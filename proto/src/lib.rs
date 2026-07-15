@@ -590,17 +590,22 @@ pub const CMD_TZIC_STATUS: u32 = 201;
 // Prodtest commands (100-199) — only present in the `prodtest` build profile.
 //
 // Factory production-line test firmware. Replaces the wizard / unlock path
-// with a USB-command server that the factory fixture drives to validate each
-// hardware component before flashing the factory_provisioning firmware. See
+// with a USB-command server that the fixture drives for reversible component
+// acceptance. A pass does not authorize or precede any currently executable
+// irreversible ceremony; factory_provisioning is quarantined. See
 // `docs/provisioning/factory-prodtest.md` for the full command reference + fixture
 // integration guide.
 //
 // Phase A (landed 2026-05-19): GET_ID + DISPLAY_PATTERN
-// Phase B (landed 2026-05-19): SAES_SELFTEST + BHK_SELFTEST + FLASH_RW +
-//                              TRNG_SAMPLE
-// Phase C-G (deferred to work-todo §30): communication tests, button test,
-//                              host-side fixture runner, operator manual.
+// Supported profile: GET_ID, DISPLAY_PATTERN, SAES, TRNG, both SE
+// handshakes, USB loopback, and buttons are required. BHK and FLASH_RW are
+// stable negative-capability probes and remain unsupported.
 // ---------------------------------------------------------------------------
+
+/// Maximum prodtest command response data carried in the NS short-response
+/// buffer. The buffer is 256 bytes and every response reserves two trailing
+/// bytes for the ISO 7816 status word, leaving 254 bytes of command data.
+pub const PRODTEST_MAX_RESPONSE_DATA_LEN: usize = 254;
 
 /// CMD_PRODTEST_GET_ID — returns 24 bytes:
 ///   [0..12]   STM32 chip UID (`0x0BFA_0700`, 96 bits per RM0456)
@@ -610,7 +615,7 @@ pub const CMD_TZIC_STATUS: u32 = 201;
 /// fixture's per-unit traceability database.
 pub const CMD_PRODTEST_GET_ID: u32 = 100;
 
-/// CMD_PRODTEST_DISPLAY_PATTERN — render a known full-screen OLED test
+/// CMD_PRODTEST_DISPLAY_PATTERN — render a known full-screen NV3007 LCD test
 /// pattern for the fixture's camera (or operator) to verify.
 ///   in_ptr → 4 bytes pattern ID (u32 LE):
 ///     0 = all white (every pixel ON)
@@ -628,48 +633,45 @@ pub const CMD_PRODTEST_DISPLAY_PATTERN: u32 = 101;
 /// selectors) and returns the per-die DHUK fingerprint.
 ///   in_ptr  → ignored
 ///   out_ptr → 8 bytes DHUK fingerprint (first 8 bytes of
-///             `SAES-CBC(DHUK, [0u8; 32])`). Used by the fixture's
+///             `SAES-ECB(DHUK, b"PQSIGNER-SAES-v1")`). Used by the fixture's
 ///             per-die-uniqueness check + factory traceability DB.
 /// Returns `NscStatus::Ok` on success, `NscStatus::InternalError` if the
 /// SAES round-trip fails (silicon defect or wrong RDP state).
 pub const CMD_PRODTEST_SAES_SELFTEST: u32 = 102;
 
-/// CMD_PRODTEST_BHK_SELFTEST — runs the Tier-2 BHK self-test (load,
-/// TAMP-backup-register lock, AES round-trip under BHK key selector)
-/// and returns the per-die BHK fingerprint.
+/// CMD_PRODTEST_BHK_SELFTEST — reserved negative-capability check. The
+/// reversible prodtest profile never enables or provisions BHK.
 ///   in_ptr  → ignored
-///   out_ptr → 8 bytes BHK fingerprint
-/// Returns `NscStatus::Ok` on success, `NscStatus::InternalError` if the
-/// BHK isn't provisioned yet (flash page 126 blank) or if the AES
-/// round-trip fails.
+///   out_ptr → 8 zero diagnostic bytes
+/// Returns `NscStatus::InternalError`. A fixture records this exact result as
+/// `SKIP_UNSUPPORTED`; `Ok` is a profile-drift failure, never a pass.
 pub const CMD_PRODTEST_BHK_SELFTEST: u32 = 103;
 
-/// CMD_PRODTEST_FLASH_RW — write a known pattern to a designated test
-/// page, read it back, verify integrity. Used to catch flash defects
-/// before they wedge a customer wallet. **NEVER call against a
-/// non-test-page** — would clobber wallet state.
+/// CMD_PRODTEST_FLASH_RW — reserved negative-capability check. The reversible
+/// profile has no writable test-page authority and performs no flash write.
 ///   in_ptr  → 4 bytes test pattern (u32 LE; 0xDEADBEEF is the canonical
 ///             value used by the fixture)
 ///   out_ptr → ignored
-/// Returns `NscStatus::Ok` on round-trip success, `NscStatus::Internal-
-/// Error` on readback mismatch.
+/// Returns `NscStatus::InternalError`. A fixture records this exact result as
+/// `SKIP_UNSUPPORTED`; `Ok` is a profile-drift failure, never a pass.
 pub const CMD_PRODTEST_FLASH_RW: u32 = 104;
 
 /// CMD_PRODTEST_TRNG_SAMPLE — return raw bytes from the MCU TRNG (no SE
 /// XOR mix) for the fixture's statistical entropy check (χ² / Shannon
-/// estimator / etc.). Capped at 256 bytes per call to keep the USB HID
-/// buffer bounded.
-///   in_ptr  → 4 bytes byte count (u32 LE, must be 1..=256)
+/// estimator / etc.). Capped at `PRODTEST_MAX_RESPONSE_DATA_LEN` so the
+/// 256-byte NS response buffer retains its two-byte status word.
+///   in_ptr  → 4 bytes byte count (u32 LE, must be 1..=254)
 ///   out_ptr → N bytes of TRNG output
 /// Returns `NscStatus::Ok` on success, `NscStatus::InvalidParameter` if
-/// count is 0 or > 256, `NscStatus::InternalError` on TRNG fault.
+/// count is 0 or > 254, `NscStatus::InternalError` on TRNG fault.
 pub const CMD_PRODTEST_TRNG_SAMPLE: u32 = 105;
 
 /// CMD_PRODTEST_OPTIGA_HANDSHAKE — exercise the full IFX I²C + APDU
 /// stack against the OPTIGA Trust M. Lazily runs OpenApplication (no
 /// PBS, no shielded connection) then `GetRandom(16)`. Catches missing
-/// chip / broken solder / I²C wiring / RST line / clock issues before
-/// the irreversible `factory_provisioning` ceremony writes E140.
+/// chip / broken solder / I²C wiring / RST line / clock issues during
+/// reversible acceptance. It does not select an E140 actor/order or authorize
+/// any follow-on write; that lifecycle remains OPEN.
 ///   in_ptr  → ignored
 ///   out_ptr → 16 bytes of OPTIGA RNG output
 /// Returns `NscStatus::Ok` on success, `NscStatus::InternalError` on
@@ -679,8 +681,9 @@ pub const CMD_PRODTEST_OPTIGA_HANDSHAKE: u32 = 106;
 /// CMD_PRODTEST_SE050_HANDSHAKE — exercise the SE050 T=1' + APDU stack.
 /// Runs `interface_reset` + `GetRandom(16)` over the default channel
 /// (no SCP03, no UserID PIN). Catches missing chip / broken solder /
-/// I²C wiring / ENA line / power-rail issues before the irreversible
-/// SCP03 rotation in `factory_provisioning`.
+/// I²C wiring / ENA line / power-rail issues during reversible acceptance.
+/// It does not authorize an SCP03 rotation or select the still-OPEN final
+/// credential protocol.
 ///   in_ptr  → ignored
 ///   out_ptr → 16 bytes of SE050 RNG output
 /// Returns `NscStatus::Ok` on success, `NscStatus::InternalError` on
@@ -694,14 +697,14 @@ pub const CMD_PRODTEST_SE050_HANDSHAKE: u32 = 107;
 /// round-trip integrity for non-trivial payloads.
 ///   in_ptr  → N bytes input (caller-allocated)
 ///   out_ptr → N bytes output (caller-allocated; byte-identical to input)
-///   arg2    → N (length, 1..=256)
+///   arg2    → N (length, 1..=254)
 /// Returns `NscStatus::Ok` on success, `NscStatus::InvalidPointer` if
-/// N is 0 or > 256 or pointer validation fails.
+/// N is 0 or > 254 or pointer validation fails.
 pub const CMD_PRODTEST_USB_LOOPBACK: u32 = 108;
 
 /// CMD_PRODTEST_BUTTON_TEST — interactive 3-step button verification.
 /// The firmware displays "PRESS LEFT" / "PRESS RIGHT" / "PRESS BOTH"
-/// on the OLED in sequence; the operator presses the indicated button
+/// on the NV3007 LCD in sequence; the operator presses the indicated button
 /// (or both) within `BUTTON_TEST_TIMEOUT_MS = 10_000` per step. Catches
 /// mechanically dead buttons, broken solder joints, and L/R wires
 /// swapped at the connector.
@@ -1996,6 +1999,12 @@ mod tests {
         // The USB SIG_BUF is sized to MAX_SIGN_RESPONSE_LEN; it must also
         // accommodate the largest possible CMD_SIGN_OFFCHAIN response.
         assert!(MAX_SIGN_RESPONSE_LEN >= SIGN_OFFCHAIN_OUTPUT_LEN_6492);
+    }
+
+    #[test]
+    fn prodtest_response_cap_reserves_status_word() {
+        assert_eq!(PRODTEST_MAX_RESPONSE_DATA_LEN, 254);
+        assert_eq!(PRODTEST_MAX_RESPONSE_DATA_LEN + 2, 256);
     }
 }
 

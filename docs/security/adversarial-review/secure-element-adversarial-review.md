@@ -6,7 +6,7 @@
 
 **How this differs from the bench red-team.** [`docs/security/red-teaming.md`](../red-teaming.md) §5.1–5.6 (SCP03/Shielded/lockstep/lockdown, all silicon) and §4.2 (XOR split) enumerate the *bench pass-fail bars* — logic-analyzer bus captures, desolder rigs, PUT-KEY ceremonies. **This playbook is the code-review counterpart**: it walks the *driver source* against invariants #1/#2/#3, hunting a plaintext-on-wire feature downgrade, a PIN-counter desync the reconcile logic misses, an advertised-vs-actual gap, or a secret OID readable without auth. Same discipline as the [FV playbook](../../verification/fv-adversarial-review-playbook.md); cross-link red-teaming.md as the bench counterpart, do not re-run its checks.
 
-> **Corrected facts (carry these, not folklore).** The research prompts that seeded this playbook carried errors the source corrected — the playbook uses the corrections: **(a)** the master secret is OID **`0xF1D2`** (`OID_MASTER_SECRET`); `0xF1D4` is the **bootstrap VK**, not the master. **(b)** The OPTIGA PBS is **DHUK-derived at boot** (`hw::secret_keys::derive_into("pqsigner/optiga-pbs-v1")`), **not** flash-page-126-sealed — so a fw-update wiping page 126 does *not* brick OPTIGA and flash extraction does *not* yield the PBS. Page 126 was repurposed as the fw-update verify-failure counter, and bank-1 page 126 (`0x0C0F_C000`) now holds the wrapped **SE050 BHK** — *that* is where the brick/extraction concern actually lives (SE7). **(c)** The reconcile tamper condition is `se_count > mcu` (**not** `!=`) — MCU-leads is benign (power-cut window). **(d)** PIN attempts are three-way, but boot reconciliation is not: the SE050 attempt-attribute read returns `SW=0x6986`, so boot uses the directional MCU-page124/OPTIGA-E120 pair and SE050 retains its independent lockout/status path.
+> **Corrected facts (carry these, not folklore).** The research prompts that seeded this playbook carried errors the source corrected — the playbook uses the corrections: **(a)** the master secret is OID **`0xF1D2`** (`OID_MASTER_SECRET`); `0xF1D4` is the **bootstrap VK**, not the master. **(b)** The OPTIGA PBS is **DHUK-derived at boot** (`hw::secret_keys::derive_into("pqsigner/optiga-pbs-v1")`) and has no flash page. Bank-1 page 126 (`0x0C0F_C000`) is exclusively the wrapped **SE050 BHK** when `bhk` is enabled; the earlier persistent firmware-update failure counter was removed. **(c)** The reconcile tamper condition is `se_count > mcu` (**not** `!=`) — MCU-leads is benign (power-cut window). **(d)** PIN attempts are three-way, but boot reconciliation is not: the SE050 attempt-attribute read returns `SW=0x6986`, so boot uses the directional MCU-page124/OPTIGA-E120 pair and SE050 retains its independent lockout/status path.
 
 > **Honesty note + ship-blocker framing.** Known S-1/S-2/S-3 items need not be
 > duplicate-filed as new discoveries, but their absence remains a ship blocker.
@@ -24,9 +24,9 @@
 | SE3 | **PIN-counter desync undetected** | an attacker rolls back a readable counter without tripping tamper | **DEFENDED in source within the documented direction; reboot-silicon receipt OPEN.** `reconcile_pin_attempts` fires on `E120_used > page124_used`; MCU-leads is the conservatively charged cut/transport state. The SE050 leg returns `None` under the production policy (`0x6986`), so it contributes independent attempt enforcement/lockout but no boot comparison. | `make pin-gate-hw-counter-e2e` proves three-way attempt consumption and in-run desync recovery; `pin-gate-wipe-e2e` proves 10-wrong → wipe. Neither invokes reboot reconciliation. Add a reboot-based silicon test for E120-leading wipe and benign MCU-leading retention. | ✅ attempt/wipe HW e2e / ⚠ boot edge open |
 | SE4 | **Advertised ≠ actual lockstep** | a future doc reintroduces three-way boot-reconciliation language | **OWNER CLAIM CORRECTED; KEEP AS REGRESSION LENS.** `CLAUDE.md` now distinguishes three-way per-attempt consumption from the directional page124/E120 boot check. The SE050 attempt-attribute read remains policy-denied; making it readable would require a separately reviewed policy/backend and silicon decision. | Diff active owner docs against `reconcile_pin_attempts` and `pin_attribute_read_refused_on_user_userid`; any future three-way boot claim reopens SE4 | ✅ documentation correction / regression review |
 | SE5 | **Shielded / SCP03 downgrade & replay** | a forced re-handshake drops to plaintext, or a captured transcript replays | **DEFENDED.** OPTIGA: seq-replay refused (`shield.rs:300-307`), nonce-wrap renegotiate at `enc_seq>=0xFFFF_FFF0` (`:220`), record-type in AAD rejects alert/handshake frames (`:288-294`). SCP03: monotonic 16-byte counter (`scp03.rs:299`), level 0x33 mandatory unwrap (`apdu.rs:230-240`). **Attack surface**: a MITM wedging PRL state forces fresh handshakes (self-heal `mod.rs:249-254`) — confirm no plaintext fallback fires on the second failure; confirm `zeroize_session` (`scp03.rs:138`) is invoked on lock/idle so a transcript can't replay a live session | Rainbow `fault_sweep_scp03.py`; audit the re-handshake / self-heal path for a plaintext fallback | ⚠ partial (FI sweep + review) |
-| SE6 | **OID read without auth** | a secret OID readable with `require_shielded=false` | **DEFENDED.** Secret OIDs F1D1/F1D2/F1D3/F1D4 have Read = `Auto(0xF1D0) AND Conf(0xE140)` (`apdu.rs:909,923`) — reading half_O/master requires **both** PIN auth and the shielded connection. Counter OIDs E120/F1D5 are `Read = Always` (non-secret, but the attacker's *oracle* for the reconcile counters) | Grep for any read of F1D1/F1D2 with `require_shielded=false`; confirm the AND (not OR) on the Read AC builder | ✅ host AC-builder tests / grep |
-| SE7 | **Brick / extraction on fw-update** | a fw-update writes the page holding a re-derivation root and bricks the wallet or exposes a secret | **DEFENDED (redirected).** OPTIGA PBS is DHUK-derived, **not** page-126-sealed (see corrected facts) — fw-update wiping page 126 does not brick OPTIGA. **The real class lives on the SE050 axis**: the wrapped BHK is on bank-1 page 126 (`hw/bhk.rs:72`), and `hw/bhk.rs:40` mandates "the firmware-update path MUST NOT touch page 126" | Audit the fw-update staging/erase range against the BHK page + the fw-fail-counter page (`hw/flash.rs:154-248`); the postmortem is `docs/secure-elements/optiga-brick-postmortem.md` | ⚠ partial (range audit) |
-| SE8 | **Ship-blocker fence gap** | a shipping config that ships a blocker open | The irreversible SE closures remain OPEN. During the rollback quarantine, all production/factory STM32 shapes are rejected; bench builds require the explicit production-forbidden `legacy-fw-rollback-unsafe` feature. The missing `build_metadata_counter` production gate remains separately tracked. | Negative production/factory compilation tests plus the future reviewed SE ceremony | 🚫 shipping blocked |
+| SE6 | **OID read without auth** | a secret OID readable with `require_shielded=false` | **DEFENDED.** Secret OIDs F1D1/F1D2/F1D3/F1D4 have Read = `Auto(0xF1D0) AND Conf(0xE140)` (`apdu.rs:909,923`) — reading half_O/master requires **both** PIN auth and the shielded connection. E120 and the F1E1 provisioning/reset sentinel are `Read = Always` and non-secret; only E120 is lockout authority in production. | Grep for any read of F1D1/F1D2 with `require_shielded=false`; confirm the AND (not OR) on the Read AC builder | ✅ host AC-builder tests / grep |
+| SE7 | **Brick / extraction on fw-update** | a fw-update writes the page holding a re-derivation root and bricks the wallet or exposes a secret | **DEFENDED (redirected).** OPTIGA PBS is DHUK-derived and has no flash page. **The real class lives on the SE050 axis**: the wrapped BHK is on bank-1 page 126 (`hw/bhk.rs:72`), and `hw/bhk.rs:40` mandates "the firmware-update path MUST NOT touch page 126" | Audit the fw-update staging/erase range against the single-owner BHK page and keep persistent failure-state writes absent; the historical collision report is `docs/security/vulns/VULN-page126-bhk-fwfail-collision-brick.md` | ⚠ partial (range audit) |
+| SE8 | **Ship-blocker fence gap** | a shipping config that ships a blocker open | The irreversible SE closures remain OPEN. During the rollback quarantine, all production/factory STM32 shapes are rejected; bench builds require the explicit production-forbidden `legacy-fw-rollback-unsafe` feature. Production already requires `optiga-hw-counter`; E120 is lockout authority. F1E1 remains a provisioning/reset sentinel whose final lifecycle or replacement is separately tracked, not a missing one-line production fence. | Negative production/factory compilation tests plus the future reviewed SE ceremony | 🚫 shipping blocked |
 | SE9 | **A half crosses chips** | a provisioning/debug path ships one chip's half to the other | **NOT OBSERVED.** Each half is read/decrypted independently (`dual_se.rs:388-425`) and only XORed locally in MCU SRAM | Confirm no debug/prov path (`factory_provisioning.rs`, the `dual-se-*-e2e` harnesses) transmits a half to the opposite chip | ❌ adversary (grep + review) |
 
 **Read this catalog as a review map, not a shipping verdict.** SE8 and the
@@ -37,7 +37,7 @@ factory half remain open blockers even when already tracked.
 ## Part B — The existing defenses (Layer 1)
 
 1. **Compile-time ship-blocker fences.** The `compile_error!` wall in `nsc/mod.rs` (S-1/S-2/S-3 OPTIGA, HIGH-1/MEDIUM-1 SE tunnels, Tier-1 KDF REQUIRE, tamp/tamp-wipe/tzic-wipe, consumption-mask, the leaky-feature denylist `:114-133`). These *prevent shipping unhardened* but do not close the bench/factory half (SE8).
-2. **HW PIN-attempt e2e (silicon).** `make pin-gate-hw-counter-e2e` (three-way attempt consumption plus the directional boot check), `pin-gate-wipe-e2e` (10-wrong → factory-reset both SEs + page-124 erase), `optiga-hw-counter-e2e` (E120 LUC provision + drive cycles, PASSED 2026-04-22).
+2. **HW PIN-attempt e2e (silicon).** `make pin-gate-hw-counter-e2e` proves three-way attempt consumption, in-run desynchronization recovery, and simulated cache resynchronization; it does not reboot or exercise the directional boot check. `pin-gate-wipe-e2e` proves 10-wrong → factory-reset both SEs + page-124 erase. `optiga-hw-counter-e2e` provisions E120 LUC and drives cycles (PASSED 2026-04-22). A separate cold-reboot silicon receipt for E120-leading wipe and MCU-leading retention remains OPEN.
 3. **SE050 stress catalog (silicon).** `make se050-stress` / `-destructive` — the S-5/S-6 verifiers and the source of the silicon findings (`docs/secure-elements/se050-silicon-findings.md`); `se050-admin-extract-attempt-e2e` (S-6), `dual-se-admin-wipe-e2e`, `dual-se-bhk-e2e`.
 4. **Host logic tests.** `scp03_logic.rs` (SCP03 KDF + GP PUT-KEY vectors + anti-factory-key guard), `optiga_under_test/pure_tests.rs`, `se050_under_test/pure_tests.rs`, `nsc_core_under_test/pure_tests.rs` (verifies the `compile_error!` fences exist). AC-builder tests for the Read = `Auto AND Conf` gate (SE6).
 5. **FI + protocol backstops.** Rainbow `fault_sweep_{scp03,optiga_lock,pin}.py`; the ProVerif model `contracts/verification/proverif/optiga_shield_handshake.pv`. See the [SCA/FI playbook](./sca-fi-adversarial-review.md) for the unlock-window FI review.
@@ -57,7 +57,7 @@ whether the boot predicate exceeds its documented direction, and whether the
 plaintext-downgrade fences cover every shipping config.
 
 CORRECTED FACTS (use these, not the folklore): master OID = 0xF1D2 (F1D4 = bootstrap VK);
-OPTIGA PBS is DHUK-DERIVED not page-126-sealed (page 126 = fw-fail counter + SE050 BHK —
+OPTIGA PBS is DHUK-DERIVED and has no flash page (page 126 = wrapped SE050 BHK only —
 the brick concern is the BHK, not the PBS); reconcile fires on E120_used > page124_used
 (NOT !=); SE050's 0x6986 attempt-attribute denial excludes it from boot reconciliation,
 not from per-attempt consumption or its independent max-10 lockout.
@@ -95,19 +95,17 @@ RULES:
     one (bus-capture / desolder are red-teaming.md bench items — cite, don't re-run).
   - Known S-1/S-2/S-3 blockers remain blockers. Avoid duplicate catalogue
     entries, but report false closure/authority and every new bypass.
-  - For each finding: SE-mode, file:line, PoC, disposition, severity, proposed fix (flag
+  - For each candidate: SE-mode, file:line, PoC, provisional severity, stable
+    candidate ID, and proposed fix (flag
     if it would break a fence, regress an e2e, or weaken an AC).
+    Do not assign a finding disposition.
 
-OUTPUT — file findings so they can be catalogued + worked through (see
-docs/security/adversarial-review/findings/README.md):
-  Write a dated report to docs/security/adversarial-review/findings/<surface>-<YYYY-MM-DD>.md
-  from findings/TEMPLATE.md — everything below (findings + the honest residual) goes IN it.
-  Report frontmatter `status: open`; EACH finding gets its own `Status:` line (start 🔲 OPEN)
-  + a falsifiable PoC. Add one row to the Catalogue table in findings/README.md. As findings
-  are worked through, whoever handles each flips its `Status:` (✅ FIXED / ☑️ ACCEPTED /
-  🚫 INVALID / ⏸ DEFERRED) + a Resolution (commit+date or why), and sets the report
-  `status: resolved` once none remain OPEN. work-todo.md stays the action list; findings/ is
-  the review record — cross-link them.
+OUTPUT — return an external candidate packet to the coordinator. Do not modify
+the repository, write a canonical findings report, or update catalogue/status
+fields. Include every candidate and the honest residual. The coordinator freezes
+the raw packet and gives the complete union to the exact Partner-A/Partner-B
+pair; only their symmetric cross-adjudication may assign dispositions. An
+authorized maintainer records the adjudicated result afterward.
 
 MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   1. "What I tried to break and COULDN'T" — per surface.
@@ -117,7 +115,13 @@ MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   Never imply "the rest is fine."
 ```
 
-**Running it as a swarm.** ≥3 reviewers per scope, cross-vote, two model backends.
+**Running it as a swarm.** Use ≥3 independent discovery reviewers per scope
+across two model backends. Quorum only corroborates/prioritizes discovery; it
+does not set a disposition, and sub-quorum variants remain in the packet. Give
+every candidate and origin variant to the exact Partner-A/Partner-B pair in
+[`../../planning-and-review-workflow.md`](../../planning-and-review-workflow.md);
+only their symmetric cross-adjudication may disposition it, with disagreement
+preserved.
 
 ---
 

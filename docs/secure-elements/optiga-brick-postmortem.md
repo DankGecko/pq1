@@ -1,24 +1,39 @@
 # OPTIGA Trust M pairing: brick post-mortem and restructure
 
-**Audience**: engineers on the PQSigner team who need to understand (a) what bricked our TRUSTMV3SHIELDTOBO1 test chip during bring-up, (b) why the current code would brick *any* device on *any* firmware update, and (c) what we're changing structurally to make sure it never happens again.
+**Audience**: engineers on the PQSigner team who need to understand (a) what
+bricked our TRUSTMV3SHIELDTOBO1 test chip during bring-up, (b) why the
+historical as-found code would have bricked a paired device after a firmware
+change, and (c) which structural lessons remain relevant.
 
 **Last updated**: 2026-04-17. **Audit overlay added 2026-04-30.**
 
-> **Implementation status (audit, 2026-04-30).** The structural fixes proposed
-> in §5 / §9 below are partially landed:
+> **Current-state overlay (2026-07-14).** The historical mechanism below is
+> preserved for provenance. OPTIGA PBS is now DHUK-derived at boot and has no
+> flash copy. Bank-1 page 126 is exclusively the wrapped SE050 BHK when `bhk`
+> is enabled; no persistent firmware-update failure counter remains. The
+> historical Cause 1 conclusion is also superseded: PRL works below
+> Operational, ordinary pairing must not ratchet E140, and the exact
+> factory-side lifecycle order remains OPEN. Do not execute a ceremony from
+> the historical narrative below.
+>
+> **Implementation status (audit, 2026-04-30; historical snapshot).** The structural fixes proposed
+> in §5 / §9 below were partially landed at that date:
+>
+> **Historical bring-up receipt, not the production-final pairing protocol.**
+> The fresh-TRNG final rotation, durable public state, cut recovery, and E140
+> ordering remain OPEN under work-todo #36.
 >
 > - ✅ **OTP-derived device master key** (commit `b19fbf7`, 2026-04-20).
 >   `secure/src/hw/otp.rs` + `secure/src/hw/secret_keys.rs` provide per-purpose
->   subkeys via `SAES-CMAC(DHUK, label‖counter)` (production) /
+>   subkeys via `SAES-CMAC(DHUK, label‖counter)` (current bring-up transport) /
 >   `HKDF(OTP_master, label)` (dev).
 > - ✅ **Deterministic PBS** rooted in OTP, stable across rebuilds (`b19fbf7`).
 > - ✅ **Admin-wipe PIN OTP-derived** (commit `1bfb572`, 2026-04-27); SE050
 >   admin credential is now `hw::secret_keys::se050_admin_pin()` instead of
 >   first-boot TRNG.
 > - ✅ **HUK re-rooting** in `secure/src/hw/huk.rs::derive_device_key`.
-> - ⏳ **Flash page 126 deletion** still pending — `load_pbs` retained for
->   migration; PBS now sourced from OTP but the page-126 footprint hasn't
->   been freed yet.
+> - ⏳ **At that date:** flash page 126 deletion was pending. This is now
+>   superseded by the current-state overlay above.
 > - ✅ **`optiga-lock-operational` Cargo feature** added (commit `fa06a4f`,
 >   2026-04-20). LcsO=Operational bump is now opt-in; default builds keep
 >   `E140` at `Creation`.
@@ -72,7 +87,12 @@ Per OPTIGA Trust M SRM §"Life Cycle Status":
 
 > *"Once Lcs0 is set to higher value, it is not reversible and cannot be set to lower value any more."*
 
-Our `setup_pbs_no_handshake` writes `LcsO=0x07` (Operational) on `E140` as its final step. This is **correct** — the chip's PRL state machine refuses `MasterHello` unless `E140.LcsO >= Operational`. We have to bump it for Shielded Connection to work at all. The SRM §"Platform Binding Secret" is explicit: *"It shall be 64 bytes and LcsO set to operational."*
+> **Historical, refuted conclusion.** The paragraph below described the code
+> and interpretation at incident time. Later source review and silicon work
+> showed that PRL operates with `E140.LcsO < Operational`; current ordinary
+> pairing deliberately leaves lifecycle unchanged.
+
+At incident time, `setup_pbs_no_handshake` wrote `LcsO=0x07` (Operational) on `E140` as its final step. We then believed this was required for Shielded Connection; that belief is not current authority.
 
 After the bump, `E140`'s Change AC evaluates to:
 ```
@@ -318,25 +338,31 @@ For the record, so nobody asks later:
 
 ---
 
-## 7. Guard rails
+## 7. Guard rails — historical proposal, superseded
+
+The numbered proposal and example sequence below are preserved to explain the
+incident response, not as current instructions. Current code leaves the E140
+lifecycle primitive unwired; `optiga-lock-operational` applies to non-E140
+object locks and grants no E140 authority. The factory/field credential
+migration and exact E140 order remain OPEN in `docs/production-todo.md`.
 
 New safeguards so we cannot repeat this particular mistake:
 
-1. **`optiga-lock-operational` is a Cargo feature, not always-on.** Default dev builds don't bump LcsO. Production builds explicitly opt in once OTP is burned + PBS is deterministic.
-2. **Runtime check**: `setup_pbs_no_handshake` refuses to bump LcsO if `is_device_master_burned()` returns false. Belt-and-braces: even if `optiga-lock-operational` is accidentally enabled on a board that hasn't been through factory provisioning, the bump aborts.
+1. **Current rule:** ordinary pairing never ratchets E140; lifecycle is a separate, unwired factory-side primitive.
+2. **Current gate:** no deterministic transport key or feature combination constitutes the still-missing authenticated migration ceremony.
 3. **`optiga-bringup-fresh` is removed.** It erased flash page 126 on every boot — harmless once the PBS stops coming from flash, but it's the feature that sealed our test chip's fate and there's no longer any reason for it.
 4. **`optiga-no-shield` dev feature**: skip the PBS/PRL path entirely. Use when developing on a chip where PRL isn't available (our current test chip) without risk of touching E140.
 
 ---
 
-## 8. What you'd see end-to-end after the port
+## 8. What the historical proposal expected after the port
 
-On a fresh SLS32AIA shield with the rewritten code:
+This table is a historical expectation, not a runnable or approved ceremony:
 
 | Step | Observable |
 |---|---|
-| 1. `make stm32-burn-device-key` on a new board (one-shot factory step) | 32 TRNG bytes written to OTP; verified readback; pass/fail marker. |
-| 2. `make flash-hw FEATURES=dual-se,...` with `optiga-lock-operational` | First boot: PBS derived from OTP, written to E140 at LcsO=Creation, metadata+ACs installed, LcsO bumped to Operational. Wallet provisioned. Shielded connection green. |
+| 1. Historical `stm32-burn-device-key` proposal | Superseded; not authority to consume OTP. |
+| 2. Historical combined pairing/lock proposal | Superseded; current ordinary pairing leaves E140 lifecycle unchanged. |
 | 3. Any subsequent rebuild — even with wildly different features — and reflash | Boot: `firmware_hash()` changes (8-word display reflects new firmware). PBS re-derived from OTP (unchanged). `shield.establish()` succeeds with the same PBS. Wallet unlocks normally. |
 | 4. Accidentally bricking becomes structurally impossible | PBS is a pure function of OTP master + HKDF label. No state to lose. |
 

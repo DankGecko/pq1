@@ -15,7 +15,11 @@ factory-reset design see `docs/secure-elements/se050-factory-reset.md`.
 
 ---
 
-## 1. Top 5 critical findings (do these before anything else)
+## 1. Critical findings as found in the 2026-04 research round
+
+This is a dated synthesis, not a current priority list. Resolved or superseded
+items are marked in place; current authority lives in `docs/STATUS.md` and
+`docs/production-todo.md`.
 
 1. **SLH-DSA verify-after-sign is inadequate**. Current code assumes
    signing the blob, re-verifying, and failing closed is enough. Per
@@ -32,12 +36,13 @@ factory-reset design see `docs/secure-elements/se050-factory-reset.md`.
    STM32 TRNG as OptRand. One-line fix with massive SCA impact.
    *Source: bundle C.*
 
-3. **NXP SE050 SCP03 keys are the published factory defaults**. Until
-   we rotate them per-device, anyone with a logic analyzer + the
-   Global Platform default key list can decrypt our I2C bus. The
-   research provides the published key values from AN12436 and the
-   exact PUT KEY rotation sequence. Must execute at factory per
-   device. *Source: bundle B.*
+3. **NXP SE050 SCP03 keys must not remain the published factory
+   defaults.** The factory installs only per-device transport keysets and
+   ships at RDP0. After owner verification, the first-field ceremony
+   self-locks RDP2, performs the BHK first write, and rotates to the final
+   fresh-TRNG-salted keyset before the seed wizard. The exact E140
+   ratchet-versus-final-rotation ordering remains OPEN and owner/silicon
+   gated. *Source: bundle B and work-todo #36.*
 
 4. **USB path has two concrete silicon-errata bugs** we have not
    addressed: DWC2 TxFIFO write atomicity (ES0499 §2.26.x) and ZLP
@@ -52,18 +57,16 @@ factory-reset design see `docs/secure-elements/se050-factory-reset.md`.
    Stage 2 needs to land before any talk of production. *Source:
    bundle A + C.*
 
-6. **OPTIGA Shielded-Connection pairing secret is sealed to flash
-   under a wrap key that mixes in `measured_boot::firmware_hash()`.**
-   Any firmware update — a one-byte edit is enough — changes the
-   hash, changes the wrap key, fails AES-GCM authentication on the
-   next boot, and renders the chip-side PBS permanently unreachable.
-   Every production customer would brick on their first update. We
-   already reproduced the failure on a bench chip whose pairing is
-   now unrecoverable (§1 of `docs/secure-elements/optiga-brick-postmortem.md`). Fix
-   is a Trezor-style OTP-derived PBS with HKDF-scoped subkeys, no
-   flash seal, plus re-rooting `hw/huk.rs` off the OTP master instead
-   of `firmware_hash`. See §2.6. *Source: bench failure, 2026-04-17;
-   Trezor STM32U5 reference (`core/embed/sec/secret_keys/stm32u5/`).*
+6. **RESOLVED/SUPERSEDED — the original OPTIGA PBS flash seal mixed in
+   `measured_boot::firmware_hash()` and bricked pairing after an update.**
+   The bench failure remains valid historical evidence (§1 of
+   `docs/secure-elements/optiga-brick-postmortem.md`), but the intermediate
+   OTP-master proposal is not current production architecture. Current code
+   derives bring-up PBS deterministically from DHUK with no flash copy; page
+   126 belongs only to the wrapped BHK. The production-final fresh-salted
+   rotation protocol and its durable public state remain OPEN under work-todo
+   #36. See the current-state override in §2.6. *Source: bench failure,
+   2026-04-17; later lifecycle corrections.*
 
 ## 2. Per-topic summary
 
@@ -110,8 +113,10 @@ protected boolean (FihInt). Acceptable for a wallet UX.
 
 ### 2.2 Production key management (bundle B → todo #20)
 
-**Big picture**: Trezor Safe 5 uses single-SE + binding; we extend to
-dual-SE + signed binding record + OTP anchor + monotonic counter.
+**Historical proposal.** Trezor Safe 5 uses single-SE + binding; the
+following retained research proposed dual-SE + signed binding record + OTP
+anchor + monotonic counter. It is not current implementation or ceremony
+authority.
 
 > **UPDATE 2026-07-14 (work-todo #36 — ship-RDP-0 decision).** Retained as
 > research input, but **stage 2 now executes ON-DEVICE at first field boot,
@@ -124,7 +129,8 @@ dual-SE + signed binding record + OTP anchor + monotonic counter.
 > ("Burn RDP Level 2") is no longer a fixture action, and the stage-1
 > FMK-derived SCP03 keys are demoted to transport keysets.
 
-**Factory provisioning — two-stage RDP flow**:
+**Historical factory provisioning proposal — superseded by the current
+transport-to-first-field lifecycle above:**
 
 Stage 1 at RDP0 (debug attached):
 1. Read all 3 UIDs (STM32 at `0x0BFA_0700`, SE050 via GetInfo, OPTIGA
@@ -171,8 +177,11 @@ HKDF label. On boot, if `blob.version < current`, re-wrap with new
 HKDF label and flash new format. STM32U585 DHUK does not rotate per
 firmware, unlike STM32H5, so migration is simple.
 
-**Anti-rollback**: OPTIGA monotonic counter at OID `0xF1E0`,
-Conf(0xE140)-protected. Reject firmware with `fw_version < counter`.
+**Historical anti-rollback proposal (superseded):** OPTIGA monotonic counter
+at OID `0xF1E0`, Conf(0xE140)-protected. Production anti-rollback is currently
+quarantined; Draft 1.1 is a preserved, non-implementation-approved research
+candidate and no backend is selected until its OPEN resource, journal,
+OTP/ECC, factory, and silicon gates close.
 
 ### 2.3 Side-channel (bundle C → todo #18)
 
@@ -460,6 +469,15 @@ retire Bundle B's ECDSA binding record design. This is a material
 change to work-todo #20 scope.
 
 ### 2.6 Device root-key architecture (work-todo #24)
+
+> **Current-state override (2026-07-14).** This section preserves the
+> historical failure analysis and staged proposal; it is not the current page
+> map or an implementation plan. OPTIGA PBS is now DHUK-derived at boot and has
+> no flash copy. Bank-1 page 126 is exclusively the DHUK-wrapped SE050 BHK when
+> `bhk` is enabled, and no persistent firmware-update failure counter remains.
+> The OTP-master route below is legacy/rejected for production. Current
+> lifecycle and rollback authority stays with `docs/production-todo.md`,
+> `docs/STATUS.md`, and the production-fenced rollback architecture record.
 
 **Threat context.** The OPTIGA Trust M pairing-secret flow that landed
 during early bring-up (`setup_pbs_no_handshake`, `hw/huk.rs`, flash page

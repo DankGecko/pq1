@@ -3,14 +3,14 @@ surface: multi (playbook family build-out + code-review fixes)
 run_date: 2026-07-02..04
 reviewer: opus-4.8 (interactive, advisor-reviewed) + Explore/Workflow surface-mapping agents
 scope: authored the 10-playbook adversarial-review family + the FV playbook validation, then worked through the findings surfaced across trusted-UI, trustzone-gateway, on-chain, fw-update, and silicon-lockdown
-status: resolved
+status: in-review
 ---
 
 # Adversarial-review findings — playbook-family engagement — 2026-07-02..04
 
 ## Summary
 
-11 findings surfaced while building + running the adversarial-review playbook family. **None was live fund-theft.** Final tally: **7 fixed, 1 accepted (by-design), 3 deferred (tracked, blocked on hardware / a design decision / an undefined OTP scheme).** This report is the *review record* — the actionable detail + validation evidence lives in `docs/work-todo.md` (#12b–#12g), cross-linked per finding. Provenance: fixes were compiled + host-tested (secure suite 2090/0, shared lockdown tests, forge SOL6/H-3); the surface reviews were source-read + advisor-cross-checked (not a rainbow/silicon executing pass — those are the bench sweeps).
+11 findings surfaced while building + running the adversarial-review playbook family. **None was live fund-theft.** Current tally: **7 fixed, 1 reviewed but not owner-ratified, 3 deferred (tracked, blocked on hardware / a design decision / an undefined OTP scheme).** This report is the *review record* — the actionable detail + validation evidence lives in `docs/work-todo.md` (#12b–#12g), cross-linked per finding. Provenance: fixes were compiled + host-tested (secure suite 2090/0, shared lockdown tests, forge SOL6/H-3); the surface reviews were source-read + advisor-cross-checked (not a rainbow/silicon executing pass — those are the bench sweeps).
 
 This report also **seeds the catalogue convention** — see `findings/README.md` + `findings/TEMPLATE.md`. Future passes file one report here per run, each finding carrying its own `Status:` so a glance shows what is handled.
 
@@ -45,11 +45,11 @@ This report also **seeds the catalogue convention** — see `findings/README.md`
 - **Resolution:** added a dated CORRECTION note under Claim 8 ("anti-rollback is STM32-OTP-only"). The implement-the-2nd-layer option is left as a defense-in-depth choice. work-todo #12c.
 
 ### F5 — Cross-slot `removeOwnerAtIndex` not bound to the signing slot (on-chain SOL6)
-- **Status:** ☑️ ACCEPTED (by-design; tighten-decision open)
+- **Status:** 🔬 REVIEWED (current behavior pinned; owner decision remains open)
 - **Mode / severity:** SOL6 · LOW (availability, not theft)
 - **Location:** `contracts/smart-wallet/src/PQSmartWallet.sol:469-474`
 - **What:** the H-3 parity check is deliberately skipped for the remove selector, so any slot key ≥1 can remove any other non-bootstrap slot (bootstrap is unremovable + can re-add).
-- **Resolution:** descriptive `threat-model.md §8` note (framed as an open owner-management design decision, **not ratified**) + `test_sol6_crossSlotRemoveIsAcceptedByDesign` forge test PINNING current behavior so a future `i==j` binding is a deliberate flip. Whether to tighten is the user's design call. work-todo #12c.
+- **Resolution:** descriptive `threat-model.md §8` note (framed as an open owner-management design decision, **not ratified**) + `test_sol6_crossSlotRemoveIsAcceptedByDesign` forge test PINNING current behavior so a future `i==j` binding is a deliberate flip. This is not risk acceptance; whether to tighten remains the owner's design call. work-todo #12c.
 
 ### F6 — RDP-verify-in-boot missing (silicon-lockdown SL7)
 - **Status:** ✅ FIXED
@@ -76,8 +76,8 @@ This report also **seeds the catalogue convention** — see `findings/README.md`
 - **Status:** ⏸ DEFERRED
 - **Mode / severity:** SL7 · LOW
 - **Location:** `secure/src/optiga/apdu.rs` `build_metadata_counter` + its callers
-- **What:** production-todo prescribes making `build_metadata_counter` a `compile_error!` under `mode-production`, but F1E1 is deeply integrated (read 5+ sites, written by `factory_reset_body`, LcsO-ratcheted) — not a one-line fence.
-- **Resolution (blocker):** a safe fix gates the whole F1E1 soft-counter subsystem out under `mode-production` (replaced by E120) and **needs on-silicon `optiga-hw-counter-e2e` validation**. Deferred — do not ram a partial gate (would break OPTIGA provisioning/factory-reset). work-todo #12e.
+- **What:** the historical remediation proposed making `build_metadata_counter` a `compile_error!` under `mode-production`, but F1E1 is deeply integrated (read 5+ sites, written by `factory_reset_body`, LcsO-ratcheted) — not a one-line fence.
+- **Resolution (blocker):** production already requires E120 as lockout authority. F1E1 is only the provisioning/reset sentinel; retain it under a reviewed final lifecycle or replace all consumers under a separately reviewed design. Either route needs on-silicon validation. Deferred — do not ram in a partial gate. work-todo #12e.
 
 ### F10 — BOOT_LOCK bit + HDP1 boot-verify (silicon-lockdown SL2)
 - **Status:** ⏸ DEFERRED

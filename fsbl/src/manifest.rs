@@ -28,7 +28,7 @@ use crate::slot::{manifest_addr, Slot};
 /// BOTH slots' buffers live simultaneously across the multi-KB-stack
 /// SPHINCS+C10 verify, `main`'s boot frame reserved ~24.7 KB and overran the
 /// 16 KB stack (`_stack_start = 0x3000_4000`, no MSPLIM) — a silent stack
-/// overflow / HardFault on the immutable, WRP1A-locked bootloader (it was never
+/// overflow / HardFault on the legacy bench bootloader (it was never
 /// caught because QEMU/e2e load the secure world directly and the only
 /// HW-exercised FSBL path short-circuits before this verify body). Borrowing
 /// flash removes both 8 KB copies.

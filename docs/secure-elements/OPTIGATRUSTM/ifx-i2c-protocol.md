@@ -387,13 +387,13 @@ Pairing binds the host MCU to a specific OPTIGA Trust M chip. This is a **one-ti
      the handshake path; the channel works fine with E140 at `Creation`.
    - The bump is irreversible (OPTIGA lifecycle states are one-way) and was
      responsible for the brick incident documented in `../optiga-brick-postmortem.md`.
-   - In `secure/src/optiga/mod.rs::ensure_shield`, the bump is now skipped by
-     default. It is only attempted under the `optiga-lock-operational` Cargo feature,
-     which production builds enable as a deliberate gate (see commit `fa06a4f`
-     and the comments at `secure/src/optiga/mod.rs:380-392, 502, 528-530`).
-   - For dev/bring-up: leave E140 at `Creation`. For production provisioning: enable
-     `optiga-lock-operational` only after every other gate (RDP, OTP burn, SCP03 rotation)
-     has been validated, and only on chips that have already paired successfully.
+   - Current ordinary pairing and `ensure_shield` never invoke the separately
+     retained E140 lifecycle primitive. `optiga-lock-operational` still gates
+     non-E140 object locks; it is not permission or wiring for E140.
+   - For dev/bring-up, leave E140 at `Creation`. Do not infer a production
+     ordering from any feature's existence: the final pairing rotation and
+     exact E140 lifecycle order remain OPEN. Until that decision is frozen and
+     silicon-validated, no ordinary or production path may call the primitive.
 
 6. **Verify:** Attempt a Shielded Connection handshake to confirm pairing works.
 
@@ -402,7 +402,11 @@ Pairing binds the host MCU to a specific OPTIGA Trust M chip. This is a **one-ti
 - Each Shielded Connection establishment increments the Security Event Counter (OID `0xE0C5`)
 - If the counter exceeds its threshold, the chip will reject further handshakes temporarily
 - The PBS is the root of trust for the encrypted channel -- if leaked, an attacker can MITM the I2C bus
-- For production: store PBS with same protection level as other entropy halves (SAES-wrapped in secure flash)
+- Current bring-up derives the PBS at boot from the silicon-rooted KDF and does
+  not store it in flash. Page 126 is reserved for the wrapped SE050 BHK when
+  enabled. This deterministic helper is not the production-final protocol;
+  the required fresh-TRNG final rotation, durable public salt/state, cut
+  recovery, and exact E140 ordering remain OPEN and production-blocking.
 
 ### Session Save/Restore
 

@@ -12,7 +12,7 @@
  *   0x0C00_C000  Boot state      8 KB   (page 6)
  *   0x0C00_E000  Slot A secure 464 KB   (pages 7–64)
  *   0x0C08_2000  Slot B secure 464 KB   (pages 65–122)
- *   0x0C0F_A000  Reserved (SE050 admin, OPTIGA PBS, etc.)
+ *   0x0C0F_A000  Reserved (admin/wipe state, wrapped BHK, etc.; no PBS storage)
  *
  * RAM: the first 16 KB of SRAM1 (0x3000_0000) is reserved for the
  * FSBL's stack. The runtime slot reuses the full SRAM1 from 0x0 on

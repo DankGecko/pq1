@@ -60,9 +60,10 @@ impl DualSecureElement {
         self.optiga.load_pbs();
     }
 
-    /// First-boot OPTIGA E140 pairing, run BEFORE the seed wizard draws
-    /// entropy — see `OptigaTrustM::pair_for_first_boot` for why
-    /// (mandatory `ensure_shield` in `random()` needs a paired chip).
+    /// Bring-up transport OPTIGA E140 pairing, run before the legacy seed
+    /// wizard draws entropy — see `OptigaTrustM::pair_for_first_boot` for why
+    /// (mandatory `ensure_shield` in `random()` needs a paired chip). This is
+    /// not the production-final fresh-TRNG rotation or E140 lock ceremony.
     /// The OPTIGA-level error detail is logged by the inner driver;
     /// callers only branch on success.
     pub fn pair_optiga_for_first_boot(&mut self) -> Result<(), SeError> {
@@ -583,9 +584,9 @@ impl WalletStore for DualSecureElement {
     ///
     /// OPTIGA: `optiga.factory_reset()` overwrites every user OID through
     /// the shielded-connection path (`Change = Auto(F1D0) OR Conf(0xE140)`).
-    /// Works even if the user PIN is forgotten. The PBS in flash is
-    /// preserved so the chip remains usable for re-provisioning; the user
-    /// OIDs are now blank.
+    /// Works even if the user PIN is forgotten. The DHUK-derived PBS remains
+    /// reproducible and the shield stays available for re-provisioning; the
+    /// user OIDs are now blank. No PBS is stored on flash page 126.
     ///
     /// SE050: delegates to its own `factory_reset_admin` which uses the
     /// admin UserID at 0x7B10_00A0 to delete user objects.

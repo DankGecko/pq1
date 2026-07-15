@@ -26,7 +26,7 @@ Document your trust boundaries, your list of secrets, and where each secret is a
 |---|---|---|
 | BIP-39 entropy / seed | SE050 at rest; U585 Secure SRAM briefly during signing | U585 flash, NS world, logs, debug output |
 | SPHINCS+ `SK.seed`, `SK.prf`, `PK.seed` | U585 Secure SRAM briefly during signing | Anywhere persistent on U585, NS world |
-| SCP03 static keys | U585 Secure flash, HUK-wrapped | Plain flash, NS world, any unwrapped form outside SAES operations |
+| SCP03 static keys | Current bring-up transport keys are derived on demand from the BHK (DHUK fallback; OTP only in dev/legacy builds). The fresh-TRNG production-final rotation remains OPEN | Flash as a standalone key blob, NS world, logs, debug output |
 | PIN (raw) | U585 Secure SRAM for microseconds during stretching | Anywhere else, ever |
 | Stretched PIN (AESKey credential) | U585 Secure SRAM for one SCP03 handshake | Persistent storage, NS world |
 | SE050 attestation root cert | U585 Secure flash (hardcoded in image) | N/A (public) |
@@ -78,12 +78,14 @@ On every boot, before trusting the SE050:
 
 ### 3.5 Provisioning
 
-- **UPDATE 2026-07-14 (work-todo #36):** the final rotation now runs **ON-DEVICE at first field boot, immediately after the RDP-2 self-lock** — the factory rotates the AN12436 defaults only to per-device *transport* keysets and ships at RDP-0 (so buyers can verify the flash before first power); the first-boot rotation must mix **fresh TRNG salt** (a pure deterministic derivation is recoverable via the RDP-1-roundtrip attack, see #36). The root-choice and ordering reasoning below still applies, executed by firmware instead of a fixture. Rotate the SE050 factory-default SCP03 platform keys to device-unique keys (GP `PUT KEY`, replacing keyset `0x0B` in place — the factory keys are *published* in AN12436, so an un-rotated channel is plaintext-equivalent to a bus sniffer with the datasheet). Root the new keys in the **BHK** (`SAES-CMAC(BHK, "se050-scp03-{enc,mac,dek}-v1")`), same axis as the SE050 admin PIN — *not* the DHUK: the SCP03 keyset is replaceable and on an RDP2 unit the BHK can never be lost, so the "lost root ⇒ unrecoverable channel" brick mode is structurally impossible and the Tier-2 isolation (a silicon-DHUK extraction does not reach `half_E`) comes free. **Ordering matters: provision the BHK and run the PUT KEY ceremony only after stepping RDP → 1** (the BHK's flash wrapping is DHUK-keyed and the DHUK changes at RDP0→RDP1) — and only on a unit committed to production, never on a dev board that still moves RDP around (the RDP1↔RDP0 dance mass-erases the BHK page → dead SE050). Brick class on commit = same as OPTIGA PBS loss. Operational detail + the exact ceremony + the factory sequence: `docs/production-todo.md` §"SE050 — SCP03 + ADMIN provisioning" and the root-choice reasoning in `docs/architecture/trezor-comparison.md §6.5`. (The OPTIGA PBS stays on the **DHUK** for the inverse reason — its E140 is bumped to `LcsO=Operational`, i.e. immutable, so it needs the maximally-stable silicon root.)
-- Create the PIN auth object, seed binary object, and all policies in the same authenticated provisioning session.
-- Wrap the new SCP03 keys with the U585's HUK-derived key via SAES and write the ciphertext to Secure flash in the same provisioning step.
+- **Current lifecycle split (work-todo #36):** the factory installs and locks only per-device SE transport/attestation state, then ships at RDP-0 so the owner can verify flash and option bytes before first power. It does not install the final pairing secret, perform the BHK first write, create the wallet seed, or set RDP-2.
+- On first field boot, after pre-power verification, the FSBL self-locks RDP-2, performs the BHK first write, and then must run a final pairing rotation with fresh TRNG input before the seed wizard. A purely deterministic final rotation is forbidden because it is recoverable through an RDP round trip.
+- Current code only supplies deterministic DHUK-derived OPTIGA PBS and BHK-derived SE050 credentials. The durable non-secret salt/state owner, cut recovery, exact derivation, and E140 ratchet-versus-final-PBS ordering remain OPEN, owner-gated, and silicon-gated. This document does not select that construction or authorize an irreversible action; follow `docs/production-todo.md` and work-todo #36.
+- The current storage boundary is: deterministic OPTIGA PBS has no flash copy; flash page 126 holds only the wrapped BHK; SE050 SCP03/admin material is on the BHK axis. The final protocol must preserve the no-plaintext-secret boundary without inventing an HUK-wrapped SCP03/PBS blob, but may require reviewed durable public salt/state elsewhere.
+- Create the PIN-auth and seed objects only during the reviewed first-field ceremony after the final secure-channel rotation.
 - Pin the SE050 unique ID to U585 Secure flash.
 - Apply SE050 transport lock if applicable to your variant.
-- U585 RDP Level 2 is the final lockdown step. **Irreversible; it happens last — and per work-todo #36 it is self-programmed by the FSBL on the first field boot, not burned at the factory: devices ship at RDP-0 so users can verify flash/option-bytes/OTP over SWD before first power.**
+- U585 RDP Level 2 is the final MCU option-byte lockdown step before the final pairing rotation and seed wizard. **Irreversible; per work-todo #36 it is self-programmed by the FSBL on first field boot, not burned at the factory: devices ship at RDP-0 so users can verify flash, option bytes, and OTP over SWD before first power.**
 - Consider NXP EdgeLock 2GO if you need to provision at volume.
 - Provisioning must run in a clean-room environment. A compromised provisioning station compromises every device that passes through it.
 
@@ -108,16 +110,16 @@ On every boot, before trusting the SE050:
 
 ### 4.3 At-Rest Key Protection
 
-- SCP03 keys (or ECKey private key) stored **wrapped** in Secure flash.
-- Wrapping key is derived from the U585 HUK via SAES; the wrapping key itself never leaves the SAES peripheral.
+- Current bring-up OPTIGA PBS is deterministically derived from the STM32U585 DHUK at boot and is never stored in flash; this is not yet the production-final salted protocol.
+- Flash page 126 stores only the BHK wrapped under the per-die DHUK; final SE050 SCP03/admin material derives on the BHK axis.
 - A flash dump transplanted to another U585 must be useless.
-- The wrapped blob lives in a Secure flash region governed by GTZC.
+- The final derivation, durable public salt/state, first-field recovery, and E140 ordering remain OPEN until the owner-approved silicon and lifecycle gates close.
 
 ### 4.4 Hardware Peripherals to Use
 
 - **TRNG**: for all nonces, challenges, and any randomness. Audit that `rand_core` is wired to this, not to a software PRNG.
 - **HASH**: for SHA-256 acceleration inside SPHINCS+ (pick the SHA2 parameter set specifically to benefit from this).
-- **SAES**: for HUK-wrapped key operations.
+- **SAES**: for DHUK/BHK derivation and BHK wrap/unwrap operations; the hardware roots never become CPU-visible.
 - **TAMP**: wire any tamper inputs (case switch, mesh) into the wipe handler.
 - **BOR**: set to a high threshold so brownout detection fires with enough headroom for the wipe ISR.
 
@@ -295,7 +297,7 @@ Say this out loud to yourself before every commit:
 - Clean-room facility. No network on provisioning stations.
 - HSM-backed generation of per-device SCP03 keys, or EdgeLock 2GO.
 - Provisioning logs never contain secret material. Audit every log statement.
-- Post-provisioning verification: each device is challenged before shipping to prove it's in the expected state (PIN auth object present, seed object present, RDP-2 set, attestation working).
+- Factory acceptance proves only the authorized RDP-0 transport/attestation state. First-field acceptance, after owner verification, separately proves the RDP-2 self-lock, BHK first write, final secure-channel rotation, and seed-wizard completion.
 - Tamper-evident packaging between facility and user.
 - A provisioning station compromise compromises every device that passed through it during the compromise window. Have a plan.
 
@@ -307,7 +309,7 @@ Firmware update is its own project, outside the scope of this document, but note
 
 - Updates must be signed with a key held in an HSM, verified by the bootloader before any code runs.
 - The verification key is stored in a region covered by RDP-2 and option bytes that prevent modification.
-- Downgrade protection via a monotonic counter in Secure flash.
+- Production anti-rollback remains quarantined. The legacy secure-flash and unary-OTP mechanisms are rejected; Draft 1.1 is a preserved, non-implementation-approved research candidate whose journal, OTP/ECC, resource, factory, and silicon gates remain OPEN. Follow `docs/STATUS.md`; no backend is selected here.
 - Rollback plan for broken updates that doesn't involve unlocking RDP-2.
 - Update process must not require exposing secrets.
 - Test updates on field hardware before every release, not just in the lab.

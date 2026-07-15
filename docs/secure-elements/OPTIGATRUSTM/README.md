@@ -8,11 +8,17 @@ Reference documentation for the **OPTIGA Trust M V3** (SLS32AIA) secure element 
 > - **E120 LUC PIN counter binding** — hardware-enforced PIN attempt counter
 >   bound to F1D0 AuthRef; immune to PBS extraction. Gated behind the
 >   `optiga-hw-counter` feature.
-> - **OTP-derived PBS** — Platform Binding Secret is now derived from STM32
->   OTP via SAES-CMAC(DHUK, …), stable across reflashes.
-> - **`optiga-lock-operational` feature** — production-only opt-in for the
->   `E140.LcsO=Operational` bump. Default keeps `E140` at `Creation` (the
->   PRL handshake works in `Creation` per Infineon's own reference).
+> - **Current bring-up PBS** — Platform Binding Secret is derived
+>   deterministically with SAES-CMAC from the STM32 DHUK and is stable across
+>   reflashes; OTP is retained only for explicit dev/legacy builds. This is not
+>   the production-final protocol: the required fresh-TRNG final per-device
+>   rotation, durable public salt/state, cut recovery, and exact E140 ordering
+>   remain OPEN and production-blocking.
+> - **`optiga-lock-operational` feature** — controlled irreversible-validation
+>   opt-in for implemented non-E140 user-OID ratchets. Ordinary pairing never
+>   advances `E140`; its retained ratchet primitive is intentionally unwired.
+>   PRL works while E140 remains at `Creation`. This feature is not production
+>   authority: E140's actor/order relative to the final rotation remains OPEN.
 > - **Three-way PIN sync + admin-wipe** — full lockstep with SE050 UserID and
 >   MCU page-124 attempt counter; 10-wrong-PIN brick + admin-wipe validated
 >   end-to-end.

@@ -54,8 +54,8 @@ vendor laptop             user laptop                 device (STM32U585)
    FSBL bug is a device replacement.
 5. **Candidate power-loss contract.** Draft 1.1 proposes preserving the last confirmed
    fallback through PENDING and ATTEMPTED, seals CONFIRMED only after the
-   proposed health/finalization flow, and lets the immutable FSBL establish
-   the epoch floor. It is not implementation-approved; its durable
+   proposed health/finalization flow, and lets a future approved immutable
+   FSBL establish the epoch floor. It is not implementation-approved; its durable
    journal/OTP construction and resource, release-policy, factory, and silicon
    gates remain open. The legacy two-page commit is not power-fail-safe.
 6. **User-consent gated.** The target flow shows the new firmware's 8
@@ -85,7 +85,11 @@ Bank 1 — secure (1 MB, SECWM1: all 128 pages secure):
   page  6         Boot state          8 KB   (try-once + active slot)
   pages 7–64      Slot A secure     464 KB
   pages 65–122    Slot B secure     464 KB
-  pages 123–127   Reserved (legacy, SE050 admin, OPTIGA PBS)
+  page  123       Off-chain/UserOp counters       8 KB
+  page  124       MCU PIN-attempt log             8 KB
+  page  125       Wipe/duress admin state          8 KB
+  page  126       Wrapped BHK only (no PBS)        8 KB
+  page  127       Legacy secure key/state          8 KB
 
 Bank 2 — non-secure (1 MB, SECWM2: all 128 pages NS):
   pages 0–63      Slot A NS         512 KB

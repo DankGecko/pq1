@@ -20,11 +20,21 @@ reversible-iteration backlog.
 
 > **UPDATE 2026-07-14 — selected product direction (work-todo #36).** The
 > intended product ships a batch-uniform, pre-first-power-verifiable RDP-0
-> artifact and moves lifecycle/self-provision work to first field boot rather
-> than a fixture RDP-2 burn. Exact option bytes, transport-key state,
-> first-boot ordering, failure recovery, and receipts are not yet an approved
-> ceremony. Older orderings below are research inputs and MUST NOT be
-> mechanically reinterpreted as first-boot instructions.
+> artifact. The factory retains SE-internal irreversible provisioning and
+> lockdown on transport keysets: S-1/S-2/S-3 metadata/object preparation,
+> UserID/LUC and attestation objects, and the eventual OPTIGA lifecycle
+> ratchets. The intended first-field sequence is the MCU RDP-2 self-lock, BHK
+> first-write, TRNG-salted SCP03/PBS rotation, and then the seed wizard, but it
+> is not currently executable: the batch-uniform/erased shipping state has no
+> authenticated per-unit handoff for the factory-installed transport keys.
+> The handoff, authenticate-before-rotate rule, atomic durable old/new-key and
+> KVN recovery, and exact E140 lifecycle timing are still OPEN. The field
+> rotation must remain
+> possible through the transport-PBS `Conf(E140)` path, and that ordering has
+> neither owner approval nor a silicon receipt. Exact option bytes, failure
+> recovery, and receipts are not yet an approved ceremony. Older orderings
+> below are research inputs and MUST NOT be mechanically reinterpreted as
+> first-boot instructions.
 
 ## Ground rules
 
@@ -38,9 +48,10 @@ reversible-iteration backlog.
    part requires a fresh instruction.
 3. **No feature combinations on dev machines.** The
    `optiga-lock-operational`, future `stm32-burn-device-key`, RDP=2,
-   and WRP1A flows are enabled exactly once per physical part, at
-   production time. They never appear in a `make flash-*` target
-   that developers run day-to-day.
+   and WRP1A flows may run only under exact owner authority on a named
+   sacrificial part, or later under a separately reviewed production ceremony.
+   No such production ceremony is authorized today. They never appear in a
+   `make flash-*` target that developers run day-to-day.
 4. **Every gate has an explicit "why this is safe now" checklist.**
    Before flipping a one-way switch, the operator records what was
    validated on the sacrificial parts that justified the commit.
@@ -55,23 +66,26 @@ Termination (0x0F)`. No reverse command exists, no authorisation
 reverses it, no factory-reset path is exposed. Once you commit,
 you are committed.
 
-The `optiga-lock-operational` Cargo feature gates every LcsO=op bump
-we emit today. Default OFF. Production builds flip it only at final
-provisioning, after every item in the pre-commit checklist below has
-passed against sacrificial parts.
+The `optiga-lock-operational` Cargo feature gates the implemented non-E140 user-
+OID lifecycle ratchets. Default OFF. Ordinary pairing never ratchets E140, and
+the retained `ensure_pbs_lcso_operational` primitive is intentionally unwired.
+The current quarantined candidate profile includes the feature, but that does
+not select E140's production actor/order or authorize any lifecycle mutation.
+Use it only under an exact owner-authorized sacrificial plan until a reviewed
+ceremony exists.
 
-#### Production items (each is one-way per chip)
+#### Candidate irreversible items (each is one-way per chip; no authority)
 
-- [ ] **E140 LcsO=Operational.** PBS metadata frozen, chip accepts
+- [ ] **E140 LcsO=Operational (unwired candidate action).** PBS metadata frozen, chip accepts
       Change only via `Conf(E140)` (shielded connection with matching
       PBS). NOTE: PRL does NOT need this — Shielded Connection works
       with E140 at LcsO=Creation per the Infineon pairing example +
       SRM "Pairing Use Case Pre-conditions" (requires `LcsO <
       operational`). This transition is purely a *post-pairing
       hardening* step that locks the PBS against plaintext rewrite.
-      Production chips land here once the PBS derivation is fully
-      validated and we're ready to seal the chip's pairing against
-      tampering.
+      A future production ceremony may land here only after the final
+      credential protocol, cut recovery, and E140 order are frozen and
+      silicon-validated.
 - [ ] **F1D0 (AUTH_REF) — TIGHTEN `Change` AC BEFORE LcsO=Operational. SHIP BLOCKER S-1. DO NOT REGRESS.**
       The bring-up metadata
       `{Change=ALW, Read=NEV, Exec=ALW | LUC(E120), DataType=AUTHREF}`
@@ -189,34 +203,29 @@ passed against sacrificial parts.
       OR Conf(E140), Read=Auto(F1D0) OR Conf(E140)}`. Data remains
       writeable via PIN-HMAC auth or shielded connection — exactly
       the wallet's read/write envelope.
-- [ ] **F1E1 (COUNTER) LcsO=Operational — OR remove entirely (SHIP BLOCKER S-3).**
-      Production builds MUST enable `optiga-hw-counter`. In that build
-      F1E1 is unused — the counter is the silicon LUC at E120. F1E1
-      MUST therefore either be (a) ratcheted to LcsO=Op with junk
-      content so it cannot be re-armed as a counter on a desoldered
-      chip, or (b) removed from the provisioning sequence entirely.
-      The currently-documented `{Change=Conf(E140), Read=ALW}` shape
-      is the soft-counter path that S-3 deprecates: `Conf(E140)` is
-      bypassable by a PBS-extraction attacker, and on a chip without
-      hw-counter the F1D0 Execute=ALW lets a desoldered-chip attacker
-      burn unbounded HMAC verifies without ever touching F1E1. The
-      mitigation is: enforce `optiga-hw-counter` at compile time (see
-      S-3 in `docs/work-todo.md`), then make `build_metadata_counter`
-      a `compile_error!` under `mode-production`, then write F1E1
-      either as a frozen-junk slot or skip it entirely.
+- [ ] **F1E1 provisioning/reset sentinel — select its final production
+      disposition (S-3 adjacent).** Production builds already require
+      `optiga-hw-counter`; E120 is the silicon lockout authority in that
+      profile. F1E1 is still used as the boot-readable provisioning/reset
+      sentinel, but it is never bumped or consulted as lockout authority on
+      that path. Do not compile-fence `build_metadata_counter` unless a
+      replacement sentinel is implemented first. Before shipment, either
+      retain F1E1 under a reviewed access-condition/lifecycle policy or replace
+      the marker and remove its provisioning/reset consumers. In either case,
+      prove that the legacy non-hardware-counter lockout path remains
+      production-ineligible.
 
-      Also reconcile the F1D5 / F1E1 / "soft-counter" naming drift
-      across `apdu.rs:151`, `apdu.rs:956 build_metadata_counter`
-      docstring, and the duress-comment in `mod.rs`. All three name
-      the same mechanism. Pick one (delete the mechanism) and remove
-      the other two stories.
+      Also reconcile the stale F1D5 / F1E1 / "soft-counter" naming across
+      `apdu.rs`, `mod.rs`, and supporting documentation. Production guidance
+      must call E120 the lockout counter and F1E1 only the provisioning/reset
+      sentinel.
 - [ ] **Global chip LcsO (0xE0C0) = Operational** if we ever transition
       it. Currently we leave this alone; if we ever write it, it goes
       in this doc first.
 
-#### SHIP BLOCKER S-2 — Trust-anchor cleanup — OID TARGET UNDER REVISION (2026-05-29)
+#### SHIP BLOCKER S-2 — Trust-anchor pool closure — candidate inventory documented; policy and silicon receipt OPEN
 
-> **⚠️ CORRECTION (2026-05-29) — this section is mis-targeted; revise the OID before acting.**
+> **⚠️ CORRECTION (2026-05-29; reconciled 2026-07-14) — the historical E0E3 target is wrong; no action is authorized.**
 > Our own 2026-04-22 on-silicon metadata dump (memory `project_optiga_reset_oids`)
 > shows **`0xE0E3` is a device-certificate slot (`DataType=0x12`), already full
 > with Infineon's device cert — NOT a Trust Anchor (`0x11`)**. The chip will not
@@ -227,34 +236,31 @@ passed against sacrificial parts.
 > (`docs/provisioning/provisioning-reference.md`, Matrix 2 + top correction box).
 >
 > **Reframed threat:** the real Protected-Update trust-anchor pool is the
-> `DataType=0x11` slots (research: `0xE0E8/0xE0E9/0xE0EF`), which ship **empty at
+> candidate `DataType=0x11` slots (`0xE0E8/0xE0E9/0xE0EF`), which may ship **empty at
 > LcsO=creation** — a physical attacker can install *their own* anchor there and
-> sign a manifest. **Our code touches none of them.** So the exposure is "open
+> sign a manifest. The fail-closed `lockdown_ta_pool` stub now names them but
+> performs no APDU and always refuses. So the exposure is "open
 > type-0x11 anchor slots," not "Infineon sample cert at 0xE0E3." Also open:
 > whether the SetObjectProtected path is even live on our chip rev (our dump
 > showed every manifest failing for want of a usable TA) — so the dump settles
 > *severity* too.
 >
-> **Do NOT act on the OID targets below until the "⏳ BENCH-PENDING" dump at the
-> end of this section confirms the real anchor slot.** The fix *shape* (HSM-
+> **Do NOT act on the candidate OID targets below until an owner-authorized
+> silicon inventory/readback confirms the SKU/revision and the selected policy.**
+> The fix *shape* (HSM-
 > controlled anchor, or fill-and-lock every type-0x11 slot + ratchet LcsO=Op) is
 > unchanged; only the OID targets move.
 
-The single biggest hole in the OPTIGA shipping posture, and the one
-that defeats EVERY other hardening including S-1's metadata tightening
-and every LcsO=Operational ratchet above. **Cannot ship while this is
-open. There is no `optiga-lock-operational` flag value that closes it
-on its own — this requires a separate factory-controlled cert
-substitution.**
-
-The bring-up flow under `optiga-reset-oids`
-(`secure/src/optiga/reset.rs`) provisions `0xE0E3` with the Infineon
-**sample** EC P-256 cert from `samples/integrity/sample_ec_256_priv.pem`.
-The matching private key is in Infineon's public example bundle.
-Anyone holding it can sign a SetObjectProtected manifest the chip
-accepts, and a valid manifest **bypasses the target OID's Change AC
-entirely**, including `Change = NEV` and `Change = Auto(F1D0)` on
-ratcheted objects.
+S-2 remains a ship blocker because the real type-0x11 pool and the
+device-certificate retype boundary are not closed. No existing
+`optiga-lock-operational` feature value settles the SKU inventory, HSM policy,
+or lifecycle ceremony. The retired `optiga-reset-oids` source contains an
+Infineon sample certificate and attempted to place it at E0E3, but that write
+is a no-op on the observed full type-0x12 object and the feature is now
+unconditionally unbuildable. Do not describe the sample-key path as a live
+anchor on this part. A Protected Update additionally requires the target's
+appropriate integrity/reset metadata; the exact negative matrix remains part
+of the authorized silicon validation below.
 
 Required for ship (each item is one-way per chip):
 
@@ -278,23 +284,28 @@ Required for ship (each item is one-way per chip):
       apply the same treatment to all of them. Any object whose
       metadata is mutable AND whose data_type can be set to `0x11`
       is a usable trust anchor surface.
-- [ ] **`compile_error!` fence** `optiga-reset-oids` and
-      `reset::provision_trust_anchor` in `secure/src/nsc/mod.rs`'s
-      production-build fence. Currently the feature flag is dev-only
-      by convention; make it a compile-time guarantee that no
-      production binary can write the sample TA cert.
-- [ ] **Document the factory HSM key custody** (which device, which
-      key slot, who has authorization to sign manifests, what
-      authorization workflow gates a signing operation). Pin this in
-      §"Supply-chain attestation" below.
-- [ ] **Sacrificial-part verification:** with the production trust
-      anchor in place at `0xE0E3` and all other TA-pool OIDs +
-      `0xF1D7` ratcheted:
+- [x] **Unconditionally quarantine `optiga-reset-oids`.** The
+      `OPTIGA_RESET_OIDS_RETIRED` compile fence rejects every dev, test,
+      factory, and production feature combination. The source remains only as
+      incident evidence; no runnable binary can write the mis-targeted sample
+      certificate.
+- [ ] **Select the pool policy.** If a factory HSM anchor is selected, document
+      device, key slot, signing authorization, recovery, and audit workflow in
+      §"Supply-chain attestation" below. If neutralization is selected, prove
+      every unused type-`0x11` surface is irreversibly closed and record the
+      resulting loss of field Protected-Update recovery.
+- [ ] **Sacrificial-part verification:** only after the selected S-2 policy is
+      frozen against the confirmed E0E8/E0E9/E0EF type-0x11 pool, with unused
+      pool surfaces closed and
+      `0xF1D7` dispositioned:
       - Manifest signed by a non-PQ1 / Infineon-sample key targeting
         `kid ∈ {0xE0E8, 0xE0E9, 0xE0EF}` → MUST fail.
       - Same manifest targeting `kid ∈ {0xE0E1, 0xE0E2, 0xE0E3, 0xF1D7,
         random OIDs}` → MUST fail.
-      - Manifest signed by the factory HSM key → MUST succeed.
+      - If an HSM anchor is selected, a manifest signed by that exact key → MUST
+        succeed only for the explicitly authorized target/update shape.
+      - If neutralization is selected, every Protected-Update attempt through
+        the closed pool → MUST fail.
       - Manifest attempting to rewrite F1D0 after S-1's ratchet,
         signed by the public Infineon sample key → MUST fail.
       - Manifest attempting to promote any spare OID to
@@ -308,64 +319,48 @@ Required for ship (each item is one-way per chip):
       Trezor's integration relies on this; verify on our chip
       revision before depending on it.
 
-#### Pre-commit checklist (sacrificial part, each run fresh)
+#### Pre-commit gate (no runnable checklist is approved)
 
-Before flipping `optiga-lock-operational=on` on a "real" unit:
+The former six-step bring-up sequence mixed a shared dev PBS, the rejected OTP
+master path, user-OID ratchets, and an assumed E140 transition. It is retired
+and must not be executed as a production or sacrificial checklist. Before any
+replacement command exists, freeze the actor/order, exact object/range,
+artifact digest, readback predicate, power-cut behavior, and fresh-part
+authorization under the planning workflow. Ordinary pairing must remain unable
+to ratchet E140, and no failure grants automatic retry authority.
 
-1. Run `make flash-hw-optiga-bringup-write-only` (Phase A) with the
-   feature OFF. All 6 user OIDs provision; chip stays at
-   LcsO=Creation; nothing committed.
-2. Reflash with a different commit hash or a comment-only code edit.
-   Confirm PBS fingerprint `8ca52e4bc284d822` reproduces identically.
-   This is the rebuild-stability proof for the hardcoded-master path.
-3. Repeat step 2 twice more. Any drift in the fingerprint aborts the
-   flow — root-cause before proceeding.
-4. On a second fresh part: flip `otp-hardcoded-master-key` OFF so the
-   OTP burn path runs. Validate first-boot TRNG→OTP→readback cycle
-   completes cleanly (`[S][otp] device master burned, X bytes`
-   appears; second boot shows `device master already burned`).
-5. On a third fresh part: full Phase-B with `optiga-lock-operational`
-   enabled + `e2e-skip-unlock` off. MasterHello / SlaveHello / record-
-   layer exchange all succeed against the committed PBS. Read back
-   entropy / master / vk via the shielded channel and confirm bit-
-   for-bit match of what was written.
-6. Only then: flip `optiga-lock-operational=on` on the production
-   build for the unit being provisioned. Single flip, single chip.
+#### Retired escape-hatch hypothesis
 
-#### Escape hatch
-
-`make flash-hw-optiga-reset` uses SetObjectProtected + an Infineon
-sample Trust Anchor to reset the F1D0..F1DF user-OID range. Validated
-16/16 on the original bench chip. Can recover a user-OID range that
-was accidentally LcsO=op'd in dev. Cannot reset E140 once LcsO=op
-with a lost PBS (that's the hard brick from the first chip), so the
-escape hatch exists for user OIDs only.
+The former `make flash-hw-optiga-reset` path is not an escape hatch. It
+mis-targets the observed type-0x12 E0E3 device-certificate object, did not
+establish a usable anchor, and is now unconditionally compile-fenced; the Make
+flash target refuses before generation, build, flashing, or option-byte work.
+Preserve an incompatible part for analysis or service/RMA. No automatic retry
+or substitute Protected-Update ceremony is authorized.
 
 #### ⏳ BENCH-PENDING (no dev board on hand 2026-05-29) — do first when back at the board
 
 All need the physical TRUSTMV3SHIELDTOBO1; they gate the corrected S-1/S-2 fixes.
 
-- [ ] **OPTIGA E0Ex metadata dump (settles S-2).** `trustm_metadata -r` on
+- [ ] **OPTIGA E0Ex metadata dump (confirms candidate S-2 inventory/ACs).** `trustm_metadata -r` on
       `0xE0E0 0xE0E1 0xE0E2 0xE0E3 0xE0E8 0xE0E9 0xE0EF` — record type / LcsO /
       Read+Change AC / populated. Then the discriminating read: the **`Int(...)`
       (Integrity) AC on the objects we actually Protected-Update** — that names
       the exact trust-anchor OID the manifest path consults, i.e. the slot S-2
-      must lock. Settles where the sample cert is, what E0E3 holds, whether our
-      write no-ops, which anchor matters, and whether the attack path is live.
-- [ ] **S-1 code fix (`apdu.rs:934`).** Our provisioning **actively writes
-      `Change=ALW`** on F1D0 (worse than the chip default). Change the production
-      path to write `Change=Conf(0xE140)&&Auto(0xF1D0)`, `Read=NEV`, then ratchet
-      LcsO=Op. Keep the dev `Change=ALW` variant gated OFF in production.
-- [ ] **S-2 code fix (`reset.rs`).** Slot identity is now DOC-SETTLED (SRM Table 68,
-      triple-sourced): re-target anchor provisioning from the no-op `0xE0E3` (device
-      cert, type 0x12) to the real type-0x11 pool `{0xE0E8, 0xE0E9, 0xE0EF}`, ratchet
-      the device-cert slots E0E1/E0E2/E0E3 (block DEVCERT→TA retype), and fix the
-      `reset.rs:24-26` comment + `TRUST_ANCHOR_OID`. Requires the AC-builder code gap
-      (work-todo) first. Bench still needed ONLY for: (a) does the chip accept a
-      type-0x12 `kid` (mixed evidence — `ecdsa_verify` accepts 0x11|0x12); (b) the
-      exact `Int`-AC the manifest path consults.
-- [ ] **Retire/relabel the stale escape-hatch "16/16 OK" claim** and consider
-      removing `optiga-reset-oids` + `reset.rs` (memory `project_optiga_reset_oids`).
+      must lock. Confirms what E0E3 holds, the candidate pool, exact integrity
+      AC, and whether the Protected-Update path is live; it does not by itself
+      select HSM-anchor versus neutralization.
+- [ ] **S-1 silicon validation.** The locked candidate builder now uses
+      `Change=Auto(F1D0)` with LUC binding and fail-closed readback. Validate the
+      exact selected metadata and user-wipe/PIN flows before authorizing a
+      lifecycle ratchet; do not reintroduce the old `Change=ALW` profile.
+- [ ] **S-2 replacement implementation.** Do not retarget the retired
+      `optiga-reset-oids` helper. Implement the separately reviewed pool policy,
+      preserve/ratchet E0E1/E0E2/E0E3 as type-`0x12`, and prove the exact
+      `Int`-AC and readback predicates before any mutation.
+- [x] **Retire/relabel the stale escape-hatch "16/16 OK" claim.** The feature
+      and Make path now refuse before mutation; `reset.rs` remains incident
+      evidence only.
 - [x] **OPTIGA monotonic-counter endurance — RESOLVED (2026-05-29 cross-reference).**
       ~600k updates per counter / ~2M total CONFIRMED against the SRM + datasheet.
       Size PIN/usage thresholds well under it (our E120 limit is 32 — ample margin).
@@ -411,18 +406,21 @@ blockers above stand; these refine accuracy + add residuals.
 
 > **2026-07-14 scope override — no executable ceremony.** The factory no
 > longer burns a legacy OTP master or performs an RDP0→1→2 transition. The
-> owner-selected product model ships a verifiable RDP-0 artifact and performs
-> any eventual lifecycle/self-provision transition on first field boot, but
-> its exact option bytes, ordering, receipts, rollback backend, and failure
-> recovery remain unapproved. Draft 1.1 grants no OTP/WRP/RDP authority. Treat
-> older bullets in this section as research inputs until rewritten into an
-> exact, reviewed, owner-authorized ceremony.
+> owner-selected product model ships a verifiable RDP-0 artifact. First field
+> boot reserves only the MCU RDP-2 self-lock, BHK first-write, and TRNG-salted
+> SCP03/PBS rotation; OPTIGA S-1/S-2/S-3 lockdown and lifecycle responsibility
+> remain factory-side. The exact E140 ratchet-versus-field-rotation sequence is
+> unresolved and production-blocking. Option bytes, receipts, rollback
+> backend, and failure recovery remain unapproved. Draft 1.1 grants no
+> OTP/WRP/RDP authority. Treat older bullets in this section as research inputs
+> until rewritten into an exact, reviewed, owner-authorized ceremony.
 
 #### Production items
 
 - [x] **Do not require the legacy STM32 OTP master-key burn for shipping.**
-      The `saes-dhuk` production profile now derives SE tunnel roots from
-      SAES-CMAC(DHUK); the legacy 32-byte region at
+      The current `saes-dhuk` bring-up/candidate transport profile derives SE
+      tunnel roots from SAES-CMAC(DHUK); this is not the still-open
+      fresh-TRNG production-final rotation. The legacy 32-byte region at
       `0x0BFA_0080..0x0BFA_00A0` on first secure-world boot of a blank
       MCU is a dev/legacy fallback and should remain blank unless a separately
       reviewed future consumer assigns it. `otp-hardcoded-master-key` remains
@@ -789,6 +787,20 @@ signer, BLS verify is over public data) · add the MCU's own cert line to Matrix
 The SE050 half of the dual-SE also has irreversible steps (per
 `docs/secure-elements/se050-factory-reset.md` + work-todo #20). Summarising here:
 
+> **Current authority boundary (2026-07-14).** The detailed deterministic
+> BHK-derived PUT KEY sequence and pre-commit checklist below are retained as
+> bring-up evidence and research input; they are **not** the production-final
+> ceremony and grant no hardware authority. Owner decision #36 requires a
+> fresh-TRNG final per-device rotation on first field boot. Its credential
+> derivation, authenticated per-unit transport-key handoff,
+> authenticate-before-rotate rule, durable public salt/state owner, atomic
+> old/new-key and KVN cut recovery, coordinated OPTIGA/SE050 ordering, and
+> exact E140 timing remain OPEN and production-blocking. A batch-uniform/erased
+> shipping image cannot currently authenticate to factory-installed per-unit
+> transport keys; no migration protocol has been selected. Where a historical
+> imperative below conflicts with
+> that boundary, this paragraph governs.
+
 - [ ] **SCP03 keys rotated per device** (work-todo #11). Derivation
       root and chip-state changes:
       - Today: hardcoded AN12436 Rev 2.4 defaults for OEF `0xA921`
@@ -806,7 +818,7 @@ The SE050 half of the dual-SE also has irreversible steps (per
       - **Root = BHK** (not DHUK, not DHUK⊕BHK). `se050_scp03_*_key`
         route through `derive_into_bhk` ⇒ `SAES-CMAC(BHK,
         "se050-scp03-{enc,mac,dek}-v1")` in a `bhk`-on build (which is
-        the production build); falls through to `derive_into` (DHUK /
+        the current candidate build); falls through to `derive_into` (DHUK /
         OTP per build) when `bhk` is off. Same axis as the SE050 admin
         PIN. Rationale for BHK here (vs. the OPTIGA PBS, which stays on
         DHUK): the SE050's SCP03 keyset `0x0B` is *replaceable* (you can
@@ -930,7 +942,13 @@ The SE050 half of the dual-SE also has irreversible steps (per
       whatever we ultimately ship (currently in `docs/se050-userid-
       pin-auth.md`); post-provision, policy is frozen.
 
-#### SE050 SCP03 rotation pre-commit checklist (sacrificial parts)
+#### Historical deterministic SCP03 characterization (sacrificial parts only)
+
+This retained checklist may characterize the existing deterministic PUT KEY
+helper on an explicitly authorized throwaway part. It is **not** a production
+pre-commit checklist and cannot graduate that helper into the first-field
+ceremony. That ceremony remains blocked on the authenticated per-unit handoff
+and atomic durable old/new/KVN recovery stated above.
 
 Before flipping `se050-rotate-scp03=on` on any real unit:
 
@@ -941,39 +959,33 @@ Before flipping `se050-rotate-scp03=on` on any real unit:
    to un-rotated chips. Log the error, no chip state committed.
 2. On sacrificial SE050 #2: build + flash with `se050-rotate-scp03`.
    First boot: firmware sees default keyset, runs PUT KEY ceremony,
-   rotates to `KVN=0x11` with derived keys. Second boot on the same
-   chip: firmware uses `KVN=0x11` + derived keys → SCP03 establishes.
+   replaces `KVN=0x0B` in place with deterministic derived transport keys.
+   Second boot on the same chip: firmware uses `KVN=0x0B` + derived keys →
+   SCP03 establishes.
    Third boot: reflash with a comment-only code edit, confirm SCP03
    still establishes (derivation stable across firmware rebuilds).
-4. On sacrificial SE050 #3: same as #2 but induce a brown-out
-   mid-`PUT KEY` by cutting VCC between the ENC and MAC key writes.
+3. On sacrificial SE050 #3: same as #2 but induce a brown-out
+   during the single `PUT KEY` APDU.
    Verify on restore: either all three keys rotated (atomic), or
    chip reports specific error the code can detect and retry. If
    partial rotation survives the brown-out → halt the rollout and
    re-design.
-5. On sacrificial SE050 #4 (only if stage C is shipping): repeat #2
+4. On sacrificial SE050 #4 (only if UID binding is being characterized): repeat #2
    with UID binding enabled. Confirm derivation depends on UID:
    swap the rotated SE050 to a different STM32 board with
    `se050-rotate-scp03` built for that STM32's OTP → SCP03 establish
    fails (different OTP → different derived keys → key mismatch).
    Swap back → works. This is the clone-resistance proof.
-6. Only then: production line runs per-unit `PUT KEY` → provision →
-   admin UserID + user UserID install → option-byte lock. Per-part
-   logs record: SE050 UID, KVN 0x11 KCV (3 bytes per key), post-
-   rotation SCP03 establishment success, first-boot admin PIN
-   derivation fingerprint.
+5. Stop after recording the sacrificial evidence. It grants no authority for a
+   production-line or first-field PUT KEY operation.
 
 #### SE050 SCP03 rotation — escape hatch
 
-**None.** Unlike OPTIGA's SetObjectProtected + Trust Anchor recovery
-(which can reset user OIDs at `LcsO=Op`), SE050 has no reset-to-
-factory-keys path for SCP03. The `0x0B` default keyset still exists
-on the chip (GP `PUT KEY` installs new keysets, doesn't replace the
-default), but once the firmware commits to `KVN=0x11` there's no
-build-time path back to `0x0B` without an explicit rollback feature
-— and rolling back exposes every device to the same factory default
-that made rotation necessary in the first place. Treat a lost
-derivation root as a total loss of that chip.
+**None for the current experiment.** The helper replaces keyset `0x0B` in
+place; it does not preserve a default-key fallback. A cut, partial update, or
+lost derivation root can therefore strand the SE050. This is another reason
+the helper is limited to sacrificial characterization and is not the final
+migration protocol.
 
 ### SE050 — datasheet cross-reference (AN12413/AN12436, 2026-05-29)
 
@@ -1090,18 +1102,21 @@ affect the broader secure-world isolation that production will need.
       Adding a new destructive / dev-only e2e feature must land
       with a matching `prod-check` entry in the same commit.
 
-- [ ] **`optiga-lock-operational=ON` production commit.** Every
-      validated test run to date has kept every OID at
-      `LcsO=Creation`. The production bump to `LcsO=Operational` is
-      covered by this document's OPTIGA section (and is the defining
-      commit ceremony of the OPTIGA subsystem), but also needs
-      explicit cross-validation against the PIN-attempt paths before
-      flipping: confirm that `reset_hw_pin_counter`,
+- [ ] **Resolve `optiga-lock-operational` actor/order, then validate on
+      sacrificial silicon.** Every validated test run to date has kept every
+      OID at `LcsO=Creation`. The feature gates the implemented user-OID
+      ratchets; ordinary pairing does not call the retained E140 ratchet
+      primitive. E140's order relative to the fresh-TRNG final rotation is
+      OPEN; therefore neither path is a production commit path or grants
+      authority to flip a shipping unit. After an owner-approved design orders
+      those actions and explicitly wires only the selected actor, cross-validate
+      the selected ratchet against the
+      PIN-attempt paths: confirm that `reset_hw_pin_counter`,
       `factory_reset`, three-way per-attempt consumption, and the directional
       page124/E120 boot check all still work on
       an OID set with `LcsO=Op` metadata. See work-todo.md #25 Gap 5
-      for the reversible dry-run on a sacrificial chip that must
-      precede any production LcsO=Op flip.
+      for the reversible dry-run on a sacrificial chip. Only a later reviewed
+      ceremony may define a production LcsO=Op flip.
 
 - [ ] **`make test-key-speed` as release smoke gate.** The NS bench
       is the primary "did anything regress signing perf?" detector.

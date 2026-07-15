@@ -38,19 +38,20 @@
 | FW1 | **FI-skip of the sig verify → unsigned image installed** | a fault skips `verify_signature` and the erase/flash proceeds | **DEFENDED.** `verify_manifest` is called at BEGIN *before* the slot erase (`fw_update/mod.rs:418-512`, erase at `cmd_fw_begin.rs:345-349` — the C-1 verify-before-destructive-write fix); `verify_signature` runs through `fi::check_true_into_sentinel` with `scrub_sentinel_register` between digest/rollback verdicts (`mod.rs:471-510`); COMMIT re-verifies from fresh flash read (`verify.rs:41-115`, aggregate sentinel + `black_box`) | Rainbow `fault_sweep_fw_verify.py` (BAD_SIG/BAD_DIGEST fixtures, success = zero Err→Ok flips) | ✅ FI sweep |
 | FW2 | **Rollback-floor bypass / counter reset** | a downgrade to a vulnerable version is accepted, or the floor is reset | **NOT PRODUCTION-DEFENDED.** Strict version comparison exists, but the underlying unary OTP tally attempts unsupported reprogramming of ECC-protected QWs. Draft 1.1 proposes a typed epoch-floor interface; approval, physical codec/ECC/interruption, resource, and silicon gates remain OPEN. | Production compile fence + historical host models; current candidate review pending | ⛔ ship blocker |
 | FW3 | **Manifest parse fail-open** | a malformed/oversized manifest is accepted | **DEFENDED (with a fuzz-only residual).** Total/panic-free parse (`read_array` checked slice `lib.rs:627-632`, proptest `:826`, Kani `:1000`); oversized-length reject at `cmd_fw_begin.rs:286-293`. **Residual**: `verify_structural`'s reserved-region hygiene scan is fuzz-covered but **not Kani-covered by design** (`lib.rs:1064-1073`) | fw-manifest Kani harnesses + `fw-manifest/tests/negative_{parser,verifier_chain}.rs` | ✅ Kani + fuzz (structural = fuzz only) |
-| FW4 | **Boot-fingerprint spoof** | the FSBL trust-root fingerprint and the S-world advisory fingerprint diverge undetected | **DEFENDED (human-in-loop).** Both derive from `sphincs_tz_bip39::firmware_fingerprint_lines` (FSBL `fsbl/src/render.rs:30-44`, S-world `measured_boot.rs:151-186` over a *linker-derived* base so it measures the running slot); divergence = strong tamper signal. **Caveat**: the cross-check is a human reading two rows — the advisory row is self-attested, no automated compare | Manual boot inspection; `docs/security/measured-boot.md` | ⚠ human-in-loop (no auto cross-check) |
+| FW4 | **Boot-fingerprint spoof** | the legacy FSBL fingerprint and the S-world advisory fingerprint diverge undetected | **BENCH PARITY DEFENDED; PRODUCTION TRUST ROOT OPEN.** Both derive from `sphincs_tz_bip39::firmware_fingerprint_lines` (FSBL `fsbl/src/render.rs:30-44`, S-world `measured_boot.rs:151-186` over a *linker-derived* base so it measures the running slot), so divergence is a useful bench tamper signal. **Caveat**: the cross-check is a human reading two rows and the advisory row is self-attested; the current FSBL does not become a production trust root until geometry, WRP/RDP, resource, factory, and silicon gates close | Manual bench inspection now; immutable-FSBL receipts before production | ⛔ trust-root gate; ⚠ bench human check |
 | FW5 | **Staging state-machine confusion** | COMMIT without the full CHUNK set, chunk reorder/retransmit, or a partial-write brick | **DEFENDED.** Strict monotonic append `check_chunk` rejects gaps/retransmits (`mod.rs:516-553`); QW-alignment + last-chunk pad (`staging.rs:50-72`); COMMIT requires `received==expected` + full-image hash match (`verify.rs:42-47`); STATUS reports `STAGED` only when both halves complete (`cmd_fw_status.rs:48-55`) | `nsc_fw_update_pure_tests.rs` (non-monotonic chunk tests `:496-518`) | ✅ host tests |
 | FW6 | **Manifest-v6 candidate binding drift** | a proposed field/offset/domain byte changes, the physical slot or `(R,E)` is omitted, or a legacy artifact is accepted | **RESEARCH CANDIDATE; IMPLEMENTATION OPEN.** Draft 1.1 proposes the exact V6/121-byte preimage and fixtures. Existing V1/75-byte proofs and historical V4/80-byte models provide no V6 implementation assurance. | After candidate approval: shared V6 fixtures + parser/model/extraction gates before implementation approval | ⛔ implementation gate |
 | FW7 | **Runtime write to the final WRP-protected FSBL range** | runtime firmware modifies the immutable bootloader | **LEGACY HARDWARE MECHANISM, CANDIDATE OPEN.** WRP rejects writes to a correctly programmed range, but Draft 1.1's proposed pages-0..4 geometry, both-bank protection, exact option bytes, and factory receipt are not approved. The current 32-KiB footprint test is only a legacy bench-link regression. | After candidate approval: physical LOAD-span + RAM/stack gates, both-bank option-byte receipt, and owner-authorized silicon validation | ⛔ architecture / hardware / factory gate |
 | FW8 | **Try-once / A-B slot rollback + torn-commit brick** | a bad slot bricks the device, or a try-once revert erases the live slot | **CONFIRMED OPEN.** COMMIT advances the OTP floor before the candidate proves health, excluding the old slot; the single-candidate selector then cannot revert. Draft 1.1 proposes a replacement state machine but withholds implementation and physical-backend authority. | Candidate state/power-cut review; physical FLASH, RAM/stack, factory, and silicon receipts pending | ⛔ ship blocker |
 | FW9 | **PIN not enforced on a FW command** | a FW command runs without a fresh PIN unlock | **DEFENDED.** All five (BEGIN/CHUNK/COMMIT/STATUS/ABORT) gate on `peek_state(pin_verified).check_sentinel() != OK_SENTINEL` (`cmd_fw_begin.rs:220`, `cmd_fw_chunk.rs:39`, `cmd_fw_commit.rs:35`, `cmd_fw_status.rs:26`, `cmd_fw_abort.rs:27`) | Source-text tests `nsc_fw_update_pure_tests.rs:663-720` | ✅ source-text tests |
-| FW10 | **Claim-8 OPTIGA counter cross-check advertised but ABSENT** | the threat model claims a defense the code doesn't implement | **⚠ CONFIRMED CLAIM DRIFT.** `threat-model.md` advertises an OPTIGA cross-check that `cmd_fw_commit.rs` does not perform. The legacy STM32 OTP path is also not production-sound (FW2), so this cannot be dismissed as harmless defense-in-depth drift. Draft 1.1 keeps SE/hybrid counters out of the initial pre-PIN FSBL interface; reconcile the claim with the candidate before approval. | Grep `cmd_fw_commit.rs`; candidate-vs-threat-model conflict preflight | ⛔ documentation + architecture gate |
+| FW10 | **An OPTIGA firmware-version counter is advertised accidentally** | documentation claims a counter/cross-check that the implementation and approved architecture do not have | **DEFENDED AS DOCUMENTED.** `threat-model.md` explicitly states that there is no OPTIGA firmware-version counter. The legacy STM32 OTP path remains non-production-sound (FW2), while Draft 1.1 keeps SE/hybrid counters out of the initial pre-PIN FSBL interface. Treat any future OPTIGA firmware-counter claim as drift unless a separately reviewed architecture adds one. | Claim inventory across threat model, updater, FSBL, and candidate architecture | ✅ documentation preflight |
 
 **Read this catalog narrowly.** Signature, parser, staging, PIN, and measured-
 boot sub-properties retain their listed evidence, but anti-rollback and A/B
 availability are not production-defended until FW2/FW8 are replaced and the
 Draft-1.1 candidate's approval/physical/resource/factory gates close. FW7 remains factory/hardware evidence;
-FW10 is an additional claim-vs-code correction.
+FW10 guards against reintroducing a counter claim that the current owner text
+explicitly rejects.
 
 ---
 
@@ -63,7 +64,7 @@ FW10 is an additional claim-vs-code correction.
    implementation is invalid and production-fenced; approval plus physical
    OTP/ECC/journal/resource gates remain open.
 3. **Legacy manifest evidence.** `fw-manifest/src/lib.rs` has total-parse tests/Kani and a 75-byte layout proof, and the historical Draft-0.9 model covers V4/80 bytes. Neither provides V6 assurance. After candidate approval, V6 needs shared fixtures and updated parser/formal extraction before it can count toward implementation.
-4. **The immutable FSBL + measured boot.** The current 32-KiB legacy FSBL verifies and renders the shared 8-word fingerprint. Draft 1.1 keeps a 40-KiB candidate envelope; its physical FLASH LOAD-span and independent RAM/worst-case-stack gates remain NO-GO.
+4. **The target immutable FSBL + measured boot.** The current 32-KiB legacy FSBL verifies and renders the shared 8-word fingerprint but is not a production trust root. Draft 1.1 keeps a 40-KiB candidate envelope; its geometry/WRP ceremony, physical FLASH LOAD-span, and independent RAM/worst-case-stack gates remain NO-GO.
 5. **FI sweeps.** `tools/sca/fault_sweep_fw_verify.py` (skip + stuck-at over the verify) + `fault_sweep_flashctr.py` (counter rollback). Host tests `fw_update_boot_pure_tests.rs` + `nsc_fw_update_pure_tests.rs` (PIN gate + non-monotonic chunk). `fwsign/tests/` roundtrip + wire-format stability.
 
 ---
@@ -91,13 +92,13 @@ TARGET (read first, in this order):
   - fsbl/src/{main,verify,branch,manifest,otp}.rs + secure/src/measured_boot.rs — the boot root.
   - secure/src/nsc/cmd_fw_*.rs — the five gated handlers.
 SCOPE THIS RUN: {{e.g. "the verify chain's single-fault surface" | "the rollback floor + OTP
-  ordering" | "the staging state machine + torn-commit brick" | "the Claim-8 OPTIGA-counter
-  drift (FW10)" | "the manifest parse fail-open surface"}}.
+  ordering" | "the staging state machine + torn-commit brick" | "accidental OPTIGA
+  firmware-counter claims (FW10)" | "the manifest parse fail-open surface"}}.
 
 ATTACK PROTOCOL — walk EVERY FW1–FW10 mode against each stage in scope:
   FW1 FI-skip verify · FW2 rollback bypass · FW3 manifest fail-open · FW4 fingerprint spoof ·
   FW5 staging confusion · FW6 preimage expansion · FW7 WRP1A runtime write · FW8 try-once/AB
-  brick · FW9 PIN not enforced · FW10 Claim-8 OPTIGA-counter drift.
+  brick · FW9 PIN not enforced · FW10 accidental OPTIGA firmware-counter claim.
 
 For each candidate finding you MUST produce a FALSIFIABLE PoC, one of:
   - a rainbow fault_sweep BYPASS (an unsigned/downgraded image reaches flash / OTP);
@@ -111,19 +112,17 @@ RULES:
   - Treat Draft 1.1's exact V6/121-byte preimage as the candidate under review, never as implementation authority. Any candidate-byte change requires a new schema/domain where applicable, a new digest, fresh dual review, and owner approval. V4/80 and V1/75 are historical only.
   - WRP1A is a hardware/option-byte property — a "no runtime write path" finding must point at
     factory provisioning, not firmware.
-  - For each finding: FW-mode, file:line, PoC, disposition, severity, proposed fix (flag if it
+  - For each candidate: FW-mode, file:line, PoC, provisional severity, stable
+    candidate ID, and proposed fix (flag if it
     changes candidate V6 bytes/state interfaces, weakens a sentinel, or gives runtime floor ownership).
+    Do not assign a finding disposition.
 
-OUTPUT — file findings so they can be catalogued + worked through (see
-docs/security/adversarial-review/findings/README.md):
-  Write a dated report to docs/security/adversarial-review/findings/<surface>-<YYYY-MM-DD>.md
-  from findings/TEMPLATE.md — everything below (findings + the honest residual) goes IN it.
-  Report frontmatter `status: open`; EACH finding gets its own `Status:` line (start 🔲 OPEN)
-  + a falsifiable PoC. Add one row to the Catalogue table in findings/README.md. As findings
-  are worked through, whoever handles each flips its `Status:` (✅ FIXED / ☑️ ACCEPTED /
-  🚫 INVALID / ⏸ DEFERRED) + a Resolution (commit+date or why), and sets the report
-  `status: resolved` once none remain OPEN. work-todo.md stays the action list; findings/ is
-  the review record — cross-link them.
+OUTPUT — return an external candidate packet to the coordinator. Do not modify
+the repository, write a canonical findings report, or update catalogue/status
+fields. Include every candidate and the honest residual. The coordinator freezes
+the raw packet and gives the complete union to the exact Partner-A/Partner-B
+pair; only their symmetric cross-adjudication may assign dispositions. An
+authorized maintainer records the adjudicated result afterward.
 
 MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   1. "What I tried to break and COULDN'T" — per stage.
@@ -133,7 +132,13 @@ MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   Never imply "the rest is fine."
 ```
 
-**Running it as a swarm.** ≥3 reviewers per scope, cross-vote, two model backends.
+**Running it as a swarm.** Use ≥3 independent discovery reviewers per scope
+across two model backends. Quorum only corroborates/prioritizes discovery; it
+does not set a disposition, and sub-quorum variants remain in the packet. Give
+every candidate and origin variant to the exact Partner-A/Partner-B pair in
+[`../../planning-and-review-workflow.md`](../../planning-and-review-workflow.md);
+only their symmetric cross-adjudication may disposition it, with disagreement
+preserved.
 
 ---
 

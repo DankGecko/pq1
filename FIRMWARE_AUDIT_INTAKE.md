@@ -49,7 +49,7 @@ Code SLOC = non-blank, non-comment-only lines. **Rust unit tests are inline (`#[
 | SPHINCS+C10 crypto core (written from scratch) | `sphincs-c10` | 1,168 |
 | Pure-logic crates ¹ | proto, tx-core, aa, domain, tx, erc7730, bip39 ², hal, shared, fi | 8,428 |
 | Nonsecure world — USB-HID / APDU v2 router | `nonsecure` | 3,551 |
-| Immutable bootloader + FW-update manifest | `fsbl` + `fw-manifest` | 810 |
+| Legacy bench bootloader (production-ineligible) + FW-update manifest | `fsbl` + `fw-manifest` | 810 |
 | **On-device subtotal** | | **remeasure before engagement** |
 
 ¹ all `no_std`, no-heap, host-testable; the secure world re-exports them through thin shims.
@@ -127,7 +127,7 @@ make play                # interactive arrow-key UI
 make test-key-speed      # DWT-timed signing bench, prints === PASS ===
 make saes-self-test-hw   # SAES SW + DHUK round-trip
 make gtzc-enforcement-hw # NS-access RAZ-fault check (invariant #4)
-make pin-gate-hw-counter-e2e   # three-way attempt consumption + directional boot check
+make pin-gate-hw-counter-e2e   # three-way per-attempt + in-run recovery; no reboot/reconcile coverage
 make pin-gate-wipe-e2e         # 10 wrong PINs → factory reset
 # make fw-rollback-hw          # legacy comparison harness; NOT rollback evidence
 

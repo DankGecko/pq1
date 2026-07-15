@@ -16,7 +16,9 @@
 //! Never returns except via the branch; panics on catastrophic failure
 //! (no valid slot) and halts. The intended fail-safe in that case is
 //! that the user sees no NV3007 LCD output and contacts the vendor for a
-//! device replacement. Production RDP-2 prevents SWD recovery.
+//! device replacement. The eventual production design requires a separately
+//! approved RDP/WRP ceremony; this legacy bench image does not claim that
+//! immutable state.
 //!
 //! ## Slot selection algorithm
 //!
@@ -98,7 +100,8 @@ fn main() -> ! {
     // copy. Copying both into stack-local `[u8; MANIFEST_SIZE]` (8 KB each)
     // buffers held 16 KB live across the multi-KB-stack SPHINCS+C10 verify and
     // peaked `main`'s frame at ~24.7 KB against a 16 KB RAM budget with no
-    // MSPLIM — a silent stack overflow / HardFault of the immutable bootloader.
+    // MSPLIM — a silent stack overflow / HardFault of the legacy bench
+    // bootloader (and therefore a required resource gate for its replacement).
     // The pages are stable, readable flash throughout boot (verify_images
     // already streams the image regions straight from flash), so borrowing
     // them costs no stack. See `manifest::at`.

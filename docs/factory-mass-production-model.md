@@ -1,208 +1,258 @@
 # PQ1 factory mass-production provisioning — tooling model
 
-Status: **design** (2026-06-17). Supersedes nothing; extends the single-device
-ceremony in [`factory-provisioning.md`](factory-provisioning.md) +
+Status: **design research; not an executable ceremony** (2026-06-17, scoped
+update 2026-07-14). Supersedes nothing; extends the single-device
+ceremony in [`factory-provisioning.md`](provisioning/factory-provisioning.md) +
 [`secure/src/factory_provisioning.rs`](../secure/src/factory_provisioning.rs)
 toward a mass-production line that ships a device whose **dual-SE seed
 invariant actually holds** ([[project_se_removal_invariant]]).
 
-Decisions locked 2026-06-17:
+Historical decisions recorded 2026-06-17 (superseded where the update below
+says so):
 1. OPTIGA shipping-state lockdown (S-1/S-2/S-3) is **folded into the ceremony**
    as new validated steps, ordered before the irreversible RDP2 bump.
 2. S-2 trust anchor closed with a **PQ1 factory-HSM cert** (offline root;
-   line carries the public cert only).
+   line carries the public cert only). **Superseded:** HSM-anchor versus
+   irreversible neutralization is not selected, and the real type-`0x11` pool
+   is still open.
 3. **No per-unit traceability** — the OTP sentinel is the only gate.
+   **Superseded:** factory-installed transport credentials require an
+   authenticated, crash-consistent per-unit handoff/receipt whose owner is
+   still open.
 
-> **UPDATE 2026-07-14 (work-todo #36).** Decision 1's ordering survives but the
-> **RDP2 bump leaves the line entirely**: devices ship at RDP-0 (batch-uniform,
-> user-verifiable over SWD before first power) and the FSBL self-locks to
-> RDP-2 on the first field boot, then self-provisions pairing keys
-> (TRNG-salted rotation off factory-installed transport keysets). Fixture
-> step 5 (`bump-rdp2-after-factory`) and the "sentinel → RDP2" gate below are
-> superseded — the sentinel now gates *shipping*, not an RDP2 burn. The SE
-> lockdown steps (5–8) stay at the line unchanged.
+> **UPDATE 2026-07-14 (work-todo #36).** The actor split survives, but this
+> document no longer selects a complete ordering. Devices ship at RDP-0
+> (batch-uniform and user-verifiable over SWD before first power); first field
+> boot performs the MCU RDP2 self-lock, BHK first-write, and TRNG-salted final
+> PBS/SCP03 rotation from factory-installed transport keysets. The factory
+> retains S-1/S-2/S-3 object/metadata preparation, required objects, and OPTIGA
+> lifecycle responsibility. **The exact E140 LcsO ratchet-versus-field PBS
+> rotation order is OPEN, owner-gated, and silicon-gated.** Fixture step 5
+> (`bump-rdp2-after-factory`) and the "sentinel → RDP2" gate below are
+> superseded; the 10-step table is a historical design input, not an executable
+> ceremony. In particular, do not interpret its E140 row as a selected order.
 
 ---
 
 ## 1. Why the current model isn't shippable for mass production
 
-The existing 7-step ceremony provisions the MCU and **permanently locks it**
+The legacy 7-step ceremony provisions the MCU and **permanently locks it**
 (`bump-rdp2-after-factory` → RDP=Level 2), but **none of its steps close the
 OPTIGA ship-blockers**:
 
 - **S-1** F1D0 `Change=ALW` — a desoldered OPTIGA can be re-keyed and PIN-brute-forced.
-- **S-2** trust anchor at `0xE0E3` is the Infineon **public sample cert**
-  (`tools/optiga_reset/out/trust_anchor_cert.bin`); its private key is public,
-  so anyone can sign a `SetObjectProtected` manifest and bypass every Change AC.
-- **S-3** soft counter instead of the E120 hardware counter.
+- **S-2** the real type-`0x11` Protected-Update pool is not closed. The retired
+  dev reset helper attempts to install Infineon's public sample cert at
+  `0xE0E3`, but the observed object is already a full type-`0x12` device cert,
+  so that write is a no-op rather than the live anchor path. The candidate
+  pool is `{0xE0E8,0xE0E9,0xE0EF}` and remains factory/silicon-gated.
+- **S-3** the final F1D0/E120 metadata, lifecycle, reset/power-cut, and limit
+  boundary are not yet factory-authorized and silicon-validated. Production
+  already requires E120 as lockout authority; F1E1 is only a
+  provisioning/reset sentinel.
 
-Because RDP2 makes the MCU side unfixable in the field, a unit shipped today is
-**permanently locked with the SE seed-protection invariant violated**. The
-lockdown must happen at the line, before RDP2.
+Shipping with these SE surfaces open would permanently violate the seed-
+protection invariant once the first-field RDP2 self-lock completes. The
+factory-side S-1/S-2/S-3 obligations must therefore close before shipment, but
+the exact E140 ratchet order relative to the first-field final rotation remains
+OPEN and must not be inferred here.
 
-The primitives already exist (`provision_trust_anchor`, `optiga-lock-operational`
-→ `build_metadata_auth_ref_luc` + `Change=Auto(F1D0)`, `optiga-hw-counter` E120
-binding, `SetObjectProtected` CMD 0x83). The gap is purely orchestration: they
-are not wired as ceremony steps, and the baked-in TA cert is still the sample.
+Several component primitives already exist (`provision_trust_anchor`,
+`optiga-lock-operational` → `build_metadata_auth_ref_luc` +
+`Change=Auto(F1D0)`, `optiga-hw-counter` E120 binding,
+`SetObjectProtected` CMD 0x83). The remaining gap is **not** purely
+orchestration: the fresh-TRNG final credential derivation, durable public
+state, power-cut recovery, coordinated OPTIGA/SE050 update order, and E140
+timing are still design + implementation + silicon blockers; the retired reset
+helper also still embeds the public sample certificate and must remain absent
+from every production-shaped build.
 
 ---
 
-## 2. Trust model — the line holds no secrets
+## 2. Trust model — the line must not hold final wallet secrets
 
-Every per-device secret is **derived on-device** from silicon roots
-(`SAES-CMAC(DHUK,·)` Tier-1, BHK Tier-2, OTP-master, UID-sealed HUK). The OTP
-master is TRNG-burned idempotently on first boot (`otp::ensure_device_master`).
-Nothing is injected per unit, so:
+Under the selected #36 research direction, the line would install only
+transport keysets and factory-side SE objects/locks; it must not learn or
+inject the final BHK, PBS, SCP03 keys, or seed. However, the per-device
+transport-key creation, authenticated handoff, public state, KVN migration,
+old/new-key recovery, and first-field proof of possession are still
+unspecified. Until those close, this is a constraint on a future protocol, not
+an executable line model. Final pairing material is intended to be created
+on-device after the first-field RDP2 self-lock and mixed with fresh TRNG. The legacy
+`otp::ensure_device_master` route and unary rollback tally are production-
+rejected; Draft 1.1's physical OTP allocation remains OPEN. Therefore:
 
-- **Every device flashes the identical firmware image.** No per-unit data file,
-  no key-injection station, no HSM connectivity at the line.
-- The **only** external key material in the whole model is the S-2 trust-anchor
-  keypair, and only its **public cert** reaches the device (compiled into
-  firmware, like any pinned root). The private key lives in an **offline HSM**
-  and is used only for the one-time fleet root ceremony and for signing future
-  refurbishment manifests.
+- **Every device should flash the identical firmware image.** This does not
+  imply that transport-key provisioning can avoid per-unit authenticated state;
+  the required handoff/receipt mechanism is OPEN and may require a station or
+  HSM-mediated per-unit record.
+- Factory transport credentials are still per-device secrets even though they
+  are not final wallet roots. Their generation, station/HSM custody,
+  authenticated handoff, replacement, and deletion receipts must be selected
+  before this model can claim that the line holds no secrets.
+- If S-2 selects a fleet anchor, only its public object may reach the device
+  and the private authority requires a separately reviewed custody/signing
+  policy. S-2 may instead select irreversible neutralization of unused
+  type-`0x11` slots. This document selects neither option and does not assign
+  refurbishment authority to a future fleet key.
 
-This is the property that makes the line cheap to scale: provisioning is
-embarrassingly parallel because units are interchangeable.
+The intended final firmware image may remain batch-uniform, but provisioning
+units are not interchangeable once per-device transport state exists. Scaling
+depends on the still-open authenticated receipt/handoff design rather than on
+stateless parallelism.
 
 ---
 
 ## 3. The extended ceremony (10 steps)
 
-Add four SE-lockdown steps and re-order so the **SE point-of-no-return
-(LcsO=Op) precedes wipe/validate**, and the MCU point-of-no-return (RDP2,
-host-side) comes last. Each new step does a **read-back validation** before
-returning `Ok`; reaching `WriteOtpSentinel` therefore proves all prior steps
-verified (the existing `halt_with_failure` model gives the gate for free).
+The historical candidate added four SE-lockdown steps and placed an SE
+point-of-no-return before wipe/validate. It is retained below to show the
+validation obligations, but it is not the selected executable order: E140's
+placement must be resolved separately without moving S-1/S-2/S-3 or final key
+rotation to the wrong actor. Each eventual step needs read-back validation
+before a shipping sentinel can carry authority.
 
 | # | `FactoryStep` | Action | New? | Err range |
 |---|---|---|---|---|
 | 1 | HardwareSelfTest | SAES Tier-1 + BHK Tier-2 | — | E01xx |
-| 2 | OtpMasterKey | burn/verify OTP master | — | E02xx |
+| 2 | OtpMasterKey | **legacy production-ineligible step**; no burn authority (replacement OTP allocation OPEN) | — | E02xx |
 | 3 | PrePopulatedStateCheck | refuse non-fresh chip (E0301/E0702 reentry guard) | — | E03xx |
-| 4 | DualSeProvisionInfrastructure | SCP03 rotate, PBS/E140, SE050 OIDs, dual-SE pair | — | E04xx |
+| 4 | DualSeProvisionInfrastructure | factory transport-keyset/object preparation only; final PBS/SCP03 rotation is first-field | — | E04xx |
 | 5 | **OptigaS1AuthRef** | F1D0 `Change=Auto(F1D0)` (`build_metadata_auth_ref_luc`); read-back confirms AC | ✅ | E05xx |
-| 6 | **OptigaS2TrustAnchor** | write PQ1-HSM TA cert → `0xE0E3`; lock/junk pool `0xE0E4..0xE0E8`; read-back cert hash | ✅ | E06xx |
-| 7 | **OptigaS3HwCounter** | provision E120 LUC, bind F1D0 `Execute=LUC(E120)`, delete/freeze F1E1 soft counter | ✅ | E07xx |
-| 8 | **OptigaLcsOpRatchet** | LcsO=Op on every touched OID — **SE no-take-backs line** | ✅ | E08xx |
+| 6 | **OptigaS2TrustAnchor** | **historical invalid step:** the E0E3 write is mis-targeted. A replacement must pin the SKU/revision inventory, preserve/ratchet device-cert surfaces, and install or irreversibly neutralize the real type-`0x11` pool `{0xE0E8,0xE0E9,0xE0EF}` under a separately approved policy | ✅ | E06xx |
+| 7 | **OptigaS3HwCounter** | provision E120 LUC and bind F1D0 `Execute=LUC(E120)`; retain or replace the F1E1 provisioning/reset sentinel only under the separately reviewed final sentinel policy | ✅ | E07xx |
+| 8 | **OptigaLcsOpRatchet** | candidate factory-side ratchet for required user OIDs; **E140 placement remains OPEN and is not selected by this table** | ✅ | E08xx |
 | 9 | WipeUserState + PostWipeValidation | `factory_reset_admin`; confirm user state gone, admin reachable | — | E09xx |
-| 10 | WriteOtpSentinel | clear `BIT_PRODUCTION`; sentinel now ship-eligible (post-#36: no RDP2 bump — unit ships at RDP-0) | — | E10xx |
+| 10 | WriteOtpSentinel | **historical sentinel claim; invalid as a current ship gate** (post-#36 the unit targets RDP-0 transport, but no sentinel currently authorizes shipment) | — | E10xx |
 
-Then host-side: read sentinel → box + ship at RDP-0. (Post-#36 the **MCU
-no-take-backs line** moved to the device's first field boot — the FSBL
-self-locks RDP-2; `bump-rdp2-after-factory` is retired.)
+The historical flow then said “read sentinel → box + ship at RDP-0.” That is
+not current authority. Post-#36, the intended **MCU no-take-backs line** moves
+to first field boot, but the RDP-2 self-lock, handoff state, recovery, and
+receipt protocol remain OPEN; `bump-rdp2-after-factory` is retired.
 
-**Open validation item (must verify on silicon before this ships):** step 9
+**Historical validation dependency to carry into a replacement plan:** step 9
 wipes user state *after* the LcsO=Op ratchet (step 8). Confirm `factory_reset_admin`
 + the F1Dx data-object clears still succeed under locked metadata — the F1Dx
 data AC is `Conf(E140)` (independent of LcsO), so this *should* hold, but it is
 load-bearing and must be proven on a real OPTIGA, not assumed. If it fails,
-swap steps 8↔9 (wipe under Creation, then ratchet).
+the replacement design must choose and review a safe order; this document does
+not authorize swapping or executing either step.
 
-`FactoryStep::total()` becomes 10; the host-test that pins step/error/display
-invariants (`cargo test -p sphincs-tz-secure factory_provisioning`) must be
-extended in lockstep (the existing `total()==7` assert is the tripwire).
-
----
-
-## 4. S-2 — the offline HSM root ceremony
-
-Done **once per firmware lineage**, off the production floor:
-
-1. **Root ceremony (offline HSM):** generate the PQ1 trust-anchor P-256 keypair
-   inside the HSM. Private key never exported. Export the matching cert.
-2. **Bake the public cert into firmware:** replace
-   `tools/optiga_reset/out/trust_anchor_cert.bin` with the PQ1 cert and
-   regenerate any pinned hash, exactly as a pinned root is handled today
-   (cf. `ERC7730_DESCRIPTORS_ROOT`). A `compile_error!` fence rejects a
-   production-irreversible build whose TA cert still hashes to the Infineon
-   sample.
-3. **At the line (step 6):** `provision_trust_anchor` writes the *public* cert
-   to `0xE0E3` while the OPTIGA is still LcsO=Creation (authorized by the
-   sample TA — fine, because the device is physically inside the trusted
-   factory). The pool OIDs `0xE0E4..0xE0E8` are filled-junk/`Change=NEV`.
-   Step 8 ratchets LcsO=Op, after which **only a PQ1-HSM-signed manifest is
-   honored**. The field/desoldered attacker (the S-2 threat) has no usable
-   manifest.
-
-The HSM is therefore **not on the production line** — it is an offline asset
-for (a) the one-time fleet root, (b) signing `SetObjectProtected` refurb
-manifests for returned units.
+The historical proposal would have made `FactoryStep::total()` 10 and required
+the host test to change in lockstep. A replacement ceremony must select its own
+state machine and tests; the existing count is not an implementation todo from
+this document.
 
 ---
 
-## 5. Line orchestration
+## 4. S-2 — pool-closure requirements, not a frozen ceremony
 
-Because units are interchangeable (§2), the line is a fan-out of the existing
-single-device flow, sentinel-driven so no operator watches each OLED:
+A replacement S-2 design may use a PQ1-controlled offline HSM, but this file
+does not select the key type, certificate format, station protocol, or exact
+OID write order. At minimum it must:
+
+1. select either a PQ1-controlled Protected-Update authority or irreversible
+   neutralization; if an authority is selected, retain its private key under
+   reviewed custody and export only the public object required by OPTIGA;
+2. prove that the production build cannot carry or provision the retired
+   public-sample recovery key;
+3. pin the exact SKU/revision metadata inventory before mutation; preserve and
+   ratchet the type-`0x12` device-cert surfaces, and install or irreversibly
+   close each real type-`0x11` slot in `{0xE0E8,0xE0E9,0xE0EF}`;
+4. read back type, access conditions, lifecycle, and, when applicable, the
+   selected public-key identity before any one-way ratchet; and
+5. define refurbishment authority separately rather than assuming the same
+   fleet key and path remain safe forever.
+
+The current `provision_trust_anchor` helper targets `0xE0E3` and is therefore
+retired dev recovery code, not the first step of this ceremony. If an HSM
+authority is selected, its line connectivity and receipt shape remain OPEN;
+the per-unit transport-state receipt is open under either S-2 policy.
+
+---
+
+## 5. Historical line-orchestration sketch — do not run
+
+The earlier proposal fan-out the single-device flow and trusted a sentinel so
+no operator watched each OLED. The sketch is retained only as a list of line-
+automation requirements; its sentinel and first-field self-lock assumptions
+are not approved:
 
 ```
-for each station (probe-rs --probe <serial>):
+HISTORICAL PSEUDOCODE — NOT A COMMAND SEQUENCE
+for each station:
   1. probe-rs download   <identical-image.elf>
   2. STM32_Programmer_CLI --optionbytes TZEN=1 ...
   3. probe-rs reset
-  4. poll OTP sentinel @0x0BFA_00A0  (60s timeout)
+  4. poll legacy OTP sentinel @0x0BFA_00A0  (INVALID AS A SHIP GATE)
        PRODUCTION_OK / BOTH_OK  -> step 5
        STARTED_FAILED           -> divert bin (read OLED step+code for vendor)
        DID_NOT_START / timeout  -> retry once, else divert bin
-  5. box + ship at RDP-0       (post-#36: RDP=0xCC is self-programmed by the
-                                FSBL on first field boot, never by the fixture)
+  5. historical "box + ship" step — NO CURRENT AUTHORITY
 ```
 
-- **Parallelism:** one fixture controller fans out N probe-rs invocations keyed
-  by probe serial; same image to every station. No DB, no per-unit file.
-- **OLED is the fallback channel**, not the gate — the host reads the sentinel
-  over SWD. (Post-RDP2 the OLED becomes the only window, per the existing doc.)
-- **Rehearsal build** must be extended to **dry-run steps 5–8 without committing
-  LcsO=Op** (the ratchet is destructive on the OPTIGA). Today rehearsal already
-  skips the destructive `provision()`/`factory_reset_admin`; extend the same
-  skip to the new SE-lockdown commit so panel/layout iteration on dev OPTIGAs
-  doesn't brick them.
+- **Historical parallelism assumption:** one fixture controller fans out N
+  probe-rs invocations keyed by probe serial and flashes the same image. The
+  old “no DB, no per-unit file” assumption is superseded by the required
+  authenticated per-unit transport-state handoff/receipt.
+- A replacement must define an authenticated, crash-consistent receipt; the
+  legacy OTP sentinel and OLED are evidence channels, not current ship gates.
+- Any future rehearsal must dry-run destructive SE transitions without
+  committing them. Exact steps follow the approved replacement state machine,
+  not the historical 5–8 numbering above.
 
 ---
 
 ## 6. Build-profile guards (extend the existing matrix)
 
-The irreversible production profile must now also imply the SE lockdown and a
-real TA cert:
+The current candidate guard matrix exercises SE-lockdown and real-TA
+requirements, but it is a quarantine/test shape rather than a finalized
+production profile. In particular, the combined E140+user-OID feature cannot
+settle the still-open E140/final-rotation order:
 
 | Feature combination | Result |
 |---|---|
-| `factory-provisioning` + `dev-testkey` | builds (dev/safe; SE lockdown SKIPPED) |
-| `factory-provisioning,...-rehearsal` | builds (rehearsal; lockdown dry-run, no LcsO commit) |
-| `factory-provisioning` w/o `optiga-lock-operational` | **compile_error** — production needs the ratchet |
-| `factory-provisioning` w/o `optiga-hw-counter` | **compile_error** — S-3 mandatory (already specified) |
-| TA cert == Infineon sample hash | **compile_error** — S-2 not closed |
-| all above + `factory-production-irreversible-im-sure` | builds (real production) |
+| any STM32U585 `factory-provisioning` combination | **compile error `FW_ROLLBACK_FACTORY_BLOCKED`**; the retained state machine is historical and no acknowledgement relaxes the rollback quarantine |
+| `factory-provisioning-rehearsal` | **same compile error** because it activates `factory-provisioning`; it is not a runnable dry-run profile |
+| `optiga-lock-operational + factory-production-irreversible-im-sure` | **compile error `OPTIGA_TA_POOL_LOCKDOWN_BLOCKED`**; the named pool has no approved mutation/verification ceremony |
+| TA cert == Infineon sample hash / `optiga-reset-oids` | **compile error**; retired mis-targeted evidence cannot become a runnable profile |
 
 The opt-in remains a foot-gun guard, not a security gate.
 
 ---
 
-## 7. Traceability — explicitly none (accepted)
+## 7. Traceability — historical omission, not accepted closure
 
-Decided: no provisioning log, no attestation record, no label printing. The OTP
-sentinel is the sole pass/fail gate. **RMA implication (accepted):** a returned
-unit cannot be looked up against a factory record; the only refurb path is
-vendor wipe-firmware → re-run ceremony (which requires an HSM-signed
-`SetObjectProtected` manifest to re-open the LcsO=Op'd OIDs — see §4/refurb).
-There is no cryptographic tie between a fielded unit and its factory run. If
-this is later revisited, the natural minimal addition is a per-unit log row
-keyed on the STM32 UID (`0x0BFA_0700`) + OPTIGA/SE050 UIDs read pre-RDP2.
+The historical proposal selected no provisioning log, attestation record, or
+label. That decision does not make the old OTP sentinel a sufficient current
+gate: the revised actor split, transport receipts, E140 ordering, field RDP2
+receipt, and final key-rotation receipt must be frozen first. Until then there
+is no approved cryptographic tie between a fielded unit and a factory run. If
+traceability is later added, the minimal candidate is a per-unit row keyed on
+the STM32 UID plus OPTIGA/SE050 UIDs, captured by the actor authorized to read
+them at that stage.
 
 ---
 
 ## 8. Work breakdown (what to actually build)
 
-1. `factory_provisioning.rs`: add steps 5–8 (`OptigaS1AuthRef`,
-   `OptigaS2TrustAnchor`, `OptigaS3HwCounter`, `OptigaLcsOpRatchet`) with
-   read-back validation + error codes; bump `FactoryStep::total()` to 10; update
-   the host tests.
-2. Resolve the **step-8-vs-step-9 ordering** question on real silicon (§3).
-3. S-2 HSM root ceremony + cert-swap + `compile_error!` sample-cert fence (§4).
-4. Extend rehearsal to dry-run the SE lockdown without the LcsO commit (§5).
-5. Extend the build-profile guard matrix (§6).
-6. Fixture controller for N-station fan-out (§5) — thin wrapper over the
-   existing `make flash-hw-factory-provisioning` / `bump-rdp2-after-factory`.
-7. Update `factory-provisioning.md` operator manual: 10 steps, new error codes,
-   and the "FACTORY OK ⇒ SEs are LcsO=Op locked" guarantee.
+1. Freeze and test the **factory-owned transport phase**: S-1/S-2/S-3 object and
+   metadata preparation, required-object receipts, sample-certificate refusal,
+   and no MCU RDP2 or final field key rotation.
+2. Resolve the exact E140 LcsO-ratchet-versus-final-PBS-rotation ordering on an
+   owner-authorized sacrificial OPTIGA. Until that evidence lands, neither
+   factory nor first-field code may claim the final order.
+3. Specify and test the **first-field phase**: MCU RDP2 self-lock, BHK
+   first-write/load, TRNG-salted final PBS/SCP03 rotation, wizard, and explicit
+   receipts. No step may silently fall back to factory transport credentials.
+4. Freeze the S-2 pool/OID policy (selected HSM anchor or irreversible
+   neutralization) and replace or remove the mis-targeted E0E3 sample-cert
+   helper; retain the compile-time sample-cert fence (§4).
+5. Extend rehearsal and the build-profile guard matrix without firing an
+   irreversible lifecycle transition in a dev/test build (§5–§6).
+6. Build an N-station fixture controller only after phases 1–3 and their
+   authority boundaries are frozen; do not wrap the retired
+   `bump-rdp2-after-factory` flow.
+7. Update the operator manual with the measured phase receipts. It must not say
+   "FACTORY OK ⇒ final LcsO=Op + RDP2" while E140 ordering and the first-field
+   ceremony remain open.

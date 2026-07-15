@@ -303,7 +303,7 @@ logical premises of the bare safety conjunct.
 
 `TRUST_ASSUMPTIONS.md` excludes the firmware from the on-chain TCB: *"the proof
 says nothing about whether the firmware keeps the secret keys secret."* Of the 9
-CLAUDE.md non-negotiable invariants, **#2 (PIN three-way lockstep), #3 (E2E SE
+CLAUDE.md non-negotiable invariants, **#2 (three-way PIN-attempt consumption + directional page124/E120 boot check), #3 (E2E SE
 tunnels), #4 (TrustZone isolation), and the trusted-display pipeline have zero
 Lean coverage** — they rest on silicon E2E tests + the security-review docs. That
 is a deliberate scope boundary, not a defect; but it must not be read as a

@@ -2,7 +2,10 @@
 //!
 //! Provides read/write/erase for the last two pages of bank 1:
 //! - Page 127 (0x0C0F_E000): Tropic01 pairing key / persistent secure data
-//! - Page 126 (0x0C0F_C000): OPTIGA Trust M Platform Binding Secret (PBS)
+//! - Page 126 (0x0C0F_C000): DHUK-wrapped SE050 BHK when `bhk` is enabled
+//!
+//! OPTIGA PBS is DHUK-derived at boot and has no flash-page owner. Firmware
+//! update verification also has no persistent failure counter.
 //!
 //! The linker script (`memory-stm32u585.x`) must shrink FLASH LENGTH
 //! by 16 KB to prevent firmware code from being placed in these pages.
@@ -49,7 +52,11 @@ const FLASH_OPTR_OFF: u32 = 0x40;
 #[allow(dead_code)]
 const FLASH_SECBOOTADD0R_OFF: u32 = 0x4C;
 
-/// STM32U585 FSBL base (secure bank-1 page 0) — the shipping secure-boot entry.
+/// STM32U585 legacy bench FSBL base (secure bank-1 page 0).
+///
+/// The target shipping design keeps this entry, but production extent/WRP and
+/// option-byte authority remain open until their reviewed ceremony and silicon
+/// receipts close.
 #[allow(dead_code)]
 pub const FSBL_BASE_ADDR: u32 = 0x0C00_0000;
 
@@ -199,7 +206,7 @@ const KEY_PAGE_NUM: u32 = 127;
 
 // NOTE: flash page 126 (the former OPTIGA PBS seal page at
 // 0x0C0F_C000) was freed by work-todo #24 — the Platform Binding
-// Secret is now re-derived from the OTP master on every boot via
+// Secret is now re-derived from the configured device root on every boot via
 // `hw::secret_keys::optiga_pairing_secret`. It is exclusively owned by
 // the wrapped SE050 BHK store when the `bhk` feature is enabled. Firmware
 // update verification intentionally has no persistent failure counter:
@@ -491,8 +498,9 @@ pub unsafe fn erase_admin_page() -> Result<(), ()> {
 // NOTE: `write_admin_pin` / `read_admin_pin` / `is_admin_pin_blank`
 // and `ADMIN_PIN_OFFSET` were all removed (2026-05-11). The SE050
 // admin PIN is never persisted to flash — it's re-derived on demand
-// from the OTP master via `hw::secret_keys::se050_admin_pin()` (the
-// v6 OTP-derived admin scheme; see `Se050::store_objects` /
+// via `hw::secret_keys::se050_admin_pin()` (BHK in the production
+// target, DHUK fallback, OTP only in explicit dev/legacy builds; see
+// `Se050::store_objects` /
 // `Se050::factory_reset_admin`). The e2e pre-clean cascades that used
 // to read a pre-v6 flash PIN now call `Se050::factory_reset_admin()`
 // (the v6 path) directly. Page 125 still holds the wipe-in-progress
@@ -562,19 +570,20 @@ pub fn is_duress_wipe_mode() -> bool {
 // MCU-side PIN attempt counter — page 124
 // ---------------------------------------------------------------------------
 //
-// Authoritative PIN-attempt counter. Trezor-parity design (see
-// `storage/storage.c:1171-1311` in trezor-firmware): the MCU-side
-// counter is the source of truth, incremented BEFORE every SE verify
-// (pre-commit), reset only after a successful PIN match. SE-side
-// counters (OPTIGA F1E1, SE050 silicon retry on UserID) are
-// secondary redundant defenses — if they disagree with the MCU
-// counter at boot, the MCU counter wins.
+// Persistent user-facing PIN-attempt counter. Trezor-parity design (see
+// `storage/storage.c:1171-1311` in trezor-firmware): page 124 is precharged
+// BEFORE every SE verify and reset only after a successful PIN match. It is
+// therefore the firmware gate for the ten-attempt policy.
 //
-// Why MCU-authoritative: OPTIGA's F1E1 counter is soft (writable via
-// `Conf(E140)`), so an attacker with PBS extraction can reset it.
-// Without an MCU counter, that collapses to "SE050 is the only real
-// lockout," burning only SE050's silicon budget. With MCU counter,
-// OPTIGA reset attacks cost nothing — the gate is still MCU flash.
+// Under `optiga-hw-counter`, OPTIGA E120 is a separate silicon-enforced LUC
+// and the directional boot rollback witness. A benign cut can leave page 124
+// one attempt ahead, so reconciliation accepts `mcu >= e120`; only
+// `e120 > mcu` proves page-124 rollback. F1E1 is frozen as the
+// provisioning/reset sentinel in this profile and is not an attempt counter.
+// SE050 UserID independently enforces its max-ten retry policy, but its attempt
+// attribute is not boot-readable under the production policy. Do not describe
+// reconciliation as "the MCU counter always wins" or as a symmetric
+// three-counter readback.
 //
 // Layout of page 124 (0x0C0F_8000, 8 KB):
 //   QW 0..(MAX_ATTEMPTS-1): one programmed QW per attempt (any non-
@@ -811,13 +820,13 @@ pub unsafe fn pin_attempts_reset() -> Result<(), ()> {
 // Slot layout (see docs/firmware/firmware-update.md for the full picture):
 //
 //   Bank 1 (secure):
-//     FSBL             pages   0..3    0x0C00_0000  (32 KB, WRP-locked)
+//     FSBL             pages   0..3    0x0C00_0000  (legacy 32 KB bench layout)
 //     Manifest A       page    4       0x0C00_8000  (8 KB)
 //     Manifest B       page    5       0x0C00_A000  (8 KB)
 //     Boot state       page    6       0x0C00_C000  (8 KB, redundant)
 //     Slot A secure    pages   7..64   0x0C00_E000  (464 KB)
 //     Slot B secure    pages  65..122  0x0C08_2000  (464 KB)
-//     (reserved)       pages 123..127  legacy + PBS + SE050 admin
+//     (reserved)       pages 123..127  legacy state + admin/wipe + wrapped BHK
 //
 //   Bank 2 (non-secure):
 //     Slot A NS        pages   0..63   0x0810_0000  (512 KB)

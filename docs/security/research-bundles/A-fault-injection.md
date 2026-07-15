@@ -87,9 +87,13 @@ security anchor.
 **Dark Skippy and similar nonce-exfil attacks do NOT apply.** Hash-
 based SLH-DSA has no nonce. Don't chase this.
 
-**Current SCP03 state.** The SE050 SCP03 channel is active (every TX
-has CLA=0x84). Using NXP default static keys; rotation to per-device
-keys + HUK-SAES wrapping is a production-readiness item (work-todo #7).
+**Current SCP03 lifecycle.** The SE050 SCP03 channel is active (every TX
+has CLA=0x84). Factory defaults are not an acceptable production state:
+the factory installs per-device transport keysets, while the final
+fresh-TRNG-salted BHK-axis rotation belongs to the owner-approved first-field
+ceremony after RDP2 self-lock and BHK first write. OPTIGA PBS is DHUK-derived
+at boot and is never stored in flash; page 126 holds only the wrapped BHK.
+The exact E140 ratchet-versus-final-rotation order remains OPEN.
 
 ---
 
@@ -176,9 +180,10 @@ impl DualSecureElement {
         self.optiga.load_pbs();
     }
 
-    /// First-boot OPTIGA E140 pairing, run BEFORE the seed wizard draws
-    /// entropy — see `OptigaTrustM::pair_for_first_boot` for why
-    /// (mandatory `ensure_shield` in `random()` needs a paired chip).
+    /// Bring-up transport OPTIGA E140 pairing, run before the legacy seed
+    /// wizard draws entropy — see `OptigaTrustM::pair_for_first_boot` for why
+    /// (mandatory `ensure_shield` in `random()` needs a paired chip). This is
+    /// not the production-final fresh-TRNG rotation or E140 lock ceremony.
     /// The OPTIGA-level error detail is logged by the inner driver;
     /// callers only branch on success.
     pub fn pair_optiga_for_first_boot(&mut self) -> Result<(), SeError> {
@@ -699,9 +704,9 @@ impl WalletStore for DualSecureElement {
     ///
     /// OPTIGA: `optiga.factory_reset()` overwrites every user OID through
     /// the shielded-connection path (`Change = Auto(F1D0) OR Conf(0xE140)`).
-    /// Works even if the user PIN is forgotten. The PBS in flash is
-    /// preserved so the chip remains usable for re-provisioning; the user
-    /// OIDs are now blank.
+    /// Works even if the user PIN is forgotten. The DHUK-derived PBS remains
+    /// reproducible and the shield stays available for re-provisioning; the
+    /// user OIDs are now blank. No PBS is stored on flash page 126.
     ///
     /// SE050: delegates to its own `factory_reset_admin` which uses the
     /// admin UserID at 0x7B10_00A0 to delete user objects.
@@ -1187,7 +1192,7 @@ unsafe fn verify_pin_with_chip(pin: &[u8; 8]) -> u32 {
 
     let se = &mut *core::ptr::addr_of_mut!(crate::SE);
 
-    // `super::gated_unlock` handles the MCU-side counter (page 126):
+    // `super::gated_unlock` handles the MCU-side counter (page 124):
     // pre-commit bump before SE verify, reset on success, refuse
     // on flash fault. See its docstring for the full Trezor-style
     // gating rationale.

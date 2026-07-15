@@ -24,8 +24,10 @@ Specifically:
 4. Our design rotates the main signer every ~2^20 signatures. Is
    that already beyond the SCA trace-count threshold for practical
    recovery, or do we need tighter rotation?
-5. Does migration from SHA2-128f to SHA2-192f meaningfully improve
-   the SCA posture, or is it orthogonal?
+5. With the all-C10 parameter choice fixed, which implementation-level
+   countermeasures materially improve the SCA posture? Do not reopen a
+   SHA2-128f/192f migration or imply that changing parameters alone closes
+   leakage.
 
 Deliverables: catalogued threat list with severity + mitigation per
 item, plus specific recommendations on per-signer rotation cadence
@@ -92,9 +94,13 @@ security anchor.
 **Dark Skippy and similar nonce-exfil attacks do NOT apply.** Hash-
 based SLH-DSA has no nonce. Don't chase this.
 
-**Current SCP03 state.** The SE050 SCP03 channel is active (every TX
-has CLA=0x84). Using NXP default static keys; rotation to per-device
-keys + HUK-SAES wrapping is a production-readiness item (work-todo #7).
+**Current SCP03 lifecycle.** The SE050 SCP03 channel is active (every TX
+has CLA=0x84). Factory defaults are not an acceptable production state:
+the factory installs per-device transport keysets, while the final
+fresh-TRNG-salted BHK-axis rotation belongs to the owner-approved first-field
+ceremony after RDP2 self-lock and BHK first write. OPTIGA PBS is DHUK-derived
+at boot and is never stored in flash; page 126 holds only the wrapped BHK.
+The exact E140 ratchet-versus-final-rotation order remains OPEN.
 
 ---
 
@@ -3038,9 +3044,10 @@ optiga-trust-m = []  # Infineon OPTIGA Trust M V3 via I2C1 (TRUSTMV3SHIELDTOBO1 
 # DESTRUCTIVE on first provisioning: rewrites F1D0 metadata with
 # Execute=LUC(E120). If F1D0 is already at LcsO=Operational with the
 # non-LUC metadata installed, the ratchet blocks the rewrite — the chip
-# would need a SetObjectProtected recovery pass (same mechanism as
-# `optiga-reset-oids`) before this feature can be enabled. See
-# `docs/secure-elements/optiga-brick-postmortem.md` for the recovery story.
+# cannot be repaired by the retired, mis-targeted `optiga-reset-oids`
+# experiment. Stop, preserve the part as evidence, and use only a separately
+# specified and reviewed replacement ceremony; none exists today. See
+# `docs/secure-elements/optiga-brick-postmortem.md` for the incident record.
 #
 # Feature is pure-additive against non-`optiga-hw-counter` builds: all
 # new code is cfg-gated, no behavioural change without it.
@@ -3088,10 +3095,11 @@ duress-provision-e2e = ["duress-pin"]
 # without standing up a full dual-SE provision. main.rs short-circuits
 # into a dialog loop at boot. Pure UI; pairs with mock-se + ui-oled.
 duress-ui-test = []
-# Combined MCU page-124 + OPTIGA E120 + SE050 per-attempt and rollback-check
-# e2e. Under dual-se with hw-counter, exercises ordinary three-way attempt
-# consumption plus MCU-ahead and OPTIGA-ahead cases under the directional
-# page124/E120 boot policy. It does not claim an SE050 boot-counter read. Use
+# Combined MCU page-124 + OPTIGA E120 + SE050 per-attempt and in-run
+# desynchronization/recovery E2E. It exercises ordinary three-way attempt
+# consumption plus MCU-, OPTIGA-, and SE050-ahead recovery and simulated
+# cache resynchronization. It does not reboot, call `reconcile_pin_attempts`,
+# or supply evidence for either directional boot branch. Use
 # `make pin-gate-hw-counter-e2e`.
 pin-gate-hw-counter-e2e = ["dual-se", "optiga-hw-counter", "e2e-test"]
 # Destructive end-to-end: burns 10 wrong PINs through gated_unlock to force
@@ -3293,9 +3301,9 @@ boot-pulse = ["stm32u585"]
 # `hw::sca_trigger`; rises high on entry to a guarded primitive and falls
 # low on exit. Implies `stm32u585` because the trigger pin is a real GPIO.
 sca-trigger = ["stm32u585"]
-optiga-reset-oids = ["optiga-trust-m"]  # One-shot recovery: provision Trust Anchor at 0xE0E3 and send SetObjectProtected reset manifests for OIDs F1D0..F1DF. Dev-only; drop once the chip is recovered.
+optiga-reset-oids = ["optiga-trust-m"]  # RETIRED evidence-only feature. Unconditionally compile-fenced: it mis-targets the observed type-0x12 E0E3 device-certificate object as a type-0x11 anchor. No runnable profile may enable it.
 optiga-no-shield = []  # Dev mode: skip Shielded Connection (PRL) entirely — no setup_pbs_no_handshake, no ensure_shield, no encrypted I2C. PIN HMAC + entropy read/write still work via plaintext APDUs. Use when E140 is unreachable (current bricked test chip). NOT production-safe. See docs/secure-elements/optiga-brick-postmortem.md §7.
-optiga-lock-operational = []  # Candidate production action: bump LcsO to Operational on BOTH E140 (PBS) AND every user OID (F1D0..F1D4 + F1E1) only through the future approved lifecycle flow. Irreversible per OPTIGA SRM §"Life Cycle Status" — LcsO is monotonic, no reverse path exists. Default OFF so dev chips stay at LcsO=Creation throughout all iteration (metadata still mutable, data rewriteable without AC constraints). The intended product direction ships transport keysets at RDP0, then on first field boot self-locks, derives/rotates the DHUK-rooted PBS plus TRNG salt, rotates SE050 SCP03, and only then ratchets lifecycle; that ordering is not implemented or authorized yet. Enable only for an exact owner-authorized sacrificial/production procedure after validation. See docs/production-todo.md and docs/secure-elements/optiga-brick-postmortem.md §5 + §7.
+optiga-lock-operational = []  # Controlled irreversible-validation primitive for non-E140 OPTIGA object locks (F1D0..F1D4 + F1E1) and separately gated S-2 experiments. Irreversible per OPTIGA SRM §"Life Cycle Status" — LcsO is monotonic, no reverse path exists. Ordinary `pair_for_first_boot` / `setup_pbs_no_handshake` NEVER ratchets E140, even when this feature is present. Work-todo #36 fixes the E140 actor as factory-side but leaves exact timing/order relative to the first-field final PBS rotation OPEN; the E140 ratchet primitive remains intentionally unwired. This feature grants no production authority and is unconditionally incompatible with prodtest. Enable only under an exact owner-authorized sacrificial plan until a reviewed lifecycle flow exists. See docs/production-todo.md and docs/secure-elements/optiga-brick-postmortem.md §5 + §7.
 # Dev/bring-up ONLY: swap the STM32U585 OTP-stored device master key for a
 # compile-time fixed 32-byte constant. Lets us exercise the whole hw/otp.rs
 # + hw/secret_keys.rs + OPTIGA pairing-secret derivation pipeline on bench
@@ -3320,26 +3328,29 @@ otp-hardcoded-master-key = ["legacy-fw-rollback-unsafe", "erc7730-dev-unattested
 # in the production-build `compile_error!` fence. Pure-additive (no
 # silicon side effects).
 bhk-hardcoded-master-key = []
-# Tier-2 phase 2B production gate: switch `secret_keys::derive_into_bhk`
+# Tier-2 phase 2B candidate-hardware gate: switch `secret_keys::derive_into_bhk`
 # from the dev hardcoded fallback (HKDF over a compile-time constant)
 # to the real silicon path — `kdf_cmac_counter_generic` driven by
 # `KeySel::Bhk`. Requires `saes-dhuk` (Tier 1) AND the silicon-side
 # BHK provisioning + boot-load + TAMP-lock infrastructure that phase
-# 2B will land. OFF until that infrastructure exists; turning it on
+# 2B will land. This deterministic root helper is not the still-open
+# fresh-TRNG production-final credential protocol. OFF until that
+# infrastructure exists; turning it on
 # in a build that hasn't run phase-2B provisioning would produce
 # stable-but-zero-keyed derivations on most STM32U5 silicon (BHK
 # backup registers are zero at reset).
 bhk = ["saes-dhuk"]
 # Under `e2e-test`, halt the boot flow right after `provision_from_mnemonic`
-# returns, BEFORE `SE.unlock` would trigger the OPTIGA PRL handshake + the
-# irreversible E140 LcsO=op bump. Used for the Phase-A hardware-validation
-# target (`flash-hw-optiga-bringup-write-only`): we want to prove the PBS
-# was written to the chip without committing the chip to that PBS.
+# returns, before the ordinary unlock/PRL handshake. Used for the Phase-A
+# hardware-validation target (`flash-hw-optiga-bringup-write-only`) to prove
+# the PBS write without proceeding into the rest of the session. Ordinary
+# unlock does not ratchet E140; that irreversible factory-side step remains
+# unwired and OPEN.
 # Only meaningful in combination with `e2e-test`.
 e2e-skip-unlock = []
 # Under `e2e-test`, skip the `crypto::provision_from_mnemonic` call. Used when
-# the OPTIGA chip is already provisioned from a prior run and its user-OID
-# metadata has been locked at LcsO=op — re-running `store_objects` would fail
+# the OPTIGA chip is already provisioned from a prior run and its protected
+# user-OID metadata has been locked at LcsO=op — re-running `store_objects` would fail
 # on the first `set_metadata` APDU because the target OID is already frozen.
 # With this feature set, we jump straight to `SE.unlock(pin)` which triggers
 # the PRL handshake against the existing PBS + PIN secret on the chip. Only
@@ -3363,23 +3374,31 @@ dual-se = ["optiga-trust-m", "se050"]  # Both SEs active: XOR-split entropy acro
 # `establish()` probes the derived set first; if that fails the card-cryptogram check it
 # can fall back to the published factory keys — but ONLY when `se050-scp03-allow-factory-
 # fallback` is ALSO set (see below). Reversible: just code + this flag, no chip writes.
-# Production-safe on its own (it's the chosen direction); the irreversible rotation is
-# `se050-rotate-scp03`. See work-todo #20 Stage A.
+# Necessary for the current deterministic transport-key path, but not
+# production-final or sufficient for shipment. The selected shipping model
+# requires a fresh-TRNG per-device final rotation plus crash-safe durable public
+# state and recovery; that protocol is still OPEN. The existing irreversible
+# deterministic PUT KEY mechanism is `se050-rotate-scp03` and is bench/factory
+# evidence only. See work-todo #20 and docs/production-todo.md.
 se050-derived-scp03 = ["se050"]
 # Permit `establish()` to fall back to the PUBLISHED AN12436 factory SCP03 keys when the
 # derived-key handshake fails. This is needed ONLY by the provisioning/rotation tool
 # firmware (§29) — it must open a factory-key session to send GP PUT KEY against a chip
 # that still holds NXP defaults. The runtime-signing SHIP build talks exclusively to an
-# already-rotated chip, so it MUST omit this flag and FAIL CLOSED instead of silently
-# downgrading to attacker-known factory keys (a fail-OPEN). ENFORCED at compile time:
+# already-rotated deterministic-transport chip, so it MUST omit this flag and
+# FAIL CLOSED instead of silently downgrading to attacker-known factory keys (a
+# fail-OPEN). This is a necessary current guard, not production-final pairing
+# closure. ENFORCED at compile time:
 # this flag is in the hardware-release `compile_error!` fence in nsc/mod.rs (alongside
 # debug-log / se050-rotate-scp03), so a `stm32u585 + !debug_assertions` image that is not
 # an explicit `e2e-test` / `dev-testkey` test build cannot enable it. Nonsensical without
 # `se050-derived-scp03` → second compile_error in scp03.rs.
 se050-scp03-allow-factory-fallback = ["se050-derived-scp03"]
-# IRREVERSIBLE per chip — one-shot GP PUT KEY ceremony that replaces SCP03 keyset 0x0B
-# in place with the device's derived keys, then halts. NEVER ship; production-provisioning
-# only; never flash to a board that still moves RDP around (the RDP1↔RDP0 dance mass-erases
+# IRREVERSIBLE per chip — existing one-shot GP PUT KEY evidence path that
+# replaces SCP03 keyset 0x0B in place with deterministic derived transport
+# keys, then halts. This is not the required fresh-TRNG production-final
+# rotation. NEVER ship; sacrificial bench/factory validation only; never flash
+# to a board that still moves RDP around (the RDP1↔RDP0 dance mass-erases
 # the BHK page → dead SE050). The PUT KEY APDU framing is best-effort from GP 2.3 / AN12436
 # and MUST be validated on sacrificial parts before any real provisioning run. Listed in the
 # `compile_error!` fence in nsc/mod.rs. See work-todo #20 Stage B + docs/production-todo.md.
@@ -3460,12 +3479,13 @@ dual-se-admin-wipe-e2e = ["dual-se"]
 # — the exact scenario where the old PE4→ENA cross-coupling corrupted
 # ENTROPY_OBJ. Use `make dual-se-multi-unlock-e2e`.
 dual-se-multi-unlock-e2e = ["dual-se"]
-# Direct test of the MCU-side PIN attempt counter (page 126) + the
+# Direct test of the MCU-side PIN attempt counter (page 124) + the
 # `nsc::gated_unlock` pre-commit pattern. Hardcoded right/wrong PINs
 # + semihosting PASS/FAIL output; no buttons or PIN UI needed.
 # Exercises what the interactive unlock path would — counter
 # bump on wrong PIN, counter reset on correct PIN, return-code
-# correctness. Use `make pin-gate-e2e`.
+# correctness. It does not enable the OPTIGA E120 hardware counter and does
+# not exercise boot reconciliation. Use `make pin-gate-e2e`.
 pin-gate-e2e = ["dual-se"]
 se050-crash-safety-e2e = ["se050"]  # 2-phase test: partial wipe + reset + resume. Use `make se050-crash-safety-e2e`.
 # On-silicon SE050 stress-test harness. Catalog-driven runner that boots

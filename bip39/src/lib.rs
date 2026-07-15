@@ -209,12 +209,12 @@ pub const FINGERPRINT_COLS: usize = 16;
 /// blit them as blanks instead of NUL glyphs.
 ///
 /// Used by:
-///   * `fsbl/src/render.rs` for the WRP1A-rooted FSBL NV3007 LCD screen
+///   * `fsbl/src/render.rs` for the legacy bench FSBL NV3007 LCD screen
 ///   * `secure/src/measured_boot.rs` for the (secondary) self-attested
 ///     screen the slot draws after FSBL hands over control
 ///
 /// Hosting this function in `bip39` means **both** renderers consume
-/// the same pure-logic source of truth, so the FSBL row and the
+/// the same pure-logic source of truth, so the legacy FSBL row and the
 /// secure-world row stay byte-identical for the same digest. The
 /// `firmware_fingerprint_lines` regression test in
 /// `bip39/tests/prefix5_roundtrip.rs` pins the exact byte grid.

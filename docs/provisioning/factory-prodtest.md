@@ -1,15 +1,19 @@
 # PQSigner factory production-line test (prodtest)
 
-The prodtest firmware is the **first** firmware the factory operator
-flashes onto a fresh chip. It validates each hardware component
-(OLED, SAES, BHK, TRNG, flash) before the factory_provisioning
-ceremony burns one-way state.
+The prodtest firmware is a **reversible acceptance-test candidate** for fresh
+bench or sacrificial chips. Its supported profile validates the NV3007 LCD,
+SAES/DHUK, MCU TRNG, both SE communication paths, USB, buttons, and identity.
+BHK and flash writes are deliberately unsupported. No result grants authority
+to continue into an irreversible factory or field ceremony.
 
 Internal design notes for engineers are in
 [`secure/src/nsc/prodtest.rs`](../../secure/src/nsc/prodtest.rs).
 
-For the operator manual covering the post-prodtest provisioning
-ceremony, see [`factory-provisioning.md`](factory-provisioning.md).
+The former follow-on ceremony is quarantined in
+[`factory-provisioning.md`](factory-provisioning.md). A passing prodtest result
+does not satisfy, enable, or authorize that document's OTP, option-byte, E140,
+or SE050 operations. Until a replacement lifecycle is reviewed, passing units
+must be logged and set aside.
 
 ---
 
@@ -21,24 +25,27 @@ ceremony, see [`factory-provisioning.md`](factory-provisioning.md).
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
 │  1. probe-rs download prodtest firmware                     │
-│  2. Configure TZ option bytes (TZEN=1, ...)                 │
-│  3. Reset chip → OLED shows "PRODTEST READY"                │
-│  4. tools/factory-prodtest-runner.py over USB HID           │
+│  2. Reset chip → LCD shows "PRODTEST READY"                 │
+│  3. tools/factory-prodtest-runner.py over USB HID           │
 │     - reads STM32 UID into fixture's traceability DB        │
 │     - cycles display patterns (1 s each, camera verify)     │
-│     - reads SAES + BHK fingerprints (per-die-uniqueness)    │
-│     - flash R/W round-trip on a designated test page       │
-│     - 256-byte TRNG sample (χ² entropy check)              │
-│  5. On all pass → proceed to factory_provisioning ceremony  │
+│     - validates SAES/DHUK and a 254-byte TRNG sample         │
+│     - verifies BHK + FLASH remain unsupported               │
+│     - validates SE, USB-loopback, and button paths          │
+│  4. On profile acceptance → log receipt + set unit aside │
 │     On any fail → set chip aside, log offending CMD_ code  │
 │                                                              │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-The runner script (`tools/factory-prodtest-runner.py`) exits 0
-when every test passes, non-zero on any failure. The fixture's
-outer script wraps this with the per-unit serial / position
-tracking and decides whether to chain `flash-hw-factory-provisioning`.
+The runner exits 0 only when all eight required command classes pass and the
+two unsupported probes return their exact non-authority responses. Those two
+results are recorded as `SKIP_UNSUPPORTED` with `passed=false`; exit zero does
+not mean every command passed. Exit 1 is a test/profile failure and exit 2 is a
+runner/transport failure. With `--report`, the runner atomically replaces the
+JSON receipt even after a transport exception whenever the destination remains
+writable. The fixture MUST NOT chain `flash-hw-factory-provisioning` or infer
+irreversible authority from an exit-zero result.
 
 ---
 
@@ -48,18 +55,28 @@ The prodtest firmware exposes 10 USB HID commands. All commands map
 to `proto/src/lib.rs::CMD_PRODTEST_*`; keep these IDs STABLE so old
 field reports stay interpretable.
 
-| ID | Command | Input | Output | Phase |
+| ID | Command | Input | Output | Profile policy |
 |---:|---|---|---|---|
-| 100 | `GET_ID` | — | 12 B UID ‖ 4 B fw_version ‖ 8 B reserved | A |
-| 101 | `DISPLAY_PATTERN` | 4 B pattern (0..4) | — | A |
-| 102 | `SAES_SELFTEST` | — | 8 B DHUK fingerprint | B |
-| 103 | `BHK_SELFTEST` | — | 8 B BHK fingerprint | B |
-| 104 | `FLASH_RW` | 4 B test pattern | — | B (stub) |
-| 105 | `TRNG_SAMPLE` | 4 B count (1..=256) | N B random | B |
-| 106 | `OPTIGA_HANDSHAKE` | — | 16 B OPTIGA RNG | C |
-| 107 | `SE050_HANDSHAKE` | — | 16 B SE050 RNG | C |
-| 108 | `USB_LOOPBACK` | N B input (1..=256) | N B echo | C |
-| 109 | `BUTTON_TEST` | — | 4 B step_status | D |
+| 100 | `GET_ID` | — | 12 B UID ‖ 4 B fw_version ‖ 8 B reserved | required |
+| 101 | `DISPLAY_PATTERN` | 4 B pattern (0..4) | — | required |
+| 102 | `SAES_SELFTEST` | — | 8 B DHUK fingerprint | required |
+| 103 | `BHK_SELFTEST` | — | 8 zero diagnostic bytes + `SW_INTERNAL_ERROR` | unsupported |
+| 104 | `FLASH_RW` | 4 B test pattern | `SW_INTERNAL_ERROR` | unsupported |
+| 105 | `TRNG_SAMPLE` | 4 B count (1..=254) | N B random | required |
+| 106 | `OPTIGA_HANDSHAKE` | — | 16 B OPTIGA RNG | required |
+| 107 | `SE050_HANDSHAKE` | — | 16 B SE050 RNG | required |
+| 108 | `USB_LOOPBACK` | N B input (1..=254) | N B echo | required |
+| 109 | `BUTTON_TEST` | — | 4 B step_status | required |
+
+The runner emits this matrix, the host-required secure/nonsecure feature lists,
+the 254-byte cap, and expected prodtest firmware version 3 in every JSON
+receipt. The feature lists state fixture/build policy; they are not a
+device-attested manifest. The versioned firmware behavior is bound separately
+by the `GET_ID` result.
+Its machine-readable policy classes are eight `required`, zero `optional`, and
+two `unsupported` commands. An
+unexpected `Ok` from either unsupported command is profile drift and fails
+acceptance.
 
 Phase A landed 2026-05-19 (architecture validation). Phase B landed
 same day (compute-only commands). Phase C landed 2026-05-19
@@ -87,12 +104,15 @@ bytes 12..16  Prodtest firmware version (u32 LE)
 bytes 16..24  Reserved (zeroed; future: build-hash prefix)
 ```
 
-Pass criterion: UID is neither all-zero nor all-`0xFF` (factory-blank
-or fully-erased silicon).
+Pass criterion: UID is neither all-zero nor all-`0xFF` (factory-blank or
+fully-erased silicon), and the reported firmware version is exactly 3. A
+different version is not interpreted under this profile: the runner records a
+firmware/profile mismatch, emits the atomic non-green receipt, and sends no
+subsequent command.
 
 ### CMD_PRODTEST_DISPLAY_PATTERN (101)
 
-Renders a known full-screen test pattern on the OLED for the
+Renders a known full-screen test pattern on the NV3007 LCD for the
 fixture's camera (or operator) to verify.
 
 | Pattern ID | Visible result |
@@ -103,12 +123,12 @@ fixture's camera (or operator) to verify.
 | 3 | Vertical stripes (`# # # # # # # # ` × 4 rows) |
 | 4 | 8×8 checker |
 
-Phase A note: these are text-grid approximations. A future phase
-should reach into the SSD1306 framebuffer directly for true
+These are text-grid approximations. A display-specific hardware harness can
+reach into the NV3007 framebuffer directly for true
 per-pixel patterns. The text approximations are sufficient for
 catching dead-pixel + connector-detach defects.
 
-<!-- TODO photo: side-by-side OLED snapshots of each of the 5 patterns (WHITE / BLACK / HSTRIPES / VSTRIPES / CHECKER) on a known-good unit, so the operator can visually compare against the chip under test. -->
+<!-- TODO photo: side-by-side NV3007 LCD snapshots of each of the 5 patterns (WHITE / BLACK / HSTRIPES / VSTRIPES / CHECKER) on a known-good unit, so the operator can visually compare against the chip under test. -->
 
 ### CMD_PRODTEST_SAES_SELFTEST (102)
 
@@ -118,52 +138,56 @@ correlates this against the per-board expected value (recorded
 during initial bring-up) or just logs it for the traceability DB.
 
 Pass criterion: response status is `Ok` (peripheral round-trip
-succeeded). The fingerprint is informational — per-die uniqueness
-is naturally satisfied at RDP ≥ 1 (the silicon DHUK is per-die).
+succeeded). The fingerprint is informational only. Prodtest runs in the
+reversible RDP-0 acceptance phase, where it is not evidence of a final per-die
+DHUK or credential.
 
-Requires the build to include both `prodtest` AND `saes-dhuk`
-features. Without `saes-dhuk` the command returns `InternalError`
-so the fixture knows Tier-1 wasn't actually validated.
+The exact supported secure feature profile is
+`prodtest,dev-testkey,saes-dhuk`. The command initializes SAES itself, runs the
+software-key and DHUK round-trip/domain checks, then returns the first eight
+bytes of `SAES-ECB(DHUK, b"PQSIGNER-SAES-v1")`. Without `saes-dhuk`, the
+required command returns `InternalError` and acceptance fails.
 
 ### CMD_PRODTEST_BHK_SELFTEST (103)
 
-Tier-2 BHK validation: encrypts a known block under the BHK key
-selector. Returns the fingerprint.
-
-Requires `prodtest,bhk,saes-dhuk`. Without `bhk` the command
-returns `InternalError` (factory build profile chooses whether to
-validate Tier-2 — for small-batch dev this can be skipped).
+The wire command is retained, but the supported prodtest profile never enables
+`bhk`: doing so could consume persistent BHK state before acceptance testing is
+complete and is a compile error. The command always returns eight zero
+diagnostic bytes plus `SW_INTERNAL_ERROR`. The runner records that exact result
+as non-passing `SKIP_UNSUPPORTED`; any other response fails the profile. Any
+Tier-2 BHK characterization belongs in a separate, reviewed, owner-authorized
+sacrificial harness.
 
 ### CMD_PRODTEST_FLASH_RW (104)
 
-Write a known pattern to a designated test flash page, read back,
-verify integrity. Catches flash defects before they wedge a
-customer wallet.
-
-**Phase B stub**: the test page + helpers aren't carved out yet.
-The command currently returns `InternalError` so the fixture knows
-to skip this test until the helpers land (tracked in work-todo §30).
+The reversible profile has no designated writable test page and grants no
+flash-write authority. The stable command accepts the canonical four-byte
+request but performs no write and returns `SW_INTERNAL_ERROR` with no data.
+The runner records that exact result as non-passing `SKIP_UNSUPPORTED`; an
+unexpected success is a profile-drift failure. Destructive flash
+characterization requires a separate owner-authorized sacrificial harness.
 
 ### CMD_PRODTEST_TRNG_SAMPLE (105)
 
-Returns N bytes (1..=256) from the STM32 hardware TRNG, no SE XOR
+Returns N bytes (1..=254) from the STM32 hardware TRNG, no SE XOR
 mix. The fixture runs a statistical entropy check (χ² / Shannon /
 distinct-byte-count) to detect a stuck-bit or biased TRNG.
 
 The runner script uses a simple distinct-byte-count threshold: a
-healthy TRNG returns at least 32 distinct byte values in 256 bytes.
+healthy TRNG returns at least 32 distinct byte values in 254 bytes.
 A defective TRNG repeating the same byte or following a low-entropy
 pattern fails this gate.
 
 ### CMD_PRODTEST_OPTIGA_HANDSHAKE (106)
 
 Exercises the full IFX I²C → APDU stack against the OPTIGA Trust M
-without touching any persistent chip state. The firmware lazily
-runs `OptigaTrustM::init()` (RST pulse + `OpenApplication`) on first
-call, then sends a `GetRandom(16)` APDU. On a fresh chip there's no
-PBS yet, so the APDU goes through the plain (non-shielded) path —
-this is exactly what the fixture wants to validate, since the
-shielded connection requires `factory_provisioning` to have run.
+without touching any persistent chip state. The firmware uses a
+`prodtest`-only method that lazily runs `OptigaTrustM::init()` (RST pulse +
+`OpenApplication`) on first call, then sends a plaintext `GetRandom(16)` APDU.
+It refuses if pairing state was loaded or activated. Production `random()` is
+unchanged and always requires the Shielded Connection. This validates only
+reversible communication; it neither exercises nor authorizes a later
+shielded-connection credential ceremony.
 
 Catches:
 - missing chip / broken solder joint / I²C bus wedged
@@ -201,7 +225,7 @@ Pass criterion: same as OPTIGA_HANDSHAKE.
 Echo N bytes back to the host. The fact that the firmware RECEIVED
 the command already proves USB RX framing works; this command proves
 TX + full round-trip byte integrity for non-trivial payloads up to
-the 256 B per-call cap.
+the shared 254-byte response-data cap (256-byte buffer minus status word).
 
 The host runner uses a deterministic test pattern: `byte[i] = i ^
 0xA5` for `i ∈ [0, N)`. This catches:
@@ -215,7 +239,7 @@ Pass criterion: every byte byte-identical to the input.
 
 ### CMD_PRODTEST_BUTTON_TEST (109)
 
-Interactive 3-step button verification. The firmware drives the OLED
+Interactive 3-step button verification. The firmware drives the NV3007 LCD
 through the sequence "PRESS LEFT" → "PRESS RIGHT" → "PRESS BOTH",
 giving the operator up to 10 s per step. The 4-byte output's first
 byte encodes step status (compact nibble layout: upper = step,
@@ -246,7 +270,7 @@ Pass criterion: `step_status == 0x00`. The firmware returns
 `NscStatus::Ok` only when all 3 steps pass; any failure returns
 `InternalError` with the diagnostic byte in the output buffer.
 
-<!-- TODO photo: OLED showing each of the 3 button-test prompt panels (PRESS LEFT / PRESS RIGHT / PRESS BOTH) plus the BTN PASS / BTN FAIL outcome panels. -->
+<!-- TODO photo: NV3007 LCD showing each of the 3 button-test prompt panels (PRESS LEFT / PRESS RIGHT / PRESS BOTH) plus the BTN PASS / BTN FAIL outcome panels. -->
 
 ---
 
@@ -260,14 +284,18 @@ make build-hw-prodtest
 # these into a per-unit operation):
 #
 #   probe-rs download $(NONSECURE_ELF) $(SECURE_ELF)
-#   STM32_Programmer_CLI --optionbytes TZEN=1 ...
 #   probe-rs reset
 #   python tools/factory-prodtest-runner.py --report this-unit.json
 #
-# `factory-prodtest-runner.py` exits 0 if every test passed, non-
-# zero on any failure. The fixture inspects this exit code (and the
-# JSON report's `all_passed` field) to decide whether to chain
-# `flash-hw-factory-provisioning` against the same chip.
+# This acceptance guide grants no option-byte authority. If a future test
+# profile requires an option-byte transition, it needs a separate reviewed,
+# owner-authorized plan naming the exact sacrificial unit and values.
+#
+# Exit 0 means the declared reversible profile was accepted: all required
+# checks passed and both unsupported probes returned SKIP_UNSUPPORTED. It does
+# not mean all ten commands passed. Exit 1 is a profile failure; exit 2 is a
+# runner/transport failure. The atomic JSON receipt remains non-green in both
+# cases. Never chain an irreversible provisioning target.
 ```
 
 ---
@@ -277,7 +305,8 @@ make build-hw-prodtest
 Run once at the start of every shift, before any units are tested:
 
 1. **Fixture USB cable** — plug a known-good "golden" prodtest unit
-   in, run the runner, confirm all 10 commands pass. If they fail
+   in, run the runner, confirm eight required command classes pass and BHK plus
+   FLASH are `SKIP_UNSUPPORTED`. If the profile fails
    on the golden unit, the fixture cable / hub / driver host is the
    problem, not the units under test.
 2. **probe-rs flash speed** — flash one unit and time it. > 30 s
@@ -310,13 +339,13 @@ and contact the firmware team — don't repair on the line."
 | GET_ID | `uid == 0x00 × 12` | STM32 boot ROM dead / OTP unreadable | REPORT VENDOR |
 | GET_ID | `uid == 0xFF × 12` | OTP wiped or chip never booted | REPORT VENDOR |
 | GET_ID | timeout / no response | USB cable unseated, fixture mis-wired, NS world never reached | Reseat cable + retry; if persistent → REPORT VENDOR |
-| DISPLAY_PATTERN | OK status, OLED black | OLED I²C dead / connector loose | Reseat connector; if persistent → set aside |
-| DISPLAY_PATTERN | OK status, pattern smeared | OLED contrast drift | Set aside (cosmetic — would ship but operator can't verify) |
+| DISPLAY_PATTERN | OK status, LCD black | NV3007 LCD interface dead / connector loose | Reseat connector; if persistent → set aside |
+| DISPLAY_PATTERN | OK status, pattern smeared | LCD contrast drift | Set aside (cosmetic — would ship but operator can't verify) |
 | SAES_SELFTEST | `SW_INTERNAL_ERROR` | SAES peripheral defective OR `saes-dhuk` feature missing from build | Re-verify build profile; if profile correct → REPORT VENDOR |
 | SAES_SELFTEST | all-zero fingerprint | DHUK not provisioned (silicon defect — DHUK is per-die intrinsic) | REPORT VENDOR |
-| BHK_SELFTEST | `SW_INTERNAL_ERROR` | BHK feature off in build, or BHK not loaded into TAMP backup regs | Re-verify build (`bhk + saes-dhuk` enabled); if both on → REPORT VENDOR |
-| FLASH_RW | `SW_INTERNAL_ERROR` (Phase B stub) | Test-page helpers not yet wired — known-not-implemented | Skip — pass criterion is "command is reachable", not the round-trip itself |
-| TRNG_SAMPLE | `< 32 distinct bytes in 256` | STM32 TRNG stuck or biased | REPORT VENDOR — this chip can never be a wallet |
+| BHK_SELFTEST | `SW_INTERNAL_ERROR` + 8 zero bytes | Expected unsupported capability | Record `SKIP_UNSUPPORTED` (`passed=false`); any other response fails the profile |
+| FLASH_RW | `SW_INTERNAL_ERROR` + no data | Expected unsupported capability | Record `SKIP_UNSUPPORTED` (`passed=false`); any other response fails the profile |
+| TRNG_SAMPLE | `< 32 distinct bytes in 254` | STM32 TRNG stuck or biased | REPORT VENDOR — this chip can never be a wallet |
 | OPTIGA_HANDSHAKE | `SW_INTERNAL_ERROR` | OPTIGA I²C unwired, RST line floating, OPTIGA chip absent | Reseat OPTIGA shield; rewire RST jumper (D6 → PE0); if persistent → set aside |
 | OPTIGA_HANDSHAKE | `rng == 0x00 × 16` or `0xFF × 16` | I²C bus pulled to GND/VCC | Reseat shield; if persistent → set aside |
 | SE050_HANDSHAKE | `SW_INTERNAL_ERROR` | SE050 absent, ENA line wrong, SCP03 default keys pre-rotated | Reseat SE050 shield; if persistent → set aside |
@@ -345,28 +374,36 @@ silicon has a defect — repair time will exceed the unit's BOM cost.
 - CMSE veneers (NS→S entry): `secure/src/nsc/mod.rs::nsc_prodtest_*`
 - main.rs short-circuit: `#[cfg(feature = "prodtest")]` block after
   the existing `factory-provisioning` short-circuit
-- Cargo feature: `prodtest = ["dual-se", "stm32u585", "ui-oled", "usb"]`
+- Exact secure build profile: `prodtest,dev-testkey,saes-dhuk`
+- Exact nonsecure build profile: `stm32u585,usb,prodtest`
 - Build target: `make build-hw-prodtest`
 - Host-side fixture runner: `tools/factory-prodtest-runner.py`
-- Host tests: `cargo test -p sphincs-tz-secure prodtest::tests`
-  (4 tests pinning the UID layout + FW version + buffer sizes)
+- Host tests: `cargo test -p pqsigner-proto
+  prodtest_response_cap_reserves_status_word` and `python3 -m unittest
+  tools/test_factory_prodtest_runner.py -v`
+- Exact software-only links use the two feature lists above with
+  `--target thumbv8m.main-none-eabi --no-default-features`; they prove profile
+  coherence, not hardware behavior.
 
 ### Build profile safety
 
-Same compile fence as `factory-provisioning`:
+`prodtest` is a reversible acceptance-test image. Its fence cannot be relaxed
+by an irreversible acknowledgement:
 
 | Combination | Result |
 |---|---|
-| `prodtest + dev-testkey` | builds (dev-safe) |
-| `prodtest + bhk` (no opt-in) | **compile error** |
-| `prodtest + optiga-lock-operational` (no opt-in) | **compile error** |
-| above + `factory-production-irreversible-im-sure` | builds |
+| `prodtest + dev-testkey + saes-dhuk` | exact supported secure profile |
+| `prodtest + bhk` | **compile error** |
+| `prodtest + real OTP path` | **compile error** |
+| `prodtest + SE rotation / OPTIGA lifecycle / factory ceremony` | **compile error** |
+| any row above + `factory-production-irreversible-im-sure` | **still a compile error** |
 
-Mass-production builds will be `prodtest + saes-dhuk + bhk +
-factory-production-irreversible-im-sure` (Phase D in work-todo
-§30) so the full Tier-1 + Tier-2 self-test paths are exercised.
+There is no mass-production prodtest profile that carries BHK or mutates
+persistent security state. Tier-2 or destructive characterization uses a
+separate, reviewed, owner-authorized sacrificial harness; it is not an
+acceptance-test capability.
 
-### Wire format (Phase E — production framing)
+### Wire format
 
 `tools/factory-prodtest-runner.py::ProdtestTransport` wraps each
 `CMD_PRODTEST_*` as a v2 APDU and fragments it into 64-byte HID
@@ -396,12 +433,12 @@ since hidapi normalises the host-side API.
 | Phase | Scope | Status |
 |---|---|---|
 | A | Architecture: Cargo feature + 2 commands (GET_ID, DISPLAY_PATTERN) | **DONE** 2026-05-19 |
-| B | Compute-only commands (SAES, BHK, FLASH_RW, TRNG_SAMPLE) | **DONE** 2026-05-19 |
+| B | SAES + TRNG required checks; BHK + FLASH negative capability checks | **DONE** (BHK/FLASH remain unsupported by design) |
 | C | Communication tests (OPTIGA_HANDSHAKE, SE050_HANDSHAKE, USB_LOOPBACK) | **DONE** 2026-05-19 |
 | D | Button test (BUTTON_TEST) | **DONE** 2026-05-19 |
 | E | Host-side fixture runner (full USB HID framing) | **DONE** 2026-05-19 |
 | F | Operator manual production-ready text (photos pending hardware bench) | **DONE** 2026-05-19 (text); photos blocked on hardware-on-bench session |
-| G | Compile fences for the irreversible production profile | DONE 2026-05-19 |
+| G | Compile fences separating reversible prodtest from irreversible profiles | **DONE** |
 
 Phase F note: every `<!-- TODO photo: ... -->` marker in this file
 identifies a place where a visual aid would help the operator. The

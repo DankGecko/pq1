@@ -108,6 +108,13 @@ Update with the sample key).
 
 ### C-6. OPTIGA soft-counter path defeats desoldered-chip lockout (SHIP BLOCKER S-3)
 
+> **Historical finding and original remediation proposal.** The evidence below
+> is retained, but its bullets are not current implementation authority.
+> Production now requires `optiga-hw-counter`, making E120 the lockout
+> authority; F1E1 remains a provisioning/reset sentinel. Its final lifecycle or
+> replacement is owned by `docs/production-todo.md` and must not be reduced to
+> a partial `build_metadata_counter` compile fence.
+
 The default build (without `optiga-hw-counter`) emits
 `build_metadata_auth_ref` (`Execute = ALW`, no LUC) +
 `build_metadata_counter` (soft counter at F1E1, `Change = Conf(E140)`).

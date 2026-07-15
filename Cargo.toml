@@ -67,7 +67,7 @@ members = [
     # Firmware update subsystem.
     "fw-manifest",   # no_std manifest format shared by FSBL / secure / fwsign
     "fwsign",        # host-side release-signing tool
-    "fsbl",          # immutable first-stage bootloader (ARM-only, no_std)
+    "fsbl",          # legacy bench first-stage bootloader (ARM-only, no_std; production-ineligible)
     "fsbl-tests",    # host-side integration tests for `fsbl` (footprint, source-text invariants)
     # Merkle DB builder (ERC-20 / names / selectors / ERC-7730 descriptors).
     "dbgen",

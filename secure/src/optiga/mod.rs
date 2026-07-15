@@ -14,8 +14,12 @@
 //! mechanism:
 //!
 //! 1. During provisioning we write the PIN-derived HMAC secret into the
-//!    auth-ref OID (0xF1D0) and mark it with data type 0x31 (AUTHREF),
-//!    `Exec = Always`, `Change = Conf(0xE140)`, `Read = Never`.
+//!    auth-ref OID (0xF1D0) and mark it with data type 0x31 (AUTHREF) and
+//!    `Read = Never`. Under `optiga-hw-counter`, `Execute = LUC(E120)`;
+//!    `Change = Auto(F1D0)` only in the `optiga-lock-operational` candidate
+//!    profile and remains `Always` on the re-provisionable bench profile.
+//!    The legacy non-hardware-counter path uses `Execute = Always` and is not
+//!    production-eligible.
 //! 2. During unlock:
 //!    a. `GetRandom` — the chip returns a 32-byte challenge from its TRNG.
 //!    b. Host computes `HMAC-SHA256(pin_secret, challenge)`.
@@ -28,15 +32,18 @@
 //!
 //! # Admin recovery path
 //!
-//! Every user OID's `Change` access condition is `Auto(0xF1D0) OR Conf(0xE140)`.
+//! The data OIDs at F1D1..F1D4 use `Change = Auto(F1D0) OR Conf(E140)`.
 //! The PIN path unlocks normal operation; the `Conf` path lets the shielded
-//! connection overwrite the data during factory reset, even when the user
-//! has forgotten their PIN. This avoids the SE050 "permanent lockout"
-//! failure mode we hit earlier.
+//! connection overwrite those data objects during factory reset, even when
+//! the user has forgotten their PIN. F1D0 and the provisioning marker have
+//! separate policies.
 //!
-//! Attempt limiting uses a firmware-managed counter at OID 0xF1D5,
-//! protected by `Conf(0xE140)` (shielded connection required for writes,
-//! reads are `Always` so firmware can check without authenticating).
+//! Attempt limiting is feature-dependent. `optiga-hw-counter` uses the E120
+//! silicon LUC as the lockout authority; the legacy non-production path uses
+//! the firmware-managed counter at F1E1. In the hardware-counter profile F1E1
+//! remains the boot-readable provisioning/reset sentinel, not lockout
+//! authority. Production builds require `optiga-hw-counter`; the final
+//! metadata/lifecycle ceremony and silicon receipts remain open.
 
 pub mod i2c;
 pub mod ifx_i2c;
@@ -217,13 +224,6 @@ impl OptigaTrustM {
         self.init()
     }
 
-    /// One-shot SetObjectProtected recovery flow, gated by `optiga-reset-oids`.
-    ///
-    /// Initializes the chip (`OpenApplication`), provisions a Trust Anchor
-    /// cert at OID `0xE0E3` if it isn't already there, then iterates the
-    /// embedded reset-manifest bundle and sends each one. Logs per-OID
-    /// outcome via `secure_log!`.
-    ///
     /// Draw `buf.len()` bytes from the OPTIGA Trust M hardware TRNG
     /// over the Shielded Connection. The bytes are NOT intended to be
     /// used in isolation — `hw::rng_strong` XOR-mixes this stream with
@@ -272,6 +272,36 @@ impl OptigaTrustM {
         Err(last_err)
     }
 
+    /// Reversible factory-line transport probe.
+    ///
+    /// Prodtest runs before any pairing secret is loaded and must not mutate
+    /// persistent OPTIGA state.  Keep this separate from [`Self::random`]: the
+    /// production RNG contribution is required to use the Shielded Connection,
+    /// while this narrowly cfg-gated probe deliberately exercises only reset,
+    /// OpenApplication, IFX-I2C framing, and a plaintext GetRandom command on a
+    /// fresh factory part.
+    #[cfg(feature = "prodtest")]
+    pub(crate) fn prodtest_plain_random(
+        &mut self,
+        out: &mut [u8],
+    ) -> Result<(), OptigaError> {
+        if !(8..=256).contains(&out.len()) {
+            return Err(OptigaError::BufferOverflow);
+        }
+        // A prodtest image must reach this method before any pairing setup.
+        // Refuse instead of accidentally turning an established production
+        // session into a plaintext downgrade.
+        if self.shield.pbs_loaded || self.shield.active {
+            return Err(OptigaError::Shield);
+        }
+        self.init()?;
+        let written = unsafe { apdu::get_random(&mut self.ifx, &mut self.shield, out)? };
+        if written != out.len() {
+            return Err(OptigaError::Transport);
+        }
+        Ok(())
+    }
+
     /// One `init` → `ensure_shield` → `GetRandom` attempt; split out so
     /// [`Self::random`] can run it twice around the PRL self-heal.
     fn random_shielded_once(&mut self, buf: &mut [u8]) -> Result<(), OptigaError> {
@@ -289,7 +319,11 @@ impl OptigaTrustM {
         Ok(())
     }
 
-    /// Drops the `optiga-reset-oids` feature as soon as the chip is back
+    /// Retired SetObjectProtected recovery evidence. The
+    /// `OPTIGA_RESET_OIDS_RETIRED` compile fence makes this unreachable.
+    ///
+    /// Historical note: the original experiment intended to drop the
+    /// `optiga-reset-oids` feature as soon as the chip was back
     /// in a writable state — the TA cert that authorises these manifests
     /// is a sample key from Infineon's example set, unsafe for production.
     #[cfg(feature = "optiga-reset-oids")]
@@ -368,8 +402,9 @@ impl OptigaTrustM {
     /// `hw::secret_keys::optiga_pairing_secret` — no flash seal, no
     /// blank-page check, no AES-GCM unseal. Which root depends on the
     /// build (see `hw::secret_keys` module docs):
-    /// - `saes-dhuk` on (Tier-1 / production): `SAES-CMAC(DHUK, …)` —
-    ///   the silicon DHUK, never CPU-visible. (This is the path
+    /// - `saes-dhuk` on (Tier-1 / current bring-up transport):
+    ///   `SAES-CMAC(DHUK, …)` — the silicon DHUK, never CPU-visible. This is
+    ///   not the still-open fresh-TRNG production-final pairing protocol. (This is the path
     ///   exercised by `make dual-se-bhk-e2e`; the bench OPTIGA on board
     ///   #1 was re-paired to its DHUK-derived PBS 2026-05-12.)
     /// - `otp-hardcoded-master-key` on (dev/bench): HKDF over the
@@ -463,11 +498,13 @@ impl OptigaTrustM {
                 // (`ifx_i2c_presentation_layer.c:820-829`) has no LcsO check
                 // in the handshake dispatch. The SRM "Pairing Use Case
                 // Pre-conditions" explicitly requires `LcsO < operational`,
-                // not `= operational`. Bumping LcsO=op is a production-
-                // hardening step (it locks the PBS in place so only `Conf
-                // (E140)` can rewrite it afterwards), invoked via the
-                // `optiga-lock-operational` Cargo feature at production
-                // provisioning time — NOT a prerequisite here.
+                // not `= operational`. Bumping LcsO=op is an irreversible
+                // hardening primitive (it locks the PBS in place so only
+                // `Conf(E140)` can rewrite it afterwards), but its exact actor
+                // and order relative to the still-open fresh-TRNG final
+                // rotation are unresolved. The `optiga-lock-operational`
+                // feature exists for controlled validation; it is NOT
+                // production authority and is not a handshake prerequisite.
                 unsafe {
                     self.shield.establish(&mut self.ifx)
                         .map_err(|_| OptigaError::Shield)?;
@@ -478,8 +515,9 @@ impl OptigaTrustM {
         }
     }
 
-    /// First-boot pairing: write the PBS to E140 (plaintext, allowed at
-    /// LcsO=Creation) BEFORE the wizard draws any entropy, so that
+    /// Bring-up transport pairing: write the deterministic device-root PBS to
+    /// E140 (plaintext, allowed at LcsO=Creation) BEFORE the legacy wizard draws
+    /// any entropy, so that
     /// [`Self::random`]'s mandatory `ensure_shield` can handshake even
     /// on a factory-new chip whose E140 is blank. Idempotent — the
     /// provisioning flow's step 1 (`setup_pbs_no_handshake` inside
@@ -488,6 +526,10 @@ impl OptigaTrustM {
     /// `hard_reset_and_reinit` clears the 2-writes-per-session throttle
     /// the E140 data+metadata writes just consumed (and any PRL/alert
     /// residue), leaving the chip clean for the first handshake.
+    ///
+    /// This is not the production-final fresh-TRNG rotation and grants no
+    /// authority to lock E140 or provision a shipping unit. Final derivation,
+    /// durable public state, cut recovery, and E140/SE050 order remain OPEN.
     ///
     /// Under `optiga-no-shield` this is a no-op — those chips never run
     /// the PRL and `ensure_shield` is a no-op for them too.
@@ -508,13 +550,13 @@ impl OptigaTrustM {
         }
     }
 
-    /// Derive PBS from the OTP master and load it into the shield state
+    /// Derive PBS from the configured device root and load it into the shield state
     /// WITHOUT touching E140 on the chip. For bring-up test paths where
     /// E140 is already provisioned from a prior boot — we only need the
     /// host-side PBS in place so `establish()` can run. Does nothing
     /// under `optiga-no-shield`.
     #[cfg(feature = "stm32u585")]
-    pub(crate) fn load_pbs_from_otp(&mut self) -> Result<(), OptigaError> {
+    pub(crate) fn load_pbs_from_device_root(&mut self) -> Result<(), OptigaError> {
         let mut pbs = crate::hw::secret_keys::optiga_pairing_secret()
             .map_err(|e| {
                 secure_log!("[OPTIGA/bringup] optiga_pairing_secret FAILED: {:?}", e);
@@ -523,7 +565,7 @@ impl OptigaTrustM {
         self.shield.load_pbs(&pbs);
         use zeroize::Zeroize;
         pbs.zeroize();
-        secure_log!("[OPTIGA/bringup] PBS loaded from OTP (E140 untouched)");
+        secure_log!("[OPTIGA/bringup] PBS loaded from configured device root (E140 untouched)");
         Ok(())
     }
 
@@ -539,7 +581,8 @@ impl OptigaTrustM {
     /// `hw::secret_keys::optiga_pairing_secret` with label
     /// `"pqsigner/optiga-pbs-v1"`. The derivation root depends on the
     /// build (see `hw::secret_keys` module docs): `SAES-CMAC(DHUK, …)`
-    /// on the silicon DHUK when `saes-dhuk` is on (Tier-1 / production),
+    /// on the silicon DHUK when `saes-dhuk` is on (Tier-1 / current
+    /// bring-up transport; not the still-open fresh-TRNG final protocol),
     /// HKDF over the compile-time ASCII OTP constant under
     /// `otp-hardcoded-master-key`, or HKDF over the per-board TRNG OTP
     /// master otherwise (legacy — `ensure_device_master` burns it once
@@ -566,18 +609,15 @@ impl OptigaTrustM {
     ///   programs 32 TRNG bytes into OTP and locks the region. Under
     ///   `saes-dhuk` there is no OTP burn — the DHUK is silicon-fused.
     ///
-    /// ## LcsO=Operational bump (optional, gated, irreversible)
+    /// ## E140 lifecycle is deliberately not changed here
     ///
-    /// `setup_pbs_no_handshake` does NOT promote `E140` to Operational
-    /// unless the `optiga-lock-operational` Cargo feature is enabled
-    /// (and even then it refuses on a board whose legacy OTP master is
-    /// still blank — see `is_device_master_burned`). The PRL handshake
-    /// works fine at `LcsO=Creation` (validated repeatedly on real
-    /// silicon — see commit `fa06a4f` and `make dual-se-bhk-e2e`), so
-    /// dev builds stay at Creation throughout. Promoting to Operational
-    /// freezes the metadata (a hardening step) but makes the PBS
-    /// unrewriteable — only do it on a unit you intend to ship and have
-    /// validated against sacrificial parts. See
+    /// Ordinary bring-up/field pairing never promotes E140 to Operational,
+    /// even when `optiga-lock-operational` is present. The PRL handshake works
+    /// at `LcsO < Operational`; freezing E140 is a distinct factory-side
+    /// irreversible action whose exact order relative to the final credential
+    /// rotation remains OPEN. A future reviewed ceremony may call the separate
+    /// [`Self::ensure_pbs_lcso_operational`] primitive, but this routine only
+    /// writes the transport PBS and its rotatable metadata. See
     /// `docs/secure-elements/optiga-brick-postmortem.md` §3, §5, §7 and
     /// `docs/production-todo.md`.
     fn setup_pbs_no_handshake(&mut self) -> Result<(), OptigaError> {
@@ -614,41 +654,14 @@ impl OptigaTrustM {
                 apdu::OID_PBS, &meta[..meta_len],
             )?;
 
-            // LcsO = Operational. Irreversible per SRM §"Life Cycle Status".
-            // Gated behind `optiga-lock-operational` so dev builds cannot
-            // commit to an irreversible pairing; additionally gated on
-            // `is_device_master_burned` so an accidental feature-flip on
-            // an unburned board cannot reproduce the brick scenario.
-            #[cfg(feature = "optiga-lock-operational")]
-            {
-                #[cfg(feature = "stm32u585")]
-                {
-                    if !crate::hw::otp::is_device_master_burned() {
-                        secure_log!(
-                            "[OPTIGA/prov] REFUSE LcsO=op: OTP master is blank; \
-                             the PBS cannot be reproduced across resets, locking \
-                             E140 would brick the chip on next boot"
-                        );
-                        pbs.zeroize();
-                        return Err(OptigaError::Transport);
-                    }
-                }
-
-                let (lock_meta, lock_len) = apdu::build_metadata_lock();
-                if let Err(e) = apdu::set_metadata(
-                    &mut self.ifx, &mut self.shield,
-                    apdu::OID_PBS, &lock_meta[..lock_len],
-                ) {
-                    secure_log!("[OPTIGA/prov] E140 LcsO→op bump FAILED: {:?}", e);
-                    pbs.zeroize();
-                    return Err(e);
-                }
-                secure_log!("[OPTIGA/prov] E140 LcsO bumped to Operational (feature optiga-lock-operational)");
-            }
-            #[cfg(not(feature = "optiga-lock-operational"))]
-            {
-                secure_log!("[OPTIGA/prov] E140 LcsO bump SKIPPED (optiga-lock-operational OFF; E140 stays at Creation, rewriteable)");
-            }
+            // Do not couple ordinary pairing to lifecycle authority.  The
+            // factory actor is fixed, but its exact E140/rotation ordering is
+            // still open; `ensure_pbs_lcso_operational` remains unwired until
+            // that ceremony is reviewed and silicon-validated.
+            secure_log!(
+                "[OPTIGA/prov] E140 lifecycle unchanged; factory-side ratchet \
+                 is a separate OPEN ceremony"
+            );
         }
 
         self.shield.load_pbs(&pbs);
@@ -663,19 +676,21 @@ impl OptigaTrustM {
     /// **NOT required for the PRL handshake** (earlier comment in this
     /// function claimed otherwise, incorrectly — see `ensure_shield` for
     /// the corrected rationale with references into the Infineon host
-    /// library and SRM). This is a production-only hardening step: once
+    /// library and SRM). This is an irreversible hardening primitive: once
     /// LcsO=op the chip stops accepting `Change` via `LcsO<op`, so E140
     /// can only be rewritten via `Conf(E140)` (shielded connection with
-    /// the matching PBS). Currently only called from the explicit
-    /// production-commit path (see `optiga-lock-operational` feature in
-    /// `secure/Cargo.toml`). Dead elsewhere.
+    /// the matching PBS). This primitive is intentionally unwired: the actor
+    /// is factory-side, while the exact timing/order relative to final pairing
+    /// rotation remains OPEN. A future ceremony must call it explicitly only
+    /// after review and owner-authorized silicon validation. Ordinary pairing
+    /// never reaches it.
     ///
     /// Reads metadata first and only writes when needed so we don't burn
     /// an NVM cycle on every boot once the chip is already Operational.
     /// Metadata reads are Change=ALW on the LcsO tag (SRM §"Metadata
     /// associated with data and key objects"), no shielded connection
     /// required.
-    #[allow(dead_code)] // retained for explicit production-commit callers
+    #[allow(dead_code)] // retained for explicit gated validation/future reviewed ceremony
     unsafe fn ensure_pbs_lcso_operational(&mut self) -> Result<(), OptigaError> {
         let mut meta = [0u8; 64];
         let n = apdu::get_metadata(
@@ -715,7 +730,7 @@ impl OptigaTrustM {
 
     /// Check if the device has been provisioned.
     ///
-    /// Uses the attempt counter OID (0xF1D5) as a liveness marker since
+    /// Uses the F1E1 provisioning/reset sentinel as a liveness marker since
     /// LcsO can only go up — it stays Operational even after a factory
     /// reset, so a metadata check alone would mis-report a wiped chip as
     /// provisioned. The counter can hold:
@@ -803,10 +818,12 @@ impl OptigaTrustM {
     /// Gated behind the `optiga-lock-operational` Cargo feature so that
     /// the default dev / Phase-A build leaves **all OIDs at
     /// `LcsO=Creation`**. Dev builds iterate freely on chip state; only
-    /// explicit "we're committing this specific chip to production"
-    /// builds flip the feature on. See `docs/work-todo.md` #24 P2 for
-    /// the reversible test matrix and `docs/production-todo.md` for the
-    /// one-way items that belong in that gated production flow.
+    /// explicitly authorized sacrificial-validation builds flip the feature
+    /// on. A future production ceremony may call this primitive only after its
+    /// actor/order and final-rotation recovery contract are reviewed and
+    /// silicon-validated. See `docs/work-todo.md` #24 P2 for the reversible
+    /// test matrix and `docs/production-todo.md` for the still-open one-way
+    /// flow.
     unsafe fn lock_oid(&mut self, _oid: u16) -> Result<(), OptigaError> {
         #[cfg(not(feature = "optiga-lock-operational"))]
         {
@@ -945,9 +962,10 @@ impl OptigaTrustM {
             // LcsO=Op and the hw-counter feature is inert. Surface
             // this loudly rather than continuing with what looks like
             // a hw-counter-enabled build but behaves like the soft
-            // counter. Recovery: run a SetObjectProtected reset pass
-            // on F1D0 (see `optiga-reset-oids`) to return it to
-            // LcsO=Initialization, then re-provision.
+            // counter. There is no approved in-place recovery: the old
+            // SetObjectProtected/`optiga-reset-oids` experiment was
+            // mis-targeted and is compile-fenced. Stop and preserve this
+            // part as evidence; a replacement ceremony remains OPEN.
             #[cfg(feature = "optiga-hw-counter")]
             {
                 let luc_ok =
@@ -1134,12 +1152,12 @@ impl OptigaTrustM {
     /// Lifetime-failure threshold for the silicon PIN counter.
     ///
     /// This is an emergency / anti-extraction backstop, NOT the
-    /// user-facing "3 consecutive" lockout — MCU flash page 124 handles
-    /// consecutive-failure semantics with reset-on-success (see
+    /// user-facing 10-attempt lockout — MCU flash page 124 and the SE050
+    /// UserID enforce that bound with reset-on-success (see
     /// `hw::flash::pin_attempts_{read,bump,reset}` and
     /// `nsc::gated_unlock`). Silicon counter's value-add is the case
     /// where an attacker extracts PBS and replays against the chip
-    /// directly, bypassing the MCU gate — silicon then fires after
+    /// directly, bypassing the MCU gate — E120 then fires after
     /// `HW_PIN_CTR_LIMIT` lifetime attempts. 32 is well above the
     /// birthday budget of legitimate typo-bursts over the device
     /// lifetime yet well below any plausible brute-force attempt
@@ -1764,7 +1782,7 @@ impl OptigaTrustM {
         )?;
 
         // LcsO-ratchet guard (same rationale as provision_auth_ref /
-        // provision_user_oid). F1D5's Change = Conf(E140) — still
+        // provision_user_oid). F1E1's Change = Conf(E140) — still
         // writable via shield when LcsO < Op, but blocked at LcsO=Op.
         let mut cur_meta = [0u8; 128];
         let cur_len = apdu::get_metadata(
@@ -1793,30 +1811,22 @@ impl OptigaTrustM {
         self.verify_and_lock(apdu::OID_COUNTER, &meta[..meta_len])
     }
 
-    /// S-2 — neutralize the OPTIGA trust-anchor pool so NO SetObjectProtected
-    /// manifest can ever bypass an OID's `Change` AC on a shipped chip.
+    /// Fail-closed placeholder for the S-2 trust-anchor pool.
     ///
-    /// For each trust-anchor slot `0xE0E3..=0xE0E8`: overwrite any stored cert
-    /// with junk, install [`apdu::build_metadata_ta_junk`] (`Change`/`Read`/
-    /// `Execute = NEV`, and no `DataType=TrustAnchor`), readback-verify the AC,
-    /// then ratchet `LcsO=Operational`. After this the chip holds no cert it
-    /// will verify a manifest against AND the slots can never be re-pointed, so
-    /// the protected-update Change-AC bypass (ship-blocker S-2) is structurally
-    /// closed — even a bench attacker holding the public Infineon sample key has
-    /// no on-chip anchor to verify a forged manifest against.
+    /// The candidate trust-anchor inventory for this SKU/revision is exactly
+    /// `{0xE0E8, 0xE0E9, 0xE0EF}`. `0xE0E3` is a device-certificate object
+    /// (`DataType=0x12`); `0xE0E4..=0xE0E7` are not members of the pool. The
+    /// prior helper targeted those wrong objects and assumed that omitting a
+    /// DataType tag from a metadata update removed an existing
+    /// `DataType=TrustAnchor (0x11)`. That transition is not established by
+    /// the current driver or silicon receipts.
     ///
-    /// **IRREVERSIBLE.** This permanently removes any field OID-reset channel —
-    /// the owner's explicit "no recovery manifest, no HSM cert" decision. Gated
-    /// so it only ever runs inside a deliberately-flagged irreversible factory
-    /// build, and only as the LAST provisioning step.
-    ///
-    /// Idempotent: an already-Operational slot is skipped.
-    ///
-    /// NOTE (slot scope): per the Infineon SRM the functional trust-anchor pool
-    /// is `0xE0E3..0xE0E8`. Whether an arbitrary `F1Dx` data object can also be
-    /// promoted to `DataType=0x11` and honored as a manifest anchor is verified
-    /// on a sacrificial chip (see `docs/production-todo.md` S-2); if it can, the
-    /// promotable spare `F1Dx` are added to `TA_POOL` here.
+    /// This function therefore performs **no APDU at all** and fails before a
+    /// write. The matching compile-time fence in `nsc/mod.rs` prevents the
+    /// feature pair from producing a runnable image. A future replacement must
+    /// pin the SKU/revision and prove, fail-fast, the initial type, exact data
+    /// write/readback, replacement type, ACs, and final lifecycle state before
+    /// any irreversible lock. Until then S-2 remains a production blocker.
     ///
     /// # Safety
     /// Touches the OPTIGA APDU stack; caller holds `&mut self` and an active
@@ -1826,54 +1836,13 @@ impl OptigaTrustM {
         feature = "factory-production-irreversible-im-sure"
     ))]
     unsafe fn lockdown_ta_pool(&mut self) -> Result<(), OptigaError> {
-        const TA_POOL: [u16; 6] = [0xE0E3, 0xE0E4, 0xE0E5, 0xE0E6, 0xE0E7, 0xE0E8];
-        // 32 bytes of 0xFF: not a parseable X.509 cert, so even if a slot
-        // somehow retained `DataType=TrustAnchor`, a signature-verify against
-        // this junk fails — the data overwrite is the load-bearing defense, the
-        // NEV ACs + lock are belt-and-braces.
-        let junk = [0xFFu8; 32];
-        let (meta, meta_len) = apdu::build_metadata_ta_junk();
-
-        for &oid in TA_POOL.iter() {
-            let mut cur = [0u8; 128];
-            let cur_len =
-                apdu::get_metadata(&mut self.ifx, &mut self.shield, oid, &mut cur).unwrap_or(0);
-            if cur_len > 0 && apdu::is_metadata_operational(&cur, cur_len) {
-                secure_log!("[OPTIGA/ta] OID 0x{:04x} already locked — skip", oid);
-                continue;
-            }
-
-            // Overwrite any stored cert. Fresh production slots are empty, so a
-            // write error there is benign (nothing to neutralize) — log + press
-            // on; the metadata-narrow + lock below is what freezes the slot.
-            if let Err(e) = apdu::set_data_object(&mut self.ifx, &mut self.shield, oid, &junk) {
-                secure_log!("[OPTIGA/ta] OID 0x{:04x} junk set_data: {:?} (continuing)", oid, e);
-            }
-            #[cfg(feature = "stm32u585")]
-            {
-                self.hard_reset_and_reinit()?;
-                self.ensure_shield()?;
-            }
-
-            if let Err(e) =
-                apdu::set_metadata(&mut self.ifx, &mut self.shield, oid, &meta[..meta_len])
-            {
-                secure_log!("[OPTIGA/ta] OID 0x{:04x} set_metadata FAILED: {:?}", oid, e);
-                return Err(e);
-            }
-
-            // Readback-verify the junk AC actually landed BEFORE the
-            // irreversible lock (the chip silently accepts unsupported ACs).
-            self.verify_and_lock(oid, &meta[..meta_len])?;
-            #[cfg(feature = "stm32u585")]
-            {
-                self.hard_reset_and_reinit()?;
-                self.ensure_shield()?;
-            }
-            secure_log!("[OPTIGA/ta] OID 0x{:04x} neutralized + locked", oid);
-        }
-        secure_log!("[OPTIGA/ta] trust-anchor pool lockdown complete (S-2)");
-        Ok(())
+        const TA_POOL: [u16; 3] = [0xE0E8, 0xE0E9, 0xE0EF];
+        let _ = TA_POOL;
+        secure_log!(
+            "[OPTIGA/ta] REFUSED: E0E8/E0E9/E0EF neutralization lacks a \
+             reviewed type/data/AC/lifecycle readback contract"
+        );
+        Err(OptigaError::Status(0xEC))
     }
 
     /// Full-device provisioning.
@@ -1905,7 +1874,7 @@ impl OptigaTrustM {
         // Pre-#24 this was gated on `!self.shield.pbs_loaded`, which
         // worked when `load_pbs` only set `pbs_loaded=true` after an
         // unsealed flash read succeeded. Post-#24, `load_pbs` always
-        // succeeds (PBS is derived from the OTP master on every boot),
+        // succeeds (PBS is derived from the configured device root on every boot),
         // so that gate would now skip the chip-side write on every
         // fresh chip — which is exactly the bug surfaced on Phase-A
         // hardware validation of 2026-04-20.
@@ -2029,12 +1998,12 @@ impl OptigaTrustM {
             prov_with_reset!("counter", self.provision_counter());
         }
 
-        // S-2: neutralize the trust-anchor pool as the LAST infrastructure step
-        // — only in a deliberately-flagged irreversible factory build. Running
-        // it last means any earlier-step failure aborts BEFORE this
-        // point-of-no-return (it permanently removes the manifest channel).
-        // Idempotent on the end-user wizard's re-provision (slots already
-        // locked → skipped).
+        // S-2 sacrificial candidate: neutralize the enumerated trust-anchor
+        // slots after the reversible steps in this experimental sequence.
+        // These feature gates do not make this a production ceremony or settle
+        // E140/credential ordering, HSM policy, recovery, or complete slot
+        // scope. Owner authorization naming a sacrificial part and reviewed
+        // test plan are still required. An already-locked slot is skipped.
         #[cfg(all(
             feature = "optiga-lock-operational",
             feature = "factory-production-irreversible-im-sure"
@@ -2501,7 +2470,7 @@ impl OptigaTrustM {
     /// - Caller must have called `init` previously or this call will
     ///   OpenApplication again (cheap).
     /// - `shield.pbs_loaded` must be true (set by `setup_pbs_no_handshake`
-    ///   or `load_pbs_from_otp`). `ensure_shield()` below will return
+    ///   or `load_pbs_from_device_root`). `ensure_shield()` below will return
     ///   `OptigaError::Shield` otherwise — correct failure, not a
     ///   regression.
     pub fn factory_reset(&mut self) -> Result<(), OptigaError> {

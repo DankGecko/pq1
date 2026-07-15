@@ -125,8 +125,9 @@ enum Cmd {
         #[arg(long)]
         key: std::path::PathBuf,
 
-        /// Final immutable FSBL ELF. Its allocated runtime vendor key must
-        /// match the secure ELF, reviewed policy, and signing key.
+        /// FSBL ELF participating in this artifact set. Its allocated runtime
+        /// vendor key must match the secure ELF, reviewed policy, and signing
+        /// key. This does not make the legacy bench FSBL production-immutable.
         #[arg(long)]
         fsbl: std::path::PathBuf,
 
@@ -190,7 +191,8 @@ enum Cmd {
     /// Prove from final linked artifacts that FSBL and secure world use the
     /// same reviewed, non-development firmware-update key.
     VerifyArtifactKeys {
-        /// Final immutable FSBL ELF.
+        /// FSBL ELF to verify. Passing this check does not make the legacy
+        /// bench FSBL production-immutable.
         #[arg(long)]
         fsbl: std::path::PathBuf,
         /// Final secure-world ELF.

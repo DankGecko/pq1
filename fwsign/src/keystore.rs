@@ -2,10 +2,12 @@
 //!
 //! The vendor signing key is a SPHINCS+C10 keypair: 32 bytes of sk_seed
 //! plus the derived 16-byte pk_seed and 16-byte pk_root. Losing it bricks
-//! the ability to sign new releases (every device's FSBL holds the
-//! matching pubkey and RDP-2 makes FSBL immutable), so the at-rest
-//! encryption has to be serious — but also usable by humans, so it's
-//! passphrase-based via Argon2id + XChaCha20-Poly1305 AEAD.
+//! the ability to sign new releases. In the eventual approved production
+//! design, every device's immutable FSBL holds the matching public key; the
+//! current legacy bench FSBL and option-byte state do not yet establish that
+//! production claim. The at-rest encryption still has to be serious — but
+//! also usable by humans, so it is passphrase-based via Argon2id +
+//! XChaCha20-Poly1305 AEAD.
 //!
 //! ## Threat model
 //!

@@ -40,6 +40,23 @@
 use super::apdu;
 use super::shield;
 
+#[test]
+fn get_random_payload_copy_requires_exact_length() {
+    let exact = [0x5Au8; 16];
+    let mut out = [0u8; 16];
+    assert_eq!(apdu::copy_exact_payload(&exact, &mut out).unwrap(), 16);
+    assert_eq!(out, exact);
+
+    for payload in [&[0x11u8; 15][..], &[0x22u8; 17][..]] {
+        let mut guarded = [0xA5u8; 16];
+        assert!(matches!(
+            apdu::copy_exact_payload(payload, &mut guarded),
+            Err(apdu::OptigaError::Transport)
+        ));
+        assert_eq!(guarded, [0xA5u8; 16]);
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Source-text snapshots (per the precedent of `hw_crypto_under_test`)
 // ─────────────────────────────────────────────────────────────────────
@@ -245,9 +262,10 @@ fn positive_is_metadata_operational_detects_lcs_07() {
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
-fn positive_build_metadata_ta_junk_no_trust_anchor() {
-    // S-2: the trust-anchor pool neutralizer. Change/Read/Execute = NEV and —
-    // critically — NO DataType tag, so the slot can never be a manifest anchor.
+fn positive_build_metadata_ta_junk_emits_no_trust_anchor_assertion() {
+    // This legacy candidate emits Change/Read/Execute = NEV and no DataType
+    // tag. Omission is deliberately NOT treated as proof that an existing
+    // TrustAnchor type was removed; the executable lockdown path is fenced.
     let (buf, len) = apdu::build_metadata_ta_junk();
     let expected: [u8; 11] =
         [0x20, 0x09, 0xD0, 0x01, 0xFF, 0xD1, 0x01, 0xFF, 0xD3, 0x01, 0xFF];
@@ -255,8 +273,53 @@ fn positive_build_metadata_ta_junk_no_trust_anchor() {
     assert_eq!(&buf[..len], &expected, "TA-junk metadata is wire-frozen (S-2)");
     assert!(
         !buf[..len].windows(3).any(|w| w == [0xE8, 0x01, 0x11]),
-        "TA-junk must NEVER carry DataType=TrustAnchor(0x11) — that is the \
-         exact byte that would make the slot a usable manifest anchor"
+        "candidate metadata must not itself assert DataType=TrustAnchor(0x11)"
+    );
+}
+
+#[test]
+fn negative_ordinary_pairing_never_ratchets_e140_lifecycle() {
+    let start = MOD_SRC
+        .find("fn setup_pbs_no_handshake")
+        .expect("setup_pbs_no_handshake exists");
+    let end = MOD_SRC[start..]
+        .find("/// Bump E140 to `LcsO=Operational`")
+        .map(|offset| start + offset)
+        .expect("lifecycle primitive follows pairing routine");
+    let pairing = &MOD_SRC[start..end];
+
+    assert!(
+        !pairing.contains("ensure_pbs_lcso_operational("),
+        "ordinary pairing must not invoke the irreversible E140 lifecycle primitive"
+    );
+    assert!(
+        pairing.contains("E140 lifecycle unchanged"),
+        "pairing must retain an explicit lifecycle-separation marker"
+    );
+}
+
+#[test]
+fn negative_ta_pool_lockdown_is_exact_and_emits_no_apdu() {
+    let start = MOD_SRC
+        .find("unsafe fn lockdown_ta_pool")
+        .expect("lockdown_ta_pool exists");
+    let end = MOD_SRC[start..]
+        .find("/// Full-device provisioning.")
+        .map(|offset| start + offset)
+        .expect("provisioning docs follow lockdown helper");
+    let helper = &MOD_SRC[start..end];
+
+    assert!(
+        helper.contains("const TA_POOL: [u16; 3] = [0xE0E8, 0xE0E9, 0xE0EF];"),
+        "candidate trust-anchor inventory must be exactly E0E8/E0E9/E0EF"
+    );
+    assert!(
+        !helper.contains("apdu::"),
+        "fenced trust-anchor helper must emit no APDU before the ceremony is proven"
+    );
+    assert!(
+        helper.contains("Err(OptigaError::Status(0xEC))"),
+        "trust-anchor helper must fail closed"
     );
 }
 

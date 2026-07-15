@@ -90,19 +90,17 @@ RULES:
     you ran. The rainbow _target/ ELFs mirror production fi.rs via #[path]; a sweep on them
     reflects shipped code, a source read does not.
   - cargo-checkct / TVLA on a HOST build is not the shipped M33 binary — flag post-LTO gaps.
-  - For each finding: FI-mode, file:line, PoC, disposition, severity, proposed fix (flag if
+  - For each candidate: FI-mode, file:line, PoC, provisional severity, stable
+    candidate ID, and proposed fix (flag if
     it would weaken the double-compute chain, remove a sentinel, or regress a checkct proof).
+    Do not assign a finding disposition.
 
-OUTPUT — file findings so they can be catalogued + worked through (see
-docs/security/adversarial-review/findings/README.md):
-  Write a dated report to docs/security/adversarial-review/findings/<surface>-<YYYY-MM-DD>.md
-  from findings/TEMPLATE.md — everything below (findings + the honest residual) goes IN it.
-  Report frontmatter `status: open`; EACH finding gets its own `Status:` line (start 🔲 OPEN)
-  + a falsifiable PoC. Add one row to the Catalogue table in findings/README.md. As findings
-  are worked through, whoever handles each flips its `Status:` (✅ FIXED / ☑️ ACCEPTED /
-  🚫 INVALID / ⏸ DEFERRED) + a Resolution (commit+date or why), and sets the report
-  `status: resolved` once none remain OPEN. work-todo.md stays the action list; findings/ is
-  the review record — cross-link them.
+OUTPUT — return an external candidate packet to the coordinator. Do not modify
+the repository, write a canonical findings report, or update catalogue/status
+fields. Include every candidate and the honest residual. The coordinator freezes
+the raw packet and gives the complete union to the exact Partner-A/Partner-B
+pair; only their symmetric cross-adjudication may assign dispositions. An
+authorized maintainer records the adjudicated result afterward.
 
 MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   1. "What I tried to break and COULDN'T" — per countermeasure, the strongest failed sweep.
@@ -114,7 +112,15 @@ MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   Never imply "the rest is fine."
 ```
 
-**Running it as a swarm.** ≥3 reviewers per scope, cross-vote, two model backends. For the FI surface specifically, an *executing* pass (actually running the rainbow sweep / cargo-checkct) is worth far more than a source read — prioritize provenance.
+**Running it as a swarm.** Use ≥3 independent discovery reviewers per scope
+across two model backends. Quorum only corroborates/prioritizes discovery; it
+does not set a disposition, and sub-quorum variants remain in the packet. Give
+every candidate and origin variant to the exact Partner-A/Partner-B pair in
+[`../../planning-and-review-workflow.md`](../../planning-and-review-workflow.md);
+only their symmetric cross-adjudication may disposition it, with disagreement
+preserved. For the FI surface specifically, an *executing* pass (actually
+running the rainbow sweep / cargo-checkct) is worth far more than a source read
+— prioritize provenance.
 
 ---
 

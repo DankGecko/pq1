@@ -17,7 +17,7 @@ reproducible-build artifact `./measure.sh` produces from the public
 source tree. If those words could be faked, the entire reproducible-
 build story collapses.
 
-The defended property:
+The target defended property (after the production FSBL/WRP gates close):
 
 > The user trusts only the *initial provisioning*. Any subsequent
 > firmware update is unable to forge the 8 words shown on the NV3007 LCD.
@@ -110,7 +110,7 @@ This is safe because:
 * BIP-39's English wordlist guarantees the first **4 chars** are unique
   per word, so a 5-char prefix unambiguously identifies any wordlist
   entry. The 5th byte serves as a visual sanity buffer for the user.
-* Both the immutable FSBL and advisory secure-world screen draw the exact
+* Both the legacy FSBL and advisory secure-world screen draw the exact
   4×16 byte grid returned by `firmware_fingerprint_lines`. They therefore
   use the same five-character truncation, spacing, and short-word padding;
   any honest-image display divergence is a real defect or tamper signal.
@@ -169,10 +169,11 @@ this cross-check mis-fire on honest firmware (the "divergence ⇒ tamper"
 signal would then be permanently tripped and ignored). See
 `docs/security/audits/boot-fsbl-20260611-141459.md` (MEDIUM-1).
 
-> **Status of the cross-check.** Today's shipping build is **monolithic**
-> (no FSBL flashed), so only the self-attested secure-world row exists; the
-> FSBL trust root is not yet deployed. The base-tracking fix above is what
-> makes the two rows agree *once FSBL + A/B ship*. There is still **no
+> **Status of the cross-check.** No shipping build exists. The default
+> monolithic bring-up profile has only the self-attested secure-world row;
+> separate legacy bench FSBL/A/B exercises do not establish a production
+> trust root. The base-tracking fix above is what makes the two rows agree in
+> a future approved slot-relocated build. There is still **no
 > automated comparator** — divergence detection is a human glance at the
 > LCD against the recorded baseline. Wiring an on-device comparator (FSBL
 > leaving its verdict in a known SRAM/RTC-backup slot for the slot to echo)

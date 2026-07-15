@@ -161,7 +161,7 @@ injected real defects were caught, most at compile time), but the scope is the
 **on-chain contract + the SPHINCS+C10 spec only**:
 
 - **Most of the 9 CLAUDE.md non-negotiable invariants are NOT formally proven
-  on-chain.** #2 hardware PIN three-way lockstep, #3 E2E SE tunnels, #4
+  on-chain.** #2 three-way PIN-attempt consumption + directional page124/E120 boot check, #3 E2E SE tunnels, #4
   TrustZone secret isolation, and the trusted-display clear-signing pipeline are
   firmware/secure-world/hardware properties with **zero Lean coverage in this
   tree** — they rest on silicon E2E tests, the protocol models (ProVerif/Tamarin,

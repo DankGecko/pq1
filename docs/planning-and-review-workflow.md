@@ -23,6 +23,13 @@ Task-specific specifications, explicit owner decisions, and surface playbooks
 may impose stricter gates. They take precedence for their scope; this generic
 workflow cannot weaken them or grant authority they withhold.
 
+Preserved research candidates may contain the review choreography that was
+current when they were frozen. Those embedded process clauses are historical
+unless an explicit owner decision re-adopts them: this document controls the
+current partner configuration, runtime receipts, withheld first passes,
+symmetric cross-adjudication, and finding-status authority. This rule changes
+no technical requirement inside the preserved candidate.
+
 ## 1. Operating principles
 
 1. **Security and correctness outrank elegance, schedule, and line count.** A
@@ -236,21 +243,34 @@ Reports must name the exact level actually reached.
 
 For security-sensitive architecture and implementation, use both partners:
 
-- **Partner A:** Claude Code **Opus 4.8** with 1M context. Run the
-  **`ultracode` orchestration workflow** and set reasoning effort separately to
-  **`xhigh`**. `ultracode` is an orchestration profile, not a reasoning-effort
-  value, and MUST NOT be recorded as one. Use `max` only when a task-specific
-  technical reason favors it; record that reason before review starts. `max`
-  never substitutes for the required `ultracode` orchestration.
+- **Partner A:** Claude Code **Opus 4.8** with 1M context. Select the
+  **`ultracode` mode**, resolving to the required orchestration profile and
+  **`xhigh`** reasoning effort. If the backend exposes separate selectors, set
+  and attest both; if one control-plane selector sets both, record that selector
+  plus the resolved settings rather than claiming a second manual control was
+  used. `ultracode` is not itself the literal reasoning-effort field. Use `max`
+  only when a task-specific technical reason favors it; record that reason
+  before review starts. `max` never substitutes for the required `ultracode`
+  mode.
 - **Partner B:** literal model **`gpt-5.6-sol`** with
   **`model_reasoning_effort="ultra"`**.
 
-Before either first pass starts, freeze a reviewer-configuration receipt for
-each leg: role, literal model identifier, context window, reasoning-effort
-setting, orchestration profile if any, harness/backend and version, allowed
-fan-out or subagents, and every substitution or deviation. Each report repeats
-the actual runtime values observed; requested settings alone are not evidence
-that the required pair ran.
+Before either first pass starts, the coordinator MUST freeze a **pre-launch
+request receipt** for each leg: role, executable and CLI/harness version,
+redacted argv/config, working directory, prompt digest, requested literal model
+identifier, context selector, reasoning-effort setting, orchestration profile,
+sandbox, allowed fan-out or subagents, and every planned substitution.
+
+After the session starts, and before its report is accepted or disclosed, the
+coordinator MUST freeze a **post-launch runtime receipt** from the launcher,
+harness, provider response, or durable session log. It binds the session ID,
+target identity, report digest, observed model/provider, effort and context
+selector when exposed, actual fan-out/profile, sandbox, harness version, and
+every deviation. A command line alone is request evidence, not runtime
+attestation. Runtime configuration is a control-plane fact: model self-report
+is not required and MUST NOT be the sole attestation. If a required selector is
+absent from every trusted post-launch/control-plane record, that review leg is
+unavailable; non-required fields may be `NOT_EXPOSED` with a source and reason.
 
 If either exact partner is unavailable, do not silently substitute a weaker or
 different review and call the pair complete. Record the missing leg and ask the
@@ -277,8 +297,12 @@ non-destructive commands, build into external target directories, and create or
 mutate PoCs in an isolated scratch copy. They must record those actions and
 must never report scratch state as the reviewed identity.
 
-Reviewers write raw reports outside the immutable target and freeze each report
-with its own digest. After both first passes and cross-adjudications are frozen,
+Reviewers write raw reports to distinct, no-clobber paths outside the immutable
+target and freeze each report with its own digest. Review commands SHOULD set
+`PYTHONDONTWRITEBYTECODE=1` (or equivalent), and the initial/final identity
+receipt records ignored files as well as ordinary Git status so an ignored
+cache cannot masquerade as an immutable target. After both first passes and
+cross-adjudications are frozen,
 a coordinator may file byte-identical copies in a separate reporting
 commit/worktree. That archival commit is not the reviewed target and MUST NOT
 be described as inheriting its recommendation. Any substantive edit to a raw
@@ -313,8 +337,9 @@ After both first-pass reports freeze:
    framing or accepted an unsupported claim.
 4. Preserve disagreements explicitly; do not average severities or decide by
    majority language.
-5. A confirmed blocker, or an unresolved `NO-GO` from either partner, prevents
-   a favorable recommendation or owner transition for that stage. The owner
+5. A confirmed or unresolved blocker/major finding, or an unresolved `NO-GO`
+   from either partner, prevents a favorable recommendation or owner transition
+   for that stage. The owner
    may accept a product trade-off only after the residual and consequence are
    written plainly; an unresolved correctness contradiction cannot be accepted
    by preference.
@@ -356,9 +381,12 @@ reproduce the claims:
 Each reviewer report must contain:
 
 1. **Identity and drift result.** Initial and final snapshot identity.
-2. **Reviewer-configuration receipt.** Actual model ID, context, reasoning
-   effort, orchestration profile, harness/backend version, and
-   reviewer-controlled fan-out used for the report.
+2. **Reviewer-configuration receipt.** Digests/references for the frozen
+   pre-launch request and post-launch runtime receipts; the observed model and
+   provider, effort and context selector when exposed, profile/fan-out,
+   harness/backend version, session ID, sandbox, deviations, and any
+   `NOT_EXPOSED` fields. The raw model report need not introspect control-plane
+   facts itself.
 3. **Stage-specific verdicts.** Architecture, implementation, merge, and
    production shipment are stated separately; unavailable stages say so.
 4. **Findings.** Stable ID, severity, file/line, mechanism, prerequisites,
@@ -374,8 +402,10 @@ Each reviewer report must contain:
 8. **Honest residual.** What resisted attack, what was not reviewed, tool or
    model limits, and the exact remaining gates.
 
-Every security review governed by the surface playbooks files a durable report
-using the surface-specific finding template at
+Every security review governed by the surface playbooks first freezes its raw
+partner reports externally. Symmetric adjudication then uses
+[`security/adversarial-review/findings/CROSS_ADJUDICATION_TEMPLATE.md`](security/adversarial-review/findings/CROSS_ADJUDICATION_TEMPLATE.md);
+only the post-cross canonical record uses
 [`security/adversarial-review/findings/TEMPLATE.md`](security/adversarial-review/findings/TEMPLATE.md)
 and its
 [`status lifecycle`](security/adversarial-review/findings/README.md).

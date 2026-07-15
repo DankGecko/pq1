@@ -78,19 +78,17 @@ RULES:
   - Verify against the CURRENT tree; the C10 verifier math is OUT of scope (A3.1 bridge).
   - Distinguish theft (funds move) from availability (a slot pruned) from operational (a
     deployment assumption) — SOL6/SOL8 are not theft; label severity accordingly.
-  - For each finding: SOL-mode, file:line, PoC, disposition, severity, proposed fix (flag if it
+  - For each candidate: SOL-mode, file:line, PoC, provisional severity, stable
+    candidate ID, and proposed fix (flag if it
     would change a codehash-frozen contract — that breaks the pin and needs a re-freeze).
+    Do not assign a finding disposition.
 
-OUTPUT — file findings so they can be catalogued + worked through (see
-docs/security/adversarial-review/findings/README.md):
-  Write a dated report to docs/security/adversarial-review/findings/<surface>-<YYYY-MM-DD>.md
-  from findings/TEMPLATE.md — everything below (findings + the honest residual) goes IN it.
-  Report frontmatter `status: open`; EACH finding gets its own `Status:` line (start 🔲 OPEN)
-  + a falsifiable PoC. Add one row to the Catalogue table in findings/README.md. As findings
-  are worked through, whoever handles each flips its `Status:` (✅ FIXED / ☑️ ACCEPTED /
-  🚫 INVALID / ⏸ DEFERRED) + a Resolution (commit+date or why), and sets the report
-  `status: resolved` once none remain OPEN. work-todo.md stays the action list; findings/ is
-  the review record — cross-link them.
+OUTPUT — return an external candidate packet to the coordinator. Do not modify
+the repository, write a canonical findings report, or update catalogue/status
+fields. Include every candidate and the honest residual. The coordinator freezes
+the raw packet and gives the complete union to the exact Partner-A/Partner-B
+pair; only their symmetric cross-adjudication may assign dispositions. An
+authorized maintainer records the adjudicated result afterward.
 
 MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   1. "What I tried to break and COULDN'T" — per class, with the covering gate.
@@ -99,7 +97,15 @@ MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   Never imply "the rest is fine."
 ```
 
-**Running it as a swarm.** ≥3 reviewers per scope, cross-vote, two model backends. A productive split: one reviewer writes the SOL2 reentrancy harness, one attacks SOL6 authorization, one audits whether each cited gate actually covers its claim.
+**Running it as a swarm.** Use ≥3 independent discovery reviewers per scope
+across two model backends. Quorum only corroborates/prioritizes discovery; it
+does not set a disposition, and sub-quorum variants remain in the packet. Give
+every candidate and origin variant to the exact Partner-A/Partner-B pair in
+[`../../planning-and-review-workflow.md`](../../planning-and-review-workflow.md);
+only their symmetric cross-adjudication may disposition it, with disagreement
+preserved. A productive split: one reviewer writes the SOL2 reentrancy harness,
+one attacks SOL6 authorization, and one audits whether each cited gate actually
+covers its claim.
 
 ---
 

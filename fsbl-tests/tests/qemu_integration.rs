@@ -56,11 +56,13 @@ fn qemu_fsbl_row_changes_after_alternate_image_install() {
     // TODO: assert captured row matches `firmware_fingerprint_lines(sha256(secure_b))`
 }
 
-/// Empirical proof that a malicious slot's `measured_boot::run` cannot
-/// forge the user-visible fingerprint. Build a secure-world variant
+/// Planned experiment showing that a malicious slot's `measured_boot::run`
+/// cannot forge the legacy bench-FSBL fingerprint. It becomes production
+/// trust-root evidence only after the approved FSBL geometry and immutable
+/// option-byte ceremony close. Build a secure-world variant
 /// under a hidden `cfg(test_malicious_slot)` flag that hard-codes a
 /// fake `firmware_hash()` return value. Boot under QEMU. Assert:
-///   * FSBL's frame matches `fwmeasure(real_bytes)` (trust root holds),
+///   * FSBL's frame matches `fwmeasure(real_bytes)` (bench parity holds),
 ///   * `measured_boot::run`'s frame matches the fake hardcoded value
 ///     (the lie is visible — divergence is the tamper signal).
 #[test]

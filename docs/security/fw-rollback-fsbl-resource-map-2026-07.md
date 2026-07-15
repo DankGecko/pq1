@@ -15,7 +15,7 @@ this receipt's authority.
 
 ## Outcome
 
-The immutable FSBL warning proxy can be reduced from a 40,268-byte physical
+The target-immutable FSBL warning proxy can be reduced from a 40,268-byte physical
 FLASH span to 38,860 bytes while retaining the signature, signed
 digest/image, rollback-admission/establishment, ECC, and final fresh-hash
 gates. The 1,408-byte reduction puts the proxy only 52 bytes below Draft

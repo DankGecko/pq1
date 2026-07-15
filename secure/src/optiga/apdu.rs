@@ -164,8 +164,8 @@ pub const OID_COUNTER:       u16 = 0xF1E1;
 // A second, independent decoy wallet stored under a SECOND OPTIGA AuthRef
 // (F1D8) bound to its OWN LUC counter (E121, "matched-LUC" — validated on
 // silicon 2026-05-20, see work-todo §32). Mirrors the real layout
-// (auth/entropy/master/vk/bvk) in the free type-3 slots. F1D0..F1D5 are
-// taken (auth/entropy/master/vk/bvk/soft-counter); the free type-3 pool is
+// (auth/entropy/master/vk/bvk) in the free type-3 slots. F1D0..F1D4 and
+// F1E1 are taken (auth/entropy/master/vk/bvk/provisioning sentinel); the free type-3 pool is
 // F1D6, F1D7, F1D9, F1DA, F1DB (F1D8 = duress auth). F1D7 is left spare.
 /// Duress AuthRef — PIN-derived HMAC key for the decoy wallet, Execute=LUC(E121).
 pub const OID_DURESS_AUTH_REF:      u16 = 0xF1D8;
@@ -530,9 +530,23 @@ pub unsafe fn get_random(
     let n = send_command(ifx, shield, apdu, &mut resp)?;
     let payload = parse_response(&resp, n)?;
 
-    let copy_len = payload.len().min(out.len());
-    out[..copy_len].copy_from_slice(&payload[..copy_len]);
-    Ok(copy_len)
+    copy_exact_payload(payload, out)
+}
+
+/// Copy a length-bound APDU payload without accepting truncation or padding.
+///
+/// `GetRandom` requests an exact byte count. Treating a short or overlong
+/// response as success can hide a framing/protocol error and, for factory
+/// diagnostics, falsely attest the requested response shape.
+pub(crate) fn copy_exact_payload(
+    payload: &[u8],
+    out: &mut [u8],
+) -> Result<usize, OptigaError> {
+    if payload.len() != out.len() {
+        return Err(OptigaError::Transport);
+    }
+    out.copy_from_slice(payload);
+    Ok(payload.len())
 }
 
 /// `GenerateAuthCode` — `GetRandom` variant that *also binds* the random
@@ -954,7 +968,7 @@ pub fn build_metadata_auth_ref() -> (MetaBuf, usize) {
     wrap_meta(inner, c)
 }
 
-/// Metadata for the PIN attempt counter (0xF1D5).
+/// Metadata for the provisioning/reset sentinel (0xF1E1).
 ///
 /// - **Change**: `Conf(0xE140)` — only the shielded connection can update.
 ///   Any write is additionally guarded in firmware by a verify-after-
@@ -965,9 +979,9 @@ pub fn build_metadata_auth_ref() -> (MetaBuf, usize) {
 ///
 /// CRIT-6 mitigation is applied in firmware (verify-after-write + PBS
 /// protection via SAES-wrap, see CRIT-9) rather than in the metadata
-/// itself: a chip-native monotonic counter (OID E120..E123 linked
-/// into AUTH_REF's AC) would be stronger but requires a wire-level
-/// extension we defer to the next driver revision.
+/// itself. Shipping profiles use the chip-native E120 LUC linked into
+/// AUTH_REF's access condition as the PIN lockout authority; F1E1 remains
+/// only a boot-readable provisioning/reset sentinel.
 pub fn build_metadata_counter() -> (MetaBuf, usize) {
     let mut inner = [0u8; 64];
     let mut c = 0usize;
@@ -1144,16 +1158,16 @@ pub fn build_metadata_lock() -> (MetaBuf, usize) {
     wrap_meta(inner, c)
 }
 
-/// Metadata that neutralizes a trust-anchor pool OID (S-2).
+/// Historical candidate metadata for a trust-anchor-pool experiment (S-2).
 ///
 /// `Change = NEV`, `Read = NEV`, `Execute = NEV`, and DELIBERATELY no
-/// `DataType` tag — so the slot carries no `DataType = TrustAnchor (0x11)` and
-/// the chip can never execute a SetObjectProtected signature-verify against it.
-/// Written (over any existing cert) + ratcheted to `LcsO=Operational` by
-/// [`OptigaTrustM::lockdown_ta_pool`] on `0xE0E3..0xE0E8`, this guarantees no
-/// usable trust anchor exists on a shipped chip: a desoldered-bench attacker
-/// has no anchor to verify a forged manifest against, so the protected-update
-/// Change-AC bypass is structurally closed.
+/// `DataType` tag. Omission is **not** evidence that an existing
+/// `DataType=TrustAnchor (0x11)` is removed: OPTIGA metadata replacement
+/// semantics for that transition are not yet pinned or silicon-validated.
+/// Consequently [`OptigaTrustM::lockdown_ta_pool`] is fail-closed and the
+/// `optiga-lock-operational + factory-production-irreversible-im-sure` build
+/// shape is fenced. Do not use these bytes as a ceremony until the exact
+/// E0E8/E0E9/E0EF type/data/AC/lifecycle readback contract is reviewed.
 ///
 /// Bytes: `20 09 D0 01 FF D1 01 FF D3 01 FF`.
 pub fn build_metadata_ta_junk() -> (MetaBuf, usize) {
@@ -1168,8 +1182,9 @@ pub fn build_metadata_ta_junk() -> (MetaBuf, usize) {
 /// Metadata for the Platform Binding Secret OID (0xE140).
 ///
 /// Follows Infineon's `example_pair_host_and_optiga_using_pre_shared_secret`
-/// pattern verbatim, with LcsO bumped to Operational so the metadata itself
-/// becomes immutable:
+/// access-condition shape. This builder deliberately does **not** change
+/// LcsO; ordinary pairing must leave the factory-side lifecycle ratchet to a
+/// separately reviewed ceremony:
 ///
 /// - **Change**: `LcsO < Operational OR Conf(0xE140)` — the LcsO path is
 ///   one-shot (satisfied only during Creation), the `Conf` path keeps the
@@ -1179,7 +1194,7 @@ pub fn build_metadata_ta_junk() -> (MetaBuf, usize) {
 /// - **Execute**: Always (the shielded connection engine must be able to use
 ///   the secret).
 /// - **Data type**: Platform Binding Secret (0x22).
-/// - **LcsO**: Operational (irreversible).
+/// - **LcsO**: omitted; the stored lifecycle value is preserved.
 pub fn build_metadata_pbs_final() -> (MetaBuf, usize) {
     let mut inner = [0u8; 64];
     let mut c = 0usize;
@@ -1189,13 +1204,10 @@ pub fn build_metadata_pbs_final() -> (MetaBuf, usize) {
     // chip's current LcsO can be rejected. On a virgin chip LcsO=Creation,
     // and on a chip reset via SetObjectProtected manifest LcsO=Initialization
     // (see `tools/optiga_reset/reset_metadata_e140.txt`) — both are <op, so
-    // the Change AC installed below will hold until the explicit bump from
-    // `setup_pbs_no_handshake` raises LcsO to Operational. Merge semantics:
-    // the existing stored LcsO survives this write untouched.
-    //
-    // The bump to Operational is required before PRL handshake will work
-    // (SRM §"Platform Binding Secret": "LcsO set to operational", confirmed
-    // against Infineon's matter_provisioning final-metadata config).
+    // the Change AC installed below remains available until a future reviewed
+    // factory ceremony explicitly ratchets LcsO. Merge semantics preserve the
+    // existing stored LcsO. PRL itself has been validated while LcsO is below
+    // Operational; lifecycle hardening is not a handshake prerequisite.
 
     // Change: LcsO < Operational OR Conf(0xE140) — 7-byte expression.
     inner[c] = META_CHANGE;

@@ -88,8 +88,11 @@ pub struct ShieldedConnection {
     pub active: bool,
     /// Platform Binding Secret. 64 bytes per OPTIGA Trust M SRM §
     /// "Platform Binding Secret" ("It shall be 64 bytes …") — derived
-    /// on demand from the OTP master via `hw::secret_keys::optiga_
-    /// pairing_secret`.
+    /// on demand from the configured device root via
+    /// `hw::secret_keys::optiga_pairing_secret` (DHUK in the current
+    /// bring-up transport path; OTP only in explicit dev/legacy builds).
+    /// This buffer does not implement the still-open fresh-TRNG
+    /// production-final pairing protocol.
     pbs: [u8; 64],
     /// Whether PBS has been loaded.
     pub pbs_loaded: bool,

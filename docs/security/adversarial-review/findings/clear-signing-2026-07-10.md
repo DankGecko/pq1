@@ -3,7 +3,7 @@ surface: clear-signing
 run_date: 2026-07-10
 reviewer: GPT-5 Codex multi-agent adversarial review
 scope: ERC-7730 registry compiler, authenticated IR/binding, calldata and EIP-712 renderers, direct/Safe dispatch, UserOp context pages, FI permission gates, and catalogue provenance
-status: fixes-landed-production-blocked
+status: in-review
 ---
 
 # Adversarial-review findings — clear-signing — 2026-07-10
@@ -11,7 +11,8 @@ status: fixes-landed-production-blocked
 ## Summary
 
 30 handled findings: **28 confirmed-real with fixes landed on the integration branch,
-1 deferred production ship blocker, and 1 accepted lower-trust mode**. The review
+1 deferred production ship blocker, and 1 reviewed lower-trust mode whose owner
+acceptance is not recorded**. The review
 found exploitable display/binding ambiguities in dynamic EIP-712 fields, ABI
 framing, hidden operands, identity/number formatting, duplicate bindings, and
 Safe classification; it also found fail-open downgrade and fault-injection gaps
@@ -165,14 +166,14 @@ attributed to this regenerated root.
 
 ### F11 — SelfAttest names have only 4-byte selector provenance
 
-- **Status:** ☑️ ACCEPTED
+- **Status:** 🔬 REVIEWED
 - **Mode / severity:** CS10 · LOW / UX trust boundary
 - **Location:** `tx/src/selectors/bundle.rs:52-64`; `secure/src/tx/display/mod.rs:206-241`
 - **What:** SelfAttest proves only that `keccak256(text_signature)[0..4]` equals the calldata selector. A chosen-prefix/same-selector signature can therefore provide a misleading function name; it is not curated semantic provenance.
 - **PoC (falsifiable):** supply a different ASCII text signature with the same four-byte selector. It may appear only under the lower-trust `GUESS:` / unverified blind-sign presentation and must never gain a curated `FUNCTION:` or ERC-7730 clear-sign label.
 - **Disposition:** CONFIRMED_REAL
 - **Proposed fix:** retain the explicit trust-tier separation; any promotion would require stronger authenticated metadata rather than selector equality.
-- **Resolution:** Accepted by design, 2026-07-10. SelfAttest remains a loud lower-trust aid inside the blind-sign ladder; its banner is the defense and it is not treated as clear-sign provenance.
+- **Resolution:** Current behavior retained pending an owner decision. SelfAttest remains a loud lower-trust aid inside the blind-sign ladder; its banner is the defense and it is not treated as clear-sign provenance. No owner risk-acceptance receipt is recorded, so this finding is not `ACCEPTED`.
 
 ### F12 — Verified-name truncation and short address fingerprints could collide
 

@@ -124,8 +124,11 @@ V11 failure of its own reasoning.
 ## Output — STRICT JSON, nothing else
 
 Emit exactly one JSON object matching this schema. No prose before or after, no
-markdown fences. If your runtime added a preamble, the object must still be the
-last/only top-level JSON value.
+markdown fences. Send runtime logs and progress to stderr: stdout permits only
+leading/trailing whitespace around this one object. Do not add any top-level or
+per-finding fields beyond those shown below. In particular, do not emit `disposition`, `status`,
+`stage_verdict`, approval, acceptance, merge, or shipment fields: discovery
+passes have no authority to assign them, and the orchestrator rejects them.
 
 ```
 {

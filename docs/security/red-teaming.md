@@ -37,8 +37,12 @@ is to attack what customers receive:
 - `dual-se` + `stm32u585` + `optiga-hw-counter` + `consumption-mask` + `tamp` + `tamp-wipe` + `tzic-wipe`.
 - Both SEs provisioned with **device-unique** SCP03 / Shielded-Connection secrets (NOT the
   published NXP/Infineon factory defaults — see §5.1).
-- OTP device-master burned; rollback floor initialised.
-- **RDP-2 set** (SWD/JTAG permanently disabled, irreversible — do this last).
+- The approved rollback backend and its exact OTP map provisioned under a
+  separately reviewed ceremony. The legacy OTP-master/floor layout is not an
+  EVT prerequisite and grants no burn authority.
+- For post-lock tests only, a device that reached **RDP-2 through the approved
+  first-field RDP2 self-lock** under an exact owner authorization. This is not an
+  instruction for a fixture-side RDP transition.
 
 **Provision a second, sacrificial unit at RDP-0/1** for the tests that RDP-2 locks you out of:
 raw-entropy statistical capture (§4.1), SWD-based counter manipulation (§6.3), and any
@@ -308,17 +312,19 @@ ship-blocker section of `docs/work-todo.md`.
 
 - **S-1 — F1D0 `Change = ALW`.** A desoldered OPTIGA lets a bench attacker overwrite F1D0 with a
   chosen HMAC key, self-auth, reset E120, and brute-force PINs unbounded. (`secure/src/optiga/apdu.rs`.)
-- **S-2 — Trust anchor at `0xE0E3` is Infineon's PUBLIC sample cert.** The matching private key is
-  public; anyone can sign a `SetObjectProtected` manifest that bypasses every `Change` AC — *including
-  any S-1 fix*. **S-1 alone is insufficient; S-2 must close simultaneously.** (`secure/src/optiga/reset.rs`.)
+- **S-2 — the type-`0x11` Protected-Update pool is not production-closed.** The observed E0E3 is a
+  full type-`0x12` device certificate; the retired public-sample helper targeting it is a no-op, not
+  the live anchor path. Pin and close `{E0E8,E0E9,E0EF}` and prevent device-certificate retyping.
+  **S-1 alone is insufficient; S-2 must close simultaneously.** (`docs/production-todo.md`.)
 - **S-3 — `optiga-hw-counter` must be mandatory.** Without the E120 hardware counter, a
   PBS-leaking/desoldered attacker gets unbounded HMAC attempts.
 
 **Test (desolder a sacrificial OPTIGA onto a bench I²C rig).**
 1. `GetMetadata(0xF1D0)` → confirm `Change` AC (pre-fix: `ALW`; post-fix: `Auto(F1D0)` + LcsO=Op).
 2. Attempt to overwrite F1D0 with a chosen key with no auth → must **fail** on a fixed unit.
-3. Sign a `SetObjectProtected` manifest with the Infineon sample key against `0xE0E3` → must
-   **fail** on a fixed unit (TA replaced with a PQ1-HSM cert or removed; spare OIDs locked).
+3. Exercise the reviewed negative Protected-Update vectors against the pinned E0E8/E0E9/E0EF
+   inventory → attacker-controlled anchors/manifests must **fail**; E0E1..E0E3 must remain
+   device-certificate surfaces and reject retyping.
 4. Confirm `optiga-hw-counter` is compiled in (the `compile_error!` fence in `nsc/mod.rs` is
    present — see §10) and that the E120 LUC, not the F1E1 soft counter, bounds attempts.
 
@@ -341,23 +347,34 @@ keep the admin-delete (DoS-wipe) path. `secure/src/se050/mod.rs`, `docs/secure-e
 **Tests.**
 - From an admin session, attempt `delete_object(USERID_OBJ)` → must fail (`SW≠Ok`; expect `0x6986`).
 - Attempt to create a user UserID with `max_attempts=0` → must fail `InvalidParam`.
-- **S-7d silicon item (still open):** drive a UserID to `auth_attempts == max_attempts`, send
-  VERIFY, **capture the actual SW from the chip** with the LA, and confirm the firmware's
-  `AuthMethodBlocked` mapping matches empirically (the code assumes `0x6986`).
+- **S-7d silicon receipt (resolved 2026-05-28):** driving a UserID to
+  `auth_attempts == max_attempts` produced `SW=0x6986`; commit `ef3d00da`
+  records the mapping to `AuthMethodBlocked`. A future LA rerun is replication,
+  not the source of the current claim.
 
 **Pass.** Substitution attack structurally closed; empirical lockout SW matches the firmware mapping.
 
 ### 5.6 Factory SCP03 / pairing secrets are device-unique
 
-**Property.** Production must derive SE channel keys from the device's hardware-unique secret
-(`se050-derived-scp03`, SAES-CMAC(DHUK)/HKDF in `secure/src/hw/secret_keys.rs`), **not** the
-published NXP AN12436 / Infineon sample keys.
+**Property.** The published NXP AN12436 / Infineon sample keys must never be a
+production credential. The current `se050-derived-scp03` and DHUK/BHK helpers
+close that fallback only for bring-up transport. Production additionally
+requires the still-open fresh-TRNG final per-device OPTIGA/SE050 rotation,
+crash-safe durable public salt/state, recovery after every cut point, and a
+reviewed E140 ordering; deterministic device uniqueness alone is not a pass.
 
-**Test.** Read the provisioned device's SCP03 keys are not the published constants (confirm
-`se050-scp03-allow-factory-fallback` is fenced out; the establish must succeed with derived keys
-and never fall back). On two different units, confirm the channel keys differ.
+**Test.** First confirm `se050-scp03-allow-factory-fallback` is fenced out and
+that neither tunnel accepts published/sample credentials. After the final
+protocol is implemented, cut power at every durable-state and chip-update
+boundary, prove recovery never re-enables transport keys, and confirm two units
+receive distinct fresh-random final credentials while retaining only the
+public recovery state needed to reconstruct them. Exercise the reviewed E140
+order on sacrificial silicon.
 
-**Pass.** Channel keys are per-device and non-public.
+**Pass.** Fresh-random final credentials are per-device and non-public; every
+power cut recovers or fails closed without restoring transport credentials;
+both tunnels reconnect after a clean ceremony; the reviewed lifecycle order
+holds on silicon. Until then HIGH-1 remains open.
 
 ---
 
@@ -382,9 +399,13 @@ peripheral RAZ-faults and bumps `hw::tzic::VIOLATION_COUNT`. `secure/src/sau.rs`
 
 ### 6.2 Measured boot / FSBL fingerprint
 
-**Property.** FSBL (WRP1A-locked, immutable) and the secure world independently render the **same**
-8-word BIP-39 fingerprint for the active slot; divergence ⇒ the slot is lying ⇒ tamper.
-`secure/src/measured_boot.rs`, `fsbl/`, `docs/security/measured-boot.md`.
+**Target property.** After the production geometry, WRP/option-byte ceremony,
+resource, and silicon gates close, the immutable FSBL and the secure world must
+independently render the **same** 8-word BIP-39 fingerprint for the active slot;
+divergence means the slot or one renderer is lying. The current legacy bench
+FSBL exercises the rendering path but is not evidence of production
+immutability. `secure/src/measured_boot.rs`, `fsbl/`,
+`docs/security/measured-boot.md`.
 
 **Tests.**
 - Corrupt the secure image in flash (glitch a write, or a malformed `CMD_FW_CHUNK`); reboot;
@@ -395,8 +416,9 @@ peripheral RAZ-faults and bumps `hw::tzic::VIOLATION_COUNT`. `secure/src/sau.rs`
 **Pass.** Divergence is visible; display bus matches the screen.
 
 **Known gaps (from `docs/security/audits/boot-fsbl-*.md`).**
-- **The shipping build is currently MONOLITHIC** — the FSBL is built but not actually flashed/booted;
-  A/B slotting reads as live in code but is aspirational. Confirm the EVT's real boot path.
+- **No shipping build exists.** The default EVT/bring-up profile is monolithic;
+  legacy bench FSBL/A/B exercises are not a production trust root. Confirm the
+  exact candidate boot path and receipts before assigning production authority.
 - **Divergence detection is HUMAN-ONLY** — there is no automated on-device comparator between the
   FSBL row and the secure-world row. A user who doesn't compare gets no protection. Note this as a
   residual; an automated comparator is open work.
@@ -462,7 +484,9 @@ SW-key round-trip + DHUK≠SW domain separation + DHUK round-trip. `secure/src/h
 - `make saes-self-test-hw`: confirm PASS + a stable DHUK fingerprint across reboots.
 - Glitch the `SR.KEYVALID` gate / CCF completion during a DHUK op; confirm bus-error/timeout and
   (if enabled) ITAMP9.
-- Confirm page-126 (PBS) and the BHK page read as ciphertext off a desoldered MCU (DHUK-sealed).
+- Confirm bank-1 page 126 (the wrapped SE050 BHK) is ciphertext off a
+  desoldered MCU. OPTIGA PBS has no flash page: test its domain derivation,
+  non-persistence, and Shielded-Connection behavior separately.
 
 **Pass.** Self-test passes; DHUK never materialises in readable memory; glitch faults are caught.
 
@@ -663,8 +687,8 @@ Confirm on the actual EVT image / unit:
 
 - [ ] **S-1** OPTIGA F1D0 `Change ≠ ALW` (Auto(F1D0) + LcsO=Op); desolder-overwrite fails. **And** a
       `compile_error!` fence requires the lockdown feature in production (verify it isn't missing).
-- [ ] **S-2** `0xE0E3` TA is a PQ1-HSM cert or removed; Infineon-sample-key manifest rejected; spare
-      OIDs locked.
+- [ ] **S-2** exact E0E8/E0E9/E0EF type-0x11 inventory is closed under the reviewed factory
+      policy; E0E1..E0E3 remain type-0x12 and cannot be retyped; attacker manifests are rejected.
 - [ ] **S-3** `optiga-hw-counter` compiled in (fence present); E120 LUC (not F1E1) bounds attempts.
 - [ ] **S-5** SE050 SCP03 response is ciphertext + R-MAC on I²C2 (LA-confirmed) — **retire the
       pending item**.

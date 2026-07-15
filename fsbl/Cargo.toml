@@ -2,7 +2,7 @@
 name = "pqsigner-fsbl"
 version = "0.1.0"
 edition.workspace = true
-description = "PQSigner first-stage bootloader — immutable, vendor-C10-verified A/B slot selector for the firmware-update subsystem."
+description = "PQSigner legacy bench first-stage bootloader — production-fenced vendor-C10 A/B slot selector."
 
 [[bin]]
 name = "pqsigner-fsbl"

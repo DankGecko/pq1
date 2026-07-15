@@ -42,10 +42,12 @@ pub const fn rdp_level_from_byte(rdp: u8) -> RdpLevel {
 const SECBOOTADD0_ADDR_MASK: u32 = 0x01FF_FFFF;
 
 /// Does the `SECBOOTADD0R` register value select `expected_boot_addr` as the
-/// secure boot entry? A shipping image must boot the immutable WRP1A-locked FSBL
-/// (`expected_boot_addr = 0x0C00_0000`); a different address is a boot redirect
-/// (SL2). The high control bits are masked out so that *setting* `BOOT_LOCK`
-/// (whose exact bit position is doc-ambiguous) does not read as a wrong address.
+/// secure boot entry? A target shipping image must select the approved FSBL
+/// base (`expected_boot_addr = 0x0C00_0000`); a different address is a boot
+/// redirect (SL2). This predicate proves only the address selection, not the
+/// FSBL extent, WRP mapping, or lifecycle state. The high control bits are
+/// masked out so that *setting* `BOOT_LOCK` (whose exact bit position is
+/// doc-ambiguous) does not read as a wrong address.
 #[must_use]
 pub const fn secboot_selects(secbootadd0r: u32, expected_boot_addr: u32) -> bool {
     (secbootadd0r & SECBOOTADD0_ADDR_MASK) == (expected_boot_addr >> 7)
@@ -55,7 +57,8 @@ pub const fn secboot_selects(secbootadd0r: u32, expected_boot_addr: u32) -> bool
 mod tests {
     use super::*;
 
-    /// STM32U585 FSBL base (secure bank-1 page 0) — the shipping boot entry.
+    /// Legacy bench FSBL base; the target shipping entry remains gated by the
+    /// production geometry, WRP/option-byte ceremony, and silicon receipts.
     const FSBL_BASE: u32 = 0x0C00_0000;
 
     #[test]

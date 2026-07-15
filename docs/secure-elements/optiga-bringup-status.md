@@ -13,16 +13,24 @@ Last updated: 2026-04-16. Tracks the state of the OPTIGA Trust M V3 driver again
 >   Cargo feature, off by default.
 > - **Hardware monotonic counter** (E120 LUC) validated on silicon
 >   (commits around `987408f` / `5620b06`, 2026-04-21). The PIN attempt
->   counter is hardware-enforced, three-way synced (MCU page 124 + OPTIGA
->   E120 LUC + SE050 silicon UserID).
-> - **Three-way PIN sync end-to-end** validated including 10-wrong-PIN brick
->   and admin-wipe (commit `7574218` and follow-ups, 2026-04-23).
-> - **OTP-derived 64-byte PBS** (commit `b19fbf7`, 2026-04-20). Pairing secret
->   is now stable across rebuilds; the page-126 PBS file is being phased out
->   (`load_pbs` retained for migration; deletion still pending).
+>   counter participates in three-way per-attempt consumption (MCU page 124 +
+>   OPTIGA E120 LUC + SE050 silicon UserID); boot reconciliation is only the
+>   directional page124/E120 check and lacks a reboot-silicon receipt.
+> - **Three-way per-attempt + 10-wrong wipe flow** validated (commit `7574218`
+>   and follow-ups, 2026-04-23); this is not three-way boot reconciliation.
+> - **DHUK-derived 64-byte PBS** (current implementation). It is stable across
+>   rebuilds and has no flash-page copy. Page 126 now belongs exclusively to
+>   the wrapped SE050 BHK when `bhk` is enabled.
 >
 > See `optiga-brick-postmortem.md` for the longer "what we changed
 > structurally" story; this file is the contemporaneous status notebook.
+>
+> **Protected-Update correction (2026-07-14).** The April notebook's later
+> claims that E0E3 held an active sample-key trust anchor and that recovery was
+> validated 16/16 are superseded. The observed E0E3 is a full type-0x12 device
+> certificate; the helper was a no-op and the run returned uniform status
+> failures. The candidate type-0x11 pool is E0E8/E0E9/E0EF and remains OPEN.
+> No instruction in the historical snapshot below authorizes a write.
 
 ---
 
@@ -32,15 +40,26 @@ Last updated: 2026-04-16. Tracks the state of the OPTIGA Trust M V3 driver again
 - **OPTIGA Trust M I²C bring-up**: address probe with sleep-wake retry, 50 µs guard time between register-write and register-read, soft reset (REG_SOFT_RESET 0x88 + ReSynch).
 - **IFX I²C protocol layer**: FRNR/ACKNR encoding, PCTR PRESENCE_BIT layer-selector, piggybacked DL-ACKs in response data frames, CRC-16.
 - **APDU layer**: OpenApplication, GetDataObject (data + metadata), SetDataObject (data + metadata + erase-and-write), GetRandom, DecryptSym (HMAC-verify), CloseApplication, **SetObjectProtected (START / CONTINUE / FINAL with CBOR-signed manifests)**.
-- **OID recovery via SetObjectProtected**: feature `optiga-reset-oids` rolls a burned `0xF1D0..0xF1DF` AUTHREF range back to a writable state, validated 16/16 OIDs OK on real silicon.
-- **Wallet provisioning end-to-end**: PBS → auth_ref → entropy → master_secret → VK → bootstrap_vk → counter, all 6 user-OID writes succeed when `optiga-reset-oids` workaround (per-write RST hard-pulse) is applied. SE050 half also provisions cleanly via the existing `dual_se` path.
+- **Historical OID-recovery result — REFUTED:** the April run reported
+  16/16 success for `optiga-reset-oids`, but the helper targeted E0E3 as a
+  type-`0x11` anchor even though the observed object is a type-`0x12` device
+  certificate; uniform status failures were misread as success. The feature is
+  now unconditionally compile-fenced and authorizes no recovery.
+- **Wallet provisioning end-to-end (bounded claim):** the six user-OID writes
+  succeeded with per-write RST hard-pulses. That provisioning observation does
+  not validate, depend on, or revive the retired SetObjectProtected route.
+  The SE050 half also provisions through the existing `dual_se` path.
 
 ## ⚠️ Working but with workarounds in tree
 
 - **Per-session 2-write throttle**. After 2 successful SetData-family APDUs on this specific dev chip, all subsequent data APDUs either time out (chip ACKs at DL but never sets RESP_READY in I2C_STATE) or return `Status=0xFF`. We work around it by hard-pulsing `RST` (PE0) between every pair of writes via `OptigaTrustM::hard_reset_and_reinit()`. Effective but ~150 ms wall-clock per pulse + reinit, so provisioning takes ~2 s instead of <500 ms. **Root cause unconfirmed** — best guess is the chip's Security Event Counter (`0xE0C5`) silently incrementing and crossing a threshold we haven't read yet.
 - **CloseApplication never emits a data response on this chip.** ACKs at DL layer, then state stays `0x08` indefinitely. `reopen_application()` was the prior session's cycle approach; we now skip it entirely and use the RST pulse instead.
 - **TZSC self-check is log-only.** The bit-position constants in `sau.rs::stm32::configure_gtzc` came from an audit commit that targeted the wrong base (`0x5003_2800` = TZIC) and a register layout that doesn't match STM32U585. Base address is now correct (`0x5003_2400`); `expect1/expect2/expect3` masks still need re-auditing against RM0456 §32.8 before the panic-on-mismatch can be reinstated.
-- **Sample-key Trust Anchor at OID `0xE0E3`.** The TA cert that verifies our reset manifests is Infineon's `samples/integrity/sample_ec_256_priv.pem` matching cert. Anyone holding that key can `SetObjectProtected` against this chip from now until E0E3 is rewritten with a real production TA — drop `optiga-reset-oids` from default builds and plan to overwrite E0E3 (or wipe to factory metadata) before the chip ships.
+- **Historical E0E3 sample-anchor hypothesis — refuted.** On this observed
+  part E0E3 is a full type-0x12 device certificate, not a mutable type-0x11
+  anchor. The retired helper did not establish a usable anchor. Production
+  remains blocked on inventory and closure of E0E8/E0E9/E0EF, not on an E0E3
+  overwrite ceremony.
 
 ## ❌ Still broken — needs new investigation
 
@@ -84,7 +103,10 @@ The per-write RST pulse adds ~150 ms each, ×6 OIDs, ×2 (SetData + reinit) ≈ 
 ## 🔧 Cleanup owed before merging into main
 
 - **`secure/src/sau.rs`** — re-audit `SECCFGR1_*_BIT` / `SECCFGR2_*_BIT` / `SECCFGR3_*_BIT` against STM32U585 RM0456 §32.8 (current values were copied from a generic STM32U5 source and don't match). Reinstate the panic-on-mismatch once the bits are right.
-- **`optiga-reset-oids` feature** — remove from default builds before any release. The TA at E0E3 is a sample key; production must provision its own TA (or wipe E0E3) before this feature can stay enabled.
+- **`optiga-reset-oids` feature** — retired and fail-closed. Its E0E3
+  sample-key route is mis-targeted on the observed part; do not build or flash
+  it. Any future Protected-Update design starts from the pinned
+  E0E8/E0E9/E0EF inventory and a separately reviewed factory ceremony.
 - **`hard_reset_and_reinit` calls in `store_objects`** — once the throttle root cause is fixed, remove the per-step pulses. They're a workaround, not the right design.
 - **Remaining `for _ in 0..N { cortex_m::asm::nop() }` patterns** — `secure/src/tropic01_se.rs`, `secure/src/nsc/cmd_sign_userop.rs`, and `secure/src/hw/buttons.rs` still use the LTO-elidable form. Convert to `cortex_m::asm::delay(N)` to be safe.
 

@@ -63,7 +63,7 @@ unsafe fn verify_pin_with_chip(pin: &[u8; 8]) -> u32 {
 
     let se = &mut *core::ptr::addr_of_mut!(crate::SE);
 
-    // `super::gated_unlock` handles the MCU-side counter (page 126):
+    // `super::gated_unlock` handles the MCU-side counter (page 124):
     // pre-commit bump before SE verify, reset on success, refuse
     // on flash fault. See its docstring for the full Trezor-style
     // gating rationale.

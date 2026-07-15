@@ -27,7 +27,7 @@ A **post-quantum ERC-4337 hardware wallet** (the **PQ1**) where every primitive 
    │ E120 LUC)│   │  │                                                │ │   │   │ status·fw-update │  │
    └──────────┘   │  │  SE050.unlock(K_E)   → half_E                  │ │   │   └──────────────────┘  │
    ┌──────────┐   │  │  (SCP03 AES-CMAC + AES-CBC; admin UserID       │ │   │                          │
-   │  SE050   │◄──┼──┤   derived from OTP master via secret_keys)     │ │   │  no secrets, ever        │
+   │  SE050   │◄──┼──┤   keys: BHK prod; DHUK fallback; OTP dev)      │ │   │  no secrets, ever        │
    │  (SCP03  │   │  │                                                │ │   └──────────────────────────┘
    │  + admin │   │  │  E       = HKDF(half_O ⊕ half_E)               │ │
    │  UID)    │   │  │  bip39_seed ← PBKDF2-SHA512(BIP-39(E))         │ │
@@ -55,7 +55,19 @@ Each item below is implemented today (QEMU and/or real STM32U585), partial, or p
 
 - **Post-quantum signatures, one primitive everywhere** — SPHINCS+C10 for both Type 1 (bootstrap slot registration) and Type 2 (per-slot user tx). The on-chain contract has a single `c10Verifier` immutable wired to both dispatch paths. Per-chain caps `MAX_BOOTSTRAP_USES = MAX_SLOT_USES = 65,536` are immutable; combined ≈ 2³² user txns/chain before that chain is permanently frozen — well inside the C10 birthday margin. *(Implemented; `forge test` covers both paths.)*
 - **Post-quantum firmware signing (pre-production)** — the existing V1/75-byte signer and FSBL verify SPHINCS+C10 artifacts on the bench, but their rollback/try-once backend is rejected and compile-blocked from production. Historical Draft 0.9/V4 is preserved as research evidence. Draft 1.1 proposes slot-bound manifest v6 and an exact 121-byte `PQFW_V6` preimage, but remains an unapproved research candidate; journal/ECC/OTP, FLASH, RAM/stack, release-policy, factory, and silicon gates remain open.
-- **Symmetric-only SE tunnels (no harvestable handshake)** — both SE channels key from pre-shared symmetric roots (OPTIGA PBS DHUK-derived, SE050 SCP03 statics rotated per-device at provisioning), so no public-key exchange ever crosses I²C and a recorded bus yields nothing Shor can open. Accepted residual: Grover key search on AES-128 session keys (~2⁶⁴ serial, NIST Category 1 — the same floor as SPHINCS+C10 itself), per recorded session, requiring a physical tap during a live unlock, twice over thanks to the XOR split. *(A ML-KEM-1024 inner wrap was prototyped and descoped 2026-07-07 — owner decision; see `docs/security/ml-kem-inner-wrap.md`.)*
+- **Symmetric-only SE tunnels (no harvestable handshake)** — the current
+  bring-up channels use pre-shared symmetric roots (a deterministic
+  DHUK-derived OPTIGA PBS and BHK-derived SE050 credentials), so no public-key
+  exchange crosses I²C. Those helpers are **not** the production-final key
+  ceremony. The shipping model requires a fresh-TRNG, per-device final
+  rotation on first field boot before the seed wizard; its durable public
+  salt/state, cut recovery, and exact E140 ordering remain OPEN and
+  production-blocking. Once that ceremony is closed, the accepted residual is
+  Grover key search on AES-128 session keys (~2⁶⁴ serial, NIST Category 1 —
+  the same floor as SPHINCS+C10 itself), per recorded session, requiring a
+  physical tap during a live unlock, twice over thanks to the XOR split. *(An
+  ML-KEM-1024 inner wrap was prototyped and descoped 2026-07-07 — owner
+  decision; see `docs/security/ml-kem-inner-wrap.md`.)*
 - **TrustZone isolation** — signing key, PIN state, key derivation, and crypto confined to the secure world. The NSC gateway (sign / batch-sign / off-chain sign / unlock / lock / status / wallet-address / init-code / firmware-update) is the only crossing point, with NS pointer validation and TOCTOU defense (NS buffers copied to S-stack before parse). On silicon the gateway runs through real ARMv8-M CMSE veneers (`make e2e-hw`); QEMU uses a shared-memory mailbox (workaround for a QEMU 8.2.2 MPC S-alias bug).
 - **Dual secure elements (split entropy)** — BIP-39 entropy is XOR-split: `half_O` on OPTIGA, `half_E` on SE050. Either chip alone reveals zero bits. `E = HKDF(half_O ⊕ half_E)` happens only in S-SRAM during unlock, then zeroized. *(Validated on silicon; both on I2C1 at 0x30 / 0x48.)*
 - **Three-way PIN-attempt enforcement** — every ordinary wrong attempt charges FI-hardened MCU page 124, OPTIGA E120 LUC, and the SE050 silicon UserID. Page 124 and SE050 enforce the user-facing 10-attempt bound; E120 is a separate 32-lifetime-attempt anti-extraction backstop. Boot checks the readable counters directionally (`E120_used > page124_used` means rollback/tamper); the SE050 attempt attribute is policy-denied and is not a boot input. `CMD_GET_REMAINING` uses page 124 plus runtime driver mirrors, not a three-way silicon read receipt. *Silicon evidence from `make pin-gate-hw-counter-e2e` covers per-attempt consumption/desync recovery within one run, and `make pin-gate-wipe-e2e` covers lockout/wipe. A reboot-based silicon receipt for both directional boot-ordering cases remains open; those branches are not claimed as hardware-E2E-validated.*
@@ -153,11 +165,11 @@ Every primitive that touches a secret, with PQ status. **Classical** entries are
 |---|---|---|---|---|
 | **Tx signing (Type 1 + 2)** | SPHINCS+C10 (W+C_F+C, h=18 d=2 a=11 k=13 w=8 l=43 target_sum=205) | sig 4008 B, pk 32 B | ✅ | One primitive for bootstrap *and* per-slot. Verifier `SPHINCsC10Asm.sol` runs in-EVM via the SHA-256 precompile. The on-chain `SignatureWrapper(ownerIndex, sig)` is 4128 B (4008 padded to 4032 + 3×32 header) |
 | **Firmware signing** | SPHINCS+C10 (same params) | sig 4008 B | ⚠️ | Legacy V1 bench path exists. Draft 1.1 proposes manifest-v6 but is not implementation-approved; production remains blocked on its journal/ECC/OTP, FLASH, RAM/stack, release-policy, factory, and silicon gates. No classical fallback |
-| **OPTIGA wire** | Shielded Connection: TLS-PRF + AES-128-CCM-8, root = PBS (DHUK-derived, per-device) | tag 8 B | ⚠️ | Symmetric-rooted (no Shor surface); KDF is HMAC-SHA-256. Residual = Grover-2⁶⁴ on a physically-tapped session (Cat-1, accepted 2026-07-07) |
+| **OPTIGA wire** | Shielded Connection: TLS-PRF + AES-128-CCM-8; current PBS helper is deterministic DHUK-derived | tag 8 B | ⚠️ | Symmetric-rooted (no Shor surface). The fresh-TRNG final per-device rotation, durable public salt/state, cut recovery, and E140 ordering are OPEN and production-blocking; only after that closure does the accepted Grover-2⁶⁴ tapped-session residual apply |
 | **OPTIGA PIN gate** | AuthRef (`0xF1D0`) + E120 LUC (silicon-monotonic) | — | ✅ | Trezor-parity; immune to PBS extraction. Hardware-cleared by `Change=Auto(F1D0)` over transient auth on success |
-| **SE050 wire** | SCP03 (AES-CMAC + AES-CBC), statics rotated per-device | k 16/32 B | ⚠️ | Symmetric-rooted (no Shor surface). Session keys derive from statics + challenges (no forward secrecy) — per-device rotation (work-todo #11) is load-bearing; residual = Grover-2⁶⁴ on a tapped session (accepted 2026-07-07) |
+| **SE050 wire** | SCP03 (AES-CMAC + AES-CBC); current credentials use the BHK derivation axis | k 16/32 B | ⚠️ | Symmetric-rooted (no Shor surface). The same still-open fresh-TRNG final rotation is load-bearing; current deterministic helpers are not production-final. Session keys have no forward secrecy |
 | **SE050 PIN gate** | UserID auth (constant-time, max 10) | — | ✅ | Hardware retry counter; surfaces only via `SW=0x63Cx` |
-| **SE050 admin PIN** | `HKDF(OTP_master,…)` (dev) → `SAES-CMAC(DHUK,…)` (prod) | 16 B | ✅ | Replaces a flash-stored random PIN; survives flash erase so cross-test contamination can't brick a chip |
+| **SE050 admin PIN** | Current helper: `SAES-CMAC(BHK,…)`; DHUK fallback; OTP only in explicit dev/legacy builds | 16 B | ⚠️ | Derived on demand and never stored as a flash PIN. Page 126 holds the wrapped BHK. This helper is bring-up transport material; production-final credential rotation remains OPEN |
 | **MCU PIN counter** | Page-124 quad-word programs | 10-attempt cap | ✅ | FI-hardened pre-commit in `nsc::gated_unlock`: bump *before* touching the SE driver, with post-bump readback (`+1` or `InternalError`) |
 | **SE chip attestation** | ECDSA over a vendor curve | — | ❌ | Proof-of-presence only; cryptographic device identity will be a pinned SPHINCS+C10 cert (planned) |
 | **Tier 1 root** | STM32U585 DHUK via SAES `KEYSEL=001`; `SAES-CMAC(DHUK, label‖counter)` | 16 B/block | ✅ | DHUK never CPU-visible. RDP0 = ST constant; per-die uniqueness at RDP ≥ 1 |
@@ -184,7 +196,27 @@ Every primitive that touches a secret, with PQ status. **Classical** entries are
 
 **The dominant threat is Harvest Now, Decrypt Later (HNDL):** an adversary records all I²C traffic today and decrypts it once a CRQC exists. For a wallet holding long-term funds this matters because the adversary need not be present at decryption time.
 
-**How the design defeats HNDL:** there is nothing Shor-breakable to harvest. Every signature is hash-based, and both SE tunnels key from *pre-shared symmetric* roots (OPTIGA PBS derived per-device from the DHUK at boot; SE050 SCP03 statics rotated per-device at provisioning) — no ECDH, no RSA, no KEM handshake ever crosses I²C or USB. A recorded bus trace can only be attacked by Grover key search on an AES-128 session key: ~2⁶⁴ *serial* quantum operations (NIST Category 1 — the identical floor SPHINCS+C10's n=16 parameters sit at), per session, and the sensitive payloads (PIN, entropy halves) only cross during a live unlock, so harvesting requires a physical interposer on a powered device. The XOR split then demands two independent such breaks on two different buses under two different keys. **Accepted residual (owner decision 2026-07-07):** this Grover-2⁶⁴-with-physical-tap bound is the design's floor for bus confidentiality; a prototyped ML-KEM-1024 inner wrap that would have lifted stored-half confidentiality above it was descoped (retained feature-gated in-tree — `docs/security/ml-kem-inner-wrap.md`). Because session keys derive deterministically from the statics (no forward secrecy), this acceptance depends on the per-device key-rotation ceremony — fleet-shared statics would degrade a tapped session to a classical decrypt.
+**How the shipping design defeats HNDL:** there is nothing Shor-breakable to
+harvest. Every signature is hash-based, and both SE tunnels use pre-shared
+symmetric roots — no ECDH, RSA, or KEM handshake crosses I²C or USB. Current
+bring-up code derives the OPTIGA PBS deterministically from the DHUK and SE050
+credentials from the BHK axis; it does **not** yet implement the required
+fresh-TRNG final per-device rotation. The durable public salt/state, power-cut
+recovery, and E140 ordering for that first-field-boot ceremony remain OPEN and
+production-blocking. Once closed, a recorded bus trace can only be attacked by
+Grover key search on an AES-128 session key: ~2⁶⁴ *serial* quantum operations
+(NIST Category 1 — the identical floor SPHINCS+C10's n=16 parameters sit at),
+per session, and the sensitive payloads (PIN, entropy halves) only cross during
+a live unlock, so harvesting requires a physical interposer on a powered
+device. The XOR split then demands two independent such breaks on two different
+buses under two different keys. **Accepted residual (owner decision
+2026-07-07):** this Grover-2⁶⁴-with-physical-tap bound is the design's floor for
+bus confidentiality; a prototyped ML-KEM-1024 inner wrap that would have lifted
+stored-half confidentiality above it was descoped (retained feature-gated
+in-tree — `docs/security/ml-kem-inner-wrap.md`). Because session keys derive
+deterministically from the statics (no forward secrecy), this acceptance
+depends on completing the per-device final-rotation ceremony — fleet-shared or
+reconstructible final statics would invalidate it.
 
 **Residual classical surface we accept:** OPTIGA Shielded Connection KDF (symmetric-only; worst case Grover-accelerated PBS brute force, still > 128-bit PQ); SE050 secure-channel auth (MITM needs real-time physical bus tampering on a powered device; a MITM'd half is still only one XOR share); SE factory attestation (ECDSA — proof-of-presence only); OPTIGA/SE050 internal firmware (single-chip compromise leaks zero seed bits); U585 RDP-2 + HUK-SAES (the irreducible "extract the specific die" attack).
 
@@ -210,9 +242,9 @@ Cost: one extra I²C peripheral, ~$3 BOM, ~50 ms unlock latency.
 | Layer | Protection |
 |---|---|
 | **Seed at rest (OPTIGA)** | `half_O` in object `0xF1D1`, `Read = Auto(0xF1D0) + Conf(0xE140)` — readable only after an AuthRef HMAC-SHA-256 challenge against the PIN-derived `0xF1D0` *and* through the AES-128-CCM-8 Shielded Connection |
-| **Seed at rest (SE050)** | `half_E = E ⊕ half_O` in an SE050 binary object whose read policy is bound to a UserID opened only inside SCP03. Admin PIN derived from the OTP master (crash-safe) |
+| **Seed at rest (SE050)** | `half_E = E ⊕ half_O` in an SE050 binary object whose read policy is bound to a UserID opened only inside SCP03. Current bring-up admin/SCP03 material uses the BHK axis; DHUK is the non-BHK fallback and OTP is dev/legacy only. The production-final fresh-TRNG rotation remains OPEN as described below |
 | **Seed reconstruction** | `E = HKDF(half_O ⊕ half_E)` only in S-SRAM, for microseconds, then zeroized. Mnemonic / seed / master / slot keys recomputed on demand, dropped on lock / idle / panic |
-| **Key transport** | OPTIGA Shielded Connection (TLS-PRF + AES-128-CCM-8, PBS DHUK-derived at boot) and SE050 SCP03. Flash page 126 is reserved for the wrapped SE050 BHK when enabled; it is not PBS storage. Production keys come from `hw::secret_keys`; legacy dev fallback is quarantined. |
+| **Key transport** | OPTIGA Shielded Connection (TLS-PRF + AES-128-CCM-8) and SE050 SCP03. Current bring-up material comes from deterministic `hw::secret_keys` helpers (DHUK-derived OPTIGA PBS, BHK-axis SE050 credentials); legacy dev fallback is quarantined. These helpers are not production-final. The required fresh-TRNG final rotation, durable public salt/state, cut recovery, and exact E140 ordering remain OPEN and production-blocking. Flash page 126 is reserved for the wrapped SE050 BHK when enabled; it is not PBS storage |
 | **PIN handling** | Raw PIN never leaves S-world; the trusted UI runs entirely in S-world. NS never sees a digit, cursor, or confirm decision. SE challenges derived via `hw::secret_keys` so neither chip stores the PIN |
 | **Retry counters** | Three-way per-attempt consumption (MCU page 124 + OPTIGA E120 LUC + SE050 UserID); boot cross-check is directional page124→E120, while SE050 independently enforces max-10 lockout |
 | **Boot self-tests** | `SHA-256("abc")` KAT (halt on FAIL); `make saes-self-test-hw` SAES round-trip + DHUK fingerprint. Production gates the self-test feature out |
@@ -401,14 +433,14 @@ Nothing here is optional. Run through the entire list **per device class**, not 
 - [ ] No test pads / debug headers / probe points on any SE bus, LCD bus, button GPIO, or S-world peripheral
 - [ ] Tamper mesh across all four layers over U585 + both SEs; case switch → TAMP with pull + noise filter
 - [ ] BOR threshold + bulk capacitance **measured on real HW** so the wipe ISR completes before V_dd collapses
-- [ ] Temperature sensor across the operating envelope; cold-boot threshold tested; no exposed SWD/JTAG after assembly
+- [ ] Temperature sensor across the operating envelope; cold-boot threshold tested; retain only the SWD + NRST verification pads required for pre-first-power inspection, with no JTAG or second debug header (first field boot self-locks RDP-2 and disables debug in silicon)
 - [ ] EMI can over U585 + both SEs; power-rail filtering vs ripple-injection; no glitchable clock to S-world peripherals
 - [ ] Second-source every BOM part (an OPTIGA/SE050 stockout must not force a swap that breaks pinned attestation)
 
 **B. Provisioning facility**
 - [ ] Clean-room, no network / removable media / personal devices; reproducible, signed, re-imaged station OS per batch
-- [ ] HSM-backed generation of every per-device secret (or EdgeLock 2GO for SE050 at volume); two-person rule on HSM root keys
-- [ ] Per-device unique SE050 SCP03 keys, OPTIGA PBS, both UID pins (derived from the Tier-1 SAES-DHUK root via `hw::secret_keys`)
+- [ ] HSM-backed factory trust-anchor, attestation, and per-device transport-key ceremonies (or EdgeLock 2GO for SE050 at volume); two-person rule on HSM roots. The line must not generate or retain final pairing secrets.
+- [ ] Per-device transport SCP03/PBS state and UID bindings are installed at the factory; the final pairing rotation happens on-device after first-field RDP-2 self-lock. Current code's deterministic DHUK/BHK helpers are not the still-open final salted-rotation protocol.
 - [ ] Logs never contain secret material (CI scan for high-entropy strings); tamper-evident packaging; signed per-batch report
 - [ ] Provisioning-station compromise plan (detect / scope / notify); quarantine + manual review for any post-provisioning failure
 

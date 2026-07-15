@@ -26,7 +26,7 @@ There are three different things a SE secret can be rooted in, picked at compile
 
 | Build features | OPTIGA PBS root (`optiga_pairing_secret`) | SE050 admin PIN root (`se050_admin_pin`) | SE050 SCP03 keys (today / after #20) | Ships? |
 |---|---|---|---|---|
-| **Intended production roots:** `saes-dhuk` + `bhk` (no hardcoded keys) | silicon **DHUK** — `SAES-CMAC(DHUK, "pqsigner/optiga-pbs-v1")`, with the planned first-field rotation also mixing TRNG salt | silicon **BHK** — `SAES-CMAC(BHK, "pqsigner/se050-admin-pin-v1")` | transport keys *today*; per-device keys only after the future approved first-field PUT KEY flow | 🚫 target shape only; shipping and lifecycle flow remain blocked |
+| **Current candidate hardware roots:** `saes-dhuk` + `bhk` (no hardcoded keys) | current transport PBS = silicon **DHUK** via `SAES-CMAC(DHUK, "pqsigner/optiga-pbs-v1")` | current transport/admin axis = silicon **BHK** via the domain-separated helpers | deterministic transport keys today; the fresh-TRNG production-final derivation, durable public state, recovery, and coordinated first-field rotation are OPEN | 🚫 target shape only; shipping and lifecycle flow remain blocked |
 | `make dual-se-bhk-e2e` (`saes-dhuk,bhk,e2e-test`) | silicon DHUK | silicon BHK | factory (probe-derived if `se050-derived-scp03` also added) | ❌ test image (`e2e-test`) |
 | `make dual-se-admin-wipe-e2e`, `make e2e-hw` (`otp-hardcoded-master-key`, no `bhk`) | **compile-time OTP constant** (HKDF) | `derive_into_bhk` *falls through* → **compile-time OTP constant** (HKDF) | published factory keys | ❌ dev-only (fence) |
 | `bhk-hardcoded-master-key` (dev) | (per the DHUK/OTP arm) | **compile-time BHK constant** (HKDF) | published factory keys | ❌ dev-only (fence) |
@@ -34,7 +34,17 @@ There are three different things a SE secret can be rooted in, picked at compile
 
 **The thing that's easy to get wrong:** `secret_keys::derive_into_bhk` is the *call site* for SE050 secrets (the Phase-2C call-site flip, `aa23f05`), but whether it actually uses the silicon BHK depends on the `bhk` feature. With `bhk` off it falls through to `derive_into` → DHUK / OTP-const / OTP-master per the table. The "BHK axis" describes the code path; the root is build-dependent.
 
-**Provisioning-order constraint (production):** because the BHK is stored DHUK-ECB-wrapped on flash page 126, and the DHUK changes at `RDP0 → RDP1` (ST-substituted constant → real per-die), the BHK first-write — and anything derived from it, including the admin UserID and the SCP03 PUT KEY ceremony — must happen *at RDP ≥ 1*. **Post-#36 (2026-07-14) this runs ON-DEVICE, not at the factory:** devices ship at RDP-0 (user-verifiable) with the SEs on transport keysets; the first field boot self-locks `RDP → 2` (the DHUK's single transition, straight to per-die-final), then does the BHK first-write → OPTIGA PBS rotation → SE050 SCP03 PUT KEY rotation, mixed with fresh TRNG salt. The constraint is unchanged — only the actor and moment moved (see work-todo #36).
+**Provisioning-order constraint (production target, not an approved ceremony):**
+because the BHK is stored DHUK-ECB-wrapped on flash page 126, and the DHUK
+changes at `RDP0 → RDP1` (ST-substituted constant → real per-die), the BHK
+first-write — and anything derived from it, including the admin UserID and the
+SCP03 PUT KEY ceremony — must happen *at RDP ≥ 1*. Under work-todo #36, the
+factory retains SE-internal irreversible provisioning and lockdown on transport
+keysets, including OPTIGA S-1/S-2/S-3 and lifecycle ratchets. First field boot
+is limited to `RDP → 2`, the BHK first-write, TRNG-salted OPTIGA PBS and SE050
+SCP03 rotation, then the seed wizard. The exact E140 lifecycle-versus-field-
+rotation ordering is still OPEN and silicon-gated; none of this paragraph is an
+executable or owner-authorized ceremony.
 
 ---
 
@@ -51,7 +61,7 @@ Two distinct things both called "OTP":
   security-epoch revocations, but is not implementation-approved; its physical
   codec, interruption handling, resource fit, and silicon gates remain open.
   *Not* a bit-addressable fuse bank.
-- **OTP "master key" region** (32 bytes in OTP, burned once by `hw::otp::ensure_device_master()`) — the **legacy** derivation root. On a `saes-dhuk` shipping build `ensure_device_master()` is **never called** (verified in the Phase-2C pre-flight) → this region **stays blank for the device's life**. The roots are the silicon DHUK + BHK, not an OTP-burned master. The old "burn an OTP master in production" plan is superseded.
+- **OTP "master key" region** (32 bytes in OTP, burned once by `hw::otp::ensure_device_master()`) — the **legacy** derivation root. In the current `saes-dhuk` candidate hardware shape `ensure_device_master()` is **never called** (verified in the Phase-2C pre-flight), so this region stays blank. The current helper roots are silicon DHUK + BHK, not an OTP-burned master; the production-final credential protocol is separately OPEN. The old "burn an OTP master in production" plan is superseded.
 - **`otp-hardcoded-master-key` Cargo feature** — a *dev-only compile-time constant* standing in for that OTP master so re-flashed bench boards keep stable derivations. **Never ships** (in the `compile_error!` fence in `nsc/mod.rs`).
 
 ---
@@ -87,8 +97,8 @@ There's also a dedicated dual-feature `compile_error!` for `otp-hardcoded-master
 |---|---|---|
 | `make e2e-hw` | `e2e-test,stm32u585,otp-hardcoded-master-key,dual-se,…` | The full unified-sign e2e on real silicon. **Brick-proof** (all-constants config). Default for routine dev. |
 | `make dual-se-admin-wipe-e2e` | `dual-se-admin-wipe-e2e,stm32u585,ui-oled,debug-log,e2e-test,otp-hardcoded-master-key` | Admin-wipe roundtrip with the OTP-const root. **Brick-proof.** Self-heals the OPTIGA back to OTP-const PBS. |
-| `make dual-se-bhk-e2e` | `dual-se-admin-wipe-e2e,stm32u585,ui-oled,debug-log,e2e-test,saes-dhuk,bhk` | The production-shape validation — admin PIN on silicon BHK + OPTIGA PBS on silicon DHUK. Provisions+wipes in one boot, so no persistent brick — but **don't run on a board you're about to RDP-regress** if you've left a BHK-derived provisioning persistent. |
-| `make flash-hw-se050-rotate-scp03` | `se050-rotate-scp03,bhk,stm32u585,ui-oled,debug-log,e2e-test` | **IRREVERSIBLE.** One-shot GP PUT KEY ceremony, replaces SCP03 keyset 0x0B in place. Production-provisioning only. |
+| `make dual-se-bhk-e2e` | `dual-se-admin-wipe-e2e,stm32u585,ui-oled,debug-log,e2e-test,saes-dhuk,bhk` | Current candidate transport-shape validation — admin PIN on silicon BHK + OPTIGA PBS on silicon DHUK. It does not exercise the still-open fresh-TRNG final rotation. Provisions+wipes in one boot, so no persistent brick — but **don't run on a board you're about to RDP-regress** if you've left a BHK-derived provisioning persistent. |
+| `make flash-hw-se050-rotate-scp03` | `se050-rotate-scp03,bhk,stm32u585,ui-oled,debug-log,e2e-test` | **IRREVERSIBLE.** One-shot deterministic GP PUT KEY evidence path, replacing SCP03 keyset 0x0B in place. Sacrificial bench/factory validation only; it is not the still-open fresh-TRNG production-final rotation and must not be used on a unit intended to ship. |
 | `make saes-self-test-hw[-rdp1]` | `saes-self-test,debug-log,ui-noop,e2e-test,mock-se[,uart-console]` | DHUK fingerprint check. **Brick-proof** (`mock-se` — no real SE I/O). Used for the per-die DHUK experiments. |
 | `make test-key-speed` | (bench profile) | DWT-timed signing bench, no semihosting reads → works on real silicon without the probe-rs `SYS_READC` hang (CLAUDE.md HW gotcha). |
 
@@ -104,7 +114,7 @@ Live source: `secure/Cargo.toml` (each feature has an inline `#`-comment). The h
 - **Platform:** `stm32u585` (real HW, implies `hw-sha256`) vs. nothing (QEMU `mps2-an505`).
 - **UI:** `ui-semihosting` · `ui-oled` · `ui-noop` (silent for headless USB) · `ui-mirror` (RTT framebuffer stream) · `ui-capture` (per-frame SHA-256).
 - **Hardening / accelerators (compose):** `saes-dhuk` (Tier-1 DHUK-SAES KDF) · `saes-self-test` · `tamp` (currently log-only) · `consumption-mask` (TIM2 PWM PA5) · `bhk` (Tier-2 BHK lifecycle on flash page 126).
-- **OPTIGA-specific:** `optiga-hw-counter` (E120 LUC bound to F1D0) · `optiga-lock-operational` (irreversible LcsO bump — production only) · `optiga-no-shield` (dev only).
+- **OPTIGA-specific:** `optiga-hw-counter` (E120 LUC bound to F1D0) · `optiga-lock-operational` (irreversible LcsO bump — controlled sacrificial validation only until the production actor/order is reviewed) · `optiga-no-shield` (dev only).
 - **SE050-specific:** `se050-derived-scp03` (Stage A of #20 — derived SCP03 keys with probe-on-boot fallback) · `se050-rotate-scp03` (Stage B — the irreversible PUT KEY ceremony build, fenced) · `se050-factory-reset` · `se050-reset-e2e` · `se050-admin-wipe-e2e` · `se050-admin-extract-attempt-e2e` · `se050-crash-safety-e2e`.
 - **TROPIC01-specific:** `tropic01-se`.
 - **Test scaffolding:** `e2e-test` (fixed mnemonic + PIN, short-circuits `confirm()`/`enter_pin()`) · `e2e-skip-*` (sub-tests skipped under e2e) · `dev-testkey` (interactive UI, OTP substituted) · various `*-e2e` one-shot dispatchers.

@@ -25,10 +25,11 @@ claim.
 1. **An independently-derivable baseline** — `./measure.sh` words for
    the published release commit. This is what reproducible builds
    provide; everything below in this document is about getting it.
-2. **An on-device ground truth the running firmware can't forge** —
-   the WRP1A-locked FSBL renders the measurement words on the NV3007 LCD
-   *before* branching into the slot, so any firmware update (even
-   vendor-signed) cannot lie about what bytes ended up on the device.
+2. **An on-device ground truth the running firmware can't forge** — the target
+   design has an approved, WRP-protected FSBL render the measurement words on
+   the NV3007 LCD *before* branching into the slot. The legacy bench FSBL
+   implements the measurement/display behavior, but production immutability
+   still awaits the geometry, WRP/factory, build/resource, and silicon gates.
    See [`measured-boot.md`](../security/measured-boot.md) for the threat model
    and the trust chain.
 

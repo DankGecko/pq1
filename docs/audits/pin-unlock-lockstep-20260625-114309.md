@@ -1,5 +1,14 @@
 # audit:pin-unlock — Security Audit (20260625-114309)
 
+> **Superseded S-2 correction (2026-07-14).** This frozen June audit
+> misidentified E0E3 as an active type-`0x11` public-sample trust anchor and
+> concluded that `optiga-lock-operational` closed S-2. On the observed part,
+> E0E3 is a type-`0x12` device certificate; the real candidate pool is
+> E0E8/E0E9/E0EF. Current `lockdown_ta_pool` emits no APDU, and
+> `OPTIGA_S2_PRODUCTION_BLOCKED` keeps every production OPTIGA image blocked.
+> Treat the original section below as as-found audit history; current authority
+> is `docs/STATUS.md` §A and `docs/production-todo.md`.
+
 ## Scope & threat model
 
 Target: the PIN / unlock path and the three-way attempt-counter lockstep

@@ -5,9 +5,9 @@
 //! pubkeys, and released `.pqfw` bundles — silently changing any of
 //! these constants would orphan every device in the field.
 //!
-//! Per CLAUDE.md: "No casual KDF tag changes" and "Do not expand the
-//! signed FW-update preimage."  These tests give those two policies
-//! teeth.
+//! These tests pin the legacy manifest-v0x02 contract in
+//! `fw-manifest/src/lib.rs`. They are intentionally brittle compatibility
+//! checks and grant no production rollback/signing authority.
 
 use fw_manifest::{compute_signed_digest, DOMAIN_TAG, SIGNED_PREIMAGE_LEN, VERIFYING_KEY_LEN};
 use sha2::{Digest, Sha256};
@@ -19,7 +19,7 @@ use sphincs_c10::params::{N, SIGNATURE_LEN};
 
 #[test]
 fn positive_domain_tag_is_pqfw_v1() {
-    // Frozen forever per CLAUDE.md.  If anyone bumps this, every
+    // Frozen for legacy-v0x02 compatibility. If anyone bumps this, every
     // device's FSBL hard-codes the old tag and will refuse the new
     // bundle.
     assert_eq!(DOMAIN_TAG, b"PQFW_V1", "FW-update domain tag must remain 'PQFW_V1'");
@@ -28,7 +28,7 @@ fn positive_domain_tag_is_pqfw_v1() {
 
 #[test]
 fn positive_signed_preimage_len_is_75() {
-    // The CLAUDE.md spec: "75 B `PQFW_V1` || fw_version_be || secure_hash || nonsecure_hash".
+    // Legacy crate contract: 75 B `PQFW_V1 || version || hashes`.
     // Auditors reconstruct the preimage from (version, secure.elf,
     // nonsecure.elf) — changing the length is a breaking change.
     assert_eq!(SIGNED_PREIMAGE_LEN, 7 + 4 + 32 + 32);

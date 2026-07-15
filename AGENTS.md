@@ -18,6 +18,22 @@ Before non-trivial work:
    coverage gap if a required lens has no playbook. Unrelated playbooks need
    not be run.
 
+## Security-review surface routing
+
+Five cross-cutting playbooks complement the subsystem-specific and formal-
+verification playbooks:
+
+- [lifecycle, provisioning, persistent state, recovery, and RMA](docs/security/adversarial-review/lifecycle-persistent-state-adversarial-review.md)
+- [entropy, key generation, derivation, nonce, and key lifecycle](docs/security/adversarial-review/entropy-key-lifecycle-adversarial-review.md)
+- [secure runtime, resources, exceptions, concurrency, and unsafe code](docs/security/adversarial-review/secure-runtime-resource-adversarial-review.md)
+- [production configuration, prodtest, and assurance fidelity](docs/security/adversarial-review/production-configuration-prodtest-adversarial-review.md)
+- [build, release, provenance, signing-key custody, and distribution](docs/security/adversarial-review/build-release-provenance-adversarial-review.md)
+
+These lenses are additive to every intersecting subsystem playbook. Return
+review evidence under the indexed findings workflow; a source-only pass must
+retain the playbook's honest residual and must not imply hardware, merge,
+shipment, or irreversible-action authority.
+
 Task-specific normative specifications, authorization boundaries, and explicit
 owner decisions take precedence over the generic workflow and may require
 additional reviewers or evidence.

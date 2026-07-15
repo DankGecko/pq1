@@ -33,7 +33,7 @@ conversation context).
 | Letter | Topic | Primary code bundled |
 |---|---|---|
 | **A** | Fault-injection resistance for PQ signing + PIN path | `dual_se.rs`, `cmd_request_unlock.rs`, `state.rs`, `crypto.rs` |
-| **B** | Production key management (SCP03 rotation, PBS wrap, HUK-SAES) | `se050/scp03.rs`, `optiga/shield.rs`, `hw/flash.rs`, `docs/secure-elements/se050-factory-reset.md` |
+| **B** | Transport-to-first-field SCP03/PBS lifecycle (BHK final keys, DHUK-derived PBS, open E140 ordering) | `se050/scp03.rs`, `optiga/shield.rs`, `hw/flash.rs`, `docs/secure-elements/se050-factory-reset.md` |
 | **C** | SLH-DSA side-channel landscape on Cortex-M33 | `crypto.rs`, `cmd_sign_userop.rs`, `secure/Cargo.toml` |
 | **D** | USB stack hardening for USB-C-only design | `hw/usb_hw.rs`, `nonsecure/src/usb/*`, `docs/companion/usb-protocol-v2.md` |
 | **E** | Supply-chain + provisioning attestation | `CLAUDE.md`, `docs/security/HARDENING.md`, `docs/security/production-security.md` |

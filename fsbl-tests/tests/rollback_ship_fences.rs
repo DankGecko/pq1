@@ -9,6 +9,23 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+const DESTRUCTIVE_HARNESS_FEATURES: &[&str] = &[
+    "se050-factory-reset",
+    "se050-reset-e2e",
+    "se050-admin-wipe-e2e",
+    "se050-crash-safety-e2e",
+    "se050-admin-extract-attempt-e2e",
+    "se050-stress",
+    "optiga-admin-wipe-e2e",
+    "optiga-nuclear-reset",
+    "dual-se-admin-wipe-e2e",
+    "optiga-hw-counter-e2e",
+    "duress-probe-e2e",
+    "duress-provision-e2e",
+    "pin-gate-e2e",
+    "dual-se-multi-unlock-e2e",
+];
+
 fn workspace_root() -> PathBuf {
     let mut path = std::env::current_dir().expect("current directory");
     loop {
@@ -74,6 +91,41 @@ fn assert_cargo_rejected(
     );
 }
 
+fn assert_host_cargo_rejected(
+    workspace: &Path,
+    target_dir: &Path,
+    package: &str,
+    features: &str,
+    expected: &str,
+) {
+    let output = Command::new("cargo")
+        .current_dir(workspace)
+        .env_remove("FSBL_VENDOR_PUBKEY")
+        .env_remove("FSBL_ALLOW_DEV_KEY")
+        .args(["check", "--locked", "--release", "--target-dir"])
+        .arg(target_dir)
+        .args([
+            "-p",
+            package,
+            "--no-default-features",
+            "--features",
+            features,
+        ])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run cargo for {package}: {error}"));
+
+    let text = combined_output(&output);
+    assert!(
+        !output.status.success(),
+        "unsafe host-check build unexpectedly succeeded: package={package}, features={features}"
+    );
+    assert!(
+        text.contains(expected),
+        "host-check build failed for the wrong reason: package={package}, features={features}\n\
+         expected diagnostic: {expected}\n--- cargo output ---\n{text}"
+    );
+}
+
 #[test]
 fn rollback_backend_cannot_enter_production_or_factory_images() {
     let workspace = workspace_root();
@@ -117,6 +169,212 @@ fn rollback_backend_cannot_enter_production_or_factory_images() {
 }
 
 #[test]
+fn prodtest_cannot_compose_with_persistent_or_irreversible_actions() {
+    let workspace = workspace_root();
+    let target_dir = workspace.join("target/prodtest-persistent-action-fence-tests");
+    let expected = "PRODTEST_PERSISTENT_ACTION_FORBIDDEN";
+
+    // The irreversible acknowledgement is deliberately present in the first
+    // four cases. It must not turn an acceptance-test image into authority to
+    // consume a root, rotate an SE credential, or ratchet lifecycle state.
+    // `legacy-fw-rollback-unsafe` only passes this branch's independent
+    // rollback quarantine so the prodtest diagnostic itself is exercised.
+    for features in [
+        "prodtest,dev-testkey,bhk,factory-production-irreversible-im-sure,legacy-fw-rollback-unsafe",
+        "prodtest,dev-testkey,se050-rotate-scp03,factory-production-irreversible-im-sure,legacy-fw-rollback-unsafe",
+        "prodtest,dev-testkey,optiga-lock-operational,factory-production-irreversible-im-sure,legacy-fw-rollback-unsafe",
+        "prodtest,dev-testkey,factory-production-irreversible-im-sure,legacy-fw-rollback-unsafe",
+        "prodtest,dev-testkey,rdp-enforce-halt,legacy-fw-rollback-unsafe",
+        "prodtest,dev-testkey,saes-dhuk,tamp-wipe,legacy-fw-rollback-unsafe",
+        "prodtest,dev-testkey,saes-dhuk,tzic-wipe,legacy-fw-rollback-unsafe",
+        // With neither dev-testkey nor otp-hardcoded-master-key, prodtest
+        // would enter the real per-device OTP-master path.
+        "prodtest,legacy-fw-rollback-unsafe",
+    ] {
+        assert_cargo_rejected(
+            &workspace,
+            &target_dir,
+            "sphincs-tz-secure",
+            features,
+            expected,
+        );
+    }
+
+    // The factory-provisioning combination is stopped even earlier by the
+    // build script's rollback quarantine. It remains listed in the central
+    // prodtest fence as defence in depth for the day that quarantine changes.
+    assert_cargo_rejected(
+        &workspace,
+        &target_dir,
+        "sphincs-tz-secure",
+        "prodtest,dev-testkey,factory-provisioning,factory-production-irreversible-im-sure,legacy-fw-rollback-unsafe",
+        "FW_ROLLBACK_FACTORY_BLOCKED",
+    );
+}
+
+#[test]
+fn production_feature_policy_rejects_all_factory_and_prodtest_aliases() {
+    let workspace = workspace_root();
+
+    // Mutation guard for Makefile::PROD_FORBIDDEN. Testing one feature at a
+    // time ensures removing any alias changes the failure from the dedicated
+    // never-ship diagnosis to an unrelated missing-required-feature result.
+    for feature in [
+        "prodtest",
+        "factory-provisioning",
+        "factory-provisioning-rehearsal",
+        "factory-production-irreversible-im-sure",
+    ]
+    .into_iter()
+    .chain(DESTRUCTIVE_HARNESS_FEATURES.iter().copied())
+    {
+        let output = Command::new("make")
+            .current_dir(&workspace)
+            .arg("prod-feature-check")
+            .arg(format!("RELEASE_FEATURES={feature}"))
+            .output()
+            .unwrap_or_else(|error| panic!("run prod-feature-check for {feature}: {error}"));
+        let text = combined_output(&output);
+        assert!(
+            !output.status.success(),
+            "never-ship feature unexpectedly passed production policy: {feature}"
+        );
+        assert!(
+            text.contains("never-ship feature(s)") && text.contains(feature),
+            "production policy rejected {feature} for the wrong reason:\n{text}"
+        );
+    }
+
+    // GNU Make normally gives command-line assignments precedence over
+    // Makefile assignments.  The policy sets are security constants, not
+    // caller-tunable inputs: an empty override must not erase either half of
+    // the production envelope.
+    let canonical_plus_prodtest = concat!(
+        "stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,",
+        "saes-dhuk,se050-derived-scp03,mode-production,",
+        "optiga-lock-operational,optiga-hw-counter,consumption-mask,",
+        "tamp,tamp-wipe,tzic-wipe,prodtest"
+    );
+    let output = Command::new("make")
+        .current_dir(&workspace)
+        .arg("prod-feature-check")
+        .arg(format!("RELEASE_FEATURES={canonical_plus_prodtest}"))
+        .arg("PROD_FORBIDDEN=")
+        .output()
+        .expect("run prod-feature-check with forbidden-set override");
+    let text = combined_output(&output);
+    assert!(
+        !output.status.success()
+            && text.contains("never-ship feature(s)")
+            && text.contains("prodtest"),
+        "command-line assignment erased PROD_FORBIDDEN:\n{text}"
+    );
+
+    let output = Command::new("make")
+        .current_dir(&workspace)
+        .arg("prod-feature-check")
+        .arg("RELEASE_FEATURES=mode-production")
+        .arg("PROD_REQUIRED=")
+        .output()
+        .expect("run prod-feature-check with required-set override");
+    let text = combined_output(&output);
+    assert!(
+        !output.status.success()
+            && text.contains("MISSING required hardening feature(s)")
+            && text.contains("saes-dhuk"),
+        "command-line assignment erased PROD_REQUIRED:\n{text}"
+    );
+
+    // The reversible fixture target likewise owns its exact paired feature
+    // profiles.  A dry run proves command-line assignments cannot substitute
+    // a different secure or nonsecure image while retaining the target name.
+    let output = Command::new("make")
+        .current_dir(&workspace)
+        .args([
+            "--no-print-directory",
+            "-n",
+            "build-hw-prodtest",
+            "PRODTEST_SECURE_FEATURES=prodtest,bhk",
+            "PRODTEST_NONSECURE_FEATURES=usb",
+        ])
+        .output()
+        .expect("dry-run build-hw-prodtest with profile overrides");
+    let text = combined_output(&output);
+    assert!(output.status.success(), "prodtest dry run failed:\n{text}");
+    assert!(
+        text.contains("--features prodtest,dev-testkey,saes-dhuk")
+            && text.contains("--features stm32u585,usb,prodtest")
+            && !text.contains("--features prodtest,bhk"),
+        "command-line assignment changed the exact prodtest profiles:\n{text}"
+    );
+}
+
+#[test]
+fn mode_production_rejects_every_destructive_harness_via_direct_cargo() {
+    let workspace = workspace_root();
+    let target_dir = workspace.join("target/production-destructive-harness-fences");
+    for feature in DESTRUCTIVE_HARNESS_FEATURES {
+        assert_cargo_rejected(
+            &workspace,
+            &target_dir,
+            "sphincs-tz-secure",
+            &format!("mode-production,ui-semihosting,{feature},legacy-fw-rollback-unsafe"),
+            "PRODUCTION_DESTRUCTIVE_HARNESS_FORBIDDEN",
+        );
+    }
+}
+
+#[test]
+fn retired_optiga_reset_oids_cannot_build_in_any_profile() {
+    let workspace = workspace_root();
+    let target_dir = workspace.join("target/retired-optiga-reset-oids-fence-tests");
+
+    for features in [
+        "optiga-reset-oids,dev-testkey,ui-noop,legacy-fw-rollback-unsafe",
+        "optiga-reset-oids,e2e-test,dev-testkey,ui-noop,legacy-fw-rollback-unsafe",
+        "optiga-reset-oids,factory-production-irreversible-im-sure,ui-noop,legacy-fw-rollback-unsafe",
+    ] {
+        assert_cargo_rejected(
+            &workspace,
+            &target_dir,
+            "sphincs-tz-secure",
+            features,
+            "OPTIGA_RESET_OIDS_RETIRED",
+        );
+    }
+}
+
+#[test]
+fn optiga_ta_pool_lockdown_cannot_build_before_codec_validation() {
+    let workspace = workspace_root();
+    let target_dir = workspace.join("target/optiga-ta-lockdown-fence-tests");
+
+    assert_cargo_rejected(
+        &workspace,
+        &target_dir,
+        "sphincs-tz-secure",
+        "stm32u585,ui-lcd,optiga-trust-m,dev-testkey,optiga-lock-operational,factory-production-irreversible-im-sure",
+        "OPTIGA_TA_POOL_LOCKDOWN_BLOCKED",
+    );
+}
+
+#[test]
+fn production_optiga_cannot_build_while_s2_is_open() {
+    let workspace = workspace_root();
+    let target_dir = workspace.join("target/optiga-s2-production-fence-tests");
+
+    // Use a host check so the independent rollback build-script quarantine
+    // cannot preempt rustc before this source-level production fence fires.
+    assert_host_cargo_rejected(
+        &workspace,
+        &target_dir,
+        "sphincs-tz-secure",
+        "ui-noop,optiga-trust-m,optiga-hw-counter,optiga-lock-operational,mode-production",
+        "OPTIGA_S2_PRODUCTION_BLOCKED",
+    );
+}
+
+#[test]
 fn advertised_ship_and_irreversible_factory_gates_fail_loudly() {
     let workspace = workspace_root();
 
@@ -134,6 +392,23 @@ fn advertised_ship_and_irreversible_factory_gates_fail_loudly() {
         ship_text.contains("prod-feature-check: PASS")
             && ship_text.contains("reviewed production rollback backend is not implemented"),
         "prod-check-ship failed for the wrong reason:\n{ship_text}"
+    );
+
+    let overridden_ship = Command::new("make")
+        .current_dir(&workspace)
+        .args(["prod-check-ship", "RELEASE_FEATURES=mode-production"])
+        .output()
+        .expect("run prod-check-ship with a command-line RELEASE_FEATURES override");
+    let overridden_ship_text = combined_output(&overridden_ship);
+    assert!(
+        !overridden_ship.status.success(),
+        "prod-check-ship must remain blocked when RELEASE_FEATURES is supplied"
+    );
+    assert!(
+        overridden_ship_text.contains("prod-feature-check: PASS")
+            && overridden_ship_text
+                .contains("reviewed production rollback backend is not implemented"),
+        "prod-check-ship did not retain its canonical feature envelope:\n{overridden_ship_text}"
     );
 
     let ignored_ship = Command::new("make")

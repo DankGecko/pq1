@@ -7,11 +7,11 @@
 //! as a hardcoded constant or a per-provisioning random is derived on
 //! demand from a device-bound root via a domain-labelled expansion.
 //!
-//! ## Two derivation paths
+//! ## Root selection in the current implementation
 //!
-//! The root depends on the build configuration:
+//! The root depends on both the caller and build configuration:
 //!
-//! 1. **Production / post-Tier-1 — `saes-dhuk` feature ON:** the root
+//! 1. **OPTIGA/common path — `saes-dhuk` feature ON:** the root
 //!    is the silicon DHUK, accessed only via the SAES peripheral's
 //!    `KEYSEL=001` selector. DHUK bytes never appear in CPU-visible
 //!    memory. Each 16-byte output block is produced by
@@ -23,7 +23,10 @@
 //!    produces a single fixed-length output, so each counter value
 //!    gives a domain-separated block).
 //!
-//! 2. **Dev / bench — `otp-hardcoded-master-key` feature ON:** the
+//! 2. **SE050/Tropic01 path — `bhk` feature ON:**
+//!    `derive_into_bhk` selects the BHK, so SE050 SCP03/admin and the
+//!    Tropic01 pairing key do not collapse onto the OPTIGA DHUK axis.
+//! 3. **Dev / bench — `otp-hardcoded-master-key` feature ON:** the
 //!    root is the 32-byte OTP-master-shaped ASCII constant, and
 //!    outputs come from `HKDF-Expand-HMAC-SHA256(constant, label)`.
 //!    This preserves the derivation byte-for-byte across every dev
@@ -31,21 +34,22 @@
 //!    cycle, and the admin UserID / SCP03 / PBS from the previous
 //!    run is still usable.
 //!
-//! The caller API (e.g. `optiga_pairing_secret()`) is identical for
-//! both paths — callers cannot tell which derivation is in use.
+//! Callers use purpose-specific APIs, but those APIs do not expose root bytes.
+//! This module describes current deterministic bring-up helpers; it does not
+//! implement the still-open fresh-salted final pairing-rotation protocol.
 //!
 //! ## Properties
 //!
-//! - **Deterministic per device.** Same board, same domain label →
+//! - **Deterministic per device (current helpers).** Same board, same domain label →
 //!   same bytes every boot.
-//! - **Unique per die (production).** Different STM32U585 silicon →
+//! - **Unique per die after the required RDP transition.** Different STM32U585 silicon →
 //!   different DHUK → different derived bytes at RDP ≥ 1. (At RDP0
 //!   DHUK is a shared ST-substituted constant; all dev boards
 //!   produce the same derivations. See `docs/work-todo.md §7 Tier 1`
 //!   for the RDP/DHUK semantics.)
 //! - **Domain-separated.** CMAC / HMAC as PRFs give independent-
 //!   looking outputs per label.
-//! - **Root-key-invisible (production).** Secure-world RCE can still
+//! - **Root-key-invisible.** Secure-world RCE can still
 //!   *call* SAES-CMAC(DHUK, ...) to reproduce the same outputs, but
 //!   cannot dump DHUK bytes to exfiltrate or replay on a different
 //!   chip or in emulation.
@@ -217,7 +221,7 @@ const BHK_TEST_CONSTANT: [u8; 32] = *b"PQSIGNER-TEST-BHK-DHUK-WRAP-v1!!";
 ///    OTP-master test constant so outputs differ between the two
 ///    paths even under dev — this preserves the "two independent key
 ///    sources" property for any host-side analysis.
-/// 2. **`bhk` ON (production phase 2B+):** SP 800-108-style CMAC-based
+/// 2. **`bhk` ON (current candidate hardware phase 2B+):** SP 800-108-style CMAC-based
 ///    counter KDF driven by `KeySel::Bhk` via `cmac_bhk`. Requires
 ///    silicon-side BHK provisioning + boot-load + TAMP-lock to have
 ///    run; otherwise output is stable-but-zero-keyed.
@@ -226,8 +230,10 @@ const BHK_TEST_CONSTANT: [u8; 32] = *b"PQSIGNER-TEST-BHK-DHUK-WRAP-v1!!";
 ///    output. The output is keyed on DHUK rather than BHK, so the
 ///    defense-in-depth shape is degenerate until phase 2B lands —
 ///    this is intentional: it lets us add BHK call sites
-///    incrementally without breaking pre-Tier-2 builds. Production
-///    builds enable `bhk` to flip to the real silicon path.
+///    incrementally without breaking pre-Tier-2 builds. Candidate hardware
+///    builds enable `bhk` to flip to the real silicon path; this deterministic
+///    helper does not implement the still-open fresh-TRNG production-final
+///    credential protocol.
 fn derive_into_bhk(label: &[u8], output: &mut [u8]) -> Result<(), OtpError> {
     #[cfg(feature = "bhk-hardcoded-master-key")]
     {
@@ -253,8 +259,8 @@ fn derive_into_bhk(label: &[u8], output: &mut [u8]) -> Result<(), OtpError> {
 
 /// SAES-BHK adaptor — parallel to `derive_into_saes_kdf` but routes
 /// through `cmac_bhk` instead of `cmac_dhuk`. Only compiled when the
-/// production `bhk` feature is on (and `bhk-hardcoded-master-key` is
-/// off).
+/// hardware `bhk` feature is on (and `bhk-hardcoded-master-key` is off).
+/// Feature selection alone is not production-final pairing closure.
 #[cfg(all(not(feature = "bhk-hardcoded-master-key"), feature = "bhk"))]
 fn derive_into_saes_bhk_kdf(label: &[u8], output: &mut [u8]) -> Result<(), OtpError> {
     use crate::cmac::{kdf_cmac_counter_generic, KdfError};
@@ -287,8 +293,10 @@ fn derive_into_saes_bhk_kdf(label: &[u8], output: &mut [u8]) -> Result<(), OtpEr
 /// brick scenario.
 ///
 /// Size is 64 bytes per the OPTIGA Trust M Solution Reference Manual §
-/// "Platform Binding Secret" ("It shall be 64 bytes …"). Derived via
-/// two-block HKDF-Expand (`T(1) || T(2)`, RFC 5869).
+/// "Platform Binding Secret" ("It shall be 64 bytes …"). `derive_into`
+/// selects the configured current-helper backend: four 16-byte
+/// `SAES-CMAC(DHUK, label || counter)` blocks under `saes-dhuk`, or two
+/// RFC-5869 HKDF-Expand blocks in explicit dev/legacy configurations.
 pub fn optiga_pairing_secret() -> Result<[u8; 64], OtpError> {
     let mut out = [0u8; 64];
     derive_into(b"pqsigner/optiga-pbs-v1", &mut out)?;
@@ -377,10 +385,11 @@ pub fn se050_scp03_dek_key() -> Result<[u8; 16], OtpError> {
 ///   dev board + fresh-flashed firmware combination yields the same
 ///   admin PIN — swap chips, reflash, power-cycle, and the admin
 ///   UserID from the previous run is still delete-able.
-/// - **Per-die in production.** The HUK is per-die (DHUK at RDP ≥ 1,
-///   or the per-board TRNG OTP master), so the admin PIN is unique
-///   per device — a flash dump of one device cannot admin-wipe
-///   another.
+/// - **Per-die in the current hardware-root helper.** The HUK is per-die
+///   (DHUK at RDP ≥ 1, or the per-board TRNG OTP master), so the derived admin
+///   PIN is unique per device — a flash dump of one device cannot admin-wipe
+///   another. This property alone does not close the still-open fresh-TRNG
+///   production-final pairing protocol.
 ///
 /// **Tier-2 split:** routes through `derive_into_bhk` (BHK axis) — see
 /// `se050_scp03_enc_key`. Inert until `bhk` is enabled (falls through

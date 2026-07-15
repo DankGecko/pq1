@@ -30,9 +30,9 @@ Attacks the design *does not* defend against are written down in §10 with the s
 |---|---|---|---|
 | **S0 — fund-equivalent** | `bip39_seed` (64 B), reconstructed `entropy` (32 B), `masterSk` C10 (96 B working, ~ 4 KB derivation state), `slotSk` C10, `master_secret` and `slot_master` derivation pivots | OPTIGA + SE050 (XOR split at rest); S-SRAM transiently during signing | Total: attacker can spend every wallet ever derived from this seed across every chain |
 | **S1 — single-account-equivalent** | A single `(account_index, chain_id, slot_index)` slotSk in S-SRAM during a single signing window | S-SRAM only, ≤ 120 s after each sign | One chain's funds on one account until on-chain cap (≤ 65 536 spends) is reached |
-| **S2 — channel-equivalent** | OPTIGA Platform Binding Secret (PBS), SE050 SCP03 ENC/MAC/DEK, SE050 admin UserID | STM32 OTP-derived (Tier-1 DHUK) — never persisted in plaintext | Bus-snoop / channel-impersonation against this device only. Does **not** alone unlock funds — see §6 |
+| **S2 — channel-equivalent** | OPTIGA Platform Binding Secret (PBS), SE050 SCP03 ENC/MAC/DEK, SE050 admin UserID | Current dev/legacy code derives the base PBS from DHUK and uses build-dependent SE050 roots; the target ships factory-installed transport keysets, then creates the BHK and TRNG-salted final PBS/SCP03 material after the first-field RDP2 self-lock. That final flow is unimplemented and its E140 ordering remains OPEN. No plaintext channel key is intended to persist. | Bus-snoop / channel-impersonation against this device only. Does **not** alone unlock funds — see §6 |
 | **S3 — auth-equivalent** | User PIN (raw), PIN-derived auth ref values stored in OPTIGA F1D0 + SE050 UserID | SE silicon (never MCU, never NS) | Online brute-force: 10 attempts → factory wipe (see §7.4) |
-| **S4 — identity-equivalent** | Per-die DHUK (factory-fused), BHK (Stage 2 planned), STM32 OTP master, factory-burnt vendor pubkey hash | STM32 silicon — DHUK only accessible via SAES, never as memory | Decap-class only; downstream wraps fail open if extracted but the on-device PIN gate (§7.4) still applies |
+| **S4 — identity-equivalent** | Per-die DHUK (factory-fused), BHK target, candidate rollback-floor OTP records, candidate vendor-key identity | STM32 silicon / protected state. DHUK is SAES-only; the BHK lifecycle exists in code but its production first-write flow is not approved. The legacy OTP master and unary rollback tally are production-rejected; Draft 1.1's physical OTP allocation and vendor-key binding remain OPEN. | Decap-class only for established silicon roots; candidate OTP/vendor records carry no production authority until their backend and ceremony close. The on-device PIN gate (§7.4) remains independently required. |
 | **S5 — integrity-equivalent** | Firmware secure/nonsecure images, FSBL, on-chain bytecode at the deployed proxy + factory + implementation + verifier addresses, vendor C10 signing key (off-device, HSM) | Flash (current FSBL geometry is legacy bench-only; Draft 1.1 protection/layout is unapproved), on-chain CREATE2-derived addresses, vendor HSM | Persistent backdoor or substituted code path; downstream affects S0–S3 |
 | **S6 — availability** | PIN-attempt controls, on-chain per-chain caps, page-123 offchain counter | MCU page 124, OPTIGA E120 LUC, SE050 UserID, on-chain storage | Brick (DoS) — funds frozen but not extracted. Note: bricking is a *defence outcome*, not an attack outcome we care about preventing |
 | **S7 — privacy** | Wallet on-chain identity ↔ user, list of signed transactions, BIP-39 measurement words | On-chain (public), local NV3007 LCD (transient), companion app (depends on app) | Surveillance / deanonymisation; not financial loss |
@@ -50,9 +50,9 @@ A boundary is *non-trivial* when its two sides are governed by different keys, d
 | **B-USB** Companion ↔ device | USB HID, APDU v2 (`nonsecure/src/usb/{commands,hid,transport}.rs`) | Device trusts companion *only* for non-secret metadata (chain_id, slot_index, flags, displayed tx fields); never for secret material | NS-side parser → NSC veneer |
 | **B-NSC** NS ↔ S (TrustZone-M) | CMSE `cmse-nonsecure-entry` veneers on STM32U585; shared-memory mailbox on QEMU | S **never** trusts NS pointers, lengths, or contents without validation + copy-in | `secure/src/nsc/{ptr_validate,ns_ptr}.rs`; every `cmd_*::run` copies NS buffers to S-stack before parse |
 | **B-UI** S ↔ user (NV3007 LCD + 2 buttons) | Trusted-path dialogs (`secure/src/ui/{confirm,pin_entry,seed_wizard}.rs`); buttons + LCD are S-owned peripherals via GTZC | User trusts what they see; S trusts only what they physically pressed | NS opinion of a button press is ignored — the S-only TIM2 inactivity timer is not reset by NS pings (§7.6) |
-| **B-OPT** S ↔ OPTIGA Trust M V3 | OPTIGA Shielded Connection (TLS-PRF + AES-128-CCM-8); PBS provisioned at factory under Tier-1 DHUK-derived wrap | S trusts OPTIGA only for the `half_O` bits it returns under successful E120/F1D0 silicon-gated read | `secure/src/optiga/{shield,apdu,ifx_i2c}.rs` |
-| **B-SE0** S ↔ SE050 | SCP03 (AES-CMAC + AES-CBC); admin UserID derived from OTP master via `secret_keys`; user UserID is the PIN-derived bytes | S trusts SE050 only for `half_E` bits returned under successful user-UserID read | `secure/src/se050/{scp03,apdu,t1oi2c}.rs` |
-| **B-OTP** S firmware ↔ STM32 OTP | One-way SAES-CMAC(DHUK, label‖ctr) key derivation; OTP master in OTP block, vendor-pubkey hash planned | OTP is silicon-immutable post-burn | `secure/src/hw/{otp,huk,secret_keys}.rs` |
+| **B-OPT** S ↔ OPTIGA Trust M V3 | OPTIGA Shielded Connection (TLS-PRF + AES-128-CCM-8). The factory prepares the chip on a transport PBS; the target first-field flow rotates to TRNG-salted final material after RDP2. The exact E140 lifecycle-versus-rotation order remains OPEN and silicon-gated. | S trusts OPTIGA only for the `half_O` bits it returns under successful E120/F1D0 silicon-gated read | `secure/src/optiga/{shield,apdu,ifx_i2c}.rs` |
+| **B-SE0** S ↔ SE050 | SCP03 (AES-CMAC + AES-CBC). The factory installs transport keys; the target first-field flow creates the BHK and rotates to TRNG-salted per-device SCP03/admin material. Current fallback derivations are dev/legacy, not the selected ceremony. The user UserID is PIN-derived. | S trusts SE050 only for `half_E` bits returned under successful user-UserID read | `secure/src/se050/{scp03,apdu,t1oi2c}.rs` |
+| **B-OTP** S firmware ↔ STM32 OTP | Candidate one-way rollback-floor records and vendor-key binding. The legacy OTP master/unary tally is production-fenced; Draft 1.1's physical codec, allocation, interruption handling, and factory procedure remain OPEN. | No field may receive immutable authority before the reviewed backend, exact map, and owner-authorized ceremony close | `secure/src/hw/otp.rs`; `docs/security/a-b-firmware-rollback-architecture.md` |
 | **B-FW** Vendor HSM ↔ device | Candidate: SPHINCS+C10 signature over Draft 1.1's proposed 121-byte, slot-bound `PQFW_V6` preimage; vendor public key compiled into FSBL | Draft 1.1 is not implementation-approved; production is compile-blocked until exact-digest approval plus manifest-v6, journal/ECC/OTP, FLASH, RAM/stack, release-policy, factory, and silicon gates close | `docs/security/a-b-firmware-rollback-architecture.md`, `fsbl/`, `fwsign/`, `fw-manifest/` |
 | **B-CHAIN** Device ↔ on-chain wallet contract | C10 signature wrapped in `SignatureWrapper(uint256 ownerIndex, bytes c10Sig)`; per-chain `slot_entropy = sha256(slot_master‖"slot_entropy"‖chain_id_be8‖slot_index_be4)` so the slot keypair is chain-bound | Contract verifies the C10 sig stateless against the wrapper's `ownerIndex` lookup; trust crosses only via the wallet's own storage | `contracts/smart-wallet/src/{PQSmartWallet,PQSmartWalletFactory,verifiers/SPHINCsC10Asm}.sol` |
 | **B-FAB** Factory ↔ device (provisioning) | Future reviewed ceremony; current legacy receipt is quarantined | No factory trust anchor or RDP2 authority exists until the replacement receipt/ordering and silicon evidence are approved | `docs/provisioning/factory-provisioning.md`, Draft 1.1 §13 candidate |
@@ -133,8 +133,11 @@ Mechanism: SE050 PIN policy template (`apdu::build_policy`, `se050/apdu.rs:339-3
 
 Mechanism: three-way per-attempt enforcement, `nsc::gated_unlock` pre-commit,
 and `factory_reset_admin` on strike #10, with the directional MCU/E120 boot
-check described above. Falsifiable by `make pin-gate-hw-counter-e2e` and
-`make pin-gate-wipe-e2e`.
+check described above. `make pin-gate-hw-counter-e2e` falsifies only the
+per-attempt, in-run desynchronization-recovery, and simulated cache-resync
+portion; `make pin-gate-wipe-e2e` falsifies the ten-wrong lockout/wipe portion.
+The directional boot predicate needs a separate cold-reboot silicon receipt
+and remains OPEN.
 
 **⚠️ PROVISIONAL — currently violated by ship blocker S-1 (`docs/work-todo.md`).** **S-5 + S-6 RESOLVED 2026-05-28**, see closure notes below. Against a *desoldered-OPTIGA bench-rig* attacker (i.e. the threat that motivates the LUC at all), the OPTIGA leg of this claim does not hold in the current build: `F1D0.Change = ALW` (`secure/src/optiga/apdu.rs:930`, `:1059`) lets an attacker overwrite F1D0 with a chosen key, self-auth, and reset E120 indefinitely. On-board ordinary attempts still consume all three controls; firmware-side `gated_unlock` precharges MCU page 124 and SE050 independently enforces max-10, while E120 is a 32-use backstop. This is per-attempt composition, not symmetric three-counter boot reconciliation. Until S-1 is closed (F1D0 metadata tightened to `Auto(F1D0)` + LcsO ratchet), read this claim as "10 wrong PINs against MCU + SE050; OPTIGA contributes belt-and-braces *on-board* only." Re-establishing the OPTIGA desoldered-chip claim requires closing S-1 and re-running `pin-gate-hw-counter-e2e` against a ratcheted, owner-authorized sacrificial part with the tightened metadata.
 
@@ -226,8 +229,8 @@ These three patterns mean: every named attacker tier must beat *both* a silicon 
 
 | Attack | Tier | Mitigation | Residual |
 |---|---|---|---|
-| I²C bus snoop (logic analyzer on traces) | T2 | OPTIGA Shielded Connection (TLS-PRF + AES-128-CCM-8, PBS-keyed); SE050 SCP03 (AES-CMAC + AES-CBC). The intended product ships transport keysets at RDP0 and performs per-device rotation during an approved first-field boot, not at the factory. | Symmetric-rooted AEAD; a capture is attackable only via Grover-2⁶⁴ on the session key — ACCEPTED residual (§7.14, §9.1; owner 2026-07-07). Per-device rotation is load-bearing (no forward secrecy in either KDF), and its lifecycle flow is not yet implemented/approved. |
-| MITM with replayed handshake | T2 | SCP03 mutual auth + Shielded Connection's PBS-anchored TLS-PRF; freshness nonce on each session | None known once transport/default keys are rotated per device (PRE-PROD-CAVEAT until the first-field lifecycle flow lands — §9.2) |
+| I²C bus snoop (logic analyzer on traces) | T2 | OPTIGA Shielded Connection (TLS-PRF + AES-128-CCM-8, PBS-keyed); SE050 SCP03 (AES-CMAC + AES-CBC). The intended product ships transport keysets at RDP0 and performs per-device rotation during an approved first-field boot, not at the factory. | Symmetric-rooted AEAD; a capture is attackable only via Grover-2⁶⁴ on the session key — ACCEPTED residual (§7.14, §9.1; owner 2026-07-07). Per-device rotation is load-bearing (no forward secrecy in either KDF), and its first-field pairing flow is not yet implemented/approved. |
+| MITM with replayed handshake | T2 | SCP03 mutual auth + Shielded Connection's PBS-anchored TLS-PRF; freshness nonce on each session | None known once transport/default keys are rotated per device (PRE-PROD-CAVEAT until the first-field pairing flow lands — §9.2) |
 | Bus desync / glitch the SE response | T3 | Channel MAC fails ⇒ APDU rejected; tamper response invokes lockout | Untested at production hardness |
 | Channel key extraction from MCU OTP | T4 | DHUK only accessible via SAES (peripheral, not memory); BHK uplift (Stage 2) further hardens to "key must be *used* on this specific device" | A decap-class extraction of DHUK is the entry to the residual of Claim 2 — bricks possible, funds not extractable |
 
@@ -387,7 +390,7 @@ USB is the only external interface and the primary T0 attack vector. The host is
 
 | Attack | Tier | Mitigation | Residual |
 |---|---|---|---|
-| Decap STM32 to probe OTP master | T4 | DHUK wrap of OTP-master at rest (Stage 2) raises bar; BHK (Stage 2) becomes "must keep code running on this specific device" | Tier-4 lab is the residual; cost dominated by single-shot per-device, destructive |
+| Decap STM32 to probe device roots / candidate OTP state | T4 | DHUK is SAES-only; the target BHK is DHUK-wrapped and becomes "must keep code running on this specific device." The legacy OTP master is production-rejected, and candidate rollback/vendor OTP records are non-secret but integrity-critical. | Tier-4 lab is the residual for silicon roots; candidate OTP authority remains blocked pending its backend and ceremony. Cost is dominated by single-shot per-device destructive work. |
 | Decap OPTIGA to extract `half_O` | T4 | EAL 6+ rated; without `half_E` extraction the seed is XOR-blind | Two-chip decap is the brute-force lower bound |
 | Decap SE050 to extract `half_E` | T4 | EAL 6+ rated; same as above | Two-chip decap is the brute-force lower bound |
 | FIB read of TAMP backup registers (BHK) | T4 | Post-Stage 2 — TAMP-BHK with `TAMP_SECCFGR.BHKLOCK` makes BHK SAES-only; FIB on TAMP backup registers is the residual surface | Tier-4, single-shot per device |
@@ -535,7 +538,8 @@ These are tests that *back* threat-model claims, not just unit tests. Each is re
 |---|---|---|
 | `make e2e` | Gateway sign path under mock SEs in QEMU | Passing |
 | `make e2e-hw` | Gateway sign path on real STM32U585 + dual-SE | Passing 2026-05-12 |
-| `make pin-gate-hw-counter-e2e` | Claim 3 — three-way per-attempt consumption plus directional page124/E120 behavior | Passing |
+| `make pin-gate-hw-counter-e2e` | Claim 3 — three-way per-attempt consumption, in-run desynchronization recovery, and simulated cache resynchronization; no reboot/reconcile coverage | Passing for stated scope |
+| Cold-reboot page124/E120 reconciliation on silicon (target not yet implemented) | Claim 3 boot edge — exact E120-leading state wipes before unlock/gateway exposure; exact MCU-leading state cold-boots without wiping and preserves the conservatively charged MCU debt | **OPEN — not implemented or run; requires a fresh owner-authorized sacrificial part** |
 | `make pin-gate-wipe-e2e` | Claim 3 — 10-wrong factory wipe + page-124 erase | Passing |
 | `make se050-admin-extract-attempt-e2e` | Claim 2 — admin can DELETE but not READ user-PIN-gated secrets on SE050 | Passing 2026-05-11 |
 | `make saes-self-test-hw` | SAES driver + DHUK round-trip + 8-byte fingerprint cross-board consistency | Passing |
@@ -580,7 +584,10 @@ Production-ship is gated on Phases 0–5 (Phase 6 descoped 2026-07-07; its accep
 - **HSM** — Hardware Security Module. Off-device vendor signing key custody.
 - **LUC** — Lifetime Usage Counter. OPTIGA Trust M E120 silicon-monotonic counter, bound to F1D0 AuthRef's Execute access.
 - **NSC** — Non-Secure Callable. The narrow gateway region between TrustZone-S and TrustZone-NS code.
-- **PBS** — Platform Binding Secret. OPTIGA Shielded-Connection key, OTP-derived via Tier-1 SAES-CMAC(DHUK).
+- **PBS** — Platform Binding Secret for OPTIGA Shielded Connection. Current
+  dev/legacy code derives a reproducible base value via SAES-CMAC(DHUK); the
+  target product ships a factory transport PBS and performs a TRNG-salted final
+  rotation after first-field RDP2. That flow and the E140 ordering remain OPEN.
 - **RDP** — Readout Protection. STM32 levels 0/1/2 — 2 is irreversible and disables debug.
 - **SAES** — Secure AES. STM32U585 AES peripheral with hardware-key selectors (`Software`, `DHUK`, `BHK`, `DHUK^BHK`); keys never appear as bus-visible bytes.
 - **SAU** — Security Attribution Unit. ARMv8-M memory-attribution to S/NS/NSC at region granularity.
