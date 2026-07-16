@@ -22,7 +22,7 @@
     "tx-core/src/eip1559.rs": 1,
     "tx-core/src/rlp.rs": 2,
     "tx/src/cowswap_order.rs": 5,
-    "tx/src/erc20/calldata.rs": 4,
+    "tx/src/erc20/calldata.rs": 5,
     "tx/src/multisend.rs": 16,
     "tx/src/safe_mgmt.rs": 7,
     "tx/src/safe_tx.rs": 14,
@@ -30,18 +30,18 @@
   },
   "totals": {
     "total_files": 25,
-    "total_harnesses": 148,
+    "total_harnesses": 149,
     "mutation_enrolled_files": 19,
-    "harnesses_in_enrolled_files": 140,
+    "harnesses_in_enrolled_files": 141,
     "files_outside_mutation": 6,
     "harnesses_outside_mutation": 8,
-    "mutation_groups_total": 31,
+    "mutation_groups_total": 32,
     "mutation_groups_by_tier": {
       "quick": 7,
-      "default": 21,
+      "default": 22,
       "full": 3
     },
-    "distinct_enrolled_harnesses": 29
+    "distinct_enrolled_harnesses": 30
   },
   "files_outside_mutation": [
     "domain/src/lib.rs",

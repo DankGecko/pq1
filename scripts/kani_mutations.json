@@ -1,5 +1,5 @@
 {
-  "_comment": "verify-kani-mutation manifest — the Kani-side analogue of the Lean verify-proof-mutation gate (anti-vacuity for the firmware bounded-verification harnesses). For each entry, mutate a decoder/gate function in a way a specific Kani harness MUST catch, run ONLY that harness, and assert it flips to `VERIFICATION:- FAILED`. A green-when-it-should-be-red = a vacuous / under-constrained harness (the exact failure class the per-slice manual mutation checks caught by hand; this makes them a standing gate — work-todo §34/§35). Paths are relative to the repo root. Every entry uses `expect: kani_fails` (the load-bearing mutation must be caught); the `canary` doubles as the machinery-health check (if it survives, ALL results are void).",
+  "_comment": "verify-kani-mutation manifest \u2014 the Kani-side analogue of the Lean verify-proof-mutation gate (anti-vacuity for the firmware bounded-verification harnesses). For each entry, mutate a decoder/gate function in a way a specific Kani harness MUST catch, run ONLY that harness, and assert it flips to `VERIFICATION:- FAILED`. A green-when-it-should-be-red = a vacuous / under-constrained harness (the exact failure class the per-slice manual mutation checks caught by hand; this makes them a standing gate \u2014 work-todo \u00a734/\u00a735). Paths are relative to the repo root. Every entry uses `expect: kani_fails` (the load-bearing mutation must be caught); the `canary` doubles as the machinery-health check (if it survives, ALL results are void).",
   "mutations": [
     {
       "id": "canary",
@@ -98,7 +98,7 @@
       "find": "if count > MAX_ARRAY_RENDER {",
       "replace": "if false {",
       "expect": "kani_fails",
-      "note": "disable the dynamic-array element cap (step 7) -> a 9-element sole-tail body is accepted, so resolve_array_rejects_over_cap (expects Reject) MUST break. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding §2 #2 (the cap was UNREACHABLE in the symbolic panic-free harnesses at N=160/224 which admit only count<=2/4, so `count<=MAX_ARRAY_RENDER` there was vacuous; the concrete control at 384 B exercises it)."
+      "note": "disable the dynamic-array element cap (step 7) -> a 9-element sole-tail body is accepted, so resolve_array_rejects_over_cap (expects Reject) MUST break. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding \u00a72 #2 (the cap was UNREACHABLE in the symbolic panic-free harnesses at N=160/224 which admit only count<=2/4, so `count<=MAX_ARRAY_RENDER` there was vacuous; the concrete control at 384 B exercises it)."
     },
     {
       "id": "enum_label_key_match",
@@ -109,7 +109,7 @@
       "find": "u64::from_be_bytes(kb) == k",
       "replace": "true",
       "expect": "kani_fails",
-      "note": "make lookup_enum_label's per-entry key comparison always-true -> the first entry matches any (high-zero) value, so the returned label is entry 0's regardless of which key the value actually matches. enum_two_entry_value_sound (a value matching key1, not key0, must return label1) MUST break. Verified 2026-07-02 by hand: mutation -> enum_two_entry_value_sound (and enum_single_entry_value_sound) VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding §2 #3 (the single-entry harness only proved the match where first==correct; the multi-entry return-the-matching-entry property was unverified)."
+      "note": "make lookup_enum_label's per-entry key comparison always-true -> the first entry matches any (high-zero) value, so the returned label is entry 0's regardless of which key the value actually matches. enum_two_entry_value_sound (a value matching key1, not key0, must return label1) MUST break. Verified 2026-07-02 by hand: mutation -> enum_two_entry_value_sound (and enum_single_entry_value_sound) VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding \u00a72 #3 (the single-entry harness only proved the match where first==correct; the multi-entry return-the-matching-entry property was unverified)."
     },
     {
       "id": "rlp_used_underreport",
@@ -120,7 +120,7 @@
       "find": "Ok((Item::Bytes(&input[..1]), 1))",
       "replace": "Ok((Item::Bytes(&input[..1]), 0))",
       "expect": "kani_fails",
-      "note": "under-report the single-byte item's consumed count (used 1 -> 0) -> ListIter's `&self.rest[used..]` would re-read the same byte (a parse desync). The strengthened `assert_eq!(used, header_len + payload.len())` (header_len derived independently from the RLP prefix byte) MUST break; the old `used <= len` assert would have PASSED with used=0. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding §2 #10."
+      "note": "under-report the single-byte item's consumed count (used 1 -> 0) -> ListIter's `&self.rest[used..]` would re-read the same byte (a parse desync). The strengthened `assert_eq!(used, header_len + payload.len())` (header_len derived independently from the RLP prefix byte) MUST break; the old `used <= len` assert would have PASSED with used=0. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding \u00a72 #10."
     },
     {
       "id": "erc20_transferfrom_to_offset",
@@ -131,7 +131,7 @@
       "find": "let to = decode_address_word(&body[32..64])",
       "replace": "let to = decode_address_word(&body[0..32])",
       "expect": "kani_fails",
-      "note": "read transferFrom's `to` from word 0 (the `from` word) instead of word 1 -> the display would show the WRONG recipient for the approval-drain arm. parse_erc20_transfer_from_no_misdecode (decoded to == encoded to, forall) MUST break. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding §2 #9 (only `transfer` had a forall no-misdecode harness; approve/transferFrom rested on point-tests)."
+      "note": "read transferFrom's `to` from word 0 (the `from` word) instead of word 1 -> the display would show the WRONG recipient for the approval-drain arm. parse_erc20_transfer_from_no_misdecode (decoded to == encoded to, forall) MUST break. Verified 2026-07-02 by hand: mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding \u00a72 #9 (only `transfer` had a forall no-misdecode harness; approve/transferFrom rested on point-tests)."
     },
     {
       "id": "safe_mgmt_addr_word_offset",
@@ -230,7 +230,7 @@
       "find": "if gap >= MAX_OFFCHAIN_GAP {",
       "replace": "if false {",
       "expect": "kani_fails",
-      "note": "[work-todo §12e: off-chain counter sequence/interleave harness] Disable the MAX_OFFCHAIN_GAP gate in check_offchain_gate -> an accept can now be granted with gap >= 100, so offchain_gate_accept_is_sound's post-state gap bound (new_count - last_userop <= MAX_OFFCHAIN_GAP, i.e. gap+1) MUST break. Verified 2026-07-03 by hand (verify_mutations.sh): mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Guards the doc-baseline single-gate soundness proof (firmware-bounded-verification-sota-2026-06.md:81) against vacuity. `check_offchain_gate` is called in place by cmd_sign_offchain.rs so this is the shipped gate."
+      "note": "[work-todo \u00a712e: off-chain counter sequence/interleave harness] Disable the MAX_OFFCHAIN_GAP gate in check_offchain_gate -> an accept can now be granted with gap >= 100, so offchain_gate_accept_is_sound's post-state gap bound (new_count - last_userop <= MAX_OFFCHAIN_GAP, i.e. gap+1) MUST break. Verified 2026-07-03 by hand (verify_mutations.sh): mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Guards the doc-baseline single-gate soundness proof (firmware-bounded-verification-sota-2026-06.md:81) against vacuity. `check_offchain_gate` is called in place by cmd_sign_offchain.rs so this is the shipped gate."
     },
     {
       "id": "offchain_gate_cap_bypass",
@@ -241,7 +241,7 @@
       "find": "if userop_sigs.saturating_add(new_count) > MAX_SLOT_USES {",
       "replace": "if false {",
       "expect": "kani_fails",
-      "note": "[work-todo §12e] Disable the combined few-time-budget cap (userop_sigs + off-chain) in check_offchain_gate -> an accept can now push userop_sigs + new_count past MAX_SLOT_USES, so offchain_gate_accept_is_sound's combined-cap assertion MUST break. Verified 2026-07-03 by hand (verify_mutations.sh): mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. This is the MEDIUM-2 counter-replay cap (a withheld/reverted UserOp never bumps on-chain slotUses, so the device tallies its own Type-2 sigs); the harness now guards it non-vacuously."
+      "note": "[work-todo \u00a712e] Disable the combined few-time-budget cap (userop_sigs + off-chain) in check_offchain_gate -> an accept can now push userop_sigs + new_count past MAX_SLOT_USES, so offchain_gate_accept_is_sound's combined-cap assertion MUST break. Verified 2026-07-03 by hand (verify_mutations.sh): mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. This is the MEDIUM-2 counter-replay cap (a withheld/reverted UserOp never bumps on-chain slotUses, so the device tallies its own Type-2 sigs); the harness now guards it non-vacuously."
     },
     {
       "id": "offchain_distinct_slot_wedge",
@@ -252,7 +252,7 @@
       "find": "already_present || distinct_live < MAX_DISTINCT_SLOTS",
       "replace": "distinct_live < MAX_DISTINCT_SLOTS",
       "expect": "kani_fails",
-      "note": "[work-todo §12e: page-123 exhaustion brick, the found HIGH] Drop the already_present short-circuit from may_create_distinct_slot -> an EXISTING slot is now refused once distinct_live reaches the cap, i.e. a spray of distinct keys could wedge a live slot. distinct_slot_policy_graceful (asserts may_create_distinct_slot(any, true) is ALWAYS true) MUST break. Verified 2026-07-03 by hand (verify_mutations.sh): mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Pins the VULN-offchain-sync-page123-exhaustion-brick.md defence: at the cap, new-slot creation fails gracefully while existing slots keep signing."
+      "note": "[work-todo \u00a712e: page-123 exhaustion brick, the found HIGH] Drop the already_present short-circuit from may_create_distinct_slot -> an EXISTING slot is now refused once distinct_live reaches the cap, i.e. a spray of distinct keys could wedge a live slot. distinct_slot_policy_graceful (asserts may_create_distinct_slot(any, true) is ALWAYS true) MUST break. Verified 2026-07-03 by hand (verify_mutations.sh): mutation -> VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Pins the VULN-offchain-sync-page123-exhaustion-brick.md defence: at the cap, new-slot creation fails gracefully while existing slots keep signing."
     },
     {
       "id": "tok_array_idx_off_by_one",
@@ -341,6 +341,17 @@
       "replace": "write_hex_word(r2, &word[9..17]);",
       "expect": "kani_fails",
       "note": "raw-word hex row 2 drifts one byte (bytes 8..16 -> 9..17): a signed byte vanishes from the trusted display (the magnitude-hiding class). The forall exactness harness binds every row byte to an independent nibble table, so it MUST redden. Verified 2026-07-04 by hand: mutation -> VERIFICATION:- FAILED; reverted -> file restored (grep-confirmed)."
+    },
+    {
+      "id": "erc20_canonical_padding",
+      "tier": "default",
+      "crate": "pqsigner-tx",
+      "harness": "parse_erc20_only_accepts_canonical",
+      "file": "tx/src/erc20/calldata.rs",
+      "find": "word[0..12].iter().any(|&b| b != 0)",
+      "replace": "false",
+      "expect": "kani_fails",
+      "note": "Neuter the ERC-20 address-word zero-padding check. A non-canonical calldata (non-zero address high bytes) then decodes to a Transfer/Approve whose displayed recipient/spender differs from the signed bytes -> parse_erc20_only_accepts_canonical MUST turn red. If it SURVIVES, the show-one/sign-another canonicity proof is vacuous. (P1.2 signed-intent-to-display, 2026-07-16.)"
     }
   ]
 }

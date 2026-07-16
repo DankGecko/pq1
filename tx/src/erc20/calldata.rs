@@ -202,4 +202,61 @@ mod kani_harnesses {
             _ => panic!("a well-formed approve must decode to Approve"),
         }
     }
+
+    /// True iff `data` is EXACTLY the canonical ABI encoding of `call`:
+    /// `selector(4) ‖ left-zero-padded words`, with no trailing bytes and no
+    /// non-zero address padding. This is the encoder the decoder must be the
+    /// exact inverse of.
+    fn is_canonical(data: &[u8], call: &Erc20Call) -> bool {
+        fn word20(w: &[u8], a: &[u8; 20]) -> bool {
+            w.len() == 32 && w[0..12].iter().all(|&b| b == 0) && &w[12..32] == a
+        }
+        match *call {
+            Erc20Call::Transfer { to, amount } => {
+                data.len() == 68
+                    && data[0..4] == SELECTOR_TRANSFER
+                    && word20(&data[4..36], &to)
+                    && data[36..68] == amount.0
+            }
+            Erc20Call::TransferFrom { from, to, amount } => {
+                data.len() == 100
+                    && data[0..4] == SELECTOR_TRANSFER_FROM
+                    && word20(&data[4..36], &from)
+                    && word20(&data[36..68], &to)
+                    && data[68..100] == amount.0
+            }
+            Erc20Call::Approve { spender, amount } => {
+                data.len() == 68
+                    && data[0..4] == SELECTOR_APPROVE
+                    && word20(&data[4..36], &spender)
+                    && data[36..68] == amount.0
+            }
+        }
+    }
+
+    /// CANONICITY / show-one-sign-another (P1.2 the show⇒signed-bytes binding):
+    /// over ARBITRARY companion calldata (any length ≤ N, any bytes — trailing
+    /// bytes, non-zero address padding, wrong selector all in scope), IF the
+    /// decoder accepts and the display therefore renders a `transfer/transferFrom/
+    /// approve` with fields F, THEN the calldata is EXACTLY the canonical encoding
+    /// of F. So the bytes that get SIGNED (call_data_digest = sha256(callData))
+    /// are precisely the transfer the user was SHOWN — no alternate/trailing
+    /// encoding can be signed while a benign transfer is displayed. This is the
+    /// reverse of `*_no_misdecode` (which only covers well-formed input), and is
+    /// the property that actually forecloses show-one/sign-another via the decoder.
+    #[kani::proof]
+    #[kani::unwind(105)]
+    fn parse_erc20_only_accepts_canonical() {
+        const N: usize = 104; // transferFrom (100) + slack to expose trailing bytes
+        let buf: [u8; N] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= N);
+        let data = &buf[..len];
+        if let Some(call) = parse_erc20_calldata(data) {
+            assert!(
+                is_canonical(data, &call),
+                "decoder accepted NON-canonical calldata: the signed bytes differ from the shown transfer"
+            );
+        }
+    }
 }
