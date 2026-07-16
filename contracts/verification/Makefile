@@ -233,11 +233,18 @@ verify-interp: ## A3.1 interpreter<->bytecode KAT+bulk replay
 # solc source->deployed-bytecode leg is untouched, and the parser + its 2 normalization rules
 # (error-string mstore elision; return-var init) are themselves the TCB. See
 # docs/findings/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md + docs/A3_1_CLOSURE_PATH.md §8.
-verify-transcription: ## A3.1 c10Program <-> .sol transcription checks (positional + structural + source byte-pin)
+verify-transcription: ## A3.1 c10Program <-> .sol transcription checks (positional + structural + source byte-pin) + P1.7 digest field-order pin
 	@python3 scripts/check_c10_transcription.py
 	@python3 scripts/check_c10_transcription_ast.py
 	@python3 scripts/test_c10_transcription_ast_negative.py
 	@python3 scripts/check_c10_source_pin.py
+	@# P1.7 (2026-07-16): the digest the FIRMWARE signs (compute_sphincs_digest_v06)
+	@# and the digest the wallet RECOMPUTES on-chain (sphincsDigest) must list the
+	@# same 12 preimage fields in the same order — a source-level pin a regenerated
+	@# vector can't see (self-test asserts a reorder/drop fires). See
+	@# docs/verification/fv-pilot-signed-digest-correspondence-2026-07-16.md.
+	@python3 scripts/check_sphincs_digest_field_order.py --self-test
+	@python3 scripts/check_sphincs_digest_field_order.py
 
 # A3.1 R1a IN-KERNEL parser leg (2026-07-04). Lake-builds the Lean Yul-subset
 # parser (Interpreter/YulParse.lean), the pinned byte-exact source + faithful
