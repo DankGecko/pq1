@@ -2,17 +2,24 @@
 # Leaf lemmas first — once committed, they become premises for later goals.
 # (Modules not listed here are NOT touched by `leanloop run --manifest`.)
 
-[[goal]]
-module  = "Extracted.Bits"
-name    = "lor_eq_add_disjoint"
-context = """The load-bearing fact for the read_bits_le accumulator invariant
-(CWE-347 closure roadmap in ForsExtractWIP.lean). Known-true Nat fact:
-disjoint-OR equals ADD. Hand attempts (2026-06-10) found: the disjointness step
-`val &&& (x <<< 8*b) = 0` proves easily via Nat.eq_of_testBit_eq +
-Nat.testBit_shiftLeft + Nat.testBit_lt_two_pow; the missing piece is the bridge
-`a &&& b = 0 -> a ||| b = a + b` (exact?/omega/grind all failed — find the
-Mathlib lemma, e.g. around Nat.distrib/Nat.add of disjoint bits, or prove the
-bridge from scratch via testBit + Nat.add carry-freeness)."""
+# DONE 2026-06 (refreshed status 2026-07-16, FV review F8): this goal is CLOSED.
+# `Extracted.Bits.lor_eq_add_disjoint` has a complete kernel proof
+# (extracted/Extracted/Bits.lean:16-38, no sorry/admit) and is a passing headline
+# in the `make verify-extracted` per-headline axiom gate
+# (extracted/axiom_closure_manifest.txt). The manifest previously listed it as
+# the SOLE active open goal, which was stale — LeanLoop `run --manifest` would
+# have re-queued an already-proven target. Left here (commented) as provenance;
+# add a genuinely-open target below when one exists.
+#
+# [[goal]]
+# module  = "Extracted.Bits"
+# name    = "lor_eq_add_disjoint"
+# context = """The load-bearing fact for the read_bits_le accumulator invariant
+# (CWE-347 closure roadmap in ForsExtractWIP.lean). Known-true Nat fact:
+# disjoint-OR equals ADD. Hand attempts (2026-06-10) found: the disjointness step
+# `val &&& (x <<< 8*b) = 0` proves easily via Nat.eq_of_testBit_eq +
+# Nat.testBit_shiftLeft + Nat.testBit_lt_two_pow; the missing piece is the bridge
+# `a &&& b = 0 -> a ||| b = a + b`."""
 
 # NOW-phase queue (docs/verification/verification-targets-2026-06.md; uncomment as each goal
 # file is created — see each target's "first step"):
@@ -24,9 +31,12 @@ bridge from scratch via testBit + Nat.add carry-freeness)."""
 # rank 4 DONE 2026-06-12 (WotsDigits.lean): extract_digits_spec + extract_digits_lt
 #   (kernel-clean, default target). Independent extractor = same window as rank 1.
 # ranks 5-12 ALL DONE 2026-06-12 — THE 12-RANK CATALOG IS COMPLETE. Every
-#   module in the default sorry-free target + AxiomCheck; content axioms are
-#   exactly the declared hash boundaries (keccak256/sha256/th_pair/th_multi/
-#   chain_hash/wots_digest _pure); ranks 4,7,8,9,10,12 fully kernel-clean.
+#   module in the default sorry-free target + AxiomCheck. Content axioms are
+#   now EXACTLY three (refreshed 2026-07-16, FV review F8): keccak256_pure,
+#   sha256_pure_bytes, hmac_sha512_pure_bytes. The th_pair/th_multi/chain_hash/
+#   wots_digest/th/leaf/node `_pure` names named in the original note are NO
+#   LONGER axioms — HashPure.lean collapsed all of them into DEFs over
+#   sha256_pure. Ranks 4,7,8,9,10,12 fully kernel-clean.
 #
 # [[goal]]
 # module  = "Extracted.SpecBridgeFors"  # rank 2: vendored-bridge for ht_idx

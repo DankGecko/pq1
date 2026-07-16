@@ -5,6 +5,18 @@
 
 ## Summary
 
+> **⚠ Caveat (FV review F10, 2026-07-16): LeanLoop `vet`'s RED verdict is not yet
+> citable as assurance.** `vet` currently misclassifies a *failing* Lean process
+> with unsolved goals into the RED `NEGATION PROVED` bucket instead of
+> `ERROR/UNRESOLVED` — so an invalid adversarial spec-check can read as strong
+> negative evidence. Correct behaviour is RED only after a **zero Lean exit AND
+> named-declaration kernel acceptance**. Until the external `spec_vet.py` fix plus
+> end-to-end negative regressions land (work-todo FV15-F10), treat every `vet` /
+> `NEGATION PROVED` mention below as a **design reference, not a delivered
+> assurance verdict**. PQSigner's own non-vacuity gate does NOT rest on `vet`'s
+> output — it is the hand-witness `verify-ledger-consistency` C9 gate, which is
+> kernel-checked (see `fv-adversarial-review-playbook.md` §B).
+
 As of June 2026, the verified state of the art in spec assurance rests on two pillars that transfer directly to LeanLoop. First, the model-checking sanity-check literature (Kupferman–Vardi vacuity, coverage, and their proven duality) provides the formal foundation and strong empirical yield data (IBM: ~20% of specs pass vacuously on first runs, every vacuous pass a real problem) for LeanLoop's existing `vet` probes, and the 2025 Amazon FMCAD result shows the same coverage notion now runs in deductive verification via SMT unsat cores. Second, "mutate the implementation, expect the proof to fail" is mature, quantified prior art: mCoq (Coq, ICSE/ASE 2019-20) defines the exact live/killed proof-break scoring semantics with measured yield (92.37% average mutation score on mature libraries; ~85% of triaged surviving mutants were real spec gaps, ~15% equivalent mutants), and MutDafny (2025/26) replicates the rule for auto-active verification with a replicable 40-operator selection methodology mined from real bugfix commits. For LeanLoop's `mutate` command, cargo-mutants is verified as usable as a mutant generator (--list --json with diffs) and its four-outcome taxonomy maps cleanly onto proof-break scoring, but its kill criterion is hard-wired to `cargo test`, and its operator set lacks constant-tweaking mutations (e.g., domain-separator bytes) that matter most for crypto code — so LeanLoop must own the apply-and-judge loop and add custom operators. Research questions 3-5 (differential/KAT testing mechanics, LLM spec generation/critique including the Verification Facade taxonomy, and high-assurance project practice) produced no claims surviving adversarial verification and require a follow-up research pass before those roadmap items are designed.
 
 ## Verified findings

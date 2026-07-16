@@ -70,7 +70,7 @@
 
 ### Protocol layer (decompose to the layer that owns each property)
 - **XOR split-secrecy (invariant #1) → a Lean information-theoretic lemma, NOT a symbolic model.** Computationally-sound Dolev-Yao XOR is **provably impossible** (Unruh, eprint 2010/389) — a symbolic verdict there would be *unsound*. Each half is marginally uniform iff the mask is uniform+independent: a trivial counting lemma in Lean, the layer you own.
-- **FW-update domain separation → a Lean prefix-disjointness/injectivity lemma** over the fixed 75-B `PQFW_V1‖…` tag (needs only the tag prefix, not hash properties — SHA stays opaque). Same "decide it where it lives" logic as the on-device keccak-nesting fix.
+- **(legacy/nonshipping — PQFW_V1 bench preimage only) FW-update domain separation → a Lean prefix-disjointness/injectivity lemma** over the fixed 75-B `PQFW_V1‖…` tag (needs only the tag prefix, not hash properties — SHA stays opaque). Same "decide it where it lives" logic as the on-device keccak-nesting fix.
 - **Reserve Tamarin/ProVerif** for the tunnel/ordering/provisioning protocol only (PQ-relevant *by abstraction* as long as no algebraic equation is added — transfer-by-assumption, not a PQ theorem). CryptoVerif/PQ-Squirrel = overkill; they re-prove the protocol, never touch the Rust/Yul, and don't close A5.
 
 ---

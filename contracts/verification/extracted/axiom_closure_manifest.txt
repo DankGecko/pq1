@@ -1,0 +1,94 @@
+# EXACT per-headline axiom allowlist for the §33 Aeneas-extracted gate (F3, 2026-07-16).
+#
+# `make verify-extracted` runs `#print axioms` on every headline in
+# Extracted/AxiomCheck.lean and drives the dump through
+#   scripts/check_axiom_closure.py --manifest <this file> <dump>
+# which FAILS if:
+#   * any headline in the dump is NOT listed here (an unlisted/rogue theorem, or
+#     one that acquired a new axiom dependency — the old `grep sorryAx` was blind
+#     to a consumed `axiom Evil : False`);
+#   * any listed headline is MISSING from the dump (silently dropped from the
+#     audit file, or the dump was truncated by an elaboration error); or
+#   * any headline's live closure carries an axiom outside {kernel triple} ∪ its
+#     listed extras.
+#
+# The kernel triple {propext, Classical.choice, Quot.sound} is IMPLICIT on every
+# line. Extra content axioms (the disclosed hash-boundary postulates) are named
+# after the theorem, space-separated, order-insensitive:
+#   keccak256_pure            aa/userop keccak (UserOp/FunsExternal.lean:14)
+#   sha256_pure_bytes         slot KDF single-shot SHA-256 (SlotKdf/FunsExternal.lean:27)
+#   hmac_sha512_pure_bytes    bip39 seed HMAC-SHA512 (SlotKdf/FunsExternal.lean:41)
+# `sha256_pure` is a COMPUTABLE def (kernel-only closure), not an axiom.
+#
+# Regenerate/verify against a fresh dump with the same 4-bucket structure:
+#   57 kernel-only + 4 sha256_pure_bytes + 1 (sha256_pure_bytes+hmac_sha512_pure_bytes)
+#   + 4 keccak256_pure = 66 headlines.
+# The 3 ~42 GB FormatDecimalSpec.* heavies (verify-extracted-heavy) are gated
+# separately with a kernel-only allowlist.
+#
+Extracted.Equiv.slot_entropy_hashes_canonical_preimage  sha256_pure_bytes
+Extracted.Equiv.derive_c10_slot_seeds_byte_layout  sha256_pure_bytes
+Extracted.Equiv.slot_master_byte_layout  sha256_pure_bytes
+Extracted.Equiv.derive_c10_master_byte_layout  hmac_sha512_pure_bytes sha256_pure_bytes
+Extracted.Equiv.slotEntropyPreimage_chain_inj
+Extracted.Equiv.slotEntropyPreimage_slot_inj
+Extracted.Equiv.slot_entropy_crosschain_reduction  sha256_pure_bytes
+Div10Spec.div10_inplace_spec
+ExtractDigitsSpec.extract_digits_spec
+ExtractDigitsSpec.extract_digits_loop_spec
+ExtractDigitsSpec.is_zero_spec
+RoundCarrySpec.round_carry_spec
+RoundCarrySpec.round_carry_loop_spec
+RoundCarrySpec.decValue_set
+TrimFracSpec.trim_frac_spec
+TrimFracSpec.trim_frac_loop_spec
+EmitSpec.emit_spec
+EmitSpec.emit_int_loop_spec
+EmitSpec.emit_frac_loop_spec
+EmitSpec.fmt_emit_loop0_eq_loop2
+EmitSpec.emitBytes_length
+EmitSpec.emitBytes_ascii
+EmitSpec.emitBytes_dot_iff
+EmitSpec.emitBytes_head_digit
+EmitSpec.emitBytes_no_leading_zero
+Extracted.Equiv.deserialize_pin_state_rejects_bad_len
+Extracted.Equiv.make_adrs_spec
+Extracted.Equiv.set_chain_index_spec
+Extracted.Equiv.compute_user_op_hash_terminates  keccak256_pure
+Extracted.Equiv.compute_user_op_hash_spec  keccak256_pure
+Extracted.Equiv.firmware_make_adrs_matches_vendored
+Extracted.Equiv.next_usize_spec
+Extracted.Equiv.read_bits_le_loop_terminates
+Extracted.Equiv.extract_ht_index_terminates
+Extracted.Equiv.extract_fors_indices_terminates
+Extracted.Equiv.extract_ht_index_in_range
+Extracted.Equiv.extract_fors_indices_in_range
+Extracted.Equiv.lor_eq_add_disjoint
+Extracted.Equiv.read_bits_le_spec
+Extracted.Equiv.extract_ht_index_spec
+Extracted.Equiv.extract_fors_indices_spec
+Extracted.Equiv.domain_separator_spec  keccak256_pure
+Extracted.Equiv.replay_safe_hash_spec  keccak256_pure
+Extracted.Equiv.extract_digits_spec
+Extracted.Equiv.extract_digits_lt
+Extracted.Equiv.signed_preimage_spec
+Extracted.Equiv.preimage_layout_injective
+Extracted.Equiv.layout_domain_tag_prefix
+Extracted.Equiv.signed_preimage_authorizes_one_firmware
+Extracted.Equiv.roundtrip_11_id
+Extracted.Equiv.beValue_lt
+Extracted.Equiv.bytes_to_u64_spec
+Extracted.Equiv.bytes_to_u256_spec
+Extracted.Equiv.saturating_mul_u64_spec
+Extracted.Equiv.verify_auth_path_spec
+Extracted.Equiv.verify_proof_spec
+Extracted.Equiv.decode_length_be_spec
+Extracted.Equiv.decode_item_spec
+Extracted.Equiv.pk_from_sig_spec
+sha256_pure
+sphincs_c10.hash.truncate_spec
+sphincs_c10.hash.th_spec
+sphincs_c10.hash.th_pair_spec
+sphincs_c10.hash.wots_digest_spec
+sphincs_c10.hash.th_multi_spec
+sphincs_c10.hash.chain_hash_spec

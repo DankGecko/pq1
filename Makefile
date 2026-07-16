@@ -3970,6 +3970,18 @@ verify-kani-mutation: ## anti-vacuity: break a decoder, expect a Kani harness to
 	@command -v cargo-kani >/dev/null 2>&1 || { echo "ERROR: cargo-kani not found. Install: cargo install --locked kani-verifier && cargo kani setup"; exit 1; }
 	python3 scripts/check_kani_mutations.py
 
+# F11 (2026-07-16) — SOURCE-GENERATED Kani harness census. The published counts
+# (148 harnesses / 25 files; 8 harnesses in 6 files with no mutation coverage)
+# were hand-maintained prose that drifted (gate_enforcement.json said 93/17).
+# kani_mutations.json is only the load-bearing MUTATION manifest — it can't encode
+# the full census. This regenerates the census from git-tracked sources (counting
+# #[kani::proof]), derives the mutation-enrolled/outside split, cross-checks the
+# manifest for rot, and diffs vs scripts/kani_census.lock.json. Pure Python (NO
+# cargo kani) → fast per-PR gate, unlike verify-kani-mutation (slow nightly).
+.PHONY: verify-kani-census
+verify-kani-census: ## source-generated Kani harness census vs kani_census.lock.json (fast, no Kani toolchain)
+	@python3 scripts/kani_census.py --check
+
 miri: ## Miri UB check on host crates
 	@rustup component list --toolchain nightly --installed 2>/dev/null | grep -q '^miri' || rustup component add miri --toolchain nightly
 	@echo "==> Miri: FI volatile helpers"
@@ -4123,11 +4135,21 @@ tamarin: ## Tamarin symbolic protocol-model verification
 .PHONY: cryptoverif
 cryptoverif: ## CryptoVerif computational protocol proof
 	@echo "==> CryptoVerif: dual-SE XOR seed-split secrecy (computational; OTP advantage 0 ⇒ quantum-sound)"
+	@# F7 (2026-07-16): the default library lives at `libexec/default` on a nix
+	@# install but `bin/default` on an opam switch — probe BOTH documented
+	@# layouts (plus `lib/cryptoverif`) instead of hard-coding one, and PROPAGATE
+	@# cryptoverif's exit code (the old `| grep` masked it) so verify-protocol-
+	@# models sees a failed run as a failure, not a silent skip.
 	@if command -v cryptoverif >/dev/null 2>&1; then \
 	  p=$$(dirname $$(dirname $$(readlink -f $$(command -v cryptoverif)))); \
-	  cryptoverif -lib $$p/libexec/default contracts/verification/cryptoverif/seed_split_secrecy.cv | grep -E 'RESULT|proved'; \
+	  lib=""; for cand in $$p/libexec/default $$p/bin/default $$p/lib/cryptoverif/default; do \
+	    if [ -f "$$cand.cvl" ]; then lib="$$cand"; break; fi; done; \
+	  if [ -z "$$lib" ]; then echo "ERROR: no default.cvl under $$p (tried libexec/, bin/, lib/cryptoverif/)"; exit 1; fi; \
+	  out=$$(cryptoverif -lib "$$lib" contracts/verification/cryptoverif/seed_split_secrecy.cv 2>&1); rc=$$?; \
+	  echo "$$out" | grep -E 'RESULT|proved'; \
+	  if [ $$rc -ne 0 ]; then echo "ERROR: cryptoverif exited $$rc"; exit $$rc; fi; \
 	elif command -v nix-shell >/dev/null 2>&1; then \
-	  nix-shell -p cryptoverif --run 'p=$$(dirname $$(dirname $$(readlink -f $$(command -v cryptoverif)))); cryptoverif -lib $$p/libexec/default contracts/verification/cryptoverif/seed_split_secrecy.cv' | grep -E 'RESULT|proved'; \
+	  nix-shell -p cryptoverif --run 'p=$$(dirname $$(dirname $$(readlink -f $$(command -v cryptoverif)))); for cand in $$p/libexec/default $$p/bin/default; do [ -f "$$cand.cvl" ] && lib="$$cand" && break; done; cryptoverif -lib "$$lib" contracts/verification/cryptoverif/seed_split_secrecy.cv' | grep -E 'RESULT|proved'; \
 	else echo "ERROR: cryptoverif not found (try: nix-shell -p cryptoverif, or opam install cryptoverif)"; exit 1; fi
 
 # Protocol-model regression GATE — the third anti-vacuity sibling of

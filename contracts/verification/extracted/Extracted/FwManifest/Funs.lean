@@ -16,14 +16,14 @@ set_option maxRecDepth 2048
 namespace fw_manifest
 
 /-- [fw_manifest::DOMAIN_TAG]
-    Source: 'fw-manifest/src/lib.rs', lines 111:0-111:44
+    Source: 'fw-manifest/src/lib.rs', lines 127:0-127:44
     Visibility: public -/
 @[global_simps, irreducible]
 def DOMAIN_TAG : Array Std.U8 7#usize :=
   Array.make 7#usize [ 80#u8, 81#u8, 70#u8, 87#u8, 95#u8, 86#u8, 49#u8 ]
 
 /-- [fw_manifest::signed_preimage]:
-    Source: 'fw-manifest/src/lib.rs', lines 187:0-201:1
+    Source: 'fw-manifest/src/lib.rs', lines 203:0-217:1
     Visibility: public -/
 def signed_preimage
   (fw_version : Std.U32) (secure_hash : Array Std.U8 32#usize)

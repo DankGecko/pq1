@@ -20,7 +20,7 @@ namespace sphincs_tz_bip39
 @[global_simps, irreducible] def BITS_PER_WORD : Std.Usize := 11#usize
 
 /-- [sphincs_tz_bip39::read_11_bits]:
-    Source: 'bip39/src/lib.rs', lines 126:0-141:1 -/
+    Source: 'bip39/src/lib.rs', lines 150:0-165:1 -/
 def read_11_bits (buf : Slice Std.U8) (bit : Std.Usize) : Result Std.U16 := do
   let byte ← bit / 8#usize
   let shift ← bit % 8#usize

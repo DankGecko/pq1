@@ -127,3 +127,11 @@ jobs:
       # execute the extracted Lean vs the executed-Rust oracle (signed_preimage + vectors).
       - name: verify-extract-differential
         run: make -C contracts/verification verify-extract-differential
+
+      # F1 (2026-07-16) — TOOLCHAIN-FREE freshness tripwire. The extract-* regen
+      # targets need the charon/aeneas toolchain (absent on this runner), so this
+      # pins sha256(committed Lean)+sha256(mirrored Rust) and FAILS if Rust drifted
+      # without a re-extraction. Pure Python, no toolchain. The heavy toolchain
+      # regen (`make verify-extraction-regen`) stays LOCAL (see gate_enforcement.json).
+      - name: verify-extraction-freshness (F1 sha256 tripwire)
+        run: make -C contracts/verification verify-extraction-freshness

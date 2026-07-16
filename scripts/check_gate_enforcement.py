@@ -324,25 +324,32 @@ def main() -> int:
         print("=== --self-test (negative controls) ===")
         broken_allow = {"id": "verify-ledger-consistency", "make": "x", "enforcement": "per_pr_blocking",
                         "runs_in": "lean-fv.yml", "polices_paths": ["totally/unpoliced/surface/**"]}
-        # A gate whose policed path is EXCLUDED by a real paths-ignore filter (ci.yml
-        # ignores contracts/verification/**) must be caught by the denylist F1 check.
-        broken_ignore = {"id": "miri", "make": "x", "enforcement": "per_pr_blocking",
-                         "runs_in": "ci.yml", "polices_paths": ["contracts/verification/lean/**"]}
         fa = check_gate(broken_allow)
-        fi = check_gate(broken_ignore)
         if not fa:
             print("  SELF-TEST FAILED: uncovered-allowlist gate NOT caught — harness void.", file=sys.stderr)
             return 2
-        if not any("paths-ignore" in m for m in fi):
-            print("  SELF-TEST FAILED: paths-ignore-excluded gate NOT caught — harness void.", file=sys.stderr)
+        # The paths-ignore (denylist F1) branch is tested DIRECTLY against `_ignored`
+        # rather than through a real workflow's `paths-ignore:` filter. CI trigger
+        # configs are refactored over time — ci.yml intentionally DROPPED all
+        # paths-ignore filters (2026-07), which silently voided the old
+        # workflow-coupled control here. A self-test that stops exercising a branch
+        # when an unrelated workflow changes is itself the vacuity this gate exists
+        # to prevent (incidental fix during the 2026-07-15 FV review sweep).
+        if not _ignored(["contracts/verification/**"], "contracts/verification/lean/Foo.lean"):
+            print("  SELF-TEST FAILED: a directory-prefix paths-ignore glob did NOT exclude a policed "
+                  "sub-path — the denylist F1 check is void.", file=sys.stderr)
+            return 2
+        if _ignored(["docs/**"], "contracts/verification/lean/Foo.lean"):
+            print("  SELF-TEST FAILED: an unrelated paths-ignore glob WRONGLY excluded a policed path "
+                  "(_ignored over-fires).", file=sys.stderr)
             return 2
         # 3rd control: an uncovered crate `make kani` runs must be caught by the reverse-check.
         rc = kani_makefile_coverage(["tx/src/**"], ["pqsigner-domain"], {"pqsigner-domain": "domain"})
         if not rc:
             print("  SELF-TEST FAILED: uncovered kani-Makefile crate NOT caught — harness void.", file=sys.stderr)
             return 2
-        print(f"  self-test OK: allowlist gap caught ({len(fa)}), paths-ignore gap caught ({len(fi)}), "
-              f"kani-reverse gap caught ({len(rc)}).")
+        print(f"  self-test OK: allowlist gap caught ({len(fa)}), paths-ignore denylist logic verified "
+              f"(directly), kani-reverse gap caught ({len(rc)}).")
         return 0
 
     print(f"=== verify-gate-enforcement ({len(gates)} gates) ===")

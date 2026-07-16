@@ -59,7 +59,10 @@ section below, do not ship it.
 > symbolic inputs — including a genuinely ∀-quantified owner index on every
 > money-moving path. The same four control-flow bridges are now **independently
 > re-discharged transcription-free by Kontrol/KEVM** — proven directly on the
-> deployed bytecode with no hand-written model mirror (30 KEVM proofs; see #2).**
+> deployed bytecode with no hand-written model mirror (30 KEVM proofs; see #2).** —
+> "transcription-free" = no LeanModel.sol mirror; each proof still uses the concrete
+> valid wrapper + concrete owner role scoped in KONTROL_SCOPING.md (symbolic dynamic
+> calldata unsupported), so this is not uniform generality.
 
 Specifically and defensibly:
 
@@ -153,7 +156,10 @@ forms**: (a) a Halmos+z3 session — the fast **local/manual** gate (NOT CI-run;
 bytecode drift is caught by the codehash-freeze test, which forces a re-pin) — whose harness↔property
 correspondence AND the `LeanModel.sol`↔Lean-file **transcription** are in the
 TCB; and (b) a transcription-free **Kontrol/KEVM** session that proves the
-property directly against the bytecode with **no `LeanModel.sol` mirror**, so the
+property directly against the bytecode with **no `LeanModel.sol` mirror** (here
+"transcription-free" = no LeanModel.sol mirror; each proof still uses the concrete
+valid wrapper + concrete owner role scoped in KONTROL_SCOPING.md — symbolic dynamic
+calldata unsupported — so this is not uniform generality), so the
 transcription element drops out and the residual is KEVM-soundness (the canonical
 EVM semantics) + the Kontrol session. The two engines agree, so the
 hand-transcription is no longer a load-bearing trust assumption for the

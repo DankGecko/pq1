@@ -566,8 +566,8 @@ The EIP-712 `GPv2Order` is verified in S-world (`secure/src/tx/eip712/cowswap/`)
 
 The raw32 UserOp-forgery (CRITICAL) is fixed by on-device `replay_safe_hash` nesting for kind=0/2
 (`project_offchain_raw32_userop_forgery`). **Test:** request RAW32 over `sphincsDigest(drainOp)` and
-confirm the firmware nests it (so the signed value is structurally disjoint from any on-chain
-`sphincsDigest`) and shows a loud blind page. Also retest the `account_deployed` FI-OOB fix
+confirm the firmware nests it (so the signed value is computationally separated from any on-chain
+`sphincsDigest` (cross-hash separation, `∨ BreaksHash`)) and shows a loud blind page. Also retest the `account_deployed` FI-OOB fix
 (`project_offchain_account_deployed_fi_oob`): glitch the deployed/counterfactual size selector and
 confirm no OOB write across the NS/secure SRAM boundary.
 

@@ -161,7 +161,13 @@ veneers/MMIO; only Kani/Miri/Verus/MIRAI reach `unsafe` at all.
 - **Already has spec assurance**: `leanloop vet` (CEX/HYP/NEG probes), `leanloop mutate`
   (mCoq-style spec-strength), and **`leanloop kat`** (grounds the executable Lean spec
   byte-for-byte against official NIST SLH-DSA/SPHINCS+ vectors) — covering all four spec-error
-  classes (false/vacuous/weak/wrong-property).
+  classes (false/vacuous/weak/wrong-property). **⚠ Caveat (FV review F10, 2026-07-16): the
+  `vet` NEG probe's RED verdict is NOT yet citable as assurance** — it misclassifies a failing
+  Lean run with unsolved goals as `NEGATION PROVED` instead of `ERROR/UNRESOLVED` (RED must
+  require a zero Lean exit + named-declaration kernel acceptance). Until the external
+  `spec_vet.py` fix + negative regressions land (work-todo FV15-F10), read `vet` as a design
+  reference, not a delivered verdict; PQSigner's shipped non-vacuity gate is the kernel-checked
+  `verify-ledger-consistency` C9 hand-witness gate, which does not rest on `vet`.
 - **Free frontier** via interactive Claude Code (`queue` backend + `/leanloop-frontier`).
 
 **Remaining adoptable** (LeanLoop's own roadmap, with concrete prior art to implement from):
@@ -254,7 +260,7 @@ Priority (skeptic's ranking):
    ProVerif+Tamarin; **CryptoVerif** (now PQ-sound) / **PQ-Squirrel** for computational
    seed-split guarantees if you want quantum-soundness, not just symbolic.
 
-The FW-update signature chain (75-B `PQFW_V1‖…` preimage) is a near-trivial authenticity lemma —
+The legacy/nonshipping FW-update signature chain (75-B PQFW_V1 bench preimage) is a near-trivial authenticity lemma —
 a warm-up, low value relative to the lockstep/channel work.
 
 ---

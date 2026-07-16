@@ -1,8 +1,9 @@
 /- §33 P2 — full byte-layout equivalence for `compute_user_op_hash`,
-   PROVEN 2026-06-10. This is the FIRMWARE SIDE of the firmware↔chain
-   binding (§33 goal theorem 1): the firmware's userOpHash equals the
-   EntryPoint v0.6 double-keccak over the exact abi.encode preimage, for
-   ALL inputs.
+   PROVEN 2026-06-10. This is a TOOLING-ONLY byte-layout theorem for the
+   EntryPoint v0.6 double-keccak userOpHash. It is NOT the firmware-signed
+   digest: the secure handler signs compute_sphincs_digest_v06 (SHA-256,
+   recomputed on-chain in PQSmartWallet.sol); compute_user_op_hash has no
+   non-test signing-path caller. See THE_CLAIM.md correction (1).
 
    keccak-256 is the single uninterpreted axiom (`keccak256_pure`, the
    FunsExternal model mirroring AXIOM_STATUS A1). Axiom closure of

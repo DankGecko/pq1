@@ -79,6 +79,64 @@ from pathlib import Path
 
 KERNEL = {"propext", "Classical.choice", "Quot.sound"}
 
+# --------------------------------------------------------------------------- #
+# MANDATORY REGISTRY (F8, 2026-07-16, closes the deletion-tolerance vacuity).
+#
+# Every other check in this gate iterates a DECLARED collection, so deleting a
+# whole collection (e.g. all of `closures`, or the entire `axioms` array with a
+# zeroed `summary`) makes the per-entry loops run zero times and PASS silently.
+# These IDs are hard-coded HERE — deliberately NOT derived from the ledger, so an
+# edit that deletes a ledger entry cannot also delete its floor in one stroke —
+# and asserted present, so a deletion is a hard failure. Mirrors the hard-coded
+# KERNEL set + the THEFT_EXPECTED pin cross-check (C2).
+HEADLINE_THEOREM = "SphincsCVerify.Spec.Theorems.theft_free"
+MANDATORY_CLOSURES = {
+    "SphincsCVerify.Spec.Theorems.theft_free",                       # flagship
+    "SphincsCVerify.Spec.Theorems.theft_free_bytecode",
+    "SphincsCVerify.Spec.Theorems.theft_free_bytecode_reachable",
+    "SphincsCVerify.Spec.Theorems.theft_free_with_calldata_binding",
+    "SphincsCVerify.Spec.Theorems.factory_squat_defence_bytecode",
+    "SphincsCVerify.Wallet.Invariants.reachable_implies_combinedCap",
+    "SphincsCVerify.Wallet.OffchainBinding.offchain_nested_disjoint_from_userop_digest",
+}
+MANDATORY_SIGNATURE_PINS = {
+    "SphincsCVerify.Spec.Theorems.theft_free",
+    "SphincsCVerify.Spec.Theorems.theft_free_bytecode",
+    "SphincsCVerify.Spec.Theorems.theft_free_bytecode_reachable",
+    "SphincsCVerify.Spec.Theorems.factory_squat_defence_bytecode",
+    "SphincsCVerify.Wallet.Invariants.reachable_implies_combinedCap",
+}
+MANDATORY_WITNESSES = {
+    "SphincsCVerify.Wallet.Invariants.combinedCapInvariant_empty",
+    "SphincsCVerify.Wallet.Invariants.combinedCapInvariant_initialised",
+    "SphincsCVerify.Interpreter.C10.H_adrs_dischargeable",
+    "SphincsCVerify.Interpreter.C10.H_sib_dischargeable",
+    "SphincsCVerify.Wallet.CreditLedger.execute_step_satisfiable",
+}
+MANDATORY_COROLLARIES = {
+    "SphincsCVerify.Spec.Theorems.theft_free_with_calldata_binding",
+    "SphincsCVerify.Spec.Theorems.executeBatch_faithful",
+    "SphincsCVerify.Wallet.Invariants.initialize_called_exactly_once",
+    "SphincsCVerify.Wallet.Invariants.owner_set_nonempty_after_init",
+    "SphincsCVerify.Wallet.Invariants.cannot_remove_bootstrap",
+    "SphincsCVerify.Wallet.Invariants.create2_address_chain_independent",
+    "SphincsCVerify.Wallet.Invariants.factory_requires_bootstrap_sig",
+    "SphincsCVerify.Wallet.Invariants.eip1271_forbids_bootstrap",
+}
+# The flagship `theft_free` trust base (A1..A5, non-kernel). Deleting any of
+# these from `axioms[]` silently shrinks the advertised assumption set.
+MANDATORY_AXIOM_NAMES = {
+    "SphincsCVerify.Bridge.EntryPoint.entrypoint_honest",              # A2
+    "SphincsCVerify.Bridge.solidityVerifier_compiles_correctly",       # A3.1
+    "SphincsCVerify.Bridge.precompile_0x02_is_FIPS_180_4",             # A1
+    "SphincsCVerify.Bridge.evm_bytecode_executes_correctly",           # A4
+    "SphincsCVerify.Crypto.EUF_CMA_SPHINCSplusC",                      # A5
+    "SphincsCVerify.Crypto.ITSR_F",                                    # A5
+    "SphincsCVerify.Crypto.SM_DT_TCR_F",                               # A5
+    "SphincsCVerify.Crypto.hMsg_random_oracle",                        # A5
+}
+MANDATORY_COLLECTIONS = ["closures", "signature_pins", "witness_coverage", "axioms", "claim_corollaries"]
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 VERIF_DIR = SCRIPT_DIR.parent
 LEAN_DIR = VERIF_DIR / "lean"
@@ -361,6 +419,51 @@ def check_witness_coverage(ledger: dict, live: dict[str, set[str]]) -> list[str]
 
 
 # --------------------------------------------------------------------------- #
+# C0 — MANDATORY REGISTRY (F8): deletion-tolerance guard.
+# --------------------------------------------------------------------------- #
+def check_mandatory_registry(ledger: dict) -> list[str]:
+    """C0 — every mandatory collection is non-empty AND every hard-coded floor ID
+    (flagship + bytecode/reachability chain closures, signature pins, non-vacuity
+    witnesses, claim corollaries, and the flagship A1..A5 axiom names) is present.
+    Closes the deletion-tolerance vacuity: deleting a whole `closures`/`axioms`/…
+    collection (which makes every per-entry loop pass zero times) now fails here,
+    as does silently pruning a single load-bearing ID."""
+    fails = []
+    for key in MANDATORY_COLLECTIONS:
+        col = ledger.get(key)
+        if not col:
+            fails.append(f"C0 mandatory collection `{key}` is EMPTY or ABSENT — a whole evidence "
+                         f"collection was deleted; the per-entry checks would pass vacuously.")
+    if ledger.get("headline_theorem") != HEADLINE_THEOREM:
+        fails.append(f"C0 headline_theorem = {ledger.get('headline_theorem')!r}, expected "
+                     f"{HEADLINE_THEOREM!r} (the flagship was renamed or removed).")
+    closures = ledger.get("closures", {})
+    for t in sorted(MANDATORY_CLOSURES):
+        if t not in closures:
+            fails.append(f"C0 mandatory closure `{t}` absent from `closures` (deleted?).")
+    pins = ledger.get("signature_pins", {})
+    for t in sorted(MANDATORY_SIGNATURE_PINS):
+        if t not in pins:
+            fails.append(f"C0 mandatory signature_pin `{t}` absent from `signature_pins` (deleted?).")
+    witnesses = {e.get("witness") for e in ledger.get("witness_coverage", [])}
+    for w in sorted(MANDATORY_WITNESSES):
+        if w not in witnesses:
+            fails.append(f"C0 mandatory non-vacuity witness `{w}` absent from `witness_coverage` (deleted?).")
+    coros = set(ledger.get("claim_corollaries", []))
+    for c in sorted(MANDATORY_COROLLARIES):
+        if c not in coros:
+            fails.append(f"C0 mandatory claim corollary `{c}` absent from `claim_corollaries` (deleted?).")
+        if c not in closures:
+            fails.append(f"C0 claim corollary `{c}` is not a `closures` key (its closure is unpinned).")
+    _, documented_full = _documented_axioms(ledger)
+    for a in sorted(MANDATORY_AXIOM_NAMES):
+        if a not in documented_full and axiom_ident(a) not in _documented_axioms(ledger)[0]:
+            fails.append(f"C0 mandatory flagship axiom `{a}` not documented in `axioms[]` — the "
+                         f"theft_free trust base (A1..A5) was silently pruned.")
+    return fails
+
+
+# --------------------------------------------------------------------------- #
 # source-ident harvest (for C4)
 # --------------------------------------------------------------------------- #
 def harvest_source_axiom_idents() -> set[str]:
@@ -446,8 +549,38 @@ def self_test() -> int:
     # C9: witness present but rests on a non-kernel axiom -> must fire
     cases.append(("C9 rogue", check_witness_coverage(
         wc_ledger, {"Foo.cap_witness": {"propext", "Some.project_axiom"}})))
+
+    # C0 (F8) DELETION NEGATIVES — the vacuity the per-entry loops could not see.
+    # A ledger that satisfies every mandatory floor (the clean control for C0):
+    mand = {
+        "headline_theorem": HEADLINE_THEOREM,
+        "closures": {t: [] for t in (MANDATORY_CLOSURES | MANDATORY_COROLLARIES)},
+        "signature_pins": {t: {} for t in MANDATORY_SIGNATURE_PINS},
+        "witness_coverage": [{"witness": w} for w in MANDATORY_WITNESSES],
+        "claim_corollaries": sorted(MANDATORY_COROLLARIES),
+        "axioms": [{"name": a} for a in MANDATORY_AXIOM_NAMES] + [{"name": "propext"}],
+    }
+    # (a) whole `closures` collection wiped -> must fire
+    cases.append(("C0 closures deleted", check_mandatory_registry({**mand, "closures": {}})))
+    # (b) only the flagship theft_free closure dropped -> must fire
+    cl_no_flag = {k: v for k, v in mand["closures"].items() if k != HEADLINE_THEOREM}
+    cases.append(("C0 flagship closure dropped", check_mandatory_registry({**mand, "closures": cl_no_flag})))
+    # (c) whole `signature_pins` collection wiped -> must fire
+    cases.append(("C0 signature_pins deleted", check_mandatory_registry({**mand, "signature_pins": {}})))
+    # (d) whole `witness_coverage` collection wiped -> must fire
+    cases.append(("C0 witness_coverage deleted", check_mandatory_registry({**mand, "witness_coverage": []})))
+    # (e) whole `axioms` array wiped (the case check_counts alone misses) -> must fire
+    cases.append(("C0 axioms deleted", check_mandatory_registry({**mand, "axioms": []})))
+    # (f) `claim_corollaries` wiped -> must fire
+    cases.append(("C0 claim_corollaries deleted", check_mandatory_registry({**mand, "claim_corollaries": []})))
+    # (g) flagship theorem renamed -> must fire
+    cases.append(("C0 headline_theorem mutated", check_mandatory_registry({**mand, "headline_theorem": "X.evil"})))
+    # (h) a single flagship axiom (A5 EUF-CMA) pruned from axioms[] -> must fire
+    ax_no_a5 = [a for a in mand["axioms"] if a["name"] != "SphincsCVerify.Crypto.EUF_CMA_SPHINCSplusC"]
+    cases.append(("C0 flagship axiom pruned", check_mandatory_registry({**mand, "axioms": ax_no_a5})))
+
     # control: a CLEAN input must NOT fire (guards against always-fire vacuity)
-    clean = check_closures(ledger, live_ok)
+    clean = check_closures(ledger, live_ok) + check_mandatory_registry(mand)
 
     ok = True
     for label, result in cases:
@@ -539,6 +672,7 @@ def main() -> int:
             return None
 
     fails: list[str] = []
+    fails += check_mandatory_registry(ledger)
     fails += check_closures(ledger, live)
     fails += check_lint_fv_crosscheck(ledger, lint_text) if lint_text else \
         ["C2 lint_fv_invariants.sh not found — cannot cross-check the closure pin."]

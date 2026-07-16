@@ -342,6 +342,8 @@ This narrows the "5 of 9 invariants unproven" statement to **#1 partially proven
 (IT core), 4 still silicon-E2E-only.**
 
 ### G10 — FW-update signed preimage: domain-separated + authorizes one firmware · **K**  ← NEW
+- **LEGACY/NONSHIPPING — this proof covers only the retired bench PQFW_V1 75-byte
+  preimage and grants no assurance to any shipping firmware-update format.**
 - **Status — NEW 2026-06-29.** The CLAUDE.md "frozen 75-B preimage" + fw-manifest
   "the `PQFW_V1` domain tag stops cross-protocol signature reuse" prose claims now
   have kernel backing, over the **Aeneas-extracted** firmware spec

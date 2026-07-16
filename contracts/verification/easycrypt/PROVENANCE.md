@@ -413,8 +413,13 @@ Non-vacuity: deleting the `htree` premise makes `SPHINCS_C.ec` fail (strict).
   NOTHING requires**: `FORS_C_TreePort.ec` (extract_op), `FORS_C_TreePort_skel.ec`
   (untracked 13-line scratch probe whose `admit` closes a *trivially true* statement —
   delete or gitignore it), `WOTS_C_Interactive.ec`. The capstone's chain is admit-free.
-- **Real axiom declarations across `drafts/*.ec`: 1** — `axiom dpp_ll : is_lossless dpp`
-  (STCR_C.ec), benign. The unconditional `grindCP` left with `WOTS_C_Encoding.ec`.
+- **Real axiom declarations across `drafts/*.ec`: 8** (refreshed 2026-07-16, FV
+  review F5 — this line long read "1", counting only STCR_C.ec's `dpp_ll`): the
+  comment-stripped sweep finds 7 in `FORS_C10.ec` (`dmkey_ll`, `size_g`, `eqiks_g`,
+  `neqisvs_g`, `rng_g`, `uniq_g`, `good_pos`) + 1 in `STCR_C.ec` (`dpp_ll`). All
+  benign / structural. The exact `(name → statement)` set is pinned in
+  `axiom_pins.txt` and enforced by `make verify-easycrypt-pins` (semantic pin, not
+  just a count). The unconditional `grindCP` left with `WOTS_C_Encoding.ec`.
 - **Orphaned (required by nothing, contribute zero to the capstone today):**
   `FORS_C_TreePort` (and note it targets `FORS_C`'s single-instance obligation, while
   the capstone routes through `FORS_C_Multi`'s independent one), `FORS_C_Tree`,

@@ -1,7 +1,9 @@
-/- §33 P2 — firmware-side userOpHash theorems.
+/- §33 P2 — userOpHash theorems.
 
-   `compute_user_op_hash` is the firmware's reconstruction of the
-   EntryPoint v0.6 `userOpHash`. This file proves it TOTAL (never
+   `compute_user_op_hash` is a tooling/companion reconstruction of the
+   EntryPoint v0.6 `userOpHash` (double-keccak). It is not the signed
+   digest (that is compute_sphincs_digest_v06, SHA-256); it has no
+   non-test signing caller. This file proves it TOTAL (never
    panics / diverges) for all inputs, and gives the step-specs for its
    two write helpers. keccak-256 is the single uninterpreted axiom
    (`keccak256_pure`, the FunsExternal model — mirrors AXIOM_STATUS

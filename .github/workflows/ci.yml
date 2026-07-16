@@ -314,3 +314,8 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           make verify-gate-enforcement
+      # F11 (2026-07-16) — source-generated Kani harness census vs the committed
+      # lock. Pure Python (no cargo kani), so it belongs here (fast per-PR) rather
+      # than beside the slow nightly `make kani` / `verify-kani-mutation`.
+      - name: verify-kani-census
+        run: make verify-kani-census

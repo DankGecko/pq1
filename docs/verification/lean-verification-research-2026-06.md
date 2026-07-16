@@ -162,8 +162,9 @@ tools/spec-oracle/               # Lean→C compiled spec oracle + cargo differe
   tests binding model to crate.
 - **Phase 1 — harness online (July–Aug).** Install/adapt Lean Squad workflow; wire Aristotle
   MCP; plausible gate; panic-freedom theorems across parsers (`proto`/`shared`/`aa` input
-  paths); start `aa` userOpHash equivalence (links firmware to the existing
-  `Wallet/ValidateUserOp.lean` model — the firmware↔chain composite theorem).
+  paths); start `aa` userOpHash equivalence (tooling userOpHash; links to the existing
+  `Wallet/ValidateUserOp.lean` model — the firmware↔chain composite still
+  requires extracting the actually-signed compute_sphincs_digest_v06, see B-F3).
 - **Phase 2 — C10 building blocks (Aug–Oct).** WOTS chain / FORS / merkle per-function
   equivalence vs Spec modules. Expect ~30%/round AI close-rate; loop invariants are the
   human-ish residue (Claude-assisted, user reviews 10-line statements only).

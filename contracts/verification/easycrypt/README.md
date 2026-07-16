@@ -53,9 +53,12 @@ Include order matters: **XMSS before SPHINCSPLUS**, else `unknown type diff_t`.
 
 **3 admits, all in files that nothing requires** (`FORS_C_TreePort.ec`,
 `WOTS_C_Interactive.ec` — the third, an untracked scratch probe, was not vendored).
-The capstone's dependency chain is admit-free. **7 axioms**: `dpp_ll`, `dmkey_ll`
-(losslessness), `good_pos` (= the paper's p_ν), and four structural constraints on
-the FORS index extractor `g` that mirror MM45's own.
+The capstone's dependency chain is admit-free. **8 axioms** (refreshed 2026-07-16,
+FV review F5 — was "7"; `uniq_g` was added 2026-07-10 and omitted here): `dpp_ll`,
+`dmkey_ll` (losslessness), `good_pos` (= the paper's p_ν), and five structural
+constraints on the FORS index extractor `g` that mirror MM45's own (`size_g`,
+`eqiks_g`, `neqisvs_g`, `rng_g`, `uniq_g`). The exact `(name → statement)` set is
+pinned in `axiom_pins.txt` and enforced by `make verify-easycrypt-pins`.
 
 Upstream history and the full dated record: `PROVENANCE.md`, and
 `../../../docs/verification/easycrypt-euf-cma-port-feasibility-2026-07.md`.

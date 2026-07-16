@@ -70,7 +70,7 @@ def eip1559.U256.saturating_mul_u64
   else ok (out1, false)
 
 /-- [pqsigner_tx_core::eip1559::u256_saturating_mul_u64]:
-    Source: 'tx-core/src/eip1559.rs', lines 238:0-240:1
+    Source: 'tx-core/src/eip1559.rs', lines 332:0-334:1
     Visibility: public -/
 def eip1559.u256_saturating_mul_u64
   (v : eip1559.U256) (rhs : Std.U64) : Result (eip1559.U256 × Bool) := do

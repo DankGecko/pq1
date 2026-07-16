@@ -1,0 +1,329 @@
+{
+  "schema": "fv-extraction-freshness-registry/v1",
+  "note": "F1 (2026-07-16). sha256(committed generated Lean) = robust primary tripwire (literal charon->aeneas output; moves on any semantic drift incl. inlined callees); sha256(mirrored Rust file) = coarse toolchain-free secondary (whole-file; over-fires on unrelated shared-file edits, never under-fires). Drift in EITHER, for a fresh:true entry, FAILS check_extraction_freshness.py -> forces re-run of the named extract-* target (needs the charon/aeneas toolchain) before the green FV gates are trusted. fresh:false entries are WAIVED-STALE (loud, tracked in work-todo), not silently green. The CI hash-pin is a 'Rust-unchanged-since-last-extraction' tripwire, NOT a correspondence proof; the toolchain-gated `make verify-extraction-regen` is the real regen check.",
+  "toolchain_receipt": {
+    "note": "The generator+toolchain half of the roadmap P0.1 'one receipt'. These are the versions the committed generated_lean_sha256 pins were produced under (2026-07-16 regen); a bump invalidates the pins and requires a fresh `make verify-extraction-regen` + `check_extraction_freshness.py --update`. The pinned digests are the input-source + generated-file half. A per-RUN receipt (exact command line + timestamp + host) is emitted by verify-extraction-regen; it is not committed (Date.now-style volatility).",
+    "toolchain_root": "~/.local/share/pqsigner-lean",
+    "charon": "nightly-2026.06.08",
+    "aeneas": "nightly-2026.06.10",
+    "rustc": "nightly-2026-06-01",
+    "extract_command_pattern": "cd <crate> && RUSTFLAGS=--cfg lean_extract $PQLEAN/charon cargo --preset=aeneas --opaque <deps> --start-from <symbol> --dest-file <llbc>; $PQLEAN/aeneas -backend lean -dest <out> [-split-files] <llbc>; diff -u <committed Funs.lean> <regenerated>"
+  },
+  "shared_rust_files": {
+    "tx-core/src/rlp.rs": [
+      "extract-decode-item",
+      "extract-txcore-rlp"
+    ],
+    "tx-core/src/eip1559.rs": [
+      "extract-u256-mul",
+      "extract-format-decimal"
+    ],
+    "sphincs-c10/src/wots.rs": [
+      "extract-wots-pkfromsig",
+      "extract-wots-digits"
+    ]
+  },
+  "entries": [
+    {
+      "target": "extract-sphincs-adrs",
+      "make_dir": "contracts/verification",
+      "crate": "sphincs-c10",
+      "rust_files": [
+        "sphincs-c10/src/address.rs"
+      ],
+      "rust_files_sha256": [
+        "84f5708f1dee711f9cf0dd11c14b8770618e3353f839329b24da6cca6e34ce00"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/Adrs.lean"
+      ],
+      "generated_lean_sha256": [
+        "30e278280f0daf667568f721180ef121e246b39f78cb32bb947ded7bb6362062"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/AdrsEquiv.lean",
+      "headline_theorem": "make_adrs_spec",
+      "fresh": true
+    },
+    {
+      "target": "extract-aa-userop",
+      "make_dir": "contracts/verification",
+      "crate": "aa",
+      "rust_files": [
+        "aa/src/userop.rs"
+      ],
+      "rust_files_sha256": [
+        "e239c5666400ead165203dcbf63bd967830cdd2c8e50a9883b9c0bfec6eeafd9"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/UserOp/Funs.lean"
+      ],
+      "generated_lean_sha256": [
+        "a4e878619bac298d9aaddf2bc7363cbbc9d18bfa47ae7af98aeb3afa8262189d"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/UserOpEquiv.lean",
+      "headline_theorem": "compute_user_op_hash_terminates",
+      "fresh": true
+    },
+    {
+      "target": "extract-fors-index",
+      "make_dir": "contracts/verification",
+      "crate": "sphincs-c10",
+      "rust_files": [
+        "sphincs-c10/src/fors.rs"
+      ],
+      "rust_files_sha256": [
+        "3b64e07bc9c3a6c0e1db1d63da90c32ad34b26857dfe5767997df360b7713ed2"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/Fors/Funs.lean"
+      ],
+      "generated_lean_sha256": [
+        "1e81e635541eddcd507784dd39e1a04b2e3e91c6529a0090036573d2938f2ef3"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/ForsExtract.lean",
+      "headline_theorem": "extract_ht_index_terminates",
+      "fresh": true
+    },
+    {
+      "target": "extract-tx-merkle",
+      "make_dir": "contracts/verification",
+      "crate": "tx",
+      "rust_files": [
+        "tx/src/erc20/merkle.rs"
+      ],
+      "rust_files_sha256": [
+        "9ed22297f4343cc033efc0c8af552cf8f31667c3e33267fae263951d8e3ce708"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/TxMerkle/Funs.lean"
+      ],
+      "generated_lean_sha256": [
+        "dfe15a2e42485135860f4aff2a839fe182b3e0f8e744cbbf8dbe0a86f1546397"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/TxMerkleSpec.lean",
+      "headline_theorem": "verify_proof_spec",
+      "fresh": false,
+      "waiver": "STALE: current tx/src/erc20/merkle.rs verify_proof (checked_mul + residual-index rejection) can no longer be re-extracted \u2014 Aeneas nightly-2026.06.10 hits an internal 'Unreachable' translating it (see /tmp regen log). The committed Extracted/TxMerkle/Funs.lean proves the OLDER, LESS-STRICT behaviour; current Rust is STRICTER (rejects more), so no acceptance bypass, but the extraction is not fresh. Tracked: work-todo FV15-F1 (refactor merkle.rs for Aeneas re-translation, or bump the charon/aeneas toolchain, then re-extract + re-prove + re-pin)."
+    },
+    {
+      "target": "extract-merkle-verify",
+      "make_dir": "contracts/verification",
+      "crate": "sphincs-c10",
+      "rust_files": [
+        "sphincs-c10/src/merkle.rs"
+      ],
+      "rust_files_sha256": [
+        "f787428b15cea6fb353eb3e1830f9f737067ce70a74e4d6b79113b83a1f3aed0"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/Merkle/Funs.lean"
+      ],
+      "generated_lean_sha256": [
+        "cbae9768b79734e64b217aece2f4b9cb1e62f1c283ae307a01660ff862c6397d"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/MerkleVerifySpec.lean",
+      "headline_theorem": "verify_auth_path_loop_value",
+      "fresh": true
+    },
+    {
+      "target": "extract-wots-pkfromsig",
+      "make_dir": "contracts/verification",
+      "crate": "sphincs-c10",
+      "rust_files": [
+        "sphincs-c10/src/wots.rs"
+      ],
+      "rust_files_sha256": [
+        "e7ebe1d71591e68f6045383b041905ff17ad5822def35e77e11244ffdf49c56b"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/PkFromSig/Funs.lean"
+      ],
+      "generated_lean_sha256": [
+        "9528945c6bacb43b4dd1fb1902de6ac887dd1a002f73ff7ada1c4b0835de1f84"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/PkFromSigSpec.lean",
+      "headline_theorem": "pk_loop0_value",
+      "fresh": true
+    },
+    {
+      "target": "extract-hash-fns",
+      "make_dir": "contracts/verification",
+      "crate": "sphincs-c10",
+      "rust_files": [
+        "sphincs-c10/src/hash.rs"
+      ],
+      "rust_files_sha256": [
+        "049a689c96ef9e14ce34030e71269292f3f6951b522cad88d56daa4466ade2c4"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/Hash/Funs.lean"
+      ],
+      "generated_lean_sha256": [
+        "c999332342e216196e0f744e354c4d96c0cc708bb4e258cb5b630fae51aab8a0"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/HashSpecs.lean",
+      "headline_theorem": "th_spec",
+      "fresh": true
+    },
+    {
+      "target": "extract-bip39-roundtrip",
+      "make_dir": "contracts/verification",
+      "crate": "bip39",
+      "rust_files": [
+        "bip39/src/lib.rs"
+      ],
+      "rust_files_sha256": [
+        "db35d8bda5b3ac603a83114c3d1a4735497e037bff87d1706cefc6941d924fbf"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/Bip39/Funs.lean"
+      ],
+      "generated_lean_sha256": [
+        "81dc719ab8a11f89247f4e4a7ac8876c1ac7a7d4edf058399e8db5a3d915d17d"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/Bip39RoundtripSpec.lean",
+      "headline_theorem": "roundtrip_11_id",
+      "fresh": true
+    },
+    {
+      "target": "extract-decode-item",
+      "make_dir": "contracts/verification",
+      "crate": "tx-core",
+      "rust_files": [
+        "tx-core/src/rlp.rs"
+      ],
+      "rust_files_sha256": [
+        "d2a1a211f22ab20241ee5923924273ce33de363939fc49fd5f94b39b1f1b40a6"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/Decode/Funs.lean"
+      ],
+      "generated_lean_sha256": [
+        "b160442fe7dab4df18079b387e8660ffe67d2f7e9a7aba14e207da8613bd5f27"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/DecodeItemSpec.lean",
+      "headline_theorem": "decode_item_spec",
+      "fresh": true
+    },
+    {
+      "target": "extract-u256-mul",
+      "make_dir": "contracts/verification",
+      "crate": "tx-core",
+      "rust_files": [
+        "tx-core/src/eip1559.rs"
+      ],
+      "rust_files_sha256": [
+        "56c8fcef42560ef77f53ca8192b37b54929b83760531fdfc6f81b2ddf0bebec4"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/U256Mul/Funs.lean"
+      ],
+      "generated_lean_sha256": [
+        "6166465d10f732afe1a4faca8ceeeeaf94a010bce641a0f8d2773de026f691b3"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/U256MulSpec.lean",
+      "headline_theorem": "saturating_mul_u64_spec",
+      "fresh": true
+    },
+    {
+      "target": "extract-format-decimal",
+      "make_dir": "contracts/verification",
+      "crate": "tx-core",
+      "rust_files": [
+        "tx-core/src/eip1559.rs"
+      ],
+      "rust_files_sha256": [
+        "56c8fcef42560ef77f53ca8192b37b54929b83760531fdfc6f81b2ddf0bebec4"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/FormatDecimal/Funs.lean"
+      ],
+      "generated_lean_sha256": [
+        "527054569a96ea002560bf3249b3ab60c014d44aef96260b26f96fbf7d716bc7"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/FormatDecimal/FormatDecimalSpec.lean",
+      "headline_theorem": "format_decimal_spec",
+      "fresh": true
+    },
+    {
+      "target": "extract-fwmanifest-preimage",
+      "make_dir": "contracts/verification",
+      "crate": "fw-manifest",
+      "rust_files": [
+        "fw-manifest/src/lib.rs"
+      ],
+      "rust_files_sha256": [
+        "ffd1881497439903dee425d817903a837179dc848b44be0eb9d98f7a9edc9d4f"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/FwManifest/Funs.lean"
+      ],
+      "generated_lean_sha256": [
+        "d651b316a3b2e31d9f067fc4df406a86b5bcf826f3f4a359deac027e71d1f674"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/FwManifestSpec.lean",
+      "headline_theorem": "signed_preimage_spec",
+      "fresh": true
+    },
+    {
+      "target": "extract-wots-digits",
+      "make_dir": "contracts/verification",
+      "crate": "sphincs-c10",
+      "rust_files": [
+        "sphincs-c10/src/wots.rs"
+      ],
+      "rust_files_sha256": [
+        "e7ebe1d71591e68f6045383b041905ff17ad5822def35e77e11244ffdf49c56b"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/Wots/Funs.lean"
+      ],
+      "generated_lean_sha256": [
+        "ebbea10da2757c68aabca02ded757713f08a11204ca8e62e18ada66c548a2992"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/WotsDigits.lean",
+      "headline_theorem": "extract_digits_spec",
+      "fresh": true
+    },
+    {
+      "target": "extract-aa-eip1271",
+      "make_dir": "contracts/verification",
+      "crate": "aa",
+      "rust_files": [
+        "aa/src/eip1271.rs"
+      ],
+      "rust_files_sha256": [
+        "fe9650ce44d882943a8e431390ce0a8a9e83c62165221a083e178d6a1593944f"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/Eip1271/Funs.lean"
+      ],
+      "generated_lean_sha256": [
+        "c8fa4a3039580c71f08afcd60c73e8eee42859b53f631c2b21420417e414e687"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/Eip1271Equiv.lean",
+      "headline_theorem": "domain_separator_spec",
+      "fresh": true
+    },
+    {
+      "target": "extract-txcore-rlp",
+      "make_dir": "contracts/verification",
+      "crate": "tx-core",
+      "rust_files": [
+        "tx-core/src/rlp.rs"
+      ],
+      "rust_files_sha256": [
+        "d2a1a211f22ab20241ee5923924273ce33de363939fc49fd5f94b39b1f1b40a6"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/Rlp/Funs.lean"
+      ],
+      "generated_lean_sha256": [
+        "854f673c4745998a9ae498b1ca0ceef82097412410afc269863baa4f06a99c0f"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/RlpIntSpec.lean",
+      "headline_theorem": "bytes_to_u64_loop1_value",
+      "fresh": true
+    }
+  ]
+}

@@ -33,7 +33,19 @@ backend = "queue"            # free: hard goals queue for an interactive Claude 
                              # session (subscription flat-rate); /leanloop-frontier
 
 [audit]
-# THE single content axiom of this project (UserOp/FunsExternal.lean) — the
-# uninterpreted keccak-256 boundary. Everything else must reduce to the three
-# kernel axioms; sorryAx / surprise axioms / native_decide are rejected.
-axiom_whitelist = ["keccak256_pure"]
+# The disclosed content axioms of this project (the uninterpreted hash
+# boundaries) — refreshed 2026-07-16 (FV review F8): the extracted tree now
+# declares THREE, not one, and a whitelist of only `keccak256_pure` would
+# FALSE-REJECT any LeanLoop-generated proof over the SlotKdf / slot-entropy goals
+# (which legitimately close over `sha256_pure_bytes` / `hmac_sha512_pure_bytes`).
+# These are the exact three `^axiom` postulates in extracted/Extracted:
+#   keccak256_pure          UserOp/FunsExternal.lean:14   (aa/userop keccak-256)
+#   sha256_pure_bytes       SlotKdf/FunsExternal.lean:27  (slot-KDF single-shot SHA-256)
+#   hmac_sha512_pure_bytes  SlotKdf/FunsExternal.lean:41  (bip39 seed HMAC-SHA512)
+# Everything else must reduce to the three kernel axioms; sorryAx / surprise
+# axioms / native_decide are rejected. NB the six SPHINCS+ tweakable-hash names
+# (th_pure/th_pair_pure/th_multi_pure/chain_hash_pure/wots_digest_pure/…) are NO
+# LONGER axioms — HashPure.lean collapsed them into DEFs over sha256_pure — so do
+# NOT re-add them here. See the per-headline manifest at
+# extracted/axiom_closure_manifest.txt (the `make verify-extracted` gate).
+axiom_whitelist = ["keccak256_pure", "sha256_pure_bytes", "hmac_sha512_pure_bytes"]

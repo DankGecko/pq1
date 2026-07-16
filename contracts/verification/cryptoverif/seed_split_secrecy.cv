@@ -15,7 +15,18 @@
 
    Because the advantage is exactly 0 (a one-time pad, not a computational
    assumption), this bound is *unconditional* — it holds against ANY adversary,
-   including a quantum one. That is the "quantum-soundness" the dual-SE split
+   including a quantum one.
+
+   SCOPE (FV review F9c, 2026-07-16): this is the IDEAL model — `new pad: D` is
+   uniform over the full 2^256 space. The DEPLOYED split rejects the all-zero
+   mask (secure/src/dual_se.rs:130), so deployed single-half secrecy is
+   STATISTICAL (statistical distance Δ ≤ 2^-256), not the model's exact-0; and
+   `master_secret = KDF(entropy)` is co-resident per-chip, so ABSOLUTE
+   single-chip secrecy additionally rests on a computational KDF assumption. The
+   ideal-vs-deployed gap is negligible but nonzero — do not present this .cv's
+   exact-0 as a deployed-equivalent statement. See ASSURANCE_CASE.md G9.
+
+   That is the "quantum-soundness" the dual-SE split
    needs: a CRQC that records the bus + breaks the classical SE channel still
    cannot recover the seed from a single half. (The post-quantum confidentiality
    of the half WHILE it crosses I²C is the separate ML-KEM inner-wrap concern —

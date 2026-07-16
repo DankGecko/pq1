@@ -119,7 +119,7 @@
 - **Effort:** days
 - **First step:** Add an `extract-tx-merkle` Makefile target for tx::erc20::merkle::verify_proof with the two sha256 hash constructors opaque, and restate rank 6's invariant plus a `bytes_consumed = proof_depth * 32` lemma.
 
-### 12. fw-manifest/src/lib.rs::signed_preimage (line 187) + compute_signed_digest (line 208)
+### 12. fw-manifest/src/lib.rs::signed_preimage (line 187) + compute_signed_digest (line 208) — LEGACY/NONSHIPPING (bench-only PQFW_V1; not a shipping-format proof)
 
 - **Prove:** Byte layout: the preimage is exactly 75 bytes = "PQFW_V1"(7) || fw_version BE(4) || secure_hash(32) || nonsecure_hash(32) in that order for all inputs, and compute_signed_digest = SHA256 of exactly that byte list (hash opaque).
 - **Why bug-prone:** Pure offset arithmetic (ver_off/sec_off/ns_off chaining) on a frozen 75-byte format that the entire FW-update trust chain reconstructs from (version, elf-hashes) — a one-byte layout drift breaks auditor reconstruction silently.
@@ -158,4 +158,4 @@
 - Ranks 7-8, 10 (tx-core): tx-core/tests/rlp_decoder.rs (positive AND negative canonical-form vectors — the negatives are the valuable half for the iff-theorem), u256_arithmetic.rs, and keccak256_kat.rs port mechanically; eip1559_parser.rs vectors become the later-phase parse() anchors.
 - Rank 9 (bip39): bip39/tests/vectors.rs imports the official BIP-39 (entropy, mnemonic) vector set — the strongest external ground truth in the whole catalog; prefix5_roundtrip.rs adds firmware_fingerprint_lines round-trips.
 - Rank 11 (tx merkle): tx/tests/positive_merkle.rs trees (singleton / 2-leaf / 3-leaf padded / 32-leaf / depth-32) plus the dbgen cross-implementation give both KAT roots and a second-implementation oracle.
-- Rank 12 (fw-manifest): the 75-byte layout test (lib.rs:774-782), digest test (791-793) and the crc32 standard vector crc32_ieee("123456789") == 0xCBF43926 (line 669) are single-line Lean KAT facts.
+- Rank 12 (fw-manifest) — LEGACY/NONSHIPPING (bench-only PQFW_V1; not a shipping-format proof): the 75-byte layout test (lib.rs:774-782), digest test (791-793) and the crc32 standard vector crc32_ieee("123456789") == 0xCBF43926 (line 669) are single-line Lean KAT facts.

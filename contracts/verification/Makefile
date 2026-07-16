@@ -116,11 +116,22 @@ verify-ledger-consistency: verify-build ## AXIOM_STATUS.json falsifiable vs live
 # with a NESTING-AWARE sweeper (scripts/ec_sweep.py).
 # NOT CI-gated: needs an opam switch with EasyCrypt r2026.02 + Alt-Ergo 2.6.0.
 # `make verify-easycrypt-pins` checks the ledger with no toolchain at all.
-.PHONY: verify-easycrypt verify-easycrypt-pins
-verify-easycrypt: ## Compile the SPHINCS+C EasyCrypt port (every file as a target) + assert its ledger
+.PHONY: verify-easycrypt verify-easycrypt-full verify-easycrypt-pins
+verify-easycrypt: ## EasyCrypt PARTIAL compile (stdlib +C chain; MM45-chain SKIPPED loudly) + pins
 	@bash scripts/check_easycrypt.sh
 
-verify-easycrypt-pins: ## EasyCrypt admit/axiom ledger only (no toolchain needed)
+# F5 (2026-07-16): "full" is now DISTINCT from partial and HONEST — it requires
+# all 21 .ec compiled with ZERO skips (implies FORCE_MM45=1) and FAILS if the
+# MM45 reference proofs / toolchain are absent, instead of the old behaviour
+# where a skipped-11-of-21 run could still print a success banner.
+verify-easycrypt-full: ## EasyCrypt FULL verification — 21/21, zero skips (needs MM45 toolchain)
+	@bash scripts/check_easycrypt.sh --full
+
+# F5: ledger (admit/axiom COUNT + SEMANTIC name->statement pin) with NO toolchain,
+# preceded by the wired-in negative control (a `dmkey_ll : false` weakening and a
+# delete-one-add-one, both count-preserving, MUST fire the semantic pin).
+verify-easycrypt-pins: ## EasyCrypt admit/axiom + semantic pin ledger (no toolchain) + negative control
+	@bash scripts/check_easycrypt.sh --self-test
 	@bash scripts/check_easycrypt.sh --dry-run
 
 # FORS+C GRINDING MARGIN (bounds the blast radius of the A5-ITSR literature gap:
@@ -369,7 +380,38 @@ EXTRACTED_DIR := extracted
 PQLEAN        := $(HOME)/.local/share/pqsigner-lean
 REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
-.PHONY: verify-extracted verify-extract-differential extract-sphincs-adrs extract-aa-userop extract-fors-index extract-format-decimal
+.PHONY: verify-extracted verify-extract-differential verify-extraction-freshness verify-extraction-regen extract-sphincs-adrs extract-aa-userop extract-fors-index extract-format-decimal
+
+# F1 (2026-07-16) — TOOLCHAIN-FREE extraction freshness tripwire. The extract-*
+# regen-diff targets below are the REAL freshness check but need the §33
+# charon/aeneas toolchain (~/.local/share/pqsigner-lean), so they cannot run on a
+# stock CI runner — and without them current Rust can drift from the committed
+# extraction while verify-build/verify-extracted stay green on the stale .lean
+# (4 of 15 extractions were already stale when this gate was written). This pins
+# sha256(committed generated Lean) + sha256(mirrored Rust file) per extraction
+# (extraction_registry.json) and FAILS on drift, forcing a re-extraction. Ships a
+# wired-in negative control (the PQFW_V1->PQFW_V2 domain-tag flip must fire both
+# tripwire halves). CI-runnable (pure Python). See scripts/check_extraction_freshness.py.
+verify-extraction-freshness: ## F1 toolchain-free extraction freshness tripwire (sha256 pins) + negative control
+	@python3 scripts/check_extraction_freshness.py --self-test
+	@python3 scripts/check_extraction_freshness.py
+
+# F1 — the REAL regen check (LOCAL, needs the charon/aeneas toolchain): re-run
+# every extract-* target and diff against the committed extraction. A `fresh:true`
+# registry entry that drifts is a FAILURE; the `fresh:false` waived entry
+# (tx-merkle — Aeneas can no longer translate it) is EXPECTED to fail and only
+# flags if it unexpectedly re-extracts (bump it to fresh + `--update` then).
+verify-extraction-regen: ## F1 REAL regen: re-run every extract-* + diff (needs charon/aeneas toolchain)
+	@echo "=== F1 extraction regen: re-running charon->aeneas + diff for every registry target ==="
+	@fail=0; \
+	for t in $$(python3 -c "import json;print(' '.join(e['target'] for e in json.load(open('extraction_registry.json'))['entries'] if e.get('fresh',True)))"); do \
+	  if $(MAKE) $$t >/dev/null 2>&1; then echo "  fresh: $$t"; else echo "  DRIFT: $$t (re-extract/re-prove/re-pin via --update)"; fail=1; fi; \
+	done; \
+	for t in $$(python3 -c "import json;print(' '.join(e['target'] for e in json.load(open('extraction_registry.json'))['entries'] if not e.get('fresh',True)))"); do \
+	  if $(MAKE) $$t >/dev/null 2>&1; then echo "  UNEXPECTED-FRESH (waived entry re-extracts! promote to fresh + --update): $$t"; else echo "  waived-stale (expected): $$t"; fi; \
+	done; \
+	if [ $$fail != 0 ]; then echo "FAIL: a fresh extraction drifted from its committed Lean"; exit 1; fi; \
+	echo "OK: all fresh extractions re-extract cleanly; waived entries unchanged"
 
 # roadmap T1.3 (ii) — extracted-Lean vs shipped-Rust DIFFERENTIAL gate.
 # The `extract-*` regen-diff targets catch a Rust change that was not re-extracted;
@@ -398,9 +440,23 @@ verify-extracted: ## S33 Aeneas-extracted build + axiom-discipline
 	  echo "FAIL: an Extracted/ declaration uses 'sorry' (incomplete proof)"; exit 1; fi
 	@echo "=== Axiom closure of the §33 theorems (expect propext, Classical.choice, Quot.sound + the three disclosed hash-boundary postulates: keccak256_pure, sha256_pure_bytes, hmac_sha512_pure_bytes — NB sha256_pure is a kernel THEOREM, not an axiom) ==="
 	@cd $(EXTRACTED_DIR) && $(LAKE) env lean Extracted/AxiomCheck.lean 2>&1 | tee /tmp/pq_axiomcheck.out
-	@if grep -q sorryAx /tmp/pq_axiomcheck.out; then \
-	  echo "FAIL: a §33 theorem axiom closure contains sorryAx — a proof is incomplete"; exit 1; \
-	else echo "OK: extracted/ axiom-discipline gate passed — no sorryAx in any §33 theorem closure"; fi
+	@# F3 (2026-07-16): EXACT PER-HEADLINE axiom allowlist, not just a `grep sorryAx`.
+	@# A consumed `axiom Evil : False` prints `depends on axioms: [Evil]` — no
+	@# `sorryAx` substring — so the old grep let it pass. The manifest gate is
+	@# bidirectional and fails closed: an UNLISTED headline (rogue/undisclosed
+	@# theorem), a MISSING headline (silently dropped / dump truncated), or a
+	@# closure carrying an undisclosed axiom all fail. Manifest =
+	@# extracted/axiom_closure_manifest.txt (57 kernel-only + 4 sha256_pure_bytes
+	@# + 1 sha256+hmac + 4 keccak256_pure = 66 headlines).
+	@python3 scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_manifest.txt /tmp/pq_axiomcheck.out
+	@# WIRED-IN NEGATIVE CONTROL: the Evil:False canary MUST be rejected. A *pass*
+	@# of the checker here is a *failure* of the meta-gate (the gate is toothless).
+	@echo "=== NEGATIVE CONTROL: a consumed axiom Evil:False MUST be rejected by the closure gate ==="
+	@cd $(EXTRACTED_DIR) && $(LAKE) env lean Extracted/AxiomCheckNegativeControl.lean > /tmp/pq_axiomcheck_neg.out 2>&1 || true
+	@if python3 scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_manifest.txt /tmp/pq_axiomcheck_neg.out >/dev/null 2>&1; then \
+	  echo "FAIL: the Evil:False negative control PASSED the closure gate — the gate is VACUOUS"; exit 1; \
+	else echo "OK: closure gate correctly REJECTS the Evil:False canary (per-headline allowlist enforcement is live)"; fi
+	@echo "OK: extracted/ axiom-discipline gate passed — per-headline closure verified, no sorryAx, negative control has teeth"
 	@echo "NB: FormatDecimalSpec (M7 WYSIWYS, ~42 GB kernel-TC) is CARVED OUT of this"
 	@echo "    16 GB-safe gate — verify it with 'make verify-extracted-heavy' on ≥48 GB RAM."
 
@@ -421,9 +477,11 @@ verify-extracted-heavy: ## S33 FormatDecimalSpec M7 (~42 GB kernel-TC) — carve
 	  echo "FAIL: FormatDecimalSpec declaration uses 'sorry' (incomplete proof)"; exit 1; fi
 	@echo "=== Axiom closure of the M7 WYSIWYS theorems (expect propext, Classical.choice, Quot.sound) ==="
 	@cd $(EXTRACTED_DIR) && $(LAKE) env lean Extracted/AxiomCheckFormatDecimal.lean 2>&1 | tee /tmp/pq_axiomcheck_fd.out
-	@if grep -q sorryAx /tmp/pq_axiomcheck_fd.out; then \
-	  echo "FAIL: a format_decimal M7 theorem axiom closure contains sorryAx — a proof is incomplete"; exit 1; \
-	else echo "OK: format_decimal M7 axiom-discipline gate passed — no sorryAx in the WYSIWYS closure"; fi
+	@# F3 (2026-07-16): the 3 M7 WYSIWYS theorems close over EXACTLY the kernel
+	@# triple (no hash axiom). Enforce that exact set + the declaration inventory
+	@# (exactly 3 records) rather than only grepping for sorryAx.
+	@python3 scripts/check_axiom_closure.py /tmp/pq_axiomcheck_fd.out --expect-records 3
+	@echo "OK: format_decimal M7 axiom-discipline gate passed — kernel-only closure over exactly 3 headlines"
 
 extract-sphincs-adrs:
 	@mkdir -p /tmp/pqsigner-extract
