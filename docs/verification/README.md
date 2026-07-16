@@ -23,6 +23,13 @@ answer "where is FV going and why," not "what is proven right now."
   (the 2026-06 SOTA sweep + adopt-now shortlist),
   [`fv-soundness-roadmap-2026-06.md`](./fv-soundness-roadmap-2026-06.md) (T0/T1/T2
   roadmap), [`fv-adversarial-review-playbook.md`](./fv-adversarial-review-playbook.md).
+- **The honest boundary (read before writing any claim about the device):**
+  [`hardware-assumption-boundary-2026-07-17.md`](./hardware-assumption-boundary-2026-07-17.md)
+  — what is achievable vs. permanently-assumed for each of the six hardware
+  surfaces (OTP, flash atomicity, ARMv8-M/CMSE/SAU-GTZC, I2C/T=1' framing,
+  SE black box, STM32 peripherals); the falsifiability criterion that separates
+  a hardware model from proof theatre; entitled-vs-overclaim claim language;
+  per-invariant silicon dependency; and the RDP-2 / dual-SE-split trace.
 - **Research notes:** [`lean-verification-research-2026-06.md`](./lean-verification-research-2026-06.md),
   [`spec-assurance-research-2026-06.md`](./spec-assurance-research-2026-06.md),
   [`how_to_math_proof_secureness.md`](./how_to_math_proof_secureness.md),
