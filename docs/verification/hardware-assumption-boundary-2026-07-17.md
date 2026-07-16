@@ -10,6 +10,18 @@ tool/paper claims across ARMv8-M ISA, device models, flash/OTP crash consistency
 elements, methodology, Rust-embedded FV, and SCA/FI). **It does not re-derive that survey.**
 Where a finding is cited below it is cited by its survey id (A*, B*, C-*, D*, E*, F*, G*).
 
+**Evidence tiers within this document — they are not uniform, read the marker:**
+
+| Marker | Meaning |
+|---|---|
+| **[code]** | Read from this tree by the author this pass; every `file:line` claim about PQSigner is this tier. |
+| **[tool]** | A binary was run on this box by the author this pass. Specifically: the Kani seam proof (`0/52 checks, 0.18s`) and the BINSEC thumb/CMSE probe in follow-up #6. |
+| **[survey]** | Sourced by a research agent and then adversarially re-checked by an independent agent that fetched the primary source itself. This covers the ~45 external tool/paper claims (Reid's bug counts, µ-Glitch, Šimoník, Sabt–Traoré, TickTock, PoWER, the CC certificate numbers, EUCLEAK's scope). Rigorous, but **not author-verified** — treat as good secondary evidence, and re-check before any of it becomes load-bearing for a public claim. |
+
+Where **[tool]** and **[survey]** disagree, **[tool]** wins and the disagreement is recorded
+rather than silently resolved — see follow-up #6, where the author's own probe **withdrew** a
+survey correction.
+
 Companion docs — read them, do not duplicate them:
 
 - [`fv-surface-expansion-inventory-2026-07-16.md`](./fv-surface-expansion-inventory-2026-07-16.md) — the 47 verifiable surfaces (what to build).
@@ -267,9 +279,14 @@ divergence falsifies. Guard-time violation injection on the bench.
     scope covers OPTIGA's LcsO ratchets or SE050's APDU/policy behaviour** (D7). The artifact
     is confidential regardless; we would never hold it.
   - **EUCLEAK is the ceiling-setter.** A non-constant-time modular inversion in the Infineon
-    cryptolib survived 14 years and ~80 CC evaluations at AVA_VAN.4/5 — the highest
-    attack-potential rating that exists — and Roche's paper names OPTIGA Trust M among the
-    affected parts (D4). Scoping, honestly: it is **not** a live break of our path — we are
+    cryptolib — in NinjaLab's exact words, a vulnerability "that went unnoticed for **14 years
+    and about 80 highest-level Common Criteria certification evaluations**" (AVA_VAN.4/5, the
+    highest attack-potential rating that exists) (D4). Scope it precisely: the attack was
+    **demonstrated on a YubiKey 5Ci (Infineon SLE78)**, and NinjaLab states the vulnerability
+    "extends to the more recent Infineon Optiga Trust M and Infineon Optiga TPM security
+    microcontrollers" — i.e. for our part it is **tested-and-suspected, not demonstrated**.
+    Do not write "our OPTIGA is EUCLEAK-vulnerable"; write what NinjaLab wrote.
+    Scoping, honestly: it is **not** a live break of our path — we are
     SPHINCS+C10-only (invariant #5), our OPTIGA driver implements exactly six APDUs
     (OpenApplication/GetDataObject/SetDataObject/SetObjectProtected/GetRandom/DecryptSym) and
     never invokes ECDSA signing, and the tunnel is symmetric. Its value is epistemic and
@@ -763,13 +780,28 @@ recovery proof" gate, not a new discovery.
 4. **Kani `t1oi2c`'s `crc16`/`build_frame`/`validate_frame`.** Pure functions; no seam work.
 5. **Re-derive `optiga_shield_handshake.pv` from Infineon I2C Protocol v2.03 §6** rather than
    from `shield.rs`.
-6. **Retire the `shipping-thumb-ct-binsec` framing** in the 47-surface inventory. It proposes
-   to "first prove BINSEC decodes the emitted Cortex-M33 subset" against the SOTA doc's
-   finding that BINSEC has no ARMv8-M decoder. The reality is finer than *either*: BINSEC has
-   an ARMv7 Thumb decoder, and `make checkct` is **already wired and green-capable** against
-   `thumbv8m.main-none-eabi` for the crypto leaves, because ARMv8-M Mainline leaf crypto
-   compiles into the Thumb-2 subset. The real boundary is **CMSE** (`sg`/`bxns`/`tt` →
-   `unimplemented`), not thumbv8m. Fix both docs (G1).
+6. **`shipping-thumb-ct-binsec`: the inventory's framing is still wrong, but do NOT propagate
+   the "BINSEC decodes Thumb fine, only CMSE fails" correction — it does not reproduce.**
+   *(Author-run on this box, 2026-07-17, superseding the workflow's G1 claim.)* The survey
+   asserted BINSEC decodes plain Thumb-2 and emits `unimplemented` only on `sg`/`bxns`/`tt`,
+   implying the real boundary is CMSE rather than thumbv8m. Reproducing it against the same
+   probe ELF (`plain: adds/eors/bx`; `cmse_sg: sg/nop/bxns`; `cmse_tt: tta/ttat/bx`, built
+   `.arch armv8-m.main`):
+   - BINSEC **does** expose `-arm-supported-modes {both|thumb|arm}` (default `arm`). So the
+     2026-06 SOTA doc's flat "there is no ARMv8-M / Cortex-M / M-profile decoder" is imprecise
+     about the *option surface* — a thumb mode exists.
+   - But in `thumb` mode BINSEC emits `unimplemented` **uniformly — including on the plain
+     `adds`/`eors`/`bx` function** — at every entry tried (`0x0/0x1`, `0x6/0x7`, `0xe/0xf`),
+     then dies with `Fatal error: … disasm_core.ml … Assertion failed`. The plain and CMSE
+     cases are **indistinguishable**. In `arm`/`both` mode it reads the Thumb bytes as ARM and
+     reports "Unknown ARM instruction".
+   - **Therefore the SOTA doc's operational verdict (BINSEC NO-GO for our thumbv8m ELF)
+     stands, and the survey's refinement is withdrawn.** The inventory row is still wrong —
+     but for the original reason, not a CMSE-specific one.
+   - Untouched and still open: whether `cargo-checkct` uses a BINSEC frontend at all (it may
+     be an independent engine, in which case BINSEC's decoder has no bearing on `make checkct`),
+     and whether `make checkct` actually runs green here. **Verify both before editing the
+     other two docs.** Nothing here is propagated yet, by design.
 7. **Fix the OPTIGA CC citation** — V4-2019 expired 2024-12-17; cite V7-2024, and scope it to
    the IC platform, never the applet.
 8. **Make `tla2tools.jar` durable.**
@@ -809,9 +841,11 @@ recovery proof" gate, not a new discovery.
 PQSigner's chain-side invariants (#5–#8) are proven. Its seed-side invariants (#1–#4) are
 assumed, and will be assumed forever, because they rest on silicon nobody outside ST,
 Infineon and NXP can inspect. That is the industry ceiling, not a local failure — the
-reference ARMv8-M secure firmware has no isolation proof either, and the highest CC
-attack-potential rating on earth missed a 14-year constant-time bug in the exact vendor
-cryptolib our OPTIGA runs. What we can honestly do is: write each hardware contract down as
+reference ARMv8-M secure firmware has no isolation proof either, and ~80 evaluations at the
+highest CC attack-potential rating on earth missed a non-constant-time modular inversion in
+the Infineon cryptolib for 14 years (demonstrated on a YubiKey; NinjaLab reports it extends
+to our OPTIGA part, on an ECDSA path invariant #5 means we never invoke). What we can
+honestly do is: write each hardware contract down as
 an explicit artifact; wire the seam so code-vs-contract drift is detectable; prove the
 decidable logic against the contract with the tools already installed; and validate each
 contract with a silicon test that can fail. What we must never do is model a device we cannot

@@ -65,9 +65,13 @@ branch `fix/sweep-2026-07-14-findings`. Deferred, needs bench silicon:
   the correct `{E0E8,E0E9,E0EF}` anchors are documented). The irreversible LcsO
   ratchet + the sacrificial-part validation matrix (`docs/production-todo.md`
   S-2) remain the factory-ceremony step — S-2 stays a production blocker.
-- [ ] **F10 — multiSend page-budget `make e2e` check.** Confirm no legitimate
-  page-heavy Safe multiSend overflows `MAX_PAGES=31` now that the UserOp
-  gas-triple page is mandatory (fail-closed refuse if it does).
+- [x] **F10 — multiSend page-budget `make e2e` check — DONE 2026-07-17.** A
+  fresh complete QEMU run on the append-only/CFI gas snapshot passed all
+  assertions, including page-heavy Safe MultiSend approve+presign, maximum
+  four-member batch, exact gas pages at every confirmation, hostile
+  EntryPoint 0d/0e, selector-only Safe 0f/0g and canonical Safe 0h. This is E4
+  emulator evidence, not physical panel, resource-high-water or hardware-FI
+  evidence.
 - [ ] **F12 — (optional, owner) OPTIGA PBS just-before-handshake.** Reverses the
   accepted MEDIUM-1 retained-PBS residual; availability risk (OPTIGA-unreachable
   if handshake-time re-derivation ever fails). Owner call — left as-is.
@@ -128,6 +132,46 @@ Owner report:
 This was research/documentation only; none of the implementation acceptance
 tests below has been completed. The report owns mechanisms, severities,
 deduplication, and falsifiable acceptance criteria.
+
+> **IMPLEMENTED 2026-07-16 (branch `fix/fv-review-2026-07-15`).** The six
+> gate-integrity findings are fixed with a wired-in negative control each, all
+> run + green on this box:
+> - **FV15-F1 DONE** — `check_extraction_freshness.py` + `extraction_registry.json`
+>   (sha256 tripwire, CI per-PR in lean-extracted.yml) + `verify-extraction-regen`
+>   (local toolchain regen). Found 4/15 extractions stale; re-committed 3 cosmetic
+>   (bip39/u256-mul/fwmanifest), tx-merkle WAIVED-STALE (Aeneas can't re-translate
+>   the hardened verify_proof — residual below). FW-tag V1→V2 negative fires.
+> - **FV15-F3 DONE** — per-headline `axiom_closure_manifest.txt` + `--manifest` mode
+>   in check_axiom_closure.py + permanent `AxiomCheckNegativeControl.lean` (Evil:False
+>   canary) wired into `verify-extracted`/`-heavy`.
+> - **FV15-F5 DONE** — `ec_axioms.py` + `axiom_pins.txt` semantic (name→statement)
+>   pin + partial/full split (`--full` = 21/21 zero skips, empirically GREEN here) +
+>   `--self-test` (dmkey_ll:false + delete-one-add-one fire) + gate_enforcement enrolment.
+> - **FV15-F7 DONE** — check_protocol_models.py now checks prover exit code + pins
+>   per-query/per-lemma IDENTITY (Install⇒Install tautology + exit-42 fire); `make
+>   cryptoverif` tries both lib layouts (bin/default here).
+> - **FV15-F8 DONE** — mandatory-ID registry (C0) + deletion negatives in
+>   check_ledger_consistency --self-test; LeanLoop config refreshed (3-axiom
+>   whitelist; closed Bits goal marked DONE). 55→58/eight→nine already fixed in live docs.
+> - **FV15-F11 DONE** — source-generated `kani_census.py` + `kani_census.lock.json`
+>   (148/25, 8-in-6 outside) vs committed lock + manifest-rot; CI per-PR; refreshed the
+>   stale "93/17" gate_enforcement note.
+> - Claim-truth: **FV15-F2 relabel** (compute_user_op_hash → tooling-only) DONE;
+>   **FV15-F4** (PQFW_V1 → LEGACY/NONSHIPPING) DONE; **FV15-F9a/b/c/e** precision
+>   fixes DONE; **FV15-F10** vet-caveat DONE (external spec_vet.py fix deferred).
+> - Incidental: fixed a pre-existing broken `check_gate_enforcement.py --self-test`
+>   (its paths-ignore control was stale after ci.yml dropped paths-ignore).
+>
+> **Still open (research / owner):** FV15-F2 full extraction+proof of
+> `compute_sphincs_digest_v06`↔`PQSmartWallet.sphincsDigest` (roadmap P1.7);
+> FV15-F4 new V4-vs-V6 schema (owner decision); FV15-F6 EasyCrypt C10
+> representability (stage-2 stop/go; stage-1 shipped with F5); FV15-F10 external
+> LeanLoop `spec_vet.py` code fix; FV15-F1 residual: refactor `tx/src/erc20/merkle.rs`
+> for Aeneas re-translation (or bump charon/aeneas), then re-extract + re-prove +
+> `check_extraction_freshness.py --update` to un-waive tx-merkle.
+> NB: `make check-research-bundles` is PRE-EXISTINGLY red on this tree (B/C/D bundles
+> stale vs committed sources, unrelated to this work); the F9b CLAUDE.md source fix
+> will propagate to the E/F bundles on the next full `build.sh` regeneration.
 
 - [ ] **FV15-F1 — reopen extraction freshness (prior extracted F1/F3).** Require
   pinned clean regeneration from every mirrored current Rust source, a total
@@ -2158,7 +2202,11 @@ Fresh critical Trezor(STM32U5/T3W1)→PQSigner pass (12-dim compare→adversaria
 - [x] **fi-2 [low/S] — DONE 2026-07-03 (`4ea78980`; 3 confirmed-fault branches relock via zeroize_sensitive_state, DoS-excluded, guard-pinned).** In confirmed-fault branches ONLY (`crypto.rs:188` ct_eq mismatch; flag-recheck mismatches) call `zeroize_sensitive_state()` + relock (`pin_verified.set_false()`, not halt). EXCLUDE policy/parse rejects.
 - [ ] **te-3 [med/L]** SE-genuineness gate in `factory_provisioning.rs` (OPTIGA Infineon cert challenge-sign + chain-to-pinned-CA; SE050 NXP birth-attest) before any LcsO/lockdown/OTP. Behind `feature=factory-provisioning` only + carve-out in the anti-classical substring guards. Anti-counterfeit; NOT a seed-secrecy fix, NOT "closes S-2".
 - [ ] **td-1 [med/M]** Chunk `write_addr_full` (`primitives.rs:265`) into equal-weight 4-char hex groups (unknown-recipient path only — known addrs carry the `+name` anchor); re-audit per-renderer page-count + `seen_last`.
-- [ ] **td-2 [low/S]** Render full 32-byte calldata hash on the blind-sign page (`primitives.rs:597` shows only 13/32) across 2 pages / a 4-row page; bump `blind_sign.rs` page count + re-verify confirm gate. Consistency, not a break.
+- [x] **td-2 [low/S] SUPERSEDED 2026-07-16.** Every UserOp signing handler now
+  appends the complete mandatory two-page ERC-8213 calldata digest after the
+  semantic/blind renderer and refuses if it does not fit. Expanding the older
+  partial hash inside `blind_sign.rs` would duplicate a stronger existing page;
+  keep one full handler-owned fingerprint and its page-budget gate.
 - [ ] **td-3 [low/S]** Add a "p/n" page-position counter to `confirm.rs::render_page` footer. (Drop hold-progress/rollback — `track_hold` + `seen_last` already cover it.)
 - [ ] **se-3 [low/S]** Read OPTIGA Security Event Counter (`GetDataObject 0xE0C5`) at unlock over the shielded connection; **advisory only** (log + NV3007). Do NOT wire into `tamp-wipe`.
 - [x] **sca-1 [low/S] — DONE 2026-07-03 (`e7f0d34a`; reseed from PLATFORM TRNG, ISR-safe, fail-open — NOT rng_strong which would race SE I2C).** Reseed `consumption_mask` xorshift32 from `rng_strong` every ~1024 ticks (fail-closed skip on Err). Fix the "cryptographic strength not required" comment (`consumption_mask.rs:87-97`).
@@ -2493,8 +2541,9 @@ compiler/silicon/FI/SCA — those stay with `tools/sca` + silicon validation.
             mirrors AXIOM_STATUS A1). In `Extracted/UserOpEquiv.lean`;
             axiom-checked + drift-guarded (`make extract-aa-userop`).
       - [x] **`compute_user_op_hash_spec` (full byte layout = goal
-            theorem 1, FIRMWARE SIDE) — PROVEN 2026-06-10, no sorry.**
-            The firmware's userOpHash equals the EntryPoint v0.6
+            theorem 1, TOOLING-ONLY (EntryPoint userOpHash; NOT the signed
+            compute_sphincs_digest_v06)) — PROVEN 2026-06-10, no sorry.**
+            The tooling userOpHash equals the EntryPoint v0.6
             double-keccak over the EXACT abi.encode preimage, for ALL
             inputs. Axiom closure = [keccak256_pure, propext,
             Classical.choice, Quot.sound] — keccak the lone content
@@ -2948,6 +2997,240 @@ before actioning; several sub-items have since landed.**
   Irreducible categories (CMSE veneers, NsPtr deref, hw-sha256 hooks, `fi.rs`
   volatiles, `static mut` driver state) stay — see CLAUDE.md unsafe taxonomy.
 
+## PQ1 ERC-7730 productization campaign — owner direction 2026-07-16
+
+This campaign turns the Ambire/registry comparison into PQ1 work without
+copying Ambire's host-trusting assumptions. The engineering plan and evidence
+matrix live in `docs/erc7730-implementation-review-2026-07.md` under the dated
+PQ1 update; the normative companion behavior remains owned by
+`docs/companion/companion-erc7730-implementation-guide.md`. The exact first
+candidate received **NO-GO** from both required architecture partners. The
+canonical record is
+`docs/security/adversarial-review/findings/clear-signing-pq1-forced-blind-architecture-2026-07-16.md`;
+its 27-row matrix (`214763b8…`) records 13 confirmed, 10 narrowed, 3 unresolved
+and 1 refuted result. The materially revised v2 candidate is explicitly
+**NOT REVIEWED** and carries no implementation authority. Baseline for the
+adverse plan freeze: branch `fix/fv-review-2026-07-15`, HEAD
+`9647b79374d5e2e10445254492308101b8be708b`, with unrelated in-flight formal-
+verification changes preserved (tracked-diff SHA-256
+`8ae9921ec0e4aec00f97aeafcb3925d19ff9482d8330fe8ceaa746233c7fe65f`).
+The clean reference clones were Ambire `ambire-common`
+`348591fb1c1b1f05b71f06cd509cc5be143309e4` and the Ethereum ERC-7730 registry
+`784c87c925e8438e7b4736b2af85a501f8d2a265`; they are comparison inputs, not
+PQSigner authorities. Correction to the earlier external assessment: that
+Ambire commit has a substantial explicit implementation under
+`src/libs/humanizer/erc7730/`, including AccountOp/EIP-712 controller wiring,
+request-generation race suppression, nested calldata and registry caches. The
+comparison below was checked against that code, not only Ambire's older generic
+humanizer.
+
+- [~] **[pq1-7730-blind-review, P0, MATERIAL REDLINE / FRESH DUAL REVIEW
+  REQUIRED] Add a transaction-local forced-blind option without weakening the
+  default refusal.** The frozen v1 candidate is rejected; do not implement it.
+  Candidate v2 is the conservative replacement in the dated review:
+  **only** a structurally cleanly absent ERC-7730 trailer on an independently
+  FI-proven Bloom `filter-positive` direct call may qualify. “Filter-positive”
+  is probabilistic, never exact membership. Bad/nonempty/malformed,
+  root-mismatched, chain/target-misbound or FI/CFI-disagreeing evidence; every
+  current `RenderErr` including `NoFormat`; nonempty paymaster; short/malformed
+  protected selectors; Safe/CoW/MultiSend/delegatecall; batch/off-chain/EIP-712;
+  deployment/initCode; slot rotation; page/stack/resource failure; and unknown
+  future reasons are fatal. The handler preserves a closed fatal-default cause,
+  mints eligibility affirmatively, and consumes it in a direct terminal flow
+  that cannot enter the ordinary ERC-20/typed/selector/generic-blind ladder.
+  Refusal remains default/rollback; there is no host flag, saved preference,
+  persistent setting, automatic downgrade or reusable permission. The fixed
+  28-page raw transcript includes device signer, target, numeric chain, pinned
+  EntryPoint v0.6, selector/length, full value/nonce/fee/gas words, empty
+  paymaster digest, complete ERC-8213 digest and final Type-2 signing digest.
+  A severe static warning and the final transcript produce distinct
+  request-digest-bound, fail-initialized, ordered, single-use FI/CFI receipts.
+  All deterministic preflight completes before warning. **Still unresolved and
+  architecture-blocking:** the owner must choose exact volatile prompt
+  budget/cooldown/deadline/reset semantics and accept either fail-closed host
+  DoS or the habituation/unlocked-window residual. After that decision, freeze
+  the new exact digest and run fresh mutually withheld A/B first passes plus
+  symmetric cross-adjudication; the adverse v1 review cannot transfer.
+- [x] **[pq1-7730-doc-drift, P0, S] DONE 2026-07-16 — repair and mechanically
+  guard the companion catalogue snapshot.** Both normative E2E facts now state
+  3,917 bytes / 8 leaves at root `cbd0…238e9`; the stale `NftName` opcode is
+  corrected to `0x04` (`0x09` is `Unit`). Fresh prod/E2E builds render and check
+  the guide's root/count/size facts plus the integration snapshot's root, leaf
+  count, exact known-call tuple count/SHA, Bloom occupancy and omission count.
+  Stale values fail `xtask gen-erc7730-descriptors --check`. Fresh evidence: all
+  52 `pqsigner-xtask` tests passed, the catalogue check reported `in sync`,
+  `cargo fmt --check` and `git diff --check` were clean.
+- [~] **[pq1-7730-gas-page, P0, S, IMPLEMENTED + SOFTWARE VALIDATED;
+  EXACT IMPLEMENTATION REVIEW PENDING] Restore one-owner gas display without
+  weakening the handler FI gate.** The ERC-7730 renderer no longer emits the
+  gas triple. All five single/batch confirmation contexts use one handler-owned
+  canonical page, A/B pre/post scans, an append-only `prior_len` position that
+  never shifts an existing semantic page, a caller-owned CFI counter checked
+  after append and again at the final confirmation boundary, and exact global
+  uniqueness/no-near-shape proofs. Width, full-buffer, duplicate, conflict,
+  corrupted, skipped-call and wrong-index cases fail closed; the differential
+  harness models the complete handler transformation. Fresh E1/E3 evidence on
+  the current implementation: 14/14 focused gas tests; secure host 2,155/0
+  with one diagnostic ignored; Thumb release link green; full QEMU all
+  assertions green, including page-heavy MultiSend and maximum batch.
+  Optimized-ELF FI/resource inspection and the exact dual implementation review
+  remain mandatory before `[x]` or merge. The prior dual review rejected
+  “idempotently trust a renderer-owned page”; this implementation does not.
+- [~] **[pq1-entrypoint-v06-pin, P0, S, IMPLEMENTED + SOFTWARE VALIDATED;
+  EXACT IMPLEMENTATION REVIEW PENDING] Pin the wire EntryPoint
+  before any UserOp display or signing.** In both single and batch handlers,
+  FI-harden equality of `snap[32..52]` to `ENTRY_POINT_V06`, reject mismatch,
+  then discard the supplied value and feed the firmware constant into all four
+  T1/T2 digest initializers. Add ordering/source pins, hostile-byte QEMU cases,
+  canonical positive controls and optimized gate inspection. This is an
+  existing WYSIWYS hardening independent of forced-blind authority; custom
+  EntryPoints remain unsupported. The code, host tests, Thumb link and current
+  QEMU hostile single/batch cases are green; optimized inspection and exact
+  dual implementation review remain open.
+- [~] **[pq1-safe-short-exec-refusal, P0, S, IMPLEMENTED + SOFTWARE
+  VALIDATED; EXACT IMPLEMENTATION REVIEW PENDING] Reserve every Safe
+  `execTransaction` selector claim regardless of calldata length.** Add a
+  selector-only `is_exec_transaction_claim`; in single and batch paths, any
+  claim whose strict `verify_and_bind_exec` returns `None` must abort before
+  ERC-20/CoW/ERC-7730/typed/generic routing. Delete the minimum-length conjunct.
+  Test 0–3-byte controls, selector-only/5-byte/`MIN-1`/canonical/overlong claims,
+  one-member batch refusal and a valid canonical Safe positive. Document the
+  deliberate liveness narrowing for non-Safe contracts that reuse the selector.
+  The current implementation uses fail-initialized caller-owned claim and
+  verifier outputs, independent CFI counters, two strict decodes and two
+  resolution gates in every production pass; host tests, current QEMU
+  selector-only single/batch refusal plus canonical liveness, and Thumb link
+  are green, while optimized inspection and exact dual implementation review
+  remain open.
+- [ ] **[pq1-confirm-page-append-only, P0, CANDIDATE EXPANSION / EXACT DUAL
+  ADJUDICATION REQUIRED] Eliminate the remaining shared in-place confirmation
+  page shifts.** The gas review produced a concrete single-skip trace: an early
+  exit in `value_page::insert_blank` can duplicate a tail page, erase a prior
+  semantic page, still increment `len`, and let an inserted-page-only proof
+  pass. UserOp gas is now append-only, but source review found the same helper
+  still used by native value, Safe/CoW fee, paymaster, signer, target and nonce
+  gates; the material exposure is the single-main and batch-member paths. This
+  is a substantiated scope-expansion candidate, not yet an adjudicated finding
+  or implementation mandate. Smallest proposed remedy: coordinate all callers
+  onto bounded append-only construction, strengthen missing completion/CFI
+  proofs, add uniquely marked prefix-preservation and combined handler-order
+  tests, then delete `insert_blank`. Alternative: retain placement only with a
+  caller-owned cryptographic pre/post preservation proof, which adds more TCB,
+  stack/work and FI argument. Include the candidate in the exact pair's fresh
+  implementation review; do not claim the gas fix closes this whole legacy
+  class. E3 inspection confirms the copy loop is real in the exact dev/mock
+  Thumb release ELF `e5e4c896955e6802b83a4b4ca48f856507b2df7e06abc1b85a12a1c747221320`:
+  `insert_blank` is at `0x10012a00`, its 64-byte load/store body at
+  `0x10012a32..0x10012a46`, and its loop branch at `0x10012a4c`. This is a
+  non-production optimized surface receipt, not an executed fault bypass.
+- [x] **[pq1-7730-semantic-guard, P0, S] DONE 2026-07-16 — catalogue guards
+  now cover security semantics.** The normative guide contains an exact
+  xtask-managed manifest generated from `FormatOp::ALL`, stable registry names,
+  and the same `FormatterRoute` mapping production dispatch executes. It pins
+  every opcode (`NftName=0x04`, `Unit=0x09`), all implemented branches, and the
+  deliberate `Calldata`/`Encrypted` hard-refusal routes. The real secure
+  dispatcher consumes an exhaustive per-`RenderErr` hard-refusal policy and a
+  host test enumerates `Reject`/`NoFormat`/`PageBudget`. Shared ERC-8213 layout
+  constants drive both renderer and manifest; executable tests prove exactly
+  two pages, all 32 digest bytes, and atomic no-orphan failure when only one
+  page remains. Stale semantic-doc mutations fail the xtask gate. Fresh
+  evidence: erc7730 193/0; secure renderer 67/0 (1 diagnostic ignored) plus the
+  fatal-policy test; xtask 54/0; catalogue `in sync`; thumbv8m
+  `ui-noop,mock-se` check green. No signing eligibility or fallback behavior
+  changed.
+- [ ] **[pq1-7730-native-erc20-shortcut, P2, DESIGN-FIRST, M] Decide native
+  direct ERC-20 clear rendering separately from forced blind.** Only exact
+  canonical transfer/approve framing plus Merkle-authenticated
+  `(chain, contract)` metadata could qualify. Unknown tokens, Permit2,
+  ERC-721-colliding `approve`, malformed framing and metadata mismatch remain
+  ineligible. This row cannot broaden the forced-blind clean-absence class.
+- [ ] **[pq1-7730-upstream-fixtures, P1, M] Add a test-only upstream conformance
+  lane.** Import the registry's positive `expectedTexts` fixtures without
+  putting fixture bytes in the production root; compare normalized semantic
+  transcripts and maintain explicit, reviewed waivers where the 16×4 trusted
+  display intentionally differs. Generate adversarial negatives for truncated
+  ABI tails, wrong offsets, overlap/aliasing, extra bytes, wrong deployment or
+  chain, malformed proofs, visibility hiding, and boundary magnitudes. Inventory
+  descriptors with no upstream test and never interpret a positive-only corpus
+  as downgrade-safety evidence.
+- [ ] **[pq1-7730-provenance, P1, M] Mechanize registry provenance and reviewable
+  updates.** Complete the existing §2.1/§2.3 owner items in
+  `docs/erc7730-implementation-review-2026-07.md`: explicit upstream SHA,
+  schema/tool/policy/curation digests, a reviewable overlay instead of hidden
+  in-place edits, deterministic `diff-registry`, and signed-release-manifest
+  binding. Preserve the existing root-rotation policy as owner; do not create a
+  second ceremony.
+- [ ] **[pq1-7730-native-currency-list, P1, DESIGN, M] Support bounded
+  `nativeCurrencyAddress` lists.** Authenticate the complete descriptor list,
+  cap its length, compare every entry exactly, bind chain-native ticker/decimals,
+  and render an unmatched address as an unverified token rather than assuming
+  native currency. Reconcile with existing review item 3.4/3.5.
+- [ ] **[pq1-7730-device-from, P1, M] Bind descriptor `@.from` to the
+  independently derived device signer.** Thread the handler-derived wallet
+  address into contract rendering; never accept a companion-provided sender.
+  Retain the mandatory full signer page and add wrong-account, byte-flip,
+  single/batch attribution and descriptor-path tests. The reviewed Ambire
+  corpus uses `@.from` in 39 fields across 14 source files, while PQSigner
+  currently rejects the wire op as unbound in
+  `pqsigner-erc7730/src/display/render/formatters.rs`.
+- [ ] **[pq1-7730-revoke-copy, P2, S] Derive “Revoke approval” only from an
+  exact signed zero allowance.** Keep spender, zero amount, token contract and
+  chain visible. Enable the wording only for an authenticated ERC-20
+  capability or verified descriptor with canonical approval framing; never
+  infer it from selector-only calldata because ERC-721 shares
+  `approve(address,uint256)`.
+- [ ] **[pq1-7730-interpolated-intent, P2, DESIGN, M] Support
+  `interpolatedIntent` only as derived presentation.** Every substitution must
+  come from an independently rendered, signed-byte-bound value; the intent may
+  summarize but never replace the underlying field pages. Reject missing,
+  hidden, clipped, ambiguous or unrenderable substitutions. This is the
+  existing companion-guide §12.2 owner item, not a parallel specification.
+- [ ] **[pq1-7730-nft, P2, DESIGN, M] Complete injective NFT collection
+  identity.** The exact raw token-ID fallback is already implemented; add the
+  complete collection contract alongside it. A friendly collection name is
+  permitted only when authenticated by a chain+contract-bound metadata
+  capability; missing metadata keeps the raw identity, never a guessed name or
+  blind downgrade. Reconcile with review item 3.2 and guide §12.4.
+- [ ] **[pq1-7730-nested-calldata, P2, DESIGN-FIRST, L] Add nested calldata only
+  with child semantic proofs.** Bind the child target, selector, exact byte
+  interval and parent path; cap recursion/depth/pages; reject overlaps,
+  aliases, trailing bytes, cycles and unsupported delegatecall semantics. A
+  hash-only child is a loud raw fallback, not clear signing. The native
+  Safe/MultiSend paths retain precedence. Owner: guide §12.3 plus the existing
+  nested-calldata design documents.
+- [ ] **[pq1-7730-multi-tail-abi, P2, DESIGN-FIRST, L] Generalize dynamic ABI
+  only from an authenticated topology with an exact interval partition.** Cap
+  tail count and total work; prove canonical offsets, non-overlap, complete
+  consumption, alignment and no hidden gaps/trailing data. Do not add a second
+  permissive walker or a value-single-index array resolver. Owner: guide §12.5
+  and current resolver design.
+- [ ] **[pq1-7730-companion-ux, P2, companion-only, M] Port only Ambire-like UX
+  ideas that survive the hostile-companion model.** Add request-generation IDs
+  for cancellation/race suppression, typed stable warning/refusal codes,
+  warning preservation, catalogue-selection diagnostics and an exportable
+  signing transcript that clearly separates authenticated facts from host
+  hints. These improve operability but grant no signing authority and cannot
+  hide or reclassify a device warning.
+- [ ] **[pq1-7730-nonports, guardrail] Do not import Ambire's relayer trust,
+  selector-only semantics, missing-token-means-native behavior, host visibility
+  suppression, or heuristic labels as authenticated facts.** Ambire remains a
+  companion-UX/reference decoder; PQ1's device-pinned, byte-bound renderer and
+  hostile-host model remain the security boundary.
+
+**Execution order/gate:** the stale guide/catalogue facts are guarded and the
+first exact dual review is complete with NO-GO. Resolve the prompt-abuse owner
+decision, freeze material v2, and run fresh mutually withheld architecture
+passes plus cross-adjudication before forced-tier behavior. The EntryPoint pin,
+short-Safe refusal, handler-only gas ownership and semantic guards are separate
+fail-closed slices: their current software implementations still need the
+frozen exact dual implementation review and remaining evidence before merge.
+That review must also adjudicate the newly surfaced legacy `insert_blank`
+preservation candidate and whether it blocks the slice; do not silently treat
+it as closed by the append-only gas fix. Then take fixtures/provenance/status
+before larger semantic coverage features. No campaign row changes production
+shipment authority, the ERC-8176 blocker, frozen wire formats, or irreversible
+hardware state.
+
 - [ ] **ERC-7730 phase-5 residuals** — MOST landed (the `erc7730-dev-unattested`
   feature, both `tools/cross_parity_erc7730.py`/`cross_parity_erc8213.py`, and
   the 3 docs the handoff commissioned all exist). The remaining clear-sign gaps
@@ -3225,13 +3508,26 @@ remain useful dated evidence, but are kept distinct from the merged-root run.
   establish structure, not physical fault coverage. This item grants no
   authority to flash hardware or run destructive tests.
 
-- [ ] **[erc7730-provenance, production ship blocker] Acquire and verify real
-  ERC-8176 provenance.** Obtain trusted auditor identities and attestations,
-  build a reproducible authenticated offline EAS snapshot verifier, bind each
-  record to the exact JCS descriptor hash and deployment, exclude unattested
-  leaves, and make the production gate reproduce the shipping root with
-  provenance `erc8176-verified`. `dev-unattested` must remain an intentional
-  production failure until this closes.
+- [ ] **[erc7730-provenance / pq1-7730-erc8176, P0 production ship blocker]
+  Acquire and verify real ERC-8176 provenance.** **False-readiness sub-fix in
+  the current working tree (2026-07-16):** the advisory coverage checker now
+  derives `min_attesters = 2` from policy, counts distinct trusted identities
+  per descriptor, excludes expired/revoked/malformed EAS rows at an explicit
+  report timestamp, reports deterministic shortfalls, and can never authorize
+  a production flip; 9/9 offline tests pass and the target is enrolled in
+  Make/CI. This closes PB-BR-010's one-attester and expired-record false greens,
+  not the production blocker. Code-now half still
+  required: build a reproducible authenticated offline EAS snapshot verifier
+  and test synthetic valid, revoked, wrong-schema, wrong-hash and
+  untrusted-attester records; bind each accepted record to the exact JCS
+  descriptor hash and deployment and exclude unattested leaves. External half:
+  obtain real trusted auditor
+  identities and attestations and make the production gate reproduce the
+  shipping root with provenance `erc8176-verified`. The current ecosystem has
+  no usable trusted-attestation population; `dev-unattested` and
+  `make prod-erc7730-provenance-check` must remain intentional production
+  failures until it exists. No renderer feature, Ambire heuristic or owner
+  preference can code around this external trust gate.
 
 - [ ] **[erc7730-semantic-honesty, external audit] Reconcile accepted
   descriptors with deployed semantics.** Archive deployed bytecode/proxy state
@@ -3241,15 +3537,20 @@ remain useful dated evidence, but are kept distinct from the merged-root run.
   structural consistency cannot prove that registry prose or RPC metadata is
   honest; pin the resulting evidence inputs so the exercise is reproducible.
 
-- [ ] **[erc7730-catalog-root-distribution, companion integration/liveness]
+- [ ] **[erc7730-catalog-root-distribution / pq1-7730-catalog-status, P1 DESIGN,
+  companion integration/liveness]
   Authenticate the firmware-root ↔ companion-catalogue pairing.** The `P730`
   blob contains layout/proofs, not its root. Put the ERC-7730 root, catalogue
-  hash/size/schema/leaf count, and firmware measurement/version in authenticated
-  release metadata—or add an equivalently authenticated device query—then have
-  the companion reconstruct every proof before enabling clear signing. Add
-  upgrade, rollback, and version-skew tests. This is compatibility/availability;
-  it does not replace the on-device Merkle check. Production also remains
-  independently blocked by the firmware-rollback quarantine.
+  hash/size/schema/leaf count, known-call tuple-set/Bloom identity, provenance
+  class, tool version and firmware measurement/version in authenticated release
+  metadata—or add an equivalently authenticated, versioned, read-only device
+  query—then have the companion reconstruct every proof before enabling clear
+  signing. Treat the response as a compatibility report, not an ERC-8176
+  attestation, and never let the companion assert the values. A query changes
+  the frozen command/response surface and needs protocol/USB/CMSE review. Add
+  upgrade, rollback and version-skew tests. This does not replace the on-device
+  Merkle check; production also remains independently blocked by the firmware-
+  rollback quarantine.
 
 - [ ] **[erc7730-kani-tractability, offline assurance] Obtain a current-tree
   Kani census and close the two bounded proof-convergence residuals.** Kani was
@@ -3305,6 +3606,130 @@ returns the exact 64-byte public key or complete bound calldata.
 
 ---
 
+## Hardware-assumption boundary — surfaced 2026-07-17
+
+Source: [`docs/verification/hardware-assumption-boundary-2026-07-17.md`](verification/hardware-assumption-boundary-2026-07-17.md)
+(deep research into whether OTP / TrustZone / I2C / STM32 / OPTIGA / SE050 surfaces are formally
+verifiable). Read that doc's §6 for the full falsifying-test + cost table. **The first two rows are
+live defects, not research residuals.**
+
+### Defects (fix these; they are not "research")
+
+- [ ] **D1 — `Inconclusive` is collapsed into `Rejected` at three probe sites, and the collapse
+  drives a mutation.** `se050/mod.rs:375` (`establish_with(final).is_ok()` → falls through to PUT KEY),
+  `se050/mod.rs:440` (`check_exists(...).unwrap_or(false)` → **drives a create/write**), and
+  `optiga/mod.rs:585` (`hard_reset_and_reinit().is_ok() && ensure_shield().is_ok()` → falls through to
+  the **E140 rewrite**, i.e. the brick path — see `docs/secure-elements/optiga-brick-postmortem.md`).
+  A transport glitch is indistinguishable from an authoritative "no", and "no" here means *mutate*.
+  Fix: a probe result that can say "I don't know", whose don't-know branch retries read-only probes
+  instead of falling through. Small, local, and a prerequisite for the first-boot ceremony's named
+  production gate.
+- [ ] **D2 — live unsound axiom with no gate: `hal/` and `flash.rs` state contradictory flash
+  semantics.** `hal/src/lib.rs:105-107` (the crate that declares itself *"the specification"*) says
+  programming an already-cleared bit is a **no-op**; `secure/src/hw/flash.rs:723-725` says STM32U5
+  *"does NOT allow re-programming an already-programmed word (ECC locks the value)"*. Both cannot be
+  true; page-124's whole one-QW-per-attempt encoding rationale depends on which; and because
+  `secure/Cargo.toml` has **no dependency on `hal/`**, nothing detects it. Decide which is true
+  (`HW-ASSUME-QW-ATOMIC`), fix the loser, and note this is exactly the false-axiom shape that would
+  have made a naive HAL-seam Kani proof a false green.
+- [ ] **D3 — `hal/src/lib.rs`'s `Rng` trait asserts an SP 800-90B obligation the code does not meet.**
+  Either implement the health tests (decidable software) or delete the obligation. Today the contract
+  asserts something untrue, and that RNG feeds an irreversible OTP burn.
+
+### Named open hardware assumptions (each needs a ledger row + a falsifying test)
+
+- [ ] **A1 — Build `hw-assumptions.json`**, mirroring the existing `AXIOM_STATUS.json` +
+  `verify-ledger-consistency` culture, with one row per assumption: `{assumption, RM0456/datasheet/
+  errata cite, falsifying silicon test, status, consuming claim}`. Gate: a claim depending on an
+  unledgered hardware assumption fails. `TRUST_ASSUMPTIONS.md` §Out-of-scope **excludes firmware** —
+  this is the firmware-side hole it leaves, and it has no ledger today. Register at minimum:
+  `HW-ASSUME-{DHUK-RDP12, QW-ATOMIC, OTP-ONEWAY, DHUK-UNIQUE, CMSE-SAU, TRNG-ENTROPY,
+  SE050-CERT-VERSION, RDP2, SE-INTERNALS, PUTKEY-ATOMIC}` (full table in the doc's §6).
+- [ ] **A2 — `HW-ASSUME-PUTKEY-ATOMIC` is the highest-leverage single row.** The entire first-boot
+  SE050 rotation reduces to: *is PUT KEY (`P1=0x0B`, `P2=0x81`, three key blocks ENC‖MAC‖DEK,
+  in-place KVN) all-or-nothing across the SE's NVM commit?* The resume probe proves **ENC+MAC only**
+  (`se050/mod.rs:375`), the DEK is never probed, and the KVN is `0x0B` before *and* after, so it
+  cannot disambiguate. If PUT KEY is non-atomic, a green "already rotated → resume" can strand a
+  **factory-known DEK**. Falsifying test: power-cut mid-APDU, then probe ENC/MAC and DEK
+  *independently*. Sharpens CLAUDE.md's already-named *"atomic durable old/new/KVN recovery proof"*
+  gate — this is the precise statement of it.
+- [ ] **A3 — `HW-ASSUME-DHUK-RDP12` (one sacrificial part, one shot, irreversible).** Is
+  `SAES-CMAC(DHUK,·)` identical at RDP-1 and RDP-2 on the same die? **Unmeasured — no board in this
+  project has ever been at RDP-2.** ST prose implies yes; CLAUDE.md's "only then is the per-die DHUK
+  *final*" reads the other way; both are consistent with everything measured, and the first-boot
+  ceremony is self-consistent either way, so **no functional test will ever surface this**. Test:
+  fingerprint at RDP-1 → self-lock RDP-2 → fingerprint again.
+
+### Cheap wins (days, no seam work)
+
+- [ ] **C1 — Kani `t1oi2c`'s `crc16` / `build_frame` / `validate_frame`.** Pure functions over byte
+  slices, no model, no seam work. The cheapest real win in the doc.
+- [ ] **C2 — Vendor the `stm32-rs` patched U585 SVD and diff it** against every hand-transcribed base
+  address in `secure/src/hw/*`. Hours; 3-for-3 against our transcription history (incl. the TAMP
+  wrong-address bug). Scope: layout only; does not cover SAU/MPU/NVIC/SCB/UID/OTP.
+- [ ] **C3 — Bind the GTZC receipt to the shipping feature combo.** `make gtzc-enforcement-hw` builds
+  `mock-se,ui-semihosting,debug-log,e2e-test,stm32u585,otp-hardcoded-master-key` — *not* what we ship —
+  while `sau.rs` has 12 `cfg(feature)` gates incl. `spi1-arduino` inside the peripheral security config
+  (sau.rs:281,387). Emit the SAU/GTZC register image per feature combo; gate production == tested.
+  Extends the existing compile-time interval assert (sau.rs:58-64), which is already the right kernel.
+- [ ] **C4 — Give TAMP a silicon test.** `tamp-wipe` is forced ON for shipping dual-SE images, has
+  never run on silicon, and its driver sat at the wrong base address for an unknown period precisely
+  because nothing exercised it.
+- [ ] **C5 — Make `tla2tools.jar` durable.** A pilot result that cannot be re-run is a verification
+  claim with no executable evidence — the exact thing `verify-ledger-consistency` exists to prevent.
+- [ ] **C6 — Fix the OPTIGA CC citation.** V4-2019 **expired 2024-12-17**; cite V7-2024, and scope it
+  to the **IC platform** — the Trust M applet, its OID model, LcsO, and the Shielded Connection are IC
+  Embedded Software, *above* the certified boundary. Any row saying "discharged by EAL6+" is wrong.
+
+### Modelling work (ranked)
+
+- [ ] **M1 — Model the T=1' / IFX-I2C framing FSM in TLA+.** The layer every PIN attempt and every
+  PUT KEY crosses, and the only one still unmodelled — the SCP03/Shielded *crypto* is modelled, the
+  framing that carries it is not. `t1oi2c.rs` is a textbook **alternating-bit protocol** (`PCB_I_SEQ =
+  0x40`; `ns`/`nr` "toggle 0/1"; R-block acks; `MAX_WTX_RETRIES = 500`) — that 1-bit sequence number is
+  precisely how a lost response could **duplicate-apply** an already-executed command (double-charged
+  PIN attempt; re-issued PUT KEY). TLC is installed and piloted; literature offers nothing to reuse.
+- [ ] **M2 — Wire the HAL seam** (`hal-stm32u5` / `hal-mock`, the deferred PR2/PR3). Not merely a
+  Kani/Miri enabler: it is **what makes the contract falsifiable**, and it would surface D2 as a build
+  event instead of an invisible unsound axiom. Demonstrated working on this box: driver logic generic
+  over a `Flash` trait + a proof-only `ModelFlash` encoding the 1→0 rule, Kani 0.67, **0/52 checks
+  failed, 0.18 s**. ⚠️ Do **not** wire the traits as they stand — their `Result<(),E>` outcome type
+  structurally cannot express "the command executed but the response was lost" (see D1/A2 and the
+  doc's §2.1); fix the outcome algebra first or the seam launders the optimism into a proof.
+- [ ] **M3 — Re-derive `optiga_shield_handshake.pv` from Infineon's public I2C Protocol v2.03 §6**
+  rather than from `shield.rs`. The current model's own docstring admits it is driver-derived — so it
+  proves we modelled ourselves consistently. The vendor spec is an external ground truth the driver
+  can diverge from. Note: OPTIGA's Shielded Connection has **no public security analysis at all**,
+  whereas the SCP03 leg has a published proof (Sabt & Traoré, SSR 2016) — that asymmetry deserves a
+  `THREAT_CLAIM_MAP` row.
+- [ ] **M4 — Extend the page-123 TLC pilot with a torn-QW fault action** (the current model cannot
+  express it), and Kani page-124 scan/bump monotonicity behind a model `Flash` — after M2's outcome
+  algebra lands, and noting the current page-124 model under-models the security-load-bearing part
+  (the F-15.r5 forward+reverse FI double-scan with fail-closed-to-CAPACITY).
+
+### Do NOT do (recorded so it is not re-proposed)
+
+- **(c) ARMv8-M / CMSE is CLOSED, not backlog.** No public formal M-profile model exists in any
+  framework. ARM's v8-M ASL was machine-validated (Reid, OOPSLA 2017 — 12 bugs found, 2 security) but
+  **never released**; `sail-arm` is A-profile only, so Isla/Islaris have nothing to consume; and GTZC —
+  where our enforcement actually lives — is an **ST peripheral in no ARM specification at all**. `K` is
+  permanently unreachable. Record as closed.
+- **Modelling OPTIGA/SE050 internals is theatre, unconditionally.** No test can reach inside the die;
+  it is pure assumption-relocation. Surface (e) is silicon-E2E-or-nothing.
+- **A hand-written SAU/IDAU/CMSE contract with no silicon differential is theatre.** Nothing could
+  contradict it; `make gtzc-enforcement-hw` is worth more.
+- **Do not model OTP as a monotone bit-lattice.** Bit monotonicity is *true* on this silicon and the
+  design built on it was *invalid* — the rejected unary tally (`otp.rs`) needed to clear one more bit
+  in an already-programmed QW, which the silicon forbids (QW program-once, virgin-required). The
+  lattice model would have issued a clean green for an irreversible brick. Model at the **commit
+  granularity** (quad-word / one APDU / one bus transaction) or do not model.
+- **Do not propagate "BINSEC decodes Thumb fine, only CMSE fails"** — author-reproduced on this box
+  2026-07-17: thumb mode emits `unimplemented` **uniformly, including on plain `adds`/`eors`/`bx`**,
+  then dies with an OCaml assertion. The 2026-06 SOTA doc's operational NO-GO verdict **stands**.
+  (Still open: whether `cargo-checkct` uses a BINSEC frontend at all.)
+
+---
+
 ## Completion Log
 
 When a task above is completed, update it here with the date and a one-line summary.
@@ -3318,6 +3743,8 @@ When a task above is completed, update it here with the date and a one-line summ
 
 | Date | Item | Summary |
 | --- | --- | --- |
+| 2026-07-16 | PQ1 ERC-7730 executable semantic drift guard | The normative companion guide now carries an xtask-generated semantic manifest sourced from the stable `FormatOp::ALL` wire vocabulary and the exact `FormatterRoute` production dispatch consumes: all 14 opcode/name pairs are pinned (`NftName=0x04`, `Unit=0x09`), with `Calldata` and `Encrypted` honestly listed as hard refusals. The real secure dispatcher funnels all verified-descriptor `RenderErr::{Reject,NoFormat,PageBudget}` variants through one exhaustive hard-refusal helper, directly enumerated by a host test. Shared ERC-8213 layout constants drive both renderer and manifest; tests prove a complete 32-byte/two-page fingerprint and atomic refusal with only one free page. Stale opcode/route/error/fingerprint prose mutations fail xtask. Evidence: pqsigner-erc7730 193/0; secure ERC-7730 renderer 67/0 (1 diagnostic ignored) plus fatal-policy 1/0; xtask 54/0; catalogue `in sync`; thumbv8m `ui-noop,mock-se` check green. This is a behavior-equivalent single-source refactor plus tests/docs; it changes no signing eligibility or fallback policy. |
+| 2026-07-16 | PQ1 ERC-7730 catalogue documentation drift guard | Corrected the normative companion guide's stale E2E catalogue from 2,000 B / 5 leaves / `2c4f…d9575` to the generated 3,917 B / 8 leaves / `cbd0…238e9`. `pqsigner-xtask gen-erc7730-descriptors --check` now verifies generated prod/E2E summary and root blocks (root/count/size plus prod tuple/provenance facts); focused stale-fact negatives pass, full xtask = 50 passed, fresh catalogue = `in sync`. No signing behavior, root, blob, Makefile, or FV file changed in this slice. |
 | 2026-07-15 | #36 correction after integration review | The 2026-07-14 row is retained as an as-found receipt, but its authority and two evidence claims are superseded: `rdp2-self-lock` is bidirectionally coupled to `mode-production`; `make build-rdp2-self-lock` now proves the unsafe non-production combination is rejected rather than compiling a runnable image. Host cuts cover boundaries between completed QW programs and recovery is capacity-bounded, not “power loss at any point.” The candidate is not production-approved; handoff/receipt, authenticate-before-rotate, old/new/KVN recovery, E140 ordering, silicon receipts, and later Opus re-review remain OPEN. `docs/provisioning/first-boot-provisioning.md` grants no irreversible authority. |
 | 2026-07-14 | #36 first-boot self-provisioning — DEVICE-SIDE IMPLEMENTED (feature `rdp2-self-lock`, silicon-validation pending) | On the first field boot the secure app verifies the ship option-byte profile + blank per-device pages 123–127, self-locks RDP-2 (Phase A, right after `ui::init()`), then resumes a journaled state machine that provisions the BHK (anti-pre-plant erase-and-reprovision) and rotates the SE050 SCP03 keyset + admin credential and the OPTIGA E140 PBS off the factory **transport** keysets to their final BHK-/salted-DHUK-rooted values (Phase B, right after `measured_boot::run()`), all before the seed wizard. Owner amendment: the lock lives in the **secure app early-boot, not the FSBL** (FSBL is ~99 % of its 32 KB budget; FSBL still gates slot-signature verification before entry). Landed: feature + `mode-production`-only ship require-fence + incompat/`dual-se` fences (`nsc/mod.rs`); pure page-127 journal codec + resumable state machine, **host-tested incl. a power-cut-at-every-boundary convergence matrix** (`secure/src/first_boot/{journal,state}.rs`); ship OB profile + verifier (`shared/src/lockdown.rs`); RDP-2 write path + OB readers + journal I/O (`hw/flash.rs`); transport keysets + salted-`v2` PBS + the `current_pbs()` single-source-of-truth resolver that fixes the wizard-rewrites-E140-to-unsalted **brick class** (`hw/secret_keys.rs`); two-phase SE rotation methods (`se050/mod.rs`, `scp03.rs`, `optiga/mod.rs`); parameterized `build_put_key_apdu(wrap_dek)`; boot wiring (Phase A/B, BHK-block journal gate so the BHK is never wrapped under the RDP-0 constant DHUK, SL7 journal-aware hard-halt on RDP regression). Authoritative factory⇄first-boot split written into `docs/provisioning/first-boot-provisioning.md` (new) + `factory-provisioning.md` + `factory-mass-production-model.md`. Verified: 2163 secure + 36 shared host tests green, `make build-rdp2-self-lock` compiles the feature-ON path for thumbv8m, dev/QEMU builds byte-identical (feature off). NOT done = the silicon-validation runbook (RDP 0→2 with TZEN=1, page-126 program-hostility, SE rotation APDU flows, OEM/BOR/WRP register pins, power-cut matrix on sacrificial parts) — nothing has shipped. |
 | 2026-07-15 | Local closure review (LCR) 2026-07-14/15 — 2 fixed / 2 deferred | Worked the 4 leads in `multi-2026-07-14-local-closure-review.md` (a local E0 source-only pass — its GPT-5.6/Opus legs were discarded per the doc; the 2026-07-15 second round added 0 findings). Weighed each on independently-confirmed code. **✅ FIXED:** LCR-F4 (completes the sweep's F12 — `ApduBuf` zeroize-on-drop, `wrap_apdu`/`unwrap_response` plaintext buffers → `Zeroizing`, enabled the `aes`/`cmac` crate `zeroize` features so cipher schedules wipe; dual-se compile); LCR-F2 (confirmed a REAL race on the CMSE path — `FwUpdateCtx` is `ZeroizeOnDrop`, so `*FW_UPDATE = None` is a non-atomic destructor the preemptive SysTick idle-wipe can hit; FW STATUS + ABORT now hold `HandlerGuard::enter()` before touching `FW_UPDATE` like BEGIN/CHUNK/COMMIT; the old test that pinned abort as guard-free was rewritten to assert the guard + a new STATUS guard test). Secure host 2150/0. **⏸ DEFERRED (diffs in the LCR dispositions section):** LCR-F1 (OPTIGA verify-final-state-before-accept-skip — brick-risky, silicon-only, same principle as the sweep's F2/F3/F4/F9), LCR-F3 (FW-COMMIT cleanup-before-reset — behind the quarantined update backend). |
