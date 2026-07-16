@@ -23,6 +23,14 @@ answer "where is FV going and why," not "what is proven right now."
   (the 2026-06 SOTA sweep + adopt-now shortlist),
   [`fv-soundness-roadmap-2026-06.md`](./fv-soundness-roadmap-2026-06.md) (T0/T1/T2
   roadmap), [`fv-adversarial-review-playbook.md`](./fv-adversarial-review-playbook.md).
+- **Can the hardware surfaces be formally verified? (the survey + verdict):**
+  [`hardware-formalization-survey-2026-07-17.md`](./hardware-formalization-survey-2026-07-17.md)
+  — ~45 external tool/paper claims adjudicated against primary sources: what applies per
+  surface (with URLs), the negative results (no public ARMv8-M model, no T=1′ formal model,
+  no embedded flash/OTP litmus suite, no errata-vs-usage checker), a refuted-claims table,
+  ranked build proposals, and the delta vs the 47-surface inventory. Includes the STM32U5
+  **SESIP silicon certificate** (TN1545/UM3387) — the vendor's own assumption ledger, which
+  this repo was not citing.
 - **The honest boundary (read before writing any claim about the device):**
   [`hardware-assumption-boundary-2026-07-17.md`](./hardware-assumption-boundary-2026-07-17.md)
   — what is achievable vs. permanently-assumed for each of the six hardware

@@ -24,6 +24,7 @@ survey correction.
 
 Companion docs — read them, do not duplicate them:
 
+- [`hardware-formalization-survey-2026-07-17.md`](./hardware-formalization-survey-2026-07-17.md) — **the survey itself**: what tool exists per surface, with URLs; the negative results; the refuted-claims table; the ranked build proposals; and the delta vs the 47-surface inventory. This document is its epistemology layer.
 - [`fv-surface-expansion-inventory-2026-07-16.md`](./fv-surface-expansion-inventory-2026-07-16.md) — the 47 verifiable surfaces (what to build).
 - [`formal-verification-assurance-expansion-2026-07-15.md`](./formal-verification-assurance-expansion-2026-07-15.md) — the roadmap; §P1.9 already declares peripheral behaviour, CMSE instruction semantics and silicon errata out of scope. This document is the *justification* for that decision and its precise price.
 - [`../../contracts/verification/docs/THREAT_CLAIM_MAP.md`](../../contracts/verification/docs/THREAT_CLAIM_MAP.md) — the threat→claim coverage index. Every surface below should eventually carry a row there.
@@ -156,11 +157,26 @@ preserves log-structured recovery for SLC. **Do not cite C-06 as a refutation of
 premise.** Cite it for its real lesson: fault-injection models need input from real hardware
 measurements to be representative.
 
-**Falsifying test.** A power-cut rig on sacrificial U585s: cut VDD at swept sub-µs offsets
-across a quad-word program and across a page erase; classify every read-back into
-old / new / ECC-fault / other. "Other" falsifies the contract. This is the single most
-valuable piece of hardware evidence PQSigner could buy, and it is the exact instrument
-C-06 says the field needs and Ferrite (C-05) declined to build.
+**Falsifying test — and it splits into a free half and a paid half** *(costing corrected
+2026-07-17)*:
+
+- **The recovery-logic half needs ZERO new hardware.** Trigger a reset (probe-rs, or an on-device
+  `SYSRESETREQ`/watchdog) at swept delays across a program/erase, reboot, and check that recovery
+  lands in old-or-new-or-fail-closed. This reaches **D4** and the page-123/124 recovery paths today,
+  on a bench board we already have. It does **not** model brownout — a reset is not a power cut, and
+  the flash controller may complete the operation — so it bounds the *logic*, not the *analog*.
+  (Note the LA1010 on the bench is **read-only** and cannot glitch; it is an observer, not a rig.)
+- **Only the analog torn-write half needs a glitcher**: cut VDD at swept sub-µs offsets across a
+  quad-word program and across a page erase; classify every read-back into old / new / ECC-fault /
+  other. "Other" falsifies the contract. This is the single most valuable piece of hardware evidence
+  PQSigner could buy — the exact instrument C-06 says the field needs and Ferrite (C-05) declined to
+  build.
+
+**Convergence worth acting on:** the **ChipWhisperer-Husky + shunt** already recommended *adopt-now*
+for SCA/FI in `security-tooling-sota-2026-06.md` §4 is the same instrument that makes these crash
+contracts falsifiable (glitch output → crowbar on VDD), and Donjon's **Scaffold** "can also instrument
+the OPTIGA/SE050 I2C buses" — i.e. it serves `HW-ASSUME-PUTKEY-ATOMIC` too. **One rig, two assurance
+programs.** The FI bench purchase is not a separate line item from this document's recommendations.
 
 **Tier ceiling: `K`/`C` for the journal logic; `M` + `silicon-E2E` for the contract; the
 premise stays `bare-TCB`.**
@@ -402,6 +418,41 @@ device" is not automatically progress: **a hardware model pitched above the gran
 silicon actually commits does not merely fail to help — it launders a design error into a proof.**
 Model at the commit granularity (quad-word, one APDU, one bus transaction) or do not model.
 
+**And the repo did not apply its own lesson to the master key.** *(Author-verified 2026-07-17;
+surfaced by the survey's completeness critic.)* `hw/otp.rs::burn_device_master()` programs the
+32-byte master as **two separate quad-word writes**:
+
+```rust
+let r0 = unsafe { program_otp_qw(MASTER_KEY_ADDR,      &qw0) };  // bytes  0..16
+let r1 = unsafe { program_otp_qw(MASTER_KEY_ADDR + 16, &qw1) };  // bytes 16..32
+```
+
+It has a same-run readback guard (*"catches brown-out mid-program"*, comparing `readback == key`).
+That guard is good and it **never runs across a reset**. A power cut between the two programs leaves
+QW0 burned and QW1 virgin, and on the next boot:
+
+- `is_device_master_burned()` returns **`true`** — it scans all 8 words and returns true on **any**
+  word `!= 0xFFFF_FFFF` (otp.rs:504-509), so one programmed quad-word is enough;
+- `burn_device_master()` therefore returns `Err(AlreadyBurned)` and **never completes or retries**;
+- `first_boot`'s Step-1 precondition is exactly this boolean (`first_boot/mod.rs:218` →
+  `state.rs:157`), so the ceremony proceeds;
+- `secret_keys.rs:448` reads `[QW0 ‖ 0xFF×16]` and derives **every** SE transport credential
+  (SCP03 enc/mac/dek, admin PIN, OPTIGA PBS) from it.
+
+Result: the device master silently and permanently drops from 256 to **128 bits** of entropy — the
+upper half is the known constant `0xFF×16` — with no detection and no path to repair. Honest severity:
+128 bits is not a practical break (and AES-128 credentials cap there anyway), so this is a **loss of
+designed margin, not a compromise** — but it is silent, irreversible, and it roots every SE pairing
+secret. The worse branch is a torn *QW0*: an ECC-poisoned word still reads non-`0xFF`, still returns
+`burned = true`, and may read unstably ⇒ nondeterministic credentials or a brick.
+
+This is the thesis in one function. The abstraction is a **boolean** — `burned?` — over a device that
+commits at **quad-word** granularity; `FirstBootHw::otp_master_burned() -> bool` is the outcome-type
+defect of §2.1 in its most consequential instance, on the one path that is irreversible. The fix is a
+**boot-time completeness check** (per-QW, not any-bit), with the half-burned state as a distinct,
+named state: completable while QW1 is still virgin and nothing has derived from the partial master;
+terminal/RMA once it has. Filed as `docs/work-todo.md` **D4**.
+
 ### The criterion
 
 > **A model earns assurance only in proportion to what could contradict it.** Every model
@@ -611,10 +662,47 @@ Two **stacked** contingencies, routinely conflated:
    app note. Šimoník (Masaryk, 2025) achieved **76% voltage-glitch bypass of a PIN check on
    the STM32U5A9** — a sibling of our U585 — but on simplified target code, with decoupling
    caps removed, and **it is not an RDP break**. The honest position: **U5 is proven
-   glitch-vulnerable at the core level; U5 RDP-2 is not proven breakable.** ST's "no known
-   vulnerability on the RDP of the STM32U5" and the PSA L3 / SESIP3 certificate for
-   "STM32U585 TFM" are vendor/lab claims — and that certificate's TOE is **TF-M v1.3.0**,
-   which we do not run, on Die 482 Rev W, which we have not matched (G10).
+   glitch-vulnerable at the core level; U5 RDP-2 is not proven breakable.**
+
+   **CORRECTION 2026-07-17 (author-verified, supersedes the survey's G10).** There are **two**
+   ST certificates and the earlier read checked the wrong one. The PSA Certified entry's TOE is
+   **"STM32U585 TFM" = TF-M v1.3.0**, which we do not run — correctly dismissed. But a
+   **silicon-scoped SESIP certificate also exists and it does apply to us**:
+
+   > **SESIP-2400133-01** (TrustCB, issued 2025-05-22, **valid to 2027-03-28**; lab **SGS
+   > Brightsight**; **SESIP3 + Physical Attacker Resistance + Software Attacker Resistance:
+   > Isolation of Platform**), Security Target **TN1545 Rev 3** (public).
+   > **TN1545:728 — *"The platform does not include any firmware component and the implemented
+   > hardware is not reprogrammable."*** ⇒ unlike the TF-M cert, the TOE is the die itself.
+
+   This is genuine, correctly-scoped `T`-tier evidence for RDP-2 and it is **better than the
+   absence argument §5 previously leaned on** — the Physical Attacker Resistance package
+   (TN1545: redundancy checks against RDP/HDP deconfiguration by physical tampering or
+   perturbation; transient-perturbation detection in SAES/PKA) was evaluated **at RDP-2**.
+   Three caveats keep it from being more than `T`:
+
+   1. **It pins a die revision we never check.** TN1545 fixes **REV_ID `0x3003` (rev U)** at
+      `0xE004_4002`. We probe **DEV_ID `0x482` only** (`docs/security/production-security.md`,
+      `docs/security/threat-model.md`). A cert for rev U says nothing about the rev X/W parts on
+      the bench. **Add the REV_ID check and record our dies' revisions.**
+   2. **We deliberately ship OUTSIDE the certified configuration** — see the OEM2KEY deviation
+      below. The evaluated config is not ours.
+   3. **EUCLEAK's lesson applies unchanged**: a lab evaluation is bounded expert effort, not a
+      proof. ~80 evaluations at the highest attack-potential rating missed a 14-year defect.
+
+   **The OEM2KEY deviation — name it, do not inherit silently.** TN1545:912 —
+   *"In the certified configuration, the Integrator allows the platform to regress to RDP Level 1
+   when the TOE secret **OEM2KEY** is successfully provisioned, and the **OEM2LOCK** option bit is
+   set."* TN1545:921 — *"If the Integrator sets RDP to Level 2 without programming the OEM2KEY the
+   product is locked, and it is not possible to change the RDP level."* **That locked state is
+   exactly what we mandate**: `shared/src/lockdown.rs:99-104` — *"A shipped unit must have NO OEM
+   key provisioned — otherwise a transit attacker could pre-plant an OEM2 password enabling a
+   later RDP-2 → RDP-1 regression"* — enforced by `oem_locks_absent()`. So **we are deliberately
+   stricter than the evaluated configuration, for a documented threat-model reason** (and the
+   cert's "field return of platform" SFR correspondingly does not hold for us — no RMA path).
+   This is a *good* posture and a *bad* thing to leave implicit: the certificate's claims were
+   established for a configuration that permits the regression we forbid. Record it as a named
+   deviation, not as inherited assurance.
 
 2. **If RDP-2 were downgraded to RDP-1, would DHUK still be usable?** **We do not know, and
    it flips the answer.** The empirical record is n=2 boards at RDP0 (shared constant) and
@@ -739,12 +827,14 @@ These are the deliverables that follow. Promote each to `docs/work-todo.md` and 
 |---|---|---|---|---|
 | `HW-ASSUME-DHUK-RDP12` | `SAES-CMAC(DHUK,·)` identical at RDP-1 and RDP-2 on one die | unmeasured; ST prose only | fingerprint at RDP-1 → self-lock RDP-2 → fingerprint | 1 sacrificial part, one shot |
 | `HW-ASSUME-QW-ATOMIC` | A quad-word program is old-or-new under power loss; a torn QW is read-back-detectable or ECC-faults | asserted in `flash.rs`; **contradicted by `hal/src/lib.rs`**; untested | power-cut rig, swept sub-µs offsets, classify readback | rig + sacrificial parts |
-| `HW-ASSUME-OTP-ONEWAY` | An OTP QW programmed once can never be re-driven; a half-burn is detectable | prose; ST thread (C-10) settles nothing | half-program a QW, attempt completion, record PGSERR + readback | 1 part per trial |
+| `HW-ASSUME-OTP-ONEWAY` | An OTP QW programmed once can never be re-driven; a half-burn is detectable | prose; ST thread (C-10) settles nothing. **D4 shows the half-burn is currently NOT detectable in our code** | half-program a QW, attempt completion, record PGSERR + readback | **~21 shots on a still-usable board — NOT a sacrificial part** (corrected: `otp.rs:32` maps `176..512` = 336 B = **21 unallocated quad-words**). 2-3 d |
 | `HW-ASSUME-DHUK-UNIQUE` | DHUK is per-die and unextractable | per-die: validated n=2 at RDP1. Unextractable: bare-TCB | more boards; decap is out of scope | low / N/A |
 | `HW-ASSUME-CMSE-SAU` | CMSE/SAU/IDAU/GTZC behave per RM0456 + DDI0553 | `gtzc-enforcement-hw` 7/7 (positive test only) | extend the enforcement test per attribution rule; **no ∀ is reachable** | low |
 | `HW-ASSUME-TRNG-ENTROPY` | STM32U585 TRNG meets SP 800-90B in our `RNG_CR` config | **no ESV cert names U585**; E11 covers "STM32U5x" but has no PUD; **no health tests implemented** | self-run NIST EA v1.1.8 over our samples; read `RNG_VERR` to match E11's Rev B | days |
 | `HW-ASSUME-SE050-CERT-VERSION` | Our SE050 is JCOP 4 v4.7 R2.00.11/R2.03.11 | **unconfirmed** — the cert covers nothing else | read the applet/config version off the part | hours |
-| `HW-ASSUME-RDP2` | RDP-2 resists voltage glitching on the U5 | no published break; U5 core-level glitch **proven**; M33 sibling TrustZone-M disable **proven** | offensive FI campaign on sacrificial parts | high |
+| `HW-ASSUME-RDP2` | RDP-2 resists voltage glitching on the U5 | **`T` — SESIP-2400133-01 / TN1545 Rev 3, SESIP3 + Physical Attacker Resistance, SGS Brightsight, evaluated at RDP-2, valid to 2027-03-28** — *but* pinned to **rev U (REV_ID `0x3003`)** which we do not check, and evaluated in the OEM2KEY config we deliberately do not ship. Independently: no published U5 RDP break; U5 core-level glitch **proven**; M33-sibling TrustZone-M disable **proven** | offensive FI campaign on sacrificial parts | high |
+| `HW-ASSUME-REV-U` | Our dies are rev U (REV_ID `0x3003`), the only revision SESIP-2400133-01 covers | **unchecked** — we probe DEV_ID `0x482` only | read `0xE004_4002` on every bench die; add a boot/production probe | hours |
+| `HW-ASSUME-OEM2-ABSENT` | No OEM2KEY is provisioned on a shipped unit (`lockdown.rs:99`, `oem_locks_absent()`) — **stricter than, and outside, the certified configuration** | design-enforced; **not** covered by the SESIP evaluation | probe OEM1LOCK/OEM2LOCK on every unit at production test; and probe whether any CubeIDE-touched bench board carries ST's default OEM2 password | low |
 | `HW-ASSUME-PUTKEY-ATOMIC` | An SE050 PUT KEY (`P1=0x0B`, `P2=0x81`, three key blocks ENC‖MAC‖DEK, in-place KVN) is **all-or-nothing** across the SE's NVM commit | **bare-TCB, and load-bearing.** See below — the whole first-boot rotation reduces to it | drive PUT KEY, cut power mid-APDU, then probe ENC/MAC **and DEK independently**; a die with final ENC/MAC but transport DEK falsifies it | rig + sacrificial parts |
 | `HW-ASSUME-SE-INTERNALS` | OPTIGA/SE050 behave per datasheet inside the die | **permanently bare-TCB**; certificates do not cover the applet/OS behaviour we rely on | none exists — silicon-E2E per property only | N/A |
 

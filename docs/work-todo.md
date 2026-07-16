@@ -3635,6 +3635,23 @@ live defects, not research residuals.**
 - [ ] **D3 — `hal/src/lib.rs`'s `Rng` trait asserts an SP 800-90B obligation the code does not meet.**
   Either implement the health tests (decidable software) or delete the obligation. Today the contract
   asserts something untrue, and that RNG feeds an irreversible OTP burn.
+- [ ] **D4 — a torn OTP master burn silently halves the device master to 128 bits, permanently, with
+  no detection and no retry.** `otp.rs::burn_device_master()` programs the 32-byte master as **two
+  separate QW writes** (`program_otp_qw(MASTER_KEY_ADDR, &qw0)` then `+16, &qw1`). Its readback guard
+  is same-run only and **never runs across a reset**. A power cut between the two writes ⇒ next boot:
+  `is_device_master_burned()` returns **true** (it returns true on *any* of the 8 words `!= 0xFFFF_FFFF`,
+  otp.rs:504-509) ⇒ `burn_device_master()` returns `Err(AlreadyBurned)` and never completes ⇒
+  `first_boot`'s Step-1 precondition passes (`first_boot/mod.rs:218` → `state.rs:157`) ⇒
+  `secret_keys.rs:448` derives **every** SE transport credential (SCP03 enc/mac/dek, admin PIN, OPTIGA
+  PBS) from `[QW0 ‖ 0xFF×16]`. Honest severity: **loss of designed margin, not a compromise** — 128
+  bits is not brute-forceable and AES-128 credentials cap there anyway — but it is silent, irreversible,
+  undetectable, and it roots every SE pairing secret. Worse branch: a torn *QW0* reads non-`0xFF`
+  (still "burned") and may be ECC-poisoned ⇒ unstable reads ⇒ nondeterministic credentials or a brick.
+  **Fix:** boot-time *per-QW completeness* check (not any-bit), with half-burned as a distinct named
+  state — completable while QW1 is virgin **and** nothing has yet derived from the partial master;
+  terminal/RMA once it has. This is the repo's own OTP-granularity lesson (the rejected unary tally)
+  not applied to the master key, and it is the outcome-type defect (`-> bool`) on the one irreversible
+  path. Test it with **zero new hardware** (reset-at-swept-delay, see C7).
 
 ### Named open hardware assumptions (each needs a ledger row + a falsifying test)
 
@@ -3653,6 +3670,30 @@ live defects, not research residuals.**
   **factory-known DEK**. Falsifying test: power-cut mid-APDU, then probe ENC/MAC and DEK
   *independently*. Sharpens CLAUDE.md's already-named *"atomic durable old/new/KVN recovery proof"*
   gate — this is the precise statement of it.
+- [ ] **A4 — Cite the STM32U5 SESIP silicon certificate, and name our deviation from it.**
+  *(Author-verified 2026-07-17; this repo cites TN1545/UM3387 nowhere.)* There are **two** ST
+  certificates and we were reading the wrong one. The PSA entry's TOE is **"STM32U585 TFM" =
+  TF-M v1.3.0**, which we do not run. But **SESIP-2400133-01** (TrustCB, SGS Brightsight, **SESIP3 +
+  Physical Attacker Resistance**, valid to **2027-03-28**), Security Target **TN1545 Rev 3** (public),
+  states at line 728: *"The platform does not include any firmware component and the implemented
+  hardware is not reprogrammable"* — **so it applies to us**, and it was evaluated **at RDP-2**. That
+  is real `T`-tier evidence for `HW-ASSUME-RDP2`, better than the absence argument. Three actions:
+  - [ ] **A4a — add a REV_ID probe.** TN1545 pins **REV_ID `0x3003` (rev U)** at `0xE004_4002`; we
+    check **DEV_ID `0x482` only** (`production-security.md`, `threat-model.md`, work-todo:1713). A
+    cert for rev U says nothing about rev X/W parts. Read REV_ID on every bench die and record it.
+  - [ ] **A4b — name the OEM2KEY deviation.** TN1545:912 — *"In the certified configuration, the
+    Integrator allows the platform to regress to RDP Level 1 when the TOE secret OEM2KEY is
+    successfully provisioned, and the OEM2LOCK option bit is set"*; :921 — *"If the Integrator sets
+    RDP to Level 2 without programming the OEM2KEY the product is locked."* **That locked state is
+    what `shared/src/lockdown.rs:99-104` mandates** (no OEM key, so a transit attacker cannot
+    pre-plant an OEM2 password). We are deliberately **stricter than, and outside, the evaluated
+    configuration** — a good posture that must be a *documented deviation*, not silent inheritance.
+    The cert's "field return of platform" SFR also does not hold for us (no RMA path). Collides with
+    the OWNER-GATED `provisioning-wipe-rma-authority` inventory row.
+  - [ ] **A4c — probe for ST's default OEM2 password on CubeIDE-touched boards.** UM3387 reports
+    CubeIDE's init script sets a **default OEM2 password**; any bench board it touched may carry a
+    live RDP2→RDP1 regression credential. Vindicates `lockdown.rs`; warrants a bench check.
+    *(Unverified by me — from the survey; confirm against UM3387 before acting.)*
 - [ ] **A3 — `HW-ASSUME-DHUK-RDP12` (one sacrificial part, one shot, irreversible).** Is
   `SAES-CMAC(DHUK,·)` identical at RDP-1 and RDP-2 on the same die? **Unmeasured — no board in this
   project has ever been at RDP-2.** ST prose implies yes; CLAUDE.md's "only then is the per-die DHUK
@@ -3680,6 +3721,20 @@ live defects, not research residuals.**
 - [ ] **C6 — Fix the OPTIGA CC citation.** V4-2019 **expired 2024-12-17**; cite V7-2024, and scope it
   to the **IC platform** — the Trust M applet, its OID model, LcsO, and the Shielded Connection are IC
   Embedded Software, *above* the certified boundary. Any row saying "discharged by EAL6+" is wrong.
+- [ ] **C7 — Reset-at-swept-delay crash harness. ZERO new hardware; reaches D4 today.** *(Costing
+  corrected: the earlier "power-cut rig on sacrificial parts" conflated two tests.)* Trigger a reset
+  (probe-rs, or on-device `SYSRESETREQ`/watchdog) at swept delays across a program/erase, reboot, and
+  assert recovery lands in old-or-new-or-fail-closed. Reaches **D4** and the page-123/124 recovery
+  paths on a bench board we already own. It bounds the **logic**, not the analog: a reset is not a
+  power cut and the flash controller may complete the operation. Only the **torn-write/brownout** half
+  needs a glitcher — and that is the ChipWhisperer-Husky already on the SCA/FI adopt-now list
+  (`security-tooling-sota-2026-06.md` §4: Husky + shunt; Scaffold "can also instrument the
+  OPTIGA/SE050 I2C buses" ⇒ it serves A2's PUT KEY probe too). **One rig, two assurance programs** —
+  the FI bench purchase is not a separate line item from this work.
+- [ ] **C8 — OTP one-wayness probe needs no sacrificial board.** *(Costing corrected: `otp.rs:32`
+  maps `176..512` = 336 B = **21 unallocated quad-words**.)* ~21 independent half-program→attempt-
+  completion shots on a still-usable board; record PGSERR/WRPERR + readback each time. 2-3 d.
+  Settles `HW-ASSUME-OTP-ONEWAY`, on which D4's fix depends.
 
 ### Modelling work (ranked)
 
@@ -3726,7 +3781,11 @@ live defects, not research residuals.**
 - **Do not propagate "BINSEC decodes Thumb fine, only CMSE fails"** — author-reproduced on this box
   2026-07-17: thumb mode emits `unimplemented` **uniformly, including on plain `adds`/`eors`/`bx`**,
   then dies with an OCaml assertion. The 2026-06 SOTA doc's operational NO-GO verdict **stands**.
-  (Still open: whether `cargo-checkct` uses a BINSEC frontend at all.)
+  The survey doc retracts this too (§5.6/§9). **Before editing the SOTA doc or the inventory row,
+  answer both:** (i) does `cargo-checkct` drive a BINSEC frontend at all, or is it an independent
+  engine (in which case BINSEC's decoder has no bearing on `make checkct`)? (ii) does `make checkct`
+  have *any* pass signal — the survey reports it ships a by-design-insecure `fisher_yates` driver, so
+  **exit code ≠ verdict**. Both unanswered ⇒ do not touch the other two docs.
 
 ---
 
