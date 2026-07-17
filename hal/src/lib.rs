@@ -146,9 +146,16 @@ impl MutationOutcome {
 ///
 /// The real premise is a named silicon assumption: **`HW-ASSUME-TRNG-ENTROPY`**
 /// — the STM32U585 TRNG meets SP 800-90B in our `RNG_CR` configuration. Status:
-/// vendor claim; no ESV certificate naming the U585 was found. Its falsifying
-/// test (self-run NIST EA over our own samples) and cost are tracked in
-/// `docs/verification/hardware-assumption-boundary-2026-07-17.md` §6.
+/// **cert-cited (by elimination)** — NIST ESV Entropy Certificate #E11
+/// ("STM32U5x TRNG", Physical, SP 800-90B, validated 2022-12-16) is the U5x-family
+/// entropy-source cert; it has no published Public Use Document, so U585 coverage
+/// is by-elimination, not enumerated. What it does NOT settle: whether we select
+/// the *certified* RNG config, and the U5 RNG exposes only conditioned output (no
+/// raw-noise API), so we cannot cheaply re-run 90B ourselves. (An earlier note
+/// here said "no ESV certificate naming the U585 was found" — too strong;
+/// corrected 2026-07-17.) Tracked in
+/// `docs/verification/hardware-assumption-boundary-2026-07-17.md` §6 and
+/// `docs/security/red-teaming.md` §4.1.
 ///
 /// Defence in depth: callers on the irreversible paths do not rely on one
 /// source — the secure world's `rng_strong::fill` XOR-folds STM32 + OPTIGA +

@@ -195,6 +195,29 @@ capture ciphertext, which looks random whether the underlying TRNG is healthy or
 2. Capture ≥10 MB per source. Run **NIST SP 800-22, Dieharder, `ent`**, and the **SP 800-90B /
    AIS-31** estimators. **Test each source independently** — the XOR masks a single biased
    source, so per-source testing is what catches it.
+
+   **Verified tooling + the STM32U5 limitation that shapes this test** *(2026-07-17 bench research,
+   high-confidence, primary-sourced):*
+   - **The STM32U5 RNG exposes only *conditioned* 32-bit output** — there is no raw-noise-source
+     API in the public HAL (`HAL_RNG_GenerateRandomNumber` returns conditioned data). SP 800-90B's
+     noise-source tests want **≥1,000,000 *raw*, pre-conditioning samples** (`SP 800-90B §3.1.1`),
+     which we therefore **cannot cheaply obtain from the production part**. So the "run 90B
+     ourselves on the STM32 source" step is *not* straightforwardly available for the STM32 TRNG —
+     it applies cleanly to the **OPTIGA/SE050** `GetRandom` streams (conditioned SE output, tested
+     as black-box quality) but the STM32 leg leans on ST's own validation, below.
+   - **ST already holds a NIST ESV Entropy Certificate — #E11 ("STM32U5x TRNG", Physical noise
+     source, conformance SP 800-90B, validated 2022-12-16, UL Verification Services).** It has no
+     published Public Use Document, so exact device enumeration is unconfirmed, but by Operating
+     Environment ("STM32U5x") and elimination of the later U5-subfamily certs it is the U585 cert
+     (`HW-ASSUME-TRNG-ENTROPY`, corrected from the earlier "no ESV certificate" claim). The
+     residual red-team action is therefore **config**, not statistics: confirm the firmware selects
+     the *certified* RNG config (ST's `HAL_RNG_SetCertifiedNISTConfig` equivalent — RM0456 RNG_CR),
+     not a candidate/custom one.
+   - **Tools (installed/fetchable):** NIST `SP800-90B_EntropyAssessment` — `ea_iid -i <file> <bps>`
+     (IID path) / `ea_non_iid -i <file> <bps>` (conservative min-entropy; source also accepts `-q`);
+     the restart test needs the row/column datasets. AIS-31 open reference suite:
+     `mjosaarinen/ais31-testsuite` (BSI Java reference, wants 5,220,000 bits). These are the right
+     estimators for the SE `GetRandom` streams and for any raw dump ST's tooling can produce.
 3. Confirm the STM32 silicon health monitors fire: perturb the RNG clock and confirm
    `SEIS/CEIS` latch and `hw::rng::fill` returns `Err` (fail-closed), per the recovery logic
    in `secure/src/hw/rng.rs`.
@@ -901,3 +924,88 @@ locked unit before sign-off.
 
 > **Line-number note.** File paths in this plan are reliable; specific line numbers drift with the
 > tree — confirm against the current source when you sit down at the bench.
+
+---
+
+## 13. Verified bench parameters & prior art (2026-07 research)
+
+Primary-sourced facts for the campaigns above, so bench time isn't spent re-deriving them. Each is
+marked with its confidence; the two **negatives** are as load-bearing as the positives.
+
+### 13.1 Rigol MHO934 — the copy-paste SCA/LA capture recipe *(high confidence)*
+
+The exact device is covered by the official **RIGOL MHO900 Programming Guide** (© 2026; its model
+list enumerates MHO984/MHO954/**MHO934**). Control it from the capture host with **pyvisa +
+pyvisa-py** over USBTMC (`USB0::0x1AB1::<pid>::<serial>::INSTR`) or raw TCP `SOCKET` — no vendor
+driver needed (Rigol's proprietary TMC driver is deprecated). The USB VID is `0x1AB1`; the **PID is
+not in any datasheet — read it off the bench** (`lsusb -v`, look for `bInterfaceClass 0xFE`
+subclass `0x03`; the in-tree Linux `usbtmc` module binds `/dev/usbtmc0`).
+
+Deep-memory single-shot capture (RAW mode **requires the STOP state**):
+
+```
+:STOP
+:WAVeform:SOURce CHANnel1
+:WAVeform:MODE RAW            # RAW = full internal memory; NORMal caps at 1000 pts
+:WAVeform:FORMat BYTE         # 8-bit, fastest — fine for a first-order T-test / CPA.
+                             # Use WORD for the full 12-bit ADC when SNR is marginal.
+:WAVeform:STARt 1
+:WAVeform:STOP  <memory_depth>
+:WAVeform:PREamble?          # -> format,type,points,count,xinc,xorig,xref,yinc,yorig,yref
+:WAVeform:DATA?              # -> '#9NNNNNNNNN' TMC header, then the raw bytes
+```
+
+Parse the `#9` + 9-digit-count TMC header off the front before handing bytes to numpy. **In RAW
+mode scale from the PREamble, not from the timebase:** `v = (raw - YORigin - YREFerence)*YINCrement`,
+`t = XORigin + i*XINCrement` (RAW `XINCrement = 1/SampleRate`). Arm each shot with `:SINGle`.
+lascar/scared consume the resulting numpy arrays directly. Source:
+<https://www.rigol.com/dam/global/downloads/brochures/en/program-guide/oscilloscopes/MHO900-ProgrammingGuide.pdf>
+
+### 13.2 STM32U5 FI prior art — the two sibling results, and the confirmed gap *(high confidence)*
+
+- **µ-Glitch (USENIX Sec 2023, arXiv:2302.06932) — the FaultyCat/EMFI shape for §6.6.1.** On the
+  **STM32L5** (Cortex-M33 sibling), it disabled TrustZone-M by faulting the **SAU** and the
+  **Global TrustZone Controller (GTZC)** configuration and the `BXNS` transition. **Critically it
+  needs FOUR coordinated voltage faults off a *single* trigger** (avg ~1 day to land) — so the
+  multi-fault requirement is itself a real countermeasure, and a single-fault campaign that finds
+  nothing is not reassuring here. It claims transferability to "conceptionally similar ICs" citing
+  ST's joint L5/U5 TrustZone app note — which is precisely why the U5 is worth attempting.
+- **Šimoník (Masaryk 2025) — the Scaffold/voltage shape for §6.6.1.** ~**76%** success
+  voltage-glitching a *Basic PIN Check* on an **STM32U5A9NJ** (MB1829, SatoshiLabs-supplied), vs
+  **1.1%** with EM-FI on the same target, using a ChipWhisperer Husky. (The thesis' low-level
+  numbers — glitch width/offset/voltage, whether VCAP caps were removed — are behind a JS session
+  gate and were **not** extractable; get them from the PDF at the bench.)
+- **NEGATIVE, and it is the point: no public STM32U5-family RDP-2 downgrade or protected-flash-
+  readout result exists (2024–2026).** Actively searched (Trezor Safe 5, U5A9, TraceRip). This is a
+  *gap, not evidence of safety* — §6.6.1 is genuinely novel work, and either outcome is publishable.
+- **Crowbar injection point is part-specific — do NOT assume VCAP/Vcore.** The "glitch the VCAP
+  pins" recipe (verified on STM32F401/F4) was **refuted as a universal rule**; the U5's core-supply
+  topology differs. Identify the right rail on a sacrificial U585 first.
+
+### 13.3 EMFI / voltage-glitch safety and target prep *(high confidence)*
+
+- **FaultyCat/PicoEMP is an operator HV hazard.** It generates **~250 V, uncalibrated**, and —
+  unlike a ChipSHOUTER — has **no missing-tip failsafe**: it will charge and fire with no coil
+  attached. Treat the tip as live; discharge before handling. Sequence: **ARM** (HV charges, CHG
+  LED at ~240 V) → **PULSE**.
+- **Decoupling-cap removal sharpens the glitch** (small capacitance ⇒ steep V drop — SEC Consult
+  SecGlitcher), but leave enough that the board still boots; over-shorting trips any PMIC and can
+  damage the part.
+- **Damage modes make sacrificial parts mandatory:** a mistimed glitch can corrupt option bytes to
+  *random* RDP/WRP values or trigger an **irreversible flash mass-erase** (Anvil Secure, STM32F4).
+  Never run OTP/RDP-2 campaigns on a part you want back.
+- **Sweep = offset × width × intensity, reset-per-shot** (ChipWhisperer `GlitchController` is the
+  canonical loop); add coil-XY as a 4th axis for FaultyCat. Realistic hit rates are single-digit
+  percent — budget thousands of shots.
+- **NEGATIVE: there is no published guidance on protecting the soldered OPTIGA/SE050 from collateral
+  damage during board-level MCU glitching.** This is an open risk for our specific board — a coil or
+  crowbar aimed at the STM32 can disturb an adjacent SE. Mitigate empirically: local coil placement,
+  shielding, monitor SE liveness between shots, and keep the SE-specific tests (§5.7) on a rig that
+  glitches the **SE's own rail**, not the whole board.
+
+### 13.4 What did not survive verification
+
+The research refuted 6 of 29 claims — recorded so they aren't reintroduced: the universal
+"VCAP/Vcore is the STM32 crowbar point" (part-specific), an over-specific SECGlitcher RDP recipe, and
+`ea_restart`'s exact flag string (confirm from the tool's `--help`). Full adjudication is in the
+2026-07-17 bench-research transcript.

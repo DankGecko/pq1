@@ -210,7 +210,7 @@
       "id": "HW-ASSUME-TRNG-ENTROPY",
       "surface": "f-peripherals",
       "statement": "The STM32U585 TRNG meets NIST SP 800-90B in our RNG_CR configuration, and its SECS/CECS status bits faithfully report its internal health-test failures.",
-      "status": "bare-tcb",
+      "status": "cert-cited",
       "evidence": [
         {
           "kind": "code-enforced",
@@ -221,10 +221,15 @@
           "kind": "spec",
           "ref": "hal/src/lib.rs",
           "anchor": "HW-ASSUME-TRNG-ENTROPY"
+        },
+        {
+          "kind": "certificate",
+          "ref": "docs/security/red-teaming.md",
+          "anchor": "#E11 (\"STM32U5x TRNG\""
         }
       ],
       "falsifying_test": {
-        "description": "Self-run the NIST SP 800-90B entropy-assessment suite over samples drawn from our own parts in our own RNG_CR configuration. Days.",
+        "description": "CORRECTED 2026-07-17: not 'run SP 800-90B ourselves' (the U5 RNG exposes only conditioned output — no raw-noise API in the public HAL — so >=1e6 raw pre-conditioning samples are not cheaply obtainable). Instead: (a) confirm the firmware selects the CERTIFIED RNG config, not a candidate/custom one; (b) confirm E11's device coverage against its Public Use Document if ST publishes one, or accept the by-elimination read. See red-teaming.md §4.1 for the ESV Certificate #E11 provenance.",
         "exists": false,
         "make_target": null,
         "cost": "days",
@@ -234,7 +239,7 @@
         "secure/src/hw/otp.rs (burn_device_master — irreversible)",
         "secure/src/crypto.rs (C10 keygen seeds, signing randomiser r, FI sentinels)"
       ],
-      "note": "No ESV certificate naming the U585 was found. The firmware CONSUMES the RNG's hardware health tests and fails closed on them (that is an impl obligation and it is met); SP 800-90B conformance itself is a property of the entropy-source silicon and no driver can establish it — see work-todo D3. Defence in depth: rng_strong::fill XOR-folds STM32 + OPTIGA + SE050 on the irreversible paths, so one broken TRNG does not alone determine a burned key.",
+      "note": "CORRECTION 2026-07-17: an earlier version of this row (and hal/src/lib.rs) said 'no ESV certificate naming the U585 was found'. That was too strong. NIST ESV Entropy Certificate #E11 ('STM32U5x TRNG', Rev B, Physical noise source, SP 800-90B, validated 2022-12-16, UL Verification Services) exists; its Operating Environment is 'STM32U5x advanced Arm-based 32-bit MCU' and, by elimination of the later U5-subfamily certs (U5Fx/5Gx, U59x/5Ax, U535x/545x), it is the cert covering U585 — but E11 has NO published Public Use Document, so its exact device list is unenumerated. So: cert-cited by-elimination, not a confirmed U585 enumeration. Two residuals stand regardless: (1) E11 certifies the entropy SOURCE; whether OUR RNG_CR config is the certified one is a separate firmware check; (2) the public HAL exposes only CONDITIONED 32-bit output (no raw-noise API), so we cannot cheaply re-run 90B (which needs >=1e6 raw samples) on the production part. Firmware still fails closed on the RNG hardware health tests (SECS/CECS, work-todo D3), and rng_strong XOR-folds STM32+OPTIGA+SE050 on the irreversible paths.",
       "last_reviewed": "2026-07-17"
     },
     {
