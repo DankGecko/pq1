@@ -3966,7 +3966,15 @@ live defects, not research residuals.**
 
 ### Named open hardware assumptions (each needs a ledger row + a falsifying test)
 
-- [ ] **A1 — Build `hw-assumptions.json`**, mirroring the existing `AXIOM_STATUS.json` +
+- [x] **A1 — DONE 2026-07-17 (`f5f1b928`). Built `contracts/verification/docs/HW_ASSUMPTIONS.json`** — 12 rows
+  (bare-tcb=5, vendor-doc=2, silicon-tested=3, cert-cited=1, code-enforced=1; **only 3/12 have a
+  runnable falsifying test** — that ratio is the finding, now recomputed by CI). Gate:
+  `make -C contracts/verification verify-hw-assumptions`, wired into `ci.yml` invariant-gates
+  (deliberately NOT lean-fv.yml, whose path filter would ignore the secure/ shared/ hal/ edits that
+  break the anchors — the repo's own F1 failure mode). Checks hygiene only, never the premises:
+  anchors resolve (caught a real stale one on its first run), claimed make-targets are real, and the
+  HW-ASSUME id set is **bidirectionally** exact vs the tree (OpenTitan's cross-check). 6 self-test
+  mutations, all biting. Original ask:, mirroring the existing `AXIOM_STATUS.json` +
   `verify-ledger-consistency` culture, with one row per assumption: `{assumption, RM0456/datasheet/
   errata cite, falsifying silicon test, status, consuming claim}`. Gate: a claim depending on an
   unledgered hardware assumption fails. `TRUST_ASSUMPTIONS.md` §Out-of-scope **excludes firmware** —
@@ -4028,7 +4036,13 @@ live defects, not research residuals.**
 - [ ] **C2 — Vendor the `stm32-rs` patched U585 SVD and diff it** against every hand-transcribed base
   address in `secure/src/hw/*`. Hours; 3-for-3 against our transcription history (incl. the TAMP
   wrong-address bug). Scope: layout only; does not cover SAU/MPU/NVIC/SCB/UID/OTP.
-- [ ] **C3 — Bind the GTZC receipt to the shipping feature combo.** `make gtzc-enforcement-hw` builds
+- [~] **C3 — PARTIAL 2026-07-17 (`7eb19efa`). Finding VERIFIED and worse than written; pins added,
+  gap NOT closed.** `ui-lcd = ["spi1-arduino", ...]`, so the **shipping** image secures SPI1 (the
+  trusted-display bus) while `gtzc-enforcement-hw` builds `ui-semihosting` and runs against
+  `seccfgr2 == 0` — the bit that keeps NS off the trusted display is not covered by the enforcement
+  test cited as evidence for it. All three TZSC images are now compile-time-pinned (mutation-checked:
+  moving the I2C2 bit fails the build on both combos), which makes the gap reviewable. **Still open:**
+  rebuild the enforcement test on the shipping combo. Original: `make gtzc-enforcement-hw` builds
   `mock-se,ui-semihosting,debug-log,e2e-test,stm32u585,otp-hardcoded-master-key` — *not* what we ship —
   while `sau.rs` has 12 `cfg(feature)` gates incl. `spi1-arduino` inside the peripheral security config
   (sau.rs:281,387). Emit the SAU/GTZC register image per feature combo; gate production == tested.
@@ -4036,7 +4050,14 @@ live defects, not research residuals.**
 - [ ] **C4 — Give TAMP a silicon test.** `tamp-wipe` is forced ON for shipping dual-SE images, has
   never run on silicon, and its driver sat at the wrong base address for an unknown period precisely
   because nothing exercised it.
-- [ ] **C5 — Make `tla2tools.jar` durable.** A pilot result that cannot be re-run is a verification
+- [x] **C5 — DONE 2026-07-17 (`b6f7115d`). `make -C contracts/verification verify-tla`.** Was worse
+  than 'not durable': there was no target at all and the only jar on the box lived in a scratch dir
+  belonging to a dead session, while three model results were cited as evidence. Now runs all three
+  self-checking suites — **16/16 expected outcomes reproduced**, including every negative control.
+  Fails loudly when the jar is absent (never silently skips); prints the jar hash and warns when it
+  is not the validated nightly, because a different TLC is a different tool. Not hash-gated: the
+  validated build IS a nightly, so pinning against 'download latest' would fail for everyone.
+  Original: A pilot result that cannot be re-run is a verification
   claim with no executable evidence — the exact thing `verify-ledger-consistency` exists to prevent.
 - [ ] **C6 — Fix the OPTIGA CC citation.** V4-2019 **expired 2024-12-17**; cite V7-2024, and scope it
   to the **IC platform** — the Trust M applet, its OID model, LcsO, and the Shielded Connection are IC
