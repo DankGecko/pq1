@@ -4178,8 +4178,26 @@ live defects, not research residuals.**
   failed, 0.18 s**. ⚠️ Do **not** wire the traits as they stand — their `Result<(),E>` outcome type
   structurally cannot express "the command executed but the response was lost" (see D1/A2 and the
   doc's §2.1); fix the outcome algebra first or the seam launders the optimism into a proof.
-- [!] **M3 — BLOCKED ON SOURCE 2026-07-17. The in-repo spec doc cannot serve as the independent
-  oracle, and using it would be circular.** M3's whole point is that the current
+- [ ] **M3 — UNBLOCKED. My "blocked on source" call earlier today was WRONG.** I searched for the
+  Infineon spec PDF and judged the repo's own `ifx-i2c-protocol.md` unusable (no provenance,
+  post-dates the driver by two months — both true). I never checked for the vendor's **open-source
+  reference implementation**, which has been on this box the whole time:
+  **`/home/nicola/repos/optiga-trust-m`** — `github.com/Infineon/optiga-trust-m`, v5.6.0 (2026-03-09),
+  containing `src/comms/ifx_i2c/ifx_i2c_presentation_layer.c`. That is the *exact file* `shield.rs`
+  cites line numbers from (`PRL_SLAVE_HELLO_LENGTH = 0x26`, `ifx_i2c_presentation_layer.c:451-472`,
+  `:512-521`, `:820-829`). It is a **better oracle than the spec PDF for a wire protocol**: a spec can
+  be ambiguous, whereas the reference implementation is executable truth and is what the silicon
+  demonstrably interoperates with.
+  First cross-check already passes (constants agree): MasterHello SCTR `0x00`, MasterFinished SCTR
+  `0x08`, `PRL_PROTOCOL_VERSION 0x01`, SlaveHello length `0x26`=38.
+  **Honest residual on the oracle's independence:** `shield.rs` was written *from* this file, so
+  re-deriving the model from it catches **shield.rs ↔ vendor-reference transcription drift** — real,
+  and categorically different from today's model, which is derived from `shield.rs` and can only
+  prove we modelled ourselves consistently. It would NOT catch "the reference impl and our reading
+  of it are both wrong vs the spec". For a wire protocol that residual is small, because the
+  reference impl is what the chip talks to. State it; don't pretend it away.
+  Adjacent cheap win now available: give `docs/secure-elements/OPTIGATRUSTM/ifx-i2c-protocol.md` a
+  provenance header by diffing it against the vendor source. Original framing: M3's whole point is that the current
   `optiga_shield_handshake.pv` is derived from `shield.rs` (its own docstring admits it), so it can
   only prove we modelled ourselves consistently; an external ground truth the driver can DIVERGE
   from is what makes it worth anything. `docs/secure-elements/OPTIGATRUSTM/ifx-i2c-protocol.md`
