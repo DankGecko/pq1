@@ -68,7 +68,11 @@ it does not search for counterexamples).
 - **AX-ERASE-ATOMIC** (assumed precondition): the 8 KiB page erase is one indivisible step.
   A torn **partial** erase (brownout) breaks the property — that is the TLC pilot's job
   and `flash.rs:1669`'s commit-marker residual, deliberately **not** in this positive
-  theorem. Adding a `PartialErase` action to the TLA+ model is the tracked follow-up.
+  theorem. **DONE (2026-07-17):** the `EnablePartialErase` cfg in
+  `contracts/verification/tla/Page123Compaction.tla` (`partial_erase_sigsfirst`) exhibits
+  the counterexample in TLC — a torn partial erase rolls a registered slot back even under
+  SigsFirst, machine-confirming that `AX-ERASE-ATOMIC` is load-bearing (Finding 3 of the
+  page-123 crash-atomicity report).
 - **AX-QW-WRITE-ONCE / AX-NOR**: 128-bit quadword program, 1→0-only, re-program faults;
   erase → all-0xFF.
 - **Out of scope (availability, not safety):** whether a torn-QW ECC read is silent-skippable

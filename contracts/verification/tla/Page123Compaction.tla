@@ -36,11 +36,17 @@ CONSTANTS
     MaxCount,     \* counts range 0..MaxCount (real: 7 big-endian bytes; here small for TLC)
     PageCap,      \* max live QWs on the page (real OFFCHAIN_CAPACITY = 512)
     ReplayOrder,  \* "SigsFirst" (shipped) | "SigsLast" (NEGATIVE CONTROL — must break the invariant)
-    TornModel     \* "Skip" (torn QW reads back undecodable & is skipped — the code's HW premise)
+    TornModel,    \* "Skip" (torn QW reads back undecodable & is skipped — the code's HW premise)
                   \*   | "MayValid" (torn QW may read back as an arbitrary VALID entry — no CRC/marker)
+    EnablePartialErase \* FALSE = ATOMIC erase (AX-ERASE-ATOMIC — the 5 base cfgs are all FALSE). TRUE =
+                       \* model the erase NON-atomically: a torn erase leaves a PREFIX of the append-only
+                       \* log, so a LOWER SIGS QW survives while a higher is wiped → registered-slot
+                       \* rollback. Complements the Verus pilot (which ASSUMES AX-ERASE-ATOMIC): this is
+                       \* the TLC counterexample that proves erase-atomicity is load-bearing (flash.rs:1669).
 
 ASSUME ReplayOrder \in {"SigsFirst", "SigsLast"}
 ASSUME TornModel   \in {"Skip", "MayValid"}
+ASSUME EnablePartialErase \in BOOLEAN
 ASSUME PageCap \in Nat /\ PageCap >= 3
 
 Types == {"SIGS", "UO", "CNT"}     \* USEROP_SIGS, USEROP, COUNT
@@ -155,16 +161,57 @@ AppendUo(s) ==
 \* loop; a full page of all-distinct entries simply stops accepting new appends
 \* (availability, not safety) -> a benign deadlock (deadlock check disabled).
 StartCompact ==
+    /\ ~EnablePartialErase                    \* ATOMIC erase path (the 5 base cfgs)
     /\ mode = "run"
     /\ Len(page) = PageCap
     /\ LET newrq == BuildRQ(1) IN
          /\ Len(newrq) < PageCap              \* progress guard: frees >= 1 QW
          /\ rq'   = newrq
-         /\ page' = << >>                      \* erase_offchain_page
+         /\ page' = << >>                      \* erase_offchain_page (one indivisible step)
          /\ mode' = "compact"
          /\ ri'   = 0
          /\ preSigs' = [s \in Slots |-> Proj(page, s, "SIGS")]  \* snapshot BEFORE erase
     /\ UNCHANGED << hwm, chwm, cpUnsafe >>
+
+\* ── NON-ATOMIC erase (EnablePartialErase = TRUE) ────────────────────────────
+\* The genuine Verus>TLA delta: the Verus pilot proves the positive theorem ASSUMING
+\* AX-ERASE-ATOMIC; here TLC drops that assumption. StartCompactNA snapshots preSigs and
+\* enters "erasing" WITHOUT wiping the page yet (the 1.5 ms erase is in flight); then EITHER
+\* EraseComplete finishes it cleanly (page -> <<>>, proceed to replay) OR CrashPartialErase
+\* tears it — a brownout mid-erase leaves a PREFIX of the append-only log (the erase cleared
+\* the high-address QWs but not the low). Because SIGS bumps append in increasing order, a
+\* surviving prefix holds a LOWER SIGS than preSigs while the higher is gone → the slot is
+\* registered with rolled-back SIGS. The forward/reverse double-scan does NOT catch it (both
+\* MAX over the survivors and agree). This is unreachable in the atomic-erase model.
+StartCompactNA ==
+    /\ EnablePartialErase
+    /\ mode = "run"
+    /\ Len(page) = PageCap
+    /\ LET newrq == BuildRQ(1) IN
+         /\ Len(newrq) < PageCap
+         /\ rq'   = newrq
+         /\ mode' = "erasing"                  \* erase in flight; page NOT yet wiped
+         /\ ri'   = 0
+         /\ preSigs' = [s \in Slots |-> Proj(page, s, "SIGS")]  \* snapshot BEFORE erase
+    /\ UNCHANGED << page, hwm, chwm, cpUnsafe >>
+
+EraseComplete ==
+    /\ mode = "erasing"
+    /\ page' = << >>                           \* erase finished with power intact
+    /\ mode' = "compact"                        \* proceed to the (SIGS-first) replay
+    /\ UNCHANGED << rq, ri, hwm, chwm, cpUnsafe, preSigs >>
+
+\* Torn erase: a crash mid-erase leaves an arbitrary PREFIX of the pre-erase log readable
+\* (the suffix QWs were cleared to Blank first), then reboots to steady state.
+CrashPartialErase ==
+    /\ mode = "erasing"
+    /\ \E cut \in 0..Len(page) :
+         /\ page' = SubSeq(page, 1, cut)
+         /\ cpUnsafe' = (cpUnsafe \/ HasCompactionRollback(SubSeq(page, 1, cut)))
+    /\ mode' = "run"
+    /\ rq'   = << >>
+    /\ ri'   = 0
+    /\ UNCHANGED << hwm, chwm, preSigs >>
 
 \* Replay the next queued entry cleanly (its QW programmed fully).
 ReplayClean ==
@@ -223,6 +270,9 @@ FinishCompact ==
 Next ==
     \/ \E s \in Slots : AppendSigs(s) \/ AppendCnt(s) \/ AppendUo(s)
     \/ StartCompact
+    \/ StartCompactNA        \* non-atomic-erase path (EnablePartialErase)
+    \/ EraseComplete
+    \/ CrashPartialErase
     \/ ReplayClean
     \/ CrashBetween
     \/ CrashTornSkip
@@ -259,7 +309,7 @@ INV_CNT_NO_ROLLBACK ==
 
 \* Sanity: counts stay in range (guards the model, not a security property).
 TypeOK ==
-    /\ mode \in {"run", "compact"}
+    /\ mode \in {"run", "compact", "erasing"}
     /\ ri \in 0..Len(rq)
     /\ cpUnsafe \in BOOLEAN
     /\ preSigs \in [Slots -> Nat]

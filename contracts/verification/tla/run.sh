@@ -21,6 +21,7 @@ run sigsfirst_skip           PASS     || rc=1   # F3 SIGS-first ordering CONFIRM
 run sigslast_skip            VIOLATED || rc=1   # negative control: wrong order breaks it (non-vacuity)
 run sigsfirst_mayvalid       VIOLATED || rc=1   # FINDING 1: no per-entry integrity tag; relies on torn-QW=undecodable HW premise
 run endtoend_sigsfirst_skip  VIOLATED || rc=1   # FINDING 2: local tally resets on total loss; backstopped by inv-#9 + on-chain cap
+run partial_erase_sigsfirst   VIOLATED || rc=1   # NON-ATOMIC ERASE: a torn partial erase rolls a registered slot back even under SigsFirst — proves erase-atomicity is load-bearing (the Verus pilot ASSUMES it)
 run cnt_sigsfirst_skip       VIOLATED || rc=1   # documented SIGS-vs-COUNT asymmetry (non-vacuity)
-echo; [ $rc = 0 ] && echo "=== all 5 expected outcomes matched ===" || echo "=== MISMATCH — investigate ==="
+echo; [ $rc = 0 ] && echo "=== all 6 expected outcomes matched ===" || echo "=== MISMATCH — investigate ==="
 exit $rc

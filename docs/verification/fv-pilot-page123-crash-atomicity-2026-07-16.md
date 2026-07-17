@@ -54,6 +54,7 @@ Reproduce: `TLA2TOOLS=/path/to/tla2tools.jar contracts/verification/tla/run.sh`
 | `INV_SIGS_COMPACTION_LOCAL` | **SigsFirst** | **Skip** | **PASS** (35 238 states; also **PASS at 1 033 535 states**, PageCap=5/MaxCount=3) | ✅ the shipped F3 ordering claim is **confirmed** under the code's HW premise |
 | `INV_SIGS_COMPACTION_LOCAL` | SigsLast | Skip | VIOLATED | negative control fires ⇒ the PASS is **non-vacuous** |
 | `INV_SIGS_COMPACTION_LOCAL` | SigsFirst | **MayValid** | **VIOLATED** | **Finding 1** — the QW format has no per-entry integrity tag; safety relies on the hardware giving "torn QW = undecodable" for free |
+| `INV_SIGS_COMPACTION_LOCAL` | SigsFirst | Skip + **`EnablePartialErase`** | **VIOLATED** | **Finding 3** (added 2026-07-17) — with the 8 KiB erase modeled NON-atomically, a torn partial erase leaves a *lower* SIGS QW readable while wiping the higher, so a registered slot rolls back **even under SigsFirst** ⇒ erase-atomicity is load-bearing (the Verus pilot ASSUMES it as `AX-ERASE-ATOMIC`) |
 | `INV_SIGS_NO_ROLLBACK` (end-to-end) | SigsFirst | Skip | **VIOLATED** | **Finding 2** — the *local* tally can reset after a torn total-loss; the model confirms invariant #9 + the on-chain cap are the (load-bearing) backstops, not a hole |
 
 The model encodes **invariant #9** (a bare `COUNT`/`USEROP` write requires the slot
@@ -140,6 +141,22 @@ composition bound is a **cited** premise, precisely localized by this pilot.
 > never reads the cap counters (`PQSmartWallet.sol:573-576`), so they are uncapped;
 > the bound is the reset-rate + bootstrap budget, and the impact is slot-key
 > birthday-margin erosion (see the P1.5 combined-budget report's CORRECTION note).
+
+**Finding 3 — non-atomic erase breaks SIGS-first (added 2026-07-17; the TLC counterpart
+to the Verus pilot).** The original model erased the page atomically (`page' = <<>>`).
+Under the new `EnablePartialErase = TRUE` (the `partial_erase_sigsfirst` cfg — non-base,
+the 5 base cfgs stay `FALSE` and unchanged), `StartCompactNA` enters an `"erasing"` mode
+without wiping the page, and `CrashPartialErase` models a brownout mid-erase leaving a
+**prefix** of the append-only log. TLC finds the counterexample in 7 states: `AppendSigs(a)`
+×2 → `page = [SIGS(a,1), SIGS(a,2)]`; `StartCompactNA` snapshots `preSigs[a]=2`;
+`CrashPartialErase` → `page = [SIGS(a,1)]` (the high QW erased, the low prefix survives) →
+`a` registered with `proj_sigs = 1 < 2` → **`INV_SIGS_COMPACTION_LOCAL` VIOLATED under
+SigsFirst**. So **SIGS-first replay ordering is not sufficient if the erase itself tears** —
+erase-atomicity is a load-bearing silicon premise (the Verus pilot proves the positive
+theorem *assuming* it as `AX-ERASE-ATOMIC`; this is the counterexample it deferred to TLC).
+The forward/reverse double-scan does not catch it (both MAX over the survivors and agree).
+Mitigation is a commit-marker / two-page ping-pong, already flagged at `flash.rs:1669`. See
+`docs/verification/fv-pilot-verus-flash-journal-2026-07-17.md`.
 
 **Confirmed residual — the SIGS-vs-COUNT asymmetry.** `INV_CNT_NO_ROLLBACK` is
 violated under SigsFirst+Skip, machine-confirming the F3 comment's own honest
