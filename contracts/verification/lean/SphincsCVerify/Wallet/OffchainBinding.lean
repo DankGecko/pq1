@@ -48,7 +48,22 @@ opaque keccak256 : List ByteSeg → ByteVec 32
     `keccak256 x = sha256 y` is a cross-hash collision — the `BreaksHash`
     witness. Stated in the same consistent reduction shape as
     `sha256_collision_resistance`: it never concludes `False`, and `BreaksHash`
-    must NEVER be assumed false (that would re-introduce an inconsistency). -/
+    must NEVER be assumed false (that would re-introduce an inconsistency).
+
+    **OC2 — QUANTITATIVE floor (partial / cited-tcb).** This axiom is the
+    QUALITATIVE reduction; its `BreaksHash` disjunct is NOT free. The explicit
+    search-game bound lives in `Crypto/Quantitative.lean` (§ Cross-function
+    separation): both images share the 256-bit `ByteVec 32` codomain, so the floor
+    is NOT automatically `2⁻²⁵⁶` — it is `256 − 2·qBits` (both-messages-vary claw /
+    birthday, `crossClawBits`) or `256 − qBits` (fixed-target preimage,
+    `crossPreimageBits`). The RAW32 attacker varies BOTH the off-chain `rawHash`
+    and the draining UserOp, so the OPERATIVE floor is the claw: **128 bits at
+    `2⁶⁴` work (`crossClaw_at_2pow64`) — C10's Cat-1 design level**, i.e. the same
+    birthday strength the whole wallet lives at. The axiom stays `cited-tcb`: the
+    quantitative layer bounds the feasibility of the disjunct, it does not
+    discharge it. (Replaces the earlier "structurally impossible / disjoint"
+    framing, which conflated the two regimes and implied a `2⁻²⁵⁶` that only holds
+    for a fixed target.) -/
 axiom keccak_sha256_cross_separation
     (ksegs ssegs : List ByteSeg) :
     keccak256 ksegs ≠ sha256 ssegs ∨ BreaksHash

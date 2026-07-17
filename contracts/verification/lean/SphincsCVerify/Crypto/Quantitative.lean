@@ -285,4 +285,90 @@ theorem securityFloor_antitone_in_qBits {n a k q1 q2 : Nat} (h : q1 ≤ q2) :
         Nat.le_trans (Nat.min_le_right _ _)
           (Nat.le_trans (Nat.min_le_right _ _) (Nat.sub_le_sub_left (by omega) n))⟩⟩
 
+/-! ## Cross-function separation floor (OC2 — off-chain/on-chain domain separation)
+
+The `Wallet/OffchainBinding.keccak_sha256_cross_separation` axiom is the
+QUALITATIVE reduction (`keccak256 x = sha256 y ⟹ BreaksHash`) that grounds the
+RAW32 UserOp-forgery-oracle defense: the off-chain-signed value (`replaySafeHash`,
+a keccak-256 image) is never equal to any UserOp `sphincsDigest` (a SHA-256 image)
+unless a hash-hardness assumption is broken. This section adds the missing
+QUANTITATIVE layer for that `BreaksHash` disjunct — the explicit search-game floor
+— exactly as the sections above quantify the EUF-CMA / SM-DT-TCR BreaksHash events.
+It stays a bound on the FEASIBILITY of the disjunct; it does NOT discharge the
+axiom (which remains `cited-tcb`).
+
+**The honest point (finding OC2): the floor is NOT automatically `2⁻²⁵⁶`.** It
+depends on whether the attacker's target is FIXED or BOTH messages vary, because
+the two hashes share the same 256-bit codomain (`ByteVec 32` on both sides —
+type-guaranteed, independent of the `N = 16` truncation INSIDE the tweakable
+hashes, which is not applied to these outer digests):
+
+* **Both-messages-vary (claw / birthday)** — find ANY `(x, y)` with
+  `keccak256 x = sha256 y`. Two independent 256-bit-codomain functions ⇒ birthday
+  advantage `q² · 2⁻²⁵⁶` ⇒ floor `256 − 2·qBits`, break at `q ≈ 2¹²⁸`.
+* **Fixed-target (preimage)** — hit one specific `sphincsDigest = T` with
+  `keccak256 x = T` ⇒ `q · 2⁻²⁵⁶` ⇒ floor `256 − qBits`.
+
+**The claw is the OPERATIVE regime for the RAW32 defense**, and it is genuinely
+available: the attacker varies the off-chain `rawHash` freely (full 2²⁵⁶ image via
+`replaySafeHash`) AND the draining UserOp (its `nonce` alone spans 256 bits, plus
+the gas fields), so it can search for a cross-image collision, not just a preimage.
+Take the attacker-favorable minimum = the claw. So the honest headline floor is
+**128 bits — C10's Cat-1 design level**: the RAW32 cross-separation holds at the
+SAME birthday strength the whole wallet already lives at. The naive `2⁻²⁵⁶` was the
+wrong yardstick (that is the fixed-target preimage number); the right one is the
+128-bit both-vary claw. This is a precision/honesty fix, not a downgrade. -/
+
+/-- Output width of BOTH cross-separation images — the off-chain `replaySafeHash`
+    (a keccak-256 `ByteVec 32`) and the on-chain `sphincsDigest` (a SHA-256
+    `ByteVec 32`): 32 bytes = 256 bits. Type-guaranteed by `ByteVec 32` on both
+    sides; the `N = 16` truncation inside the tweakable hashes does not touch these
+    outer digests. -/
+def CrossOutputBits : Nat := 8 * 32
+
+theorem crossOutputBits_eq : CrossOutputBits = 256 := by decide
+
+/-- **Both-messages-vary (claw / birthday) floor**, in bits, at adversary offline
+    work `2^qBits`: finding ANY `(x, y)` with `keccak256 x = sha256 y` is a claw
+    between two independent 256-bit-codomain functions ⇒ `q² · 2⁻²⁵⁶` ⇒
+    `256 − 2·qBits`. The OPERATIVE regime for the RAW32-oracle defense. -/
+def crossClawBits (qBits : Nat) : Nat := CrossOutputBits - 2 * qBits
+
+/-- **Fixed-target (preimage) floor**, in bits: hitting a FIXED `sphincsDigest = T`
+    with `keccak256 x = T` is a preimage search ⇒ `q · 2⁻²⁵⁶` ⇒ `256 − qBits`. The
+    stronger regime — only applies if the attacker cannot also vary the UserOp. -/
+def crossPreimageBits (qBits : Nat) : Nat := CrossOutputBits - qBits
+
+/-- **Anti-vacuity (exact value, not `≥ 0`).** The operative claw floor at a
+    generous `2⁶⁴` offline-work budget is EXACTLY 128 bits = C10's Cat-1 design
+    level. Pinned exactly so a wrong arithmetic (or Nat-subtraction truncation)
+    would flip it — mirrors `c10_security_floor_at_slot_cap : … = 96`. -/
+theorem crossClaw_at_2pow64 : crossClawBits 64 = 128 := by decide
+
+/-- **The claw break-point (exact).** At `2¹²⁸` work the birthday floor reaches 0
+    (a cross-image collision is expected) — the exact 256-bit-codomain birthday
+    bound, pinned so the formula cannot silently truncate to an accidentally-true
+    `≥ 0` past the break. -/
+theorem crossClaw_breakpoint : crossClawBits 128 = 0 := by decide
+
+/-- Fixed-target preimage floor is 192 bits at `2⁶⁴` work and 128 bits at `2¹²⁸`
+    — strictly above the claw floor, confirming the claw is the binding regime. -/
+theorem crossPreimage_at_2pow64 : crossPreimageBits 64 = 192 := by decide
+theorem crossPreimage_at_2pow128 : crossPreimageBits 128 = 128 := by decide
+
+/-- **The claw is the attacker-favorable (weaker) regime at every work budget**:
+    `256 − 2·qBits ≤ 256 − qBits`. So headlining the claw floor is conservative —
+    the reported 128-bit strength is a lower bound on both regimes. -/
+theorem crossClaw_le_preimage (qBits : Nat) :
+    crossClawBits qBits ≤ crossPreimageBits qBits := by
+  unfold crossClawBits crossPreimageBits
+  exact Nat.sub_le_sub_left (by omega) CrossOutputBits
+
+/-- The claw floor is monotone non-increasing in the (log) offline-work budget:
+    more work never *increases* the separation strength. -/
+theorem crossClaw_antitone {q1 q2 : Nat} (h : q1 ≤ q2) :
+    crossClawBits q2 ≤ crossClawBits q1 := by
+  unfold crossClawBits
+  exact Nat.sub_le_sub_left (by omega) CrossOutputBits
+
 end SphincsCVerify.Crypto.Quantitative
