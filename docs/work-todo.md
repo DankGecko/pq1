@@ -225,12 +225,16 @@ deduplication, and falsifiable acceptance criteria.
 > **⏳ Remaining non-blocked surface — entrypoint-v06-nonce-replay (D2).** Same-nonce
 > Type-2 replay protection is WHOLLY the deployed EntryPoint v0.6 NonceManager
 > (cited-TCB; `entrypoint_no_replay` was removed as dangling+latent-false, and the
-> wallet never reads `op.nonce` except as a `sphincsDigest` input). Honest closure =
-> a named-TCB leaf: a fork-gated `extcodehash` PIN of `0x5FF1…789` (needs a live RPC —
-> unavailable in the sandbox) + a cited bridge to the audited canonical v0.6.0. The
-> distinct-nonce half is already covered by `sphincsDigest_field_binding`; the
-> optional `distinct_nonce_distinct_digest` Lean lemma is marginal. Do once a codehash
-> receipt can be captured externally.
+> wallet never reads `op.nonce` except as a `sphincsDigest` input). **Named-TCB leaf
+> `T-EP-NONCE` documented 2026-07-17** (`THREAT_CLAIM_MAP.md` footnote [^10] UPDATE):
+> the cited-TCB fact is now stated OBSERVABLY — reused `(sender,nonce)` →
+> `_validateAndUpdateNonce` returns false → EntryPoint `FailedOp` AA25 → op never
+> reaches execution → no balance change. **Still open (the pending receipt):** bind
+> the EntryPoint `0x5FF1…789` deployed `extcodehash` (currently ADDRESS-pinned only)
+> to the audited canonical v0.6.0 via a fork-gated test — needs a live RPC
+> `cast code | cast keccak` (unavailable in sandbox). Does NOT discharge D2 (stays
+> cited-TCB). The distinct-nonce half is already covered by `sphincsDigest_field_binding`;
+> the optional `distinct_nonce_distinct_digest` Lean lemma is marginal.
 
 - [ ] **FV15-F1 — reopen extraction freshness (prior extracted F1/F3).** Require
   pinned clean regeneration from every mirrored current Rust source, a total
