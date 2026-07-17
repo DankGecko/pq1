@@ -72,11 +72,10 @@ self-test fires (2 failures).
   secure-region consts + a disjointness const-assert INTO the already-Kani-proven
   `ns_ptr_validate.rs` predicate, upgrading `accept ⟹ ⊆ NS-window` to `accept ⟹ ∉ secure`
   in the mechanized proof itself (vs this Lean re-statement of the interval arithmetic).
-- **Makefile wiring deferred:** a concurrent session is mid-edit on
-  `contracts/verification/Makefile` (adding `verify-tla`); wiring `verify-linker-map`
-  now would swallow that uncommitted change. The gate runs standalone
-  (`python3 contracts/verification/scripts/check_linker_memory_map.py [--self-test]`);
-  add the `verify-linker-map` target (self-test + run) once the `verify-tla` change lands.
+- **Makefile wiring:** **WIRED 2026-07-17** as `make -C contracts/verification
+  verify-linker-map` (self-test + run, in `make help`) once the concurrent `verify-tla`
+  edit landed. Standalone target (not in the aggregate `verify` bundle, same as
+  `verify-tla`).
 
 ## Files
 

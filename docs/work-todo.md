@@ -205,13 +205,13 @@ deduplication, and falsifiable acceptance criteria.
 > bootstrap-budget bounds to the P1.5 TLA+ model). Refs:
 > `docs/verification/fv-pilot-combined-budget-lifetime-2026-07-17.md` CORRECTION note.
 >
-> **⏳ WIRE — `verify-linker-map` CI gate.** The P1.9 memory-map source-binding gate
-> `contracts/verification/scripts/check_linker_memory_map.py` (closes a confirmed
-> `.x`-vs-`proto`/`sau.rs` drift; run + `--self-test` both pass) is NOT wired into
-> `contracts/verification/Makefile` — deferred to avoid clobbering a concurrent
-> uncommitted `verify-tla` edit. Add a `verify-linker-map` PHONY target (`--self-test`
-> then run) + `.PHONY` entry once `verify-tla` lands; until then the drift gate does
-> not fire automatically.
+> **✅ WIRED — `verify-linker-map` CI gate (2026-07-17).** The P1.9 memory-map
+> source-binding gate `contracts/verification/scripts/check_linker_memory_map.py`
+> (closes a confirmed `.x`-vs-`proto`/`sau.rs` drift) is now a
+> `make -C contracts/verification verify-linker-map` target (`--self-test` then run,
+> both green; in `make help`). Wired once the concurrent `verify-tla` edit landed
+> (both now committed). Still standalone (not in the aggregate `verify` bundle, same
+> as `verify-tla`); add to CI's FV gate list if desired.
 >
 > **⏳ CIRCLE BACK — gas-lane P1.2 slice** (`signed-intent-to-display`, the second
 > named high-risk binding): DEFERRED because its kernel

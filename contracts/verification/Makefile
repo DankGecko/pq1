@@ -37,7 +37,7 @@ LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 help: ## Show the runnable FV targets (those with a description)
 	@grep -hE '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F':.*## ' '!seen[$$1]++ {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: verify verify-hw-assumptions verify-tla verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation verify-forsc-margin verify-easycrypt verify-easycrypt-pins
+.PHONY: verify verify-hw-assumptions verify-tla verify-linker-map verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation verify-forsc-margin verify-easycrypt verify-easycrypt-pins
 
 # NOTE: verify-build (the `lake build` this bundle depends on) now also
 # kernel-checks the A3.1 in-kernel parse theorem + elision bridge (the root
@@ -168,6 +168,19 @@ verify-tla: ## TLA+/TLC models (page-123 crash-atomicity, combined budget, PIN r
 	TLA2TOOLS="$(TLA_JAR)" $(TLA_DIR)/run_combined.sh || rc=1; \
 	TLA2TOOLS="$(TLA_JAR)" $(TLA_DIR)/run_pin.sh      || rc=1; \
 	exit $$rc
+
+# P1.9 TrustZone memory-map source-binding drift gate. The region literals are
+# triplicated by hand across the linker .x files, proto/src/lib.rs, and
+# secure/src/sau.rs with no cross-family check — editing a .x MEMORY number
+# without updating proto/sau.rs silently overlaps secure data into an SAU-NS
+# region. This binds all three families to each other AND to the Lean
+# Platform/MemoryMap.lean literals (so its accept=>∉secure disjointness proof is
+# about the real map). --self-test is the negative control: an injected .x/secure
+# overlap MUST be caught. Pure source parse, no build.
+.PHONY: verify-linker-map
+verify-linker-map: ## TrustZone memory-map drift gate: .x == proto == sau.rs == Lean (P1.9)
+	@python3 scripts/check_linker_memory_map.py --self-test
+	@python3 scripts/check_linker_memory_map.py
 
 # EASYCRYPT PORT gate. Two axioms in theft_free's closure (A5-EUFCMA, A5-ITSR)
 # cite this development as evidence; until 2026-07-10 it lived in a remote-less
