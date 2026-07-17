@@ -46,6 +46,10 @@ const SAES_SRC: &str = include_str!("../hw/saes.rs");
 const SAES_CMAC_SRC: &str = include_str!("../hw/saes_cmac.rs");
 const SECRET_KEYS_SRC: &str = include_str!("../hw/secret_keys.rs");
 const OTP_SRC: &str = include_str!("../hw/otp.rs");
+/// The pure Virgin/Partial/Complete rule `hw/otp.rs` consumes. Unlike the rest
+/// of this slice it is MMIO-free, so its behaviour is tested for real in its
+/// own module — these text pins only hold the *shape* of the D4 rule in place.
+const OTP_STATE_SRC: &str = include_str!("../otp_state.rs");
 const HUK_SRC: &str = include_str!("../hw/huk.rs");
 const BHK_SRC: &str = include_str!("../hw/bhk.rs");
 const MMIO_SRC: &str = include_str!("../hw/mmio.rs");
@@ -689,8 +693,68 @@ fn negative_otp_program_qw_bounds_checked() {
 fn negative_otp_burn_refuses_when_already_burned() {
     // OTP is one-way. burn_device_master against an already-burned
     // region would produce garbage on the unburned bits.
-    assert!(OTP_SRC.contains("if is_device_master_burned()"));
+    //
+    // D4: the refusal must key on `Complete`, NOT on "any bit cleared". The
+    // master spans TWO quad-words and takes two separate programs, so a reset
+    // between them leaves a region that is neither blank nor complete. The old
+    // any-bit test called that "burned" — which is the defect, not the guard.
+    assert!(OTP_SRC.contains("if state == MasterKeyState::Complete"));
     assert!(OTP_SRC.contains("return Err(OtpError::AlreadyBurned);"));
+}
+
+#[test]
+fn negative_otp_master_state_is_per_quad_word_not_per_bit() {
+    // D4 regression guard. `is_device_master_burned` must mean "both
+    // quad-words programmed", never "some bit somewhere is cleared" — a
+    // per-bit test reports an interrupted burn as burned, and
+    // read_device_master then hands back [QW0 || 0xFF x16], rooting every SE
+    // transport credential in a 128-bit master, silently and irreversibly.
+    assert!(
+        OTP_SRC.contains("matches!(master_key_state(), Ok(MasterKeyState::Complete))"),
+        "is_device_master_burned must mean Complete (both quad-words), not any-bit-cleared"
+    );
+    // The rule itself is pure and lives in `otp_state.rs` so it is executable
+    // on the host (see the behavioural suite in that module). `hw/otp.rs` must
+    // consume it rather than re-implement it beside the MMIO.
+    assert!(OTP_SRC.contains("classify_master_words(&read_master_words())"));
+    assert!(
+        OTP_STATE_SRC.contains("(false, false) => MasterKeyState::Virgin"),
+        "the pure classifier must treat an all-blank region as Virgin"
+    );
+    assert!(
+        OTP_STATE_SRC.contains("(true, true) => MasterKeyState::Complete"),
+        "the pure classifier must require BOTH quad-words for Complete"
+    );
+    assert!(
+        OTP_STATE_SRC.contains("_ => MasterKeyState::Partial"),
+        "exactly-one-quad-word-programmed must be Partial — this is D4"
+    );
+}
+
+#[test]
+fn negative_otp_read_master_refuses_partial_region() {
+    // The barrier that makes D4 unreachable: no caller may obtain a
+    // half-blank master, so no credential can ever root in one.
+    assert!(OTP_SRC.contains("MasterKeyState::Partial => return Err(OtpError::MasterKeyPartial)"));
+    assert!(OTP_SRC.contains("MasterKeyState::Virgin => return Err(OtpError::NotBurned)"));
+}
+
+#[test]
+fn negative_otp_master_state_fails_closed_on_unstable_read() {
+    // The verdict gates an irreversible OTP write AND a key derivation, so a
+    // glitched classification must abort, not be voted. Contrast
+    // `rollback_floor`, which votes max(a,b) — correct for a monotonic
+    // admission check, wrong here.
+    assert!(OTP_SRC.contains("return Err(OtpError::MasterKeyUnstable);"));
+    // Two passes with an FI delay between them.
+    let state_fn = OTP_SRC
+        .split("pub fn master_key_state()")
+        .nth(1)
+        .expect("master_key_state must exist");
+    assert!(
+        state_fn.contains("crate::fi::wait_random();"),
+        "master_key_state must place an FI delay between its two classification passes"
+    );
 }
 
 #[test]

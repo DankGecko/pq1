@@ -83,6 +83,12 @@ mod first_boot;
 // page 127 remains exclusively owned by the first-boot journal.
 mod flash_policy;
 
+// Pure classification of the device-master-key OTP region (Virgin / Partial /
+// Complete, per quad-word). Free of MMIO so the D4 rule — an interrupted
+// two-quad-word burn must never read as "burned" — is executable on the host;
+// `hw::otp` does the volatile reads and consumes the verdict.
+mod otp_state;
+
 // Hardware-dependent modules: gated out in test builds so `cargo test`
 // compiles only the pure logic on x86_64.
 #[cfg(not(test))]

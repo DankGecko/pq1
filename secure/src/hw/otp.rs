@@ -135,8 +135,11 @@ pub const MASTER_KEY_OFFSET: u32 = ROLLBACK_WORDS * 4;
 pub const MASTER_KEY_SIZE: usize = 32;
 /// Absolute address of the device master key.
 const MASTER_KEY_ADDR: u32 = OTP_BASE + MASTER_KEY_OFFSET;
-/// Number of 32-bit words in the device-master-key region (32 B = 8 words).
-const MASTER_KEY_WORDS: usize = MASTER_KEY_SIZE / 4;
+// Master-region geometry + the pure Virgin/Partial/Complete rule live in
+// `crate::otp_state` so they are host-testable without MMIO. Re-exported here
+// because `hw::otp` is the public face of the OTP surface.
+pub use crate::otp_state::{MasterKeyState, classify_master_words};
+use crate::otp_state::{MASTER_KEY_QWS, MASTER_KEY_WORDS, QW_BYTES, WORDS_PER_QW};
 
 /// Byte offset of the factory-ceremony sentinel within OTP. Lives
 /// directly after the device master key (offset 160..176, one
@@ -219,6 +222,18 @@ pub enum OtpError {
     ReadbackMismatch,
     /// Failed to obtain TRNG bytes from `crate::rng::fill`.
     RngFailed,
+    /// The master-key region is programmed in ONE quad-word but not the other
+    /// — a burn was interrupted between its two quad-word programs (D4).
+    /// `read_device_master` refuses this state: handing back
+    /// `[QW0 ‖ 0xFF×16]` would root every derived credential in a 128-bit
+    /// master. `burn_device_master` completes the still-virgin quad-word.
+    MasterKeyPartial,
+    /// Two independent classifications of the master region disagreed, i.e.
+    /// the region does not read stably (glitch, or an ECC-poisoned quad-word
+    /// from an interrupted program). Fail closed: never act on an unstable
+    /// read when the consequence is an irreversible write or a key
+    /// derivation.
+    MasterKeyUnstable,
 }
 
 /// Read the current rollback floor (count of zero bits in the OTP
@@ -499,25 +514,83 @@ pub fn is_device_master_burned() -> bool {
     }
     #[cfg(not(feature = "otp-hardcoded-master-key"))]
     {
-        // Word-scan equivalent of the byte scan: blank OTP reads all-1s,
-        // so any word != 0xFFFF_FFFF means at least one bit has flipped.
-        for i in 0..MASTER_KEY_WORDS {
-            // SAFETY: `i < MASTER_KEY_WORDS = 8` — inside the master-key
-            // bank `MASTER_KEY_W0` was constructed for.
-            let w = unsafe { MASTER_KEY_W0.read_at(i) };
-            if w != 0xFFFF_FFFF {
-                return true;
-            }
-        }
-        false
+        // D4: `Complete` ONLY. The pre-2026-07-17 test was "any word !=
+        // 0xFFFF_FFFF ⇒ burned", which reports an interrupted two-quad-word
+        // burn as burned; `read_device_master` then handed out
+        // `[QW0 ‖ 0xFF×16]` and every SE transport credential rooted in a
+        // 128-bit master, silently and irreversibly. An unstable read yields
+        // `Err` ⇒ `false` here, which is fail-closed at every call site:
+        // `read_device_master` → `NotBurned`, `first_boot`'s precondition →
+        // `OtpMasterNotBurned` (RMA screen), and `ensure_device_master` →
+        // re-enters `burn_device_master`, which re-classifies and refuses.
+        matches!(master_key_state(), Ok(MasterKeyState::Complete))
     }
+}
+
+/// Snapshot the eight master-region words with volatile reads.
+///
+/// This is the only MMIO in the classification path; the *rule* it feeds
+/// (`crate::otp_state::classify_master_words`) is pure and host-tested.
+#[cfg(not(feature = "otp-hardcoded-master-key"))]
+fn read_master_words() -> [u32; MASTER_KEY_WORDS] {
+    let mut words = [0u32; MASTER_KEY_WORDS];
+    for (i, slot) in words.iter_mut().enumerate() {
+        // SAFETY: `i < MASTER_KEY_WORDS = 8` — inside the master-key bank
+        // `MASTER_KEY_W0` was constructed for.
+        *slot = unsafe { MASTER_KEY_W0.read_at(i) };
+    }
+    words
+}
+
+/// Is quad-word `qw` (0 or 1) of the master region programmed?
+#[cfg(not(feature = "otp-hardcoded-master-key"))]
+fn master_qw_programmed(qw: usize) -> bool {
+    debug_assert!(qw < MASTER_KEY_QWS);
+    crate::otp_state::qw_programmed(&read_master_words(), qw)
+}
+
+#[cfg(not(feature = "otp-hardcoded-master-key"))]
+fn master_key_state_once() -> MasterKeyState {
+    classify_master_words(&read_master_words())
+}
+
+/// Classify the master-key region per quad-word, fail-closed on an unstable
+/// read.
+///
+/// Read twice with an FI delay between passes and require agreement. This
+/// mirrors `bump_to`'s discipline and for the same reason: the verdict gates
+/// an irreversible OTP write *and* a key derivation, so a glitched
+/// classification must abort rather than be voted. Note the deliberate
+/// asymmetry with `rollback_floor`, which votes `max(a, b)` — that
+/// conservative-HIGH bias is correct for a monotonic admission check and
+/// wrong here, where a glitched-`Complete` would skip a needed completion and
+/// a glitched-`Virgin` would re-drive a programmed quad-word.
+#[cfg(not(feature = "otp-hardcoded-master-key"))]
+pub fn master_key_state() -> Result<MasterKeyState, OtpError> {
+    let a = master_key_state_once();
+    crate::fi::wait_random();
+    let b = master_key_state_once();
+    if a != b {
+        return Err(OtpError::MasterKeyUnstable);
+    }
+    Ok(a)
+}
+
+/// Under `otp-hardcoded-master-key` the fixed test constant stands in for a
+/// completed burn; no OTP word is ever read or programmed.
+#[cfg(feature = "otp-hardcoded-master-key")]
+pub fn master_key_state() -> Result<MasterKeyState, OtpError> {
+    Ok(MasterKeyState::Complete)
 }
 
 /// Read the 32-byte device master key out of OTP.
 ///
-/// Returns `OtpError::NotBurned` if the region is still blank. Callers may use
-/// `ensure_device_master`, but its initial two-QW burn is not crash-retry-safe;
-/// only a previously completed and verified burn makes later calls pure reads.
+/// Returns `NotBurned` if the region is still blank, `MasterKeyPartial` if an
+/// interrupted burn left exactly one of its two quad-words programmed, and
+/// `MasterKeyUnstable` if two classifications disagree. **Only a `Complete`
+/// region yields bytes** — this is the barrier that makes D4 unreachable: a
+/// caller can never obtain `[QW0 ‖ 0xFF×16]` and root a credential in a
+/// 128-bit master.
 ///
 /// Under `otp-hardcoded-master-key` returns the fixed test pattern.
 pub fn read_device_master() -> Result<[u8; MASTER_KEY_SIZE], OtpError> {
@@ -527,8 +600,15 @@ pub fn read_device_master() -> Result<[u8; MASTER_KEY_SIZE], OtpError> {
     }
     #[cfg(not(feature = "otp-hardcoded-master-key"))]
     {
-        if !is_device_master_burned() {
-            return Err(OtpError::NotBurned);
+        // D4: refuse anything that is not a completed burn. This is the
+        // barrier that makes the whole defect unreachable — no caller can
+        // obtain `[QW0 ‖ 0xFF×16]`, so no credential can ever root in a
+        // half-blank master. `Partial` and `MasterKeyUnstable` are distinct
+        // from `NotBurned` so the fault screen says which one it is.
+        match master_key_state()? {
+            MasterKeyState::Virgin => return Err(OtpError::NotBurned),
+            MasterKeyState::Partial => return Err(OtpError::MasterKeyPartial),
+            MasterKeyState::Complete => {}
         }
         let mut out = [0u8; MASTER_KEY_SIZE];
         for i in 0..MASTER_KEY_WORDS {
@@ -548,6 +628,14 @@ pub fn read_device_master() -> Result<[u8; MASTER_KEY_SIZE], OtpError> {
 /// Refuses to proceed (`AlreadyBurned`) if any bit in the region has
 /// already been cleared — OTP is one-way, so partially rewriting the
 /// region would produce garbage. The region must be pristine.
+///
+/// **D4 (fixed 2026-07-17): `Partial` is completed, not refused.** The master
+/// spans two quad-words and takes two separate programs, so a reset between
+/// them is reachable. Only `Complete` is `AlreadyBurned`; from `Partial` this
+/// programs the still-virgin quad-word (its one legal program) and keeps the
+/// committed quad-word's bytes as part of the master. That is safe because
+/// `read_device_master` refuses any non-`Complete` region, so no caller can
+/// ever have derived a credential from the partial value.
 ///
 /// Readback-verifies the burned bytes match what was programmed; on
 /// mismatch returns `ReadbackMismatch` (device effectively bricked —
@@ -571,7 +659,12 @@ pub unsafe fn burn_device_master() -> Result<(), OtpError> {
     {
         use zeroize::Zeroize;
 
-        if is_device_master_burned() {
+        // D4: classify per QUAD-WORD, and fail closed on an unstable read.
+        // `Partial` is a legitimately reachable state (a reset between the two
+        // programs below) and is COMPLETABLE — the virgin quad-word can still
+        // take its one legal program. It is not `AlreadyBurned`.
+        let state = master_key_state()?;
+        if state == MasterKeyState::Complete {
             return Err(OtpError::AlreadyBurned);
         }
 
@@ -589,27 +682,44 @@ pub unsafe fn burn_device_master() -> Result<(), OtpError> {
             return Err(OtpError::RngFailed);
         }
 
-        // Two quad-words: bytes 0..16 and 16..32.
-        let mut qw0 = [0u8; 16];
-        let mut qw1 = [0u8; 16];
-        qw0.copy_from_slice(&key[..16]);
-        qw1.copy_from_slice(&key[16..]);
-
-        // SAFETY: addresses are within the reserved master-key region
-        // and 16-byte aligned by construction (MASTER_KEY_ADDR is
-        // 32-byte aligned; MASTER_KEY_ADDR + 16 inherits alignment).
-        let r0 = unsafe { program_otp_qw(MASTER_KEY_ADDR, &qw0) };
-        let r1 = unsafe { program_otp_qw(MASTER_KEY_ADDR + 16, &qw1) };
-        qw0.zeroize();
-        qw1.zeroize();
-
-        if let Err(e) = r0 {
-            key.zeroize();
-            return Err(e);
+        // `key` is the INTENDED final master. A programmed quad-word is
+        // immutable, so on the `Partial` path its committed bytes stay part of
+        // the master and only the virgin quad-word takes fresh entropy: read
+        // each programmed quad-word back over its slot in `key`. On the
+        // `Virgin` path nothing is overwritten and `key` is wholly fresh.
+        // Either way `key` is what the readback below must equal.
+        let words = read_master_words();
+        let mut virgin = [false; MASTER_KEY_QWS];
+        for (qw, slot) in virgin.iter_mut().enumerate() {
+            if crate::otp_state::qw_programmed(&words, qw) {
+                for w in 0..WORDS_PER_QW {
+                    let i = qw * WORDS_PER_QW + w;
+                    key[i * 4..i * 4 + 4].copy_from_slice(&words[i].to_le_bytes());
+                }
+            } else {
+                *slot = true;
+            }
         }
-        if let Err(e) = r1 {
-            key.zeroize();
-            return Err(e);
+
+        // Program ONLY the virgin quad-words, and abort on the first error
+        // rather than compounding it. (Pre-2026-07-17 this ran both programs
+        // unconditionally and inspected neither result until afterwards, so a
+        // failed QW0 was still followed by a QW1 program — turning a
+        // recoverable `Partial` into a `Complete`-looking region with an
+        // ambiguous QW0. A quad-word whose program errored is consumed and
+        // must not be re-driven; see the module header.)
+        for (qw, _) in virgin.iter().enumerate().filter(|(_, v)| **v) {
+            let mut buf = [0u8; QW_BYTES];
+            buf.copy_from_slice(&key[qw * QW_BYTES..(qw + 1) * QW_BYTES]);
+            // SAFETY: addresses are within the reserved master-key region and
+            // 16-byte aligned by construction (MASTER_KEY_ADDR is 32-byte
+            // aligned; +16 inherits alignment). `qw < MASTER_KEY_QWS = 2`.
+            let r = unsafe { program_otp_qw(MASTER_KEY_ADDR + (qw * QW_BYTES) as u32, &buf) };
+            buf.zeroize();
+            if let Err(e) = r {
+                key.zeroize();
+                return Err(e);
+            }
         }
 
         // Readback verification — catches brown-out mid-program and any
@@ -630,11 +740,21 @@ pub unsafe fn burn_device_master() -> Result<(), OtpError> {
     }
 }
 
-/// If the master-key region is blank, run `burn_device_master`; then read and
-/// return the key. After a successful verified burn, later calls are pure
-/// reads. This is not an idempotence claim for the initial burn: power loss
-/// between its two QWs can leave a partial nonblank region that must fail
-/// closed and cannot be retried in place.
+/// If the master-key region is not a completed burn, run `burn_device_master`;
+/// then read and return the key. After a successful verified burn, later calls
+/// are pure reads.
+///
+/// **D4 (fixed 2026-07-17).** This IS now crash-retry-safe across the burn's
+/// two quad-word programs. The three states compose:
+///
+/// - `Virgin`  → `burn_device_master` programs both quad-words → `Complete` → read.
+/// - `Partial` → `burn_device_master` completes the virgin quad-word → `Complete` → read.
+/// - `Complete`→ skip the burn → read.
+///
+/// and every failure path lands on `read_device_master`, which refuses anything
+/// that is not `Complete`. Previously `is_device_master_burned` was true for a
+/// `Partial` region, so this skipped the burn and returned `[QW0 ‖ 0xFF×16]` —
+/// silently rooting every SE transport credential in a 128-bit master.
 ///
 /// Safe to call on every boot only after factory evidence establishes that the
 /// first burn completed and read back correctly. The production ceremony for
