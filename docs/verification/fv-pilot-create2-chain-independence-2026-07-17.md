@@ -37,9 +37,15 @@ Invariant #6 holds structurally. ✓
    a shared chain-free constant binder, the same technique `Factory.salt` uses);
 2. the **homogeneous** `impl1 = impl2` premise.
 
-`initCodeHash_eq_of_impl_eq` (kernel-only `[propext, Quot.sound]`) proves the
-initCode-preimage chain-freeness in Lean. What remains cited-TCB is now exactly
-TWO homogeneous facts — `factory1 = factory2` and `impl1 = impl2` — each an
+`initCodeHash_eq_of_impl_eq` is `subst h; rfl` — i.e. `congrArg (initCodeHash
+proxyCode)` — so it witnesses the **shape** of the `def` (that `initCodeHash` is a
+function of `(proxyCode, implementation)` and takes no chainId argument), NOT a
+byte-level proof that the real deployed initCode contains no chainId. That "no
+chainId in the real initCode" fact is **source-verified** against
+`PQSmartWalletFactory.sol:93` (cited-TCB — a Rust/Solidity→Lean extraction of the
+actual initCode bytes was not done and is not claimed). What remains cited-TCB is
+now exactly TWO homogeneous facts — `factory1 = factory2` and `impl1 = impl2` —
+each an
 instance of the *single* receipt: "a deterministically-deployed contract (Arachnid
 `0x4e59…` singleton CREATE2 deployer, salt 0, frozen bytecode) has one address on
 every chain, since the CREATE2 opcode preimage `0xff ‖ deployer ‖ salt ‖
@@ -47,17 +53,25 @@ keccak256(initcode)` carries no chainId." That receipt is discharged for the liv
 Base deployment by `contracts/smart-wallet/test/DeployedBytecodeReproCheck.t.sol`
 (CREATE2 replay reproduces factory `0xe8CE78CD…` and impl `0x31e49D24…` exactly).
 
-## What this establishes
+## What this establishes (and what it does not)
 
-- **The initCode preimage is now Lean-proven chain-free** (modulo the impl
-  address), not an opaque premise. Nothing chain-dependent remains inside the
-  address preimage: salt (chain-free, proven) + initCode (chain-free modulo impl,
-  proven).
-- **The cited-TCB shrinks to one fact applied twice.** Before: `{deployer chain-free,
-  keccak256(initCode) chain-free}` — two heterogeneous opaque premises. After:
-  `{factory addr, impl addr}` cross-chain identity — the SAME CREATE2-determinism
-  receipt, already discharged on Base. This is the maximal Lean shrink of I-7:
-  cross-chain deployment identity is genuinely not a pure-Lean fact.
+- **The initCode preimage is structurally MODELED (no chainId parameter) +
+  SOURCE-VERIFIED** against `PQSmartWalletFactory.sol:93`. This is *not* a
+  kernel proof that the real initCode bytes are chain-free (that would need a
+  Solidity→Lean extraction of the actual initcode, which was not done) — it is the
+  project's standard `cited-tcb` level: a faithful structural model whose
+  faithfulness rests on source inspection. The salt, by contrast, IS kernel-proven
+  chain-free (`Factory.salt` provably takes no chain id).
+- **The improvement is the TCB SHAPE, not the hypothesis count.** Both the old
+  theorem (`hd`, `hi`) and the new one (`hf`, `himpl`) carry two cited-TCB
+  hypotheses. What changed: before, `ich1 = ich2` was a *heterogeneous opaque*
+  premise ("keccak256(initCode) is chain-free" — an un-modeled black box); after,
+  it is decomposed into the structural `initCodeHash` model + `impl1 = impl2`, so
+  BOTH remaining TCB facts are now the **same kind** — a deterministically-deployed
+  contract's cross-chain address identity — bound to the one existing Base receipt
+  (`{factory addr, impl addr}`, the SAME Arachnid/salt-0 CREATE2 determinism fact
+  applied twice). Cross-chain deployment identity is genuinely not a pure-Lean
+  fact; this is the maximal *shape* shrink of I-7's TCB.
 
 ## Closure hygiene
 
