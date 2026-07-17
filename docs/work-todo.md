@@ -175,7 +175,7 @@ deduplication, and falsifiable acceptance criteria.
 > will propagate to the E/F bundles on the next full `build.sh` regeneration.
 >
 > **FV-EXPANSION pilots (2026-07-16/17, branch `fix/fv-review-2026-07-15`, pushed to
-> master).** 13 new-surface pilots landed (inventory:
+> master).** 15+ new-surface pilots landed (inventory:
 > `docs/verification/fv-surface-expansion-inventory-2026-07-16.md`; reports under
 > `docs/verification/fv-pilot-*`): page-123 crash-atomicity TLA+/TLC (`e45e7ac8`),
 > P1.7 signed-digest correspondence (`47cc4e2d`), P1.2 ERC-20 canonicity (`64f059ff`),
@@ -183,9 +183,17 @@ deduplication, and falsifiable acceptance criteria.
 > P1.6 directional-PIN reconcile (`3647a5fa`), OC2 cross-hash floor (`b3c7b11f`),
 > I-7 create2 chain-independence (`b7c6c44c`+`99889cb7`), F10 seed-split leak
 > (`f309725d`), validateUserOp wrapper-decode ∀-symbolic KEVM (`261d0e80`),
-> P1.9 TrustZone memory-map + drift gate (`2e60f64d`). All ran through a 7-agent
-> adversarial review (fixes `2a6a8cd9`): P1.6/F10/validateUserOp-KEVM/OC2 SOUND;
-> 3 honesty/soundness corrections applied.
+> P1.9 TrustZone memory-map + drift gate (`2e60f64d`), Verus flash-journal
+> crash-safety all-length (`e0e7d36a`+`8fbb6f13`), TLA+ non-atomic-erase
+> counterexample (`054ee73f`), crux-mir NS-pointer diversity check (`cb5613fd`).
+> **Two new FV tools stood up:** **Verus** (verified Rust — all-length deductive
+> proof, vs bounded TLC) and **crux-mir** (Galois symbolic Rust — a SECOND engine
+> vs Kani, which found a real overflow in a naive re-impl, confirming the
+> validator's overflow-safety is load-bearing). Setup recipes:
+> `contracts/verification/scripts/fv-external-tools.env`. First eleven pilots ran
+> through a 7-agent adversarial review (fixes `2a6a8cd9`):
+> P1.6/F10/validateUserOp-KEVM/OC2 SOUND; 3 honesty/soundness corrections applied.
+> The Verus pilot got its own 3-facet review (SOUND×3 + 1 scope-precision fix).
 >
 > **⚠️ SECURITY RESIDUAL (audit-derived, P1.5 adversarial review 2026-07-17) —
 > off-chain EIP-1271 few-time-key margin has NO on-chain cap.** `wallet.isValidSignature`
@@ -239,6 +247,50 @@ deduplication, and falsifiable acceptance criteria.
 > over the ~30-line canonical NonceManager source. The distinct-nonce half is already
 > covered by `sphincsDigest_field_binding`; the optional `distinct_nonce_distinct_digest`
 > Lean lemma is marginal.
+
+**FV-expansion pilot residuals (2026-07-16/17) — open follow-ups.** The pilots
+above proved their software properties; these are the named gaps their reports
+scope out (honest-scope residuals, promoted here so they don't evaporate).
+
+- [ ] **FVX-1 — page-123 torn-erase atomicity (`AX-ERASE-ATOMIC`).** The Verus
+  all-length no-rollback theorem ASSUMES the 8 KiB page erase is atomic; the TLA+
+  `partial_erase_sigsfirst` counterexample (`054ee73f`) machine-confirms a torn
+  PARTIAL erase (brownout mid-compaction) rolls a registered slot's SIGS below its
+  snapshot even under SIGS-first. Close by EITHER (a) an on-silicon receipt for
+  STM32U5 erase brownout behaviour (can a power-cut mid-erase leave a
+  partially-erased page readable? — AN5342/RM0456 unconfirmed), OR (b) a compaction
+  commit-marker / per-QW CRC so a torn compaction is detectable and the reader fails
+  closed (`flash.rs:1669` residual). Acceptance: the TLA+ counterexample no longer
+  reaches `INV_SIGS_COMPACTION_LOCAL` VIOLATED under the chosen mechanism.
+- [ ] **FVX-2 — page-123 torn-QW integrity (`AX-TORN-SKIP`).** The 16-byte QW format
+  has no per-entry integrity tag, so BOTH replay orders stay safe ONLY because the
+  STM32U5 gives "power-interrupted QW = undecodable" for free (page-123 TLA+
+  Finding 1); under "torn QW may decode as a rogue valid entry" the property is
+  FALSE. Pin/validate that silicon behaviour on-device, or add a per-entry CRC /
+  commit bit. Acceptance: an on-device torn-write test shows the interrupted QW
+  reads back undecodable (or the CRC rejects it).
+- [ ] **FVX-3 — torn-QW ECC read: silent-skip vs brick (availability).**
+  Undetermined for STM32U5 whether reading a torn QW silently skips or raises an ECC
+  double-error NMI (→ crash-loop brick). The safety proofs assume silent-skip
+  (`AX-TORN-SKIP`); the trap branch is an unresolved AVAILABILITY residual, not a
+  safety hole. Acceptance: on-silicon determination + a fail-safe path if it traps.
+- [ ] **FVX-4 — bind the SAU config to the NS-pointer validator constants.** The
+  crux-mir (`cb5613fd`) + Kani proofs cover only the SOFTWARE window arithmetic; the
+  hardware half (ARMv8-M SAU/`TT` re-classification) is a HW receipt — GTZC
+  enforcement was silicon-validated 2026-05-20 (`make gtzc-enforcement-hw`, 7/7
+  RAZ/fault), but that is a TEST not a proof, and nothing binds the runtime `sau.rs`
+  register writes to the validator's window constants. Fold the secure-region
+  constants into the Kani `ns_ptr_validate` predicate itself and extend
+  `check_linker_memory_map.py` to bind `sau.rs`'s `GTZC*_SECCFGR` / SAU region
+  programming, so a lone `sau.rs` edit that widens NS into a secure region reddens
+  the gate.
+- [ ] **FVX-5 — keep-in-sync gates for the host FV copies (cited-TCB).** Two pilots
+  verify a COPY, not the deployed code: the Verus page-123 journal MODEL (vs
+  `offchain_state.rs` / `flash.rs`) and the crux-mir `ns_ptr_diversity` copy (vs
+  `shared/src/ns_ptr_validate.rs`). Add a source-diff tripwire for the crux copy
+  (its two functions are byte-copyable), and — stronger — extract the real page-123
+  reader/compaction to a host kernel and re-verify THAT (the proven `decode_canonical`
+  delegation pattern), shrinking the model↔firmware TCB.
 
 - [ ] **FV15-F1 — reopen extraction freshness (prior extracted F1/F3).** Require
   pinned clean regeneration from every mirrored current Rust source, a total
