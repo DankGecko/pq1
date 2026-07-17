@@ -4155,7 +4155,23 @@ live defects, not research residuals.**
   0x40`; `ns`/`nr` "toggle 0/1"; R-block acks; `MAX_WTX_RETRIES = 500`) — that 1-bit sequence number is
   precisely how a lost response could **duplicate-apply** an already-executed command (double-charged
   PIN attempt; re-issued PUT KEY). TLC is installed and piloted; literature offers nothing to reuse.
-- [ ] **M2 — Wire the HAL seam** (`hal-stm32u5` / `hal-mock`, the deferred PR2/PR3). Not merely a
+- [~] **M2 — PREREQUISITE DONE 2026-07-17, wiring still deliberately NOT done.** The blocker my own
+  boundary doc names ("do NOT wire the traits as they stand — their `Result<(),E>` outcome type
+  structurally cannot express 'the command executed but the response was lost'; fix the outcome
+  algebra first or the seam launders the optimism into a proof") is now addressed in `hal/src/lib.rs`:
+  - `HalError::is_inconclusive()` — exactly `BusFault | Timeout`, mirroring `Se050Error` (`Transport`)
+    and `OptigaError` (`I2c|Transport|Crc`). One rule, three taxonomies, with a **mutation-tested
+    cross-check** in `hal/tests/negative_invariants.rs` that fires if any drifts apart.
+  - `MutationOutcome { Acked, DefinitelyNotApplied(e), MayHaveApplied(e) }` — the third state that
+    `Result<(),E>` cannot express, with tests pinning that `MayHaveApplied` can never read as
+    "did not happen" (that inference IS D1) and that `Acked` is not an observation (that assumption
+    IS D4).
+  - `Flash::program`, `Otp::burn_once`, `I2cBus::xfer` now state the ambiguity in their contracts,
+    each citing the concrete defect it caused (`HW-ASSUME-QW-ATOMIC`, D4, D1/`HW-ASSUME-PUTKEY-ATOMIC`).
+  **Still open, and intentionally:** splitting the signatures to RETURN `MutationOutcome`, then
+  building `hal-stm32u5` / `hal-mock` and rewiring `secure/src/hw/*`. That is the large refactor;
+  it is now unblocked rather than done, and doing it against a live concurrent session in the tree
+  would be reckless. Original: (`hal-stm32u5` / `hal-mock`, the deferred PR2/PR3). Not merely a
   Kani/Miri enabler: it is **what makes the contract falsifiable**, and it would surface D2 as a build
   event instead of an invisible unsound axiom. Demonstrated working on this box: driver logic generic
   over a `Flash` trait + a proof-only `ModelFlash` encoding the 1→0 rule, Kani 0.67, **0/52 checks

@@ -41,6 +41,84 @@ pub enum HalError {
     Corrupt,
 }
 
+impl HalError {
+    /// Does this error mean **"I don't know"** rather than an answer the
+    /// hardware gave?
+    ///
+    /// `BusFault` and `Timeout` are the two that carry no information about
+    /// whether the operation took effect: the peripheral may never have seen
+    /// the command, or may have executed it and lost the reply. `BadParam` and
+    /// `Unsupported` are our own bugs, caught before anything happened.
+    /// `Corrupt` is an observation.
+    ///
+    /// The rule this exists for (work-todo D1, learned the hard way in the SE
+    /// drivers): **a probe that cannot say "I don't know" says "no", and at
+    /// every rotation site "no" was the branch that MUTATED.** Three sites
+    /// collapsed a transport fault into an authoritative negative and fell
+    /// through to a PUT KEY, a credential write, and an E140 rewrite — the
+    /// brick path. Callers whose next step is an irreversible or destructive
+    /// mutation MUST fail closed on an inconclusive result. Read-only callers
+    /// may treat it as a plain failure.
+    ///
+    /// Mirrors `Se050Error::is_inconclusive` / `OptigaError::is_inconclusive`
+    /// in the secure world, deliberately: one rule, three taxonomies.
+    #[must_use]
+    pub const fn is_inconclusive(self) -> bool {
+        matches!(self, HalError::BusFault | HalError::Timeout)
+    }
+}
+
+/// What a **mutating** hardware operation actually established.
+///
+/// `Result<(), HalError>` cannot express the state that matters most on this
+/// device: *the command executed and we did not find out*. That is not a
+/// pedantic distinction — it is the shape of every open hardware gate we have
+/// (`HW-ASSUME-PUTKEY-ATOMIC`, `HW-ASSUME-QW-ATOMIC`, the D4 torn OTP master
+/// burn), and a trait that cannot say it forces every implementation to guess
+/// on the caller's behalf.
+///
+/// **This type is why the HAL seam is not yet wired** (work-todo M2). Wiring
+/// `secure/src/hw/*` over traits that return `Result<(), E>` would let the
+/// drivers be "verified" against a model that structurally cannot represent the
+/// failure they actually risk — the proof would launder the optimism. See
+/// `docs/verification/hardware-assumption-boundary-2026-07-17.md` §2.1, where
+/// exactly that happened: `first_boot`'s crash harness cuts at every durable
+/// boundary and is green, because its fake models an SE key rotation as
+/// `self.se050_keys_final = true` while the real one is a probe-and-branch.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[non_exhaustive]
+pub enum MutationOutcome {
+    /// The hardware acknowledged the mutation. Note what this does NOT mean:
+    /// an ack is not an observation. For anything irreversible, confirm by a
+    /// fresh read before treating it as done — `hw::otp::burn_device_master`'s
+    /// read-back is the pattern (and D4 is what happens when that read-back is
+    /// same-run only and a reset skips it).
+    Acked,
+    /// **Earned**: the command was never issued, or the hardware gave an
+    /// authoritative no-effect rejection. Safe to retry.
+    DefinitelyNotApplied(HalError),
+    /// The command may or may not have taken effect: a timeout, a lost reply,
+    /// a reset mid-operation. **Nothing was learned.** Do not retry a
+    /// non-idempotent operation from here, and do not record progress; either
+    /// re-probe the hardware for its actual state or fail closed to a terminal
+    /// state. On a journal-resumable path, failing closed IS the retry.
+    MayHaveApplied(HalError),
+}
+
+impl MutationOutcome {
+    /// Did this establish that the mutation did NOT happen?
+    #[must_use]
+    pub const fn is_definitely_not_applied(self) -> bool {
+        matches!(self, MutationOutcome::DefinitelyNotApplied(_))
+    }
+
+    /// Is the hardware's state now unknown to us?
+    #[must_use]
+    pub const fn is_ambiguous(self) -> bool {
+        matches!(self, MutationOutcome::MayHaveApplied(_))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Random number generator
 // ---------------------------------------------------------------------------
@@ -158,6 +236,17 @@ pub trait Saes {
 /// `docs/verification/hardware-assumption-boundary-2026-07-17.md`.
 pub trait Flash {
     fn read(&self, page: u16, offset: u16, buf: &mut [u8]);
+    /// Program `data`. **An `Err` does not mean the flash is unchanged.**
+    ///
+    /// A reset or brown-out during a quad-word program can leave the line
+    /// old, new, or ECC-poisoned (`HW-ASSUME-QW-ATOMIC`), and the quad-word is
+    /// then spent — it cannot be re-driven. So an [`HalError::is_inconclusive`]
+    /// result means *this quad-word's state is now unknown and it has probably
+    /// been consumed*, not "nothing happened, try again". Callers that log
+    /// progress on `Ok` and retry on `Err` are wrong on both edges.
+    ///
+    /// Intended shape once M2 splits the signature: [`MutationOutcome`], so the
+    /// third state is representable rather than folded into `Err`.
     fn program(&mut self, page: u16, offset: u16, data: &[u8]) -> Result<(), HalError>;
     fn erase_page(&mut self, page: u16) -> Result<(), HalError>;
 }
@@ -184,6 +273,24 @@ pub enum OtpRange {
 /// `HalError::Unsupported`.
 pub trait Otp {
     fn read(&self, range: OtpRange, buf: &mut [u8]);
+    /// Burn `data`. Irreversible, and **an `Err` does not mean unburnt.**
+    ///
+    /// This is the sharpest instance of the whole problem, and it is not
+    /// hypothetical — it is work-todo D4, fixed 2026-07-17. The device master
+    /// spans TWO quad-words and takes two separate programs; a reset between
+    /// them left `is_device_master_burned()` returning **true** on a
+    /// half-blank master, so the burn was never completed and every SE
+    /// transport credential silently rooted in 128 bits instead of 256.
+    ///
+    /// Consequences for any implementation of this trait:
+    /// * a multi-quad-word field is NOT atomic — classify per quad-word, never
+    ///   "any bit cleared ⇒ burned";
+    /// * a same-run read-back does not survive a reset, so completeness must be
+    ///   re-checked at boot, not only after the write;
+    /// * an [`HalError::is_inconclusive`] result means the fuse state is
+    ///   unknown and may be partially consumed.
+    ///
+    /// Intended shape once M2 splits the signature: [`MutationOutcome`].
     fn burn_once(&mut self, range: OtpRange, data: &[u8]) -> Result<(), HalError>;
 }
 
@@ -240,6 +347,29 @@ pub trait ConsumptionMask {
 pub trait I2cBus {
     /// Combined write-then-read transfer. Returns the number of bytes
     /// actually read into `r`.
+    ///
+    /// # This signature cannot express the failure that matters
+    ///
+    /// `xfer` is write-then-read in one call, so an `Err` is **ambiguous by
+    /// construction**: it cannot distinguish "the write never reached the
+    /// device" from "the device executed the command and the reply was lost".
+    /// On this device that second case is the whole problem — it is a consumed
+    /// PIN attempt, or a PUT KEY that installed a keyset we then fail to
+    /// detect ([`MutationOutcome`], `HW-ASSUME-PUTKEY-ATOMIC`).
+    ///
+    /// Callers MUST therefore treat `Err(e)` where [`HalError::is_inconclusive`]
+    /// as *the device may have acted*, and must not use it to decide that a
+    /// mutation did not happen. That is not a style note: three sites in the
+    /// production SE drivers made exactly that inference and fell through to an
+    /// irreversible write (work-todo D1, fixed 2026-07-17).
+    ///
+    /// **Do not wire the real drivers over this trait until the signature is
+    /// split** (work-todo M2). The intended shape returns
+    /// [`MutationOutcome`]-style evidence for the write leg and a separate
+    /// result for the read leg, so a driver can be checked against a model that
+    /// can represent the ambiguity. Verifying drivers against this signature as
+    /// it stands would prove them correct in a world where lost replies do not
+    /// exist.
     fn xfer(&mut self, addr: u8, w: &[u8], r: &mut [u8]) -> Result<usize, HalError>;
 }
 

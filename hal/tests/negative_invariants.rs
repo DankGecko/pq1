@@ -569,3 +569,72 @@ fn negative_sha256_finalize_output_is_32_bytes() {
     assert_eq!(out.len(), 32);
     const_assert_eq!(core::mem::size_of::<[u8; 32]>(), 32);
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// M2 prerequisite — the outcome algebra must be able to say "I don't know"
+// ─────────────────────────────────────────────────────────────────────
+
+use pqsigner_hal::MutationOutcome;
+
+/// `BusFault`/`Timeout` carry no information about whether the operation took
+/// effect; everything else is either our own bug (caught before anything
+/// happened) or an observation.
+#[test]
+fn hal_error_classifies_only_transport_faults_as_inconclusive() {
+    assert!(HalError::BusFault.is_inconclusive());
+    assert!(HalError::Timeout.is_inconclusive());
+    assert!(!HalError::BadParam.is_inconclusive(), "our bug, nothing happened");
+    assert!(!HalError::Unsupported.is_inconclusive(), "our bug, nothing happened");
+    assert!(!HalError::Corrupt.is_inconclusive(), "an observation, not a don't-know");
+}
+
+/// The whole point of the type: an ambiguous outcome must NOT be readable as
+/// "did not happen". This is the D1 defect expressed as a type-level property —
+/// three production sites inferred exactly that and fell through to an
+/// irreversible write.
+#[test]
+fn ambiguous_outcome_is_never_definitely_not_applied() {
+    let ambiguous = MutationOutcome::MayHaveApplied(HalError::Timeout);
+    assert!(ambiguous.is_ambiguous());
+    assert!(
+        !ambiguous.is_definitely_not_applied(),
+        "MayHaveApplied must never read as 'no effect' — that inference IS work-todo D1"
+    );
+
+    let earned = MutationOutcome::DefinitelyNotApplied(HalError::BadParam);
+    assert!(earned.is_definitely_not_applied());
+    assert!(!earned.is_ambiguous());
+
+    assert!(!MutationOutcome::Acked.is_ambiguous());
+    assert!(!MutationOutcome::Acked.is_definitely_not_applied());
+}
+
+/// An ack is not an observation. Nothing may treat `Acked` as proof the state
+/// changed — that is what the OTP read-back exists for, and D4 is what happened
+/// when the read-back was same-run only.
+#[test]
+fn acked_is_not_an_observation() {
+    // Acked is distinct from every error-carrying outcome, so a caller cannot
+    // pattern-match it into a "confirmed" bucket by accident.
+    assert_ne!(MutationOutcome::Acked, MutationOutcome::MayHaveApplied(HalError::Timeout));
+    assert_ne!(MutationOutcome::Acked, MutationOutcome::DefinitelyNotApplied(HalError::BadParam));
+}
+
+/// One rule, three taxonomies: the HAL's inconclusive set must stay the
+/// transport-fault set, mirroring `Se050Error::is_inconclusive` (exactly
+/// `Transport`) and `OptigaError::is_inconclusive` (`I2c | Transport | Crc`).
+/// If these drift apart, a driver mapped down to `HalError` at the trait
+/// boundary would silently change its fail-closed behaviour.
+#[test]
+fn negative_inconclusive_rule_matches_the_secure_world_taxonomies() {
+    let se050 = include_str!("../../secure/src/se050/apdu.rs");
+    let optiga = include_str!("../../secure/src/optiga/apdu.rs");
+    assert!(
+        se050.contains("matches!(self, Se050Error::Transport)"),
+        "Se050Error::is_inconclusive drifted — the HAL mirrors it"
+    );
+    assert!(
+        optiga.contains("OptigaError::I2c | OptigaError::Transport | OptigaError::Crc"),
+        "OptigaError::is_inconclusive drifted — the HAL mirrors it"
+    );
+}
