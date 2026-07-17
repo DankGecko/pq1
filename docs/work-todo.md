@@ -222,19 +222,23 @@ deduplication, and falsifiable acceptance criteria.
 > preVerificationGas, maxFee, maxPriority)` equal the signed ones, + a mutation.
 > Same for any other `secure/src/tx/display/*` binding blocked by that refactor.
 >
-> **⏳ Remaining non-blocked surface — entrypoint-v06-nonce-replay (D2).** Same-nonce
-> Type-2 replay protection is WHOLLY the deployed EntryPoint v0.6 NonceManager
-> (cited-TCB; `entrypoint_no_replay` was removed as dangling+latent-false, and the
-> wallet never reads `op.nonce` except as a `sphincsDigest` input). **Named-TCB leaf
-> `T-EP-NONCE` documented 2026-07-17** (`THREAT_CLAIM_MAP.md` footnote [^10] UPDATE):
-> the cited-TCB fact is now stated OBSERVABLY — reused `(sender,nonce)` →
-> `_validateAndUpdateNonce` returns false → EntryPoint `FailedOp` AA25 → op never
-> reaches execution → no balance change. **Still open (the pending receipt):** bind
-> the EntryPoint `0x5FF1…789` deployed `extcodehash` (currently ADDRESS-pinned only)
-> to the audited canonical v0.6.0 via a fork-gated test — needs a live RPC
-> `cast code | cast keccak` (unavailable in sandbox). Does NOT discharge D2 (stays
-> cited-TCB). The distinct-nonce half is already covered by `sphincsDigest_field_binding`;
-> the optional `distinct_nonce_distinct_digest` Lean lemma is marginal.
+> **✅ entrypoint-v06-nonce-replay (D2) — named-TCB leaf `T-EP-NONCE` + receipt
+> CAPTURED (2026-07-17).** Same-nonce Type-2 replay protection is WHOLLY the deployed
+> EntryPoint v0.6 NonceManager (cited-TCB; `entrypoint_no_replay` removed as
+> dangling+latent-false; the wallet never reads `op.nonce` except as a `sphincsDigest`
+> input). Leaf stated OBSERVABLY (`THREAT_CLAIM_MAP.md` [^10]): reused `(sender,nonce)`
+> → `_validateAndUpdateNonce` false → EntryPoint `FailedOp` AA25 → op never reaches
+> execution → no balance change. **Receipt captured:** the EntryPoint deployed
+> `extcodehash` is pinned `0xc93c…8e70`, verified IDENTICAL on Ethereum/Base/Optimism/
+> Arbitrum (the one singleton); fork-gated tripwire
+> `contracts/smart-wallet/test/EntryPointCodehashReceipt.t.sol` (self-skips without
+> `ENTRYPOINT_RPC_URL`, PASSES against a live Base fork). **Correction:** an earlier
+> note wrongly said the codehash needed an RPC "unavailable in the sandbox" — the
+> sandbox has egress; done. **Still open (does NOT discharge D2, stays cited-TCB):**
+> the NonceManager CORRECTNESS itself — the stronger step is a bounded Kontrol/Halmos
+> over the ~30-line canonical NonceManager source. The distinct-nonce half is already
+> covered by `sphincsDigest_field_binding`; the optional `distinct_nonce_distinct_digest`
+> Lean lemma is marginal.
 
 - [ ] **FV15-F1 — reopen extraction freshness (prior extracted F1/F3).** Require
   pinned clean regeneration from every mirrored current Rust source, a total

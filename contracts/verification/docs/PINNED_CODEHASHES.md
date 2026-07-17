@@ -136,6 +136,29 @@ deployment with the production verifier + EntryPoint addresses — modulo those
 certified-located immutables. (This lemma is an intra-profile instance bridge;
 the cross-profile coverage comes from actually running both profiles, above.)
 
+## External dependency — EntryPoint v0.6 codehash (`T-EP-NONCE` receipt)
+
+The wallet's same-nonce Type-2 replay protection is cited-TCB on the deployed
+EntryPoint v0.6 `NonceManager` (see `THREAT_CLAIM_MAP.md` `S-USEROP-REPLAY` [^10]).
+Unlike the project contracts above (reproduced from source), the EntryPoint is an
+EXTERNAL canonical singleton; its receipt is the deployed `extcodehash`, pinned and
+**cross-chain-verified 2026-07-17**:
+
+```
+EntryPoint v0.6  address   0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
+                 codehash  0xc93c806e738300b5357ecdc2e971d6438d34d8e4e17b99b758b1f9cac91c8e70
+```
+
+`keccak256(eth_getCode(0x5FF1…789))` is IDENTICAL on Ethereum (1), Base (8453),
+Optimism (10), and Arbitrum (42161) — the same 23,690-byte singleton — so the pin
+binds the cited-TCB assumption to one specific verified deployment (a substitution
+or wrong-version EntryPoint at that address is caught). Provenance:
+`cast code 0x5FF1…789 --rpc-url <chain> | cast keccak`. Fork-gated tripwire:
+`contracts/smart-wallet/test/EntryPointCodehashReceipt.t.sol` — set
+`ENTRYPOINT_RPC_URL` to re-verify against a live node; self-skips (no false green)
+when unset, so the pinned constant is the durable receipt. This pins the DEPLOYMENT;
+it does not discharge NonceManager correctness (that stays cited-TCB / defeater D2).
+
 ## EntryPoint v0.6 (cited-TCB)
 
 ```
