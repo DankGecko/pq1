@@ -66,6 +66,8 @@ EXPECTED = {
         "MPCBB2_BASE": "GTZC_MPCBB2_BASE_S",
     },
     "secure/src/hw/spi_hw.rs": {"SPI_BASE": "SPI1_BASE_S"},
+    # A4a's die-identity probe. DBGMCU has no _S/_NS split — one base.
+    "secure/src/hw/dbgmcu.rs": {"DBGMCU_BASE": "DBGMCU_BASE"},
 }
 
 # Constants that are a peripheral base PLUS a register offset. Checked as

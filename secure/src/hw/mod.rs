@@ -15,6 +15,11 @@ pub mod mmio;
 #[cfg(feature = "stm32u585")]
 pub mod rcc;
 
+// Die identity (DBGMCU_IDCODE). One register read; the decode + SESIP-scope
+// rule live in `crate::die_id`, host-tested.
+#[cfg(feature = "stm32u585")]
+pub mod dbgmcu;
+
 #[cfg(feature = "stm32u585")]
 pub mod rng;
 

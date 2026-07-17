@@ -264,16 +264,26 @@
       "id": "HW-ASSUME-REV-U",
       "surface": "f-peripherals",
       "statement": "Our STM32U585 dies are revision U (REV_ID 0x3003 at 0xE004_4002) — the only revision SESIP-2400133-01 / TN1545 Rev 3 covers.",
-      "status": "bare-tcb",
+      "status": "code-enforced",
       "evidence": [
         {
           "kind": "certificate",
           "ref": "docs/verification/hardware-assumption-boundary-2026-07-17.md",
           "anchor": "REV_ID `0x3003` (rev U)"
+        },
+        {
+          "kind": "code-enforced",
+          "ref": "secure/src/die_id.rs",
+          "anchor": "pub const REV_ID_REV_U: u16 = 0x3003"
+        },
+        {
+          "kind": "code-enforced",
+          "ref": "secure/src/hw/dbgmcu.rs",
+          "anchor": "pub fn report_die_id"
         }
       ],
       "falsifying_test": {
-        "description": "Read REV_ID at 0xE004_4002 on every bench die and record it. A die that is not rev U falsifies any inheritance of the SESIP claims. Hours.",
+        "description": "Boot any board and read the log: `hw::dbgmcu::report_die_id()` runs immediately after rcc::init() and prints dev_id/rev_id/rev/sesip_covered, shouting when the die is NOT the SESIP-covered rev U. Implemented 2026-07-17 (work-todo A4a); the probe reports and never faults, because a rev X/W part is good silicon that the certificate simply does not cover. REMAINING: nobody has yet RUN it on the bench dies and recorded the answer — that is the falsifying step, and it needs hardware.",
         "exists": false,
         "make_target": null,
         "cost": "hours"
@@ -281,7 +291,7 @@
       "consumed_by": [
         "HW-ASSUME-RDP2 (the certificate's scope)"
       ],
-      "note": "UNCHECKED. We probe DEV_ID 0x482 only (docs/security/production-security.md, docs/security/threat-model.md, work-todo:1713). A certificate for rev U says nothing about the rev X/W parts on the bench. Cheapest row in the ledger to close — work-todo A4a.",
+      "note": "Probe now EXISTS (secure/src/die_id.rs decode, host-tested incl. field-swap and wrong-part negatives; secure/src/hw/dbgmcu.rs one register read, base cross-checked against ST's CMSIS header by make verify-mmio-addresses). Before 2026-07-17 NO code read DBGMCU_IDCODE at all — every DEV_ID 0x482 check in this repo was a plan in a document. So the SESIP certificate was being cited on bench parts whose revision nobody had ever read. STILL UNCONFIRMED until someone boots a board and records the output: a rev X/W die is not a defect, it is simply outside SESIP-2400133-01's scope, and HW-ASSUME-RDP2's certificate evidence must not be cited for it.",
       "last_reviewed": "2026-07-17"
     },
     {

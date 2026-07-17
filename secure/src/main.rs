@@ -89,6 +89,12 @@ mod flash_policy;
 // `hw::otp` does the volatile reads and consumes the verdict.
 mod otp_state;
 
+// Pure decode of DBGMCU_IDCODE (which die is this?). Free of MMIO so the
+// SESIP-scope rule — REV_ID 0x3003 "rev U" is the ONLY revision
+// SESIP-2400133-01 covers — is executable on the host; `hw::dbgmcu` does the
+// single register read. See work-todo A4a / HW-ASSUME-REV-U.
+mod die_id;
+
 // Hardware-dependent modules: gated out in test builds so `cargo test`
 // compiles only the pure logic on x86_64.
 #[cfg(not(test))]
@@ -879,6 +885,15 @@ fn main() -> ! {
     unsafe {
         let mhz = hw::rcc::init();
         SYSTICK_RELOAD = mhz * 1_000;
+        // Report the die identity (work-todo A4a / HW-ASSUME-REV-U). Report
+        // only, never a fault: a rev X/W part is good silicon that the STM32U5
+        // SESIP certificate (SESIP-2400133-01 / TN1545 Rev 3, which pins
+        // dev_id=0x482 rev_id=0x3003 "rev U") simply does not cover, and the
+        // consequence is that HW-ASSUME-RDP2's certificate evidence must not be
+        // cited for it. Halting would conflate "outside a certificate's scope"
+        // with "broken". Needs no clocks (DBGMCU is always-on) and no GTZC
+        // attribute, so it is safe this early.
+        hw::dbgmcu::report_die_id();
         #[cfg(feature = "boot-pulse")]
         hw::boot_pulse::pulse(2);
         // RNG init is deferred until AFTER sau::init() / GTZC config —
