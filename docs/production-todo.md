@@ -400,7 +400,12 @@ blockers above stand; these refine accuracy + add residuals.
   on Conf/Auto/Luc).
 - **Confirms that resolve:** anchor pool {E0E8/E0E9/E0EF} type 0x11, device certs E0E0-E0E3
   type 0x12, no E0E4-E0E7 (SRM Table 68) ✓; PBS 64 B / type 0x22, shielded = TLS-PRF-SHA256 +
-  AES-128-CCM-8 ✓; CC EAL6+ / BSI-DSZ-CC-0961 ✓; counter endurance 600k/2M ✓ (resolves the
+  AES-128-CCM-8 ✓; CC EAL6+ / BSI-DSZ-CC-0961 ✓ **— scope: the IC PLATFORM only** (hardware + IC
+  dedicated software + Infineon crypto libs on a 16-bit 80251-compatible core). The Trust M applet,
+  its OID/AC model, `LcsO`, and the Shielded Connection are IC *Embedded Software*, ABOVE the
+  certified boundary (`OE.Resp-Appl` assigns application data handling to the environment) — so this
+  ✓ is NOT authority for any S-1/S-2/S-3 lifecycle or shielded-connection property, and V4-2019
+  expired 2024-12-17 (cite the current version). See `HW-ASSUME-SE-INTERNALS`; counter endurance 600k/2M ✓ (resolves the
   TO-VERIFY). ⚠️ the PSA cert **number/HW-ver/date** in O-12 are NOT in the Infineon docs —
   verify against products.psacertified.org before citing as fact.
 

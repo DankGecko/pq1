@@ -395,6 +395,32 @@ USB is the only external interface and the primary T0 attack vector. The host is
 | Decap SE050 to extract `half_E` | T4 | EAL 6+ rated; same as above | Two-chip decap is the brute-force lower bound |
 | FIB read of TAMP backup registers (BHK) | T4 | Post-Stage 2 — TAMP-BHK with `TAMP_SECCFGR.BHKLOCK` makes BHK SAES-only; FIB on TAMP backup registers is the residual surface | Tier-4, single-shot per device |
 
+**What "EAL 6+ rated" above does and does not cover** (added 2026-07-17; see
+[`docs/verification/hardware-assumption-boundary-2026-07-17.md`](../verification/hardware-assumption-boundary-2026-07-17.md)
+§1(e) and `HW-ASSUME-SE-INTERNALS` / `HW-ASSUME-SE050-CERT-VERSION` in
+[`HW_ASSUMPTIONS.json`](../../contracts/verification/docs/HW_ASSUMPTIONS.json)):
+
+- **The decap rows are within scope.** Physical attack resistance of the die *is* what these
+  certificates evaluate, which is why the citation belongs on exactly these two rows and nowhere
+  else in this document.
+- **OPTIGA — the boundary is sharp.** BSI-DSZ-CC-0961 (EAL6+/ALC_FLR.1) covers the **IC platform**:
+  hardware, IC dedicated software, and the Infineon crypto libraries, on a 16-bit
+  Intel-80251-compatible core. The Trust M **applet** — its object/OID model, access conditions,
+  `LcsO` lifecycle, and the Shielded Connection — is IC *Embedded Software*, **above** the certified
+  boundary; the report assigns application data handling to the environment (`OE.Resp-Appl`). So no
+  row anywhere may read "discharged by EAL6+" for an OID/AC/LcsO/shielded property. Cite the current
+  certificate version, not V4-2019, which **expired 2024-12-17**.
+- **SE050 is genuinely stronger.** NSCIB-CC-180212-CR5's TOE includes the JCVM/JCRE/JCAPI — the layer
+  that enforces our UserID PIN policy. It explicitly does **not** rate cryptographic protocol
+  strength, so it does not cover SCP03-as-deployed. And which configuration we actually hold is
+  itself unconfirmed (`HW-ASSUME-SE050-CERT-VERSION`).
+- **A certificate is bounded expert effort, not a proof.** EUCLEAK is the standing refutation: a
+  non-constant-time modular inversion in the Infineon cryptolib went unnoticed for *"14 years and
+  about 80 highest-level Common Criteria certification evaluations"* (NinjaLab). Demonstrated on a
+  YubiKey 5Ci (SLE78); NinjaLab reports the vulnerability "extends to" OPTIGA Trust M — suspected,
+  not demonstrated, on our part. Not a live exposure for us regardless: invariant #5 means we never
+  invoke OPTIGA's ECDSA (the driver has no asymmetric ops at all).
+
 ### 7.16 Coercion
 
 | Attack | Tier | Mitigation | Residual |
