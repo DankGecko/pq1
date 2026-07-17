@@ -185,4 +185,86 @@ contract KontrolValidateUserOp is Test {
             assertTrue(false, "A3.2-validate: non-EntryPoint caller accepted");
         } catch {}
     }
+
+    // ── Wrapper-decode structural gates: ∀-symbolic REJECTS ──────────────────
+    //
+    // The `prove_validate_*_nonbypass` rules above pass the *canonical* wrapper
+    // `abi.encode(uint256, new bytes(4008))`, so the three structural decode gates
+    // in `_validateSignature` (offsetField==0x40, innerLen==C10_SIG_LEN, tailPad==0)
+    // hold BY CONSTRUCTION — they were never exercised ∀-symbolically (the honest
+    // gap the 2026-07-02 KONTROL_SCOPING NOTE recorded). The three rules below close
+    // that: each makes exactly ONE wrapper word symbolic-and-malformed and proves
+    // `validateUserOp` returns FAILURE for EVERY such value. These gates fire at
+    // `_validateSignature` L428/L429/L433 — BEFORE the verifier CALL and the
+    // `sphincsDigest` SHA-256 — so the rules are hash-free (Kontrol's fast class).
+    //
+    // NON-VACUITY: each rule sets `c10.setValid(true)` and a well-formed slot
+    // callData, so the ONLY reason for rejection is the malformed word — the
+    // canonical-wrapper `prove_validate_slot_nonbypass` (verdict=true) is the
+    // "well-formed ⇒ success" other half of the contrast. So "∀ malformed ⇒ reject"
+    // rejects BECAUSE of the field, not because the op is otherwise junk.
+
+    /// Build a 4128-byte `SignatureWrapper` with symbolic words at the exact decode
+    /// offsets. Layout (sig-offset relative): [0]=ownerIndex, [32]=offsetField,
+    /// [64]=innerLen, [96..4104)=innerSig(4008), [4104..4128)=tail-pad(24). The word
+    /// at +4096 (`lastWord`) holds the last 8 innerSig bytes (high) + the 24 tail
+    /// bytes (low), matching the wallet's masked read. 32+32+32+4000+32 = 4128.
+    function _sigWithFields(uint256 ownerIndex, uint256 offsetField, uint256 innerLen, bytes32 lastWord)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return abi.encodePacked(
+            bytes32(ownerIndex), bytes32(offsetField), bytes32(innerLen), new bytes(4000), lastWord
+        );
+    }
+
+    /// **∀ malformed ABI offset word ⇒ REJECT.** For every `offsetField != 0x40`,
+    /// `validateUserOp` returns FAILURE — even with the verifier accepting. Fires at
+    /// `_validateSignature` L428 (`offsetField != 0x40`), before verify/hash.
+    function prove_validate_rejects_bad_offset(uint256 offsetField) public {
+        vm.assume(offsetField != 0x40);
+        c10.setValid(true); // reject is the decode gate's, not the verifier's
+        bytes memory callData = abi.encodeCall(
+            wallet.executeWithOffchainCount,
+            (uint256(1), uint256(0), CODELESS_TARGET, uint256(0), bytes(""))
+        );
+        bytes memory wrappedSig = _sigWithFields(1, offsetField, 4008, bytes32(0));
+        vm.prank(ENTRY_POINT_ADDR);
+        uint256 vres = wallet.validateUserOp(_op(callData, wrappedSig), bytes32(0), 0);
+        assertTrue(vres != 0, "A3.2-validate: accepted a malformed ABI offset word");
+    }
+
+    /// **∀ malformed inner length ⇒ REJECT.** For every `innerLen != C10_SIG_LEN`
+    /// (4008), `validateUserOp` returns FAILURE. Fires at `_validateSignature` L429.
+    function prove_validate_rejects_bad_innerlen(uint256 innerLen) public {
+        vm.assume(innerLen != 4008); // C10_SIG_LEN
+        c10.setValid(true);
+        bytes memory callData = abi.encodeCall(
+            wallet.executeWithOffchainCount,
+            (uint256(1), uint256(0), CODELESS_TARGET, uint256(0), bytes(""))
+        );
+        bytes memory wrappedSig = _sigWithFields(1, 0x40, innerLen, bytes32(0));
+        vm.prank(ENTRY_POINT_ADDR);
+        uint256 vres = wallet.validateUserOp(_op(callData, wrappedSig), bytes32(0), 0);
+        assertTrue(vres != 0, "A3.2-validate: accepted a malformed inner length");
+    }
+
+    /// **∀ nonzero ABI tail-pad ⇒ REJECT.** For every `lastWord` whose low 24 bytes
+    /// (the ABI tail-pad, positions [4104..4128), masked by `2^192 - 1`) are nonzero,
+    /// `validateUserOp` returns FAILURE. Fires at `_validateSignature` L433. Closes
+    /// the wrapper-malleability gate (Audit L-1) ∀-symbolically.
+    function prove_validate_rejects_bad_tailpad(bytes32 lastWord) public {
+        // low 24 bytes nonzero == the wallet's masked tail-pad != 0
+        vm.assume(uint256(lastWord) & ((uint256(1) << 192) - 1) != 0);
+        c10.setValid(true);
+        bytes memory callData = abi.encodeCall(
+            wallet.executeWithOffchainCount,
+            (uint256(1), uint256(0), CODELESS_TARGET, uint256(0), bytes(""))
+        );
+        bytes memory wrappedSig = _sigWithFields(1, 0x40, 4008, lastWord);
+        vm.prank(ENTRY_POINT_ADDR);
+        uint256 vres = wallet.validateUserOp(_op(callData, wrappedSig), bytes32(0), 0);
+        assertTrue(vres != 0, "A3.2-validate: accepted a nonzero ABI tail pad");
+    }
 }

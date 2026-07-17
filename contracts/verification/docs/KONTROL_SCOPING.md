@@ -1,8 +1,8 @@
 # Kontrol / KEVM scoping — closing the model-to-bytecode gap (D)
 
-**Status: A3.2 + A3.3 + A3.4 FULLY DISCHARGED ON BYTECODE (2026-06-15) — 30/30
-KEVM proofs; only A3.1 (verifier ∀-signature) remains, and is intractable under
-symbolic SHA-256 (out of scope).** The four control-flow bridge axioms are now
+**Status: A3.2 + A3.3 + A3.4 FULLY DISCHARGED ON BYTECODE (2026-06-15; 33/33
+KEVM proofs as of 2026-07-17) — only A3.1 (verifier ∀-signature) remains, and is
+intractable under symbolic SHA-256 (out of scope).** The four control-flow bridge axioms are now
 proven directly on the deployed PQSmartWallet/Factory bytecode by an engine
 independent of Halmos with no hand-written `LeanModel.sol` mirror — so the
 hand-transcription TCB element of A3.3/A3.4/A3.2-exec-single is retired (Halmos stays the
@@ -11,10 +11,27 @@ test). NOTE (2026-07-02): A3.2-**validate** and A3.2-exec-**batch** use a CONCRE
 well-formed wrapper in Kontrol, so the wrapper-decode / selector-role-split / full-frame
 transcription of `LeanValidateUserOpModel.sol` is NOT independently re-established for them —
 that transcription stays a Halmos-only, eye-auditable TCB element (see the A3.2 status_detail
-in AXIOM_STATUS.json). Breakdown: A3.4 owner-table = 12/12; A3.2-exec = 8/8; A3.3 factory
+in AXIOM_STATUS.json). **UPDATE 2026-07-17 — the three STRUCTURAL wrapper-decode gates are
+now ∀-SYMBOLIC in Kontrol (no longer concrete-by-construction).** Three new revert-shaped
+rules in `KontrolValidateUserOp.t.sol` — `prove_validate_rejects_{bad_offset, bad_innerlen,
+bad_tailpad}` — make exactly one wrapper word symbolic-and-malformed and prove
+`validateUserOp` returns FAILURE for EVERY such value: `offsetField != 0x40`
+(`_validateSignature` L428, ∀ `uint256`), `innerLen != C10_SIG_LEN` (L429, ∀ `uint256`),
+and a nonzero ABI tail-pad (L433, ∀ `bytes32` low-24-bytes, masked by `2^192-1`). All three
+fire BEFORE the verifier CALL + `sphincsDigest`, so they are hash-free; each sets
+`c10.setValid(true)` + a well-formed slot callData so the reject is provably the decode
+gate's, not the verifier's (the canonical-wrapper `prove_validate_slot_nonbypass` is the
+well-formed⇒success other half). All PASSED under KEVM, non-vacuous. So the three STRUCTURAL
+gates leave the concrete-by-construction / Halmos-only eye-auditable TCB list. STILL
+Halmos-only / documented increments (NOT closed here): selector-role-split with a SYMBOLIC
+selector, the full owner-frame probe, the H-3 calldata-ownerIndex parity (slot success path —
+reaches verify+hash), all-tail-symbolic innerSig in the success rules, and the
+fully-symbolic UNSET ownerIndex (a permanent both-engine blocker — dynamic-bytes getter
+`NotConcreteError` on a symbolic key). A3.2-validate is now 7/7. Breakdown: A3.4 owner-table = 12/12; A3.2-exec = 8/8; A3.3 factory
 = 6/6; A3.2-validate (the non-bypass I-1: validate succeeds ⟺ cap-gate ∧
 verifier-accepts, ∀ verdict + counters, slot + bootstrap roles; + unset-owner +
-EntryPoint rejects) = 4/4 in `kontrol/test/KontrolValidateUserOp.t.sol`.
+EntryPoint rejects; + the three ∀-symbolic wrapper-decode reject rules of the
+2026-07-17 UPDATE above) = 7/7 in `kontrol/test/KontrolValidateUserOp.t.sol`.
 A3.4 owner-table = 12/12 KEVM proofs; A3.2-exec
 (execute / executeBatch) = 8/8 in `kontrol/test/KontrolExecute.t.sol`
 (EntryPoint gate, anti-impersonation no-credit-revert ∀ ownerIndex, self-target
