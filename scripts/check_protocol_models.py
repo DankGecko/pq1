@@ -109,6 +109,26 @@ PROVERIF_IDENTITY: dict[str, dict[str, bool]] = {
         "not event(OptAccepted(h,c))": False,
         "not attacker(halfOR[])": False,
     },
+    # M3 (2026-07-17): the handshake RE-DERIVED from Infineon's reference
+    # implementation (github.com/Infineon/optiga-trust-m v5.6.0,
+    # src/comms/ifx_i2c/ifx_i2c_presentation_layer.c) rather than from our own
+    # driver. Note the LAST entry: injective agreement is pinned FALSE, and that
+    # is the finding, not a failure. The real handshake has ONE nonce and the
+    # host does not supply it (prl.random is memcpy'd out of the received
+    # SlaveHello at :497; the PRF seed is that value alone at :302-313), so the
+    # host contributes no freshness and cannot make a session distinct. The
+    # sibling optiga_shield_handshake.pv, derived from shield.rs, invented a
+    # host nonce and answers this SAME query `true`. If this ever flips to true,
+    # the model has drifted back toward the driver's fiction.
+    "optiga_shield_handshake_vendor.pv": {
+        "not attacker(halfOB[])": True,
+        "event(HostAcceptedOpt(r)) ==> event(OptSentHello(r))": True,
+        "event(OptAcceptedHost(r)) ==> event(HostSentFinished(r))": True,
+        "not event(HostAcceptedOpt(r))": False,
+        "not event(OptAcceptedHost(r))": False,
+        "not attacker(halfOR[])": False,
+        "inj-event(HostAcceptedOpt(r)) ==> inj-event(OptSentHello(r))": False,
+    },
     "scp03_replay.pv": {
         "event(Accept(ctr_N,cmd_N)) ==> event(Send(ctr_N,cmd_N))": True,
         "not event(Accept(ctr_N,cmd_N))": False,

@@ -4178,7 +4178,33 @@ live defects, not research residuals.**
   failed, 0.18 s**. ⚠️ Do **not** wire the traits as they stand — their `Result<(),E>` outcome type
   structurally cannot express "the command executed but the response was lost" (see D1/A2 and the
   doc's §2.1); fix the outcome algebra first or the seam launders the optimism into a proof.
-- [ ] **M3 — UNBLOCKED. My "blocked on source" call earlier today was WRONG.** I searched for the
+- [x] **M3 — DONE 2026-07-17. Re-derived from Infineon's reference implementation, and it found a
+  real infidelity on the first pass.** `contracts/verification/proverif/optiga_shield_handshake_vendor.pv`,
+  derived from `github.com/Infineon/optiga-trust-m` v5.6.0
+  `src/comms/ifx_i2c/ifx_i2c_presentation_layer.c` (vendored at `/home/nicola/repos/optiga-trust-m`).
+  Registered in `scripts/check_protocol_models.py` with all **7 queries pinned by identity**.
+  **THE FINDING — the driver-derived model invented a nonce the protocol does not have.** Vendor
+  source: `prl.random` is `memcpy`'d out of the received SlaveHello at `:497` and there is **no RNG
+  call in the entire presentation layer**; the TLS-PRF seed is that value alone (`:302-313`). So
+  `session_key = PRF(PBS, "Platform Binding", random_S)` — **one nonce, and the host does not supply
+  it**. `optiga_shield_handshake.pv` gives the host `new hrnd` and derives `prf(pbs, hrnd, ornd)`.
+  Measured on the SAME injective-agreement query: **driver-derived = TRUE, vendor-derived = FALSE.**
+  The old model credited the host with a freshness guarantee the protocol never gave it. `shield.rs`
+  itself says so correctly ("Infineon PRL does NOT send a master random") — the model derived from
+  it contradicts the file it was derived from, which is precisely what a self-derived model is worth.
+  Impact scoped honestly: **not** an attack on half_O (secrecy still holds — PBS is never leaked).
+  It means session-key freshness rests ENTIRELY on OPTIGA's RNG and the host cannot detect or prevent
+  a repeat; the defence against the consequence that would matter (CCM nonce reuse under a repeated
+  key) is the vendor's `PRL_SEQUENCE_THRESHOLD 0xFFFFFFF0` renegotiation, which `shield.rs:241`
+  already implements — and which is a computational property outside symbolic scope.
+  Also cross-checked and all AGREEING (vendor → shield.rs): `PRL_LABEL "Platform Binding"`,
+  `PRL_RANDOM_DATA_LENGTH 0x20`=32, session key 0x28=40 with the same ENC/DEC/nonce split,
+  SCTR `0x00`/`0x08`, `PRL_PROTOCOL_VERSION 0x01`, the renegotiation threshold. The transcription is
+  good; the *model* was the problem.
+  Old model retained with a prominent KNOWN-INFIDELITY header (its half_O-secrecy and non-injective
+  agreement results are unaffected and independently pinned) — "do not cite any freshness, replay or
+  session-distinctness property from this file". Residual: `shield.rs` was written from the vendor
+  file, so this catches transcription drift, not "both wrong vs the spec". Original framing: I searched for the
   Infineon spec PDF and judged the repo's own `ifx-i2c-protocol.md` unusable (no provenance,
   post-dates the driver by two months — both true). I never checked for the vendor's **open-source
   reference implementation**, which has been on this box the whole time:

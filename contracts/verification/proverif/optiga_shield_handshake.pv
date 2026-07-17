@@ -14,10 +14,46 @@
    The host (S-world) opens the shielded connection, the F1D0/E120 silicon gate
    authorises the read, and OPTIGA returns `half_O` over the channel.
 
+   ***********************************************************************
+   * KNOWN INFIDELITY (found 2026-07-17 by work-todo M3 — READ THIS FIRST) *
+   ***********************************************************************
+   THIS MODEL INVENTS A HOST NONCE THE PROTOCOL DOES NOT HAVE. The `host` leg
+   below does `new hrnd`, publishes it, and derives `prf(pbs, hrnd, ornd)` — a
+   two-nonce exchange. Infineon's reference implementation
+   (`github.com/Infineon/optiga-trust-m` v5.6.0,
+   `src/comms/ifx_i2c/ifx_i2c_presentation_layer.c`) shows the real handshake has
+   exactly ONE nonce and the host does not supply it:
+     :497       prl.random is memcpy'd OUT OF the received SlaveHello — it is
+                never generated here; there is no RNG call in the whole PRL.
+     :302-313   the TLS-PRF seed is prl.random ALONE
+                => session_key = PRF(PBS, "Platform Binding", random_S).
+   `shield.rs` states this correctly ("Infineon PRL does NOT send a master
+   random"); this model, derived FROM shield.rs, contradicts it anyway — which
+   is exactly what a driver-derived model is worth.
+
+   CONSEQUENCE, MEASURED: the host here can unilaterally guarantee session-key
+   freshness with its own fresh nonce. In reality it contributes NONE. Run the
+   same injective-agreement query on both models:
+     this file                             : inj-event(HostAccepted) ==> ...  TRUE
+     optiga_shield_handshake_vendor.pv     : inj-event(HostAcceptedOpt) ==> .. FALSE
+   Same property, two answers. **Do not cite any freshness, replay or
+   session-distinctness property from this file.**
+
+   STILL SOUND HERE (unaffected by the invented nonce, and gate-pinned):
+   half_O confidentiality, the two NON-injective mutual-agreement
+   correspondences, and the PBS-leak residual — none of which depend on who
+   contributed the nonce.
+
+   The authoritative handshake model is now
+   `optiga_shield_handshake_vendor.pv`, re-derived from the vendor source. This
+   file is retained as the SCP03-companion shape and as the honest record of the
+   divergence (and because its non-injective results are independently pinned).
+
    ABSTRACTIONS (stated): PBS as one symbolic key; TLS-PRF / cryptograms /
    AES-CCM-8 as symbolic functions (perfect crypto); the exact 4-step framing
    abstracted to a nonce-exchange + PRF-derived session key. Faithful for the
-   mutual authentication and half_O-confidentiality questions below. (Finding F3:
+   mutual authentication and half_O-confidentiality questions below —
+   NOT for freshness (see the infidelity note above). (Finding F3:
    the session key `s = prf(pbs, hrnd, ornd)` is never leaked — a STRUCTURAL
    consequence of PBS-secrecy, since PBS is never output — but that is NOT a
    separately-queried RESULT here; the shipped queries ask mutual-auth + half_O

@@ -1,0 +1,223 @@
+(* ===========================================================================
+   PQ-Signer — OPTIGA Shielded Connection handshake, RE-DERIVED FROM THE VENDOR
+   ===========================================================================
+
+   Companion to `optiga_shield_handshake.pv`, and the reason it exists:
+
+     that model is derived from OUR DRIVER (`secure/src/optiga/shield.rs`) — its
+     own docstring says so — so it can only prove we modelled ourselves
+     consistently. An external artifact the driver can DIVERGE from is what
+     makes a model worth anything (work-todo M3).
+
+   SOURCE OF TRUTH for this file: Infineon's own reference implementation,
+   `github.com/Infineon/optiga-trust-m` v5.6.0 (2026-03-09), vendored on this
+   box at `/home/nicola/repos/optiga-trust-m`, file
+   `src/comms/ifx_i2c/ifx_i2c_presentation_layer.c`. For a WIRE protocol this is
+   a better oracle than the spec PDF: a spec can be ambiguous; the reference
+   implementation is executable truth and is what the silicon demonstrably
+   interoperates with.
+
+   Honest residual on independence: `shield.rs` was written FROM that file (it
+   cites its line numbers). So this model catches shield.rs <-> vendor-reference
+   TRANSCRIPTION DRIFT — categorically better than self-consistency — but not
+   "the reference and our reading of it are both wrong vs the spec". Small for a
+   wire protocol, because the reference is what the chip talks to. Stated, not
+   pretended away.
+
+   ---------------------------------------------------------------------------
+   WHAT THE VENDOR SOURCE SAYS, and where the driver-derived model diverges
+   ---------------------------------------------------------------------------
+
+   THE HANDSHAKE HAS EXACTLY ONE NONCE, AND THE HOST DOES NOT SUPPLY IT.
+
+     ifx_i2c_presentation_layer.c:497
+       memcpy(p_ctx->prl.random, &p_data[PRL_RANDOM_DATAOFFSET], PRL_RANDOM_DATA_LENGTH);
+     -- `prl.random` is filled ONLY there: COPIED OUT OF THE RECEIVED SlaveHello.
+        There is no RNG call anywhere in the presentation layer.
+
+     ifx_i2c_presentation_layer.c:302-313
+       pal_crypt_tls_prf_sha256(NULL, secret_input /* PBS */, shared_secret_length,
+                                label_input /* "Platform Binding" */, ...,
+                                p_ctx->prl.random, sizeof(p_ctx->prl.random),
+                                p_ctx->prl.session_key, sizeof(...));
+     -- the PRF seed is `prl.random` ALONE => session_key = PRF(PBS, label, random_S).
+
+   `shield.rs` knows this and says so ("Infineon PRL does NOT send a master
+   random -- the handshake uses only `random_S` from SlaveHello"). The
+   DRIVER-DERIVED MODEL DOES NOT: `optiga_shield_handshake.pv` gives the host
+   `new hrnd`, publishes it, and derives `prf(pbs, hrnd, ornd)` — a two-nonce
+   exchange that does not exist.
+
+   That is not cosmetic. In that model the host UNILATERALLY guarantees session-key
+   freshness with its own fresh nonce. In the real protocol the host contributes
+   NO freshness: the session key is a pure function of PBS and a value OPTIGA
+   chose. Every replay/freshness question therefore has a different answer, and
+   the driver-derived model cannot even ASK it.
+
+   This file makes that measurable: `inj_agree_optiga_to_host` below is the SAME
+   property in both models. It is TRUE under the invented host nonce and FALSE
+   here. See `RESULT` at the bottom.
+
+   Cross-checked constants (vendor -> shield.rs), all agreeing:
+     PRL_LABEL "Platform Binding"        -> PRF_LABEL      = b"Platform Binding"
+     PRL_RANDOM_DATA_LENGTH   0x20 (32)  -> RANDOM_LEN     = 32
+     session key 0x28 (40) = ENC@0x00 | DEC@0x10 | ENC_NONCE@0x20 | DEC_NONCE@0x24
+                                         -> SESSION_KEY_LEN = 40, same split
+     PRL_MASTER_HELLO_MSG     0x00       -> SCTR_HANDSHAKE_HELLO    = 0x00
+     PRL_MASTER_FINISHED_MSG  0x08       -> SCTR_HANDSHAKE_FINISHED = 0x08
+     PRL_PROTOCOL_VERSION     0x01       -> PROTOCOL_VERSION        = 0x01
+     PRL_SEQUENCE_THRESHOLD   0xFFFFFFF0 -> shield.rs:241 renegotiation threshold
+
+   ABSTRACTIONS (stated): PBS is one symbolic key; TLS-PRF and AES-128-CCM-8 are
+   symbolic (perfect crypto); the transport/datalink layers below the PRL are
+   abstracted to a public channel. Sequence numbers are modelled only where they
+   authenticate (inside Finished); the CCM nonce/counter arithmetic and the
+   renegotiation threshold are NOT modelled — nonce-reuse is a computational
+   question a symbolic model cannot pose. Bounded sessions except where
+   replication is explicitly written.
+   =========================================================================== *)
+
+type key.
+
+fun senc(bitstring, key): bitstring.
+reduc forall m: bitstring, k: key; sdec(senc(m, k), k) = m.
+
+(* session_key = TLS-PRF(PBS, "Platform Binding", random_S).
+   ONE nonce. This is the whole point of the file. *)
+fun sessionkey(key, bitstring): key.
+
+(* MasterFinished  = CCM_enc(random_S || slave_seq)  under the session key.
+   SlaveFinished   = CCM_enc(random_S || master_seq) under the session key.
+   Modelled as keyed tags: each proves its sender derived the session key, i.e.
+   knows PBS. *)
+fun mfinished(key, bitstring, bitstring): bitstring.
+fun sfinished(key, bitstring, bitstring): bitstring.
+
+free bus: channel.
+
+(* MasterHello is SCTR|PVER: public, fixed, carries no nonce and no secret. *)
+free masterHello: bitstring.
+
+event OptSentHello(bitstring).
+event HostAcceptedOpt(bitstring).
+event HostSentFinished(bitstring).
+event OptAcceptedHost(bitstring).
+
+(* --- OPTIGA leg -----------------------------------------------------------
+   MasterHello arrives (SCTR|PVER only — carries NO host random, per the vendor
+   source), OPTIGA answers SlaveHello with ITS random + seq, then verifies
+   MasterFinished and answers SlaveFinished, after which half_O may cross. *)
+let optiga(pbs: key, halfO: bitstring) =
+    in(bus, hello: bitstring);              (* MasterHello: SCTR|PVER, no nonce *)
+    new rndS: bitstring;                    (* the ONLY nonce in the protocol *)
+    new seqS: bitstring;
+    let s = sessionkey(pbs, rndS) in
+    event OptSentHello(rndS);
+    out(bus, (rndS, seqS));                 (* SlaveHello *)
+    in(bus, mf: bitstring);
+    if mf = mfinished(s, rndS, seqS) then
+    (
+        event OptAcceptedHost(rndS);
+        out(bus, sfinished(s, rndS, seqS)); (* SlaveFinished *)
+        out(bus, senc(halfO, s))            (* half_O over the shielded channel *)
+    ).
+
+(* --- Host leg -------------------------------------------------------------
+   Note what is ABSENT and cannot be added without diverging from the vendor:
+   the host has no `new` nonce. Its only inputs to the session key are PBS and a
+   value the peer chose. *)
+let host(pbs: key, halfO: bitstring) =
+    out(bus, masterHello);                  (* MasterHello: SCTR|PVER — no nonce, no secret *)
+    in(bus, (rndS: bitstring, seqS: bitstring));
+    let s = sessionkey(pbs, rndS) in
+    event HostSentFinished(rndS);
+    out(bus, mfinished(s, rndS, seqS));
+    in(bus, sf: bitstring);
+    if sf = sfinished(s, rndS, seqS) then
+    (
+        event HostAcceptedOpt(rndS)
+    ).
+
+(* === BASELINE: bus attacker, no PBS leak. ================================ *)
+free pbsB:   key       [private].
+free halfOB: bitstring [private].
+
+(* Q1 half_O confidentiality. *)
+query attacker(halfOB).
+
+(* Q2/Q3 non-injective mutual agreement — these SURVIVE the missing host nonce. *)
+query r: bitstring; event(HostAcceptedOpt(r)) ==> event(OptSentHello(r)).
+query r: bitstring; event(OptAcceptedHost(r)) ==> event(HostSentFinished(r)).
+
+(* Q4/Q5 anti-vacuity: both accepts MUST be reachable, else Q1-Q3 hold
+   vacuously over a dead honest leg. ProVerif reports a reachable event query as
+   `is false`; both MUST stay false. *)
+query r: bitstring; event(HostAcceptedOpt(r)).
+query r: bitstring; event(OptAcceptedHost(r)).
+
+(* Q6 -- THE CROSSING. INJECTIVE agreement: each host accept must correspond to
+   a DISTINCT OPTIGA hello.
+
+   EXPECTED: FALSE, and that is the finding. The host contributes no freshness,
+   so a replayed SlaveHello + replayed SlaveFinished drives a second host accept
+   against ONE OPTIGA hello. Under the driver-derived model's invented `new
+   hrnd` this same query is TRUE — the fresh host nonce makes every session
+   distinct. Same property, two answers: the model was crediting the host with a
+   guarantee the protocol never gave it.
+
+   What this does NOT mean: not an attack on half_O (Q1 still holds — PBS is
+   never leaked, so the attacker learns nothing from replaying ciphertext it
+   cannot decrypt). It means session-key freshness rests ENTIRELY on OPTIGA's
+   RNG, and the host cannot detect or prevent a repeat. The real defence against
+   the consequence that would matter — CCM nonce/counter reuse under a repeated
+   key — is the vendor's PRL_SEQUENCE_THRESHOLD renegotiation
+   (shield.rs:241), which is a computational property outside symbolic scope. *)
+query r: bitstring; inj-event(HostAcceptedOpt(r)) ==> inj-event(OptSentHello(r)).
+
+(* Replication on both legs: injectivity is only meaningful across sessions. *)
+let scenarioBaseline = ( !optiga(pbsB, halfOB) | !host(pbsB, halfOB) ).
+
+(* === RESIDUAL: PBS leak (DHUK extraction, ship-blocker S2 class) => half_O
+   recoverable from a captured session. Doubles as anti-vacuity for Q1: if this
+   came back secret, the model would not be modelling the channel at all.
+   Strictly weaker than the SCP03 PIN residual — half_O alone is useless without
+   half_E (Claim 1, proved in dual_se_unlock.pv). === *)
+free pbsR:   key       [private].
+free halfOR: bitstring [private].
+query attacker(halfOR).
+
+let optigaL(pbs: key, halfO: bitstring) =
+    in(bus, hello: bitstring);
+    new rndS: bitstring;
+    new seqS: bitstring;
+    let s = sessionkey(pbs, rndS) in
+    out(bus, (rndS, seqS));
+    in(bus, mf: bitstring);
+    if mf = mfinished(s, rndS, seqS) then
+    ( out(bus, sfinished(s, rndS, seqS)); out(bus, senc(halfO, s)) ).
+
+let hostL(pbs: key, halfO: bitstring) =
+    out(bus, masterHello);
+    in(bus, (rndS: bitstring, seqS: bitstring));
+    let s = sessionkey(pbs, rndS) in
+    out(bus, mfinished(s, rndS, seqS));
+    in(bus, sf: bitstring);
+    if sf = sfinished(s, rndS, seqS) then ( 0 ).
+
+let scenarioResidual =
+    ( optigaL(pbsR, halfOR) | hostL(pbsR, halfOR) | out(bus, pbsR) ).
+
+process ( scenarioBaseline | scenarioResidual )
+
+(* ---------------------------------------------------------------------------
+   RESULT (run: contracts/verification/proverif/run_optiga_vendor.sh)
+     Q1  attacker(halfOB)                      : true  (half_O secret)
+     Q2  HostAcceptedOpt  ==> OptSentHello     : true  (non-inj agreement)
+     Q3  OptAcceptedHost  ==> HostSentFinished : true  (non-inj agreement)
+     Q4  event(HostAcceptedOpt(r))             : false (reachable -> non-vacuous)
+     Q5  event(OptAcceptedHost(r))             : false (reachable -> non-vacuous)
+     Q6  inj-event ... ==> inj-event ...       : FALSE (the finding: no host
+                                                        nonce => no injective
+                                                        agreement)
+     Q7  attacker(halfOR)                      : false (PBS leak => half_O out)
+   --------------------------------------------------------------------------- *)

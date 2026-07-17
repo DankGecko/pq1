@@ -4130,6 +4130,7 @@ proverif: ## ProVerif symbolic protocol-model verification
 	proverif contracts/verification/proverif/scp03_handshake.pv
 	@echo "==> ProVerif: OPTIGA Shielded Connection handshake (half_O secrecy + mutual auth + PBS-leak residual)"
 	proverif contracts/verification/proverif/optiga_shield_handshake.pv
+	proverif contracts/verification/proverif/optiga_shield_handshake_vendor.pv
 	@echo "==> ProVerif: SCP03 within-session no-forgery (companion to the Tamarin no-replay)"
 	proverif contracts/verification/proverif/scp03_replay.pv
 	@echo "==> ProVerif: firmware-update authenticity (vendor-signed manifest, domain-separated)"
