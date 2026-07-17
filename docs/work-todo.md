@@ -173,6 +173,20 @@ deduplication, and falsifiable acceptance criteria.
 > NB: `make check-research-bundles` is PRE-EXISTINGLY red on this tree (B/C/D bundles
 > stale vs committed sources, unrelated to this work); the F9b CLAUDE.md source fix
 > will propagate to the E/F bundles on the next full `build.sh` regeneration.
+>
+> **FV-EXPANSION pilots (2026-07-16/17, branch `fix/fv-review-2026-07-15`).** Five
+> new-surface pilots landed (inventory: `docs/verification/fv-surface-expansion-inventory-2026-07-16.md`):
+> page-123 crash-atomicity TLA+/TLC (`e45e7ac8`), P1.7 signed-digest correspondence
+> (`47cc4e2d`), P1.2 ERC-20 display canonicity (`64f059ff`), P1.2 CoW owner-UID
+> (`bd28c03d`), + P1.5 durable-budget composition (this pass).
+> **⏳ CIRCLE BACK — gas-lane P1.2 slice** (`signed-intent-to-display`, the second
+> named high-risk binding): DEFERRED because its kernel
+> `secure/src/tx/display/userop_gas_lane.rs` is in a concurrent GPT-5.6 agent's live
+> ERC-7730 edit set (the whole `secure/src/tx/display/` tree). Once that lands, apply
+> the proven triple — extract the gas-triple page↔signed-values binding to a host
+> kernel, Kani-prove the displayed `(callGasLimit, verificationGasLimit,
+> preVerificationGas, maxFee, maxPriority)` equal the signed ones, + a mutation.
+> Same for any other `secure/src/tx/display/*` binding blocked by that refactor.
 
 - [ ] **FV15-F1 — reopen extraction freshness (prior extracted F1/F3).** Require
   pinned clean regeneration from every mirrored current Rust source, a total
@@ -3887,8 +3901,13 @@ live defects, not research residuals.**
 
 ### Defects (fix these; they are not "research")
 
-- [ ] **D1 — `Inconclusive` is collapsed into `Rejected` at three probe sites, and the collapse
-  drives a mutation.** `se050/mod.rs:375` (`establish_with(final).is_ok()` → falls through to PUT KEY),
+- [x] **D1 — FIXED 2026-07-17 (`d33bba58`). `Inconclusive` was collapsed into `Rejected` at three
+  probe sites, and the collapse drove a mutation.** Fix: `Se050Error::is_inconclusive()` (exactly
+  `Transport`) + `OptigaError::is_inconclusive()` (`I2c|Transport|Crc`); all three sites match
+  instead of collapsing and fail closed — no retry loop needed, the journal-resumable ceremony IS
+  the retry. 5 gates, all absence-assertions mutation-tested. **Residual:** `OptigaError::Shield`
+  still conflates wrong-PBS with handshake-faulted and is conservatively authoritative — splitting
+  it is the follow-up (the SE050 side already distinguishes `Scp03` vs `Transport`). Original: `se050/mod.rs:375` (`establish_with(final).is_ok()` → falls through to PUT KEY),
   `se050/mod.rs:440` (`check_exists(...).unwrap_or(false)` → **drives a create/write**), and
   `optiga/mod.rs:585` (`hard_reset_and_reinit().is_ok() && ensure_shield().is_ok()` → falls through to
   the **E140 rewrite**, i.e. the brick path — see `docs/secure-elements/optiga-brick-postmortem.md`).
@@ -3896,15 +3915,23 @@ live defects, not research residuals.**
   Fix: a probe result that can say "I don't know", whose don't-know branch retries read-only probes
   instead of falling through. Small, local, and a prerequisite for the first-boot ceremony's named
   production gate.
-- [ ] **D2 — live unsound axiom with no gate: `hal/` and `flash.rs` state contradictory flash
-  semantics.** `hal/src/lib.rs:105-107` (the crate that declares itself *"the specification"*) says
+- [x] **D2 — FIXED 2026-07-17 (`cb125e14`). Live unsound axiom with no gate: `hal/` and `flash.rs`
+  stated contradictory flash semantics.** `flash.rs` is right (and empirically so — flash.rs:1452
+  records the QW rule PROGERRing in the field); corrected the hal doc to quad-word-program-once and
+  named `HW-ASSUME-QW-ATOMIC`. Gated by a mutation-tested source-text test that include_str!s
+  `hal/src/lib.rs` — the only check possible until M2 wires the seam. Original: `hal/src/lib.rs:105-107` (the crate that declares itself *"the specification"*) says
   programming an already-cleared bit is a **no-op**; `secure/src/hw/flash.rs:723-725` says STM32U5
   *"does NOT allow re-programming an already-programmed word (ECC locks the value)"*. Both cannot be
   true; page-124's whole one-QW-per-attempt encoding rationale depends on which; and because
   `secure/Cargo.toml` has **no dependency on `hal/`**, nothing detects it. Decide which is true
   (`HW-ASSUME-QW-ATOMIC`), fix the loser, and note this is exactly the false-axiom shape that would
   have made a naive HAL-seam Kani proof a false green.
-- [ ] **D3 — `hal/src/lib.rs`'s `Rng` trait asserts an SP 800-90B obligation the code does not meet.**
+- [x] **D3 — FIXED 2026-07-17 (`cb125e14`). `hal`'s `Rng` trait put SP 800-90B conformance on the
+  *implementation*.** No driver can satisfy that — it is an entropy-source-silicon property.
+  Replaced with the obligation an impl CAN meet (fail closed on health-test/seed/clock errors,
+  which `hw/rng.rs` already does via SECS/CECS + SEIS/CEIS) and named `HW-ASSUME-TRNG-ENTROPY`.
+  Note the survey's "no health tests implemented" was about *software* tests; the driver does
+  consume the RNG's hardware ones. Original:
   Either implement the health tests (decidable software) or delete the obligation. Today the contract
   asserts something untrue, and that RNG feeds an irreversible OTP burn.
 - [x] **D4 — FIXED 2026-07-17 (`a53aefc3`). A torn OTP master burn silently halved the device master
