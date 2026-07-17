@@ -146,6 +146,85 @@ pub fn decode_canonical(canonical: &[u8; COW_CANONICAL_LEN]) -> Result<GpV2Order
 }
 
 // ---------------------------------------------------------------------------
+// setPreSignature(orderUid, signed) calldata — shape + orderUid field decode.
+//
+// The trusted-display binding for a CoW pre-sign: the C10 signature commits to
+// this 164-byte `setPreSignature(bytes,bool)` calldata, and the orderUid it
+// carries is `orderDigest(32) ‖ owner(20) ‖ validTo(4)`. The secure world
+// (`secure/src/tx/eip712/cowswap`) rebuilds the orderDigest with keccak and
+// byte-compares it, the validTo, and — the P1.2 owner-UID binding — the OWNER
+// against the expected owner (the wallet `sender` for a direct pre-sign, the
+// SAFE for a Safe-wrapped one; see `secure/.../safe/cow_binding.rs`).
+//
+// This is the host-linkable, Kani-friendly kernel for the SHAPE + fixed-offset
+// orderUid field extraction (no hashing — the digest rebuild/compare stays in
+// secure/). `decode_setpresig_orderuid(c) == Some(uid)` iff `c` is the canonical
+// `setPreSignature(orderUid, true)` encoding, and then `uid.{order_digest,owner,
+// valid_to}` are the verbatim bytes at the canonical orderUid offsets. So the
+// owner the secure world binds against is provably the owner embedded in the
+// signed calldata — read from the right offset, over ALL symbolic inputs.
+// ---------------------------------------------------------------------------
+
+/// Canonical `setPreSignature(bytes orderUid, bool signed)` calldata length.
+pub const COW_SETPRESIG_CALLDATA_LEN: usize = 164;
+
+/// `setPreSignature(bytes,bool)` selector.
+pub const SETPRESIG_SELECTOR: [u8; 4] = [0xec, 0x6c, 0xb1, 0x3f];
+
+/// orderUid = `orderDigest(32) ‖ owner(20) ‖ validTo(4)` starting at byte 100.
+pub const SETPRESIG_ORDER_DIGEST_OFFSET: usize = 100; // [100..132)
+pub const SETPRESIG_OWNER_OFFSET: usize = 132; //        [132..152)
+pub const SETPRESIG_VALID_TO_OFFSET: usize = 152; //     [152..156)
+
+/// The three orderUid sub-fields carried by a setPreSignature calldata.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SetPresigOrderUid {
+    pub order_digest: [u8; 32],
+    pub owner: [u8; 20],
+    pub valid_to: [u8; 4],
+}
+
+/// Decode a 164-byte `setPreSignature(orderUid, true)` calldata: verify its
+/// canonical ABI shape (selector, `bytes` offset `0x40`, `signed == true`,
+/// `orderUid` length `56`, and the `[156..164)` zero-pad tail) and, if canonical,
+/// extract the orderUid's `(order_digest, owner, valid_to)` at their fixed
+/// offsets. `None` iff the shape is non-canonical — so a non-canonical calldata
+/// can never bind an owner/digest the display does not derive from these exact
+/// bytes. Pure: no hashing, no allocation.
+pub fn decode_setpresig_orderuid(
+    calldata: &[u8; COW_SETPRESIG_CALLDATA_LEN],
+) -> Option<SetPresigOrderUid> {
+    // ── canonical shape ──
+    if calldata[0..4] != SETPRESIG_SELECTOR {
+        return None;
+    }
+    // `bytes` arg offset = 0x40 at slot 0 (word [4..36)).
+    if calldata[4..35].iter().any(|&b| b != 0) || calldata[35] != 0x40 {
+        return None;
+    }
+    // `signed` bool == true at slot 1 (word [36..68)).
+    if calldata[36..67].iter().any(|&b| b != 0) || calldata[67] != 1 {
+        return None;
+    }
+    // orderUid `bytes` length == 56 at slot 2 (word [68..100)).
+    if calldata[68..99].iter().any(|&b| b != 0) || calldata[99] != 56 {
+        return None;
+    }
+    // ABI tail zero-pad [156..164) (56-byte orderUid padded to 64).
+    if calldata[156..164].iter().any(|&b| b != 0) {
+        return None;
+    }
+    // ── extract orderUid fields at their canonical offsets ──
+    let mut order_digest = [0u8; 32];
+    order_digest.copy_from_slice(&calldata[SETPRESIG_ORDER_DIGEST_OFFSET..SETPRESIG_ORDER_DIGEST_OFFSET + 32]);
+    let mut owner = [0u8; 20];
+    owner.copy_from_slice(&calldata[SETPRESIG_OWNER_OFFSET..SETPRESIG_OWNER_OFFSET + 20]);
+    let mut valid_to = [0u8; 4];
+    valid_to.copy_from_slice(&calldata[SETPRESIG_VALID_TO_OFFSET..SETPRESIG_VALID_TO_OFFSET + 4]);
+    Some(SetPresigOrderUid { order_digest, owner, valid_to })
+}
+
+// ---------------------------------------------------------------------------
 // Bounded verification (Kani)
 // ---------------------------------------------------------------------------
 
@@ -324,5 +403,80 @@ mod verification {
             decode_canonical(&buf),
             Err(CowOrderDecodeError::EnumOutOfRange)
         ));
+    }
+
+    // ----- setPreSignature orderUid decode (P1.2 CoW owner-UID binding) -----
+
+    /// CANONICITY / show⇒signed-bytes for the CoW owner-UID binding: over ALL
+    /// symbolic 164-byte calldata, IF `decode_setpresig_orderuid` accepts and
+    /// returns `uid` (so the secure world will bind the order to `uid.owner` /
+    /// `uid.order_digest` / `uid.valid_to`), THEN the calldata is the canonical
+    /// `setPreSignature(orderUid, true)` encoding AND every orderUid field is the
+    /// verbatim bytes at its canonical offset — in particular `uid.owner ==
+    /// calldata[132..152]`. So the owner the display/verifier binds against is
+    /// provably the owner embedded in the SIGNED calldata, read from the right
+    /// offset. Exhaustive over the fixed 164-byte layout (no length parameter).
+    #[kani::proof]
+    fn decode_setpresig_orderuid_canonical() {
+        let c: [u8; COW_SETPRESIG_CALLDATA_LEN] = kani::any();
+        if let Some(uid) = decode_setpresig_orderuid(&c) {
+            // accept ⟹ canonical shape (selector / offset / signed / len / pad)
+            assert!(c[0..4] == SETPRESIG_SELECTOR);
+            assert!(c[35] == 0x40 && c[67] == 1 && c[99] == 56);
+            assert!(c[4..35].iter().all(|&b| b == 0));
+            assert!(c[36..67].iter().all(|&b| b == 0));
+            assert!(c[68..99].iter().all(|&b| b == 0));
+            assert!(c[156..164].iter().all(|&b| b == 0));
+            // accept ⟹ fields are the verbatim orderUid bytes (correct offsets),
+            // reconstructed independently from the ORIGINAL calldata.
+            let mut od = [0u8; 32];
+            od.copy_from_slice(&c[100..132]);
+            assert!(uid.order_digest == od);
+            let mut ow = [0u8; 20];
+            ow.copy_from_slice(&c[132..152]);
+            assert!(uid.owner == ow);
+            let mut vt = [0u8; 4];
+            vt.copy_from_slice(&c[152..156]);
+            assert!(uid.valid_to == vt);
+        }
+    }
+
+    /// Non-vacuity (positive control): a canonical setPreSignature calldata is
+    /// ACCEPTED and the orderUid fields decode to exactly the embedded bytes
+    /// (edge sentinels catch an offset shared between harness and decoder).
+    #[kani::proof]
+    fn decode_setpresig_orderuid_accepts_concrete() {
+        let mut c = [0u8; COW_SETPRESIG_CALLDATA_LEN];
+        c[0..4].copy_from_slice(&SETPRESIG_SELECTOR);
+        c[35] = 0x40;
+        c[67] = 1;
+        c[99] = 56;
+        // orderDigest / owner / validTo edge sentinels.
+        c[100] = 0x11;
+        c[131] = 0x22;
+        c[132] = 0x33; // owner[0]
+        c[151] = 0x44; // owner[19]
+        c[152] = 0x55; // validTo[0]
+        c[155] = 0x66; // validTo[3]
+        match decode_setpresig_orderuid(&c) {
+            Some(uid) => {
+                assert!(uid.order_digest[0] == 0x11 && uid.order_digest[31] == 0x22);
+                assert!(uid.owner[0] == 0x33 && uid.owner[19] == 0x44);
+                assert!(uid.valid_to[0] == 0x55 && uid.valid_to[3] == 0x66);
+            }
+            None => panic!("a canonical setPreSignature calldata must decode"),
+        }
+    }
+
+    /// Non-vacuity (negative control): a wrong selector — the "NS supplies a
+    /// different call than setPreSignature" threat — must be REJECTED.
+    #[kani::proof]
+    fn decode_setpresig_orderuid_rejects_bad_selector() {
+        let mut c = [0u8; COW_SETPRESIG_CALLDATA_LEN];
+        c[35] = 0x40;
+        c[67] = 1;
+        c[99] = 56;
+        c[0] = 0xde; // selector != setPreSignature
+        assert!(decode_setpresig_orderuid(&c).is_none());
     }
 }

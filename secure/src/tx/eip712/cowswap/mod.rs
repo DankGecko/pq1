@@ -308,9 +308,18 @@ pub fn cross_check_setpresig_calldata(
         return Err(OrderUidMismatch::OrderDigestMismatch);
     }
 
-    // (4) owner — must equal the UserOp sender.
-    let calldata_owner = &calldata[SETPRESIG_OWNER_OFFSET..SETPRESIG_OWNER_OFFSET + SETPRESIG_OWNER_LEN];
-    if calldata_owner != userop_sender.as_slice() {
+    // (4) owner — must equal the expected owner (the UserOp `sender` for a
+    //     direct pre-sign, the Safe for a Safe-wrapped one; see
+    //     `safe/cow_binding.rs`). The orderUid field extraction is the
+    //     host-compilable, Kani-verified `decode_setpresig_orderuid` (the
+    //     P1.2 CoW owner-UID canonicity proof: accept ⟹ owner == calldata's
+    //     orderUid owner bytes, read from the canonical offset over ALL inputs).
+    //     Shape was already validated by `check_setpresig_calldata_shape` above
+    //     in the pipeline, so this `decode` returns `Some` here; the `ok_or`
+    //     is belt-and-braces fail-closed.
+    let uid = pqsigner_tx::cowswap_order::decode_setpresig_orderuid(calldata)
+        .ok_or(OrderUidMismatch::CanonicalDecode)?;
+    if uid.owner != *userop_sender {
         return Err(OrderUidMismatch::OwnerMismatch);
     }
 
@@ -324,42 +333,15 @@ pub fn cross_check_setpresig_calldata(
 /// make; the firmware checks them natively now instead of running a
 /// separate proof.
 pub fn check_setpresig_calldata_shape(calldata: &[u8; 164]) -> Result<(), OrderUidMismatch> {
-    // Selector.
-    if &calldata[0..4] != &[0xec, 0x6c, 0xb1, 0x3f] {
-        return Err(OrderUidMismatch::CanonicalDecode);
+    // The shape gate (selector `ec6cb13f`, `bytes` offset 0x40, `signed == true`,
+    // orderUid length 56, `[156..164)` zero-pad) is the host-compilable,
+    // Kani-verified `decode_setpresig_orderuid` — it accepts iff the calldata is
+    // the canonical `setPreSignature(orderUid, true)` encoding, and the P1.2
+    // owner-UID canonicity proof binds accept ⟹ orderUid fields at the exact
+    // offsets. `.is_some()` == the same accept set the inline checks made.
+    if pqsigner_tx::cowswap_order::decode_setpresig_orderuid(calldata).is_some() {
+        Ok(())
+    } else {
+        Err(OrderUidMismatch::CanonicalDecode)
     }
-    // ABI bytes offset = 0x40 at slot 0.
-    for b in &calldata[4..35] {
-        if *b != 0 {
-            return Err(OrderUidMismatch::CanonicalDecode);
-        }
-    }
-    if calldata[35] != 0x40 {
-        return Err(OrderUidMismatch::CanonicalDecode);
-    }
-    // Bool signed == true at slot 1.
-    for b in &calldata[36..67] {
-        if *b != 0 {
-            return Err(OrderUidMismatch::CanonicalDecode);
-        }
-    }
-    if calldata[67] != 1 {
-        return Err(OrderUidMismatch::CanonicalDecode);
-    }
-    // Bytes length = 56 at slot 2.
-    for b in &calldata[68..99] {
-        if *b != 0 {
-            return Err(OrderUidMismatch::CanonicalDecode);
-        }
-    }
-    if calldata[99] != 56 {
-        return Err(OrderUidMismatch::CanonicalDecode);
-    }
-    // Zero padding at [156..164).
-    for b in &calldata[156..164] {
-        if *b != 0 {
-            return Err(OrderUidMismatch::CanonicalDecode);
-        }
-    }
-    Ok(())
 }

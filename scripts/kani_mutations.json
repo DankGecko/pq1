@@ -352,6 +352,17 @@
       "replace": "false",
       "expect": "kani_fails",
       "note": "Neuter the ERC-20 address-word zero-padding check. A non-canonical calldata (non-zero address high bytes) then decodes to a Transfer/Approve whose displayed recipient/spender differs from the signed bytes -> parse_erc20_only_accepts_canonical MUST turn red. If it SURVIVES, the show-one/sign-another canonicity proof is vacuous. (P1.2 signed-intent-to-display, 2026-07-16.)"
+    },
+    {
+      "id": "cow_setpresig_selector",
+      "tier": "default",
+      "crate": "pqsigner-tx",
+      "harness": "decode_setpresig_orderuid_canonical",
+      "file": "tx/src/cowswap_order.rs",
+      "find": "calldata[0..4] != SETPRESIG_SELECTOR",
+      "replace": "false",
+      "expect": "kani_fails",
+      "note": "Neuter the setPreSignature selector check. A non-setPreSignature call (any selector) would then decode to Some(uid) and bind an owner/orderUid the display did not derive from a real presign call -> decode_setpresig_orderuid_canonical MUST redden (assert c[0..4]==SETPRESIG_SELECTOR). If it SURVIVES, the CoW owner-UID canonicity proof is vacuous. (P1.2 CoW owner-UID binding, 2026-07-17.)"
     }
   ]
 }

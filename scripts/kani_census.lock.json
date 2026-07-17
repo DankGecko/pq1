@@ -21,7 +21,7 @@
     "shared/src/ns_ptr_validate.rs": 8,
     "tx-core/src/eip1559.rs": 1,
     "tx-core/src/rlp.rs": 2,
-    "tx/src/cowswap_order.rs": 5,
+    "tx/src/cowswap_order.rs": 8,
     "tx/src/erc20/calldata.rs": 5,
     "tx/src/multisend.rs": 16,
     "tx/src/safe_mgmt.rs": 7,
@@ -30,18 +30,18 @@
   },
   "totals": {
     "total_files": 25,
-    "total_harnesses": 149,
+    "total_harnesses": 152,
     "mutation_enrolled_files": 19,
-    "harnesses_in_enrolled_files": 141,
+    "harnesses_in_enrolled_files": 144,
     "files_outside_mutation": 6,
     "harnesses_outside_mutation": 8,
-    "mutation_groups_total": 32,
+    "mutation_groups_total": 33,
     "mutation_groups_by_tier": {
       "quick": 7,
-      "default": 22,
+      "default": 23,
       "full": 3
     },
-    "distinct_enrolled_harnesses": 30
+    "distinct_enrolled_harnesses": 31
   },
   "files_outside_mutation": [
     "domain/src/lib.rs",
