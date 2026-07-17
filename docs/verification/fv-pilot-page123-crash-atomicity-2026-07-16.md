@@ -126,6 +126,17 @@ compose this store with the gateway + on-chain counters and *prove* the released
 budget for a re-registered slot is bounded by the on-chain cap. Until then, that
 composition bound is a **cited** premise, precisely localized by this pilot.
 
+> **UPDATE 2026-07-17 — P1.5 landed (`fv-pilot-combined-budget-lifetime-2026-07-17.md`).**
+> The composition model confirms: the on-chain combined cap **holds across torn
+> resets** (`INV_ONCHAIN_CAP`), so **fund-moving / on-chain-landing** few-time-key
+> usage is bounded by `MAX_SLOT_USES` regardless of resets — the backstop is real.
+> The residual is narrower than "the flash layer doesn't bound it": it is the
+> **view-only off-chain margin** (EIP-1271 sigs that never reach the chain), which
+> a torn reset can erode past the cap (`INV_MARGIN_BOUNDED` violated ON, and the
+> negative control holds OFF — so the reset is the cause). That erosion is bounded
+> outside the model by the bootstrap re-registration budget + the physical
+> torn-compaction rate, and the excess sigs do not validate on-chain.
+
 **Confirmed residual — the SIGS-vs-COUNT asymmetry.** `INV_CNT_NO_ROLLBACK` is
 violated under SigsFirst+Skip, machine-confirming the F3 comment's own honest
 statement that a torn `COUNT`/`USEROP` roll-back is possible (bounded elsewhere by
