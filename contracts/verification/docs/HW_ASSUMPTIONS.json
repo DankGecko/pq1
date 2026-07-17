@@ -1,0 +1,373 @@
+{
+  "_comment": "HW-ASSUME ledger — the firmware-side hardware-assumption inventory. TRUST_ASSUMPTIONS.md's §Out-of-scope explicitly EXCLUDES firmware; this file is the hole that leaves. Every row is a claim about silicon we did not design and cannot inspect, so unlike AXIOM_STATUS.json there is NO machine truth to check a row against — no `#print axioms` for a die. What `make verify-hw-assumptions` CAN falsify is everything around the premise: that each row's anchors still resolve, that each named make-target exists, and — the load-bearing one, borrowed from OpenTitan's bidirectional RTL<->Hjson countermeasure cross-check — that the set of HW-ASSUME ids in the ledger is EXACTLY the set referenced across the tree. A row nobody cites is dead; a citation with no row is an unledgered assumption. See docs/verification/hardware-assumption-boundary-2026-07-17.md §6.",
+  "_status_vocabulary": {
+    "bare-tcb": "Asserted; discharged by nothing but vendor prose. Zero assurance. The point of a row at this status is that it is NAMED.",
+    "vendor-doc": "Stated in an ST/Infineon/NXP reference manual or datasheet we have read and cited to a section.",
+    "cert-cited": "Covered by a third-party lab evaluation whose scope we have checked and recorded. An attestation of bounded expert effort — NOT a proof. EUCLEAK is the standing refutation: ~80 evaluations at the highest attack-potential rating missed a 14-year constant-time defect.",
+    "silicon-tested": "A positive test on OUR parts. Bounds disbelief; never a forall.",
+    "code-enforced": "The firmware fails closed if the premise is violated in an observable way. Does not make the premise true — it makes a violation detectable."
+  },
+  "_falsifying_test_rule": "Every row MUST carry a falsifying_test whose `description` states a concrete experiment that could FAIL. `exists: false` is honest and common; `exists: true` REQUIRES a make_target that the gate checks is real. A model earns assurance only in proportion to what could contradict it — a row with no falsifying test is prose in JSON.",
+  "schema_version": 1,
+  "last_updated": "2026-07-17",
+  "assumptions": [
+    {
+      "id": "HW-ASSUME-QW-ATOMIC",
+      "surface": "b-flash",
+      "statement": "An STM32U585 flash/OTP quad-word program is old-or-new under power loss; a torn quad-word is read-back-detectable or raises an ECC fault. A programmed quad-word cannot be re-driven (ECC is computed and latched over the whole 128-bit line at first program), including when the new data would only clear already-cleared bits.",
+      "status": "vendor-doc",
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "secure/src/hw/flash.rs",
+          "anchor": "STM32U5 flash does NOT allow re-"
+        },
+        {
+          "kind": "field-observation",
+          "ref": "secure/src/hw/flash.rs",
+          "anchor": "cannot re-program a bit that is already 0"
+        },
+        {
+          "kind": "spec",
+          "ref": "hal/src/lib.rs",
+          "anchor": "quad-word, program-once"
+        }
+      ],
+      "falsifying_test": {
+        "description": "Power-cut rig on sacrificial U585s: cut VDD at swept sub-us offsets across a quad-word program and across a page erase; classify every read-back into old / new / ECC-fault / other. 'Other' falsifies. The recovery-LOGIC half needs zero new hardware (reset-at-swept-delay, work-todo C7); only the analog torn-write half needs a glitcher.",
+        "exists": false,
+        "make_target": null,
+        "cost": "rig + sacrificial parts; the logic half is free"
+      },
+      "consumed_by": [
+        "invariant-9 (page-123 off-chain counter durability)",
+        "invariant-2 (page-124 PIN attempt counter: one fresh blank QW per bump)",
+        "secure/src/otp_state.rs (the D4 per-quad-word classifier)",
+        "contracts/verification/tla/Page123Compaction.tla (torn-QW=Skip premise)"
+      ],
+      "note": "The page-123 TLC pilot's FINDING 1 is exactly this premise: with torn=MayValid instead of torn=Skip the invariant is VIOLATED. So the pilot does not prove crash-atomicity; it proves crash-atomicity IS EQUIVALENT TO this hardware premise. That is the honest shape and it is why this row exists.",
+      "last_reviewed": "2026-07-17"
+    },
+    {
+      "id": "HW-ASSUME-OTP-ONEWAY",
+      "surface": "a-otp",
+      "statement": "An OTP quad-word programmed once can never be re-driven, and a virgin quad-word is distinguishable from a programmed one by reading all-1s. A half-burn (one QW of a two-QW field programmed) is therefore detectable by a per-quad-word read.",
+      "status": "vendor-doc",
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "secure/src/hw/otp.rs",
+          "anchor": "An OTP quad-word may be programmed only once"
+        },
+        {
+          "kind": "code-enforced",
+          "ref": "secure/src/otp_state.rs",
+          "anchor": "pub const fn classify_master_words"
+        }
+      ],
+      "falsifying_test": {
+        "description": "Half-program an OTP quad-word, attempt completion, record FLASH_SR PGSERR/WRPERR and the read-back. Needs NO sacrificial board: otp.rs maps 176..512 = 336 B = 21 UNALLOCATED quad-words, so ~21 independent shots fit on a board that stays usable (work-todo C8).",
+        "exists": false,
+        "make_target": null,
+        "cost": "2-3 d; ~21 shots on a still-usable board"
+      },
+      "consumed_by": [
+        "secure/src/hw/otp.rs (device-master burn + the rejected rollback tally)",
+        "secure/src/otp_state.rs (D4 fix rests on this)"
+      ],
+      "note": "The widely-cited ST community thread on stuck half-quad-words does NOT settle the mechanism: ST confirmed the issue and fixed it in STM32CubeProgrammer v2.19.0 while stating no root cause, and it concerns the host SWD programming path, not our firmware path. Do not cite it as silicon semantics in either direction. Note also that bit-level monotonicity being TRUE is not sufficient: the rejected unary rollback tally was built on exactly that true premise and was still invalid, because the binding constraint is quad-word-program-once. Model at the commit granularity.",
+      "last_reviewed": "2026-07-17"
+    },
+    {
+      "id": "HW-ASSUME-PUTKEY-ATOMIC",
+      "surface": "e-se-blackbox",
+      "statement": "An SE050 PUT KEY with P1=0x0B, P2=0x81 and three key blocks (ENC || MAC || DEK) replacing key-version-number 0x0B in place is ALL-OR-NOTHING across the SE's internal NVM commit.",
+      "status": "bare-tcb",
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "secure/src/scp03_logic.rs",
+          "anchor": "pub fn build_put_key_apdu"
+        },
+        {
+          "kind": "source",
+          "ref": "secure/src/se050/mod.rs",
+          "anchor": "Fresh link, then probe FINAL (resume / idempotence)."
+        }
+      ],
+      "falsifying_test": {
+        "description": "Drive PUT KEY, cut power mid-APDU, then probe ENC/MAC and DEK INDEPENDENTLY. A die with final ENC/MAC but a transport DEK falsifies it. The probe must be independent because SCP03 establish proves ENC+MAC only.",
+        "exists": false,
+        "make_target": null,
+        "cost": "glitch rig + sacrificial SE050s"
+      },
+      "consumed_by": [
+        "secure/src/se050/mod.rs (rotate_scp03_transport_to_final resume probe)",
+        "secure/src/first_boot/state.rs (the Phase-B ceremony's SE050 key step)",
+        "CLAUDE.md ship gate 'atomic durable old/new/KVN recovery proof'"
+      ],
+      "note": "THE worked example for the whole method. All three key blocks ride ONE APDU; the resume probe (establish_with(final_enc, final_mac)) proves ENC+MAC ONLY — the DEK is never probed — and the KVN is 0x0B before AND after, so it cannot disambiguate transport from final. If PUT KEY is atomic the probe is sound (one APDU). If it is not, ENC+MAC-final-with-DEK-still-transport is reachable, the probe reports 'already rotated -> resume', run() commits DONE_SE050_KEYS, and the device proceeds with a mixed keyset whose DEK is derived from the FACTORY-KNOWN transport root. Formalisation does not verify the SE050; it reduces a multi-thousand-line rotation path to this one sentence and tells you exactly which two values to probe.",
+      "last_reviewed": "2026-07-17"
+    },
+    {
+      "id": "HW-ASSUME-DHUK-RDP12",
+      "surface": "f-peripherals",
+      "statement": "SAES-CMAC(DHUK, .) produces identical output at RDP-1 and RDP-2 on the same die.",
+      "status": "bare-tcb",
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "secure/src/hw/saes.rs",
+          "anchor": "KeySel"
+        }
+      ],
+      "falsifying_test": {
+        "description": "Fingerprint one sacrificial die at RDP-1, self-lock to RDP-2, fingerprint again; divergence falsifies. One shot per part, irreversible.",
+        "exists": false,
+        "make_target": null,
+        "cost": "one sacrificial part, one shot"
+      },
+      "consumed_by": [
+        "invariant-3 (OPTIGA PBS is DHUK-derived)",
+        "secure/src/first_boot/ (Phase A locks RDP-2, Phase B derives — both AT RDP-2)"
+      ],
+      "note": "UNMEASURED, and no board in this project has ever been at RDP-2 — an RDP-2 part cannot be regressed, which is the entire point. ST prose ('SAES uses a constant instead of DHUK at RDP0; the real DHUK activates at RDP >= 1') implies RDP1 == RDP2; CLAUDE.md's 'only then [at RDP-2] is the per-die DHUK final' reads the other way. Both are consistent with everything measured (n=2 boards, RDP0 vs RDP1). The first-boot ceremony is self-consistent either way, so NO FUNCTIONAL TEST WILL EVER SURFACE THIS — only a deliberate probe can. If FALSE it is fail-secure for the downgrade route (the attacker computes f(DHUK_RDP1,salt) != PBS and both tunnels stay shut) but that consolation does NOT extend to a runtime TrustZone-M disable at RDP-2, which uses DHUK(RDP-2) directly.",
+      "last_reviewed": "2026-07-17"
+    },
+    {
+      "id": "HW-ASSUME-DHUK-UNIQUE",
+      "surface": "f-peripherals",
+      "statement": "DHUK is per-die and cannot be extracted into CPU-visible memory.",
+      "status": "silicon-tested",
+      "evidence": [
+        {
+          "kind": "silicon-e2e",
+          "ref": "Makefile",
+          "anchor": "saes-self-test-hw"
+        },
+        {
+          "kind": "source",
+          "ref": "secure/src/hw/saes.rs",
+          "anchor": "Dhuk = 0b001"
+        }
+      ],
+      "falsifying_test": {
+        "description": "Per-die: fingerprint more boards at RDP1 and require distinct outputs (n=2 today; a collision falsifies). Unextractability: decap, which is explicitly out of scope.",
+        "exists": true,
+        "make_target": "saes-self-test-hw",
+        "cost": "low for the per-die half; N/A for unextractability"
+      },
+      "consumed_by": [
+        "invariant-3 (both SE tunnels are DHUK/BHK-rooted)",
+        "secure/src/hw/secret_keys.rs"
+      ],
+      "note": "Per-die: validated n=2 (two B-U585I boards give distinct RDP1 fingerprints; both share an ST constant at RDP0). Unextractability: bare-TCB. Say 'n=2, unmeasured at RDP2', never 'DHUK is unique per die' unqualified.",
+      "last_reviewed": "2026-07-17"
+    },
+    {
+      "id": "HW-ASSUME-CMSE-SAU",
+      "surface": "c-armv8m",
+      "statement": "The Cortex-M33 CMSE instructions, SAU/IDAU attribution, and ST's GTZC peripheral behave as documented in ARM DDI0553 and ST RM0456.",
+      "status": "silicon-tested",
+      "evidence": [
+        {
+          "kind": "silicon-e2e",
+          "ref": "Makefile",
+          "anchor": "gtzc-enforcement-hw"
+        },
+        {
+          "kind": "code-enforced",
+          "ref": "secure/src/sau.rs",
+          "anchor": "proto NS_FLASH window escaped the SAU NS-flash region"
+        }
+      ],
+      "falsifying_test": {
+        "description": "Extend the enforcement test per attribution rule. NO forall is reachable: there is no public formal ARMv8-M model in any framework, ARM's v8-M ASL was machine-validated (Reid, OOPSLA 2017) but never released, sail-arm is A-profile only, and GTZC is an ST peripheral that appears in NO ARM specification at all.",
+        "exists": true,
+        "make_target": "gtzc-enforcement-hw",
+        "cost": "low"
+      },
+      "consumed_by": [
+        "invariant-4 (all secrets only in TrustZone secure world)",
+        "S-NS-SECRET-LEAK",
+        "S-SRAM-NS-READ"
+      ],
+      "note": "This surface is CLOSED, not backlog — the K tier is permanently unreachable absent an ARM release we do not control. The 7/7 RAZ-fault test is a positive test, not a forall, and it is nonetheless STRONGER evidence than the industry reference (Trusted Firmware-M) publishes for the same property. Caveat recorded as work-todo C3: the receipt is currently taken on a NON-shipping feature combo while sau.rs has 12 cfg(feature) gates.",
+      "last_reviewed": "2026-07-17"
+    },
+    {
+      "id": "HW-ASSUME-TRNG-ENTROPY",
+      "surface": "f-peripherals",
+      "statement": "The STM32U585 TRNG meets NIST SP 800-90B in our RNG_CR configuration, and its SECS/CECS status bits faithfully report its internal health-test failures.",
+      "status": "bare-tcb",
+      "evidence": [
+        {
+          "kind": "code-enforced",
+          "ref": "secure/src/hw/rng.rs",
+          "anchor": "if sr & (SECS | CECS) != 0"
+        },
+        {
+          "kind": "spec",
+          "ref": "hal/src/lib.rs",
+          "anchor": "HW-ASSUME-TRNG-ENTROPY"
+        }
+      ],
+      "falsifying_test": {
+        "description": "Self-run the NIST SP 800-90B entropy-assessment suite over samples drawn from our own parts in our own RNG_CR configuration. Days.",
+        "exists": false,
+        "make_target": null,
+        "cost": "days"
+      },
+      "consumed_by": [
+        "secure/src/hw/otp.rs (burn_device_master — irreversible)",
+        "secure/src/crypto.rs (C10 keygen seeds, signing randomiser r, FI sentinels)"
+      ],
+      "note": "No ESV certificate naming the U585 was found. The firmware CONSUMES the RNG's hardware health tests and fails closed on them (that is an impl obligation and it is met); SP 800-90B conformance itself is a property of the entropy-source silicon and no driver can establish it — see work-todo D3. Defence in depth: rng_strong::fill XOR-folds STM32 + OPTIGA + SE050 on the irreversible paths, so one broken TRNG does not alone determine a burned key.",
+      "last_reviewed": "2026-07-17"
+    },
+    {
+      "id": "HW-ASSUME-RDP2",
+      "surface": "f-peripherals",
+      "statement": "STM32U585 readout protection level 2 resists voltage glitching and cannot be downgraded.",
+      "status": "cert-cited",
+      "evidence": [
+        {
+          "kind": "certificate",
+          "ref": "docs/verification/hardware-assumption-boundary-2026-07-17.md",
+          "anchor": "SESIP-2400133-01"
+        },
+        {
+          "kind": "code-enforced",
+          "ref": "shared/src/lockdown.rs",
+          "anchor": "OEM2LOCK"
+        }
+      ],
+      "falsifying_test": {
+        "description": "Offensive FI campaign on sacrificial parts. High cost.",
+        "exists": false,
+        "make_target": null,
+        "cost": "high"
+      },
+      "consumed_by": [
+        "invariant-4",
+        "the evil-maid threat model (see the boundary doc §5)"
+      ],
+      "note": "SESIP-2400133-01 (TrustCB, SGS Brightsight, SESIP3 + Physical Attacker Resistance, valid to 2027-03-28), ST security target TN1545 Rev 3, evaluated AT RDP-2 — real T-tier evidence, better than the absence argument. THREE caveats: (1) it pins REV_ID 0x3003 (rev U) and we probe DEV_ID only — see HW-ASSUME-REV-U; (2) we deliberately ship OUTSIDE the evaluated configuration — see HW-ASSUME-OEM2-ABSENT; (3) EUCLEAK's lesson applies unchanged. Independently: no published U5 RDP break exists, but U5 core-level glitch is PROVEN (Simonik, 76% PIN-check bypass on the STM32U5A9 sibling) and a TrustZone-M disable is PROVEN on the STM32L5 — a Cortex-M33 sibling (uGlitch, USENIX Sec 2023). This is the single highest-leverage unverifiable premise in the design, and it protects the attack class a hardware wallet actually faces.",
+      "last_reviewed": "2026-07-17"
+    },
+    {
+      "id": "HW-ASSUME-REV-U",
+      "surface": "f-peripherals",
+      "statement": "Our STM32U585 dies are revision U (REV_ID 0x3003 at 0xE004_4002) — the only revision SESIP-2400133-01 / TN1545 Rev 3 covers.",
+      "status": "bare-tcb",
+      "evidence": [
+        {
+          "kind": "certificate",
+          "ref": "docs/verification/hardware-assumption-boundary-2026-07-17.md",
+          "anchor": "REV_ID `0x3003` (rev U)"
+        }
+      ],
+      "falsifying_test": {
+        "description": "Read REV_ID at 0xE004_4002 on every bench die and record it. A die that is not rev U falsifies any inheritance of the SESIP claims. Hours.",
+        "exists": false,
+        "make_target": null,
+        "cost": "hours"
+      },
+      "consumed_by": [
+        "HW-ASSUME-RDP2 (the certificate's scope)"
+      ],
+      "note": "UNCHECKED. We probe DEV_ID 0x482 only (docs/security/production-security.md, docs/security/threat-model.md, work-todo:1713). A certificate for rev U says nothing about the rev X/W parts on the bench. Cheapest row in the ledger to close — work-todo A4a.",
+      "last_reviewed": "2026-07-17"
+    },
+    {
+      "id": "HW-ASSUME-OEM2-ABSENT",
+      "surface": "f-peripherals",
+      "statement": "No OEM2KEY is provisioned on a shipped unit and OEM2LOCK is clear, so no RDP-2 -> RDP-1 regression credential exists.",
+      "status": "code-enforced",
+      "evidence": [
+        {
+          "kind": "code-enforced",
+          "ref": "shared/src/lockdown.rs",
+          "anchor": "have NO OEM key provisioned"
+        },
+        {
+          "kind": "code-enforced",
+          "ref": "shared/src/lockdown.rs",
+          "anchor": "pub const fn oem_locks_absent"
+        }
+      ],
+      "falsifying_test": {
+        "description": "Probe OEM1LOCK/OEM2LOCK on every unit at production test. Separately: probe whether any CubeIDE-touched bench board already carries ST's default OEM2 password (UM3387 reports CubeIDE's init script sets one) — that would be a live regression credential on our own bench. Low cost.",
+        "exists": false,
+        "make_target": null,
+        "cost": "low"
+      },
+      "consumed_by": [
+        "HW-ASSUME-RDP2 (this is WHY we ship outside the certified configuration)"
+      ],
+      "note": "A DELIBERATE DEVIATION FROM THE CERTIFIED CONFIGURATION, recorded so it is not silently inherited in either direction. TN1545:912 — 'In the certified configuration, the Integrator allows the platform to regress to RDP Level 1 when the TOE secret OEM2KEY is successfully provisioned, and the OEM2LOCK option bit is set.' TN1545:921 — 'If the Integrator sets RDP to Level 2 without programming the OEM2KEY the product is locked.' That locked state is exactly what lockdown.rs mandates, because a transit attacker could pre-plant an OEM2 password. We are STRICTER than the evaluated configuration for a documented threat-model reason — which also means the certificate's 'field return of platform' SFR does not hold for us (no RMA path). Collides with the OWNER-GATED provisioning-wipe-rma-authority surface.",
+      "last_reviewed": "2026-07-17"
+    },
+    {
+      "id": "HW-ASSUME-SE050-CERT-VERSION",
+      "surface": "e-se-blackbox",
+      "statement": "Our SE050 parts are JCOP 4 SE050 v4.7 R2.00.11 / R2.03.11 — the configuration NSCIB-CC-180212-CR5 covers.",
+      "status": "bare-tcb",
+      "evidence": [
+        {
+          "kind": "certificate",
+          "ref": "docs/verification/hardware-assumption-boundary-2026-07-17.md",
+          "anchor": "NSCIB-CC-180212-CR5"
+        }
+      ],
+      "falsifying_test": {
+        "description": "Read the applet/config version off the part. Hours.",
+        "exists": false,
+        "make_target": null,
+        "cost": "hours"
+      },
+      "consumed_by": [
+        "HW-ASSUME-SE-INTERNALS (the certificate is the only third-party evidence we have)"
+      ],
+      "note": "UNCONFIRMED — the certificate covers nothing else. The SE050 cert is genuinely stronger than the OPTIGA one (its TOE includes the JCVM/JCRE/JCAPI, i.e. the layer enforcing our UserID PIN policy), but it explicitly does NOT rate cryptographic protocol strength, so it does not cover SCP03-as-deployed.",
+      "last_reviewed": "2026-07-17"
+    },
+    {
+      "id": "HW-ASSUME-SE-INTERNALS",
+      "surface": "e-se-blackbox",
+      "statement": "The OPTIGA Trust M and SE050 behave per datasheet inside the die: access-control policies are enforced, attempt counters are monotonic and durable, and lifecycle transitions are irreversible.",
+      "status": "silicon-tested",
+      "evidence": [
+        {
+          "kind": "silicon-e2e",
+          "ref": "Makefile",
+          "anchor": "se050-stress"
+        },
+        {
+          "kind": "silicon-e2e",
+          "ref": "Makefile",
+          "anchor": "optiga-hw-counter-e2e"
+        },
+        {
+          "kind": "silicon-e2e",
+          "ref": "Makefile",
+          "anchor": "pin-gate-wipe-e2e"
+        }
+      ],
+      "falsifying_test": {
+        "description": "None exists that reaches inside the die, and none will. Per-property silicon E2E on our own parts is the ceiling — each test can fail, which is what makes them worth running.",
+        "exists": true,
+        "make_target": "se050-stress",
+        "cost": "N/A for the general premise; low per property"
+      },
+      "consumed_by": [
+        "invariant-1 (dual-chip seed split)",
+        "invariant-2 (hardware PIN gating)",
+        "S-SE-ADMIN-READ",
+        "S-PIN-BRUTE"
+      ],
+      "note": "PERMANENTLY bare-TCB as a general premise. Every technique that could genuinely discharge it — firmware/RTL co-verification, OpenTitan-style FPV of a lifecycle controller, Termite's model-check-spec-against-RTL step — requires design source that Infineon and NXP will not supply. This is a business fact, not an effort estimate. Modelling SE internals is therefore theatre UNCONDITIONALLY: it relocates the assumption into a model we wrote and calls the agreement a proof. The gold standard here is make se050-admin-extract-attempt-e2e: a security claim + a test that fails if the policy regresses + a same-session DELETE as the control proving the refusal was real.",
+      "last_reviewed": "2026-07-17"
+    }
+  ]
+}

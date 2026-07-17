@@ -845,7 +845,26 @@ Against evil-maid, the **only** defences are:
 
 ## §6. Named open assumptions this document registers
 
-These are the deliverables that follow. Promote each to `docs/work-todo.md` and to a
+**These rows are now a machine-checked artifact, not this table.** They live in
+[`contracts/verification/docs/HW_ASSUMPTIONS.json`](../../contracts/verification/docs/HW_ASSUMPTIONS.json),
+gated by `make -C contracts/verification verify-hw-assumptions` (wired into `ci.yml`'s
+`invariant-gates`, which has no path filter — see the note there for why *not* `lean-fv.yml`).
+
+The gate cannot check the premises; there is no `#print axioms` for a die. It checks the
+ledger's **hygiene**, which is the part that rots: every evidence anchor still resolves in the
+file it names (so a row cannot quietly go stale when code moves out from under it); any row
+claiming a runnable falsifying test names a **real** make-target (a claimed test that cannot be
+run reads as evidence and is not); and — the load-bearing one, the only transferable half of
+OpenTitan's bidirectional RTL↔Hjson countermeasure cross-check, since we can never FPV our
+silicon and they designed theirs — **the set of `HW-ASSUME` ids in the ledger is exactly the set
+cited across the tree.** A citation with no row is an unledgered assumption; a row nobody cites
+is dead weight. Six self-test mutations assert the gate bites.
+
+Current state: **12 rows — 5 `bare-tcb`, 2 `vendor-doc`, 3 `silicon-tested`, 1 `cert-cited`,
+1 `code-enforced`; only 3 have a runnable falsifying test.** That ratio is the finding, and it
+is now a number that CI recomputes rather than a claim in a document.
+
+The table below is the human-readable snapshot. Promote each row to `docs/work-todo.md` and to a
 `THREAT_CLAIM_MAP` row; do not let them evaporate here.
 
 | Id | Assumption | Status | Falsifying test | Cost |

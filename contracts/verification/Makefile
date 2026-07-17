@@ -37,7 +37,7 @@ LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 help: ## Show the runnable FV targets (those with a description)
 	@grep -hE '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F':.*## ' '!seen[$$1]++ {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: verify verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation verify-forsc-margin verify-easycrypt verify-easycrypt-pins
+.PHONY: verify verify-hw-assumptions verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation verify-forsc-margin verify-easycrypt verify-easycrypt-pins
 
 # NOTE: verify-build (the `lake build` this bundle depends on) now also
 # kernel-checks the A3.1 in-kernel parse theorem + elision bridge (the root
@@ -106,6 +106,20 @@ verify-fv-lints: verify-build ## FV anti-vacuity sub-lints (escape-hatch/closure
 verify-ledger-consistency: verify-build ## AXIOM_STATUS.json falsifiable vs live dump (closures/pins/witnesses)
 	@python3 scripts/check_ledger_consistency.py --self-test
 	@python3 scripts/check_ledger_consistency.py
+
+# HARDWARE-ASSUMPTION ledger hygiene. The firmware-side counterpart to
+# verify-ledger-consistency, for the premises that have NO machine truth to be
+# checked against (there is no `#print axioms` for a die). It checks the
+# ledger's hygiene — anchors resolve, claimed make-targets are real, and the
+# HW-ASSUME id set is EXACTLY the set cited across the tree (OpenTitan's
+# bidirectional cross-check; an unledgered citation and a dead row both fail).
+# It never checks the premises themselves: no amount of green here makes a
+# claim about silicon true.
+# Needs no build — pure ledger/source inspection.
+.PHONY: verify-hw-assumptions
+verify-hw-assumptions: ## HW-ASSUME ledger falsifiable: anchors resolve, tests real, ids bidirectional
+	@python3 scripts/check_hw_assumptions.py --self-test
+	@python3 scripts/check_hw_assumptions.py
 
 # EASYCRYPT PORT gate. Two axioms in theft_free's closure (A5-EUFCMA, A5-ITSR)
 # cite this development as evidence; until 2026-07-10 it lived in a remote-less

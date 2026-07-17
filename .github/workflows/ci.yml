@@ -71,6 +71,16 @@ jobs:
       # contracts/verification/docs/findings/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md.
       - name: A3.1 c10Program <-> SPHINCsC10Asm.sol transcription lint
         run: make -C contracts/verification verify-transcription
+      # HW-ASSUME ledger hygiene. Deliberately here and NOT in lean-fv.yml: that
+      # workflow's path filter watches contracts/verification/** only, but this
+      # gate's C3 check anchors into secure/, shared/, hal/ and the Makefiles —
+      # so hosted there it would be path-ignored by exactly the edits that break
+      # it. That is the FV adversarial-review F1 failure mode (a gate advertised
+      # to police drift that never fires) and this job has no path filter, so it
+      # always runs. Pure source inspection: no Lean, no build, no toolchain.
+      # Ships its own --self-test negative control (asserted first).
+      - name: HW-ASSUME ledger falsifiable (anchors / real tests / bidirectional ids)
+        run: make -C contracts/verification verify-hw-assumptions
 
   supply-chain-vet:
     name: cargo-vet (dependency audit attestation)
@@ -186,6 +196,10 @@ jobs:
       # drift on merge.
       - name: ERC-7730 descriptor catalog in-sync (drift gate)
         run: cargo run --locked -q -p pqsigner-xtask -- gen-erc7730-descriptors --check
+      # Deterministic/offline: malformed, revoked, and expired EAS rows must
+      # never contribute to a descriptor's trusted-attester threshold.
+      - name: ERC-8176 coverage checker regressions (offline)
+        run: make erc8176-coverage-test
       # proto -> Solidity freshness: PqsignerProto.sol must be a byte-for-byte
       # render of the current proto constants (the on-chain verifier depends on
       # them). This gate was claimed in xtask help + Natspec but wired nowhere
