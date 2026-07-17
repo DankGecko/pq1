@@ -1019,12 +1019,18 @@ theorem initCodeHash_eq_of_impl_eq
     replay reproduces factory `0xe8CE78CD…` and implementation `0x31e49D24…`
     exactly).
 
-    What is now Lean-PROVEN (no longer opaque): the salt is chain-free
-    (`Factory.salt` takes no chain id) AND the initCode preimage is chain-free
-    modulo the implementation address (`initCodeHash` takes no chain id, `proxyCode`
-    is shared). Nothing chain-dependent remains inside the address preimage; the
-    only cited-TCB facts are the two deterministic-deployment address identities,
-    and they are the same fact applied twice. See `OPEN_PROOF_OBLIGATIONS.md` I-7. -/
+    HONEST SCOPE (do not overstate): the salt is kernel-proven chain-free
+    (`Factory.salt` takes no chain id). `initCodeHash_eq_of_impl_eq` is `subst; rfl`
+    (= `congrArg`): it witnesses the `def`'s SHAPE — `initCodeHash` takes no chainId
+    argument, `proxyCode` is a shared binder — NOT a byte-level proof that the real
+    deployed initCode contains no chainId. That "no chainId in the real initCode" fact
+    is SOURCE-VERIFIED cited-TCB (`PQSmartWalletFactory.sol:93`,
+    `LibClone.createDeterministicERC1967`), not a Solidity→Lean initcode-byte
+    extraction. So the improvement is the TCB SHAPE, not the hypothesis count (still
+    two): the opaque `ich1 = ich2` premise is decomposed into the structural model +
+    the homogeneous `impl1 = impl2`, so both remaining cited-TCB facts are the SAME
+    deterministic-deployment address identity, applied twice. See
+    `OPEN_PROOF_OBLIGATIONS.md` I-7. -/
 theorem create2Address_chain_independent_via_impl
     (mpk_seed mpk_root : ByteVec 32) (proxyCode : Spec.ByteSeg)
     (factory1 factory2 impl1 impl2 : ByteVec 32)

@@ -80,8 +80,16 @@ def sauNsFlash : Region := ⟨0x08100000, 0x08200000⟩
 /-- `SAU_NS_SRAM` — `sau.rs` `0x2003_0000..=0x2003_FFFF` (inclusive) → exclusive end. -/
 def sauNsSram : Region := ⟨0x20030000, 0x20040000⟩
 
-/-- Secure FLASH — `secure/memory-stm32u585.x` ORIGIN `0x0C000000`, LENGTH 984K. -/
-def secureFlash : Region := ⟨0x0C000000, 0x0C0F6000⟩
+/-- Secure FLASH — the **SECWM1 watermark footprint**: the FULL 1 MB of bank-1
+    (`0x0C000000..0x0C100000`), which `secure/memory-stm32u585.x` documents as
+    "secure watermark (SECWM1) covers all 128 pages of bank 1". This is the
+    HARDWARE-secure extent, a SUPERSET of the 984K the linker actually allocates
+    (`LENGTH = 984K` → `0x0C0F6000`); the extra pages 123–127 at
+    `[0x0C0F6000, 0x0C100000)` (per-device persistent data) are secure too. Modeling
+    the full watermark (not the linker LENGTH) is the SOUND direction for an
+    `∉ secure` statement — under-approximating "secure" would let a pointer in the
+    tail read as "not secure" while the silicon rejects it. -/
+def secureFlash : Region := ⟨0x0C000000, 0x0C100000⟩
 /-- Secure RAM — `secure/memory-stm32u585.x` ORIGIN `0x30000000`, LENGTH 192K. -/
 def secureRam : Region := ⟨0x30000000, 0x30030000⟩
 

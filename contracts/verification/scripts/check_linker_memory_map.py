@@ -121,7 +121,20 @@ def run_checks(sec_x, ns_x, proto, sau, lean) -> list:
         if a != b:
             fails.append(f"{name}: {tuple(hex(x) for x in a)} != {tuple(hex(x) for x in b)}")
 
-    secF, secR = sec_x["FLASH"], sec_x["RAM"]
+    # Secure FLASH = SECWM1 watermark footprint = the FULL bank-1 (1 MB), which the
+    # .x documents as "secure watermark (SECWM1) covers all 128 pages of bank 1" — the
+    # HARDWARE-secure extent, a SUPERSET of the linker-allocated LENGTH (984K). Modeling
+    # the full watermark (not the allocation) is the SOUND direction for `∉ secure`:
+    # under-approximating would let a pointer in the tail read as "not secure".
+    BANK1_SIZE = 0x100000  # 1 MB (128 * 8K pages), the stm32u585 flash bank size
+    secF = (sec_x["FLASH"][0], sec_x["FLASH"][0] + BANK1_SIZE)
+    secR = sec_x["RAM"]
+    # Sanity: the linker-allocated secure FLASH must fit inside the SECWM1 footprint.
+    if not subset(sec_x["FLASH"], secF):
+        fails.append(
+            f"linker-allocated secure FLASH {tuple(hex(x) for x in sec_x['FLASH'])} "
+            f"escaped SECWM1 footprint {tuple(hex(x) for x in secF)}"
+        )
 
     # (1) DRIFT GUARD: linker .x NS regions == proto NS windows.
     eq("drift .x-NS-FLASH vs proto NS_FLASH", ns_x["FLASH"], proto["NS_FLASH"])

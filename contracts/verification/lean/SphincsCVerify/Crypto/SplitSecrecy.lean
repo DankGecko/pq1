@@ -312,4 +312,16 @@ theorem splitLeak_floor_tight :
     ¬ (2 * 2 ^ 256 ≤ SplitEntropySpace) := by
   unfold SplitEntropySpace; decide
 
+/-- **How the count binds to the cardinality (honest wiring).** The two floor
+    theorems above are `Nat` arithmetic over the literal `SplitLeakExcludedCount = 1`;
+    this mathlib-free file has no `Finset.card` object to MECHANICALLY equate the
+    excluded-set cardinality to the `def`, so the count → distance step is
+    human-mediated: `halfE_deployed_excluded_iff` PROVES the deployed excluded set is
+    exactly `{v}` (an `e` is excluded iff `e = v`), and `SplitLeakExcludedCount = 1`
+    records that singleton cardinality as the distance numerator. The proof content
+    lives in `halfE_deployed_excluded_iff`; the floor theorems package its consequence. -/
+theorem splitLeak_count_matches_singleton (e v : Half) :
+    (∀ m, m ≠ 0 → halfE e m ≠ v) ↔ (e = v) :=
+  halfE_deployed_excluded_iff e v
+
 end SphincsCVerify.Crypto.SplitSecrecy

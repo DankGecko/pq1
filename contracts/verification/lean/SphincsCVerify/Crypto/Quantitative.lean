@@ -347,8 +347,10 @@ theorem crossClaw_at_2pow64 : crossClawBits 64 = 128 := by decide
 
 /-- **The claw break-point (exact).** At `2¹²⁸` work the birthday floor reaches 0
     (a cross-image collision is expected) — the exact 256-bit-codomain birthday
-    bound, pinned so the formula cannot silently truncate to an accidentally-true
-    `≥ 0` past the break. -/
+    bound. NOTE: this `= 0` is the Nat-subtraction floor value, so this theorem
+    ALONE does not distinguish `256 − 2·qBits` from `256 − k·qBits` for other `k`;
+    the load-bearing anti-vacuity pin is `crossClaw_at_2pow64 = 128`, which uniquely
+    fixes the coefficient at 2 (coeff 1 → 192, coeff 2 → 128, coeff 3 → 64). -/
 theorem crossClaw_breakpoint : crossClawBits 128 = 0 := by decide
 
 /-- Fixed-target preimage floor is 192 bits at `2⁶⁴` work and 128 bits at `2¹²⁸`

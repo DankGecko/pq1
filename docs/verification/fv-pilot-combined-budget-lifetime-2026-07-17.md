@@ -63,11 +63,14 @@ contracts/verification/tla/run_combined.sh`.
    control (`INV_MARGIN_BOUNDED`, resets OFF) holds — so the residual is precisely
    attributable to the reset, not to the gate.
 
-3. **The view-only few-time-key MARGIN is the residual, not the on-chain budget.**
-   With torn resets, `margin` exceeds `MaxSlotUses`: a reset lets the firmware
-   RELEASE more slot-key sigs (off-chain EIP-1271 sigs never reach the chain) than
-   the on-chain cap tracks. This machine-confirms `flash.rs`'s own statement that
-   `USEROP_SIGS` (the off-chain/withheld tally) has **no on-chain backstop**.
+3. **The residual is the few-time-key MARGIN, released UNCAPPED on-chain via
+   EIP-1271.** With torn resets, `margin` exceeds `MaxSlotUses`: a reset lets the
+   firmware RELEASE more slot-key sigs than the on-chain cap tracks. These are
+   EIP-1271 signatures — validated **on-chain** by `wallet.isValidSignature` (a
+   `view` call) but never bumping the on-chain counters — so they are NOT bounded by
+   the `slotUses + offchainSigCount` cap. This machine-confirms `flash.rs`'s own
+   statement that `USEROP_SIGS` (the off-chain/withheld tally) has **no on-chain
+   backstop**.
 
 ## Residual + mitigations OUTSIDE this model (stated honestly)
 
@@ -76,10 +79,20 @@ The margin erosion is **bounded per reset** by mechanisms outside the model:
   at the exact replay window — the page-123 pilot's surface);
 - each reset unregisters the slot, so invariant #9 forces a **Type-1
   re-registration**, which spends the separate **bootstrap** few-time budget
-  (`MAX_BOOTSTRAP_USES`) — bounding the number of resets;
-- the excess off-chain sigs released after the on-chain cap is reached **do not
-  validate on-chain** (the wallet's `isValidSignature` still enforces the cap), so
-  the erosion is a **few-time-margin** concern, not a fund-movement one.
+  (`MAX_BOOTSTRAP_USES`) — bounding the number of resets.
+
+> **CORRECTION (2026-07-17, adversarial review).** An earlier version of this bullet
+> and the commit `4d8d4f47` message claimed the excess off-chain sigs "do not validate
+> on-chain (the wallet's `isValidSignature` still enforces the cap)". **That is false.**
+> `isValidSignature` / `_erc1271IsValidSignatureNowCalldata` is `view`-only and **never
+> reads** `slotUses`/`offchainSigCount` (`PQSmartWallet.sol:573-576, 599-648`) — so the
+> excess slot-key sigs released after a torn reset **do** validate on-chain (return the
+> `0x1626ba7e` magic for any valid C10 sig, authorizing Permit2 / CoW-presign /
+> Safe-cosign flows). The residual is therefore bounded ONLY by the two mechanisms above
+> (physical reset rate + bootstrap re-registration budget), and its impact is
+> **birthday-margin erosion of the slot key** (releasing more few-time C10 sigs than
+> the cap intends), NOT a dismissable few-time-margin bookkeeping concern. Its exact
+> quantification is the open refinement below.
 
 Quantifying the exact worst-case erosion (resets × `MAX_OFFCHAIN_GAP`, and whether
 it stays within the C10 birthday margin at the shipped `MAX_SLOT_USES=65536`) is

@@ -56,6 +56,15 @@ self-test fires (2 failures).
 
 - **Silicon enforcement** (SAU/IDAU/GTZC on the die) stays a HW-receipt assumption
   (`make gtzc-enforcement-hw`); this is interval algebra over literals.
+- **`secureFlash` = SECWM1 watermark footprint, not the linker allocation
+  (adversarial-review fix 2026-07-17).** The secure region is modeled as the FULL
+  1 MB of bank-1 (`0x0C000000..0x0C100000`), which the `.x` documents as the SECWM1
+  watermark ("covers all 128 pages of bank 1") — the HARDWARE-secure extent, a
+  superset of the 984K the linker allocates. Modeling the full watermark is the
+  SOUND direction for `∉ secure` (under-approximating "secure" would let a pointer in
+  the tail pages 123–127 read as "not secure" while the silicon rejects it); the gate
+  binds to the SECWM1 footprint and sanity-checks that the linker allocation fits
+  inside it.
 - **No veneer⊆secure** theorem: FALSE on QEMU (NSC at `0x103FF000`, NS-MPC territory)
   and build-time-only on hardware (`__veneer_base/limit` are link-time symbols absent
   from `.x`). Out of frame by design.

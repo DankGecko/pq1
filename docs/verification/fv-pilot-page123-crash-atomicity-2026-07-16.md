@@ -131,11 +131,15 @@ composition bound is a **cited** premise, precisely localized by this pilot.
 > resets** (`INV_ONCHAIN_CAP`), so **fund-moving / on-chain-landing** few-time-key
 > usage is bounded by `MAX_SLOT_USES` regardless of resets — the backstop is real.
 > The residual is narrower than "the flash layer doesn't bound it": it is the
-> **view-only off-chain margin** (EIP-1271 sigs that never reach the chain), which
-> a torn reset can erode past the cap (`INV_MARGIN_BOUNDED` violated ON, and the
-> negative control holds OFF — so the reset is the cause). That erosion is bounded
-> outside the model by the bootstrap re-registration budget + the physical
-> torn-compaction rate, and the excess sigs do not validate on-chain.
+> **off-chain EIP-1271 margin** (view-only sigs that never bump the on-chain
+> counters), which a torn reset can erode past the cap (`INV_MARGIN_BOUNDED`
+> violated ON, and the negative control holds OFF — so the reset is the cause).
+> That erosion is bounded outside the model by the bootstrap re-registration budget
+> + the physical torn-compaction rate. **NB (2026-07-17 correction):** those excess
+> EIP-1271 sigs **do** validate on-chain — `isValidSignature` is `view`-only and
+> never reads the cap counters (`PQSmartWallet.sol:573-576`), so they are uncapped;
+> the bound is the reset-rate + bootstrap budget, and the impact is slot-key
+> birthday-margin erosion (see the P1.5 combined-budget report's CORRECTION note).
 
 **Confirmed residual — the SIGS-vs-COUNT asymmetry.** `INV_CNT_NO_ROLLBACK` is
 violated under SigsFirst+Skip, machine-confirming the F3 comment's own honest
