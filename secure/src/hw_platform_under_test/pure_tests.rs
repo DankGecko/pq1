@@ -43,6 +43,13 @@
 #![cfg(test)]
 
 const FLASH_SRC: &str = include_str!("../hw/flash.rs");
+/// The trait-only `pqsigner-hal` crate, which declares itself "the
+/// specification". `secure/` does not depend on it (the `hal-stm32u5` /
+/// `hal-mock` impls are deferred — work-todo M2), so nothing links the two and
+/// no compiler check can catch the spec disagreeing with the driver. Until the
+/// seam is wired, this text pin is the only gate. See
+/// `negative_hal_flash_contract_agrees_with_driver_on_quad_word_rule`.
+const HAL_SRC: &str = include_str!("../../../hal/src/lib.rs");
 const TAMP_SRC: &str = include_str!("../hw/tamp.rs");
 const CONSUMPTION_MASK_SRC: &str = include_str!("../hw/consumption_mask.rs");
 const SCA_TRIGGER_SRC: &str = include_str!("../hw/sca_trigger.rs");
@@ -1541,4 +1548,78 @@ fn extract_body(src: &str, header: &str) -> String {
         }
     }
     src[start..end].to_string()
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// D2 — the spec crate must not contradict the driver
+// ─────────────────────────────────────────────────────────────────────
+
+/// `hal/` calls itself "the specification" but `secure/` has no dependency on
+/// it, so the compiler cannot catch the two disagreeing. They did: `hal` said a
+/// program of an already-cleared bit was "a no-op" (a per-*bit* model) while
+/// `flash.rs` says the STM32U5 forbids re-programming a programmed word because
+/// ECC locks it (a per-*quad-word* model). Both cannot be true, and page-124's
+/// one-blank-QW-per-attempt design depends on which — as does `hw::otp`, which
+/// rejected a unary rollback tally for exactly this reason.
+///
+/// The driver is the correct one, and not merely by assertion:
+/// `flash.rs:~1452` records the rule being hit in the field ("PROGERRs ... the
+/// caller surfaces it as `Sig commit FAIL`") on devices upgraded across the
+/// all-C10 cutover.
+///
+/// Fixed 2026-07-17 (work-todo D2). This test is the interim gate until the
+/// seam is wired (M2) and drift becomes a build failure instead of a grep.
+#[test]
+fn negative_hal_flash_contract_agrees_with_driver_on_quad_word_rule() {
+    // The driver's claim — the one the designs depend on.
+    assert!(
+        FLASH_SRC.contains("STM32U5 flash does NOT allow re-")
+            && FLASH_SRC.contains("programmed word (ECC locks the value)"),
+        "flash.rs must state the quad-word program-once rule; if this moved, \
+         re-point the pin rather than deleting the gate"
+    );
+
+    // The spec must not re-introduce the per-bit "no-op" model.
+    assert!(
+        !HAL_SRC.contains("is a no-op\n/// for any bit already cleared"),
+        "hal/src/lib.rs re-introduced the per-bit flash model (a program of an \
+         already-cleared bit is NOT a no-op on STM32U5 — the quad-word is \
+         program-once and ECC-locked, and flash.rs:1452 records it PROGERRing \
+         in the field). This is work-todo D2: an unsound axiom in the crate \
+         that declares itself the specification, undetectable by the compiler \
+         because secure/ does not depend on hal/."
+    );
+
+    // And it must state the correct one.
+    assert!(
+        HAL_SRC.contains("quad-word, program-once"),
+        "hal/src/lib.rs must state the STM32U585 quad-word program-once flash \
+         semantics that flash.rs and hw::otp both rely on"
+    );
+}
+
+/// D3 companion: the `Rng` contract must not put SP 800-90B conformance on the
+/// *implementation*. No driver can satisfy it — it is a property of the entropy
+/// source silicon and its validation, not of the code reading `RNG_DR`. Stating
+/// it as an impl obligation made the spec assert something no implementation
+/// establishes, on a path that feeds an irreversible OTP burn.
+#[test]
+fn negative_hal_rng_contract_does_not_claim_impl_satisfies_sp800_90b() {
+    assert!(
+        !HAL_SRC.contains("MUST satisfy NIST SP 800-90B"),
+        "hal/src/lib.rs re-introduced SP 800-90B conformance as an *impl* \
+         obligation (work-todo D3). It is a silicon property — track it as \
+         HW-ASSUME-TRNG-ENTROPY. The impl contract is fail-closed on the \
+         source's health-test/seed/clock errors, which hw/rng.rs does via \
+         SECS/CECS + SEIS/CEIS."
+    );
+    assert!(
+        HAL_SRC.contains("HW-ASSUME-TRNG-ENTROPY"),
+        "the hal Rng doc must name the silicon assumption it depends on"
+    );
+    // The impl contract the doc now states is the one rng.rs actually meets.
+    assert!(
+        RNG_SRC.contains("if sr & (SECS | CECS) != 0"),
+        "hw/rng.rs must fail closed on the RNG's health-test current-status bits"
+    );
 }

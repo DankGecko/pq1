@@ -45,10 +45,37 @@ pub enum HalError {
 // Random number generator
 // ---------------------------------------------------------------------------
 
-/// Hardware true-random / TRNG-DRBG abstraction. Every driver impl
-/// MUST satisfy NIST SP 800-90B post-conditioning — the secure world
-/// trusts the output for SPHINCS+ keygen seeds, signing-randomiser
-/// `r`, FI-glitch sentinels, and the RDI mask.
+/// Hardware true-random / TRNG abstraction. The secure world trusts the output
+/// for SPHINCS+ keygen seeds, the signing randomiser `r`, FI sentinels, the RDI
+/// mask, and — irreversibly — the OTP device-master burn.
+///
+/// **Impl contract (what an implementation can actually be held to):** `fill`
+/// MUST fail closed. It must surface a health-test / seed / clock error from
+/// the underlying entropy source as `Err(HalError::Corrupt)` rather than
+/// returning low-entropy bytes, and it must never return `Ok` having filled
+/// `buf` partially or from a stalled source. The STM32U585 impl does this by
+/// checking the RNG's `SECS`/`CECS` current-status bits on every word and
+/// `SEIS`/`CEIS` on entry (`secure/src/hw/rng.rs::fill`), with a bounded
+/// `DRDY` timeout.
+///
+/// **NOT an impl obligation (corrected 2026-07-17, work-todo D3):** this doc
+/// previously required every driver impl to satisfy NIST SP 800-90B
+/// post-conditioning. No driver can. SP 800-90B conformance is a property of
+/// the *entropy source silicon* and its validation, not of the code that reads
+/// its data register. Stating it as an impl obligation made the contract assert
+/// something no implementation establishes, on a path that feeds an
+/// irreversible OTP burn.
+///
+/// The real premise is a named silicon assumption: **`HW-ASSUME-TRNG-ENTROPY`**
+/// — the STM32U585 TRNG meets SP 800-90B in our `RNG_CR` configuration. Status:
+/// vendor claim; no ESV certificate naming the U585 was found. Its falsifying
+/// test (self-run NIST EA over our own samples) and cost are tracked in
+/// `docs/verification/hardware-assumption-boundary-2026-07-17.md` §6.
+///
+/// Defence in depth: callers on the irreversible paths do not rely on one
+/// source — the secure world's `rng_strong::fill` XOR-folds STM32 + OPTIGA +
+/// SE050 entropy, so a single broken TRNG does not silently determine a burned
+/// key.
 pub trait Rng {
     fn fill(&mut self, buf: &mut [u8]) -> Result<(), HalError>;
 }
@@ -101,11 +128,34 @@ pub trait Saes {
 // Internal flash
 // ---------------------------------------------------------------------------
 
-/// Internal flash. STM32U585 quad-word semantics: programs only set
-/// bits to zero, so calling `program` on a non-erased page is a no-op
-/// for any bit already cleared but a fault for any bit that would need
-/// to be cleared by program. The page granularity is 8 KiB on the
-/// STM32U5 dual-bank layout.
+/// Internal flash.
+///
+/// **STM32U585 semantics — quad-word, program-once.** The program granularity
+/// is one complete 128-bit quad-word, and ECC is computed and latched over the
+/// whole quad-word at its first program. A second program of an
+/// already-programmed quad-word therefore **faults (PROGERR)** — *including*
+/// when the new data would only clear bits that are already 0. Erase
+/// granularity is one 8 KiB page on the dual-bank layout.
+///
+/// Corrected 2026-07-17 (work-todo D2). This doc previously said a program of
+/// an already-cleared bit was "a no-op", i.e. a per-*bit* model. That is wrong
+/// twice over: `secure/src/hw/flash.rs:723-725` states the quad-word rule, and
+/// `flash.rs:1452` records it being hit in the field — writing a partially
+/// programmed quad-word "PROGERRs ... and the caller surfaces it as `Sig commit
+/// FAIL`" on devices upgraded across the all-C10 cutover. Real designs depend
+/// on the quad-word rule and not the per-bit one: page-124 spends a *fresh
+/// blank* quad-word per PIN attempt precisely because it cannot rewrite one,
+/// and `hw::otp` rejected a unary rollback tally for the same reason.
+///
+/// The two statements were contradictory and nothing detected it, because
+/// `secure/` does not depend on this crate (work-todo M2). A contract nobody
+/// links is an axiom nobody checks — model at the granularity the silicon
+/// commits at, and wire the seam so drift is a build failure.
+///
+/// The one-way premise itself (`HW-ASSUME-QW-ATOMIC`, `HW-ASSUME-OTP-ONEWAY`)
+/// is a silicon assumption held by ST's documentation and our own field
+/// experience, not by anything provable here. See
+/// `docs/verification/hardware-assumption-boundary-2026-07-17.md`.
 pub trait Flash {
     fn read(&self, page: u16, offset: u16, buf: &mut [u8]);
     fn program(&mut self, page: u16, offset: u16, data: &[u8]) -> Result<(), HalError>;
