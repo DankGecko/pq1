@@ -56,6 +56,11 @@ use crate::iso7816::{tlv_parse, tlv_put, tlv_put_u32};
 const APDU_SRC: &str = include_str!("../se050/apdu.rs");
 const SCP03_SRC: &str = include_str!("../se050/scp03.rs");
 const T1OI2C_SRC: &str = include_str!("../se050/t1oi2c.rs");
+/// The pure T=1' framing, extracted to `sphincs-tz-shared` (2026-07-17) so it
+/// is Kani-provable host-side. The wire-format pins below follow it: a Kani
+/// round-trip proves build/validate agree with EACH OTHER, so only these text
+/// pins tie us to the chip's silicon-locked CRC/NAD/LEN choices.
+const T1_FRAME_SRC: &str = include_str!("../../../shared/src/t1_frame.rs");
 const I2C_SRC: &str = include_str!("../se050/i2c.rs");
 const MOD_SRC: &str = include_str!("../se050/mod.rs");
 
@@ -644,17 +649,29 @@ fn negative_crc16_algorithm_shape_stable() {
     // chip side; a refactor that swapped to the standard 0x1021 form
     // (CRC-16/CCITT-FALSE) would silently break every frame and every
     // ATR. Pin the exact algorithm lines verbatim.
-    assert!(T1OI2C_SRC.contains("let mut crc: u16 = 0xFFFF;"),
+    // The algorithm moved to `sphincs_tz_shared::t1_frame` (2026-07-17) so it
+    // could be Kani-proven; the driver re-exports it. These pins follow it —
+    // they are NOT deleted, because the Kani round-trip proves build/validate
+    // agree with EACH OTHER and would stay green if BOTH were changed to a
+    // different CRC. Only these constants tie us to the chip's silicon-locked
+    // choice, which no host-side proof can reach.
+    assert!(T1_FRAME_SRC.contains("let mut crc: u16 = 0xFFFF;"),
             "init constant must remain 0xFFFF");
-    assert!(T1OI2C_SRC.contains("crc = (crc >> 1) ^ 0x8408;"),
+    assert!(T1_FRAME_SRC.contains("crc = (crc >> 1) ^ 0x8408;"),
             "the reflected polynomial constant 0x8408 (mirror of 0x1021) must remain");
-    assert!(T1OI2C_SRC.contains("crc ^= 0xFFFF;"),
+    assert!(T1_FRAME_SRC.contains("crc ^= 0xFFFF;"),
             "final XOR with 0xFFFF must remain");
     assert!(
-        T1OI2C_SRC.contains("crc // GP 1.0: no byte-swap"),
+        T1_FRAME_SRC.contains("crc // GP 1.0: no byte-swap"),
         "GP 1.0 explicitly does NOT byte-swap the CRC; the standard \
          T1 variant DOES — swapping the comment away tells future devs \
          the byte-swap is OK, which silently breaks every frame"
+    );
+    // And the driver must consume the proven copy, not grow a second one.
+    assert!(
+        !T1OI2C_SRC.contains("fn crc16(data: &[u8]) -> u16 {"),
+        "t1oi2c.rs re-grew a local crc16 — a second copy beside the proven one \
+         proves only that the two copies agree. Re-export, do not duplicate."
     );
 }
 
@@ -686,12 +703,18 @@ fn negative_build_frame_layout_matches_production_pins() {
     // Pin every byte position of the GP 1.0 build_frame implementation
     // so a refactor that moved to the legacy LEN(1) layout (compatible
     // with the older T=1' variant) silently breaks every chip.
-    assert!(T1OI2C_SRC.contains("buf[0] = NAD_HOST_TO_SE;"));
-    assert!(T1OI2C_SRC.contains("buf[1] = pcb;"));
-    assert!(T1OI2C_SRC.contains("buf[2] = (len >> 8) as u8; // LEN MSB"));
-    assert!(T1OI2C_SRC.contains("buf[3] = (len & 0xFF) as u8; // LEN LSB"));
-    assert!(T1OI2C_SRC.contains("const HEADER_LEN: usize = 4;"));
-    assert!(T1OI2C_SRC.contains("HEADER_LEN + len + 2 // NAD + PCB + LEN(2) + INF + CRC16"));
+    // Followed the extraction to `sphincs_tz_shared::t1_frame` (2026-07-17).
+    assert!(T1_FRAME_SRC.contains("buf[0] = NAD_HOST_TO_SE;"));
+    assert!(T1_FRAME_SRC.contains("buf[1] = pcb;"));
+    assert!(T1_FRAME_SRC.contains("buf[2] = (len >> 8) as u8; // LEN MSB"));
+    assert!(T1_FRAME_SRC.contains("buf[3] = (len & 0xFF) as u8; // LEN LSB"));
+    assert!(T1_FRAME_SRC.contains("pub const HEADER_LEN: usize = 4;"));
+    assert!(T1_FRAME_SRC.contains("HEADER_LEN + len + 2 // NAD + PCB + LEN(2) + INF + CRC16"));
+    // The driver must call the proven builder rather than re-implement it.
+    assert!(
+        T1OI2C_SRC.contains("pub use sphincs_tz_shared::t1_frame::build_frame;"),
+        "t1oi2c.rs must re-export the Kani-proven build_frame"
+    );
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -704,7 +727,7 @@ fn negative_t1_nad_host_to_se_is_0x5a() {
     // 0xA5 is the SOF the chip emits on the return path. Swapping them
     // silently makes every write malformed at the chip and every read
     // ignored at the host.
-    assert!(T1OI2C_SRC.contains("const NAD_HOST_TO_SE: u8 = 0x5A;"));
+    assert!(T1_FRAME_SRC.contains("pub const NAD_HOST_TO_SE: u8 = 0x5A;"));
 }
 
 #[test]

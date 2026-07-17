@@ -34,8 +34,8 @@ impl From<i2c::I2cError> for T1Error {
 // T1oI2C protocol constants (UM11225 / SE050)
 // ---------------------------------------------------------------------------
 
-/// Node Address: host → SE050.
-const NAD_HOST_TO_SE: u8 = 0x5A;
+// NAD_HOST_TO_SE now lives in `sphincs_tz_shared::t1_frame` alongside the
+// builder that writes it — one definition, not two copies of a wire constant.
 
 /// Max information field size per I-frame.
 const IFSC: usize = 254;
@@ -75,68 +75,33 @@ const PCB_S_INTF_RESET_REQ: u8 = 0xCF; // S-block interface reset request (UM112
 // CRC-16/CCITT (polynomial 0x1021, init 0xFFFF)
 // ---------------------------------------------------------------------------
 
-/// CRC-16 as used by the SE050 T1oI2C protocol (GP 1.0 variant).
-///
-/// Algorithm: reflected CRC with polynomial 0x8408 (bit-reversed 0x1021),
-/// init 0xFFFF, final XOR 0xFFFF. GP 1.0 does NOT byte-swap.
-/// This matches `phNxpEseProto7816_ComputeCRC` in the NXP nano-package
-/// with `T1oI2C_GP1_0` defined.
-fn crc16(data: &[u8]) -> u16 {
-    let mut crc: u16 = 0xFFFF;
-    for &byte in data {
-        crc ^= byte as u16;
-        for _ in 0..8 {
-            if crc & 0x0001 != 0 {
-                crc = (crc >> 1) ^ 0x8408;
-            } else {
-                crc >>= 1;
-            }
-        }
-    }
-    crc ^= 0xFFFF;
-    crc // GP 1.0: no byte-swap
-}
-
 // ---------------------------------------------------------------------------
-// Frame encoding / decoding
+// Frame build/validate — shim over the Kani-proven extraction
 // ---------------------------------------------------------------------------
+//
+// The pure framing logic lives in `sphincs_tz_shared::t1_frame` so it can be
+// host-compiled and bounded-verified (`cargo kani -p sphincs-tz-shared`:
+// panic-freedom on any byte string, build/validate round-trip,
+// accept => CRC-over-declared-span, and a flipped-CRC-bit negative control).
+// Same pattern and same crate as the NS-pointer validator.
+//
+// These are re-export shims, NOT a second copy: a parallel reimplementation
+// beside the driver, with nothing detecting drift, would prove only that the
+// two copies agree — see `docs/verification/hardware-assumption-boundary-
+// 2026-07-17.md` §2. The driver calls the proven code.
 
-// GP 1.0 frame header: NAD(1) + PCB(1) + LEN(2) = 4 bytes
-const HEADER_LEN: usize = 4;
-
-/// Build a T1oI2C frame (GP 1.0 format: 2-byte LEN) into `buf`.
-/// Returns the total frame length.
-fn build_frame(pcb: u8, inf: &[u8], buf: &mut [u8]) -> usize {
-    let len = inf.len();
-    buf[0] = NAD_HOST_TO_SE;
-    buf[1] = pcb;
-    buf[2] = (len >> 8) as u8; // LEN MSB
-    buf[3] = (len & 0xFF) as u8; // LEN LSB
-    buf[HEADER_LEN..HEADER_LEN + len].copy_from_slice(inf);
-    let crc = crc16(&buf[..HEADER_LEN + len]);
-    buf[HEADER_LEN + len] = (crc >> 8) as u8;
-    buf[HEADER_LEN + len + 1] = (crc & 0xFF) as u8;
-    HEADER_LEN + len + 2 // NAD + PCB + LEN(2) + INF + CRC16
-}
+pub use sphincs_tz_shared::t1_frame::build_frame;
 
 /// Validate a received GP 1.0 frame's CRC. Returns (PCB, INF slice).
+///
+/// Thin `FrameError` -> `T1Error` mapping over the proven
+/// `sphincs_tz_shared::t1_frame::validate_frame`; behaviour-identical to the
+/// pre-extraction local copy.
 fn validate_frame(frame: &[u8]) -> Result<(u8, &[u8]), T1Error> {
-    if frame.len() < 6 {
-        return Err(T1Error::Protocol);
-    }
-    let pcb = frame[1];
-    let inf_len = ((frame[2] as usize) << 8) | (frame[3] as usize);
-    let total = HEADER_LEN + inf_len + 2;
-    if frame.len() < total {
-        return Err(T1Error::Protocol);
-    }
-    let computed = crc16(&frame[..HEADER_LEN + inf_len]);
-    let received = ((frame[HEADER_LEN + inf_len] as u16) << 8)
-        | (frame[HEADER_LEN + inf_len + 1] as u16);
-    if computed != received {
-        return Err(T1Error::Crc);
-    }
-    Ok((pcb, &frame[HEADER_LEN..HEADER_LEN + inf_len]))
+    sphincs_tz_shared::t1_frame::validate_frame(frame).map_err(|e| match e {
+        sphincs_tz_shared::t1_frame::FrameError::Malformed => T1Error::Protocol,
+        sphincs_tz_shared::t1_frame::FrameError::Crc => T1Error::Crc,
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -27,6 +27,11 @@ pub mod db_format;
 // extracted host-verifiable from `secure/src/nsc/{ptr_validate,ns_ptr}.rs`
 // for Kani (soundness) + Miri (tree-borrows) — see module docs.
 pub mod ns_ptr_validate;
+/// Pure T=1′ (T1oI2C, GP 1.0) frame build/validate, extracted verbatim from
+/// `secure/src/se050/t1oi2c.rs` so the framing layer beneath SCP03 — the one
+/// every PIN attempt and every PUT KEY crosses — can be Kani-proven host-side.
+/// Same rationale as [`ns_ptr_validate`].
+pub mod t1_frame;
 // Pure silicon-lockdown option-byte decode (RDP level / SECBOOTADD0 boot
 // address) — host-testable; the MMIO reads live in `secure/src/hw/flash.rs`.
 pub mod lockdown;
