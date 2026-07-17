@@ -968,6 +968,72 @@ theorem create2Address_chain_independent
       = create2Address d2 (Factory.salt mpk_seed mpk_root) ich2 := by
   subst hd; subst hi; rfl
 
+/-! ### (I-7) initCode-preimage decomposition — shrinking the `ich1 = ich2` TCB
+
+`create2Address_chain_independent` above takes `ich1 = ich2` (the
+`keccak256(initCode)` chain-freeness) as an OPAQUE hypothesis. The block below
+opens it: the PQSmartWallet `initCode` is `erc1967ProxyCode ‖ implementation`
+(Solady `LibClone.createDeterministicERC1967`; `PQSmartWalletFactory.sol:93`) —
+it carries **no chainId and no chain-bound slot key** (the factory seeds slot 0
+by a SEPARATE post-deploy state write authorized by `addSlot0Digest`, NOT via the
+CREATE2 address preimage). So `initCodeHash` is a function of `implementation`
+ALONE, and the opaque `ich1 = ich2` premise reduces to the homogeneous
+`impl1 = impl2` deployment fact — the SAME shape as the factory-address premise
+`d1 = d2`. -/
+
+/-- **initCode-hash model (I-7, structural).** `keccak256(initCode)` where
+    `initCode = proxyCode ‖ implementation`. `proxyCode` is the fixed Solady
+    `LibClone` ERC-1967 proxy creation code (~55 bytes, compiled in — chain-free by
+    construction, so it is a SHARED binder, the same technique `Factory.salt` uses
+    to witness chain-freeness of its inputs); the initCode hash is a function of
+    `(proxyCode, implementation)` ALONE — no chainId parameter exists to depend on
+    (the factory seeds slot 0 by a SEPARATE post-deploy state write authorized by
+    `addSlot0Digest`, NOT via the address preimage). -/
+def initCodeHash (proxyCode : Spec.ByteSeg) (implementation : ByteVec 32) : ByteVec 32 :=
+  OffchainBinding.keccak256
+    [proxyCode, Spec.ByteSeg.ofByteVec implementation]
+
+/-- (I-7) **initCode hash depends only on `(proxyCode, implementation)`.** The
+    structural content that reduces the opaque `ich1 = ich2` premise: for a fixed
+    (shared) `proxyCode`, equal implementations give equal init-code hashes. Since
+    `initCodeHash` takes no chain id, there is nothing chain-dependent in the
+    initCode preimage — the sole residual is the cross-chain identity of the
+    `implementation` ADDRESS. -/
+theorem initCodeHash_eq_of_impl_eq
+    (proxyCode : Spec.ByteSeg) {impl1 impl2 : ByteVec 32} (h : impl1 = impl2) :
+    initCodeHash proxyCode impl1 = initCodeHash proxyCode impl2 := by
+  subst h; rfl
+
+/-- (I-7) **Address-level chain-independence, TCB-decomposed (P11+, 2026-07-17).**
+    The same conclusion as `create2Address_chain_independent`, but the opaque
+    `ich1 = ich2` premise is REPLACED by the structural `initCodeHash` model + the
+    homogeneous `impl1 = impl2` premise (with `proxyCode` a shared chain-free
+    constant). So the FULL cited-TCB surface for cross-chain address stability
+    (invariant #6) is now exactly TWO HOMOGENEOUS deployment facts —
+    `factory1 = factory2` and `impl1 = impl2` — each an instance of the single
+    receipt "a deterministically-deployed contract (Arachnid `0x4e59…` singleton
+    CREATE2 deployer, salt 0, frozen bytecode) has ONE address on every chain,
+    since the CREATE2 opcode preimage `0xff ‖ deployer ‖ salt ‖ keccak256(initcode)`
+    contains no chainId". That receipt is discharged for the live Base deployment
+    by `contracts/smart-wallet/test/DeployedBytecodeReproCheck.t.sol` (CREATE2
+    replay reproduces factory `0xe8CE78CD…` and implementation `0x31e49D24…`
+    exactly).
+
+    What is now Lean-PROVEN (no longer opaque): the salt is chain-free
+    (`Factory.salt` takes no chain id) AND the initCode preimage is chain-free
+    modulo the implementation address (`initCodeHash` takes no chain id, `proxyCode`
+    is shared). Nothing chain-dependent remains inside the address preimage; the
+    only cited-TCB facts are the two deterministic-deployment address identities,
+    and they are the same fact applied twice. See `OPEN_PROOF_OBLIGATIONS.md` I-7. -/
+theorem create2Address_chain_independent_via_impl
+    (mpk_seed mpk_root : ByteVec 32) (proxyCode : Spec.ByteSeg)
+    (factory1 factory2 impl1 impl2 : ByteVec 32)
+    (hf : factory1 = factory2) (himpl : impl1 = impl2) :
+    create2Address factory1 (Factory.salt mpk_seed mpk_root) (initCodeHash proxyCode impl1)
+      = create2Address factory2 (Factory.salt mpk_seed mpk_root) (initCodeHash proxyCode impl2) := by
+  subst hf
+  rw [initCodeHash_eq_of_impl_eq proxyCode himpl]
+
 /-! ## (I-8) Squat-defence: factory requires bootstrap signature -/
 
 theorem factory_requires_bootstrap_sig
