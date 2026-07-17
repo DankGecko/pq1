@@ -1,0 +1,79 @@
+# 2b-wire capstone gate receipt — 2026-07-17
+# toolchain: fv-sphincsplus-ec:r2026.02 (EC git-hash r2026.02, digest bf1a13e7), Alt-Ergo@2.6.0 + Z3@4.13.4
+# MM45 base 'make docker-check' = 11/11 green (rc=0); easycrypt.project restored (Z3 was dropped by the port author)
+
+start 16:51:58UTC (script 7048 b64 bytes)
+=== closure compile order (21 files, as targets) ===
+  BinaryTrees.ec
+  FORS_C10.ec
+  FORS_C10_Multi.ec
+  Grind.ec
+  HashAddresses.eca
+  KeyedHashFunctions.eca
+  MerkleTrees.ec
+  TweakableHashFunctions.eca
+  WOTS_TW_ES.ec
+  FL_SL_XMSS_MT_ES.ec
+  OpenPRE_From_TCR_DSPR_THF.eca
+  STCR_C.ec
+  FORS_ES.ec
+  SPHINCS_PLUS.ec
+  WOTS_C_Real.ec
+  WOTS_C_Scheme.ec
+  WOTS_C_Reduction.ec
+  WOTS_C_Multi.ec
+  WOTS_C_Bridge.ec
+  WOTS_C_EmbDischarge.ec
+  SPHINCS_C_c10.ec
+############ STAGE G — every closure file compiles AS A TARGET (must all pass) ############
+  ok    BinaryTrees.ec
+  ok    FORS_C10.ec
+  ok    FORS_C10_Multi.ec
+  ok    Grind.ec
+  ok    HashAddresses.eca
+  ok    KeyedHashFunctions.eca
+  ok    MerkleTrees.ec
+  ok    TweakableHashFunctions.eca
+  ok    WOTS_TW_ES.ec
+  ok    FL_SL_XMSS_MT_ES.ec
+  ok    OpenPRE_From_TCR_DSPR_THF.eca
+  ok    STCR_C.ec
+  ok    FORS_ES.ec
+  ok    SPHINCS_PLUS.ec
+  ok    WOTS_C_Real.ec
+  ok    WOTS_C_Scheme.ec
+  ok    WOTS_C_Reduction.ec
+  ok    WOTS_C_Multi.ec
+  ok    WOTS_C_Bridge.ec
+  ok    WOTS_C_EmbDischarge.ec
+  ok    SPHINCS_C_c10.ec
+== rcG=0 (expect 0) ==
+############ CONTROL C1 — drop htree tree premise (recompile capstone as target; must FAIL) ############
+    [-] [0119] 54.0% (-1.0B / [frag -1.0B])[\] [0125] 56.5% (-1.0B / [frag -1.0B])[|] [0126] 57.1% (-1.0B / [frag -1.0B])[/] [0127] 57.2% (-1.0B / [frag -1.0B])[-] [0128] 57.3% (-1.0B / [frag -1.0B])[\] [0129] 57.5% (-1.0B / [frag -1.0B])[|] [0130] 57.7% (-1.0B / [frag -1.0B])[/] [0131] 57.8% (-1.0B / [frag -1.0B])[-] [0132] 58.0% (-1.0B / [frag -1.0B])[\] [0133] 58.2% (-1.0B / [frag -1.0B])[|] [0142] 62.1% (-1.0B / [frag -1.0B])[/] [0143] 62.4% (-1.0B / [frag -1.0B])[-] [0223] 93.6% (-1.0B / [frag -1.0B])[\] [0224] 93.6% (-1.0B / [frag -1.0B])[|] [0225] 93.8% (-1.0B / [frag -1.0B])[/] [0228] 95.6% (-1.0B / [frag -1.0B])                                                                                                      [critical] [/tmp/w/drafts/SPHINCS_C_c10.ec: line 227 (76-81)] expecting a `proof-term', not a `formula'
+    [-] [0228] 95.6% (-1.0B / [frag -1.0B])[\] [0228] 95.6% (-1.0B / [frag -1.0B])
+  ✓ FIRED (rc=1)
+############ CONTROL C2 — zero the ITSRC10 forgery term (must FAIL) ############
+    (WARN: mutation did not match)
+    [-] [0119] 54.4% (-1.0B / [frag -1.0B])[\] [0125] 56.9% (-1.0B / [frag -1.0B])[|] [0126] 57.5% (-1.0B / [frag -1.0B])[/] [0127] 57.7% (-1.0B / [frag -1.0B])[-] [0128] 57.8% (-1.0B / [frag -1.0B])[\] [0129] 57.9% (-1.0B / [frag -1.0B])[|] [0130] 58.1% (-1.0B / [frag -1.0B])[/] [0131] 58.2% (-1.0B / [frag -1.0B])[-] [0132] 58.4% (-1.0B / [frag -1.0B])[\] [0133] 58.6% (-1.0B / [frag -1.0B])[|] [0142] 62.6% (-1.0B / [frag -1.0B])[/] [0143] 62.8% (-1.0B / [frag -1.0B])[-] [0222] 93.5% (-1.0B / [frag -1.0B])[\] [0223] 93.5% (-1.0B / [frag -1.0B])[|] [0224] 93.8% (-1.0B / [frag -1.0B])[/] [0227] 95.5% (-1.0B / [frag -1.0B])[-] [0229] 96.5% (-1.0B / [frag -1.0B])[\] [0238] 100.0% (-1.0B / [frag -1.0B])                                                                                                      [critical] [/tmp/w/drafts/SPHINCS_C_c10.ec: line 229 (0) to line 237 (8)] cannot prove goal (strict)
+    [|] [0238] 100.0% (-1.0B / [frag -1.0B])[/] [0238] 100.0% (-1.0B / [frag -1.0B])
+  ✓ FIRED (rc=1)
+############ CONTROL C3 — remove good_pos (=p_nu) axiom from FORS_C10 (recompile FORS_C10 as target; must FAIL) ############
+    [-] [0131] 40.6% (-1.0B / [frag -1.0B])[\] [0133] 40.7% (-1.0B / [frag -1.0B])[|] [0139] 42.6% (-1.0B / [frag -1.0B])[/] [0140] 42.8% (-1.0B / [frag -1.0B])[-] [0140] 42.9% (-1.0B / [frag -1.0B])[\] [0142] 43.2% (-1.0B / [frag -1.0B])[|] [0144] 43.5% (-1.0B / [frag -1.0B])[/] [0145] 43.5% (-1.0B / [frag -1.0B])[-] [0149] 44.4% (-1.0B / [frag -1.0B])[\] [0150] 44.6% (-1.0B / [frag -1.0B])[|] [0153] 45.2% (-1.0B / [frag -1.0B])[/] [0164] 48.6% (-1.0B / [frag -1.0B])[-] [0167] 48.9% (-1.0B / [frag -1.0B])[\] [0170] 49.6% (-1.0B / [frag -1.0B])[|] [0173] 50.4% (-1.0B / [frag -1.0B])[/] [0176] 51.0% (-1.0B / [frag -1.0B])[-] [0193] 55.4% (-1.0B / [frag -1.0B])[\] [0199] 56.7% (-1.0B / [frag -1.0B])[|] [0202] 57.4% (-1.0B / [frag -1.0B])[/] [0212] 60.3% (-1.0B / [frag -1.0B])[-] [0223] 62.9% (-1.0B / [frag -1.0B])[\] [0266] 71.9% (-1.0B / [frag -1.0B])[|] [0270] 72.3% (-1.0B / [frag -1.0B])[/] [0298] 78.0% (-1.0B / [frag -1.0B])[-] [0319] 81.2% (-1.0B / [frag -1.0B])[\] [0336] 86.1% (-1.0B / [frag -1.0B])[|] [0337] 86.2% (-1.0B / [frag -1.0B])[/] [0338] 86.4% (-1.0B / [frag -1.0B])[-] [0339] 86.4% (-1.0B / [frag -1.0B])[\] [0346] 88.5% (-1.0B / [frag -1.0B])[|] [0346] 88.5% (-1.0B / [frag -1.0B])[/] [0346] 88.7% (-1.0B / [frag -1.0B])                                                                                                      [critical] [/tmp/w/drafts/FORS_C10.ec: line 346 (32-40)] cannot find lemma `good_pos'
+    [-] [0346] 88.7% (-1.0B / [frag -1.0B])[\] [0346] 88.7% (-1.0B / [frag -1.0B])
+  ✓ FIRED (rc=1)
+
+################## VERDICT ##################
+rcG=0  rcC1=1  rcC2=1  rcC3=1
+OVERALL: PASS — capstone-C10 verified as a target over the full closure + all 3 controls fired.
+         good_pos (=p_nu) IS load-bearing → the C10-concrete wire is real, not cosmetic.
+=== GATE EXIT rc=0 17:10:37UTC ===
+
+################## C3' — DISCRIMINATING good_pos CONTROL (post-advisor) ##################
+# C3 fired on `cannot find lemma good_pos` = NAME-resolution (proves referenced, not content).
+# C3' keeps the name, weakens the axiom  0%r < mu dmkey (good m)  ->  0%r <= mu dmkey (good m):
+#   easycrypt compile drafts/FORS_C10.ec  =>  rc=1
+#   [critical] [drafts/FORS_C10.ec: line 346 (7-42)] cannot prove goal (strict)   (= query_ll)
+# => good_pos's STRICT POSITIVITY is content-load-bearing for query_ll (oracle losslessness via
+#    dcond_ll), hence for the FORS_C10 reduction. Resolves the old F2 tension (F2 was right pre-
+#    2026-07-10b, when good_pos was consumed only by the unused good_exists; the GATE-0c fix wired
+#    it into query_ll). Confirmed, not asserted.

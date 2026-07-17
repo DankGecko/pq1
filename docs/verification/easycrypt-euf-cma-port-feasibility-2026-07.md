@@ -1,5 +1,33 @@
 # Mechanizing C10 EUF-CMA in EasyCrypt — a sourced feasibility verdict (2026-07)
 
+> **UPDATE — 2026-07-17 (supersedes the "10/21, skip 11" CAPSTONE status below).**
+> The C10-CONCRETE capstone is now machine-verified in MM45's confirmed toolchain,
+> container-gated. `easycrypt/drafts/SPHINCS_C_c10.ec` — `EUFCMA_SPHINCS_PLUS_C` with its
+> FORS leg routed through the **concrete** `FORS_C10_Multi.MFORSC10` (not the abstract
+> `FORS_C_Multi`) — compiles **as a target over its full 21-file closure** (MM45 base + `+C`
+> drafts + the C10 model) in `fv-sphincsplus-ec:r2026.02` (EC git-hash r2026.02, Z3 4.13.4 +
+> Alt-Ergo 2.6.0). MM45's own base is 11/11 green there. Reproduce:
+> `make -C contracts/verification verify-easycrypt-docker` (needs the out-of-tree MM45 checkout
+> + docker); receipt: `easycrypt/docker/GATE-RECEIPT-2026-07-17.log`.
+>
+> **Why the picture below flipped:** the "10/21 compiled, 11 skipped, abstract capstone" status
+> was a LOCAL-toolchain limitation (the box couldn't build `SPHINCS_PLUS.eco`) — **not** a proof
+> defect. Root cause: the port's `easycrypt.project` had dropped `Z3@4.13.4` (the README requires
+> Z3 4.13.4 **and** Alt-Ergo 2.6.0); Alt-Ergo alone failed the SMT goals and cascaded into
+> misleading type-mismatches. Restoring Z3 makes MM45's base + the C10 closure verify. The
+> C10-representability stop/go the correction demanded is answered concretely: the C10-faithful
+> `FORS_C10` model compiles and is load-bearing — a weakened-axiom control (`<` → `<=`) shows
+> `good_pos`'s **strict** positivity is required for `query_ll`'s oracle-losslessness.
+>
+> **HONEST SCOPE — do not over-read.** This is NOT an end-to-end EUF-CMA proof. It stays a
+> **conditional composition**: `hfx` (FX skeleton), `hbridge` (XMSS-MT), `htree` (FORS tree
+> cluster) are carried labelled hypotheses, NOT discharged (controls C1/C2 confirm they are
+> load-bearing). The C10 wire upgrades ONLY the FORS leg abstract→concrete. The capstone's LIVE
+> assumption set **grew**: `good_pos` (=p_ν) + `FORS_C10`'s g-structure axioms are now in its
+> closure (traded for the dropped `good_counter_exists` premise). The ITSRC10 assumption and the
+> MM45-base axioms remain assumed. The ~6–18 person-month estimate for a full self-contained
+> proof stands.
+
 > **Controlling correction — 2026-07-15.** The historical progress log below
 > remains useful, but its optimistic “concrete C10” and near-capstone language
 > is superseded. The full wrapper currently exits successfully after compiling

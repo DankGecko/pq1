@@ -87,7 +87,10 @@ declare -A EXPECTED_ADMITS=(
   [WOTS_C_Interactive.ec]=1   # interactive S-TCR(+C) sim; orphaned
 )
 EXPECTED_TOTAL_AXIOMS=8       # dpp_ll, dmkey_ll, good_pos, size_g, eqiks_g, neqisvs_g, rng_g, uniq_g
-EXPECTED_TOTAL_EC=21          # F5: --full requires all 21 .ec compiled, zero skips
+EXPECTED_TOTAL_EC=22          # F5: --full requires all .ec compiled, zero skips. 22nd =
+                              # SPHINCS_C_c10.ec (C10-concrete capstone, 2026-07-17): MM45-chain,
+                              # SKIPPED here, VERIFIED as a target only in the docker gate
+                              # (docker/gate-c10-capstone.sh + GATE-RECEIPT-2026-07-17.log).
 
 # NESTING-AWARE sweep (scripts/ec_sweep.py) — a naive comment strip over/under-counts.
 sweep()          { python3 "$HERE/ec_sweep.py" "$1"; }

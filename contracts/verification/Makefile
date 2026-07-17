@@ -243,6 +243,30 @@ verify-easycrypt-pins: ## EasyCrypt admit/axiom + semantic pin ledger (no toolch
 	@bash scripts/check_easycrypt.sh --self-test
 	@bash scripts/check_easycrypt.sh --dry-run
 
+# 2026-07-17: the C10-CONCRETE capstone (easycrypt/drafts/SPHINCS_C_c10.ec — the FORS leg
+# routed through the concrete FORS_C10_Multi, not the abstract FORS_C_Multi) is VERIFIED only
+# in MM45's confirmed toolchain (EC r2026.02 + Z3 4.13.4 + Alt-Ergo 2.6.0), which does NOT build
+# locally. This target reproduces the container gate: compile EVERY closure file AS A TARGET
+# (sound — EC `require` does not re-verify deps) + 3 honesty controls (htree, ITSRC10, good_pos
+# strict-positivity). Needs a local MM45 checkout (C10_PORT_DIR, with its FV-SPHINCSPLUS-EC
+# submodule — third-party, NOT vendored) + docker. Absent either, it prints the committed
+# receipt, which is the primary evidence. STILL a conditional composition (hfx/hbridge/htree
+# carried); see easycrypt/docker/GATE-RECEIPT-2026-07-17.log.
+C10_PORT_DIR ?= $(HOME)/repos/c10-eufcma-port
+DOCKER ?= docker
+.PHONY: verify-easycrypt-docker
+verify-easycrypt-docker: ## EasyCrypt C10-capstone gate in MM45's r2026.02 docker image (needs C10_PORT_DIR + docker)
+	@if ! $(DOCKER) info >/dev/null 2>&1; then \
+	  echo "SKIP: docker unavailable — the committed receipt (primary evidence) follows:"; echo; \
+	  cat easycrypt/docker/GATE-RECEIPT-2026-07-17.log; exit 0; fi
+	@if [ ! -d "$(C10_PORT_DIR)/FV-SPHINCSPLUS-EC/proofs" ]; then \
+	  echo "SKIP: MM45 base absent at $(C10_PORT_DIR) (third-party, not vendored) — receipt follows:"; echo; \
+	  cat easycrypt/docker/GATE-RECEIPT-2026-07-17.log; exit 0; fi
+	$(DOCKER) build -t fv-sphincsplus-ec:r2026.02 "$(C10_PORT_DIR)/FV-SPHINCSPLUS-EC"
+	@B64=$$(base64 -w0 easycrypt/docker/gate-c10-capstone.sh); \
+	 $(DOCKER) run --rm -v "$(C10_PORT_DIR)":/work:ro fv-sphincsplus-ec:r2026.02 \
+	   bash -c "echo $$B64 | base64 -d > /tmp/g.sh && bash /tmp/g.sh"
+
 # FORS+C GRINDING MARGIN (bounds the blast radius of the A5-ITSR literature gap:
 # the published SPHINCS+C paper has NO FORS+C security theorem). Pins that FORS+C
 # is never weaker than plain FORS at C10's params, and FAILS if the removed
