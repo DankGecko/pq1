@@ -45,6 +45,7 @@ pub(super) fn render_intent_banner(
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     format: &FormatHeader<'_>,
+    derived_intent: Option<&[u8]>,
 ) -> Result<(), RenderErr> {
     #[cfg(feature = "erc7730-dev-unattested")]
     {
@@ -70,7 +71,11 @@ pub(super) fn render_intent_banner(
     //                        name (owner drops — the intent earns the space).
     //   row3 = "> next" nav hint (unchanged, for cross-page consistency).
     const W: usize = 16;
-    let intent = format.intent;
+    // A derived intent may summarize already authenticated signed bytes, but
+    // never replaces the field pages below. The only current caller override
+    // is exact-zero ERC-20 approval after strict canonical decode plus a
+    // chain+contract-bound metadata capability.
+    let intent = derived_intent.unwrap_or(format.intent);
 
     let mut row0 = [b' '; W];
     let r0_take = intent.len().min(W);

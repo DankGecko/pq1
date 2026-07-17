@@ -3156,6 +3156,89 @@ for implementation acceptance and merge at that identity**. The frozen
 actionable landing ledger. No raw report is rewritten, and no result transfers
 authority to forced-blind v2.
 
+**Owner scope correction — 2026-07-17.** Stop expanding this engineering
+slice into additional adversarial-playbook or cross-adjudication campaigns.
+Those assurance passes are deferred and remain required before any merge,
+production or shipment recommendation; they do not block continuing the
+bounded PQ1 ERC-7730 implementation work below. The later implementation
+candidate frozen at `HEAD=927d91365a28ce9a6782e3c77449967ca094b826`
+(`AGGREGATE_SHA256=fb3a5e7ffbb050d7b193efa6b21663b8104e32ce4c6af2c4cd2a8622d2db051d`)
+has a frozen Partner A first pass, but no accepted Partner B report and
+therefore no fresh exact pair or cross result. Partner B v8 and retry 2 each
+ended `UNAVAILABLE / NO VERDICT` after the provider returned
+`Selected model is at capacity`; retry 3 completed 130 read-only inspection
+commands but was then rejected by the provider cybersecurity classifier before
+emitting a report. All three attempts produced zero report, preserved the
+target identity and used zero actual subagents. Preserve their frozen runtime
+receipts as process evidence only; do not retry now, infer a verdict from
+partial transcripts, or claim review closure. Return scope to the ERC-7730
+product work and retain the current hard-refusal behavior as the forced-blind
+rollback state until the owner chooses the still-open volatile prompt
+budget/cooldown/deadline/reset semantics.
+
+Retry 3 is frozen at
+`/var/tmp/pq1-erc7730-b-clean-freeze-927d9136-v8-r3`. Its exact
+`FILES_SHA256` is
+`8a556d32b0f51b9947fc0ce5b8216c8fcf75ae7ce68e167d60ee38272d393e45`;
+short artifact IDs are raw transcript `749b62…2bd4`, evidence `fcb5ed…897`, failure receipt
+`640a14…3ab`, runtime audit `db4e6b…4cf`, and control manifest
+`e4b715…16a`. These hashes identify an unavailable/no-verdict receipt, not a
+review report.
+
+- [x] **[pq1-kimi-k3-reviewer-tooling, process, S] Register Kimi K3 as a
+  supplemental reviewer agent.** The login-shell PATH resolves Kimi Code
+  0.27.0 at `~/.kimi-code/bin/kimi`; managed OAuth resolves
+  `kimi-code/k3` to provider/model `kimi/k3`, with max thinking and the
+  1,048,576-token context recorded in the reviewer workflow. A clean-directory
+  wire/session smoke returned the exact `K3_READY` control and recorded that
+  runtime identity. Kimi is supplemental only: it cannot replace either
+  required A/B leg, cast a third disposition vote, or cure a missing mandatory
+  report. The smoke is tooling evidence, not a PQ1 review.
+
+- [x] **[pq1-batch-write-extent-recheck, P0, Partner-A PA-01, S] Restore the
+  final non-secure output-extent gate in `cmd_sign_userop_batch`.** Mirror the
+  single and off-chain handlers immediately before the first response write,
+  so one skipped early reject branch cannot turn the post-confirmation output
+  into a secure-SRAM corruption primitive. The dereference-site gate, sentinel
+  scrub, corrected early-gate comment and two-gate/order source regression are
+  implemented; secure release host tests are green (2,217 passed, 0 failed,
+  1 ignored). Optimized inspection of the canonical dev/mock Thumb ELF
+  `1077bbd9…7323` confirms the late scrub/call/verdict gate at
+  `0x10010da8..0x10010db8`, its full `MAX_SIGN_RESPONSE_LEN=12,556` extent
+  check at `0x10001338`, the reject branch to the `"bad out"` status path at
+  `0x1001106e`, and the first response write only afterward at `0x10010ddc`.
+- [~] **[pq1-erc8176-test-atomic-landing, P0, Partner-A PA-02, process, S]
+  Land the ERC-8176 checker regression file atomically with its Make/CI
+  enrollment.** `tools/test_erc8176_eas_coverage.py` exists and passes locally
+  but remains untracked, so the frozen tracked diff would fail on a fresh
+  clone. Do not stage or commit without owner authorization; until then, keep
+  the 12/12 result explicitly working-tree-local and do not claim merge
+  readiness.
+- [~] **[pq1-paymaster-completion-parity, P1, Partner-A PA-03, M] Give the
+  mandatory paymaster page the same caller-owned completion/CFI and exact
+  final-set proof used by the other mandatory handler pages.** Preserve the
+  legitimate absent-paymaster path, fail closed on skipped publication or
+  page corruption, and cover the single confirmation plus the one batch-final
+  summary where the outer UserOp-level paymaster is deliberately shown once.
+  Implemented with caller-owned CFI plus immediate and final exact-index,
+  exact-content and global-uniqueness proofs in both required contexts. Host
+  tests cover absent-skip completion, corruption, wrong index, duplicate,
+  absent injection and full-buffer failure and are green in the 2,217-passed
+  secure release run. Optimized inspection of canonical dev/mock Thumb ELF
+  `1077bbd9…7323` retains the single and batch append calls, scrub-separated
+  CFI/content proofs (`0x1000ba38..0x1000ba74` and
+  `0x1000f8ac..0x1000f8ec`) and final-set proofs
+  (`0x1000bd60..0x1000bd8e` and `0x1000fd3c..0x1000fd70`). Keep `[~]`
+  solely because executable FI inspection is deferred by owner direction;
+  the optimized-retention sub-gate is complete.
+- [x] **[pq1-review-minor-cleanups, P2, Partner-A PA-06/07/08, S] Apply the
+  bounded drift/consistency cleanups.** Route batch flag extraction through the
+  Kani-proven `decode_flags` kernel, scrub before the first Safe claim sentinel
+  check, and disambiguate the three different five-context/test counts in the
+  ERC-8213 TODO prose. Completed and covered by the green secure release host
+  suite. These are defense-in-depth/readability changes, not new signing
+  eligibility or review closure.
+
 - [~] **[pq1-7730-blind-review, P0, MATERIAL REDLINE / FRESH DUAL REVIEW
   REQUIRED] Add a transaction-local forced-blind option without weakening the
   default refusal.** The frozen v1 candidate is rejected; do not implement it.
@@ -3412,8 +3495,9 @@ authority to forced-blind v2.
   evidence remain open.
 - [~] **[pq1-erc8213-confirmation-proof, P0, NARROWED + OWNER-SPECIFIED
   ROTATION EXEMPTION, M] Completion-prove every actual fingerprint and state
-  the Type-1 rotation exemption exactly.** Three of five UserOp confirmation contexts append a
-  fingerprint; single and batch rotation do not. A reads the five-context S3
+  the Type-1 rotation exemption exactly.** Three of the five UserOp
+  confirmation contexts append a fingerprint; the two rotation contexts do
+  not. A reads that five-context S3
   sentence as gas-specific while B reads it as a literal fingerprint mandate,
   so that wording remained UNRESOLVED after the one bounded response. The exact
   Type-1 calldata includes secret-derived `slot_owner_bytes`, created roughly
@@ -3427,13 +3511,14 @@ authority to forced-blind v2.
   before each confirmation. A future exact 5/5 design is a separate material
   lifecycle/runtime slice.
   The live implementation now uses one non-inlined caller-CFI append API and
-  exact transition/final-set proofs in all five real contexts: single main,
+  exact transition/final-set proofs at all five actual fingerprint append
+  sites: single main,
   batch member, batch final, offchain typed data, and offchain personal/raw32.
   Kind, both indices, label and all 32 hash bytes are rebuilt independently;
   wrong-kind/hash/index, corruption, short-capacity and skipped-call controls
   fail closed. The generated guide and fingerprint documentation state the
-  rotation exemption and forbid a synthetic digest. Focused ERC-8213 tests
-  passed 5/5 plus all handler-context source pins; current QEMU paints complete
+  rotation exemption and forbid a synthetic digest. The five focused ERC-8213
+  test cases passed, plus all handler-context source pins; current QEMU paints complete
   fingerprints across the single, batch and off-chain flows. Fresh exact
   review remains.
 - [~] **[pq1-slot-rotation-injective, P0, CONFIRMED MEDIUM WYSIWYS, S] Render
@@ -3499,8 +3584,8 @@ authority to forced-blind v2.
   codegen checks in sync, and QEMU 39 PASS markers including the final sentinel
   (`b8d83774…2492`). The canonical optimized dev/mock Thumb artifact at the
   same firmware source has ELF/map/disassembly/stack-report SHA-256 values
-  `149f498f…12e5` / `41ad0a35…abc8` / `f2c378d6…daa4` /
-  `bd16d8a0…01a`, 306,784/475,136 bytes of FLASH, 51,560 bytes `.bss`, and
+  `149f498f…12e5` / `3664be68…e3c` / `d00fc87c…f43c` /
+  `41ee4472…0739`, 306,784/475,136 bytes of FLASH, 51,560 bytes `.bss`, and
   47,952-/31,328-byte batch/single local frames. This is E1/E3/E4 evidence,
   not a source-identity freeze, whole-call stack proof, physical FI/UI test,
   production build, release or shipment evidence.
@@ -3521,7 +3606,7 @@ authority to forced-blind v2.
   `(chain, contract)` metadata could qualify. Unknown tokens, Permit2,
   ERC-721-colliding `approve`, malformed framing and metadata mismatch remain
   ineligible. This row cannot broaden the forced-blind clean-absence class.
-- [ ] **[pq1-7730-upstream-fixtures, P1, M] Add a test-only upstream conformance
+- [~] **[pq1-7730-upstream-fixtures, P1, M] Add a test-only upstream conformance
   lane.** Import the registry's positive `expectedTexts` fixtures without
   putting fixture bytes in the production root; compare normalized semantic
   transcripts and maintain explicit, reviewed waivers where the 16×4 trusted
@@ -3529,7 +3614,30 @@ authority to forced-blind v2.
   ABI tails, wrong offsets, overlap/aliasing, extra bytes, wrong deployment or
   chain, malformed proofs, visibility hiding, and boundary magnitudes. Inventory
   descriptors with no upstream test and never interpret a positive-only corpus
-  as downgrade-safety evidence.
+  as downgrade-safety evidence. **First bounded slice landed (2026-07-17):**
+  all 272 fixture files / 687,949 bytes / 510 cases from pinned upstream
+  `784c87c9…a265` now live only under `tests/erc7730-upstream-fixtures/`, with
+  the existing excluded-fixture receipt `689a0904…685f` independently
+  reproduced. The dbgen host lane validates every schema/mapping, all 362
+  calldata and 148 EIP-712 case shapes, raw-transaction RLP classes, the 3,976
+  expected strings and every declared presentation-hazard count. It also
+  inventories 228 accepted descriptor sources: 143 have an upstream fixture
+  and 85 do not; 129 tested sources are currently not accepted. A valid Lido
+  claim runs raw transaction → production parser → Merkle-verified descriptor
+  → binding → real PQ1 renderer and matches in order with exact fail-on-unused
+  Ledger-shell waivers; decimal request ID `117007` is compared to the complete
+  signed 256-bit word PQ1 renders. The upstream WETH `deposit()` "positive"
+  contains one trailing calldata byte and is retained as an explicit PQ1
+  refusal, not waived into conformance. Evidence: focused lane 3/0, full dbgen
+  247/0, and `gen-erc7730-descriptors --check` in sync. At this slice's landing
+  the production root remained `048fd2f1…b142`; the subsequently completed
+  native-currency-list and NFT-identity rows intentionally rotate it to
+  `0706d763…17d2ed`. **Still open:**
+  broaden enrolled semantic transcripts,
+  signed-Type-2/legacy adapters, EIP-712 encoding, exact per-case difference
+  waivers, generated adversarial negatives, and missing-target inventory at
+  format rather than accepted-source granularity. Positive cases remain
+  explicitly insufficient as downgrade-safety evidence.
 - [ ] **[pq1-7730-provenance, P1, M] Mechanize registry provenance and reviewable
   updates.** Complete the existing §2.1/§2.3 owner items in
   `docs/erc7730-implementation-review-2026-07.md`: explicit upstream SHA,
@@ -3537,37 +3645,107 @@ authority to forced-blind v2.
   in-place edits, deterministic `diff-registry`, and signed-release-manifest
   binding. Preserve the existing root-rotation policy as owner; do not create a
   second ceremony.
-- [ ] **[pq1-7730-native-currency-list, P1, DESIGN, M] Support bounded
+- [x] **[pq1-7730-native-currency-list, P1, DESIGN, M] Support bounded
   `nativeCurrencyAddress` lists.** Authenticate the complete descriptor list,
   cap its length, compare every entry exactly, bind chain-native ticker/decimals,
   and render an unmatched address as an unverified token rather than assuming
-  native currency. Reconcile with existing review item 3.4/3.5.
-- [ ] **[pq1-7730-device-from, P1, M] Bind descriptor `@.from` to the
+  native currency. Reconcile with existing review item 3.4/3.5. **Completed
+  2026-07-17:** tag `0x42` retains its byte-identical legacy 20-byte scalar
+  payload and accepts a descriptor-ordered payload of at most two complete
+  20-byte addresses; no header/schema version bump was needed, and older
+  firmware cannot authenticate the rotated root. Dbgen resolves constant and
+  field references after definition merge and rejects empty, malformed,
+  non-string, unresolved, duplicate or oversized lists. Firmware requires
+  exact membership across every authenticated entry. On a known chain a match
+  uses the chain-native ticker/18 decimals; an unknown chain or any one-byte
+  address miss stays raw/unverified. A real pinned 1inch
+  `AggregationRouterV4` descriptor now contributes one leaf with two accepted
+  selectors; its `clipperSwap`/`clipperSwapTo` fields authenticate the ordered
+  ETH-sentinel plus zero-address pair and run through Merkle verification,
+  independently derived device-signer binding and the real PQ1 renderer.
+  At completion of this slice, the production catalogue was 421 leaves /
+  335,691 bytes / root
+  `aed2d8926a7b3c3ed40e46fedf82aabc89a89cdfdac63eca0452dab94eb92b02`;
+  the 4,542-call set and its hash remain unchanged, and the descriptor generator
+  is in sync. Evidence: `pqsigner-erc7730` 200/0, dbgen 244/0, secure release
+  2,218 passed / 0 failed / 1 ignored, canonical dev/mock Thumb build green
+  (477,996 bytes; SHA-256 `2844310f…125da`). This is bounded implementation
+  evidence, not a fresh adversarial review, executable FI, production or ship
+  authority.
+- [x] **[pq1-7730-device-from, P1, M] Bind descriptor `@.from` to the
   independently derived device signer.** Thread the handler-derived wallet
   address into contract rendering; never accept a companion-provided sender.
   Retain the mandatory full signer page and add wrong-account, byte-flip,
-  single/batch attribution and descriptor-path tests. The reviewed Ambire
-  corpus uses `@.from` in 39 fields across 14 source files, while PQSigner
-  currently rejects the wire op as unbound in
-  `pqsigner-erc7730/src/display/render/formatters.rs`.
-- [ ] **[pq1-7730-revoke-copy, P2, S] Derive “Revoke approval” only from an
+  single/batch attribution and descriptor-path tests. Completed with an
+  explicit `render_erc7730_pages_with_signer` capability: single and every
+  batch member pass the independently derived `&sender`; no sender enters the
+  generic transaction object or comes from companion data. Generic contract
+  and both EIP-712 entry points still fail closed on `@.from`. Raw output is
+  the exact ABI address word (12 zero bytes plus all 20 signer bytes), while
+  address formatters bind the same value; every signer-byte flip changes the
+  transcript. A real vendored Celo `createAccount()` descriptor now renders
+  its `@.from`, the dbgen test pins the exact path bytes, handler source guards
+  pin single/batch attribution, and the contract-render fuzz target supplies
+  an independent signer. Evidence: `pqsigner-erc7730` 196/0, dbgen 237/0,
+  secure release 2,217 passed / 0 failed / 1 ignored, fuzz-target check green,
+  canonical dev/mock Thumb build green, and `git diff --check` clean. This is
+  bounded implementation evidence, not fresh dual review, executable FI,
+  merge, production or shipment authority.
+- [x] **[pq1-7730-revoke-copy, P2, S] Derive “Revoke approval” only from an
   exact signed zero allowance.** Keep spender, zero amount, token contract and
-  chain visible. Enable the wording only for an authenticated ERC-20
-  capability or verified descriptor with canonical approval framing; never
-  infer it from selector-only calldata because ERC-721 shares
-  `approve(address,uint256)`.
+  chain visible. Completed without a schema/root change. Direct and Safe ERC-20
+  paths derive the copy only after their exact Merkle-authenticated
+  `(chain, contract)` metadata gate. ERC-7730 additionally requires strict
+  canonical 68-byte calldata, all 256 allowance bits zero, matching
+  transaction/IR/metadata chain+contract, and an authenticated visible-field
+  witness: `AddressName` at word 0 plus `TokenAmount` at word 1 whose tokenPath
+  resolves to that same contract. Those normal pages retain spender, exact zero,
+  full token contract and chain; the derived banner replaces none of them.
+  Missing/wrong-chain/wrong-contract metadata and every one-byte nonzero amount
+  mutation retain the descriptor's ordinary approval intent. Unknown-token
+  selector-only calls remain `approve`; a real accepted Lido ERC-721
+  `approve(..., tokenId=0)` remains `Approve unstETH NFT`. Evidence: six focused
+  revoke tests, full secure release 2,217 passed / 0 failed / 1 ignored,
+  `pqsigner-erc7730` 196/0, fuzz-target check and canonical dev/mock Thumb build
+  green, `git diff --check` clean. This is bounded implementation evidence, not
+  fresh dual review, production or shipment authority.
 - [ ] **[pq1-7730-interpolated-intent, P2, DESIGN, M] Support
   `interpolatedIntent` only as derived presentation.** Every substitution must
   come from an independently rendered, signed-byte-bound value; the intent may
   summarize but never replace the underlying field pages. Reject missing,
   hidden, clipped, ambiguous or unrenderable substitutions. This is the
   existing companion-guide §12.2 owner item, not a parallel specification.
-- [ ] **[pq1-7730-nft, P2, DESIGN, M] Complete injective NFT collection
-  identity.** The exact raw token-ID fallback is already implemented; add the
-  complete collection contract alongside it. A friendly collection name is
-  permitted only when authenticated by a chain+contract-bound metadata
-  capability; missing metadata keeps the raw identity, never a guessed name or
-  blind downgrade. Reconcile with review item 3.2 and guide §12.4.
+  **Design assessment (2026-07-17):** the pinned registry contains 89 formats
+  across 29 files and 103 placeholder occurrences. Safe interpolation needs a
+  post-render, signed-byte-bound field witness; the current formatters paint
+  pages but return no canonical rendered-value receipt. The first admissible
+  slice is therefore limited to at most three always-visible scalar amounts,
+  retains their underlying pages, and requires the complete interpolated line
+  to fit the display. Do not implement this as direct path-to-string
+  substitution.
+- [x] **[pq1-7730-nft, P2, DESIGN, M] Complete injective NFT collection
+  identity.** Completed 2026-07-17 with dedicated IR tags `0x44` (literal
+  20-byte collection) and `0x45` (compiled static-address path). Exactly one is
+  mandatory; malformed, duplicate, missing, mutually specified, non-address,
+  or unsupported container paths reject. The container namespace is frozen
+  independently of ABI argument names, and only `@.to` is admitted for this
+  first slice, closing the discovered `to` argument shadowing collision. The
+  device retains the exact raw token-ID fallback (decimal only when lossless,
+  otherwise all 32 bytes) and always adds the complete 20-byte collection
+  address. Descriptor `contractName` qualifies only when the resolved
+  collection equals the IR-bound contract; otherwise a friendly name requires
+  exact `(chain, address)` metadata. Chain-zero wildcard metadata never
+  qualifies, and absence of a name keeps the raw identity without a blind
+  downgrade. Seven real registry deployments / 12 formats now exercise the
+  path through Merkle verification and the PQ1 renderer. Current production
+  catalogue: 428 leaves / 340,016 bytes / root
+  `0706d763061ecfb0668ba7bdcf81e7159a6e541bae090b8678e5c9f31517d2ed`;
+  the 4,542-call set and its hash remain unchanged. Evidence:
+  `pqsigner-erc7730` 203/0, dbgen 247/0, secure release 2,219 passed / 0 failed /
+  1 ignored, descriptor generator in sync, canonical dev/mock Thumb build green
+  (479,052 bytes; SHA-256 `b5fa1f34…27d75`), and `git diff --check` clean.
+  This is bounded implementation evidence, not a fresh adversarial review,
+  executable FI, production or shipment authority.
 - [ ] **[pq1-7730-nested-calldata, P2, DESIGN-FIRST, L] Add nested calldata only
   with child semantic proofs.** Bind the child target, selector, exact byte
   interval and parent path; cap recursion/depth/pages; reject overlaps,

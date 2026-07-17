@@ -31,6 +31,20 @@
 pub mod primitives;
 pub mod render;
 
+/// ERC-8213 trusted-display layout constants consumed by the secure renderer
+/// and the generated companion semantic manifest.
+pub mod erc8213_contract {
+    /// Banner plus complete-hash page.  Appending is atomic: either both fit or
+    /// the signing caller refuses.
+    pub const FINGERPRINT_PAGES: usize = 2;
+    /// ERC-8213 fingerprint width surfaced on the trusted display.
+    pub const HASH_BYTES: usize = 32;
+    /// Bytes encoded as hex on each 16-column row.
+    pub const HASH_BYTES_PER_ROW: usize = 8;
+
+    const _: () = assert!(HASH_BYTES_PER_ROW * super::DISPLAY_ROWS == HASH_BYTES);
+}
+
 /// Logical display dimensions (cells, not pixels). MUST equal the secure
 /// crate's `crate::ui::{DISPLAY_COLS, DISPLAY_ROWS}` — pinned by the asserts
 /// below and by `secure/src/ui_under_test`, so the two sides can never drift

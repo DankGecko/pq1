@@ -51,14 +51,17 @@ pub(crate) mod value_transfer;
 
 pub(crate) use value_page::{
     enforce_from_page, enforce_paymaster_page, enforce_target_page, from_page_matches,
-    from_page_proof, target_page_matches, target_page_proof, SIGNER_IDENTITY_PAGES,
-    TARGET_IDENTITY_PAGES,
+    from_page_proof, paymaster_final_set_proof, paymaster_page_proof, target_page_matches,
+    target_page_proof, PAYMASTER_PAGE_CFI_EXPECTED, SIGNER_IDENTITY_PAGES,
+    SIGNER_PAGE_CFI_EXPECTED, TARGET_IDENTITY_PAGES, TARGET_PAGE_CFI_EXPECTED,
 };
 pub(crate) use nonce_lane::{
-    enforce_nonce_lane_page, nonce_lane_page_proof, NONZERO_NONCE_LANE_PAGES,
+    enforce_nonce_lane_page, nonce_lane_page_proof, NONCE_LANE_CFI_EXPECTED,
+    NONZERO_NONCE_LANE_PAGES,
 };
 pub(crate) use userop_gas_lane::{
-    enforce_userop_gas_page, userop_gas_page_proof, USEROP_GAS_PAGES,
+    enforce_userop_gas_page, userop_gas_final_set_proof, userop_gas_page_proof,
+    USEROP_GAS_CFI_EXPECTED, USEROP_GAS_PAGES,
 };
 pub use blind_sign::render_blind_sign_pages;
 pub use eip1271::{render_eip1271_personal_sign_pages, render_eip1271_raw32_pages};
@@ -100,5 +103,7 @@ pub use pqsigner_erc7730::display::{Pages, MAX_PAGES};
 // verbatim to `dispatch.rs` (2026-07-06) so the host WYSIWYS glue harness
 // can `#[path]`-mount the real body — see `display_under_test::dispatch`
 // and `display_under_test/wysiwys_dispatch_differential_tests.rs`.
+#[cfg(not(test))]
+pub(crate) use dispatch::{legacy_fee_pages_required, DispatchPageProofs};
 #[cfg(not(test))]
 pub use dispatch::pick_sign_pages;

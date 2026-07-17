@@ -1,0 +1,693 @@
+//! Test-only conformance lane for the pinned upstream ERC-7730 positives.
+//!
+//! The imported fixture bytes live under `tests/erc7730-upstream-fixtures/`,
+//! outside every production catalogue input. This test owns two deliberately
+//! separate claims:
+//!
+//! 1. the complete upstream positive corpus is byte-receipted, structurally
+//!    valid, mapped to a descriptor, and honestly inventoried; and
+//! 2. individually enrolled cases can be decoded and compared against the
+//!    actual PQ1 renderer, with exact per-token waivers that must all be used.
+//!
+//! Positive fixtures are not downgrade-safety evidence. Adversarial negative
+//! generation remains a separate open work item.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+use pqsigner_erc7730::binding::cross_check_contract;
+use pqsigner_erc7730::bundle::verify_erc7730_bundle;
+use pqsigner_erc7730::display::render::render_erc7730_pages;
+use pqsigner_tx::names::NameResolver;
+use pqsigner_tx_core::eip1559;
+use pqsigner_tx_core::rlp::{decode_item, Item, ListIter};
+use serde::Deserialize;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+const UPSTREAM_SHA: &str = "784c87c925e8438e7b4736b2af85a501f8d2a265";
+const FIXTURE_RECEIPT_DOMAIN: &[u8] = b"pqsigner/erc7730-excluded-fixture-corpus-v1";
+const FIXTURE_RECEIPT_HEX: &str =
+    "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
+// Intentional 2026-07-17 rotation: bounded nativeCurrencyAddress list support
+// plus injective nftName collection identity admit the real 1inch and Flying
+// Tulip slices while test-only fixture bytes remain outside the catalogue.
+const PROD_ROOT_HEX: &str = "0706d763061ecfb0668ba7bdcf81e7159a6e541bae090b8678e5c9f31517d2ed";
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("dbgen sits one level below the workspace root")
+        .to_path_buf()
+}
+
+fn fixture_root() -> PathBuf {
+    workspace_root().join("tests/erc7730-upstream-fixtures")
+}
+
+fn prod_registry_root() -> PathBuf {
+    workspace_root().join("secure/data/erc7730-registry/registry")
+}
+
+fn collect_regular_files(dir: &Path, suffix: &str, out: &mut Vec<PathBuf>) {
+    let metadata = std::fs::symlink_metadata(dir)
+        .unwrap_or_else(|error| panic!("inspect {}: {error}", dir.display()));
+    assert!(metadata.is_dir(), "not a directory: {}", dir.display());
+    assert!(
+        !metadata.file_type().is_symlink(),
+        "symlinked fixture directory: {}",
+        dir.display()
+    );
+
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
+        .map(|entry| entry.expect("read fixture entry"))
+        .collect();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let kind = entry.file_type().expect("fixture entry type");
+        assert!(
+            !kind.is_symlink(),
+            "symlinked fixture entry: {}",
+            path.display()
+        );
+        if kind.is_dir() {
+            collect_regular_files(&path, suffix, out);
+        } else if kind.is_file() {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("UTF-8 fixture name");
+            if name.ends_with(suffix) {
+                out.push(path);
+            }
+        } else {
+            panic!("unsupported fixture filesystem entry: {}", path.display());
+        }
+    }
+}
+
+fn fixture_files() -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    collect_regular_files(&fixture_root().join("registry"), ".tests.json", &mut files);
+    files.sort();
+    files
+}
+
+fn fixture_receipt(files: &[PathBuf]) -> ([u8; 32], u64) {
+    let root = fixture_root();
+    let count = u64::try_from(files.len()).expect("fixture count fits u64");
+    let mut aggregate = Sha256::new();
+    aggregate.update(FIXTURE_RECEIPT_DOMAIN);
+    aggregate.update(count.to_be_bytes());
+    let mut total_bytes = 0u64;
+    for path in files {
+        let relative = path.strip_prefix(&root).expect("fixture beneath root");
+        let relative = relative.to_str().expect("UTF-8 fixture path");
+        let bytes = std::fs::read(path).expect("read fixture bytes");
+        let path_len = u32::try_from(relative.len()).expect("fixture path fits u32");
+        let file_len = u64::try_from(bytes.len()).expect("fixture size fits u64");
+        total_bytes = total_bytes
+            .checked_add(file_len)
+            .expect("fixture byte sum fits u64");
+        aggregate.update(path_len.to_be_bytes());
+        aggregate.update(relative.as_bytes());
+        aggregate.update(file_len.to_be_bytes());
+        aggregate.update(Sha256::digest(&bytes));
+    }
+    let mut receipt = [0u8; 32];
+    receipt.copy_from_slice(&aggregate.finalize());
+    (receipt, total_bytes)
+}
+
+#[derive(Default, Debug)]
+struct FixtureStats {
+    files: usize,
+    entities: BTreeSet<String>,
+    calldata_files: usize,
+    eip712_files: usize,
+    cases: usize,
+    calldata_cases: usize,
+    eip712_cases: usize,
+    tx_hash_cases: usize,
+    expected_strings: usize,
+    empty_expected_cases: usize,
+    odd_expected_cases: usize,
+    interaction_with: usize,
+    max_fees: usize,
+    address_like_wrapped: usize,
+    numeric_wrapped: usize,
+    unresolved_ticker: usize,
+    truncated_more: usize,
+    over_pq1_page: usize,
+    type2_cases: usize,
+    type2_unsigned: usize,
+    type2_signed: usize,
+    legacy_cases: usize,
+    non_envelope_payload_cases: usize,
+}
+
+fn is_wrapped_address(text: &str) -> bool {
+    text.starts_with("0x")
+        && text.contains(' ')
+        && text
+            .bytes()
+            .all(|byte| byte == b' ' || byte.is_ascii_hexdigit() || byte == b'x')
+}
+
+fn has_digit_space_digit(text: &str) -> bool {
+    text.as_bytes()
+        .windows(3)
+        .any(|window| window[0].is_ascii_digit() && window[1] == b' ' && window[2].is_ascii_digit())
+}
+
+fn rlp_field_count(raw: &[u8], typed: bool) -> Option<usize> {
+    let payload = if typed { &raw[1..] } else { raw };
+    let (item, used) = decode_item(payload).ok()?;
+    if used != payload.len() {
+        return None;
+    }
+    let Item::List(list) = item else {
+        return None;
+    };
+    let mut iter = ListIter::new(list);
+    let mut count = 0usize;
+    while iter
+        .next_item()
+        .expect("fixture transaction field RLP")
+        .is_some()
+    {
+        count += 1;
+    }
+    Some(count)
+}
+
+fn descriptor_relative_path(fixture: &Path) -> PathBuf {
+    let relative = fixture
+        .strip_prefix(fixture_root().join("registry"))
+        .expect("fixture below registry root");
+    let mut components: Vec<_> = relative.components().collect();
+    assert!(
+        components.len() >= 3,
+        "unexpected fixture path: {}",
+        relative.display()
+    );
+    assert_eq!(components[components.len() - 2].as_os_str(), "tests");
+    components.remove(components.len() - 2);
+    let mut descriptor = PathBuf::new();
+    for component in components {
+        descriptor.push(component.as_os_str());
+    }
+    let name = descriptor
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("UTF-8 descriptor name");
+    assert!(name.ends_with(".tests.json"));
+    descriptor.set_file_name(name.replace(".tests.json", ".json"));
+    descriptor
+}
+
+fn inventory_fixture(path: &Path, stats: &mut FixtureStats, tested: &mut BTreeSet<PathBuf>) {
+    let bytes = std::fs::read(path).expect("read upstream fixture");
+    let root: Value = serde_json::from_slice(&bytes).expect("parse upstream fixture JSON");
+    let object = root.as_object().expect("fixture root object");
+    assert_eq!(
+        object.get("$schema").and_then(Value::as_str),
+        Some("../../../specs/erc7730-tests.schema.json"),
+        "unexpected fixture schema in {}",
+        path.display()
+    );
+    let tests = object
+        .get("tests")
+        .and_then(Value::as_array)
+        .expect("fixture tests array");
+    assert!(
+        !tests.is_empty(),
+        "fixture file has no cases: {}",
+        path.display()
+    );
+
+    let descriptor = descriptor_relative_path(path);
+    assert!(
+        prod_registry_root().join(&descriptor).is_file(),
+        "orphan fixture has no sibling descriptor: {} -> {}",
+        path.display(),
+        descriptor.display()
+    );
+    tested.insert(descriptor.clone());
+    stats.entities.insert(
+        descriptor
+            .components()
+            .next()
+            .expect("fixture entity")
+            .as_os_str()
+            .to_str()
+            .expect("UTF-8 entity")
+            .to_string(),
+    );
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("UTF-8 fixture file");
+    let file_is_calldata = file_name.starts_with("calldata-");
+    let file_is_eip712 = file_name.starts_with("eip712-");
+    assert_ne!(
+        file_is_calldata, file_is_eip712,
+        "mixed/unknown fixture filename: {file_name}"
+    );
+    if file_is_calldata {
+        stats.calldata_files += 1;
+    } else {
+        stats.eip712_files += 1;
+    }
+
+    stats.files += 1;
+    for case in tests {
+        let case = case.as_object().expect("fixture case object");
+        assert!(
+            case.get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.is_empty()),
+            "fixture case lacks a description in {}",
+            path.display()
+        );
+        let raw_tx = case.get("rawTx");
+        let data = case.get("data");
+        assert_ne!(
+            raw_tx.is_some(),
+            data.is_some(),
+            "case must be exactly calldata or EIP-712"
+        );
+        assert_eq!(
+            raw_tx.is_some(),
+            file_is_calldata,
+            "fixture filename/case-kind mismatch"
+        );
+
+        stats.cases += 1;
+        if let Some(raw_tx) = raw_tx {
+            stats.calldata_cases += 1;
+            let raw_tx = raw_tx.as_str().expect("rawTx string");
+            assert!(raw_tx.starts_with("0x"), "rawTx lacks 0x prefix");
+            let raw = hex::decode(&raw_tx[2..]).expect("rawTx hex");
+            assert!(!raw.is_empty(), "empty rawTx");
+            if raw[0] == 0x02 {
+                stats.type2_cases += 1;
+                match rlp_field_count(&raw, true).expect("type-2 fixture outer RLP") {
+                    9 => stats.type2_unsigned += 1,
+                    12 => stats.type2_signed += 1,
+                    count => panic!(
+                        "unexpected EIP-1559 field count {count} in {}",
+                        path.display()
+                    ),
+                }
+            } else {
+                stats.legacy_cases += 1;
+                match rlp_field_count(&raw, false) {
+                    Some(count) => assert!(
+                        count >= 6,
+                        "legacy fixture has fewer than six transaction fields"
+                    ),
+                    None => stats.non_envelope_payload_cases += 1,
+                }
+            }
+            if let Some(tx_hash) = case.get("txHash") {
+                let tx_hash = tx_hash.as_str().expect("txHash string");
+                assert_eq!(tx_hash.len(), 66, "txHash width");
+                assert!(tx_hash.starts_with("0x"));
+                hex::decode(&tx_hash[2..]).expect("txHash hex");
+                stats.tx_hash_cases += 1;
+            }
+        } else {
+            stats.eip712_cases += 1;
+            let data = data
+                .and_then(Value::as_object)
+                .expect("EIP-712 data object");
+            for key in ["types", "primaryType", "domain", "message"] {
+                assert!(data.contains_key(key), "EIP-712 fixture lacks `{key}`");
+            }
+        }
+
+        let expected = case
+            .get("expectedTexts")
+            .and_then(Value::as_array)
+            .expect("every imported case must carry expectedTexts");
+        if expected.is_empty() {
+            stats.empty_expected_cases += 1;
+        }
+        if expected.len() % 2 == 1 {
+            stats.odd_expected_cases += 1;
+        }
+        stats.expected_strings += expected.len();
+        for text in expected {
+            let text = text.as_str().expect("expectedTexts string");
+            assert!(
+                text.is_ascii(),
+                "non-ASCII expected text in {}",
+                path.display()
+            );
+            assert_eq!(text.trim(), text, "expected text has edge whitespace");
+            assert!(
+                !text.contains(['\n', '\r', '\t']),
+                "expected text has control whitespace"
+            );
+            assert!(!text.contains("  "), "expected text has repeated spaces");
+            stats.interaction_with += usize::from(text == "Interaction with");
+            stats.max_fees += usize::from(text == "Max fees");
+            stats.address_like_wrapped += usize::from(is_wrapped_address(text));
+            stats.numeric_wrapped += usize::from(has_digit_space_digit(text));
+            stats.unresolved_ticker += usize::from(text.contains("???"));
+            stats.truncated_more += usize::from(text.ends_with("... More"));
+            stats.over_pq1_page += usize::from(text.len() > 64);
+        }
+    }
+}
+
+fn build_registry() -> &'static dbgen::erc7730::Erc7730BuildResult {
+    static REGISTRY: std::sync::OnceLock<dbgen::erc7730::Erc7730BuildResult> =
+        std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        let root = workspace_root();
+        let registry = root.join("secure/data/erc7730-registry");
+        let policy = root.join("secure/data/erc7730/policy.toml");
+        let (result, _) =
+            dbgen::erc7730::build_db_tolerant(&registry.join("registry"), &policy, Some(&registry))
+                .expect("build production registry for conformance test");
+        result
+    })
+}
+
+#[test]
+fn upstream_fixture_corpus_is_exact_test_only_and_honestly_inventoried() {
+    let fixtures = fixture_files();
+    let (receipt, fixture_bytes) = fixture_receipt(&fixtures);
+    assert_eq!(hex::encode(receipt), FIXTURE_RECEIPT_HEX);
+    assert_eq!(fixture_bytes, 687_949);
+
+    let fixture_canonical = std::fs::canonicalize(fixture_root()).expect("canonical fixture root");
+    let prod_canonical = std::fs::canonicalize(prod_registry_root()).expect("canonical prod root");
+    assert!(!fixture_canonical.starts_with(&prod_canonical));
+    assert!(!prod_canonical.starts_with(&fixture_canonical));
+
+    let mut stats = FixtureStats::default();
+    let mut tested_descriptors = BTreeSet::new();
+    for fixture in &fixtures {
+        inventory_fixture(fixture, &mut stats, &mut tested_descriptors);
+    }
+
+    assert_eq!(stats.files, 272);
+    assert_eq!(stats.entities.len(), 42);
+    assert_eq!((stats.calldata_files, stats.eip712_files), (154, 118));
+    assert_eq!(stats.cases, 510);
+    assert_eq!((stats.calldata_cases, stats.eip712_cases), (362, 148));
+    assert_eq!(stats.tx_hash_cases, 311);
+    assert_eq!(stats.expected_strings, 3_976);
+    assert_eq!(stats.empty_expected_cases, 3);
+    assert_eq!(stats.odd_expected_cases, 58);
+    assert_eq!(stats.interaction_with, 280);
+    assert_eq!(stats.max_fees, 275);
+    assert_eq!(stats.address_like_wrapped, 400);
+    assert_eq!(stats.numeric_wrapped, 608);
+    assert_eq!(stats.unresolved_ticker, 28);
+    assert_eq!(stats.truncated_more, 6);
+    assert_eq!(stats.over_pq1_page, 75);
+    assert_eq!(stats.type2_cases, 316);
+    assert_eq!((stats.type2_unsigned, stats.type2_signed), (227, 89));
+    assert_eq!(stats.legacy_cases, 46);
+    assert_eq!(stats.non_envelope_payload_cases, 1);
+
+    let policy: Value = serde_json::from_slice(
+        &std::fs::read(fixture_root().join("projection-policy.json"))
+            .expect("read projection policy"),
+    )
+    .expect("parse projection policy");
+    assert_eq!(
+        policy.get("upstream_sha").and_then(Value::as_str),
+        Some(UPSTREAM_SHA)
+    );
+    assert_eq!(
+        policy.get("fixture_receipt_sha256").and_then(Value::as_str),
+        Some(FIXTURE_RECEIPT_HEX)
+    );
+
+    let registry = build_registry();
+    assert_eq!(
+        hex::encode(registry.root),
+        PROD_ROOT_HEX,
+        "test-only fixtures changed the production root"
+    );
+    let accepted: BTreeSet<PathBuf> = registry
+        .entries
+        .iter()
+        .map(|entry| {
+            entry
+                .source
+                .strip_prefix(prod_registry_root())
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "entry source outside production registry: {}",
+                        entry.source.display()
+                    )
+                })
+                .to_path_buf()
+        })
+        .collect();
+    assert_eq!(accepted.len(), 228);
+    assert_eq!(accepted.intersection(&tested_descriptors).count(), 143);
+    assert_eq!(accepted.difference(&tested_descriptors).count(), 85);
+    assert_eq!(tested_descriptors.difference(&accepted).count(), 129);
+}
+
+fn synth_bundle(blob: &[u8], ir_bytes: &[u8], leaf_index: usize) -> Vec<u8> {
+    let proof_depth = u32::from_le_bytes(blob[24..28].try_into().expect("proof depth")) as usize;
+    let proofs_off = u32::from_le_bytes(blob[28..32].try_into().expect("proof offset")) as usize;
+    let proof_base = proofs_off + leaf_index * proof_depth * 32;
+    let mut bundle = Vec::with_capacity(2 + ir_bytes.len() + 8 + proof_depth * 32);
+    bundle.extend_from_slice(&(ir_bytes.len() as u16).to_be_bytes());
+    bundle.extend_from_slice(ir_bytes);
+    bundle.extend_from_slice(&(leaf_index as u32).to_be_bytes());
+    bundle.extend_from_slice(&(proof_depth as u32).to_be_bytes());
+    for index in 0..proof_depth {
+        let offset = proof_base + index * 32;
+        bundle.extend_from_slice(&blob[offset..offset + 32]);
+    }
+    bundle
+}
+
+fn normalize_text(text: &str) -> String {
+    text.bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .map(|byte| byte.to_ascii_lowercase() as char)
+        .collect()
+}
+
+#[derive(Debug, Deserialize)]
+struct WaiverFile {
+    schema: u8,
+    waivers: Vec<Waiver>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Waiver {
+    fixture: String,
+    case: usize,
+    text_index: usize,
+    text: String,
+    class: String,
+    reason: String,
+}
+
+#[test]
+fn lido_claim_positive_matches_actual_merkle_verified_pq1_pages_with_exact_waivers() {
+    let relative_fixture = "registry/lido/tests/calldata-WithdrawalQueueERC721.tests.json";
+    let fixture: Value = serde_json::from_slice(
+        &std::fs::read(fixture_root().join(relative_fixture)).expect("read Lido fixture"),
+    )
+    .expect("parse Lido fixture");
+    let case = &fixture["tests"][2];
+    let raw_hex = case["rawTx"].as_str().expect("Lido rawTx");
+    let raw = hex::decode(raw_hex.strip_prefix("0x").expect("0x rawTx")).expect("Lido rawTx hex");
+    let parsed = eip1559::parse(&raw).expect("Lido fixture is a canonical unsigned type-2 tx");
+    assert_eq!(parsed.tx.chain_id, 1);
+    let to = parsed.tx.to.expect("Lido transaction target");
+
+    let registry = build_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == parsed.tx.chain_id
+                && entry.contract == to
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-WithdrawalQueueERC721.json")
+        })
+        .expect("accepted Lido descriptor leaf");
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified =
+        verify_erc7730_bundle(&bundle, &registry.root).expect("Merkle-verify Lido descriptor");
+    cross_check_contract(&verified.ir, parsed.tx.chain_id, &to).expect("bind Lido descriptor");
+    let pages = render_erc7730_pages(
+        &parsed.tx,
+        parsed.data,
+        &verified,
+        None,
+        &NameResolver::new(),
+    )
+    .expect("render upstream Lido positive");
+
+    let rendered: Vec<String> = pages
+        .as_slice()
+        .iter()
+        .flat_map(|page| page.iter())
+        .filter_map(|row| {
+            let text = std::str::from_utf8(row)
+                .expect("PQ1 pages are ASCII")
+                .trim_end();
+            (!text.is_empty()).then(|| normalize_text(text))
+        })
+        .collect();
+
+    let waiver_file: WaiverFile = serde_json::from_slice(
+        &std::fs::read(fixture_root().join("conformance-waivers.json"))
+            .expect("read conformance waivers"),
+    )
+    .expect("parse conformance waivers");
+    assert_eq!(waiver_file.schema, 1);
+    let projection_policy: Value = serde_json::from_slice(
+        &std::fs::read(fixture_root().join("projection-policy.json"))
+            .expect("read projection policy"),
+    )
+    .expect("parse projection policy");
+    let classes = projection_policy["presentation_classes"]
+        .as_object()
+        .expect("presentation classes");
+    let mut waivers = BTreeMap::new();
+    for waiver in &waiver_file.waivers {
+        assert!(!waiver.reason.trim().is_empty(), "waiver needs a rationale");
+        assert!(
+            classes.contains_key(&waiver.class),
+            "unknown waiver class: {}",
+            waiver.class
+        );
+        assert_eq!(
+            waiver.fixture, relative_fixture,
+            "this bounded lane has no hidden waiver for another case"
+        );
+        assert_eq!(waiver.case, 2);
+        assert!(
+            waivers.insert(waiver.text_index, waiver).is_none(),
+            "duplicate exact waiver"
+        );
+    }
+
+    let expected = case["expectedTexts"]
+        .as_array()
+        .expect("Lido expectedTexts");
+    let mut rendered_cursor = 0usize;
+    let mut used_waivers = BTreeSet::new();
+    for (text_index, expected) in expected.iter().enumerate() {
+        let expected = expected.as_str().expect("expected text string");
+        if let Some(waiver) = waivers.get(&text_index) {
+            assert_eq!(
+                waiver.text, expected,
+                "waiver must pin the exact upstream token"
+            );
+            used_waivers.insert(text_index);
+            continue;
+        }
+        if !expected.is_empty() && expected.bytes().all(|byte| byte.is_ascii_digit()) {
+            let value: u64 = expected.parse().expect("fixture integer fits u64");
+            let mut word = [0u8; 32];
+            word[24..].copy_from_slice(&value.to_be_bytes());
+            assert_eq!(
+                parsed.data.get(4..36),
+                Some(word.as_slice()),
+                "upstream decimal must equal the exact signed calldata word"
+            );
+            let encoded = hex::encode(word);
+            for chunk in encoded.as_bytes().chunks(16) {
+                let chunk = std::str::from_utf8(chunk).expect("hex ASCII");
+                let Some(relative_match) = rendered[rendered_cursor..]
+                    .iter()
+                    .position(|actual| actual == chunk)
+                else {
+                    panic!(
+                        "PQ1 did not render the complete 256-bit word for {expected}; rows={rendered:?}"
+                    );
+                };
+                rendered_cursor += relative_match + 1;
+            }
+            continue;
+        }
+        let normalized = normalize_text(expected);
+        let Some(relative_match) = rendered[rendered_cursor..]
+            .iter()
+            .position(|actual| actual == &normalized)
+        else {
+            panic!(
+                "unwaived upstream token {expected:?} was not present in order; PQ1 rows={rendered:?}"
+            );
+        };
+        rendered_cursor += relative_match + 1;
+    }
+    assert_eq!(
+        used_waivers.len(),
+        waivers.len(),
+        "unused waiver must fail the lane"
+    );
+    assert!(
+        rendered.iter().any(|row| row == "claimwithdrawal")
+            && rendered.iter().any(|row| row == "lidodao")
+            && rendered.iter().any(|row| row == "requestid")
+            && rendered.iter().any(|row| row == "000000000001c90f"),
+        "non-vacuity: expected authenticated Lido semantics were not all rendered: {rendered:?}"
+    );
+}
+
+#[test]
+fn weth_upstream_positive_with_trailing_calldata_is_an_explicit_pq1_refusal() {
+    let fixture: Value = serde_json::from_slice(
+        &std::fs::read(fixture_root().join("registry/weth/tests/calldata-weth.tests.json"))
+            .expect("read WETH fixture"),
+    )
+    .expect("parse WETH fixture");
+    let raw_hex = fixture["tests"][0]["rawTx"].as_str().expect("WETH rawTx");
+    let raw = hex::decode(raw_hex.strip_prefix("0x").expect("0x rawTx")).expect("WETH rawTx hex");
+    let parsed = eip1559::parse(&raw).expect("parse WETH transaction envelope");
+    assert_eq!(parsed.data.len(), 5);
+    assert_eq!(
+        &parsed.data[..4],
+        &pqsigner_tx_core::hash::keccak256(b"deposit()")[..4]
+    );
+
+    let to = parsed.tx.to.expect("WETH target");
+    let registry = build_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == 1
+                && entry.contract == to
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-weth.json")
+        })
+        .expect("accepted WETH descriptor leaf");
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified =
+        verify_erc7730_bundle(&bundle, &registry.root).expect("Merkle-verify WETH descriptor");
+    cross_check_contract(&verified.ir, parsed.tx.chain_id, &to).expect("bind WETH descriptor");
+    assert!(matches!(
+        render_erc7730_pages(
+            &parsed.tx,
+            parsed.data,
+            &verified,
+            None,
+            &NameResolver::new(),
+        ),
+        Err(pqsigner_erc7730::render::RenderErr::Reject(
+            "7730 static calldata trailing"
+        ))
+    ));
+}

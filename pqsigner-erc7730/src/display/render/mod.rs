@@ -10,10 +10,13 @@
 //!
 //! - [`render_erc7730_pages`] — contract context (EIP-1559 UserOp
 //!   execution against a known smart contract).
+//! - [`render_erc7730_pages_with_signer`] — the same contract context with an
+//!   independently derived device signer, required to resolve `@.from`.
 //! - [`render_erc7730_eip712_pages`] — EIP-712 typed-data offchain
 //!   signs driven by `OFFCHAIN_KIND_EIP712_TYPED = 2` (Step 7).
+//! - [`render_erc7730_eip712_pages_v3`] — the v3 EIP-712 typed-data path.
 //!
-//! Both consume a [`VerifiedDescriptor`] minted by Phase 3's bundle
+//! All consume a [`VerifiedDescriptor`] minted by Phase 3's bundle
 //! verifier and produce a [`Pages`] object the existing
 //! [`crate::ui::confirm::confirm`] loop drives.
 //!
@@ -88,6 +91,41 @@ pub fn render_erc7730_pages<'ir>(
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
 ) -> Result<Pages, RenderErr> {
+    render_erc7730_pages_scoped(tx, inner_data, descriptor, erc20, resolver, None)
+}
+
+/// Contract-context render with an independently derived UserOperation sender.
+///
+/// This is the only entry point that can resolve descriptor `@.from`. The
+/// secure handlers pass their already-FI-bound `sender` explicitly; the
+/// generic contract renderer above and both EIP-712 renderers retain no sender
+/// context and therefore fail closed on `@.from`.
+pub fn render_erc7730_pages_with_signer<'ir>(
+    tx: &Eip1559Tx,
+    inner_data: &[u8],
+    descriptor: &'ir VerifiedDescriptor<'ir>,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    device_signer: &[u8; 20],
+) -> Result<Pages, RenderErr> {
+    render_erc7730_pages_scoped(
+        tx,
+        inner_data,
+        descriptor,
+        erc20,
+        resolver,
+        Some(device_signer),
+    )
+}
+
+fn render_erc7730_pages_scoped<'ir>(
+    tx: &Eip1559Tx,
+    inner_data: &[u8],
+    descriptor: &'ir VerifiedDescriptor<'ir>,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    device_signer: Option<&[u8; 20]>,
+) -> Result<Pages, RenderErr> {
     // Stack canary (Phase 5 item 11). Volatile read/write so LLVM
     // cannot prove the value is dead and remove the check.
     let mut canary: u32 = 0;
@@ -96,7 +134,14 @@ pub fn render_erc7730_pages<'ir>(
     // observable at function exit.
     unsafe { core::ptr::write_volatile(&mut canary, STACK_CANARY) };
 
-    let result = render_erc7730_pages_inner(tx, inner_data, descriptor, erc20, resolver);
+    let result = render_erc7730_pages_inner(
+        tx,
+        inner_data,
+        descriptor,
+        erc20,
+        resolver,
+        device_signer,
+    );
 
     // SAFETY: same slot we wrote to above; no other context can have
     // written it (secure world is single-threaded + non-reentrant).
@@ -116,6 +161,7 @@ fn render_erc7730_pages_inner<'ir>(
     descriptor: &'ir VerifiedDescriptor<'ir>,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
+    device_signer: Option<&[u8; 20]>,
 ) -> Result<Pages, RenderErr> {
     // 1. Locate the format by 4-byte calldata selector.
     if inner_data.len() < 4 {
@@ -152,8 +198,19 @@ fn render_erc7730_pages_inner<'ir>(
     // 2. Allocate the page buffer (grows via push_blank).
     let mut pages = Pages::with_len(0);
 
-    // 3. Banner — page 0.
-    intent::render_intent_banner(&mut pages, &descriptor.ir, &format)?;
+    // 3. Banner — page 0. Exact-zero approval wording is derived only when a
+    // Merkle-authenticated ERC-20 capability binds this chain+contract and the
+    // signed calldata is the strict canonical `approve(address,uint256)`
+    // frame. Selector-only inference is forbidden because ERC-721 collides.
+    let derived_intent = authenticated_contract_intent(
+        tx,
+        inner_data,
+        &descriptor.ir,
+        &format,
+        body,
+        erc20,
+    )?;
+    intent::render_intent_banner(&mut pages, &descriptor.ir, &format, derived_intent)?;
 
     // 4. Iterate fields. Contract-context formats never carry a
     //    `PARAM_NESTED_STRUCT` field (dbgen only emits it for EIP-712), so the
@@ -168,6 +225,7 @@ fn render_erc7730_pages_inner<'ir>(
         tx,
         erc20,
         resolver,
+        device_signer,
         &mut NestedCtx::default(),
     )?;
 
@@ -361,7 +419,7 @@ fn render_erc7730_eip712_pages_inner<'ir>(
     let body = head_bounded_body(encoded_data, format.static_head_words)?;
 
     let mut pages = Pages::with_len(0);
-    intent::render_intent_banner(&mut pages, &descriptor.ir, &format)?;
+    intent::render_intent_banner(&mut pages, &descriptor.ir, &format, None)?;
     // EIP-712 `encodeData` is all one-word members — no dynamic tail — so the
     // full body IS the head body; an `[]` field (nonsensical here) safely
     // declines inside `render_array` (its tail/length checks fail).
@@ -380,6 +438,7 @@ fn render_erc7730_eip712_pages_inner<'ir>(
         &synth_tx,
         erc20,
         resolver,
+        None,
         &mut nested_ctx,
     )?;
     // E1 reconciliation (the top-level analog of the belt): the device must have
@@ -420,6 +479,88 @@ fn head_bounded_body(body: &[u8], static_head_words: u16) -> Result<&[u8], Rende
     body.get(..head_len).ok_or(RenderErr::Reject("7730 short head"))
 }
 
+/// Derive presentation copy only from an authenticated ERC-20 capability and
+/// the exact signed calldata. The strict decoder requires the canonical
+/// 68-byte ABI frame (including zero address padding and no trailing bytes),
+/// while the metadata match and authenticated field-shape witness establish
+/// ERC-20 semantics despite the shared ERC-721 `approve(address,uint256)`
+/// selector.
+fn authenticated_contract_intent<'a>(
+    tx: &Eip1559Tx,
+    inner_data: &[u8],
+    ir: &crate::ir::Erc7730Ir<'_>,
+    format: &crate::ir::FormatHeader<'_>,
+    body: &[u8],
+    erc20: Option<&Erc20Metadata<'a>>,
+) -> Result<Option<&'static [u8]>, RenderErr> {
+    let Some(meta) = erc20 else {
+        return Ok(None);
+    };
+    if meta.chain_id != tx.chain_id
+        || tx.to.as_ref() != Some(&meta.contract)
+        || ir.chain_id != tx.chain_id
+        || ir.contract != meta.contract
+    {
+        return Ok(None);
+    }
+    let exact_zero_approve = matches!(
+        pqsigner_tx::erc20::calldata::parse_erc20_calldata(inner_data),
+        Some(pqsigner_tx::erc20::calldata::Erc20Call::Approve { amount, .. })
+            if amount.is_zero()
+    );
+    if !exact_zero_approve || format.static_head_words != 2 {
+        return Ok(None);
+    }
+
+    // The copy must not replace or launder incomplete descriptor fields. Pin
+    // an authenticated semantic witness in the selected IR: word 0 is visibly
+    // rendered as an address, and word 1 is visibly rendered as a token amount
+    // whose tokenPath resolves to this exact metadata-bound contract. The
+    // TokenAmount renderer then necessarily paints the zero and appends the
+    // full token-contract identity page; the normal envelope keeps chain
+    // visible. A canonical ERC-721 approve has the same selector/framing but
+    // uses NftName/Raw for word 1, so it cannot satisfy this witness.
+    let mut spender_visible = false;
+    let mut allowance_visible = false;
+    for entry in format.fields() {
+        let field = entry.map_err(|_| RenderErr::Reject("7730 bad field"))?;
+        let params = parse_params(ir, field.param_off)?;
+        if !matches!(
+            should_render_with_mode(&params, None, COMPACT_MODE),
+            Action::Render
+        ) {
+            continue;
+        }
+        let op = crate::ir::FormatOp::try_from(field.format_op)
+            .map_err(|_| RenderErr::Reject("7730 bad format op"))?;
+        match op {
+            crate::ir::FormatOp::AddressName => {
+                if let formatters::Resolved::Slot32(word) =
+                    formatters::resolve_path(ir, field.path_off, body)?
+                {
+                    if core::ptr::eq(word.as_ptr(), body.as_ptr()) {
+                        spender_visible = true;
+                    }
+                }
+            }
+            crate::ir::FormatOp::TokenAmount => {
+                if let formatters::Resolved::Slot32(word) =
+                    formatters::resolve_path(ir, field.path_off, body)?
+                {
+                    if core::ptr::eq(word.as_ptr(), body[32..].as_ptr())
+                        && formatters::resolve_token_address(ir, body, tx, &params)?
+                            == meta.contract
+                    {
+                        allowance_visible = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok((spender_visible && allowance_visible).then_some(b"Revoke approval"))
+}
+
 /// Threaded through [`render_fields`] to carry the nested-EIP-712 struct DFS
 /// state (Phase 5). Empty (`Default`) for the calldata path and for a non-nested
 /// typed message; a V3 typed message supplies the companion `blob` and the
@@ -442,6 +583,7 @@ fn render_fields(
     tx: &Eip1559Tx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
+    device_signer: Option<&[u8; 20]>,
     nested: &mut NestedCtx<'_>,
 ) -> Result<(), RenderErr> {
     for field_result in format.fields() {
@@ -462,7 +604,18 @@ fn render_fields(
                 // reject the WHOLE typed-data request.
                 return Err(RenderErr::Reject("7730 eip712 nested unsupported"));
             }
-            render_nested_struct(pages, ir, payload, body, nested, 1, tx, erc20, resolver)?;
+            render_nested_struct(
+                pages,
+                ir,
+                payload,
+                body,
+                nested,
+                1,
+                tx,
+                erc20,
+                resolver,
+                device_signer,
+            )?;
             continue;
         }
         render_one_field(
@@ -476,6 +629,7 @@ fn render_fields(
             tx,
             erc20,
             resolver,
+            device_signer,
         )?;
     }
     Ok(())
@@ -497,6 +651,7 @@ fn render_one_field(
     tx: &Eip1559Tx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
+    device_signer: Option<&[u8; 20]>,
 ) -> Result<(), RenderErr> {
     match should_render_with_mode(params, None, COMPACT_MODE) {
         Action::Render => {
@@ -549,10 +704,30 @@ fn render_one_field(
                 // preflight proved a sole C1 bytes/address[] whole tail. Paint
                 // against the same full body; malformed extraction cannot
                 // degrade to raw because preflight resolves it first.
-                formatters::dispatch(field, pages, ir, full_body, tx, erc20, resolver, params)?;
+                formatters::dispatch(
+                    field,
+                    pages,
+                    ir,
+                    full_body,
+                    tx,
+                    erc20,
+                    resolver,
+                    params,
+                    device_signer,
+                )?;
             } else {
                 // Static-head scalar — head-bounded body (byte-identical).
-                formatters::dispatch(field, pages, ir, body, tx, erc20, resolver, params)?;
+                formatters::dispatch(
+                    field,
+                    pages,
+                    ir,
+                    body,
+                    tx,
+                    erc20,
+                    resolver,
+                    params,
+                    device_signer,
+                )?;
             }
             Ok(())
         }
@@ -583,6 +758,7 @@ fn render_nested_struct(
     tx: &Eip1559Tx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
+    device_signer: Option<&[u8; 20]>,
 ) -> Result<(), RenderErr> {
     use crate::render::nested as pn;
     use subtle::ConstantTimeEq;
@@ -670,7 +846,18 @@ fn render_nested_struct(
         for (i, elem_ed) in elems.iter().enumerate().take(elem_count) {
             let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
             write_array_item_row(pages.row_mut(p, 0), i, elem_count);
-            render_nested_subfields(pages, ir, &np, elem_ed, nested, depth, tx, erc20, resolver)?;
+            render_nested_subfields(
+                pages,
+                ir,
+                &np,
+                elem_ed,
+                nested,
+                depth,
+                tx,
+                erc20,
+                resolver,
+                device_signer,
+            )?;
         }
         return Ok(());
     }
@@ -687,7 +874,18 @@ fn render_nested_struct(
         return Err(RenderErr::Reject("7730 nested binding"));
     }
     pn::validate_nested_structure(ir, &np, COMPACT_MODE)?;
-    render_nested_subfields(pages, ir, &np, nested_ed, nested, depth, tx, erc20, resolver)?;
+    render_nested_subfields(
+        pages,
+        ir,
+        &np,
+        nested_ed,
+        nested,
+        depth,
+        tx,
+        erc20,
+        resolver,
+        device_signer,
+    )?;
     Ok(())
 }
 
@@ -707,6 +905,7 @@ fn render_nested_subfields(
     tx: &Eip1559Tx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
+    device_signer: Option<&[u8; 20]>,
 ) -> Result<(), RenderErr> {
     for sf in np.sub_fields() {
         let sf = sf.map_err(|_| RenderErr::Reject("7730 nested subfield"))?;
@@ -734,6 +933,7 @@ fn render_nested_subfields(
                 tx,
                 erc20,
                 resolver,
+                device_signer,
             )?;
             continue;
         }
@@ -750,6 +950,7 @@ fn render_nested_subfields(
             tx,
             erc20,
             resolver,
+            device_signer,
         )?;
     }
     Ok(())
@@ -802,7 +1003,10 @@ fn append_envelope_pages(pages: &mut Pages, tx: &Eip1559Tx) -> Result<(), Render
     }
 
     if let Some(fields) = tx.userop_fields.as_ref() {
-        append_userop_gas_page(pages, fields, exact_gas_limit)?;
+        // The secure handler is the sole producer and global prover of the
+        // canonical call/verification/pre-verification gas page. Keep the
+        // ERC-7730 envelope's exact aggregate fee calculation and full nonce,
+        // but do not create a second gas-triple page here.
         append_userop_nonce_pages(pages, &fields.nonce)?;
     } else {
         // Native EIP-1559 nonce. Its u64 decimal can exceed the old one-row
@@ -902,52 +1106,6 @@ fn u256_to_u64_exact(value: &U256) -> Option<u64> {
         return None;
     }
     Some(u64::from_be_bytes(value.0[24..].try_into().ok()?))
-}
-
-/// Show the three independently signed EntryPoint v0.6 gas limits. The old
-/// display shim collapsed them into one saturated sum, so a companion could
-/// permute call/verification/pre-verification gas without changing a page.
-fn append_userop_gas_page(
-    pages: &mut Pages,
-    fields: &pqsigner_tx_core::eip1559::UserOpDisplayFields,
-    total: u64,
-) -> Result<(), RenderErr> {
-    let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-    write_u256_decimal_with_prefix(
-        pages.row_mut(p, 0),
-        b"Call:",
-        &fields.call_gas_limit,
-    )?;
-    write_u256_decimal_with_prefix(
-        pages.row_mut(p, 1),
-        b"Verify:",
-        &fields.verification_gas_limit,
-    )?;
-    write_u256_decimal_with_prefix(
-        pages.row_mut(p, 2),
-        b"PreVer:",
-        &fields.pre_verification_gas,
-    )?;
-    write_u64_decimal_with_prefix(pages.row_mut(p, 3), b"Total:", total)?;
-    Ok(())
-}
-
-fn write_u256_decimal_with_prefix(
-    row: &mut [u8; super::DISPLAY_COLS],
-    prefix: &[u8],
-    value: &U256,
-) -> Result<(), RenderErr> {
-    *row = [b' '; super::DISPLAY_COLS];
-    let mut digits = [0u8; 80];
-    let n = value
-        .format_decimal(0, 0, false, &mut digits)
-        .ok_or(RenderErr::Reject("7730 raw gas"))?;
-    if prefix.len().saturating_add(n) > super::DISPLAY_COLS {
-        return Err(RenderErr::Reject("7730 userop gas too wide"));
-    }
-    row[..prefix.len()].copy_from_slice(prefix);
-    row[prefix.len()..prefix.len() + n].copy_from_slice(&digits[..n]);
-    Ok(())
 }
 
 /// Full 256-bit UserOperation nonce, four 16-hex-digit rows. EntryPoint v0.6
@@ -1252,7 +1410,7 @@ mod unknown_chain_fee_tests {
     }
 
     #[test]
-    fn userop_gas_components_cannot_be_permuted_behind_same_total() {
+    fn userop_gas_components_are_left_to_the_handler_owned_lane() {
         let mut a = unknown_fee_tx(1, 0, 0);
         a.userop_fields = Some(UserOpDisplayFields {
             nonce: u256_from_u128(7),
@@ -1271,9 +1429,19 @@ mod unknown_chain_fee_tests {
         let mut pb = Pages::with_len(0);
         append_envelope_pages(&mut pa, &a).unwrap();
         append_envelope_pages(&mut pb, &b).unwrap();
-        assert_eq!(trimmed(&pa.buf[3][3]), b"Total:171000");
-        assert_eq!(trimmed(&pb.buf[3][3]), b"Total:171000");
-        assert_ne!(pa.buf[3], pb.buf[3]);
+        assert_eq!(pa.len, 5);
+        assert_eq!(pb.len, 5);
+        assert_eq!(pa.as_slice(), pb.as_slice());
+        for row in pa.as_slice().iter().flatten() {
+            let row = trimmed(row);
+            assert!(
+                !row.starts_with(b"Call:")
+                    && !row.starts_with(b"Verify:")
+                    && !row.starts_with(b"PreVer:")
+                    && !row.starts_with(b"Total:"),
+                "ERC-7730 must not reintroduce the handler-owned gas page"
+            );
+        }
     }
 
     #[test]
@@ -1290,9 +1458,9 @@ mod unknown_chain_fee_tests {
         });
         let mut pages = Pages::with_len(0);
         append_envelope_pages(&mut pages, &tx).unwrap();
-        assert_eq!(trimmed(&pages.buf[4][0]), b"Nonce (hex):");
-        assert_eq!(trimmed(&pages.buf[4][1]), b"ab00000000000000");
-        assert_eq!(trimmed(&pages.buf[5][0]), b"00000000000000cd");
+        assert_eq!(trimmed(&pages.buf[3][0]), b"Nonce (hex):");
+        assert_eq!(trimmed(&pages.buf[3][1]), b"ab00000000000000");
+        assert_eq!(trimmed(&pages.buf[4][0]), b"00000000000000cd");
     }
 
     #[test]

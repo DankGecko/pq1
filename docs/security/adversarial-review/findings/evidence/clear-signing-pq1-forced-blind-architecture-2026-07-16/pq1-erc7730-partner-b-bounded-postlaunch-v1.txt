@@ -1,0 +1,29 @@
+POST-LAUNCH RUNTIME RECEIPT V1 — PQ1 ERC-7730 BOUNDED COUNTERPART — PARTNER B
+frozen_local: 2026-07-16T23:26:29+02:00
+role: single bounded counterpart response to Partner-A new cross candidates XB-1 and XB-2
+session_id: 019f6be0-cf83-7933-9565-ad5c2ccf72c5 (resumed accepted Partner-B V4/cross context)
+cli_version_observed: codex-cli 0.144.5
+provider_observed: openai
+model_observed_in_durable_turn_context: gpt-5.6-sol
+effort_observed_in_durable_turn_context: ultra
+orchestration_observed: built-in Codex session; personal bounded response; no fanout
+sandbox_observed: read-only; target recursively non-writable
+approval_policy_observed: never
+target_head_initial_final: 9647b79374d5e2e10445254492308101b8be708b
+target_diff_sha256_initial_final: b8e270747a5c16eafde0b74fe94f34be9ab4504d91559234fb2a1ca056d59c25
+target_status_final: M docs/erc7730-implementation-review-2026-07.md; M docs/work-todo.md
+target_untracked_final: empty
+target_ignored_inventory_sha256_final: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+partner_a_cross_sha256: d11bf34e8b6ece6eac442ef26674ea7604c816bbc8dd50804539327f32186e70
+partner_b_cross_sha256: 8f2310602fbd36f09994ed1de794c332f0bf1ea85dbd98f6dc1a0f00c6a2e193
+bounded_prelaunch_receipt_sha256: 2305b38ec865c7955a5826a931ee25426f2f26744fc144eeb99b34013d19d6f3
+bounded_prompt_sha256: 8dab3c7759cff4ac0694020af6dd6f044bf26a05782d3c60228624fc2a437e45
+bounded_response_path: /tmp/pq1-erc7730-partner-b-bounded-v1.md
+bounded_response_sha256: ff7eb9eab04c8090329349023da7f786e99b9dc172a171a7db3b9d90d9e746e1
+bounded_response_bytes: 7516
+bounded_response_lines: 82
+raw_candidates: XB-1, XB-2 (origin Partner A)
+dispositions: XB-1 CONFIRMED; XB-2 REFUTED
+new_candidates_raised: none
+session_log_sha256_after_response: 40075c3ccb5d3baaa4876ba4c9a2884f9cf268a86571ab7a15c03308589a88a2
+acceptance: frozen one-turn Partner-B counterpart response; no recursive exchange

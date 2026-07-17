@@ -1,0 +1,17 @@
+PRE-LAUNCH REQUEST RECEIPT V1 — PQ1 ERC-7730 BOUNDED COUNTERPART — PARTNER B
+frozen_local: 2026-07-16T23:20:43+02:00
+role: single bounded counterpart response to Partner-A new cross candidates XB-1 and XB-2
+executable: /home/nicola/.local/bin/codex
+cli_version: codex-cli 0.144.5
+session_id: 019f6be0-cf83-7933-9565-ad5c2ccf72c5
+requested_literal_model: gpt-5.6-sol
+requested_effort: ultra
+orchestration: built-in Codex session; personal bounded response; no fanout
+sandbox: read-only inherited and explicitly requested; target chmod a-w recursively
+target: /tmp/pq1-erc7730-arch-review-9647b79
+target_head: 9647b79374d5e2e10445254492308101b8be708b
+target_diff_sha256: b8e270747a5c16eafde0b74fe94f34be9ab4504d91559234fb2a1ca056d59c25
+partner_a_cross_sha256: d11bf34e8b6ece6eac442ef26674ea7604c816bbc8dd50804539327f32186e70
+partner_b_cross_sha256: 8f2310602fbd36f09994ed1de794c332f0bf1ea85dbd98f6dc1a0f00c6a2e193
+bounded_prompt_sha256: 8dab3c7759cff4ac0694020af6dd6f044bf26a05782d3c60228624fc2a437e45
+report_path: /tmp/pq1-erc7730-partner-b-bounded-v1.md

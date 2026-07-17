@@ -1,0 +1,3 @@
+Continue as Partner B in the accepted literal `gpt-5.6-sol`, `model_reasoning_effort="ultra"` session. Partner A's complete frozen V5 first pass is now disclosed solely for symmetric cross-adjudication. Do not infer or seek Partner A's cross result.
+
+Read and follow `/tmp/pq1-erc7730-cross-common-v1.md` completely. Personally adjudicate the full ID inventory; no new discovery fan-out is required. Write one complete raw cross report as your final response. Do not edit the target or either frozen first-pass report. The launcher will freeze the response at `/tmp/pq1-erc7730-partner-b-cross-v1.md`.

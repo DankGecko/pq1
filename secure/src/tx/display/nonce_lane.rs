@@ -7,7 +7,7 @@
 //! retry on the same `Nonce: 0` screen.
 //!
 //! Lane zero remains the compact/common path. For every non-zero lane this
-//! module inserts one exact page containing all 24 key bytes (48 lowercase
+//! module appends one exact page containing all 24 key bytes (48 lowercase
 //! hex characters). The handler then calls [`nonce_lane_page_proof`] before
 //! confirmation: it independently proves either that the key is zero and no
 //! page was inserted, or that exactly one byte-for-byte-correct page was
@@ -23,20 +23,24 @@ use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 /// multiSend budget independent of a faultable skip predicate.
 pub(crate) const NONZERO_NONCE_LANE_PAGES: usize = 1;
 
+const NONCE_LANE_CFI_STEP: u32 = 0xC715_2AE3;
+pub(crate) const NONCE_LANE_CFI_EXPECTED: u32 =
+    crate::cfi_expected!(NONCE_LANE_CFI_STEP);
+
 type NonceLanePage = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 
-/// Insert the exact 192-bit EntryPoint nonce key when it is non-zero.
+/// Append the exact 192-bit EntryPoint nonce key when it is non-zero.
 ///
-/// The page is inserted at index 3 when available, after the mandatory signer
-/// and target identity pages. Shorter rotation/summary layouts clamp to their
-/// current length. Lane zero appends nothing. A required page that cannot fit
-/// returns `Err(())`; every caller maps that to refusal. Keeping the insertion
-/// after index 2 is load-bearing: it never shifts a target page after that
-/// page's independent FI completion proof.
+/// The page is written exactly at the caller-recorded prior length. Lane zero
+/// appends nothing but still publishes the caller-owned completion receipt. A
+/// required page that cannot fit returns `Err(())`; every caller maps that to
+/// refusal. Append-only construction never shifts a signer/target page after
+/// that page's independent FI completion proof.
 #[inline(never)]
 pub(crate) fn enforce_nonce_lane_page(
     pages: &mut Pages,
     nonce: &[u8; 32],
+    cfi: &mut crate::fi::CfiCounter,
 ) -> Result<(), ()> {
     // The safe fast path is taken only after two independently-evaluated
     // zero-lane checks produce the Hamming-distant OK sentinel. Scrub first
@@ -46,13 +50,16 @@ pub(crate) fn enforce_nonce_lane_page(
         core::hint::black_box(nonce_lane_is_zero(nonce))
     });
     if may_skip == crate::fi::OK_SENTINEL {
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        cfi.bump(NONCE_LANE_CFI_STEP);
         return Ok(());
     }
 
     let page = build_nonce_lane_page(nonce);
-    let at = core::cmp::min(3, pages.len);
-    let idx = super::value_page::insert_blank(pages, at)?;
+    let idx = pages.push_blank()?;
     pages.buf[idx] = page;
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    cfi.bump(NONCE_LANE_CFI_STEP);
     Ok(())
 }
 
@@ -66,13 +73,20 @@ pub(crate) fn nonce_lane_page_matches(
     let Some(actual) = pages.as_slice().get(page_index) else {
         return false;
     };
-    let mut diff = 0u8;
-    for row in 0..DISPLAY_ROWS {
-        for col in 0..DISPLAY_COLS {
-            diff |= actual[row][col] ^ expected[row][col];
-        }
-    }
-    diff == 0
+    nonce_page_exact(actual, &expected)
+}
+
+/// Exact completed-skip proof for the compact lane-zero path.
+#[inline(never)]
+pub(crate) fn nonce_lane_skip_proof(
+    pages: &Pages,
+    prior_len: usize,
+    nonce: &[u8; 32],
+) -> u32 {
+    crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(nonce_lane_is_zero(nonce))
+            && core::hint::black_box(pages.len == prior_len)
+    })
 }
 
 /// FI-hardened completion/skip proof for [`enforce_nonce_lane_page`].
@@ -90,6 +104,7 @@ pub(crate) fn nonce_lane_page_proof(
     prior_len: usize,
     nonce: &[u8; 32],
 ) -> u32 {
+    let expected = build_nonce_lane_page(nonce);
     crate::fi::check_true_into_sentinel(|| {
         if core::hint::black_box(nonce_lane_is_zero(nonce)) {
             core::hint::black_box(pages.len == prior_len)
@@ -97,11 +112,8 @@ pub(crate) fn nonce_lane_page_proof(
             prior_len.checked_add(NONZERO_NONCE_LANE_PAGES).is_some_and(
                 |expected_len| {
                     core::hint::black_box(pages.len == expected_len)
-                        && nonce_lane_page_matches(
-                            pages,
-                            core::cmp::min(3, prior_len),
-                            nonce,
-                        )
+                        && nonce_lane_page_matches(pages, prior_len, nonce)
+                        && nonce_page_occurrences(pages, &expected) == 1
                 },
             )
         }
@@ -128,9 +140,36 @@ fn build_nonce_lane_page(nonce: &[u8; 32]) -> NonceLanePage {
     page
 }
 
+fn nonce_page_exact(actual: &NonceLanePage, expected: &NonceLanePage) -> bool {
+    let mut diff = 0u8;
+    for row in 0..DISPLAY_ROWS {
+        for col in 0..DISPLAY_COLS {
+            diff |= actual[row][col] ^ expected[row][col];
+        }
+    }
+    diff == 0
+}
+
+fn nonce_page_occurrences(pages: &Pages, expected: &NonceLanePage) -> usize {
+    pages
+        .as_slice()
+        .iter()
+        .filter(|actual| nonce_page_exact(actual, expected))
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn append_nonce(pages: &mut Pages, nonce: &[u8; 32]) {
+        let mut cfi = crate::fi::CfiCounter::new();
+        enforce_nonce_lane_page(pages, nonce, &mut cfi).unwrap();
+        assert_eq!(
+            cfi.check_into_sentinel(NONCE_LANE_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL
+        );
+    }
 
     fn nonzero_nonce() -> [u8; 32] {
         let mut nonce = [0u8; 32];
@@ -147,7 +186,7 @@ mod tests {
         let mut nonce = [0u8; 32];
         nonce[24..].copy_from_slice(&99u64.to_be_bytes());
         let mut pages = Pages::with_len(3);
-        assert!(enforce_nonce_lane_page(&mut pages, &nonce).is_ok());
+        append_nonce(&mut pages, &nonce);
         assert_eq!(pages.len, 3);
         assert_eq!(
             nonce_lane_page_proof(&pages, 3, &nonce),
@@ -159,7 +198,7 @@ mod tests {
     fn nonzero_lane_shows_all_192_bits_exactly() {
         let nonce = nonzero_nonce();
         let mut pages = Pages::with_len(3);
-        assert!(enforce_nonce_lane_page(&mut pages, &nonce).is_ok());
+        append_nonce(&mut pages, &nonce);
         assert_eq!(pages.len, 4);
         assert_eq!(&pages.buf[3][0], b"Nonce lane key: ");
         assert_eq!(&pages.buf[3][1], b"ab01020304050607");
@@ -176,7 +215,7 @@ mod tests {
     fn every_lane_byte_is_bound_but_sequence_is_not_duplicated() {
         let nonce = nonzero_nonce();
         let mut pages = Pages::with_len(1);
-        enforce_nonce_lane_page(&mut pages, &nonce).unwrap();
+        append_nonce(&mut pages, &nonce);
         for i in 0..24 {
             let mut changed = nonce;
             changed[i] ^= 1;
@@ -195,7 +234,7 @@ mod tests {
             let mut nonce = [0u8; 32];
             nonce[i] = 1;
             let mut pages = Pages::with_len(1);
-            enforce_nonce_lane_page(&mut pages, &nonce).unwrap();
+            append_nonce(&mut pages, &nonce);
             assert_eq!(pages.len, 2, "lane byte {i} was ignored");
             assert_eq!(
                 nonce_lane_page_proof(&pages, 1, &nonce),
@@ -213,7 +252,7 @@ mod tests {
             nonce_lane_page_proof(&pages, 2, &nonce),
             crate::fi::OK_SENTINEL
         );
-        enforce_nonce_lane_page(&mut pages, &nonce).unwrap();
+        append_nonce(&mut pages, &nonce);
         assert_eq!(
             nonce_lane_page_proof(&pages, 2, &nonce),
             crate::fi::OK_SENTINEL
@@ -228,9 +267,11 @@ mod tests {
     #[test]
     fn nonzero_lane_fails_closed_when_full_but_zero_lane_still_fits() {
         let mut full = Pages::with_len(super::super::MAX_PAGES);
-        assert!(enforce_nonce_lane_page(&mut full, &nonzero_nonce()).is_err());
+        let mut nonzero_cfi = crate::fi::CfiCounter::new();
+        assert!(enforce_nonce_lane_page(&mut full, &nonzero_nonce(), &mut nonzero_cfi).is_err());
         assert_eq!(full.len, super::super::MAX_PAGES);
-        assert!(enforce_nonce_lane_page(&mut full, &[0u8; 32]).is_ok());
+        let mut zero_cfi = crate::fi::CfiCounter::new();
+        assert!(enforce_nonce_lane_page(&mut full, &[0u8; 32], &mut zero_cfi).is_ok());
         assert_eq!(full.len, super::super::MAX_PAGES);
     }
 
@@ -242,21 +283,34 @@ mod tests {
         let nonce = nonzero_nonce();
 
         let signer_prior = pages.len;
-        super::super::value_page::enforce_from_page(&mut pages, 0, &sender).unwrap();
+        let mut signer_cfi = crate::fi::CfiCounter::new();
+        super::super::value_page::enforce_from_page(
+            &mut pages,
+            0,
+            &sender,
+            &mut signer_cfi,
+        )
+        .unwrap();
         assert_eq!(
             super::super::value_page::from_page_proof(&pages, signer_prior, 0, &sender),
             crate::fi::OK_SENTINEL
         );
 
         let target_prior = pages.len;
-        super::super::value_page::enforce_target_page(&mut pages, &target).unwrap();
+        let mut target_cfi = crate::fi::CfiCounter::new();
+        super::super::value_page::enforce_target_page(
+            &mut pages,
+            &target,
+            &mut target_cfi,
+        )
+        .unwrap();
         assert_eq!(
             super::super::value_page::target_page_proof(&pages, target_prior, &target),
             crate::fi::OK_SENTINEL
         );
 
         let lane_prior = pages.len;
-        enforce_nonce_lane_page(&mut pages, &nonce).unwrap();
+        append_nonce(&mut pages, &nonce);
         assert_eq!(
             nonce_lane_page_proof(&pages, lane_prior, &nonce),
             crate::fi::OK_SENTINEL
@@ -273,5 +327,79 @@ mod tests {
         pages.buf[2][1][0] ^= 1;
         pages.buf[3][1][0] ^= 1;
         assert!(!nonce_lane_page_matches(&pages, 3, &nonce));
+    }
+
+    #[test]
+    fn nonce_append_preserves_unique_prefix_and_uses_exact_fit_slot() {
+        let nonce = nonzero_nonce();
+        let mut pages = Pages::with_len(super::super::MAX_PAGES - 1);
+        for page_index in 0..pages.len {
+            let marker = 0x20u8.wrapping_add(page_index as u8);
+            for row in &mut pages.buf[page_index] {
+                row.fill(marker);
+            }
+        }
+        let prior_len = pages.len;
+        let before = pages.buf;
+        append_nonce(&mut pages, &nonce);
+        assert_eq!(pages.len, super::super::MAX_PAGES);
+        assert_eq!(&pages.buf[..prior_len], &before[..prior_len]);
+        assert_eq!(
+            nonce_lane_page_proof(&pages, prior_len, &nonce),
+            crate::fi::OK_SENTINEL
+        );
+    }
+
+    #[test]
+    fn nonce_zero_skip_needs_completion_cfi_even_when_structure_matches() {
+        let mut nonce = [0u8; 32];
+        nonce[31] = 9;
+        let mut pages = Pages::with_len(2);
+        let prior_len = pages.len;
+        let mut cfi = crate::fi::CfiCounter::new();
+        assert_eq!(
+            nonce_lane_skip_proof(&pages, prior_len, &nonce),
+            crate::fi::OK_SENTINEL
+        );
+        assert_ne!(
+            cfi.check_into_sentinel(NONCE_LANE_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL,
+            "a skipped whole enforcer must leave caller-owned CFI short"
+        );
+        enforce_nonce_lane_page(&mut pages, &nonce, &mut cfi).unwrap();
+        assert_eq!(
+            cfi.check_into_sentinel(NONCE_LANE_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL
+        );
+        assert_eq!(
+            nonce_lane_page_proof(&pages, prior_len, &nonce),
+            crate::fi::OK_SENTINEL
+        );
+    }
+
+    #[test]
+    fn nonce_proof_rejects_right_content_at_wrong_index_and_duplicates() {
+        let nonce = nonzero_nonce();
+        let mut pages = Pages::with_len(2);
+        for row in &mut pages.buf[0] {
+            row.fill(b'A');
+        }
+        for row in &mut pages.buf[1] {
+            row.fill(b'B');
+        }
+        let prior_len = pages.len;
+        append_nonce(&mut pages, &nonce);
+        pages.buf.swap(0, prior_len);
+        assert_ne!(
+            nonce_lane_page_proof(&pages, prior_len, &nonce),
+            crate::fi::OK_SENTINEL
+        );
+
+        pages.buf.swap(0, prior_len);
+        pages.buf[0] = pages.buf[prior_len];
+        assert_ne!(
+            nonce_lane_page_proof(&pages, prior_len, &nonce),
+            crate::fi::OK_SENTINEL
+        );
     }
 }

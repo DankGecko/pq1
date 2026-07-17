@@ -1161,6 +1161,7 @@ version = "0.1.0"
 dependencies = [
  "dbgen",
  "hex",
+ "pqsigner-erc7730",
  "pqsigner-proto",
  "serde_json",
  "sha2",

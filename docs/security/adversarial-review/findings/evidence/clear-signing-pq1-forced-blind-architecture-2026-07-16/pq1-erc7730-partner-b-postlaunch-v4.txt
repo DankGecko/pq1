@@ -1,0 +1,27 @@
+POST-LAUNCH RUNTIME RECEIPT V4 — PQ1 ERC-7730 ARCHITECTURE — PARTNER B
+frozen_local: 2026-07-16T22:45+02:00
+session_id: 019f6be0-cf83-7933-9565-ad5c2ccf72c5
+target_head_initial_final: 9647b79374d5e2e10445254492308101b8be708b
+target_diff_sha256_initial_final: b8e270747a5c16eafde0b74fe94f34be9ab4504d91559234fb2a1ca056d59c25
+target_status_final: M docs/erc7730-implementation-review-2026-07.md; M docs/work-todo.md
+target_ignored_inventory_sha256_final: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+cli_version_observed: codex-cli 0.144.5
+provider_observed: openai
+model_observed_in_durable_turn_context: gpt-5.6-sol
+effort_observed_in_durable_turn_context: ultra
+sandbox_observed: read-only
+approval_policy_observed: never
+session_log_sha256: 08b72c77f6b8d6d60d2e354a2160ead5bec18a960127cbf2ea97bb534663c1d2
+report_path: /tmp/pq1-erc7730-partner-b-first-pass-v4.md
+report_sha256: bcb8a52e7dba0ecf49e651467615a9c47da2a2a0756563d4362252dde5f1110f
+report_bytes: 42192
+lane_taxonomy_routing_session: 019f6be5-b16a-7a72-ad72-a52318e29c8e
+lane_taxonomy_routing_log_sha256: 5c1fc1a2283a23d1a32259020efdd452a62dae893d407e00fd609615644d00d7
+lane_ui_fi_resources_session: 019f6be5-d676-7a42-be6d-6959d7bbefb3
+lane_ui_fi_resources_log_sha256: a33b7557607f59861068e979567beb9625b06fc8fee9939d50c4981adc5b4e82
+lane_host_lifecycle_provenance_session: 019f6be5-f493-7bf1-af41-d97285f41798
+lane_host_lifecycle_provenance_log_sha256: d21cd0f87c547b92f9e7575747d195bc2603e2774a4b19b9db9ae16ec289bbd6
+fanout_observed: all three distinct Codex lanes returned candidate evidence and the named partner personally adjudicated it
+deviations: initial collab spawn hit the shared thread ceiling, then succeeded; one attempted supplemental Claude backend failed DNS before inference and was honestly excluded. The required second backend is supplied independently by the separately receipted Partner-A Opus lanes/leg, not by this report.
+report_note: the model's final todo metadata left the final-identity item unchecked, but item_145 executed the final identity command and the report records the matching final receipt; coordinator independently rechecked the target above.
+acceptance: valid Partner-B first-pass leg, subject to symmetric cross-adjudication with the accepted Partner-A replacement report.

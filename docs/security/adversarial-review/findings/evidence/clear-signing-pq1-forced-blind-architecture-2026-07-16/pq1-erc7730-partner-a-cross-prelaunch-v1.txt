@@ -1,0 +1,25 @@
+PRE-LAUNCH REQUEST RECEIPT V1 — PQ1 ERC-7730 ARCHITECTURE CROSS — PARTNER A
+frozen_local: 2026-07-16T23:00:29+02:00
+role: symmetric cross-adjudication Partner A; accepted V5 session resumed after both first passes froze
+executable: /home/nicola/.local/bin/claude
+cli_version: Claude Code 2.1.211
+session_id: fc611891-8cef-4051-b9a1-d409dab7db13
+observed_process_argv: claude --resume fc611891-8cef-4051-b9a1-d409dab7db13 --safe-mode --strict-mcp-config --model opus[1m] --effort xhigh --permission-mode plan
+interactive_control: existing session remains at ultracode/xhigh
+requested_model: claude-opus-4-8 via opus[1m]
+requested_context: 1M
+requested_effort: xhigh
+requested_profile: ultracode dynamic workflows
+sandbox: plan/read-only; target chmod a-w recursively
+target: /tmp/pq1-erc7730-arch-review-9647b79
+target_head: 9647b79374d5e2e10445254492308101b8be708b
+target_diff_sha256: b8e270747a5c16eafde0b74fe94f34be9ab4504d91559234fb2a1ca056d59c25
+target_untracked: empty
+target_ignored_inventory_sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+common_cross_prompt_sha256: 2f6b2fabd5d25458439fc79c07d74d5915249be13574b947ee8e695cf7d06172
+role_cross_prompt_sha256: b2394b992d9f08d20c940de4878f11fed765780fc1219f7e16e1e14f1bec244a
+partner_a_first_report_sha256: 4b34ae5f1459d2d6dbfe21a1a9019235b74344cb0440aac76551efe6823a884c
+partner_b_first_report_sha256: bcb8a52e7dba0ecf49e651467615a9c47da2a2a0756563d4362252dde5f1110f
+counterpart_cross_result: withheld until both cross reports freeze
+report_path: /tmp/pq1-erc7730-partner-a-cross-v1.md
+

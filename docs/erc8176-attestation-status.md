@@ -3,12 +3,12 @@
 **Question this answers:** can we flip the ERC-7730 descriptor corpus from
 "trusted content" (dev mode) to "trusted **and attested**" — `allow_unattested_dev_descriptors = false`?
 
-**Short answer: not yet — blocked on the attestation *ecosystem*, not on our code.**
-The ERC-8176 standard is live but adoption is ~zero (3 total attestations on the
-canonical EAS schema, all from a single test address; **0** of our descriptors
-attested). We have made our side correct-and-ready and instrumented so we know
-the day it unblocks. This is the same evidence-driven posture as the HARD-slice
-and non-address-hidden-value decisions.
+**Short answer: not yet — blocked on both our missing production verifier and
+the attestation ecosystem.** The ERC-8176 standard is live but adoption is ~zero
+(3 total attestations on the canonical EAS schema, all from a single test
+address; **0** of our descriptors attested). We have the hash binding and an
+advisory coverage tripwire, but no authenticated offline EAS snapshot verifier
+or production ingestion path. Neither code nor ecosystem gate is complete.
 
 ## What ERC-8176 actually is (verified against the spec, 2026-07)
 
@@ -28,14 +28,14 @@ fingerprints). Mechanism — from the draft ([ethereum/ERCs PR #1576](https://gi
   that wrong; the spec is explicit).
 - Auditors self-register permissionlessly (`auditors/eip155-1-0xAddr/profile.json`);
   wallets pick which attesters to trust (ENS-resolved). Verify = standard EAS
-  validation + `descriptorHash` equality + not-revoked.
+  validation + `descriptorHash` equality + not-revoked + not-expired.
 
 Contrast with our internal `descriptor_hash`: that is **SHA-256**(JCS(descriptor)),
 the on-device IR/leaf identifier baked into the firmware-pinned Merkle tree
 (SHA-256 per the PQ-stack convention). The ERC-8176 hash is **keccak-256** of the
 *same* JCS bytes — EVM-mandated, host-only, never computed on the device.
 
-## What we built (correct-and-ready)
+## What we built (pre-production foundations)
 
 - **`erc8176_hash` in `dbgen`** = `keccak256(jcs_canonicalize(resolved descriptor))`,
   reusing the existing RFC-8785 canonicalizer. Emitted into every row of
@@ -47,8 +47,12 @@ the on-device IR/leaf identifier baked into the firmware-pinned Merkle tree
   — `erc8176_hash` is review-only metadata, not in the leaf.
 - **Coverage checker** `tools/erc8176_eas_coverage.py` (`make erc8176-coverage`):
   reads the review-file hashes, queries EAS schema #377, reports how many of our
-  descriptors are attested and by whom, and gives a flip-readiness verdict against
-  a `--trusted <auditor addrs>` list. curl + stdlib only; read-only.
+  descriptors meet the policy's distinct-attester threshold against an advisory
+  `--trusted <auditor addrs>` list. It reports per-descriptor shortfalls and can
+  never authorize a production flip: the command-line trust set and live query
+  are not the required authenticated, reproducible offline policy input. curl +
+  stdlib only; read-only. The deterministic offline regression target is
+  `make erc8176-coverage-test` and is enrolled in CI.
 - The legacy `enforce_policy` gate (embedded-`attestations`-array, identity-only)
   is documented as an **outdated model** that predates the finalized EAS-based
   spec; it stays behind `allow_unattested_dev_descriptors`. It is not the real
@@ -56,11 +60,13 @@ the on-device IR/leaf identifier baked into the firmware-pinned Merkle tree
 
 ## Current coverage (420-leaf catalogue snapshot, measured 2026-07)
 
-`make erc8176-coverage`:
+`make erc8176-coverage` (the live result distinguishes all returned records
+from the eligible, unrevoked, unexpired subset used for threshold arithmetic):
 
 ```
 our descriptors (unique descriptorHashes): 224   (→ 420 firmware leaves)
-total attestations under the EAS schema:   3
+total attestations returned by EAS:        3
+eligible (unrevoked and unexpired):        2
 OUR descriptors with ANY attestation:      0
 ```
 
@@ -72,24 +78,28 @@ ecosystem has not populated (~2 months post-launch).
 
 ## Flip-readiness: the precise unblock condition
 
-Flip `allow_unattested_dev_descriptors = false` (and rewrite `enforce_policy` to
-the real EAS-snapshot model) **when** `make erc8176-coverage --trusted <Ledger/
-Fireblocks/Sourcify/… addrs>` reports acceptable trusted coverage of the corpus.
-Concretely, that requires, externally:
+Flip `allow_unattested_dev_descriptors = false` only after both the missing code
+and external evidence exist. To assess a candidate advisory trust set, run
+`python3 tools/erc8176_eas_coverage.py --trusted <0xADDR> [<0xADDR> ...]`;
+that live report is an ecosystem tripwire, not authorization.
+Concretely, the external half requires:
 
 1. Auditors we trust (Ledger / Fireblocks / Sourcify / Cyfrin) actually publish
    EAS attestations under schema #377 for the descriptors we ship.
 2. Their real attester addresses populate `policy.toml`'s `trusted_attesters`
    (currently placeholders).
 
-Then the production build snapshots the trusted attestations (so the build stays
-reproducible/offline), the gate requires `≥ min_attesters` trusted attestations
-per shipped descriptorHash, and un-attested descriptors drop to loud blind-sign
-(fail-safe) rather than shipping unattested.
+The code half must authenticate and snapshot those trusted attestations so the
+build stays reproducible/offline, require `≥ min_attesters` distinct trusted
+attestations per shipped descriptorHash, and bind the resulting policy and
+provenance into the release artifact. Below-threshold descriptors are excluded;
+corresponding filter-positive calls retain the current hard refusal rather than
+silently falling to ordinary blind signing.
 
 **Until then:** run `make erc8176-coverage` periodically (it's the tripwire); stay
-in dev mode. Flipping now would drop the entire 420-leaf corpus to blind-sign for
-zero security gain, because there is nothing to verify against.
+in dev mode. Flipping now would remove clear-sign coverage for the entire
+420-leaf corpus, while filter-positive calls would hard-refuse, for zero
+security gain because there is nothing to verify against.
 
 ## Why this is the honest posture
 
@@ -100,4 +110,5 @@ party who checked the descriptor against the real contract is the defense — an
 that is exactly ERC-8176. We cannot manufacture that trust unilaterally; a
 self-signed curation key in the repo would be a no-op (an attacker who owns CI
 owns the key). So we make our binding provably-correct, instrument coverage, and
-flip when the ecosystem gives us real attestations to enforce.
+implement the authenticated verifier before any future flip when the ecosystem
+provides real attestations to enforce.

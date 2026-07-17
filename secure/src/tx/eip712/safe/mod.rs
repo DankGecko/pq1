@@ -33,8 +33,10 @@
 
 use super::{keccak, Eip712Error};
 use sphincs_tz_shared::{
-    APPROVE_HASH_SELECTOR, SAFE_DOMAIN_TYPEHASH, SAFE_TX_TYPEHASH, SAFE_V1_CANONICAL_LEN,
+    APPROVE_HASH_SELECTOR, EXEC_TRANSACTION_SELECTOR, SAFE_DOMAIN_TYPEHASH, SAFE_TX_TYPEHASH,
+    SAFE_V1_CANONICAL_LEN,
 };
+use subtle::ConstantTimeEq;
 
 // Like the native CoW path, the Safe verifier depends only on keccak and
 // our own decode + digest helpers, all available on host.
@@ -52,6 +54,7 @@ pub mod mgmt_decode;
 // calldata's argument list.
 pub mod exec_decode;
 pub use exec_decode::{verify_and_bind_exec, DecodedExec, VerifiedSafeExec};
+pub(crate) use exec_decode::{verify_and_bind_exec_into, EXEC_VERIFY_CFI_EXPECTED};
 
 // Pure-logic CoW-binding resolution for Safe-wrapped `setPreSignature`
 // orders. Host-runnable; shared by both gateway handlers and their
@@ -203,6 +206,200 @@ pub fn is_approve_hash_claim(inner_data: &[u8]) -> bool {
     inner_data.len() >= 4 && inner_data[..4] == APPROVE_HASH_SELECTOR
 }
 
+/// Return true when calldata claims the reserved Safe
+/// `execTransaction(...)` shape by selector alone.
+///
+/// This predicate intentionally does not require the canonical ABI minimum
+/// length. A selector-only or otherwise truncated claim cannot be verified,
+/// but it must still be owned by the Safe route so the signing handlers refuse
+/// it instead of falling through to typed-call, selector-name, or generic
+/// blind-sign rendering. [`verify_and_bind_exec`] remains the authoritative
+/// full decoder; this helper only classifies the reserved selector namespace.
+#[must_use]
+pub fn is_exec_transaction_claim(inner_data: &[u8]) -> bool {
+    inner_data.len() >= 4 && inner_data[..4] == EXEC_TRANSACTION_SELECTOR
+}
+
+/// Hamming-distant classification emitted only after two independent volatile
+/// selector samples agree.
+pub(crate) const EXEC_CLAIMED_SENTINEL: u32 = 0xC36A_917E;
+/// The same proof ran and established that the selector is not
+/// `execTransaction` (including inputs shorter than four bytes).
+pub(crate) const EXEC_UNCLAIMED_SENTINEL: u32 = 0x5A94_6E81;
+const EXEC_CLAIM_CFI_STEP: u32 = 0x7D31_B4E9;
+pub(crate) const EXEC_CLAIM_CFI_EXPECTED: u32 = crate::cfi_expected!(EXEC_CLAIM_CFI_STEP);
+
+/// Caller-owned, fail-initialized receipt for reserved Safe-selector routing.
+///
+/// `state` is meaningful only when `verdict == OK_SENTINEL` and the caller's
+/// CFI counter reaches [`EXEC_CLAIM_CFI_EXPECTED`]. Publishing the verdict
+/// last means an instruction-skipped proof call cannot leave a usable class.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ExecClaimReceipt {
+    pub(crate) state: u32,
+    pub(crate) verdict: u32,
+}
+
+impl ExecClaimReceipt {
+    #[must_use]
+    pub(crate) const fn fail_closed() -> Self {
+        Self {
+            state: crate::fi::FAIL_SENTINEL,
+            verdict: crate::fi::FAIL_SENTINEL,
+        }
+    }
+}
+
+/// Materialize one volatile selector sample into a fail-initialized slot.
+///
+/// The caller invokes this twice with distinct slots. A skipped call leaves
+/// `FAIL_SENTINEL`; a skipped/corrupted byte comparison disagrees with the
+/// independently repeated sample under the single-fault model.
+#[inline(never)]
+fn sample_exec_transaction_claim(inner_data: &[u8], output: &mut u32) {
+    let state = if inner_data.len() < EXEC_TRANSACTION_SELECTOR.len() {
+        EXEC_UNCLAIMED_SENTINEL
+    } else {
+        let mut supplied = [0u8; 4];
+        for (index, byte) in supplied.iter_mut().enumerate() {
+            // SAFETY: the length gate above proves all four indices are in the
+            // immutable S-world snapshot. Volatile loads prevent LTO from
+            // merging this sample with the second call.
+            *byte = unsafe { core::ptr::read_volatile(inner_data.as_ptr().add(index)) };
+        }
+        if supplied.ct_eq(&EXEC_TRANSACTION_SELECTOR).unwrap_u8() == 1 {
+            EXEC_CLAIMED_SENTINEL
+        } else {
+            EXEC_UNCLAIMED_SENTINEL
+        }
+    };
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    // SAFETY: `output` is a unique initialized caller-owned slot.
+    unsafe { core::ptr::write_volatile(output, state) };
+}
+
+/// Prove selector ownership into a caller-owned fail-closed receipt.
+///
+/// Callers must volatile-materialize [`ExecClaimReceipt::fail_closed`] before
+/// this non-inlined call and pass a fresh CFI counter. The helper samples the
+/// immutable calldata twice, validates agreement and the encoded class, then
+/// publishes `verdict` last after two volatile state readbacks.
+#[inline(never)]
+pub(crate) fn prove_exec_transaction_claim(
+    inner_data: &[u8],
+    output: &mut ExecClaimReceipt,
+    cfi: &mut crate::fi::CfiCounter,
+) {
+    let mut sample_a = crate::fi::FAIL_SENTINEL;
+    let mut sample_b = crate::fi::FAIL_SENTINEL;
+    // SAFETY: both locals are uniquely borrowed and remain live throughout
+    // the proof. The fail stores make skipped sample calls observable.
+    unsafe {
+        core::ptr::write_volatile(&mut sample_a, crate::fi::FAIL_SENTINEL);
+        core::ptr::write_volatile(&mut sample_b, crate::fi::FAIL_SENTINEL);
+    }
+    sample_exec_transaction_claim(inner_data, &mut sample_a);
+    crate::fi::wait_random();
+    sample_exec_transaction_claim(inner_data, &mut sample_b);
+
+    // SAFETY: initialized locals, read independently after both non-inlined
+    // sample calls.
+    let sample_a = unsafe { core::ptr::read_volatile(&sample_a) };
+    let sample_b = unsafe { core::ptr::read_volatile(&sample_b) };
+    let samples_valid = (sample_a == EXEC_CLAIMED_SENTINEL
+        || sample_a == EXEC_UNCLAIMED_SENTINEL)
+        && sample_a == sample_b;
+    crate::fi::scrub_sentinel_register();
+    let sample_verdict = crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(samples_valid)
+    });
+    let state = if sample_verdict == crate::fi::OK_SENTINEL {
+        sample_a
+    } else {
+        crate::fi::FAIL_SENTINEL
+    };
+
+    // Publish state first and prove both materialized readbacks before the OK
+    // verdict. A skipped aggregate/word store cannot pair stale state with OK.
+    // SAFETY: `output` is uniquely borrowed by this call.
+    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(output.state), state) };
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    // SAFETY: the caller preinitialized the receipt and the helper wrote state.
+    let readback_a = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(output.state)) };
+    crate::fi::wait_random();
+    // SAFETY: same live caller-owned field, deliberately re-read.
+    let readback_b = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(output.state)) };
+    let published_ok = sample_verdict == crate::fi::OK_SENTINEL
+        && readback_a == state
+        && readback_b == state;
+    crate::fi::scrub_sentinel_register();
+    let published_verdict =
+        crate::fi::check_true_into_sentinel(|| core::hint::black_box(published_ok));
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    // SAFETY: unique live receipt; verdict is intentionally the last field.
+    unsafe {
+        core::ptr::write_volatile(
+            core::ptr::addr_of_mut!(output.verdict),
+            published_verdict,
+        )
+    };
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    cfi.bump(EXEC_CLAIM_CFI_STEP);
+}
+
+/// Check that a proved selector classification and strict decoder result form
+/// one closed routing state.
+///
+/// Claimed + verified may clear-sign; unclaimed + unverified may continue to
+/// lower routes. Claimed + unverified, unclaimed + verified, invalid receipts,
+/// and skipped proof publication all return `FAIL_SENTINEL`.
+#[inline(never)]
+pub(crate) fn exec_claim_resolution_proof(
+    receipt: &ExecClaimReceipt,
+    verified_a: Option<&VerifiedSafeExec<'_>>,
+    verified_b: Option<&VerifiedSafeExec<'_>>,
+) -> u32 {
+    // SAFETY: the receipt is initialized before the proof call and remains
+    // live. Each caller invokes this function twice around a randomized gap.
+    let state = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(receipt.state)) };
+    let verdict = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(receipt.verdict)) };
+    let verification_state_a = match (verified_a, verified_b) {
+        (None, None) => EXEC_UNCLAIMED_SENTINEL,
+        (Some(a), Some(b)) if verified_exec_equivalent(a, b) => EXEC_CLAIMED_SENTINEL,
+        _ => crate::fi::FAIL_SENTINEL,
+    };
+    crate::fi::wait_random();
+    let verification_state_b = match (verified_a, verified_b) {
+        (None, None) => EXEC_UNCLAIMED_SENTINEL,
+        (Some(a), Some(b)) if verified_exec_equivalent(a, b) => EXEC_CLAIMED_SENTINEL,
+        _ => crate::fi::FAIL_SENTINEL,
+    };
+    let all_ok = verdict == crate::fi::OK_SENTINEL
+        && state == verification_state_a
+        && state == verification_state_b;
+    crate::fi::scrub_sentinel_register();
+    crate::fi::check_true_into_sentinel(|| core::hint::black_box(all_ok))
+}
+
+/// Compare every trusted fact published by two independent strict verifier
+/// executions. A caller may render the first result only after this complete
+/// equivalence is folded into both resolution proofs above.
+fn verified_exec_equivalent(a: &VerifiedSafeExec<'_>, b: &VerifiedSafeExec<'_>) -> bool {
+    a.chain_id == b.chain_id
+        && a.safe_address == b.safe_address
+        && a.decoded.to == b.decoded.to
+        && a.decoded.value == b.decoded.value
+        && a.decoded.operation == b.decoded.operation
+        && a.decoded.safe_tx_gas == b.decoded.safe_tx_gas
+        && a.decoded.base_gas == b.decoded.base_gas
+        && a.decoded.gas_price == b.decoded.gas_price
+        && a.decoded.gas_token == b.decoded.gas_token
+        && a.decoded.refund_receiver == b.decoded.refund_receiver
+        && a.decoded.data == b.decoded.data
+        && a.decoded.signatures == b.decoded.signatures
+}
+
 /// Parse the 281-byte canonical packed SafeTx into structured fields.
 ///
 /// The only range check is on `operation`: Safe's Solidity definition
@@ -317,6 +514,76 @@ pub fn compute_safe_tx_hash(
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod exec_equivalence_tests {
+    use super::*;
+
+    #[test]
+    fn strict_pair_equivalence_binds_every_published_fact() {
+        let data = [0x10, 0x11];
+        let signatures = [0x20, 0x21];
+        let changed_data = [0x10, 0x12];
+        let changed_signatures = [0x20, 0x22];
+        let base = VerifiedSafeExec {
+            chain_id: 1,
+            safe_address: [0x30; 20],
+            decoded: DecodedExec {
+                to: [0x40; 20],
+                value: [0x50; 32],
+                operation: 0,
+                safe_tx_gas: [0x60; 32],
+                base_gas: [0x70; 32],
+                gas_price: [0x80; 32],
+                gas_token: [0x90; 20],
+                refund_receiver: [0xA0; 20],
+                data: &data,
+                signatures: &signatures,
+            },
+        };
+
+        let mut changed = [base; 14];
+        changed[0].chain_id ^= 1;
+        changed[1].safe_address[0] ^= 1;
+        changed[2].decoded.to[0] ^= 1;
+        changed[3].decoded.value[0] ^= 1;
+        changed[4].decoded.operation ^= 1;
+        changed[5].decoded.safe_tx_gas[0] ^= 1;
+        changed[6].decoded.base_gas[0] ^= 1;
+        changed[7].decoded.gas_price[0] ^= 1;
+        changed[8].decoded.gas_token[0] ^= 1;
+        changed[9].decoded.refund_receiver[0] ^= 1;
+        changed[10].decoded.data = &changed_data;
+        changed[11].decoded.data = &data[..1];
+        changed[12].decoded.signatures = &changed_signatures;
+        changed[13].decoded.signatures = &signatures[..1];
+
+        let labels = [
+            "chain_id",
+            "safe_address",
+            "to",
+            "value",
+            "operation",
+            "safe_tx_gas",
+            "base_gas",
+            "gas_price",
+            "gas_token",
+            "refund_receiver",
+            "data contents",
+            "data length",
+            "signature contents",
+            "signature length",
+        ];
+        assert!(verified_exec_equivalent(&base, &base));
+        for (index, candidate) in changed.iter().enumerate() {
+            assert!(
+                !verified_exec_equivalent(&base, candidate),
+                "pair equivalence omitted {}",
+                labels[index]
+            );
+        }
+    }
+}
 
 #[cfg(test)]
 mod typehash_tests {
@@ -454,5 +721,49 @@ mod typehash_tests {
             "sub-selector not claimed"
         );
         assert!(!is_approve_hash_claim(&[]), "empty not claimed");
+    }
+
+    /// A Safe `execTransaction` claim is selector-owned at every length from
+    /// exactly four bytes upward. In particular, `MIN_CALLDATA_LEN - 1` is a
+    /// malformed claimed Safe call, not an unknown call eligible for a lower
+    /// rendering rung.
+    #[test]
+    fn exec_transaction_claim_keys_on_selector_not_length() {
+        let sel = EXEC_TRANSACTION_SELECTOR;
+
+        for len in 0..4 {
+            assert!(
+                !is_exec_transaction_claim(&sel[..len]),
+                "sub-selector length {len} must not be claimed"
+            );
+        }
+
+        assert!(
+            is_exec_transaction_claim(&sel),
+            "selector-only execTransaction must be claimed"
+        );
+
+        let mut five = [0u8; 5];
+        five[..4].copy_from_slice(&sel);
+        assert!(is_exec_transaction_claim(&five));
+
+        let mut just_short = [0u8; sphincs_tz_shared::EXEC_TRANSACTION_MIN_CALLDATA_LEN - 1];
+        just_short[..4].copy_from_slice(&sel);
+        assert!(
+            is_exec_transaction_claim(&just_short),
+            "minimum-minus-one execTransaction must still be claimed"
+        );
+
+        let mut minimum = [0u8; sphincs_tz_shared::EXEC_TRANSACTION_MIN_CALLDATA_LEN];
+        minimum[..4].copy_from_slice(&sel);
+        assert!(is_exec_transaction_claim(&minimum));
+
+        let mut longer = [0u8; sphincs_tz_shared::EXEC_TRANSACTION_MIN_CALLDATA_LEN + 1];
+        longer[..4].copy_from_slice(&sel);
+        assert!(is_exec_transaction_claim(&longer));
+
+        let mut other = minimum;
+        other[3] ^= 1;
+        assert!(!is_exec_transaction_claim(&other));
     }
 }

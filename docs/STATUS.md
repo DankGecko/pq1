@@ -33,6 +33,39 @@
 > No fresh full Kani campaign was run. V1 is legacy evidence; V4 versus V6
 > remains an owner conflict, not a selected implementation target.
 
+> **Scoped PQ1 clear-signing correction — 2026-07-16.** The normative hard
+> refusal remains unchanged. The first forced-blind architecture identity and
+> the first current-refusal implementation identity both completed as
+> **NO-GO**; the conservative v2 forced-blind candidate is unimplemented,
+> unreviewed and blocked on the owner's exact prompt-abuse budget/cooldown/
+> deadline/reset decision. The materially remediated current tree is host,
+> codegen and QEMU green; optimized development inspection is favorable but is
+> not executable FI, a production profile, or a hardware stack/high-water
+> bound. A fresh exact dual review is still required. Follow the live campaign
+> ledger in [`work-todo.md`](work-todo.md#pq1-erc-7730-productization-campaign--owner-direction-2026-07-16),
+> the architecture record in
+> [`clear-signing-pq1-forced-blind-architecture-2026-07-16.md`](security/adversarial-review/findings/clear-signing-pq1-forced-blind-architecture-2026-07-16.md),
+> and the implementation assessment in
+> [`erc7730-implementation-review-2026-07.md`](erc7730-implementation-review-2026-07.md).
+> ERC-8176 provenance remains an independent production ship blocker; its
+> advisory checker cannot authorize a production flip.
+
+> **Scoped PQ1 ERC-7730 implementation update — 2026-07-17.** Bounded
+> `nativeCurrencyAddress` list support and injective `nftName` collection
+> identity are complete. Tag `0x42` authenticates one or two exact native-token
+> sentinels while preserving the legacy scalar encoding. Dedicated tags `0x44`
+> and `0x45` bind each NFT field to exactly one literal collection or static
+> address path; the device always shows the exact token ID and complete
+> collection address. A friendly name is optional and requires descriptor or
+> exact-chain metadata authority; wildcard names never qualify. Seven real NFT
+> deployments / 12 formats are newly enrolled. Current catalogue: 428 leaves /
+> 340,016 bytes / root `0706d763…17d2ed`; the 4,542 known-call set is unchanged.
+> Evidence is recorded in the live
+> [`work-todo.md`](work-todo.md#pq1-erc-7730-productization-campaign--owner-direction-2026-07-16)
+> row. This is bounded implementation evidence, not a fresh adversarial review
+> or production/ship authority; forced blind signing remains disabled under the
+> 2026-07-16 decision above.
+
 ## §0 — Where the truth lives (doc map)
 
 One concern → one **owner** doc. If a fact lives in two docs it *will* drift (it did: S-1/S-2/S-3 status was

@@ -36,7 +36,8 @@ use libfuzzer_sys::fuzz_target;
 
 use pqsigner_erc7730::bundle::VerifiedDescriptor;
 use pqsigner_erc7730::display::render::{
-    render_erc7730_eip712_pages, render_erc7730_eip712_pages_v3, render_erc7730_pages,
+    render_erc7730_eip712_pages, render_erc7730_eip712_pages_v3,
+    render_erc7730_pages_with_signer,
 };
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir};
 use pqsigner_tx::names::NameResolver;
@@ -110,8 +111,8 @@ fuzz_target!(|data: &[u8]| {
     let context_kind = ir.context_kind;
     let descriptor = VerifiedDescriptor { ir };
 
-    // Envelope tx: the container fields the renderer reads (@.value, chain_id,
-    // @.from-derived) come from here; derive them from the fuzz bytes.
+    // Envelope tx: numeric/destination container fields come from here. The
+    // independently threaded UserOp sender below is the sole `@.from` source.
     let mut tx = Eip1559Tx::default();
     let mut chain = [0u8; 8];
     for (i, b) in chain.iter_mut().enumerate() {
@@ -128,6 +129,10 @@ fuzz_target!(|data: &[u8]| {
         *b = fuzz_bytes[(i + 28) % fuzz_bytes.len()];
     }
     tx.value = U256(val);
+    let mut device_signer = [0u8; 20];
+    for (i, b) in device_signer.iter_mut().enumerate() {
+        *b = fuzz_bytes[(i + 60) % fuzz_bytes.len()];
+    }
 
     let resolver = NameResolver::default();
 
@@ -154,12 +159,13 @@ fuzz_target!(|data: &[u8]| {
                     u16::from_be_bytes([fuzz_byte(fuzz_bytes, 56), fuzz_byte(fuzz_bytes, 57)])
                         as usize
                         % (CALLDATA_CAP + 1);
-                let _ = render_erc7730_pages(
+                let _ = render_erc7730_pages_with_signer(
                     &tx,
                     &calldata[..arbitrary_len],
                     &descriptor,
                     None,
                     &resolver,
+                    &device_signer,
                 );
 
                 if head_len > BODY_CAP {
@@ -170,8 +176,14 @@ fuzz_target!(|data: &[u8]| {
                 // that actually crosses validate_contract_calldata_framing
                 // for the majority of production formats.
                 let exact_len = 4 + head_len;
-                let _ =
-                    render_erc7730_pages(&tx, &calldata[..exact_len], &descriptor, None, &resolver);
+                let _ = render_erc7730_pages_with_signer(
+                    &tx,
+                    &calldata[..exact_len],
+                    &descriptor,
+                    None,
+                    &resolver,
+                    &device_signer,
+                );
 
                 // Random high bytes almost always violate canonical ABI
                 // address padding (chance 2^-96), which can strand every
@@ -185,8 +197,14 @@ fuzz_target!(|data: &[u8]| {
                         *b = fuzz_byte(fuzz_bytes, 320 + word_index * 20 + i);
                     }
                 }
-                let _ =
-                    render_erc7730_pages(&tx, &calldata[..exact_len], &descriptor, None, &resolver);
+                let _ = render_erc7730_pages_with_signer(
+                    &tx,
+                    &calldata[..exact_len],
+                    &descriptor,
+                    None,
+                    &resolver,
+                    &device_signer,
+                );
 
                 // Canonical sole-dynamic candidates. Put head_end in every
                 // head word: the one authenticated dynamic slot therefore
@@ -208,12 +226,13 @@ fuzz_target!(|data: &[u8]| {
                         calldata[4 + head_len + 32 + i] =
                             0x20 + fuzz_byte(fuzz_bytes, i + 96) % 0x5f;
                     }
-                    let _ = render_erc7730_pages(
+                    let _ = render_erc7730_pages_with_signer(
                         &tx,
                         &calldata[..4 + string_body_len],
                         &descriptor,
                         None,
                         &resolver,
+                        &device_signer,
                     );
                 }
 
@@ -232,12 +251,13 @@ fuzz_target!(|data: &[u8]| {
                             *b = fuzz_byte(fuzz_bytes, 160 + index * 20 + i);
                         }
                     }
-                    let _ = render_erc7730_pages(
+                    let _ = render_erc7730_pages_with_signer(
                         &tx,
                         &calldata[..4 + array_body_len],
                         &descriptor,
                         None,
                         &resolver,
+                        &device_signer,
                     );
                 }
             }

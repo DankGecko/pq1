@@ -43,3 +43,26 @@ pub enum RenderErr {
     /// refuses rather than hiding descriptor fields behind blind-sign.
     PageBudget,
 }
+
+/// Policy applied by the secure dispatcher after a descriptor has both
+/// verified and bound to the request.  Renderer errors are diagnostics, never
+/// authority to reinterpret the same signed bytes through a weaker ladder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum VerifiedDescriptorErrorPolicy {
+    HardRefuse,
+}
+
+impl RenderErr {
+    /// Required secure-dispatch disposition for a verified, request-bound
+    /// descriptor.  All current variants are fatal by construction.
+    #[must_use]
+    #[doc(hidden)]
+    pub const fn verified_descriptor_policy(&self) -> VerifiedDescriptorErrorPolicy {
+        match self {
+            Self::Reject(_) | Self::NoFormat | Self::PageBudget => {
+                VerifiedDescriptorErrorPolicy::HardRefuse
+            }
+        }
+    }
+}

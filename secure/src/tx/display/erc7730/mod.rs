@@ -8,11 +8,14 @@
 //! `fuzz/fuzz_targets/erc7730_render_dispatch.rs`. It renders over the shared
 //! host `Pages` (`crate::tx::display::Pages`, re-exported from the same crate).
 //!
-//! This shim re-exports the three render entry points the secure world calls
-//! (`pick_sign_pages` for the on-chain UserOp path, `cmd_sign_offchain` for the
-//! EIP-1271 / EIP-712 paths); everything else in the renderer is internal to the
-//! host crate.
+//! This shim exposes four render entry points to the secure module and its host
+//! tests (`pick_sign_pages` for the signer-bound on-chain UserOp path,
+//! `cmd_sign_offchain` for EIP-1271 / EIP-712, plus the generic contract entry
+//! used by focused host tests); everything else is internal to the host crate.
 
 pub use pqsigner_erc7730::display::render::{
-    render_erc7730_eip712_pages, render_erc7730_eip712_pages_v3, render_erc7730_pages,
+    render_erc7730_eip712_pages, render_erc7730_eip712_pages_v3,
+    render_erc7730_pages_with_signer,
 };
+#[allow(unused_imports)]
+pub use pqsigner_erc7730::display::render::render_erc7730_pages;

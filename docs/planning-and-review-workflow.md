@@ -254,9 +254,20 @@ For security-sensitive architecture and implementation, use both partners:
   mode.
 - **Partner B:** literal model **`gpt-5.6-sol`** with
   **`model_reasoning_effort="ultra"`**.
+- **Supplemental reviewer K (non-substitutive):** **Kimi K3** through Kimi
+  Code, selected with CLI model alias **`kimi-code/k3`**. Request maximum
+  supported thinking effort and the 1M context ceiling. The post-launch
+  control-plane receipt must resolve the alias to provider/model `kimi`/`k3`
+  and attest `thinkingEffort="max"`. Kimi is additional adversarial-discovery
+  signal only: it does not replace either required partner, change the minimum
+  independent pair, assign cross dispositions, or cure an unavailable
+  mandatory leg. Freeze its first pass independently. After both required
+  first passes freeze, give Kimi's complete raw report and digest to both
+  required partners as supplemental candidate input for their symmetric
+  cross-adjudication.
 
-Before either first pass starts, the coordinator MUST freeze a **pre-launch
-request receipt** for each leg: role, executable and CLI/harness version,
+Before any required or supplemental first pass starts, the coordinator MUST
+freeze a **pre-launch request receipt** for each leg: role, executable and CLI/harness version,
 redacted argv/config, working directory, prompt digest, requested literal model
 identifier, context selector, reasoning-effort setting, orchestration profile,
 sandbox, allowed fan-out or subagents, and every planned substitution.
@@ -271,6 +282,14 @@ attestation. Runtime configuration is a control-plane fact: model self-report
 is not required and MUST NOT be the sole attestation. If a required selector is
 absent from every trusted post-launch/control-plane record, that review leg is
 unavailable; non-required fields may be `NOT_EXPOSED` with a source and reason.
+
+For Kimi, the trusted post-launch source is a Kimi Code export or durable
+wire/session log. It must bind the CLI version, session ID, report digest,
+observed model alias, provider/model, thinking effort, context ceiling,
+permission mode, active tool/MCP profile, completion outcome, and deviations.
+An `llm.request` record, command line, or model self-report is not a completed
+runtime receipt. A failed or unattested Kimi leg is recorded as
+supplemental-unavailable and does not weaken or complete the mandatory pair.
 
 If either exact partner is unavailable, do not silently substitute a weaker or
 different review and call the pair complete. Record the missing leg and ask the
@@ -317,6 +336,13 @@ Use neutral mutual disclosure without sharing conclusions:
 - Tell GPT-5.6: **“Claude Code Opus 4.8 with 1M context, `ultracode`
   orchestration, and `xhigh` reasoning effort is independently reviewing this
   same frozen packet. Do not infer its verdict or defer to it.”**
+- When Kimi runs, additionally tell both required partners: **“Kimi K3 (Kimi
+  Code alias `kimi-code/k3`, maximum thinking effort) is also running a
+  supplemental, non-dispositive pass on this frozen packet. Do not infer its
+  findings or defer to it.”** Tell Kimi: **“The exact Opus 4.8 and GPT-5.6 SOL
+  pair is independently reviewing this frozen packet and exclusively owns
+  symmetric cross-dispositions. Your pass is supplemental; do not infer their
+  verdicts or defer to them.”**
 
 Do not provide either partner with the other's findings or verdict before both
 first-pass reports are frozen. The disclosure prevents a model from being
@@ -330,6 +356,11 @@ finding from a reasoned suspicion and must not mutate the review target.
 ### Symmetric cross-adjudication
 
 After both first-pass reports freeze:
+
+Any frozen supplemental Kimi report is candidate input, not a third
+disposition vote. Give its complete report and digest to both required
+partners at this stage; both must reproduce, refute, or narrow every Kimi
+candidate and record its origin in the same cross matrix.
 
 1. Give each reviewer the other complete report and both report digests.
 2. Require each to reproduce, refute, or narrow every blocker/major finding.

@@ -283,6 +283,19 @@ const ERC7730_DEFAULT_E2E_OUT: &str = "tools/companion-stub/erc7730_db_e2e.bin";
 const ERC7730_DEFAULT_REVIEW: &str = "secure/data/erc7730.review.txt";
 const ERC7730_DEFAULT_KNOWN_CALLS: &str = "secure/data/erc7730-known-calls.bloom";
 const ERC7730_DEFAULT_KNOWN_CALLS_E2E: &str = "secure/data/erc7730-known-calls-e2e.bloom";
+const ERC7730_COMPANION_GUIDE: &str = "docs/companion/companion-erc7730-implementation-guide.md";
+const ERC7730_COMPANION_INTEGRATION: &str = "docs/companion/erc7730-integration.md";
+const ERC7730_GUIDE_SUMMARY_BEGIN: &str =
+    "   <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->";
+const ERC7730_GUIDE_SUMMARY_END: &str = "   <!-- END XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->";
+const ERC7730_GUIDE_ROOTS_BEGIN: &str = "<!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->";
+const ERC7730_GUIDE_ROOTS_END: &str = "<!-- END XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->";
+const ERC7730_GUIDE_SEMANTICS_BEGIN: &str =
+    "<!-- BEGIN XTASK-VERIFIED ERC7730 SEMANTIC CONTRACT -->";
+const ERC7730_GUIDE_SEMANTICS_END: &str = "<!-- END XTASK-VERIFIED ERC7730 SEMANTIC CONTRACT -->";
+const ERC7730_INTEGRATION_FACTS_BEGIN: &str =
+    "<!-- BEGIN XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->";
+const ERC7730_INTEGRATION_FACTS_END: &str = "<!-- END XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->";
 
 #[derive(Default)]
 struct Erc7730Args {
@@ -383,9 +396,9 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
     // (the corpus switch) — `input_dir` is `<registry>/registry`, so its parent
     // is the registry root used to resolve `includes`. E2E stays strict.
     let registry_root = input_dir.parent().map(|p| p.to_path_buf());
-    let prod =
+    let (prod, prod_skips) =
         match dbgen::erc7730::build_db_tolerant(&input_dir, &policy, registry_root.as_deref()) {
-            Ok((r, _skips)) => r,
+            Ok(result) => result,
             Err(e) => {
                 eprintln!("error: prod build failed: {e}");
                 return ExitCode::FAILURE;
@@ -454,11 +467,41 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
             eprintln!("DRIFT: {e}");
             drift = true;
         }
+        let companion_guide = workspace_root.join(ERC7730_COMPANION_GUIDE);
+        if let Err(e) = diff_erc7730_companion_guide(
+            &companion_guide,
+            &prod.root,
+            prod.leaf_count,
+            prod.blob.len(),
+            prod.known_call_count,
+            &prod.known_call_set_hash,
+            prod.provenance,
+            &e2e.root,
+            e2e.leaf_count,
+            e2e.blob.len(),
+        ) {
+            eprintln!("DRIFT: {e}");
+            drift = true;
+        }
+        let companion_integration = workspace_root.join(ERC7730_COMPANION_INTEGRATION);
+        if let Err(e) = diff_erc7730_companion_integration(
+            &companion_integration,
+            &prod.root,
+            prod.leaf_count,
+            prod.known_call_count,
+            &prod.known_call_set_hash,
+            &prod.known_calls_bloom,
+            prod_skips.len(),
+        ) {
+            eprintln!("DRIFT: {e}");
+            drift = true;
+        }
         if drift {
             eprintln!(
                 "\nERC-7730 catalog has drifted from the checked-in artifacts.\n\
                  Run `cargo run -p dbgen` (which writes ALL DBs in one pass) and\n\
-                 commit the resulting changes."
+                 update the XTASK-VERIFIED catalogue facts in the companion docs,\n\
+                 then commit the resulting changes."
             );
             return ExitCode::FAILURE;
         }
@@ -573,9 +616,7 @@ fn diff_root_in_db_roots(
     ) {
         return Ok(());
     }
-    let sentinel_count = text
-        .matches(dbgen::ERC7730_SECURITY_TAIL_SENTINEL)
-        .count();
+    let sentinel_count = text.matches(dbgen::ERC7730_SECURITY_TAIL_SENTINEL).count();
     Err(format!(
         "ERC-7730 generated security tail in {} does not exactly match the fresh byte-for-byte suffix through EOF (sentinels={sentinel_count}, expected prod root {}, e2e root {}, prod provenance {}, e2e provenance {})",
         path.display(),
@@ -603,10 +644,269 @@ fn erc7730_security_tail_matches(
         e2e_count,
         e2e_provenance,
     );
-    text.matches(dbgen::ERC7730_SECURITY_TAIL_SENTINEL)
-        .count()
-        == 1
-        && text.ends_with(&expected)
+    text.matches(dbgen::ERC7730_SECURITY_TAIL_SENTINEL).count() == 1 && text.ends_with(&expected)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn diff_erc7730_companion_guide(
+    path: &std::path::Path,
+    prod_root: &[u8; 32],
+    prod_count: usize,
+    prod_size: usize,
+    prod_known_call_count: usize,
+    prod_known_call_set_hash: &[u8; 32],
+    prod_provenance: dbgen::erc7730::CatalogueProvenance,
+    e2e_root: &[u8; 32],
+    e2e_count: usize,
+    e2e_size: usize,
+) -> Result<(), String> {
+    let text = fs::read_to_string(path)
+        .map_err(|e| format!("read companion guide at {}: {e}", path.display()))?;
+    let summary = render_erc7730_guide_summary(
+        prod_count,
+        prod_size,
+        prod_known_call_count,
+        prod_known_call_set_hash,
+        prod_provenance,
+        e2e_count,
+        e2e_size,
+    );
+    let roots = render_erc7730_guide_roots(
+        prod_root, prod_count, prod_size, e2e_root, e2e_count, e2e_size,
+    );
+    let semantics = render_erc7730_semantic_contract();
+    exact_document_block_matches(
+        &text,
+        ERC7730_GUIDE_SUMMARY_BEGIN,
+        ERC7730_GUIDE_SUMMARY_END,
+        &summary,
+    )
+    .map_err(|e| format!("{}: {e}", path.display()))?;
+    exact_document_block_matches(
+        &text,
+        ERC7730_GUIDE_ROOTS_BEGIN,
+        ERC7730_GUIDE_ROOTS_END,
+        &roots,
+    )
+    .map_err(|e| format!("{}: {e}", path.display()))?;
+    exact_document_block_matches(
+        &text,
+        ERC7730_GUIDE_SEMANTICS_BEGIN,
+        ERC7730_GUIDE_SEMANTICS_END,
+        &semantics,
+    )
+    .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn render_erc7730_guide_summary(
+    prod_count: usize,
+    prod_size: usize,
+    prod_known_call_count: usize,
+    prod_known_call_set_hash: &[u8; 32],
+    prod_provenance: dbgen::erc7730::CatalogueProvenance,
+    e2e_count: usize,
+    e2e_size: usize,
+) -> String {
+    format!(
+        concat!(
+            "{}\n",
+            "   - Development catalogue: {} B, {} compiled leaves, {}\n",
+            "     exact registry-declared known-call tuples, provenance `{}`.\n",
+            "     The tuple-set SHA-256 receipt is\n",
+            "     `{}`.\n",
+            "   - E2E fixture: {} B, {} compiled leaves.\n",
+            "{}",
+        ),
+        ERC7730_GUIDE_SUMMARY_BEGIN,
+        grouped_decimal(prod_size, ','),
+        grouped_decimal(prod_count, ','),
+        grouped_decimal(prod_known_call_count, ','),
+        prod_provenance.as_str(),
+        hex::encode(prod_known_call_set_hash),
+        grouped_decimal(e2e_size, ','),
+        grouped_decimal(e2e_count, ','),
+        ERC7730_GUIDE_SUMMARY_END,
+    )
+}
+
+fn render_erc7730_guide_roots(
+    prod_root: &[u8; 32],
+    prod_count: usize,
+    prod_size: usize,
+    e2e_root: &[u8; 32],
+    e2e_count: usize,
+    e2e_size: usize,
+) -> String {
+    format!(
+        concat!(
+            "{}\n",
+            "| Variant | Root | Catalog blob bytes | Compiled leaves |\n",
+            "|---------|------|-------------------:|----------------:|\n",
+            "| development (non-e2e) | `0x{}` | {} | {} |\n",
+            "| e2e | `0x{}` | {} | {} |\n",
+            "{}",
+        ),
+        ERC7730_GUIDE_ROOTS_BEGIN,
+        hex::encode(prod_root),
+        grouped_decimal(prod_size, ' '),
+        grouped_decimal(prod_count, ' '),
+        hex::encode(e2e_root),
+        grouped_decimal(e2e_size, ' '),
+        grouped_decimal(e2e_count, ' '),
+        ERC7730_GUIDE_ROOTS_END,
+    )
+}
+
+fn render_erc7730_semantic_contract() -> String {
+    use pqsigner_erc7730::display::erc8213_contract::{
+        FINGERPRINT_PAGES, HASH_BYTES, HASH_BYTES_PER_ROW,
+    };
+    use pqsigner_erc7730::display::render::formatters::formatter_route;
+    use pqsigner_erc7730::ir::FormatOp;
+    use pqsigner_erc7730::render::{RenderErr, VerifiedDescriptorErrorPolicy};
+
+    let mut out = String::with_capacity(2 * 1024);
+    let _ = writeln!(out, "{ERC7730_GUIDE_SEMANTICS_BEGIN}");
+    let _ = writeln!(out, "### Device semantic manifest (generated)");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "| Wire opcode | Registry `format` | Device route |");
+    let _ = writeln!(out, "|------------:|-------------------|--------------|");
+    for op in FormatOp::ALL {
+        let route = formatter_route(op);
+        let _ = writeln!(
+            out,
+            "| `0x{:02X}` | `{}` | {} |",
+            op as u8,
+            op.registry_name(),
+            route.manifest_status(),
+        );
+    }
+
+    // This call links generation to the exhaustive production policy method.
+    // Adding a RenderErr variant cannot compile until that match assigns it a
+    // disposition; the manifest deliberately states the universal rule rather
+    // than maintaining a second hand-enumerated variant list.
+    match RenderErr::NoFormat.verified_descriptor_policy() {
+        VerifiedDescriptorErrorPolicy::HardRefuse => {}
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "- For a verified, request-bound descriptor, **every `RenderErr` variant is a hard refusal** through an exhaustive production match. A new variant cannot compile until it receives that policy; no variant authorizes typed-call, selector-label, or blind-sign fallback."
+    );
+    let _ = writeln!(
+        out,
+        "- ERC-8213 is mandatory and atomic for every companion/dapp-supplied signed payload: exactly {FINGERPRINT_PAGES} pages (banner + hash) surface the complete {HASH_BYTES}-byte digest at {HASH_BYTES_PER_ROW} bytes per display row. If both pages do not fit, the signing caller refuses; it never leaves an orphan banner or signs without the complete hash. The sole current exemption is the firmware-constructed Type-1 slot-rotation operation: its calldata combines firmware constants with seed-derived slot-owner material that is intentionally unavailable before the rotation consent boundary, so that dialog instead renders the complete slot index and bootstrap-use consequence."
+    );
+    let _ = writeln!(
+        out,
+        "- Confirmation transcripts use the pinned append-only order. A single UserOp shows renderer pages first; the dispatcher may append native-value/legacy-fee pages, then the handler appends paymaster (when present), signer, target, non-zero nonce lane, exact UserOp gas and ERC-8213 fingerprint pages. A batch member prepends its exact `BATCH SIGN / Tx i of N` banner to the renderer/dispatcher pages, then appends signer, target, nonce lane, gas and fingerprint pages. The batch-final summary appends paymaster, signer, nonce lane, gas and the whole-batch fingerprint. A full buffer refuses; no mandatory page is inserted by shifting or overwriting an earlier page."
+    );
+    out.push_str(ERC7730_GUIDE_SEMANTICS_END);
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn diff_erc7730_companion_integration(
+    path: &std::path::Path,
+    prod_root: &[u8; 32],
+    prod_count: usize,
+    prod_known_call_count: usize,
+    prod_known_call_set_hash: &[u8; 32],
+    prod_known_calls_bloom: &[u8],
+    prod_skip_count: usize,
+) -> Result<(), String> {
+    let text = fs::read_to_string(path)
+        .map_err(|e| format!("read companion integration doc at {}: {e}", path.display()))?;
+    let facts = render_erc7730_integration_facts(
+        prod_root,
+        prod_count,
+        prod_known_call_count,
+        prod_known_call_set_hash,
+        prod_known_calls_bloom,
+        prod_skip_count,
+    );
+    exact_document_block_matches(
+        &text,
+        ERC7730_INTEGRATION_FACTS_BEGIN,
+        ERC7730_INTEGRATION_FACTS_END,
+        &facts,
+    )
+    .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn render_erc7730_integration_facts(
+    prod_root: &[u8; 32],
+    prod_count: usize,
+    prod_known_call_count: usize,
+    prod_known_call_set_hash: &[u8; 32],
+    prod_known_calls_bloom: &[u8],
+    prod_skip_count: usize,
+) -> String {
+    let bloom_set_bits: usize = prod_known_calls_bloom
+        .iter()
+        .map(|byte| byte.count_ones() as usize)
+        .sum();
+    let bloom_bits = prod_known_calls_bloom.len().saturating_mul(8);
+    format!(
+        concat!(
+            "{}\n",
+            "- The current regenerated development catalogue has **{} leaves**, root\n",
+            "  `{}`,\n",
+            "  and **{} exact known-call tuples**. The tuple-set receipt is SHA-256\n",
+            "  `{}`;\n",
+            "  Bloom occupancy is {} / {} bits under the compiler-enforced generation cap.\n",
+            "- The current compiler report records **{}** omitted descriptor/formats.\n",
+            "{}",
+        ),
+        ERC7730_INTEGRATION_FACTS_BEGIN,
+        grouped_decimal(prod_count, ','),
+        hex::encode(prod_root),
+        grouped_decimal(prod_known_call_count, ','),
+        hex::encode(prod_known_call_set_hash),
+        grouped_decimal(bloom_set_bits, ','),
+        grouped_decimal(bloom_bits, ','),
+        grouped_decimal(prod_skip_count, ','),
+        ERC7730_INTEGRATION_FACTS_END,
+    )
+}
+
+fn grouped_decimal(value: usize, separator: char) -> String {
+    let digits = value.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len().saturating_sub(1) / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(separator);
+        }
+        out.push(digit);
+    }
+    out
+}
+
+fn exact_document_block_matches(
+    text: &str,
+    begin: &str,
+    end: &str,
+    expected: &str,
+) -> Result<(), String> {
+    let begin_count = text.matches(begin).count();
+    let end_count = text.matches(end).count();
+    if begin_count != 1 || end_count != 1 {
+        return Err(format!(
+            "managed block markers are not unique (begin={begin_count}, end={end_count})"
+        ));
+    }
+    let start = text.find(begin).expect("unique begin marker exists");
+    let end_start = text.find(end).expect("unique end marker exists");
+    if end_start < start {
+        return Err("managed block end precedes its begin marker".to_string());
+    }
+    let end_offset = end_start + end.len();
+    if &text[start..end_offset] == expected {
+        Ok(())
+    } else {
+        Err("managed catalogue facts differ from the fresh build".to_string())
+    }
 }
 
 #[cfg(test)]
@@ -665,6 +965,183 @@ mod tests {
         let mut s = String::new();
         sol_uint256(&mut s, "N", 65_536);
         assert_eq!(s, "    uint256 internal constant N = 65536;\n");
+    }
+
+    #[test]
+    fn erc7730_companion_guide_facts_accept_fresh_root_count_and_size() {
+        use dbgen::erc7730::CatalogueProvenance::DevUnattested;
+
+        let prod = [0x11; 32];
+        let e2e = [0x22; 32];
+        let tuple_hash = [0x33; 32];
+        let summary =
+            render_erc7730_guide_summary(420, 334_827, 4_542, &tuple_hash, DevUnattested, 8, 3_917);
+        let roots = render_erc7730_guide_roots(&prod, 420, 334_827, &e2e, 8, 3_917);
+        let guide = format!("prefix\n{summary}\nbody\n{roots}\nsuffix\n");
+
+        exact_document_block_matches(
+            &guide,
+            ERC7730_GUIDE_SUMMARY_BEGIN,
+            ERC7730_GUIDE_SUMMARY_END,
+            &summary,
+        )
+        .expect("fresh summary");
+        exact_document_block_matches(
+            &guide,
+            ERC7730_GUIDE_ROOTS_BEGIN,
+            ERC7730_GUIDE_ROOTS_END,
+            &roots,
+        )
+        .expect("fresh roots table");
+    }
+
+    #[test]
+    fn erc7730_companion_guide_facts_reject_stale_root_count_or_size() {
+        use dbgen::erc7730::CatalogueProvenance::DevUnattested;
+
+        let prod = [0x11; 32];
+        let e2e = [0x22; 32];
+        let tuple_hash = [0x33; 32];
+        let summary =
+            render_erc7730_guide_summary(420, 334_827, 4_542, &tuple_hash, DevUnattested, 8, 3_917);
+        let roots = render_erc7730_guide_roots(&prod, 420, 334_827, &e2e, 8, 3_917);
+        let guide = format!("prefix\n{summary}\nbody\n{roots}\nsuffix\n");
+
+        for stale in [
+            guide.replacen(&hex::encode(prod), &hex::encode([0x55; 32]), 1),
+            guide.replacen(&hex::encode(e2e), &hex::encode([0x44; 32]), 1),
+            guide.replacen("334,827 B", "334,826 B", 1),
+            guide.replacen("8 compiled leaves", "7 compiled leaves", 1),
+            guide.replacen("3,917 B", "3,916 B", 1),
+            guide.replacen("| 3 917 | 8 |", "| 3 916 | 8 |", 1),
+            guide.replacen("| 3 917 | 8 |", "| 3 917 | 7 |", 1),
+            guide.replacen("| 334 827 | 420 |", "| 334 827 | 419 |", 1),
+        ] {
+            let summary_result = exact_document_block_matches(
+                &stale,
+                ERC7730_GUIDE_SUMMARY_BEGIN,
+                ERC7730_GUIDE_SUMMARY_END,
+                &summary,
+            );
+            let roots_result = exact_document_block_matches(
+                &stale,
+                ERC7730_GUIDE_ROOTS_BEGIN,
+                ERC7730_GUIDE_ROOTS_END,
+                &roots,
+            );
+            assert!(
+                summary_result.is_err() || roots_result.is_err(),
+                "stale root/count/size must fail at least one managed block"
+            );
+        }
+    }
+
+    #[test]
+    fn erc7730_semantic_contract_is_generated_from_executable_routes() {
+        let semantics = render_erc7730_semantic_contract();
+        let guide = format!("prefix\n{semantics}\nsuffix\n");
+        exact_document_block_matches(
+            &guide,
+            ERC7730_GUIDE_SEMANTICS_BEGIN,
+            ERC7730_GUIDE_SEMANTICS_END,
+            &semantics,
+        )
+        .expect("fresh semantic contract");
+
+        assert!(semantics.contains(
+            "| `0x04` | `nftName` | implemented renderer (fail closed on invalid input) |"
+        ));
+        assert!(semantics
+            .contains("| `0x09` | `unit` | implemented renderer (fail closed on invalid input) |"));
+        assert!(semantics
+            .contains("| `0x0A` | `calldata` | hard refusal (nested calldata unsupported) |"));
+        assert!(
+            semantics.contains("| `0x0E` | `encrypted` | hard refusal (signed operand hidden) |")
+        );
+        assert!(semantics.contains("**every `RenderErr` variant is a hard refusal**"));
+        assert!(semantics.contains("exactly 2 pages (banner + hash)"));
+        assert!(semantics.contains("complete 32-byte digest at 8 bytes per display row"));
+    }
+
+    #[test]
+    fn erc7730_semantic_contract_rejects_stale_documented_behavior() {
+        let semantics = render_erc7730_semantic_contract();
+        let guide = format!("prefix\n{semantics}\nsuffix\n");
+        for stale in [
+            guide.replacen("`0x04` | `nftName`", "`0x09` | `nftName`", 1),
+            guide.replacen(
+                "hard refusal (nested calldata unsupported)",
+                "implemented renderer (fail closed on invalid input)",
+                1,
+            ),
+            guide.replacen(
+                "every `RenderErr` variant is a hard refusal",
+                "some `RenderErr` variants may fall back",
+                1,
+            ),
+            guide.replacen("exactly 2 pages", "exactly 1 page", 1),
+            guide.replacen("complete 32-byte digest", "truncated 16-byte digest", 1),
+        ] {
+            assert!(
+                exact_document_block_matches(
+                    &stale,
+                    ERC7730_GUIDE_SEMANTICS_BEGIN,
+                    ERC7730_GUIDE_SEMANTICS_END,
+                    &semantics,
+                )
+                .is_err(),
+                "stale security semantics must fail the documentation gate"
+            );
+        }
+    }
+
+    #[test]
+    fn erc7730_companion_integration_facts_accept_fresh_receipts() {
+        let root = [0x11; 32];
+        let tuple_hash = [0x22; 32];
+        let mut bloom = [0u8; 16];
+        bloom[0] = 0b1010_0001;
+        bloom[15] = 0b0000_0011;
+        let facts = render_erc7730_integration_facts(&root, 420, 4_542, &tuple_hash, &bloom, 274);
+        let doc = format!("prefix\n{facts}\nsuffix\n");
+        exact_document_block_matches(
+            &doc,
+            ERC7730_INTEGRATION_FACTS_BEGIN,
+            ERC7730_INTEGRATION_FACTS_END,
+            &facts,
+        )
+        .expect("fresh integration facts");
+        assert!(facts.contains("5 / 128 bits"));
+    }
+
+    #[test]
+    fn erc7730_companion_integration_facts_reject_stale_receipts() {
+        let root = [0x11; 32];
+        let tuple_hash = [0x22; 32];
+        let mut bloom = [0u8; 16];
+        bloom[0] = 0b1010_0001;
+        bloom[15] = 0b0000_0011;
+        let facts = render_erc7730_integration_facts(&root, 420, 4_542, &tuple_hash, &bloom, 274);
+        let doc = format!("prefix\n{facts}\nsuffix\n");
+        for stale in [
+            doc.replacen("420 leaves", "419 leaves", 1),
+            doc.replacen(&hex::encode(root), &hex::encode([0x33; 32]), 1),
+            doc.replacen("4,542 exact", "4,541 exact", 1),
+            doc.replacen(&hex::encode(tuple_hash), &hex::encode([0x44; 32]), 1),
+            doc.replacen("5 / 128 bits", "4 / 128 bits", 1),
+            doc.replacen("**274**", "**273**", 1),
+        ] {
+            assert!(
+                exact_document_block_matches(
+                    &stale,
+                    ERC7730_INTEGRATION_FACTS_BEGIN,
+                    ERC7730_INTEGRATION_FACTS_END,
+                    &facts,
+                )
+                .is_err(),
+                "stale integration receipt must fail"
+            );
+        }
     }
 
     #[test]
@@ -904,7 +1381,10 @@ mod generated_suffix {
             error.contains("checked rollback restored the prior corpus"),
             "unexpected error: {error}"
         );
-        assert_eq!(fs::read(out.join("registry/old.json")).unwrap(), b"old registry");
+        assert_eq!(
+            fs::read(out.join("registry/old.json")).unwrap(),
+            b"old registry"
+        );
         assert_eq!(fs::read(out.join("ercs/old.json")).unwrap(), b"old ercs");
         assert!(!out.join("registry/new.json").exists());
         assert_eq!(
@@ -1976,8 +2456,8 @@ fn collect_vendor_jsons(
 /// arrays and the EIP-712 domain-only `{chainId, verifyingContract}` form. The
 /// inventory is separately receipted for the root-rotation review.
 fn validate_excluded_vendor_fixture(path: &std::path::Path) -> Result<(), String> {
-    let bytes = fs::read(path)
-        .map_err(|e| format!("read excluded fixture {}: {e}", path.display()))?;
+    let bytes =
+        fs::read(path).map_err(|e| format!("read excluded fixture {}: {e}", path.display()))?;
     let json: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|e| format!("parse excluded fixture {}: {e}", path.display()))?;
     if json.get("includes").is_some() {
@@ -2074,11 +2554,7 @@ fn vendor_excluded_fixture_receipt(
     root: &std::path::Path,
     files: &std::collections::BTreeSet<PathBuf>,
 ) -> Result<(usize, [u8; 32]), String> {
-    vendor_corpus_receipt_with_domain(
-        root,
-        files,
-        b"pqsigner/erc7730-excluded-fixture-corpus-v1",
-    )
+    vendor_corpus_receipt_with_domain(root, files, b"pqsigner/erc7730-excluded-fixture-corpus-v1")
 }
 
 /// Install only the two tool-managed subdirectories after every source/staged
@@ -2150,14 +2626,8 @@ fn install_vendored_subdirs(
         let staged = staging.join(subdir);
         let destination = out.join(subdir);
         if let Err(error) = fs::rename(&staged, &destination) {
-            let rollback = rollback_vendored_install(
-                staging,
-                out,
-                &backup,
-                &subdirs,
-                &old_moved,
-                &new_moved,
-            );
+            let rollback =
+                rollback_vendored_install(staging, out, &backup, &subdirs, &old_moved, &new_moved);
             return Err(install_failure_message(
                 &format!("install staged directory {}: {error}", staged.display()),
                 &backup,

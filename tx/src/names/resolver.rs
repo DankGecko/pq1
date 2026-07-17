@@ -64,21 +64,27 @@ impl<'a> NameResolver<'a> {
     /// accidentally upgrade a chain-specific entry into a wildcard.
     pub fn lookup(&self, chain_id: u64, address: &[u8; 20]) -> Option<&'a [u8]> {
         // Phase 1: exact.
-        for slot in &self.entries[..self.len] {
-            if let Some(m) = slot {
-                if m.chain_id == chain_id && &m.address == address {
-                    return Some(m.name);
-                }
-            }
+        if let Some(name) = self.lookup_exact(chain_id, address) {
+            return Some(name);
         }
         // Phase 2: wildcard.
         const WILD: u64 = sphincs_tz_shared::db_format::NAMES_WILDCARD_CHAIN_ID;
         if chain_id == WILD {
             return None;
         }
+        self.lookup_exact(WILD, address)
+    }
+
+    /// Look up a name only when the verified metadata carries this exact
+    /// `(chain_id, address)` pair. Unlike [`Self::lookup`], this never falls
+    /// through to a chain-agnostic entry. Semantic renderers whose friendly
+    /// label must be chain-bound (for example an ERC-7730 NFT collection name)
+    /// use this stricter capability while generic address presentation retains
+    /// the established wildcard policy.
+    pub fn lookup_exact(&self, chain_id: u64, address: &[u8; 20]) -> Option<&'a [u8]> {
         for slot in &self.entries[..self.len] {
             if let Some(m) = slot {
-                if m.chain_id == WILD && &m.address == address {
+                if m.chain_id == chain_id && &m.address == address {
                     return Some(m.name);
                 }
             }

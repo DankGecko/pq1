@@ -17,8 +17,9 @@ use crate::nsc_api;
 use cortex_m_semihosting::{debug, hprintln};
 use sha3::{Digest, Keccak256};
 use sphincs_tz_shared::{
-    NscStatus, APPROVE_HASH_CALLDATA_LEN, APPROVE_HASH_SELECTOR, FLAG_REGISTER_SLOT,
-    GPV2_SETTLEMENT_ADDRESS, GPV2_VAULT_RELAYER_ADDRESS, MAX_BATCH_TXS, MAX_SIGN_RESPONSE_LEN,
+    NscStatus, APPROVE_HASH_CALLDATA_LEN, APPROVE_HASH_SELECTOR, EXEC_TRANSACTION_MIN_CALLDATA_LEN,
+    EXEC_TRANSACTION_SELECTOR, FLAG_REGISTER_SLOT, GPV2_SETTLEMENT_ADDRESS,
+    GPV2_VAULT_RELAYER_ADDRESS, MAX_BATCH_TXS, MAX_SIGN_RESPONSE_LEN,
     MULTISEND_CALL_ONLY_ADDRESSES, MULTI_SEND_SELECTOR, SAFE_DOMAIN_TYPEHASH, SAFE_OFF_CHAIN_ID,
     SAFE_OFF_DATA_HASH, SAFE_OFF_NONCE, SAFE_OFF_OPERATION, SAFE_OFF_SAFE_ADDRESS, SAFE_OFF_TO,
     SAFE_TX_TYPEHASH, SAFE_V1_CANONICAL_LEN, SIGN_USEROP_BATCH_HEADER_LEN, SIGN_USEROP_HEADER_LEN,
@@ -113,6 +114,24 @@ fn build_sign_payload(
     buf[off..off + inner_data.len()].copy_from_slice(inner_data);
     off += inner_data.len();
     off
+}
+
+/// Minimal canonical `Safe.execTransaction(...)` calldata: a zero-value Call
+/// to `to`, with empty data and signature tails. This is sufficient to prove
+/// that selector ownership does not accidentally reject the valid route; the
+/// strict decoder remains the source of truth for the complete ABI.
+fn build_minimal_safe_exec(to: &[u8; 20]) -> [u8; EXEC_TRANSACTION_MIN_CALLDATA_LEN] {
+    const HEAD_LEN: usize = 10 * 32;
+    let mut out = [0u8; EXEC_TRANSACTION_MIN_CALLDATA_LEN];
+    out[..4].copy_from_slice(&EXEC_TRANSACTION_SELECTOR);
+    out[4 + 12..4 + 32].copy_from_slice(to);
+
+    // Dynamic offsets are measured from the start of the ABI head (after the
+    // selector). The first empty length word follows the head; the second
+    // follows that first 32-byte length word.
+    out[4 + 2 * 32 + 28..4 + 3 * 32].copy_from_slice(&(HEAD_LEN as u32).to_be_bytes());
+    out[4 + 9 * 32 + 28..4 + 10 * 32].copy_from_slice(&((HEAD_LEN + 32) as u32).to_be_bytes());
+    out
 }
 
 // === Safe-multisig (`safe_v1`) trailer helpers =============================
@@ -956,6 +975,138 @@ fn main() -> ! {
             status,
             NscStatus::InvalidPointer as u32,
             "account-0 sender must not pass an account-1 binding"
+        );
+    }
+
+    // Scenario 0d: the single handler treats the wire EntryPoint as an
+    // assertion against the firmware-pinned v0.6 singleton. A one-bit hostile
+    // substitution must fail before any render or signature work.
+    hprintln!("[NS][e2e] Scenario 0d: mismatched single EntryPoint is refused");
+    unsafe {
+        let len = build_sign_payload(
+            &mut PAYLOAD_BUF,
+            &wallet_sender,
+            11_155_111,
+            1,
+            false,
+            0,
+            &to_alice,
+            1,
+            &[],
+        );
+        PAYLOAD_BUF[32] ^= 0x01;
+        let status = nsc_api::sign_userop(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::InvalidPointer as u32,
+            "single UserOp with a non-v0.6 EntryPoint must be refused"
+        );
+    }
+
+    // Scenario 0e: the batch handler owns the same fixed EntryPoint domain.
+    hprintln!("[NS][e2e] Scenario 0e: mismatched batch EntryPoint is refused");
+    unsafe {
+        let inner = [E2eBatchTx {
+            to: to_alice,
+            value_wei: 1,
+            data: &[],
+        }];
+        let len = build_batch_payload(
+            &mut PAYLOAD_BUF,
+            &wallet_sender,
+            11_155_111,
+            1,
+            false,
+            0,
+            &inner,
+        );
+        PAYLOAD_BUF[32] ^= 0x01;
+        let status = nsc_api::sign_userop_batch(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::InvalidPointer as u32,
+            "batch UserOp with a non-v0.6 EntryPoint must be refused"
+        );
+    }
+
+    // Scenario 0f: a selector-only Safe execTransaction claim is owned by the
+    // Safe route even though it is too short to decode. It must never reach a
+    // generic blind or selector-label fallback.
+    hprintln!("[NS][e2e] Scenario 0f: selector-only Safe exec is refused");
+    unsafe {
+        let len = build_sign_payload(
+            &mut PAYLOAD_BUF,
+            &wallet_sender,
+            11_155_111,
+            1,
+            false,
+            0,
+            &to_alice,
+            0,
+            &EXEC_TRANSACTION_SELECTOR,
+        );
+        let status = nsc_api::sign_userop(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::InvalidPointer as u32,
+            "selector-only Safe execTransaction must be refused"
+        );
+    }
+
+    // Scenario 0g: the one-member batch route must enforce the identical
+    // selector-only refusal before its CoW pre-pass or per-member ladder.
+    hprintln!("[NS][e2e] Scenario 0g: selector-only Safe exec batch is refused");
+    unsafe {
+        let inner = [E2eBatchTx {
+            to: to_alice,
+            value_wei: 0,
+            data: &EXEC_TRANSACTION_SELECTOR,
+        }];
+        let len = build_batch_payload(
+            &mut PAYLOAD_BUF,
+            &wallet_sender,
+            11_155_111,
+            1,
+            false,
+            0,
+            &inner,
+        );
+        let status = nsc_api::sign_userop_batch(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::InvalidPointer as u32,
+            "one-member batch with selector-only Safe execTransaction must be refused"
+        );
+    }
+
+    // Scenario 0h: the liveness control. A complete canonical Safe
+    // execTransaction remains accepted; only malformed claims were narrowed.
+    hprintln!("[NS][e2e] Scenario 0h: canonical Safe exec remains signable");
+    unsafe {
+        let safe_address = [0x5Au8; 20];
+        let safe_target = [0xA5u8; 20];
+        let inner_data = build_minimal_safe_exec(&safe_target);
+        let len = build_sign_payload(
+            &mut PAYLOAD_BUF,
+            &wallet_sender,
+            11_155_111,
+            1,
+            false,
+            0,
+            &safe_address,
+            0,
+            &inner_data,
+        );
+        let status = nsc_api::sign_userop(&PAYLOAD_BUF[..len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::Ok as u32,
+            "canonical Safe execTransaction must remain signable"
+        );
+        let (t1_present, _) = parse_response(&SIG_BUF);
+        assert!(
+            !t1_present,
+            "canonical Safe exec control does not rotate a slot"
         );
     }
 

@@ -93,6 +93,7 @@ pub fn decode_exec_transaction(cd: &[u8]) -> Result<DecodedExec<'_>, Eip712Error
 /// `chain_id` and `safe_address` are taken from the outer UserOp header
 /// — they are the binding facts for the renderer, and the firmware has
 /// already verified them as part of its standard UserOp flow.
+#[derive(Clone, Copy)]
 pub struct VerifiedSafeExec<'a> {
     pub chain_id: u64,
     pub safe_address: [u8; 20],
@@ -108,6 +109,7 @@ pub struct VerifiedSafeExec<'a> {
 /// [`super::multi_send::is_multisend_claim`]); any other DelegateCall
 /// replaces the Safe's code for the duration of the call, so a
 /// non-expert user cannot meaningfully confirm the inner action.
+#[inline(never)]
 pub fn verify_and_bind_exec<'a>(
     inner_data: &'a [u8],
     chain_id: u64,
@@ -128,6 +130,189 @@ pub fn verify_and_bind_exec<'a>(
         safe_address: *userop_to,
         decoded,
     })
+}
+
+const EXEC_VERIFY_CFI_STEP: u32 = 0xA24F_73C1;
+pub(crate) const EXEC_VERIFY_CFI_EXPECTED: u32 = crate::cfi_expected!(EXEC_VERIFY_CFI_STEP);
+
+/// Run the strict verifier into caller-owned, fail-initialized storage.
+///
+/// The caller must volatile-write `None` into `output` and pass a fresh CFI
+/// counter before this non-inlined call. This operation repeats that volatile
+/// fail initialization before doing its own strict decode and operation-policy
+/// check, then publishes the final `None`/`Some` result directly into the
+/// caller's slot. It deliberately does not call either value-returning
+/// [`decode_exec_transaction`] or [`verify_and_bind_exec`]: there is no inner
+/// decoder/verifier return/sret or local aggregate copy whose skipped
+/// publication could be followed by a completed outer CFI receipt. The
+/// returning decoder remains the Kani-backed test oracle; bytewise mutation
+/// parity tests pin this in-operation decode to it.
+///
+/// The CFI step is minted only after the final volatile publication. If this
+/// whole call is instruction-skipped, the caller's `None` remains and the
+/// counter remains short. Callers execute this twice into distinct slots and
+/// accept a Safe route only when both complete, equivalent `Some` results
+/// agree with the selector receipt.
+#[inline(never)]
+pub(crate) fn verify_and_bind_exec_into<'a>(
+    inner_data: &'a [u8],
+    chain_id: u64,
+    userop_to: &[u8; 20],
+    output: &mut Option<VerifiedSafeExec<'a>>,
+    cfi: &mut crate::fi::CfiCounter,
+) {
+    // Establish the fail state inside the non-inlined strict operation as
+    // well as at each production call site. This also overwrites any stale
+    // success if a caller ever reuses a slot incorrectly.
+    // SAFETY: `output` is a unique caller-owned slot.
+    unsafe { core::ptr::write_volatile(output, None) };
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+
+    // Complete a strict rejection without returning an aggregate through an
+    // inner call. Every reject republishes the final `None`, fences it, and
+    // only then mints the same one-step completion receipt as success.
+    macro_rules! complete_reject {
+        () => {{
+            // SAFETY: same unique caller-owned slot.
+            unsafe { core::ptr::write_volatile(output, None) };
+            core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+            cfi.bump(EXEC_VERIFY_CFI_STEP);
+            return;
+        }};
+    }
+
+    // Decode the strict ABI shape in this non-inlined operation. These checks
+    // intentionally mirror the Kani-backed pure decoder used by
+    // `decode_exec_transaction`, but no aggregate crosses a call boundary.
+    if inner_data.len() < EXEC_TRANSACTION_MIN_CALLDATA_LEN {
+        complete_reject!();
+    }
+    if inner_data[..4] != EXEC_TRANSACTION_SELECTOR {
+        complete_reject!();
+    }
+    let head = &inner_data[4..];
+
+    if head[..12].iter().any(|&byte| byte != 0) {
+        complete_reject!();
+    }
+    let mut to = [0u8; 20];
+    to.copy_from_slice(&head[12..32]);
+
+    let mut value = [0u8; 32];
+    value.copy_from_slice(&head[32..64]);
+    if head[64..92].iter().any(|&byte| byte != 0) {
+        complete_reject!();
+    }
+    let data_offset = u32::from_be_bytes([head[92], head[93], head[94], head[95]]) as usize;
+
+    if head[96..127].iter().any(|&byte| byte != 0) {
+        complete_reject!();
+    }
+    let operation = head[127];
+    if operation > 1 {
+        complete_reject!();
+    }
+
+    let mut safe_tx_gas = [0u8; 32];
+    safe_tx_gas.copy_from_slice(&head[128..160]);
+    let mut base_gas = [0u8; 32];
+    base_gas.copy_from_slice(&head[160..192]);
+    let mut gas_price = [0u8; 32];
+    gas_price.copy_from_slice(&head[192..224]);
+
+    if head[224..236].iter().any(|&byte| byte != 0) {
+        complete_reject!();
+    }
+    let mut gas_token = [0u8; 20];
+    gas_token.copy_from_slice(&head[236..256]);
+
+    if head[256..268].iter().any(|&byte| byte != 0) {
+        complete_reject!();
+    }
+    let mut refund_receiver = [0u8; 20];
+    refund_receiver.copy_from_slice(&head[268..288]);
+
+    if head[288..316].iter().any(|&byte| byte != 0) {
+        complete_reject!();
+    }
+    let signatures_offset =
+        u32::from_be_bytes([head[316], head[317], head[318], head[319]]) as usize;
+
+    if data_offset < 10 * 32 {
+        complete_reject!();
+    }
+    let data_length_word_end = match data_offset.checked_add(32) {
+        Some(end) if end <= head.len() => end,
+        _ => complete_reject!(),
+    };
+    let data_length_word = &head[data_offset..data_length_word_end];
+    if data_length_word[..28].iter().any(|&byte| byte != 0) {
+        complete_reject!();
+    }
+    let data_length = u32::from_be_bytes([
+        data_length_word[28],
+        data_length_word[29],
+        data_length_word[30],
+        data_length_word[31],
+    ]) as usize;
+    let data_end = match data_length_word_end.checked_add(data_length) {
+        Some(end) if end <= head.len() => end,
+        _ => complete_reject!(),
+    };
+    let data = &head[data_length_word_end..data_end];
+
+    if signatures_offset < 10 * 32 {
+        complete_reject!();
+    }
+    let signatures_length_word_end = match signatures_offset.checked_add(32) {
+        Some(end) if end <= head.len() => end,
+        _ => complete_reject!(),
+    };
+    let signatures_length_word = &head[signatures_offset..signatures_length_word_end];
+    if signatures_length_word[..28].iter().any(|&byte| byte != 0) {
+        complete_reject!();
+    }
+    let signatures_length = u32::from_be_bytes([
+        signatures_length_word[28],
+        signatures_length_word[29],
+        signatures_length_word[30],
+        signatures_length_word[31],
+    ]) as usize;
+    let signatures_end = match signatures_length_word_end.checked_add(signatures_length) {
+        Some(end) if end <= head.len() => end,
+        _ => complete_reject!(),
+    };
+    let signatures = &head[signatures_length_word_end..signatures_end];
+
+    if operation != 0 && !super::multi_send::is_multisend_claim(operation, &to, data) {
+        complete_reject!();
+    }
+
+    // SAFETY: same unique caller-owned slot. Publish the completed successful
+    // binding directly; no inner aggregate-returning decoder/verifier exists.
+    unsafe {
+        core::ptr::write_volatile(
+            output,
+            Some(VerifiedSafeExec {
+                chain_id,
+                safe_address: *userop_to,
+                decoded: DecodedExec {
+                    to,
+                    value,
+                    operation,
+                    safe_tx_gas,
+                    base_gas,
+                    gas_price,
+                    gas_token,
+                    refund_receiver,
+                    data,
+                    signatures,
+                },
+            }),
+        )
+    };
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    cfi.bump(EXEC_VERIFY_CFI_STEP);
 }
 
 // ---------------------------------------------------------------------------
@@ -504,5 +689,306 @@ mod tests {
         assert_eq!(v.safe_address, fixture_addr(0xBB));
         assert_eq!(v.decoded.to, fixture_addr(0xAA));
         assert_eq!(v.decoded.data, &[0xCA, 0xFE]);
+    }
+
+    #[test]
+    fn strict_into_valid_completion_publishes_result_and_cfi() {
+        let cd = encode_exec(
+            fixture_addr(0xAA),
+            fixture_u256(7),
+            &[0xCA, 0xFE],
+            0,
+            fixture_u256(1),
+            fixture_u256(2),
+            fixture_u256(3),
+            fixture_addr(0x40),
+            fixture_addr(0x50),
+            &[0x01, 0x02],
+        );
+        let mut output = None;
+        let mut cfi = crate::fi::CfiCounter::new();
+        unsafe { core::ptr::write_volatile(&mut output, None) };
+
+        verify_and_bind_exec_into(&cd, 1, &fixture_addr(0xBB), &mut output, &mut cfi);
+
+        assert_eq!(
+            cfi.check_into_sentinel(EXEC_VERIFY_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL,
+            "completed publication must mint exactly one verifier CFI step"
+        );
+        let verified = output.expect("valid strict operation must publish Some");
+        assert_eq!(verified.chain_id, 1);
+        assert_eq!(verified.safe_address, fixture_addr(0xBB));
+        assert_eq!(verified.decoded.data, &[0xCA, 0xFE]);
+        assert_eq!(verified.decoded.signatures, &[0x01, 0x02]);
+    }
+
+    #[test]
+    fn strict_into_matches_returning_oracle_for_every_byte_and_prefix() {
+        use super::super::verified_exec_equivalent;
+
+        fn agrees_with_oracle(cd: &[u8]) -> bool {
+            let expected = verify_and_bind_exec(cd, 7, &[0xBB; 20]);
+            let mut published = None;
+            let mut cfi = crate::fi::CfiCounter::new();
+            unsafe { core::ptr::write_volatile(&mut published, None) };
+            verify_and_bind_exec_into(cd, 7, &[0xBB; 20], &mut published, &mut cfi);
+            if cfi.check_into_sentinel(EXEC_VERIFY_CFI_EXPECTED) != crate::fi::OK_SENTINEL {
+                return false;
+            }
+            match (expected.as_ref(), published.as_ref()) {
+                (None, None) => true,
+                (Some(a), Some(b)) => verified_exec_equivalent(a, b),
+                _ => false,
+            }
+        }
+
+        // Non-word-aligned data and signature lengths ensure the sweep covers
+        // both dynamic length words, both payloads (including signature
+        // contents), and their ABI padding as well as every fixed-head byte.
+        let base = encode_exec(
+            fixture_addr(0xAA),
+            fixture_u256(7),
+            &[0xCA, 0xFE, 0x01],
+            0,
+            fixture_u256(1),
+            fixture_u256(2),
+            fixture_u256(3),
+            fixture_addr(0x40),
+            fixture_addr(0x50),
+            &[0x10, 0x11, 0x12],
+        );
+        assert!(agrees_with_oracle(&base), "canonical fixture parity");
+
+        for len in 0..base.len() {
+            assert!(
+                agrees_with_oracle(&base[..len]),
+                "strict decode diverged from oracle at prefix length {len}"
+            );
+        }
+        for index in 0..base.len() {
+            let mut mutated = base.clone();
+            mutated[index] ^= 1;
+            assert!(
+                agrees_with_oracle(&mutated),
+                "strict decode diverged from oracle at mutated byte {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_into_invalid_completion_overwrites_stale_success_and_completes_cfi() {
+        let valid_cd = encode_exec(
+            fixture_addr(0xAA),
+            fixture_u256(0),
+            &[],
+            0,
+            fixture_u256(0),
+            fixture_u256(0),
+            fixture_u256(0),
+            [0u8; 20],
+            [0u8; 20],
+            &[],
+        );
+        let invalid_cd = encode_exec(
+            fixture_addr(0xCC),
+            fixture_u256(0),
+            &[],
+            1,
+            fixture_u256(0),
+            fixture_u256(0),
+            fixture_u256(0),
+            [0u8; 20],
+            [0u8; 20],
+            &[],
+        );
+        let stale =
+            verify_and_bind_exec(&valid_cd, 1, &fixture_addr(0xBB)).expect("valid stale fixture");
+        let mut output = Some(stale);
+        let mut cfi = crate::fi::CfiCounter::new();
+
+        verify_and_bind_exec_into(&invalid_cd, 1, &fixture_addr(0xBB), &mut output, &mut cfi);
+
+        assert!(
+            output.is_none(),
+            "a completed strict rejection must overwrite stale Some"
+        );
+        assert_eq!(
+            cfi.check_into_sentinel(EXEC_VERIFY_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL,
+            "a completed rejection is a completed strict operation"
+        );
+    }
+
+    #[test]
+    fn skipped_whole_strict_call_leaves_fail_output_and_short_cfi() {
+        use super::super::{
+            exec_claim_resolution_proof, prove_exec_transaction_claim, ExecClaimReceipt,
+            EXEC_CLAIM_CFI_EXPECTED,
+        };
+
+        let cd = encode_exec(
+            fixture_addr(0xAA),
+            fixture_u256(0),
+            &[],
+            0,
+            fixture_u256(0),
+            fixture_u256(0),
+            fixture_u256(0),
+            [0u8; 20],
+            [0u8; 20],
+            &[],
+        );
+        let mut receipt = ExecClaimReceipt::fail_closed();
+        let mut claim_cfi = crate::fi::CfiCounter::new();
+        prove_exec_transaction_claim(&cd, &mut receipt, &mut claim_cfi);
+        assert_eq!(
+            claim_cfi.check_into_sentinel(EXEC_CLAIM_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL
+        );
+
+        let mut output: Option<VerifiedSafeExec<'_>> = None;
+        let verify_cfi = crate::fi::CfiCounter::new();
+        unsafe { core::ptr::write_volatile(&mut output, None) };
+        // Model an instruction skip of the entire non-inlined
+        // `verify_and_bind_exec_into` call: deliberately do not invoke it.
+        assert!(output.is_none());
+        assert_ne!(
+            verify_cfi.check_into_sentinel(EXEC_VERIFY_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL,
+            "a skipped whole call must not mint its completion receipt"
+        );
+        assert_ne!(
+            exec_claim_resolution_proof(&receipt, output.as_ref(), output.as_ref()),
+            crate::fi::OK_SENTINEL,
+            "claimed selector plus skipped strict publication must fail closed"
+        );
+    }
+
+    #[test]
+    fn fi_receipt_requires_two_equivalent_strict_exec_verifications() {
+        use super::super::{
+            exec_claim_resolution_proof, prove_exec_transaction_claim, ExecClaimReceipt,
+            EXEC_CLAIM_CFI_EXPECTED,
+        };
+
+        let cd = encode_exec(
+            fixture_addr(0xAA),
+            fixture_u256(7),
+            &[0xCA, 0xFE],
+            0,
+            fixture_u256(1),
+            fixture_u256(2),
+            fixture_u256(3),
+            fixture_addr(0x40),
+            fixture_addr(0x50),
+            &[0x01, 0x02],
+        );
+        let mut receipt = ExecClaimReceipt::fail_closed();
+        let mut cfi = crate::fi::CfiCounter::new();
+        prove_exec_transaction_claim(&cd, &mut receipt, &mut cfi);
+        assert_eq!(
+            cfi.check_into_sentinel(EXEC_CLAIM_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL
+        );
+
+        let mut verified_a = None;
+        let mut verified_b = None;
+        let mut verify_cfi_a = crate::fi::CfiCounter::new();
+        let mut verify_cfi_b = crate::fi::CfiCounter::new();
+        // Mirror the production caller contract: both outputs begin as
+        // independently materialized `None`, and each helper call must publish
+        // both its result and its own complete CFI receipt.
+        unsafe {
+            core::ptr::write_volatile(&mut verified_a, None);
+            core::ptr::write_volatile(&mut verified_b, None);
+        }
+        verify_and_bind_exec_into(
+            &cd,
+            1,
+            &fixture_addr(0xBB),
+            &mut verified_a,
+            &mut verify_cfi_a,
+        );
+        verify_and_bind_exec_into(
+            &cd,
+            1,
+            &fixture_addr(0xBB),
+            &mut verified_b,
+            &mut verify_cfi_b,
+        );
+        assert_eq!(
+            verify_cfi_a.check_into_sentinel(EXEC_VERIFY_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL
+        );
+        assert_eq!(
+            verify_cfi_b.check_into_sentinel(EXEC_VERIFY_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL
+        );
+        let verified_a = verified_a.expect("first bind publication");
+        let verified_b = verified_b.expect("second bind publication");
+        assert_eq!(
+            exec_claim_resolution_proof(&receipt, Some(&verified_a), Some(&verified_b)),
+            crate::fi::OK_SENTINEL
+        );
+        assert_ne!(
+            exec_claim_resolution_proof(&receipt, Some(&verified_a), None),
+            crate::fi::OK_SENTINEL,
+            "a skipped/disagreeing strict verifier must fail closed"
+        );
+
+        let mut disagreeing = verified_b;
+        disagreeing.decoded.value[31] ^= 1;
+        assert_ne!(
+            exec_claim_resolution_proof(&receipt, Some(&verified_a), Some(&disagreeing)),
+            crate::fi::OK_SENTINEL,
+            "every bound Safe field participates in the pair proof"
+        );
+    }
+
+    #[test]
+    fn fi_receipt_rejects_one_fault_delegatecall_acceptance_and_skipped_classifier() {
+        use super::super::{
+            exec_claim_resolution_proof, prove_exec_transaction_claim, ExecClaimReceipt,
+        };
+
+        // The pure ABI decoder accepts operation=1, while the strict verifier
+        // correctly rejects this non-allowlisted DelegateCall. Constructing a
+        // `Some` from the decoded fields models one skipped operation-policy
+        // reject in one verifier execution; the independent `None` result must
+        // make the pair proof fail.
+        let cd = encode_exec(
+            fixture_addr(0xAA),
+            fixture_u256(0),
+            &[],
+            1,
+            fixture_u256(0),
+            fixture_u256(0),
+            fixture_u256(0),
+            [0u8; 20],
+            [0u8; 20],
+            &[],
+        );
+        let mut receipt = ExecClaimReceipt::fail_closed();
+        let mut cfi = crate::fi::CfiCounter::new();
+        prove_exec_transaction_claim(&cd, &mut receipt, &mut cfi);
+        let faulted_accept = VerifiedSafeExec {
+            chain_id: 1,
+            safe_address: fixture_addr(0xBB),
+            decoded: decode_exec_transaction(&cd).expect("ABI shape is valid"),
+        };
+        assert!(verify_and_bind_exec(&cd, 1, &fixture_addr(0xBB)).is_none());
+        assert_ne!(
+            exec_claim_resolution_proof(&receipt, Some(&faulted_accept), None),
+            crate::fi::OK_SENTINEL,
+            "one skipped DelegateCall reject must not authorize the Safe route"
+        );
+
+        let skipped = ExecClaimReceipt::fail_closed();
+        assert_ne!(
+            exec_claim_resolution_proof(&skipped, None, None),
+            crate::fi::OK_SENTINEL,
+            "a skipped classifier proof must not look like an unclaimed selector"
+        );
     }
 }

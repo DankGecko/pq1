@@ -1,0 +1,25 @@
+POST-LAUNCH RUNTIME RECEIPT V1 — PQ1 ERC-7730 ARCHITECTURE CROSS — PARTNER A
+frozen_local: 2026-07-16T23:09:36+02:00
+session_id: fc611891-8cef-4051-b9a1-d409dab7db13 (resumed accepted Partner-A V5 context)
+cli_version_observed: Claude Code 2.1.211
+provider_model_observed_in_durable_messages: claude-opus-4-8
+context_selector_observed: opus[1m] / 1M
+orchestration_observed: /effort ultracode acknowledged as xhigh + dynamic workflows; no new discovery fanout required for cross
+sandbox: plan/read-only; target recursively non-writable
+target_head_initial_final: 9647b79374d5e2e10445254492308101b8be708b
+target_diff_sha256_initial_final: b8e270747a5c16eafde0b74fe94f34be9ab4504d91559234fb2a1ca056d59c25
+target_status_final: M docs/erc7730-implementation-review-2026-07.md; M docs/work-todo.md
+target_untracked_final: empty
+target_ignored_inventory_sha256_final: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+partner_a_first_sha256_recomputed: 4b34ae5f1459d2d6dbfe21a1a9019235b74344cb0440aac76551efe6823a884c
+partner_b_first_sha256_recomputed: bcb8a52e7dba0ecf49e651467615a9c47da2a2a0756563d4362252dde5f1110f
+cross_report_path: /tmp/pq1-erc7730-partner-a-cross-v1.md
+cross_report_sha256: d11bf34e8b6ece6eac442ef26674ea7604c816bbc8dd50804539327f32186e70
+cross_report_bytes: 27716
+cross_inventory: 24/24 first-pass IDs present as distinct rows
+new_cross_candidates_raw_ids: XB-1, XB-2 (origin is Partner A despite raw prefix; coordinator will preserve raw IDs and assign origin mapping)
+session_log_sha256_after_cross: 29d4cc50f65cb19fbc50105765654df3629567ed77033561e46b3de46fcbcabe
+scratch: one Bloom-recomputation script under the Claude harness-owned scratchpad; canonical target unchanged
+counterpart_cross_result: withheld throughout this report
+acceptance: frozen Partner-A cross leg, subject to one bounded Partner-B response for the two new cross candidates and durable coordinator matrix
+

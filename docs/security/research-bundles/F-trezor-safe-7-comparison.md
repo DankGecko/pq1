@@ -246,6 +246,14 @@ A **post-quantum ERC-4337 hardware wallet** (the **PQ1**) where every primitive 
 
 **Build one yourself:** every part is off-the-shelf — [`DIY.md`](../../../DIY.md) has the ~$150 bill of materials (Mouser links included), the wiring, and the first-flash guide.
 
+> **Firmware-format authority correction — 2026-07-15.** The existing
+> `PQFW_V1`/75-byte proof and implementation are legacy bench evidence only.
+> Historical V4/80-byte text remains in some owner documents, while the
+> more-specific Draft 1.1 describes V6/121 bytes as a research candidate with
+> no implementation authority. No replacement schema is currently selected.
+> Reconcile those owners before implementation or formalization; later V4
+> passages in this README are historical candidate text, not current approval.
+
 > **Status — 2026-04, pre-production bring-up. All-C10 cutover complete.**
 > Every transaction is signed with **SPHINCS+C10** (W+C_F+C, `h=18, d=2, a=11, k=13, w=8, l=43, target_sum=205, sig=4008`) — hash-based, no lattice or number-theoretic assumptions, no classical fallback. The *same* primitive signs both Type 1 (bootstrap → slot registration) and Type 2 (slot → user tx); there is no FORS+C and no secp256k1/P-256/Ed25519 anywhere. The firmware boots and runs on a real **B-U585I-IOT02A** with the OPTIGA Trust M V3 Shield + NXP OM-SE050ARD on Arduino R3 headers, and on QEMU `mps2-an505`. Dual-SE XOR entropy split, three-way PIN-attempt consumption (MCU + OPTIGA + SE050), both SE drivers, and the Tier-1 SAES-CMAC(DHUK) KDF are validated end-to-end on silicon; the boot counter check is directionally MCU→OPTIGA E120 because the SE050 attempt count is not peek-readable. On-chain contracts (`PQSmartWallet` + factory + `PQMultiOwnable`) target **EntryPoint v0.6** behind cheap ERC-1967 proxies at a deterministic CREATE2 address keyed on `sha256(masterPkSeed‖masterPkRoot)`. SHA-256 throughout the PQ stack (routed to the STM32U585 HASH peripheral); Keccak-256 only for EVM-mandated hashes.
 >
@@ -525,9 +533,13 @@ Every step runs in the **secure world**; NS drives nothing more sensitive than "
 
 ## Formal Verification (Lean 4)
 
-Two machine-checked proof tracks, one shared specification. Neither gates
-shipping — the C10 parameters and wire formats are frozen, so proofs that land
-after a release still apply to shipped firmware.
+Two machine-checked proof tracks, one shared specification. A proof applies to
+a shipped release only when an identity-bound receipt connects that exact
+release artifact to its source, configuration, generated models, toolchain,
+assumption closure, and proof result. Frozen parameters or wire formats alone
+do not establish that correspondence. A release may be separately authorized
+without FV, but it must not be described retrospectively as verified without
+that binding.
 
 **On-chain track (established).** `contracts/verification/` holds a Lean 4
 specification of SPHINCS+C10 verification (`SphincsCVerify/Spec/` — WOTS, FORS,
@@ -554,11 +566,13 @@ Research and tool selection: [docs/verification/lean-verification-research-2026-
 
 What this unlocks, in value order:
 
-1. **Firmware↔chain binding.** The headline goal theorem: *the bytes the
-   firmware signs over a parsed sign-request are exactly the `userOpHash` the
-   proven wallet model verifies* — closing, mathematically, the gap between
-   what the device signs and what the chain checks. No test suite can cover
-   that gap exhaustively; a theorem covers every input at once.
+1. **Firmware↔chain binding.** The headline goal theorem must show that the
+   bytes the firmware signs over a parsed sign-request are exactly the custom
+   SHA-256 `PQSmartWallet.sphincsDigest(userOp)` the wallet recomputes—not the
+   EntryPoint canonical keccak `userOpHash`, which this wallet ignores. The
+   existing extracted `compute_user_op_hash` theorem is tooling-only; the
+   production `compute_sphincs_digest_v06` bridge remains open. No finite test
+   suite can close that gap exhaustively; a current-source theorem can.
 2. **Signer/verifier correspondence.** The firmware's C10 signer and the
    on-chain verifier proven against one spec, ending any possibility of
    silent algorithmic drift between the two implementations.
@@ -917,7 +931,7 @@ Input header is 17 B (`account(1) | chain(8) | slot(4) | kind(1) | payload_len(2
 - **`account_deployed = 1` (wallet on-chain):** firmware returns 4016 B = `[new_local_offchain_count(8 BE)][C10 sig (4008)]` — byte-identical to pre-EIP-6492 builds. Companion wraps as `abi.encode(uint256 ownerIndex, bytes c10Sig)` and the dapp calls `wallet.isValidSignature(rawHash, wrappedSig)`.
 - **`account_deployed = 0` (counterfactual):** firmware returns 8616 B = `[new_local_offchain_count(8 BE)][ERC-6492 blob(8608)]`. The blob is `abi.encode(address factory, bytes factoryCalldata, bytes signatureWrapper) || EIP6492_MAGIC` (`0x6492…6492`, 32 B). `factory = PQ_SMART_WALLET_FACTORY`, `factoryCalldata = initCode[20..]` (i.e. the exact deploy bytes whose hash is baked into the CREATE2 address), and `signatureWrapper = abi.encode(1, c10Sig)` (ownerIndex 1 = slot 0). The dapp routes the blob through any EIP-6492-aware verifier (Solady `SignatureCheckerLib.isValidERC6492SignatureNow`, Ambire `UniversalSigValidator`, viem `verifyMessage`) which deploys-then-verifies in one `eth_call`. Constraints: `slot_index` MUST be `0` (the factory only seeds slot 0 at deploy); slot 0 is auto-registered (`local=last=0`) on the first counterfactual call to a never-used wallet.
 
-In both modes the wallet recomputes `replaySafeHash(rawHash)` (Solady-nested EIP-712: `(name="PQSmartWallet", version="1", chainId, address(this))`) and verifies. **The firmware — never the companion — performs this `replaySafeHash` nesting, for every off-chain kind.** For `kind = RAW32` the companion sends the dapp's *raw* hash `H` (the value it passes to `isValidSignature`) and the firmware nests it via `aa::eip1271::replay_safe_hash` before signing; for `kind = PERSONAL_SIGN`/`EIP712_TYPED` the firmware likewise nests in S-world. This is a security invariant, not a convenience: the on-chain Type-1/Type-2 UserOp path verifies a *bare* slot/bootstrap C10 sig over a SHA-256 `sphincsDigest`, so a firmware that bare-signed a companion-chosen 32-byte value would be a UserOp-forgery oracle (`raw32(sphincsDigest(drainOp))` → valid Type-2 sig → drain behind a blind page). On-device keccak nesting keeps every off-chain signed value structurally disjoint from any `sphincsDigest` (fixed 2026-06-11; was the pre-fix RAW32 design where the companion pre-nested).
+In both modes the wallet recomputes `replaySafeHash(rawHash)` (Solady-nested EIP-712: `(name="PQSmartWallet", version="1", chainId, address(this))`) and verifies. **The firmware — never the companion — performs this `replaySafeHash` nesting, for every off-chain kind.** For `kind = RAW32` the companion sends the dapp's *raw* hash `H` (the value it passes to `isValidSignature`) and the firmware nests it via `aa::eip1271::replay_safe_hash` before signing; for `kind = PERSONAL_SIGN`/`EIP712_TYPED` the firmware likewise nests in S-world. This is a security invariant, not a convenience: the on-chain Type-1/Type-2 UserOp path verifies a *bare* slot/bootstrap C10 sig over a SHA-256 `sphincsDigest`, so a firmware that bare-signed a companion-chosen 32-byte value would be a UserOp-forgery oracle (`raw32(sphincsDigest(drainOp))` → valid Type-2 sig → drain behind a blind page). On-device keccak nesting keeps every off-chain signed value computationally separated from any `sphincsDigest` — equal images would require a keccak-256/SHA-256 cross-preimage (Lean discharges via `keccak_sha256_cross_separation`, an explicit `… ∨ BreaksHash` cross-function assumption, not a structural impossibility) (fixed 2026-06-11; was the pre-fix RAW32 design where the companion pre-nested).
 
 `RAW32` remains intentionally opaque: replay-safe nesting prevents the UserOp-forgery oracle, but it cannot prove how a dapp obtained `H`. A hostile companion can submit the final hash of otherwise-supported typed data as `RAW32` and suppress its semantic pages; the device therefore shows `! BLIND RAW32` plus the complete hash. Companions MUST preserve the dapp-requested method and MUST NOT downgrade typed data to `RAW32`. Disabling `RAW32` in production remains the preferred policy unless an explicit compatibility decision accepts this residual.
 
@@ -1010,7 +1024,7 @@ CI must gate shipped firmware on `debug-log` / `e2e-test` / `mock-se` / `otp-har
 - `zeroize::ZeroizeOnDrop` on every secret type with compiler fences.
 - `subtle` for constant-time compares. No secret-dependent branches.
 - Every `unsafe` block has a `// SAFETY:` comment. `#![deny(unsafe_op_in_unsafe_fn)]`, `#![warn(clippy::pedantic)]`.
-- **`unsafe` taxonomy.** Five categories that are structurally required and one that is not. **Required:** (1) CMSE `unsafe extern "C"` veneers (TrustZone ABI); (2) NS pointer deref after `NsPtr<T>` validation in `secure/src/nsc/*`; (3) `unsafe extern "C"` SHA-256 hooks consumed by `sphincs-c10` under `hw-sha256`; (4) FI volatile read/write helpers in `secure/src/fi.rs` (must be `read_volatile`/`write_volatile` to defeat compiler folding); (5) `static mut` bookkeeping for the HASH peripheral's 4-byte merge buffer and similar single-threaded driver state. **Avoidable:** ad-hoc per-register MMIO `read_volatile`/`write_volatile` — funnel each peripheral's registers through `hw::mmio::{Reg32, RoReg32}`, which encapsulates the unsafe once at the address-binding step. UI/log code that materialises ASCII-by-construction buffers must use `crate::ui::ascii_str` rather than `core::str::from_utf8_unchecked`.
+- **`unsafe` taxonomy.** Five categories that are structurally required and one that is not. **Required:** (1) CMSE `unsafe extern "C"` veneers (TrustZone ABI); (2) NS pointer deref after `NsPtr<T>` validation in `secure/src/nsc/*` — and the same NS-pointer window-check + volatile-copy primitives extracted verbatim into `shared/src/ns_ptr_validate.rs` so they are Kani-proven + Miri-checked host-side (re-exported by `nsc/{ns_ptr,ptr_validate}.rs`); (3) `unsafe extern "C"` SHA-256 hooks consumed by `sphincs-c10` under `hw-sha256`; (4) FI volatile read/write helpers in `secure/src/fi.rs` — plus the FI stack-canary `read_volatile`/`write_volatile` in `pqsigner-erc7730/src/display/render/mod.rs` that rode into the host crate with the render dispatch (all must stay `read_volatile`/`write_volatile` to defeat compiler folding; a `black_box` swap is a silent FI-weakening); (5) `static mut` bookkeeping for the HASH peripheral's 4-byte merge buffer and similar single-threaded driver state. The `.semgrep` `no-unsafe-in-pure-logic-crates` gate excludes exactly those two host-relocated files (allowlist asserted by `make invariant-gates`); any *new* `unsafe` in a pure-logic crate is still a hard error. **Avoidable:** ad-hoc per-register MMIO `read_volatile`/`write_volatile` — funnel each peripheral's registers through `hw::mmio::{Reg32, RoReg32}`, which encapsulates the unsafe once at the address-binding step. UI/log code that materialises ASCII-by-construction buffers must use `crate::ui::ascii_str` rather than `core::str::from_utf8_unchecked`.
 - NS pointer validation on every gateway call before any deref. NS buffers copied to S-stack before parse.
 - Cross-world types in `shared/src/lib.rs` with `#[repr(C)]`.
 - Secret types are `!Copy + !Clone`.

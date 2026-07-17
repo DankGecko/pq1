@@ -3,9 +3,18 @@
 The ERC-8213 spec (Ethereum Magicians thread #24295) standardises how
 wallets display signature/calldata digests so users can cross-check the
 on-device fingerprint against an independent tool. The PQSigner OS
-firmware renders a 2-page fingerprint for every clear-signing path:
-page F is the banner (`"8213 Fingerprint"` + kind label) and page F+1
-is the full 32-byte hash split 4 rows × 8 hex bytes.
+firmware renders a 2-page fingerprint for every confirmation of a
+companion/dapp-supplied signed payload: page F is the banner
+(`"8213 Fingerprint"` + kind label) and page F+1 is the full 32-byte
+hash split 4 rows × 8 hex bytes.
+
+The one current exception is the firmware-constructed Type-1 slot-rotation
+operation. Its exact calldata contains seed-derived slot-owner material that
+does not exist until after the pre-derivation rotation consent boundary.
+Deriving it earlier would extend secret lifetime across a user wait/cancel
+path, so the rotation dialog instead shows the complete slot index and the
+bootstrap-use consequence. Adding an exact rotation fingerprint is a separate
+secret-lifecycle change, not permission to display a synthetic digest.
 
 This document is the recipe for an external party (you, an auditor, a
 support engineer) to regenerate the same hash from public inputs.

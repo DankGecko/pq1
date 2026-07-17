@@ -9,7 +9,7 @@
 - **Severity:** HIGH (integrity / trusted-display boundary). **Latent** (the one live shipping witness is impotent against a PQ1 EIP-1271 wallet by an *external* contract property — Rarible verifies `from` via `ecrecover`, not by any PQ1 control), rated HIGH on the same basis the sibling `VULN-erc7730-visible-never-noparam-clearsign` used: the control was simply absent and the auto-vendored corpus can grow the affected set unchecked.
 - **Class:** WYSIWYS / clear-sign supply-chain gate hole. Sibling of the FIXED `visible:"never"` (address-recipient) and `eip712-nested-struct` (address-in-struct) findings.
 - **Status:** **FIXED (2026-07-01)** — build-time **Rule 1** now requires a genuinely effect-bearing shown field. Corpus regenerated (**784 → 783 leaves**; new `ERC7730_DESCRIPTORS_ROOT` `0xaa64b785…`). The Rule-3 half (gating hidden *non-address values*) was **deliberately NOT taken** — see **§Scope: why Rule 1 only**. Found by exhaustive adversarial hunt (2 multi-agent workflows + manual verification).
-- **Reachability:** software-triggerable by an untrusted companion after one ordinary PIN unlock; no fault injection; rides descriptors auto-vendored from a mutable third-party registry (now ERC-8176-attestation-gated).
+- **Reachability:** software-triggerable by an untrusted companion after one ordinary PIN unlock; no fault injection; rides descriptors auto-vendored from a mutable third-party registry. The current corpus is still `dev-unattested`; production is quarantined until the missing authenticated ERC-8176 verifier and external attestation population exist.
 
 ## The gap in one sentence
 
@@ -48,4 +48,11 @@ The original write-up also proposed a **Rule 3** to gate a hidden *non-address* 
 
 Rule 1 asks a **different** question than Rule 3 — "is anything effect-bearing SHOWN?" rather than "is a specific hidden value dangerous?" — so it is complementary to that decision, not a reversal of it: it closes the one live witness (the Rarible meta-tx, which shows *only* inert fields and which the residual analysis — assuming "the recipient/intent IS shown" — did not cover) with zero corpus false positives.
 
-**Residual (accepted, MEDIUM, ERC-8176-attestation-backstopped):** a descriptor that hides an effect-bearing scalar value / executable-calldata payload **while a non-inert field (recipient/intent) IS shown** — e.g. a hypothetical `execute(address target, bytes data)` that shows `target` and hides `data`. Rule 1 does not catch this (a non-inert field is shown); none ship today, and the corpus is now ERC-8176-attestation-gated. Tracked in the residual section above.
+**Residual (accepted for development, MEDIUM; ERC-8176 backstop still
+missing):** a descriptor that hides an effect-bearing scalar value /
+executable-calldata payload **while a non-inert field (recipient/intent) IS
+shown** — e.g. a hypothetical `execute(address target, bytes data)` that shows
+`target` and hides `data`. Rule 1 does not catch this and none ship today. The
+current corpus remains `dev-unattested`; production stays quarantined until the
+separate authenticated ERC-8176 verifier and external evidence exist. Tracked
+in the residual section above.

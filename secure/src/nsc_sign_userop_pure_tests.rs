@@ -892,6 +892,7 @@ fn negative_u128_sat_msb_high_byte_saturates_not_truncates() {
 
 const CMD_SIGN_USEROP_SRC: &str =
     include_str!("nsc/cmd_sign_userop.rs");
+const SAFE_EXEC_DECODE_SRC: &str = include_str!("tx/eip712/safe/exec_decode.rs");
 const WALLET_ADDRESS_SRC: &str = include_str!("nsc/cmd_get_wallet_address.rs");
 const VALUE_PAGE_SRC: &str = include_str!("tx/display/value_page.rs");
 const NONCE_LANE_SRC: &str = include_str!("tx/display/nonce_lane.rs");
@@ -959,6 +960,153 @@ fn negative_slice_does_not_use_entrypoint_v07_or_v08() {
     // And the slice's only AaUserOp params type must be the v06
     // Sha256 variant. (Compile-time pin via use-site.)
     assert!(CMD_SIGN_USEROP_SRC.contains("AaUserOpParamsV06Sha256"));
+}
+
+#[test]
+fn negative_slice_fi_pins_wire_entrypoint_and_hashes_only_the_constant() {
+    // The wire field is hostile input. It must be checked before any later
+    // header field or verifier can consume the request, and it must never be
+    // threaded into the signing params. Two independently materialized reads
+    // and two spatially separate reject gates force a single skipped reject to
+    // encounter the second gate; direct use of `ENTRY_POINT_V06` in every
+    // params initializer keeps the signed domain canonical even if control
+    // flow is faulted.
+    const SNAPSHOT_COPY_END: &str =
+        "snap[i] = core::ptr::read_volatile(payload_ptr.add(i));\n    }\n";
+    let snapshot_copy_end = CMD_SIGN_USEROP_SRC
+        .find(SNAPSHOT_COPY_END)
+        .map(|p| p + SNAPSHOT_COPY_END.len())
+        .expect("completed single-handler snapshot copy loop");
+    let parse_header = CMD_SIGN_USEROP_SRC
+        .find("// ── 4. Parse header (big-endian, fixed offsets)")
+        .expect("single-handler request parse boundary");
+    let pin_a = CMD_SIGN_USEROP_SRC
+        .find("let supplied_entry_point_a")
+        .expect("first EntryPoint pin read");
+    let gate_a = CMD_SIGN_USEROP_SRC[pin_a..]
+        .find("if crate::fi::check_true_into_sentinel(|| core::hint::black_box(entry_point_match_a)")
+        .map(|p| pin_a + p)
+        .expect("first EntryPoint rejection gate");
+    let gate_a_end = CMD_SIGN_USEROP_SRC[gate_a..]
+        .find("return NscStatus::InvalidPointer as u32;")
+        .map(|p| gate_a + p + "return NscStatus::InvalidPointer as u32;".len())
+        .expect("end of first EntryPoint rejection gate");
+    let gap = CMD_SIGN_USEROP_SRC[gate_a_end..]
+        .find("crate::fi::wait_random();")
+        .map(|p| gate_a_end + p)
+        .expect("randomized gap between EntryPoint gates");
+    let pin_b = CMD_SIGN_USEROP_SRC[gap..]
+        .find("let supplied_entry_point_b")
+        .map(|p| gap + p)
+        .expect("second EntryPoint pin read");
+    let gate_b = CMD_SIGN_USEROP_SRC[pin_b..]
+        .find("if crate::fi::check_true_into_sentinel(|| core::hint::black_box(entry_point_match_b)")
+        .map(|p| pin_b + p)
+        .expect("second EntryPoint rejection gate");
+    let gate_b_end = CMD_SIGN_USEROP_SRC[gate_b..]
+        .find("return NscStatus::InvalidPointer as u32;")
+        .map(|p| gate_b + p + "return NscStatus::InvalidPointer as u32;".len())
+        .expect("end of second EntryPoint rejection gate");
+    let nonce_parse = CMD_SIGN_USEROP_SRC
+        .find("let mut nonce =")
+        .expect("nonce parse");
+    let chain_parse = CMD_SIGN_USEROP_SRC
+        .find("let chain_id = u64::from_be_bytes([")
+        .expect("chain-id parse");
+    let flags_parse = CMD_SIGN_USEROP_SRC
+        .find("let flags_a = u32::from_be_bytes(")
+        .expect("flags parse");
+    let diagnostic = CMD_SIGN_USEROP_SRC
+        .find("#[cfg(all(feature = \"e2e-test\", feature = \"ui-lcd\"))]")
+        .expect("request-derived e2e diagnostic");
+    let sender_parse = CMD_SIGN_USEROP_SRC
+        .find("let mut companion_sender =")
+        .expect("sender parse");
+    assert!(snapshot_copy_end <= pin_a, "pin must follow snapshot copy");
+    assert!(
+        pin_a < gate_a
+            && gate_a < gate_a_end
+            && gate_a_end < gap
+            && gap < pin_b
+            && pin_b < gate_b
+            && gate_b < gate_b_end
+    );
+    assert!(
+        gate_b_end < parse_header,
+        "both EntryPoint gates must finish before the request parse boundary"
+    );
+    for (label, parse) in [
+        ("chain id", chain_parse),
+        ("flags", flags_parse),
+        ("e2e diagnostic", diagnostic),
+        ("sender", sender_parse),
+        ("nonce", nonce_parse),
+    ] {
+        assert!(
+            gate_b_end < parse,
+            "EntryPoint must fail before {label} request handling"
+        );
+    }
+    let pin_window = &CMD_SIGN_USEROP_SRC[snapshot_copy_end..gate_b_end];
+    assert!(
+        !pin_window.contains("snap["),
+        "no indexed request field may be consumed before both EntryPoint rejects complete"
+    );
+    assert_eq!(
+        pin_window.matches("snap.as_ptr().add(32)").count(),
+        2,
+        "the pre-parse window may read only the two EntryPoint samples"
+    );
+    for forbidden_parse in ["u64::from_be_bytes", "u32::from_be_bytes", "copy_from_slice"] {
+        assert!(
+            !pin_window.contains(forbidden_parse),
+            "request parsing via {forbidden_parse} appeared before pin completion"
+        );
+    }
+    let pre_scrub = CMD_SIGN_USEROP_SRC[pin_a..gate_a]
+        .rfind("crate::fi::scrub_sentinel_register();")
+        .map(|p| pin_a + p)
+        .expect("scrub before first EntryPoint sentinel check");
+    assert!(
+        pre_scrub < gate_a,
+        "stale OK sentinel state must be scrubbed before the first pin gate"
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_SRC
+            .matches(".ct_eq(&ENTRY_POINT_V06)")
+            .count(),
+        2,
+        "both EntryPoint reads must use constant-time equality"
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_SRC
+            .matches("read_volatile(snap.as_ptr().add(32).cast::<[u8; 20]>())")
+            .count(),
+        2,
+        "the two snapshot samples must remain volatile under LTO"
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_SRC.matches("wrong EntryPoint").count(),
+        2,
+        "two spatially separate mismatch rejects are required"
+    );
+    assert!(!CMD_SIGN_USEROP_SRC.contains("let mut entry_point ="));
+    assert!(!CMD_SIGN_USEROP_SRC.contains("entry_point.copy_from_slice"));
+
+    let params = CMD_SIGN_USEROP_SRC
+        .matches("AaUserOpParamsV06Sha256 {")
+        .count();
+    assert_eq!(
+        params, 2,
+        "single handler owns one T1 and one T2 params site"
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_SRC
+            .matches("entry_point: ENTRY_POINT_V06,")
+            .count(),
+        params,
+        "every T1/T2 digest must consume the firmware constant directly"
+    );
 }
 
 #[test]
@@ -1089,6 +1237,11 @@ fn negative_slice_binds_sender_before_confirm_sign_or_counter_write() {
         !downstream.contains("companion_sender"),
         "the untrusted sender must never reach display bindings or signed hashes"
     );
+    let downstream_compact = downstream.split_whitespace().collect::<String>();
+    assert!(
+        downstream_compact.contains("pick_sign_pages(&tx_for_display,inner_data,&sender,"),
+        "ERC-7730 @.from must receive the already-bound device sender explicitly"
+    );
 
     let helper_start = WALLET_ADDRESS_SRC
         .find("pub(super) unsafe fn bind_userop_sender")
@@ -1141,20 +1294,24 @@ fn negative_slice_every_userop_confirm_gets_bound_from_page() {
         .split_whitespace()
         .collect::<String>()
         .replace(",)", ")");
-    assert!(compact.contains("enforce_from_page(&mutrotate_pages,account_index,&sender)"));
-    assert!(CMD_SIGN_USEROP_SRC.contains(
-        "enforce_from_page(&mut pages, account_index, &sender)"
+    assert!(compact.contains(
+        "enforce_from_page(&mutrotate_pages,account_index,&sender,&mutsigner_cfi)"
+    ));
+    assert!(compact.contains(
+        "enforce_from_page(&mutpages,account_index,&sender,&mutsigner_cfi)"
     ));
     assert!(CMD_SIGN_USEROP_SRC.contains("signer unshown"));
     assert_eq!(CMD_SIGN_USEROP_SRC.matches("from_page_proof(").count(), 2);
+    assert_eq!(CMD_SIGN_USEROP_SRC.matches("SIGNER_PAGE_CFI_EXPECTED").count(), 2);
 }
 
 #[test]
 fn negative_slice_transaction_confirm_gets_full_target_page() {
     assert_eq!(CMD_SIGN_USEROP_SRC.matches("enforce_target_page(").count(), 1);
     assert_eq!(CMD_SIGN_USEROP_SRC.matches("target_page_proof(").count(), 1);
-    assert!(CMD_SIGN_USEROP_SRC.contains(
-        "enforce_target_page(&mut pages, &to_address)"
+    let compact = CMD_SIGN_USEROP_SRC.split_whitespace().collect::<String>();
+    assert!(compact.contains(
+        "enforce_target_page(&mutpages,&to_address,&muttarget_cfi)"
     ));
     assert!(CMD_SIGN_USEROP_SRC.contains("TARGET_IDENTITY_PAGES"));
     assert!(CMD_SIGN_USEROP_SRC.contains("target unshown"));
@@ -1173,11 +1330,12 @@ fn negative_slice_shows_and_fi_proves_full_derived_signer_identity() {
         "every signer-page append needs an independent FI completion proof"
     );
     assert!(CMD_SIGN_USEROP_SRC.contains("SIGNER_IDENTITY_PAGES"));
-    assert!(CMD_SIGN_USEROP_SRC.contains("account_index, &sender"));
+    let compact = CMD_SIGN_USEROP_SRC.split_whitespace().collect::<String>();
+    assert!(compact.contains("account_index,&sender,&mutsigner_cfi"));
     assert!(!CMD_SIGN_USEROP_SRC.contains("account_index, &companion_sender"));
 
     let main_page = CMD_SIGN_USEROP_SRC
-        .find("enforce_from_page(&mut pages, account_index, &sender)")
+        .rfind("let signer_pages_before = pages.len;")
         .expect("main UserOp signer page");
     let fingerprint = CMD_SIGN_USEROP_SRC[main_page..]
         .find("append_fingerprint_page(")
@@ -1193,7 +1351,7 @@ fn negative_slice_shows_and_fi_proves_full_derived_signer_identity() {
     assert!(VALUE_PAGE_SRC.contains("primitives::write_addr_full(a, b, c, sender)"));
     assert!(VALUE_PAGE_SRC.contains("#[inline(never)]\npub(crate) fn enforce_from_page"));
     assert!(VALUE_PAGE_SRC.contains("#[inline(never)]\npub(crate) fn from_page_proof"));
-    assert!(VALUE_PAGE_SRC.contains("from_page_matches(pages, page_index"));
+    assert!(VALUE_PAGE_SRC.contains("from_page_matches(pages, prior_len"));
     assert!(!VALUE_PAGE_SRC.contains("b\"From account:"));
 }
 
@@ -1201,13 +1359,14 @@ fn negative_slice_shows_and_fi_proves_full_derived_signer_identity() {
 fn negative_slice_shows_and_fi_proves_every_nonzero_nonce_lane() {
     assert_eq!(CMD_SIGN_USEROP_SRC.matches("enforce_nonce_lane_page(").count(), 2);
     assert_eq!(CMD_SIGN_USEROP_SRC.matches("nonce_lane_page_proof(").count(), 2);
-    assert!(CMD_SIGN_USEROP_SRC.contains("&mut rotate_pages, &nonce"));
-    assert!(CMD_SIGN_USEROP_SRC.contains("&mut pages, &type2_nonce"));
+    let compact = CMD_SIGN_USEROP_SRC.split_whitespace().collect::<String>();
+    assert!(compact.contains("&mutrotate_pages,&nonce,&mutnonce_lane_cfi"));
+    assert!(compact.contains("&mutpages,&type2_nonce,&mutnonce_lane_cfi"));
     assert!(CMD_SIGN_USEROP_SRC.contains("NONZERO_NONCE_LANE_PAGES"));
     assert!(CMD_SIGN_USEROP_SRC.contains("lane unshown"));
 
     let main_lane = CMD_SIGN_USEROP_SRC
-        .find("enforce_nonce_lane_page(&mut pages, &type2_nonce)")
+        .rfind("let nonce_lane_pages_before = pages.len;")
         .unwrap();
     let proof = main_lane
         + CMD_SIGN_USEROP_SRC[main_lane..]
@@ -1237,6 +1396,57 @@ fn negative_slice_shows_and_fi_proves_every_nonzero_nonce_lane() {
 }
 
 #[test]
+fn single_payload_fingerprint_completes_and_rechecks_at_confirmation_boundary() {
+    assert_eq!(CMD_SIGN_USEROP_SRC.matches("append_fingerprint_page(").count(), 1);
+    assert_eq!(CMD_SIGN_USEROP_SRC.matches("fingerprint_page_proof(").count(), 1);
+    assert_eq!(
+        CMD_SIGN_USEROP_SRC
+            .matches("fingerprint_final_set_proof(")
+            .count(),
+        1
+    );
+    assert_eq!(CMD_SIGN_USEROP_SRC.matches("FINGERPRINT_CFI_EXPECTED").count(), 1);
+
+    let append = CMD_SIGN_USEROP_SRC
+        .find("append_fingerprint_page(")
+        .expect("single payload fingerprint append");
+    let completion = append
+        + CMD_SIGN_USEROP_SRC[append..]
+            .find("fingerprint_page_proof(")
+            .expect("single payload fingerprint completion proof");
+    let gas_final = completion
+        + CMD_SIGN_USEROP_SRC[completion..]
+            .find("userop_gas_final_set_proof(")
+            .expect("single final gas proof");
+    let dispatch_final = gas_final
+        + CMD_SIGN_USEROP_SRC[gas_final..]
+            .find("dispatch_page_proofs.final_set_proof(")
+            .expect("single final native/fee proof");
+    let fingerprint_final = dispatch_final
+        + CMD_SIGN_USEROP_SRC[dispatch_final..]
+            .find("fingerprint_final_set_proof(")
+            .expect("single final fingerprint proof");
+    let confirm = fingerprint_final
+        + CMD_SIGN_USEROP_SRC[fingerprint_final..]
+            .find("confirm_checked(pages.as_slice())")
+            .expect("single payload confirmation");
+    assert!(append < completion);
+    assert!(completion < gas_final && gas_final < dispatch_final);
+    assert!(dispatch_final < fingerprint_final && fingerprint_final < confirm);
+
+    let rotation = CMD_SIGN_USEROP_SRC
+        .find("// Slot rotation is its own affirmative-consent step")
+        .expect("single rotation confirmation block");
+    let main = CMD_SIGN_USEROP_SRC
+        .find("let mut dispatch_page_proofs")
+        .expect("single payload render");
+    assert!(
+        !CMD_SIGN_USEROP_SRC[rotation..main].contains("append_fingerprint_page("),
+        "firmware-built rotation must use its documented explicit exemption, not a pseudo hash"
+    );
+}
+
+#[test]
 fn negative_slice_type2_display_uses_incremented_rotation_nonce() {
     let overflow_guard = CMD_SIGN_USEROP_SRC
         .find("register_slot && nonce[24..32] == [0xFFu8; 8]")
@@ -1248,7 +1458,7 @@ fn negative_slice_type2_display_uses_incremented_rotation_nonce() {
         .find("let display_nonce = u64::from_be_bytes([")
         .unwrap();
     let main_lane = CMD_SIGN_USEROP_SRC
-        .find("enforce_nonce_lane_page(&mut pages, &type2_nonce)")
+        .rfind("let nonce_lane_pages_before = pages.len;")
         .unwrap();
     let signed = CMD_SIGN_USEROP_SRC
         .rfind("nonce: U256(type2_nonce)")
@@ -1259,9 +1469,8 @@ fn negative_slice_type2_display_uses_incremented_rotation_nonce() {
     assert!(CMD_SIGN_USEROP_SRC[display..].contains("type2_nonce[24]"));
     // The separate Type-1 rotation lane page remains bound to the base
     // high-192 key; CRIT-17 proves base+1 cannot change that lane.
-    assert!(CMD_SIGN_USEROP_SRC.contains(
-        "enforce_nonce_lane_page(&mut rotate_pages, &nonce)"
-    ));
+    let compact = CMD_SIGN_USEROP_SRC.split_whitespace().collect::<String>();
+    assert!(compact.contains("&mutrotate_pages,&nonce,&mutnonce_lane_cfi"));
 }
 
 #[test]
@@ -1335,16 +1544,113 @@ fn negative_slice_pins_safe_downgrade_mitigation_gate() {
 
 #[test]
 fn negative_slice_pins_safe_exec_decode_gate() {
-    // Safe `execTransaction`: when the inner calldata selector matches
-    // and the calldata is long enough to satisfy the ABI head, a
-    // successful exec decode is MANDATORY. A parse failure (malformed,
-    // DelegateCall, non-canonical address, …) must refuse the sign
-    // rather than fall through to generic blind-sign — letting an
-    // attacker hide intent behind a Safe-shaped call would defeat the
-    // point of the Safe-aware renderer.
-    assert!(CMD_SIGN_USEROP_SRC.contains("EXEC_TRANSACTION_SELECTOR"));
-    assert!(CMD_SIGN_USEROP_SRC.contains("EXEC_TRANSACTION_MIN_CALLDATA_LEN"));
-    assert!(CMD_SIGN_USEROP_SRC.contains("safe_exec_verified.is_none()"));
+    // Safe `execTransaction` ownership begins at the selector, not at the ABI
+    // minimum length. The caller-owned proof and two independent strict
+    // verifications must resolve twice before any lower routing surface.
+    let claim = CMD_SIGN_USEROP_SRC
+        .find("let mut safe_exec_claim =")
+        .expect("fail-closed Safe claim receipt");
+    let claim_proof = CMD_SIGN_USEROP_SRC[claim..]
+        .find("prove_exec_transaction_claim(")
+        .map(|p| claim + p)
+        .expect("Safe selector A/B proof");
+    let verify_a = CMD_SIGN_USEROP_SRC[claim_proof..]
+        .find("let mut safe_exec_verified:")
+        .map(|p| claim_proof + p)
+        .expect("first strict Safe exec verifier");
+    let verify_b = CMD_SIGN_USEROP_SRC[verify_a..]
+        .find("let mut safe_exec_verified_check:")
+        .map(|p| verify_a + p)
+        .expect("second strict Safe exec verifier");
+    let resolution = CMD_SIGN_USEROP_SRC[verify_b..]
+        .find("exec_claim_resolution_proof(")
+        .map(|p| verify_b + p)
+        .expect("Safe claimed/verified resolution gate");
+    let lower_routing = CMD_SIGN_USEROP_SRC
+        .find("// 7c-bis-erc20.")
+        .expect("next lower routing stage");
+    let resolution_positions: Vec<_> = CMD_SIGN_USEROP_SRC
+        .match_indices("exec_claim_resolution_proof(")
+        .map(|(position, _)| position)
+        .collect();
+    assert_eq!(resolution_positions.len(), 2);
+    assert!(
+        resolution_positions.iter().all(|&position| position < lower_routing),
+        "both Safe resolution gates must complete before lower routing"
+    );
+    assert!(
+        claim < claim_proof
+            && claim_proof < verify_a
+            && verify_a < verify_b
+            && verify_b < resolution
+            && resolution < lower_routing
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_SRC
+            .matches("prove_exec_transaction_claim(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_SRC
+            .matches("verify_and_bind_exec_into(")
+            .count(),
+        2,
+        "caller-owned strict Safe verifier outputs must execute independently twice"
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_SRC
+            .matches("exec_claim_resolution_proof(")
+            .count(),
+        2,
+        "a single skipped final reject must encounter the second gate"
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_SRC
+            .matches("EXEC_CLAIM_CFI_EXPECTED")
+            .count(),
+        2
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_SRC
+            .matches("EXEC_VERIFY_CFI_EXPECTED")
+            .count(),
+        4,
+        "both verifier calls are CFI-checked at both final gates"
+    );
+    assert!(CMD_SIGN_USEROP_SRC.contains("exec parse fail"));
+    assert!(
+        !CMD_SIGN_USEROP_SRC.contains("EXEC_TRANSACTION_MIN_CALLDATA_LEN"),
+        "handler claim ownership must not depend on the ABI minimum length"
+    );
+    assert!(!CMD_SIGN_USEROP_SRC.contains("safe_exec_enough_len"));
+}
+
+#[test]
+fn safe_direct_publication_body_cannot_reintroduce_returning_decoder_dependency() {
+    let start = SAFE_EXEC_DECODE_SRC
+        .find("pub(crate) fn verify_and_bind_exec_into")
+        .expect("authoritative Safe verifier");
+    let tail = &SAFE_EXEC_DECODE_SRC[start..];
+    let end = tail
+        .find("\n// ---------------------------------------------------------------------------\n// Tests")
+        .expect("end of authoritative Safe verifier section");
+    let body = &tail[..end];
+    for forbidden_call in ["decode_exec_transaction(", "verify_and_bind_exec("] {
+        assert!(
+            !body.contains(forbidden_call),
+            "caller-storage verifier must not call returning helper {forbidden_call}"
+        );
+    }
+    let fail_init = body.find("write_volatile(output, None)").expect("volatile fail init");
+    let strict_decode = body.find("if inner_data.len()").expect("in-operation strict decode");
+    let success_publish = body
+        .find("Some(VerifiedSafeExec")
+        .expect("direct successful publication");
+    let final_cfi = body
+        .rfind("cfi.bump(EXEC_VERIFY_CFI_STEP)")
+        .expect("completion CFI after publication");
+    assert!(fail_init < strict_decode && strict_decode < success_publish && success_publish < final_cfi);
 }
 
 #[test]

@@ -1,0 +1,3 @@
+Continue as Partner A in the accepted Claude Opus 4.8, 1M-context, ultracode/xhigh session. Partner B's complete frozen first pass is now disclosed solely for symmetric cross-adjudication. Do not infer or seek Partner B's cross result.
+
+Read and follow `/tmp/pq1-erc7730-cross-common-v1.md` completely. Personally adjudicate the full ID inventory; no new discovery fan-out is required. Return one complete raw cross report in your final response, delimited by `BEGIN PARTNER A CROSS V1` and `END PARTNER A CROSS V1`. Do not edit the target or either frozen first-pass report. The coordinator will freeze your raw response at `/tmp/pq1-erc7730-partner-a-cross-v1.md`.

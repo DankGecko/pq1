@@ -1,0 +1,27 @@
+PRE-LAUNCH REQUEST RECEIPT V4 — PQ1 ERC-7730 ARCHITECTURE — PARTNER B
+frozen_utc: 2026-07-16T17:01:28Z
+role: independent adversarial architecture review Partner B
+executable: /home/nicola/.local/bin/codex
+cli_version: codex-cli 0.144.5
+executable_sha256: 058d616bde049c0648b72d53a22a54bf428eeb3f10e76cb4d6d4d4f81b764600
+working_directory: /tmp/pq1-erc7730-arch-review-9647b79
+redacted_argv: codex exec --ignore-user-config --model gpt-5.6-sol -c model_reasoning_effort='"ultra"' -c model_verbosity='"low"' --sandbox read-only --json -o /tmp/pq1-erc7730-partner-b-first-pass-v4.md -C /tmp/pq1-erc7730-arch-review-9647b79 - < /tmp/pq1-erc7730-review-partner-b.md
+requested_literal_model: gpt-5.6-sol
+context_selector: provider default / NOT separately requested
+reasoning_effort: ultra
+orchestration_profile: built-in Codex agent orchestration; prompt requires at least 3 discovery lanes
+sandbox_permissions: Codex read-only; canonical target immutable and chmod a-w recursively
+customization_policy: --ignore-user-config disables user plugins that created .serena metadata in invalid V2/V3 launches; model/effort are explicit
+outer_launcher: unrestricted API/app-server access only; no hardware/external-write authority
+allowed_fanout: at least 3 independent built-in discovery lanes; named Partner B personally adjudicates
+planned_substitution: none
+common_prompt_sha256: 2f395b7bc273dcc21fd66ff9fcab0bcd4574b0ec7aaf19a76b128dd6e87b5aba
+role_prompt_sha256: 0da15ec3f5870ebf16f7cc9f57658972751381d72847a87834ea0c1deb4945e4
+target_head: 9647b79374d5e2e10445254492308101b8be708b
+target_diff_sha256: b8e270747a5c16eafde0b74fe94f34be9ab4504d91559234fb2a1ca056d59c25
+target_dirty_manifest: M docs/erc7730-implementation-review-2026-07.md; M docs/work-todo.md
+target_untracked_manifest: empty
+target_ignored_manifest: empty
+report_path: /tmp/pq1-erc7730-partner-b-first-pass-v4.md plus durable Codex session JSONL
+prior_attempts: V1/V2/V3 invalid before report freeze (app-server init, ignored-metadata drift, interrupted drift retry); none is a review leg and no conclusions were disclosed
+deviations_expected: none; if literal model, ultra effort, or required fan-out is unavailable, the leg must report unavailable

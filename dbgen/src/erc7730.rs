@@ -153,13 +153,21 @@ const PARAM_CONST_VALUE: u8 = 0x40;
 /// defense-in-depth backstop that survives a gate regression and is where
 /// the future Phase-5 nested renderer will hook faithful expansion.
 const PARAM_NESTED_STRUCT: u8 = 0x41;
-// A `tokenAmount`'s `nativeCurrencyAddress` sentinel (20 B): a resolved token
-// equal to it renders as the chain native currency (18 decimals, native_ticker).
+// A `tokenAmount`'s `nativeCurrencyAddress`: the scalar form is one 20-byte
+// sentinel; the registry list form is two descriptor-order addresses
+// concatenated under the same tag. The old scalar encoding is byte-identical.
 const PARAM_NATIVE_CURRENCY: u8 = 0x42;
 /// ABI kind for a dynamic leaf. The device must not infer `string` versus
 /// arbitrary `bytes` from whether attacker-controlled payload happens to be
 /// printable.
 const PARAM_DYNAMIC_KIND: u8 = 0x43;
+/// `nftName.params.collection`: an exact descriptor-authenticated collection
+/// contract. Kept distinct from tokenAmount's token vocabulary so malformed IR
+/// cannot cross formatter semantics.
+const PARAM_NFT_COLLECTION: u8 = 0x44;
+/// `nftName.params.collectionPath`: a compiled static address path. The first
+/// corpus-complete slice permits `@.to` and static structured address words.
+const PARAM_NFT_COLLECTION_PATH: u8 = 0x45;
 const DYNAMIC_KIND_STRING: u8 = 0x01;
 
 /// Maximum EIP-712 struct nesting the gate will walk before failing closed.
@@ -3723,6 +3731,11 @@ fn compile_params(
     }
 
     let Some(params) = params else {
+        if format_op == FMT_NFT_NAME {
+            return Err(format!(
+                "format `{sig}` field[{field_idx}] nftName requires exactly one of `collection` or `collectionPath`"
+            ));
+        }
         return Ok(out);
     };
     let params = params
@@ -3741,12 +3754,13 @@ fn compile_params(
             "message",
         ],
         FMT_ADDRESS_NAME | FMT_INTEROP_ADDR_NAME => &["types", "sources"],
+        FMT_NFT_NAME => &["collection", "collectionPath"],
         FMT_DATE => &["encoding"],
         FMT_ENUM => &["$ref", "ref"],
         FMT_UNIT => &["base", "decimals", "prefix"],
         FMT_CALLDATA => &["selector", "calleePath"],
         FMT_ENCRYPTED => &["fallbackLabel"],
-        FMT_RAW | FMT_AMOUNT | FMT_NFT_NAME | FMT_DURATION | FMT_CHAIN_ID | FMT_TOKEN_TICKER => &[],
+        FMT_RAW | FMT_AMOUNT | FMT_DURATION | FMT_CHAIN_ID | FMT_TOKEN_TICKER => &[],
         _ => return Err(format!("unknown format opcode: 0x{format_op:02x}")),
     };
     for key in params.keys() {
@@ -3775,18 +3789,12 @@ fn compile_params(
                 let bytes = resolve_address_or_const(t, ctx)?;
                 push_tlv(&mut out, PARAM_TOKEN, &bytes)?;
             }
-            // `nativeCurrencyAddress` (a `0x…`/`$`-const sentinel): when the
-            // resolved token equals it, the device renders the chain native
-            // currency (18 dec, native_ticker) instead of an ERC-20 lookup — so an
-            // ETH leg shows "1.5 ETH", not `! raw, dec=?`. Single-address form (the
-            // registry's shape); an array form has no sentinel emitted (safe
-            // fallback: renders as an unknown token, never mislabelled).
+            // `nativeCurrencyAddress` accepts the ERC-7730 scalar or list
+            // shape. Resolve constants now and authenticate the complete
+            // descriptor-order list in IR; never truncate or silently drop a
+            // member. The current local bound is registry-complete (two).
             if let Some(nca) = params.get("nativeCurrencyAddress") {
-                let nca = nca.as_str().ok_or_else(|| {
-                    "tokenAmount.nativeCurrencyAddress arrays are not representable in IR"
-                        .to_string()
-                })?;
-                let bytes = resolve_address_or_const(nca, ctx)?;
+                let bytes = compile_native_currency_addresses(nca, ctx)?;
                 push_tlv(&mut out, PARAM_NATIVE_CURRENCY, &bytes)?;
             }
             if let Some(th) = params.get("threshold") {
@@ -3810,6 +3818,44 @@ fn compile_params(
                     .ok_or_else(|| "tokenAmount.message must be a string".to_string())?;
                 let s = clean_ascii_exact(msg, 16, "tokenAmount.message")?;
                 push_tlv(&mut out, PARAM_MESSAGE, s.as_bytes())?;
+            }
+        }
+        FMT_NFT_NAME => {
+            let collection = params.get("collection");
+            let collection_path = params.get("collectionPath");
+            if collection.is_some() == collection_path.is_some() {
+                return Err(format!(
+                    "format `{sig}` field[{field_idx}] nftName requires exactly one of `collection` or `collectionPath`"
+                ));
+            }
+            if let Some(collection) = collection {
+                let collection = collection
+                    .as_str()
+                    .ok_or_else(|| "nftName.collection must be a string".to_string())?;
+                let address = resolve_address_or_const(collection, ctx)?;
+                push_tlv(&mut out, PARAM_NFT_COLLECTION, &address)?;
+            }
+            if let Some(collection_path) = collection_path {
+                let collection_path = collection_path
+                    .as_str()
+                    .ok_or_else(|| "nftName.collectionPath must be a string".to_string())?;
+                if collection_path.trim().starts_with('@') {
+                    if collection_path.trim() != "@.to" {
+                        return Err(format!(
+                            "nftName.collectionPath supports only `@.to` for container paths, got `{collection_path}`"
+                        ));
+                    }
+                } else if rendered_path_terminal_type(collection_path, context_kind, parsed)?
+                    .as_deref()
+                    != Some("address")
+                {
+                    return Err(format!(
+                        "nftName.collectionPath `{collection_path}` must resolve to an address"
+                    ));
+                }
+                let program = compile_path(collection_path, context_kind, parsed)
+                    .map_err(|e| format!("collectionPath `{collection_path}`: {e}"))?;
+                push_tlv(&mut out, PARAM_NFT_COLLECTION_PATH, &program)?;
             }
         }
         FMT_ADDRESS_NAME | FMT_INTEROP_ADDR_NAME => {
@@ -3945,7 +3991,7 @@ fn compile_params(
             let s = clean_ascii_truncated(label, MAX_POOL_TLV_PAYLOAD);
             push_tlv(&mut out, PARAM_FALLBACK_LABEL, s.as_bytes())?;
         }
-        FMT_RAW | FMT_AMOUNT | FMT_NFT_NAME | FMT_CHAIN_ID | FMT_TOKEN_TICKER => {
+        FMT_RAW | FMT_AMOUNT | FMT_CHAIN_ID | FMT_TOKEN_TICKER => {
             // No formatter-specific params on the seed corpus today.
             // Any unrecognized keys are ignored — keeps us forward-
             // compatible with future spec extensions.
@@ -5478,6 +5524,35 @@ fn compile_path_inner(
     let mut out = Vec::with_capacity(8);
     out.push(root);
 
+    // Container names are a frozen envelope namespace, not ABI argument
+    // names. Resolving `@.to` through `parsed.top_names` made it silently turn
+    // into calldata ordinal 0 whenever a function also declared `address to`
+    // (for example ERC-721 approve), while the device interprets the operand
+    // as a keccak-prefix container discriminator. Compile this root from the
+    // single-sourced constants so calldata names can never shadow it.
+    if root == PATHOP_ROOT_CONTAINER {
+        let segments = tokenize_path(rest)?;
+        let name = match segments.as_slice() {
+            [PathSeg::Name(name)] => *name,
+            _ => {
+                return Err(
+                    "container path must name exactly one supported envelope field".to_string(),
+                )
+            }
+        };
+        let field = match name {
+            "value" => pqsigner_erc7730::abi::container_field::VALUE,
+            "to" => pqsigner_erc7730::abi::container_field::TO,
+            "from" => pqsigner_erc7730::abi::container_field::FROM,
+            "chainId" => pqsigner_erc7730::abi::container_field::CHAIN_ID,
+            "nonce" => pqsigner_erc7730::abi::container_field::NONCE,
+            _ => return Err(format!("unsupported container field `@.{name}`")),
+        };
+        out.push(PATHOP_FIELD_IDX);
+        out.extend_from_slice(&field.to_be_bytes());
+        return Ok(out);
+    }
+
     // 2a. Contract-calldata structured paths emit *ABI head-word slots*
     //     (width-aware), not logical ordinals. This is the fix for the
     //     walker slot-confusion forgery: with logical ordinals a field
@@ -6802,6 +6877,62 @@ fn resolve_address_or_const(s: &str, ctx: &CompileCtx) -> Result<[u8; 20], Strin
         return parse_address(hex);
     }
     parse_address(s)
+}
+
+/// Compile the ERC-7730 `nativeCurrencyAddress` scalar-or-list union into the
+/// authenticated `PARAM_NATIVE_CURRENCY` payload.
+///
+/// A scalar remains exactly 20 bytes for backward compatibility. A list is
+/// concatenated in descriptor order with no count byte: its validated payload
+/// width is unambiguous. The pinned registry needs at most two members; larger
+/// lists are deliberately refused instead of truncated.
+fn compile_native_currency_addresses(
+    value: &serde_json::Value,
+    ctx: &CompileCtx,
+) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    match value {
+        serde_json::Value::String(address) => {
+            out.extend_from_slice(&resolve_address_or_const(address, ctx)?);
+        }
+        serde_json::Value::Array(addresses) => {
+            if addresses.is_empty() {
+                return Err("tokenAmount.nativeCurrencyAddress list must not be empty".to_string());
+            }
+            if addresses.len()
+                > pqsigner_erc7730::render::params::MAX_NATIVE_CURRENCY_ADDRESSES
+            {
+                return Err(format!(
+                    "tokenAmount.nativeCurrencyAddress list has {} entries (max {})",
+                    addresses.len(),
+                    pqsigner_erc7730::render::params::MAX_NATIVE_CURRENCY_ADDRESSES
+                ));
+            }
+            for (idx, entry) in addresses.iter().enumerate() {
+                let address = entry.as_str().ok_or_else(|| {
+                    format!(
+                        "tokenAmount.nativeCurrencyAddress[{idx}] must be a string"
+                    )
+                })?;
+                let resolved = resolve_address_or_const(address, ctx)?;
+                if out
+                    .chunks_exact(pqsigner_erc7730::render::params::NATIVE_CURRENCY_ADDRESS_LEN)
+                    .any(|existing| existing == resolved.as_slice())
+                {
+                    return Err(format!(
+                        "tokenAmount.nativeCurrencyAddress[{idx}] duplicates an earlier address"
+                    ));
+                }
+                out.extend_from_slice(&resolved);
+            }
+        }
+        _ => {
+            return Err(
+                "tokenAmount.nativeCurrencyAddress must be a string or string array".to_string(),
+            )
+        }
+    }
+    Ok(out)
 }
 
 fn resolve_u256_or_const(s: &str, ctx: &CompileCtx) -> Result<[u8; 32], String> {
@@ -8261,6 +8392,33 @@ mod tests {
         let disc = u16::from_be_bytes([prog[2], prog[3]]);
         let h = keccak256(b"value");
         assert_eq!(disc, u16::from_be_bytes([h[0], h[1]]));
+
+        // ABI argument names must never shadow the independent `@` namespace.
+        let colliding = parse_format_key("approve(address to,uint256 tokenId)").unwrap();
+        assert_eq!(
+            compile_path("@.to", CTX_CONTRACT, &colliding).unwrap(),
+            [
+                pqsigner_erc7730::ir::PathOp::RootContainer as u8,
+                pqsigner_erc7730::ir::PathOp::FieldIdx as u8,
+                (pqsigner_erc7730::abi::container_field::TO >> 8) as u8,
+                pqsigner_erc7730::abi::container_field::TO as u8,
+            ],
+            "calldata `to` cannot shadow envelope `@.to`"
+        );
+
+        // `@.from` is a frozen cross-host/device wire contract. Keep the exact
+        // program bytes explicit because enabling the device renderer must not
+        // silently change the descriptor database schema or field identity.
+        let from = compile_path("@.from", CTX_CONTRACT, &p).unwrap();
+        assert_eq!(
+            from,
+            [
+                pqsigner_erc7730::ir::PathOp::RootContainer as u8,
+                pqsigner_erc7730::ir::PathOp::FieldIdx as u8,
+                (pqsigner_erc7730::abi::container_field::FROM >> 8) as u8,
+                pqsigner_erc7730::abi::container_field::FROM as u8,
+            ]
+        );
     }
 
     #[test]
@@ -8515,6 +8673,11 @@ mod tests {
         assert_eq!(PARAM_NESTED_STRUCT, params::PARAM_NESTED_STRUCT);
         assert_eq!(PARAM_NATIVE_CURRENCY, params::PARAM_NATIVE_CURRENCY);
         assert_eq!(PARAM_DYNAMIC_KIND, params::PARAM_DYNAMIC_KIND);
+        assert_eq!(PARAM_NFT_COLLECTION, params::PARAM_NFT_COLLECTION);
+        assert_eq!(
+            PARAM_NFT_COLLECTION_PATH,
+            params::PARAM_NFT_COLLECTION_PATH
+        );
 
         // Visibility bytes.
         assert_eq!(VIS_ALWAYS, Visibility::Always as u8);
@@ -9390,6 +9553,156 @@ mod tests {
             descriptor_hash: [0u8; 32],
             owner: String::new(),
             contract_name: String::new(),
+        }
+    }
+
+    #[test]
+    fn native_currency_scalar_and_singleton_list_keep_legacy_bytes() {
+        const ETH: &str = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        let ctx = test_ctx();
+        let expected = [0xEEu8; 20];
+        let scalar = compile_native_currency_addresses(&serde_json::json!(ETH), &ctx).unwrap();
+        let singleton =
+            compile_native_currency_addresses(&serde_json::json!([ETH]), &ctx).unwrap();
+        assert_eq!(scalar, expected);
+        assert_eq!(singleton, expected);
+    }
+
+    #[test]
+    fn native_currency_list_resolves_constants_in_descriptor_order() {
+        const ETH: &str = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        const ZERO: &str = "0x0000000000000000000000000000000000000000";
+        let mut ctx = test_ctx();
+        ctx.constants.insert(
+            "addressAsEth".to_string(),
+            serde_json::Value::String(ETH.to_string()),
+        );
+        ctx.constants.insert(
+            "addressAsNull".to_string(),
+            serde_json::Value::String(ZERO.to_string()),
+        );
+        let value = serde_json::json!([
+            "$.metadata.constants.addressAsEth",
+            "$.metadata.constants.addressAsNull"
+        ]);
+        let compiled = compile_native_currency_addresses(&value, &ctx).unwrap();
+        assert_eq!(compiled.len(), 40);
+        assert_eq!(&compiled[..20], &[0xEE; 20]);
+        assert_eq!(&compiled[20..], &[0x00; 20]);
+    }
+
+    #[test]
+    fn native_currency_list_rejects_invalid_shapes_and_members() {
+        const ETH: &str = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        const ZERO: &str = "0x0000000000000000000000000000000000000000";
+        let ctx = test_ctx();
+        for (value, expected) in [
+            (serde_json::json!([]), "must not be empty"),
+            (serde_json::json!([ETH, ZERO, "0x1111111111111111111111111111111111111111"]), "max 2"),
+            (serde_json::json!([ETH, 1]), "must be a string"),
+            (serde_json::json!([ETH, ETH]), "duplicates"),
+            (serde_json::json!(["0xeee"]), "40 hex chars"),
+            (serde_json::json!(7), "string or string array"),
+        ] {
+            let err = compile_native_currency_addresses(&value, &ctx).unwrap_err();
+            assert!(err.contains(expected), "expected {expected:?}, got {err:?}");
+        }
+    }
+
+    fn compile_nft_field(sig: &str, params: serde_json::Value) -> Result<(Pool, u16), String> {
+        let parsed = parse_format_key(sig)?;
+        let field: FieldDef = serde_json::from_value(serde_json::json!({
+            "path": "tokenId",
+            "label": "NFT",
+            "format": "nftName",
+            "params": params
+        }))
+        .map_err(|e| e.to_string())?;
+        let mut pool = Pool::new();
+        let compiled = compile_one_field(
+            sig,
+            0,
+            &field,
+            CTX_CONTRACT,
+            &parsed,
+            &mut test_ctx(),
+            &mut pool,
+            &BTreeMap::new(),
+            false,
+        )?;
+        Ok((pool, compiled.param_off))
+    }
+
+    #[test]
+    fn nft_collection_literal_and_to_path_emit_dedicated_tlvs() {
+        const COLLECTION: &str = "0xa4215Daaf3745E14E96E169E0E7706c479Ce04F2";
+        let (literal_pool, literal_off) = compile_nft_field(
+            "approve(address to,uint256 tokenId)",
+            serde_json::json!({ "collection": COLLECTION }),
+        )
+        .unwrap();
+        assert_eq!(
+            find_tlv(&literal_pool, literal_off, PARAM_NFT_COLLECTION),
+            Some(&hex::decode(&COLLECTION[2..]).unwrap()[..])
+        );
+        assert!(find_tlv(
+            &literal_pool,
+            literal_off,
+            PARAM_NFT_COLLECTION_PATH
+        )
+        .is_none());
+
+        let (path_pool, path_off) = compile_nft_field(
+            "approve(address to,uint256 tokenId)",
+            serde_json::json!({ "collectionPath": "@.to" }),
+        )
+        .unwrap();
+        assert_eq!(
+            find_tlv(&path_pool, path_off, PARAM_NFT_COLLECTION_PATH),
+            Some(
+                &[
+                    PATHOP_ROOT_CONTAINER,
+                    PATHOP_FIELD_IDX,
+                    (pqsigner_erc7730::abi::container_field::TO >> 8) as u8,
+                    pqsigner_erc7730::abi::container_field::TO as u8,
+                ][..]
+            )
+        );
+    }
+
+    #[test]
+    fn nft_collection_path_requires_a_static_address_and_exactly_one_source() {
+        let sig = "f(uint256 tokenId,address collection)";
+        let (pool, off) = compile_nft_field(
+            sig,
+            serde_json::json!({ "collectionPath": "collection" }),
+        )
+        .unwrap();
+        assert!(find_tlv(&pool, off, PARAM_NFT_COLLECTION_PATH).is_some());
+
+        for (params, expected) in [
+            (serde_json::json!({}), "exactly one"),
+            (
+                serde_json::json!({
+                    "collection": "0x1111111111111111111111111111111111111111",
+                    "collectionPath": "@.to"
+                }),
+                "exactly one",
+            ),
+            (
+                serde_json::json!({ "collectionPath": "tokenId" }),
+                "must resolve to an address",
+            ),
+            (
+                serde_json::json!({ "collectionPath": "@.from" }),
+                "only `@.to`",
+            ),
+        ] {
+            let error = match compile_nft_field(sig, params) {
+                Ok(_) => panic!("malformed nftName parameters unexpectedly compiled"),
+                Err(error) => error,
+            };
+            assert!(error.contains(expected), "expected {expected:?}, got {error:?}");
         }
     }
 

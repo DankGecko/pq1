@@ -30,18 +30,38 @@ Current security contract:
   direct call or MultiSend record. Without either, signing hard-refuses and
   never downgrades to typed or blind signing. Only a genuinely absent tuple may
   use the generic display ladder; Bloom false positives conservatively refuse.
-- The current regenerated development catalogue has **420 leaves**, root
-  `048fd2f1ff61942027ffa248f7d26fdbe9d8e2f02e9ad6478ad6714cb96ab142`,
+<!-- BEGIN XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->
+- The current regenerated development catalogue has **428 leaves**, root
+  `0706d763061ecfb0668ba7bdcf81e7159a6e541bae090b8678e5c9f31517d2ed`,
   and **4,542 exact known-call tuples**. The tuple-set receipt is SHA-256
   `96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`;
-  Bloom occupancy is 28,235 / 131,072 bits under a hard 25% generation cap.
-  These receipts detect input/artifact drift. They do not turn Bloom insertion
-  into a proof of parser completeness: an independent types-only ABI parser,
-  raw/resolved declaration tests, real tuple-array witnesses, and fail-closed
-  selector derivation cover that boundary.
+  Bloom occupancy is 28,235 / 131,072 bits under the compiler-enforced generation cap.
+- The current compiler report records **281** omitted descriptor/formats.
+<!-- END XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->
+- These receipts detect input/artifact drift. They do not turn Bloom insertion
+  into a proof of parser completeness. The current independent types-only ABI
+  parser, raw/resolved declaration tests, tuple-array witnesses, and
+  fail-closed selector derivation are separately reviewed evidence and must be
+  re-evaluated when those implementations change.
+- The current omission report classifies endpoint-only array/packed-route token
+  paths, runtime-dead opaque semantic bytes, hidden operands, and unsupported
+  framing. Those categories are reviewed prose, not facts derived by xtask;
+  omissions cannot acquire trusted-display authority merely by being listed.
 - Known/verified render errors—including no matching format, non-canonical ABI
   framing, unsupported dynamics, or page-budget exhaustion—hard-refuse.
   `MAX_PAGES` is currently 31; code constants, not old prose, are authoritative.
+- `tokenAmount.nativeCurrencyAddress` is an authenticated one-or-two-address
+  list under IR tag `0x42` (legacy scalar bytes unchanged). Exact membership
+  alone selects the chain-native ticker/scale; malformed, duplicate, oversized,
+  or unmatched lists never acquire native-currency semantics.
+- `nftName` binds exactly one collection source under IR tag `0x44` (literal
+  20-byte address) or `0x45` (compiled static-address path). Container paths are
+  limited to the frozen `@.to` envelope field; ABI arguments cannot shadow the
+  `@` namespace. The device always renders the exact token ID and complete
+  collection address. Descriptor `contractName` is usable only when that
+  address equals the authenticated descriptor contract; otherwise a friendly
+  name requires exact `(chain, address)` metadata. Chain-zero wildcard names do
+  not qualify.
 - Contract selector preflight is independent of renderer field-name policy. It
   canonicalizes Solidity ABI aliases (`uint`, `int`, `byte`, `fixed`,
   `ufixed`), accepts legal `$` identifiers, whitespace, and nested tuple-array
@@ -52,10 +72,6 @@ Current security contract:
   authenticated IR. The entry-level type hash is only the first-surviving
   format's sorting/diagnostic hint; multi-format leaves require scanning their
   complete format tables.
-- The drift-gated review records all **274** current descriptor/format
-  omissions by exact reason. Endpoint-only array/packed-route token paths,
-  runtime-dead opaque semantic bytes, hidden operands, and unsupported framing
-  remain known but cannot acquire trusted display authority.
 - The renderer's local stack sentinel is only a corruption tripwire. It is not
   proof that arbitrary stack overrun is detected; ARM link/resource reporting
   and reviewed worst-case stack analysis remain separate evidence.

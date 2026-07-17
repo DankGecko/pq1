@@ -225,6 +225,15 @@ leverage order:
 - **3.5 `amount` hardcodes ETH/18** on every chain (formatters.rs:286-288) — Polygon/BNB
   deployments display native value as "ETH". Add a chain→native-ticker table (device already
   has `chain_name()`); also feeds 3.4. Effort S.
+
+  **Resolved 2026-07-17 (3.4/3.5):** tag `0x42` now authenticates either the
+  byte-identical 20-byte scalar or a bounded two-address list in descriptor
+  order. Dbgen and the device reject empty, malformed, duplicate, or larger
+  lists. Runtime membership is exact; known chains use the firmware-pinned
+  native ticker and 18-decimal scale, unknown chains remain raw, and a list
+  miss follows the verified-ERC-20/unverified-address path. The real 1inch V4
+  ETH `clipperSwap`/`clipperSwapTo` formats now form one additional production
+  leaf and exercise both `0xEeee…` and zero sentinels.
 - **3.6 tokenAmount `message` param** compiled + parsed but never rendered (hardcoded
   "unlimited"); threshold check only in the metadata-bound branch (see also 4.5). Effort S.
 - **3.7 `metadata.token` fallback** ignored (`_token`, erc7730.rs:270-271) — 2 upstream files
@@ -248,8 +257,9 @@ leverage order:
   string/bytes/primitive-array/tokenPath whole tail; C2 dynamic-tuple descent and C3
   multiple-tail layouts are intentionally excluded. The **attestation flip** (dev-mode
   `allow_unattested` → enforced
-  ERC-8176) remains the orthogonal lever, blocked on the EAS ecosystem (~0 real
-  attestations, `docs/erc8176-attestation-status.md`), not code.
+  ERC-8176) remains the orthogonal lever, blocked on both the EAS ecosystem
+  (~0 real attestations) and PQSigner's missing authenticated offline snapshot
+  verifier/production ingestion path (`docs/erc8176-attestation-status.md`).
 
 Documented-deviation candidates (write down, don't change): date blockheight shows
 `block #N` not approximate time (no block-time oracle); duration `Xd Yh Zm` vs spec HH:MM:ss;
@@ -408,6 +418,17 @@ Quick-win bundle (all S unless noted):
 
 Post-5.1-refactor pass over the "tractable remaining" set:
 
+- **3.2 nftName — DONE for the raw fallback.** `NftName = 0x04` now renders the
+  exact token ID as decimal when it fits and otherwise as the full raw word;
+  the original finding above is retained as dated review input.
+- **3.2 NFT collection identity — DONE (2026-07-17 bounded follow-up).**
+  Dedicated IR tags bind exactly one literal collection or static-address path.
+  The device always shows the exact token ID and complete collection address;
+  a friendly name requires matching authenticated descriptor identity or exact
+  chain+address metadata, never a chain-zero wildcard. The first container-path
+  slice accepts only frozen `@.to`, independently of ABI argument names. Seven
+  real deployments / 12 formats now exercise this path. This closes the
+  deferred §12.4/PQ1 NFT identity item without broadening blind-sign policy.
 - **3.6 message param — DONE.** `render_token_amount`'s unlimited path uses the
   descriptor's `message` param (validated printable) instead of hardcoded
   "unlimited"; render test on a synthetic `message="Max"` descriptor.
@@ -433,3 +454,574 @@ Post-5.1-refactor pass over the "tractable remaining" set:
   holds the format signatures; pqsigner-erc7730 renders) to record the
   per-leaf renders/declines classification — a real M-L build. The panic-freedom
   half is already covered by the swarm's `erc7730_render_dispatch` fuzz target.
+
+---
+
+> **Adverse architecture-review result (frozen candidate below).** The exact
+> candidate below was reviewed at HEAD `9647b793…` with tracked-diff SHA-256
+> `b8e27074…`. Accepted A/B first passes (`4b34ae5f…`, `bcb8a52e…`) and
+> symmetric cross passes (`d11bf34…`, `8f231060…`), followed by the two bounded
+> responses (`d6617979…`, `ff7eb9ea…`), produced **NO-GO**. The complete matrix
+> is SHA-256 `214763b8…` and is filed with the canonical findings. This section
+> remains unchanged as historical reviewed input; it is not implementation
+> authority. The material v2 redline after it supersedes its candidate wording
+> and requires fresh mutually withheld review.
+
+## PQ1 productization plan freeze (2026-07-16)
+
+**Stage:** Phase B candidate selection. This packet records the user's new
+known-call blind-review requirement and the Ambire/registry comparison. It does
+not authorize a signing-behavior change. The selected escape-hatch architecture
+and the gas-page FI change must receive the workflow's exact favorable dual
+architecture review, symmetric cross-adjudication, and a recorded owner stage
+decision before production-shared implementation.
+
+### 1. Objective and observable outcome
+
+PQ1 keeps clear signing as the default and retains every existing production
+quarantine, while gaining: (a) mechanically current catalogue documentation;
+(b) exactly one exact UserOp gas-triple page with an independent handler proof;
+(c) test/provenance foundations that make registry updates reviewable; and,
+only after the gates above, (d) a transaction-local, device-selected way to
+review and accept a known call as unmistakable blind signing when clear signing
+cannot complete. No host message, cached setting, failed descriptor text or
+heuristic may grant that permission.
+
+### 2. Baseline identity and preserved work
+
+- Repository `/home/nicola/repos/PQSigner_OS`; branch
+  `fix/fv-review-2026-07-15`; HEAD
+  `9647b79374d5e2e10445254492308101b8be708b`.
+- Pre-plan tracked-diff receipt: SHA-256
+  `8ae9921ec0e4aec00f97aeafcb3925d19ff9482d8330fe8ceaa746233c7fe65f`.
+  It contains unrelated, user-owned formal-verification edits in the root and
+  contracts Makefiles/config/check scripts. The exact starting status also had
+  four untracked, user-owned FV inputs:
+  `contracts/verification/easycrypt/axiom_pins.txt`,
+  `contracts/verification/extracted/Extracted/AxiomCheckNegativeControl.lean`,
+  `contracts/verification/extracted/axiom_closure_manifest.txt`, and
+  `contracts/verification/scripts/ec_axioms.py`. This campaign must not edit,
+  stage or clean them.
+- Clean comparison inputs (reference-only):
+  `/home/nicola/repos/ambire-common` at
+  `348591fb1c1b1f05b71f06cd509cc5be143309e4`; and
+  `/home/nicola/repos/clear-signing-erc7730-registry` at
+  `784c87c925e8438e7b4736b2af85a501f8d2a265`.
+- Generated catalogue receipts at freeze: production blob SHA-256
+  `d5ed95960a3c84dc65b534dbe1dfd8d6e6b1e766605bdd45a8f332b26f995099`,
+  334,827 bytes, 420 leaves, root `048fd2f1…6ab142`; E2E blob SHA-256
+  `5d6ee030da3bb5d1c65192badeb5378aab44d8cd60303b5836e53a52c90ad486`,
+  3,917 bytes, 8 leaves, root `cbd0b771…0238e9`.
+
+### 3. Sources-of-truth preflight and conflict
+
+The following files were read in full before selection. Digests bind the
+pre-plan versions; later review receipts must bind the post-plan target again.
+
+| Input | Pre-plan SHA-256 | Authority used here |
+|---|---|---|
+| `CLAUDE.md` | `0289d493…3b3ae5` | Product/security invariants and frozen interfaces |
+| `docs/STATUS.md` | `3a8c2ac7…a36c1` | Current evidence and ship frontier/router |
+| `docs/planning-and-review-workflow.md` | `64c7e849…d86a` | Plan, exact dual review and convergence owner |
+| `docs/companion/companion-erc7730-implementation-guide.md` | `21f3d072…e9f83` | Normative companion and known-call behavior |
+| `docs/erc7730-root-rotation-and-update-policy.md` | `3150ce10…73864` | Root/corpus update decision owner |
+| `docs/erc8176-attestation-status.md` | `a6ae68f9…d9c97` | Provenance ecosystem status |
+| `docs/security/adversarial-review/findings/clear-signing-2026-07-10.md` | `08576785…5d99` | Last canonical clear-signing findings/evidence |
+| `docs/work-todo.md` | `134f38f0…5f56a` | Reversible backlog and completion records |
+
+Applicable playbooks are additive: clear signing
+`da91244a…c438`, hostile USB/companion `4244da86…00e9`, trusted UI
+`c906f444…0144`, SCA/FI `4d5be4f5…3b6e`, lifecycle/persistent state
+`2c607980…18d74`, secure runtime/resources `67f04bd6…77068`, production
+configuration/prodtest `27ae6f22…c08`, and build/release/provenance
+`d87c8a83…1392`.
+
+**Material conflict carried as an open stage decision:** the user explicitly
+requested an option to accept blind signing after a warning. `CLAUDE.md`, the
+current companion guide and clear-signing CS2 currently require a known shape,
+missing proof or verified-render failure to hard-refuse and never downgrade.
+The user direction is a legitimate new product candidate, but it does not
+silently rewrite those owners. They may be amended only after favorable exact
+architecture review and the subsequent owner/maintainer stage decision. Wire
+v2 remains frozen; ERC-8176 and rollback remain independent ship blockers.
+
+### 4. Invariants, threats and selected mechanisms
+
+- **Signed bytes remain visibly bound.** Target, value, chain, selector and
+  length, signer, gas triple and the complete ERC-8213 calldata digest must
+  change or the device must refuse when a signed input changes. Failed
+  descriptor text is never shown as authenticated meaning.
+- **The hostile companion cannot select a weaker trust tier.** It may trigger
+  the warning by withholding/corrupting a proof, but only an on-device first
+  confirmation can enter forced-blind review, and only a second independent
+  confirmation can release a signature.
+- **Default and faults fail closed.** Typed outcome/state discriminants default
+  to fatal. A skipped branch, stuck permission, corrupt page, missed warning,
+  skipped confirmation or reused sentinel must not convert fatal/refusal to
+  eligible/sign.
+- **No hidden durable authority.** The permission is a stack-local event scoped
+  to one handler call and dies on success, cancel, idle wipe or error. This
+  avoids power-cut, migration, RMA, wear and stale-enable states.
+- **Resource exhaustion does not remove facts.** Page/stack/FLASH/RAM overflow
+  refuses. The warning page buffer is dropped before the raw transcript buffer
+  is built; no two `Pages` buffers should coexist at the high-water point.
+
+Concrete threats include malicious proof omission/misbinding, Bloom false
+positives, retry/interleaving, warning habituation, typed/ERC-20 fallback after
+a known failure, selector-name spoofing, truncated hashes, page-budget pressure,
+FI bypass of either consent, and batch-summary ambiguity.
+
+### 5. Scope, non-goals, assumptions and alternatives
+
+The selected PQ1 candidate is **single-UserOp, per-request, on-device forced
+blind review**. Only a known tuple with absent/bad/mis-bound ERC-7730 evidence,
+or a verified descriptor that cannot render completely, may be considered
+eligible. Safe `approveHash`, CoW `setPreSignature`, malformed Safe/MultiSend,
+delegatecall, malformed envelope/pointer, mandatory-page overflow, batches and
+all off-chain/EIP-712 paths remain fatal.
+
+Alternatives:
+
+- Keep unconditional refusal: remains the default and rollback behavior.
+- Volatile session toggle: credible but deferred; it needs a new CMD/INS/CMSE/
+  router surface and an FI-hardened secure-SRAM permission merely to save one
+  warning interaction.
+- Persistent setting: rejected for PQ1 because it creates unsafe-on lifecycle,
+  torn-write/migration/default/wear/RMA semantics and collides with tightly
+  owned flash pages.
+- Companion flag/trailer or companion-only preference: rejected because the
+  companion is fully hostile.
+- Automatic fallback: rejected; clear-sign failure and blind review are two
+  separately consented trust tiers.
+
+Verified facts are the current routing, UI, artefact counts and absence of a
+settings/status command. Product choices are the warning copy and exact
+eligible classes. Human resistance to warning habituation and physical-panel
+legibility remain hardware/UX evidence questions, not source-proven facts.
+
+### 6. Authority, compatibility and resource envelope
+
+This plan authorizes only reversible repository edits and non-destructive host/
+QEMU checks. It authorizes no flashing, fault injection on hardware, release,
+deployment, signing-key use, OTP/option-byte/SE lifecycle change or external
+publication. Those need their own owner instruction and playbook evidence.
+
+The chosen blind path changes no wire/schema or persistent state. `Pages`
+remains bounded by `MAX_PAGES=31` (31×64 bytes of page storage); conservative
+gas and fingerprint reservations remain. Any candidate that exceeds current
+FLASH/update-slot, static SRAM/stack, latency, confirmation-page or frozen-wire
+limits is rejected or separately re-planned. A future catalogue-status command
+is a distinct protocol project, not smuggled into this slice.
+
+### 7. Implementation slices
+
+1. Correct both stale E2E catalogue statements and make the existing xtask
+   drift check fail on root/count/size mismatch.
+2. After architecture approval, make handler gas enforcement idempotent while
+   independently proving either the existing exact canonical page or the
+   deterministic inserted page; close the F10 page-budget evidence.
+3. Introduce an explicit `BlindEligible(reason)` versus `Fatal` outcome with a
+   fatal default and prove all non-eligible paths remain fatal.
+4. Add the first warning confirmation, then a separate forced-blind renderer
+   that ignores failed semantic metadata, followed by the existing final
+   confirmation; keep the permit local to that control flow.
+5. Run the full software/FI/resource campaign and physical trusted-UI campaign
+   before considering batch/off-chain expansion.
+6. Independently sequence the test-only upstream fixture/negative corpus,
+   provenance overlays/receipts, status design, bounded native-currency list,
+   NFT collection identity and constrained intent. Nested calldata and
+   multi-tail ABI remain design-first.
+
+### 8. Validation matrix
+
+| Requirement / cut | Required evidence |
+|---|---|
+| Guide matches generated artefacts | xtask positive check plus stale-root, stale-count and stale-size negative tests |
+| Exactly one exact gas page | existing-page, near-match, full-buffer, permutation and single/batch regressions; F10 E2E page-budget case |
+| Fatal never becomes eligible | dispatcher table tests for every proof/render/fatal class; fatal-default mutation control |
+| Host cannot auto-downgrade | stripped, malformed, wrong-chain/target proofs reach warning only; no signature without both confirms |
+| Both consents are mandatory | cancel/idle at warning; confirm warning then cancel final; sentinel-skip/stuck-at optimized-ELF sweeps |
+| Raw transcript binds signature | independent byte-flips over target/value/calldata/chain/gas/signer change a full page/digest or refuse |
+| No reused permission | retry, interleaving, error, idle wipe, lock and return tests; permission is not stored |
+| Resource and UI fit | Thumb release link; physical FLASH span; static SRAM and worst-stack receipt; MAX_PAGES boundaries; QEMU and golden grids |
+| Shipping panel behaves | production-like NV3007 frame/button capture, clipping/stale-row/scroll-to-end checks |
+| Registry updates are honest | upstream fixture transcript/waiver lane, generated negatives, deterministic overlay/diff and digest receipts |
+
+Host tests and source FI structure do not replace physical UI/FI evidence.
+Conversely, bench evidence does not replace parser, byte-binding or drift tests.
+
+### 9. Review, convergence, preservation and rollback
+
+Freeze the post-plan tree/diff, ignored/untracked inventory, prompt and input
+digests before review. Run the exact Partner A (Claude Code Opus 4.8, 1M,
+`ultracode`, `xhigh`) and Partner B (literal `gpt-5.6-sol`, effort `ultra`)
+architecture legs with the required pre/post runtime receipts, neutral mutual
+disclosure, immutable target and every applicable playbook Part-C attack list.
+The clear-signing scope also requires at least three independent discovery
+reviewers; discovery never substitutes for the exact pair. Freeze both first
+reports before disclosure, cross-adjudicate symmetrically, preserve every
+unresolved blocker, then record the owner stage decision. Repeat the protocol
+on implementation before any merge/production recommendation.
+
+Each slice must be independently revertible. Do not modify, stage or overwrite
+the preserved FV work. A failed blind-path experiment is removed by reverting
+only its isolated files; the current hard-refusal routing remains the rollback
+state. Bank reversible residuals in `docs/work-todo.md`; hardware/production
+residuals stay with their existing owners. No completion row or shipment claim
+is written until its named executable evidence actually ran on the frozen
+target.
+
+---
+
+## PQ1 architecture review outcome — frozen candidate
+
+The exact review completed with **NO-GO**:
+
+- accepted Partner A first pass:
+  `4b34ae5f1459d2d6dbfe21a1a9019235b74344cb0440aac76551efe6823a884c`;
+- accepted Partner B first pass:
+  `bcb8a52e7dba0ecf49e651467615a9c47da2a2a0756563d4362252dde5f1110f`;
+- Partner A cross:
+  `d11bf34e8b6ece6eac442ef26674ea7604c816bbc8dd50804539327f32186e70`;
+- Partner B cross:
+  `8f2310602fbd36f09994ed1de794c332f0bf1ea85dbd98f6dc1a0f00c6a2e193`;
+- one-turn bounded responses:
+  `d6617979ec0c877e7501c8921beb37041c03db5aef3f53732f96ab32f3311aa7`
+  and
+  `ff7eb9eab04c8090329349023da7f786e99b9dc172a171a7db3b9d90d9e746e1`;
+- complete 27-row matrix:
+  `214763b83d44fbd2d6c278edbfef625076a3a99a0d3aa326b28de012e09c6415`.
+
+The [canonical findings](security/adversarial-review/findings/clear-signing-pq1-forced-blind-architecture-2026-07-16.md)
+and [cross matrix](security/adversarial-review/findings/clear-signing-pq1-forced-blind-architecture-2026-07-16-cross-matrix.md)
+are the durable review record. The matrix preserves three unresolved items:
+the prompt-abuse policy, Partner A's incomplete independent reproduction of the
+handler-gas differential gap, and the stage-impact disagreement for the
+two-receipt mechanism. None may be converted into approval by reviewer count.
+
+## PQ1 forced-blind material redline candidate v2 — NOT REVIEWED
+
+**Status:** material replacement candidate only. It changes authority,
+failure response, state transitions, trusted UI, and the page/resource
+envelope, so the prior review cannot transfer. Do not implement the forced
+tier until this exact candidate is completed, frozen, and receives fresh
+mutually withheld first passes, symmetric cross-adjudication, and a recorded
+owner stage decision. Current hard refusal remains the default and rollback.
+
+### 1. Product decision and conservative closures
+
+The user's direction selects continued design of an on-device option: when
+clear signing is unavailable in one narrowly defined case, the user may enter
+an unmistakable forced-blind ceremony after a severe warning. It does not
+authorize a companion-selected downgrade, persistent preference, reusable
+session permission, current-owner rewrite, implementation start, merge, or
+shipment.
+
+This v2 candidate closes the reviewed ambiguities conservatively:
+
+| Decision | PQ1 v2 selection |
+|---|---|
+| Trust tier | Separate forced blind; explicitly **not clear signing** |
+| Default / rollback | Existing hard refusal |
+| Host authority | None: no flag, trailer bit, preference, cached grant, or automatic fallback |
+| Membership language | `filter-positive`, acknowledging Bloom false positives; never exact/known membership |
+| Sole eligible metadata cause | Structurally clean absence of the complete ERC-7730 trailer |
+| Invalid/bad/root-mismatched/chain- or target-misbound evidence | Fatal |
+| Verified render failure | Every current `RenderErr`, including `NoFormat`, `Reject`, and `PageBudget`, is fatal |
+| Paymaster | Any nonempty `paymasterAndData` is fatal |
+| EntryPoint | Exact canonical v0.6 only; hostile wire value is checked then discarded |
+| Lifecycle | Deployment/initCode and slot registration/rotation are fatal |
+| Other commands | Batch (including one element), off-chain, EIP-712, and rotation/deployment are fatal |
+| Semantic exclusions | Safe, CoW, MultiSend, delegatecall, `approveHash`, `setPreSignature`, contract creation, and malformed/short protected selectors are fatal |
+| Friendly formatting | None in the first forced tier; raw representation is authoritative |
+| Feature activation | Candidate is production-disabled pending favorable architecture/implementation review and independent release gates |
+
+The native ERC-20 shortcut mentioned by the old candidate is not part of
+forced blind and is deferred to a separate design. It cannot broaden this
+eligible set.
+
+### 2. Closed handler-owned state and routing
+
+The cause must remain typed at the first site that can still distinguish it:
+
+```text
+RequestMode =
+    SingleSteadyType2
+  | FatalMode(reason)
+
+MetadataEvidence =
+    Absent
+  | Verified(descriptor)
+  | InvalidBundle
+  | RootMismatch
+  | BindingMismatch
+  | FatalEvidenceFault(reason)
+
+DispatchOutcome =
+    Clear(pages)
+  | GenericUnknown(pages)
+  | ForcedCandidate(FilterPositiveDescriptorAbsent)
+  | Fatal(reason)
+```
+
+These are closed, fatal-default representations: no wildcard security arm,
+permissive `From`, `Default` to eligible, invalid-discriminant recovery, or
+`Option`-collapse. Unknown future reasons are fatal. `ForcedCandidate` is
+private, non-`Copy`, bound to the request digest and consumed once.
+
+The handler mints `ForcedCandidate` only after two independent positive checks:
+
+1. strict parsing proves the trailer is structurally cleanly absent (not
+   malformed, truncated, nonempty, bad, root-mismatched, or misbound); and
+2. independent FI-protected evaluation proves the exact
+   `(chain, target, selector)` tuple is Bloom `filter-positive`.
+
+Failure of either check, disagreement between redundant checks, or failure to
+produce the expected positive sentinel is fatal. Eligibility is never inferred
+from `prove_unknown != OK`, missing verification, skipped binding, renderer
+failure, or a generic `None`.
+
+The direct single handler consumes the candidate immediately. It must not
+return to the ordinary ERC-20, typed-call, selector-name, Safe/CoW, or generic
+blind ladder. A filter-negative call continues to use today's ordinary routing
+and gains no forced option.
+
+### 3. Exhaustive fatal preflight
+
+Before any warning, the handler completes and FI-proves every deterministic
+check, including:
+
+- fixed header, pointers, lengths, version, cursor, padding and trailing bytes;
+- direct target, selector-width calldata, and non-creation semantics;
+- `include_init_code == false`, `register_slot == false`, and exactly one
+  steady-state Type-2 output artifact, using the FI-re-read flags;
+- single command only: no batch, off-chain, EIP-712, lifecycle, or other
+  signing mode;
+- exact `ENTRY_POINT_V06` equality;
+- no Safe/CoW/MultiSend/delegatecall/protected-selector claim, including
+  selector-only and short malformed `execTransaction`;
+- empty `paymasterAndData`;
+- clean absence plus positive filter receipt;
+- full transcript/page construction, numeric widths and final digest;
+- exactly-one handler-owned canonical gas page and complete two-page ERC-8213
+  digest;
+- stack/page/resource preflight and all CFI stage initialization.
+
+Any failure returns the existing refusal/error path without showing the severe
+warning. This prevents a hostile companion from training the user on a warning
+that predictably ends in a later resource or routing refusal.
+
+### 4. Fixed forced transcript and page budget
+
+The transcript accepts one canonical raw `ForcedTranscriptInput` already used
+to compute the final Type-2 signing digest. It performs no ABI, descriptor,
+resolver, token, selector-name, or host-string parsing. Each 32-byte word uses
+64 lowercase hexadecimal digits, split without truncation. The exact final
+order is:
+
+| Final page(s) | Content and owner |
+|---:|---|
+| 0 | Persistent `! FORCED BLIND` / `UNVERIFIED CALL` banner |
+| 1 | Account index, slot owner index, and full device-derived signer |
+| 2 | Full raw target |
+| 3 | Exact numeric chain ID |
+| 4 | One canonical exact gas-triple page, produced only by the handler |
+| 5 | Full pinned EntryPoint v0.6 address |
+| 6 | `Single Type-2`, raw selector, and exact calldata length |
+| 7–8 | Full raw `value` word |
+| 9–10 | Full raw nonce word; forced-flow replacement for the compact conditional nonce-lane page, independently handler-proven |
+| 11–12 | Full raw `maxFeePerGas` word |
+| 13–14 | Full raw `maxPriorityFeePerGas` word |
+| 15–16 | Full raw `callGasLimit` word |
+| 17–18 | Full raw `verificationGasLimit` word |
+| 19–20 | Full raw `preVerificationGas` word |
+| 21–22 | `paymasterAndData = EMPTY` plus full SHA-256 of the empty value |
+| 23–24 | Complete ERC-8213 inner-calldata digest |
+| 25–26 | Complete final Type-2 SPHINCS signing digest |
+| 27 | `FORCED BLIND / UNVERIFIED`, cancel/sign instructions, final consent |
+
+The 28-page fixed set leaves three pages of the 31-page bound unused. There are
+no friendly decimal or semantic summary pages in PQ1. If any exact value,
+label, digest, or final page cannot fit exactly, the request is fatal before
+warning. Every page participates in scroll-to-end; the final page repeats the
+weaker trust tier.
+
+The forced flow does not also insert the ordinary conditional nonce-lane page:
+pages 9–10 display and bind the complete 256-bit nonce and are strictly stronger
+than the compact high-192-only lane page. The handler must independently prove
+those two exact pages from the signed nonce. If that proof cannot replace the
+existing compact-lane proof without weakening its FI structure, the page schema
+must be re-budgeted and reviewed before implementation; silent duplication or a
+skipped nonce proof is not permitted.
+
+Only one `Pages` value may exist at a time. The warning uses a fixed read-only
+`&'static [Page]` in flash, while the complete final transcript is already
+built in the one `Pages` value. No security argument relies on lexical
+`drop`. If the compiler cannot keep this construction within the secure stack,
+use explicit non-inlined page-owning phases and re-review the data lifetime.
+
+### 5. Two request-bound physical receipts
+
+The sequence is:
+
+1. freeze and strictly parse the request;
+2. complete the fatal preflight and build/prove the 28-page transcript;
+3. check/charge the owner-selected prompt-abuse control;
+4. display at least two fixed severe-warning pages from flash, including
+   `CLEAR SIGNING UNAVAILABLE` and `BLIND SIGN CAN DRAIN WALLET`;
+5. require scroll-to-end plus physical long confirmation;
+6. publish
+   `WarningReceipt { WARNING_DOMAIN, request_digest }` into its own
+   fail-initialized caller-owned slot and CFI stage;
+7. display the already-built raw transcript and require scroll-to-end plus a
+   distinct physical long confirmation;
+8. publish
+   `FinalReceipt { FINAL_DOMAIN, request_digest }` into a separate
+   fail-initialized slot and CFI stage;
+9. independently recompute/recheck the request digest, eligible reason, both
+   receipts, exact order and CFI transcript;
+10. consume the private permit and sign exactly once.
+
+Cancel, decline, idle wipe, lock, reset, disconnect, exception, parse/resource
+error, CFI/FI disagreement, or any return path invalidates the permit and both
+receipts. Neither receipt is stored in flash or exposed on the wire. The
+implementation must prove this across `SecureState`, handler guards, reset,
+panic/zeroize and interleaving paths; a stack-local claim by itself is not
+evidence.
+
+### 6. Unresolved owner decision — prompt abuse
+
+The exact secure-side abuse policy remains intentionally open because the
+reviewers disagreed and each choice has a material consequence:
+
+- a volatile per-unlock attempt budget/cooldown bounds habituation and activity
+  extension but lets a hostile host deny the option until re-unlock;
+- an absolute forced-flow deadline bounds button-driven lifetime extension but
+  needs FI-safe monotonic tick and wraparound semantics;
+- accepting unlimited per-request prompts leaves a documented habituation and
+  unlocked-window residual that Partner B treats as architecture-blocking.
+
+Before the v2 digest can be frozen for favorable review, the owner must select
+exact budget/cooldown/deadline/reset semantics and explicitly accept the
+fail-closed DoS or habituation consequence. No implementation should guess a
+numeric budget.
+
+### 7. Gas ownership and independent hardenings
+
+The ERC-7730 renderer no longer emits a gas-triple page. The single and batch
+handlers are the only producers for all existing confirmation sets:
+
+1. independently recompute the canonical page from the signed gas words;
+2. A/B scan the entire pre-append set and require zero exact copies and no
+   near-shaped conflict;
+3. append once at the prior-length boundary, before the handler-owned
+   fingerprint, without shifting or rewriting an existing semantic page;
+4. independently recompute and A/B scan the entire final set;
+5. require exactly one exact match, the append-only index and correct total
+   length;
+6. bind completion to caller-owned CFI after append and again immediately
+   before confirmation.
+
+The differential harness must model the full handler transformation, not only
+the dispatcher.
+
+Two existing fail-closed gaps are separate PQ1 hardenings, not authority for
+forced blind:
+
+- reserve every `execTransaction` selector claim regardless of calldata length;
+  a claimed-but-unverified single or batch member is fatal; and
+- FI-pin the wire EntryPoint to exact v0.6, discard the wire value after the
+  gate, and use the firmware constant in every T1/T2 digest.
+
+They need implementation-stage tests/review but do not depend on resolving the
+forced-tier product decision.
+
+#### Independent P0 implementation status — scoped update 2026-07-16
+
+The first exact implementation identity (`HEAD=64f059ffed804ebb509d8e42ed724922a1feefe8`,
+tracked-diff SHA-256 `1b032b4f…9ddbf`) completed the workflow-required mutually
+withheld dual first passes, same-session symmetric cross-review and bounded
+responses. Its frozen 18-row matrix (`39ad7be3…0eb0`) converged on **NO-GO for
+implementation acceptance and merge**: 7 confirmed, 7 narrowed, 1 refuted and
+3 unresolved. The optimized and QEMU receipts cited by the earlier paragraph
+belong to that pre-remediation/gas snapshot; they are not evidence for the
+materially changed live tree.
+
+The live remediation keeps the handler-owned gas page and now also moves both
+EntryPoint gates before request parsing, publishes Safe strict-decoder results
+directly into fail-initialized caller storage, deletes `insert_blank`, converts
+all seven legacy page sites to append-only suffix construction, completion-
+proves mandatory pages and every actual ERC-8213 fingerprint, renders slot
+indices injectively, completion-proves the batch-banner copy, and adds an
+ordered confirmed-member receipt plus an independently recomputed full-batch
+digest before the final summary. A subsequent source audit also separated
+adjacent sentinel-returning checks under the F-15.r1 rule. Focused and combined
+evidence is recorded in `docs/work-todo.md`. The current tree now passes the
+2,183/0 secure host suite (one diagnostic ignored), 194/0 ERC-7730 tests, 54/0
+xtask tests, deterministic codegen, and all current QEMU assertions. A
+canonical optimized dev/mock Thumb artifact preserves the EntryPoint-before-
+parse gates, direct Safe publication, append/proof calls, batch copy/member/
+digest gates, fingerprint proofs and 0/1 sentinel-call composition. That
+artifact is E3 development evidence only: no honest production ELF is currently
+linkable, its 47,952-byte batch frame is not a whole-call/on-target stack bound,
+and executable FI remains open. The tree still needs a new six-component frozen
+identity and fresh exact dual review. No prior favorable subfinding transfers
+merge, release or shipment authority to this new identity.
+
+Forced-blind v2 remains unimplemented and **NOT REVIEWED**. None of these
+independent fail-closed hardenings grants forced-blind eligibility or changes
+the current default refusal.
+
+### 8. Falsifiable acceptance evidence
+
+Architecture review must first receive this exact completed decision set and
+owner amendments. A later implementation/merge packet must include:
+
+- exhaustive tables for every metadata, render, mode, exclusion and fatal enum
+  variant, including a future-variant-fatal mutation control;
+- filter-positive collision, filter-negative and exact-source controls;
+- absent versus malformed/nonempty/bad/root/misbound/FI-fault separation;
+- selector-only/short Safe, Safe/CoW/MultiSend/delegatecall, one-element batch,
+  off-chain, deployment and rotation rejection;
+- nonempty paymaster and noncanonical EntryPoint rejection;
+- every-signed-field byte flips over signer, EntryPoint, chain, nonce, target,
+  value, calldata, fees, all gas words and paymaster state;
+- transcript/full final-digest differential and exact 28-page golden grids;
+- gas zero/one/two/near-match/full-buffer/permutation tests in the complete
+  handler glue;
+- warning/final cancel, idle, replay, out-of-order, stale-receipt, disconnect,
+  exception and reset cleanup;
+- a scripted non-auto-confirm UI configuration;
+- selected prompt-policy exhaustion, deadline and reset tests;
+- release-shaped Thumb link/map, post-LTO disassembly, MSPLIM/exception
+  headroom and hardware stack high-water;
+- FI skip/stuck-at campaigns over classifier, filter receipt, both consent
+  receipts, gas proof and final release;
+- production-like NV3007 clipping/stale-row/scroll-to-end and two-real-button
+  captures;
+- production configuration/prodtest parity, authenticated ERC-8176 offline
+  verifier/snapshot, release provenance, rollback and signing-key custody
+  closure.
+
+Source tests do not replace target/hardware evidence. Hardware evidence does
+not replace byte-binding, parser, routing, provenance or configuration gates.
+
+### 9. Authority, owner amendments and convergence
+
+After a favorable fresh architecture review, an owner/maintainer decision must
+amend, at minimum, `CLAUDE.md`, clear-signing CS2/CS9, the companion guide and
+integration contract, root-rotation policy where relevant, `docs/STATUS.md`,
+production feature/configuration documentation, and the ERC-8176 status owner.
+Required language:
+
+> Forced blind is not clear signing. A filter-positive call never silently
+> reaches the ordinary ERC-20, typed-call, selector-name, or generic blind
+> ladder. It either clear-signs, fatal-refuses, or—only for the explicitly
+> enumerated clean-absence, single steady-state Type-2 case—enters a separate
+> on-device forced-blind ceremony. Default and rollback remain refusal.
+
+This plan authorizes no flashing, hardware fault injection, release,
+publication, deployment, signing-key use, OTP/option-byte/secure-element
+lifecycle change, or shipment. The independent ERC-8176, rollback,
+production-configuration, hardware UI/FI, resource, provenance and release
+gates remain unchanged.

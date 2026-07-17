@@ -141,6 +141,94 @@ fn registry_declared_but_uncompiled_call_is_still_known() {
 }
 
 #[test]
+fn registry_1inch_native_currency_list_is_authenticated_in_order() {
+    let catalogue = build_registry();
+    let entry = catalogue
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == 1
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-AggregationRouterV4-eth.json")
+        })
+        .expect("the static 1inch V4 ETH formats should now compile");
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).unwrap();
+    let digest = keccak256(
+        b"clipperSwap(address,address,uint256,uint256)",
+    );
+    let selector = [digest[0], digest[1], digest[2], digest[3]];
+    let format = ir
+        .format_iter()
+        .map(Result::unwrap)
+        .find(|format| format.selector == selector)
+        .expect("clipperSwap format survives");
+
+    let expected = {
+        let mut addresses = [0u8; 40];
+        addresses[..20].fill(0xEE);
+        addresses
+    };
+    let token_amounts: Vec<_> = format
+        .fields()
+        .map(Result::unwrap)
+        .filter(|field| FormatOp::try_from(field.format_op) == Ok(FormatOp::TokenAmount))
+        .collect();
+    assert_eq!(token_amounts.len(), 2);
+    for field in token_amounts {
+        let params = parse_params(&ir, field.param_off).unwrap();
+        assert_eq!(
+            params.native_currency_addresses,
+            Some(&expected[..]),
+            "{} must authenticate [0xEeee…, 0x0] in descriptor order",
+            String::from_utf8_lossy(field.label),
+        );
+    }
+}
+
+#[test]
+fn registry_flying_tulip_nft_collections_expand_injectively() {
+    let catalogue = build_registry();
+    let nft_sources = [
+        "calldata-PftNft.json",
+        "calldata-PftMarketplace.json",
+        "calldata-PutManager.json",
+    ];
+    let entries: Vec<_> = catalogue
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry
+                .source
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| nft_sources.contains(&name))
+        })
+        .collect();
+    assert_eq!(entries.len(), 7, "three real descriptors expand to seven deployments");
+
+    let mut format_count = 0usize;
+    let mut nft_field_count = 0usize;
+    for entry in entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).unwrap();
+        for format in ir.format_iter().map(Result::unwrap) {
+            format_count += 1;
+            for field in format.fields().map(Result::unwrap) {
+                if FormatOp::try_from(field.format_op) == Ok(FormatOp::NftName) {
+                    nft_field_count += 1;
+                    let params = parse_params(&ir, field.param_off).unwrap();
+                    assert!(
+                        params.nft_collection.is_some() ^ params.nft_collection_path.is_some(),
+                        "every accepted nftName field has one authenticated collection identity"
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(format_count, 12, "only the twelve bounded static formats expand");
+    assert_eq!(nft_field_count, 12);
+}
+
+#[test]
 fn registry_endpoint_only_route_is_omitted_but_stays_known() {
     let catalogue = build_registry();
     let raw = hex::decode("a5e0829caced8ffdd4de3c43696c57f7d7a678ff").unwrap();
@@ -1027,9 +1115,9 @@ fn seed_corpus_param_tlv_blobs_are_well_formed() {
                         field.label
                     );
                     // Tag must be in the documented contiguous space through
-                    // 0x43 (`PARAM_DYNAMIC_KIND`).
+                    // 0x45 (`PARAM_NFT_COLLECTION_PATH`).
                     assert!(
-                        (0x30u8..=0x43).contains(&tag),
+                        (0x30u8..=0x45).contains(&tag),
                         "unknown TLV tag 0x{:02X} in {:?} field {:?}",
                         tag,
                         ir.contract,
@@ -1037,9 +1125,11 @@ fn seed_corpus_param_tlv_blobs_are_well_formed() {
                     );
                     // Per-tag width invariants.
                     match tag {
-                        0x31 => {
-                            assert_eq!(len, 20, "PARAM_TOKEN must be 20 B in {:?}", field.label)
-                        }
+                        0x31 | 0x44 => assert_eq!(
+                            len, 20,
+                            "address tag 0x{:02X} must be 20 B in {:?}",
+                            tag, field.label
+                        ),
                         0x32 => {
                             assert_eq!(len, 32, "PARAM_THRESHOLD must be 32 B in {:?}", field.label)
                         }
@@ -1057,12 +1147,27 @@ fn seed_corpus_param_tlv_blobs_are_well_formed() {
                             field.label
                         ),
                         0x3D => assert!(len > 0, "PARAM_NESTED_CALLEE path must be non-empty"),
+                        0x45 => assert!(
+                            len > 0,
+                            "PARAM_NFT_COLLECTION_PATH must be non-empty"
+                        ),
                         0x3F => assert!(
                             (1..=255).contains(&len),
                             "PARAM_VISIBILITY must be ≥1 B in {:?}",
                             field.label
                         ),
-                        0x42 => assert_eq!(len, 20, "PARAM_NATIVE_CURRENCY must be 20 B"),
+                        0x42 => assert!(
+                            len % pqsigner_erc7730::render::params::NATIVE_CURRENCY_ADDRESS_LEN
+                                == 0
+                                && (1
+                                    ..=pqsigner_erc7730::render::params::MAX_NATIVE_CURRENCY_ADDRESSES)
+                                    .contains(
+                                        &(len
+                                            / pqsigner_erc7730::render::params::NATIVE_CURRENCY_ADDRESS_LEN),
+                                    ),
+                            "PARAM_NATIVE_CURRENCY must contain 1–{} complete addresses",
+                            pqsigner_erc7730::render::params::MAX_NATIVE_CURRENCY_ADDRESSES
+                        ),
                         _ => {} // variable-width tags: 0x30, 0x33, 0x39, 0x3B, 0x3E, 0x40, 0x41
                     }
                     cursor += len;

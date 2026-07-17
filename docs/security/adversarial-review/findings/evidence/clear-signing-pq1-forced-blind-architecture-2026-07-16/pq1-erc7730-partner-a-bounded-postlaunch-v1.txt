@@ -1,0 +1,26 @@
+POST-LAUNCH RUNTIME RECEIPT V1 — PQ1 ERC-7730 BOUNDED COUNTERPART — PARTNER A
+frozen_local: 2026-07-16T23:23:39+02:00
+role: single bounded counterpart response to Partner-B new cross candidate XB-001
+session_id: fc611891-8cef-4051-b9a1-d409dab7db13 (resumed accepted Partner-A V5/cross context)
+cli_version_observed: Claude Code 2.1.211
+provider_model_observed_in_durable_messages: claude-opus-4-8
+context_selector_observed: opus[1m] / 1M
+orchestration_observed: ultracode acknowledged as xhigh; personal bounded response; no new fanout
+sandbox: plan/read-only; target recursively non-writable
+target_head_initial_final: 9647b79374d5e2e10445254492308101b8be708b
+target_diff_sha256_initial_final: b8e270747a5c16eafde0b74fe94f34be9ab4504d91559234fb2a1ca056d59c25
+target_status_final: M docs/erc7730-implementation-review-2026-07.md; M docs/work-todo.md
+target_untracked_final: empty
+target_ignored_inventory_sha256_final: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+partner_a_cross_sha256: d11bf34e8b6ece6eac442ef26674ea7604c816bbc8dd50804539327f32186e70
+partner_b_cross_sha256: 8f2310602fbd36f09994ed1de794c332f0bf1ea85dbd98f6dc1a0f00c6a2e193
+bounded_prompt_sha256: e87a9c3d32d5c335cd6fc7bd86d24da1a8e53fc93e15fc09fa8fa067f4441eac
+bounded_response_path: /tmp/pq1-erc7730-partner-a-bounded-v1.md
+bounded_response_sha256: d6617979ec0c877e7501c8921beb37041c03db5aef3f53732f96ab32f3311aa7
+bounded_response_bytes: 7263
+bounded_response_lines: 34
+raw_candidate: XB-001 (origin Partner B)
+disposition: CONFIRMED (NARROWED)
+new_candidates_raised: none
+session_log_sha256_after_response: f5b344c8939b62b2b3b49cab530eff683e03325a54254283f29b0fdf9e76a6c0
+acceptance: frozen one-turn Partner-A counterpart response; no recursive exchange

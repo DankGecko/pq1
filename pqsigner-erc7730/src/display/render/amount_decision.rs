@@ -101,8 +101,8 @@ pub struct TokenAmountDecision<'a> {
 ///
 /// Ladder (order is load-bearing):
 ///
-/// 1. **Native-currency sentinel** (`nativeCurrencyAddress`): a resolved
-///    token equal to the descriptor's sentinel (`0xEeee…`/`0x0`) IS the
+/// 1. **Native-currency sentinel list** (`nativeCurrencyAddress`): a resolved
+///    token equal to any descriptor-pinned sentinel (`0xEeee…`/`0x0`) IS the
 ///    chain native currency. An authenticated `params.decimals` wins; absent
 ///    that, 18 decimals are used only for a chain in
 ///    [`known_native_ticker`]. An unknown chain takes the exact raw-integer
@@ -129,10 +129,7 @@ pub fn token_amount_decision<'a>(
     chain_id: u64,
     params: &ParamSet<'a>,
 ) -> TokenAmountDecision<'a> {
-    let is_native = matches!(
-        (token_addr, params.native_currency),
-        (Some(addr), Some(native)) if &addr == native
-    );
+    let is_native = token_addr.is_some_and(|addr| params.native_currency_matches(&addr));
 
     let bound: Option<(u32, &'a [u8])> = if is_native {
         match params.decimals {
@@ -254,7 +251,7 @@ mod tests {
         t[31] = 42;
         let mut params = ParamSet::default();
         params.threshold = Some(&t);
-        params.native_currency = Some(&SENTINEL);
+        params.native_currency_addresses = Some(&SENTINEL);
         let d = token_amount_decision(&t, Some(SENTINEL), None, 1, &params);
         assert_eq!(
             d,
@@ -276,7 +273,7 @@ mod tests {
         v[31] = 41;
         let mut params = ParamSet::default();
         params.threshold = Some(&t);
-        params.native_currency = Some(&SENTINEL);
+        params.native_currency_addresses = Some(&SENTINEL);
         let d = token_amount_decision(&v, Some(SENTINEL), None, 1, &params);
         assert_eq!(
             d.arm,
@@ -286,6 +283,41 @@ mod tests {
             }
         );
         assert_eq!(d.identity_page, None);
+    }
+
+    #[test]
+    fn either_native_list_member_binds_but_one_byte_miss_does_not() {
+        let zero = [0u8; 20];
+        let mut sentinels = [0u8; 40];
+        sentinels[..20].copy_from_slice(&SENTINEL);
+        sentinels[20..].copy_from_slice(&zero);
+        let mut params = ParamSet::default();
+        params.native_currency_addresses = Some(&sentinels);
+        let value = [0u8; 32];
+
+        for sentinel in [SENTINEL, zero] {
+            let d = token_amount_decision(&value, Some(sentinel), None, 137, &params);
+            assert_eq!(
+                d,
+                TokenAmountDecision {
+                    arm: TokenAmountArm::Bound {
+                        decimals: 18,
+                        ticker: b"POL",
+                    },
+                    identity_page: None,
+                }
+            );
+        }
+
+        let mut miss = SENTINEL;
+        miss[19] ^= 1;
+        let d = token_amount_decision(&value, Some(miss), None, 137, &params);
+        assert_eq!(d.arm, TokenAmountArm::UnverifiedRaw);
+        assert_eq!(d.identity_page, Some(miss));
+
+        let unknown_chain = token_amount_decision(&value, Some(zero), None, 149, &params);
+        assert_eq!(unknown_chain.arm, TokenAmountArm::UnverifiedRaw);
+        assert_eq!(unknown_chain.identity_page, None);
     }
 
     #[test]
@@ -374,7 +406,7 @@ mod tests {
         assert_eq!(amount_decision(149, &params), None);
 
         let mut native = ParamSet::default();
-        native.native_currency = Some(&SENTINEL);
+        native.native_currency_addresses = Some(&SENTINEL);
         let d = token_amount_decision(&[0u8; 32], Some(SENTINEL), None, 149, &native);
         assert_eq!(d.arm, TokenAmountArm::UnverifiedRaw);
         assert_eq!(d.identity_page, None);
@@ -387,7 +419,7 @@ mod tests {
         let a = amount_decision(149, &params).expect("descriptor pins the scale");
         assert_eq!((a.decimals, a.unit), (9, &b"NATIVE"[..]));
 
-        params.native_currency = Some(&SENTINEL);
+        params.native_currency_addresses = Some(&SENTINEL);
         let d = token_amount_decision(&[0u8; 32], Some(SENTINEL), None, 149, &params);
         assert_eq!(
             d.arm,
@@ -404,7 +436,7 @@ mod tests {
         let threshold = [0u8; 32];
         let mut params = ParamSet::default();
         params.threshold = Some(&threshold);
-        params.native_currency = Some(&SENTINEL);
+        params.native_currency_addresses = Some(&SENTINEL);
         let d = token_amount_decision(&threshold, Some(SENTINEL), None, 149, &params);
         assert_eq!(d.arm, TokenAmountArm::UnverifiedRaw);
         assert_eq!(d.identity_page, None);
@@ -485,7 +517,7 @@ mod kani_harness {
             params.threshold = Some(&threshold);
         }
         if has_native {
-            params.native_currency = Some(&native);
+            params.native_currency_addresses = Some(&native);
         }
         let token_addr = if has_token { Some(token) } else { None };
         let chain_id: u64 = kani::any();
@@ -613,8 +645,8 @@ mod kani_harness {
         }
     }
 
-    /// (c) Native-sentinel precedence ∀: a resolved token equal to the
-    /// descriptor's Merkle-pinned `nativeCurrencyAddress` IS the chain native
+    /// (c) Native-sentinel precedence ∀: a resolved token equal to either
+    /// member of the descriptor's Merkle-pinned `nativeCurrencyAddress` IS the chain native
     /// currency and takes precedence over the companion-supplied erc20 trailer
     /// EVEN when that trailer also matches the same address. A known chain is
     /// `Bound(18, ticker)`; an unknown chain is exact `UnverifiedRaw`; neither
@@ -625,7 +657,8 @@ mod kani_harness {
     fn amt_dec_native_sentinel_precedence() {
         let value: [u8; 32] = kani::any();
         let addr: [u8; 20] = kani::any();
-        let native: [u8; 20] = kani::any();
+        let native_first: [u8; 20] = kani::any();
+        let native_second: [u8; 20] = kani::any();
         let contract: [u8; 20] = kani::any();
         let decimals: u8 = kani::any();
         let sym: [u8; 4] = kani::any();
@@ -638,8 +671,11 @@ mod kani_harness {
         };
         let has_meta: bool = kani::any();
         let chain_id: u64 = kani::any();
+        let mut native = [0u8; 40];
+        native[..20].copy_from_slice(&native_first);
+        native[20..].copy_from_slice(&native_second);
         let mut params = ParamSet::default();
-        params.native_currency = Some(&native);
+        params.native_currency_addresses = Some(&native);
         let d = token_amount_decision(
             &value,
             Some(addr),
@@ -647,7 +683,7 @@ mod kani_harness {
             chain_id,
             &params,
         );
-        if addr == native {
+        if addr == native_first || addr == native_second {
             match known_native_ticker(chain_id) {
                 Some(expect) => match d.arm {
                     TokenAmountArm::Bound {
@@ -741,7 +777,7 @@ mod kani_harness {
         t[31] = 42;
         let mut params = ParamSet::default();
         params.threshold = Some(&t);
-        params.native_currency = Some(&sentinel);
+        params.native_currency_addresses = Some(&sentinel);
 
         // Unlimited (bound via the native sentinel) at value == threshold.
         let d = token_amount_decision(&t, Some(sentinel), None, 1, &params);

@@ -272,18 +272,25 @@ it carried.
 For an N-tx batch, the device renders, in order:
 
 1. Banner: `BATCH SIGN` / `Tx 1 of N`
-2. `Signer acct #N` plus the full mnemonic-derived EIP-55 signer address.
-3. When the high-192 EntryPoint nonce key is non-zero, `Nonce lane key:`
+2. The exact renderer/dispatcher pages for inner tx 1 (semantic intent,
+   envelope, and any append-only native-value or legacy-fee suffix).
+3. `Signer acct #N` plus the full mnemonic-derived EIP-55 signer address,
+   then `Target contract:` plus the full member target address.
+4. When the high-192 EntryPoint nonce key is non-zero, `Nonce lane key:`
    followed by all 48 lowercase hexadecimal characters. Lane zero omits it.
-4. The same pages a single-tx sign would render for inner tx 1
-   (value / ERC-20-shape / blind-sign).
-5. Long-right (or cancel via long-left).
-6. Banner: `Tx 2 of N` + signer identity + conditional nonce-lane page + tx 2 pages.
-7. … repeat for each member …
-8. Final summary pages: `Sign N txs?`, the same signer identity, the same
-   conditional nonce-lane page, then
-   `Long-right` / `to confirm`.
-9. Long-right confirms; signing begins.
+5. The exact three-word UserOp gas page, then the complete two-page ERC-8213
+   calldata fingerprint.
+6. Long-right confirms this member (or long-left cancels the whole batch).
+7. Banner: `Tx 2 of N`, followed by tx 2's renderer/dispatcher pages and the
+   same signer → target → conditional nonce-lane → gas → fingerprint suffix.
+8. … repeat for every declared member …
+9. Before the final summary, firmware independently proves that all `N`
+   affirmative member receipts completed and that a second full ordered digest
+   pass matches the confirmed-member digest.
+10. Final summary pages: `Sign N txs?`, optional paymaster identity, the same
+    signer identity, the conditional nonce-lane page, exact gas, and the
+    complete whole-batch fingerprint, then `Long-right` / `to confirm`.
+11. Long-right confirms; signing begins.
 
 Cancel at **any** of the per-tx confirms or the final summary aborts
 the entire signing operation — no inner tx is signed individually.

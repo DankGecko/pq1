@@ -6,8 +6,8 @@
 > skills are the source of truth**; this is the categorized index, not a copy — when in doubt, run the
 > command and read the Makefile.
 >
-> **PATH note:** installed tools are spread across **five** dirs — a fresh shell needs all of them:
-> `~/.foundry/bin` · `~/.cargo/bin` · `~/.local/bin` · `~/.nix-profile/bin` · `~/.elan/bin`.
+> **PATH note:** installed tools are spread across **six** dirs — a fresh shell needs all of them:
+> `~/.foundry/bin` · `~/.cargo/bin` · `~/.local/bin` · `~/.nix-profile/bin` · `~/.elan/bin` · `~/.kimi-code/bin`.
 
 ---
 
@@ -76,6 +76,12 @@
 | **WebSearch / WebFetch** | ✅ reachable | Deferred tools — load via `ToolSearch query "select:WebSearch,WebFetch"`. **Probed live 2026-06-17: reachable from a *workflow subagent*, not just the main loop.** |
 | **`deep-research` skill** | ✅ installed | Fan-out web search → fetch → adversarial-verify → cited report. Invoke via Skill tool. |
 | Other skills | ✅ | `rainbow`, `lascar`, `scared`, `la1010`, `leanloop`, plus harness skills (`verify`, `code-review`, `simplify`, `run`). `~/.claude/skills` → `~/repos/my-claude-skills`. |
+
+### Reviewer agents
+
+| Tool | Status | Invoke / evidence boundary |
+|------|--------|----------------------------|
+| **Kimi Code / K3** | ✅ `~/.kimi-code/bin/kimi` 0.27.0; clean-directory K3 smoke completed 2026-07-17 | Model alias `kimi-code/k3` resolves in the exported wire receipt to provider/model `kimi`/`k3`, `thinkingEffort="max"`, 1M context. Start interactive reviews with `kimi --plan --model kimi-code/k3`; never use `--yolo`. (`--plan` and non-interactive `--prompt` are mutually exclusive in 0.27.0.) Launch from an MCP-minimal clean review directory with the immutable target added: an earlier repo-root diagnostic failed before response on the auto-loaded Lean-MCP schema, while the clean-directory prompt returned `K3_READY`. Accept only a completed export/wire receipt satisfying [`planning-and-review-workflow.md`](planning-and-review-workflow.md) §7; Kimi is supplemental and cannot replace the mandatory pair. |
 
 ---
 

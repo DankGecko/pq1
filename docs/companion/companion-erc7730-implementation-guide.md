@@ -115,6 +115,49 @@ for authority. A bound non-native scalar `tokenAmount`, token array, or
 decimals authenticate successfully. If that injective identity page does not
 fit, rendering refuses rather than omitting it.
 
+`tokenAmount.nativeCurrencyAddress` accepts the registry's scalar or array
+form. IR tag `0x42` keeps the scalar encoding byte-identical at 20 bytes and
+encodes the current registry-complete list as two descriptor-order 20-byte
+addresses. Empty, duplicate, malformed, or longer lists are compiler- and
+device-rejected; no entry is truncated. Only an exact member match uses the
+chain-pinned native ticker/scale. A miss remains an ERC-20 candidate and, when
+metadata cannot bind it, renders the exact raw amount plus the full
+`Token (UNVERIFIED)` address page.
+
+`nftName` likewise carries injective collection identity. IR tag `0x44` binds
+a literal 20-byte collection and `0x45` binds a compiled static-address path;
+exactly one is required. Only the frozen `@.to` envelope field is accepted as a
+container-root path, so an ABI argument named `to` cannot shadow it. The device
+always shows the exact token ID and complete collection address. A friendly
+name is additional display metadata: descriptor `contractName` applies only to
+the authenticated descriptor contract, while any external collection requires
+an exact `(chain, address)` lookup. Wildcard names never qualify.
+
+<!-- BEGIN XTASK-VERIFIED ERC7730 SEMANTIC CONTRACT -->
+### Device semantic manifest (generated)
+
+| Wire opcode | Registry `format` | Device route |
+|------------:|-------------------|--------------|
+| `0x01` | `raw` | implemented renderer (fail closed on invalid input) |
+| `0x02` | `amount` | implemented renderer (fail closed on invalid input) |
+| `0x03` | `tokenAmount` | implemented renderer (fail closed on invalid input) |
+| `0x04` | `nftName` | implemented renderer (fail closed on invalid input) |
+| `0x05` | `date` | implemented renderer (fail closed on invalid input) |
+| `0x06` | `duration` | implemented renderer (fail closed on invalid input) |
+| `0x07` | `addressName` | implemented renderer (fail closed on invalid input) |
+| `0x08` | `enum` | implemented renderer (fail closed on invalid input) |
+| `0x09` | `unit` | implemented renderer (fail closed on invalid input) |
+| `0x0A` | `calldata` | hard refusal (nested calldata unsupported) |
+| `0x0B` | `chainId` | implemented renderer (fail closed on invalid input) |
+| `0x0C` | `tokenTicker` | implemented renderer (fail closed on invalid input) |
+| `0x0D` | `interoperableAddressName` | implemented renderer (fail closed on invalid input) |
+| `0x0E` | `encrypted` | hard refusal (signed operand hidden) |
+
+- For a verified, request-bound descriptor, **every `RenderErr` variant is a hard refusal** through an exhaustive production match. A new variant cannot compile until it receives that policy; no variant authorizes typed-call, selector-label, or blind-sign fallback.
+- ERC-8213 is mandatory and atomic for every companion/dapp-supplied signed payload: exactly 2 pages (banner + hash) surface the complete 32-byte digest at 8 bytes per display row. If both pages do not fit, the signing caller refuses; it never leaves an orphan banner or signs without the complete hash. The sole current exemption is the firmware-constructed Type-1 slot-rotation operation: its calldata combines firmware constants with seed-derived slot-owner material that is intentionally unavailable before the rotation consent boundary, so that dialog instead renders the complete slot index and bootstrap-use consequence.
+- Confirmation transcripts use the pinned append-only order. A single UserOp shows renderer pages first; the dispatcher may append native-value/legacy-fee pages, then the handler appends paymaster (when present), signer, target, non-zero nonce lane, exact UserOp gas and ERC-8213 fingerprint pages. A batch member prepends its exact `BATCH SIGN / Tx i of N` banner to the renderer/dispatcher pages, then appends signer, target, nonce lane, gas and fingerprint pages. The batch-final summary appends paymaster, signer, nonce lane, gas and the whole-batch fingerprint. A full buffer refuses; no mandatory page is inserted by shifting or overwriting an earlier page.
+<!-- END XTASK-VERIFIED ERC7730 SEMANTIC CONTRACT -->
+
 ## 2. What the companion must ship
 
 Three things in the companion bundle:
@@ -125,12 +168,13 @@ Three things in the companion bundle:
    recorded by the registry rotation policy. It is not built from the small
    hand-authored seed corpus used by older bring-up snapshots.
 
-   - Development catalogue: 334,827 B, 420 compiled leaves, 4,542
+   <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->
+   - Development catalogue: 340,016 B, 428 compiled leaves, 4,542
      exact registry-declared known-call tuples, provenance `dev-unattested`.
      The tuple-set SHA-256 receipt is
      `96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`.
-   - E2E fixture: 2,000 B, 5 leaves (WETH + USDT plus one synthetic,
-     fully-bound EIP-712 Delegation leaf).
+   - E2E fixture: 3,917 B, 8 compiled leaves.
+   <!-- END XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->
 
    The blob does **not** embed its Merkle root. Bytes 0..31 are the catalogue
    header. For the current development line, pin the blob and expected root out
@@ -644,15 +688,15 @@ Companion-side flow:
    `dev-unattested` firmware will show:
    ```
    Page 0: "** DEV BUILD **" / "Unattested" / "descriptor" / "> next"
-   Page 1: "Signer acct #0" + the full mnemonic-derived wallet address
-   Page 2: "Target contract:" + the full USDT contract address
-   Page 3: "Send" / "Tether Limited" / "Tether USD" / "> next"
-   Page 4: "Amount" / "100000000" / "" / "! raw, dec=?"
-   Page 5: "Token (UNVERIFIED)" + the exact USDT contract address
-   Page 6: "To" / "0x333333…" / "..." / "> next"
-   Then: network; exact max-fee/tip/maximum-total; call,
-            verification, and pre-verification gas separately; full
-            256-bit UserOp nonce (hex)...
+   Page 1: "Send" / "Tether Limited" / "Tether USD" / "> next"
+   Page 2: "Amount" / "100000000" / "" / "! raw, dec=?"
+   Page 3: "Token (UNVERIFIED)" + the exact USDT contract address
+   Page 4: "To" / "0x333333…" / "..." / "> next"
+   Then: renderer-owned network and exact fee/nonce envelope pages.
+   Append-only handler suffix: "Signer acct #0" + full derived address;
+            "Target contract:" + full USDT address; non-zero nonce-lane
+            key when applicable; call, verification, and pre-verification
+            gas separately; complete fingerprint pages.
    Page N: "8213 Fingerprint" / "CalldataDigest" / "> verify off-dev"
    Page N+1: <full 32-byte hex hash>
    Page N+2: "Cancel / Confirm"
@@ -698,12 +742,12 @@ Expected display:
 
 ```
 Page 0: "** DEV BUILD **" / "Unattested" / "descriptor" / "> next"
-Page 1: "Signer acct #0" + the full mnemonic-derived wallet address
-Page 2: "Target contract:" + the full USDT contract address
-Page 3: "Approve" / "Tether Limited" / "Tether USD" / "> next"
-Page 4: "Spender" / "0x444444…" / "..." / "> next"
-Page 5: "Amount" / "unlimited" / "(unverified)" / "> next"
-Page 6+: exact "Token (UNVERIFIED)" identity, envelope, fingerprint, confirm
+Page 1: "Approve" / "Tether Limited" / "Tether USD" / "> next"
+Page 2: "Spender" / "0x444444…" / "..." / "> next"
+Page 3: "Amount" / "unlimited" / "(unverified)" / "> next"
+Page 4+: exact "Token (UNVERIFIED)" identity and renderer envelope, followed
+         append-only by signer, target, conditional nonce lane, exact gas,
+         fingerprint and confirm
 ```
 
 ### 7.3 WETH deposit (zero-arg, value from envelope)
@@ -729,12 +773,11 @@ Expected display:
 
 ```
 Page 0: "** DEV BUILD **" / "Unattested" / "descriptor" / "> next"
-Page 1: "Signer acct #0" + the full mnemonic-derived wallet address
-Page 2: "Target contract:" + the full WETH contract address
-Page 3: "! NATIVE ETH" + the exact 0.5 ETH outer value
-Page 4: "Wrap" / "WETH" / "WETH" / "> next"
-Page 5: "Amount" / "0.5 ETH" / "" / "> next"
-Page 6+: envelope + fingerprint + confirm
+Page 1: "Wrap" / "WETH" / "WETH" / "> next"
+Page 2: "Amount" / "0.5 ETH" / "" / "> next"
+Page 3+: renderer envelope, then the dispatcher-appended "! NATIVE ETH"
+         exact 0.5 ETH value page, followed append-only by signer, target,
+         conditional nonce lane, exact gas, fingerprint and confirm
 ```
 
 ### 7.4 USDC TransferWithAuthorization (currently refused)
@@ -875,13 +918,17 @@ or modified, the root changes deterministically.
 **Current development roots** (this integration snapshot; production
 provenance remains blocked):
 
-| Variant | Root                                                                 | Catalog blob bytes |
-|---------|----------------------------------------------------------------------|-------------------:|
-| development (non-e2e) | `0x048fd2f1ff61942027ffa248f7d26fdbe9d8e2f02e9ad6478ad6714cb96ab142` |            334 827 |
-| e2e     | `0x2c4f31595aa61014a4bc1e347a19893e167aa940ab50771bd826ffe35e3d9575` |              2 000 |
+<!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
+| Variant | Root | Catalog blob bytes | Compiled leaves |
+|---------|------|-------------------:|----------------:|
+| development (non-e2e) | `0x0706d763061ecfb0668ba7bdcf81e7159a6e541bae090b8678e5c9f31517d2ed` | 340 016 | 428 |
+| e2e | `0xcbd0b77128b92246363f6ea444e8544f7f84dc9ca4d1e15d671d6078960238e9` | 3 917 | 8 |
+<!-- END XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 
-Source of truth: `secure/src/db_roots.rs` (regenerated by
-`cargo run -p dbgen`).
+Source of truth: fresh compiler output checked against `secure/src/db_roots.rs`
+and the companion blobs. `cargo run -p pqsigner-xtask --
+gen-erc7730-descriptors --check` verifies all marked documentation blocks as
+well as the generated artifacts.
 
 **Companion update flow** when the firmware rolls a new root:
 
@@ -1046,11 +1093,22 @@ this in the registry but is handled by a dedicated `safe_display`
 renderer; generic descriptors that use `nestedSelector` will not sign until a
 complete native rendering path exists.
 
-### 12.4 NFT collection names not resolved
+### 12.4 NFT collection identity is bounded and injective
 
-`NftName` formatter (0x09) renders the raw token id as a decimal +
-"(NFT token id)" hint. Collection-name lookup needs an on-device
-NFT-name DB which is not yet wired. Phase 5+ scope.
+`NftName` formatter (`0x04`; `0x09` is `Unit`) requires exactly one
+authenticated collection source: a literal 20-byte address in IR tag `0x44`,
+or a compiled static-address path in tag `0x45`. Container-root paths are
+limited to the frozen `@.to` envelope field; calldata argument names cannot
+shadow the `@` namespace. Missing, duplicate, mutually specified, malformed,
+non-address, dynamic, or unsupported container paths reject.
+
+The device renders the exact token ID as decimal only when lossless, otherwise
+as all 32 raw bytes, and always adds a page containing the complete collection
+address. A friendly name is optional: descriptor `contractName` qualifies only
+when the collection equals the authenticated descriptor contract; any other
+collection requires exact `(chain, address)` metadata. Chain-zero wildcard
+metadata never qualifies. A missing name retains the complete raw identity and
+does not authorize blind signing.
 
 ### 12.5 Dynamic ABI framing is deliberately narrow
 

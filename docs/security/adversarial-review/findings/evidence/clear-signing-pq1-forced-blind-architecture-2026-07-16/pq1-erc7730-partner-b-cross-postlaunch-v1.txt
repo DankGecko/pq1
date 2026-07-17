@@ -1,0 +1,28 @@
+POST-LAUNCH RUNTIME RECEIPT V1 — PQ1 ERC-7730 ARCHITECTURE CROSS — PARTNER B
+frozen_local: 2026-07-16T23:19:12+02:00
+session_id: 019f6be0-cf83-7933-9565-ad5c2ccf72c5 (resumed accepted Partner-B V4 context)
+cli_version_observed: codex-cli 0.144.5
+provider_observed: openai
+model_observed_in_durable_turn_context: gpt-5.6-sol
+effort_observed_in_durable_turn_context: ultra
+orchestration_observed: built-in Codex session; personal cross-adjudication; no new fanout
+sandbox_observed: read-only; target recursively non-writable
+approval_policy_observed: never
+target_head_initial_final: 9647b79374d5e2e10445254492308101b8be708b
+target_diff_sha256_initial_final: b8e270747a5c16eafde0b74fe94f34be9ab4504d91559234fb2a1ca056d59c25
+target_status_final: M docs/erc7730-implementation-review-2026-07.md; M docs/work-todo.md
+target_untracked_final: empty
+target_ignored_inventory_sha256_final: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+partner_a_first_sha256_recomputed: 4b34ae5f1459d2d6dbfe21a1a9019235b74344cb0440aac76551efe6823a884c
+partner_b_first_sha256_recomputed: bcb8a52e7dba0ecf49e651467615a9c47da2a2a0756563d4362252dde5f1110f
+cross_prelaunch_receipt_sha256: 2e36a18f5736a3b429188feab7c4875b907c022f0a7a2bfe03dda4e4d0a92bc8
+cross_report_path: /tmp/pq1-erc7730-partner-b-cross-v1.md
+cross_report_sha256: 8f2310602fbd36f09994ed1de794c332f0bf1ea85dbd98f6dc1a0f00c6a2e193
+cross_report_bytes: 37860
+cross_report_lines: 520
+cross_inventory: 24/24 first-pass IDs present
+new_cross_candidates_raw_ids: XB-001 (origin Partner B; raw ID preserved)
+session_log_sha256_after_cross: 76411e17d4d6c01aaf1865ea636c409c49790b7aedf53b47cff5b760ef23449e
+completion_deviation: durable session recorded task_complete at 2026-07-16T21:18:27Z, but the CLI wrapper remained waiting; coordinator sent one SIGINT after completion, which returned exit 0, emitted the completed turn, and wrote the exact -o report above
+counterpart_cross_result: withheld throughout this report
+acceptance: frozen Partner-B cross leg, subject to one bounded Partner-A response for XB-001 and one bounded Partner-B response for Partner-A raw XB-1/XB-2

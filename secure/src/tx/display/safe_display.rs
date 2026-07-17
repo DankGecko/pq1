@@ -551,10 +551,11 @@ fn render_safe_pages_inner(
     // SAFETY: the proof's unique mutable borrow ended before this readback.
     let unknown_verdict_a = unsafe { core::ptr::read_volatile(&unknown_verdict_slot) };
     let unknown_cfi_verdict_a = unknown_cfi.check_into_sentinel(CFI_SAFE_ROUTE_EXPECTED);
-    let unknown_gate_a = crate::fi::check_true_into_sentinel(|| {
-        core::hint::black_box(unknown_verdict_a) == crate::fi::OK_SENTINEL
-            && core::hint::black_box(unknown_cfi_verdict_a) == crate::fi::OK_SENTINEL
-    });
+    let unknown_all_ok_a = unknown_verdict_a == crate::fi::OK_SENTINEL
+        && unknown_cfi_verdict_a == crate::fi::OK_SENTINEL;
+    crate::fi::scrub_sentinel_register();
+    let unknown_gate_a =
+        crate::fi::check_true_into_sentinel(|| core::hint::black_box(unknown_all_ok_a));
     crate::fi::scrub_sentinel_register();
     if unknown_gate_a != crate::fi::OK_SENTINEL {
         return Err(());
@@ -566,10 +567,11 @@ fn render_safe_pages_inner(
     // SAFETY: same initialized caller-owned local, with no intervening write.
     let unknown_verdict_b = unsafe { core::ptr::read_volatile(&unknown_verdict_slot) };
     let unknown_cfi_verdict_b = unknown_cfi.check_into_sentinel(CFI_SAFE_ROUTE_EXPECTED);
-    let unknown_gate_b = crate::fi::check_true_into_sentinel(|| {
-        core::hint::black_box(unknown_verdict_b) == crate::fi::OK_SENTINEL
-            && core::hint::black_box(unknown_cfi_verdict_b) == crate::fi::OK_SENTINEL
-    });
+    let unknown_all_ok_b = unknown_verdict_b == crate::fi::OK_SENTINEL
+        && unknown_cfi_verdict_b == crate::fi::OK_SENTINEL;
+    crate::fi::scrub_sentinel_register();
+    let unknown_gate_b =
+        crate::fi::check_true_into_sentinel(|| core::hint::black_box(unknown_all_ok_b));
     crate::fi::scrub_sentinel_register();
     if unknown_gate_b != crate::fi::OK_SENTINEL {
         return Err(());

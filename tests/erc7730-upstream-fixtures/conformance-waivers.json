@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "waivers": [
+    {
+      "fixture": "registry/lido/tests/calldata-WithdrawalQueueERC721.tests.json",
+      "case": 2,
+      "text_index": 0,
+      "text": "Interaction with",
+      "class": "ledger_interaction_with",
+      "reason": "Ledger-owned transaction shell label; PQ1's authenticated intent banner separately renders the Lido descriptor identity."
+    },
+    {
+      "fixture": "registry/lido/tests/calldata-WithdrawalQueueERC721.tests.json",
+      "case": 2,
+      "text_index": 4,
+      "text": "Max fees",
+      "class": "ledger_max_fees",
+      "reason": "Fee presentation is appended by PQ1's transaction display, outside the descriptor renderer exercised by this fixture lane."
+    },
+    {
+      "fixture": "registry/lido/tests/calldata-WithdrawalQueueERC721.tests.json",
+      "case": 2,
+      "text_index": 5,
+      "text": "0.00001891793145988 8 ETH",
+      "class": "ledger_max_fees",
+      "reason": "Ledger-specific fee formatting is not descriptor-derived; PQ1 fee semantics have their own signed-envelope tests."
+    }
+  ]
+}

@@ -163,20 +163,118 @@ pub(super) fn container_u256(tx: &Eip1559Tx, idx: u16) -> Result<[u8; 32], Rende
     }
 }
 
+/// Read a container field for the `raw` formatter. Address-valued `@.from`
+/// is ABI-word encoded (12 zero bytes followed by the 20-byte sender), while
+/// numeric formatters continue to reject it through [`container_u256`].
+fn container_raw_word(
+    tx: &Eip1559Tx,
+    idx: u16,
+    device_signer: Option<&[u8; 20]>,
+) -> Result<[u8; 32], RenderErr> {
+    if idx == container_field::FROM {
+        let sender = device_signer.ok_or(RenderErr::Reject("7730 from unbound"))?;
+        let mut word = [0u8; 32];
+        word[12..].copy_from_slice(sender);
+        return Ok(word);
+    }
+    container_u256(tx, idx)
+}
+
 /// Read a container field as an address. Returns the 20-byte slice for
 /// `@.to` / `@.from`.
-pub(super) fn container_addr(tx: &Eip1559Tx, idx: u16) -> Result<[u8; 20], RenderErr> {
+pub(super) fn container_addr(
+    tx: &Eip1559Tx,
+    idx: u16,
+    device_signer: Option<&[u8; 20]>,
+) -> Result<[u8; 20], RenderErr> {
     match idx {
         container_field::TO => tx.to.ok_or(RenderErr::Reject("7730 no to")),
-        // `@.from` is the AA wallet's own address — derived elsewhere
-        // (cmd_sign_userop computes it) and not available at the display
-        // layer. Returning 0x00… here was a confirm-X-sign-Y (finding F4):
-        // the display showed 0x0000…0000 while the signed UserOp executed from
-        // the real, nonzero AA wallet. Refuse rather than render a zero for
-        // a nonzero signed value; wire a real @.from value in if a descriptor
-        // ever needs it.
-        container_field::FROM => Err(RenderErr::Reject("7730 from unbound")),
+        // `@.from` is the AA wallet's own address. It is populated only by the
+        // secure UserOp handlers after mnemonic derivation and sender binding;
+        // native transactions and EIP-712 synthetic envelopes have no
+        // `userop_fields` and therefore still fail closed here.
+        container_field::FROM => device_signer
+            .copied()
+            .ok_or(RenderErr::Reject("7730 from unbound")),
         _ => Err(RenderErr::Reject("7730 cnt no addr")),
+    }
+}
+
+/// Executable route selected for each stable [`FormatOp`] wire value.
+///
+/// The dispatcher below matches on this type, so the generated companion
+/// semantic manifest is derived from the same route that production executes,
+/// rather than from a parallel prose list.  The two `HardRefuse*` routes are
+/// deliberate reserved branches: they authenticate the opcode but never
+/// produce confirmable clear-sign pages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum FormatterRoute {
+    Raw,
+    Amount,
+    TokenAmount,
+    NftName,
+    Date,
+    Duration,
+    AddressName,
+    Enum,
+    Unit,
+    HardRefuseCalldata,
+    ChainId,
+    TokenTicker,
+    InteroperableAddressName,
+    HardRefuseEncrypted,
+}
+
+impl FormatterRoute {
+    const IMPLEMENTED_STATUS: &'static str =
+        "implemented renderer (fail closed on invalid input)";
+
+    /// Short, generated-documentation wording for the production route.
+    ///
+    /// Keep every variant explicit: adding a production route must fail to
+    /// compile until its generated-manifest classification is reviewed.
+    #[must_use]
+    #[doc(hidden)]
+    pub const fn manifest_status(self) -> &'static str {
+        match self {
+            Self::Raw => Self::IMPLEMENTED_STATUS,
+            Self::Amount => Self::IMPLEMENTED_STATUS,
+            Self::TokenAmount => Self::IMPLEMENTED_STATUS,
+            Self::NftName => Self::IMPLEMENTED_STATUS,
+            Self::Date => Self::IMPLEMENTED_STATUS,
+            Self::Duration => Self::IMPLEMENTED_STATUS,
+            Self::AddressName => Self::IMPLEMENTED_STATUS,
+            Self::Enum => Self::IMPLEMENTED_STATUS,
+            Self::Unit => Self::IMPLEMENTED_STATUS,
+            Self::HardRefuseCalldata => "hard refusal (nested calldata unsupported)",
+            Self::ChainId => Self::IMPLEMENTED_STATUS,
+            Self::TokenTicker => Self::IMPLEMENTED_STATUS,
+            Self::InteroperableAddressName => Self::IMPLEMENTED_STATUS,
+            Self::HardRefuseEncrypted => "hard refusal (signed operand hidden)",
+        }
+    }
+}
+
+/// Map the canonical wire opcode to the route used by [`dispatch`].
+#[must_use]
+#[doc(hidden)]
+pub const fn formatter_route(op: FormatOp) -> FormatterRoute {
+    match op {
+        FormatOp::Raw => FormatterRoute::Raw,
+        FormatOp::Amount => FormatterRoute::Amount,
+        FormatOp::TokenAmount => FormatterRoute::TokenAmount,
+        FormatOp::NftName => FormatterRoute::NftName,
+        FormatOp::Date => FormatterRoute::Date,
+        FormatOp::Duration => FormatterRoute::Duration,
+        FormatOp::AddressName => FormatterRoute::AddressName,
+        FormatOp::Enum => FormatterRoute::Enum,
+        FormatOp::Unit => FormatterRoute::Unit,
+        FormatOp::Calldata => FormatterRoute::HardRefuseCalldata,
+        FormatOp::ChainId => FormatterRoute::ChainId,
+        FormatOp::TokenTicker => FormatterRoute::TokenTicker,
+        FormatOp::InteroperableAddressName => FormatterRoute::InteroperableAddressName,
+        FormatOp::Encrypted => FormatterRoute::HardRefuseEncrypted,
     }
 }
 
@@ -192,6 +290,7 @@ pub(super) fn dispatch(
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
+    device_signer: Option<&[u8; 20]>,
 ) -> Result<(), RenderErr> {
     let op =
         FormatOp::try_from(field.format_op).map_err(|_| RenderErr::Reject("7730 bad format op"))?;
@@ -209,18 +308,29 @@ pub(super) fn dispatch(
     if field.path_off == 0 {
         return Err(RenderErr::Reject("7730 missing field path"));
     }
-    match op {
-        FormatOp::Raw => render_raw(field, pages, ir, body, tx, params),
-        FormatOp::Amount => render_amount(field, pages, ir, body, tx, params),
-        FormatOp::TokenAmount => {
+    match formatter_route(op) {
+        FormatterRoute::Raw => render_raw(field, pages, ir, body, tx, params, device_signer),
+        FormatterRoute::Amount => render_amount(field, pages, ir, body, tx, params),
+        FormatterRoute::TokenAmount => {
             render_token_amount(field, pages, ir, body, tx, erc20, resolver, params)
         }
-        FormatOp::NftName => render_nft_name(field, pages, ir, body, tx, resolver, params),
-        FormatOp::Date => render_date(field, pages, ir, body, tx, params),
-        FormatOp::Duration => render_duration(field, pages, ir, body, tx),
-        FormatOp::AddressName => render_address_name(field, pages, ir, body, tx, resolver, params),
-        FormatOp::Enum => render_enum(field, pages, ir, body, tx, params),
-        FormatOp::Unit => {
+        FormatterRoute::NftName => render_nft_name(field, pages, ir, body, tx, resolver, params),
+        FormatterRoute::Date => render_date(field, pages, ir, body, tx, params),
+        FormatterRoute::Duration => render_duration(field, pages, ir, body, tx),
+        FormatterRoute::AddressName => {
+            render_address_name(
+                field,
+                pages,
+                ir,
+                body,
+                tx,
+                resolver,
+                params,
+                device_signer,
+            )
+        }
+        FormatterRoute::Enum => render_enum(field, pages, ir, body, tx, params),
+        FormatterRoute::Unit => {
             // The current painter supports the standard suffix placement only.
             // Do not silently ignore a descriptor requesting a prefix or an
             // additional suffix: that changes the human meaning of the number.
@@ -229,15 +339,25 @@ pub(super) fn dispatch(
             }
             render_unit(field, pages, ir, body, tx, params)
         }
-        FormatOp::Calldata => super::calldata_nested::render(field, pages, params),
-        FormatOp::ChainId => render_chain_id(field, pages, ir, body, tx),
-        FormatOp::TokenTicker => {
-            render_token_ticker(field, pages, ir, body, tx, erc20, resolver, params)
+        FormatterRoute::HardRefuseCalldata => super::calldata_nested::render(field, pages, params),
+        FormatterRoute::ChainId => render_chain_id(field, pages, ir, body, tx),
+        FormatterRoute::TokenTicker => {
+            render_token_ticker(
+                field,
+                pages,
+                ir,
+                body,
+                tx,
+                erc20,
+                resolver,
+                params,
+                device_signer,
+            )
         }
-        FormatOp::InteroperableAddressName => {
-            render_interop_address_name(field, pages, ir, body, tx, resolver)
+        FormatterRoute::InteroperableAddressName => {
+            render_interop_address_name(field, pages, ir, body, tx, resolver, device_signer)
         }
-        FormatOp::Encrypted => render_encrypted(field, pages, params),
+        FormatterRoute::HardRefuseEncrypted => render_encrypted(field, pages, params),
     }
 }
 
@@ -262,8 +382,10 @@ fn const_params_are_canonical(params: &ParamSet<'_>) -> bool {
         && params.fallback_label.is_none()
         && params.visibility_values.is_none()
         && params.nested_struct.is_none()
-        && params.native_currency.is_none()
+        && params.native_currency_addresses.is_none()
         && params.dynamic_kind.is_none()
+        && params.nft_collection.is_none()
+        && params.nft_collection_path.is_none()
 }
 
 /// A dynamic ABI string is a special case of `raw`: the exact authenticated
@@ -288,8 +410,37 @@ fn dynamic_string_params_are_canonical(params: &ParamSet<'_>) -> bool {
         && params.fallback_label.is_none()
         && params.const_value.is_none()
         && params.nested_struct.is_none()
-        && params.native_currency.is_none()
+        && params.native_currency_addresses.is_none()
         && params.dynamic_kind == Some(DYNAMIC_KIND_STRING)
+        && params.nft_collection.is_none()
+        && params.nft_collection_path.is_none()
+}
+
+/// `nftName` is an exact token-id renderer plus an authenticated collection
+/// identity. The existing token/token-path TLVs carry the descriptor's
+/// `collection`/`collectionPath` respectively; exactly one must be present and
+/// no unrelated formatter semantics may be smuggled alongside it.
+fn nft_params_are_canonical(params: &ParamSet<'_>) -> bool {
+    (params.nft_collection_path.is_some() ^ params.nft_collection.is_some())
+        && params.token_path.is_none()
+        && params.token.is_none()
+        && params.threshold.is_none()
+        && params.message.is_none()
+        && params.addr_types.is_none()
+        && params.addr_sources.is_none()
+        && params.date_encoding.is_none()
+        && params.enum_ref.is_none()
+        && params.decimals.is_none()
+        && params.base.is_none()
+        && params.prefix.is_none()
+        && params.suffix.is_none()
+        && params.nested_selector.is_none()
+        && params.nested_callee.is_none()
+        && params.fallback_label.is_none()
+        && params.const_value.is_none()
+        && params.nested_struct.is_none()
+        && params.native_currency_addresses.is_none()
+        && params.dynamic_kind.is_none()
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -303,6 +454,7 @@ fn render_raw(
     body: &[u8],
     tx: &Eip1559Tx,
     _params: &ParamSet<'_>,
+    device_signer: Option<&[u8; 20]>,
 ) -> Result<(), RenderErr> {
     let bytes = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => *b,
@@ -310,7 +462,7 @@ fn render_raw(
         // unsupported container (finding F4): `unwrap_or([0u8; 32])` showed an
         // all-zero 32-byte value while the signed UserOp committed a nonzero
         // one (e.g. raw `@.to`). Fail closed.
-        Resolved::Container(idx) => container_u256(tx, idx)?,
+        Resolved::Container(idx) => container_raw_word(tx, idx, device_signer)?,
     };
     // A 16-col row holds 16 hex chars = 8 bytes, so the full 32-byte signed
     // word needs FOUR hex rows across two pages, so EVERY signed byte is shown
@@ -426,8 +578,8 @@ fn render_token_amount(
     // when its amount and ticker fit. Native sentinels remain exempt; for them
     // a pinned ticker is the identity. Overflow also forces the identity page.
     let mut bound_identity_ticker: Option<&[u8]> = None;
-    let bound_non_native = token_addr
-        .is_some_and(|addr| !params.native_currency.is_some_and(|native| *native == addr));
+    let bound_non_native =
+        token_addr.is_some_and(|addr| !params.native_currency_matches(&addr));
 
     {
         let [_, r1, r2, foot] = pages.page_mut(p);
@@ -562,7 +714,7 @@ fn append_bound_token_identity(
 ) -> Result<(), RenderErr> {
     let addr = token_addr.ok_or(RenderErr::Reject("7730 bound token missing"))?;
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
-    if params.native_currency.is_some_and(|native| *native == addr) {
+    if params.native_currency_matches(&addr) {
         if ticker.is_empty() || ticker.len() > DISPLAY_COLS {
             return Err(RenderErr::Reject("7730 native ticker too long"));
         }
@@ -583,8 +735,8 @@ fn render_nft_name(
     ir: &Erc7730Ir<'_>,
     body: &[u8],
     tx: &Eip1559Tx,
-    _resolver: &NameResolver<'_>,
-    _params: &ParamSet<'_>,
+    resolver: &NameResolver<'_>,
+    params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
     // The ERC-7730 spec's own fallback for an unresolved NFT is "a raw int
     // token ID". We have no NFT-name DB, so we ALWAYS render that fallback —
@@ -598,6 +750,10 @@ fn render_nft_name(
     // satisfies the spec fallback without reopening the original M-7 concern —
     // which was the opposite failure: a bare int dressed up as a resolved name.
     // (review 3.2; deliberately overrides the prior M-7 decline.)
+    if !nft_params_are_canonical(params) {
+        return Err(RenderErr::Reject("7730 nft collection unbound"));
+    }
+    let collection = resolve_nft_collection(body, tx, params)?;
     let value = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => *b,
         Resolved::Container(idx) => container_u256(tx, idx)?,
@@ -616,7 +772,64 @@ fn render_nft_name(
         // Large / full-uint256 id → show every byte (never a magnitude-hiding
         // overflow marker). Reuses the hardened scalar-raw two-page renderer.
         _ => write_raw_word_two_pages(pages, p, field.label, &value),
+    }?;
+
+    // Always show every collection-contract byte even when a friendly name is
+    // authenticated. The friendly name occupies only the label row; the three
+    // address rows remain complete. Descriptor contractName is eligible only
+    // when the collection is the descriptor-bound target. Otherwise require an
+    // exact chain+address name capability; wildcard names are insufficient.
+    let cp = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    let friendly = if collection == ir.contract && !ir.contract_name.is_empty() {
+        Some(ir.contract_name)
+    } else {
+        resolver.lookup_exact(tx.chain_id, &collection)
+    };
+    if let Some(name) = friendly {
+        write_verified_nft_collection_label(pages.row_mut(cp, 0), name)?;
+    } else {
+        write_label_row(pages, cp, b"NFT collection");
     }
+    let [_, r1, r2, r3] = pages.page_mut(cp);
+    write_addr_full(r1, r2, r3, &collection);
+    Ok(())
+}
+
+fn resolve_nft_collection(
+    body: &[u8],
+    tx: &Eip1559Tx,
+    params: &ParamSet<'_>,
+) -> Result<[u8; 20], RenderErr> {
+    if let Some(path) = params.nft_collection_path {
+        return canonical_address_word(&resolve_path_bytes(path, body, tx)?);
+    }
+    params
+        .nft_collection
+        .copied()
+        .ok_or(RenderErr::Reject("7730 nft collection missing"))
+}
+
+/// Paint an authenticated collection name into the page label while keeping
+/// all three following rows available for the complete contract. `+` is the
+/// established verified-name sentinel; `~` makes any name clipping explicit.
+fn write_verified_nft_collection_label(
+    row: &mut [u8; DISPLAY_COLS],
+    name: &[u8],
+) -> Result<(), RenderErr> {
+    if name.is_empty() || !name.iter().all(|&b| (0x20..0x7f).contains(&b)) {
+        return Err(RenderErr::Reject("7730 bad nft collection name"));
+    }
+    *row = [b' '; DISPLAY_COLS];
+    row[0] = b'+';
+    row[1] = b' ';
+    let room = DISPLAY_COLS - 2;
+    if name.len() <= room {
+        row[2..2 + name.len()].copy_from_slice(name);
+    } else {
+        row[2..DISPLAY_COLS - 1].copy_from_slice(&name[..room - 1]);
+        row[DISPLAY_COLS - 1] = b'~';
+    }
+    Ok(())
 }
 
 fn render_date(
@@ -716,10 +929,11 @@ fn render_address_name(
     tx: &Eip1559Tx,
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
+    device_signer: Option<&[u8; 20]>,
 ) -> Result<(), RenderErr> {
     let addr = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => canonical_address_word(b)?,
-        Resolved::Container(idx) => container_addr(tx, idx)?,
+        Resolved::Container(idx) => container_addr(tx, idx, device_signer)?,
     };
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
@@ -1014,10 +1228,13 @@ pub(crate) fn validate_token_path_static_head(
     params: &ParamSet<'_>,
     static_head_words: u16,
 ) -> Result<(), RenderErr> {
-    match params.token_path {
-        Some(prog) => validate_root_program_static_head(prog, static_head_words),
-        None => Ok(()),
+    if let Some(prog) = params.token_path {
+        validate_root_program_static_head(prog, static_head_words)?;
     }
+    if let Some(prog) = params.nft_collection_path {
+        validate_root_program_static_head(prog, static_head_words)?;
+    }
+    Ok(())
 }
 
 /// Bind every exact dynamic-tail reference in one format to a single
@@ -1716,6 +1933,7 @@ fn render_token_ticker(
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
     _params: &ParamSet<'_>,
+    device_signer: Option<&[u8; 20]>,
 ) -> Result<(), RenderErr> {
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
@@ -1728,7 +1946,7 @@ fn render_token_ticker(
     // credits `field.path` as covered, so the signed token operand went unshown.
     let addr = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => canonical_address_word(b)?,
-        Resolved::Container(idx) => container_addr(tx, idx)?,
+        Resolved::Container(idx) => container_addr(tx, idx, device_signer)?,
     };
     match erc20 {
         Some(meta) if addr == meta.contract => {
@@ -1762,13 +1980,14 @@ fn render_interop_address_name(
     body: &[u8],
     tx: &Eip1559Tx,
     _resolver: &NameResolver<'_>,
+    device_signer: Option<&[u8; 20]>,
 ) -> Result<(), RenderErr> {
     // ERC-3770 long form: `eip155:<chainId>:0x<addr>`. The chain short-
     // name registry is out of scope (would require a separate name DB
     // on-device); long form is unambiguous and self-describing.
     let addr = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => canonical_address_word(b)?,
-        Resolved::Container(idx) => container_addr(tx, idx)?,
+        Resolved::Container(idx) => container_addr(tx, idx, device_signer)?,
     };
     let p1 = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p1, field.label);
@@ -2142,7 +2361,7 @@ fn format_duration(mut secs: u64, row: &mut [u8; DISPLAY_COLS]) -> bool {
 /// Resolve the token contract address from a `tokenAmount` /
 /// `tokenTicker` field's parameters: `params.token_path` wins, then
 /// `params.token` literal.
-fn resolve_token_address(
+pub(super) fn resolve_token_address(
     ir: &Erc7730Ir<'_>,
     body: &[u8],
     tx: &Eip1559Tx,
@@ -2378,6 +2597,100 @@ mod walker_slot_confusion_fixed {
 }
 
 #[cfg(test)]
+mod semantic_manifest_tests {
+    use super::{formatter_route, FormatterRoute};
+    use crate::ir::FormatOp;
+
+    #[test]
+    fn stable_opcodes_map_to_the_routes_production_dispatches() {
+        const IMPLEMENTED: &str = "implemented renderer (fail closed on invalid input)";
+        let expected = [
+            (0x01, "raw", FormatterRoute::Raw, IMPLEMENTED),
+            (0x02, "amount", FormatterRoute::Amount, IMPLEMENTED),
+            (
+                0x03,
+                "tokenAmount",
+                FormatterRoute::TokenAmount,
+                IMPLEMENTED,
+            ),
+            (0x04, "nftName", FormatterRoute::NftName, IMPLEMENTED),
+            (0x05, "date", FormatterRoute::Date, IMPLEMENTED),
+            (0x06, "duration", FormatterRoute::Duration, IMPLEMENTED),
+            (
+                0x07,
+                "addressName",
+                FormatterRoute::AddressName,
+                IMPLEMENTED,
+            ),
+            (0x08, "enum", FormatterRoute::Enum, IMPLEMENTED),
+            (0x09, "unit", FormatterRoute::Unit, IMPLEMENTED),
+            (
+                0x0A,
+                "calldata",
+                FormatterRoute::HardRefuseCalldata,
+                "hard refusal (nested calldata unsupported)",
+            ),
+            (0x0B, "chainId", FormatterRoute::ChainId, IMPLEMENTED),
+            (
+                0x0C,
+                "tokenTicker",
+                FormatterRoute::TokenTicker,
+                IMPLEMENTED,
+            ),
+            (
+                0x0D,
+                "interoperableAddressName",
+                FormatterRoute::InteroperableAddressName,
+                IMPLEMENTED,
+            ),
+            (
+                0x0E,
+                "encrypted",
+                FormatterRoute::HardRefuseEncrypted,
+                "hard refusal (signed operand hidden)",
+            ),
+        ];
+
+        assert_eq!(FormatOp::ALL.len(), expected.len());
+        for (op, (wire, registry_name, route, manifest_status)) in
+            FormatOp::ALL.into_iter().zip(expected)
+        {
+            assert_eq!(op as u8, wire);
+            assert_eq!(op.registry_name(), registry_name);
+            assert_eq!(FormatOp::try_from(wire), Ok(op));
+            assert_eq!(formatter_route(op), route);
+            assert_eq!(route.manifest_status(), manifest_status);
+        }
+    }
+
+    #[test]
+    fn all_covers_every_accepted_wire_byte_exactly_once() {
+        let mut accepted = 0usize;
+        for wire in u8::MIN..=u8::MAX {
+            match FormatOp::try_from(wire) {
+                Ok(op) => {
+                    accepted += 1;
+                    assert_eq!(
+                        FormatOp::ALL.iter().filter(|&&listed| listed == op).count(),
+                        1,
+                        "accepted opcode 0x{wire:02x} must occur exactly once in ALL"
+                    );
+                }
+                Err(_) => assert_eq!(
+                    FormatOp::ALL
+                        .iter()
+                        .filter(|&&listed| listed as u8 == wire)
+                        .count(),
+                    0,
+                    "rejected opcode 0x{wire:02x} must not occur in ALL"
+                ),
+            }
+        }
+        assert_eq!(accepted, FormatOp::ALL.len());
+    }
+}
+
+#[cfg(test)]
 mod date_overflow_fixed {
     //! REGRESSION (audit 2026-06-23 — date/duration high-byte truncation).
     //! `read_u64_be_tail` used to keep only the low 8 bytes of a signed
@@ -2520,6 +2833,15 @@ mod faithless_formatter_fixed {
         ]
     }
 
+    fn container_prog(field: u16) -> [u8; 4] {
+        [
+            PathOp::RootContainer as u8,
+            PathOp::FieldIdx as u8,
+            (field >> 8) as u8,
+            field as u8,
+        ]
+    }
+
     fn envelope_chain(chain_id: u64) -> Eip1559Tx {
         Eip1559Tx {
             chain_id,
@@ -2587,6 +2909,90 @@ mod faithless_formatter_fixed {
     }
 
     #[test]
+    fn from_container_requires_and_renders_bound_userop_sender() {
+        let ir = ir_with_path(&container_prog(container_field::FROM));
+        let resolver = NameResolver::new();
+        let tx = envelope_chain(1);
+        let mut absent_pages = Pages::with_len(0);
+        assert_eq!(
+            render_address_name(
+                &field(FormatOp::AddressName),
+                &mut absent_pages,
+                &ir,
+                &[],
+                &tx,
+                &resolver,
+                &ParamSet::default(),
+                None,
+            ),
+            Err(RenderErr::Reject("7730 from unbound"))
+        );
+        assert_eq!(absent_pages.len, 0);
+
+        let sender = [0x11u8; 20];
+        let mut pages = Pages::with_len(0);
+        render_address_name(
+            &field(FormatOp::AddressName),
+            &mut pages,
+            &ir,
+            &[],
+            &tx,
+            &resolver,
+            &ParamSet::default(),
+            Some(&sender),
+        )
+        .expect("bound @.from renders");
+        assert_eq!(&pages.buf[0][1], b"0x11111111111111");
+        assert_eq!(&pages.buf[0][2], b"1111111111111111");
+        assert_eq!(&pages.buf[0][3][..10], b"1111111111");
+
+        let before = pages.buf;
+        for byte in 0..sender.len() {
+            let mut changed = sender;
+            changed[byte] ^= 1;
+            let mut changed_pages = Pages::with_len(0);
+            render_address_name(
+                &field(FormatOp::AddressName),
+                &mut changed_pages,
+                &ir,
+                &[],
+                &tx,
+                &resolver,
+                &ParamSet::default(),
+                Some(&changed),
+            )
+            .expect("changed @.from renders");
+            assert_ne!(
+                before, changed_pages.buf,
+                "flipping sender byte {byte} must change the rendered pages"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_from_is_an_exact_zero_padded_abi_address_word() {
+        let ir = ir_with_path(&container_prog(container_field::FROM));
+        let tx = envelope_chain(1);
+        let sender = [0x22u8; 20];
+        let mut pages = Pages::with_len(0);
+        render_raw(
+            &field(FormatOp::Raw),
+            &mut pages,
+            &ir,
+            &[],
+            &tx,
+            &ParamSet::default(),
+            Some(&sender),
+        )
+        .expect("raw @.from renders");
+        assert_eq!(pages.len, 2);
+        assert_eq!(&pages.buf[0][1], b"0000000000000000");
+        assert_eq!(&pages.buf[0][2], b"0000000022222222");
+        assert_eq!(&pages.buf[1][1], b"2222222222222222");
+        assert_eq!(&pages.buf[1][2], b"2222222222222222");
+    }
+
+    #[test]
     fn chain_id_above_u64_falls_back_to_full_raw_word() {
         // A >u64 word can't name a real chain; never render a truncated value.
         let ir = ir_with_path(&slot_prog(0));
@@ -2639,6 +3045,7 @@ mod faithless_formatter_fixed {
             None,
             &resolver,
             &params,
+            None,
         )
         .expect("renders");
         // Full address shown: write_addr_full_or_name paints "0x" + hex on r1.
@@ -2681,6 +3088,7 @@ mod faithless_formatter_fixed {
             Some(&meta),
             &resolver,
             &params,
+            None,
         )
         .expect("renders");
         assert_eq!(pages.len, 2);
@@ -2716,6 +3124,7 @@ mod faithless_formatter_fixed {
                 Some(&meta),
                 &resolver,
                 &params,
+                None,
             )
             .expect("renders");
             pages
@@ -2753,6 +3162,7 @@ mod faithless_formatter_fixed {
                 Some(&meta),
                 &NameResolver::new(),
                 &ParamSet::default(),
+                None,
             ),
             Err(RenderErr::PageBudget)
         );
@@ -2980,7 +3390,7 @@ mod encrypted_formatter_declines {
         };
         let mut pages = Pages::with_len(0);
         let r = dispatch(
-            &field, &mut pages, &ir, &body, &tx, None, &resolver, &params,
+            &field, &mut pages, &ir, &body, &tx, None, &resolver, &params, None,
         );
         assert!(
             r.is_err(),
@@ -3210,7 +3620,9 @@ mod kani_harness {
         let params = ParamSet::default();
         let f = mk_field(FormatOp::Raw as u8, 1);
         let mut pages = Pages::with_len(0);
-        let r = dispatch(&f, &mut pages, &ir, &word, &tx, None, &resolver, &params);
+        let r = dispatch(
+            &f, &mut pages, &ir, &word, &tx, None, &resolver, &params, None,
+        );
         assert!(r.is_ok());
         assert!(pages.len == 2);
         let mut k = 0usize;
@@ -3244,7 +3656,9 @@ mod kani_harness {
         let params = ParamSet::default();
         let f = mk_field(FormatOp::Raw as u8, 1);
         let mut pages = Pages::with_len(0);
-        let r = dispatch(&f, &mut pages, &ir, &word, &tx, None, &resolver, &params);
+        let r = dispatch(
+            &f, &mut pages, &ir, &word, &tx, None, &resolver, &params, None,
+        );
         assert!(r.is_ok());
         assert!(pages.len == 2);
         assert!(pages.buf[0][1] == *b"0123456789abcdef");
@@ -3267,7 +3681,7 @@ mod kani_harness {
         let mut p = ParamSet::default();
         p.threshold = Some(threshold);
         p.token = Some(&NATIVE_SENTINEL);
-        p.native_currency = Some(&NATIVE_SENTINEL);
+        p.native_currency_addresses = Some(&NATIVE_SENTINEL);
         p
     }
 
@@ -3524,7 +3938,9 @@ mod kani_harness {
         params.const_value = Some(&backing[..clen]);
         let f = mk_field(FormatOp::Raw as u8, 0);
         let mut pages = Pages::with_len(0);
-        let r = dispatch(&f, &mut pages, &ir, &[], &tx, None, &resolver, &params);
+        let r = dispatch(
+            &f, &mut pages, &ir, &[], &tx, None, &resolver, &params, None,
+        );
         assert!(r.is_ok());
         assert!(pages.len == 1);
         let k: usize = kani::any();
@@ -3544,7 +3960,9 @@ mod kani_harness {
         params.const_value = Some(b"Vault share (ERC4626");
         let f = mk_field(FormatOp::Raw as u8, 0);
         let mut pages = Pages::with_len(0);
-        let r = dispatch(&f, &mut pages, &ir, &[], &tx, None, &resolver, &params);
+        let r = dispatch(
+            &f, &mut pages, &ir, &[], &tx, None, &resolver, &params, None,
+        );
         assert!(r.is_ok());
         assert!(pages.buf[0][1] == *b"Vault share (ERC");
         assert!(pages.buf[0][2] == *b"4626            ");
@@ -3611,7 +4029,7 @@ mod token_amount_threshold_host_tests {
         let mut p = ParamSet::default();
         p.threshold = Some(threshold);
         p.token = Some(&NATIVE_SENTINEL);
-        p.native_currency = Some(&NATIVE_SENTINEL);
+        p.native_currency_addresses = Some(&NATIVE_SENTINEL);
         p
     }
 
@@ -3768,6 +4186,31 @@ mod adversarial_renderer_regressions {
         let multi = ir(&ARRAY_MULTI_POOL);
         assert!(path_ends_with_array_all(&multi, 1).unwrap());
         assert!(array_all_is_multi(&multi, 1).unwrap());
+    }
+
+    #[test]
+    fn nft_collection_params_require_exactly_one_dedicated_binding() {
+        static COLLECTION: [u8; 20] = [0xA4; 20];
+        static PATH: [u8; 4] = [
+            PathOp::RootContainer as u8,
+            PathOp::FieldIdx as u8,
+            (crate::abi::container_field::TO >> 8) as u8,
+            crate::abi::container_field::TO as u8,
+        ];
+
+        let mut params = ParamSet::default();
+        assert!(!nft_params_are_canonical(&params));
+        params.nft_collection = Some(&COLLECTION);
+        assert!(nft_params_are_canonical(&params));
+        params.nft_collection_path = Some(&PATH);
+        assert!(!nft_params_are_canonical(&params));
+        params.nft_collection = None;
+        assert!(nft_params_are_canonical(&params));
+        params.token = Some(&COLLECTION);
+        assert!(
+            !nft_params_are_canonical(&params),
+            "cross-formatter token TLV cannot be ignored by nftName"
+        );
     }
 
     #[test]
@@ -4367,7 +4810,7 @@ mod adversarial_renderer_regressions {
         envelope.chain_id = 149;
         let mut params = ParamSet::default();
         params.token = Some(&SENTINEL);
-        params.native_currency = Some(&SENTINEL);
+        params.native_currency_addresses = Some(&SENTINEL);
         let mut pages = Pages::with_len(0);
         render_token_amount(
             &field(FormatOp::TokenAmount as u8, 1),
@@ -4560,6 +5003,7 @@ mod adversarial_renderer_regressions {
                 None,
                 &resolver,
                 &ParamSet::default(),
+                None,
             ),
             Err(RenderErr::Reject("7730 noncanonical address"))
         );
@@ -4573,6 +5017,7 @@ mod adversarial_renderer_regressions {
                 &body,
                 &tx,
                 &resolver,
+                None,
             ),
             Err(RenderErr::Reject("7730 noncanonical address"))
         );
@@ -4592,6 +5037,7 @@ mod adversarial_renderer_regressions {
             &body,
             &tx,
             &NameResolver::new(),
+            None,
         )
         .unwrap();
         assert_eq!(&pages.buf[0][1][..7], b"eip155:");
@@ -4615,6 +5061,7 @@ mod adversarial_renderer_regressions {
                 None,
                 &resolver,
                 &params,
+                None,
             ),
             Err(RenderErr::Reject("7730 bad const shape"))
         );
@@ -4628,6 +5075,7 @@ mod adversarial_renderer_regressions {
                 None,
                 &resolver,
                 &params,
+                None,
             ),
             Err(RenderErr::Reject("7730 bad format op"))
         );

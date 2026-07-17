@@ -235,6 +235,30 @@ fn positive_safe_erc20_inner_binds_amount_recipient_and_safe_address() {
 }
 
 #[test]
+fn positive_safe_exact_zero_erc20_approve_renders_revoke_and_all_identities() {
+    let spender = [0x44u8; 20];
+    let meta = usdc_meta();
+    let pages = render_raw_with_context(
+        TOKEN,
+        0,
+        &erc20_approve(spender, 0),
+        None,
+        Some(&meta),
+    )
+    .expect("metadata-bound Safe ERC-20 zero approval must render");
+    let text = all_text(&pages);
+    let hex = all_hex(&pages);
+
+    assert!(text.contains("Revoke approval"), "pages:\n{text}");
+    assert!(text.contains("0.000000") && text.contains("USDC"), "pages:\n{text}");
+    let spender_hex: String = spender.iter().map(|b| format!("{b:02x}")).collect();
+    let token_hex: String = TOKEN.iter().map(|b| format!("{b:02x}")).collect();
+    assert!(hex.contains(&spender_hex), "spender must remain fully visible");
+    assert!(hex.contains(&token_hex), "token contract must remain fully visible");
+    assert!(text.contains("Chain: 1"), "chain must remain visible: {text}");
+}
+
+#[test]
 fn positive_safe_golden_grid_hash() {
     // te-2: full-grid golden over the canonical Safe-wrapped ERC-20 render.
     // The per-substring asserts above check that specific fields render; this

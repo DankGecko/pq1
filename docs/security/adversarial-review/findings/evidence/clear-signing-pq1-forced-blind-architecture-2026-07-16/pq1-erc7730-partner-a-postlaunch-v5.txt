@@ -1,0 +1,21 @@
+POST-LAUNCH RUNTIME RECEIPT V5 — PQ1 ERC-7730 ARCHITECTURE — PARTNER A REPLACEMENT
+frozen_local: 2026-07-16T22:55+02:00
+session_id: fc611891-8cef-4051-b9a1-d409dab7db13 (resumed exact V4 Partner-A context; no counterpart findings disclosed)
+target_head_initial_final: 9647b79374d5e2e10445254492308101b8be708b
+target_diff_sha256_initial_final: b8e270747a5c16eafde0b74fe94f34be9ab4504d91559234fb2a1ca056d59c25
+target_status_final: M docs/erc7730-implementation-review-2026-07.md; M docs/work-todo.md
+target_ignored_inventory_sha256_final: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+cli_version_observed: Claude Code 2.1.211
+provider_model_observed_in_durable_messages: claude-opus-4-8
+context_selector_observed_in prior post-report /status and explicitly reselected at resume: opus[1m] (claude-opus-4-8[1m])
+orchestration_observed_at resume: /effort ultracode acknowledged as xhigh + dynamic workflow orchestration; TUI footer showed ultracode/xhigh throughout
+sandbox: plan/read-only; target chmod a-w
+session_log_sha256_after_replacement: 1543da5c10452b1df879cec134d4a9360ec4d58b1e41d0c8bedcf5fe52f89f11
+replacement_report_path: /tmp/pq1-erc7730-partner-a-first-pass-v5.md
+replacement_report_sha256: 4b34ae5f1459d2d6dbfe21a1a9019235b74344cb0440aac76551efe6823a884c
+replacement_report_bytes: 8419
+supplemental_lane_receipts: pre 83fc8dc3ab5d9678c5954a38077f19e953293a9fb564a9ed46a64ec5b1b86b7c; post 99d55017d2bded402c011f05aa20021d3d7b03dd317e2fa7c84d9b60c846388d
+fanout: no new agents; named partner read all three complete lane reports and personally re-opened/adjudicated their cited source
+external_write: Claude plan mode rewrote only its harness-owned plan file under /home/nicola/.claude/plans; canonical target, index, hardware and other external state unchanged
+supersession: this V5 replacement report supersedes process-incomplete Partner-A V4 for pairing. V4 remains frozen only as audit evidence.
+acceptance: valid Partner-A first-pass leg, subject to symmetric cross-adjudication with Partner B V4.

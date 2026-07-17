@@ -30,13 +30,16 @@ use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir};
 use pqsigner_tx_core::hash::keccak256;
 
 use crate::erc20::bundle::Erc20Metadata;
-use crate::names::NameResolver;
+use crate::names::{NameMeta, NameResolver};
 use crate::tx::eip1559::{Eip1559Tx, U256};
 use crate::ui::DISPLAY_COLS;
 
 use super::dispatch::pick_sign_pages;
-use super::erc7730::render_erc7730_pages;
-use super::erc8213::{append_fingerprint_page, Kind as Erc8213Kind};
+use super::erc7730::{render_erc7730_pages, render_erc7730_pages_with_signer};
+use super::erc8213::{
+    append_fingerprint_page, fingerprint_final_set_proof, fingerprint_page_proof,
+    Kind as Erc8213Kind, FINGERPRINT_CFI_EXPECTED,
+};
 use super::Pages;
 
 // ───────────────────────────────────────────────────────────────────────
@@ -528,6 +531,23 @@ fn assert_full_contract_identity_page(pages: &Pages, contract: &[u8; 20]) {
     );
 }
 
+fn find_full_nft_collection_page(pages: &Pages, collection: &[u8; 20]) -> usize {
+    let mut expected = [[b' '; DISPLAY_COLS]; 3];
+    let [r1, r2, r3] = &mut expected;
+    write_addr_full(r1, r2, r3, collection);
+    pages
+        .as_slice()
+        .iter()
+        .position(|page| page[1..4] == expected)
+        .unwrap_or_else(|| {
+            panic!(
+                "no page carries full NFT collection {}; dump:\n{}",
+                hex::encode(collection),
+                dump_pages(pages)
+            )
+        })
+}
+
 // ───────────────────────────────────────────────────────────────────────
 // Per-corpus tests. One per representative descriptor + format.
 // ───────────────────────────────────────────────────────────────────────
@@ -595,6 +615,39 @@ fn diagnostic_dump_seed_corpus_path_offsets() {
 // sequence. Incomplete Aave formats remain known-call refusals.
 //
 // The three tests below assert the user-visible display text end-to-end.
+
+#[test]
+fn positive_registry_celo_from_uses_explicit_device_signer() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-celo_accounts.json", 42220);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let calldata = keccak256(b"createAccount()")[..4].to_vec();
+    assert_selector_matches(&verified.ir, &calldata, "createAccount()");
+    let tx = envelope(42220, entry.contract);
+    let resolver = NameResolver::new();
+
+    assert!(matches!(
+        render_erc7730_pages(&tx, &calldata, &verified, None, &resolver),
+        Err(crate::tx::erc7730_render::RenderErr::Reject("7730 from unbound"))
+    ));
+
+    let sender = [0x12u8; 20];
+    let pages = render_erc7730_pages_with_signer(
+        &tx,
+        &calldata,
+        &verified,
+        None,
+        &resolver,
+        &sender,
+    )
+    .expect("Celo @.from renders from the device signer");
+    let field_page = intent_page_index(&pages) + 1;
+    assert_eq!(page_strs(&pages, field_page)[0], "Account Owner");
+    assert_eq!(&pages.buf[field_page][1], b"0x12121212121212");
+    assert_eq!(&pages.buf[field_page][2], b"1212121212121212");
+    assert_eq!(&pages.buf[field_page][3][..10], b"1212121212");
+}
 
 #[test]
 fn positive_usdt_transfer_mainnet_renders_send_intent() {
@@ -756,6 +809,151 @@ fn positive_usdt_approve_unlimited_renders_approve_intent() {
         !amount_blob.contains("AMOUNT OVERFLOW"),
         "threshold check must short-circuit before the overflow fallback, got:\n{amount_blob}",
     );
+}
+
+#[test]
+fn usdt_exact_zero_approve_derives_revoke_from_authenticated_signed_facts() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-usdt.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let tx = envelope(1, entry.contract);
+    let meta = Erc20Metadata {
+        chain_id: 1,
+        contract: entry.contract,
+        decimals: 6,
+        name: b"Tether USD",
+        symbol: b"USDT",
+    };
+    let spender = [0x44u8; 20];
+    let resolver = NameResolver::new();
+    let zero_calldata = calldata_approve(spender, U256::zero());
+    let pages = render_erc7730_pages(
+        &tx,
+        &zero_calldata,
+        &verified,
+        Some(&meta),
+        &resolver,
+    )
+    .expect("render zero approval");
+
+    assert_eq!(
+        page_strs(&pages, intent_page_index(&pages))[0],
+        "Revoke approval"
+    );
+    let spender_page = find_page_by_label(&pages, "Spender");
+    let spender_blob = page_strs(&pages, spender_page).join("");
+    assert!(spender_blob.to_ascii_lowercase().contains("44444444"));
+    let amount_page = find_page_by_label(&pages, "Amount");
+    let amount_blob = page_strs(&pages, amount_page).join(" ");
+    assert!(
+        amount_blob.contains("0 USDT"),
+        "zero amount and authenticated ticker must remain visible: {amount_blob:?}"
+    );
+    assert_full_contract_identity_page(&pages, &entry.contract);
+    assert!(pages
+        .as_slice()
+        .iter()
+        .any(|page| row_str(&page[0]) == "Network:" && row_str(&page[1]) == "Chain: 1"));
+
+    // Exact means all 32 signed amount bytes must be zero. Flipping any one
+    // byte leaves every other authenticated fact unchanged and must restore
+    // the descriptor's ordinary approval intent.
+    for byte in 0..32 {
+        let mut nonzero = [0u8; 32];
+        nonzero[byte] = 1;
+        let calldata = calldata_approve(spender, U256(nonzero));
+        let changed = render_erc7730_pages(
+            &tx,
+            &calldata,
+            &verified,
+            Some(&meta),
+            &resolver,
+        )
+        .expect("render nonzero approval");
+        assert_eq!(
+            page_strs(&changed, intent_page_index(&changed))[0],
+            "Approve",
+            "nonzero amount byte {byte} must not be called a revocation"
+        );
+    }
+}
+
+#[test]
+fn usdt_zero_approve_without_matching_erc20_capability_keeps_approve_intent() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-usdt.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let calldata = calldata_approve([0x44; 20], U256::zero());
+
+    let no_meta = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver)
+        .expect("descriptor-only zero approval renders");
+    assert_eq!(page_strs(&no_meta, intent_page_index(&no_meta))[0], "Approve");
+
+    let wrong_contract = Erc20Metadata {
+        chain_id: 1,
+        contract: [0x55; 20],
+        decimals: 6,
+        name: b"Not USDT",
+        symbol: b"NOPE",
+    };
+    let mismatched = render_erc7730_pages(
+        &tx,
+        &calldata,
+        &verified,
+        Some(&wrong_contract),
+        &resolver,
+    )
+    .expect("mismatched metadata remains unbound");
+    assert_eq!(
+        page_strs(&mismatched, intent_page_index(&mismatched))[0],
+        "Approve"
+    );
+
+    let wrong_chain = Erc20Metadata {
+        chain_id: 10,
+        contract: entry.contract,
+        decimals: 6,
+        name: b"Wrong-chain USDT",
+        symbol: b"USDT",
+    };
+    let chain_mismatched = render_erc7730_pages(
+        &tx,
+        &calldata,
+        &verified,
+        Some(&wrong_chain),
+        &resolver,
+    )
+    .expect("wrong-chain metadata remains unbound");
+    assert_eq!(
+        page_strs(&chain_mismatched, intent_page_index(&chain_mismatched))[0],
+        "Approve"
+    );
+}
+
+#[test]
+fn lido_erc721_zero_token_id_never_becomes_revoke_approval() {
+    // ERC-721 deliberately shares approve(address,uint256). A verified
+    // descriptor and canonical two-word calldata are therefore insufficient
+    // to claim ERC-20 revocation semantics without a matching ERC-20 metadata
+    // capability.
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-WithdrawalQueueERC721.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Lido NFT leaf");
+    let tx = envelope(1, entry.contract);
+    let calldata = calldata_approve([0x44; 20], U256::zero());
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &NameResolver::new())
+        .expect("render ERC-721 approve token id zero");
+
+    let nft_intent = page_strs(&pages, intent_page_index(&pages));
+    assert_eq!(nft_intent[0], "Approve unstETH");
+    assert_eq!(nft_intent[1], "NFT");
+    assert!(dump_pages(&pages).contains("Request ID"));
+    assert!(!dump_pages(&pages).contains("Revoke approval"));
 }
 
 #[test]
@@ -944,7 +1142,7 @@ fn positive_aave_withdraw_eth_renders_native_currency() {
     // (b) NO unbound-token artefacts — the sentinel is native, not an unverified
     // ERC-20. These strings appear ONLY when `is_native` is false.
     assert!(
-        !dump.contains("Token (UNVERIFIED)"),
+        !dump.contains("Token (UNVERIFI~"),
         "native render must NOT emit a token-identity page for the 0x0 sentinel:\n{dump}",
     );
     assert!(
@@ -956,6 +1154,94 @@ fn positive_aave_withdraw_eth_renders_native_currency() {
     assert!(
         dump.to_lowercase().contains("5555"),
         "curated pool address must render as raw hex:\n{dump}",
+    );
+}
+
+#[test]
+fn positive_1inch_native_currency_list_renders_both_members_and_rejects_a_miss() {
+    // Real upstream list witness: the 1inch V4 definition authenticates
+    // [0xEeee…, 0x0] for BOTH tokenAmount fields. `clipperSwap` is all-static,
+    // complete, and binds its beneficiary to the device-derived signer.
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-AggregationRouterV4-eth.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify 1inch leaf");
+    let signer = [0x12u8; 20];
+    let resolver = NameResolver::new();
+    let tx = envelope(1, entry.contract);
+
+    let calldata = |src_token: [u8; 20]| {
+        let mut out = Vec::with_capacity(4 + 4 * 32);
+        let selector = keccak256(b"clipperSwap(address,address,uint256,uint256)");
+        out.extend_from_slice(&selector[..4]);
+        for address in [src_token, [0u8; 20]] {
+            let mut word = [0u8; 32];
+            word[12..].copy_from_slice(&address);
+            out.extend_from_slice(&word);
+        }
+        out.extend_from_slice(&u256_from_u64(1_500_000_000_000_000_000).0);
+        out.extend_from_slice(&u256_from_u64(2_250_000_000_000_000_000).0);
+        out
+    };
+
+    let eth_sentinel = [0xEEu8; 20];
+    let native_calldata = calldata(eth_sentinel);
+    assert_selector_matches(
+        &verified.ir,
+        &native_calldata,
+        "clipperSwap(address,address,uint256,uint256)",
+    );
+    let pages = render_erc7730_pages_with_signer(
+        &tx,
+        &native_calldata,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("both list members render as native ETH");
+    let dump = dump_pages(&pages);
+    assert_eq!(page_strs(&pages, intent_page_index(&pages))[0], "Swap");
+    let send = page_strs(&pages, find_page_by_label(&pages, "Amount to Send")).join("\n");
+    let receive =
+        page_strs(&pages, find_page_by_label(&pages, "Minimum to Rece~")).join("\n");
+    assert!(send.contains("1.5") && send.contains("ETH"), "{dump}");
+    assert!(
+        receive.contains("2.25") && receive.contains("ETH"),
+        "{dump}"
+    );
+    assert!(
+        !dump.contains("Token (UNVERIFI~") && !dump.contains("! raw, dec=?"),
+        "both authenticated sentinels must stay on the native path:\n{dump}"
+    );
+    let beneficiary = page_strs(&pages, find_page_by_label(&pages, "Beneficiary"));
+    assert_eq!(beneficiary[1], "0x12121212121212");
+
+    // Flip one byte of the first sentinel. It is no longer a member, while the
+    // zero-address receive token still is. With no ERC-20 metadata, the send
+    // amount must become raw and expose the full unverified token identity.
+    let mut miss = eth_sentinel;
+    miss[19] ^= 1;
+    let miss_pages = render_erc7730_pages_with_signer(
+        &tx,
+        &calldata(miss),
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("one-byte list miss remains safely renderable as unverified raw");
+    let miss_dump = dump_pages(&miss_pages);
+    assert!(miss_dump.contains("! raw, dec=?"), "{miss_dump}");
+    assert!(miss_dump.contains("Token (UNVERIFI~"), "{miss_dump}");
+    let miss_receive = page_strs(
+        &miss_pages,
+        find_page_by_label(&miss_pages, "Minimum to Rece~"),
+    )
+    .join("\n");
+    assert!(
+        miss_receive.contains("2.25") && miss_receive.contains("ETH"),
+        "the second list member must remain native after a first-member miss:\n{miss_dump}"
     );
 }
 
@@ -1122,10 +1408,12 @@ fn negative_verified_descriptor_no_format_refuses_dispatch() {
     let calldata = vec![0xde, 0xad, 0xbe, 0xef];
     let tx = envelope(1, entry.contract);
     let resolver = NameResolver::new();
+    let mut dispatch_proofs = super::dispatch::DispatchPageProofs::new();
 
     let outcome = pick_sign_pages(
         &tx,
         &calldata,
+        &[0u8; 20],
         None,
         None,
         None,
@@ -1133,6 +1421,7 @@ fn negative_verified_descriptor_no_format_refuses_dispatch() {
         None,
         None,
         &resolver,
+        &mut dispatch_proofs,
     );
     assert!(
         outcome.is_err(),
@@ -1256,7 +1545,7 @@ fn positive_erc8213_fingerprint_renders_full_hash() {
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
         0x1f, 0x20,
     ];
-    append_fingerprint_page(&mut pages, Erc8213Kind::CalldataDigest(hash))
+    append_fingerprint_for_test(&mut pages, Erc8213Kind::CalldataDigest(hash))
         .expect("fingerprint fits");
 
     assert_eq!(pages.len, 2, "fingerprint renders exactly 2 pages");
@@ -1281,6 +1570,15 @@ fn positive_erc8213_fingerprint_renders_full_hash() {
     );
 }
 
+fn append_fingerprint_for_test(pages: &mut Pages, kind: Erc8213Kind) -> Result<(), ()> {
+    let mut cfi = crate::fi::CfiCounter::new();
+    append_fingerprint_page(pages, kind, &mut cfi)?;
+    if cfi.check_into_sentinel(FINGERPRINT_CFI_EXPECTED) != crate::fi::OK_SENTINEL {
+        return Err(());
+    }
+    Ok(())
+}
+
 #[test]
 fn positive_erc8213_labels_cover_every_kind() {
     // Pin the label text on every Kind variant. Surfaces a regression
@@ -1293,7 +1591,7 @@ fn positive_erc8213_labels_cover_every_kind() {
         (Erc8213Kind::SafeTxHash([0u8; 32]), "SafeTxHash"),
     ] {
         let mut pages = Pages::empty_with_len(0);
-        append_fingerprint_page(&mut pages, kind).expect("fits");
+        append_fingerprint_for_test(&mut pages, kind).expect("fits");
         assert_eq!(
             row_str(&pages.buf[0][1]),
             expected_label,
@@ -1301,6 +1599,141 @@ fn positive_erc8213_labels_cover_every_kind() {
             std::any::type_name_of_val(&kind)
         );
     }
+}
+
+#[test]
+fn erc8213_append_is_atomic_and_requires_both_complete_pages() {
+    use pqsigner_erc7730::display::erc8213_contract::FINGERPRINT_PAGES;
+    use pqsigner_erc7730::display::MAX_PAGES;
+
+    let mut one_page_short = Pages::empty_with_len(MAX_PAGES - 1);
+    one_page_short.buf[MAX_PAGES - 2][0] = *b"existing page   ";
+    let before_len = one_page_short.len;
+    let before_page = one_page_short.buf[MAX_PAGES - 2];
+    assert!(
+        append_fingerprint_for_test(
+            &mut one_page_short,
+            Erc8213Kind::CalldataDigest([0xA5; 32]),
+        )
+            .is_err(),
+        "one free page must not permit a banner without the complete hash"
+    );
+    assert_eq!(one_page_short.len, before_len);
+    assert_eq!(one_page_short.buf[MAX_PAGES - 2], before_page);
+
+    let mut exact_fit = Pages::empty_with_len(MAX_PAGES - FINGERPRINT_PAGES);
+    append_fingerprint_for_test(&mut exact_fit, Erc8213Kind::CalldataDigest([0x5A; 32]))
+        .expect("exact two-page capacity must fit");
+    assert_eq!(exact_fit.len, MAX_PAGES);
+    assert_eq!(
+        row_str(&exact_fit.buf[MAX_PAGES - 2][0]),
+        "8213 Fingerprint"
+    );
+    assert_eq!(
+        row_str(&exact_fit.buf[MAX_PAGES - 1][0]),
+        "5a5a5a5a5a5a5a5a"
+    );
+}
+
+#[test]
+fn erc8213_authoritative_append_mints_cfi_and_binds_exact_pair() {
+    let kind = Erc8213Kind::Eip712Final([0xa5; 32]);
+    let mut pages = Pages::empty_with_len(3);
+    for (index, page) in pages.buf[..pages.len].iter_mut().enumerate() {
+        *page = [[b'A' + index as u8; DISPLAY_COLS]; 4];
+    }
+    let prefix = pages.buf;
+    let prior_len = pages.len;
+    let mut cfi = crate::fi::CfiCounter::new();
+
+    append_fingerprint_page(&mut pages, kind, &mut cfi).expect("pair fits");
+    assert_eq!(&pages.buf[..prior_len], &prefix[..prior_len]);
+    assert_eq!(
+        cfi.check_into_sentinel(FINGERPRINT_CFI_EXPECTED),
+        crate::fi::OK_SENTINEL
+    );
+    assert_eq!(
+        fingerprint_page_proof(&pages, prior_len, kind),
+        crate::fi::OK_SENTINEL
+    );
+    assert_eq!(
+        fingerprint_final_set_proof(&pages, prior_len, kind),
+        crate::fi::OK_SENTINEL
+    );
+
+    let skipped = crate::fi::CfiCounter::new();
+    assert_ne!(
+        skipped.check_into_sentinel(FINGERPRINT_CFI_EXPECTED),
+        crate::fi::OK_SENTINEL,
+        "skipping the whole append must leave caller-owned CFI short"
+    );
+
+    pages.buf[prior_len + 1][3][15] ^= 1;
+    assert_ne!(
+        fingerprint_page_proof(&pages, prior_len, kind),
+        crate::fi::OK_SENTINEL
+    );
+    assert_ne!(
+        fingerprint_final_set_proof(&pages, prior_len, kind),
+        crate::fi::OK_SENTINEL
+    );
+}
+
+#[test]
+fn erc8213_proofs_reject_wrong_index_kind_hash_and_short_capacity() {
+    use pqsigner_erc7730::display::MAX_PAGES;
+
+    let kind = Erc8213Kind::Raw32([0x3c; 32]);
+    let mut pages = Pages::empty_with_len(2);
+    let prior_len = pages.len;
+    let mut cfi = crate::fi::CfiCounter::new();
+    append_fingerprint_page(&mut pages, kind, &mut cfi).unwrap();
+
+    for wrong in [
+        Erc8213Kind::Raw32([0x3d; 32]),
+        Erc8213Kind::CalldataDigest([0x3c; 32]),
+        Erc8213Kind::Eip712Final([0x3c; 32]),
+        Erc8213Kind::SafeTxHash([0x3c; 32]),
+    ] {
+        assert_ne!(
+            fingerprint_page_proof(&pages, prior_len, wrong),
+            crate::fi::OK_SENTINEL
+        );
+        assert_ne!(
+            fingerprint_final_set_proof(&pages, prior_len, wrong),
+            crate::fi::OK_SENTINEL
+        );
+    }
+    assert_ne!(
+        fingerprint_final_set_proof(&pages, prior_len - 1, kind),
+        crate::fi::OK_SENTINEL
+    );
+
+    pages.push_blank().unwrap();
+    assert_ne!(
+        fingerprint_page_proof(&pages, prior_len, kind),
+        crate::fi::OK_SENTINEL,
+        "the transition proof must reject later growth"
+    );
+    assert_eq!(
+        fingerprint_final_set_proof(&pages, prior_len, kind),
+        crate::fi::OK_SENTINEL,
+        "the final-set proof must tolerate later append-only pages"
+    );
+
+    let mut short = Pages::empty_with_len(MAX_PAGES - 1);
+    let before = short.buf;
+    let mut short_cfi = crate::fi::CfiCounter::new();
+    assert!(append_fingerprint_page(&mut short, kind, &mut short_cfi).is_err());
+    assert_eq!(short.len, MAX_PAGES - 1);
+    assert_eq!(
+        short.buf, before,
+        "failed atomic append must preserve all pages"
+    );
+    assert_ne!(
+        short_cfi.check_into_sentinel(FINGERPRINT_CFI_EXPECTED),
+        crate::fi::OK_SENTINEL
+    );
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -1403,32 +1836,95 @@ fn positive_aave_repay_unknown_enum_value_renders_raw_index_loudly() {
 }
 
 #[test]
-fn nftname_with_unimplemented_collection_binding_refuses_small_id() {
-    // The real PftNft descriptor requests nftName collection semantics. Until
-    // the IR binds and the renderer displays that collection identity, strict
-    // param compilation drops this format rather than silently degrading a
-    // trusted NFT-name field to a bare integer.
+fn nftname_small_id_keeps_raw_id_and_full_target_collection_identity() {
     let res = build_registry();
-    assert!(
-        !res.entries.iter().any(|e| {
-            e.chain_id == 1
-                && e.source.file_name().and_then(|n| n.to_str()) == Some("calldata-PftNft.json")
-        }),
-        "descriptor with unimplemented nftName collection semantics must not enter the catalogue"
+    let entry = find_leaf(res, "calldata-PftNft.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify pFT NFT leaf");
+    let tx = envelope(1, entry.contract);
+    let calldata = calldata_approve([0x44; 20], u256_from_u64(7));
+    assert_selector_matches(&verified.ir, &calldata, "approve(address,uint256)");
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &NameResolver::new())
+        .expect("render pFT NFT approve");
+
+    let id = page_strs(&pages, find_page_by_label(&pages, "Position"));
+    assert_eq!(id[1], "7");
+    assert_eq!(id[3], "! raw nft id");
+    let collection_page = find_full_nft_collection_page(&pages, &entry.contract);
+    assert_eq!(
+        page_strs(&pages, collection_page)[0],
+        "+ pFT NFT",
+        "descriptor contractName is eligible only because @.to equals the bound collection"
     );
 }
 
 #[test]
-fn nftname_with_unimplemented_collection_binding_refuses_large_id() {
-    // Same fail-closed policy for a full-width identifier: no overflow marker,
-    // lossy decimal, or bare raw-id page is accepted under nftName semantics.
+fn nftname_full_width_id_shows_every_byte_plus_full_collection_identity() {
     let res = build_registry();
-    assert!(
-        !res.entries.iter().any(|e| {
-            e.chain_id == 1
-                && e.source.file_name().and_then(|n| n.to_str()) == Some("calldata-PftNft.json")
-        }),
-        "large ids get no lossy fallback because the unsafe descriptor is excluded"
+    let entry = find_leaf(res, "calldata-PftNft.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify pFT NFT leaf");
+    let tx = envelope(1, entry.contract);
+    let token_id = U256([0xAB; 32]);
+    let calldata = calldata_approve([0x44; 20], token_id);
+    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &NameResolver::new())
+        .expect("render full-width pFT token id");
+
+    let id_pages: Vec<_> = pages
+        .as_slice()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, page)| (row_str(&page[0]) == "Position").then_some(index))
+        .collect();
+    assert_eq!(id_pages.len(), 2, "full uint256 id requires two pages");
+    let first = page_strs(&pages, id_pages[0]);
+    let second = page_strs(&pages, id_pages[1]);
+    for row in [&first[1], &first[2], &second[1], &second[2]] {
+        assert_eq!(row, "abababababababab");
+    }
+    assert_eq!(first[3], "1/2 > next");
+    assert_eq!(second[3], "2/2 > next");
+    let _ = find_full_nft_collection_page(&pages, &entry.contract);
+}
+
+#[test]
+fn nftname_external_collection_name_requires_exact_chain_metadata() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-PftMarketplace.json", 146);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify marketplace leaf");
+    let tx = envelope(146, entry.contract);
+    let mut calldata = keccak256(b"removeListing(uint256)")[..4].to_vec();
+    calldata.extend_from_slice(&u256_from_u64(9).0);
+    assert_selector_matches(&verified.ir, &calldata, "removeListing(uint256)");
+    let collection: [u8; 20] = hex::decode("1d8051c90076FaA5b683A3551Ee4369d00f99D67")
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+    let mut exact = NameResolver::new();
+    exact.push(NameMeta {
+        chain_id: 146,
+        address: collection,
+        name: b"pFT Positions",
+    });
+    let exact_pages = render_erc7730_pages(&tx, &calldata, &verified, None, &exact)
+        .expect("exact collection name renders");
+    let exact_page = find_full_nft_collection_page(&exact_pages, &collection);
+    assert_eq!(page_strs(&exact_pages, exact_page)[0], "+ pFT Positions");
+
+    let mut wildcard = NameResolver::new();
+    wildcard.push(NameMeta {
+        chain_id: 0,
+        address: collection,
+        name: b"Wildcard Name",
+    });
+    let wildcard_pages = render_erc7730_pages(&tx, &calldata, &verified, None, &wildcard)
+        .expect("wildcard metadata cannot change collection label");
+    let wildcard_page = find_full_nft_collection_page(&wildcard_pages, &collection);
+    assert_eq!(
+        page_strs(&wildcard_pages, wildcard_page)[0],
+        "NFT collection"
     );
 }
 

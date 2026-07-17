@@ -92,6 +92,11 @@ fn positive_resolver_exact_match_wins_over_wildcard() {
 
     assert_eq!(r.lookup(137, &[0x11; 20]), Some(b"PolygonName".as_slice()),
         "exact (chain, addr) match MUST be returned even when a wildcard exists");
+    assert_eq!(
+        r.lookup_exact(137, &[0x11; 20]),
+        Some(b"PolygonName".as_slice()),
+        "exact-only capability returns the chain-bound entry"
+    );
 }
 
 #[test]
@@ -109,6 +114,10 @@ fn positive_resolver_wildcard_falls_through_for_chain_specific_miss() {
         r.lookup(137, &[0x11; 20]),
         Some(b"WildcardName".as_slice()),
         "chain=0 wildcard MUST be matched when no exact entry exists"
+    );
+    assert!(
+        r.lookup_exact(137, &[0x11; 20]).is_none(),
+        "exact-only lookup must not promote a wildcard entry"
     );
 }
 

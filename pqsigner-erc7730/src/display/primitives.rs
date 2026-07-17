@@ -877,6 +877,14 @@ pub fn write_erc20_header(
     meta: &Erc20Metadata<'_>,
 ) {
     *row = [b' '; DISPLAY_COLS];
+    // `meta` is the authenticated ERC-20 capability at every production call
+    // site. Exact zero therefore means allowance revocation, not an ERC-721
+    // token-id guess (the unknown-token path never calls this helper). The
+    // complete phrase consumes 15 columns; do not append a ticker fragment.
+    if matches!(call, Erc20Call::Approve { amount, .. } if amount.is_zero()) {
+        let _ = append(row, 0, b"Revoke approval");
+        return;
+    }
     let verb: &[u8] = match call {
         Erc20Call::Transfer { .. } => b"Send ",
         Erc20Call::TransferFrom { .. } => b"From ",

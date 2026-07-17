@@ -234,6 +234,50 @@ pub enum FormatOp {
     Encrypted = 0x0E,
 }
 
+impl FormatOp {
+    /// Complete stable wire vocabulary, in opcode order.  Code generation and
+    /// semantic-documentation guards iterate this array instead of maintaining
+    /// a second list that can silently swap entries (notably `NftName = 0x04`
+    /// and `Unit = 0x09`).
+    pub const ALL: [Self; 14] = [
+        Self::Raw,
+        Self::Amount,
+        Self::TokenAmount,
+        Self::NftName,
+        Self::Date,
+        Self::Duration,
+        Self::AddressName,
+        Self::Enum,
+        Self::Unit,
+        Self::Calldata,
+        Self::ChainId,
+        Self::TokenTicker,
+        Self::InteroperableAddressName,
+        Self::Encrypted,
+    ];
+
+    /// ERC-7730 JSON spelling compiled to this wire opcode.
+    #[must_use]
+    pub const fn registry_name(self) -> &'static str {
+        match self {
+            Self::Raw => "raw",
+            Self::Amount => "amount",
+            Self::TokenAmount => "tokenAmount",
+            Self::NftName => "nftName",
+            Self::Date => "date",
+            Self::Duration => "duration",
+            Self::AddressName => "addressName",
+            Self::Enum => "enum",
+            Self::Unit => "unit",
+            Self::Calldata => "calldata",
+            Self::ChainId => "chainId",
+            Self::TokenTicker => "tokenTicker",
+            Self::InteroperableAddressName => "interoperableAddressName",
+            Self::Encrypted => "encrypted",
+        }
+    }
+}
+
 impl TryFrom<u8> for FormatOp {
     type Error = IrError;
     fn try_from(b: u8) -> Result<Self, IrError> {

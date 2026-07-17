@@ -31,7 +31,10 @@
 //! | 0x3E | `fallback_label`     | ASCII (≤254 B)                             |
 //! | 0x3F | `visibility`         | 1 B (Visibility byte value), optionally    |
 //! |      |                      | followed by a Phase 5 value-list sub-TLV.  |
+//! | 0x42 | `native_currency`    | 1–2 concatenated 20 B sentinel addresses  |
 //! | 0x43 | `dynamic_kind`       | 1 B (`1=string`, `2=bytes`)                |
+//! | 0x44 | `nft_collection`     | 20 B collection contract                   |
+//! | 0x45 | `nft_collection_path`| non-empty compiled static address path     |
 //!
 //! Wire-stable.
 //!
@@ -74,16 +77,26 @@ pub const PARAM_CONST_VALUE: u8 = 0x40;
 /// downgrading it (`VULN-erc7730-eip712-nested-struct-address-hide`, on-device
 /// belt behind the build-time visibility gate).
 pub const PARAM_NESTED_STRUCT: u8 = 0x41;
-/// A `tokenAmount`'s `nativeCurrencyAddress` sentinel (20 B). When the field's
-/// resolved token address equals this sentinel, the amount is rendered as the
-/// chain's NATIVE currency (18 decimals, `native_ticker(chain_id)`) instead of
-/// an ERC-20 lookup — so an ETH leg (`0xEeee…`/`0x0`) shows "1.5 ETH" rather than
-/// a raw `! raw, dec=?` integer (ERC-7730 `nativeCurrencyAddress`).
+/// A `tokenAmount`'s `nativeCurrencyAddress` sentinel list. The legacy scalar
+/// form remains byte-identical at 20 B; the registry's array form is two
+/// descriptor-order 20 B addresses concatenated into the same authenticated
+/// TLV. When the field's resolved token address equals any member, the amount
+/// is rendered as the chain's native currency instead of an ERC-20 lookup.
 pub const PARAM_NATIVE_CURRENCY: u8 = 0x42;
+pub const NATIVE_CURRENCY_ADDRESS_LEN: usize = 20;
+/// Current registry-complete bound: every pinned array contains exactly the
+/// `0xEeee…` and zero-address sentinels. Larger lists fail closed until their
+/// need and resource impact are reviewed explicitly.
+pub const MAX_NATIVE_CURRENCY_ADDRESSES: usize = 2;
 /// Compiler-authenticated ABI kind for a dynamic leaf. The path bytecode only
 /// says "follow this offset"; without this tag the device cannot distinguish a
 /// human string from arbitrary bytes. Missing/unknown kinds therefore decline.
 pub const PARAM_DYNAMIC_KIND: u8 = 0x43;
+/// Exact collection address carried by `nftName.params.collection`.
+pub const PARAM_NFT_COLLECTION: u8 = 0x44;
+/// Compiled collection-address path carried by
+/// `nftName.params.collectionPath`.
+pub const PARAM_NFT_COLLECTION_PATH: u8 = 0x45;
 pub const DYNAMIC_KIND_STRING: u8 = 0x01;
 pub const DYNAMIC_KIND_BYTES: u8 = 0x02;
 
@@ -144,13 +157,19 @@ pub struct ParamSet<'a> {
     /// Until the belt is inverted (Phase 5 Commit D), the caller declines on
     /// EITHER form — the fail-safe.
     pub nested_struct: Option<&'a [u8]>,
-    /// A `tokenAmount`'s native-currency sentinel address (`PARAM_NATIVE_CURRENCY`,
-    /// 20 B). `Some` when the descriptor declares `nativeCurrencyAddress`; the
-    /// renderer treats a resolved token equal to it as the chain native currency.
-    pub native_currency: Option<&'a [u8; 20]>,
+    /// A `tokenAmount`'s native-currency sentinel address list
+    /// (`PARAM_NATIVE_CURRENCY`): one or two concatenated 20-byte addresses in
+    /// descriptor order. The renderer treats an exact match to any member as
+    /// the chain native currency.
+    pub native_currency_addresses: Option<&'a [u8]>,
     /// ABI type of a dynamic `FollowOffset` leaf. This is emitted by dbgen from
     /// the canonical function signature, never inferred from payload bytes.
     pub dynamic_kind: Option<u8>,
+    /// Descriptor-authenticated literal NFT collection contract.
+    pub nft_collection: Option<&'a [u8; 20]>,
+    /// Descriptor-authenticated static path resolving the NFT collection
+    /// contract (for example `@.to`).
+    pub nft_collection_path: Option<&'a [u8]>,
 }
 
 impl<'a> Default for ParamSet<'a> {
@@ -175,10 +194,51 @@ impl<'a> Default for ParamSet<'a> {
             visibility: Visibility::Always,
             visibility_values: None,
             nested_struct: None,
-            native_currency: None,
+            native_currency_addresses: None,
             dynamic_kind: None,
+            nft_collection: None,
+            nft_collection_path: None,
         }
     }
+}
+
+impl ParamSet<'_> {
+    /// True only when `address` exactly equals one complete authenticated
+    /// native-currency sentinel. Chunk boundaries are fixed at 20 bytes, so a
+    /// prefix/suffix or cross-member match is impossible.
+    pub fn native_currency_matches(&self, address: &[u8; 20]) -> bool {
+        self.native_currency_addresses.is_some_and(|addresses| {
+            addresses
+                .chunks_exact(NATIVE_CURRENCY_ADDRESS_LEN)
+                .any(|candidate| candidate == address.as_slice())
+        })
+    }
+}
+
+fn native_currency_list_is_canonical(payload: &[u8]) -> bool {
+    let count = payload.len() / NATIVE_CURRENCY_ADDRESS_LEN;
+    if payload.is_empty()
+        || payload.len() % NATIVE_CURRENCY_ADDRESS_LEN != 0
+        || count > MAX_NATIVE_CURRENCY_ADDRESSES
+    {
+        return false;
+    }
+
+    // Duplicate members create a second wire spelling for the same semantic
+    // set and waste the tightly bounded display IR. Reject them on-device as
+    // well as in dbgen so parser canonicality is not host-policy-dependent.
+    for (index, member) in payload
+        .chunks_exact(NATIVE_CURRENCY_ADDRESS_LEN)
+        .enumerate()
+    {
+        if payload[(index + 1) * NATIVE_CURRENCY_ADDRESS_LEN..]
+            .chunks_exact(NATIVE_CURRENCY_ADDRESS_LEN)
+            .any(|later| later == member)
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// Parse a TLV parameter blob located at `param_off` inside the IR's
@@ -220,7 +280,7 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
         let payload = &body[cursor..cursor + len];
         cursor += len;
 
-        if !(PARAM_TOKEN_PATH..=PARAM_DYNAMIC_KIND).contains(&tag) {
+        if !(PARAM_TOKEN_PATH..=PARAM_NFT_COLLECTION_PATH).contains(&tag) {
             return Err(RenderErr::Reject("7730 unknown tlv tag"));
         }
         let bit = 1u32 << (tag - PARAM_TOKEN_PATH);
@@ -239,11 +299,10 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
                 );
             }
             PARAM_NATIVE_CURRENCY => {
-                p.native_currency = Some(
-                    payload
-                        .try_into()
-                        .map_err(|_| RenderErr::Reject("7730 bad native ccy"))?,
-                );
+                if !native_currency_list_is_canonical(payload) {
+                    return Err(RenderErr::Reject("7730 bad native ccy"));
+                }
+                p.native_currency_addresses = Some(payload);
             }
             PARAM_DYNAMIC_KIND => {
                 if payload.len() != 1
@@ -252,6 +311,19 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
                     return Err(RenderErr::Reject("7730 bad dynamic kind"));
                 }
                 p.dynamic_kind = Some(payload[0]);
+            }
+            PARAM_NFT_COLLECTION => {
+                p.nft_collection = Some(
+                    payload
+                        .try_into()
+                        .map_err(|_| RenderErr::Reject("7730 bad nft collection"))?,
+                );
+            }
+            PARAM_NFT_COLLECTION_PATH => {
+                if payload.is_empty() {
+                    return Err(RenderErr::Reject("7730 empty nft collection path"));
+                }
+                p.nft_collection_path = Some(payload);
             }
             PARAM_THRESHOLD => {
                 p.threshold = Some(
@@ -392,6 +464,116 @@ mod tests {
         assert_eq!(p.decimals, Some(6));
         assert_eq!(p.token, Some(&[0xAB; 20]));
         assert_eq!(p.visibility, Visibility::Always);
+    }
+
+    #[test]
+    fn parses_legacy_scalar_native_currency_byte_identically() {
+        let sentinel = [0xEEu8; NATIVE_CURRENCY_ADDRESS_LEN];
+        let mut pool = std::vec![0xFFu8, 22, PARAM_NATIVE_CURRENCY, 20];
+        pool.extend_from_slice(&sentinel);
+        let bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
+        let p = parse(&ir, 1).unwrap();
+        assert_eq!(p.native_currency_addresses, Some(&sentinel[..]));
+        assert!(p.native_currency_matches(&sentinel));
+    }
+
+    #[test]
+    fn parses_two_native_currency_addresses_and_matches_each_exactly() {
+        let first = [0xEEu8; NATIVE_CURRENCY_ADDRESS_LEN];
+        let second = [0x00u8; NATIVE_CURRENCY_ADDRESS_LEN];
+        let mut payload = std::vec::Vec::new();
+        payload.extend_from_slice(&first);
+        payload.extend_from_slice(&second);
+        let mut pool = std::vec![
+            0xFFu8,
+            (2 + payload.len()) as u8,
+            PARAM_NATIVE_CURRENCY,
+            payload.len() as u8,
+        ];
+        pool.extend_from_slice(&payload);
+        let bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
+        let p = parse(&ir, 1).unwrap();
+        assert_eq!(p.native_currency_addresses, Some(&payload[..]));
+        assert!(p.native_currency_matches(&first));
+        assert!(p.native_currency_matches(&second));
+
+        let mut miss = first;
+        miss[NATIVE_CURRENCY_ADDRESS_LEN - 1] ^= 1;
+        assert!(!p.native_currency_matches(&miss));
+    }
+
+    #[test]
+    fn rejects_noncanonical_native_currency_lists() {
+        for payload in [
+            std::vec![0x11; 0],
+            std::vec![0x11; 19],
+            std::vec![0x11; 21],
+            std::vec![0x11; 39],
+            std::vec![0x11; 41],
+            std::vec![0x11; 60],
+            std::vec![0x11; 40], // two identical addresses
+        ] {
+            let mut pool = std::vec![
+                0xFFu8,
+                (2 + payload.len()) as u8,
+                PARAM_NATIVE_CURRENCY,
+                payload.len() as u8,
+            ];
+            pool.extend_from_slice(&payload);
+            let bytes = ir_with_pool(&pool);
+            let ir = Erc7730Ir::parse(&bytes).unwrap();
+            assert!(
+                matches!(parse(&ir, 1), Err(RenderErr::Reject("7730 bad native ccy"))),
+                "accepted payload length {}",
+                payload.len()
+            );
+        }
+    }
+
+    #[test]
+    fn parses_nft_collection_and_collection_path() {
+        let path = [
+            crate::ir::PathOp::RootContainer as u8,
+            crate::ir::PathOp::FieldIdx as u8,
+            0x00,
+            0x02,
+        ];
+        let mut body = std::vec::Vec::new();
+        body.extend_from_slice(&[PARAM_NFT_COLLECTION, 20]);
+        body.extend_from_slice(&[0xA4; 20]);
+        body.extend_from_slice(&[PARAM_NFT_COLLECTION_PATH, path.len() as u8]);
+        body.extend_from_slice(&path);
+        let mut pool = std::vec![0xFF, body.len() as u8];
+        pool.extend_from_slice(&body);
+        let bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
+        let p = parse(&ir, 1).unwrap();
+        assert_eq!(p.nft_collection, Some(&[0xA4; 20]));
+        assert_eq!(p.nft_collection_path, Some(&path[..]));
+    }
+
+    #[test]
+    fn rejects_bad_or_duplicate_nft_collection_parameters() {
+        for body in [
+            std::vec![PARAM_NFT_COLLECTION, 19, 0x11, 0x22],
+            std::vec![PARAM_NFT_COLLECTION_PATH, 0],
+            std::vec![
+                PARAM_NFT_COLLECTION_PATH,
+                1,
+                0x10,
+                PARAM_NFT_COLLECTION_PATH,
+                1,
+                0x10,
+            ],
+        ] {
+            let mut pool = std::vec![0xFF, body.len() as u8];
+            pool.extend_from_slice(&body);
+            let bytes = ir_with_pool(&pool);
+            let ir = Erc7730Ir::parse(&bytes).unwrap();
+            assert!(parse(&ir, 1).is_err(), "accepted malformed body {body:?}");
+        }
     }
 
     #[test]

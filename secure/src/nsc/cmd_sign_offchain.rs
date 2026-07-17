@@ -98,6 +98,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // HIGH-1 (audit fault-injection 20260611): sentinel-gate the NS-pointer
     // checks (a bare `if !validate` is single-fault FAIL-OUT → OOB R/W across
     // the S/NS boundary). Same idiom as the §14 6492 re-validation below.
+    crate::fi::scrub_sentinel_register();
     let read_ptr_ok = crate::fi::check_true_into_sentinel(|| {
         validate_ns_read_ptr(args.arg0, total_len)
     });
@@ -111,6 +112,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // fails fast before we touch SE state. The 6492-path write below
     // performs its own larger validation immediately after parsing the
     // flag.
+    crate::fi::scrub_sentinel_register();
     let write_ptr_ok = crate::fi::check_true_into_sentinel(|| {
         validate_ns_write_ptr(args.arg1, SIGN_OFFCHAIN_OUTPUT_LEN)
     });
@@ -181,6 +183,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
 
     // When ERC-6492 wrapping is requested, the output buffer is
     // larger. Validate the full extent now that we know the mode.
+    crate::fi::scrub_sentinel_register();
     if !account_deployed
         && crate::fi::check_true_into_sentinel(|| {
             validate_ns_write_ptr(args.arg1, SIGN_OFFCHAIN_OUTPUT_LEN_6492)
@@ -496,11 +499,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         let bind_cfi_verdict_a = bind_cfi.check_into_sentinel(
             crate::tx::erc7730::CFI_EIP712_BIND_EXPECTED,
         );
-        let bind_gate_a = crate::fi::check_true_into_sentinel(|| {
-            core::hint::black_box(bind_verdict_a) == crate::fi::OK_SENTINEL
-                && core::hint::black_box(bind_cfi_verdict_a)
-                    == crate::fi::OK_SENTINEL
-        });
+        let bind_all_ok_a = bind_verdict_a == crate::fi::OK_SENTINEL
+            && bind_cfi_verdict_a == crate::fi::OK_SENTINEL;
+        crate::fi::scrub_sentinel_register();
+        let bind_gate_a =
+            crate::fi::check_true_into_sentinel(|| core::hint::black_box(bind_all_ok_a));
         crate::fi::scrub_sentinel_register();
         if bind_gate_a != crate::fi::OK_SENTINEL {
             crate::ui::show_status("EIP-1271", "7730 binding fail");
@@ -516,11 +519,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         let bind_cfi_verdict_b = bind_cfi.check_into_sentinel(
             crate::tx::erc7730::CFI_EIP712_BIND_EXPECTED,
         );
-        let bind_gate_b = crate::fi::check_true_into_sentinel(|| {
-            core::hint::black_box(bind_verdict_b) == crate::fi::OK_SENTINEL
-                && core::hint::black_box(bind_cfi_verdict_b)
-                    == crate::fi::OK_SENTINEL
-        });
+        let bind_all_ok_b = bind_verdict_b == crate::fi::OK_SENTINEL
+            && bind_cfi_verdict_b == crate::fi::OK_SENTINEL;
+        crate::fi::scrub_sentinel_register();
+        let bind_gate_b =
+            crate::fi::check_true_into_sentinel(|| core::hint::black_box(bind_all_ok_b));
         crate::fi::scrub_sentinel_register();
         if bind_gate_b != crate::fi::OK_SENTINEL {
             crate::ui::show_status("EIP-1271", "7730 binding fail");
@@ -637,13 +640,44 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // (F5): it is the mandatory binding between the displayed typed-data
         // intent and the digest being signed; dropping it silently and signing
         // anyway is a confirm-without-fingerprint.
+        let fingerprint_pages_before = pages.len;
+        let fingerprint_kind =
+            crate::tx::display::erc8213::Kind::Eip712Final(final_eip712);
+        let mut fingerprint_cfi = crate::fi::CfiCounter::new();
         if crate::tx::display::erc8213::append_fingerprint_page(
             &mut pages,
-            crate::tx::display::erc8213::Kind::Eip712Final(final_eip712),
+            fingerprint_kind,
+            &mut fingerprint_cfi,
         )
         .is_err()
         {
             crate::ui::show_status("Sign refused", "fp unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        let fingerprint_cfi_verdict = fingerprint_cfi.check_into_sentinel(
+            crate::tx::display::erc8213::FINGERPRINT_CFI_EXPECTED,
+        );
+        crate::fi::scrub_sentinel_register();
+        let fingerprint_page_verdict = crate::tx::display::erc8213::fingerprint_page_proof(
+            &pages,
+            fingerprint_pages_before,
+            fingerprint_kind,
+        );
+        if fingerprint_cfi_verdict != crate::fi::OK_SENTINEL
+            || fingerprint_page_verdict != crate::fi::OK_SENTINEL
+        {
+            crate::ui::show_status("Sign refused", "fp incomplete");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        if crate::tx::display::erc8213::fingerprint_final_set_proof(
+            &pages,
+            fingerprint_pages_before,
+            fingerprint_kind,
+        ) != crate::fi::OK_SENTINEL
+        {
+            crate::ui::show_status("Sign refused", "fp changed");
             return NscStatus::InternalError as u32;
         }
         let (cr, cr_verdict) = confirm_checked(pages.as_slice());
@@ -788,10 +822,42 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             _ => crate::tx::display::erc8213::Kind::Raw32(raw_h),
         };
         // Fail closed if the fingerprint page can't be appended (F5).
-        if crate::tx::display::erc8213::append_fingerprint_page(&mut pages, fingerprint_kind)
-            .is_err()
+        let fingerprint_pages_before = pages.len;
+        let mut fingerprint_cfi = crate::fi::CfiCounter::new();
+        if crate::tx::display::erc8213::append_fingerprint_page(
+            &mut pages,
+            fingerprint_kind,
+            &mut fingerprint_cfi,
+        )
+        .is_err()
         {
             crate::ui::show_status("Sign refused", "fp unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        let fingerprint_cfi_verdict = fingerprint_cfi.check_into_sentinel(
+            crate::tx::display::erc8213::FINGERPRINT_CFI_EXPECTED,
+        );
+        crate::fi::scrub_sentinel_register();
+        let fingerprint_page_verdict = crate::tx::display::erc8213::fingerprint_page_proof(
+            &pages,
+            fingerprint_pages_before,
+            fingerprint_kind,
+        );
+        if fingerprint_cfi_verdict != crate::fi::OK_SENTINEL
+            || fingerprint_page_verdict != crate::fi::OK_SENTINEL
+        {
+            crate::ui::show_status("Sign refused", "fp incomplete");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        if crate::tx::display::erc8213::fingerprint_final_set_proof(
+            &pages,
+            fingerprint_pages_before,
+            fingerprint_kind,
+        ) != crate::fi::OK_SENTINEL
+        {
+            crate::ui::show_status("Sign refused", "fp changed");
             return NscStatus::InternalError as u32;
         }
         let (cr, cr_verdict) = confirm_checked(pages.as_slice());

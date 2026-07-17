@@ -634,12 +634,16 @@ const CMD_OFFCHAIN_SYNC_SRC: &str = include_str!("nsc/cmd_offchain_sync.rs");
 const OFFCHAIN_SYNC_DISPLAY_SRC: &str = include_str!("tx/display/offchain_sync.rs");
 const CMD_SIGN_OFFCHAIN_SRC: &str = include_str!("nsc/cmd_sign_offchain.rs");
 const CMD_SIGN_USEROP_BATCH_SRC: &str = include_str!("nsc/cmd_sign_userop_batch.rs");
+const BATCH_DISPLAY_SRC: &str = include_str!("tx/display/batch.rs");
 // Not part of the four-file "slice" array below — pinned only for the
 // MEDIUM-2 combined-cap guard, which lives in the single-tx handler too.
 const CMD_SIGN_USEROP_SRC: &str = include_str!("nsc/cmd_sign_userop.rs");
 const WALLET_ADDRESS_SRC: &str = include_str!("nsc/cmd_get_wallet_address.rs");
 const VALUE_PAGE_SRC: &str = include_str!("tx/display/value_page.rs");
 const NONCE_LANE_SRC: &str = include_str!("tx/display/nonce_lane.rs");
+const DISPLAY_DISPATCH_SRC: &str = include_str!("tx/display/dispatch.rs");
+const SAFE_DISPLAY_SRC: &str = include_str!("tx/display/safe_display.rs");
+const SAFE_EIP712_SRC: &str = include_str!("tx/eip712/safe/mod.rs");
 
 const ALL_SLICE_SRCS: [(&str, &str); 4] = [
     ("cmd_offchain_status.rs", CMD_OFFCHAIN_STATUS_SRC),
@@ -647,6 +651,32 @@ const ALL_SLICE_SRCS: [(&str, &str); 4] = [
     ("cmd_sign_offchain.rs", CMD_SIGN_OFFCHAIN_SRC),
     ("cmd_sign_userop_batch.rs", CMD_SIGN_USEROP_BATCH_SRC),
 ];
+
+fn assert_each_sentinel_pair_is_scrubbed(
+    name: &str,
+    src: &str,
+    first: &str,
+    second: &str,
+) -> usize {
+    let mut cursor = 0usize;
+    let mut count = 0usize;
+    while let Some(relative_first) = src[cursor..].find(first) {
+        let first_pos = cursor + relative_first;
+        let second_pos = first_pos
+            + src[first_pos..]
+                .find(second)
+                .unwrap_or_else(|| panic!("{name}: missing {second:?} after {first:?}"));
+        assert!(
+            src[first_pos + first.len()..second_pos]
+                .contains("crate::fi::scrub_sentinel_register();"),
+            "{name}: adjacent sentinel pair {first:?} -> {second:?} lacks an intervening F-15.r1 scrub"
+        );
+        count += 1;
+        cursor = second_pos + second.len();
+    }
+    assert!(count > 0, "{name}: no {first:?} -> {second:?} pair found");
+    count
+}
 
 // ── 8a. pin_verified gate (CLAUDE.md invariant #2 — hardware PIN gating)
 
@@ -698,6 +728,38 @@ fn negative_handlers_with_output_buffers_validate_ns_write_ptr() {
     assert!(
         !CMD_OFFCHAIN_SYNC_SRC.contains("validate_ns_write_ptr"),
         "cmd_offchain_sync.rs has no output body — adding validate_ns_write_ptr signals new attack surface"
+    );
+}
+
+#[test]
+fn negative_batch_revalidates_full_output_extent_at_deref_site() {
+    const GATE: &str =
+        "validate_ns_write_ptr(args.arg1, MAX_SIGN_RESPONSE_LEN)";
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC.matches(GATE).count(),
+        2,
+        "batch signing needs both the entry gate and a spatially separate deref-site gate"
+    );
+
+    let durable_commit = CMD_SIGN_USEROP_BATCH_SRC
+        .rfind("userop_sigs_bump(&slot_flash_key")
+        .expect("durable signature tally before response release");
+    let final_gate = CMD_SIGN_USEROP_BATCH_SRC
+        .rfind(GATE)
+        .expect("deref-site output gate");
+    let first_output_write = CMD_SIGN_USEROP_BATCH_SRC[final_gate..]
+        .find("write_be_u64(out_ptr")
+        .map(|offset| final_gate + offset)
+        .expect("first response write");
+    assert!(
+        durable_commit < final_gate && final_gate < first_output_write,
+        "the second full-extent check must be after durable commit and immediately before output writes"
+    );
+    assert!(
+        CMD_SIGN_USEROP_BATCH_SRC[..final_gate]
+            .rfind("crate::fi::scrub_sentinel_register();")
+            .is_some_and(|scrub| final_gate - scrub < 256),
+        "the deref-site sentinel check must start from a scrubbed return register"
     );
 }
 
@@ -927,15 +989,17 @@ fn negative_byte_source_handlers_bound_account_index() {
 
 #[test]
 fn negative_batch_account_index_is_mask_bounded() {
-    // cmd_sign_userop_batch.rs derives account_index from the flags
-    // word: `(flags & ACCOUNT_INDEX_MASK) >> ACCOUNT_INDEX_SHIFT`.
-    // ACCOUNT_INDEX_MASK is 8 bits wide, so the result is bounded to
-    // 0..=255 by construction — no separate `> MAX_ACCOUNT_INDEX`
-    // gate is necessary. Pin the mask-based derivation so a refactor
-    // that switched to a direct byte read would also be forced to
-    // add the explicit gate.
-    assert!(CMD_SIGN_USEROP_BATCH_SRC
-        .contains("(flags & ACCOUNT_INDEX_MASK) >> ACCOUNT_INDEX_SHIFT"));
+    // The batch handler must share the Kani-proven total flag decoder with
+    // the single handler for both the primary extraction and FI recheck.
+    // `decode_flags` applies the canonical eight-bit account mask, so no
+    // separate `> MAX_ACCOUNT_INDEX` gate is necessary here.
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("crate::aa::userop::decode_flags(")
+            .count(),
+        2,
+        "batch primary/recheck flag extraction must use the shared proven kernel"
+    );
     // Sanity: the mask really is 8 bits wide.
     let derived_width = (ACCOUNT_INDEX_MASK >> ACCOUNT_INDEX_SHIFT).count_ones();
     assert_eq!(
@@ -1018,6 +1082,54 @@ fn negative_sign_offchain_caps_total_len_to_input_max() {
     assert!(CMD_SIGN_OFFCHAIN_SRC.contains("SIGN_OFFCHAIN_HEADER_LEN"));
     assert!(CMD_SIGN_OFFCHAIN_SRC.contains("SIGN_OFFCHAIN_INPUT_MAX_LEN"));
     assert!(CMD_SIGN_OFFCHAIN_SRC.contains("bad length"));
+}
+
+#[test]
+fn offchain_fingerprints_have_caller_cfi_completion_and_final_boundary_proofs() {
+    assert_eq!(
+        CMD_SIGN_OFFCHAIN_SRC
+            .matches("append_fingerprint_page(")
+            .count(),
+        2,
+        "typed-data and personal/raw32 confirmations each need the authoritative append"
+    );
+    assert_eq!(
+        CMD_SIGN_OFFCHAIN_SRC
+            .matches("fingerprint_page_proof(")
+            .count(),
+        2
+    );
+    assert_eq!(
+        CMD_SIGN_OFFCHAIN_SRC
+            .matches("fingerprint_final_set_proof(")
+            .count(),
+        2
+    );
+
+    let mut cursor = 0usize;
+    for context in ["typed-data", "personal/raw32"] {
+        let append = cursor
+            + CMD_SIGN_OFFCHAIN_SRC[cursor..]
+                .find("append_fingerprint_page(")
+                .unwrap_or_else(|| panic!("missing {context} fingerprint append"));
+        let completion = append
+            + CMD_SIGN_OFFCHAIN_SRC[append..]
+                .find("fingerprint_page_proof(")
+                .unwrap_or_else(|| panic!("missing {context} completion proof"));
+        let final_set = completion
+            + CMD_SIGN_OFFCHAIN_SRC[completion..]
+                .find("fingerprint_final_set_proof(")
+                .unwrap_or_else(|| panic!("missing {context} final-set proof"));
+        let confirm = final_set
+            + CMD_SIGN_OFFCHAIN_SRC[final_set..]
+                .find("confirm_checked(pages.as_slice())")
+                .unwrap_or_else(|| panic!("missing {context} confirm"));
+        let guarded = &CMD_SIGN_OFFCHAIN_SRC[append..confirm];
+        assert!(guarded.contains("FINGERPRINT_CFI_EXPECTED"));
+        assert!(guarded.contains("fingerprint_pages_before"));
+        assert!(append < completion && completion < final_set && final_set < confirm);
+        cursor = confirm + "confirm_checked(pages.as_slice())".len();
+    }
 }
 
 #[test]
@@ -1364,6 +1476,11 @@ fn negative_batch_binds_sender_before_verify_confirm_sign_or_state_write() {
         !downstream.contains("companion_sender"),
         "the untrusted sender must never reach batch verifiers or signed hashes"
     );
+    let downstream_compact = downstream.split_whitespace().collect::<String>();
+    assert!(
+        downstream_compact.contains("pick_sign_pages(&tx_for_display,inner_data,&sender,"),
+        "each batch member's ERC-7730 @.from must receive the bound sender explicitly"
+    );
     let helper_start = WALLET_ADDRESS_SRC
         .find("pub(super) unsafe fn bind_userop_sender")
         .expect("sender helper");
@@ -1410,11 +1527,19 @@ fn negative_batch_every_confirmation_gets_bound_from_page() {
         3,
         "rotation, each member, and final batch authorization need source identity"
     );
-    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("&mut rotate_pages"));
-    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains(
-        "enforce_from_page(&mut pages, account_index, &sender)"
+    let compact = CMD_SIGN_USEROP_BATCH_SRC
+        .split_whitespace()
+        .collect::<String>()
+        .replace(",)", ")");
+    assert!(compact.contains(
+        "enforce_from_page(&mutrotate_pages,account_index,&sender,&mutsigner_cfi)"
     ));
-    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("&mut final_pages"));
+    assert!(compact.contains(
+        "enforce_from_page(&mutpages,account_index,&sender,&mutsigner_cfi)"
+    ));
+    assert!(compact.contains(
+        "enforce_from_page(&mutfinal_pages,account_index,&sender,&mutsigner_cfi)"
+    ));
     assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("signer unshown"));
     assert_eq!(CMD_SIGN_USEROP_BATCH_SRC.matches("from_page_proof(").count(), 3);
 }
@@ -1423,8 +1548,9 @@ fn negative_batch_every_confirmation_gets_bound_from_page() {
 fn negative_batch_each_member_gets_full_target_page() {
     assert_eq!(CMD_SIGN_USEROP_BATCH_SRC.matches("enforce_target_page(").count(), 1);
     assert_eq!(CMD_SIGN_USEROP_BATCH_SRC.matches("target_page_proof(").count(), 1);
-    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains(
-        "enforce_target_page(&mut pages, &ptx.to)"
+    let compact = CMD_SIGN_USEROP_BATCH_SRC.split_whitespace().collect::<String>();
+    assert!(compact.contains(
+        "enforce_target_page(&mutpages,&ptx.to,&muttarget_cfi)"
     ));
     assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("TARGET_IDENTITY_PAGES"));
     assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("target unshown"));
@@ -1446,10 +1572,10 @@ fn negative_batch_shows_and_fi_proves_full_derived_signer_identity() {
     assert!(!CMD_SIGN_USEROP_BATCH_SRC.contains("account_index, &companion_sender"));
 
     let wrap = CMD_SIGN_USEROP_BATCH_SRC
-        .find("wrap_pages_with_batch_banner(inner_pages")
+        .find("if wrap_pages_with_batch_banner(")
         .expect("per-member banner");
     let member_page = CMD_SIGN_USEROP_BATCH_SRC[wrap..]
-        .find("enforce_from_page(&mut pages, account_index, &sender)")
+        .find("let signer_pages_before = pages.len;")
         .map(|p| wrap + p)
         .expect("per-member signer page");
     let member_fp = CMD_SIGN_USEROP_BATCH_SRC[member_page..]
@@ -1480,6 +1606,382 @@ fn negative_batch_shows_and_fi_proves_full_derived_signer_identity() {
 }
 
 #[test]
+fn negative_batch_banner_copy_completes_before_shift_and_member_confirmation() {
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("wrap_pages_with_batch_banner(")
+            .count(),
+        1,
+        "the production member loop must have one authoritative banner-copy call"
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("batch_banner_copy_proof(")
+            .count(),
+        1,
+        "the copied transcript needs one exact completion proof"
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("BATCH_BANNER_CFI_EXPECTED")
+            .count(),
+        1,
+        "the copy operation needs one caller-owned CFI completion receipt"
+    );
+
+    let start = CMD_SIGN_USEROP_BATCH_SRC
+        .find("// Fail closed if the per-tx renderer ate the banner budget")
+        .expect("batch-banner completion block");
+    let wrap = start
+        + CMD_SIGN_USEROP_BATCH_SRC[start..]
+            .find("if wrap_pages_with_batch_banner(")
+            .expect("authoritative banner copy");
+    let cfi = wrap
+        + CMD_SIGN_USEROP_BATCH_SRC[wrap..]
+            .find("let banner_cfi_verdict =")
+            .expect("banner CFI verdict");
+    let scrub = cfi
+        + CMD_SIGN_USEROP_BATCH_SRC[cfi..]
+            .find("crate::fi::scrub_sentinel_register();")
+            .expect("F-15.r1 scrub between sentinel calls");
+    let proof = scrub
+        + CMD_SIGN_USEROP_BATCH_SRC[scrub..]
+            .find("let banner_copy_verdict =")
+            .expect("exact copied-transcript proof");
+    let reject = proof
+        + CMD_SIGN_USEROP_BATCH_SRC[proof..]
+            .find("banner incomplete")
+            .expect("completion refusal");
+    let shift = reject
+        + CMD_SIGN_USEROP_BATCH_SRC[reject..]
+            .find("dispatch_page_proofs.shift_indices(1)")
+            .expect("dispatcher proof-index shift");
+    let signer = shift
+        + CMD_SIGN_USEROP_BATCH_SRC[shift..]
+            .find("let signer_pages_before = pages.len;")
+            .expect("member signer append");
+    let fingerprint = signer
+        + CMD_SIGN_USEROP_BATCH_SRC[signer..]
+            .find("append_fingerprint_page(")
+            .expect("member fingerprint append");
+    let confirm = fingerprint
+        + CMD_SIGN_USEROP_BATCH_SRC[fingerprint..]
+            .find("confirm_checked(pages.as_slice())")
+            .expect("member confirmation");
+    assert!(
+        wrap < cfi
+            && cfi < scrub
+            && scrub < proof
+            && proof < reject
+            && reject < shift
+            && shift < signer
+            && signer < fingerprint
+            && fingerprint < confirm
+    );
+
+    let copy_body = BATCH_DISPLAY_SRC
+        .split("pub fn wrap_pages_with_batch_banner(")
+        .nth(1)
+        .and_then(|tail| tail.split("fn build_batch_banner_page(").next())
+        .expect("authoritative banner-copy body");
+    let fail_init = copy_body
+        .find("write_volatile(&mut out.len, 0)")
+        .expect("volatile empty-output fail initialization");
+    let bounds = copy_body
+        .find("let new_len = inner.len.checked_add(1).ok_or(())?;")
+        .expect("checked visible-length derivation");
+    let copied = copy_body
+        .find("copy_from_slice(&inner.buf[i][r])")
+        .expect("all-row copy loop");
+    let completion = copy_body
+        .find("cfi.bump(BATCH_BANNER_CFI_STEP)")
+        .expect("copy-completion CFI step");
+    assert!(fail_init < bounds && bounds < copied && copied < completion);
+    assert!(BATCH_DISPLAY_SRC.contains("#[inline(never)]\npub fn wrap_pages_with_batch_banner("));
+    assert!(BATCH_DISPLAY_SRC.contains("for page_index in 0..inner.len"));
+    assert!(BATCH_DISPLAY_SRC.contains("for row in 0..DISPLAY_ROWS"));
+    assert!(BATCH_DISPLAY_SRC.contains("for col in 0..DISPLAY_COLS"));
+}
+
+#[test]
+fn negative_batch_member_loop_must_complete_before_final_summary() {
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("member_confirm_receipt.record_confirmed(i)")
+            .count(),
+        1
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("member_confirm_receipt.completion_proof(batch_count)")
+            .count(),
+        1
+    );
+
+    let receipt_init = CMD_SIGN_USEROP_BATCH_SRC
+        .find("let mut member_confirm_receipt =")
+        .expect("fail-closed member receipt");
+    let member_loop = receipt_init
+        + CMD_SIGN_USEROP_BATCH_SRC[receipt_init..]
+            .find("for i in 0..batch_count")
+            .expect("trusted-display member loop");
+    let confirm = member_loop
+        + CMD_SIGN_USEROP_BATCH_SRC[member_loop..]
+            .find("confirm_checked(pages.as_slice())")
+            .expect("member confirmation");
+    let affirmative_gate = confirm
+        + CMD_SIGN_USEROP_BATCH_SRC[confirm..]
+            .find("if cr_verdict != crate::fi::OK_SENTINEL")
+            .expect("affirmative member sentinel");
+    let digest_update = affirmative_gate
+        + CMD_SIGN_USEROP_BATCH_SRC[affirmative_gate..]
+            .find("batch_digest.update(&inner_digest)")
+            .expect("confirmed-member running digest update");
+    let record = digest_update
+        + CMD_SIGN_USEROP_BATCH_SRC[digest_update..]
+            .find("member_confirm_receipt.record_confirmed(i)")
+            .expect("ordered confirmed-member receipt");
+    let pinned_count = record
+        + CMD_SIGN_USEROP_BATCH_SRC[record..]
+            .find("let pinned_batch_count_a =")
+            .expect("fresh post-loop batch count");
+    let receipt_proof = pinned_count
+        + CMD_SIGN_USEROP_BATCH_SRC[pinned_count..]
+            .find("member_confirm_receipt.completion_proof(batch_count)")
+            .expect("post-loop receipt proof");
+    let independent_digest = receipt_proof
+        + CMD_SIGN_USEROP_BATCH_SRC[receipt_proof..]
+            .find("let recomputed_batch_final:")
+            .expect("independent all-member digest");
+    let completion_reject = independent_digest
+        + CMD_SIGN_USEROP_BATCH_SRC[independent_digest..]
+            .find("members incomplete")
+            .expect("incomplete-member refusal");
+    let final_summary = completion_reject
+        + CMD_SIGN_USEROP_BATCH_SRC[completion_reject..]
+            .find("let mut final_pages = build_final_summary_pages(batch_count)")
+            .expect("whole-batch final summary");
+    assert!(
+        receipt_init < member_loop
+            && member_loop < confirm
+            && confirm < affirmative_gate
+            && affirmative_gate < digest_update
+            && digest_update < record
+            && record < pinned_count
+            && pinned_count < receipt_proof
+            && receipt_proof < independent_digest
+            && independent_digest < completion_reject
+            && completion_reject < final_summary
+    );
+
+    assert!(BATCH_DISPLAY_SRC.contains("pub(crate) struct BatchMemberConfirmReceipt"));
+    assert!(BATCH_DISPLAY_SRC.contains("write_volatile(&mut self.confirmed, 0)"));
+    assert!(BATCH_DISPLAY_SRC.contains("if current != expected"));
+    assert!(BATCH_DISPLAY_SRC.contains("cfi.bump(BATCH_MEMBER_CONFIRM_CFI_STEP)"));
+    assert!(BATCH_DISPLAY_SRC.contains("let confirmed_a = unsafe"));
+    assert!(BATCH_DISPLAY_SRC.contains("let confirmed_b = unsafe"));
+    assert!(BATCH_DISPLAY_SRC.contains("let all_ok = confirmed_a == expected_count_u32"));
+}
+
+#[test]
+fn security_relevant_sentinel_composition_is_explicitly_scrubbed() {
+    for (name, src) in [
+        ("single", CMD_SIGN_USEROP_SRC),
+        ("batch", CMD_SIGN_USEROP_BATCH_SRC),
+        ("offchain", CMD_SIGN_OFFCHAIN_SRC),
+    ] {
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "if super::state::peek_state",
+            "let read_ptr_ok =",
+        );
+        assert_each_sentinel_pair_is_scrubbed(name, src, "let read_ptr_ok =", "let write_ptr_ok =");
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "let bind_cfi_verdict_a =",
+            "let bind_gate_a =",
+        );
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "let bind_cfi_verdict_b =",
+            "let bind_gate_b =",
+        );
+    }
+
+    for (name, src) in [
+        ("single", CMD_SIGN_USEROP_SRC),
+        ("batch", CMD_SIGN_USEROP_BATCH_SRC),
+    ] {
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "let paymaster_cfi_verdict",
+            "let paymaster_page_verdict",
+        );
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "let paymaster_final_cfi_verdict",
+            "let paymaster_final_verdict",
+        );
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "let signer_cfi_verdict",
+            "let signer_page_verdict",
+        );
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "let nonce_lane_cfi_verdict",
+            "let nonce_lane_page_verdict",
+        );
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "let gas_lane_cfi_verdict",
+            "let gas_lane_page_verdict",
+        );
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "let gas_lane_final_cfi_verdict",
+            "let gas_lane_final_verdict",
+        );
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "let fingerprint_cfi_verdict",
+            "let fingerprint_page_verdict",
+        );
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "let safe_claim_cfi_verdict_a =",
+            "let safe_verify_a_cfi_verdict_a =",
+        );
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "let safe_verify_a_cfi_verdict_a =",
+            "let safe_verify_b_cfi_verdict_a =",
+        );
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "let safe_verify_b_cfi_verdict_a =",
+            "let safe_resolution_verdict_a =",
+        );
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "let safe_claim_cfi_verdict_b =",
+            "let safe_verify_a_cfi_verdict_b =",
+        );
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "let safe_verify_a_cfi_verdict_b =",
+            "let safe_verify_b_cfi_verdict_b =",
+        );
+        assert_each_sentinel_pair_is_scrubbed(
+            name,
+            src,
+            "let safe_verify_b_cfi_verdict_b =",
+            "let safe_resolution_verdict_b =",
+        );
+    }
+
+    assert_each_sentinel_pair_is_scrubbed(
+        "single",
+        CMD_SIGN_USEROP_SRC,
+        "let target_cfi_verdict",
+        "let target_page_verdict",
+    );
+    assert_each_sentinel_pair_is_scrubbed(
+        "batch",
+        CMD_SIGN_USEROP_BATCH_SRC,
+        "let target_cfi_verdict",
+        "let target_page_verdict",
+    );
+    assert_each_sentinel_pair_is_scrubbed(
+        "batch banner",
+        CMD_SIGN_USEROP_BATCH_SRC,
+        "let banner_cfi_verdict",
+        "let banner_copy_verdict",
+    );
+    assert_each_sentinel_pair_is_scrubbed(
+        "offchain fingerprint",
+        CMD_SIGN_OFFCHAIN_SRC,
+        "let fingerprint_cfi_verdict",
+        "let fingerprint_page_verdict",
+    );
+
+    assert_each_sentinel_pair_is_scrubbed(
+        "dispatcher native",
+        DISPLAY_DISPATCH_SRC,
+        "let native_cfi_verdict",
+        "let native_page_verdict",
+    );
+    assert_each_sentinel_pair_is_scrubbed(
+        "dispatcher fees",
+        DISPLAY_DISPATCH_SRC,
+        "let legacy_fee_cfi_verdict",
+        "let legacy_fee_page_verdict",
+    );
+    assert_each_sentinel_pair_is_scrubbed(
+        "dispatcher unknown A",
+        DISPLAY_DISPATCH_SRC,
+        "let unknown_cfi_verdict_a",
+        "let unknown_gate_a",
+    );
+    assert_each_sentinel_pair_is_scrubbed(
+        "dispatcher unknown B",
+        DISPLAY_DISPATCH_SRC,
+        "let unknown_cfi_verdict_b",
+        "let unknown_gate_b",
+    );
+    assert_each_sentinel_pair_is_scrubbed(
+        "Safe display unknown A",
+        SAFE_DISPLAY_SRC,
+        "let unknown_cfi_verdict_a",
+        "let unknown_gate_a",
+    );
+    assert_each_sentinel_pair_is_scrubbed(
+        "Safe display unknown B",
+        SAFE_DISPLAY_SRC,
+        "let unknown_cfi_verdict_b",
+        "let unknown_gate_b",
+    );
+    assert_each_sentinel_pair_is_scrubbed(
+        "Safe claim publication",
+        SAFE_EIP712_SRC,
+        "let sample_verdict =",
+        "let published_verdict =",
+    );
+
+    assert!(DISPLAY_DISPATCH_SRC.contains("let all_ok = native_cfi == crate::fi::OK_SENTINEL"));
+    assert!(DISPLAY_DISPATCH_SRC.contains("core::hint::black_box(unknown_all_ok_a)"));
+    assert!(SAFE_DISPLAY_SRC.contains("core::hint::black_box(unknown_all_ok_a)"));
+    assert!(SAFE_EIP712_SRC.contains("core::hint::black_box(published_ok)"));
+    assert!(SAFE_EIP712_SRC.contains("core::hint::black_box(all_ok)"));
+    for src in [CMD_SIGN_USEROP_SRC, CMD_SIGN_USEROP_BATCH_SRC, CMD_SIGN_OFFCHAIN_SRC] {
+        assert!(src.contains("core::hint::black_box(bind_all_ok_a)"));
+        assert!(src.contains("core::hint::black_box(bind_all_ok_b)"));
+    }
+    let larger_extent = CMD_SIGN_OFFCHAIN_SRC
+        .split("// larger. Validate the full extent now that we know the mode.")
+        .nth(1)
+        .and_then(|tail| tail.split("// Per-kind payload constraints.").next())
+        .expect("conditional ERC-6492 output-extent gate");
+    assert!(larger_extent.contains("crate::fi::scrub_sentinel_register();"));
+    assert!(larger_extent.contains("SIGN_OFFCHAIN_OUTPUT_LEN_6492"));
+}
+
+#[test]
 fn negative_batch_shows_and_fi_proves_nonce_lane_on_every_confirmation() {
     assert_eq!(
         CMD_SIGN_USEROP_BATCH_SRC
@@ -1493,14 +1995,15 @@ fn negative_batch_shows_and_fi_proves_nonce_lane_on_every_confirmation() {
             .count(),
         3
     );
-    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("&mut rotate_pages, &nonce"));
-    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("&mut pages, &type2_nonce"));
-    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("&mut final_pages, &type2_nonce"));
+    let compact = CMD_SIGN_USEROP_BATCH_SRC.split_whitespace().collect::<String>();
+    assert!(compact.contains("&mutrotate_pages,&nonce,&mutnonce_lane_cfi"));
+    assert!(compact.contains("&mutpages,&type2_nonce,&mutnonce_lane_cfi"));
+    assert!(compact.contains("&mutfinal_pages,&type2_nonce,&mutnonce_lane_cfi"));
     assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("NONZERO_NONCE_LANE_PAGES"));
     assert!(CMD_SIGN_USEROP_BATCH_SRC.contains("lane unshown"));
 
     let member = CMD_SIGN_USEROP_BATCH_SRC
-        .find("enforce_nonce_lane_page(&mut pages, &type2_nonce)")
+        .find("let nonce_lane_pages_before = pages.len;")
         .unwrap();
     let member_proof = member
         + CMD_SIGN_USEROP_BATCH_SRC[member..]
@@ -1513,7 +2016,7 @@ fn negative_batch_shows_and_fi_proves_nonce_lane_on_every_confirmation() {
     assert!(member < member_proof && member_proof < member_fp);
 
     let final_lane = CMD_SIGN_USEROP_BATCH_SRC
-        .find("enforce_nonce_lane_page(&mut final_pages, &type2_nonce)")
+        .find("let nonce_lane_pages_before = final_pages.len;")
         .unwrap();
     let final_proof = final_lane
         + CMD_SIGN_USEROP_BATCH_SRC[final_lane..]
@@ -1542,10 +2045,10 @@ fn negative_batch_type2_display_uses_incremented_rotation_nonce() {
         .find("let display_nonce = u64::from_be_bytes([")
         .unwrap();
     let member_lane = CMD_SIGN_USEROP_BATCH_SRC
-        .find("enforce_nonce_lane_page(&mut pages, &type2_nonce)")
+        .find("let nonce_lane_pages_before = pages.len;")
         .unwrap();
     let final_lane = CMD_SIGN_USEROP_BATCH_SRC
-        .find("enforce_nonce_lane_page(&mut final_pages, &type2_nonce)")
+        .find("let nonce_lane_pages_before = final_pages.len;")
         .unwrap();
     let signed = CMD_SIGN_USEROP_BATCH_SRC
         .rfind("nonce: U256(type2_nonce)")
@@ -1566,9 +2069,8 @@ fn negative_batch_type2_display_uses_incremented_rotation_nonce() {
     assert!(CMD_SIGN_USEROP_BATCH_SRC[derive..display]
         .contains("add_one_to_be_u256(&mut type2_nonce)"));
     assert!(CMD_SIGN_USEROP_BATCH_SRC[display..].contains("type2_nonce[24]"));
-    assert!(CMD_SIGN_USEROP_BATCH_SRC.contains(
-        "enforce_nonce_lane_page(&mut rotate_pages, &nonce)"
-    ));
+    let compact = CMD_SIGN_USEROP_BATCH_SRC.split_whitespace().collect::<String>();
+    assert!(compact.contains("&mutrotate_pages,&nonce,&mutnonce_lane_cfi"));
 }
 
 #[test]
@@ -1830,6 +2332,337 @@ fn negative_slice_does_not_target_entrypoint_v07_or_v08() {
             );
         }
     }
+}
+
+#[test]
+fn negative_batch_fi_pins_wire_entrypoint_and_hashes_only_the_constant() {
+    // Match the single handler's frozen-domain contract: two independent
+    // snapshot reads, constant-time equality, spatially separate sentinel
+    // rejects, then direct use of the firmware constant at every T1/T2 digest
+    // initializer. No wire-derived `entry_point` variable may survive.
+    const SNAPSHOT_COPY_END: &str =
+        "snap[i] = core::ptr::read_volatile(payload_ptr.add(i));\n    }\n";
+    let snapshot_copy_end = CMD_SIGN_USEROP_BATCH_SRC
+        .find(SNAPSHOT_COPY_END)
+        .map(|p| p + SNAPSHOT_COPY_END.len())
+        .expect("completed batch-handler snapshot copy loop");
+    let parse_header = CMD_SIGN_USEROP_BATCH_SRC
+        .find("// ── 4. Parse fixed header")
+        .expect("batch request parse boundary");
+    let pin_a = CMD_SIGN_USEROP_BATCH_SRC
+        .find("let supplied_entry_point_a")
+        .expect("first batch EntryPoint pin read");
+    let gate_a = CMD_SIGN_USEROP_BATCH_SRC[pin_a..]
+        .find("if crate::fi::check_true_into_sentinel(|| core::hint::black_box(entry_point_match_a)")
+        .map(|p| pin_a + p)
+        .expect("first batch EntryPoint rejection gate");
+    let gate_a_end = CMD_SIGN_USEROP_BATCH_SRC[gate_a..]
+        .find("return NscStatus::InvalidPointer as u32;")
+        .map(|p| gate_a + p + "return NscStatus::InvalidPointer as u32;".len())
+        .expect("end of first batch EntryPoint rejection gate");
+    let gap = CMD_SIGN_USEROP_BATCH_SRC[gate_a_end..]
+        .find("crate::fi::wait_random();")
+        .map(|p| gate_a_end + p)
+        .expect("batch EntryPoint randomized gap");
+    let pin_b = CMD_SIGN_USEROP_BATCH_SRC[gap..]
+        .find("let supplied_entry_point_b")
+        .map(|p| gap + p)
+        .expect("second batch EntryPoint pin read");
+    let gate_b = CMD_SIGN_USEROP_BATCH_SRC[pin_b..]
+        .find("if crate::fi::check_true_into_sentinel(|| core::hint::black_box(entry_point_match_b)")
+        .map(|p| pin_b + p)
+        .expect("second batch EntryPoint rejection gate");
+    let gate_b_end = CMD_SIGN_USEROP_BATCH_SRC[gate_b..]
+        .find("return NscStatus::InvalidPointer as u32;")
+        .map(|p| gate_b + p + "return NscStatus::InvalidPointer as u32;".len())
+        .expect("end of second batch EntryPoint rejection gate");
+    let nonce_parse = CMD_SIGN_USEROP_BATCH_SRC
+        .find("let mut nonce =")
+        .expect("batch nonce parse");
+    let chain_parse = CMD_SIGN_USEROP_BATCH_SRC
+        .find("let chain_id = u64::from_be_bytes([")
+        .expect("batch chain-id parse");
+    let flags_parse = CMD_SIGN_USEROP_BATCH_SRC
+        .find("let flags_a = u32::from_be_bytes(")
+        .expect("batch flags parse");
+    let sender_parse = CMD_SIGN_USEROP_BATCH_SRC
+        .find("let mut companion_sender =")
+        .expect("batch sender parse");
+    let wire_version_parse = CMD_SIGN_USEROP_BATCH_SRC
+        .find("let wire_version = snap[276];")
+        .expect("batch wire-version parse");
+    assert!(snapshot_copy_end <= pin_a, "pin must follow snapshot copy");
+    assert!(
+        pin_a < gate_a
+            && gate_a < gate_a_end
+            && gate_a_end < gap
+            && gap < pin_b
+            && pin_b < gate_b
+            && gate_b < gate_b_end
+    );
+    assert!(
+        gate_b_end < parse_header,
+        "both EntryPoint gates must finish before the batch parse boundary"
+    );
+    for (label, parse) in [
+        ("chain id", chain_parse),
+        ("flags", flags_parse),
+        ("sender", sender_parse),
+        ("nonce", nonce_parse),
+        ("wire version", wire_version_parse),
+    ] {
+        assert!(
+            gate_b_end < parse,
+            "EntryPoint must fail before batch {label} request handling"
+        );
+    }
+    let pin_window = &CMD_SIGN_USEROP_BATCH_SRC[snapshot_copy_end..gate_b_end];
+    assert!(
+        !pin_window.contains("snap["),
+        "no indexed batch field may be consumed before both EntryPoint rejects complete"
+    );
+    assert_eq!(
+        pin_window.matches("snap.as_ptr().add(32)").count(),
+        2,
+        "the batch pre-parse window may read only the two EntryPoint samples"
+    );
+    for forbidden_parse in ["u64::from_be_bytes", "u32::from_be_bytes", "copy_from_slice"] {
+        assert!(!pin_window.contains(forbidden_parse));
+    }
+    let pre_scrub = CMD_SIGN_USEROP_BATCH_SRC[pin_a..gate_a]
+        .rfind("crate::fi::scrub_sentinel_register();")
+        .map(|p| pin_a + p)
+        .expect("scrub before first batch EntryPoint sentinel check");
+    assert!(pre_scrub < gate_a);
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches(".ct_eq(&ENTRY_POINT_V06)")
+            .count(),
+        2
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("read_volatile(snap.as_ptr().add(32).cast::<[u8; 20]>())")
+            .count(),
+        2
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("wrong EntryPoint")
+            .count(),
+        2
+    );
+    assert!(!CMD_SIGN_USEROP_BATCH_SRC.contains("let mut entry_point ="));
+    assert!(!CMD_SIGN_USEROP_BATCH_SRC.contains("entry_point.copy_from_slice"));
+
+    let params = CMD_SIGN_USEROP_BATCH_SRC
+        .matches("AaUserOpParamsV06Sha256 {")
+        .count();
+    assert_eq!(
+        params, 2,
+        "batch handler owns one T1 and one T2 params site"
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("entry_point: ENTRY_POINT_V06,")
+            .count(),
+        params,
+        "every batch T1/T2 digest must consume the firmware constant directly"
+    );
+}
+
+#[test]
+fn negative_batch_safe_exec_claim_is_fatal_before_other_routing() {
+    // The CoW trailer pass must not reinterpret malformed Safe-shaped bytes as
+    // a direct CoW call, and the per-member display pass must refuse before
+    // ERC-20/ERC-7730/selector/typed/blind routing. Each pass owns a fresh
+    // selector receipt, two strict verifier executions, and two final
+    // resolution gates; neither may restore a minimum-length conjunct.
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("prove_exec_transaction_claim(")
+            .count(),
+        2,
+        "both batch Safe classification sites need caller-owned proofs"
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("verify_and_bind_exec_into(")
+            .count(),
+        4,
+        "each batch pass uses two caller-owned strict verifier outputs"
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("exec_claim_resolution_proof(")
+            .count(),
+        4,
+        "each batch pass has two spatially separate resolution gates"
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("EXEC_CLAIM_CFI_EXPECTED")
+            .count(),
+        4
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("EXEC_VERIFY_CFI_EXPECTED")
+            .count(),
+        8,
+        "four verifier calls are each CFI-checked at two final gates"
+    );
+    assert!(!CMD_SIGN_USEROP_BATCH_SRC.contains("EXEC_TRANSACTION_MIN_CALLDATA_LEN"));
+    assert!(!CMD_SIGN_USEROP_BATCH_SRC.contains("safe_exec_enough_len"));
+
+    let cow_pass = CMD_SIGN_USEROP_BATCH_SRC
+        .find("Pass 2: verify the deferred COW_ORDER")
+        .expect("deferred CoW pass");
+    let cow_claim = CMD_SIGN_USEROP_BATCH_SRC[cow_pass..]
+        .find("let mut safe_exec_claim =")
+        .map(|p| cow_pass + p)
+        .expect("CoW-pass Safe claim receipt");
+    let cow_verify = CMD_SIGN_USEROP_BATCH_SRC[cow_claim..]
+        .find("let mut safe_exec_ctx:")
+        .map(|p| cow_claim + p)
+        .expect("CoW-pass first Safe verify");
+    let cow_verify_check = CMD_SIGN_USEROP_BATCH_SRC[cow_verify..]
+        .find("let mut safe_exec_ctx_check:")
+        .map(|p| cow_verify + p)
+        .expect("CoW-pass second Safe verify");
+    let cow_resolution = CMD_SIGN_USEROP_BATCH_SRC[cow_verify_check..]
+        .find("exec_claim_resolution_proof(")
+        .map(|p| cow_verify_check + p)
+        .expect("CoW-pass resolution gate");
+    let cow_route = CMD_SIGN_USEROP_BATCH_SRC[cow_resolution..]
+        .find("let cow_bind =")
+        .map(|p| cow_resolution + p)
+        .expect("CoW route");
+    assert!(
+        cow_claim < cow_verify
+            && cow_verify < cow_verify_check
+            && cow_verify_check < cow_resolution
+            && cow_resolution < cow_route
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC[cow_pass..cow_route]
+            .matches("exec_claim_resolution_proof(")
+            .count(),
+        2,
+        "both CoW-pass Safe resolution gates must precede CoW routing"
+    );
+
+    let member_pass = CMD_SIGN_USEROP_BATCH_SRC
+        .find("Routed-trailer pass-through")
+        .expect("per-member routed pass");
+    let member_claim = CMD_SIGN_USEROP_BATCH_SRC[member_pass..]
+        .find("let mut safe_exec_claim =")
+        .map(|p| member_pass + p)
+        .expect("member Safe claim receipt");
+    let member_verify = CMD_SIGN_USEROP_BATCH_SRC[member_claim..]
+        .find("let mut safe_exec_verified:")
+        .map(|p| member_claim + p)
+        .expect("member first Safe verify");
+    let member_verify_check = CMD_SIGN_USEROP_BATCH_SRC[member_verify..]
+        .find("let mut safe_exec_verified_check:")
+        .map(|p| member_verify + p)
+        .expect("member second Safe verify");
+    let member_resolution = CMD_SIGN_USEROP_BATCH_SRC[member_verify_check..]
+        .find("exec_claim_resolution_proof(")
+        .map(|p| member_verify_check + p)
+        .expect("member resolution gate");
+    let lower_route = CMD_SIGN_USEROP_BATCH_SRC[member_resolution..]
+        .find("let chain_verified_erc20 =")
+        .map(|p| member_resolution + p)
+        .expect("member lower routing");
+    assert!(
+        member_claim < member_verify
+            && member_verify < member_verify_check
+            && member_verify_check < member_resolution
+            && member_resolution < lower_route
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC[member_pass..lower_route]
+            .matches("exec_claim_resolution_proof(")
+            .count(),
+        2,
+        "both member Safe resolution gates must precede lower routing"
+    );
+}
+
+#[test]
+fn batch_payload_fingerprints_complete_and_recheck_before_both_confirms() {
+    assert_eq!(CMD_SIGN_USEROP_BATCH_SRC.matches("append_fingerprint_page(").count(), 2);
+    assert_eq!(CMD_SIGN_USEROP_BATCH_SRC.matches("fingerprint_page_proof(").count(), 2);
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("fingerprint_final_set_proof(")
+            .count(),
+        2
+    );
+    assert_eq!(
+        CMD_SIGN_USEROP_BATCH_SRC
+            .matches("FINGERPRINT_CFI_EXPECTED")
+            .count(),
+        2
+    );
+
+    let member_start = CMD_SIGN_USEROP_BATCH_SRC
+        .find("// Per-tx ERC-8213 fingerprint")
+        .expect("batch-member fingerprint block");
+    let member_append = member_start
+        + CMD_SIGN_USEROP_BATCH_SRC[member_start..]
+            .find("append_fingerprint_page(")
+            .expect("batch-member append");
+    let member_completion = member_append
+        + CMD_SIGN_USEROP_BATCH_SRC[member_append..]
+            .find("fingerprint_page_proof(")
+            .expect("batch-member completion proof");
+    let member_final = member_completion
+        + CMD_SIGN_USEROP_BATCH_SRC[member_completion..]
+            .find("fingerprint_final_set_proof(")
+            .expect("batch-member final proof");
+    let member_confirm = member_final
+        + CMD_SIGN_USEROP_BATCH_SRC[member_final..]
+            .find("confirm_checked(pages.as_slice())")
+            .expect("batch-member confirm");
+    assert!(member_append < member_completion && member_completion < member_final);
+    assert!(member_final < member_confirm);
+
+    let final_start = CMD_SIGN_USEROP_BATCH_SRC
+        .find("// Fail closed if the batch-final fingerprint")
+        .expect("batch-final fingerprint block");
+    let final_append = final_start
+        + CMD_SIGN_USEROP_BATCH_SRC[final_start..]
+            .find("append_fingerprint_page(")
+            .expect("batch-final append");
+    let final_completion = final_append
+        + CMD_SIGN_USEROP_BATCH_SRC[final_append..]
+            .find("fingerprint_page_proof(")
+            .expect("batch-final completion proof");
+    let final_boundary = final_completion
+        + CMD_SIGN_USEROP_BATCH_SRC[final_completion..]
+            .find("fingerprint_final_set_proof(")
+            .expect("batch-final final proof");
+    let final_confirm = final_boundary
+        + CMD_SIGN_USEROP_BATCH_SRC[final_boundary..]
+            .find("confirm_checked(final_pages.as_slice())")
+            .expect("batch-final confirm");
+    assert!(final_append < final_completion && final_completion < final_boundary);
+    assert!(final_boundary < final_confirm);
+
+    let rotation = CMD_SIGN_USEROP_BATCH_SRC
+        .find("// Slot rotation is its own affirmative-consent step ahead")
+        .expect("batch rotation confirmation block");
+    let member_loop = rotation
+        + CMD_SIGN_USEROP_BATCH_SRC[rotation..]
+        .find("for i in 0..batch_count")
+        .expect("batch member loop");
+    assert!(
+        !CMD_SIGN_USEROP_BATCH_SRC[rotation..member_loop]
+            .contains("append_fingerprint_page("),
+        "firmware-built batch rotation must retain the explicit exemption"
+    );
 }
 
 // ── 8j. NS observability — handlers must not log payload bytes

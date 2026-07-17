@@ -10,7 +10,7 @@
 > packed payloads, and `sqrtPriceLimitX96`), and registry-declared calls that do
 > not compile are retained in the pinned omission filter and **hard-refuse** if
 > their proof is absent; they do not downgrade to blind-sign. The current
-> generated runtime catalogue has 420 leaves and 4,542 registry-declared contract-call
+> generated runtime catalogue has 428 leaves and 4,542 registry-declared contract-call
 > tuples. See [the current implementation review](./erc7730-implementation-review-2026-07.md)
 > and [the 2026-07-10 findings](./security/adversarial-review/findings/clear-signing-2026-07-10.md).
 
@@ -91,9 +91,11 @@ V4/5/6 are HARD-slice.
 4. **Attestation is the orthogonal, arguably bigger, security lever:** we render in dev-mode
    (`allow_unattested`), trusting registry *content* without cryptographically enforcing ERC-8176
    attestations. Flipping that gate is "trusted-and-attested," independent of render coverage.
-   **Status (2026-07):** the flip is blocked on the attestation *ecosystem* (near-zero real EAS
-   attestations), not on our code — our ERC-8176 `descriptorHash` binding + an EAS-coverage tripwire
-   (`make erc8176-coverage`) are landed and cross-validated. See
+   **Status (2026-07):** the hash binding and advisory EAS-coverage tripwire
+   (`make erc8176-coverage`) are landed and cross-validated, but the flip is
+   blocked on both the attestation *ecosystem* (near-zero real EAS
+   attestations) and our missing authenticated offline snapshot verifier plus
+   production ingestion path. See
    [`erc8176-attestation-status.md`](./erc8176-attestation-status.md).
 
 **Caveats:** these tiers are a static path-shape read; a C0 function can still be blocked at render

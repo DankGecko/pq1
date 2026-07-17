@@ -15,11 +15,10 @@
 //! aggregate the envelope shows) on one page, and the handler independently
 //! FI-proves that page materialized. Unlike the nonce lane there is no
 //! compact/skip fast path: the page is ALWAYS inserted and ALWAYS proved, so a
-//! skipped inserter or proof call fails closed. Only the ERC-7730 renderer
-//! already showed the components inline; on that path this gate double-shows,
-//! which is redundant-but-safe (matching the nonce-lane precedent). Every other
-//! UserOp dispatch branch (value transfer, ERC-20, Safe v1/exec, CoW, blind,
-//! typed-call) relied on this handler-level gate for gas injectivity.
+//! skipped inserter or proof call fails closed. The handler is the only
+//! producer, including for ERC-7730. Every UserOp dispatch branch (value
+//! transfer, ERC-20, Safe v1/exec, CoW, ERC-7730, blind, typed-call) relies on
+//! this handler-level gate for gas injectivity.
 
 use super::Pages;
 use crate::tx::eip1559::U256;
@@ -32,26 +31,54 @@ pub(crate) const USEROP_GAS_PAGES: usize = 1;
 
 type GasLanePage = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 
-/// Insert the exact call / verification / pre-verification gas page, after the
-/// signer, target, and (conditional) nonce-lane pages.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GasScan {
+    exact: usize,
+    near_shaped: usize,
+}
+
+impl GasScan {
+    const EMPTY: Self = Self {
+        exact: 0,
+        near_shaped: 0,
+    };
+}
+
+const USEROP_GAS_CFI_STEP: u32 = 0x94C2_6B3D;
+pub(crate) const USEROP_GAS_CFI_EXPECTED: u32 =
+    crate::cfi_expected!(USEROP_GAS_CFI_STEP);
+
+/// Append the exact call / verification / pre-verification gas page after all
+/// already-rendered semantic pages and before the handler-owned fingerprint.
 ///
-/// Returns `Err(())` if the page buffer is full OR any gas value is too wide to
-/// render faithfully in `DISPLAY_COLS`; every caller maps that to refusal (fail
-/// closed — the finding's "render the exact three gas values … or refuse"
-/// contract). The insertion index (`min(4, pages.len)`) sits at or after the
-/// nonce lane's `min(3, …)`, so it never shifts an already-proven signer,
-/// target, or nonce-lane page.
+/// Returns `Err(())` if the page buffer is full, any gas value is too wide to
+/// render faithfully in `DISPLAY_COLS`, or the pre-insertion set already
+/// contains an exact/near-shaped gas page. Every caller maps that to refusal
+/// (fail closed — the finding's "render the exact three gas values … or refuse"
+/// contract). The forward/reverse pre-scan is deliberately repeated by the
+/// independently called completion proof after insertion. Appending at the
+/// prior length is load-bearing: unlike an in-place splice, it cannot drop or
+/// corrupt an already-rendered semantic page if a shift loop is faulted. The
+/// caller-owned CFI counter is bumped only after the page and length have been
+/// published, so a skipped whole call remains observable at confirmation.
 #[inline(never)]
 pub(crate) fn enforce_userop_gas_page(
     pages: &mut Pages,
     call_gas: &[u8; 32],
     verification_gas: &[u8; 32],
     pre_verification_gas: &[u8; 32],
+    cfi: &mut crate::fi::CfiCounter,
 ) -> Result<(), ()> {
     let page = build_gas_lane_page(call_gas, verification_gas, pre_verification_gas).ok_or(())?;
-    let at = core::cmp::min(4, pages.len);
-    let idx = super::value_page::insert_blank(pages, at)?;
+    let forward = scan_gas_pages_forward(pages, &page);
+    let reverse = scan_gas_pages_reverse(pages, &page);
+    if forward != GasScan::EMPTY || reverse != GasScan::EMPTY || forward != reverse {
+        return Err(());
+    }
+    let idx = pages.push_blank()?;
     pages.buf[idx] = page;
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    cfi.bump(USEROP_GAS_CFI_STEP);
     Ok(())
 }
 
@@ -70,6 +97,10 @@ pub(crate) fn userop_gas_page_matches(
     let Some(actual) = pages.as_slice().get(page_index) else {
         return false;
     };
+    gas_page_exact(actual, &expected)
+}
+
+fn gas_page_exact(actual: &GasLanePage, expected: &GasLanePage) -> bool {
     let mut diff = 0u8;
     for row in 0..DISPLAY_ROWS {
         for col in 0..DISPLAY_COLS {
@@ -79,13 +110,60 @@ pub(crate) fn userop_gas_page_matches(
     diff == 0
 }
 
+fn row_starts_with(row: &[u8; DISPLAY_COLS], prefix: &[u8]) -> bool {
+    prefix.len() <= DISPLAY_COLS && row[..prefix.len()] == *prefix
+}
+
+/// A non-canonical page is "near-shaped" when at least two of the four gas
+/// lane labels remain in their canonical rows. This catches a conflicting gas
+/// split or a single-fault-corrupted canonical page without treating a generic
+/// semantic page containing only a `Total:` row as a second gas lane.
+fn gas_page_near_shaped(page: &GasLanePage) -> bool {
+    let markers = usize::from(row_starts_with(&page[0], b"Call:"))
+        + usize::from(row_starts_with(&page[1], b"Verify:"))
+        + usize::from(row_starts_with(&page[2], b"PreVer:"))
+        + usize::from(row_starts_with(&page[3], b"Total:"));
+    markers >= 2
+}
+
+fn classify_gas_page(page: &GasLanePage, expected: &GasLanePage, scan: &mut GasScan) {
+    if gas_page_exact(page, expected) {
+        scan.exact += 1;
+    } else if gas_page_near_shaped(page) {
+        scan.near_shaped += 1;
+    }
+}
+
+/// First half of the A/B global scan. Kept non-inlined so the forward and
+/// reverse traversals remain distinct operations in optimized firmware.
+#[inline(never)]
+fn scan_gas_pages_forward(pages: &Pages, expected: &GasLanePage) -> GasScan {
+    let mut scan = GasScan::EMPTY;
+    for page in pages.as_slice() {
+        classify_gas_page(page, expected, &mut scan);
+    }
+    scan
+}
+
+/// Second half of the A/B global scan, walking the visible set in reverse.
+#[inline(never)]
+fn scan_gas_pages_reverse(pages: &Pages, expected: &GasLanePage) -> GasScan {
+    let mut scan = GasScan::EMPTY;
+    for page in pages.as_slice().iter().rev() {
+        classify_gas_page(page, expected, &mut scan);
+    }
+    scan
+}
+
 /// FI-hardened completion proof for [`enforce_userop_gas_page`].
 ///
 /// The caller records `prior_len`, calls the non-inlined inserter, scrubs the
 /// ABI return register, and accepts only [`crate::fi::OK_SENTINEL`] here. The
-/// predicate requires exactly one new page at the deterministic insertion index
-/// whose four rows match the three signed gas words (and their total). A
-/// skipped inserter or proof call fails closed.
+/// predicate requires exactly one new page, the canonical page at the
+/// append-only prior-length index, exactly one canonical match across the full
+/// visible set, and no near-shaped conflict. The expected bytes and both global
+/// scans are recomputed independently of the inserter. A skipped inserter,
+/// duplicate/conflicting producer, length error, or proof call fails closed.
 #[inline(never)]
 pub(crate) fn userop_gas_page_proof(
     pages: &Pages,
@@ -95,16 +173,67 @@ pub(crate) fn userop_gas_page_proof(
     pre_verification_gas: &[u8; 32],
 ) -> u32 {
     crate::fi::check_true_into_sentinel(|| {
+        let Some(expected) =
+            build_gas_lane_page(call_gas, verification_gas, pre_verification_gas)
+        else {
+            return false;
+        };
+        let forward = scan_gas_pages_forward(pages, &expected);
+        let reverse = scan_gas_pages_reverse(pages, &expected);
         prior_len.checked_add(USEROP_GAS_PAGES).is_some_and(|expected_len| {
             core::hint::black_box(pages.len == expected_len)
-                && userop_gas_page_matches(
-                    pages,
-                    core::cmp::min(4, prior_len),
-                    call_gas,
-                    verification_gas,
-                    pre_verification_gas,
+                && core::hint::black_box(forward == reverse)
+                && core::hint::black_box(
+                    forward
+                        == GasScan {
+                            exact: 1,
+                            near_shaped: 0,
+                        },
                 )
+                && pages
+                    .as_slice()
+                    .get(prior_len)
+                    .is_some_and(|actual| gas_page_exact(actual, &expected))
         })
+    })
+}
+
+/// Final-confirmation boundary proof for the complete page set.
+///
+/// Callers append all later mandatory pages (currently the complete ERC-8213
+/// fingerprint) and then invoke this immediately before `confirm_checked`.
+/// Unlike [`userop_gas_page_proof`], this does not require `prior_len + 1`
+/// because later append-only gates legitimately grow the set. It independently
+/// rebuilds the canonical page and A/B scans every final visible page, accepting
+/// exactly one canonical match and no near-shaped conflict.
+#[inline(never)]
+pub(crate) fn userop_gas_final_set_proof(
+    pages: &Pages,
+    expected_index: usize,
+    call_gas: &[u8; 32],
+    verification_gas: &[u8; 32],
+    pre_verification_gas: &[u8; 32],
+) -> u32 {
+    crate::fi::check_true_into_sentinel(|| {
+        let Some(expected) =
+            build_gas_lane_page(call_gas, verification_gas, pre_verification_gas)
+        else {
+            return false;
+        };
+        let forward = scan_gas_pages_forward(pages, &expected);
+        let reverse = scan_gas_pages_reverse(pages, &expected);
+        core::hint::black_box(forward == reverse)
+            && core::hint::black_box(
+                forward
+                    == GasScan {
+                        exact: 1,
+                        near_shaped: 0,
+                    },
+            )
+            && pages
+                .as_slice()
+                .get(expected_index)
+                .is_some_and(|actual| gas_page_exact(actual, &expected))
     })
 }
 
@@ -147,8 +276,8 @@ fn build_gas_lane_page(
 /// Render `prefix` followed by the decimal of `value` into one row, space-padded.
 ///
 /// `None` if `prefix.len() + digits` does not fit `DISPLAY_COLS` (a gas value too
-/// large to show faithfully → the caller refuses). Mirrors the ERC-7730
-/// renderer's `write_u256_decimal_with_prefix`.
+/// large to show faithfully → the caller refuses). This is the sole canonical
+/// gas-triple row writer; semantic renderers must leave this lane to the handler.
 fn write_gas_row(row: &mut [u8; DISPLAY_COLS], prefix: &[u8], value: &U256) -> Option<()> {
     *row = [b' '; DISPLAY_COLS];
     let mut digits = [0u8; 80];
@@ -171,11 +300,27 @@ mod tests {
         v
     }
 
+    fn enforce_with_cfi(
+        pages: &mut Pages,
+        call: &[u8; 32],
+        verification: &[u8; 32],
+        pre_verification: &[u8; 32],
+    ) -> Result<crate::fi::CfiCounter, ()> {
+        let mut cfi = crate::fi::CfiCounter::new();
+        enforce_userop_gas_page(pages, call, verification, pre_verification, &mut cfi)?;
+        assert_eq!(
+            cfi.check_into_sentinel(USEROP_GAS_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL,
+            "successful append must complete the caller-owned CFI receipt"
+        );
+        Ok(cfi)
+    }
+
     #[test]
     fn gas_page_inserted_and_proved() {
         let (c, v, p) = (gas(100_000), gas(200_000), gas(21_000));
         let mut pages = Pages::with_len(4);
-        assert!(enforce_userop_gas_page(&mut pages, &c, &v, &p).is_ok());
+        assert!(enforce_with_cfi(&mut pages, &c, &v, &p).is_ok());
         assert_eq!(pages.len, 5);
         assert_eq!(&pages.buf[4][0], b"Call:100000     ");
         assert_eq!(&pages.buf[4][1], b"Verify:200000   ");
@@ -198,7 +343,7 @@ mod tests {
         assert_ne!(a, b, "permuting the gas split must change the page");
 
         let mut pages = Pages::with_len(4);
-        enforce_userop_gas_page(&mut pages, &gas(100_000), &gas(200_000), &gas(21_000)).unwrap();
+        enforce_with_cfi(&mut pages, &gas(100_000), &gas(200_000), &gas(21_000)).unwrap();
         assert!(userop_gas_page_matches(
             &pages, 4, &gas(100_000), &gas(200_000), &gas(21_000)
         ));
@@ -211,7 +356,7 @@ mod tests {
     fn every_component_is_bound() {
         let (c, v, p) = (gas(111), gas(222), gas(333));
         let mut pages = Pages::with_len(1);
-        enforce_userop_gas_page(&mut pages, &c, &v, &p).unwrap();
+        enforce_with_cfi(&mut pages, &c, &v, &p).unwrap();
         assert!(userop_gas_page_matches(&pages, 1, &c, &v, &p));
         assert!(!userop_gas_page_matches(&pages, 1, &gas(112), &v, &p));
         assert!(!userop_gas_page_matches(&pages, 1, &c, &gas(223), &p));
@@ -226,7 +371,7 @@ mod tests {
             userop_gas_page_proof(&pages, 2, &c, &v, &p),
             crate::fi::OK_SENTINEL
         );
-        enforce_userop_gas_page(&mut pages, &c, &v, &p).unwrap();
+        enforce_with_cfi(&mut pages, &c, &v, &p).unwrap();
         assert_eq!(
             userop_gas_page_proof(&pages, 2, &c, &v, &p),
             crate::fi::OK_SENTINEL
@@ -239,18 +384,181 @@ mod tests {
     }
 
     #[test]
+    fn append_only_preserves_every_existing_semantic_page_and_cfi() {
+        let (c, v, p) = (gas(10), gas(20), gas(30));
+        let mut pages = Pages::with_len(6);
+        for index in 0..pages.len {
+            pages.buf[index] = [[b'A' + index as u8; DISPLAY_COLS]; DISPLAY_ROWS];
+        }
+        let before = pages.buf;
+
+        let cfi = enforce_with_cfi(&mut pages, &c, &v, &p).unwrap();
+        assert_eq!(pages.len, 7);
+        assert_eq!(
+            &pages.buf[..6],
+            &before[..6],
+            "append-only gas ownership must never shift or rewrite semantic pages"
+        );
+        assert_eq!(
+            userop_gas_page_proof(&pages, 6, &c, &v, &p),
+            crate::fi::OK_SENTINEL
+        );
+        assert_eq!(
+            cfi.check_into_sentinel(USEROP_GAS_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL
+        );
+        assert_eq!(
+            userop_gas_final_set_proof(&pages, 6, &c, &v, &p),
+            crate::fi::OK_SENTINEL
+        );
+        assert_ne!(
+            userop_gas_final_set_proof(&pages, 4, &c, &v, &p),
+            crate::fi::OK_SENTINEL,
+            "the final boundary must retain the append-only position"
+        );
+
+        let skipped_call_cfi = crate::fi::CfiCounter::new();
+        assert_ne!(
+            skipped_call_cfi.check_into_sentinel(USEROP_GAS_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL,
+            "a skipped whole append call must leave caller-owned CFI short"
+        );
+    }
+
+    #[test]
+    fn inserter_rejects_preexisting_exact_page() {
+        let (c, v, p) = (gas(1), gas(2), gas(3));
+        let mut pages = Pages::with_len(1);
+        pages.buf[0] = build_gas_lane_page(&c, &v, &p).unwrap();
+        let mut cfi = crate::fi::CfiCounter::new();
+        assert!(enforce_userop_gas_page(&mut pages, &c, &v, &p, &mut cfi).is_err());
+        assert_ne!(
+            cfi.check_into_sentinel(USEROP_GAS_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL
+        );
+        assert_eq!(pages.len, 1, "pre-existing exact page must remain unchanged");
+    }
+
+    #[test]
+    fn inserter_rejects_preexisting_near_shaped_page() {
+        let (c, v, p) = (gas(10), gas(20), gas(30));
+        let mut conflict = build_gas_lane_page(&c, &v, &p).unwrap();
+        conflict[1][7] = b'9'; // `Verify:20` -> a conflicting `Verify:90`.
+        assert!(gas_page_near_shaped(&conflict));
+        assert!(!gas_page_exact(
+            &conflict,
+            &build_gas_lane_page(&c, &v, &p).unwrap()
+        ));
+
+        let mut pages = Pages::with_len(2);
+        pages.buf[1] = conflict;
+        let mut cfi = crate::fi::CfiCounter::new();
+        assert!(enforce_userop_gas_page(&mut pages, &c, &v, &p, &mut cfi).is_err());
+        assert_ne!(
+            cfi.check_into_sentinel(USEROP_GAS_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL
+        );
+        assert_eq!(pages.len, 2, "near-shaped conflict must not be spliced around");
+    }
+
+    #[test]
+    fn global_proof_rejects_duplicate_exact_page() {
+        let (c, v, p) = (gas(7), gas(8), gas(9));
+        let canonical = build_gas_lane_page(&c, &v, &p).unwrap();
+        let mut pages = Pages::with_len(3);
+        pages.buf[0] = canonical;
+        pages.buf[2] = canonical;
+        assert_ne!(
+            userop_gas_page_proof(&pages, 2, &c, &v, &p),
+            crate::fi::OK_SENTINEL,
+            "a correct expected slot must not hide a second global copy"
+        );
+    }
+
+    #[test]
+    fn global_proof_rejects_near_shaped_conflict() {
+        let (c, v, p) = (gas(7), gas(8), gas(9));
+        let canonical = build_gas_lane_page(&c, &v, &p).unwrap();
+        let mut conflict = canonical;
+        conflict[3][6] = b'0'; // Wrong total, intact canonical shape.
+        let mut pages = Pages::with_len(3);
+        pages.buf[0] = conflict;
+        pages.buf[2] = canonical;
+        assert_ne!(
+            userop_gas_page_proof(&pages, 2, &c, &v, &p),
+            crate::fi::OK_SENTINEL,
+            "a correct page must not coexist with a conflicting gas-shaped page"
+        );
+    }
+
+    #[test]
+    fn final_set_proof_accepts_later_unrelated_pages() {
+        let (c, v, p) = (gas(7), gas(8), gas(9));
+        let mut pages = Pages::with_len(2);
+        let cfi = enforce_with_cfi(&mut pages, &c, &v, &p).unwrap();
+        pages.push_blank().unwrap();
+        pages.push_blank().unwrap();
+        assert_eq!(
+            cfi.check_into_sentinel(USEROP_GAS_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL
+        );
+        assert_eq!(
+            userop_gas_final_set_proof(&pages, 2, &c, &v, &p),
+            crate::fi::OK_SENTINEL,
+            "later fingerprint pages must preserve the unique gas proof"
+        );
+    }
+
+    #[test]
+    fn final_set_proof_rejects_late_duplicate_or_conflict() {
+        let (c, v, p) = (gas(7), gas(8), gas(9));
+        let canonical = build_gas_lane_page(&c, &v, &p).unwrap();
+        let mut pages = Pages::with_len(1);
+        enforce_with_cfi(&mut pages, &c, &v, &p).unwrap();
+
+        let duplicate = pages.push_blank().unwrap();
+        pages.buf[duplicate] = canonical;
+        assert_ne!(
+            userop_gas_final_set_proof(&pages, 1, &c, &v, &p),
+            crate::fi::OK_SENTINEL
+        );
+
+        pages.buf[duplicate] = canonical;
+        pages.buf[duplicate][0][5] = b'6';
+        assert_ne!(
+            userop_gas_final_set_proof(&pages, 1, &c, &v, &p),
+            crate::fi::OK_SENTINEL
+        );
+    }
+
+    #[test]
+    fn single_marker_is_not_a_near_shaped_gas_page() {
+        let mut semantic_total = [[b' '; DISPLAY_COLS]; DISPLAY_ROWS];
+        semantic_total[3][..6].copy_from_slice(b"Total:");
+        assert!(!gas_page_near_shaped(&semantic_total));
+    }
+
+    #[test]
     fn oversized_gas_value_fails_closed() {
         // ~78-digit value cannot be shown faithfully in DISPLAY_COLS.
         let huge = [0xFFu8; 32];
         let mut pages = Pages::with_len(1);
-        assert!(enforce_userop_gas_page(&mut pages, &huge, &gas(1), &gas(1)).is_err());
+        let mut cfi = crate::fi::CfiCounter::new();
+        assert!(
+            enforce_userop_gas_page(&mut pages, &huge, &gas(1), &gas(1), &mut cfi)
+                .is_err()
+        );
         assert_eq!(pages.len, 1, "no page inserted on refuse");
     }
 
     #[test]
     fn fails_closed_when_buffer_full() {
         let mut full = Pages::with_len(super::super::MAX_PAGES);
-        assert!(enforce_userop_gas_page(&mut full, &gas(1), &gas(2), &gas(3)).is_err());
+        let mut cfi = crate::fi::CfiCounter::new();
+        assert!(
+            enforce_userop_gas_page(&mut full, &gas(1), &gas(2), &gas(3), &mut cfi)
+                .is_err()
+        );
         assert_eq!(full.len, super::super::MAX_PAGES);
     }
 }

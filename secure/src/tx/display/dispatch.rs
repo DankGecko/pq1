@@ -15,6 +15,102 @@
 //! No logic change — the function bodies are byte-identical to the
 //! pre-extraction `mod.rs` versions apart from the path qualification.
 
+const UNSET_PAGE_INDEX: usize = usize::MAX;
+
+/// Caller-owned receipts for dispatcher-appended native-value and legacy-fee
+/// pages. The secure handler keeps this object alive until the final confirm
+/// boundary, so skipping the dispatcher enforcer, its immediate proof, or the
+/// later complete-set recheck leaves an independently observable failure.
+pub(crate) struct DispatchPageProofs {
+    native_prior_len: usize,
+    legacy_fee_prior_len: usize,
+    native_cfi: crate::fi::CfiCounter,
+    legacy_fee_cfi: crate::fi::CfiCounter,
+}
+
+impl DispatchPageProofs {
+    pub(crate) const fn new() -> Self {
+        Self {
+            native_prior_len: UNSET_PAGE_INDEX,
+            legacy_fee_prior_len: UNSET_PAGE_INDEX,
+            native_cfi: crate::fi::CfiCounter::new(),
+            legacy_fee_cfi: crate::fi::CfiCounter::new(),
+        }
+    }
+
+    fn is_pristine(&self) -> bool {
+        self.native_prior_len == UNSET_PAGE_INDEX
+            && self.legacy_fee_prior_len == UNSET_PAGE_INDEX
+    }
+
+    /// Account for a caller-owned prefix wrapper (the batch banner) that is
+    /// constructed after dispatch. A skipped or wrong shift makes the final
+    /// exact-index proof fail closed.
+    pub(crate) fn shift_indices(&mut self, by: usize) -> Result<(), ()> {
+        self.native_prior_len = self.native_prior_len.checked_add(by).ok_or(())?;
+        if self.legacy_fee_prior_len != UNSET_PAGE_INDEX {
+            self.legacy_fee_prior_len =
+                self.legacy_fee_prior_len.checked_add(by).ok_or(())?;
+        }
+        Ok(())
+    }
+
+    /// Final-boundary CFI/content/uniqueness recheck after every later append.
+    #[inline(never)]
+    pub(crate) fn final_set_proof(
+        &self,
+        pages: &super::Pages,
+        tx: &crate::tx::eip1559::Eip1559Tx,
+        legacy_fee_required: bool,
+    ) -> u32 {
+        let native_cfi = self
+            .native_cfi
+            .check_into_sentinel(super::value_page::NATIVE_VALUE_CFI_EXPECTED);
+        crate::fi::scrub_sentinel_register();
+        let native_pages = super::value_page::native_value_final_set_proof(
+            pages,
+            self.native_prior_len,
+            &tx.value,
+            tx.chain_id,
+        );
+        crate::fi::scrub_sentinel_register();
+        let legacy_cfi = self.legacy_fee_cfi.check_into_sentinel(if legacy_fee_required {
+            super::value_page::LEGACY_FEE_CFI_EXPECTED
+        } else {
+            crate::fi::CfiCounter::INIT_VALUE
+        });
+        crate::fi::scrub_sentinel_register();
+        let legacy_pages = if legacy_fee_required {
+            super::value_page::legacy_fee_pages_final_set_proof(
+                pages,
+                self.legacy_fee_prior_len,
+                tx,
+            )
+        } else {
+            crate::fi::check_true_into_sentinel(|| {
+                core::hint::black_box(self.legacy_fee_prior_len == UNSET_PAGE_INDEX)
+            })
+        };
+        let all_ok = native_cfi == crate::fi::OK_SENTINEL
+            && native_pages == crate::fi::OK_SENTINEL
+            && legacy_cfi == crate::fi::OK_SENTINEL
+            && legacy_pages == crate::fi::OK_SENTINEL;
+        crate::fi::scrub_sentinel_register();
+        crate::fi::check_true_into_sentinel(|| core::hint::black_box(all_ok))
+    }
+}
+
+/// Safe/CoW renderers omit the legacy friendly fee envelope; all other
+/// renderer branches already produce it themselves.
+#[must_use]
+pub(crate) const fn legacy_fee_pages_required(
+    cow_present: bool,
+    safe_v1_present: bool,
+    safe_exec_present: bool,
+) -> bool {
+    cow_present || safe_v1_present || safe_exec_present
+}
+
 /// Pick the right renderer for a CMD_SIGN_USEROP trusted-UI confirm.
 ///
 /// Centralises the priority ladder — the handler stays a pure
@@ -63,6 +159,7 @@
 pub fn pick_sign_pages(
     tx: &crate::tx::eip1559::Eip1559Tx,
     inner_data: &[u8],
+    device_signer: &[u8; 20],
     v3: Option<&crate::tx::eip712::cowswap::VerifiedCowswapV3>,
     safe_v1: Option<&crate::tx::eip712::safe::VerifiedSafeV1<'_>>,
     safe_exec: Option<&crate::tx::eip712::safe::VerifiedSafeExec<'_>>,
@@ -70,13 +167,26 @@ pub fn pick_sign_pages(
     erc20: Option<&crate::erc20::bundle::Erc20Metadata<'_>>,
     selector: Option<&crate::selectors::SelectorMeta<'_>>,
     resolver: &crate::names::NameResolver<'_>,
+    proofs: &mut DispatchPageProofs,
 ) -> Result<super::Pages, ()> {
+    if !proofs.is_pristine() {
+        return Err(());
+    }
     // `pick_sign_pages_inner` returns `Err(())` when a Safe-surface render
     // refuses (page budget exceeded / page-accounting self-check failed);
     // propagate it so the handler maps it to a refuse-to-sign rather than
     // showing a buffer with a hidden signed value (audit 2026-06-27).
     let mut pages = pick_sign_pages_inner(
-        tx, inner_data, v3, safe_v1, safe_exec, erc7730, erc20, selector, resolver,
+        tx,
+        inner_data,
+        device_signer,
+        v3,
+        safe_v1,
+        safe_exec,
+        erc7730,
+        erc20,
+        selector,
+        resolver,
     )?;
     // Dispatcher-level WYSIWYS invariant (audit C-1 / H-2 / M-8; hardened
     // 2026-06-18).
@@ -98,7 +208,29 @@ pub fn pick_sign_pages(
     // signature over ETH the user never saw. The helper lives in
     // `value_page.rs` so the host-test scaffold can mount and exercise the
     // real body (this dispatcher is `cfg(not(test))`).
-    super::value_page::enforce_native_value_page(&mut pages, &tx.value, tx.chain_id)?;
+    proofs.native_prior_len = pages.len;
+    super::value_page::enforce_native_value_page(
+        &mut pages,
+        &tx.value,
+        tx.chain_id,
+        &mut proofs.native_cfi,
+    )?;
+    crate::fi::scrub_sentinel_register();
+    let native_cfi_verdict = proofs
+        .native_cfi
+        .check_into_sentinel(super::value_page::NATIVE_VALUE_CFI_EXPECTED);
+    crate::fi::scrub_sentinel_register();
+    let native_page_verdict = super::value_page::native_value_page_proof(
+        &pages,
+        proofs.native_prior_len,
+        &tx.value,
+        tx.chain_id,
+    );
+    if native_cfi_verdict != crate::fi::OK_SENTINEL
+        || native_page_verdict != crate::fi::OK_SENTINEL
+    {
+        return Err(());
+    }
 
     // Dispatcher-level WYSIWYS invariant (audit 2026-06-19 — gas/fee pages).
     //
@@ -119,10 +251,33 @@ pub fn pick_sign_pages(
     // outcome (erc7730 / value / erc20 / typed-call / blind-sign) already
     // shows gas, so splicing there would DOUBLE the pages. Fails CLOSED on a
     // full buffer (same refuse-to-sign contract as the value page).
-    let needs_gas =
-        v3.is_some() || safe_v1.is_some() || safe_exec.is_some();
+    let needs_gas = legacy_fee_pages_required(
+        v3.is_some(),
+        safe_v1.is_some(),
+        safe_exec.is_some(),
+    );
     if needs_gas {
-        super::value_page::enforce_gas_pages(&mut pages, tx)?;
+        proofs.legacy_fee_prior_len = pages.len;
+        super::value_page::enforce_gas_pages(
+            &mut pages,
+            tx,
+            &mut proofs.legacy_fee_cfi,
+        )?;
+        crate::fi::scrub_sentinel_register();
+        let legacy_fee_cfi_verdict = proofs
+            .legacy_fee_cfi
+            .check_into_sentinel(super::value_page::LEGACY_FEE_CFI_EXPECTED);
+        crate::fi::scrub_sentinel_register();
+        let legacy_fee_page_verdict = super::value_page::legacy_fee_pages_proof(
+            &pages,
+            proofs.legacy_fee_prior_len,
+            tx,
+        );
+        if legacy_fee_cfi_verdict != crate::fi::OK_SENTINEL
+            || legacy_fee_page_verdict != crate::fi::OK_SENTINEL
+        {
+            return Err(());
+        }
     }
     Ok(pages)
 }
@@ -131,6 +286,7 @@ pub fn pick_sign_pages(
 fn pick_sign_pages_inner(
     tx: &crate::tx::eip1559::Eip1559Tx,
     inner_data: &[u8],
+    device_signer: &[u8; 20],
     v3: Option<&crate::tx::eip712::cowswap::VerifiedCowswapV3>,
     safe_v1: Option<&crate::tx::eip712::safe::VerifiedSafeV1<'_>>,
     safe_exec: Option<&crate::tx::eip712::safe::VerifiedSafeExec<'_>>,
@@ -209,34 +365,16 @@ fn pick_sign_pages_inner(
         return super::safe_display::render_safe_exec_pages(exec, None, inner_meta, resolver);
     }
     if let Some(d) = erc7730 {
-        match super::erc7730::render_erc7730_pages(tx, inner_data, d, erc20, resolver) {
+        match super::erc7730::render_erc7730_pages_with_signer(
+            tx,
+            inner_data,
+            d,
+            erc20,
+            resolver,
+            device_signer,
+        ) {
             Ok(pages) => return Ok(pages),
-            Err(crate::tx::erc7730_render::RenderErr::Reject(msg)) => {
-                // `msg` is a developer trace tag (e.g. "7730 nested blob
-                // trailing") — not user-facing text, and several exceed the
-                // 16-col row. Keep the tag in the debug log and refuse: once a
-                // descriptor has verified and bound to this transaction, a
-                // renderer failure is an integrity failure, not permission to
-                // downgrade to a weaker typed/blind-sign interpretation.
-                // Bare invocation — `secure_log!` is a `macro_rules!` in
-                // main.rs without `#[macro_export]`, textually scoped: the
-                // `crate::secure_log!` path form fails E0433 under
-                // `debug-log` (only the cfg'd-out no-op arm is suggested).
-                secure_log!("erc7730 clear-sign refused: {}", msg);
-                let _ = msg;
-                crate::ui::show_status("Sign refused", "clear-sign failed");
-                return Err(());
-            }
-            Err(crate::tx::erc7730_render::RenderErr::NoFormat) => {
-                secure_log!("erc7730 clear-sign refused: no format");
-                crate::ui::show_status("Sign refused", "clear-sign format");
-                return Err(());
-            }
-            Err(crate::tx::erc7730_render::RenderErr::PageBudget) => {
-                secure_log!("erc7730 clear-sign refused: page budget");
-                crate::ui::show_status("Sign refused", "clear-sign pages");
-                return Err(());
-            }
+            Err(error) => return refuse_verified_erc7730(error),
         }
     }
     // A Merkle root authenticates a supplied descriptor but cannot, by itself,
@@ -328,12 +466,12 @@ fn pick_sign_pages_inner(
                     && selector[..selector_len] == inner_data[..selector_len]
             }
         };
-        let unknown_gate_a = crate::fi::check_true_into_sentinel(|| {
-            core::hint::black_box(unknown_verdict_a) == crate::fi::OK_SENTINEL
-                && core::hint::black_box(unknown_cfi_verdict_a)
-                    == crate::fi::OK_SENTINEL
-                && core::hint::black_box(route_a)
-        });
+        let unknown_all_ok_a = unknown_verdict_a == crate::fi::OK_SENTINEL
+            && unknown_cfi_verdict_a == crate::fi::OK_SENTINEL
+            && route_a;
+        crate::fi::scrub_sentinel_register();
+        let unknown_gate_a =
+            crate::fi::check_true_into_sentinel(|| core::hint::black_box(unknown_all_ok_a));
         crate::fi::scrub_sentinel_register();
         if unknown_gate_a != crate::fi::OK_SENTINEL {
             secure_log!(
@@ -364,12 +502,12 @@ fn pick_sign_pages_inner(
                     && selector[..selector_len] == inner_data[..selector_len]
             }
         };
-        let unknown_gate_b = crate::fi::check_true_into_sentinel(|| {
-            core::hint::black_box(unknown_verdict_b) == crate::fi::OK_SENTINEL
-                && core::hint::black_box(unknown_cfi_verdict_b)
-                    == crate::fi::OK_SENTINEL
-                && core::hint::black_box(route_b)
-        });
+        let unknown_all_ok_b = unknown_verdict_b == crate::fi::OK_SENTINEL
+            && unknown_cfi_verdict_b == crate::fi::OK_SENTINEL
+            && route_b;
+        crate::fi::scrub_sentinel_register();
+        let unknown_gate_b =
+            crate::fi::check_true_into_sentinel(|| core::hint::black_box(unknown_all_ok_b));
         crate::fi::scrub_sentinel_register();
         if unknown_gate_b != crate::fi::OK_SENTINEL {
             secure_log!(
@@ -423,6 +561,68 @@ fn pick_sign_pages_inner(
                 }
             }
             Ok(super::blind_sign::render_blind_sign_pages(tx, inner_data, selector, resolver))
+        }
+    }
+}
+
+/// Apply the one permitted policy to a render error from a descriptor that has
+/// already verified and bound to this request: hard refusal.  Keeping this as
+/// one executable function lets host tests enumerate every [`RenderErr`]
+/// variant without manufacturing a descriptor fixture for each diagnostic.
+fn refuse_verified_erc7730(
+    error: crate::tx::erc7730_render::RenderErr,
+) -> Result<super::Pages, ()> {
+    use crate::tx::erc7730_render::RenderErr;
+    use pqsigner_erc7730::render::VerifiedDescriptorErrorPolicy;
+
+    match error.verified_descriptor_policy() {
+        VerifiedDescriptorErrorPolicy::HardRefuse => {}
+    }
+
+    match error {
+        RenderErr::Reject(msg) => {
+            // `msg` is a developer trace tag (e.g. "7730 nested blob
+            // trailing") — not user-facing text, and several exceed the
+            // 16-col row. Keep the tag in the debug log and refuse: once a
+            // descriptor has verified and bound to this transaction, a
+            // renderer failure is an integrity failure, not permission to
+            // downgrade to a weaker typed/blind-sign interpretation.
+            // Bare invocation — `secure_log!` is a `macro_rules!` in
+            // main.rs without `#[macro_export]`, textually scoped: the
+            // `crate::secure_log!` path form fails E0433 under
+            // `debug-log` (only the cfg'd-out no-op arm is suggested).
+            secure_log!("erc7730 clear-sign refused: {}", msg);
+            let _ = msg;
+            crate::ui::show_status("Sign refused", "clear-sign failed");
+        }
+        RenderErr::NoFormat => {
+            secure_log!("erc7730 clear-sign refused: no format");
+            crate::ui::show_status("Sign refused", "clear-sign format");
+        }
+        RenderErr::PageBudget => {
+            secure_log!("erc7730 clear-sign refused: page budget");
+            crate::ui::show_status("Sign refused", "clear-sign pages");
+        }
+    }
+    Err(())
+}
+
+#[cfg(test)]
+mod semantic_guard_tests {
+    use super::refuse_verified_erc7730;
+    use crate::tx::erc7730_render::RenderErr;
+
+    #[test]
+    fn every_verified_descriptor_render_error_is_fatal() {
+        for error in [
+            RenderErr::Reject("semantic guard"),
+            RenderErr::NoFormat,
+            RenderErr::PageBudget,
+        ] {
+            assert!(
+                refuse_verified_erc7730(error).is_err(),
+                "verified descriptor errors must never enter a weaker renderer"
+            );
         }
     }
 }

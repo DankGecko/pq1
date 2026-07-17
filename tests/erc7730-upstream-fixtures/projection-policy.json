@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "upstream_sha": "784c87c925e8438e7b4736b2af85a501f8d2a265",
+  "receipt_domain": "pqsigner/erc7730-excluded-fixture-corpus-v1",
+  "fixture_files": 272,
+  "fixture_bytes": 687949,
+  "fixture_receipt_sha256": "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f",
+  "cases": {
+    "total": 510,
+    "calldata": 362,
+    "eip712": 148,
+    "expected_text_strings": 3976
+  },
+  "semantic_incompatibilities": [
+    {
+      "fixture": "registry/weth/tests/calldata-weth.tests.json",
+      "case": 0,
+      "classification": "noncanonical_static_calldata",
+      "disposition": "The upstream deposit() positive carries one trailing calldata byte. PQ1 must and does refuse it; it is retained as an explicit negative, never waived into a positive transcript match."
+    }
+  ],
+  "presentation_classes": {
+    "ledger_interaction_with": {
+      "strings": 280,
+      "disposition": "Ledger-owned envelope presentation; preserve and classify, but do not require a byte-identical PQ1 page."
+    },
+    "ledger_max_fees": {
+      "strings": 275,
+      "disposition": "Ledger-owned fee presentation; PQ1 fee pages are checked by the transaction-display tests, not treated as descriptor output."
+    },
+    "empty_expected_texts": {
+      "cases": 3,
+      "disposition": "Inventory-only. Never count as positive transcript coverage."
+    },
+    "odd_expected_text_count": {
+      "cases": 58,
+      "disposition": "Do not infer alternating label/value pairs; retain ordered strings until a typed semantic projection exists."
+    },
+    "line_wrapped_address_like": {
+      "strings": 400,
+      "disposition": "Normalize spaces only after validating and reconstructing one complete address."
+    },
+    "line_wrapped_numeric": {
+      "strings": 608,
+      "disposition": "Reconstruct digit wrapping without erasing the semantic amount/ticker separator."
+    },
+    "unresolved_ticker": {
+      "strings": 28,
+      "disposition": "`???` is non-authoritative presentation output and cannot establish token identity."
+    },
+    "truncated_more": {
+      "strings": 6,
+      "disposition": "`... More` is a lossy Ledger snapshot and cannot establish full-value equality."
+    },
+    "over_pq1_page": {
+      "strings": 75,
+      "disposition": "Values longer than one 4x16 PQ1 page require an explicit multi-page or digest comparison; no clipping waiver is implied."
+    }
+  }
+}

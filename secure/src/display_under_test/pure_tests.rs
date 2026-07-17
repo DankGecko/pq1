@@ -439,6 +439,11 @@ fn positive_write_erc20_header_send_and_approve() {
     assert_eq!(row_str(&row), "Approve USDC");
 
     let mut row = [b' '; DISPLAY_COLS];
+    let call = Erc20Call::Approve { spender: [0; 20], amount: U256::zero() };
+    write_erc20_header(&mut row, &call, &meta);
+    assert_eq!(row_str(&row), "Revoke approval");
+
+    let mut row = [b' '; DISPLAY_COLS];
     let call = Erc20Call::TransferFrom { from: [0;20], to: [0;20], amount: u256_from_u64(1) };
     write_erc20_header(&mut row, &call, &meta);
     assert_eq!(row_str(&row), "From USDC");
@@ -684,6 +689,34 @@ fn positive_erc20_known_approve_unlimited_renders_word() {
         "Approve must label the recipient row as 'Spender:'");
 }
 
+#[test]
+fn positive_erc20_known_exact_zero_approve_renders_revoke_without_hiding_facts() {
+    let mut tx = sample_tx();
+    tx.value = U256::zero();
+    let resolver = NameResolver::new();
+    let meta = usdc_metadata();
+    let spender = [0x44; 20];
+    let pages = render_erc20_known_pages(
+        &tx,
+        &Erc20Call::Approve {
+            spender,
+            amount: U256::zero(),
+        },
+        &meta,
+        &resolver,
+    );
+
+    assert_eq!(row_str(&pages.buf[0][0]), "Revoke approval");
+    assert_eq!(row_str(&pages.buf[1][0]), "Spender:");
+    let spender_hex: String = spender.iter().map(|b| format!("{b:02x}")).collect();
+    assert!(page_hex(&pages, 1).contains(&spender_hex));
+    assert_eq!(row_str(&pages.buf[2][0]), "Amount:");
+    assert!(row_str(&pages.buf[2][1]).starts_with("0.000000 USDC"));
+    assert_eq!(row_str(&pages.buf[3][0]), "Contract:");
+    assert_eq!(row_str(&pages.buf[4][0]), "Chain:");
+    assert_eq!(row_str(&pages.buf[4][1]), "Chain: 1");
+}
+
 // ===========================================================================
 // POSITIVE TESTS — ERC-20 unknown renderer
 // ===========================================================================
@@ -701,6 +734,28 @@ fn positive_erc20_unknown_renders_warning_banner() {
     assert_eq!(row_str(&pages.buf[0][0]), "! Unknown token");
     assert_eq!(row_str(&pages.buf[0][1]), "transfer");
     assert_eq!(row_str(&pages.buf[0][2]), "(decimals = ?)");
+}
+
+#[test]
+fn negative_unknown_token_zero_approve_never_claims_revoke() {
+    let mut tx = sample_tx();
+    tx.value = U256::zero();
+    let resolver = NameResolver::new();
+    let pages = render_erc20_unknown_pages(
+        &tx,
+        &Erc20Call::Approve {
+            spender: [0x44; 20],
+            amount: U256::zero(),
+        },
+        &resolver,
+    );
+    assert_eq!(row_str(&pages.buf[0][0]), "! Unknown token");
+    assert_eq!(row_str(&pages.buf[0][1]), "approve");
+    assert!(pages
+        .as_slice()
+        .iter()
+        .flat_map(|page| page.iter())
+        .all(|row| !row_str(row).contains("Revoke")));
 }
 
 // ===========================================================================
@@ -766,7 +821,7 @@ fn positive_slot_rotation_single_page() {
     let row1 = row_str(&pages.buf[0][1]);
     assert!(row1.contains("ROTATE SLOT?"), "row 1 must show the prompt, got {:?}", row1);
     let row2 = row_str(&pages.buf[0][2]);
-    assert!(row2.contains("New slot: 3"), "row 2 must show the slot index, got {:?}", row2);
+    assert!(row2.contains("Slot: 3"), "row 2 must show the slot index, got {:?}", row2);
     let row3 = row_str(&pages.buf[0][3]);
     assert!(row3.contains("+bootstrap use"),
         "row 3 must warn about bootstrap-use consumption, got {:?}", row3);
@@ -778,7 +833,7 @@ fn positive_batch_wrap_adds_banner_page() {
     let tx = sample_tx();
     let inner = render_pages(&tx, &resolver);
     let inner_len = inner.len;
-    let wrapped = wrap_pages_with_batch_banner(inner, 0, 3).expect("banner fits");
+    let wrapped = wrap_batch_for_test(&inner, 0, 3).expect("banner fits");
     assert_eq!(wrapped.len, inner_len + 1);
     // Banner page is page 0
     let row1 = row_str(&wrapped.buf[0][1]);
@@ -786,6 +841,34 @@ fn positive_batch_wrap_adds_banner_page() {
     let row2 = row_str(&wrapped.buf[0][2]);
     assert!(row2.contains("Tx 1 of 3"),
         "1-based render of batch index, got {:?}", row2);
+}
+
+fn wrap_batch_for_test(
+    inner: &Pages,
+    tx_index: usize,
+    batch_total: usize,
+) -> Result<Pages, ()> {
+    let mut wrapped = Pages::empty_with_len(0);
+    let mut cfi = crate::fi::CfiCounter::new();
+    wrap_pages_with_batch_banner(
+        inner,
+        tx_index,
+        batch_total,
+        &mut wrapped,
+        &mut cfi,
+    )?;
+    if cfi.check_into_sentinel(super::batch::BATCH_BANNER_CFI_EXPECTED)
+        != crate::fi::OK_SENTINEL
+        || super::batch::batch_banner_copy_proof(
+            inner,
+            &wrapped,
+            tx_index,
+            batch_total,
+        ) != crate::fi::OK_SENTINEL
+    {
+        return Err(());
+    }
+    Ok(wrapped)
 }
 
 #[test]
@@ -1324,46 +1407,142 @@ fn negative_slot_rotation_shows_index() {
 }
 
 #[test]
-fn negative_slot_rotation_never_panics_across_22bit_field() {
+fn negative_slot_rotation_is_injective_across_22bit_field() {
     // The `slot_index` FLAG-word field is 22 bits (0..=4_194_303); the
     // sign handlers reject only `register_slot && slot_index == 0`, so a
     // buggy or hostile companion can drive any other value into
-    // build_slot_rotation_pages BEFORE the confirm dialog. Pre-fix,
-    // write_new_slot laid the 10-byte "New slot: " prefix then wrote each
-    // decimal digit at buf[10 + i] into a [u8; 16] row — so any 7-digit
-    // value (>= 1_000_000) indexed buf[16] and panicked the secure world,
-    // aborting the sign and hanging the device until a power cycle. Every
-    // value in the field must render without panicking.
-    for &idx in &[
-        0u32, 1, 9, 10, 99, 999_999, 1_000_000, 1_000_005, 4_194_303, 4_194_303 / 2,
-    ] {
-        let _ = build_slot_rotation_pages(idx);
-    }
-    // Sweep the low range densely and stride across the top of the field
-    // to exercise every digit width and the exact 6->7 digit boundary.
-    for idx in 0u32..=3_000 {
-        let _ = build_slot_rotation_pages(idx);
-    }
-    let mut idx = 100_000u32;
-    while idx <= 4_194_303 {
-        let _ = build_slot_rotation_pages(idx);
-        idx += 7919; // prime stride
+    // build_slot_rotation_pages BEFORE the confirm dialog. The old ten-byte
+    // prefix left only six digit columns, so 1_000_000 and 1_000_001 both
+    // painted "New slot: 100000". Independently parse every accepted row
+    // and require it to recover the original signed index exactly.
+    for idx in 1u32..=4_194_303 {
+        let pages = build_slot_rotation_pages(idx);
+        let row = &pages.buf[0][2];
+        let prefix_at = row
+            .windows(b"Slot: ".len())
+            .position(|window| window == b"Slot: ")
+            .expect("rotation row must contain the complete slot label");
+        let digits = &row[prefix_at + b"Slot: ".len()..];
+        let mut parsed = 0u32;
+        let mut count = 0usize;
+        for &byte in digits {
+            if !byte.is_ascii_digit() {
+                break;
+            }
+            parsed = parsed
+                .checked_mul(10)
+                .and_then(|value| value.checked_add(u32::from(byte - b'0')))
+                .expect("rendered slot decimal must fit u32");
+            count += 1;
+        }
+        assert!(count > 0, "slot {idx} must render at least one digit");
+        assert_eq!(parsed, idx, "slot {idx} must round-trip through the display");
     }
 }
 
 #[test]
-fn negative_slot_rotation_row_is_exactly_display_cols_for_large_index() {
-    // Robustness for pathological indices must not corrupt the fixed row
-    // width: even a truncated 7-digit value yields a full 16-col row (all
-    // page rows are DISPLAY_COLS wide by construction).
+fn negative_slot_rotation_renders_large_indices_without_collision() {
     let pages = build_slot_rotation_pages(4_194_303);
     assert_eq!(pages.buf[0][2].len(), DISPLAY_COLS,
         "row 2 must stay exactly DISPLAY_COLS wide");
-    // And the fitting case still shows the full number.
-    let small = build_slot_rotation_pages(42);
-    let row2 = row_str(&small.buf[0][2]);
-    assert!(row2.contains("New slot: 42"),
-        "small slot index must render in full, got {:?}", row2);
+    assert!(row_str(&pages.buf[0][2]).contains("Slot: 4194303"));
+
+    let million = build_slot_rotation_pages(1_000_000);
+    let million_one = build_slot_rotation_pages(1_000_001);
+    assert!(row_str(&million.buf[0][2]).contains("Slot: 1000000"));
+    assert!(row_str(&million_one.buf[0][2]).contains("Slot: 1000001"));
+    assert_ne!(million.buf[0][2], million_one.buf[0][2]);
+
+    // The formatter is deliberately total over u32, not just today's 22-bit
+    // field, so future field widening cannot silently reintroduce truncation.
+    let max = build_slot_rotation_pages(u32::MAX);
+    assert_eq!(max.buf[0][2], *b"Slot: 4294967295");
+}
+
+fn composed_slot_rotation_transcript(slot_index: u32) -> Pages {
+    let sender = [0x42; 20];
+    let mut nonce = [0u8; 32];
+    nonce[0] = 0x01;
+    nonce[24..].copy_from_slice(&7u64.to_be_bytes());
+    let gas = |value: u64| {
+        let mut out = [0u8; 32];
+        out[24..].copy_from_slice(&value.to_be_bytes());
+        out
+    };
+
+    let mut pages = build_slot_rotation_pages(slot_index);
+
+    let signer_prior = pages.len;
+    let mut signer_cfi = crate::fi::CfiCounter::new();
+    super::value_page::enforce_from_page(&mut pages, 3, &sender, &mut signer_cfi).unwrap();
+    assert_eq!(
+        signer_cfi.check_into_sentinel(super::value_page::SIGNER_PAGE_CFI_EXPECTED),
+        crate::fi::OK_SENTINEL
+    );
+    assert_eq!(
+        super::value_page::from_page_proof(&pages, signer_prior, 3, &sender),
+        crate::fi::OK_SENTINEL
+    );
+
+    let nonce_prior = pages.len;
+    let mut nonce_cfi = crate::fi::CfiCounter::new();
+    super::nonce_lane::enforce_nonce_lane_page(&mut pages, &nonce, &mut nonce_cfi).unwrap();
+    assert_eq!(
+        nonce_cfi.check_into_sentinel(super::nonce_lane::NONCE_LANE_CFI_EXPECTED),
+        crate::fi::OK_SENTINEL
+    );
+    assert_eq!(
+        super::nonce_lane::nonce_lane_page_proof(&pages, nonce_prior, &nonce),
+        crate::fi::OK_SENTINEL
+    );
+
+    let call = gas(100_000);
+    let verify = gas(200_000);
+    let prever = gas(21_000);
+    let gas_prior = pages.len;
+    let mut gas_cfi = crate::fi::CfiCounter::new();
+    super::userop_gas_lane::enforce_userop_gas_page(
+        &mut pages,
+        &call,
+        &verify,
+        &prever,
+        &mut gas_cfi,
+    )
+    .unwrap();
+    assert_eq!(
+        gas_cfi.check_into_sentinel(super::userop_gas_lane::USEROP_GAS_CFI_EXPECTED),
+        crate::fi::OK_SENTINEL
+    );
+    assert_eq!(
+        super::userop_gas_lane::userop_gas_page_proof(
+            &pages,
+            gas_prior,
+            &call,
+            &verify,
+            &prever,
+        ),
+        crate::fi::OK_SENTINEL
+    );
+    pages
+}
+
+#[test]
+fn slot_rotation_full_single_and_batch_transcripts_preserve_injective_page() {
+    // Both handlers construct the same rotation → signer → nonce → gas page
+    // set. Hold every non-slot input constant and prove the old collision pair
+    // differs only in the complete, still-leading rotation page.
+    let million = composed_slot_rotation_transcript(1_000_000);
+    let million_one = composed_slot_rotation_transcript(1_000_001);
+    assert_eq!(million.len, 4);
+    assert_eq!(million.len, million_one.len);
+    assert_ne!(million.buf[0], million_one.buf[0]);
+    assert_eq!(&million.buf[1..million.len], &million_one.buf[1..million_one.len]);
+    assert!(row_str(&million.buf[0][2]).contains("Slot: 1000000"));
+    assert!(row_str(&million_one.buf[0][2]).contains("Slot: 1000001"));
+
+    let maximum = composed_slot_rotation_transcript(4_194_303);
+    assert!(row_str(&maximum.buf[0][2]).contains("Slot: 4194303"));
+    assert_eq!(&maximum.buf[1..maximum.len], &million.buf[1..million.len]);
 }
 
 // --- Batch banner: 1-based UI, refuse to overflow MAX_PAGES ---------------
@@ -1376,7 +1555,7 @@ fn negative_batch_banner_renders_one_based_index() {
     let tx = sample_tx();
     for idx in 0..4 {
         let inner = render_pages(&tx, &resolver);
-        let wrapped = wrap_pages_with_batch_banner(inner, idx, 4).expect("banner fits");
+        let wrapped = wrap_batch_for_test(&inner, idx, 4).expect("banner fits");
         let row2 = row_str(&wrapped.buf[0][2]);
         let expected_one_based = format!("Tx {} of 4", idx + 1);
         assert!(row2.contains(&expected_one_based),
@@ -1395,9 +1574,196 @@ fn negative_batch_banner_refuses_to_overflow_max_pages() {
     let mut huge = Pages::empty_with_len(MAX_PAGES);
     // Tag the inner so we can recognise it.
     huge.buf[0][0][0] = b'I';
-    let wrapped = wrap_pages_with_batch_banner(huge, 0, 2);
-    assert!(wrapped.is_err(),
+    let mut wrapped = Pages::empty_with_len(3);
+    wrapped.buf[0][0][0] = b'S';
+    let mut cfi = crate::fi::CfiCounter::new();
+    let result = wrap_pages_with_batch_banner(&huge, 0, 2, &mut wrapped, &mut cfi);
+    assert!(result.is_err(),
         "wrap must refuse (Err) rather than drop the banner past MAX_PAGES");
+    assert_eq!(
+        wrapped.len, 0,
+        "an overflow refusal must leave the caller-owned output invisibly fail-initialized"
+    );
+    assert_ne!(
+        cfi.check_into_sentinel(super::batch::BATCH_BANNER_CFI_EXPECTED),
+        crate::fi::OK_SENTINEL,
+        "an overflow refusal must not mint the copy-completion receipt"
+    );
+}
+
+#[test]
+fn batch_banner_copy_has_caller_cfi_and_exact_transcript_proof() {
+    let mut inner = Pages::empty_with_len(6);
+    for (index, page) in inner.buf[..inner.len].iter_mut().enumerate() {
+        *page = [[b'A' + index as u8; DISPLAY_COLS]; DISPLAY_ROWS];
+    }
+    let mut wrapped = Pages::empty_with_len(0);
+    let mut cfi = crate::fi::CfiCounter::new();
+    wrap_pages_with_batch_banner(&inner, 2, 4, &mut wrapped, &mut cfi).unwrap();
+    assert_eq!(
+        cfi.check_into_sentinel(super::batch::BATCH_BANNER_CFI_EXPECTED),
+        crate::fi::OK_SENTINEL
+    );
+    assert_eq!(
+        super::batch::batch_banner_copy_proof(&inner, &wrapped, 2, 4),
+        crate::fi::OK_SENTINEL
+    );
+    assert_eq!(&wrapped.buf[1..7], &inner.buf[..6]);
+
+    let skipped = crate::fi::CfiCounter::new();
+    assert_ne!(
+        skipped.check_into_sentinel(super::batch::BATCH_BANNER_CFI_EXPECTED),
+        crate::fi::OK_SENTINEL
+    );
+
+    assert_ne!(
+        super::batch::batch_banner_copy_proof(&inner, &wrapped, 1, 4),
+        crate::fi::OK_SENTINEL,
+        "the exact banner must bind the member index"
+    );
+    assert_ne!(
+        super::batch::batch_banner_copy_proof(&inner, &wrapped, 2, 3),
+        crate::fi::OK_SENTINEL,
+        "the exact banner must bind the verified batch total"
+    );
+
+    wrapped.buf[0][1][3] ^= 1;
+    assert_ne!(
+        super::batch::batch_banner_copy_proof(&inner, &wrapped, 2, 4),
+        crate::fi::OK_SENTINEL,
+        "one corrupted banner byte must fail the exact transcript proof"
+    );
+    wrapped.buf[0][1][3] ^= 1;
+
+    wrapped.len -= 1;
+    assert_ne!(
+        super::batch::batch_banner_copy_proof(&inner, &wrapped, 2, 4),
+        crate::fi::OK_SENTINEL,
+        "a stale visible length must fail the exact transcript proof"
+    );
+    wrapped.len += 1;
+
+    wrapped.buf[4][2][9] ^= 1;
+    assert_ne!(
+        super::batch::batch_banner_copy_proof(&inner, &wrapped, 2, 4),
+        crate::fi::OK_SENTINEL,
+        "one corrupted copied byte must fail the exact transcript proof"
+    );
+    wrapped.buf[4][2][9] ^= 1;
+
+    wrapped.buf[1][0][0] ^= 1;
+    assert_ne!(
+        super::batch::batch_banner_copy_proof(&inner, &wrapped, 2, 4),
+        crate::fi::OK_SENTINEL,
+        "the first copied byte must be covered"
+    );
+    wrapped.buf[1][0][0] ^= 1;
+    wrapped.buf[inner.len][DISPLAY_ROWS - 1][DISPLAY_COLS - 1] ^= 1;
+    assert_ne!(
+        super::batch::batch_banner_copy_proof(&inner, &wrapped, 2, 4),
+        crate::fi::OK_SENTINEL,
+        "the last copied byte must be covered"
+    );
+
+    let mut exact_fit = Pages::empty_with_len(MAX_PAGES - 1);
+    exact_fit.buf[0][0][0] = b'F';
+    exact_fit.buf[MAX_PAGES - 2][DISPLAY_ROWS - 1][DISPLAY_COLS - 1] = b'L';
+    let exact_wrapped = wrap_batch_for_test(&exact_fit, 0, 4).expect("banner exactly fits");
+    assert_eq!(exact_wrapped.len, MAX_PAGES);
+    assert_eq!(exact_wrapped.buf[1], exact_fit.buf[0]);
+    assert_eq!(exact_wrapped.buf[MAX_PAGES - 1], exact_fit.buf[MAX_PAGES - 2]);
+}
+
+#[test]
+fn batch_member_confirm_receipt_rejects_early_exit_and_wrong_sequence() {
+    for expected_count in 1..=4 {
+        for confirmed_prefix in 0..=expected_count {
+            let mut receipt = super::batch::BatchMemberConfirmReceipt::new();
+            receipt.fail_initialize();
+            for index in 0..confirmed_prefix {
+                receipt.record_confirmed(index).unwrap();
+            }
+            let completed = receipt.completion_proof(expected_count) == crate::fi::OK_SENTINEL;
+            assert_eq!(
+                completed,
+                confirmed_prefix == expected_count,
+                "only the complete ordered prefix may satisfy N={expected_count}; prefix={confirmed_prefix}"
+            );
+        }
+    }
+
+    let mut out_of_order = super::batch::BatchMemberConfirmReceipt::new();
+    out_of_order.fail_initialize();
+    assert!(out_of_order.record_confirmed(1).is_err());
+    assert_ne!(out_of_order.completion_proof(2), crate::fi::OK_SENTINEL);
+
+    let mut duplicate = super::batch::BatchMemberConfirmReceipt::new();
+    duplicate.fail_initialize();
+    duplicate.record_confirmed(0).unwrap();
+    assert!(duplicate.record_confirmed(0).is_err());
+    assert_ne!(duplicate.completion_proof(2), crate::fi::OK_SENTINEL);
+
+    let mut omitted_middle = super::batch::BatchMemberConfirmReceipt::new();
+    omitted_middle.fail_initialize();
+    omitted_middle.record_confirmed(0).unwrap();
+    assert!(omitted_middle.record_confirmed(2).is_err());
+    assert_ne!(omitted_middle.completion_proof(3), crate::fi::OK_SENTINEL);
+
+    let mut reset = super::batch::BatchMemberConfirmReceipt::new();
+    for index in 0..4 {
+        reset.record_confirmed(index).unwrap();
+    }
+    reset.fail_initialize();
+    assert_ne!(reset.completion_proof(4), crate::fi::OK_SENTINEL);
+}
+
+#[test]
+fn batch_member_digest_oracle_detects_prefix_omission_and_mutation() {
+    use sha3::Digest;
+
+    fn digest_calls(calls: &[Vec<u8>], omitted: Option<usize>) -> [u8; 32] {
+        let mut running = sha3::Keccak256::new();
+        for (index, call) in calls.iter().enumerate() {
+            if omitted == Some(index) {
+                continue;
+            }
+            running.update(pqsigner_tx_core::erc8213::calldata_digest(call));
+        }
+        running.finalize().into()
+    }
+
+    let calls = vec![
+        vec![0x11, 0x22, 0x33],
+        vec![0x44; 32],
+        vec![0x55, 0x66],
+        vec![0x77; 127],
+    ];
+    let full = digest_calls(&calls, None);
+    for omitted in 0..calls.len() {
+        assert_ne!(
+            digest_calls(&calls, Some(omitted)),
+            full,
+            "omitting confirmed-member digest {omitted} must disagree with the full oracle"
+        );
+    }
+    for prefix in 0..calls.len() {
+        assert_ne!(digest_calls(&calls[..prefix], None), full);
+    }
+
+    let mut first_changed = calls.clone();
+    first_changed[0][0] ^= 1;
+    assert_ne!(digest_calls(&first_changed, None), full);
+    let mut last_changed = calls.clone();
+    let last_call = last_changed.last_mut().unwrap();
+    let last_byte = last_call.last_mut().unwrap();
+    *last_byte ^= 1;
+    assert_ne!(digest_calls(&last_changed, None), full);
+
+    let identical = vec![vec![0xAA; 68]; 4];
+    let identical_full = digest_calls(&identical, None);
+    for prefix in 0..identical.len() {
+        assert_ne!(digest_calls(&identical[..prefix], None), identical_full);
+    }
 }
 
 // --- Pages container bounds --------------------------------------------------
