@@ -179,6 +179,11 @@
           "kind": "code-enforced",
           "ref": "secure/src/sau.rs",
           "anchor": "proto NS_FLASH window escaped the SAU NS-flash region"
+        },
+        {
+          "kind": "code-enforced",
+          "ref": "secure/src/sau.rs",
+          "anchor": "TZSC_SECCFGR1 image drifted"
         }
       ],
       "falsifying_test": {
@@ -192,7 +197,7 @@
         "S-NS-SECRET-LEAK",
         "S-SRAM-NS-READ"
       ],
-      "note": "This surface is CLOSED, not backlog — the K tier is permanently unreachable absent an ARM release we do not control. The 7/7 RAZ-fault test is a positive test, not a forall, and it is nonetheless STRONGER evidence than the industry reference (Trusted Firmware-M) publishes for the same property. Caveat recorded as work-todo C3: the receipt is currently taken on a NON-shipping feature combo while sau.rs has 12 cfg(feature) gates.",
+      "note": "This surface is CLOSED, not backlog — the K tier is permanently unreachable absent an ARM release we do not control. The 7/7 RAZ-fault test is a positive test, not a forall, and it is nonetheless STRONGER evidence than the industry reference (Trusted Firmware-M) publishes for the same property. VERIFIED CAVEAT (work-todo C3, 2026-07-17): the receipt is taken on a NON-shipping feature combo. `ui-lcd = [\"spi1-arduino\", ...]` (secure/Cargo.toml), so the SHIPPING image secures SPI1 — the trusted-display bus — whereas `make gtzc-enforcement-hw` builds `ui-semihosting`, i.e. WITHOUT spi1-arduino, so its 7/7 RAZ-fault receipt runs against seccfgr2 == 0. The one bit that keeps NS off the trusted display is NOT covered by the enforcement test cited as evidence for it. Mitigated in the meantime by compile-time pins on all three TZSC images (sau.rs), mutation-checked: moving the I2C2 bit fails the build. Closing it needs the enforcement test rebuilt on the shipping combo.",
       "last_reviewed": "2026-07-17"
     },
     {

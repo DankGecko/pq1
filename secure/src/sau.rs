@@ -381,18 +381,56 @@ mod stm32 {
         // TAMP lives in GTZC2 (a different controller); its SECCFGR
         // setup is owed in a follow-up (the `tamp` feature flag is
         // log-only-on-this-branch per CLAUDE.md anyway).
-        let seccfgr1 = SECCFGR1_I2C1_BIT | SECCFGR1_I2C2_BIT;
+        // ---- C3: the register image is FEATURE-CONDITIONAL — pin it ----
+        //
+        // Pinned so a feature-combo change to the TZSC image is a build failure
+        // rather than a silent difference between what we test and what we ship.
+        // This is the register-image half of roadmap §P1.9 ("exact production
+        // register images and feature combinations"), and it composes with the
+        // proto-NS-window subset assert at the top of this file: that one pins
+        // the SAU intervals, this one pins the peripheral-security image.
+        //
+        // WHY IT MATTERS HERE, CONCRETELY: `ui-lcd` implies `spi1-arduino`
+        // (secure/Cargo.toml), so the SHIPPING image secures SPI1 — the
+        // trusted-display bus. `make gtzc-enforcement-hw` builds with
+        // `ui-semihosting`, i.e. WITHOUT `spi1-arduino`, so its 7/7 RAZ-fault
+        // receipt is taken against `seccfgr2 == 0`: the one bit that keeps NS
+        // off the trusted display is NOT covered by the enforcement test that
+        // is cited as evidence for it. Recorded as HW-ASSUME-CMSE-SAU's note
+        // and work-todo C3; closing it needs the test rebuilt on the shipping
+        // combo, which these pins make reviewable in the meantime.
+        const SECCFGR1_IMAGE: u32 = SECCFGR1_I2C1_BIT | SECCFGR1_I2C2_BIT;
+        const _: () = assert!(
+            SECCFGR1_IMAGE == (1 << 13) | (1 << 14),
+            "TZSC_SECCFGR1 image drifted — I2C1+I2C2 are the SE buses (invariant #3). \
+             Update the pin ONLY with a matching gtzc-enforcement-hw receipt."
+        );
+        // SECCFGR2 is the one that differs between the tested and shipped
+        // builds. Both arms are pinned so neither can move unnoticed.
+        #[cfg(feature = "spi1-arduino")]
+        const _: () = assert!(
+            SECCFGR2_SPI1_BIT == 1 << 1,
+            "TZSC_SECCFGR2 shipping image drifted (SPI1 = the trusted-display bus)"
+        );
+        const SECCFGR3_IMAGE: u32 = SECCFGR3_AES_BIT
+            | SECCFGR3_HASH_BIT
+            | SECCFGR3_RNG_BIT
+            | SECCFGR3_PKA_BIT
+            | SECCFGR3_SAES_BIT;
+        const _: () = assert!(
+            SECCFGR3_IMAGE == (1 << 11) | (1 << 12) | (1 << 13) | (1 << 14) | (1 << 15),
+            "TZSC_SECCFGR3 image drifted — AES/HASH/RNG/PKA/SAES secure, OTG stays NS. \
+             These are 5 of the 7 peripherals gtzc-enforcement-hw covers."
+        );
+
+        let seccfgr1 = SECCFGR1_IMAGE;
         // SPI1 (trusted-display bus) is the only APB2 peripheral we secure
         // (F1), and only in the `spi1-arduino` LCD build.
         #[cfg(feature = "spi1-arduino")]
         let seccfgr2: u32 = SECCFGR2_SPI1_BIT;
         #[cfg(not(feature = "spi1-arduino"))]
         let seccfgr2: u32 = 0; // no APB2 peripheral secured on non-LCD builds
-        let seccfgr3 = SECCFGR3_AES_BIT
-            | SECCFGR3_HASH_BIT
-            | SECCFGR3_RNG_BIT
-            | SECCFGR3_PKA_BIT
-            | SECCFGR3_SAES_BIT;
+        let seccfgr3 = SECCFGR3_IMAGE;
         GTZC.tzsc_seccfgr1.write(seccfgr1);
         GTZC.tzsc_seccfgr2.write(seccfgr2);
         GTZC.tzsc_seccfgr3.write(seccfgr3);
