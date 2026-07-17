@@ -37,7 +37,7 @@ LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 help: ## Show the runnable FV targets (those with a description)
 	@grep -hE '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F':.*## ' '!seen[$$1]++ {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: verify verify-hw-assumptions verify-tla verify-linker-map verify-verus verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation verify-forsc-margin verify-easycrypt verify-easycrypt-pins
+.PHONY: verify verify-hw-assumptions verify-tla verify-linker-map verify-verus verify-crux-ns-ptr verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation verify-forsc-margin verify-easycrypt verify-easycrypt-pins
 
 # NOTE: verify-build (the `lake build` this bundle depends on) now also
 # kernel-checks the A3.1 in-kernel parse theorem + elision bridge (the root
@@ -199,6 +199,22 @@ verify-verus: ## Verus page-123 flash-journal crash-safety pilot (all-length; ne
 	@# (cargo caches a prior success and would otherwise only print "Finished").
 	@cd verus && cargo clean -p pq1-flash-journal-verus 2>/dev/null; true
 	@cd verus && PATH="$(VERUS_DIR):$$HOME/.cargo/bin:$$PATH" cargo verus verify
+
+# crux-mir (Galois) implementation-diversity check on the NS-pointer window validator: a
+# SECOND symbolic engine (vs the Kani harnesses) proving the validator EQUIVALENT to an
+# independent u64 oracle (covers completeness, not just Kani's soundness). Needs the
+# schema-8 mir-json build + the SAW-bundle crux-mir-comp; NOT vendored (see
+# scripts/fv-external-tools.env). `cargo crux-test` exits non-zero on any disproved goal.
+CRUX_RLIBS  ?= $(HOME)/repos/mir-json/rlibs
+SAW_BIN_DIR ?= $(HOME)/Downloads/saw-1.5.1-ubuntu-24.04-X64-with-solvers/bin
+.PHONY: verify-crux-ns-ptr
+verify-crux-ns-ptr: ## crux-mir diversity check of ns_ptr_validate vs an independent oracle
+	@test -x "$(SAW_BIN_DIR)/crux-mir-comp" && test -d "$(CRUX_RLIBS)" || { \
+	  echo "ERROR: crux-mir-comp / mir-json rlibs not found ($(SAW_BIN_DIR), $(CRUX_RLIBS))."; \
+	  echo "  See contracts/verification/scripts/fv-external-tools.env."; exit 1; }
+	@cd crux/ns_ptr_diversity && env -u LD_LIBRARY_PATH \
+	  PATH="$$HOME/.cargo/bin:$(SAW_BIN_DIR):/usr/bin:/bin" \
+	  CRUX_RUST_LIBRARY_PATH="$(CRUX_RLIBS)" cargo crux-test
 
 # EASYCRYPT PORT gate. Two axioms in theft_free's closure (A5-EUFCMA, A5-ITSR)
 # cite this development as evidence; until 2026-07-10 it lived in a remote-less

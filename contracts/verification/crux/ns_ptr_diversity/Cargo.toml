@@ -1,0 +1,9 @@
+# Standalone crux-mir crate (own [workspace]). `crucible`/`crux` are injected by mir-json
+# at build time (no Cargo deps). Run: source ../../scripts/fv-external-tools.env then
+# `cargo crux-test` in this dir. See docs/verification/fv-pilot-crux-ns-ptr-diversity-2026-07-17.md.
+[package]
+name = "ns_ptr_diversity"
+version = "0.0.0"
+edition = "2021"
+[lib]
+[workspace]
