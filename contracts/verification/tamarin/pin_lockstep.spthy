@@ -15,6 +15,13 @@ begin
    disagreement wipes. This is deliberately stronger than the deployed
    directional page124/E120 boot check, which has no SE050 attempt-count input.
 
+   !! This theory is the idealized SYMMETRIC UPPER-BOUND CONTRAST, NOT the
+   deployed code (see finding PM-1 below). The FAITHFUL directional model of the
+   shipped `reconcile_pin_attempts` (tamper = se_count > mcu) is the bounded
+   TLA+/TLC model ../tla/PinReconcileDirectional.tla, where these symmetric lemmas
+   reappear as the labelled `SymmetricReconcile = TRUE` negative control.
+   Report: docs/verification/fv-pilot-directional-pin-reconcile-2026-07-17.md. !!
+
    MODEL SCOPE (2026-07-02, finding F5): this model does NOT model the wrong-PIN
    BUMP rule — it abstracts each counter to a STATUS ('fresh'/'zeroed', see below)
    and proves the RECONCILE property (a reset/desync from an assumed-synced baseline

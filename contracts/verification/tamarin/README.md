@@ -55,6 +55,26 @@ the model*.
 > page-124 pre-commit, so this is an overstated-model / false-README defect, not a
 > fund-drain. Re-modeling the directional predicate (the both-SE reset then
 > surfaces as a NEW residual) is the tracked follow-up.
+>
+> **✅ PM-1 FOLLOW-UP DONE (2026-07-17).** The faithful directional model now
+> exists as a bounded TLA+/TLC model:
+> [`../tla/PinReconcileDirectional.tla`](../tla/PinReconcileDirectional.tla)
+> (+ `pin_*.cfg`, `run_pin.sh`; report
+> `docs/verification/fv-pilot-directional-pin-reconcile-2026-07-17.md`). It models
+> the actual ordered-counter predicate `tamper = (se_count > mcu)` with the SE-leg
+> `None`/skip path, and proves the deployed positive guarantee (an MCU page-124
+> rollback with `se_count > mcu` and the leg readable ⟹ WIPE) plus the two
+> residuals. **This symmetric `pin_lockstep.spthy` is retained as an idealized
+> UPPER-BOUND CONTRAST model, NOT a statement about the deployed code** — its
+> lemmas prove the symmetric idealization only, and are what the TLC model uses as
+> the labelled `SymmetricReconcile = TRUE` **negative control**. The directional
+> arithmetic is deliberately NOT forced into Tamarin: the status-abstraction
+> (`fresh`/`zeroed`) that Tamarin's weak arithmetic requires is exactly what
+> produced the symmetric overstatement, so the faithful model lives in TLC where
+> ordered `>` is native. The TLC crossing (below) shows the symmetric predicate is
+> not merely weaker-or-stronger but a different point on an availability-vs-detection
+> trade — it catches the SE-reset the deployed code misses, but false-wipes every
+> benign `mcu == se+1` power-cut, which is *why* the deployed reconcile is directional.
 
 ### Relationship to the threat model
 

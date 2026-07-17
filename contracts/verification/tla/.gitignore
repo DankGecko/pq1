@@ -1,0 +1,5 @@
+# TLC model-checker run artifacts (regenerated each run — never committed)
+*_TTrace_*.tla
+*_TTrace_*.bin
+states/
+*.st
