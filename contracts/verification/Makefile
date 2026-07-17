@@ -37,7 +37,7 @@ LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 help: ## Show the runnable FV targets (those with a description)
 	@grep -hE '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F':.*## ' '!seen[$$1]++ {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: verify verify-hw-assumptions verify-tla verify-linker-map verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation verify-forsc-margin verify-easycrypt verify-easycrypt-pins
+.PHONY: verify verify-hw-assumptions verify-tla verify-linker-map verify-verus verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation verify-forsc-margin verify-easycrypt verify-easycrypt-pins
 
 # NOTE: verify-build (the `lake build` this bundle depends on) now also
 # kernel-checks the A3.1 in-kernel parse theorem + elision bridge (the root
@@ -181,6 +181,24 @@ verify-tla: ## TLA+/TLC models (page-123 crash-atomicity, combined budget, PIN r
 verify-linker-map: ## TrustZone memory-map drift gate: .x == proto == sau.rs == Lean (P1.9)
 	@python3 scripts/check_linker_memory_map.py --self-test
 	@python3 scripts/check_linker_memory_map.py
+
+# Verus (verified Rust) flash-journal crash-safety pilot — an ALL-LENGTH proof of the
+# page-123 SIGS-first compaction-local no-rollback property (INV_SIGS_COMPACTION_LOCAL),
+# complementing the bounded TLA+ Page123Compaction pilot. Proves a Rust MODEL (not the
+# firmware) under named STM32-flash silicon axioms; the model<->firmware link is cited-TCB.
+# Verus is NOT vendored (rustc-pinned prebuilt); set VERUS_DIR or see
+# scripts/fv-external-tools.env. `cargo verus verify` exits non-zero on any failed proof.
+VERUS_DIR ?= $(HOME)/Downloads/verus-0.2026.07.12.0b42f4c-x86-linux/verus-x86-linux
+.PHONY: verify-verus
+verify-verus: ## Verus page-123 flash-journal crash-safety pilot (all-length; needs local Verus)
+	@test -x "$(VERUS_DIR)/cargo-verus" || { echo "ERROR: cargo-verus not at $(VERUS_DIR)."; \
+	  echo "  Install Verus (rustc-pinned prebuilt) + set VERUS_DIR=<verus-x86-linux dir>."; \
+	  echo "  See contracts/verification/scripts/fv-external-tools.env."; exit 1; }
+	@# `cargo verus verify` exits non-zero on ANY failed proof — that exit code IS the gate.
+	@# Clean just this crate first so it always re-verifies + prints "N verified, 0 errors"
+	@# (cargo caches a prior success and would otherwise only print "Finished").
+	@cd verus && cargo clean -p pq1-flash-journal-verus 2>/dev/null; true
+	@cd verus && PATH="$(VERUS_DIR):$$HOME/.cargo/bin:$$PATH" cargo verus verify
 
 # EASYCRYPT PORT gate. Two axioms in theft_free's closure (A5-EUFCMA, A5-ITSR)
 # cite this development as evidence; until 2026-07-10 it lived in a remote-less

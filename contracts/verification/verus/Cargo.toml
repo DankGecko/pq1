@@ -1,0 +1,15 @@
+# Standalone Verus crate (NOT part of the firmware workspace — its own [workspace]).
+# Verified with `cargo verus verify` using the local Verus install (see
+# contracts/verification/scripts/fv-external-tools.env). vstd pinned to match that Verus.
+[package]
+name = "pq1-flash-journal-verus"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+vstd = "=0.0.0-2026-07-12-0122"
+
+[workspace]
+
+[package.metadata.verus]
+verify = true
