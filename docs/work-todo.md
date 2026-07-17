@@ -174,11 +174,45 @@ deduplication, and falsifiable acceptance criteria.
 > stale vs committed sources, unrelated to this work); the F9b CLAUDE.md source fix
 > will propagate to the E/F bundles on the next full `build.sh` regeneration.
 >
-> **FV-EXPANSION pilots (2026-07-16/17, branch `fix/fv-review-2026-07-15`).** Five
-> new-surface pilots landed (inventory: `docs/verification/fv-surface-expansion-inventory-2026-07-16.md`):
-> page-123 crash-atomicity TLA+/TLC (`e45e7ac8`), P1.7 signed-digest correspondence
-> (`47cc4e2d`), P1.2 ERC-20 display canonicity (`64f059ff`), P1.2 CoW owner-UID
-> (`bd28c03d`), + P1.5 durable-budget composition (this pass).
+> **FV-EXPANSION pilots (2026-07-16/17, branch `fix/fv-review-2026-07-15`, pushed to
+> master).** 13 new-surface pilots landed (inventory:
+> `docs/verification/fv-surface-expansion-inventory-2026-07-16.md`; reports under
+> `docs/verification/fv-pilot-*`): page-123 crash-atomicity TLA+/TLC (`e45e7ac8`),
+> P1.7 signed-digest correspondence (`47cc4e2d`), P1.2 ERC-20 canonicity (`64f059ff`),
+> P1.2 CoW owner-UID (`bd28c03d`), P1.5 combined-budget composition (`4d8d4f47`),
+> P1.6 directional-PIN reconcile (`3647a5fa`), OC2 cross-hash floor (`b3c7b11f`),
+> I-7 create2 chain-independence (`b7c6c44c`+`99889cb7`), F10 seed-split leak
+> (`f309725d`), validateUserOp wrapper-decode ∀-symbolic KEVM (`261d0e80`),
+> P1.9 TrustZone memory-map + drift gate (`2e60f64d`). All ran through a 7-agent
+> adversarial review (fixes `2a6a8cd9`): P1.6/F10/validateUserOp-KEVM/OC2 SOUND;
+> 3 honesty/soundness corrections applied.
+>
+> **⚠️ SECURITY RESIDUAL (audit-derived, P1.5 adversarial review 2026-07-17) —
+> off-chain EIP-1271 few-time-key margin has NO on-chain cap.** `wallet.isValidSignature`
+> / `_erc1271IsValidSignatureNowCalldata` is `view`-only and NEVER reads
+> `slotUses`/`offchainSigCount` (`PQSmartWallet.sol:573-576, 599-648`), so an EIP-1271
+> sig validates on-chain UNCAPPED. A torn page-123 compaction resets the LOCAL gap/cap
+> counter, letting the firmware release more slot-key EIP-1271 sigs than the combined
+> cap intends — each validates on-chain (returns `0x1626ba7e`, authorizing
+> Permit2 / CoW-presign / Safe-cosign). **Severity: crypto-hygiene, NOT
+> authorization-rate** — every off-chain sig is pin- + user-confirm-gated
+> (`cmd_sign_offchain.rs:84` pin; `:601` `confirm_checked`; no-flash-write-before-confirm
+> `:252-273`), so an attacker cannot SILENTLY mint sigs; the residual is few-time-key
+> BIRTHDAY-MARGIN erosion (user-confirmed excess sigs consume real C10 slot-key budget
+> past `MAX_SLOT_USES`). Bounded by physical torn-reset rate + bootstrap re-registration
+> budget (`MAX_BOOTSTRAP_USES`). **Open:** quantify whether the worst-case erosion stays
+> within the C10 birthday margin at the shipped `MAX_SLOT_USES=65536` (add reset-rate +
+> bootstrap-budget bounds to the P1.5 TLA+ model). Refs:
+> `docs/verification/fv-pilot-combined-budget-lifetime-2026-07-17.md` CORRECTION note.
+>
+> **⏳ WIRE — `verify-linker-map` CI gate.** The P1.9 memory-map source-binding gate
+> `contracts/verification/scripts/check_linker_memory_map.py` (closes a confirmed
+> `.x`-vs-`proto`/`sau.rs` drift; run + `--self-test` both pass) is NOT wired into
+> `contracts/verification/Makefile` — deferred to avoid clobbering a concurrent
+> uncommitted `verify-tla` edit. Add a `verify-linker-map` PHONY target (`--self-test`
+> then run) + `.PHONY` entry once `verify-tla` lands; until then the drift gate does
+> not fire automatically.
+>
 > **⏳ CIRCLE BACK — gas-lane P1.2 slice** (`signed-intent-to-display`, the second
 > named high-risk binding): DEFERRED because its kernel
 > `secure/src/tx/display/userop_gas_lane.rs` is in a concurrent GPT-5.6 agent's live
@@ -187,6 +221,16 @@ deduplication, and falsifiable acceptance criteria.
 > kernel, Kani-prove the displayed `(callGasLimit, verificationGasLimit,
 > preVerificationGas, maxFee, maxPriority)` equal the signed ones, + a mutation.
 > Same for any other `secure/src/tx/display/*` binding blocked by that refactor.
+>
+> **⏳ Remaining non-blocked surface — entrypoint-v06-nonce-replay (D2).** Same-nonce
+> Type-2 replay protection is WHOLLY the deployed EntryPoint v0.6 NonceManager
+> (cited-TCB; `entrypoint_no_replay` was removed as dangling+latent-false, and the
+> wallet never reads `op.nonce` except as a `sphincsDigest` input). Honest closure =
+> a named-TCB leaf: a fork-gated `extcodehash` PIN of `0x5FF1…789` (needs a live RPC —
+> unavailable in the sandbox) + a cited bridge to the audited canonical v0.6.0. The
+> distinct-nonce half is already covered by `sphincsDigest_field_binding`; the
+> optional `distinct_nonce_distinct_digest` Lean lemma is marginal. Do once a codehash
+> receipt can be captured externally.
 
 - [ ] **FV15-F1 — reopen extraction freshness (prior extracted F1/F3).** Require
   pinned clean regeneration from every mirrored current Rust source, a total
