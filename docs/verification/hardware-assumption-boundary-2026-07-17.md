@@ -448,10 +448,35 @@ secret. The worse branch is a torn *QW0*: an ECC-poisoned word still reads non-`
 
 This is the thesis in one function. The abstraction is a **boolean** — `burned?` — over a device that
 commits at **quad-word** granularity; `FirstBootHw::otp_master_burned() -> bool` is the outcome-type
-defect of §2.1 in its most consequential instance, on the one path that is irreversible. The fix is a
-**boot-time completeness check** (per-QW, not any-bit), with the half-burned state as a distinct,
-named state: completable while QW1 is still virgin and nothing has derived from the partial master;
-terminal/RMA once it has. Filed as `docs/work-todo.md` **D4**.
+defect of §2.1 in its most consequential instance, on the one path that is irreversible.
+
+**FIXED 2026-07-17 (`a53aefc3`), and the fix is the method in miniature.** The rule moved into a pure,
+MMIO-free `crate::otp_state` — the same split, and the same rationale, as the existing `flash_policy`
+module: *"keeping the policy free of MMIO makes the exact boundary behaviour executable on the host;
+the hardware driver consumes the validated capability."* `MasterKeyState { Virgin, Partial, Complete }`
+is classified **per quad-word**; `read_device_master()` refuses anything not `Complete` (the barrier
+that makes the defect unreachable — no caller can obtain a half-blank master, so none can root a
+credential in one); `is_device_master_burned()` now means `Complete`, fail-closed at every call site;
+`master_key_state()` double-reads with an FI delay and fails closed on disagreement — deliberately
+*not* `rollback_floor`'s `max(a,b)` vote, because that conservative-HIGH bias is correct for a
+monotonic admission check and wrong for an irreversible write. `burn_device_master()` **completes** a
+`Partial` region rather than refusing it, and programs quad-words sequentially, aborting on the first
+error (it previously ran both programs before inspecting either result, so a failed QW0 was still
+followed by a QW1 program — compounding a recoverable tear into a `Complete`-looking region with an
+ambiguous QW0).
+
+Note what made the fix verifiable, because it is this document's whole argument: the rule is now
+**executable on the host**, so it carries eight behavioural tests (plus an exhaustive 2^8
+blank/programmed sweep) instead of `include_str!` greps — and it is **mutation-checked**: reverting
+to the old per-bit rule turns 6 of 8 RED. Before the extraction, the only available guard was a
+source-text assertion, which is exactly the false-green this document warns about. The seam was not
+optional bookkeeping; it was the difference between a proof and a grep.
+
+Residual, unchanged and now explicit: the fix rests on `HW-ASSUME-OTP-ONEWAY` and
+`HW-ASSUME-QW-ATOMIC`. A *torn QW0* — ECC-poisoned, reading non-`0xFF` but unstable — still
+classifies as programmed; the double-read catches instability, but an ECC-corrected-but-wrong value
+reads stably and is undetectable in software. That is silicon evidence (C8's ~21-shot probe), not
+code.
 
 ### The criterion
 

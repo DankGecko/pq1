@@ -2,7 +2,7 @@
 
 Tracks what remains to go from "working dual-SE demo" to "end-to-end hardware wallet on STM32U585 + OPTIGA Trust M + SE050, PIN-gated, doing real transactions."
 
-Last audited: 2026-07-15
+Last full-project audit: 2026-07-15. Scoped PQ1 clear-signing update: 2026-07-16/17.
 
 ---
 
@@ -66,9 +66,10 @@ branch `fix/sweep-2026-07-14-findings`. Deferred, needs bench silicon:
   ratchet + the sacrificial-part validation matrix (`docs/production-todo.md`
   S-2) remain the factory-ceremony step — S-2 stays a production blocker.
 - [x] **F10 — multiSend page-budget `make e2e` check — DONE 2026-07-17.** A
-  fresh complete QEMU run on the append-only/CFI gas snapshot passed all
-  assertions, including page-heavy Safe MultiSend approve+presign, maximum
-  four-member batch, exact gas pages at every confirmation, hostile
+  fresh complete QEMU run on the current combined append-only, completion-
+  receipt and sentinel-composition remediation passed all assertions, including
+  page-heavy Safe MultiSend approve+presign, maximum four-member batch, exact
+  gas pages at every confirmation, hostile
   EntryPoint 0d/0e, selector-only Safe 0f/0g and canonical Safe 0h. This is E4
   emulator evidence, not physical panel, resource-high-water or hardware-FI
   evidence.
@@ -3024,6 +3025,18 @@ request-generation race suppression, nested calldata and registry caches. The
 comparison below was checked against that code, not only Ambire's older generic
 humanizer.
 
+The exact current-refusal implementation review is complete for immutable
+target `HEAD=64f059ffed804ebb509d8e42ed724922a1feefe8`, tracked-diff
+`1b032b4f…9ddbf`. Mutually withheld Opus 4.8 `opus[1m]`/ultracode and literal
+`gpt-5.6-sol`/ultra first passes, same-session symmetric cross-review, and the
+single bounded responses for five new cross candidates converged on **NO-GO
+for implementation acceptance and merge at that identity**. The frozen
+18-row matrix is `/tmp/pq1-erc7730-impl-cross-matrix-v1.md`, SHA-256
+`39ad7be3a95b8c0efecdde124128aa7ffc0b13e5df1487c4a6a3be6b5b830eb0`:
+7 confirmed, 7 narrowed, 1 refuted and 3 unresolved. The rows below are the
+actionable landing ledger. No raw report is rewritten, and no result transfers
+authority to forced-blind v2.
+
 - [~] **[pq1-7730-blind-review, P0, MATERIAL REDLINE / FRESH DUAL REVIEW
   REQUIRED] Add a transaction-local forced-blind option without weakening the
   default refusal.** The frozen v1 candidate is rejected; do not implement it.
@@ -3057,11 +3070,14 @@ humanizer.
   corrected to `0x04` (`0x09` is `Unit`). Fresh prod/E2E builds render and check
   the guide's root/count/size facts plus the integration snapshot's root, leaf
   count, exact known-call tuple count/SHA, Bloom occupancy and omission count.
-  Stale values fail `xtask gen-erc7730-descriptors --check`. Fresh evidence: all
-  52 `pqsigner-xtask` tests passed, the catalogue check reported `in sync`,
-  `cargo fmt --check` and `git diff --check` were clean.
-- [~] **[pq1-7730-gas-page, P0, S, IMPLEMENTED + SOFTWARE VALIDATED;
-  EXACT IMPLEMENTATION REVIEW PENDING] Restore one-owner gas display without
+  Stale values fail `xtask gen-erc7730-descriptors --check`. Current evidence:
+  all 54 `pqsigner-xtask` tests passed, the catalogue reports `in sync`, the
+  deterministic research bundles were regenerated and full `make
+  check-codegen` is green, and `git diff --check` is clean. A whole-workspace
+  rustfmt claim is deliberately not made because the in-flight tree contains
+  broad pre-existing formatting drift under the current toolchain.
+- [~] **[pq1-7730-gas-page, P0, S, GAS-SPECIFIC REVIEW CONFIRMED;
+  COMBINED TARGET NO-GO] Restore one-owner gas display without
   weakening the handler FI gate.** The ERC-7730 renderer no longer emits the
   gas triple. All five single/batch confirmation contexts use one handler-owned
   canonical page, A/B pre/post scans, an append-only `prior_len` position that
@@ -3069,26 +3085,45 @@ humanizer.
   after append and again at the final confirmation boundary, and exact global
   uniqueness/no-near-shape proofs. Width, full-buffer, duplicate, conflict,
   corrupted, skipped-call and wrong-index cases fail closed; the differential
-  harness models the complete handler transformation. Fresh E1/E3 evidence on
-  the current implementation: 14/14 focused gas tests; secure host 2,155/0
+  harness models the complete handler transformation. The pre-remediation gas
+  snapshot had 14/14 focused gas tests; secure host 2,155/0
   with one diagnostic ignored; Thumb release link green; full QEMU all
   assertions green, including page-heavy MultiSend and maximum batch.
-  Optimized-ELF FI/resource inspection and the exact dual implementation review
-  remain mandatory before `[x]` or merge. The prior dual review rejected
-  “idempotently trust a renderer-owned page”; this implementation does not.
+  Those are dated gas-specific receipts, not validation of the materially
+  revised combined tree. The current combined tree now has 2,183/0 secure host
+  tests (one diagnostic ignored), a release Thumb link and all 39 QEMU PASS
+  markers including the final sentinel. Its canonical optimized dev/mock ELF
+  also preserves the append/proof calls, but executable FI, a genuinely
+  linkable production profile, hardware resource/high-water evidence and fresh
+  exact review remain mandatory before `[x]` or shipment. The exact
+  pair confirmed the append-only gas-specific mechanism,
+  all five contexts and global gas-shaped scans; it also confirmed that this
+  proof does not cover legacy transcript integrity. The prior dual review
+  rejected “idempotently trust a renderer-owned page”; this implementation
+  does not.
 - [~] **[pq1-entrypoint-v06-pin, P0, S, IMPLEMENTED + SOFTWARE VALIDATED;
-  EXACT IMPLEMENTATION REVIEW PENDING] Pin the wire EntryPoint
+  CONFIRMED ORDERING RED-LINE] Pin the wire EntryPoint
   before any UserOp display or signing.** In both single and batch handlers,
   FI-harden equality of `snap[32..52]` to `ENTRY_POINT_V06`, reject mismatch,
   then discard the supplied value and feed the firmware constant into all four
   T1/T2 digest initializers. Add ordering/source pins, hostile-byte QEMU cases,
   canonical positive controls and optimized gate inspection. This is an
   existing WYSIWYS hardening independent of forced-blind authority; custom
-  EntryPoints remain unsupported. The code, host tests, Thumb link and current
-  QEMU hostile single/batch cases are green; optimized inspection and exact
-  dual implementation review remain open.
+  EntryPoints remain unsupported. The exact pair confirmed the signed-domain
+  pin and all four constant-fed digests, but also confirmed that both handlers
+  parse chain/flags—and the never-ship single e2e+LCD build displays a
+  flag-derived diagnostic—before the pin. Move both gates immediately after
+  snapshot acquisition, strengthen the source-order guard, rerun QEMU and
+  optimized inspection, then re-freeze; the reviewed target cannot merge.
+  The live remediation now places both dual volatile/constant-time gates
+  immediately after the completed snapshot and before every header field or
+  diagnostic; four constant-fed digest initializers remain pinned. Focused
+  single/batch order tests passed 2/2. Current QEMU rejects hostile single and
+  batch EntryPoints, and optimized inspection places both dual gates before
+  header parsing in both handlers. Executable FI and the fresh exact review are
+  still required before closure.
 - [~] **[pq1-safe-short-exec-refusal, P0, S, IMPLEMENTED + SOFTWARE
-  VALIDATED; EXACT IMPLEMENTATION REVIEW PENDING] Reserve every Safe
+  VALIDATED; CONFIRMED VERIFIER-COMPLETION RED-LINE] Reserve every Safe
   `execTransaction` selector claim regardless of calldata length.** Add a
   selector-only `is_exec_transaction_claim`; in single and batch paths, any
   claim whose strict `verify_and_bind_exec` returns `None` must abort before
@@ -3098,33 +3133,208 @@ humanizer.
   deliberate liveness narrowing for non-Safe contracts that reuse the selector.
   The current implementation uses fail-initialized caller-owned claim and
   verifier outputs, independent CFI counters, two strict decodes and two
-  resolution gates in every production pass; host tests, current QEMU
-  selector-only single/batch refusal plus canonical liveness, and Thumb link
-  are green, while optimized inspection and exact dual implementation review
-  remain open.
-- [ ] **[pq1-confirm-page-append-only, P0, CANDIDATE EXPANSION / EXACT DUAL
-  ADJUDICATION REQUIRED] Eliminate the remaining shared in-place confirmation
+  resolution gates in every production pass; host tests, the pre-direct-
+  publication QEMU selector-only single/batch refusal plus canonical liveness,
+  and Thumb link were green. The exact pair confirmed selector ownership and
+  refuted the claim
+  that `decoded.signatures` is omitted from equivalence. It also confirmed a
+  distinct MEDIUM defect: `verify_and_bind_exec_into` calls a value-returning
+  inner verifier through an uninitialized local return area, then publishes
+  and bumps CFI unconditionally, so a skipped inner call can falsely report two
+  completed strict verifications. Publish directly into fail-initialized
+  caller storage and mint CFI only inside the completed strict operation; add
+  an optimized skipped-inner negative control and re-freeze before merge. The
+  live remediation now performs the complete strict ABI decode and operation
+  policy inside the non-inlined caller-storage operation, volatile-publishes
+  `None`/`Some` before minting CFI, and calls no aggregate-return decoder or
+  verifier. Twenty Safe-focused tests plus three order/equivalence pins passed;
+  current QEMU covers short single/batch refusal and canonical liveness, while
+  optimized inspection confirms every site calls the direct caller-storage
+  verifier and that no aggregate-return decoder remains in that operation.
+  Executable skipped-call FI and fresh exact review remain open.
+- [~] **[pq1-confirm-page-append-only, P0, CONFIRMED HIGH/MAJOR;
+  MATERIAL IMPLEMENTATION + FRESH DUAL REVIEW REQUIRED] Eliminate the
+  remaining shared in-place confirmation
   page shifts.** The gas review produced a concrete single-skip trace: an early
   exit in `value_page::insert_blank` can duplicate a tail page, erase a prior
   semantic page, still increment `len`, and let an inserted-page-only proof
   pass. UserOp gas is now append-only, but source review found the same helper
   still used by native value, Safe/CoW fee, paymaster, signer, target and nonce
-  gates; the material exposure is the single-main and batch-member paths. This
-  is a substantiated scope-expansion candidate, not yet an adjudicated finding
-  or implementation mandate. Smallest proposed remedy: coordinate all callers
-  onto bounded append-only construction, strengthen missing completion/CFI
-  proofs, add uniquely marked prefix-preservation and combined handler-order
-  tests, then delete `insert_blank`. Alternative: retain placement only with a
-  caller-owned cryptographic pre/post preservation proof, which adds more TCB,
-  stack/work and FI argument. Include the candidate in the exact pair's fresh
-  implementation review; do not claim the gas fix closes this whole legacy
-  class. E3 inspection confirms the copy loop is real in the exact dev/mock
+  gates; the material exposure is the single-main and batch-member paths. Both
+  exact partners independently confirmed this as PA-C1-001 /
+  PB-PQ1-IR-001. For this combined packet, B's unresolved NO-GO and the
+  workflow prevent a favorable merge transition. Selected reversible remedy:
+  coordinate all callers onto bounded append-only construction, pin the
+  resulting UX order, strengthen missing completion/CFI proofs, add uniquely
+  marked prefix-preservation and combined handler-order tests, then delete
+  `insert_blank`. The alternative FI/CFI-bound pre/post transcript hash remains
+  defensible but adds more TCB and is not being mixed into this slice. Do not
+  claim the gas fix closes this whole legacy class. E3 inspection confirms the
+  copy loop is real in the exact dev/mock
   Thumb release ELF `e5e4c896955e6802b83a4b4ca48f856507b2df7e06abc1b85a12a1c747221320`:
   `insert_blank` is at `0x10012a00`, its 64-byte load/store body at
   `0x10012a32..0x10012a46`, and its loop branch at `0x10012a4c`. This is a
   non-production optimized surface receipt, not an executed fault bypass.
-- [x] **[pq1-7730-semantic-guard, P0, S] DONE 2026-07-16 — catalogue guards
-  now cover security semantics.** The normative guide contains an exact
+  The live remediation has now deleted the helper and converted all seven
+  legacy sites to bounded `push_blank()` suffixes. Unique-marker prefix tests,
+  exact-fit/full-buffer cases and combined suffix-order tests are green;
+  signer, target, native value, legacy fee and nonce have caller-owned
+  completion receipts, while paymaster deliberately remains structural-only
+  under its recorded owner-optional boundary. `rg` finds zero helper
+  references. The canonical optimized dev/mock artifact has no `insert_blank`
+  symbol and retains the append/CFI/proof operations; current QEMU is green
+  through page-heavy MultiSend and maximum batch. Executable FI,
+  production/hardware resource evidence and the workflow-required fresh exact
+  review still gate closure.
+- [~] **[pq1-batch-banner-copy-completion, P0, NEW COVERAGE GAP, M] Completion-
+  prove the separate batch-banner transcript copy.** Deleting the legacy shift
+  helper does not cover `batch::wrap_pages_with_batch_banner`, which builds a
+  second `Pages` buffer and copies every renderer page into indices `1..` with
+  no caller-owned completion receipt or exact input/output transcript proof.
+  A skipped loop body could therefore lose an arbitrary semantic page while
+  leaving the advertised length intact; the new shifted native/fee proofs bind
+  only their own pages. This is source-discovered, not a frozen-pair finding or
+  an executed bypass. Prefer a fail-initialized caller output, completion CFI,
+  exact banner proof and byte-for-byte `inner[i] == wrapped[i+1]` proof; the
+  alternative is a larger no-copy leading-banner renderer refactor. Add
+  unique-marker/short-CFI/corruption tests and measure the two-buffer stack
+  lifetime before presenting the append-only class as closed. The live
+  implementation now fail-initializes a caller-owned output, copies only after
+  a checked page budget, mints a dedicated caller CFI receipt after all bytes,
+  and immediately proves the exact banner, visible length and every
+  `inner[i] == wrapped[i+1]` byte before shifting dispatcher proof indices or
+  appending any member pages. The CFI and exact-proof calls are separated by an
+  F-15.r1 register scrub. Unique-marker, wrong-index/total, short-CFI,
+  banner/inner-byte corruption, stale-length and overflow fail-initialization
+  controls passed 4/4 focused release tests, including exact-fit plus first/last
+  copied-byte coverage. A development/mock optimized artifact emits separate
+  wrapper/proof calls at `0x1000f0be` / `0x1000f0fa`; its handler frame is
+  47,952 bytes (+40 bytes versus the immediately preceding artifact), with the
+  two live `Pages` objects accounting for roughly 3,976 bytes. This is not the
+  production stack bound. Current QEMU exercises the wrapper through the
+  maximum four-member batch and is green; exact production-profile/on-target
+  stack evidence, executable FI and fresh exact review remain open.
+- [~] **[pq1-batch-member-loop-completion, P0, NEW FI CONTROL-FLOW GAP, M]
+  Prove that every declared batch member reached affirmative confirmation.** A
+  read-only optimized-Thumb audit found that a single skipped loop-back branch
+  can exit `for i in 0..batch_count` after one correctly rendered/confirmed
+  early member, then reach the final summary while the later signing path still
+  consumes all `batch_count` parsed members. The banner's per-iteration CFI
+  receipt proves a copy only when an iteration runs; it cannot prove the loop's
+  cardinality. `batch_digest` is also accumulated inside that loop, so an early
+  exit yields a subset digest rather than independently detecting the missing
+  confirmations. This is an adjacent source/optimized-code finding, not caused
+  by the banner refactor and not yet an executed fault bypass. Add a
+  caller-owned, fail-initialized completed-member sequence/cardinality receipt,
+  bind it to a fresh pinned batch count and an independently recomputed
+  all-member digest/transcript fact before the final summary and signing, then
+  add early-exit mutation/fault controls. Preserve the exact optimized receipt,
+  inspect the final ARM gate, and include this material change in the fresh dual
+  review before closure. The live handler now advances a fail-initialized,
+  ordered volatile-count + repeated-CFI receipt only after the affirmative
+  member sentinel, and moves the running digest update to that same boundary.
+  After the loop it re-reads the signed count twice, proves exact receipt
+  cardinality, recomputes the full ordered calldata-digest hash in a second
+  pass, and gates equality before constructing the final summary. Complete
+  N=1..4 prefixes, omitted running-digest updates, first/last-byte mutations,
+  identical members, early-exit, out-of-order, duplicate and reset controls
+  plus the handler-order source pin passed 3/3 focused release tests. The same
+  development artifact shows the loop fallthrough entering count/receipt/full-
+  digest gates at `0x1000f4d6..0x1000f658`, before final-summary construction
+  at `0x1000f666` (ELF SHA-256 `18671615…ba77`). Current QEMU completes the
+  maximum four-member path and all assertions. Executable fault/mutation
+  evidence, exact production profile and dual review remain open.
+- [~] **[pq1-sentinel-composition-scrub, P0, NEW FI COMPOSITION GAP, M]
+  Separate every adjacent sentinel-returning completion check.** The new
+  caller-CFI + exact-page proofs exposed a fault-composition mistake: several
+  handler and dispatcher call sites evaluate `CfiCounter::check_into_sentinel`
+  and then a second sentinel-returning content/resolution proof without
+  `scrub_sentinel_register()` between them. On ARM, skipping the second `bl`
+  can reuse the first call's `OK_SENTINEL` in `r0`, exactly the F-15.r1 class
+  documented by `secure/src/fi.rs`. The same shape exists in the revised Safe
+  claim-resolution aggregation and in CFI-to-final-gate composition for
+  ERC-7730 unknown/binding checks; this is source-discovered, not an executed
+  bypass or frozen-pair finding. Materialize each verdict separately, insert a
+  scrub before every subsequent sentinel-returning call, retain the final
+  fail-closed aggregation, and add source pins that prohibit an unscrubbed
+  adjacency across single, batch, offchain and shared display paths. Inspect
+  the optimized ARM call sequence and run the applicable FI sweep before
+  closure; do not transfer the historical F-15.r1 `[x]` claim to newly added
+  call sites without that evidence.
+  The live remediation now materializes each CFI/content/resolution verdict,
+  scrubs before the next sentinel-returning call, and converts aggregate gates
+  to capture a plain `bool` rather than an `OK_SENTINEL`-valued first closure
+  field. It covers single, batch, offchain, dispatcher final-set, Safe-display
+  unknown-call and Safe claim-publication paths; the initial unlock/read/write
+  pointer chain is also explicitly separated. The cross-surface source guard
+  passed 1/1 in release. Optimized ARM inspection now confirms the reviewed
+  aggregate sites fold to a plain 0/1 value in `r0` after a scrub before the
+  sentinel call, and the current QEMU integration run is green. This remains
+  `[~]`: executable instruction-skip/stuck-at coverage, the exact production
+  profile and fresh dual review are still pending.
+- [~] **[pq1-mandatory-page-completion, P0, NARROWED MAJOR, M] Give every
+  mandatory handler-owned page an independently checkable completion
+  receipt.** The exact pair broadened PA-C1-002 beyond native value/paymaster:
+  native value and both legacy fee pages lack non-inlined completion/CFI
+  proofs, and ERC-8213 has its own two-page gap. Add caller-owned CFI, exact
+  index/content/uniqueness proofs and final-boundary rechecks for mandatory
+  native/fee pages. Paymaster previously had an owner-accepted optional
+  hardening boundary; hardening it in the same mechanically bounded slice is
+  permitted, but do not rewrite that historical decision. Coordinate with the
+  append-only conversion and measure stack/latency before claiming closure.
+  Signer, target, nonce, native value and the atomic legacy-fee pair now mint
+  distinct caller-owned CFI only after publication and have exact
+  transition/content/global-uniqueness proofs; native/nonce zero skips are
+  proved independently, and native/fee pages are rechecked at the final single
+  and batch-member boundaries. Value 28/28, nonce 10/10 and combined
+  differential 22/22 passed. The full 2,183/0 host suite and current QEMU are
+  green. Paymaster remains structural append-only under its recorded optional-
+  hardening boundary. Fresh exact review and production/hardware resource
+  evidence remain open.
+- [~] **[pq1-erc8213-confirmation-proof, P0, NARROWED + OWNER-SPECIFIED
+  ROTATION EXEMPTION, M] Completion-prove every actual fingerprint and state
+  the Type-1 rotation exemption exactly.** Three of five UserOp confirmation contexts append a
+  fingerprint; single and batch rotation do not. A reads the five-context S3
+  sentence as gas-specific while B reads it as a literal fingerprint mandate,
+  so that wording remained UNRESOLVED after the one bounded response. The exact
+  Type-1 calldata includes secret-derived `slot_owner_bytes`, created roughly
+  500 lines after the current pre-derivation consent point; moving key
+  derivation before a cancellable UI wait would materially expand secret
+  lifetime, cleanup/cache and lifecycle scope. Do not invent a pseudo-ERC-8213
+  hash. Instead, explicitly exempt the firmware-constructed Type-1 rotation in
+  the normative prose, bind consent to the fully rendered injective slot index
+  below, and add a non-inlined caller-CFI proof over exact two-page indices,
+  kind and all 32 bytes for the three real fingerprints, rechecked immediately
+  before each confirmation. A future exact 5/5 design is a separate material
+  lifecycle/runtime slice.
+  The live implementation now uses one non-inlined caller-CFI append API and
+  exact transition/final-set proofs in all five real contexts: single main,
+  batch member, batch final, offchain typed data, and offchain personal/raw32.
+  Kind, both indices, label and all 32 hash bytes are rebuilt independently;
+  wrong-kind/hash/index, corruption, short-capacity and skipped-call controls
+  fail closed. The generated guide and fingerprint documentation state the
+  rotation exemption and forbid a synthetic digest. Focused ERC-8213 tests
+  passed 5/5 plus all handler-context source pins; current QEMU paints complete
+  fingerprints across the single, batch and off-chain flows. Fresh exact
+  review remains.
+- [~] **[pq1-slot-rotation-injective, P0, CONFIRMED MEDIUM WYSIWYS, S] Render
+  every accepted 22-bit slot index injectively.** `New slot: ` leaves six
+  decimal columns, so `1_000_000` and `1_000_001` render identically and
+  `4_194_303` looks like `419430`; no other rotation page distinguishes the
+  input. Shorten or spill the label so all seven digits are visible, retain the
+  accepted range or explicitly narrow it, and add an exhaustive injectivity
+  control across `1..=4_194_303` plus complete rotation-page-set negatives.
+  No theft path was shown; consent integrity and bootstrap-budget use are
+  affected. The live renderer now uses `Slot: `, which leaves ten decimal
+  columns, and the release-host control round-trips every accepted 22-bit index
+  plus `u32::MAX`. A composed rotation+signer+nonce+gas control holds every
+  suffix byte constant while distinguishing the old collision pair and maximum
+  index; 6 focused tests passed, and current QEMU exercises the revised slot
+  copy on real rotation paths. Fresh exact review and maximum-index physical
+  NV3007 evidence remain separate gates.
+- [~] **[pq1-7730-semantic-guard, P0, S, ONE CONFIRMED GUARD RED-LINE]
+  Catalogue guards cover current security semantics but not future route
+  exhaustiveness.** The normative guide contains an exact
   xtask-managed manifest generated from `FormatOp::ALL`, stable registry names,
   and the same `FormatterRoute` mapping production dispatch executes. It pins
   every opcode (`NftName=0x04`, `Unit=0x09`), all implemented branches, and the
@@ -3136,8 +3346,56 @@ humanizer.
   page remains. Stale semantic-doc mutations fail the xtask gate. Fresh
   evidence: erc7730 193/0; secure renderer 67/0 (1 diagnostic ignored) plus the
   fatal-policy test; xtask 54/0; catalogue `in sync`; thumbv8m
-  `ui-noop,mock-se` check green. No signing eligibility or fallback behavior
-  changed.
+  `ui-noop,mock-se` check green. Current reruns pass erc7730 194/0, xtask
+  54/0, descriptor `in sync`, and the full deterministic `check-codegen` gate.
+  The exact pair confirmed PA-S4-005:
+  `FormatterRoute::manifest_status` still uses `_ =>`, so a future route can be
+  silently documented as implemented. Enumerate every current route explicitly
+  and rerun the generated-manifest stale mutation before restoring `[x]`. The
+  live match now names all 14 routes explicitly; semantic-manifest tests passed
+  2/2 and the generated catalogue check is in sync. Fresh exact review remains
+  required. No signing eligibility or fallback behavior changes.
+- [~] **[pq1-erc8176-advisory-guards, P1, CONFIRMED/NARROWED ASSURANCE, S]
+  Bind live rows to the exact schema and make normalization tests non-vacuous.**
+  Request an immutable per-row schema identifier, require exact
+  `ERC8176_SCHEMA_UID`, and reject missing/wrong schema rows; otherwise use only
+  the authenticated offline evidence path. Replace digit-only attester fixtures
+  with alphabetic mixed-case values through parser → trusted set → summary and
+  require an all-normalizers-removed mutant to fail. Keep the checker advisory
+  and production authorization unconditionally false. Explicit pagination is
+  deferred until the EAS API's authoritative cursor/cap contract is known;
+  honest truncation currently biases toward shortfall, not false readiness.
+  The live query now requests `schemaId`, rejects missing/wrong/noncanonical
+  rows before threshold arithmetic, and exercises alphabetic mixed-case values
+  across all three normalization layers; 12 offline tests passed and a
+  read-only live query accepted the selected field. The 2026-07-17 query found
+  zero catalogue matches, and `prod-erc7730-provenance-check` still refuses the
+  `dev-unattested` catalogue as designed. Fresh exact review remains open; the
+  checker still cannot authorize a production flip.
+
+  **Combined convergence receipt (2026-07-17; not the later review identity):**
+  secure release host 2,183 passed / 0 failed / 1 ignored (log SHA-256
+  `c7ab7d92…e840`), ERC-7730 194/0 (`c24a3475…d5fc`), xtask 54/0
+  (`10da3123…a7a7`), dbgen 237/0, ERC-8176 offline 12/0, descriptor and full
+  codegen checks in sync, and QEMU 39 PASS markers including the final sentinel
+  (`b8d83774…2492`). The canonical optimized dev/mock Thumb artifact at the
+  same firmware source has ELF/map/disassembly/stack-report SHA-256 values
+  `149f498f…12e5` / `41ad0a35…abc8` / `f2c378d6…daa4` /
+  `bd16d8a0…01a`, 306,784/475,136 bytes of FLASH, 51,560 bytes `.bss`, and
+  47,952-/31,328-byte batch/single local frames. This is E1/E3/E4 evidence,
+  not a source-identity freeze, whole-call stack proof, physical FI/UI test,
+  production build, release or shipment evidence.
+- [ ] **[pq1-impl-review-evidence-hygiene, process, S] Archive the immutable
+  implementation-review evidence without rewriting raw reports.** Publish the
+  reproducible six-component identity recipe or remove the recipe-less
+  `26c201cd…` aggregate, supersede B's admitted carried-forward `MATCH` only in
+  the matrix/canonical record, and include immutable ELF/map paths with hashes
+  and profile. Archive byte-identical first/cross/bounded reports, runtime
+  receipts and matrix `39ad7be3…0eb0` in a canonical post-cross implementation
+  findings record after the matrix freeze, and add its catalogue row to
+  `docs/security/adversarial-review/findings/README.md`. Preserve all six
+  identity components plus every receipt/report hash. The reporting commit is
+  not the reviewed target.
 - [ ] **[pq1-7730-native-erc20-shortcut, P2, DESIGN-FIRST, M] Decide native
   direct ERC-20 clear rendering separately from forced blind.** Only exact
   canonical transfer/approve framing plus Merkle-authenticated
@@ -3217,19 +3475,27 @@ humanizer.
   companion-UX/reference decoder; PQ1's device-pinned, byte-bound renderer and
   hostile-host model remain the security boundary.
 
-**Execution order/gate:** the stale guide/catalogue facts are guarded and the
-first exact dual review is complete with NO-GO. Resolve the prompt-abuse owner
-decision, freeze material v2, and run fresh mutually withheld architecture
-passes plus cross-adjudication before forced-tier behavior. The EntryPoint pin,
-short-Safe refusal, handler-only gas ownership and semantic guards are separate
-fail-closed slices: their current software implementations still need the
-frozen exact dual implementation review and remaining evidence before merge.
-That review must also adjudicate the newly surfaced legacy `insert_blank`
-preservation candidate and whether it blocks the slice; do not silently treat
-it as closed by the append-only gas fix. Then take fixtures/provenance/status
-before larger semantic coverage features. No campaign row changes production
-shipment authority, the ERC-8176 blocker, frozen wire formats, or irreversible
-hardware state.
+**Execution order/gate:** the first exact current-refusal implementation review
+is frozen and **NO-GO**. First land the coherent remediation slice: append-only
+page construction plus mandatory completion proofs; exact batch-banner copy;
+ordered all-member confirmation/digest completion; Safe direct publication;
+EntryPoint-before-parse order; scrub-separated sentinel composition; ERC-8213
+rotation/completion; injective slot rendering; exhaustive route mapping; and
+ERC-8176 schema/normalization guards. The focused tests, full secure/Thumb/QEMU
+development convergence and optimized checklist are now green for Safe direct-
+publication shape, EntryPoint pre-parse gates, zero `insert_blank`, append/CFI
+calls, batch copy/receipt/digest proofs, fingerprint append/final proofs, map
+size and local stack frames. The E3 artifact is explicitly dev/mock and does not
+close executable FI, whole-call/on-target stack, production provenance or
+hardware evidence. Freeze a new material identity and run fresh mutually
+withheld implementation passes plus symmetric cross-adjudication. Separately resolve
+the forced-blind prompt-abuse owner decision and run fresh architecture review
+before any forced-tier behavior. Then take fixtures/provenance/status before
+larger semantic coverage features. No campaign row changes production shipment
+authority, the ERC-8176 provenance blocker, stack/hardware evidence, frozen
+wire formats, or irreversible hardware state. Production closure additionally
+depends on `[erc7730-stack-bound]`, `[erc7730-hw-ui]` and executable FI evidence
+for the new completion gates.
 
 - [ ] **ERC-7730 phase-5 residuals** — MOST landed (the `erc7730-dev-unattested`
   feature, both `tools/cross_parity_erc7730.py`/`cross_parity_erc8213.py`, and
@@ -3483,8 +3749,10 @@ remain useful dated evidence, but are kept distinct from the merged-root run.
   compiler/call-graph stack sizes with on-target high-water measurement for the
   deepest `SIGN_USEROP`/batch → Safe/CoW/ERC-7730/nested-render and
   C10/recovery paths, include IRQ/NMI nesting and a reviewed guard margin, then
-  enforce the bound against `static_end..stack_start` in CI. Host tests and the
-  static link gap are not evidence of this bound.
+  enforce the bound against `static_end..stack_start` in CI. Include the
+  simultaneous two-`Pages` batch-banner copy, confirmation receipt and second
+  Keccak pass introduced by the PQ1 remediation. Host tests and the static link
+  gap are not evidence of this bound.
 
 - [ ] **[erc7730-hw-ui, ship validation] Physical NV3007 WYSIWYS campaign.**
   On a production-like STM32U585 + NV3007 build without `e2e-test` or a capture
@@ -3493,7 +3761,10 @@ remain useful dated evidence, but are kept distinct from the merged-root run.
   lengths, raw two-page words, unknown-token fallbacks, Safe/MultiSend nesting,
   refusal banners, and the `dev-unattested` warning. Include lane-zero omission,
   an exact 48-hex-character nonzero lane, `REGISTER_SLOT` Type-1 `base` versus
-  Type-2 `base+1`, every batch member, and the batch-final confirmation. Capture
+  Type-2 `base+1`, `Slot: 1000000` / `1000001` / `4194303`, the append-only
+  renderer→native/fee→signer→target→lane→gas→fingerprint order, every exact
+  batch banner/member and the batch-final confirmation with complete ERC-8213
+  pages. Capture
   physical frames and button transitions; compare with host golden rows and
   check clipping, ghosting, stale rows, and confirm-before-last-page behavior.
   Host/QEMU page buffers do not validate the shipping panel path.
@@ -3503,8 +3774,9 @@ remain useful dated evidence, but are kept distinct from the merged-root run.
   volatile FAIL publication, known-call decision, direct/Safe/MultiSend route
   gates, and final refusals. Acceptance: no unrooted, mis-bound, or omitted-known
   descriptor reaches confirmation or C10 release. Include nonce-lane skip,
-  inserter-index, page-corruption, and completion-proof faults; no nonzero lane
-  may reach confirmation without its exact page. Source mutation/QEMU tests
+  append-index, batch-copy/early-loop-exit, stale-sentinel, page-corruption, and
+  completion-proof faults; no nonzero lane or incomplete batch may reach
+  confirmation without its exact pages/receipts. Source mutation/QEMU tests
   establish structure, not physical fault coverage. This item grants no
   authority to flash hardware or run destructive tests.
 
@@ -3635,8 +3907,20 @@ live defects, not research residuals.**
 - [ ] **D3 — `hal/src/lib.rs`'s `Rng` trait asserts an SP 800-90B obligation the code does not meet.**
   Either implement the health tests (decidable software) or delete the obligation. Today the contract
   asserts something untrue, and that RNG feeds an irreversible OTP burn.
-- [ ] **D4 — a torn OTP master burn silently halves the device master to 128 bits, permanently, with
-  no detection and no retry.** `otp.rs::burn_device_master()` programs the 32-byte master as **two
+- [x] **D4 — FIXED 2026-07-17 (`a53aefc3`). A torn OTP master burn silently halved the device master
+  to 128 bits, permanently, with no detection and no retry.** Fix: new pure `crate::otp_state`
+  (MMIO-free, host-linkable — same split as `flash_policy`) classifying `MasterKeyState
+  { Virgin, Partial, Complete }` **per quad-word**; `read_device_master()` refuses anything not
+  `Complete` (the barrier that makes it unreachable — no caller can obtain a half-blank master);
+  `is_device_master_burned()` now means `Complete`, fail-closed at every call site;
+  `master_key_state()` double-reads with an FI delay and fails closed on disagreement (deliberately
+  NOT `rollback_floor`'s `max(a,b)` vote — that bias is right for a monotonic admission check and
+  wrong for an irreversible write); `burn_device_master()` **completes** `Partial` and programs
+  quad-words sequentially, aborting on the first error (it previously ran both programs before
+  inspecting either result). 8 behavioural tests on the pure classifier + an exhaustive 2^8 sweep,
+  **mutation-checked** (reverting to the per-bit rule turns 6 of 8 RED). 2194 host tests green,
+  clippy clean, cross-builds on both OTP feature paths. Original report:
+  `otp.rs::burn_device_master()` programs the 32-byte master as **two
   separate QW writes** (`program_otp_qw(MASTER_KEY_ADDR, &qw0)` then `+16, &qw1`). Its readback guard
   is same-run only and **never runs across a reset**. A power cut between the two writes ⇒ next boot:
   `is_device_master_burned()` returns **true** (it returns true on *any* of the 8 words `!= 0xFFFF_FFFF`,
