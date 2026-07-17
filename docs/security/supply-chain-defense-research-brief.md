@@ -13,6 +13,14 @@ the gaps the 2026-05-29 supply-chain survey established.
 > locks anything, and every shipped unit is pre-first-power auditable — the
 > malicious-station residual becomes detectable by receiving audits and any
 > end user with a probe.
+>
+> **UPDATE 2026-07-17.** The "any end user with a probe" line is now a
+> designed consumer procedure, not an expert escape hatch:
+> [`user-device-verification.md`](user-device-verification.md) — commodity
+> $5 CMSIS-DAP probe on USB-C SBU pins, reset-halt ground-truth dump vs the
+> reproducible release, fingerprint-word binding, confirm-gated Phase A.
+> Its birth-certificate/transparency-log section is where this brief's #22
+> manifest output should land.
 
 ```
 DEEP RESEARCH BRIEF — State-of-the-art supply-chain-attack defense for a crypto

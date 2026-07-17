@@ -254,6 +254,12 @@ reviewed and owner-authorized.
 
 ## Independent verification workflow
 
+> **UPDATE 2026-07-17.** Rebuilding proves *the published artifact* matches
+> the source. Proving *a delivered device* contains exactly that artifact is
+> the end-user SWD ground-truth procedure (reset-halt full dump at RDP-0,
+> before first lock) designed in
+> [`docs/security/user-device-verification.md`](../security/user-device-verification.md).
+
 A non-developer who wants to confirm the firmware on their device matches
 the published source needs exactly two commands:
 

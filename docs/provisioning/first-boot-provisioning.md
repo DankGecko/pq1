@@ -70,6 +70,21 @@ mirrored verbatim in `docs/provisioning/factory-provisioning.md` and
   + blank per-device pages 123–127 → show "FIRST BOOT / DO NOT POWER OFF" →
   **program RDP=0xCC → reset.** This is the MCU point-of-no-return, moved off
   the factory line onto the user's device.
+
+  > **UPDATE 2026-07-17 (owner design decision) — Phase A must be
+  > CONFIRM-GATED.** The RDP=0xCC burn must not run automatically on first
+  > power. Before it, the trusted UI shows "Confirm to lock device — after
+  > that verification over SWD not possible anymore." and waits for a
+  > deliberate on-device button sequence; until confirmed the device stays at
+  > RDP-0, fully re-verifiable, touches no SE/USB/journal state, and every
+  > boot re-enters the same prompt. This means accidental or transit
+  > power-ups no longer destroy verifiability (today merely powering the
+  > board self-locks it), and an attacker who confirms the lock in transit
+  > only produces a unit that arrives locked → fails the unboxing
+  > verification → returned (no seed exists yet). Not yet implemented —
+  > current code runs Phase A unconditionally right after `ui::init()`.
+  > User-side procedure this serves:
+  > [`../security/user-device-verification.md`](../security/user-device-verification.md).
 - **Phase B (post-lock, per-die DHUK now live), journaled + resumable:**
   - **BHK first-write** (TRNG → DHUK-ECB page 126; anti-pre-plant
     erase-and-reprovision).
