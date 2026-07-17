@@ -1285,3 +1285,62 @@ fn negative_pbs_rotation_probe_does_not_let_a_bus_fault_reach_e140() {
         "an inconclusive FINAL-PBS probe must fail closed, never reach E140"
     );
 }
+
+/// **D1 follow-up — `HandshakeFailed` must stay split.**
+///
+/// The original D1 fix left `OptigaError::Shield` conflating "wrong PBS" with
+/// "handshake faulted", which was the one residual path by which a bus fault
+/// could still reach the E140 rewrite. `ShieldError` now separates them, and
+/// the separation is only worth anything if `ensure_shield` stops discarding
+/// it: `map_err(|_| OptigaError::Shield)` threw the distinction away.
+///
+/// The dividing line is evidence, not severity. `HandshakeRejected` means the
+/// chip answered and its `SlaveFinished` failed to authenticate under keys
+/// derived from the loaded PBS — a CCM MAC failure IS the proof our PBS is
+/// wrong. `HandshakeTransport` means the exchange never got that far.
+#[test]
+fn negative_shield_handshake_error_stays_split_by_evidence() {
+    // The two classes exist and the collapsed variant is gone.
+    assert!(SHIELD_SRC.contains("HandshakeTransport"));
+    assert!(SHIELD_SRC.contains("HandshakeRejected"));
+    assert!(
+        !SHIELD_SRC.contains("ShieldError::HandshakeFailed"),
+        "ShieldError::HandshakeFailed re-appeared — it conflates 'the chip \
+         rejected our PBS' with 'the bus faulted', and rotate_pbs_to_salted \
+         answers the former by rewriting E140 (the brick path)."
+    );
+
+    // The CCM MAC failure — the authoritative wrong-PBS signal — must be
+    // classified as a rejection, never as transport.
+    let decrypt_site = SHIELD_SRC
+        .find("SlaveFinished decrypt FAILED")
+        .expect("SlaveFinished decrypt check exists");
+    let after = &SHIELD_SRC[decrypt_site..decrypt_site + 400];
+    assert!(
+        after.contains("ShieldError::HandshakeRejected"),
+        "a CCM MAC failure on SlaveFinished is the authoritative 'wrong PBS' \
+         verdict and must classify as HandshakeRejected"
+    );
+
+    // A failed MasterHello transceive is transport — the chip may not have
+    // seen it at all.
+    let hello_site = SHIELD_SRC
+        .find("MasterHello transceive FAILED")
+        .expect("MasterHello transceive check exists");
+    let after_hello = &SHIELD_SRC[hello_site..hello_site + 300];
+    assert!(
+        after_hello.contains("ShieldError::HandshakeTransport"),
+        "a failed MasterHello transceive proves nothing about the PBS"
+    );
+
+    // And ensure_shield must not throw the distinction away again.
+    assert!(
+        !MOD_SRC.contains("self.shield.establish(&mut self.ifx)\n                        .map_err(|_| OptigaError::Shield)?;"),
+        "ensure_shield re-collapsed the handshake error with map_err(|_| ...)"
+    );
+    assert!(
+        MOD_SRC.contains("shield::ShieldError::HandshakeTransport => OptigaError::Transport"),
+        "ensure_shield must map a transport-class handshake failure onto \
+         OptigaError::Transport so is_inconclusive() sees it"
+    );
+}

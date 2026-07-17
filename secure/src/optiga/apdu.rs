@@ -62,15 +62,21 @@ impl OptigaError {
     /// `PinIncorrect`, `PinLocked` and `NotProvisioned` are verdicts the chip
     /// returned. `BufferOverflow` is our own bug.
     ///
-    /// **Known imprecision — `Shield` is NOT classified inconclusive, and it is
-    /// ambiguous.** A Shielded-Connection failure can mean either "the PBS is
-    /// wrong" (authoritative: not yet rotated) or "the handshake fell over for
-    /// transport reasons" (inconclusive). This taxonomy cannot separate them,
-    /// so `Shield` is conservatively treated as authoritative in order to keep
-    /// resume working — which is precisely the residual case where a transport
-    /// fault could still reach the rewrite. Splitting `Shield` into
-    /// handshake-rejected vs handshake-faulted is the follow-up; the SE050 side
-    /// already distinguishes its equivalent (`Scp03` vs `Transport`).
+    /// `Shield` is authoritative, and as of 2026-07-17 that is now *earned*
+    /// rather than assumed. `ShieldError` separates `HandshakeTransport` (the
+    /// PRL exchange never got far enough to prove anything) from
+    /// `HandshakeRejected` (the chip's `SlaveFinished` failed to authenticate
+    /// under keys derived from the loaded PBS — a CCM MAC failure IS the proof
+    /// our PBS is wrong), and `ensure_shield` maps the former onto
+    /// `Transport` so it lands in the inconclusive set here. Only a genuine
+    /// rejection reaches `Shield`. This mirrors the SE050 split (`Scp03` vs
+    /// `Transport`).
+    ///
+    /// Residual: `Shield` is still reachable from `pbs_loaded == false` and
+    /// from the steady-state `DecryptFailed`/`NotActive` paths, which are
+    /// programming errors or an already-established session rather than probe
+    /// verdicts — neither is a transport fault, so treating them as
+    /// authoritative is correct.
     #[must_use]
     pub const fn is_inconclusive(&self) -> bool {
         matches!(

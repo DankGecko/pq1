@@ -511,8 +511,20 @@ impl OptigaTrustM {
                 // feature exists for controlled validation; it is NOT
                 // production authority and is not a handshake prerequisite.
                 unsafe {
-                    self.shield.establish(&mut self.ifx)
-                        .map_err(|_| OptigaError::Shield)?;
+                    // D1 follow-up: do not discard WHY the handshake failed.
+                    // `HandshakeTransport` means the PRL exchange never got far
+                    // enough to prove anything about the PBS — surface it as a
+                    // transport fault so `is_inconclusive()` sees it and no
+                    // caller can read it as "wrong PBS". Only
+                    // `HandshakeRejected` (SlaveFinished failed to authenticate
+                    // under keys derived from the loaded PBS) is an
+                    // authoritative verdict. `map_err(|_| Shield)` collapsed
+                    // both, which is how a bus fault could reach the E140
+                    // rewrite.
+                    self.shield.establish(&mut self.ifx).map_err(|e| match e {
+                        shield::ShieldError::HandshakeTransport => OptigaError::Transport,
+                        _ => OptigaError::Shield,
+                    })?;
                 }
                 secure_log!("[OPTIGA/shield] PRL handshake OK — encrypted I2C active");
             }
@@ -591,9 +603,11 @@ impl OptigaTrustM {
             // is journal-resumable, so the next boot re-probes with a fresh
             // link.
             //
-            // Residual: `OptigaError::Shield` cannot separate "wrong PBS" from
-            // "handshake faulted" and is conservatively authoritative — see
-            // `OptigaError::is_inconclusive`.
+            // The `Shield` verdict is now earned, not assumed: `ensure_shield`
+            // maps a transport-class handshake failure onto
+            // `OptigaError::Transport`, so only a genuine cryptographic
+            // rejection (SlaveFinished MAC failure under keys derived from the
+            // loaded PBS) reaches the fall-through below.
             self.shield.load_pbs(&final_pbs);
             match self
                 .hard_reset_and_reinit()

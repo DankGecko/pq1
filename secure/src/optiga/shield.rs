@@ -57,7 +57,26 @@ const RANDOM_LEN: usize = 32;
 #[derive(Debug)]
 pub enum ShieldError {
     NotActive,
-    HandshakeFailed,
+    /// The handshake did not complete for **transport** reasons: a PRL
+    /// transceive failed, or a frame was short/malformed/oversized. The
+    /// exchange never reached the point of proving anything.
+    ///
+    /// **This tells you NOTHING about the PBS** (work-todo D1 follow-up). It
+    /// must not be read as "the pairing secret is wrong", because the caller
+    /// that asks that question — `rotate_pbs_to_salted`'s resume probe —
+    /// answers "not rotated yet" by **rewriting E140**, the operation that
+    /// bricked the bench chip (`docs/secure-elements/optiga-brick-postmortem.md`).
+    HandshakeTransport,
+    /// The exchange completed and the OPTIGA's `SlaveFinished` did **not**
+    /// authenticate under the session keys we derived from the loaded PBS —
+    /// CCM MAC failure, or a `random_S` / `master_seq` echo mismatch after a
+    /// successful decrypt.
+    ///
+    /// This is an **authoritative** verdict: the chip answered, and the answer
+    /// proves our PBS is not the one it holds. Directly analogous to
+    /// `Se050Error::Scp03` (cryptogram mismatch) as opposed to
+    /// `Se050Error::Transport`, which is the split this mirrors.
+    HandshakeRejected,
     DecryptFailed,
     BufferOverflow,
     NoPbs,
@@ -373,7 +392,8 @@ impl ShieldedConnection {
             Ok(n) => n,
             Err(e) => {
                 secure_log!("[OPTIGA/shield] MasterHello transceive FAILED: {:?}", e);
-                return Err(ShieldError::HandshakeFailed);
+                // Transport: the chip may not even have seen MasterHello.
+                return Err(ShieldError::HandshakeTransport);
             }
         };
 
@@ -393,7 +413,8 @@ impl ShieldedConnection {
                 "[OPTIGA/shield] SlaveHello too short ({} < {}), bytes=[{:02x}{:02x}{:02x}{:02x}...]",
                 n, SLAVE_HELLO_LEN, resp[0], resp[1], resp[2], resp[3]
             );
-            return Err(ShieldError::HandshakeFailed);
+            // Truncated/garbled reply — a framing fault, not a PBS verdict.
+            return Err(ShieldError::HandshakeTransport);
         }
         let mut random_s = [0u8; RANDOM_LEN];
         random_s.copy_from_slice(
@@ -444,7 +465,7 @@ impl ShieldedConnection {
         let mut resp2 = [0u8; 128];
         secure_log!("[OPTIGA/shield] sending MasterFinished ({}B)", msg_len);
         let n2 = ifx.transceive_prl(&finished_msg[..msg_len], &mut resp2)
-            .map_err(|_| ShieldError::HandshakeFailed)?;
+            .map_err(|_| ShieldError::HandshakeTransport)?;
         secure_log!(
             "[OPTIGA/shield] MasterFinished response n={}, SCTR={:02x}",
             n2, resp2[0]
@@ -454,11 +475,12 @@ impl ShieldedConnection {
         // Format: SCTR(0x08) | master_seq(4 BE) | ct(36) | MAC(8) = 49 B.
         // See `ifx_i2c_presentation_layer.c:559-607`.
         if n2 < SC_HEADER_LEN + CCM_TAG_LEN {
-            return Err(ShieldError::HandshakeFailed);
+            // Short frame — framing fault, no PBS evidence.
+            return Err(ShieldError::HandshakeTransport);
         }
         if resp2[0] != SCTR_HANDSHAKE_FINISHED {
             secure_log!("[OPTIGA/shield] SlaveFinished SCTR unexpected: {:02x}", resp2[0]);
-            return Err(ShieldError::HandshakeFailed);
+            return Err(ShieldError::HandshakeTransport);
         }
         let master_seq = u32::from_be_bytes([resp2[1], resp2[2], resp2[3], resp2[4]]);
         secure_log!("[OPTIGA/shield] master_seq={:#010x}", master_seq);
@@ -485,7 +507,8 @@ impl ShieldedConnection {
                 slave_pt_len,
                 slave_plain.len()
             );
-            return Err(ShieldError::HandshakeFailed);
+            // Oversized frame — malformed transport, no PBS evidence.
+            return Err(ShieldError::HandshakeTransport);
         }
         let dec_aad = Self::build_aad(SCTR_HANDSHAKE_FINISHED, master_seq, slave_pt_len as u16);
 
@@ -498,12 +521,17 @@ impl ShieldedConnection {
         );
         if !ok {
             secure_log!("[OPTIGA/shield] SlaveFinished decrypt FAILED");
-            return Err(ShieldError::HandshakeFailed);
+            // CCM MAC failure under keys derived from the loaded PBS: the chip
+            // holds a different PBS. THIS is the authoritative "wrong PBS".
+            return Err(ShieldError::HandshakeRejected);
         }
 
         // Plaintext of SlaveFinished must be `random_S (32) || master_seq (4 BE)`.
         if slave_pt_len < 36 {
-            return Err(ShieldError::HandshakeFailed);
+            // Authenticated (MAC passed) but the wrong shape — the chip is
+            // speaking our session keys, so this is a chip/protocol fault, not
+            // a transport one.
+            return Err(ShieldError::HandshakeRejected);
         }
         let mut diff: u8 = 0;
         for i in 0..RANDOM_LEN {
@@ -511,14 +539,14 @@ impl ShieldedConnection {
         }
         if diff != 0 {
             secure_log!("[OPTIGA/shield] SlaveFinished random_S mismatch");
-            return Err(ShieldError::HandshakeFailed);
+            return Err(ShieldError::HandshakeRejected);
         }
         let echoed_master_seq = u32::from_be_bytes([
             slave_plain[32], slave_plain[33], slave_plain[34], slave_plain[35],
         ]);
         if echoed_master_seq != master_seq {
             secure_log!("[OPTIGA/shield] SlaveFinished master_seq mismatch");
-            return Err(ShieldError::HandshakeFailed);
+            return Err(ShieldError::HandshakeRejected);
         }
 
         // Session established. Subsequent protected records use the
