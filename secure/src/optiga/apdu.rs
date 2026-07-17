@@ -47,6 +47,39 @@ pub enum OptigaError {
     BufferOverflow,
 }
 
+impl OptigaError {
+    /// Does this error mean **"I don't know"** rather than an answer the OPTIGA
+    /// actually gave?
+    ///
+    /// **Why this exists (work-todo D1).** A probe that cannot say "I don't
+    /// know" says "no", and in `rotate_pbs_to_final` a "no" falls through to an
+    /// **E140 rewrite** — the operation that bricked the bench chip
+    /// (`docs/secure-elements/optiga-brick-postmortem.md`). A bus fault must
+    /// never be allowed to drive it.
+    ///
+    /// `I2c` / `Transport` / `Crc` are physical- and framing-layer faults: the
+    /// chip may not have seen the command, or its reply was mangled. `Status`,
+    /// `PinIncorrect`, `PinLocked` and `NotProvisioned` are verdicts the chip
+    /// returned. `BufferOverflow` is our own bug.
+    ///
+    /// **Known imprecision — `Shield` is NOT classified inconclusive, and it is
+    /// ambiguous.** A Shielded-Connection failure can mean either "the PBS is
+    /// wrong" (authoritative: not yet rotated) or "the handshake fell over for
+    /// transport reasons" (inconclusive). This taxonomy cannot separate them,
+    /// so `Shield` is conservatively treated as authoritative in order to keep
+    /// resume working — which is precisely the residual case where a transport
+    /// fault could still reach the rewrite. Splitting `Shield` into
+    /// handshake-rejected vs handshake-faulted is the follow-up; the SE050 side
+    /// already distinguishes its equivalent (`Scp03` vs `Transport`).
+    #[must_use]
+    pub const fn is_inconclusive(&self) -> bool {
+        matches!(
+            self,
+            OptigaError::I2c | OptigaError::Transport | OptigaError::Crc
+        )
+    }
+}
+
 impl From<super::ifx_i2c::IfxError> for OptigaError {
     fn from(e: super::ifx_i2c::IfxError) -> Self {
         match e {

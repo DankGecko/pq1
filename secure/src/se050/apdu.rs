@@ -20,6 +20,10 @@ use super::t1oi2c::{T1Error, T1State};
 #[derive(Debug)]
 pub enum Se050Error {
     /// T1oI2C framing, CRC, or timeout error.
+    ///
+    /// **Inconclusive** — see [`Se050Error::is_inconclusive`]. The SE may never
+    /// have seen the command, or may have executed it and lost the reply. This
+    /// is not evidence about any credential or object.
     Transport,
     /// SCP03 handshake or cryptogram mismatch.
     Scp03,
@@ -67,6 +71,35 @@ pub enum Se050Error {
     /// Caller supplied an out-of-range argument (e.g. `GetRandom`
     /// length outside the SE050's accepted [1, 256] range).
     InvalidParam,
+}
+
+impl Se050Error {
+    /// Does this error mean **"I don't know"** rather than an answer the SE
+    /// actually gave?
+    ///
+    /// **Why this exists (work-todo D1).** A probe that cannot say "I don't
+    /// know" says "no" — and at every rotation site in this driver, "no" means
+    /// *mutate*. `Transport` is a T=1' framing / CRC / timeout fault: the SE may
+    /// never have seen the command, or may have executed it and lost the reply.
+    /// It is not evidence about a credential, an object's existence, or a
+    /// lifecycle state, and it must never be allowed to drive a write.
+    ///
+    /// Everything else is authoritative *because the SE spoke*: `Scp03` is a
+    /// cryptogram/MAC mismatch (the card answered and the answer did not
+    /// verify), `Status`/`PinIncorrect`/`AuthMethodBlocked`/`NotProvisioned`
+    /// are verdicts it returned, and `BufferOverflow`/`InvalidParam` are our
+    /// own bugs, not the card's state.
+    ///
+    /// Callers on a *read-only* path may still treat an inconclusive result as
+    /// a plain failure. Callers whose next step is an **irreversible or
+    /// destructive** mutation (PUT KEY, delete-and-recreate, an E140 rewrite)
+    /// MUST fail closed on it. The first-boot ceremony is journal-resumable, so
+    /// failing closed *is* the retry: the next boot re-enters the step with a
+    /// fresh link.
+    #[must_use]
+    pub const fn is_inconclusive(&self) -> bool {
+        matches!(self, Se050Error::Transport)
+    }
 }
 
 impl From<T1Error> for Se050Error {

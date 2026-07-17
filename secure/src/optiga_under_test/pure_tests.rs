@@ -1224,3 +1224,64 @@ fn negative_hw_counter_pin_counter_layout_be_u32_pair() {
 // Coverage seeds deliberately left to integration / on-target tests
 // (documented in reports/tests/secure-optiga.md "Coverage gaps").
 // ─────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────
+// D1 — an inconclusive probe must never drive the E140 rewrite
+// ─────────────────────────────────────────────────────────────────────
+
+/// `I2c` / `Transport` / `Crc` are physical- and framing-layer faults: the chip
+/// may not have seen the command, or its reply was mangled. They are not
+/// evidence about the PBS. `Status` / `PinIncorrect` / `PinLocked` /
+/// `NotProvisioned` are verdicts the chip returned.
+#[test]
+fn positive_optiga_error_classifies_bus_faults_as_inconclusive() {
+    assert!(
+        APDU_SRC.contains("pub const fn is_inconclusive(&self) -> bool"),
+        "OptigaError must be able to say 'I don't know' — see work-todo D1"
+    );
+    assert!(
+        APDU_SRC.contains("OptigaError::I2c | OptigaError::Transport | OptigaError::Crc"),
+        "the inconclusive set must be exactly the bus/framing faults"
+    );
+}
+
+/// **D1 regression guard — the PBS rotation probe gates the E140 rewrite.**
+///
+/// `rotate_pbs_to_salted` probes whether the FINAL PBS already establishes a
+/// shield and, if not, falls through to rewriting E140 — the operation that
+/// bricked the bench chip (`docs/secure-elements/optiga-brick-postmortem.md`,
+/// memory `project_optiga_brick`). The old code used
+/// `hard_reset_and_reinit().is_ok() && ensure_shield().is_ok()`, so an I2C or
+/// IFX fault during a read-only probe fell straight through to the rewrite.
+#[test]
+fn negative_pbs_rotation_probe_does_not_let_a_bus_fault_reach_e140() {
+    let start = MOD_SRC
+        .find("pub fn rotate_pbs_to_salted")
+        .expect("rotate_pbs_to_salted exists");
+    let rest = &MOD_SRC[start..];
+    let end = rest[1..]
+        .find("\n    pub fn ")
+        .map_or(MOD_SRC.len(), |o| start + 1 + o);
+    // Strip `//` comments: this is an absence-assertion, and the comment that
+    // documents the fix would otherwise trip the gate it documents.
+    let code: std::string::String = MOD_SRC[start..end]
+        .lines()
+        .map(|l| match l.find("//") {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<std::vec::Vec<_>>()
+        .join("\n");
+
+    assert!(
+        !code.contains("self.hard_reset_and_reinit().is_ok() && self.ensure_shield().is_ok()"),
+        "D1: the FINAL-PBS probe collapsed a bus fault into 'not rotated' and \
+         fell through to the E140 rewrite (the brick path). Classify with \
+         is_inconclusive() and fail closed — the ceremony is journal-resumable, \
+         so the next boot re-probes with a fresh link."
+    );
+    assert!(
+        code.contains("Err(e) if e.is_inconclusive() => return Err(e)"),
+        "an inconclusive FINAL-PBS probe must fail closed, never reach E140"
+    );
+}

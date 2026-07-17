@@ -581,9 +581,27 @@ impl OptigaTrustM {
 
         let result = (|| {
             // Resume / idempotence: FINAL PBS already establishes a shield?
+            //
+            // D1: the next branch REWRITES E140 — the operation that bricked
+            // the bench chip (`docs/secure-elements/optiga-brick-postmortem.md`).
+            // The old `.is_ok() && .is_ok()` let an I2C/IFX/CRC fault during a
+            // read-only probe fall straight through to it. Classify: only an
+            // answer the chip actually gave may say "not rotated yet"; a bus
+            // fault means we learned nothing and must fail closed. The ceremony
+            // is journal-resumable, so the next boot re-probes with a fresh
+            // link.
+            //
+            // Residual: `OptigaError::Shield` cannot separate "wrong PBS" from
+            // "handshake faulted" and is conservatively authoritative — see
+            // `OptigaError::is_inconclusive`.
             self.shield.load_pbs(&final_pbs);
-            if self.hard_reset_and_reinit().is_ok() && self.ensure_shield().is_ok() {
-                return Ok(());
+            match self
+                .hard_reset_and_reinit()
+                .and_then(|()| self.ensure_shield())
+            {
+                Ok(()) => return Ok(()),
+                Err(e) if e.is_inconclusive() => return Err(e),
+                Err(_) => {}
             }
 
             // Establish under TRANSPORT to authorise the E140 rewrite.

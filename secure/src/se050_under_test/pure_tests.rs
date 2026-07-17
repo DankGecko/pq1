@@ -1782,3 +1782,93 @@ fn gap4_catch_all_still_maps_to_internal_error() {
         "classify_se050_unlock_error must keep the catch-all on InternalError"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// D1 — an inconclusive probe must never drive a mutation
+// ─────────────────────────────────────────────────────────────────────
+
+/// Slice `mod.rs` from a fn signature to the start of the next `    pub fn` /
+/// `    fn` at the same indent, **with `//` line comments stripped**. Same
+/// find-based idiom the OPTIGA slice uses.
+///
+/// The comment-stripping is load-bearing, not tidiness: these are
+/// absence-assertions ("this fn must no longer contain X"), and the fix for X
+/// is normally accompanied by a comment *explaining* X. Without stripping, the
+/// explanation trips the gate that the explanation exists to document — and the
+/// tempting "fix" is to weaken the assertion or delete the comment. Read code,
+/// not prose.
+fn fn_code(sig: &str) -> String {
+    let start = MOD_SRC.find(sig).unwrap_or_else(|| panic!("{sig} exists"));
+    let rest = &MOD_SRC[start + sig.len()..];
+    let end = rest
+        .find("\n    pub fn ")
+        .or_else(|| rest.find("\n    fn "))
+        .map_or(MOD_SRC.len(), |o| start + sig.len() + o);
+    MOD_SRC[start..end]
+        .lines()
+        .map(|l| match l.find("//") {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<std::vec::Vec<_>>()
+        .join("\n")
+}
+
+/// `Se050Error::Transport` is a T=1' framing/CRC/timeout fault: the SE may
+/// never have seen the command, or may have executed it and lost the reply. It
+/// is NOT evidence about a credential or an object. Every other variant is
+/// authoritative *because the SE spoke*.
+#[test]
+fn positive_se050_error_classifies_transport_as_inconclusive() {
+    assert!(
+        APDU_SRC.contains("matches!(self, Se050Error::Transport)"),
+        "is_inconclusive must classify exactly Transport — a bus fault is the \
+         only variant that is not an answer the SE gave"
+    );
+    assert!(APDU_SRC.contains("pub const fn is_inconclusive(&self) -> bool"));
+}
+
+/// **D1 regression guard — the SCP03 rotation probe.**
+///
+/// `rotate_scp03_transport_to_final` probes the FINAL keyset and, if the probe
+/// fails, falls through to a PUT KEY that irreversibly installs it. The old
+/// code used `establish_with(...).is_ok()`, which collapses "the SE rejected
+/// these keys" (authoritative → not rotated yet) into the same bucket as "the
+/// bus faulted" (inconclusive → we learned nothing). A single T=1' glitch
+/// during a read-only probe therefore drove an irreversible key install.
+#[test]
+fn negative_scp03_rotation_probe_does_not_collapse_inconclusive_into_reject() {
+    let f = fn_code("pub fn rotate_scp03_transport_to_final");
+    assert!(
+        !f.contains("establish_with(&mut self.scp03, &mut self.t1, &final_enc, &final_mac).is_ok()"),
+        "D1: the FINAL-keyset probe collapsed a transport fault into 'not \
+         rotated' and fell through to PUT KEY. Classify with is_inconclusive() \
+         and fail closed — the ceremony is journal-resumable, so failing closed \
+         IS the retry."
+    );
+    assert!(
+        f.contains("Err(e) if e.is_inconclusive() => return Err(e)"),
+        "the FINAL-keyset probe must fail closed on an inconclusive result \
+         rather than proceed to the irreversible PUT KEY"
+    );
+}
+
+/// **D1 regression guard — the admin existence probe.**
+///
+/// `check_exists` returns `Ok(bool)` when the SE answered and `Err` when we
+/// could not ask. `.unwrap_or(false)` mapped "I don't know" onto "it's
+/// missing" — and "missing" is the branch that WRITES a credential.
+#[test]
+fn negative_admin_existence_probe_does_not_unwrap_or_false_into_a_write() {
+    let f = fn_code("pub fn rekey_admin_transport_to_final");
+    assert!(
+        !f.contains("unwrap_or(false)"),
+        "D1: `check_exists(...).unwrap_or(false)` turns a bus glitch on a \
+         READ-ONLY existence probe into 'object missing', which drives \
+         write_userid_unlimited. Match on Ok(false)/Ok(true)/Err instead."
+    );
+    assert!(
+        f.contains("Err(e) => return Err(e)"),
+        "an unanswerable existence probe must propagate, not write"
+    );
+}

@@ -370,11 +370,25 @@ impl Se050 {
         self.ready = false;
         let result = (|| unsafe {
             // Fresh link, then probe FINAL (resume / idempotence).
+            //
+            // D1: distinguish "the SE rejected these keys" (authoritative — not
+            // rotated yet, fall through and rotate) from "the bus faulted"
+            // (inconclusive — we learned NOTHING, and must not fall through to
+            // a PUT KEY). The old `.is_ok()` collapsed both into "not final",
+            // so a T=1' glitch during the probe drove an irreversible key
+            // install. Failing closed here IS the retry: the ceremony is
+            // journal-resumable and the next boot re-enters with a fresh link.
             self.link_bringup()?;
             self.scp03 = Scp03Session::new();
-            if scp03::establish_with(&mut self.scp03, &mut self.t1, &final_enc, &final_mac).is_ok() {
-                self.ready = true;
-                return Ok(());
+            match scp03::establish_with(&mut self.scp03, &mut self.t1, &final_enc, &final_mac) {
+                Ok(()) => {
+                    self.ready = true;
+                    return Ok(());
+                }
+                Err(e) if e.is_inconclusive() => return Err(e),
+                // Authoritative reject (cryptogram mismatch / status word):
+                // the FINAL keyset is genuinely not installed.
+                Err(_) => {}
             }
 
             // Not final yet: clean link, establish under TRANSPORT.
@@ -436,12 +450,23 @@ impl Se050 {
         let mut tr_pin = sk::transport_se050_admin_pin().map_err(map)?;
 
         let result = (|| unsafe {
-            // (a) Admin object missing (crashed between delete and recreate).
-            if !apdu::check_exists(&mut self.t1, &mut self.scp03, ADMIN_WIPE_OBJ).unwrap_or(false) {
-                apdu::write_userid_unlimited(
-                    &mut self.t1, &mut self.scp03, ADMIN_WIPE_OBJ, &final_pin, None,
-                )?;
-                return Ok(());
+            // (a) Admin object missing (crashed between delete and recreate)?
+            //
+            // D1: `check_exists` returns `Ok(bool)` when the SE answered and
+            // `Err` when we could not ask. The old `.unwrap_or(false)` mapped
+            // "I don't know" onto "it's missing" — and "missing" is the branch
+            // that WRITES. A single bus glitch on a read-only existence probe
+            // therefore drove a credential install. Propagate instead: the
+            // ceremony is journal-resumable, so the next boot re-asks.
+            match apdu::check_exists(&mut self.t1, &mut self.scp03, ADMIN_WIPE_OBJ) {
+                Ok(false) => {
+                    apdu::write_userid_unlimited(
+                        &mut self.t1, &mut self.scp03, ADMIN_WIPE_OBJ, &final_pin, None,
+                    )?;
+                    return Ok(());
+                }
+                Ok(true) => {}
+                Err(e) => return Err(e),
             }
 
             // (b) Already re-keyed? Verify under FINAL.
