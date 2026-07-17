@@ -4014,8 +4014,17 @@ live defects, not research residuals.**
 
 ### Cheap wins (days, no seam work)
 
-- [ ] **C1 — Kani `t1oi2c`'s `crc16` / `build_frame` / `validate_frame`.** Pure functions over byte
-  slices, no model, no seam work. The cheapest real win in the doc.
+- [x] **C1 — DONE 2026-07-17 (`c0711813`). Kani-proved `t1oi2c`'s `crc16`/`build_frame`/
+  `validate_frame`.** Extracted verbatim to `sphincs-tz-shared::t1_frame` (the `ns_ptr_validate`
+  precedent); the driver re-exports the proven code rather than keeping a second copy. 5 harnesses,
+  0/146 checks failed, 1.6 s, unwind assertions SUCCESS. 3 anti-vacuity entries in
+  `kani_mutations.json`, each RUN and each flipping its harness to FAILED. Two findings recorded:
+  (a) my "verbatim" extraction wasn't — an off-by-two rejected the valid empty-INF frame, caught
+  immediately by the round-trip test; (b) **a round-trip cannot catch a symmetric change to a wire
+  constant** (swap CRC poly 0x8408→0x1021 and both sides change together, all harnesses stay green,
+  every real frame is rejected by the chip) — so the silicon-locked constants stay held by
+  source-text pins + the NXP reference + `make se050-stress`, and that limit is documented in the
+  module. Removed 2 duplicated wire constants from the driver on the way.
 - [ ] **C2 — Vendor the `stm32-rs` patched U585 SVD and diff it** against every hand-transcribed base
   address in `secure/src/hw/*`. Hours; 3-for-3 against our transcription history (incl. the TAMP
   wrong-address bug). Scope: layout only; does not cover SAU/MPU/NVIC/SCB/UID/OTP.
