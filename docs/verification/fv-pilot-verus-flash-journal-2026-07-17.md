@@ -26,19 +26,25 @@ it does not search for counterexamples).
 - `Qw ∈ {Blank, Torn, Entry{slot, ty, count}}` — a decoded 16-byte quadword
   (`parse_entry`, `flash.rs:1398-1440`); `Ty ∈ {Cnt, Uo, Sigs}` (`flash.rs:1354-1367`).
 - `proj(log, slot, ty)` = MAX `count` over decodable matching entries (the reader's
-  reconstruction, `scan_page_into_table` MAX-merge `flash.rs:1587-1602`) — defined
-  **recursively over the log prefix with `decreases`**, so `proj(push)` is one unfold.
+  reconstruction, `scan_page_into_table` MAX-merge `flash.rs:1587-1602`, and `userop_sigs_read`
+  `flash.rs:2191-2200` — both `count > cur || !found ⇒ cur = count` = MAX-else-0) — defined
+  **recursively over the log prefix with `decreases`**, so `proj(push)` is one unfold. (`proj`
+  models the max-merge VALUE and abstracts the forward reader's stop-at-first-blank boundary;
+  sound here because a torn replay prefix is contiguous/blank-free, and the deployed F-12
+  forward-vs-reverse cross-check fails closed on any entry-after-blank.)
 - `registered(log, slot)` = ∃ a decodable entry for the slot (`is_registered_forward`,
   `flash.rs:1996-2008`).
 
 ## What is proven (`make -C contracts/verification verify-verus` → 8 verified, 0 errors)
 
 - **`sigs_first_no_rollback` (HEADLINE, `INV_SIGS_COMPACTION_LOCAL`, all-length).** In a
-  SIGS-first replay, any crash-prefix `replay[0..k]` that leaves a slot **registered**
-  already has its `USEROP_SIGS` durable at the pre-compaction value — a torn compaction
-  can never roll a *registered* slot's SIGS below its snapshot. Proof: registration in
-  the prefix exhibits an s-cell at `j < k`; SIGS-first forces `j ≥ j0` (the SIGS cell),
-  so the prefix contains it; `proj_ge_at` gives `proj_sigs ≥ v`.
+  SIGS-first replay, any crash-prefix `replay[0..k]` that leaves a slot **registered *and*
+  carrying a replayed `USEROP_SIGS` cell** already has its SIGS durable at the pre-compaction
+  value — a torn compaction can never roll such a slot's SIGS below its snapshot. Proof:
+  registration in the prefix exhibits an s-cell at `j < k`; SIGS-first forces `j ≥ j0` (the
+  SIGS cell), so the prefix contains it; `proj_ge_at` gives `proj_sigs ≥ v`. (SCOPE: a slot
+  registered ONLY by the count-0 `USEROP` register marker has no SIGS cell — outside this
+  theorem, and trivially safe: `proj_sigs` stays `0`.)
 - Supporting lemmas: `proj_push` (append updates proj by max-if-match), `proj_monotone_push`
   (append never decreases proj — counters don't go backwards), `proj_entry_lower_bound`
   (a written entry is a durable lower bound — the model of "release ⟹ prior durable

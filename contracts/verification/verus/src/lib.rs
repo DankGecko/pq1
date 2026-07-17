@@ -158,9 +158,12 @@ pub proof fn proj_ge_at(log: Seq<Qw>, s: nat, t: Ty, c: nat, i: int)
 /// atomic-erase — that atomicity is `AX-ERASE-ATOMIC`, assumed), and a power-cut leaves the durable
 /// PREFIX `replay[0..k]`. The **SIGS-first** replay order (`flash.rs:1671-1700`) is modeled by: for
 /// the slot `s`, its `USEROP_SIGS` cell is at `j0`, and NO cell for `s` precedes `j0`. The theorem:
-/// **any crash-prefix that leaves `s` registered has already made its SIGS durable at the
-/// pre-compaction value `v`** — so a torn compaction can never roll a *registered* slot's SIGS
-/// below its snapshot. (A crash BEFORE `j0` leaves `s` unregistered → invariant #9 forces a Type-1
+/// **any crash-prefix that leaves `s` registered — where `s`'s replay carries a `USEROP_SIGS` cell
+/// (the `has_userop_sigs` case) — has already made its SIGS durable at the pre-compaction value
+/// `v`** — so a torn compaction can never roll such a slot's SIGS below its snapshot. (SCOPE: a slot
+/// registered ONLY by the count-0 `USEROP` register marker has no SIGS cell — registered yet outside
+/// this theorem, and trivially safe: `proj_sigs` is `0` before and after.) (A crash BEFORE `j0`
+/// leaves `s` unregistered → invariant #9 forces a Type-1
 /// re-registration; that total-loss branch is the accepted residual, TLA+ Finding 2 — NOT covered
 /// here, and correctly so: this is COMPACTION-LOCAL, not global no-rollback.)
 ///
