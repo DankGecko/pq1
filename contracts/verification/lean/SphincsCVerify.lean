@@ -87,3 +87,4 @@ import SphincsCVerify.Interpreter.C10Refine
 import SphincsCVerify.Interpreter.YulParse
 import SphincsCVerify.Interpreter.C10Source
 import SphincsCVerify.Interpreter.C10Parse
+import SphincsCVerify.Platform.MemoryMap
