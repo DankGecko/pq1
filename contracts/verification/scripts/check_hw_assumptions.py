@@ -74,33 +74,31 @@ def load(path=LEDGER):
 
 
 def sweep_referenced_ids():
-    """Every HW-ASSUME id mentioned anywhere in the tree, with its locations."""
+    """Every HW-ASSUME id cited anywhere in the tree, mapped to its files.
+
+    ONE pass, so the skip list cannot be applied inconsistently. It was, once:
+    an earlier version took names from a `git grep -ho` pass that ignored
+    SWEEP_SKIP and locations from a `-n` pass that honoured it. That silently
+    worked right up until this file itself was committed — `git grep` only sees
+    TRACKED files — at which point the self-test's own ghost id
+    (`HW-ASSUME-NOBODY-CITES-THIS`, a string that exists purely to be absent
+    from the ledger) became "referenced" and the gate failed on itself. Keep the
+    filtering in exactly one place.
+    """
     hits = {}
     try:
         out = subprocess.run(
-            ["git", "grep", "-hoE", ID_RE.pattern, "--", *[f"*{g[1:]}" for g in SWEEP_GLOBS]],
-            cwd=REPO, capture_output=True, text=True, timeout=120,
-        )
-        names = out.stdout.split()
-    except Exception:
-        names = []
-    # Locations, for a useful error message.
-    try:
-        out2 = subprocess.run(
             ["git", "grep", "-nE", ID_RE.pattern],
             cwd=REPO, capture_output=True, text=True, timeout=120,
         )
-        for line in out2.stdout.splitlines():
-            if any(s in line for s in SWEEP_SKIP):
-                continue
-            for m in ID_RE.findall(line):
-                hits.setdefault(m, set()).add(line.split(":")[0])
     except Exception:
-        pass
-    for n in names:
-        hits.setdefault(n, set())
-    for s in SWEEP_SKIP:
-        pass
+        return hits
+    for line in out.stdout.splitlines():
+        path = line.split(":", 1)[0]
+        if any(s in f"/{path}" for s in SWEEP_SKIP):
+            continue
+        for m in ID_RE.findall(line):
+            hits.setdefault(m, set()).add(path)
     return hits
 
 
