@@ -4049,7 +4049,12 @@ live defects, not research residuals.**
   states at line 728: *"The platform does not include any firmware component and the implemented
   hardware is not reprogrammable"* — **so it applies to us**, and it was evaluated **at RDP-2**. That
   is real `T`-tier evidence for `HW-ASSUME-RDP2`, better than the absence argument. Three actions:
-  - [ ] **A4a — add a REV_ID probe.** TN1545 pins **REV_ID `0x3003` (rev U)** at `0xE004_4002`; we
+  - [x] **A4a — DONE 2026-07-17 (`1bd581bb`). REV_ID probe implemented** (`secure/src/die_id.rs` pure
+    decode + SESIP-scope rule, 6 host tests incl. field-swap/wrong-part/undriven-bus negatives;
+    `secure/src/hw/dbgmcu.rs` one read, called from boot; DBGMCU_BASE cross-checked against ST's
+    CMSIS header). Report-only — a rev X/W part is good silicon outside the cert's scope, not a
+    fault. `HW-ASSUME-REV-U` bare-tcb → code-enforced. **NOT closed:** nobody has RUN it and
+    recorded the answer — that needs a board. Original: TN1545 pins **REV_ID `0x3003` (rev U)** at `0xE004_4002`; we
     check **DEV_ID `0x482` only** (`production-security.md`, `threat-model.md`, work-todo:1713). A
     cert for rev U says nothing about rev X/W parts. Read REV_ID on every bench die and record it.
   - [ ] **A4b — name the OEM2KEY deviation.** TN1545:912 — *"In the certified configuration, the
@@ -4085,7 +4090,12 @@ live defects, not research residuals.**
   every real frame is rejected by the chip) — so the silicon-locked constants stay held by
   source-text pins + the NXP reference + `make se050-stress`, and that limit is documented in the
   module. Removed 2 duplicated wire constants from the driver on the way.
-- [ ] **C2 — Vendor the `stm32-rs` patched U585 SVD and diff it** against every hand-transcribed base
+- [x] **C2 — DONE 2026-07-17 (`f538439f`). `make verify-mmio-addresses`, 14/14 match, no defect.**
+  Used ST's OWN CMSIS header (already on this box, upstream of the stm32-rs SVD this row proposed).
+  Self-test pins the resolver against 5 known values + a perturbation. It caught three of MY bugs
+  before catching anything real (identifier regex matching inside hex literals; an extractor that
+  dropped `+ 0x88`; cfg-duplicated SPI_BASE). Wired into ci.yml; skips cleanly without CubeU5.
+  Given the historical hit rate, a clean 14/14 is a useful negative result. Original: against every hand-transcribed base
   address in `secure/src/hw/*`. Hours; 3-for-3 against our transcription history (incl. the TAMP
   wrong-address bug). Scope: layout only; does not cover SAU/MPU/NVIC/SCB/UID/OTP.
 - [~] **C3 — PARTIAL 2026-07-17 (`7eb19efa`). Finding VERIFIED and worse than written; pins added,
@@ -4111,7 +4121,12 @@ live defects, not research residuals.**
   validated build IS a nightly, so pinning against 'download latest' would fail for everyone.
   Original: A pilot result that cannot be re-run is a verification
   claim with no executable evidence — the exact thing `verify-ledger-consistency` exists to prevent.
-- [ ] **C6 — Fix the OPTIGA CC citation.** V4-2019 **expired 2024-12-17**; cite V7-2024, and scope it
+- [x] **C6 — DONE 2026-07-17 (`17909010`). Scoped the EAL6+ citation to the IC platform.** The two
+  threat-model decap rows are WITHIN scope (die physical resistance is what the cert evaluates); what
+  was missing is that BSI-DSZ-CC-0961 does NOT cover the Trust M applet — OID/AC model, LcsO, the
+  Shielded Connection are IC Embedded Software above the TOE (`OE.Resp-Appl`), which is exactly where
+  S-1/S-2/S-3 live. V4-2019 expired 2024-12-17. EUCLEAK recorded as the standing refutation.
+  Original: V4-2019 **expired 2024-12-17**; cite V7-2024, and scope it
   to the **IC platform** — the Trust M applet, its OID model, LcsO, and the Shielded Connection are IC
   Embedded Software, *above* the certified boundary. Any row saying "discharged by EAL6+" is wrong.
 - [ ] **C7 — Reset-at-swept-delay crash harness. ZERO new hardware; reaches D4 today.** *(Costing
