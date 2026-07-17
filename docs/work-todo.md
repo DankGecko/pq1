@@ -4268,6 +4268,33 @@ live defects, not research residuals.**
   algebra lands, and noting the current page-124 model under-models the security-load-bearing part
   (the F-15.r5 forward+reverse FI double-scan with fail-closed-to-CAPACITY).
 
+### Bench campaign — PLANNED and ledger-bound 2026-07-17 (instruments on-hand: Scaffold + FaultyCat + Rigol MHO934, all USB on this host)
+
+The bench-gated rows are no longer "blocked on hardware I don't have" — the FI/SCA rig is here. They
+are now a **sequenced, ledger-bound campaign** in `docs/security/red-teaming.md` (§3.2 on-hand rig,
+§3.3 the HW-ASSUME↔procedure binding table, §5.7 / §6.4 / §6.5 / §6.6.1 the new precise procedures).
+Every `HW_ASSUMPTIONS.json` row carries a `falsifying_test.procedure` pointer; `exists` stays false
+until a runnable `make` target exists (the C4 check forbids lying). **No parts touched yet — this is
+the plan, authored before sacrificial silicon is burned.**
+
+- [ ] **BENCH-1 — SE050 PUT-KEY atomicity (`HW-ASSUME-PUTKEY-ATOMIC`, §5.7).** Highest leverage: the
+  whole first-boot rotation reduces to it. Scaffold crowbar on SE050 Vdd, I²C trigger, independent
+  ENC/MAC vs DEK probe. A confirmed torn DEK is a **ship-blocker**. Needs: the halt-after-PUT-KEY
+  firmware harness (I build) + the Scaffold host loop (I build) + sacrificial SE050s + bench hands.
+- [ ] **BENCH-2 — flash/OTP torn-write (`QW-ATOMIC` + `OTP-ONEWAY`, §6.4).** The reset-only recovery
+  half needs **no glitcher** (probe-rs) — start there; the analog torn-write + D4 torn-master half
+  needs the Scaffold crowbar. `OTP-ONEWAY` reprogram-reject is pure firmware, 21 shots/usable board.
+- [ ] **BENCH-3 — the no-FI settlers.** `DHUK-RDP12` (one-shot irreversible fingerprint compare),
+  `DHUK-UNIQUE` (n≥3 boards), `TRNG-ENTROPY` (RDP-0 dump → SP 800-90B), `REV-U` (DONE — boot probe,
+  just record the answer), `OEM2-ABSENT` (option-byte read). Cheapest, no bench risk, settle 5 rows.
+- [ ] **BENCH-4 — RDP-2 offensive downgrade (`HW-ASSUME-RDP2`, §6.6.1).** The headline red-team, and
+  the single highest-leverage unverifiable premise. FaultyCat EMFI (µGlitch/L5 shape) + Scaffold
+  voltage (Šimoník/U5A9 shape). Open-ended; a success is a ship decision, a null result only bounds
+  disbelief. Sets how much the dual-SE split must carry independent of the MCU (boundary doc §5).
+- [ ] **BENCH-HARNESS — host orchestration (`tools/bench/`).** Scaffold Python driver + Rigol SCPI
+  capture + FaultyCat serial + the sweep/classify loop. I can build this now; it runs when the
+  instruments are plugged in. This is the software half of every row above.
+
 ### Do NOT do (recorded so it is not re-proposed)
 
 - **(c) ARMv8-M / CMSE is CLOSED, not backlog.** No public formal M-profile model exists in any

@@ -118,6 +118,59 @@ cutting the rail.
 - **(D) Fault injection.** §6.3, §9 two-fault campaign — *aimed by (B)'s leakage map*; AFG-crowbar
   for first light, glitcher for real campaigns.
 
+### 3.2 On-hand FI rig (2026-07) — Scaffold + FaultyCat, all on one USB host
+
+The "real glitcher" §3.1 defers to is now on the bench, alongside the Rigol, **all driven from one
+Linux host over USB** — so the sweep/capture/classify loop is fully scriptable (see
+`tools/bench/` once stood up):
+
+| Instrument | Role in this plan | Control from the host |
+|---|---|---|
+| **Ledger Donjon Scaffold** (voltage glitcher + FPGA timing + bus instrument + ST-bootloader) | The **voltage-crowbar** campaigns: flash/OTP torn-write (§6.4), SE050 PUT-KEY atomicity (§5.7), the Šimoník-shape RDP-2 / PIN glitch (§6.6). Its `PulseGenerator` gives sub-ns `delay`/`width`; its `STM32` class reads/writes flash+OTP over the ST USART bootloader; it can instrument I²C to trigger on an exact APDU. | `scaffold` Python API (`/home/nicola/repos/scaffold/api`); `Scaffold()`, `PulseGenerator.delay/width`, glitch-clock `div_a/div_b/glitch_count` |
+| **Electronic Cats FaultyCat** (EMFI, PicoEMP lineage, RP2040) | The **electromagnetic** campaigns: the µ-Glitch-shape RDP-2 / TrustZone-config attack (§6.6), tamper-canary triggering (§6.3). Non-invasive — no decap, coil over the die. | `faultycmd` CLI over serial (`/home/nicola/repos/faultycat/tools/faultycmd`): `--pulse-count`, `--pulse-timeout` |
+| **Rigol MHO934** (§3.1) | Capture (12-bit SCA traces + 16-ch LA) and the AWG for a delayed trigger/crude crowbar drive. | SCPI over USBTMC (pyvisa) — *[bench params pending research]* |
+
+**Trigger spine.** The firmware already exposes `sca-trigger` (`secure/src/hw/sca_trigger.rs`): a GPIO
+that rises on entry to a guarded primitive and falls on exit — an LVCMOS sync input for Scaffold's
+trigger and the scope. It is **production-fenced** (`compile_error!` in `nsc/mod.rs` alongside
+`debug-log`), so every FI campaign runs a bench image and then re-confirms the gate survives in the
+production binary. The offset-sweep is: arm on the `sca-trigger` rising edge → sweep
+`delay × width × intensity` → classify the outcome → log. FaultyCat adds the XY coil position as a
+fourth sweep axis.
+
+**Epistemics — carried from `docs/verification/hardware-assumption-boundary-2026-07-17.md` §0.** These
+campaigns *falsify*, they never *validate*. A sweep that fails to break RDP-2 bounds disbelief on our
+parts, at our voltages/temperatures — it is never a ∀-proof that RDP-2 holds. The flip side is the
+one that changes the product: a **successful** glitch (an RDP-2 downgrade, a reachable torn PUT KEY)
+is not a doc update, it is a ship decision — see the evil-maid trace in that doc's §5.
+
+### 3.3 Binding to the HW-ASSUME ledger — every named test has a home here
+
+`contracts/verification/docs/HW_ASSUMPTIONS.json` (gate: `make -C contracts/verification
+verify-hw-assumptions`) names a *falsifying test* for each hardware assumption. This table is the
+missing link between that ledger and these procedures: it is what turns "5 of 12 rows are bare-TCB
+with no runnable test" into a sequenced bench program. **Nothing here validates a premise** — the
+gate checks the ledger's hygiene, and the bench can only try to break each row.
+
+| `HW-ASSUME-*` | Falsifying test | Procedure | Instrument | Falsified if… | Parts |
+|---|---|---|---|---|---|
+| `PUTKEY-ATOMIC` **(highest leverage)** | cut power mid-PUT-KEY, probe ENC/MAC and DEK independently | **§5.7 (new)** | Scaffold crowbar on SE050 Vdd + I²C trigger | ENC/MAC read final while DEK still transport | sacrificial SE050s |
+| `QW-ATOMIC` | cut VDD across a QW program/erase; classify readback | **§6.4** | Scaffold crowbar; probe-rs for the reset-only half | any readback is neither old, new, nor a clean ECC fault | sacrificial U585s |
+| `OTP-ONEWAY` | reprogram an already-programmed QW; and torn half-burn | **§6.4** | firmware only (reject) + Scaffold (half-burn) | a second program of a complete QW is *accepted* | ~21 shots / usable board |
+| `RDP2` **(headline red-team)** | offensive FI campaign, both shapes | **§6.6** | FaultyCat EMFI (µ-Glitch shape) + Scaffold voltage (Šimoník shape) | flash readout, or a TrustZone-M/SAU disable, at RDP-2 | sacrificial U585s |
+| `DHUK-RDP12` | fingerprint at RDP-1, self-lock RDP-2, fingerprint again | **§6.5** | no FI; `saes-self-test-hw` + `rdp2-self-lock` | the two fingerprints differ (DHUK changes across the lock) | 1 sacrificial part, one shot |
+| `DHUK-UNIQUE` | more boards; require distinct RDP-1 fingerprints | **§6.5** | no FI | two dies produce the same fingerprint | ≥3 boards |
+| `TRNG-ENTROPY` | SP 800-90B EA over raw samples from our config | **§4.1** | no FI; RDP-0 dump | min-entropy below the design floor | non-destructive |
+| `CMSE-SAU` | extend the enforcement test per attribution rule | **§6.1** | `gtzc-enforcement-hw` | any NS access to a secure peripheral succeeds | non-destructive |
+| `REV-U` | boot and read `DBGMCU_IDCODE` | **DONE — `hw::dbgmcu`** (A4a) | no FI | the bench dies are not rev U (0x3003) | non-destructive |
+| `OEM2-ABSENT` | probe OEM1/OEM2 lock bits; check CubeIDE default pw | **§6.6** | no FI (option-byte read) | any unit ships with an OEM key provisioned | non-destructive |
+| `SE050-CERT-VERSION` | read the applet/config version off the part | **§5.5** | no FI | the part is not the certified JCOP4 config | non-destructive |
+| `SE-INTERNALS` | per-property silicon E2E (permanent bare-TCB) | **§5.1–5.5** | LA + SE stress | a policy the datasheet promises is not enforced | some destructive |
+
+When a procedure below is turned into a runnable `make` target, set that row's
+`falsifying_test.make_target` in the ledger and flip `exists` to `true` — the `verify-hw-assumptions`
+C4 check enforces that a claimed target is real, so the ledger cannot get ahead of the bench.
+
 ---
 
 ## 4. Crypto core: RNG, seed, key derivation, FI
@@ -381,6 +434,47 @@ fresh salt. Every power cut recovers or fails closed without restoring
 transport credentials; both tunnels reconnect after a clean ceremony; the
 reviewed lifecycle order holds on silicon. Until then HIGH-1 remains open.
 
+### 5.7 SE050 key-rotation atomicity — **`HW-ASSUME-PUTKEY-ATOMIC`, the highest-leverage bench test**
+
+**Why this one first among the SE tests.** The entire first-boot transport→final rotation
+(`secure/src/first_boot/`, `se050/mod.rs::rotate_scp03_transport_to_final`) rests on a single silicon
+premise, and formalising it reduced ~2000 lines of driver crash-safety to one falsifiable sentence
+(`docs/verification/hardware-assumption-boundary-2026-07-17.md` §1(e)). From
+`scp03_logic.rs::build_put_key_apdu`: all three key blocks — ENC ‖ MAC ‖ DEK — ride **one** PUT KEY
+APDU (`P2=0x81`) replacing KVN `0x0B` **in place**. The resume probe
+(`establish_with(final_enc, final_mac)`) proves **ENC+MAC only** — the DEK is never probed — and the
+KVN is `0x0B` before *and* after, so it cannot disambiguate. If PUT KEY is atomic, the probe is sound.
+If it is not, a device can boot with ENC+MAC final but a **DEK still derived from the factory-known
+transport root**, and the resume path reports "already rotated" over it.
+
+**Property.** An SE050 PUT KEY (`P1=0x0B`, `P2=0x81`, three key blocks, in-place KVN) is
+all-or-nothing across the SE050's internal NVM commit.
+
+**Setup.** Bench image that drives one PUT KEY and halts. Instrument I²C2 (Scaffold or the MHO934's
+LA) to detect the PUT KEY command bytes; the crowbar target is the **SE050's own Vdd rail** (it is a
+separate package — glitch its supply, not the STM32's). The commit window is after the last APDU byte
+is ACKed and before the SE050's success SW; sweep the crowbar `delay` across it.
+
+**Tests.**
+1. **Baseline (no glitch):** drive the rotation, then probe ENC/MAC (SCP03 establish under final) and
+   **DEK independently** — the DEK wraps future key blocks, so probe it by attempting a PUT KEY whose
+   blocks are wrapped under the *candidate-final* DEK and reading the SW. Confirm all three are final.
+2. **Torn campaign:** crowbar at swept offsets across the commit window; after each, cold-boot and
+   run the same independent ENC/MAC vs DEK probe. Classify each part: {all-transport, all-final,
+   **ENC/MAC-final-DEK-transport**, unreadable/bricked}.
+3. Repeat across ≥5 sacrificial SE050s to bound the reachable-state set.
+
+**Falsified if** any part lands in **ENC/MAC-final-DEK-transport** — that is the exact state the
+resume probe cannot see, and it means final-rotation is not crash-safe against a mid-APDU power cut.
+
+**Pass** (for this bench, on these parts) if the outcome is only ever all-transport or all-final —
+which would let the "atomic durable old/new/KVN recovery proof" ship-gate cite silicon evidence
+instead of an assumption. **This does not prove atomicity** (§3.2 epistemics); it fails to falsify it.
+
+**Ledger.** `HW-ASSUME-PUTKEY-ATOMIC` (bare-TCB). A confirmed torn DEK is a **ship-blocker**, not a
+finding to file for later: it means the SE050 leg of the pairing can be left on a factory-known key by
+a single well-timed brown-out.
+
 ---
 
 ## 6. Platform isolation, boot, tamper, OTP
@@ -470,14 +564,29 @@ complete 128-bit QWs through the approved replicated/interruption-safe codec.
 **Tests.**
 - Install vN (floor → N-1); replay an older signed manifest → must reject at `FW_BEGIN`.
 - Reinstall vN (floor stays N-1) then v(N+1) (floor → N) — confirm each boots (no brick).
-- **Brownout during OTP write** (sacrificial, separately authorized): classify
-  the consumed QW through fresh ECC/status evidence. Never assume an
-  idempotent re-burn; a QW whose write may have launched is not retried.
+- **`OTP-ONEWAY`, no glitcher needed:** firmware attempts a second program of an already-complete
+  quad-word and reads `FLASH_SR`. A *virgin* QW can hold 21 shots — `otp.rs:32` maps 336 B / 21
+  unallocated QWs — so this fits on a **usable** board. Falsified if a second program of a complete
+  QW is *accepted* (the whole one-way premise, and the D4 fix, rest on it PGSERR-ing).
+- **`QW-ATOMIC`, Scaffold crowbar:** cut VDD at swept sub-µs offsets across a QW program *and* a page
+  erase; classify every readback into {old, new, clean ECC-fault, **other**}. "Other" falsifies the
+  contract. The **recovery-logic half needs no glitcher** — reset (probe-rs / `SYSRESETREQ`) at
+  swept delay, reboot, assert recovery lands old-or-new-or-fail-closed; only the analog torn-write
+  half needs the crowbar. This is the premise the page-123 TLC pilot's FINDING 1 is *equivalent to*.
+- **`QW-ATOMIC` on the device master — the D4 shape specifically (sacrificial):** the master spans
+  **two** QWs and takes two programs (`otp.rs::burn_device_master`). Crowbar between them, cold-boot,
+  and confirm the D4 fix holds: `is_device_master_burned()` must classify the half-blank region as
+  `Partial` (not `Complete`), `read_device_master()` must refuse it, and the burn must complete the
+  virgin QW. Falsified if a half-burnt master reads as complete — pre-fix, that silently rooted every
+  SE transport credential in a **128-bit** master. The fix is host-tested + mutation-checked; this is
+  its silicon confirmation.
 
 **Pass.** Available only after an exact rollback architecture digest is
 implementation-approved and its journal/ECC/OTP, resource, factory, and
 silicon gates close; no downgrade, no fallback retirement before the health
-contract, and no uncertain QW reuse.
+contract, and no uncertain QW reuse. The `OTP-ONEWAY` / `QW-ATOMIC` classification tests above are
+*independent* of that gate — they characterise the silicon, they do not authorize a production OTP
+write — and can run first.
 
 ### 6.5 SAES / DHUK key derivation (Tier-1 KDF)
 
@@ -487,13 +596,29 @@ SW-key round-trip + DHUK≠SW domain separation + DHUK round-trip. `secure/src/h
 
 **Tests.**
 - `make saes-self-test-hw`: confirm PASS + a stable DHUK fingerprint across reboots.
+- **`DHUK-UNIQUE` (no FI, ≥3 boards):** the fingerprint must differ per die at RDP-1 (it is a shared
+  ST constant at RDP-0). Two dies producing the same RDP-1 fingerprint falsifies per-die uniqueness.
+  Currently validated at n=2 — this raises it.
+- **`DHUK-RDP12` — one shot per part, IRREVERSIBLE (sacrificial):** the single test that settles a
+  named open ambiguity. Is `SAES-CMAC(DHUK,·)` identical at RDP-1 and RDP-2 on the *same* die? No
+  board in this project has ever been at RDP-2 (an RDP-2 part cannot be regressed — that is the whole
+  point), and the first-boot ceremony is self-consistent either way, so **no functional test will
+  ever surface this — only a deliberate probe can.** Procedure: capture the fingerprint at RDP-1
+  (`saes-self-test-hw`; it reaches the ST-LINK VCP even at RDP≥1 per `main.rs`), then self-lock to
+  RDP-2 (`rdp2-self-lock` Phase A programs RDP=0xCC), then capture again on the locked part.
+  Falsified if the two fingerprints **differ**. Note the *consequence direction*: if they differ,
+  that is fail-secure for the RDP-2→RDP-1 downgrade route (an attacker computes `f(DHUK_RDP1,salt) ≠
+  PBS` and both tunnels stay shut) but does NOT help against a runtime TrustZone-M disable at RDP-2 —
+  see `HW-ASSUME-DHUK-RDP12`.
 - Glitch the `SR.KEYVALID` gate / CCF completion during a DHUK op; confirm bus-error/timeout and
   (if enabled) ITAMP9.
 - Confirm bank-1 page 126 (the wrapped SE050 BHK) is ciphertext off a
   desoldered MCU. OPTIGA PBS has no flash page: test its domain derivation,
   non-persistence, and Shielded-Connection behavior separately.
 
-**Pass.** Self-test passes; DHUK never materialises in readable memory; glitch faults are caught.
+**Pass.** Self-test passes; DHUK never materialises in readable memory; glitch faults are caught;
+per-die uniqueness holds at n≥3; the RDP-1/RDP-2 fingerprint relationship is recorded (either answer
+is informative — the point is that today it is *unmeasured*).
 
 **Caveat.** Confirm whether production `secret_keys` call sites are actually routed through
 SAES-CMAC(DHUK) yet, or still on the legacy OTP-master+HKDF path (the SAES path landed behind a
@@ -510,8 +635,36 @@ forbid `debug-log`/`e2e-test`/`mock-se`/`otp-hardcoded-master-key`/`ui-capture`/
 - **Build-time:** attempt a `--release stm32u585` build with each forbidden feature → must
   `compile_error!`. (This is a CI gate; re-confirm on the exact EVT image's feature set.)
 - Confirm the shipped binary contains no semihosting/UART debug strings (grep the ELF).
+- **`OEM2-ABSENT`:** read the OEM1/OEM2 key-lock option bits on every unit — a shipped unit must have
+  **no** OEM key provisioned (`shared/src/lockdown.rs::oem_locks_absent`). Separately, probe whether
+  any CubeIDE-touched bench board carries ST's **default OEM2 password** (UM3387 reports the CubeIDE
+  init script sets one) — that would be a live RDP-2→RDP-1 regression credential on our own bench.
+  Falsified if any unit ships with an OEM key, or a bench board carries the default password.
 
-**Pass.** Debug ports dead; forbidden features don't compile into production; no debug strings ship.
+**Pass.** Debug ports dead; forbidden features don't compile into production; no debug strings ship;
+no OEM key provisioned.
+
+#### 6.6.1 RDP-2 offensive downgrade — **`HW-ASSUME-RDP2`, the highest-leverage unverifiable premise**
+
+The one the whole design leans on, and the one the field has not answered for the U5. From the
+boundary doc §5: RDP-2 downgradability is *"an unanswered question only your bench can settle"* — every
+public STM32 RDP glitch result targets F1/F2/F4/L0/L5, **not** the U5. Two shapes to attempt, with the
+two instruments that match the two published sibling results:
+
+- **EM shape (FaultyCat) — the µ-Glitch attack.** µ-Glitch (USENIX Sec 2023) disabled TrustZone-M on
+  the **STM32L5**, the Cortex-M33 sibling of the U585, by EM-faulting the SAU / TZ-config load, and
+  claimed transferability to "conceptionally similar ICs" citing ST's joint L5/U5 TrustZone app note.
+  FaultyCat is exactly that tool shape. Sweep coil XY position × pulse timing over the boot-time
+  option-byte / SAU / GTZC configuration window (aim with the `sca-trigger` on `sau::init`).
+- **Voltage shape (Scaffold) — the Šimoník attack.** Šimoník (Masaryk 2025) hit ~76% voltage-glitch
+  bypass of a PIN check on the **STM32U5A9**, our part's own sibling. Crowbar the STM32 Vcore across
+  the PIN-compare / `gated_unlock` verdict window and across the RDP-check read.
+
+**Falsified if** either yields flash readout at RDP-2, a TrustZone-M / SAU disable, or a PIN-gate
+bypass — any of which is a **ship-blocking** result (§3.2). This is an open-ended campaign, not a
+quick win; budget sacrificial parts and treat a null result as *bounds-disbelief-on-our-parts*, never
+proof. Whatever the outcome, it directly sets how much trust the dual-SE XOR split must carry
+independent of the MCU — the §5 evil-maid trace in the boundary doc turns on exactly this.
 
 ### 6.7 Consumption mask / SCA jitter
 

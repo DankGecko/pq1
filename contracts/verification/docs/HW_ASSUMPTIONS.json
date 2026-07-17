@@ -37,7 +37,8 @@
         "description": "Power-cut rig on sacrificial U585s: cut VDD at swept sub-us offsets across a quad-word program and across a page erase; classify every read-back into old / new / ECC-fault / other. 'Other' falsifies. The recovery-LOGIC half needs zero new hardware (reset-at-swept-delay, work-todo C7); only the analog torn-write half needs a glitcher.",
         "exists": false,
         "make_target": null,
-        "cost": "rig + sacrificial parts; the logic half is free"
+        "cost": "rig + sacrificial parts; the logic half is free",
+        "procedure": "docs/security/red-teaming.md §6.4 (Scaffold crowbar; reset-only half needs no glitcher; D4 torn-master sub-test)"
       },
       "consumed_by": [
         "invariant-9 (page-123 off-chain counter durability)",
@@ -69,7 +70,8 @@
         "description": "Half-program an OTP quad-word, attempt completion, record FLASH_SR PGSERR/WRPERR and the read-back. Needs NO sacrificial board: otp.rs maps 176..512 = 336 B = 21 UNALLOCATED quad-words, so ~21 independent shots fit on a board that stays usable (work-todo C8).",
         "exists": false,
         "make_target": null,
-        "cost": "2-3 d; ~21 shots on a still-usable board"
+        "cost": "2-3 d; ~21 shots on a still-usable board",
+        "procedure": "docs/security/red-teaming.md §6.4 (firmware reprogram-reject, no glitcher; ~21 shots/usable board)"
       },
       "consumed_by": [
         "secure/src/hw/otp.rs (device-master burn + the rejected rollback tally)",
@@ -99,7 +101,8 @@
         "description": "Drive PUT KEY, cut power mid-APDU, then probe ENC/MAC and DEK INDEPENDENTLY. A die with final ENC/MAC but a transport DEK falsifies it. The probe must be independent because SCP03 establish proves ENC+MAC only.",
         "exists": false,
         "make_target": null,
-        "cost": "glitch rig + sacrificial SE050s"
+        "cost": "glitch rig + sacrificial SE050s",
+        "procedure": "docs/security/red-teaming.md §5.7 (Scaffold crowbar on SE050 Vdd; independent ENC/MAC vs DEK probe)"
       },
       "consumed_by": [
         "secure/src/se050/mod.rs (rotate_scp03_transport_to_final resume probe)",
@@ -125,7 +128,8 @@
         "description": "Fingerprint one sacrificial die at RDP-1, self-lock to RDP-2, fingerprint again; divergence falsifies. One shot per part, irreversible.",
         "exists": false,
         "make_target": null,
-        "cost": "one sacrificial part, one shot"
+        "cost": "one sacrificial part, one shot",
+        "procedure": "docs/security/red-teaming.md §6.5 (saes-self-test-hw fingerprint at RDP-1 vs after rdp2-self-lock; one-shot irreversible)"
       },
       "consumed_by": [
         "invariant-3 (OPTIGA PBS is DHUK-derived)",
@@ -155,7 +159,8 @@
         "description": "Per-die: fingerprint more boards at RDP1 and require distinct outputs (n=2 today; a collision falsifies). Unextractability: decap, which is explicitly out of scope.",
         "exists": true,
         "make_target": "saes-self-test-hw",
-        "cost": "low for the per-die half; N/A for unextractability"
+        "cost": "low for the per-die half; N/A for unextractability",
+        "procedure": "docs/security/red-teaming.md §6.5 (per-die fingerprint, n>=3 boards, no FI)"
       },
       "consumed_by": [
         "invariant-3 (both SE tunnels are DHUK/BHK-rooted)",
@@ -190,7 +195,8 @@
         "description": "Extend the enforcement test per attribution rule. NO forall is reachable: there is no public formal ARMv8-M model in any framework, ARM's v8-M ASL was machine-validated (Reid, OOPSLA 2017) but never released, sail-arm is A-profile only, and GTZC is an ST peripheral that appears in NO ARM specification at all.",
         "exists": true,
         "make_target": "gtzc-enforcement-hw",
-        "cost": "low"
+        "cost": "low",
+        "procedure": "docs/security/red-teaming.md §6.1 (gtzc-enforcement-hw; note C3 shipping-combo gap)"
       },
       "consumed_by": [
         "invariant-4 (all secrets only in TrustZone secure world)",
@@ -221,7 +227,8 @@
         "description": "Self-run the NIST SP 800-90B entropy-assessment suite over samples drawn from our own parts in our own RNG_CR configuration. Days.",
         "exists": false,
         "make_target": null,
-        "cost": "days"
+        "cost": "days",
+        "procedure": "docs/security/red-teaming.md §4.1 (RDP-0 raw-entropy dump -> SP 800-90B EA, no FI)"
       },
       "consumed_by": [
         "secure/src/hw/otp.rs (burn_device_master — irreversible)",
@@ -251,7 +258,8 @@
         "description": "Offensive FI campaign on sacrificial parts. High cost.",
         "exists": false,
         "make_target": null,
-        "cost": "high"
+        "cost": "high",
+        "procedure": "docs/security/red-teaming.md §6.6.1 (FaultyCat EMFI µGlitch-shape + Scaffold voltage Šimoník-shape)"
       },
       "consumed_by": [
         "invariant-4",
@@ -286,7 +294,8 @@
         "description": "Boot any board and read the log: `hw::dbgmcu::report_die_id()` runs immediately after rcc::init() and prints dev_id/rev_id/rev/sesip_covered, shouting when the die is NOT the SESIP-covered rev U. Implemented 2026-07-17 (work-todo A4a); the probe reports and never faults, because a rev X/W part is good silicon that the certificate simply does not cover. REMAINING: nobody has yet RUN it on the bench dies and recorded the answer — that is the falsifying step, and it needs hardware.",
         "exists": false,
         "make_target": null,
-        "cost": "hours"
+        "cost": "hours",
+        "procedure": "docs/security/red-teaming.md §3.3 (DONE: hw::dbgmcu boot probe, A4a) — bench step is boot-and-record"
       },
       "consumed_by": [
         "HW-ASSUME-RDP2 (the certificate's scope)"
@@ -315,7 +324,8 @@
         "description": "Probe OEM1LOCK/OEM2LOCK on every unit at production test. Separately: probe whether any CubeIDE-touched bench board already carries ST's default OEM2 password (UM3387 reports CubeIDE's init script sets one) — that would be a live regression credential on our own bench. Low cost.",
         "exists": false,
         "make_target": null,
-        "cost": "low"
+        "cost": "low",
+        "procedure": "docs/security/red-teaming.md §6.6 (option-byte OEM-lock read; CubeIDE default-password probe)"
       },
       "consumed_by": [
         "HW-ASSUME-RDP2 (this is WHY we ship outside the certified configuration)"
@@ -339,7 +349,8 @@
         "description": "Read the applet/config version off the part. Hours.",
         "exists": false,
         "make_target": null,
-        "cost": "hours"
+        "cost": "hours",
+        "procedure": "docs/security/red-teaming.md §5.5 (read applet/config version)"
       },
       "consumed_by": [
         "HW-ASSUME-SE-INTERNALS (the certificate is the only third-party evidence we have)"
@@ -373,7 +384,8 @@
         "description": "None exists that reaches inside the die, and none will. Per-property silicon E2E on our own parts is the ceiling — each test can fail, which is what makes them worth running.",
         "exists": true,
         "make_target": "se050-stress",
-        "cost": "N/A for the general premise; low per property"
+        "cost": "N/A for the general premise; low per property",
+        "procedure": "docs/security/red-teaming.md §5.1-5.5 (per-property silicon E2E; permanent bare-TCB)"
       },
       "consumed_by": [
         "invariant-1 (dual-chip seed split)",
