@@ -4079,7 +4079,25 @@ live defects, not research residuals.**
 
 ### Modelling work (ranked)
 
-- [ ] **M1 — Model the T=1' / IFX-I2C framing FSM in TLA+.** The layer every PIN attempt and every
+- [~] **M1 — RE-SCOPED 2026-07-17 after reading the driver. The stated hazard does not exist; a
+  smaller real one does.** My original framing (and the C1 module docstring, now corrected in
+  `shared/src/t1_frame.rs`) claimed `t1oi2c.rs` is "a textbook alternating-bit protocol" whose 1-bit
+  sequence number "is exactly the mechanism by which a lost response can cause a duplicate apply of
+  an already-executed command". **Wrong** — asserted from the shape of `PCB_I_SEQ`/`ns`/`nr` without
+  reading the send loop. The driver has **no I-block retransmission**: `i2c::write(..)?` propagates,
+  `ns` toggles once per write, nothing re-sends. Duplicate-apply needs a retransmitter and there
+  isn't one; the retry lives in the journal-resumable ceremony above, where D1 has now typed the
+  ambiguity. *(Third time this session that a "finding" derived from code shape rather than code
+  dissolved on reading it — cf. the TLC lesson in `project_fv_expansion_pilot_page123`.)*
+  **What is actually real, and what a model should target:** `nr` is a **free-running toggle, not a
+  check** — the receive loop never compares a received I-frame's sequence bit against `self.nr`;
+  `nr` only builds the outgoing R(ACK). A duplicated or reordered SE response frame is therefore not
+  rejected at this layer. Caught above by SCP03 (MAC + its own counter), so defence-in-depth rather
+  than a break — but the sequencing guarantee a reader assumes on seeing `ns`/`nr` is not enforced.
+  A TLA+ model over a lossy/adversarial bus should prove the fail-closed shape (any framing/CRC
+  anomaly ⇒ Err, never a partial-but-accepted response) and **expose the nr-not-checked gap as an
+  explicit modelled residual** rather than the duplicate-apply hazard that motivated the row.
+  Prerequisite done: C1 proved the pure framing half. Original: The layer every PIN attempt and every
   PUT KEY crosses, and the only one still unmodelled — the SCP03/Shielded *crypto* is modelled, the
   framing that carries it is not. `t1oi2c.rs` is a textbook **alternating-bit protocol** (`PCB_I_SEQ =
   0x40`; `ns`/`nr` "toggle 0/1"; R-block acks; `MAX_WTX_RETRIES = 500`) — that 1-bit sequence number is

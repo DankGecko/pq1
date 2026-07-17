@@ -14,11 +14,30 @@
 //! OPTIGA Shielded Connection) is modelled in Tamarin/ProVerif; the framing
 //! that carries it is not modelled anywhere
 //! (`docs/verification/hardware-assumption-boundary-2026-07-17.md` §1(d)).
-//! `t1oi2c.rs` is a textbook alternating-bit protocol — `PCB_I_SEQ = 0x40`
-//! with `ns`/`nr` that toggle 0/1 — and a 1-bit sequence number is exactly the
-//! mechanism by which a lost response can cause a **duplicate apply** of an
-//! already-executed command. That sequencing FSM is the TLA+ target (work-todo
-//! M1); this module is the pure half beneath it, which Kani can take now.
+//!
+//! **CORRECTION 2026-07-17 — what this layer does NOT risk.** An earlier
+//! version of this note said `t1oi2c.rs` is "a textbook alternating-bit
+//! protocol" whose 1-bit sequence number "is exactly the mechanism by which a
+//! lost response can cause a duplicate apply of an already-executed command".
+//! That was asserted from the shape of `PCB_I_SEQ`/`ns`/`nr` without reading
+//! the send loop, and it is **wrong**: the driver has **no I-block
+//! retransmission**. `i2c::write(..)?` propagates the error, `ns` toggles once
+//! per write, and nothing re-sends. Duplicate-apply needs a retransmitter;
+//! there isn't one here. The retry lives one layer up, in the journal-resumable
+//! first-boot ceremony — which is where the ambiguity is now typed
+//! (`Se050Error::is_inconclusive`, work-todo D1/A2), and that is the right
+//! place for it.
+//!
+//! What IS real at this layer, and is the honest M1 scope: `nr` is a
+//! **free-running toggle, not a check**. `validate_frame` returns the PCB but
+//! the receive loop never compares its sequence bit against `self.nr` — `nr`
+//! only builds the outgoing R(ACK). So a duplicated or reordered SE response
+//! frame is not rejected *here*. It is caught one layer up by SCP03 (MAC plus
+//! its own counter), which makes this defence-in-depth rather than a break —
+//! but it means the sequencing guarantee people assume from seeing `ns`/`nr`
+//! is not actually enforced. Stated so nobody re-derives it as a finding.
+//!
+//! This module is the pure framing half, which Kani can take now.
 //!
 //! Frame layout (GP 1.0, 2-byte LEN):
 //!
