@@ -81,6 +81,12 @@ jobs:
       # Ships its own --self-test negative control (asserted first).
       - name: HW-ASSUME ledger falsifiable (anchors / real tests / bidirectional ids)
         run: make -C contracts/verification verify-hw-assumptions
+      # C2: hand-typed MMIO bases vs ST's own CMSIS header. Skips cleanly (exit 0)
+      # when STM32CubeU5 is not checked out, so it is a no-op in CI today and a
+      # real gate on any box with the vendor SDK — including every dev machine
+      # that has ever built against CubeU5. Point it with STM32U5_CMSIS_HEADER.
+      - name: MMIO base addresses vs ST CMSIS header
+        run: make verify-mmio-addresses
 
   supply-chain-vet:
     name: cargo-vet (dependency audit attestation)

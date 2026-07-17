@@ -366,6 +366,11 @@ e2e: ## Automated unified-sign E2E (QEMU)
 		"\\[NS\\]\\[e2e\\] Scenario 0a: mismatched single sender is refused" \
 		"\\[NS\\]\\[e2e\\] Scenario 0b: mismatched batch sender is refused" \
 		"\\[NS\\]\\[e2e\\] Scenario 0c: cross-account sender is refused" \
+		"\\[NS\\]\\[e2e\\] Scenario 0d: mismatched single EntryPoint is refused" \
+		"\\[NS\\]\\[e2e\\] Scenario 0e: mismatched batch EntryPoint is refused" \
+		"\\[NS\\]\\[e2e\\] Scenario 0f: selector-only Safe exec is refused" \
+		"\\[NS\\]\\[e2e\\] Scenario 0g: selector-only Safe exec batch is refused" \
+		"\\[NS\\]\\[e2e\\] Scenario 0h: canonical Safe exec remains signable" \
 		"\\[NS\\]\\[e2e\\] Scenario 1: register slot 1 on chain A" \
 		"\\[NS\\]\\[e2e\\] Scenario 2: repeat sign on chain A slot 1" \
 		"\\[NS\\]\\[e2e\\] Scenario 3: rotate to slot 2 on chain A" \
@@ -1763,6 +1768,7 @@ test-unit: ## Rust workspace unit tests (host)
 	    -p pqsigner-hal -p pqsigner-pq-seal -p masked-sha2 -p pqsigner-xtask
 	@echo "==> Running dbgen ERC-7730 round-trip integration tests (host)"
 	@cargo test --locked -p dbgen --test erc7730_roundtrip
+	@$(MAKE) --no-print-directory erc8176-coverage-test
 
 # CI gate: every checked-in generated artifact must round-trip
 # byte-for-byte. New artifacts get a parallel diff target here so a
@@ -1775,7 +1781,7 @@ test-unit: ## Rust workspace unit tests (host)
 #   make check-codegen
 #
 # Or as part of `make prod-erc7730-provenance-check` (Phase 2 onwards).
-.PHONY: check-codegen check-erc7730-descriptors check-solidity-constants check-research-bundles erc8176-coverage
+.PHONY: check-codegen check-erc7730-descriptors check-solidity-constants check-research-bundles erc8176-coverage erc8176-coverage-test
 check-codegen: check-erc7730-descriptors check-solidity-constants check-research-bundles
 	@echo "==> codegen artifacts in sync"
 
@@ -1802,6 +1808,10 @@ check-solidity-constants:
 erc8176-coverage: ## Report ERC-8176 (EAS) attestation coverage of the ERC-7730 corpus
 	@echo "==> Querying EAS for ERC-8176 attestation coverage (needs network)"
 	@python3 tools/erc8176_eas_coverage.py
+
+erc8176-coverage-test: ## Run deterministic offline ERC-8176 coverage-checker tests
+	@echo "==> Testing ERC-8176 coverage checker (offline)"
+	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tools/test_erc8176_eas_coverage.py
 
 # Foundry tests for the PQ smart-wallet contracts.
 test-solidity: ## Foundry tests for the smart-wallet contracts
@@ -3966,6 +3976,17 @@ kani: ## Bounded model-checking on firmware decoders/counters
 #   make verify-kani-mutation                 # default tier (all 6 mutations)
 #   make verify-kani-mutation MUTATIONS=quick # canary + the fast fw-manifest/aa ones
 .PHONY: verify-kani-mutation
+# C2: hand-transcribed MMIO base addresses vs ST's OWN CMSIS header. Peripheral
+# bases are typed in by hand from RM0456 and a wrong nibble is SILENT — the TAMP
+# driver sat at the wrong base for an unknown period precisely because nothing
+# compared it to anything. External artifact that can disagree; there is no
+# proof to be had here, just a diff. SKIPs (exit 0) when STM32CubeU5 is absent:
+# a missing vendor SDK is a setup gap, not a code defect.
+.PHONY: verify-mmio-addresses
+verify-mmio-addresses: ## hand-typed MMIO bases vs ST's CMSIS stm32u585xx.h
+	@python3 scripts/check_mmio_addresses.py --self-test
+	@python3 scripts/check_mmio_addresses.py
+
 verify-kani-mutation: ## anti-vacuity: break a decoder, expect a Kani harness to turn red
 	@command -v cargo-kani >/dev/null 2>&1 || { echo "ERROR: cargo-kani not found. Install: cargo install --locked kani-verifier && cargo kani setup"; exit 1; }
 	python3 scripts/check_kani_mutations.py
