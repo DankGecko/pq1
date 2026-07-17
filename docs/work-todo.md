@@ -4110,7 +4110,27 @@ live defects, not research residuals.**
   failed, 0.18 s**. ⚠️ Do **not** wire the traits as they stand — their `Result<(),E>` outcome type
   structurally cannot express "the command executed but the response was lost" (see D1/A2 and the
   doc's §2.1); fix the outcome algebra first or the seam launders the optimism into a proof.
-- [ ] **M3 — Re-derive `optiga_shield_handshake.pv` from Infineon's public I2C Protocol v2.03 §6**
+- [!] **M3 — BLOCKED ON SOURCE 2026-07-17. The in-repo spec doc cannot serve as the independent
+  oracle, and using it would be circular.** M3's whole point is that the current
+  `optiga_shield_handshake.pv` is derived from `shield.rs` (its own docstring admits it), so it can
+  only prove we modelled ourselves consistently; an external ground truth the driver can DIVERGE
+  from is what makes it worth anything. `docs/secure-elements/OPTIGATRUSTM/ifx-i2c-protocol.md`
+  looks like that ground truth — it is titled "IFX I2C Protocol v2.03 — Complete Reference" and has
+  the wire-complete handshake (SCTR/MasterHello/SlaveHello/Finished). It is not:
+  - it carries **no provenance statement** — no Infineon document number, version, or source;
+  - `git log --diff-filter=A`: `shield.rs` added **2026-04-13**, the doc added **2026-06-18** —
+    the doc post-dates the driver by two months.
+  So its independence from the driver is unestablished, and a model re-derived from it could simply
+  launder the driver's beliefs through a document. That is the PERRY failure mode the 2026-07-17
+  survey named ("infers a peripheral model FROM the vendor driver, so the model encodes the driver's
+  belief — precisely the belief in doubt"), which is the thing M3 exists to escape.
+  **Unblock by obtaining the actual Infineon *I2C Protocol* specification** (the datasheet PDFs in
+  `docs/` are not it). Then either re-derive the model from it, or — cheaper and nearly as valuable —
+  diff the spec against `ifx-i2c-protocol.md` and give that doc a provenance header, which would
+  make it a legitimate oracle for this and future work.
+  Note the standing asymmetry this leaves: SCP03 has a published game-based proof (Sabt & Traoré,
+  SSR 2016) for the protocol as specified; OPTIGA's Shielded Connection has **no public security
+  analysis at all**. Original:
   rather than from `shield.rs`. The current model's own docstring admits it is driver-derived — so it
   proves we modelled ourselves consistently. The vendor spec is an external ground truth the driver
   can diverge from. Note: OPTIGA's Shielded Connection has **no public security analysis at all**,
