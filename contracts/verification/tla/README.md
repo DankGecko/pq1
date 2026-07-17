@@ -1,5 +1,39 @@
 # TLA+/TLC models (FV-surface expansion)
 
+## Running them
+
+```sh
+make -C contracts/verification verify-tla       # all three suites
+TLA2TOOLS=/path/to/tla2tools.jar make -C contracts/verification verify-tla
+```
+
+The target needs `tla2tools.jar` (not vendored: 4.3 MB of third-party binary).
+It looks at `$TLA2TOOLS`, then `$HOME/tla2tools.jar`, and **fails loudly** if
+absent — it never silently skips. Fetch from
+<https://github.com/tlaplus/tlaplus/releases>.
+
+The committed results were obtained with a TLA+ Tools **nightly**
+(`Build-TimeStamp 2026-07-15T13:43:31Z`, sha256
+`58d44845a37a8d776deaf8cf3a623213b59d311bc0ec287bcdfbe148dd11bb3d`). The target
+prints the hash of whatever jar it used and warns when it differs: a different
+TLC is a different tool, so a green under another build is not attributable to
+these results. The hash is *not* a hard gate precisely because the validated
+build is a nightly — pinning it against "download latest" would fail for
+everyone. Attribution over false precision.
+
+Each `run_*.sh` is **self-checking**: it asserts an expected verdict per config,
+including the deliberately `VIOLATED` ones that are the negative controls (a
+wrong-order compaction must break; a symmetric PIN model must false-wipe). A
+green means *all expected outcomes matched* — not *no violations found*. 16
+expected outcomes across the three models as of 2026-07-17.
+
+Before this target existed (work-todo C5) there was no way to re-run any of
+this: the only jar on the box lived in a scratch directory belonging to a
+session that no longer exists, while three model-checking results were cited in
+docs as evidence. A pilot result that cannot be re-run is a verification claim
+with no executable evidence.
+
+
 First pilot of the formal-verification-surface expansion program
 (`docs/verification/fv-surface-expansion-inventory-2026-07-16.md`).
 

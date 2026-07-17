@@ -37,7 +37,7 @@ LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 help: ## Show the runnable FV targets (those with a description)
 	@grep -hE '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F':.*## ' '!seen[$$1]++ {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: verify verify-hw-assumptions verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation verify-forsc-margin verify-easycrypt verify-easycrypt-pins
+.PHONY: verify verify-hw-assumptions verify-tla verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation verify-forsc-margin verify-easycrypt verify-easycrypt-pins
 
 # NOTE: verify-build (the `lake build` this bundle depends on) now also
 # kernel-checks the A3.1 in-kernel parse theorem + elision bridge (the root
@@ -120,6 +120,54 @@ verify-ledger-consistency: verify-build ## AXIOM_STATUS.json falsifiable vs live
 verify-hw-assumptions: ## HW-ASSUME ledger falsifiable: anchors resolve, tests real, ids bidirectional
 	@python3 scripts/check_hw_assumptions.py --self-test
 	@python3 scripts/check_hw_assumptions.py
+
+# TLA+/TLC models. Until now these had NO make target and the only tla2tools.jar
+# on the box lived in a scratch directory belonging to a session that no longer
+# exists — so three committed model-checking results, each cited in docs, could
+# not be re-run by anyone. A pilot result that cannot be re-run is a
+# verification claim with no executable evidence, which is exactly what
+# verify-ledger-consistency exists to prevent (work-todo C5).
+#
+# Each run_*.sh is self-checking: it asserts an EXPECTED verdict per config,
+# including the deliberate VIOLATED ones that are the negative controls (a
+# wrong-order variant must break; a symmetric PIN model must false-wipe). So a
+# green here means "all expected outcomes matched", not "no violations found".
+#
+# The jar is NOT vendored (4.3 MB of third-party binary) and NOT auto-fetched:
+# the validated build is a tlaplus NIGHTLY, so a hard hash-pin against
+# "download latest" would fail for everyone. Instead: fail loudly when absent,
+# print the jar hash, and warn when it is not the build these results were
+# obtained with. Attribution over false precision.
+TLA_DIR       := tla
+TLA_JAR       ?= $(or $(TLA2TOOLS),$(HOME)/tla2tools.jar)
+# SHA-256 of the tla2tools build the committed results were obtained with
+# (TLA+ Tools nightly, Build-TimeStamp 2026-07-15T13:43:31Z).
+TLA_JAR_SHA256 := 58d44845a37a8d776deaf8cf3a623213b59d311bc0ec287bcdfbe148dd11bb3d
+
+.PHONY: verify-tla
+verify-tla: ## TLA+/TLC models (page-123 crash-atomicity, combined budget, PIN reconcile)
+	@command -v java >/dev/null 2>&1 || { echo "ERROR: java not found — TLC needs a JRE."; exit 1; }
+	@if [ ! -f "$(TLA_JAR)" ]; then \
+		echo "ERROR: tla2tools.jar not found at $(TLA_JAR)."; \
+		echo "  Set TLA2TOOLS=/path/to/tla2tools.jar, or drop it at \$$HOME/tla2tools.jar."; \
+		echo "  Fetch: https://github.com/tlaplus/tlaplus/releases"; \
+		echo "  The committed results used sha256 $(TLA_JAR_SHA256)."; \
+		exit 1; \
+	fi
+	@got=$$(sha256sum "$(TLA_JAR)" | cut -d' ' -f1); \
+	if [ "$$got" != "$(TLA_JAR_SHA256)" ]; then \
+		echo "WARNING: tla2tools.jar sha256 $$got"; \
+		echo "         differs from the build these results were validated against"; \
+		echo "         ($(TLA_JAR_SHA256)). A different TLC is a different tool —"; \
+		echo "         a green below is not attributable to the committed pilot."; \
+	else \
+		echo "tla2tools.jar sha256 matches the validated build."; \
+	fi
+	@rc=0; \
+	TLA2TOOLS="$(TLA_JAR)" $(TLA_DIR)/run.sh          || rc=1; \
+	TLA2TOOLS="$(TLA_JAR)" $(TLA_DIR)/run_combined.sh || rc=1; \
+	TLA2TOOLS="$(TLA_JAR)" $(TLA_DIR)/run_pin.sh      || rc=1; \
+	exit $$rc
 
 # EASYCRYPT PORT gate. Two axioms in theft_free's closure (A5-EUFCMA, A5-ITSR)
 # cite this development as evidence; until 2026-07-10 it lived in a remote-less
