@@ -670,12 +670,20 @@ fn negative_stm32_gtzc_seccfgr3_protects_full_crypto_block() {
             "GTZC SECCFGR3 bit `{name}` is load-bearing for CLAUDE.md invariant #4"
         );
     }
-    // The seccfgr3 expression must include every five bits.
-    assert!(SAU_SRC.contains("let seccfgr3 = SECCFGR3_AES_BIT"));
+    // The image must compose all five bits. It became a named const with a
+    // compile-time pin (work-todo C3, 2026-07-17) rather than an inline
+    // expression — strictly stronger, because the `const _: () = assert!(..)`
+    // below fails the BUILD, not just this test, if the composition drifts.
+    assert!(SAU_SRC.contains("const SECCFGR3_IMAGE: u32 = SECCFGR3_AES_BIT"));
     assert!(SAU_SRC.contains("| SECCFGR3_HASH_BIT"));
     assert!(SAU_SRC.contains("| SECCFGR3_RNG_BIT"));
     assert!(SAU_SRC.contains("| SECCFGR3_PKA_BIT"));
     assert!(SAU_SRC.contains("| SECCFGR3_SAES_BIT;"));
+    assert!(SAU_SRC.contains("let seccfgr3 = SECCFGR3_IMAGE;"));
+    assert!(
+        SAU_SRC.contains("SECCFGR3_IMAGE == (1 << 11) | (1 << 12) | (1 << 13) | (1 << 14) | (1 << 15)"),
+        "the SECCFGR3 image must stay compile-time-pinned to the five crypto peripherals"
+    );
 }
 
 #[test]
@@ -707,7 +715,16 @@ fn negative_stm32_gtzc_seccfgr1_protects_se_buses() {
     // race a transfer and steal session-key material.
     assert!(SAU_SRC.contains("const SECCFGR1_I2C1_BIT: u32 = 1 << 13;"));
     assert!(SAU_SRC.contains("const SECCFGR1_I2C2_BIT: u32 = 1 << 14;"));
-    assert!(SAU_SRC.contains("let seccfgr1 = SECCFGR1_I2C1_BIT | SECCFGR1_I2C2_BIT;"));
+    // The image is now a named const with a compile-time pin (work-todo C3,
+    // 2026-07-17) rather than an inline expression — a strictly stronger form:
+    // the `const _: () = assert!(SECCFGR1_IMAGE == ...)` below fails the BUILD,
+    // not just this test, if the composition drifts. Pin both.
+    assert!(SAU_SRC.contains("const SECCFGR1_IMAGE: u32 = SECCFGR1_I2C1_BIT | SECCFGR1_I2C2_BIT;"));
+    assert!(SAU_SRC.contains("let seccfgr1 = SECCFGR1_IMAGE;"));
+    assert!(
+        SAU_SRC.contains("SECCFGR1_IMAGE == (1 << 13) | (1 << 14)"),
+        "the SECCFGR1 image must stay compile-time-pinned to the two SE buses"
+    );
 }
 
 #[test]
