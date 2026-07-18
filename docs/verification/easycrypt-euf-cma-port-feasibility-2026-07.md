@@ -998,3 +998,24 @@ the empirical spike (port `Eqv_..._Orig_C` and compile) to convert "expected mec
 mechanical". Caveat retained: the leaf-term premise `A_wf` is CARRIED at the component level (the
 faithful +C analog of MM45's shipped `H_pkco`) and remains **open** until the capstone reduction-image
 discharge — do not read "component theorem done" as "A_wf discharged".
+
+### UPDATE 2026-07-18 (same day, tightened) — read-level +C-invariance CONFIRMED for the WHOLE core lemma
+
+Extended the checksum-reasoning audit from the suspect equiv to the entire core-lemma region
+(FL_SL_XMSS_MT_ES.ec:3005-4290). Result: **ALL FOUR proof components are checksum/constant-sum-free**
+— `Eqv_..._Orig_C` (:3511, the pk-reconstruction/collision-extraction alignment, the hardest one,
+uses only generic base-w facts `cf`/`ch_comp`/`BaseW.valP`/`val_w`), `EqPr_..._Orig_V` (:3005),
+`Eqv_..._C_V` (:3962), and the assembly `..._MEUFGCMAWOTSTWES` (:4075, a pure `Pr[mu_split ...
+valid_WOTSTWES]` + `ler_add` splitting the instrumented V-game win into the three collision buckets,
+each routed to its reduction). No component invokes an encoding *property* — the WOTS security
+argument is delegated wholesale to the leaf theorem via `R_MEUFGCMAWOTSTWESNPRF_EUFNAGCMA`.
+
+⇒ The +C port of the ~2000-line hypertree collision-extraction machinery is **mechanical**:
+scheme-substitution (`encode_msgWOTS`→`encode_msgWOTS_C ps ad m counter`, tree ops verbatim) plus
+counter-threading friction (the `sigFLSLXMSSMTTWC` element bundles `((sigWOTS,counter),ap)`, so every
+sig destructure + the forgery reconstruction `pkWOTS_from_sigWOTS_C` carry the counter). The three
+collision flags (:3268-3273) are +C-identical (the counter never enters a collision comparison).
+**100% of the +C cryptographic novelty sits in the WOTS+C leaf (interactive-D.1 — CLOSED).** Remaining
+to convert "shown by reading" → "shown by compiler": the empirical port-and-compile of the C/V game
+modules + the equivs (in progress). This is the sharpest evidence yet against 6-18-pmo: the layer
+everyone assumes is expensive (hypertree security) is a substitution port off MM45.
