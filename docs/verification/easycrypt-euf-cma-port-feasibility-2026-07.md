@@ -968,3 +968,33 @@ absolute (never promote a proof you cannot gate). A future session on a working 
 applies the recipe, gates it (delete tree premise → fail; zero ITSRC10 term → fail), then vendors.
 The `FORS_C10_Multi` leg it routes through IS verified (stdlib-gateable, landed this session); only
 the capstone *composition* over it is blocked, and purely by the `SPHINCS_PLUS.eco` toolchain wall.
+
+## UPDATE 2026-07-18 — XMSS-MT+C core-lemma attack: scheme-level +C-invariance CONFIRMED (a bankable finding)
+
+Re-estimate evidence, independent of how far the capstone gets this cycle:
+
+**MM45's entire XMSS-MT tree machinery is reused byte-for-byte by the +C scheme.** `XMSSMT_C_Scheme.ec`
+imports `pkco`, `cons_ap_trh`, `val_bt_trh`, `val_ap_trh` directly from MM45's `FSSLXMTWES` instance;
+`leaves_from_sspsad` / `gen_root` / `keygen` are annotated "byte-for-byte MM45" (line 33) and verified
+so (pkco at :84/:191, val_bt_trh/cons_ap_trh at :96/:128/:129). The **only** +C delta in the whole
+hypertree is `okC <- predC (ThC ps ad m counter)` at :158 — the message-compression grinding gate,
+which lives strictly **inside the WOTS leaf** (`WOTS_C_ES`), never in the tree hashing.
+
+**Consequence for the core reduction lemma** (`EUFNAGCMA_FLSLXMSSMTTWESNPRF_MEUFGCMAWOTSTWES`,
+FL_SL_XMSS_MT_ES.ec:4075): its two tree-collision reductions (`R_SMDTTCRCPKCO_EUFNAGCMA` :2130,
+`R_SMDTTCRCTRH_EUFNAGCMA` :2415) and its three instrumented-game equivs (`EqPr_..._Orig_V` :3005,
+`Eqv_..._Orig_C` :3511, `Eqv_..._C_V` :3962) operate over the tree structure that is +C-identical.
+The instrumented games (`EUF_NAGCMA_..._C` :3054, `_V` :3285) inline the WOTS encoding **inside the
+game body** — so both sides of every equiv share it, and the equivs align execution *traces* (never
+invoke an encoding *property* — the checksum/constant-sum security argument is the LEAF theorem's job,
+delegated out via the leaf reduction). ⇒ the tree reductions + tree game-hops are expected to port by
+**scheme-substitution** (`encode_msgWOTS`→`encode_msgWOTS_C`, add the `grindC` counter-loop alignment
+on BOTH sides), with the entire +C delta absorbed in the already-closed leaf term (interactive-D.1).
+
+**This is direct evidence against the 6-18-person-month figure**: the hard, novel +C work is the WOTS+C
+leaf (interactive-D.1 — CLOSED, gold-standard-verified this program); the ~2000-line hypertree
+collision-extraction machinery above it is a mechanical port, not fresh cryptographic proof. Pending
+the empirical spike (port `Eqv_..._Orig_C` and compile) to convert "expected mechanical" → "shown
+mechanical". Caveat retained: the leaf-term premise `A_wf` is CARRIED at the component level (the
+faithful +C analog of MM45's shipped `H_pkco`) and remains **open** until the capstone reduction-image
+discharge — do not read "component theorem done" as "A_wf discharged".
