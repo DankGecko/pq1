@@ -11,6 +11,13 @@
     "eip712": 148,
     "expected_text_strings": 3976
   },
+  "format_coverage": {
+    "fixture_targets": 502,
+    "accepted_formats": 815,
+    "fixture_targets_accepted": 287,
+    "accepted_without_fixture": 528,
+    "fixture_without_accepted_format": 215
+  },
   "semantic_incompatibilities": [
     {
       "fixture": "registry/weth/tests/calldata-weth.tests.json",

@@ -42,7 +42,9 @@
 > deadline/reset decision. The materially remediated current tree is host,
 > codegen and QEMU green; optimized development inspection is favorable but is
 > not executable FI, a production profile, or a hardware stack/high-water
-> bound. A fresh exact three-reviewer wave is still required. Follow the live campaign
+> bound. The remediated current-refusal phase completed its exact three-reviewer
+> wave and landed; this does not authorize the separate forced-blind design.
+> Follow the live campaign
 > ledger in [`work-todo.md`](work-todo.md#pq1-erc-7730-productization-campaign--owner-direction-2026-07-16),
 > the architecture record in
 > [`clear-signing-pq1-forced-blind-architecture-2026-07-16.md`](security/adversarial-review/findings/clear-signing-pq1-forced-blind-architecture-2026-07-16.md),
@@ -79,7 +81,7 @@
 > not the batched Phase-D adversarial review or production/ship authority;
 > forced blind signing remains disabled under the 2026-07-16 decision above.
 
-> **Scoped ERC-7730 V5 review / V6 remediation receipt — 2026-07-18.** Frozen
+> **Scoped ERC-7730 V5 review / V9 completion receipt — 2026-07-18.** Frozen
 > ref `review/erc7730-phase-d-20260718-v5` at
 > `c70f6ffff34e739cbde78ecfec8cfc7f7253772b` completed the combined
 > source-first Phase-D review and returned **DO NOT MERGE**. Blocking findings
@@ -118,16 +120,36 @@
 > outside; 40 groups (10 quick / 27 default / 3 full), 38 distinct enrolled
 > harnesses.
 >
-> Candidate evidence is green: the combined host package suites pass; secure
+> Final V9 evidence is green: the combined host package suites pass; secure
 > mock-SE suites pass 2245/0 under both no-default and
 > `erc7730-dev-unattested`, with one diagnostic test ignored; descriptor drift,
 > census, the scoped Kani harness and exact enrolled mutation pass; and the
 > strict linked Thumb profile remains within FLASH/static-RAM/stack margins.
-> Final freeze plus the workflow's single simultaneous GPT-5.6 SOL / Opus 4.8 /
-> Kimi K3 fast review wave remain mandatory before landing. The exhaustive
+> Commit `870cb113800235b47ca8a22e6c5a853e143516b8`, tree
+> `3e5492d1c34d623820899bf16d1563a6d8a90ad2`, is retained at
+> `review/erc7730-phase-d-20260718-v9`; the simultaneous GPT-5.6 SOL, Opus 4.8,
+> and Kimi K3 fast review returned three **GO** verdicts with no findings, after
+> which that identity landed on `master` and was pushed. The exhaustive
 > combined playbook lock-in is explicitly deferred to the future
 > owner-triggered item in `docs/work-todo.md`; session restart does not activate
-> it. This grants no merge, production, shipment, or forced-blind authority.
+> it. This grants no production, shipment, or forced-blind authority.
+
+> **Scoped ERC-7730 upstream-conformance candidate — 2026-07-18.** The active
+> bounded Phase-C slice is test-only: it adds exact format-level inventory,
+> strict signed-Type-2 and legacy EIP-155 fixture adapters, and the first real
+> upstream EIP-712 semantic transcript. The pinned corpus contains 502 unique
+> fixture-targeted formats against 815 accepted PQ1 formats; 287 intersect, 528
+> accepted formats lack a fixture, and 215 fixture targets are not accepted.
+> Four Merkle-verified semantic transcripts now cover unsigned and signed
+> Type-2, legacy EIP-155, and flat-static EIP-712; all exact case-owned waivers
+> must be consumed, while the malformed trailing-byte WETH fixture still
+> refuses. Evidence is focused lane 10/0, full dbgen 276/0,
+> `pqsigner-erc7730` 242/0, xtask 60/0, and clean descriptor/codegen drift.
+> This candidate changes no production descriptor, root, known-call Bloom,
+> firmware signing behavior, or legacy
+> transaction authority. Broader semantic enrollment and corpus-derived
+> adversarial mutations remain open in `docs/work-todo.md`; forced blind signing
+> remains disabled and out of scope.
 
 ## §0 — Where the truth lives (doc map)
 

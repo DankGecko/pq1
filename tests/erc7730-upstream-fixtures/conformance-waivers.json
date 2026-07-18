@@ -24,6 +24,38 @@
       "text": "0.00001891793145988 8 ETH",
       "class": "ledger_max_fees",
       "reason": "Ledger-specific fee formatting is not descriptor-derived; PQ1 fee semantics have their own signed-envelope tests."
+    },
+    {
+      "fixture": "registry/lido/tests/calldata-wstETH.tests.json",
+      "case": 3,
+      "text_index": 0,
+      "text": "Interaction with",
+      "class": "ledger_interaction_with",
+      "reason": "Ledger-owned transaction shell label; PQ1 separately renders the authenticated Lido descriptor identity."
+    },
+    {
+      "fixture": "registry/lido/tests/calldata-wstETH.tests.json",
+      "case": 3,
+      "text_index": 3,
+      "text": "0xdB34FBB4E7989c3f 8957e9E9b346bf46Ee 0F0408",
+      "class": "line_wrapped_address_like",
+      "reason": "Ledger line-wraps the address into one token. The test independently reconstructs the exact address and matches every byte of the rendered signed ABI word."
+    },
+    {
+      "fixture": "registry/lido/tests/calldata-wstETH.tests.json",
+      "case": 3,
+      "text_index": 6,
+      "text": "Max fees",
+      "class": "ledger_max_fees",
+      "reason": "Fee presentation is transaction-shell output outside the descriptor renderer exercised by this fixture lane."
+    },
+    {
+      "fixture": "registry/lido/tests/calldata-wstETH.tests.json",
+      "case": 3,
+      "text_index": 7,
+      "text": "0.0000045605908 ETH",
+      "class": "ledger_max_fees",
+      "reason": "Ledger-specific fee formatting is not descriptor-derived; PQ1 fee semantics have their own signed-envelope tests."
     }
   ]
 }

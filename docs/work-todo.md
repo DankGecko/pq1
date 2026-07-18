@@ -3904,19 +3904,41 @@ review report.
   247/0, and `gen-erc7730-descriptors --check` in sync. At this slice's landing
   the production root remained `048fd2f1…b142`; the subsequently completed
   native-currency-list and NFT-identity rows intentionally rotate it to
-  `0706d763…17d2ed`. **Still open:**
-  broaden enrolled semantic transcripts,
-  signed-Type-2/legacy adapters, EIP-712 encoding, exact per-case difference
-  waivers, generated adversarial negatives, and missing-target inventory at
-  format rather than accepted-source granularity. Positive cases remain
-  explicitly insufficient as downgrade-safety evidence.
+  `0706d763…17d2ed`. **Second bounded slice completed (2026-07-18):** the lane
+  now inventories exact descriptor-relative path plus calldata selector or
+  full EIP-712 primary-type hash. There are 502 unique fixture-targeted formats
+  and 815 accepted PQ1 formats: 287 intersect, 528 accepted formats have no
+  fixture, and 215 fixture targets are not accepted. Four real semantic
+  transcripts now cover unsigned and signed Type-2, a strict test-only legacy
+  EIP-155 preimage adapter, and flat-static EIP-712. Every waiver is exact,
+  case-owned, rationale-bearing, and fail-on-unused; the WETH trailing-byte
+  case still refuses. Evidence: focused lane 10/0, full dbgen 276/0,
+  `pqsigner-erc7730` 242/0, xtask 60/0, and descriptor/codegen drift clean,
+  with production catalogue, root, known-call Bloom, signing behavior, and
+  legacy support unchanged because this slice is test-only. **Still open:** enroll broader semantic
+  shapes and generate corpus-derived adversarial mutations for truncation,
+  offset/aliasing, extra bytes, binding/proof errors, hidden fields, and
+  boundary magnitudes. Positive cases remain explicitly insufficient as
+  downgrade-safety evidence.
+- [ ] **[pq1-7730-aave-v3-basic-lending, P1, S] Curate Aave V3 basic lending
+  formats without adding a new formatter or authority.** Admit `borrow`,
+  `deposit`, and `supply` only by making the existing `referralCode` an exact
+  visible raw word. Cover all 15 unique Pool deployments / 45 deployment-format
+  instances; assert every signed field is rendered, `multicall` and permit
+  variants remain omitted, and the known-call tuple set and Bloom stay
+  byte-identical. Regenerate and review the rotated descriptor root. This is
+  the next bounded production-catalogue expansion after the fixture phase, not
+  part of the current test-only conformance slice.
 - [ ] **[pq1-7730-provenance, P1, M] Mechanize registry provenance and reviewable
   updates.** Complete the existing §2.1/§2.3 owner items in
   `docs/erc7730-implementation-review-2026-07.md`: explicit upstream SHA,
   schema/tool/policy/curation digests, a reviewable overlay instead of hidden
   in-place edits, deterministic `diff-registry`, and signed-release-manifest
   binding. Preserve the existing root-rotation policy as owner; do not create a
-  second ceremony.
+  second ceremony. First land a deterministic full-replacement curation overlay
+  whose manifest binds each upstream and curated file hash plus the pinned
+  upstream/schema/policy/tool identities; keep signed release-manifest authority
+  and ERC-8176 production provenance as later, separately gated work.
 - [x] **[pq1-7730-phase-c-reviewability, P0, S] Make the Phase-D input and
   standing verification receipts mechanically reviewable.** Completed
   2026-07-18 without changing signing eligibility or the authenticated
@@ -3948,7 +3970,7 @@ review report.
   merge, production or shipment authority and does not close the larger
   provenance row above. Forced blind signing remains disabled in its separate
   authority-changing phase.
-- [~] **[pq1-7730-phase-d-v6-remediation, P0, SECURITY, M] Close the frozen V5
+- [x] **[pq1-7730-phase-d-v6-remediation, P0, SECURITY, M] Close the frozen V5
   Phase-D no-go findings and obtain one fresh combined review.** Frozen ref
   `review/erc7730-phase-d-20260718-v5` at
   `c70f6ffff34e739cbde78ecfec8cfc7f7253772b` completed the combined
@@ -3987,13 +4009,17 @@ review report.
   `erc7730-dev-unattested` configurations, with one diagnostic test ignored;
   descriptor drift and census checks pass.
 
-  **Remaining before `[x]`:** finish exact-target mutation and Thumb/resource
-  receipts, freeze V6, run the single combined source-first additive-playbook
-  A/B review plus the already-requested supplemental Kimi pass, complete
-  symmetric cross-adjudication, remediate any stage blocker, then land.
-  Whole-call stack high-water, exception headroom, `MSPLIM`, hardware FI, and
-  ERC-8176 provenance remain honest production residuals. Forced blind signing
-  stays disabled and belongs to its separate authority-changing phase.
+  **Completed 2026-07-18:** the final V9 identity is commit
+  `870cb113800235b47ca8a22e6c5a853e143516b8`, tree
+  `3e5492d1c34d623820899bf16d1563a6d8a90ad2`, retained at
+  `review/erc7730-phase-d-20260718-v9`. The simultaneous fast GPT-5.6 SOL,
+  Opus 4.8, and Kimi K3 review returned three **GO** verdicts with no findings;
+  the commit landed on `master` and was pushed. The full additive-playbook
+  lock-in remains the explicitly deferred future owner-triggered row near the
+  top of this file. Whole-call stack high-water, exception headroom, `MSPLIM`,
+  hardware FI, and ERC-8176 provenance remain honest production residuals.
+  Forced blind signing stays disabled and belongs to its separate
+  authority-changing phase.
 - [x] **[pq1-7730-native-currency-list, P1, DESIGN, M] Support bounded
   `nativeCurrencyAddress` lists.** Authenticate the complete descriptor list,
   cap its length, compare every entry exactly, bind chain-native ticker/decimals,
@@ -4174,9 +4200,11 @@ for the new completion gates.
   feature, both `tools/cross_parity_erc7730.py`/`cross_parity_erc8213.py`, and
   the 3 docs the handoff commissioned all exist). The remaining clear-sign gaps
   already live in **`docs/companion/companion-erc7730-implementation-guide.md`
-  §12** (12.2 `interpolatedIntent` unimplemented, 12.3 nested-calldata recursion
-  stubbed, 12.4 NFT collection-name DB absent, 12.5 dynamic ABI support limited
-  to exact static or one sole C1 whole tail) — track them there. **Production
+  §12**. Constrained scalar `interpolatedIntent` and authenticated NFT
+  collection identity are complete. Remaining gaps are nested-calldata
+  recursion and dynamic ABI beyond exact static or one sole C1 whole tail;
+  registry provenance/real ERC-8176 attestation, compact-mode settings, and
+  stack/hardware evidence remain separate owner rows. **Production
   remains deliberately blocked** until a real ERC-8176 EAS verifier replaces
   `dev-unattested`; `make prod-erc7730-provenance-check` is the dedicated
   fail-closed provenance gate, independently of the rollback quarantine. Only
