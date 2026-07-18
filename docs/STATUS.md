@@ -156,7 +156,7 @@
 > Three non-blocking test-hardening observations are banked in the owner TODO;
 > they do not expand the reviewed phase or confer production authority.
 
-> **Scoped ERC-7730 Aave V3 basic-lending candidate — 2026-07-18.** This
+> **Scoped ERC-7730 Aave V3 basic-lending completion receipt — 2026-07-18.** This
 > bounded production-catalogue curation admits only Aave V3 `borrow`, `deposit`,
 > and `supply` by changing their existing `referralCode` field from hidden to an
 > always-visible complete raw word. Across all 15 unique Pool deployments, the
@@ -169,9 +169,17 @@
 > omissions fall from 281 to 278. The 4,542 known-call tuples, tuple-set hash,
 > production/E2E Bloom bytes, and E2E catalogue are unchanged. Full dbgen,
 > `pqsigner-erc7730`, xtask, the secure ERC-7730 renderer lane, and descriptor
-> drift gates are green. This is the Phase-D input, not yet its review receipt;
-> it adds no formatter, fallback, generic signing, legacy transaction, or
-> forced-blind authority.
+> drift gates are green. Frozen target
+> `0dc3275c354324d4287e1b42a0b26ab0fcd24206`, tree
+> `8468e60ac2042b23c2808624d315dbc5cab04610`, is retained at
+> `review/erc7730-aave-v3-basic-lending-20260718-v1`. Kimi K3 and Opus 4.8
+> returned **GO**; Opus identified one non-material stale historical label,
+> corrected in the receipt-only follow-up. GPT-5.6 SOL inspected the frozen
+> source and artifacts but reached the mandatory eight-minute cap without a
+> final verdict, so no third GO is claimed and no retry or substitute was
+> launched. No reviewer produced a stage-blocking source finding. This is merge
+> evidence only; it adds no formatter, fallback, generic signing, legacy
+> transaction, production/ship, ERC-8176 provenance, or forced-blind authority.
 
 ## §0 — Where the truth lives (doc map)
 

@@ -3935,7 +3935,7 @@ review report.
   and bind waived address chunks at their field position rather than merely
   somewhere in the transcript. Positive cases remain explicitly insufficient
   as downgrade-safety evidence.
-- [~] **[pq1-7730-aave-v3-basic-lending, P1, S] Curate Aave V3 basic lending
+- [x] **[pq1-7730-aave-v3-basic-lending, P1, S] Curate Aave V3 basic lending
   formats without adding a new formatter or authority.** Admit `borrow`,
   `deposit`, and `supply` only by making the existing `referralCode` an exact
   visible raw word. Cover all 15 unique Pool deployments / 45 deployment-format
@@ -3943,8 +3943,8 @@ review report.
   variants remain omitted, and the known-call tuple set and Bloom stay
   byte-identical. Regenerate and review the rotated descriptor root. This is
   the next bounded production-catalogue expansion after the fixture phase, not
-  part of the test-only conformance slice. **Implementation/gates complete
-  2026-07-18; fast Phase-D review pending:** all 15 unique Pool leaves now emit
+  part of the test-only conformance slice. **Implementation, gates, and bounded
+  Phase-D review complete 2026-07-18:** all 15 unique Pool leaves now emit
   the three formats (45 deployment-format instances). Host tests prove the
   referral field is always-visible `raw`/unsigned, every permit/multicall
   control stays absent, and the renderer paints the bound amount, full token
@@ -3955,6 +3955,21 @@ review report.
   and E2E Bloom digests, and E2E catalogue digest are byte-identical. Full
   dbgen, `pqsigner-erc7730` 242/0, xtask 60/0, the 67-test secure ERC-7730
   renderer lane, formatting/JSON/diff checks, and descriptor drift are green.
+  Frozen target `0dc3275c354324d4287e1b42a0b26ab0fcd24206`, tree
+  `8468e60ac2042b23c2808624d315dbc5cab04610`, is retained at
+  `review/erc7730-aave-v3-basic-lending-20260718-v1`. Kimi K3 returned **GO**
+  (session `session_95801fb1-0ce0-40f3-a0f8-d400e9c9f7b3`, raw report
+  `/tmp/pqsigner-erc7730-aave-v3-review-20260718-0dc3275c/kimi.md`). Opus 4.8
+  returned **GO** with one non-material stale historical label, corrected in
+  the receipt-only follow-up (session `5a7e18d4-326c-4f8a-91cb-f67c2f2bd947`,
+  raw `/tmp/pqsigner-erc7730-aave-v3-review-20260718-0dc3275c/opus.json`).
+  GPT-5.6 SOL inspected the frozen source and artifacts but hit the mandatory
+  eight-minute cap before a final verdict; no GO is claimed and no retry or
+  substitute was launched (thread `019f774d-ed86-7e13-818d-36b6363e1c96`,
+  raw event log at the sibling `gpt.events.jsonl`). The capped wave therefore
+  closes honestly with two GOs, one unavailable leg, and no stage-blocking
+  source finding. This is merge evidence only; it adds no production, shipment,
+  ERC-8176 provenance, or forced-blind authority.
 - [ ] **[pq1-7730-provenance, P1, M] Mechanize registry provenance and reviewable
   updates.** Complete the existing §2.1/§2.3 owner items in
   `docs/erc7730-implementation-review-2026-07.md`: explicit upstream SHA,
@@ -4020,7 +4035,7 @@ review report.
   authorization commits and independently reparses every ordered
   `(index,target,value,calldata)` tuple.
 
-  Current generated identity: 428 leaves / 345,546 bytes / root
+  V9 frozen generated identity: 428 leaves / 345,546 bytes / root
   `668a7964b4241ec0c2348d117adaa5e29e9b34d97286ef5d1c722cdda43d700a`;
   production blob SHA-256
   `45e57e54dd3d2ea33efd5819d95ac611a06a61e8e036bc2a13a170577a9f9eac`;
