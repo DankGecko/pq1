@@ -3915,11 +3915,25 @@ review report.
   case still refuses. Evidence: focused lane 10/0, full dbgen 276/0,
   `pqsigner-erc7730` 242/0, xtask 60/0, and descriptor/codegen drift clean,
   with production catalogue, root, known-call Bloom, signing behavior, and
-  legacy support unchanged because this slice is test-only. **Still open:** enroll broader semantic
+  legacy support unchanged because this slice is test-only. **Fast Phase-D
+  receipt:** frozen target `8b32c3a925bbf1f1d34d53caf5ca76b2a6d2245b`,
+  tree `036a209950f20bfe629570a78d4bdbeccd0d4f76`, retained at
+  `review/erc7730-upstream-conformance-20260718-v1`, received three **GO**
+  verdicts and no stage-blocking finding. Runtime receipts: GPT-5.6 SOL/ultra
+  thread `019f7734-07ff-7421-bfad-908029e587f3` at
+  `/tmp/pqsigner-erc7730-conformance-review-20260718-8b32c3a9/gpt.md`;
+  Opus 4.8 `opus[1m]`/xhigh session
+  `da2a3361-f74a-4dab-9a1c-355f894e7bb5` at the sibling `opus.json`; Kimi K3
+  `kimi-code/k3` session `session_5df72470-aa71-4a02-babc-d6f4f666eb43` at
+  the sibling `kimi.md`. **Still open:** enroll broader semantic
   shapes and generate corpus-derived adversarial mutations for truncation,
   offset/aliasing, extra bytes, binding/proof errors, hidden fields, and
-  boundary magnitudes. Positive cases remain explicitly insufficient as
-  downgrade-safety evidence.
+  boundary magnitudes. At the next fixture refresh, fail closed on typed
+  envelopes other than the explicitly supported Type-2 shape, remove the two
+  explanatory set-partition tautologies while retaining the pinned count gate,
+  and bind waived address chunks at their field position rather than merely
+  somewhere in the transcript. Positive cases remain explicitly insufficient
+  as downgrade-safety evidence.
 - [ ] **[pq1-7730-aave-v3-basic-lending, P1, S] Curate Aave V3 basic lending
   formats without adding a new formatter or authority.** Admit `borrow`,
   `deposit`, and `supply` only by making the existing `referralCode` an exact

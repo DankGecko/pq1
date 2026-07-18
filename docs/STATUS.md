@@ -134,8 +134,8 @@
 > owner-triggered item in `docs/work-todo.md`; session restart does not activate
 > it. This grants no production, shipment, or forced-blind authority.
 
-> **Scoped ERC-7730 upstream-conformance candidate — 2026-07-18.** The active
-> bounded Phase-C slice is test-only: it adds exact format-level inventory,
+> **Scoped ERC-7730 upstream-conformance review receipt — 2026-07-18.** The
+> bounded slice is test-only: it adds exact format-level inventory,
 > strict signed-Type-2 and legacy EIP-155 fixture adapters, and the first real
 > upstream EIP-712 semantic transcript. The pinned corpus contains 502 unique
 > fixture-targeted formats against 815 accepted PQ1 formats; 287 intersect, 528
@@ -149,7 +149,12 @@
 > firmware signing behavior, or legacy
 > transaction authority. Broader semantic enrollment and corpus-derived
 > adversarial mutations remain open in `docs/work-todo.md`; forced blind signing
-> remains disabled and out of scope.
+> remains disabled and out of scope. Frozen commit
+> `8b32c3a925bbf1f1d34d53caf5ca76b2a6d2245b`, tree
+> `036a209950f20bfe629570a78d4bdbeccd0d4f76`, received simultaneous GPT-5.6
+> SOL, Opus 4.8, and Kimi K3 **GO** verdicts with no stage-blocking finding.
+> Three non-blocking test-hardening observations are banked in the owner TODO;
+> they do not expand the reviewed phase or confer production authority.
 
 ## §0 — Where the truth lives (doc map)
 
