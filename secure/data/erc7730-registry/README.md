@@ -36,9 +36,9 @@ tuple-set SHA-256, and Bloom bytes. Merkle-root or Bloom equality alone is not
 accepted as a faithfulness proof.
 
 <!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
-Checked-in curated receipt, verified against a fresh build by `--check`: **428 leaves**, **345,546-byte**
+Checked-in curated receipt, verified against a fresh build by `--check`: **428 leaves**, **349,671-byte**
 compiled companion catalogue, root
-`668a7964b4241ec0c2348d117adaa5e29e9b34d97286ef5d1c722cdda43d700a`,
+`0074f39ed119ae4ed07a5d520b080f211033417bc66577a4fe7e82196df9c1ec`,
 **4,542** canonical known-call tuples, tuple-set SHA-256
 `96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`.
 The Bloom contains 28,235 / 131,072 set bits, below the generator's 25% cap.
@@ -49,9 +49,10 @@ sentinel only. It deliberately carries no upstream SHA or generated receipt;
 those reviewed values live in this document and the generated artifacts and
 must be independently regenerated and drift-checked before replacement.
 
-Current reviewed in-place curations (13):
+Current reviewed in-place curations (14):
 
 - `registry/aave/calldata-WrappedTokenGatewayV3.json`
+- `registry/aave/calldata-lpv3.json`
 - `registry/flyingtulip/eip712-PftMarketplace-BuyOffer.json`
 - `registry/p2p/calldata-P2pOrgUnlimitedEthDepositor.json`
 - `registry/p2p/calldata-P2pSsvProxyFactory.json`

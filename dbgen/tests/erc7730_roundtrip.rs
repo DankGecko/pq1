@@ -35,10 +35,14 @@ use dbgen::erc7730::{
 use pqsigner_erc7730::abi::container_field;
 use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712};
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, MAX_ERC7730_BUNDLE_LEN};
-use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir, FormatOp, PathOp, CTX_CONTRACT, CTX_EIP712};
+use pqsigner_erc7730::ir::{
+    ContextKind, Erc7730Ir, FormatOp, PathOp, Visibility, CTX_CONTRACT, CTX_EIP712,
+};
 use pqsigner_erc7730::known_calls::may_contain as known_call_may_contain;
 use pqsigner_erc7730::render::params::{parse as parse_params, DYNAMIC_KIND_BYTES};
+use pqsigner_erc7730::render::policy::TerminalKind;
 use pqsigner_tx_core::hash::keccak256;
+use sha2::{Digest, Sha256};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -79,6 +83,103 @@ fn build_e2e() -> Erc7730BuildResult {
     let dir = root.join("secure/data/erc7730-e2e");
     let policy = root.join("secure/data/erc7730/policy.toml");
     build_db(&dir, &policy).expect("build E2E corpus")
+}
+
+#[test]
+fn registry_aave_v3_basic_lending_covers_every_unique_deployment() {
+    let result = build_registry();
+    let entries: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str()) == Some("calldata-lpv3.json")
+        })
+        .collect();
+    assert_eq!(
+        entries.len(),
+        15,
+        "the duplicate Linea declaration must dedupe to 15 unique Aave V3 Pools"
+    );
+
+    let accepted = [
+        (
+            "borrow(address,uint256,uint256,uint16,address)",
+            4usize,
+            3usize,
+        ),
+        ("deposit(address,uint256,address,uint16)", 3, 2),
+        ("supply(address,uint256,address,uint16)", 3, 2),
+    ];
+    let still_refused = [
+        "multicall(bytes[])",
+        "repayWithPermit(address,uint256,uint256,address,uint256,uint8,bytes32,bytes32)",
+        "supplyWithPermit(address,uint256,address,uint16,uint256,uint8,bytes32,bytes32)",
+    ];
+
+    for entry in entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Aave V3 IR parses");
+        for (signature, field_count, referral_ordinal) in accepted {
+            let hash = keccak256(signature.as_bytes());
+            let selector: [u8; 4] = hash[..4].try_into().expect("selector width");
+            let format = ir
+                .find_format_by_selector(&selector)
+                .expect("Aave format table parses")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{signature} missing for chain {} contract 0x{}",
+                        entry.chain_id,
+                        hex::encode(entry.contract)
+                    )
+                });
+            let fields: Vec<_> = format
+                .fields()
+                .map(|field| field.expect("generated Aave field parses"))
+                .collect();
+            assert_eq!(
+                fields.len(),
+                field_count,
+                "unexpected fields for {signature}"
+            );
+            let referral = &fields[referral_ordinal];
+            assert_eq!(referral.label, b"Referral Code");
+            assert_eq!(
+                FormatOp::try_from(referral.format_op),
+                Ok(FormatOp::Raw),
+                "referralCode must expose its complete signed ABI word"
+            );
+            let params = parse_params(&ir, referral.param_off).expect("referral params parse");
+            assert_eq!(params.visibility, Visibility::Always);
+            assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+        }
+
+        for signature in still_refused {
+            let hash = keccak256(signature.as_bytes());
+            let selector: [u8; 4] = hash[..4].try_into().expect("selector width");
+            assert!(
+                ir.find_format_by_selector(&selector)
+                    .expect("Aave format table parses")
+                    .is_none(),
+                "unsafe Aave format unexpectedly became clear-signable: {signature}"
+            );
+        }
+    }
+
+    assert_eq!(
+        result.entries.len(),
+        428,
+        "Aave curation must not add leaves"
+    );
+    assert_eq!(result.known_call_count, 4_542);
+    assert_eq!(
+        hex::encode(result.known_call_set_hash),
+        "96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b",
+        "format acceptance must not change the declared known-call tuple set"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(&result.known_calls_bloom)),
+        "270a4bc71332868cbdc75c81a1cc92da8669a37e2bead6b7d193974b3e1d431d",
+        "format acceptance must not change the known-call Bloom"
+    );
 }
 
 #[test]

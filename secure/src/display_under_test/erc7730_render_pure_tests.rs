@@ -444,9 +444,34 @@ fn calldata_borrow(
     data
 }
 
+/// Aave V3 `deposit` / `supply` share the same static argument layout and
+/// differ only by selector.
+fn calldata_aave_supply_like(
+    text_signature: &[u8],
+    asset: [u8; 20],
+    amount: U256,
+    on_behalf_of: [u8; 20],
+    referral_code: u16,
+) -> Vec<u8> {
+    let mut data = Vec::with_capacity(4 + 4 * 32);
+    let selector = keccak256(text_signature);
+    data.extend_from_slice(&selector[..4]);
+    let mut asset_word = [0u8; 32];
+    asset_word[12..].copy_from_slice(&asset);
+    data.extend_from_slice(&asset_word);
+    data.extend_from_slice(&amount.0);
+    let mut recipient_word = [0u8; 32];
+    recipient_word[12..].copy_from_slice(&on_behalf_of);
+    data.extend_from_slice(&recipient_word);
+    let mut referral_word = [0u8; 32];
+    referral_word[30..].copy_from_slice(&referral_code.to_be_bytes());
+    data.extend_from_slice(&referral_word);
+    data
+}
+
 /// Aave V3 `repay(address asset,uint256 amount,uint256 interestRateMode,
-/// address onBehalfOf)` — a safe all-visible format that retains real emitted
-/// enum-table coverage after `borrow` was excluded for hiding `referralCode`.
+/// address onBehalfOf)` — an all-visible format that retains an independent
+/// enum-table control alongside the curated `borrow` format.
 fn calldata_repay(
     asset: [u8; 20],
     amount: U256,
@@ -563,6 +588,42 @@ fn find_page_by_label(pages: &Pages, label: &str) -> usize {
     panic!(
         "no page with row 0 == {label:?}; full dump:\n{}",
         dump_pages(pages)
+    );
+}
+
+fn assert_raw_word_pages(pages: &Pages, label: &str, word: &[u8; 32]) {
+    let first = find_page_by_label(pages, label);
+    assert!(first + 1 < pages.len, "raw word lacks its second page");
+    let encoded = hex::encode(word);
+    assert_eq!(
+        page_strs(pages, first),
+        [
+            label.to_string(),
+            encoded[0..16].to_string(),
+            encoded[16..32].to_string(),
+            "1/2 > next".to_string(),
+        ]
+    );
+    assert_eq!(
+        page_strs(pages, first + 1),
+        [
+            label.to_string(),
+            encoded[32..48].to_string(),
+            encoded[48..64].to_string(),
+            "2/2 > next".to_string(),
+        ]
+    );
+}
+
+fn assert_full_address_field_page(pages: &Pages, label: &str, address: &[u8; 20]) {
+    let page = find_page_by_label(pages, label);
+    let mut expected = [[b' '; DISPLAY_COLS]; 4];
+    expected[0][..label.len()].copy_from_slice(label.as_bytes());
+    let [_, r1, r2, r3] = &mut expected;
+    write_addr_full(r1, r2, r3, address);
+    assert_eq!(
+        pages.buf[page], expected,
+        "address field must show every signed address byte"
     );
 }
 
@@ -1900,31 +1961,133 @@ fn erc8213_proofs_reject_wrong_index_kind_hash_and_short_capacity() {
 }
 
 // ───────────────────────────────────────────────────────────────────────
-// Enum formatter (FormatOp 0x08) — Aave V3. The real `borrow` format is now
-// excluded because it explicitly hides `referralCode`; the all-visible `repay`
-// format carries the same emitted enum table and preserves the end-to-end host
-// `encode_enum_table` → device `lookup_enum_label` → `render_enum` coverage.
+// Aave V3 basic lending. `borrow`, `deposit`, and `supply` now expose the
+// complete referralCode word instead of hiding signed material. `repay`
+// remains an independent enum-table control.
 // ───────────────────────────────────────────────────────────────────────
 
 #[test]
-fn positive_aave_repay_renders_enum_label_and_borrow_is_excluded() {
+fn positive_aave_basic_lending_renders_complete_referral_and_signed_fields() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-lpv3.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
-    let excluded_borrow =
-        calldata_borrow([0u8; 20], u256_from_u64(0), u256_from_u64(2), 0, [0u8; 20]);
-    let borrow_selector: [u8; 4] = excluded_borrow[..4].try_into().unwrap();
-    assert!(
-        verified
-            .ir
-            .find_format_by_selector(&borrow_selector)
-            .expect("format table")
-            .is_none(),
-        "Aave borrow hides referralCode and must not survive strict compilation"
-    );
+    let asset = [
+        0xda, 0xc1, 0x7f, 0x95, 0x8d, 0x2e, 0xe5, 0x23, 0xa2, 0x20, 0x62, 0x06, 0x99, 0x45, 0x97,
+        0xc1, 0x3d, 0x83, 0x1e, 0xc7,
+    ];
+    let debtor = [0x44u8; 20];
+    let collateral_recipient = [0x55u8; 20];
+    let amount = u256_from_u64(500_000_000); // 500 USDT at six decimals.
+    let referral_code = 0x1234u16;
+    let token = Erc20Metadata {
+        chain_id: 1,
+        contract: asset,
+        decimals: 6,
+        name: b"Tether USD",
+        symbol: b"USDT",
+    };
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
 
+    let cases = [
+        (
+            "borrow(address,uint256,uint256,uint16,address)",
+            calldata_borrow(asset, amount, u256_from_u64(2), referral_code, debtor),
+            "Borrow",
+            "Amount to borrow",
+            "Debtor",
+            debtor,
+        ),
+        (
+            "deposit(address,uint256,address,uint16)",
+            calldata_aave_supply_like(
+                b"deposit(address,uint256,address,uint16)",
+                asset,
+                amount,
+                collateral_recipient,
+                referral_code,
+            ),
+            "Supply",
+            "Amount to supply",
+            "Collateral reci~",
+            collateral_recipient,
+        ),
+        (
+            "supply(address,uint256,address,uint16)",
+            calldata_aave_supply_like(
+                b"supply(address,uint256,address,uint16)",
+                asset,
+                amount,
+                collateral_recipient,
+                referral_code,
+            ),
+            "Supply",
+            "Amount to supply",
+            "Collateral reci~",
+            collateral_recipient,
+        ),
+    ];
+
+    for (signature, calldata, intent, amount_label, recipient_label, recipient) in cases {
+        assert_selector_matches(&verified.ir, &calldata, signature);
+        let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&token), &resolver)
+            .unwrap_or_else(|error| panic!("render {signature}: {error:?}"));
+        assert_all_pages_printable(&pages);
+        assert_eq!(page_strs(&pages, intent_page_index(&pages))[0], intent);
+
+        let amount_rows = page_strs(&pages, find_page_by_label(&pages, amount_label));
+        assert!(
+            amount_rows.iter().any(|row| row.contains("500"))
+                && amount_rows.iter().any(|row| row.contains("USDT")),
+            "bound amount missing for {signature}: {amount_rows:?}"
+        );
+        assert_full_contract_identity_page(&pages, &asset);
+        assert_full_address_field_page(&pages, recipient_label, &recipient);
+
+        let referral_word: [u8; 32] = calldata[4 + 3 * 32..4 + 4 * 32]
+            .try_into()
+            .expect("referralCode ABI word");
+        assert!(referral_word[..30].iter().all(|byte| *byte == 0));
+        assert_eq!(&referral_word[30..], &referral_code.to_be_bytes());
+        assert_raw_word_pages(&pages, "Referral Code", &referral_word);
+
+        if signature.starts_with("borrow(") {
+            let rows = page_strs(&pages, find_page_by_label(&pages, "Interest Rate m~"));
+            assert!(
+                rows[1].contains("variable"),
+                "borrow enum missing: {rows:?}"
+            );
+            assert!(!rows.iter().any(|row| row.trim() == "2"));
+        }
+    }
+
+    let original = calldata_borrow(asset, amount, u256_from_u64(2), 0x1234, debtor);
+    let mutated = calldata_borrow(asset, amount, u256_from_u64(2), 0x1235, debtor);
+    assert_eq!(original[..4 + 3 * 32], mutated[..4 + 3 * 32]);
+    assert_ne!(original[4 + 3 * 32..], mutated[4 + 3 * 32..]);
+    let original_pages =
+        render_erc7730_pages(&tx, &original, &verified, Some(&token), &resolver).expect("render");
+    let mutated_pages =
+        render_erc7730_pages(&tx, &mutated, &verified, Some(&token), &resolver).expect("render");
+    assert_ne!(
+        original_pages.as_slice(),
+        mutated_pages.as_slice(),
+        "one signed referralCode bit must change the trusted transcript"
+    );
+    let mutated_word: [u8; 32] = mutated[4 + 3 * 32..4 + 4 * 32]
+        .try_into()
+        .expect("mutated referralCode word");
+    assert_raw_word_pages(&mutated_pages, "Referral Code", &mutated_word);
+}
+
+#[test]
+fn positive_aave_repay_renders_enum_label() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-lpv3.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
     // interestRateMode = 2 → "variable" in the descriptor's enum.
     let calldata = calldata_repay(
         [0x11u8; 20],

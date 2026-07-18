@@ -3906,9 +3906,10 @@ review report.
   native-currency-list and NFT-identity rows intentionally rotate it to
   `0706d763…17d2ed`. **Second bounded slice completed (2026-07-18):** the lane
   now inventories exact descriptor-relative path plus calldata selector or
-  full EIP-712 primary-type hash. There are 502 unique fixture-targeted formats
-  and 815 accepted PQ1 formats: 287 intersect, 528 accepted formats have no
-  fixture, and 215 fixture targets are not accepted. Four real semantic
+  full EIP-712 primary-type hash. After the bounded Aave V3 curation below,
+  there are 502 unique fixture-targeted formats and 818 accepted PQ1 formats:
+  289 intersect, 529 accepted formats have no fixture, and 213 fixture targets
+  are not accepted. Four real semantic
   transcripts now cover unsigned and signed Type-2, a strict test-only legacy
   EIP-155 preimage adapter, and flat-static EIP-712. Every waiver is exact,
   case-owned, rationale-bearing, and fail-on-unused; the WETH trailing-byte
@@ -3934,7 +3935,7 @@ review report.
   and bind waived address chunks at their field position rather than merely
   somewhere in the transcript. Positive cases remain explicitly insufficient
   as downgrade-safety evidence.
-- [ ] **[pq1-7730-aave-v3-basic-lending, P1, S] Curate Aave V3 basic lending
+- [~] **[pq1-7730-aave-v3-basic-lending, P1, S] Curate Aave V3 basic lending
   formats without adding a new formatter or authority.** Admit `borrow`,
   `deposit`, and `supply` only by making the existing `referralCode` an exact
   visible raw word. Cover all 15 unique Pool deployments / 45 deployment-format
@@ -3942,7 +3943,18 @@ review report.
   variants remain omitted, and the known-call tuple set and Bloom stay
   byte-identical. Regenerate and review the rotated descriptor root. This is
   the next bounded production-catalogue expansion after the fixture phase, not
-  part of the current test-only conformance slice.
+  part of the test-only conformance slice. **Implementation/gates complete
+  2026-07-18; fast Phase-D review pending:** all 15 unique Pool leaves now emit
+  the three formats (45 deployment-format instances). Host tests prove the
+  referral field is always-visible `raw`/unsigned, every permit/multicall
+  control stays absent, and the renderer paints the bound amount, full token
+  contract, complete debtor/recipient, borrow enum, and both pages of the exact
+  32-byte referral word; a one-value referral mutation changes the transcript.
+  The catalogue remains 428 leaves and rotates to 349,671 bytes / root
+  `0074f39e…c1ec`; omissions fall 281→278. The 4,542 tuple set/hash, production
+  and E2E Bloom digests, and E2E catalogue digest are byte-identical. Full
+  dbgen, `pqsigner-erc7730` 242/0, xtask 60/0, the 67-test secure ERC-7730
+  renderer lane, formatting/JSON/diff checks, and descriptor drift are green.
 - [ ] **[pq1-7730-provenance, P1, M] Mechanize registry provenance and reviewable
   updates.** Complete the existing §2.1/§2.3 owner items in
   `docs/erc7730-implementation-review-2026-07.md`: explicit upstream SHA,

@@ -108,7 +108,7 @@
 > authorization commits and independently reparses every ordered
 > `(index,target,value,calldata)` tuple.
 >
-> Current generated identity: 428 leaves / 345,546 bytes / root
+> V9 frozen generated identity: 428 leaves / 345,546 bytes / root
 > `668a7964b4241ec0c2348d117adaa5e29e9b34d97286ef5d1c722cdda43d700a`;
 > production blob SHA-256
 > `45e57e54dd3d2ea33efd5819d95ac611a06a61e8e036bc2a13a170577a9f9eac`;
@@ -138,8 +138,8 @@
 > bounded slice is test-only: it adds exact format-level inventory,
 > strict signed-Type-2 and legacy EIP-155 fixture adapters, and the first real
 > upstream EIP-712 semantic transcript. The pinned corpus contains 502 unique
-> fixture-targeted formats against 815 accepted PQ1 formats; 287 intersect, 528
-> accepted formats lack a fixture, and 215 fixture targets are not accepted.
+> fixture-targeted formats against 818 accepted PQ1 formats; 289 intersect, 529
+> accepted formats lack a fixture, and 213 fixture targets are not accepted.
 > Four Merkle-verified semantic transcripts now cover unsigned and signed
 > Type-2, legacy EIP-155, and flat-static EIP-712; all exact case-owned waivers
 > must be consumed, while the malformed trailing-byte WETH fixture still
@@ -155,6 +155,23 @@
 > SOL, Opus 4.8, and Kimi K3 **GO** verdicts with no stage-blocking finding.
 > Three non-blocking test-hardening observations are banked in the owner TODO;
 > they do not expand the reviewed phase or confer production authority.
+
+> **Scoped ERC-7730 Aave V3 basic-lending candidate — 2026-07-18.** This
+> bounded production-catalogue curation admits only Aave V3 `borrow`, `deposit`,
+> and `supply` by changing their existing `referralCode` field from hidden to an
+> always-visible complete raw word. Across all 15 unique Pool deployments, the
+> 45 deployment-format instances render the bound amount and token identity,
+> complete debtor or collateral-recipient address, and exact referral word;
+> `borrow` also retains its authenticated interest-rate enum. Permit variants
+> and `multicall` remain omitted and hard-refused. The regenerated catalogue is
+> 428 leaves / 349,671 bytes / root
+> `0074f39ed119ae4ed07a5d520b080f211033417bc66577a4fe7e82196df9c1ec`;
+> omissions fall from 281 to 278. The 4,542 known-call tuples, tuple-set hash,
+> production/E2E Bloom bytes, and E2E catalogue are unchanged. Full dbgen,
+> `pqsigner-erc7730`, xtask, the secure ERC-7730 renderer lane, and descriptor
+> drift gates are green. This is the Phase-D input, not yet its review receipt;
+> it adds no formatter, fallback, generic signing, legacy transaction, or
+> forced-blind authority.
 
 ## §0 — Where the truth lives (doc map)
 

@@ -12,7 +12,7 @@
 # The trailing `## skips` section lists every descriptor or
 # individual source format the tolerant build dropped (compile
 # failure, safe-format cap, or dedup), by exact reason.
-# Root: 0x668a7964b4241ec0c2348d117adaa5e29e9b34d97286ef5d1c722cdda43d700a
+# Root: 0x0074f39ed119ae4ed07a5d520b080f211033417bc66577a4fe7e82196df9c1ec
 # Provenance: dev-unattested
 # Known contract calls: 4542 (16384-byte omission filter; 28235/131072 bits set; hard cap 25%)
 # Known-call tuple-set SHA-256: 0x96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b
@@ -1145,10 +1145,19 @@
          · format [0x8759c234] intent="Claim unstaked POL" intent_raw=0x436c61696d20756e7374616b656420504f4c static_head_words=1 nested_descent_count=0
          ·   field[0] op=raw          label="Unbond nonce" path=0x10200000 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xe0db556b] intent="Withdraw POL rewards" intent_raw=0x576974686472617720504f4c2072657761726473 static_head_words=0 nested_descent_count=0
-[0082] ctx=contract chain_id=1 contract=0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x0485df8c2af674181b9a5a53e8085076580d4ac7aa7a26c4bf5b51ce7da70512 erc8176_hash=0x24a75672008c5f5302257e52a712b5c3e76d14d8e5149c37ba341cb69bd817c5 ir_len=844 fields=17 degraded=0 source=calldata-lpv3.json
+[0082] ctx=contract chain_id=1 contract=0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882 erc8176_hash=0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163 ir_len=1119 fields=27 degraded=0 source=calldata-lpv3.json
          · format [0xb8caa7c5] intent="Approve Manager" intent_raw=0x417070726f7665204d616e61676572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Approve" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
+         · format [0xa415bcad] intent="Borrow" intent_raw=0x426f72726f77 static_head_words=5 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to borrow" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=enum         label="Interest Rate mode" path=0x10200002 params_tlv=0x37020001470101 params={enumRef=1,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[2] op=addressName  label="Debtor" path=0x10200004 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[3] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
+         · format [0xe8eda9df] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xfea149a6] intent="Revoke Manager Role" intent_raw=0x5265766f6b65204d616e6167657220526f6c65 static_head_words=1 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x112045a9 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="User" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
@@ -1167,6 +1176,10 @@
          ·   field[0] op=addressName  label="For asset" path=0x10200000 params_tlv=0x340110350103470103 params={addressTypes=0x10,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Use as collateral" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
          ·   field[2] op=addressName  label="Debtor" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         · format [0x617ba037] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
@@ -2467,10 +2480,19 @@
          ·   field[0] op=raw          label="Hash to approve" path=0x10200000 params_tlv=0x470105 params={visibility=always,terminalKind=fixedBytes(0x05)}
          · format [0x694e80c3] intent="Modify threshold" intent_raw=0x4d6f64696679207468726573686f6c64 static_head_words=1 nested_descent_count=0
          ·   field[0] op=raw          label="New threshold" path=0x10200000 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
-[0181] ctx=contract chain_id=10 contract=0x794a61358d6845594f94dc1db02a252b5b4814ad primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x0485df8c2af674181b9a5a53e8085076580d4ac7aa7a26c4bf5b51ce7da70512 erc8176_hash=0x24a75672008c5f5302257e52a712b5c3e76d14d8e5149c37ba341cb69bd817c5 ir_len=844 fields=17 degraded=0 source=calldata-lpv3.json
+[0181] ctx=contract chain_id=10 contract=0x794a61358d6845594f94dc1db02a252b5b4814ad primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882 erc8176_hash=0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163 ir_len=1119 fields=27 degraded=0 source=calldata-lpv3.json
          · format [0xb8caa7c5] intent="Approve Manager" intent_raw=0x417070726f7665204d616e61676572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Approve" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
+         · format [0xa415bcad] intent="Borrow" intent_raw=0x426f72726f77 static_head_words=5 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to borrow" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=enum         label="Interest Rate mode" path=0x10200002 params_tlv=0x37020001470101 params={enumRef=1,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[2] op=addressName  label="Debtor" path=0x10200004 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[3] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
+         · format [0xe8eda9df] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xfea149a6] intent="Revoke Manager Role" intent_raw=0x5265766f6b65204d616e6167657220526f6c65 static_head_words=1 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x112045a9 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="User" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
@@ -2489,6 +2511,10 @@
          ·   field[0] op=addressName  label="For asset" path=0x10200000 params_tlv=0x340110350103470103 params={addressTypes=0x10,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Use as collateral" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
          ·   field[2] op=addressName  label="Debtor" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         · format [0x617ba037] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
@@ -2748,10 +2774,19 @@
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x31140000000000000000000000000000000000000000421400000000000000000000000000000000000000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff3303416c6c470101 params={token=0x0000000000000000000000000000000000000000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="All",visibility=always,nativeCurrency=[0x0000000000000000000000000000000000000000],terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[2] op=raw          label="Pool" path=0x10200000 params_tlv=0x470103 params={visibility=always,terminalKind=address(0x03)}
-[0206] ctx=contract chain_id=100 contract=0xb50201558b00496a145fe76f7424749556e326d8 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x0485df8c2af674181b9a5a53e8085076580d4ac7aa7a26c4bf5b51ce7da70512 erc8176_hash=0x24a75672008c5f5302257e52a712b5c3e76d14d8e5149c37ba341cb69bd817c5 ir_len=844 fields=17 degraded=0 source=calldata-lpv3.json
+[0206] ctx=contract chain_id=100 contract=0xb50201558b00496a145fe76f7424749556e326d8 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882 erc8176_hash=0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163 ir_len=1119 fields=27 degraded=0 source=calldata-lpv3.json
          · format [0xb8caa7c5] intent="Approve Manager" intent_raw=0x417070726f7665204d616e61676572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Approve" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
+         · format [0xa415bcad] intent="Borrow" intent_raw=0x426f72726f77 static_head_words=5 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to borrow" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=enum         label="Interest Rate mode" path=0x10200002 params_tlv=0x37020001470101 params={enumRef=1,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[2] op=addressName  label="Debtor" path=0x10200004 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[3] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
+         · format [0xe8eda9df] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xfea149a6] intent="Revoke Manager Role" intent_raw=0x5265766f6b65204d616e6167657220526f6c65 static_head_words=1 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x112045a9 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="User" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
@@ -2770,6 +2805,10 @@
          ·   field[0] op=addressName  label="For asset" path=0x10200000 params_tlv=0x340110350103470103 params={addressTypes=0x10,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Use as collateral" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
          ·   field[2] op=addressName  label="Debtor" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         · format [0x617ba037] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
@@ -2873,10 +2912,19 @@
          ·   field[0] op=raw          label="Hash to approve" path=0x10200000 params_tlv=0x470105 params={visibility=always,terminalKind=fixedBytes(0x05)}
          · format [0x694e80c3] intent="Modify threshold" intent_raw=0x4d6f64696679207468726573686f6c64 static_head_words=1 nested_descent_count=0
          ·   field[0] op=raw          label="New threshold" path=0x10200000 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
-[0216] ctx=contract chain_id=137 contract=0x794a61358d6845594f94dc1db02a252b5b4814ad primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x0485df8c2af674181b9a5a53e8085076580d4ac7aa7a26c4bf5b51ce7da70512 erc8176_hash=0x24a75672008c5f5302257e52a712b5c3e76d14d8e5149c37ba341cb69bd817c5 ir_len=844 fields=17 degraded=0 source=calldata-lpv3.json
+[0216] ctx=contract chain_id=137 contract=0x794a61358d6845594f94dc1db02a252b5b4814ad primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882 erc8176_hash=0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163 ir_len=1119 fields=27 degraded=0 source=calldata-lpv3.json
          · format [0xb8caa7c5] intent="Approve Manager" intent_raw=0x417070726f7665204d616e61676572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Approve" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
+         · format [0xa415bcad] intent="Borrow" intent_raw=0x426f72726f77 static_head_words=5 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to borrow" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=enum         label="Interest Rate mode" path=0x10200002 params_tlv=0x37020001470101 params={enumRef=1,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[2] op=addressName  label="Debtor" path=0x10200004 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[3] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
+         · format [0xe8eda9df] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xfea149a6] intent="Revoke Manager Role" intent_raw=0x5265766f6b65204d616e6167657220526f6c65 static_head_words=1 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x112045a9 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="User" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
@@ -2895,6 +2943,10 @@
          ·   field[0] op=addressName  label="For asset" path=0x10200000 params_tlv=0x340110350103470103 params={addressTypes=0x10,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Use as collateral" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
          ·   field[2] op=addressName  label="Debtor" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         · format [0x617ba037] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
@@ -3115,10 +3167,19 @@
 [0235] ctx=contract chain_id=146 contract=0x52ef449d44cc4205fa44bf644dee15611fc30734 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x7670c5057cc5967e186d3ecb06e6c72cc18ec1c07d71d28f5c2a19d0679307ed erc8176_hash=0xb4e1c03d08987b4ac156a0d1b6ae4dbf2344ba666a351363d32faba909f297c7 ir_len=198 fields=0 degraded=0 source=calldata-SessionManager.json
          · format [0x79ba5097] intent="Manage session manager" intent_raw=0x4d616e6167652073657373696f6e206d616e61676572 static_head_words=0 nested_descent_count=0
          · format [0x715018a6] intent="Manage session manager" intent_raw=0x4d616e6167652073657373696f6e206d616e61676572 static_head_words=0 nested_descent_count=0
-[0236] ctx=contract chain_id=146 contract=0x5362dbb1e601abf3a4c14c22ffeda64042e5eaa3 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x0485df8c2af674181b9a5a53e8085076580d4ac7aa7a26c4bf5b51ce7da70512 erc8176_hash=0x24a75672008c5f5302257e52a712b5c3e76d14d8e5149c37ba341cb69bd817c5 ir_len=844 fields=17 degraded=0 source=calldata-lpv3.json
+[0236] ctx=contract chain_id=146 contract=0x5362dbb1e601abf3a4c14c22ffeda64042e5eaa3 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882 erc8176_hash=0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163 ir_len=1119 fields=27 degraded=0 source=calldata-lpv3.json
          · format [0xb8caa7c5] intent="Approve Manager" intent_raw=0x417070726f7665204d616e61676572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Approve" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
+         · format [0xa415bcad] intent="Borrow" intent_raw=0x426f72726f77 static_head_words=5 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to borrow" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=enum         label="Interest Rate mode" path=0x10200002 params_tlv=0x37020001470101 params={enumRef=1,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[2] op=addressName  label="Debtor" path=0x10200004 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[3] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
+         · format [0xe8eda9df] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xfea149a6] intent="Revoke Manager Role" intent_raw=0x5265766f6b65204d616e6167657220526f6c65 static_head_words=1 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x112045a9 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="User" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
@@ -3137,6 +3198,10 @@
          ·   field[0] op=addressName  label="For asset" path=0x10200000 params_tlv=0x340110350103470103 params={addressTypes=0x10,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Use as collateral" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
          ·   field[2] op=addressName  label="Debtor" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         · format [0x617ba037] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
@@ -3372,10 +3437,19 @@
          · format [0x86d11066] intent="Replace solver" intent_raw=0x5265706c61636520736f6c766572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Existing solver" path=0x10200000 params_tlv=0x340105470103 params={addressTypes=0x05,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="Replacement solver" path=0x10200001 params_tlv=0x340105470103 params={addressTypes=0x05,visibility=always,terminalKind=address(0x03)}
-[0253] ctx=contract chain_id=324 contract=0x78e30497a3c7527d953c6b1e3541b021a98ac43c primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x0485df8c2af674181b9a5a53e8085076580d4ac7aa7a26c4bf5b51ce7da70512 erc8176_hash=0x24a75672008c5f5302257e52a712b5c3e76d14d8e5149c37ba341cb69bd817c5 ir_len=844 fields=17 degraded=0 source=calldata-lpv3.json
+[0253] ctx=contract chain_id=324 contract=0x78e30497a3c7527d953c6b1e3541b021a98ac43c primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882 erc8176_hash=0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163 ir_len=1119 fields=27 degraded=0 source=calldata-lpv3.json
          · format [0xb8caa7c5] intent="Approve Manager" intent_raw=0x417070726f7665204d616e61676572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Approve" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
+         · format [0xa415bcad] intent="Borrow" intent_raw=0x426f72726f77 static_head_words=5 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to borrow" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=enum         label="Interest Rate mode" path=0x10200002 params_tlv=0x37020001470101 params={enumRef=1,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[2] op=addressName  label="Debtor" path=0x10200004 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[3] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
+         · format [0xe8eda9df] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xfea149a6] intent="Revoke Manager Role" intent_raw=0x5265766f6b65204d616e6167657220526f6c65 static_head_words=1 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x112045a9 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="User" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
@@ -3394,6 +3468,10 @@
          ·   field[0] op=addressName  label="For asset" path=0x10200000 params_tlv=0x340110350103470103 params={addressTypes=0x10,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Use as collateral" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
          ·   field[2] op=addressName  label="Debtor" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         · format [0x617ba037] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
@@ -3521,10 +3599,19 @@
          · format [0x86d11066] intent="Replace solver" intent_raw=0x5265706c61636520736f6c766572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Existing solver" path=0x10200000 params_tlv=0x340105470103 params={addressTypes=0x05,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="Replacement solver" path=0x10200001 params_tlv=0x340105470103 params={addressTypes=0x05,visibility=always,terminalKind=address(0x03)}
-[0260] ctx=contract chain_id=1088 contract=0x90df02551bb792286e8d4f13e0e357b4bf1d6a57 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x0485df8c2af674181b9a5a53e8085076580d4ac7aa7a26c4bf5b51ce7da70512 erc8176_hash=0x24a75672008c5f5302257e52a712b5c3e76d14d8e5149c37ba341cb69bd817c5 ir_len=844 fields=17 degraded=0 source=calldata-lpv3.json
+[0260] ctx=contract chain_id=1088 contract=0x90df02551bb792286e8d4f13e0e357b4bf1d6a57 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882 erc8176_hash=0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163 ir_len=1119 fields=27 degraded=0 source=calldata-lpv3.json
          · format [0xb8caa7c5] intent="Approve Manager" intent_raw=0x417070726f7665204d616e61676572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Approve" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
+         · format [0xa415bcad] intent="Borrow" intent_raw=0x426f72726f77 static_head_words=5 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to borrow" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=enum         label="Interest Rate mode" path=0x10200002 params_tlv=0x37020001470101 params={enumRef=1,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[2] op=addressName  label="Debtor" path=0x10200004 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[3] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
+         · format [0xe8eda9df] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xfea149a6] intent="Revoke Manager Role" intent_raw=0x5265766f6b65204d616e6167657220526f6c65 static_head_words=1 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x112045a9 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="User" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
@@ -3543,6 +3630,10 @@
          ·   field[0] op=addressName  label="For asset" path=0x10200000 params_tlv=0x340110350103470103 params={addressTypes=0x10,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Use as collateral" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
          ·   field[2] op=addressName  label="Debtor" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         · format [0x617ba037] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
@@ -3680,10 +3771,19 @@
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x31140000000000000000000000000000000000000000421400000000000000000000000000000000000000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff3303416c6c470101 params={token=0x0000000000000000000000000000000000000000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="All",visibility=always,nativeCurrency=[0x0000000000000000000000000000000000000000],terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[2] op=raw          label="Pool" path=0x10200000 params_tlv=0x470103 params={visibility=always,terminalKind=address(0x03)}
-[0271] ctx=contract chain_id=1868 contract=0xdd3d7a7d03d9fd9ef45f3e587287922ef65ca38b primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x0485df8c2af674181b9a5a53e8085076580d4ac7aa7a26c4bf5b51ce7da70512 erc8176_hash=0x24a75672008c5f5302257e52a712b5c3e76d14d8e5149c37ba341cb69bd817c5 ir_len=844 fields=17 degraded=0 source=calldata-lpv3.json
+[0271] ctx=contract chain_id=1868 contract=0xdd3d7a7d03d9fd9ef45f3e587287922ef65ca38b primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882 erc8176_hash=0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163 ir_len=1119 fields=27 degraded=0 source=calldata-lpv3.json
          · format [0xb8caa7c5] intent="Approve Manager" intent_raw=0x417070726f7665204d616e61676572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Approve" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
+         · format [0xa415bcad] intent="Borrow" intent_raw=0x426f72726f77 static_head_words=5 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to borrow" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=enum         label="Interest Rate mode" path=0x10200002 params_tlv=0x37020001470101 params={enumRef=1,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[2] op=addressName  label="Debtor" path=0x10200004 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[3] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
+         · format [0xe8eda9df] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xfea149a6] intent="Revoke Manager Role" intent_raw=0x5265766f6b65204d616e6167657220526f6c65 static_head_words=1 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x112045a9 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="User" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
@@ -3702,6 +3802,10 @@
          ·   field[0] op=addressName  label="For asset" path=0x10200000 params_tlv=0x340110350103470103 params={addressTypes=0x10,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Use as collateral" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
          ·   field[2] op=addressName  label="Debtor" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         · format [0x617ba037] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
@@ -4315,10 +4419,19 @@
          ·   field[0] op=tokenAmount  label="Withdraw exactly" path=0x10200000 params_tlv=0x3114833589fcd6edb6e08f4c7c32d4f71b54bda02913470101 params={token=0x833589fcd6edb6e08f4c7c32d4f71b54bda02913,visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To" path=0x10200001 params_tlv=0x340106470103 params={addressTypes=0x06,visibility=always,terminalKind=address(0x03)}
          ·   field[2] op=addressName  label="Owner" path=0x10200002 params_tlv=0x340106470103 params={addressTypes=0x06,visibility=always,terminalKind=address(0x03)}
-[0309] ctx=contract chain_id=8453 contract=0xa238dd80c259a72e81d7e4664a9801593f98d1c5 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x0485df8c2af674181b9a5a53e8085076580d4ac7aa7a26c4bf5b51ce7da70512 erc8176_hash=0x24a75672008c5f5302257e52a712b5c3e76d14d8e5149c37ba341cb69bd817c5 ir_len=844 fields=17 degraded=0 source=calldata-lpv3.json
+[0309] ctx=contract chain_id=8453 contract=0xa238dd80c259a72e81d7e4664a9801593f98d1c5 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882 erc8176_hash=0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163 ir_len=1119 fields=27 degraded=0 source=calldata-lpv3.json
          · format [0xb8caa7c5] intent="Approve Manager" intent_raw=0x417070726f7665204d616e61676572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Approve" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
+         · format [0xa415bcad] intent="Borrow" intent_raw=0x426f72726f77 static_head_words=5 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to borrow" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=enum         label="Interest Rate mode" path=0x10200002 params_tlv=0x37020001470101 params={enumRef=1,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[2] op=addressName  label="Debtor" path=0x10200004 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[3] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
+         · format [0xe8eda9df] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xfea149a6] intent="Revoke Manager Role" intent_raw=0x5265766f6b65204d616e6167657220526f6c65 static_head_words=1 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x112045a9 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="User" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
@@ -4337,6 +4450,10 @@
          ·   field[0] op=addressName  label="For asset" path=0x10200000 params_tlv=0x340110350103470103 params={addressTypes=0x10,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Use as collateral" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
          ·   field[2] op=addressName  label="Debtor" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         · format [0x617ba037] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
@@ -4814,10 +4931,19 @@
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x31140000000000000000000000000000000000000000421400000000000000000000000000000000000000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff3303416c6c470101 params={token=0x0000000000000000000000000000000000000000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="All",visibility=always,nativeCurrency=[0x0000000000000000000000000000000000000000],terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[2] op=raw          label="Pool" path=0x10200000 params_tlv=0x470103 params={visibility=always,terminalKind=address(0x03)}
-[0340] ctx=contract chain_id=9745 contract=0x925a2a7214ed92428b5b1b090f80b25700095e12 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x0485df8c2af674181b9a5a53e8085076580d4ac7aa7a26c4bf5b51ce7da70512 erc8176_hash=0x24a75672008c5f5302257e52a712b5c3e76d14d8e5149c37ba341cb69bd817c5 ir_len=844 fields=17 degraded=0 source=calldata-lpv3.json
+[0340] ctx=contract chain_id=9745 contract=0x925a2a7214ed92428b5b1b090f80b25700095e12 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882 erc8176_hash=0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163 ir_len=1119 fields=27 degraded=0 source=calldata-lpv3.json
          · format [0xb8caa7c5] intent="Approve Manager" intent_raw=0x417070726f7665204d616e61676572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Approve" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
+         · format [0xa415bcad] intent="Borrow" intent_raw=0x426f72726f77 static_head_words=5 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to borrow" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=enum         label="Interest Rate mode" path=0x10200002 params_tlv=0x37020001470101 params={enumRef=1,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[2] op=addressName  label="Debtor" path=0x10200004 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[3] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
+         · format [0xe8eda9df] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xfea149a6] intent="Revoke Manager Role" intent_raw=0x5265766f6b65204d616e6167657220526f6c65 static_head_words=1 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x112045a9 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="User" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
@@ -4836,6 +4962,10 @@
          ·   field[0] op=addressName  label="For asset" path=0x10200000 params_tlv=0x340110350103470103 params={addressTypes=0x10,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Use as collateral" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
          ·   field[2] op=addressName  label="Debtor" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         · format [0x617ba037] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
@@ -5019,10 +5149,19 @@
          · format [0x150214d7] intent="Arbitrum Foundation: Treasury Governor" intent_raw=0x417262697472756d20466f756e646174696f6e3a20547265617375727920476f7665726e6f72 static_head_words=2 nested_descent_count=0
          ·   field[0] op=raw          label="Proposal id" path=0x10200000 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=raw          label="Support" path=0x10200001 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
-[0355] ctx=contract chain_id=42161 contract=0x794a61358d6845594f94dc1db02a252b5b4814ad primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x0485df8c2af674181b9a5a53e8085076580d4ac7aa7a26c4bf5b51ce7da70512 erc8176_hash=0x24a75672008c5f5302257e52a712b5c3e76d14d8e5149c37ba341cb69bd817c5 ir_len=844 fields=17 degraded=0 source=calldata-lpv3.json
+[0355] ctx=contract chain_id=42161 contract=0x794a61358d6845594f94dc1db02a252b5b4814ad primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882 erc8176_hash=0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163 ir_len=1119 fields=27 degraded=0 source=calldata-lpv3.json
          · format [0xb8caa7c5] intent="Approve Manager" intent_raw=0x417070726f7665204d616e61676572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Approve" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
+         · format [0xa415bcad] intent="Borrow" intent_raw=0x426f72726f77 static_head_words=5 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to borrow" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=enum         label="Interest Rate mode" path=0x10200002 params_tlv=0x37020001470101 params={enumRef=1,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[2] op=addressName  label="Debtor" path=0x10200004 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[3] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
+         · format [0xe8eda9df] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xfea149a6] intent="Revoke Manager Role" intent_raw=0x5265766f6b65204d616e6167657220526f6c65 static_head_words=1 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x112045a9 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="User" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
@@ -5041,6 +5180,10 @@
          ·   field[0] op=addressName  label="For asset" path=0x10200000 params_tlv=0x340110350103470103 params={addressTypes=0x10,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Use as collateral" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
          ·   field[2] op=addressName  label="Debtor" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         · format [0x617ba037] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
@@ -5135,10 +5278,19 @@
          · format [0x86d11066] intent="Replace solver" intent_raw=0x5265706c61636520736f6c766572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Existing solver" path=0x10200000 params_tlv=0x340105470103 params={addressTypes=0x05,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="Replacement solver" path=0x10200001 params_tlv=0x340105470103 params={addressTypes=0x05,visibility=always,terminalKind=address(0x03)}
-[0364] ctx=contract chain_id=42220 contract=0x3e59a31363e2ad014dcbc521c4a0d5757d9f3402 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x0485df8c2af674181b9a5a53e8085076580d4ac7aa7a26c4bf5b51ce7da70512 erc8176_hash=0x24a75672008c5f5302257e52a712b5c3e76d14d8e5149c37ba341cb69bd817c5 ir_len=844 fields=17 degraded=0 source=calldata-lpv3.json
+[0364] ctx=contract chain_id=42220 contract=0x3e59a31363e2ad014dcbc521c4a0d5757d9f3402 primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882 erc8176_hash=0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163 ir_len=1119 fields=27 degraded=0 source=calldata-lpv3.json
          · format [0xb8caa7c5] intent="Approve Manager" intent_raw=0x417070726f7665204d616e61676572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Approve" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
+         · format [0xa415bcad] intent="Borrow" intent_raw=0x426f72726f77 static_head_words=5 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to borrow" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=enum         label="Interest Rate mode" path=0x10200002 params_tlv=0x37020001470101 params={enumRef=1,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[2] op=addressName  label="Debtor" path=0x10200004 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[3] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
+         · format [0xe8eda9df] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xfea149a6] intent="Revoke Manager Role" intent_raw=0x5265766f6b65204d616e6167657220526f6c65 static_head_words=1 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x112045a9 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="User" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
@@ -5157,6 +5309,10 @@
          ·   field[0] op=addressName  label="For asset" path=0x10200000 params_tlv=0x340110350103470103 params={addressTypes=0x10,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Use as collateral" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
          ·   field[2] op=addressName  label="Debtor" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         · format [0x617ba037] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
@@ -5313,10 +5469,19 @@
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
-[0375] ctx=contract chain_id=43114 contract=0x794a61358d6845594f94dc1db02a252b5b4814ad primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x0485df8c2af674181b9a5a53e8085076580d4ac7aa7a26c4bf5b51ce7da70512 erc8176_hash=0x24a75672008c5f5302257e52a712b5c3e76d14d8e5149c37ba341cb69bd817c5 ir_len=844 fields=17 degraded=0 source=calldata-lpv3.json
+[0375] ctx=contract chain_id=43114 contract=0x794a61358d6845594f94dc1db02a252b5b4814ad primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882 erc8176_hash=0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163 ir_len=1119 fields=27 degraded=0 source=calldata-lpv3.json
          · format [0xb8caa7c5] intent="Approve Manager" intent_raw=0x417070726f7665204d616e61676572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Approve" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
+         · format [0xa415bcad] intent="Borrow" intent_raw=0x426f72726f77 static_head_words=5 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to borrow" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=enum         label="Interest Rate mode" path=0x10200002 params_tlv=0x37020001470101 params={enumRef=1,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[2] op=addressName  label="Debtor" path=0x10200004 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[3] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
+         · format [0xe8eda9df] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xfea149a6] intent="Revoke Manager Role" intent_raw=0x5265766f6b65204d616e6167657220526f6c65 static_head_words=1 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x112045a9 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="User" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
@@ -5335,6 +5500,10 @@
          ·   field[0] op=addressName  label="For asset" path=0x10200000 params_tlv=0x340110350103470103 params={addressTypes=0x10,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Use as collateral" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
          ·   field[2] op=addressName  label="Debtor" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         · format [0x617ba037] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
@@ -5551,10 +5720,19 @@
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x31140000000000000000000000000000000000000000421400000000000000000000000000000000000000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff3303416c6c470101 params={token=0x0000000000000000000000000000000000000000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="All",visibility=always,nativeCurrency=[0x0000000000000000000000000000000000000000],terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[2] op=raw          label="Pool" path=0x10200000 params_tlv=0x470103 params={visibility=always,terminalKind=address(0x03)}
-[0388] ctx=contract chain_id=59144 contract=0xc47b8c00b0f69a36fa203ffeac0334874574a8ac primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x0485df8c2af674181b9a5a53e8085076580d4ac7aa7a26c4bf5b51ce7da70512 erc8176_hash=0x24a75672008c5f5302257e52a712b5c3e76d14d8e5149c37ba341cb69bd817c5 ir_len=844 fields=17 degraded=0 source=calldata-lpv3.json
+[0388] ctx=contract chain_id=59144 contract=0xc47b8c00b0f69a36fa203ffeac0334874574a8ac primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882 erc8176_hash=0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163 ir_len=1119 fields=27 degraded=0 source=calldata-lpv3.json
          · format [0xb8caa7c5] intent="Approve Manager" intent_raw=0x417070726f7665204d616e61676572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Approve" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
+         · format [0xa415bcad] intent="Borrow" intent_raw=0x426f72726f77 static_head_words=5 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to borrow" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=enum         label="Interest Rate mode" path=0x10200002 params_tlv=0x37020001470101 params={enumRef=1,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[2] op=addressName  label="Debtor" path=0x10200004 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[3] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
+         · format [0xe8eda9df] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xfea149a6] intent="Revoke Manager Role" intent_raw=0x5265766f6b65204d616e6167657220526f6c65 static_head_words=1 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x112045a9 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="User" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
@@ -5573,6 +5751,10 @@
          ·   field[0] op=addressName  label="For asset" path=0x10200000 params_tlv=0x340110350103470103 params={addressTypes=0x10,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Use as collateral" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
          ·   field[2] op=addressName  label="Debtor" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         · format [0x617ba037] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
@@ -5707,10 +5889,19 @@
          ·   field[3] op=unit         label="Arbiter fee" path=0x10200003 params_tlv=0x3801123904744254433a0100470101 params={decimals=18,base="tBTC",prefix=0,visibility=always,terminalKind=unsigned(0x01)}
          ·   field[4] op=raw          label="Nonce" path=0x10200004 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          ·   field[5] op=amount       label="Wormhole message fee" path=0x112081af params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
-[0396] ctx=contract chain_id=534352 contract=0x11fcfe756c05ad438e312a7fd934381537d3cffe primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x0485df8c2af674181b9a5a53e8085076580d4ac7aa7a26c4bf5b51ce7da70512 erc8176_hash=0x24a75672008c5f5302257e52a712b5c3e76d14d8e5149c37ba341cb69bd817c5 ir_len=844 fields=17 degraded=0 source=calldata-lpv3.json
+[0396] ctx=contract chain_id=534352 contract=0x11fcfe756c05ad438e312a7fd934381537d3cffe primary_type=0x0000000000000000000000000000000000000000000000000000000000000000 descriptor_hash=0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882 erc8176_hash=0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163 ir_len=1119 fields=27 degraded=0 source=calldata-lpv3.json
          · format [0xb8caa7c5] intent="Approve Manager" intent_raw=0x417070726f7665204d616e61676572 static_head_words=2 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Approve" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
+         · format [0xa415bcad] intent="Borrow" intent_raw=0x426f72726f77 static_head_words=5 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to borrow" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=enum         label="Interest Rate mode" path=0x10200002 params_tlv=0x37020001470101 params={enumRef=1,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[2] op=addressName  label="Debtor" path=0x10200004 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[3] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
+         · format [0xe8eda9df] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0xfea149a6] intent="Revoke Manager Role" intent_raw=0x5265766f6b65204d616e6167657220526f6c65 static_head_words=1 nested_descent_count=0
          ·   field[0] op=addressName  label="Position manager" path=0x112045a9 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="User" path=0x10200000 params_tlv=0x340102470103 params={addressTypes=0x02,visibility=always,terminalKind=address(0x03)}
@@ -5729,6 +5920,10 @@
          ·   field[0] op=addressName  label="For asset" path=0x10200000 params_tlv=0x340110350103470103 params={addressTypes=0x10,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=raw          label="Use as collateral" path=0x10200001 params_tlv=0x470104 params={visibility=always,terminalKind=bool(0x04)}
          ·   field[2] op=addressName  label="Debtor" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         · format [0x617ba037] intent="Supply" intent_raw=0x537570706c79 static_head_words=4 nested_descent_count=0
+         ·   field[0] op=tokenAmount  label="Amount to supply" path=0x10200001 params_tlv=0x300410200000470101 params={tokenPath=0x10200000,visibility=always,terminalKind=unsigned(0x01)}
+         ·   field[1] op=addressName  label="Collateral recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
+         ·   field[2] op=raw          label="Referral Code" path=0x10200003 params_tlv=0x470101 params={visibility=always,terminalKind=unsigned(0x01)}
          · format [0x69328dec] intent="Withdraw" intent_raw=0x5769746864726177 static_head_words=3 nested_descent_count=0
          ·   field[0] op=tokenAmount  label="Amount to withdraw" path=0x10200001 params_tlv=0x3004102000003220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff33034d6178470101 params={tokenPath=0x10200000,threshold=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,message="Max",visibility=always,terminalKind=unsigned(0x01)}
          ·   field[1] op=addressName  label="To recipient" path=0x10200002 params_tlv=0x340102350103470103 params={addressTypes=0x02,addressSources=0x03,visibility=always,terminalKind=address(0x03)}
@@ -6074,11 +6269,11 @@
          ·   field[0] op=addressName  label="Existing solver" path=0x10200000 params_tlv=0x340105470103 params={addressTypes=0x05,visibility=always,terminalKind=address(0x03)}
          ·   field[1] op=addressName  label="Replacement solver" path=0x10200001 params_tlv=0x340105470103 params={addressTypes=0x05,visibility=always,terminalKind=address(0x03)}
 
-## skips (281 total)
+## skips (278 total)
 #
 # by category:
 #      3  attestation policy
-#     90  completeness lint (un-displayed field)
+#     87  completeness lint (un-displayed field)
 #      1  duplicate leaf (deduped)
 #      1  enum issue
 #     35  other
@@ -6106,11 +6301,8 @@ registry/aave/calldata-WrappedTokenGatewayV3.json — PARTIAL FORMAT DROP: forma
 registry/aave/calldata-WrappedTokenGatewayV3.json — PARTIAL FORMAT DROP: format `withdrawETHWithPermit(address pool, uint256 amount, address to, uint256 deadline, uint8 permitV, bytes32 permitR, bytes32 permitS)`: format `withdrawETHWithPermit(address pool, uint256 amount, address to, uint256 deadline, uint8 permitV, bytes32 permitR, bytes32 permitS)`: parameter #0 (`pool`) is neither rendered, explicitly hidden (`visible:"never"`), nor fully surfaced by a scalar-address `tokenPath` — every contract-call argument must be accounted for so the trusted display cannot omit an effect-bearing field. An indexed/sliced tokenPath covers only one endpoint, not an entire signed array/bytes route (audit H-3)
 registry/aave/calldata-lpv2.json — PARTIAL FORMAT DROP: format `borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)`: format `borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)`: parameter #3 (`referralCode`) is neither rendered, explicitly hidden (`visible:"never"`), nor fully surfaced by a scalar-address `tokenPath` — every contract-call argument must be accounted for so the trusted display cannot omit an effect-bearing field. An indexed/sliced tokenPath covers only one endpoint, not an entire signed array/bytes route (audit H-3)
 registry/aave/calldata-lpv2.json — PARTIAL FORMAT DROP: format `deposit(address asset, uint256 amount, address onBehalfOf, uint16 referralCode)`: format `deposit(address asset, uint256 amount, address onBehalfOf, uint16 referralCode)`: parameter #3 (`referralCode`) is neither rendered, explicitly hidden (`visible:"never"`), nor fully surfaced by a scalar-address `tokenPath` — every contract-call argument must be accounted for so the trusted display cannot omit an effect-bearing field. An indexed/sliced tokenPath covers only one endpoint, not an entire signed array/bytes route (audit H-3)
-registry/aave/calldata-lpv3.json — PARTIAL FORMAT DROP: format `borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)`: format `borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)` field[3] path `referralCode` has terminal type `uint16` and is `visible:"never"` — every signed non-address operand must be shown. Hidden bytes, arrays, tuples, packed words, and scalars can change transaction semantics; dbgen cannot classify them as harmless from their type or argument name. Only an exact `address` already surfaced by another visible field/tokenPath may carry `visible:"never"`.
-registry/aave/calldata-lpv3.json — PARTIAL FORMAT DROP: format `deposit(address asset, uint256 amount, address onBehalfOf, uint16 referralCode)`: format `deposit(address asset, uint256 amount, address onBehalfOf, uint16 referralCode)` field[2] path `referralCode` has terminal type `uint16` and is `visible:"never"` — every signed non-address operand must be shown. Hidden bytes, arrays, tuples, packed words, and scalars can change transaction semantics; dbgen cannot classify them as harmless from their type or argument name. Only an exact `address` already surfaced by another visible field/tokenPath may carry `visible:"never"`.
 registry/aave/calldata-lpv3.json — PARTIAL FORMAT DROP: format `multicall(bytes[] data)`: format `multicall(bytes[] data)`: every shown field is an inert self-identity / replay role (`from`/`owner`/`nonce`/`salt`/`deadline`/…) or the format is parameter-less, and the native value is not shown — a clear-signed known shape must surface at least one EFFECT-BEARING field (an amount, a routing/target address, or a state-changing operand), else the trusted display shows only a reassuring banner while the user blind-signs the call (WYSIWYS; VULN-erc7730-rule1-inert-field-nonaddr-action-hide / VULN-erc7730-visible-never-noparam-clearsign). Drop the format or make an effect-bearing field visible.
 registry/aave/calldata-lpv3.json — PARTIAL FORMAT DROP: format `repayWithPermit(address asset, uint256 amount, uint256 interestRateMode, address onBehalfOf, uint256 deadline, uint8 permitV, bytes32 permitR, bytes32 permitS)`: format `repayWithPermit(address asset, uint256 amount, uint256 interestRateMode, address onBehalfOf, uint256 deadline, uint8 permitV, bytes32 permitR, bytes32 permitS)` field[3] path `deadline` has terminal type `uint256` and is `visible:"never"` — every signed non-address operand must be shown. Hidden bytes, arrays, tuples, packed words, and scalars can change transaction semantics; dbgen cannot classify them as harmless from their type or argument name. Only an exact `address` already surfaced by another visible field/tokenPath may carry `visible:"never"`.
-registry/aave/calldata-lpv3.json — PARTIAL FORMAT DROP: format `supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode)`: format `supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode)` field[2] path `referralCode` has terminal type `uint16` and is `visible:"never"` — every signed non-address operand must be shown. Hidden bytes, arrays, tuples, packed words, and scalars can change transaction semantics; dbgen cannot classify them as harmless from their type or argument name. Only an exact `address` already surfaced by another visible field/tokenPath may carry `visible:"never"`.
 registry/aave/calldata-lpv3.json — PARTIAL FORMAT DROP: format `supplyWithPermit(address asset, uint256 amount, address onBehalfOf, uint16 referralCode, uint256 deadline, uint8 permitV, bytes32 permitR, bytes32 permitS)`: format `supplyWithPermit(address asset, uint256 amount, address onBehalfOf, uint16 referralCode, uint256 deadline, uint8 permitV, bytes32 permitR, bytes32 permitS)` field[2] path `referralCode` has terminal type `uint16` and is `visible:"never"` — every signed non-address operand must be shown. Hidden bytes, arrays, tuples, packed words, and scalars can change transaction semantics; dbgen cannot classify them as harmless from their type or argument name. Only an exact `address` already surfaced by another visible field/tokenPath may carry `visible:"never"`.
 registry/aave/calldata-lpv3.json — duplicate (chain_id=59144, contract=0xc47b8c00b0f69a36fa203ffeac0334874574a8ac, primary_type_hash=0x0000000000000000000000000000000000000000000000000000000000000000, ctx=1) byte-identical to <catalog-root>/registry/aave/calldata-lpv3.json — deduped
 registry/avvatar-labs-alia/calldata-AgentIdentityRegistry-base.json — PARTIAL FORMAT DROP: format `registerAgent(address _agentWallet, address _ownerWallet, uint8 _agentType, string _name, string _version, string _manufacturer, string _serialNumber, uint256 _minColScore, uint256 _maxLTV)`: format `registerAgent(address _agentWallet, address _ownerWallet, uint8 _agentType, string _name, string _version, string _manufacturer, string _serialNumber, uint256 _minColScore, uint256 _maxLTV)` has 4 dynamic top-level arguments; trusted calldata rendering supports at most one canonically framed whole-tail dynamic object
