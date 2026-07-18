@@ -1042,3 +1042,25 @@ scoped: the pure-tree components (`Eqv_Orig_C`, `Eqv_C_V`, the 2 tree reductions
 are mechanical; the **seam `EqPr_Orig_V ⟷ R_leaf_C` is the untested go/no-go**. The next empirical spike
 must aim at THAT compile (build C+V games only as scaffold to reach it) — `Eqv_Orig_C` (pure tree) would
 compile clean and prove nothing about the seam. Until the seam hop compiles, do not call the layer done.
+
+### REFINEMENT 2026-07-18 (same day) — the seam's rework risk is LOWER than "shape-only" implied
+
+Read the actual milestone-2 `R_MEUFGCMAWOTSC_EUFNAGCMA_C.forge` body (XMSSMT_C_Reduction.ec:645-656)
+against MM45's `R_MEUFGCMAWOTSTWESNPRF_EUFNAGCMA.forge` (FL_SL_XMSS_MT_ES.ec:225-238). Our forge is a
+**complete, counter-carrying extraction — NOT a stub**: identical `find` predicate (`pkWOTSs' i =
+pkWOTSs i /\ (m'::rootss') i <> (ml::rootss) i`), identical `fidx = bigi nr_trees 0 cidx * l' + tidx*l'
++ kpidx`, and it extracts `sigc' = (sigWOTS, counter)` (the +C-carrying forgery) and returns
+`(fidx, root', sigc')`. It reconstructs pks via the counter-threaded `pkWOTS_from_sigWOTS_C`. The
+`valid_WOTSTWES` event MM45 defines (:3268) is EXACTLY this `find` predicate and is **counter-independent**
+(pk-match + root-mismatch; the counter never enters it). ⇒ the `EqPr_Orig_V ⟷ R_leaf_C` connection is
+expected to port.
+
+So "milestone-2's forge is shape-only" (my own note's wording) means the extraction CODE is complete and
+MM45-faithful; what is DEFERRED is the soundness PROOF — that a valid hypertree forgery on a fresh message
+forces `valid_WOTSTWES` (the level-wise telescoping: a re-rooting on a different message must, at some
+layer, hit a matching pk with a different signed root = a WOTS forgery, else a pkco/trh collision). That
+telescoping is tree-level and counter-independent. NET: the seam is still the untested go/no-go and its
+compile is the fact-converter (advisor discipline holds), but the risk it forces a milestone-2 *rework* is
+LOWER than "shape-only stub" implied — the forge already has the right counter-carrying shape. Next
+session: port C+V games (scaffold), then compile the seam soundness (`EqPr_Orig_V` + the `V ∧ valid_WOTSTWES
+⟺ M_EUF_GCMA_WOTSC(R_leaf_C)` connection). That compile is the go/no-go, not `Eqv_Orig_C`.
