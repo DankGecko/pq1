@@ -289,7 +289,10 @@ For an N-tx batch, the device renders, in order:
    pass matches the confirmed-member commitment.
 10. Final summary pages: `Sign N txs?`, optional paymaster identity, the same
     signer identity, the conditional nonce-lane page, exact gas, and the
-    complete whole-batch fingerprint, then `Long-right` / `to confirm`.
+    complete whole-batch fingerprint. When `FLAG_INCLUDE_INIT_CODE` is set,
+    one final `DEPLOY FACTORY:` page shows the complete factory address; the
+    already-deployed path omits it under an explicit completed-skip proof.
+    The final page ends with `Long-right` / `to confirm`.
 11. Long-right confirms; signing begins.
 
 Cancel at **any** of the per-tx confirms or the final summary aborts

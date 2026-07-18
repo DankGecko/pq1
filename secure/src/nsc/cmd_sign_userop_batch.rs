@@ -973,7 +973,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             access_list_count: 0,
             signing_hash: [0u8; 32],
             userop_fields: Some(UserOpDisplayFields {
-                nonce: U256(nonce),
+                // Bind every member display to the nonce of the Type-2 batch
+                // being authorized.  In REGISTER_SLOT mode the base nonce is
+                // consumed by Type 1 and the batch signs at base+1.
+                nonce: U256(type2_nonce),
                 call_gas_limit: U256(call_gas_limit),
                 verification_gas_limit: U256(verification_gas_limit),
                 pre_verification_gas: U256(pre_verification_gas),
@@ -1525,6 +1528,21 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         }
     }
 
+    // Deployment is authorized once at the whole-batch boundary. Its receipt
+    // binds the exact public mode/factory context and remains fail-initialized
+    // until the final summary confirmation succeeds.
+    let deployment_context = crate::tx::display::DeploymentConfirmContext::new(
+        include_init_code,
+        chain_id,
+        account_index,
+        slot_index,
+        sender,
+        type2_nonce,
+        PQ_SMART_WALLET_FACTORY,
+    );
+    let mut deployment_confirm_receipt = crate::tx::display::DeploymentConfirmReceipt::new();
+    deployment_confirm_receipt.fail_initialize();
+
     // ── 6b. Final summary confirm + batch-final fingerprint ────────
     //
     // Prove that the loop reached every freshly pinned member and that its
@@ -1747,6 +1765,36 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             ui::show_status("Batch sign", "digest incomplete");
             return NscStatus::InternalError as u32;
         }
+        // The final whole-batch gate owns the deployment mode. Append an exact
+        // cancellable factory page here (not once per member), with an exact
+        // completed-skip proof for ordinary already-deployed UserOps.
+        let deployment_pages_before = final_pages.len;
+        let mut deployment_page_cfi = crate::fi::CfiCounter::new();
+        if crate::tx::display::enforce_deployment_page(
+            &mut final_pages,
+            &deployment_context,
+            &mut deployment_page_cfi,
+        )
+        .is_err()
+        {
+            ui::show_status("Batch sign", "deploy unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        let deployment_cfi_verdict = deployment_page_cfi
+            .check_into_sentinel(crate::tx::display::DEPLOYMENT_PAGE_CFI_EXPECTED);
+        crate::fi::scrub_sentinel_register();
+        let deployment_page_verdict = crate::tx::display::deployment_page_proof(
+            &final_pages,
+            deployment_pages_before,
+            &deployment_context,
+        );
+        if deployment_cfi_verdict != crate::fi::OK_SENTINEL
+            || deployment_page_verdict != crate::fi::OK_SENTINEL
+        {
+            ui::show_status("Batch sign", "deploy unshown");
+            return NscStatus::InternalError as u32;
+        }
         crate::fi::scrub_sentinel_register();
         let gas_lane_final_cfi_verdict =
             gas_lane_cfi.check_into_sentinel(crate::tx::display::USEROP_GAS_CFI_EXPECTED);
@@ -1789,6 +1837,21 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             ui::show_status("Batch sign", "digest changed");
             return NscStatus::InternalError as u32;
         }
+        crate::fi::scrub_sentinel_register();
+        let deployment_final_cfi_verdict = deployment_page_cfi
+            .check_into_sentinel(crate::tx::display::DEPLOYMENT_PAGE_CFI_EXPECTED);
+        crate::fi::scrub_sentinel_register();
+        let deployment_final_verdict = crate::tx::display::deployment_final_set_proof(
+            &final_pages,
+            deployment_pages_before,
+            &deployment_context,
+        );
+        if deployment_final_cfi_verdict != crate::fi::OK_SENTINEL
+            || deployment_final_verdict != crate::fi::OK_SENTINEL
+        {
+            ui::show_status("Batch sign", "deploy changed");
+            return NscStatus::InternalError as u32;
+        }
         let (cr, cr_verdict) = confirm_checked(final_pages.as_slice());
         match cr {
             ConfirmResult::Confirmed => {}
@@ -1805,6 +1868,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         if cr_verdict != crate::fi::OK_SENTINEL {
             super::zeroize_sensitive_state();
             return NscStatus::UserRejected as u32;
+        }
+        if deployment_confirm_receipt
+            .record_confirmed(&deployment_context)
+            .is_err()
+        {
+            super::zeroize_sensitive_state();
+            return NscStatus::InternalError as u32;
         }
     }
 
@@ -2067,6 +2137,18 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     slot_owner_bytes[..32].copy_from_slice(&slot_pk_seed_32);
     slot_owner_bytes[32..].copy_from_slice(&slot_pk_root_32);
 
+    // First spatially separate authority check: the bootstrap factory-sign
+    // path cannot begin unless the whole-batch deployment page was confirmed.
+    crate::fi::scrub_sentinel_register();
+    if deployment_confirm_receipt.completion_proof(&deployment_context)
+        != crate::fi::OK_SENTINEL
+    {
+        entropy.zeroize();
+        crate::fi::zeroize_barrier();
+        ui::show_status("Batch sign", "deploy consent");
+        return NscStatus::InternalError as u32;
+    }
+
     // ── 11. Build Type 1 (optional) + initCode (optional) ───────────
     let mut init_code_out: Zeroizing<[u8; PQ_INIT_CODE_LEN]> =
         Zeroizing::new([0u8; PQ_INIT_CODE_LEN]);
@@ -2248,6 +2330,29 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     } else {
         SHA256_EMPTY
     };
+    // Reprove the affirmative receipt and couple it to the concrete emitted
+    // initCode immediately before Type-2 digest construction. The enabled
+    // path verifies the exact shown factory and byte digest; disabled mode
+    // proves no blob was materialized and uses SHA256_EMPTY.
+    crate::fi::scrub_sentinel_register();
+    let deployment_receipt_verdict =
+        deployment_confirm_receipt.completion_proof(&deployment_context);
+    crate::fi::scrub_sentinel_register();
+    let deployment_output_verdict = crate::tx::display::deployment_output_binding_proof(
+        &deployment_context,
+        emit_init_code,
+        init_code_out.as_slice(),
+        &t2_init_code_digest,
+        &SHA256_EMPTY,
+    );
+    if deployment_receipt_verdict != crate::fi::OK_SENTINEL
+        || deployment_output_verdict != crate::fi::OK_SENTINEL
+    {
+        entropy.zeroize();
+        crate::fi::zeroize_barrier();
+        ui::show_status("Batch sign", "deploy binding");
+        return NscStatus::InternalError as u32;
+    }
     let t2_params = AaUserOpParamsV06Sha256 {
         sender,
         entry_point: ENTRY_POINT_V06,

@@ -263,7 +263,7 @@ fn offchain_eip712_uses_checked_two_pass_transcript_before_confirm() {
         .expect("end of typed confirmation section");
     let section = &CMD_SIGN_OFFCHAIN[start..end];
     let context_append = section
-        .find("append_eip1271_typed_context_pages(")
+        .find("append_eip1271_context_pages(")
         .expect("handler-owned typed offchain context append");
     let fingerprint = section
         .rfind("fingerprint_final_set_proof(")
@@ -284,7 +284,7 @@ fn offchain_eip712_uses_checked_two_pass_transcript_before_confirm() {
         .find("if eip712_transcript_gate_b != crate::fi::OK_SENTINEL")
         .expect("second transcript reject gate");
     let context_final = section
-        .find("eip1271_typed_context_final_set_proof(")
+        .find("eip1271_context_final_set_proof(")
         .expect("final handler context proof");
     let confirm = section
         .find("confirm_checked(pages.as_slice())")

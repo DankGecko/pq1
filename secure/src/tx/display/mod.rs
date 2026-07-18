@@ -23,6 +23,7 @@
 #[cfg(not(test))]
 pub mod batch;
 mod blind_sign;
+mod deployment;
 // The CMD_SIGN_USEROP render dispatcher (`pick_sign_pages` + its priority
 // ladder). Lives in its own file so the host WYSIWYS glue harness can
 // `#[path]`-mount the REAL body (`display_under_test::dispatch`); the
@@ -59,6 +60,11 @@ pub(crate) use nonce_lane::{
     enforce_nonce_lane_page, nonce_lane_page_proof, NONCE_LANE_CFI_EXPECTED,
     NONZERO_NONCE_LANE_PAGES,
 };
+pub(crate) use deployment::{
+    deployment_final_set_proof, deployment_output_binding_proof, deployment_page_proof,
+    enforce_deployment_page, DeploymentConfirmContext, DeploymentConfirmReceipt,
+    DEPLOYMENT_MODE_PAGES, DEPLOYMENT_PAGE_CFI_EXPECTED,
+};
 pub(crate) use userop_gas_lane::{
     enforce_userop_gas_page, userop_gas_final_set_proof, userop_gas_page_proof,
     USEROP_GAS_CFI_EXPECTED, USEROP_GAS_PAGES,
@@ -66,9 +72,9 @@ pub(crate) use userop_gas_lane::{
 pub use blind_sign::render_blind_sign_pages;
 pub use eip1271::{render_eip1271_personal_sign_pages, render_eip1271_raw32_pages};
 pub(crate) use eip1271::{
-    append_eip1271_typed_context_pages, eip1271_typed_context_final_set_proof,
-    eip1271_typed_context_page_proof, OffchainConfirmContext, OffchainConfirmReceipt,
-    OFFCHAIN_CONTEXT_CFI_EXPECTED,
+    append_eip1271_context_pages, eip1271_context_final_set_proof,
+    eip1271_context_page_proof, OffchainConfirmContext, OffchainConfirmReceipt,
+    OFFCHAIN_CONTEXT_CFI_EXPECTED, OFFCHAIN_CONTEXT_PAGES,
 };
 pub use erc20_known::render_erc20_known_pages;
 pub use erc20_unknown::render_erc20_unknown_pages;

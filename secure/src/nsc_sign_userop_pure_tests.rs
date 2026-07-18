@@ -1467,10 +1467,70 @@ fn negative_slice_type2_display_uses_incremented_rotation_nonce() {
     assert_eq!(CMD_SIGN_USEROP_SRC.matches("let mut type2_nonce = nonce;").count(), 1);
     assert!(CMD_SIGN_USEROP_SRC[derive..display].contains("add_one_to_be_u256(&mut type2_nonce)"));
     assert!(CMD_SIGN_USEROP_SRC[display..].contains("type2_nonce[24]"));
+    let display_fields = CMD_SIGN_USEROP_SRC[display..main_lane]
+        .find("userop_fields: Some(UserOpDisplayFields")
+        .map(|p| display + p)
+        .expect("Type-2 UserOp display fields");
+    let display_fields_end = CMD_SIGN_USEROP_SRC[display_fields..]
+        .find("}),")
+        .map(|p| display_fields + p)
+        .expect("end of Type-2 UserOp display fields");
+    assert!(
+        CMD_SIGN_USEROP_SRC[display_fields..display_fields_end]
+            .contains("nonce: U256(type2_nonce)"),
+        "the visible UserOp nonce must be the exact Type-2 nonce, not the Type-1 base nonce"
+    );
     // The separate Type-1 rotation lane page remains bound to the base
     // high-192 key; CRIT-17 proves base+1 cannot change that lane.
     let compact = CMD_SIGN_USEROP_SRC.split_whitespace().collect::<String>();
     assert!(compact.contains("&mutrotate_pages,&nonce,&mutnonce_lane_cfi"));
+}
+
+#[test]
+fn negative_slice_deployment_mode_crosses_confirm_before_factory_or_type2_signing() {
+    let context = CMD_SIGN_USEROP_SRC
+        .find("let deployment_context =")
+        .expect("fail-initialized deployment context");
+    let append = CMD_SIGN_USEROP_SRC[context..]
+        .find("enforce_deployment_page(")
+        .map(|p| context + p)
+        .expect("deployment page append");
+    let final_proof = CMD_SIGN_USEROP_SRC[append..]
+        .find("deployment_final_set_proof(")
+        .map(|p| append + p)
+        .expect("deployment final-set proof");
+    let confirm = CMD_SIGN_USEROP_SRC[final_proof..]
+        .find("confirm_checked(pages.as_slice())")
+        .map(|p| final_proof + p)
+        .expect("main Type-2 confirmation");
+    let record = CMD_SIGN_USEROP_SRC[confirm..]
+        .find(".record_confirmed(&deployment_context)")
+        .map(|p| confirm + p)
+        .expect("affirmative deployment receipt publication");
+    let first_receipt_gate = CMD_SIGN_USEROP_SRC[record..]
+        .find("deployment_confirm_receipt.completion_proof(&deployment_context)")
+        .map(|p| record + p)
+        .expect("pre-factory receipt gate");
+    let factory_path = CMD_SIGN_USEROP_SRC[first_receipt_gate..]
+        .find("// ── 13a. Deploy path")
+        .map(|p| first_receipt_gate + p)
+        .expect("factory-sign path");
+    let output_gate = CMD_SIGN_USEROP_SRC[factory_path..]
+        .find("deployment_output_binding_proof(")
+        .map(|p| factory_path + p)
+        .expect("post-confirm initCode binding");
+    let type2_params = CMD_SIGN_USEROP_SRC[output_gate..]
+        .find("let t2_params = AaUserOpParamsV06Sha256")
+        .map(|p| output_gate + p)
+        .expect("Type-2 digest parameters");
+
+    assert!(context < append);
+    assert!(append < final_proof && final_proof < confirm && confirm < record);
+    assert!(record < first_receipt_gate && first_receipt_gate < factory_path);
+    assert!(factory_path < output_gate && output_gate < type2_params);
+    assert!(CMD_SIGN_USEROP_SRC[append..confirm].contains("DEPLOYMENT_PAGE_CFI_EXPECTED"));
+    assert!(CMD_SIGN_USEROP_SRC[output_gate..type2_params].contains("emit_init_code"));
+    assert!(CMD_SIGN_USEROP_SRC[output_gate..type2_params].contains("t2_init_code_digest"));
 }
 
 #[test]

@@ -1507,7 +1507,12 @@ fn pin_handler_display_shim_construction_matches_replication() {
              max_priority_fee_per_gas: display_max_prio, max_fee_per_gas: display_max_fee,
              gas_limit: display_gas_limit, to: Some(to_address), value: U256(value),
              data_len, access_list_count: 0, signing_hash: [0u8; 32],
-             userop_fields: Some(UserOpDisplayFields { nonce: U256(nonce),
+             userop_fields: Some(UserOpDisplayFields {
+             // This display object describes the Type-2 transaction the user
+             // is authorizing.  During slot rotation the companion-supplied
+             // base nonce belongs to the preceding Type-1 registration, while
+             // the transaction is signed at base+1.
+             nonce: U256(type2_nonce),
              call_gas_limit: U256(call_gas_limit),
              verification_gas_limit: U256(verification_gas_limit),
              pre_verification_gas: U256(pre_verification_gas), }), };"

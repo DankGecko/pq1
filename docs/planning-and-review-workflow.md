@@ -1,4 +1,4 @@
-# Engineering planning and dual-review workflow
+# Engineering planning and fast adversarial-review workflow
 
 **Status:** active project process
 
@@ -16,19 +16,20 @@ Project invariants remain owned by [`../CLAUDE.md`](../CLAUDE.md). Current
 security state remains routed through [`STATUS.md`](STATUS.md). Surface-specific
 attack catalogs and finding formats remain owned by
 [`security/adversarial-review/`](security/adversarial-review/README.md). This
-document owns only planning, scope change, convergence, and the required
-two-partner review protocol.
+document owns only planning, scope change, convergence, and the required fast
+three-reviewer protocol.
 
-Task-specific specifications, explicit owner decisions, and surface playbooks
-may impose stricter gates. They take precedence for their scope; this generic
-workflow cannot weaken them or grant authority they withhold.
+Task-specific normative specifications and explicit owner decisions may impose
+stricter gates and take precedence for their scope. Surface playbooks may impose
+technical evidence requirements when their sweep is active, but they do not
+auto-activate themselves or override this workflow's reviewer cadence. This
+workflow cannot grant authority a more specific owner document withholds.
 
 Preserved research candidates may contain the review choreography that was
 current when they were frozen. Those embedded process clauses are historical
 unless an explicit owner decision re-adopts them: this document controls the
-current partner configuration, runtime receipts, withheld first passes,
-symmetric cross-adjudication, and finding-status authority. This rule changes
-no technical requirement inside the preserved candidate.
+current reviewer configuration, cadence, and finding-status authority. This
+rule changes no technical requirement inside the preserved candidate.
 
 ## 1. Operating principles
 
@@ -61,24 +62,28 @@ no technical requirement inside the preserved candidate.
    reversible Phase C campaign may contain several related implementation
    slices under one recorded scope and fail-closed authority contract. Each
    slice still earns proportionate executable evidence, but the complete
-   playbook/dual-review ceremony runs on the frozen combined Phase D candidate,
+   three-reviewer wave runs on the frozen combined Phase D candidate,
    not after every commit or formatter addition. Expansion and authority
    triggers still stop the batch immediately. Keep one batch to a coherent
    feature family and normally **2–5 slices**; a larger campaign needs an
    explicit smaller review boundary rather than accumulating an open-ended
    diff.
-9. **Playbooks are coverage floors, not the threat model.** Reviewers derive
-   assets, trust boundaries, failure paths, and novel attacks from the frozen
-   source, requirements, and invariants before using the applicable playbooks
-   as a completeness check. A catalog row, status label, or claimed defense is
-   an untrusted hypothesis to reproduce or falsify, not a premise or an
-   exhaustive list of what may be wrong.
+9. **Playbooks are deferred assurance floors, not reviewer prompts.** The fast
+   reviewers derive failures from the frozen source and short invariant list.
+   The later combined lock-in pass uses applicable catalogs as a completeness
+   check. A catalog row, status label, or claimed defense is never a premise.
 10. **Finish the active stage before improving the process around it.** Once a
     candidate enters Phase D, the closure checklist is closed. Optional
     assurance, reviewer additions, documentation polish, tooling cleanup, and
     adjacent hardening are banked unless they were already a named gate or a
     concrete Section-5 trigger makes them stage-blocking. Review ceremony must
     remain proportionate to the stage being decided.
+11. **Time-box exploration, never the truth.** Phase-D runtime and report caps
+    are stop-new-exploration and synthesize-now limits, not automatic approval.
+    Reviewers prioritize mandatory stage-impacting questions, report any honest
+    gap at the cap, and stop. A gap may block a verdict; it does not authorize an
+    unbounded campaign, extra reviewers, or repeated inspection of settled
+    evidence.
 
 The practical rule is: **do not suppress exploration, and do not implement
 speculation as if it were a requirement.**
@@ -88,8 +93,8 @@ speculation as if it were a requirement.**
 | Class | Typical examples | Minimum process |
 |---|---|---|
 | Routine and reversible | Local refactor, typo, isolated test, non-authoritative tooling | Scoped plan or direct change; proportionate tests and ordinary review |
-| Security-sensitive or invariant-adjacent | Signing, parsing, trusted display, TrustZone, SE protocols, update selection, counters, wire formats | Written plan, threat/invariant mapping, executable evidence, and the dual-review protocol below |
-| Immutable, irreversible, or production-authority-bearing | FSBL, OTP, WRP/RDP/option bytes, SE lifecycle locks, factory keys, on-chain frozen interfaces | Dual review of architecture and implementation, explicit owner authorization for irreversible actions, resource and physical evidence, and a distinct shipment verdict |
+| Security-sensitive or invariant-adjacent | Signing, parsing, trusted display, TrustZone, SE protocols, update selection, counters, wire formats | Written plan, threat/invariant mapping, executable evidence, and the three-reviewer wave below |
+| Immutable, irreversible, or production-authority-bearing | FSBL, OTP, WRP/RDP/option bytes, SE lifecycle locks, factory keys, on-chain frozen interfaces | Three-reviewer architecture and implementation waves, explicit owner authorization for irreversible actions, resource and physical evidence, and a distinct shipment verdict |
 
 If classification is uncertain, use the higher class until evidence narrows it.
 Classification raises review depth; it does not grant authority to perform a
@@ -165,15 +170,15 @@ paths unless it passes the implementation process independently.
 - Select the smallest candidate that satisfies the current named requirements.
 - Explain why each non-obvious mechanism is retained.
 - Record rejected alternatives and the evidence that rejected them.
-- Freeze the review packet: plan/spec digest, prompt digest, repository identity,
-  tests already executed, and open gates.
+- Record the selected plan, repository identity, tests already executed, and
+  open gates. Do not build a separate review dossier.
 - For security-sensitive work that establishes or changes signing authority,
   fallback policy, a trust boundary, persistent-state semantics, or an
-  irreversible interface, obtain favorable architecture recommendations from
-  both review partners, then record the owner or authorized maintainer's stage
-  decision before production-shared implementation.
+  irreversible interface, obtain the required architecture review wave, then
+  record the owner or authorized maintainer's stage decision before
+  production-shared implementation.
 - A maintainer may instead authorize a bounded Phase C implementation campaign
-  under an already-selected authority and fail-closed contract. The packet must
+  under an already-selected authority and fail-closed contract. The plan must
   enumerate its slice IDs, cumulative compatibility/resource envelope, and
   Phase D stopping point. This permits implementation and testing, not merge or
   production claims, and it cannot be used to smuggle an unresolved product
@@ -192,9 +197,9 @@ paths unless it passes the implementation process independently.
 - Preserve user changes and unrelated work; do not use broad cleanup or
   formatting as part of a security fix.
 - Record exactly what was executed and what was only inspected.
-- Do not launch a complete adversarial-review pair after each bounded slice.
-  Accumulate relevant playbook coverage, tests, generated artifacts, resource
-  deltas, and residuals for the combined Phase D packet.
+- Do not launch an adversarial-review wave after each bounded slice.
+  Accumulate relevant tests, generated artifacts, resource deltas, and residuals
+  for the combined Phase D candidate.
 
 The Phase C batch stops and returns to Phase B (or pauses for owner direction)
 if a slice introduces any of the following outside the recorded campaign
@@ -204,14 +209,15 @@ semantics; a wire/schema change requiring ecosystem migration rather than a
 root-pinned compatible extension; an irreversible/external action; a failed
 resource envelope; or another Section-5 expansion trigger. Ordinary root
 rotation, compatible authenticated-IR extensions, additional fail-closed
-formatters, tests, and catalogue coverage may remain in the same batch when the
-packet explicitly allowed them.
+  formatters, tests, and catalogue coverage may remain in the same batch when the
+  plan explicitly allowed them.
 
 ### Phase D — frozen implementation review
 
 - Stop all writers and freeze one exact candidate identity.
 - Run the same required gates from a clean or isolated environment.
-- Give both adversarial partners the same core packet and questions.
+- Launch GPT-5.6 SOL, Opus 4.8, and Kimi K3 simultaneously with the same short,
+  clear-context prompt.
 - Resolve findings, re-freeze, and apply the material/non-material re-review
   rule in Section 10.
 
@@ -232,9 +238,11 @@ Phase D is **closure mode**, not another exploration or implementation phase:
   factory, and destructive evidence as honest residuals unless the changed
   surface or a stricter gate specifically requires that evidence for merge.
   It does not collect shipment evidence merely because a playbook names it.
-- Parallelize independent mandatory gates and review legs. Receipt generation
-  and archival are bookkeeping, not new product slices, and should use the
-  existing templates/scripts.
+- Parallelize independent mandatory gates and the three reviewer commands.
+  Keep only their raw outputs and a compact coordinator summary.
+- Apply the Section-7 wall-clock and output caps to the single reviewer wave.
+  At the deadline, accept the compact report or record that leg as unavailable;
+  do not extend it into another campaign.
 - If Phase D cannot progress on its recorded checklist, stop adding work and
   report the exact blocker, its evidence, and the shortest compliant route to
   either convergence or an owner decision.
@@ -242,19 +250,22 @@ Phase D is **closure mode**, not another exploration or implementation phase:
   gate and a statement of why it cannot be banked. Without that receipt, the
   next action must come from the existing checklist.
 
-The Phase D target is the combined Phase C candidate. Apply every intersecting
-playbook as an additive lens inside one combined review of that complete
-surface; do not substitute narrow per-slice reviews or separate per-playbook
-campaigns for inspection of the composed behavior and resource envelope. A
-separate campaign is justified only by a stricter task-specific requirement or
-a concrete finding that triggers Section 5 scope expansion. Combining the
-lenses never permits an applicable catalog, stricter gate, or honest residual
-to be omitted.
+The Phase D target is the combined Phase C candidate. The three reviewers inspect
+that composed diff and affected callers. Full catalog-by-catalog reconciliation
+is deferred unless a task-specific gate explicitly requires it for the current
+stage. Before landing, add one owner-triggered TODO naming the primary and
+intersecting playbooks to run later as a single lock-in campaign. A concrete
+unsafe trace, stricter required command, or failed resource envelope remains a
+current blocker and cannot be deferred under this rule.
+
+That deferral survives handoff and session restart. A future session that reads
+the TODO leaves the sweep deferred unless the owner selects it as the active
+surface; intersection alone is not a reason to interrupt other product work.
 
 ### Phase E — landing and handoff
 
-- Distinguish a reviewer recommendation of `GO for merge` from `GO for
-  production shipment`; neither performs or authorizes the action by itself.
+- Bind `GO` to the stage named in the prompt. A merge `GO` is not a production
+  shipment decision and never performs or authorizes the action by itself.
 - Land all load-bearing tracked and untracked inputs atomically.
 - Re-run the identity and drift checks immediately before staging and after
   landing.
@@ -286,9 +297,9 @@ Except for an explicit owner-added requirement, a candidate expansion enters
 the accepted plan only after its trigger is independently substantiated at the
 applicable evidence level and adjudicated. Destructive E6/E7 evidence is never
 repeated merely to satisfy this sentence; it requires the separate authority
-in Section 11. For security-sensitive work, substantiation includes the
-applicable independent/cross-review step; a single reviewer's unverified trace
-or factual assertion is not enough.
+in Section 11. For security-sensitive work, substantiation includes coordinator
+reproduction against source or executable evidence; a single reviewer's
+unsupported trace or factual assertion is not enough.
 
 For an expansion, record:
 
@@ -325,263 +336,111 @@ Higher levels do not automatically subsume different lower-level properties.
 For example, a silicon smoke test does not replace a parser property test.
 Reports must name the exact level actually reached.
 
-## 7. Required adversarial review partners
+## 7. Required fast adversarial-review wave
 
-For security-sensitive architecture and implementation, use both partners:
+For security-sensitive architecture and implementation, launch exactly these
+three reviewers **simultaneously in fresh contexts**:
 
-- **Partner A:** Claude Code **Opus 4.8** with 1M context. Select the
-  **`ultracode` mode**, resolving to the required orchestration profile and
-  **`xhigh`** reasoning effort. If the backend exposes separate selectors, set
-  and attest both; if one control-plane selector sets both, record that selector
-  plus the resolved settings rather than claiming a second manual control was
-  used. `ultracode` is not itself the literal reasoning-effort field. Use `max`
-  only when a task-specific technical reason favors it; record that reason
-  before review starts. `max` never substitutes for the required `ultracode`
-  mode.
-- **Partner B:** literal model **`gpt-5.6-sol`** with
-  **`model_reasoning_effort="ultra"`**.
-- **Optional supplemental reviewer K (non-substitutive):** **Kimi K3** through
-  Kimi Code, selected with CLI model alias **`kimi-code/k3`**. Request maximum
-  supported thinking effort and the 1M context ceiling. The post-launch
-  control-plane receipt must resolve the alias to provider/model `kimi`/`k3`
-  and attest `thinkingEffort="max"`. Kimi is additional adversarial-discovery
-  signal only: it does not replace either required partner, change the minimum
-  independent pair, assign cross dispositions, or cure an unavailable
-  mandatory leg. Run it only when the user, a task-specific gate, or a recorded
-  unresolved technical question names the expected value before Phase D
-  launches. It is not a standing default and its absence must not delay the
-  mandatory pair or landing. When run, freeze its first pass independently.
-  After both required first passes freeze, give its complete raw report and
-  digest to both required partners as supplemental candidate input.
+- literal **`gpt-5.6-sol`** with `model_reasoning_effort="ultra"`;
+- Claude Code **Opus 4.8** (`opus[1m]`) with `xhigh` effort; and
+- Kimi Code **Kimi K3** (`kimi-code/k3`) with the highest supported thinking
+  effort.
 
-**Local access points for the partner legs (2026-07-17).** Partner A is
-reachable through the `claude` CLI (`~/.local/bin/claude`, Claude Code 2.x);
-Partner B through the `codex` CLI (`~/.local/bin/codex`) or the Codex MCP
-server; the repo kit is
-[`contracts/verification/adversarial-review/run_review.py`](../contracts/verification/adversarial-review/README.md)
-(`--backend {claude,codex,generic}`). An orchestrator-spawned single-backend
-reviewer swarm (any model, incl. Kimi subagents) is a **Phase-A discovery input
-only**: its candidate packet — however convergent — goes through the
-Partner-A/B protocol above before any disposition, canonical finding, or
-"verified" claim. It is not a standing prerequisite and must not be launched
-after the Phase-D checklist freezes unless that checklist already names the
-unresolved question it is expected to answer.
+Use the local `codex`, `claude`, and `kimi` CLIs. Give all three the same short
+prompt, frozen target, baseline, stage, and bounded focus. Start a new session
+for each review. Do not give them prior reports, other reviewers' conclusions,
+status prose, playbook catalogs, or a dossier of claimed defenses. Do not add
+extra coordinator-launched reviewer swarms. The goal is three independent
+source reviews, not three orchestrated research projects.
 
-Before any required or supplemental first pass starts, the coordinator MUST
-freeze a **pre-launch request receipt** for each leg: role, executable and CLI/harness version,
-redacted argv/config, working directory, prompt digest, requested literal model
-identifier, context selector, reasoning-effort setting, orchestration profile,
-sandbox, allowed fan-out or subagents, and every planned substitution.
+The CLI command/event log is the runtime receipt. Record only reviewer/model,
+target commit and tree, command or session identifier, completion status, and
+raw report path. Separate pre-launch and post-launch receipt files, report
+digests, terminal transcripts, and packet manifests are unnecessary unless a
+stricter task-specific gate explicitly requires them.
 
-After the session starts, and before its report is accepted or disclosed, the
-coordinator MUST freeze a **post-launch runtime receipt** from the launcher,
-harness, provider response, or durable session log. It binds the session ID,
-target identity, report digest, observed model/provider, effort and context
-selector when exposed, actual fan-out/profile, sandbox, harness version, and
-every deviation. A command line alone is request evidence, not runtime
-attestation. Runtime configuration is a control-plane fact: model self-report
-is not required and MUST NOT be the sole attestation. If a required selector is
-absent from every trusted post-launch/control-plane record, that review leg is
-unavailable; non-required fields may be `NOT_EXPOSED` with a source and reason.
+If a reviewer cannot launch, retry that same reviewer once for a mechanical
+failure. Do not substitute a fourth model or serialize the other reviews while
+waiting. If it remains unavailable, report the missing leg and the two completed
+results; do not invent completion or start another campaign.
 
-Receipts should be compact and machine-generated where possible. One immutable
-record plus its digest may satisfy every later citation; do not reproduce the
-same configuration as parallel prose in prompts, reports, matrices, status,
-and TODO files.
+### Hard review bounds
 
-For Kimi, the trusted post-launch source is a Kimi Code export or durable
-wire/session log. It must bind the CLI version, session ID, report digest,
-observed model alias, provider/model, thinking effort, context ceiling,
-permission mode, active tool/MCP profile, completion outcome, and deviations.
-An `llm.request` record, command line, or model self-report is not a completed
-runtime receipt. A failed or unattested Kimi leg is recorded as
-supplemental-unavailable and does not weaken or complete the mandatory pair.
+The three reviews form one parallel wave. Each reviewer gets **8 minutes total**
+and a maximum **800-word** response. No follow-up model turns, cross-review, or
+report rewrite are allowed. Already-running mandatory tests are separate and
+run once.
 
-If either exact partner is unavailable, do not silently substitute a weaker or
-different review and call the pair complete. Record the missing leg and ask the
-owner whether to wait or authorize a named substitute.
+At the deadline, the reviewer returns what it has with an honest `GAP`, or the
+coordinator records the leg as timed out. A timeout never causes the other two
+reviews to restart. A stricter task-specific owner gate may require more, but it
+must say so before the target freezes.
 
-These two partners are the minimum independent pair, not a cap. A task-specific
-specification or surface playbook may require additional reviewers, formal
-tools, domain specialists, or hardware evidence. Either partner may also use
-subagents, provided the named partner personally adjudicates the result.
+### One-wave execution
 
-### Independent first pass
+All three reviewers receive only:
 
-Both reviewers receive:
+- the exact target commit/tree and comparison baseline;
+- the objective, requested stage, bounded product surface, and non-goals;
+- a short list of the load-bearing invariants or remediation outcomes;
+- a compact summary of tests/evidence already run; and
+- the immutable-target instruction.
 
-- the same frozen artifact and repository identity;
-- the same threat/invariant questions and acceptance gates;
-- the same evidence packet and list of known open decisions;
-- an immutable-target instruction: no edit to the canonical source/index,
-  hardware, or external state;
-- a required initial and final digest/drift check.
+They inspect the exact diff and affected callers source-first. Prior reviews,
+playbook/status claims, and other reviewer outputs are deliberately absent from
+the initial context. Reviewers may run read-only commands and focused tests in
+external build directories, but may not edit the canonical target, use
+hardware, or perform external writes. Each raw response goes to a distinct path
+outside the target.
 
-“Immutable target” does not mean source-only review. Reviewers may run
-non-destructive commands, build into external target directories, and create or
-mutate PoCs in an isolated scratch copy. They must record those actions and
-must never report scratch state as the reviewed identity.
+### Coordinator triage; no cross-review
 
-Reviewers write raw reports to distinct, no-clobber paths outside the immutable
-target and freeze each report with its own digest. Review commands SHOULD set
-`PYTHONDONTWRITEBYTECODE=1` (or equivalent), and the initial/final identity
-receipt records ignored files as well as ordinary Git status so an ignored
-cache cannot masquerade as an immutable target. After both first passes and
-cross-adjudications are frozen,
-a coordinator may file byte-identical copies in a separate reporting
-commit/worktree. That archival commit is not the reviewed target and MUST NOT
-be described as inheriting its recommendation. Any substantive edit to a raw
-report creates a new report digest and remains visibly distinct from the frozen
-original.
+After the three parallel reports return, the coordinator:
 
-Use neutral mutual disclosure without sharing conclusions:
+1. deduplicates concrete findings;
+2. reproduces every claimed blocker or high/major issue from source or a focused
+   executable check;
+3. treats unsupported suspicions as `NOTE`, not as blockers;
+4. checks the task-relevant playbook and owner gates once; and
+5. reports one compact decision and the shortest correction set.
 
-- Tell Opus: **“GPT-5.6 SOL (`gpt-5.6-sol`,
-  `model_reasoning_effort="ultra"`) is independently reviewing this same frozen
-  packet. Do not infer its verdict or defer to it.”**
-- Tell GPT-5.6: **“Claude Code Opus 4.8 with 1M context, `ultracode`
-  orchestration, and `xhigh` reasoning effort is independently reviewing this
-  same frozen packet. Do not infer its verdict or defer to it.”**
-- When Kimi runs, additionally tell both required partners: **“Kimi K3 (Kimi
-  Code alias `kimi-code/k3`, maximum thinking effort) is also running a
-  supplemental, non-dispositive pass on this frozen packet. Do not infer its
-  findings or defer to it.”** Tell Kimi: **“The exact Opus 4.8 and GPT-5.6 SOL
-  pair is independently reviewing this frozen packet and exclusively owns
-  symmetric cross-dispositions. Your pass is supplemental; do not infer their
-  verdicts or defer to them.”**
+There is no pairwise disclosure, cross-adjudication, second-opinion prompt, or
+model-written matrix. Majority vote does not overrule a reproduced unsafe
+trace. Conversely, one unsupported model assertion does not block landing. If
+the coordinator cannot resolve a stage-impacting disagreement quickly from the
+source/evidence, report it to the user as `UNRESOLVED` instead of launching more
+reviewers.
 
-Do not provide either partner with the other's findings or verdict before both
-first-pass reports are frozen. The disclosure prevents a model from being
-presented as the sole authority; withholding the result prevents anchoring and
-premature consensus.
+## 8. Minimal review context and output
 
-Reviewers may use their own subagents, tools, and exploratory attacks. They are
-not limited to the plan author's threat list. They must distinguish an executed
-finding from a reasoned suspicion and must not mutate the review target.
+Do not build a review packet. The shared prompt contains the target and baseline
+identities, objective/stage, bounded focus, at most seven short invariants or
+acceptance checks, and a one-paragraph evidence summary. Link source-of-truth
+documents only when the reviewer must read them to decide the requested stage.
+Production/hardware residuals are named once; they do not trigger work for a
+merge-only review.
 
-To resist prompt anchoring, each first pass has two distinguishable parts:
+Every reviewer returns this exact compact shape:
 
-1. **Independent source-first discovery.** Derive the attacker, assets, trust
-   boundaries, authority transitions, composed failure paths, and resource
-   hazards from the frozen implementation and normative requirements. Hunt for
-   novel defects without treating playbook catalogs, prior findings, or
-   `DEFENDED` labels as premises.
-2. **Playbook coverage reconciliation.** After that open-ended analysis, walk
-   every applicable catalog and stricter requirement as a coverage audit;
-   reproduce or challenge its claims, identify gaps, and record anything the
-   independent pass found outside the catalogs.
+```text
+VERDICT: GO | FIX | GAP
+TARGET: <commit> / <tree>
+FINDINGS:
+- <BLOCKER|HIGH|MEDIUM> <file:line> — <mechanism>; <evidence>; <smallest fix>
+GAPS: none | <one line>
+```
 
-The report must keep those two parts visible even when the same evidence serves
-both. This is one combined review, not one campaign per playbook, and it does
-not require inventing a novel finding when the independent pass finds none.
+Use at most three findings. Optional hardening is omitted or placed in at most
+two `NOTE` lines after `GAPS`; it never changes `GO` without a concrete unsafe
+trace. `FIX` requires a source anchor, mechanism, consequence, and falsifiable
+evidence. `GAP` means the reviewer could not answer a mandatory question within
+the bound. The coordinator, not the models, records the CLI/runtime facts and
+the final synthesized decision.
 
-### Symmetric cross-adjudication
-
-After both first-pass reports freeze:
-
-Any frozen supplemental Kimi report is candidate input, not a third
-disposition vote. Give its complete report and digest to both required
-partners at this stage. Both must disposition every Kimi blocker, major, or
-other candidate that could change the requested stage verdict. Lower-severity
-supplemental observations may be grouped and banked unless either required
-partner promotes one with a concrete stage-impacting trace.
-
-1. Give each reviewer the other complete report and both report digests.
-2. Require each to reproduce, refute, or narrow every blocker/major finding.
-3. Require each to identify where the other reviewer inherited the plan's
-   framing, anchored on a playbook catalog, or accepted an unsupported claim,
-   and to name any shared blind spot outside the supplied catalogs.
-4. Preserve disagreements explicitly; do not average severities or decide by
-   majority language.
-5. A confirmed or unresolved blocker/major finding, or an unresolved `NO-GO`
-   from either partner, prevents a favorable recommendation or owner transition
-   for that stage. The owner
-   may accept a product trade-off only after the residual and consequence are
-   written plainly; an unresolved correctness contradiction cannot be accepted
-   by preference.
-
-Cross-adjudication produces one durable matrix with one row for every
-stage-impacting first-pass finding. Each row records the stable finding ID,
-originating severity and stage impact, Partner A's disposition and evidence,
-Partner B's disposition and evidence, the resulting correction or residual,
-and whether an owner decision remains. Low/informational findings with no
-plausible combined stage impact may be grouped in a banked appendix with origin
-and rationale; they do not require a separate counterpart round. Either partner
-may promote a grouped item by supplying a concrete unsafe trace or other
-Section-5 trigger.
-Use only `CONFIRMED`, `REFUTED`, `NARROWED`, or `UNRESOLVED` as cross
-dispositions.
-
-A new finding discovered during cross-adjudication receives a stable `X-*` ID
-and one bounded response from the counterpart. If that response does not
-resolve it, record it as `UNRESOLVED`; do not start a recursive discussion
-loop. The matrix header binds the target identity and both first-pass and
-cross-report digests. Its footer records the final target drift check and each
-partner's revised stage-specific verdict.
-
-The partner identities provide model diversity; the reproduce/refute phase is
-what turns two opinions into adversarial evidence.
-
-## 8. Review packet and required output
-
-The packet should include only relevant material, but it must be sufficient to
-reproduce the claims:
-
-- objective, scope, non-goals, and stage being adjudicated;
-- exact `HEAD`, branch, tracked diff hash, untracked manifest/hash, and aggregate
-  identity recipe;
-- plan/spec and prompt digests;
-- named invariants, threats, decisions, and open gates;
-- implementation diff or file list and the source-of-truth documents;
-- commands, logs, resource receipts, and hardware receipts actually available;
-- previous findings that remain open or whose fixes are being re-adjudicated;
-- one applicable-playbook coverage map that includes every task-relevant Part-C
-  question, reviewer-count/cadence requirement, required command, and honest
-  boundary. Present the playbooks as additive coverage lenses for the combined
-  review, label their status claims as untrusted inputs, and deduplicate common
-  instructions without dropping a stricter requirement. The generic workflow
-  never substitutes for a stricter playbook, and the number of intersecting
-  playbooks does not itself create separate campaigns.
-
-Do not manufacture evidence for a stage that is not being decided. The packet
-must distinguish: (a) evidence required for the requested verdict, (b) unchanged
-evidence reused by exact digest/reference, and (c) production/hardware residuals
-that are intentionally outside this stage. Category (c) is disclosed, not run
-as a precautionary side campaign.
-
-Each reviewer report must contain:
-
-1. **Identity and drift result.** Initial and final snapshot identity.
-2. **Reviewer-configuration receipt.** Digests/references for the frozen
-   pre-launch request and post-launch runtime receipts; the observed model and
-   provider, effort and context selector when exposed, profile/fan-out,
-   harness/backend version, session ID, sandbox, deviations, and any
-   `NOT_EXPOSED` fields. The raw model report need not introspect control-plane
-   facts itself.
-3. **Stage-specific verdicts.** Architecture, implementation, merge, and
-   production shipment are stated separately; unavailable stages say so.
-4. **Findings.** Stable ID, severity, file/line, mechanism, prerequisites,
-   consequence, whether introduced here, falsifiable evidence/PoC, and required
-   correction.
-5. **Invariant and failure-path trace.** Especially power cuts, malformed
-   states, trust-boundary crossings, resource exhaustion, and downgrade/fallback
-   paths applicable to the change.
-6. **Executed versus inspected evidence.** Tests not rerun are never presented
-   as fresh evidence.
-7. **KEEP / SIMPLIFY / FIX NOW / DEFER / DROP / OPEN RESEARCH.** Optional ideas
-   are classified rather than smuggled into a red-line.
-8. **Honest residual.** What resisted attack, what was not reviewed, tool or
-   model limits, and the exact remaining gates.
-
-Every security review governed by the surface playbooks first freezes its raw
-partner reports externally. Symmetric adjudication then uses
-[`security/adversarial-review/findings/CROSS_ADJUDICATION_TEMPLATE.md`](security/adversarial-review/findings/CROSS_ADJUDICATION_TEMPLATE.md);
-only the post-cross canonical record uses
-[`security/adversarial-review/findings/TEMPLATE.md`](security/adversarial-review/findings/TEMPLATE.md)
-and its
-[`status lifecycle`](security/adversarial-review/findings/README.md).
-Formal-verification work also follows
-[`verification/fv-adversarial-review-playbook.md`](verification/fv-adversarial-review-playbook.md).
+Formal-verification work still follows any stricter mandatory command or
+evidence requirement in
+[`verification/fv-adversarial-review-playbook.md`](verification/fv-adversarial-review-playbook.md),
+but its catalogs are not pasted into the three reviewer prompts.
 
 A reviewer may recommend risk acceptance but may not set a finding to
 `☑️ ACCEPTED`. That status is owner-only and requires a recorded owner decision
@@ -592,47 +451,36 @@ acceptance authority.
 
 ## 9. Reviewer recommendation meanings
 
-These labels are evidence for a separate owner or authorized-maintainer stage
-decision. A model never authorizes implementation, merge, shipment, hardware
-mutation, or an external write.
+The prompt names exactly one stage—normally architecture, merge, or shipment.
+The compact verdict applies only to that stage and exact target:
 
-- **`NO-GO`:** a blocker, unresolved correctness contradiction, target drift,
-  or missing mandatory evidence prevents the named stage.
-- **`APPROVE WITH RED-LINES`:** named mandatory corrections block the requested
-  stage until a new frozen snapshot is reviewed successfully.
-- **`APPROVE FOR OPEN-DECISION CLOSURE`:** the architecture is coherent enough
-  to resolve explicitly listed decisions; it is not implementation approval.
-- **`APPROVE FOR IMPLEMENTATION`:** the reviewer recommends that the exact
-  architecture is closed enough for the stated implementation scope; the owner
-  or authorized maintainer still decides whether implementation starts.
-- **`GO FOR MERGE`:** the reviewer recommends that the exact tested
-  implementation may land for its stated purpose. An authorized maintainer
-  makes the merge decision. This is not shipment approval.
-- **`GO FOR PRODUCTION SHIPMENT`:** the reviewer found the submitted software,
-  resource, hardware, factory, provenance, and owner-gate evidence complete for
-  the exact release artifact. The owner/release authority still makes the
-  shipment decision.
+- **`GO`:** no concrete stage-blocking defect was found and no mandatory answer
+  is missing.
+- **`FIX`:** one or more concrete findings require correction before that stage.
+- **`GAP`:** identity, evidence, or a mandatory question could not be resolved
+  within the time bound.
 
-Every verdict names its subject and exact digest. “Looks good” is not a verdict.
+A model never authorizes implementation, merge, shipment, hardware mutation,
+risk acceptance, or an external write. An authorized owner/maintainer acts on
+the synthesized evidence. A merge `GO` is never a production-shipment verdict.
 
 ## 10. Convergence and stopping discipline
 
 The default convergence loop is:
 
-1. one independent first-pass pair;
-2. symmetric cross-adjudication;
-3. fix confirmed blockers and mandatory red-lines;
-4. freeze a new digest;
-5. classify the change as material or non-material;
-6. review the new exact digest under the rule below.
+1. implement and test the bounded Phase-C slices;
+2. freeze one exact candidate;
+3. run the one parallel three-reviewer wave;
+4. reproduce and fix only concrete blockers or mandatory gaps as one batch;
+5. re-freeze and, if code/behavior changed, run the same short wave once more;
+6. land when gates are green and coordinator triage has no reproduced blocker
+   or unresolved mandatory gap.
 
 A change is **material** when it affects an authority rule, state transition,
 byte/schema format, trust boundary, failure response, resource envelope,
-security claim, or the substance of a blocker/mandatory red-line. A material
-change starts fresh, mutually withheld first-pass reviews in fresh contexts on
-the new digest, followed by cross-adjudication. Prior findings remain explicit
-acceptance criteria, but neither partner sees the other's new report before its
-own freezes.
+security claim, or the substance of a blocker. A material change invalidates the
+old verdict and receives a fresh three-reviewer wave on the combined corrected
+snapshot. It does not require review after each intermediate commit.
 
 That re-review rule applies once a snapshot has entered Phase D or carries a
 review recommendation. It does not require a full review after every material
@@ -644,25 +492,22 @@ during that interval, and no merge/production claim is available until the
 next Phase D review converges.
 
 For a remediation snapshot that stays inside the original authority, trust
-boundaries, compatibility envelope, and product surface, the fresh withheld
-pair may be **remediation-focused**: it must re-check every prior blocker,
-changed file, affected caller/consumer, composed failure path, resource delta,
-and applicable playbook question whose answer could have changed. It need not
-repeat unrelated catalogue questions or unchanged evidence solely to recreate
-the first packet's volume. A new authority, trust boundary, fallback, persistent
-state, incompatible wire change, or Section-5 trigger requires a full combined
-review instead.
+boundaries, compatibility envelope, and product surface, the prompt may include
+a short acceptance list for the prior blockers and changed callers. It still
+does not include prior reports or catalog prose. A new authority, fallback,
+persistent state, incompatible wire change, or Section-5 trigger returns to
+Phase B before review.
 
 A **non-material** change is limited to editorial correction, link/receipt
 repair, or a mechanically equivalent test/document update that changes no
-authority, behavior, evidence claim, or acceptance gate. Both partners and the
-owner/authorized maintainer must agree on that classification; only then may a
-delta-focused re-review replace fresh full first passes.
+authority, behavior, evidence claim, or acceptance gate. The coordinator may
+classify it directly; if uncertain, include it in the next combined freeze.
 
-This is a default, not an arbitrary cap. Continue when a re-review produces a
-new concrete expansion trigger from Section 5. Stop when only editorial
-preferences, duplicate defenses without a named threat, or optional hardening
-remain; bank those items instead of creating another draft by accretion.
+Do not start cross-review or recursively ask models to debate. If the second
+wave still has a reproduced blocker, fix it in the active product scope. If it
+has only an unresolved disagreement or unavailable leg, stop and give the user
+the exact evidence and shortest decision path before doing more review work.
+Bank editorial preferences, duplicate defenses, and optional hardening.
 
 Do not declare convergence merely because review is expensive. Conversely, do
 not reopen an accepted architecture merely because a reviewer can imagine an
@@ -670,8 +515,8 @@ additional defense. The deciding question is whether new evidence changes a
 requirement, invalidates an assumption, or makes the selected design unsafe or
 unimplementable.
 
-No recommendation transfers across a changed artifact. Even a permitted narrow
-delta review binds its conclusion to the new exact digest.
+No recommendation transfers across a changed artifact. Every wave binds its
+conclusion to the exact reviewed commit and tree.
 
 ## 11. Irreversible and external actions
 
@@ -681,8 +526,8 @@ or production-release mutation, obtain an explicit owner instruction naming:
 
 - the exact board/part and revision or external target;
 - the cells, objects, keys, lifecycle states, or deployment affected;
-- the exact artifact, source, toolchain, ceremony/procedure, and dual-review
-  report digests being authorized;
+- the exact artifact, source, toolchain, ceremony/procedure, and three-reviewer
+  wave result being authorized;
 - the named operator, authorization window, and exact single attempt covered;
 - the pre-state capture and recovery limits;
 - the expected irreversible result and stop conditions;
@@ -695,51 +540,28 @@ replayed for a retry, replacement part, broader cell/object range, changed
 artifact, changed procedure, or later window; each requires fresh owner
 authorization.
 
-## 12. Reusable reviewer prompt preamble
+## 12. Reusable quick reviewer prompt
 
-Use the same body for both partners and change only the role line and neutral
-disclosure. Attach every applicable surface playbook's task-relevant Part-C
-questions and stricter requirements as a coverage appendix; do not concatenate
-them into repetitive prompts that displace open-ended analysis. This generic
-preamble never replaces an applicable lens.
+Use this same short prompt for all three fresh sessions. Replace only the model,
+paths, identities, stage, and bounded focus.
 
 ```text
-You are independent adversarial review Partner <A|B> for PQSigner OS.
-Run with <Opus 4.8, 1M context, ultracode orchestration, xhigh reasoning |
-literal gpt-5.6-sol, model_reasoning_effort="ultra">.
-Record the actual runtime configuration receipt required by Sections 7 and 8.
-<Neutral counterpart-disclosure sentence from Section 7.>
+Review PQSigner OS for <STAGE>.
+Target: <PATH>, commit <COMMIT>, tree <TREE>.
+Compare: <BASE>..<COMMIT>.
+Focus only on <PRODUCT SURFACE>: <AT MOST SEVEN SHORT CHECKS>.
+Evidence already green: <ONE SHORT PARAGRAPH>.
 
-Keep the canonical review target immutable: do not edit its repository or
-index, access hardware, or perform external writes. You may run non-destructive
-commands, use external build directories, and create executable PoCs in an
-isolated scratch copy; report them separately from the reviewed identity.
-Verify the canonical snapshot identity before reading and immediately before
-reporting. Treat prior recommendations as non-transferable and attempt to
-refute both the architecture and its implementation.
+Inspect the diff and affected callers source-first for concrete security or
+correctness blockers. Keep the target immutable. Use read-only commands only;
+no edits, hardware, external writes, prior reports, status prose, or playbook
+catalogs. Ignore style and optional hardening. You have 8 minutes and
+800 words.
 
-Begin with an independent source-first attack: derive the assets, attacker,
-trust boundaries, authority transitions, composed failure paths, and resource
-hazards from the frozen implementation and normative requirements. Seek novel
-defects outside the supplied threat list. Do not treat a playbook catalog,
-status label, prior finding, or claimed defense as a premise or as exhaustive.
-Then use every applicable playbook in the coverage appendix to audit what the
-independent pass may have missed and to challenge each relevant claim. Keep the
-source-first results and the playbook reconciliation distinguishable. Multiple
-playbooks are additive lenses in this one review, not separate campaigns,
-unless the packet names a stricter task-specific requirement.
-
-Return the output required by Sections 8 and 9 of
-docs/planning-and-review-workflow.md. Require falsifiable evidence for findings,
-separate executed from inspected evidence, state honest residuals, and keep
-architecture, implementation, merge, and production verdicts distinct. State
-what you explored outside the catalogs and identify any inherited framing,
-even if that exploration yields no additional finding.
-
-<Objective, scope, frozen identity recipe/digests, invariants, evidence,
-mandatory questions, open gates, and exact files follow.>
+Return exactly:
+VERDICT: GO | FIX | GAP
+TARGET: <commit> / <tree>
+FINDINGS:
+- <BLOCKER|HIGH|MEDIUM> <file:line> — <mechanism>; <evidence>; <smallest fix>
+GAPS: none | <one line>
 ```
-
-After both first passes freeze, issue a separate cross-adjudication prompt with
-both complete reports and require the Section-7 disposition matrix, report
-digests, final drift result, and revised stage-specific verdicts.

@@ -42,7 +42,7 @@
 > deadline/reset decision. The materially remediated current tree is host,
 > codegen and QEMU green; optimized development inspection is favorable but is
 > not executable FI, a production profile, or a hardware stack/high-water
-> bound. A fresh exact dual review is still required. Follow the live campaign
+> bound. A fresh exact three-reviewer wave is still required. Follow the live campaign
 > ledger in [`work-todo.md`](work-todo.md#pq1-erc-7730-productization-campaign--owner-direction-2026-07-16),
 > the architecture record in
 > [`clear-signing-pq1-forced-blind-architecture-2026-07-16.md`](security/adversarial-review/findings/clear-signing-pq1-forced-blind-architecture-2026-07-16.md),
@@ -90,8 +90,12 @@
 > non-atomic ERC-20/ERC-7730 drift checks; and incomplete batch tuple
 > commitment.
 >
-> V6 remediates those findings without enabling blind signing. All off-chain
-> kinds render their exact account/slot/wallet/deployment/budget context and
+> V6 remediates those findings without enabling blind signing. Its structured
+> typed kinds render exact account/slot/wallet/deployment/budget context, while
+> `personal_sign` retains its complete signer context. The frozen V6 RAW32
+> transcript did not show the full wallet, exact response mode, or nested hash
+> actually passed to C10; the bounded Phase-D remediation candidate adds those
+> pages and proofs, but has no inherited merge recommendation. All four kinds
 > carry one fail-initialized, domain-separated `OffchainConfirmReceipt` through
 > two common gates before signing. IR schema v4 requires shared exhaustive
 > `TerminalKind × FormatOp × params` validation in compiler and device,
@@ -114,13 +118,16 @@
 > outside; 40 groups (10 quick / 27 default / 3 full), 38 distinct enrolled
 > harnesses.
 >
-> Pre-freeze evidence is green: combined host suites 814/0; secure mock-SE
-> suites 2235/0 under both no-default and `erc7730-dev-unattested`
-> configurations, with one diagnostic test ignored; descriptor drift and
-> census checks pass. Exact-target mutation/resource evidence, candidate
-> freeze, the combined A/B review with the already-requested supplemental Kimi
-> pass, and symmetric cross-adjudication remain mandatory before landing. This
-> grants no merge, production, shipment, or forced-blind authority.
+> Candidate evidence is green: the combined host package suites pass; secure
+> mock-SE suites pass 2245/0 under both no-default and
+> `erc7730-dev-unattested`, with one diagnostic test ignored; descriptor drift,
+> census, the scoped Kani harness and exact enrolled mutation pass; and the
+> strict linked Thumb profile remains within FLASH/static-RAM/stack margins.
+> Final freeze plus the workflow's single simultaneous GPT-5.6 SOL / Opus 4.8 /
+> Kimi K3 fast review wave remain mandatory before landing. The exhaustive
+> combined playbook lock-in is explicitly deferred to the future
+> owner-triggered item in `docs/work-todo.md`; session restart does not activate
+> it. This grants no merge, production, shipment, or forced-blind authority.
 
 ## §0 — Where the truth lives (doc map)
 
@@ -130,8 +137,8 @@ in four places). The rule: **owners hold the fact; everything else links.**
 | Concern | Owner (source of truth) | Notes |
 |---------|------------------------|-------|
 | Non-negotiable invariants · code conventions · key-file map · KDF tags | **`CLAUDE.md`** | the LLM operating contract; the "do / never" rules |
-| Engineering planning · scope/requirements change control · convergence · dual-model adversarial review | **`docs/planning-and-review-workflow.md`** | `AGENTS.md` is the mandatory agent router; this owner doc holds the process |
-| Security-review playbook routing · additive lenses · finding-record lifecycle | **`docs/security/adversarial-review/README.md`** | surface playbooks discover candidates; the planning workflow exclusively owns exact-pair cross dispositions and convergence |
+| Engineering planning · scope/requirements change control · convergence · fast three-model adversarial review | **`docs/planning-and-review-workflow.md`** | `AGENTS.md` is the mandatory agent router; this owner doc holds the process |
+| Security-review playbook routing · additive lenses · finding-record lifecycle | **`docs/security/adversarial-review/README.md`** | full sweeps are future owner-triggered assurance unless a stricter gate activates them; the planning workflow owns fast-review cadence and convergence |
 | External architecture · per-device shipping checklist | **`README.md`** | auditor/integrator altitude |
 | Reversible dev backlog · the dated Completion Log | **`docs/work-todo.md`** | "what got done when" |
 | **Irreversible** factory/silicon burn ceremony (OPTIGA LcsO, OTP/WRP/RDP, SCP03 PUT-KEY) | **`docs/production-todo.md`** | ⚠ NOT merged with work-todo — different lifecycle/reader |

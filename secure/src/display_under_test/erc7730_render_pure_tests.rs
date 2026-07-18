@@ -1712,6 +1712,7 @@ fn positive_erc8213_labels_cover_every_kind() {
         (Erc8213Kind::CalldataDigest([0u8; 32]), "CalldataDigest"),
         (Erc8213Kind::Eip712Final([0u8; 32]), "EIP-712 Final"),
         (Erc8213Kind::Raw32([0u8; 32]), "Raw32 Hash"),
+        (Erc8213Kind::ReplaySafeHash([0u8; 32]), "ReplaySafe Hash"),
         (Erc8213Kind::SafeTxHash([0u8; 32]), "SafeTxHash"),
     ] {
         let mut pages = Pages::empty_with_len(0);
@@ -1723,6 +1724,47 @@ fn positive_erc8213_labels_cover_every_kind() {
             std::any::type_name_of_val(&kind)
         );
     }
+}
+
+#[test]
+fn raw32_input_and_replay_safe_signed_hash_render_as_distinct_complete_pairs() {
+    let raw_h = [0x11u8; 32];
+    let signed_h = [0xA7u8; 32];
+    let raw_kind = Erc8213Kind::Raw32(raw_h);
+    let signed_kind = Erc8213Kind::ReplaySafeHash(signed_h);
+    let mut pages = Pages::empty_with_len(0);
+
+    let raw_index = pages.len;
+    append_fingerprint_for_test(&mut pages, raw_kind).unwrap();
+    let signed_index = pages.len;
+    append_fingerprint_for_test(&mut pages, signed_kind).unwrap();
+
+    assert_eq!(pages.len, 4);
+    assert_eq!(row_str(&pages.buf[raw_index][1]), "Raw32 Hash");
+    assert_eq!(row_str(&pages.buf[signed_index][1]), "ReplaySafe Hash");
+    for row in &pages.buf[raw_index + 1] {
+        assert_eq!(row_str(row), "1111111111111111");
+    }
+    for row in &pages.buf[signed_index + 1] {
+        assert_eq!(row_str(row), "a7a7a7a7a7a7a7a7");
+    }
+    assert_eq!(
+        fingerprint_final_set_proof(&pages, raw_index, raw_kind),
+        crate::fi::OK_SENTINEL
+    );
+    assert_eq!(
+        fingerprint_final_set_proof(&pages, signed_index, signed_kind),
+        crate::fi::OK_SENTINEL
+    );
+    assert_ne!(
+        fingerprint_final_set_proof(
+            &pages,
+            signed_index,
+            Erc8213Kind::ReplaySafeHash([0xA6; 32]),
+        ),
+        crate::fi::OK_SENTINEL,
+        "the signed-hash proof must bind every nested-hash byte"
+    );
 }
 
 #[test]

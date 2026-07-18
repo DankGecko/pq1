@@ -136,6 +136,8 @@ an exact `(chain, address)` lookup. Wildcard names never qualify.
 <!-- BEGIN XTASK-VERIFIED ERC7730 SEMANTIC CONTRACT -->
 ### Device semantic manifest (generated)
 
+- The host compiler and device require **IR schema v4 (`0x04`)**; this value is generated from `pqsigner_erc7730::ir::SCHEMA_VER`, and older schemas hard-refuse.
+
 | Wire opcode | Registry `format` | Device route |
 |------------:|-------------------|--------------|
 | `0x01` | `raw` | implemented renderer (fail closed on invalid input) |
@@ -155,7 +157,7 @@ an exact `(chain, address)` lookup. Wildcard names never qualify.
 
 - For a verified, request-bound descriptor, **every `RenderErr` variant is a hard refusal** through an exhaustive production match. A new variant cannot compile until it receives that policy; no variant authorizes typed-call, selector-label, or blind-sign fallback.
 - ERC-8213 is mandatory and atomic for every companion/dapp-supplied signed payload: exactly 2 pages (banner + hash) surface the complete 32-byte digest at 8 bytes per display row. If both pages do not fit, the signing caller refuses; it never leaves an orphan banner or signs without the complete hash. The sole current exemption is the firmware-constructed Type-1 slot-rotation operation: its calldata combines firmware constants with seed-derived slot-owner material that is intentionally unavailable before the rotation consent boundary, so that dialog instead renders the complete slot index and bootstrap-use consequence.
-- Confirmation transcripts use the pinned append-only order. A single UserOp shows renderer pages first; the dispatcher may append native-value/legacy-fee pages, then the handler appends paymaster (when present), signer, target, non-zero nonce lane, exact UserOp gas and ERC-8213 fingerprint pages. A batch member prepends its exact `BATCH SIGN / Tx i of N` banner to the renderer/dispatcher pages, then appends signer, target, nonce lane, gas and fingerprint pages. The batch-final summary appends paymaster, signer, nonce lane, gas and the whole-batch fingerprint. A full buffer refuses; no mandatory page is inserted by shifting or overwriting an earlier page.
+- Confirmation transcripts use the pinned append-only order. A single UserOp shows renderer pages first; the dispatcher may append native-value/legacy-fee pages, then the handler appends paymaster (when present), signer, target, non-zero nonce lane, exact UserOp gas and ERC-8213 fingerprint pages. When `FLAG_INCLUDE_INIT_CODE` is set, one final `DEPLOY FACTORY:` page shows the complete factory address; the ordinary path proves that page was skipped. A batch member prepends its exact `BATCH SIGN / Tx i of N` banner to the renderer/dispatcher pages, then appends signer, target, nonce lane, gas and fingerprint pages. The batch-final summary appends paymaster, signer, nonce lane, gas, the whole-batch fingerprint, and the same conditional deployment page. A full buffer refuses; no mandatory page is inserted by shifting or overwriting an earlier page.
 <!-- END XTASK-VERIFIED ERC7730 SEMANTIC CONTRACT -->
 
 ## 2. What the companion must ship
@@ -800,7 +802,9 @@ to its `tx_idx` in the TLV list described in §6.2.
 Do **not** describe first deployment as Type 1 registration. First deployment
 uses `FLAG_INCLUDE_INIT_CODE`, `slot_index = 0`, and
 `FLAG_REGISTER_SLOT = 0`; the factory installs slot 0 atomically and the device
-emits only the slot-0 Type 2 signature.
+emits only the slot-0 Type 2 signature. Before signing, the final trusted
+confirmation includes `DEPLOY FACTORY:` and the complete factory address; a
+companion must treat that page as mandatory deployment consent.
 
 Rotation to slot N≥1 is currently blocked for seedless companions. Firmware
 can emit a Type 1 signature over `addOwnerBytes(newSlotPk)`, but wire v2 does
@@ -1103,9 +1107,9 @@ enrollment test to change.
 
 The compiler resolves the placeholder to the final emitted field ordinal and
 stores program version 1 in authenticated parameter TLV `0x46`, canonically on
-field zero. This is a root-pinned extension within IR schema v3, not a schema
-bump. The device deep-validates the TLV in every format, including unselected
-suffixes: unique canonical placement, in-range ordinal, `Always` visibility,
+field zero. This is a root-pinned authenticated parameter extension within the
+current schema. The device deep-validates the TLV in every format, including
+unselected suffixes: unique canonical placement, in-range ordinal, `Always` visibility,
 an `Amount`/`TokenAmount` opcode, no threshold/message, and a static structured
 scalar path are mandatory.
 

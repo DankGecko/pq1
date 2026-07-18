@@ -839,7 +839,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         access_list_count: 0,
         signing_hash: [0u8; 32],
         userop_fields: Some(UserOpDisplayFields {
-            nonce: U256(nonce),
+            // This display object describes the Type-2 transaction the user
+            // is authorizing.  During slot rotation the companion-supplied
+            // base nonce belongs to the preceding Type-1 registration, while
+            // the transaction is signed at base+1.
+            nonce: U256(type2_nonce),
             call_gas_limit: U256(call_gas_limit),
             verification_gas_limit: U256(verification_gas_limit),
             pre_verification_gas: U256(pre_verification_gas),
@@ -1208,6 +1212,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // is non-empty (audit 2026-06-27).
         let reserved = usize::from(value.iter().any(|&b| b != 0))
             + usize::from(paymaster_and_data_hash != SHA256_EMPTY)
+            + usize::from(include_init_code) * crate::tx::display::DEPLOYMENT_MODE_PAGES
             + crate::tx::display::SIGNER_IDENTITY_PAGES
             + crate::tx::display::TARGET_IDENTITY_PAGES
             + crate::tx::display::NONZERO_NONCE_LANE_PAGES
@@ -1396,6 +1401,21 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             return NscStatus::UserRejected as u32;
         }
     }
+    // `include_init_code` changes the released response, the Type-2 digest,
+    // and whether the bootstrap key signs a factory authorization. Bind that
+    // mode to the exact public deployment context before the cancellable main
+    // confirmation; the receipt is published only from its affirmative arm.
+    let deployment_context = crate::tx::display::DeploymentConfirmContext::new(
+        include_init_code,
+        chain_id,
+        account_index,
+        slot_index,
+        sender,
+        type2_nonce,
+        PQ_SMART_WALLET_FACTORY,
+    );
+    let mut deployment_confirm_receipt = crate::tx::display::DeploymentConfirmReceipt::new();
+    deployment_confirm_receipt.fail_initialize();
     let legacy_fee_pages_required = crate::tx::display::legacy_fee_pages_required(
         cow_order_verified.is_some(),
         safe_v1_verified.is_some(),
@@ -1606,6 +1626,36 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ui::show_status("Sign refused", "fp incomplete");
         return NscStatus::InternalError as u32;
     }
+    // Deployment is a UserOp-level mode, so append its exact factory page
+    // after the semantic calldata fingerprint and prove the completed-skip
+    // path when initCode is absent. A full page budget refuses atomically.
+    let deployment_pages_before = pages.len;
+    let mut deployment_page_cfi = crate::fi::CfiCounter::new();
+    if crate::tx::display::enforce_deployment_page(
+        &mut pages,
+        &deployment_context,
+        &mut deployment_page_cfi,
+    )
+    .is_err()
+    {
+        ui::show_status("Sign refused", "deploy unshown");
+        return NscStatus::InternalError as u32;
+    }
+    crate::fi::scrub_sentinel_register();
+    let deployment_cfi_verdict = deployment_page_cfi
+        .check_into_sentinel(crate::tx::display::DEPLOYMENT_PAGE_CFI_EXPECTED);
+    crate::fi::scrub_sentinel_register();
+    let deployment_page_verdict = crate::tx::display::deployment_page_proof(
+        &pages,
+        deployment_pages_before,
+        &deployment_context,
+    );
+    if deployment_cfi_verdict != crate::fi::OK_SENTINEL
+        || deployment_page_verdict != crate::fi::OK_SENTINEL
+    {
+        ui::show_status("Sign refused", "deploy unshown");
+        return NscStatus::InternalError as u32;
+    }
     // Recompute the canonical gas page and scan the COMPLETE page set after
     // every later append. The insertion-completion proof above establishes the
     // one-page length transition; this final-boundary proof prevents a later
@@ -1699,6 +1749,21 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ui::show_status("Sign refused", "fp changed");
         return NscStatus::InternalError as u32;
     }
+    crate::fi::scrub_sentinel_register();
+    let deployment_final_cfi_verdict = deployment_page_cfi
+        .check_into_sentinel(crate::tx::display::DEPLOYMENT_PAGE_CFI_EXPECTED);
+    crate::fi::scrub_sentinel_register();
+    let deployment_final_verdict = crate::tx::display::deployment_final_set_proof(
+        &pages,
+        deployment_pages_before,
+        &deployment_context,
+    );
+    if deployment_final_cfi_verdict != crate::fi::OK_SENTINEL
+        || deployment_final_verdict != crate::fi::OK_SENTINEL
+    {
+        ui::show_status("Sign refused", "deploy changed");
+        return NscStatus::InternalError as u32;
+    }
     let (cr, cr_verdict) = confirm_checked(pages.as_slice());
     match cr {
         ConfirmResult::Confirmed => {}
@@ -1717,6 +1782,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     if cr_verdict != crate::fi::OK_SENTINEL {
         super::zeroize_sensitive_state();
         return NscStatus::UserRejected as u32;
+    }
+    if deployment_confirm_receipt
+        .record_confirmed(&deployment_context)
+        .is_err()
+    {
+        super::zeroize_sensitive_state();
+        return NscStatus::InternalError as u32;
     }
 
     // ── 9. Reconstruct entropy + derive slot master ────────────────
@@ -1971,6 +2043,19 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     slot_owner_bytes[..32].copy_from_slice(&slot_pk_seed_32);
     slot_owner_bytes[32..].copy_from_slice(&slot_pk_root_32);
 
+    // First spatially separate authority check: no bootstrap-key factory
+    // signature may start unless the exact deployment context crossed the
+    // affirmative trusted-display branch above.
+    crate::fi::scrub_sentinel_register();
+    if deployment_confirm_receipt.completion_proof(&deployment_context)
+        != crate::fi::OK_SENTINEL
+    {
+        entropy.zeroize();
+        crate::fi::zeroize_barrier();
+        ui::show_status("Sign refused", "deploy consent");
+        return NscStatus::InternalError as u32;
+    }
+
     // ── 13. Build Type 1 (optional) + initCode (optional) ──────────
     //
     // We need the bootstrap C10 key in three cases:
@@ -2201,6 +2286,29 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     } else {
         SHA256_EMPTY
     };
+    // Second authority check, now coupled to the concrete post-confirm output:
+    // the Type-2 digest must consume SHA-256 of the exact emitted initCode and
+    // that blob must carry the factory shown to the user. Disabled mode proves
+    // the opposite: no emitted blob and the canonical empty digest.
+    crate::fi::scrub_sentinel_register();
+    let deployment_receipt_verdict =
+        deployment_confirm_receipt.completion_proof(&deployment_context);
+    crate::fi::scrub_sentinel_register();
+    let deployment_output_verdict = crate::tx::display::deployment_output_binding_proof(
+        &deployment_context,
+        emit_init_code,
+        init_code_out.as_slice(),
+        &t2_init_code_digest,
+        &SHA256_EMPTY,
+    );
+    if deployment_receipt_verdict != crate::fi::OK_SENTINEL
+        || deployment_output_verdict != crate::fi::OK_SENTINEL
+    {
+        entropy.zeroize();
+        crate::fi::zeroize_barrier();
+        ui::show_status("Sign refused", "deploy binding");
+        return NscStatus::InternalError as u32;
+    }
     // The on-wire `paymaster_and_data_hash` is now the SHA-256 of the
     // paymasterAndData bytes (companion sends SHA256_EMPTY when absent).
     // Staying all-sha256 means zero keccak on the sign path.

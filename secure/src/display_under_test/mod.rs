@@ -84,6 +84,12 @@ pub mod blind_sign;
 #[path = "../tx/display/eip1271.rs"]
 pub mod eip1271;
 
+// UserOperation deployment/initCode consent page and receipt. Mount the real
+// production source so its exact-page and fail-initialized receipt tests run
+// in the host test binary.
+#[path = "../tx/display/deployment.rs"]
+pub mod deployment;
+
 // Counter-sync is a trusted-display authorization surface: mount the real
 // renderer so its current/target pixel-binding tests execute on the host.
 #[path = "../tx/display/offchain_sync.rs"]

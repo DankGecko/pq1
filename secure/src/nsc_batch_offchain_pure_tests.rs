@@ -1091,46 +1091,61 @@ fn offchain_fingerprints_have_caller_cfi_completion_and_final_boundary_proofs() 
         CMD_SIGN_OFFCHAIN_SRC
             .matches("append_fingerprint_page(")
             .count(),
-        2,
-        "typed-data and personal/raw32 confirmations each need the authoritative append"
+        3,
+        "typed-data, personal/raw32 input, and RAW32 signed hash need authoritative appends"
     );
     assert_eq!(
         CMD_SIGN_OFFCHAIN_SRC
             .matches("fingerprint_page_proof(")
             .count(),
-        2
+        3
     );
     assert_eq!(
         CMD_SIGN_OFFCHAIN_SRC
             .matches("fingerprint_final_set_proof(")
             .count(),
-        2
+        3
     );
 
-    let mut cursor = 0usize;
-    for context in ["typed-data", "personal/raw32"] {
-        let append = cursor
-            + CMD_SIGN_OFFCHAIN_SRC[cursor..]
-                .find("append_fingerprint_page(")
-                .unwrap_or_else(|| panic!("missing {context} fingerprint append"));
-        let completion = append
-            + CMD_SIGN_OFFCHAIN_SRC[append..]
-                .find("fingerprint_page_proof(")
-                .unwrap_or_else(|| panic!("missing {context} completion proof"));
-        let final_set = completion
-            + CMD_SIGN_OFFCHAIN_SRC[completion..]
-                .find("fingerprint_final_set_proof(")
-                .unwrap_or_else(|| panic!("missing {context} final-set proof"));
-        let confirm = final_set
-            + CMD_SIGN_OFFCHAIN_SRC[final_set..]
-                .find("confirm_checked(pages.as_slice())")
-                .unwrap_or_else(|| panic!("missing {context} confirm"));
-        let guarded = &CMD_SIGN_OFFCHAIN_SRC[append..confirm];
-        assert!(guarded.contains("FINGERPRINT_CFI_EXPECTED"));
-        assert!(guarded.contains("fingerprint_pages_before"));
-        assert!(append < completion && completion < final_set && final_set < confirm);
-        cursor = confirm + "confirm_checked(pages.as_slice())".len();
-    }
+    let typed_start = CMD_SIGN_OFFCHAIN_SRC
+        .find("let render_result = if is_v3")
+        .expect("typed render section");
+    let ordinary_start = CMD_SIGN_OFFCHAIN_SRC
+        .find("if kind == OFFCHAIN_KIND_RAW32 || kind == OFFCHAIN_KIND_PERSONAL_SIGN")
+        .expect("personal/raw32 render section");
+    let typed = &CMD_SIGN_OFFCHAIN_SRC[typed_start..ordinary_start];
+    let typed_append = typed.find("append_fingerprint_page(").unwrap();
+    let typed_completion = typed.find("fingerprint_page_proof(").unwrap();
+    let typed_final = typed.find("fingerprint_final_set_proof(").unwrap();
+    let typed_confirm = typed.find("confirm_checked(pages.as_slice())").unwrap();
+    assert!(typed_append < typed_completion && typed_completion < typed_final);
+    assert!(typed_final < typed_confirm);
+    assert!(typed[typed_append..typed_confirm].contains("FINGERPRINT_CFI_EXPECTED"));
+
+    let ordinary = &CMD_SIGN_OFFCHAIN_SRC[ordinary_start..];
+    let primary_append = ordinary.find("append_fingerprint_page(").unwrap();
+    let primary_completion = ordinary.find("fingerprint_page_proof(").unwrap();
+    let nested_append = primary_append
+        + 1
+        + ordinary[primary_append + 1..]
+            .find("append_fingerprint_page(")
+            .unwrap();
+    let nested_completion = primary_completion
+        + 1
+        + ordinary[primary_completion + 1..]
+            .find("fingerprint_page_proof(")
+            .unwrap();
+    let primary_final = ordinary.find("fingerprint_final_set_proof(").unwrap();
+    let nested_final = primary_final
+        + 1
+        + ordinary[primary_final + 1..]
+            .find("fingerprint_final_set_proof(")
+            .unwrap();
+    let ordinary_confirm = ordinary.find("confirm_checked(pages.as_slice())").unwrap();
+    assert!(primary_append < primary_completion && primary_completion < nested_append);
+    assert!(nested_append < nested_completion && nested_completion < primary_final);
+    assert!(primary_final < nested_final && nested_final < ordinary_confirm);
+    assert!(ordinary[primary_append..ordinary_confirm].contains("FINGERPRINT_CFI_EXPECTED"));
 }
 
 #[test]
@@ -1160,13 +1175,13 @@ fn typed_offchain_context_and_common_confirmation_receipt_gate_every_kind() {
         .find("offchain_confirm_receipt.fail_initialize()")
         .expect("fail-initialized off-chain authority receipt");
     let context_append = CMD_SIGN_OFFCHAIN_SRC
-        .find("append_eip1271_typed_context_pages(")
+        .find("append_eip1271_context_pages(")
         .expect("typed handler-owned context append");
     let context_insert_proof = CMD_SIGN_OFFCHAIN_SRC
-        .find("eip1271_typed_context_page_proof(")
+        .find("eip1271_context_page_proof(")
         .expect("typed context insertion proof");
     let context_final_proof = CMD_SIGN_OFFCHAIN_SRC
-        .find("eip1271_typed_context_final_set_proof(")
+        .find("eip1271_context_final_set_proof(")
         .expect("typed context final-set proof");
     let typed_confirm = context_final_proof
         + CMD_SIGN_OFFCHAIN_SRC[context_final_proof..]
@@ -1243,10 +1258,78 @@ fn typed_offchain_context_and_common_confirmation_receipt_gate_every_kind() {
     }
     assert!(EIP1271_DISPLAY_SRC.contains("PQSigner/offchain-confirm/v1"));
     assert!(EIP1271_DISPLAY_SRC.contains("DEPLOYED EIP1271"));
-    assert!(EIP1271_DISPLAY_SRC.contains("UNDEPLOYED 6492"));
+    assert!(EIP1271_DISPLAY_SRC.contains("ERC-6492 WRAPPED"));
     assert!(EIP1271_DISPLAY_SRC.contains("L cancel/R sign"));
     assert!(EIP1271_DISPLAY_SRC.contains("write_addr_full"));
     assert!(EIP1271_DISPLAY_SRC.contains("occurrences != 1"));
+}
+
+#[test]
+fn raw32_confirmation_shows_input_signed_hash_wallet_and_exact_response_mode() {
+    let ordinary_start = CMD_SIGN_OFFCHAIN_SRC
+        .find("if kind == OFFCHAIN_KIND_RAW32 || kind == OFFCHAIN_KIND_PERSONAL_SIGN")
+        .expect("personal/raw32 confirmation section");
+    let ordinary_end = ordinary_start
+        + CMD_SIGN_OFFCHAIN_SRC[ordinary_start..]
+            .find("// ── 10. Slot C10 keygen")
+            .expect("end of personal/raw32 confirmation section");
+    let section = &CMD_SIGN_OFFCHAIN_SRC[ordinary_start..ordinary_end];
+
+    let context = section
+        .find("let confirmed_context = crate::tx::display::OffchainConfirmContext::new(")
+        .expect("exact confirmation context");
+    let preflight = section
+        .find("let required_suffix_pages = if kind == OFFCHAIN_KIND_RAW32")
+        .expect("atomic complete RAW32 suffix preflight");
+    let primary_append = section.find("append_fingerprint_page(").unwrap();
+    let replay_kind = section
+        .find("Kind::ReplaySafeHash(hash_to_sign)")
+        .expect("exact nested hash fingerprint");
+    let replay_append = replay_kind
+        + section[replay_kind..]
+            .find("append_fingerprint_page(")
+            .unwrap();
+    let replay_proof = replay_append
+        + section[replay_append..]
+            .find("fingerprint_page_proof(")
+            .unwrap();
+    let context_append = section
+        .find("append_eip1271_context_pages(")
+        .expect("RAW32 signer/mode context append");
+    let context_proof = section
+        .find("eip1271_context_page_proof(")
+        .expect("RAW32 context completion proof");
+    let primary_final = section.find("fingerprint_final_set_proof(").unwrap();
+    let replay_final = primary_final
+        + 1
+        + section[primary_final + 1..]
+            .find("fingerprint_final_set_proof(")
+            .unwrap();
+    let context_final = section
+        .find("eip1271_context_final_set_proof(")
+        .expect("RAW32 final context proof");
+    let confirm = section
+        .find("confirm_checked(pages.as_slice())")
+        .expect("trusted confirmation");
+    let receipt = section
+        .find(".record_confirmed(&confirmed_context)")
+        .expect("authority receipt publication");
+
+    assert!(context < preflight && preflight < primary_append);
+    assert!(primary_append < replay_kind && replay_kind < replay_append);
+    assert!(replay_append < replay_proof && replay_proof < context_append);
+    assert!(context_append < context_proof && context_proof < primary_final);
+    assert!(primary_final < replay_final && replay_final < context_final);
+    assert!(context_final < confirm && confirm < receipt);
+
+    assert!(section.contains("Kind::Raw32(raw_h)"));
+    assert!(section.contains("raw_h.copy_from_slice(payload)"));
+    assert!(section.contains("FINGERPRINT_PAGES * 2"));
+    assert!(section.contains("+ crate::tx::display::OFFCHAIN_CONTEXT_PAGES"));
+    assert!(EIP1271_DISPLAY_SRC.contains("Signing wallet"));
+    assert!(EIP1271_DISPLAY_SRC.contains("DEPLOYED EIP1271"));
+    assert!(EIP1271_DISPLAY_SRC.contains("ERC-6492 WRAPPED"));
+    assert!(EIP1271_DISPLAY_SRC.contains("write_addr_full"));
 }
 
 #[test]
@@ -1290,6 +1373,89 @@ fn negative_sign_offchain_revalidates_6492_extent_fi_hardened_before_write() {
     let branch = src.find("if account_deployed {").expect("write-size branch");
     let guard = src.find("bad out 6492").expect("6492 extent guard");
     assert!(guard > branch, "6492 extent re-validation must live inside the write-size branch");
+}
+
+#[test]
+fn negative_sign_offchain_revalidates_full_mode_extent_after_commit_before_release() {
+    let src = CMD_SIGN_OFFCHAIN_SRC;
+    let entry_check = src
+        .find("validate_ns_write_ptr(args.arg1, SIGN_OFFCHAIN_OUTPUT_LEN)")
+        .expect("entry deployed-extent validation");
+    let snapshot = src.find("// ── 3. TOCTOU snapshot").expect("snapshot");
+    let bump = src
+        .find("crate::offchain_state::offchain_count_bump(&slot_flash_key, new_count)")
+        .expect("durable off-chain counter bump");
+    let extent_select = src
+        .find("let response_extent = if account_deployed")
+        .expect("mode-selected complete response extent");
+    let post_commit_scrub = extent_select
+        + src[extent_select..]
+            .find("crate::fi::scrub_sentinel_register();")
+            .expect("post-commit sentinel scrub");
+    let post_commit_check = src
+        .find("let post_commit_output_extent_verdict = crate::fi::check_true_into_sentinel")
+        .expect("post-commit hardened pointer validation");
+    let post_commit_reject = src
+        .find("if post_commit_output_extent_verdict != crate::fi::OK_SENTINEL")
+        .expect("post-commit fail-closed pointer gate");
+    let first_output_write = src
+        .find("core::ptr::write_volatile(out_ptr.add(SIGN_OFFCHAIN_OUTPUT_COUNT_OFF + i)")
+        .expect("first NS output write");
+
+    assert!(entry_check < snapshot, "entry extent must fail before expensive secure work");
+    assert!(bump < extent_select, "release recheck must follow the durable commit");
+    assert!(extent_select < post_commit_scrub && post_commit_scrub < post_commit_check);
+    assert!(post_commit_check < post_commit_reject && post_commit_reject < first_output_write);
+    let selected_extent = &src[extent_select..post_commit_scrub];
+    assert!(selected_extent.contains("SIGN_OFFCHAIN_OUTPUT_LEN"));
+    assert!(selected_extent.contains("SIGN_OFFCHAIN_OUTPUT_LEN_6492"));
+    let hardened_gate = &src[post_commit_scrub..first_output_write];
+    assert_eq!(
+        hardened_gate
+            .matches("crate::fi::scrub_sentinel_register();")
+            .count(),
+        2,
+        "scrub both before producing and before consuming the Hamming-distant verdict"
+    );
+    assert!(hardened_gate.contains("validate_ns_write_ptr(args.arg1"));
+    assert!(hardened_gate.contains("core::hint::black_box(response_extent)"));
+}
+
+#[test]
+fn negative_sign_offchain_retains_scrubbed_branch_local_6492_spatial_belt() {
+    let src = CMD_SIGN_OFFCHAIN_SRC;
+    let first_output_write = src
+        .find("core::ptr::write_volatile(out_ptr.add(SIGN_OFFCHAIN_OUTPUT_COUNT_OFF + i)")
+        .unwrap();
+    let branch = first_output_write
+        + src[first_output_write..]
+            .find("if account_deployed {")
+            .expect("release-size branch");
+    let branch_scrub = branch
+        + src[branch..]
+            .find("crate::fi::scrub_sentinel_register();")
+            .expect("branch-local pre-check scrub");
+    let extent_check = branch
+        + src[branch..]
+            .find("let extent_ok = crate::fi::check_true_into_sentinel")
+            .expect("branch-local 6492 check");
+    let branch_reject = branch
+        + src[branch..]
+            .find("if extent_ok != crate::fi::OK_SENTINEL")
+            .expect("branch-local fail-closed gate");
+    let blob_write = branch
+        + src[branch..]
+            .find("for i in 0..EIP6492_BLOB_LEN")
+            .expect("counterfactual blob write");
+    assert!(branch < branch_scrub && branch_scrub < extent_check);
+    assert!(extent_check < branch_reject && branch_reject < blob_write);
+    let belt = &src[branch_scrub..branch_reject];
+    assert_eq!(
+        belt.matches("crate::fi::scrub_sentinel_register();").count(),
+        2,
+        "the branch-local sentinel must be scrubbed immediately before check and compare"
+    );
+    assert!(belt.contains("validate_ns_write_ptr(args.arg1, SIGN_OFFCHAIN_OUTPUT_LEN_6492)"));
 }
 
 #[test]
@@ -2186,6 +2352,22 @@ fn negative_batch_type2_display_uses_incremented_rotation_nonce() {
     assert!(CMD_SIGN_USEROP_BATCH_SRC[derive..display]
         .contains("add_one_to_be_u256(&mut type2_nonce)"));
     assert!(CMD_SIGN_USEROP_BATCH_SRC[display..].contains("type2_nonce[24]"));
+    let display_fields_start = CMD_SIGN_USEROP_BATCH_SRC
+        .find("userop_fields: Some(UserOpDisplayFields {")
+        .expect("per-member UserOp display fields");
+    let display_fields_end = display_fields_start
+        + CMD_SIGN_USEROP_BATCH_SRC[display_fields_start..]
+            .find("}),")
+            .expect("end of per-member UserOp display fields");
+    let display_fields = &CMD_SIGN_USEROP_BATCH_SRC[display_fields_start..display_fields_end];
+    assert!(
+        display_fields.contains("nonce: U256(type2_nonce)"),
+        "the per-member display must show the exact Type-2 nonce"
+    );
+    assert!(
+        !display_fields.contains("nonce: U256(nonce)"),
+        "the base Type-1 nonce must not leak into the Type-2 display"
+    );
     let compact = CMD_SIGN_USEROP_BATCH_SRC.split_whitespace().collect::<String>();
     assert!(compact.contains("&mutrotate_pages,&nonce,&mutnonce_lane_cfi"));
 }
@@ -2780,6 +2962,96 @@ fn batch_payload_fingerprints_complete_and_recheck_before_both_confirms() {
             .contains("append_fingerprint_page("),
         "firmware-built batch rotation must retain the explicit exemption"
     );
+}
+
+#[test]
+fn batch_deployment_consent_gates_factory_and_type2_authority_in_source_order() {
+    let context = CMD_SIGN_USEROP_BATCH_SRC
+        .find("let deployment_context =")
+        .expect("deployment context");
+    let fail_initialize = context
+        + CMD_SIGN_USEROP_BATCH_SRC[context..]
+            .find("deployment_confirm_receipt.fail_initialize()")
+            .expect("fail-initialized deployment receipt");
+    let page_append = fail_initialize
+        + CMD_SIGN_USEROP_BATCH_SRC[fail_initialize..]
+            .find("enforce_deployment_page(")
+            .expect("deployment page append");
+    let page_proof = page_append
+        + CMD_SIGN_USEROP_BATCH_SRC[page_append..]
+            .find("deployment_page_proof(")
+            .expect("deployment page proof");
+    let final_proof = page_proof
+        + CMD_SIGN_USEROP_BATCH_SRC[page_proof..]
+            .find("deployment_final_set_proof(")
+            .expect("deployment final-set proof");
+    let final_confirm = final_proof
+        + CMD_SIGN_USEROP_BATCH_SRC[final_proof..]
+            .find("confirm_checked(final_pages.as_slice())")
+            .expect("batch-final confirmation");
+    let affirmative_gate = final_confirm
+        + CMD_SIGN_USEROP_BATCH_SRC[final_confirm..]
+            .find("if cr_verdict != crate::fi::OK_SENTINEL")
+            .expect("affirmative confirmation sentinel gate");
+    let record_confirmed = affirmative_gate
+        + CMD_SIGN_USEROP_BATCH_SRC[affirmative_gate..]
+            .find(".record_confirmed(&deployment_context)")
+            .expect("deployment confirmation receipt record");
+    let first_completion = record_confirmed
+        + CMD_SIGN_USEROP_BATCH_SRC[record_confirmed..]
+            .find("deployment_confirm_receipt.completion_proof(&deployment_context)")
+            .expect("pre-factory deployment receipt proof");
+    let deploy_branch = first_completion
+        + CMD_SIGN_USEROP_BATCH_SRC[first_completion..]
+            .find("if include_init_code {")
+            .expect("optional deployment branch");
+    let factory_sign = deploy_branch
+        + CMD_SIGN_USEROP_BATCH_SRC[deploy_branch..]
+            .find("let factory_sig = match crate::crypto::c10_sign_verified_with_progress(")
+            .expect("factory signature authority");
+    let second_completion = factory_sign
+        + CMD_SIGN_USEROP_BATCH_SRC[factory_sign..]
+            .find("deployment_confirm_receipt.completion_proof(&deployment_context)")
+            .expect("pre-Type-2 deployment receipt proof");
+    let output_binding = second_completion
+        + CMD_SIGN_USEROP_BATCH_SRC[second_completion..]
+            .find("deployment_output_binding_proof(")
+            .expect("deployment output binding proof");
+    let type2_params = output_binding
+        + CMD_SIGN_USEROP_BATCH_SRC[output_binding..]
+            .find("let t2_params = AaUserOpParamsV06Sha256")
+            .expect("Type-2 parameters");
+    let type2_digest = type2_params
+        + CMD_SIGN_USEROP_BATCH_SRC[type2_params..]
+            .find("let t2_digest = compute_sphincs_digest_v06(")
+            .expect("Type-2 digest");
+    let type2_sign = type2_digest
+        + CMD_SIGN_USEROP_BATCH_SRC[type2_digest..]
+            .find("match crate::crypto::c10_sign_verified_with_progress(")
+            .expect("Type-2 signing authority");
+
+    assert!(context < fail_initialize);
+    assert!(fail_initialize < page_append && page_append < page_proof);
+    assert!(page_proof < final_proof && final_proof < final_confirm);
+    assert!(final_confirm < affirmative_gate && affirmative_gate < record_confirmed);
+    assert!(record_confirmed < first_completion && first_completion < deploy_branch);
+    assert!(deploy_branch < factory_sign && factory_sign < second_completion);
+    assert!(second_completion < output_binding && output_binding < type2_params);
+    assert!(type2_params < type2_digest && type2_digest < type2_sign);
+
+    let binding_call = &CMD_SIGN_USEROP_BATCH_SRC[output_binding..type2_params];
+    for bound_value in [
+        "&deployment_context",
+        "emit_init_code",
+        "init_code_out.as_slice()",
+        "&t2_init_code_digest",
+        "&SHA256_EMPTY",
+    ] {
+        assert!(
+            binding_call.contains(bound_value),
+            "deployment output proof must bind {bound_value}"
+        );
+    }
 }
 
 // ── 8j. NS observability — handlers must not log payload bytes

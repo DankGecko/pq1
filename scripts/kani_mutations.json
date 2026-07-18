@@ -348,10 +348,10 @@
       "crate": "pqsigner-erc7730",
       "harness": "fmt_p0_native_amount_prepublication_decision_concrete",
       "file": "pqsigner-erc7730/src/display/render/formatters.rs",
-      "find": "fn native_amount_prepublication_refuses(value: &U256, decimals: u32) -> bool {\n    !amount_is_exact_at_fraction_digits(value, decimals, INTERPOLATED_AMOUNT_POLICY.fraction_digits)\n}",
-      "replace": "fn native_amount_prepublication_refuses(value: &U256, decimals: u32) -> bool {\n    false && !amount_is_exact_at_fraction_digits(value, decimals, INTERPOLATED_AMOUNT_POLICY.fraction_digits)\n}",
+      "find": "fn scaled_amount_prepublication_refuses(value: &U256, decimals: u32) -> bool {\n    !amount_is_exact_at_fraction_digits(value, decimals, INTERPOLATED_AMOUNT_POLICY.fraction_digits)\n}",
+      "replace": "fn scaled_amount_prepublication_refuses(value: &U256, decimals: u32) -> bool {\n    false && !amount_is_exact_at_fraction_digits(value, decimals, INTERPOLATED_AMOUNT_POLICY.fraction_digits)\n}",
       "expect": "kani_fails",
-      "note": "Disable the shared pure pre-publication native-amount exactness decision used by both amount and authenticated-native tokenAmount sinks. The helper-only concrete harness requires one ETH plus one wei at 18 decimals to refuse while exact/zero and decimals<=the six-digit policy remain allowed, so it MUST redden without entering format_decimal or any page painter. Both caller-level Kani harnesses and host tests remain as zero-publication integration pins. Replaces the two painter-reaching Phase-D mutants after the ordinary-amount mutant produced no Kani verdict within the bounded 900-second closure run."
+      "note": "Disable the shared pure pre-publication scaled-amount exactness decision used by scalar amount/unit/bound tokenAmount and their array sinks. The helper-only concrete harness requires one 18-decimal unit plus one discarded base unit to refuse while exact/zero and decimals<=the six-digit policy remain allowed, so it MUST redden without entering format_decimal or any page painter. Caller-level Kani harnesses and host atomic-refusal tests remain as zero-publication integration pins. Replaces the two painter-reaching Phase-D mutants after the ordinary-amount mutant produced no Kani verdict within the bounded 900-second closure run."
     },
     {
       "id": "erc20_canonical_padding",

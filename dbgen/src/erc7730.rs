@@ -5673,6 +5673,17 @@ fn parse_struct_defs(tail: &str) -> Result<BTreeMap<String, Vec<(String, String)
             }
             members.push((last_ident(m).to_string(), strip_one_arg(m)));
         }
+        let member_names: Vec<String> = members
+            .iter()
+            .map(|(member_name, _)| member_name.clone())
+            .collect();
+        if let Some(dup) = first_duplicate_name(&member_names) {
+            return Err(format!(
+                "EIP-712 struct `{name}` has duplicate member name `{dup}`; referenced struct \
+                 members are addressed by name, so the later member could be hidden behind the \
+                 earlier member's trusted clear-sign. Refused."
+            ));
+        }
         if defs.insert(name.to_string(), members).is_some() {
             return Err(format!("duplicate EIP-712 struct def `{name}`"));
         }
@@ -10190,6 +10201,75 @@ mod tests {
         assert!(edo
             .iter()
             .any(|(n, t)| n == "outputs" && t == "DutchOutput[]"));
+    }
+
+    #[test]
+    fn parse_struct_defs_rejects_duplicate_member_names_for_every_member_shape() {
+        let cases = [
+            (
+                "primitive",
+                "Root(Primitive value)Primitive(uint256 amount,uint256 amount)",
+                "Primitive",
+                "amount",
+            ),
+            (
+                "address",
+                "Root(AddressBook book)AddressBook(address recipient,address recipient)",
+                "AddressBook",
+                "recipient",
+            ),
+            (
+                "array",
+                "Root(Batch batch)Batch(uint256[] values,uint256[] values)",
+                "Batch",
+                "values",
+            ),
+            (
+                "transitively referenced nested struct",
+                "Root(Outer outer)Inner(bytes32 salt,bytes32 salt)Outer(Inner leg)",
+                "Inner",
+                "salt",
+            ),
+        ];
+
+        for (shape, encode_type, struct_name, member_name) in cases {
+            let err = parse_format_key(encode_type)
+                .err()
+                .unwrap_or_else(|| panic!("duplicate {shape} member must be refused"));
+            assert!(
+                err.contains(&format!("struct `{struct_name}`")),
+                "{shape} error must name its struct: {err}"
+            );
+            assert!(
+                err.contains(&format!("member name `{member_name}`")),
+                "{shape} error must name its duplicate member: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_struct_defs_accepts_distinct_nested_and_array_members() {
+        let parsed = parse_format_key(
+            "Root(Outer outer)Inner(address recipient,uint256 amount)\
+             Outer(Inner first,Inner second,Inner[] many)",
+        )
+        .expect("distinct referenced-struct member names must remain accepted");
+
+        assert_eq!(
+            parsed.struct_defs["Inner"],
+            [
+                ("recipient".to_string(), "address".to_string()),
+                ("amount".to_string(), "uint256".to_string()),
+            ]
+        );
+        assert_eq!(
+            parsed.struct_defs["Outer"],
+            [
+                ("first".to_string(), "Inner".to_string()),
+                ("second".to_string(), "Inner".to_string()),
+                ("many".to_string(), "Inner[]".to_string()),
+            ]
+        );
     }
 
     #[test]

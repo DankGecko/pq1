@@ -25,6 +25,22 @@ image. Sequence for the next bench session:
 3. Flip `PROD_SHIP_FEATURES` to include `bhk`; `make se050-scp03-axis-parity`
    then goes green, closing F7.
 
+## 🧾 ERC-7730 deferred full playbook lock-in (future owner-triggered session)
+
+- [ ] **Run one combined ERC-7730 assurance pass on the exact landed commit
+  before any production/ship claim, or before starting the separate voluntary
+  blind-signing authority phase.** Use
+  [`clear-signing-adversarial-review.md`](security/adversarial-review/clear-signing-adversarial-review.md)
+  as the primary playbook and apply the intersecting trusted-UI, USB/companion,
+  off-chain-signing, TrustZone-gateway, SCA/FI, secure-runtime/resource,
+  production-configuration/prodtest, build/release/provenance, and FV playbooks
+  as additive lenses in that **one** campaign. Re-run only the commands those
+  playbooks require for the exact target and record hardware/production gaps
+  honestly. This is deferred assurance requested by the owner, not a blocker
+  for the current fast merge review unless it produces a concrete unsafe trace.
+  On session restart, leave this item deferred until the owner explicitly makes
+  it the active surface; playbook intersection alone does not activate it.
+
 ## 🔎 Adversarial sweep 2026-07-14 — deferred residuals
 
 From `docs/security/adversarial-review/findings/full-project-sweep-2026-07-14.md`

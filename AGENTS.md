@@ -13,10 +13,15 @@ Before non-trivial work:
    for planning, scope changes, convergence, and adversarial review.
 4. For security-sensitive work, use the existing playbook index at
    [`docs/security/adversarial-review/README.md`](docs/security/adversarial-review/README.md)
-   and cover every existing playbook whose surface intersects the task under
-   the workflow's combined-review rules. Do not substitute one matching
-   playbook for another additive lens; record a coverage gap if a required lens
-   has no playbook. Unrelated playbooks need not be run.
+   to identify stricter mandatory gates and the later assurance surface. Do not
+   turn intersecting playbooks into separate merge-review campaigns or paste
+   their catalogs into reviewer prompts. Unless a task-specific gate requires
+   the full playbook now, add one combined owner-triggered playbook pass to the
+   TODO before landing and leave it for a future owner-triggered session. New
+   sessions must not promote that deferred sweep into the active phase merely
+   because its playbooks intersect the code. Concrete unsafe traces and required
+   commands cannot be deferred by relabelling them. Unrelated playbooks need not
+   run.
 
 ## Focus and review-cadence routing
 
@@ -28,9 +33,8 @@ active product work unless it is a concrete blocker for that work.
 
 The workflow linked above solely owns phase-boundary review batching, batch
 bounds, per-slice evidence, and early-stop triggers. Follow those rules rather
-than initiating a full adversarial pair by habit after every slice. Do not start
-a second product surface before the active phase reaches its recorded stopping
-point.
+than initiating adversarial review after every slice. Do not start a second
+product surface before the active phase reaches its recorded stopping point.
 
 Once Phase D starts, enter the workflow's **closure mode**. Treat its recorded
 completion checklist as closed: run the stage-relevant mandatory gates, freeze,
@@ -41,13 +45,19 @@ task-specific owner gate required it before the freeze, or a concrete workflow
 expansion trigger makes it a blocker. If closure stalls, report the exact
 blockers and shortest compliant path before starting more work.
 
-Multiple intersecting playbooks do not by themselves create multiple review
-campaigns or phase boundaries. Use them as mandatory coverage floors within the
-single review of the active surface. Reviewers must still derive threats from
-the source and invariants independently, seek failures outside the catalogs,
-and treat playbook status claims as hypotheses rather than accepted facts.
-Non-blocking observations are banked through the workflow; they do not keep the
-active phase open merely because they are security-adjacent.
+Phase D uses one short, simultaneous three-reviewer wave under the workflow's
+hard wall-clock and output bounds. The reviewers are GPT-5.6 SOL, Claude Opus
+4.8, and Kimi K3. Give all three the same small, clear-context prompt. Do not
+build a packet dossier, run pairwise/cross-adjudication, or add reviewers. A
+missing mandatory answer remains an honest gap, not permission to keep browsing
+indefinitely.
+
+Multiple intersecting playbooks do not create more reviewer prompts, campaigns,
+or phase boundaries. Reviewers derive threats from the source and invariants in
+fresh contexts; catalogs and prior verdicts are not initial prompt material.
+The coordinator reconciles the three compact reports against task-specific
+gates, reproduces concrete blocker claims locally, and banks non-blocking
+observations. Disagreement does not launch another model round.
 
 ## Security-review surface routing
 
@@ -60,22 +70,20 @@ verification playbooks:
 - [production configuration, prodtest, and assurance fidelity](docs/security/adversarial-review/production-configuration-prodtest-adversarial-review.md)
 - [build, release, provenance, signing-key custody, and distribution](docs/security/adversarial-review/build-release-provenance-adversarial-review.md)
 
-These lenses are additive to every intersecting subsystem playbook. Return
-review evidence under the indexed findings workflow; a source-only pass must
-retain the playbook's honest residual and must not imply hardware, merge,
-shipment, or irreversible-action authority.
+These lenses are additive when the combined playbook pass runs. A fast
+source-only merge review records that deferred assurance honestly and must not
+imply hardware, shipment, or irreversible-action authority.
 
 Task-specific normative specifications, authorization boundaries, and explicit
 owner decisions take precedence over the generic workflow and may require
 additional reviewers or evidence.
 
 The workflow is the sole owner of the project's YAGNI/exploration balance,
-scope-expansion triggers, evidence ladder, exact dual-review runtime
-configurations (model/context, orchestration profile, and reasoning effort),
-cross-adjudication procedure, review-batching rules, convergence rules, and
-irreversible-action planning gates. Do not restate or weaken those rules here.
-Before starting a security-sensitive implementation or review, identify and
-follow the applicable workflow stage and any stricter task-specific gate.
+scope-expansion triggers, evidence ladder, three-reviewer runtime configuration,
+review-batching and convergence rules, and irreversible-action planning gates.
+Do not restate or weaken those rules here. Before starting a security-sensitive
+implementation or review, identify and follow the applicable workflow stage and
+any stricter task-specific gate.
 
 If this file conflicts with a more specific owner document, stop and surface
 the conflict rather than choosing silently.

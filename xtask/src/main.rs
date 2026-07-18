@@ -1040,12 +1040,18 @@ fn render_erc7730_semantic_contract() -> String {
         FINGERPRINT_PAGES, HASH_BYTES, HASH_BYTES_PER_ROW,
     };
     use pqsigner_erc7730::display::render::formatters::formatter_route;
-    use pqsigner_erc7730::ir::FormatOp;
+    use pqsigner_erc7730::ir::{FormatOp, SCHEMA_VER};
     use pqsigner_erc7730::render::{RenderErr, VerifiedDescriptorErrorPolicy};
 
     let mut out = String::with_capacity(2 * 1024);
     let _ = writeln!(out, "{ERC7730_GUIDE_SEMANTICS_BEGIN}");
     let _ = writeln!(out, "### Device semantic manifest (generated)");
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "- The host compiler and device require **IR schema v{} (`0x{SCHEMA_VER:02X}`)**; this value is generated from `pqsigner_erc7730::ir::SCHEMA_VER`, and older schemas hard-refuse.",
+        u16::from(SCHEMA_VER),
+    );
     let _ = writeln!(out);
     let _ = writeln!(out, "| Wire opcode | Registry `format` | Device route |");
     let _ = writeln!(out, "|------------:|-------------------|--------------|");
@@ -1078,7 +1084,7 @@ fn render_erc7730_semantic_contract() -> String {
     );
     let _ = writeln!(
         out,
-        "- Confirmation transcripts use the pinned append-only order. A single UserOp shows renderer pages first; the dispatcher may append native-value/legacy-fee pages, then the handler appends paymaster (when present), signer, target, non-zero nonce lane, exact UserOp gas and ERC-8213 fingerprint pages. A batch member prepends its exact `BATCH SIGN / Tx i of N` banner to the renderer/dispatcher pages, then appends signer, target, nonce lane, gas and fingerprint pages. The batch-final summary appends paymaster, signer, nonce lane, gas and the whole-batch fingerprint. A full buffer refuses; no mandatory page is inserted by shifting or overwriting an earlier page."
+        "- Confirmation transcripts use the pinned append-only order. A single UserOp shows renderer pages first; the dispatcher may append native-value/legacy-fee pages, then the handler appends paymaster (when present), signer, target, non-zero nonce lane, exact UserOp gas and ERC-8213 fingerprint pages. When `FLAG_INCLUDE_INIT_CODE` is set, one final `DEPLOY FACTORY:` page shows the complete factory address; the ordinary path proves that page was skipped. A batch member prepends its exact `BATCH SIGN / Tx i of N` banner to the renderer/dispatcher pages, then appends signer, target, nonce lane, gas and fingerprint pages. The batch-final summary appends paymaster, signer, nonce lane, gas, the whole-batch fingerprint, and the same conditional deployment page. A full buffer refuses; no mandatory page is inserted by shifting or overwriting an earlier page."
     );
     out.push_str(ERC7730_GUIDE_SEMANTICS_END);
     out
@@ -1121,6 +1127,8 @@ fn render_erc7730_integration_facts(
     prod_known_calls_bloom: &[u8],
     prod_skip_count: usize,
 ) -> String {
+    use pqsigner_erc7730::ir::SCHEMA_VER;
+
     let bloom_set_bits: usize = prod_known_calls_bloom
         .iter()
         .map(|byte| byte.count_ones() as usize)
@@ -1129,6 +1137,8 @@ fn render_erc7730_integration_facts(
     format!(
         concat!(
             "{}\n",
+            "- The host compiler and device require **IR schema v{} (`0x{:02X}`)**; this value is\n",
+            "  generated from `pqsigner_erc7730::ir::SCHEMA_VER`, and older schemas hard-refuse.\n",
             "- The current regenerated development catalogue has **{} leaves**, root\n",
             "  `{}`,\n",
             "  and **{} exact known-call tuples**. The tuple-set receipt is SHA-256\n",
@@ -1138,6 +1148,8 @@ fn render_erc7730_integration_facts(
             "{}",
         ),
         ERC7730_INTEGRATION_FACTS_BEGIN,
+        u16::from(SCHEMA_VER),
+        SCHEMA_VER,
         grouped_decimal(prod_count, ','),
         hex::encode(prod_root),
         grouped_decimal(prod_known_call_count, ','),
@@ -1645,6 +1657,9 @@ mod tests {
         )
         .expect("fresh semantic contract");
 
+        assert_eq!(pqsigner_erc7730::ir::SCHEMA_VER, 0x04);
+        assert!(semantics.contains("IR schema v4 (`0x04`)"));
+        assert!(!semantics.contains("IR schema v3 (`0x03`)"));
         assert!(semantics.contains(
             "| `0x04` | `nftName` | implemented renderer (fail closed on invalid input) |"
         ));
@@ -1658,6 +1673,8 @@ mod tests {
         assert!(semantics.contains("**every `RenderErr` variant is a hard refusal**"));
         assert!(semantics.contains("exactly 2 pages (banner + hash)"));
         assert!(semantics.contains("complete 32-byte digest at 8 bytes per display row"));
+        assert!(semantics.contains("one final `DEPLOY FACTORY:` page"));
+        assert!(semantics.contains("ordinary path proves that page was skipped"));
     }
 
     #[test]
@@ -1665,6 +1682,7 @@ mod tests {
         let semantics = render_erc7730_semantic_contract();
         let guide = format!("prefix\n{semantics}\nsuffix\n");
         for stale in [
+            guide.replacen("IR schema v4 (`0x04`)", "IR schema v3 (`0x03`)", 1),
             guide.replacen("`0x04` | `nftName`", "`0x09` | `nftName`", 1),
             guide.replacen(
                 "hard refusal (nested calldata unsupported)",
@@ -1678,6 +1696,7 @@ mod tests {
             ),
             guide.replacen("exactly 2 pages", "exactly 1 page", 1),
             guide.replacen("complete 32-byte digest", "truncated 16-byte digest", 1),
+            guide.replacen("one final `DEPLOY FACTORY:` page", "no deployment page", 1),
         ] {
             assert!(
                 exact_document_block_matches(
@@ -1708,6 +1727,9 @@ mod tests {
             &facts,
         )
         .expect("fresh integration facts");
+        assert_eq!(pqsigner_erc7730::ir::SCHEMA_VER, 0x04);
+        assert!(facts.contains("IR schema v4 (`0x04`)"));
+        assert!(!facts.contains("IR schema v3 (`0x03`)"));
         assert!(facts.contains("5 / 128 bits"));
     }
 
@@ -1721,6 +1743,7 @@ mod tests {
         let facts = render_erc7730_integration_facts(&root, 420, 4_542, &tuple_hash, &bloom, 274);
         let doc = format!("prefix\n{facts}\nsuffix\n");
         for stale in [
+            doc.replacen("IR schema v4 (`0x04`)", "IR schema v3 (`0x03`)", 1),
             doc.replacen("420 leaves", "419 leaves", 1),
             doc.replacen(&hex::encode(root), &hex::encode([0x33; 32]), 1),
             doc.replacen("4,542 exact", "4,541 exact", 1),

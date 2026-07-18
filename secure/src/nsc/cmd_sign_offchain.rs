@@ -672,7 +672,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         );
         let context_pages_before = pages.len;
         let mut context_cfi = crate::fi::CfiCounter::new();
-        if crate::tx::display::append_eip1271_typed_context_pages(
+        if crate::tx::display::append_eip1271_context_pages(
             &mut pages,
             &typed_confirm_context,
             &mut context_cfi,
@@ -686,7 +686,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         let context_cfi_verdict =
             context_cfi.check_into_sentinel(crate::tx::display::OFFCHAIN_CONTEXT_CFI_EXPECTED);
         crate::fi::scrub_sentinel_register();
-        let context_page_verdict = crate::tx::display::eip1271_typed_context_page_proof(
+        let context_page_verdict = crate::tx::display::eip1271_context_page_proof(
             &pages,
             context_pages_before,
             &typed_confirm_context,
@@ -750,7 +750,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             return NscStatus::InternalError as u32;
         }
         crate::fi::scrub_sentinel_register();
-        if crate::tx::display::eip1271_typed_context_final_set_proof(
+        if crate::tx::display::eip1271_context_final_set_proof(
             &pages,
             context_pages_before,
             &typed_confirm_context,
@@ -867,6 +867,18 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         if kind == OFFCHAIN_KIND_RAW32 {
             raw_h.copy_from_slice(payload);
         }
+        let confirmed_context = crate::tx::display::OffchainConfirmContext::new(
+            kind,
+            chain_id,
+            account_index,
+            slot_index,
+            wallet_addr,
+            account_deployed,
+            new_count,
+            last_userop,
+            MAX_SLOT_USES,
+            hash_to_sign,
+        );
         let mut pages = match kind {
             OFFCHAIN_KIND_PERSONAL_SIGN => crate::tx::display::render_eip1271_personal_sign_pages(
                 chain_id,
@@ -890,6 +902,24 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 account_deployed,
             ),
         };
+        // RAW32 must show two complete 32-byte values (the supplied H and the
+        // exact replay-safe hash passed to C10) plus the full signer/mode
+        // context. Preflight the complete suffix before mutating `pages`, so a
+        // page-budget refusal cannot leave a partially assembled transcript.
+        let required_suffix_pages = if kind == OFFCHAIN_KIND_RAW32 {
+            pqsigner_erc7730::display::erc8213_contract::FINGERPRINT_PAGES * 2
+                + crate::tx::display::OFFCHAIN_CONTEXT_PAGES
+        } else {
+            pqsigner_erc7730::display::erc8213_contract::FINGERPRINT_PAGES
+        };
+        if pages
+            .len
+            .checked_add(required_suffix_pages)
+            .is_none_or(|len| len > crate::tx::display::MAX_PAGES)
+        {
+            crate::ui::show_status("Sign refused", "context overflow");
+            return NscStatus::InternalError as u32;
+        }
         let fingerprint_kind = match kind {
             OFFCHAIN_KIND_PERSONAL_SIGN => {
                 // PersonalSign signs the message via Solady's nested
@@ -931,6 +961,72 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             crate::ui::show_status("Sign refused", "fp incomplete");
             return NscStatus::InternalError as u32;
         }
+
+        // RAW32 is intentionally blind to semantics, but never blind to the
+        // exact authority being exercised. In addition to the supplied H
+        // above, show the exact Solady replay-safe nested value passed to C10,
+        // then append the full derived wallet and response-mode context.
+        let replay_safe_fingerprint_kind =
+            crate::tx::display::erc8213::Kind::ReplaySafeHash(hash_to_sign);
+        let mut replay_safe_fingerprint_pages_before = usize::MAX;
+        let mut raw32_context_pages_before = usize::MAX;
+        if kind == OFFCHAIN_KIND_RAW32 {
+            replay_safe_fingerprint_pages_before = pages.len;
+            let mut replay_safe_fingerprint_cfi = crate::fi::CfiCounter::new();
+            if crate::tx::display::erc8213::append_fingerprint_page(
+                &mut pages,
+                replay_safe_fingerprint_kind,
+                &mut replay_safe_fingerprint_cfi,
+            )
+            .is_err()
+            {
+                crate::ui::show_status("Sign refused", "signed hash unshown");
+                return NscStatus::InternalError as u32;
+            }
+            crate::fi::scrub_sentinel_register();
+            let replay_safe_cfi_verdict = replay_safe_fingerprint_cfi
+                .check_into_sentinel(crate::tx::display::erc8213::FINGERPRINT_CFI_EXPECTED);
+            crate::fi::scrub_sentinel_register();
+            let replay_safe_page_verdict = crate::tx::display::erc8213::fingerprint_page_proof(
+                &pages,
+                replay_safe_fingerprint_pages_before,
+                replay_safe_fingerprint_kind,
+            );
+            if replay_safe_cfi_verdict != crate::fi::OK_SENTINEL
+                || replay_safe_page_verdict != crate::fi::OK_SENTINEL
+            {
+                crate::ui::show_status("Sign refused", "signed hash incomplete");
+                return NscStatus::InternalError as u32;
+            }
+
+            raw32_context_pages_before = pages.len;
+            let mut raw32_context_cfi = crate::fi::CfiCounter::new();
+            if crate::tx::display::append_eip1271_context_pages(
+                &mut pages,
+                &confirmed_context,
+                &mut raw32_context_cfi,
+            )
+            .is_err()
+            {
+                crate::ui::show_status("Sign refused", "context unshown");
+                return NscStatus::InternalError as u32;
+            }
+            crate::fi::scrub_sentinel_register();
+            let raw32_context_cfi_verdict = raw32_context_cfi
+                .check_into_sentinel(crate::tx::display::OFFCHAIN_CONTEXT_CFI_EXPECTED);
+            crate::fi::scrub_sentinel_register();
+            let raw32_context_page_verdict = crate::tx::display::eip1271_context_page_proof(
+                &pages,
+                raw32_context_pages_before,
+                &confirmed_context,
+            );
+            if raw32_context_cfi_verdict != crate::fi::OK_SENTINEL
+                || raw32_context_page_verdict != crate::fi::OK_SENTINEL
+            {
+                crate::ui::show_status("Sign refused", "context incomplete");
+                return NscStatus::InternalError as u32;
+            }
+        }
         crate::fi::scrub_sentinel_register();
         if crate::tx::display::erc8213::fingerprint_final_set_proof(
             &pages,
@@ -940,6 +1036,28 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         {
             crate::ui::show_status("Sign refused", "fp changed");
             return NscStatus::InternalError as u32;
+        }
+        if kind == OFFCHAIN_KIND_RAW32 {
+            crate::fi::scrub_sentinel_register();
+            if crate::tx::display::erc8213::fingerprint_final_set_proof(
+                &pages,
+                replay_safe_fingerprint_pages_before,
+                replay_safe_fingerprint_kind,
+            ) != crate::fi::OK_SENTINEL
+            {
+                crate::ui::show_status("Sign refused", "signed hash changed");
+                return NscStatus::InternalError as u32;
+            }
+            crate::fi::scrub_sentinel_register();
+            if crate::tx::display::eip1271_context_final_set_proof(
+                &pages,
+                raw32_context_pages_before,
+                &confirmed_context,
+            ) != crate::fi::OK_SENTINEL
+            {
+                crate::ui::show_status("Sign refused", "context changed");
+                return NscStatus::InternalError as u32;
+            }
         }
         let (cr, cr_verdict) = confirm_checked(pages.as_slice());
         match cr {
@@ -958,18 +1076,6 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             super::zeroize_sensitive_state();
             return NscStatus::UserRejected as u32;
         }
-        let confirmed_context = crate::tx::display::OffchainConfirmContext::new(
-            kind,
-            chain_id,
-            account_index,
-            slot_index,
-            wallet_addr,
-            account_deployed,
-            new_count,
-            last_userop,
-            MAX_SLOT_USES,
-            hash_to_sign,
-        );
         if offchain_confirm_receipt
             .record_confirmed(&confirmed_context)
             .is_err()
@@ -1136,7 +1242,28 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // Two wire modes:
     //   * deployed: `[count(8)] [c10_sig(4008)]`              = 4016 B
     //   * 6492:     `[count(8)] [eip6492 blob(8608)]`         = 8616 B
+    // PBR-01: the entry checks above cannot authorize a release after the
+    // durable page-123 commit. Revalidate the mode-selected *complete* output
+    // extent at the last common boundary before the first NS write. A pointer
+    // that became invalid during key generation/signing therefore consumes a
+    // counter but cannot corrupt secure memory; the operation fails closed.
+    // The counterfactual branch retains its own spatial 8616-byte belt below,
+    // because a fault can still flip the mode selector after this common gate.
     let count_be = new_count.to_be_bytes();
+    let response_extent = if account_deployed {
+        SIGN_OFFCHAIN_OUTPUT_LEN
+    } else {
+        SIGN_OFFCHAIN_OUTPUT_LEN_6492
+    };
+    crate::fi::scrub_sentinel_register();
+    let post_commit_output_extent_verdict = crate::fi::check_true_into_sentinel(|| {
+        validate_ns_write_ptr(args.arg1, core::hint::black_box(response_extent))
+    });
+    crate::fi::scrub_sentinel_register();
+    if post_commit_output_extent_verdict != crate::fi::OK_SENTINEL {
+        crate::ui::show_status("EIP-1271", "bad out release");
+        return NscStatus::InvalidPointer as u32;
+    }
     for i in 0..8 {
         core::ptr::write_volatile(out_ptr.add(SIGN_OFFCHAIN_OUTPUT_COUNT_OFF + i), count_be[i]);
     }
@@ -1160,9 +1287,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // sentinel (same pattern as F-8 in `nsc::ns_ptr`), so reaching the
         // larger write *requires* a passing larger validation in the same
         // branch: two coordinated faults are needed instead of one.
+        crate::fi::scrub_sentinel_register();
         let extent_ok = crate::fi::check_true_into_sentinel(|| {
             validate_ns_write_ptr(args.arg1, SIGN_OFFCHAIN_OUTPUT_LEN_6492)
         });
+        crate::fi::scrub_sentinel_register();
         if extent_ok != crate::fi::OK_SENTINEL {
             crate::ui::show_status("EIP-1271", "bad out 6492");
             return NscStatus::InvalidPointer as u32;

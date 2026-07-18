@@ -24,10 +24,12 @@ use sha2::{Digest, Sha256};
 
 type ContextPage = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 
-/// Handler-owned suffix appended to structured EIP-712/ERC-7730 requests.
+/// Handler-owned suffix appended to any off-chain request whose base renderer
+/// does not already prove this complete signing context. Structured
+/// EIP-712/ERC-7730 and explicit RAW32 both use it.
 /// Three pages are sufficient to show the complete signing identity, response
 /// mode, and post-sign few-time budget without increasing `MAX_PAGES`.
-pub(crate) const TYPED_OFFCHAIN_CONTEXT_PAGES: usize = 3;
+pub(crate) const OFFCHAIN_CONTEXT_PAGES: usize = 3;
 
 const OFFCHAIN_CONTEXT_CFI_STEP: u32 = 0x1271_C7A1;
 pub(crate) const OFFCHAIN_CONTEXT_CFI_EXPECTED: u32 =
@@ -186,19 +188,19 @@ impl OffchainConfirmReceipt {
     }
 }
 
-/// Append the complete handler-owned context for typed off-chain requests.
+/// Append the complete handler-owned context for an off-chain request.
 /// The operation is atomic with respect to the page budget and publishes a
 /// caller-owned CFI step only after all three exact pages are present.
 #[inline(never)]
-pub(crate) fn append_eip1271_typed_context_pages(
+pub(crate) fn append_eip1271_context_pages(
     pages: &mut Pages,
     context: &OffchainConfirmContext,
     cfi: &mut crate::fi::CfiCounter,
 ) -> Result<(), ()> {
-    let expected = build_typed_context_pages(context);
+    let expected = build_context_pages(context);
     if pages
         .len
-        .checked_add(TYPED_OFFCHAIN_CONTEXT_PAGES)
+        .checked_add(OFFCHAIN_CONTEXT_PAGES)
         .is_none_or(|len| len > super::MAX_PAGES)
     {
         return Err(());
@@ -214,31 +216,31 @@ pub(crate) fn append_eip1271_typed_context_pages(
 
 /// Exact insertion and uniqueness proof immediately after append.
 #[inline(never)]
-pub(crate) fn eip1271_typed_context_page_proof(
+pub(crate) fn eip1271_context_page_proof(
     pages: &Pages,
     prior_len: usize,
     context: &OffchainConfirmContext,
 ) -> u32 {
-    crate::fi::check_true_into_sentinel(|| typed_context_matches(pages, prior_len, context, true))
+    crate::fi::check_true_into_sentinel(|| context_matches(pages, prior_len, context, true))
 }
 
 /// Independent final-set proof run after every other handler-owned suffix and
 /// immediately before the trusted confirmation boundary.
 #[inline(never)]
-pub(crate) fn eip1271_typed_context_final_set_proof(
+pub(crate) fn eip1271_context_final_set_proof(
     pages: &Pages,
     expected_index: usize,
     context: &OffchainConfirmContext,
 ) -> u32 {
     crate::fi::check_true_into_sentinel(|| {
-        typed_context_matches(pages, expected_index, context, true)
+        context_matches(pages, expected_index, context, true)
     })
 }
 
-fn build_typed_context_pages(
+fn build_context_pages(
     context: &OffchainConfirmContext,
-) -> [ContextPage; TYPED_OFFCHAIN_CONTEXT_PAGES] {
-    let mut out = [[[b' '; DISPLAY_COLS]; DISPLAY_ROWS]; TYPED_OFFCHAIN_CONTEXT_PAGES];
+) -> [ContextPage; OFFCHAIN_CONTEXT_PAGES] {
+    let mut out = [[[b' '; DISPLAY_COLS]; DISPLAY_ROWS]; OFFCHAIN_CONTEXT_PAGES];
 
     write_line(&mut out[0][0], "Offchain signer");
     write_acct_row(&mut out[0][1], context.account_index);
@@ -254,7 +256,7 @@ fn build_typed_context_pages(
     if context.account_deployed {
         write_line(&mut out[2][0], "DEPLOYED EIP1271");
     } else {
-        write_line(&mut out[2][0], "UNDEPLOYED 6492");
+        write_line(&mut out[2][0], "ERC-6492 WRAPPED");
     }
     write_used_budget_row(&mut out[2][1], context.local_offchain_after, context.cap);
     write_gap_row(
@@ -276,14 +278,14 @@ fn context_page_exact(actual: &ContextPage, expected: &ContextPage) -> bool {
     diff == 0
 }
 
-fn typed_context_matches(
+fn context_matches(
     pages: &Pages,
     expected_index: usize,
     context: &OffchainConfirmContext,
     require_final_len: bool,
 ) -> bool {
-    let expected = build_typed_context_pages(context);
-    let Some(end) = expected_index.checked_add(TYPED_OFFCHAIN_CONTEXT_PAGES) else {
+    let expected = build_context_pages(context);
+    let Some(end) = expected_index.checked_add(OFFCHAIN_CONTEXT_PAGES) else {
         return false;
     };
     if end > pages.len || (require_final_len && end != pages.len) {
@@ -640,14 +642,14 @@ mod tests {
     }
 
     #[test]
-    fn typed_context_suffix_is_complete_exact_and_mode_distinct() {
+    fn offchain_context_suffix_is_complete_exact_and_mode_distinct() {
         let deployed = context(true);
         let mut pages = Pages::with_len(2);
         let prior = pages.len;
         let mut cfi = crate::fi::CfiCounter::new();
-        append_eip1271_typed_context_pages(&mut pages, &deployed, &mut cfi).unwrap();
+        append_eip1271_context_pages(&mut pages, &deployed, &mut cfi).unwrap();
 
-        assert_eq!(pages.len, prior + TYPED_OFFCHAIN_CONTEXT_PAGES);
+        assert_eq!(pages.len, prior + OFFCHAIN_CONTEXT_PAGES);
         assert_eq!(trimmed(&pages.buf[prior][0]), "Offchain signer");
         assert_eq!(trimmed(&pages.buf[prior][1]), "Account: 7");
         assert_eq!(trimmed(&pages.buf[prior][2]), "Slot: 11");
@@ -668,54 +670,54 @@ mod tests {
             crate::fi::OK_SENTINEL
         );
         assert_eq!(
-            eip1271_typed_context_page_proof(&pages, prior, &deployed),
+            eip1271_context_page_proof(&pages, prior, &deployed),
             crate::fi::OK_SENTINEL
         );
         assert_eq!(
-            eip1271_typed_context_final_set_proof(&pages, prior, &deployed),
+            eip1271_context_final_set_proof(&pages, prior, &deployed),
             crate::fi::OK_SENTINEL
         );
 
         let undeployed = context(false);
         assert_ne!(
-            eip1271_typed_context_final_set_proof(&pages, prior, &undeployed),
+            eip1271_context_final_set_proof(&pages, prior, &undeployed),
             crate::fi::OK_SENTINEL
         );
         let mut undeployed_pages = Pages::with_len(0);
         let mut undeployed_cfi = crate::fi::CfiCounter::new();
-        append_eip1271_typed_context_pages(&mut undeployed_pages, &undeployed, &mut undeployed_cfi)
+        append_eip1271_context_pages(&mut undeployed_pages, &undeployed, &mut undeployed_cfi)
             .unwrap();
-        assert_eq!(trimmed(&undeployed_pages.buf[2][0]), "UNDEPLOYED 6492");
+        assert_eq!(trimmed(&undeployed_pages.buf[2][0]), "ERC-6492 WRAPPED");
     }
 
     #[test]
-    fn typed_context_proofs_reject_corruption_duplicate_and_page_overflow() {
+    fn offchain_context_proofs_reject_corruption_duplicate_and_page_overflow() {
         let context = context(true);
         let mut pages = Pages::with_len(1);
         let prior = pages.len;
         let mut cfi = crate::fi::CfiCounter::new();
-        append_eip1271_typed_context_pages(&mut pages, &context, &mut cfi).unwrap();
+        append_eip1271_context_pages(&mut pages, &context, &mut cfi).unwrap();
         pages.buf[prior + 1][2][4] ^= 1;
         assert_ne!(
-            eip1271_typed_context_page_proof(&pages, prior, &context),
+            eip1271_context_page_proof(&pages, prior, &context),
             crate::fi::OK_SENTINEL
         );
 
-        let expected = build_typed_context_pages(&context);
+        let expected = build_context_pages(&context);
         let mut duplicate = Pages::with_len(1);
         duplicate.buf[0] = expected[0];
         let duplicate_prior = duplicate.len;
         let mut duplicate_cfi = crate::fi::CfiCounter::new();
-        append_eip1271_typed_context_pages(&mut duplicate, &context, &mut duplicate_cfi).unwrap();
+        append_eip1271_context_pages(&mut duplicate, &context, &mut duplicate_cfi).unwrap();
         assert_ne!(
-            eip1271_typed_context_page_proof(&duplicate, duplicate_prior, &context),
+            eip1271_context_page_proof(&duplicate, duplicate_prior, &context),
             crate::fi::OK_SENTINEL
         );
 
         let mut full = Pages::with_len(super::super::MAX_PAGES - 2);
         let before = full.len;
         let mut full_cfi = crate::fi::CfiCounter::new();
-        assert!(append_eip1271_typed_context_pages(&mut full, &context, &mut full_cfi).is_err());
+        assert!(append_eip1271_context_pages(&mut full, &context, &mut full_cfi).is_err());
         assert_eq!(full.len, before, "page-budget refusal must be atomic");
     }
 

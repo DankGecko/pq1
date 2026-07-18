@@ -30,8 +30,10 @@ This directory holds **adversarial review playbooks**, one per major non-FV atta
 The [FV adversarial-review playbook](../../verification/fv-adversarial-review-playbook.md) covers the FV surface family — the Lean on-chain proofs + the firmware Kani vacuity — and carries the shared "green ≠ sound" thesis all of these inherit.
 
 Several playbooks are **cross-cutting lenses** rather than single subsystems.
-They are additive: apply every lens intersecting the change rather than choosing
-one as a substitute for the subsystem owner.
+They are additive when an owner-triggered combined playbook sweep is active:
+apply every lens intersecting that sweep rather than choosing one as a
+substitute for the subsystem owner. Mere intersection does not activate a sweep
+or make it a merge blocker; cadence is owned by the planning workflow.
 
 - **[usb + compromised-companion](./usb-companion-adversarial-review.md) — the outer-attacker anchor**: what a fully-hostile host can attempt across *every* flow, each attack mapped to the on-device defense in the playbook that owns it. Start here for the end-to-end remote-attacker view.
 - **[silicon-lockdown hardening-depth](./silicon-lockdown-adversarial-review.md) — the lockdown-depth lens**: whether the irreversible production hardening stack (RDP/WRP/OTP/debug + OPTIGA LcsO + SE050 lockdown + secure-boot) is deep, *enforced* (compile-fence + blocking `prod-check-ship`), correctly *ordered*, and un-bypassable — using an (a) enforced / (b) deferred-by-design / (c) unenforced taxonomy where only (c) is a review target. Start here to judge whether "hardened" is enforced or merely intended.
@@ -46,32 +48,29 @@ one as a substitute for the subsystem owner.
 - **Part A — failure catalog.** A surface-specific, stable-ID table (for example `CS*`, `TZ*`, `LC*`, `EK*`, `RT*`, `PC*`, `BR*`) of the ways the surface can look correct yet not be, each with a `Status` column that honestly separates **defended-by-construction** (with the test/gate that proves it), **claim-vs-code tension**, **by-design-leaky/limited** (a documented posture, not a bug), and **found-this-surface / reasoned-latent**.
 - **Part B — existing defenses (Layer 1).** The mechanical backbone already in the tree (render harness, Kani kernels, fuzz differentials, `compile_error!` fences, HW e2e, rainbow sweeps, cargo-checkct, zeroize-audit) — so the catalog claims are anchored, not generic.
 - **Part C — the master prompt.** A copy-paste brief that tasks a fresh agent to walk every catalog mode against a scoped surface, demands a **falsifiable PoC per finding** (no PoC ⇒ "suspicion, unverified"), and requires a **mandatory honest residual** (what survived, what wasn't looked at, and whether the pass *executed* the checkers or only read source).
-- **Part D — cadence + honest boundary.** When to run each layer, the one-line gut check, and an explicit statement of what the playbook *cannot* tell you (the boundary — stated on purpose, because an unstated boundary is itself a coverage gap).
+- **Part D — suggested cadence + honest boundary.** The planning workflow and
+  owner decide when the sweep activates. Part D supplies the one-line gut check
+  and what the playbook cannot establish.
 
 ## Where findings go — [`findings/`](./findings/README.md)
 
-Discovery passes return external candidate packets and never write canonical
-repository state. The coordinator freezes the raw packets, preserves every
-variant, and sends their union to the exact Partner-A/Partner-B pair required by
-the planning workflow. **After symmetric cross-adjudication**, an authorized
-maintainer records the result as a dated report in
-[`findings/`](./findings/README.md) (from
-[`findings/TEMPLATE.md`](./findings/TEMPLATE.md)). The four frozen partner
-reports are first reconciled, without voting, in
-[`findings/CROSS_ADJUDICATION_TEMPLATE.md`](./findings/CROSS_ADJUDICATION_TEMPLATE.md).
-Each canonical report has
-frontmatter `status:` and, because it is created only after the cross matrix
-freezes, starts at `status: in-review`; every canonical finding starts at
-`Status: 🔬 REVIEWED`. Later resolution moves an item to `✅ FIXED` /
-`☑️ ACCEPTED` / `🚫 INVALID` / `⏸ DEFERRED`. `🔲 OPEN` is reserved for
-pre-cross/imported records. `☑️ ACCEPTED` is owner-only; a discovery reviewer
-may recommend acceptance but cannot set it.
+Fast Phase-D reviews return three compact raw reports under
+[`../../planning-and-review-workflow.md`](../../planning-and-review-workflow.md).
+The coordinator reproduces concrete blockers directly; no pairwise cross or
+matrix is required. When a future owner-triggered full playbook sweep runs, an
+authorized maintainer may record its durable results in
+[`findings/`](./findings/README.md) using
+[`findings/TEMPLATE.md`](./findings/TEMPLATE.md). The cross-adjudication template
+is retained only for historical/specially authorized campaigns. `☑️ ACCEPTED`
+remains owner-only; a reviewer may recommend acceptance but cannot set it.
 The catalogue remains the review record and `docs/work-todo.md` the action
 list.
 
 ## Running a pass
 
-The framework-agnostic kit at
+Full playbook sweeps are future owner-triggered work by default. A new session
+must leave a recorded sweep deferred until the owner makes it the active
+surface. When such a sweep is active, the framework-agnostic kit at
 [`contracts/verification/adversarial-review/`](../../../contracts/verification/adversarial-review/README.md)
 drives discovery fan-out backend-agnostically (`run_review.py --backend
 {claude,codex,generic}`, `--reviewers N --quorum M`, `--run-id <stable-id>
@@ -81,26 +80,27 @@ surface; add a per-surface angle to its `protocol.json` mirroring the existing
 `kani-decoder-vacuity` angle — the persona (`PROMPT.md`) and discovery grouping
 are shared; only the catalog + target files change per surface. Quorum only
 corroborates/prioritizes candidates. It never sets a finding disposition, and
-sub-quorum candidates are retained rather than discarded. Send every candidate,
-variant/origin ID, and honest residual to the exact Partner-A/Partner-B pair in
-[`../../planning-and-review-workflow.md`](../../planning-and-review-workflow.md);
-only that pair's symmetric cross-adjudication may assign
-`CONFIRMED`/`REFUTED`/`NARROWED`/`UNRESOLVED`.
+sub-quorum candidates are retained rather than discarded. The coordinator
+reproduces stage-impacting candidates against source or executable evidence and
+records unresolved facts honestly.
 
 For two tool-produced receipts, use `run_review.py --union-raw
 <partner-a-raw.json> <partner-b-raw.json> --out <external-dir>`. The
 content-addressed envelope retains both complete raw payloads and diagnostics;
 it performs no cross-run grouping, re-voting, disposition, or authority grant.
 
-For a quick one-off, paste a playbook's Part-C prompt into any agent chat and
-fill the `{{…}}` scope slot. For model diversity, run twice across two backends
-and union all candidates, retained variants, and honest-residual blocks before
-the required exact-pair adjudication.
+For the ordinary Phase-D merge review, do not paste Part-C catalogs. Use the
+planning workflow's shared short prompt with GPT-5.6 SOL, Opus 4.8, and Kimi K3
+simultaneously.
 
 ## Cadence summary
 
-- **Per-PR touching a surface:** its Layer-1 gates + a scoped Part-C pass on the changed code.
-- **Per-milestone:** full-scope Part-C swarm per surface, paired with the matching red-teaming.md bench section.
+- **Per-PR touching a surface:** its required Layer-1 gates; no automatic
+  playbook sweep.
+- **Phase-D merge boundary:** the planning workflow's fast three-reviewer wave.
+- **Future owner-triggered lock-in:** one combined Part-C sweep across every
+  intersecting lens, paired with relevant bench evidence when that stage asks
+  for it.
 - **Pre-ship:** the deferred lifecycle/silicon/factory/release work (first-boot transition, OPTIGA lockdown, bench FI/SCA, key rotation, exact production artifacts, HSM custody and publication ceremony) — tracked by the applicable owner documents + `docs/STATUS.md`, not authorized by these playbooks.
 
 > **The one-sentence boundary shared by all listed playbooks.** *An executing pass may report that it reproduced no break within its recorded scope, configuration, and evidence level; it cannot establish that every covered or uncovered path is sound, that silicon matches source assumptions, or that a source-only pass executed the claimed behavior.* That sentence — not a green checkmark — is what to hand an auditor.

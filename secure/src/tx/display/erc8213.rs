@@ -31,8 +31,8 @@
 //! ## Kinds
 //!
 //! - [`Kind::CalldataDigest`] — for `cmd_sign_userop` /
-//!   `cmd_sign_userop_batch` per-tx pages and for `kind=0` raw32
-//!   offchain signs. The hash is computed via
+//!   `cmd_sign_userop_batch` per-tx pages and personal-sign payloads.
+//!   The hash is computed via
 //!   [`pqsigner_tx_core::erc8213::calldata_digest`] (=
 //!   `keccak256(uint256(len) || data)`).
 //! - [`Kind::Eip712Final`] — for offchain `OFFCHAIN_KIND_EIP712_TYPED`
@@ -40,6 +40,8 @@
 //!   `keccak256(0x1901 || domain_sep || struct_hash)`.
 //! - [`Kind::Raw32`] — for already-final 32-byte digests (raw32
 //!   offchain sign).
+//! - [`Kind::ReplaySafeHash`] — for the exact Solady replay-safe nested hash
+//!   that the RAW32 path passes to the C10 signer.
 //! - [`Kind::SafeTxHash`] — for the Safe v1 inner-tx path; the hash
 //!   is the `safeTxHash` computed by `secure::tx::eip712::safe::
 //!   verify`. Re-exported from the Safe renderer.
@@ -71,6 +73,9 @@ pub enum Kind {
     Eip712Final([u8; 32]),
     /// Raw 32-byte digest (offchain kind=0). Passes through verbatim.
     Raw32([u8; 32]),
+    /// Exact Solady replay-safe nested hash passed to the C10 signer for an
+    /// explicit RAW32 request.
+    ReplaySafeHash([u8; 32]),
     /// Safe v1 `safeTxHash` (`crate::tx::eip712::safe::verify` already
     /// produces this — the renderer just re-surfaces it).
     SafeTxHash([u8; 32]),
@@ -82,6 +87,7 @@ impl Kind {
             Kind::CalldataDigest(h)
             | Kind::Eip712Final(h)
             | Kind::Raw32(h)
+            | Kind::ReplaySafeHash(h)
             | Kind::SafeTxHash(h) => h,
         }
     }
@@ -91,6 +97,7 @@ impl Kind {
             Kind::CalldataDigest(_) => "CalldataDigest",
             Kind::Eip712Final(_) => "EIP-712 Final",
             Kind::Raw32(_) => "Raw32 Hash",
+            Kind::ReplaySafeHash(_) => "ReplaySafe Hash",
             Kind::SafeTxHash(_) => "SafeTxHash",
         }
     }

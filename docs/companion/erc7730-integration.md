@@ -9,8 +9,9 @@ wire layouts and fallback policies and must not be implemented.
 
 Current security contract:
 
-- The host compiler emits IR schema v3. Its fixed header is 134 bytes; the
-  authoritative layout and caps are in `pqsigner-erc7730/src/ir.rs`.
+- The host compiler emits the schema named in the xtask-verified facts below.
+  Its fixed header is 134 bytes; the authoritative layout and caps are in
+  `pqsigner-erc7730/src/ir.rs`.
 - The verifier, binding logic, ABI resolver, page substrate, and full renderer
   are host-linkable pure logic in `pqsigner-erc7730/`. Secure world calls that
   same implementation through thin re-exports.
@@ -31,6 +32,8 @@ Current security contract:
   never downgrades to typed or blind signing. Only a genuinely absent tuple may
   use the generic display ladder; Bloom false positives conservatively refuse.
 <!-- BEGIN XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->
+- The host compiler and device require **IR schema v4 (`0x04`)**; this value is
+  generated from `pqsigner_erc7730::ir::SCHEMA_VER`, and older schemas hard-refuse.
 - The current regenerated development catalogue has **428 leaves**, root
   `668a7964b4241ec0c2348d117adaa5e29e9b34d97286ef5d1c722cdda43d700a`,
   and **4,542 exact known-call tuples**. The tuple-set receipt is SHA-256
