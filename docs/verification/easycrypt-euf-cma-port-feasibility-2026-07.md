@@ -1019,3 +1019,26 @@ collision flags (:3268-3273) are +C-identical (the counter never enters a collis
 to convert "shown by reading" → "shown by compiler": the empirical port-and-compile of the C/V game
 modules + the equivs (in progress). This is the sharpest evidence yet against 6-18-pmo: the layer
 everyone assumes is expensive (hypertree security) is a substitution port off MM45.
+
+### CORRECTION 2026-07-18 (same day) — "mechanical" is PROVISIONAL: the forge-soundness SEAM is untested
+
+The two updates above are correct that NO component of the core lemma has a checksum/constant-sum-
+*property* dependency (a necessary condition, confirmed by reading). But that must NOT round up to "the
+whole ~2000-line hypertree layer is a mechanical port." A negative checksum-grep is structurally blind
+to one thing: the **tree↔leaf SEAM** at `EqPr_..._Orig_V` (FL_SL_XMSS_MT_ES.ec:3005) — the hop the
+assembly uses (`rewrite EqPr_..._Orig_V`) to map the instrumented V-game's `valid_WOTSTWES` bucket down
+to `Pr[M_EUF_GCMA_WOTS(R_leaf)]` (it drops to the WOTS-level `FC.O_THFC_Default` — that IS the seam, not
+bookkeeping). In OUR port the leaf term is `Pr[M_EUF_GCMA_WOTSC(R_MEUFGCMAWOTSC_EUFNAGCMA_C(A_ht))]`, and
+**milestone 2's `R_leaf_C.forge` is SHAPE-ONLY** — the reduction-soundness leg ("a hypertree forgery
+yields a WOTS+C forgery, forge-selection correctness") is explicitly DEFERRED (XMSSMT_C_Reduction.ec
+scope note, "D1-COMPOSITION LEG ONLY"). The seam hop asks an *interface-shape* question a checksum-grep
+cannot detect: does `R_leaf_C`'s shape-only `forge` extract the **counter-carrying** WOTS+C forgery in
+precisely the form `EqPr_..._Orig_V`'s alignment consumes? If not, porting this hop forces a **rework of
+the already-"0-admit" milestone 2**, not a mechanical substitution.
+
+⇒ HONEST STATUS: checksum-freedom across all components = confirmed, bankable, real evidence vs 6-18-pmo
+(the WOTS-security *argument* does not re-enter the tree layer). "Mechanical" is **provisional** and
+scoped: the pure-tree components (`Eqv_Orig_C`, `Eqv_C_V`, the 2 tree reductions, assembly bookkeeping)
+are mechanical; the **seam `EqPr_Orig_V ⟷ R_leaf_C` is the untested go/no-go**. The next empirical spike
+must aim at THAT compile (build C+V games only as scaffold to reach it) — `Eqv_Orig_C` (pure tree) would
+compile clean and prove nothing about the seam. Until the seam hop compiles, do not call the layer done.
