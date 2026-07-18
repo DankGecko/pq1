@@ -3990,6 +3990,25 @@ review report.
   replacement, selected tool-input, and curated-corpus drift proof. This slice
   intentionally leaves `diff-registry`, signed-release-manifest binding, and
   ERC-8176/production authority open, so the parent item remains unchecked.
+  **First-slice Phase-D merge closure completed 2026-07-19:** frozen technical
+  target `70e9864b1c6e1bdcb5756fb2d8ca20fb8c018194`, tree
+  `cc02c58f3b69477e375302ecd578f6225eb1a352`, is retained at
+  `review/erc7730-provenance-overlay-20260718-v2`. The remediated repository-only
+  gate now binds the curation-manifest SHA-256 and upstream commit/tree into its
+  exact managed receipt; a disposable commit-only manifest mutation fails the
+  gate. Real pinned-upstream vendoring, xtask 55+10, dbgen 204+2+33+28+10,
+  `pqsigner-erc7730` 242, descriptor drift, focused clippy, formatting, JSON,
+  and diff checks are green; catalogue/root/known-call/Bloom bytes remain
+  unchanged. Opus 4.8 returned **GO** (session
+  `9db823df-cd10-441d-ba57-6fd6d731de7a`, raw `opus.json`) and Kimi K3 returned
+  **GO** (session `session_e96c3bb5-99f2-4fca-9dc0-3df1be681ac5`, raw `kimi.md`)
+  under `/tmp/pqsigner-erc7730-provenance-review-20260718-70e9864b/`. Kimi's sole
+  symlink caveat was falsified by source and an executable control: the final
+  `--out` symlink is rejected before staging. GPT-5.6 SOL inspected the frozen
+  source but reached the fixed eight-minute cap without a verdict or finding
+  (thread `019f7786-1ba2-7410-ad63-10b48bbbfe32`, raw `gpt.events.jsonl`); no
+  retry or substitute was launched. This grants merge evidence only, not
+  production, shipment, ERC-8176, release-signing, or forced-blind authority.
 - [x] **[pq1-7730-phase-c-reviewability, P0, S] Make the Phase-D input and
   standing verification receipts mechanically reviewable.** Completed
   2026-07-18 without changing signing eligibility or the authenticated
