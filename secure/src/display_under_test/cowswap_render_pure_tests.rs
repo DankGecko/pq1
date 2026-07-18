@@ -29,7 +29,10 @@ const OFF_KIND: usize = 168;
 
 fn row_str(row: &[u8; DISPLAY_COLS]) -> String {
     for &b in row.iter() {
-        assert!((0x20..=0x7e).contains(&b), "non-printable byte {b:#x} on a rendered row");
+        assert!(
+            (0x20..=0x7e).contains(&b),
+            "non-printable byte {b:#x} on a rendered row"
+        );
     }
     let s: String = row.iter().map(|&b| b as char).collect();
     s.trim_end().to_string()
@@ -38,7 +41,10 @@ fn row_str(row: &[u8; DISPLAY_COLS]) -> String {
 /// Concatenate the 4 rows of a page (trim-joined) so a multi-row field can be
 /// asserted regardless of which row it lands on.
 fn page_concat(pages: &super::Pages, page: usize) -> String {
-    (0..4).map(|r| row_str(&pages.buf[page][r])).collect::<Vec<_>>().join("|")
+    (0..4)
+        .map(|r| row_str(&pages.buf[page][r]))
+        .collect::<Vec<_>>()
+        .join("|")
 }
 
 /// First page whose row 0 trims to exactly `label`.
@@ -104,12 +110,19 @@ fn positive_sell_amount_and_symbol_bind_to_canonical_bytes() {
 
     // Sell leg page A: label + amount + symbol. Page 1 (header is page 0).
     assert_eq!(row_str(&pages.buf[1][0]), "Sell exactly:");
-    let amount_rows = format!("{}|{}", row_str(&pages.buf[1][1]), row_str(&pages.buf[1][2]));
+    let amount_rows = format!(
+        "{}|{}",
+        row_str(&pages.buf[1][1]),
+        row_str(&pages.buf[1][2])
+    );
     assert!(
         amount_rows.contains("1500"),
         "sell amount must render the integer 1500 from canonical[68..100]; got {amount_rows:?}"
     );
-    assert!(amount_rows.contains("USDC"), "sell amount must carry the symbol; got {amount_rows:?}");
+    assert!(
+        amount_rows.contains("USDC"),
+        "sell amount must carry the symbol; got {amount_rows:?}"
+    );
 
     // Sell leg page B carries the FULL 40-hex sell-token contract (anti-spoof);
     // it's "0x"+addr split across rows 1-3. Strip non-hex and join, then the
@@ -149,7 +162,10 @@ fn negative_sell_amount_nonvacuous() {
     let a2 = format!("{}|{}", row_str(&p2.buf[1][1]), row_str(&p2.buf[1][2]));
     assert!(a1.contains("1500") && !a1.contains("2700"));
     assert!(a2.contains("2700") && !a2.contains("1500"));
-    assert_ne!(a1, a2, "flipping canonical sellAmount must change the rendered amount");
+    assert_ne!(
+        a1, a2,
+        "flipping canonical sellAmount must change the rendered amount"
+    );
 }
 
 #[test]
@@ -165,14 +181,24 @@ fn positive_cowswap_golden_grid_hash() {
 
     // Non-vacuity: flipping the canonical sellAmount MUST move the digest.
     let c2 = sell_canonical(token, 2_700_000_000);
-    let h2 = super::golden_grid_hash(&render_cowswap_pages(&c2, &leg(b"USDC", 6), &leg(b"WETH", 18)));
-    assert_ne!(h, h2, "golden hash must bind rendered content (sellAmount change did not move it)");
+    let h2 = super::golden_grid_hash(&render_cowswap_pages(
+        &c2,
+        &leg(b"USDC", 6),
+        &leg(b"WETH", 18),
+    ));
+    assert_ne!(
+        h, h2,
+        "golden hash must bind rendered content (sellAmount change did not move it)"
+    );
 
     const GOLDEN: [u8; 32] = [
-        142, 85, 132, 133, 106, 125, 212, 52, 60, 225, 218, 75, 139, 0, 3, 193, 120, 121, 210,
-        134, 178, 254, 10, 88, 186, 141, 14, 183, 134, 47, 238, 228,
+        142, 85, 132, 133, 106, 125, 212, 52, 60, 225, 218, 75, 139, 0, 3, 193, 120, 121, 210, 134,
+        178, 254, 10, 88, 186, 141, 14, 183, 134, 47, 238, 228,
     ];
-    assert_eq!(h, GOLDEN, "CowSwap render golden changed — re-bless if intentional. got={h:?}");
+    assert_eq!(
+        h, GOLDEN,
+        "CowSwap render golden changed — re-bless if intentional. got={h:?}"
+    );
 }
 
 #[test]

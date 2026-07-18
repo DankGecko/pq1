@@ -106,8 +106,8 @@
       "crate": "pqsigner-erc7730",
       "harness": "enum_two_entry_value_sound",
       "file": "pqsigner-erc7730/src/render/enums.rs",
-      "find": "u64::from_be_bytes(kb) == k",
-      "replace": "true",
+      "find": "if key == k {",
+      "replace": "if true {",
       "expect": "kani_fails",
       "note": "make lookup_enum_label's per-entry key comparison always-true -> the first entry matches any (high-zero) value, so the returned label is entry 0's regardless of which key the value actually matches. enum_two_entry_value_sound (a value matching key1, not key0, must return label1) MUST break. Verified 2026-07-02 by hand: mutation -> enum_two_entry_value_sound (and enum_single_entry_value_sound) VERIFICATION:- FAILED; unmutated -> SUCCESSFUL. Closes finding §2 #3 (the single-entry harness only proved the match where first==correct; the multi-entry return-the-matching-entry property was unverified)."
     },
@@ -326,7 +326,7 @@
       "crate": "pqsigner-erc7730",
       "harness": "amt_dec_token_identity_binding",
       "file": "pqsigner-erc7730/src/display/render/amount_decision.rs",
-      "find": "let identity_page = if bound.is_none() { token_addr } else { None };",
+      "find": "    let identity_page = if bound.is_none() && !is_native {\n        token_addr\n    } else {\n        None\n    };",
       "replace": "let identity_page = None;",
       "expect": "kani_fails",
       "note": "drop the MEDIUM-1 identity-page rule: an unbound token's resolved address is never emitted, so the user approves a transfer/withdraw/swap of an UNNAMED token (the identity-hiding class). The token-identity forall binds identity_page == Some(resolved addr) on every miss, so it MUST redden. Verified 2026-07-06 by hand: mutation -> VERIFICATION:- FAILED (d.identity_page == Some(addr)); reverted -> harness re-run SUCCESSFUL on the restored tree."
@@ -341,6 +341,17 @@
       "replace": "write_hex_word(r2, &word[9..17]);",
       "expect": "kani_fails",
       "note": "raw-word hex row 2 drifts one byte (bytes 8..16 -> 9..17): a signed byte vanishes from the trusted display (the magnitude-hiding class). The forall exactness harness binds every row byte to an independent nibble table, so it MUST redden. Verified 2026-07-04 by hand: mutation -> VERIFICATION:- FAILED; reverted -> file restored (grep-confirmed)."
+    },
+    {
+      "id": "native_amount_exactness_helper_gate_dropped",
+      "tier": "default",
+      "crate": "pqsigner-erc7730",
+      "harness": "fmt_p0_native_amount_prepublication_decision_concrete",
+      "file": "pqsigner-erc7730/src/display/render/formatters.rs",
+      "find": "fn native_amount_prepublication_refuses(value: &U256, decimals: u32) -> bool {\n    !amount_is_exact_at_fraction_digits(value, decimals, INTERPOLATED_AMOUNT_POLICY.fraction_digits)\n}",
+      "replace": "fn native_amount_prepublication_refuses(value: &U256, decimals: u32) -> bool {\n    false && !amount_is_exact_at_fraction_digits(value, decimals, INTERPOLATED_AMOUNT_POLICY.fraction_digits)\n}",
+      "expect": "kani_fails",
+      "note": "Disable the shared pure pre-publication native-amount exactness decision used by both amount and authenticated-native tokenAmount sinks. The helper-only concrete harness requires one ETH plus one wei at 18 decimals to refuse while exact/zero and decimals<=the six-digit policy remain allowed, so it MUST redden without entering format_decimal or any page painter. Both caller-level Kani harnesses and host tests remain as zero-publication integration pins. Replaces the two painter-reaching Phase-D mutants after the ordinary-amount mutant produced no Kani verdict within the bounded 900-second closure run."
     },
     {
       "id": "erc20_canonical_padding",
@@ -363,6 +374,39 @@
       "replace": "false",
       "expect": "kani_fails",
       "note": "Neuter the setPreSignature selector check. A non-setPreSignature call (any selector) would then decode to Some(uid) and bind an owner/orderUid the display did not derive from a real presign call -> decode_setpresig_orderuid_canonical MUST redden (assert c[0..4]==SETPRESIG_SELECTOR). If it SURVIVES, the CoW owner-UID canonicity proof is vacuous. (P1.2 CoW owner-UID binding, 2026-07-17.)"
+    },
+    {
+      "id": "native_currency_list_two_member_bound",
+      "tier": "default",
+      "crate": "pqsigner-erc7730",
+      "harness": "params_native_currency_list_canonicality",
+      "file": "pqsigner-erc7730/src/render/params.rs",
+      "find": "|| count > MAX_NATIVE_CURRENCY_ADDRESSES",
+      "replace": "|| count >= MAX_NATIVE_CURRENCY_ADDRESSES",
+      "expect": "kani_fails",
+      "note": "Turn the inclusive two-address native-currency-list cap into an off-by-one rejection. The exhaustive canonicality harness requires every distinct 40-byte pair to remain accepted and therefore MUST redden. The unmutated harness verified successfully with cargo-kani 0.67.0 on 2026-07-18 and the unique material mutation is statically enrolled; a targeted mutated execution receipt is still pending."
+    },
+    {
+      "id": "interpolated_intent_single_substitution",
+      "tier": "default",
+      "crate": "pqsigner-erc7730",
+      "harness": "params_interpolated_intent_executable_subset",
+      "file": "pqsigner-erc7730/src/render/params.rs",
+      "find": "substitution_count != 1",
+      "replace": "substitution_count != 2",
+      "expect": "kani_fails",
+      "note": "Change the single, pre-walk owner of the authority-bearing interpolation cardinality from exactly one substitution to exactly two. The executable-subset biconditional requires one-field programs to remain accepted and every two-field program to remain rejected, so this fixed-bound authority mutation MUST redden without turning the parser loop symbolic. Repointed 2026-07-18 after the prior downstream shape mutation became dead behind the early tractability gate."
+    },
+    {
+      "id": "nft_collection_path_exactness",
+      "tier": "default",
+      "crate": "pqsigner-erc7730",
+      "harness": "params_nft_collection_path_current_slice",
+      "file": "pqsigner-erc7730/src/render/params.rs",
+      "find": "payload == NFT_COLLECTION_TO_PATH.as_slice()",
+      "replace": "payload.len() == NFT_COLLECTION_TO_PATH.len()",
+      "expect": "kani_fails",
+      "note": "Weaken the authenticated NFT collection-path gate from the exact frozen @.to bytecode to any four-byte path. The symbolic current-slice harness requires acceptance iff every path byte matches and therefore MUST redden. The unmutated harness verified successfully with cargo-kani 0.67.0 on 2026-07-18 and the unique material mutation is statically enrolled; a targeted mutated execution receipt is still pending."
     },
     {
       "id": "t1-frame-validate-skips-crc",

@@ -51,15 +51,25 @@
 //! particular, an obsolete embedded `attestations` array is never
 //! treated as production verification.
 
+use crate::erc20::Erc20Capabilities;
 use crate::merkle::{node_hash, verify_proof, MerkleTree};
 use pqsigner_erc7730::bundle::{leaf_hash, verify_erc7730_bundle_with_leaf_count};
+use pqsigner_erc7730::display::primitives::known_native_ticker;
 use pqsigner_erc7730::ir::{
-    Erc7730Ir, CONTRACT_NAME_FIELD_LEN, CTX_CONTRACT, CTX_EIP712, HEADER_LEN,
-    MAX_FIELDS_PER_FORMAT, MAX_FORMATS, MAX_IR_LEN, MAX_NESTED_MEMBERS, OWNER_FIELD_LEN,
-    SCHEMA_VER,
+    Erc7730Ir, FormatOp, CONTRACT_NAME_FIELD_LEN, CTX_CONTRACT, CTX_EIP712, ERC20_APPROVE_SELECTOR,
+    HEADER_LEN, MAX_FIELDS_PER_FORMAT, MAX_FORMATS, MAX_IR_LEN, MAX_NESTED_MEMBERS,
+    OWNER_FIELD_LEN, SCHEMA_VER,
 };
 use pqsigner_erc7730::known_calls::{
     insert as insert_known_call, may_contain as known_call_may_contain, BLOOM_BYTES,
+};
+use pqsigner_erc7730::render::{
+    enums::ENUM_DISPLAY_BYTES,
+    params::NFT_COLLECTION_TO_PATH,
+    policy::{
+        directly_displays_terminal, label_has_visible_glyph, token_path_displays_identity,
+        validate_field as validate_field_policy, ParamMask, TerminalKind,
+    },
 };
 use pqsigner_tx_core::hash::keccak256;
 use serde::Deserialize;
@@ -168,7 +178,16 @@ const PARAM_NFT_COLLECTION: u8 = 0x44;
 /// `nftName.params.collectionPath`: a compiled static address path. The first
 /// corpus-complete slice permits `@.to` and static structured address words.
 const PARAM_NFT_COLLECTION_PATH: u8 = 0x45;
+/// Format-level constrained `interpolatedIntent` bytecode. Canonically parked
+/// on emitted field ordinal zero; source paths are resolved to field ordinals
+/// at build time, so the device never interprets braces or JSON paths.
+const PARAM_INTERPOLATED_INTENT: u8 = 0x46;
+/// Schema-v4 authenticated terminal kind; mandatory on every field.
+const PARAM_TERMINAL_KIND: u8 = 0x47;
 const DYNAMIC_KIND_STRING: u8 = 0x01;
+const INTERPOLATED_INTENT_VERSION: u8 = 0x01;
+const MAX_INTERPOLATED_SUBSTITUTIONS: usize = 3;
+const MAX_INTERPOLATED_INTENT_LEN: usize = 32;
 
 /// Maximum EIP-712 struct nesting the gate will walk before failing closed.
 /// Matches the on-device `ir::MAX_NESTING`; a type deeper than this (or a
@@ -338,10 +357,11 @@ struct Format {
     #[serde(default)]
     intent: Option<String>,
     fields: Vec<FieldDef>,
-    /// v2 `interpolatedIntent` — valid but unrendered (we show `intent`);
-    /// modelled (ignored) so it doesn't trip the 1.3 unknown-key gate.
+    /// v2 `interpolatedIntent`. The compiler emits only the fail-closed scalar
+    /// amount subset; valid shapes outside that subset retain the static
+    /// `intent` and carry no runtime interpolation program.
     #[serde(rename = "interpolatedIntent", default)]
-    _interpolated_intent: Option<serde_json::Value>,
+    interpolated_intent: Option<String>,
     /// Catch-all for unmodelled top-level format keys (finding 1.3).
     #[serde(flatten)]
     unknown: BTreeMap<String, serde_json::Value>,
@@ -445,11 +465,39 @@ pub fn build_db_with_policy_override(
     force_production: bool,
     registry_root: Option<&Path>,
 ) -> Result<Erc7730BuildResult, String> {
+    let capabilities = Erc20Capabilities::default();
+    build_db_with_policy_override_and_erc20_capabilities(
+        input_dir,
+        policy_path,
+        force_production,
+        registry_root,
+        &capabilities,
+    )
+}
+
+/// Capability-aware variant of [`build_db_with_policy_override`]. Token-amount
+/// interpolation is enrolled only when the deployment's static token identity
+/// is present in this exact authenticated ERC-20 metadata set (or is a
+/// firmware-pinned native identity).
+pub fn build_db_with_policy_override_and_erc20_capabilities(
+    input_dir: &Path,
+    policy_path: &Path,
+    force_production: bool,
+    registry_root: Option<&Path>,
+    erc20_capabilities: &Erc20Capabilities,
+) -> Result<Erc7730BuildResult, String> {
     let mut policy = load_policy(policy_path)?;
     if force_production {
         policy.allow_unattested_dev_descriptors = false;
     }
-    build_db_inner(input_dir, &policy, registry_root, false, &mut Vec::new())
+    build_db_inner(
+        input_dir,
+        &policy,
+        registry_root,
+        false,
+        &mut Vec::new(),
+        erc20_capabilities,
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -534,8 +582,25 @@ fn catalogue_provenance(policy: &Policy) -> Result<CatalogueProvenance, String> 
 /// emit the catalog blob + Merkle root. Caller is expected to also
 /// run `round_trip_check` before writing the artifacts to disk.
 pub fn build_db(input_dir: &Path, policy_path: &Path) -> Result<Erc7730BuildResult, String> {
+    let capabilities = Erc20Capabilities::default();
+    build_db_with_erc20_capabilities(input_dir, policy_path, &capabilities)
+}
+
+/// Capability-aware variant of [`build_db`].
+pub fn build_db_with_erc20_capabilities(
+    input_dir: &Path,
+    policy_path: &Path,
+    erc20_capabilities: &Erc20Capabilities,
+) -> Result<Erc7730BuildResult, String> {
     let policy = load_policy(policy_path)?;
-    build_db_inner(input_dir, &policy, None, false, &mut Vec::new())
+    build_db_inner(
+        input_dir,
+        &policy,
+        None,
+        false,
+        &mut Vec::new(),
+        erc20_capabilities,
+    )
 }
 
 /// Compile a SINGLE descriptor file, tolerantly. Returns the emitted IR
@@ -551,8 +616,26 @@ pub fn try_compile_one(
     policy: &Policy,
     registry_root: Option<&Path>,
 ) -> Result<Vec<Emitted>, String> {
+    let capabilities = Erc20Capabilities::default();
+    try_compile_one_with_erc20_capabilities(path, policy, registry_root, &capabilities)
+}
+
+/// Capability-aware variant of [`try_compile_one`].
+pub fn try_compile_one_with_erc20_capabilities(
+    path: &Path,
+    policy: &Policy,
+    registry_root: Option<&Path>,
+    erc20_capabilities: &Erc20Capabilities,
+) -> Result<Vec<Emitted>, String> {
     // The coverage scan reports whole-descriptor compilability (strict).
-    compile_descriptor(path, policy, registry_root, false, &mut Vec::new())
+    compile_descriptor(
+        path,
+        policy,
+        registry_root,
+        false,
+        &mut Vec::new(),
+        erc20_capabilities,
+    )
 }
 
 /// A descriptor (or sub-tree) the tolerant build skipped, with why.
@@ -579,9 +662,27 @@ pub fn build_db_tolerant(
     policy_path: &Path,
     registry_root: Option<&Path>,
 ) -> Result<(Erc7730BuildResult, Vec<SkipReport>), String> {
+    let capabilities = Erc20Capabilities::default();
+    build_db_tolerant_with_erc20_capabilities(input_dir, policy_path, registry_root, &capabilities)
+}
+
+/// Capability-aware variant of [`build_db_tolerant`].
+pub fn build_db_tolerant_with_erc20_capabilities(
+    input_dir: &Path,
+    policy_path: &Path,
+    registry_root: Option<&Path>,
+    erc20_capabilities: &Erc20Capabilities,
+) -> Result<(Erc7730BuildResult, Vec<SkipReport>), String> {
     let policy = load_policy(policy_path)?;
     let mut skips: Vec<SkipReport> = Vec::new();
-    let result = build_db_inner(input_dir, &policy, registry_root, true, &mut skips)?;
+    let result = build_db_inner(
+        input_dir,
+        &policy,
+        registry_root,
+        true,
+        &mut skips,
+        erc20_capabilities,
+    )?;
     Ok((result, skips))
 }
 
@@ -711,6 +812,7 @@ fn build_db_inner(
     registry_root: Option<&Path>,
     tolerant: bool,
     skips: &mut Vec<SkipReport>,
+    erc20_capabilities: &Erc20Capabilities,
 ) -> Result<Erc7730BuildResult, String> {
     // Establish provenance once for the entire leaf set. This deliberately
     // fails before reading any descriptor when production verification is
@@ -827,6 +929,7 @@ fn build_db_inner(
             registry_root,
             tolerant,
             &mut partial_format_drops,
+            erc20_capabilities,
         ) {
             Ok(entries) => {
                 // A descriptor can retain safe formats while other source
@@ -1625,12 +1728,14 @@ pub fn round_trip_check(result: &Erc7730BuildResult) -> Result<(), String> {
         // Also exercise the on-device bundle verifier with a synthetic
         // trailer.
         let bundle = synth_bundle(&e.ir_bytes, e.leaf_index as u32, &proof);
-        verify_erc7730_bundle_with_leaf_count(&bundle, &result.root, result.leaf_count).map_err(|err| {
-            format!(
-                "round-trip on-device bundle verify failed for {}: {err:?}",
-                e.source.display()
-            )
-        })?;
+        verify_erc7730_bundle_with_leaf_count(&bundle, &result.root, result.leaf_count).map_err(
+            |err| {
+                format!(
+                    "round-trip on-device bundle verify failed for {}: {err:?}",
+                    e.source.display()
+                )
+            },
+        )?;
 
         if e.context_kind == CTX_CONTRACT {
             for format in ir.format_iter() {
@@ -1772,6 +1877,7 @@ fn compile_descriptor(
     registry_root: Option<&Path>,
     tolerant: bool,
     partial_format_drops: &mut Vec<String>,
+    erc20_capabilities: &Erc20Capabilities,
 ) -> Result<Vec<Emitted>, String> {
     let json = load_resolved_descriptor_json(path, registry_root)?;
 
@@ -1825,7 +1931,7 @@ fn compile_descriptor(
 
     // Resolve constants and enums into the IR pool (lazily, only
     // entries actually referenced get emitted).
-    let mut ctx = CompileCtx {
+    let base_ctx = CompileCtx {
         constants: descriptor.metadata.constants.unwrap_or_default(),
         enums: descriptor.metadata.enums.unwrap_or_default(),
         descriptor_hash,
@@ -1837,22 +1943,37 @@ fn compile_descriptor(
     let (context_kind, deployments) =
         resolve_deployments(&descriptor.context).map_err(|e| format!("deployments: {e}"))?;
 
-    let (formats_section, pool_initial) = compile_formats_reporting(
-        &descriptor.display,
-        context_kind,
-        &mut ctx,
-        tolerant,
-        partial_format_drops,
-    )?;
-
-    // For each deployment we emit a distinct IR (same body, different
-    // header bytes). The pool/format bytes are byte-identical between
-    // deployments — the leaf-level differences live entirely in the
-    // 134-byte header.
+    // Interpolation enrollment can differ by deployment: a static token may
+    // be authenticated on one chain but absent from the exact ERC-20 metadata
+    // corpus on another. Compile each body against its deployment capability
+    // rather than cloning one optimistic body across every chain.
     let mut out = Vec::with_capacity(deployments.len());
+    let mut recorded_partial_drops = BTreeSet::new();
     for dep in deployments {
         let (chain_id, contract_addr, domain_separator) =
             resolve_per_deployment(context_kind, &descriptor.context, &dep)?;
+        let deployment = InterpolationDeployment {
+            chain_id,
+            contract: contract_addr,
+            erc20_capabilities,
+        };
+        let mut ctx = base_ctx.clone();
+        let mut deployment_drops = Vec::new();
+        let (formats_section, pool_initial) = compile_formats_reporting(
+            &descriptor.display,
+            context_kind,
+            &mut ctx,
+            tolerant,
+            &mut deployment_drops,
+            Some(&deployment),
+        )?;
+        // The same unsupported source format is normally rediscovered for
+        // every deployment. Keep one stable review receipt per exact reason.
+        for reason in deployment_drops {
+            if recorded_partial_drops.insert(reason.clone()) {
+                partial_format_drops.push(reason);
+            }
+        }
 
         let ir_bytes = build_ir(
             context_kind,
@@ -1873,15 +1994,25 @@ fn compile_descriptor(
             ));
         }
 
+        // Deep-parse every newly built deployment IR with the canonical
+        // device parser before it can leave this per-descriptor boundary.
+        // In tolerant mode a host/device grammar or policy mismatch therefore
+        // drops this descriptor with its ordinary skip receipt instead of
+        // poisoning the catalogue later during global processing.
+        let parsed_ir = Erc7730Ir::parse(&ir_bytes).map_err(|error| {
+            format!(
+                "internal: newly emitted IR for `{descriptor_id}` deployment chain_id={chain_id} contract=0x{} failed canonical device parsing: {error:?}",
+                hex::encode(contract_addr),
+            )
+        })?;
+
         // The catalogue discriminator must name an authenticated format that
         // actually survived tolerant compilation. Indexing by the first source
         // format can orphan an otherwise-valid leaf when that format is one of
         // the fail-closed drops.
         let primary_type_hash = if context_kind == CTX_EIP712 {
-            let ir = Erc7730Ir::parse(&ir_bytes).map_err(|e| {
-                format!("internal: newly emitted EIP-712 IR failed to parse: {e:?}")
-            })?;
-            ir.format_iter()
+            parsed_ir
+                .format_iter()
                 .next()
                 .ok_or_else(|| "internal: emitted EIP-712 IR has no formats".to_string())?
                 .map_err(|e| format!("internal: first emitted EIP-712 format is invalid: {e:?}"))?
@@ -2029,6 +2160,7 @@ fn resolve_per_deployment(
 // ─────────────────────────────────────────────────────────────────────
 
 /// Side-table the compiler builds while walking a single descriptor.
+#[derive(Clone)]
 struct CompileCtx {
     constants: serde_json::Map<String, serde_json::Value>,
     enums: serde_json::Map<String, serde_json::Value>,
@@ -2038,6 +2170,16 @@ struct CompileCtx {
     owner: String,
     #[allow(dead_code)]
     contract_name: String,
+}
+
+/// Deployment-bound interpolation authority. The ERC-20 key set comes from
+/// the exact validated DB build whose Merkle root will be authenticated by the
+/// device; no runtime lookup success is assumed here.
+#[derive(Clone, Copy)]
+struct InterpolationDeployment<'a> {
+    chain_id: u64,
+    contract: [u8; 20],
+    erc20_capabilities: &'a Erc20Capabilities,
 }
 
 /// Pool-with-cache used while compiling a single descriptor. Interns
@@ -2094,6 +2236,43 @@ impl Pool {
         Ok(off)
     }
 
+    /// Return a new canonical parameter blob consisting of the existing blob
+    /// plus one TLV. The old interned entry is never mutated: other fields may
+    /// share its offset, and changing it in place would silently give them
+    /// format-level interpolation semantics too.
+    fn append_param_tlv(
+        &mut self,
+        param_off: u16,
+        kind: u8,
+        payload: &[u8],
+    ) -> Result<u16, String> {
+        let mut body = Vec::new();
+        if param_off != 0 {
+            let off = param_off as usize;
+            let len = *self
+                .buf
+                .get(off)
+                .ok_or_else(|| "existing param offset is outside the IR pool".to_string())?
+                as usize;
+            let existing = self
+                .buf
+                .get(off + 1..off + 1 + len)
+                .ok_or_else(|| "existing param blob is truncated".to_string())?;
+            body.extend_from_slice(existing);
+        }
+        push_tlv(&mut body, kind, payload)?;
+        if body.len() > MAX_POOL_TLV_PAYLOAD {
+            return Err(format!(
+                "parameter blob with TLV 0x{kind:02x} is {} bytes; maximum is {MAX_POOL_TLV_PAYLOAD}",
+                body.len()
+            ));
+        }
+        let mut encoded = Vec::with_capacity(1 + body.len());
+        encoded.push(body.len() as u8);
+        encoded.extend_from_slice(&body);
+        self.intern(&encoded)
+    }
+
     fn into_bytes(self) -> Vec<u8> {
         self.buf
     }
@@ -2124,7 +2303,7 @@ fn compile_formats(
     ctx: &mut CompileCtx,
     tolerant: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    compile_formats_reporting(display, context_kind, ctx, tolerant, &mut Vec::new())
+    compile_formats_reporting(display, context_kind, ctx, tolerant, &mut Vec::new(), None)
 }
 
 fn compile_formats_reporting(
@@ -2133,6 +2312,7 @@ fn compile_formats_reporting(
     ctx: &mut CompileCtx,
     tolerant: bool,
     partial_format_drops: &mut Vec<String>,
+    interpolation_deployment: Option<&InterpolationDeployment<'_>>,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let n = display.formats.len();
     if n == 0 {
@@ -2197,7 +2377,7 @@ fn compile_formats_reporting(
                     _id: fmt._id.clone(),
                     intent: fmt.intent.clone(),
                     fields,
-                    _interpolated_intent: None,
+                    interpolated_intent: fmt.interpolated_intent.clone(),
                     unknown: BTreeMap::new(),
                 },
             )),
@@ -2270,6 +2450,7 @@ fn compile_formats_reporting(
             &mut pool,
             &enum_offsets,
             &mut one,
+            interpolation_deployment,
         ) {
             Ok(()) => survivors.push(one),
             Err(e) if tolerant => {
@@ -2501,6 +2682,316 @@ fn combine_field_path(prefix: Option<&str>, child: Option<&str>) -> Option<Strin
     }
 }
 
+/// Compile the first fail-closed `interpolatedIntent` subset.
+///
+/// Source braces are consumed only here on the host. Each placeholder must
+/// name exactly one post-`$ref`, post-group-flattening field path and is encoded
+/// as that emitted field ordinal. Unsupported-but-valid presentation shapes
+/// return `Ok(None)` so the independently safe static `intent` remains in use;
+/// malformed or ambiguous amount templates return `Err` and cannot enter the
+/// authenticated catalogue.
+fn compile_interpolated_intent(
+    sig: &str,
+    fmt: &Format,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+    ctx: &CompileCtx,
+    interpolation_deployment: Option<&InterpolationDeployment<'_>>,
+) -> Result<Option<Vec<u8>>, String> {
+    let Some(template) = fmt.interpolated_intent.as_deref() else {
+        return Ok(None);
+    };
+
+    // v1 is contract-calldata only. EIP-712 nested/array witness semantics are
+    // a later bounded slice; those descriptors keep their static intent.
+    if context_kind != CTX_CONTRACT {
+        return Ok(None);
+    }
+    // The renderer already has an independently derived exact-zero ERC-20
+    // revoke title. Avoid two authenticated banner authorities for the whole
+    // selector class, including a different textual signature that collides
+    // with `approve(address,uint256)`. Device validation applies this exact
+    // selector policy too; comparing source text here would be weaker.
+    let computed_selector_hash = keccak256(parsed.types_signature.as_bytes());
+    let computed_selector = [
+        computed_selector_hash[0],
+        computed_selector_hash[1],
+        computed_selector_hash[2],
+        computed_selector_hash[3],
+    ];
+    if computed_selector == ERC20_APPROVE_SELECTOR {
+        return Ok(None);
+    }
+    if template.is_empty()
+        || template.len() > MAX_POOL_TLV_PAYLOAD
+        || !template.bytes().all(|b| (0x20..0x7f).contains(&b))
+    {
+        return Ok(None);
+    }
+    if template.starts_with(' ') || template.ends_with(' ') {
+        return Err(format!(
+            "format `{sig}` interpolatedIntent has ambiguous leading/trailing display padding"
+        ));
+    }
+
+    let bytes = template.as_bytes();
+    let mut literals: Vec<Vec<u8>> = Vec::new();
+    let mut ordinals: Vec<u8> = Vec::new();
+    let mut literal_start = 0usize;
+    let mut cursor = 0usize;
+    let mut token_amount_refs = 0usize;
+
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'}' => {
+                return Err(format!(
+                    "format `{sig}` interpolatedIntent has an unmatched `}}`"
+                ))
+            }
+            b'{' => {
+                literals.push(bytes[literal_start..cursor].to_vec());
+                let placeholder_start = cursor + 1;
+                let rel_close = bytes[placeholder_start..]
+                    .iter()
+                    .position(|&b| b == b'}')
+                    .ok_or_else(|| {
+                        format!("format `{sig}` interpolatedIntent has an unmatched `{{`")
+                    })?;
+                let close = placeholder_start + rel_close;
+                let placeholder = &template[placeholder_start..close];
+                if placeholder.is_empty()
+                    || placeholder.starts_with(' ')
+                    || placeholder.ends_with(' ')
+                    || placeholder.as_bytes().contains(&b'{')
+                {
+                    return Err(format!(
+                        "format `{sig}` interpolatedIntent has an empty, nested, or padded placeholder"
+                    ));
+                }
+                if ordinals.len() == MAX_INTERPOLATED_SUBSTITUTIONS {
+                    return Err(format!(
+                        "format `{sig}` interpolatedIntent exceeds {MAX_INTERPOLATED_SUBSTITUTIONS} substitutions"
+                    ));
+                }
+
+                let mut matching = fmt.fields.iter().enumerate().filter(|(_, field)| {
+                    field
+                        .path
+                        .as_deref()
+                        .is_some_and(|path| interpolation_paths_match(path, placeholder))
+                });
+                let Some((field_index, field)) = matching.next() else {
+                    // Registry v2 explicitly permits falling back to the
+                    // static intent when interpolation cannot be resolved.
+                    // Do so at build time rather than dropping an otherwise
+                    // safe format from the authenticated catalogue.
+                    return Ok(None);
+                };
+                if matching.next().is_some() {
+                    return Err(format!(
+                        "format `{sig}` interpolatedIntent placeholder `{{{placeholder}}}` is ambiguous"
+                    ));
+                }
+                let field_ordinal = u8::try_from(field_index)
+                    .map_err(|_| format!("format `{sig}` interpolation field index overflow"))?;
+                if ordinals.contains(&field_ordinal) {
+                    return Err(format!(
+                        "format `{sig}` interpolatedIntent repeats field `{{{placeholder}}}`"
+                    ));
+                }
+                match field.visible.as_deref() {
+                    None | Some("always") => {}
+                    _ => {
+                        return Err(format!(
+                            "format `{sig}` interpolatedIntent references non-always-visible field `{{{placeholder}}}`"
+                        ))
+                    }
+                }
+
+                let format_op = parse_format_name(field.format.as_deref().unwrap_or("raw"))?;
+                if !matches!(format_op, FMT_AMOUNT | FMT_TOKEN_AMOUNT) {
+                    // Valid upstream address/NFT/raw summaries are outside the
+                    // scalar amount witness subset; retain the static intent.
+                    return Ok(None);
+                }
+                if field
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.as_object())
+                    .is_some_and(|p| p.contains_key("threshold") || p.contains_key("message"))
+                {
+                    // Threshold/message output is semantic shorthand, not the
+                    // canonical numeric witness required by interpolation v1.
+                    return Ok(None);
+                }
+                if format_op == FMT_TOKEN_AMOUNT {
+                    token_amount_refs += 1;
+                    if token_amount_refs > 1 {
+                        // The current request envelope supplies at most one
+                        // authenticated ERC-20 metadata entry.
+                        return Ok(None);
+                    }
+                    if !token_amount_interpolation_identity_is_authenticated(
+                        field,
+                        context_kind,
+                        parsed,
+                        ctx,
+                        interpolation_deployment,
+                    )? {
+                        // The ordinary field remains fully rendered and the
+                        // descriptor's static intent remains authenticated.
+                        // Only the stronger value-bearing banner authority is
+                        // omitted when its ticker/scale witness is not known
+                        // to exist for this exact deployment.
+                        return Ok(None);
+                    }
+                }
+
+                let path = field.path.as_deref().unwrap_or("");
+                if path.starts_with('@') || path.starts_with('$') {
+                    return Ok(None);
+                }
+                let terminal = rendered_path_terminal_type(path, context_kind, parsed)?
+                    .ok_or_else(|| format!("format `{sig}` interpolation path has no ABI type"))?;
+                let (base, is_array) = split_array_suffix(&terminal);
+                let unsigned_integer = base.strip_prefix("uint").is_some_and(|width| {
+                    width.is_empty() || width.bytes().all(|b| b.is_ascii_digit())
+                });
+                if is_array || !unsigned_integer {
+                    return Ok(None);
+                }
+
+                ordinals.push(field_ordinal);
+                cursor = close + 1;
+                literal_start = cursor;
+            }
+            _ => cursor += 1,
+        }
+    }
+    literals.push(bytes[literal_start..].to_vec());
+
+    if ordinals.is_empty() {
+        return Ok(None);
+    }
+    // PQ1 substitutes the formatter's trusted-display witness, including its
+    // authenticated unit/ticker. Ambire's companion renderer instead inserts
+    // a raw decoded integer, so upstream templates sometimes append a unit in
+    // the following literal (for example `{amount} BORG`). Enroll only one
+    // terminal scalar in this first device slice: this prevents duplicated or
+    // contradictory unit copy while retaining the ordinary field and token-
+    // identity pages. The v1 bytecode stays bounded for a later reviewed
+    // multi-value expansion.
+    if ordinals.len() != 1 || !literals.last().is_some_and(Vec::is_empty) {
+        return Ok(None);
+    }
+    let literal_total = literals
+        .iter()
+        .try_fold(0usize, |total, literal| total.checked_add(literal.len()));
+    let Some(literal_total) = literal_total else {
+        return Ok(None);
+    };
+    // Every exact amount witness is at least one visible byte. If even that
+    // lower bound cannot fit two OLED rows, this template can never render.
+    if literal_total + ordinals.len() > MAX_INTERPOLATED_INTENT_LEN {
+        return Ok(None);
+    }
+
+    let mut program = Vec::new();
+    program.push(INTERPOLATED_INTENT_VERSION);
+    program.push(ordinals.len() as u8);
+    for (literal, ordinal) in literals.iter().take(ordinals.len()).zip(&ordinals) {
+        program.push(literal.len() as u8);
+        program.extend_from_slice(literal);
+        program.push(*ordinal);
+    }
+    let final_literal = literals
+        .last()
+        .expect("one final literal is always pushed above");
+    program.push(final_literal.len() as u8);
+    program.extend_from_slice(final_literal);
+    if program.len() > MAX_POOL_TLV_PAYLOAD {
+        return Ok(None);
+    }
+    Ok(Some(program))
+}
+
+/// Prove that a `tokenAmount` interpolation has a deployment-static token
+/// identity and an authenticated magnitude/unit witness.
+///
+/// Runtime calldata paths are intentionally ineligible even if the current
+/// ERC-20 corpus contains some possible token: enrollment must hold for every
+/// transaction accepted by the descriptor. `@.to` is the sole static path and
+/// is compared in compiled wire space against the same constant the device
+/// accepts. A literal/constant `token` is also static. In either case the exact
+/// `(chain, token)` must exist in the validated ERC-20 DB, unless the token is
+/// a descriptor-pinned native sentinel on a chain whose native ticker/18-decimal
+/// scale is firmware-pinned already.
+fn token_amount_interpolation_identity_is_authenticated(
+    field: &FieldDef,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+    ctx: &CompileCtx,
+    interpolation_deployment: Option<&InterpolationDeployment<'_>>,
+) -> Result<bool, String> {
+    let Some(deployment) = interpolation_deployment else {
+        return Ok(false);
+    };
+    let Some(params) = field.params.as_ref().and_then(|params| params.as_object()) else {
+        return Ok(false);
+    };
+
+    // Device precedence is tokenPath first, then token literal. Mirror it so a
+    // dynamic path cannot borrow enrollment authority from a dormant literal.
+    let token = if let Some(token_path) = params.get("tokenPath") {
+        let token_path = token_path
+            .as_str()
+            .ok_or_else(|| "tokenAmount.tokenPath must be a string".to_string())?;
+        let program = compile_token_path(token_path, context_kind, parsed)
+            .map_err(|e| format!("tokenPath `{token_path}`: {e}"))?;
+        if program.as_slice() != NFT_COLLECTION_TO_PATH.as_slice() {
+            return Ok(false);
+        }
+        deployment.contract
+    } else if let Some(token) = params.get("token") {
+        let token = token
+            .as_str()
+            .ok_or_else(|| "tokenAmount.token must be a string".to_string())?;
+        resolve_address_or_const(token, ctx)?
+    } else {
+        return Ok(false);
+    };
+
+    if deployment
+        .erc20_capabilities
+        .contains(deployment.chain_id, &token)
+    {
+        return Ok(true);
+    }
+
+    if known_native_ticker(deployment.chain_id).is_none() {
+        return Ok(false);
+    }
+    let Some(native_currency) = params.get("nativeCurrencyAddress") else {
+        return Ok(false);
+    };
+    let native_addresses = compile_native_currency_addresses(native_currency, ctx)?;
+    Ok(native_addresses
+        .chunks_exact(pqsigner_erc7730::render::params::NATIVE_CURRENCY_ADDRESS_LEN)
+        .any(|candidate| candidate == token))
+}
+
+/// ERC-7730 calldata examples use both root-explicit (`#.amount`) and
+/// root-relative (`amount`) placeholder spellings for a field whose emitted
+/// path is `#.amount`. Treat exactly that optional structured-root prefix as
+/// equivalent; no trimming, case folding, or broader path normalization is
+/// permitted. If both spellings are emitted as distinct fields, the caller's
+/// ambiguity check rejects enrollment.
+fn interpolation_paths_match(field_path: &str, placeholder: &str) -> bool {
+    field_path == placeholder
+        || field_path.strip_prefix("#.") == Some(placeholder)
+        || placeholder.strip_prefix("#.") == Some(field_path)
+}
+
 fn compile_one_format(
     sig: &str,
     fmt: &Format,
@@ -2509,6 +3000,7 @@ fn compile_one_format(
     pool: &mut Pool,
     enum_offsets: &BTreeMap<String, u16>,
     out: &mut Vec<u8>,
+    interpolation_deployment: Option<&InterpolationDeployment<'_>>,
 ) -> Result<(), String> {
     let parsed = parse_format_key(sig).map_err(|e| format!("format `{sig}`: {e}"))?;
     let canonical_contract_signature = if context_kind == CTX_CONTRACT {
@@ -2646,7 +3138,7 @@ fn compile_one_format(
     // declines the whole format to blind-sign. `nested_descent_count` is the E1
     // reconciliation pin: the number of nested descent points the device MUST
     // bind, derived HERE (independent of the render traversal).
-    let (compiled, nested_descent_count): (Vec<CompiledFieldOut>, u8) = if has_nested_struct {
+    let (mut compiled, nested_descent_count): (Vec<CompiledFieldOut>, u8) = if has_nested_struct {
         match try_compile_eip712_nested(sig, fmt, &parsed, ctx, pool, enum_offsets)? {
             Some(res) => res,
             None => (
@@ -2679,12 +3171,33 @@ fn compile_one_format(
         )
     };
 
+    // `interpolatedIntent` is presentation derived from values that keep their
+    // ordinary field pages. The host resolves braces to final emitted field
+    // ordinals; the device receives only a tiny authenticated token program.
+    // Valid upstream shapes outside this first scalar-amount subset retain the
+    // descriptor's static `intent` and emit no program. Once emitted, however,
+    // runtime witness failure is fatal and can never fall back to static copy.
+    if let Some(program) = compile_interpolated_intent(
+        sig,
+        fmt,
+        context_kind,
+        &parsed,
+        ctx,
+        interpolation_deployment,
+    )? {
+        let first = compiled
+            .first_mut()
+            .ok_or_else(|| format!("format `{sig}` interpolation has no emitted field"))?;
+        first.param_off =
+            pool.append_param_tlv(first.param_off, PARAM_INTERPOLATED_INTENT, &program)?;
+    }
+
     // Emit format header.
     out.extend_from_slice(&selector); // 4 B
     out.push(compiled.len() as u8); // 1 B field_count
     out.push(intent.len() as u8); // 1 B intent_len
     out.extend_from_slice(&static_head_words.to_be_bytes()); // 2 B static_head_words
-                                                             // Schema v3: E1 reconciliation pin — the count of nested-EIP-712 struct
+                                                             // Schema v4: E1 reconciliation pin — the count of nested-EIP-712 struct
                                                              // descent points (`PARAM_NESTED_STRUCT` v0x03 anchors) the device MUST bind
                                                              // before signing. Independent of the render traversal, so a regression that
                                                              // makes descent conditional under-consumes and declines. `0` until the
@@ -2742,8 +3255,12 @@ fn rendered_path_terminal_type(
     for (i, seg) in segs.iter().enumerate() {
         match seg {
             PathSeg::Name(name) => names.push(name),
-            PathSeg::ArrayAll
-            | PathSeg::ArrayIdx(_)
+            // A whole-array wildcard followed by a member is the canonical
+            // v2 array-of-struct path (`details.[].amount`). It changes the
+            // traversal cardinality, not the element's semantic type, so keep
+            // the array element type and continue into the named member.
+            PathSeg::ArrayAll => {}
+            PathSeg::ArrayIdx(_)
             | PathSeg::ArrayLast
             | PathSeg::ArraySlice(_, _)
             | PathSeg::ArraySliceLast(_)
@@ -2793,6 +3310,116 @@ fn rendered_path_terminal_type(
         }
     }
     Ok(Some(ty))
+}
+
+fn terminal_kind_from_type(ty: &str) -> Result<TerminalKind, String> {
+    let (base, _) = split_array_suffix(ty);
+    if base == "address" {
+        return Ok(TerminalKind::Address);
+    }
+    if base == "bool" {
+        return Ok(TerminalKind::Bool);
+    }
+    if base == "string" {
+        return Ok(TerminalKind::DynamicString);
+    }
+    if base == "bytes" {
+        return Ok(TerminalKind::DynamicBytes);
+    }
+    if let Some(width) = base.strip_prefix("uint") {
+        if width.is_empty() || width.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Ok(TerminalKind::Unsigned);
+        }
+    }
+    if let Some(width) = base.strip_prefix("int") {
+        if width.is_empty() || width.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Ok(TerminalKind::Signed);
+        }
+    }
+    if let Some(width) = base.strip_prefix("bytes") {
+        if matches!(width.parse::<u8>(), Ok(1..=32)) {
+            return Ok(TerminalKind::FixedBytes);
+        }
+    }
+    Err(format!(
+        "terminal type `{ty}` has no schema-v4 device semantic kind"
+    ))
+}
+
+fn terminal_kind_for_path(
+    path: &str,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+) -> Result<TerminalKind, String> {
+    let path = path.trim();
+    if let Some(container) = path.strip_prefix('@') {
+        return match container.trim_start_matches('.') {
+            "to" | "from" => Ok(TerminalKind::Address),
+            "value" | "chainId" | "nonce" => Ok(TerminalKind::Unsigned),
+            other => Err(format!("unsupported container terminal `@.{other}`")),
+        };
+    }
+    if path.starts_with('$') {
+        return Err("metadata-rooted render fields have no signed terminal kind".to_string());
+    }
+    let ty = rendered_path_terminal_type(path, context_kind, parsed)?
+        .ok_or_else(|| format!("path `{path}` has no typed terminal"))?;
+    let (base, _) = split_array_suffix(&ty);
+    if context_kind == CTX_EIP712 && type_is_struct(base, parsed) {
+        return Ok(TerminalKind::NestedStruct);
+    }
+    terminal_kind_from_type(&ty)
+}
+
+fn format_op_from_wire(format_op: u8) -> Result<FormatOp, String> {
+    FormatOp::try_from(format_op).map_err(|_| format!("unknown format opcode 0x{format_op:02x}"))
+}
+
+fn param_mask_from_compiled_tlvs(body: &[u8]) -> Result<ParamMask, String> {
+    let mut cursor = 0usize;
+    let mut mask = ParamMask::NONE;
+    while cursor < body.len() {
+        let tag = *body
+            .get(cursor)
+            .ok_or_else(|| "truncated compiled parameter tag".to_string())?;
+        let len = *body
+            .get(cursor + 1)
+            .ok_or_else(|| "truncated compiled parameter length".to_string())?
+            as usize;
+        cursor += 2;
+        body.get(cursor..cursor + len)
+            .ok_or_else(|| "truncated compiled parameter payload".to_string())?;
+        cursor += len;
+        let bit = match tag {
+            PARAM_TOKEN_PATH => ParamMask::TOKEN_PATH,
+            PARAM_TOKEN => ParamMask::TOKEN,
+            PARAM_THRESHOLD => ParamMask::THRESHOLD,
+            PARAM_MESSAGE => ParamMask::MESSAGE,
+            PARAM_ADDR_TYPES => ParamMask::ADDR_TYPES,
+            PARAM_ADDR_SOURCES => ParamMask::ADDR_SOURCES,
+            PARAM_DATE_ENCODING => ParamMask::DATE_ENCODING,
+            PARAM_ENUM_REF => ParamMask::ENUM_REF,
+            PARAM_DECIMALS => ParamMask::DECIMALS,
+            PARAM_BASE => ParamMask::BASE,
+            PARAM_PREFIX => ParamMask::PREFIX,
+            PARAM_SUFFIX => ParamMask::SUFFIX,
+            PARAM_NESTED_SELECTOR => ParamMask::NESTED_SELECTOR,
+            PARAM_NESTED_CALLEE => ParamMask::NESTED_CALLEE,
+            PARAM_FALLBACK_LABEL => ParamMask::FALLBACK_LABEL,
+            PARAM_CONST_VALUE => ParamMask::CONST_VALUE,
+            PARAM_NESTED_STRUCT => ParamMask::NESTED_STRUCT,
+            PARAM_NATIVE_CURRENCY => ParamMask::NATIVE_CURRENCY,
+            PARAM_DYNAMIC_KIND => ParamMask::DYNAMIC_KIND,
+            PARAM_NFT_COLLECTION => ParamMask::NFT_COLLECTION,
+            PARAM_NFT_COLLECTION_PATH => ParamMask::NFT_COLLECTION_PATH,
+            // Format metadata / mandatory semantic kind are validated at
+            // their own enclosing boundaries, not as formatter parameters.
+            PARAM_VISIBILITY | PARAM_INTERPOLATED_INTENT | PARAM_TERMINAL_KIND => continue,
+            other => return Err(format!("unknown compiled parameter tag 0x{other:02x}")),
+        };
+        mask = mask.union(bit);
+    }
+    Ok(mask)
 }
 
 fn is_signed_integer_type(ty: &str) -> bool {
@@ -2905,6 +3532,15 @@ fn compile_one_field(
         Some(path) => rendered_path_terminal_type(path, context_kind, parsed)?,
         None => None,
     };
+    let terminal_kind = match field.path.as_deref() {
+        Some(path) => terminal_kind_for_path(path, context_kind, parsed)?,
+        None if const_value.is_some() => TerminalKind::ConstantText,
+        None => {
+            return Err(format!(
+                "format `{sig}` field[{field_idx}] has no schema-v4 terminal kind"
+            ))
+        }
+    };
     // EIP-712 `encodeData` stores dynamic bytes/string as keccak256(value),
     // arrays as keccak256(concatenated encodings), and structs as hashStruct.
     // A flat field path therefore binds only the opaque 32-byte hash word, not
@@ -2979,6 +3615,26 @@ fn compile_one_field(
     if emit_nested_marker {
         push_tlv(&mut param_blob, PARAM_NESTED_STRUCT, &[0x01])?;
     }
+    // Schema v4: the host's exact type resolution is authenticated in every
+    // field and rechecked against the same policy by the device preflight.
+    push_tlv(&mut param_blob, PARAM_TERMINAL_KIND, &[terminal_kind as u8])?;
+    let policy_mask = param_mask_from_compiled_tlvs(&param_blob)?;
+    let op = format_op_from_wire(format_op)?;
+    let policy_mask = if emit_nested_marker && terminal_kind != TerminalKind::NestedStruct {
+        // A bare v1 marker deliberately hard-refuses the whole format; validate
+        // the underlying field semantics while treating the marker as an
+        // enclosing refusal, not a formatter parameter.
+        policy_mask.without(ParamMask::NESTED_STRUCT)
+    } else {
+        policy_mask
+    };
+    validate_field_policy(op, terminal_kind, policy_mask).map_err(|error| {
+        format!(
+            "format `{sig}` field[{field_idx}] formatter/type/parameter policy rejected \
+             `{}` × {terminal_kind:?}: {error:?}",
+            op.registry_name()
+        )
+    })?;
     let param_off = if param_blob.is_empty() {
         0u16
     } else {
@@ -2997,11 +3653,10 @@ fn compile_one_field(
     // 4. Label.
     let label_raw = field.label.as_deref().unwrap_or("");
     let label = clean_ascii_truncated(label_raw, 254);
-    if label.is_empty() && format_op != FMT_RAW {
-        // A blank label on a *visible* field would render as a header-
-        // less value page. Allow it on raw because some descriptors
-        // (Aave's `referralCode` set to visible=never) intentionally
-        // skip labels.
+    if field.visible.as_deref() != Some("never") && !label_has_visible_glyph(label.as_bytes()) {
+        return Err(format!(
+            "format `{sig}` field[{field_idx}] has an empty post-sanitization visible label"
+        ));
     }
 
     Ok(CompiledFieldOut {
@@ -3366,11 +4021,29 @@ fn compile_nested_block(
             }
             let mut param_blob: Vec<u8> = Vec::new();
             push_tlv(&mut param_blob, PARAM_NESTED_STRUCT, &child_payload)?;
+            push_tlv(
+                &mut param_blob,
+                PARAM_TERMINAL_KIND,
+                &[TerminalKind::NestedStruct as u8],
+            )?;
+            validate_field_policy(
+                FormatOp::Raw,
+                TerminalKind::NestedStruct,
+                param_mask_from_compiled_tlvs(&param_blob)?,
+            )
+            .map_err(|error| {
+                format!("format `{sig}` nested anchor `{abs_prefix}.{seg}` policy: {error:?}")
+            })?;
             let param_off = intern_param_blob(pool, &param_blob)?;
             // A nested-anchor sub-field renders nothing itself (its word is a
             // struct/array hashStruct word — never an address bit, so it needs no
             // E2 coverage); the device recurses on the marker, ignoring path_off.
             let label = clean_ascii_truncated(seg, 254);
+            if !label_has_visible_glyph(label.as_bytes()) {
+                return Err(format!(
+                    "format `{sig}` nested anchor `{abs_prefix}.{seg}` has an empty post-sanitization label"
+                ));
+            }
             sub_fields.push(FMT_RAW);
             sub_fields.push(label.len() as u8);
             sub_fields.extend_from_slice(label.as_bytes());
@@ -3407,6 +4080,7 @@ fn compile_nested_block(
                 return Ok(None);
             }
             let nested_format_op = parse_format_name(field.format.as_deref().unwrap_or("raw"))?;
+            let terminal_kind = terminal_kind_from_type(&members[local_ord].1)?;
             if is_signed_integer_type(&members[local_ord].1)
                 && format_interprets_numeric_sign(nested_format_op)
             {
@@ -3415,12 +4089,28 @@ fn compile_nested_block(
                     members[local_ord].1
                 ));
             }
-            covered[local_ord] = true; // the render path reads this word
-            let Some((format_op, param_blob)) =
-                compile_nested_subfield_params(field, abs_prefix, members, &mut covered)?
+            let Some((format_op, mut param_blob)) = compile_nested_subfield_params(
+                field,
+                abs_prefix,
+                members,
+                &mut covered,
+                terminal_kind,
+                !is_hidden,
+            )?
             else {
                 return Ok(None);
             };
+            push_tlv(&mut param_blob, PARAM_TERMINAL_KIND, &[terminal_kind as u8])?;
+            let op = format_op_from_wire(format_op)?;
+            validate_field_policy(op, terminal_kind, param_mask_from_compiled_tlvs(&param_blob)?)
+                .map_err(|error| {
+                    format!(
+                        "format `{sig}` nested field `{path}` formatter/type/parameter policy: {error:?}"
+                    )
+                })?;
+            if !is_hidden && directly_displays_terminal(op, terminal_kind) {
+                covered[local_ord] = true;
+            }
             let render_prog = [
                 PATHOP_ROOT_STRUCT,
                 PATHOP_FIELD_IDX,
@@ -3434,6 +4124,11 @@ fn compile_nested_block(
                 intern_param_blob(pool, &param_blob)?
             };
             let label = clean_ascii_truncated(field.label.as_deref().unwrap_or(""), 254);
+            if !is_hidden && !label_has_visible_glyph(label.as_bytes()) {
+                return Err(format!(
+                    "format `{sig}` nested field `{path}` has an empty post-sanitization visible label"
+                ));
+            }
             sub_fields.push(format_op);
             sub_fields.push(label.len() as u8);
             sub_fields.extend_from_slice(label.as_bytes());
@@ -3512,10 +4207,26 @@ fn compile_nested_anchor(
     }
     let mut param_blob: Vec<u8> = Vec::new();
     push_tlv(&mut param_blob, PARAM_NESTED_STRUCT, &payload)?;
+    push_tlv(
+        &mut param_blob,
+        PARAM_TERMINAL_KIND,
+        &[TerminalKind::NestedStruct as u8],
+    )?;
+    validate_field_policy(
+        FormatOp::Raw,
+        TerminalKind::NestedStruct,
+        param_mask_from_compiled_tlvs(&param_blob)?,
+    )
+    .map_err(|error| format!("format `{sig}` nested anchor `{top}` policy: {error:?}"))?;
     let param_off = intern_param_blob(pool, &param_blob)?;
     // The anchor record renders nothing itself; the label carries the member name
     // for `erc7730.review.txt` readability.
     let label = clean_ascii_truncated(top, 254);
+    if !label_has_visible_glyph(label.as_bytes()) {
+        return Err(format!(
+            "format `{sig}` nested anchor `{top}` has an empty post-sanitization label"
+        ));
+    }
     Ok(Some((
         CompiledFieldOut {
             format_op: FMT_RAW,
@@ -3565,6 +4276,8 @@ fn compile_nested_subfield_params(
     abs_prefix: &str,
     members: &[(String, String)],
     covered: &mut [bool],
+    terminal_kind: TerminalKind,
+    shown: bool,
 ) -> Result<Option<(u8, Vec<u8>)>, String> {
     let format_op = parse_format_name(field.format.as_deref().unwrap_or("raw"))?;
     let mut out: Vec<u8> = Vec::new();
@@ -3624,7 +4337,15 @@ fn compile_nested_subfield_params(
                 return Ok(None);
             };
             let tok_ord = u16::try_from(tok_ord).expect("member_count ≤ MAX_NESTED_MEMBERS");
-            covered[tok_ord as usize] = true; // the token address word is bound
+            if !token_path_displays_identity(format_op_from_wire(format_op)?, terminal_kind) {
+                return Ok(None);
+            }
+            if terminal_kind_from_type(&members[tok_ord as usize].1)? != TerminalKind::Address {
+                return Ok(None);
+            }
+            if shown {
+                covered[tok_ord as usize] = true; // visibly bound token identity
+            }
             let tok_prog = [
                 PATHOP_ROOT_STRUCT,
                 PATHOP_FIELD_IDX,
@@ -3839,22 +4560,13 @@ fn compile_params(
                 let collection_path = collection_path
                     .as_str()
                     .ok_or_else(|| "nftName.collectionPath must be a string".to_string())?;
-                if collection_path.trim().starts_with('@') {
-                    if collection_path.trim() != "@.to" {
-                        return Err(format!(
-                            "nftName.collectionPath supports only `@.to` for container paths, got `{collection_path}`"
-                        ));
-                    }
-                } else if rendered_path_terminal_type(collection_path, context_kind, parsed)?
-                    .as_deref()
-                    != Some("address")
-                {
-                    return Err(format!(
-                        "nftName.collectionPath `{collection_path}` must resolve to an address"
-                    ));
-                }
                 let program = compile_path(collection_path, context_kind, parsed)
                     .map_err(|e| format!("collectionPath `{collection_path}`: {e}"))?;
+                if program.as_slice() != NFT_COLLECTION_TO_PATH.as_slice() {
+                    return Err(format!(
+                        "nftName.collectionPath `{collection_path}` does not compile to the exact device-supported `@.to` collection path"
+                    ));
+                }
                 push_tlv(&mut out, PARAM_NFT_COLLECTION_PATH, &program)?;
             }
         }
@@ -4138,7 +4850,7 @@ fn check_contract_field_completeness(
                             .path
                             .as_deref()
                             .is_some_and(|p| path_covers_tuple_member(p, top_name, member))
-                            || field_token_path(field).is_some_and(|tp| {
+                            || shown_token_path(field, CTX_CONTRACT, parsed).is_some_and(|tp| {
                                 token_path_surfaces_exact_scalar_address(tp, CTX_CONTRACT, parsed)
                                     && path_covers_tuple_member(tp, top_name, member)
                             })
@@ -4161,7 +4873,7 @@ fn check_contract_field_completeness(
                         .path
                         .as_deref()
                         .is_some_and(|p| path_top_param_index(p, parsed) == Some(idx as u16))
-                        || field_token_path(field).is_some_and(|tp| {
+                        || shown_token_path(field, CTX_CONTRACT, parsed).is_some_and(|tp| {
                             token_path_surfaces_exact_scalar_address(tp, CTX_CONTRACT, parsed)
                                 && path_top_param_index(tp, parsed) == Some(idx as u16)
                         })
@@ -4227,7 +4939,7 @@ fn check_eip712_field_completeness(
                 .path
                 .as_deref()
                 .is_some_and(|p| path_top_param_index(p, parsed) == Some(idx as u16))
-                || field_token_path(field).is_some_and(|tp| {
+                || shown_token_path(field, CTX_EIP712, parsed).is_some_and(|tp| {
                     token_path_surfaces_exact_scalar_address(tp, CTX_EIP712, parsed)
                         && path_top_param_index(tp, parsed) == Some(idx as u16)
                 })
@@ -4319,11 +5031,47 @@ fn field_is_hidden(field: &FieldDef) -> bool {
     field.visible.as_deref() == Some("never")
 }
 
-/// The `tokenPath` param of a `tokenAmount`-style field, if any. A shown
-/// amount whose `tokenPath` points at an address argument surfaces that
-/// address's identity (name/symbol/decimals) to the user, which counts as
-/// showing the address for the WYSIWYS rule.
-fn field_token_path(field: &FieldDef) -> Option<&str> {
+/// A shown field path whose formatter actually consumes and displays its
+/// authenticated terminal value.  Visibility/accounting gates must not give a
+/// descriptor credit merely because a path is present: an inapplicable
+/// formatter would otherwise turn a signed-but-unshown operand into apparent
+/// coverage before the compiler's final policy check runs.
+fn shown_direct_field_path<'a>(
+    field: &'a FieldDef,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+) -> Option<&'a str> {
+    if field_is_hidden(field) {
+        return None;
+    }
+    let path = field.path.as_deref()?;
+    let op = parse_format_name(field.format.as_deref().unwrap_or("raw"))
+        .ok()
+        .and_then(|wire| format_op_from_wire(wire).ok())?;
+    let terminal_kind = terminal_kind_for_path(path, context_kind, parsed).ok()?;
+    directly_displays_terminal(op, terminal_kind).then_some(path)
+}
+
+/// The `tokenPath` of a shown `tokenAmount` field whose amount path has the
+/// exact authenticated kind that makes the formatter consume the token
+/// identity.  A stray `tokenPath` parameter on `raw`, a hidden field, or a
+/// non-unsigned amount cannot receive completeness/visibility credit.
+fn shown_token_path<'a>(
+    field: &'a FieldDef,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+) -> Option<&'a str> {
+    if field_is_hidden(field) {
+        return None;
+    }
+    let amount_path = field.path.as_deref()?;
+    let op = parse_format_name(field.format.as_deref().unwrap_or("raw"))
+        .ok()
+        .and_then(|wire| format_op_from_wire(wire).ok())?;
+    let terminal_kind = terminal_kind_for_path(amount_path, context_kind, parsed).ok()?;
+    if !token_path_displays_identity(op, terminal_kind) {
+        return None;
+    }
     field
         .params
         .as_ref()
@@ -4459,16 +5207,15 @@ fn check_field_visibility(
     // shown field refuses that shape while still passing Celo
     // `authorizeVoteSigner(address signer)` (the shown `signer` IS the effect).
     let any_shown_effect = fmt.fields.iter().any(|f| {
-        !field_is_hidden(f)
-            && f.path.as_deref().is_some_and(|p| {
-                path_is_native_value(p)
-                    || path_top_param_index(p, parsed).is_some_and(|idx| {
-                        parsed
-                            .top_names
-                            .get(idx as usize)
-                            .is_some_and(|nm| !is_inert_role_name(nm))
-                    })
-            })
+        shown_direct_field_path(f, context_kind, parsed).is_some_and(|p| {
+            path_is_native_value(p)
+                || path_top_param_index(p, parsed).is_some_and(|idx| {
+                    parsed
+                        .top_names
+                        .get(idx as usize)
+                        .is_some_and(|nm| !is_inert_role_name(nm))
+                })
+        })
     });
     if !parsed.top_names.is_empty() && !any_shown_effect {
         return Err(format!(
@@ -4532,18 +5279,12 @@ fn check_field_visibility(
                         continue;
                     }
                     let shown = fmt.fields.iter().any(|f| {
-                        !field_is_hidden(f)
-                            && (f
-                                .path
-                                .as_deref()
-                                .is_some_and(|p| path_covers_tuple_member(p, top_name, member))
-                                || field_token_path(f).is_some_and(|tp| {
-                                    token_path_surfaces_exact_scalar_address(
-                                        tp,
-                                        context_kind,
-                                        parsed,
-                                    ) && path_covers_tuple_member(tp, top_name, member)
-                                }))
+                        shown_direct_field_path(f, context_kind, parsed)
+                            .is_some_and(|p| path_covers_tuple_member(p, top_name, member))
+                            || shown_token_path(f, context_kind, parsed).is_some_and(|tp| {
+                                token_path_surfaces_exact_scalar_address(tp, context_kind, parsed)
+                                    && path_covers_tuple_member(tp, top_name, member)
+                            })
                     });
                     if !shown {
                         let arg_path = format!("{top_name}.{member}");
@@ -4555,16 +5296,14 @@ fn check_field_visibility(
                 if !type_contains_address(top_ty) {
                     continue;
                 }
-                let shown =
-                    fmt.fields.iter().any(|f| {
-                        !field_is_hidden(f)
-                            && (f.path.as_deref().is_some_and(|p| {
-                                path_top_param_index(p, parsed) == Some(idx as u16)
-                            }) || field_token_path(f).is_some_and(|tp| {
-                                token_path_surfaces_exact_scalar_address(tp, context_kind, parsed)
-                                    && path_top_param_index(tp, parsed) == Some(idx as u16)
-                            }))
-                    });
+                let shown = fmt.fields.iter().any(|f| {
+                    shown_direct_field_path(f, context_kind, parsed)
+                        .is_some_and(|p| path_top_param_index(p, parsed) == Some(idx as u16))
+                        || shown_token_path(f, context_kind, parsed).is_some_and(|tp| {
+                            token_path_surfaces_exact_scalar_address(tp, context_kind, parsed)
+                                && path_top_param_index(tp, parsed) == Some(idx as u16)
+                        })
+                });
                 if !shown {
                     return Err(hidden_address_err(sig, top_name));
                 }
@@ -4696,12 +5435,10 @@ fn check_eip712_member_addresses(
         return Ok(());
     }
     let shown = fmt.fields.iter().any(|f| {
-        !field_is_hidden(f)
-            && (f
-                .path
-                .as_deref()
-                .is_some_and(|p| path_matches_member(p, member_path))
-                || field_token_path(f).is_some_and(|tp| path_matches_member(tp, member_path)))
+        shown_direct_field_path(f, CTX_EIP712, parsed)
+            .is_some_and(|p| path_matches_member(p, member_path))
+            || shown_token_path(f, CTX_EIP712, parsed)
+                .is_some_and(|tp| path_matches_member(tp, member_path))
     });
     if !shown {
         return Err(hidden_address_err(sig, member_path));
@@ -6216,7 +6953,11 @@ fn encode_enum_table(table: &serde_json::Value) -> Result<Vec<u8>, String> {
     if map.len() > 255 {
         return Err(format!("enum has {} entries > 255", map.len()));
     }
+    if map.is_empty() {
+        return Err("enum table must contain at least one entry".to_string());
+    }
     let mut entries: Vec<(u64, String)> = Vec::with_capacity(map.len());
+    let mut display_labels = BTreeSet::new();
     for (k, v) in map {
         let key: u64 = k
             .parse()
@@ -6224,9 +6965,16 @@ fn encode_enum_table(table: &serde_json::Value) -> Result<Vec<u8>, String> {
         let val = v
             .as_str()
             .ok_or_else(|| format!("enum value for `{k}` must be a string"))?;
-        let val = clean_ascii_truncated(val, 254);
-        if val.is_empty() {
-            return Err(format!("enum value for `{k}` is empty / non-printable"));
+        let val = clean_ascii_truncated(val, ENUM_DISPLAY_BYTES);
+        if !label_has_visible_glyph(val.as_bytes()) || val.ends_with(' ') {
+            return Err(format!(
+                "enum value for `{k}` is empty, blank, or ends in ambiguous display padding"
+            ));
+        }
+        if !display_labels.insert(val.clone()) {
+            return Err(format!(
+                "enum value for `{k}` collides with another label after printable-ASCII sanitization and the {ENUM_DISPLAY_BYTES}-byte device display cap"
+            ));
         }
         entries.push((key, val));
     }
@@ -6616,12 +7364,184 @@ fn review_skip_category(msg: &str) -> &'static str {
     }
 }
 
-/// Decode one leaf's IR into a per-field breakdown (op + label) plus a count
-/// of *degraded* fields — `raw`-op fields with an empty label, the signature
-/// of a descriptor whose author-intended formatting was silently lost (e.g. a
-/// dropped `$ref`; review finding 1.1). Returns `(lines, field_count,
-/// degraded_count)`. Never panics: a parse failure yields a single visible
-/// error line so the catalogue still reconciles.
+fn review_ascii(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() + 2);
+    out.push('"');
+    for &byte in bytes {
+        for escaped in std::ascii::escape_default(byte) {
+            out.push(char::from(escaped));
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn review_pool_entry<'a>(ir: &'a Erc7730Ir<'a>, off: u16) -> Result<&'a [u8], String> {
+    if off == 0 {
+        return Ok(&[]);
+    }
+    let off = off as usize;
+    let len = *ir
+        .pool
+        .get(off)
+        .ok_or_else(|| "pool offset is outside the authenticated IR".to_string())?
+        as usize;
+    ir.pool
+        .get(off + 1..off + 1 + len)
+        .ok_or_else(|| "length-prefixed pool entry is truncated".to_string())
+}
+
+fn review_visibility_name(visibility: pqsigner_erc7730::ir::Visibility) -> &'static str {
+    use pqsigner_erc7730::ir::Visibility;
+    match visibility {
+        Visibility::Always => "always",
+        Visibility::Never => "never",
+        Visibility::Optional => "optional",
+        Visibility::IfNotIn => "ifNotIn",
+        Visibility::MustMatch => "mustMatch",
+    }
+}
+
+/// Canonical decoded view of every parameter meaning the device parser exposes.
+/// The review line also carries the exact raw TLV bytes, so an omitted decoder
+/// field cannot erase the authenticated identity of a newly added tag.
+fn review_param_semantics(
+    params: &pqsigner_erc7730::render::params::ParamSet<'_>,
+) -> Result<String, String> {
+    let mut parts = Vec::new();
+    if let Some(path) = params.token_path {
+        parts.push(format!("tokenPath=0x{}", hex::encode(path)));
+    }
+    if let Some(token) = params.token {
+        parts.push(format!("token=0x{}", hex::encode(token)));
+    }
+    if let Some(threshold) = params.threshold {
+        parts.push(format!("threshold=0x{}", hex::encode(threshold)));
+    }
+    if let Some(message) = params.message {
+        parts.push(format!("message={}", review_ascii(message)));
+    }
+    if let Some(types) = params.addr_types {
+        parts.push(format!("addressTypes=0x{types:02x}"));
+    }
+    if let Some(sources) = params.addr_sources {
+        parts.push(format!("addressSources=0x{sources:02x}"));
+    }
+    if let Some(encoding) = params.date_encoding {
+        parts.push(format!("dateEncoding={encoding}"));
+    }
+    if let Some(enum_ref) = params.enum_ref {
+        parts.push(format!("enumRef={enum_ref}"));
+    }
+    if let Some(decimals) = params.decimals {
+        parts.push(format!("decimals={decimals}"));
+    }
+    if let Some(base) = params.base {
+        parts.push(format!("base={}", review_ascii(base)));
+    }
+    if let Some(prefix) = params.prefix {
+        parts.push(format!("prefix={prefix}"));
+    }
+    if let Some(suffix) = params.suffix {
+        parts.push(format!("suffix={}", review_ascii(suffix)));
+    }
+    if let Some(selector) = params.nested_selector {
+        parts.push(format!("nestedSelector=0x{}", hex::encode(selector)));
+    }
+    if let Some(callee) = params.nested_callee {
+        parts.push(format!("nestedCallee=0x{}", hex::encode(callee)));
+    }
+    if let Some(label) = params.fallback_label {
+        parts.push(format!("fallbackLabel={}", review_ascii(label)));
+    }
+    parts.push(format!(
+        "visibility={}",
+        review_visibility_name(params.visibility)
+    ));
+    if let Some(values) = params.visibility_values {
+        parts.push(format!("visibilityValues=0x{}", hex::encode(values)));
+    }
+    if let Some(value) = params.const_value {
+        parts.push(format!("constValue={}", review_ascii(value)));
+    }
+    if let Some(nested) = params.nested_struct {
+        parts.push(format!("nestedStruct=0x{}", hex::encode(nested)));
+    }
+    if let Some(addresses) = params.native_currency_addresses {
+        let members = addresses
+            .chunks_exact(pqsigner_erc7730::render::params::NATIVE_CURRENCY_ADDRESS_LEN)
+            .map(|address| format!("0x{}", hex::encode(address)))
+            .collect::<Vec<_>>()
+            .join(",");
+        parts.push(format!("nativeCurrency=[{members}]"));
+    }
+    if let Some(kind) = params.dynamic_kind {
+        let name = match kind {
+            pqsigner_erc7730::render::params::DYNAMIC_KIND_STRING => "string",
+            pqsigner_erc7730::render::params::DYNAMIC_KIND_BYTES => "bytes",
+            _ => "unknown",
+        };
+        parts.push(format!("dynamicKind={name}(0x{kind:02x})"));
+    }
+    if let Some(collection) = params.nft_collection {
+        parts.push(format!("nftCollection=0x{}", hex::encode(collection)));
+    }
+    if let Some(path) = params.nft_collection_path {
+        parts.push(format!("nftCollectionPath=0x{}", hex::encode(path)));
+    }
+    if let Some(program) = params.interpolated_intent {
+        let count = program.substitution_count();
+        let mut literals = Vec::with_capacity(count as usize + 1);
+        let mut ordinals = Vec::with_capacity(count as usize);
+        for slot in 0..count {
+            literals.push(review_ascii(
+                program
+                    .literal(slot)
+                    .map_err(|e| format!("interpolation literal {slot}: {e:?}"))?,
+            ));
+            ordinals.push(
+                program
+                    .field_ordinal(slot)
+                    .map_err(|e| format!("interpolation ordinal {slot}: {e:?}"))?
+                    .to_string(),
+            );
+        }
+        literals.push(review_ascii(
+            program
+                .literal(count)
+                .map_err(|e| format!("interpolation final literal: {e:?}"))?,
+        ));
+        parts.push(format!(
+            "interpolatedIntent={{version={},count={},literals=[{}],ordinals=[{}]}}",
+            pqsigner_erc7730::render::params::INTERPOLATED_INTENT_VERSION,
+            count,
+            literals.join(","),
+            ordinals.join(","),
+        ));
+    }
+    if let Some(kind) = params.terminal_kind {
+        let name = match kind {
+            TerminalKind::Unsigned => "unsigned",
+            TerminalKind::Signed => "signed",
+            TerminalKind::Address => "address",
+            TerminalKind::Bool => "bool",
+            TerminalKind::FixedBytes => "fixedBytes",
+            TerminalKind::DynamicString => "dynamicString",
+            TerminalKind::DynamicBytes => "dynamicBytes",
+            TerminalKind::ConstantText => "constantText",
+            TerminalKind::NestedStruct => "nestedStruct",
+        };
+        parts.push(format!("terminalKind={name}(0x{:02x})", kind as u8));
+    }
+    Ok(format!("{{{}}}", parts.join(",")))
+}
+
+/// Decode one leaf's IR into a format/field breakdown (intent + canonical raw
+/// path/TLV bytes + decoded semantics) plus a count of *degraded* fields —
+/// `raw`-op fields with an empty label, the signature of a descriptor whose
+/// author-intended formatting was silently lost (e.g. a dropped `$ref`; review
+/// finding 1.1). Returns `(lines, field_count, degraded_count)`. Never panics: a
+/// parse failure yields a visible error line so the catalogue still reconciles.
 fn review_field_breakdown(ir_bytes: &[u8]) -> (Vec<String>, usize, usize) {
     let mut lines = Vec::new();
     let mut n_fields = 0usize;
@@ -6638,22 +7558,56 @@ fn review_field_breakdown(ir_bytes: &[u8]) -> (Vec<String>, usize, usize) {
             lines.push("         · <malformed format entry>".to_string());
             break;
         };
-        for field in fmt.fields() {
+        lines.push(format!(
+            "         · format [0x{}] intent={} intent_raw=0x{} static_head_words={} nested_descent_count={}",
+            hex::encode(fmt.selector),
+            review_ascii(fmt.intent),
+            hex::encode(fmt.intent),
+            fmt.static_head_words,
+            fmt.nested_descent_count,
+        ));
+        for (field_ordinal, field) in fmt.fields().enumerate() {
             let Ok(field) = field else {
                 lines.push("         · <malformed field entry>".to_string());
                 break;
             };
             n_fields += 1;
-            let label = String::from_utf8_lossy(field.label);
             let degraded = field.format_op == 0x01 && field.label.is_empty();
             if degraded {
                 n_degraded += 1;
             }
+            let path = match ir.path_bytes(field.path_off) {
+                Ok(path) => path,
+                Err(e) => {
+                    lines.push(format!(
+                        "         ·   field[{field_ordinal}] <PATH ERROR: {e:?}>"
+                    ));
+                    continue;
+                }
+            };
+            let raw_params = match review_pool_entry(&ir, field.param_off) {
+                Ok(raw) => raw,
+                Err(e) => {
+                    lines.push(format!(
+                        "         ·   field[{field_ordinal}] <PARAM ERROR: {e}>"
+                    ));
+                    continue;
+                }
+            };
+            let decoded_params = match pqsigner_erc7730::render::params::parse(&ir, field.param_off)
+                .map_err(|e| format!("{e:?}"))
+                .and_then(|params| review_param_semantics(&params))
+            {
+                Ok(decoded) => decoded,
+                Err(e) => format!("<PARAM DECODE ERROR: {e}>"),
+            };
             lines.push(format!(
-                "         · [0x{}] op={:<12} label='{}'{}",
-                hex::encode(fmt.selector),
+                "         ·   field[{field_ordinal}] op={:<12} label={} path=0x{} params_tlv=0x{} params={}{}",
                 fmt_op_name(field.format_op),
-                label,
+                review_ascii(field.label),
+                hex::encode(path),
+                hex::encode(raw_params),
+                decoded_params,
                 if degraded {
                     "  <-- DEGRADED (raw, no label)"
                 } else {
@@ -6681,9 +7635,10 @@ fn render_review(
     s.push_str("# Generated by `cargo run -p dbgen`. DO NOT EDIT BY HAND.\n");
     s.push_str("#\n");
     s.push_str("# Each row is one entry in the firmware-pinned Merkle tree at\n");
-    s.push_str("# ERC7730_DESCRIPTORS_ROOT, followed by its per-field breakdown\n");
-    s.push_str("# (op + label, decoded from the emitted IR — i.e. what actually\n");
-    s.push_str("# RENDERS on-device, not what the JSON claims). A `degraded` count\n");
+    s.push_str("# ERC7730_DESCRIPTORS_ROOT, followed by its emitted format intent and\n");
+    s.push_str("# per-field op/label, canonical path bytes, raw parameter TLVs and\n");
+    s.push_str("# device-decoded semantics — i.e. what actually RENDERS on-device,\n");
+    s.push_str("# not what the JSON claims. A `degraded` count\n");
     s.push_str("# flags raw-op fields with no label: author-intended formatting\n");
     s.push_str("# that was silently lost. Auditors should reconcile every row\n");
     s.push_str("# against the source JSON and the upstream attestation chain.\n");
@@ -6899,9 +7854,7 @@ fn compile_native_currency_addresses(
             if addresses.is_empty() {
                 return Err("tokenAmount.nativeCurrencyAddress list must not be empty".to_string());
             }
-            if addresses.len()
-                > pqsigner_erc7730::render::params::MAX_NATIVE_CURRENCY_ADDRESSES
-            {
+            if addresses.len() > pqsigner_erc7730::render::params::MAX_NATIVE_CURRENCY_ADDRESSES {
                 return Err(format!(
                     "tokenAmount.nativeCurrencyAddress list has {} entries (max {})",
                     addresses.len(),
@@ -6910,9 +7863,7 @@ fn compile_native_currency_addresses(
             }
             for (idx, entry) in addresses.iter().enumerate() {
                 let address = entry.as_str().ok_or_else(|| {
-                    format!(
-                        "tokenAmount.nativeCurrencyAddress[{idx}] must be a string"
-                    )
+                    format!("tokenAmount.nativeCurrencyAddress[{idx}] must be a string")
                 })?;
                 let resolved = resolve_address_or_const(address, ctx)?;
                 if out
@@ -7240,6 +8191,37 @@ mod tests {
     }
 
     #[test]
+    fn terminal_type_walks_whole_array_struct_members_but_not_indexed_descents() {
+        let sig = "PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)\
+             PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)";
+        let parsed = parse_format_key(sig).unwrap();
+
+        assert_eq!(
+            rendered_path_terminal_type("details.[].amount", CTX_EIP712, &parsed).unwrap(),
+            Some("uint160".to_string())
+        );
+        assert_eq!(
+            terminal_kind_for_path("details.[].amount", CTX_EIP712, &parsed).unwrap(),
+            TerminalKind::Unsigned
+        );
+        assert_eq!(
+            terminal_kind_for_path("details.[].token", CTX_EIP712, &parsed).unwrap(),
+            TerminalKind::Address
+        );
+
+        for hostile in [
+            "details.[0].amount",
+            "details.[-1].amount",
+            "details.[0:1].amount",
+        ] {
+            assert!(
+                rendered_path_terminal_type(hostile, CTX_EIP712, &parsed).is_err(),
+                "an indexed/sliced descent must not inherit whole-array coverage: {hostile}"
+            );
+        }
+    }
+
+    #[test]
     fn strip_abs_prefix_relative_remainder() {
         // Returns the FULL remaining path relative to the element `prefix`
         // (the recursion strips one prefix level per depth). v1/v2/v3 shapes:
@@ -7313,6 +8295,7 @@ mod tests {
             &mut pool,
             &BTreeMap::new(),
             &mut out,
+            None,
         )?;
         Ok(out)
     }
@@ -7321,34 +8304,34 @@ mod tests {
     fn visible_flat_eip712_hash_words_are_rejected() {
         let cases = [
             (
-                "Message(string text,uint256 nonce)",
+                "Message(string text,uint256 effect)",
                 r#"[
                     {"path":"text","label":"Text","format":"raw"},
-                    {"path":"nonce","label":"Nonce","format":"raw"}
+                    {"path":"effect","label":"Effect","format":"raw"}
                 ]"#,
                 "string",
             ),
             (
-                "Message(bytes payload,uint256 nonce)",
+                "Message(bytes payload,uint256 effect)",
                 r#"[
                     {"path":"payload","label":"Payload","format":"raw"},
-                    {"path":"nonce","label":"Nonce","format":"raw"}
+                    {"path":"effect","label":"Effect","format":"raw"}
                 ]"#,
                 "bytes",
             ),
             (
-                "Batch(uint256[] values,uint256 nonce)",
+                "Batch(uint256[] values,uint256 effect)",
                 r#"[
                     {"path":"values","label":"Values","format":"raw"},
-                    {"path":"nonce","label":"Nonce","format":"raw"}
+                    {"path":"effect","label":"Effect","format":"raw"}
                 ]"#,
                 "uint256[]",
             ),
             (
-                "Envelope(Meta meta,uint256 nonce)Meta(uint256 value)",
+                "Envelope(Meta meta,uint256 effect)Meta(uint256 value)",
                 r#"[
                     {"path":"meta","label":"Meta","format":"raw"},
-                    {"path":"nonce","label":"Nonce","format":"raw"}
+                    {"path":"effect","label":"Effect","format":"raw"}
                 ]"#,
                 "Meta",
             ),
@@ -7851,7 +8834,7 @@ mod tests {
             _id: None,
             intent: Some("Borrow".to_string()),
             fields: flatten_field_groups(&fmt.fields).unwrap(),
-            _interpolated_intent: None,
+            interpolated_intent: None,
             unknown: BTreeMap::new(),
         };
         check_contract_field_completeness(sig, &flat, &parsed)
@@ -8280,6 +9263,7 @@ mod tests {
             &mut pool,
             &BTreeMap::new(),
             &mut out,
+            None,
         )
         .expect_err("format-level preflight must include hidden dynamic fields");
         assert!(
@@ -8339,7 +9323,8 @@ mod tests {
         // while preserving the exact overloaded signature in the receipt.
         let mut drops = Vec::new();
         let (buf, _pool) =
-            compile_formats_reporting(&display, CTX_CONTRACT, &mut ctx, true, &mut drops).unwrap();
+            compile_formats_reporting(&display, CTX_CONTRACT, &mut ctx, true, &mut drops, None)
+                .unwrap();
         assert_eq!(buf[0], 1, "exactly one surviving format (transfer)");
         assert_eq!(drops.len(), 1);
         assert!(drops[0].contains("swap(uint256[] amounts)"), "{:?}", drops);
@@ -8674,9 +9659,11 @@ mod tests {
         assert_eq!(PARAM_NATIVE_CURRENCY, params::PARAM_NATIVE_CURRENCY);
         assert_eq!(PARAM_DYNAMIC_KIND, params::PARAM_DYNAMIC_KIND);
         assert_eq!(PARAM_NFT_COLLECTION, params::PARAM_NFT_COLLECTION);
+        assert_eq!(PARAM_NFT_COLLECTION_PATH, params::PARAM_NFT_COLLECTION_PATH);
+        assert_eq!(PARAM_INTERPOLATED_INTENT, params::PARAM_INTERPOLATED_INTENT);
         assert_eq!(
-            PARAM_NFT_COLLECTION_PATH,
-            params::PARAM_NFT_COLLECTION_PATH
+            INTERPOLATED_INTENT_VERSION,
+            params::INTERPOLATED_INTENT_VERSION
         );
 
         // Visibility bytes.
@@ -9481,6 +10468,7 @@ mod tests {
             &mut pool,
             &BTreeMap::new(),
             &mut out,
+            None,
         );
         assert!(
             res.is_err(),
@@ -9546,6 +10534,41 @@ mod tests {
         assert!(check_eip712_field_completeness(PERMIT2_KEY, &fmt, &parsed).is_ok());
     }
 
+    #[test]
+    fn tokenpath_coverage_requires_a_visible_consuming_formatter() {
+        let parsed = parse_format_key(PERMIT2_KEY).unwrap();
+        let invalid_fields = [
+            // `raw` ignores tokenPath and therefore cannot display identity.
+            serde_json::json!([
+                { "path": "amount", "format": "raw", "params": { "tokenPath": "token" } },
+                { "path": "spender", "format": "addressName" },
+                { "path": "nonce", "format": "raw" },
+                { "path": "deadline", "format": "raw" }
+            ]),
+            // A hidden amount paints no token identity.
+            serde_json::json!([
+                { "path": "amount", "format": "tokenAmount", "params": { "tokenPath": "token" }, "visible": "never" },
+                { "path": "spender", "format": "addressName" },
+                { "path": "nonce", "format": "raw" },
+                { "path": "deadline", "format": "raw" }
+            ]),
+            // tokenAmount over an address terminal is an inadmissible type pair.
+            serde_json::json!([
+                { "path": "spender", "format": "tokenAmount", "params": { "tokenPath": "token" } },
+                { "path": "amount", "format": "raw" },
+                { "path": "nonce", "format": "raw" },
+                { "path": "deadline", "format": "raw" }
+            ]),
+        ];
+        for fields in invalid_fields {
+            let fmt: Format = serde_json::from_value(serde_json::json!({ "fields": fields }))
+                .expect("synthetic format");
+            let error = check_eip712_field_completeness(PERMIT2_KEY, &fmt, &parsed)
+                .expect_err("ignored/hidden/inapplicable tokenPath must not cover token");
+            assert!(error.contains("`token`"), "unexpected refusal: {error}");
+        }
+    }
+
     fn test_ctx() -> CompileCtx {
         CompileCtx {
             constants: serde_json::Map::new(),
@@ -9562,8 +10585,7 @@ mod tests {
         let ctx = test_ctx();
         let expected = [0xEEu8; 20];
         let scalar = compile_native_currency_addresses(&serde_json::json!(ETH), &ctx).unwrap();
-        let singleton =
-            compile_native_currency_addresses(&serde_json::json!([ETH]), &ctx).unwrap();
+        let singleton = compile_native_currency_addresses(&serde_json::json!([ETH]), &ctx).unwrap();
         assert_eq!(scalar, expected);
         assert_eq!(singleton, expected);
     }
@@ -9598,7 +10620,10 @@ mod tests {
         let ctx = test_ctx();
         for (value, expected) in [
             (serde_json::json!([]), "must not be empty"),
-            (serde_json::json!([ETH, ZERO, "0x1111111111111111111111111111111111111111"]), "max 2"),
+            (
+                serde_json::json!([ETH, ZERO, "0x1111111111111111111111111111111111111111"]),
+                "max 2",
+            ),
             (serde_json::json!([ETH, 1]), "must be a string"),
             (serde_json::json!([ETH, ETH]), "duplicates"),
             (serde_json::json!(["0xeee"]), "40 hex chars"),
@@ -9645,12 +10670,7 @@ mod tests {
             find_tlv(&literal_pool, literal_off, PARAM_NFT_COLLECTION),
             Some(&hex::decode(&COLLECTION[2..]).unwrap()[..])
         );
-        assert!(find_tlv(
-            &literal_pool,
-            literal_off,
-            PARAM_NFT_COLLECTION_PATH
-        )
-        .is_none());
+        assert!(find_tlv(&literal_pool, literal_off, PARAM_NFT_COLLECTION_PATH).is_none());
 
         let (path_pool, path_off) = compile_nft_field(
             "approve(address to,uint256 tokenId)",
@@ -9659,26 +10679,20 @@ mod tests {
         .unwrap();
         assert_eq!(
             find_tlv(&path_pool, path_off, PARAM_NFT_COLLECTION_PATH),
-            Some(
-                &[
-                    PATHOP_ROOT_CONTAINER,
-                    PATHOP_FIELD_IDX,
-                    (pqsigner_erc7730::abi::container_field::TO >> 8) as u8,
-                    pqsigner_erc7730::abi::container_field::TO as u8,
-                ][..]
-            )
+            Some(NFT_COLLECTION_TO_PATH.as_slice()),
+            "compiler output must be byte-identical to the device allowlist"
+        );
+        let parsed = parse_format_key("approve(address to,uint256 tokenId)").unwrap();
+        assert_eq!(
+            compile_path("@.to", CTX_CONTRACT, &parsed).unwrap(),
+            NFT_COLLECTION_TO_PATH,
+            "shared compiler/device path parity drift"
         );
     }
 
     #[test]
-    fn nft_collection_path_requires_a_static_address_and_exactly_one_source() {
+    fn nft_collection_path_rejects_every_non_to_program_and_requires_one_source() {
         let sig = "f(uint256 tokenId,address collection)";
-        let (pool, off) = compile_nft_field(
-            sig,
-            serde_json::json!({ "collectionPath": "collection" }),
-        )
-        .unwrap();
-        assert!(find_tlv(&pool, off, PARAM_NFT_COLLECTION_PATH).is_some());
 
         for (params, expected) in [
             (serde_json::json!({}), "exactly one"),
@@ -9690,19 +10704,26 @@ mod tests {
                 "exactly one",
             ),
             (
+                serde_json::json!({ "collectionPath": "collection" }),
+                "exact device-supported `@.to`",
+            ),
+            (
                 serde_json::json!({ "collectionPath": "tokenId" }),
-                "must resolve to an address",
+                "exact device-supported `@.to`",
             ),
             (
                 serde_json::json!({ "collectionPath": "@.from" }),
-                "only `@.to`",
+                "exact device-supported `@.to`",
             ),
         ] {
             let error = match compile_nft_field(sig, params) {
                 Ok(_) => panic!("malformed nftName parameters unexpectedly compiled"),
                 Err(error) => error,
             };
-            assert!(error.contains(expected), "expected {expected:?}, got {error:?}");
+            assert!(
+                error.contains(expected),
+                "expected {expected:?}, got {error:?}"
+            );
         }
     }
 
@@ -9822,6 +10843,472 @@ mod tests {
     }
 
     #[test]
+    fn interpolated_intent_omits_runtime_token_path_without_deployment_capability() {
+        let sig = "deposit(address asset,uint256 amt)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt: Format = serde_json::from_value(serde_json::json!({
+            "intent": "Deposit collateral",
+            "interpolatedIntent": "Deposit {amt}",
+            "fields": [{
+                "path": "amt",
+                "label": "Amount",
+                "format": "tokenAmount",
+                "params": { "tokenPath": "asset" },
+                "visible": "always"
+            }]
+        }))
+        .unwrap();
+        assert_eq!(
+            compile_interpolated_intent(sig, &fmt, CTX_CONTRACT, &parsed, &test_ctx(), None,)
+                .unwrap(),
+            None,
+            "a calldata-derived token identity must retain only the static intent"
+        );
+    }
+
+    #[test]
+    fn interpolated_intent_blocks_computed_approve_selector_text_collision() {
+        let sig = "watch_tg_invmru_2f69f1b(address first,address second)";
+        let parsed = parse_format_key(sig).unwrap();
+        assert_ne!(parsed.types_signature, "approve(address,uint256)");
+        let hash = keccak256(parsed.types_signature.as_bytes());
+        assert_eq!(&hash[..4], ERC20_APPROVE_SELECTOR.as_slice());
+
+        // The malformed template would error if source parsing continued.
+        // Selector policy must short-circuit it to static intent based on the
+        // computed selector, not on the non-approve source spelling.
+        let fmt: Format = serde_json::from_value(serde_json::json!({
+            "intent": "Static collision",
+            "interpolatedIntent": "Broken {",
+            "fields": [
+                { "path": "first", "format": "addressName" },
+                { "path": "second", "format": "addressName" }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            compile_interpolated_intent(sig, &fmt, CTX_CONTRACT, &parsed, &test_ctx(), None,)
+                .unwrap(),
+            None,
+            "computed 0x095ea7b3 must never enroll interpolation"
+        );
+    }
+
+    #[test]
+    fn token_amount_interpolation_requires_static_authenticated_deployment_identity() {
+        const TOKEN: [u8; 20] = [0x11; 20];
+        const NATIVE: [u8; 20] = [0xEE; 20];
+        let capabilities = crate::erc20::Erc20Capabilities::from_keys(vec![(1, TOKEN)]);
+        let empty = crate::erc20::Erc20Capabilities::default();
+        let ctx = test_ctx();
+
+        let literal_sig = "deposit(uint256 amount)";
+        let literal_parsed = parse_format_key(literal_sig).unwrap();
+        let literal: Format = serde_json::from_value(serde_json::json!({
+            "intent": "Deposit",
+            "interpolatedIntent": "Deposit {amount}",
+            "fields": [{
+                "path": "amount",
+                "format": "tokenAmount",
+                "params": { "token": "0x1111111111111111111111111111111111111111" }
+            }]
+        }))
+        .unwrap();
+        let covered = InterpolationDeployment {
+            chain_id: 1,
+            contract: [0x22; 20],
+            erc20_capabilities: &capabilities,
+        };
+        assert!(compile_interpolated_intent(
+            literal_sig,
+            &literal,
+            CTX_CONTRACT,
+            &literal_parsed,
+            &ctx,
+            Some(&covered),
+        )
+        .unwrap()
+        .is_some());
+
+        let uncovered = InterpolationDeployment {
+            chain_id: 146,
+            contract: [0x22; 20],
+            erc20_capabilities: &capabilities,
+        };
+        assert_eq!(
+            compile_interpolated_intent(
+                literal_sig,
+                &literal,
+                CTX_CONTRACT,
+                &literal_parsed,
+                &ctx,
+                Some(&uncovered),
+            )
+            .unwrap(),
+            None,
+            "the same static token must lose interpolation on an uncovered deployment"
+        );
+
+        let to_sig = "deposit(address asset,uint256 amount)";
+        let to_parsed = parse_format_key(to_sig).unwrap();
+        let to_path: Format = serde_json::from_value(serde_json::json!({
+            "intent": "Deposit",
+            "interpolatedIntent": "Deposit {amount}",
+            "fields": [{
+                "path": "amount",
+                "format": "tokenAmount",
+                "params": { "tokenPath": "@.to" }
+            }]
+        }))
+        .unwrap();
+        let to_deployment = InterpolationDeployment {
+            chain_id: 1,
+            contract: TOKEN,
+            erc20_capabilities: &capabilities,
+        };
+        assert!(compile_interpolated_intent(
+            to_sig,
+            &to_path,
+            CTX_CONTRACT,
+            &to_parsed,
+            &ctx,
+            Some(&to_deployment),
+        )
+        .unwrap()
+        .is_some());
+
+        let dynamic: Format = serde_json::from_value(serde_json::json!({
+            "intent": "Deposit",
+            "interpolatedIntent": "Deposit {amount}",
+            "fields": [{
+                "path": "amount",
+                "format": "tokenAmount",
+                "params": {
+                    "tokenPath": "asset",
+                    "token": "0x1111111111111111111111111111111111111111"
+                }
+            }]
+        }))
+        .unwrap();
+        assert_eq!(
+            compile_interpolated_intent(
+                to_sig,
+                &dynamic,
+                CTX_CONTRACT,
+                &to_parsed,
+                &ctx,
+                Some(&covered),
+            )
+            .unwrap(),
+            None,
+            "runtime tokenPath precedence must not borrow a static literal's capability"
+        );
+
+        let native: Format = serde_json::from_value(serde_json::json!({
+            "intent": "Deposit",
+            "interpolatedIntent": "Deposit {amount}",
+            "fields": [{
+                "path": "amount",
+                "format": "tokenAmount",
+                "params": {
+                    "token": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                    "nativeCurrencyAddress": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                }
+            }]
+        }))
+        .unwrap();
+        let native_deployment = InterpolationDeployment {
+            chain_id: 146,
+            contract: NATIVE,
+            erc20_capabilities: &empty,
+        };
+        assert!(compile_interpolated_intent(
+            literal_sig,
+            &native,
+            CTX_CONTRACT,
+            &literal_parsed,
+            &ctx,
+            Some(&native_deployment),
+        )
+        .unwrap()
+        .is_some());
+    }
+
+    #[test]
+    fn interpolated_intent_rejects_ambiguous_or_nonvisible_amount_refs() {
+        let sig = "f(uint256 amount)";
+        let parsed = parse_format_key(sig).unwrap();
+        for format in [
+            serde_json::json!({
+                "interpolatedIntent": "Send {amount}",
+                "fields": [{"path":"amount","format":"amount","visible":"optional"}]
+            }),
+            serde_json::json!({
+                "interpolatedIntent": "Send {amount} then {amount}",
+                "fields": [{"path":"amount","format":"amount"}]
+            }),
+            serde_json::json!({
+                "interpolatedIntent": "Send {{amount}",
+                "fields": [{"path":"amount","format":"amount"}]
+            }),
+        ] {
+            let fmt: Format = serde_json::from_value(format).unwrap();
+            assert!(
+                compile_interpolated_intent(sig, &fmt, CTX_CONTRACT, &parsed, &test_ctx(), None,)
+                    .is_err(),
+                "unsafe interpolation unexpectedly compiled"
+            );
+        }
+
+        let unresolved: Format = serde_json::from_value(serde_json::json!({
+            "intent": "Send",
+            "interpolatedIntent": "Send {missing}",
+            "fields": [{"path":"amount","format":"amount"}]
+        }))
+        .unwrap();
+        assert_eq!(
+            compile_interpolated_intent(
+                sig,
+                &unresolved,
+                CTX_CONTRACT,
+                &parsed,
+                &test_ctx(),
+                None,
+            )
+            .unwrap(),
+            None,
+            "an unresolvable valid template must retain its static intent"
+        );
+    }
+
+    #[test]
+    fn interpolated_intent_accepts_only_the_optional_structured_root_alias() {
+        let sig = "f(uint256 amount)";
+        let parsed = parse_format_key(sig).unwrap();
+        let rooted: Format = serde_json::from_value(serde_json::json!({
+            "interpolatedIntent": "Send {amount}",
+            "fields": [{"path":"#.amount","format":"amount"}]
+        }))
+        .unwrap();
+        assert!(compile_interpolated_intent(
+            sig,
+            &rooted,
+            CTX_CONTRACT,
+            &parsed,
+            &test_ctx(),
+            None,
+        )
+        .unwrap()
+        .is_some());
+
+        let ambiguous: Format = serde_json::from_value(serde_json::json!({
+            "interpolatedIntent": "Send {amount}",
+            "fields": [
+                {"path":"amount","format":"amount"},
+                {"path":"#.amount","format":"amount"}
+            ]
+        }))
+        .unwrap();
+        assert!(
+            compile_interpolated_intent(sig, &ambiguous, CTX_CONTRACT, &parsed, &test_ctx(), None,)
+                .is_err(),
+            "two emitted spellings of one normalized path must be ambiguous"
+        );
+    }
+
+    #[test]
+    fn unsupported_interpolation_shapes_keep_static_intent_without_a_program() {
+        let cases = [
+            (
+                "send(address recipient,uint256 amount)",
+                serde_json::json!({
+                    "intent":"Send",
+                    "interpolatedIntent":"Send to {recipient}",
+                    "fields":[
+                        {"path":"recipient","format":"addressName"},
+                        {"path":"amount","format":"amount"}
+                    ]
+                }),
+                CTX_CONTRACT,
+            ),
+            (
+                "f(uint256[] amounts)",
+                serde_json::json!({
+                    "intent":"Send",
+                    "interpolatedIntent":"Send {amounts.[]}",
+                    "fields":[{"path":"amounts.[]","format":"tokenAmount"}]
+                }),
+                CTX_CONTRACT,
+            ),
+            (
+                "Order(uint256 amount)",
+                serde_json::json!({
+                    "intent":"Order",
+                    "interpolatedIntent":"Order {amount}",
+                    "fields":[{"path":"amount","format":"amount"}]
+                }),
+                CTX_EIP712,
+            ),
+            (
+                "approve(address spender,uint256 amount)",
+                serde_json::json!({
+                    "intent":"Approve",
+                    "interpolatedIntent":"Approve {amount}",
+                    "fields":[
+                        {"path":"spender","format":"addressName"},
+                        {"path":"amount","format":"tokenAmount","params":{"tokenPath":"@.to"}}
+                    ]
+                }),
+                CTX_CONTRACT,
+            ),
+            (
+                "f(uint256 amount)",
+                serde_json::json!({
+                    "intent":"Send",
+                    "interpolatedIntent":"Send {amount} TOKEN",
+                    "fields":[{"path":"amount","format":"tokenAmount","params":{"token":"0x1111111111111111111111111111111111111111"}}]
+                }),
+                CTX_CONTRACT,
+            ),
+        ];
+        for (sig, value, context) in cases {
+            let parsed = parse_format_key(sig).unwrap();
+            let fmt: Format = serde_json::from_value(value).unwrap();
+            assert_eq!(
+                compile_interpolated_intent(sig, &fmt, context, &parsed, &test_ctx(), None,)
+                    .unwrap(),
+                None,
+                "unsupported shape must retain static intent: {sig}"
+            );
+        }
+    }
+
+    #[test]
+    fn format_level_interpolation_tlv_clones_interned_params_before_append() {
+        let mut pool = Pool::new();
+        let original_body = [PARAM_DECIMALS, 1, 6];
+        let original = intern_param_blob(&mut pool, &original_body).unwrap();
+        let program = [INTERPOLATED_INTENT_VERSION, 1, 0, 0, 0];
+        let extended = pool
+            .append_param_tlv(original, PARAM_INTERPOLATED_INTENT, &program)
+            .unwrap();
+        assert_ne!(original, extended);
+        assert!(find_tlv(&pool, original, PARAM_INTERPOLATED_INTENT).is_none());
+        assert_eq!(
+            find_tlv(&pool, extended, PARAM_INTERPOLATED_INTENT),
+            Some(&program[..])
+        );
+        assert_eq!(find_tlv(&pool, extended, PARAM_DECIMALS), Some(&[6][..]));
+    }
+
+    #[test]
+    fn review_param_semantics_decodes_new_security_tlvs_canonically() {
+        use pqsigner_erc7730::ir::Visibility;
+        use pqsigner_erc7730::render::params::{
+            InterpolatedIntentProgram, ParamSet, INTERPOLATED_INTENT_VERSION,
+        };
+
+        let native = [0xEEu8; 40];
+        let collection = [0xA4u8; 20];
+        let collection_path = [
+            PATHOP_ROOT_CONTAINER,
+            PATHOP_FIELD_IDX,
+            (pqsigner_erc7730::abi::container_field::TO >> 8) as u8,
+            pqsigner_erc7730::abi::container_field::TO as u8,
+        ];
+        let interpolation = [
+            INTERPOLATED_INTENT_VERSION,
+            1,
+            8,
+            b'D',
+            b'e',
+            b'p',
+            b'o',
+            b's',
+            b'i',
+            b't',
+            b' ',
+            0,
+            0,
+        ];
+        let mut params = ParamSet::default();
+        params.visibility = Visibility::Optional;
+        params.native_currency_addresses = Some(&native);
+        params.interpolated_intent = Some(
+            InterpolatedIntentProgram::parse(&interpolation).expect("canonical interpolation"),
+        );
+
+        let decoded = review_param_semantics(&params).expect("review semantics");
+        assert!(decoded.contains(&format!(
+            "nativeCurrency=[0x{},0x{}]",
+            hex::encode(&native[..20]),
+            hex::encode(&native[20..]),
+        )));
+        assert!(decoded.contains("visibility=optional"));
+        assert!(decoded.contains(
+            "interpolatedIntent={version=1,count=1,literals=[\"Deposit \",\"\"],ordinals=[0]}"
+        ));
+
+        let mut literal_nft = ParamSet::default();
+        literal_nft.nft_collection = Some(&collection);
+        assert!(review_param_semantics(&literal_nft)
+            .unwrap()
+            .contains(&format!("nftCollection=0x{}", hex::encode(collection))));
+        let mut path_nft = ParamSet::default();
+        path_nft.nft_collection_path = Some(&collection_path);
+        assert!(review_param_semantics(&path_nft)
+            .unwrap()
+            .contains(&format!(
+                "nftCollectionPath=0x{}",
+                hex::encode(collection_path)
+            )));
+    }
+
+    #[test]
+    fn review_breakdown_records_emitted_intent_raw_tlv_and_decoded_interpolation() {
+        let display: Display = serde_json::from_value(serde_json::json!({
+            "formats": {
+                "deposit(uint256 amount)": {
+                    "intent": "Deposit collateral",
+                    "interpolatedIntent": "Deposit {amount}",
+                    "fields": [{
+                    "path": "amount",
+                    "label": "Amount",
+                    "format": "amount"
+                    }]
+                }
+            }
+        }))
+        .expect("synthetic display");
+        let mut ctx = test_ctx();
+        let (formats, pool) = compile_formats(&display, CTX_CONTRACT, &mut ctx, false)
+            .expect("compile synthetic interpolation");
+        let ir_bytes = build_ir(
+            CTX_CONTRACT,
+            1,
+            [0x11; 20],
+            &[0u8; 32],
+            &ctx,
+            &pool,
+            &formats,
+        )
+        .expect("build synthetic IR");
+
+        let (lines, fields, degraded) = review_field_breakdown(&ir_bytes);
+        let review = lines.join("\n");
+        assert_eq!((fields, degraded), (1, 0));
+        assert!(review.contains(
+            "format [0xb6b55f25] intent=\"Deposit collateral\" intent_raw=0x4465706f73697420636f6c6c61746572616c"
+        ));
+        assert!(review.contains("field[0] op=amount"));
+        assert!(review.contains("label=\"Amount\" path=0x"));
+        assert!(review.contains("params_tlv=0x"));
+        assert!(review.contains(
+            "interpolatedIntent={version=1,count=1,literals=[\"Deposit \",\"\"],ordinals=[0]}"
+        ));
+    }
+
+    #[test]
     fn compiler_emits_authenticated_dynamic_string_kind() {
         let sig = "f(string value)";
         let parsed = parse_format_key(sig).unwrap();
@@ -9846,6 +11333,104 @@ mod tests {
             find_tlv(&pool, compiled.param_off, PARAM_DYNAMIC_KIND),
             Some(&[DYNAMIC_KIND_STRING][..])
         );
+        assert_eq!(
+            find_tlv(&pool, compiled.param_off, PARAM_TERMINAL_KIND),
+            Some(&[TerminalKind::DynamicString as u8][..])
+        );
+    }
+
+    #[test]
+    fn compiler_rejects_formatter_terminal_mismatch_and_blank_visible_labels() {
+        let sig = "f(address target,uint256 amount)";
+        let parsed = parse_format_key(sig).unwrap();
+        let bad_type: FieldDef = serde_json::from_value(serde_json::json!({
+            "path": "target", "label": "Target", "format": "amount"
+        }))
+        .unwrap();
+        let error = compile_one_field(
+            sig,
+            0,
+            &bad_type,
+            CTX_CONTRACT,
+            &parsed,
+            &mut test_ctx(),
+            &mut Pool::new(),
+            &BTreeMap::new(),
+            false,
+        )
+        .expect_err("amount must not reinterpret an address terminal");
+        assert!(error.contains("formatter/type/parameter policy"), "{error}");
+
+        let blank: FieldDef = serde_json::from_value(serde_json::json!({
+            "path": "amount", "label": "   ", "format": "raw"
+        }))
+        .unwrap();
+        let error = compile_one_field(
+            sig,
+            1,
+            &blank,
+            CTX_CONTRACT,
+            &parsed,
+            &mut test_ctx(),
+            &mut Pool::new(),
+            &BTreeMap::new(),
+            false,
+        )
+        .expect_err("visible labels must have a post-sanitization glyph");
+        assert!(
+            error.contains("empty post-sanitization visible label"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn nested_compiler_rejects_blank_visible_child_label() {
+        let sig = "Order(Meta info,uint256 effect)Meta(uint256 amount)";
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"info.amount","label":"   ","format":"raw"},
+              {"path":"effect","label":"Effect","format":"raw"}
+            ]"#,
+        );
+        let mut out = Vec::new();
+        let error = compile_one_format(
+            sig,
+            &fmt,
+            CTX_EIP712,
+            &mut test_ctx(),
+            &mut Pool::new(),
+            &BTreeMap::new(),
+            &mut out,
+            None,
+        )
+        .expect_err("nested visible child label must have a glyph");
+        assert!(
+            error.contains("empty post-sanitization visible label"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn enum_encoder_is_injective_after_device_canonicalization() {
+        for invalid in [
+            serde_json::json!({}),
+            serde_json::json!({"0": "   "}),
+            serde_json::json!({"0": "mode "}),
+            serde_json::json!({"0": "same", "1": "same"}),
+            // Each non-ASCII scalar sanitizes to the same printable `?`.
+            serde_json::json!({"0": "α", "1": "β"}),
+            serde_json::json!({
+                "0": format!("{}A", "x".repeat(ENUM_DISPLAY_BYTES)),
+                "1": format!("{}B", "x".repeat(ENUM_DISPLAY_BYTES))
+            }),
+        ] {
+            assert!(encode_enum_table(&invalid).is_err(), "accepted {invalid}");
+        }
+
+        let valid = serde_json::json!({"0": "off", "1": "on"});
+        let encoded = encode_enum_table(&valid).expect("injective enum encodes");
+        pqsigner_erc7730::render::enums::validate_enum_table(&encoded, 0)
+            .expect("device accepts compiler-canonical table");
     }
 
     #[test]

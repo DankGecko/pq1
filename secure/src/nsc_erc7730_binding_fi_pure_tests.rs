@@ -13,6 +13,7 @@ const CMD_SIGN_USEROP_BATCH: &str = include_str!("nsc/cmd_sign_userop_batch.rs")
 const CMD_SIGN_OFFCHAIN: &str = include_str!("nsc/cmd_sign_offchain.rs");
 const ERC7730_GLUE: &str = include_str!("tx/erc7730.rs");
 const DISPLAY_DISPATCH: &str = include_str!("tx/display/dispatch.rs");
+const ERC7730_DISPLAY_SHIM: &str = include_str!("tx/display/erc7730/mod.rs");
 const SAFE_DISPLAY: &str = include_str!("tx/display/safe_display.rs");
 
 fn count_substr(haystack: &str, needle: &str) -> usize {
@@ -20,7 +21,9 @@ fn count_substr(haystack: &str, needle: &str) -> usize {
 }
 
 fn assert_ordered(source: &str, first: &str, second: &str, third: &str, fourth: &str) {
-    let a = source.find(first).unwrap_or_else(|| panic!("missing {first}"));
+    let a = source
+        .find(first)
+        .unwrap_or_else(|| panic!("missing {first}"));
     let b = source[a..]
         .find(second)
         .map(|p| a + p)
@@ -58,8 +61,16 @@ fn assert_dual_reject_gates(
         2,
         "caller-owned CFI must be independently checked by both gates",
     );
-    assert_eq!(count_substr(&normalized, gate_a), 1, "missing first reject gate");
-    assert_eq!(count_substr(&normalized, gate_b), 1, "missing second reject gate");
+    assert_eq!(
+        count_substr(&normalized, gate_a),
+        1,
+        "missing first reject gate"
+    );
+    assert_eq!(
+        count_substr(&normalized, gate_b),
+        1,
+        "missing second reject gate"
+    );
     assert_ordered(
         &normalized,
         gate_a,
@@ -162,10 +173,7 @@ fn every_signing_surface_requires_volatile_verdict_and_caller_cfi() {
         assert!(source.contains("core::ptr::write_volatile("));
         assert!(source.contains("crate::fi::FAIL_SENTINEL"));
         assert_eq!(
-            count_substr(
-                source,
-                "core::ptr::read_volatile(&bind_verdict_slot)",
-            ),
+            count_substr(source, "core::ptr::read_volatile(&bind_verdict_slot)",),
             2,
         );
         assert!(source.contains(expected));
@@ -221,4 +229,93 @@ fn no_binding_site_claims_one_cached_verdict_is_recomputation() {
         assert!(!source.contains("computed once into `bind_ok`"));
         assert!(!source.contains("double-evaluate without re-running"));
     }
+}
+
+#[test]
+fn offchain_eip712_uses_checked_two_pass_transcript_before_confirm() {
+    assert_eq!(
+        count_substr(
+            CMD_SIGN_OFFCHAIN,
+            "crate::tx::display::erc7730::render_erc7730_eip712_pages_checked(",
+        ),
+        1,
+    );
+    assert_eq!(
+        count_substr(
+            CMD_SIGN_OFFCHAIN,
+            "crate::tx::display::erc7730::render_erc7730_eip712_pages_v3_checked(",
+        ),
+        1,
+    );
+    assert!(
+        !CMD_SIGN_OFFCHAIN.contains("crate::tx::display::erc7730::render_erc7730_eip712_pages(")
+    );
+    assert!(
+        !CMD_SIGN_OFFCHAIN.contains("crate::tx::display::erc7730::render_erc7730_eip712_pages_v3(")
+    );
+
+    let start = CMD_SIGN_OFFCHAIN
+        .find("let render_result = if is_v3")
+        .expect("checked EIP-712 render section");
+    let end = CMD_SIGN_OFFCHAIN[start..]
+        .find(".record_confirmed(&typed_confirm_context)")
+        .map(|offset| start + offset)
+        .expect("end of typed confirmation section");
+    let section = &CMD_SIGN_OFFCHAIN[start..end];
+    let context_append = section
+        .find("append_eip1271_typed_context_pages(")
+        .expect("handler-owned typed offchain context append");
+    let fingerprint = section
+        .rfind("fingerprint_final_set_proof(")
+        .expect("final fingerprint proof");
+    let transcript = section
+        .find(".final_set_proof(&pages, &mut eip712_transcript_verdict_slot)")
+        .expect("final transcript proof");
+    let read_a = section
+        .find("let eip712_transcript_verdict_a")
+        .expect("first volatile transcript read");
+    let gate_a = section
+        .find("if eip712_transcript_gate_a != crate::fi::OK_SENTINEL")
+        .expect("first transcript reject gate");
+    let read_b = section
+        .find("let eip712_transcript_verdict_b")
+        .expect("second volatile transcript read");
+    let gate_b = section
+        .find("if eip712_transcript_gate_b != crate::fi::OK_SENTINEL")
+        .expect("second transcript reject gate");
+    let context_final = section
+        .find("eip1271_typed_context_final_set_proof(")
+        .expect("final handler context proof");
+    let confirm = section
+        .find("confirm_checked(pages.as_slice())")
+        .expect("typed confirmation boundary");
+    assert!(
+        context_append < fingerprint
+            && fingerprint < transcript
+            && transcript < read_a
+            && read_a < gate_a
+            && gate_a < read_b
+            && read_b < gate_b
+            && gate_b < context_final
+            && context_final < confirm,
+        "renderer, fingerprint, and handler context must all be final-set proven before confirmation"
+    );
+    assert_eq!(
+        count_substr(
+            section,
+            "core::ptr::read_volatile(&eip712_transcript_verdict_slot)",
+        ),
+        2,
+    );
+    assert!(section[gate_a..read_b].contains("crate::fi::wait_random();"));
+
+    assert!(ERC7730_DISPLAY_SHIM.contains("pub(super) fn render_contract_pass_into"));
+    assert!(!ERC7730_DISPLAY_SHIM.contains(
+        "pub use pqsigner_erc7730::display::render::render_erc7730_pages_with_signer_into"
+    ));
+    assert!(ERC7730_DISPLAY_SHIM.contains("let first = render_pass("));
+    assert!(ERC7730_DISPLAY_SHIM.contains("let second = render_pass("));
+    assert!(ERC7730_DISPLAY_SHIM.contains(".poison_for_second(&mut pages)"));
+    assert!(ERC7730_DISPLAY_SHIM.contains("self.receipt.exact_match(second)"));
+    assert!(ERC7730_DISPLAY_SHIM.contains("self.receipt.range_matches(pages, 0)"));
 }

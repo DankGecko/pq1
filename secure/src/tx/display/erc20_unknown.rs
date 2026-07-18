@@ -97,8 +97,7 @@ pub fn render_erc20_unknown_pages(
             }
             Some(n) if n <= 2 * DISPLAY_COLS => {
                 pages.buf[p][1].copy_from_slice(&tmp[..DISPLAY_COLS]);
-                pages.buf[p][2][..n - DISPLAY_COLS]
-                    .copy_from_slice(&tmp[DISPLAY_COLS..n]);
+                pages.buf[p][2][..n - DISPLAY_COLS].copy_from_slice(&tmp[DISPLAY_COLS..n]);
             }
             _ => {
                 write_line(&mut pages.buf[p][1], "!OVERFLOW");

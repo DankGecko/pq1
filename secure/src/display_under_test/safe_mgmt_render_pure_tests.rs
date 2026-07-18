@@ -350,9 +350,7 @@ fn set_guard_install_loud_banner_plus_full_address() {
 
 #[test]
 fn set_guard_zero_renders_removing_guard() {
-    let op = SafeMgmtOp::SetGuard {
-        guard: [0u8; 20],
-    };
+    let op = SafeMgmtOp::SetGuard { guard: [0u8; 20] };
     let pages = render(&op, 2);
     assert_eq!(row_str(&pages.buf[0][0]), "! CHANGE GUARD");
     assert_eq!(row_str(&pages.buf[0][1]), "REMOVING GUARD");
@@ -380,9 +378,7 @@ fn set_fallback_handler_install_loud_banner() {
 
 #[test]
 fn set_fallback_handler_zero_renders_removing_fb() {
-    let op = SafeMgmtOp::SetFallbackHandler {
-        handler: [0u8; 20],
-    };
+    let op = SafeMgmtOp::SetFallbackHandler { handler: [0u8; 20] };
     let pages = render(&op, 2);
     assert_eq!(row_str(&pages.buf[0][0]), "! CHG FALLBACK");
     assert_eq!(row_str(&pages.buf[0][1]), "REMOVING FB");

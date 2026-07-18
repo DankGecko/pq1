@@ -28,8 +28,9 @@
 > signed-digest bridge, extracted closure policy, protocol-driver semantics,
 > and EasyCrypt gate/parameter correspondence. EasyCrypt reproduced 10/21
 > compiled with 11 skips and success; its imported WOTS theorem excludes C10's
-> `log2_w=3`. The source census is 148 Kani harnesses/25 files; mutation-enrolled
-> files contain 140/19, with eight/six outside and three of 31 groups full-only.
+> `log2_w=3`. The refreshed source census is 162 Kani harnesses/26 files;
+> mutation-enrolled files contain 154/20, with eight/six outside and three of
+> 40 groups full-only.
 > No fresh full Kani campaign was run. V1 is legacy evidence; V4 versus V6
 > remains an owner conflict, not a selected implementation target.
 
@@ -50,21 +51,76 @@
 > ERC-8176 provenance remains an independent production ship blocker; its
 > advisory checker cannot authorize a production flip.
 
-> **Scoped PQ1 ERC-7730 implementation update — 2026-07-17.** Bounded
-> `nativeCurrencyAddress` list support and injective `nftName` collection
-> identity are complete. Tag `0x42` authenticates one or two exact native-token
-> sentinels while preserving the legacy scalar encoding. Dedicated tags `0x44`
-> and `0x45` bind each NFT field to exactly one literal collection or static
-> address path; the device always shows the exact token ID and complete
-> collection address. A friendly name is optional and requires descriptor or
-> exact-chain metadata authority; wildcard names never qualify. Seven real NFT
-> deployments / 12 formats are newly enrolled. Current catalogue: 428 leaves /
-> 340,016 bytes / root `0706d763…17d2ed`; the 4,542 known-call set is unchanged.
+> **Scoped PQ1 ERC-7730 implementation update — 2026-07-17; corrected
+> 2026-07-18.** Bounded
+> `nativeCurrencyAddress` lists, injective `nftName` collection identity, and
+> constrained scalar `interpolatedIntent` are complete. Tag `0x42`
+> authenticates one or two exact native-token sentinels while preserving the
+> legacy scalar encoding. Dedicated tags `0x44` and `0x45` bind each NFT field
+> to exactly one literal collection or static address path; the device always
+> shows the exact token ID and complete collection address. A friendly name is
+> optional and requires descriptor or exact-chain metadata authority; wildcard
+> names never qualify. Authenticated TLV `0x46` enrolls only a terminal,
+> always-visible static `amount`/`tokenAmount` placeholder and substitutes the
+> exact value the trusted formatter successfully painted, including its bound
+> unit/ticker; all ordinary field and identity pages remain. The compiler
+> evaluates the 11 reviewed source/selector templates independently for every
+> deployment. Of 78 candidate deployment formats, six have a static token
+> identity covered by the exact device-verifiable ERC-20 metadata capability
+> set (or a firmware-pinned native identity); the other 72 retain their static
+> intent and emit no interpolation program. At completion of those Phase-C
+> slices, the catalogue was 428 leaves / 340,215 bytes / root
+> `c785f90c…b054d4`; the 4,542 known-call set and its receipt were unchanged,
+> and omissions remained 281.
 > Evidence is recorded in the live
 > [`work-todo.md`](work-todo.md#pq1-erc-7730-productization-campaign--owner-direction-2026-07-16)
-> row. This is bounded implementation evidence, not a fresh adversarial review
-> or production/ship authority; forced blind signing remains disabled under the
-> 2026-07-16 decision above.
+> row. Host suites, descriptor drift, and standalone plus canonical dual-SE
+> STM32U585 `thumbv8m` checks are green. This is bounded implementation evidence,
+> not the batched Phase-D adversarial review or production/ship authority;
+> forced blind signing remains disabled under the 2026-07-16 decision above.
+
+> **Scoped ERC-7730 V5 review / V6 remediation receipt — 2026-07-18.** Frozen
+> ref `review/erc7730-phase-d-20260718-v5` at
+> `c70f6ffff34e739cbde78ecfec8cfc7f7253772b` completed the combined
+> source-first Phase-D review and returned **DO NOT MERGE**. Blocking findings
+> covered typed off-chain context and bool-gated confirmation authority; native
+> `amount`/`tokenAmount` rounding collisions; non-injective enum labels;
+> schema/compiler/runtime policy drift; empty visible labels, recursive
+> validation, and formatter-aware `tokenPath` coverage; stale census/digest and
+> non-atomic ERC-20/ERC-7730 drift checks; and incomplete batch tuple
+> commitment.
+>
+> V6 remediates those findings without enabling blind signing. All off-chain
+> kinds render their exact account/slot/wallet/deployment/budget context and
+> carry one fail-initialized, domain-separated `OffchainConfirmReceipt` through
+> two common gates before signing. IR schema v4 requires shared exhaustive
+> `TerminalKind × FormatOp × params` validation in compiler and device,
+> rejects schema v3, empty visible labels and over-depth nested structures, and
+> applies formatter-aware identity coverage. Known-native dispatcher values and
+> ordinary ERC-7730 `amount`/native `tokenAmount` values refuse before page or
+> CFI publication when their signed value is not exactly representable. Batch
+> authorization commits and independently reparses every ordered
+> `(index,target,value,calldata)` tuple.
+>
+> Current generated identity: 428 leaves / 345,546 bytes / root
+> `668a7964b4241ec0c2348d117adaa5e29e9b34d97286ef5d1c722cdda43d700a`;
+> production blob SHA-256
+> `45e57e54dd3d2ea33efd5819d95ac611a06a61e8e036bc2a13a170577a9f9eac`;
+> E2E root
+> `f8256e1bf1f41391eb337bf2ee3f85e59f738d0f6ed60c16eaa916e99842e4cf`;
+> review artifact 1,389,653 bytes, SHA-256
+> `6a8abeec1f228a58c60557d54a975086a033742db28f6542539d07129f5839b7`.
+> Census: 162 harnesses / 26 files; 154 / 20 mutation-enrolled; eight / six
+> outside; 40 groups (10 quick / 27 default / 3 full), 38 distinct enrolled
+> harnesses.
+>
+> Pre-freeze evidence is green: combined host suites 814/0; secure mock-SE
+> suites 2235/0 under both no-default and `erc7730-dev-unattested`
+> configurations, with one diagnostic test ignored; descriptor drift and
+> census checks pass. Exact-target mutation/resource evidence, candidate
+> freeze, the combined A/B review with the already-requested supplemental Kimi
+> pass, and symmetric cross-adjudication remain mandatory before landing. This
+> grants no merge, production, shipment, or forced-blind authority.
 
 ## §0 — Where the truth lives (doc map)
 

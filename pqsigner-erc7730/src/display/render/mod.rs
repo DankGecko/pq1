@@ -33,19 +33,219 @@ pub mod formatters;
 pub mod intent;
 pub mod nested;
 
-use pqsigner_tx::erc20::bundle::Erc20Metadata;
-use pqsigner_tx::names::NameResolver;
 use super::primitives::{
     format_u64, hex_nibble, known_native_ticker, write_array_item_row, write_chain, write_line,
     write_native_amount_two_rows, write_native_currency_row, AmountFit,
 };
-use pqsigner_tx_core::eip1559::{Eip1559Tx, U256};
 use crate::bundle::VerifiedDescriptor;
-use crate::render::params::parse as parse_params;
+use crate::render::params::{
+    parse as parse_params, InterpolatedIntentProgram, MAX_INTERPOLATED_SUBSTITUTIONS,
+};
 use crate::render::visibility::{should_render_with_mode, Action};
 use crate::render::RenderErr;
+use pqsigner_tx::erc20::bundle::Erc20Metadata;
+use pqsigner_tx::names::NameResolver;
+use pqsigner_tx_core::eip1559::{Eip1559Tx, U256};
+use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
-use super::Pages;
+use super::{Page, Pages};
+
+/// Fail/default state for the contract-render intent publication receipt.
+/// These codes are deliberately far apart so an ordinary single-bit upset
+/// cannot turn an unpublished/static result into published authority.
+pub const INTENT_PUBLICATION_UNPUBLISHED: u32 = 0xA55A_0FF0;
+/// The selected authenticated contract format carries no interpolation.
+pub const INTENT_PUBLICATION_STATIC: u32 = 0x39C6_D24B;
+/// An enrolled interpolation was derived, published, independently rebuilt,
+/// and matched byte-for-byte against the actual intent page.
+pub const INTENT_PUBLICATION_INTERPOLATED: u32 = 0xC639_2DB4;
+/// Static EIP-712 renderer transcript. Interpolation is deliberately excluded
+/// from the off-chain path, so this state binds the warning, authenticated
+/// intent, every rendered field, chain page, and confirmation page.
+pub const INTENT_PUBLICATION_EIP712_STATIC: u32 = 0x2A6C_FC7C;
+const MIN_PUBLICATION_STATE_DISTANCE: u32 = 12;
+const _: () = {
+    assert!(
+        (INTENT_PUBLICATION_UNPUBLISHED ^ INTENT_PUBLICATION_STATIC).count_ones()
+            >= MIN_PUBLICATION_STATE_DISTANCE
+    );
+    assert!(
+        (INTENT_PUBLICATION_UNPUBLISHED ^ INTENT_PUBLICATION_INTERPOLATED).count_ones()
+            >= MIN_PUBLICATION_STATE_DISTANCE
+    );
+    assert!(
+        (INTENT_PUBLICATION_UNPUBLISHED ^ INTENT_PUBLICATION_EIP712_STATIC).count_ones()
+            >= MIN_PUBLICATION_STATE_DISTANCE
+    );
+    assert!(
+        (INTENT_PUBLICATION_STATIC ^ INTENT_PUBLICATION_INTERPOLATED).count_ones()
+            >= MIN_PUBLICATION_STATE_DISTANCE
+    );
+    assert!(
+        (INTENT_PUBLICATION_STATIC ^ INTENT_PUBLICATION_EIP712_STATIC).count_ones()
+            >= MIN_PUBLICATION_STATE_DISTANCE
+    );
+    assert!(
+        (INTENT_PUBLICATION_INTERPOLATED ^ INTENT_PUBLICATION_EIP712_STATIC).count_ones()
+            >= MIN_PUBLICATION_STATE_DISTANCE
+    );
+};
+
+/// Domain separator for the exact contract-render transcript commitment.
+/// Changing the framing or display geometry requires a new version.
+const CONTRACT_TRANSCRIPT_DOMAIN: &[u8] = b"pqsigner/erc7730-display-transcript/v1\0";
+
+/// Fixed, allocation-free receipt carried from the first full contract render
+/// to the secure confirmation boundary. It binds the renderer state, exact
+/// visible page count, relative page indices, and all 64 bytes of every page.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ContractTranscriptReceipt {
+    state: u32,
+    page_count: u32,
+    digest: [u8; 32],
+}
+
+impl Default for ContractTranscriptReceipt {
+    fn default() -> Self {
+        Self::unpublished()
+    }
+}
+
+impl ContractTranscriptReceipt {
+    /// Non-authoritative fail/default receipt. Range verification always
+    /// rejects this state.
+    pub const fn unpublished() -> Self {
+        Self {
+            state: INTENT_PUBLICATION_UNPUBLISHED,
+            page_count: u32::MAX,
+            digest: [0xA5; 32],
+        }
+    }
+
+    /// Build a receipt over one complete contract-render page set. Secure code
+    /// still treats this as observed data and cross-checks `state` against an
+    /// independently parsed authenticated descriptor.
+    pub fn from_pages(state: u32, pages: &Pages) -> Result<Self, RenderErr> {
+        if !matches!(
+            state,
+            INTENT_PUBLICATION_STATIC
+                | INTENT_PUBLICATION_INTERPOLATED
+                | INTENT_PUBLICATION_EIP712_STATIC
+        ) {
+            return Err(RenderErr::Reject("7730 invalid transcript state"));
+        }
+        let page_count = u32::try_from(pages.as_slice().len())
+            .map_err(|_| RenderErr::Reject("7730 transcript page count overflow"))?;
+        if page_count == 0 {
+            return Err(RenderErr::Reject("7730 empty transcript"));
+        }
+        Ok(Self {
+            state,
+            page_count,
+            digest: contract_transcript_digest(state, pages.as_slice()),
+        })
+    }
+
+    #[must_use]
+    pub const fn state_code(&self) -> u32 {
+        self.state
+    }
+
+    #[must_use]
+    pub const fn page_count(&self) -> u32 {
+        self.page_count
+    }
+
+    #[must_use]
+    pub const fn digest(&self) -> &[u8; 32] {
+        &self.digest
+    }
+
+    /// Compare two independently rendered receipts without a data-dependent
+    /// digest exit. State and count remain explicit framing checks as well as
+    /// inputs to the digest.
+    #[must_use]
+    pub fn exact_match(&self, other: &Self) -> bool {
+        self.state == other.state
+            && self.page_count == other.page_count
+            && bool::from(self.digest.ct_eq(&other.digest))
+    }
+
+    /// Recompute this receipt over an exact relative page range. Handler-owned
+    /// append-only suffixes remain outside the range; a batch wrapper shifts
+    /// only `start` by exactly one page.
+    #[must_use]
+    pub fn range_matches(&self, pages: &Pages, start: usize) -> bool {
+        if !matches!(
+            self.state,
+            INTENT_PUBLICATION_STATIC
+                | INTENT_PUBLICATION_INTERPOLATED
+                | INTENT_PUBLICATION_EIP712_STATIC
+        ) || self.page_count == 0
+        {
+            return false;
+        }
+        let Ok(count) = usize::try_from(self.page_count) else {
+            return false;
+        };
+        let Some(end) = start.checked_add(count) else {
+            return false;
+        };
+        let Some(range) = pages.as_slice().get(start..end) else {
+            return false;
+        };
+        let actual = contract_transcript_digest(self.state, range);
+        bool::from(actual.ct_eq(&self.digest))
+    }
+}
+
+#[inline(never)]
+fn contract_transcript_digest(state: u32, pages: &[Page]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(CONTRACT_TRANSCRIPT_DOMAIN);
+    hasher.update(state.to_be_bytes());
+    hasher.update((pages.len() as u32).to_be_bytes());
+    for (relative_index, page) in pages.iter().enumerate() {
+        hasher.update((relative_index as u32).to_be_bytes());
+        for row in page {
+            hasher.update(row);
+        }
+    }
+    hasher.finalize().into()
+}
+
+/// Checked contract-render result used by the secure dispatcher. Legacy host
+/// and fuzz entry points retain their `Result<Pages, _>` surface below.
+pub struct ContractRenderOutput {
+    pub pages: Pages,
+    pub transcript_receipt: ContractTranscriptReceipt,
+}
+
+/// Private receipt minted only after an amount formatter has painted the exact
+/// signed word without raw fallback, warning, clipping, or missing metadata.
+/// `interpolatedIntent` consumes the canonical text; the formatter constructs
+/// that text directly from its signed-word input before this receipt exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RenderedFieldWitness {
+    text: [u8; 32],
+    text_len: u8,
+}
+
+impl RenderedFieldWitness {
+    fn new(text: [u8; 32], text_len: usize) -> Option<Self> {
+        let text_len = u8::try_from(text_len).ok()?;
+        if text_len == 0 || text_len as usize > text.len() {
+            return None;
+        }
+        Some(Self { text, text_len })
+    }
+
+    fn text(&self) -> &[u8] {
+        &self.text[..self.text_len as usize]
+    }
+}
 
 /// Compact-mode display toggle (Phase 5 item 10).
 ///
@@ -91,7 +291,11 @@ pub fn render_erc7730_pages<'ir>(
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
 ) -> Result<Pages, RenderErr> {
-    render_erc7730_pages_scoped(tx, inner_data, descriptor, erc20, resolver, None)
+    let mut pages = Pages::with_len(0);
+    render_erc7730_pages_scoped_into(
+        tx, inner_data, descriptor, erc20, resolver, None, &mut pages,
+    )?;
+    Ok(pages)
 }
 
 /// Contract-context render with an independently derived UserOperation sender.
@@ -108,24 +312,84 @@ pub fn render_erc7730_pages_with_signer<'ir>(
     resolver: &NameResolver<'_>,
     device_signer: &[u8; 20],
 ) -> Result<Pages, RenderErr> {
-    render_erc7730_pages_scoped(
+    let mut pages = Pages::with_len(0);
+    render_erc7730_pages_with_signer_into(
+        tx,
+        inner_data,
+        descriptor,
+        erc20,
+        resolver,
+        device_signer,
+        &mut pages,
+    )?;
+    Ok(pages)
+}
+
+/// Secure-dispatch contract renderer. In addition to the legacy page set it
+/// returns the fail-closed publication receipt that must survive every later
+/// append and be consumed immediately before confirmation.
+pub fn render_erc7730_pages_with_signer_checked<'ir>(
+    tx: &Eip1559Tx,
+    inner_data: &[u8],
+    descriptor: &'ir VerifiedDescriptor<'ir>,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    device_signer: &[u8; 20],
+) -> Result<ContractRenderOutput, RenderErr> {
+    let mut pages = Pages::with_len(0);
+    let transcript_receipt = render_erc7730_pages_with_signer_into(
+        tx,
+        inner_data,
+        descriptor,
+        erc20,
+        resolver,
+        device_signer,
+        &mut pages,
+    )?;
+    Ok(ContractRenderOutput {
+        pages,
+        transcript_receipt,
+    })
+}
+
+/// Render a complete contract transcript into caller-owned empty storage and
+/// return its exact-page receipt. The secure dispatcher invokes this twice
+/// around a volatile poison/reset. The two passes reuse one logical transcript
+/// buffer, no first-pass [`Pages`] remains live as display authority, and each
+/// pass reconstructs all interpolation state. Compiler construction
+/// temporaries are assessed from the linked stack receipt; this source shape
+/// does not claim that only one physical [`Pages`]-sized stack slot exists.
+#[inline(never)]
+pub fn render_erc7730_pages_with_signer_into<'ir>(
+    tx: &Eip1559Tx,
+    inner_data: &[u8],
+    descriptor: &'ir VerifiedDescriptor<'ir>,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    device_signer: &[u8; 20],
+    pages: &mut Pages,
+) -> Result<ContractTranscriptReceipt, RenderErr> {
+    render_erc7730_pages_scoped_into(
         tx,
         inner_data,
         descriptor,
         erc20,
         resolver,
         Some(device_signer),
+        pages,
     )
 }
 
-fn render_erc7730_pages_scoped<'ir>(
+#[inline(never)]
+fn render_erc7730_pages_scoped_into<'ir>(
     tx: &Eip1559Tx,
     inner_data: &[u8],
     descriptor: &'ir VerifiedDescriptor<'ir>,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
     device_signer: Option<&[u8; 20]>,
-) -> Result<Pages, RenderErr> {
+    pages: &mut Pages,
+) -> Result<ContractTranscriptReceipt, RenderErr> {
     // Stack canary (Phase 5 item 11). Volatile read/write so LLVM
     // cannot prove the value is dead and remove the check.
     let mut canary: u32 = 0;
@@ -134,13 +398,14 @@ fn render_erc7730_pages_scoped<'ir>(
     // observable at function exit.
     unsafe { core::ptr::write_volatile(&mut canary, STACK_CANARY) };
 
-    let result = render_erc7730_pages_inner(
+    let result = render_erc7730_pages_inner_into(
         tx,
         inner_data,
         descriptor,
         erc20,
         resolver,
         device_signer,
+        pages,
     );
 
     // SAFETY: same slot we wrote to above; no other context can have
@@ -152,17 +417,22 @@ fn render_erc7730_pages_scoped<'ir>(
         final_canary,
         STACK_CANARY
     );
-    result
+    result.and_then(|state| ContractTranscriptReceipt::from_pages(state, pages))
 }
 
-fn render_erc7730_pages_inner<'ir>(
+#[inline(never)]
+fn render_erc7730_pages_inner_into<'ir>(
     tx: &Eip1559Tx,
     inner_data: &[u8],
     descriptor: &'ir VerifiedDescriptor<'ir>,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
     device_signer: Option<&[u8; 20]>,
-) -> Result<Pages, RenderErr> {
+    pages: &mut Pages,
+) -> Result<u32, RenderErr> {
+    if pages.len != 0 {
+        return Err(RenderErr::Reject("7730 transcript buffer not empty"));
+    }
     // 1. Locate the format by 4-byte calldata selector.
     if inner_data.len() < 4 {
         return Err(RenderErr::NoFormat);
@@ -195,29 +465,33 @@ fn render_erc7730_pages_inner<'ir>(
     // unprovable from the current IR and hard-refuse.
     formatters::validate_contract_calldata_framing(&descriptor.ir, &format, full_body)?;
 
-    // 2. Allocate the page buffer (grows via push_blank).
-    let mut pages = Pages::with_len(0);
-
-    // 3. Banner — page 0. Exact-zero approval wording is derived only when a
+    // 2. Banner — page 0. Exact-zero approval wording is derived only when a
     // Merkle-authenticated ERC-20 capability binds this chain+contract and the
     // signed calldata is the strict canonical `approve(address,uint256)`
     // frame. Selector-only inference is forbidden because ERC-721 collides.
-    let derived_intent = authenticated_contract_intent(
-        tx,
-        inner_data,
-        &descriptor.ir,
-        &format,
-        body,
-        erc20,
-    )?;
-    intent::render_intent_banner(&mut pages, &descriptor.ir, &format, derived_intent)?;
+    let derived_intent =
+        authenticated_contract_intent(tx, inner_data, &descriptor.ir, &format, body, erc20)?;
+    let mut interpolation = InterpolationState::from_format(&descriptor.ir, &format)?;
+    if derived_intent.is_some() && interpolation.is_enrolled() {
+        return Err(RenderErr::Reject("7730 conflicting derived intents"));
+    }
+    // An enrolled interpolation never pre-paints the reassuring authenticated
+    // static title. If publication is fault-skipped, this unmistakable invalid
+    // state remains and cannot satisfy either the local or secure readback.
+    const UNPUBLISHED_INTERPOLATED_TITLE: &[u8] = b"! INTENT INVALID";
+    let initial_intent = if interpolation.is_enrolled() {
+        Some(UNPUBLISHED_INTERPOLATED_TITLE)
+    } else {
+        derived_intent
+    };
+    let intent_page = intent::render_intent_banner(pages, &descriptor.ir, &format, initial_intent)?;
 
     // 4. Iterate fields. Contract-context formats never carry a
     //    `PARAM_NESTED_STRUCT` field (dbgen only emits it for EIP-712), so the
     //    nested descent never triggers here — pass an empty context.
     let field_pages_before = pages.as_slice().len();
     render_fields(
-        &mut pages,
+        pages,
         &descriptor.ir,
         &format,
         body,
@@ -227,6 +501,7 @@ fn render_erc7730_pages_inner<'ir>(
         resolver,
         device_signer,
         &mut NestedCtx::default(),
+        &mut interpolation,
     )?;
 
     // 4b. WYSIWYS belt (VULN-erc7730-visible-never-noparam-clearsign). A
@@ -244,16 +519,55 @@ fn render_erc7730_pages_inner<'ir>(
     if format.field_count > 0 && pages.as_slice().len() == field_pages_before {
         return Err(RenderErr::Reject("7730 no visible fields"));
     }
+    let published_interpolation = interpolation.finish()?;
+    if let Some(interpolated) = published_interpolation.as_ref() {
+        intent::repaint_intent_banner(
+            pages,
+            intent_page,
+            &descriptor.ir,
+            &format,
+            &interpolated.bytes[..interpolated.len as usize],
+        )?;
+    }
 
     // 5. Envelope pages (chain / fee / nonce). Mirrors the tail of the
     //    erc20_known renderer so the user always sees gas + chain
     //    information regardless of which descriptor lit up.
-    append_envelope_pages(&mut pages, tx)?;
+    append_envelope_pages(pages, tx)?;
 
     // 6. Final confirm-button page.
-    append_confirm_page(&mut pages)?;
+    append_confirm_page(pages)?;
 
-    Ok(pages)
+    // Retain the local exact-page reconstruction belt after every renderer-
+    // owned append. The secure dispatcher adds the independent full second
+    // render; this local check still catches a deterministic skipped repaint
+    // that could otherwise be common to both passes.
+    let transcript_state = match published_interpolation {
+        Some(first) => {
+            let second = interpolation
+                .finish()?
+                .ok_or(RenderErr::Reject("7730 missing intent rederivation"))?;
+            if first != second {
+                return Err(RenderErr::Reject("7730 intent derivation mismatch"));
+            }
+            let expected_page = intent::build_intent_page(
+                &descriptor.ir,
+                &format,
+                Some(&second.bytes[..second.len as usize]),
+            );
+            let actual = pages
+                .as_slice()
+                .get(intent_page)
+                .ok_or(RenderErr::Reject("7730 missing intent page"))?;
+            if !intent::page_exact(actual, &expected_page) {
+                return Err(RenderErr::Reject("7730 intent publication mismatch"));
+            }
+            INTENT_PUBLICATION_INTERPOLATED
+        }
+        None => INTENT_PUBLICATION_STATIC,
+    };
+
+    Ok(transcript_state)
 }
 
 /// Entry point for EIP-712 typed-data renders driven by the
@@ -271,16 +585,37 @@ pub fn render_erc7730_eip712_pages<'ir>(
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
 ) -> Result<Pages, RenderErr> {
-    // Stack canary (Phase 5 item 11) — see render_erc7730_pages above.
-    let mut canary: u32 = 0;
-    // SAFETY: unique local, volatile write defeats dead-store
-    // elimination.
-    unsafe { core::ptr::write_volatile(&mut canary, STACK_CANARY) };
+    let mut pages = Pages::with_len(0);
+    render_erc7730_eip712_pages_into(
+        chain_id,
+        verifying_contract,
+        primary_type_hash,
+        encoded_data,
+        descriptor,
+        erc20,
+        resolver,
+        &mut pages,
+    )?;
+    Ok(pages)
+}
 
-    // V2 kind: no nested-struct section (an empty `nested_blob`). A nested
-    // format signed via kind=2 therefore Rejects at the descent (no record to
-    // pull) — a companion must use `OFFCHAIN_KIND_EIP712_TYPED_V3`.
-    let result = render_erc7730_eip712_pages_inner(
+/// Render one complete V2 EIP-712 transcript into caller-owned empty storage.
+/// The secure shim keeps this one-pass primitive private and invokes it twice
+/// around a volatile poison/reset before returning pages to the handler.
+#[inline(never)]
+pub fn render_erc7730_eip712_pages_into<'ir>(
+    chain_id: u64,
+    verifying_contract: &[u8; 20],
+    primary_type_hash: &[u8; 32],
+    encoded_data: &[u8],
+    descriptor: &'ir VerifiedDescriptor<'ir>,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    pages: &mut Pages,
+) -> Result<ContractTranscriptReceipt, RenderErr> {
+    // V2 has no nested-struct section. A nested format therefore rejects at
+    // descent and must be submitted through the V3 entry point.
+    render_erc7730_eip712_pages_scoped_into(
         chain_id,
         verifying_contract,
         primary_type_hash,
@@ -289,17 +624,8 @@ pub fn render_erc7730_eip712_pages<'ir>(
         descriptor,
         erc20,
         resolver,
-    );
-
-    // SAFETY: same slot we wrote to above.
-    let final_canary = unsafe { core::ptr::read_volatile(&canary) };
-    assert!(
-        final_canary == STACK_CANARY,
-        "ERC-7730 EIP-712 renderer stack canary smashed (got {:#x}, expected {:#x})",
-        final_canary,
-        STACK_CANARY
-    );
-    result
+        pages,
+    )
 }
 
 /// Entry point for the `OFFCHAIN_KIND_EIP712_TYPED_V3 = 3` sign path — the
@@ -324,12 +650,8 @@ pub fn render_erc7730_eip712_pages_v3<'ir>(
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
 ) -> Result<Pages, RenderErr> {
-    // Stack canary (Phase 5 item 11) — same discipline as the V2 entry.
-    let mut canary: u32 = 0;
-    // SAFETY: unique local, volatile write defeats dead-store elimination.
-    unsafe { core::ptr::write_volatile(&mut canary, STACK_CANARY) };
-
-    let result = render_erc7730_eip712_pages_inner(
+    let mut pages = Pages::with_len(0);
+    render_erc7730_eip712_pages_v3_into(
         chain_id,
         verifying_contract,
         primary_type_hash,
@@ -338,20 +660,16 @@ pub fn render_erc7730_eip712_pages_v3<'ir>(
         descriptor,
         erc20,
         resolver,
-    );
-
-    // SAFETY: same slot we wrote to above.
-    let final_canary = unsafe { core::ptr::read_volatile(&canary) };
-    assert!(
-        final_canary == STACK_CANARY,
-        "ERC-7730 EIP-712 V3 renderer stack canary smashed (got {:#x}, expected {:#x})",
-        final_canary,
-        STACK_CANARY
-    );
-    result
+        &mut pages,
+    )?;
+    Ok(pages)
 }
 
-fn render_erc7730_eip712_pages_inner<'ir>(
+/// Render one complete V3 nested-EIP-712 transcript into caller-owned empty
+/// storage. The secure shim keeps this primitive private and performs the
+/// checked two-pass publication protocol.
+#[inline(never)]
+pub fn render_erc7730_eip712_pages_v3_into<'ir>(
     chain_id: u64,
     verifying_contract: &[u8; 20],
     primary_type_hash: &[u8; 32],
@@ -360,7 +678,80 @@ fn render_erc7730_eip712_pages_inner<'ir>(
     descriptor: &'ir VerifiedDescriptor<'ir>,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
-) -> Result<Pages, RenderErr> {
+    pages: &mut Pages,
+) -> Result<ContractTranscriptReceipt, RenderErr> {
+    render_erc7730_eip712_pages_scoped_into(
+        chain_id,
+        verifying_contract,
+        primary_type_hash,
+        encoded_data,
+        nested_blob,
+        descriptor,
+        erc20,
+        resolver,
+        pages,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn render_erc7730_eip712_pages_scoped_into<'ir>(
+    chain_id: u64,
+    verifying_contract: &[u8; 20],
+    primary_type_hash: &[u8; 32],
+    encoded_data: &[u8],
+    nested_blob: &[u8],
+    descriptor: &'ir VerifiedDescriptor<'ir>,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    pages: &mut Pages,
+) -> Result<ContractTranscriptReceipt, RenderErr> {
+    // Stack canary (Phase 5 item 11) — same discipline as contract renders.
+    let mut canary: u32 = 0;
+    // SAFETY: unique local; volatile write defeats dead-store elimination.
+    unsafe { core::ptr::write_volatile(&mut canary, STACK_CANARY) };
+
+    let result = render_erc7730_eip712_pages_inner_into(
+        chain_id,
+        verifying_contract,
+        primary_type_hash,
+        encoded_data,
+        nested_blob,
+        descriptor,
+        erc20,
+        resolver,
+        pages,
+    );
+
+    // SAFETY: same slot we wrote to above.
+    let final_canary = unsafe { core::ptr::read_volatile(&canary) };
+    assert!(
+        final_canary == STACK_CANARY,
+        "ERC-7730 EIP-712 renderer stack canary smashed (got {:#x}, expected {:#x})",
+        final_canary,
+        STACK_CANARY
+    );
+    result.and_then(|()| {
+        ContractTranscriptReceipt::from_pages(INTENT_PUBLICATION_EIP712_STATIC, pages)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn render_erc7730_eip712_pages_inner_into<'ir>(
+    chain_id: u64,
+    verifying_contract: &[u8; 20],
+    primary_type_hash: &[u8; 32],
+    encoded_data: &[u8],
+    nested_blob: &[u8],
+    descriptor: &'ir VerifiedDescriptor<'ir>,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    pages: &mut Pages,
+) -> Result<(), RenderErr> {
+    if pages.len != 0 {
+        return Err(RenderErr::Reject("7730 transcript buffer not empty"));
+    }
     // 1. Locate the format by the FULL 32-byte primary-type hash and bind
     //    it constant-time (audit M-5). The 4-byte selector only picks the
     //    display template; the signature commits to the full
@@ -418,8 +809,11 @@ fn render_erc7730_eip712_pages_inner<'ir>(
     }
     let body = head_bounded_body(encoded_data, format.static_head_words)?;
 
-    let mut pages = Pages::with_len(0);
-    intent::render_intent_banner(&mut pages, &descriptor.ir, &format, None)?;
+    let mut interpolation = InterpolationState::from_format(&descriptor.ir, &format)?;
+    if interpolation.is_enrolled() {
+        return Err(RenderErr::Reject("7730 eip712 interpolation unsupported"));
+    }
+    intent::render_intent_banner(pages, &descriptor.ir, &format, None)?;
     // EIP-712 `encodeData` is all one-word members — no dynamic tail — so the
     // full body IS the head body; an `[]` field (nonsensical here) safely
     // declines inside `render_array` (its tail/length checks fail).
@@ -430,7 +824,7 @@ fn render_erc7730_eip712_pages_inner<'ir>(
         records_consumed: 0,
     };
     render_fields(
-        &mut pages,
+        pages,
         &descriptor.ir,
         &format,
         body,
@@ -440,6 +834,7 @@ fn render_erc7730_eip712_pages_inner<'ir>(
         resolver,
         None,
         &mut nested_ctx,
+        &mut interpolation,
     )?;
     // E1 reconciliation (the top-level analog of the belt): the device must have
     // BOUND every nested descent point the descriptor pins, and consumed the
@@ -461,9 +856,9 @@ fn render_erc7730_eip712_pages_inner<'ir>(
     if format.field_count > 0 && pages.as_slice().len() == field_pages_before {
         return Err(RenderErr::Reject("7730 no visible members"));
     }
-    append_eip712_chain_page(&mut pages, chain_id)?;
-    append_confirm_page(&mut pages)?;
-    Ok(pages)
+    append_eip712_chain_page(pages, chain_id)?;
+    append_confirm_page(pages)?;
+    Ok(())
 }
 
 /// Clamp a structured body to its format's ABI static head
@@ -476,7 +871,8 @@ fn head_bounded_body(body: &[u8], static_head_words: u16) -> Result<&[u8], Rende
     let head_len = (static_head_words as usize)
         .checked_mul(32)
         .ok_or(RenderErr::Reject("7730 head overflow"))?;
-    body.get(..head_len).ok_or(RenderErr::Reject("7730 short head"))
+    body.get(..head_len)
+        .ok_or(RenderErr::Reject("7730 short head"))
 }
 
 /// Derive presentation copy only from an authenticated ERC-20 capability and
@@ -574,6 +970,113 @@ struct NestedCtx<'a> {
     records_consumed: u16,
 }
 
+/// Contract-render state for one authenticated `interpolatedIntent` program.
+/// The executable v1 subset enrolls exactly one referenced field. The storage
+/// remains fixed at the wire-format cap so parsing stays bounded and future
+/// versions cannot introduce allocation implicitly; all ordinary field pages
+/// still render in descriptor order.
+struct InterpolationState<'a> {
+    program: Option<InterpolatedIntentProgram<'a>>,
+    witnesses: [Option<RenderedFieldWitness>; MAX_INTERPOLATED_SUBSTITUTIONS],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InterpolatedIntentText {
+    bytes: [u8; 32],
+    len: u8,
+}
+
+impl<'a> InterpolationState<'a> {
+    fn from_format(
+        ir: &'a crate::ir::Erc7730Ir<'a>,
+        format: &crate::ir::FormatHeader<'a>,
+    ) -> Result<Self, RenderErr> {
+        let mut program = None;
+        for (ordinal, field) in format.fields().enumerate() {
+            let field = field.map_err(|_| RenderErr::Reject("7730 bad field"))?;
+            let params = parse_params(ir, field.param_off)?;
+            if let Some(candidate) = params.interpolated_intent {
+                if ordinal != 0 || program.replace(candidate).is_some() {
+                    return Err(RenderErr::Reject("7730 bad interpolation placement"));
+                }
+            }
+        }
+        Ok(Self {
+            program,
+            witnesses: [None; MAX_INTERPOLATED_SUBSTITUTIONS],
+        })
+    }
+
+    fn is_enrolled(&self) -> bool {
+        self.program.is_some()
+    }
+
+    fn record(
+        &mut self,
+        field_ordinal: u8,
+        witness: Option<RenderedFieldWitness>,
+    ) -> Result<(), RenderErr> {
+        let Some(program) = self.program else {
+            return Ok(());
+        };
+        for slot in 0..program.substitution_count() {
+            if program.field_ordinal(slot)? == field_ordinal {
+                let witness = witness.ok_or(RenderErr::Reject(
+                    "7730 interpolated field has no exact witness",
+                ))?;
+                let dst = &mut self.witnesses[slot as usize];
+                if dst.replace(witness).is_some() {
+                    return Err(RenderErr::Reject("7730 duplicate field witness"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(&self) -> Result<Option<InterpolatedIntentText>, RenderErr> {
+        let Some(program) = self.program else {
+            return Ok(None);
+        };
+        let mut bytes = [0u8; 32];
+        let mut len = 0usize;
+        for slot in 0..program.substitution_count() {
+            append_interpolated_bytes(&mut bytes, &mut len, program.literal(slot)?)?;
+            let witness = self.witnesses[slot as usize]
+                .as_ref()
+                .ok_or(RenderErr::Reject("7730 missing field witness"))?;
+            append_interpolated_bytes(&mut bytes, &mut len, witness.text())?;
+        }
+        append_interpolated_bytes(
+            &mut bytes,
+            &mut len,
+            program.literal(program.substitution_count())?,
+        )?;
+        if len == 0 {
+            return Err(RenderErr::Reject("7730 empty interpolated intent"));
+        }
+        Ok(Some(InterpolatedIntentText {
+            bytes,
+            len: len as u8,
+        }))
+    }
+}
+
+fn append_interpolated_bytes(
+    out: &mut [u8; 32],
+    len: &mut usize,
+    input: &[u8],
+) -> Result<(), RenderErr> {
+    let end = len
+        .checked_add(input.len())
+        .ok_or(RenderErr::Reject("7730 interpolated intent overflow"))?;
+    if end > out.len() {
+        return Err(RenderErr::Reject("7730 interpolated intent too long"));
+    }
+    out[*len..end].copy_from_slice(input);
+    *len = end;
+    Ok(())
+}
+
 fn render_fields(
     pages: &mut Pages,
     ir: &crate::ir::Erc7730Ir<'_>,
@@ -585,8 +1088,9 @@ fn render_fields(
     resolver: &NameResolver<'_>,
     device_signer: Option<&[u8; 20]>,
     nested: &mut NestedCtx<'_>,
+    interpolation: &mut InterpolationState<'_>,
 ) -> Result<(), RenderErr> {
-    for field_result in format.fields() {
+    for (field_ordinal, field_result) in format.fields().enumerate() {
         let field = field_result.map_err(|_| RenderErr::Reject("7730 bad field"))?;
         let params = parse_params(ir, field.param_off)?;
         // Nested-EIP-712 struct descent (Phase 5). E1: the descent + keccak
@@ -616,9 +1120,10 @@ fn render_fields(
                 resolver,
                 device_signer,
             )?;
+            interpolation.record(field_ordinal as u8, None)?;
             continue;
         }
-        render_one_field(
+        let witness = render_one_field(
             pages,
             ir,
             &field,
@@ -631,6 +1136,7 @@ fn render_fields(
             resolver,
             device_signer,
         )?;
+        interpolation.record(field_ordinal as u8, witness)?;
     }
     Ok(())
 }
@@ -652,7 +1158,7 @@ fn render_one_field(
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
     device_signer: Option<&[u8; 20]>,
-) -> Result<(), RenderErr> {
+) -> Result<Option<RenderedFieldWitness>, RenderErr> {
     match should_render_with_mode(params, None, COMPACT_MODE) {
         Action::Render => {
             // Full-body dynamic resolution is safe only after the first
@@ -679,6 +1185,7 @@ fn render_one_field(
                     resolver,
                     params,
                 )?;
+                Ok(None)
             } else if formatters::path_is_dynamic_leaf(ir, field.path_off)? {
                 // C1: a dynamic `bytes`/`string` leaf — its value is in the
                 // calldata tail (needs the FULL body).
@@ -693,6 +1200,7 @@ fn render_one_field(
                     resolver,
                     params,
                 )?;
+                Ok(None)
             } else if formatters::path_needs_full_body(ir, field.path_off)? {
                 // C2 dynamic-tuple placement cannot be reconstructed exactly
                 // from today's IR (the nested head width/tail topology is not
@@ -714,7 +1222,7 @@ fn render_one_field(
                     resolver,
                     params,
                     device_signer,
-                )?;
+                )
             } else {
                 // Static-head scalar — head-bounded body (byte-identical).
                 formatters::dispatch(
@@ -727,11 +1235,10 @@ fn render_one_field(
                     resolver,
                     params,
                     device_signer,
-                )?;
+                )
             }
-            Ok(())
         }
-        Action::Skip => Ok(()),
+        Action::Skip => Ok(None),
         Action::Reject(msg) => Err(RenderErr::Reject(msg)),
     }
 }
@@ -969,12 +1476,8 @@ fn append_envelope_pages(pages: &mut Pages, tx: &Eip1559Tx) -> Result<(), Render
         // acceptable substitute for binding a signed value to the screen.
         let mut raw_hi = [b' '; super::DISPLAY_COLS];
         let mut raw_lo = [b' '; super::DISPLAY_COLS];
-        if write_native_amount_two_rows(
-            &mut raw_hi,
-            &mut raw_lo,
-            &tx.value,
-            tx.chain_id,
-        ) != AmountFit::Full
+        if write_native_amount_two_rows(&mut raw_hi, &mut raw_lo, &tx.value, tx.chain_id)
+            != AmountFit::Full
         {
             return Err(RenderErr::Reject("7730 raw native value too wide"));
         }
@@ -1259,6 +1762,143 @@ fn append_confirm_page(pages: &mut Pages) -> Result<(), RenderErr> {
 }
 
 #[cfg(test)]
+mod interpolation_tests {
+    use super::*;
+    use crate::render::params::InterpolatedIntentProgram;
+
+    fn state_with_witness(witness_len: usize) -> InterpolationState<'static> {
+        // `"Deposit " + field[0] + ""`.
+        static PROGRAM: [u8; 13] = [
+            1, 1, 8, b'D', b'e', b'p', b'o', b's', b'i', b't', b' ', 0, 0,
+        ];
+        let program = InterpolatedIntentProgram::parse(&PROGRAM).unwrap();
+        let mut text = [0u8; 32];
+        text[..witness_len].fill(b'x');
+        let witness = RenderedFieldWitness::new(text, witness_len).unwrap();
+        let mut state = InterpolationState {
+            program: Some(program),
+            witnesses: [None; MAX_INTERPOLATED_SUBSTITUTIONS],
+        };
+        state.record(0, Some(witness)).unwrap();
+        state
+    }
+
+    #[test]
+    fn interpolated_intent_exactly_32_cells_succeeds_without_clipping() {
+        let text = state_with_witness(24).finish().unwrap().unwrap();
+        assert_eq!(text.len, 32);
+        assert_eq!(&text.bytes[..8], b"Deposit ");
+        assert_eq!(&text.bytes[8..], &[b'x'; 24]);
+        assert!(!text.bytes.contains(&b'~'));
+    }
+
+    #[test]
+    fn interpolated_intent_33_cells_and_missing_witness_refuse() {
+        assert!(matches!(
+            state_with_witness(25).finish(),
+            Err(RenderErr::Reject("7730 interpolated intent too long"))
+        ));
+
+        let program = InterpolatedIntentProgram::parse(&[
+            1, 1, 8, b'D', b'e', b'p', b'o', b's', b'i', b't', b' ', 0, 0,
+        ])
+        .unwrap();
+        let missing = InterpolationState {
+            program: Some(program),
+            witnesses: [None; MAX_INTERPOLATED_SUBSTITUTIONS],
+        };
+        assert!(matches!(
+            missing.finish(),
+            Err(RenderErr::Reject("7730 missing field witness"))
+        ));
+    }
+}
+
+#[cfg(test)]
+mod transcript_receipt_tests {
+    use super::*;
+
+    fn sample_pages() -> Pages {
+        let mut pages = Pages::with_len(2);
+        for (page_index, page) in pages.buf[..2].iter_mut().enumerate() {
+            for (cell_index, byte) in page.iter_mut().flatten().enumerate() {
+                *byte = b'A' + ((page_index * 64 + cell_index) % 26) as u8;
+            }
+        }
+        pages
+    }
+
+    #[test]
+    fn transcript_digest_framing_is_pinned_and_exact() {
+        let pages = sample_pages();
+        let receipt =
+            ContractTranscriptReceipt::from_pages(INTENT_PUBLICATION_STATIC, &pages).unwrap();
+        assert_eq!(core::mem::size_of::<ContractTranscriptReceipt>(), 40);
+        assert_eq!(receipt.page_count(), 2);
+        assert_eq!(
+            receipt.digest(),
+            &[
+                0xda, 0x64, 0x86, 0x46, 0xbc, 0xdc, 0x50, 0xf4, 0xdc, 0x23, 0x49, 0x5f, 0xc0, 0x93,
+                0xf9, 0x4d, 0xcc, 0x4d, 0x72, 0xe2, 0x6f, 0xa2, 0x4a, 0x5a, 0xa0, 0x5e, 0xff, 0xf3,
+                0x77, 0x46, 0x08, 0x63,
+            ]
+        );
+        assert!(receipt.range_matches(&pages, 0));
+
+        let mut bad_count = receipt;
+        bad_count.page_count ^= 1;
+        assert!(!bad_count.range_matches(&pages, 0));
+        let mut bad_state = receipt;
+        bad_state.state = INTENT_PUBLICATION_INTERPOLATED;
+        assert!(!bad_state.range_matches(&pages, 0));
+        let mut bad_digest = receipt;
+        bad_digest.digest[31] ^= 1;
+        assert!(!bad_digest.range_matches(&pages, 0));
+    }
+
+    #[test]
+    fn relative_order_and_range_are_bound_but_suffix_is_not() {
+        let pages = sample_pages();
+        let receipt =
+            ContractTranscriptReceipt::from_pages(INTENT_PUBLICATION_STATIC, &pages).unwrap();
+
+        let mut reordered = sample_pages();
+        reordered.buf.swap(0, 1);
+        assert!(!receipt.range_matches(&reordered, 0));
+
+        let mut dropped = sample_pages();
+        dropped.len = 1;
+        assert!(!receipt.range_matches(&dropped, 0));
+
+        let mut appended = sample_pages();
+        let suffix = appended.push_blank().unwrap();
+        appended.buf[suffix][0][..6].copy_from_slice(b"suffix");
+        assert!(receipt.range_matches(&appended, 0));
+
+        let mut prefixed = Pages::with_len(3);
+        prefixed.buf[0][0][..6].copy_from_slice(b"prefix");
+        prefixed.buf[1] = pages.buf[0];
+        prefixed.buf[2] = pages.buf[1];
+        assert!(!receipt.range_matches(&prefixed, 0));
+        assert!(receipt.range_matches(&prefixed, 1));
+    }
+
+    #[test]
+    fn volatile_reset_poison_covers_full_fixed_buffer() {
+        let mut pages = sample_pages();
+        pages.volatile_poison_and_reset();
+        assert!(pages.is_transcript_poisoned());
+        assert_eq!(pages.len, 0);
+        assert!(pages
+            .buf
+            .iter()
+            .flatten()
+            .flatten()
+            .all(|byte| *byte == super::super::TRANSCRIPT_POISON));
+    }
+}
+
+#[cfg(test)]
 mod unknown_chain_fee_tests {
     use super::*;
     use pqsigner_tx_core::eip1559::UserOpDisplayFields;
@@ -1314,8 +1954,7 @@ mod unknown_chain_fee_tests {
         assert_eq!(pages.buf[2][2][super::super::DISPLAY_COLS - 1], b'>');
 
         assert!(pages.as_slice().iter().flatten().all(|row| {
-            !row.windows(4).any(|w| w == b"gwei")
-                && !row.windows(3).any(|w| w == b"ETH")
+            !row.windows(4).any(|w| w == b"gwei") && !row.windows(3).any(|w| w == b"ETH")
         }));
     }
 

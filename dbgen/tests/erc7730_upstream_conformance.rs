@@ -18,21 +18,25 @@ use std::path::{Path, PathBuf};
 use pqsigner_erc7730::binding::cross_check_contract;
 use pqsigner_erc7730::bundle::verify_erc7730_bundle;
 use pqsigner_erc7730::display::render::render_erc7730_pages;
+use pqsigner_erc7730::ir::Erc7730Ir;
+use pqsigner_erc7730::render::params::{parse as parse_params, NFT_COLLECTION_TO_PATH};
+use pqsigner_tx::erc20::bundle::metadata_shape_is_device_verifiable;
 use pqsigner_tx::names::NameResolver;
 use pqsigner_tx_core::eip1559;
 use pqsigner_tx_core::rlp::{decode_item, Item, ListIter};
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use sphincs_tz_shared::db_format::ERC20_HDR_OFF_PROOF_DEPTH;
 
 const UPSTREAM_SHA: &str = "784c87c925e8438e7b4736b2af85a501f8d2a265";
 const FIXTURE_RECEIPT_DOMAIN: &[u8] = b"pqsigner/erc7730-excluded-fixture-corpus-v1";
 const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
-// Intentional 2026-07-17 rotation: bounded nativeCurrencyAddress list support
-// plus injective nftName collection identity admit the real 1inch and Flying
-// Tulip slices while test-only fixture bytes remain outside the catalogue.
-const PROD_ROOT_HEX: &str = "0706d763061ecfb0668ba7bdcf81e7159a6e541bae090b8678e5c9f31517d2ed";
+// Intentional 2026-07-18 schema-v4 rotation: every field now authenticates its
+// terminal kind and the compiler/device share one exhaustive formatter policy.
+// The upstream fixture bytes remain test-only and outside the catalogue.
+const PROD_ROOT_HEX: &str = "668a7964b4241ec0c2348d117adaa5e29e9b34d97286ef5d1c722cdda43d700a";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -372,11 +376,94 @@ fn build_registry() -> &'static dbgen::erc7730::Erc7730BuildResult {
         let root = workspace_root();
         let registry = root.join("secure/data/erc7730-registry");
         let policy = root.join("secure/data/erc7730/policy.toml");
-        let (result, _) =
-            dbgen::erc7730::build_db_tolerant(&registry.join("registry"), &policy, Some(&registry))
-                .expect("build production registry for conformance test");
+        let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+            .expect("build exact production ERC20 capability corpus");
+        let (result, _) = dbgen::erc7730::build_db_tolerant_with_erc20_capabilities(
+            &registry.join("registry"),
+            &policy,
+            Some(&registry),
+            &erc20.capabilities,
+        )
+        .expect("build production registry for conformance test");
         result
     })
+}
+
+#[test]
+fn production_interpolation_tags_have_exact_static_erc20_capabilities() {
+    let root = workspace_root();
+    let erc20_path = root.join("secure/data/erc20.json");
+    let erc20 = dbgen::erc20::build_db(&erc20_path)
+        .expect("build exact production ERC20 capability corpus");
+    let metadata: BTreeMap<_, _> = dbgen::load_erc20_records(&erc20_path)
+        .expect("load production ERC20 metadata")
+        .into_iter()
+        .map(|record| {
+            let contract =
+                dbgen::parse_hex_address(&record.address).expect("production ERC20 address parses");
+            ((record.chain_id, contract), record)
+        })
+        .collect();
+    let proof_depth = u32::from_le_bytes(
+        erc20.blob[ERC20_HDR_OFF_PROOF_DEPTH..ERC20_HDR_OFF_PROOF_DEPTH + 4]
+            .try_into()
+            .expect("ERC20 proof-depth header"),
+    ) as usize;
+    let registry = build_registry();
+    let mut enrolled = 0usize;
+
+    for entry in &registry.entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated IR parses");
+        for format in ir.format_iter() {
+            let format = format.expect("generated format parses");
+            let fields: Vec<_> = format
+                .fields()
+                .map(|field| field.expect("generated field parses"))
+                .collect();
+            let Some(program) = fields.iter().find_map(|field| {
+                parse_params(&ir, field.param_off)
+                    .expect("generated params parse")
+                    .interpolated_intent
+            }) else {
+                continue;
+            };
+            enrolled += 1;
+            let ordinal = usize::from(program.field_ordinal(0).expect("enrolled field ordinal"));
+            let target = fields
+                .get(ordinal)
+                .expect("interpolation target field exists");
+            let params = parse_params(&ir, target.param_off).expect("target params parse");
+            let token = if let Some(path) = params.token_path {
+                assert_eq!(
+                    path,
+                    NFT_COLLECTION_TO_PATH.as_slice(),
+                    "an enrolled tokenPath must be deployment-static @.to"
+                );
+                entry.contract
+            } else {
+                *params
+                    .token
+                    .expect("enrolled tokenAmount must carry a static token identity")
+            };
+            let token_metadata = metadata
+                .get(&(entry.chain_id, token))
+                .expect("enrolled token has production ERC20 metadata");
+            assert!(
+                metadata_shape_is_device_verifiable(
+                    token_metadata.decimals,
+                    token_metadata.name.as_bytes(),
+                    token_metadata.symbol.as_bytes(),
+                    proof_depth,
+                ),
+                "interpolation metadata cannot pass the production device verifier"
+            );
+            assert!(
+                erc20.capabilities.contains(entry.chain_id, &token),
+                "interpolation lacks exact (chain, token) ERC20 metadata capability"
+            );
+        }
+    }
+    assert_eq!(enrolled, 6, "current corpus enrollment changed");
 }
 
 #[test]

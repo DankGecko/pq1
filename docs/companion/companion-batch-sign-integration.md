@@ -285,8 +285,8 @@ For an N-tx batch, the device renders, in order:
    same signer → target → conditional nonce-lane → gas → fingerprint suffix.
 8. … repeat for every declared member …
 9. Before the final summary, firmware independently proves that all `N`
-   affirmative member receipts completed and that a second full ordered digest
-   pass matches the confirmed-member digest.
+   affirmative member receipts completed and that a second full ordered tuple
+   pass matches the confirmed-member commitment.
 10. Final summary pages: `Sign N txs?`, optional paymaster identity, the same
     signer identity, the conditional nonce-lane page, exact gas, and the
     complete whole-batch fingerprint, then `Long-right` / `to confirm`.
@@ -296,6 +296,26 @@ Cancel at **any** of the per-tx confirms or the final summary aborts
 the entire signing operation — no inner tx is signed individually.
 This is the trusted-display contract; it cannot be skipped from the
 non-secure side.
+
+The whole-batch fingerprint is domain-separated and fixed-framed (all integers
+below are unsigned 64-bit big-endian):
+
+```text
+member[i] = keccak256(
+    "PQSigner/batch-member/v1" || u64be(i) || target[i] || value32[i]
+    || erc8213_calldata_digest(data[i])
+)
+
+batch = keccak256(
+    "PQSigner/batch-final/v1" || u64be(N) || member[0] || ... || member[N-1]
+)
+```
+
+After the last confirmation, firmware independently parses the exact live
+`executeBatchWithOffchainCount(...)` ABI bytes that will enter the signed
+UserOperation digest. Selector, owner/counter, canonical offsets and padding,
+count/order, targets, values and data must reconstruct the displayed `batch`
+commitment or signing refuses.
 
 ## Constants
 

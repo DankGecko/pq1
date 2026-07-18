@@ -17,6 +17,222 @@
 
 const UNSET_PAGE_INDEX: usize = usize::MAX;
 
+/// No ERC-7730 contract renderer won the dispatch priority ladder. This is
+/// distinct from every renderer transcript state.
+const INTENT_REQUIREMENT_NONE: u32 = 0xF00F_5AA5;
+const INTENT_CFI_FAIL_INITIALIZED: u32 = 0x2A17_C4E9;
+const INTENT_CFI_REQUIREMENT_CLASSIFIED: u32 = 0xB4C2_196D;
+const TRANSCRIPT_CFI_FIRST_RECEIPT_RECORDED: u32 = 0x49D8_E3B2;
+const TRANSCRIPT_CFI_BUFFER_RESET: u32 = 0x963A_5C71;
+const TRANSCRIPT_CFI_SECOND_RENDER_VERIFIED: u32 = 0x6BC5_A38E;
+const TRANSCRIPT_CFI_NONE_RECORDED: u32 = 0xD14E_72A9;
+const TRANSCRIPT_CFI_ERC7730_EXPECTED: u32 = crate::cfi_expected!(
+    INTENT_CFI_FAIL_INITIALIZED,
+    INTENT_CFI_REQUIREMENT_CLASSIFIED,
+    TRANSCRIPT_CFI_FIRST_RECEIPT_RECORDED,
+    TRANSCRIPT_CFI_BUFFER_RESET,
+    TRANSCRIPT_CFI_SECOND_RENDER_VERIFIED,
+);
+const TRANSCRIPT_CFI_NONE_EXPECTED: u32 = crate::cfi_expected!(
+    INTENT_CFI_FAIL_INITIALIZED,
+    INTENT_CFI_REQUIREMENT_CLASSIFIED,
+    TRANSCRIPT_CFI_NONE_RECORDED,
+);
+
+const _: () = {
+    use pqsigner_erc7730::display::render::{
+        INTENT_PUBLICATION_INTERPOLATED, INTENT_PUBLICATION_STATIC, INTENT_PUBLICATION_UNPUBLISHED,
+    };
+    assert!((INTENT_REQUIREMENT_NONE ^ INTENT_PUBLICATION_UNPUBLISHED).count_ones() >= 16);
+    assert!((INTENT_REQUIREMENT_NONE ^ INTENT_PUBLICATION_STATIC).count_ones() >= 16);
+    assert!((INTENT_REQUIREMENT_NONE ^ INTENT_PUBLICATION_INTERPOLATED).count_ones() >= 16);
+};
+
+/// Secure-world view of one complete renderer transcript. `expected_state` is
+/// classified from the authenticated descriptor and dispatch priority without
+/// consulting the renderer receipt. The receipt comes from the first full
+/// render; displayed pages come from a fresh second render into the same buffer.
+struct Erc7730TranscriptProof {
+    expected_state: u32,
+    receipt: pqsigner_erc7730::display::render::ContractTranscriptReceipt,
+    start_index: usize,
+    cfi: crate::fi::CfiCounter,
+}
+
+impl Erc7730TranscriptProof {
+    const fn new() -> Self {
+        Self {
+            expected_state: pqsigner_erc7730::display::render::INTENT_PUBLICATION_UNPUBLISHED,
+            receipt: pqsigner_erc7730::display::render::ContractTranscriptReceipt::unpublished(),
+            start_index: UNSET_PAGE_INDEX,
+            cfi: crate::fi::CfiCounter::new(),
+        }
+    }
+
+    #[inline(never)]
+    fn fail_initialize(&mut self) {
+        // SAFETY: every pointer is derived from this unique mutable borrow.
+        // Volatile stores keep the fail state materialized if a later proof
+        // call is fault-skipped under LTO.
+        unsafe {
+            core::ptr::write_volatile(
+                &mut self.expected_state,
+                pqsigner_erc7730::display::render::INTENT_PUBLICATION_UNPUBLISHED,
+            );
+            core::ptr::write_volatile(
+                &mut self.receipt,
+                pqsigner_erc7730::display::render::ContractTranscriptReceipt::unpublished(),
+            );
+            core::ptr::write_volatile(&mut self.start_index, UNSET_PAGE_INDEX);
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        self.cfi.bump(INTENT_CFI_FAIL_INITIALIZED);
+    }
+
+    /// Record the first full render only after independently classified state,
+    /// count, and exact range all agree. The CFI bump is operation-local.
+    #[inline(never)]
+    fn record_first_receipt(
+        &mut self,
+        receipt: &pqsigner_erc7730::display::render::ContractTranscriptReceipt,
+        pages: &super::Pages,
+    ) -> Result<(), ()> {
+        let valid = receipt.state_code() == self.expected_state
+            && matches!(
+                self.expected_state,
+                pqsigner_erc7730::display::render::INTENT_PUBLICATION_STATIC
+                    | pqsigner_erc7730::display::render::INTENT_PUBLICATION_INTERPOLATED
+            )
+            && receipt.range_matches(pages, 0);
+        let verdict = crate::fi::check_true_into_sentinel(|| core::hint::black_box(valid));
+        if verdict != crate::fi::OK_SENTINEL {
+            return Err(());
+        }
+        // SAFETY: unique mutable borrow. The receipt/start stores are volatile
+        // so a skipped publication cannot inherit a permissive prior frame.
+        unsafe {
+            core::ptr::write_volatile(&mut self.receipt, *receipt);
+            core::ptr::write_volatile(&mut self.start_index, 0);
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        self.cfi.bump(TRANSCRIPT_CFI_FIRST_RECEIPT_RECORDED);
+        Ok(())
+    }
+
+    /// Destroy the first render in-place and grant the reset CFI step only
+    /// after all fixed-capacity bytes and the visible length read back as the
+    /// poison state.
+    #[inline(never)]
+    fn poison_for_second_render(&mut self, pages: &mut super::Pages) -> Result<(), ()> {
+        pages.volatile_poison_and_reset();
+        let verdict = crate::fi::check_true_into_sentinel(|| {
+            core::hint::black_box(pages.is_transcript_poisoned())
+        });
+        if verdict != crate::fi::OK_SENTINEL {
+            return Err(());
+        }
+        self.cfi.bump(TRANSCRIPT_CFI_BUFFER_RESET);
+        Ok(())
+    }
+
+    /// Compare the independently rendered second receipt and displayed pages
+    /// against the first receipt. The caller owns and fail-initializes the
+    /// verdict slot, so skipping this function cannot grant authority.
+    #[inline(never)]
+    fn verify_second_render(
+        &mut self,
+        second: &pqsigner_erc7730::display::render::ContractTranscriptReceipt,
+        pages: &super::Pages,
+        verdict_out: &mut u32,
+    ) {
+        let comparison = self.receipt.exact_match(second)
+            && second.state_code() == self.expected_state
+            && second.range_matches(pages, 0);
+        let comparison_verdict =
+            crate::fi::check_true_into_sentinel(|| core::hint::black_box(comparison));
+        if comparison_verdict != crate::fi::OK_SENTINEL {
+            return;
+        }
+        self.cfi.bump(TRANSCRIPT_CFI_SECOND_RENDER_VERIFIED);
+        let final_verdict = self.proof(pages);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        // SAFETY: unique caller-owned output slot, already materialized FAIL.
+        unsafe { core::ptr::write_volatile(verdict_out, final_verdict) };
+    }
+
+    /// Complete the distinct no-ERC-7730 route. No fake empty transcript can
+    /// satisfy a static/interpolated requirement.
+    #[inline(never)]
+    fn finish_route(&mut self) -> Result<(), ()> {
+        match self.expected_state {
+            INTENT_REQUIREMENT_NONE => {
+                if self.receipt
+                    != pqsigner_erc7730::display::render::ContractTranscriptReceipt::unpublished()
+                    || self.start_index != UNSET_PAGE_INDEX
+                {
+                    return Err(());
+                }
+                self.cfi.bump(TRANSCRIPT_CFI_NONE_RECORDED);
+                Ok(())
+            }
+            pqsigner_erc7730::display::render::INTENT_PUBLICATION_STATIC
+            | pqsigner_erc7730::display::render::INTENT_PUBLICATION_INTERPOLATED => {
+                if self.receipt.state_code() != self.expected_state || self.start_index != 0 {
+                    return Err(());
+                }
+                Ok(())
+            }
+            _ => Err(()),
+        }
+    }
+
+    fn is_pristine(&self) -> bool {
+        self.expected_state == pqsigner_erc7730::display::render::INTENT_PUBLICATION_UNPUBLISHED
+            && self.receipt
+                == pqsigner_erc7730::display::render::ContractTranscriptReceipt::unpublished()
+            && self.start_index == UNSET_PAGE_INDEX
+    }
+
+    fn shift_index(&mut self, by: usize) -> Result<(), ()> {
+        if self.start_index != UNSET_PAGE_INDEX {
+            self.start_index = self.start_index.checked_add(by).ok_or(())?;
+        }
+        Ok(())
+    }
+
+    /// CFI + independently classified state + exact protected-range check.
+    #[inline(never)]
+    fn proof(&self, pages: &super::Pages) -> u32 {
+        let expected_cfi = if self.expected_state == INTENT_REQUIREMENT_NONE {
+            TRANSCRIPT_CFI_NONE_EXPECTED
+        } else {
+            TRANSCRIPT_CFI_ERC7730_EXPECTED
+        };
+        let cfi = self.cfi.check_into_sentinel(expected_cfi);
+        crate::fi::scrub_sentinel_register();
+        let content_ok = match self.expected_state {
+            INTENT_REQUIREMENT_NONE => {
+                self.start_index == UNSET_PAGE_INDEX
+                    && self.receipt
+                        == pqsigner_erc7730::display::render::ContractTranscriptReceipt::unpublished(
+                        )
+            }
+            pqsigner_erc7730::display::render::INTENT_PUBLICATION_STATIC
+            | pqsigner_erc7730::display::render::INTENT_PUBLICATION_INTERPOLATED => {
+                self.receipt.state_code() == self.expected_state
+                    && self.start_index != UNSET_PAGE_INDEX
+                    && self.receipt.range_matches(pages, self.start_index)
+            }
+            _ => false,
+        };
+        crate::fi::scrub_sentinel_register();
+        crate::fi::check_true_into_sentinel(|| {
+            core::hint::black_box(cfi == crate::fi::OK_SENTINEL)
+                && core::hint::black_box(content_ok)
+        })
+    }
+}
+
 /// Caller-owned receipts for dispatcher-appended native-value and legacy-fee
 /// pages. The secure handler keeps this object alive until the final confirm
 /// boundary, so skipping the dispatcher enforcer, its immediate proof, or the
@@ -26,6 +242,7 @@ pub(crate) struct DispatchPageProofs {
     legacy_fee_prior_len: usize,
     native_cfi: crate::fi::CfiCounter,
     legacy_fee_cfi: crate::fi::CfiCounter,
+    erc7730_transcript: Erc7730TranscriptProof,
 }
 
 impl DispatchPageProofs {
@@ -35,12 +252,22 @@ impl DispatchPageProofs {
             legacy_fee_prior_len: UNSET_PAGE_INDEX,
             native_cfi: crate::fi::CfiCounter::new(),
             legacy_fee_cfi: crate::fi::CfiCounter::new(),
+            erc7730_transcript: Erc7730TranscriptProof::new(),
         }
+    }
+
+    /// Materialize all dispatcher-owned fail states before any renderer can
+    /// publish pages. Required even though [`Self::new`] is also fail-safe:
+    /// the intent CFI step detects a skipped initialization call.
+    #[inline(never)]
+    pub(crate) fn fail_initialize(&mut self) {
+        self.erc7730_transcript.fail_initialize();
     }
 
     fn is_pristine(&self) -> bool {
         self.native_prior_len == UNSET_PAGE_INDEX
             && self.legacy_fee_prior_len == UNSET_PAGE_INDEX
+            && self.erc7730_transcript.is_pristine()
     }
 
     /// Account for a caller-owned prefix wrapper (the batch banner) that is
@@ -49,9 +276,9 @@ impl DispatchPageProofs {
     pub(crate) fn shift_indices(&mut self, by: usize) -> Result<(), ()> {
         self.native_prior_len = self.native_prior_len.checked_add(by).ok_or(())?;
         if self.legacy_fee_prior_len != UNSET_PAGE_INDEX {
-            self.legacy_fee_prior_len =
-                self.legacy_fee_prior_len.checked_add(by).ok_or(())?;
+            self.legacy_fee_prior_len = self.legacy_fee_prior_len.checked_add(by).ok_or(())?;
         }
+        self.erc7730_transcript.shift_index(by)?;
         Ok(())
     }
 
@@ -62,7 +289,8 @@ impl DispatchPageProofs {
         pages: &super::Pages,
         tx: &crate::tx::eip1559::Eip1559Tx,
         legacy_fee_required: bool,
-    ) -> u32 {
+        verdict_out: &mut u32,
+    ) {
         let native_cfi = self
             .native_cfi
             .check_into_sentinel(super::value_page::NATIVE_VALUE_CFI_EXPECTED);
@@ -74,11 +302,13 @@ impl DispatchPageProofs {
             tx.chain_id,
         );
         crate::fi::scrub_sentinel_register();
-        let legacy_cfi = self.legacy_fee_cfi.check_into_sentinel(if legacy_fee_required {
-            super::value_page::LEGACY_FEE_CFI_EXPECTED
-        } else {
-            crate::fi::CfiCounter::INIT_VALUE
-        });
+        let legacy_cfi = self
+            .legacy_fee_cfi
+            .check_into_sentinel(if legacy_fee_required {
+                super::value_page::LEGACY_FEE_CFI_EXPECTED
+            } else {
+                crate::fi::CfiCounter::INIT_VALUE
+            });
         crate::fi::scrub_sentinel_register();
         let legacy_pages = if legacy_fee_required {
             super::value_page::legacy_fee_pages_final_set_proof(
@@ -91,12 +321,20 @@ impl DispatchPageProofs {
                 core::hint::black_box(self.legacy_fee_prior_len == UNSET_PAGE_INDEX)
             })
         };
+        crate::fi::scrub_sentinel_register();
+        let erc7730_transcript = self.erc7730_transcript.proof(pages);
         let all_ok = native_cfi == crate::fi::OK_SENTINEL
             && native_pages == crate::fi::OK_SENTINEL
             && legacy_cfi == crate::fi::OK_SENTINEL
-            && legacy_pages == crate::fi::OK_SENTINEL;
+            && legacy_pages == crate::fi::OK_SENTINEL
+            && erc7730_transcript == crate::fi::OK_SENTINEL;
         crate::fi::scrub_sentinel_register();
-        crate::fi::check_true_into_sentinel(|| core::hint::black_box(all_ok))
+        let verdict = crate::fi::check_true_into_sentinel(|| core::hint::black_box(all_ok));
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        // SAFETY: caller supplied a unique live output slot. It initializes the
+        // slot to FAIL before this call, so skipping this entire function never
+        // authorizes confirmation via a stale return register.
+        unsafe { core::ptr::write_volatile(verdict_out, verdict) };
     }
 }
 
@@ -109,6 +347,57 @@ pub(crate) const fn legacy_fee_pages_required(
     safe_exec_present: bool,
 ) -> bool {
     cow_present || safe_v1_present || safe_exec_present
+}
+
+/// Independently determine what the winning dispatch route requires from the
+/// renderer. This deliberately reparses the selected authenticated format's
+/// parameter TLVs and never consults a renderer transcript receipt.
+#[inline(never)]
+fn classify_intent_requirement(
+    cow_present: bool,
+    safe_v1_present: bool,
+    safe_exec_present: bool,
+    erc7730: Option<&crate::tx::erc7730::VerifiedDescriptor<'_>>,
+    inner_data: &[u8],
+    proof: &mut Erc7730TranscriptProof,
+) -> Result<(), ()> {
+    let requirement = if cow_present || safe_v1_present || safe_exec_present {
+        INTENT_REQUIREMENT_NONE
+    } else if let Some(descriptor) = erc7730 {
+        let selector: [u8; 4] = inner_data.get(..4).ok_or(())?.try_into().map_err(|_| ())?;
+        let format = descriptor
+            .ir
+            .find_format_by_selector(&selector)
+            .map_err(|_| ())?
+            .ok_or(())?;
+        let mut enrolled = false;
+        for (ordinal, field) in format.fields().enumerate() {
+            let field = field.map_err(|_| ())?;
+            let params = pqsigner_erc7730::render::params::parse(&descriptor.ir, field.param_off)
+                .map_err(|_| ())?;
+            if params.interpolated_intent.is_some() {
+                if ordinal != 0 || enrolled {
+                    return Err(());
+                }
+                enrolled = true;
+            }
+        }
+        if enrolled {
+            pqsigner_erc7730::display::render::INTENT_PUBLICATION_INTERPOLATED
+        } else {
+            pqsigner_erc7730::display::render::INTENT_PUBLICATION_STATIC
+        }
+    } else {
+        INTENT_REQUIREMENT_NONE
+    };
+
+    // SAFETY: unique mutable borrow. The classifier publishes into the
+    // caller-owned fail-in state; skipping this call leaves both the state and
+    // its CFI counter non-authoritative.
+    unsafe { core::ptr::write_volatile(&mut proof.expected_state, requirement) };
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    proof.cfi.bump(INTENT_CFI_REQUIREMENT_CLASSIFIED);
+    Ok(())
 }
 
 /// Pick the right renderer for a CMD_SIGN_USEROP trusted-UI confirm.
@@ -172,6 +461,14 @@ pub fn pick_sign_pages(
     if !proofs.is_pristine() {
         return Err(());
     }
+    classify_intent_requirement(
+        v3.is_some(),
+        safe_v1.is_some(),
+        safe_exec.is_some(),
+        erc7730,
+        inner_data,
+        &mut proofs.erc7730_transcript,
+    )?;
     // `pick_sign_pages_inner` returns `Err(())` when a Safe-surface render
     // refuses (page budget exceeded / page-accounting self-check failed);
     // propagate it so the handler maps it to a refuse-to-sign rather than
@@ -187,7 +484,9 @@ pub fn pick_sign_pages(
         erc20,
         selector,
         resolver,
+        &mut proofs.erc7730_transcript,
     )?;
+    proofs.erc7730_transcript.finish_route()?;
     // Dispatcher-level WYSIWYS invariant (audit C-1 / H-2 / M-8; hardened
     // 2026-06-18).
     //
@@ -226,8 +525,7 @@ pub fn pick_sign_pages(
         &tx.value,
         tx.chain_id,
     );
-    if native_cfi_verdict != crate::fi::OK_SENTINEL
-        || native_page_verdict != crate::fi::OK_SENTINEL
+    if native_cfi_verdict != crate::fi::OK_SENTINEL || native_page_verdict != crate::fi::OK_SENTINEL
     {
         return Err(());
     }
@@ -251,33 +549,95 @@ pub fn pick_sign_pages(
     // outcome (erc7730 / value / erc20 / typed-call / blind-sign) already
     // shows gas, so splicing there would DOUBLE the pages. Fails CLOSED on a
     // full buffer (same refuse-to-sign contract as the value page).
-    let needs_gas = legacy_fee_pages_required(
-        v3.is_some(),
-        safe_v1.is_some(),
-        safe_exec.is_some(),
-    );
+    let needs_gas = legacy_fee_pages_required(v3.is_some(), safe_v1.is_some(), safe_exec.is_some());
     if needs_gas {
         proofs.legacy_fee_prior_len = pages.len;
-        super::value_page::enforce_gas_pages(
-            &mut pages,
-            tx,
-            &mut proofs.legacy_fee_cfi,
-        )?;
+        super::value_page::enforce_gas_pages(&mut pages, tx, &mut proofs.legacy_fee_cfi)?;
         crate::fi::scrub_sentinel_register();
         let legacy_fee_cfi_verdict = proofs
             .legacy_fee_cfi
             .check_into_sentinel(super::value_page::LEGACY_FEE_CFI_EXPECTED);
         crate::fi::scrub_sentinel_register();
-        let legacy_fee_page_verdict = super::value_page::legacy_fee_pages_proof(
-            &pages,
-            proofs.legacy_fee_prior_len,
-            tx,
-        );
+        let legacy_fee_page_verdict =
+            super::value_page::legacy_fee_pages_proof(&pages, proofs.legacy_fee_prior_len, tx);
         if legacy_fee_cfi_verdict != crate::fi::OK_SENTINEL
             || legacy_fee_page_verdict != crate::fi::OK_SENTINEL
         {
             return Err(());
         }
+    }
+    crate::fi::scrub_sentinel_register();
+    let transcript_verdict = proofs.erc7730_transcript.proof(&pages);
+    crate::fi::scrub_sentinel_register();
+    if transcript_verdict != crate::fi::OK_SENTINEL {
+        return Err(());
+    }
+    Ok(pages)
+}
+
+/// Render the authenticated contract twice into one fixed-capacity page buffer.
+/// Only the second render is returned for display; the first survives solely as
+/// a 40-byte transcript receipt. A volatile full-buffer poison and randomized
+/// delay separate the fresh renderer/witness states.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn render_verified_erc7730_two_pass<'ir>(
+    tx: &crate::tx::eip1559::Eip1559Tx,
+    inner_data: &[u8],
+    descriptor: &'ir crate::tx::erc7730::VerifiedDescriptor<'ir>,
+    erc20: Option<&crate::erc20::bundle::Erc20Metadata<'_>>,
+    resolver: &crate::names::NameResolver<'_>,
+    device_signer: &[u8; 20],
+    proof: &mut Erc7730TranscriptProof,
+) -> Result<super::Pages, crate::tx::erc7730_render::RenderErr> {
+    use crate::tx::erc7730_render::RenderErr;
+
+    let mut pages = super::Pages::with_len(0);
+    let first = super::erc7730::render_contract_pass_into(
+        tx,
+        inner_data,
+        descriptor,
+        erc20,
+        resolver,
+        device_signer,
+        &mut pages,
+    )?;
+    proof
+        .record_first_receipt(&first, &pages)
+        .map_err(|_| RenderErr::Reject("7730 first transcript proof"))?;
+    proof
+        .poison_for_second_render(&mut pages)
+        .map_err(|_| RenderErr::Reject("7730 transcript reset proof"))?;
+    crate::fi::wait_random();
+
+    let second = super::erc7730::render_contract_pass_into(
+        tx,
+        inner_data,
+        descriptor,
+        erc20,
+        resolver,
+        device_signer,
+        &mut pages,
+    )?;
+
+    let mut immediate_verdict = crate::fi::FAIL_SENTINEL;
+    // SAFETY: unique live local. A skipped verification call leaves the
+    // materialized FAIL value in memory rather than a stale return register.
+    unsafe {
+        core::ptr::write_volatile(&mut immediate_verdict, crate::fi::FAIL_SENTINEL);
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    proof.verify_second_render(&second, &pages, &mut immediate_verdict);
+    // SAFETY: the local verdict remains live and uniquely owned; volatile
+    // readback is part of the fault-detection boundary.
+    let verdict_a = unsafe { core::ptr::read_volatile(&immediate_verdict) };
+    crate::fi::wait_random();
+    // SAFETY: same live local as above, read a second time after an independent
+    // randomized delay.
+    let verdict_b = unsafe { core::ptr::read_volatile(&immediate_verdict) };
+    crate::fi::scrub_sentinel_register();
+    if verdict_a != crate::fi::OK_SENTINEL || verdict_b != crate::fi::OK_SENTINEL {
+        return Err(RenderErr::Reject("7730 second transcript mismatch"));
     }
     Ok(pages)
 }
@@ -294,6 +654,7 @@ fn pick_sign_pages_inner(
     erc20: Option<&crate::erc20::bundle::Erc20Metadata<'_>>,
     selector: Option<&crate::selectors::SelectorMeta<'_>>,
     resolver: &crate::names::NameResolver<'_>,
+    transcript_proof: &mut Erc7730TranscriptProof,
 ) -> Result<super::Pages, ()> {
     // Handler verification already enforces this before dispatch. Repeat the
     // public-envelope bind locally so future or host-only call sites cannot
@@ -329,7 +690,12 @@ fn pick_sign_pages_inner(
                 &exec.decoded.to,
                 exec.decoded.data,
             );
-            return super::safe_display::render_safe_exec_pages(exec, Some(v3), inner_meta, resolver);
+            return super::safe_display::render_safe_exec_pages(
+                exec,
+                Some(v3),
+                inner_meta,
+                resolver,
+            );
         }
         return Ok(crate::tx::eip712::cowswap_display::render_cowswap_pages(
             &v3.canonical,
@@ -365,13 +731,14 @@ fn pick_sign_pages_inner(
         return super::safe_display::render_safe_exec_pages(exec, None, inner_meta, resolver);
     }
     if let Some(d) = erc7730 {
-        match super::erc7730::render_erc7730_pages_with_signer(
+        match render_verified_erc7730_two_pass(
             tx,
             inner_data,
             d,
             erc20,
             resolver,
             device_signer,
+            transcript_proof,
         ) {
             Ok(pages) => return Ok(pages),
             Err(error) => return refuse_verified_erc7730(error),
@@ -395,20 +762,14 @@ fn pick_sign_pages_inner(
         // SAFETY: unique local. Start from a materialized FAIL state so a
         // skipped `Some` route cannot inherit a permissive stack value.
         unsafe {
-            core::ptr::write_volatile(
-                &mut target_present,
-                crate::fi::FAIL_SENTINEL,
-            );
+            core::ptr::write_volatile(&mut target_present, crate::fi::FAIL_SENTINEL);
         }
         if let Some(actual) = tx.to.as_ref() {
             target.copy_from_slice(actual);
             // SAFETY: unique live local; volatile publication makes a skipped
             // target-copy route observable in both final permission gates.
             unsafe {
-                core::ptr::write_volatile(
-                    &mut target_present,
-                    crate::fi::OK_SENTINEL,
-                );
+                core::ptr::write_volatile(&mut target_present, crate::fi::OK_SENTINEL);
             }
         }
         let mut selector = [0u8; 4];
@@ -425,10 +786,7 @@ fn pick_sign_pages_inner(
         // (the callee overwrites it) and LTO could erase it, leaving stale
         // stack data if a fault skips the call.
         unsafe {
-            core::ptr::write_volatile(
-                &mut unknown_verdict_slot,
-                crate::fi::FAIL_SENTINEL,
-            );
+            core::ptr::write_volatile(&mut unknown_verdict_slot, crate::fi::FAIL_SENTINEL);
         }
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         let mut unknown_cfi = crate::fi::CfiCounter::new();
@@ -445,9 +803,7 @@ fn pick_sign_pages_inner(
         // gap, so a skipped reject branch still lands at another reject.
         // SAFETY: local was initialized above and remains live; the proof's
         // unique mutable borrow ended before this independent readback.
-        let unknown_verdict_a = unsafe {
-            core::ptr::read_volatile(&unknown_verdict_slot)
-        };
+        let unknown_verdict_a = unsafe { core::ptr::read_volatile(&unknown_verdict_slot) };
         let unknown_cfi_verdict_a =
             unknown_cfi.check_into_sentinel(crate::tx::erc7730::CFI_KNOWN_EXPECTED);
         let route_a = match tx.to.as_ref() {
@@ -462,8 +818,7 @@ fn pick_sign_pages_inner(
             None => {
                 // Contract creation has no catalogue target. It still queries
                 // the all-zero sentinel tuple so a Bloom collision refuses.
-                target == [0u8; 20]
-                    && selector[..selector_len] == inner_data[..selector_len]
+                target == [0u8; 20] && selector[..selector_len] == inner_data[..selector_len]
             }
         };
         let unknown_all_ok_a = unknown_verdict_a == crate::fi::OK_SENTINEL
@@ -474,9 +829,7 @@ fn pick_sign_pages_inner(
             crate::fi::check_true_into_sentinel(|| core::hint::black_box(unknown_all_ok_a));
         crate::fi::scrub_sentinel_register();
         if unknown_gate_a != crate::fi::OK_SENTINEL {
-            secure_log!(
-                "erc7730 clear-sign refused: known call omitted descriptor"
-            );
+            secure_log!("erc7730 clear-sign refused: known call omitted descriptor");
             crate::ui::show_status("Sign refused", "7730 proof needed");
             return Err(());
         }
@@ -484,9 +837,7 @@ fn pick_sign_pages_inner(
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         // SAFETY: same live local, independently re-read after the randomized
         // gap instead of reusing gate A's cached evidence.
-        let unknown_verdict_b = unsafe {
-            core::ptr::read_volatile(&unknown_verdict_slot)
-        };
+        let unknown_verdict_b = unsafe { core::ptr::read_volatile(&unknown_verdict_slot) };
         let unknown_cfi_verdict_b =
             unknown_cfi.check_into_sentinel(crate::tx::erc7730::CFI_KNOWN_EXPECTED);
         let route_b = match tx.to.as_ref() {
@@ -497,10 +848,7 @@ fn pick_sign_pages_inner(
                     && actual == &target
                     && selector[..selector_len] == inner_data[..selector_len]
             }
-            None => {
-                target == [0u8; 20]
-                    && selector[..selector_len] == inner_data[..selector_len]
-            }
+            None => target == [0u8; 20] && selector[..selector_len] == inner_data[..selector_len],
         };
         let unknown_all_ok_b = unknown_verdict_b == crate::fi::OK_SENTINEL
             && unknown_cfi_verdict_b == crate::fi::OK_SENTINEL
@@ -510,9 +858,7 @@ fn pick_sign_pages_inner(
             crate::fi::check_true_into_sentinel(|| core::hint::black_box(unknown_all_ok_b));
         crate::fi::scrub_sentinel_register();
         if unknown_gate_b != crate::fi::OK_SENTINEL {
-            secure_log!(
-                "erc7730 clear-sign refused: known call omitted descriptor"
-            );
+            secure_log!("erc7730 clear-sign refused: known call omitted descriptor");
             crate::ui::show_status("Sign refused", "7730 proof needed");
             return Err(());
         }
@@ -538,10 +884,13 @@ fn pick_sign_pages_inner(
             // Neither grants authority to this direct ERC-20 branch. Re-check
             // the outer contract and fall back to the raw unknown-token view
             // on mismatch.
-            let matched = erc20
-                .filter(|meta| super::value_page::direct_erc20_meta_matches(&meta.contract, tx.to.as_ref()));
+            let matched = erc20.filter(|meta| {
+                super::value_page::direct_erc20_meta_matches(&meta.contract, tx.to.as_ref())
+            });
             Ok(match matched {
-                Some(meta) => super::erc20_known::render_erc20_known_pages(tx, &call, meta, resolver),
+                Some(meta) => {
+                    super::erc20_known::render_erc20_known_pages(tx, &call, meta, resolver)
+                }
                 None => super::erc20_unknown::render_erc20_unknown_pages(tx, &call, resolver),
             })
         }
@@ -560,7 +909,9 @@ fn pick_sign_pages_inner(
                     return Ok(pages);
                 }
             }
-            Ok(super::blind_sign::render_blind_sign_pages(tx, inner_data, selector, resolver))
+            Ok(super::blind_sign::render_blind_sign_pages(
+                tx, inner_data, selector, resolver,
+            ))
         }
     }
 }
@@ -624,6 +975,168 @@ mod semantic_guard_tests {
                 "verified descriptor errors must never enter a weaker renderer"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod transcript_proof_tests {
+    use super::*;
+
+    fn sample_pages() -> super::super::Pages {
+        let mut pages = super::super::Pages::with_len(3);
+        pages.buf[0][0].copy_from_slice(b"** DEV BUILD ** ");
+        pages.buf[0][1][..10].copy_from_slice(b"Unattested");
+        pages.buf[1][0][..13].copy_from_slice(b"Static intent");
+        for (row_index, row) in pages.buf[2].iter_mut().enumerate() {
+            for (col_index, byte) in row.iter_mut().enumerate() {
+                *byte = b'A'
+                    + ((row_index * pqsigner_erc7730::display::DISPLAY_COLS + col_index) % 26)
+                        as u8;
+            }
+        }
+        pages
+    }
+
+    fn completed_proof(state: u32) -> (Erc7730TranscriptProof, super::super::Pages) {
+        let mut first_pages = sample_pages();
+        let first = pqsigner_erc7730::display::render::ContractTranscriptReceipt::from_pages(
+            state,
+            &first_pages,
+        )
+        .unwrap();
+        let mut proof = Erc7730TranscriptProof::new();
+        proof.fail_initialize();
+        proof.expected_state = state;
+        proof.cfi.bump(INTENT_CFI_REQUIREMENT_CLASSIFIED);
+        proof.record_first_receipt(&first, &first_pages).unwrap();
+        proof.poison_for_second_render(&mut first_pages).unwrap();
+
+        let second_pages = sample_pages();
+        let second = pqsigner_erc7730::display::render::ContractTranscriptReceipt::from_pages(
+            state,
+            &second_pages,
+        )
+        .unwrap();
+        let mut verdict = crate::fi::FAIL_SENTINEL;
+        proof.verify_second_render(&second, &second_pages, &mut verdict);
+        assert_eq!(verdict, crate::fi::OK_SENTINEL);
+        (proof, second_pages)
+    }
+
+    #[test]
+    fn distinct_no_erc7730_route_requires_its_own_cfi_completion() {
+        let pages = sample_pages();
+        let mut proof = Erc7730TranscriptProof::new();
+        proof.fail_initialize();
+        proof.expected_state = INTENT_REQUIREMENT_NONE;
+        proof.cfi.bump(INTENT_CFI_REQUIREMENT_CLASSIFIED);
+        assert_ne!(proof.proof(&pages), crate::fi::OK_SENTINEL);
+        proof.finish_route().unwrap();
+        assert_eq!(proof.proof(&pages), crate::fi::OK_SENTINEL);
+    }
+
+    #[test]
+    fn static_and_interpolated_transcripts_bind_every_page_byte() {
+        for state in [
+            pqsigner_erc7730::display::render::INTENT_PUBLICATION_STATIC,
+            pqsigner_erc7730::display::render::INTENT_PUBLICATION_INTERPOLATED,
+        ] {
+            let (proof, mut pages) = completed_proof(state);
+            assert_eq!(proof.proof(&pages), crate::fi::OK_SENTINEL);
+
+            let protected = pages.len;
+            for page in 0..protected {
+                let original = pages.buf[page];
+                for row in 0..pqsigner_erc7730::display::DISPLAY_ROWS {
+                    for col in 0..pqsigner_erc7730::display::DISPLAY_COLS {
+                        pages.buf[page] = original;
+                        pages.buf[page][row][col] ^= 1;
+                        assert_ne!(
+                            proof.proof(&pages),
+                            crate::fi::OK_SENTINEL,
+                            "state={state:#x}, page={page}, row={row}, col={col}"
+                        );
+                    }
+                }
+                pages.buf[page] = original;
+            }
+        }
+    }
+
+    #[test]
+    fn suffix_count_state_and_range_are_exact() {
+        let (mut proof, mut pages) =
+            completed_proof(pqsigner_erc7730::display::render::INTENT_PUBLICATION_STATIC);
+        let suffix = pages.push_blank().unwrap();
+        pages.buf[suffix][0][..6].copy_from_slice(b"suffix");
+        assert_eq!(proof.proof(&pages), crate::fi::OK_SENTINEL);
+
+        pages.len -= 2;
+        assert_ne!(proof.proof(&pages), crate::fi::OK_SENTINEL);
+        pages.len += 2;
+        proof.expected_state = pqsigner_erc7730::display::render::INTENT_PUBLICATION_INTERPOLATED;
+        assert_ne!(proof.proof(&pages), crate::fi::OK_SENTINEL);
+        proof.expected_state = pqsigner_erc7730::display::render::INTENT_PUBLICATION_STATIC;
+        proof.shift_index(1).unwrap();
+        assert_ne!(proof.proof(&pages), crate::fi::OK_SENTINEL);
+    }
+
+    #[test]
+    fn common_mode_first_pass_corruption_cannot_authorize_clean_second_render() {
+        let state = pqsigner_erc7730::display::render::INTENT_PUBLICATION_STATIC;
+        let mut first_pages = sample_pages();
+        first_pages.buf[2][3][15] ^= 1;
+        let first = pqsigner_erc7730::display::render::ContractTranscriptReceipt::from_pages(
+            state,
+            &first_pages,
+        )
+        .unwrap();
+        let mut proof = Erc7730TranscriptProof::new();
+        proof.fail_initialize();
+        proof.expected_state = state;
+        proof.cfi.bump(INTENT_CFI_REQUIREMENT_CLASSIFIED);
+        proof.record_first_receipt(&first, &first_pages).unwrap();
+        proof.poison_for_second_render(&mut first_pages).unwrap();
+        assert!(first_pages.is_transcript_poisoned());
+
+        let second_pages = sample_pages();
+        let second = pqsigner_erc7730::display::render::ContractTranscriptReceipt::from_pages(
+            state,
+            &second_pages,
+        )
+        .unwrap();
+        let mut verdict = crate::fi::FAIL_SENTINEL;
+        proof.verify_second_render(&second, &second_pages, &mut verdict);
+        assert_eq!(verdict, crate::fi::FAIL_SENTINEL);
+    }
+
+    #[test]
+    fn batch_prefix_shift_moves_the_full_transcript_exactly_once() {
+        let (proof, inner) =
+            completed_proof(pqsigner_erc7730::display::render::INTENT_PUBLICATION_INTERPOLATED);
+        let mut carrier = DispatchPageProofs::new();
+        carrier.erc7730_transcript = proof;
+        carrier.native_prior_len = inner.len;
+
+        let mut wrapped = super::super::Pages::with_len(inner.len + 1);
+        wrapped.buf[0][0][..12].copy_from_slice(b"Batch member");
+        for index in 0..inner.len {
+            wrapped.buf[index + 1] = inner.buf[index];
+        }
+        assert_ne!(
+            carrier.erc7730_transcript.proof(&wrapped),
+            crate::fi::OK_SENTINEL
+        );
+        carrier.shift_indices(1).unwrap();
+        assert_eq!(
+            carrier.erc7730_transcript.proof(&wrapped),
+            crate::fi::OK_SENTINEL
+        );
+        carrier.shift_indices(1).unwrap();
+        assert_ne!(
+            carrier.erc7730_transcript.proof(&wrapped),
+            crate::fi::OK_SENTINEL
+        );
     }
 }
 

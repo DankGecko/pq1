@@ -88,14 +88,57 @@ pub fn format_u64(mut n: u64, out: &mut [u8]) -> Option<usize> {
 // Amount rendering
 // ---------------------------------------------------------------------------
 
-/// Outcome of a width-aware amount render. `Full` means every digit of
-/// the value was painted; `Overflow` means the caller must render a
-/// truncation banner because even the 2-row fallback couldn't hold the
-/// number.
+/// Outcome of a width-aware amount render. `Full` means the formatter's
+/// complete output fit; callers whose policy uses fewer fractional digits than
+/// the signed value must separately require
+/// [`amount_is_exact_at_fraction_digits`] before treating that output as an
+/// exact clear-signing representation. `Overflow` means the value must not be
+/// confirmed through that rendering.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum AmountFit {
     Full,
     Overflow,
+}
+
+/// Return `true` iff scaling `value` to `fraction_digits` would discard only
+/// zero base-10 digits.
+///
+/// `format_decimal` rounds when `decimals > fraction_digits`; a successful
+/// width fit alone therefore does not prove that the displayed number binds
+/// every signed base unit. This allocation-free predicate supplies that proof
+/// for trusted amount sinks. It is bounded to the 78 decimal positions of a
+/// `U256`, so an attacker-controlled descriptor cannot turn an absurd decimal
+/// count into an unbounded loop.
+#[must_use]
+#[inline]
+pub fn amount_is_exact_at_fraction_digits(
+    value: &U256,
+    decimals: u32,
+    fraction_digits: u32,
+) -> bool {
+    let discarded_digits = decimals.saturating_sub(fraction_digits);
+    if discarded_digits == 0 || value.is_zero() {
+        return true;
+    }
+    // U256::MAX has 78 decimal digits. No non-zero U256 is divisible by
+    // 10^78, while divisibility by 10^77 is still possible.
+    if discarded_digits > 77 {
+        return false;
+    }
+
+    let mut quotient = value.0;
+    for _ in 0..discarded_digits {
+        let mut remainder = 0u16;
+        for byte in &mut quotient {
+            let dividend = (remainder << 8) | u16::from(*byte);
+            *byte = (dividend / 10) as u8;
+            remainder = dividend % 10;
+        }
+        if remainder != 0 {
+            return false;
+        }
+    }
+    true
 }
 
 /// F14#3 collapse-to-zero guard: true iff `digits` (a `format_decimal`
@@ -591,7 +634,11 @@ pub fn write_chain(row1: &mut [u8; DISPLAY_COLS], row2: &mut [u8; DISPLAY_COLS],
 /// Number of fractional digits shown for every ETH amount. Fixed (not
 /// auto-shrunk to fit a row) and matched to the ERC-20 token policy
 /// (`write_token_amount_two_rows` uses `min(decimals, 6)`).
-const ETH_FRAC_DIGITS: u32 = 6;
+/// Fractional precision shared by every compact known-chain native-currency
+/// painter and by the secure exactness gate that authorizes its output.
+/// Keeping one constant prevents the gate and painter from drifting into
+/// different equivalence classes.
+pub const NATIVE_DISPLAY_FRACTION_DIGITS: u32 = 6;
 
 /// Paint an ETH value across (up to) two rows.
 ///
@@ -601,14 +648,11 @@ const ETH_FRAC_DIGITS: u32 = 6;
 /// 17+ digit integer can't be rendered, and the caller paints a banner.
 ///
 /// **Anti-spoof (audit M-6).** The fractional width is FIXED at
-/// [`ETH_FRAC_DIGITS`] and trailing zeros are NOT trimmed — identical to
-/// the ERC-20 token-amount policy. The previous implementation tried
-/// progressively fewer fractional digits (6 → 4 → 2 → 0) to squeeze the
-/// value onto one row and trimmed trailing zeros, so two distinct
-/// amounts could render to the same string when the renderer silently
-/// dropped the digits that distinguished them. Fixing the width removes
-/// that collision class; any value that still doesn't fit overflows
-/// loudly rather than aliasing.
+/// [`NATIVE_DISPLAY_FRACTION_DIGITS`] and trailing zeros are NOT trimmed — identical to
+/// the ERC-20 token-amount policy. This removes adaptive-width display drift,
+/// but six-decimal formatting can still round lower base units. A trusted sink
+/// that needs exact signed-value binding must require
+/// [`amount_is_exact_at_fraction_digits`] in addition to `AmountFit::Full`.
 pub fn write_eth_two_rows(
     row1: &mut [u8; DISPLAY_COLS],
     row2: &mut [u8; DISPLAY_COLS],
@@ -617,12 +661,29 @@ pub fn write_eth_two_rows(
     // Single row if the fixed-width form fits. `reject_zero_collapse = true`:
     // an ETH transfer is an amount, so a nonzero value rendering as
     // "0.000000 ETH" must overflow loudly, not hide its magnitude (F14#3).
-    if try_write_amount_single_row(row1, value, 18, ETH_FRAC_DIGITS, false, true, "ETH") {
+    if try_write_amount_single_row(
+        row1,
+        value,
+        18,
+        NATIVE_DISPLAY_FRACTION_DIGITS,
+        false,
+        true,
+        "ETH",
+    ) {
         *row2 = [b' '; DISPLAY_COLS];
         return AmountFit::Full;
     }
     // Otherwise spill the SAME fixed-width form across two rows.
-    write_amount_two_rows(row1, row2, value, 18, ETH_FRAC_DIGITS, false, true, "ETH")
+    write_amount_two_rows(
+        row1,
+        row2,
+        value,
+        18,
+        NATIVE_DISPLAY_FRACTION_DIGITS,
+        false,
+        true,
+        "ETH",
+    )
 }
 
 /// Paint a chain's native-currency amount across up to two rows.
@@ -640,11 +701,19 @@ pub fn write_native_amount_two_rows(
     let Some(unit) = known_native_ticker(chain_id) else {
         return write_amount_two_rows(row1, row2, value, 0, 0, false, true, "raw");
     };
-    if single_row_amount_fixed(row1, value, 18, ETH_FRAC_DIGITS, unit) {
+    if single_row_amount_fixed(row1, value, 18, NATIVE_DISPLAY_FRACTION_DIGITS, unit) {
         *row2 = [b' '; DISPLAY_COLS];
         return AmountFit::Full;
     }
-    write_amount_two_rows_bytes(row1, row2, value, 18, ETH_FRAC_DIGITS, false, unit)
+    write_amount_two_rows_bytes(
+        row1,
+        row2,
+        value,
+        18,
+        NATIVE_DISPLAY_FRACTION_DIGITS,
+        false,
+        unit,
+    )
 }
 
 /// Paint a gas-price value in gwei on a single row. Uses 3 fractional
@@ -1130,7 +1199,10 @@ mod eip55_tests {
 
 #[cfg(test)]
 mod native_amount_tests {
-    use super::{write_native_amount_two_rows, AmountFit, DISPLAY_COLS};
+    use super::{
+        amount_is_exact_at_fraction_digits, known_native_ticker, write_native_amount_two_rows,
+        AmountFit, DISPLAY_COLS,
+    };
     use pqsigner_tx_core::eip1559::U256;
 
     fn u256_from_u128(value: u128) -> U256 {
@@ -1171,6 +1243,82 @@ mod native_amount_tests {
         );
         assert_eq!(trimmed(&row1), b"1.000000 ETH");
         assert!(trimmed(&row2).is_empty());
+    }
+
+    #[test]
+    fn exactness_gate_covers_six_decimal_boundaries_without_rounding() {
+        let one_native = u256_from_u128(1_000_000_000_000_000_000);
+        let one_wei_more = u256_from_u128(1_000_000_000_000_000_001);
+        let next_exact_step = u256_from_u128(1_000_001_000_000_000_000);
+        let rounding_carry = u256_from_u128(999_999_500_000_000_000);
+
+        assert!(amount_is_exact_at_fraction_digits(&one_native, 18, 6));
+        assert!(!amount_is_exact_at_fraction_digits(&one_wei_more, 18, 6));
+        assert!(amount_is_exact_at_fraction_digits(&next_exact_step, 18, 6));
+        assert!(!amount_is_exact_at_fraction_digits(&rounding_carry, 18, 6));
+        assert!(amount_is_exact_at_fraction_digits(
+            &U256::zero(),
+            u32::MAX,
+            0
+        ));
+        assert!(!amount_is_exact_at_fraction_digits(
+            &u256_from_u128(1),
+            u32::MAX,
+            0
+        ));
+    }
+
+    #[test]
+    fn known_native_exactness_requires_both_policy_and_width_fit() {
+        let value = u256_from_u128(1_000_000_000_000_000_001);
+        for chain_id in [1, 56] {
+            assert!(known_native_ticker(chain_id).is_some());
+            assert!(!amount_is_exact_at_fraction_digits(&value, 18, 6));
+            let mut row1 = [b' '; DISPLAY_COLS];
+            let mut row2 = [b' '; DISPLAY_COLS];
+            assert_eq!(
+                write_native_amount_two_rows(&mut row1, &mut row2, &value, chain_id),
+                AmountFit::Full,
+                "width fit alone must remain visibly distinct from exactness"
+            );
+        }
+    }
+
+    #[test]
+    fn accepted_adjacent_six_decimal_values_paint_differently() {
+        let exact = u256_from_u128(1_000_000_000_000_000_000);
+        let next = u256_from_u128(1_000_001_000_000_000_000);
+        let mut exact_rows = [[b' '; DISPLAY_COLS]; 2];
+        let mut next_rows = [[b' '; DISPLAY_COLS]; 2];
+        let [exact_row1, exact_row2] = &mut exact_rows;
+        let [next_row1, next_row2] = &mut next_rows;
+        assert_eq!(
+            write_native_amount_two_rows(exact_row1, exact_row2, &exact, 1),
+            AmountFit::Full
+        );
+        assert_eq!(
+            write_native_amount_two_rows(next_row1, next_row2, &next, 1),
+            AmountFit::Full
+        );
+        assert_ne!(exact_rows, next_rows);
+        assert_eq!(trimmed(&next_rows[0]), b"1.000001 ETH");
+    }
+
+    #[test]
+    fn unknown_chain_raw_integer_is_exact_or_reports_overflow() {
+        let mut row1 = [b' '; DISPLAY_COLS];
+        let mut row2 = [b' '; DISPLAY_COLS];
+        assert_eq!(
+            write_native_amount_two_rows(&mut row1, &mut row2, &u256_from_u128(1), 4_242_424_242,),
+            AmountFit::Full
+        );
+        assert_eq!(trimmed(&row1), b"1");
+        assert_eq!(trimmed(&row2), b"raw");
+
+        assert_eq!(
+            write_native_amount_two_rows(&mut row1, &mut row2, &U256([0xff; 32]), 4_242_424_242,),
+            AmountFit::Overflow
+        );
     }
 }
 

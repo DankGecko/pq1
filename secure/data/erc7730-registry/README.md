@@ -35,11 +35,14 @@ count, provenance, stable review/skip receipt, known-call count, canonical
 tuple-set SHA-256, and Bloom bytes. Merkle-root or Bloom equality alone is not
 accepted as a faithfulness proof.
 
-Current curated receipt (2026-07-12): **420 leaves**, root
-`048fd2f1ff61942027ffa248f7d26fdbe9d8e2f02e9ad6478ad6714cb96ab142`,
+<!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
+Checked-in curated receipt, verified against a fresh build by `--check`: **428 leaves**, **345,546-byte**
+compiled companion catalogue, root
+`668a7964b4241ec0c2348d117adaa5e29e9b34d97286ef5d1c722cdda43d700a`,
 **4,542** canonical known-call tuples, tuple-set SHA-256
 `96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`.
 The Bloom contains 28,235 / 131,072 set bits, below the generator's 25% cap.
+<!-- END XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
 
 The `.pqsigner-erc7730-vendor` file is an exact machine-owned directory
 sentinel only. It deliberately carries no upstream SHA or generated receipt;

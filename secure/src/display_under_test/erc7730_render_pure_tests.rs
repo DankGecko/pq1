@@ -34,8 +34,12 @@ use crate::names::{NameMeta, NameResolver};
 use crate::tx::eip1559::{Eip1559Tx, U256};
 use crate::ui::DISPLAY_COLS;
 
-use super::dispatch::pick_sign_pages;
-use super::erc7730::{render_erc7730_pages, render_erc7730_pages_with_signer};
+use super::dispatch::{pick_sign_pages, DispatchPageProofs};
+use super::erc7730::{
+    render_erc7730_pages, render_erc7730_pages_with_signer,
+    render_erc7730_pages_with_signer_checked, INTENT_PUBLICATION_INTERPOLATED,
+    INTENT_PUBLICATION_STATIC,
+};
 use super::erc8213::{
     append_fingerprint_page, fingerprint_final_set_proof, fingerprint_page_proof,
     Kind as Erc8213Kind, FINGERPRINT_CFI_EXPECTED,
@@ -81,20 +85,27 @@ fn build_registry() -> &'static dbgen::erc7730::Erc7730BuildResult {
         let root = workspace_root();
         let reg = root.join("secure/data/erc7730-registry");
         let policy = root.join("secure/data/erc7730/policy.toml");
-        let (res, _skips) =
-            dbgen::erc7730::build_db_tolerant(&reg.join("registry"), &policy, Some(&reg))
-                .expect("build registry corpus");
+        let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+            .expect("build ERC-20 capability set");
+        let (res, _skips) = dbgen::erc7730::build_db_tolerant_with_erc20_capabilities(
+            &reg.join("registry"),
+            &policy,
+            Some(&reg),
+            &erc20.capabilities,
+        )
+        .expect("build registry corpus");
         res
     })
 }
 
 /// Real descriptors whose nested renderer shapes are valuable test vectors but
 /// which the shipping catalogue now correctly excludes because they contain
-/// explicit `visible:"never"` non-address material. For renderer tests only,
-/// compile copies in a process-private temporary registry after promoting every
-/// such field to `visible:"always"`. This preserves the original ABI/type tree
-/// and runs through the real dbgen compiler, while making the emitted fixture
-/// satisfy the same strict hidden-material policy as production.
+/// hidden non-address material. For renderer tests only, compile copies in a
+/// process-private temporary registry after promoting both explicit
+/// `visible:"never"` fields and the few legacy fields whose omitted visibility
+/// defaults to hidden. This preserves the original ABI/type tree and runs
+/// through the real dbgen compiler, while making the emitted fixture satisfy
+/// the same strict hidden-material policy as production.
 const SAFE_VISIBLE_NESTED_FIXTURES: &[(&str, &str)] = &[
     (
         "eip712-uniswap-permit2.json",
@@ -140,7 +151,21 @@ fn build_safe_visible_nested_fixtures(
                 text.contains("\"visible\": \"never\""),
                 "fixture {source_name} must exercise the hidden-material gate"
             );
-            let safe_text = text.replace("\"visible\": \"never\"", "\"visible\": \"always\"");
+            let safe_text = text
+                .replace("\"visible\": \"never\"", "\"visible\": \"always\"")
+                // PermitBatch predates the explicit-visibility requirement on
+                // its amount/tokenPath and expiration fields. Promote those
+                // two omitted values in this process-private positive only.
+                .replace(
+                    "\"tokenPath\": \"details.[].token\"\n            }\n          }",
+                    "\"tokenPath\": \"details.[].token\"\n            },\n            \"visible\": \"always\"\n          }",
+                )
+                // PermitSingle and PermitBatch both omitted visibility on the
+                // nested expiration field; make both explicit test positives.
+                .replace(
+                    "\"encoding\": \"timestamp\"\n            }\n          }",
+                    "\"encoding\": \"timestamp\"\n            },\n            \"visible\": \"always\"\n          }",
+                );
             assert!(!safe_text.contains("\"visible\": \"never\""));
             std::fs::write(&destination, safe_text).expect("write safe nested fixture");
             let emitted = dbgen::erc7730::try_compile_one(&destination, &policy, Some(&temp_root))
@@ -159,10 +184,11 @@ fn safe_visible_nested_leaf(source_name: &str, chain_id: u64) -> &'static dbgen:
         .unwrap_or_else(|| panic!("no safe visible nested fixture for {source_name} on {chain_id}"))
 }
 
-/// Build a compiler-authenticated C1 `string` descriptor, then change only its
-/// authenticated dynamic-kind TLV to `bytes`. Production dbgen refuses to emit
-/// arbitrary dynamic `bytes`; this process-private fixture retains an
-/// independent runtime refusal test without weakening the catalogue gate.
+/// Build a compiler-authenticated C1 `string` descriptor, then coherently
+/// change both its authenticated dynamic-kind and schema-v4 terminal-kind TLVs
+/// to `bytes`. Production dbgen refuses to emit arbitrary dynamic `bytes`; this
+/// process-private fixture proves the device parser independently refuses the
+/// now-forbidden `raw` + `DynamicBytes` pair.
 fn opaque_bytes_runtime_fixture() -> &'static Vec<u8> {
     static FIXTURE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
     FIXTURE.get_or_init(|| {
@@ -210,17 +236,38 @@ fn opaque_bytes_runtime_fixture() -> &'static Vec<u8> {
             .collect();
         assert_eq!(hits.len(), 1, "fixture must have one dynamic-kind TLV");
         ir_bytes[hits[0] + 2] = bytes_kind;
+        let terminal_tag = pqsigner_erc7730::render::params::PARAM_TERMINAL_KIND;
+        let string_terminal = pqsigner_erc7730::render::policy::TerminalKind::DynamicString as u8;
+        let bytes_terminal = pqsigner_erc7730::render::policy::TerminalKind::DynamicBytes as u8;
+        let terminal_pattern = [terminal_tag, 1, string_terminal];
+        let terminal_hits: Vec<usize> = (pqsigner_erc7730::ir::HEADER_LEN
+            ..ir_bytes.len().saturating_sub(2))
+            .filter(|&i| ir_bytes[i..i + 3] == terminal_pattern)
+            .collect();
+        assert_eq!(
+            terminal_hits.len(),
+            1,
+            "fixture must have one terminal-kind TLV"
+        );
+        ir_bytes[terminal_hits[0] + 2] = bytes_terminal;
         let _ = std::fs::remove_dir_all(&temp_root);
         ir_bytes
     })
 }
 
-fn render_opaque_bytes_runtime(data: &[u8]) -> Result<Pages, crate::tx::erc7730_render::RenderErr> {
-    let ir = Erc7730Ir::parse(opaque_bytes_runtime_fixture()).expect("patched runtime IR parses");
-    let verified = VerifiedDescriptor { ir };
-    let calldata = calldata_sole_bytes(b"probe(string)", data);
-    let tx = envelope(1, [0xBC; 20]);
-    render_erc7730_pages(&tx, &calldata, &verified, None, &NameResolver::new())
+fn assert_opaque_bytes_runtime_rejected(data: &[u8]) {
+    // Keep a realistically framed payload so these tests still cover both
+    // printable and binary attacker inputs. Schema v4 refuses the descriptor
+    // before payload-dependent rendering, which is stronger than the former
+    // formatter-only belt and cannot create a lossy preview.
+    let _calldata = calldata_sole_bytes(b"probe(string)", data);
+    assert!(
+        matches!(
+            Erc7730Ir::parse(opaque_bytes_runtime_fixture()),
+            Err(pqsigner_erc7730::ir::IrError::BadField)
+        ),
+        "raw DynamicBytes must fail authenticated-IR admission"
+    );
 }
 
 fn assert_registry_source_excluded(source_name: &str) {
@@ -531,6 +578,18 @@ fn assert_full_contract_identity_page(pages: &Pages, contract: &[u8; 20]) {
     );
 }
 
+fn assert_full_unverified_token_identity_page(pages: &Pages, contract: &[u8; 20]) {
+    let page = find_page_by_label(pages, "Token (UNVERIFI~");
+    let mut expected = [[b' '; DISPLAY_COLS]; 3];
+    let [r1, r2, r3] = &mut expected;
+    write_addr_full(r1, r2, r3, contract);
+    assert_eq!(
+        pages.buf[page][1..4],
+        expected,
+        "unbound token pages must carry the exact signed token contract"
+    );
+}
+
 fn find_full_nft_collection_page(pages: &Pages, collection: &[u8; 20]) -> usize {
     let mut expected = [[b' '; DISPLAY_COLS]; 3];
     let [r1, r2, r3] = &mut expected;
@@ -629,19 +688,15 @@ fn positive_registry_celo_from_uses_explicit_device_signer() {
 
     assert!(matches!(
         render_erc7730_pages(&tx, &calldata, &verified, None, &resolver),
-        Err(crate::tx::erc7730_render::RenderErr::Reject("7730 from unbound"))
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 from unbound"
+        ))
     ));
 
     let sender = [0x12u8; 20];
-    let pages = render_erc7730_pages_with_signer(
-        &tx,
-        &calldata,
-        &verified,
-        None,
-        &resolver,
-        &sender,
-    )
-    .expect("Celo @.from renders from the device signer");
+    let pages =
+        render_erc7730_pages_with_signer(&tx, &calldata, &verified, None, &resolver, &sender)
+            .expect("Celo @.from renders from the device signer");
     let field_page = intent_page_index(&pages) + 1;
     assert_eq!(page_strs(&pages, field_page)[0], "Account Owner");
     assert_eq!(&pages.buf[field_page][1], b"0x12121212121212");
@@ -671,8 +726,22 @@ fn positive_usdt_transfer_mainnet_renders_send_intent() {
         symbol: b"USDT",
     };
     let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&usdt_meta), &resolver)
-        .expect("render");
+    let checked = render_erc7730_pages_with_signer_checked(
+        &tx,
+        &calldata,
+        &verified,
+        Some(&usdt_meta),
+        &resolver,
+        &[0u8; 20],
+    )
+    .expect("checked static render");
+    let pages = checked.pages;
+    assert_eq!(
+        checked.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert_eq!(checked.transcript_receipt.page_count() as usize, pages.len);
+    assert!(checked.transcript_receipt.range_matches(&pages, 0));
 
     assert_all_pages_printable(&pages);
 
@@ -707,7 +776,7 @@ fn positive_usdt_transfer_mainnet_renders_send_intent() {
 }
 
 #[test]
-fn flyingtulip_same_ticker_assets_render_distinct_exact_token_identity() {
+fn flyingtulip_dynamic_token_path_keeps_static_intent_and_exact_token_identity() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-PositionsManager.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
@@ -726,13 +795,17 @@ fn flyingtulip_same_ticker_assets_render_distinct_exact_token_identity() {
         ],
     ];
 
-    let render = |asset: [u8; 20]| {
+    let calldata_for = |asset: [u8; 20], amount: U256| {
         let mut calldata = Vec::with_capacity(68);
         calldata.extend_from_slice(&keccak256(b"deposit(address,uint256)")[..4]);
         let mut asset_word = [0u8; 32];
         asset_word[12..].copy_from_slice(&asset);
         calldata.extend_from_slice(&asset_word);
         calldata.extend_from_slice(&amount.0);
+        calldata
+    };
+    let render = |asset: [u8; 20], amount: U256| {
+        let calldata = calldata_for(asset, amount);
         let meta = Erc20Metadata {
             chain_id: 1,
             contract: asset,
@@ -744,8 +817,24 @@ fn flyingtulip_same_ticker_assets_render_distinct_exact_token_identity() {
             .expect("FlyingTulip deposit renders")
     };
 
-    let pages_a = render(assets[0]);
-    let pages_b = render(assets[1]);
+    let pages_a = render(assets[0], amount);
+    let pages_b = render(assets[1], amount);
+    assert_eq!(
+        page_strs(&pages_a, intent_page_index(&pages_a))[0],
+        "Deposit collater",
+        "a calldata-derived tokenPath must not authorize value-bearing intent interpolation"
+    );
+    assert_eq!(
+        page_strs(&pages_b, intent_page_index(&pages_b))[0],
+        "Deposit collater"
+    );
+    let amount_page = find_page_by_label(&pages_a, "Amount");
+    let amount_rows = page_strs(&pages_a, amount_page);
+    assert!(
+        amount_rows[1].contains("1")
+            && (amount_rows[1].contains("USDT") || amount_rows[2].contains("USDT")),
+        "interpolation must not replace the ordinary amount page: {amount_rows:?}"
+    );
     assert_ne!(
         pages_a.as_slice(),
         pages_b.as_slice(),
@@ -753,6 +842,57 @@ fn flyingtulip_same_ticker_assets_render_distinct_exact_token_identity() {
     );
     assert_full_contract_identity_page(&pages_a, &assets[0]);
     assert_full_contract_identity_page(&pages_b, &assets[1]);
+
+    let two_pages = render(assets[0], u256_from_u64(2_000_000));
+    assert_eq!(
+        page_strs(&two_pages, intent_page_index(&two_pages))[0],
+        "Deposit collater",
+        "changing the signed amount must not turn a static intent into interpolation"
+    );
+    assert_ne!(
+        page_strs(&pages_a, find_page_by_label(&pages_a, "Amount")),
+        page_strs(&two_pages, find_page_by_label(&two_pages, "Amount")),
+        "the retained amount page must change with the same signed word"
+    );
+
+    let calldata = calldata_for(assets[0], amount);
+    let no_meta = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver)
+        .expect("static intent remains safe with an exact unverified raw amount");
+    assert_eq!(
+        page_strs(&no_meta, intent_page_index(&no_meta))[0],
+        "Deposit collater"
+    );
+    assert!(
+        dump_pages(&no_meta).contains("! raw, dec=?"),
+        "missing token metadata must not imply a decimal scale"
+    );
+    assert_full_unverified_token_identity_page(&no_meta, &assets[0]);
+    for meta in [
+        Erc20Metadata {
+            chain_id: 2,
+            contract: assets[0],
+            decimals: 6,
+            name: b"USDT",
+            symbol: b"USDT",
+        },
+        Erc20Metadata {
+            chain_id: 1,
+            contract: [0x55; 20],
+            decimals: 6,
+            name: b"USDT",
+            symbol: b"USDT",
+        },
+    ] {
+        let mismatched = render_erc7730_pages(&tx, &calldata, &verified, Some(&meta), &resolver)
+            .expect("mismatched metadata remains safely unbound");
+        assert_eq!(
+            page_strs(&mismatched, intent_page_index(&mismatched))[0],
+            "Deposit collater",
+            "wrong-chain or wrong-contract metadata must not mint a title witness"
+        );
+        assert!(dump_pages(&mismatched).contains("! raw, dec=?"));
+        assert_full_unverified_token_identity_page(&mismatched, &assets[0]);
+    }
 }
 
 #[test]
@@ -828,14 +968,8 @@ fn usdt_exact_zero_approve_derives_revoke_from_authenticated_signed_facts() {
     let spender = [0x44u8; 20];
     let resolver = NameResolver::new();
     let zero_calldata = calldata_approve(spender, U256::zero());
-    let pages = render_erc7730_pages(
-        &tx,
-        &zero_calldata,
-        &verified,
-        Some(&meta),
-        &resolver,
-    )
-    .expect("render zero approval");
+    let pages = render_erc7730_pages(&tx, &zero_calldata, &verified, Some(&meta), &resolver)
+        .expect("render zero approval");
 
     assert_eq!(
         page_strs(&pages, intent_page_index(&pages))[0],
@@ -863,14 +997,8 @@ fn usdt_exact_zero_approve_derives_revoke_from_authenticated_signed_facts() {
         let mut nonzero = [0u8; 32];
         nonzero[byte] = 1;
         let calldata = calldata_approve(spender, U256(nonzero));
-        let changed = render_erc7730_pages(
-            &tx,
-            &calldata,
-            &verified,
-            Some(&meta),
-            &resolver,
-        )
-        .expect("render nonzero approval");
+        let changed = render_erc7730_pages(&tx, &calldata, &verified, Some(&meta), &resolver)
+            .expect("render nonzero approval");
         assert_eq!(
             page_strs(&changed, intent_page_index(&changed))[0],
             "Approve",
@@ -891,7 +1019,10 @@ fn usdt_zero_approve_without_matching_erc20_capability_keeps_approve_intent() {
 
     let no_meta = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver)
         .expect("descriptor-only zero approval renders");
-    assert_eq!(page_strs(&no_meta, intent_page_index(&no_meta))[0], "Approve");
+    assert_eq!(
+        page_strs(&no_meta, intent_page_index(&no_meta))[0],
+        "Approve"
+    );
 
     let wrong_contract = Erc20Metadata {
         chain_id: 1,
@@ -900,14 +1031,9 @@ fn usdt_zero_approve_without_matching_erc20_capability_keeps_approve_intent() {
         name: b"Not USDT",
         symbol: b"NOPE",
     };
-    let mismatched = render_erc7730_pages(
-        &tx,
-        &calldata,
-        &verified,
-        Some(&wrong_contract),
-        &resolver,
-    )
-    .expect("mismatched metadata remains unbound");
+    let mismatched =
+        render_erc7730_pages(&tx, &calldata, &verified, Some(&wrong_contract), &resolver)
+            .expect("mismatched metadata remains unbound");
     assert_eq!(
         page_strs(&mismatched, intent_page_index(&mismatched))[0],
         "Approve"
@@ -920,14 +1046,9 @@ fn usdt_zero_approve_without_matching_erc20_capability_keeps_approve_intent() {
         name: b"Wrong-chain USDT",
         symbol: b"USDT",
     };
-    let chain_mismatched = render_erc7730_pages(
-        &tx,
-        &calldata,
-        &verified,
-        Some(&wrong_chain),
-        &resolver,
-    )
-    .expect("wrong-chain metadata remains unbound");
+    let chain_mismatched =
+        render_erc7730_pages(&tx, &calldata, &verified, Some(&wrong_chain), &resolver)
+            .expect("wrong-chain metadata remains unbound");
     assert_eq!(
         page_strs(&chain_mismatched, intent_page_index(&chain_mismatched))[0],
         "Approve"
@@ -1203,8 +1324,7 @@ fn positive_1inch_native_currency_list_renders_both_members_and_rejects_a_miss()
     let dump = dump_pages(&pages);
     assert_eq!(page_strs(&pages, intent_page_index(&pages))[0], "Swap");
     let send = page_strs(&pages, find_page_by_label(&pages, "Amount to Send")).join("\n");
-    let receive =
-        page_strs(&pages, find_page_by_label(&pages, "Minimum to Rece~")).join("\n");
+    let receive = page_strs(&pages, find_page_by_label(&pages, "Minimum to Rece~")).join("\n");
     assert!(send.contains("1.5") && send.contains("ETH"), "{dump}");
     assert!(
         receive.contains("2.25") && receive.contains("ETH"),
@@ -1222,15 +1342,9 @@ fn positive_1inch_native_currency_list_renders_both_members_and_rejects_a_miss()
     // amount must become raw and expose the full unverified token identity.
     let mut miss = eth_sentinel;
     miss[19] ^= 1;
-    let miss_pages = render_erc7730_pages_with_signer(
-        &tx,
-        &calldata(miss),
-        &verified,
-        None,
-        &resolver,
-        &signer,
-    )
-    .expect("one-byte list miss remains safely renderable as unverified raw");
+    let miss_pages =
+        render_erc7730_pages_with_signer(&tx, &calldata(miss), &verified, None, &resolver, &signer)
+            .expect("one-byte list miss remains safely renderable as unverified raw");
     let miss_dump = dump_pages(&miss_pages);
     assert!(miss_dump.contains("! raw, dec=?"), "{miss_dump}");
     assert!(miss_dump.contains("Token (UNVERIFI~"), "{miss_dump}");
@@ -1409,6 +1523,7 @@ fn negative_verified_descriptor_no_format_refuses_dispatch() {
     let tx = envelope(1, entry.contract);
     let resolver = NameResolver::new();
     let mut dispatch_proofs = super::dispatch::DispatchPageProofs::new();
+    dispatch_proofs.fail_initialize();
 
     let outcome = pick_sign_pages(
         &tx,
@@ -1579,6 +1694,15 @@ fn append_fingerprint_for_test(pages: &mut Pages, kind: Erc8213Kind) -> Result<(
     Ok(())
 }
 
+fn eip712_transcript_verdict(
+    proof: &super::erc7730_secure_shim::Eip712TranscriptProof,
+    pages: &Pages,
+) -> u32 {
+    let mut verdict = crate::fi::FAIL_SENTINEL;
+    proof.final_set_proof(pages, &mut verdict);
+    verdict
+}
+
 #[test]
 fn positive_erc8213_labels_cover_every_kind() {
     // Pin the label text on every Kind variant. Surfaces a regression
@@ -1611,10 +1735,7 @@ fn erc8213_append_is_atomic_and_requires_both_complete_pages() {
     let before_len = one_page_short.len;
     let before_page = one_page_short.buf[MAX_PAGES - 2];
     assert!(
-        append_fingerprint_for_test(
-            &mut one_page_short,
-            Erc8213Kind::CalldataDigest([0xA5; 32]),
-        )
+        append_fingerprint_for_test(&mut one_page_short, Erc8213Kind::CalldataDigest([0xA5; 32]),)
             .is_err(),
         "one free page must not permit a banner without the complete hash"
     );
@@ -1929,7 +2050,7 @@ fn nftname_external_collection_name_requires_exact_chain_metadata() {
 }
 
 /// Pack-expansion sanity: the registry Lido `wstETH.wrap(uint256)`
-/// descriptor renders the right intent + field label. A render test
+/// descriptor renders the exact derived intent + retained field label. A render test
 /// (not just round-trip) catches descriptor-authoring slips — wrong
 /// path, selector, or label — that re-parse + Merkle-verify can't.
 #[test]
@@ -1959,15 +2080,266 @@ fn positive_wsteth_wrap_renders_intent_and_amount_label() {
         symbol: b"stETH",
     };
     let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&steth_meta), &resolver)
-        .expect("render");
+    let checked = render_erc7730_pages_with_signer_checked(
+        &tx,
+        &calldata,
+        &verified,
+        Some(&steth_meta),
+        &resolver,
+        &[0u8; 20],
+    )
+    .expect("checked render");
+    let pages = checked.pages;
+    let transcript = checked.transcript_receipt;
     assert_all_pages_printable(&pages);
 
+    let mut colliding_calldata = keccak256(b"wrap(uint256)")[..4].to_vec();
+    colliding_calldata.extend_from_slice(&u256_from_u64(1_500_000_000_000_000_001).0);
+    assert!(
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &colliding_calldata,
+            &verified,
+            Some(&steth_meta),
+            &resolver,
+            &[0u8; 20],
+        )
+        .is_err(),
+        "1.5 stETH and 1.5 stETH + 1 wei collide under six-decimal paint; the enrolled checked render must hard-refuse the latter"
+    );
+
+    assert_eq!(transcript.state_code(), INTENT_PUBLICATION_INTERPOLATED);
+    assert_eq!(transcript.page_count() as usize, pages.len);
+    assert!(transcript.range_matches(&pages, 0));
+    let intent_index = intent_page_index(&pages);
+    #[cfg(feature = "erc7730-dev-unattested")]
+    {
+        let mut warning_corruption = Pages::with_len(pages.len);
+        warning_corruption.buf = pages.buf;
+        warning_corruption.buf[0][0][0] ^= 1;
+        assert!(
+            !transcript.range_matches(&warning_corruption, 0),
+            "the dev-unattested warning page is part of the transcript"
+        );
+    }
+
+    let mut skipped_repaint = Pages::with_len(pages.len);
+    skipped_repaint.buf = pages.buf;
+    skipped_repaint.buf[intent_index] = [[b' '; DISPLAY_COLS]; 4];
+    skipped_repaint.buf[intent_index][0].copy_from_slice(b"! INTENT INVALID");
+    assert!(
+        !transcript.range_matches(&skipped_repaint, 0),
+        "the invalid initial paint must never satisfy the transcript receipt"
+    );
+
+    let mut static_substitution = Pages::with_len(pages.len);
+    static_substitution.buf = pages.buf;
+    static_substitution.buf[intent_index][0] = [b' '; DISPLAY_COLS];
+    static_substitution.buf[intent_index][0][..10].copy_from_slice(b"Wrap stETH");
+    assert!(
+        !transcript.range_matches(&static_substitution, 0),
+        "restoring the authenticated static title is not transcript authority"
+    );
+
+    for row in 0..4 {
+        for col in 0..DISPLAY_COLS {
+            let mut corrupted = Pages::with_len(pages.len);
+            corrupted.buf = pages.buf;
+            corrupted.buf[intent_index][row][col] ^= 1;
+            assert!(
+                !transcript.range_matches(&corrupted, 0),
+                "every one of the 64 visible title bytes must be exact ({row},{col})"
+            );
+        }
+    }
+
     let [r0, ..] = page_strs(&pages, intent_page_index(&pages));
-    assert_eq!(r0, "Wrap stETH");
+    assert_eq!(r0, "Wrap 1.5 stETH");
     // The amount field must render under its authored label (proves
     // `#._stETHAmount` resolved to the right static-head slot).
-    let _amt_page = find_page_by_label(&pages, "stETH amount");
+    let amt_page = find_page_by_label(&pages, "stETH amount");
+    let amount_rows = page_strs(&pages, amt_page);
+    assert!(
+        amount_rows[1].contains("1.5")
+            && (amount_rows[1].contains("stETH") || amount_rows[2].contains("stETH")),
+        "derived intent must not replace the ordinary amount page: {amount_rows:?}"
+    );
+
+    // Mount the same fixture through the production dispatcher seam. This
+    // keeps the independently classified requirement and the renderer-issued
+    // publication receipt alive through later handler-owned suffixes and the
+    // final confirmation-boundary proof.
+    let dispatch_once = |dispatch_tx: &Eip1559Tx| {
+        let mut proofs = DispatchPageProofs::new();
+        proofs.fail_initialize();
+        let pages = pick_sign_pages(
+            dispatch_tx,
+            &calldata,
+            &[0u8; 20],
+            None,
+            None,
+            None,
+            Some(&verified),
+            Some(&steth_meta),
+            None,
+            &resolver,
+            &mut proofs,
+        )
+        .expect("real wstETH fixture dispatches with its publication receipt");
+        (pages, proofs)
+    };
+    let fingerprint_kind =
+        Erc8213Kind::CalldataDigest(pqsigner_tx_core::erc8213::calldata_digest(&calldata));
+    let append_later_suffixes = |pages: &mut Pages| {
+        let prior_len = pages.len;
+        append_fingerprint_for_test(pages, fingerprint_kind)
+            .expect("later handler fingerprint suffix fits");
+        assert_eq!(pages.len, prior_len + 2);
+        assert_eq!(
+            fingerprint_final_set_proof(pages, prior_len, fingerprint_kind),
+            crate::fi::OK_SENTINEL,
+            "the later suffix remains independently bound at final confirmation"
+        );
+    };
+    let final_verdict = |proofs: &DispatchPageProofs, pages: &Pages| {
+        let mut verdict = crate::fi::FAIL_SENTINEL;
+        proofs.final_set_proof(pages, &tx, false, &mut verdict);
+        verdict
+    };
+
+    let (mut dispatched_pages, dispatch_proofs) = dispatch_once(&tx);
+    assert_eq!(
+        page_strs(&dispatched_pages, intent_page_index(&dispatched_pages))[0],
+        "Wrap 1.5 stETH"
+    );
+    append_later_suffixes(&mut dispatched_pages);
+    assert_eq!(
+        final_verdict(&dispatch_proofs, &dispatched_pages),
+        crate::fi::OK_SENTINEL,
+        "the real receipt must survive later append-only pages"
+    );
+
+    let mut omitted_init = DispatchPageProofs::new();
+    assert!(
+        pick_sign_pages(
+            &tx,
+            &calldata,
+            &[0u8; 20],
+            None,
+            None,
+            None,
+            Some(&verified),
+            Some(&steth_meta),
+            None,
+            &resolver,
+            &mut omitted_init,
+        )
+        .is_err(),
+        "omitting fail_initialize must refuse even when classification, render, and receipt otherwise agree"
+    );
+
+    let (mut corrupted_pages, corrupted_proofs) = dispatch_once(&tx);
+    let corrupted_intent_index = intent_page_index(&corrupted_pages);
+    append_later_suffixes(&mut corrupted_pages);
+    corrupted_pages.buf[corrupted_intent_index][3][15] ^= 1;
+    assert_eq!(
+        final_verdict(&corrupted_proofs, &corrupted_pages),
+        crate::fi::FAIL_SENTINEL,
+        "one changed visible byte must invalidate the real receipt at the final boundary"
+    );
+
+    let (mut ordinary_corruption, ordinary_proofs) = dispatch_once(&tx);
+    let amount_index = find_page_by_label(&ordinary_corruption, "stETH amount");
+    append_later_suffixes(&mut ordinary_corruption);
+    ordinary_corruption.buf[amount_index][1][0] ^= 1;
+    assert_eq!(
+        final_verdict(&ordinary_proofs, &ordinary_corruption),
+        crate::fi::FAIL_SENTINEL,
+        "an ordinary signed-field page is part of the full transcript"
+    );
+
+    let (inner_pages, mut batch_proofs) = dispatch_once(&tx);
+    let mut batch_pages = Pages::with_len(inner_pages.len + 1);
+    batch_pages.buf[0][0][..12].copy_from_slice(b"Batch member");
+    for index in 0..inner_pages.len {
+        batch_pages.buf[index + 1] = inner_pages.buf[index];
+    }
+    append_later_suffixes(&mut batch_pages);
+    assert_eq!(
+        final_verdict(&batch_proofs, &batch_pages),
+        crate::fi::FAIL_SENTINEL,
+        "adding a batch prefix without shifting the real receipt index must refuse"
+    );
+    batch_proofs
+        .shift_indices(1)
+        .expect("one-page batch prefix index shift");
+    assert_eq!(
+        final_verdict(&batch_proofs, &batch_pages),
+        crate::fi::OK_SENTINEL,
+        "the exact one-page batch-prefix shift must preserve the real receipt"
+    );
+
+    // Exact outer native value: the dispatcher-owned page is additive to the
+    // ERC-7730 transcript, and both proofs must survive the one-page batch
+    // prefix shift. Exactly 1 ETH is the positive member of the formatter's
+    // real collision pair; 1 ETH + 1 wei and a literal 1 wei cannot be
+    // represented by the fixed six-decimal native sink and therefore refuse.
+    let mut exact_outer = envelope(1, entry.contract);
+    exact_outer.value = u256_from_u64(1_000_000_000_000_000_000); // 1 ETH
+    let (exact_inner, mut exact_outer_proofs) = dispatch_once(&exact_outer);
+    let mut exact_batch = Pages::with_len(exact_inner.len + 1);
+    exact_batch.buf[0][0][..12].copy_from_slice(b"Batch member");
+    for index in 0..exact_inner.len {
+        exact_batch.buf[index + 1] = exact_inner.buf[index];
+    }
+    exact_outer_proofs.shift_indices(1).unwrap();
+    let mut exact_verdict = crate::fi::FAIL_SENTINEL;
+    exact_outer_proofs.final_set_proof(&exact_batch, &exact_outer, false, &mut exact_verdict);
+    assert_eq!(exact_verdict, crate::fi::OK_SENTINEL);
+
+    let mut one_wei_outer = envelope(1, entry.contract);
+    one_wei_outer.value = u256_from_u64(1);
+    let mut one_wei_proofs = DispatchPageProofs::new();
+    one_wei_proofs.fail_initialize();
+    assert!(
+        pick_sign_pages(
+            &one_wei_outer,
+            &calldata,
+            &[0u8; 20],
+            None,
+            None,
+            None,
+            Some(&verified),
+            Some(&steth_meta),
+            None,
+            &resolver,
+            &mut one_wei_proofs,
+        )
+        .is_err(),
+        "one wei must refuse rather than alias to an exact-zero native page"
+    );
+
+    let mut one_eth_plus_one_wei_outer = envelope(1, entry.contract);
+    one_eth_plus_one_wei_outer.value = u256_from_u64(1_000_000_000_000_000_001);
+    let mut one_eth_plus_one_wei_proofs = DispatchPageProofs::new();
+    one_eth_plus_one_wei_proofs.fail_initialize();
+    assert!(
+        pick_sign_pages(
+            &one_eth_plus_one_wei_outer,
+            &calldata,
+            &[0u8; 20],
+            None,
+            None,
+            None,
+            Some(&verified),
+            Some(&steth_meta),
+            None,
+            &resolver,
+            &mut one_eth_plus_one_wei_proofs,
+        )
+        .is_err(),
+        "1 ETH + 1 wei must refuse rather than alias to the exact 1 ETH page"
+    );
 }
 
 /// Constant-annotation field (path-less `{value, label}`): the registry
@@ -2513,14 +2885,7 @@ fn c1_dynamic_bytes_declines_even_when_printable() {
     );
 
     for url in [&b"a"[..], b"https://ex.io/s", b"ipfs://Qm12345"] {
-        match render_opaque_bytes_runtime(url) {
-            Err(crate::tx::erc7730_render::RenderErr::Reject(msg)) => assert_eq!(
-                msg, "7730 opaque bytes",
-                "runtime must reject for authenticated type, not payload printability"
-            ),
-            Err(other) => panic!("dynamic bytes rejected for wrong reason for {url:?}: {other:?}"),
-            Ok(_) => panic!("dynamic bytes must decline even when printable: {url:?}"),
-        }
+        assert_opaque_bytes_runtime_rejected(url);
     }
 }
 
@@ -2530,13 +2895,7 @@ fn c1_dynamic_bytes_declines_even_when_printable() {
 #[test]
 fn c1_opaque_bytes_decline_without_lossy_preview() {
     let payload = [0xFFu8; 40]; // binary, 40 bytes → opaque
-    match render_opaque_bytes_runtime(&payload) {
-        Err(crate::tx::erc7730_render::RenderErr::Reject(msg)) => {
-            assert_eq!(msg, "7730 opaque bytes")
-        }
-        Err(other) => panic!("opaque bytes rejected for wrong reason: {other:?}"),
-        Ok(_) => panic!("opaque bytes must decline instead of rendering a lossy preview"),
-    }
+    assert_opaque_bytes_runtime_rejected(&payload);
 }
 
 /// Morpho Blue `borrow` — the nested static-tuple GROUP (`marketParams`)
@@ -2883,6 +3242,80 @@ fn belt_rejects_all_hidden_contract_format() {
     }
 }
 
+#[test]
+fn eip712_v2_two_pass_transcript_binds_static_warning_and_fields() {
+    let res = build_registry();
+    let entry = find_leaf(res, "eip712-tally-ethereum-pool-token.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify EIP-712 leaf");
+    assert!(matches!(verified.ir.context_kind, ContextKind::Eip712));
+    let format = verified
+        .ir
+        .format_iter()
+        .next()
+        .expect("one format")
+        .expect("valid format");
+
+    let mut encoded_data = vec![0u8; format.static_head_words as usize * 32];
+    encoded_data[12..32].copy_from_slice(&[0x11; 20]);
+    encoded_data[32..64].copy_from_slice(&u256_from_u64(7).0);
+    encoded_data[64..96].copy_from_slice(&u256_from_u64(1_800_000_000).0);
+
+    let resolver = NameResolver::new();
+    let (mut pages, proof) = super::erc7730_secure_shim::render_erc7730_eip712_pages_checked(
+        1,
+        &entry.contract,
+        &format.type_hash,
+        &encoded_data,
+        &verified,
+        None,
+        &resolver,
+    )
+    .expect("checked V2 EIP-712 render");
+    assert_all_pages_printable(&pages);
+    assert!(dump_pages(&pages).contains("POOL token"));
+    let field_page = find_page_by_label(&pages, "Delegatee");
+
+    append_fingerprint_for_test(&mut pages, Erc8213Kind::Eip712Final([0x77; 32]))
+        .expect("handler fingerprint suffix fits");
+    assert_eq!(
+        eip712_transcript_verdict(&proof, &pages),
+        crate::fi::OK_SENTINEL,
+        "handler-owned fingerprint suffix must preserve the renderer range"
+    );
+
+    let mut static_corruption = Pages::with_len(pages.len);
+    static_corruption.buf = pages.buf;
+    let intent_index = intent_page_index(&static_corruption);
+    static_corruption.buf[intent_index][0][0] ^= 1;
+    assert_eq!(
+        eip712_transcript_verdict(&proof, &static_corruption),
+        crate::fi::FAIL_SENTINEL,
+        "authenticated static intent bytes are transcript-bound"
+    );
+
+    let mut field_corruption = Pages::with_len(pages.len);
+    field_corruption.buf = pages.buf;
+    field_corruption.buf[field_page][1][0] ^= 1;
+    assert_eq!(
+        eip712_transcript_verdict(&proof, &field_corruption),
+        crate::fi::FAIL_SENTINEL,
+        "every displayed EIP-712 field is transcript-bound"
+    );
+
+    #[cfg(feature = "erc7730-dev-unattested")]
+    {
+        let mut warning_corruption = Pages::with_len(pages.len);
+        warning_corruption.buf = pages.buf;
+        warning_corruption.buf[0][0][0] ^= 1;
+        assert_eq!(
+            eip712_transcript_verdict(&proof, &warning_corruption),
+            crate::fi::FAIL_SENTINEL,
+            "the dev-unattested warning is part of the EIP-712 transcript"
+        );
+    }
+}
+
 // ───────────────────────────────────────────────────────────────────────
 // VULN-erc7730-eip712-nested-struct-address-hide — on-device belt.
 //
@@ -3010,7 +3443,7 @@ fn v3_permit_single_renders_nested_members() {
 
     let verified = VerifiedDescriptor { ir };
     let resolver = NameResolver::new();
-    let pages = super::erc7730::render_erc7730_eip712_pages_v3(
+    let (mut pages, proof) = super::erc7730_secure_shim::render_erc7730_eip712_pages_v3_checked(
         1,
         &[0u8; 20],
         &pth,
@@ -3020,7 +3453,7 @@ fn v3_permit_single_renders_nested_members() {
         None,
         &resolver,
     )
-    .expect("valid PermitSingle clear-signs via V3");
+    .expect("valid PermitSingle clear-signs via checked V3");
     assert_all_pages_printable(&pages);
     let dump = dump_pages(&pages).to_lowercase();
     // spender (top-level, shown).
@@ -3035,6 +3468,21 @@ fn v3_permit_single_renders_nested_members() {
     assert!(
         dump.contains("2025"),
         "nested expiration date must render:\n{dump}"
+    );
+
+    let spender_page = find_page_by_label(&pages, "Spender");
+    append_fingerprint_for_test(&mut pages, Erc8213Kind::Eip712Final([0x88; 32]))
+        .expect("V3 handler fingerprint suffix fits");
+    assert_eq!(
+        eip712_transcript_verdict(&proof, &pages),
+        crate::fi::OK_SENTINEL,
+        "checked V3 transcript survives only the handler suffix"
+    );
+    pages.buf[spender_page][1][0] ^= 1;
+    assert_eq!(
+        eip712_transcript_verdict(&proof, &pages),
+        crate::fi::FAIL_SENTINEL,
+        "nested V3 field corruption must fail the final transcript proof"
     );
 }
 
@@ -3157,20 +3605,14 @@ fn eip712_format_ndc_offset(ir_bytes: &[u8], target: &[u8; 32]) -> Option<usize>
 }
 
 /// THE reconciliation tripwire test (advisor blocker #1 — the E1 pinned-count
-/// control). The flip→decline tests all reject at the BINDING (step 6), which
-/// returns before render_fields completes, so they never exercise the
-/// reconciliation's REJECT path. Here the blob binds correctly (render_fields
-/// completes, records_consumed == 1) but the format header's PINNED
-/// `nested_descent_count` is hand-patched to a WRONG value → the after-render
-/// `records_consumed != nested_descent_count` check FIRES → decline. Proves the
-/// pinned count is actually compared (the control is NON-tautological + the path
-/// is reachable), mirroring the dbgen byte-patch test style. In production the
-/// IR is Merkle-pinned so this byte can't be forged; the test proves the device
-/// logic catches a (future) dbgen regression that emits the wrong count.
+/// control). Schema v4 deep-validates the nested program before rendering, so a
+/// format header whose authenticated `nested_descent_count` disagrees with the
+/// recursively parsed anchors is rejected at IR admission. This is earlier and
+/// stronger than the retained after-render consumption belt: malformed pinned
+/// IR cannot become a `VerifiedDescriptor` at all.
 #[test]
 fn v3_reconciliation_rejects_wrong_pinned_descent_count() {
     let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
-    let (top_ed, nested_blob) = permit_single_valid_vectors();
 
     // Locate PermitSingle's format header nested_descent_count byte. The permit2
     // leaf now carries three formats (PermitSingle, PermitTransferFrom,
@@ -3181,37 +3623,31 @@ fn v3_reconciliation_rejects_wrong_pinned_descent_count() {
     let ndc_off = eip712_format_ndc_offset(&leaf.ir_bytes, &PERMIT_SINGLE_TYPEHASH)
         .expect("PermitSingle format present in the permit2 leaf");
 
-    let render_patched = |ndc: u8| {
+    let parse_patched = |ndc: u8| {
         let mut ir_bytes = leaf.ir_bytes.clone();
         assert_eq!(
             ir_bytes[ndc_off], 1,
             "PermitSingle pins exactly one descent point"
         );
         ir_bytes[ndc_off] = ndc;
-        let ir = Erc7730Ir::parse(&ir_bytes).expect("patched IR still parses");
-        let verified = VerifiedDescriptor { ir };
-        let resolver = NameResolver::new();
-        super::erc7730::render_erc7730_eip712_pages_v3(
-            1,
-            &[0u8; 20],
-            &PERMIT_SINGLE_TYPEHASH,
-            &top_ed,
-            &nested_blob,
-            &verified,
-            None,
-            &resolver,
-        )
+        Erc7730Ir::parse(&ir_bytes).err()
     };
 
-    // Claim TWO descent points but only one record binds → 1 != 2 → decline.
+    // Claim TWO descent points but encode one anchor → reject at admission.
     assert!(
-        render_patched(2).is_err(),
-        "records_consumed(1) != pinned nested_descent_count(2) must decline"
+        matches!(
+            parse_patched(2),
+            Some(pqsigner_erc7730::ir::IrError::BadFormat)
+        ),
+        "one encoded anchor != pinned nested_descent_count(2) must decline"
     );
-    // Claim ZERO → 1 != 0 → decline (a regression that stopped emitting the pin).
+    // Claim ZERO while retaining one anchor → reject at admission.
     assert!(
-        render_patched(0).is_err(),
-        "records_consumed(1) != pinned nested_descent_count(0) must decline"
+        matches!(
+            parse_patched(0),
+            Some(pqsigner_erc7730::ir::IrError::BadFormat)
+        ),
+        "one encoded anchor != pinned nested_descent_count(0) must decline"
     );
 }
 

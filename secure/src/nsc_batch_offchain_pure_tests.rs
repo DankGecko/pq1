@@ -633,6 +633,7 @@ const CMD_OFFCHAIN_STATUS_SRC: &str = include_str!("nsc/cmd_offchain_status.rs")
 const CMD_OFFCHAIN_SYNC_SRC: &str = include_str!("nsc/cmd_offchain_sync.rs");
 const OFFCHAIN_SYNC_DISPLAY_SRC: &str = include_str!("tx/display/offchain_sync.rs");
 const CMD_SIGN_OFFCHAIN_SRC: &str = include_str!("nsc/cmd_sign_offchain.rs");
+const EIP1271_DISPLAY_SRC: &str = include_str!("tx/display/eip1271.rs");
 const CMD_SIGN_USEROP_BATCH_SRC: &str = include_str!("nsc/cmd_sign_userop_batch.rs");
 const BATCH_DISPLAY_SRC: &str = include_str!("tx/display/batch.rs");
 // Not part of the four-file "slice" array below — pinned only for the
@@ -1130,6 +1131,122 @@ fn offchain_fingerprints_have_caller_cfi_completion_and_final_boundary_proofs() 
         assert!(append < completion && completion < final_set && final_set < confirm);
         cursor = confirm + "confirm_checked(pages.as_slice())".len();
     }
+}
+
+#[test]
+fn typed_offchain_context_and_common_confirmation_receipt_gate_every_kind() {
+    assert!(
+        !CMD_SIGN_OFFCHAIN_SRC.contains("already_confirmed"),
+        "a plain conditional must never be off-chain signing authority"
+    );
+    assert_eq!(
+        CMD_SIGN_OFFCHAIN_SRC
+            .matches("offchain_confirm_receipt.fail_initialize()")
+            .count(),
+        1
+    );
+    assert_eq!(
+        CMD_SIGN_OFFCHAIN_SRC.matches(".record_confirmed(").count(),
+        2,
+        "typed and personal/raw confirmations must each mint the same receipt"
+    );
+    assert_eq!(
+        CMD_SIGN_OFFCHAIN_SRC.matches(".completion_proof(").count(),
+        2,
+        "two spatially distinct common gates must consume the receipt"
+    );
+
+    let fail_init = CMD_SIGN_OFFCHAIN_SRC
+        .find("offchain_confirm_receipt.fail_initialize()")
+        .expect("fail-initialized off-chain authority receipt");
+    let context_append = CMD_SIGN_OFFCHAIN_SRC
+        .find("append_eip1271_typed_context_pages(")
+        .expect("typed handler-owned context append");
+    let context_insert_proof = CMD_SIGN_OFFCHAIN_SRC
+        .find("eip1271_typed_context_page_proof(")
+        .expect("typed context insertion proof");
+    let context_final_proof = CMD_SIGN_OFFCHAIN_SRC
+        .find("eip1271_typed_context_final_set_proof(")
+        .expect("typed context final-set proof");
+    let typed_confirm = context_final_proof
+        + CMD_SIGN_OFFCHAIN_SRC[context_final_proof..]
+            .find("confirm_checked(pages.as_slice())")
+            .expect("typed trusted confirmation");
+    let typed_record = typed_confirm
+        + CMD_SIGN_OFFCHAIN_SRC[typed_confirm..]
+            .find(".record_confirmed(&typed_confirm_context)")
+            .expect("typed affirmative receipt publication");
+    let ordinary_branch = typed_record
+        + CMD_SIGN_OFFCHAIN_SRC[typed_record..]
+            .find("if kind == OFFCHAIN_KIND_RAW32 || kind == OFFCHAIN_KIND_PERSONAL_SIGN")
+            .expect("ordinary raw/personal render branch");
+    let ordinary_confirm = ordinary_branch
+        + CMD_SIGN_OFFCHAIN_SRC[ordinary_branch..]
+            .find("confirm_checked(pages.as_slice())")
+            .expect("raw/personal trusted confirmation");
+    let ordinary_record = ordinary_confirm
+        + CMD_SIGN_OFFCHAIN_SRC[ordinary_confirm..]
+            .find(".record_confirmed(&confirmed_context)")
+            .expect("raw/personal affirmative receipt publication");
+    let common_proof_a = ordinary_record
+        + CMD_SIGN_OFFCHAIN_SRC[ordinary_record..]
+            .find("offchain_confirm_receipt.completion_proof(&signing_context_a)")
+            .expect("first unconditional common receipt gate");
+    let common_reject_a = common_proof_a
+        + CMD_SIGN_OFFCHAIN_SRC[common_proof_a..]
+            .find("if confirm_receipt_verdict_a != crate::fi::OK_SENTINEL")
+            .expect("first common receipt rejection");
+    let common_proof_b = common_reject_a
+        + CMD_SIGN_OFFCHAIN_SRC[common_reject_a..]
+            .find("offchain_confirm_receipt.completion_proof(&signing_context_b)")
+            .expect("second unconditional common receipt gate");
+    let common_reject_b = common_proof_b
+        + CMD_SIGN_OFFCHAIN_SRC[common_proof_b..]
+            .find("if confirm_receipt_verdict_b != crate::fi::OK_SENTINEL")
+            .expect("second common receipt rejection");
+    let sign = common_reject_b
+        + CMD_SIGN_OFFCHAIN_SRC[common_reject_b..]
+            .find("c10_sign_verified_with_progress")
+            .expect("C10 sign boundary");
+    assert!(
+        fail_init < context_append
+            && context_append < context_insert_proof
+            && context_insert_proof < context_final_proof
+            && context_final_proof < typed_confirm
+            && typed_confirm < typed_record
+            && typed_record < ordinary_branch
+            && ordinary_branch < ordinary_confirm
+            && ordinary_confirm < ordinary_record
+            && ordinary_record < common_proof_a
+            && common_proof_a < common_reject_a
+            && common_reject_a < common_proof_b
+            && common_proof_b < common_reject_b
+            && common_reject_b < sign
+    );
+    assert!(CMD_SIGN_OFFCHAIN_SRC[common_reject_a..common_proof_b]
+        .contains("crate::fi::wait_random();"));
+
+    for required in [
+        "account_index",
+        "slot_index",
+        "wallet_addr",
+        "account_deployed",
+        "local_offchain_after",
+        "last_userop",
+        "cap",
+        "hash_to_sign",
+    ] {
+        assert!(
+            EIP1271_DISPLAY_SRC.contains(required),
+            "off-chain receipt/context must bind {required}"
+        );
+    }
+    assert!(EIP1271_DISPLAY_SRC.contains("PQSigner/offchain-confirm/v1"));
+    assert!(EIP1271_DISPLAY_SRC.contains("DEPLOYED EIP1271"));
+    assert!(EIP1271_DISPLAY_SRC.contains("UNDEPLOYED 6492"));
+    assert!(EIP1271_DISPLAY_SRC.contains("L cancel/R sign"));
+    assert!(EIP1271_DISPLAY_SRC.contains("write_addr_full"));
+    assert!(EIP1271_DISPLAY_SRC.contains("occurrences != 1"));
 }
 
 #[test]
@@ -1733,12 +1850,12 @@ fn negative_batch_member_loop_must_complete_before_final_summary() {
         + CMD_SIGN_USEROP_BATCH_SRC[confirm..]
             .find("if cr_verdict != crate::fi::OK_SENTINEL")
             .expect("affirmative member sentinel");
-    let digest_update = affirmative_gate
+    let commitment_publish = affirmative_gate
         + CMD_SIGN_USEROP_BATCH_SRC[affirmative_gate..]
-            .find("batch_digest.update(&inner_digest)")
-            .expect("confirmed-member running digest update");
-    let record = digest_update
-        + CMD_SIGN_USEROP_BATCH_SRC[digest_update..]
+            .find("confirmed_member_commitments[i] = member_commitment")
+            .expect("confirmed-member full-tuple commitment publication");
+    let record = commitment_publish
+        + CMD_SIGN_USEROP_BATCH_SRC[commitment_publish..]
             .find("member_confirm_receipt.record_confirmed(i)")
             .expect("ordered confirmed-member receipt");
     let pinned_count = record
@@ -1749,12 +1866,12 @@ fn negative_batch_member_loop_must_complete_before_final_summary() {
         + CMD_SIGN_USEROP_BATCH_SRC[pinned_count..]
             .find("member_confirm_receipt.completion_proof(batch_count)")
             .expect("post-loop receipt proof");
-    let independent_digest = receipt_proof
+    let independent_tuple = receipt_proof
         + CMD_SIGN_USEROP_BATCH_SRC[receipt_proof..]
-            .find("let recomputed_batch_final:")
-            .expect("independent all-member digest");
-    let completion_reject = independent_digest
-        + CMD_SIGN_USEROP_BATCH_SRC[independent_digest..]
+            .find("let Some(recomputed_batch_final) =")
+            .expect("independent all-member tuple commitment");
+    let completion_reject = independent_tuple
+        + CMD_SIGN_USEROP_BATCH_SRC[independent_tuple..]
             .find("members incomplete")
             .expect("incomplete-member refusal");
     let final_summary = completion_reject
@@ -1765,12 +1882,12 @@ fn negative_batch_member_loop_must_complete_before_final_summary() {
         receipt_init < member_loop
             && member_loop < confirm
             && confirm < affirmative_gate
-            && affirmative_gate < digest_update
-            && digest_update < record
+            && affirmative_gate < commitment_publish
+            && commitment_publish < record
             && record < pinned_count
             && pinned_count < receipt_proof
-            && receipt_proof < independent_digest
-            && independent_digest < completion_reject
+            && receipt_proof < independent_tuple
+            && independent_tuple < completion_reject
             && completion_reject < final_summary
     );
 

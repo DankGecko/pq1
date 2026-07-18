@@ -26,6 +26,10 @@ pqsigner-tx-core = { workspace = true }
 # constants byte-for-byte) and for the dbgen round-trip test which
 # runs every host-emitted IR back through the on-device parser.
 pqsigner-erc7730 = { workspace = true }
+# Device-verifier-owned ERC-20 metadata/proof-shape policy. ERC-7730
+# interpolation capabilities must never enroll a token whose authenticated
+# metadata bundle the production verifier will reject.
+pqsigner-tx = { workspace = true }
 # Minimal TOML parser for ERC-8176 policy.toml.
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 
@@ -36,8 +40,3 @@ tempfile = "3"
 # world parser byte-for-byte. (Dev-only because the lib build does not
 # need this dep; only the test binary does.)
 pqsigner-erc7730 = { workspace = true }
-# On-device ERC-20 / names bundle verifiers + the shared Merkle proof
-# checker, used by the companion-stub round-trip test to confirm a
-# host-built bundle verifies against the pinned root (and a tampered
-# one is rejected) — the same trust check the secure world runs.
-pqsigner-tx = { workspace = true }

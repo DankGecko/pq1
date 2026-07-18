@@ -51,16 +51,15 @@
 //!     path.
 
 use sphincs_tz_shared::{
-    EIP6492_BLOB_LEN, EIP6492_FACTORY_CALLDATA_LEN, MAX_ACCOUNT_INDEX,
+    NscStatus, EIP6492_BLOB_LEN, EIP6492_FACTORY_CALLDATA_LEN, MAX_ACCOUNT_INDEX,
     MAX_OFFCHAIN_EIP712_TYPED_LEN, MAX_OFFCHAIN_EIP712_TYPED_V3_LEN,
-    MAX_OFFCHAIN_PERSONAL_SIGN_LEN, MAX_SLOT_USES, NscStatus, OFFCHAIN_FLAGS_MASK,
+    MAX_OFFCHAIN_PERSONAL_SIGN_LEN, MAX_SLOT_USES, OFFCHAIN_FLAGS_MASK,
     OFFCHAIN_FLAG_ACCOUNT_DEPLOYED, OFFCHAIN_KIND_EIP712_TYPED, OFFCHAIN_KIND_EIP712_TYPED_V3,
-    OFFCHAIN_KIND_PERSONAL_SIGN,
-    OFFCHAIN_KIND_RAW32, PQ_SMART_WALLET_FACTORY, SIGNATURE_LEN, SIGN_OFFCHAIN_HEADER_LEN,
-    SIGN_OFFCHAIN_INPUT_FLAGS_OFF, SIGN_OFFCHAIN_INPUT_KIND_OFF, SIGN_OFFCHAIN_INPUT_MAX_LEN,
-    SIGN_OFFCHAIN_INPUT_PAYLOAD_LEN_OFF, SIGN_OFFCHAIN_INPUT_PAYLOAD_OFF,
-    SIGN_OFFCHAIN_OUTPUT_COUNT_OFF, SIGN_OFFCHAIN_OUTPUT_LEN, SIGN_OFFCHAIN_OUTPUT_LEN_6492,
-    SIGN_OFFCHAIN_OUTPUT_SIG_OFF, SIG_WRAPPER_LEN,
+    OFFCHAIN_KIND_PERSONAL_SIGN, OFFCHAIN_KIND_RAW32, PQ_SMART_WALLET_FACTORY, SIGNATURE_LEN,
+    SIGN_OFFCHAIN_HEADER_LEN, SIGN_OFFCHAIN_INPUT_FLAGS_OFF, SIGN_OFFCHAIN_INPUT_KIND_OFF,
+    SIGN_OFFCHAIN_INPUT_MAX_LEN, SIGN_OFFCHAIN_INPUT_PAYLOAD_LEN_OFF,
+    SIGN_OFFCHAIN_INPUT_PAYLOAD_OFF, SIGN_OFFCHAIN_OUTPUT_COUNT_OFF, SIGN_OFFCHAIN_OUTPUT_LEN,
+    SIGN_OFFCHAIN_OUTPUT_LEN_6492, SIGN_OFFCHAIN_OUTPUT_SIG_OFF, SIG_WRAPPER_LEN,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -99,9 +98,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // checks (a bare `if !validate` is single-fault FAIL-OUT → OOB R/W across
     // the S/NS boundary). Same idiom as the §14 6492 re-validation below.
     crate::fi::scrub_sentinel_register();
-    let read_ptr_ok = crate::fi::check_true_into_sentinel(|| {
-        validate_ns_read_ptr(args.arg0, total_len)
-    });
+    let read_ptr_ok =
+        crate::fi::check_true_into_sentinel(|| validate_ns_read_ptr(args.arg0, total_len));
     if read_ptr_ok != crate::fi::OK_SENTINEL {
         return NscStatus::InvalidPointer as u32;
     }
@@ -238,7 +236,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         }
     }
 
-    let payload = &snap[SIGN_OFFCHAIN_INPUT_PAYLOAD_OFF..SIGN_OFFCHAIN_INPUT_PAYLOAD_OFF + payload_len];
+    let payload =
+        &snap[SIGN_OFFCHAIN_INPUT_PAYLOAD_OFF..SIGN_OFFCHAIN_INPUT_PAYLOAD_OFF + payload_len];
 
     // ── 5. Slot key + registration probe ────────────────────────────
     let slot_flash_key =
@@ -304,9 +303,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     }
     let mut local_offchain = local_offchain_a;
     if last_userop > local_offchain {
-        if crate::offchain_state::offchain_count_promote_to(&slot_flash_key, last_userop)
-            .is_err()
-        {
+        if crate::offchain_state::offchain_count_promote_to(&slot_flash_key, last_userop).is_err() {
             crate::ui::show_status("EIP-1271", "repair fail");
             return NscStatus::InternalError as u32;
         }
@@ -424,7 +421,12 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     //      so we never fall back to a raw-hash blind sign here.
     let mut hash_to_sign = [0u8; 32];
     let mut wallet_addr = [0u8; 20];
-    let mut already_confirmed = false;
+    // One fail-initialized authority object spans all four kinds. Conditional
+    // dispatch chooses which trusted pages are shown, but it can never itself
+    // authorize signing: the common §11 gate independently reconstructs and
+    // proves the exact accepted kind/context before invoking C10.
+    let mut offchain_confirm_receipt = crate::tx::display::OffchainConfirmReceipt::new();
+    offchain_confirm_receipt.fail_initialize();
 
     if kind == OFFCHAIN_KIND_EIP712_TYPED || kind == OFFCHAIN_KIND_EIP712_TYPED_V3 {
         let is_v3 = kind == OFFCHAIN_KIND_EIP712_TYPED_V3;
@@ -438,8 +440,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // `Eip712FrameError::status_str`) and the same domain_separator /
         // primary_type_hash / encoded_data / nested_blob (V3) / trailer sections.
         // The upstream kind-dispatch `payload_len` min/max gate stays in place.
-        let frame = match pqsigner_aa::offchain_header::parse_eip712_typed_frame(payload, is_v3)
-        {
+        let frame = match pqsigner_aa::offchain_header::parse_eip712_typed_frame(payload, is_v3) {
             Ok(f) => f,
             Err(e) => {
                 crate::ui::show_status("EIP-1271", e.status_str());
@@ -472,10 +473,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // SAFETY: unique local; volatile FAIL state survives LTO if the
         // non-inlined binding proof call is fault-skipped.
         unsafe {
-            core::ptr::write_volatile(
-                &mut bind_verdict_slot,
-                crate::fi::FAIL_SENTINEL,
-            );
+            core::ptr::write_volatile(&mut bind_verdict_slot, crate::fi::FAIL_SENTINEL);
         }
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         let mut bind_cfi = crate::fi::CfiCounter::new();
@@ -493,12 +491,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // Gate B repeats both checks after a randomized gap, so one skipped
         // final reject branch cannot admit a failed descriptor binding.
         // SAFETY: local remains live and the callee borrow ended.
-        let bind_verdict_a = unsafe {
-            core::ptr::read_volatile(&bind_verdict_slot)
-        };
-        let bind_cfi_verdict_a = bind_cfi.check_into_sentinel(
-            crate::tx::erc7730::CFI_EIP712_BIND_EXPECTED,
-        );
+        let bind_verdict_a = unsafe { core::ptr::read_volatile(&bind_verdict_slot) };
+        let bind_cfi_verdict_a =
+            bind_cfi.check_into_sentinel(crate::tx::erc7730::CFI_EIP712_BIND_EXPECTED);
         let bind_all_ok_a = bind_verdict_a == crate::fi::OK_SENTINEL
             && bind_cfi_verdict_a == crate::fi::OK_SENTINEL;
         crate::fi::scrub_sentinel_register();
@@ -513,12 +508,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         // SAFETY: same live local, independently re-read after the randomized
         // gap rather than relying on gate A's cached evidence.
-        let bind_verdict_b = unsafe {
-            core::ptr::read_volatile(&bind_verdict_slot)
-        };
-        let bind_cfi_verdict_b = bind_cfi.check_into_sentinel(
-            crate::tx::erc7730::CFI_EIP712_BIND_EXPECTED,
-        );
+        let bind_verdict_b = unsafe { core::ptr::read_volatile(&bind_verdict_slot) };
+        let bind_cfi_verdict_b =
+            bind_cfi.check_into_sentinel(crate::tx::erc7730::CFI_EIP712_BIND_EXPECTED);
         let bind_all_ok_b = bind_verdict_b == crate::fi::OK_SENTINEL
             && bind_cfi_verdict_b == crate::fi::OK_SENTINEL;
         crate::fi::scrub_sentinel_register();
@@ -554,15 +546,12 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             o.copy_from_slice(&h.finalize());
             o
         };
-        let final_eip712 = pqsigner_tx_core::erc8213::eip712_final_hash(
-            &domain_separator,
-            &struct_hash,
-        );
+        let final_eip712 =
+            pqsigner_tx_core::erc8213::eip712_final_hash(&domain_separator, &struct_hash);
 
         // Bootstrap pubkey + wallet address (same lookup-or-derive as
         // PERSONAL_SIGN below; entropy is already in scope from §7).
-        let cached =
-            super::state::with_state(|s| s.bootstrap_cache_lookup(account_index));
+        let cached = super::state::with_state(|s| s.bootstrap_cache_lookup(account_index));
         let (master_pk_seed_32, master_pk_root_32) = match cached {
             Some(pair) => pair,
             None => {
@@ -580,8 +569,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 (pk_seed_32, pk_root_32)
             }
         };
-        wallet_addr =
-            crate::aa::eip1271::proxy_address(&master_pk_seed_32, &master_pk_root_32);
+        wallet_addr = crate::aa::eip1271::proxy_address(&master_pk_seed_32, &master_pk_root_32);
 
         // Solady replay-safe nesting of the 32-byte EIP-712 final hash.
         // `final_eip712` IS the `H` a dapp passes to `isValidSignature`,
@@ -591,17 +579,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // `H` through the exact same PersonalSign envelope when verifying,
         // so this signature validates without any on-chain change (no new
         // typehash, no TypedDataSign appended-data branch).
-        hash_to_sign = crate::aa::eip1271::replay_safe_hash(
-            chain_id,
-            &wallet_addr,
-            &final_eip712,
-        );
+        hash_to_sign = crate::aa::eip1271::replay_safe_hash(chain_id, &wallet_addr, &final_eip712);
 
         // Render via the ERC-7730 descriptor + append fingerprint.
         use crate::ui::confirm::{confirm_checked, ConfirmResult};
         let resolver = crate::names::NameResolver::new();
         let render_result = if is_v3 {
-            crate::tx::display::erc7730::render_erc7730_eip712_pages_v3(
+            crate::tx::display::erc7730::render_erc7730_eip712_pages_v3_checked(
                 chain_id,
                 &v.ir.contract,
                 &primary_type_hash,
@@ -612,7 +596,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 &resolver,
             )
         } else {
-            crate::tx::display::erc7730::render_erc7730_eip712_pages(
+            crate::tx::display::erc7730::render_erc7730_eip712_pages_checked(
                 chain_id,
                 &v.ir.contract,
                 &primary_type_hash,
@@ -622,8 +606,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 &resolver,
             )
         };
-        let mut pages = match render_result {
-            Ok(p) => p,
+        let (mut pages, eip712_transcript_proof) = match render_result {
+            Ok(checked) => checked,
             // Fail closed (finding F6): this descriptor already passed
             // verify_erc7730_bundle + cross_check_eip712 — it is a known,
             // verified shape. Falling back to render_eip1271_raw32_pages here
@@ -641,8 +625,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // intent and the digest being signed; dropping it silently and signing
         // anyway is a confirm-without-fingerprint.
         let fingerprint_pages_before = pages.len;
-        let fingerprint_kind =
-            crate::tx::display::erc8213::Kind::Eip712Final(final_eip712);
+        let fingerprint_kind = crate::tx::display::erc8213::Kind::Eip712Final(final_eip712);
         let mut fingerprint_cfi = crate::fi::CfiCounter::new();
         if crate::tx::display::erc8213::append_fingerprint_page(
             &mut pages,
@@ -655,9 +638,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             return NscStatus::InternalError as u32;
         }
         crate::fi::scrub_sentinel_register();
-        let fingerprint_cfi_verdict = fingerprint_cfi.check_into_sentinel(
-            crate::tx::display::erc8213::FINGERPRINT_CFI_EXPECTED,
-        );
+        let fingerprint_cfi_verdict = fingerprint_cfi
+            .check_into_sentinel(crate::tx::display::erc8213::FINGERPRINT_CFI_EXPECTED);
         crate::fi::scrub_sentinel_register();
         let fingerprint_page_verdict = crate::tx::display::erc8213::fingerprint_page_proof(
             &pages,
@@ -670,6 +652,51 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             crate::ui::show_status("Sign refused", "fp incomplete");
             return NscStatus::InternalError as u32;
         }
+
+        // The ERC-7730 renderer owns the typed-data meaning, but the handler
+        // owns the signing key/domain, response mode, and durable budget. Bind
+        // that complete authorization set as an exact three-page suffix.
+        // Page-budget failure is a hard refusal; context is never omitted to
+        // preserve a sign path.
+        let typed_confirm_context = crate::tx::display::OffchainConfirmContext::new(
+            kind,
+            chain_id,
+            account_index,
+            slot_index,
+            wallet_addr,
+            account_deployed,
+            new_count,
+            last_userop,
+            MAX_SLOT_USES,
+            hash_to_sign,
+        );
+        let context_pages_before = pages.len;
+        let mut context_cfi = crate::fi::CfiCounter::new();
+        if crate::tx::display::append_eip1271_typed_context_pages(
+            &mut pages,
+            &typed_confirm_context,
+            &mut context_cfi,
+        )
+        .is_err()
+        {
+            crate::ui::show_status("Sign refused", "context unshown");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        let context_cfi_verdict =
+            context_cfi.check_into_sentinel(crate::tx::display::OFFCHAIN_CONTEXT_CFI_EXPECTED);
+        crate::fi::scrub_sentinel_register();
+        let context_page_verdict = crate::tx::display::eip1271_typed_context_page_proof(
+            &pages,
+            context_pages_before,
+            &typed_confirm_context,
+        );
+        if context_cfi_verdict != crate::fi::OK_SENTINEL
+            || context_page_verdict != crate::fi::OK_SENTINEL
+        {
+            crate::ui::show_status("Sign refused", "context incomplete");
+            return NscStatus::InternalError as u32;
+        }
         crate::fi::scrub_sentinel_register();
         if crate::tx::display::erc8213::fingerprint_final_set_proof(
             &pages,
@@ -678,6 +705,58 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         ) != crate::fi::OK_SENTINEL
         {
             crate::ui::show_status("Sign refused", "fp changed");
+            return NscStatus::InternalError as u32;
+        }
+        // Recheck the complete ERC-7730 renderer transcript immediately before
+        // confirmation. The fingerprint is an allowed handler-owned suffix;
+        // every warning, static intent, field, chain, and confirm-page byte in
+        // the original renderer range remains exact.
+        let mut eip712_transcript_verdict_slot = crate::fi::FAIL_SENTINEL;
+        // SAFETY: unique live local. A skipped non-inlined proof call leaves
+        // materialized FAIL and cannot authorize the confirmation below.
+        unsafe {
+            core::ptr::write_volatile(
+                &mut eip712_transcript_verdict_slot,
+                crate::fi::FAIL_SENTINEL,
+            );
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        eip712_transcript_proof.final_set_proof(&pages, &mut eip712_transcript_verdict_slot);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        // SAFETY: the slot remains live and is no longer mutably borrowed.
+        let eip712_transcript_verdict_a =
+            unsafe { core::ptr::read_volatile(&eip712_transcript_verdict_slot) };
+        crate::fi::scrub_sentinel_register();
+        let eip712_transcript_gate_a = crate::fi::check_true_into_sentinel(|| {
+            core::hint::black_box(eip712_transcript_verdict_a == crate::fi::OK_SENTINEL)
+        });
+        crate::fi::scrub_sentinel_register();
+        if eip712_transcript_gate_a != crate::fi::OK_SENTINEL {
+            crate::ui::show_status("Sign refused", "7730 display changed");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::wait_random();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        // SAFETY: independent second volatile read after the randomized gap.
+        let eip712_transcript_verdict_b =
+            unsafe { core::ptr::read_volatile(&eip712_transcript_verdict_slot) };
+        crate::fi::scrub_sentinel_register();
+        let eip712_transcript_gate_b = crate::fi::check_true_into_sentinel(|| {
+            core::hint::black_box(eip712_transcript_verdict_b == crate::fi::OK_SENTINEL)
+        });
+        crate::fi::scrub_sentinel_register();
+        if eip712_transcript_gate_b != crate::fi::OK_SENTINEL {
+            crate::ui::show_status("Sign refused", "7730 display changed");
+            return NscStatus::InternalError as u32;
+        }
+        crate::fi::scrub_sentinel_register();
+        if crate::tx::display::eip1271_typed_context_final_set_proof(
+            &pages,
+            context_pages_before,
+            &typed_confirm_context,
+        ) != crate::fi::OK_SENTINEL
+        {
+            crate::ui::show_status("Sign refused", "context changed");
             return NscStatus::InternalError as u32;
         }
         let (cr, cr_verdict) = confirm_checked(pages.as_slice());
@@ -697,7 +776,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             super::zeroize_sensitive_state();
             return NscStatus::UserRejected as u32;
         }
-        already_confirmed = true;
+        if offchain_confirm_receipt
+            .record_confirmed(&typed_confirm_context)
+            .is_err()
+        {
+            super::zeroize_sensitive_state();
+            return NscStatus::UserRejected as u32;
+        }
     }
 
     // ── 8. PersonalSign + raw32 hash construction (kind=0/1) ───────
@@ -728,8 +813,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             // Look up the bootstrap pubkey (needed for the wallet's CREATE2
             // proxy address = EIP-712 verifyingContract); derive on miss
             // (<1 s, cached for the session).
-            let cached =
-                super::state::with_state(|s| s.bootstrap_cache_lookup(account_index));
+            let cached = super::state::with_state(|s| s.bootstrap_cache_lookup(account_index));
             let (master_pk_seed_32, master_pk_root_32) = match cached {
                 Some(pair) => pair,
                 None => {
@@ -747,8 +831,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                     (pk_seed_32, pk_root_32)
                 }
             };
-            wallet_addr =
-                crate::aa::eip1271::proxy_address(&master_pk_seed_32, &master_pk_root_32);
+            wallet_addr = crate::aa::eip1271::proxy_address(&master_pk_seed_32, &master_pk_root_32);
             hash_to_sign = if kind == OFFCHAIN_KIND_RAW32 {
                 // `payload` is the dapp's RAW 32-byte hash H (the value it
                 // passes to `isValidSignature`); validated to exactly 32 B
@@ -758,9 +841,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 crate::aa::eip1271::replay_safe_hash(chain_id, &wallet_addr, &raw_h)
             } else {
                 // PersonalSign: EIP-191-prefix the message, then nest.
-                crate::aa::eip1271::personal_sign_replay_safe_hash(
-                    chain_id, &wallet_addr, payload,
-                )
+                crate::aa::eip1271::personal_sign_replay_safe_hash(chain_id, &wallet_addr, payload)
             };
         }
         OFFCHAIN_KIND_EIP712_TYPED | OFFCHAIN_KIND_EIP712_TYPED_V3 => {
@@ -771,11 +852,12 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
 
     // ── 9. Trusted-display confirmation + ERC-8213 fingerprint ─────
     //
-    // kind=2 already confirmed in §7b (it needed the descriptor +
-    // EIP-712 final hash to render meaningful pages). For kind=0/1
-    // we render the existing personal-sign / raw32 pages and append
-    // the ERC-8213 fingerprint here.
-    if !already_confirmed {
+    // Typed kinds confirmed in §7b (they need the descriptor + EIP-712 final
+    // hash to render meaningful pages). For kind=0/1 we render the existing
+    // personal-sign / raw32 pages and append the ERC-8213 fingerprint here.
+    // This conditional controls rendering only. Signing authority comes from
+    // the fail-initialized receipt checked unconditionally at §11.
+    if kind == OFFCHAIN_KIND_RAW32 || kind == OFFCHAIN_KIND_PERSONAL_SIGN {
         use crate::ui::confirm::{confirm_checked, ConfirmResult};
         // For raw32 the user-meaningful value is the dapp's raw hash H
         // (= payload), NOT the firmware-internal replay-safe nesting now
@@ -835,9 +917,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             return NscStatus::InternalError as u32;
         }
         crate::fi::scrub_sentinel_register();
-        let fingerprint_cfi_verdict = fingerprint_cfi.check_into_sentinel(
-            crate::tx::display::erc8213::FINGERPRINT_CFI_EXPECTED,
-        );
+        let fingerprint_cfi_verdict = fingerprint_cfi
+            .check_into_sentinel(crate::tx::display::erc8213::FINGERPRINT_CFI_EXPECTED);
         crate::fi::scrub_sentinel_register();
         let fingerprint_page_verdict = crate::tx::display::erc8213::fingerprint_page_proof(
             &pages,
@@ -874,6 +955,25 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         }
         // FI belt (UI1 / work-todo #12c): affirmative-sentinel gate; fail closed.
         if cr_verdict != crate::fi::OK_SENTINEL {
+            super::zeroize_sensitive_state();
+            return NscStatus::UserRejected as u32;
+        }
+        let confirmed_context = crate::tx::display::OffchainConfirmContext::new(
+            kind,
+            chain_id,
+            account_index,
+            slot_index,
+            wallet_addr,
+            account_deployed,
+            new_count,
+            last_userop,
+            MAX_SLOT_USES,
+            hash_to_sign,
+        );
+        if offchain_confirm_receipt
+            .record_confirmed(&confirmed_context)
+            .is_err()
+        {
             super::zeroize_sensitive_state();
             return NscStatus::UserRejected as u32;
         }
@@ -924,7 +1024,60 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         });
     }
 
-    // ── 11. C10 sign ────────────────────────────────────────────────
+    // ── 11. Common confirmation-authority gate + C10 sign ───────────
+    // Reconstruct from the live values used by key selection, response
+    // dispatch, counter publication, and signing. This gate is unconditional
+    // for all four kinds; skipping a kind-specific render branch cannot mint
+    // the fail-initialized receipt or satisfy this context digest.
+    {
+        let signing_context_a = crate::tx::display::OffchainConfirmContext::new(
+            kind,
+            chain_id,
+            account_index,
+            slot_index,
+            wallet_addr,
+            account_deployed,
+            new_count,
+            last_userop,
+            MAX_SLOT_USES,
+            hash_to_sign,
+        );
+        crate::fi::scrub_sentinel_register();
+        let confirm_receipt_verdict_a =
+            offchain_confirm_receipt.completion_proof(&signing_context_a);
+        if confirm_receipt_verdict_a != crate::fi::OK_SENTINEL {
+            super::zeroize_sensitive_state();
+            crate::ui::show_status("Sign refused", "confirm missing");
+            return NscStatus::UserRejected as u32;
+        }
+    }
+    crate::fi::wait_random();
+    {
+        // Reconstruct again after the randomized separation. One skipped
+        // reject branch or one corrupted context/proof result cannot satisfy
+        // both spatially distinct gates.
+        let signing_context_b = crate::tx::display::OffchainConfirmContext::new(
+            core::hint::black_box(kind),
+            core::hint::black_box(chain_id),
+            core::hint::black_box(account_index),
+            core::hint::black_box(slot_index),
+            core::hint::black_box(wallet_addr),
+            core::hint::black_box(account_deployed),
+            core::hint::black_box(new_count),
+            core::hint::black_box(last_userop),
+            core::hint::black_box(MAX_SLOT_USES),
+            core::hint::black_box(hash_to_sign),
+        );
+        crate::fi::scrub_sentinel_register();
+        let confirm_receipt_verdict_b =
+            offchain_confirm_receipt.completion_proof(&signing_context_b);
+        if confirm_receipt_verdict_b != crate::fi::OK_SENTINEL {
+            super::zeroize_sensitive_state();
+            crate::ui::show_status("Sign refused", "confirm missing");
+            return NscStatus::UserRejected as u32;
+        }
+    }
+
     crate::ui::show_progress("EIP-1271 sign", 0);
     let sig = {
         // SAFETY: category 5 — read-only borrow of `static mut
@@ -936,11 +1089,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             Some(c) => &c.key,
             None => return NscStatus::InternalError as u32,
         };
-        match crate::crypto::c10_sign_verified_with_progress(
-            slot_ref,
-            &hash_to_sign,
-            |p| crate::ui::show_progress("EIP-1271 sign", p),
-        ) {
+        match crate::crypto::c10_sign_verified_with_progress(slot_ref, &hash_to_sign, |p| {
+            crate::ui::show_progress("EIP-1271 sign", p)
+        }) {
             Ok(s) => s,
             Err(_) => return NscStatus::CryptoError as u32,
         }
@@ -966,8 +1117,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // closure evaluations (the F-1 idiom the single-bool gates here already
     // use); the two `verify()` calls split by `wait_random` above are the
     // CSE-proof redundancy, this matches their bar.
-    if crate::fi::check_true_into_sentinel(|| core::hint::black_box(v1) && core::hint::black_box(v2))
-        != crate::fi::OK_SENTINEL
+    if crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(v1) && core::hint::black_box(v2)
+    }) != crate::fi::OK_SENTINEL
     {
         crate::ui::show_status("Sig verify", "FAIL");
         return NscStatus::CryptoError as u32;
@@ -986,10 +1138,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     //   * 6492:     `[count(8)] [eip6492 blob(8608)]`         = 8616 B
     let count_be = new_count.to_be_bytes();
     for i in 0..8 {
-        core::ptr::write_volatile(
-            out_ptr.add(SIGN_OFFCHAIN_OUTPUT_COUNT_OFF + i),
-            count_be[i],
-        );
+        core::ptr::write_volatile(out_ptr.add(SIGN_OFFCHAIN_OUTPUT_COUNT_OFF + i), count_be[i]);
     }
 
     if account_deployed {
@@ -1098,8 +1247,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         drop(master_c10_sk); // ZeroizeOnDrop wipes sk_seed.
 
         // Build the ERC-6492 blob.
-        let mut blob: Zeroizing<[u8; EIP6492_BLOB_LEN]> =
-            Zeroizing::new([0u8; EIP6492_BLOB_LEN]);
+        let mut blob: Zeroizing<[u8; EIP6492_BLOB_LEN]> = Zeroizing::new([0u8; EIP6492_BLOB_LEN]);
         crate::aa::eip6492::wrap_signature(
             &mut *blob,
             &PQ_SMART_WALLET_FACTORY,

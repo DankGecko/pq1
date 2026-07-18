@@ -2,8 +2,11 @@
 
 mod common;
 
-use common::{build_erc20_bundle, build_tree, canonical_erc20, leaf_hash};
-use pqsigner_tx::erc20::bundle::{verify_erc20_bundle, MAX_ERC20_BUNDLE_LEN};
+use common::{build_erc20_bundle, build_tree, canonical_erc20, leaf_hash, node_hash};
+use pqsigner_tx::erc20::bundle::{
+    metadata_shape_is_device_verifiable, verify_erc20_bundle, MAX_ERC20_BUNDLE_LEN,
+    MAX_ERC20_PROOF_DEPTH,
+};
 
 fn three_real_entries() -> (
     [u8; 32],
@@ -127,4 +130,40 @@ fn positive_special_printable_ascii_accepted() {
         &proofs[0],
     );
     assert!(verify_erc20_bundle(&bundle, &root).is_some());
+}
+
+#[test]
+fn positive_exact_device_stack_budget_bundle_verifies() {
+    // Fixed wire bytes (39) + name (28) + symbol (29) + 32 proof nodes
+    // = exactly 1120 bytes, the production secure-side copy-buffer budget.
+    let name = [b'A'; 28];
+    let symbol = [b'~'; 29];
+    let proof = [[0x55u8; 32]; MAX_ERC20_PROOF_DEPTH];
+    assert!(metadata_shape_is_device_verifiable(
+        36,
+        &name,
+        &symbol,
+        MAX_ERC20_PROOF_DEPTH,
+    ));
+
+    let canonical = canonical_erc20(1, &[0x42; 20], 36, &name, &symbol);
+    let mut root = leaf_hash(&canonical);
+    for sibling in &proof {
+        root = node_hash(&root, sibling);
+    }
+    let bundle = build_erc20_bundle(
+        1,
+        &[0x42; 20],
+        36,
+        &name,
+        &symbol,
+        0,
+        MAX_ERC20_PROOF_DEPTH as u32,
+        &proof,
+    );
+    assert_eq!(bundle.len(), MAX_ERC20_BUNDLE_LEN);
+    assert!(
+        verify_erc20_bundle(&bundle, &root).is_some(),
+        "the exact production buffer boundary must remain executable"
+    );
 }

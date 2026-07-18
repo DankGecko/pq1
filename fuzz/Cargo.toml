@@ -135,7 +135,7 @@ bench = false
 # screen). The renderer moved to `pqsigner_erc7730::display::render`
 # (docs/erc7730-renderer-fuzzability.md), so this harness host-links and
 # drives `render_erc7730_pages` itself. Seed its corpus first with
-# `make fuzz-seed-erc7730-render` (420 current pinned IR leaves). The
+# `make fuzz-seed-erc7730-render` (the current generated pinned IR corpus). The
 # field formatters are only reached once a descriptor parses, which
 # random bytes do almost never. Coverage is root/source-tree specific; the
 # current-root campaign status lives in docs/erc7730-renderer-fuzzability.md. The

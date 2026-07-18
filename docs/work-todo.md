@@ -350,6 +350,251 @@ scope out (honest-scope residuals, promoted here so they don't evaporate).
   firmware update, and narrow tool pilots. Do not start a framework migration or
   monolithic lifecycle theorem without a separate owner decision and plan.
 
+## 🔎 Secure-element adversarial passes 2026-07-17 — candidate action items
+
+Deep discovery passes over the SE050 driver (5 scopes), the OPTIGA driver
+(5 scopes), and a 10-surface sweep (the other 9 playbooks + FV), run per the
+Part-C protocol of `docs/security/adversarial-review/secure-element-adversarial-review.md`.
+**Every item below is a CANDIDATE: source-only evidence from single-backend
+reviewers, pre-cross-adjudication; no bench/e2e/silicon was run.** Convergent
+items were found independently by 2-5 reviewers and spot-verified against the
+tree by the coordinator. The secure-element playbook was updated in place
+(SE5/SE6 rows corrected; new rows SE10-SE14 describe the cross-cutting
+classes). Promote to `docs/security/adversarial-review/findings/` through the
+Partner-A/B cross-adjudication workflow before treating any item as confirmed.
+
+### SE050 driver (`secure/src/se050/`, `secure/src/scp03_logic.rs`, callers)
+
+- [ ] **SE17-1 — Forged bare 2-byte status word → one-shot dual-SE wipe (HIGH).**
+  `scp03.rs:605-627` accepts any bare 2-byte SW with no R-MAC (GP Amd D §6.2.5
+  exemption); `0x6986` → `AuthMethodBlocked` (`apdu.rs:749,826-828`) → `PinLocked`
+  (`mod.rs:2745-2751`) → unconditional `trigger_lockout_wipe`
+  (`nsc/cmd_request_unlock.rs:126-131`). One injected frame wipes both SEs with
+  zero attempt budget. Also: bare `0x9000` (illegal at 0x33) is taken as success.
+  Fix: reject bare SW ∈ {0x9000, 0x62xx, 0x63xx}; corroborate `AuthMethodBlocked`
+  across `reinit()` + a fresh session (and a page-124 floor) before wiping.
+- [ ] **SE17-2 — Forged bare `0x6985` burns page-124 on the correct PIN (HIGH).**
+  `verify_session` maps unauthenticated `0x6985` → `PinIncorrect`
+  (`apdu.rs:805-807`); the pre-committed MCU bump (`nsc/mod.rs:1097-1112`) stands
+  while both chip counters reset → correct-PIN self-wipe in ≤10, invisible to the
+  directional boot reconcile (MCU-leads). Fix: bare `0x6985` = inconclusive, only
+  authenticated `0x63Cx` is a PIN failure.
+- [ ] **SE17-3 — Wipe verdict coercion ("I don't know" → "wiped") (HIGH).**
+  `check_exists(...).unwrap_or(false)` in post-wipe verification
+  (`mod.rs:2296,2312-2314,2322-2324`); `admin_exists()` (`:566-574`) gates the
+  page-125 resume-flag erase *before* the `wipe_result` check (`:3092-3108`);
+  admin-PIN derivation failure returns `Ok(())` before the flag is armed
+  (`:3068-3081`); the gateway discards the wipe error, resets page 124 and shows
+  "WALLET WIPED" regardless (`cmd_request_unlock.rs:161-174`). Fix: tri-state
+  probes that propagate inconclusive; gate the flag erase and the UI on a
+  verified wipe.
+- [ ] **SE17-4 — Duress (decoy) objects survive every wipe; docs claim reclaimed (HIGH).**
+  `DURESS_*` OIDs (`0x7B10_0010-0013`) absent from `DATA_AND_CANARY_OBJS`
+  (`mod.rs:2146-2156`), `AUTH_OBJS_BEST_EFFORT` (`:2166-2168`) and the post-wipe
+  verification, contradicting `mod.rs:69-71` / `:1979-1983` /
+  `optiga/mod.rs:2676-2680`. Duress UserID has unlimited attempts; after wipe +
+  page-124 reset the decoy half_E stays readable with the old duress PIN.
+  `store_duress_objects` then silently keeps the stale UserID on re-provision
+  (`:2042-2048`, vs fail-loud in `store_objects:1873-1881`). Fix: add the four
+  OIDs to the delete + verification lists; fail loud on stale duress UserID.
+- [ ] **SE17-5 — Plaintext PIN / half_E stack residue (MEDIUM).**
+  `apdu.rs:376` (`unwrapped[1024]`), `:782-796` (PIN-bearing `inner[64]`),
+  `:863` (`resp`), error-path `entropy` locals (`mod.rs:2703-2707`), admin PIN on
+  `provision()` error arms (`:2805-2827`), `user_factory_reset` skips
+  `zeroize_session()` (`:826-868`), `dual_se.rs` unlock/provision error arms
+  (`:181-189`, `:389-426`). Command side was hardened; response/error side was
+  missed. Fix: `Zeroizing`/explicit zeroize on every exit path.
+- [ ] **SE17-6 — Page-124 charged on post-verify `InternalError` (MEDIUM).**
+  Pre-commit (`nsc/mod.rs:1097-1112`) + only-`Ok`-resets means a transport
+  glitch after a *successful* SE verify costs a real attempt while both chip
+  counters reset — correct-PIN self-wipe in ≤10. Stale comments claim the
+  opposite (`cmd_request_unlock.rs:132-137`, VULN-provision-halfwrite §4).
+  Fix: don't charge (or roll back) after a successful SE verify; fix the docs.
+- [ ] **SE17-7 — A3 session-pending recovery gap on read/create paths (MEDIUM).**
+  `reinit()` is wired only into failed-*verify* arms; a mid-`read_authed` or
+  failed `create_session` transport fault leaves the chip session-pending →
+  every later attempt `0x6982` → `InternalError` until power cycle. Fix:
+  `reinit()` on any error exit after a session was opened.
+- [ ] **SE17-8 — `check_provisioned` fails open where OPTIGA fails safe (MEDIUM).**
+  Any init/transport error → `false` (`mod.rs:1668-1676`) → boot wizard over a
+  provisioned wallet → `store_objects` admin-deletes the real objects. OPTIGA
+  deliberately reports provisioned on a wedge (`optiga/mod.rs:895-905`). Fix:
+  mirror the OPTIGA tri-state contract.
+- [ ] **SE17-9 — PUT-KEY rotation misreports success as failure (LOW).**
+  `send_apdu` strips the SW (`apdu.rs:389-394`) but `rotate_scp03_transport_to_final`
+  (`mod.rs:405-412`) and `rotate_scp03_keys` (`:543-552`) re-parse `sw` from the
+  body buffer → spurious `Se050EstablishFailed` halt on a healthy unit
+  (self-heals next boot via the FINAL probe). Fix: delete the re-parse.
+- [ ] **SE17-10 — VK fallback caches `vk(half_E)` as the wallet VK (LOW, latent).**
+  `mod.rs:2948-2956` derives the "wallet VK" from half_E alone on an SE read
+  miss (plus `drop(sk)` unzeroized); wrong-by-construction for any future
+  `read_vk` consumer. Fix: fail/retry instead of caching a half-derived VK.
+- [ ] **SE17-11 — Transport robustness (LOW).** No T=1 N(S) validation
+  (documented, `t1_frame.rs:31-38`); `interface_reset` accepts any CRC-valid
+  frame (`t1oi2c.rs:156-167`); no I2C stuck-bus recovery (no STOP/9-clock
+  clear; SE050 ENA not driven — wedges both SEs across MCU reset); worst-case
+  `transceive` is minutes-scale (IWDG-bounded ~32 s in release). Fix: per-op
+  wall-clock deadline; bus-clear on error; check `rx_pcb`.
+- [ ] **SE17-12 — Latent panic windows (LOW/latent).** `verify_session` panics on
+  `pin.len() > ~55` (`apdu.rs:782-790`); `wrap_apdu` ceiling near 1008-byte
+  payloads; extended-Le edge at `apdu.rs:337-343`. No current caller reaches
+  them. Fix: boundary length guards returning `InvalidParam`.
+
+### OPTIGA driver (`secure/src/optiga/`, `secure/src/dual_se.rs` consumers)
+
+- [ ] **OP17-1 — Secret OIDs provisioned Read = `Auto(F1D0)` only; playbook SE6
+  "DEFENDED (Auto AND Conf)" was a false closure (HIGH, 5/5 convergence).**
+  All four secret OIDs get `require_shielded_read = false` (`mod.rs:2093-2096`,
+  duress twins `:2233-2236`); the AND arm (`apdu.rs:975-976`) is dead outside a
+  host test. After any F1D0 HMAC verify the secrets are plaintext-readable in
+  that session — no PBS/shield needed; `verify_and_lock` ratchets the weak AC
+  irreversibly. Fix: pass `true` for entropy/master (+VK decision per S-4.2);
+  call-site assertion test + e2e metadata readback; must land before/with the
+  S-1 ratchet (metadata freezes). Fix-time trap: `verify_and_lock`'s skip path
+  trusts already-Operational F1D1-F1D4 blindly (`mod.rs:963-964`) — the locked
+  "expected" metadata is itself the weak shape, so the fix must update what the
+  ratchet treats as expected, and chips already locked with the weak AC need
+  the OID-range bump. Playbook SE6 row corrected 2026-07-17.
+- [ ] **OP17-2 — Shielded Connection whole-session replay: no host nonce (HIGH,
+  4/5 convergence).** MasterHello is constant (`shield.rs:388`); keys =
+  `PRF(PBS, random_S)` (`:182-194`); post-handshake `dec_seq=0` accepts any
+  `seq >= dec_seq` (`:327,358,560-561`). A recorded session replays end-to-end:
+  replayed E120 read forges `E120 > page124` → tamper-wipe; replayed wipe-ACKs
+  (no verify-after-write exists); optiga-only builds: replayed unlock = PIN
+  bypass. Contradicts threat-model.md:233/255 ("freshness nonce", "no replay
+  window"). Protocol-inherent (PRL); fixes procedural: persisted `random_S`
+  watermark, fresh GetRandom before destructive verdicts, post-wipe readback;
+  check whether `contracts/verification/proverif/optiga_shield_handshake.pv`
+  models host freshness. Playbook SE5 row updated.
+- [ ] **OP17-3 — Salted-final PBS written in plaintext on every unprovisioned
+  boot / re-provision (HIGH).** `setup_pbs_no_handshake` writes `current_pbs()`
+  — the salted-final once the rotation journal is `ALL_DONE`
+  (`hw/secret_keys.rs:523-531`) — to E140 before any handshake
+  (`mod.rs:717-771`; also `store_objects` step 1). A passive tap recovers the
+  device's permanent pairing root. Fix: `ensure_shield` first; once the journal
+  is `ALL_DONE`, never plaintext-write — abort instead.
+- [ ] **OP17-4 — No PRL self-heal on the unlock path → wedge burns page-124 to
+  self-wipe (HIGH, 3/5 convergence).** Self-heal exists in `random()`
+  (`mod.rs:255-272`), `check_provisioned` (`:884-892`), `factory_reset`
+  (`:2587-2591`) but not `authenticate_and_read` (`:2267-2273`); the
+  silicon-observed `08 40` PRL-alert wedge makes every retry `InternalError`
+  while the pre-committed page-124 ratchets to MAX → wipe with zero wrong PINs.
+  Fix: mirror `random()`'s bounded drop-state + re-init + retry.
+- [ ] **OP17-5 — Globally-mapped/unauthenticated statuses → wipe verdicts (HIGH).**
+  `parse_response` maps `0x0E` → `PinLocked` for *any* command
+  (`apdu.rs:390-397`), including the plaintext pre-shield `open_application`
+  window (`:443-452`) and every post-verify `?` propagation
+  (`mod.rs:2480-2516`); `0x07` → `PinIncorrect` globally likewise. One forged
+  pre-shield frame, or a faulted/hostile chip status post-verify, wipes both
+  SEs. Fix: per-command-site status scoping; only the verify/E120 commands may
+  produce PIN verdicts.
+- [ ] **OP17-6 — `check_provisioned`: plaintext at cold boot + clean `Status(_)`
+  → "fresh chip" (HIGH).** The sentinel read runs before any shield (init
+  RST-kills the PRL) and maps any cleanly-framed `Status(_)`/empty read to
+  `false` (`mod.rs:852-905`); the fail-safe epilogue covers only transport-class
+  errors. One injected frame routes a provisioned wallet to the re-provision
+  wizard (overwrite / locked-profile soft-brick). Fix: shield-first ordering;
+  any non-clean answer = inconclusive → fail safe.
+- [ ] **OP17-7 — Compound `hmac_verify` shape authorizes F1D0 without advancing
+  E120 (MEDIUM-HIGH; SILICON MATRIX OWED).** The tree's own silicon note
+  (`mod.rs:2365-2378`) records the 64-byte compound shape authorizes reads
+  without consuming LUC — a direct-chip attacker needs no MCU to brute-force
+  the PIN. Unverified: refusal at/above threshold (decides "unbounded" vs
+  "32×"). Run the silicon matrix (shape × {success, failure, at/above
+  threshold}); if confirmed free, downgrade threat-model §S3 + the lockstep
+  audit's cap claim to MCU-mediated attempts; OP17-1's Conf(E140) arm becomes
+  the compensating control.
+- [ ] **OP17-8 — Wipe atomicity/verification gaps (MEDIUM).** No post-wipe
+  readback anywhere (`mod.rs:2648-2673`); sentinel-first ordering
+  (`:2650-2658`); `arm_wipe_flag` swallowed (`:2614-2617`); duress blanks
+  `let _ =` ×5 (`:2689-2697`) — and F1DA holds the decoy master *unsplit*
+  (`dual_se.rs:219`), so its survival is an offline decoy-seed oracle; stale
+  E120 (never reset on re-provision) → deterministic false-tamper wipe of a
+  healthy restored wallet, saturation → permanent boot-wipe loop. Fix:
+  readback-verify every OID; blank secrets first, sentinel last; propagate arm
+  failure; reset E120 during re-provision; extend the duress e2e to assert
+  decoy unreadability.
+- [ ] **OP17-9 — Secret residue twins (MEDIUM).** `get_data_object`'s
+  `resp[512]` (`apdu.rs:756`); 768-byte `ApduBuf` with no `Drop` — holds the
+  PIN-HMAC, an **offline dictionary oracle for the 8-digit PIN**, plus
+  provisioning secrets; `authenticate_and_read` error arms (`mod.rs:2489-2516`);
+  zeroize-the-copy bugs (`mod.rs:2026-2031`, `dual_se.rs:223-238`);
+  `decrypt_entropy_blob` error path (`domain/src/lib.rs:295`). Further instances
+  from the packets (suspicion-grade, verify while fixing): after an
+  OPTIGA-Ok/SE050-fail unlock, OPTIGA-side caches + live shield session keys
+  are retained — only `master_o` is zeroized (`dual_se.rs:375-379`); an error
+  on the F1DA read leaves decoy half_O unzeroized (`mod.rs:1744-1753`);
+  `establish()` error paths leave derived session keys in the struct; CCM
+  decrypt writes plaintext into the caller buffer before tag verification
+  (`shield.rs:736-762`, all current callers discard on `Err`). Fix: same
+  `Zeroizing`/Drop discipline as SE17-5.
+- [ ] **OP17-10 — Verdict confusion (MEDIUM).** Verify maps
+  `Status(_)|PinLocked → PinIncorrect` (`mod.rs:2469-2474`): the documented
+  chip-wedge `0xFF` costs a real attempt with the correct PIN; a genuine
+  lockout is mislabeled "Wrong PIN" (wipe deferred one attempt). E120 gate
+  treats read failure as `NotProvisioned` (`:2290-2293`). Fix: classify
+  per-command-site; inconclusive ≠ wrong PIN.
+- [ ] **OP17-11 — Unauthenticated session-kill → forced plaintext (MEDIUM).**
+  `unwrap_response` kills the session on `seq >= 0xFFFF_FFF0` checked *before*
+  the CCM tag (`shield.rs:330-334`); `send_command` then silently falls back to
+  plaintext (`apdu.rs:432-434`) — an interposer can force the plaintext branch
+  mid-flow (incl. mid-wipe). Fix: verify the tag before acting on the
+  threshold; allow the plaintext branch only for the pairing-window PBS write.
+- [ ] **OP17-12 — Smaller items (LOW).** E120 `curr >= limit` wipe gate is a
+  single unhardened read, "validated by inspection" (`mod.rs:2297-2314`) —
+  double-read + sentinel like page-124. Boot reconcile's OPTIGA leg never calls
+  `init()` before `ensure_shield` (`mod.rs:3083-3103`) — silicon-check whether
+  the leg ever runs; reconcile-skip log is `debug-log`-gated (`nsc/mod.rs:1244`).
+  DL frames: FRNR/ACKNR never validated (`ifx_i2c.rs:280-302`). Worst-case
+  transceive ≈ 13 min composed bound (IWDG-capped). Legacy soft-counter
+  readback `None` → `PinLocked` (`mod.rs:2355`, fenced out of production).
+  `factory_reset` error arm skips cache/session zeroize (`mod.rs:2587-2591`
+  vs `:2699`). OPTIGA-only builds have no boot wipe-resume (`main.rs:1496-1501`).
+  `provision_hw_pin_counter`'s idempotency pre-check coerces a glitched
+  metadata read to 0 (`mod.rs:1313-1317`, `unwrap_or(0)`) and proceeds to a
+  data rewrite (suspicion-grade; chip-side ACs appear to bound it).
+- [ ] **OP17-13 — Fixed-size secret reads never assert the returned length
+  (MEDIUM; HIGH for optiga-only builds; 2/5 convergence).** `get_data_object`
+  returns `Ok(payload.len())` for any short payload (`apdu.rs:760-764`) and
+  `authenticate_and_read` discards the count on all four secret reads
+  (`mod.rs:2480-2501`; `duress_read_half` same, `:1744-1753`) — a
+  faulted/hostile chip truncating F1D1/F1D2 yields zero-padded halves/masters.
+  Dual-se builds are saved by the master cross-check (`dual_se.rs:443-454`);
+  optiga-only builds self-consistently cache the truncated values and derive a
+  publicly-known wallet key. Same shape: `generate_auth_code` accepts a
+  truncated chip random (`apdu.rs:637-639`, zero-pads the HMAC challenge →
+  guaranteed mismatch → attempt burn on non-hw-counter builds). Fix:
+  `copy_exact_payload` semantics (`== 32`) at every fixed-size secret read.
+- [ ] **OP17-14 — Wipe-list completeness: legacy OIDs from early builds (LOW,
+  suspicion-grade).** `factory_reset_body` blanks F1D0-F1D4 + duress set but
+  not legacy `0xF1D5` — stale data on chips provisioned by early builds
+  survives the wipe. Confirm the OID inventory across all historical
+  provisioning shapes and fold into the OP17-8 readback-verify work.
+
+### Cross-surface sweep (remaining 9 playbooks + FV; 1 reviewer per surface)
+
+Each surface's playbook was updated in place with these candidates + stale-ref
+fixes; line cites live in the playbook rows. Same candidate status as above.
+
+- [ ] **X17-FI1 — `fi_min`'s FI recompute is compiled away (MEDIUM, sca-fi; EMPIRICALLY CONFIRMED at LLVM-IR level, twice).** `pqsigner-fi/src/lib.rs:233-244`: the guard `r > a || r > b` is algebraically false for `r=min`, so `-O` emits a bare `llvm.umin`+`ret` even `#[inline(never)]`. Single-clamp sites lose their only FI guard: `nonsecure/src/usb/transport.rs:159-160`, `nonsecure/src/usb/commands.rs:791-793` (one fault → buffer-overrun write). Claims at work-todo:1683 `[x]`, threat-model.md:374, UC1 are wrong for the shipped binary. Fix: `black_box` the computed `r`; add an IR/assembly regression check (unit tests cannot pin this).
+- [ ] **X17-SOL1 — Per-key few-time budget resets via remove+re-add (MEDIUM, onchain; source-verified).** `_removeOwnerAtIndex` leaves no tombstone (`PQMultiOwnable.sol:192-193`); `_addOwner` reinstalls the same key at a fresh zero-countered index (`:175-181`). Fully-authorized sequence (SOL6 cross-slot remove at cap + bootstrap re-add) → fresh 65,536 budget, repeatable. Invariant #7 "unresettable" is false at the key level; the Lean `no_reset_path` is per-method and structurally blind to the composition; the on-chain cap is the documented backstop for a rolled-back device counter. Fix options in playbook SOL9 (key counters by keccak(owner) / lifetimeUses / permanent tombstone) — all touch codehash-frozen contracts → deliberate re-freeze.
+- [x] **X17-TUI1 — Off-chain conditional-confirm authority source-closed; physical FI validation remains.** `already_confirmed` is removed. One fail-initialized, domain-separated `OffchainConfirmReceipt` covers all four kinds, binds the exact live signing context, and must satisfy two spatially separated common completion gates before C10 signing (`cmd_sign_offchain.rs:428-429,1047,1073`; `eip1271.rs:105-186`). Regression tests require the bool to remain absent and pin confirm→receipt→dual-gate→sign ordering. No executing physical-FI sweep exists, so this is source closure, not silicon-FI evidence.
+- [ ] **X17-TZ1 — AIRCR security-config write never read-back verified (LOW-MED, trustzone; FI).** `sau.rs:540` unverified before LOCKSVTAIRCR freezes it; the "read returns VECTKEYSTAT" justification only covers bits [31:16] — PRIS/BFHFNMINS/SYSRESETREQS read back fine. One skipped store → PRIS=0 → NS IRQ can preempt a secure veneer mid-handler. Fix: mask-and-verify the low half-word (playbook TZ10).
+- [ ] **X17-SL1 — OTP-master burn validated only AFTER the irreversible RDP-2 lock (MEDIUM, silicon-lockdown).** Phase A (`first_boot/mod.rs:124-176`) checks option bytes + blank pages, never the OTP master; `otp_master_burned()` runs in Phase B post-lock — a unit missing the reversible factory burn bricks permanently at E0811; docs claim OTP is in the pre-lock halt-unlocked class. Fix: add `otp::master_key_state() == Complete` to Phase A (read-only).
+- [ ] **X17-FW1 — Pre-OTP authorization gate is a bare `&&` chain (MED, firmware-update; FI).** `cmd_fw_commit.rs:229-237` — two coordinated faults (tear manifest write + skip reject) → brick. Everything around it is sentinel-wrapped. Fix: `check_true_into_sentinel` + scrub (playbook FW11).
+- [ ] **X17-FI2 — CFI bumps not bound to step execution (LOW-MED, sca-fi; FI).** `crypto.rs:131-143,:180-198,:83-85`: skipping the fallible call doesn't skip its `cfi.bump` → zero OptRand / identity shuffle with all gates green; fail-closure today is register-allocation luck; the F-18 comment is wrong. Fix: gate bumps on verified step success (playbook FI11).
+- [ ] **X17-UC1 — Chained-APDU state has no idle timeout → permanent router-lease wedge (LOW-MED, usb; persistent DoS).** `ChainState::reset` has no caller outside `step` (`apdu_framing.rs:158-206`); the F11 lease re-derives from `active_ins() != 0` (`commands.rs:213-217`); survives replug, IWDG-blind. One chained APDU from a crashed/malicious client locks out all others until power-cycle. Fix: idle timeout on chain state + lease release (playbook UC7). Companion: same-INS retransmit dup-appends.
+- [ ] **X17-TUI2 — `cmd_request_unlock` zeroizes a *copy* of the PIN (MEDIUM, trusted-ui).** `cmd_request_unlock.rs:41-46` — `pin_copy.zeroize()` leaves the original `[u8;8]` live; the test greps the literal string, the 20260611 audit blessed it. Fix: zeroize the original binding; pin the test to it (playbook UI9). Same family: `optiga/mod.rs:2026-2031`, `dual_se.rs:223-238`.
+- [x] **X17-CS1 — Native-value exactness source-closed.** The dispatcher now constructs the native page before publication and rejects non-exact known-native values or any non-`Full` paint result without changing pages or CFI state (`value_page.rs:254-301`). Ordinary ERC-7730 `amount` and descriptor-pinned native `tokenAmount` likewise reject inexact six-decimal values before `push_blank` (`formatters.rs:493-618`). Host regressions pin atomic refusal; the bounded caller and pure-decision Kani harnesses are green, while the exact-target mutant receipt remains a Phase-D evidence gate. Safe non-canonical framing and the deferred `COMPACT_MODE`/Optional trap remain separately banked observations.
+- [ ] **X17-FW2 — Try-once arm coerces unreadable boot-state to "try the unproven winner" (LOW-MED, fsbl).** `fsbl/src/main.rs:224-234` — both CRC copies torn → boots the unproven slot instead of the known-good one; Draft 1.1's typed-marker decode must inherit fail-closed (playbook FW8 sub-arm). Also: `cmd_fw_begin.rs:123-125` comment falsely claims image lengths are signed-over (capacity check is the sole bound); `SESSION_COUNTER` documented but not wired.
+- [ ] **X17-FI3 — Sign-rate session cap has no FI wrapper (LOW, sca-fi).** `sign_rate.rs:78-94` plain load/branch/store vs the F-19-hardened time-wait. Fix: voted read + sentinel readback (playbook FI12). Also: `fih.rs:17-18,38-44` Hamming-weight/distance comment numbers are wrong (comment-only fix).
+- [ ] **X17-TZ2 — Prodtest handlers: 12 bare `if !validate_ns_*_ptr`, no sentinel, no HandlerGuard (LOW, fence-bounded).** `prodtest.rs:61..643` — single-fault FAIL-OUT shape production handlers hardened against; no real secrets in a prodtest image. Fix: sentinel idiom or a recorded exemption (playbook TZ5).
+- [ ] **X17-SL2 — "HDP-protected BHK" claimed as current; ship profile sets HDP1EN=0 (LOW-MED, docs).** `production-security.md:514`, `threat-model.md:606` vs `production-todo.md:449`; nothing in `secure/src` engages HDP. Fix the two docs (deferred layer); add to `verify_ship_profile` when it lands. Also SL8: OEM-lock/WRP1AR gate constants are BENCH-CONFIRM guesses whose wrong-guess direction is vacuous-pass — record fail direction per field (`lockdown.rs:98-104,:161-173`). SL9: Phase-A ship-profile check is a partial OPTR mask; make it an exact masked compare.
+- [ ] **X17-OC1 — Offchain counter-commit elision under FI (LOW).** `cmd_sign_offchain.rs:977` — a skipped `offchain_count_bump` releases a sig whose count never landed (re-issued next request). Fix: handler re-reads the count through an FI sentinel before the response (playbook OC10). OC11 documents the kind=2/3 inner-structure trust boundary.
+- [ ] **X17-UC2 — GET_STATUS `provisioned` byte is constant-1 (LOW, informational).** `commands.rs:427` derives it from `remaining ≤ MAX_ATTEMPTS`, always true. Fix: real provisioning veneer or delete the byte (playbook UC8).
+- [ ] **X17-UI3 — `pin_entry` resets the idle timer on dialog entry (LOW).** `pin_entry.rs:83` — the HIGH-13 pattern survives on the NS-reachable PIN path; each spammed unlock gifts a fresh 120 s window. Fix: delete the entry reset; extend the prologue test (playbook UI5).
+- [ ] **X17-FV1 — ProVerif citer staleness (LOW-MED, docs).** The M3 vendor re-derivation (`9ec109ad`, same day) pinned cross-session replay FALSE for the OPTIGA shield and banner-marked the driver-derived model do-not-cite; the citers didn't follow: `contracts/verification/proverif/README.md:90-91` ("handshake remains a future model", never mentions the vendor model), `contracts/verification/docs/THREAT_CLAIM_MAP.md:73` (anchors S-SE-TUNNEL-SNOOP to the fiction model; should record replay proven-possible + SE5/OP17-2 pointer), and the two 2026-07-17 verification docs recommend the re-derivation as future work post-landing. Fix the three citers. The FV playbook itself was updated (V9 detection: external-oracle re-derivation; Part D stale clause).
+
 ## ⚠️ SHIP BLOCKERS — must be resolved before any unit leaves the bench
 
 These items are NOT part of the normal feature backlog. They are
@@ -439,6 +684,17 @@ unextractable" is a single-point-of-failure we have no need to take.
 7. Boundary test: `E120.current = limit - 1` + correct PIN must
    still authorize and reset to 0. Currently
    `optiga-hw-counter-e2e` only exercises low-`current` resets.
+
+**Scope note (2026-07-17 adversarial pass):** the closure must cover
+**metadata-level** LUC stripping, not only data-level rewriting.
+`recover_hw_counter_metadata` (`secure/src/optiga/mod.rs:1443-1506`)
+proves F1D0's *metadata* is rewritable without auth while LcsO=Creation
+— a bus implant can strip the LUC binding from F1D0's Execute AC (not
+just overwrite the data), silently removing silicon attempt enforcement
+with the data left intact. Same root cause (Change=ALW at Creation);
+make the step-(5) sacrificial matrix also assert that *metadata* writes
+to F1D0/E120 are refused post-ratchet, and extend step 3's fence to
+cover the metadata-rewrite helper's production reachability.
 
 **Cost we accept (with `Auto(F1D0)`):** None — user-driven PIN change
 is preserved. If a sacrificial-part test of step (5) reveals the
@@ -3645,6 +3901,83 @@ review report.
   in-place edits, deterministic `diff-registry`, and signed-release-manifest
   binding. Preserve the existing root-rotation policy as owner; do not create a
   second ceremony.
+- [x] **[pq1-7730-phase-c-reviewability, P0, S] Make the Phase-D input and
+  standing verification receipts mechanically reviewable.** Completed
+  2026-07-18 without changing signing eligibility or the authenticated
+  catalogue. `secure/data/erc7730.review.txt` now records every emitted format's
+  selector, decoded and exact-byte intent, static-head/nested-descent facts, and
+  every field's ordinal/op/escaped label, exact compiled path, raw parameter
+  TLVs and canonical device-parser semantics. The omission ledger remains
+  complete. The registry README's root/count/size/known-call/hash/Bloom receipt
+  is an exact xtask-managed block, so stale or duplicate markers fail the
+  descriptor gate. The fast Kani census now rejects missing harnesses, empty,
+  absent or ambiguous find strings, non-string/no-op replacements, and ran
+  four offline negative controls on every census check. Three bounded
+  ERC-7730 parameter harnesses cover native-list canonicality, the one-scalar
+  interpolation grammar and exact NFT collection path; all three verified on
+  restored source with Kani 0.67.0. Their unique material mutants are enrolled
+  in the nightly manifest but were **not executed** in this receipt. Pre-V3
+  census at this historical checkpoint: 160 harnesses / 26 files; 152 / 20 in mutation-enrolled files; eight /
+  six outside; 39 groups (10 quick / 26 default / 3 full), 37 distinct enrolled
+  harnesses. Regeneration preserved the prod/e2e DB digests
+  `009b6a61…fc5acf` / `d12ef4dd…919d1`, both Bloom digests and
+  `db_roots.rs` byte-for-byte; only the review file changed to 1,265,190 bytes,
+  SHA-256 `c329449d…dec71`. Evidence: dbgen 256/0, xtask 56/0, census self-tests
+  4/0, `make verify-kani-census` and `make check-erc7730-descriptors` green.
+  Current V6 tooling correction: 162 harnesses / 26 files; 154 / 20
+  mutation-enrolled; eight / six outside; 40 groups (10 quick / 27 default / 3
+  full), 38 distinct enrolled harnesses; census self-tests 6/6.
+  This is the completed pre-V3 Phase-C remediation/tooling receipt; the later
+  Phase-D result and root rotation are recorded immediately below. It grants no
+  merge, production or shipment authority and does not close the larger
+  provenance row above. Forced blind signing remains disabled in its separate
+  authority-changing phase.
+- [~] **[pq1-7730-phase-d-v6-remediation, P0, SECURITY, M] Close the frozen V5
+  Phase-D no-go findings and obtain one fresh combined review.** Frozen ref
+  `review/erc7730-phase-d-20260718-v5` at
+  `c70f6ffff34e739cbde78ecfec8cfc7f7253772b` completed the combined
+  source-first Phase-D review and returned **DO NOT MERGE**. Blocking findings
+  covered typed off-chain context and bool-gated confirmation authority; native
+  `amount`/`tokenAmount` rounding collisions; non-injective enum labels;
+  schema/compiler/runtime policy drift; empty visible labels, recursive
+  validation, and formatter-aware `tokenPath` coverage; stale census/digest and
+  non-atomic ERC-20/ERC-7730 drift checks; and incomplete batch tuple
+  commitment.
+
+  V6 remediates those findings without enabling blind signing. All off-chain
+  kinds render their exact account/slot/wallet/deployment/budget context and
+  carry one fail-initialized, domain-separated `OffchainConfirmReceipt` through
+  two common gates before signing. IR schema v4 requires shared exhaustive
+  `TerminalKind × FormatOp × params` validation in compiler and device,
+  rejects schema v3, empty visible labels and over-depth nested structures, and
+  applies formatter-aware identity coverage. Known-native dispatcher values and
+  ordinary ERC-7730 `amount`/native `tokenAmount` values refuse before page or
+  CFI publication when their signed value is not exactly representable. Batch
+  authorization commits and independently reparses every ordered
+  `(index,target,value,calldata)` tuple.
+
+  Current generated identity: 428 leaves / 345,546 bytes / root
+  `668a7964b4241ec0c2348d117adaa5e29e9b34d97286ef5d1c722cdda43d700a`;
+  production blob SHA-256
+  `45e57e54dd3d2ea33efd5819d95ac611a06a61e8e036bc2a13a170577a9f9eac`;
+  E2E root
+  `f8256e1bf1f41391eb337bf2ee3f85e59f738d0f6ed60c16eaa916e99842e4cf`;
+  review artifact 1,389,653 bytes / SHA-256
+  `6a8abeec1f228a58c60557d54a975086a033742db28f6542539d07129f5839b7`.
+  Census: 162 harnesses / 26 files; 154 / 20 mutation-enrolled; eight / six
+  outside; 40 groups (10 quick / 27 default / 3 full), 38 distinct enrolled
+  harnesses. Pre-freeze evidence is green: combined host suites 814/0; secure
+  mock-SE suites 2235/0 under both no-default and
+  `erc7730-dev-unattested` configurations, with one diagnostic test ignored;
+  descriptor drift and census checks pass.
+
+  **Remaining before `[x]`:** finish exact-target mutation and Thumb/resource
+  receipts, freeze V6, run the single combined source-first additive-playbook
+  A/B review plus the already-requested supplemental Kimi pass, complete
+  symmetric cross-adjudication, remediate any stage blocker, then land.
+  Whole-call stack high-water, exception headroom, `MSPLIM`, hardware FI, and
+  ERC-8176 provenance remain honest production residuals. Forced blind signing
+  stays disabled and belongs to its separate authority-changing phase.
 - [x] **[pq1-7730-native-currency-list, P1, DESIGN, M] Support bounded
   `nativeCurrencyAddress` lists.** Authenticate the complete descriptor list,
   cap its length, compare every entry exactly, bind chain-native ticker/decimals,
@@ -3709,20 +4042,47 @@ review report.
   `pqsigner-erc7730` 196/0, fuzz-target check and canonical dev/mock Thumb build
   green, `git diff --check` clean. This is bounded implementation evidence, not
   fresh dual review, production or shipment authority.
-- [ ] **[pq1-7730-interpolated-intent, P2, DESIGN, M] Support
+- [x] **[pq1-7730-interpolated-intent, P2, DESIGN, M] Support
   `interpolatedIntent` only as derived presentation.** Every substitution must
   come from an independently rendered, signed-byte-bound value; the intent may
   summarize but never replace the underlying field pages. Reject missing,
   hidden, clipped, ambiguous or unrenderable substitutions. This is the
   existing companion-guide §12.2 owner item, not a parallel specification.
-  **Design assessment (2026-07-17):** the pinned registry contains 89 formats
-  across 29 files and 103 placeholder occurrences. Safe interpolation needs a
-  post-render, signed-byte-bound field witness; the current formatters paint
-  pages but return no canonical rendered-value receipt. The first admissible
-  slice is therefore limited to at most three always-visible scalar amounts,
-  retains their underlying pages, and requires the complete interpolated line
-  to fit the display. Do not implement this as direct path-to-string
-  substitution.
+  **Completed 2026-07-17 as a deliberately narrower first slice:** authenticated
+  TLV `0x46` carries a versioned field-ordinal program, canonically on field
+  zero, within root-pinned IR schema v3. Dbgen enrolls only one terminal
+  placeholder resolving to an always-visible, static unsigned `amount` or
+  `tokenAmount`; the accepted source spelling is exactly `#.amount` or the
+  registry's root-relative `amount` alias. Arrays, container paths, EIP-712,
+  address/NFT/raw values, threshold/message shorthand, and canonical ERC-20
+  `approve(address,uint256)` remain excluded. Unsupported-but-valid templates
+  retain the descriptor's static intent at build time instead of dropping the
+  safe format. The runtime deep-validates every format, including unselected
+  suffixes, then substitutes only a private witness minted after the ordinary
+  amount and identity pages were fully painted from signed bytes with an
+  authenticated scale/unit. Non-native tokens require exact chain+contract
+  metadata binding. Raw/unverified/unlimited/overflow/zero-collapse,
+  hidden/skipped/missing-witness, overlong title, or revoke-banner combinations
+  hard-refuse once the TLV exists; ordinary field and identity pages are never
+  removed or reordered. Unlike Ambire's raw decoded-value interpolation, PQ1
+  reuses the exact trusted-render value including its authenticated unit/ticker.
+  The reviewed candidate set is explicitly pinned to **11 unique
+  source/selector templates across 78 deployment formats**. The 2026-07-18
+  Phase-D correction evaluates each deployment independently: only six formats
+  have a static token identity in the exact device-verifiable ERC-20 metadata
+  capability set (or a firmware-pinned native identity), so 72 emit no program
+  and retain static intent. Expansion requires a reviewed test diff. Current
+  catalogue: 428 leaves / 340,215 bytes / root
+  `c785f90c779724ef4cda0a0c0ddaf6850fe277d3cbe0e473eded5bca36b054d4`;
+  the 4,542 known-call set and its SHA-256 receipt are unchanged, the E2E root is
+  `cbd0b77128b92246363f6ea444e8544f7f84dc9ca4d1e15d671d6078960238e9`,
+  and omissions remain 281. Evidence: `pqsigner-erc7730` 213/0, dbgen 254/0,
+  secure release 2,219 passed / 0 failed / 1 ignored, descriptor drift check in
+  sync, standalone renderer `thumbv8m` check green, and the canonical dual-SE
+  STM32U585 secure-world check green. This is bounded implementation evidence,
+  not the batched Phase-D adversarial review, executable FI, merge, production,
+  or shipment authority. Forced blind signing remains disabled and belongs to
+  its separate authority-changing phase.
 - [x] **[pq1-7730-nft, P2, DESIGN, M] Complete injective NFT collection
   identity.** Completed 2026-07-17 with dedicated IR tags `0x44` (literal
   20-byte collection) and `0x45` (compiled static-address path). Exactly one is
@@ -3737,8 +4097,8 @@ review report.
   exact `(chain, address)` metadata. Chain-zero wildcard metadata never
   qualifies, and absence of a name keeps the raw identity without a blind
   downgrade. Seven real registry deployments / 12 formats now exercise the
-  path through Merkle verification and the PQ1 renderer. Current production
-  catalogue: 428 leaves / 340,016 bytes / root
+  path through Merkle verification and the PQ1 renderer. At completion of this
+  slice, the production catalogue was 428 leaves / 340,016 bytes / root
   `0706d763061ecfb0668ba7bdcf81e7159a6e541bae090b8678e5c9f31517d2ed`;
   the 4,542-call set and its hash remain unchanged. Evidence:
   `pqsigner-erc7730` 203/0, dbgen 247/0, secure release 2,219 passed / 0 failed /
@@ -4329,6 +4689,13 @@ live defects, not research residuals.**
   Given the historical hit rate, a clean 14/14 is a useful negative result. Original: against every hand-transcribed base
   address in `secure/src/hw/*`. Hours; 3-for-3 against our transcription history (incl. the TAMP
   wrong-address bug). Scope: layout only; does not cover SAU/MPU/NVIC/SCB/UID/OTP.
+- [ ] **G1META follow-up — enroll the two new CI hardware-assurance gates in
+  `scripts/gate_enforcement.json`.** The 2026-07-18 global enforcement check
+  reports `verify-hw-assumptions` and `verify-mmio-addresses` as CI-invoked but
+  absent from both the gate manifest and `_completeness_waived`. Add truthful
+  `polices_paths`/enforcement rows (or a documented waiver only if justified),
+  then rerun the self-test and live checker. This is banked under the hardware/FV
+  owner, not an ERC-7730 Phase-D blocker.
 - [~] **C3 — PARTIAL 2026-07-17 (`7eb19efa`). Finding VERIFIED and worse than written; pins added,
   gap NOT closed.** `ui-lcd = ["spi1-arduino", ...]`, so the **shipping** image secures SPI1 (the
   trusted-display bus) while `gtzc-enforcement-hw` builds `ui-semihosting` and runs against
@@ -4566,6 +4933,7 @@ When a task above is completed, update it here with the date and a one-line summ
 
 | Date | Item | Summary |
 | --- | --- | --- |
+| 2026-07-17 | PQ1 ERC-7730 constrained scalar `interpolatedIntent` | Added root-authenticated IR-v3 TLV `0x46` with a versioned field-ordinal program and a private post-render witness, so a derived intent may reuse only the exact signed-byte-bound amount the trusted formatter fully painted, including an authenticated unit/ticker. Ordinary amount and identity pages remain; invalid programs, hidden/skipped values, missing/wrong token metadata, raw/unverified/unlimited/overflow/zero-collapse output, overlong titles, and revoke-banner combinations hard-refuse. Dbgen enrolls exactly one terminal static `amount`/`tokenAmount` placeholder and pins the first registry slice to 11 templates / 78 deployment formats; unsupported valid templates retain their static intent. Catalogue: 428 leaves / 341,328 B / root `ffe2c1fb…9ef38`; known-call set unchanged at 4,542; omissions unchanged at 281. Evidence: renderer 213/0, dbgen 254/0, secure 2,219/0/1 ignored, drift in sync, renderer and canonical dual-SE STM32U585 `thumbv8m` checks green. Batched Phase-D adversarial review and forced-blind authority work remain separate. |
 | 2026-07-16 | PQ1 ERC-7730 executable semantic drift guard | The normative companion guide now carries an xtask-generated semantic manifest sourced from the stable `FormatOp::ALL` wire vocabulary and the exact `FormatterRoute` production dispatch consumes: all 14 opcode/name pairs are pinned (`NftName=0x04`, `Unit=0x09`), with `Calldata` and `Encrypted` honestly listed as hard refusals. The real secure dispatcher funnels all verified-descriptor `RenderErr::{Reject,NoFormat,PageBudget}` variants through one exhaustive hard-refusal helper, directly enumerated by a host test. Shared ERC-8213 layout constants drive both renderer and manifest; tests prove a complete 32-byte/two-page fingerprint and atomic refusal with only one free page. Stale opcode/route/error/fingerprint prose mutations fail xtask. Evidence: pqsigner-erc7730 193/0; secure ERC-7730 renderer 67/0 (1 diagnostic ignored) plus fatal-policy 1/0; xtask 54/0; catalogue `in sync`; thumbv8m `ui-noop,mock-se` check green. This is a behavior-equivalent single-source refactor plus tests/docs; it changes no signing eligibility or fallback policy. |
 | 2026-07-16 | PQ1 ERC-7730 catalogue documentation drift guard | Corrected the normative companion guide's stale E2E catalogue from 2,000 B / 5 leaves / `2c4f…d9575` to the generated 3,917 B / 8 leaves / `cbd0…238e9`. `pqsigner-xtask gen-erc7730-descriptors --check` now verifies generated prod/E2E summary and root blocks (root/count/size plus prod tuple/provenance facts); focused stale-fact negatives pass, full xtask = 50 passed, fresh catalogue = `in sync`. No signing behavior, root, blob, Makefile, or FV file changed in this slice. |
 | 2026-07-15 | #36 correction after integration review | The 2026-07-14 row is retained as an as-found receipt, but its authority and two evidence claims are superseded: `rdp2-self-lock` is bidirectionally coupled to `mode-production`; `make build-rdp2-self-lock` now proves the unsafe non-production combination is rejected rather than compiling a runnable image. Host cuts cover boundaries between completed QW programs and recovery is capacity-bounded, not “power loss at any point.” The candidate is not production-approved; handoff/receipt, authenticate-before-rotate, old/new/KVN recovery, E140 ordering, silicon receipts, and later Opus re-review remain OPEN. `docs/provisioning/first-boot-provisioning.md` grants no irreversible authority. |

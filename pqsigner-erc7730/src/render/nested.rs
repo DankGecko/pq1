@@ -37,9 +37,17 @@
 
 use core::convert::TryFrom;
 
-use crate::ir::{Erc7730Ir, FieldEntry, FieldIter, PathOp, MAX_NESTED_MEMBERS};
+use crate::ir::{
+    Erc7730Ir, FieldEntry, FieldIter, FormatOp, IrError, PathOp, Visibility,
+    MAX_FIELDS_PER_FORMAT, MAX_NESTED_MEMBERS, MAX_NESTING,
+};
 
-use super::RenderErr;
+use super::{
+    policy::{
+        label_has_visible_glyph, token_path_displays_identity, validate_field, TerminalKind,
+    },
+    RenderErr,
+};
 
 /// Leading version byte of a structured v0x03 `PARAM_NESTED_STRUCT` payload.
 /// (`0x01` is the bare belt marker for an unsupported nested member — declined
@@ -84,6 +92,93 @@ impl<'a> NestedStructParam<'a> {
     fn local_word_is_address(&self, i: usize) -> bool {
         (self.addr_word_bmp.get(i / 8).copied().unwrap_or(0) >> (i % 8)) & 1 == 1
     }
+}
+
+/// Allocation-free schema-v4 preflight for one complete nested-v3 subtree.
+/// Returns the number of descent records consumed by this block plus all child
+/// anchors, which the enclosing format reconciles against its independently
+/// authenticated `nested_descent_count`.
+pub(crate) fn validate_nested_ir(
+    ir: &Erc7730Ir<'_>,
+    payload: &[u8],
+    parent_member_count: usize,
+    depth: usize,
+) -> Result<u8, IrError> {
+    if depth == 0 || depth > MAX_NESTING {
+        return Err(IrError::OverCap);
+    }
+    let np = parse_nested_struct_param(payload).map_err(|_| IrError::BadPoolEntry)?;
+    if np.word_pos as usize >= parent_member_count
+        || np.sub_field_cnt as usize > MAX_FIELDS_PER_FORMAT
+    {
+        return Err(IrError::BadField);
+    }
+
+    // Unused high bitmap bits are a second wire spelling for the same member
+    // types and could hide future meaning.  Require canonical zero padding.
+    let remainder = np.member_count as usize % 8;
+    if remainder != 0 {
+        let allowed = (1u8 << remainder) - 1;
+        if np.addr_word_bmp.last().is_some_and(|byte| byte & !allowed != 0) {
+            return Err(IrError::BadPoolEntry);
+        }
+    }
+
+    // Reuse the independently maintained address-coverage validator.  It
+    // checks every local ordinal and credits tokenPath only when the selected
+    // formatter actually displays token identity.
+    validate_nested_structure(ir, &np, false).map_err(|_| IrError::BadField)?;
+
+    let mut descents = 1u8;
+    for entry in np.sub_fields() {
+        let field = entry?;
+        let op = FormatOp::try_from(field.format_op)?;
+        let params = super::params::parse(ir, field.param_off)
+            .map_err(|_| IrError::BadPoolEntry)?;
+        let kind = params.terminal_kind.ok_or(IrError::BadField)?;
+
+        if params.visibility != Visibility::Never && !label_has_visible_glyph(field.label) {
+            return Err(IrError::BadAscii);
+        }
+
+        if let Some(child_payload) = params.nested_struct {
+            if child_payload.first() != Some(&NESTED_V3)
+                || kind != TerminalKind::NestedStruct
+                || op != FormatOp::Raw
+                || field.path_off != 0
+            {
+                return Err(IrError::BadField);
+            }
+            validate_field(op, kind, params.policy_mask()).map_err(|_| IrError::BadField)?;
+            let child = validate_nested_ir(
+                ir,
+                child_payload,
+                np.member_count as usize,
+                depth + 1,
+            )?;
+            descents = descents.checked_add(child).ok_or(IrError::OverCap)?;
+            continue;
+        }
+
+        if kind == TerminalKind::NestedStruct || field.path_off == 0 {
+            return Err(IrError::BadField);
+        }
+        let path = ir.path_bytes(field.path_off)?;
+        let word = static_word_index(path).ok_or(IrError::BadField)?;
+        if word >= np.member_count as usize {
+            return Err(IrError::BadField);
+        }
+        if let Some(token_path) = params.token_path {
+            let token_word = static_word_index(token_path).ok_or(IrError::BadField)?;
+            if token_word >= np.member_count as usize
+                || !token_path_displays_identity(op, kind)
+            {
+                return Err(IrError::BadField);
+            }
+        }
+        validate_field(op, kind, params.policy_mask()).map_err(|_| IrError::BadField)?;
+    }
+    Ok(descents)
 }
 
 /// Parse a `PARAM_NESTED_STRUCT` v0x03 payload into a bounds-checked
@@ -226,6 +321,13 @@ pub fn validate_nested_structure(
     for entry in np.sub_fields() {
         let sf: FieldEntry<'_> = entry.map_err(|_| RenderErr::Reject("7730 nested subfield"))?;
         let params = super::params::parse(ir, sf.param_off)?;
+        let op = FormatOp::try_from(sf.format_op)
+            .map_err(|_| RenderErr::Reject("7730 nested format"))?;
+        let kind = params
+            .terminal_kind
+            .ok_or(RenderErr::Reject("7730 nested terminal kind"))?;
+        validate_field(op, kind, params.policy_mask())
+            .map_err(|_| RenderErr::Reject("7730 nested field policy"))?;
 
         // v3 depth-2+: a nested-anchor sub-field (itself a `PARAM_NESTED_STRUCT`,
         // e.g. `witness.info` / `witness.outputs`). Its render `path_off` is a
@@ -241,7 +343,11 @@ pub fn validate_nested_structure(
         // check in `parse_nested_struct_param` → decline, matching the renderer.)
         if let Some(payload) = params.nested_struct {
             let child = parse_nested_struct_param(payload)?;
-            if child.word_pos as usize >= mc {
+            if kind != TerminalKind::NestedStruct
+                || op != FormatOp::Raw
+                || sf.path_off != 0
+                || child.word_pos as usize >= mc
+            {
                 return Err(RenderErr::Reject("7730 nested anchor ord oob"));
             }
             continue;
@@ -270,13 +376,12 @@ pub fn validate_nested_structure(
         // when the amount field is SHOWN (E2 credits a *shown-amount* tokenPath;
         // a hidden amount's tokenPath does not surface the address).
         if let Some(tp) = params.token_path {
-            if let Some(tw) = static_word_index(tp) {
-                if tw >= mc {
-                    return Err(RenderErr::Reject("7730 nested tok oob"));
-                }
-                if shown {
-                    covered[tw] = true;
-                }
+            let tw = static_word_index(tp).ok_or(RenderErr::Reject("7730 nested tok path"))?;
+            if tw >= mc || !token_path_displays_identity(op, kind) {
+                return Err(RenderErr::Reject("7730 nested tok oob"));
+            }
+            if shown {
+                covered[tw] = true;
             }
         }
     }
@@ -315,7 +420,8 @@ mod tests {
 
     /// A PermitSingle-shaped v0x03 payload: member_count 4, addr_bmp 0x01, two
     /// sub-fields (amount → render FieldIdx(1) + tokenPath at param_off; expiration
-    /// → render FieldIdx(2), no params). Path/param offsets index `pool` below.
+    /// → render FieldIdx(2)). Both carry the mandatory schema-v4 terminal kind.
+    /// Path/param offsets index `pool` below.
     fn permit_single_payload() -> std::vec::Vec<u8> {
         let mut p = std::vec![NESTED_V3];
         p.extend_from_slice(&0u16.to_be_bytes()); // word_pos 0
@@ -330,32 +436,36 @@ mod tests {
         p.extend_from_slice(b"amt");
         p.extend_from_slice(&1u16.to_be_bytes()); // path_off (render FieldIdx(1))
         p.extend_from_slice(&6u16.to_be_bytes()); // param_off (tokenPath FieldIdx(0))
-        // sub-field 1: expiration — date(0x05), label "exp"(3), path_off, param_off 0.
+        // sub-field 1: expiration — date(0x05), label "exp"(3), path + kind params.
         p.push(0x05);
         p.push(3);
         p.extend_from_slice(b"exp");
-        p.extend_from_slice(&13u16.to_be_bytes()); // path_off (render FieldIdx(2), pool off 13)
-        p.extend_from_slice(&0u16.to_be_bytes()); // no params
+        p.extend_from_slice(&16u16.to_be_bytes()); // path_off (render FieldIdx(2))
+        p.extend_from_slice(&21u16.to_be_bytes()); // param_off (unsigned terminal kind)
         p
     }
 
     /// Pool laying out the programs the payload above references:
     ///   off 1  : render FieldIdx(1)  = [len 4][10 20 00 01]
-    ///   off 6  : param blob with tokenPath FieldIdx(0)
-    ///   off 12 : render FieldIdx(2)  = [len 4][10 20 00 02]
+    ///   off 6  : params with tokenPath FieldIdx(0) + unsigned terminal kind
+    ///   off 16 : render FieldIdx(2) = [len 4][10 20 00 02]
+    ///   off 21 : params with unsigned terminal kind
     fn permit_single_pool() -> std::vec::Vec<u8> {
         let mut pool = std::vec![0xFFu8]; // offset-0 filler
         // off 1: render path FieldIdx(1)
         pool.push(4);
         pool.extend_from_slice(&[0x10, 0x20, 0x00, 0x01]);
-        // off 6: param blob = [blob_len][PARAM_TOKEN_PATH(0x30) len=4 | 10 20 00 00]
-        pool.push(6); // blob_len
+        // off 6: tokenPath plus mandatory unsigned terminal kind.
+        pool.push(9); // blob_len
         pool.push(0x30);
         pool.push(4);
         pool.extend_from_slice(&[0x10, 0x20, 0x00, 0x00]);
-        // off 12: render path FieldIdx(2)
+        pool.extend_from_slice(&[0x47, 1, TerminalKind::Unsigned as u8]);
+        // off 16: render path FieldIdx(2)
         pool.push(4);
         pool.extend_from_slice(&[0x10, 0x20, 0x00, 0x02]);
+        // off 21: mandatory unsigned terminal kind.
+        pool.extend_from_slice(&[3, 0x47, 1, TerminalKind::Unsigned as u8]);
         pool
     }
 
@@ -488,11 +598,12 @@ mod tests {
             child.push(0); // sub_field_cnt 0
             // Pool: off 0 filler; off 1 = param blob [blob_len][0x41 tag][tlv_len][child].
             let mut pool = std::vec![0xFFu8];
-            let blob_len = 2 + child.len();
+            let blob_len = 2 + child.len() + 3;
             pool.push(blob_len as u8);
             pool.push(0x41); // PARAM_NESTED_STRUCT
             pool.push(child.len() as u8);
             pool.extend_from_slice(&child);
+            pool.extend_from_slice(&[0x47, 1, TerminalKind::NestedStruct as u8]);
             // Parent payload: member_count 3, addr_bmp 0x00, one nested-anchor
             // sub-field (FMT_RAW 0x01, label "sub", path_off 0 placeholder,
             // param_off 1 → the child TLV blob above).
@@ -555,30 +666,32 @@ mod tests {
     }
 
     /// Like `permit_single_payload` but the amount sub-field's `param_off` points
-    /// at a pool blob carrying its tokenPath AND a `visible:never` TLV (pool
-    /// offset 18, see `permit_single_pool_amount_never`). The amount sub-field's
+    /// at a pool blob carrying its tokenPath, terminal kind, AND a
+    /// `visible:never` TLV (pool offset 25, see
+    /// `permit_single_pool_amount_never`). The amount sub-field's
     /// `param_off` occupies payload bytes `[47..49]` (header 40 + fmt(1) +
     /// label_len(1) + "amt"(3) + path_off(2) = 47).
     fn permit_single_payload_amount_never() -> std::vec::Vec<u8> {
         let mut p = permit_single_payload();
-        p[47..49].copy_from_slice(&18u16.to_be_bytes());
+        p[47..49].copy_from_slice(&25u16.to_be_bytes());
         p
     }
 
-    /// The base pool (amount render @1, tokenPath blob @6, expiration render @13,
-    /// ending at offset 18) plus a `tokenPath + visible:never` blob at offset 18.
+    /// The base pool (amount render @1, tokenPath blob @6, expiration render @16,
+    /// expiration kind @21, ending at offset 25) plus a
+    /// `tokenPath + visible:never + terminal-kind` blob at offset 25.
     fn permit_single_pool_amount_never() -> std::vec::Vec<u8> {
-        let mut pool = permit_single_pool(); // len == 18
-        assert_eq!(pool.len(), 18);
-        // off 18: [len=9][PARAM_TOKEN_PATH(0x30) 4 | 10 20 00 00]
-        //                [PARAM_VISIBILITY(0x3F) 1 | 01 (VIS_NEVER)]
-        pool.push(9);
+        let mut pool = permit_single_pool(); // len == 25
+        assert_eq!(pool.len(), 25);
+        // off 25: tokenPath + visibility:never + unsigned terminal kind.
+        pool.push(12);
         pool.push(0x30);
         pool.push(4);
         pool.extend_from_slice(&[0x10, 0x20, 0x00, 0x00]);
         pool.push(0x3F);
         pool.push(1);
         pool.push(0x01);
+        pool.extend_from_slice(&[0x47, 1, TerminalKind::Unsigned as u8]);
         pool
     }
 }

@@ -55,9 +55,8 @@ use sha2::{Digest as Sha256Digest, Sha256};
 /// SHA-256("") — the empty-bytes hash used for empty `initCode` and
 /// `paymasterAndData` inside the SHA-256 sphincs digest.
 pub const SHA256_EMPTY: [u8; 32] = [
-    0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9,
-    0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52,
-    0xb8, 0x55,
+    0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
+    0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
 ];
 
 pub use pqsigner_proto::EXECUTE_BATCH_SELECTOR;
@@ -236,6 +235,185 @@ pub enum BatchAaError {
     /// reconstructed calldata wouldn't fit in the
     /// `MAX_EXECUTE_BATCH_CALLDATA_LEN` buffer.
     CallDataTooLong,
+}
+
+/// Domain-separated commitment shown at the batch-final confirmation. Each
+/// member first commits to its exact ordered tuple `(index, target, value,
+/// ERC-8213 calldata digest)`; the final hash commits to the declared count and
+/// the ordered member hashes. Fixed framing makes tuple boundaries
+/// unambiguous and prevents a target/value fault from preserving the final UI
+/// fingerprint merely because calldata stayed unchanged.
+const BATCH_MEMBER_COMMIT_DOMAIN: &[u8] = b"PQSigner/batch-member/v1";
+const BATCH_FINAL_COMMIT_DOMAIN: &[u8] = b"PQSigner/batch-final/v1";
+
+#[must_use]
+pub fn batch_member_commitment(
+    index: usize,
+    target: &[u8; 20],
+    value: &[u8; 32],
+    calldata_digest: &[u8; 32],
+) -> Option<[u8; 32]> {
+    let index = u64::try_from(index).ok()?;
+    let mut frame = [0u8; BATCH_MEMBER_COMMIT_DOMAIN.len() + 8 + 20 + 32 + 32];
+    let mut p = 0usize;
+    frame[p..p + BATCH_MEMBER_COMMIT_DOMAIN.len()].copy_from_slice(BATCH_MEMBER_COMMIT_DOMAIN);
+    p += BATCH_MEMBER_COMMIT_DOMAIN.len();
+    frame[p..p + 8].copy_from_slice(&index.to_be_bytes());
+    p += 8;
+    frame[p..p + 20].copy_from_slice(target);
+    p += 20;
+    frame[p..p + 32].copy_from_slice(value);
+    p += 32;
+    frame[p..p + 32].copy_from_slice(calldata_digest);
+    Some(keccak256(&frame))
+}
+
+/// Finalize an ordered set of already-computed member commitments. The count
+/// is included independently rather than inferred from byte length so a
+/// skipped member-loop backedge cannot preserve the authorization digest.
+#[must_use]
+pub fn batch_tuple_commitment_from_members(members: &[[u8; 32]]) -> Option<[u8; 32]> {
+    if members.is_empty() || members.len() > pqsigner_proto::MAX_BATCH_TXS {
+        return None;
+    }
+    let count = u64::try_from(members.len()).ok()?;
+    let mut frame = [0u8; BATCH_FINAL_COMMIT_DOMAIN.len() + 8 + pqsigner_proto::MAX_BATCH_TXS * 32];
+    let mut p = 0usize;
+    frame[p..p + BATCH_FINAL_COMMIT_DOMAIN.len()].copy_from_slice(BATCH_FINAL_COMMIT_DOMAIN);
+    p += BATCH_FINAL_COMMIT_DOMAIN.len();
+    frame[p..p + 8].copy_from_slice(&count.to_be_bytes());
+    p += 8;
+    let mut i = 0usize;
+    while i < members.len() {
+        frame[p..p + 32].copy_from_slice(&members[i]);
+        p += 32;
+        i += 1;
+    }
+    Some(keccak256(&frame[..p]))
+}
+
+/// Compute the final commitment directly from authoritative tuple slices.
+#[must_use]
+pub fn batch_tuple_commitment(txs: &[BatchInnerTx<'_>]) -> Option<[u8; 32]> {
+    if txs.is_empty() || txs.len() > pqsigner_proto::MAX_BATCH_TXS {
+        return None;
+    }
+    let mut members = [[0u8; 32]; pqsigner_proto::MAX_BATCH_TXS];
+    let mut i = 0usize;
+    while i < txs.len() {
+        let calldata_digest = pqsigner_tx_core::erc8213::calldata_digest(txs[i].data);
+        members[i] = batch_member_commitment(i, &txs[i].to, &txs[i].value, &calldata_digest)?;
+        i += 1;
+    }
+    batch_tuple_commitment_from_members(&members[..txs.len()])
+}
+
+fn read_batch_word(buf: &[u8], pos: usize) -> Option<&[u8; WORD]> {
+    let end = pos.checked_add(WORD)?;
+    buf.get(pos..end)?.try_into().ok()
+}
+
+fn read_batch_u64_word(buf: &[u8], pos: usize) -> Option<u64> {
+    let word = read_batch_word(buf, pos)?;
+    if word[..WORD - 8].iter().any(|&b| b != 0) {
+        return None;
+    }
+    Some(u64::from_be_bytes(word[WORD - 8..].try_into().ok()?))
+}
+
+/// Independently parse the exact live ABI bytes produced after confirmation
+/// and reconstruct their tuple commitment. This deliberately does not reuse
+/// the encoder's `BatchInnerTx` source: selector, owner/counter words, offsets,
+/// lengths, address padding, dynamic offsets, data padding, exact consumption,
+/// count, order, target, value and calldata all have to survive in the bytes
+/// that are actually hashed for signing.
+#[must_use]
+pub fn execute_batch_tuple_commitment_from_calldata(
+    calldata: &[u8],
+    expected_owner_index: u64,
+    expected_offchain_count: u64,
+    expected_member_count: usize,
+) -> Option<[u8; 32]> {
+    if expected_member_count == 0 || expected_member_count > pqsigner_proto::MAX_BATCH_TXS {
+        return None;
+    }
+    if calldata.get(..SELECTOR_LEN)? != EXECUTE_BATCH_SELECTOR {
+        return None;
+    }
+    if read_batch_u64_word(calldata, SELECTOR_LEN)? != expected_owner_index
+        || read_batch_u64_word(calldata, SELECTOR_LEN + WORD)? != expected_offchain_count
+    {
+        return None;
+    }
+
+    let head_len = 5usize.checked_mul(WORD)?;
+    let array_size = WORD.checked_add(expected_member_count.checked_mul(WORD)?)?;
+    let targets_rel = head_len;
+    let values_rel = targets_rel.checked_add(array_size)?;
+    let datas_rel = values_rel.checked_add(array_size)?;
+    if read_batch_u64_word(calldata, SELECTOR_LEN + 2 * WORD)? != u64::try_from(targets_rel).ok()?
+        || read_batch_u64_word(calldata, SELECTOR_LEN + 3 * WORD)?
+            != u64::try_from(values_rel).ok()?
+        || read_batch_u64_word(calldata, SELECTOR_LEN + 4 * WORD)?
+            != u64::try_from(datas_rel).ok()?
+    {
+        return None;
+    }
+
+    let targets_start = SELECTOR_LEN.checked_add(targets_rel)?;
+    let values_start = SELECTOR_LEN.checked_add(values_rel)?;
+    let datas_start = SELECTOR_LEN.checked_add(datas_rel)?;
+    let expected_count_u64 = u64::try_from(expected_member_count).ok()?;
+    if read_batch_u64_word(calldata, targets_start)? != expected_count_u64
+        || read_batch_u64_word(calldata, values_start)? != expected_count_u64
+        || read_batch_u64_word(calldata, datas_start)? != expected_count_u64
+    {
+        return None;
+    }
+
+    let targets_data = targets_start.checked_add(WORD)?;
+    let values_data = values_start.checked_add(WORD)?;
+    let datas_offsets = datas_start.checked_add(WORD)?;
+    let mut cursor = expected_member_count.checked_mul(WORD)?;
+    let mut members = [[0u8; 32]; pqsigner_proto::MAX_BATCH_TXS];
+    let mut i = 0usize;
+    while i < expected_member_count {
+        let target_word =
+            read_batch_word(calldata, targets_data.checked_add(i.checked_mul(WORD)?)?)?;
+        if target_word[..WORD - 20].iter().any(|&b| b != 0) {
+            return None;
+        }
+        let mut target = [0u8; 20];
+        target.copy_from_slice(&target_word[WORD - 20..]);
+        let value = *read_batch_word(calldata, values_data.checked_add(i.checked_mul(WORD)?)?)?;
+
+        let offset_pos = datas_offsets.checked_add(i.checked_mul(WORD)?)?;
+        if read_batch_u64_word(calldata, offset_pos)? != u64::try_from(cursor).ok()? {
+            return None;
+        }
+        let payload_pos = datas_offsets.checked_add(cursor)?;
+        let data_len_u64 = read_batch_u64_word(calldata, payload_pos)?;
+        let data_len = usize::try_from(data_len_u64).ok()?;
+        if data_len > pqsigner_proto::MAX_TX_LEN {
+            return None;
+        }
+        let data_start = payload_pos.checked_add(WORD)?;
+        let data_end = data_start.checked_add(data_len)?;
+        let data = calldata.get(data_start..data_end)?;
+        let padded_len = data_len.checked_add(WORD - 1)? & !(WORD - 1);
+        let padded_end = data_start.checked_add(padded_len)?;
+        if calldata.get(data_end..padded_end)?.iter().any(|&b| b != 0) {
+            return None;
+        }
+        let digest = pqsigner_tx_core::erc8213::calldata_digest(data);
+        members[i] = batch_member_commitment(i, &target, &value, &digest)?;
+        cursor = cursor.checked_add(WORD)?.checked_add(padded_len)?;
+        i += 1;
+    }
+    if datas_offsets.checked_add(cursor)? != calldata.len() {
+        return None;
+    }
+    batch_tuple_commitment_from_members(&members[..expected_member_count])
 }
 
 /// Build the canonical
@@ -608,17 +786,16 @@ pub fn parse_header(buf: &[u8]) -> Result<AaUserOpParams, WireParseError> {
 /// `keccak256("")` — the empty-bytes hash used for `initCode = "0x"` and
 /// `paymasterAndData = "0x"` in the v0.6 userOpHash.
 pub const KECCAK_EMPTY: [u8; 32] = [
-    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03,
-    0xc0, 0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85,
-    0xa4, 0x70,
+    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
+    0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
 ];
 
 /// EntryPoint v0.6 canonical singleton address
 /// (`0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789`). Deployed via Nick's
 /// method on every major EVM chain.
 pub const ENTRY_POINT_V06: [u8; 20] = [
-    0x5F, 0xF1, 0x37, 0xD4, 0xb0, 0xFD, 0xCD, 0x49, 0xDc, 0xA3, 0x0c, 0x7C, 0xF5, 0x7E, 0x57,
-    0x8a, 0x02, 0x6d, 0x27, 0x89,
+    0x5F, 0xF1, 0x37, 0xD4, 0xb0, 0xFD, 0xCD, 0x49, 0xDc, 0xA3, 0x0c, 0x7C, 0xF5, 0x7E, 0x57, 0x8a,
+    0x02, 0x6d, 0x27, 0x89,
 ];
 
 // ---------------------------------------------------------------------------
@@ -941,8 +1118,8 @@ mod kani_harnesses {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::vec::Vec;
     use std::vec;
+    use std::vec::Vec;
 
     // -- helpers ----------------------------------------------------------
 
@@ -951,8 +1128,8 @@ mod tests {
         AaUserOpParams {
             sender: [0x42; 20],
             entry_point: [
-                0x5f, 0xf1, 0x37, 0xd4, 0xb0, 0xfd, 0xcd, 0x49, 0xdc, 0xa3,
-                0x0c, 0x7c, 0xf5, 0x7e, 0x57, 0x8a, 0x02, 0x6d, 0x27, 0x89,
+                0x5f, 0xf1, 0x37, 0xd4, 0xb0, 0xfd, 0xcd, 0x49, 0xdc, 0xa3, 0x0c, 0x7c, 0xf5, 0x7e,
+                0x57, 0x8a, 0x02, 0x6d, 0x27, 0x89,
             ],
             chain_id: 1,
             nonce: u256_from_u64(1),
@@ -986,8 +1163,8 @@ mod tests {
             max_fee_per_gas: u256_from_u64(50_000_000_000),
             gas_limit: 21_000,
             to: Some([
-                0xab, 0xcd, 0xef, 0x12, 0x34, 0x56, 0x78, 0x90, 0xab, 0xcd,
-                0xef, 0x12, 0x34, 0x56, 0x78, 0x90, 0xab, 0xcd, 0xef, 0x12,
+                0xab, 0xcd, 0xef, 0x12, 0x34, 0x56, 0x78, 0x90, 0xab, 0xcd, 0xef, 0x12, 0x34, 0x56,
+                0x78, 0x90, 0xab, 0xcd, 0xef, 0x12,
             ]),
             value: U256(value),
             data_len: 0,
@@ -1005,9 +1182,8 @@ mod tests {
 
     /// keccak256("") — used for empty initCode and paymasterAndData.
     const TEST_KECCAK_EMPTY: [u8; 32] = [
-        0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e,
-        0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0, 0xe5, 0x00, 0xb6, 0x53,
-        0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85,
+        0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03,
+        0xc0, 0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85,
         0xa4, 0x70,
     ];
 
@@ -1083,14 +1259,15 @@ mod tests {
         let data = hex::decode(
             "a9059cbb\
              000000000000000000000000742d35cc6634c0532925a3b844bc454e4438f44e\
-             000000000000000000000000000000000000000000000000000000003b9aca00"
-        ).unwrap();
+             000000000000000000000000000000000000000000000000000000003b9aca00",
+        )
+        .unwrap();
         assert_eq!(data.len(), 68);
 
         let mut tx = test_value_transfer_tx();
         tx.to = Some([
-            0xa0, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1,
-            0x9d, 0x4a, 0x2e, 0x9e, 0xb0, 0xce, 0x36, 0x06, 0xeb, 0x48,
+            0xa0, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9d, 0x4a, 0x2e, 0x9e,
+            0xb0, 0xce, 0x36, 0x06, 0xeb, 0x48,
         ]);
         tx.value = U256::zero();
         tx.data_len = 68;
@@ -1159,8 +1336,9 @@ mod tests {
              000000000000000000000000abcdef1234567890abcdef1234567890abcdef12\
              0000000000000000000000000000000000000000000000000de0b6b3a7640000\
              00000000000000000000000000000000000000000000000000000000000000a0\
-             0000000000000000000000000000000000000000000000000000000000000000"
-        ).unwrap();
+             0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .unwrap();
         assert_eq!(out, expected.as_slice());
     }
 
@@ -1171,17 +1349,17 @@ mod tests {
     #[test]
     fn test_hash_known_vector() {
         let params = test_params();
-        let call_data_hash = hex::decode(
-            "da854735bd0e0dc5ee6409e7d6e496a35a2988be7199131994e06ff812d91c9c"
-        ).unwrap();
+        let call_data_hash =
+            hex::decode("da854735bd0e0dc5ee6409e7d6e496a35a2988be7199131994e06ff812d91c9c")
+                .unwrap();
         let mut cdh = [0u8; 32];
         cdh.copy_from_slice(&call_data_hash);
 
         let hash = compute_user_op_hash(&params, &cdh);
 
-        let expected = hex::decode(
-            "b0ac4b1db1042ca2bd8c1609a6da834b0c0d9d904815cdad2e544ac881ff7579"
-        ).unwrap();
+        let expected =
+            hex::decode("b0ac4b1db1042ca2bd8c1609a6da834b0c0d9d904815cdad2e544ac881ff7579")
+                .unwrap();
         assert_eq!(hash.as_slice(), expected.as_slice());
     }
 
@@ -1243,12 +1421,24 @@ mod tests {
         assert_eq!(parsed.chain_id, original.chain_id);
         assert_eq!(parsed.nonce.0, original.nonce.0);
         assert_eq!(parsed.call_gas_limit.0, original.call_gas_limit.0);
-        assert_eq!(parsed.verification_gas_limit.0, original.verification_gas_limit.0);
-        assert_eq!(parsed.pre_verification_gas.0, original.pre_verification_gas.0);
+        assert_eq!(
+            parsed.verification_gas_limit.0,
+            original.verification_gas_limit.0
+        );
+        assert_eq!(
+            parsed.pre_verification_gas.0,
+            original.pre_verification_gas.0
+        );
         assert_eq!(parsed.max_fee_per_gas.0, original.max_fee_per_gas.0);
-        assert_eq!(parsed.max_priority_fee_per_gas.0, original.max_priority_fee_per_gas.0);
+        assert_eq!(
+            parsed.max_priority_fee_per_gas.0,
+            original.max_priority_fee_per_gas.0
+        );
         assert_eq!(parsed.init_code_hash, original.init_code_hash);
-        assert_eq!(parsed.paymaster_and_data_hash, original.paymaster_and_data_hash);
+        assert_eq!(
+            parsed.paymaster_and_data_hash,
+            original.paymaster_and_data_hash
+        );
     }
 
     #[test]
@@ -1381,13 +1571,20 @@ mod tests {
         let targets_off = 4 + 160;
         assert_eq!(out[targets_off + 31], 1);
         // address at targets+32, left-padded
-        assert!(out[targets_off + 32..targets_off + 32 + 12].iter().all(|&b| b == 0));
-        assert_eq!(&out[targets_off + 32 + 12..targets_off + 32 + 32], &[0xAA; 20]);
+        assert!(out[targets_off + 32..targets_off + 32 + 12]
+            .iter()
+            .all(|&b| b == 0));
+        assert_eq!(
+            &out[targets_off + 32 + 12..targets_off + 32 + 32],
+            &[0xAA; 20]
+        );
 
         // values length = 1, value = 0
         let values_off = targets_off + 64;
         assert_eq!(out[values_off + 31], 1);
-        assert!(out[values_off + 32..values_off + 64].iter().all(|&b| b == 0));
+        assert!(out[values_off + 32..values_off + 64]
+            .iter()
+            .all(|&b| b == 0));
 
         // datas length = 1, inner offset = 32 (1*32)
         let datas_off = values_off + 64;
@@ -1450,7 +1647,9 @@ mod tests {
         let v0_lo = &out[values_off + 32 + 28..values_off + 64];
         assert_eq!(v0_lo, &[0xde, 0xad, 0xbe, 0xef]);
         // value1 = 0
-        assert!(out[values_off + 64..values_off + 96].iter().all(|&b| b == 0));
+        assert!(out[values_off + 64..values_off + 96]
+            .iter()
+            .all(|&b| b == 0));
 
         // datas length = 2
         let datas_off = values_off + 32 + n * 32;
@@ -1516,7 +1715,7 @@ mod tests {
         let mut expected = [0u8; 388];
         expected[..4].copy_from_slice(&EXECUTE_BATCH_SELECTOR);
         expected[4 + 31] = 1; // ownerIndex
-        // offsets
+                              // offsets
         expected[4 + 64 + 31] = 0xa0;
         expected[4 + 96 + 31] = 0xe0;
         expected[4 + 128 + 30] = 0x01;
@@ -1554,5 +1753,98 @@ mod tests {
         }
         let r = reconstruct_execute_batch_calldata(1, 0, &v);
         assert_eq!(r.unwrap_err(), BatchAaError::CallDataTooLong);
+    }
+
+    #[test]
+    fn batch_tuple_commitment_binds_count_order_target_value_and_data() {
+        let d0 = [0x11u8, 0x22, 0x33, 0x44];
+        let d1 = [0xAAu8; 17];
+        let base_txs = [batch_tx(0x10, 7, &d0), batch_tx(0x20, 9, &d1)];
+        let base = batch_tuple_commitment(&base_txs).unwrap();
+
+        let target_changed = [batch_tx(0x11, 7, &d0), batch_tx(0x20, 9, &d1)];
+        assert_ne!(base, batch_tuple_commitment(&target_changed).unwrap());
+        let value_changed = [batch_tx(0x10, 8, &d0), batch_tx(0x20, 9, &d1)];
+        assert_ne!(base, batch_tuple_commitment(&value_changed).unwrap());
+        let d0_changed = [0x11u8, 0x22, 0x33, 0x45];
+        let data_changed = [batch_tx(0x10, 7, &d0_changed), batch_tx(0x20, 9, &d1)];
+        assert_ne!(base, batch_tuple_commitment(&data_changed).unwrap());
+        let reordered = [batch_tx(0x20, 9, &d1), batch_tx(0x10, 7, &d0)];
+        assert_ne!(base, batch_tuple_commitment(&reordered).unwrap());
+        assert_ne!(base, batch_tuple_commitment(&base_txs[..1]).unwrap());
+    }
+
+    #[test]
+    fn live_execute_batch_parser_matches_encoder_for_every_supported_count() {
+        let d0 = [0x01u8; 0];
+        let d1 = [0x12u8; 1];
+        let d2 = [0x23u8; 32];
+        let d3 = [0x34u8; 65];
+        let txs = [
+            batch_tx(0x10, 1, &d0),
+            batch_tx(0x20, 2, &d1),
+            batch_tx(0x30, 3, &d2),
+            batch_tx(0x40, 4, &d3),
+        ];
+        for count in 1..=pqsigner_proto::MAX_BATCH_TXS {
+            let expected = batch_tuple_commitment(&txs[..count]).unwrap();
+            let encoded = reconstruct_execute_batch_calldata(7, 19, &txs[..count]).unwrap();
+            assert_eq!(
+                execute_batch_tuple_commitment_from_calldata(encoded.as_slice(), 7, 19, count,),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn live_execute_batch_parser_rejects_structure_and_detects_tuple_mutations() {
+        let d0 = [0x12u8, 0x34, 0x56, 0x78];
+        let d1 = [0xABu8; 36];
+        let txs = [batch_tx(0x11, 7, &d0), batch_tx(0x22, 9, &d1)];
+        let encoded = reconstruct_execute_batch_calldata(3, 17, &txs).unwrap();
+        let bytes = encoded.as_slice();
+        let expected = batch_tuple_commitment(&txs).unwrap();
+        let authorizes = |candidate: &[u8]| {
+            execute_batch_tuple_commitment_from_calldata(candidate, 3, 17, 2) == Some(expected)
+        };
+        assert!(authorizes(bytes));
+
+        // Fixed head and structural framing.
+        for pos in [0usize, 35, 67, 99, 164 + 31, 388 + 31, 452 + 31] {
+            let mut changed = bytes.to_vec();
+            changed[pos] ^= 1;
+            assert!(!authorizes(&changed), "mutation at byte {pos} survived");
+        }
+
+        // Exact semantic tuple components: target, value, and calldata.
+        for pos in [196 + 12, 292 + 31, 484] {
+            let mut changed = bytes.to_vec();
+            changed[pos] ^= 1;
+            assert!(
+                !authorizes(&changed),
+                "tuple mutation at byte {pos} survived"
+            );
+        }
+
+        // Canonical zero padding and exact total consumption are mandatory.
+        let mut dirty_padding = bytes.to_vec();
+        dirty_padding[484 + d0.len()] = 1;
+        assert!(!authorizes(&dirty_padding));
+        let mut trailing = bytes.to_vec();
+        trailing.push(0);
+        assert!(!authorizes(&trailing));
+
+        assert_eq!(
+            execute_batch_tuple_commitment_from_calldata(bytes, 4, 17, 2),
+            None
+        );
+        assert_eq!(
+            execute_batch_tuple_commitment_from_calldata(bytes, 3, 18, 2),
+            None
+        );
+        assert_eq!(
+            execute_batch_tuple_commitment_from_calldata(bytes, 3, 17, 1),
+            None
+        );
     }
 }

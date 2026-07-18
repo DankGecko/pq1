@@ -24,11 +24,13 @@
 //! test is what that recipe's step 2 (`cargo test -p dbgen --test
 //! erc7730_roundtrip`) refers to.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use dbgen::erc7730::{
-    build_db, build_db_tolerant, load_policy, round_trip_check, try_compile_one, Erc7730BuildResult,
+    build_db, build_db_tolerant, build_db_tolerant_with_erc20_capabilities, load_policy,
+    round_trip_check, try_compile_one, Erc7730BuildResult,
 };
 use pqsigner_erc7730::abi::container_field;
 use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712};
@@ -60,8 +62,15 @@ fn build_registry() -> Erc7730BuildResult {
     let root = workspace_root();
     let reg = root.join("secure/data/erc7730-registry");
     let policy = root.join("secure/data/erc7730/policy.toml");
-    let (res, _skips) = build_db_tolerant(&reg.join("registry"), &policy, Some(&reg))
-        .expect("build registry corpus");
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+        .expect("build exact production ERC20 capability corpus");
+    let (res, _skips) = build_db_tolerant_with_erc20_capabilities(
+        &reg.join("registry"),
+        &policy,
+        Some(&reg),
+        &erc20.capabilities,
+    )
+    .expect("build registry corpus");
     res
 }
 
@@ -70,6 +79,142 @@ fn build_e2e() -> Erc7730BuildResult {
     let dir = root.join("secure/data/erc7730-e2e");
     let policy = root.join("secure/data/erc7730/policy.toml");
     build_db(&dir, &policy).expect("build E2E corpus")
+}
+
+#[test]
+fn registry_runtime_token_path_keeps_static_intent_without_interpolation() {
+    let result = build_registry();
+    let entry = result
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-PositionsManager.json")
+                && entry.chain_id == 1
+        })
+        .expect("mainnet Flying Tulip PositionsManager leaf");
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated leaf parses on device");
+
+    let deposit_hash = keccak256(b"deposit(address,uint256)");
+    let deposit_selector: [u8; 4] = deposit_hash[..4].try_into().unwrap();
+    let deposit = ir
+        .find_format_by_selector(&deposit_selector)
+        .unwrap()
+        .expect("deposit format survives catalogue policy");
+    assert_eq!(deposit.intent, b"Deposit collateral");
+    let first = deposit.fields().next().unwrap().unwrap();
+    let params = parse_params(&ir, first.param_off).unwrap();
+    assert!(
+        params.interpolated_intent.is_none(),
+        "calldata-derived token identity must not authorize a value-bearing banner"
+    );
+
+    // Address interpolation is outside v1. It retains the ordinary static
+    // intent and emits no token program rather than resolving an address path
+    // directly in the banner renderer.
+    let approve_hash = keccak256(b"approveBorrow(address,address,uint256)");
+    let approve_selector: [u8; 4] = approve_hash[..4].try_into().unwrap();
+    let approve = ir
+        .find_format_by_selector(&approve_selector)
+        .unwrap()
+        .expect("approveBorrow format survives with static intent");
+    assert_eq!(approve.intent, b"Approve borrowing");
+    for field in approve.fields() {
+        let field = field.unwrap();
+        assert!(parse_params(&ir, field.param_off)
+            .unwrap()
+            .interpolated_intent
+            .is_none());
+    }
+}
+
+#[test]
+fn registry_scalar_interpolation_enrollment_is_explicit_and_bounded() {
+    let result = build_registry();
+    let reviewed_candidates: BTreeSet<(String, [u8; 4])> = [
+        ("calldata-EpochRewardsVault.json", [0x6e, 0x55, 0x3f, 0x65]),
+        ("calldata-EpochRewardsVault.json", [0xb4, 0x60, 0xaf, 0x94]),
+        (
+            "calldata-LayerswapDepository.json",
+            [0xf4, 0x37, 0x1f, 0x63],
+        ),
+        ("calldata-MintAndRedeem.json", [0xa6, 0x47, 0xe8, 0xec]),
+        ("calldata-MintAndRedeem.json", [0xea, 0x20, 0x92, 0xf3]),
+        ("calldata-PositionsManager.json", [0x22, 0x86, 0x7d, 0x78]),
+        ("calldata-PositionsManager.json", [0x47, 0xe7, 0xef, 0x24]),
+        ("calldata-PositionsManager.json", [0x4b, 0x8a, 0x35, 0x29]),
+        ("calldata-PositionsManager.json", [0xf3, 0xfe, 0xf3, 0xa3]),
+        ("calldata-wstETH.json", [0xde, 0x0e, 0x9a, 0x3e]),
+        ("calldata-wstETH.json", [0xea, 0x59, 0x8c, 0xb0]),
+    ]
+    .into_iter()
+    .map(|(source, selector)| (source.to_string(), selector))
+    .collect();
+    let mut enrolled = BTreeSet::new();
+    let mut leaf_format_count = 0usize;
+    let mut candidate_deployment_count = 0usize;
+    for entry in &result.entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated registry leaf parses");
+        for format in ir.format_iter() {
+            let format = format.expect("validated format");
+            let source = entry
+                .source
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("utf8 registry filename")
+                .to_string();
+            candidate_deployment_count +=
+                usize::from(reviewed_candidates.contains(&(source.clone(), format.selector)));
+            let has_program = format.fields().any(|field| {
+                let field = field.expect("validated field");
+                parse_params(&ir, field.param_off)
+                    .expect("validated params")
+                    .interpolated_intent
+                    .is_some()
+            });
+            if has_program {
+                leaf_format_count += 1;
+                enrolled.insert((source, entry.chain_id, format.selector));
+            }
+        }
+    }
+
+    let expected: BTreeSet<(String, u64, [u8; 4])> = [
+        (
+            "calldata-EpochRewardsVault.json",
+            1,
+            [0x6e, 0x55, 0x3f, 0x65],
+        ),
+        (
+            "calldata-EpochRewardsVault.json",
+            1,
+            [0xb4, 0x60, 0xaf, 0x94],
+        ),
+        ("calldata-MintAndRedeem.json", 1, [0xa6, 0x47, 0xe8, 0xec]),
+        ("calldata-MintAndRedeem.json", 1, [0xea, 0x20, 0x92, 0xf3]),
+        ("calldata-wstETH.json", 1, [0xde, 0x0e, 0x9a, 0x3e]),
+        ("calldata-wstETH.json", 1, [0xea, 0x59, 0x8c, 0xb0]),
+    ]
+    .into_iter()
+    .map(|(source, chain_id, selector)| (source.to_string(), chain_id, selector))
+    .collect();
+    assert_eq!(
+        enrolled, expected,
+        "a registry update changed the explicitly reviewed scalar-interpolation set"
+    );
+    assert_eq!(
+        leaf_format_count, 6,
+        "only covered deployment-static token identities may retain interpolation"
+    );
+    assert_eq!(
+        candidate_deployment_count, 78,
+        "reviewed candidate set drift"
+    );
+    assert_eq!(
+        candidate_deployment_count - leaf_format_count,
+        72,
+        "deployment-dynamic or metadata-uncovered candidates must omit the tag"
+    );
 }
 
 #[test]
@@ -153,9 +298,7 @@ fn registry_1inch_native_currency_list_is_authenticated_in_order() {
         })
         .expect("the static 1inch V4 ETH formats should now compile");
     let ir = Erc7730Ir::parse(&entry.ir_bytes).unwrap();
-    let digest = keccak256(
-        b"clipperSwap(address,address,uint256,uint256)",
-    );
+    let digest = keccak256(b"clipperSwap(address,address,uint256,uint256)");
     let selector = [digest[0], digest[1], digest[2], digest[3]];
     let format = ir
         .format_iter()
@@ -204,7 +347,11 @@ fn registry_flying_tulip_nft_collections_expand_injectively() {
                 .is_some_and(|name| nft_sources.contains(&name))
         })
         .collect();
-    assert_eq!(entries.len(), 7, "three real descriptors expand to seven deployments");
+    assert_eq!(
+        entries.len(),
+        7,
+        "three real descriptors expand to seven deployments"
+    );
 
     let mut format_count = 0usize;
     let mut nft_field_count = 0usize;
@@ -220,11 +367,21 @@ fn registry_flying_tulip_nft_collections_expand_injectively() {
                         params.nft_collection.is_some() ^ params.nft_collection_path.is_some(),
                         "every accepted nftName field has one authenticated collection identity"
                     );
+                    if let Some(path) = params.nft_collection_path {
+                        assert_eq!(
+                            path,
+                            pqsigner_erc7730::render::params::NFT_COLLECTION_TO_PATH.as_slice(),
+                            "dbgen must emit only the exact device-supported @.to program"
+                        );
+                    }
                 }
             }
         }
     }
-    assert_eq!(format_count, 12, "only the twelve bounded static formats expand");
+    assert_eq!(
+        format_count, 12,
+        "only the twelve bounded static formats expand"
+    );
     assert_eq!(nft_field_count, 12);
 }
 
@@ -1065,7 +1222,7 @@ fn seed_corpus_path_programs_parse() {
 ///   - `pool[param_off]` is the blob length byte (or `param_off == 0`).
 ///   - The inner stream is `[tag][len][payload]*` with cursor staying
 ///     within `blob_len` bytes.
-///   - Every tag is in the known 0x30..=0x40 space.
+///   - Every tag is in the known 0x30..=0x47 space.
 ///   - Fixed-width tags carry the documented payload size.
 ///
 /// This complements the per-renderer unit tests in
@@ -1115,9 +1272,9 @@ fn seed_corpus_param_tlv_blobs_are_well_formed() {
                         field.label
                     );
                     // Tag must be in the documented contiguous space through
-                    // 0x45 (`PARAM_NFT_COLLECTION_PATH`).
+                    // 0x47 (`PARAM_TERMINAL_KIND`).
                     assert!(
-                        (0x30u8..=0x45).contains(&tag),
+                        (0x30u8..=0x47).contains(&tag),
                         "unknown TLV tag 0x{:02X} in {:?} field {:?}",
                         tag,
                         ir.contract,
@@ -1133,7 +1290,7 @@ fn seed_corpus_param_tlv_blobs_are_well_formed() {
                         0x32 => {
                             assert_eq!(len, 32, "PARAM_THRESHOLD must be 32 B in {:?}", field.label)
                         }
-                        0x34 | 0x35 | 0x36 | 0x38 | 0x3A | 0x43 => assert_eq!(
+                        0x34 | 0x35 | 0x36 | 0x38 | 0x3A | 0x43 | 0x47 => assert_eq!(
                             len, 1,
                             "fixed-1-byte tag 0x{:02X} in {:?}",
                             tag, field.label
@@ -1147,9 +1304,14 @@ fn seed_corpus_param_tlv_blobs_are_well_formed() {
                             field.label
                         ),
                         0x3D => assert!(len > 0, "PARAM_NESTED_CALLEE path must be non-empty"),
-                        0x45 => assert!(
+                        0x45 => assert_eq!(
+                            &body[cursor..cursor + len],
+                            pqsigner_erc7730::render::params::NFT_COLLECTION_TO_PATH.as_slice(),
+                            "compiler/device NFT collection-path allowlists diverged"
+                        ),
+                        0x46 => assert!(
                             len > 0,
-                            "PARAM_NFT_COLLECTION_PATH must be non-empty"
+                            "PARAM_INTERPOLATED_INTENT must be non-empty"
                         ),
                         0x3F => assert!(
                             (1..=255).contains(&len),

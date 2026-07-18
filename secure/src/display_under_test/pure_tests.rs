@@ -15,24 +15,24 @@
 
 use core::cmp::min;
 
-use super::{Pages, MAX_PAGES};
 use super::primitives::{
-    chain_name, format_u64, hex_nibble, native_ticker, write_addr_full, write_addr_full_or_name,
-    write_calldata_hash_rows, write_chain, write_data_len_row, write_eth_two_rows,
-    write_fee_budget_row, write_gas, write_gwei, write_line, write_nonce_row,
-    write_native_amount_two_rows, write_native_currency_row, write_native_fee_budget_row,
-    write_selector_row, write_tip_row, write_token_amount_two_rows, write_erc20_header,
-    write_token_name, try_write_amount_single_row, write_amount_two_rows, AmountFit,
+    chain_name, format_u64, hex_nibble, native_ticker, try_write_amount_single_row,
+    write_addr_full, write_addr_full_or_name, write_amount_two_rows, write_calldata_hash_rows,
+    write_chain, write_data_len_row, write_erc20_header, write_eth_two_rows, write_fee_budget_row,
+    write_gas, write_gwei, write_line, write_native_amount_two_rows, write_native_currency_row,
+    write_native_fee_budget_row, write_nonce_row, write_selector_row, write_tip_row,
+    write_token_amount_two_rows, write_token_name, AmountFit,
 };
+use super::{Pages, MAX_PAGES};
 
+use super::batch::{build_final_summary_pages, wrap_pages_with_batch_banner};
 use super::blind_sign::render_blind_sign_pages;
 use super::eip1271::{render_eip1271_personal_sign_pages, render_eip1271_raw32_pages};
 use super::erc20_known::render_erc20_known_pages;
 use super::erc20_unknown::render_erc20_unknown_pages;
 use super::slot_rotation::build_slot_rotation_pages;
-use super::value_transfer::render_pages;
-use super::batch::{build_final_summary_pages, wrap_pages_with_batch_banner};
 use super::typed_call::try_render_typed_call;
+use super::value_transfer::render_pages;
 
 use crate::erc20::bundle::Erc20Metadata;
 use crate::erc20::calldata::Erc20Call;
@@ -87,7 +87,10 @@ mod fixtures {
         }
     }
 
-    pub fn self_attest_selector(text_sig: &'static [u8], selector: [u8; 4]) -> SelectorMeta<'static> {
+    pub fn self_attest_selector(
+        text_sig: &'static [u8],
+        selector: [u8; 4],
+    ) -> SelectorMeta<'static> {
         SelectorMeta {
             selector,
             text_sig,
@@ -122,7 +125,10 @@ mod row_helpers {
                     assert!(
                         (0x20..=0x7E).contains(&b),
                         "page {} row {} col {} byte {:#x} is not printable ASCII",
-                        p, r, c, b
+                        p,
+                        r,
+                        c,
+                        b
                     );
                 }
             }
@@ -141,8 +147,10 @@ fn positive_write_line_short_fits_then_pads() {
     let mut row = [0u8; DISPLAY_COLS];
     write_line(&mut row, "hi");
     assert_eq!(&row[..2], b"hi");
-    assert!(row[2..].iter().all(|&b| b == b' '),
-        "tail must be space-padded");
+    assert!(
+        row[2..].iter().all(|&b| b == b' '),
+        "tail must be space-padded"
+    );
 }
 
 #[test]
@@ -165,7 +173,10 @@ fn positive_write_line_truncates_oversize() {
 fn positive_write_line_empty_zeros_to_spaces() {
     let mut row = [b'X'; DISPLAY_COLS];
     write_line(&mut row, "");
-    assert!(row.iter().all(|&b| b == b' '), "empty text must blank the row");
+    assert!(
+        row.iter().all(|&b| b == b' '),
+        "empty text must blank the row"
+    );
 }
 
 #[test]
@@ -344,8 +355,7 @@ fn positive_write_addr_full_renders_40_hex() {
     assert_eq!(hex_chars.len(), 40);
     let s = String::from_utf8(hex_chars).unwrap();
     assert_eq!(
-        s,
-        "000102030405060708090a0b0c0d0e0f10111213",
+        s, "000102030405060708090a0b0c0d0e0f10111213",
         "full 40 hex chars must be painted across three rows"
     );
 }
@@ -398,7 +408,11 @@ fn f14_3_nonzero_amount_collapsing_to_zero_overflows() {
     let mut r2 = [b' '; DISPLAY_COLS];
     // Amount path (reject_zero_collapse = true) → Overflow.
     let fit = write_amount_two_rows(&mut r1, &mut r2, &v, 30, 6, true, true, "TKN");
-    assert_eq!(fit, AmountFit::Overflow, "nonzero amount collapsing to 0 must overflow");
+    assert_eq!(
+        fit,
+        AmountFit::Overflow,
+        "nonzero amount collapsing to 0 must overflow"
+    );
     // Single-row amount path likewise refuses.
     let mut row = [b' '; DISPLAY_COLS];
     let ok = try_write_amount_single_row(&mut row, &v, 30, 6, true, true, "TKN");
@@ -429,22 +443,35 @@ fn positive_write_erc20_header_send_and_approve() {
     let meta = usdc_metadata();
 
     let mut row = [b' '; DISPLAY_COLS];
-    let call = Erc20Call::Transfer { to: [0; 20], amount: u256_from_u64(1) };
+    let call = Erc20Call::Transfer {
+        to: [0; 20],
+        amount: u256_from_u64(1),
+    };
     write_erc20_header(&mut row, &call, &meta);
     assert_eq!(row_str(&row), "Send USDC");
 
     let mut row = [b' '; DISPLAY_COLS];
-    let call = Erc20Call::Approve { spender: [0; 20], amount: u256_from_u64(1) };
+    let call = Erc20Call::Approve {
+        spender: [0; 20],
+        amount: u256_from_u64(1),
+    };
     write_erc20_header(&mut row, &call, &meta);
     assert_eq!(row_str(&row), "Approve USDC");
 
     let mut row = [b' '; DISPLAY_COLS];
-    let call = Erc20Call::Approve { spender: [0; 20], amount: U256::zero() };
+    let call = Erc20Call::Approve {
+        spender: [0; 20],
+        amount: U256::zero(),
+    };
     write_erc20_header(&mut row, &call, &meta);
     assert_eq!(row_str(&row), "Revoke approval");
 
     let mut row = [b' '; DISPLAY_COLS];
-    let call = Erc20Call::TransferFrom { from: [0;20], to: [0;20], amount: u256_from_u64(1) };
+    let call = Erc20Call::TransferFrom {
+        from: [0; 20],
+        to: [0; 20],
+        amount: u256_from_u64(1),
+    };
     write_erc20_header(&mut row, &call, &meta);
     assert_eq!(row_str(&row), "From USDC");
 }
@@ -577,13 +604,15 @@ fn positive_blind_sign_calldata_hash_matches_sha256() {
     let row1 = &pages.buf[4][1];
     let row2 = &pages.buf[4][2];
     // Row 1 head = "0x" + first 7 bytes of hash
-    let head_hex = format!("0x{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        expected[0], expected[1], expected[2], expected[3],
-        expected[4], expected[5], expected[6]);
+    let head_hex = format!(
+        "0x{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        expected[0], expected[1], expected[2], expected[3], expected[4], expected[5], expected[6]
+    );
     assert_eq!(&row1[..16], head_hex.as_bytes());
-    let tail_hex = format!("{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        expected[26], expected[27], expected[28],
-        expected[29], expected[30], expected[31]);
+    let tail_hex = format!(
+        "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        expected[26], expected[27], expected[28], expected[29], expected[30], expected[31]
+    );
     assert_eq!(&row2[..4], b"... ");
     assert_eq!(&row2[4..16], tail_hex.as_bytes());
 }
@@ -640,9 +669,19 @@ fn positive_erc20_known_transfer_binds_amount_digits_and_recipient_hex() {
     let pages = render_erc20_known_pages(&tx, &call, &meta, &resolver);
 
     // Amount page (2): the rendered integer digits + symbol, not just "Amount:".
-    let amount = format!("{}|{}", row_str(&pages.buf[2][1]), row_str(&pages.buf[2][2]));
-    assert!(amount.contains("100"), "amount must render the integer 100; got {amount:?}");
-    assert!(amount.contains("USDC"), "amount must carry the symbol; got {amount:?}");
+    let amount = format!(
+        "{}|{}",
+        row_str(&pages.buf[2][1]),
+        row_str(&pages.buf[2][2])
+    );
+    assert!(
+        amount.contains("100"),
+        "amount must render the integer 100; got {amount:?}"
+    );
+    assert!(
+        amount.contains("USDC"),
+        "amount must carry the symbol; got {amount:?}"
+    );
 
     // Recipient page (1): the FULL 40-hex recipient across rows 1-3.
     let want: String = recipient.iter().map(|b| format!("{b:02x}")).collect();
@@ -660,7 +699,10 @@ fn negative_erc20_amount_digits_nonvacuous() {
     let resolver = NameResolver::new();
     let meta = usdc_metadata();
     let mk = |raw: u64| {
-        let call = Erc20Call::Transfer { to: [0x33; 20], amount: u256_from_u64(raw) };
+        let call = Erc20Call::Transfer {
+            to: [0x33; 20],
+            amount: u256_from_u64(raw),
+        };
         let p = render_erc20_known_pages(&tx, &call, &meta, &resolver);
         format!("{}|{}", row_str(&p.buf[2][1]), row_str(&p.buf[2][2]))
     };
@@ -685,8 +727,11 @@ fn positive_erc20_known_approve_unlimited_renders_word() {
     let pages = render_erc20_known_pages(&tx, &call, &meta, &resolver);
     assert_eq!(row_str(&pages.buf[2][0]), "Amount:");
     assert_eq!(row_str(&pages.buf[2][1]), "unlimited");
-    assert_eq!(row_str(&pages.buf[1][0]), "Spender:",
-        "Approve must label the recipient row as 'Spender:'");
+    assert_eq!(
+        row_str(&pages.buf[1][0]),
+        "Spender:",
+        "Approve must label the recipient row as 'Spender:'"
+    );
 }
 
 #[test]
@@ -766,9 +811,7 @@ fn negative_unknown_token_zero_approve_never_claims_revoke() {
 fn positive_eip1271_personal_sign_short_message() {
     let wallet = [0x55u8; 20];
     let msg = b"hello dapp";
-    let pages = render_eip1271_personal_sign_pages(
-        1, 0, 1, &wallet, msg, 5, 4, 100, true,
-    );
+    let pages = render_eip1271_personal_sign_pages(1, 0, 1, &wallet, msg, 5, 4, 100, true);
     // Layout: 5 fixed + ceil(len/48) = 5 + 1 = 6 pages.
     assert_eq!(pages.len, 6);
     assert_eq!(row_str(&pages.buf[0][0]), "EIP-1271 Sign?");
@@ -782,9 +825,7 @@ fn positive_eip1271_personal_sign_short_message() {
 #[test]
 fn positive_eip1271_personal_sign_empty_message_still_one_msg_page() {
     let wallet = [0x55u8; 20];
-    let pages = render_eip1271_personal_sign_pages(
-        1, 0, 0, &wallet, b"", 5, 4, 100, true,
-    );
+    let pages = render_eip1271_personal_sign_pages(1, 0, 0, &wallet, b"", 5, 4, 100, true);
     // Empty message still produces 1 message page (5 fixed + 1 = 6).
     assert_eq!(pages.len, 6);
 }
@@ -795,9 +836,7 @@ fn positive_eip1271_raw32_six_pages() {
     for (i, b) in hash.iter_mut().enumerate() {
         *b = i as u8;
     }
-    let pages = render_eip1271_raw32_pages(
-        1, 0, 1, &hash, 5, 4, 100, true,
-    );
+    let pages = render_eip1271_raw32_pages(1, 0, 1, &hash, 5, 4, 100, true);
     assert_eq!(pages.len, 6);
     assert_eq!(row_str(&pages.buf[0][0]), "EIP-1271 Sign?");
     assert_eq!(row_str(&pages.buf[0][1]), "! BLIND RAW32");
@@ -819,12 +858,23 @@ fn positive_slot_rotation_single_page() {
     assert_eq!(pages.len, 1);
     // row 1 = centered "ROTATE SLOT?"
     let row1 = row_str(&pages.buf[0][1]);
-    assert!(row1.contains("ROTATE SLOT?"), "row 1 must show the prompt, got {:?}", row1);
+    assert!(
+        row1.contains("ROTATE SLOT?"),
+        "row 1 must show the prompt, got {:?}",
+        row1
+    );
     let row2 = row_str(&pages.buf[0][2]);
-    assert!(row2.contains("Slot: 3"), "row 2 must show the slot index, got {:?}", row2);
+    assert!(
+        row2.contains("Slot: 3"),
+        "row 2 must show the slot index, got {:?}",
+        row2
+    );
     let row3 = row_str(&pages.buf[0][3]);
-    assert!(row3.contains("+bootstrap use"),
-        "row 3 must warn about bootstrap-use consumption, got {:?}", row3);
+    assert!(
+        row3.contains("+bootstrap use"),
+        "row 3 must warn about bootstrap-use consumption, got {:?}",
+        row3
+    );
 }
 
 #[test]
@@ -839,32 +889,20 @@ fn positive_batch_wrap_adds_banner_page() {
     let row1 = row_str(&wrapped.buf[0][1]);
     assert!(row1.contains("BATCH SIGN"));
     let row2 = row_str(&wrapped.buf[0][2]);
-    assert!(row2.contains("Tx 1 of 3"),
-        "1-based render of batch index, got {:?}", row2);
+    assert!(
+        row2.contains("Tx 1 of 3"),
+        "1-based render of batch index, got {:?}",
+        row2
+    );
 }
 
-fn wrap_batch_for_test(
-    inner: &Pages,
-    tx_index: usize,
-    batch_total: usize,
-) -> Result<Pages, ()> {
+fn wrap_batch_for_test(inner: &Pages, tx_index: usize, batch_total: usize) -> Result<Pages, ()> {
     let mut wrapped = Pages::empty_with_len(0);
     let mut cfi = crate::fi::CfiCounter::new();
-    wrap_pages_with_batch_banner(
-        inner,
-        tx_index,
-        batch_total,
-        &mut wrapped,
-        &mut cfi,
-    )?;
-    if cfi.check_into_sentinel(super::batch::BATCH_BANNER_CFI_EXPECTED)
-        != crate::fi::OK_SENTINEL
-        || super::batch::batch_banner_copy_proof(
-            inner,
-            &wrapped,
-            tx_index,
-            batch_total,
-        ) != crate::fi::OK_SENTINEL
+    wrap_pages_with_batch_banner(inner, tx_index, batch_total, &mut wrapped, &mut cfi)?;
+    if cfi.check_into_sentinel(super::batch::BATCH_BANNER_CFI_EXPECTED) != crate::fi::OK_SENTINEL
+        || super::batch::batch_banner_copy_proof(inner, &wrapped, tx_index, batch_total)
+            != crate::fi::OK_SENTINEL
     {
         return Err(());
     }
@@ -947,8 +985,11 @@ fn negative_chain_name_mainnet_distinct_from_sidechains() {
         // No two labels collide.
         for (id2, name2) in labels {
             if id != id2 {
-                assert_ne!(name, name2,
-                    "chain labels {} and {} must not visually collide", id, id2);
+                assert_ne!(
+                    name, name2,
+                    "chain labels {} and {} must not visually collide",
+                    id, id2
+                );
             }
         }
     }
@@ -963,8 +1004,10 @@ fn negative_format_u64_refuses_to_truncate() {
     // truncation gas/nonce/chain rendering would be more dangerous than
     // a visible "!OVF".
     let mut buf = [0u8; 2];
-    assert!(format_u64(1_000_000, &mut buf).is_none(),
-        "format_u64 must NOT silently truncate when buffer is too small");
+    assert!(
+        format_u64(1_000_000, &mut buf).is_none(),
+        "format_u64 must NOT silently truncate when buffer is too small"
+    );
 }
 
 #[test]
@@ -977,8 +1020,11 @@ fn negative_write_gas_overflow_paints_marker_not_wrong_digits() {
     // so 10^9-ish triggers the overflow marker.
     write_gas(&mut row, u64::MAX); // 20 digits, can't fit
     let s = row_str(&row);
-    assert!(s.contains("!OVF"),
-        "u64::MAX gas must surface !OVF, got {:?}", s);
+    assert!(
+        s.contains("!OVF"),
+        "u64::MAX gas must surface !OVF, got {:?}",
+        s
+    );
 }
 
 #[test]
@@ -986,8 +1032,11 @@ fn negative_write_nonce_row_overflow_paints_marker() {
     let mut row = [b' '; DISPLAY_COLS];
     write_nonce_row(&mut row, u64::MAX); // 20 digits, blows past 16 cols
     let s = row_str(&row);
-    assert!(s.contains("!OVF"),
-        "u64::MAX nonce must surface !OVF, got {:?}", s);
+    assert!(
+        s.contains("!OVF"),
+        "u64::MAX nonce must surface !OVF, got {:?}",
+        s
+    );
 }
 
 #[test]
@@ -1000,8 +1049,11 @@ fn negative_write_eth_two_rows_pathological_overflow() {
     let mut r2 = [b' '; DISPLAY_COLS];
     let max = U256([0xFFu8; 32]);
     let fit = write_eth_two_rows(&mut r1, &mut r2, &max);
-    assert_eq!(fit, AmountFit::Overflow,
-        "U256::MAX as ETH must report Overflow");
+    assert_eq!(
+        fit,
+        AmountFit::Overflow,
+        "U256::MAX as ETH must report Overflow"
+    );
 }
 
 #[test]
@@ -1011,8 +1063,11 @@ fn negative_write_gwei_overflow_falls_to_explicit_marker() {
     let ok = write_gwei(&mut row, &max);
     let s = row_str(&row);
     assert!(!ok, "U256::MAX gas price must return false");
-    assert_eq!(s, "!OVERFLOW",
-        "overflow must paint the explicit '!OVERFLOW' marker, got {:?}", s);
+    assert_eq!(
+        s, "!OVERFLOW",
+        "overflow must paint the explicit '!OVERFLOW' marker, got {:?}",
+        s
+    );
 }
 
 // --- Anti-spoof: full 40-hex address rendering -----------------------------
@@ -1033,8 +1088,10 @@ fn negative_write_addr_full_middle_byte_difference_visible() {
     let [b1, b2, b3] = &mut b_rows;
     write_addr_full(a1, a2, a3, &a);
     write_addr_full(b1, b2, b3, &b);
-    assert_ne!(a_rows, b_rows,
-        "addresses differing in byte 10 must render differently");
+    assert_ne!(
+        a_rows, b_rows,
+        "addresses differing in byte 10 must render differently"
+    );
 }
 
 #[test]
@@ -1049,8 +1106,11 @@ fn negative_addr_full_or_name_unknown_falls_back_to_hex() {
     let addr = [0xAB; 20];
     write_addr_full_or_name(&mut r1, &mut r2, &mut r3, &addr, 1, &resolver);
     // No name → no "+ " sentinel — row 1 must start with "0x".
-    assert_eq!(&r1[..2], b"0x",
-        "unknown address must fall back to hex render (no name sentinel)");
+    assert_eq!(
+        &r1[..2],
+        b"0x",
+        "unknown address must fall back to hex render (no name sentinel)"
+    );
 }
 
 // --- Unlimited-approve UI affordance (anti-spoof) --------------------------
@@ -1070,7 +1130,10 @@ fn negative_approve_unlimited_only_fires_for_approve() {
     // 1. Approve(unlimited) → word "unlimited".
     let pages = render_erc20_known_pages(
         &tx,
-        &Erc20Call::Approve { spender: [0; 20], amount: unlimited },
+        &Erc20Call::Approve {
+            spender: [0; 20],
+            amount: unlimited,
+        },
         &meta,
         &resolver,
     );
@@ -1079,12 +1142,18 @@ fn negative_approve_unlimited_only_fires_for_approve() {
     // 2. Transfer(unlimited) → MUST NOT collapse to "unlimited".
     let pages = render_erc20_known_pages(
         &tx,
-        &Erc20Call::Transfer { to: [0; 20], amount: unlimited },
+        &Erc20Call::Transfer {
+            to: [0; 20],
+            amount: unlimited,
+        },
         &meta,
         &resolver,
     );
-    assert_ne!(row_str(&pages.buf[2][1]), "unlimited",
-        "Transfer must render the digits — only Approve gets the 'unlimited' affordance");
+    assert_ne!(
+        row_str(&pages.buf[2][1]),
+        "unlimited",
+        "Transfer must render the digits — only Approve gets the 'unlimited' affordance"
+    );
 }
 
 #[test]
@@ -1099,11 +1168,19 @@ fn negative_approve_below_threshold_renders_as_number() {
     // (BE index, MSB-first) = 0x01 and everything below zero. So 2^200-1
     // has bytes 0..7 all zero and bytes 7..32 = 0xFF.
     let mut amt = [0u8; 32];
-    for i in 7..32 { amt[i] = 0xFF; }
-    let call = Erc20Call::Approve { spender: [0; 20], amount: U256(amt) };
+    for i in 7..32 {
+        amt[i] = 0xFF;
+    }
+    let call = Erc20Call::Approve {
+        spender: [0; 20],
+        amount: U256(amt),
+    };
     let pages = render_erc20_known_pages(&tx, &call, &meta, &resolver);
-    assert_ne!(row_str(&pages.buf[2][1]), "unlimited",
-        "amounts < 2^200 must render as digits, not 'unlimited'");
+    assert_ne!(
+        row_str(&pages.buf[2][1]),
+        "unlimited",
+        "amounts < 2^200 must render as digits, not 'unlimited'"
+    );
 }
 
 // --- ERC-20 native-ETH cross-injection warning -----------------------------
@@ -1117,7 +1194,10 @@ fn negative_erc20_known_warns_on_native_eth_attached() {
     tx.value = u256_from_u64(1); // attacker hides 1 wei in the ERC-20 wrapper
     let resolver = NameResolver::new();
     let meta = usdc_metadata();
-    let call = Erc20Call::Transfer { to: [0; 20], amount: u256_from_u64(1) };
+    let call = Erc20Call::Transfer {
+        to: [0; 20],
+        amount: u256_from_u64(1),
+    };
     let pages = render_erc20_known_pages(&tx, &call, &meta, &resolver);
     assert_eq!(row_str(&pages.buf[0][2]), "! native ETH!");
 }
@@ -1131,7 +1211,10 @@ fn negative_erc20_known_no_false_warning_when_value_zero() {
     tx.value = U256::zero();
     let resolver = NameResolver::new();
     let meta = usdc_metadata();
-    let call = Erc20Call::Transfer { to: [0; 20], amount: u256_from_u64(1) };
+    let call = Erc20Call::Transfer {
+        to: [0; 20],
+        amount: u256_from_u64(1),
+    };
     let pages = render_erc20_known_pages(&tx, &call, &meta, &resolver);
     assert_ne!(row_str(&pages.buf[0][2]), "! native ETH!");
 }
@@ -1172,10 +1255,14 @@ fn negative_blind_sign_data_hash_changes_when_any_byte_flips() {
     let p1 = render_blind_sign_pages(&tx, &data1, None, &resolver);
     let p2 = render_blind_sign_pages(&tx, &data2, None, &resolver);
     // Data hash is on page 4 (0-banner, 1-to, 2-value, 3-sel, 4-hash, ...).
-    assert_ne!(p1.buf[4][1], p2.buf[4][1],
-        "1-bit calldata change must change the rendered hash row 1");
-    assert_ne!(p1.buf[4][2], p2.buf[4][2],
-        "1-bit calldata change must change the rendered hash row 2");
+    assert_ne!(
+        p1.buf[4][1], p2.buf[4][1],
+        "1-bit calldata change must change the rendered hash row 1"
+    );
+    assert_ne!(
+        p1.buf[4][2], p2.buf[4][2],
+        "1-bit calldata change must change the rendered hash row 2"
+    );
 }
 
 #[test]
@@ -1192,8 +1279,11 @@ fn negative_blind_sign_banner_stays_on_page_zero() {
 
     let meta = curated_selector(b"foo()", [0xde, 0xad, 0xbe, 0xef]);
     let pages_with_sel = render_blind_sign_pages(&tx, &data, Some(&meta), &resolver);
-    assert_eq!(row_str(&pages_with_sel.buf[0][0]), "! BLIND SIGN",
-        "FUNCTION:/GUESS: page must NEVER displace the BLIND SIGN banner from page 0");
+    assert_eq!(
+        row_str(&pages_with_sel.buf[0][0]),
+        "! BLIND SIGN",
+        "FUNCTION:/GUESS: page must NEVER displace the BLIND SIGN banner from page 0"
+    );
 }
 
 #[test]
@@ -1211,8 +1301,10 @@ fn negative_blind_sign_self_attest_uses_guess_label() {
     let p_s = render_blind_sign_pages(&tx, &data, Some(&self_attest), &resolver);
     assert_eq!(row_str(&p_c.buf[1][0]), "FUNCTION:");
     assert_eq!(row_str(&p_s.buf[1][0]), "GUESS:");
-    assert_ne!(p_c.buf[1][0], p_s.buf[1][0],
-        "Curated and SelfAttest provenance must render distinguishable labels");
+    assert_ne!(
+        p_c.buf[1][0], p_s.buf[1][0],
+        "Curated and SelfAttest provenance must render distinguishable labels"
+    );
 }
 
 #[test]
@@ -1225,8 +1317,11 @@ fn negative_blind_sign_nonzero_value_uses_loud_banner() {
     let data = [0xde, 0xad, 0xbe, 0xef];
     let pages = render_blind_sign_pages(&tx, &data, None, &resolver);
     // Value page = page 2 (0-banner, 1-to, 2-value).
-    assert_eq!(row_str(&pages.buf[2][0]), "! VALUE:",
-        "non-zero value on blind-sign must show the loud '! VALUE:' banner");
+    assert_eq!(
+        row_str(&pages.buf[2][0]),
+        "! VALUE:",
+        "non-zero value on blind-sign must show the loud '! VALUE:' banner"
+    );
 }
 
 #[test]
@@ -1251,9 +1346,7 @@ fn negative_eip1271_personal_sign_sanitises_non_printable() {
     // Use control byte 0x1F (US, just below printable range), DEL 0x7F,
     // high-bit 0xC3 (UTF-8 lead).
     let msg = b"a\x1Fb\x7Fc\xC3d";
-    let pages = render_eip1271_personal_sign_pages(
-        1, 0, 1, &wallet, msg, 5, 4, 100, true,
-    );
+    let pages = render_eip1271_personal_sign_pages(1, 0, 1, &wallet, msg, 5, 4, 100, true);
     // First message page is index 4. Bytes 0..7 are the rendered text.
     let row = &pages.buf[4][0];
     assert_eq!(row[0], b'a');
@@ -1271,9 +1364,7 @@ fn negative_eip1271_personal_sign_printable_edges_pass_through() {
     // printable range and must NOT be redacted.
     let wallet = [0x55u8; 20];
     let msg = b" ~";
-    let pages = render_eip1271_personal_sign_pages(
-        1, 0, 1, &wallet, msg, 5, 4, 100, true,
-    );
+    let pages = render_eip1271_personal_sign_pages(1, 0, 1, &wallet, msg, 5, 4, 100, true);
     let row = &pages.buf[4][0];
     assert_eq!(row[0], b' ', "0x20 (space) is printable, must render as-is");
     assert_eq!(row[1], b'~', "0x7E (~) is printable, must render as-is");
@@ -1286,12 +1377,9 @@ fn negative_eip1271_counterfactual_shows_pre_deploy_warning() {
     // factually deploy their wallet on the dapp's first use.
     let wallet = [0x55u8; 20];
 
-    let p_deployed = render_eip1271_personal_sign_pages(
-        1, 0, 1, &wallet, b"hi", 5, 4, 100, true,
-    );
-    let p_pre_deploy = render_eip1271_personal_sign_pages(
-        1, 0, 1, &wallet, b"hi", 5, 4, 100, false,
-    );
+    let p_deployed = render_eip1271_personal_sign_pages(1, 0, 1, &wallet, b"hi", 5, 4, 100, true);
+    let p_pre_deploy =
+        render_eip1271_personal_sign_pages(1, 0, 1, &wallet, b"hi", 5, 4, 100, false);
     assert_eq!(row_str(&p_deployed.buf[0][2]), "Verify on dapp");
     // MEDIUM-1: legible, fit-to-width counterfactual warning (exactly 16
     // chars, no longer truncated). Surfaces the budget-reset risk to a
@@ -1316,11 +1404,12 @@ fn negative_eip1271_msg_pagination_at_chars_per_page_boundary() {
     // the user has to click through.
     let wallet = [0x55u8; 20];
     let msg = [b'A'; 48];
-    let pages = render_eip1271_personal_sign_pages(
-        1, 0, 0, &wallet, &msg, 5, 4, 100, true,
+    let pages = render_eip1271_personal_sign_pages(1, 0, 0, &wallet, &msg, 5, 4, 100, true);
+    assert_eq!(
+        pages.len,
+        5 + 1,
+        "48-byte (= CHARS_PER_PAGE) msg fits in exactly 1 message page"
     );
-    assert_eq!(pages.len, 5 + 1,
-        "48-byte (= CHARS_PER_PAGE) msg fits in exactly 1 message page");
 }
 
 #[test]
@@ -1328,11 +1417,12 @@ fn negative_eip1271_msg_pagination_one_byte_over_boundary() {
     // Just past the boundary needs a second message page.
     let wallet = [0x55u8; 20];
     let msg = [b'A'; 49];
-    let pages = render_eip1271_personal_sign_pages(
-        1, 0, 0, &wallet, &msg, 5, 4, 100, true,
+    let pages = render_eip1271_personal_sign_pages(1, 0, 0, &wallet, &msg, 5, 4, 100, true);
+    assert_eq!(
+        pages.len,
+        5 + 2,
+        "49-byte msg crosses CHARS_PER_PAGE boundary → 2 message pages"
     );
-    assert_eq!(pages.len, 5 + 2,
-        "49-byte msg crosses CHARS_PER_PAGE boundary → 2 message pages");
 }
 
 #[test]
@@ -1341,15 +1431,19 @@ fn negative_eip1271_raw32_hash_bytes_round_trip_unchanged() {
     // input hash — flipping any byte must surface in the page output.
     let mut h1 = [0u8; 32];
     let mut h2 = [0u8; 32];
-    for (i, b) in h1.iter_mut().enumerate() { *b = i as u8; }
+    for (i, b) in h1.iter_mut().enumerate() {
+        *b = i as u8;
+    }
     h2.copy_from_slice(&h1);
     h2[20] ^= 0x55;
 
     let p1 = render_eip1271_raw32_pages(1, 0, 0, &h1, 5, 4, 100, true);
     let p2 = render_eip1271_raw32_pages(1, 0, 0, &h2, 5, 4, 100, true);
     // Byte 20 lives on Hash 2/2 page (index 4), inside row 1 (16..24).
-    assert_ne!(p1.buf[4][1], p2.buf[4][1],
-        "byte-20 flip must surface as a different rendered hex row");
+    assert_ne!(
+        p1.buf[4][1], p2.buf[4][1],
+        "byte-20 flip must surface as a different rendered hex row"
+    );
 }
 
 #[test]
@@ -1358,9 +1452,7 @@ fn negative_eip1271_budget_row_reflects_supplied_counter() {
     // over the cap, not a stale value. We assert exact text so future
     // refactors can't accidentally swap "used" for "remaining".
     let wallet = [0x55u8; 20];
-    let pages = render_eip1271_personal_sign_pages(
-        1, 0, 0, &wallet, b"x", 17, 12, 100, true,
-    );
+    let pages = render_eip1271_personal_sign_pages(1, 0, 0, &wallet, b"x", 17, 12, 100, true);
     let last = pages.len - 1;
     let row0 = row_str(&pages.buf[last][0]);
     let row1 = row_str(&pages.buf[last][1]);
@@ -1374,12 +1466,13 @@ fn negative_eip1271_gap_is_local_minus_last_userop_saturating() {
     // it did via a corrupted state), gap row must saturate to 0 — not
     // underflow / panic. Defensive surface.
     let wallet = [0x55u8; 20];
-    let pages = render_eip1271_personal_sign_pages(
-        1, 0, 0, &wallet, b"x", 1, 99, 100, true,
-    );
+    let pages = render_eip1271_personal_sign_pages(1, 0, 0, &wallet, b"x", 1, 99, 100, true);
     let last = pages.len - 1;
-    assert_eq!(row_str(&pages.buf[last][1]), "Gap: 0",
-        "Gap row must saturating-sub, never underflow");
+    assert_eq!(
+        row_str(&pages.buf[last][1]),
+        "Gap: 0",
+        "Gap row must saturating-sub, never underflow"
+    );
 }
 
 // --- Slot-rotation affordances ---------------------------------------------
@@ -1392,8 +1485,11 @@ fn negative_slot_rotation_warns_about_bootstrap_use() {
     // "+bootstrap use" line would silently regress this UX guarantee.
     let pages = build_slot_rotation_pages(7);
     let row3 = row_str(&pages.buf[0][3]);
-    assert!(row3.contains("+bootstrap use"),
-        "rotation page MUST surface bootstrap-budget consumption, got {:?}", row3);
+    assert!(
+        row3.contains("+bootstrap use"),
+        "rotation page MUST surface bootstrap-budget consumption, got {:?}",
+        row3
+    );
 }
 
 #[test]
@@ -1402,8 +1498,10 @@ fn negative_slot_rotation_shows_index() {
     // user can verify which slot is being rotated.
     let a = build_slot_rotation_pages(3);
     let b = build_slot_rotation_pages(8);
-    assert_ne!(a.buf[0][2], b.buf[0][2],
-        "slot_index must be visible on row 2");
+    assert_ne!(
+        a.buf[0][2], b.buf[0][2],
+        "slot_index must be visible on row 2"
+    );
 }
 
 #[test]
@@ -1436,15 +1534,21 @@ fn negative_slot_rotation_is_injective_across_22bit_field() {
             count += 1;
         }
         assert!(count > 0, "slot {idx} must render at least one digit");
-        assert_eq!(parsed, idx, "slot {idx} must round-trip through the display");
+        assert_eq!(
+            parsed, idx,
+            "slot {idx} must round-trip through the display"
+        );
     }
 }
 
 #[test]
 fn negative_slot_rotation_renders_large_indices_without_collision() {
     let pages = build_slot_rotation_pages(4_194_303);
-    assert_eq!(pages.buf[0][2].len(), DISPLAY_COLS,
-        "row 2 must stay exactly DISPLAY_COLS wide");
+    assert_eq!(
+        pages.buf[0][2].len(),
+        DISPLAY_COLS,
+        "row 2 must stay exactly DISPLAY_COLS wide"
+    );
     assert!(row_str(&pages.buf[0][2]).contains("Slot: 4194303"));
 
     let million = build_slot_rotation_pages(1_000_000);
@@ -1514,13 +1618,7 @@ fn composed_slot_rotation_transcript(slot_index: u32) -> Pages {
         crate::fi::OK_SENTINEL
     );
     assert_eq!(
-        super::userop_gas_lane::userop_gas_page_proof(
-            &pages,
-            gas_prior,
-            &call,
-            &verify,
-            &prever,
-        ),
+        super::userop_gas_lane::userop_gas_page_proof(&pages, gas_prior, &call, &verify, &prever,),
         crate::fi::OK_SENTINEL
     );
     pages
@@ -1536,7 +1634,10 @@ fn slot_rotation_full_single_and_batch_transcripts_preserve_injective_page() {
     assert_eq!(million.len, 4);
     assert_eq!(million.len, million_one.len);
     assert_ne!(million.buf[0], million_one.buf[0]);
-    assert_eq!(&million.buf[1..million.len], &million_one.buf[1..million_one.len]);
+    assert_eq!(
+        &million.buf[1..million.len],
+        &million_one.buf[1..million_one.len]
+    );
     assert!(row_str(&million.buf[0][2]).contains("Slot: 1000000"));
     assert!(row_str(&million_one.buf[0][2]).contains("Slot: 1000001"));
 
@@ -1558,9 +1659,13 @@ fn negative_batch_banner_renders_one_based_index() {
         let wrapped = wrap_batch_for_test(&inner, idx, 4).expect("banner fits");
         let row2 = row_str(&wrapped.buf[0][2]);
         let expected_one_based = format!("Tx {} of 4", idx + 1);
-        assert!(row2.contains(&expected_one_based),
+        assert!(
+            row2.contains(&expected_one_based),
             "batch index {} (0-based) must render as 'Tx {} of 4', got {:?}",
-            idx, idx + 1, row2);
+            idx,
+            idx + 1,
+            row2
+        );
     }
 }
 
@@ -1578,8 +1683,10 @@ fn negative_batch_banner_refuses_to_overflow_max_pages() {
     wrapped.buf[0][0][0] = b'S';
     let mut cfi = crate::fi::CfiCounter::new();
     let result = wrap_pages_with_batch_banner(&huge, 0, 2, &mut wrapped, &mut cfi);
-    assert!(result.is_err(),
-        "wrap must refuse (Err) rather than drop the banner past MAX_PAGES");
+    assert!(
+        result.is_err(),
+        "wrap must refuse (Err) rather than drop the banner past MAX_PAGES"
+    );
     assert_eq!(
         wrapped.len, 0,
         "an overflow refusal must leave the caller-owned output invisibly fail-initialized"
@@ -1671,7 +1778,10 @@ fn batch_banner_copy_has_caller_cfi_and_exact_transcript_proof() {
     let exact_wrapped = wrap_batch_for_test(&exact_fit, 0, 4).expect("banner exactly fits");
     assert_eq!(exact_wrapped.len, MAX_PAGES);
     assert_eq!(exact_wrapped.buf[1], exact_fit.buf[0]);
-    assert_eq!(exact_wrapped.buf[MAX_PAGES - 1], exact_fit.buf[MAX_PAGES - 2]);
+    assert_eq!(
+        exact_wrapped.buf[MAX_PAGES - 1],
+        exact_fit.buf[MAX_PAGES - 2]
+    );
 }
 
 #[test]
@@ -1802,10 +1912,14 @@ fn negative_max_pages_covers_personal_sign_worst_case() {
     // page bucket can accommodate, MAX_PAGES must grow to match.
     let max_message_pages = MAX_PAGES - 5;
     let max_message_chars = max_message_pages * 48;
-    assert!(max_message_chars >= 700,
+    assert!(
+        max_message_chars >= 700,
         "MAX_PAGES = {} only buys {} message-page chars = {} bytes; \
          CLAUDE.md documents MAX_OFFCHAIN_PERSONAL_SIGN_LEN ≤ 700",
-        MAX_PAGES, max_message_pages, max_message_chars);
+        MAX_PAGES,
+        max_message_pages,
+        max_message_chars
+    );
 }
 
 #[test]
@@ -1816,10 +1930,12 @@ fn negative_max_pages_matches_production_constant() {
     // that source must stay in lockstep. Searches the production source text.
     let src = include_str!("../../../pqsigner-erc7730/src/display/mod.rs");
     let needle = "pub const MAX_PAGES: usize = 31;";
-    assert!(src.contains(needle),
+    assert!(
+        src.contains(needle),
         "production tx/display/mod.rs no longer defines `{}` — either \
          bump MAX_PAGES here and update this test, OR fix the source.",
-        needle);
+        needle
+    );
 }
 
 // --- Source-text invariant: enforce frozen page-renderer surface ----------
@@ -1831,10 +1947,14 @@ fn negative_blind_sign_banner_text_pinned() {
     // would silently disrupt that training — the source text is pinned
     // here so a tweak fails CI loudly.
     let src = include_str!("../tx/display/blind_sign.rs");
-    assert!(src.contains("\"! BLIND SIGN\""),
-        "blind_sign.rs must keep the exact '! BLIND SIGN' banner literal");
-    assert!(src.contains("\"Verify on dapp\""),
-        "blind_sign.rs must keep the 'Verify on dapp' guidance literal");
+    assert!(
+        src.contains("\"! BLIND SIGN\""),
+        "blind_sign.rs must keep the exact '! BLIND SIGN' banner literal"
+    );
+    assert!(
+        src.contains("\"Verify on dapp\""),
+        "blind_sign.rs must keep the 'Verify on dapp' guidance literal"
+    );
 }
 
 #[test]
@@ -1844,8 +1964,10 @@ fn negative_personal_sign_sanitiser_range_pinned() {
     // 0x80-0xFF for "UTF-8 passthrough" would break the trusted
     // display contract. Pin the literal.
     let src = include_str!("../tx/display/eip1271.rs");
-    assert!(src.contains("(0x20..=0x7E)"),
-        "eip1271.rs sanitise_byte must keep the (0x20..=0x7E) printable range");
+    assert!(
+        src.contains("(0x20..=0x7E)"),
+        "eip1271.rs sanitise_byte must keep the (0x20..=0x7E) printable range"
+    );
 }
 
 #[test]
@@ -1881,8 +2003,11 @@ fn negative_chain_name_list_pinned() {
         "84532 => \"(BaseSepolia)\"",
         "_ => \"(unknown chain)\"",
     ] {
-        assert!(src.contains(needle),
-            "primitives.rs chain_name must keep `{}`", needle);
+        assert!(
+            src.contains(needle),
+            "primitives.rs chain_name must keep `{}`",
+            needle
+        );
     }
 }
 
@@ -1903,10 +2028,18 @@ fn negative_no_non_ascii_anywhere_in_renderer_outputs() {
     assert_all_pages_printable(&render_blind_sign_pages(&tx, &nasty_data, None, &resolver));
 
     let meta_curated = curated_selector(b"foo(bytes,uint256)", [0u8; 4]);
-    assert_all_pages_printable(&render_blind_sign_pages(&tx, &nasty_data, Some(&meta_curated), &resolver));
+    assert_all_pages_printable(&render_blind_sign_pages(
+        &tx,
+        &nasty_data,
+        Some(&meta_curated),
+        &resolver,
+    ));
 
     let meta = usdc_metadata();
-    let call = Erc20Call::Transfer { to: [0x33; 20], amount: u256_from_u64(7) };
+    let call = Erc20Call::Transfer {
+        to: [0x33; 20],
+        amount: u256_from_u64(7),
+    };
     assert_all_pages_printable(&render_erc20_known_pages(&tx, &call, &meta, &resolver));
     assert_all_pages_printable(&render_erc20_unknown_pages(&tx, &call, &resolver));
 
@@ -1936,15 +2069,13 @@ fn positive_write_tip_and_fee_budget_render() {
     assert!(s.starts_with("Max:"), "expected Max: prefix, got {:?}", s);
     assert!(s.contains("ETH"), "expected ETH unit, got {:?}", s);
 
-    write_native_fee_budget_row(
-        &mut fee_row,
-        &u256_from_u64(30_000_000_000),
-        21_000,
-        56,
-    );
+    write_native_fee_budget_row(&mut fee_row, &u256_from_u64(30_000_000_000), 21_000, 56);
     let s = row_str(&fee_row);
     assert!(s.contains("BNB"), "expected BNB unit, got {s:?}");
-    assert!(!s.contains("ETH"), "BSC fee must not be labelled ETH: {s:?}");
+    assert!(
+        !s.contains("ETH"),
+        "BSC fee must not be labelled ETH: {s:?}"
+    );
 }
 
 #[test]
@@ -1957,8 +2088,11 @@ fn negative_write_fee_budget_saturates_on_multiplication_overflow() {
     let pathological = U256([0xFFu8; 32]);
     write_fee_budget_row(&mut row, &pathological, u64::MAX);
     let s = row_str(&row);
-    assert!(s.starts_with("Max:"),
-        "fee budget row must still carry the 'Max:' prefix, got {:?}", s);
+    assert!(
+        s.starts_with("Max:"),
+        "fee budget row must still carry the 'Max:' prefix, got {:?}",
+        s
+    );
     // Either the marker or a clamped-MAX render is acceptable; what's
     // forbidden is a quiet "Max: 0 ETH" (which would be the wrap-around
     // bug we're guarding against).
@@ -1969,8 +2103,12 @@ fn negative_write_fee_budget_saturates_on_multiplication_overflow() {
 fn positive_assert_total_test_breadth() {
     // Sanity: this file must keep producing both halves of the pass.
     // (Compile-time presence check via path-locality.)
-    let positives = include_str!("pure_tests.rs").matches("fn positive_").count();
-    let negatives = include_str!("pure_tests.rs").matches("fn negative_").count();
+    let positives = include_str!("pure_tests.rs")
+        .matches("fn positive_")
+        .count();
+    let negatives = include_str!("pure_tests.rs")
+        .matches("fn negative_")
+        .count();
     assert!(positives >= 30, "positive coverage shrank to {}", positives);
     assert!(negatives >= 30, "negative coverage shrank to {}", negatives);
 }
@@ -1993,7 +2131,10 @@ fn negative_addr_full_or_name_hit_renders_name_sentinel() {
     let mut r2 = [b' '; DISPLAY_COLS];
     let mut r3 = [b' '; DISPLAY_COLS];
     write_addr_full_or_name(&mut r1, &mut r2, &mut r3, &addr, 1, &resolver);
-    assert_eq!(r1[0], b'+', "name hit must paint the '+' sentinel in row 1 col 0");
+    assert_eq!(
+        r1[0], b'+',
+        "name hit must paint the '+' sentinel in row 1 col 0"
+    );
     assert_eq!(r1[1], b' ');
     // Hex fallback uses '0' as the first byte of row 1; name hit uses
     // '+' — they must be visually distinguishable.
@@ -2001,8 +2142,11 @@ fn negative_addr_full_or_name_hit_renders_name_sentinel() {
     let mut bare_r2 = [b' '; DISPLAY_COLS];
     let mut bare_r3 = [b' '; DISPLAY_COLS];
     write_addr_full(&mut bare_r1, &mut bare_r2, &mut bare_r3, &addr);
-    assert_ne!(r1[..2], bare_r1[..2],
-        "name-hit and hex-fallback first-two bytes must differ");
+    assert_ne!(
+        r1[..2],
+        bare_r1[..2],
+        "name-hit and hex-fallback first-two bytes must differ"
+    );
 }
 
 // --- typed_call (Phase 2 decoder) renderer --------------------------------
@@ -2027,8 +2171,11 @@ fn positive_typed_call_renders_uint256_arg() {
         .expect("typed_call should succeed for valid input");
     // Page 0 = banner; page 1 = first arg.
     let arg_label = row_str(&pages.buf[1][0]);
-    assert!(arg_label.starts_with("arg 0"),
-        "arg 0 label expected, got {:?}", arg_label);
+    assert!(
+        arg_label.starts_with("arg 0"),
+        "arg 0 label expected, got {:?}",
+        arg_label
+    );
     let arg_value = row_str(&pages.buf[1][1]);
     assert_eq!(arg_value, "42", "uint256 arg value");
 }
@@ -2039,7 +2186,9 @@ fn positive_typed_call_renders_address_arg_with_name() {
     let mut resolver = NameResolver::new();
     let addr = [0xCD; 20];
     resolver.push(crate::names::NameMeta {
-        chain_id: 1, address: addr, name: b"Coinbase",
+        chain_id: 1,
+        address: addr,
+        name: b"Coinbase",
     });
     let sel = [0x11, 0x22, 0x33, 0x44];
     let meta = curated_selector(b"transfer(address)", sel);
@@ -2048,12 +2197,14 @@ fn positive_typed_call_renders_address_arg_with_name() {
     let mut word = [0u8; 32];
     word[12..32].copy_from_slice(&addr);
     inner.extend_from_slice(&word);
-    let pages = try_render_typed_call(&tx, &inner, &meta, &resolver)
-        .expect("address arg should render");
+    let pages =
+        try_render_typed_call(&tx, &inner, &meta, &resolver).expect("address arg should render");
     // The address arg should produce the "+ Coinbase" name sentinel
     // on row 1 of page 1.
-    assert_eq!(pages.buf[1][1][0], b'+',
-        "name resolver hit on address arg must paint sentinel");
+    assert_eq!(
+        pages.buf[1][1][0], b'+',
+        "name resolver hit on address arg must paint sentinel"
+    );
 }
 
 #[test]
@@ -2067,8 +2218,8 @@ fn positive_typed_call_renders_bool_arg() {
     let mut word = [0u8; 32];
     word[31] = 1;
     inner.extend_from_slice(&word);
-    let pages = try_render_typed_call(&tx, &inner, &meta, &resolver)
-        .expect("bool true should render");
+    let pages =
+        try_render_typed_call(&tx, &inner, &meta, &resolver).expect("bool true should render");
     assert_eq!(row_str(&pages.buf[1][1]), "true");
 }
 
@@ -2147,8 +2298,10 @@ fn negative_typed_call_declines_on_selector_mismatch() {
     let meta = curated_selector(b"foo(uint256)", [0xaa, 0xaa, 0xaa, 0xaa]);
     let mut inner = vec![0xff, 0xff, 0xff, 0xff];
     inner.extend_from_slice(&ascii_u256(1));
-    assert!(try_render_typed_call(&tx, &inner, &meta, &resolver).is_none(),
-        "selector mismatch must force the typed-call renderer to decline");
+    assert!(
+        try_render_typed_call(&tx, &inner, &meta, &resolver).is_none(),
+        "selector mismatch must force the typed-call renderer to decline"
+    );
 }
 
 #[test]
@@ -2184,15 +2337,19 @@ fn negative_typed_call_declines_when_too_many_args() {
     let resolver = NameResolver::new();
     let sel = [9, 8, 7, 6];
     let meta = curated_selector(
-        b"f(uint256,uint256,uint256,uint256,uint256,uint256,uint256)", sel);
+        b"f(uint256,uint256,uint256,uint256,uint256,uint256,uint256)",
+        sel,
+    );
     let mut inner = Vec::new();
     inner.extend_from_slice(&sel);
     for i in 0..7 {
         inner.extend_from_slice(&ascii_u256(i as u64));
     }
-    assert!(try_render_typed_call(&tx, &inner, &meta, &resolver).is_none(),
+    assert!(
+        try_render_typed_call(&tx, &inner, &meta, &resolver).is_none(),
         "argument count > MAX_TYPED_ARGS_RENDERED must force the renderer \
-         to decline so the caller falls back to BLIND SIGN");
+         to decline so the caller falls back to BLIND SIGN"
+    );
 }
 
 #[test]
@@ -2212,8 +2369,10 @@ fn negative_typed_call_self_attest_uses_unverified_banner() {
     let p_s = try_render_typed_call(&tx, &inner, &attest, &resolver).unwrap();
     assert_eq!(row_str(&p_c.buf[0][0]), "! BLIND SIGN");
     assert_eq!(row_str(&p_s.buf[0][0]), "! UNVERIFIED");
-    assert_ne!(p_c.buf[0][0], p_s.buf[0][0],
-        "Curated vs SelfAttest banner must visibly differ");
+    assert_ne!(
+        p_c.buf[0][0], p_s.buf[0][0],
+        "Curated vs SelfAttest banner must visibly differ"
+    );
 }
 
 // Confirms write_selector_row hex bytes match the input ---------------------
@@ -2231,6 +2390,8 @@ fn negative_write_selector_row_bytes_match_input_exactly() {
     b[2] ^= 0x01;
     write_selector_row(&mut r_a, &a);
     write_selector_row(&mut r_b, &b);
-    assert_ne!(r_a, r_b,
-        "1-bit selector change must change the rendered Sel: row");
+    assert_ne!(
+        r_a, r_b,
+        "1-bit selector change must change the rendered Sel: row"
+    );
 }

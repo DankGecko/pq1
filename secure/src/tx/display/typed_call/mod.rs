@@ -274,8 +274,8 @@ fn render_arg(
             }
             let elem_kind = *parsed.arena.get(elem);
             let elem_word_off = match fixed_len {
-                Some(_) => walked.body_off,        // inline in head
-                None => walked.body_off + 32,      // skip length word
+                Some(_) => walked.body_off,   // inline in head
+                None => walked.body_off + 32, // skip length word
             };
             write_array_rows(
                 r1,
@@ -390,11 +390,7 @@ fn write_decimal(row: &mut [u8; DISPLAY_COLS], pos: usize, mut n: u64) -> usize 
 /// Write the verified `text_sig` across two rows (16 cols each = 32
 /// chars max). Truncates with "..." marker on the second row when the
 /// signature is longer.
-fn write_text_sig_rows(
-    row1: &mut [u8; DISPLAY_COLS],
-    row2: &mut [u8; DISPLAY_COLS],
-    text: &[u8],
-) {
+fn write_text_sig_rows(row1: &mut [u8; DISPLAY_COLS], row2: &mut [u8; DISPLAY_COLS], text: &[u8]) {
     *row1 = [b' '; DISPLAY_COLS];
     *row2 = [b' '; DISPLAY_COLS];
     let n1 = core::cmp::min(text.len(), DISPLAY_COLS);
@@ -549,8 +545,7 @@ fn write_int_two_rows(
                 }
                 buf[p..p + n].copy_from_slice(&tmp[..n]);
                 row1.copy_from_slice(&buf[..DISPLAY_COLS]);
-                row2[..total - DISPLAY_COLS]
-                    .copy_from_slice(&buf[DISPLAY_COLS..total]);
+                row2[..total - DISPLAY_COLS].copy_from_slice(&buf[DISPLAY_COLS..total]);
                 true
             } else {
                 write_line(row1, "!OVERFLOW");
@@ -877,7 +872,12 @@ mod tests {
     fn uint_n_dirty_high_bits_render_masked_value() {
         let mut r1 = [b' '; DISPLAY_COLS];
         let mut r2 = [b' '; DISPLAY_COLS];
-        assert!(write_uint_two_rows(&mut r1, &mut r2, 64, &U256(word_2pow64_plus_5())));
+        assert!(write_uint_two_rows(
+            &mut r1,
+            &mut r2,
+            64,
+            &U256(word_2pow64_plus_5())
+        ));
         assert_eq!(
             trimmed(&r1),
             b"5",
@@ -890,13 +890,21 @@ mod tests {
     fn uint256_renders_full_word_unmasked() {
         let mut r1 = [b' '; DISPLAY_COLS];
         let mut r2 = [b' '; DISPLAY_COLS];
-        assert!(write_uint_two_rows(&mut r1, &mut r2, 256, &U256(word_2pow64_plus_5())));
+        assert!(write_uint_two_rows(
+            &mut r1,
+            &mut r2,
+            256,
+            &U256(word_2pow64_plus_5())
+        ));
         // bits == 256 ⇒ no mask: the whole 2^64 + 5 (20 digits) is shown,
         // spilling across both rows (16 + 4).
         let mut combined = [b' '; 2 * DISPLAY_COLS];
         combined[..DISPLAY_COLS].copy_from_slice(&r1);
         combined[DISPLAY_COLS..].copy_from_slice(&r2);
-        let end = combined.iter().rposition(|&b| b != b' ').map_or(0, |i| i + 1);
+        let end = combined
+            .iter()
+            .rposition(|&b| b != b' ')
+            .map_or(0, |i| i + 1);
         assert_eq!(&combined[..end], b"18446744073709551621");
     }
 
@@ -905,8 +913,17 @@ mod tests {
         // int64: sign bit (63) clear ⇒ positive; bit 64 is discarded.
         let mut r1 = [b' '; DISPLAY_COLS];
         let mut r2 = [b' '; DISPLAY_COLS];
-        assert!(write_int_two_rows(&mut r1, &mut r2, 64, &U256(word_2pow64_plus_5())));
-        assert_eq!(trimmed(&r1), b"5", "positive intN must mask the high bits the EVM signextends away");
+        assert!(write_int_two_rows(
+            &mut r1,
+            &mut r2,
+            64,
+            &U256(word_2pow64_plus_5())
+        ));
+        assert_eq!(
+            trimmed(&r1),
+            b"5",
+            "positive intN must mask the high bits the EVM signextends away"
+        );
     }
 
     #[test]
@@ -962,7 +979,16 @@ mod array_wysiwys_tests {
         let walked = walk(&parsed, body).expect("body walks");
         let mut pages = Pages::with_len(1);
         let resolver = NameResolver::new();
-        render_arg(&mut pages, 0, 0, &parsed, &walked.args[0], body, 1, &resolver)
+        render_arg(
+            &mut pages,
+            0,
+            0,
+            &parsed,
+            &walked.args[0],
+            body,
+            1,
+            &resolver,
+        )
     }
 
     #[test]

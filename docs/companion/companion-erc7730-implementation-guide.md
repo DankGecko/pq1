@@ -169,11 +169,11 @@ Three things in the companion bundle:
    hand-authored seed corpus used by older bring-up snapshots.
 
    <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->
-   - Development catalogue: 340,016 B, 428 compiled leaves, 4,542
+   - Development catalogue: 345,546 B, 428 compiled leaves, 4,542
      exact registry-declared known-call tuples, provenance `dev-unattested`.
      The tuple-set SHA-256 receipt is
      `96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`.
-   - E2E fixture: 3,917 B, 8 compiled leaves.
+   - E2E fixture: 3,984 B, 8 compiled leaves.
    <!-- END XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->
 
    The blob does **not** embed its Merkle root. Bytes 0..31 are the catalogue
@@ -921,8 +921,8 @@ provenance remains blocked):
 <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 | Variant | Root | Catalog blob bytes | Compiled leaves |
 |---------|------|-------------------:|----------------:|
-| development (non-e2e) | `0x0706d763061ecfb0668ba7bdcf81e7159a6e541bae090b8678e5c9f31517d2ed` | 340 016 | 428 |
-| e2e | `0xcbd0b77128b92246363f6ea444e8544f7f84dc9ca4d1e15d671d6078960238e9` | 3 917 | 8 |
+| development (non-e2e) | `0x668a7964b4241ec0c2348d117adaa5e29e9b34d97286ef5d1c722cdda43d700a` | 345 546 | 428 |
+| e2e | `0xf8256e1bf1f41391eb337bf2ee3f85e59f738d0f6ed60c16eaa916e99842e4cf` | 3 984 | 8 |
 <!-- END XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 
 Source of truth: fresh compiler output checked against `secure/src/db_roots.rs`
@@ -1076,14 +1076,63 @@ supplies the ticker. Without that metadata it displays `"unlimited"` plus
 `0x32`) needs no new wire field; authenticated ticker/decimals still require the
 existing ERC-20 trailer.
 
-### 12.2 `interpolatedIntent` is ignored
+### 12.2 `interpolatedIntent` has a constrained scalar-amount path
 
-The current host compiler models `interpolatedIntent` so it does not trip the
-unknown-key gate, but it does not substitute or emit that field into the IR.
-The device renders the descriptor's separate static `intent` string, or
-`"Sign"` when static `intent` is absent. It therefore does **not** display an
-`interpolatedIntent` template literally with braces. Treat interpolation as an
-unsupported UX feature; do not claim that its dynamic values are shown.
+The host compiler supports a deliberately smaller contract-calldata subset. A
+catalogue format is enrolled only when the template has one terminal
+placeholder naming an always-visible, static unsigned scalar field formatted as
+`amount` or `tokenAmount`. `#.amount` and the registry's root-relative
+`amount` spelling are the only accepted path alias. Arrays, container paths,
+EIP-712 values, address/NFT/raw fields, threshold/message shorthand and the
+canonical ERC-20 `approve(address,uint256)` flow remain outside this slice.
+Valid unsupported templates retain the descriptor's separate static `intent`;
+they are not printed with braces and do not cause an otherwise safe format to
+drop from the catalogue.
+
+Eligibility is deployment-specific, not descriptor-global. A non-native
+`tokenAmount` placeholder is enrolled only when its statically resolved exact
+`(chainId, token)` identity is present in the generated ERC-20 metadata set and
+that metadata row fits every device-verifier bound, including proof depth and
+the complete 1,120-byte wire limit. A runtime calldata token path cannot borrow
+authority from another deployment or from a dormant token literal. A native
+placeholder instead requires one of the descriptor-authenticated native
+sentinels and a firmware-pinned chain scale/ticker. The current reviewed source
+set contains 78 candidate deployment formats: six meet these conditions and 72
+retain only their static intent. Catalogue expansion requires that explicit
+enrollment test to change.
+
+The compiler resolves the placeholder to the final emitted field ordinal and
+stores program version 1 in authenticated parameter TLV `0x46`, canonically on
+field zero. This is a root-pinned extension within IR schema v3, not a schema
+bump. The device deep-validates the TLV in every format, including unselected
+suffixes: unique canonical placement, in-range ordinal, `Always` visibility,
+an `Amount`/`TokenAmount` opcode, no threshold/message, and a static structured
+scalar path are mandatory.
+
+Rendering remains derived presentation. PQ1 first renders and retains every
+ordinary field and token-identity page. Only a formatter that completely paints
+the signed 32-byte amount using an authenticated scale/unit may mint the private
+substitution witness. A non-native `tokenAmount` additionally requires exact
+metadata chain and contract binding. Raw/unverified/unlimited/overflow,
+zero-collapse, hidden/skipped or missing-witness paths reject. The derived title
+then repaints the already-reserved intent page, so page count and ordering do not
+change; it must fit all 32 OLED cells and never uses the static title's `~`
+clipping.
+
+The value witness is exact at the displayed precision. In particular, the
+native-value path displays at most six fractional digits and refuses a non-zero
+amount whose signed 256-bit value cannot be reconstructed exactly at that
+precision; it never certifies rounded copy as the signed amount. Native
+rendering and interpolation share the same exactness predicate.
+
+This intentionally differs from Ambire's companion-side implementation, which
+interpolates decoded path values directly. PQ1 substitutes the value its trusted
+field renderer actually showed, including the authenticated unit/ticker. For
+that reason the first catalogue slice accepts only a terminal placeholder and
+does not enroll upstream templates that append their own unit copy. Once TLV
+`0x46` is present, any runtime interpolation failure is a hard refusal rather
+than a downgrade to the static title. The separately derived exact-zero
+`"Revoke approval"` banner and interpolation cannot coexist.
 
 ### 12.3 Nested calldata stubs out
 

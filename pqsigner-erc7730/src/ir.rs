@@ -15,7 +15,7 @@
 //!
 //! ```text
 //!   off  size  field
-//!    0    1   schema_ver         (0x03 — see SCHEMA_VER)
+//!    0    1   schema_ver         (0x04 — see SCHEMA_VER)
 //!    1    1   context_kind       (CTX_CONTRACT | CTX_EIP712)
 //!    2    8   chain_id (u64 BE)  (for EIP-712: domain.chainId)
 //!   10   20   contract           (for EIP-712: domain.verifyingContract)
@@ -60,10 +60,14 @@ use core::convert::TryFrom;
 /// (`0x01`) vs the structured v0x03 block (`0x03`). `parse` strict-rejects any
 /// other value, so a descriptor compiled under the old, slot-confusable
 /// encoding can never be walked by this firmware — and a 0x02 DB can never be
-/// mixed-interpreted by 0x03 firmware. Firmware + DB ship together under one
-/// pinned Merkle root, so the bump is clean.
+/// mixed-interpreted by 0x03 firmware. Bumped `0x03 → 0x04` for the mandatory
+/// authenticated terminal-kind TLV on every field. Static path bytecode alone
+/// cannot distinguish an address from uint/int/bool/bytesN; v4 lets the device
+/// independently enforce the same exhaustive formatter/type/parameter matrix
+/// as dbgen. Firmware + DB ship together under one pinned Merkle root, so old
+/// v3 leaves hard-refuse instead of being mixed-interpreted.
 /// See `docs/security/vulns/VULN-erc7730-walker-slot-confusion.md`.
-pub const SCHEMA_VER: u8 = 0x03;
+pub const SCHEMA_VER: u8 = 0x04;
 pub const HEADER_LEN: usize = 134;
 
 /// Upper bound on a nested EIP-712 struct's own member count (the number
@@ -76,7 +80,7 @@ pub const MAX_NESTED_MEMBERS: usize = 32;
 /// (`T[]`, v2). Bounds the device's page budget — each element renders its
 /// visible sub-fields plus a divider, and the whole array must fit inside
 /// `MAX_PAGES` after the banner/chain/confirm pages — and the collect-verify
-/// buffer. `elem_count > MAX_NESTED_ARRAY` (or `== 0`) declines. Schema v3.
+/// buffer. `elem_count > MAX_NESTED_ARRAY` (or `== 0`) declines. Schema v4.
 pub const MAX_NESTED_ARRAY: usize = 6;
 
 pub const CTX_CONTRACT: u8 = 0x01;
@@ -87,6 +91,11 @@ pub const MAX_FORMATS: usize = 32;
 pub const MAX_FIELDS_PER_FORMAT: usize = 24;
 pub const MAX_NESTING: usize = 8;
 pub const MAX_POOL_ENTRY_LEN: usize = 256;
+
+/// ERC-20 `approve(address,uint256)`. The host compiler does not enroll an
+/// interpolated confirm banner for this authority-bearing selector; the device
+/// mirrors that policy so a hostile authenticated IR cannot reintroduce it.
+pub const ERC20_APPROVE_SELECTOR: [u8; 4] = [0x09, 0x5E, 0xA7, 0xB3];
 
 pub const OWNER_FIELD_LEN: usize = 16;
 pub const CONTRACT_NAME_FIELD_LEN: usize = 16;
@@ -519,20 +528,159 @@ impl<'a> Erc7730Ir<'a> {
                 return Err(IrError::BadFormat);
             }
             let mut fields = header.fields();
+            let mut field_ordinal = 0u8;
+            let mut interpolated_intent = None;
+            let mut actual_nested_descents = 0u8;
+            let mut saw_bare_nested_marker = false;
             while let Some(field) = fields.next() {
                 let field = field?;
-                FormatOp::try_from(field.format_op)?;
+                let op = FormatOp::try_from(field.format_op)?;
                 if field.path_off != 0 {
                     let path = self.path_bytes(field.path_off)?;
                     validate_path_program(path)?;
                 }
-                if field.param_off != 0 {
-                    validate_pool_entry(self.pool, field.param_off)?;
-                    crate::render::params::parse(self, field.param_off)
+                if field.param_off == 0 {
+                    // Schema v4 requires the authenticated terminal-kind TLV
+                    // even when a formatter has no other parameters.
+                    return Err(IrError::BadField);
+                }
+                validate_pool_entry(self.pool, field.param_off)?;
+                let params = crate::render::params::parse(self, field.param_off)
+                    .map_err(|_| IrError::BadPoolEntry)?;
+                let kind = params.terminal_kind.ok_or(IrError::BadField)?;
+
+                if params.visibility != Visibility::Never
+                    && !crate::render::policy::label_has_visible_glyph(field.label)
+                {
+                    return Err(IrError::BadAscii);
+                }
+
+                if let Some(program) = params.interpolated_intent {
+                    // This is format-level state with one canonical wire
+                    // location. A second location or a later field would
+                    // create order-dependent meaning.
+                    if field_ordinal != 0
+                        || interpolated_intent.replace(program).is_some()
+                        || !matches!(self.context_kind, ContextKind::Contract)
+                    {
+                        return Err(IrError::BadFormat);
+                    }
+                }
+
+                if let Some(payload) = params.nested_struct {
+                    match payload.first().copied() {
+                        Some(0x01) if payload.len() == 1 => {
+                            // Legacy belt marker remains an intentional hard
+                            // refusal.  Validate the underlying field normally,
+                            // but never count the marker as a structured descent.
+                            saw_bare_nested_marker = true;
+                            let mask = params
+                                .policy_mask()
+                                .without(crate::render::policy::ParamMask::NESTED_STRUCT);
+                            crate::render::policy::validate_field(op, kind, mask)
+                                .map_err(|_| IrError::BadField)?;
+                            validate_terminal_path_shape(self, &field, kind, &params, false)?;
+                        }
+                        Some(crate::render::nested::NESTED_V3) => {
+                            if !matches!(self.context_kind, ContextKind::Eip712)
+                                || op != FormatOp::Raw
+                                || kind != crate::render::policy::TerminalKind::NestedStruct
+                                || field.path_off != 0
+                            {
+                                return Err(IrError::BadField);
+                            }
+                            crate::render::policy::validate_field(
+                                op,
+                                kind,
+                                params.policy_mask(),
+                            )
+                            .map_err(|_| IrError::BadField)?;
+                            let consumed = crate::render::nested::validate_nested_ir(
+                                self,
+                                payload,
+                                header.static_head_words as usize,
+                                1,
+                            )?;
+                            actual_nested_descents = actual_nested_descents
+                                .checked_add(consumed)
+                                .ok_or(IrError::OverCap)?;
+                        }
+                        _ => return Err(IrError::BadPoolEntry),
+                    }
+                } else {
+                    if kind == crate::render::policy::TerminalKind::NestedStruct {
+                        return Err(IrError::BadField);
+                    }
+                    crate::render::policy::validate_field(op, kind, params.policy_mask())
+                        .map_err(|_| IrError::BadField)?;
+                    validate_terminal_path_shape(self, &field, kind, &params, true)?;
+                }
+
+                if op == FormatOp::Enum {
+                    let enum_off = params.enum_ref.ok_or(IrError::BadField)?;
+                    crate::render::enums::validate_enum_table(self.pool, enum_off)
                         .map_err(|_| IrError::BadPoolEntry)?;
                 }
+                field_ordinal = field_ordinal.checked_add(1).ok_or(IrError::OverCap)?;
             }
             if fields.cursor() != header.fields_buf.len() {
+                return Err(IrError::BadFormat);
+            }
+            if let Some(program) = interpolated_intent {
+                // Belt behind `InterpolatedIntentProgram::parse`: the current
+                // executable subset is exactly one substitution followed by
+                // an empty final literal. Keep this check in the enclosing
+                // format validator so faulted parser state cannot broaden the
+                // confirm-banner authority boundary.
+                if program.substitution_count() != 1
+                    || !program
+                        .literal(1)
+                        .map_err(|_| IrError::BadPoolEntry)?
+                        .is_empty()
+                    || header.selector == ERC20_APPROVE_SELECTOR
+                {
+                    return Err(IrError::BadFormat);
+                }
+                let mut token_amount_refs = 0u8;
+                for slot in 0..program.substitution_count() {
+                    let ordinal = program
+                        .field_ordinal(slot)
+                        .map_err(|_| IrError::BadPoolEntry)?;
+                    if ordinal >= header.field_count {
+                        return Err(IrError::BadFormat);
+                    }
+                    let target = header
+                        .fields()
+                        .nth(ordinal as usize)
+                        .ok_or(IrError::BadFormat)??;
+                    let op = FormatOp::try_from(target.format_op)?;
+                    if !matches!(op, FormatOp::Amount | FormatOp::TokenAmount) {
+                        return Err(IrError::BadFormat);
+                    }
+                    if matches!(op, FormatOp::TokenAmount) {
+                        token_amount_refs =
+                            token_amount_refs.checked_add(1).ok_or(IrError::OverCap)?;
+                        if token_amount_refs > 1 {
+                            return Err(IrError::BadFormat);
+                        }
+                    }
+                    let target_params = crate::render::params::parse(self, target.param_off)
+                        .map_err(|_| IrError::BadPoolEntry)?;
+                    if target_params.visibility != Visibility::Always
+                        || target_params.threshold.is_some()
+                        || target_params.message.is_some()
+                    {
+                        return Err(IrError::BadFormat);
+                    }
+                    let path = self.path_bytes(target.path_off)?;
+                    validate_interpolated_scalar_path(path)?;
+                }
+            }
+            if actual_nested_descents != header.nested_descent_count
+                || saw_bare_nested_marker && actual_nested_descents != 0
+                || matches!(self.context_kind, ContextKind::Contract)
+                    && header.nested_descent_count != 0
+            {
                 return Err(IrError::BadFormat);
             }
         }
@@ -559,6 +707,82 @@ impl<'a> Erc7730Ir<'a> {
         }
         Ok(())
     }
+}
+
+/// Independently reconcile an authenticated terminal kind with the structural
+/// path shape available to the device.  The semantic kind itself is supplied
+/// by schema v4; this belt prevents a dynamic/constant/container path from
+/// contradicting that authenticated claim.
+fn validate_terminal_path_shape(
+    ir: &Erc7730Ir<'_>,
+    field: &FieldEntry<'_>,
+    kind: crate::render::policy::TerminalKind,
+    params: &crate::render::params::ParamSet<'_>,
+    forbid_nested: bool,
+) -> Result<(), IrError> {
+    use crate::{
+        abi::container_field,
+        render::{params::DYNAMIC_KIND_STRING, policy::TerminalKind},
+    };
+
+    match kind {
+        TerminalKind::ConstantText => {
+            if field.path_off != 0 || params.const_value.is_none() {
+                return Err(IrError::BadField);
+            }
+            return Ok(());
+        }
+        TerminalKind::NestedStruct => {
+            if forbid_nested || field.path_off != 0 || params.nested_struct.is_none() {
+                return Err(IrError::BadField);
+            }
+            return Ok(());
+        }
+        _ if field.path_off == 0 => return Err(IrError::BadField),
+        _ => {}
+    }
+
+    let path = ir.path_bytes(field.path_off)?;
+    let ends_dynamic = path.last().copied() == Some(PathOp::FollowOffset as u8);
+    match kind {
+        TerminalKind::DynamicString => {
+            if !ends_dynamic || params.dynamic_kind != Some(DYNAMIC_KIND_STRING) {
+                return Err(IrError::BadField);
+            }
+        }
+        TerminalKind::DynamicBytes => {
+            // No current formatter admits arbitrary dynamic bytes, but retain
+            // the structural check so a future matrix extension cannot skip it.
+            if !ends_dynamic
+                || params.dynamic_kind
+                    != Some(crate::render::params::DYNAMIC_KIND_BYTES)
+            {
+                return Err(IrError::BadField);
+            }
+        }
+        _ if ends_dynamic || params.dynamic_kind.is_some() => return Err(IrError::BadField),
+        _ => {}
+    }
+
+    // Container fields have a firmware-owned type vocabulary, so validate the
+    // exact kind without trusting dbgen's claim.
+    if path.first().copied() == Some(PathOp::RootContainer as u8) {
+        if path.len() != 4 || path[1] != PathOp::FieldIdx as u8 {
+            return Err(IrError::BadField);
+        }
+        let idx = u16::from_be_bytes([path[2], path[3]]);
+        let expected = match idx {
+            container_field::TO | container_field::FROM => TerminalKind::Address,
+            container_field::VALUE | container_field::CHAIN_ID | container_field::NONCE => {
+                TerminalKind::Unsigned
+            }
+            _ => return Err(IrError::BadField),
+        };
+        if kind != expected {
+            return Err(IrError::BadField);
+        }
+    }
+    Ok(())
 }
 
 fn validate_pool_entry(pool: &[u8], off: u16) -> Result<(), IrError> {
@@ -606,6 +830,31 @@ fn validate_path_program(prog: &[u8]) -> Result<(), IrError> {
     Ok(())
 }
 
+/// Interpolation v1 deliberately witnesses only a static structured scalar.
+/// The compiler proves the terminal ABI type is unsigned; this device-side
+/// belt independently excludes container/dynamic/array path bytecode.
+fn validate_interpolated_scalar_path(prog: &[u8]) -> Result<(), IrError> {
+    if prog.first().copied() != Some(PathOp::RootStructured as u8) {
+        return Err(IrError::BadField);
+    }
+    let mut cursor = 1usize;
+    let mut steps = 0usize;
+    while cursor < prog.len() {
+        if prog.get(cursor).copied() != Some(PathOp::FieldIdx as u8) {
+            return Err(IrError::BadField);
+        }
+        cursor = cursor.checked_add(3).ok_or(IrError::BadField)?;
+        if cursor > prog.len() {
+            return Err(IrError::BadField);
+        }
+        steps += 1;
+    }
+    if steps == 0 {
+        return Err(IrError::BadField);
+    }
+    Ok(())
+}
+
 /// Parsed view of one format-table entry. Borrows from the IR's
 /// `formats` slice; cheap to copy.
 ///
@@ -617,7 +866,7 @@ fn validate_path_program(prog: &[u8]) -> Result<(), IrError> {
 ///   field_count          u8       (≤ MAX_FIELDS_PER_FORMAT)
 ///   intent_len           u8       (≤ 254, printable ASCII)
 ///   static_head_words    u16 BE   (ABI static head, in 32-byte words)
-///   nested_descent_count u8       (schema v3 — E1 reconciliation pin)
+///   nested_descent_count u8       (schema v4 — E1 reconciliation pin)
 ///   intent               [u8; intent_len]
 ///   type_hash            [u8; 32] (EIP-712 context ONLY — see below)
 ///   field                [u8; ...]*  (field_count entries — see FieldEntry)
@@ -653,7 +902,7 @@ pub struct FormatHeader<'a> {
     /// regression tripwire, not a tautology: a future edit that makes descent
     /// conditional drops the runtime consume-count below this pin → decline.
     /// `0` for every contract-context format and every non-nested EIP-712
-    /// format. Schema v3.
+    /// format. Schema v4.
     pub nested_descent_count: u8,
     /// Trimmed printable ASCII intent string ("Sign", "Wrap", …).
     pub intent: &'a [u8],
@@ -826,7 +1075,7 @@ impl<'a> FieldIter<'a> {
     /// FieldEntry wire format (`format_op | label_len | label | path_off |
     /// param_off`), so the nested-struct renderer reuses this exact parser —
     /// including its label-ASCII + bounds checks — instead of re-implementing
-    /// it. Schema v3.
+    /// it. Schema v4.
     pub fn from_buf(buf: &'a [u8], count: u8) -> Self {
         FieldIter {
             buf,
@@ -953,8 +1202,69 @@ mod tests {
         out.push(1); // label len
         out.push(b'X');
         out.extend_from_slice(&1u16.to_be_bytes()); // path offset
-        out.extend_from_slice(&0u16.to_be_bytes()); // no params
+        out.extend_from_slice(&6u16.to_be_bytes()); // terminal-kind params
         out
+    }
+
+    /// Root-structured FieldIdx(0) plus the schema-v4 mandatory authenticated
+    /// unsigned terminal-kind blob at offset 6.
+    fn scalar_pool() -> std::vec::Vec<u8> {
+        std::vec![
+            0,
+            4,
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+            3,
+            crate::render::params::PARAM_TERMINAL_KIND,
+            1,
+            crate::render::policy::TerminalKind::Unsigned as u8,
+        ]
+    }
+
+    fn interpolation_pool_with_program(
+        program: &[u8],
+        extra_param_tlvs: &[u8],
+    ) -> std::vec::Vec<u8> {
+        let mut pool = std::vec![
+            0,
+            4,
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+        ];
+        let body_len = 2 + program.len() + extra_param_tlvs.len() + 3;
+        pool.push(body_len as u8);
+        pool.push(crate::render::params::PARAM_INTERPOLATED_INTENT);
+        pool.push(program.len() as u8);
+        pool.extend_from_slice(program);
+        pool.extend_from_slice(extra_param_tlvs);
+        pool.extend_from_slice(&[
+            crate::render::params::PARAM_TERMINAL_KIND,
+            1,
+            crate::render::policy::TerminalKind::Unsigned as u8,
+        ]);
+        pool
+    }
+
+    fn interpolation_pool(field_ordinal: u8, extra_param_tlvs: &[u8]) -> std::vec::Vec<u8> {
+        interpolation_pool_with_program(&[1, 1, 0, field_ordinal, 0], extra_param_tlvs)
+    }
+
+    fn interpolated_field_format(
+        selector: [u8; 4],
+        format_op: u8,
+        field_ordinal: u8,
+        extra_param_tlvs: &[u8],
+    ) -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
+        let pool = interpolation_pool(field_ordinal, extra_param_tlvs);
+        let mut format = one_field_format(selector, format_op);
+        let param_off = 6u16;
+        let param_pos = format.len() - 2;
+        format[param_pos..].copy_from_slice(&param_off.to_be_bytes());
+        (pool, format)
     }
 
     #[test]
@@ -971,14 +1281,7 @@ mod tests {
 
     #[test]
     fn deep_validation_rejects_duplicate_selectors() {
-        let pool = [
-            0,
-            4,
-            PathOp::RootStructured as u8,
-            PathOp::FieldIdx as u8,
-            0,
-            0,
-        ];
+        let pool = scalar_pool();
         let mut formats = std::vec![2];
         formats.extend_from_slice(&one_field_format([1, 2, 3, 4], FormatOp::Raw as u8));
         formats.extend_from_slice(&one_field_format([1, 2, 3, 4], FormatOp::Raw as u8));
@@ -988,19 +1291,116 @@ mod tests {
 
     #[test]
     fn deep_validation_checks_unselected_format_suffix() {
-        let pool = [
-            0,
-            4,
-            PathOp::RootStructured as u8,
-            PathOp::FieldIdx as u8,
-            0,
-            0,
-        ];
+        let pool = scalar_pool();
         let mut formats = std::vec![2];
         formats.extend_from_slice(&one_field_format([1, 2, 3, 4], FormatOp::Raw as u8));
         formats.extend_from_slice(&one_field_format([5, 6, 7, 8], 0xFF));
         let bytes = build_ir(&pool, &formats);
         assert_eq!(Erc7730Ir::parse(&bytes), Err(IrError::BadField));
+    }
+
+    #[test]
+    fn deep_validation_accepts_canonical_scalar_interpolation() {
+        let (pool, format) =
+            interpolated_field_format([1, 2, 3, 4], FormatOp::Amount as u8, 0, &[]);
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&format);
+        assert!(Erc7730Ir::parse(&build_ir(&pool, &formats)).is_ok());
+    }
+
+    #[test]
+    fn deep_validation_rejects_interpolated_erc20_approve_enrollment() {
+        let (pool, format) =
+            interpolated_field_format(ERC20_APPROVE_SELECTOR, FormatOp::Amount as u8, 0, &[]);
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&format);
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&pool, &formats)),
+            Err(IrError::BadFormat)
+        );
+    }
+
+    #[test]
+    fn deep_validation_checks_interpolation_in_unselected_format_suffix() {
+        let invalid_program = [1, 2, 0, 0, 0, 1, 0];
+        let pool = interpolation_pool_with_program(&invalid_program, &[]);
+        let mut bad_suffix = one_field_format([5, 6, 7, 8], FormatOp::Amount as u8);
+        let param_pos = bad_suffix.len() - 2;
+        bad_suffix[param_pos..].copy_from_slice(&6u16.to_be_bytes());
+
+        let mut formats = std::vec![2];
+        formats.extend_from_slice(&one_field_format([1, 2, 3, 4], FormatOp::Raw as u8));
+        formats.extend_from_slice(&bad_suffix);
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&pool, &formats)),
+            Err(IrError::BadPoolEntry)
+        );
+    }
+
+    #[test]
+    fn deep_validation_rejects_interpolation_oob_wrong_op_or_visibility() {
+        let (oob_pool, oob_format) =
+            interpolated_field_format([1, 2, 3, 4], FormatOp::Amount as u8, 1, &[]);
+        let mut oob_formats = std::vec![1];
+        oob_formats.extend_from_slice(&oob_format);
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&oob_pool, &oob_formats)),
+            Err(IrError::BadFormat)
+        );
+
+        let (raw_pool, raw_format) =
+            interpolated_field_format([1, 2, 3, 4], FormatOp::Raw as u8, 0, &[]);
+        let mut raw_formats = std::vec![1];
+        raw_formats.extend_from_slice(&raw_format);
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&raw_pool, &raw_formats)),
+            Err(IrError::BadFormat)
+        );
+
+        let visibility_tlv = [
+            crate::render::params::PARAM_VISIBILITY,
+            1,
+            Visibility::Optional as u8,
+        ];
+        let (optional_pool, optional_format) =
+            interpolated_field_format([1, 2, 3, 4], FormatOp::Amount as u8, 0, &visibility_tlv);
+        let mut optional_formats = std::vec![1];
+        optional_formats.extend_from_slice(&optional_format);
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&optional_pool, &optional_formats)),
+            Err(IrError::BadFormat)
+        );
+    }
+
+    #[test]
+    fn deep_validation_rejects_noncanonical_interpolation_placement() {
+        let mut pool = interpolation_pool(1, &[]);
+        let terminal_only_off = pool.len() as u16;
+        pool.extend_from_slice(&[
+            3,
+            crate::render::params::PARAM_TERMINAL_KIND,
+            1,
+            crate::render::policy::TerminalKind::Unsigned as u8,
+        ]);
+        let mut format = std::vec::Vec::new();
+        format.extend_from_slice(&[1, 2, 3, 4]);
+        format.push(2); // field count
+        format.push(0); // intent len
+        format.extend_from_slice(&2u16.to_be_bytes());
+        format.push(0); // nested descent count
+        for param_off in [terminal_only_off, 6u16] {
+            format.push(FormatOp::Amount as u8);
+            format.push(1);
+            format.push(b'X');
+            format.extend_from_slice(&1u16.to_be_bytes());
+            format.extend_from_slice(&param_off.to_be_bytes());
+        }
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&format);
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&pool, &formats)),
+            Err(IrError::BadFormat)
+        );
     }
 
     // `path_bytes` (review 5.4 — moved here from the retired legacy walker).
@@ -1054,6 +1454,13 @@ mod tests {
         let mut bytes = minimal_header();
         bytes[0] = 0xFF;
         assert_eq!(Erc7730Ir::parse(&bytes), Err(IrError::SchemaVersion));
+    }
+
+    #[test]
+    fn schema_v3_is_rejected_after_terminal_kind_migration() {
+        let mut buf = minimal_header();
+        buf[0] = 0x03;
+        assert_eq!(Erc7730Ir::parse(&buf), Err(IrError::SchemaVersion));
     }
 
     #[test]

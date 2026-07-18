@@ -57,6 +57,28 @@ no technical requirement inside the preserved candidate.
    Architecture, implementation, merge, and production recommendations are
    separate. None is inherited by a changed digest, and none replaces the
    owner or authorized maintainer's stage-transition decision.
+8. **Batch implementation review at explicit phase boundaries.** A bounded,
+   reversible Phase C campaign may contain several related implementation
+   slices under one recorded scope and fail-closed authority contract. Each
+   slice still earns proportionate executable evidence, but the complete
+   playbook/dual-review ceremony runs on the frozen combined Phase D candidate,
+   not after every commit or formatter addition. Expansion and authority
+   triggers still stop the batch immediately. Keep one batch to a coherent
+   feature family and normally **2–5 slices**; a larger campaign needs an
+   explicit smaller review boundary rather than accumulating an open-ended
+   diff.
+9. **Playbooks are coverage floors, not the threat model.** Reviewers derive
+   assets, trust boundaries, failure paths, and novel attacks from the frozen
+   source, requirements, and invariants before using the applicable playbooks
+   as a completeness check. A catalog row, status label, or claimed defense is
+   an untrusted hypothesis to reproduce or falsify, not a premise or an
+   exhaustive list of what may be wrong.
+10. **Finish the active stage before improving the process around it.** Once a
+    candidate enters Phase D, the closure checklist is closed. Optional
+    assurance, reviewer additions, documentation polish, tooling cleanup, and
+    adjacent hardening are banked unless they were already a named gate or a
+    concrete Section-5 trigger makes them stage-blocking. Review ceremony must
+    remain proportionate to the stage being decided.
 
 The practical rule is: **do not suppress exploration, and do not implement
 speculation as if it were a requirement.**
@@ -111,6 +133,10 @@ A non-trivial plan must make the following reviewable before implementation:
     executable test, model, measurement, or deliberately open gate.
 12. **Review and convergence gates.** State when the artifact freezes, which
     reviews are required, what blocks the next stage, and what gets banked.
+    Include a closed, ordered Phase-D completion checklist. Mark each evidence
+    item as mandatory for the requested stage, reusable unchanged evidence, or
+    a later production/hardware gate; only the first category may delay that
+    stage.
 13. **Preservation and rollback.** Protect existing work, define the commit or
     branch strategy, and explain how a failed experiment is removed cleanly.
 
@@ -141,13 +167,23 @@ paths unless it passes the implementation process independently.
 - Record rejected alternatives and the evidence that rejected them.
 - Freeze the review packet: plan/spec digest, prompt digest, repository identity,
   tests already executed, and open gates.
-- For security-sensitive work, obtain favorable architecture recommendations
-  from both review partners, then record the owner or authorized maintainer's
-  stage decision before production-shared implementation.
+- For security-sensitive work that establishes or changes signing authority,
+  fallback policy, a trust boundary, persistent-state semantics, or an
+  irreversible interface, obtain favorable architecture recommendations from
+  both review partners, then record the owner or authorized maintainer's stage
+  decision before production-shared implementation.
+- A maintainer may instead authorize a bounded Phase C implementation campaign
+  under an already-selected authority and fail-closed contract. The packet must
+  enumerate its slice IDs, cumulative compatibility/resource envelope, and
+  Phase D stopping point. This permits implementation and testing, not merge or
+  production claims, and it cannot be used to smuggle an unresolved product
+  decision into code.
 
 ### Phase C — implementation and evidence
 
 - Implement in reviewable slices; keep commits buildable and fail-closed.
+- Keep one named product surface active. Record the included slice IDs and bank
+  unrelated findings rather than switching campaigns mid-phase.
 - Test behavior rather than source strings wherever behavior can be executed.
 - Inject reset, torn-write, malformed-input, boundary, and fault cases wherever
   the threat model makes them relevant.
@@ -156,6 +192,20 @@ paths unless it passes the implementation process independently.
 - Preserve user changes and unrelated work; do not use broad cleanup or
   formatting as part of a security fix.
 - Record exactly what was executed and what was only inspected.
+- Do not launch a complete adversarial-review pair after each bounded slice.
+  Accumulate relevant playbook coverage, tests, generated artifacts, resource
+  deltas, and residuals for the combined Phase D packet.
+
+The Phase C batch stops and returns to Phase B (or pauses for owner direction)
+if a slice introduces any of the following outside the recorded campaign
+envelope: new signing eligibility or downgrade/fallback authority; a new trust
+boundary or host-controlled security fact; persistent-state or recovery
+semantics; a wire/schema change requiring ecosystem migration rather than a
+root-pinned compatible extension; an irreversible/external action; a failed
+resource envelope; or another Section-5 expansion trigger. Ordinary root
+rotation, compatible authenticated-IR extensions, additional fail-closed
+formatters, tests, and catalogue coverage may remain in the same batch when the
+packet explicitly allowed them.
 
 ### Phase D — frozen implementation review
 
@@ -164,6 +214,42 @@ paths unless it passes the implementation process independently.
 - Give both adversarial partners the same core packet and questions.
 - Resolve findings, re-freeze, and apply the material/non-material re-review
   rule in Section 10.
+
+Phase D is **closure mode**, not another exploration or implementation phase:
+
+- Freeze the exact ordered checklist before launching reviewers. It contains
+  only stage-relevant mandatory evidence, target identity, the required review
+  legs, blocker remediation, re-review when required, landing, and the minimal
+  owner-status/TODO receipt.
+- Do not add a test campaign, reviewer, playbook campaign, formal-method track,
+  documentation rewrite, or cleanup merely because it would improve assurance.
+  Bank it unless it was already required for the requested verdict or a
+  concrete Section-5 trigger makes it stage-blocking.
+- Run focused tests while correcting findings and run the frozen combined gate
+  set once on the candidate that will be reviewed. Do not repeatedly run the
+  complete evidence matrix after every correction.
+- Evidence is stage-fit. A merge review records absent production, hardware,
+  factory, and destructive evidence as honest residuals unless the changed
+  surface or a stricter gate specifically requires that evidence for merge.
+  It does not collect shipment evidence merely because a playbook names it.
+- Parallelize independent mandatory gates and review legs. Receipt generation
+  and archival are bookkeeping, not new product slices, and should use the
+  existing templates/scripts.
+- If Phase D cannot progress on its recorded checklist, stop adding work and
+  report the exact blocker, its evidence, and the shortest compliant route to
+  either convergence or an owner decision.
+- Every new checklist item needs a cited Section-5 trigger or stricter owner
+  gate and a statement of why it cannot be banked. Without that receipt, the
+  next action must come from the existing checklist.
+
+The Phase D target is the combined Phase C candidate. Apply every intersecting
+playbook as an additive lens inside one combined review of that complete
+surface; do not substitute narrow per-slice reviews or separate per-playbook
+campaigns for inspection of the composed behavior and resource envelope. A
+separate campaign is justified only by a stricter task-specific requirement or
+a concrete finding that triggers Section 5 scope expansion. Combining the
+lenses never permits an applicable catalog, stricter gate, or honest residual
+to be omitted.
 
 ### Phase E — landing and handoff
 
@@ -254,17 +340,32 @@ For security-sensitive architecture and implementation, use both partners:
   mode.
 - **Partner B:** literal model **`gpt-5.6-sol`** with
   **`model_reasoning_effort="ultra"`**.
-- **Supplemental reviewer K (non-substitutive):** **Kimi K3** through Kimi
-  Code, selected with CLI model alias **`kimi-code/k3`**. Request maximum
+- **Optional supplemental reviewer K (non-substitutive):** **Kimi K3** through
+  Kimi Code, selected with CLI model alias **`kimi-code/k3`**. Request maximum
   supported thinking effort and the 1M context ceiling. The post-launch
   control-plane receipt must resolve the alias to provider/model `kimi`/`k3`
   and attest `thinkingEffort="max"`. Kimi is additional adversarial-discovery
   signal only: it does not replace either required partner, change the minimum
   independent pair, assign cross dispositions, or cure an unavailable
-  mandatory leg. Freeze its first pass independently. After both required
-  first passes freeze, give Kimi's complete raw report and digest to both
-  required partners as supplemental candidate input for their symmetric
-  cross-adjudication.
+  mandatory leg. Run it only when the user, a task-specific gate, or a recorded
+  unresolved technical question names the expected value before Phase D
+  launches. It is not a standing default and its absence must not delay the
+  mandatory pair or landing. When run, freeze its first pass independently.
+  After both required first passes freeze, give its complete raw report and
+  digest to both required partners as supplemental candidate input.
+
+**Local access points for the partner legs (2026-07-17).** Partner A is
+reachable through the `claude` CLI (`~/.local/bin/claude`, Claude Code 2.x);
+Partner B through the `codex` CLI (`~/.local/bin/codex`) or the Codex MCP
+server; the repo kit is
+[`contracts/verification/adversarial-review/run_review.py`](../contracts/verification/adversarial-review/README.md)
+(`--backend {claude,codex,generic}`). An orchestrator-spawned single-backend
+reviewer swarm (any model, incl. Kimi subagents) is a **Phase-A discovery input
+only**: its candidate packet — however convergent — goes through the
+Partner-A/B protocol above before any disposition, canonical finding, or
+"verified" claim. It is not a standing prerequisite and must not be launched
+after the Phase-D checklist freezes unless that checklist already names the
+unresolved question it is expected to answer.
 
 Before any required or supplemental first pass starts, the coordinator MUST
 freeze a **pre-launch request receipt** for each leg: role, executable and CLI/harness version,
@@ -282,6 +383,11 @@ attestation. Runtime configuration is a control-plane fact: model self-report
 is not required and MUST NOT be the sole attestation. If a required selector is
 absent from every trusted post-launch/control-plane record, that review leg is
 unavailable; non-required fields may be `NOT_EXPOSED` with a source and reason.
+
+Receipts should be compact and machine-generated where possible. One immutable
+record plus its digest may satisfy every later citation; do not reproduce the
+same configuration as parallel prose in prompts, reports, matrices, status,
+and TODO files.
 
 For Kimi, the trusted post-launch source is a Kimi Code export or durable
 wire/session log. It must bind the CLI version, session ID, report digest,
@@ -353,19 +459,38 @@ Reviewers may use their own subagents, tools, and exploratory attacks. They are
 not limited to the plan author's threat list. They must distinguish an executed
 finding from a reasoned suspicion and must not mutate the review target.
 
+To resist prompt anchoring, each first pass has two distinguishable parts:
+
+1. **Independent source-first discovery.** Derive the attacker, assets, trust
+   boundaries, authority transitions, composed failure paths, and resource
+   hazards from the frozen implementation and normative requirements. Hunt for
+   novel defects without treating playbook catalogs, prior findings, or
+   `DEFENDED` labels as premises.
+2. **Playbook coverage reconciliation.** After that open-ended analysis, walk
+   every applicable catalog and stricter requirement as a coverage audit;
+   reproduce or challenge its claims, identify gaps, and record anything the
+   independent pass found outside the catalogs.
+
+The report must keep those two parts visible even when the same evidence serves
+both. This is one combined review, not one campaign per playbook, and it does
+not require inventing a novel finding when the independent pass finds none.
+
 ### Symmetric cross-adjudication
 
 After both first-pass reports freeze:
 
 Any frozen supplemental Kimi report is candidate input, not a third
 disposition vote. Give its complete report and digest to both required
-partners at this stage; both must reproduce, refute, or narrow every Kimi
-candidate and record its origin in the same cross matrix.
+partners at this stage. Both must disposition every Kimi blocker, major, or
+other candidate that could change the requested stage verdict. Lower-severity
+supplemental observations may be grouped and banked unless either required
+partner promotes one with a concrete stage-impacting trace.
 
 1. Give each reviewer the other complete report and both report digests.
 2. Require each to reproduce, refute, or narrow every blocker/major finding.
 3. Require each to identify where the other reviewer inherited the plan's
-   framing or accepted an unsupported claim.
+   framing, anchored on a playbook catalog, or accepted an unsupported claim,
+   and to name any shared blind spot outside the supplied catalogs.
 4. Preserve disagreements explicitly; do not average severities or decide by
    majority language.
 5. A confirmed or unresolved blocker/major finding, or an unresolved `NO-GO`
@@ -376,11 +501,16 @@ candidate and record its origin in the same cross matrix.
    by preference.
 
 Cross-adjudication produces one durable matrix with one row for every
-first-pass finding. Each row records the stable finding ID, originating
-severity and stage impact, Partner A's disposition and evidence, Partner B's
-disposition and evidence, the resulting correction or residual, and whether an
-owner decision remains. Use only `CONFIRMED`, `REFUTED`, `NARROWED`, or
-`UNRESOLVED` as cross dispositions.
+stage-impacting first-pass finding. Each row records the stable finding ID,
+originating severity and stage impact, Partner A's disposition and evidence,
+Partner B's disposition and evidence, the resulting correction or residual,
+and whether an owner decision remains. Low/informational findings with no
+plausible combined stage impact may be grouped in a banked appendix with origin
+and rationale; they do not require a separate counterpart round. Either partner
+may promote a grouped item by supplying a concrete unsafe trace or other
+Section-5 trigger.
+Use only `CONFIRMED`, `REFUTED`, `NARROWED`, or `UNRESOLVED` as cross
+dispositions.
 
 A new finding discovered during cross-adjudication receives a stable `X-*` ID
 and one bounded response from the counterpart. If that response does not
@@ -405,9 +535,19 @@ reproduce the claims:
 - implementation diff or file list and the source-of-truth documents;
 - commands, logs, resource receipts, and hardware receipts actually available;
 - previous findings that remain open or whose fixes are being re-adjudicated;
-- every applicable surface playbook, including its Part-C attack catalog,
-  reviewer-count/cadence requirements, and required commands. The generic
-  workflow is additive and never substitutes for a stricter playbook.
+- one applicable-playbook coverage map that includes every task-relevant Part-C
+  question, reviewer-count/cadence requirement, required command, and honest
+  boundary. Present the playbooks as additive coverage lenses for the combined
+  review, label their status claims as untrusted inputs, and deduplicate common
+  instructions without dropping a stricter requirement. The generic workflow
+  never substitutes for a stricter playbook, and the number of intersecting
+  playbooks does not itself create separate campaigns.
+
+Do not manufacture evidence for a stage that is not being decided. The packet
+must distinguish: (a) evidence required for the requested verdict, (b) unchanged
+evidence reused by exact digest/reference, and (c) production/hardware residuals
+that are intentionally outside this stage. Category (c) is disclosed, not run
+as a precautionary side campaign.
 
 Each reviewer report must contain:
 
@@ -494,6 +634,25 @@ the new digest, followed by cross-adjudication. Prior findings remain explicit
 acceptance criteria, but neither partner sees the other's new report before its
 own freezes.
 
+That re-review rule applies once a snapshot has entered Phase D or carries a
+review recommendation. It does not require a full review after every material
+commit made inside the initial authorized Phase C batch. Likewise, when a Phase
+D review produces several material corrections, implement and test the related
+corrections as one bounded remediation batch, then freeze and review their
+combined result once. No prior recommendation transfers to the changed digest
+during that interval, and no merge/production claim is available until the
+next Phase D review converges.
+
+For a remediation snapshot that stays inside the original authority, trust
+boundaries, compatibility envelope, and product surface, the fresh withheld
+pair may be **remediation-focused**: it must re-check every prior blocker,
+changed file, affected caller/consumer, composed failure path, resource delta,
+and applicable playbook question whose answer could have changed. It need not
+repeat unrelated catalogue questions or unchanged evidence solely to recreate
+the first packet's volume. A new authority, trust boundary, fallback, persistent
+state, incompatible wire change, or Section-5 trigger requires a full combined
+review instead.
+
 A **non-material** change is limited to editorial correction, link/receipt
 repair, or a mechanically equivalent test/document update that changes no
 authority, behavior, evidence claim, or acceptance gate. Both partners and the
@@ -539,8 +698,10 @@ authorization.
 ## 12. Reusable reviewer prompt preamble
 
 Use the same body for both partners and change only the role line and neutral
-disclosure. Append every applicable surface playbook's Part-C prompt and
-requirements; this generic preamble never replaces them.
+disclosure. Attach every applicable surface playbook's task-relevant Part-C
+questions and stricter requirements as a coverage appendix; do not concatenate
+them into repetitive prompts that displace open-ended analysis. This generic
+preamble never replaces an applicable lens.
 
 ```text
 You are independent adversarial review Partner <A|B> for PQSigner OS.
@@ -555,13 +716,25 @@ commands, use external build directories, and create executable PoCs in an
 isolated scratch copy; report them separately from the reviewed identity.
 Verify the canonical snapshot identity before reading and immediately before
 reporting. Treat prior recommendations as non-transferable and attempt to
-refute both the architecture and its implementation. You may explore outside
-the author's threat list.
+refute both the architecture and its implementation.
+
+Begin with an independent source-first attack: derive the assets, attacker,
+trust boundaries, authority transitions, composed failure paths, and resource
+hazards from the frozen implementation and normative requirements. Seek novel
+defects outside the supplied threat list. Do not treat a playbook catalog,
+status label, prior finding, or claimed defense as a premise or as exhaustive.
+Then use every applicable playbook in the coverage appendix to audit what the
+independent pass may have missed and to challenge each relevant claim. Keep the
+source-first results and the playbook reconciliation distinguishable. Multiple
+playbooks are additive lenses in this one review, not separate campaigns,
+unless the packet names a stricter task-specific requirement.
 
 Return the output required by Sections 8 and 9 of
 docs/planning-and-review-workflow.md. Require falsifiable evidence for findings,
 separate executed from inspected evidence, state honest residuals, and keep
-architecture, implementation, merge, and production verdicts distinct.
+architecture, implementation, merge, and production verdicts distinct. State
+what you explored outside the catalogs and identify any inherited framing,
+even if that exploration yields no additional finding.
 
 <Objective, scope, frozen identity recipe/digests, invariants, evidence,
 mandatory questions, open gates, and exact files follow.>

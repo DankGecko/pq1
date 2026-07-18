@@ -251,6 +251,109 @@ fn dup_leaf_byte_identical_is_deduped_not_error() {
 }
 
 #[test]
+fn per_deployment_partial_format_drop_is_reported_once() {
+    let dir = make_tempdir("deployment_drop_dedup");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(
+        dir.join("calldata-two-deployments.json"),
+        r#"{
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000001" },
+    { "chainId": 10, "address": "0x0000000000000000000000000000000000000002" }
+  ] } },
+  "metadata": { "owner": "Drop Test", "contractName": "DropTest" },
+  "display": { "formats": {
+    "transfer(address to,uint256 amount)": {
+      "intent": "Send",
+      "fields": [
+        { "path": "to", "format": "addressName", "label": "To" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    },
+    "swap(uint256[] amounts)": {
+      "intent": "Swap",
+      "fields": [
+        { "path": "amounts[0]", "format": "raw", "label": "Amount" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+
+    let (result, skips) = build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir))
+        .expect("one safe format must survive on both deployments");
+    assert_eq!(result.leaf_count, 2);
+    let duplicate_drop_count = skips
+        .iter()
+        .filter(|skip| {
+            skip.reason.contains("PARTIAL FORMAT DROP")
+                && skip.reason.contains("swap(uint256[] amounts)")
+        })
+        .count();
+    assert_eq!(
+        duplicate_drop_count, 1,
+        "per-deployment compilation must not duplicate one source-format receipt"
+    );
+}
+
+#[test]
+fn tolerant_boundary_skips_contract_ir_rejected_by_canonical_device_parser() {
+    let dir = make_tempdir("device_parser_boundary");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(
+        dir.join("calldata-safe.json"),
+        transfer_descriptor("To", "Amount"),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("calldata-selector-collision.json"),
+        r#"{
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000003" }
+  ] } },
+  "metadata": { "owner": "Collision", "contractName": "Collision" },
+  "display": { "formats": {
+    "approve(address spender,uint256 amount)": {
+      "intent": "Approve",
+      "fields": [
+        { "path": "spender", "format": "addressName", "label": "Spender" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    },
+    "watch_tg_invmru_2f69f1b(address first,address second)": {
+      "intent": "Collision",
+      "fields": [
+        { "path": "first", "format": "addressName", "label": "First" },
+        { "path": "second", "format": "addressName", "label": "Second" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+
+    let (result, skips) = build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir))
+        .expect("the malformed descriptor must stay inside its tolerant boundary");
+    assert_eq!(result.leaf_count, 1, "only the safe descriptor may survive");
+    let collision_skip = skips
+        .iter()
+        .find(|skip| {
+            skip.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-selector-collision.json")
+        })
+        .expect("device-parser rejection must produce a descriptor skip receipt");
+    assert!(
+        collision_skip
+            .reason
+            .contains("failed canonical device parsing")
+            && collision_skip.reason.contains("BadFormat"),
+        "unexpected collision skip: {}",
+        collision_skip.reason
+    );
+}
+
+#[test]
 fn dup_leaf_non_identical_is_conflict_error() {
     // Same (chain, contract) but DIFFERENT IR (different field labels) → the
     // device would trust whichever sorts first by filename (a silent trust-swap

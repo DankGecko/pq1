@@ -7,8 +7,11 @@
 
 mod common;
 
-use common::{build_erc20_bundle, build_tree, canonical_erc20, leaf_hash};
-use pqsigner_tx::erc20::bundle::verify_erc20_bundle;
+use common::{build_erc20_bundle, build_tree, canonical_erc20, leaf_hash, node_hash};
+use pqsigner_tx::erc20::bundle::{
+    metadata_shape_is_device_verifiable, verify_erc20_bundle, MAX_ERC20_BUNDLE_LEN,
+    MAX_ERC20_PROOF_DEPTH,
+};
 
 fn single_entry_fixture(
     chain: u64,
@@ -274,4 +277,41 @@ fn negative_substituted_root_rejected() {
     let bogus = [0xabu8; 32];
     assert!(verify_erc20_bundle(&b, &bogus).is_none(),
         "a valid bundle must NOT verify under an unrelated root");
+}
+
+#[test]
+fn negative_one_byte_over_device_stack_budget_rejected() {
+    // Same maximum-depth shape as the positive boundary control, with one
+    // additional printable symbol byte: 1121 bytes cannot fit the production
+    // secure-side copy buffer even though every individual field is <=64.
+    let name = [b'A'; 28];
+    let symbol = [b'B'; 30];
+    let proof = [[0x55u8; 32]; MAX_ERC20_PROOF_DEPTH];
+    assert!(!metadata_shape_is_device_verifiable(
+        36,
+        &name,
+        &symbol,
+        MAX_ERC20_PROOF_DEPTH,
+    ));
+
+    let canonical = canonical_erc20(1, &[0x42; 20], 36, &name, &symbol);
+    let mut root = leaf_hash(&canonical);
+    for sibling in &proof {
+        root = node_hash(&root, sibling);
+    }
+    let bundle = build_erc20_bundle(
+        1,
+        &[0x42; 20],
+        36,
+        &name,
+        &symbol,
+        0,
+        MAX_ERC20_PROOF_DEPTH as u32,
+        &proof,
+    );
+    assert_eq!(bundle.len(), MAX_ERC20_BUNDLE_LEN + 1);
+    assert!(
+        verify_erc20_bundle(&bundle, &root).is_none(),
+        "a Merkle-valid bundle that cannot fit the production buffer must reject"
+    );
 }

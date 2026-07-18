@@ -8,19 +8,18 @@
 //!
 //! ## interpolatedIntent
 //!
-//! The host compiler currently models but ignores `interpolatedIntent`; it
-//! neither substitutes that field nor emits its template into the IR. The
-//! format header therefore contains only the descriptor's separate static
-//! `intent`, or the host-generated `"Sign"` fallback when `intent` is absent.
-//! This renderer never receives `interpolatedIntent` tokens and does not print
-//! their braces literally. Dynamic interpolation remains unsupported UX and
-//! must not be claimed as displayed content.
+//! The host compiler supports a constrained scalar-amount subset. It resolves
+//! source placeholders to authenticated emitted field ordinals and emits a
+//! max-three-reference token program. The field renderer first paints every
+//! ordinary page and mints exact post-paint amount witnesses; only then may
+//! [`repaint_intent_banner`] replace the static title. Derived output must fit
+//! both rows completely — it never receives the static intent's `~` clipping.
 
 use super::super::primitives::write_line;
 use crate::ir::{Erc7730Ir, FormatHeader};
 
 use super::formatters::write_line_bytes;
-use super::Pages;
+use super::{Page, Pages};
 use crate::render::RenderErr;
 
 /// Number of pages [`render_intent_banner`] writes. Always allocates
@@ -46,7 +45,7 @@ pub(super) fn render_intent_banner(
     ir: &Erc7730Ir<'_>,
     format: &FormatHeader<'_>,
     derived_intent: Option<&[u8]>,
-) -> Result<(), RenderErr> {
+) -> Result<usize, RenderErr> {
     #[cfg(feature = "erc7730-dev-unattested")]
     {
         let warn = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
@@ -57,7 +56,35 @@ pub(super) fn render_intent_banner(
     }
 
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+    pages.buf[p] = build_intent_page(ir, format, derived_intent);
+    Ok(p)
+}
 
+/// Replace the already-reserved intent page after all referenced scalar fields
+/// rendered and produced exact witnesses. The optional dev warning remains at
+/// page zero; page count and visible ordering are unchanged.
+pub(super) fn repaint_intent_banner(
+    pages: &mut Pages,
+    intent_page: usize,
+    ir: &Erc7730Ir<'_>,
+    format: &FormatHeader<'_>,
+    derived_intent: &[u8],
+) -> Result<(), RenderErr> {
+    if derived_intent.is_empty() || derived_intent.len() > 32 {
+        return Err(RenderErr::Reject("7730 bad derived intent length"));
+    }
+    if pages.as_slice().len() <= intent_page {
+        return Err(RenderErr::Reject("7730 missing intent page"));
+    }
+    pages.buf[intent_page] = build_intent_page(ir, format, Some(derived_intent));
+    Ok(())
+}
+
+pub(super) fn build_intent_page(
+    ir: &Erc7730Ir<'_>,
+    format: &FormatHeader<'_>,
+    derived_intent: Option<&[u8]>,
+) -> Page {
     // The intent is the descriptor author's single most important string (the
     // flow title). The confirm page + the field pages already establish this is
     // a signing flow, so we DROP the old "Sign: " prefix — which left only 10
@@ -77,28 +104,37 @@ pub(super) fn render_intent_banner(
     // chain+contract-bound metadata capability.
     let intent = derived_intent.unwrap_or(format.intent);
 
-    let mut row0 = [b' '; W];
+    let mut page = [[b' '; W]; 4];
     let r0_take = intent.len().min(W);
-    row0[..r0_take].copy_from_slice(&intent[..r0_take]);
-    *pages.row_mut(p, 0) = row0;
+    page[0][..r0_take].copy_from_slice(&intent[..r0_take]);
 
     if intent.len() > W {
-        let mut row1 = [b' '; W];
         let end = intent.len().min(2 * W);
         let take = end - W;
-        row1[..take].copy_from_slice(&intent[W..end]);
+        page[1][..take].copy_from_slice(&intent[W..end]);
         // Meaning-bearing truncation marker: the intent runs past what two rows
         // can show, so replace the last cell with `~` (never silently clip).
         if intent.len() > 2 * W {
-            row1[W - 1] = b'~';
+            page[1][W - 1] = b'~';
         }
-        *pages.row_mut(p, 1) = row1;
-        write_line_bytes(pages.row_mut(p, 2), ir.contract_name);
+        write_line_bytes(&mut page[2], ir.contract_name);
     } else {
-        write_line_bytes(pages.row_mut(p, 1), ir.owner);
-        write_line_bytes(pages.row_mut(p, 2), ir.contract_name);
+        write_line_bytes(&mut page[1], ir.owner);
+        write_line_bytes(&mut page[2], ir.contract_name);
     }
-    write_line(pages.row_mut(p, 3), "> next");
+    write_line(&mut page[3], "> next");
+    page
+}
 
-    Ok(())
+/// Exact full-page comparison used for the post-publication receipt and again
+/// at the secure confirmation boundary. Accumulating all differences avoids a
+/// data-dependent early exit and guarantees every visible cell participates.
+pub(super) fn page_exact(actual: &Page, expected: &Page) -> bool {
+    let mut diff = 0u8;
+    for row in 0..actual.len() {
+        for col in 0..actual[row].len() {
+            diff |= actual[row][col] ^ expected[row][col];
+        }
+    }
+    diff == 0
 }

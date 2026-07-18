@@ -28,9 +28,8 @@ use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 /// here so the host-test `#[path]` mount of this file does not pull in the
 /// `aa` crate). Used by [`enforce_paymaster_page`] to decide presence.
 const SHA256_OF_EMPTY: [u8; 32] = [
-    0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9,
-    0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52,
-    0xb8, 0x55,
+    0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
+    0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
 ];
 
 /// One mandatory full signer-identity page per confirmation set.
@@ -44,21 +43,20 @@ pub(crate) const LEGACY_FEE_PAGES: usize = 2;
 /// One conditional warning page when the UserOp carries a paymaster.
 pub(crate) const PAYMASTER_PAGES: usize = 1;
 
+// Every entry in `known_native_ticker` is pinned to an 18-decimal native
+// currency, while the compact value page paints six fractional digits.
+const KNOWN_NATIVE_DECIMALS: u32 = 18;
+
 const SIGNER_PAGE_CFI_STEP: u32 = 0xA4D1_73C9;
-pub(crate) const SIGNER_PAGE_CFI_EXPECTED: u32 =
-    crate::cfi_expected!(SIGNER_PAGE_CFI_STEP);
+pub(crate) const SIGNER_PAGE_CFI_EXPECTED: u32 = crate::cfi_expected!(SIGNER_PAGE_CFI_STEP);
 const TARGET_PAGE_CFI_STEP: u32 = 0x6B2E_91F5;
-pub(crate) const TARGET_PAGE_CFI_EXPECTED: u32 =
-    crate::cfi_expected!(TARGET_PAGE_CFI_STEP);
+pub(crate) const TARGET_PAGE_CFI_EXPECTED: u32 = crate::cfi_expected!(TARGET_PAGE_CFI_STEP);
 const NATIVE_VALUE_CFI_STEP: u32 = 0xD83A_4C27;
-pub(crate) const NATIVE_VALUE_CFI_EXPECTED: u32 =
-    crate::cfi_expected!(NATIVE_VALUE_CFI_STEP);
+pub(crate) const NATIVE_VALUE_CFI_EXPECTED: u32 = crate::cfi_expected!(NATIVE_VALUE_CFI_STEP);
 const LEGACY_FEE_CFI_STEP: u32 = 0x39F6_BD81;
-pub(crate) const LEGACY_FEE_CFI_EXPECTED: u32 =
-    crate::cfi_expected!(LEGACY_FEE_CFI_STEP);
+pub(crate) const LEGACY_FEE_CFI_EXPECTED: u32 = crate::cfi_expected!(LEGACY_FEE_CFI_STEP);
 const PAYMASTER_PAGE_CFI_STEP: u32 = 0xC52D_8E73;
-pub(crate) const PAYMASTER_PAGE_CFI_EXPECTED: u32 =
-    crate::cfi_expected!(PAYMASTER_PAGE_CFI_STEP);
+pub(crate) const PAYMASTER_PAGE_CFI_EXPECTED: u32 = crate::cfi_expected!(PAYMASTER_PAGE_CFI_STEP);
 
 type SignerIdentityPage = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 type TargetIdentityPage = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
@@ -138,10 +136,7 @@ pub(crate) fn from_page_proof(
     })
 }
 
-fn build_signer_identity_page(
-    account_index: u32,
-    sender: &[u8; 20],
-) -> Option<SignerIdentityPage> {
+fn build_signer_identity_page(account_index: u32, sender: &[u8; 20]) -> Option<SignerIdentityPage> {
     // The wire field is exactly eight bits. Recheck at the display boundary so
     // a faulted flag decode cannot paint a truncated/aliased account number.
     if account_index > 255 {
@@ -184,11 +179,7 @@ pub(crate) fn enforce_target_page(
 }
 
 /// Exact all-64-byte readback predicate for the mandatory target page.
-pub(crate) fn target_page_matches(
-    pages: &Pages,
-    page_index: usize,
-    target: &[u8; 20],
-) -> bool {
+pub(crate) fn target_page_matches(pages: &Pages, page_index: usize, target: &[u8; 20]) -> bool {
     let expected = build_target_identity_page(target);
     let Some(actual) = pages.as_slice().get(page_index) else {
         return false;
@@ -202,11 +193,7 @@ pub(crate) fn target_page_matches(
 /// inserter, scrub the sentinel register, then require this independent
 /// length/full-page recomputation to return `OK_SENTINEL`.
 #[inline(never)]
-pub(crate) fn target_page_proof(
-    pages: &Pages,
-    prior_len: usize,
-    target: &[u8; 20],
-) -> u32 {
+pub(crate) fn target_page_proof(pages: &Pages, prior_len: usize, target: &[u8; 20]) -> u32 {
     let Some(expected_len) = prior_len.checked_add(TARGET_IDENTITY_PAGES) else {
         return crate::fi::FAIL_SENTINEL;
     };
@@ -274,17 +261,18 @@ pub(super) fn enforce_native_value_page(
     // keeps the two internal evaluations of the predicate from collapsing
     // into one (F-1). Any other outcome — value non-zero, or a glitched
     // zero-check — flows to the mandatory splice below.
-    let may_skip =
-        crate::fi::check_true_into_sentinel(|| core::hint::black_box(value.is_zero()));
+    let may_skip = crate::fi::check_true_into_sentinel(|| core::hint::black_box(value.is_zero()));
     if may_skip == crate::fi::OK_SENTINEL {
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         cfi.bump(NATIVE_VALUE_CFI_STEP);
         return Ok(());
     }
-    // value is non-zero (or the zero-check was faulted): a loud value page
-    // is MANDATORY. Append it; `?` fails CLOSED when the buffer is full so
-    // the caller refuses to sign instead of hiding the ETH.
-    let page = build_native_value_page(value, chain_id);
+    // value is non-zero (or the zero-check was faulted): an exact native-value
+    // page is MANDATORY. Reconstruct it before reserving a slot so a rounded
+    // or overwide value fails closed without mutating the page set or CFI
+    // receipt. The later `push_blank` likewise fails atomically on a full
+    // buffer.
+    let page = build_native_value_page(value, chain_id).ok_or(())?;
     let idx = pages.push_blank()?;
     pages.buf[idx] = page;
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
@@ -292,31 +280,32 @@ pub(super) fn enforce_native_value_page(
     Ok(())
 }
 
-fn build_native_value_page(value: &U256, chain_id: u64) -> NativeValuePage {
+fn build_native_value_page(value: &U256, chain_id: u64) -> Option<NativeValuePage> {
+    if primitives::known_native_ticker(chain_id).is_some()
+        && !primitives::amount_is_exact_at_fraction_digits(
+            value,
+            KNOWN_NATIVE_DECIMALS,
+            primitives::NATIVE_DISPLAY_FRACTION_DIGITS,
+        )
+    {
+        return None;
+    }
     let mut page = [[b' '; DISPLAY_COLS]; DISPLAY_ROWS];
     primitives::write_native_currency_row(&mut page[0], b"! NATIVE ", chain_id, b"");
     let [_lbl, r1, r2, foot] = &mut page;
     let fit = primitives::write_native_amount_two_rows(r1, r2, value, chain_id);
-    primitives::write_line(
-        foot,
-        match fit {
-            primitives::AmountFit::Full => "> next",
-            primitives::AmountFit::Overflow => "!AMOUNT OVERFLOW",
-        },
-    );
-    page
+    if fit != primitives::AmountFit::Full {
+        return None;
+    }
+    primitives::write_line(foot, "> next");
+    Some(page)
 }
 
 /// Exact completed-skip proof for the compact zero-value path.
 #[inline(never)]
-pub(super) fn native_value_skip_proof(
-    pages: &Pages,
-    prior_len: usize,
-    value: &U256,
-) -> u32 {
+pub(super) fn native_value_skip_proof(pages: &Pages, prior_len: usize, value: &U256) -> u32 {
     crate::fi::check_true_into_sentinel(|| {
-        core::hint::black_box(value.is_zero())
-            && core::hint::black_box(pages.len == prior_len)
+        core::hint::black_box(value.is_zero()) && core::hint::black_box(pages.len == prior_len)
     })
 }
 
@@ -334,7 +323,9 @@ pub(super) fn native_value_page_proof(
     let Some(expected_len) = prior_len.checked_add(NATIVE_VALUE_PAGES) else {
         return crate::fi::FAIL_SENTINEL;
     };
-    let expected = build_native_value_page(value, chain_id);
+    let Some(expected) = build_native_value_page(value, chain_id) else {
+        return crate::fi::FAIL_SENTINEL;
+    };
     crate::fi::check_true_into_sentinel(|| {
         core::hint::black_box(pages.len == expected_len)
             && page_at_matches(pages, prior_len, &expected)
@@ -350,17 +341,21 @@ pub(super) fn native_value_final_set_proof(
     value: &U256,
     chain_id: u64,
 ) -> u32 {
-    let expected = build_native_value_page(value, chain_id);
+    let Some(expected) = build_native_value_page(value, chain_id) else {
+        return crate::fi::FAIL_SENTINEL;
+    };
     crate::fi::check_true_into_sentinel(|| {
         if core::hint::black_box(value.is_zero()) {
             core::hint::black_box(pages.len >= prior_len)
                 && exact_page_occurrences(pages, &expected) == 0
         } else {
-            prior_len.checked_add(NATIVE_VALUE_PAGES).is_some_and(|minimum_len| {
-                core::hint::black_box(pages.len >= minimum_len)
-                    && page_at_matches(pages, prior_len, &expected)
-                    && exact_page_occurrences(pages, &expected) == 1
-            })
+            prior_len
+                .checked_add(NATIVE_VALUE_PAGES)
+                .is_some_and(|minimum_len| {
+                    core::hint::black_box(pages.len >= minimum_len)
+                        && page_at_matches(pages, prior_len, &expected)
+                        && exact_page_occurrences(pages, &expected) == 1
+                })
         }
     })
 }
@@ -437,11 +432,7 @@ fn build_legacy_fee_pages(tx: &Eip1559Tx) -> [LegacyFeePage; LEGACY_FEE_PAGES] {
 
 /// Exact two-page length/content/adjacency/uniqueness completion proof.
 #[inline(never)]
-pub(super) fn legacy_fee_pages_proof(
-    pages: &Pages,
-    prior_len: usize,
-    tx: &Eip1559Tx,
-) -> u32 {
+pub(super) fn legacy_fee_pages_proof(pages: &Pages, prior_len: usize, tx: &Eip1559Tx) -> u32 {
     let Some(expected_len) = prior_len.checked_add(LEGACY_FEE_PAGES) else {
         return crate::fi::FAIL_SENTINEL;
     };
@@ -575,11 +566,13 @@ pub(crate) fn paymaster_page_proof(
             core::hint::black_box(pages.len == prior_len)
                 && exact_page_occurrences(pages, &expected) == 0
         } else {
-            prior_len.checked_add(PAYMASTER_PAGES).is_some_and(|expected_len| {
-                core::hint::black_box(pages.len == expected_len)
-                    && page_at_matches(pages, prior_len, &expected)
-                    && exact_page_occurrences(pages, &expected) == 1
-            })
+            prior_len
+                .checked_add(PAYMASTER_PAGES)
+                .is_some_and(|expected_len| {
+                    core::hint::black_box(pages.len == expected_len)
+                        && page_at_matches(pages, prior_len, &expected)
+                        && exact_page_occurrences(pages, &expected) == 1
+                })
         }
     })
 }
@@ -597,11 +590,13 @@ pub(crate) fn paymaster_final_set_proof(
             core::hint::black_box(pages.len >= prior_len)
                 && exact_page_occurrences(pages, &expected) == 0
         } else {
-            prior_len.checked_add(PAYMASTER_PAGES).is_some_and(|minimum_len| {
-                core::hint::black_box(pages.len >= minimum_len)
-                    && page_at_matches(pages, prior_len, &expected)
-                    && exact_page_occurrences(pages, &expected) == 1
-            })
+            prior_len
+                .checked_add(PAYMASTER_PAGES)
+                .is_some_and(|minimum_len| {
+                    core::hint::black_box(pages.len >= minimum_len)
+                        && page_at_matches(pages, prior_len, &expected)
+                        && exact_page_occurrences(pages, &expected) == 1
+                })
         }
     })
 }
@@ -630,10 +625,7 @@ fn page_at_matches(
         .is_some_and(|actual| page_exact(actual, expected))
 }
 
-fn exact_page_occurrences(
-    pages: &Pages,
-    expected: &[[u8; DISPLAY_COLS]; DISPLAY_ROWS],
-) -> usize {
+fn exact_page_occurrences(pages: &Pages, expected: &[[u8; DISPLAY_COLS]; DISPLAY_ROWS]) -> usize {
     pages
         .as_slice()
         .iter()
@@ -724,6 +716,31 @@ mod tests {
         U256(v)
     }
 
+    fn u256_from_u128(value: u128) -> U256 {
+        let mut bytes = [0u8; 32];
+        bytes[16..].copy_from_slice(&value.to_be_bytes());
+        U256(bytes)
+    }
+
+    fn one_native() -> U256 {
+        u256_from_u128(1_000_000_000_000_000_000)
+    }
+
+    fn power_of_ten(exponent: u32) -> U256 {
+        let mut bytes = [0u8; 32];
+        bytes[31] = 1;
+        for _ in 0..exponent {
+            let mut carry = 0u16;
+            for byte in bytes.iter_mut().rev() {
+                let product = u16::from(*byte) * 10 + carry;
+                *byte = product as u8;
+                carry = product >> 8;
+            }
+            assert_eq!(carry, 0, "test power must remain inside U256");
+        }
+        U256(bytes)
+    }
+
     fn gwei(n: u64) -> U256 {
         // n * 1e9 wei, fits a u64 for any realistic gas price.
         let wei = (n as u128) * 1_000_000_000u128;
@@ -805,11 +822,20 @@ mod tests {
     fn signer_page_completion_proof_fails_before_or_after_corruption() {
         let sender = [0x24u8; 20];
         let mut pages = Pages::with_len(1);
-        assert_ne!(from_page_proof(&pages, 1, 3, &sender), crate::fi::OK_SENTINEL);
+        assert_ne!(
+            from_page_proof(&pages, 1, 3, &sender),
+            crate::fi::OK_SENTINEL
+        );
         append_signer(&mut pages, 3, &sender);
-        assert_eq!(from_page_proof(&pages, 1, 3, &sender), crate::fi::OK_SENTINEL);
+        assert_eq!(
+            from_page_proof(&pages, 1, 3, &sender),
+            crate::fi::OK_SENTINEL
+        );
         pages.buf[1][2][7] ^= 1;
-        assert_ne!(from_page_proof(&pages, 1, 3, &sender), crate::fi::OK_SENTINEL);
+        assert_ne!(
+            from_page_proof(&pages, 1, 3, &sender),
+            crate::fi::OK_SENTINEL
+        );
     }
 
     #[test]
@@ -894,7 +920,7 @@ mod tests {
         let mut pages = Pages::with_len(3);
         primitives::write_line(pages.row_mut(0, 0), "! Unknown token");
         primitives::write_line(pages.row_mut(2, 2), "L=Cancel");
-        append_native(&mut pages, &one_wei(), 1);
+        append_native(&mut pages, &one_native(), 1);
         assert_eq!(pages.len, 4, "a value page must be inserted");
         // Banner stays first; the loud value page is appended.
         assert_eq!(&pages.buf[0][0][..15], b"! Unknown token");
@@ -906,7 +932,7 @@ mod tests {
     #[test]
     fn nonzero_value_page_uses_chain_native_ticker() {
         let mut pages = Pages::with_len(2);
-        append_native(&mut pages, &one_wei(), 56);
+        append_native(&mut pages, &one_native(), 56);
         assert_eq!(&pages.buf[2][0][..12], b"! NATIVE BNB");
         let rows = &pages.buf[2];
         assert!(rows.iter().all(|row| !row.windows(3).any(|w| w == b"ETH")));
@@ -923,7 +949,7 @@ mod tests {
     fn direct_erc20_meta_gate_rejects_mismatched_contract() {
         let token_y = [0xAAu8; 20]; // the real call target
         let token_t = [0xBBu8; 20]; // the bundle's (mis-attributed) token
-        // Mismatch → reject (renderer falls back to erc20_unknown).
+                                    // Mismatch → reject (renderer falls back to erc20_unknown).
         assert!(!direct_erc20_meta_matches(&token_t, Some(&token_y)));
     }
 
@@ -974,12 +1000,22 @@ mod tests {
     fn nonzero_value_full_buffer_fails_closed() {
         let mut pages = Pages::with_len(super::super::MAX_PAGES);
         let before = pages.len;
+        let before_buf = pages.buf;
         let mut cfi = crate::fi::CfiCounter::new();
         assert!(
-            enforce_native_value_page(&mut pages, &one_wei(), 1, &mut cfi).is_err(),
+            enforce_native_value_page(&mut pages, &one_native(), 1, &mut cfi).is_err(),
             "non-zero value on a full buffer must fail closed"
         );
         assert_eq!(pages.len, before, "no page may be spliced or dropped");
+        assert_eq!(
+            pages.buf, before_buf,
+            "failure must be byte-for-byte atomic"
+        );
+        assert_ne!(
+            cfi.check_into_sentinel(NATIVE_VALUE_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL,
+            "a failed append must not publish the native-value CFI receipt"
+        );
     }
 
     /// A non-zero value with exactly one free slot must splice the loud
@@ -988,11 +1024,163 @@ mod tests {
     #[test]
     fn nonzero_value_with_room_splices_and_reports_ok() {
         let mut pages = Pages::with_len(super::super::MAX_PAGES - 1);
-        append_native(&mut pages, &one_wei(), 1);
+        append_native(&mut pages, &one_native(), 1);
         assert_eq!(pages.len, super::super::MAX_PAGES);
         assert_eq!(
             &pages.buf[super::super::MAX_PAGES - 1][0][..12],
             b"! NATIVE ETH"
+        );
+    }
+
+    #[test]
+    fn known_native_exactness_gate_accepts_only_six_decimal_base_units() {
+        let exact_values = [
+            one_native(),
+            u256_from_u128(1_000_001_000_000_000_000), // 1.000001 native
+        ];
+        for chain_id in [1, 56] {
+            for value in exact_values {
+                let mut pages = marker_pages(2);
+                let prior_len = pages.len;
+                append_native(&mut pages, &value, chain_id);
+                assert_eq!(
+                    native_value_page_proof(&pages, prior_len, &value, chain_id),
+                    crate::fi::OK_SENTINEL
+                );
+                assert_eq!(
+                    native_value_final_set_proof(&pages, prior_len, &value, chain_id),
+                    crate::fi::OK_SENTINEL
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nonexact_known_native_values_refuse_atomically_before_cfi_progress() {
+        let nonexact_values = [
+            u256_from_u128(1),                         // 1 wei: painter would collapse to zero
+            u256_from_u128(1_000_000_000_000_000_001), // 1 native + 1 base unit
+            u256_from_u128(999_999_500_000_000_000),   // half-up carry boundary
+        ];
+        for chain_id in [1, 56] {
+            for value in nonexact_values {
+                let mut pages = marker_pages(2);
+                let before_len = pages.len;
+                let before_buf = pages.buf;
+                let mut cfi = crate::fi::CfiCounter::new();
+                assert!(
+                    enforce_native_value_page(&mut pages, &value, chain_id, &mut cfi).is_err(),
+                    "chain {chain_id} must refuse a rounded native value"
+                );
+                assert_eq!(pages.len, before_len);
+                assert_eq!(pages.buf, before_buf);
+                assert_ne!(
+                    cfi.check_into_sentinel(NATIVE_VALUE_CFI_EXPECTED),
+                    crate::fi::OK_SENTINEL
+                );
+                assert_ne!(
+                    native_value_page_proof(&pages, before_len, &value, chain_id),
+                    crate::fi::OK_SENTINEL
+                );
+                assert_ne!(
+                    native_value_final_set_proof(&pages, before_len, &value, chain_id),
+                    crate::fi::OK_SENTINEL
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rounded_collision_and_next_exact_step_cannot_reuse_confirmed_page() {
+        let exact = one_native();
+        let aliased_before_fix = u256_from_u128(1_000_000_000_000_000_001);
+        let next_exact = u256_from_u128(1_000_001_000_000_000_000);
+        let mut pages = marker_pages(2);
+        let prior_len = pages.len;
+        append_native(&mut pages, &exact, 1);
+
+        assert_ne!(
+            native_value_page_proof(&pages, prior_len, &aliased_before_fix, 1),
+            crate::fi::OK_SENTINEL,
+            "1 ETH's page must not prove 1 ETH + 1 wei"
+        );
+        assert_ne!(
+            native_value_final_set_proof(&pages, prior_len, &aliased_before_fix, 1),
+            crate::fi::OK_SENTINEL
+        );
+        assert_ne!(
+            native_value_page_proof(&pages, prior_len, &next_exact, 1),
+            crate::fi::OK_SENTINEL,
+            "the next accepted six-decimal amount must paint differently"
+        );
+    }
+
+    #[test]
+    fn exact_but_overwide_known_native_value_refuses_atomically() {
+        // 10^60 base units is divisible by 10^12, so it passes the precision
+        // gate, but its 43-digit native-unit representation cannot fit the two
+        // value rows. This isolates the width/overflow half of the policy.
+        let overwide_exact = power_of_ten(60);
+        assert!(primitives::amount_is_exact_at_fraction_digits(
+            &overwide_exact,
+            KNOWN_NATIVE_DECIMALS,
+            primitives::NATIVE_DISPLAY_FRACTION_DIGITS,
+        ));
+        let mut pages = marker_pages(2);
+        let before_len = pages.len;
+        let before_buf = pages.buf;
+        let mut cfi = crate::fi::CfiCounter::new();
+        assert!(enforce_native_value_page(&mut pages, &overwide_exact, 1, &mut cfi).is_err());
+        assert_eq!(pages.len, before_len);
+        assert_eq!(pages.buf, before_buf);
+        assert_ne!(
+            cfi.check_into_sentinel(NATIVE_VALUE_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL
+        );
+        assert_ne!(
+            native_value_page_proof(&pages, before_len, &overwide_exact, 1),
+            crate::fi::OK_SENTINEL
+        );
+        assert_ne!(
+            native_value_final_set_proof(&pages, before_len, &overwide_exact, 1),
+            crate::fi::OK_SENTINEL
+        );
+    }
+
+    #[test]
+    fn unknown_chain_raw_value_stays_exact_and_overwide_raw_refuses() {
+        const UNKNOWN_CHAIN: u64 = 4_242_424_242;
+        let mut exact_pages = marker_pages(2);
+        let exact_prior = exact_pages.len;
+        append_native(&mut exact_pages, &one_wei(), UNKNOWN_CHAIN);
+        assert_eq!(
+            native_value_page_proof(&exact_pages, exact_prior, &one_wei(), UNKNOWN_CHAIN),
+            crate::fi::OK_SENTINEL
+        );
+        assert_eq!(&exact_pages.buf[exact_prior][1][..1], b"1");
+        assert_eq!(&exact_pages.buf[exact_prior][2][..3], b"raw");
+
+        let overwide = U256([0xff; 32]);
+        let mut refused = marker_pages(2);
+        let before_len = refused.len;
+        let before_buf = refused.buf;
+        let mut cfi = crate::fi::CfiCounter::new();
+        assert!(
+            enforce_native_value_page(&mut refused, &overwide, UNKNOWN_CHAIN, &mut cfi).is_err()
+        );
+        assert_eq!(refused.len, before_len);
+        assert_eq!(refused.buf, before_buf);
+        assert_ne!(
+            cfi.check_into_sentinel(NATIVE_VALUE_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL
+        );
+        assert_ne!(
+            native_value_page_proof(&refused, before_len, &overwide, UNKNOWN_CHAIN),
+            crate::fi::OK_SENTINEL
+        );
+        assert_ne!(
+            native_value_final_set_proof(&refused, before_len, &overwide, UNKNOWN_CHAIN),
+            crate::fi::OK_SENTINEL
         );
     }
 
@@ -1063,9 +1251,7 @@ mod tests {
         let mut pages = Pages::with_len(3);
         let prior_len = pages.len;
         let mut cfi = crate::fi::CfiCounter::new();
-        assert!(
-            enforce_paymaster_page(&mut pages, &SHA256_OF_EMPTY, &mut cfi).is_ok()
-        );
+        assert!(enforce_paymaster_page(&mut pages, &SHA256_OF_EMPTY, &mut cfi).is_ok());
         assert_eq!(
             cfi.check_into_sentinel(PAYMASTER_PAGE_CFI_EXPECTED),
             crate::fi::OK_SENTINEL
@@ -1167,11 +1353,7 @@ mod tests {
         let absent_injection_prior = absent_injection.len;
         absent_injection.buf[0] = build_paymaster_page();
         assert_ne!(
-            paymaster_page_proof(
-                &absent_injection,
-                absent_injection_prior,
-                &SHA256_OF_EMPTY,
-            ),
+            paymaster_page_proof(&absent_injection, absent_injection_prior, &SHA256_OF_EMPTY,),
             crate::fi::OK_SENTINEL
         );
     }
@@ -1205,7 +1387,7 @@ mod tests {
 
         let mut native = marker_pages(4);
         let native_before = native.buf;
-        append_native(&mut native, &one_wei(), 1);
+        append_native(&mut native, &one_native(), 1);
         assert_eq!(&native.buf[..4], &native_before[..4]);
 
         let mut fees = marker_pages(4);
@@ -1233,7 +1415,7 @@ mod tests {
         assert_eq!(target_pages.len, super::super::MAX_PAGES);
 
         let mut native = marker_pages(super::super::MAX_PAGES - 1);
-        append_native(&mut native, &one_wei(), 1);
+        append_native(&mut native, &one_native(), 1);
         assert_eq!(native.len, super::super::MAX_PAGES);
 
         let mut fees = marker_pages(super::super::MAX_PAGES - LEGACY_FEE_PAGES);
@@ -1318,14 +1500,14 @@ mod tests {
 
         let mut appended = marker_pages(2);
         let append_prior = appended.len;
-        append_native(&mut appended, &one_wei(), 1);
+        append_native(&mut appended, &one_native(), 1);
         assert_eq!(
-            native_value_page_proof(&appended, append_prior, &one_wei(), 1),
+            native_value_page_proof(&appended, append_prior, &one_native(), 1),
             crate::fi::OK_SENTINEL
         );
         appended.buf[append_prior][1][0] ^= 1;
         assert_ne!(
-            native_value_page_proof(&appended, append_prior, &one_wei(), 1),
+            native_value_page_proof(&appended, append_prior, &one_native(), 1),
             crate::fi::OK_SENTINEL
         );
     }

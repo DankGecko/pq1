@@ -13,9 +13,8 @@ use sha2::{Digest, Sha256};
 
 use super::primitives::{
     write_addr_full_or_name, write_calldata_hash_rows, write_chain, write_data_len_row, write_gas,
-    write_gwei, write_line, write_native_amount_two_rows,
-    write_native_currency_row, write_native_fee_budget_row, write_nonce_row, write_selector_row,
-    write_tip_row, AmountFit,
+    write_gwei, write_line, write_native_amount_two_rows, write_native_currency_row,
+    write_native_fee_budget_row, write_nonce_row, write_selector_row, write_tip_row, AmountFit,
 };
 use super::Pages;
 use crate::names::NameResolver;
@@ -70,10 +69,7 @@ pub fn render_blind_sign_pages(
         write_line_bytes(&mut pages.buf[next_page][1], &text[..row1_len]);
         if text.len() > 16 {
             let row2_len = (text.len() - 16).min(16);
-            write_line_bytes(
-                &mut pages.buf[next_page][2],
-                &text[16..16 + row2_len],
-            );
+            write_line_bytes(&mut pages.buf[next_page][2], &text[16..16 + row2_len]);
         }
         if text.len() > 32 {
             // Indicate truncation with "...> next" on the foot row.
@@ -96,12 +92,7 @@ pub fn render_blind_sign_pages(
 
     // ── Value — EXTRA loud when non-zero on blind-sign ──────────────
     if tx.value.is_zero() {
-        write_native_currency_row(
-            &mut pages.buf[next_page][0],
-            b"Value: 0 ",
-            tx.chain_id,
-            b"",
-        );
+        write_native_currency_row(&mut pages.buf[next_page][0], b"Value: 0 ", tx.chain_id, b"");
         write_line(&mut pages.buf[next_page][1], "");
         write_line(&mut pages.buf[next_page][2], "");
     } else {

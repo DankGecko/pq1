@@ -75,7 +75,7 @@ use crate::selectors::{
     MAX_SELF_ATTEST_BUNDLE_LEN,
 };
 use crate::tx::display::pick_sign_pages;
-use crate::tx::eip1559::{Eip1559Tx, U256, UserOpDisplayFields};
+use crate::tx::eip1559::{Eip1559Tx, UserOpDisplayFields, U256};
 use crate::ui;
 
 /// Reserve enough room to TOCTOU-snapshot the largest valid input the
@@ -143,9 +143,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // cmd_sign_offchain.rs. (The FI-bypass count itself is validated by the
     // deferred rainbow instruction-skip sweep on the real ELF, not in-repo.)
     crate::fi::scrub_sentinel_register();
-    let read_ptr_ok = crate::fi::check_true_into_sentinel(|| {
-        validate_ns_read_ptr(args.arg0, total_len)
-    });
+    let read_ptr_ok =
+        crate::fi::check_true_into_sentinel(|| validate_ns_read_ptr(args.arg0, total_len));
     if read_ptr_ok != crate::fi::OK_SENTINEL {
         ui::show_status("Sign", "bad ptr");
         return NscStatus::InvalidPointer as u32;
@@ -379,8 +378,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         add_one_to_be_u256(&mut type2_nonce);
     }
 
-    let inner_data: &[u8] =
-        &snap[SIGN_USEROP_HEADER_LEN..SIGN_USEROP_HEADER_LEN + data_len];
+    let inner_data: &[u8] = &snap[SIGN_USEROP_HEADER_LEN..SIGN_USEROP_HEADER_LEN + data_len];
 
     // ── 5. Parse optional trailers ─────────────────────────────────
     //
@@ -604,115 +602,100 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // ERC-7730 tuple, missing verification hard-refuses. Only tuples absent
     // from that filter may continue through the generic typed/blind ladder
     // (Bloom false positives refuse an unknown call, the safe direction).
-    let erc7730_verified: Option<crate::tx::erc7730::VerifiedDescriptor<'_>> =
-        if erc7730_trailer.len > 0 {
-            let bytes = &snap[erc7730_trailer.start
-                ..erc7730_trailer.start + erc7730_trailer.len];
-            match crate::tx::erc7730::verify_erc7730_bundle(
-                bytes,
-                &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
-            ) {
-                Ok(v) => {
-                    // Caller-owned FI transcript: the non-inlined proof
-                    // independently re-verifies this exact bundle/root and
-                    // its binding twice, requires both parses to reproduce
-                    // `v.ir`, volatile-publishes into a FAIL-initialized slot,
-                    // and bumps this caller's CFI counter internally. Skipping
-                    // either the first Merkle reject or this whole call cannot
-                    // admit an unrooted/mis-bound descriptor.
-                    let mut bind_verdict_slot = 0u32;
-                    // SAFETY: unique initialized local; volatile so LTO cannot
-                    // erase the fail state as dead before the callee overwrite.
-                    unsafe {
-                        core::ptr::write_volatile(
-                            &mut bind_verdict_slot,
-                            crate::fi::FAIL_SENTINEL,
-                        );
-                    }
-                    core::sync::atomic::compiler_fence(
-                        core::sync::atomic::Ordering::SeqCst,
-                    );
-                    let mut bind_cfi = crate::fi::CfiCounter::new();
-                    crate::tx::erc7730::prove_contract_binding(
-                        &v.ir,
-                        bytes,
-                        &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
-                        chain_id,
-                        &to_address,
-                        &mut bind_verdict_slot,
-                        &mut bind_cfi,
-                    );
-                    core::sync::atomic::compiler_fence(
-                        core::sync::atomic::Ordering::SeqCst,
-                    );
-                    // Gate A independently materializes both pieces of proof.
-                    // A skipped final reject branch therefore still reaches
-                    // gate B below, which re-reads and re-checks everything.
-                    // SAFETY: local remains live and the callee borrow ended.
-                    let bind_verdict_a = unsafe {
-                        core::ptr::read_volatile(&bind_verdict_slot)
-                    };
-                    let bind_cfi_verdict_a = bind_cfi.check_into_sentinel(
-                        crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED,
-                    );
-                    let bind_all_ok_a = bind_verdict_a == crate::fi::OK_SENTINEL
-                        && bind_cfi_verdict_a == crate::fi::OK_SENTINEL;
+    let erc7730_verified: Option<crate::tx::erc7730::VerifiedDescriptor<'_>> = if erc7730_trailer
+        .len
+        > 0
+    {
+        let bytes = &snap[erc7730_trailer.start..erc7730_trailer.start + erc7730_trailer.len];
+        match crate::tx::erc7730::verify_erc7730_bundle(
+            bytes,
+            &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
+        ) {
+            Ok(v) => {
+                // Caller-owned FI transcript: the non-inlined proof
+                // independently re-verifies this exact bundle/root and
+                // its binding twice, requires both parses to reproduce
+                // `v.ir`, volatile-publishes into a FAIL-initialized slot,
+                // and bumps this caller's CFI counter internally. Skipping
+                // either the first Merkle reject or this whole call cannot
+                // admit an unrooted/mis-bound descriptor.
+                let mut bind_verdict_slot = 0u32;
+                // SAFETY: unique initialized local; volatile so LTO cannot
+                // erase the fail state as dead before the callee overwrite.
+                unsafe {
+                    core::ptr::write_volatile(&mut bind_verdict_slot, crate::fi::FAIL_SENTINEL);
+                }
+                core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+                let mut bind_cfi = crate::fi::CfiCounter::new();
+                crate::tx::erc7730::prove_contract_binding(
+                    &v.ir,
+                    bytes,
+                    &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
+                    chain_id,
+                    &to_address,
+                    &mut bind_verdict_slot,
+                    &mut bind_cfi,
+                );
+                core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+                // Gate A independently materializes both pieces of proof.
+                // A skipped final reject branch therefore still reaches
+                // gate B below, which re-reads and re-checks everything.
+                // SAFETY: local remains live and the callee borrow ended.
+                let bind_verdict_a = unsafe { core::ptr::read_volatile(&bind_verdict_slot) };
+                let bind_cfi_verdict_a =
+                    bind_cfi.check_into_sentinel(crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED);
+                let bind_all_ok_a = bind_verdict_a == crate::fi::OK_SENTINEL
+                    && bind_cfi_verdict_a == crate::fi::OK_SENTINEL;
+                crate::fi::scrub_sentinel_register();
+                let bind_gate_a =
+                    crate::fi::check_true_into_sentinel(|| core::hint::black_box(bind_all_ok_a));
+                crate::fi::scrub_sentinel_register();
+                if bind_gate_a != crate::fi::OK_SENTINEL {
+                    ui::show_status("Sign", "7730 binding fail");
+                    None
+                } else {
+                    crate::fi::wait_random();
+                    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+                    // SAFETY: same live local, independently re-read after
+                    // the randomized gap rather than trusting gate A's
+                    // cached evidence.
+                    let bind_verdict_b = unsafe { core::ptr::read_volatile(&bind_verdict_slot) };
+                    let bind_cfi_verdict_b = bind_cfi
+                        .check_into_sentinel(crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED);
+                    let bind_all_ok_b = bind_verdict_b == crate::fi::OK_SENTINEL
+                        && bind_cfi_verdict_b == crate::fi::OK_SENTINEL;
                     crate::fi::scrub_sentinel_register();
-                    let bind_gate_a = crate::fi::check_true_into_sentinel(|| {
-                        core::hint::black_box(bind_all_ok_a)
+                    let bind_gate_b = crate::fi::check_true_into_sentinel(|| {
+                        core::hint::black_box(bind_all_ok_b)
                     });
                     crate::fi::scrub_sentinel_register();
-                    if bind_gate_a != crate::fi::OK_SENTINEL {
+                    if bind_gate_b != crate::fi::OK_SENTINEL {
                         ui::show_status("Sign", "7730 binding fail");
                         None
                     } else {
-                        crate::fi::wait_random();
-                        core::sync::atomic::compiler_fence(
-                            core::sync::atomic::Ordering::SeqCst,
-                        );
-                        // SAFETY: same live local, independently re-read after
-                        // the randomized gap rather than trusting gate A's
-                        // cached evidence.
-                        let bind_verdict_b = unsafe {
-                            core::ptr::read_volatile(&bind_verdict_slot)
-                        };
-                        let bind_cfi_verdict_b = bind_cfi.check_into_sentinel(
-                            crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED,
-                        );
-                        let bind_all_ok_b = bind_verdict_b == crate::fi::OK_SENTINEL
-                            && bind_cfi_verdict_b == crate::fi::OK_SENTINEL;
-                        crate::fi::scrub_sentinel_register();
-                        let bind_gate_b = crate::fi::check_true_into_sentinel(|| {
-                            core::hint::black_box(bind_all_ok_b)
-                        });
-                        crate::fi::scrub_sentinel_register();
-                        if bind_gate_b != crate::fi::OK_SENTINEL {
-                            ui::show_status("Sign", "7730 binding fail");
-                            None
-                        } else {
-                            #[cfg(feature = "debug-log")]
-                            {
-                                let c = &v.ir.contract;
-                                secure_log!(
+                        #[cfg(feature = "debug-log")]
+                        {
+                            let c = &v.ir.contract;
+                            secure_log!(
                                     "[ERC-7730] matched: chain={} contract=0x{:02x}{:02x}{:02x}{:02x}..{:02x}{:02x}{:02x}{:02x} ir_len={}",
                                     v.ir.chain_id,
                                     c[0], c[1], c[2], c[3],
                                     c[16], c[17], c[18], c[19],
                                     v.ir.raw.len(),
                                 );
-                            }
-                            Some(v)
                         }
+                        Some(v)
                     }
                 }
-                Err(_e) => {
-                    ui::show_status("Sign", "7730 bundle fail");
-                    None
-                }
             }
-        } else {
-            None
-        };
+            Err(_e) => {
+                ui::show_status("Sign", "7730 bundle fail");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // ── 5b. Optional address-name bundles ─────────────────────────
     //
@@ -768,8 +751,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // trusted-display confirmation. Downstream code intentionally uses ONLY
     // the published address, never `companion_sender`; even a skipped reject
     // branch therefore cannot produce a signature for an arbitrary wallet.
-    let mut sender_binding_slot =
-        super::cmd_get_wallet_address::SenderBinding::fail_closed();
+    let mut sender_binding_slot = super::cmd_get_wallet_address::SenderBinding::fail_closed();
     let mut sender_binding_cfi = crate::fi::CfiCounter::new();
     // Materialize the fail-closed slot even under LTO. If the following `bl`
     // is instruction-skipped, only the materialized fail-closed slot remains.
@@ -790,35 +772,30 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // Read the derived sender twice. A skipped/corrupted aggregate word-load
     // must be detected before the local copy can reach any verifier or hash.
     // SAFETY: the slot is initialized before the call and remains live here.
-    let sender = unsafe {
-        core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.sender))
-    };
+    let sender =
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.sender)) };
     crate::fi::wait_random();
     // SAFETY: same as the first sender read.
-    let sender_check = unsafe {
-        core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.sender))
-    };
+    let sender_check =
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.sender)) };
     let sender_reads_agree = sender.ct_eq(&sender_check).unwrap_u8();
     // SAFETY: the scalar fields were initialized before the call and the
     // helper publishes them with volatile stores.
-    let binding_verdict = unsafe {
-        core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.verdict))
-    };
+    let binding_verdict =
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.verdict)) };
     // SAFETY: same initialized caller-owned slot.
-    let binding_error = unsafe {
-        core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.error))
-    };
-    if sender_binding_cfi.check_into_sentinel(
-        super::cmd_get_wallet_address::SENDER_BIND_CFI_EXPECTED,
-    ) != crate::fi::OK_SENTINEL
+    let binding_error =
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!(sender_binding_slot.error)) };
+    if sender_binding_cfi
+        .check_into_sentinel(super::cmd_get_wallet_address::SENDER_BIND_CFI_EXPECTED)
+        != crate::fi::OK_SENTINEL
     {
         ui::show_status("Sign refused", "fi tampered");
         return NscStatus::InternalError as u32;
     }
     crate::fi::scrub_sentinel_register();
-    if crate::fi::check_true_into_sentinel(|| {
-        core::hint::black_box(sender_reads_agree) == 1
-    }) != crate::fi::OK_SENTINEL
+    if crate::fi::check_true_into_sentinel(|| core::hint::black_box(sender_reads_agree) == 1)
+        != crate::fi::OK_SENTINEL
     {
         ui::show_status("Sign refused", "fi tampered");
         return NscStatus::InternalError as u32;
@@ -831,8 +808,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
 
     // ── 6. Build display-time Eip1559Tx shim ───────────────────────
     let display_nonce = u64::from_be_bytes([
-        type2_nonce[24], type2_nonce[25], type2_nonce[26], type2_nonce[27],
-        type2_nonce[28], type2_nonce[29], type2_nonce[30], type2_nonce[31],
+        type2_nonce[24],
+        type2_nonce[25],
+        type2_nonce[26],
+        type2_nonce[27],
+        type2_nonce[28],
+        type2_nonce[29],
+        type2_nonce[30],
+        type2_nonce[31],
     ]);
     let display_max_fee = U256(max_fee_per_gas);
     let display_max_prio = U256(max_priority_fee_per_gas);
@@ -968,17 +951,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     );
 
     crate::fi::scrub_sentinel_register();
-    let safe_claim_cfi_verdict_a = safe_exec_claim_cfi.check_into_sentinel(
-        crate::tx::eip712::safe::EXEC_CLAIM_CFI_EXPECTED,
-    );
+    let safe_claim_cfi_verdict_a =
+        safe_exec_claim_cfi.check_into_sentinel(crate::tx::eip712::safe::EXEC_CLAIM_CFI_EXPECTED);
     crate::fi::scrub_sentinel_register();
-    let safe_verify_a_cfi_verdict_a = safe_exec_verify_cfi_a.check_into_sentinel(
-        crate::tx::eip712::safe::EXEC_VERIFY_CFI_EXPECTED,
-    );
+    let safe_verify_a_cfi_verdict_a = safe_exec_verify_cfi_a
+        .check_into_sentinel(crate::tx::eip712::safe::EXEC_VERIFY_CFI_EXPECTED);
     crate::fi::scrub_sentinel_register();
-    let safe_verify_b_cfi_verdict_a = safe_exec_verify_cfi_b.check_into_sentinel(
-        crate::tx::eip712::safe::EXEC_VERIFY_CFI_EXPECTED,
-    );
+    let safe_verify_b_cfi_verdict_a = safe_exec_verify_cfi_b
+        .check_into_sentinel(crate::tx::eip712::safe::EXEC_VERIFY_CFI_EXPECTED);
     crate::fi::scrub_sentinel_register();
     let safe_resolution_verdict_a = crate::tx::eip712::safe::exec_claim_resolution_proof(
         &safe_exec_claim,
@@ -995,17 +975,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     }
     crate::fi::scrub_sentinel_register();
     crate::fi::wait_random();
-    let safe_claim_cfi_verdict_b = safe_exec_claim_cfi.check_into_sentinel(
-        crate::tx::eip712::safe::EXEC_CLAIM_CFI_EXPECTED,
-    );
+    let safe_claim_cfi_verdict_b =
+        safe_exec_claim_cfi.check_into_sentinel(crate::tx::eip712::safe::EXEC_CLAIM_CFI_EXPECTED);
     crate::fi::scrub_sentinel_register();
-    let safe_verify_a_cfi_verdict_b = safe_exec_verify_cfi_a.check_into_sentinel(
-        crate::tx::eip712::safe::EXEC_VERIFY_CFI_EXPECTED,
-    );
+    let safe_verify_a_cfi_verdict_b = safe_exec_verify_cfi_a
+        .check_into_sentinel(crate::tx::eip712::safe::EXEC_VERIFY_CFI_EXPECTED);
     crate::fi::scrub_sentinel_register();
-    let safe_verify_b_cfi_verdict_b = safe_exec_verify_cfi_b.check_into_sentinel(
-        crate::tx::eip712::safe::EXEC_VERIFY_CFI_EXPECTED,
-    );
+    let safe_verify_b_cfi_verdict_b = safe_exec_verify_cfi_b
+        .check_into_sentinel(crate::tx::eip712::safe::EXEC_VERIFY_CFI_EXPECTED);
     crate::fi::scrub_sentinel_register();
     let safe_resolution_verdict_b = crate::tx::eip712::safe::exec_claim_resolution_proof(
         &safe_exec_claim,
@@ -1128,8 +1105,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             None => None,
         }
     } else if self_attest_trailer.len > 0 {
-        let bundle_slice = &snap
-            [self_attest_trailer.start..self_attest_trailer.start + self_attest_trailer.len];
+        let bundle_slice =
+            &snap[self_attest_trailer.start..self_attest_trailer.start + self_attest_trailer.len];
         match parse_self_attest_bundle(bundle_slice) {
             Some(meta) => {
                 if inner_data.len() >= 4 && meta.selector == inner_data[..4] {
@@ -1207,9 +1184,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // gate AND failed `safe_v1` verify, falling to a generic blind-sign of
     // an approveHash that pre-approves an arbitrary SafeTx (audit
     // 2026-06-28). `is_approve_hash_claim` closes the differential.
-    if crate::tx::eip712::safe::is_approve_hash_claim(inner_data)
-        && safe_v1_verified.is_none()
-    {
+    if crate::tx::eip712::safe::is_approve_hash_claim(inner_data) && safe_v1_verified.is_none() {
         ui::show_status("Safe sign", "safe_v1 required");
         return NscStatus::InvalidPointer as u32;
     }
@@ -1307,8 +1282,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             return NscStatus::InternalError as u32;
         }
         crate::fi::scrub_sentinel_register();
-        let signer_cfi_verdict = signer_cfi
-            .check_into_sentinel(crate::tx::display::SIGNER_PAGE_CFI_EXPECTED);
+        let signer_cfi_verdict =
+            signer_cfi.check_into_sentinel(crate::tx::display::SIGNER_PAGE_CFI_EXPECTED);
         crate::fi::scrub_sentinel_register();
         let signer_page_verdict = crate::tx::display::from_page_proof(
             &rotate_pages,
@@ -1335,8 +1310,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             return NscStatus::InternalError as u32;
         }
         crate::fi::scrub_sentinel_register();
-        let nonce_lane_cfi_verdict = nonce_lane_cfi
-            .check_into_sentinel(crate::tx::display::NONCE_LANE_CFI_EXPECTED);
+        let nonce_lane_cfi_verdict =
+            nonce_lane_cfi.check_into_sentinel(crate::tx::display::NONCE_LANE_CFI_EXPECTED);
         crate::fi::scrub_sentinel_register();
         let nonce_lane_page_verdict = crate::tx::display::nonce_lane_page_proof(
             &rotate_pages,
@@ -1368,8 +1343,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             return NscStatus::InternalError as u32;
         }
         crate::fi::scrub_sentinel_register();
-        let gas_lane_cfi_verdict = gas_lane_cfi
-            .check_into_sentinel(crate::tx::display::USEROP_GAS_CFI_EXPECTED);
+        let gas_lane_cfi_verdict =
+            gas_lane_cfi.check_into_sentinel(crate::tx::display::USEROP_GAS_CFI_EXPECTED);
         crate::fi::scrub_sentinel_register();
         let gas_lane_page_verdict = crate::tx::display::userop_gas_page_proof(
             &rotate_pages,
@@ -1385,8 +1360,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             return NscStatus::InternalError as u32;
         }
         crate::fi::scrub_sentinel_register();
-        let gas_lane_final_cfi_verdict = gas_lane_cfi
-            .check_into_sentinel(crate::tx::display::USEROP_GAS_CFI_EXPECTED);
+        let gas_lane_final_cfi_verdict =
+            gas_lane_cfi.check_into_sentinel(crate::tx::display::USEROP_GAS_CFI_EXPECTED);
         crate::fi::scrub_sentinel_register();
         let gas_lane_final_verdict = crate::tx::display::userop_gas_final_set_proof(
             &rotate_pages,
@@ -1427,6 +1402,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         safe_exec_verified.is_some(),
     );
     let mut dispatch_page_proofs = crate::tx::display::DispatchPageProofs::new();
+    dispatch_page_proofs.fail_initialize();
     let mut pages = match pick_sign_pages(
         &tx_for_display,
         inner_data,
@@ -1473,8 +1449,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         return NscStatus::InternalError as u32;
     }
     crate::fi::scrub_sentinel_register();
-    let paymaster_cfi_verdict = paymaster_cfi
-        .check_into_sentinel(crate::tx::display::PAYMASTER_PAGE_CFI_EXPECTED);
+    let paymaster_cfi_verdict =
+        paymaster_cfi.check_into_sentinel(crate::tx::display::PAYMASTER_PAGE_CFI_EXPECTED);
     crate::fi::scrub_sentinel_register();
     let paymaster_page_verdict = crate::tx::display::paymaster_page_proof(
         &pages,
@@ -1493,13 +1469,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // renderer/paymaster page that has already been built and proved.
     let signer_pages_before = pages.len;
     let mut signer_cfi = crate::fi::CfiCounter::new();
-    if crate::tx::display::enforce_from_page(
-        &mut pages,
-        account_index,
-        &sender,
-        &mut signer_cfi,
-    )
-    .is_err()
+    if crate::tx::display::enforce_from_page(&mut pages, account_index, &sender, &mut signer_cfi)
+        .is_err()
     {
         ui::show_status("Sign refused", "signer unshown");
         return NscStatus::InternalError as u32;
@@ -1508,14 +1479,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     let signer_cfi_verdict =
         signer_cfi.check_into_sentinel(crate::tx::display::SIGNER_PAGE_CFI_EXPECTED);
     crate::fi::scrub_sentinel_register();
-    let signer_page_verdict = crate::tx::display::from_page_proof(
-        &pages,
-        signer_pages_before,
-        account_index,
-        &sender,
-    );
-    if signer_cfi_verdict != crate::fi::OK_SENTINEL
-        || signer_page_verdict != crate::fi::OK_SENTINEL
+    let signer_page_verdict =
+        crate::tx::display::from_page_proof(&pages, signer_pages_before, account_index, &sender);
+    if signer_cfi_verdict != crate::fi::OK_SENTINEL || signer_page_verdict != crate::fi::OK_SENTINEL
     {
         ui::show_status("Sign refused", "signer unshown");
         return NscStatus::InternalError as u32;
@@ -1535,8 +1501,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     crate::fi::scrub_sentinel_register();
     let target_page_verdict =
         crate::tx::display::target_page_proof(&pages, target_pages_before, &to_address);
-    if target_cfi_verdict != crate::fi::OK_SENTINEL
-        || target_page_verdict != crate::fi::OK_SENTINEL
+    if target_cfi_verdict != crate::fi::OK_SENTINEL || target_page_verdict != crate::fi::OK_SENTINEL
     {
         ui::show_status("Sign refused", "target unshown");
         return NscStatus::InternalError as u32;
@@ -1547,25 +1512,18 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // hide behind the same low-64 `Nonce:` row.
     let nonce_lane_pages_before = pages.len;
     let mut nonce_lane_cfi = crate::fi::CfiCounter::new();
-    if crate::tx::display::enforce_nonce_lane_page(
-        &mut pages,
-        &type2_nonce,
-        &mut nonce_lane_cfi,
-    )
-    .is_err()
+    if crate::tx::display::enforce_nonce_lane_page(&mut pages, &type2_nonce, &mut nonce_lane_cfi)
+        .is_err()
     {
         ui::show_status("Sign refused", "lane unshown");
         return NscStatus::InternalError as u32;
     }
     crate::fi::scrub_sentinel_register();
-    let nonce_lane_cfi_verdict = nonce_lane_cfi
-        .check_into_sentinel(crate::tx::display::NONCE_LANE_CFI_EXPECTED);
+    let nonce_lane_cfi_verdict =
+        nonce_lane_cfi.check_into_sentinel(crate::tx::display::NONCE_LANE_CFI_EXPECTED);
     crate::fi::scrub_sentinel_register();
-    let nonce_lane_page_verdict = crate::tx::display::nonce_lane_page_proof(
-        &pages,
-        nonce_lane_pages_before,
-        &type2_nonce,
-    );
+    let nonce_lane_page_verdict =
+        crate::tx::display::nonce_lane_page_proof(&pages, nonce_lane_pages_before, &type2_nonce);
     if nonce_lane_cfi_verdict != crate::fi::OK_SENTINEL
         || nonce_lane_page_verdict != crate::fi::OK_SENTINEL
     {
@@ -1595,8 +1553,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         return NscStatus::InternalError as u32;
     }
     crate::fi::scrub_sentinel_register();
-    let gas_lane_cfi_verdict = gas_lane_cfi
-        .check_into_sentinel(crate::tx::display::USEROP_GAS_CFI_EXPECTED);
+    let gas_lane_cfi_verdict =
+        gas_lane_cfi.check_into_sentinel(crate::tx::display::USEROP_GAS_CFI_EXPECTED);
     crate::fi::scrub_sentinel_register();
     let gas_lane_page_verdict = crate::tx::display::userop_gas_page_proof(
         &pages,
@@ -1619,11 +1577,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // fail closed (F5): the fingerprint binds the displayed intent to the
     // signed calldata, so dropping it silently and signing anyway breaks that
     // binding.
-    let calldata_fingerprint =
-        pqsigner_tx_core::erc8213::calldata_digest(inner_data);
+    let calldata_fingerprint = pqsigner_tx_core::erc8213::calldata_digest(inner_data);
     let fingerprint_pages_before = pages.len;
-    let fingerprint_kind =
-        crate::tx::display::erc8213::Kind::CalldataDigest(calldata_fingerprint);
+    let fingerprint_kind = crate::tx::display::erc8213::Kind::CalldataDigest(calldata_fingerprint);
     let mut fingerprint_cfi = crate::fi::CfiCounter::new();
     if crate::tx::display::erc8213::append_fingerprint_page(
         &mut pages,
@@ -1636,9 +1592,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         return NscStatus::InternalError as u32;
     }
     crate::fi::scrub_sentinel_register();
-    let fingerprint_cfi_verdict = fingerprint_cfi.check_into_sentinel(
-        crate::tx::display::erc8213::FINGERPRINT_CFI_EXPECTED,
-    );
+    let fingerprint_cfi_verdict =
+        fingerprint_cfi.check_into_sentinel(crate::tx::display::erc8213::FINGERPRINT_CFI_EXPECTED);
     crate::fi::scrub_sentinel_register();
     let fingerprint_page_verdict = crate::tx::display::erc8213::fingerprint_page_proof(
         &pages,
@@ -1673,8 +1628,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         return NscStatus::InternalError as u32;
     }
     crate::fi::scrub_sentinel_register();
-    let paymaster_final_cfi_verdict = paymaster_cfi
-        .check_into_sentinel(crate::tx::display::PAYMASTER_PAGE_CFI_EXPECTED);
+    let paymaster_final_cfi_verdict =
+        paymaster_cfi.check_into_sentinel(crate::tx::display::PAYMASTER_PAGE_CFI_EXPECTED);
     crate::fi::scrub_sentinel_register();
     let paymaster_final_verdict = crate::tx::display::paymaster_final_set_proof(
         &pages,
@@ -1692,12 +1647,45 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // fingerprint appends. This also rechecks the caller-owned dispatcher CFI
     // receipts immediately before the pages cross the confirmation boundary.
     crate::fi::scrub_sentinel_register();
-    if dispatch_page_proofs.final_set_proof(
+    let mut dispatch_final_verdict_slot = 0u32;
+    // SAFETY: unique live local. The volatile FAIL state is load-bearing: if
+    // the non-inlined final proof is fault-skipped, stale stack/register data
+    // cannot authorize the confirmation below.
+    unsafe {
+        core::ptr::write_volatile(&mut dispatch_final_verdict_slot, crate::fi::FAIL_SENTINEL);
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    dispatch_page_proofs.final_set_proof(
         &pages,
         &tx_for_display,
         legacy_fee_pages_required,
-    ) != crate::fi::OK_SENTINEL
-    {
+        &mut dispatch_final_verdict_slot,
+    );
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    // SAFETY: the slot remains live and is not concurrently written.
+    let dispatch_final_verdict_a =
+        unsafe { core::ptr::read_volatile(&dispatch_final_verdict_slot) };
+    crate::fi::scrub_sentinel_register();
+    let dispatch_final_gate_a = crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(dispatch_final_verdict_a == crate::fi::OK_SENTINEL)
+    });
+    crate::fi::scrub_sentinel_register();
+    if dispatch_final_gate_a != crate::fi::OK_SENTINEL {
+        ui::show_status("Sign refused", "value/fee conflict");
+        return NscStatus::InternalError as u32;
+    }
+    crate::fi::wait_random();
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    // SAFETY: this is a second independent volatile read after a randomized
+    // gap; it deliberately does not reuse gate A's cached evidence.
+    let dispatch_final_verdict_b =
+        unsafe { core::ptr::read_volatile(&dispatch_final_verdict_slot) };
+    crate::fi::scrub_sentinel_register();
+    let dispatch_final_gate_b = crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(dispatch_final_verdict_b == crate::fi::OK_SENTINEL)
+    });
+    crate::fi::scrub_sentinel_register();
+    if dispatch_final_gate_b != crate::fi::OK_SENTINEL {
         ui::show_status("Sign refused", "value/fee conflict");
         return NscStatus::InternalError as u32;
     }
@@ -1793,22 +1781,18 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // cannot carry a faulted count into the combined-cap check below. The
     // reads forward+reverse-scan internally (F-12), so a glitched scan
     // yields u64::MAX — rejected here and tripped by the saturating cap.
-    let local_offchain_a =
-        unsafe { crate::offchain_state::offchain_count_read(&slot_flash_key) };
+    let local_offchain_a = unsafe { crate::offchain_state::offchain_count_read(&slot_flash_key) };
     crate::fi::wait_random();
-    let local_offchain_b =
-        unsafe { crate::offchain_state::offchain_count_read(&slot_flash_key) };
+    let local_offchain_b = unsafe { crate::offchain_state::offchain_count_read(&slot_flash_key) };
     if local_offchain_a != local_offchain_b || local_offchain_a == u64::MAX {
         ui::show_status("Slot sign", "fi tampered");
         return NscStatus::InternalError as u32;
     }
     let local_offchain = local_offchain_a;
 
-    let last_userop_a =
-        unsafe { crate::offchain_state::last_userop_count_read(&slot_flash_key) };
+    let last_userop_a = unsafe { crate::offchain_state::last_userop_count_read(&slot_flash_key) };
     crate::fi::wait_random();
-    let last_userop_b =
-        unsafe { crate::offchain_state::last_userop_count_read(&slot_flash_key) };
+    let last_userop_b = unsafe { crate::offchain_state::last_userop_count_read(&slot_flash_key) };
     if last_userop_a != last_userop_b || last_userop_a == u64::MAX {
         ui::show_status("Slot sign", "fi tampered");
         return NscStatus::InternalError as u32;
@@ -1826,11 +1810,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // signatures. Refuse before signing if emitting one more would push
     // the combined total past MAX_SLOT_USES. Fail-closed: a glitched read
     // returns u64::MAX, which saturates and trips the gate.
-    let userop_sigs_a =
-        unsafe { crate::offchain_state::userop_sigs_read(&slot_flash_key) };
+    let userop_sigs_a = unsafe { crate::offchain_state::userop_sigs_read(&slot_flash_key) };
     crate::fi::wait_random();
-    let userop_sigs_b =
-        unsafe { crate::offchain_state::userop_sigs_read(&slot_flash_key) };
+    let userop_sigs_b = unsafe { crate::offchain_state::userop_sigs_read(&slot_flash_key) };
     if userop_sigs_a != userop_sigs_b {
         ui::show_status("Slot sign", "fi tampered");
         return NscStatus::InternalError as u32;
@@ -1843,10 +1825,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // that same effective value.  Checking bare `local_offchain` here used to
     // admit one Type-2 signature after a high sync even when
     // `userop_sigs + max(local,last)` was already exhausted.
-    let effective_offchain = crate::aa::offchain_gate::effective_offchain_count(
-        local_offchain,
-        last_userop_snapshot,
-    );
+    let effective_offchain =
+        crate::aa::offchain_gate::effective_offchain_count(local_offchain, last_userop_snapshot);
     if !crate::aa::offchain_gate::userop_cap_ok(effective_offchain, userop_sigs) {
         ui::show_status("Slot exhausted", "rotate slot");
         return NscStatus::OffchainCapExceeded as u32;
@@ -1871,7 +1851,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     }
     secure_log!(
         "[S][sign] slot_key={:02x?} local_offchain={} last_userop={} userop_sigs={}",
-        slot_flash_key, local_offchain, last_userop_snapshot, userop_sigs
+        slot_flash_key,
+        local_offchain,
+        last_userop_snapshot,
+        userop_sigs
     );
     let new_offchain_count = effective_offchain;
     if new_offchain_count > local_offchain {
@@ -1881,10 +1864,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // monotonicity gate is the authoritative check. Surface a
         // diagnostic on the OLED so operators notice the repair.
         if unsafe {
-            crate::offchain_state::offchain_count_promote_to(
-                &slot_flash_key,
-                new_offchain_count,
-            )
+            crate::offchain_state::offchain_count_promote_to(&slot_flash_key, new_offchain_count)
         }
         .is_err()
         {
@@ -2058,10 +2038,18 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             // corrupted sig into the initCode blob.
             let (fv1, fv2) = {
                 let v1 = sphincs_c10::verify(
-                    c10_sk.pk_seed(), c10_sk.pk_root(), &factory_digest, &factory_sig);
+                    c10_sk.pk_seed(),
+                    c10_sk.pk_root(),
+                    &factory_digest,
+                    &factory_sig,
+                );
                 crate::fi::wait_random();
                 let v2 = sphincs_c10::verify(
-                    c10_sk.pk_seed(), c10_sk.pk_root(), &factory_digest, &factory_sig);
+                    c10_sk.pk_seed(),
+                    c10_sk.pk_root(),
+                    &factory_digest,
+                    &factory_sig,
+                );
                 (v1, v2)
             };
             // F16: `black_box` each verdict so LLVM cannot CSE-merge the
@@ -2170,10 +2158,18 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             // Outer FI guard, symmetric with Type 2.
             let (bv1, bv2) = {
                 let v1 = sphincs_c10::verify(
-                    c10_sk.pk_seed(), c10_sk.pk_root(), &t1_digest, &bootstrap_sig);
+                    c10_sk.pk_seed(),
+                    c10_sk.pk_root(),
+                    &t1_digest,
+                    &bootstrap_sig,
+                );
                 crate::fi::wait_random();
                 let v2 = sphincs_c10::verify(
-                    c10_sk.pk_seed(), c10_sk.pk_root(), &t1_digest, &bootstrap_sig);
+                    c10_sk.pk_seed(),
+                    c10_sk.pk_root(),
+                    &t1_digest,
+                    &bootstrap_sig,
+                );
                 (v1, v2)
             };
             // F16: black_box each verdict (see the factory-sig gate above).
@@ -2187,7 +2183,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 return NscStatus::CryptoError as u32;
             }
 
-            super::sig_wrapper::encode_signature_wrapper(&mut *type1_wrapper_out, 0, &bootstrap_sig);
+            super::sig_wrapper::encode_signature_wrapper(
+                &mut *type1_wrapper_out,
+                0,
+                &bootstrap_sig,
+            );
             emit_type1 = true;
         }
 
@@ -2274,8 +2274,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         (v1, v2)
     };
     // F16: black_box each verdict (see the factory-sig gate above).
-    if crate::fi::check_true_into_sentinel(|| core::hint::black_box(v1) && core::hint::black_box(v2))
-        != crate::fi::OK_SENTINEL
+    if crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(v1) && core::hint::black_box(v2)
+    }) != crate::fi::OK_SENTINEL
     {
         entropy.zeroize();
         crate::fi::zeroize_barrier();
@@ -2293,8 +2294,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     //         registered-slot flag. Done *after* sig verify so a verify
     //         failure does not bake a phantom count into flash.
     if register_slot {
-        if unsafe { crate::offchain_state::offchain_count_register_slot(&slot_flash_key) }
-            .is_err()
+        if unsafe { crate::offchain_state::offchain_count_register_slot(&slot_flash_key) }.is_err()
         {
             entropy.zeroize();
             crate::fi::zeroize_barrier();
@@ -2306,16 +2306,15 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             return NscStatus::InternalError as u32;
         }
     }
-    if unsafe {
-        crate::offchain_state::last_userop_count_set(&slot_flash_key, new_offchain_count)
-    }
-    .is_err()
+    if unsafe { crate::offchain_state::last_userop_count_set(&slot_flash_key, new_offchain_count) }
+        .is_err()
     {
         entropy.zeroize();
         crate::fi::zeroize_barrier();
         secure_log!(
             "[S][sig-commit] last_userop_count_set FAIL key={:02x?} count={}",
-            slot_flash_key, new_offchain_count
+            slot_flash_key,
+            new_offchain_count
         );
         ui::show_status("Sig commit", "FAIL");
         return NscStatus::InternalError as u32;
@@ -2327,14 +2326,14 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // response rather than releasing an uncounted sig). `userop_sigs` was
     // read at §10 and the cap gate proved `userop_sigs < MAX_SLOT_USES`,
     // so `+ 1` cannot overflow.
-    if unsafe { crate::offchain_state::userop_sigs_bump(&slot_flash_key, userop_sigs + 1) }
-        .is_err()
+    if unsafe { crate::offchain_state::userop_sigs_bump(&slot_flash_key, userop_sigs + 1) }.is_err()
     {
         entropy.zeroize();
         crate::fi::zeroize_barrier();
         secure_log!(
             "[S][sig-commit] userop_sigs_bump FAIL key={:02x?} count={}",
-            slot_flash_key, userop_sigs + 1
+            slot_flash_key,
+            userop_sigs + 1
         );
         ui::show_status("Sig commit", "FAIL");
         return NscStatus::InternalError as u32;

@@ -32,7 +32,7 @@ Current security contract:
   use the generic display ladder; Bloom false positives conservatively refuse.
 <!-- BEGIN XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->
 - The current regenerated development catalogue has **428 leaves**, root
-  `0706d763061ecfb0668ba7bdcf81e7159a6e541bae090b8678e5c9f31517d2ed`,
+  `668a7964b4241ec0c2348d117adaa5e29e9b34d97286ef5d1c722cdda43d700a`,
   and **4,542 exact known-call tuples**. The tuple-set receipt is SHA-256
   `96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`;
   Bloom occupancy is 28,235 / 131,072 bits under the compiler-enforced generation cap.

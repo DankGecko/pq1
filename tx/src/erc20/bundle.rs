@@ -62,13 +62,14 @@ pub struct Erc20Metadata<'a> {
 }
 
 /// Maximum total bundle size, used to bound the secure-side stack
-/// buffer that holds the copy. 8+20+1+1+64+1+32+4+4 + 32 levels of
-/// proof = ~1.2 KB. Capped well below MAX_TX_LEN.
+/// buffer that holds the copy. Individual metadata and proof-depth maxima do
+/// not necessarily fit simultaneously; [`metadata_shape_is_device_verifiable`]
+/// checks the exact encoded length. Capped well below MAX_TX_LEN.
 pub const MAX_ERC20_BUNDLE_LEN: usize = 64 + 1024 + 32;
 
 /// Cosmetic upper bound on token name and symbol lengths. Anything
 /// the OLED can't render is pointless and a foothold for spoofing.
-const MAX_DISPLAY_FIELD: usize = 64;
+pub const MAX_DISPLAY_FIELD: usize = 64;
 
 /// Defence-in-depth upper bound on a token's `decimals`.
 ///
@@ -93,7 +94,56 @@ const MAX_DISPLAY_FIELD: usize = 64;
 /// token is rejected. NOTE: a cap cannot catch *in-range* inflation (e.g.
 /// a DB `decimals` of 24 for a token whose on-chain value is 18) — closing
 /// that requires a build-time on-chain `decimals()` cross-check.
-const MAX_DISPLAY_DECIMALS: u8 = 36;
+pub const MAX_DISPLAY_DECIMALS: u8 = 36;
+
+/// Maximum Merkle-proof depth accepted by the device verifier.
+pub const MAX_ERC20_PROOF_DEPTH: usize = 32;
+
+/// Bytes in an ERC-20 bundle other than the two metadata strings and proof.
+///
+/// `chain_id(8) + contract(20) + decimals(1) + name_len(1) +
+/// symbol_len(1) + leaf_index(4) + proof_depth(4)`.
+const ERC20_BUNDLE_FIXED_LEN: usize = 8 + 20 + 1 + 1 + 1 + 4 + 4;
+
+/// Return whether built metadata and its Merkle-proof shape can pass every
+/// production device-verifier policy gate that is independent of the proof
+/// contents and pinned root.
+///
+/// This is public so host-side catalogue compilers can derive enrollment
+/// capabilities from the verifier's policy rather than duplicating it. A
+/// `true` result does not authenticate metadata: [`verify_erc20_bundle`] still
+/// verifies the exact proof and root.
+#[must_use]
+pub fn metadata_shape_is_device_verifiable(
+    decimals: u8,
+    name: &[u8],
+    symbol: &[u8],
+    proof_depth: usize,
+) -> bool {
+    if decimals > MAX_DISPLAY_DECIMALS
+        || name.is_empty()
+        || name.len() > MAX_DISPLAY_FIELD
+        || !is_clean_ascii(name)
+        || symbol.is_empty()
+        || symbol.len() > MAX_DISPLAY_FIELD
+        || !is_clean_ascii(symbol)
+        || proof_depth > MAX_ERC20_PROOF_DEPTH
+    {
+        return false;
+    }
+
+    let Some(proof_len) = proof_depth.checked_mul(32) else {
+        return false;
+    };
+    let Some(bundle_len) = ERC20_BUNDLE_FIXED_LEN
+        .checked_add(name.len())
+        .and_then(|len| len.checked_add(symbol.len()))
+        .and_then(|len| len.checked_add(proof_len))
+    else {
+        return false;
+    };
+    bundle_len <= MAX_ERC20_BUNDLE_LEN
+}
 
 /// Verify a bundle copied from the NS gateway buffer against `root`.
 /// On success, returns the decoded metadata. On failure, returns
@@ -103,6 +153,10 @@ const MAX_DISPLAY_DECIMALS: u8 = 36;
 /// length prefix, no padding. The caller is responsible for handling
 /// the optional/length-prefix wrapping at the gateway boundary.
 pub fn verify_erc20_bundle<'a>(bundle: &'a [u8], root: &[u8; 32]) -> Option<Erc20Metadata<'a>> {
+    if bundle.len() > MAX_ERC20_BUNDLE_LEN {
+        return None;
+    }
+
     let mut off = 0usize;
 
     // Header fields.
@@ -116,27 +170,11 @@ pub fn verify_erc20_bundle<'a>(bundle: &'a [u8], root: &[u8; 32]) -> Option<Erc2
     let decimals = *bundle.get(off)?;
     off += 1;
 
-    // Defence-in-depth WYSIWYS floor: refuse an absurd `decimals` rather
-    // than let the display scale a draining `amount` down to "0.000000".
-    // `decimals` is Merkle-bound below, so a forged value cannot pass
-    // regardless; rejecting here also fails fast on a corrupt/garbage leaf.
-    // See `MAX_DISPLAY_DECIMALS` for why a cap is a floor (not a complete
-    // fix) against in-range inflation.
-    if decimals > MAX_DISPLAY_DECIMALS {
-        return None;
-    }
-
     // Name (length-prefixed).
     let name_len = *bundle.get(off)? as usize;
     off += 1;
-    if name_len == 0 || name_len > MAX_DISPLAY_FIELD {
-        return None;
-    }
     let name = bundle.get(off..off + name_len)?;
     off += name_len;
-    if !is_clean_ascii(name) {
-        return None;
-    }
 
     // Symbol (length-prefixed).
     if bundle.len() < off + 1 {
@@ -144,14 +182,8 @@ pub fn verify_erc20_bundle<'a>(bundle: &'a [u8], root: &[u8; 32]) -> Option<Erc2
     }
     let symbol_len = *bundle.get(off)? as usize;
     off += 1;
-    if symbol_len == 0 || symbol_len > MAX_DISPLAY_FIELD {
-        return None;
-    }
     let symbol = bundle.get(off..off + symbol_len)?;
     off += symbol_len;
-    if !is_clean_ascii(symbol) {
-        return None;
-    }
 
     // Merkle proof header.
     if bundle.len() < off + 4 + 4 {
@@ -162,10 +194,10 @@ pub fn verify_erc20_bundle<'a>(bundle: &'a [u8], root: &[u8; 32]) -> Option<Erc2
     let proof_depth = read_u32_le(bundle, off)? as usize;
     off += 4;
 
-    // Practical bound: 4 GiB worth of leaves never happen, and
-    // accepting unbounded depths means a hostile NS can force the
-    // secure verifier into a long hash chain.
-    if proof_depth > 32 {
+    // Keep the verifier and host-side enrollment compiler on one exact policy:
+    // metadata bounds, printable ASCII, proof-depth work cap, and the full
+    // secure-side stack-buffer length envelope.
+    if !metadata_shape_is_device_verifiable(decimals, name, symbol, proof_depth) {
         return None;
     }
 
@@ -218,4 +250,3 @@ pub fn verify_erc20_bundle<'a>(bundle: &'a [u8], root: &[u8; 32]) -> Option<Erc2
         symbol,
     })
 }
-

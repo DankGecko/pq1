@@ -124,10 +124,18 @@ pub mod typed_call;
 // assert the resulting OLED rows byte-for-byte against the strings a
 // user would actually see on the device.
 // The ERC-7730 render moved to the host crate; re-export it (instead of
-// `#[path]`-mounting) so `erc7730_render_pure_tests.rs`'s
-// `super::erc7730::render_erc7730_pages` drives the same code the device runs,
-// over the shared host `Pages`.
-pub use pqsigner_erc7730::display::render as erc7730;
+// Mount the secure shim itself so its checked two-pass EIP-712 wrappers and
+// transcript proof execute in host tests. Production reaches the same source
+// through `tx::display::erc7730`.
+#[path = "../tx/display/erc7730/mod.rs"]
+pub mod erc7730_secure_shim;
+
+// Re-export the host renderer and the test-mounted dispatcher's private
+// contract-pass wrapper under the same sibling module shape production uses.
+pub mod erc7730 {
+    pub(super) use super::erc7730_secure_shim::render_contract_pass_into;
+    pub use pqsigner_erc7730::display::render::*;
+}
 
 #[path = "../tx/display/erc8213.rs"]
 pub mod erc8213;

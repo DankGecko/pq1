@@ -97,7 +97,8 @@ pub struct TokenAmountDecision<'a> {
 ///   the `params.token` literal); `None` when no address could be
 ///   resolved.
 /// * `erc20` — the companion-supplied, Merkle-verified metadata trailer
-///   (untrusted until its `contract` matches the resolved address).
+///   (untrusted until its exact chain and `contract` match the render
+///   envelope and resolved address).
 ///
 /// Ladder (order is load-bearing):
 ///
@@ -109,9 +110,10 @@ pub struct TokenAmountDecision<'a> {
 ///    arm instead of assuming a scale. The sentinel takes precedence over the
 ///    `erc20` bundle: it is not a real ERC-20 contract, and emits no token-
 ///    identity page even when its decimal scale is unknown.
-/// 2. **ERC-20 binding**: the `erc20` bundle counts only when the
-///    addresses agree. `None` = the token could NOT be bound to a
-///    Merkle-verified metadata entry — its decimals are unknown.
+/// 2. **ERC-20 binding**: the `erc20` bundle counts only when its chain and
+///    address agree with the render envelope and resolved token. `None` = the
+///    token could NOT be bound to a Merkle-verified metadata entry — its
+///    decimals are unknown.
 /// 3. **Threshold / approve-all sentinel, HOISTED ABOVE the bound match**
 ///    (review 4.5): when the descriptor supplies a `threshold` and the
 ///    value is ≥ it, this is an "unlimited" approval — the single most
@@ -138,7 +140,7 @@ pub fn token_amount_decision<'a>(
         }
     } else {
         match (token_addr, erc20) {
-            (Some(addr), Some(meta)) if addr == meta.contract => {
+            (Some(addr), Some(meta)) if meta.chain_id == chain_id && addr == meta.contract => {
                 Some((u32::from(meta.decimals), meta.symbol))
             }
             _ => None,
@@ -344,6 +346,17 @@ mod tests {
         let d = token_amount_decision(&v, Some([0xBB; 20]), Some(&meta), 1, &params);
         assert_eq!(d.arm, TokenAmountArm::UnverifiedRaw);
         assert_eq!(d.identity_page, Some([0xBB; 20]));
+    }
+
+    #[test]
+    fn erc20_right_contract_on_wrong_chain_is_unbound() {
+        let mut meta = usdc();
+        meta.chain_id = 2;
+        let v = [0u8; 32];
+        let params = ParamSet::default();
+        let d = token_amount_decision(&v, Some([0xAA; 20]), Some(&meta), 1, &params);
+        assert_eq!(d.arm, TokenAmountArm::UnverifiedRaw);
+        assert_eq!(d.identity_page, Some([0xAA; 20]));
     }
 
     #[test]
@@ -588,8 +601,9 @@ mod kani_harness {
 
     /// (b) Token-identity ∀ (the MEDIUM-1 identity-hiding + M-4
     /// assumed-scale classes closed for ALL addresses): erc20 metadata
-    /// HIT (resolved addr == meta.contract) ⟺ `Bound` with THAT
-    /// metadata's decimals + symbol bytes; MISS ⟹ `UnverifiedRaw` with
+    /// HIT (render chain == metadata chain AND resolved addr == meta.contract)
+    /// ⟺ `Bound` with THAT metadata's decimals + symbol bytes; MISS ⟹
+    /// `UnverifiedRaw` with
     /// the identity page carrying the RESOLVED address; no resolved
     /// address ⟹ `UnverifiedRaw` with no identity page.
     #[kani::proof]
@@ -601,8 +615,9 @@ mod kani_harness {
         let contract: [u8; 20] = kani::any();
         let decimals: u8 = kani::any();
         let sym: [u8; 4] = kani::any();
+        let metadata_chain_id: u64 = kani::any();
         let meta = Erc20Metadata {
-            chain_id: 1,
+            chain_id: metadata_chain_id,
             contract,
             decimals,
             name: b"",
@@ -611,14 +626,15 @@ mod kani_harness {
         let has_meta: bool = kani::any();
         let params = ParamSet::default(); // no threshold, no sentinel
         let token_addr = if has_token { Some(addr) } else { None };
+        let render_chain_id: u64 = kani::any();
         let d = token_amount_decision(
             &value,
             token_addr,
             if has_meta { Some(&meta) } else { None },
-            1,
+            render_chain_id,
             &params,
         );
-        if has_token && has_meta && addr == contract {
+        if has_token && has_meta && metadata_chain_id == render_chain_id && addr == contract {
             match d.arm {
                 TokenAmountArm::Bound {
                     decimals: dd,

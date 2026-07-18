@@ -16,6 +16,15 @@ C1 dynamic tail and retired C2/C3 on 2026-07-10),
 `docs/erc7730-registry-coverage-2026-06.md` (stale counts), the three
 `VULN-erc7730-*.md` postmortems.
 
+> **Current-state router (2026-07-18).** This document preserves a dated
+> engineering review and point-in-time corrections. Any "current", "pending
+> V4", catalogue identity, test count, or review-state statement below is
+> historical unless repeated by the live owners: [STATUS.md](STATUS.md) and the
+> [PQ1 campaign ledger](work-todo.md#pq1-erc-7730-productization-campaign--owner-direction-2026-07-16).
+> Those owners record the V5 no-go and V6 remediation/pre-freeze state. Nothing
+> in this dated review grants merge, production, shipment, or forced-blind
+> authority.
+
 ---
 
 ## Tier 1 — Correctness of what already ships (fix first)
@@ -78,6 +87,25 @@ gate through the `$ref` merge — now gated in `resolve_display_refs`. **REMAINI
 (i) params SUB-key gating (a `decimls` typo silently drops decimals — params is a raw `Value`,
 needs per-format valid-key allowlists); (ii) the CI JSON-schema step (b).
 
+**DATED CORRECTION (2026-07-18):** `interpolatedIntent` is no longer ignored.
+PQ1 enrolls only the authenticated, one-terminal-scalar subset whose placeholder
+resolves to an always-visible static unsigned `amount`/`tokenAmount` field and
+whose trusted formatter can produce an exact signed-value witness. Other valid
+interpolation shapes retain the independent static `intent` and emit no runtime
+program; malformed or ambiguous shapes still fail closed. This correction does
+not rewrite the 2026-07-02 historical status or close the remaining params
+sub-key/schema-validation follow-ups above.
+
+**PHASE-D CORRECTION (2026-07-18):** enrollment is evaluated independently for
+each deployment. A non-native `tokenAmount` program additionally requires a
+statically resolved `(chainId, token)` in the exact generated ERC-20 capability
+set after all device wire-size/proof-depth/name/symbol checks; a runtime token
+path cannot borrow another deployment's metadata. Of 78 reviewed candidate
+deployment formats, six retain interpolation and 72 retain static intent only.
+Every per-deployment IR is then reparsed by the device parser before the leaf is
+accepted. The current production catalogue is 428 leaves / 340,215 bytes / root
+`c785f90c…b054d4`.
+
 ### 1.4 The skip report is discarded; the review file lists no fields and no skips
 `dbgen/src/main.rs:304` does `let (erc7730_res, _skips) = build_db_tolerant(…)` — in the
 shipping path the only record of dropped/degraded descriptors is thrown away.
@@ -89,6 +117,37 @@ invisible by construction.
 committed review file; since review.txt is already inside the CI drift gate, skip/coverage
 regressions become reviewable diffs for free. Effort S. Files: dbgen/src/erc7730.rs:689,4723,
 dbgen/src/main.rs:304.
+
+**DATED CORRECTION (2026-07-18):** the generated, drift-gated review artifact
+now retains the complete tolerant-build skip ledger and an emitted-IR breakdown
+for every format and field. Each format records its selector, decoded intent,
+exact intent bytes, static-head width and nested-descent count; each field
+records its ordinal, opcode, escaped label, exact compiled path bytes, exact raw
+parameter TLVs and a canonical decode of every parameter meaning exposed by the
+device parser. This closes the specific discarded-skip and opaque-field-review
+defect above. It does not by itself prove source-to-IR faithfulness or registry
+provenance; reviewers must still reconcile the generated diff against the
+source descriptor, policy and upstream identity.
+
+**PHASE-D SIGNING-PATH CORRECTION (2026-07-18):** contract and EIP-712
+clear-signing no longer authorize confirmation from one published transcript
+or a cached display witness. The handler renders a complete first pass, hashes
+its exact state/count/relative indices and all 64 bytes of every page, poisons
+and resets the volatile page buffer, applies the delay boundary, then performs
+a fresh second render from authoritative signed inputs. It accepts only equal
+independent receipts and proves the exact second-pass page range immediately
+before confirmation. The contract and EIP-712 domains use distinct CFI states;
+raw one-pass helpers are private to the checked dispatcher path. This is source
+and host-test evidence pending the fresh V4 Phase-D cross-adjudication and
+hardware resource/FI evidence; it is not production authority.
+
+The two-pass source shape establishes one logical `Pages` display authority,
+not one physical stack slot. Optimized Thumb disassembly shows that constructing
+the caller-owned value currently materializes an additional `Pages`-sized
+temporary before copying it into the working slot. The linked prologue/map and
+available SRAM must therefore be reported directly. They do not replace the
+still-open whole-call stack high-water, exception-headroom, `MSPLIM`, or
+hardware-FI evidence.
 
 ---
 
@@ -234,6 +293,12 @@ leverage order:
   miss follows the verified-ERC-20/unverified-address path. The real 1inch V4
   ETH `clipperSwap`/`clipperSwapTo` formats now form one additional production
   leaf and exercise both `0xEeee…` and zero sentinels.
+
+  **Phase-D correction 2026-07-18:** known 18-decimal native values now refuse
+  unless the complete signed 256-bit word is exactly representable at the
+  shared six-fractional-digit display precision. Values such as one wei or one
+  ETH plus one wei cannot share a trusted page/proof with one ETH. The renderer
+  and interpolation witness use the same bounded decimal exactness predicate.
 - **3.6 tokenAmount `message` param** compiled + parsed but never rendered (hardcoded
   "unlimited"); threshold check only in the metadata-bound branch (see also 4.5). Effort S.
 - **3.7 `metadata.token` fallback** ignored (`_token`, erc7730.rs:270-271) — 2 upstream files

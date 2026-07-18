@@ -34,7 +34,9 @@
 //! | 0x42 | `native_currency`    | 1–2 concatenated 20 B sentinel addresses  |
 //! | 0x43 | `dynamic_kind`       | 1 B (`1=string`, `2=bytes`)                |
 //! | 0x44 | `nft_collection`     | 20 B collection contract                   |
-//! | 0x45 | `nft_collection_path`| non-empty compiled static address path     |
+//! | 0x45 | `nft_collection_path`| exact compiled `@.to` container path       |
+//! | 0x46 | `interpolated_intent`| v1 literal/field-ordinal bytecode (format) |
+//! | 0x47 | `terminal_kind`      | 1 B [`TerminalKind`] (schema v4, required) |
 //!
 //! Wire-stable.
 //!
@@ -42,9 +44,15 @@
 //! unknown tag must NOT silently render: it might describe semantics
 //! the renderer can't honour.
 
-use crate::ir::{Erc7730Ir, Visibility};
+use crate::{
+    abi::container_field,
+    ir::{Erc7730Ir, PathOp, Visibility},
+};
 
-use super::RenderErr;
+use super::{
+    policy::{ParamMask, TerminalKind},
+    RenderErr,
+};
 
 // Re-export the tag constants so the formatter dispatcher (Step 3) and
 // other intra-module consumers don't have to keep them in sync by
@@ -97,8 +105,212 @@ pub const PARAM_NFT_COLLECTION: u8 = 0x44;
 /// Compiled collection-address path carried by
 /// `nftName.params.collectionPath`.
 pub const PARAM_NFT_COLLECTION_PATH: u8 = 0x45;
+/// The only collection-path bytecode accepted by the current device slice:
+/// `RootContainer / FieldIdx / @.to`. Keeping the exact four bytes here makes
+/// the parser and the renderer's fault-containment belt share one policy.
+pub const NFT_COLLECTION_TO_PATH: [u8; 4] = [
+    PathOp::RootContainer as u8,
+    PathOp::FieldIdx as u8,
+    (container_field::TO >> 8) as u8,
+    container_field::TO as u8,
+];
+/// Format-level `interpolatedIntent` program, parked exactly once on the
+/// format's first field. The compiler resolves source paths to emitted field
+/// ordinals, so the device never parses JSON paths or braces while signing.
+pub const PARAM_INTERPOLATED_INTENT: u8 = 0x46;
+/// Mandatory schema-v4 authenticated semantic kind of the field terminal.
+/// This closes the static-word ambiguity where the path alone cannot tell an
+/// address from a uint, bool, signed integer, or fixed bytes.
+pub const PARAM_TERMINAL_KIND: u8 = 0x47;
 pub const DYNAMIC_KIND_STRING: u8 = 0x01;
 pub const DYNAMIC_KIND_BYTES: u8 = 0x02;
+
+/// First constrained interpolation-program wire shape. This is a compatible,
+/// root-pinned TLV extension within IR schema v4; the program carries its own
+/// version so future grammars cannot be mixed-interpreted.
+pub const INTERPOLATED_INTENT_VERSION: u8 = 0x01;
+/// Wire-parser storage bound. The current executable subset below accepts
+/// exactly one substitution and rejects every other count before walking the
+/// payload; retaining the three-slot bound keeps renderer storage bounded.
+pub const MAX_INTERPOLATED_SUBSTITUTIONS: usize = 3;
+/// The OLED intent area is exactly two 16-cell rows. Interpolated output must
+/// fit completely; unlike a static descriptor intent it never earns a `~`
+/// truncation marker.
+pub const MAX_INTERPOLATED_INTENT_LEN: usize = 32;
+
+/// Validated view of one format-level interpolation program.
+///
+/// Payload grammar (all literal bytes printable ASCII):
+///
+/// ```text
+/// version=1 | substitution_count
+///   (literal_len | literal | field_ordinal) * substitution_count
+/// final_literal_len | final_literal
+/// ```
+///
+/// Version 1's executable subset has exactly one field ordinal and an empty
+/// final literal. Bounds against the enclosing format's actual field count and
+/// formatter/visibility policy are checked by `Erc7730Ir::validate_formats`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InterpolatedIntentProgram<'a> {
+    payload: &'a [u8],
+    substitution_count: u8,
+}
+
+impl<'a> InterpolatedIntentProgram<'a> {
+    /// Parse and canonically validate a program independent of its enclosing
+    /// format. This is called by the deep IR validator for every format,
+    /// including unselected suffixes.
+    pub fn parse(payload: &'a [u8]) -> Result<Self, RenderErr> {
+        if payload.len() < 3 || payload[0] != INTERPOLATED_INTENT_VERSION {
+            return Err(RenderErr::Reject("7730 bad interpolated intent"));
+        }
+        let substitution_count = payload[1] as usize;
+        // Keep the authority-bearing cardinality check directly before the
+        // payload walk. Besides being the single owner of this rule, the
+        // explicit equality lets bounded model checking constrain the loop to
+        // one iteration instead of expanding a symbolic hostile count.
+        if substitution_count != 1 {
+            return Err(RenderErr::Reject("7730 bad interpolation count"));
+        }
+
+        let mut cursor = 2usize;
+        let mut literal_total = 0usize;
+        let mut ordinals = [0u8; MAX_INTERPOLATED_SUBSTITUTIONS];
+        for slot in 0..substitution_count {
+            let literal = take_interpolated_literal(payload, &mut cursor)?;
+            literal_total = literal_total
+                .checked_add(literal.len())
+                .ok_or(RenderErr::Reject("7730 interpolation overflow"))?;
+            let ordinal = *payload
+                .get(cursor)
+                .ok_or(RenderErr::Reject("7730 truncated interpolation"))?;
+            cursor += 1;
+            if ordinals[..slot].contains(&ordinal) {
+                return Err(RenderErr::Reject("7730 duplicate interpolation field"));
+            }
+            ordinals[slot] = ordinal;
+        }
+        let final_literal = take_interpolated_literal(payload, &mut cursor)?;
+        if !interpolated_intent_suffix_is_executable(final_literal) {
+            return Err(RenderErr::Reject("7730 unsupported interpolation shape"));
+        }
+        literal_total = literal_total
+            .checked_add(final_literal.len())
+            .ok_or(RenderErr::Reject("7730 interpolation overflow"))?;
+        let minimum_output = literal_total
+            .checked_add(substitution_count)
+            .ok_or(RenderErr::Reject("7730 interpolation overflow"))?;
+        if cursor != payload.len() || minimum_output > MAX_INTERPOLATED_INTENT_LEN {
+            return Err(RenderErr::Reject("7730 bad interpolation length"));
+        }
+
+        // Display padding must not become a second wire spelling for the same
+        // visible title. Interior spaces remain allowed (`"Send " + value`).
+        let first_literal = literal_at(payload, substitution_count as u8, 0)?;
+        if first_literal.first() == Some(&b' ') || final_literal.last() == Some(&b' ') {
+            return Err(RenderErr::Reject("7730 padded interpolated intent"));
+        }
+
+        Ok(Self {
+            payload,
+            substitution_count: substitution_count as u8,
+        })
+    }
+
+    #[must_use]
+    pub const fn substitution_count(self) -> u8 {
+        self.substitution_count
+    }
+
+    /// Literal segment `0..=substitution_count`.
+    pub fn literal(self, index: u8) -> Result<&'a [u8], RenderErr> {
+        literal_at(self.payload, self.substitution_count, index)
+    }
+
+    /// Emitted field ordinal for substitution `0..substitution_count`.
+    pub fn field_ordinal(self, index: u8) -> Result<u8, RenderErr> {
+        if index >= self.substitution_count {
+            return Err(RenderErr::Reject("7730 interpolation index"));
+        }
+        let mut cursor = 2usize;
+        for slot in 0..self.substitution_count {
+            let _ = take_interpolated_literal(self.payload, &mut cursor)?;
+            let ordinal = *self
+                .payload
+                .get(cursor)
+                .ok_or(RenderErr::Reject("7730 truncated interpolation"))?;
+            cursor += 1;
+            if slot == index {
+                return Ok(ordinal);
+            }
+        }
+        Err(RenderErr::Reject("7730 interpolation index"))
+    }
+}
+
+/// The current derived title ends with its one rendered witness. Broadening
+/// this suffix changes what a verified descriptor may place on the confirm
+/// banner and therefore requires a fresh review boundary.
+fn interpolated_intent_suffix_is_executable(final_literal: &[u8]) -> bool {
+    final_literal.is_empty()
+}
+
+/// True only for the exact authenticated collection path implemented by this
+/// release. The formatter calls this again after parsing so a corrupted or
+/// fault-injected `ParamSet` cannot reach the generic path resolver.
+pub(crate) fn nft_collection_path_is_current_slice(payload: &[u8]) -> bool {
+    payload == NFT_COLLECTION_TO_PATH.as_slice()
+}
+
+fn take_interpolated_literal<'a>(
+    payload: &'a [u8],
+    cursor: &mut usize,
+) -> Result<&'a [u8], RenderErr> {
+    let len = *payload
+        .get(*cursor)
+        .ok_or(RenderErr::Reject("7730 truncated interpolation"))? as usize;
+    *cursor += 1;
+    let end = cursor
+        .checked_add(len)
+        .ok_or(RenderErr::Reject("7730 interpolation overflow"))?;
+    let literal = payload
+        .get(*cursor..end)
+        .ok_or(RenderErr::Reject("7730 truncated interpolation"))?;
+    if literal
+        .iter()
+        .any(|&b| !(0x20..0x7f).contains(&b) || matches!(b, b'{' | b'}'))
+    {
+        return Err(RenderErr::Reject("7730 bad interpolation literal"));
+    }
+    *cursor = end;
+    Ok(literal)
+}
+
+fn literal_at<'a>(
+    payload: &'a [u8],
+    substitution_count: u8,
+    index: u8,
+) -> Result<&'a [u8], RenderErr> {
+    if index > substitution_count {
+        return Err(RenderErr::Reject("7730 interpolation index"));
+    }
+    let mut cursor = 2usize;
+    for slot in 0..=substitution_count {
+        let literal = take_interpolated_literal(payload, &mut cursor)?;
+        if slot == index {
+            return Ok(literal);
+        }
+        // Every non-final literal is followed by one field ordinal.
+        cursor = cursor
+            .checked_add(1)
+            .ok_or(RenderErr::Reject("7730 interpolation overflow"))?;
+        if cursor > payload.len() {
+            return Err(RenderErr::Reject("7730 truncated interpolation"));
+        }
+    }
+    Err(RenderErr::Reject("7730 interpolation index"))
+}
 
 /// `dbgen::erc7730::DATE_ENC_TIMESTAMP` — unix-seconds u64.
 pub const DATE_ENC_TIMESTAMP: u8 = 0x00;
@@ -170,6 +382,13 @@ pub struct ParamSet<'a> {
     /// Descriptor-authenticated static path resolving the NFT collection
     /// contract (for example `@.to`).
     pub nft_collection_path: Option<&'a [u8]>,
+    /// Format-level interpolation bytecode. Canonically emitted only on field
+    /// ordinal zero; the IR validator enforces that placement and validates
+    /// every referenced field before rendering can begin.
+    pub interpolated_intent: Option<InterpolatedIntentProgram<'a>>,
+    /// Mandatory for every schema-v4 field.  Parsed from
+    /// [`PARAM_TERMINAL_KIND`] and checked by the shared host/device policy.
+    pub terminal_kind: Option<TerminalKind>,
 }
 
 impl<'a> Default for ParamSet<'a> {
@@ -198,6 +417,8 @@ impl<'a> Default for ParamSet<'a> {
             dynamic_kind: None,
             nft_collection: None,
             nft_collection_path: None,
+            interpolated_intent: None,
+            terminal_kind: None,
         }
     }
 }
@@ -213,6 +434,81 @@ impl ParamSet<'_> {
                 .any(|candidate| candidate == address.as_slice())
         })
     }
+
+    /// Field-local semantic parameter presence consumed by the shared
+    /// formatter policy.  Visibility itself, terminal kind, and the
+    /// format-level interpolation program are validated separately.
+    #[must_use]
+    pub const fn policy_mask(&self) -> ParamMask {
+        let mut mask = ParamMask::NONE;
+        if self.token_path.is_some() {
+            mask = mask.union(ParamMask::TOKEN_PATH);
+        }
+        if self.token.is_some() {
+            mask = mask.union(ParamMask::TOKEN);
+        }
+        if self.threshold.is_some() {
+            mask = mask.union(ParamMask::THRESHOLD);
+        }
+        if self.message.is_some() {
+            mask = mask.union(ParamMask::MESSAGE);
+        }
+        if self.addr_types.is_some() {
+            mask = mask.union(ParamMask::ADDR_TYPES);
+        }
+        if self.addr_sources.is_some() {
+            mask = mask.union(ParamMask::ADDR_SOURCES);
+        }
+        if self.date_encoding.is_some() {
+            mask = mask.union(ParamMask::DATE_ENCODING);
+        }
+        if self.enum_ref.is_some() {
+            mask = mask.union(ParamMask::ENUM_REF);
+        }
+        if self.decimals.is_some() {
+            mask = mask.union(ParamMask::DECIMALS);
+        }
+        if self.base.is_some() {
+            mask = mask.union(ParamMask::BASE);
+        }
+        if self.prefix.is_some() {
+            mask = mask.union(ParamMask::PREFIX);
+        }
+        if self.suffix.is_some() {
+            mask = mask.union(ParamMask::SUFFIX);
+        }
+        if self.nested_selector.is_some() {
+            mask = mask.union(ParamMask::NESTED_SELECTOR);
+        }
+        if self.nested_callee.is_some() {
+            mask = mask.union(ParamMask::NESTED_CALLEE);
+        }
+        if self.fallback_label.is_some() {
+            mask = mask.union(ParamMask::FALLBACK_LABEL);
+        }
+        if self.const_value.is_some() {
+            mask = mask.union(ParamMask::CONST_VALUE);
+        }
+        if self.visibility_values.is_some() {
+            mask = mask.union(ParamMask::VISIBILITY_VALUES);
+        }
+        if self.nested_struct.is_some() {
+            mask = mask.union(ParamMask::NESTED_STRUCT);
+        }
+        if self.native_currency_addresses.is_some() {
+            mask = mask.union(ParamMask::NATIVE_CURRENCY);
+        }
+        if self.dynamic_kind.is_some() {
+            mask = mask.union(ParamMask::DYNAMIC_KIND);
+        }
+        if self.nft_collection.is_some() {
+            mask = mask.union(ParamMask::NFT_COLLECTION);
+        }
+        if self.nft_collection_path.is_some() {
+            mask = mask.union(ParamMask::NFT_COLLECTION_PATH);
+        }
+        mask
+    }
 }
 
 fn native_currency_list_is_canonical(payload: &[u8]) -> bool {
@@ -224,21 +520,14 @@ fn native_currency_list_is_canonical(payload: &[u8]) -> bool {
         return false;
     }
 
-    // Duplicate members create a second wire spelling for the same semantic
-    // set and waste the tightly bounded display IR. Reject them on-device as
-    // well as in dbgen so parser canonicality is not host-policy-dependent.
-    for (index, member) in payload
-        .chunks_exact(NATIVE_CURRENCY_ADDRESS_LEN)
-        .enumerate()
-    {
-        if payload[(index + 1) * NATIVE_CURRENCY_ADDRESS_LEN..]
-            .chunks_exact(NATIVE_CURRENCY_ADDRESS_LEN)
-            .any(|later| later == member)
-        {
-            return false;
-        }
+    if count == 1 {
+        return true;
     }
-    true
+
+    // The reviewed bound is exactly two members, so canonical duplicate
+    // detection needs one fixed comparison rather than a general nested walk.
+    // This keeps both secure runtime cost and the exhaustive proof small.
+    payload[..NATIVE_CURRENCY_ADDRESS_LEN] != payload[NATIVE_CURRENCY_ADDRESS_LEN..]
 }
 
 /// Parse a TLV parameter blob located at `param_off` inside the IR's
@@ -263,7 +552,7 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
         .ok_or(RenderErr::Reject("7730 bad param blob"))?;
 
     let mut cursor = 0usize;
-    // Tags 0x30..=0x43 fit in this bitmap. Singleton parameter TLVs are
+    // Tags 0x30..=0x47 fit in this bitmap. Singleton parameter TLVs are
     // canonical: accepting duplicates would make meaning order-dependent and
     // previously let a short visibility duplicate retain the first tag's tail.
     let mut seen_tags = 0u32;
@@ -280,7 +569,7 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
         let payload = &body[cursor..cursor + len];
         cursor += len;
 
-        if !(PARAM_TOKEN_PATH..=PARAM_NFT_COLLECTION_PATH).contains(&tag) {
+        if !(PARAM_TOKEN_PATH..=PARAM_TERMINAL_KIND).contains(&tag) {
             return Err(RenderErr::Reject("7730 unknown tlv tag"));
         }
         let bit = 1u32 << (tag - PARAM_TOKEN_PATH);
@@ -320,10 +609,22 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
                 );
             }
             PARAM_NFT_COLLECTION_PATH => {
-                if payload.is_empty() {
-                    return Err(RenderErr::Reject("7730 empty nft collection path"));
+                if !nft_collection_path_is_current_slice(payload) {
+                    return Err(RenderErr::Reject("7730 bad nft collection path"));
                 }
                 p.nft_collection_path = Some(payload);
+            }
+            PARAM_INTERPOLATED_INTENT => {
+                p.interpolated_intent = Some(InterpolatedIntentProgram::parse(payload)?);
+            }
+            PARAM_TERMINAL_KIND => {
+                if payload.len() != 1 {
+                    return Err(RenderErr::Reject("7730 bad terminal kind"));
+                }
+                p.terminal_kind = Some(
+                    TerminalKind::try_from(payload[0])
+                        .map_err(|_| RenderErr::Reject("7730 bad terminal kind"))?,
+                );
             }
             PARAM_THRESHOLD => {
                 p.threshold = Some(
@@ -332,21 +633,32 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
                         .map_err(|_| RenderErr::Reject("7730 bad threshold"))?,
                 );
             }
-            PARAM_MESSAGE => p.message = Some(payload),
+            PARAM_MESSAGE => {
+                if payload.is_empty()
+                    || payload.len() > 16
+                    || !payload.iter().all(|&b| (0x20..0x7f).contains(&b))
+                    || payload.last() == Some(&b' ')
+                {
+                    return Err(RenderErr::Reject("7730 bad message"));
+                }
+                p.message = Some(payload);
+            }
             PARAM_ADDR_TYPES => {
-                if payload.len() != 1 {
+                // wallet/eoa/contract/nft_collection/token/collection
+                if payload.len() != 1 || payload[0] & !0x3f != 0 {
                     return Err(RenderErr::Reject("7730 bad addr-types"));
                 }
                 p.addr_types = Some(payload[0]);
             }
             PARAM_ADDR_SOURCES => {
-                if payload.len() != 1 {
+                // local/ens/etherscan/registry
+                if payload.len() != 1 || payload[0] & !0x0f != 0 {
                     return Err(RenderErr::Reject("7730 bad addr-sources"));
                 }
                 p.addr_sources = Some(payload[0]);
             }
             PARAM_DATE_ENCODING => {
-                if payload.len() != 1 {
+                if payload.len() != 1 || !matches!(payload[0], 0 | 1) {
                     return Err(RenderErr::Reject("7730 bad date enc"));
                 }
                 p.date_encoding = Some(payload[0]);
@@ -363,9 +675,17 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
                 }
                 p.decimals = Some(payload[0]);
             }
-            PARAM_BASE => p.base = Some(payload),
+            PARAM_BASE => {
+                if payload.is_empty()
+                    || !payload.iter().all(|&b| (0x20..0x7f).contains(&b))
+                    || payload.last() == Some(&b' ')
+                {
+                    return Err(RenderErr::Reject("7730 bad unit base"));
+                }
+                p.base = Some(payload);
+            }
             PARAM_PREFIX => {
-                if payload.len() != 1 {
+                if payload != [0] {
                     return Err(RenderErr::Reject("7730 bad prefix"));
                 }
                 p.prefix = Some(payload[0]);
@@ -384,8 +704,24 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
                 }
                 p.nested_callee = Some(payload);
             }
-            PARAM_FALLBACK_LABEL => p.fallback_label = Some(payload),
-            PARAM_CONST_VALUE => p.const_value = Some(payload),
+            PARAM_FALLBACK_LABEL => {
+                if payload.is_empty()
+                    || !payload.iter().all(|&b| (0x20..0x7f).contains(&b))
+                    || payload.last() == Some(&b' ')
+                {
+                    return Err(RenderErr::Reject("7730 bad fallback label"));
+                }
+                p.fallback_label = Some(payload);
+            }
+            PARAM_CONST_VALUE => {
+                if payload.is_empty()
+                    || !payload.iter().all(|&b| (0x20..0x7f).contains(&b))
+                    || payload.last() == Some(&b' ')
+                {
+                    return Err(RenderErr::Reject("7730 bad const value"));
+                }
+                p.const_value = Some(payload);
+            }
             PARAM_NESTED_STRUCT => {
                 // A leading version byte selects the shape. `0x01` = bare belt
                 // marker; `0x03` = structured v0x03 descent block. Any other
@@ -444,6 +780,80 @@ mod tests {
         assert_eq!(p.visibility, Visibility::Always);
         assert!(p.decimals.is_none());
         assert!(p.token.is_none());
+    }
+
+    #[test]
+    fn interpolated_intent_program_is_strict_and_field_ordinal_bound() {
+        let program = [
+            INTERPOLATED_INTENT_VERSION,
+            1,
+            8,
+            b'D',
+            b'e',
+            b'p',
+            b'o',
+            b's',
+            b'i',
+            b't',
+            b' ',
+            0,
+            0,
+        ];
+        let parsed = InterpolatedIntentProgram::parse(&program).unwrap();
+        assert_eq!(parsed.substitution_count(), 1);
+        assert_eq!(parsed.literal(0).unwrap(), b"Deposit ");
+        assert_eq!(parsed.field_ordinal(0).unwrap(), 0);
+        assert_eq!(parsed.literal(1).unwrap(), b"");
+    }
+
+    #[test]
+    fn interpolated_intent_count_gate_precedes_payload_walk() {
+        for count in [0, 2, 3, 4, u8::MAX] {
+            let payload = [INTERPOLATED_INTENT_VERSION, count, 0];
+            assert_eq!(
+                InterpolatedIntentProgram::parse(&payload).unwrap_err(),
+                RenderErr::Reject("7730 bad interpolation count")
+            );
+        }
+
+        let canonical = [INTERPOLATED_INTENT_VERSION, 1, 0, 0, 0];
+        assert!(InterpolatedIntentProgram::parse(&canonical).is_ok());
+    }
+
+    #[test]
+    fn interpolated_intent_rejects_malformed_or_ambiguous_programs() {
+        let cases: &[&[u8]] = &[
+            &[0xFF, 1, 0, 0, 0],             // bad version
+            &[1, 0, 0],                      // zero substitutions
+            &[1, 4, 0, 0, 0, 1, 0, 2, 0, 3], // over the cap/truncated
+            &[1, 2, 0, 0, 0, 1, 0],          // executable subset is exactly one
+            &[1, 1, 1, b'{', 0, 0],          // source brace survived host compile
+            &[1, 1, 0, 0],                   // missing final literal
+            &[1, 1, 0, 0, 0, 0xAA],          // trailing byte
+            &[1, 1, 0, 0, 1, b'x'],          // final literal must be empty
+            &[1, 2, 0, 0, 0, 0, 0, 0],       // duplicate field ordinal
+            &[1, 1, 1, b' ', 0, 0],          // leading display padding
+            &[1, 1, 0, 0, 1, b' '],          // trailing display padding
+        ];
+        for payload in cases {
+            assert!(
+                InterpolatedIntentProgram::parse(payload).is_err(),
+                "accepted malformed interpolation {payload:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn interpolated_intent_minimum_output_bound_is_exact() {
+        let mut exact = std::vec![1, 1, 31];
+        exact.extend_from_slice(&[b'a'; 31]);
+        exact.extend_from_slice(&[0, 0]);
+        assert!(InterpolatedIntentProgram::parse(&exact).is_ok());
+
+        let mut too_long = std::vec![1, 1, 32];
+        too_long.extend_from_slice(&[b'a'; 32]);
+        too_long.extend_from_slice(&[0, 0]);
+        assert!(InterpolatedIntentProgram::parse(&too_long).is_err());
     }
 
     #[test]
@@ -534,12 +944,7 @@ mod tests {
 
     #[test]
     fn parses_nft_collection_and_collection_path() {
-        let path = [
-            crate::ir::PathOp::RootContainer as u8,
-            crate::ir::PathOp::FieldIdx as u8,
-            0x00,
-            0x02,
-        ];
+        let path = NFT_COLLECTION_TO_PATH;
         let mut body = std::vec::Vec::new();
         body.extend_from_slice(&[PARAM_NFT_COLLECTION, 20]);
         body.extend_from_slice(&[0xA4; 20]);
@@ -555,10 +960,58 @@ mod tests {
     }
 
     #[test]
+    fn extension_tags_44_45_46_have_positive_parse_controls() {
+        let collection = [0xA4; 20];
+        let interpolation = [INTERPOLATED_INTENT_VERSION, 1, 0, 0, 0];
+        let cases: [(u8, &[u8]); 3] = [
+            (PARAM_NFT_COLLECTION, &collection),
+            (PARAM_NFT_COLLECTION_PATH, &NFT_COLLECTION_TO_PATH),
+            (PARAM_INTERPOLATED_INTENT, &interpolation),
+        ];
+
+        for (tag, payload) in cases {
+            let mut pool = std::vec![0xFF, (2 + payload.len()) as u8, tag, payload.len() as u8];
+            pool.extend_from_slice(payload);
+            let bytes = ir_with_pool(&pool);
+            let ir = Erc7730Ir::parse(&bytes).unwrap();
+            let parsed = parse(&ir, 1).unwrap();
+            match tag {
+                PARAM_NFT_COLLECTION => assert_eq!(parsed.nft_collection, Some(&collection)),
+                PARAM_NFT_COLLECTION_PATH => {
+                    assert_eq!(
+                        parsed.nft_collection_path,
+                        Some(&NFT_COLLECTION_TO_PATH[..])
+                    );
+                }
+                PARAM_INTERPOLATED_INTENT => {
+                    assert!(parsed.interpolated_intent.is_some());
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
     fn rejects_bad_or_duplicate_nft_collection_parameters() {
         for body in [
             std::vec![PARAM_NFT_COLLECTION, 19, 0x11, 0x22],
             std::vec![PARAM_NFT_COLLECTION_PATH, 0],
+            std::vec![
+                PARAM_NFT_COLLECTION_PATH,
+                4,
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                0,
+            ],
+            std::vec![
+                PARAM_NFT_COLLECTION_PATH,
+                4,
+                PathOp::RootContainer as u8,
+                PathOp::FieldIdx as u8,
+                (container_field::CHAIN_ID >> 8) as u8,
+                container_field::CHAIN_ID as u8,
+            ],
             std::vec![
                 PARAM_NFT_COLLECTION_PATH,
                 1,
@@ -737,12 +1190,12 @@ mod tests {
     fn parses_max_payload_tlv() {
         // Single TLV with a 252-byte payload (max single-TLV size in
         // a 254-byte blob: 1 tag + 1 len + 252 payload = 254).
-        let mut pool = std::vec![0xFFu8, 254, PARAM_MESSAGE, 252];
+        let mut pool = std::vec![0xFFu8, 254, PARAM_FALLBACK_LABEL, 252];
         pool.extend_from_slice(&[0x41u8; 252]);
         let bytes = ir_with_pool(&pool);
         let ir = Erc7730Ir::parse(&bytes).unwrap();
         let p = parse(&ir, 1).unwrap();
-        assert_eq!(p.message.map(|m| m.len()), Some(252));
+        assert_eq!(p.fallback_label.map(|label| label.len()), Some(252));
     }
 
     #[test]
@@ -1010,6 +1463,92 @@ mod kani_harnesses {
         }
     }
 
+    /// The authenticated native-currency list has exactly one of two
+    /// canonical widths, and the two-member form is canonical iff its members
+    /// differ. This is exhaustive over every byte through the first reachable
+    /// over-capacity width (three complete addresses), so the deployed
+    /// `count > MAX_NATIVE_CURRENCY_ADDRESSES` rejection is not vacuous.
+    #[kani::proof]
+    #[kani::unwind(24)]
+    fn params_native_currency_list_canonicality() {
+        const N: usize = (MAX_NATIVE_CURRENCY_ADDRESSES + 1) * NATIVE_CURRENCY_ADDRESS_LEN;
+        let bytes: [u8; N] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= N);
+
+        const TWO_MEMBER_WIDTH: usize = MAX_NATIVE_CURRENCY_ADDRESSES * NATIVE_CURRENCY_ADDRESS_LEN;
+        let expected_width = len == NATIVE_CURRENCY_ADDRESS_LEN || len == TWO_MEMBER_WIDTH;
+        let members_distinct = len != TWO_MEMBER_WIDTH
+            || bytes[..NATIVE_CURRENCY_ADDRESS_LEN]
+                != bytes[NATIVE_CURRENCY_ADDRESS_LEN..TWO_MEMBER_WIDTH];
+        assert_eq!(
+            native_currency_list_is_canonical(&bytes[..len]),
+            expected_width && members_distinct
+        );
+    }
+
+    /// Executable interpolation v1 is deliberately one substitution with no
+    /// suffix. Prove the complete parser biconditional over every payload byte
+    /// and length through the first output-overflow case; this is the actual
+    /// authority boundary, not a set of concrete positive/negative examples.
+    #[kani::proof]
+    #[kani::unwind(40)]
+    fn params_interpolated_intent_executable_subset() {
+        // Five framing bytes plus a 32-byte literal reaches the first value
+        // rejected solely because literal bytes + one witness exceed the
+        // two-row (32-cell) title budget.
+        const N: usize = MAX_INTERPOLATED_INTENT_LEN + 5;
+        let bytes: [u8; N] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= N);
+
+        let expected = if len < 5 || bytes[0] != INTERPOLATED_INTENT_VERSION || bytes[1] != 1 {
+            false
+        } else {
+            let literal_len = bytes[2] as usize;
+            if literal_len > N - 5 || len != literal_len + 5 {
+                false
+            } else {
+                let literal = &bytes[3..3 + literal_len];
+                let final_literal_len = bytes[4 + literal_len];
+                literal
+                    .iter()
+                    .all(|&b| (0x20..0x7f).contains(&b) && !matches!(b, b'{' | b'}'))
+                    && literal.first() != Some(&b' ')
+                    && final_literal_len == 0
+                    && literal_len + 1 <= MAX_INTERPOLATED_INTENT_LEN
+            }
+        };
+
+        assert_eq!(
+            InterpolatedIntentProgram::parse(&bytes[..len]).is_ok(),
+            expected
+        );
+    }
+
+    /// TLV 0x45 accepts the frozen `@.to` program and no other four-byte path.
+    /// The full parser is exercised so this is also a non-vacuity control for
+    /// the newly extended high-tag range.
+    #[kani::proof]
+    #[kani::unwind(10)]
+    fn params_nft_collection_path_current_slice() {
+        let path: [u8; 4] = kani::any();
+        let mut pool = [0u8; 8];
+        pool[0] = 0xFF;
+        pool[1] = 6;
+        pool[2] = PARAM_NFT_COLLECTION_PATH;
+        pool[3] = 4;
+        pool[4..].copy_from_slice(&path);
+        let ir = mk_ir(&pool);
+        match parse(&ir, 1) {
+            Ok(parsed) => {
+                assert!(path == NFT_COLLECTION_TO_PATH);
+                assert_eq!(parsed.nft_collection_path, Some(&pool[4..]));
+            }
+            Err(_) => assert!(path != NFT_COLLECTION_TO_PATH),
+        }
+    }
+
     // ---- self-anchored non-vacuity controls ----------------------------
 
     /// Positive control: a concrete, canonical multi-TLV blob
@@ -1061,13 +1600,13 @@ mod kani_harnesses {
         kani::assume(4 + l <= N);
         let tag = pool[2];
         // "Unknown" = outside the CONTIGUOUS known-tag range
-        // `[0x30, PARAM_DYNAMIC_KIND]`.
+        // `[0x30, PARAM_INTERPOLATED_INTENT]`.
         // NB: the top bound is the HIGHEST known tag, not 0x3F — new tags were added
         // above the original 0x30..=0x3F block (`PARAM_CONST_VALUE` 0x40 in b37a052f,
         // `PARAM_NESTED_STRUCT` 0x41 in 2f4cc810), so a stale bound wrongly classifies
         // a known tag as unknown and the harness fails on a tag the parser correctly
         // accepts. Keep this in sync with the highest `PARAM_*` constant.
-        kani::assume(tag < PARAM_TOKEN_PATH || tag > PARAM_DYNAMIC_KIND);
+        kani::assume(tag < PARAM_TOKEN_PATH || tag > PARAM_INTERPOLATED_INTENT);
         let ir = mk_ir(&pool);
         assert!(parse(&ir, 1).is_err());
     }

@@ -238,24 +238,30 @@ fn positive_safe_erc20_inner_binds_amount_recipient_and_safe_address() {
 fn positive_safe_exact_zero_erc20_approve_renders_revoke_and_all_identities() {
     let spender = [0x44u8; 20];
     let meta = usdc_meta();
-    let pages = render_raw_with_context(
-        TOKEN,
-        0,
-        &erc20_approve(spender, 0),
-        None,
-        Some(&meta),
-    )
-    .expect("metadata-bound Safe ERC-20 zero approval must render");
+    let pages = render_raw_with_context(TOKEN, 0, &erc20_approve(spender, 0), None, Some(&meta))
+        .expect("metadata-bound Safe ERC-20 zero approval must render");
     let text = all_text(&pages);
     let hex = all_hex(&pages);
 
     assert!(text.contains("Revoke approval"), "pages:\n{text}");
-    assert!(text.contains("0.000000") && text.contains("USDC"), "pages:\n{text}");
+    assert!(
+        text.contains("0.000000") && text.contains("USDC"),
+        "pages:\n{text}"
+    );
     let spender_hex: String = spender.iter().map(|b| format!("{b:02x}")).collect();
     let token_hex: String = TOKEN.iter().map(|b| format!("{b:02x}")).collect();
-    assert!(hex.contains(&spender_hex), "spender must remain fully visible");
-    assert!(hex.contains(&token_hex), "token contract must remain fully visible");
-    assert!(text.contains("Chain: 1"), "chain must remain visible: {text}");
+    assert!(
+        hex.contains(&spender_hex),
+        "spender must remain fully visible"
+    );
+    assert!(
+        hex.contains(&token_hex),
+        "token contract must remain fully visible"
+    );
+    assert!(
+        text.contains("Chain: 1"),
+        "chain must remain visible: {text}"
+    );
 }
 
 #[test]
@@ -414,16 +420,14 @@ fn multisend_metadata_is_scoped_to_its_exact_record_contract() {
     let raw = encode_multisend(&packed);
 
     let meta = usdc_meta();
-    let pages = render_raw_with_context(
-        MULTISEND_CALL_ONLY_ADDRESSES[0],
-        1,
-        &raw,
-        None,
-        Some(&meta),
-    )
-    .expect("two strict synthetic ERC-20 records should render");
+    let pages =
+        render_raw_with_context(MULTISEND_CALL_ONLY_ADDRESSES[0], 1, &raw, None, Some(&meta))
+            .expect("two strict synthetic ERC-20 records should render");
     let text = all_text(&pages);
-    assert!(text.contains("USDC"), "record A must use its verified metadata");
+    assert!(
+        text.contains("USDC"),
+        "record A must use its verified metadata"
+    );
 
     let (_, second_section) = text
         .split_once("MSend rec 2/2")

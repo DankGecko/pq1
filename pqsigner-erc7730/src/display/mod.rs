@@ -73,6 +73,11 @@ pub type Page = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 /// the budget still fails closed (refuse, never truncate).
 pub const MAX_PAGES: usize = 31;
 
+/// Non-display byte used to separate two renders that reuse one [`Pages`]
+/// allocation. No valid renderer page contains this value because every
+/// trusted-display byte is printable ASCII.
+pub const TRANSCRIPT_POISON: u8 = 0xA5;
+
 /// A buffer of up to [`MAX_PAGES`] pre-rendered confirmation pages.
 ///
 /// Owned-by-value: every renderer returns a fresh `Pages` on the stack and the
@@ -151,6 +156,46 @@ impl Pages {
         let idx = self.len;
         self.len += 1;
         Ok(idx)
+    }
+
+    /// Volatile-poison the full fixed buffer and reset its visible length.
+    ///
+    /// The secure ERC-7730 dispatcher calls this between two complete renders
+    /// into the same allocation. Volatile writes prevent LLVM from deleting
+    /// the poison as dead stores before the second render. If the second render
+    /// is skipped, the empty/poisoned buffer cannot match the first receipt; if
+    /// this reset is skipped, the independently rendered second pass still
+    /// clears every page it publishes.
+    #[inline(never)]
+    pub fn volatile_poison_and_reset(&mut self) {
+        for page in &mut self.buf {
+            for row in page {
+                for byte in row {
+                    // SAFETY: every pointer comes from this unique mutable
+                    // borrow and remains within the live fixed-size buffer.
+                    unsafe { core::ptr::write_volatile(byte, TRANSCRIPT_POISON) };
+                }
+            }
+        }
+        // Write the length last: a skipped second render then exposes either a
+        // zero count or poison bytes, both of which fail the transcript proof.
+        // SAFETY: `self.len` is uniquely borrowed and remains live for this
+        // in-place reset.
+        unsafe { core::ptr::write_volatile(&mut self.len, 0) };
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Readback used before granting the reset CFI step.
+    #[must_use]
+    #[inline(never)]
+    pub fn is_transcript_poisoned(&self) -> bool {
+        self.len == 0
+            && self
+                .buf
+                .iter()
+                .flat_map(|page| page.iter())
+                .flat_map(|row| row.iter())
+                .all(|byte| *byte == TRANSCRIPT_POISON)
     }
 }
 

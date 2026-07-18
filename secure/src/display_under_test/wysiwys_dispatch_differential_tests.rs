@@ -66,16 +66,14 @@ use sha3::Keccak256;
 
 use super::dispatch::{legacy_fee_pages_required, pick_sign_pages, DispatchPageProofs};
 use super::erc8213;
+use super::nonce_lane::{enforce_nonce_lane_page, nonce_lane_page_proof, NONCE_LANE_CFI_EXPECTED};
+use super::userop_gas_lane::{
+    enforce_userop_gas_page, userop_gas_final_set_proof, userop_gas_page_proof,
+};
 use super::value_page::{
     enforce_from_page, enforce_paymaster_page, enforce_target_page, from_page_proof,
     paymaster_final_set_proof, paymaster_page_proof, target_page_proof,
     PAYMASTER_PAGE_CFI_EXPECTED, SIGNER_PAGE_CFI_EXPECTED, TARGET_PAGE_CFI_EXPECTED,
-};
-use super::nonce_lane::{
-    enforce_nonce_lane_page, nonce_lane_page_proof, NONCE_LANE_CFI_EXPECTED,
-};
-use super::userop_gas_lane::{
-    enforce_userop_gas_page, userop_gas_final_set_proof, userop_gas_page_proof,
 };
 use super::Pages;
 use crate::aa::userop::{
@@ -84,7 +82,7 @@ use crate::aa::userop::{
 };
 use crate::erc20::bundle::Erc20Metadata;
 use crate::names::NameResolver;
-use crate::tx::eip1559::{Eip1559Tx, U256, UserOpDisplayFields};
+use crate::tx::eip1559::{Eip1559Tx, UserOpDisplayFields, U256};
 use crate::ui::DISPLAY_COLS;
 use sphincs_tz_shared::{EXEC_TRANSACTION_SELECTOR, SIGN_USEROP_HEADER_LEN};
 
@@ -149,8 +147,7 @@ impl WireSignRequest {
         buf[0..8].copy_from_slice(&self.chain_id.to_be_bytes());
         // flags: no INCLUDE_INIT_CODE / REGISTER_SLOT; account index in bits
         // 29..22, slot index in bits 21..0.
-        let flags: u32 = ((self.account_index & 0xff) << 22)
-            | (self.slot_index & 0x003F_FFFF);
+        let flags: u32 = ((self.account_index & 0xff) << 22) | (self.slot_index & 0x003F_FFFF);
         buf[8..12].copy_from_slice(&flags.to_be_bytes());
         buf[12..32].copy_from_slice(&self.sender);
         buf[32..52].copy_from_slice(&self.entry_point);
@@ -300,9 +297,8 @@ fn drive_glue(p: &MirrorParsed, ctx: &Contexts<'_>) -> GlueOutcome {
     // Safe execTransaction context — through the REAL verifier the
     // handler calls (§7c-bis), not a hand-built struct.
     let safe_exec = if ctx.safe_exec_calldata {
-        let v = crate::tx::eip712::safe::exec_decode::verify_and_bind_exec(
-            &p.inner, p.chain_id, &p.to,
-        );
+        let v =
+            crate::tx::eip712::safe::exec_decode::verify_and_bind_exec(&p.inner, p.chain_id, &p.to);
         assert!(v.is_some(), "corpus execTransaction must verify");
         v
     } else {
@@ -311,8 +307,8 @@ fn drive_glue(p: &MirrorParsed, ctx: &Contexts<'_>) -> GlueOutcome {
 
     // §8 — render + append-only mandatory gates, in handler order.
     let mut dispatch_proofs = DispatchPageProofs::new();
-    let legacy_fees_required =
-        legacy_fee_pages_required(false, false, safe_exec.is_some());
+    dispatch_proofs.fail_initialize();
+    let legacy_fees_required = legacy_fee_pages_required(false, false, safe_exec.is_some());
     let mut pages = pick_sign_pages(
         &tx,
         &p.inner,
@@ -332,11 +328,7 @@ fn drive_glue(p: &MirrorParsed, ctx: &Contexts<'_>) -> GlueOutcome {
         (p.paymaster_and_data_hash != SHA256_EMPTY).then_some(dispatch_pages_len);
     let paymaster_pages_before = pages.len;
     let mut paymaster_cfi = crate::fi::CfiCounter::new();
-    enforce_paymaster_page(
-        &mut pages,
-        &p.paymaster_and_data_hash,
-        &mut paymaster_cfi,
-    )
+    enforce_paymaster_page(&mut pages, &p.paymaster_and_data_hash, &mut paymaster_cfi)
         .expect("paymaster page must fit");
     crate::fi::scrub_sentinel_register();
     assert_eq!(
@@ -346,11 +338,7 @@ fn drive_glue(p: &MirrorParsed, ctx: &Contexts<'_>) -> GlueOutcome {
     );
     crate::fi::scrub_sentinel_register();
     assert_eq!(
-        paymaster_page_proof(
-            &pages,
-            paymaster_pages_before,
-            &p.paymaster_and_data_hash,
-        ),
+        paymaster_page_proof(&pages, paymaster_pages_before, &p.paymaster_and_data_hash,),
         crate::fi::OK_SENTINEL,
         "paymaster transition must match the signed presence hash"
     );
@@ -413,7 +401,7 @@ fn drive_glue(p: &MirrorParsed, ctx: &Contexts<'_>) -> GlueOutcome {
         &p.gas[2],
         &mut gas_lane_cfi,
     )
-        .expect("handler-owned gas page must fit exactly once");
+    .expect("handler-owned gas page must fit exactly once");
     crate::fi::scrub_sentinel_register();
     assert_eq!(
         gas_lane_cfi.check_into_sentinel(super::userop_gas_lane::USEROP_GAS_CFI_EXPECTED),
@@ -436,12 +424,8 @@ fn drive_glue(p: &MirrorParsed, ctx: &Contexts<'_>) -> GlueOutcome {
     let fingerprint_pages_before = pages.len;
     let fingerprint_kind = erc8213::Kind::CalldataDigest(calldata_fingerprint);
     let mut fingerprint_cfi = crate::fi::CfiCounter::new();
-    erc8213::append_fingerprint_page(
-        &mut pages,
-        fingerprint_kind,
-        &mut fingerprint_cfi,
-    )
-    .expect("fingerprint pages must fit");
+    erc8213::append_fingerprint_page(&mut pages, fingerprint_kind, &mut fingerprint_cfi)
+        .expect("fingerprint pages must fit");
     crate::fi::scrub_sentinel_register();
     assert_eq!(
         fingerprint_cfi.check_into_sentinel(erc8213::FINGERPRINT_CFI_EXPECTED),
@@ -460,13 +444,7 @@ fn drive_glue(p: &MirrorParsed, ctx: &Contexts<'_>) -> GlueOutcome {
         "final handler boundary must retain caller-owned gas CFI"
     );
     assert_eq!(
-        userop_gas_final_set_proof(
-            &pages,
-            gas_page_index,
-            &p.gas[0],
-            &p.gas[1],
-            &p.gas[2],
-        ),
+        userop_gas_final_set_proof(&pages, gas_page_index, &p.gas[0], &p.gas[1], &p.gas[2],),
         crate::fi::OK_SENTINEL,
         "complete final page set must retain exactly one canonical gas page"
     );
@@ -478,27 +456,26 @@ fn drive_glue(p: &MirrorParsed, ctx: &Contexts<'_>) -> GlueOutcome {
     );
     crate::fi::scrub_sentinel_register();
     assert_eq!(
-        paymaster_final_set_proof(
-            &pages,
-            paymaster_pages_before,
-            &p.paymaster_and_data_hash,
-        ),
+        paymaster_final_set_proof(&pages, paymaster_pages_before, &p.paymaster_and_data_hash,),
         crate::fi::OK_SENTINEL,
         "complete final page set must retain the exact paymaster warning state"
     );
     crate::fi::scrub_sentinel_register();
+    let mut dispatch_final_verdict_slot = crate::fi::FAIL_SENTINEL;
+    dispatch_proofs.final_set_proof(
+        &pages,
+        &tx,
+        legacy_fees_required,
+        &mut dispatch_final_verdict_slot,
+    );
     assert_eq!(
-        dispatch_proofs.final_set_proof(&pages, &tx, legacy_fees_required),
+        dispatch_final_verdict_slot,
         crate::fi::OK_SENTINEL,
         "final handler boundary must retain native/legacy-fee receipts and exact pages"
     );
     crate::fi::scrub_sentinel_register();
     assert_eq!(
-        erc8213::fingerprint_final_set_proof(
-            &pages,
-            fingerprint_pages_before,
-            fingerprint_kind,
-        ),
+        erc8213::fingerprint_final_set_proof(&pages, fingerprint_pages_before, fingerprint_kind,),
         crate::fi::OK_SENTINEL,
         "final handler boundary must retain the exact fingerprint pair"
     );
@@ -749,8 +726,14 @@ fn assert_handler_gas_page(p: &MirrorParsed, out: &GlueOutcome) {
         .iter()
         .filter(|page| **page != expected && oracle_gas_marker_count(page) >= 2)
         .count();
-    assert_eq!(exact_count, 1, "final handler page set must contain one exact gas page");
-    assert_eq!(near_count, 0, "final handler page set contains a conflicting gas shape");
+    assert_eq!(
+        exact_count, 1,
+        "final handler page set must contain one exact gas page"
+    );
+    assert_eq!(
+        near_count, 0,
+        "final handler page set contains a conflicting gas shape"
+    );
     assert_eq!(
         out.pages.as_slice()[out.gas_page_index],
         expected,
@@ -915,10 +898,19 @@ fn wysiwys_value_transfer_binds_pages_to_signed_bytes() {
     // the renderer's Value page AND the dispatcher's loud splice page.
     assert!(oracle.value == be_u256_from_u64(1_000_000_000_000_000_000));
     assert!(rows_contain(&rows, "Send ETH?"), "value-transfer banner");
-    assert!(rows_contain(&rows, "1.000000 ETH"), "signed 1 ETH amount shown");
-    assert!(rows_contain(&rows, "! NATIVE ETH"), "dispatcher value splice");
+    assert!(
+        rows_contain(&rows, "1.000000 ETH"),
+        "signed 1 ETH amount shown"
+    );
+    assert!(
+        rows_contain(&rows, "! NATIVE ETH"),
+        "dispatcher value splice"
+    );
     // No paymaster in this flow → no paymaster page.
-    assert!(!rows_contain(&rows, "PAYMASTER"), "no phantom paymaster page");
+    assert!(
+        !rows_contain(&rows, "PAYMASTER"),
+        "no phantom paymaster page"
+    );
 }
 
 #[test]
@@ -941,7 +933,10 @@ fn wysiwys_erc20_unknown_transfer_binds_recipient_from_signed_bytes() {
     assert_eq!(signed_recipient, recipient);
 
     let rows = all_rows(&out.pages);
-    assert!(rows_contain(&rows, "! Unknown token"), "unknown-token banner");
+    assert!(
+        rows_contain(&rows, "! Unknown token"),
+        "unknown-token banner"
+    );
     assert!(rows_contain(&rows, "Recipient:"), "recipient label");
     assert_addr_shown(&out.pages, &signed_recipient, "signed ERC-20 recipient");
 }
@@ -975,7 +970,10 @@ fn wysiwys_erc20_known_metadata_binds_amount_and_recipient() {
     let signed_amount = u64::from_be_bytes(oracle.data[60..68].try_into().unwrap());
     assert_eq!(signed_amount, 500_000);
     let rows = all_rows(&out.pages);
-    assert!(rows_contain(&rows, "0.500000 USDC"), "signed token amount shown");
+    assert!(
+        rows_contain(&rows, "0.500000 USDC"),
+        "signed token amount shown"
+    );
     let signed_recipient: [u8; 20] = oracle.data[16..36].try_into().unwrap();
     assert_addr_shown(&out.pages, &signed_recipient, "signed ERC-20 recipient");
 }
@@ -1062,10 +1060,16 @@ fn wysiwys_blind_sign_shows_signed_selector_and_fingerprint() {
     let rows = all_rows(&out.pages);
     // Selector row is painted from the same bytes that got signed.
     assert_eq!(&oracle.data[..4], &[0xde, 0xad, 0xbe, 0xef]);
-    assert!(rows_contain(&rows, "Sel: 0xdeadbeef"), "signed selector shown");
+    assert!(
+        rows_contain(&rows, "Sel: 0xdeadbeef"),
+        "signed selector shown"
+    );
     // The native value on a blind-signed call is the C-1 drain class —
     // the dispatcher splice must fire.
-    assert!(rows_contain(&rows, "! NATIVE ETH"), "value splice on blind sign");
+    assert!(
+        rows_contain(&rows, "! NATIVE ETH"),
+        "value splice on blind sign"
+    );
     assert!(rows_contain(&rows, "0.250000 ETH"), "signed 0.25 ETH shown");
 }
 
@@ -1080,14 +1084,15 @@ fn wysiwys_known_weth_deposit_without_descriptor_hard_refuses() {
     let mut req = WireSignRequest::base();
     req.chain_id = 1;
     req.to = [
-        0xc0, 0x2a, 0xaa, 0x39, 0xb2, 0x23, 0xfe, 0x8d, 0x0a, 0x0e,
-        0x5c, 0x4f, 0x27, 0xea, 0xd9, 0x08, 0x3c, 0x75, 0x6c, 0xc2,
+        0xc0, 0x2a, 0xaa, 0x39, 0xb2, 0x23, 0xfe, 0x8d, 0x0a, 0x0e, 0x5c, 0x4f, 0x27, 0xea, 0xd9,
+        0x08, 0x3c, 0x75, 0x6c, 0xc2,
     ];
     req.data = vec![0xd0, 0xe3, 0x0d, 0xb0]; // deposit()
     let parsed = mirror_parse(&req.encode());
     let tx = tx_for_display(&parsed);
     let resolver = NameResolver::new();
     let mut dispatch_proofs = DispatchPageProofs::new();
+    dispatch_proofs.fail_initialize();
 
     let outcome = pick_sign_pages(
         &tx,
@@ -1151,18 +1156,27 @@ fn wysiwys_safe_exec_renders_safe_surface_with_spliced_gas_pages() {
         "Safe surface banner expected:\n{rows:#?}"
     );
     assert_addr_shown(&out.pages, &signed_inner_to, "signed Safe inner target");
-    assert!(rows_contain(&rows, "0.050000 ETH"), "signed inner ETH shown");
+    assert!(
+        rows_contain(&rows, "0.050000 ETH"),
+        "signed inner ETH shown"
+    );
     // The dispatcher's gas splice must fire for the Safe surface (the
     // renderer itself is gas-less; hiding fees is the 2026-06-19 fee-bomb).
-    assert!(rows_contain(&rows, "Max fee:"), "gas pages spliced for Safe");
-    assert!(rows_contain(&rows, "Worst-case:"), "worst-case fee page spliced");
+    assert!(
+        rows_contain(&rows, "Max fee:"),
+        "gas pages spliced for Safe"
+    );
+    assert!(
+        rows_contain(&rows, "Worst-case:"),
+        "worst-case fee page spliced"
+    );
 }
 
 #[test]
 fn wysiwys_paymaster_page_spliced_iff_hash_nonempty() {
     // With a paymaster: loud page present, and the digest commits the hash.
     let mut req = WireSignRequest::base();
-    req.value = be_u256_from_u64(1);
+    req.value = be_u256_from_u64(1_000_000_000_000); // exact 0.000001 ETH
     req.paymaster_and_data_hash = [0x77; 32];
     let p = mirror_parse(&req.encode());
     let out = drive_glue(&p, &Contexts::default());
@@ -1180,7 +1194,10 @@ fn wysiwys_paymaster_page_spliced_iff_hash_nonempty() {
     let p2 = mirror_parse(&req2.encode());
     let out2 = drive_glue(&p2, &Contexts::default());
     assert_core_bindings(&p2, &out2);
-    assert_ne!(out.digest, out2.digest, "paymaster hash must move the digest");
+    assert_ne!(
+        out.digest, out2.digest,
+        "paymaster hash must move the digest"
+    );
     let rows2 = all_rows(&out2.pages);
     assert!(
         !rows2.iter().any(|r| r.contains("PAYMASTER")),
@@ -1191,7 +1208,7 @@ fn wysiwys_paymaster_page_spliced_iff_hash_nonempty() {
 #[test]
 fn append_only_combined_transcripts_have_exact_mandatory_suffix_order() {
     let mut rich = WireSignRequest::base();
-    rich.value = be_u256_from_u64(1);
+    rich.value = be_u256_from_u64(1_000_000_000_000); // exact 0.000001 ETH
     rich.paymaster_and_data_hash = [0x77; 32];
     rich.nonce[0] = 0xAB;
     let rich_parsed = mirror_parse(&rich.encode());
@@ -1202,7 +1219,10 @@ fn append_only_combined_transcripts_have_exact_mandatory_suffix_order() {
         "! NATIVE ETH",
         "dispatcher native page must be the last dispatcher suffix page"
     );
-    assert_eq!(rich_out.paymaster_page_index, Some(rich_out.dispatch_pages_len));
+    assert_eq!(
+        rich_out.paymaster_page_index,
+        Some(rich_out.dispatch_pages_len)
+    );
     assert_eq!(rich_out.signer_page_index, rich_out.dispatch_pages_len + 1);
     assert_eq!(rich_out.target_page_index, rich_out.signer_page_index + 1);
     assert_eq!(
@@ -1285,14 +1305,20 @@ fn divergence_probe_inner_data_byte_flip_moves_digest_and_fingerprint() {
     let p2 = mirror_parse(&req2.encode());
     let out2 = drive_glue(&p2, &Contexts::default());
 
-    assert_ne!(out.digest, out2.digest, "inner-data flip must move the digest");
+    assert_ne!(
+        out.digest, out2.digest,
+        "inner-data flip must move the digest"
+    );
     // The fingerprint page — the display-side commitment to the signed
     // calldata — must move with it.
     let fp1 = all_rows(&out.pages);
     let fp2 = all_rows(&out2.pages);
     let tail1: Vec<_> = fp1.iter().rev().take(4).collect();
     let tail2: Vec<_> = fp2.iter().rev().take(4).collect();
-    assert_ne!(tail1, tail2, "fingerprint page must move with the signed bytes");
+    assert_ne!(
+        tail1, tail2,
+        "fingerprint page must move with the signed bytes"
+    );
 }
 
 #[test]
@@ -1337,17 +1363,28 @@ fn divergence_probe_nonce_lane_flip_cannot_hide_behind_same_sequence() {
     assert_eq!(row_str(&lane1[2]), "0000000000000000");
     assert_eq!(row_str(&lane1[3]), "0000000000000000");
     assert_eq!(row_str(&lane2[1]), "0200000000000000");
-    assert_ne!(lane1, lane2, "lane-distinct confirmations must not be identical");
+    assert_ne!(
+        lane1, lane2,
+        "lane-distinct confirmations must not be identical"
+    );
 
     let rows1 = all_rows(&out.pages);
     let rows2 = all_rows(&out2.pages);
     assert!(rows_contain(&rows1, "Nonce: 7"));
     assert!(rows_contain(&rows2, "Nonce: 7"));
-    assert_ne!(out.digest, out2.digest, "full signed nonce must move the digest");
+    assert_ne!(
+        out.digest, out2.digest,
+        "full signed nonce must move the digest"
+    );
 
-    let zero = drive_glue(&mirror_parse(&WireSignRequest::base().encode()), &Contexts::default());
+    let zero = drive_glue(
+        &mirror_parse(&WireSignRequest::base().encode()),
+        &Contexts::default(),
+    );
     assert!(
-        !all_rows(&zero.pages).iter().any(|row| row == "Nonce lane key:"),
+        !all_rows(&zero.pages)
+            .iter()
+            .any(|row| row == "Nonce lane key:"),
         "lane zero must retain the compact confirmation path"
     );
 }
@@ -1359,10 +1396,7 @@ fn divergence_probe_gas_permutation_moves_handler_page_and_digest() {
     let out = drive_glue(&p, &Contexts::default());
 
     let mut req2 = req.clone();
-    core::mem::swap(
-        &mut req2.call_gas_limit,
-        &mut req2.verification_gas_limit,
-    );
+    core::mem::swap(&mut req2.call_gas_limit, &mut req2.verification_gas_limit);
     let p2 = mirror_parse(&req2.encode());
     let out2 = drive_glue(&p2, &Contexts::default());
 
@@ -1376,7 +1410,10 @@ fn divergence_probe_gas_permutation_moves_handler_page_and_digest() {
         out2.pages.as_slice()[out2.gas_page_index],
         "ordered signed gas components must move the handler-owned page"
     );
-    assert_ne!(out.digest, out2.digest, "gas permutation must move the signed digest");
+    assert_ne!(
+        out.digest, out2.digest,
+        "gas permutation must move the signed digest"
+    );
 }
 
 #[test]
@@ -1455,11 +1492,10 @@ fn divergence_probe_account_flip_moves_mandatory_from_page() {
 
 const HANDLER_SRC: &str = include_str!("../nsc/cmd_sign_userop.rs");
 const BATCH_HANDLER_SRC: &str = include_str!("../nsc/cmd_sign_userop_batch.rs");
+const DISPATCH_SRC: &str = include_str!("../tx/display/dispatch.rs");
 
 fn squash_ws(s: &str) -> String {
-    s.split_whitespace()
-        .collect::<String>()
-        .replace(",)", ")")
+    s.split_whitespace().collect::<String>().replace(",)", ")")
 }
 
 #[test]
@@ -1484,6 +1520,11 @@ fn pin_handler_display_shim_construction_matches_replication() {
 fn pin_handler_render_and_digest_glue_matches_replication() {
     let src = squash_ws(HANDLER_SRC);
     for (frag, why) in [
+        (
+            "let mut dispatch_page_proofs = crate::tx::display::DispatchPageProofs::new();
+             dispatch_page_proofs.fail_initialize();",
+            "handler dispatcher receipt must start from a materialized fail state",
+        ),
         (
             "let mut pages = match pick_sign_pages( &tx_for_display, inner_data, &sender,
              cow_order_verified.as_ref(), safe_v1_verified.as_ref(), safe_exec_verified.as_ref(),
@@ -1598,9 +1639,32 @@ fn pin_handler_render_and_digest_glue_matches_replication() {
             "handler §8 final-confirmation paymaster proof drifted",
         ),
         (
-            "if dispatch_page_proofs.final_set_proof(&pages, &tx_for_display,
-             legacy_fee_pages_required,) != crate::fi::OK_SENTINEL",
-            "handler §8 final native/legacy-fee proof drifted",
+            "core::ptr::write_volatile(&mut dispatch_final_verdict_slot,
+             crate::fi::FAIL_SENTINEL,);",
+            "handler final dispatcher proof output must fail-in",
+        ),
+        (
+            "dispatch_page_proofs.final_set_proof(&pages, &tx_for_display,
+             legacy_fee_pages_required, &mut dispatch_final_verdict_slot,);",
+            "handler §8 final display/publication proof drifted",
+        ),
+        (
+            "let dispatch_final_verdict_a = unsafe {
+             core::ptr::read_volatile(&dispatch_final_verdict_slot) };",
+            "handler final display proof needs volatile read A",
+        ),
+        (
+            "let dispatch_final_verdict_b = unsafe {
+             core::ptr::read_volatile(&dispatch_final_verdict_slot) };",
+            "handler final display proof needs volatile read B",
+        ),
+        (
+            "if dispatch_final_gate_a != crate::fi::OK_SENTINEL",
+            "handler final display proof needs refusal gate A",
+        ),
+        (
+            "if dispatch_final_gate_b != crate::fi::OK_SENTINEL",
+            "handler final display proof needs refusal gate B",
         ),
         (
             "let t2_exec = match reconstruct_execute_calldata( t2_owner_index,
@@ -1638,14 +1702,37 @@ fn pin_handler_render_and_digest_glue_matches_replication() {
 
 #[test]
 fn pin_append_only_handler_suffix_order_and_completion_receipts() {
-    assert_eq!(HANDLER_SRC.matches("PAYMASTER_PAGE_CFI_EXPECTED").count(), 2);
+    assert_eq!(
+        HANDLER_SRC.matches("PAYMASTER_PAGE_CFI_EXPECTED").count(),
+        2
+    );
     assert_eq!(HANDLER_SRC.matches("paymaster_page_proof(").count(), 1);
     assert_eq!(HANDLER_SRC.matches("paymaster_final_set_proof(").count(), 1);
     assert_eq!(HANDLER_SRC.matches("SIGNER_PAGE_CFI_EXPECTED").count(), 2);
     assert_eq!(HANDLER_SRC.matches("TARGET_PAGE_CFI_EXPECTED").count(), 1);
     assert_eq!(HANDLER_SRC.matches("NONCE_LANE_CFI_EXPECTED").count(), 2);
     assert_eq!(HANDLER_SRC.matches("DispatchPageProofs::new()").count(), 1);
-    assert_eq!(HANDLER_SRC.matches("dispatch_page_proofs.final_set_proof(").count(), 1);
+    assert_eq!(
+        HANDLER_SRC
+            .matches("dispatch_page_proofs.fail_initialize()")
+            .count(),
+        1
+    );
+    assert_eq!(
+        HANDLER_SRC
+            .matches("dispatch_page_proofs.final_set_proof(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        HANDLER_SRC
+            .matches("read_volatile(&dispatch_final_verdict_slot)")
+            .count(),
+        2,
+        "single final receipt needs two independently emitted volatile loads"
+    );
+    assert_eq!(HANDLER_SRC.matches("dispatch_final_gate_a").count(), 2);
+    assert_eq!(HANDLER_SRC.matches("dispatch_final_gate_b").count(), 2);
 
     let single_start = HANDLER_SRC
         .find("let mut dispatch_page_proofs = crate::tx::display::DispatchPageProofs::new();")
@@ -1654,11 +1741,25 @@ fn pin_append_only_handler_suffix_order_and_completion_receipts() {
     let paymaster = single.find("enforce_paymaster_page(").unwrap();
     let signer = single.find("let signer_pages_before = pages.len;").unwrap();
     let target = single.find("let target_pages_before = pages.len;").unwrap();
-    let nonce = single.find("let nonce_lane_pages_before = pages.len;").unwrap();
-    let gas = single.find("let gas_lane_pages_before = pages.len;").unwrap();
+    let nonce = single
+        .find("let nonce_lane_pages_before = pages.len;")
+        .unwrap();
+    let gas = single
+        .find("let gas_lane_pages_before = pages.len;")
+        .unwrap();
     let fingerprint = single.find("append_fingerprint_page(").unwrap();
     let final_paymaster = single.find("paymaster_final_set_proof(").unwrap();
-    let final_dispatch = single.find("dispatch_page_proofs.final_set_proof(").unwrap();
+    let final_dispatch = single
+        .find("dispatch_page_proofs.final_set_proof(")
+        .unwrap();
+    let final_read_a = single.find("let dispatch_final_verdict_a").unwrap();
+    let final_gate_a = single
+        .find("if dispatch_final_gate_a != crate::fi::OK_SENTINEL")
+        .unwrap();
+    let final_read_b = single.find("let dispatch_final_verdict_b").unwrap();
+    let final_gate_b = single
+        .find("if dispatch_final_gate_b != crate::fi::OK_SENTINEL")
+        .unwrap();
     let confirm = single.find("confirm_checked(pages.as_slice())").unwrap();
     assert!(
         paymaster < signer
@@ -1668,35 +1769,118 @@ fn pin_append_only_handler_suffix_order_and_completion_receipts() {
             && gas < fingerprint
             && fingerprint < final_paymaster
             && final_paymaster < final_dispatch
-            && final_dispatch < confirm,
+            && final_dispatch < final_read_a
+            && final_read_a < final_gate_a
+            && final_gate_a < final_read_b
+            && final_read_b < final_gate_b
+            && final_gate_b < confirm,
         "single mandatory suffix/order or final-boundary proof drifted"
     );
+    let after_final_proof = &single[final_dispatch..confirm];
+    assert!(!after_final_proof.contains("&mut pages"));
+    assert!(!after_final_proof.contains("pages.buf"));
+    assert!(!after_final_proof.contains("pages.push_blank"));
+    assert!(single[final_gate_a..final_read_b].contains("crate::fi::wait_random();"));
+    assert!(single[final_gate_a..final_read_b].contains("compiler_fence"));
 
-    assert_eq!(BATCH_HANDLER_SRC.matches("SIGNER_PAGE_CFI_EXPECTED").count(), 3);
-    assert_eq!(BATCH_HANDLER_SRC.matches("TARGET_PAGE_CFI_EXPECTED").count(), 1);
-    assert_eq!(BATCH_HANDLER_SRC.matches("NONCE_LANE_CFI_EXPECTED").count(), 3);
-    assert_eq!(BATCH_HANDLER_SRC.matches("PAYMASTER_PAGE_CFI_EXPECTED").count(), 2);
-    assert_eq!(BATCH_HANDLER_SRC.matches("paymaster_page_proof(").count(), 1);
-    assert_eq!(BATCH_HANDLER_SRC.matches("paymaster_final_set_proof(").count(), 1);
-    assert_eq!(BATCH_HANDLER_SRC.matches("DispatchPageProofs::new()").count(), 1);
-    assert_eq!(BATCH_HANDLER_SRC.matches("dispatch_page_proofs.shift_indices(1)").count(), 1);
+    assert_eq!(
+        BATCH_HANDLER_SRC
+            .matches("SIGNER_PAGE_CFI_EXPECTED")
+            .count(),
+        3
+    );
+    assert_eq!(
+        BATCH_HANDLER_SRC
+            .matches("TARGET_PAGE_CFI_EXPECTED")
+            .count(),
+        1
+    );
+    assert_eq!(
+        BATCH_HANDLER_SRC.matches("NONCE_LANE_CFI_EXPECTED").count(),
+        3
+    );
+    assert_eq!(
+        BATCH_HANDLER_SRC
+            .matches("PAYMASTER_PAGE_CFI_EXPECTED")
+            .count(),
+        2
+    );
+    assert_eq!(
+        BATCH_HANDLER_SRC.matches("paymaster_page_proof(").count(),
+        1
+    );
+    assert_eq!(
+        BATCH_HANDLER_SRC
+            .matches("paymaster_final_set_proof(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        BATCH_HANDLER_SRC
+            .matches("DispatchPageProofs::new()")
+            .count(),
+        1
+    );
+    assert_eq!(
+        BATCH_HANDLER_SRC
+            .matches("dispatch_page_proofs.fail_initialize()")
+            .count(),
+        1
+    );
+    assert_eq!(
+        BATCH_HANDLER_SRC
+            .matches("dispatch_page_proofs.shift_indices(1)")
+            .count(),
+        1
+    );
     assert_eq!(
         BATCH_HANDLER_SRC
             .matches("dispatch_page_proofs.final_set_proof(")
             .count(),
         1
     );
+    assert_eq!(
+        BATCH_HANDLER_SRC
+            .matches("read_volatile(&dispatch_final_verdict_slot)")
+            .count(),
+        2,
+        "batch-member final receipt needs two independent volatile loads"
+    );
+    assert_eq!(
+        BATCH_HANDLER_SRC.matches("dispatch_final_gate_a").count(),
+        2
+    );
+    assert_eq!(
+        BATCH_HANDLER_SRC.matches("dispatch_final_gate_b").count(),
+        2
+    );
     let member_start = BATCH_HANDLER_SRC
         .find("let mut dispatch_page_proofs = crate::tx::display::DispatchPageProofs::new();")
         .expect("batch-member dispatcher proof owner");
     let member = &BATCH_HANDLER_SRC[member_start..];
-    let shift = member.find("dispatch_page_proofs.shift_indices(1)").unwrap();
+    let shift = member
+        .find("dispatch_page_proofs.shift_indices(1)")
+        .unwrap();
     let signer = member.find("let signer_pages_before = pages.len;").unwrap();
     let target = member.find("let target_pages_before = pages.len;").unwrap();
-    let nonce = member.find("let nonce_lane_pages_before = pages.len;").unwrap();
-    let gas = member.find("let gas_lane_pages_before = pages.len;").unwrap();
+    let nonce = member
+        .find("let nonce_lane_pages_before = pages.len;")
+        .unwrap();
+    let gas = member
+        .find("let gas_lane_pages_before = pages.len;")
+        .unwrap();
     let fingerprint = member.find("append_fingerprint_page(").unwrap();
-    let final_dispatch = member.find("dispatch_page_proofs.final_set_proof(").unwrap();
+    let final_dispatch = member
+        .find("dispatch_page_proofs.final_set_proof(")
+        .unwrap();
+    let final_read_a = member.find("let dispatch_final_verdict_a").unwrap();
+    let final_gate_a = member
+        .find("if dispatch_final_gate_a != crate::fi::OK_SENTINEL")
+        .unwrap();
+    let final_read_b = member.find("let dispatch_final_verdict_b").unwrap();
+    let final_gate_b = member
+        .find("if dispatch_final_gate_b != crate::fi::OK_SENTINEL")
+        .unwrap();
     let confirm = member.find("confirm_checked(pages.as_slice())").unwrap();
     assert!(
         shift < signer
@@ -1705,9 +1889,29 @@ fn pin_append_only_handler_suffix_order_and_completion_receipts() {
             && nonce < gas
             && gas < fingerprint
             && fingerprint < final_dispatch
-            && final_dispatch < confirm,
+            && final_dispatch < final_read_a
+            && final_read_a < final_gate_a
+            && final_gate_a < final_read_b
+            && final_read_b < final_gate_b
+            && final_gate_b < confirm,
         "batch-member mandatory suffix/order or shifted final proof drifted"
     );
+    let after_final_proof = &member[final_dispatch..confirm];
+    assert!(!after_final_proof.contains("&mut pages"));
+    assert!(!after_final_proof.contains("pages.buf"));
+    assert!(!after_final_proof.contains("pages.push_blank"));
+    assert!(member[final_gate_a..final_read_b].contains("crate::fi::wait_random();"));
+    assert!(member[final_gate_a..final_read_b].contains("compiler_fence"));
+
+    assert_eq!(
+        DISPATCH_SRC.matches("render_contract_pass_into(").count(),
+        2,
+        "the secure ERC-7730 route must perform two complete renders"
+    );
+    assert!(DISPATCH_SRC.contains("pages.volatile_poison_and_reset();"));
+    assert!(DISPATCH_SRC.contains("self.receipt.exact_match(second)"));
+    assert!(DISPATCH_SRC.contains("second.range_matches(pages, 0)"));
+    assert!(DISPATCH_SRC.contains("self.receipt.range_matches(pages, self.start_index)"));
 
     let final_start = BATCH_HANDLER_SRC
         .find("let mut final_pages = build_final_summary_pages(batch_count);")
@@ -1715,7 +1919,9 @@ fn pin_append_only_handler_suffix_order_and_completion_receipts() {
     let final_summary = &BATCH_HANDLER_SRC[final_start..];
     let paymaster = final_summary.find("enforce_paymaster_page(").unwrap();
     let paymaster_proof = final_summary.find("paymaster_page_proof(").unwrap();
-    let signer = final_summary.find("let signer_pages_before = final_pages.len;").unwrap();
+    let signer = final_summary
+        .find("let signer_pages_before = final_pages.len;")
+        .unwrap();
     let fingerprint = final_summary.find("append_fingerprint_page(").unwrap();
     let final_paymaster = final_summary.find("paymaster_final_set_proof(").unwrap();
     let confirm = final_summary
@@ -1773,9 +1979,7 @@ fn pin_every_gas_bearing_confirmation_has_a_final_global_proof() {
         "single confirmations must check gas CFI after append and at the final boundary"
     );
     assert_eq!(
-        BATCH_HANDLER_SRC
-            .matches("USEROP_GAS_CFI_EXPECTED")
-            .count(),
+        BATCH_HANDLER_SRC.matches("USEROP_GAS_CFI_EXPECTED").count(),
         6,
         "batch confirmations must check gas CFI after append and at the final boundary"
     );

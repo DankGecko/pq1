@@ -45,8 +45,7 @@ impl GasScan {
 }
 
 const USEROP_GAS_CFI_STEP: u32 = 0x94C2_6B3D;
-pub(crate) const USEROP_GAS_CFI_EXPECTED: u32 =
-    crate::cfi_expected!(USEROP_GAS_CFI_STEP);
+pub(crate) const USEROP_GAS_CFI_EXPECTED: u32 = crate::cfi_expected!(USEROP_GAS_CFI_STEP);
 
 /// Append the exact call / verification / pre-verification gas page after all
 /// already-rendered semantic pages and before the handler-owned fingerprint.
@@ -173,28 +172,29 @@ pub(crate) fn userop_gas_page_proof(
     pre_verification_gas: &[u8; 32],
 ) -> u32 {
     crate::fi::check_true_into_sentinel(|| {
-        let Some(expected) =
-            build_gas_lane_page(call_gas, verification_gas, pre_verification_gas)
+        let Some(expected) = build_gas_lane_page(call_gas, verification_gas, pre_verification_gas)
         else {
             return false;
         };
         let forward = scan_gas_pages_forward(pages, &expected);
         let reverse = scan_gas_pages_reverse(pages, &expected);
-        prior_len.checked_add(USEROP_GAS_PAGES).is_some_and(|expected_len| {
-            core::hint::black_box(pages.len == expected_len)
-                && core::hint::black_box(forward == reverse)
-                && core::hint::black_box(
-                    forward
-                        == GasScan {
-                            exact: 1,
-                            near_shaped: 0,
-                        },
-                )
-                && pages
-                    .as_slice()
-                    .get(prior_len)
-                    .is_some_and(|actual| gas_page_exact(actual, &expected))
-        })
+        prior_len
+            .checked_add(USEROP_GAS_PAGES)
+            .is_some_and(|expected_len| {
+                core::hint::black_box(pages.len == expected_len)
+                    && core::hint::black_box(forward == reverse)
+                    && core::hint::black_box(
+                        forward
+                            == GasScan {
+                                exact: 1,
+                                near_shaped: 0,
+                            },
+                    )
+                    && pages
+                        .as_slice()
+                        .get(prior_len)
+                        .is_some_and(|actual| gas_page_exact(actual, &expected))
+            })
     })
 }
 
@@ -215,8 +215,7 @@ pub(crate) fn userop_gas_final_set_proof(
     pre_verification_gas: &[u8; 32],
 ) -> u32 {
     crate::fi::check_true_into_sentinel(|| {
-        let Some(expected) =
-            build_gas_lane_page(call_gas, verification_gas, pre_verification_gas)
+        let Some(expected) = build_gas_lane_page(call_gas, verification_gas, pre_verification_gas)
         else {
             return false;
         };
@@ -345,10 +344,18 @@ mod tests {
         let mut pages = Pages::with_len(4);
         enforce_with_cfi(&mut pages, &gas(100_000), &gas(200_000), &gas(21_000)).unwrap();
         assert!(userop_gas_page_matches(
-            &pages, 4, &gas(100_000), &gas(200_000), &gas(21_000)
+            &pages,
+            4,
+            &gas(100_000),
+            &gas(200_000),
+            &gas(21_000)
         ));
         assert!(!userop_gas_page_matches(
-            &pages, 4, &gas(200_000), &gas(100_000), &gas(21_000)
+            &pages,
+            4,
+            &gas(200_000),
+            &gas(100_000),
+            &gas(21_000)
         ));
     }
 
@@ -436,7 +443,10 @@ mod tests {
             cfi.check_into_sentinel(USEROP_GAS_CFI_EXPECTED),
             crate::fi::OK_SENTINEL
         );
-        assert_eq!(pages.len, 1, "pre-existing exact page must remain unchanged");
+        assert_eq!(
+            pages.len, 1,
+            "pre-existing exact page must remain unchanged"
+        );
     }
 
     #[test]
@@ -458,7 +468,10 @@ mod tests {
             cfi.check_into_sentinel(USEROP_GAS_CFI_EXPECTED),
             crate::fi::OK_SENTINEL
         );
-        assert_eq!(pages.len, 2, "near-shaped conflict must not be spliced around");
+        assert_eq!(
+            pages.len, 2,
+            "near-shaped conflict must not be spliced around"
+        );
     }
 
     #[test]
@@ -544,10 +557,7 @@ mod tests {
         let huge = [0xFFu8; 32];
         let mut pages = Pages::with_len(1);
         let mut cfi = crate::fi::CfiCounter::new();
-        assert!(
-            enforce_userop_gas_page(&mut pages, &huge, &gas(1), &gas(1), &mut cfi)
-                .is_err()
-        );
+        assert!(enforce_userop_gas_page(&mut pages, &huge, &gas(1), &gas(1), &mut cfi).is_err());
         assert_eq!(pages.len, 1, "no page inserted on refuse");
     }
 
@@ -555,10 +565,7 @@ mod tests {
     fn fails_closed_when_buffer_full() {
         let mut full = Pages::with_len(super::super::MAX_PAGES);
         let mut cfi = crate::fi::CfiCounter::new();
-        assert!(
-            enforce_userop_gas_page(&mut full, &gas(1), &gas(2), &gas(3), &mut cfi)
-                .is_err()
-        );
+        assert!(enforce_userop_gas_page(&mut full, &gas(1), &gas(2), &gas(3), &mut cfi).is_err());
         assert_eq!(full.len, super::super::MAX_PAGES);
     }
 }

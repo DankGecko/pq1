@@ -2,6 +2,7 @@
 
 use crate::merkle::{leaf_hash, verify_proof, MerkleTree};
 use crate::{load_erc20_records, parse_hex_address, write_u32_le, write_u64_le};
+use pqsigner_tx::erc20::bundle::metadata_shape_is_device_verifiable;
 use sphincs_tz_shared::db_format::*;
 use std::collections::HashMap;
 use std::path::Path;
@@ -30,6 +31,44 @@ pub struct Erc20BuildResult {
     pub blob: Vec<u8>,
     pub root: [u8; 32],
     pub entry_count: usize,
+    /// Exact `(chain_id, contract)` subset whose built metadata/proof shape can
+    /// pass the production device verifier. Every source row remains committed
+    /// by `root`; this only narrows ERC-7730 interpolation enrollment.
+    pub capabilities: Erc20Capabilities,
+}
+
+/// Exact device-verifiable token identities in one authenticated ERC-20 DB.
+///
+/// Construction stays inside [`build_db`], after the Merkle proof depth is
+/// known, so callers cannot derive enrollment authority from a looser corpus
+/// or metadata shape the device will refuse.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Erc20Capabilities {
+    keys: Vec<(u64, [u8; 20])>,
+}
+
+impl Erc20Capabilities {
+    #[must_use]
+    pub fn contains(&self, chain_id: u64, contract: &[u8; 20]) -> bool {
+        self.keys.binary_search(&(chain_id, *contract)).is_ok()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_keys(mut keys: Vec<(u64, [u8; 20])>) -> Self {
+        keys.sort();
+        keys.dedup();
+        Self { keys }
+    }
 }
 
 pub fn build_db(json_path: &Path) -> Result<Erc20BuildResult, String> {
@@ -159,6 +198,25 @@ pub fn build_db(json_path: &Path) -> Result<Erc20BuildResult, String> {
     let root = tree.root();
     let proof_depth = tree.depth();
 
+    // Derive ERC-7730 interpolation authority only after the exact proof shape
+    // is known, using the production verifier's own policy predicate. Rows
+    // that fail this policy still remain in `prepared`, the Merkle tree, blob,
+    // and root so ordinary ERC-20 DB behavior is unchanged.
+    let capabilities = Erc20Capabilities {
+        keys: prepared
+            .iter()
+            .filter(|row| {
+                metadata_shape_is_device_verifiable(
+                    row.decimals,
+                    row.name.as_bytes(),
+                    row.symbol.as_bytes(),
+                    proof_depth,
+                )
+            })
+            .map(|row| (row.chain_id, row.contract))
+            .collect(),
+    };
+
     // 7. Lay out the binary blob:
     //   header | entries | pool | proofs
     let entry_cnt = prepared.len();
@@ -243,6 +301,7 @@ pub fn build_db(json_path: &Path) -> Result<Erc20BuildResult, String> {
         blob,
         root,
         entry_count: entry_cnt,
+        capabilities,
     })
 }
 
@@ -446,6 +505,30 @@ mod tests {
         f
     }
 
+    fn built_bundle(result: &Erc20BuildResult, chain_id: u64, contract: &[u8; 20]) -> Vec<u8> {
+        let parser = HostErc20Db::open(&result.blob).expect("open built ERC20 DB");
+        let metadata = parser
+            .lookup(chain_id, contract)
+            .expect("built row must be present");
+        let proof = parser
+            .proof(chain_id, contract)
+            .expect("built row must have a proof");
+
+        let mut bundle = canonical_erc20_leaf(
+            chain_id,
+            contract,
+            metadata.decimals,
+            metadata.name,
+            metadata.symbol,
+        );
+        bundle.extend_from_slice(&(metadata.index as u32).to_le_bytes());
+        bundle.extend_from_slice(&(proof.len() as u32).to_le_bytes());
+        for sibling in proof {
+            bundle.extend_from_slice(&sibling);
+        }
+        bundle
+    }
+
     // === Positive ============================================================
 
     /// Canonical leaf encoding is a frozen wire format — its byte
@@ -551,6 +634,105 @@ mod tests {
         assert_eq!(pool_off, ERC20_DB_HEADER_LEN + entry_cnt * ERC20_DB_ENTRY_LEN);
         assert_eq!(proof_depth, 1); // log2(2)
         assert!(proofs_off > pool_off);
+    }
+
+    #[test]
+    fn capabilities_exactly_match_device_verifiable_built_rows() {
+        // The first two rows exercise every inclusive metadata boundary. The
+        // remaining rows cross one gate at a time. All rows must remain in the
+        // Merkle DB; only ERC-7730 interpolation capability is filtered.
+        let cases: Vec<(u8, String, String, u8, bool)> = vec![
+            (0x01, " ".into(), "~".into(), 0, true),
+            (0x02, "A".repeat(64), "Z".repeat(64), 36, true),
+            (0x03, "Name".into(), "SYM".into(), 37, false),
+            (0x04, String::new(), "SYM".into(), 18, false),
+            (0x05, "Name".into(), String::new(), 18, false),
+            (0x06, "A".repeat(65), "SYM".into(), 18, false),
+            (0x07, "Name".into(), "S".repeat(65), 18, false),
+            (0x08, "A\u{1f}".into(), "SYM".into(), 18, false),
+            (0x09, "A\u{7f}".into(), "SYM".into(), 18, false),
+            (0x0a, "Name".into(), "S\u{1f}".into(), 18, false),
+            (0x0b, "Name".into(), "S\u{7f}".into(), 18, false),
+            (0x0c, "Caf\u{e9}".into(), "SYM".into(), 18, false),
+        ];
+        let rows: Vec<serde_json::Value> = cases
+            .iter()
+            .map(|(suffix, name, symbol, decimals, _)| {
+                serde_json::json!({
+                    "chain_id": 1,
+                    "address": fixture_addr(*suffix),
+                    "name": name,
+                    "symbol": symbol,
+                    "decimals": decimals,
+                })
+            })
+            .collect();
+        let input = serde_json::to_string(&rows).expect("serialize fixture");
+        let fixture = write_json(&input);
+        let result = build_db(fixture.path()).expect("build mixed-policy DB");
+
+        assert_eq!(result.entry_count, cases.len());
+        assert_eq!(result.capabilities.len(), 2);
+        round_trip_check(&result.blob, fixture.path(), &result.root)
+            .expect("every row, including non-capabilities, remains Merkle-committed");
+
+        let proof_depth = u32::from_le_bytes(result.blob[24..28].try_into().unwrap()) as usize;
+        for (suffix, name, symbol, decimals, expected) in &cases {
+            let contract = parse_hex_address(&fixture_addr(*suffix)).unwrap();
+            assert_eq!(
+                metadata_shape_is_device_verifiable(
+                    *decimals,
+                    name.as_bytes(),
+                    symbol.as_bytes(),
+                    proof_depth,
+                ),
+                *expected,
+                "shared verifier predicate mismatch for suffix 0x{suffix:02x}",
+            );
+            assert_eq!(
+                result.capabilities.contains(1, &contract),
+                *expected,
+                "capability mismatch for suffix 0x{suffix:02x}",
+            );
+        }
+
+        // Non-vacuous cross-verifier control: a built, capability-enrolled row
+        // verifies on the production parser. A built row with a valid Merkle
+        // proof but decimals=37 remains committed and is refused by that same
+        // parser, exactly matching its absent capability.
+        let valid_contract = parse_hex_address(&fixture_addr(0x01)).unwrap();
+        let invalid_contract = parse_hex_address(&fixture_addr(0x03)).unwrap();
+        assert!(pqsigner_tx::erc20::bundle::verify_erc20_bundle(
+            &built_bundle(&result, 1, &valid_contract),
+            &result.root,
+        )
+        .is_some());
+        assert!(pqsigner_tx::erc20::bundle::verify_erc20_bundle(
+            &built_bundle(&result, 1, &invalid_contract),
+            &result.root,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn capability_predicate_pins_proof_and_exact_wire_boundaries() {
+        // 39 fixed bytes + 28-byte name + 29-byte symbol + 32*32 proof
+        // bytes = exactly MAX_ERC20_BUNDLE_LEN (1120).
+        assert!(metadata_shape_is_device_verifiable(
+            36,
+            &[b'A'; 28],
+            &[b'~'; 29],
+            32,
+        ));
+        // One additional individually-valid symbol byte exceeds the complete
+        // production bundle budget.
+        assert!(!metadata_shape_is_device_verifiable(
+            36,
+            &[b'A'; 28],
+            &[b'B'; 30],
+            32,
+        ));
+        assert!(!metadata_shape_is_device_verifiable(36, b"A", b"B", 33,));
     }
 
     // === Negative ============================================================

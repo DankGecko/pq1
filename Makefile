@@ -3358,7 +3358,8 @@ fuzz-erc7730-render-dispatch:
 	cd fuzz && cargo +nightly fuzz run erc7730_render_dispatch $(FUZZ_LIBFUZZER_ARGS)
 
 # Populate the render-dispatch corpus from the current pinned ERC-7730 catalogue
-# (420 IR leaves) so the fuzzer starts from valid descriptors. Coverage numbers
+# (the current generated registry IR corpus) so the fuzzer starts from valid
+# descriptors. Coverage numbers
 # are root/source-tree specific; regenerate and rerun after every root rotation
 # before reporting them. See docs/erc7730-renderer-fuzzability.md.
 fuzz-seed-erc7730-render:
@@ -3973,7 +3974,7 @@ kani: ## Bounded model-checking on firmware decoders/counters
 # should-be-red = a vacuous / under-constrained Kani proof. Institutionalises
 # the per-slice manual mutation checks (work-todo §35 P3). Slow (recompiles a
 # crate + runs one harness per mutation, ~1-4 min each) → nightly, not per-PR.
-#   make verify-kani-mutation                 # default tier (all 6 mutations)
+#   make verify-kani-mutation                 # quick + default mutation tiers
 #   make verify-kani-mutation MUTATIONS=quick # canary + the fast fw-manifest/aa ones
 .PHONY: verify-kani-mutation
 # C2: hand-transcribed MMIO base addresses vs ST's OWN CMSIS header. Peripheral
@@ -3992,16 +3993,18 @@ verify-kani-mutation: ## anti-vacuity: break a decoder, expect a Kani harness to
 	python3 scripts/check_kani_mutations.py
 
 # F11 (2026-07-16) — SOURCE-GENERATED Kani harness census. The published counts
-# (148 harnesses / 25 files; 8 harnesses in 6 files with no mutation coverage)
+# (161 harnesses / 26 files; 8 harnesses in 6 files with no mutation coverage)
 # were hand-maintained prose that drifted (gate_enforcement.json said 93/17).
 # kani_mutations.json is only the load-bearing MUTATION manifest — it can't encode
-# the full census. This regenerates the census from git-tracked sources (counting
-# #[kani::proof]), derives the mutation-enrolled/outside split, cross-checks the
-# manifest for rot, and diffs vs scripts/kani_census.lock.json. Pure Python (NO
+# the full census. This regenerates exact file/function identities from active,
+# standalone #[kani::proof] attributes in git-tracked sources, derives the
+# mutation-enrolled/outside split, cross-checks the manifest for rot, and diffs
+# vs scripts/kani_census.lock.json. Pure Python (NO
 # cargo kani) → fast per-PR gate, unlike verify-kani-mutation (slow nightly).
 .PHONY: verify-kani-census
 verify-kani-census: ## source-generated Kani harness census vs kani_census.lock.json (fast, no Kani toolchain)
-	@python3 scripts/kani_census.py --check
+	@PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/test_kani_census.py
+	@PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/kani_census.py --check
 
 miri: ## Miri UB check on host crates
 	@rustup component list --toolchain nightly --installed 2>/dev/null | grep -q '^miri' || rustup component add miri --toolchain nightly

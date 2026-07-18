@@ -24,8 +24,7 @@ use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 pub(crate) const NONZERO_NONCE_LANE_PAGES: usize = 1;
 
 const NONCE_LANE_CFI_STEP: u32 = 0xC715_2AE3;
-pub(crate) const NONCE_LANE_CFI_EXPECTED: u32 =
-    crate::cfi_expected!(NONCE_LANE_CFI_STEP);
+pub(crate) const NONCE_LANE_CFI_EXPECTED: u32 = crate::cfi_expected!(NONCE_LANE_CFI_STEP);
 
 type NonceLanePage = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 
@@ -46,9 +45,8 @@ pub(crate) fn enforce_nonce_lane_page(
     // zero-lane checks produce the Hamming-distant OK sentinel. Scrub first
     // so a skipped sentinel call cannot reuse an earlier display proof's r0.
     crate::fi::scrub_sentinel_register();
-    let may_skip = crate::fi::check_true_into_sentinel(|| {
-        core::hint::black_box(nonce_lane_is_zero(nonce))
-    });
+    let may_skip =
+        crate::fi::check_true_into_sentinel(|| core::hint::black_box(nonce_lane_is_zero(nonce)));
     if may_skip == crate::fi::OK_SENTINEL {
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         cfi.bump(NONCE_LANE_CFI_STEP);
@@ -64,11 +62,7 @@ pub(crate) fn enforce_nonce_lane_page(
 }
 
 /// Exact all-64-byte predicate for the non-zero nonce-lane page.
-pub(crate) fn nonce_lane_page_matches(
-    pages: &Pages,
-    page_index: usize,
-    nonce: &[u8; 32],
-) -> bool {
+pub(crate) fn nonce_lane_page_matches(pages: &Pages, page_index: usize, nonce: &[u8; 32]) -> bool {
     let expected = build_nonce_lane_page(nonce);
     let Some(actual) = pages.as_slice().get(page_index) else {
         return false;
@@ -78,11 +72,7 @@ pub(crate) fn nonce_lane_page_matches(
 
 /// Exact completed-skip proof for the compact lane-zero path.
 #[inline(never)]
-pub(crate) fn nonce_lane_skip_proof(
-    pages: &Pages,
-    prior_len: usize,
-    nonce: &[u8; 32],
-) -> u32 {
+pub(crate) fn nonce_lane_skip_proof(pages: &Pages, prior_len: usize, nonce: &[u8; 32]) -> u32 {
     crate::fi::check_true_into_sentinel(|| {
         core::hint::black_box(nonce_lane_is_zero(nonce))
             && core::hint::black_box(pages.len == prior_len)
@@ -99,23 +89,19 @@ pub(crate) fn nonce_lane_skip_proof(
 /// * a non-zero lane requires exactly one new page at the deterministic
 ///   insertion index, with all 64 bytes matching the signed nonce key.
 #[inline(never)]
-pub(crate) fn nonce_lane_page_proof(
-    pages: &Pages,
-    prior_len: usize,
-    nonce: &[u8; 32],
-) -> u32 {
+pub(crate) fn nonce_lane_page_proof(pages: &Pages, prior_len: usize, nonce: &[u8; 32]) -> u32 {
     let expected = build_nonce_lane_page(nonce);
     crate::fi::check_true_into_sentinel(|| {
         if core::hint::black_box(nonce_lane_is_zero(nonce)) {
             core::hint::black_box(pages.len == prior_len)
         } else {
-            prior_len.checked_add(NONZERO_NONCE_LANE_PAGES).is_some_and(
-                |expected_len| {
+            prior_len
+                .checked_add(NONZERO_NONCE_LANE_PAGES)
+                .is_some_and(|expected_len| {
                     core::hint::black_box(pages.len == expected_len)
                         && nonce_lane_page_matches(pages, prior_len, nonce)
                         && nonce_page_occurrences(pages, &expected) == 1
-                },
-            )
+                })
         }
     })
 }
@@ -284,13 +270,8 @@ mod tests {
 
         let signer_prior = pages.len;
         let mut signer_cfi = crate::fi::CfiCounter::new();
-        super::super::value_page::enforce_from_page(
-            &mut pages,
-            0,
-            &sender,
-            &mut signer_cfi,
-        )
-        .unwrap();
+        super::super::value_page::enforce_from_page(&mut pages, 0, &sender, &mut signer_cfi)
+            .unwrap();
         assert_eq!(
             super::super::value_page::from_page_proof(&pages, signer_prior, 0, &sender),
             crate::fi::OK_SENTINEL
@@ -298,12 +279,8 @@ mod tests {
 
         let target_prior = pages.len;
         let mut target_cfi = crate::fi::CfiCounter::new();
-        super::super::value_page::enforce_target_page(
-            &mut pages,
-            &target,
-            &mut target_cfi,
-        )
-        .unwrap();
+        super::super::value_page::enforce_target_page(&mut pages, &target, &mut target_cfi)
+            .unwrap();
         assert_eq!(
             super::super::value_page::target_page_proof(&pages, target_prior, &target),
             crate::fi::OK_SENTINEL

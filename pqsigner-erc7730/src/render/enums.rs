@@ -31,6 +31,74 @@
 
 use super::RenderErr;
 
+/// Enum labels occupy exactly three 16-column value rows.  A shorter label is
+/// space-padded; a longer one is refused.  Requiring non-empty, printable,
+/// non-space-terminated labels gives that painter one canonical byte spelling.
+pub const ENUM_DISPLAY_BYTES: usize = 48;
+
+fn enum_label_is_canonical(label: &[u8]) -> bool {
+    !label.is_empty()
+        && label.len() <= ENUM_DISPLAY_BYTES
+        && label.iter().all(|&b| (0x20..0x7f).contains(&b))
+        && label.iter().any(|&b| b != b' ')
+        && label.last() != Some(&b' ')
+}
+
+fn parse_enum_entry(pool: &[u8], cursor: usize) -> Result<(u64, &[u8], usize), RenderErr> {
+    let key_bytes = pool
+        .get(cursor..cursor.checked_add(8).ok_or(RenderErr::Reject("7730 enum ovf"))?)
+        .ok_or(RenderErr::Reject("7730 enum trunc key"))?;
+    let label_len = *pool
+        .get(cursor + 8)
+        .ok_or(RenderErr::Reject("7730 enum trunc len"))? as usize;
+    let label_start = cursor + 9;
+    let label_end = label_start
+        .checked_add(label_len)
+        .ok_or(RenderErr::Reject("7730 enum ovf"))?;
+    let label = pool
+        .get(label_start..label_end)
+        .ok_or(RenderErr::Reject("7730 enum trunc label"))?;
+    if label.len() > ENUM_DISPLAY_BYTES {
+        return Err(RenderErr::Reject("7730 enum label too long"));
+    }
+    if !enum_label_is_canonical(label) {
+        return Err(RenderErr::Reject("7730 enum label canonical"));
+    }
+    let mut key = [0u8; 8];
+    key.copy_from_slice(key_bytes);
+    Ok((u64::from_be_bytes(key), label, label_end))
+}
+
+/// Deeply validate an interned enum table, including injectivity of the exact
+/// device display.  The table is bounded by the 4 KiB IR cap; the allocation-
+/// free O(n²) duplicate check is used only during descriptor preflight and
+/// avoids trusting host-side map uniqueness.
+pub fn validate_enum_table(pool: &[u8], enum_off: u16) -> Result<(), RenderErr> {
+    let off = enum_off as usize;
+    let count = *pool
+        .get(off)
+        .ok_or(RenderErr::Reject("7730 enum off"))? as usize;
+    if count == 0 {
+        return Err(RenderErr::Reject("7730 enum empty"));
+    }
+
+    let mut outer_cursor = off + 1;
+    for outer_idx in 0..count {
+        let (outer_key, outer_label, next_outer) = parse_enum_entry(pool, outer_cursor)?;
+        let mut inner_cursor = off + 1;
+        for inner_idx in 0..outer_idx {
+            let (inner_key, inner_label, next_inner) = parse_enum_entry(pool, inner_cursor)?;
+            if outer_key == inner_key || outer_label == inner_label {
+                return Err(RenderErr::Reject("7730 enum non-injective"));
+            }
+            inner_cursor = next_inner;
+            let _ = inner_idx;
+        }
+        outer_cursor = next_outer;
+    }
+    Ok(())
+}
+
 /// Resolve the 32-byte big-endian ABI word `value` against the enum table
 /// interned at `enum_off` inside `pool`.
 ///
@@ -51,6 +119,7 @@ pub fn lookup_enum_label<'a>(
     enum_off: u16,
     value: &[u8; 32],
 ) -> Result<Option<&'a [u8]>, RenderErr> {
+    validate_enum_table(pool, enum_off)?;
     let off = enum_off as usize;
     let count = *pool
         .get(off)
@@ -71,29 +140,13 @@ pub fn lookup_enum_label<'a>(
 
     let mut found: Option<&[u8]> = None;
     for _ in 0..count {
-        let key_bytes = pool
-            .get(cursor..cursor + 8)
-            .ok_or(RenderErr::Reject("7730 enum trunc key"))?;
-        let label_len = *pool
-            .get(cursor + 8)
-            .ok_or(RenderErr::Reject("7730 enum trunc len"))? as usize;
-        cursor += 9;
-        let label = pool
-            .get(cursor..cursor + label_len)
-            .ok_or(RenderErr::Reject("7730 enum trunc label"))?;
-        cursor += label_len;
-        // Anti-spoof: a label printed on the trusted display MUST be clean
-        // printable ASCII (matches the host `clean_ascii_truncated`).
-        if !label.iter().all(|&b| (0x20..0x7f).contains(&b)) {
-            return Err(RenderErr::Reject("7730 enum label ascii"));
-        }
+        let (key, label, next) = parse_enum_entry(pool, cursor)?;
+        cursor = next;
         // Record the first key match but keep walking to validate the
         // whole table (enum keys are unique by construction).
         if found.is_none() {
             if let Some(k) = narrow {
-                let mut kb = [0u8; 8];
-                kb.copy_from_slice(key_bytes);
-                if u64::from_be_bytes(kb) == k {
+                if key == k {
                     found = Some(label);
                 }
             }
@@ -157,7 +210,7 @@ mod tests {
     #[test]
     fn empty_table_is_none() {
         let (pool, off) = pool_with_table(&[]);
-        assert_eq!(lookup_enum_label(&pool, off, &be32_u64(0)).unwrap(), None);
+        assert!(lookup_enum_label(&pool, off, &be32_u64(0)).is_err());
     }
 
     #[test]
@@ -220,6 +273,25 @@ mod tests {
             lookup_enum_label(&pool, 1, &be32_u64(2)),
             Err(RenderErr::Reject(_))
         ));
+    }
+
+    #[test]
+    fn duplicate_or_padding_equivalent_labels_reject() {
+        let (duplicate, off) = pool_with_table(&[(1, "same"), (2, "same")]);
+        assert!(validate_enum_table(&duplicate, off).is_err());
+
+        let (padded, off) = pool_with_table(&[(1, "mode"), (2, "mode ")]);
+        assert!(validate_enum_table(&padded, off).is_err());
+    }
+
+    #[test]
+    fn overlong_and_blank_labels_reject() {
+        let long = "x".repeat(ENUM_DISPLAY_BYTES + 1);
+        let (pool, off) = pool_with_table(&[(1, &long)]);
+        assert!(validate_enum_table(&pool, off).is_err());
+
+        let (pool, off) = pool_with_table(&[(1, "   ")]);
+        assert!(validate_enum_table(&pool, off).is_err());
     }
 }
 
@@ -293,6 +365,7 @@ mod kani_harnesses {
         pool[10] = 1; // label_len
         let label_byte: u8 = kani::any();
         kani::assume((0x20..0x7f).contains(&label_byte)); // well-formed table
+        kani::assume(label_byte != b' '); // canonical, visible one-byte label
         pool[11] = label_byte;
         let value: [u8; 32] = kani::any();
 
@@ -338,6 +411,7 @@ mod kani_harnesses {
         pool[10] = 1;
         let label0: u8 = kani::any();
         kani::assume((0x20..0x7f).contains(&label0));
+        kani::assume(label0 != b' ');
         pool[11] = label0;
         for i in 12..20 {
             pool[i] = kani::any();
@@ -345,6 +419,7 @@ mod kani_harnesses {
         pool[20] = 1;
         let label1: u8 = kani::any();
         kani::assume((0x20..0x7f).contains(&label1));
+        kani::assume(label1 != b' ');
         pool[21] = label1;
 
         let mut k0 = [0u8; 8];

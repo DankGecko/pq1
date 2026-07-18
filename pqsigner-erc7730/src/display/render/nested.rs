@@ -82,7 +82,8 @@ mod tests {
     #[test]
     fn hash_struct_matches_permit_details_vector() {
         // typeHash(PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce))
-        let type_hash: [u8; 32] = hex32("65626cad6cb96493bf6f5ebea28756c966f023ab9e8a83a7101849d5573b3678");
+        let type_hash: [u8; 32] =
+            hex32("65626cad6cb96493bf6f5ebea28756c966f023ab9e8a83a7101849d5573b3678");
         // nested_ed = 4 ABI words: token (USDC), amount, expiration, nonce.
         let mut ed = [0u8; 128];
         // token = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 (right-aligned)
@@ -111,8 +112,7 @@ mod tests {
     /// is the exact vector the v2 flip→decline render test uses.
     #[test]
     fn hash_struct_array_matches_permit_batch_vector() {
-        let type_hash =
-            hex32("65626cad6cb96493bf6f5ebea28756c966f023ab9e8a83a7101849d5573b3678");
+        let type_hash = hex32("65626cad6cb96493bf6f5ebea28756c966f023ab9e8a83a7101849d5573b3678");
         let mut el0 = [0u8; 128];
         el0[12..32].copy_from_slice(&hex20("a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"));
         el0[32 + 24..64].copy_from_slice(&1_000_000_000u64.to_be_bytes());
@@ -133,7 +133,10 @@ mod tests {
         // A single-element array is keccak(hashStruct(el0)) — NOT hashStruct(el0)
         // itself; distinct binding (guards against a device that skips the outer
         // keccak for elem_count==1).
-        assert_ne!(hash_struct_array(&type_hash, &[&el0[..]]), hash_struct(&type_hash, &el0));
+        assert_ne!(
+            hash_struct_array(&type_hash, &[&el0[..]]),
+            hash_struct(&type_hash, &el0)
+        );
     }
 
     fn hex32(s: &str) -> [u8; 32] {

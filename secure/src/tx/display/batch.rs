@@ -14,8 +14,7 @@ use crate::ui::{DISPLAY_COLS, DISPLAY_ROWS};
 type BannerPage = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 
 const BATCH_BANNER_CFI_STEP: u32 = 0xB47C_91E3;
-pub(crate) const BATCH_BANNER_CFI_EXPECTED: u32 =
-    crate::cfi_expected!(BATCH_BANNER_CFI_STEP);
+pub(crate) const BATCH_BANNER_CFI_EXPECTED: u32 = crate::cfi_expected!(BATCH_BANNER_CFI_STEP);
 
 const BATCH_MEMBER_CONFIRM_CFI_STEP: u32 = 0x6D2A_C4F1;
 
@@ -78,9 +77,8 @@ impl BatchMemberConfirmReceipt {
         let confirmed_a = unsafe { core::ptr::read_volatile(&self.confirmed) };
         crate::fi::wait_random();
         let confirmed_b = unsafe { core::ptr::read_volatile(&self.confirmed) };
-        let expected_cfi = crate::fi::CfiCounter::INIT_VALUE.wrapping_add(
-            BATCH_MEMBER_CONFIRM_CFI_STEP.wrapping_mul(expected_count_u32),
-        );
+        let expected_cfi = crate::fi::CfiCounter::INIT_VALUE
+            .wrapping_add(BATCH_MEMBER_CONFIRM_CFI_STEP.wrapping_mul(expected_count_u32));
         crate::fi::scrub_sentinel_register();
         let cfi_verdict = self.cfi.check_into_sentinel(expected_cfi);
         let all_ok = confirmed_a == expected_count_u32
@@ -185,10 +183,9 @@ pub(crate) fn batch_banner_copy_proof(
             return false;
         };
         if core::hint::black_box(wrapped.len != expected_len)
-            || !wrapped
-                .as_slice()
-                .first()
-                .is_some_and(|page| page_exact(page, &build_batch_banner_page(tx_index, batch_total)))
+            || !wrapped.as_slice().first().is_some_and(|page| {
+                page_exact(page, &build_batch_banner_page(tx_index, batch_total))
+            })
         {
             return false;
         }
@@ -196,8 +193,7 @@ pub(crate) fn batch_banner_copy_proof(
         for page_index in 0..inner.len {
             for row in 0..DISPLAY_ROWS {
                 for col in 0..DISPLAY_COLS {
-                    diff |= inner.buf[page_index][row][col]
-                        ^ wrapped.buf[page_index + 1][row][col];
+                    diff |= inner.buf[page_index][row][col] ^ wrapped.buf[page_index + 1][row][col];
                 }
             }
         }

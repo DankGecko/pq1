@@ -13,7 +13,7 @@
 use std::env;
 use std::fmt::Write as _;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use pqsigner_proto as proto;
@@ -71,29 +71,34 @@ Subcommands:
         secure/data/erc7730-known-calls.bloom
         secure/data/erc7730-known-calls-e2e.bloom
       With --check: rebuild in-memory and compare against the checked-in
-      artifacts; exit non-zero on drift. `secure/src/db_roots.rs` is
-      validation-only here and is regenerated with `cargo run -p dbgen`.
+      artifacts, including the capability-defining production/E2E ERC-20
+      companion blobs and their exact root sections; exit non-zero on drift.
+      `secure/src/db_roots.rs` is validation-only here and is regenerated with
+      `cargo run -p dbgen`.
 
   scan-registry [--registry-root PATH] [--input PATH] [--policy PATH]
                 [--report PATH]
       Read-only coverage probe: tolerantly compile every descriptor under
-      the upstream registry through the on-device pipeline and tally how
-      many PQ1 can clear-sign today vs. skipped-and-why. Writes nothing
-      into the firmware corpus.
+      the upstream registry through the on-device pipeline using the exact
+      production `secure/data/erc20.json` capability set, and tally how many
+      PQ1 can clear-sign today vs. skipped-and-why. Writes nothing into the
+      firmware corpus.
 
   build-registry [--registry-root PATH] [--input PATH] [--policy PATH]
                  [--report PATH]
-      Build the full upstream registry via `build_db_tolerant` (the corpus
-      switch) and report leaf count, root, and skips. Read-only: does NOT
-      overwrite the firmware-pinned root.
+      Build the full upstream registry through the capability-aware tolerant
+      pipeline and report leaf count, root, skips, and the exact production
+      ERC-20 input/root receipt. Read-only: does NOT overwrite the firmware-
+      pinned root.
 
   vendor-registry [--registry-root PATH] [--out PATH] [--policy PATH]
       Scan every `registry/**/*.json` and `ercs/**/*.json` file. Vendor the
       production corpus into `secure/data/erc7730-registry/` while excluding
       upstream test fixtures after validating and receipting them. Then VERIFY
       byte-identical compiled catalogue/review output plus the exact known-call
-      tuple-set receipt and Bloom filter. Merkle-root equality alone does not
-      prove that unsupported calls remained covered by the fail-closed omission
+      tuple-set receipt, Bloom filter, and production ERC-20 input/root used by
+      both source and staged rebuilds. Merkle-root equality alone does not prove
+      that unsupported calls remained covered by the fail-closed omission
       filter.
 
   help
@@ -278,6 +283,10 @@ fn is_solidity_string_safe(bytes: &[u8]) -> bool {
 const ERC7730_DEFAULT_INPUT: &str = "secure/data/erc7730-registry/registry";
 const ERC7730_DEFAULT_POLICY: &str = "secure/data/erc7730/policy.toml";
 const ERC7730_DEFAULT_E2E_INPUT: &str = "secure/data/erc7730-e2e";
+const ERC20_DEFAULT_INPUT: &str = "secure/data/erc20.json";
+const ERC20_DEFAULT_E2E_INPUT: &str = "secure/data/erc20-e2e.json";
+const ERC20_DEFAULT_OUT: &str = "tools/companion-stub/erc20_db.bin";
+const ERC20_DEFAULT_E2E_OUT: &str = "tools/companion-stub/erc20_db_e2e.bin";
 const ERC7730_DEFAULT_OUT: &str = "tools/companion-stub/erc7730_db.bin";
 const ERC7730_DEFAULT_E2E_OUT: &str = "tools/companion-stub/erc7730_db_e2e.bin";
 const ERC7730_DEFAULT_REVIEW: &str = "secure/data/erc7730.review.txt";
@@ -285,6 +294,7 @@ const ERC7730_DEFAULT_KNOWN_CALLS: &str = "secure/data/erc7730-known-calls.bloom
 const ERC7730_DEFAULT_KNOWN_CALLS_E2E: &str = "secure/data/erc7730-known-calls-e2e.bloom";
 const ERC7730_COMPANION_GUIDE: &str = "docs/companion/companion-erc7730-implementation-guide.md";
 const ERC7730_COMPANION_INTEGRATION: &str = "docs/companion/erc7730-integration.md";
+const ERC7730_REGISTRY_README: &str = "secure/data/erc7730-registry/README.md";
 const ERC7730_GUIDE_SUMMARY_BEGIN: &str =
     "   <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->";
 const ERC7730_GUIDE_SUMMARY_END: &str = "   <!-- END XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->";
@@ -296,6 +306,93 @@ const ERC7730_GUIDE_SEMANTICS_END: &str = "<!-- END XTASK-VERIFIED ERC7730 SEMAN
 const ERC7730_INTEGRATION_FACTS_BEGIN: &str =
     "<!-- BEGIN XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->";
 const ERC7730_INTEGRATION_FACTS_END: &str = "<!-- END XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->";
+const ERC7730_REGISTRY_RECEIPT_BEGIN: &str =
+    "<!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->";
+const ERC7730_REGISTRY_RECEIPT_END: &str = "<!-- END XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Erc20CapabilityReceipt {
+    input_sha256: [u8; 32],
+    db_root: [u8; 32],
+    entry_count: usize,
+    capability_count: usize,
+}
+
+/// One exact ERC-20 input and the device-verifiable identity set derived from
+/// its generated Merkle database.
+///
+/// ERC-7730 token interpolation is deployment-sensitive. A catalogue build is
+/// therefore not identified by the descriptor corpus alone: it is also bound
+/// to the exact ERC-20 source bytes, generated root, and capability-derivation
+/// result used by the production device verifier.
+struct Erc20CapabilityInput {
+    source: PathBuf,
+    receipt: Erc20CapabilityReceipt,
+    /// Exact companion blob whose root and capabilities produced the
+    /// capability-bound ERC-7730 catalogue. Retaining it makes descriptor
+    /// drift checking atomic with the metadata authority it depends on.
+    blob: Vec<u8>,
+    capabilities: dbgen::erc20::Erc20Capabilities,
+}
+
+fn load_erc20_capability_input(source: &Path, label: &str) -> Result<Erc20CapabilityInput, String> {
+    // `dbgen::erc20::build_db` owns parsing and capability derivation. Read
+    // around that call so the byte-level receipt cannot silently describe a
+    // different file revision from the one that produced the DB root.
+    let before = fs::read(source)
+        .map_err(|e| format!("read {label} ERC-20 input {}: {e}", source.display()))?;
+    let build = dbgen::erc20::build_db(source)
+        .map_err(|e| format!("{label} ERC-20 build from {} failed: {e}", source.display()))?;
+    let after = fs::read(source)
+        .map_err(|e| format!("re-read {label} ERC-20 input {}: {e}", source.display()))?;
+    if before != after {
+        return Err(format!(
+            "{label} ERC-20 input changed while its capability set was being built: {}",
+            source.display()
+        ));
+    }
+
+    Ok(Erc20CapabilityInput {
+        source: source.to_path_buf(),
+        receipt: Erc20CapabilityReceipt {
+            input_sha256: Sha256::digest(&before).into(),
+            db_root: build.root,
+            entry_count: build.entry_count,
+            capability_count: build.capabilities.len(),
+        },
+        blob: build.blob,
+        capabilities: build.capabilities,
+    })
+}
+
+fn load_production_erc20_capability_input(
+    workspace_root: &Path,
+) -> Result<Erc20CapabilityInput, String> {
+    load_erc20_capability_input(&workspace_root.join(ERC20_DEFAULT_INPUT), "production")
+}
+
+fn render_erc20_capability_receipt(input: &Erc20CapabilityInput) -> String {
+    render_erc20_capability_receipt_parts(&input.source, &input.receipt)
+}
+
+fn render_erc20_capability_receipt_parts(
+    source: &Path,
+    receipt: &Erc20CapabilityReceipt,
+) -> String {
+    format!(
+        concat!(
+            "erc20 input:              {}\n",
+            "erc20 input SHA-256:       {}\n",
+            "erc20 generated DB root:   {}\n",
+            "erc20 entries/capabilities: {}/{}\n",
+        ),
+        source.display(),
+        hex_lower(&receipt.input_sha256),
+        hex_lower(&receipt.db_root),
+        receipt.entry_count,
+        receipt.capability_count,
+    )
+}
 
 #[derive(Default)]
 struct Erc7730Args {
@@ -357,6 +454,80 @@ fn parse_erc7730_args(args: &[String]) -> Result<Erc7730Args, String> {
     Ok(out)
 }
 
+struct Erc7730CatalogueBuild {
+    prod: dbgen::erc7730::Erc7730BuildResult,
+    prod_skips: Vec<dbgen::erc7730::SkipReport>,
+    e2e: dbgen::erc7730::Erc7730BuildResult,
+    prod_erc20: Erc20CapabilityInput,
+    e2e_erc20: Erc20CapabilityInput,
+}
+
+struct CapabilityBoundRegistryBuild {
+    catalogue: dbgen::erc7730::Erc7730BuildResult,
+    skips: Vec<dbgen::erc7730::SkipReport>,
+    erc20: Erc20CapabilityReceipt,
+}
+
+fn build_capability_bound_registry(
+    input: &Path,
+    policy: &Path,
+    registry_root: Option<&Path>,
+    erc20: &Erc20CapabilityInput,
+) -> Result<CapabilityBoundRegistryBuild, String> {
+    let (catalogue, skips) = dbgen::erc7730::build_db_tolerant_with_erc20_capabilities(
+        input,
+        policy,
+        registry_root,
+        &erc20.capabilities,
+    )?;
+    Ok(CapabilityBoundRegistryBuild {
+        catalogue,
+        skips,
+        erc20: erc20.receipt,
+    })
+}
+
+/// Build the same capability-bound production and E2E catalogues as dbgen.
+///
+/// Token-amount interpolation is deployment-sensitive, so descriptor codegen
+/// must derive its capability sets from the exact ERC-20 inputs committed by
+/// the corresponding Merkle databases. Keeping this shared by generation and
+/// `--check` prevents either path from silently falling back to the
+/// conservative, capability-free compiler API.
+fn build_erc7730_catalogues(
+    workspace_root: &Path,
+    input_dir: &Path,
+    policy: &Path,
+    registry_root: Option<&Path>,
+    e2e_input_dir: &Path,
+) -> Result<Erc7730CatalogueBuild, String> {
+    let prod_erc20 = load_production_erc20_capability_input(workspace_root)?;
+    let e2e_erc20 =
+        load_erc20_capability_input(&workspace_root.join(ERC20_DEFAULT_E2E_INPUT), "e2e")?;
+
+    let (prod, prod_skips) = dbgen::erc7730::build_db_tolerant_with_erc20_capabilities(
+        input_dir,
+        policy,
+        registry_root,
+        &prod_erc20.capabilities,
+    )
+    .map_err(|e| format!("prod build failed: {e}"))?;
+    let e2e = dbgen::erc7730::build_db_with_erc20_capabilities(
+        e2e_input_dir,
+        policy,
+        &e2e_erc20.capabilities,
+    )
+    .map_err(|e| format!("e2e build failed: {e}"))?;
+
+    Ok(Erc7730CatalogueBuild {
+        prod,
+        prod_skips,
+        e2e,
+        prod_erc20,
+        e2e_erc20,
+    })
+}
+
 fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
     let parsed = match parse_erc7730_args(args) {
         Ok(a) => a,
@@ -391,30 +562,36 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
         .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_E2E_OUT));
     let known_calls_out = workspace_root.join(ERC7730_DEFAULT_KNOWN_CALLS);
     let known_calls_e2e_out = workspace_root.join(ERC7730_DEFAULT_KNOWN_CALLS_E2E);
+    let erc20_out = workspace_root.join(ERC20_DEFAULT_OUT);
+    let erc20_e2e_out = workspace_root.join(ERC20_DEFAULT_E2E_OUT);
 
     // Build both prod + e2e catalogs. PROD is the tolerant registry build
     // (the corpus switch) — `input_dir` is `<registry>/registry`, so its parent
     // is the registry root used to resolve `includes`. E2E stays strict.
     let registry_root = input_dir.parent().map(|p| p.to_path_buf());
-    let (prod, prod_skips) =
-        match dbgen::erc7730::build_db_tolerant(&input_dir, &policy, registry_root.as_deref()) {
-            Ok(result) => result,
-            Err(e) => {
-                eprintln!("error: prod build failed: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
+    let Erc7730CatalogueBuild {
+        prod,
+        prod_skips,
+        e2e,
+        prod_erc20,
+        e2e_erc20,
+    } = match build_erc7730_catalogues(
+        &workspace_root,
+        &input_dir,
+        &policy,
+        registry_root.as_deref(),
+        &e2e_input_dir,
+    ) {
+        Ok(result) => result,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     if let Err(e) = dbgen::erc7730::round_trip_check(&prod) {
         eprintln!("error: prod round-trip failed: {e}");
         return ExitCode::FAILURE;
     }
-    let e2e = match dbgen::erc7730::build_db(&e2e_input_dir, &policy) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("error: e2e build failed: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
     if let Err(e) = dbgen::erc7730::round_trip_check(&e2e) {
         eprintln!("error: e2e round-trip failed: {e}");
         return ExitCode::FAILURE;
@@ -423,6 +600,15 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
     if parsed.check {
         // CI mode: diff against checked-in artifacts.
         let mut drift = false;
+        if let Err(e) = diff_erc20_blob_pair(
+            &erc20_out,
+            &prod_erc20.blob,
+            &erc20_e2e_out,
+            &e2e_erc20.blob,
+        ) {
+            eprintln!("DRIFT: {e}");
+            drift = true;
+        }
         if let Err(e) = diff_bytes("erc7730_db.bin", &out_binary, &prod.blob) {
             eprintln!("DRIFT: {e}");
             drift = true;
@@ -451,12 +637,14 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
             eprintln!("DRIFT: {e}");
             drift = true;
         }
-        // db_roots.rs is owned by `cargo run -p dbgen` (it bakes 5
-        // other roots besides ours); only assert that the ERC-7730
-        // root line in it matches.
+        // db_roots.rs is owned by `cargo run -p dbgen` (it bakes other roots
+        // besides this composed surface). Validate the exact production/E2E
+        // ERC-20 sections and the exact ERC-7730 security suffix together.
         let roots_path = workspace_root.join("secure/src/db_roots.rs");
-        if let Err(e) = diff_root_in_db_roots(
+        if let Err(e) = diff_catalogue_roots_in_db_roots(
             &roots_path,
+            &prod_erc20.receipt.db_root,
+            &e2e_erc20.receipt.db_root,
             &prod.root,
             prod.leaf_count,
             &e2e.root,
@@ -496,11 +684,24 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
             eprintln!("DRIFT: {e}");
             drift = true;
         }
+        let registry_readme = workspace_root.join(ERC7730_REGISTRY_README);
+        if let Err(e) = diff_erc7730_registry_readme(
+            &registry_readme,
+            &prod.root,
+            prod.leaf_count,
+            prod.blob.len(),
+            prod.known_call_count,
+            &prod.known_call_set_hash,
+            &prod.known_calls_bloom,
+        ) {
+            eprintln!("DRIFT: {e}");
+            drift = true;
+        }
         if drift {
             eprintln!(
-                "\nERC-7730 catalog has drifted from the checked-in artifacts.\n\
+                "\nThe capability-bound ERC-20/ERC-7730 catalog has drifted from the checked-in artifacts.\n\
                  Run `cargo run -p dbgen` (which writes ALL DBs in one pass) and\n\
-                 update the XTASK-VERIFIED catalogue facts in the companion docs,\n\
+                 update the XTASK-VERIFIED catalogue facts in the managed docs,\n\
                  then commit the resulting changes."
             );
             return ExitCode::FAILURE;
@@ -568,7 +769,7 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn diff_bytes(label: &str, path: &PathBuf, fresh: &[u8]) -> Result<(), String> {
+fn diff_bytes(label: &str, path: &Path, fresh: &[u8]) -> Result<(), String> {
     let existing =
         fs::read(path).map_err(|e| format!("read {label} at {}: {e}", path.display()))?;
     if existing == fresh {
@@ -582,7 +783,27 @@ fn diff_bytes(label: &str, path: &PathBuf, fresh: &[u8]) -> Result<(), String> {
     ))
 }
 
-fn diff_text(label: &str, path: &PathBuf, fresh: &str) -> Result<(), String> {
+fn diff_erc20_blob_pair(
+    prod_path: &Path,
+    prod_fresh: &[u8],
+    e2e_path: &Path,
+    e2e_fresh: &[u8],
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+    if let Err(error) = diff_bytes("erc20_db.bin", prod_path, prod_fresh) {
+        errors.push(error);
+    }
+    if let Err(error) = diff_bytes("erc20_db_e2e.bin", e2e_path, e2e_fresh) {
+        errors.push(error);
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn diff_text(label: &str, path: &Path, fresh: &str) -> Result<(), String> {
     let existing =
         fs::read_to_string(path).map_err(|e| format!("read {label} at {}: {e}", path.display()))?;
     if existing == fresh {
@@ -594,8 +815,11 @@ fn diff_text(label: &str, path: &PathBuf, fresh: &str) -> Result<(), String> {
     ))
 }
 
-fn diff_root_in_db_roots(
-    path: &PathBuf,
+#[allow(clippy::too_many_arguments)]
+fn diff_catalogue_roots_in_db_roots(
+    path: &Path,
+    erc20_prod_root: &[u8; 32],
+    erc20_e2e_root: &[u8; 32],
     prod_root: &[u8; 32],
     prod_count: usize,
     e2e_root: &[u8; 32],
@@ -605,6 +829,14 @@ fn diff_root_in_db_roots(
 ) -> Result<(), String> {
     let text = fs::read_to_string(path)
         .map_err(|e| format!("read db_roots.rs at {}: {e}", path.display()))?;
+    if !erc20_root_sections_match(&text, erc20_prod_root, erc20_e2e_root) {
+        return Err(format!(
+            "ERC-20 production/E2E root sections in {} do not exactly match the fresh capability databases (expected prod root {}, e2e root {})",
+            path.display(),
+            hex::encode(erc20_prod_root),
+            hex::encode(erc20_e2e_root),
+        ));
+    }
     if erc7730_security_tail_matches(
         &text,
         prod_root,
@@ -625,6 +857,52 @@ fn diff_root_in_db_roots(
         prod_provenance.as_str(),
         e2e_provenance.as_str(),
     ))
+}
+
+const ERC20_ROOT_SECTION_START: &str =
+    "#[cfg(not(feature = \"e2e-test\"))]\npub static ERC20_DB_ROOT";
+const ERC20_ROOT_SECTION_END: &str =
+    "#[cfg(not(feature = \"e2e-test\"))]\npub static NAMES_DB_ROOT";
+
+fn erc20_root_sections_match(text: &str, prod: &[u8; 32], e2e: &[u8; 32]) -> bool {
+    if text.matches(ERC20_ROOT_SECTION_START).count() != 1
+        || text.matches(ERC20_ROOT_SECTION_END).count() != 1
+        || text.matches("pub static ERC20_DB_ROOT").count() != 2
+    {
+        return false;
+    }
+    let Some(start) = text.find(ERC20_ROOT_SECTION_START) else {
+        return false;
+    };
+    let Some(end) = text.find(ERC20_ROOT_SECTION_END) else {
+        return false;
+    };
+    end > start && text[start..end] == render_erc20_root_sections(prod, e2e)
+}
+
+fn render_erc20_root_sections(prod: &[u8; 32], e2e: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(2 * 320);
+    let _ = writeln!(out, "#[cfg(not(feature = \"e2e-test\"))]");
+    append_generated_root(&mut out, "ERC20_DB_ROOT", prod);
+    let _ = writeln!(out, "#[cfg(feature = \"e2e-test\")]");
+    append_generated_root(&mut out, "ERC20_DB_ROOT", e2e);
+    out
+}
+
+/// Match `dbgen/src/main.rs::emit_root` byte-for-byte. The exact section
+/// comparison above intentionally fails on duplicate cfgs, renamed statics,
+/// reordered roots, or hand-edited formatting around the load-bearing values.
+fn append_generated_root(out: &mut String, name: &str, bytes: &[u8; 32]) {
+    let _ = write!(out, "pub static {name}: [u8; 32] = [");
+    for (index, byte) in bytes.iter().enumerate() {
+        if index % 8 == 0 {
+            out.push_str("\n    ");
+        } else {
+            out.push(' ');
+        }
+        let _ = write!(out, "0x{byte:02x},");
+    }
+    let _ = writeln!(out, "\n];\n");
 }
 
 fn erc7730_security_tail_matches(
@@ -871,6 +1149,72 @@ fn render_erc7730_integration_facts(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+fn diff_erc7730_registry_readme(
+    path: &std::path::Path,
+    prod_root: &[u8; 32],
+    prod_count: usize,
+    prod_size: usize,
+    prod_known_call_count: usize,
+    prod_known_call_set_hash: &[u8; 32],
+    prod_known_calls_bloom: &[u8],
+) -> Result<(), String> {
+    let text = fs::read_to_string(path)
+        .map_err(|e| format!("read registry README at {}: {e}", path.display()))?;
+    let receipt = render_erc7730_registry_receipt(
+        prod_root,
+        prod_count,
+        prod_size,
+        prod_known_call_count,
+        prod_known_call_set_hash,
+        prod_known_calls_bloom,
+    );
+    exact_document_block_matches(
+        &text,
+        ERC7730_REGISTRY_RECEIPT_BEGIN,
+        ERC7730_REGISTRY_RECEIPT_END,
+        &receipt,
+    )
+    .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn render_erc7730_registry_receipt(
+    prod_root: &[u8; 32],
+    prod_count: usize,
+    prod_size: usize,
+    prod_known_call_count: usize,
+    prod_known_call_set_hash: &[u8; 32],
+    prod_known_calls_bloom: &[u8],
+) -> String {
+    let bloom_set_bits: usize = prod_known_calls_bloom
+        .iter()
+        .map(|byte| byte.count_ones() as usize)
+        .sum();
+    let bloom_bits = prod_known_calls_bloom.len().saturating_mul(8);
+    format!(
+        concat!(
+            "{}\n",
+            "Checked-in curated receipt, verified against a fresh build by `--check`: ",
+            "**{} leaves**, **{}-byte**\n",
+            "compiled companion catalogue, root\n",
+            "`{}`,\n",
+            "**{}** canonical known-call tuples, tuple-set SHA-256\n",
+            "`{}`.\n",
+            "The Bloom contains {} / {} set bits, below the generator's 25% cap.\n",
+            "{}",
+        ),
+        ERC7730_REGISTRY_RECEIPT_BEGIN,
+        grouped_decimal(prod_count, ','),
+        grouped_decimal(prod_size, ','),
+        hex::encode(prod_root),
+        grouped_decimal(prod_known_call_count, ','),
+        hex::encode(prod_known_call_set_hash),
+        grouped_decimal(bloom_set_bits, ','),
+        grouped_decimal(bloom_bits, ','),
+        ERC7730_REGISTRY_RECEIPT_END,
+    )
+}
+
 fn grouped_decimal(value: usize, separator: char) -> String {
     let digits = value.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len().saturating_sub(1) / 3);
@@ -965,6 +1309,259 @@ mod tests {
         let mut s = String::new();
         sol_uint256(&mut s, "N", 65_536);
         assert_eq!(s, "    uint256 internal constant N = 65536;\n");
+    }
+
+    #[test]
+    fn erc20_capability_receipt_binds_exact_input_bytes_and_generated_root() {
+        let temp = tempfile::tempdir().expect("temporary ERC-20 input");
+        let source = temp.path().join("erc20.json");
+        let compact = br#"[{"chain_id":1,"address":"0x1111111111111111111111111111111111111111","name":"Token","symbol":"TOK","decimals":18}]"#;
+        fs::write(&source, compact).expect("write compact ERC-20 input");
+
+        let compact_input =
+            load_erc20_capability_input(&source, "test").expect("load compact capability input");
+        let expected_hash: [u8; 32] = Sha256::digest(compact).into();
+        assert_eq!(compact_input.receipt.input_sha256, expected_hash);
+        assert_eq!(compact_input.receipt.entry_count, 1);
+        assert_eq!(compact_input.receipt.capability_count, 1);
+
+        // Whitespace changes no semantic DB row and therefore no Merkle root,
+        // but it must change the exact-input receipt. Reporting both values
+        // prevents either source identity or generated authority from being
+        // silently inferred from the other.
+        let pretty = br#"[
+  {
+    "chain_id": 1,
+    "address": "0x1111111111111111111111111111111111111111",
+    "name": "Token",
+    "symbol": "TOK",
+    "decimals": 18
+  }
+]"#;
+        fs::write(&source, pretty).expect("write pretty ERC-20 input");
+        let pretty_input =
+            load_erc20_capability_input(&source, "test").expect("load pretty capability input");
+        assert_eq!(compact_input.receipt.db_root, pretty_input.receipt.db_root);
+        assert_eq!(compact_input.blob, pretty_input.blob);
+        assert_ne!(
+            compact_input.receipt.input_sha256,
+            pretty_input.receipt.input_sha256
+        );
+
+        let rendered = render_erc20_capability_receipt(&pretty_input);
+        assert!(rendered.contains(&hex_lower(&pretty_input.receipt.input_sha256)));
+        assert!(rendered.contains(&hex_lower(&pretty_input.receipt.db_root)));
+        assert!(rendered.contains("1/1"));
+    }
+
+    #[test]
+    fn erc7730_check_rejects_stale_erc20_prod_or_e2e_blob() {
+        let temp = tempfile::tempdir().expect("temporary ERC-20 outputs");
+        let prod = temp.path().join("erc20_db.bin");
+        let e2e = temp.path().join("erc20_db_e2e.bin");
+        let fresh_prod = b"fresh production metadata";
+        let fresh_e2e = b"fresh e2e metadata";
+
+        fs::write(&prod, fresh_prod).expect("write fresh production blob");
+        fs::write(&e2e, fresh_e2e).expect("write fresh E2E blob");
+        assert!(diff_erc20_blob_pair(&prod, fresh_prod, &e2e, fresh_e2e).is_ok());
+
+        fs::write(&prod, b"stale production metadata").expect("stale production blob");
+        fs::write(&e2e, b"stale e2e metadata").expect("stale E2E blob");
+        let error = diff_erc20_blob_pair(&prod, fresh_prod, &e2e, fresh_e2e)
+            .expect_err("either stale ERC-20 blob must fail the atomic drift check");
+        assert!(error.contains("erc20_db.bin"));
+        assert!(error.contains("erc20_db_e2e.bin"));
+    }
+
+    #[test]
+    fn erc7730_check_rejects_stale_erc20_prod_or_e2e_root_section() {
+        let prod = [0x11; 32];
+        let e2e = [0x22; 32];
+        let roots = format!(
+            "// generated roots\n{}{}: [u8; 32] = [];\n",
+            render_erc20_root_sections(&prod, &e2e),
+            ERC20_ROOT_SECTION_END,
+        );
+        assert!(erc20_root_sections_match(&roots, &prod, &e2e));
+
+        let mut stale_prod = prod;
+        stale_prod[0] ^= 0xff;
+        assert!(!erc20_root_sections_match(&roots, &stale_prod, &e2e));
+
+        let mut stale_e2e = e2e;
+        stale_e2e[31] ^= 0xff;
+        assert!(!erc20_root_sections_match(&roots, &prod, &stale_e2e));
+    }
+
+    #[test]
+    fn erc7730_codegen_matches_capability_aware_dbgen_for_prod_and_e2e() {
+        const PROD_TOKEN: &str = "0x1111111111111111111111111111111111111111";
+        const E2E_TOKEN: &str = "0x2222222222222222222222222222222222222222";
+
+        let temp = tempfile::tempdir().expect("temporary catalogue workspace");
+        let root = temp.path();
+        let data_dir = root.join("secure/data");
+        let registry_root = root.join("prod-registry");
+        let prod_input = registry_root.join("registry");
+        let e2e_input = root.join("e2e-input");
+        std::fs::create_dir_all(&data_dir).expect("create capability directory");
+        std::fs::create_dir_all(&prod_input).expect("create production input");
+        std::fs::create_dir_all(&e2e_input).expect("create E2E input");
+
+        let erc20_json = |address: &str, symbol: &str| {
+            format!(
+                r#"[{{"chain_id":1,"address":"{address}","name":"{symbol}","symbol":"{symbol}","decimals":18}}]"#
+            )
+        };
+        std::fs::write(
+            root.join(ERC20_DEFAULT_INPUT),
+            erc20_json(PROD_TOKEN, "PROD"),
+        )
+        .expect("write production capabilities");
+        std::fs::write(
+            root.join(ERC20_DEFAULT_E2E_INPUT),
+            erc20_json(E2E_TOKEN, "E2E"),
+        )
+        .expect("write E2E capabilities");
+
+        let descriptor = |deployment: &str, token: &str| {
+            format!(
+                r#"{{
+  "context": {{ "contract": {{ "deployments": [
+    {{ "chainId": 1, "address": "{deployment}" }}
+  ] }} }},
+  "metadata": {{ "owner": "xtask test", "contractName": "Capability witness" }},
+  "display": {{ "formats": {{
+    "send(uint256 amount)": {{
+      "intent": "Send",
+      "fields": [{{
+        "path": "amount",
+        "label": "Amount",
+        "format": "tokenAmount",
+        "params": {{ "token": "{token}" }},
+        "visible": "always"
+      }}],
+      "interpolatedIntent": "Send {{amount}}"
+    }}
+  }} }}
+}}"#
+            )
+        };
+        std::fs::write(
+            prod_input.join("calldata-prod.json"),
+            descriptor("0x3333333333333333333333333333333333333333", PROD_TOKEN),
+        )
+        .expect("write production descriptor");
+        std::fs::write(
+            e2e_input.join("calldata-e2e.json"),
+            descriptor("0x4444444444444444444444444444444444444444", E2E_TOKEN),
+        )
+        .expect("write E2E descriptor");
+
+        let policy = workspace_root().join(ERC7730_DEFAULT_POLICY);
+
+        let generated =
+            build_erc7730_catalogues(root, &prod_input, &policy, Some(&registry_root), &e2e_input)
+                .expect("xtask catalogue build");
+        assert!(generated.prod_skips.is_empty());
+
+        let prod_erc20 = dbgen::erc20::build_db(&root.join(ERC20_DEFAULT_INPUT))
+            .expect("production ERC-20 capabilities");
+        let (expected_prod, _) = dbgen::erc7730::build_db_tolerant_with_erc20_capabilities(
+            &prod_input,
+            &policy,
+            Some(&registry_root),
+            &prod_erc20.capabilities,
+        )
+        .expect("direct production build");
+        assert_eq!(generated.prod.root, expected_prod.root);
+        assert_eq!(generated.prod.blob, expected_prod.blob);
+        assert_eq!(generated.prod.leaf_count, expected_prod.leaf_count);
+        assert_eq!(generated.prod_erc20.blob, prod_erc20.blob);
+        assert_eq!(generated.prod_erc20.receipt.db_root, prod_erc20.root);
+
+        let empty_capabilities = dbgen::erc20::Erc20Capabilities::default();
+        let (empty_prod, _) = dbgen::erc7730::build_db_tolerant_with_erc20_capabilities(
+            &prod_input,
+            &policy,
+            Some(&registry_root),
+            &empty_capabilities,
+        )
+        .expect("empty-capability production control build");
+        assert_ne!(
+            generated.prod.root, empty_prod.root,
+            "an empty capability set must not masquerade as the production-equivalent catalogue"
+        );
+
+        let loaded_prod =
+            load_erc20_capability_input(&root.join(ERC20_DEFAULT_INPUT), "test production")
+                .expect("load bound production capability input");
+        let bound_prod = build_capability_bound_registry(
+            &prod_input,
+            &policy,
+            Some(&registry_root),
+            &loaded_prod,
+        )
+        .expect("capability-bound production build");
+        assert_eq!(bound_prod.catalogue.root, generated.prod.root);
+        assert_eq!(bound_prod.erc20, loaded_prod.receipt);
+
+        let empty_input = Erc20CapabilityInput {
+            source: loaded_prod.source.clone(),
+            receipt: Erc20CapabilityReceipt {
+                capability_count: 0,
+                ..loaded_prod.receipt
+            },
+            blob: loaded_prod.blob.clone(),
+            capabilities: empty_capabilities,
+        };
+        let bound_empty = build_capability_bound_registry(
+            &prod_input,
+            &policy,
+            Some(&registry_root),
+            &empty_input,
+        )
+        .expect("capability-bound empty control build");
+        assert_ne!(bound_prod.catalogue.root, bound_empty.catalogue.root);
+        assert_ne!(bound_prod.erc20, bound_empty.erc20);
+
+        let e2e_erc20 = dbgen::erc20::build_db(&root.join(ERC20_DEFAULT_E2E_INPUT))
+            .expect("E2E ERC-20 capabilities");
+        let (wrong_prod, _) = dbgen::erc7730::build_db_tolerant_with_erc20_capabilities(
+            &prod_input,
+            &policy,
+            Some(&registry_root),
+            &e2e_erc20.capabilities,
+        )
+        .expect("wrong-capability production control build");
+        assert_ne!(
+            generated.prod.root, wrong_prod.root,
+            "production generation must use production, not E2E, capabilities"
+        );
+
+        let expected_e2e = dbgen::erc7730::build_db_with_erc20_capabilities(
+            &e2e_input,
+            &policy,
+            &e2e_erc20.capabilities,
+        )
+        .expect("direct E2E build");
+        assert_eq!(generated.e2e.root, expected_e2e.root);
+        assert_eq!(generated.e2e.blob, expected_e2e.blob);
+        assert_eq!(generated.e2e.leaf_count, expected_e2e.leaf_count);
+        assert_eq!(generated.e2e_erc20.blob, e2e_erc20.blob);
+        assert_eq!(generated.e2e_erc20.receipt.db_root, e2e_erc20.root);
+
+        let wrong_e2e = dbgen::erc7730::build_db_with_erc20_capabilities(
+            &e2e_input,
+            &policy,
+            &prod_erc20.capabilities,
+        )
+        .expect("wrong-capability E2E control build");
+        assert_ne!(
+            generated.e2e.root, wrong_e2e.root,
+            "E2E generation must use E2E, not production, capabilities"
+        );
     }
 
     #[test]
@@ -1140,6 +1737,60 @@ mod tests {
                 )
                 .is_err(),
                 "stale integration receipt must fail"
+            );
+        }
+    }
+
+    #[test]
+    fn erc7730_registry_readme_accepts_exact_generated_receipt() {
+        let root = [0x11; 32];
+        let tuple_hash = [0x22; 32];
+        let mut bloom = [0u8; 16];
+        bloom[0] = 0b1010_0001;
+        bloom[15] = 0b0000_0011;
+        let receipt =
+            render_erc7730_registry_receipt(&root, 428, 341_328, 4_542, &tuple_hash, &bloom);
+        let readme = format!("human provenance\n{receipt}\nhuman curation list\n");
+        exact_document_block_matches(
+            &readme,
+            ERC7730_REGISTRY_RECEIPT_BEGIN,
+            ERC7730_REGISTRY_RECEIPT_END,
+            &receipt,
+        )
+        .expect("fresh registry receipt");
+        assert!(receipt.contains("5 / 128 set bits"));
+    }
+
+    #[test]
+    fn erc7730_registry_readme_rejects_stale_values_or_markers() {
+        let root = [0x11; 32];
+        let tuple_hash = [0x22; 32];
+        let mut bloom = [0u8; 16];
+        bloom[0] = 0b1010_0001;
+        bloom[15] = 0b0000_0011;
+        let receipt =
+            render_erc7730_registry_receipt(&root, 428, 341_328, 4_542, &tuple_hash, &bloom);
+        let readme = format!("prefix\n{receipt}\nsuffix\n");
+        let stale_docs = [
+            readme.replacen("428 leaves", "427 leaves", 1),
+            readme.replacen("341,328-byte", "341,327-byte", 1),
+            readme.replacen(&hex::encode(root), &hex::encode([0x33; 32]), 1),
+            readme.replacen("4,542** canonical", "4,541** canonical", 1),
+            readme.replacen(&hex::encode(tuple_hash), &hex::encode([0x44; 32]), 1),
+            readme.replacen("5 / 128 set bits", "4 / 128 set bits", 1),
+            readme.replacen(ERC7730_REGISTRY_RECEIPT_BEGIN, "", 1),
+            format!("{readme}\n{receipt}"),
+        ];
+        for stale in stale_docs {
+            assert!(
+                exact_document_block_matches(
+                    &stale,
+                    ERC7730_REGISTRY_RECEIPT_BEGIN,
+                    ERC7730_REGISTRY_RECEIPT_END,
+                    &receipt,
+                )
+                .is_err(),
+                "stale or ambiguous registry receipt must fail"
             );
         }
     }
@@ -1852,11 +2503,12 @@ type SkipBucket = (usize, Vec<(String, String)>);
 /// [--report <path>]`
 ///
 /// Tolerantly compiles every descriptor under `--input` (default
-/// `<registry-root>/registry`) through the SAME `dbgen::erc7730` pipeline
-/// the firmware-pinned catalog uses, and tallies how many the on-device
-/// renderer can clear-sign today vs. how many are skipped and why. Read-
-/// only — writes nothing into the firmware corpus; it answers "how much of
-/// the real registry can PQ1 clear-sign, and what is the rest blocked on".
+/// `<registry-root>/registry`) through the same capability-aware
+/// `dbgen::erc7730` pipeline the firmware-pinned catalog uses, with the exact
+/// production ERC-20 DB input. It tallies how many the on-device renderer can
+/// clear-sign today vs. how many are skipped and why. Read-only — writes
+/// nothing into the firmware corpus; it answers "how much of the real registry
+/// can PQ1 clear-sign, and what is the rest blocked on".
 fn cmd_scan_registry(args: &[String]) -> ExitCode {
     let mut registry_root: Option<PathBuf> = None;
     let mut input: Option<PathBuf> = None;
@@ -1904,6 +2556,14 @@ fn cmd_scan_registry(args: &[String]) -> ExitCode {
     let policy_path =
         policy_path.unwrap_or_else(|| workspace_root.join("secure/data/erc7730/policy.toml"));
 
+    let prod_erc20 = match load_production_erc20_capability_input(&workspace_root) {
+        Ok(input) => input,
+        Err(e) => {
+            eprintln!("scan-registry: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let policy = match dbgen::erc7730::load_policy(&policy_path) {
         Ok(p) => p,
         Err(e) => {
@@ -1935,7 +2595,12 @@ fn cmd_scan_registry(args: &[String]) -> ExitCode {
             .unwrap_or(f)
             .to_string_lossy()
             .to_string();
-        match dbgen::erc7730::try_compile_one(f, &policy, Some(&registry_root)) {
+        match dbgen::erc7730::try_compile_one_with_erc20_capabilities(
+            f,
+            &policy,
+            Some(&registry_root),
+            &prod_erc20.capabilities,
+        ) {
             Ok(entries) => {
                 ok_files += 1;
                 ok_leaves += entries.len();
@@ -1966,6 +2631,7 @@ fn cmd_scan_registry(args: &[String]) -> ExitCode {
         policy_path.display(),
         policy.allow_unattested_dev_descriptors
     );
+    let _ = write!(out, "{}", render_erc20_capability_receipt(&prod_erc20));
     let _ = writeln!(out, "\n## Summary");
     let _ = writeln!(out, "descriptors scanned:        {total}");
     let pct = (ok_files * 100).checked_div(total).unwrap_or(0);
@@ -2005,12 +2671,10 @@ fn cmd_scan_registry(args: &[String]) -> ExitCode {
 /// [--report <path>]`
 ///
 /// Tolerantly builds the ERC-7730 catalog (Merkle root + leaves) from the
-/// upstream registry via `dbgen::erc7730::build_db_tolerant` — the corpus
-/// switch. Reports the leaf count, root, and skips (descriptors / dup leaves
-/// the on-device renderer can't take). Read-only for now: it does NOT yet
-/// overwrite the firmware-pinned root (the vendoring + prod-root restructure
-/// is the follow-up step); use it to see exactly what the registry corpus
-/// builds to.
+/// upstream registry via the production ERC-20 capability-aware tolerant
+/// pipeline. Reports the leaf count, root, capability input/root, and skips
+/// (descriptors / duplicate leaves the on-device renderer cannot take).
+/// Read-only: it does not overwrite the firmware-pinned root.
 fn cmd_build_registry(args: &[String]) -> ExitCode {
     let mut registry_root: Option<PathBuf> = None;
     let mut input: Option<PathBuf> = None;
@@ -2054,17 +2718,37 @@ fn cmd_build_registry(args: &[String]) -> ExitCode {
     let policy_path =
         policy_path.unwrap_or_else(|| workspace_root.join("secure/data/erc7730/policy.toml"));
 
-    let (result, skips) =
-        match dbgen::erc7730::build_db_tolerant(&input, &policy_path, Some(&registry_root)) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("build-registry: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
+    let prod_erc20 = match load_production_erc20_capability_input(&workspace_root) {
+        Ok(input) => input,
+        Err(e) => {
+            eprintln!("build-registry: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let CapabilityBoundRegistryBuild {
+        catalogue: result,
+        skips,
+        erc20,
+    } = match build_capability_bound_registry(
+        &input,
+        &policy_path,
+        Some(&registry_root),
+        &prod_erc20,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("build-registry: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     println!("# ERC-7730 tolerant registry build");
     println!("input:   {}", input.display());
+    print!(
+        "{}",
+        render_erc20_capability_receipt_parts(&prod_erc20.source, &erc20)
+    );
     println!("leaves:  {}", result.leaf_count);
     println!("root:    {}", hex_lower(&result.root));
     println!("skipped: {} descriptor(s)/leaf(s)", skips.len());
@@ -2078,6 +2762,11 @@ fn cmd_build_registry(args: &[String]) -> ExitCode {
             skips.len()
         );
         let _ = writeln!(out, "root: {}\n", hex_lower(&result.root));
+        let _ = writeln!(
+            out,
+            "{}",
+            render_erc20_capability_receipt_parts(&prod_erc20.source, &erc20)
+        );
         // Sorted leaf keys (chain:contract:typehash) for cross-build diffing.
         let mut keys: Vec<String> = result
             .entries
@@ -2156,7 +2845,14 @@ fn cmd_vendor_registry(args: &[String]) -> ExitCode {
     let out = out.unwrap_or_else(|| workspace_root.join("secure/data/erc7730-registry"));
     let policy_path =
         policy_path.unwrap_or_else(|| workspace_root.join("secure/data/erc7730/policy.toml"));
-    match vendor_registry(&registry_root, &out, &policy_path) {
+    let prod_erc20 = match load_production_erc20_capability_input(&workspace_root) {
+        Ok(input) => input,
+        Err(e) => {
+            eprintln!("vendor-registry: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match vendor_registry(&registry_root, &out, &policy_path, &prod_erc20) {
         Ok(receipt) => {
             println!(
                 "vendored {} files ({} leaf-bearing sources + {} refused/support JSON files)",
@@ -2172,6 +2868,10 @@ fn cmd_vendor_registry(args: &[String]) -> ExitCode {
             println!(
                 "known-call tuple-set SHA-256: {}",
                 hex_lower(&receipt.known_call_set_hash)
+            );
+            print!(
+                "{}",
+                render_erc20_capability_receipt_parts(&prod_erc20.source, &receipt.erc20)
             );
             println!("source-corpus SHA-256: {}", hex_lower(&receipt.corpus_hash));
             println!(
@@ -2196,6 +2896,7 @@ struct VendorReceipt {
     leaf_count: usize,
     known_call_count: usize,
     known_call_set_hash: [u8; 32],
+    erc20: Erc20CapabilityReceipt,
     corpus_hash: [u8; 32],
     excluded_fixture_count: usize,
     excluded_fixture_hash: [u8; 32],
@@ -2205,6 +2906,7 @@ fn vendor_registry(
     registry_root: &std::path::Path,
     out: &std::path::Path,
     policy_path: &std::path::Path,
+    prod_erc20: &Erc20CapabilityInput,
 ) -> Result<VendorReceipt, String> {
     let registry_root = fs::canonicalize(registry_root)
         .map_err(|e| format!("canonicalize source {}: {e}", registry_root.display()))?;
@@ -2256,9 +2958,10 @@ fn vendor_registry(
     let ercs_input = registry_root.join("ercs");
     validate_vendor_source_directory(&input, "registry")?;
     validate_vendor_source_directory(&ercs_input, "ercs")?;
-    let (result, _skips) =
-        dbgen::erc7730::build_db_tolerant(&input, policy_path, Some(&registry_root))
+    let source_build =
+        build_capability_bound_registry(&input, policy_path, Some(&registry_root), prod_erc20)
             .map_err(|e| format!("registry build: {e}"))?;
+    let result = &source_build.catalogue;
     let descriptor_count = result
         .entries
         .iter()
@@ -2326,9 +3029,14 @@ fn vendor_registry(
         ));
     }
 
-    let (vendored, _) =
-        dbgen::erc7730::build_db_tolerant(&staging.join("registry"), policy_path, Some(&staging))
-            .map_err(|e| format!("rebuild from staged tree: {e}"))?;
+    let staged_build = build_capability_bound_registry(
+        &staging.join("registry"),
+        policy_path,
+        Some(&staging),
+        prod_erc20,
+    )
+    .map_err(|e| format!("rebuild from staged tree: {e}"))?;
+    let vendored = &staged_build.catalogue;
     let faithful = vendored.root == result.root
         && vendored.blob == result.blob
         && vendored.leaf_count == result.leaf_count
@@ -2336,13 +3044,15 @@ fn vendor_registry(
         && vendored.known_call_count == result.known_call_count
         && vendored.known_call_set_hash == result.known_call_set_hash
         && vendored.known_calls_bloom == result.known_calls_bloom
-        && vendored.review_text == result.review_text;
+        && vendored.review_text == result.review_text
+        && staged_build.erc20 == source_build.erc20;
     if !faithful {
         return Err(format!(
             "FAITHFULNESS CHECK FAILED\n\
              source:   root={} leaves={} provenance={} known_calls={} tuple_hash={}\n\
              staged:   root={} leaves={} provenance={} known_calls={} tuple_hash={}\n\
-             exact checks: blob={} bloom={} review={}",
+             ERC-20 capability input: sha256={} root={} entries={} capabilities={}\n\
+             exact checks: blob={} bloom={} review={} erc20_receipt={}",
             hex_lower(&result.root),
             result.leaf_count,
             result.provenance.as_str(),
@@ -2353,9 +3063,14 @@ fn vendor_registry(
             vendored.provenance.as_str(),
             vendored.known_call_count,
             hex_lower(&vendored.known_call_set_hash),
+            hex_lower(&prod_erc20.receipt.input_sha256),
+            hex_lower(&prod_erc20.receipt.db_root),
+            prod_erc20.receipt.entry_count,
+            prod_erc20.receipt.capability_count,
             vendored.blob == result.blob,
             vendored.known_calls_bloom == result.known_calls_bloom,
             vendored.review_text == result.review_text,
+            staged_build.erc20 == source_build.erc20,
         ));
     }
 
@@ -2368,6 +3083,7 @@ fn vendor_registry(
         leaf_count: result.leaf_count,
         known_call_count: result.known_call_count,
         known_call_set_hash: result.known_call_set_hash,
+        erc20: source_build.erc20,
         corpus_hash: source_corpus.1,
         excluded_fixture_count: excluded_fixture_corpus.0,
         excluded_fixture_hash: excluded_fixture_corpus.1,

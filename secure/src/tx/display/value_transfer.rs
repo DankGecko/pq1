@@ -20,9 +20,8 @@
 
 use super::primitives::{
     write_addr_full_or_name, write_chain, write_data_len_row, write_gas, write_gwei, write_line,
-    write_native_amount_two_rows,
-    write_native_currency_row, write_native_fee_budget_row, write_nonce_row, write_tip_row,
-    AmountFit,
+    write_native_amount_two_rows, write_native_currency_row, write_native_fee_budget_row,
+    write_nonce_row, write_tip_row, AmountFit,
 };
 use super::Pages;
 use crate::names::NameResolver;
