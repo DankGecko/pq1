@@ -19,10 +19,13 @@ use std::process::ExitCode;
 use pqsigner_proto as proto;
 use sha2::{Digest, Sha256};
 
+mod erc7730_curation;
+
 const SOLIDITY_OUT_PATH: &str = "contracts/smart-wallet/src/generated/PqsignerProto.sol";
 const ERC7730_VENDOR_MARKER: &str = ".pqsigner-erc7730-vendor";
 const ERC7730_VENDOR_MARKER_BYTES: &[u8] =
     b"PQSigner ERC-7730 tool-managed registry/ and ercs/ directories.\n";
+const ERC7730_DEFAULT_CURATION_MANIFEST: &str = "secure/data/erc7730/curations/manifest.json";
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -92,14 +95,15 @@ Subcommands:
       pinned root.
 
   vendor-registry [--registry-root PATH] [--out PATH] [--policy PATH]
+                  [--curation-manifest PATH | --no-curation-overlay]
       Scan every `registry/**/*.json` and `ercs/**/*.json` file. Vendor the
-      production corpus into `secure/data/erc7730-registry/` while excluding
-      upstream test fixtures after validating and receipting them. Then VERIFY
-      byte-identical compiled catalogue/review output plus the exact known-call
-      tuple-set receipt, Bloom filter, and production ERC-20 input/root used by
-      both source and staged rebuilds. Merkle-root equality alone does not prove
-      that unsupported calls remained covered by the fail-closed omission
-      filter.
+      production corpus into `secure/data/erc7730-registry/`, validate the
+      pinned upstream Git/schema/corpus identities, and apply the default
+      hash-bound full-file curation overlay. Then VERIFY the curated corpus
+      receipt and unchanged known-call tuple set/Bloom before installation.
+      `--no-curation-overlay` is accepted only with a distinct explicit --out
+      for disposable pristine-baseline analysis; it cannot replace the
+      checked-in production corpus.
 
   help
       Print this message.
@@ -564,6 +568,32 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
     let known_calls_e2e_out = workspace_root.join(ERC7730_DEFAULT_KNOWN_CALLS_E2E);
     let erc20_out = workspace_root.join(ERC20_DEFAULT_OUT);
     let erc20_e2e_out = workspace_root.join(ERC20_DEFAULT_E2E_OUT);
+
+    // The normal CI drift gate also proves that the checked-in curated corpus
+    // is exactly reproducible from the strict overlay manifest. Custom input
+    // probes remain available without claiming anything about the production
+    // corpus.
+    if parsed.check
+        && input_dir == workspace_root.join(ERC7730_DEFAULT_INPUT)
+        && policy == workspace_root.join(ERC7730_DEFAULT_POLICY)
+    {
+        let manifest_path = workspace_root.join(ERC7730_DEFAULT_CURATION_MANIFEST);
+        let overlay = match erc7730_curation::VerifiedOverlay::load_and_verify_local_inputs(
+            &workspace_root,
+            &manifest_path,
+        ) {
+            Ok(overlay) => overlay,
+            Err(error) => {
+                eprintln!("DRIFT: ERC-7730 curation overlay: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let vendored_root = workspace_root.join("secure/data/erc7730-registry");
+        if let Err(error) = overlay.verify_checked_in_tree(&vendored_root) {
+            eprintln!("DRIFT: ERC-7730 curation overlay: {error}");
+            return ExitCode::FAILURE;
+        }
+    }
 
     // Build both prod + e2e catalogs. PROD is the tolerant registry build
     // (the corpus switch) — `input_dir` is `<registry>/registry`, so its parent
@@ -2823,7 +2853,33 @@ fn cmd_build_registry(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `vendor-registry --registry-root <dir> [--out <dir>] [--policy <path>]`
+fn canonical_named_destination(path: &Path) -> Result<PathBuf, String> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| format!("destination must be a named directory: {}", path.display()))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("destination has no parent: {}", path.display()))?;
+    let absolute_parent = if parent.as_os_str().is_empty() {
+        env::current_dir().map_err(|error| format!("read current directory: {error}"))?
+    } else if parent.is_absolute() {
+        parent.to_path_buf()
+    } else {
+        env::current_dir()
+            .map_err(|error| format!("read current directory: {error}"))?
+            .join(parent)
+    };
+    let canonical_parent = fs::canonicalize(&absolute_parent).map_err(|error| {
+        format!(
+            "canonicalize destination parent {}: {error}",
+            absolute_parent.display()
+        )
+    })?;
+    Ok(canonical_parent.join(name))
+}
+
+/// `vendor-registry --registry-root <dir> [--out <dir>] [--policy <path>]
+///                  [--curation-manifest <path> | --no-curation-overlay]`
 ///
 /// Vendors the complete security-relevant JSON corpus of the upstream registry
 /// into the repo (default `secure/data/erc7730-registry/`) so both accepted
@@ -2835,6 +2891,8 @@ fn cmd_vendor_registry(args: &[String]) -> ExitCode {
     let mut registry_root: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut policy_path: Option<PathBuf> = None;
+    let mut curation_manifest: Option<PathBuf> = None;
+    let mut no_curation_overlay = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -2849,6 +2907,13 @@ fn cmd_vendor_registry(args: &[String]) -> ExitCode {
             "--policy" => {
                 i += 1;
                 policy_path = args.get(i).map(PathBuf::from);
+            }
+            "--curation-manifest" => {
+                i += 1;
+                curation_manifest = args.get(i).map(PathBuf::from);
+            }
+            "--no-curation-overlay" => {
+                no_curation_overlay = true;
             }
             other => {
                 eprintln!("vendor-registry: unknown flag `{other}`");
@@ -2865,9 +2930,63 @@ fn cmd_vendor_registry(args: &[String]) -> ExitCode {
         .parent()
         .map(PathBuf::from)
         .unwrap_or_default();
+    if no_curation_overlay && curation_manifest.is_some() {
+        eprintln!(
+            "vendor-registry: --curation-manifest and --no-curation-overlay are mutually exclusive"
+        );
+        return ExitCode::FAILURE;
+    }
+    let explicit_out = out.is_some();
+    let default_out = workspace_root.join("secure/data/erc7730-registry");
     let out = out.unwrap_or_else(|| workspace_root.join("secure/data/erc7730-registry"));
     let policy_path =
         policy_path.unwrap_or_else(|| workspace_root.join("secure/data/erc7730/policy.toml"));
+    if no_curation_overlay {
+        if !explicit_out {
+            eprintln!(
+                "vendor-registry: --no-curation-overlay requires an explicit disposable --out"
+            );
+            return ExitCode::FAILURE;
+        }
+        match (
+            canonical_named_destination(&out),
+            canonical_named_destination(&default_out),
+        ) {
+            (Ok(requested), Ok(production)) if requested == production => {
+                eprintln!(
+                    "vendor-registry: refusing --no-curation-overlay for the checked-in production corpus"
+                );
+                return ExitCode::FAILURE;
+            }
+            (Err(error), _) | (_, Err(error)) => {
+                eprintln!("vendor-registry: {error}");
+                return ExitCode::FAILURE;
+            }
+            _ => {}
+        }
+    }
+    let overlay = if no_curation_overlay {
+        None
+    } else {
+        let manifest_path = curation_manifest
+            .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_CURATION_MANIFEST));
+        match erc7730_curation::VerifiedOverlay::load_and_verify_local_inputs(
+            &workspace_root,
+            &manifest_path,
+        ) {
+            Ok(overlay) => {
+                if let Err(error) = overlay.verify_selected_policy(&workspace_root, &policy_path) {
+                    eprintln!("vendor-registry: curation overlay: {error}");
+                    return ExitCode::FAILURE;
+                }
+                Some(overlay)
+            }
+            Err(error) => {
+                eprintln!("vendor-registry: curation overlay: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
     let prod_erc20 = match load_production_erc20_capability_input(&workspace_root) {
         Ok(input) => input,
         Err(e) => {
@@ -2875,17 +2994,25 @@ fn cmd_vendor_registry(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match vendor_registry(&registry_root, &out, &policy_path, &prod_erc20) {
+    match vendor_registry(
+        &registry_root,
+        &out,
+        &policy_path,
+        &prod_erc20,
+        overlay.as_ref(),
+    ) {
         Ok(receipt) => {
             println!(
                 "vendored {} files ({} leaf-bearing sources + {} refused/support JSON files)",
                 receipt.copied, receipt.descriptor_count, receipt.support_count
             );
             println!("out:   {}", out.display());
-            println!(
-                "root:  {} (exact catalogue + known-call coverage reproduced ✓)",
-                hex_lower(&receipt.root)
-            );
+            let proof_label = if receipt.overlay.is_some() {
+                "hash-bound curated catalogue + unchanged known-call authority reproduced ✓"
+            } else {
+                "exact pristine catalogue + known-call coverage reproduced ✓"
+            };
+            println!("root:  {} ({proof_label})", hex_lower(&receipt.root));
             println!("leaves: {}", receipt.leaf_count);
             println!("known calls: {}", receipt.known_call_count);
             println!(
@@ -2896,7 +3023,27 @@ fn cmd_vendor_registry(args: &[String]) -> ExitCode {
                 "{}",
                 render_erc20_capability_receipt_parts(&prod_erc20.source, &receipt.erc20)
             );
-            println!("source-corpus SHA-256: {}", hex_lower(&receipt.corpus_hash));
+            println!(
+                "upstream corpus: {} files / {} bytes / SHA-256 {}",
+                receipt.upstream_corpus.file_count,
+                receipt.upstream_corpus.byte_count,
+                hex_lower(&receipt.upstream_corpus.sha256)
+            );
+            println!(
+                "installed corpus: {} files / {} bytes / SHA-256 {}",
+                receipt.installed_corpus.file_count,
+                receipt.installed_corpus.byte_count,
+                hex_lower(&receipt.installed_corpus.sha256)
+            );
+            if let Some((count, manifest_hash, commit, tree)) = receipt.overlay {
+                println!(
+                    "curation overlay: {count} full-file replacements, manifest SHA-256 {}",
+                    hex_lower(&manifest_hash)
+                );
+                println!("upstream Git: commit {commit}, tree {tree}");
+            } else {
+                println!("curation overlay: disabled for disposable baseline output");
+            }
             println!(
                 "excluded fixture JSON: {} files, SHA-256 {}",
                 receipt.excluded_fixture_count,
@@ -2920,7 +3067,9 @@ struct VendorReceipt {
     known_call_count: usize,
     known_call_set_hash: [u8; 32],
     erc20: Erc20CapabilityReceipt,
-    corpus_hash: [u8; 32],
+    upstream_corpus: erc7730_curation::CorpusReceipt,
+    installed_corpus: erc7730_curation::CorpusReceipt,
+    overlay: Option<(usize, [u8; 32], String, String)>,
     excluded_fixture_count: usize,
     excluded_fixture_hash: [u8; 32],
 }
@@ -2930,9 +3079,13 @@ fn vendor_registry(
     out: &std::path::Path,
     policy_path: &std::path::Path,
     prod_erc20: &Erc20CapabilityInput,
+    overlay: Option<&erc7730_curation::VerifiedOverlay>,
 ) -> Result<VendorReceipt, String> {
     let registry_root = fs::canonicalize(registry_root)
         .map_err(|e| format!("canonicalize source {}: {e}", registry_root.display()))?;
+    if let Some(overlay) = overlay {
+        overlay.verify_upstream_checkout(&registry_root)?;
+    }
     if out.file_name().is_none() {
         return Err(format!(
             "unsafe --out {} (must be a distinct named directory)",
@@ -2985,13 +3138,6 @@ fn vendor_registry(
         build_capability_bound_registry(&input, policy_path, Some(&registry_root), prod_erc20)
             .map_err(|e| format!("registry build: {e}"))?;
     let result = &source_build.catalogue;
-    let descriptor_count = result
-        .entries
-        .iter()
-        .map(|entry| &entry.source)
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
-
     let mut source_files = std::collections::BTreeSet::<PathBuf>::new();
     let mut excluded_fixtures = std::collections::BTreeSet::<PathBuf>::new();
     for dir in [input, ercs_input] {
@@ -3000,7 +3146,9 @@ fn vendor_registry(
     let source_corpus = vendor_corpus_receipt(&registry_root, &source_files)?;
     let excluded_fixture_corpus =
         vendor_excluded_fixture_receipt(&registry_root, &excluded_fixtures)?;
-    let support_count = source_files.len().saturating_sub(descriptor_count);
+    if let Some(overlay) = overlay {
+        overlay.verify_source_receipts(source_corpus, excluded_fixture_corpus)?;
+    }
 
     let out_name = canonical_out
         .file_name()
@@ -3041,14 +3189,34 @@ fn vendor_registry(
     if !staged_excluded_fixtures.is_empty() {
         return Err("internal error: excluded fixture JSON was copied into staging".to_string());
     }
-    let staged_corpus = vendor_corpus_receipt(&staging, &staged_files)?;
-    if staged_corpus != source_corpus {
+    let pristine_staged_corpus = vendor_corpus_receipt(&staging, &staged_files)?;
+    if pristine_staged_corpus != source_corpus {
         return Err(format!(
-            "FAITHFULNESS CHECK FAILED — source corpus count/hash={}/{} staged={}/{}",
-            source_corpus.0,
-            hex_lower(&source_corpus.1),
-            staged_corpus.0,
-            hex_lower(&staged_corpus.1)
+            "FAITHFULNESS CHECK FAILED — source corpus files/bytes/hash={}/{}/{} staged={}/{}/{}",
+            source_corpus.file_count,
+            source_corpus.byte_count,
+            hex_lower(&source_corpus.sha256),
+            pristine_staged_corpus.file_count,
+            pristine_staged_corpus.byte_count,
+            hex_lower(&pristine_staged_corpus.sha256)
+        ));
+    }
+    if let Some(overlay) = overlay {
+        overlay.apply_to_staging(&staging)?;
+        overlay.verify_applied_diff(&registry_root, &source_files, &staging, &staged_files)?;
+    }
+    let staged_corpus = vendor_corpus_receipt(&staging, &staged_files)?;
+    if let Some(overlay) = overlay {
+        overlay.verify_curated_receipt(staged_corpus)?;
+    } else if staged_corpus != source_corpus {
+        return Err(format!(
+            "FAITHFULNESS CHECK FAILED — baseline staging corpus changed after copy: source={}/{}/{} staged={}/{}/{}",
+            source_corpus.file_count,
+            source_corpus.byte_count,
+            hex_lower(&source_corpus.sha256),
+            staged_corpus.file_count,
+            staged_corpus.byte_count,
+            hex_lower(&staged_corpus.sha256)
         ));
     }
 
@@ -3060,22 +3228,24 @@ fn vendor_registry(
     )
     .map_err(|e| format!("rebuild from staged tree: {e}"))?;
     let vendored = &staged_build.catalogue;
-    let faithful = vendored.root == result.root
-        && vendored.blob == result.blob
-        && vendored.leaf_count == result.leaf_count
-        && vendored.provenance == result.provenance
+    let common_authority_faithful = vendored.provenance == result.provenance
         && vendored.known_call_count == result.known_call_count
         && vendored.known_call_set_hash == result.known_call_set_hash
         && vendored.known_calls_bloom == result.known_calls_bloom
-        && vendored.review_text == result.review_text
         && staged_build.erc20 == source_build.erc20;
+    let catalogue_faithful = overlay.is_some()
+        || (vendored.root == result.root
+            && vendored.blob == result.blob
+            && vendored.leaf_count == result.leaf_count
+            && vendored.review_text == result.review_text);
+    let faithful = common_authority_faithful && catalogue_faithful;
     if !faithful {
         return Err(format!(
             "FAITHFULNESS CHECK FAILED\n\
              source:   root={} leaves={} provenance={} known_calls={} tuple_hash={}\n\
              staged:   root={} leaves={} provenance={} known_calls={} tuple_hash={}\n\
              ERC-20 capability input: sha256={} root={} entries={} capabilities={}\n\
-             exact checks: blob={} bloom={} review={} erc20_receipt={}",
+             exact checks: blob={} bloom={} review={} erc20_receipt={} overlay_mode={}",
             hex_lower(&result.root),
             result.leaf_count,
             result.provenance.as_str(),
@@ -3094,22 +3264,39 @@ fn vendor_registry(
             vendored.known_calls_bloom == result.known_calls_bloom,
             vendored.review_text == result.review_text,
             staged_build.erc20 == source_build.erc20,
+            overlay.is_some(),
         ));
     }
 
     install_vendored_subdirs(&staging, &canonical_out)?;
+    let descriptor_count = vendored
+        .entries
+        .iter()
+        .map(|entry| &entry.source)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let support_count = staged_files.len().saturating_sub(descriptor_count);
     Ok(VendorReceipt {
         copied: source_files.len(),
         descriptor_count,
         support_count,
-        root: result.root,
-        leaf_count: result.leaf_count,
-        known_call_count: result.known_call_count,
-        known_call_set_hash: result.known_call_set_hash,
-        erc20: source_build.erc20,
-        corpus_hash: source_corpus.1,
-        excluded_fixture_count: excluded_fixture_corpus.0,
-        excluded_fixture_hash: excluded_fixture_corpus.1,
+        root: vendored.root,
+        leaf_count: vendored.leaf_count,
+        known_call_count: vendored.known_call_count,
+        known_call_set_hash: vendored.known_call_set_hash,
+        erc20: staged_build.erc20,
+        upstream_corpus: source_corpus,
+        installed_corpus: staged_corpus,
+        overlay: overlay.map(|overlay| {
+            (
+                overlay.replacement_count(),
+                overlay.manifest_sha256(),
+                overlay.upstream_commit().to_string(),
+                overlay.upstream_tree().to_string(),
+            )
+        }),
+        excluded_fixture_count: excluded_fixture_corpus.file_count,
+        excluded_fixture_hash: excluded_fixture_corpus.sha256,
     })
 }
 
@@ -3251,7 +3438,7 @@ fn validate_excluded_vendor_fixture(path: &std::path::Path) -> Result<(), String
 fn vendor_corpus_receipt(
     root: &std::path::Path,
     files: &std::collections::BTreeSet<PathBuf>,
-) -> Result<(usize, [u8; 32]), String> {
+) -> Result<erc7730_curation::CorpusReceipt, String> {
     vendor_corpus_receipt_with_domain(root, files, b"pqsigner/erc7730-vendor-corpus-v1")
 }
 
@@ -3259,40 +3446,14 @@ fn vendor_corpus_receipt_with_domain(
     root: &std::path::Path,
     files: &std::collections::BTreeSet<PathBuf>,
     domain: &[u8],
-) -> Result<(usize, [u8; 32]), String> {
-    let count = u64::try_from(files.len())
-        .map_err(|_| "vendor corpus file count does not fit u64".to_string())?;
-    let mut aggregate = Sha256::new();
-    aggregate.update(domain);
-    aggregate.update(count.to_be_bytes());
-    for path in files {
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|_| format!("corpus source escaped root: {}", path.display()))?;
-        let relative = relative
-            .to_str()
-            .ok_or_else(|| format!("non-UTF-8 corpus path: {}", path.display()))?;
-        let path_len = u32::try_from(relative.len())
-            .map_err(|_| format!("corpus path is too long: {relative}"))?;
-        let bytes =
-            fs::read(path).map_err(|e| format!("read corpus file {}: {e}", path.display()))?;
-        let file_len = u64::try_from(bytes.len())
-            .map_err(|_| format!("corpus file is too large: {}", path.display()))?;
-        let file_hash = Sha256::digest(&bytes);
-        aggregate.update(path_len.to_be_bytes());
-        aggregate.update(relative.as_bytes());
-        aggregate.update(file_len.to_be_bytes());
-        aggregate.update(file_hash);
-    }
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&aggregate.finalize());
-    Ok((files.len(), out))
+) -> Result<erc7730_curation::CorpusReceipt, String> {
+    erc7730_curation::corpus_receipt(root, files, domain)
 }
 
 fn vendor_excluded_fixture_receipt(
     root: &std::path::Path,
     files: &std::collections::BTreeSet<PathBuf>,
-) -> Result<(usize, [u8; 32]), String> {
+) -> Result<erc7730_curation::CorpusReceipt, String> {
     vendor_corpus_receipt_with_domain(root, files, b"pqsigner/erc7730-excluded-fixture-corpus-v1")
 }
 

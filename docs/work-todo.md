@@ -3980,6 +3980,16 @@ review report.
   whose manifest binds each upstream and curated file hash plus the pinned
   upstream/schema/policy/tool identities; keep signed release-manifest authority
   and ERC-8176 production provenance as later, separately gated work.
+  **First bounded slice implemented 2026-07-18:** the 14 existing reviewed
+  curations now live as exact full-file replacements behind a strict manifest.
+  `vendor-registry` verifies the pinned Git origin/commit/tree and relevant
+  cleanliness, schema, pristine/excluded/curated corpus receipts, policy/tool
+  identities, every before/after file hash, the exact declared diff set, and
+  unchanged known-call count/hash/Bloom before its checked install.
+  `gen-erc7730-descriptors --check` repeats the repository-only manifest,
+  replacement, selected tool-input, and curated-corpus drift proof. This slice
+  intentionally leaves `diff-registry`, signed-release-manifest binding, and
+  ERC-8176/production authority open, so the parent item remains unchecked.
 - [x] **[pq1-7730-phase-c-reviewability, P0, S] Make the Phase-D input and
   standing verification receipts mechanically reviewable.** Completed
   2026-07-18 without changing signing eligibility or the authenticated

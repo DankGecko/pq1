@@ -161,6 +161,21 @@ rejected, and the vendored formats are omitted instead of receiving semantic exc
 Any future curation overlay must make a field faithfully renderable (not hidden), bind the
 patch to the exact upstream content hash, and pass the strict visibility/corpus gates.
 
+**Phase-C provenance-overlay implementation (2026-07-18):** the 14 current
+curations are now complete replacement files under
+`secure/data/erc7730/curations/files/`, with a strict manifest binding the
+pinned upstream repository/commit/tree, v2 schema, pristine and excluded-
+fixture corpus receipts, curated corpus receipt, policy, selected compiler/tool
+inputs, and every replacement's before/after length and SHA-256. The vendor
+path verifies the relevant upstream Git working tree, applies only declared
+replacements in staging, rejects additions/deletions/undeclared diffs, and
+requires pristine-versus-curated known-call count, tuple-set hash, and Bloom
+bytes to remain identical before install. The normal descriptor `--check` gate
+also verifies the checked-in manifest/replacements/tool inputs/curated tree.
+This mechanizes the first §2.1/§2.3 slice only; deterministic `diff-registry`,
+signed-release-manifest binding, and ERC-8176 production provenance remain
+separately gated work.
+
 ### 2.2 Duplicate-leaf precedence is alphabetical-filename (registry-squatting surface)
 Dedup on `(chain, contract, primary_type_hash, ctx)` keeps the lexicographically-first source
 path (dbgen/src/erc7730.rs:554-590); for contract ctx `primary_type_hash` is always 0. An

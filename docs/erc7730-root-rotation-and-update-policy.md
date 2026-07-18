@@ -78,13 +78,16 @@ chain and stored in flash:
 
 ## Resync ceremony (the recurring operation)
 
-1. `xtask vendor-registry` — copy the complete security-relevant JSON corpus
-   from an upstream checkout into `secure/data/erc7730-registry/`. The tool
-   proves exact accepted-catalogue and known/refused-call coverage, but does
-   **not** stamp or authenticate the Git SHA; reviewers verify the source
-   checkout and update the README receipt explicitly.
-2. Re-apply curations (until the 2.1 overlay lands, these are in-place edits;
-   the guard tests fail loud if dropped).
+1. `xtask vendor-registry` — from the manifest-pinned upstream Git top level,
+   verify origin, HEAD/tree, relevant working-tree cleanliness, v2 schema,
+   complete security corpus, and excluded-fixture receipt; then copy the
+   pristine corpus into staging.
+2. Apply the strict full-file curation overlay from
+   `secure/data/erc7730/curations/manifest.json`. The tool verifies every
+   before/after length and hash, rejects undeclared/additive/deleting diffs,
+   proves the final curated-corpus receipt, and requires the pristine and
+   curated known-call count, tuple-set hash, and Bloom bytes to be identical
+   before its checked install. There is no manual patch-reapplication step.
 3. `cargo run -p dbgen` — regenerate the blob, `db_roots.rs` root, and the
    drift-gated `erc7730.review.txt` (now carrying the per-field breakdown +
    `## skips` roll-up, finding 1.4).
@@ -99,6 +102,11 @@ chain and stored in flash:
    `erc7730-dev-unattested` in `secure/Cargo.toml` in the same root rotation.
    Generated fences deliberately reject a verified root that still requests
    the dev-warning feature, so this migration cannot be deferred silently.
+
+`gen-erc7730-descriptors --check` is the repository-only repeat gate for the
+manifest, replacement inventory, policy/tool identities, curated corpus, and
+generated catalogue. These host receipts do not sign a release, change
+`dev-unattested`, grant ERC-8176 provenance, or authorize a root for production.
 
 ## Related
 

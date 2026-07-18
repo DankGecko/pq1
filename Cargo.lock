@@ -1163,6 +1163,7 @@ dependencies = [
  "hex",
  "pqsigner-erc7730",
  "pqsigner-proto",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",

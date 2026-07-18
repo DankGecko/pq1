@@ -289,7 +289,11 @@ fn vendor_registry_preserves_dead_only_known_calls_not_just_merkle_leaves() {
 
     let policy = workspace.join("secure/data/erc7730/policy.toml");
     let command = Command::new(bin())
-        .args(["vendor-registry", "--registry-root"])
+        .args([
+            "vendor-registry",
+            "--no-curation-overlay",
+            "--registry-root",
+        ])
         .arg(&upstream)
         .arg("--out")
         .arg(&output)
@@ -330,7 +334,11 @@ fn vendor_registry_preserves_dead_only_known_calls_not_just_merkle_leaves() {
     let marker = output.join(".pqsigner-erc7730-vendor");
     std::fs::write(&marker, b"stale hand-maintained receipt\n").unwrap();
     let stale_marker = Command::new(bin())
-        .args(["vendor-registry", "--registry-root"])
+        .args([
+            "vendor-registry",
+            "--no-curation-overlay",
+            "--registry-root",
+        ])
         .arg(&upstream)
         .arg("--out")
         .arg(&output)
@@ -390,7 +398,11 @@ fn vendor_registry_rejects_symlinked_security_corpus_roots_before_build() {
     symlink(outside.join("ercs"), upstream.join("ercs")).unwrap();
 
     let output = Command::new(bin())
-        .args(["vendor-registry", "--registry-root"])
+        .args([
+            "vendor-registry",
+            "--no-curation-overlay",
+            "--registry-root",
+        ])
         .arg(&upstream)
         .arg("--out")
         .arg(test_root.join("vendored"))

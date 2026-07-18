@@ -2,14 +2,16 @@
 
 **Upstream baseline:** vendored from
 [`ethereum/clear-signing-erc7730-registry`](https://github.com/ethereum/clear-signing-erc7730-registry)
-at commit **`784c87c925e8438e7b4736b2af85a501f8d2a265`** (2026-06-30). The
+at commit **`784c87c925e8438e7b4736b2af85a501f8d2a265`** (vendoring review
+recorded 2026-06-30). The
 checked-in corpus is **not byte-identical to that upstream commit**: the
 firmware-pinned `ERC7730_DESCRIPTORS_ROOT` is derived from the upstream baseline
-plus the 13 reviewed in-place curations listed below, under
-`secure/data/erc7730/policy.toml`. Record the new upstream SHA whenever you
-re-vendor, and review the curation diff and generated receipts in the same
-change. The vendor command does not stamp or trust a Git SHA automatically;
-reviewers must verify the source checkout explicitly.
+plus the 14 reviewed full-file replacements listed below, under
+`secure/data/erc7730/policy.toml`. The strict manifest at
+`secure/data/erc7730/curations/manifest.json` binds the upstream repository,
+commit, tree, v2 schema, pristine/excluded/curated corpus receipts, policy,
+selected tool inputs, and every replacement's exact before/after bytes and
+SHA-256.
 
 This tree is the complete security-relevant JSON corpus (`registry/**/*.json`
 plus `ercs/**/*.json`, excluding validated upstream test fixtures), not merely the
@@ -22,13 +24,17 @@ Merkle root unchanged while incorrectly restoring blind signing.
 Refresh the upstream baseline with:
 
 ```bash
-cargo run -p pqsigner-xtask -- vendor-registry \
+cargo run --locked -p pqsigner-xtask -- vendor-registry \
   --registry-root /path/to/clear-signing-erc7730-registry
 ```
 
-This command overwrites the vendored baseline. After every refresh, reapply and
-review the approved curation patch before regenerating with
-`cargo run -p dbgen`. The complete ceremony and review requirements live in
+The command refuses any origin/HEAD/tree/schema/corpus mismatch or relevant
+dirty upstream input, copies the pristine baseline to staging, applies only the
+manifest's full-file replacements, and installs only after the curated corpus
+receipt and unchanged known-call tuple set/Bloom are proven. There is no manual
+"reapply the patch" step. `gen-erc7730-descriptors --check` independently
+rejects local manifest, replacement, policy, selected tool-input, or checked-in
+curated-corpus drift. The complete ceremony and review requirements live in
 [`docs/erc7730-root-rotation-and-update-policy.md`](../../../docs/erc7730-root-rotation-and-update-policy.md).
 The final curated build must reproduce the compiled blob, Merkle root, leaf
 count, provenance, stable review/skip receipt, known-call count, canonical
@@ -46,10 +52,11 @@ The Bloom contains 28,235 / 131,072 set bits, below the generator's 25% cap.
 
 The `.pqsigner-erc7730-vendor` file is an exact machine-owned directory
 sentinel only. It deliberately carries no upstream SHA or generated receipt;
-those reviewed values live in this document and the generated artifacts and
-must be independently regenerated and drift-checked before replacement.
+the machine-checked source/overlay identities live in the curation manifest,
+while the generated catalogue authority remains in the artifacts and managed
+receipt above.
 
-Current reviewed in-place curations (14):
+Current reviewed full-file replacements (14):
 
 - `registry/aave/calldata-WrappedTokenGatewayV3.json`
 - `registry/aave/calldata-lpv3.json`

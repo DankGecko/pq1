@@ -1,0 +1,50 @@
+{
+  "$schema": "../../specs/erc7730-v2.schema.json",
+  "includes": "uniswap-common-eip712.json",
+  "_curation_note": "PQSigner Tier-A curation (v3 nested-EIP-712): the upstream descriptor hides the whole `witness.info` (OrderInfo) struct AND `witness.cosigner` with visible:\"never\". PQSigner's WYSIWYS belt REFUSES a hidden address behind a trusted clear-sign, so we SHOW the OrderInfo addresses (reactor, swapper, additionalValidationContract) AND the cosigner (an address the user is trusting to co-sign the order), keeping only the non-address order metadata hidden. baseOutputs tokenPath is authored ABSOLUTE. baseOutputs' element is DutchOutput(token, startAmount, endAmount, recipient). See docs/erc7730-nested-eip712-render-design.md §12.",
+  "display": {
+    "formats": {
+      "PermitWitnessTransferFrom(TokenPermissions permitted,address spender,uint256 nonce,uint256 deadline,V2DutchOrder witness)DutchOutput(address token,uint256 startAmount,uint256 endAmount,address recipient)OrderInfo(address reactor,address swapper,uint256 nonce,uint256 deadline,address additionalValidationContract,bytes additionalValidationData)TokenPermissions(address token,uint256 amount)V2DutchOrder(OrderInfo info,address cosigner,address baseInputToken,uint256 baseInputStartAmount,uint256 baseInputEndAmount,DutchOutput[] baseOutputs)": {
+        "intent": "UniswapX V2 Dutch Order",
+        "fields": [
+          { "path": "spender", "label": "Approve to spender", "format": "raw" },
+          {
+            "path": "permitted.amount",
+            "label": "Approve amount",
+            "format": "tokenAmount",
+            "params": { "tokenPath": "permitted.token" }
+          },
+          {
+            "path": "witness.baseInputStartAmount",
+            "label": "Spend max",
+            "format": "tokenAmount",
+            "params": { "tokenPath": "witness.baseInputToken" }
+          },
+          {
+            "path": "witness.info",
+            "fields": [
+              { "path": "reactor", "label": "Order reactor", "format": "raw" },
+              { "path": "swapper", "label": "Order swapper", "format": "raw" },
+              { "path": "nonce", "label": "Order nonce", "visible": "never" },
+              { "path": "deadline", "label": "Order deadline", "visible": "never" },
+              { "path": "additionalValidationContract", "label": "Validation contract", "format": "raw" },
+              { "path": "additionalValidationData", "label": "Validation data", "visible": "never" }
+            ]
+          },
+          {
+            "path": "witness.baseOutputs.[]",
+            "fields": [
+              { "path": "endAmount", "label": "Min amount to receive", "format": "tokenAmount", "params": { "tokenPath": "witness.baseOutputs.[].token" } },
+              { "path": "recipient", "label": "On Address", "format": "raw" },
+              { "path": "startAmount", "label": "Output start amount", "visible": "never" }
+            ]
+          },
+          { "path": "witness.cosigner", "label": "Cosigner", "format": "raw" },
+          { "path": "deadline", "label": "Approval expire", "format": "date", "params": { "encoding": "timestamp" } },
+          { "label": "Nonce", "path": "nonce", "visible": "never" },
+          { "label": "Witness Base Input End Amount", "path": "witness.baseInputEndAmount", "visible": "never" }
+        ]
+      }
+    }
+  }
+}

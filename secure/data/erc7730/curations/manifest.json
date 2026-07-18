@@ -1,0 +1,177 @@
+{
+  "manifest_version": 1,
+  "mode": "full-file-replacement",
+  "upstream": {
+    "repository": "https://github.com/ethereum/clear-signing-erc7730-registry.git",
+    "commit": "784c87c925e8438e7b4736b2af85a501f8d2a265",
+    "tree": "8da8dba78c3e581bbd06c15cc681d07e570dcfb1",
+    "schema": {
+      "path": "specs/erc7730-v2.schema.json",
+      "sha256": "d0233c17f84daac46d8673e8814444b237323a928d8e5fe06af180c7105af572"
+    },
+    "corpus": {
+      "domain": "pqsigner/erc7730-vendor-corpus-v1",
+      "files": 387,
+      "bytes": 771409,
+      "sha256": "e0ef496ddca2c659e3204d903f597b101c8da3c8808b66fa4c6fe841849fefee"
+    },
+    "excluded_fixtures": {
+      "domain": "pqsigner/erc7730-excluded-fixture-corpus-v1",
+      "files": 272,
+      "bytes": 687949,
+      "sha256": "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f"
+    }
+  },
+  "curated_corpus": {
+    "domain": "pqsigner/erc7730-vendor-corpus-v1",
+    "files": 387,
+    "bytes": 777688,
+    "sha256": "b068d3d337e3e21fb8e2111bc8abfe1371a036e218a70c0a6d4a84861591cdb1"
+  },
+  "policy": {
+    "path": "secure/data/erc7730/policy.toml",
+    "sha256": "8c553b0ab2ddf7f8c6d00ff34954a3312bb3c5b981a101fe71e3733e07490877"
+  },
+  "tool_inputs": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "81539ec086a727f74dcaa50690ea4da99cf41eddc39689a323445faac5343323"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "2315489b282d54de07e2a01e62796f158c872d2cce274103f3b03857bdd951cd"
+    },
+    {
+      "path": "dbgen/Cargo.toml",
+      "sha256": "940cc37c55859098ea69554978793f235d8ccf8dff7afb4d0c83a46ecb3613f5"
+    },
+    {
+      "path": "dbgen/src/erc7730.rs",
+      "sha256": "17824caca8a18b42af0bd507c5998350e493814d3276854a9dc6f9b5f463bb3b"
+    },
+    {
+      "path": "pqsigner-erc7730/Cargo.toml",
+      "sha256": "abcae0c2e3dd0a9ce25a0bd552372a98d2fefedef098dc0948c9f429f6b9a407"
+    },
+    {
+      "path": "pqsigner-erc7730/src/ir.rs",
+      "sha256": "c2fd68d6d732837dc96df8f1035681d0b9c66995e5724534bf0a54bad767104a"
+    },
+    {
+      "path": "rust-toolchain.toml",
+      "sha256": "377b3d8b1fce9850e2f9add056c51c3f3b44d18cbc24c56d0d3225a7fbd58231"
+    },
+    {
+      "path": "xtask/Cargo.toml",
+      "sha256": "fb8853c5969e14000d8c2af8b9a2e1189e3d793e2a5fc9d52bfcea6681b4fd2b"
+    },
+    {
+      "path": "xtask/src/erc7730_curation.rs",
+      "sha256": "0cd2dcc1423ee52fb5639cb026434a279f231a1f433599c7dd4cb7ec5d8445f6"
+    },
+    {
+      "path": "xtask/src/main.rs",
+      "sha256": "97e9da6db263a787401f722c4cea78d0d51f035e779db27dc578c6124fc45e61"
+    }
+  ],
+  "replacements": [
+    {
+      "path": "registry/aave/calldata-WrappedTokenGatewayV3.json",
+      "upstream_bytes": 5491,
+      "upstream_sha256": "c8951b348a03b33046bdbdf4460bb13b2afc9ec4e5e7fde81ba18fc71389eb5e",
+      "replacement_bytes": 5563,
+      "replacement_sha256": "6dcec09f2c05c34fd0e135fb672264c8e86c11ae5d197a50de39bf18e82b3028"
+    },
+    {
+      "path": "registry/aave/calldata-lpv3.json",
+      "upstream_bytes": 11643,
+      "upstream_sha256": "19afdd033c627a5e24bdc70af93e70e0068bb0760d100ddd297377bb8c4cc659",
+      "replacement_bytes": 11697,
+      "replacement_sha256": "9d6105d4fc42f2d3993a8badfc6084035b5e5eab71a92c13d56bbc4b89e0c469"
+    },
+    {
+      "path": "registry/flyingtulip/eip712-PftMarketplace-BuyOffer.json",
+      "upstream_bytes": 2157,
+      "upstream_sha256": "9f6c51f398c96f886970f2339ba7c05a4774af2d8db532d40533b7fa10e7feb2",
+      "replacement_bytes": 2226,
+      "replacement_sha256": "99ee45490b250eb53acac5184c337076a5d22761c07c8bcc72dc70ac81fddb64"
+    },
+    {
+      "path": "registry/p2p/calldata-P2pOrgUnlimitedEthDepositor.json",
+      "upstream_bytes": 2219,
+      "upstream_sha256": "a8ffcb9a250e592f69bcff2a49bb6334f790cd7d6f47fa74f4fa2eb9fcee019f",
+      "replacement_bytes": 2678,
+      "replacement_sha256": "4d9233f187af0f21c900354df5997dc992b5a1665be0881c76840271d333bb84"
+    },
+    {
+      "path": "registry/p2p/calldata-P2pSsvProxyFactory.json",
+      "upstream_bytes": 2234,
+      "upstream_sha256": "64be6591af3a86287c7478728ff4d81cfabc94ecf85435022230f6ff50755b5e",
+      "replacement_bytes": 2504,
+      "replacement_sha256": "ee8b405e19674c61429188d0d5bf2a34273d0d0eabac1b8e8da1982019c25524"
+    },
+    {
+      "path": "registry/threshold/calldata-L1BitcoinDepositor-address.json",
+      "upstream_bytes": 2953,
+      "upstream_sha256": "0ff5910637fed1f9ce6f32fcd302ddf7b91e925c70d1182a516cc48b1fee7a9c",
+      "replacement_bytes": 3048,
+      "replacement_sha256": "106c19a4dbb637b04a1b87a194a21c536cd2db1f5a03de42efd0ce8d178b4980"
+    },
+    {
+      "path": "registry/threshold/calldata-L1BitcoinDepositor-bytes32.json",
+      "upstream_bytes": 3386,
+      "upstream_sha256": "6e991a35f4cc849de78f9405f7c0f7e2bc8ed500fa9c3b0cdfe5513dcb5d6bbf",
+      "replacement_bytes": 3481,
+      "replacement_sha256": "87634f34c5e11bb556d5843f823e2afc6a43e3181dc408f56bb832133db8323b"
+    },
+    {
+      "path": "registry/threshold/calldata-L2BitcoinDepositor.json",
+      "upstream_bytes": 3164,
+      "upstream_sha256": "8173d5e8ff661452629c1c4ebb2427fef452a2d36dadc29fe6bb8dc850b911d2",
+      "replacement_bytes": 3259,
+      "replacement_sha256": "e3157a468d0de22734eb77b5c7a8a83a6b74f02ebe5bb23213dcea638300afae"
+    },
+    {
+      "path": "registry/uniswap/calldata-UniswapV3Router02.json",
+      "upstream_bytes": 6039,
+      "upstream_sha256": "f2ced0c2ed44a7132a987365bb4f0aedd4d21091decc4aad3d327b7cb400193d",
+      "replacement_bytes": 6261,
+      "replacement_sha256": "0c894a7bc69d1879e2126172783e75e19bd367c7e1e139a9c5425ae2199522de"
+    },
+    {
+      "path": "registry/uniswap/eip712-UniswapX-DutchOrder.json",
+      "upstream_bytes": 2285,
+      "upstream_sha256": "93f931b6e7e72d3e5076eb6840374158f3ab3c11837ebeb22ea23bca64bdaacc",
+      "replacement_bytes": 3356,
+      "replacement_sha256": "df42e30ef9f8c0fade849d6cb0e49f04fa2b1ba5a9b4662b9a5482c83d310c7f"
+    },
+    {
+      "path": "registry/uniswap/eip712-UniswapX-ExclusiveDutchOrder.json",
+      "upstream_bytes": 2595,
+      "upstream_sha256": "60eac0edc33f33aa0293cc4002bc2998db2c56ba90f0241b31679bf710679c62",
+      "replacement_bytes": 3839,
+      "replacement_sha256": "fe09555561c1b7dd675c1efcae97a4a9a3ee692bf97734896ea0faecd8b0322d"
+    },
+    {
+      "path": "registry/uniswap/eip712-UniswapX-LimitOrder.json",
+      "upstream_bytes": 1686,
+      "upstream_sha256": "418a320a00c94b06458033a423157960cf551589bf95603d0b9ac5739cfaf77d",
+      "replacement_bytes": 2923,
+      "replacement_sha256": "71edd2c79b7f679fc7ade215beb1fb917cdc6ad89b004fd5a4fcb56b19175e45"
+    },
+    {
+      "path": "registry/uniswap/eip712-uniswap-V2DutchOrder.json",
+      "upstream_bytes": 2189,
+      "upstream_sha256": "c07e0c5b90a65b97300d891cb37094d83ca841aba7b008b1769385bc028f3aef",
+      "replacement_bytes": 3370,
+      "replacement_sha256": "7e6432e11e07dc3a73e694fa16f2dce2e59131492a030401657dc7e032620728"
+    },
+    {
+      "path": "registry/uniswap/eip712-uniswap-permit2.json",
+      "upstream_bytes": 3348,
+      "upstream_sha256": "c94c89c58e6c17723f087516df4c3dc0d57a86b11799c68b8830b317f515768f",
+      "replacement_bytes": 3463,
+      "replacement_sha256": "73a71f6d6a8b0421e4f07ce814282bf94f8ef03a1d6660b5ccf6eddf4c9936dc"
+    }
+  ]
+}
