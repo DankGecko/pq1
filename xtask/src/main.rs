@@ -573,7 +573,7 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
     // is exactly reproducible from the strict overlay manifest. Custom input
     // probes remain available without claiming anything about the production
     // corpus.
-    if parsed.check
+    let checked_overlay = if parsed.check
         && input_dir == workspace_root.join(ERC7730_DEFAULT_INPUT)
         && policy == workspace_root.join(ERC7730_DEFAULT_POLICY)
     {
@@ -593,7 +593,10 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
             eprintln!("DRIFT: ERC-7730 curation overlay: {error}");
             return ExitCode::FAILURE;
         }
-    }
+        Some(overlay)
+    } else {
+        None
+    };
 
     // Build both prod + e2e catalogs. PROD is the tolerant registry build
     // (the corpus switch) — `input_dir` is `<registry>/registry`, so its parent
@@ -715,6 +718,13 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
             drift = true;
         }
         let registry_readme = workspace_root.join(ERC7730_REGISTRY_README);
+        let curation_receipt = checked_overlay
+            .as_ref()
+            .map(|overlay| Erc7730CurationReceipt {
+                manifest_sha256: overlay.manifest_sha256(),
+                upstream_commit: overlay.upstream_commit(),
+                upstream_tree: overlay.upstream_tree(),
+            });
         if let Err(e) = diff_erc7730_registry_readme(
             &registry_readme,
             &prod.root,
@@ -723,6 +733,7 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
             prod.known_call_count,
             &prod.known_call_set_hash,
             &prod.known_calls_bloom,
+            curation_receipt,
         ) {
             eprintln!("DRIFT: {e}");
             drift = true;
@@ -1191,6 +1202,13 @@ fn render_erc7730_integration_facts(
     )
 }
 
+#[derive(Clone, Copy)]
+struct Erc7730CurationReceipt<'a> {
+    manifest_sha256: [u8; 32],
+    upstream_commit: &'a str,
+    upstream_tree: &'a str,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn diff_erc7730_registry_readme(
     path: &std::path::Path,
@@ -1200,6 +1218,7 @@ fn diff_erc7730_registry_readme(
     prod_known_call_count: usize,
     prod_known_call_set_hash: &[u8; 32],
     prod_known_calls_bloom: &[u8],
+    curation: Option<Erc7730CurationReceipt<'_>>,
 ) -> Result<(), String> {
     let text = fs::read_to_string(path)
         .map_err(|e| format!("read registry README at {}: {e}", path.display()))?;
@@ -1210,6 +1229,7 @@ fn diff_erc7730_registry_readme(
         prod_known_call_count,
         prod_known_call_set_hash,
         prod_known_calls_bloom,
+        curation,
     );
     exact_document_block_matches(
         &text,
@@ -1227,12 +1247,28 @@ fn render_erc7730_registry_receipt(
     prod_known_call_count: usize,
     prod_known_call_set_hash: &[u8; 32],
     prod_known_calls_bloom: &[u8],
+    curation: Option<Erc7730CurationReceipt<'_>>,
 ) -> String {
     let bloom_set_bits: usize = prod_known_calls_bloom
         .iter()
         .map(|byte| byte.count_ones() as usize)
         .sum();
     let bloom_bits = prod_known_calls_bloom.len().saturating_mul(8);
+    let curation = curation
+        .map(|receipt| {
+            format!(
+                concat!(
+                    "Curation manifest SHA-256\n",
+                    "`{}` binds upstream commit\n",
+                    "`{}` and tree\n",
+                    "`{}`.\n",
+                ),
+                hex::encode(receipt.manifest_sha256),
+                receipt.upstream_commit,
+                receipt.upstream_tree,
+            )
+        })
+        .unwrap_or_default();
     format!(
         concat!(
             "{}\n",
@@ -1242,6 +1278,7 @@ fn render_erc7730_registry_receipt(
             "`{}`,\n",
             "**{}** canonical known-call tuples, tuple-set SHA-256\n",
             "`{}`.\n",
+            "{}",
             "The Bloom contains {} / {} set bits, below the generator's 25% cap.\n",
             "{}",
         ),
@@ -1251,6 +1288,7 @@ fn render_erc7730_registry_receipt(
         hex::encode(prod_root),
         grouped_decimal(prod_known_call_count, ','),
         hex::encode(prod_known_call_set_hash),
+        curation,
         grouped_decimal(bloom_set_bits, ','),
         grouped_decimal(bloom_bits, ','),
         ERC7730_REGISTRY_RECEIPT_END,
@@ -1801,8 +1839,23 @@ mod tests {
         let mut bloom = [0u8; 16];
         bloom[0] = 0b1010_0001;
         bloom[15] = 0b0000_0011;
-        let receipt =
-            render_erc7730_registry_receipt(&root, 428, 341_328, 4_542, &tuple_hash, &bloom);
+        let manifest_hash = [0x33; 32];
+        let upstream_commit = "44".repeat(20);
+        let upstream_tree = "55".repeat(20);
+        let curation = Erc7730CurationReceipt {
+            manifest_sha256: manifest_hash,
+            upstream_commit: &upstream_commit,
+            upstream_tree: &upstream_tree,
+        };
+        let receipt = render_erc7730_registry_receipt(
+            &root,
+            428,
+            341_328,
+            4_542,
+            &tuple_hash,
+            &bloom,
+            Some(curation),
+        );
         let readme = format!("human provenance\n{receipt}\nhuman curation list\n");
         exact_document_block_matches(
             &readme,
@@ -1812,6 +1865,9 @@ mod tests {
         )
         .expect("fresh registry receipt");
         assert!(receipt.contains("5 / 128 set bits"));
+        assert!(receipt.contains(&hex::encode(manifest_hash)));
+        assert!(receipt.contains(&upstream_commit));
+        assert!(receipt.contains(&upstream_tree));
     }
 
     #[test]
@@ -1821,8 +1877,22 @@ mod tests {
         let mut bloom = [0u8; 16];
         bloom[0] = 0b1010_0001;
         bloom[15] = 0b0000_0011;
-        let receipt =
-            render_erc7730_registry_receipt(&root, 428, 341_328, 4_542, &tuple_hash, &bloom);
+        let manifest_hash = [0x33; 32];
+        let upstream_commit = "44".repeat(20);
+        let upstream_tree = "55".repeat(20);
+        let receipt = render_erc7730_registry_receipt(
+            &root,
+            428,
+            341_328,
+            4_542,
+            &tuple_hash,
+            &bloom,
+            Some(Erc7730CurationReceipt {
+                manifest_sha256: manifest_hash,
+                upstream_commit: &upstream_commit,
+                upstream_tree: &upstream_tree,
+            }),
+        );
         let readme = format!("prefix\n{receipt}\nsuffix\n");
         let stale_docs = [
             readme.replacen("428 leaves", "427 leaves", 1),
@@ -1830,6 +1900,9 @@ mod tests {
             readme.replacen(&hex::encode(root), &hex::encode([0x33; 32]), 1),
             readme.replacen("4,542** canonical", "4,541** canonical", 1),
             readme.replacen(&hex::encode(tuple_hash), &hex::encode([0x44; 32]), 1),
+            readme.replacen(&hex::encode(manifest_hash), &hex::encode([0x66; 32]), 1),
+            readme.replacen(&upstream_commit, &"77".repeat(20), 1),
+            readme.replacen(&upstream_tree, &"88".repeat(20), 1),
             readme.replacen("5 / 128 set bits", "4 / 128 set bits", 1),
             readme.replacen(ERC7730_REGISTRY_RECEIPT_BEGIN, "", 1),
             format!("{readme}\n{receipt}"),

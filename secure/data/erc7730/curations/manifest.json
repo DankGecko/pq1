@@ -71,7 +71,7 @@
     },
     {
       "path": "xtask/src/main.rs",
-      "sha256": "97e9da6db263a787401f722c4cea78d0d51f035e779db27dc578c6124fc45e61"
+      "sha256": "66a0d17b74e26a276e004ae1648d277a496e924b8ee9b5bc636b6ba38039ac27"
     }
   ],
   "replacements": [
