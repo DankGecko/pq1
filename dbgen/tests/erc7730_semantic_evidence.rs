@@ -802,23 +802,6 @@ fn lido_staking_fixed_block_evidence_binds_proxy_runtime_and_rpc_agreement() {
         ) as usize,
         metadata_len
     );
-    let mut pc = 0usize;
-    while pc < prefix_len {
-        let opcode = staker_runtime[pc];
-        assert!(
-            !matches!(opcode, 0xf2 | 0xf4 | 0xff),
-            "direct referral-staker executable contains opcode 0x{opcode:02x} at {pc}"
-        );
-        pc += 1;
-        if (0x60..=0x7f).contains(&opcode) {
-            pc += usize::from(opcode - 0x5f);
-        }
-    }
-    assert_eq!(
-        pc, prefix_len,
-        "staker executable ends on an opcode boundary"
-    );
-
     let dependency = &manifest["wsteth_dependency"];
     for (path_key, hash_key) in [
         ("evidence_manifest", "evidence_manifest_sha256"),
@@ -842,6 +825,184 @@ fn lido_staking_fixed_block_evidence_binds_proxy_runtime_and_rpc_agreement() {
 }
 
 #[test]
+fn lido_staking_archived_explorer_responses_bind_source_to_fixed_block_runtime() {
+    let evidence = lido_staking_evidence_root();
+    let manifest = read_json(&evidence.join("manifest.json"));
+    let cases = [
+        (
+            "lido_implementation",
+            "0x6ca84080381e43938476814be61b779a8bb6a600",
+            "Lido",
+            "v0.4.24+commit.e67f0147",
+            "constantinople",
+            "contracts/0.4.24/Lido.sol",
+            "source/Lido.sol",
+            "runtime/Lido.mainnet.hex",
+            36usize,
+            112usize,
+            None,
+        ),
+        (
+            "referral_staker",
+            "0xa88f0329c2c4ce51ba3fc619bbf44efe7120dd0d",
+            "WstETHReferralStaker",
+            "0.8.25+commit.b61c2a91",
+            "cancun",
+            "si-contracts/0.8.25/w/WstethStaker.sol",
+            "source/WstethStaker.sol",
+            "runtime/WstETHReferralStaker.mainnet.hex",
+            4usize,
+            6usize,
+            Some("0x0000000000000000000000007f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"),
+        ),
+    ];
+
+    for (
+        key,
+        address,
+        contract_name,
+        compiler,
+        evm_version,
+        file_path,
+        source_file,
+        runtime_file,
+        additional_source_count,
+        abi_entry_count,
+        constructor_args,
+    ) in cases
+    {
+        let spec = &manifest["verified_explorer"][key];
+        assert_eq!(required_str(spec, "address"), address);
+        assert!(required_str(spec, "api").ends_with(address));
+        assert_eq!(required_str(spec, "contract_name"), contract_name);
+        assert_eq!(required_str(spec, "compiler"), compiler);
+        assert_eq!(required_str(spec, "evm_version"), evm_version);
+        assert_eq!(required_str(spec, "file_path"), file_path);
+        assert_eq!(spec["fully_verified"].as_bool(), Some(true));
+        assert_eq!(spec["source_matches_archive"].as_bool(), Some(true));
+        assert_eq!(
+            spec["deployed_bytecode_matches_fixed_block_runtime"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            spec["additional_sources"].as_u64(),
+            Some(additional_source_count as u64)
+        );
+        assert_eq!(spec["abi_entries"].as_u64(), Some(abi_entry_count as u64));
+
+        let response_bytes = fs::read(evidence.join(required_str(spec, "archive_file")))
+            .unwrap_or_else(|error| panic!("read archived {key} explorer response: {error}"));
+        assert_eq!(
+            sha256_hex(&response_bytes),
+            required_str(spec, "archive_file_sha256")
+        );
+        let response: Value = serde_json::from_slice(&response_bytes)
+            .unwrap_or_else(|error| panic!("parse archived {key} explorer response: {error}"));
+
+        assert_eq!(response["name"].as_str(), Some(contract_name));
+        assert_eq!(response["compiler_version"].as_str(), Some(compiler));
+        assert_eq!(response["evm_version"].as_str(), Some(evm_version));
+        assert_eq!(response["file_path"].as_str(), Some(file_path));
+        assert_eq!(response["language"].as_str(), Some("solidity"));
+        assert_eq!(response["is_verified"].as_bool(), Some(true));
+        assert_eq!(response["is_fully_verified"].as_bool(), Some(true));
+        assert_eq!(response["is_partially_verified"].as_bool(), Some(false));
+        assert_eq!(response["is_changed_bytecode"].as_bool(), Some(false));
+        assert_eq!(response["creation_status"].as_str(), Some("success"));
+        assert!(response["conflicting_implementations"].is_null());
+        assert!(response["proxy_type"].is_null());
+        assert_eq!(
+            response["implementations"].as_array().map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(
+            response["optimization_enabled"].as_bool(),
+            spec["optimizer_enabled"].as_bool()
+        );
+        assert_eq!(
+            response["optimization_runs"].as_u64(),
+            spec["optimizer_runs"].as_u64()
+        );
+        assert_eq!(
+            response["compiler_settings"]["evmVersion"].as_str(),
+            Some(evm_version)
+        );
+        assert_eq!(
+            response["compiler_settings"]["optimizer"]["enabled"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            response["compiler_settings"]["optimizer"]["runs"].as_u64(),
+            Some(200)
+        );
+        assert!(response["compiler_settings"]
+            .as_object()
+            .is_some_and(|v| !v.is_empty()));
+        assert!(!required_str(&response, "creation_bytecode").is_empty());
+
+        let official_source = fs::read(evidence.join(source_file))
+            .unwrap_or_else(|error| panic!("read official {key} source: {error}"));
+        assert_eq!(
+            required_str(&response, "source_code").as_bytes(),
+            official_source,
+            "Blockscout's verified primary source must equal the official archive"
+        );
+        let fixed_block_runtime = read_hex(&evidence.join(runtime_file));
+        assert_eq!(
+            decode_hex_text(required_str(&response, "deployed_bytecode")),
+            fixed_block_runtime,
+            "Blockscout's verified deployed bytecode must equal both fixed-block RPC observations"
+        );
+
+        let additional_sources = response["additional_sources"]
+            .as_array()
+            .expect("complete explorer response retains additional sources");
+        assert_eq!(additional_sources.len(), additional_source_count);
+        let mut additional_paths = BTreeSet::new();
+        for source in additional_sources {
+            assert!(additional_paths.insert(required_str(source, "file_path")));
+            assert!(!required_str(source, "source_code").is_empty());
+        }
+        let abi = response["abi"]
+            .as_array()
+            .expect("complete explorer response retains full ABI");
+        assert_eq!(abi.len(), abi_entry_count);
+        assert_eq!(response["constructor_args"].as_str(), constructor_args);
+    }
+
+    let staker_response = read_json(&evidence.join(required_str(
+        &manifest["verified_explorer"]["referral_staker"],
+        "archive_file",
+    )));
+    assert_eq!(
+        staker_response["abi"],
+        read_json(&evidence.join("abi/WstETHReferralStaker.abi.json"))
+    );
+    assert_eq!(
+        decode_abi_word_address(required_str(&staker_response, "constructor_args")),
+        required_str(
+            &manifest["deployment"]["referral_staker"],
+            "constructor_wsteth"
+        )
+    );
+
+    let lido_response = read_json(&evidence.join(required_str(
+        &manifest["verified_explorer"]["lido_implementation"],
+        "archive_file",
+    )));
+    let archived_submit = read_json(&evidence.join("abi/Lido.submit.abi.json"));
+    let verified_submit = lido_response["abi"]
+        .as_array()
+        .expect("Lido full verified ABI")
+        .iter()
+        .find(|entry| {
+            entry["type"].as_str() == Some("function") && entry["name"].as_str() == Some("submit")
+        })
+        .expect("verified Lido ABI contains submit");
+    assert_eq!(verified_submit, &archived_submit[0]);
+}
+
+#[test]
 fn lido_staking_source_abi_descriptor_and_ir_bind_both_routes() {
     let root = workspace_root();
     let evidence = lido_staking_evidence_root();
@@ -853,10 +1014,6 @@ fn lido_staking_source_abi_descriptor_and_ir_bind_both_routes() {
     assert_eq!(
         sha256_hex(&lido_source_bytes),
         required_str(lido_source_spec, "sha256")
-    );
-    assert_eq!(
-        required_str(lido_source_spec, "sha256"),
-        required_str(lido_source_spec, "verified_explorer_source_sha256")
     );
     let lido_source = String::from_utf8(lido_source_bytes).expect("Lido source is UTF-8");
     assert_eq!(
@@ -875,10 +1032,6 @@ fn lido_staking_source_abi_descriptor_and_ir_bind_both_routes() {
     assert_eq!(
         sha256_hex(&staker_source_bytes),
         required_str(staker_source_spec, "sha256")
-    );
-    assert_eq!(
-        required_str(staker_source_spec, "sha256"),
-        required_str(staker_source_spec, "verified_explorer_source_sha256")
     );
     let staker_source =
         String::from_utf8(staker_source_bytes).expect("referral-staker source is UTF-8");

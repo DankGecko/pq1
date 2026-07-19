@@ -44,8 +44,7 @@
         "upstream_path": "contracts/0.4.24/Lido.sol",
         "archive_file": "source/Lido.sol",
         "git_blob": "8fff6b8891831a2d3ca6c1224245554a5d7b4613",
-        "sha256": "0c5e7f1ec557cfc14dcab62c0e601868e202527984cdc7e3b1bf4242a0528149",
-        "verified_explorer_source_sha256": "0c5e7f1ec557cfc14dcab62c0e601868e202527984cdc7e3b1bf4242a0528149"
+        "sha256": "0c5e7f1ec557cfc14dcab62c0e601868e202527984cdc7e3b1bf4242a0528149"
       }
     },
     "si_lidity": {
@@ -63,35 +62,46 @@
         "upstream_path": "si-contracts/0.8.25/w/WstethStaker.sol",
         "archive_file": "source/WstethStaker.sol",
         "git_blob": "7c24fdc17f324cdd06232bc6ea69c012afd736bd",
-        "sha256": "33ee379b8e0fa0f667afe5d33007d8c59a05268789f85c4807f4a71e409cd38d",
-        "verified_explorer_source_sha256": "33ee379b8e0fa0f667afe5d33007d8c59a05268789f85c4807f4a71e409cd38d"
+        "sha256": "33ee379b8e0fa0f667afe5d33007d8c59a05268789f85c4807f4a71e409cd38d"
       }
     }
   },
   "verified_explorer": {
     "lido_implementation": {
       "api": "https://eth.blockscout.com/api/v2/smart-contracts/0x6ca84080381e43938476814be61b779a8bb6a600",
+      "address": "0x6ca84080381e43938476814be61b779a8bb6a600",
+      "archive_file": "explorer/blockscout-lido-implementation.json",
+      "archive_file_sha256": "c55829360849db32cc3894c81203d597e89a3cf0078126c0e39a2812c493b423",
       "contract_name": "Lido",
+      "file_path": "contracts/0.4.24/Lido.sol",
       "compiler": "v0.4.24+commit.e67f0147",
       "evm_version": "constantinople",
       "optimizer_enabled": true,
       "optimizer_runs": 200,
       "fully_verified": true,
       "source_matches_archive": true,
-      "full_abi_canonical_sha256": "6feb7f7d8c0339219ee2ba562cbd4b7ac54df851ffeef00dca6414e2dcd75f69"
+      "deployed_bytecode_matches_fixed_block_runtime": true,
+      "additional_sources": 36,
+      "abi_entries": 112
     },
     "referral_staker": {
       "api": "https://eth.blockscout.com/api/v2/smart-contracts/0xa88f0329c2c4ce51ba3fc619bbf44efe7120dd0d",
+      "address": "0xa88f0329c2c4ce51ba3fc619bbf44efe7120dd0d",
+      "archive_file": "explorer/blockscout-referral-staker.json",
+      "archive_file_sha256": "4c397fccc91c23fb7e909b569ae457fd83a41751e7ff4b1968c295472aab687a",
       "contract_name": "WstETHReferralStaker",
+      "file_path": "si-contracts/0.8.25/w/WstethStaker.sol",
       "compiler": "0.8.25+commit.b61c2a91",
       "evm_version": "cancun",
       "optimizer_enabled": true,
       "optimizer_runs": 200,
       "fully_verified": true,
       "source_matches_archive": true,
-      "full_abi_canonical_sha256": "484c860141d297384513d91006a3a0e1d05f447429bfe6959b26bede20db42a4"
+      "deployed_bytecode_matches_fixed_block_runtime": true,
+      "additional_sources": 4,
+      "abi_entries": 6
     },
-    "boundary": "Explorer verification metadata was inspected but its full API response is not archived; the package independently archives the exact official sources, official address records, and fixed-block runtimes. It does not locally recompile either contract."
+    "boundary": "The complete canonicalized Blockscout API responses are archived. Tests bind each response's primary source byte-for-byte to the official source archive, retain all additional sources and compiler settings, and bind its deployed bytecode byte-for-byte to the runtime returned for the named address by both fixed-block RPC operators. This relies on Blockscout's full-verification attestation and is not a local reproducible recompilation."
   },
   "abi": {
     "lido_submit": {

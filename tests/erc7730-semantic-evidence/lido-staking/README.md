@@ -21,10 +21,14 @@ implementation runtimes and the same `implementation()`, `proxyType()`,
 snapshot only; they are not a live-monitoring or future-code guarantee.
 
 The referral staker is a direct contract whose immutable `stETH()` and
-`wstETH()` bindings also agree across the two operators. Its official source is
-byte-identical to Blockscout's fully verified source. The fixed-block rate
-queries are retained only to demonstrate that output is live-state-dependent,
-not to promise that rate for a later transaction.
+`wstETH()` bindings also agree across the two operators. Complete canonicalized
+Blockscout verification responses are archived for it and the Lido
+implementation: each response's primary source is byte-identical to the
+official source archive, retains the additional sources and compiler settings,
+and carries deployed bytecode byte-identical to the fixed-block RPC runtime.
+This is an archived explorer attestation, not a local recompilation. The
+fixed-block rate queries are retained only to demonstrate that output is
+live-state-dependent, not to promise that rate for a later transaction.
 
 Primary sources:
 
