@@ -40,7 +40,7 @@ const FIXTURE_RECEIPT_HEX: &str =
 // original ABI width in addition to the terminal kind, so the device can
 // reject dirty zero/sign extension before trusted display publication.
 // The upstream fixture bytes remain test-only and outside the catalogue.
-const PROD_ROOT_HEX: &str = "ee8e503b18e8ebc3bb2e9e0ed8ecad2988ec109dae9c904980ea0e24f374661d";
+const PROD_ROOT_HEX: &str = "185f5e95f4ac7446247b63fbe4d1bd3c89c5fa12f9b339d584552080aae8e6b8";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
