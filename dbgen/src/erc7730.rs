@@ -3545,10 +3545,6 @@ fn terminal_semantics_from_type(ty: &str) -> Result<TerminalSemantics, String> {
     ))
 }
 
-fn terminal_kind_from_type(ty: &str) -> Result<TerminalKind, String> {
-    Ok(terminal_semantics_from_type(ty)?.kind)
-}
-
 fn terminal_semantics_for_path(
     path: &str,
     context_kind: u8,
@@ -4339,6 +4335,7 @@ fn compile_nested_block(
                 field,
                 abs_prefix,
                 members,
+                parsed,
                 &mut covered,
                 terminal_kind,
                 !is_hidden,
@@ -4523,6 +4520,7 @@ fn compile_nested_subfield_params(
     field: &FieldDef,
     abs_prefix: &str,
     members: &[(String, String)],
+    parsed: &ParsedFormatKey,
     covered: &mut [bool],
     terminal_kind: TerminalKind,
     shown: bool,
@@ -4588,7 +4586,12 @@ fn compile_nested_subfield_params(
             if !token_path_displays_identity(format_op_from_wire(format_op)?, terminal_kind) {
                 return Ok(None);
             }
-            if terminal_kind_from_type(&members[tok_ord as usize].1)? != TerminalKind::Address {
+            // A token identity must be the elementary scalar itself. Deriving a
+            // broad terminal kind from `address[]` strips its suffix, and a
+            // malicious EIP-712 tail may also define a custom struct literally
+            // named `address`; either case would reinterpret an opaque array /
+            // hashStruct word as a token address. Use the full parsed type path.
+            if !token_path_surfaces_exact_scalar_address(tp, CTX_EIP712, parsed) {
                 return Ok(None);
             }
             if shown {
@@ -6612,7 +6615,46 @@ fn compile_token_path(
     context_kind: u8,
     parsed: &ParsedFormatKey,
 ) -> Result<Vec<u8>, String> {
-    compile_path_inner(path, context_kind, parsed, true)
+    let program = compile_path_inner(path, context_kind, parsed, true)?;
+    let exact_scalar = token_path_surfaces_exact_scalar_address(path, context_kind, parsed);
+    let authenticated_target = program.as_slice() == NFT_COLLECTION_TO_PATH.as_slice();
+    let checked_extraction = token_path_uses_checked_address_extraction(path, context_kind)?;
+    if exact_scalar || authenticated_target || checked_extraction {
+        return Ok(program);
+    }
+    Err(format!(
+        "tokenPath `{path}` does not resolve to one authenticated token identity (an exact scalar address, `@.to`, or a checked 20-byte/address[] extraction)"
+    ))
+}
+
+/// Whether `path` requests one of the contract-calldata extraction forms whose
+/// type/width is proven by [`compile_token_path_extraction`]. This is evaluated
+/// only after the path compiler succeeds; it distinguishes one selected token
+/// address from the multi-value `[]` render-all program.
+fn token_path_uses_checked_address_extraction(
+    path: &str,
+    context_kind: u8,
+) -> Result<bool, String> {
+    if context_kind != CTX_CONTRACT {
+        return Ok(false);
+    }
+    let path = path.trim();
+    let rest = if let Some(rest) = path.strip_prefix('#') {
+        rest.trim_start_matches('.')
+    } else if path.starts_with('@') || path.starts_with('$') {
+        return Ok(false);
+    } else {
+        path
+    };
+    Ok(matches!(
+        tokenize_path(rest)?.last(),
+        Some(
+            PathSeg::ArrayIdx(_)
+                | PathSeg::ArrayLast
+                | PathSeg::ArraySlice(_, _)
+                | PathSeg::ArraySliceLast(_)
+        )
+    ))
 }
 
 fn compile_path_inner(
@@ -9458,6 +9500,28 @@ mod tests {
     }
 
     #[test]
+    fn token_paths_require_exact_address_endpoints_or_checked_extraction() {
+        let p =
+            parse_format_key("f(uint256 amount,bool flag,address token,address[] route)").unwrap();
+        for invalid in ["flag", "route.[]"] {
+            let err = compile_token_path(invalid, CTX_CONTRACT, &p)
+                .expect_err("a non-scalar or multi-value endpoint is not one token identity");
+            assert!(err.contains("token identity"), "{invalid}: {err}");
+        }
+        assert!(
+            compile_token_path("route", CTX_CONTRACT, &p).is_err(),
+            "a bare dynamic array is not a token identity either"
+        );
+        assert!(compile_token_path("token", CTX_CONTRACT, &p).is_ok());
+        assert!(compile_token_path("route.[0]", CTX_CONTRACT, &p).is_ok());
+        assert_eq!(
+            compile_token_path("@.to", CTX_CONTRACT, &p).unwrap(),
+            NFT_COLLECTION_TO_PATH,
+            "the authenticated target-address identity remains supported"
+        );
+    }
+
+    #[test]
     fn eip712_format_rejects_unknown_token_path_end_to_end() {
         let sig = "Permit(address token,uint256 amount)";
         let fmt = fmt_from_fields(
@@ -11217,6 +11281,36 @@ mod tests {
         .expect_err("an unsupported structured-array rank must be rejected before emission");
         assert!(err.contains("more than one array dimension"), "{err}");
         assert!(out.is_empty(), "no trusted format bytes may be emitted");
+    }
+
+    #[test]
+    fn nested_token_path_rejects_array_hash_and_primitive_named_struct() {
+        let sig = "Order(Outer outer)Outer(uint256 amount,address[] tokens)address(bytes32 salt)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"outer.amount","label":"Amount","format":"tokenAmount",
+               "params":{"tokenPath":"outer.tokens"},"visible":"always"},
+              {"path":"outer.tokens.[].salt","label":"Salt","format":"raw",
+               "visible":"always"}
+            ]"#,
+        );
+        check_eip712_field_completeness(sig, &fmt, &parsed).unwrap();
+        check_field_visibility(sig, &fmt, &parsed, CTX_EIP712).unwrap();
+        check_eip712_nested_field_completeness(sig, &fmt, &parsed).unwrap();
+
+        let mut ctx = test_ctx();
+        let mut pool = Pool::new();
+        assert!(
+            try_compile_eip712_nested(sig, &fmt, &parsed, &mut ctx, &mut pool, &BTreeMap::new(),)
+                .expect("the nested emitter must fail closed without a build error")
+                .is_none(),
+            "an array hashStruct word must never lower as a token address"
+        );
+        assert!(
+            compile_token_path("outer.tokens", CTX_EIP712, &parsed).is_err(),
+            "the shared flat tokenPath compiler must reject the same ambiguous endpoint"
+        );
     }
 
     #[test]
