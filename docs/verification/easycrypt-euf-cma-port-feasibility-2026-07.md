@@ -1191,3 +1191,35 @@ must ALSO grep the source for admit/assume tactics (+ axiom decls). Added `ec-ce
 admit/assume/axiom-free). All prior "0-admit" claims in this port were separately grep-verified, so they hold;
 but the gate script alone was insufficient. (Kin to the earlier lessons: `require` does not re-verify; a
 broken theory compiles EXIT 0.)
+
+### CORRECTION 2026-07-19 — scope + estimate calibration (supersedes any "novel +C work is done" phrasing)
+
+Advisor-flagged over-rounding + two verification gaps closed. The precise, honest state:
+
+**Hardened (good):** the okC-ghost's WHOLE +C dependency chain is CERTIFIED-0-ADMIT (comment-stripped admit
++ axiom sweep, ec-certify.sh fixed): WOTS_C_Real/Scheme/Interactive.ec, XMSSMT_C_Scheme/Reduction.ec,
+_okc_ghost_dev.ec — all 0 admit / 0 axiom (over the MM45 cited-TCB base). So the okC-ghost 0-admit is real
+through its dependency chain, not just a target-file grep.
+
+**What is actually PROVEN + audited (this whole program, +C-novel content):** exactly TWO +C swaps — the
+WOTS+C leaf bound (interactive-D.1) and the okC-propagation (okC-ghost, a sub-lemma of the FIRST ler_add
+branch of the core lemma). No structural +C wall surfaced in either.
+
+**What is NOT done (do NOT read "the novel +C work is done"):**
+ - the first-branch seam byequiv itself — 3 admits (#1 cube-build + the O_V oracle-hop that does not exist
+   yet, #A conseq, #B reconstruction / ghost-consumption = "real work not mechanical");
+ - the SECOND ler_add branch (pkco/trh tree reductions R_pkco_C/R_trh_C) — NOT BUILT;
+ - the XMSS-MT component-theorem assembly + its type-premise discharge;
+ - **FORS+C — OPEN**, a separate +C novelty (counter in H_msg / ITSR-with-counter): FORS_C10.ec carries 7
+   axiom-decls + an admit, and FORS_C/FORS_C_Tree/FORS_C_TreePort carry admits (FORS_C10_Multi is 0-admit).
+   Not "folded into leaf+ghost";
+ - the capstone SPHINCS+C composition and the A_wf discharge at the capstone (a deferred projection).
+ Generously, this is ~a third through ONE of several capstone pieces.
+
+**Estimate verdict — TEMPERED (this is NOT a disproof of 6-18 person-months):** a full session of max-effort
+multi-agent grinding (~2.8M subagent tokens) closed a sub-sub-lemma + its structural tail and STILL left the
+first branch open with a newly-discovered oracle-hop. "Mechanical" under-counted three times this session
+(the okC edit, the O_V hop, the #B ghost-bridge). The honest, narrower claim the evidence supports: *the +C
+swaps examined are tractable and no novel cryptographic wall has been found; AI-assisted, the remainder LOOKS
+like proof-engineering rather than research — IF the mechanical characterization holds, and it has repeatedly
+expanded.* Not "weeks not months" as a settled fact; "no wall found so far."
