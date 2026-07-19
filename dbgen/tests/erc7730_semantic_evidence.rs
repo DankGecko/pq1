@@ -33,6 +33,10 @@ fn lido_evidence_root() -> PathBuf {
     workspace_root().join("tests/erc7730-semantic-evidence/lido-wsteth-permit")
 }
 
+fn lido_queue_evidence_root() -> PathBuf {
+    workspace_root().join("tests/erc7730-semantic-evidence/lido-withdrawal-queue")
+}
+
 fn uniswap_evidence_root() -> PathBuf {
     workspace_root().join("tests/erc7730-semantic-evidence/uniswap-router02-single-hop")
 }
@@ -718,7 +722,13 @@ fn stakewise_deposit_and_exit_source_abi_descriptors_and_ir_agree() {
                 displayed_paths,
                 "{key} displayed operand inventory drifted"
             );
-            if key == "enterExitQueue" {
+            if key == "deposit" {
+                assert_eq!(
+                    descriptor_fields[0]["label"].as_str(),
+                    Some("Shares receiver"),
+                    "StakeWise deposit must name the address that receives the minted shares"
+                );
+            } else if key == "enterExitQueue" {
                 assert_eq!(descriptor_format["intent"].as_str(), Some("Exit vault"));
                 assert_eq!(descriptor_fields.len(), 2);
                 assert_eq!(
@@ -2166,6 +2176,499 @@ fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
         assert!(
             registry.known_calls.contains(&(1, contract, selector)),
             "{signature} must remain an exact known-call tuple"
+        );
+    }
+}
+
+#[test]
+fn lido_queue_evidence_pins_upgradeable_proxy_and_official_sources() {
+    let evidence = lido_queue_evidence_root();
+    let manifest = read_json(&evidence.join("manifest.json"));
+
+    assert_eq!(manifest["schema_version"].as_u64(), Some(1));
+    assert_eq!(
+        manifest["upstream"]["repository"].as_str(),
+        Some("https://github.com/lidofinance/core")
+    );
+    assert_eq!(manifest["upstream"]["release"].as_str(), Some("v2.0.0"));
+    assert_eq!(
+        manifest["upstream"]["commit"].as_str(),
+        Some("cadffa46a2b8ed6cfa1127fca2468bae1a82d6bf")
+    );
+    assert_eq!(
+        manifest["upstream"]["tree"].as_str(),
+        Some("96c71e4f4e342f54e3f16a37d1a526fe25caa40b")
+    );
+
+    for source in manifest["upstream"]["files"]
+        .as_array()
+        .expect("official source array")
+    {
+        let archive_file = required_str(source, "archive_file");
+        let bytes = fs::read(evidence.join(archive_file)).expect("read official Lido source");
+        assert_eq!(
+            sha256_hex(&bytes),
+            required_str(source, "sha256"),
+            "official source hash drifted for {archive_file}"
+        );
+    }
+
+    let deployment_spec = &manifest["upstream"]["deployment_record"];
+    let deployment_bytes = fs::read(evidence.join(required_str(deployment_spec, "archive_file")))
+        .expect("read official deployment record");
+    assert_eq!(
+        sha256_hex(&deployment_bytes),
+        required_str(deployment_spec, "sha256")
+    );
+    let deployment: Value =
+        serde_json::from_slice(&deployment_bytes).expect("parse official deployment record");
+    let deployed = &deployment["withdrawalQueueERC721"];
+    assert!(deployed["proxy"]["address"]
+        .as_str()
+        .expect("proxy address")
+        .eq_ignore_ascii_case(required_str(&manifest["deployment"], "proxy_address")));
+    assert!(deployed["implementation"]["address"]
+        .as_str()
+        .expect("implementation address")
+        .eq_ignore_ascii_case(required_str(
+            &manifest["deployment"],
+            "implementation_address_at_fixed_block"
+        )));
+    assert_eq!(
+        deployed["implementation"]["constructorArgs"][1].as_str(),
+        Some("Lido: stETH Withdrawal NFT")
+    );
+    assert_eq!(
+        deployed["implementation"]["constructorArgs"][2].as_str(),
+        Some("unstETH")
+    );
+
+    let receipt_spec = &manifest["deployment"]["fixed_block"];
+    let receipt_bytes = fs::read(evidence.join(required_str(receipt_spec, "receipt_file")))
+        .expect("read fixed-block RPC receipt");
+    assert_eq!(
+        sha256_hex(&receipt_bytes),
+        required_str(receipt_spec, "receipt_file_sha256")
+    );
+    let receipt: Value = serde_json::from_slice(&receipt_bytes).expect("parse RPC receipt");
+    assert_eq!(receipt["schema_version"].as_u64(), Some(1));
+    assert_eq!(receipt["chain_id"].as_u64(), Some(1));
+    let observations = receipt["observations"]
+        .as_array()
+        .expect("independent RPC observations");
+    assert_eq!(observations.len(), 2);
+    let expected_endpoints: BTreeSet<_> = receipt_spec["rpc_endpoints"]
+        .as_array()
+        .expect("manifest RPC endpoints")
+        .iter()
+        .map(|endpoint| endpoint.as_str().expect("RPC endpoint"))
+        .collect();
+    assert_eq!(
+        observations
+            .iter()
+            .map(|observation| observation["endpoint"].as_str().expect("RPC endpoint"))
+            .collect::<BTreeSet<_>>(),
+        expected_endpoints
+    );
+    for observation in observations {
+        for key in [
+            "hash",
+            "number",
+            "number_hex",
+            "state_root",
+            "timestamp",
+            "timestamp_utc",
+        ] {
+            assert_eq!(
+                observation["block"][key], receipt_spec[key],
+                "fixed-block field {key} disagrees"
+            );
+        }
+        assert!(observation["calls"]["proxy__getImplementation"]["decoded"]
+            .as_str()
+            .expect("decoded implementation")
+            .eq_ignore_ascii_case(required_str(
+                &manifest["deployment"],
+                "implementation_address_at_fixed_block"
+            )));
+        assert!(observation["calls"]["proxy__getAdmin"]["decoded"]
+            .as_str()
+            .expect("decoded admin")
+            .eq_ignore_ascii_case(required_str(
+                &manifest["deployment"],
+                "proxy_admin_at_fixed_block"
+            )));
+        assert_eq!(
+            observation["calls"]["proxy__getIsOssified"]["decoded"].as_bool(),
+            Some(false)
+        );
+    }
+    assert_eq!(
+        manifest["deployment"]["proxy_ossified_at_fixed_block"].as_bool(),
+        Some(false)
+    );
+
+    for (name, spec) in manifest["runtime_artifacts"]
+        .as_object()
+        .expect("runtime artifact map")
+    {
+        let artifact = fs::read(evidence.join(required_str(spec, "file")))
+            .expect("read archived runtime artifact");
+        assert_eq!(
+            sha256_hex(&artifact),
+            required_str(spec, "artifact_sha256"),
+            "{name} artifact hash drifted"
+        );
+        let runtime = decode_hex_text(&String::from_utf8(artifact).expect("runtime hex is UTF-8"));
+        assert_eq!(
+            runtime.len() as u64,
+            spec["bytes"].as_u64().expect("runtime byte count")
+        );
+        assert_eq!(keccak_hex(&runtime), required_str(spec, "keccak256"));
+        for observation in observations {
+            assert_eq!(
+                observation["code"][name]["bytes"], spec["bytes"],
+                "{name} RPC byte count disagrees"
+            );
+            assert_eq!(
+                observation["code"][name]["keccak256"], spec["keccak256"],
+                "{name} RPC code hash disagrees"
+            );
+        }
+    }
+
+    let proxy = normalized_whitespace(
+        &fs::read_to_string(evidence.join("source/OssifiableProxy.sol"))
+            .expect("read official proxy source"),
+    );
+    assert!(proxy.contains(
+        "function proxy__upgradeTo(address newImplementation_) external onlyAdmin { _upgradeTo(newImplementation_); }"
+    ));
+    assert!(proxy.contains(
+        "modifier onlyAdmin() { address admin = _getAdmin(); if (admin == address(0)) { revert ProxyIsOssified(); }"
+    ));
+    assert!(manifest["residuals"]
+        .as_array()
+        .expect("evidence residuals")
+        .iter()
+        .any(|residual| residual
+            .as_str()
+            .is_some_and(|text| text.contains("admin-upgradeable"))));
+}
+
+#[test]
+fn lido_queue_source_abi_descriptor_and_ir_agree_on_five_routes_and_one_refusal() {
+    let root = workspace_root();
+    let evidence = lido_queue_evidence_root();
+    let manifest = read_json(&evidence.join("manifest.json"));
+    let routes = manifest["routes"].as_array().expect("Lido route array");
+    assert_eq!(routes.len(), 6);
+
+    let expected = BTreeMap::from([
+        (
+            "approve(address,uint256)",
+            (
+                "admitted",
+                vec![
+                    ("Approval target", "#._to", "addressName"),
+                    ("Request ID", "#._requestId", "raw"),
+                ],
+            ),
+        ),
+        (
+            "claimWithdrawal(uint256)",
+            ("admitted", vec![("Request ID", "#._requestId", "raw")]),
+        ),
+        (
+            "safeTransferFrom(address,address,uint256)",
+            (
+                "admitted",
+                vec![
+                    ("From", "#._from", "addressName"),
+                    ("To", "#._to", "addressName"),
+                    ("Request ID", "#._requestId", "raw"),
+                ],
+            ),
+        ),
+        (
+            "setApprovalForAll(address,bool)",
+            (
+                "admitted",
+                vec![
+                    ("Operator", "#._operator", "addressName"),
+                    ("Access rights", "#._approved", "enum"),
+                ],
+            ),
+        ),
+        (
+            "transferFrom(address,address,uint256)",
+            (
+                "admitted",
+                vec![
+                    ("From", "#._from", "addressName"),
+                    ("To", "#._to", "addressName"),
+                    ("Request ID", "#._requestId", "raw"),
+                ],
+            ),
+        ),
+        (
+            "requestWithdrawals(uint256[],address)",
+            (
+                "refused",
+                vec![
+                    ("Amount", "#._amounts.[]", "tokenAmount"),
+                    ("Initial NFT owner", "#._owner", "addressName"),
+                ],
+            ),
+        ),
+    ]);
+    assert_eq!(
+        routes
+            .iter()
+            .map(|route| required_str(route, "canonical_signature"))
+            .collect::<BTreeSet<_>>(),
+        expected.keys().copied().collect()
+    );
+    for route in routes {
+        let signature = required_str(route, "canonical_signature");
+        assert_eq!(
+            required_str(route, "selector"),
+            format!("0x{}", hex::encode(&keccak256(signature.as_bytes())[..4]))
+        );
+        assert_eq!(
+            required_str(route, "status"),
+            expected.get(signature).expect("known Lido route").0
+        );
+    }
+
+    let source_files: BTreeMap<_, _> = manifest["upstream"]["files"]
+        .as_array()
+        .expect("official source array")
+        .iter()
+        .map(|source| {
+            let file = required_str(source, "archive_file");
+            (
+                file,
+                normalized_whitespace(
+                    &fs::read_to_string(evidence.join(file)).expect("read official source"),
+                ),
+            )
+        })
+        .collect();
+    let queue = &source_files["source/WithdrawalQueue.sol"];
+    assert_fragments_in_order(
+        queue,
+        &[
+            "function requestWithdrawals(uint256[] calldata _amounts, address _owner)",
+            "if (_owner == address(0)) _owner = msg.sender;",
+            "requestIds = new uint256[](_amounts.length);",
+            "requestIds[i] = _requestWithdrawal(_amounts[i], _owner);",
+        ],
+    );
+    assert_fragments_in_order(
+        queue,
+        &[
+            "function _requestWithdrawal(uint256 _amountOfStETH, address _owner)",
+            "STETH.transferFrom(msg.sender, address(this), _amountOfStETH);",
+            "uint256 amountOfShares = STETH.getSharesByPooledEth(_amountOfStETH);",
+            "requestId = _enqueue(uint128(_amountOfStETH), uint128(amountOfShares), _owner);",
+            "_emitTransfer(address(0), _owner, requestId);",
+        ],
+    );
+    assert!(queue.contains(
+        "function claimWithdrawal(uint256 _requestId) external { _claim(_requestId, _findCheckpointHint(_requestId, 1, getLastCheckpointIndex()), msg.sender); _emitTransfer(msg.sender, address(0), _requestId); }"
+    ));
+    let nft = &source_files["source/WithdrawalQueueERC721.sol"];
+    assert_fragments_in_order(
+        nft,
+        &[
+            "function approve(address _to, uint256 _requestId) external override",
+            "_approve(_to, _requestId);",
+            "function setApprovalForAll(address _operator, bool _approved) external override",
+            "_setApprovalForAll(msg.sender, _operator, _approved);",
+            "function safeTransferFrom(address _from, address _to, uint256 _requestId) external override",
+            "safeTransferFrom(_from, _to, _requestId, \"\");",
+            "function transferFrom(address _from, address _to, uint256 _requestId) external override",
+            "_transfer(_from, _to, _requestId);",
+        ],
+    );
+    assert_fragments_in_order(
+        nft,
+        &[
+            "function _transfer(address _from, address _to, uint256 _requestId) internal",
+            "delete _getTokenApprovals()[_requestId];",
+            "request.owner = _to;",
+            "_emitTransfer(_from, _to, _requestId);",
+            "function _approve(address _to, uint256 _requestId) internal",
+            "_getTokenApprovals()[_requestId] = _to;",
+            "function _setApprovalForAll(address _owner, address _operator, bool _approved) internal",
+            "_getOperatorApprovals()[_owner][_operator] = _approved;",
+        ],
+    );
+    let base = &source_files["source/WithdrawalQueueBase.sol"];
+    assert_fragments_in_order(
+        base,
+        &[
+            "function _claim(uint256 _requestId, uint256 _hint, address _recipient) internal",
+            "if (request.owner != msg.sender) revert NotOwner(msg.sender, request.owner);",
+            "request.claimed = true;",
+            "uint256 ethWithDiscount = _calculateClaimableEther(request, _requestId, _hint);",
+            "_sendValue(_recipient, ethWithDiscount);",
+        ],
+    );
+
+    let abi_spec = &manifest["abi"];
+    let abi_bytes = fs::read(evidence.join(required_str(abi_spec, "archive_file")))
+        .expect("read Lido route ABI");
+    assert_eq!(
+        sha256_hex(&abi_bytes),
+        required_str(abi_spec, "archive_file_sha256")
+    );
+    let abi: Value = serde_json::from_slice(&abi_bytes).expect("parse Lido route ABI");
+    let abi_entries = abi.as_array().expect("Lido ABI array");
+    assert_eq!(abi_entries.len(), routes.len());
+    let abi_signatures: BTreeSet<_> = abi_entries
+        .iter()
+        .map(|entry| {
+            assert_eq!(entry["type"].as_str(), Some("function"));
+            assert_eq!(entry["stateMutability"].as_str(), Some("nonpayable"));
+            format!(
+                "{}({})",
+                entry["name"].as_str().expect("ABI function name"),
+                entry["inputs"]
+                    .as_array()
+                    .expect("ABI inputs")
+                    .iter()
+                    .map(|input| input["type"].as_str().expect("ABI input type"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        })
+        .collect();
+    assert_eq!(
+        abi_signatures,
+        expected.keys().map(|key| (*key).to_owned()).collect()
+    );
+
+    let curated = root.join(
+        "secure/data/erc7730/curations/files/registry/lido/calldata-WithdrawalQueueERC721.json",
+    );
+    let vendored =
+        root.join("secure/data/erc7730-registry/registry/lido/calldata-WithdrawalQueueERC721.json");
+    let descriptor_bytes = fs::read(&curated).expect("read curated Lido descriptor");
+    assert_eq!(
+        descriptor_bytes,
+        fs::read(&vendored).expect("read vendored Lido descriptor"),
+        "curated and installed Lido queue descriptors diverged"
+    );
+    let descriptor: Value =
+        serde_json::from_slice(&descriptor_bytes).expect("parse Lido queue descriptor");
+    let deployment = &descriptor["context"]["contract"]["deployments"][0];
+    assert_eq!(deployment["chainId"].as_u64(), Some(1));
+    assert!(deployment["address"]
+        .as_str()
+        .expect("descriptor deployment")
+        .eq_ignore_ascii_case(required_str(&manifest["deployment"], "proxy_address")));
+    assert_eq!(
+        descriptor["metadata"]["enums"]["operatorApproval"]["0"].as_str(),
+        Some("Revoke all")
+    );
+    assert_eq!(
+        descriptor["metadata"]["enums"]["operatorApproval"]["1"].as_str(),
+        Some("Grant all")
+    );
+
+    let canonicalize = |authored: &str| {
+        let (name, tail) = authored.split_once('(').expect("authored signature");
+        let params = tail.strip_suffix(')').expect("signature close");
+        let types = params
+            .split(',')
+            .filter(|param| !param.trim().is_empty())
+            .map(|param| param.split_ascii_whitespace().next().expect("input type"))
+            .collect::<Vec<_>>();
+        format!("{name}({})", types.join(","))
+    };
+    let descriptor_formats = descriptor["display"]["formats"]
+        .as_object()
+        .expect("descriptor formats");
+    for (signature, (_, expected_fields)) in &expected {
+        let matches: Vec<_> = descriptor_formats
+            .iter()
+            .filter(|(authored, _)| canonicalize(authored) == *signature)
+            .collect();
+        assert_eq!(matches.len(), 1, "exact descriptor route {signature}");
+        let fields = matches[0].1["fields"]
+            .as_array()
+            .expect("descriptor fields");
+        assert_eq!(fields.len(), expected_fields.len());
+        for (field, (label, path, format)) in fields.iter().zip(expected_fields) {
+            assert_eq!(field["label"].as_str(), Some(*label));
+            assert_eq!(field["path"].as_str(), Some(*path));
+            assert_eq!(field["format"].as_str(), Some(*format));
+        }
+    }
+    let request = descriptor_formats
+        .iter()
+        .find(|(authored, _)| canonicalize(authored) == "requestWithdrawals(uint256[],address)")
+        .expect("requestWithdrawals descriptor format")
+        .1;
+    assert_eq!(
+        request["fields"][1]["params"]["senderAddress"][0].as_str(),
+        Some("0x0000000000000000000000000000000000000000")
+    );
+
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+        .expect("build production ERC20 capability corpus");
+    let registry_root = root.join("secure/data/erc7730-registry");
+    let (registry, _) = build_db_tolerant_with_erc20_capabilities(
+        &registry_root.join("registry"),
+        &root.join("secure/data/erc7730/policy.toml"),
+        Some(&registry_root),
+        &erc20.capabilities,
+    )
+    .expect("build production ERC-7730 registry");
+    let entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-WithdrawalQueueERC721.json")
+        })
+        .collect();
+    assert_eq!(entries.len(), 1);
+    let entry = entries[0];
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Lido queue IR parses");
+    let admitted_selectors: BTreeSet<_> = routes
+        .iter()
+        .filter(|route| required_str(route, "status") == "admitted")
+        .map(|route| {
+            decode_hex_text(required_str(route, "selector"))
+                .try_into()
+                .expect("selector width")
+        })
+        .collect();
+    assert_eq!(
+        ir.format_iter()
+            .map(|format| format.expect("Lido queue format parses").selector)
+            .collect::<BTreeSet<_>>(),
+        admitted_selectors
+    );
+    for route in routes {
+        let selector: [u8; 4] = decode_hex_text(required_str(route, "selector"))
+            .try_into()
+            .expect("selector width");
+        assert_eq!(
+            ir.find_format_by_selector(&selector)
+                .expect("Lido queue format table parses")
+                .is_some(),
+            required_str(route, "status") == "admitted"
+        );
+        assert!(
+            registry
+                .known_calls
+                .contains(&(entry.chain_id, entry.contract, selector)),
+            "{} must remain an exact known-call tuple",
+            required_str(route, "canonical_signature")
         );
     }
 }

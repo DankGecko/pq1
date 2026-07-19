@@ -32,7 +32,7 @@
         "intent": "Stake ETH",
         "fields": [
           {
-            "label": "Rewards receiver",
+            "label": "Shares receiver",
             "format": "addressName",
             "params": { "types": ["eoa", "wallet"], "sources": ["local", "ens"] },
             "path": "#.receiver",

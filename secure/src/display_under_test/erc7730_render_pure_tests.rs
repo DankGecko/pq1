@@ -1158,25 +1158,167 @@ fn usdt_zero_approve_without_matching_erc20_capability_keeps_approve_intent() {
 }
 
 #[test]
-fn lido_erc721_zero_token_id_never_becomes_revoke_approval() {
-    // ERC-721 deliberately shares approve(address,uint256). A verified
-    // descriptor and canonical two-word calldata are therefore insufficient
-    // to claim ERC-20 revocation semantics without a matching ERC-20 metadata
-    // capability.
+fn lido_withdrawal_queue_admitted_routes_bind_every_displayed_operand() {
+    #[derive(Clone, Copy)]
+    enum ExpectedField {
+        Address(&'static str),
+        Raw(&'static str),
+        Approval,
+    }
+
     let res = build_registry();
     let entry = find_leaf(res, "calldata-WithdrawalQueueERC721.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Lido NFT leaf");
     let tx = envelope(1, entry.contract);
-    let calldata = calldata_approve([0x44; 20], U256::zero());
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &NameResolver::new())
-        .expect("render ERC-721 approve token id zero");
+    let resolver = NameResolver::new();
+    let signer = [0x91; 20];
+    let render = |call: &[u8]| {
+        render_erc7730_pages_with_signer_checked(&tx, call, &verified, None, &resolver, &signer)
+    };
+    let assert_field = |pages: &Pages, field: ExpectedField, word: &[u8; 32]| match field {
+        ExpectedField::Address(label) => {
+            let address: [u8; 20] = word[12..].try_into().expect("address word");
+            assert_full_address_field_page(pages, label, &address);
+        }
+        ExpectedField::Raw(label) => assert_raw_word_pages(pages, label, word),
+        ExpectedField::Approval => {
+            let label = match word[31] {
+                0 if word[..31].iter().all(|byte| *byte == 0) => "Revoke all",
+                1 if word[..31].iter().all(|byte| *byte == 0) => "Grant all",
+                _ => panic!("test supplied a noncanonical bool"),
+            };
+            assert_eq!(
+                page_strs(pages, find_page_by_label(pages, "Access rights")),
+                [
+                    "Access rights".to_string(),
+                    label.to_string(),
+                    "".to_string(),
+                    "".to_string(),
+                ]
+            );
+        }
+    };
 
-    let nft_intent = page_strs(&pages, intent_page_index(&pages));
-    assert_eq!(nft_intent[0], "Approve unstETH");
-    assert_eq!(nft_intent[1], "NFT");
-    assert!(dump_pages(&pages).contains("Request ID"));
-    assert!(!dump_pages(&pages).contains("Revoke approval"));
+    let cases = [
+        (
+            "approve(address,uint256)",
+            vec![abi_address_word([0x11; 20]), u256_from_u64(117_001).0],
+            vec![
+                ExpectedField::Address("Approval target"),
+                ExpectedField::Raw("Request ID"),
+            ],
+        ),
+        (
+            "claimWithdrawal(uint256)",
+            vec![u256_from_u64(117_002).0],
+            vec![ExpectedField::Raw("Request ID")],
+        ),
+        (
+            "safeTransferFrom(address,address,uint256)",
+            vec![
+                abi_address_word([0x21; 20]),
+                abi_address_word([0x22; 20]),
+                u256_from_u64(117_003).0,
+            ],
+            vec![
+                ExpectedField::Address("From"),
+                ExpectedField::Address("To"),
+                ExpectedField::Raw("Request ID"),
+            ],
+        ),
+        (
+            "transferFrom(address,address,uint256)",
+            vec![
+                abi_address_word([0x31; 20]),
+                abi_address_word([0x32; 20]),
+                u256_from_u64(117_004).0,
+            ],
+            vec![
+                ExpectedField::Address("From"),
+                ExpectedField::Address("To"),
+                ExpectedField::Raw("Request ID"),
+            ],
+        ),
+        (
+            "setApprovalForAll(address,bool)",
+            vec![abi_address_word([0x41; 20]), u256_from_u64(1).0],
+            vec![ExpectedField::Address("Operator"), ExpectedField::Approval],
+        ),
+    ];
+
+    for (signature, words, fields) in cases {
+        assert_eq!(words.len(), fields.len());
+        let calldata = calldata_static(signature, &words);
+        assert_selector_matches(&verified.ir, &calldata, signature);
+        let rendered =
+            render(&calldata).unwrap_or_else(|err| panic!("render {signature}: {err:?}"));
+        assert_all_pages_printable(&rendered.pages);
+        assert_eq!(
+            rendered.transcript_receipt.page_count() as usize,
+            rendered.pages.len
+        );
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "receipt must bind every {signature} page"
+        );
+        for (field, word) in fields.iter().copied().zip(words.iter()) {
+            assert_field(&rendered.pages, field, word);
+        }
+
+        for (word_index, field) in fields.iter().copied().enumerate() {
+            let mut mutated_words = words.clone();
+            match field {
+                ExpectedField::Approval => mutated_words[word_index] = [0u8; 32],
+                ExpectedField::Address(_) | ExpectedField::Raw(_) => {
+                    mutated_words[word_index][31] ^= 1;
+                }
+            }
+            let mutated_calldata = calldata_static(signature, &mutated_words);
+            let mutated = render(&mutated_calldata).unwrap_or_else(|err| {
+                panic!("render mutated {signature} word {word_index}: {err:?}")
+            });
+            assert_field(&mutated.pages, field, &mutated_words[word_index]);
+            assert_ne!(
+                rendered.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "mutating {signature} word {word_index} must change trusted pages"
+            );
+            assert!(
+                !rendered
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "mutating {signature} word {word_index} must change the transcript receipt"
+            );
+        }
+    }
+
+    // `_to == address(0)` can clear an ERC-721 token approval. The device must
+    // show the exact zero target without guessing approve-vs-revoke semantics.
+    let zero_target = calldata_static(
+        "approve(address,uint256)",
+        &[abi_address_word([0u8; 20]), u256_from_u64(117_005).0],
+    );
+    let zero_render = render(&zero_target).expect("render branch-neutral zero approval target");
+    assert_full_address_field_page(&zero_render.pages, "Approval target", &[0u8; 20]);
+    let zero_intent = page_strs(&zero_render.pages, intent_page_index(&zero_render.pages));
+    assert_eq!(zero_intent[0], "Set unstETH NFT");
+    assert_eq!(zero_intent[1], "approval");
+    assert!(!dump_pages(&zero_render.pages).contains("Revoke approval"));
+
+    let noncanonical_bool = calldata_static(
+        "setApprovalForAll(address,bool)",
+        &[abi_address_word([0x41; 20]), u256_from_u64(2).0],
+    );
+    assert!(
+        matches!(
+            render(&noncanonical_bool),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+        ),
+        "ABI bool word 2 must hard-refuse rather than render an unknown choice"
+    );
 }
 
 #[test]
@@ -2670,7 +2812,7 @@ fn positive_serenita_deposit_binds_native_value_receiver_and_complete_referrer()
             && amount_rows.iter().any(|row| row.contains("ETH")),
         "bound native amount missing: {amount_rows:?}"
     );
-    assert_full_address_field_page(&rendered.pages, "Rewards receiver", &receiver);
+    assert_full_address_field_page(&rendered.pages, "Shares receiver", &receiver);
     let referrer_word = abi_address_word(referrer);
     assert_raw_word_pages(&rendered.pages, "Referrer", &referrer_word);
 
@@ -2822,7 +2964,7 @@ fn positive_p2p_stakewise_deposits_bind_receiver_referrer_and_native_value() {
             page_strs(&rendered.pages, intent_page_index(&rendered.pages))[0],
             "Stake ETH with p"
         );
-        assert_full_address_field_page(&rendered.pages, "Client address", &receiver);
+        assert_full_address_field_page(&rendered.pages, "Shares receiver", &receiver);
         assert_full_address_field_page(&rendered.pages, "Referrer address", &referrer);
         let amount_rows = page_strs(
             &rendered.pages,
@@ -4700,122 +4842,38 @@ fn positive_synthetic_ref_field_renders_bound_token_amount() {
     );
 }
 
-/// The REAL registry Lido `requestWithdrawals` leaf — a `tokenAmount` `uint256[]`
-/// array (the synthetic fixture uses `format:amount`; EVERY registry `uint256[]`
-/// uses `tokenAmount`, so this is the shape the synthetic cannot exercise, and
-/// the render-faithfulness spot-check on a real registry descriptor).
-/// BOUND branch: with Merkle-verified stETH metadata the shared token is
-/// resolved ONCE and every element renders as a scaled `stETH` amount.
+/// Lido treats `_owner == address(0)` as the transaction sender, while nonzero
+/// values select an independent initial NFT owner. The current device cannot
+/// evaluate `senderAddress`, so neither branch may inherit trusted wording.
 #[test]
-fn positive_registry_lido_tokenamount_array_bound_renders_steth() {
+fn lido_request_withdrawals_zero_and_nonzero_owner_are_no_format() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-WithdrawalQueueERC721.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-
-    // 1.0 / 2.5 / 0.3 stETH (18 decimals).
-    let amounts = [
-        u256_from_u64(1_000_000_000_000_000_000),
-        u256_from_u64(2_500_000_000_000_000_000),
-        u256_from_u64(300_000_000_000_000_000),
-    ];
-    let calldata = rw_calldata(&amounts, [0x55u8; 20]);
-    assert_selector_matches(
-        &verified.ir,
-        &calldata,
-        "requestWithdrawals(uint256[],address)",
-    );
-
-    // Registry `token` is the stETH constant (0xae7ab9…); supply its metadata.
-    let steth: [u8; 20] = hex::decode("ae7ab96520DE3A18E5e111B5EaAb095312D7fE84")
-        .unwrap()
-        .try_into()
-        .unwrap();
-    let steth_meta = Erc20Metadata {
-        chain_id: 1,
-        contract: steth,
-        decimals: 18,
-        name: b"Liquid staked Ether 2.0",
-        symbol: b"stETH",
-    };
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Lido NFT leaf");
+    let signature = "requestWithdrawals(uint256[],address)";
+    assert_selector_excluded(&verified.ir, signature);
     let tx = envelope(1, entry.contract);
     let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&steth_meta), &resolver)
-        .expect("render");
-    assert_all_pages_printable(&pages);
-
-    let dump = dump_pages(&pages);
-    assert!(dump.contains("3 items"), "count header missing:\n{dump}");
-    assert!(dump.contains(".5"), "amount 2.5 fraction missing:\n{dump}");
-    // WYSIWYS: EXACTLY the 3 element pages (label "Amount") show the bound
-    // symbol — proves the shared token was Merkle-bound and applied per element
-    // (not declined-to-blind), and array-tail-hiding stays closed (all shown).
-    let steth_element_pages = pages
-        .as_slice()
-        .iter()
-        .filter(|p| row_str(&p[0]) == "Amount" && (1..=2).any(|r| row_str(&p[r]).contains("stETH")))
-        .count();
-    assert_eq!(
-        steth_element_pages, 3,
-        "every element must render as stETH:\n{dump}"
-    );
-    // Bound → no UNVERIFIED token page.
-    let unverified = pages
-        .as_slice()
-        .iter()
-        .filter(|p| row_str(&p[0]).contains("UNVERIF"))
-        .count();
-    assert_eq!(
-        unverified, 0,
-        "bound token must not show UNVERIFIED:\n{dump}"
-    );
-    let _ = find_page_by_label(&pages, "Beneficiary");
-}
-
-/// Same registry leaf, UNBOUND branch (audit M-4 + M-1): with NO Merkle-verified
-/// metadata each element renders as a loud RAW integer (never a scaled decimal
-/// with an assumed scale) and the token identity is named EXACTLY ONCE — not
-/// per element.
-#[test]
-fn positive_registry_lido_tokenamount_array_unbound_raw_and_one_token_page() {
-    let res = build_registry();
-    let entry = find_leaf(res, "calldata-WithdrawalQueueERC721.json", 1);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-
-    let amounts = [
-        u256_from_u64(1_000_000_000_000_000_000),
-        u256_from_u64(2_500_000_000_000_000_000),
-    ];
-    let calldata = rw_calldata(&amounts, [0x55u8; 20]);
-    let tx = envelope(1, entry.contract);
-    let resolver = NameResolver::new();
-    // No stETH metadata supplied → unbound.
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
-    assert_all_pages_printable(&pages);
-
-    let dump = dump_pages(&pages);
-    // M-4: every element footer is the loud raw/unknown-scale marker.
-    let raw_footers = pages
-        .as_slice()
-        .iter()
-        .filter(|p| row_str(&p[3]).contains("raw, dec=?"))
-        .count();
-    assert_eq!(
-        raw_footers, 2,
-        "both unbound elements must render loud raw:\n{dump}"
-    );
-    // M-1: the token is named EXACTLY ONCE (a per-element page would be noise
-    // and could push the array past the page budget).
-    let token_pages = pages
-        .as_slice()
-        .iter()
-        .filter(|p| row_str(&p[0]).contains("UNVERIF"))
-        .count();
-    assert_eq!(
-        token_pages, 1,
-        "unbound token must be named exactly once:\n{dump}"
-    );
+    let signer = [0x92; 20];
+    for owner in [[0u8; 20], [0x55u8; 20]] {
+        let calldata = rw_calldata(&[u256_from_u64(1_000_000_000_000_000_000)], owner);
+        assert_eq!(
+            &calldata[..4],
+            &keccak256(signature.as_bytes())[..4],
+            "test must exercise the excluded requestWithdrawals selector"
+        );
+        assert!(
+            matches!(
+                render_erc7730_pages_with_signer_checked(
+                    &tx, &calldata, &verified, None, &resolver, &signer,
+                ),
+                Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+            ),
+            "owner={} must hard-refuse as NoFormat",
+            hex::encode(owner)
+        );
+    }
 }
 
 /// COMPLETENESS + FAITHFULNESS over the WHOLE prod registry: enumerates every

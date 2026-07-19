@@ -40,7 +40,7 @@ const FIXTURE_RECEIPT_HEX: &str =
 // Router02's two single-hop formats are deliberately excluded until PQ1 can
 // enforce their sentinel and partial-fill semantics. The upstream fixture
 // bytes remain test-only and outside the catalogue.
-const PROD_ROOT_HEX: &str = "70586b7e48f39100e56664879358a7ce9d88250cebdf25190377a101e82222d2";
+const PROD_ROOT_HEX: &str = "fda42f17fbb7b344f893c52199597e46edf3ae7413062d7cc44dd9bbfe6d2467";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1456,6 +1456,84 @@ fn lido_claim_positive_matches_actual_merkle_verified_pq1_pages_with_exact_waive
 }
 
 #[test]
+fn lido_withdrawal_queue_upstream_frontier_refuses_unsafe_requests_and_renders_transfers() {
+    let relative_fixture = "registry/lido/tests/calldata-WithdrawalQueueERC721.tests.json";
+    let registry = build_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == 1
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-WithdrawalQueueERC721.json")
+        })
+        .expect("accepted Lido WithdrawalQueue leaf");
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified =
+        verify_erc7730_bundle(&bundle, &registry.root).expect("Merkle-verify Lido queue");
+    cross_check_contract(&verified.ir, 1, &entry.contract).expect("bind Lido queue");
+
+    for (case_index, signature) in [
+        (0usize, "requestWithdrawals(uint256[],address)"),
+        (
+            1,
+            "requestWithdrawalsWithPermit(uint256[],address,(uint256,uint256,uint8,bytes32,bytes32))",
+        ),
+        (3, "claimWithdrawals(uint256[],uint256[])"),
+    ] {
+        let (_, raw) = fixture_case(relative_fixture, case_index);
+        let parsed = eip1559::parse(&raw).expect("canonical unsigned Lido fixture");
+        assert_eq!(parsed.tx.to, Some(entry.contract));
+        assert_eq!(parsed.data.get(..4), Some(&keccak256(signature.as_bytes())[..4]));
+        assert!(matches!(
+            render_erc7730_pages(
+                &parsed.tx,
+                parsed.data,
+                &verified,
+                None,
+                &NameResolver::new(),
+            ),
+            Err(RenderErr::NoFormat)
+        ));
+    }
+
+    for (case_index, signature) in [
+        (4usize, "safeTransferFrom(address,address,uint256)"),
+        (5, "transferFrom(address,address,uint256)"),
+    ] {
+        let (_, raw) = fixture_case(relative_fixture, case_index);
+        let parsed = eip1559::parse(&raw).expect("canonical unsigned Lido transfer fixture");
+        assert_eq!(parsed.tx.to, Some(entry.contract));
+        assert_eq!(parsed.data.len(), 100, "selector plus three ABI words");
+        assert_eq!(
+            parsed.data.get(..4),
+            Some(&keccak256(signature.as_bytes())[..4])
+        );
+        let from: [u8; 20] = parsed.data[16..36].try_into().expect("from address");
+        let to: [u8; 20] = parsed.data[48..68].try_into().expect("to address");
+        let request_id: [u8; 32] = parsed.data[68..100].try_into().expect("request ID word");
+        let pages = render_erc7730_pages(
+            &parsed.tx,
+            parsed.data,
+            &verified,
+            None,
+            &NameResolver::new(),
+        )
+        .expect("render admitted Lido transfer fixture");
+        let rendered = normalized_rows(&pages);
+        let mut cursor = 0usize;
+        consume_normalized_token(&rendered, &mut cursor, "Transfer unstETH");
+        consume_normalized_token(&rendered, &mut cursor, "NFT");
+        consume_normalized_token(&rendered, &mut cursor, "From");
+        consume_full_address(&rendered, &mut cursor, &from);
+        consume_normalized_token(&rendered, &mut cursor, "To");
+        consume_full_address(&rendered, &mut cursor, &to);
+        consume_normalized_token(&rendered, &mut cursor, "Request ID");
+        consume_raw_word(&rendered, &mut cursor, &request_id);
+    }
+}
+
+#[test]
 fn lido_claim_fixture_bundle_and_binding_mutations_fail_closed() {
     let (_, raw) = fixture_case(
         "registry/lido/tests/calldata-WithdrawalQueueERC721.tests.json",
@@ -1680,7 +1758,7 @@ fn serenita_deposit_and_exit_fixtures_match_corrected_pq1_semantics() {
                 assert_eq!(referrer, [0u8; 32]);
 
                 consume_normalized_token(&rendered, &mut cursor, "Stake ETH");
-                consume_normalized_token(&rendered, &mut cursor, "Rewards receiver");
+                consume_normalized_token(&rendered, &mut cursor, "Shares receiver");
                 consume_full_address(&rendered, &mut cursor, &receiver);
                 consume_normalized_token(&rendered, &mut cursor, "Amount to stake");
                 consume_normalized_token(&rendered, &mut cursor, "149 ETH");

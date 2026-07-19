@@ -16,7 +16,7 @@
         "intent": "Stake ETH with p2p",
         "fields": [
           {
-            "label": "Client address",
+            "label": "Shares receiver",
             "format": "addressName",
             "params": { "types": ["eoa", "wallet", "contract"] },
             "path": "#.receiver",

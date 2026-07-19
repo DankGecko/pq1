@@ -559,7 +559,7 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
         .map(|field| field.expect("generated Serenita field parses"))
         .collect();
     assert_eq!(fields.len(), 3);
-    assert_eq!(fields[0].label, b"Rewards receiver");
+    assert_eq!(fields[0].label, b"Shares receiver");
     assert_eq!(
         FormatOp::try_from(fields[0].format_op),
         Ok(FormatOp::AddressName)
@@ -688,6 +688,18 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
             actual_selectors, expected_selectors,
             "only the formerly refused claim route may join the two existing P2P formats"
         );
+        let deposit_selector: [u8; 4] = keccak256(b"deposit(address,address)")[..4]
+            .try_into()
+            .expect("selector width");
+        let deposit = ir
+            .find_format_by_selector(&deposit_selector)
+            .expect("P2P vault format table parses")
+            .expect("P2P deposit remains admitted");
+        let deposit_fields: Vec<_> = deposit
+            .fields()
+            .map(|field| field.expect("generated P2P deposit field parses"))
+            .collect();
+        assert_eq!(deposit_fields[0].label, b"Shares receiver");
         let exit_selector = assert_stakewise_exit_format(&ir, "P2P");
         assert!(
             result
@@ -904,6 +916,155 @@ fn registry_lido_staking_admits_visible_referrals_on_exact_mainnet_contracts() {
         assert!(
             result.known_calls.contains(&(1, contract, selector)),
             "newly clear-signable Lido tuple was not already known"
+        );
+    }
+}
+
+#[test]
+fn registry_lido_withdrawal_queue_pins_five_honest_routes_and_refuses_sender_sentinel() {
+    let result = build_registry();
+    let entries: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-WithdrawalQueueERC721.json")
+        })
+        .collect();
+    assert_eq!(entries.len(), 1);
+    let entry = entries[0];
+    assert_eq!(entry.chain_id, 1);
+    assert_eq!(
+        hex::encode(entry.contract),
+        "889edc2edab5f40e902b864ad4d7ade8e412f9b1"
+    );
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Lido queue IR parses");
+
+    let admitted = [
+        "approve(address,uint256)",
+        "claimWithdrawal(uint256)",
+        "safeTransferFrom(address,address,uint256)",
+        "setApprovalForAll(address,bool)",
+        "transferFrom(address,address,uint256)",
+    ];
+    let expected_selectors: BTreeSet<[u8; 4]> = admitted
+        .iter()
+        .map(|signature| {
+            keccak256(signature.as_bytes())[..4]
+                .try_into()
+                .expect("selector width")
+        })
+        .collect();
+    let actual_selectors: BTreeSet<_> = ir
+        .format_iter()
+        .map(|format| format.expect("Lido queue format parses").selector)
+        .collect();
+    assert_eq!(actual_selectors, expected_selectors);
+
+    let assert_format =
+        |signature: &str, intent: &[u8], expected_fields: &[(&[u8], FormatOp, TerminalKind)]| {
+            let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+                .try_into()
+                .expect("selector width");
+            let format = ir
+                .find_format_by_selector(&selector)
+                .expect("Lido queue format table parses")
+                .unwrap_or_else(|| panic!("admitted Lido route missing: {signature}"));
+            assert_eq!(format.intent, intent);
+            let fields: Vec<_> = format
+                .fields()
+                .map(|field| field.expect("Lido queue field parses"))
+                .collect();
+            assert_eq!(fields.len(), expected_fields.len());
+            for (index, (field, (label, op, terminal))) in
+                fields.iter().zip(expected_fields).enumerate()
+            {
+                assert_eq!(field.label, *label, "wrong label for {signature}");
+                assert_eq!(FormatOp::try_from(field.format_op), Ok(*op));
+                let params = parse_params(&ir, field.param_off).expect("Lido field params parse");
+                assert_eq!(params.visibility, Visibility::Always);
+                assert_eq!(params.terminal_kind, Some(*terminal));
+                assert_eq!(
+                    ir.path_bytes(field.path_off)
+                        .expect("Lido field path parses"),
+                    [
+                        PathOp::RootStructured as u8,
+                        PathOp::FieldIdx as u8,
+                        0,
+                        u8::try_from(index).expect("field ordinal fits u8"),
+                    ],
+                    "wrong signed operand path for {signature}"
+                );
+                if *op == FormatOp::Enum {
+                    assert!(params.enum_ref.is_some(), "enum route must bind its table");
+                }
+            }
+            assert!(result
+                .known_calls
+                .contains(&(entry.chain_id, entry.contract, selector)));
+        };
+
+    assert_format(
+        "approve(address,uint256)",
+        b"Set unstETH NFT approval",
+        &[
+            (
+                b"Approval target",
+                FormatOp::AddressName,
+                TerminalKind::Address,
+            ),
+            (b"Request ID", FormatOp::Raw, TerminalKind::Unsigned),
+        ],
+    );
+    assert_format(
+        "claimWithdrawal(uint256)",
+        b"Claim withdrawal",
+        &[(b"Request ID", FormatOp::Raw, TerminalKind::Unsigned)],
+    );
+    for signature in [
+        "safeTransferFrom(address,address,uint256)",
+        "transferFrom(address,address,uint256)",
+    ] {
+        assert_format(
+            signature,
+            b"Transfer unstETH NFT",
+            &[
+                (b"From", FormatOp::AddressName, TerminalKind::Address),
+                (b"To", FormatOp::AddressName, TerminalKind::Address),
+                (b"Request ID", FormatOp::Raw, TerminalKind::Unsigned),
+            ],
+        );
+    }
+    assert_format(
+        "setApprovalForAll(address,bool)",
+        b"Set approval for all unstETH NFTs",
+        &[
+            (b"Operator", FormatOp::AddressName, TerminalKind::Address),
+            (b"Access rights", FormatOp::Enum, TerminalKind::Bool),
+        ],
+    );
+
+    let refused = [
+        "requestWithdrawals(uint256[],address)",
+        "requestWithdrawalsWithPermit(uint256[],address,(uint256,uint256,uint8,bytes32,bytes32))",
+        "requestWithdrawalsWstETH(uint256[],address)",
+        "requestWithdrawalsWstETHWithPermit(uint256[],address,(uint256,uint256,uint8,bytes32,bytes32))",
+        "claimWithdrawals(uint256[],uint256[])",
+        "claimWithdrawalsTo(uint256[],uint256[],address)",
+    ];
+    for signature in refused {
+        let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+            .try_into()
+            .expect("selector width");
+        assert!(ir
+            .find_format_by_selector(&selector)
+            .expect("Lido queue format table parses")
+            .is_none());
+        assert!(
+            result
+                .known_calls
+                .contains(&(entry.chain_id, entry.contract, selector)),
+            "refused known route escaped the omission filter: {signature}"
         );
     }
 }

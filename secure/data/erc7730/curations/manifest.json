@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 779425,
-    "sha256": "9a42da733e22967c98422138ebb82e8bc6d65d502be0f14b37da3c3a3adc502b"
+    "bytes": 779819,
+    "sha256": "aa9088448863aaab036e7452006c3995886a2d69c7b52442ab2c27a79aacad53"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -71,7 +71,7 @@
     },
     {
       "path": "xtask/src/erc7730_curation.rs",
-      "sha256": "6065cb01f149701e9db4757d7d4cbf07fccd42579c01af11172734d9ca2dc03c"
+      "sha256": "65b5bba321ce7e1dd754be3e472b3fba5bc0b0cb05ab6e3ed59bc4e732e4fb98"
     },
     {
       "path": "xtask/src/erc7730_diff.rs",
@@ -119,6 +119,13 @@
       "replacement_sha256": "99ee45490b250eb53acac5184c337076a5d22761c07c8bcc72dc70ac81fddb64"
     },
     {
+      "path": "registry/lido/calldata-WithdrawalQueueERC721.json",
+      "upstream_bytes": 7615,
+      "upstream_sha256": "77043ebc26ebbc920c32363dfadb29fbeae64472090d7a4c45a70da59a3c430e",
+      "replacement_bytes": 8009,
+      "replacement_sha256": "fa917a725794ddaea9713cf85c96f7149d00899db56010efa11287305e02389d"
+    },
+    {
       "path": "registry/lido/calldata-stETH.json",
       "upstream_bytes": 2224,
       "upstream_sha256": "8ad18b90294c6facc208c6c27de85ea21642ed22a9d743d238326563d0cf0604",
@@ -157,8 +164,8 @@
       "path": "registry/p2p/calldata-NativeTokenVault.json",
       "upstream_bytes": 3691,
       "upstream_sha256": "900dbec13f7af5c9ce507f1261cd20d275befa87d052a4b29549a7e5867bbf47",
-      "replacement_bytes": 3900,
-      "replacement_sha256": "6861528f1fbad83b48028d85c657f74ce33af1da542fa73c4bc6a0cd9104aae5"
+      "replacement_bytes": 3901,
+      "replacement_sha256": "88c365a8098621e07ec3fea89e402d4af10de666b649bab8c75440789253f1c9"
     },
     {
       "path": "registry/p2p/calldata-P2pOrgUnlimitedEthDepositor.json",
@@ -178,8 +185,8 @@
       "path": "registry/serenita/calldata-EthVault.json",
       "upstream_bytes": 3782,
       "upstream_sha256": "8058769e34b7bf4d9bb48ba2040a416f99a0c41b27827b57df26cc4d6cfe19b3",
-      "replacement_bytes": 4200,
-      "replacement_sha256": "1c9b13ca4441848d993f6663997fa9b60babbfb99dbc5926ef3f8a408ca3ada8"
+      "replacement_bytes": 4199,
+      "replacement_sha256": "250b5e04754fe1ffefff48341e2384f59fe4ba2960dac430b1d6cbf3a7e100df"
     },
     {
       "path": "registry/threshold/calldata-L1BitcoinDepositor-address.json",

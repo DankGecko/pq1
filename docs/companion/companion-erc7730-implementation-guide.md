@@ -926,7 +926,7 @@ provenance remains blocked):
 <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 | Variant | Root | Catalog blob bytes | Compiled leaves |
 |---------|------|-------------------:|----------------:|
-| development (non-e2e) | `0x70586b7e48f39100e56664879358a7ce9d88250cebdf25190377a101e82222d2` | 363 935 | 429 |
+| development (non-e2e) | `0xfda42f17fbb7b344f893c52199597e46edf3ae7413062d7cc44dd9bbfe6d2467` | 363 935 | 429 |
 | e2e | `0x79375e5cd3d5aad1a6150cbbc1a5fb396ca38d01340f876246cf03913148855a` | 4 023 | 8 |
 <!-- END XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 
