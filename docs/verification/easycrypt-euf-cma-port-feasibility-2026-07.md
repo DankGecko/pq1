@@ -1570,3 +1570,53 @@ states its own Thm 5.2 bound.)
 
 ⇒ FOUNDATIONS QUESTION CLOSED. Two independent frontier models + the paper text converge. Next build items,
 both unblocked and independent: (1) grind-in-find for branch 2; (2) the member-audit discharge above.
+
+### 2026-07-19 — BOTH BUILD TRACKS LANDED (audited); plus a CRITICAL GATE DEFECT found + fixed
+
+Parallel workflow, independently adversarially audited (auditor did not rely on either self-report).
+**Both tracks PASS. Neither touched any certified file** (verified by git diff).
+
+**GATE DEFECT (found independently by BOTH agents; my bug, now fixed).** `scratch-ecc.sh` piped EasyCrypt
+through `tr|grep|grep|tail`, so `$?` was *tail's* and always 0 ⇒ `ec-certify.sh` always set `comp=OK` and
+reported CERTIFIED-0-ADMIT **even on files EasyCrypt REJECTED** (demo: a lemma proving `false` ⇒
+"cannot save an incomplete proof", still green). FIXED: the script now captures EasyCrypt's own rc via a
+sentinel and exits with it; the negative control correctly FAILS. **RE-VERIFIED with the fixed gate:
+XMSSMT_C_Reduction.ec, _seam_byequiv_wip.ec, _okc_ghost_dev.ec, _seam_tree_reductions_wip.ec and
+_member_audit_wip.ec are ALL genuinely CERTIFIED-0-ADMIT** — the defect only misfired when compilation
+actually failed, so no prior green claim was a false positive. The auditor additionally swept the transitive
+trust base (WOTS_C_Real/Scheme, XMSSMT_C_Scheme, WOTS_C_Interactive, upstream SPHINCS_PLUS.ec): all 0-admit.
+
+**TRACK A — grind-in-find: DONE (drafts/_seam_tree_reductions_wip.ec, 3 commits, CERTIFIED-0-ADMIT).**
+Both tree reductions restructured. Audited independently: brace-matched extraction of both `pick` bodies gives
+**ZERO `grindC` and ZERO `encode_msgWOTS_C`** (each now occurs exactly once, in `find`); **no `ps`/pseed module
+variable exists** in either reduction (the only seed touched is `find`'s parameter = the game's own `pp`;
+`O_THFC.init` ignores its arg and is called `init(witness)`, MM45-identical); and **both `find` bodies contain
+0 `O.query` and 0 `OC.query`**, rebuilding the cube with the pure `cf` chain function over the seeds `pick`
+sampled. `pick` is MM45-verbatim in the deletions-only sense — mechanically checked by normalising both bodies
+(undoing clone renames) and diffing against MM45, with the comparison harness itself negative-controlled
+(perturbing an oracle address arg / a loop bound / deleting an oracle call are each CAUGHT). The unsound
+design is now structurally unreachable: re-injecting `grindC ps` fails with "unknown variable or constant: ps".
+⇒ stock games for both branches, no new assumption.
+
+**TRACK B — member-audit: DONE (drafts/_member_audit_wip.ec, CERTIFIED-0-ADMIT).** Built more than scoped:
+`size_trco_input` (the FORS-layer trco input sits at member `8*n*k` — the only new size fact a top audit
+needs); the four-member set `mem4/in_thfc4 = {8n, 8n*len, 8n*2, 8n*k}` with `mem4_neq_dfC`,
+`all_in_thfc4_neq_dfC`, and `member_aware_disj_discharged_4` (built on the IMPORTED `member_sep_disj`, so no
+edit to the concurrently-owned file); `othfcma_query_mem4` / `owrap_query_mem4`; **`R_leaf_C_members4` — the
+concrete Hoare while-invariant audit over R_leaf's nested cube-build loops**, proving every reduction-owned
+`OC.query` records a member IN the set; `R_leaf_C_A_wf_MA_members4`; and the payoff
+**`leaf_reduction_MEUFGCMAWOTSC_bound_members4`** — the leaf bound with `A_wf_ht` replaced by a mechanically
+producible 4-set audit. KEY INSIGHT: the POSITIVE-set form is required — the existing `=8*n` twin
+`owrap_chainwalk_member8n` is UNUSABLE once pkco/trh entries exist (`all(=8n)` becomes false while
+`all in_thfc4` survives); the positive set is composable, strictly stronger than the terminal `<>dfC` form.
+Controls: `A_ht_dfC_breaks_members4` (negative — premise load-bearing) and `A_ht_trco` (**positive — a FORS
+trco query SATISFIES the 4-member premise but VIOLATES the 3-member one, proving the fourth member is
+NECESSARY once FORS is in the composed adversary**, not decorative).
+
+**HONEST RESIDUALS (Track B self-documented, auditor concurred):** (a) the concrete SPHINCS+C TOP reduction
+`R_top` DOES NOT EXIST — the end-to-end discharge is NOT closed, and the agent *deliberately declined* to build
+a free-floating stand-in "because it would be indistinguishable from faking the discharge"; (b) the four
+`dfC <> {8n, 8n*len, 8n*2, 8n*k}` facts remain THREADED HYPOTHESES (dfC is an abstract op, so the parameter
+arithmetic cannot be discharged in EC here); (c) R_leaf's forge-selection SOUNDNESS is still deferred
+(untouched by this track — the bound remains the D1-composition leg only); (d) the premise on A_ht is
+RESHAPED (into a mechanically-producible member-set audit), not eliminated.
