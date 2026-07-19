@@ -1315,3 +1315,36 @@ STILL OPEN toward the SPHINCS+C capstone: the SECOND ler_add branch byequiv (use
 R_SMDTTCRCPKCO_C/R_SMDTTCRCTRH_C, with the deferred-seed +C wrinkle); the component-theorem assembly (chain
 branch-1 + branch-2 + leaf bound, discharge the carried premises); FORS+C (separate +C novelty, OPEN); the
 capstone composition + premise discharge.
+
+### SCOPING 2026-07-19 — the SECOND branch is the first NO-TEMPLATE point: tree reductions must grind (novel modeling)
+
+Before grinding the second ler_add branch, a paper-scoping of the deferred-seed wrinkle (advisor-prompted).
+Findings:
+
+1. **The tree reductions genuinely must grind — MM45 gives NO template here.** `R_leaf_C` sidestepped grinding
+   by reducing to the WOTS+C *game* (grinded sigs come from the WOTS oracle). But `R_SMDTTCRCPKCO_C`/
+   `R_SMDTTCRCTRH_C` reduce to the pkco/trh *TCR games*, which provide no WOTS signing — so their `pick` must
+   build the pks itself, including the grind. Standard SPHINCS+ never grinds, so MM45's tree reductions don't;
+   a pre-committed reduction that needs seed-dependent grinding is a problem the base proof never faced. This
+   is the FIRST genuine +C novel-modeling point (not transcription-with-adaptation).
+
+2. **The module-var seed is DEAD, not deferred.** The typecheck-green `_seam_tree_reductions_wip.ec` grinds
+   with a module-var `ps` (line 100) that is witness-valued at `pick` and cannot provably equal the freshly
+   sampled game `pp` — unsound-as-written. Those modules are SCAFFOLDING, not partial soundness; do not count
+   them toward the second branch.
+
+3. **The sound path is grind-via-OC, and it fits on count but needs member-aware disjointness.** `grindC`/`ThC`
+   are pure ops (`ThC = thfc(...) ps ...`) that need the seed; the sound fix is to grind by iterating
+   `OC.query` for `ThC` (OC holds `pp`) until `predC`, a variable-length loop at pkcotype/member-`dfC`.
+   Termination rests on the finite counter type `CntrFT` + a good-counter-exists premise (WOTS_C_Real.ec:209).
+   MM45's `disj_relcqsadtcr` (WOTS_TW_ES.ec:1963) needs only DISJOINTNESS, not a fixed collection-query count,
+   so the variable prefix is tolerated on count. BUT the grinding queries (member `dfC`) are disjoint from the
+   pkco/trh targets (member `8n·len` / `8n·2`) by MEMBER, not by MM45's group-index — so the disjointness
+   argument needs the MEMBER-AWARE transcript machinery (the shape built for the leaf via interactive-D.1),
+   EXTENDED to the tree reductions. Not a wall; genuine +C design work reusing the leaf's member-separation.
+
+⇒ CHARACTER CHANGE (honest estimate update): the second branch is not byequiv transcription — it is
+soundness-design (restructure the tree reductions to grind-via-OC + build a member-aware disjointness for
+them + then the byequiv). No wall in sight, but this confirms the pattern sharpening: genuine design work
+recurs at each +C seam, and the tree layer is where MM45's template runs out. "Weeks of transcription" is the
+wrong model; "recurring novel modeling at each +C seam, AI-assisted" is the honest one.
