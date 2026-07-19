@@ -1780,9 +1780,63 @@ fn displayed_fixture_label(label: &str) -> String {
     String::from_utf8(displayed).expect("ASCII field label")
 }
 
+fn expected_flat_raw_transcript(
+    protocol_header: &[&str],
+    semantic_fields: &[(String, [u8; 32])],
+) -> Vec<String> {
+    let mut expected: Vec<String> = protocol_header
+        .iter()
+        .map(|row| normalize_text(row))
+        .collect();
+
+    for (label, word) in semantic_fields {
+        let label = normalize_text(label);
+        let encoded = hex::encode(word);
+        let chunks: Vec<String> = encoded
+            .as_bytes()
+            .chunks(16)
+            .map(|chunk| {
+                std::str::from_utf8(chunk)
+                    .expect("hex is ASCII")
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(chunks.len(), 4, "a raw word renders as two exact pages");
+        expected.extend([
+            label.clone(),
+            chunks[0].clone(),
+            chunks[1].clone(),
+            "1/2>next".to_string(),
+            label,
+            chunks[2].clone(),
+            chunks[3].clone(),
+            "2/2>next".to_string(),
+        ]);
+    }
+
+    expected.extend(
+        [
+            "Network:",
+            "Chain: 1",
+            "(mainnet)",
+            "> next",
+            "L=cancel",
+            "R=confirm",
+        ]
+        .iter()
+        .map(|row| normalize_text(row)),
+    );
+    expected
+}
+
+fn normalized_transcript_is_exact(rendered: &[String], expected: &[String]) -> bool {
+    rendered == expected
+}
+
 fn assert_flat_raw_eip712_fixture(
     relative_fixture: &str,
     source_name: &str,
+    expected_protocol_header: &[&str],
     expected_members: &[(&str, &str)],
 ) -> Vec<String> {
     assert!(
@@ -1821,17 +1875,13 @@ fn assert_flat_raw_eip712_fixture(
         .expect("fixture expectedTexts");
     assert_eq!(expected.len(), expected_members.len() * 2);
     let message = data["message"].as_object().expect("fixture message");
-    let mut cursor = 0usize;
+    let mut semantic_fields = Vec::with_capacity(expected_members.len());
     for (field_index, ((name, ty), pair)) in expected_members
         .iter()
         .zip(expected.chunks_exact(2))
         .enumerate()
     {
-        consume_normalized_token(
-            &rendered,
-            &mut cursor,
-            &displayed_fixture_label(pair[0].as_str().expect("upstream field label")),
-        );
+        let label = displayed_fixture_label(pair[0].as_str().expect("upstream field label"));
         let signed_word: [u8; 32] = encoded.encoded_data[field_index * 32..(field_index + 1) * 32]
             .try_into()
             .expect("encoded EIP-712 word");
@@ -1845,9 +1895,28 @@ fn assert_flat_raw_eip712_fixture(
             signed_word,
             "upstream expected text did not bind the signed `{name}` word"
         );
-        consume_raw_word(&rendered, &mut cursor, &signed_word);
+        semantic_fields.push((label, signed_word));
     }
+    let exact = expected_flat_raw_transcript(expected_protocol_header, &semantic_fields);
+    assert!(
+        normalized_transcript_is_exact(&rendered, &exact),
+        "unexpected or missing normalized row for {source_name}; expected={exact:?}; rendered={rendered:?}"
+    );
     rendered
+}
+
+#[test]
+fn flat_raw_exact_transcript_rejects_an_injected_semantic_row() {
+    let expected = expected_flat_raw_transcript(
+        &["Protocol", "> next"],
+        &[("Amount".to_string(), [0x11; 32])],
+    );
+    let mut injected = expected.clone();
+    injected.insert(6, "unexpectedspender".to_string());
+    assert!(
+        !normalized_transcript_is_exact(&injected, &expected),
+        "an unexpected semantic row must not pass as ignorable scaffolding"
+    );
 }
 
 #[test]
@@ -1855,6 +1924,7 @@ fn smartcredit_flat_static_positive_matches_actual_merkle_verified_pq1_pages() {
     let rendered = assert_flat_raw_eip712_fixture(
         "registry/smartcredit/tests/eip712-smartcredit.tests.json",
         "eip712-smartcredit.json",
+        &["SmartCredit.io", "SmartCredit", "> next"],
         &[
             ("collateralAddress", "address"),
             ("initialCollateralAmount", "uint256"),
@@ -1879,6 +1949,7 @@ fn pooltogether_bool_positive_matches_actual_merkle_verified_pq1_pages() {
     let rendered = assert_flat_raw_eip712_fixture(
         "registry/tally/tests/eip712-tally-ethereum-pooltogether-governor.tests.json",
         "eip712-tally-ethereum-pooltogether-governor.json",
+        &["PoolTogether Gov", "ernor Alpha", "> next"],
         &[("proposalId", "uint256"), ("support", "bool")],
     );
     assert!(
@@ -1895,6 +1966,7 @@ fn tally_bravo_uint8_positive_matches_actual_merkle_verified_pq1_pages() {
     let rendered = assert_flat_raw_eip712_fixture(
         "registry/tally/tests/eip712-tally-ethereum-bravo-governor.tests.json",
         "eip712-tally-ethereum-bravo-governor.json",
+        &["Uniswap Governor", "Uniswap Governo", "> next"],
         &[("proposalId", "uint256"), ("support", "uint8")],
     );
     assert!(
