@@ -1348,3 +1348,43 @@ soundness-design (restructure the tree reductions to grind-via-OC + build a memb
 them + then the byequiv). No wall in sight, but this confirms the pattern sharpening: genuine design work
 recurs at each +C seam, and the tree layer is where MM45's template runs out. "Weeks of transcription" is the
 wrong model; "recurring novel modeling at each +C seam, AI-assisted" is the honest one.
+
+### ADVERSARIAL REVIEW 2026-07-19 (GPT-5.6 + Kimi K3) — grind-via-OC is DEAD; do grind-in-find; and a FOUNDATIONS flag
+
+Two independent external reviews (codex/GPT-5.6 and Kimi K3, each reading the sources) of the proposed
+grind-via-OC design. They CONVERGE on both the disqualifier and the fix, and Kimi adds a foundations finding.
+
+**DISQUALIFIER (both, verified by me in source): grind-via-OC cannot win the stock pkco game.**
+`SM_DT_TCR_C`'s win requires `disj_lists twsO twsOC` on RAW TWEAKS (TweakableHashFunctions.eca ~:745), and
+the collection oracle records only the raw tweak (:586). `emb_tw ad = insubd(put(put(put (val ad) 0 0) 1 0) 3
+pkcotype)` (WOTS_C_Real.ec:80) — and `valid_idxvalspkco` forces indices 0,1 = 0, so EVERY valid pkcotype
+address at (kp,t,l) is THE SAME address as the pkco target. The reduction would query its own challenge
+tweak ⇒ the run is deterministically rejected. Member separation (dfC vs 8n·len) is real and provable but
+INVISIBLE to the stock win condition. (trh is asymmetric: targets at trhxtype vs grind at pkcotype ⇒ disjoint
+by type, stock game fine. Only pkco collides.)
+
+**MY CORE PREMISE WAS FALSE (both):** "the grind determines the chain heights" — no. In `pick` each WOTS chain
+is walked FULLY to `w-1`; `em` only selects which intermediates are REVEALED as `sigWOTS`. So pkWOTS tops,
+leaves, nodes, roots and ALL target inputs are grind-INDEPENDENT. `pick` never needed the seed.
+
+**THE FIX (both, converged): GRIND-IN-FIND.** `pick` becomes byte-verbatim MM45 (delete the grindC/
+encode_msgWOTS_C lines + the em-pluck; chains+nodes via OC, targets via O) ⇒ transcript identical to MM45 ⇒
+`dist_tweaks`/`disj_lists`/`fidx` arithmetic carry over unchanged. `find(pp)` — which DOES receive the seed —
+builds `counterstd` (grindC pp), `em` (via `hencb`), and `sigWOTStd` by pure chain walks, then runs the
+existing assembly incl. `A.forge`. `find` makes ZERO oracle calls ⇒ zero transcript pollution ⇒ STOCK games
+for both branches, NO new cryptographic assumption. PRECEDENT ALREADY IN-REPO AND 0-ADMIT: `R_multi_STCRC`
+"defers keypair/signature construction to find(pp)" (WOTS_C_Multi.ec:186-196); same architecture as the leaf
+batch reduction (WOTS_C_Reduction.ec:66-90). MM45 does provide a grinding-reduction template — in `find`,
+not `pick`. Smallest diff: move ~15 lines from each `pick` into each `find`. Both reviewers explicitly say
+DO NOT build a member-aware pkco game (new game + full branch proof + a second non-MM45 capstone assumption).
+
+**FOUNDATIONS FLAG (Kimi, unique — a calibration on the branch-1 milestone):** the `A_wf_ht` premise carried
+by branch 1 ("A_ht never opens member dfC") FORBIDS the adversary from evaluating ThC — i.e. it excludes
+GRINDING forgers, which is the very attack class +C exists to withstand. So `seam_branch1_WOTSC` is genuinely
+0-admit, but its **+C content is thin**: the theorem closes over a forger class that cannot grind. It also
+means the member-aware pkco variant would buy nothing (it would tolerate queries our own `A_wf_ht` already
+forbids — the real inconsistency in my plan). If grinding forgers are ever to be in scope: trh survives on
+the stock game (type separation), pkco needs a member-aware variant, and the S-TCR(+C) term needs INPUT-level
+freshness (the forger's grind hits the same member AND tweak as the targets, so even member-aware disj fails —
+only "don't query the exact target input, which the adversary doesn't know" works). **That is a foundations
+redesign, not a branch-2 decision.** Decide it BEFORE investing further in member-aware machinery.
