@@ -362,7 +362,12 @@ fn negative_hid_continuation_wrong_channel_dropped() {
     cont[4] = 1;
     let out2 = asm.process_frame(&cont, HID_REPORT_SIZE, &mut buf);
     assert_eq!(out2, FrameOutcome::Dropped);
-    assert_eq!(asm.rx_expected(), 0, "must reset on channel mismatch");
+    // Foreign-channel continuation is dropped WITHOUT touching the
+    // owner's stream (finding F1, second half): resetting here is the
+    // one-frame cross-channel starvation primitive. A stalled owner
+    // self-clears via the transport-layer reassembly timeout.
+    assert_eq!(asm.rx_expected(), 80, "owner stream must survive a foreign frame");
+    assert_eq!(asm.channel_id(), 0x1111);
 }
 
 #[test]

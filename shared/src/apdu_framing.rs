@@ -381,9 +381,8 @@ impl HidFrameAssembler {
                 // A seq=0 from a DIFFERENT channel mid-stream must NOT
                 // scrub the owner's partially reassembled APDU — that
                 // is a one-frame cross-channel starvation primitive
-                // (finding F1; §31a channel isolation, which the
-                // continuation path already enforces via the
-                // `channel != self.channel_id` mismatch check below).
+                // (finding F1; §31a channel isolation — the continuation
+                // path below drops foreign-channel frames the same way).
                 // Drop the foreign frame, keep the owner's stream; the
                 // foreign host retries once the owner finishes.
                 if channel != self.channel_id {
@@ -434,7 +433,19 @@ impl HidFrameAssembler {
             buf[..take].copy_from_slice(&report[7..7 + take]);
             self.rx_pos = take;
         } else {
-            if channel != self.channel_id || seq != self.rx_seq {
+            // A continuation frame from a DIFFERENT channel mid-stream
+            // must NOT abort the owner's reassembly — that is the same
+            // one-frame cross-channel starvation primitive as a foreign
+            // seq=0 (finding F1, second half flagged by the 2026-07-19
+            // three-reviewer wave). Drop the foreign frame, keep the
+            // owner's stream; the foreign host retries once the owner
+            // finishes.
+            if channel != self.channel_id {
+                return FrameOutcome::Dropped;
+            }
+            // Same channel, wrong sequence: genuine desync — abort the
+            // stream so the host restarts from a clean slate.
+            if seq != self.rx_seq {
                 self.reset();
                 return FrameOutcome::Dropped;
             }
@@ -882,7 +893,7 @@ mod fuzz_props {
     }
 
     #[test]
-    fn hid_channel_id_mismatch_on_continuation_drops_and_resets() {
+    fn hid_channel_id_mismatch_on_continuation_drops_without_reset() {
         let mut buf = [0u8; MAX_APDU_RX];
         let mut asm = HidFrameAssembler::new();
 
@@ -894,13 +905,17 @@ mod fuzz_props {
         assert_eq!(asm.rx_expected(), 120);
 
         // Frame 1 arrives on a DIFFERENT channel (0xBBBB). Host
-        // confused-deputy / cross-tab race. Must drop + reset.
+        // confused-deputy / cross-tab race. Must drop WITHOUT touching
+        // the owner's stream — resetting here is the one-frame
+        // cross-channel starvation primitive (finding F1, second half).
+        // A genuinely stalled owner self-clears via the transport-layer
+        // reassembly timeout instead.
         let f1_wrong = hid_cont_frame(0xBBBB, 1, &[0x22; HID_CONT_DATA]);
         let outcome1 = asm.process_frame(&f1_wrong, HID_REPORT_SIZE, &mut buf);
         assert_eq!(outcome1, FrameOutcome::Dropped);
-        // State must be fully reset so a subsequent legit stream
-        // doesn't inherit half-filled buffers.
-        assert_eq!(asm.rx_expected(), 0);
+        assert_eq!(asm.channel_id(), 0xAAAA);
+        assert_eq!(asm.rx_expected(), 120);
+        assert_eq!(&buf[..HID_FIRST_DATA], &[0x11; HID_FIRST_DATA]);
     }
 
     #[test]
@@ -927,33 +942,26 @@ mod fuzz_props {
     }
 
     #[test]
-    fn hid_channel_id_mismatch_after_reset_can_start_fresh_stream() {
-        // After a reset triggered by channel mismatch, a brand-new
-        // frame 0 must be accepted (don't lock out the channel
-        // forever — only drop the in-flight stream).
+    fn hid_new_channel_can_start_after_owner_completes() {
+        // After the owner's stream COMPLETES, a brand-new first-frame
+        // from another channel must be accepted (only the in-flight
+        // stream is owned — channels are not locked out forever).
         let mut buf = [0u8; MAX_APDU_RX];
         let mut asm = HidFrameAssembler::new();
 
-        let f0_a = hid_first_frame(0xAAAA, 120, &[0x11; HID_FIRST_DATA]);
+        // A opens and completes a single-frame stream.
+        let small_a = 50u16;
+        let f0_a = hid_first_frame(0xAAAA, small_a, &[0x11; HID_FIRST_DATA]);
         assert_eq!(
             asm.process_frame(&f0_a, HID_REPORT_SIZE, &mut buf),
-            FrameOutcome::NeedMore
+            FrameOutcome::ApduComplete(small_a as usize)
         );
 
-        let f1_wrong = hid_cont_frame(0xBBBB, 1, &[0x22; HID_CONT_DATA]);
-        assert_eq!(
-            asm.process_frame(&f1_wrong, HID_REPORT_SIZE, &mut buf),
-            FrameOutcome::Dropped
-        );
-
-        // Fresh start on a new channel ID — must work. Use a size
-        // that fits in one frame (HID_FIRST_DATA = 57) so the
-        // assembler completes in a single call without needing a
-        // continuation.
-        let small_expected = 50u16;
-        let f0_b = hid_first_frame(0xCCCC, small_expected, &[0x33; HID_FIRST_DATA]);
+        // B starts fresh immediately.
+        let small_b = 42u16;
+        let f0_b = hid_first_frame(0xCCCC, small_b, &[0x33; HID_FIRST_DATA]);
         let outcome = asm.process_frame(&f0_b, HID_REPORT_SIZE, &mut buf);
-        assert_eq!(outcome, FrameOutcome::ApduComplete(small_expected as usize));
+        assert_eq!(outcome, FrameOutcome::ApduComplete(small_b as usize));
         // After completion `channel_id` retains the most recently
         // captured value but `rx_*` are reset.
         assert_eq!(asm.channel_id(), 0xCCCC);
@@ -1016,6 +1024,63 @@ mod fuzz_props {
         );
         assert_eq!(asm.rx_expected(), 0);
         assert_eq!(&buf[..HID_FIRST_DATA], &[0u8; HID_FIRST_DATA]);
+    }
+
+    #[test]
+    fn hid_cross_channel_continuation_does_not_abort_in_progress_stream() {
+        // §31a / finding F1 second half (three-reviewer wave 2026-07-19):
+        // a CONTINUATION-shaped frame from a foreign channel must also be
+        // dropped without resetting the owner's in-progress stream —
+        // before the fix, `channel != self.channel_id` in the seq!=0
+        // branch aborted the owner's reassembly exactly like a foreign
+        // seq=0 used to.
+        let mut buf = [0u8; MAX_APDU_RX];
+        let mut asm = HidFrameAssembler::new();
+
+        // Channel A opens a 120-byte reassembly.
+        let f0 = hid_first_frame(0xAAAA, 120, &[0x11; HID_FIRST_DATA]);
+        assert_eq!(
+            asm.process_frame(&f0, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::NeedMore
+        );
+        assert_eq!(asm.rx_expected(), 120);
+
+        // Channel B injects a continuation-shaped frame (seq=1).
+        let foreign_cont = hid_cont_frame(0xBBBB, 1, &[0xEE; HID_CONT_DATA]);
+        assert_eq!(
+            asm.process_frame(&foreign_cont, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::Dropped
+        );
+        // A's stream survives untouched.
+        assert_eq!(asm.channel_id(), 0xAAAA);
+        assert_eq!(asm.rx_expected(), 120);
+        assert_eq!(&buf[..HID_FIRST_DATA], &[0x11; HID_FIRST_DATA]);
+
+        // A still assembles to completion.
+        let f1 = hid_cont_frame(0xAAAA, 1, &[0x22; HID_CONT_DATA]);
+        assert_eq!(
+            asm.process_frame(&f1, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::NeedMore
+        );
+        let f2 = hid_cont_frame(0xAAAA, 2, &[0x33; HID_CONT_DATA]);
+        assert_eq!(
+            asm.process_frame(&f2, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::ApduComplete(120)
+        );
+
+        // Same-channel desync protection is preserved: an out-of-sequence
+        // continuation from the OWNER still aborts the stream.
+        let g0 = hid_first_frame(0xAAAA, 120, &[0x44; HID_FIRST_DATA]);
+        assert_eq!(
+            asm.process_frame(&g0, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::NeedMore
+        );
+        let wrong_seq = hid_cont_frame(0xAAAA, 7, &[0x55; HID_CONT_DATA]);
+        assert_eq!(
+            asm.process_frame(&wrong_seq, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::Dropped
+        );
+        assert_eq!(asm.rx_expected(), 0);
     }
 }
 
