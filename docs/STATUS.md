@@ -8,6 +8,17 @@
 > workflow). They are only trustworthy if re-reconciled — a stale STATUS is worse than none. Re-run that
 > workflow over a slice before relying on its rows, and trust the **evidence pointer, not the prose**.
 >
+> **Work-tracking migration (2026-07-19).** `docs/work-todo.md` and
+> `docs/production-todo.md` are **retired**: every open item moved to GitHub
+> Issues (`EthereumPhone/PQ1`) under the `source:work-todo` /
+> `source:production-todo` labels (plus `priority:*`, `surface:*`,
+> `ship-blocker`). Both files survive as redirect stubs and in full at
+> `docs/archive/work-todo-retired-2026-07-19.md` and
+> `docs/archive/production-todo-retired-2026-07-19.md`. Every
+> `work-todo`/`production-todo` citation in the dated rows below is
+> historical and resolves through those archives; the live action list is
+> the tracker, not any file in this repo.
+>
 > **Scoped rollback/process/SE update (2026-07-14).** This correction
 > reconciled §0's planning/rollback owners, the full AT-A-GLANCE summary, §A
 > `FW-RB`, `S-1..S-7`, `S-4`, `HIGH-1`, `MED-2`, and Claim 3, plus their
@@ -192,8 +203,8 @@ in four places). The rule: **owners hold the fact; everything else links.**
 | Engineering planning · scope/requirements change control · convergence · fast three-model adversarial review | **`docs/planning-and-review-workflow.md`** | `AGENTS.md` is the mandatory agent router; this owner doc holds the process |
 | Security-review playbook routing · additive lenses · finding-record lifecycle | **`docs/security/adversarial-review/README.md`** | full sweeps are future owner-triggered assurance unless a stricter gate activates them; the planning workflow owns fast-review cadence and convergence |
 | External architecture · per-device shipping checklist | **`README.md`** | auditor/integrator altitude |
-| Reversible dev backlog · the dated Completion Log | **`docs/work-todo.md`** | "what got done when" |
-| **Irreversible** factory/silicon burn ceremony (OPTIGA LcsO, OTP/WRP/RDP, SCP03 PUT-KEY) | **`docs/production-todo.md`** | ⚠ NOT merged with work-todo — different lifecycle/reader |
+| Reversible dev backlog · the dated Completion Log | **GitHub Issues** (`label:source:work-todo`) | retired 2026-07-19; full archive `docs/archive/work-todo-retired-2026-07-19.md` |
+| **Irreversible** factory/silicon burn ceremony (OPTIGA LcsO, OTP/WRP/RDP, SCP03 PUT-KEY) | **GitHub Issues** (`label:source:production-todo`, `label:ship-blocker`) | retired 2026-07-19; full archive `docs/archive/production-todo-retired-2026-07-19.md` |
 | Security + verification frontier (done/left/why) | **this file (§A–§D)** | reconciled pointer index |
 | Tools & systems an agent can use (+ gaps) | **`docs/tooling-and-systems.md`** | the capability manifest |
 | Adversary tiers · trust boundaries · falsifiable Claims | **`docs/security/threat-model.md`** | |
@@ -373,7 +384,7 @@ says what it authoritatively owns (don't duplicate it — link it).
 | `docs/verification/verification-targets-2026-06.md` | 12 ranked pure-logic FV targets (R1–R12) | Feeds `goals.leanloop.toml` one at a time (the FV frontier) | The FV-target ranking + KAT-anchor map driving §33/A3.1 |
 | `docs/security/threat-model.md` | STRIDE; T0–T7 tiers; S0–S7 assets; Claims 1–7; §9 live caveats | §9.1 ML-KEM (ACCEPTED residual 2026-07-07, no longer open), §9.2 provisioning, §9.4 boot-attest, §9.9 MPU; **Claim 3 provisional until S-1** | Adversary taxonomy + falsifiable security-claim contract |
 | `docs/security/security-review-2026-05.md` | 2026-05 firmware code-review | **Originated S-1..S-7** (`C-4→S-1`, `C-5→S-2`, … `C-9→S-7`) + H-5/H-6/M-2/M-3 carry-overs | The `C-n → S-n` ship-blocker derivation |
-| `production-todo.md` | Factory irreversible-burn TODO | The **bench/factory closure of S-1/S-2/S-3** + E140/F1D1-4/global-LcsO ratchets | **OPTIGA LcsO bench spec + factory burn ceremony** (the metadata bytes) |
+| `docs/archive/production-todo-retired-2026-07-19.md` (retired 2026-07-19; live items on the tracker) | Factory irreversible-burn TODO | The **bench/factory closure of S-1/S-2/S-3** + E140/F1D1-4/global-LcsO ratchets — now issues under `label:source:production-todo` | **OPTIGA LcsO bench spec + factory burn ceremony** (the metadata bytes) |
 | `docs/provisioning/provisioning-reference.md` | Hardened provisioning research (untrusted-CM) | Corrects S-1/S-2 defaults: F1D0's candidate locked shape uses `LcsO<op>` rather than ALW; observed `0xE0E3` is a full type-`0x12` device cert; candidate type-`0x11` pool is `{0xE0E8,0xE0E9,0xE0EF}`; production `0xE0E0` is device identity, not a wallet trust anchor | Provisioning research inputs + corrected OPTIGA object inventory; not an executable ceremony |
 | `docs/security/red-teaming.md` | EVT bench-attack matrix | Bench tasks: §5.1 S-5 bus capture, §5.4 S-1/2/3 lockdown, §5.5 S-7d, §6.3 TAMP | The physical pass/fail bars + required instruments |
 | `docs/security/audits/*-20260611-*.md` | 4 parallel adversarial paper-audits | se-tunnels HIGH-1 (SCP03 factory keys) — published-key fallback is **code-fenced since the audit** (`secure/src/nsc/mod.rs`, fence string ``Candidate SE050 profile is incomplete without non-public SCP03 transport keys``); a journaled first-boot candidate now exists, while handoff/recovery/E140/silicon production closure remains open; tz-tamper MED-2 (prod-config gate, closed by `f8effd45`); rest resolved-in-commit | The 2026-06-11 four-domain audit record (as-found — verify against current code) |
@@ -384,8 +395,8 @@ says what it authoritatively owns (don't duplicate it — link it).
 | `docs/verification/how_to_math_proof_secureness.md` | What full FV of the wallet requires | The 3-piece decomposition (Lean ref + Yul-refines + 4337 scaffolding) | The overarching FV strategy + TCB boundaries |
 | `docs/verification/lean-verification-research-2026-06.md` | AI-aided-Lean tooling research | Decision: stay on Aeneas; Lean-Squad orchestration; refuted-claims list | The extraction-tool decision + realistic close-rates |
 | `docs/verification/spec-assurance-research-2026-06.md` | Spec-assurance + mutation-testing research | `leanloop mutate`/`kat`/`vet` design; spec-review checklist (⚠ `vet` RED/`NEGATION PROVED` not yet citable as assurance — F10) | The spec-strength tooling design rationale |
-| `docs/security/production-security.md` | Bundles A–E → actionable plan | work-todo #18–22 + #24 (FI/key-mgmt/SCA/USB/supply-chain/root-key) | Bundle→backlog mapping + root-key tiering decisions |
-| `docs/security/HARDENING.md` | Consolidated "what we do" requirements | §3.4 boot-attest, §3.5 provisioning gaps (= threat-model §9.4 / work-todo #8/#22) | The normative hardening-requirements checklist |
+| `docs/security/production-security.md` | Bundles A–E → actionable plan | tracker issues (formerly work-todo #18–22 + #24: FI/key-mgmt/SCA/USB/supply-chain/root-key) | Bundle→backlog mapping + root-key tiering decisions |
+| `docs/security/HARDENING.md` | Consolidated "what we do" requirements | §3.4 boot-attest, §3.5 provisioning gaps (= threat-model §9.4 / archived work-todo #8/#22, now tracker issues) | The normative hardening-requirements checklist |
 | `docs/security/brownout-hardening.md` | Brownout/glitch design + rollout | Staged rollout; FI double-compute (#18) | The power-interruption recovery taxonomy |
 | `research-bundles/A–F` | 6 deep-research prompt bundles | A→#18 FI, B→#20 key-mgmt, C→#18 SCA, D→#19 USB, E→#22 supply-chain, F→Trezor | The reproducible research-question + code-snapshot bundles |
 
@@ -395,5 +406,5 @@ says what it authoritatively owns (don't duplicate it — link it).
 
 Reconciled by a fan-out workflow (`security-frontier-reconcile`, run `wf_718a4bc1-be4`, 2026-06-17): 7 agents
 each verified one cluster against the repo + 1 mapped the corpus. To extend to another slice (companion / UI /
-hardware), re-run the same shape over that slice's work-todo sections. **Re-verify before trusting any row
+hardware), re-run the same shape over that slice's tracker issues (formerly work-todo sections). **Re-verify before trusting any row
 older than the last commit it cites** — the whole point of this file is that the pointer, not the prose, is the truth.

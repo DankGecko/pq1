@@ -8,10 +8,15 @@ Before non-trivial work:
    platform constraints, and code conventions.
 2. Read [`docs/STATUS.md`](docs/STATUS.md) for the current evidence and ship
    frontier; follow its owner links rather than trusting duplicated status.
-3. Follow
+3. Track work on **GitHub Issues** (`EthereumPhone/PQ1`): open items carry
+   `source:work-todo` / `source:production-todo` labels (both TODO files were
+   retired 2026-07-19; originals are archived under `docs/archive/`), plus
+   `priority:*`, `surface:*`, and `ship-blocker`. "The TODO" anywhere in
+   project docs means that tracker; banking an item means filing an issue.
+4. Follow
    [`docs/planning-and-review-workflow.md`](docs/planning-and-review-workflow.md)
    for planning, scope changes, convergence, and adversarial review.
-4. For security-sensitive work, use the existing playbook index at
+5. For security-sensitive work, use the existing playbook index at
    [`docs/security/adversarial-review/README.md`](docs/security/adversarial-review/README.md)
    to identify stricter mandatory gates and the later assurance surface. Do not
    turn intersecting playbooks into separate merge-review campaigns or paste
@@ -27,8 +32,9 @@ Before non-trivial work:
 
 Before implementation, name one active product surface, the current workflow
 phase, the bounded slice set, and the next review boundary. Treat an explicit
-user focus instruction as a scope cap: bank unrelated discoveries in the
-appropriate owner TODO and do not let review/process cleanup displace the
+user focus instruction as a scope cap: bank unrelated discoveries as GitHub
+issues (the retired owner-TODO files' successor — see the routing list above)
+and do not let review/process cleanup displace the
 active product work unless it is a concrete blocker for that work.
 
 The workflow linked above solely owns phase-boundary review batching, batch
