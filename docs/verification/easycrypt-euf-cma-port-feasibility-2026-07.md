@@ -1251,3 +1251,35 @@ Parallel workflow (3 agents, ~863k tokens). Results, auditor-verified:
 Remaining on the first branch: #1 cube-build (MM45 :4167-4531 nested invariant) + its prerequisite O_V
 element-sampling oracle-hop (no WOTS+C analog exists yet). Consistent theme: each "mechanical" layer has
 needed real adaptation (okC edit, O_V hop, antecedent reframe) — no cryptographic wall, but real engineering.
+
+### UPDATE 2026-07-19 (cont.) — O_V hop DONE + audited; a premise-structure REFINEMENT (corrects the A_wf framing)
+
+The #1 grind delivered the O_V oracle-hop and surfaced a genuine statement-level finding.
+
+**O_V oracle-hop: COMPLETE, gated 0-admit, audited GENUINE.** Built in _seam_byequiv_wip.ec:
+`O_MEUFGCMA_WOTSC_V` (element-sampling), `Eqv_O_MEUFGCMA_WOTSC_query_Orig_V` (whole-key ~ element-sampling
+query equiv via a DList Sample_LoopSnoc leg + ch_comp pk/sig fusion, MM45 WOTS_TW_ES.ec:2928-3002 analog),
+and the Pr-hop `EqPr_MEUFGCMAWOTSC_Orig_V` (MM45 :3005-3032). Audit: a real whole-key-keygen+sign ~
+per-element-sampling equality, not vacuous; dependencies CERTIFIED-0-ADMIT. The byequiv now does
+`rewrite (EqPr_MEUFGCMAWOTSC_Orig_V A_ht)` before byequiv; statement RHS unchanged (still O_..._Default).
+
+**The cube-build (#1) is BLOCKED on a premise gap, not transcription — and it corrects the A_wf reconciliation.**
+The cube-build post P needs `all (get_typeidx <> chtype) FC.O_THFC_Default.tws{2}`. The collection oracle
+records queried addresses UNCONDITIONALLY, A_ht is abstract, and our leaf bound carries ONLY the member-based
+`A_wf` (`p.1 <> dfC`) — which says NOTHING about chtype (in the deployed design Th+C sits at pkcotype/dfC,
+NOT chtype). MM45's core lemma (:4096) carries a TYPE-based `allnchads = hoare[A.choose : ==> all
+(get_typeidx <> chtype) ads]` for exactly this. So P is unprovable (indeed false for a chtype-querying A_ht)
+without adding `allnchads`.
+
+⇒ **Refinement of the 2026-07-18 reconciliation (which over-simplified):** the member-based `A_wf` is NOT a
+blanket +C analog of MM45's three type premises `allnchads/allnpkcoads/allntrhads`. It is the analog of the
+**pkcotype-axis** premise ONLY (where +C's Th+C target sits, at member dfC). The **chtype axis (WOTS chains)
+still needs the TYPE-based `allnchads`**, verbatim MM45; likewise the trhxtype axis. So the +C component
+theorem must carry BOTH kinds: the type-based address premises (chtype/pkco/trh, MM45-faithful, for the
+tree/WOTS machinery) AND the member-based `A_wf` (the +C-specific Th+C protection). Both are component-level
+premises, both discharged at the capstone (the reduction-image adversary avoids chtype AND member dfC — the
+FORS/message OC queries sit at FORS types ≠ chtype and members ≠ dfC). This is a premise-STRUCTURE correction,
+NOT a soundness break and NOT an R_leaf_C/leaf-bound rework (both untouched). FIX (authorized, MM45-faithful):
+add `allnchads` to seam_branch1_WOTSC + strengthen the part-0 seq post to carry the dropped ps/ad/pp
+equalities, then close the cube-build transcription. Carrying it needs a downstream re-check at the eventual
+component-assembly consumer (same as MM45 carries+discharges its type premises).
