@@ -3475,6 +3475,203 @@ fn positive_lido_wsteth_permit_fixture_binds_every_signed_word() {
 }
 
 #[test]
+fn positive_lido_wsteth_remaining_routes_bind_every_signed_operand() {
+    struct Case {
+        signature: &'static str,
+        words: Vec<[u8; 32]>,
+        address_fields: Vec<(usize, &'static str)>,
+        amount_index: usize,
+        intent: &'static str,
+        amount_label: &'static str,
+        interpolated: bool,
+    }
+
+    let recipient = [0x22; 20];
+    let sender = [0x33; 20];
+    let spender = [0x44; 20];
+    let amount = u256_from_u64(1_000_000_000_000_000_000).0;
+    let cases = vec![
+        Case {
+            signature: "unwrap(uint256)",
+            words: vec![amount],
+            address_fields: vec![],
+            amount_index: 0,
+            intent: "Unwrap 1 wstETH",
+            amount_label: "wstETH amount",
+            interpolated: true,
+        },
+        Case {
+            signature: "transfer(address,uint256)",
+            words: vec![abi_address_word(recipient), amount],
+            address_fields: vec![(0, "Recipient")],
+            amount_index: 1,
+            intent: "Transfer wstETH",
+            amount_label: "Amount",
+            interpolated: false,
+        },
+        Case {
+            signature: "transferFrom(address,address,uint256)",
+            words: vec![
+                abi_address_word(sender),
+                abi_address_word(recipient),
+                amount,
+            ],
+            address_fields: vec![(0, "Sender"), (1, "Recipient")],
+            amount_index: 2,
+            intent: "Transfer wstETH",
+            amount_label: "Amount",
+            interpolated: false,
+        },
+        Case {
+            signature: "approve(address,uint256)",
+            words: vec![abi_address_word(spender), amount],
+            address_fields: vec![(0, "Spender")],
+            amount_index: 1,
+            intent: "Authorize spending",
+            amount_label: "Amount",
+            interpolated: false,
+        },
+        Case {
+            signature: "increaseAllowance(address,uint256)",
+            words: vec![abi_address_word(spender), amount],
+            address_fields: vec![(0, "Spender")],
+            amount_index: 1,
+            intent: "Increase allowance",
+            amount_label: "Amount",
+            interpolated: false,
+        },
+        Case {
+            signature: "decreaseAllowance(address,uint256)",
+            words: vec![abi_address_word(spender), amount],
+            address_fields: vec![(0, "Spender")],
+            amount_index: 1,
+            intent: "Decrease allowance",
+            amount_label: "Amount",
+            interpolated: false,
+        },
+    ];
+
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-wstETH.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Lido wstETH leaf");
+    let tx = envelope(1, entry.contract);
+    let metadata = Erc20Metadata {
+        chain_id: 1,
+        contract: entry.contract,
+        decimals: 18,
+        name: b"Wrapped liquid staked Ether 2.0",
+        symbol: b"wstETH",
+    };
+    let resolver = NameResolver::new();
+    let signer = [0x55; 20];
+
+    for case in cases {
+        let render = |words: &[[u8; 32]]| {
+            let calldata = calldata_static(case.signature, words);
+            assert_selector_matches(&verified.ir, &calldata, case.signature);
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                &calldata,
+                &verified,
+                Some(&metadata),
+                &resolver,
+                &signer,
+            )
+            .unwrap_or_else(|error| panic!("render {}: {error:?}", case.signature))
+        };
+
+        let rendered = render(&case.words);
+        assert_all_pages_printable(&rendered.pages);
+        assert!(rendered
+            .transcript_receipt
+            .range_matches(&rendered.pages, 0));
+        assert_eq!(
+            rendered.transcript_receipt.state_code(),
+            if case.interpolated {
+                INTENT_PUBLICATION_INTERPOLATED
+            } else {
+                INTENT_PUBLICATION_STATIC
+            },
+            "unexpected intent-publication mode for {}",
+            case.signature
+        );
+
+        let intent_rows = page_strs(&rendered.pages, intent_page_index(&rendered.pages));
+        let painted_intent = if case.intent.len() <= DISPLAY_COLS {
+            intent_rows[0].clone()
+        } else {
+            format!("{}{}", intent_rows[0], intent_rows[1])
+        };
+        assert_eq!(
+            painted_intent,
+            case.intent,
+            "unexpected trusted intent for {}:\n{}",
+            case.signature,
+            dump_pages(&rendered.pages)
+        );
+
+        for (word_index, label) in &case.address_fields {
+            let address: [u8; 20] = case.words[*word_index][12..]
+                .try_into()
+                .expect("canonical address word");
+            assert_full_address_field_page(&rendered.pages, label, &address);
+        }
+        let amount_rows = page_strs(
+            &rendered.pages,
+            find_page_by_label(&rendered.pages, case.amount_label),
+        );
+        assert!(
+            amount_rows[1..3].iter().any(|row| row.contains("1")),
+            "missing exact wstETH amount for {}: {amount_rows:?}",
+            case.signature
+        );
+        assert!(
+            amount_rows[1..3].iter().any(|row| row.contains("wstETH")),
+            "amount ticker is not bound for {}: {amount_rows:?}",
+            case.signature
+        );
+        assert_full_contract_identity_page(&rendered.pages, &entry.contract);
+
+        for (word_index, label) in &case.address_fields {
+            let mut mutated_words = case.words.clone();
+            mutated_words[*word_index][31] ^= 1;
+            let mutated = render(&mutated_words);
+            assert_ne!(
+                rendered.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "mutating {label} must change trusted pages for {}",
+                case.signature
+            );
+            assert!(
+                !rendered
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "mutating {label} must change the transcript for {}",
+                case.signature
+            );
+        }
+
+        let mut mutated_words = case.words.clone();
+        mutated_words[case.amount_index] = u256_from_u64(2_000_000_000_000_000_000).0;
+        let mutated = render(&mutated_words);
+        assert_ne!(
+            rendered.pages.as_slice(),
+            mutated.pages.as_slice(),
+            "mutating the exact amount must change trusted pages for {}",
+            case.signature
+        );
+        assert!(
+            !rendered
+                .transcript_receipt
+                .exact_match(&mutated.transcript_receipt),
+            "mutating the exact amount must change the transcript for {}",
+            case.signature
+        );
+    }
+}
+
+#[test]
 fn positive_lombard_lbtc_permit_binds_every_static_word_on_both_deployments() {
     const SIGNATURE: &str = "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)";
     let owner = [0x11u8; 20];

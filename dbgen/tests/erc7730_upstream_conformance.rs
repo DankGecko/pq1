@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712, BindingError};
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, BundleError};
+use pqsigner_erc7730::display::primitives::amount_is_exact_at_fraction_digits;
 use pqsigner_erc7730::display::render::{render_erc7730_eip712_pages, render_erc7730_pages};
 use pqsigner_erc7730::display::DISPLAY_COLS;
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir};
@@ -2099,6 +2100,91 @@ fn legacy_lido_positive_matches_actual_merkle_verified_pq1_pages_with_exact_waiv
             && rendered.iter().any(|row| row == "0.00001wsteth"),
         "non-vacuity: authenticated legacy Lido semantics were not all rendered: {rendered:?}"
     );
+}
+
+#[test]
+fn lido_wsteth_inexact_upstream_calls_fail_closed() {
+    let relative_fixture = "registry/lido/tests/calldata-wstETH.tests.json";
+    let cases = [
+        (0usize, "approve(address,uint256)", 1usize),
+        (2, "unwrap(uint256)", 0),
+        (4, "decreaseAllowance(address,uint256)", 1),
+        (5, "increaseAllowance(address,uint256)", 1),
+        (7, "transferFrom(address,address,uint256)", 2),
+    ];
+
+    let registry = build_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == 1
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-wstETH.json")
+        })
+        .expect("accepted mainnet wstETH descriptor leaf");
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified =
+        verify_erc7730_bundle(&bundle, &registry.root).expect("Merkle-verify wstETH leaf");
+    cross_check_contract(&verified.ir, 1, &entry.contract).expect("bind wstETH descriptor");
+
+    let records = dbgen::load_erc20_records(&workspace_root().join("secure/data/erc20.json"))
+        .expect("load production ERC20 metadata");
+    let record = records
+        .iter()
+        .find(|record| {
+            record.chain_id == 1
+                && dbgen::parse_hex_address(&record.address).ok() == Some(entry.contract)
+        })
+        .expect("production wstETH metadata");
+    let metadata = Erc20Metadata {
+        chain_id: record.chain_id,
+        contract: entry.contract,
+        decimals: record.decimals,
+        name: record.name.as_bytes(),
+        symbol: record.symbol.as_bytes(),
+    };
+    assert_eq!(metadata.decimals, 18);
+
+    for (case_index, signature, amount_word_index) in cases {
+        let (_, raw) = fixture_case(relative_fixture, case_index);
+        assert_eq!(supported_fixture_shell(&raw), FixtureShellKind::Type2);
+        let (tx, data) = match rlp_field_count(&raw, true) {
+            Some(9) => {
+                let parsed = eip1559::parse(&raw).expect("canonical unsigned Type-2 fixture");
+                let data = parsed.data.to_vec();
+                (parsed.tx, data)
+            }
+            Some(12) => {
+                let adapted = adapt_signed_type2_fixture(&raw);
+                (adapted.tx, adapted.data)
+            }
+            fields => panic!("unexpected Type-2 field count for case {case_index}: {fields:?}"),
+        };
+        assert_eq!(tx.chain_id, 1);
+        assert_eq!(tx.to, Some(entry.contract));
+        assert_eq!(tx.data_len, data.len());
+        let selector = keccak256(signature.as_bytes());
+        assert_eq!(&data[..4], &selector[..4], "fixture selector drift");
+
+        let amount_offset = 4 + amount_word_index * 32;
+        let amount = U256(
+            data[amount_offset..amount_offset + 32]
+                .try_into()
+                .expect("complete static amount word"),
+        );
+        assert!(
+            !amount_is_exact_at_fraction_digits(&amount, 18, 6),
+            "fixture case {case_index} unexpectedly became exactly renderable"
+        );
+        assert!(
+            matches!(
+                render_erc7730_pages(&tx, &data, &verified, Some(&metadata), &NameResolver::new(),),
+                Err(RenderErr::Reject("7730 inexact scaled value"))
+            ),
+            "case {case_index} must retain the existing exactness refusal"
+        );
+    }
 }
 
 #[test]

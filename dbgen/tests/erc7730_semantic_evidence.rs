@@ -1065,6 +1065,397 @@ fn lido_wsteth_wrap_source_abi_descriptor_and_metadata_agree_on_input_semantics(
 }
 
 #[test]
+fn lido_wsteth_remaining_routes_source_abi_descriptor_and_ir_agree() {
+    let root = workspace_root();
+    let evidence = lido_evidence_root();
+    let manifest = read_json(&evidence.join("manifest.json"));
+    let deployment = &manifest["deployment"];
+    let remaining = &manifest["additional_routes"]["remaining"];
+    let routes = remaining["routes"]
+        .as_array()
+        .expect("remaining routes array");
+
+    let expected_routes = BTreeMap::from([
+        ("approve", "0x095ea7b3"),
+        ("decreaseAllowance", "0xa457c2d7"),
+        ("increaseAllowance", "0x39509351"),
+        ("transfer", "0xa9059cbb"),
+        ("transferFrom", "0x23b872dd"),
+        ("unwrap", "0xde0e9a3e"),
+    ]);
+    let actual_keys: BTreeSet<_> = routes
+        .iter()
+        .map(|route| required_str(route, "key"))
+        .collect();
+    assert_eq!(
+        actual_keys,
+        expected_routes.keys().copied().collect(),
+        "remaining route inventory drifted"
+    );
+
+    let source_spec = &manifest["verified_source"];
+    let flattened_bytes =
+        fs::read(evidence.join(required_str(source_spec, "archived_flattened_file")))
+            .expect("read archived flattened source");
+    assert_eq!(
+        sha256_hex(&flattened_bytes),
+        required_str(source_spec, "archived_flattened_sha256")
+    );
+    let flattened = normalized_whitespace(
+        &String::from_utf8(flattened_bytes).expect("flattened source is UTF-8"),
+    );
+    for helper_semantics in [
+        r#"function _transfer(address sender, address recipient, uint256 amount) internal virtual { require(sender != address(0), "ERC20: transfer from the zero address"); require(recipient != address(0), "ERC20: transfer to the zero address"); _beforeTokenTransfer(sender, recipient, amount); _balances[sender] = _balances[sender].sub(amount, "ERC20: transfer amount exceeds balance"); _balances[recipient] = _balances[recipient].add(amount); emit Transfer(sender, recipient, amount); }"#,
+        r#"function _burn(address account, uint256 amount) internal virtual { require(account != address(0), "ERC20: burn from the zero address"); _beforeTokenTransfer(account, address(0), amount); _balances[account] = _balances[account].sub(amount, "ERC20: burn amount exceeds balance"); _totalSupply = _totalSupply.sub(amount); emit Transfer(account, address(0), amount); }"#,
+        r#"function _approve(address owner, address spender, uint256 amount) internal virtual { require(owner != address(0), "ERC20: approve from the zero address"); require(spender != address(0), "ERC20: approve to the zero address"); _allowances[owner][spender] = amount; emit Approval(owner, spender, amount); }"#,
+    ] {
+        assert!(flattened.contains(helper_semantics));
+    }
+    assert_eq!(
+        flattened
+            .matches("function _beforeTokenTransfer(address from, address to, uint256 amount) internal virtual { }")
+            .count(),
+        1,
+        "wstETH must retain the single empty inherited transfer hook"
+    );
+
+    let runtime = read_hex(&evidence.join(required_str(&manifest["runtime"], "file")));
+    let abi_spec = &remaining["abi"];
+    let abi_bytes = fs::read(evidence.join(required_str(abi_spec, "archive_file")))
+        .expect("read remaining-route ABI");
+    assert_eq!(
+        sha256_hex(&abi_bytes),
+        required_str(abi_spec, "archive_file_sha256")
+    );
+    assert_eq!(
+        required_str(abi_spec, "source_full_verified_abi_canonical_sha256"),
+        required_str(&manifest["abi"], "full_verified_abi_canonical_sha256"),
+        "remaining-route ABI subset lost its pinned full-ABI source receipt"
+    );
+    let abi: Value = serde_json::from_slice(&abi_bytes).expect("parse remaining-route ABI");
+    let abi_entries = abi.as_array().expect("remaining-route ABI array");
+    assert_eq!(abi_entries.len(), routes.len());
+
+    let descriptor_spec = &manifest["descriptor"];
+    let descriptor_bytes = fs::read(root.join(required_str(descriptor_spec, "curated_file")))
+        .expect("read curated Lido descriptor");
+    assert_eq!(
+        descriptor_bytes,
+        fs::read(root.join(required_str(descriptor_spec, "vendored_file")))
+            .expect("read vendored Lido descriptor")
+    );
+    let descriptor: Value =
+        serde_json::from_slice(&descriptor_bytes).expect("parse Lido descriptor");
+    let deployments = descriptor["context"]["contract"]["deployments"]
+        .as_array()
+        .expect("descriptor deployments");
+    assert_eq!(deployments.len(), 1);
+    assert_eq!(deployments[0]["chainId"].as_u64(), Some(1));
+    assert_eq!(
+        deployments[0]["address"]
+            .as_str()
+            .expect("descriptor deployment")
+            .to_ascii_lowercase(),
+        required_str(deployment, "address")
+    );
+    assert_eq!(
+        descriptor["metadata"]["constants"]["wstETHaddress"]
+            .as_str()
+            .expect("wstETH token constant")
+            .to_ascii_lowercase(),
+        required_str(deployment, "address")
+    );
+    let descriptor_formats = descriptor["display"]["formats"]
+        .as_object()
+        .expect("descriptor formats");
+
+    let registry_root = root.join("secure/data/erc7730-registry");
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+        .expect("build production ERC20 capability corpus");
+    let (registry, _) = build_db_tolerant_with_erc20_capabilities(
+        &registry_root.join("registry"),
+        &root.join("secure/data/erc7730/policy.toml"),
+        Some(&registry_root),
+        &erc20.capabilities,
+    )
+    .expect("build production ERC-7730 registry");
+    let entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str()) == Some("calldata-wstETH.json")
+        })
+        .collect();
+    assert_eq!(entries.len(), 1);
+    let registry_entry = entries[0];
+    let contract: [u8; 20] = decode_hex_text(required_str(deployment, "address"))
+        .try_into()
+        .expect("wstETH contract width");
+    assert_eq!(
+        (registry_entry.chain_id, registry_entry.contract),
+        (1, contract)
+    );
+    let ir = Erc7730Ir::parse(&registry_entry.ir_bytes).expect("parse generated wstETH IR");
+    assert_eq!(cross_check_contract(&ir, 1, &contract), Ok(()));
+
+    let canonicalize = |authored: &str| {
+        let (name, tail) = authored.split_once('(').expect("authored signature");
+        let params = tail.strip_suffix(')').expect("signature close");
+        let types: Vec<_> = params
+            .split(',')
+            .filter(|param| !param.trim().is_empty())
+            .map(|param| {
+                param
+                    .split_ascii_whitespace()
+                    .next()
+                    .expect("authored input type")
+            })
+            .collect();
+        format!("{name}({})", types.join(","))
+    };
+
+    for route in routes {
+        let key = required_str(route, "key");
+        let signature = required_str(route, "canonical_signature");
+        let expected_selector = expected_routes
+            .get(key)
+            .unwrap_or_else(|| panic!("unexpected remaining route {key}"));
+        assert_eq!(required_str(route, "selector"), *expected_selector);
+        let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+            .try_into()
+            .expect("selector width");
+        assert_eq!(
+            format!("0x{}", hex::encode(selector)),
+            *expected_selector,
+            "{key} selector drifted"
+        );
+        assert!(
+            runtime
+                .windows(selector.len())
+                .any(|candidate| candidate == selector),
+            "runtime lost {signature}"
+        );
+
+        let source_semantics = match key {
+            "approve" => "function approve(address spender, uint256 amount) public virtual override returns (bool) { _approve(_msgSender(), spender, amount); return true; }",
+            "decreaseAllowance" => r#"function decreaseAllowance(address spender, uint256 subtractedValue) public virtual returns (bool) { _approve(_msgSender(), spender, _allowances[_msgSender()][spender].sub(subtractedValue, "ERC20: decreased allowance below zero")); return true; }"#,
+            "increaseAllowance" => "function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) { _approve(_msgSender(), spender, _allowances[_msgSender()][spender].add(addedValue)); return true; }",
+            "transfer" => "function transfer(address recipient, uint256 amount) public virtual override returns (bool) { _transfer(_msgSender(), recipient, amount); return true; }",
+            "transferFrom" => r#"function transferFrom(address sender, address recipient, uint256 amount) public virtual override returns (bool) { _transfer(sender, recipient, amount); _approve(sender, _msgSender(), _allowances[sender][_msgSender()].sub(amount, "ERC20: transfer amount exceeds allowance")); return true; }"#,
+            "unwrap" => r#"function unwrap(uint256 _wstETHAmount) external returns (uint256) { require(_wstETHAmount > 0, "wstETH: zero amount unwrap not allowed"); uint256 stETHAmount = stETH.getPooledEthByShares(_wstETHAmount); _burn(msg.sender, _wstETHAmount); stETH.transfer(msg.sender, stETHAmount); return stETHAmount; }"#,
+            _ => unreachable!("route inventory checked above"),
+        };
+        assert!(
+            flattened.contains(source_semantics),
+            "verified source semantics drifted for {signature}"
+        );
+
+        let descriptor_matches: Vec<_> = descriptor_formats
+            .iter()
+            .filter(|(authored, _)| canonicalize(authored) == signature)
+            .collect();
+        assert_eq!(descriptor_matches.len(), 1, "descriptor route match");
+        let (authored_signature, descriptor_format) = descriptor_matches[0];
+        let (_, tail) = authored_signature
+            .split_once('(')
+            .expect("authored signature");
+        let authored_inputs: Vec<_> = tail
+            .strip_suffix(')')
+            .expect("signature close")
+            .split(',')
+            .map(|param| {
+                let mut parts = param.split_ascii_whitespace();
+                let input_type = parts.next().expect("descriptor input type");
+                let name = parts.next().expect("descriptor input name");
+                assert!(parts.next().is_none(), "unexpected descriptor input token");
+                (name, input_type)
+            })
+            .collect();
+
+        let abi_matches: Vec<_> = abi_entries
+            .iter()
+            .filter(|entry| {
+                let Some(name) = entry["name"].as_str() else {
+                    return false;
+                };
+                let Some(inputs) = entry["inputs"].as_array() else {
+                    return false;
+                };
+                let types: Vec<_> = inputs
+                    .iter()
+                    .filter_map(|input| input["type"].as_str())
+                    .collect();
+                format!("{name}({})", types.join(",")) == signature
+            })
+            .collect();
+        assert_eq!(abi_matches.len(), 1, "exact ABI route match");
+        let abi_entry = abi_matches[0];
+        assert_eq!(abi_entry["type"].as_str(), Some("function"));
+        assert_eq!(abi_entry["stateMutability"].as_str(), Some("nonpayable"));
+        let abi_inputs: Vec<_> = abi_entry["inputs"]
+            .as_array()
+            .expect("ABI inputs")
+            .iter()
+            .map(|input| {
+                (
+                    input["name"].as_str().expect("ABI input name"),
+                    input["type"].as_str().expect("ABI input type"),
+                )
+            })
+            .collect();
+        assert_eq!(abi_inputs, authored_inputs, "{key} ABI operands drifted");
+        let outputs = abi_entry["outputs"].as_array().expect("ABI outputs");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(
+            outputs[0]["type"].as_str(),
+            Some(if key == "unwrap" { "uint256" } else { "bool" })
+        );
+
+        let descriptor_fields = descriptor_format["fields"]
+            .as_array()
+            .expect("descriptor fields");
+        let displayed_paths: Vec<_> = route["displayed_operand_paths"]
+            .as_array()
+            .expect("displayed operand paths")
+            .iter()
+            .map(|path| path.as_str().expect("displayed operand path"))
+            .collect();
+        assert_eq!(
+            displayed_paths,
+            descriptor_fields
+                .iter()
+                .map(|field| field["path"].as_str().expect("descriptor field path"))
+                .collect::<Vec<_>>(),
+            "{key} operand coverage drifted"
+        );
+
+        let ir_format = ir
+            .find_format_by_selector(&selector)
+            .expect("wstETH format table parses")
+            .expect("remaining wstETH route remains admitted");
+        let ir_fields: Vec<_> = ir_format
+            .fields()
+            .map(|field| field.expect("generated route field parses"))
+            .collect();
+        assert_eq!(ir_fields.len(), descriptor_fields.len());
+
+        for (descriptor_field, ir_field) in descriptor_fields.iter().zip(ir_fields) {
+            let path = descriptor_field["path"]
+                .as_str()
+                .expect("descriptor field path");
+            let (label, op, kind) = match path {
+                "#.spender" => ("Spender", FormatOp::AddressName, TerminalKind::Address),
+                "#.recipient" => ("Recipient", FormatOp::AddressName, TerminalKind::Address),
+                "#.sender" => ("Sender", FormatOp::AddressName, TerminalKind::Address),
+                "#.amount" | "#.addedValue" | "#.subtractedValue" => {
+                    ("Amount", FormatOp::TokenAmount, TerminalKind::Unsigned)
+                }
+                "#._wstETHAmount" => (
+                    "wstETH amount",
+                    FormatOp::TokenAmount,
+                    TerminalKind::Unsigned,
+                ),
+                _ => panic!("unexpected remaining-route operand path {path}"),
+            };
+            assert_eq!(descriptor_field["label"].as_str(), Some(label));
+            assert_eq!(descriptor_field["visible"].as_str(), Some("always"));
+            assert_eq!(
+                descriptor_field["format"].as_str(),
+                Some(if op == FormatOp::AddressName {
+                    "addressName"
+                } else {
+                    "tokenAmount"
+                })
+            );
+            assert_eq!(ir_field.label, label.as_bytes());
+            assert_eq!(FormatOp::try_from(ir_field.format_op), Ok(op));
+            let params = parse_params(&ir, ir_field.param_off).expect("route params parse");
+            assert_eq!(params.visibility, Visibility::Always);
+            assert_eq!(params.terminal_kind, Some(kind));
+            if op == FormatOp::TokenAmount {
+                assert_eq!(params.integer_width_bytes, Some(32));
+                assert_eq!(
+                    descriptor_field["params"]["token"].as_str(),
+                    Some("$.metadata.constants.wstETHaddress")
+                );
+                assert_eq!(params.token.map(hex::encode), Some(hex::encode(contract)));
+                let threshold_expected = matches!(
+                    (key, path),
+                    ("approve", "#.amount") | ("increaseAllowance", "#.addedValue")
+                );
+                if threshold_expected {
+                    let mut threshold = [0u8; 32];
+                    threshold[0] = 0x80;
+                    assert_eq!(
+                        descriptor_field["params"]["threshold"].as_str(),
+                        Some("0x8000000000000000000000000000000000000000000000000000000000000000")
+                    );
+                    assert_eq!(
+                        descriptor_field["params"]["message"].as_str(),
+                        Some("Unlimited")
+                    );
+                    assert_eq!(
+                        params.threshold.map(|value| value.as_slice()),
+                        Some(threshold.as_slice())
+                    );
+                    assert_eq!(params.message, Some(b"Unlimited".as_slice()));
+                } else {
+                    assert!(params.threshold.is_none());
+                    assert!(params.message.is_none());
+                }
+            } else {
+                assert!(params.token.is_none());
+            }
+        }
+
+        let (effect_needles, residual_needles): (&[&str], &[&str]) = match key {
+            "approve" => (
+                &["sets", "allowance", "signed amount"],
+                &["prior allowance", "ordering"],
+            ),
+            "decreaseAllowance" => (
+                &["allowance", "minus", "signed subtractedvalue"],
+                &["resulting allowances", "live state", "not signed calldata"],
+            ),
+            "increaseAllowance" => (
+                &["allowance", "plus", "signed addedvalue"],
+                &["resulting allowances", "live state", "not signed calldata"],
+            ),
+            "transfer" => (
+                &["exactly", "msg.sender", "recipient"],
+                &["balance", "success"],
+            ),
+            "transferFrom" => (
+                &["sender", "recipient", "reduces", "allowance"],
+                &[
+                    "allowance",
+                    "live state",
+                    "neither signed calldata",
+                    "nor displayed",
+                ],
+            ),
+            "unwrap" => (
+                &["burn", "wsteth", "steth"],
+                &["live", "steth", "not signed calldata"],
+            ),
+            _ => unreachable!("route inventory checked above"),
+        };
+        for (field, needles) in [
+            ("successful_effect", effect_needles),
+            ("state_residual", residual_needles),
+        ] {
+            let text = required_str(route, field).to_ascii_lowercase();
+            for needle in needles {
+                assert!(
+                    text.contains(needle),
+                    "{key} {field} must record {needle:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
     let root = workspace_root();
     let evidence = uniswap_evidence_root();
