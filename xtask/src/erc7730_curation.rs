@@ -37,6 +37,7 @@ const TOOL_INPUT_PATHS: &[&str] = &[
     "rust-toolchain.toml",
     "xtask/Cargo.toml",
     "xtask/src/erc7730_curation.rs",
+    "xtask/src/erc7730_diff.rs",
     "xtask/src/main.rs",
 ];
 
@@ -45,6 +46,21 @@ pub(crate) struct CorpusReceipt {
     pub(crate) file_count: usize,
     pub(crate) byte_count: u64,
     pub(crate) sha256: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegistryCheckoutIdentity {
+    pub(crate) repository: String,
+    pub(crate) commit: String,
+    pub(crate) tree: String,
+    pub(crate) schema_sha256: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReplacementIdentity {
+    pub(crate) path: String,
+    pub(crate) upstream_sha256: [u8; 32],
+    pub(crate) replacement_sha256: [u8; 32],
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -172,6 +188,24 @@ impl VerifiedOverlay {
         &self.manifest.upstream.tree
     }
 
+    pub(crate) fn policy_sha256(&self) -> Result<[u8; 32], String> {
+        parse_sha256(&self.manifest.policy.sha256)
+    }
+
+    pub(crate) fn replacement_identities(&self) -> Result<Vec<ReplacementIdentity>, String> {
+        self.manifest
+            .replacements
+            .iter()
+            .map(|replacement| {
+                Ok(ReplacementIdentity {
+                    path: replacement.path.clone(),
+                    upstream_sha256: parse_sha256(&replacement.upstream_sha256)?,
+                    replacement_sha256: parse_sha256(&replacement.replacement_sha256)?,
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn verify_selected_policy(
         &self,
         workspace_root: &Path,
@@ -201,69 +235,35 @@ impl VerifiedOverlay {
     }
 
     pub(crate) fn verify_upstream_checkout(&self, root: &Path) -> Result<(), String> {
-        let top_level = git(root, &["rev-parse", "--show-toplevel"])?;
-        let canonical_top = fs::canonicalize(top_level.trim()).map_err(|error| {
-            format!(
-                "canonicalize upstream Git top-level `{}`: {error}",
-                top_level.trim()
-            )
-        })?;
-        let canonical_root = fs::canonicalize(root)
-            .map_err(|error| format!("canonicalize upstream root {}: {error}", root.display()))?;
-        if canonical_top != canonical_root {
-            return Err(format!(
-                "upstream registry root is not its Git top-level: root={} top-level={}",
-                canonical_root.display(),
-                canonical_top.display()
-            ));
-        }
-
-        let remote = git(root, &["remote", "get-url", "origin"])?;
-        if remote.trim() != self.manifest.upstream.repository {
+        let identity = verify_official_clean_checkout(root)?;
+        if identity.repository != self.manifest.upstream.repository {
             return Err(format!(
                 "upstream origin mismatch: expected `{}`, got `{}`",
-                self.manifest.upstream.repository,
-                remote.trim()
+                self.manifest.upstream.repository, identity.repository
             ));
         }
-        let commit = git(root, &["rev-parse", "HEAD"])?;
-        if commit.trim() != self.manifest.upstream.commit {
+        if identity.commit != self.manifest.upstream.commit {
             return Err(format!(
                 "upstream commit mismatch: expected {}, got {}",
-                self.manifest.upstream.commit,
-                commit.trim()
+                self.manifest.upstream.commit, identity.commit
             ));
         }
-        let tree = git(root, &["rev-parse", "HEAD^{tree}"])?;
-        if tree.trim() != self.manifest.upstream.tree {
+        if identity.tree != self.manifest.upstream.tree {
             return Err(format!(
                 "upstream tree mismatch: expected {}, got {}",
-                self.manifest.upstream.tree,
-                tree.trim()
+                self.manifest.upstream.tree, identity.tree
             ));
         }
-        let status = git(
-            root,
-            &[
-                "status",
-                "--porcelain=v1",
-                "--untracked-files=all",
-                "--",
-                "registry",
-                "ercs",
-                UPSTREAM_SCHEMA_PATH,
-            ],
-        )?;
-        if !status.is_empty() {
+        let expected_schema = parse_sha256(&self.manifest.upstream.schema.sha256)?;
+        if identity.schema_sha256 != expected_schema {
             return Err(format!(
-                "upstream security inputs are dirty; refuse mixed committed/working-tree provenance:\n{status}"
+                "upstream ERC-7730 schema hash mismatch for {}: expected {}, got {}",
+                root.join(UPSTREAM_SCHEMA_PATH).display(),
+                self.manifest.upstream.schema.sha256,
+                hex::encode(identity.schema_sha256),
             ));
         }
-        verify_file_identity(
-            root,
-            &self.manifest.upstream.schema,
-            "upstream ERC-7730 schema",
-        )
+        Ok(())
     }
 
     pub(crate) fn verify_source_receipts(
@@ -392,6 +392,77 @@ impl VerifiedOverlay {
         }
         Ok(receipt)
     }
+}
+
+/// Verify a registry checkout without requiring the manifest-pinned revision.
+/// This is the candidate-side provenance gate for `diff-registry`: only the
+/// official repository, an exact Git top level, clean security inputs, and a
+/// regular v2 schema are accepted. The observed commit/tree/schema identities
+/// are returned for the deterministic report.
+pub(crate) fn verify_official_clean_checkout(
+    root: &Path,
+) -> Result<RegistryCheckoutIdentity, String> {
+    let top_level = git(root, &["rev-parse", "--show-toplevel"])?;
+    let canonical_top = fs::canonicalize(top_level.trim()).map_err(|error| {
+        format!(
+            "canonicalize upstream Git top-level `{}`: {error}",
+            top_level.trim()
+        )
+    })?;
+    let canonical_root = fs::canonicalize(root)
+        .map_err(|error| format!("canonicalize upstream root {}: {error}", root.display()))?;
+    if canonical_top != canonical_root {
+        return Err(format!(
+            "upstream registry root is not its Git top-level: root={} top-level={}",
+            canonical_root.display(),
+            canonical_top.display()
+        ));
+    }
+
+    let repository = git(root, &["remote", "get-url", "origin"])?
+        .trim()
+        .to_string();
+    if repository != UPSTREAM_REPOSITORY {
+        return Err(format!(
+            "upstream origin mismatch: expected `{UPSTREAM_REPOSITORY}`, got `{repository}`"
+        ));
+    }
+    let commit = git(root, &["rev-parse", "HEAD"])?.trim().to_string();
+    validate_lower_hex(&commit, 20, "upstream commit")?;
+    let tree = git(root, &["rev-parse", "HEAD^{tree}"])?.trim().to_string();
+    validate_lower_hex(&tree, 20, "upstream tree")?;
+    let status = git(
+        root,
+        &[
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--",
+            "registry",
+            "ercs",
+            UPSTREAM_SCHEMA_PATH,
+        ],
+    )?;
+    if !status.is_empty() {
+        return Err(format!(
+            "upstream security inputs are dirty; refuse mixed committed/working-tree provenance:\n{status}"
+        ));
+    }
+    let schema = root.join(UPSTREAM_SCHEMA_PATH);
+    require_regular_file(&schema, "upstream ERC-7730 schema")?;
+    let schema_bytes = fs::read(&schema).map_err(|error| {
+        format!(
+            "read upstream ERC-7730 schema {}: {error}",
+            schema.display()
+        )
+    })?;
+
+    Ok(RegistryCheckoutIdentity {
+        repository,
+        commit,
+        tree,
+        schema_sha256: Sha256::digest(schema_bytes).into(),
+    })
 }
 
 pub(crate) fn corpus_receipt(
