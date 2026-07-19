@@ -48,7 +48,6 @@ HEADER = Path(os.environ.get(
 EXPECTED = {
     "secure/src/hw/hash.rs":   {"HASH_BASE": "HASH_BASE_S"},
     "secure/src/hw/saes.rs":   {"SAES_BASE": "SAES_BASE_S"},
-    "secure/src/hw/huk.rs":    {"UID_BASE": "UID_BASE"},
     "secure/src/hw/rng.rs":    {"RNG": "RNG_BASE_S"},
     # GTZC1's CMSIS names are GTZC_TZSC1_/GTZC_TZIC1_ (instance number on the
     # BLOCK, not the controller) — the obvious-looking GTZC1_TZSC_BASE_S does

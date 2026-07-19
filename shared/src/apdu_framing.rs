@@ -377,12 +377,16 @@ impl HidFrameAssembler {
             if n < 7 {
                 return FrameOutcome::Dropped;
             }
-            if self.rx_pos > 0 {
+            if self.rx_expected != 0 {
                 // A seq=0 from a DIFFERENT channel mid-stream must NOT
                 // scrub the owner's partially reassembled APDU — that
                 // is a one-frame cross-channel starvation primitive
                 // (finding F1; §31a channel isolation — the continuation
                 // path below drops foreign-channel frames the same way).
+                // Liveness is `rx_expected` (set when the first frame is
+                // accepted), NOT `rx_pos`: a legal 7-byte first frame
+                // carries zero payload and must still count as an
+                // active stream.
                 // Drop the foreign frame, keep the owner's stream; the
                 // foreign host retries once the owner finishes.
                 if channel != self.channel_id {
@@ -444,8 +448,15 @@ impl HidFrameAssembler {
                 return FrameOutcome::Dropped;
             }
             // Same channel, wrong sequence: genuine desync — abort the
-            // stream so the host restarts from a clean slate.
+            // stream so the host restarts from a clean slate. Scrub the
+            // partial bytes first, same as the seq=0 abort: the buffer
+            // is treated as potentially secret-bearing and the desync
+            // reset must not leave a stale fragment behind.
             if seq != self.rx_seq {
+                let stale = core::cmp::min(self.rx_pos, buf.len());
+                for b in &mut buf[..stale] {
+                    *b = 0;
+                }
                 self.reset();
                 return FrameOutcome::Dropped;
             }
@@ -1081,6 +1092,59 @@ mod fuzz_props {
             FrameOutcome::Dropped
         );
         assert_eq!(asm.rx_expected(), 0);
+        // The desync abort also scrubs the partial bytes (same rule as
+        // the seq=0 abort — no stale fragment left behind).
+        assert_eq!(&buf[..HID_FIRST_DATA], &[0u8; HID_FIRST_DATA]);
+    }
+
+    #[test]
+    fn hid_zero_payload_first_frame_still_counts_as_active_stream() {
+        // GPT-5.6 wave finding: stream liveness keys on `rx_expected`,
+        // NOT `rx_pos` — a legal 7-byte first frame carries zero payload
+        // bytes but opens an active stream that foreign frames must not
+        // hijack.
+        let mut buf = [0u8; MAX_APDU_RX];
+        let mut asm = HidFrameAssembler::new();
+
+        // 7-byte first frame: channel 0xAAAA, seq=0, expected=120, no payload.
+        let mut f0 = [0u8; HID_REPORT_SIZE];
+        f0[0..2].copy_from_slice(&0xAAAAu16.to_be_bytes());
+        f0[2] = HID_TAG_APDU;
+        f0[3..5].copy_from_slice(&0u16.to_be_bytes());
+        f0[5..7].copy_from_slice(&120u16.to_be_bytes());
+        assert_eq!(
+            asm.process_frame(&f0, 7, &mut buf),
+            FrameOutcome::NeedMore
+        );
+        assert_eq!(asm.rx_expected(), 120);
+
+        // A foreign first-frame must be dropped, owner's stream intact.
+        let foreign = hid_first_frame(0xBBBB, 300, &[0xEE; HID_FIRST_DATA]);
+        assert_eq!(
+            asm.process_frame(&foreign, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::Dropped
+        );
+        assert_eq!(asm.channel_id(), 0xAAAA);
+        assert_eq!(asm.rx_expected(), 120);
+
+        // The owner's continuations still assemble normally (the first
+        // frame carried no payload, so completion needs one more frame
+        // than the payload-bearing cases).
+        let f1 = hid_cont_frame(0xAAAA, 1, &[0x22; HID_CONT_DATA]);
+        assert_eq!(
+            asm.process_frame(&f1, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::NeedMore
+        );
+        let f2 = hid_cont_frame(0xAAAA, 2, &[0x33; HID_CONT_DATA]);
+        assert_eq!(
+            asm.process_frame(&f2, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::NeedMore
+        );
+        let f3 = hid_cont_frame(0xAAAA, 3, &[0x44; HID_CONT_DATA]);
+        assert_eq!(
+            asm.process_frame(&f3, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::ApduComplete(120)
+        );
     }
 }
 

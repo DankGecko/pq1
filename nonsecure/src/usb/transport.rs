@@ -110,7 +110,15 @@ impl Transport {
                 None
             }
             FrameOutcome::Dropped => {
-                self.rx_start_frame = None;
+                // Clear the reassembly deadline only when the drop also
+                // killed the stream (desync abort / invalid first frame).
+                // A FOREIGN-channel frame is dropped while the owner's
+                // stream survives — clearing the deadline here would let
+                // one injected frame disarm `check_rx_timeout` for a
+                // stalled owner indefinitely (GPT-5.6 wave finding).
+                if self.rx.rx_expected() == 0 {
+                    self.rx_start_frame = None;
+                }
                 None
             }
         }

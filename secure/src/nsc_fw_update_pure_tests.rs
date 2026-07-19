@@ -721,6 +721,33 @@ fn positive_commit_resets_idle_timer_only_with_live_context() {
 }
 
 #[test]
+fn positive_commit_flash_error_paths_drop_the_context() {
+    // GPT-5.6 wave finding: the manifest-write and boot-state-write
+    // flash-error returns previously kept FW_UPDATE alive, so every
+    // retried COMMIT passed the live-context guard and re-reset the
+    // idle timer — an X17-UI3-style keepalive. Pin that EVERY
+    // FwUpdateFlashError return drops the context first.
+    let mut rest = COMMIT_SRC;
+    let mut count = 0usize;
+    while let Some(pos) = rest.find("return NscStatus::FwUpdateFlashError as u32") {
+        let before = &rest[..pos];
+        // Find the tail of the enclosing block: the last 400 chars
+        // before the return must contain the context drop.
+        let tail = &before[before.len().saturating_sub(400)..];
+        assert!(
+            tail.contains("FW_UPDATE) = None"),
+            "every FwUpdateFlashError return must first drop FW_UPDATE (keepalive guard); missing before byte {pos}"
+        );
+        count += 1;
+        rest = &rest[pos + 1..];
+    }
+    assert!(
+        count >= 2,
+        "expected at least the manifest-write and boot-state flash-error paths"
+    );
+}
+
+#[test]
 fn negative_status_checks_pin_verified_first() {
     // LOW-1 (fw-update audit 20260611): STATUS is pin-gated like every
     // other FW entry point. Pre-unlock the session context is already

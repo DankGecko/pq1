@@ -195,6 +195,15 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
         if unsafe { flash::write_quadword_verified((manifest_addr + (qw * 16) as u32), &buf) }
             .is_err()
         {
+            // Terminal failure: drop the context like the other failure
+            // exits — retaining it would let every retried COMMIT pass
+            // the live-context guard and re-reset the idle timer (an
+            // X17-UI3-style keepalive; GPT-5.6 wave finding).
+            // SAFETY: category 5 — exclusive write to `static mut FW_UPDATE`
+            // under the non-reentrant dispatcher + `HandlerGuard`.
+            unsafe {
+                *core::ptr::addr_of_mut!(FW_UPDATE) = None;
+            }
             return NscStatus::FwUpdateFlashError as u32;
         }
     }
@@ -214,6 +223,13 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     // call it once, just after the manifest has been programmed, so
     // the on-disk pointer can never reference a half-written manifest.
     if unsafe { boot_state::write(&new_boot_state) }.is_err() {
+        // Same terminal-failure rule as the manifest-write path above:
+        // the context must not survive this return (keepalive guard).
+        // SAFETY: category 5 — exclusive write to `static mut FW_UPDATE`
+        // under the non-reentrant dispatcher + `HandlerGuard`.
+        unsafe {
+            *core::ptr::addr_of_mut!(FW_UPDATE) = None;
+        }
         return NscStatus::FwUpdateFlashError as u32;
     }
 
