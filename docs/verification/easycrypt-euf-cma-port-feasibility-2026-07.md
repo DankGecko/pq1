@@ -1524,3 +1524,49 @@ Either prove that bridge, or state the paper-facing assumption in its collection
 
 DECISION ADOPTED: build the oracle-free top-image discharge in a new integration file; do NOT delete the
 conjunct; label the assumption as the Thλ-lifted S-TCR(+C) unless/until the standalone bridge is proved.
+
+### ROUND-2 CONVERGENCE 2026-07-19 — Kimi REVERSES; both models + the paper now agree. Path settled.
+
+Kimi K3 round-2 explicitly reverses its delete recommendation: *"If my earlier position was 'delete', I now
+reverse it"* — for three reasons it re-derived independently: `pick` has no `pp` (:302-305); Def C.1's A1 has
+no Th access (paper:1984-1998) so deletion is a STRENGTHENING not a return; and the member-aware discharge
+already exists in-file, so deletion's entire motivation (avoiding discharge work) is moot.
+
+**The conjunct is LOAD-BEARING, not an artifact** (Kimi's reversal finding): it is *"the fence that makes the
+OC-augmented game coincide with Def C.1's winning power"*, and it is **the same idiom in which every
+`SM_DT_*_C` term of the already-certified SPHINCS+ bound is stated** (SPHINCS_PLUS.ec:4356-4370). So our
+formulation is not a bespoke weakness — it is MM45's standard assumption idiom.
+
+**IMPORTANT CORRECTION to Position B as I had framed it:** discharging a TWEAK-ONLY `A_wf` is **impossible,
+not merely costly** — the premise is FALSE for the hypertree adversary, because the file's own analysis proves
+the pkco tweak of `ad` *is* `emb_tw ad` (WOTS_C_Interactive.ec:1950-1964), making tweak-only disjointness
+unsatisfiable. **You cannot discharge a false premise.** Position B survives ONLY in its member-aware form —
+which is exactly the third path. This retro-justifies the member-aware machinery: it is what makes the premise
+true at all.
+
+**THE ADOPTED PATH (both models, converged) — concrete-adversary member-audit discharge:**
+The top EUF-CMA forger F is oracle-free (its only oracle is the CMA signing oracle, SPHINCS_PLUS.ec:4339); it
+computes hashes inline from the pk. Hence in the composed adversary `R_int_STCRC(R_leaf(F))` **every**
+`OC.query` site is syntactically reduction-owned, so `A_wf_MA` becomes a concrete provable Hoare goal:
+ - `R_int_STCRC`'s chain-walk queries (member `8n`) — **ALREADY PROVEN**: `owrap_chainwalk_member8n` (:2764-2782).
+ - `R_leaf`'s own queries — pkco `8n*len`, trh `8n*2`, f `8n` — need while-invariants over its concrete choose
+   loops (MM45's own pattern: premises FL_SL:6307-6318 discharged by concrete while-proofs SPHINCS_PLUS.ec
+   :4375-4560, query shapes :1544-1587).
+ - Then `member_aware_disj_discharged` (:2045-2054) + the FLAG facts (`dfC = 8n+32 ∉ {8n, 8n*len, 8n*2}`, plus
+   **`8n*k` once FORS layers are in scope**) closes it at the existing application point (:2218).
+**Cost (Kimi): a few hundred lines of EC** — while-invariants tracking `size x ∈ {8n, 8n*len, 16n}` via
+`DigestBlock.valP`/`size_cat`/`size_flatten`, precedented twice over. **No new axioms, no game edits, no
+re-certification, no edits to any certified 0-admit file** (`A_wf_MA` is a premise instantiated by the
+CONSUMING file).
+
+**ASSUMPTION LABEL (settled):** ship it as `InSec` of `S_TCR_C_Int_MA` over `Adv_ISTCRC` = **Def C.1 stated in
+the MM45 SM-DT-C collection idiom with member-aware freshness** — identical in kind to every other assumption
+term in the shipped bound — plus the one-sentence note: *restricted to adversaries making no collection
+queries it is verbatim Def C.1; collection queries at challenged coordinates are losing.* Demanding a
+syntactically-verbatim standalone Def C.1 term would require either the batch certified theorem (wrong game
+for the interactive composition) or a ROM equivalence hop (out of scope) — so the idiom form IS the correct
+ship target. (GPT-5.6's equivalent framing: the Thλ-lifted `S-TCR(+C)(Th+C ∈ Thλ)`, which is how the paper
+states its own Thm 5.2 bound.)
+
+⇒ FOUNDATIONS QUESTION CLOSED. Two independent frontier models + the paper text converge. Next build items,
+both unblocked and independent: (1) grind-in-find for branch 2; (2) the member-audit discharge above.
