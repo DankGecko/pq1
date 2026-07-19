@@ -176,6 +176,24 @@ This mechanizes the first §2.1/§2.3 slice only; deterministic `diff-registry`,
 signed-release-manifest binding, and ERC-8176 production provenance remain
 separately gated work.
 
+**Phase-C deterministic registry-diff implementation (2026-07-19):**
+`xtask diff-registry` now verifies a manifest-pinned official base checkout and
+an arbitrary clean official candidate checkout, snapshots both against the
+same manifest-bound policy/compiler and exact production ERC-20 capability
+input, and emits stable review-only JSON. It reports complete included and
+excluded file deltas, leaves gained/lost/IR-changed, all six exact contract-call
+transitions among `clear`, `refused_known` and `unregistered`, skip-category
+deltas, and removed/modified/upstreamed curation preimages. The host build now
+retains the sorted exact known-call tuple inventory used for the Bloom, so the
+comparison never tries to invert or infer authority from Bloom membership.
+Both inputs are re-verified after building to catch concurrent drift. The
+command applies no curations, writes no registry or generated artifact, and
+labels `unregistered` as catalogue absence rather than claiming a runtime blind
+path. The recurring ceremony is recorded in the root-rotation owner document.
+This closes only the deterministic `diff-registry` + runbook sub-slice;
+signed-release-manifest binding, ERC-8176 production provenance, and the other
+explicit §2.3 gates remain open.
+
 ### 2.2 Duplicate-leaf precedence is alphabetical-filename (registry-squatting surface)
 Dedup on `(chain, contract, primary_type_hash, ctx)` keeps the lexicographically-first source
 path (dbgen/src/erc7730.rs:554-590); for contract ctx `primary_type_hash` is always 0. An
@@ -190,10 +208,16 @@ byte-identical; keep silent-drop only for byte-identical dups. Effort S.
   (today it's hand-typed with an in-file TODO). (xtask/src/main.rs:1224, dbgen erc7730.rs:4723)
 - Support re-vendoring at the *recorded* SHA so "renderer unlocked more descriptors" and
   "upstream moved" are separate commits with single-cause root diffs.
-- `xtask diff-registry`: A/B tolerant builds at two registry revisions → leaves
-  gained/lost/IR-changed + clear↔blind transitions by category + curated-file collisions.
-- A short `docs/` runbook for the resync ceremony (vendor → overlays → dbgen → review diff →
-  commit) — it's currently implicit in guard-test failure messages.
+- `xtask diff-registry`: **implemented in the bounded 2026-07-19 Phase-C
+  slice** — A/B tolerant builds at two registry revisions report leaves
+  gained/lost/IR-changed, exact clear/refused-known/unregistered transitions by
+  category, and curated-file collisions. `unregistered` deliberately replaces
+  the imprecise historical “blind” label because runtime policy may still
+  refuse.
+- A short `docs/` runbook for the resync ceremony: **implemented in
+  `docs/erc7730-root-rotation-and-update-policy.md`**; the command runs before
+  manifest replacement, followed by reviewed collision resolution, vendoring,
+  overlays, dbgen, review diff and commit.
 - `--policy production` is silently inert for the registry corpus (`let _ = force_production`,
   dbgen/src/main.rs:303) — make it a hard error until the ERC-8176 attestation flip lands.
 - Filename-convention tripwire: scanner only sees `calldata-*.json`/`eip712-*.json`

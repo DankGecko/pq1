@@ -6,8 +6,10 @@
 //!   * `gen-erc7730-descriptors` — compile + Merkle-anchor the ERC-7730 catalog.
 //!   * `scan-registry` / `build-registry` — read-only upstream-registry coverage
 //!     probes (how much PQ1 can clear-sign; what the full corpus builds to).
+//!   * `diff-registry` — deterministic read-only A/B registry revision review.
 //!   * `vendor-registry` — vendor the complete security-relevant registry JSON
 //!     corpus and verify both render leaves and refused-call coverage.
+//!
 //! The `gen-*` commands take `--check` (rebuild-in-memory + drift-diff) for CI.
 
 use std::env;
@@ -20,6 +22,7 @@ use pqsigner_proto as proto;
 use sha2::{Digest, Sha256};
 
 mod erc7730_curation;
+mod erc7730_diff;
 
 const SOLIDITY_OUT_PATH: &str = "contracts/smart-wallet/src/generated/PqsignerProto.sol";
 const ERC7730_VENDOR_MARKER: &str = ".pqsigner-erc7730-vendor";
@@ -36,6 +39,7 @@ fn main() -> ExitCode {
         "gen-erc7730-descriptors" => cmd_gen_erc7730_descriptors(&args[1..]),
         "scan-registry" => cmd_scan_registry(&args[1..]),
         "build-registry" => cmd_build_registry(&args[1..]),
+        "diff-registry" => erc7730_diff::cmd_diff_registry(&args[1..], &workspace_root()),
         "vendor-registry" => cmd_vendor_registry(&args[1..]),
         "" | "help" | "--help" | "-h" => {
             print_help();
@@ -93,6 +97,15 @@ Subcommands:
       pipeline and report leaf count, root, skips, and the exact production
       ERC-20 input/root receipt. Read-only: does NOT overwrite the firmware-
       pinned root.
+
+  diff-registry --base-root PATH --candidate-root PATH
+                [--policy PATH] [--curation-manifest PATH]
+      Deterministically compare tolerant raw-upstream builds from the
+      manifest-pinned base and a clean official candidate checkout. Emit
+      stable JSON with file, leaf, exact contract-call-state, skip-category,
+      and curation-collision deltas. Read-only: does not vendor, apply
+      curations, regenerate artifacts, install roots, or grant signing or
+      release authority.
 
   vendor-registry [--registry-root PATH] [--out PATH] [--policy PATH]
                   [--curation-manifest PATH | --no-curation-overlay]

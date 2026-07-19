@@ -47,7 +47,7 @@
     },
     {
       "path": "dbgen/src/erc7730.rs",
-      "sha256": "17824caca8a18b42af0bd507c5998350e493814d3276854a9dc6f9b5f463bb3b"
+      "sha256": "7518bc8aa0e287e588ac5cbc7ca600451196f384b485762637c94a5d9a9b1914"
     },
     {
       "path": "pqsigner-erc7730/Cargo.toml",
@@ -67,11 +67,15 @@
     },
     {
       "path": "xtask/src/erc7730_curation.rs",
-      "sha256": "0cd2dcc1423ee52fb5639cb026434a279f231a1f433599c7dd4cb7ec5d8445f6"
+      "sha256": "f3516ef68d799fddfc3da0e1ed0b4e10ac3711f5ffa8c88b51b7bcb4190650ee"
+    },
+    {
+      "path": "xtask/src/erc7730_diff.rs",
+      "sha256": "43e50a5fa56c1487748c9fd574b52db842e4536a4c0ddb5fe7e23c63c53a1155"
     },
     {
       "path": "xtask/src/main.rs",
-      "sha256": "66a0d17b74e26a276e004ae1648d277a496e924b8ee9b5bc636b6ba38039ac27"
+      "sha256": "cbe00c8edb0ad30ddac7242f2f860179a256169acdd58c14824d607c58cd5298"
     }
   ],
   "replacements": [

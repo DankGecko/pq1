@@ -534,6 +534,15 @@ pub struct Erc7730BuildResult {
     /// descriptor proof for a known `(chain, contract, selector)` tuple.
     pub known_calls_bloom: [u8; BLOOM_BYTES],
     pub known_call_count: usize,
+    /// Exact canonical tuple set used to construct `known_calls_bloom`.
+    ///
+    /// The Bloom filter and its digest are compact firmware/receipt forms;
+    /// neither can be inverted for an A/B registry review. Retaining the
+    /// sorted tuples in the host-only build result lets `xtask diff-registry`
+    /// distinguish a clear-signable call, a registry-known refusal, and a
+    /// tuple that is absent from the compared registry without guessing from
+    /// Bloom membership.
+    pub known_calls: Vec<(u64, [u8; 20], [u8; 4])>,
     /// Canonical digest of the exact sorted tuple set used to construct the
     /// Bloom filter.  Bloom equality alone is not a faithfulness proof because
     /// collisions can hide a dropped tuple during registry vendoring.
@@ -1135,8 +1144,13 @@ fn build_db_inner(
     }
     assert_eq!(blob.len(), total_size);
 
-    let (known_calls_bloom, known_call_count, known_call_set_hash, known_call_set_bits) =
-        build_known_calls_bloom(&emitted, &declared_known_calls)?;
+    let (
+        known_calls_bloom,
+        known_call_count,
+        known_call_set_hash,
+        known_call_set_bits,
+        known_calls,
+    ) = build_known_calls_bloom(&emitted, &declared_known_calls)?;
     // Review artifacts are committed and compared across clean worktrees.
     // Never let an absolute checkout prefix become part of their bytes.
     let review_source_root = registry_root.unwrap_or(input_dir);
@@ -1161,6 +1175,7 @@ fn build_db_inner(
         provenance,
         known_calls_bloom,
         known_call_count,
+        known_calls,
         known_call_set_hash,
     })
 }
@@ -1610,7 +1625,16 @@ fn canonical_fixed_type(ty: &str, prefix: &str) -> bool {
 fn build_known_calls_bloom(
     entries: &[Emitted],
     declared: &BTreeSet<(u64, [u8; 20], [u8; 4])>,
-) -> Result<([u8; BLOOM_BYTES], usize, [u8; 32], usize), String> {
+) -> Result<
+    (
+        [u8; BLOOM_BYTES],
+        usize,
+        [u8; 32],
+        usize,
+        Vec<(u64, [u8; 20], [u8; 4])>,
+    ),
+    String,
+> {
     let mut tuples = declared.clone();
     for entry in entries {
         if entry.context_kind != CTX_CONTRACT {
@@ -1639,7 +1663,8 @@ fn build_known_calls_bloom(
     }
     let set_hash = known_call_set_hash(&tuples)?;
     let set_bits = enforce_known_call_bloom_occupancy(&bloom)?;
-    Ok((bloom, tuples.len(), set_hash, set_bits))
+    let exact = tuples.iter().copied().collect();
+    Ok((bloom, tuples.len(), set_hash, set_bits, exact))
 }
 
 /// Keep the omission filter's safe-refusal rate governed as the registry
@@ -7310,7 +7335,7 @@ fn fmt_op_name(op: u8) -> &'static str {
 /// the attestation/policy bucket, because a completeness message that names
 /// a `visible:"never"` / hidden field would otherwise be mis-bucketed as an
 /// attestation-policy skip (review finding, xtask/src/main.rs:1417).
-fn review_skip_category(msg: &str) -> &'static str {
+pub fn review_skip_category(msg: &str) -> &'static str {
     let m = msg;
     if m.contains("UNSCANNED") {
         "unscanned (filename convention — review 2.3)"

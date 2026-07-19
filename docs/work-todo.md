@@ -4058,6 +4058,21 @@ review report.
   replacement, selected tool-input, and curated-corpus drift proof. This slice
   intentionally leaves `diff-registry`, signed-release-manifest binding, and
   ERC-8176/production authority open, so the parent item remains unchecked.
+  **Second bounded slice implemented 2026-07-19:** `xtask diff-registry` is a
+  read-only deterministic A/B review of the manifest-pinned official upstream
+  baseline and a clean official candidate revision under the same bound
+  compiler/policy and exact production ERC-20 capabilities. Its stable JSON
+  reports included/excluded file changes, leaves gained/lost/IR-changed, all
+  exact clear/refused-known/unregistered contract-call transitions,
+  skip-category deltas, and removed/modified/upstreamed curation preimages. It
+  retains the canonical known-call tuple set in the host build rather than
+  inferring from Bloom membership, rechecks both snapshots for concurrent
+  drift, applies no overlay, writes no artifacts, and makes no blind-signing or
+  release-authority claim. The root-rotation owner now records the pre-vendor
+  invocation and collision-resolution order. This closes the deterministic
+  diff + runbook sub-slice only; signed-release-manifest binding, ERC-8176
+  production provenance, and the remaining explicit §2.3 gates keep the parent
+  item unchecked.
   **First-slice Phase-D merge closure completed 2026-07-19:** frozen technical
   target `70e9864b1c6e1bdcb5756fb2d8ca20fb8c018194`, tree
   `cc02c58f3b69477e375302ecd578f6225eb1a352`, is retained at
@@ -4077,6 +4092,18 @@ review report.
   (thread `019f7786-1ba2-7410-ad63-10b48bbbfe32`, raw `gpt.events.jsonl`); no
   retry or substitute was launched. This grants merge evidence only, not
   production, shipment, ERC-8176, release-signing, or forced-blind authority.
+- [ ] **[pq1-7730-registry-update-lock-in, P2, SECURITY, S] Run the deferred
+  owner-triggered combined playbook lock-in for registry-update tooling.** When
+  the owner selects this as the active assurance surface, run one combined
+  source-first campaign with the clear-signing playbook as the primary lens and
+  the intersecting build/release/provenance and production-configuration lenses
+  over the curation manifest, `vendor-registry`, `diff-registry`, generated
+  receipts and root-rotation procedure. Include the separately deferred
+  signed-release-manifest and ERC-8176 implementation only if they have landed
+  by then. This sweep is deliberately deferred under the planning workflow: it
+  is not a blocker for the current read-only diff merge, survives handoff and
+  session restart, and must not be activated merely because a future session
+  notices the intersection.
 - [x] **[pq1-7730-phase-c-reviewability, P0, S] Make the Phase-D input and
   standing verification receipts mechanically reviewable.** Completed
   2026-07-18 without changing signing eligibility or the authenticated

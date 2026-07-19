@@ -78,26 +78,49 @@ chain and stored in flash:
 
 ## Resync ceremony (the recurring operation)
 
-1. `xtask vendor-registry` — from the manifest-pinned upstream Git top level,
+1. Before changing the manifest, compare its recorded upstream checkout with a
+   clean candidate checkout:
+
+   ```bash
+   cargo run --locked -p pqsigner-xtask -- diff-registry \
+     --base-root /path/to/recorded-registry-worktree \
+     --candidate-root /path/to/candidate-registry-worktree
+   ```
+
+   The command verifies the official origin, exact Git top levels, relevant
+   cleanliness, schema and complete included/excluded corpus on both sides. It
+   runs both raw upstream revisions under the same current manifest-bound
+   compiler/policy and exact production ERC-20 capability input, then emits
+   stable JSON for file, leaf, exact contract-call state, skip-category and
+   curation-collision review. Curations are not silently applied. An
+   `unregistered` call means only that the exact tuple is absent from that
+   registry revision; it is not a claim that runtime blind signing is allowed.
+2. Review every reported semantic change and resolve each curated-file
+   collision. If the candidate is accepted, update the manifest's upstream
+   commit/tree/schema/corpus receipts and each affected replacement preimage in
+   one explicit reviewable change. Re-run `diff-registry` from the still-
+   recorded baseline before replacing that baseline; the command never fetches,
+   checks out, writes, signs or installs anything.
+3. `xtask vendor-registry` — from the newly manifest-pinned upstream Git top level,
    verify origin, HEAD/tree, relevant working-tree cleanliness, v2 schema,
    complete security corpus, and excluded-fixture receipt; then copy the
    pristine corpus into staging.
-2. Apply the strict full-file curation overlay from
+4. Apply the strict full-file curation overlay from
    `secure/data/erc7730/curations/manifest.json`. The tool verifies every
    before/after length and hash, rejects undeclared/additive/deleting diffs,
    proves the final curated-corpus receipt, and requires the pristine and
    curated known-call count, tuple-set hash, and Bloom bytes to be identical
    before its checked install. There is no manual patch-reapplication step.
-3. `cargo run -p dbgen` — regenerate the blob, `db_roots.rs` root, and the
+5. `cargo run -p dbgen` — regenerate the blob, `db_roots.rs` root, and the
    drift-gated `erc7730.review.txt` (now carrying the per-field breakdown +
    `## skips` roll-up, finding 1.4).
-4. **Review the review-file diff**: leaves gained/lost, any `degraded=` markers
+6. **Review the review-file diff**: leaves gained/lost, any `degraded=` markers
    (finding 1.1), any new skips by category, any `CONFLICT` dedup error
    (finding 2.2). This is the human gate on what the device will trust.
-5. Commit; after the firmware-release quarantine closes, the root rides the
+7. Commit; after the firmware-release quarantine closes, the root rides the
    next reviewed and signed firmware release. Before closure this step produces
    development artifacts only.
-6. When provenance first changes from `dev-unattested` to
+8. When provenance first changes from `dev-unattested` to
    `erc8176-verified`, remove the temporary debug/mock/e2e feature coupling to
    `erc7730-dev-unattested` in `secure/Cargo.toml` in the same root rotation.
    Generated fences deliberately reject a verified root that still requests
