@@ -1,0 +1,106 @@
+name: "🛡️ Security finding (adversarial review)"
+description: File a security finding candidate against PQSigner_OS. Canonical post-cross-adjudication records still live in docs/security/adversarial-review/findings/ — this form is the discovery/tracking entry point.
+title: "[FINDING] <short title>"
+labels: ["finding"]
+body:
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Attack surface
+      options:
+        - clear-signing
+        - trustzone-gateway
+        - secure-element
+        - sca-fi
+        - firmware-update-secure-boot
+        - usb-companion
+        - offchain-signing
+        - onchain-contracts
+        - trusted-ui
+        - silicon-lockdown
+        - lifecycle-persistent-state
+        - entropy-key-lifecycle
+        - secure-runtime-resource
+        - production-configuration-prodtest
+        - build-release-provenance
+        - fv
+        - multi
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity (self-assessed)
+      options:
+        - critical
+        - high
+        - medium
+        - low
+        - info
+    validations:
+      required: true
+  - type: dropdown
+    id: evidence
+    attributes:
+      label: Evidence level
+      description: A finding without a falsifiable PoC is "suspicion, unverified" — say so honestly.
+      options:
+        - "PoC (falsifiable: input / trace / code path)"
+        - "Executed checker (command + exit code in body)"
+        - "suspicion, unverified"
+    validations:
+      required: true
+  - type: input
+    id: target
+    attributes:
+      label: Target identity
+      description: Commit SHA / tree / artifact digest this finding was derived against.
+      placeholder: "e.g. 89c60063"
+    validations:
+      required: true
+  - type: textarea
+    id: mechanism
+    attributes:
+      label: Claim and mechanism
+      description: What is claimed (invariant / defense / doc), and the concrete defect or gap that violates it.
+      placeholder: "Claimed: …  Defect: …"
+    validations:
+      required: true
+  - type: textarea
+    id: location
+    attributes:
+      label: Location / stable anchor
+      description: file:line plus a unique symbol/string/policy so the anchor survives refactors.
+      placeholder: "secure/src/…:123"
+    validations:
+      required: true
+  - type: textarea
+    id: trace
+    attributes:
+      label: Failure-path trace / PoC
+      description: Attacker input or authority crossing states/branches/writes to the bad outcome; or the exact PoC artifact and result. Preserve contradictory evidence.
+    validations:
+      required: true
+  - type: textarea
+    id: prereq
+    attributes:
+      label: Prerequisites and consequence (optional)
+      description: Attacker capability + lifecycle/config state required; confidentiality/integrity/availability impact and affected asset.
+    validations:
+      required: false
+  - type: textarea
+    id: residual
+    attributes:
+      label: Honest residual (optional)
+      description: What you did NOT look at, what survived, executed-vs-source-only, and any property needing silicon/bench evidence.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-filing checks
+      options:
+        - label: I searched the tracker (`label:finding`, `label:ship-blocker`, surface labels) and this is not already filed.
+          required: true
+        - label: This is not a documented accepted residual (docs/security/threat-model.md §9 / findings catalogue).
+          required: true

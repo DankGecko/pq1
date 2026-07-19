@@ -81,6 +81,8 @@ preserve all frozen input and matrix digests.
 
 Newest first. Add a row when you file a report; update the Status/Findings cells as you work through it.
 
+> **2026-07-19 — actionable state lives on the tracker.** Every open finding from the reports below (and the 54 pre-cross candidates in the 2026-07-18 discovery report) is filed as a GitHub issue under [`label:finding`](https://github.com/EthereumPhone/PQ1/issues?q=label%3Afinding); the reports here remain the frozen evidence. Close items on the tracker, not by editing old report status lines — new resolutions reference issue numbers.
+
 | Report | Surface | Date | Report status | Findings (open / handled) |
 |---|---|---|---|---|
 | [full-project-sweep-2026-07-18-discovery](./full-project-sweep-2026-07-18-discovery.md) | multi (full PQSigner_OS sweep; 15 first-principles lanes over all 16 playbook surfaces) | 2026-07-18 | `open` (supplemental pre-cross discovery evidence — not cross-adjudicated, not workflow completion) | 54 open / 0 handled |
