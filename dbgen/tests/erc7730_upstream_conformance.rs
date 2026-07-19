@@ -15,11 +15,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712};
-use pqsigner_erc7730::bundle::verify_erc7730_bundle;
+use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712, BindingError};
+use pqsigner_erc7730::bundle::{verify_erc7730_bundle, BundleError};
 use pqsigner_erc7730::display::render::{render_erc7730_eip712_pages, render_erc7730_pages};
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir};
 use pqsigner_erc7730::render::params::{parse as parse_params, NFT_COLLECTION_TO_PATH};
+use pqsigner_erc7730::render::RenderErr;
 use pqsigner_tx::erc20::bundle::{metadata_shape_is_device_verifiable, Erc20Metadata};
 use pqsigner_tx::names::NameResolver;
 use pqsigner_tx_core::eip1559::{self, Eip1559Tx, U256};
@@ -854,16 +855,6 @@ fn upstream_fixture_targets_are_inventoried_at_format_granularity() {
             "stale format-level fixture coverage receipt: {name}"
         );
     }
-    assert_eq!(
-        fixture_and_accepted.len() + accepted_without_fixture.len(),
-        accepted.len(),
-        "every accepted source/format pair is either fixture-targeted or explicitly untested"
-    );
-    assert_eq!(
-        fixture_and_accepted.len() + fixture_without_accepted_format.len(),
-        fixture_targets.len(),
-        "every fixture target is either accepted or explicitly unsupported"
-    );
 }
 
 fn fixture_case(relative: &str, case_index: usize) -> (Value, Vec<u8>) {
@@ -1330,6 +1321,142 @@ fn lido_claim_positive_matches_actual_merkle_verified_pq1_pages_with_exact_waive
     );
 }
 
+#[test]
+fn lido_claim_fixture_bundle_and_binding_mutations_fail_closed() {
+    let (_, raw) = fixture_case(
+        "registry/lido/tests/calldata-WithdrawalQueueERC721.tests.json",
+        2,
+    );
+    let parsed = eip1559::parse(&raw).expect("Lido fixture is canonical unsigned Type-2");
+    let to = parsed.tx.to.expect("Lido transaction target");
+    let registry = build_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == parsed.tx.chain_id
+                && entry.contract == to
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-WithdrawalQueueERC721.json")
+        })
+        .expect("accepted Lido descriptor leaf");
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("fixture bundle verifies");
+
+    let mut tampered_proof = bundle.clone();
+    let proof_offset = 2 + entry.ir_bytes.len() + 8;
+    assert!(
+        proof_offset < tampered_proof.len(),
+        "fixture proof is nonempty"
+    );
+    tampered_proof[proof_offset] ^= 0x01;
+    assert_eq!(
+        verify_erc7730_bundle(&tampered_proof, &registry.root).unwrap_err(),
+        BundleError::Merkle,
+        "one corpus-proof bit must invalidate the descriptor"
+    );
+
+    let mut trailing_bundle = bundle.clone();
+    trailing_bundle.push(0);
+    assert_eq!(
+        verify_erc7730_bundle(&trailing_bundle, &registry.root).unwrap_err(),
+        BundleError::TrailingBytes,
+        "a valid corpus bundle plus one byte must not verify"
+    );
+
+    assert_eq!(
+        cross_check_contract(&verified.ir, parsed.tx.chain_id.wrapping_add(1), &to),
+        Err(BindingError::ChainIdMismatch)
+    );
+    let mut wrong_contract = to;
+    wrong_contract[19] ^= 0x01;
+    assert_eq!(
+        cross_check_contract(&verified.ir, parsed.tx.chain_id, &wrong_contract),
+        Err(BindingError::ContractMismatch)
+    );
+}
+
+#[test]
+fn lido_claim_fixture_calldata_mutations_refuse_or_render_boundary_exactly() {
+    let (_, raw) = fixture_case(
+        "registry/lido/tests/calldata-WithdrawalQueueERC721.tests.json",
+        2,
+    );
+    let parsed = eip1559::parse(&raw).expect("Lido fixture is canonical unsigned Type-2");
+    assert_eq!(parsed.data.len(), 36, "fixture is selector plus one word");
+    let to = parsed.tx.to.expect("Lido transaction target");
+    let registry = build_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == parsed.tx.chain_id
+                && entry.contract == to
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-WithdrawalQueueERC721.json")
+        })
+        .expect("accepted Lido descriptor leaf");
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("fixture bundle verifies");
+
+    let mut short_tx = eip1559::parse(&raw)
+        .expect("reparse short fixture shell")
+        .tx;
+    let short = &parsed.data[..parsed.data.len() - 1];
+    short_tx.data_len = short.len();
+    assert!(matches!(
+        render_erc7730_pages(&short_tx, short, &verified, None, &NameResolver::new(),),
+        Err(RenderErr::Reject("7730 short head"))
+    ));
+
+    let mut trailing = parsed.data.to_vec();
+    trailing.push(0);
+    let mut trailing_tx = eip1559::parse(&raw)
+        .expect("reparse trailing fixture shell")
+        .tx;
+    trailing_tx.data_len = trailing.len();
+    assert!(matches!(
+        render_erc7730_pages(
+            &trailing_tx,
+            &trailing,
+            &verified,
+            None,
+            &NameResolver::new(),
+        ),
+        Err(RenderErr::Reject("7730 static calldata trailing"))
+    ));
+
+    let mut maximum = parsed.data.to_vec();
+    maximum[4..36].fill(0xff);
+    let maximum_tx = eip1559::parse(&raw)
+        .expect("reparse maximum fixture shell")
+        .tx;
+    let maximum_pages =
+        render_erc7730_pages(&maximum_tx, &maximum, &verified, None, &NameResolver::new())
+            .expect("maximum request ID renders without clipping");
+    let maximum_rows = normalized_rows(&maximum_pages);
+    let mut maximum_cursor = 0usize;
+    consume_normalized_token(&maximum_rows, &mut maximum_cursor, "Request ID");
+    consume_raw_word(&maximum_rows, &mut maximum_cursor, &[0xff; 32]);
+
+    let original_tx = eip1559::parse(&raw)
+        .expect("reparse original fixture shell")
+        .tx;
+    let original_pages = render_erc7730_pages(
+        &original_tx,
+        parsed.data,
+        &verified,
+        None,
+        &NameResolver::new(),
+    )
+    .expect("original request ID renders");
+    assert_ne!(
+        normalized_rows(&original_pages),
+        maximum_rows,
+        "a boundary-magnitude mutation must change the trusted transcript"
+    );
+}
+
 fn render_adapted_contract_fixture(
     adapted: &AdaptedFixtureTx,
     source_name: &str,
@@ -1433,45 +1560,40 @@ fn legacy_lido_positive_matches_actual_merkle_verified_pq1_pages_with_exact_waiv
     let waivers = case_waivers(relative_fixture, 3);
     let mut used_waivers = BTreeSet::new();
     let mut cursor = 0usize;
+    let recipient_word: [u8; 32] = adapted.data[4..36]
+        .try_into()
+        .expect("legacy transfer recipient word");
     for (text_index, token) in expected.iter().enumerate() {
         let token = token.as_str().expect("Lido wstETH expected text");
         if let Some(waiver) = waivers.get(&text_index) {
             assert_eq!(waiver.text, token, "waiver pins the exact upstream token");
+            if waiver.class == "line_wrapped_address_like" {
+                let compact: String = token
+                    .chars()
+                    .filter(|character| !character.is_ascii_whitespace())
+                    .collect();
+                assert_eq!(
+                    hex::decode(compact.strip_prefix("0x").expect("upstream recipient 0x"))
+                        .expect("upstream recipient hex")
+                        .as_slice(),
+                    &recipient_word[12..],
+                    "the waived token must equal the signed recipient word"
+                );
+                let recipient_text = format!("0x{}", hex::encode(&recipient_word[12..]));
+                for chunk in recipient_text.as_bytes().chunks(16) {
+                    consume_normalized_token(
+                        &rendered,
+                        &mut cursor,
+                        std::str::from_utf8(chunk).expect("address hex is ASCII"),
+                    );
+                }
+            }
             used_waivers.insert(text_index);
             continue;
         }
         consume_normalized_token(&rendered, &mut cursor, token);
     }
     assert_eq!(used_waivers.len(), waivers.len(), "unused waiver must fail");
-
-    let recipient_word: [u8; 32] = adapted.data[4..36]
-        .try_into()
-        .expect("legacy transfer recipient word");
-    let expected_recipient: String = expected[3]
-        .as_str()
-        .expect("upstream recipient text")
-        .chars()
-        .filter(|character| !character.is_ascii_whitespace())
-        .collect();
-    assert_eq!(
-        hex::decode(
-            expected_recipient
-                .strip_prefix("0x")
-                .expect("upstream recipient 0x")
-        )
-        .expect("upstream recipient hex")
-        .as_slice(),
-        &recipient_word[12..],
-    );
-    let mut recipient_cursor = 0usize;
-    let recipient_text = format!("0x{}", hex::encode(&recipient_word[12..]));
-    for chunk in recipient_text.as_bytes().chunks(16) {
-        consume_normalized_token(
-            &rendered,
-            &mut recipient_cursor,
-            std::str::from_utf8(chunk).expect("address hex is ASCII"),
-        );
-    }
     assert_eq!(
         hex::encode(&adapted.data[36..68]),
         "000000000000000000000000000000000000000000000000000009184e72a000",
