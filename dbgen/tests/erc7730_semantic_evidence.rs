@@ -405,6 +405,411 @@ fn stakewise_claim_source_abi_and_descriptors_agree_on_caller_semantics() {
 }
 
 #[test]
+fn stakewise_deposit_and_exit_source_abi_descriptors_and_ir_agree() {
+    let root = workspace_root();
+    let evidence = stakewise_evidence_root();
+    let manifest = read_json(&evidence.join("manifest.json"));
+    let additional = &manifest["additional_routes"];
+    let routes = additional["routes"]
+        .as_array()
+        .expect("StakeWise additional routes array");
+    let expected_routes = BTreeMap::from([
+        ("deposit", ("deposit(address,address)", "0xf9609f08")),
+        (
+            "enterExitQueue",
+            ("enterExitQueue(uint256,address)", "0x8ceab9aa"),
+        ),
+    ]);
+    assert_eq!(
+        routes
+            .iter()
+            .map(|route| required_str(route, "key"))
+            .collect::<BTreeSet<_>>(),
+        expected_routes.keys().copied().collect(),
+        "StakeWise route inventory drifted"
+    );
+
+    let verified_source = &manifest["verified_source"];
+    let mut archived_sources = BTreeMap::<String, String>::new();
+    for source in verified_source["files"]
+        .as_array()
+        .expect("verified source file array")
+    {
+        let archive_file = required_str(source, "archive_file");
+        let bytes = fs::read(evidence.join(archive_file)).expect("read archived source");
+        assert_eq!(
+            sha256_hex(&bytes),
+            required_str(source, "sha256"),
+            "archived source hash drifted for {archive_file}"
+        );
+        archived_sources.insert(
+            archive_file.to_owned(),
+            normalized_whitespace(&String::from_utf8(bytes).expect("Solidity source is UTF-8")),
+        );
+    }
+
+    let staking = &archived_sources["source/VaultEthStaking.sol"];
+    assert!(staking.contains(
+        "function deposit(address receiver, address referrer) public payable virtual override returns (uint256 shares) { return _deposit(receiver, msg.value, referrer); }"
+    ));
+    assert!(staking.contains(
+        "function _vaultAssets() internal view virtual override returns (uint256) { return address(this).balance; }"
+    ));
+    assert!(staking.contains(
+        "function _transferVaultAssets(address receiver, uint256 assets) internal virtual override nonReentrant { return Address.sendValue(payable(receiver), assets); }"
+    ));
+
+    let interface = &archived_sources["source/IVaultEthStaking.sol"];
+    assert!(interface.contains(
+        "function deposit(address receiver, address referrer) external payable returns (uint256 shares);"
+    ));
+
+    let enter_exit = &archived_sources["source/VaultEnterExit.sol"];
+    assert_fragments_in_order(
+        enter_exit,
+        &[
+            "function _deposit(address to, uint256 assets, address referrer)",
+            "if (to == address(0)) revert Errors.ZeroAddress();",
+            "if (assets == 0) revert Errors.InvalidAssets();",
+            "if (totalAssetsAfter > capacity()) revert Errors.CapacityExceeded();",
+            "shares = _convertToShares(assets, Math.Rounding.Ceil);",
+            "_mintShares(to, shares);",
+            "emit Deposited(msg.sender, to, assets, shares, referrer);",
+        ],
+    );
+    assert_fragments_in_order(
+        enter_exit,
+        &[
+            "function _enterExitQueue(address user, uint256 shares, address receiver)",
+            "if (shares == 0) revert Errors.InvalidShares();",
+            "if (receiver == address(0)) revert Errors.ZeroAddress();",
+            "if (!_isCollateralized())",
+            "uint256 assets = convertToAssets(shares);",
+            "_burnShares(user, shares);",
+            "_transferVaultAssets(receiver, assets);",
+            "return type(uint256).max;",
+            "positionTicket = _exitQueue.getLatestTotalTickets() + _totalExitingTickets + queuedShares;",
+            "_exitRequests[keccak256(abi.encode(receiver, block.timestamp, positionTicket))] = shares;",
+            "_balances[user] -= shares;",
+            "_queuedShares = SafeCast.toUint128(queuedShares + shares);",
+            "emit ExitQueueEntered(user, receiver, positionTicket, shares);",
+        ],
+    );
+
+    let eth_vault = &archived_sources["source/EthVault.sol"];
+    assert!(eth_vault.contains(
+        "function enterExitQueue(uint256 shares, address receiver) public virtual override(IVaultEnterExit, VaultEnterExit, VaultOsToken) returns (uint256 positionTicket) { return super.enterExitQueue(shares, receiver); }"
+    ));
+    let os_token = &archived_sources["source/VaultOsToken.sol"];
+    assert_fragments_in_order(
+        os_token,
+        &[
+            "function enterExitQueue(uint256 shares, address receiver)",
+            "positionTicket = super.enterExitQueue(shares, receiver);",
+            "_checkOsTokenPosition(msg.sender);",
+            "function _checkOsTokenPosition(address user) internal view",
+            "if (position.shares == 0) return;",
+            "_checkHarvested();",
+            "if (_calcMaxOsTokenShares(convertToAssets(_balances[user])) < position.shares)",
+            "revert Errors.LowLtv();",
+        ],
+    );
+    let state = &archived_sources["source/VaultState.sol"];
+    assert!(state.contains("mapping(address => uint256) internal _balances;"));
+    assert!(state.contains(
+        "function getShares(address account) external view override returns (uint256) { return _balances[account]; }"
+    ));
+    assert!(state.contains(
+        "function convertToAssets(uint256 shares) public view override returns (uint256 assets)"
+    ));
+    assert!(state.contains(
+        "function _convertToShares(uint256 assets, Math.Rounding rounding) internal view returns (uint256 shares)"
+    ));
+    let immutables = &archived_sources["source/VaultImmutables.sol"];
+    assert!(immutables.contains(
+        "function _isCollateralized() internal view virtual returns (bool) { return IKeeperRewards(_keeper).isCollateralized(address(this)); }"
+    ));
+
+    let abi_spec = &additional["abi"];
+    let abi_bytes = fs::read(evidence.join(required_str(abi_spec, "archive_file")))
+        .expect("read StakeWise additional-route ABI");
+    assert_eq!(
+        sha256_hex(&abi_bytes),
+        required_str(abi_spec, "archive_file_sha256")
+    );
+    assert_eq!(
+        required_str(abi_spec, "source_full_verified_abi_canonical_sha256"),
+        required_str(&manifest["abi"], "full_verified_abi_canonical_sha256"),
+        "additional-route ABI subset lost its pinned full-ABI receipt"
+    );
+    let abi: Value = serde_json::from_slice(&abi_bytes).expect("parse additional-route ABI");
+    let abi_entries = abi.as_array().expect("additional-route ABI array");
+    assert_eq!(abi_entries.len(), routes.len());
+
+    let mut expected_by_descriptor = BTreeMap::<String, BTreeSet<(u64, String)>>::new();
+    for deployment in manifest["deployments"]
+        .as_array()
+        .expect("deployment array")
+    {
+        expected_by_descriptor
+            .entry(required_str(deployment, "descriptor").to_owned())
+            .or_default()
+            .insert((
+                deployment["chain_id"].as_u64().expect("deployment chain"),
+                required_str(deployment, "address").to_ascii_lowercase(),
+            ));
+    }
+
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+        .expect("build production ERC20 capability corpus");
+    let (registry, _) = build_db_tolerant_with_erc20_capabilities(
+        &root.join("secure/data/erc7730-registry/registry"),
+        &root.join("secure/data/erc7730/policy.toml"),
+        Some(&root.join("secure/data/erc7730-registry")),
+        &erc20.capabilities,
+    )
+    .expect("build production ERC-7730 registry");
+
+    for runtime_key in ["implementation_mainnet", "implementation_hoodi"] {
+        let runtime_spec = &manifest["runtime_artifacts"][runtime_key];
+        let runtime = read_hex(&evidence.join(required_str(runtime_spec, "file")));
+        for route in routes {
+            let selector = decode_hex_text(required_str(route, "selector"));
+            let mut push4 = vec![0x63];
+            push4.extend_from_slice(&selector);
+            assert_eq!(
+                runtime
+                    .windows(push4.len())
+                    .filter(|window| *window == push4.as_slice())
+                    .count(),
+                1,
+                "{runtime_key} must retain exactly one PUSH4 dispatcher entry for {}",
+                required_str(route, "canonical_signature")
+            );
+        }
+    }
+
+    let canonicalize = |authored: &str| {
+        let (name, tail) = authored.split_once('(').expect("authored signature");
+        let params = tail.strip_suffix(')').expect("signature close");
+        let types: Vec<_> = params
+            .split(',')
+            .filter(|param| !param.trim().is_empty())
+            .map(|param| {
+                param
+                    .split_ascii_whitespace()
+                    .next()
+                    .expect("authored input type")
+            })
+            .collect();
+        format!("{name}({})", types.join(","))
+    };
+
+    for (descriptor_path, expected_deployments) in expected_by_descriptor {
+        let descriptor_bytes =
+            fs::read(root.join(&descriptor_path)).expect("read curated StakeWise descriptor");
+        let registry_suffix = descriptor_path
+            .strip_prefix("secure/data/erc7730/curations/files/")
+            .expect("curation descriptor prefix");
+        assert_eq!(
+            descriptor_bytes,
+            fs::read(
+                root.join("secure/data/erc7730-registry")
+                    .join(registry_suffix)
+            )
+            .expect("read vendored StakeWise descriptor"),
+            "curation and production descriptor copies diverged"
+        );
+        let descriptor: Value =
+            serde_json::from_slice(&descriptor_bytes).expect("StakeWise descriptor JSON");
+        let actual_deployments: BTreeSet<_> = descriptor["context"]["contract"]["deployments"]
+            .as_array()
+            .expect("descriptor deployments")
+            .iter()
+            .map(|deployment| {
+                (
+                    deployment["chainId"].as_u64().expect("descriptor chain"),
+                    deployment["address"]
+                        .as_str()
+                        .expect("descriptor address")
+                        .to_ascii_lowercase(),
+                )
+            })
+            .collect();
+        assert_eq!(actual_deployments, expected_deployments);
+        let formats = descriptor["display"]["formats"]
+            .as_object()
+            .expect("descriptor formats");
+
+        let source_name = Path::new(registry_suffix)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("descriptor file name");
+        let matching_entries: Vec<_> = registry
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.source.file_name().and_then(|name| name.to_str()) == Some(source_name)
+            })
+            .collect();
+        assert_eq!(matching_entries.len(), expected_deployments.len());
+
+        for route in routes {
+            let key = required_str(route, "key");
+            let signature = required_str(route, "canonical_signature");
+            let (_, expected_selector) = expected_routes
+                .get(key)
+                .unwrap_or_else(|| panic!("unexpected StakeWise route {key}"));
+            assert_eq!(required_str(route, "selector"), *expected_selector);
+            assert_eq!(
+                format!("0x{}", hex::encode(&keccak256(signature.as_bytes())[..4])),
+                *expected_selector
+            );
+
+            let abi_matches: Vec<_> = abi_entries
+                .iter()
+                .filter(|entry| {
+                    let Some(name) = entry["name"].as_str() else {
+                        return false;
+                    };
+                    let Some(inputs) = entry["inputs"].as_array() else {
+                        return false;
+                    };
+                    let types: Vec<_> = inputs
+                        .iter()
+                        .filter_map(|input| input["type"].as_str())
+                        .collect();
+                    format!("{name}({})", types.join(",")) == signature
+                })
+                .collect();
+            assert_eq!(abi_matches.len(), 1, "exact additional-route ABI match");
+            let abi_entry = abi_matches[0];
+            assert_eq!(abi_entry["type"].as_str(), Some("function"));
+            assert_eq!(
+                abi_entry["stateMutability"].as_str(),
+                Some(if key == "deposit" {
+                    "payable"
+                } else {
+                    "nonpayable"
+                })
+            );
+            assert_eq!(abi_entry["outputs"][0]["type"].as_str(), Some("uint256"));
+
+            let descriptor_matches: Vec<_> = formats
+                .iter()
+                .filter(|(authored, _)| canonicalize(authored) == signature)
+                .collect();
+            assert_eq!(descriptor_matches.len(), 1, "exact descriptor route match");
+            let (_, descriptor_format) = descriptor_matches[0];
+            let descriptor_fields = descriptor_format["fields"]
+                .as_array()
+                .expect("descriptor fields");
+            let displayed_paths: BTreeSet<_> = route["displayed_operand_paths"]
+                .as_array()
+                .expect("displayed operand paths")
+                .iter()
+                .map(|path| path.as_str().expect("displayed operand path"))
+                .collect();
+            assert_eq!(
+                descriptor_fields
+                    .iter()
+                    .map(|field| field["path"].as_str().expect("descriptor field path"))
+                    .collect::<BTreeSet<_>>(),
+                displayed_paths,
+                "{key} displayed operand inventory drifted"
+            );
+            if key == "enterExitQueue" {
+                assert_eq!(descriptor_format["intent"].as_str(), Some("Exit vault"));
+                assert_eq!(descriptor_fields.len(), 2);
+                assert_eq!(
+                    descriptor_fields[0]["label"].as_str(),
+                    Some("Shares to exit")
+                );
+                assert_eq!(descriptor_fields[0]["format"].as_str(), Some("raw"));
+                assert!(descriptor_fields[0]["params"].is_null());
+                assert_eq!(
+                    descriptor_fields[1]["label"].as_str(),
+                    Some("Exit receiver")
+                );
+                assert_eq!(descriptor_fields[1]["format"].as_str(), Some("addressName"));
+            }
+
+            let selector: [u8; 4] = decode_hex_text(*expected_selector)
+                .try_into()
+                .expect("selector width");
+            for entry in &matching_entries {
+                let deployment = (entry.chain_id, format!("0x{}", hex::encode(entry.contract)));
+                assert!(expected_deployments.contains(&deployment));
+                let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated StakeWise IR parses");
+                assert_eq!(
+                    cross_check_contract(&ir, entry.chain_id, &entry.contract),
+                    Ok(())
+                );
+                let ir_format = ir
+                    .find_format_by_selector(&selector)
+                    .expect("StakeWise format table parses")
+                    .unwrap_or_else(|| panic!("{signature} remains admitted"));
+                let ir_fields: Vec<_> = ir_format
+                    .fields()
+                    .map(|field| field.expect("generated StakeWise field parses"))
+                    .collect();
+                assert_eq!(ir_fields.len(), descriptor_fields.len());
+                for (descriptor_field, ir_field) in descriptor_fields.iter().zip(ir_fields) {
+                    let op = match descriptor_field["format"].as_str() {
+                        Some("addressName") => FormatOp::AddressName,
+                        Some("amount") => FormatOp::Amount,
+                        Some("raw") => FormatOp::Raw,
+                        other => panic!("unexpected StakeWise field formatter {other:?}"),
+                    };
+                    assert_eq!(
+                        ir_field.label,
+                        descriptor_field["label"].as_str().unwrap().as_bytes()
+                    );
+                    assert_eq!(FormatOp::try_from(ir_field.format_op), Ok(op));
+                    let params = parse_params(&ir, ir_field.param_off).expect("field params parse");
+                    assert_eq!(params.visibility, Visibility::Always);
+                    let path = descriptor_field["path"]
+                        .as_str()
+                        .expect("descriptor field path");
+                    assert_eq!(
+                        params.terminal_kind,
+                        Some(
+                            if path.ends_with("receiver") || path.ends_with("referrer") {
+                                TerminalKind::Address
+                            } else {
+                                TerminalKind::Unsigned
+                            }
+                        )
+                    );
+                    if key == "enterExitQueue" && path == "#.shares" {
+                        assert!(params.token.is_none());
+                        assert!(params.token_path.is_none());
+                    }
+                }
+            }
+
+            let effect = required_str(route, "successful_effect").to_ascii_lowercase();
+            let residual = required_str(route, "state_residual").to_ascii_lowercase();
+            if key == "deposit" {
+                for needle in ["signed transaction value", "receiver", "referrer"] {
+                    assert!(effect.contains(needle));
+                }
+                for needle in ["live", "share", "neither signed calldata nor displayed"] {
+                    assert!(residual.contains(needle));
+                }
+            } else {
+                for needle in ["msg.sender", "shares", "receiver", "collateralized"] {
+                    assert!(effect.contains(needle));
+                }
+                for needle in ["collateralization", "ticket", "exchange rate", "live state"] {
+                    assert!(residual.contains(needle));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn lido_wsteth_fixed_block_runtime_and_state_match_receipt() {
     let evidence = lido_evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));

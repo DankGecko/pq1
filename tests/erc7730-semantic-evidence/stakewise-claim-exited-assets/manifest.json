@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "StakeWise claimExitedAssets semantic evidence for the three PQ1-admitted P2P and Serenita vault proxies",
+  "scope": "StakeWise claimExitedAssets, deposit, and enterExitQueue semantic evidence for the three PQ1-admitted P2P and Serenita vault proxies",
   "captured_at_utc": "2026-07-19T13:45:00Z",
   "selector": "0x8697d2c2",
   "canonical_signature": "claimExitedAssets(uint256,uint256,uint256)",
@@ -103,6 +103,31 @@
         "upstream_path": "contracts/interfaces/IVaultEnterExit.sol",
         "archive_file": "source/IVaultEnterExit.sol",
         "sha256": "dacbb3d4573bb6838149c50c832cde4fc91d8c1deac11d43e52c3e7f22156af4"
+      },
+      {
+        "upstream_path": "contracts/vaults/modules/VaultEthStaking.sol",
+        "archive_file": "source/VaultEthStaking.sol",
+        "sha256": "461f4d50dd85534ed3131fe701d98b3980856247839912506a5d9a4f8e0a596e"
+      },
+      {
+        "upstream_path": "contracts/interfaces/IVaultEthStaking.sol",
+        "archive_file": "source/IVaultEthStaking.sol",
+        "sha256": "f010cba9a0ce08a52f9e1c604c245c7c45057f24ac31f275e91d0b74f9d2c006"
+      },
+      {
+        "upstream_path": "contracts/vaults/modules/VaultOsToken.sol",
+        "archive_file": "source/VaultOsToken.sol",
+        "sha256": "c073b8c5336917052096a0fd57b5c208bb6c25fb91832f8d30b214660d542cfc"
+      },
+      {
+        "upstream_path": "contracts/vaults/modules/VaultState.sol",
+        "archive_file": "source/VaultState.sol",
+        "sha256": "9d80212e7660576e614ae17a343060d5f43bdf4490c216eaa9f75da29dc2c7fe"
+      },
+      {
+        "upstream_path": "contracts/vaults/modules/VaultImmutables.sol",
+        "archive_file": "source/VaultImmutables.sol",
+        "sha256": "1d9d6dbcf78cdb17e98dfe461636438481f9d239915c9c2ddfdac06d1df7fa76"
       }
     ]
   },
@@ -118,6 +143,43 @@
     "transfer_recipient": "_transferVaultAssets(msg.sender, exitedAssets)",
     "event_recipient": "ExitedAssetsClaimed(msg.sender, positionTicket, newPositionTicket, exitedAssets)",
     "descriptor_receiver_path": "@.from"
+  },
+  "additional_routes": {
+    "abi": {
+      "archive_file": "abi/deposit-enterExitQueue.abi.json",
+      "archive_file_sha256": "47b8f3ca5db457b24c68ebdca50347640c65931ae92851eaba046c80e5485ce8",
+      "source_full_verified_abi_canonical_sha256": "64e045dc2604788d272e8f38624ff1496b9e49327f6af1ce7fdddd9a7119f963"
+    },
+    "routes": [
+      {
+        "key": "deposit",
+        "canonical_signature": "deposit(address,address)",
+        "selector": "0xf9609f08",
+        "displayed_operand_paths": [
+          "#.receiver",
+          "#.referrer",
+          "@.value"
+        ],
+        "successful_effect": "Deposits exactly the signed transaction value into the vault, mints a live-rate amount of internal vault shares rounded up with Math.Rounding.Ceil to the signed receiver, and records the signed referrer only in the Deposited event.",
+        "state_residual": "The minted share output depends on live totalAssets and totalShares; harvested status and capacity determine success. The output share count is neither signed calldata nor displayed as a guaranteed result."
+      },
+      {
+        "key": "enterExitQueue",
+        "canonical_signature": "enterExitQueue(uint256,address)",
+        "selector": "0x8ceab9aa",
+        "displayed_operand_paths": [
+          "#.shares",
+          "#.receiver"
+        ],
+        "successful_effect": "Deducts exactly the signed number of internal vault shares from msg.sender. When collateralized, it records those shares in an exit request keyed by the signed receiver, current block timestamp, and computed position ticket; when uncollateralized, it burns those shares immediately and transfers the live-rate ETH amount to the signed receiver.",
+        "state_residual": "Collateralization selects the queued or immediate branch. The current timestamp, computed ticket, exchange rate, ETH output, queue timing, harvested status, caller balance, and post-exit osToken LTV check are live state and are not signed operands or guaranteed outputs."
+      }
+    ]
+  },
+  "share_semantics": {
+    "storage": "VaultState stores shares in the internal _balances mapping and exposes them through getShares and conversion functions.",
+    "erc20_status": "EthVault does not inherit an ERC-20 share token and does not expose ERC-20 transfer, transferFrom, approve, symbol, or decimals semantics for these vault shares.",
+    "formatting_constraint": "The signed shares word must therefore remain exact and must not acquire an ERC-20 scale or ticker from the vault proxy address."
   },
   "cross_chain_runtime": {
     "rule": "After replacing only the declared chain/address immutable ranges, the mainnet and Hoodi runtime bytecode must be identical.",
@@ -279,7 +341,7 @@
     ]
   },
   "metadata_scope": {
-    "token_metadata": "not applicable: claimExitedAssets has no tokenPath or trusted token metadata",
+    "token_metadata": "claimExitedAssets and deposit need no tokenPath; enterExitQueue consumes internal non-ERC-20 vault shares, so the proxy address is not trusted token metadata for their scale or ticker",
     "receiver_name": "the descriptor binds the signed @.from address; optional local or ENS resolution cannot change the bound address",
     "remaining_issue_scope": "broader protocol owner/name reconciliation for other accepted descriptors remains open in issue #378"
   },
@@ -287,6 +349,7 @@
     "This is a fixed-block receipt; the EIP-1967 proxies can be upgraded after the pinned blocks.",
     "The mainnet explorer source is verified but Blockscout reports is_fully_verified=false.",
     "Hoodi source is established by exact equality to the mainnet instruction stream outside the pinned chain/address immutable ranges, not by a separate explorer verification.",
+    "Deposit output shares and enterExitQueue branch, ticket, timing, and ETH output depend on live vault, keeper, osToken, and chain state; this receipt binds signed inputs and successful effects, not future results.",
     "This evidence grants no live-monitoring, production-shipment, fallback, or blind-signing authority."
   ]
 }

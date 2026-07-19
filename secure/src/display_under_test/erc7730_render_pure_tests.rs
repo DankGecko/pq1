@@ -2763,6 +2763,269 @@ fn positive_serenita_deposit_binds_native_value_receiver_and_complete_referrer()
     );
 }
 
+#[test]
+fn positive_p2p_stakewise_deposits_bind_receiver_referrer_and_native_value() {
+    let receiver = [0x44u8; 20];
+    let referrer = [0x55u8; 20];
+    let signer = [0x66u8; 20];
+    let value = u256_from_u64(1_500_000_000_000_000_000);
+    let expected_deployments = [
+        (1u64, "b72668d6ff7a0e318f83097a754c6aed0f8af034"),
+        (560_048u64, "8f73c1ce7fe0e17f45b317b33620924a94256fbb"),
+    ];
+
+    for (chain_id, expected_contract) in expected_deployments {
+        let res = build_registry();
+        let entry = find_leaf(res, "calldata-NativeTokenVault.json", chain_id);
+        assert_eq!(
+            hex::encode(entry.contract),
+            expected_contract,
+            "P2P deposit selected the wrong deployment"
+        );
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify P2P vault leaf");
+        assert_eq!(
+            cross_check_contract(&verified.ir, chain_id, &entry.contract),
+            Ok(())
+        );
+        let mut wrong_contract = entry.contract;
+        wrong_contract[19] ^= 1;
+        assert_eq!(
+            cross_check_contract(&verified.ir, chain_id, &wrong_contract),
+            Err(BindingError::ContractMismatch)
+        );
+
+        let calldata = calldata_static(
+            "deposit(address,address)",
+            &[abi_address_word(receiver), abi_address_word(referrer)],
+        );
+        assert_selector_matches(&verified.ir, &calldata, "deposit(address,address)");
+        let resolver = NameResolver::new();
+        let mut tx = envelope(chain_id, entry.contract);
+        tx.value = value;
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render P2P deposit on {chain_id}: {error:?}"));
+        assert_eq!(
+            rendered.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "P2P deposit receipt must bind every page on chain {chain_id}"
+        );
+        assert_all_pages_printable(&rendered.pages);
+        assert_eq!(
+            page_strs(&rendered.pages, intent_page_index(&rendered.pages))[0],
+            "Stake ETH with p"
+        );
+        assert_full_address_field_page(&rendered.pages, "Client address", &receiver);
+        assert_full_address_field_page(&rendered.pages, "Referrer address", &referrer);
+        let amount_rows = page_strs(
+            &rendered.pages,
+            find_page_by_label(&rendered.pages, "Amount to depos~"),
+        );
+        let amount_text = amount_rows.concat();
+        if chain_id == 1 {
+            assert!(
+                amount_text.contains("1.5") && amount_text.contains("ETH"),
+                "mainnet P2P deposit lost its authenticated native scale: {amount_rows:?}"
+            );
+        } else {
+            assert!(
+                amount_text.contains("1500000000000000000")
+                    && amount_text.contains("! raw, dec=?")
+                    && !amount_text.contains("ETH"),
+                "Hoodi P2P deposit must remain an exact unknown-scale integer: {amount_rows:?}"
+            );
+        }
+
+        let assert_mutation_changes =
+            |mutated_tx: &Eip1559Tx, mutated_calldata: &[u8], operand: &str| {
+                let mutated = render_erc7730_pages_with_signer_checked(
+                    mutated_tx,
+                    mutated_calldata,
+                    &verified,
+                    None,
+                    &resolver,
+                    &signer,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("render mutated P2P {operand} on {chain_id}: {error:?}")
+                });
+                assert_ne!(
+                    rendered.pages.as_slice(),
+                    mutated.pages.as_slice(),
+                    "one signed {operand} bit must change P2P deposit pages on {chain_id}"
+                );
+                assert!(
+                    !rendered
+                        .transcript_receipt
+                        .exact_match(&mutated.transcript_receipt),
+                    "one signed {operand} bit must change the P2P deposit receipt on {chain_id}"
+                );
+            };
+
+        let mut mutated_receiver = receiver;
+        mutated_receiver[19] ^= 1;
+        let mutated_receiver_calldata = calldata_static(
+            "deposit(address,address)",
+            &[
+                abi_address_word(mutated_receiver),
+                abi_address_word(referrer),
+            ],
+        );
+        assert_mutation_changes(&tx, &mutated_receiver_calldata, "receiver");
+
+        let mut mutated_referrer = referrer;
+        mutated_referrer[19] ^= 1;
+        let mutated_referrer_calldata = calldata_static(
+            "deposit(address,address)",
+            &[
+                abi_address_word(receiver),
+                abi_address_word(mutated_referrer),
+            ],
+        );
+        assert_mutation_changes(&tx, &mutated_referrer_calldata, "referrer");
+
+        let mut mutated_value_tx = tx;
+        mutated_value_tx.value = u256_from_u64(2_000_000_000_000_000_000);
+        assert_mutation_changes(&mutated_value_tx, &calldata, "native value");
+    }
+}
+
+#[test]
+fn positive_stakewise_exit_queue_routes_bind_raw_shares_and_receiver() {
+    let shares = u256_from_u64(1_234_567).0;
+    let receiver = [0x77u8; 20];
+    let signer = [0x88u8; 20];
+    let deployments = [
+        (
+            "calldata-NativeTokenVault.json",
+            1u64,
+            "b72668d6ff7a0e318f83097a754c6aed0f8af034",
+        ),
+        (
+            "calldata-NativeTokenVault.json",
+            560_048u64,
+            "8f73c1ce7fe0e17f45b317b33620924a94256fbb",
+        ),
+        (
+            "calldata-EthVault.json",
+            1u64,
+            "b36fc5e542cb4fc562a624912f55da2758998113",
+        ),
+    ];
+
+    for (source_name, chain_id, expected_contract) in deployments {
+        let res = build_registry();
+        let entry = find_leaf(res, source_name, chain_id);
+        assert_eq!(
+            hex::encode(entry.contract),
+            expected_contract,
+            "StakeWise exit selected the wrong deployment"
+        );
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified =
+            verify_erc7730_bundle(&bundle, &res.root).expect("verify StakeWise vault leaf");
+        assert_eq!(
+            cross_check_contract(&verified.ir, chain_id, &entry.contract),
+            Ok(())
+        );
+        let mut wrong_contract = entry.contract;
+        wrong_contract[19] ^= 1;
+        assert_eq!(
+            cross_check_contract(&verified.ir, chain_id, &wrong_contract),
+            Err(BindingError::ContractMismatch)
+        );
+
+        let calldata = calldata_static(
+            "enterExitQueue(uint256,address)",
+            &[shares, abi_address_word(receiver)],
+        );
+        assert_selector_matches(&verified.ir, &calldata, "enterExitQueue(uint256,address)");
+        let tx = envelope(chain_id, entry.contract);
+        let resolver = NameResolver::new();
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| {
+            panic!("render StakeWise exit for {source_name} on {chain_id}: {error:?}")
+        });
+        assert_eq!(
+            rendered.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "StakeWise exit receipt must bind every page for {source_name} on {chain_id}"
+        );
+        assert_all_pages_printable(&rendered.pages);
+        assert_eq!(
+            page_strs(&rendered.pages, intent_page_index(&rendered.pages))[0],
+            "Exit vault"
+        );
+        assert_raw_word_pages(&rendered.pages, "Shares to exit", &shares);
+        assert_full_address_field_page(&rendered.pages, "Exit receiver", &receiver);
+        assert!(
+            rendered.pages.as_slice().iter().all(|page| {
+                let label = row_str(&page[0]);
+                label != "Token (UNVERIFI~" && label != "Token contract"
+            }),
+            "corrected raw-share display must not invent token metadata: {}",
+            dump_pages(&rendered.pages)
+        );
+
+        let assert_mutation_changes = |mutated_calldata: &[u8], operand: &str| {
+            let mutated = render_erc7730_pages_with_signer_checked(
+                &tx,
+                mutated_calldata,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "render mutated StakeWise {operand} for {source_name} on {chain_id}: {error:?}"
+                )
+            });
+            assert_ne!(
+                rendered.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "one signed {operand} bit must change StakeWise exit pages for {source_name} on {chain_id}"
+            );
+            assert!(
+                !rendered
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "one signed {operand} bit must change the StakeWise exit receipt for {source_name} on {chain_id}"
+            );
+        };
+
+        let mut mutated_shares = shares;
+        mutated_shares[31] ^= 1;
+        let mutated_shares_calldata = calldata_static(
+            "enterExitQueue(uint256,address)",
+            &[mutated_shares, abi_address_word(receiver)],
+        );
+        assert_mutation_changes(&mutated_shares_calldata, "shares");
+
+        let mut mutated_receiver = receiver;
+        mutated_receiver[19] ^= 1;
+        let mutated_receiver_calldata = calldata_static(
+            "enterExitQueue(uint256,address)",
+            &[shares, abi_address_word(mutated_receiver)],
+        );
+        assert_mutation_changes(&mutated_receiver_calldata, "receiver");
+    }
+}
+
 fn assert_stakewise_claim_rendering(
     source_name: &str,
     chain_id: u64,

@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 779482,
-    "sha256": "1191358391df12b656d88b8241e476480db32fa488cd3795c5abd30d1b6a3acd"
+    "bytes": 779425,
+    "sha256": "9a42da733e22967c98422138ebb82e8bc6d65d502be0f14b37da3c3a3adc502b"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -71,7 +71,7 @@
     },
     {
       "path": "xtask/src/erc7730_curation.rs",
-      "sha256": "b4ef121d3820b4067a5c6324e6fd6c8b0f01a8d654968c81da2162fd47b54f91"
+      "sha256": "6065cb01f149701e9db4757d7d4cbf07fccd42579c01af11172734d9ca2dc03c"
     },
     {
       "path": "xtask/src/erc7730_diff.rs",
@@ -157,8 +157,8 @@
       "path": "registry/p2p/calldata-NativeTokenVault.json",
       "upstream_bytes": 3691,
       "upstream_sha256": "900dbec13f7af5c9ce507f1261cd20d275befa87d052a4b29549a7e5867bbf47",
-      "replacement_bytes": 3956,
-      "replacement_sha256": "671bcda5af75c16978b440a8591890030e8deee3a0d56f3f0aad1c49259ed9ff"
+      "replacement_bytes": 3900,
+      "replacement_sha256": "6861528f1fbad83b48028d85c657f74ce33af1da542fa73c4bc6a0cd9104aae5"
     },
     {
       "path": "registry/p2p/calldata-P2pOrgUnlimitedEthDepositor.json",
@@ -178,8 +178,8 @@
       "path": "registry/serenita/calldata-EthVault.json",
       "upstream_bytes": 3782,
       "upstream_sha256": "8058769e34b7bf4d9bb48ba2040a416f99a0c41b27827b57df26cc4d6cfe19b3",
-      "replacement_bytes": 4201,
-      "replacement_sha256": "6a0e0636bc7f75119b7011ec0848f2bc61585c76688124e98b725fc16cdfc7cf"
+      "replacement_bytes": 4200,
+      "replacement_sha256": "1c9b13ca4441848d993f6663997fa9b60babbfb99dbc5926ef3f8a408ca3ada8"
     },
     {
       "path": "registry/threshold/calldata-L1BitcoinDepositor-address.json",

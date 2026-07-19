@@ -460,6 +460,51 @@ fn assert_stakewise_claim_format(ir: &Erc7730Ir<'_>, format_name: &str) {
     assert_eq!(timestamp_params.date_encoding, Some(0));
 }
 
+fn assert_stakewise_exit_format(ir: &Erc7730Ir<'_>, format_name: &str) -> [u8; 4] {
+    let selector: [u8; 4] = keccak256(b"enterExitQueue(uint256,address)")[..4]
+        .try_into()
+        .expect("selector width");
+    let exit = ir
+        .find_format_by_selector(&selector)
+        .expect("StakeWise exit format table parses")
+        .unwrap_or_else(|| panic!("{format_name} exit route is admitted"));
+    assert_eq!(
+        exit.intent, b"Exit vault",
+        "{format_name} exit intent must cover both immediate redemption and queued exit"
+    );
+
+    let fields: Vec<_> = exit
+        .fields()
+        .map(|field| field.expect("generated StakeWise exit field parses"))
+        .collect();
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].label, b"Shares to exit");
+    assert_eq!(FormatOp::try_from(fields[0].format_op), Ok(FormatOp::Raw));
+    let shares = parse_params(ir, fields[0].param_off).expect("exit shares params parse");
+    assert_eq!(shares.visibility, Visibility::Always);
+    assert_eq!(shares.terminal_kind, Some(TerminalKind::Unsigned));
+    assert_eq!(shares.integer_width_bytes, Some(32));
+    assert_eq!(
+        shares.token_path, None,
+        "exit shares must not imply live token metadata"
+    );
+    assert_eq!(
+        shares.token, None,
+        "exit shares must remain an exact raw word"
+    );
+
+    assert_eq!(fields[1].label, b"Exit receiver");
+    assert_eq!(
+        FormatOp::try_from(fields[1].format_op),
+        Ok(FormatOp::AddressName)
+    );
+    let receiver = parse_params(ir, fields[1].param_off).expect("exit receiver params parse");
+    assert_eq!(receiver.visibility, Visibility::Always);
+    assert_eq!(receiver.terminal_kind, Some(TerminalKind::Address));
+
+    selector
+}
+
 #[test]
 fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
     let result = build_registry();
@@ -538,6 +583,14 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
             .known_calls
             .contains(&(entry.chain_id, entry.contract, deposit_selector)),
         "newly clear-signable deposit was already registry-known"
+    );
+
+    let exit_selector = assert_stakewise_exit_format(&ir, "Serenita");
+    assert!(
+        result
+            .known_calls
+            .contains(&(entry.chain_id, entry.contract, exit_selector)),
+        "Serenita exit route must remain registry-known"
     );
 
     assert_stakewise_claim_format(&ir, "Serenita");
@@ -634,6 +687,13 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
         assert_eq!(
             actual_selectors, expected_selectors,
             "only the formerly refused claim route may join the two existing P2P formats"
+        );
+        let exit_selector = assert_stakewise_exit_format(&ir, "P2P");
+        assert!(
+            result
+                .known_calls
+                .contains(&(entry.chain_id, entry.contract, exit_selector)),
+            "P2P exit route must remain registry-known"
         );
         assert_stakewise_claim_format(&ir, "P2P");
         assert!(

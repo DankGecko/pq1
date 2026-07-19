@@ -79,17 +79,16 @@
         ]
       },
       "enterExitQueue(uint256 shares, address receiver)": {
-        "intent": "Exit funds",
+        "intent": "Exit vault",
         "fields": [
           {
             "label": "Shares to exit",
-            "format": "tokenAmount",
-            "params": { "tokenPath": "@.to" },
+            "format": "raw",
             "path": "#.shares",
             "visible": "always"
           },
           {
-            "label": "Client address",
+            "label": "Exit receiver",
             "format": "addressName",
             "params": { "types": ["eoa", "wallet", "contract"] },
             "path": "#.receiver",
