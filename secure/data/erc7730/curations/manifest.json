@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 778805,
-    "sha256": "4bd397891b4fa4d996d35fb9efcd3689c5f0836fa8eea326a24ff614c84d5c00"
+    "bytes": 779244,
+    "sha256": "f2a50a0bdf76baf4820f3dc8aec82e1287c0048baad64cc174cfdb375cb97480"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -71,7 +71,7 @@
     },
     {
       "path": "xtask/src/erc7730_curation.rs",
-      "sha256": "1681d150bd02ef56f4f4bb5a7cd5d4503af11b096b0537d0b11f2bb6d1bb9dfe"
+      "sha256": "244e8f2808bf39d6f3fc2f77b52abdda64e8f4714a93aefb048eaf6b074dc041"
     },
     {
       "path": "xtask/src/erc7730_diff.rs",
@@ -87,8 +87,8 @@
       "path": "registry/aave/calldata-WrappedTokenGatewayV3.json",
       "upstream_bytes": 5491,
       "upstream_sha256": "c8951b348a03b33046bdbdf4460bb13b2afc9ec4e5e7fde81ba18fc71389eb5e",
-      "replacement_bytes": 5599,
-      "replacement_sha256": "219ff840695198318ef79d47179d3a1aae3df276acf3c77afc6c79b1723343fb"
+      "replacement_bytes": 5796,
+      "replacement_sha256": "736b03cc5201e1d601f238ccecc3e7de77869133da8f221d3d12fa0c3b0dd1ea"
     },
     {
       "path": "registry/aave/calldata-lpv2.json",
@@ -101,8 +101,8 @@
       "path": "registry/aave/calldata-lpv3.json",
       "upstream_bytes": 11643,
       "upstream_sha256": "19afdd033c627a5e24bdc70af93e70e0068bb0760d100ddd297377bb8c4cc659",
-      "replacement_bytes": 11697,
-      "replacement_sha256": "9d6105d4fc42f2d3993a8badfc6084035b5e5eab71a92c13d56bbc4b89e0c469"
+      "replacement_bytes": 11939,
+      "replacement_sha256": "ef346f7dc275f471d196074e47ec0b6d9cce2473d41e3d9b7e8db2940fd2a7ef"
     },
     {
       "path": "registry/flyingtulip/calldata-PftNft.json",

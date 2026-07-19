@@ -6,8 +6,8 @@ files from `ethereum/clear-signing-erc7730-registry` commit
 
 - Corpus: 272 files / 687,949 bytes / 510 positive cases.
 - Format inventory: 502 unique fixture-targeted source/format pairs against
-  833 accepted PQ1 source/format pairs; 299 intersect, 534 accepted formats
-  currently lack an upstream fixture, and 203 fixture targets remain outside
+  836 accepted PQ1 source/format pairs; 300 intersect, 536 accepted formats
+  currently lack an upstream fixture, and 202 fixture targets remain outside
   the accepted catalogue.
 - Receipt domain: `pqsigner/erc7730-excluded-fixture-corpus-v1`.
 - Receipt SHA-256:

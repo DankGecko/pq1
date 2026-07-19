@@ -1514,29 +1514,234 @@ fn positive_defi_catalogue_aave_gateway_referral_codes_are_complete_and_bound() 
 }
 
 #[test]
-fn defi_catalogue_aave_permit_and_multicall_formats_remain_excluded() {
+fn positive_aave_permits_bind_every_static_operand_and_real_supply_fixture() {
     let res = build_registry();
+    let resolver = NameResolver::new();
+    let signer = [0x42u8; 20];
+    let parse_address = |value: &str| -> [u8; 20] {
+        hex::decode(value)
+            .expect("valid address hex")
+            .try_into()
+            .expect("address width")
+    };
 
-    let gateway = find_leaf(res, "calldata-WrappedTokenGatewayV3.json", 1);
-    let gateway_bundle = synth_bundle(&res.blob, &gateway.ir_bytes, gateway.leaf_index);
-    let gateway_verified =
-        verify_erc7730_bundle(&gateway_bundle, &res.root).expect("verify Aave gateway leaf");
-    assert_selector_excluded(
-        &gateway_verified.ir,
-        "withdrawETHWithPermit(address,uint256,address,uint256,uint8,bytes32,bytes32)",
+    // Exact calldata item extracted from case 5 of the pinned upstream
+    // `registry/aave/tests/calldata-lpv3.tests.json` fixture. Keeping the
+    // selector and all eight words byte-for-byte here makes the trusted-render
+    // test independent of Ledger's envelope projection.
+    let supply_fixture = hex::decode(concat!(
+        "02c205f0",
+        "0000000000000000000000007f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+        "0000000000000000000000000000000000000000000000197a8f6dd551980000",
+        "0000000000000000000000006c413690c19cfc80c3db3211c80993bf642c6456",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000069b43d1a",
+        "000000000000000000000000000000000000000000000000000000000000001c",
+        "2c188c792ac9f04ac0c3d7f13a06566ccb9fcf651106778ad2002644afff9112",
+        "00b0c2c79281fc66d3fc577743a761addf6b0fb5c5256ac983bc7fd01973ce5e",
+    ))
+    .expect("valid upstream Aave supplyWithPermit calldata");
+    assert_eq!(
+        hex::encode(keccak256(&supply_fixture)),
+        "ecf233dabfe52e1bc169a8dfe1bf1276d4aa0fe5ca57096077654689bd1e634e"
     );
+    let supply_words: [[u8; 32]; 8] = core::array::from_fn(|index| {
+        supply_fixture[4 + index * 32..4 + (index + 1) * 32]
+            .try_into()
+            .expect("static Aave fixture word")
+    });
+
+    let asset: [u8; 20] = supply_words[0][12..].try_into().expect("asset address");
+    let pool = parse_address("87870bca3f3fd6335c3f4ce8392d69350b4fa4e2");
+    let recipient = parse_address("6c413690c19cfc80c3db3211c80993bf642c6456");
+    let gateway_words = [
+        abi_address_word(pool),
+        u256_from_u64(1_500_000_000_000_000_000).0,
+        abi_address_word(recipient),
+        supply_words[4],
+        supply_words[5],
+        supply_words[6],
+        supply_words[7],
+    ];
+    let repay_words = [
+        abi_address_word(asset),
+        u256_from_u64(500_000_000).0,
+        u256_from_u64(2).0,
+        abi_address_word(recipient),
+        supply_words[4],
+        supply_words[5],
+        supply_words[6],
+        supply_words[7],
+    ];
+
+    let run_case = |source_name: &str,
+                    signature: &str,
+                    words: &[[u8; 32]],
+                    intent: &str,
+                    address_fields: &[(usize, &str)],
+                    raw_fields: &[(usize, &str)]| {
+        let entry = find_leaf(res, source_name, 1);
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root)
+            .unwrap_or_else(|error| panic!("verify Aave {signature}: {error:?}"));
+        let calldata = calldata_static(signature, words);
+        assert_selector_matches(&verified.ir, &calldata, signature);
+        let tx = envelope(1, entry.contract);
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render Aave {signature}: {error:?}"));
+        assert_eq!(
+            rendered.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        assert!(rendered
+            .transcript_receipt
+            .range_matches(&rendered.pages, 0));
+        assert_all_pages_printable(&rendered.pages);
+        assert_eq!(
+            page_strs(&rendered.pages, intent_page_index(&rendered.pages))[0],
+            intent
+        );
+        let _ = find_page_by_label(&rendered.pages, "Deadline");
+
+        for (word_index, label) in address_fields {
+            let address: [u8; 20] = words[*word_index][12..]
+                .try_into()
+                .expect("Aave address word");
+            assert_full_address_field_page(&rendered.pages, label, &address);
+        }
+        for (word_index, label) in raw_fields {
+            assert_raw_word_pages(&rendered.pages, label, &words[*word_index]);
+        }
+        if source_name == "calldata-lpv3.json" {
+            assert_full_unverified_token_identity_page(&rendered.pages, &asset);
+        }
+
+        // Every ABI word is independently effect-bearing or part of the
+        // embedded permit. Change it without disturbing canonical padding and
+        // require the trusted pages plus transcript receipt to move.
+        for word_index in 0..words.len() {
+            let mut mutated_words = words.to_vec();
+            if word_index == 1 {
+                mutated_words[word_index] = u256_from_u64(1_000_000_000_000_000_000).0;
+            } else {
+                mutated_words[word_index][31] ^= 1;
+            }
+            assert_ne!(mutated_words[word_index], words[word_index]);
+            let mutated_calldata = calldata_static(signature, &mutated_words);
+            let mutated = render_erc7730_pages_with_signer_checked(
+                &tx,
+                &mutated_calldata,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            )
+            .unwrap_or_else(|error| {
+                panic!("render mutated Aave {signature} word {word_index}: {error:?}")
+            });
+            assert_ne!(
+                rendered.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "Aave {signature} word {word_index} must change trusted pages"
+            );
+            assert!(
+                !rendered
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "Aave {signature} word {word_index} must change the transcript receipt"
+            );
+        }
+    };
+
+    run_case(
+        "calldata-WrappedTokenGatewayV3.json",
+        "withdrawETHWithPermit(address,uint256,address,uint256,uint8,bytes32,bytes32)",
+        &gateway_words,
+        "Withdraw",
+        &[(2, "To recipient")],
+        &[
+            (0, "Pool"),
+            (4, "Permit V"),
+            (5, "Permit R"),
+            (6, "Permit S"),
+        ],
+    );
+    run_case(
+        "calldata-lpv3.json",
+        "repayWithPermit(address,uint256,uint256,address,uint256,uint8,bytes32,bytes32)",
+        &repay_words,
+        "Repay loan",
+        &[(3, "For debt holder")],
+        &[(5, "Permit V"), (6, "Permit R"), (7, "Permit S")],
+    );
+    run_case(
+        "calldata-lpv3.json",
+        "supplyWithPermit(address,uint256,address,uint16,uint256,uint8,bytes32,bytes32)",
+        &supply_words,
+        "Supply",
+        &[(2, "Collateral reci~")],
+        &[
+            (3, "Referral Code"),
+            (5, "Permit V"),
+            (6, "Permit R"),
+            (7, "Permit S"),
+        ],
+    );
+    assert_eq!(
+        calldata_static(
+            "supplyWithPermit(address,uint256,address,uint16,uint256,uint8,bytes32,bytes32)",
+            &supply_words,
+        ),
+        supply_fixture,
+        "the semantic case must remain byte-identical to the pinned upstream fixture calldata"
+    );
+
+    // Re-render the exact upstream fixture with its exact token metadata to
+    // pin the friendly amount path in addition to the metadata-independent
+    // word-mutation checks above.
+    let pool_entry = find_leaf(res, "calldata-lpv3.json", 1);
+    let pool_bundle = synth_bundle(&res.blob, &pool_entry.ir_bytes, pool_entry.leaf_index);
+    let pool_verified =
+        verify_erc7730_bundle(&pool_bundle, &res.root).expect("verify Aave Pool leaf");
+    let wsteth = Erc20Metadata {
+        chain_id: 1,
+        contract: asset,
+        decimals: 18,
+        name: b"Wrapped liquid staked Ether 2.0",
+        symbol: b"wstETH",
+    };
+    let rendered_fixture = render_erc7730_pages_with_signer_checked(
+        &envelope(1, pool_entry.contract),
+        &supply_fixture,
+        &pool_verified,
+        Some(&wsteth),
+        &resolver,
+        &signer,
+    )
+    .expect("render exact upstream Aave supplyWithPermit fixture");
+    let amount_rows = page_strs(
+        &rendered_fixture.pages,
+        find_page_by_label(&rendered_fixture.pages, "Amount to supply"),
+    );
+    assert!(
+        amount_rows.iter().any(|row| row.contains("470"))
+            && amount_rows.iter().any(|row| row.contains("wstETH")),
+        "exact fixture amount/token missing: {amount_rows:?}"
+    );
+    assert_full_contract_identity_page(&rendered_fixture.pages, &asset);
+}
+
+#[test]
+fn defi_catalogue_aave_multicall_remains_excluded() {
+    let res = build_registry();
 
     let pool = find_leaf(res, "calldata-lpv3.json", 1);
     let pool_bundle = synth_bundle(&res.blob, &pool.ir_bytes, pool.leaf_index);
     let pool_verified =
         verify_erc7730_bundle(&pool_bundle, &res.root).expect("verify Aave Pool leaf");
-    for signature in [
-        "repayWithPermit(address,uint256,uint256,address,uint256,uint8,bytes32,bytes32)",
-        "supplyWithPermit(address,uint256,address,uint16,uint256,uint8,bytes32,bytes32)",
-        "multicall(bytes[])",
-    ] {
-        assert_selector_excluded(&pool_verified.ir, signature);
-    }
+    assert_selector_excluded(&pool_verified.ir, "multicall(bytes[])");
 }
 
 #[test]
