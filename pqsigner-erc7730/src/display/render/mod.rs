@@ -247,18 +247,46 @@ impl RenderedFieldWitness {
     }
 }
 
-/// Compact-mode display toggle (Phase 5 item 10).
+/// Compact-mode display policy (Phase 5 item 10).
 ///
 /// When `true`, the renderer skips fields marked `Visibility::Optional`
 /// — the on-wire byte is unchanged; only the renderer's interpretation
 /// differs (Phase 4 collapsed Optional → Always for ALL descriptors;
-/// this distinguishes them under an opt-in flag).
+/// this evaluator retains the proposed compact behavior for design tests).
 ///
-/// Defaults to `false` so existing fixtures stay byte-identical. A
-/// future settings-page toggle can flip this const at runtime via a
-/// volatile flag in `crate::ui::settings` (deferred — Phase 5 v1 ships
-/// the const-only switch).
-pub const COMPACT_MODE: bool = false;
+/// The selected product profile is deliberately full-display. Dbgen gives
+/// Optional fields completeness/visibility credit on that basis, so compact
+/// mode is not a settings toggle: enabling it first requires one of #383's
+/// separately reviewed compiler/profile proofs for every skipped signed
+/// operand. Keep this private so production call sites cannot choose a mode
+/// independently.
+const COMPACT_MODE: bool = false;
+
+// A one-line constant flip must fail the build instead of silently turning
+// authenticated Optional operands into signed-but-unshown data. Removal or
+// relaxation of this fence is itself a review-visible product-policy change.
+const _: () = assert!(
+    !COMPACT_MODE,
+    "ERC7730_COMPACT_MODE_BLOCKED: prove optional-operand visibility before enabling #383"
+);
+
+#[cfg(test)]
+mod compact_mode_product_profile_tests {
+    use super::COMPACT_MODE;
+    use crate::ir::Visibility;
+    use crate::render::params::ParamSet;
+    use crate::render::visibility::{should_render_with_mode, Action};
+
+    #[test]
+    fn selected_product_profile_renders_optional_signed_fields() {
+        let mut params = ParamSet::default();
+        params.visibility = Visibility::Optional;
+        assert_eq!(
+            should_render_with_mode(&params, None, COMPACT_MODE),
+            Action::Render
+        );
+    }
+}
 
 /// Maximum nested-EIP-712 struct descent depth the device renders (v3 deep
 /// types). A top-level nested-struct anchor is depth 1; a struct/array-of-struct
