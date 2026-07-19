@@ -352,6 +352,34 @@ Pure-logic primitives live in standalone workspace crates so host signers / benc
   pages-0..3/32-KiB layout is legacy bench-only; Draft 1.1 proposes pages 0..4
   but leaves geometry, both-bank protection, factory, and silicon gates open.
 
+## External review models (adversarial review / planning / advisory)
+
+Two **non-Claude** models are wired on this box and may be used freely for **adversarial review, design
+critique, planning, and advisory** roles — especially on FV/crypto-modeling decisions, before committing to a
+multi-session approach, and as a second opinion on any claim you are about to bank as fact.
+
+| Model | How to invoke | Notes |
+|-------|---------------|-------|
+| **GPT-5.6** | `mcp__codex__codex` MCP tool — pass `prompt`, `cwd`, `sandbox: "read-only"`, `approval-policy: "never"` | Agent with repo access; reads files itself. Long reviews get backgrounded (>120 s) and notify on completion. |
+| **Kimi K3** | CLI: `export PATH="$HOME/.kimi-code/bin:$PATH"; kimi -p "<prompt>"` (run from the target repo) | **NOT an MCP.** `--auto` is INCOMPATIBLE with `-p` (hard error). Agent with repo access; verbose — redirect to a file and read the tail. Very long runs: use `run_in_background`. |
+
+**How to use them well** (learned 2026-07-19, when they jointly killed an unsound EasyCrypt reduction design
+before it cost multiple sessions):
+
+- Give them the **file paths and line numbers** and tell them explicitly to *read the actual code, not trust
+  your summary* — their value comes from checking your framing against source.
+- Ask them to **attack a specific decision**, state the failure mode you most fear, and demand a prioritized
+  list of holes + a recommended action + "where is my read too optimistic". Vague "review this" wastes them.
+- Say **"do not modify any file"** (both are agents and will edit if allowed), then `git status` afterwards.
+- **Run both and compare.** Convergence on a disqualifier is strong evidence; divergence is where the real
+  information is (in the 2026-07-19 review both found the same fatal flaw, but only one found the better fix,
+  and only the other found the deeper foundations problem).
+- **Verify their load-bearing citations yourself** before acting — treat their output as a lead, not a fact.
+
+The `advisor` tool (stronger Claude reviewer, sees the full transcript) is complementary: use it for
+calibration/honesty-of-claims and approach selection; use GPT-5.6 / Kimi K3 when you need an *independent*
+model to check domain reasoning against the source.
+
 ## Work tracking
 
 Action tracking lives on **GitHub Issues** (repo `EthereumPhone/PQ1`). `docs/work-todo.md` and `docs/production-todo.md` were retired 2026-07-19: their open items were migrated to issues labelled `source:work-todo` / `source:production-todo` (plus `priority:*`, `surface:*`, `ship-blocker`), and the full pre-migration content is archived at `docs/archive/work-todo-retired-2026-07-19.md` and `docs/archive/production-todo-retired-2026-07-19.md`. After completing implementation tasks, close the matching issue with the evidence (commit, tests, receipts) in the close comment. Historical `work-todo #N` / section references in this and other docs resolve through the archive copy.
