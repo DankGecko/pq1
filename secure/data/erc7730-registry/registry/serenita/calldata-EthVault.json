@@ -32,7 +32,7 @@
         "intent": "Stake ETH",
         "fields": [
           {
-            "label": "Rewards receiver",
+            "label": "Shares receiver",
             "format": "addressName",
             "params": { "types": ["eoa", "wallet"], "sources": ["local", "ens"] },
             "path": "#.receiver",
@@ -43,11 +43,11 @@
         ]
       },
       "enterExitQueue(uint256 shares, address receiver)": {
-        "intent": "enter exit queue",
+        "intent": "Exit vault",
         "fields": [
-          { "label": "Shares to lock", "format": "raw", "path": "#.shares", "visible": "always" },
+          { "label": "Shares to exit", "format": "raw", "path": "#.shares", "visible": "always" },
           {
-            "label": "Receiver",
+            "label": "Exit receiver",
             "format": "addressName",
             "params": { "types": ["eoa", "wallet"], "sources": ["local", "ens"] },
             "path": "#.receiver",

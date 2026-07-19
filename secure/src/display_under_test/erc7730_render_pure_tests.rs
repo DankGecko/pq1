@@ -1158,25 +1158,167 @@ fn usdt_zero_approve_without_matching_erc20_capability_keeps_approve_intent() {
 }
 
 #[test]
-fn lido_erc721_zero_token_id_never_becomes_revoke_approval() {
-    // ERC-721 deliberately shares approve(address,uint256). A verified
-    // descriptor and canonical two-word calldata are therefore insufficient
-    // to claim ERC-20 revocation semantics without a matching ERC-20 metadata
-    // capability.
+fn lido_withdrawal_queue_admitted_routes_bind_every_displayed_operand() {
+    #[derive(Clone, Copy)]
+    enum ExpectedField {
+        Address(&'static str),
+        Raw(&'static str),
+        Approval,
+    }
+
     let res = build_registry();
     let entry = find_leaf(res, "calldata-WithdrawalQueueERC721.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Lido NFT leaf");
     let tx = envelope(1, entry.contract);
-    let calldata = calldata_approve([0x44; 20], U256::zero());
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &NameResolver::new())
-        .expect("render ERC-721 approve token id zero");
+    let resolver = NameResolver::new();
+    let signer = [0x91; 20];
+    let render = |call: &[u8]| {
+        render_erc7730_pages_with_signer_checked(&tx, call, &verified, None, &resolver, &signer)
+    };
+    let assert_field = |pages: &Pages, field: ExpectedField, word: &[u8; 32]| match field {
+        ExpectedField::Address(label) => {
+            let address: [u8; 20] = word[12..].try_into().expect("address word");
+            assert_full_address_field_page(pages, label, &address);
+        }
+        ExpectedField::Raw(label) => assert_raw_word_pages(pages, label, word),
+        ExpectedField::Approval => {
+            let label = match word[31] {
+                0 if word[..31].iter().all(|byte| *byte == 0) => "Revoke all",
+                1 if word[..31].iter().all(|byte| *byte == 0) => "Grant all",
+                _ => panic!("test supplied a noncanonical bool"),
+            };
+            assert_eq!(
+                page_strs(pages, find_page_by_label(pages, "Access rights")),
+                [
+                    "Access rights".to_string(),
+                    label.to_string(),
+                    "".to_string(),
+                    "".to_string(),
+                ]
+            );
+        }
+    };
 
-    let nft_intent = page_strs(&pages, intent_page_index(&pages));
-    assert_eq!(nft_intent[0], "Approve unstETH");
-    assert_eq!(nft_intent[1], "NFT");
-    assert!(dump_pages(&pages).contains("Request ID"));
-    assert!(!dump_pages(&pages).contains("Revoke approval"));
+    let cases = [
+        (
+            "approve(address,uint256)",
+            vec![abi_address_word([0x11; 20]), u256_from_u64(117_001).0],
+            vec![
+                ExpectedField::Address("Approval target"),
+                ExpectedField::Raw("Request ID"),
+            ],
+        ),
+        (
+            "claimWithdrawal(uint256)",
+            vec![u256_from_u64(117_002).0],
+            vec![ExpectedField::Raw("Request ID")],
+        ),
+        (
+            "safeTransferFrom(address,address,uint256)",
+            vec![
+                abi_address_word([0x21; 20]),
+                abi_address_word([0x22; 20]),
+                u256_from_u64(117_003).0,
+            ],
+            vec![
+                ExpectedField::Address("From"),
+                ExpectedField::Address("To"),
+                ExpectedField::Raw("Request ID"),
+            ],
+        ),
+        (
+            "transferFrom(address,address,uint256)",
+            vec![
+                abi_address_word([0x31; 20]),
+                abi_address_word([0x32; 20]),
+                u256_from_u64(117_004).0,
+            ],
+            vec![
+                ExpectedField::Address("From"),
+                ExpectedField::Address("To"),
+                ExpectedField::Raw("Request ID"),
+            ],
+        ),
+        (
+            "setApprovalForAll(address,bool)",
+            vec![abi_address_word([0x41; 20]), u256_from_u64(1).0],
+            vec![ExpectedField::Address("Operator"), ExpectedField::Approval],
+        ),
+    ];
+
+    for (signature, words, fields) in cases {
+        assert_eq!(words.len(), fields.len());
+        let calldata = calldata_static(signature, &words);
+        assert_selector_matches(&verified.ir, &calldata, signature);
+        let rendered =
+            render(&calldata).unwrap_or_else(|err| panic!("render {signature}: {err:?}"));
+        assert_all_pages_printable(&rendered.pages);
+        assert_eq!(
+            rendered.transcript_receipt.page_count() as usize,
+            rendered.pages.len
+        );
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "receipt must bind every {signature} page"
+        );
+        for (field, word) in fields.iter().copied().zip(words.iter()) {
+            assert_field(&rendered.pages, field, word);
+        }
+
+        for (word_index, field) in fields.iter().copied().enumerate() {
+            let mut mutated_words = words.clone();
+            match field {
+                ExpectedField::Approval => mutated_words[word_index] = [0u8; 32],
+                ExpectedField::Address(_) | ExpectedField::Raw(_) => {
+                    mutated_words[word_index][31] ^= 1;
+                }
+            }
+            let mutated_calldata = calldata_static(signature, &mutated_words);
+            let mutated = render(&mutated_calldata).unwrap_or_else(|err| {
+                panic!("render mutated {signature} word {word_index}: {err:?}")
+            });
+            assert_field(&mutated.pages, field, &mutated_words[word_index]);
+            assert_ne!(
+                rendered.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "mutating {signature} word {word_index} must change trusted pages"
+            );
+            assert!(
+                !rendered
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "mutating {signature} word {word_index} must change the transcript receipt"
+            );
+        }
+    }
+
+    // `_to == address(0)` can clear an ERC-721 token approval. The device must
+    // show the exact zero target without guessing approve-vs-revoke semantics.
+    let zero_target = calldata_static(
+        "approve(address,uint256)",
+        &[abi_address_word([0u8; 20]), u256_from_u64(117_005).0],
+    );
+    let zero_render = render(&zero_target).expect("render branch-neutral zero approval target");
+    assert_full_address_field_page(&zero_render.pages, "Approval target", &[0u8; 20]);
+    let zero_intent = page_strs(&zero_render.pages, intent_page_index(&zero_render.pages));
+    assert_eq!(zero_intent[0], "Set unstETH NFT");
+    assert_eq!(zero_intent[1], "approval");
+    assert!(!dump_pages(&zero_render.pages).contains("Revoke approval"));
+
+    let noncanonical_bool = calldata_static(
+        "setApprovalForAll(address,bool)",
+        &[abi_address_word([0x41; 20]), u256_from_u64(2).0],
+    );
+    assert!(
+        matches!(
+            render(&noncanonical_bool),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+        ),
+        "ABI bool word 2 must hard-refuse rather than render an unknown choice"
+    );
 }
 
 #[test]
@@ -1880,36 +2022,63 @@ fn positive_usdt_transfer_polygon_chain_pinning() {
 #[test]
 fn positive_weth_deposit_pulls_value_from_envelope() {
     let res = build_registry();
-    let entry = find_leaf(res, "calldata-weth.json", 1);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-
-    // deposit() is the zero-arg selector — the "Amount" field is
-    // sourced from `@.value` (container), not the calldata.
     let calldata = calldata_deposit();
-    assert_selector_matches(&verified.ir, &calldata, "deposit()");
+    assert_eq!(calldata, [0xd0, 0xe3, 0x0d, 0xb0]);
 
-    let mut tx = envelope(1, entry.contract);
-    tx.value = u256_from_u64(500_000_000_000_000_000); // 0.5 ETH
+    for (chain_id, expected_contract) in [
+        (1, "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
+        (11_155_111, "fff9976782d46cc05630d1f6ebab18b2324d6b14"),
+    ] {
+        let entry = find_leaf(res, "calldata-weth.json", chain_id);
+        assert_eq!(hex::encode(entry.contract), expected_contract);
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify WETH9 leaf");
+        cross_check_contract(&verified.ir, chain_id, &entry.contract)
+            .expect("bind exact WETH9 deployment");
+        assert_selector_matches(&verified.ir, &calldata, "deposit()");
 
-    let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+        let render_value = |value| {
+            let mut tx = envelope(chain_id, entry.contract);
+            tx.value = u256_from_u64(value);
+            render_erc7730_pages(&tx, &calldata, &verified, None, &NameResolver::new())
+                .expect("render exact WETH9 deposit")
+        };
+        let half_pages = render_value(500_000_000_000_000_000);
+        assert_all_pages_printable(&half_pages);
+        let [intent_r0, owner_r, contract_r, _] =
+            page_strs(&half_pages, intent_page_index(&half_pages));
+        assert_eq!(intent_r0, "Wrap");
+        assert_eq!(owner_r, "WETH");
+        assert_eq!(contract_r, "WETH");
+        let half_rows = page_strs(&half_pages, find_page_by_label(&half_pages, "Amount"));
+        assert_eq!(half_rows[1], "0.5 ETH");
 
-    assert_all_pages_printable(&pages);
+        let one_pages = render_value(1_000_000_000_000_000_000);
+        let one_rows = page_strs(&one_pages, find_page_by_label(&one_pages, "Amount"));
+        assert_eq!(one_rows[1], "1 ETH");
+        assert_ne!(
+            half_rows, one_rows,
+            "transaction value must alter the transcript"
+        );
 
-    let [intent_r0, owner_r, contract_r, _] = page_strs(&pages, intent_page_index(&pages));
-    assert_eq!(intent_r0, "Wrap");
-    assert_eq!(owner_r, "WETH");
-    assert_eq!(contract_r, "WETH");
+        let mut trailing = calldata.clone();
+        trailing.push(0);
+        let mut tx = envelope(chain_id, entry.contract);
+        tx.value = u256_from_u64(500_000_000_000_000_000);
+        assert!(matches!(
+            render_erc7730_pages(&tx, &trailing, &verified, None, &NameResolver::new()),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 static calldata trailing"
+            ))
+        ));
 
-    // Amount page — 0.5 ETH at 18 decimals. review 4.3: the amount now prefers
-    // a SINGLE row ("0.5 ETH") instead of the old split ("0" / ".5 ETH").
-    let amount_page = find_page_by_label(&pages, "Amount");
-    let amount_rows = page_strs(&pages, amount_page);
-    assert_eq!(
-        amount_rows[1], "0.5 ETH",
-        "amount must render on a single row (4.3), got:\n{amount_rows:?}",
-    );
+        let mut withdraw = keccak256(b"withdraw(uint256)")[..4].to_vec();
+        withdraw.extend_from_slice(&u256_from_u64(1).0);
+        assert!(matches!(
+            render_erc7730_pages(&tx, &withdraw, &verified, None, &NameResolver::new()),
+            Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+        ));
+    }
 }
 
 #[test]
@@ -2670,7 +2839,7 @@ fn positive_serenita_deposit_binds_native_value_receiver_and_complete_referrer()
             && amount_rows.iter().any(|row| row.contains("ETH")),
         "bound native amount missing: {amount_rows:?}"
     );
-    assert_full_address_field_page(&rendered.pages, "Rewards receiver", &receiver);
+    assert_full_address_field_page(&rendered.pages, "Shares receiver", &receiver);
     let referrer_word = abi_address_word(referrer);
     assert_raw_word_pages(&rendered.pages, "Referrer", &referrer_word);
 
@@ -2761,6 +2930,269 @@ fn positive_serenita_deposit_binds_native_value_receiver_and_complete_referrer()
             .exact_match(&mutated_value_render.transcript_receipt),
         "a changed signed native value must change the transcript receipt"
     );
+}
+
+#[test]
+fn positive_p2p_stakewise_deposits_bind_receiver_referrer_and_native_value() {
+    let receiver = [0x44u8; 20];
+    let referrer = [0x55u8; 20];
+    let signer = [0x66u8; 20];
+    let value = u256_from_u64(1_500_000_000_000_000_000);
+    let expected_deployments = [
+        (1u64, "b72668d6ff7a0e318f83097a754c6aed0f8af034"),
+        (560_048u64, "8f73c1ce7fe0e17f45b317b33620924a94256fbb"),
+    ];
+
+    for (chain_id, expected_contract) in expected_deployments {
+        let res = build_registry();
+        let entry = find_leaf(res, "calldata-NativeTokenVault.json", chain_id);
+        assert_eq!(
+            hex::encode(entry.contract),
+            expected_contract,
+            "P2P deposit selected the wrong deployment"
+        );
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify P2P vault leaf");
+        assert_eq!(
+            cross_check_contract(&verified.ir, chain_id, &entry.contract),
+            Ok(())
+        );
+        let mut wrong_contract = entry.contract;
+        wrong_contract[19] ^= 1;
+        assert_eq!(
+            cross_check_contract(&verified.ir, chain_id, &wrong_contract),
+            Err(BindingError::ContractMismatch)
+        );
+
+        let calldata = calldata_static(
+            "deposit(address,address)",
+            &[abi_address_word(receiver), abi_address_word(referrer)],
+        );
+        assert_selector_matches(&verified.ir, &calldata, "deposit(address,address)");
+        let resolver = NameResolver::new();
+        let mut tx = envelope(chain_id, entry.contract);
+        tx.value = value;
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render P2P deposit on {chain_id}: {error:?}"));
+        assert_eq!(
+            rendered.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "P2P deposit receipt must bind every page on chain {chain_id}"
+        );
+        assert_all_pages_printable(&rendered.pages);
+        assert_eq!(
+            page_strs(&rendered.pages, intent_page_index(&rendered.pages))[0],
+            "Stake ETH with p"
+        );
+        assert_full_address_field_page(&rendered.pages, "Shares receiver", &receiver);
+        assert_full_address_field_page(&rendered.pages, "Referrer address", &referrer);
+        let amount_rows = page_strs(
+            &rendered.pages,
+            find_page_by_label(&rendered.pages, "Amount to depos~"),
+        );
+        let amount_text = amount_rows.concat();
+        if chain_id == 1 {
+            assert!(
+                amount_text.contains("1.5") && amount_text.contains("ETH"),
+                "mainnet P2P deposit lost its authenticated native scale: {amount_rows:?}"
+            );
+        } else {
+            assert!(
+                amount_text.contains("1500000000000000000")
+                    && amount_text.contains("! raw, dec=?")
+                    && !amount_text.contains("ETH"),
+                "Hoodi P2P deposit must remain an exact unknown-scale integer: {amount_rows:?}"
+            );
+        }
+
+        let assert_mutation_changes =
+            |mutated_tx: &Eip1559Tx, mutated_calldata: &[u8], operand: &str| {
+                let mutated = render_erc7730_pages_with_signer_checked(
+                    mutated_tx,
+                    mutated_calldata,
+                    &verified,
+                    None,
+                    &resolver,
+                    &signer,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("render mutated P2P {operand} on {chain_id}: {error:?}")
+                });
+                assert_ne!(
+                    rendered.pages.as_slice(),
+                    mutated.pages.as_slice(),
+                    "one signed {operand} bit must change P2P deposit pages on {chain_id}"
+                );
+                assert!(
+                    !rendered
+                        .transcript_receipt
+                        .exact_match(&mutated.transcript_receipt),
+                    "one signed {operand} bit must change the P2P deposit receipt on {chain_id}"
+                );
+            };
+
+        let mut mutated_receiver = receiver;
+        mutated_receiver[19] ^= 1;
+        let mutated_receiver_calldata = calldata_static(
+            "deposit(address,address)",
+            &[
+                abi_address_word(mutated_receiver),
+                abi_address_word(referrer),
+            ],
+        );
+        assert_mutation_changes(&tx, &mutated_receiver_calldata, "receiver");
+
+        let mut mutated_referrer = referrer;
+        mutated_referrer[19] ^= 1;
+        let mutated_referrer_calldata = calldata_static(
+            "deposit(address,address)",
+            &[
+                abi_address_word(receiver),
+                abi_address_word(mutated_referrer),
+            ],
+        );
+        assert_mutation_changes(&tx, &mutated_referrer_calldata, "referrer");
+
+        let mut mutated_value_tx = tx;
+        mutated_value_tx.value = u256_from_u64(2_000_000_000_000_000_000);
+        assert_mutation_changes(&mutated_value_tx, &calldata, "native value");
+    }
+}
+
+#[test]
+fn positive_stakewise_exit_queue_routes_bind_raw_shares_and_receiver() {
+    let shares = u256_from_u64(1_234_567).0;
+    let receiver = [0x77u8; 20];
+    let signer = [0x88u8; 20];
+    let deployments = [
+        (
+            "calldata-NativeTokenVault.json",
+            1u64,
+            "b72668d6ff7a0e318f83097a754c6aed0f8af034",
+        ),
+        (
+            "calldata-NativeTokenVault.json",
+            560_048u64,
+            "8f73c1ce7fe0e17f45b317b33620924a94256fbb",
+        ),
+        (
+            "calldata-EthVault.json",
+            1u64,
+            "b36fc5e542cb4fc562a624912f55da2758998113",
+        ),
+    ];
+
+    for (source_name, chain_id, expected_contract) in deployments {
+        let res = build_registry();
+        let entry = find_leaf(res, source_name, chain_id);
+        assert_eq!(
+            hex::encode(entry.contract),
+            expected_contract,
+            "StakeWise exit selected the wrong deployment"
+        );
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified =
+            verify_erc7730_bundle(&bundle, &res.root).expect("verify StakeWise vault leaf");
+        assert_eq!(
+            cross_check_contract(&verified.ir, chain_id, &entry.contract),
+            Ok(())
+        );
+        let mut wrong_contract = entry.contract;
+        wrong_contract[19] ^= 1;
+        assert_eq!(
+            cross_check_contract(&verified.ir, chain_id, &wrong_contract),
+            Err(BindingError::ContractMismatch)
+        );
+
+        let calldata = calldata_static(
+            "enterExitQueue(uint256,address)",
+            &[shares, abi_address_word(receiver)],
+        );
+        assert_selector_matches(&verified.ir, &calldata, "enterExitQueue(uint256,address)");
+        let tx = envelope(chain_id, entry.contract);
+        let resolver = NameResolver::new();
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| {
+            panic!("render StakeWise exit for {source_name} on {chain_id}: {error:?}")
+        });
+        assert_eq!(
+            rendered.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "StakeWise exit receipt must bind every page for {source_name} on {chain_id}"
+        );
+        assert_all_pages_printable(&rendered.pages);
+        assert_eq!(
+            page_strs(&rendered.pages, intent_page_index(&rendered.pages))[0],
+            "Exit vault"
+        );
+        assert_raw_word_pages(&rendered.pages, "Shares to exit", &shares);
+        assert_full_address_field_page(&rendered.pages, "Exit receiver", &receiver);
+        assert!(
+            rendered.pages.as_slice().iter().all(|page| {
+                let label = row_str(&page[0]);
+                label != "Token (UNVERIFI~" && label != "Token contract"
+            }),
+            "corrected raw-share display must not invent token metadata: {}",
+            dump_pages(&rendered.pages)
+        );
+
+        let assert_mutation_changes = |mutated_calldata: &[u8], operand: &str| {
+            let mutated = render_erc7730_pages_with_signer_checked(
+                &tx,
+                mutated_calldata,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "render mutated StakeWise {operand} for {source_name} on {chain_id}: {error:?}"
+                )
+            });
+            assert_ne!(
+                rendered.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "one signed {operand} bit must change StakeWise exit pages for {source_name} on {chain_id}"
+            );
+            assert!(
+                !rendered
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "one signed {operand} bit must change the StakeWise exit receipt for {source_name} on {chain_id}"
+            );
+        };
+
+        let mut mutated_shares = shares;
+        mutated_shares[31] ^= 1;
+        let mutated_shares_calldata = calldata_static(
+            "enterExitQueue(uint256,address)",
+            &[mutated_shares, abi_address_word(receiver)],
+        );
+        assert_mutation_changes(&mutated_shares_calldata, "shares");
+
+        let mut mutated_receiver = receiver;
+        mutated_receiver[19] ^= 1;
+        let mutated_receiver_calldata = calldata_static(
+            "enterExitQueue(uint256,address)",
+            &[shares, abi_address_word(mutated_receiver)],
+        );
+        assert_mutation_changes(&mutated_receiver_calldata, "receiver");
+    }
 }
 
 fn assert_stakewise_claim_rendering(
@@ -3470,6 +3902,203 @@ fn positive_lido_wsteth_permit_fixture_binds_every_signed_word() {
                 .transcript_receipt
                 .exact_match(&mutated.transcript_receipt),
             "an independent {field} mutation must change the transcript receipt"
+        );
+    }
+}
+
+#[test]
+fn positive_lido_wsteth_remaining_routes_bind_every_signed_operand() {
+    struct Case {
+        signature: &'static str,
+        words: Vec<[u8; 32]>,
+        address_fields: Vec<(usize, &'static str)>,
+        amount_index: usize,
+        intent: &'static str,
+        amount_label: &'static str,
+        interpolated: bool,
+    }
+
+    let recipient = [0x22; 20];
+    let sender = [0x33; 20];
+    let spender = [0x44; 20];
+    let amount = u256_from_u64(1_000_000_000_000_000_000).0;
+    let cases = vec![
+        Case {
+            signature: "unwrap(uint256)",
+            words: vec![amount],
+            address_fields: vec![],
+            amount_index: 0,
+            intent: "Unwrap 1 wstETH",
+            amount_label: "wstETH amount",
+            interpolated: true,
+        },
+        Case {
+            signature: "transfer(address,uint256)",
+            words: vec![abi_address_word(recipient), amount],
+            address_fields: vec![(0, "Recipient")],
+            amount_index: 1,
+            intent: "Transfer wstETH",
+            amount_label: "Amount",
+            interpolated: false,
+        },
+        Case {
+            signature: "transferFrom(address,address,uint256)",
+            words: vec![
+                abi_address_word(sender),
+                abi_address_word(recipient),
+                amount,
+            ],
+            address_fields: vec![(0, "Sender"), (1, "Recipient")],
+            amount_index: 2,
+            intent: "Transfer wstETH",
+            amount_label: "Amount",
+            interpolated: false,
+        },
+        Case {
+            signature: "approve(address,uint256)",
+            words: vec![abi_address_word(spender), amount],
+            address_fields: vec![(0, "Spender")],
+            amount_index: 1,
+            intent: "Authorize spending",
+            amount_label: "Amount",
+            interpolated: false,
+        },
+        Case {
+            signature: "increaseAllowance(address,uint256)",
+            words: vec![abi_address_word(spender), amount],
+            address_fields: vec![(0, "Spender")],
+            amount_index: 1,
+            intent: "Increase allowance",
+            amount_label: "Amount",
+            interpolated: false,
+        },
+        Case {
+            signature: "decreaseAllowance(address,uint256)",
+            words: vec![abi_address_word(spender), amount],
+            address_fields: vec![(0, "Spender")],
+            amount_index: 1,
+            intent: "Decrease allowance",
+            amount_label: "Amount",
+            interpolated: false,
+        },
+    ];
+
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-wstETH.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Lido wstETH leaf");
+    let tx = envelope(1, entry.contract);
+    let metadata = Erc20Metadata {
+        chain_id: 1,
+        contract: entry.contract,
+        decimals: 18,
+        name: b"Wrapped liquid staked Ether 2.0",
+        symbol: b"wstETH",
+    };
+    let resolver = NameResolver::new();
+    let signer = [0x55; 20];
+
+    for case in cases {
+        let render = |words: &[[u8; 32]]| {
+            let calldata = calldata_static(case.signature, words);
+            assert_selector_matches(&verified.ir, &calldata, case.signature);
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                &calldata,
+                &verified,
+                Some(&metadata),
+                &resolver,
+                &signer,
+            )
+            .unwrap_or_else(|error| panic!("render {}: {error:?}", case.signature))
+        };
+
+        let rendered = render(&case.words);
+        assert_all_pages_printable(&rendered.pages);
+        assert!(rendered
+            .transcript_receipt
+            .range_matches(&rendered.pages, 0));
+        assert_eq!(
+            rendered.transcript_receipt.state_code(),
+            if case.interpolated {
+                INTENT_PUBLICATION_INTERPOLATED
+            } else {
+                INTENT_PUBLICATION_STATIC
+            },
+            "unexpected intent-publication mode for {}",
+            case.signature
+        );
+
+        let intent_rows = page_strs(&rendered.pages, intent_page_index(&rendered.pages));
+        let painted_intent = if case.intent.len() <= DISPLAY_COLS {
+            intent_rows[0].clone()
+        } else {
+            format!("{}{}", intent_rows[0], intent_rows[1])
+        };
+        assert_eq!(
+            painted_intent,
+            case.intent,
+            "unexpected trusted intent for {}:\n{}",
+            case.signature,
+            dump_pages(&rendered.pages)
+        );
+
+        for (word_index, label) in &case.address_fields {
+            let address: [u8; 20] = case.words[*word_index][12..]
+                .try_into()
+                .expect("canonical address word");
+            assert_full_address_field_page(&rendered.pages, label, &address);
+        }
+        let amount_rows = page_strs(
+            &rendered.pages,
+            find_page_by_label(&rendered.pages, case.amount_label),
+        );
+        assert!(
+            amount_rows[1..3].iter().any(|row| row.contains("1")),
+            "missing exact wstETH amount for {}: {amount_rows:?}",
+            case.signature
+        );
+        assert!(
+            amount_rows[1..3].iter().any(|row| row.contains("wstETH")),
+            "amount ticker is not bound for {}: {amount_rows:?}",
+            case.signature
+        );
+        assert_full_contract_identity_page(&rendered.pages, &entry.contract);
+
+        for (word_index, label) in &case.address_fields {
+            let mut mutated_words = case.words.clone();
+            mutated_words[*word_index][31] ^= 1;
+            let mutated = render(&mutated_words);
+            assert_ne!(
+                rendered.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "mutating {label} must change trusted pages for {}",
+                case.signature
+            );
+            assert!(
+                !rendered
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "mutating {label} must change the transcript for {}",
+                case.signature
+            );
+        }
+
+        let mut mutated_words = case.words.clone();
+        mutated_words[case.amount_index] = u256_from_u64(2_000_000_000_000_000_000).0;
+        let mutated = render(&mutated_words);
+        assert_ne!(
+            rendered.pages.as_slice(),
+            mutated.pages.as_slice(),
+            "mutating the exact amount must change trusted pages for {}",
+            case.signature
+        );
+        assert!(
+            !rendered
+                .transcript_receipt
+                .exact_match(&mutated.transcript_receipt),
+            "mutating the exact amount must change the transcript for {}",
+            case.signature
         );
     }
 }
@@ -4240,122 +4869,38 @@ fn positive_synthetic_ref_field_renders_bound_token_amount() {
     );
 }
 
-/// The REAL registry Lido `requestWithdrawals` leaf — a `tokenAmount` `uint256[]`
-/// array (the synthetic fixture uses `format:amount`; EVERY registry `uint256[]`
-/// uses `tokenAmount`, so this is the shape the synthetic cannot exercise, and
-/// the render-faithfulness spot-check on a real registry descriptor).
-/// BOUND branch: with Merkle-verified stETH metadata the shared token is
-/// resolved ONCE and every element renders as a scaled `stETH` amount.
+/// Lido treats `_owner == address(0)` as the transaction sender, while nonzero
+/// values select an independent initial NFT owner. The current device cannot
+/// evaluate `senderAddress`, so neither branch may inherit trusted wording.
 #[test]
-fn positive_registry_lido_tokenamount_array_bound_renders_steth() {
+fn lido_request_withdrawals_zero_and_nonzero_owner_are_no_format() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-WithdrawalQueueERC721.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-
-    // 1.0 / 2.5 / 0.3 stETH (18 decimals).
-    let amounts = [
-        u256_from_u64(1_000_000_000_000_000_000),
-        u256_from_u64(2_500_000_000_000_000_000),
-        u256_from_u64(300_000_000_000_000_000),
-    ];
-    let calldata = rw_calldata(&amounts, [0x55u8; 20]);
-    assert_selector_matches(
-        &verified.ir,
-        &calldata,
-        "requestWithdrawals(uint256[],address)",
-    );
-
-    // Registry `token` is the stETH constant (0xae7ab9…); supply its metadata.
-    let steth: [u8; 20] = hex::decode("ae7ab96520DE3A18E5e111B5EaAb095312D7fE84")
-        .unwrap()
-        .try_into()
-        .unwrap();
-    let steth_meta = Erc20Metadata {
-        chain_id: 1,
-        contract: steth,
-        decimals: 18,
-        name: b"Liquid staked Ether 2.0",
-        symbol: b"stETH",
-    };
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Lido NFT leaf");
+    let signature = "requestWithdrawals(uint256[],address)";
+    assert_selector_excluded(&verified.ir, signature);
     let tx = envelope(1, entry.contract);
     let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&steth_meta), &resolver)
-        .expect("render");
-    assert_all_pages_printable(&pages);
-
-    let dump = dump_pages(&pages);
-    assert!(dump.contains("3 items"), "count header missing:\n{dump}");
-    assert!(dump.contains(".5"), "amount 2.5 fraction missing:\n{dump}");
-    // WYSIWYS: EXACTLY the 3 element pages (label "Amount") show the bound
-    // symbol — proves the shared token was Merkle-bound and applied per element
-    // (not declined-to-blind), and array-tail-hiding stays closed (all shown).
-    let steth_element_pages = pages
-        .as_slice()
-        .iter()
-        .filter(|p| row_str(&p[0]) == "Amount" && (1..=2).any(|r| row_str(&p[r]).contains("stETH")))
-        .count();
-    assert_eq!(
-        steth_element_pages, 3,
-        "every element must render as stETH:\n{dump}"
-    );
-    // Bound → no UNVERIFIED token page.
-    let unverified = pages
-        .as_slice()
-        .iter()
-        .filter(|p| row_str(&p[0]).contains("UNVERIF"))
-        .count();
-    assert_eq!(
-        unverified, 0,
-        "bound token must not show UNVERIFIED:\n{dump}"
-    );
-    let _ = find_page_by_label(&pages, "Beneficiary");
-}
-
-/// Same registry leaf, UNBOUND branch (audit M-4 + M-1): with NO Merkle-verified
-/// metadata each element renders as a loud RAW integer (never a scaled decimal
-/// with an assumed scale) and the token identity is named EXACTLY ONCE — not
-/// per element.
-#[test]
-fn positive_registry_lido_tokenamount_array_unbound_raw_and_one_token_page() {
-    let res = build_registry();
-    let entry = find_leaf(res, "calldata-WithdrawalQueueERC721.json", 1);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-
-    let amounts = [
-        u256_from_u64(1_000_000_000_000_000_000),
-        u256_from_u64(2_500_000_000_000_000_000),
-    ];
-    let calldata = rw_calldata(&amounts, [0x55u8; 20]);
-    let tx = envelope(1, entry.contract);
-    let resolver = NameResolver::new();
-    // No stETH metadata supplied → unbound.
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
-    assert_all_pages_printable(&pages);
-
-    let dump = dump_pages(&pages);
-    // M-4: every element footer is the loud raw/unknown-scale marker.
-    let raw_footers = pages
-        .as_slice()
-        .iter()
-        .filter(|p| row_str(&p[3]).contains("raw, dec=?"))
-        .count();
-    assert_eq!(
-        raw_footers, 2,
-        "both unbound elements must render loud raw:\n{dump}"
-    );
-    // M-1: the token is named EXACTLY ONCE (a per-element page would be noise
-    // and could push the array past the page budget).
-    let token_pages = pages
-        .as_slice()
-        .iter()
-        .filter(|p| row_str(&p[0]).contains("UNVERIF"))
-        .count();
-    assert_eq!(
-        token_pages, 1,
-        "unbound token must be named exactly once:\n{dump}"
-    );
+    let signer = [0x92; 20];
+    for owner in [[0u8; 20], [0x55u8; 20]] {
+        let calldata = rw_calldata(&[u256_from_u64(1_000_000_000_000_000_000)], owner);
+        assert_eq!(
+            &calldata[..4],
+            &keccak256(signature.as_bytes())[..4],
+            "test must exercise the excluded requestWithdrawals selector"
+        );
+        assert!(
+            matches!(
+                render_erc7730_pages_with_signer_checked(
+                    &tx, &calldata, &verified, None, &resolver, &signer,
+                ),
+                Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+            ),
+            "owner={} must hard-refuse as NoFormat",
+            hex::encode(owner)
+        );
+    }
 }
 
 /// COMPLETENESS + FAITHFULNESS over the WHOLE prod registry: enumerates every
@@ -5619,11 +6164,12 @@ fn erc2612_permit_with_hidden_owner_is_excluded() {
 // Tier B: canonical dynamic tokenPath framing — Uniswap swaps.
 //
 // Endpoint tokenPaths identify amount metadata; they do not display a complete
-// signed packed route or address array. The upstream Router02 source is now
-// partially admitted for its two all-static single-hop calls, while every
-// dynamic-route selector stays omitted. A process-private safe fixture adds
-// `path.[]`, preserving the runtime extraction/framing backstop while requiring
-// all route addresses to reach the display.
+// signed packed route or address array. Router02 also assigns protocol meaning
+// to sentinel recipients and zero amounts. The production source is therefore
+// entirely excluded until PQ1 can authenticate and enforce those semantics.
+// All six declared calls remain known hard refusals. A process-private safe
+// fixture adds `path.[]`, preserving the runtime extraction/framing backstop
+// while requiring all route addresses to reach the display.
 // ───────────────────────────────────────────────────────────────────────
 const UNI_V3: [u8; 20] = [
     0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
@@ -5634,147 +6180,32 @@ const TOKEN_MID: [u8; 20] = [0xAB; 20];
 const TOKEN_OUT: [u8; 20] = [0x22; 20];
 
 #[test]
-fn positive_defi_catalogue_uniswap_single_hop_price_limits_are_complete_and_bound() {
-    let res = build_registry();
-    let entry = find_leaf(res, "calldata-UniswapV3Router02.json", 1);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Uniswap Router02 leaf");
-    let recipient = [0x33u8; 20];
-    let fee = u256_from_u64(3_000).0;
-    let price_limit = 0x1234u64;
-    let signer = [0x44u8; 20];
-    let resolver = NameResolver::new();
-    let token_in = meta(TOKEN_IN, 6, b"TKA");
+fn production_uniswap_router02_is_excluded_but_every_declared_call_stays_known() {
+    let registry = build_registry();
+    assert_registry_source_excluded("calldata-UniswapV3Router02.json");
 
-    let cases = [
-        (
-            "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
-            calldata_static(
-                "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
-                &[
-                    abi_address_word(TOKEN_IN),
-                    abi_address_word(TOKEN_OUT),
-                    fee,
-                    abi_address_word(recipient),
-                    u256_from_u64(1_500_000).0,
-                    u256_from_u64(1).0,
-                    u256_from_u64(price_limit).0,
-                ],
-            ),
-            calldata_static(
-                "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
-                &[
-                    abi_address_word(TOKEN_IN),
-                    abi_address_word(TOKEN_OUT),
-                    fee,
-                    abi_address_word(recipient),
-                    u256_from_u64(1_500_000).0,
-                    u256_from_u64(1).0,
-                    u256_from_u64(price_limit ^ 1).0,
-                ],
-            ),
-            "swap",
-            "Send",
-            "Minimum to Rece~",
-        ),
-        (
-            "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))",
-            calldata_static(
-                "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))",
-                &[
-                    abi_address_word(TOKEN_IN),
-                    abi_address_word(TOKEN_OUT),
-                    fee,
-                    abi_address_word(recipient),
-                    u256_from_u64(2).0,
-                    u256_from_u64(2_000_000).0,
-                    u256_from_u64(price_limit).0,
-                ],
-            ),
-            calldata_static(
-                "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))",
-                &[
-                    abi_address_word(TOKEN_IN),
-                    abi_address_word(TOKEN_OUT),
-                    fee,
-                    abi_address_word(recipient),
-                    u256_from_u64(2).0,
-                    u256_from_u64(2_000_000).0,
-                    u256_from_u64(price_limit ^ 1).0,
-                ],
-            ),
-            "Swap",
-            "Maximum Amount ~",
-            "Amount to Recei~",
-        ),
-    ];
-
-    for (signature, calldata, mutated_calldata, intent, bound_amount_label, unbound_amount_label) in
-        cases
-    {
-        assert_selector_matches(&verified.ir, &calldata, signature);
-        let tx = envelope(1, entry.contract);
-        let rendered = render_erc7730_pages_with_signer_checked(
-            &tx,
-            &calldata,
-            &verified,
-            Some(&token_in),
-            &resolver,
-            &signer,
-        )
-        .unwrap_or_else(|error| panic!("render Uniswap {signature}: {error:?}"));
-        assert_eq!(
-            rendered.transcript_receipt.state_code(),
-            INTENT_PUBLICATION_STATIC
+    for signature in [
+        "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+        "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+        "exactInput((bytes,address,uint256,uint256))",
+        "exactOutput((bytes,address,uint256,uint256))",
+        "swapExactTokensForTokens(uint256,uint256,address[],address)",
+        "swapTokensForExactTokens(uint256,uint256,address[],address)",
+    ] {
+        let digest = keccak256(signature.as_bytes());
+        let selector: [u8; 4] = digest[..4].try_into().expect("selector width");
+        assert!(
+            registry.known_calls.contains(&(1, UNI_V3, selector)),
+            "excluded Router02 call must remain known and fail closed: {signature}"
         );
         assert!(
-            rendered
-                .transcript_receipt
-                .range_matches(&rendered.pages, 0),
-            "Uniswap {signature} receipt must bind its complete rendered page range"
-        );
-        assert_all_pages_printable(&rendered.pages);
-        assert_eq!(
-            page_strs(&rendered.pages, intent_page_index(&rendered.pages))[0],
-            intent
-        );
-        let _ = find_page_by_label(&rendered.pages, bound_amount_label);
-        let _ = find_page_by_label(&rendered.pages, unbound_amount_label);
-        let _ = find_page_by_label(&rendered.pages, "Uniswap fee");
-        assert_full_address_field_page(&rendered.pages, "Beneficiary", &recipient);
-        assert_full_contract_identity_page(&rendered.pages, &TOKEN_IN);
-        assert_full_unverified_token_identity_page(&rendered.pages, &TOKEN_OUT);
-
-        let price_word: [u8; 32] = calldata[4 + 6 * 32..4 + 7 * 32]
-            .try_into()
-            .expect("sqrtPriceLimitX96 ABI word");
-        assert_eq!(price_word, u256_from_u64(price_limit).0);
-        assert_raw_word_pages(&rendered.pages, "Price limit", &price_word);
-
-        let mutated = render_erc7730_pages_with_signer_checked(
-            &tx,
-            &mutated_calldata,
-            &verified,
-            Some(&token_in),
-            &resolver,
-            &signer,
-        )
-        .unwrap_or_else(|error| panic!("render mutated Uniswap {signature}: {error:?}"));
-        let mutated_word: [u8; 32] = mutated_calldata[4 + 6 * 32..4 + 7 * 32]
-            .try_into()
-            .expect("mutated sqrtPriceLimitX96 ABI word");
-        assert_eq!(mutated_word, u256_from_u64(price_limit ^ 1).0);
-        assert_raw_word_pages(&mutated.pages, "Price limit", &mutated_word);
-        assert_ne!(
-            rendered.pages.as_slice(),
-            mutated.pages.as_slice(),
-            "one sqrtPriceLimitX96 bit must change the Uniswap trusted pages for {signature}"
-        );
-        assert!(
-            !rendered
-                .transcript_receipt
-                .exact_match(&mutated.transcript_receipt),
-            "one sqrtPriceLimitX96 bit must change the Uniswap transcript for {signature}"
+            pqsigner_erc7730::known_calls::may_contain(
+                &registry.known_calls_bloom,
+                1,
+                &UNI_V3,
+                &selector,
+            ),
+            "excluded Router02 call must remain in the fail-closed Bloom: {signature}"
         );
     }
 }
@@ -5879,22 +6310,34 @@ fn render_safe_uni(calldata: &[u8], token: Option<&Erc20Metadata<'_>>) -> Pages 
     render_safe_uni_result(calldata, token).expect("render safe route")
 }
 
-fn assert_uniswap_router_format_excluded(signature: &str) {
-    let res = build_registry();
-    let entry = find_leaf(res, "calldata-UniswapV3Router02.json", 1);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Uniswap Router02 leaf");
-    assert_selector_excluded(&verified.ir, signature);
+fn assert_uniswap_router_call_excluded_but_known(signature: &str) {
+    let registry = build_registry();
+    assert_registry_source_excluded("calldata-UniswapV3Router02.json");
+    let digest = keccak256(signature.as_bytes());
+    let selector: [u8; 4] = digest[..4].try_into().expect("selector width");
+    assert!(
+        registry.known_calls.contains(&(1, UNI_V3, selector)),
+        "excluded Router02 call must remain known and fail closed: {signature}"
+    );
+    assert!(
+        pqsigner_erc7730::known_calls::may_contain(
+            &registry.known_calls_bloom,
+            1,
+            &UNI_V3,
+            &selector,
+        ),
+        "excluded Router02 call must remain in the fail-closed Bloom: {signature}"
+    );
 }
 
 #[test]
 fn uniswap_exact_input_c2_input_slice_is_excluded() {
-    assert_uniswap_router_format_excluded("exactInput((bytes,address,uint256,uint256))");
+    assert_uniswap_router_call_excluded_but_known("exactInput((bytes,address,uint256,uint256))");
 }
 
 #[test]
 fn uniswap_exact_input_c2_output_slice_is_excluded() {
-    assert_uniswap_router_format_excluded("exactOutput((bytes,address,uint256,uint256))");
+    assert_uniswap_router_call_excluded_but_known("exactOutput((bytes,address,uint256,uint256))");
 }
 
 #[test]
@@ -5948,14 +6391,14 @@ fn uniswap_v2_swap_binds_first_and_last_array_element() {
         route_pages, 4,
         "whole-route display must include one count page plus all three elements"
     );
-    assert_uniswap_router_format_excluded(
+    assert_uniswap_router_call_excluded_but_known(
         "swapExactTokensForTokens(uint256,uint256,address[],address)",
     );
 }
 
 #[test]
 fn uniswap_exact_input_c2_decoy_path_cannot_reach_renderer() {
-    assert_uniswap_router_format_excluded("exactInput((bytes,address,uint256,uint256))");
+    assert_uniswap_router_call_excluded_but_known("exactInput((bytes,address,uint256,uint256))");
 }
 
 /// Parse a 64-char hex string into a `[u8; 32]` for the remaining synthetic

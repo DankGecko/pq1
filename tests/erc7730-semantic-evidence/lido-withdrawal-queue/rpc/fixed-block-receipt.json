@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-07-19T18:49:25Z",
+  "chain_id": 1,
+  "block_request": {
+    "method": "eth_getBlockByNumber",
+    "params": [
+      "0x1862538",
+      false
+    ]
+  },
+  "observations": [
+    {
+      "endpoint": "https://eth.drpc.org",
+      "block": {
+        "number": 25568568,
+        "number_hex": "0x1862538",
+        "hash": "0x34c2319fd8cf3d7feb373d1e7b2e475ea1f9475f5b8b24f02480bdf589036358",
+        "state_root": "0x3fa3f93f086f3260b850ca04efe6a0f20e661caecbf4f70328165e8744e9dd49",
+        "timestamp": 1784485943,
+        "timestamp_hex": "0x6a5d1837",
+        "timestamp_utc": "2026-07-19T18:32:23Z"
+      },
+      "calls": {
+        "proxy__getImplementation": {
+          "request": {
+            "method": "eth_call",
+            "params": [
+              {
+                "to": "0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1",
+                "data": "0xad729a71"
+              },
+              "0x1862538"
+            ]
+          },
+          "signature": "proxy__getImplementation()",
+          "result": "0x000000000000000000000000e42c659dc09109566720ea8b2de186c2be7d94d9",
+          "decoded": "0xE42C659Dc09109566720EA8b2De186c2Be7D94D9"
+        },
+        "proxy__getAdmin": {
+          "request": {
+            "method": "eth_call",
+            "params": [
+              {
+                "to": "0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1",
+                "data": "0x916f1fd7"
+              },
+              "0x1862538"
+            ]
+          },
+          "signature": "proxy__getAdmin()",
+          "result": "0x0000000000000000000000003e40d73eb977dc6a537af587d48316fee66e9c8c",
+          "decoded": "0x3e40D73EB977Dc6a537aF587D48316feE66E9C8c"
+        },
+        "proxy__getIsOssified": {
+          "request": {
+            "method": "eth_call",
+            "params": [
+              {
+                "to": "0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1",
+                "data": "0x13351258"
+              },
+              "0x1862538"
+            ]
+          },
+          "signature": "proxy__getIsOssified()",
+          "result": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "decoded": false
+        }
+      },
+      "code": {
+        "proxy": {
+          "request": {
+            "method": "eth_getCode",
+            "params": [
+              "0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1",
+              "0x1862538"
+            ]
+          },
+          "result_file": "runtime/OssifiableProxy.mainnet.hex",
+          "result_file_encoding": "The exact 0x-prefixed RPC result with line breaks inserted every 128 characters; remove ASCII whitespace to recover the result.",
+          "bytes": 2497,
+          "keccak256": "0x9bc25fa4b2f98d56db4aa4156a6dc98360ccd4ef9c7bc7f891797b0024272100"
+        },
+        "implementation": {
+          "request": {
+            "method": "eth_getCode",
+            "params": [
+              "0xE42C659Dc09109566720EA8b2De186c2Be7D94D9",
+              "0x1862538"
+            ]
+          },
+          "result_file": "runtime/WithdrawalQueueERC721.mainnet.hex",
+          "result_file_encoding": "The exact 0x-prefixed RPC result with line breaks inserted every 128 characters; remove ASCII whitespace to recover the result.",
+          "bytes": 24190,
+          "keccak256": "0x7606999c03ae51ffb1d29b8b80a0d0cf85912f32f088ba1a52c45df312c36e64"
+        }
+      }
+    },
+    {
+      "endpoint": "https://ethereum-rpc.publicnode.com",
+      "block": {
+        "number": 25568568,
+        "number_hex": "0x1862538",
+        "hash": "0x34c2319fd8cf3d7feb373d1e7b2e475ea1f9475f5b8b24f02480bdf589036358",
+        "state_root": "0x3fa3f93f086f3260b850ca04efe6a0f20e661caecbf4f70328165e8744e9dd49",
+        "timestamp": 1784485943,
+        "timestamp_hex": "0x6a5d1837",
+        "timestamp_utc": "2026-07-19T18:32:23Z"
+      },
+      "calls": {
+        "proxy__getImplementation": {
+          "request": {
+            "method": "eth_call",
+            "params": [
+              {
+                "to": "0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1",
+                "data": "0xad729a71"
+              },
+              "0x1862538"
+            ]
+          },
+          "signature": "proxy__getImplementation()",
+          "result": "0x000000000000000000000000e42c659dc09109566720ea8b2de186c2be7d94d9",
+          "decoded": "0xE42C659Dc09109566720EA8b2De186c2Be7D94D9"
+        },
+        "proxy__getAdmin": {
+          "request": {
+            "method": "eth_call",
+            "params": [
+              {
+                "to": "0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1",
+                "data": "0x916f1fd7"
+              },
+              "0x1862538"
+            ]
+          },
+          "signature": "proxy__getAdmin()",
+          "result": "0x0000000000000000000000003e40d73eb977dc6a537af587d48316fee66e9c8c",
+          "decoded": "0x3e40D73EB977Dc6a537aF587D48316feE66E9C8c"
+        },
+        "proxy__getIsOssified": {
+          "request": {
+            "method": "eth_call",
+            "params": [
+              {
+                "to": "0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1",
+                "data": "0x13351258"
+              },
+              "0x1862538"
+            ]
+          },
+          "signature": "proxy__getIsOssified()",
+          "result": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "decoded": false
+        }
+      },
+      "code": {
+        "proxy": {
+          "request": {
+            "method": "eth_getCode",
+            "params": [
+              "0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1",
+              "0x1862538"
+            ]
+          },
+          "result_file": "runtime/OssifiableProxy.mainnet.hex",
+          "result_file_encoding": "The exact 0x-prefixed RPC result with line breaks inserted every 128 characters; remove ASCII whitespace to recover the result.",
+          "bytes": 2497,
+          "keccak256": "0x9bc25fa4b2f98d56db4aa4156a6dc98360ccd4ef9c7bc7f891797b0024272100"
+        },
+        "implementation": {
+          "request": {
+            "method": "eth_getCode",
+            "params": [
+              "0xE42C659Dc09109566720EA8b2De186c2Be7D94D9",
+              "0x1862538"
+            ]
+          },
+          "result_file": "runtime/WithdrawalQueueERC721.mainnet.hex",
+          "result_file_encoding": "The exact 0x-prefixed RPC result with line breaks inserted every 128 characters; remove ASCII whitespace to recover the result.",
+          "bytes": 24190,
+          "keccak256": "0x7606999c03ae51ffb1d29b8b80a0d0cf85912f32f088ba1a52c45df312c36e64"
+        }
+      }
+    }
+  ],
+  "agreement": "Both independent endpoints returned the same pinned block header fields, proxy getters, and byte-for-byte proxy and implementation runtimes."
+}

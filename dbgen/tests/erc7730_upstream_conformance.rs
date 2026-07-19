@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712, BindingError};
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, BundleError};
+use pqsigner_erc7730::display::primitives::{amount_is_exact_at_fraction_digits, write_addr_full};
 use pqsigner_erc7730::display::render::{render_erc7730_eip712_pages, render_erc7730_pages};
 use pqsigner_erc7730::display::DISPLAY_COLS;
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir};
@@ -36,11 +37,10 @@ const UPSTREAM_SHA: &str = "784c87c925e8438e7b4736b2af85a501f8d2a265";
 const FIXTURE_RECEIPT_DOMAIN: &[u8] = b"pqsigner/erc7730-excluded-fixture-corpus-v1";
 const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
-// Intentional schema-v5 rotation: every integer field now authenticates its
-// original ABI width in addition to the terminal kind, so the device can
-// reject dirty zero/sign extension before trusted display publication.
-// The upstream fixture bytes remain test-only and outside the catalogue.
-const PROD_ROOT_HEX: &str = "185f5e95f4ac7446247b63fbe4d1bd3c89c5fa12f9b339d584552080aae8e6b8";
+// Router02's two single-hop formats are deliberately excluded until PQ1 can
+// enforce their sentinel and partial-fill semantics. The upstream fixture
+// bytes remain test-only and outside the catalogue.
+const PROD_ROOT_HEX: &str = "fda42f17fbb7b344f893c52199597e46edf3ae7413062d7cc44dd9bbfe6d2467";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1198,10 +1198,10 @@ fn upstream_fixture_corpus_is_exact_test_only_and_honestly_inventoried() {
                 .to_path_buf()
         })
         .collect();
-    assert_eq!(accepted.len(), 230);
-    assert_eq!(accepted.intersection(&tested_descriptors).count(), 145);
+    assert_eq!(accepted.len(), 229);
+    assert_eq!(accepted.intersection(&tested_descriptors).count(), 144);
     assert_eq!(accepted.difference(&tested_descriptors).count(), 85);
-    assert_eq!(tested_descriptors.difference(&accepted).count(), 127);
+    assert_eq!(tested_descriptors.difference(&accepted).count(), 128);
 }
 
 fn synth_bundle(blob: &[u8], ir_bytes: &[u8], leaf_index: usize) -> Vec<u8> {
@@ -1260,6 +1260,18 @@ fn consume_raw_word(rendered: &[String], cursor: &mut usize, word: &[u8; 32]) {
             cursor,
             std::str::from_utf8(chunk).expect("hex is ASCII"),
         );
+    }
+}
+
+fn consume_full_address(rendered: &[String], cursor: &mut usize, address: &[u8; 20]) {
+    let mut rows = [[b' '; DISPLAY_COLS]; 3];
+    let [row1, row2, row3] = &mut rows;
+    write_addr_full(row1, row2, row3, address);
+    for row in rows {
+        let text = std::str::from_utf8(&row)
+            .expect("address rows are ASCII")
+            .trim_end();
+        consume_normalized_token(rendered, cursor, text);
     }
 }
 
@@ -1444,6 +1456,84 @@ fn lido_claim_positive_matches_actual_merkle_verified_pq1_pages_with_exact_waive
 }
 
 #[test]
+fn lido_withdrawal_queue_upstream_frontier_refuses_unsafe_requests_and_renders_transfers() {
+    let relative_fixture = "registry/lido/tests/calldata-WithdrawalQueueERC721.tests.json";
+    let registry = build_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == 1
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-WithdrawalQueueERC721.json")
+        })
+        .expect("accepted Lido WithdrawalQueue leaf");
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified =
+        verify_erc7730_bundle(&bundle, &registry.root).expect("Merkle-verify Lido queue");
+    cross_check_contract(&verified.ir, 1, &entry.contract).expect("bind Lido queue");
+
+    for (case_index, signature) in [
+        (0usize, "requestWithdrawals(uint256[],address)"),
+        (
+            1,
+            "requestWithdrawalsWithPermit(uint256[],address,(uint256,uint256,uint8,bytes32,bytes32))",
+        ),
+        (3, "claimWithdrawals(uint256[],uint256[])"),
+    ] {
+        let (_, raw) = fixture_case(relative_fixture, case_index);
+        let parsed = eip1559::parse(&raw).expect("canonical unsigned Lido fixture");
+        assert_eq!(parsed.tx.to, Some(entry.contract));
+        assert_eq!(parsed.data.get(..4), Some(&keccak256(signature.as_bytes())[..4]));
+        assert!(matches!(
+            render_erc7730_pages(
+                &parsed.tx,
+                parsed.data,
+                &verified,
+                None,
+                &NameResolver::new(),
+            ),
+            Err(RenderErr::NoFormat)
+        ));
+    }
+
+    for (case_index, signature) in [
+        (4usize, "safeTransferFrom(address,address,uint256)"),
+        (5, "transferFrom(address,address,uint256)"),
+    ] {
+        let (_, raw) = fixture_case(relative_fixture, case_index);
+        let parsed = eip1559::parse(&raw).expect("canonical unsigned Lido transfer fixture");
+        assert_eq!(parsed.tx.to, Some(entry.contract));
+        assert_eq!(parsed.data.len(), 100, "selector plus three ABI words");
+        assert_eq!(
+            parsed.data.get(..4),
+            Some(&keccak256(signature.as_bytes())[..4])
+        );
+        let from: [u8; 20] = parsed.data[16..36].try_into().expect("from address");
+        let to: [u8; 20] = parsed.data[48..68].try_into().expect("to address");
+        let request_id: [u8; 32] = parsed.data[68..100].try_into().expect("request ID word");
+        let pages = render_erc7730_pages(
+            &parsed.tx,
+            parsed.data,
+            &verified,
+            None,
+            &NameResolver::new(),
+        )
+        .expect("render admitted Lido transfer fixture");
+        let rendered = normalized_rows(&pages);
+        let mut cursor = 0usize;
+        consume_normalized_token(&rendered, &mut cursor, "Transfer unstETH");
+        consume_normalized_token(&rendered, &mut cursor, "NFT");
+        consume_normalized_token(&rendered, &mut cursor, "From");
+        consume_full_address(&rendered, &mut cursor, &from);
+        consume_normalized_token(&rendered, &mut cursor, "To");
+        consume_full_address(&rendered, &mut cursor, &to);
+        consume_normalized_token(&rendered, &mut cursor, "Request ID");
+        consume_raw_word(&rendered, &mut cursor, &request_id);
+    }
+}
+
+#[test]
 fn lido_claim_fixture_bundle_and_binding_mutations_fail_closed() {
     let (_, raw) = fixture_case(
         "registry/lido/tests/calldata-WithdrawalQueueERC721.tests.json",
@@ -1577,6 +1667,148 @@ fn lido_claim_fixture_calldata_mutations_refuse_or_render_boundary_exactly() {
         maximum_rows,
         "a boundary-magnitude mutation must change the trusted transcript"
     );
+}
+
+#[test]
+fn serenita_deposit_and_exit_fixtures_match_corrected_pq1_semantics() {
+    let relative_fixture = "registry/serenita/tests/calldata-EthVault.tests.json";
+    let fixture: Value = serde_json::from_slice(
+        &std::fs::read(fixture_root().join(relative_fixture)).expect("read Serenita fixture"),
+    )
+    .expect("parse Serenita fixture");
+    assert_eq!(
+        fixture["tests"][1]["description"].as_str(),
+        Some("Stake ETH - chain 1")
+    );
+    assert_eq!(
+        fixture["tests"][2]["description"].as_str(),
+        Some("enter exit queue - chain 1")
+    );
+    assert_eq!(
+        fixture["tests"][3]["description"].as_str(),
+        Some("Update & Deposit - chain 1")
+    );
+
+    let registry = build_registry();
+    let serenita_contract: [u8; 20] = hex::decode("b36fc5e542cb4fc562a624912f55da2758998113")
+        .expect("Serenita contract hex")
+        .try_into()
+        .expect("Serenita contract width");
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == 1
+                && entry.contract == serenita_contract
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-EthVault.json")
+        })
+        .expect("accepted Serenita descriptor leaf");
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified =
+        verify_erc7730_bundle(&bundle, &registry.root).expect("Merkle-verify Serenita leaf");
+    cross_check_contract(&verified.ir, 1, &entry.contract).expect("bind Serenita descriptor");
+
+    for case_index in [1usize, 2usize] {
+        let (_, raw) = fixture_case(relative_fixture, case_index);
+        let parsed = eip1559::parse(&raw).expect("canonical unsigned Serenita Type-2 fixture");
+        assert_eq!(parsed.tx.chain_id, 1);
+        assert_eq!(parsed.tx.to, Some(entry.contract));
+        let pages = render_erc7730_pages(
+            &parsed.tx,
+            parsed.data,
+            &verified,
+            None,
+            &NameResolver::new(),
+        )
+        .unwrap_or_else(|error| panic!("render Serenita fixture case {case_index}: {error:?}"));
+        let rendered = normalized_rows(&pages);
+        let mut cursor = 0usize;
+
+        match case_index {
+            1 => {
+                assert_eq!(
+                    &parsed.data[..4],
+                    &keccak256(b"deposit(address,address)")[..4]
+                );
+                assert_eq!(
+                    parsed.tx.value,
+                    U256(
+                        hex::decode(
+                            "00000000000000000000000000000000000000000000000813ca56906d340000"
+                        )
+                        .expect("149 ETH word")
+                        .try_into()
+                        .expect("149 ETH word width")
+                    )
+                );
+                let receiver: [u8; 20] = parsed.data[16..36]
+                    .try_into()
+                    .expect("Serenita receiver word");
+                let referrer: [u8; 32] = parsed.data[36..68]
+                    .try_into()
+                    .expect("Serenita referrer word");
+                assert_eq!(
+                    receiver,
+                    [
+                        0xbd, 0x86, 0x07, 0x37, 0xf3, 0x2b, 0x7a, 0x43, 0xe1, 0x97, 0x37, 0x06,
+                        0x06, 0xf7, 0xeb, 0x32, 0xc5, 0xca, 0xd3, 0x47,
+                    ]
+                );
+                assert_eq!(referrer, [0u8; 32]);
+
+                consume_normalized_token(&rendered, &mut cursor, "Stake ETH");
+                consume_normalized_token(&rendered, &mut cursor, "Shares receiver");
+                consume_full_address(&rendered, &mut cursor, &receiver);
+                consume_normalized_token(&rendered, &mut cursor, "Amount to stake");
+                consume_normalized_token(&rendered, &mut cursor, "149 ETH");
+                consume_normalized_token(&rendered, &mut cursor, "Referrer");
+                consume_raw_word(&rendered, &mut cursor, &referrer);
+            }
+            2 => {
+                assert_eq!(
+                    &parsed.data[..4],
+                    &keccak256(b"enterExitQueue(uint256,address)")[..4]
+                );
+                let shares: [u8; 32] = parsed.data[4..36].try_into().expect("Serenita shares word");
+                let receiver: [u8; 20] = parsed.data[48..68]
+                    .try_into()
+                    .expect("Serenita exit receiver word");
+
+                consume_normalized_token(&rendered, &mut cursor, "Exit vault");
+                consume_normalized_token(&rendered, &mut cursor, "Shares to exit");
+                consume_raw_word(&rendered, &mut cursor, &shares);
+                consume_normalized_token(&rendered, &mut cursor, "Exit receiver");
+                consume_full_address(&rendered, &mut cursor, &receiver);
+                assert!(
+                    !rendered.iter().any(|row| {
+                        row == "token(unverifi~" || row == "tokencontract" || row == "!raw,dec=?"
+                    }),
+                    "raw StakeWise shares must not acquire invented token semantics: {rendered:?}"
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    let (_, refused_raw) = fixture_case(relative_fixture, 3);
+    let refused = eip1559::parse(&refused_raw)
+        .expect("canonical unsigned Serenita update-and-deposit fixture");
+    assert_eq!(
+        &refused.data[..4],
+        &keccak256(b"updateStateAndDeposit(address,address,(bytes32,int160,uint160,bytes32[]))")
+            [..4]
+    );
+    assert!(matches!(
+        render_erc7730_pages(
+            &refused.tx,
+            refused.data,
+            &verified,
+            None,
+            &NameResolver::new(),
+        ),
+        Err(RenderErr::NoFormat)
+    ));
 }
 
 #[test]
@@ -2103,6 +2335,91 @@ fn legacy_lido_positive_matches_actual_merkle_verified_pq1_pages_with_exact_waiv
 }
 
 #[test]
+fn lido_wsteth_inexact_upstream_calls_fail_closed() {
+    let relative_fixture = "registry/lido/tests/calldata-wstETH.tests.json";
+    let cases = [
+        (0usize, "approve(address,uint256)", 1usize),
+        (2, "unwrap(uint256)", 0),
+        (4, "decreaseAllowance(address,uint256)", 1),
+        (5, "increaseAllowance(address,uint256)", 1),
+        (7, "transferFrom(address,address,uint256)", 2),
+    ];
+
+    let registry = build_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == 1
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-wstETH.json")
+        })
+        .expect("accepted mainnet wstETH descriptor leaf");
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified =
+        verify_erc7730_bundle(&bundle, &registry.root).expect("Merkle-verify wstETH leaf");
+    cross_check_contract(&verified.ir, 1, &entry.contract).expect("bind wstETH descriptor");
+
+    let records = dbgen::load_erc20_records(&workspace_root().join("secure/data/erc20.json"))
+        .expect("load production ERC20 metadata");
+    let record = records
+        .iter()
+        .find(|record| {
+            record.chain_id == 1
+                && dbgen::parse_hex_address(&record.address).ok() == Some(entry.contract)
+        })
+        .expect("production wstETH metadata");
+    let metadata = Erc20Metadata {
+        chain_id: record.chain_id,
+        contract: entry.contract,
+        decimals: record.decimals,
+        name: record.name.as_bytes(),
+        symbol: record.symbol.as_bytes(),
+    };
+    assert_eq!(metadata.decimals, 18);
+
+    for (case_index, signature, amount_word_index) in cases {
+        let (_, raw) = fixture_case(relative_fixture, case_index);
+        assert_eq!(supported_fixture_shell(&raw), FixtureShellKind::Type2);
+        let (tx, data) = match rlp_field_count(&raw, true) {
+            Some(9) => {
+                let parsed = eip1559::parse(&raw).expect("canonical unsigned Type-2 fixture");
+                let data = parsed.data.to_vec();
+                (parsed.tx, data)
+            }
+            Some(12) => {
+                let adapted = adapt_signed_type2_fixture(&raw);
+                (adapted.tx, adapted.data)
+            }
+            fields => panic!("unexpected Type-2 field count for case {case_index}: {fields:?}"),
+        };
+        assert_eq!(tx.chain_id, 1);
+        assert_eq!(tx.to, Some(entry.contract));
+        assert_eq!(tx.data_len, data.len());
+        let selector = keccak256(signature.as_bytes());
+        assert_eq!(&data[..4], &selector[..4], "fixture selector drift");
+
+        let amount_offset = 4 + amount_word_index * 32;
+        let amount = U256(
+            data[amount_offset..amount_offset + 32]
+                .try_into()
+                .expect("complete static amount word"),
+        );
+        assert!(
+            !amount_is_exact_at_fraction_digits(&amount, 18, 6),
+            "fixture case {case_index} unexpectedly became exactly renderable"
+        );
+        assert!(
+            matches!(
+                render_erc7730_pages(&tx, &data, &verified, Some(&metadata), &NameResolver::new(),),
+                Err(RenderErr::Reject("7730 inexact scaled value"))
+            ),
+            "case {case_index} must retain the existing exactness refusal"
+        );
+    }
+}
+
+#[test]
 fn tally_uni_eip712_positive_matches_actual_merkle_verified_pq1_pages() {
     let relative_fixture = "registry/tally/tests/eip712-tally-ethereum-uni-token.tests.json";
     let fixture: Value = serde_json::from_slice(
@@ -2317,4 +2634,60 @@ fn weth_upstream_positive_with_trailing_calldata_is_an_explicit_pq1_refusal() {
             "7730 static calldata trailing"
         ))
     ));
+}
+
+#[test]
+fn weth_canonical_deposit_renders_on_each_pinned_deployment_and_binds_value() {
+    fn value(raw: u64) -> U256 {
+        let mut bytes = [0u8; 32];
+        bytes[24..].copy_from_slice(&raw.to_be_bytes());
+        U256(bytes)
+    }
+
+    let registry = build_registry();
+    let selector = &keccak256(b"deposit()")[..4];
+    assert_eq!(selector, [0xd0, 0xe3, 0x0d, 0xb0]);
+    for (chain_id, address) in [
+        (1, "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
+        (11_155_111, "fff9976782d46cc05630d1f6ebab18b2324d6b14"),
+    ] {
+        let contract: [u8; 20] = hex::decode(address)
+            .expect("valid WETH9 address")
+            .try_into()
+            .expect("WETH9 address width");
+        let entry = registry
+            .entries
+            .iter()
+            .find(|entry| {
+                entry.chain_id == chain_id
+                    && entry.contract == contract
+                    && entry.source.file_name().and_then(|name| name.to_str())
+                        == Some("calldata-weth.json")
+            })
+            .expect("accepted WETH9 descriptor leaf");
+        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify WETH9 leaf");
+        cross_check_contract(&verified.ir, chain_id, &contract).expect("bind WETH9 deployment");
+
+        let render_value = |raw| {
+            let tx = Eip1559Tx {
+                chain_id,
+                to: Some(contract),
+                value: value(raw),
+                data_len: selector.len(),
+                ..Eip1559Tx::default()
+            };
+            let pages = render_erc7730_pages(&tx, selector, &verified, None, &NameResolver::new())
+                .expect("canonical four-byte WETH9 deposit renders");
+            normalized_rows(&pages)
+        };
+        let half = render_value(500_000_000_000_000_000);
+        let one = render_value(1_000_000_000_000_000_000);
+        assert!(half.iter().any(|row| row == "0.5eth"), "rows={half:?}");
+        assert!(one.iter().any(|row| row == "1eth"), "rows={one:?}");
+        assert_ne!(
+            half, one,
+            "distinct signed values need distinct transcripts"
+        );
+    }
 }

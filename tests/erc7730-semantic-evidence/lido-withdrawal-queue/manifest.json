@@ -1,0 +1,211 @@
+{
+  "schema_version": 1,
+  "scope": "Lido WithdrawalQueueERC721 semantic evidence for the five PQ1-admitted mainnet routes and the deliberately refused requestWithdrawals route",
+  "captured_at_utc": "2026-07-19T18:49:25Z",
+  "upstream": {
+    "repository": "https://github.com/lidofinance/core",
+    "release": "v2.0.0",
+    "commit": "cadffa46a2b8ed6cfa1127fca2468bae1a82d6bf",
+    "tree": "96c71e4f4e342f54e3f16a37d1a526fe25caa40b",
+    "commit_time": "2023-05-26T20:28:53+03:00",
+    "deployment_record": {
+      "upstream_path": "deployed-mainnet.json",
+      "archive_file": "deployment/deployed-mainnet.json",
+      "sha256": "7d15d6480a696d7c771cc0893f4b2de0fdbeecf5f6230de3470ac3a9a9daa83b",
+      "object_path": ".withdrawalQueueERC721"
+    },
+    "files": [
+      {
+        "upstream_path": "contracts/0.8.9/proxy/OssifiableProxy.sol",
+        "archive_file": "source/OssifiableProxy.sol",
+        "sha256": "3fb48bc4a40c887dd581178d05316745c1b1c393a8e64787ef2a7075f1e7ce6d"
+      },
+      {
+        "upstream_path": "contracts/0.8.9/WithdrawalQueue.sol",
+        "archive_file": "source/WithdrawalQueue.sol",
+        "sha256": "efa5a32fbc99cafdb16a38d96a9bb5b29a62e60b5610e7c317711cc58402b131"
+      },
+      {
+        "upstream_path": "contracts/0.8.9/WithdrawalQueueBase.sol",
+        "archive_file": "source/WithdrawalQueueBase.sol",
+        "sha256": "68d8919f89198c3d39272b2259a3144bf87a4aa48c570624b025fd86da47d2bb"
+      },
+      {
+        "upstream_path": "contracts/0.8.9/WithdrawalQueueERC721.sol",
+        "archive_file": "source/WithdrawalQueueERC721.sol",
+        "sha256": "f28f0974b484f26cc8b37672c6579fd05585d82e41c8e58aa4bdd6e0c0383542"
+      }
+    ]
+  },
+  "deployment": {
+    "chain_id": 1,
+    "proxy_address": "0x889edc2edab5f40e902b864ad4d7ade8e412f9b1",
+    "proxy_deploy_transaction": "0x98c2170be034f750f5006cb69ea0aeeaf0858b11f6324ee53d582fa4dd49bc1a",
+    "proxy_constructor_implementation": "0x6f6541c2203196feeddd14cd2c09550da1cbeda31",
+    "implementation_address_at_fixed_block": "0xe42c659dc09109566720ea8b2de186c2be7d94d9",
+    "implementation_deploy_transaction": "0x6ab0151735c01acdef518421358d41a08752169bc383c57d57f5bfa135ac6eb1",
+    "implementation_constructor": {
+      "wsteth": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+      "name": "Lido: stETH Withdrawal NFT",
+      "symbol": "unstETH"
+    },
+    "proxy_admin_at_fixed_block": "0x3e40d73eb977dc6a537af587d48316fee66e9c8c",
+    "proxy_ossified_at_fixed_block": false,
+    "fixed_block": {
+      "number": 25568568,
+      "number_hex": "0x1862538",
+      "hash": "0x34c2319fd8cf3d7feb373d1e7b2e475ea1f9475f5b8b24f02480bdf589036358",
+      "state_root": "0x3fa3f93f086f3260b850ca04efe6a0f20e661caecbf4f70328165e8744e9dd49",
+      "timestamp": 1784485943,
+      "timestamp_utc": "2026-07-19T18:32:23Z",
+      "receipt_file": "rpc/fixed-block-receipt.json",
+      "receipt_file_sha256": "794de914ce161eb6e5b4ff7f33a71cbe847b688f9628da68ceb36cb7cd19f73e",
+      "rpc_endpoints": [
+        "https://eth.drpc.org",
+        "https://ethereum-rpc.publicnode.com"
+      ]
+    }
+  },
+  "runtime_artifacts": {
+    "proxy": {
+      "file": "runtime/OssifiableProxy.mainnet.hex",
+      "artifact_sha256": "0405d821090c2a591ec7a81bdf49809a9afc686595b717439b04ca8bd5a9a64b",
+      "bytes": 2497,
+      "keccak256": "0x9bc25fa4b2f98d56db4aa4156a6dc98360ccd4ef9c7bc7f891797b0024272100"
+    },
+    "implementation": {
+      "file": "runtime/WithdrawalQueueERC721.mainnet.hex",
+      "artifact_sha256": "d94087242e5ca9f1d2784fcc8da613e2443fa89b58300abab9a30bf37ac2fe5d",
+      "bytes": 24190,
+      "keccak256": "0x7606999c03ae51ffb1d29b8b80a0d0cf85912f32f088ba1a52c45df312c36e64"
+    }
+  },
+  "verified_explorer": {
+    "proxy_api": "https://eth.blockscout.com/api/v2/smart-contracts/0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1",
+    "implementation_api": "https://eth.blockscout.com/api/v2/smart-contracts/0xE42C659Dc09109566720EA8b2De186c2Be7D94D9",
+    "proxy_contract_name": "OssifiableProxy",
+    "implementation_contract_name": "WithdrawalQueueERC721",
+    "compiler": "0.8.9+commit.e5eed63a",
+    "evm_version": "istanbul",
+    "optimizer_enabled": true,
+    "optimizer_runs": 200,
+    "proxy_is_verified": true,
+    "proxy_is_fully_verified": true,
+    "implementation_is_verified": true,
+    "implementation_is_fully_verified": true,
+    "implementation_abi_entries": 128,
+    "archived_sources_match_verified_explorer_sources": true,
+    "explorer_runtimes_match_fixed_block_artifacts": true
+  },
+  "abi": {
+    "archive_file": "abi/routes.abi.json",
+    "archive_file_sha256": "d5aaa5d80ba7f7d34b1c472fd5992ecefbbe8209548442b698819254bf005531",
+    "encoding": "jq -cS canonical JSON with one final LF",
+    "source_full_verified_abi_canonical_sha256": "144f64cd43555b23e5ee6d7d64043bb22aa739e18d52b751488bddfe195bf5fd",
+    "entries": 6
+  },
+  "routes": [
+    {
+      "status": "admitted",
+      "canonical_signature": "approve(address,uint256)",
+      "selector": "0x095ea7b3",
+      "displayed_operand_paths": [
+        "#._to",
+        "#._requestId"
+      ],
+      "source": [
+        "source/WithdrawalQueueERC721.sol:178-185",
+        "source/WithdrawalQueueERC721.sol:300-305"
+      ],
+      "successful_effect": "The current NFT owner or an operator approved for all sets the exact per-request approval to the signed target; address(0) clears that approval.",
+      "state_residual": "Current ownership and caller authorization are live state, and a later transfer clears the approval."
+    },
+    {
+      "status": "admitted",
+      "canonical_signature": "claimWithdrawal(uint256)",
+      "selector": "0xf8444436",
+      "displayed_operand_paths": [
+        "#._requestId"
+      ],
+      "source": [
+        "source/WithdrawalQueue.sol:277-287",
+        "source/WithdrawalQueueBase.sol:455-480"
+      ],
+      "successful_effect": "The current owner claims the signed finalized request ID; the NFT is burned and the live calculated ETH amount is sent to msg.sender.",
+      "state_residual": "Ownership, finalization, claimed status, checkpoint search and gas, claimable ETH, contract balance, and recipient acceptance are live state. No exact ETH output is signed or guaranteed."
+    },
+    {
+      "status": "admitted",
+      "canonical_signature": "safeTransferFrom(address,address,uint256)",
+      "selector": "0x42842e0e",
+      "displayed_operand_paths": [
+        "#._from",
+        "#._to",
+        "#._requestId"
+      ],
+      "source": [
+        "source/WithdrawalQueueERC721.sol:204-215",
+        "source/WithdrawalQueueERC721.sol:230-254",
+        "source/WithdrawalQueueERC721.sol:256-288"
+      ],
+      "successful_effect": "Moves the exact signed withdrawal-request NFT from the signed owner to the signed recipient, clears its per-token approval, and requires a successful ERC721Receiver callback for a contract recipient.",
+      "state_residual": "Current ownership and caller approval determine success. The receiver callback may revert or reenter and move the NFT again, so the post-call owner is not guaranteed to remain the signed recipient."
+    },
+    {
+      "status": "admitted",
+      "canonical_signature": "setApprovalForAll(address,bool)",
+      "selector": "0xa22cb465",
+      "displayed_operand_paths": [
+        "#._operator",
+        "#._approved"
+      ],
+      "source": [
+        "source/WithdrawalQueueERC721.sol:194-197",
+        "source/WithdrawalQueueERC721.sol:307-313"
+      ],
+      "successful_effect": "Sets the signed operator's collection-wide authority for all current and future unstETH NFTs owned by msg.sender to the signed boolean; the operator cannot equal msg.sender.",
+      "state_residual": "The authorization persists until another transaction changes it and can be exercised against later-acquired withdrawal NFTs."
+    },
+    {
+      "status": "admitted",
+      "canonical_signature": "transferFrom(address,address,uint256)",
+      "selector": "0x23b872dd",
+      "displayed_operand_paths": [
+        "#._from",
+        "#._to",
+        "#._requestId"
+      ],
+      "source": [
+        "source/WithdrawalQueueERC721.sol:217-220",
+        "source/WithdrawalQueueERC721.sol:230-254"
+      ],
+      "successful_effect": "Moves the exact signed withdrawal-request NFT from the signed owner to the signed recipient and clears its per-token approval, without an ERC721Receiver callback.",
+      "state_residual": "Current ownership, claimed status, and caller token/global approval determine success. The NFT conveys the withdrawal claim right, not an immediate stETH or ETH transfer."
+    },
+    {
+      "status": "refused",
+      "canonical_signature": "requestWithdrawals(uint256[],address)",
+      "selector": "0xd6681042",
+      "intended_operand_paths": [
+        "#._amounts.[]",
+        "#._owner"
+      ],
+      "source": [
+        "source/WithdrawalQueue.sol:119-136",
+        "source/WithdrawalQueue.sol:373-381",
+        "source/WithdrawalQueueBase.sol:362-390"
+      ],
+      "successful_effect": "For each signed stETH amount, transfers that amount from msg.sender, computes live shares, enqueues a request, and mints an unstETH NFT to the signed owner; address(0) is replaced by msg.sender.",
+      "refusal_reason": "The effective owner is conditional: a signed zero address means msg.sender. The current addressName opcode cannot authenticate that sender fallback, so PQ1 drops this format instead of displaying zero as the owner.",
+      "state_residual": "Pause state, allowance, balance, stETH share conversion and rounding, generated request IDs, timestamps, later finalization, and eventual ETH output are live. An empty array may complete without creating a request."
+    }
+  ],
+  "residuals": [
+    "This is a historical fixed-block receipt. The proxy was not ossified and remained admin-upgradeable at the pinned block, so later code does not inherit these conclusions.",
+    "The archived v2.0.0 sources and verified runtime bind successful source semantics, not transaction success against future contract state.",
+    "Claim output and request creation/finalization outputs depend on live protocol state and are not guaranteed by the displayed calldata.",
+    "safeTransferFrom executes an external receiver callback after the ownership write and can have post-callback state beyond the signed transfer operands.",
+    "requestWithdrawals remains hard-refused in PQ1 until the conditional zero-owner-to-sender meaning is authenticated and displayed; this package does not expand signing authority.",
+    "This evidence grants no live-monitoring, production-shipment, fallback, forced-blind, or generic signing authority."
+  ]
+}

@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "scope": "Uniswap SwapRouter02 exactInputSingle and exactOutputSingle semantic evidence for PQ1 fail-closed exclusion",
+  "captured_at_utc": "2026-07-19T15:30:00Z",
+  "policy": {
+    "outcome": "fail_closed_exclusion",
+    "mechanism": "The standard senderAddress annotation on each recipient is unsupported by PQ1, so tolerant compilation emits no Router02 leaf while declared call collection retains both known-call tuples.",
+    "excluded_routes": [
+      {
+        "canonical_signature": "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+        "selector": "0x04e45aaf",
+        "descriptor_format_key": "exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96) params)"
+      },
+      {
+        "canonical_signature": "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+        "selector": "0x5023b4df",
+        "descriptor_format_key": "exactOutputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountOut, uint256 amountInMaximum, uint160 sqrtPriceLimitX96) params)"
+      }
+    ]
+  },
+  "deployment": {
+    "chain_id": 1,
+    "address": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+    "official_deployment_document": "https://github.com/Uniswap/docs/blob/338d70983ac49911aecac02dd57b0a969c1ca61e/archive/docs/contracts/v3/reference/deployments/Ethereum-Deployments.md",
+    "transaction_hash": "0x7299cca7203f60a831756e043f4c2ccb0ee6cb7cf8aed8420f0ae99a16883a2b",
+    "block_number": 13804681,
+    "block_number_hex": "0xd2a489",
+    "block_hash": "0xa13d35ff8d6037c88537d5f1bcfaceb6eeb735956923e30a773a28e9a4917d43",
+    "state_root": "0x2f69a6de46f92b775ca79b4d0d1926fc6cd982ee1d39036981ff318fb6489368",
+    "timestamp": 1639503446,
+    "timestamp_utc": "2021-12-14T17:37:26Z",
+    "deployer": "0x6c9fc64a53c1b71fb3f9af64d1ae3a4931a5f4e9",
+    "deployer_nonce": 14,
+    "receipt_status": 1,
+    "receipt_contract_address": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+    "creation_input_bytes": 25013,
+    "creation_input_keccak256": "0xfc70e839b55c72ad168597296aae1e9dfb68df62f4d5ab1599cd3378875894c1",
+    "rpc_endpoints": [
+      "https://eth.drpc.org",
+      "https://rpc.mevblocker.io"
+    ]
+  },
+  "evidence_block": {
+    "number": 25566776,
+    "number_hex": "0x1861e38",
+    "hash": "0x926e7fa2bf7071dd1eb19c14284f27a7219d3bfb29240d4064daa8417beb42a4",
+    "state_root": "0x708b68dd3da2ea4d137075bf8edebc26ba66b90362b38c349f3f8bed5628083d",
+    "timestamp": 1784464343,
+    "timestamp_utc": "2026-07-19T12:32:23Z",
+    "rpc_endpoints": [
+      "https://eth.drpc.org",
+      "https://rpc.mevblocker.io"
+    ]
+  },
+  "runtime": {
+    "file": "runtime/SwapRouter02.mainnet.hex",
+    "bytes": 24497,
+    "sha256": "73fa6fcc81954e96e46dfde91f8e282cd98868c0992ed2c7875a9618fa0711e5",
+    "keccak256": "0x6ec798e80f3a19de650826338677604e54d6664f44a33b53a20b22b1939f402e",
+    "explorer_deployed_bytecode_changed": false,
+    "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+    "eip1967_implementation_slot_value": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "eip1967_beacon_slot": "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50",
+    "eip1967_beacon_slot_value": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "proxy_claim": "The fixed-block contract is not an ERC-1967 implementation/beacon proxy or an EIP-1167 minimal proxy; this is not a claim about every proxy convention."
+  },
+  "verified_source": {
+    "upstream_repository": "https://github.com/Uniswap/swap-router-contracts",
+    "upstream_release": "v1.1.0",
+    "annotated_tag_object": "535ee984afa8e32a0206d372ecbc5f6186360f27",
+    "upstream_commit": "8fe4f086cee7c08f0bdb6ebe20c9ab615921c65f",
+    "upstream_tree": "84ed2b9297023bf6fce8ae90b057abf030d8c65f",
+    "upstream_commit_time": "2021-12-14T11:51:00-05:00",
+    "explorer_url": "https://eth.blockscout.com/api/v2/smart-contracts/0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+    "explorer_status": "is_verified=true; is_partially_verified=true; is_fully_verified=false; is_changed_bytecode=false",
+    "contract_name": "SwapRouter02",
+    "compiler": "0.7.6+commit.7338295f",
+    "evm_version": "istanbul",
+    "optimizer_enabled": true,
+    "optimizer_runs": 1000000,
+    "metadata_bytecode_hash": "none",
+    "repo_owned_verified_file_count": 21,
+    "repo_owned_verified_source_inventory_sha256": "09dbf6f9f034cadde7b9f4e8c7d44c4f00567331ccae81fa3673734789e7d699",
+    "archived_files_match_official_release_and_verified_explorer_sources": true,
+    "files": [
+      {
+        "archive_file": "source/SwapRouter02.sol",
+        "upstream_path": "contracts/SwapRouter02.sol",
+        "sha256": "80c802656110ad9dd00a6b503e124ef231b00989d3d9af6d95b2f196ce5cfa3f"
+      },
+      {
+        "archive_file": "source/V3SwapRouter.sol",
+        "upstream_path": "contracts/V3SwapRouter.sol",
+        "sha256": "aae643f487dde006e03d64acee391315822a245276586c5cbbf7bf3e759913a2"
+      },
+      {
+        "archive_file": "source/IV3SwapRouter.sol",
+        "upstream_path": "contracts/interfaces/IV3SwapRouter.sol",
+        "sha256": "6923e377f3300769dcecba1cd57dbda6642c932feeb5455771ef3fbdf61fc171"
+      },
+      {
+        "archive_file": "source/Constants.sol",
+        "upstream_path": "contracts/libraries/Constants.sol",
+        "sha256": "ad6c525483d98318531f48d1652efdcc6d57e8fc466f584f3d61c02b592a5ba1"
+      }
+    ]
+  },
+  "abi": {
+    "archive_file": "abi/single-hop.abi.json",
+    "archive_file_sha256": "7c0893ac24d4724f15ce423ff696f32e609a0732006df8a42d611be36426a83d",
+    "official_artifact": "https://unpkg.com/@uniswap/swap-router-contracts@1.1.0/artifacts/contracts/SwapRouter02.sol/SwapRouter02.json",
+    "official_artifact_sha256": "210a7bf29f26de9f45d35dac1214943eca41c3a002007dd6a0e1aa870bf2d2d1",
+    "full_abi_canonical_sha256": "8234b13f13093d8559fe190c0ca188ed80019e8efdfc913ce2c32efd62a5fb2f",
+    "explorer_routes_canonical_sha256": "7c0893ac24d4724f15ce423ff696f32e609a0732006df8a42d611be36426a83d"
+  },
+  "descriptor": {
+    "curated_file": "secure/data/erc7730/curations/files/registry/uniswap/calldata-UniswapV3Router02.json",
+    "vendored_file": "secure/data/erc7730-registry/registry/uniswap/calldata-UniswapV3Router02.json",
+    "sha256": "79703872432fa4a4ad6b51d00cc4093a0def94c41a0c49e4e4dac28dbfe7db67",
+    "sender_address_sentinel": "0x0000000000000000000000000000000000000001"
+  },
+  "semantic_hazards": [
+    "recipient address(1) resolves to msg.sender and address(2) resolves to the router itself.",
+    "exactInputSingle amountIn=0 consumes the router's entire tokenIn balance and changes the payer to the router.",
+    "A nonzero exact-input price limit can make amountIn a cap rather than an exact consumed amount.",
+    "A nonzero exact-output price limit permits amountOutReceived to be smaller than the requested amountOut.",
+    "The payable route and native/WETH funding context are not represented by the current PQ1 display."
+  ],
+  "residuals": [
+    "This is a fixed-block historical receipt for Ethereum chain 1 and does not provide live deployment monitoring.",
+    "Blockscout marks the source partially verified rather than fully verified; the 21 repo-owned verified sources were byte-identical to the pinned official release.",
+    "Restoration requires explicit, device-verifiable sentinel, amount-zero, price-limit, recipient, and funding semantics.",
+    "The known-call Bloom is probabilistic, but both exact tuples are also asserted against the exact builder set offline.",
+    "This evidence grants no production-shipment, fallback, generic signing, legacy-transaction, or blind-signing authority."
+  ]
+}

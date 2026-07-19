@@ -281,7 +281,7 @@ fn registry_aave_v3_lending_and_permits_cover_every_unique_deployment() {
 
     assert_eq!(
         result.entries.len(),
-        430,
+        429,
         "the bounded DeFi curation phase must add exactly two catalogue leaves"
     );
     assert_eq!(result.known_call_count, 4_542);
@@ -294,6 +294,89 @@ fn registry_aave_v3_lending_and_permits_cover_every_unique_deployment() {
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
         "270a4bc71332868cbdc75c81a1cc92da8669a37e2bead6b7d193974b3e1d431d",
         "format acceptance must not change the known-call Bloom"
+    );
+}
+
+#[test]
+fn registry_weth9_deposit_binds_value_on_exact_deployments() {
+    let result = build_registry();
+    let entries: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str()) == Some("calldata-weth.json")
+        })
+        .collect();
+    let expected_deployments: BTreeSet<(u64, [u8; 20])> = [
+        (1, "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
+        (11_155_111, "fff9976782d46cc05630d1f6ebab18b2324d6b14"),
+    ]
+    .into_iter()
+    .map(|(chain_id, address)| {
+        let contract: [u8; 20] = hex::decode(address)
+            .expect("valid WETH9 deployment")
+            .try_into()
+            .expect("WETH9 address width");
+        (chain_id, contract)
+    })
+    .collect();
+    let actual_deployments: BTreeSet<_> = entries
+        .iter()
+        .map(|entry| (entry.chain_id, entry.contract))
+        .collect();
+    assert_eq!(actual_deployments, expected_deployments);
+
+    let selector: [u8; 4] = keccak256(b"deposit()")[..4]
+        .try_into()
+        .expect("selector width");
+    assert_eq!(selector, [0xd0, 0xe3, 0x0d, 0xb0]);
+    let mut value_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+    value_path.extend_from_slice(&container_field::VALUE.to_be_bytes());
+
+    for entry in entries {
+        assert_eq!(entry.ir_bytes.len(), 173, "WETH9 IR size drifted");
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated WETH9 IR parses");
+        let formats: Vec<_> = ir
+            .format_iter()
+            .map(|format| format.expect("WETH9 format parses"))
+            .collect();
+        assert_eq!(formats.len(), 1, "WETH9 admits only deposit()");
+        let deposit = ir
+            .find_format_by_selector(&selector)
+            .expect("WETH9 format table parses")
+            .expect("deposit() remains admitted");
+        assert_eq!(deposit.intent, b"Wrap");
+        assert_eq!(deposit.static_head_words, 0);
+        let fields: Vec<_> = deposit
+            .fields()
+            .map(|field| field.expect("WETH9 field parses"))
+            .collect();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].label, b"Amount");
+        assert_eq!(
+            FormatOp::try_from(fields[0].format_op),
+            Ok(FormatOp::Amount)
+        );
+        assert_eq!(
+            ir.path_bytes(fields[0].path_off)
+                .expect("WETH9 value path parses"),
+            value_path,
+            "deposit amount must bind the authenticated transaction value"
+        );
+        let params = parse_params(&ir, fields[0].param_off).expect("WETH9 params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+        assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+        assert_eq!(params.integer_width_bytes, Some(32));
+        assert!(result
+            .known_calls
+            .contains(&(entry.chain_id, entry.contract, selector)));
+    }
+
+    assert_eq!(result.entries.len(), 429);
+    assert_eq!(result.known_call_count, 4_542);
+    assert_eq!(
+        hex::encode(result.root),
+        "fda42f17fbb7b344f893c52199597e46edf3ae7413062d7cc44dd9bbfe6d2467"
     );
 }
 
@@ -398,7 +481,7 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
 
     assert_eq!(
         result.entries.len(),
-        430,
+        429,
         "Aave V2 already owned three leaves"
     );
     assert_eq!(result.known_call_count, 4_542);
@@ -460,6 +543,51 @@ fn assert_stakewise_claim_format(ir: &Erc7730Ir<'_>, format_name: &str) {
     assert_eq!(timestamp_params.date_encoding, Some(0));
 }
 
+fn assert_stakewise_exit_format(ir: &Erc7730Ir<'_>, format_name: &str) -> [u8; 4] {
+    let selector: [u8; 4] = keccak256(b"enterExitQueue(uint256,address)")[..4]
+        .try_into()
+        .expect("selector width");
+    let exit = ir
+        .find_format_by_selector(&selector)
+        .expect("StakeWise exit format table parses")
+        .unwrap_or_else(|| panic!("{format_name} exit route is admitted"));
+    assert_eq!(
+        exit.intent, b"Exit vault",
+        "{format_name} exit intent must cover both immediate redemption and queued exit"
+    );
+
+    let fields: Vec<_> = exit
+        .fields()
+        .map(|field| field.expect("generated StakeWise exit field parses"))
+        .collect();
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].label, b"Shares to exit");
+    assert_eq!(FormatOp::try_from(fields[0].format_op), Ok(FormatOp::Raw));
+    let shares = parse_params(ir, fields[0].param_off).expect("exit shares params parse");
+    assert_eq!(shares.visibility, Visibility::Always);
+    assert_eq!(shares.terminal_kind, Some(TerminalKind::Unsigned));
+    assert_eq!(shares.integer_width_bytes, Some(32));
+    assert_eq!(
+        shares.token_path, None,
+        "exit shares must not imply live token metadata"
+    );
+    assert_eq!(
+        shares.token, None,
+        "exit shares must remain an exact raw word"
+    );
+
+    assert_eq!(fields[1].label, b"Exit receiver");
+    assert_eq!(
+        FormatOp::try_from(fields[1].format_op),
+        Ok(FormatOp::AddressName)
+    );
+    let receiver = parse_params(ir, fields[1].param_off).expect("exit receiver params parse");
+    assert_eq!(receiver.visibility, Visibility::Always);
+    assert_eq!(receiver.terminal_kind, Some(TerminalKind::Address));
+
+    selector
+}
+
 #[test]
 fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
     let result = build_registry();
@@ -514,7 +642,7 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
         .map(|field| field.expect("generated Serenita field parses"))
         .collect();
     assert_eq!(fields.len(), 3);
-    assert_eq!(fields[0].label, b"Rewards receiver");
+    assert_eq!(fields[0].label, b"Shares receiver");
     assert_eq!(
         FormatOp::try_from(fields[0].format_op),
         Ok(FormatOp::AddressName)
@@ -538,6 +666,14 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
             .known_calls
             .contains(&(entry.chain_id, entry.contract, deposit_selector)),
         "newly clear-signable deposit was already registry-known"
+    );
+
+    let exit_selector = assert_stakewise_exit_format(&ir, "Serenita");
+    assert!(
+        result
+            .known_calls
+            .contains(&(entry.chain_id, entry.contract, exit_selector)),
+        "Serenita exit route must remain registry-known"
     );
 
     assert_stakewise_claim_format(&ir, "Serenita");
@@ -567,7 +703,7 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
         );
     }
 
-    assert_eq!(result.entries.len(), 430);
+    assert_eq!(result.entries.len(), 429);
     assert_eq!(result.known_call_count, 4_542);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -635,6 +771,25 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
             actual_selectors, expected_selectors,
             "only the formerly refused claim route may join the two existing P2P formats"
         );
+        let deposit_selector: [u8; 4] = keccak256(b"deposit(address,address)")[..4]
+            .try_into()
+            .expect("selector width");
+        let deposit = ir
+            .find_format_by_selector(&deposit_selector)
+            .expect("P2P vault format table parses")
+            .expect("P2P deposit remains admitted");
+        let deposit_fields: Vec<_> = deposit
+            .fields()
+            .map(|field| field.expect("generated P2P deposit field parses"))
+            .collect();
+        assert_eq!(deposit_fields[0].label, b"Shares receiver");
+        let exit_selector = assert_stakewise_exit_format(&ir, "P2P");
+        assert!(
+            result
+                .known_calls
+                .contains(&(entry.chain_id, entry.contract, exit_selector)),
+            "P2P exit route must remain registry-known"
+        );
         assert_stakewise_claim_format(&ir, "P2P");
         assert!(
             result
@@ -656,7 +811,7 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
         );
     }
 
-    assert_eq!(result.entries.len(), 430);
+    assert_eq!(result.entries.len(), 429);
     assert_eq!(result.known_call_count, 4_542);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -849,6 +1004,155 @@ fn registry_lido_staking_admits_visible_referrals_on_exact_mainnet_contracts() {
 }
 
 #[test]
+fn registry_lido_withdrawal_queue_pins_five_honest_routes_and_refuses_sender_sentinel() {
+    let result = build_registry();
+    let entries: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-WithdrawalQueueERC721.json")
+        })
+        .collect();
+    assert_eq!(entries.len(), 1);
+    let entry = entries[0];
+    assert_eq!(entry.chain_id, 1);
+    assert_eq!(
+        hex::encode(entry.contract),
+        "889edc2edab5f40e902b864ad4d7ade8e412f9b1"
+    );
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Lido queue IR parses");
+
+    let admitted = [
+        "approve(address,uint256)",
+        "claimWithdrawal(uint256)",
+        "safeTransferFrom(address,address,uint256)",
+        "setApprovalForAll(address,bool)",
+        "transferFrom(address,address,uint256)",
+    ];
+    let expected_selectors: BTreeSet<[u8; 4]> = admitted
+        .iter()
+        .map(|signature| {
+            keccak256(signature.as_bytes())[..4]
+                .try_into()
+                .expect("selector width")
+        })
+        .collect();
+    let actual_selectors: BTreeSet<_> = ir
+        .format_iter()
+        .map(|format| format.expect("Lido queue format parses").selector)
+        .collect();
+    assert_eq!(actual_selectors, expected_selectors);
+
+    let assert_format =
+        |signature: &str, intent: &[u8], expected_fields: &[(&[u8], FormatOp, TerminalKind)]| {
+            let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+                .try_into()
+                .expect("selector width");
+            let format = ir
+                .find_format_by_selector(&selector)
+                .expect("Lido queue format table parses")
+                .unwrap_or_else(|| panic!("admitted Lido route missing: {signature}"));
+            assert_eq!(format.intent, intent);
+            let fields: Vec<_> = format
+                .fields()
+                .map(|field| field.expect("Lido queue field parses"))
+                .collect();
+            assert_eq!(fields.len(), expected_fields.len());
+            for (index, (field, (label, op, terminal))) in
+                fields.iter().zip(expected_fields).enumerate()
+            {
+                assert_eq!(field.label, *label, "wrong label for {signature}");
+                assert_eq!(FormatOp::try_from(field.format_op), Ok(*op));
+                let params = parse_params(&ir, field.param_off).expect("Lido field params parse");
+                assert_eq!(params.visibility, Visibility::Always);
+                assert_eq!(params.terminal_kind, Some(*terminal));
+                assert_eq!(
+                    ir.path_bytes(field.path_off)
+                        .expect("Lido field path parses"),
+                    [
+                        PathOp::RootStructured as u8,
+                        PathOp::FieldIdx as u8,
+                        0,
+                        u8::try_from(index).expect("field ordinal fits u8"),
+                    ],
+                    "wrong signed operand path for {signature}"
+                );
+                if *op == FormatOp::Enum {
+                    assert!(params.enum_ref.is_some(), "enum route must bind its table");
+                }
+            }
+            assert!(result
+                .known_calls
+                .contains(&(entry.chain_id, entry.contract, selector)));
+        };
+
+    assert_format(
+        "approve(address,uint256)",
+        b"Set unstETH NFT approval",
+        &[
+            (
+                b"Approval target",
+                FormatOp::AddressName,
+                TerminalKind::Address,
+            ),
+            (b"Request ID", FormatOp::Raw, TerminalKind::Unsigned),
+        ],
+    );
+    assert_format(
+        "claimWithdrawal(uint256)",
+        b"Claim withdrawal",
+        &[(b"Request ID", FormatOp::Raw, TerminalKind::Unsigned)],
+    );
+    for signature in [
+        "safeTransferFrom(address,address,uint256)",
+        "transferFrom(address,address,uint256)",
+    ] {
+        assert_format(
+            signature,
+            b"Transfer unstETH NFT",
+            &[
+                (b"From", FormatOp::AddressName, TerminalKind::Address),
+                (b"To", FormatOp::AddressName, TerminalKind::Address),
+                (b"Request ID", FormatOp::Raw, TerminalKind::Unsigned),
+            ],
+        );
+    }
+    assert_format(
+        "setApprovalForAll(address,bool)",
+        b"Set approval for all unstETH NFTs",
+        &[
+            (b"Operator", FormatOp::AddressName, TerminalKind::Address),
+            (b"Access rights", FormatOp::Enum, TerminalKind::Bool),
+        ],
+    );
+
+    let refused = [
+        "requestWithdrawals(uint256[],address)",
+        "requestWithdrawalsWithPermit(uint256[],address,(uint256,uint256,uint8,bytes32,bytes32))",
+        "requestWithdrawalsWstETH(uint256[],address)",
+        "requestWithdrawalsWstETHWithPermit(uint256[],address,(uint256,uint256,uint8,bytes32,bytes32))",
+        "claimWithdrawals(uint256[],uint256[])",
+        "claimWithdrawalsTo(uint256[],uint256[],address)",
+    ];
+    for signature in refused {
+        let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+            .try_into()
+            .expect("selector width");
+        assert!(ir
+            .find_format_by_selector(&selector)
+            .expect("Lido queue format table parses")
+            .is_none());
+        assert!(
+            result
+                .known_calls
+                .contains(&(entry.chain_id, entry.contract, selector)),
+            "refused known route escaped the omission filter: {signature}"
+        );
+    }
+}
+
+#[test]
 fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract() {
     let result = build_registry();
     let entries: Vec<_> = result
@@ -973,7 +1277,7 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
         "newly clear-signable permit was already registry-known"
     );
 
-    assert_eq!(result.entries.len(), 430);
+    assert_eq!(result.entries.len(), 429);
     assert_eq!(result.known_call_count, 4_542);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -2525,11 +2829,124 @@ fn wrong_root_is_rejected() {
     );
 }
 
-/// Router02's two single-hop tuple calls are safe only after the complete price
-/// limit becomes visible. Dynamic tuple routes and V2-compatible `address[]`
-/// routes still identify only endpoints, so they remain known hard refusals.
 #[test]
-fn vendored_uniswap_v3_router_admits_only_operand_complete_single_hop_calls() {
+fn unsupported_address_name_sender_address_drops_only_its_whole_format() {
+    let temp = tempfile::tempdir().expect("create senderAddress compiler fixture");
+    let policy_path = temp.path().join("policy.toml");
+    std::fs::write(
+        &policy_path,
+        "allow_unattested_dev_descriptors = true\nmin_attesters = 0\ntrusted_attesters = []\n",
+    )
+    .expect("write synthetic policy");
+    let descriptor_path = temp.path().join("calldata-sender-address.json");
+    std::fs::write(
+        &descriptor_path,
+        r#"{
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000001" }
+  ] } },
+  "metadata": { "owner": "Synthetic", "contractName": "SenderAddress" },
+  "display": { "formats": {
+    "route(address recipient,uint256 amount)": {
+      "intent": "Route",
+      "fields": [
+        {
+          "path": "recipient",
+          "label": "Recipient",
+          "format": "addressName",
+          "params": {
+            "senderAddress": ["0x0000000000000000000000000000000000000001"]
+          }
+        },
+        { "path": "amount", "label": "Amount", "format": "raw" }
+      ]
+    },
+    "transfer(address to,uint256 amount)": {
+      "intent": "Send",
+      "fields": [
+        { "path": "to", "label": "To", "format": "addressName" },
+        { "path": "amount", "label": "Amount", "format": "raw" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .expect("write synthetic descriptor");
+
+    let policy = load_policy(&policy_path).expect("load synthetic policy");
+    let strict_error = try_compile_one(&descriptor_path, &policy, Some(temp.path()))
+        .expect_err("strict compilation must reject unsupported senderAddress semantics");
+    assert!(
+        strict_error.contains("senderAddress") && strict_error.contains("unsupported"),
+        "unexpected strict refusal: {strict_error}"
+    );
+
+    let (result, skips) = build_db_tolerant(temp.path(), &policy_path, Some(temp.path()))
+        .expect("the unrelated safe format survives tolerant compilation");
+    assert_eq!(result.leaf_count, 1);
+    assert_eq!(result.entries.len(), 1);
+    let ir = Erc7730Ir::parse(&result.entries[0].ir_bytes).expect("synthetic IR parses");
+    assert_eq!(ir.format_count(), Ok(1));
+
+    let selector = |signature: &str| {
+        keccak256(signature.as_bytes())[..4]
+            .try_into()
+            .expect("selector width")
+    };
+    let unsafe_selector: [u8; 4] = selector("route(address,uint256)");
+    let safe_selector: [u8; 4] = selector("transfer(address,uint256)");
+    assert!(
+        ir.find_format_by_selector(&safe_selector)
+            .expect("safe selector lookup")
+            .is_some(),
+        "the unrelated safe format must survive"
+    );
+    assert!(
+        ir.find_format_by_selector(&unsafe_selector)
+            .expect("unsafe selector lookup")
+            .is_none(),
+        "the senderAddress-bearing format must be dropped as a unit"
+    );
+    let drop_receipts: Vec<_> = skips
+        .iter()
+        .filter(|skip| skip.reason.contains("PARTIAL FORMAT DROP"))
+        .collect();
+    assert_eq!(
+        drop_receipts.len(),
+        1,
+        "one unsafe format, one bound receipt"
+    );
+    assert!(
+        drop_receipts[0]
+            .reason
+            .contains("route(address recipient,uint256 amount)")
+            && drop_receipts[0].reason.contains("senderAddress")
+            && drop_receipts[0].reason.contains("unsupported"),
+        "drop receipt must bind the exact format and semantic parameter: {}",
+        drop_receipts[0].reason
+    );
+
+    let contract = {
+        let mut contract = [0u8; 20];
+        contract[19] = 1;
+        contract
+    };
+    for selector in [safe_selector, unsafe_selector] {
+        assert!(
+            result.known_calls.contains(&(1, contract, selector)),
+            "every declared selector must remain in exact omission protection"
+        );
+    }
+}
+
+/// Router02 assigns protocol semantics to sentinel recipient addresses and to
+/// zero amounts. The curated descriptor declares the standard `senderAddress`
+/// substitution for `address(1)`, but PQ1 does not implement that authenticated
+/// semantic parameter yet. Tolerant compilation must therefore emit no
+/// Router02 leaf at all. Every declared selector remains in the exact known-call
+/// inventory and Bloom filter, so omission cannot downgrade to blind signing.
+#[test]
+fn vendored_uniswap_v3_router02_is_known_but_fully_excluded_without_sender_semantics() {
     let root = workspace_root();
     let reg = root.join("secure/data/erc7730-registry");
     let desc = reg.join("registry/uniswap/calldata-UniswapV3Router02.json");
@@ -2542,71 +2959,40 @@ fn vendored_uniswap_v3_router_admits_only_operand_complete_single_hop_calls() {
     );
 
     let registry = build_registry();
-    let entries: Vec<_> = registry
-        .entries
-        .iter()
-        .filter(|entry| entry.source == desc)
-        .collect();
-    assert_eq!(entries.len(), 1, "Router02 has one pinned deployment");
-    let entry = entries[0];
+    assert!(
+        !registry.entries.iter().any(|entry| entry.source == desc),
+        "Router02 must not emit a trusted-display leaf while senderAddress and sentinel semantics are unsupported"
+    );
+
     let contract_raw =
         hex::decode("68b3465833fb72a70ecdf485e0e4c7bd8665fc45").expect("valid Router02 address");
     let mut contract = [0u8; 20];
     contract.copy_from_slice(&contract_raw);
-    assert_eq!((entry.chain_id, entry.contract), (1, contract));
 
-    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Router02 IR parses");
-    let accepted: BTreeSet<[u8; 4]> = [[0x04, 0xe4, 0x5a, 0xaf], [0x50, 0x23, 0xb4, 0xdf]]
-        .into_iter()
-        .collect();
-    let actual: BTreeSet<_> = ir
-        .format_iter()
-        .map(|format| format.expect("Router02 format parses").selector)
-        .collect();
-    assert_eq!(actual, accepted, "only the two safe single-hop calls emit");
-
-    for selector in &accepted {
-        let format = ir
-            .find_format_by_selector(selector)
-            .expect("Router02 format table parses")
-            .expect("accepted single-hop format");
-        let fields: Vec<_> = format
-            .fields()
-            .map(|field| field.expect("generated Router02 field parses"))
-            .collect();
-        assert_eq!(fields.len(), 5);
-        let price_limit = fields
-            .iter()
-            .find(|field| field.label == b"Price limit")
-            .expect("single-hop format shows the complete price limit");
-        assert_eq!(FormatOp::try_from(price_limit.format_op), Ok(FormatOp::Raw));
-        let params = parse_params(&ir, price_limit.param_off).expect("price-limit params parse");
-        assert_eq!(params.visibility, Visibility::Always);
-        assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
-        assert!(registry.known_calls.contains(&(1, contract, *selector)));
-    }
-
-    let selector_for = |signature: &[u8]| {
-        let hash = keccak256(signature);
+    let selector_for = |signature: &str| {
+        let hash = keccak256(signature.as_bytes());
         <[u8; 4]>::try_from(&hash[..4]).expect("selector width")
     };
-    let omitted = [
-        selector_for(b"exactInput((bytes,address,uint256,uint256))"),
-        selector_for(b"exactOutput((bytes,address,uint256,uint256))"),
-        selector_for(b"swapExactTokensForTokens(uint256,uint256,address[],address)"),
-        selector_for(b"swapTokensForExactTokens(uint256,uint256,address[],address)"),
+    let declared = [
+        "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+        "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+        "exactInput((bytes,address,uint256,uint256))",
+        "exactOutput((bytes,address,uint256,uint256))",
+        "swapExactTokensForTokens(uint256,uint256,address[],address)",
+        "swapTokensForExactTokens(uint256,uint256,address[],address)",
     ];
-    for selector in omitted {
-        assert!(
-            ir.find_format_by_selector(&selector)
-                .expect("Router02 format table parses")
-                .is_none(),
-            "endpoint-only Router02 call unexpectedly became clear-signable: 0x{}",
-            hex::encode(selector)
-        );
+    assert_eq!(selector_for(declared[0]), [0x04, 0xe4, 0x5a, 0xaf]);
+    assert_eq!(selector_for(declared[1]), [0x50, 0x23, 0xb4, 0xdf]);
+
+    for signature in declared {
+        let selector = selector_for(signature);
         assert!(
             registry.known_calls.contains(&(1, contract, selector)),
-            "omitted Router02 call must remain in the exact known-call inventory"
+            "excluded Router02 call must remain in the exact known-call inventory: {signature}"
+        );
+        assert!(
+            known_call_may_contain(&registry.known_calls_bloom, 1, &contract, &selector),
+            "excluded Router02 call must remain in the fail-closed Bloom: {signature}"
         );
     }
 }
