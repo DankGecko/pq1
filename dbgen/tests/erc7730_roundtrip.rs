@@ -281,7 +281,7 @@ fn registry_aave_v3_lending_and_permits_cover_every_unique_deployment() {
 
     assert_eq!(
         result.entries.len(),
-        430,
+        429,
         "the bounded DeFi curation phase must add exactly two catalogue leaves"
     );
     assert_eq!(result.known_call_count, 4_542);
@@ -398,7 +398,7 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
 
     assert_eq!(
         result.entries.len(),
-        430,
+        429,
         "Aave V2 already owned three leaves"
     );
     assert_eq!(result.known_call_count, 4_542);
@@ -567,7 +567,7 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
         );
     }
 
-    assert_eq!(result.entries.len(), 430);
+    assert_eq!(result.entries.len(), 429);
     assert_eq!(result.known_call_count, 4_542);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -656,7 +656,7 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
         );
     }
 
-    assert_eq!(result.entries.len(), 430);
+    assert_eq!(result.entries.len(), 429);
     assert_eq!(result.known_call_count, 4_542);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -973,7 +973,7 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
         "newly clear-signable permit was already registry-known"
     );
 
-    assert_eq!(result.entries.len(), 430);
+    assert_eq!(result.entries.len(), 429);
     assert_eq!(result.known_call_count, 4_542);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -2525,11 +2525,14 @@ fn wrong_root_is_rejected() {
     );
 }
 
-/// Router02's two single-hop tuple calls are safe only after the complete price
-/// limit becomes visible. Dynamic tuple routes and V2-compatible `address[]`
-/// routes still identify only endpoints, so they remain known hard refusals.
+/// Router02 assigns protocol semantics to sentinel recipient addresses and to
+/// zero amounts. The curated descriptor declares the standard `senderAddress`
+/// substitution for `address(1)`, but PQ1 does not implement that authenticated
+/// semantic parameter yet. Tolerant compilation must therefore emit no
+/// Router02 leaf at all. Every declared selector remains in the exact known-call
+/// inventory and Bloom filter, so omission cannot downgrade to blind signing.
 #[test]
-fn vendored_uniswap_v3_router_admits_only_operand_complete_single_hop_calls() {
+fn vendored_uniswap_v3_router02_is_known_but_fully_excluded_without_sender_semantics() {
     let root = workspace_root();
     let reg = root.join("secure/data/erc7730-registry");
     let desc = reg.join("registry/uniswap/calldata-UniswapV3Router02.json");
@@ -2542,71 +2545,40 @@ fn vendored_uniswap_v3_router_admits_only_operand_complete_single_hop_calls() {
     );
 
     let registry = build_registry();
-    let entries: Vec<_> = registry
-        .entries
-        .iter()
-        .filter(|entry| entry.source == desc)
-        .collect();
-    assert_eq!(entries.len(), 1, "Router02 has one pinned deployment");
-    let entry = entries[0];
+    assert!(
+        !registry.entries.iter().any(|entry| entry.source == desc),
+        "Router02 must not emit a trusted-display leaf while senderAddress and sentinel semantics are unsupported"
+    );
+
     let contract_raw =
         hex::decode("68b3465833fb72a70ecdf485e0e4c7bd8665fc45").expect("valid Router02 address");
     let mut contract = [0u8; 20];
     contract.copy_from_slice(&contract_raw);
-    assert_eq!((entry.chain_id, entry.contract), (1, contract));
 
-    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Router02 IR parses");
-    let accepted: BTreeSet<[u8; 4]> = [[0x04, 0xe4, 0x5a, 0xaf], [0x50, 0x23, 0xb4, 0xdf]]
-        .into_iter()
-        .collect();
-    let actual: BTreeSet<_> = ir
-        .format_iter()
-        .map(|format| format.expect("Router02 format parses").selector)
-        .collect();
-    assert_eq!(actual, accepted, "only the two safe single-hop calls emit");
-
-    for selector in &accepted {
-        let format = ir
-            .find_format_by_selector(selector)
-            .expect("Router02 format table parses")
-            .expect("accepted single-hop format");
-        let fields: Vec<_> = format
-            .fields()
-            .map(|field| field.expect("generated Router02 field parses"))
-            .collect();
-        assert_eq!(fields.len(), 5);
-        let price_limit = fields
-            .iter()
-            .find(|field| field.label == b"Price limit")
-            .expect("single-hop format shows the complete price limit");
-        assert_eq!(FormatOp::try_from(price_limit.format_op), Ok(FormatOp::Raw));
-        let params = parse_params(&ir, price_limit.param_off).expect("price-limit params parse");
-        assert_eq!(params.visibility, Visibility::Always);
-        assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
-        assert!(registry.known_calls.contains(&(1, contract, *selector)));
-    }
-
-    let selector_for = |signature: &[u8]| {
-        let hash = keccak256(signature);
+    let selector_for = |signature: &str| {
+        let hash = keccak256(signature.as_bytes());
         <[u8; 4]>::try_from(&hash[..4]).expect("selector width")
     };
-    let omitted = [
-        selector_for(b"exactInput((bytes,address,uint256,uint256))"),
-        selector_for(b"exactOutput((bytes,address,uint256,uint256))"),
-        selector_for(b"swapExactTokensForTokens(uint256,uint256,address[],address)"),
-        selector_for(b"swapTokensForExactTokens(uint256,uint256,address[],address)"),
+    let declared = [
+        "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+        "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+        "exactInput((bytes,address,uint256,uint256))",
+        "exactOutput((bytes,address,uint256,uint256))",
+        "swapExactTokensForTokens(uint256,uint256,address[],address)",
+        "swapTokensForExactTokens(uint256,uint256,address[],address)",
     ];
-    for selector in omitted {
-        assert!(
-            ir.find_format_by_selector(&selector)
-                .expect("Router02 format table parses")
-                .is_none(),
-            "endpoint-only Router02 call unexpectedly became clear-signable: 0x{}",
-            hex::encode(selector)
-        );
+    assert_eq!(selector_for(declared[0]), [0x04, 0xe4, 0x5a, 0xaf]);
+    assert_eq!(selector_for(declared[1]), [0x50, 0x23, 0xb4, 0xdf]);
+
+    for signature in declared {
+        let selector = selector_for(signature);
         assert!(
             registry.known_calls.contains(&(1, contract, selector)),
-            "omitted Router02 call must remain in the exact known-call inventory"
+            "excluded Router02 call must remain in the exact known-call inventory: {signature}"
+        );
+        assert!(
+            known_call_may_contain(&registry.known_calls_bloom, 1, &contract, &selector),
+            "excluded Router02 call must remain in the fail-closed Bloom: {signature}"
         );
     }
 }

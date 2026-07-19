@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 779244,
-    "sha256": "f2a50a0bdf76baf4820f3dc8aec82e1287c0048baad64cc174cfdb375cb97480"
+    "bytes": 779482,
+    "sha256": "1191358391df12b656d88b8241e476480db32fa488cd3795c5abd30d1b6a3acd"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -71,7 +71,7 @@
     },
     {
       "path": "xtask/src/erc7730_curation.rs",
-      "sha256": "244e8f2808bf39d6f3fc2f77b52abdda64e8f4714a93aefb048eaf6b074dc041"
+      "sha256": "b4ef121d3820b4067a5c6324e6fd6c8b0f01a8d654968c81da2162fd47b54f91"
     },
     {
       "path": "xtask/src/erc7730_diff.rs",
@@ -206,8 +206,8 @@
       "path": "registry/uniswap/calldata-UniswapV3Router02.json",
       "upstream_bytes": 6039,
       "upstream_sha256": "f2ced0c2ed44a7132a987365bb4f0aedd4d21091decc4aad3d327b7cb400193d",
-      "replacement_bytes": 6263,
-      "replacement_sha256": "953f834588c45827f8f36b3716a0fa0a37159d2e1bc51c17553ac3544ea9b417"
+      "replacement_bytes": 6501,
+      "replacement_sha256": "79703872432fa4a4ad6b51d00cc4093a0def94c41a0c49e4e4dac28dbfe7db67"
     },
     {
       "path": "registry/uniswap/eip712-UniswapX-DutchOrder.json",

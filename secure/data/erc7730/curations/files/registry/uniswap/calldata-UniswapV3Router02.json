@@ -67,7 +67,11 @@
             "path": "params.recipient",
             "label": "Beneficiary",
             "format": "addressName",
-            "params": { "types": ["eoa", "contract"], "sources": ["local", "ens"] },
+            "params": {
+              "types": ["eoa", "contract"],
+              "sources": ["local", "ens"],
+              "senderAddress": ["0x0000000000000000000000000000000000000001"]
+            },
             "visible": "always"
           },
           { "path": "params.sqrtPriceLimitX96", "label": "Price limit", "format": "raw", "visible": "always" }
@@ -121,7 +125,11 @@
             "path": "params.recipient",
             "label": "Beneficiary",
             "format": "addressName",
-            "params": { "types": ["eoa", "contract"], "sources": ["local", "ens"] }
+            "params": {
+              "types": ["eoa", "contract"],
+              "sources": ["local", "ens"],
+              "senderAddress": ["0x0000000000000000000000000000000000000001"]
+            }
           },
           { "path": "params.sqrtPriceLimitX96", "label": "Price limit", "format": "raw", "visible": "always" }
         ]

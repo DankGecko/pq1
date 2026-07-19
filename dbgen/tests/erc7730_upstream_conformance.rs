@@ -36,11 +36,10 @@ const UPSTREAM_SHA: &str = "784c87c925e8438e7b4736b2af85a501f8d2a265";
 const FIXTURE_RECEIPT_DOMAIN: &[u8] = b"pqsigner/erc7730-excluded-fixture-corpus-v1";
 const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
-// Intentional schema-v5 rotation: every integer field now authenticates its
-// original ABI width in addition to the terminal kind, so the device can
-// reject dirty zero/sign extension before trusted display publication.
-// The upstream fixture bytes remain test-only and outside the catalogue.
-const PROD_ROOT_HEX: &str = "185f5e95f4ac7446247b63fbe4d1bd3c89c5fa12f9b339d584552080aae8e6b8";
+// Router02's two single-hop formats are deliberately excluded until PQ1 can
+// enforce their sentinel and partial-fill semantics. The upstream fixture
+// bytes remain test-only and outside the catalogue.
+const PROD_ROOT_HEX: &str = "77b436dcb75475e30a3f422b57622c115f4d10aae6d81e9307d5d1c4e56e0203";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1198,10 +1197,10 @@ fn upstream_fixture_corpus_is_exact_test_only_and_honestly_inventoried() {
                 .to_path_buf()
         })
         .collect();
-    assert_eq!(accepted.len(), 230);
-    assert_eq!(accepted.intersection(&tested_descriptors).count(), 145);
+    assert_eq!(accepted.len(), 229);
+    assert_eq!(accepted.intersection(&tested_descriptors).count(), 144);
     assert_eq!(accepted.difference(&tested_descriptors).count(), 85);
-    assert_eq!(tested_descriptors.difference(&accepted).count(), 127);
+    assert_eq!(tested_descriptors.difference(&accepted).count(), 128);
 }
 
 fn synth_bundle(blob: &[u8], ir_bytes: &[u8], leaf_index: usize) -> Vec<u8> {

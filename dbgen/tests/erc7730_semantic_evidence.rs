@@ -33,6 +33,10 @@ fn lido_evidence_root() -> PathBuf {
     workspace_root().join("tests/erc7730-semantic-evidence/lido-wsteth-permit")
 }
 
+fn uniswap_evidence_root() -> PathBuf {
+    workspace_root().join("tests/erc7730-semantic-evidence/uniswap-router02-single-hop")
+}
+
 fn read_json(path: &Path) -> Value {
     serde_json::from_slice(
         &fs::read(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display())),
@@ -1058,4 +1062,314 @@ fn lido_wsteth_wrap_source_abi_descriptor_and_metadata_agree_on_input_semantics(
     let output_residual = required_str(wrap_spec, "output_residual");
     assert!(output_residual.contains("live stETH share state"));
     assert!(output_residual.contains("not signed calldata"));
+}
+
+#[test]
+fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
+    let root = workspace_root();
+    let evidence = uniswap_evidence_root();
+    let manifest = read_json(&evidence.join("manifest.json"));
+
+    assert_eq!(manifest["schema_version"].as_u64(), Some(1));
+    assert_eq!(
+        manifest["policy"]["outcome"].as_str(),
+        Some("fail_closed_exclusion")
+    );
+    assert_eq!(
+        manifest["verified_source"]["upstream_release"].as_str(),
+        Some("v1.1.0")
+    );
+    assert_eq!(
+        manifest["verified_source"]["annotated_tag_object"].as_str(),
+        Some("535ee984afa8e32a0206d372ecbc5f6186360f27")
+    );
+    assert_eq!(
+        manifest["verified_source"]["upstream_commit"].as_str(),
+        Some("8fe4f086cee7c08f0bdb6ebe20c9ab615921c65f")
+    );
+    assert_eq!(
+        manifest["verified_source"]["upstream_tree"].as_str(),
+        Some("84ed2b9297023bf6fce8ae90b057abf030d8c65f")
+    );
+    assert_eq!(
+        manifest["verified_source"]
+            ["archived_files_match_official_release_and_verified_explorer_sources"]
+            .as_bool(),
+        Some(true)
+    );
+
+    let deployment = &manifest["deployment"];
+    assert_eq!(deployment["chain_id"].as_u64(), Some(1));
+    assert_eq!(deployment["block_number"].as_u64(), Some(13_804_681));
+    assert_eq!(deployment["deployer_nonce"].as_u64(), Some(14));
+    assert_eq!(deployment["receipt_status"].as_u64(), Some(1));
+    assert_eq!(
+        required_str(deployment, "receipt_contract_address"),
+        required_str(deployment, "address")
+    );
+    assert_eq!(deployment["creation_input_bytes"].as_u64(), Some(25_013));
+    for receipt in [deployment, &manifest["evidence_block"]] {
+        assert_eq!(
+            receipt["rpc_endpoints"]
+                .as_array()
+                .expect("RPC endpoint array")
+                .len(),
+            2
+        );
+        let hash_key = if receipt.get("block_hash").is_some() {
+            "block_hash"
+        } else {
+            "hash"
+        };
+        assert_eq!(decode_hex_text(required_str(receipt, hash_key)).len(), 32);
+        assert_eq!(
+            decode_hex_text(required_str(receipt, "state_root")).len(),
+            32
+        );
+    }
+
+    let contract: [u8; 20] = decode_hex_text(required_str(deployment, "address"))
+        .try_into()
+        .expect("Router02 address width");
+    assert_eq!(
+        hex::encode(contract),
+        "68b3465833fb72a70ecdf485e0e4c7bd8665fc45"
+    );
+
+    let route_specs = manifest["policy"]["excluded_routes"]
+        .as_array()
+        .expect("excluded route array");
+    assert_eq!(route_specs.len(), 2);
+    let mut expected_routes = BTreeMap::<String, [u8; 4]>::new();
+    for route in route_specs {
+        let signature = required_str(route, "canonical_signature");
+        let selector: [u8; 4] = decode_hex_text(required_str(route, "selector"))
+            .try_into()
+            .expect("selector width");
+        assert_eq!(&keccak256(signature.as_bytes())[..4], selector.as_slice());
+        expected_routes.insert(signature.to_owned(), selector);
+    }
+    assert_eq!(
+        expected_routes,
+        BTreeMap::from([
+            (
+                "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))"
+                    .to_owned(),
+                [0x04, 0xe4, 0x5a, 0xaf],
+            ),
+            (
+                "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))"
+                    .to_owned(),
+                [0x50, 0x23, 0xb4, 0xdf],
+            ),
+        ])
+    );
+
+    let runtime_spec = &manifest["runtime"];
+    let runtime = read_hex(&evidence.join(required_str(runtime_spec, "file")));
+    assert_eq!(
+        runtime.len() as u64,
+        runtime_spec["bytes"].as_u64().expect("runtime byte count")
+    );
+    assert_eq!(sha256_hex(&runtime), required_str(runtime_spec, "sha256"));
+    assert_eq!(
+        keccak_hex(&runtime),
+        required_str(runtime_spec, "keccak256")
+    );
+    for (signature, selector) in &expected_routes {
+        assert!(
+            runtime
+                .windows(selector.len())
+                .any(|window| window == selector),
+            "archived runtime lost {signature}"
+        );
+    }
+    for (slot_key, value_key) in [
+        (
+            "eip1967_implementation_slot",
+            "eip1967_implementation_slot_value",
+        ),
+        ("eip1967_beacon_slot", "eip1967_beacon_slot_value"),
+    ] {
+        assert_eq!(
+            decode_hex_text(required_str(runtime_spec, slot_key)).len(),
+            32
+        );
+        assert_eq!(
+            decode_hex_text(required_str(runtime_spec, value_key)),
+            [0u8; 32]
+        );
+    }
+
+    let source_spec = &manifest["verified_source"];
+    let mut archived_sources = BTreeMap::<String, String>::new();
+    for source in source_spec["files"]
+        .as_array()
+        .expect("verified source file array")
+    {
+        let archive_file = required_str(source, "archive_file");
+        let bytes = fs::read(evidence.join(archive_file)).expect("read archived source");
+        assert_eq!(sha256_hex(&bytes), required_str(source, "sha256"));
+        archived_sources.insert(
+            archive_file.to_owned(),
+            String::from_utf8(bytes).expect("Solidity source is UTF-8"),
+        );
+    }
+    assert_eq!(archived_sources.len(), 4);
+
+    let concrete = normalized_whitespace(&archived_sources["source/SwapRouter02.sol"]);
+    assert!(concrete.contains(
+        "contract SwapRouter02 is ISwapRouter02, V2SwapRouter, V3SwapRouter, ApproveAndCall, MulticallExtended, SelfPermit"
+    ));
+
+    let constants = normalized_whitespace(&archived_sources["source/Constants.sol"]);
+    assert!(constants.contains("uint256 internal constant CONTRACT_BALANCE = 0;"));
+    assert!(constants.contains("address internal constant MSG_SENDER = address(1);"));
+    assert!(constants.contains("address internal constant ADDRESS_THIS = address(2);"));
+
+    let interface = normalized_whitespace(&archived_sources["source/IV3SwapRouter.sol"]);
+    assert!(interface
+        .contains("Setting `amountIn` to 0 will cause the contract to look up its own balance"));
+    assert!(interface.contains(
+        "function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut);"
+    ));
+    assert!(interface.contains(
+        "function exactOutputSingle(ExactOutputSingleParams calldata params) external payable returns (uint256 amountIn);"
+    ));
+
+    let router = normalized_whitespace(&archived_sources["source/V3SwapRouter.sol"]);
+    assert!(router.matches(
+        "if (recipient == Constants.MSG_SENDER) recipient = msg.sender; else if (recipient == Constants.ADDRESS_THIS) recipient = address(this);"
+    ).count() >= 2);
+    assert_fragments_in_order(
+        &router,
+        &[
+            "function exactInputSingle(ExactInputSingleParams memory params)",
+            "if (params.amountIn == Constants.CONTRACT_BALANCE) {",
+            "params.amountIn = IERC20(params.tokenIn).balanceOf(address(this));",
+            "payer: hasAlreadyPaid ? address(this) : msg.sender",
+            "require(amountOut >= params.amountOutMinimum, 'Too little received');",
+        ],
+    );
+    assert_fragments_in_order(
+        &router,
+        &[
+            "function exactOutputInternal(",
+            "uint256 amountOutReceived;",
+            "(amountIn, amountOutReceived) =",
+            "if (sqrtPriceLimitX96 == 0) require(amountOutReceived == amountOut);",
+            "function exactOutputSingle(ExactOutputSingleParams calldata params)",
+            "require(amountIn <= params.amountInMaximum, 'Too much requested');",
+        ],
+    );
+
+    let abi_spec = &manifest["abi"];
+    let abi_bytes =
+        fs::read(evidence.join(required_str(abi_spec, "archive_file"))).expect("read Router02 ABI");
+    assert_eq!(
+        sha256_hex(&abi_bytes),
+        required_str(abi_spec, "archive_file_sha256")
+    );
+    let abi: Value = serde_json::from_slice(&abi_bytes).expect("parse Router02 ABI");
+    let entries = abi.as_array().expect("Router02 ABI array");
+    assert_eq!(entries.len(), 2);
+    let mut abi_signatures = BTreeSet::new();
+    for entry in entries {
+        assert_eq!(entry["type"].as_str(), Some("function"));
+        assert_eq!(entry["stateMutability"].as_str(), Some("payable"));
+        let inputs = entry["inputs"].as_array().expect("route ABI inputs");
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0]["name"].as_str(), Some("params"));
+        assert_eq!(inputs[0]["type"].as_str(), Some("tuple"));
+        let component_types: Vec<_> = inputs[0]["components"]
+            .as_array()
+            .expect("tuple components")
+            .iter()
+            .map(|component| component["type"].as_str().expect("component type"))
+            .collect();
+        assert_eq!(
+            component_types,
+            ["address", "address", "uint24", "address", "uint256", "uint256", "uint160"]
+        );
+        let signature = format!(
+            "{}(({}))",
+            entry["name"].as_str().expect("function name"),
+            component_types.join(",")
+        );
+        assert!(expected_routes.contains_key(&signature));
+        abi_signatures.insert(signature);
+        let outputs = entry["outputs"].as_array().expect("route ABI outputs");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0]["type"].as_str(), Some("uint256"));
+    }
+    assert_eq!(
+        abi_signatures,
+        expected_routes.keys().cloned().collect::<BTreeSet<_>>()
+    );
+
+    let descriptor_spec = &manifest["descriptor"];
+    let curated_bytes = fs::read(root.join(required_str(descriptor_spec, "curated_file")))
+        .expect("read curated Router02 descriptor");
+    assert_eq!(
+        sha256_hex(&curated_bytes),
+        required_str(descriptor_spec, "sha256")
+    );
+    assert_eq!(
+        curated_bytes,
+        fs::read(root.join(required_str(descriptor_spec, "vendored_file")))
+            .expect("read vendored Router02 descriptor"),
+        "curated and installed Router02 descriptors diverged"
+    );
+    let descriptor: Value =
+        serde_json::from_slice(&curated_bytes).expect("parse Router02 descriptor");
+    let deployments = descriptor["context"]["contract"]["deployments"]
+        .as_array()
+        .expect("descriptor deployments");
+    assert!(deployments.iter().any(|candidate| {
+        candidate["chainId"].as_u64() == Some(1)
+            && candidate["address"].as_str().is_some_and(|address| {
+                address.eq_ignore_ascii_case(required_str(deployment, "address"))
+            })
+    }));
+    let sentinel = required_str(descriptor_spec, "sender_address_sentinel");
+    for route in route_specs {
+        let format_key = required_str(route, "descriptor_format_key");
+        let fields = descriptor["display"]["formats"][format_key]["fields"]
+            .as_array()
+            .expect("single-hop display fields");
+        let recipients: Vec<_> = fields
+            .iter()
+            .filter(|field| field["path"].as_str() == Some("params.recipient"))
+            .collect();
+        assert_eq!(recipients.len(), 1);
+        let sender_addresses = recipients[0]["params"]["senderAddress"]
+            .as_array()
+            .expect("senderAddress annotation");
+        assert_eq!(sender_addresses.len(), 1);
+        assert_eq!(sender_addresses[0].as_str(), Some(sentinel));
+    }
+
+    let registry_root = root.join("secure/data/erc7730-registry");
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+        .expect("build production ERC20 capability corpus");
+    let (registry, _) = build_db_tolerant_with_erc20_capabilities(
+        &registry_root.join("registry"),
+        &root.join("secure/data/erc7730/policy.toml"),
+        Some(&registry_root),
+        &erc20.capabilities,
+    )
+    .expect("build production ERC-7730 registry");
+    assert!(
+        registry.entries.iter().all(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                != Some("calldata-UniswapV3Router02.json")
+        }),
+        "Router02 must emit no production descriptor leaf"
+    );
+    for (signature, selector) in expected_routes {
+        assert!(
+            registry.known_calls.contains(&(1, contract, selector)),
+            "{signature} must remain an exact known-call tuple"
+        );
+    }
 }
