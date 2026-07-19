@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "scope": "Lido wstETH calldata permit semantic evidence for the single PQ1-admitted Ethereum deployment",
+  "captured_at_utc": "2026-07-19T14:45:25Z",
+  "canonical_signature": "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)",
+  "selector": "0xd505accf",
+  "deployment": {
+    "chain_id": 1,
+    "address": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+    "transaction_hash": "0xaf2c1a501d2b290ef1e84ddcfc7beb3406f8ece2c46dee14e212e8233654ff05",
+    "block_number": 11888477,
+    "block_number_hex": "0xb5675d",
+    "block_hash": "0xd48d019c26a867f8126067d6c2cf3a6164a307024282fbf1051b55b5db783ee7",
+    "timestamp": 1613752640,
+    "timestamp_utc": "2021-02-19T16:37:20Z",
+    "deployer": "0xe19fc582dd93fa876cf4061eb5456f310144f57b",
+    "deployer_nonce": 4,
+    "receipt_status": 1,
+    "receipt_contract_address": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+    "creation_input_bytes": 7277,
+    "creation_input_keccak256": "0xf4049c6280677e28dd0b89141d142e8e96f88c33f2fdc0e484e432726f7a9ce5",
+    "constructor_argument_steth": "0xae7ab96520de3a18e5e111b5eaab095312d7fe84",
+    "rpc_endpoints": [
+      "https://eth.drpc.org",
+      "https://rpc.mevblocker.io"
+    ]
+  },
+  "evidence_block": {
+    "number": 25566776,
+    "number_hex": "0x1861e38",
+    "hash": "0x926e7fa2bf7071dd1eb19c14284f27a7219d3bfb29240d4064daa8417beb42a4",
+    "state_root": "0x708b68dd3da2ea4d137075bf8edebc26ba66b90362b38c349f3f8bed5628083d",
+    "timestamp": 1784464343,
+    "timestamp_utc": "2026-07-19T12:32:23Z",
+    "rpc_endpoints": [
+      "https://eth.drpc.org",
+      "https://rpc.mevblocker.io"
+    ]
+  },
+  "runtime": {
+    "file": "runtime/WstETH.mainnet.hex",
+    "bytes": 6492,
+    "keccak256": "0x630181884786c962140041cffa3acffbf39d8c93bde1a62b7b55046e57400557",
+    "explorer_deployed_bytecode_matches_artifact": true,
+    "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+    "eip1967_implementation_slot_value": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "proxy_claim": "The fixed-block contract is not an ERC-1967 proxy; this is not a claim about every possible proxy convention."
+  },
+  "verified_source": {
+    "explorer_url": "https://eth.blockscout.com/api/v2/smart-contracts/0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+    "explorer_status": "is_verified=true; is_partially_verified=true; is_fully_verified=false",
+    "contract_name": "WstETH",
+    "compiler": "0.6.12+commit.27d51765",
+    "evm_version": "istanbul",
+    "optimizer_enabled": true,
+    "optimizer_runs": 200,
+    "explorer_source_code_sha256_decoded_crlf": "cc047063c770ab08e96ba1f44a589ab5602a7c07de34703c581ce3fcaacf3203",
+    "archived_flattened_file": "source/WstETH.flattened.sol",
+    "archived_flattened_normalization": "decoded explorer source with CRLF converted to LF and one final LF added",
+    "archived_flattened_sha256": "221606414f8f61e7c0724f06c7f36fd515b43565f59d0408a708225dade629e4",
+    "upstream_repository": "https://github.com/lidofinance/lido-dao",
+    "upstream_commit": "2b46615a11dee77d4d22066f942f6c6afab9b87a",
+    "upstream_tree": "b4e0ba7c36530d279ff0c4f18b1ae6e68a272da7",
+    "upstream_commit_time": "2021-02-19T14:29:51Z",
+    "upstream_file": "source/WstETH.upstream.sol",
+    "upstream_path": "contracts/0.6.12/WstETH.sol",
+    "upstream_file_sha256": "16aa9a9a729e86996c4c79c57774f1861d76cca0c4c1ca6b679045f3d814b1be",
+    "openzeppelin_version": "3.4.0",
+    "openzeppelin_tag_commit": "fa64a1ced0b70ab89073d5d0b6e01b0778f7e7d6",
+    "openzeppelin_file": "source/ERC20Permit.sol",
+    "openzeppelin_path": "contracts/drafts/ERC20Permit.sol",
+    "openzeppelin_file_sha256": "f5a1eb501cf574127ad2cea3038ad050d3010989917c60dc9e45da0d5f8caa24",
+    "archived_upstream_lines_present_in_verified_flattened_source": true
+  },
+  "abi": {
+    "archive_file": "abi/permit.abi.json",
+    "archive_file_sha256": "bae20db214b7fc7a2564379fa13097780b22e9d329414b83c9f3c30d000529e8",
+    "full_verified_abi_canonical_sha256": "5fd2fa0074d446161eae3cda79d0d133754b9632983205cf1e7b57c0b850ad9d"
+  },
+  "fixed_block_calls": {
+    "name": {
+      "selector": "0x06fdde03",
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001f57726170706564206c6971756964207374616b656420457468657220322e3000",
+      "decoded": "Wrapped liquid staked Ether 2.0"
+    },
+    "symbol": {
+      "selector": "0x95d89b41",
+      "result": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000067773744554480000000000000000000000000000000000000000000000000000",
+      "decoded": "wstETH"
+    },
+    "decimals": {
+      "selector": "0x313ce567",
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000012",
+      "decoded": 18
+    },
+    "steth": {
+      "selector": "0xc1fe3e48",
+      "result": "0x000000000000000000000000ae7ab96520de3a18e5e111b5eaab095312d7fe84",
+      "decoded": "0xae7ab96520de3a18e5e111b5eaab095312d7fe84"
+    },
+    "domain_separator": {
+      "selector": "0x3644e515",
+      "result": "0xd4a8ff90a402dc7d4fcbf60f5488291263c743ccff180e139f47d139cedfd5fe"
+    }
+  },
+  "descriptor": {
+    "curated_file": "secure/data/erc7730/curations/files/registry/lido/calldata-wstETH.json",
+    "vendored_file": "secure/data/erc7730-registry/registry/lido/calldata-wstETH.json",
+    "permit_operand_paths": [
+      "#.owner",
+      "#.spender",
+      "#.value",
+      "#.deadline",
+      "#.v",
+      "#.r",
+      "#.s"
+    ]
+  },
+  "residuals": [
+    "The permit nonce is current contract state authenticated by the permit signature, not signed calldata displayed by this descriptor.",
+    "Blockscout marks the source verified and partially verified, but not fully verified.",
+    "This is a fixed-block historical receipt and does not provide live deployment monitoring.",
+    "This evidence grants no production-shipment, fallback, or blind-signing authority."
+  ]
+}
