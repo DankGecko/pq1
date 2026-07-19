@@ -38,7 +38,7 @@ const FIXTURE_RECEIPT_HEX: &str =
 // Intentional 2026-07-18 schema-v4 rotation: every field now authenticates its
 // terminal kind and the compiler/device share one exhaustive formatter policy.
 // The upstream fixture bytes remain test-only and outside the catalogue.
-const PROD_ROOT_HEX: &str = "029d4ab9f4c0cf5bba18d94980608b8cb0c75c9b4dc8fddba8e3329837f57a79";
+const PROD_ROOT_HEX: &str = "d54857b52e8b0668c639fb0a76ee380910286e26c668775bb0dd4e130f564134";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -2948,6 +2948,157 @@ fn positive_defi_catalogue_lido_referral_addresses_are_complete_and_bound() {
     }
 }
 
+#[test]
+fn positive_lido_wsteth_permit_fixture_binds_every_signed_word() {
+    // Exact mainnet EIP-1559 rawTx from the upstream Lido wstETH fixture. The
+    // RLP item immediately before calldata is `b8 e4`: a 228-byte byte string.
+    let raw_tx = hex::decode(concat!(
+        "02f901520182932a831d5918850176be191b83037cc2947f39c581f595b53c5cb19bd0b3f8da6c935e2ca080b8e4",
+        "d505accf00000000000000000000000008b00ceee2fb66029b53d76110b19eeaabfd1e65",
+        "000000000000000000000000e66aa98b55c5a55c9af9da12fe39b8868af9a346",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "000000000000000000000000000000000000000000000000000000000000001b",
+        "d925c9dc4daf2b97326adca692aba99dd40a1394c841772f5a724c2dc35953867",
+        "e99359d1f68b310a5c7f88d01abaf6956d58334b3ec60f8b70f32380d9474fc",
+        "c080a086dc5258e055940460390ded6e39e780df41d52370b43ef0a43caa37cfd4b0e7",
+        "a05f786412335c0e17ba3fa0ea7dd8158025feafa6a8a7e5c478abecc0978d960b",
+    ))
+    .expect("valid upstream permit rawTx");
+    assert_eq!(
+        hex::encode(keccak256(&raw_tx)),
+        "921cbe8ffe2ae92351a33e194d6d170420d94903f636adeb04108565ca6bed86"
+    );
+    const CALLDATA_START: usize = 46;
+    const CALLDATA_LEN: usize = 4 + 7 * 32;
+    assert_eq!(&raw_tx[CALLDATA_START - 2..CALLDATA_START], &[0xb8, 0xe4]);
+    assert_eq!(raw_tx[CALLDATA_START + CALLDATA_LEN], 0xc0);
+    let calldata = &raw_tx[CALLDATA_START..CALLDATA_START + CALLDATA_LEN];
+    assert_eq!(
+        calldata.len(),
+        228,
+        "only the RLP calldata item is rendered"
+    );
+
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-wstETH.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Lido wstETH leaf");
+    let signature = "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)";
+    assert_selector_matches(&verified.ir, calldata, signature);
+
+    let words: [[u8; 32]; 7] = core::array::from_fn(|index| {
+        calldata[4 + index * 32..4 + (index + 1) * 32]
+            .try_into()
+            .expect("static permit ABI word")
+    });
+    let owner: [u8; 20] = words[0][12..].try_into().expect("owner address");
+    let spender: [u8; 20] = words[1][12..].try_into().expect("spender address");
+    assert_eq!(
+        hex::encode(owner),
+        "08b00ceee2fb66029b53d76110b19eeaabfd1e65"
+    );
+    assert_eq!(
+        hex::encode(spender),
+        "e66aa98b55c5a55c9af9da12fe39b8868af9a346"
+    );
+    assert_eq!(words[2], [0xff; 32]);
+    assert_eq!(words[3], [0xff; 32]);
+
+    let tx = envelope(1, entry.contract);
+    let wsteth_meta = Erc20Metadata {
+        chain_id: 1,
+        contract: entry.contract,
+        decimals: 18,
+        name: b"Wrapped liquid staked Ether 2.0",
+        symbol: b"wstETH",
+    };
+    let resolver = NameResolver::new();
+    let signer = [0x42; 20];
+    let render = |call: &[u8]| {
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            call,
+            &verified,
+            Some(&wsteth_meta),
+            &resolver,
+            &signer,
+        )
+        .expect("render complete Lido wstETH permit")
+    };
+    let rendered = render(calldata);
+    // Besides the intent banner: owner + spender (2), amount + bound-token
+    // identity (2), four complete raw words (8), and the checked transaction's
+    // network/fees/nonce/confirmation suffix (5).
+    let expected_page_count = pqsigner_erc7730::display::render::intent::INTENT_BANNER_PAGES + 17;
+    assert_eq!(
+        rendered.pages.len,
+        expected_page_count,
+        "unexpected permit page count:\n{}",
+        dump_pages(&rendered.pages)
+    );
+    assert_eq!(
+        rendered.transcript_receipt.page_count() as usize,
+        expected_page_count
+    );
+    assert_eq!(
+        rendered.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert!(rendered
+        .transcript_receipt
+        .range_matches(&rendered.pages, 0));
+    assert_all_pages_printable(&rendered.pages);
+    assert_full_address_field_page(&rendered.pages, "Owner", &owner);
+    assert_full_address_field_page(&rendered.pages, "Spender", &spender);
+    assert_eq!(
+        page_strs(
+            &rendered.pages,
+            find_page_by_label(&rendered.pages, "Amount")
+        ),
+        [
+            "Amount".to_string(),
+            "Unlimited wstETH".to_string(),
+            "".to_string(),
+            "> next".to_string(),
+        ]
+    );
+    assert_raw_word_pages(&rendered.pages, "Deadline", &words[3]);
+    assert_raw_word_pages(&rendered.pages, "V", &words[4]);
+    assert_raw_word_pages(&rendered.pages, "R", &words[5]);
+    assert_raw_word_pages(&rendered.pages, "S", &words[6]);
+
+    for (word_index, field) in [
+        (0, "owner"),
+        (1, "spender"),
+        (2, "value"),
+        (3, "deadline"),
+        (4, "v"),
+        (5, "r"),
+        (6, "s"),
+    ] {
+        let mut mutated_words = words;
+        if word_index == 2 {
+            mutated_words[word_index] = u256_from_u64(1_000_000_000_000_000_000).0;
+        } else {
+            mutated_words[word_index][31] ^= 1;
+        }
+        let mutated_calldata = calldata_static(signature, &mutated_words);
+        let mutated = render(&mutated_calldata);
+        assert_ne!(
+            rendered.pages.as_slice(),
+            mutated.pages.as_slice(),
+            "an independent {field} mutation must change trusted pages"
+        );
+        assert!(
+            !rendered
+                .transcript_receipt
+                .exact_match(&mutated.transcript_receipt),
+            "an independent {field} mutation must change the transcript receipt"
+        );
+    }
+}
+
 /// Pack-expansion sanity: the registry Lido `wstETH.wrap(uint256)`
 /// descriptor renders the exact derived intent + retained field label. A render test
 /// (not just round-trip) catches descriptor-authoring slips — wrong

@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 778650,
-    "sha256": "80d4589c895bf4a40aed4968b03f1c35c0fa0ab1679839f17f7307aa29ff9813"
+    "bytes": 778704,
+    "sha256": "d0ab0db95fc7e6f9a24c7d9dd5edbad3d0c70d354e7d401cc9947f9f40f801c5"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -71,7 +71,7 @@
     },
     {
       "path": "xtask/src/erc7730_curation.rs",
-      "sha256": "dcef10f6573e9347fa8cb779a8819da21e385182b9879cde8e101ba424e9a7d8"
+      "sha256": "983172d5b15b18f2cc4990b36df735773e0c673a644190abd00debe7a21b18c5"
     },
     {
       "path": "xtask/src/erc7730_diff.rs",
@@ -124,6 +124,13 @@
       "upstream_sha256": "a55a4e458d67c20636bb8ea0dc1509b4bc958cc6a1571a7e268ff0523d9e1176",
       "replacement_bytes": 721,
       "replacement_sha256": "0567a571ec025cfc04d10b8c5bd3ab1f74090365254f92ed6a79ff4af855a3cd"
+    },
+    {
+      "path": "registry/lido/calldata-wstETH.json",
+      "upstream_bytes": 6561,
+      "upstream_sha256": "a5fe1954ebc04c6f236e237566d374c474368a5346446a23a1cca6171026378b",
+      "replacement_bytes": 6615,
+      "replacement_sha256": "0b79330448eded486fffa6f2504cb283ae973101bfc0b92e6e31b08511f6ad2f"
     },
     {
       "path": "registry/p2p/calldata-NativeTokenVault.json",

@@ -42,13 +42,13 @@ tuple-set SHA-256, and Bloom bytes. Merkle-root or Bloom equality alone is not
 accepted as a faithfulness proof.
 
 <!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
-Checked-in curated receipt, verified against a fresh build by `--check`: **430 leaves**, **354,495-byte**
+Checked-in curated receipt, verified against a fresh build by `--check`: **430 leaves**, **354,625-byte**
 compiled companion catalogue, root
-`029d4ab9f4c0cf5bba18d94980608b8cb0c75c9b4dc8fddba8e3329837f57a79`,
+`d54857b52e8b0668c639fb0a76ee380910286e26c668775bb0dd4e130f564134`,
 **4,542** canonical known-call tuples, tuple-set SHA-256
 `96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`.
 Curation manifest SHA-256
-`e1087d6ed4cd34395232d9dee2b56a182835dc48e66742f8b7ee3d20bd855de0` binds upstream commit
+`6828561253430503524fa555d74e730bd0bb7c7a1362d096f1a9c5a8baf2f2cd` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
 The Bloom contains 28,235 / 131,072 set bits, below the generator's 25% cap.
@@ -60,7 +60,7 @@ the machine-checked source/overlay identities live in the curation manifest,
 while the generated catalogue authority remains in the artifacts and managed
 receipt above.
 
-Current reviewed full-file replacements (19):
+Current reviewed full-file replacements (20):
 
 - `registry/aave/calldata-WrappedTokenGatewayV3.json`
 - `registry/aave/calldata-lpv2.json`
@@ -68,6 +68,7 @@ Current reviewed full-file replacements (19):
 - `registry/flyingtulip/eip712-PftMarketplace-BuyOffer.json`
 - `registry/lido/calldata-stETH.json`
 - `registry/lido/calldata-wstETH-referral-staker.json`
+- `registry/lido/calldata-wstETH.json`
 - `registry/p2p/calldata-NativeTokenVault.json`
 - `registry/p2p/calldata-P2pOrgUnlimitedEthDepositor.json`
 - `registry/p2p/calldata-P2pSsvProxyFactory.json`

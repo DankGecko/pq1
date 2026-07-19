@@ -709,6 +709,143 @@ fn registry_lido_staking_admits_visible_referrals_on_exact_mainnet_contracts() {
 }
 
 #[test]
+fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract() {
+    let result = build_registry();
+    let entries: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str()) == Some("calldata-wstETH.json")
+        })
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "wstETH must emit exactly its one pinned mainnet deployment"
+    );
+    let entry = entries[0];
+    assert_eq!(entry.chain_id, 1);
+    assert_eq!(
+        hex::encode(entry.contract),
+        "7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+    );
+
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated wstETH IR parses");
+    let expected_signatures = [
+        "approve(address,uint256)",
+        "decreaseAllowance(address,uint256)",
+        "increaseAllowance(address,uint256)",
+        "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)",
+        "transfer(address,uint256)",
+        "transferFrom(address,address,uint256)",
+        "unwrap(uint256)",
+        "wrap(uint256)",
+    ];
+    let expected_selectors: BTreeSet<[u8; 4]> = expected_signatures
+        .iter()
+        .map(|signature| {
+            keccak256(signature.as_bytes())[..4]
+                .try_into()
+                .expect("selector width")
+        })
+        .collect();
+    let actual_selectors: BTreeSet<_> = ir
+        .format_iter()
+        .map(|format| format.expect("wstETH format parses").selector)
+        .collect();
+    assert_eq!(
+        actual_selectors, expected_selectors,
+        "the curation must add permit without changing the other wstETH routes"
+    );
+
+    let permit_selector: [u8; 4] =
+        keccak256(b"permit(address,address,uint256,uint256,uint8,bytes32,bytes32)")[..4]
+            .try_into()
+            .expect("selector width");
+    assert_eq!(permit_selector, [0xd5, 0x05, 0xac, 0xcf]);
+    let permit = ir
+        .find_format_by_selector(&permit_selector)
+        .expect("wstETH format table parses")
+        .expect("operand-complete wstETH permit is admitted");
+    let fields: Vec<_> = permit
+        .fields()
+        .map(|field| field.expect("generated wstETH permit field parses"))
+        .collect();
+    assert_eq!(fields.len(), 7);
+
+    let expected_fields = [
+        (
+            b"Owner".as_slice(),
+            FormatOp::AddressName,
+            TerminalKind::Address,
+        ),
+        (
+            b"Spender".as_slice(),
+            FormatOp::AddressName,
+            TerminalKind::Address,
+        ),
+        (
+            b"Amount".as_slice(),
+            FormatOp::TokenAmount,
+            TerminalKind::Unsigned,
+        ),
+        (
+            b"Deadline".as_slice(),
+            FormatOp::Date,
+            TerminalKind::Unsigned,
+        ),
+        (b"V".as_slice(), FormatOp::Raw, TerminalKind::Unsigned),
+        (b"R".as_slice(), FormatOp::Raw, TerminalKind::FixedBytes),
+        (b"S".as_slice(), FormatOp::Raw, TerminalKind::FixedBytes),
+    ];
+    for (field, (label, op, terminal_kind)) in fields.iter().zip(expected_fields) {
+        assert_eq!(field.label, label);
+        assert_eq!(FormatOp::try_from(field.format_op), Ok(op));
+        let params = parse_params(&ir, field.param_off).expect("permit field params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+        assert_eq!(params.terminal_kind, Some(terminal_kind));
+    }
+    assert_eq!(
+        parse_params(&ir, fields[0].param_off)
+            .expect("owner params parse")
+            .addr_types,
+        Some(0x03),
+        "owner must remain restricted to wallet/EOA address rendering"
+    );
+    assert_eq!(
+        parse_params(&ir, fields[1].param_off)
+            .expect("spender params parse")
+            .addr_types,
+        Some(0x04),
+        "spender must remain restricted to contract address rendering"
+    );
+    assert_eq!(
+        parse_params(&ir, fields[3].param_off)
+            .expect("deadline params parse")
+            .date_encoding,
+        Some(0),
+        "deadline must render as an exact timestamp"
+    );
+    assert!(
+        result
+            .known_calls
+            .contains(&(entry.chain_id, entry.contract, permit_selector)),
+        "newly clear-signable permit was already registry-known"
+    );
+
+    assert_eq!(result.entries.len(), 430);
+    assert_eq!(result.known_call_count, 4_542);
+    assert_eq!(
+        hex::encode(result.known_call_set_hash),
+        "96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(&result.known_calls_bloom)),
+        "270a4bc71332868cbdc75c81a1cc92da8669a37e2bead6b7d193974b3e1d431d"
+    );
+}
+
+#[test]
 fn registry_runtime_token_path_keeps_static_intent_without_interpolation() {
     let result = build_registry();
     let entry = result
