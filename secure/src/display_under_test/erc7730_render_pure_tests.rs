@@ -186,7 +186,7 @@ fn safe_visible_nested_leaf(source_name: &str, chain_id: u64) -> &'static dbgen:
 }
 
 /// Build a compiler-authenticated C1 `string` descriptor, then coherently
-/// change both its authenticated dynamic-kind and schema-v4 terminal-kind TLVs
+/// change both its authenticated dynamic-kind and terminal-kind TLVs
 /// to `bytes`. Production dbgen refuses to emit arbitrary dynamic `bytes`; this
 /// process-private fixture proves the device parser independently refuses the
 /// now-forbidden `raw` + `DynamicBytes` pair.
@@ -3240,6 +3240,220 @@ fn positive_lido_wsteth_permit_fixture_binds_every_signed_word() {
     }
 }
 
+#[test]
+fn positive_lombard_lbtc_permit_binds_every_static_word_on_both_deployments() {
+    const SIGNATURE: &str = "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)";
+    let owner = [0x11u8; 20];
+    let spender = [0x22u8; 20];
+    let words = [
+        abi_address_word(owner),
+        abi_address_word(spender),
+        u256_from_u64(123_456_700).0,
+        [0xff; 32],
+        u256_from_u64(27).0,
+        [0x55; 32],
+        [0xaa; 32],
+    ];
+    let calldata = calldata_static(SIGNATURE, &words);
+    assert_eq!(calldata.len(), 4 + 7 * 32);
+
+    let res = build_registry();
+    let resolver = NameResolver::new();
+    let signer = [0x42; 20];
+    let deployments = [
+        (
+            "calldata-lbtc-mainnet.json",
+            1,
+            [
+                0x82, 0x36, 0xa8, 0x70, 0x84, 0xf8, 0xb8, 0x43, 0x06, 0xf7, 0x20, 0x07, 0xf3, 0x6f,
+                0x26, 0x18, 0xa5, 0x63, 0x44, 0x94,
+            ],
+        ),
+        (
+            "calldata-lbtc-sepolia.json",
+            11_155_111,
+            [
+                0x73, 0x1e, 0xfa, 0x68, 0x8f, 0x36, 0x79, 0x68, 0x8c, 0xf6, 0x0a, 0x39, 0x93, 0xb8,
+                0x65, 0x81, 0x38, 0x95, 0x3e, 0xd6,
+            ],
+        ),
+    ];
+
+    for (source_name, chain_id, contract) in deployments {
+        let entry = find_leaf(res, source_name, chain_id);
+        assert_eq!(entry.contract, contract);
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root)
+            .unwrap_or_else(|error| panic!("verify production LBTC leaf {source_name}: {error:?}"));
+        assert!(matches!(verified.ir.context_kind, ContextKind::Contract));
+        assert_eq!(verified.ir.chain_id, chain_id);
+        assert_eq!(verified.ir.contract, contract);
+        assert_selector_matches(&verified.ir, &calldata, SIGNATURE);
+
+        // Mainnet has a Merkle-bound 8-decimal LBTC record. Deliberately pass
+        // no metadata on Sepolia: the secure renderer must stay honest by
+        // showing the exact raw integer and full unverified token address.
+        let metadata = (chain_id == 1).then_some(Erc20Metadata {
+            chain_id,
+            contract,
+            decimals: 8,
+            name: b"Lombard Staked Bitcoin",
+            symbol: b"LBTC",
+        });
+        let tx = envelope(chain_id, contract);
+        let render = |call: &[u8]| {
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                call,
+                &verified,
+                metadata.as_ref(),
+                &resolver,
+                &signer,
+            )
+        };
+
+        let rendered = render(&calldata)
+            .unwrap_or_else(|error| panic!("render production LBTC leaf {source_name}: {error:?}"));
+        assert_eq!(
+            rendered.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        assert_eq!(
+            rendered.transcript_receipt.page_count() as usize,
+            rendered.pages.len
+        );
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "LBTC receipt must bind the complete trusted-display range for {source_name}"
+        );
+        assert_all_pages_printable(&rendered.pages);
+        assert_eq!(
+            page_strs(&rendered.pages, intent_page_index(&rendered.pages))[0],
+            "Permit"
+        );
+        assert_full_address_field_page(&rendered.pages, "Owner", &owner);
+        assert_full_address_field_page(&rendered.pages, "Spender", &spender);
+        assert_raw_word_pages(&rendered.pages, "Valid Until", &words[3]);
+        assert_raw_word_pages(&rendered.pages, "V", &words[4]);
+        assert_raw_word_pages(&rendered.pages, "R", &words[5]);
+        assert_raw_word_pages(&rendered.pages, "S", &words[6]);
+
+        let allowance = page_strs(
+            &rendered.pages,
+            find_page_by_label(&rendered.pages, "Allowance"),
+        )
+        .join(" ");
+        if chain_id == 1 {
+            assert!(
+                allowance.contains("1.234567") && allowance.contains("LBTC"),
+                "mainnet LBTC metadata must bind the exact 8-decimal amount: {allowance:?}"
+            );
+            assert_full_contract_identity_page(&rendered.pages, &contract);
+        } else {
+            assert!(
+                allowance.contains("123456700") && allowance.contains("! raw, dec=?"),
+                "Sepolia without metadata must show an exact raw amount: {allowance:?}"
+            );
+            assert_full_unverified_token_identity_page(&rendered.pages, &contract);
+        }
+
+        for (word_index, field) in [
+            (0, "owner"),
+            (1, "spender"),
+            (2, "value"),
+            (3, "deadline"),
+            (4, "v"),
+            (5, "r"),
+            (6, "s"),
+        ] {
+            let mut mutated_words = words;
+            if word_index == 2 {
+                // Preserve the renderer's exact six-fraction-digit display
+                // envelope while independently changing the 8-decimal value.
+                mutated_words[word_index] = u256_from_u64(123_456_800).0;
+            } else {
+                mutated_words[word_index][31] ^= 1;
+            }
+            let mutated_calldata = calldata_static(SIGNATURE, &mutated_words);
+            let mutated = render(&mutated_calldata).unwrap_or_else(|error| {
+                panic!("render independently mutated LBTC {field} on {source_name}: {error:?}")
+            });
+            assert_ne!(
+                rendered.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "one {field} bit must change LBTC trusted pages on {source_name}"
+            );
+            assert!(
+                !rendered
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "one {field} bit must change the LBTC transcript on {source_name}"
+            );
+        }
+
+        for (word_index, field) in [(0, "owner"), (1, "spender")] {
+            let mut dirty_address_words = words;
+            dirty_address_words[word_index][0] = 1;
+            let dirty_address = calldata_static(SIGNATURE, &dirty_address_words);
+            assert!(
+                matches!(
+                    render(&dirty_address),
+                    Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+                ),
+                "a {field} address with dirty ABI padding must hard-refuse on {source_name}"
+            );
+        }
+
+        // Solidity decodes `v` as uint8. A non-zero byte outside the retained
+        // low byte is therefore a non-canonical ABI spelling and must refuse,
+        // even though the raw formatter could display all 32 supplied bytes.
+        let mut dirty_v_words = words;
+        dirty_v_words[4][0] = 1;
+        let dirty_v = calldata_static(SIGNATURE, &dirty_v_words);
+        assert!(
+            matches!(
+                render(&dirty_v),
+                Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+            ),
+            "uint8 v with dirty high-byte padding must hard-refuse on {source_name}"
+        );
+    }
+}
+
+#[test]
+fn tally_ballot_uint8_support_rejects_dirty_eip712_padding() {
+    let res = build_registry();
+    let entry = find_leaf(res, "eip712-tally-ethereum-bravo-governor.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Tally Ballot leaf");
+    let primary_type_hash = keccak256(b"Ballot(uint256 proposalId,uint8 support)");
+
+    let mut encoded_data = std::vec![0u8; 64];
+    encoded_data[31] = 7; // proposalId
+    encoded_data[63] = 1; // support:uint8
+    let render = |body: &[u8]| {
+        super::erc7730::render_erc7730_eip712_pages(
+            1,
+            &entry.contract,
+            &primary_type_hash,
+            body,
+            &verified,
+            None,
+            &NameResolver::new(),
+        )
+    };
+    render(&encoded_data).expect("canonical uint8 Ballot support renders");
+
+    let mut dirty = encoded_data;
+    dirty[32] = 1;
+    assert!(matches!(
+        render(&dirty),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+    ));
+}
+
 /// Pack-expansion sanity: the registry Lido `wstETH.wrap(uint256)`
 /// descriptor renders the exact derived intent + retained field label. A render test
 /// (not just round-trip) catches descriptor-authoring slips — wrong
@@ -4675,6 +4889,42 @@ fn v3_permit_single_renders_nested_members() {
         crate::fi::FAIL_SENTINEL,
         "nested V3 field corruption must fail the final transcript proof"
     );
+}
+
+#[test]
+fn v3_permit_single_rejects_hash_bound_dirty_uint160_padding() {
+    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let pth: [u8; 32] = [
+        0xf3, 0x84, 0x1c, 0xd1, 0xff, 0x00, 0x85, 0x02, 0x6a, 0x63, 0x27, 0xb6, 0x20, 0xb6, 0x79,
+        0x97, 0xce, 0x40, 0xf2, 0x82, 0xc8, 0x8a, 0x8e, 0x90, 0x5a, 0x7a, 0x56, 0x26, 0xe3, 0x10,
+        0xf3, 0xd0,
+    ];
+    let (mut top_ed, mut nested_blob) = permit_single_valid_vectors();
+
+    // PermitDetails.amount is uint160. Keep the companion-supplied body fully
+    // hash-bound by recomputing the committed hashStruct after dirtying one of
+    // the twelve forbidden high bytes; rejection must therefore come from the
+    // width belt, not from a vacuous hash mismatch.
+    nested_blob[2 + 32] = 1;
+    let rebound = super::erc7730::nested::hash_struct(&PERMIT_DETAILS_TYPEHASH, &nested_blob[2..]);
+    top_ed[..32].copy_from_slice(&rebound);
+
+    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
+    let verified = VerifiedDescriptor { ir };
+    let result = super::erc7730::render_erc7730_eip712_pages_v3(
+        1,
+        &[0u8; 20],
+        &pth,
+        &top_ed,
+        &nested_blob,
+        &verified,
+        None,
+        &NameResolver::new(),
+    );
+    assert!(matches!(
+        result,
+        Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+    ));
 }
 
 #[test]

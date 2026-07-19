@@ -294,8 +294,14 @@ const PARAM_NFT_COLLECTION_PATH: u8 = 0x45;
 /// on emitted field ordinal zero; source paths are resolved to field ordinals
 /// at build time, so the device never interprets braces or JSON paths.
 const PARAM_INTERPOLATED_INTENT: u8 = 0x46;
-/// Schema-v4 authenticated terminal kind; mandatory on every field.
+/// Schema-v5 authenticated terminal kind; mandatory on every field.
 const PARAM_TERMINAL_KIND: u8 = 0x47;
+/// Schema-v5 authenticated Solidity integer width in bytes. Emitted exactly
+/// once for unsigned/signed integer terminals and forbidden for every other
+/// terminal kind. Keeping this separate from the stable terminal-kind payload
+/// preserves its one-byte wire shape while letting the device reject dirty
+/// zero/sign extension on narrow integers.
+const PARAM_INTEGER_WIDTH: u8 = 0x48;
 const DYNAMIC_KIND_STRING: u8 = 0x01;
 const INTERPOLATED_INTENT_VERSION: u8 = 0x01;
 const MAX_INTERPOLATED_SUBSTITUTIONS: usize = 3;
@@ -3449,50 +3455,101 @@ fn rendered_path_terminal_type(
     Ok(Some(ty))
 }
 
-fn terminal_kind_from_type(ty: &str) -> Result<TerminalKind, String> {
+/// Compact compiler-owned terminal semantics carried by schema v5.
+///
+/// `integer_width_bytes` is present iff `kind` is unsigned or signed. Keeping
+/// the pair together prevents one lowering path (notably nested EIP-712 fields)
+/// from emitting the broad kind while forgetting the authenticated width.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TerminalSemantics {
+    kind: TerminalKind,
+    integer_width_bytes: Option<u8>,
+}
+
+impl TerminalSemantics {
+    const fn non_integer(kind: TerminalKind) -> Self {
+        Self {
+            kind,
+            integer_width_bytes: None,
+        }
+    }
+
+    const fn integer(kind: TerminalKind, width_bytes: u8) -> Self {
+        Self {
+            kind,
+            integer_width_bytes: Some(width_bytes),
+        }
+    }
+}
+
+fn canonical_integer_width_bytes(base: &str, prefix: &str) -> Option<u8> {
+    let width = base.strip_prefix(prefix)?;
+    if width.len() > 1 && width.starts_with('0') {
+        return None;
+    }
+    let bits = if width.is_empty() {
+        256
+    } else {
+        width.parse::<u16>().ok()?
+    };
+    if !(8..=256).contains(&bits) || bits % 8 != 0 {
+        return None;
+    }
+    u8::try_from(bits / 8).ok()
+}
+
+fn terminal_semantics_from_type(ty: &str) -> Result<TerminalSemantics, String> {
     let (base, _) = split_array_suffix(ty);
     if base == "address" {
-        return Ok(TerminalKind::Address);
+        return Ok(TerminalSemantics::non_integer(TerminalKind::Address));
     }
     if base == "bool" {
-        return Ok(TerminalKind::Bool);
+        return Ok(TerminalSemantics::non_integer(TerminalKind::Bool));
     }
     if base == "string" {
-        return Ok(TerminalKind::DynamicString);
+        return Ok(TerminalSemantics::non_integer(TerminalKind::DynamicString));
     }
     if base == "bytes" {
-        return Ok(TerminalKind::DynamicBytes);
+        return Ok(TerminalSemantics::non_integer(TerminalKind::DynamicBytes));
     }
-    if let Some(width) = base.strip_prefix("uint") {
-        if width.is_empty() || width.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Ok(TerminalKind::Unsigned);
-        }
+    if let Some(width_bytes) = canonical_integer_width_bytes(base, "uint") {
+        return Ok(TerminalSemantics::integer(
+            TerminalKind::Unsigned,
+            width_bytes,
+        ));
     }
-    if let Some(width) = base.strip_prefix("int") {
-        if width.is_empty() || width.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Ok(TerminalKind::Signed);
-        }
+    if let Some(width_bytes) = canonical_integer_width_bytes(base, "int") {
+        return Ok(TerminalSemantics::integer(
+            TerminalKind::Signed,
+            width_bytes,
+        ));
     }
     if let Some(width) = base.strip_prefix("bytes") {
         if matches!(width.parse::<u8>(), Ok(1..=32)) {
-            return Ok(TerminalKind::FixedBytes);
+            return Ok(TerminalSemantics::non_integer(TerminalKind::FixedBytes));
         }
     }
     Err(format!(
-        "terminal type `{ty}` has no schema-v4 device semantic kind"
+        "terminal type `{ty}` has no schema-v5 device semantics"
     ))
 }
 
-fn terminal_kind_for_path(
+fn terminal_kind_from_type(ty: &str) -> Result<TerminalKind, String> {
+    Ok(terminal_semantics_from_type(ty)?.kind)
+}
+
+fn terminal_semantics_for_path(
     path: &str,
     context_kind: u8,
     parsed: &ParsedFormatKey,
-) -> Result<TerminalKind, String> {
+) -> Result<TerminalSemantics, String> {
     let path = path.trim();
     if let Some(container) = path.strip_prefix('@') {
         return match container.trim_start_matches('.') {
-            "to" | "from" => Ok(TerminalKind::Address),
-            "value" | "chainId" | "nonce" => Ok(TerminalKind::Unsigned),
+            "to" | "from" => Ok(TerminalSemantics::non_integer(TerminalKind::Address)),
+            "value" | "chainId" | "nonce" => {
+                Ok(TerminalSemantics::integer(TerminalKind::Unsigned, 32))
+            }
             other => Err(format!("unsupported container terminal `@.{other}`")),
         };
     }
@@ -3503,9 +3560,33 @@ fn terminal_kind_for_path(
         .ok_or_else(|| format!("path `{path}` has no typed terminal"))?;
     let (base, _) = split_array_suffix(&ty);
     if context_kind == CTX_EIP712 && type_is_struct(base, parsed) {
-        return Ok(TerminalKind::NestedStruct);
+        return Ok(TerminalSemantics::non_integer(TerminalKind::NestedStruct));
     }
-    terminal_kind_from_type(&ty)
+    terminal_semantics_from_type(&ty)
+}
+
+fn terminal_kind_for_path(
+    path: &str,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+) -> Result<TerminalKind, String> {
+    Ok(terminal_semantics_for_path(path, context_kind, parsed)?.kind)
+}
+
+/// Emit the mandatory terminal-kind TLV and the schema-v5 integer-width TLV as
+/// one invariant. The width is required exactly for signed/unsigned terminals.
+fn push_terminal_semantics(out: &mut Vec<u8>, semantics: TerminalSemantics) -> Result<(), String> {
+    push_tlv(out, PARAM_TERMINAL_KIND, &[semantics.kind as u8])?;
+    match (semantics.kind, semantics.integer_width_bytes) {
+        (TerminalKind::Unsigned | TerminalKind::Signed, Some(width @ 1..=32)) => {
+            push_tlv(out, PARAM_INTEGER_WIDTH, &[width])
+        }
+        (TerminalKind::Unsigned | TerminalKind::Signed, _) => {
+            Err("integer terminal has no canonical schema-v5 width".to_string())
+        }
+        (_, None) => Ok(()),
+        (_, Some(_)) => Err("non-integer terminal carries schema-v5 integer width".to_string()),
+    }
 }
 
 fn format_op_from_wire(format_op: u8) -> Result<FormatOp, String> {
@@ -3549,9 +3630,12 @@ fn param_mask_from_compiled_tlvs(body: &[u8]) -> Result<ParamMask, String> {
             PARAM_DYNAMIC_KIND => ParamMask::DYNAMIC_KIND,
             PARAM_NFT_COLLECTION => ParamMask::NFT_COLLECTION,
             PARAM_NFT_COLLECTION_PATH => ParamMask::NFT_COLLECTION_PATH,
-            // Format metadata / mandatory semantic kind are validated at
+            // Format metadata / mandatory terminal semantics are validated at
             // their own enclosing boundaries, not as formatter parameters.
-            PARAM_VISIBILITY | PARAM_INTERPOLATED_INTENT | PARAM_TERMINAL_KIND => continue,
+            PARAM_VISIBILITY
+            | PARAM_INTERPOLATED_INTENT
+            | PARAM_TERMINAL_KIND
+            | PARAM_INTEGER_WIDTH => continue,
             other => return Err(format!("unknown compiled parameter tag 0x{other:02x}")),
         };
         mask = mask.union(bit);
@@ -3669,15 +3753,16 @@ fn compile_one_field(
         Some(path) => rendered_path_terminal_type(path, context_kind, parsed)?,
         None => None,
     };
-    let terminal_kind = match field.path.as_deref() {
-        Some(path) => terminal_kind_for_path(path, context_kind, parsed)?,
-        None if const_value.is_some() => TerminalKind::ConstantText,
+    let terminal_semantics = match field.path.as_deref() {
+        Some(path) => terminal_semantics_for_path(path, context_kind, parsed)?,
+        None if const_value.is_some() => TerminalSemantics::non_integer(TerminalKind::ConstantText),
         None => {
             return Err(format!(
-                "format `{sig}` field[{field_idx}] has no schema-v4 terminal kind"
+                "format `{sig}` field[{field_idx}] has no schema-v5 terminal semantics"
             ))
         }
     };
+    let terminal_kind = terminal_semantics.kind;
     // EIP-712 `encodeData` stores dynamic bytes/string as keccak256(value),
     // arrays as keccak256(concatenated encodings), and structs as hashStruct.
     // A flat field path therefore binds only the opaque 32-byte hash word, not
@@ -3702,7 +3787,7 @@ fn compile_one_field(
         && format_interprets_numeric_sign(format_op)
     {
         return Err(format!(
-            "format `{sig}` field[{field_idx}] uses signed integer type `{}` with a numeric formatter; signedness is not encoded in IR",
+            "format `{sig}` field[{field_idx}] uses signed integer type `{}` with a numeric formatter; device numeric formatters are unsigned-only",
             terminal_type.as_deref().unwrap_or("")
         ));
     }
@@ -3752,9 +3837,9 @@ fn compile_one_field(
     if emit_nested_marker {
         push_tlv(&mut param_blob, PARAM_NESTED_STRUCT, &[0x01])?;
     }
-    // Schema v4: the host's exact type resolution is authenticated in every
-    // field and rechecked against the same policy by the device preflight.
-    push_tlv(&mut param_blob, PARAM_TERMINAL_KIND, &[terminal_kind as u8])?;
+    // Schema v5: authenticate the broad kind and, exactly for integer fields,
+    // the Solidity width that the device needs for canonical padding checks.
+    push_terminal_semantics(&mut param_blob, terminal_semantics)?;
     let policy_mask = param_mask_from_compiled_tlvs(&param_blob)?;
     let op = format_op_from_wire(format_op)?;
     let policy_mask = if emit_nested_marker && terminal_kind != TerminalKind::NestedStruct {
@@ -4158,10 +4243,9 @@ fn compile_nested_block(
             }
             let mut param_blob: Vec<u8> = Vec::new();
             push_tlv(&mut param_blob, PARAM_NESTED_STRUCT, &child_payload)?;
-            push_tlv(
+            push_terminal_semantics(
                 &mut param_blob,
-                PARAM_TERMINAL_KIND,
-                &[TerminalKind::NestedStruct as u8],
+                TerminalSemantics::non_integer(TerminalKind::NestedStruct),
             )?;
             validate_field_policy(
                 FormatOp::Raw,
@@ -4217,12 +4301,13 @@ fn compile_nested_block(
                 return Ok(None);
             }
             let nested_format_op = parse_format_name(field.format.as_deref().unwrap_or("raw"))?;
-            let terminal_kind = terminal_kind_from_type(&members[local_ord].1)?;
+            let terminal_semantics = terminal_semantics_from_type(&members[local_ord].1)?;
+            let terminal_kind = terminal_semantics.kind;
             if is_signed_integer_type(&members[local_ord].1)
                 && format_interprets_numeric_sign(nested_format_op)
             {
                 return Err(format!(
-                    "format `{sig}` nested field `{path}` uses signed integer type `{}` with a numeric formatter; signedness is not encoded in IR",
+                    "format `{sig}` nested field `{path}` uses signed integer type `{}` with a numeric formatter; device numeric formatters are unsigned-only",
                     members[local_ord].1
                 ));
             }
@@ -4237,7 +4322,7 @@ fn compile_nested_block(
             else {
                 return Ok(None);
             };
-            push_tlv(&mut param_blob, PARAM_TERMINAL_KIND, &[terminal_kind as u8])?;
+            push_terminal_semantics(&mut param_blob, terminal_semantics)?;
             let op = format_op_from_wire(format_op)?;
             validate_field_policy(op, terminal_kind, param_mask_from_compiled_tlvs(&param_blob)?)
                 .map_err(|error| {
@@ -4344,10 +4429,9 @@ fn compile_nested_anchor(
     }
     let mut param_blob: Vec<u8> = Vec::new();
     push_tlv(&mut param_blob, PARAM_NESTED_STRUCT, &payload)?;
-    push_tlv(
+    push_terminal_semantics(
         &mut param_blob,
-        PARAM_TERMINAL_KIND,
-        &[TerminalKind::NestedStruct as u8],
+        TerminalSemantics::non_integer(TerminalKind::NestedStruct),
     )?;
     validate_field_policy(
         FormatOp::Raw,
@@ -7680,6 +7764,9 @@ fn review_param_semantics(
             TerminalKind::NestedStruct => "nestedStruct",
         };
         parts.push(format!("terminalKind={name}(0x{:02x})", kind as u8));
+    }
+    if let Some(width) = params.integer_width_bytes {
+        parts.push(format!("integerWidthBytes={width}"));
     }
     Ok(format!("{{{}}}", parts.join(",")))
 }
@@ -11491,6 +11578,8 @@ mod tests {
         let mut params = ParamSet::default();
         params.visibility = Visibility::Optional;
         params.native_currency_addresses = Some(&native);
+        params.terminal_kind = Some(TerminalKind::Unsigned);
+        params.integer_width_bytes = Some(20);
         params.interpolated_intent = Some(
             InterpolatedIntentProgram::parse(&interpolation).expect("canonical interpolation"),
         );
@@ -11502,6 +11591,8 @@ mod tests {
             hex::encode(&native[20..]),
         )));
         assert!(decoded.contains("visibility=optional"));
+        assert!(decoded.contains("terminalKind=unsigned(0x01)"));
+        assert!(decoded.contains("integerWidthBytes=20"));
         assert!(decoded.contains(
             "interpolatedIntent={version=1,count=1,literals=[\"Deposit \",\"\"],ordinals=[0]}"
         ));
@@ -11593,6 +11684,212 @@ mod tests {
         assert_eq!(
             find_tlv(&pool, compiled.param_off, PARAM_TERMINAL_KIND),
             Some(&[TerminalKind::DynamicString as u8][..])
+        );
+        assert_eq!(
+            find_tlv(&pool, compiled.param_off, PARAM_INTEGER_WIDTH),
+            None,
+            "non-integer terminals must not carry an integer width"
+        );
+    }
+
+    #[test]
+    fn terminal_semantics_preserves_every_solidity_integer_width() {
+        for width_bytes in 1u8..=32 {
+            let bits = u16::from(width_bytes) * 8;
+            for (prefix, kind) in [
+                ("uint", TerminalKind::Unsigned),
+                ("int", TerminalKind::Signed),
+            ] {
+                let ty = format!("{prefix}{bits}");
+                assert_eq!(
+                    terminal_semantics_from_type(&ty).unwrap(),
+                    TerminalSemantics::integer(kind, width_bytes),
+                    "width lowering drift for {ty}"
+                );
+                assert_eq!(
+                    terminal_semantics_from_type(&format!("{ty}[]")).unwrap(),
+                    TerminalSemantics::integer(kind, width_bytes),
+                    "array element width lowering drift for {ty}[]"
+                );
+            }
+        }
+
+        assert_eq!(
+            terminal_semantics_from_type("uint").unwrap(),
+            TerminalSemantics::integer(TerminalKind::Unsigned, 32)
+        );
+        assert_eq!(
+            terminal_semantics_from_type("int").unwrap(),
+            TerminalSemantics::integer(TerminalKind::Signed, 32)
+        );
+        for invalid in [
+            "uint0", "uint7", "uint08", "uint264", "int0", "int9", "int024", "int512",
+        ] {
+            assert!(
+                terminal_semantics_from_type(invalid).is_err(),
+                "invalid Solidity integer width accepted: {invalid}"
+            );
+        }
+        for non_integer in ["address", "bool", "bytes4", "string", "bytes"] {
+            assert_eq!(
+                terminal_semantics_from_type(non_integer)
+                    .unwrap()
+                    .integer_width_bytes,
+                None,
+                "non-integer type gained an integer width: {non_integer}"
+            );
+        }
+    }
+
+    #[test]
+    fn compiler_emits_integer_width_only_for_integer_fields_and_containers() {
+        let cases = [
+            ("f(uint8 value)", "value", CTX_CONTRACT, Some(1)),
+            ("f(uint248 value)", "value", CTX_CONTRACT, Some(31)),
+            ("f(uint256 value)", "value", CTX_CONTRACT, Some(32)),
+            ("f(int24 value)", "value", CTX_CONTRACT, Some(3)),
+            ("Order(int48 value)", "value", CTX_EIP712, Some(6)),
+            ("f(uint16[] value)", "value.[]", CTX_CONTRACT, Some(2)),
+            ("f(address value)", "value", CTX_CONTRACT, None),
+            ("f(bytes4 value)", "value", CTX_CONTRACT, None),
+        ];
+
+        for (sig, path, context_kind, expected_width) in cases {
+            let parsed = parse_format_key(sig).unwrap();
+            let field: FieldDef = serde_json::from_value(serde_json::json!({
+                "path": path, "label": "Value", "format": "raw"
+            }))
+            .unwrap();
+            let mut pool = Pool::new();
+            let compiled = compile_one_field(
+                sig,
+                0,
+                &field,
+                context_kind,
+                &parsed,
+                &mut test_ctx(),
+                &mut pool,
+                &BTreeMap::new(),
+                false,
+            )
+            .unwrap();
+            assert_eq!(
+                find_tlv(&pool, compiled.param_off, PARAM_INTEGER_WIDTH),
+                expected_width.as_ref().map(std::slice::from_ref),
+                "wrong integer-width TLV for {sig} / {path}"
+            );
+        }
+
+        let parsed = parse_format_key("f()").unwrap();
+        for path in ["@.value", "@.chainId", "@.nonce"] {
+            let field: FieldDef = serde_json::from_value(serde_json::json!({
+                "path": path, "label": "Container", "format": "raw"
+            }))
+            .unwrap();
+            let mut pool = Pool::new();
+            let compiled = compile_one_field(
+                "f()",
+                0,
+                &field,
+                CTX_CONTRACT,
+                &parsed,
+                &mut test_ctx(),
+                &mut pool,
+                &BTreeMap::new(),
+                false,
+            )
+            .unwrap();
+            assert_eq!(
+                find_tlv(&pool, compiled.param_off, PARAM_INTEGER_WIDTH),
+                Some(&[32][..]),
+                "container integer width must be uint256: {path}"
+            );
+        }
+
+        for path in ["@.to", "@.from"] {
+            let field: FieldDef = serde_json::from_value(serde_json::json!({
+                "path": path, "label": "Container", "format": "raw"
+            }))
+            .unwrap();
+            let mut pool = Pool::new();
+            let compiled = compile_one_field(
+                "f()",
+                0,
+                &field,
+                CTX_CONTRACT,
+                &parsed,
+                &mut test_ctx(),
+                &mut pool,
+                &BTreeMap::new(),
+                false,
+            )
+            .unwrap();
+            assert_eq!(
+                find_tlv(&pool, compiled.param_off, PARAM_INTEGER_WIDTH),
+                None,
+                "address container must not carry an integer width: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_eip712_elementary_fields_emit_integer_widths() {
+        let sig = "Order(Meta details)Meta(uint48 nonce,int24 delta)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"details.nonce","label":"Nonce","format":"raw"},
+              {"path":"details.delta","label":"Delta","format":"raw"}
+            ]"#,
+        );
+        let mut pool = Pool::new();
+        let (records, descents) = try_compile_eip712_nested(
+            sig,
+            &fmt,
+            &parsed,
+            &mut test_ctx(),
+            &mut pool,
+            &BTreeMap::new(),
+        )
+        .unwrap()
+        .expect("supported nested scalar shape");
+        assert_eq!(descents, 1);
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            find_tlv(&pool, records[0].param_off, PARAM_INTEGER_WIDTH),
+            None,
+            "nested anchor is not an integer"
+        );
+
+        let nested = find_tlv(&pool, records[0].param_off, PARAM_NESTED_STRUCT)
+            .expect("nested anchor payload");
+        assert_eq!(nested[0], 0x03);
+        assert_eq!(u16::from_be_bytes([nested[35], nested[36]]), 2);
+        let bitmap_len = 1usize;
+        let mut cursor = 38 + bitmap_len;
+        assert_eq!(nested[cursor], 2, "two nested elementary fields");
+        cursor += 1;
+
+        for (expected_kind, expected_width) in
+            [(TerminalKind::Unsigned, 6u8), (TerminalKind::Signed, 3u8)]
+        {
+            let label_len = nested[cursor + 1] as usize;
+            let param_at = cursor + 2 + label_len + 2;
+            let param_off = u16::from_be_bytes([nested[param_at], nested[param_at + 1]]);
+            assert_eq!(
+                find_tlv(&pool, param_off, PARAM_TERMINAL_KIND),
+                Some(&[expected_kind as u8][..])
+            );
+            assert_eq!(
+                find_tlv(&pool, param_off, PARAM_INTEGER_WIDTH),
+                Some(&[expected_width][..])
+            );
+            cursor += 2 + label_len + 4;
+        }
+        assert_eq!(
+            cursor,
+            nested.len(),
+            "nested records consume payload exactly"
         );
     }
 
@@ -11792,7 +12089,10 @@ mod tests {
             false,
         )
         .unwrap_err();
-        assert!(err.contains("signedness is not encoded"), "{err}");
+        assert!(
+            err.contains("numeric formatters are unsigned-only"),
+            "{err}"
+        );
 
         let raw: FieldDef = serde_json::from_value(serde_json::json!({
             "path": "delta", "label": "Delta", "format": "raw"

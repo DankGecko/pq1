@@ -32,14 +32,17 @@ Current security contract:
   never downgrades to typed or blind signing. Only a genuinely absent tuple may
   use the generic display ladder; Bloom false positives conservatively refuse.
 <!-- BEGIN XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->
-- The host compiler and device require **IR schema v4 (`0x04`)**; this value is
+- The host compiler and device require **IR schema v5 (`0x05`)**; this value is
   generated from `pqsigner_erc7730::ir::SCHEMA_VER`, and older schemas hard-refuse.
+- Schema v5 authenticates every `uintN`/`intN` width and hard-refuses dirty ABI
+  zero/sign extension before publishing trusted clear-signing pages; full-width
+  `uint256`/`int256` words remain unchanged.
 - The current regenerated development catalogue has **430 leaves**, root
-  `5e3f1d841c26b031ea28b4606673a74ac79d8078b7b54c4a1f76bc1130d3f3ef`,
+  `ee8e503b18e8ebc3bb2e9e0ed8ecad2988ec109dae9c904980ea0e24f374661d`,
   and **4,542 exact known-call tuples**. The tuple-set receipt is SHA-256
   `96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`;
   Bloom occupancy is 28,235 / 131,072 bits under the compiler-enforced generation cap.
-- The current compiler report records **270** omitted descriptor/formats.
+- The current compiler report records **268** omitted descriptor/formats.
 <!-- END XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->
 - These receipts detect input/artifact drift. They do not turn Bloom insertion
   into a proof of parser completeness. The current independent types-only ABI

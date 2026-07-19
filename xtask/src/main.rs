@@ -1184,6 +1184,10 @@ fn render_erc7730_semantic_contract() -> String {
         "- The host compiler and device require **IR schema v{} (`0x{SCHEMA_VER:02X}`)**; this value is generated from `pqsigner_erc7730::ir::SCHEMA_VER`, and older schemas hard-refuse.",
         u16::from(SCHEMA_VER),
     );
+    let _ = writeln!(
+        out,
+        "- Schema v5 authenticates every `uintN`/`intN` width as `1..=32` bytes. Before any trusted ERC-7730 page is published, the device requires exact ABI zero extension for `uintN` and sign extension for `intN`; full-width `uint256`/`int256` retain every 32-byte word unchanged."
+    );
     let _ = writeln!(out);
     let _ = writeln!(out, "| Wire opcode | Registry `format` | Device route |");
     let _ = writeln!(out, "|------------:|-------------------|--------------|");
@@ -1271,6 +1275,9 @@ fn render_erc7730_integration_facts(
             "{}\n",
             "- The host compiler and device require **IR schema v{} (`0x{:02X}`)**; this value is\n",
             "  generated from `pqsigner_erc7730::ir::SCHEMA_VER`, and older schemas hard-refuse.\n",
+            "- Schema v5 authenticates every `uintN`/`intN` width and hard-refuses dirty ABI\n",
+            "  zero/sign extension before publishing trusted clear-signing pages; full-width\n",
+            "  `uint256`/`int256` words remain unchanged.\n",
             "- The current regenerated development catalogue has **{} leaves**, root\n",
             "  `{}`,\n",
             "  and **{} exact known-call tuples**. The tuple-set receipt is SHA-256\n",
@@ -1816,9 +1823,14 @@ mod tests {
         )
         .expect("fresh semantic contract");
 
-        assert_eq!(pqsigner_erc7730::ir::SCHEMA_VER, 0x04);
-        assert!(semantics.contains("IR schema v4 (`0x04`)"));
-        assert!(!semantics.contains("IR schema v3 (`0x03`)"));
+        assert_eq!(pqsigner_erc7730::ir::SCHEMA_VER, 0x05);
+        assert!(semantics.contains("IR schema v5 (`0x05`)"));
+        assert!(!semantics.contains("IR schema v4 (`0x04`)"));
+        assert!(semantics
+            .contains("exact ABI zero extension for `uintN` and sign extension for `intN`"));
+        assert!(
+            semantics.contains("full-width `uint256`/`int256` retain every 32-byte word unchanged")
+        );
         assert!(semantics.contains(
             "| `0x04` | `nftName` | implemented renderer (fail closed on invalid input) |"
         ));
@@ -1841,7 +1853,8 @@ mod tests {
         let semantics = render_erc7730_semantic_contract();
         let guide = format!("prefix\n{semantics}\nsuffix\n");
         for stale in [
-            guide.replacen("IR schema v4 (`0x04`)", "IR schema v3 (`0x03`)", 1),
+            guide.replacen("IR schema v5 (`0x05`)", "IR schema v4 (`0x04`)", 1),
+            guide.replacen("exact ABI zero extension", "best-effort ABI extension", 1),
             guide.replacen("`0x04` | `nftName`", "`0x09` | `nftName`", 1),
             guide.replacen(
                 "hard refusal (nested calldata unsupported)",
@@ -1886,9 +1899,11 @@ mod tests {
             &facts,
         )
         .expect("fresh integration facts");
-        assert_eq!(pqsigner_erc7730::ir::SCHEMA_VER, 0x04);
-        assert!(facts.contains("IR schema v4 (`0x04`)"));
-        assert!(!facts.contains("IR schema v3 (`0x03`)"));
+        assert_eq!(pqsigner_erc7730::ir::SCHEMA_VER, 0x05);
+        assert!(facts.contains("IR schema v5 (`0x05`)"));
+        assert!(!facts.contains("IR schema v4 (`0x04`)"));
+        assert!(facts.contains("hard-refuses dirty ABI"));
+        assert!(facts.contains("`uint256`/`int256` words remain unchanged"));
         assert!(facts.contains("5 / 128 bits"));
     }
 
@@ -1902,7 +1917,8 @@ mod tests {
         let facts = render_erc7730_integration_facts(&root, 420, 4_542, &tuple_hash, &bloom, 274);
         let doc = format!("prefix\n{facts}\nsuffix\n");
         for stale in [
-            doc.replacen("IR schema v4 (`0x04`)", "IR schema v3 (`0x03`)", 1),
+            doc.replacen("IR schema v5 (`0x05`)", "IR schema v4 (`0x04`)", 1),
+            doc.replacen("hard-refuses dirty ABI", "accepts dirty ABI", 1),
             doc.replacen("420 leaves", "419 leaves", 1),
             doc.replacen(&hex::encode(root), &hex::encode([0x33; 32]), 1),
             doc.replacen("4,542 exact", "4,541 exact", 1),

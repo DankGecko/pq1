@@ -1,12 +1,13 @@
 //! Shared authenticated-field admissibility policy.
 //!
 //! The host compiler knows the Solidity / EIP-712 terminal type, while the
-//! device receives only compact authenticated IR.  Schema v4 therefore carries
-//! one mandatory [`TerminalKind`] byte in every field's parameter blob.  Both
-//! sides execute this module's same exhaustive matrix before a field can be
-//! admitted or rendered.  Keeping the matrix here prevents compiler
-//! completeness accounting, nested address coverage, and the device preflight
-//! from assigning different meaning to the same formatter opcode.
+//! device receives only compact authenticated IR.  Schema v5 carries one
+//! mandatory [`TerminalKind`] byte in every field's parameter blob plus the
+//! original ABI width for integer terminals.  Both sides execute this module's
+//! same exhaustive matrix before a field can be admitted or rendered.  Keeping
+//! the matrix here prevents compiler completeness accounting, nested address
+//! coverage, and the device preflight from assigning different meaning to the
+//! same formatter opcode.
 
 use crate::ir::FormatOp;
 
@@ -14,7 +15,8 @@ use crate::ir::FormatOp;
 ///
 /// Values are wire constants carried by `PARAM_TERMINAL_KIND`.  Arrays carry
 /// the kind of each rendered element; array-ness remains explicit in the path
-/// bytecode (`ArrayAll`).  Do not renumber after schema v4 ships.
+/// bytecode (`ArrayAll`).  These values were introduced by schema v4 and remain
+/// byte-for-byte stable in schema v5; do not renumber them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum TerminalKind {
@@ -62,10 +64,51 @@ impl TryFrom<u8> for TerminalKind {
     }
 }
 
+/// Return whether a 32-byte ABI word is the canonical encoding of an integer
+/// terminal with the authenticated width `width_bytes`.
+///
+/// Unsigned narrow integers must have an all-zero prefix. Signed narrow
+/// integers must have the exact sign-extension prefix selected by the high bit
+/// of the first retained byte. Full-width (32-byte) integer words preserve all
+/// bits. Invalid widths and non-integer terminal kinds always fail closed.
+#[must_use]
+pub const fn integer_word_is_canonical(
+    kind: TerminalKind,
+    width_bytes: u8,
+    word: &[u8; 32],
+) -> bool {
+    if width_bytes == 0 || width_bytes > 32 {
+        return false;
+    }
+
+    let prefix_len = 32 - width_bytes as usize;
+    let prefix_byte = match kind {
+        TerminalKind::Unsigned => 0x00,
+        TerminalKind::Signed => {
+            if word[prefix_len] & 0x80 == 0 {
+                0x00
+            } else {
+                0xff
+            }
+        }
+        _ => return false,
+    };
+
+    let mut index = 0usize;
+    while index < prefix_len {
+        if word[index] != prefix_byte {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
 /// Semantic parameter-presence bitmap.  Visibility's selector byte and the
-/// mandatory terminal-kind byte are carried separately.  The interpolation
-/// program is format metadata and is stripped before this field-local policy
-/// runs; its placement and targets are validated by `Erc7730Ir`.
+/// mandatory terminal-kind and integer-width bytes are carried separately.
+/// The interpolation program is format metadata and is stripped before this
+/// field-local policy runs; its placement and targets are validated by
+/// `Erc7730Ir`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ParamMask(u32);
 
@@ -323,6 +366,104 @@ mod tests {
             FormatOp::Encrypted,
             TerminalKind::FixedBytes
         ));
+    }
+
+    #[test]
+    fn integer_word_canonicality_covers_every_byte_width() {
+        for width in 1u8..=32 {
+            let prefix_len = 32 - width as usize;
+
+            let zero = [0u8; 32];
+            assert!(integer_word_is_canonical(
+                TerminalKind::Unsigned,
+                width,
+                &zero
+            ));
+            assert!(integer_word_is_canonical(
+                TerminalKind::Signed,
+                width,
+                &zero
+            ));
+
+            let mut unsigned_max = [0u8; 32];
+            unsigned_max[prefix_len..].fill(0xff);
+            assert!(integer_word_is_canonical(
+                TerminalKind::Unsigned,
+                width,
+                &unsigned_max
+            ));
+
+            let mut signed_max = [0u8; 32];
+            signed_max[prefix_len] = 0x7f;
+            signed_max[prefix_len + 1..].fill(0xff);
+            assert!(integer_word_is_canonical(
+                TerminalKind::Signed,
+                width,
+                &signed_max
+            ));
+
+            let negative_one = [0xffu8; 32];
+            assert!(integer_word_is_canonical(
+                TerminalKind::Signed,
+                width,
+                &negative_one
+            ));
+
+            let mut signed_min = [0xffu8; 32];
+            signed_min[prefix_len] = 0x80;
+            signed_min[prefix_len + 1..].fill(0x00);
+            assert!(integer_word_is_canonical(
+                TerminalKind::Signed,
+                width,
+                &signed_min
+            ));
+
+            if width < 32 {
+                let mut dirty_unsigned = zero;
+                dirty_unsigned[prefix_len - 1] = 1;
+                assert!(!integer_word_is_canonical(
+                    TerminalKind::Unsigned,
+                    width,
+                    &dirty_unsigned
+                ));
+
+                let mut missing_sign_extension = zero;
+                missing_sign_extension[prefix_len] = 0x80;
+                assert!(!integer_word_is_canonical(
+                    TerminalKind::Signed,
+                    width,
+                    &missing_sign_extension
+                ));
+
+                let mut dirty_positive_extension = [0xffu8; 32];
+                dirty_positive_extension[prefix_len] = 0x7f;
+                assert!(!integer_word_is_canonical(
+                    TerminalKind::Signed,
+                    width,
+                    &dirty_positive_extension
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn integer_word_canonicality_is_fail_closed_and_preserves_full_width() {
+        let arbitrary = [
+            0x80, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b,
+            0x1c, 0x1d, 0x1e, 0x1f,
+        ];
+        for kind in [TerminalKind::Unsigned, TerminalKind::Signed] {
+            assert!(integer_word_is_canonical(kind, 32, &arbitrary));
+            for invalid_width in [0, 33, u8::MAX] {
+                assert!(!integer_word_is_canonical(kind, invalid_width, &arbitrary));
+            }
+        }
+        for kind in TerminalKind::ALL {
+            if !matches!(kind, TerminalKind::Unsigned | TerminalKind::Signed) {
+                assert!(!integer_word_is_canonical(kind, 32, &arbitrary));
+            }
+        }
     }
 
     #[test]

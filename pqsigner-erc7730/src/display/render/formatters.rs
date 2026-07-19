@@ -51,6 +51,7 @@ use crate::render::params::{
     nft_collection_path_is_current_slice, parse as parse_params, ParamSet, DATE_ENC_BLOCKHEIGHT,
     DATE_ENC_TIMESTAMP, DYNAMIC_KIND_BYTES, DYNAMIC_KIND_STRING,
 };
+use crate::render::policy::{integer_word_is_canonical, TerminalKind};
 use crate::render::RenderErr;
 
 use super::{Pages, RenderedFieldWitness};
@@ -177,6 +178,72 @@ pub(super) fn resolve_path<'a>(
         | PathOp::ArrayAll
         | PathOp::FollowOffset => Err(RenderErr::Reject("7730 path no root")),
     }
+}
+
+/// Enforce the authenticated Solidity integer width against one ABI word.
+///
+/// This is deliberately formatter-independent: `raw`, scaled amounts, enums,
+/// dates, and every future integer sink must reject the same dirty zero/sign
+/// extension instead of masking or truncating it. `ParamSet` parsing and the
+/// deep IR validator already enforce the tag relationship; the checks here are
+/// retained as a local fault-containment belt at the publication boundary.
+fn require_integer_word_canonical(params: &ParamSet<'_>, word: &[u8; 32]) -> Result<(), RenderErr> {
+    match params.terminal_kind {
+        Some(kind @ (TerminalKind::Unsigned | TerminalKind::Signed)) => {
+            let width = params
+                .integer_width_bytes
+                .ok_or(RenderErr::Reject("7730 integer width missing"))?;
+            if !integer_word_is_canonical(kind, width, word) {
+                return Err(RenderErr::Reject("7730 noncanonical integer"));
+            }
+        }
+        _ if params.integer_width_bytes.is_some() => {
+            return Err(RenderErr::Reject("7730 integer width on noninteger"));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Resolve one scalar field and apply the width check before a formatter can
+/// mutate the transcript buffer. Firmware-owned container integers are always
+/// authenticated as 32-byte values, so every container word is canonical.
+fn require_integer_path_canonical(
+    ir: &Erc7730Ir<'_>,
+    field: &FieldEntry<'_>,
+    body: &[u8],
+    params: &ParamSet<'_>,
+) -> Result<(), RenderErr> {
+    if !matches!(
+        params.terminal_kind,
+        Some(TerminalKind::Unsigned | TerminalKind::Signed)
+    ) {
+        return Ok(());
+    }
+    match resolve_path(ir, field.path_off, body)? {
+        Resolved::Slot32(word) => require_integer_word_canonical(params, word),
+        Resolved::Container(_) if params.integer_width_bytes == Some(32) => Ok(()),
+        Resolved::Container(_) => Err(RenderErr::Reject("7730 narrow container integer")),
+    }
+}
+
+/// EIP-712 top-level integer preflight. All member words, including hidden
+/// fields, are checked before the authenticated intent banner is buffered.
+/// Nested anchors carry no integer width; their elementary words are checked
+/// after hash binding by `render::nested::validate_nested_integer_words`.
+pub(crate) fn validate_eip712_integer_words(
+    ir: &Erc7730Ir<'_>,
+    format: &FormatHeader<'_>,
+    body: &[u8],
+) -> Result<(), RenderErr> {
+    for field_result in format.fields() {
+        let field = field_result.map_err(|_| RenderErr::Reject("7730 bad field"))?;
+        let params = parse_params(ir, field.param_off)?;
+        if params.nested_struct.is_none() {
+            require_integer_path_canonical(ir, &field, body, &params)?;
+        }
+    }
+    Ok(())
 }
 
 /// Read a container field value (u256-shaped) by its keccak-prefix
@@ -343,6 +410,7 @@ pub(super) fn dispatch(
     if field.path_off == 0 {
         return Err(RenderErr::Reject("7730 missing field path"));
     }
+    require_integer_path_canonical(ir, field, body, params)?;
     match formatter_route(op) {
         FormatterRoute::Raw => {
             render_raw(field, pages, ir, body, tx, params, device_signer).map(|()| None)
@@ -1519,8 +1587,14 @@ pub(crate) fn validate_contract_calldata_framing(
             let slot = sole_array_slot(ir, field.path_off)?;
             bind_sole_dynamic_slot(&mut dynamic_slot, slot)?;
             // Exact offset/head/end checks run even for `visible:never`.
-            let _ = resolve_array(&field, ir, full_body, format.static_head_words)?;
+            let (elems_start, count) =
+                resolve_array(&field, ir, full_body, format.static_head_words)?;
+            for index in 0..count {
+                let word = array_element_word(full_body, elems_start, index)?;
+                require_integer_word_canonical(&params, word)?;
+            }
         } else {
+            require_integer_path_canonical(ir, &field, full_body, &params)?;
             let (has_follow, ends_on_follow) = scan_path_ops(ir, field.path_off)?;
             if has_follow {
                 if !ends_on_follow {
@@ -1708,6 +1782,13 @@ pub(super) fn render_array(
     }
     let (elems_start, count) = resolve_array(field, ir, full_body, static_head_words)?;
     let fmt = FormatOp::try_from(field.format_op).map_err(|_| RenderErr::Reject("7730 arr fmt"))?;
+
+    // Canonical integer extension is independent of visibility and formatter.
+    // Inspect every element before the array header or token identity page.
+    for index in 0..count {
+        let word = array_element_word(full_body, elems_start, index)?;
+        require_integer_word_canonical(params, word)?;
+    }
 
     // A `tokenAmount` array (Lido `requestWithdrawals(uint256[] _amounts, …)`)
     // renders every element as an amount of the SAME token — the descriptor's
@@ -4893,6 +4974,55 @@ mod adversarial_renderer_regressions {
     #[test]
     fn scaled_exactness_amount_array_is_atomic_and_exact_array_accepts() {
         assert_array_exact_then_second_inexact(FormatOp::Amount, &ParamSet::default(), None, 3);
+    }
+
+    #[test]
+    fn narrow_integer_array_padding_is_checked_before_header_publication() {
+        let mut params = ParamSet::default();
+        params.terminal_kind = Some(TerminalKind::Unsigned);
+        params.integer_width_bytes = Some(1);
+
+        let mut one = [0u8; 32];
+        one[31] = 1;
+        let mut two = [0u8; 32];
+        two[31] = 2;
+        let canonical = two_element_array_body(one, two);
+        let mut canonical_pages = Pages::with_len(0);
+        render_array(
+            &field(FormatOp::Raw as u8, 1),
+            &mut canonical_pages,
+            &ir(&SOLE_ARRAY_POOL),
+            &canonical,
+            1,
+            &tx(),
+            None,
+            &NameResolver::new(),
+            &params,
+        )
+        .expect("canonical uint8 array renders every element");
+
+        let mut dirty_two = two;
+        dirty_two[0] = 1;
+        let dirty = two_element_array_body(one, dirty_two);
+        let mut pages = sentinel_pages();
+        let before_len = pages.len;
+        let before_buf = pages.buf;
+        assert_eq!(
+            render_array(
+                &field(FormatOp::Raw as u8, 1),
+                &mut pages,
+                &ir(&SOLE_ARRAY_POOL),
+                &dirty,
+                1,
+                &tx(),
+                None,
+                &NameResolver::new(),
+                &params,
+            ),
+            Err(RenderErr::Reject("7730 noncanonical integer"))
+        );
+        assert_eq!(pages.len, before_len);
+        assert_eq!(pages.buf, before_buf);
     }
 
     #[test]

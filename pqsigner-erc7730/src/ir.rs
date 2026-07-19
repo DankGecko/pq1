@@ -15,7 +15,7 @@
 //!
 //! ```text
 //!   off  size  field
-//!    0    1   schema_ver         (0x04 — see SCHEMA_VER)
+//!    0    1   schema_ver         (0x05 — see SCHEMA_VER)
 //!    1    1   context_kind       (CTX_CONTRACT | CTX_EIP712)
 //!    2    8   chain_id (u64 BE)  (for EIP-712: domain.chainId)
 //!   10   20   contract           (for EIP-712: domain.verifyingContract)
@@ -66,8 +66,13 @@ use core::convert::TryFrom;
 /// independently enforce the same exhaustive formatter/type/parameter matrix
 /// as dbgen. Firmware + DB ship together under one pinned Merkle root, so old
 /// v3 leaves hard-refuse instead of being mixed-interpreted.
+/// Bumped `0x04 -> 0x05` to authenticate the original ABI integer width on
+/// every signed/unsigned terminal. Firmware can now reject non-canonical zero
+/// or sign extension instead of silently displaying a dirty narrow word as a
+/// different full-width integer. Old v4 leaves hard-refuse because omitting
+/// this width changes the accepted meaning of the same 32-byte word.
 /// See `docs/security/vulns/VULN-erc7730-walker-slot-confusion.md`.
-pub const SCHEMA_VER: u8 = 0x04;
+pub const SCHEMA_VER: u8 = 0x05;
 pub const HEADER_LEN: usize = 134;
 
 /// Upper bound on a nested EIP-712 struct's own member count (the number
@@ -80,7 +85,8 @@ pub const MAX_NESTED_MEMBERS: usize = 32;
 /// (`T[]`, v2). Bounds the device's page budget — each element renders its
 /// visible sub-fields plus a divider, and the whole array must fit inside
 /// `MAX_PAGES` after the banner/chain/confirm pages — and the collect-verify
-/// buffer. `elem_count > MAX_NESTED_ARRAY` (or `== 0`) declines. Schema v4.
+/// buffer. `elem_count > MAX_NESTED_ARRAY` (or `== 0`) declines. Introduced by
+/// schema v4 and retained unchanged by schema v5.
 pub const MAX_NESTED_ARRAY: usize = 6;
 
 pub const CTX_CONTRACT: u8 = 0x01;
@@ -540,8 +546,9 @@ impl<'a> Erc7730Ir<'a> {
                     validate_path_program(path)?;
                 }
                 if field.param_off == 0 {
-                    // Schema v4 requires the authenticated terminal-kind TLV
-                    // even when a formatter has no other parameters.
+                    // Schema v5 requires the authenticated terminal-kind TLV
+                    // even when a formatter has no other parameters. Integer
+                    // kinds additionally require their authenticated width.
                     return Err(IrError::BadField);
                 }
                 validate_pool_entry(self.pool, field.param_off)?;
@@ -589,12 +596,8 @@ impl<'a> Erc7730Ir<'a> {
                             {
                                 return Err(IrError::BadField);
                             }
-                            crate::render::policy::validate_field(
-                                op,
-                                kind,
-                                params.policy_mask(),
-                            )
-                            .map_err(|_| IrError::BadField)?;
+                            crate::render::policy::validate_field(op, kind, params.policy_mask())
+                                .map_err(|_| IrError::BadField)?;
                             let consumed = crate::render::nested::validate_nested_ir(
                                 self,
                                 payload,
@@ -711,7 +714,7 @@ impl<'a> Erc7730Ir<'a> {
 
 /// Independently reconcile an authenticated terminal kind with the structural
 /// path shape available to the device.  The semantic kind itself is supplied
-/// by schema v4; this belt prevents a dynamic/constant/container path from
+/// by schema v5; this belt prevents a dynamic/constant/container path from
 /// contradicting that authenticated claim.
 fn validate_terminal_path_shape(
     ir: &Erc7730Ir<'_>,
@@ -754,8 +757,7 @@ fn validate_terminal_path_shape(
             // No current formatter admits arbitrary dynamic bytes, but retain
             // the structural check so a future matrix extension cannot skip it.
             if !ends_dynamic
-                || params.dynamic_kind
-                    != Some(crate::render::params::DYNAMIC_KIND_BYTES)
+                || params.dynamic_kind != Some(crate::render::params::DYNAMIC_KIND_BYTES)
             {
                 return Err(IrError::BadField);
             }
@@ -778,7 +780,9 @@ fn validate_terminal_path_shape(
             }
             _ => return Err(IrError::BadField),
         };
-        if kind != expected {
+        if kind != expected
+            || expected == TerminalKind::Unsigned && params.integer_width_bytes != Some(32)
+        {
             return Err(IrError::BadField);
         }
     }
@@ -866,7 +870,7 @@ fn validate_interpolated_scalar_path(prog: &[u8]) -> Result<(), IrError> {
 ///   field_count          u8       (≤ MAX_FIELDS_PER_FORMAT)
 ///   intent_len           u8       (≤ 254, printable ASCII)
 ///   static_head_words    u16 BE   (ABI static head, in 32-byte words)
-///   nested_descent_count u8       (schema v4 — E1 reconciliation pin)
+///   nested_descent_count u8       (introduced in v4 — E1 reconciliation pin)
 ///   intent               [u8; intent_len]
 ///   type_hash            [u8; 32] (EIP-712 context ONLY — see below)
 ///   field                [u8; ...]*  (field_count entries — see FieldEntry)
@@ -902,7 +906,7 @@ pub struct FormatHeader<'a> {
     /// regression tripwire, not a tautology: a future edit that makes descent
     /// conditional drops the runtime consume-count below this pin → decline.
     /// `0` for every contract-context format and every non-nested EIP-712
-    /// format. Schema v4.
+    /// format. Introduced in schema v4 and retained by schema v5.
     pub nested_descent_count: u8,
     /// Trimmed printable ASCII intent string ("Sign", "Wrap", …).
     pub intent: &'a [u8],
@@ -1075,7 +1079,7 @@ impl<'a> FieldIter<'a> {
     /// FieldEntry wire format (`format_op | label_len | label | path_off |
     /// param_off`), so the nested-struct renderer reuses this exact parser —
     /// including its label-ASCII + bounds checks — instead of re-implementing
-    /// it. Schema v4.
+    /// it. Introduced in schema v4 and retained by schema v5.
     pub fn from_buf(buf: &'a [u8], count: u8) -> Self {
         FieldIter {
             buf,
@@ -1206,8 +1210,8 @@ mod tests {
         out
     }
 
-    /// Root-structured FieldIdx(0) plus the schema-v4 mandatory authenticated
-    /// unsigned terminal-kind blob at offset 6.
+    /// Root-structured FieldIdx(0) plus the schema-v5 mandatory authenticated
+    /// unsigned terminal-kind and full-width integer metadata at offset 6.
     fn scalar_pool() -> std::vec::Vec<u8> {
         std::vec![
             0,
@@ -1216,10 +1220,31 @@ mod tests {
             PathOp::FieldIdx as u8,
             0,
             0,
-            3,
+            6,
             crate::render::params::PARAM_TERMINAL_KIND,
             1,
             crate::render::policy::TerminalKind::Unsigned as u8,
+            crate::render::params::PARAM_INTEGER_WIDTH,
+            1,
+            32,
+        ]
+    }
+
+    fn unsigned_container_pool(field: u16, width_bytes: u8) -> std::vec::Vec<u8> {
+        std::vec![
+            0,
+            4,
+            PathOp::RootContainer as u8,
+            PathOp::FieldIdx as u8,
+            (field >> 8) as u8,
+            field as u8,
+            6,
+            crate::render::params::PARAM_TERMINAL_KIND,
+            1,
+            crate::render::policy::TerminalKind::Unsigned as u8,
+            crate::render::params::PARAM_INTEGER_WIDTH,
+            1,
+            width_bytes,
         ]
     }
 
@@ -1235,7 +1260,7 @@ mod tests {
             0,
             0,
         ];
-        let body_len = 2 + program.len() + extra_param_tlvs.len() + 3;
+        let body_len = 2 + program.len() + extra_param_tlvs.len() + 6;
         pool.push(body_len as u8);
         pool.push(crate::render::params::PARAM_INTERPOLATED_INTENT);
         pool.push(program.len() as u8);
@@ -1245,6 +1270,9 @@ mod tests {
             crate::render::params::PARAM_TERMINAL_KIND,
             1,
             crate::render::policy::TerminalKind::Unsigned as u8,
+            crate::render::params::PARAM_INTEGER_WIDTH,
+            1,
+            32,
         ]);
         pool
     }
@@ -1297,6 +1325,40 @@ mod tests {
         formats.extend_from_slice(&one_field_format([5, 6, 7, 8], 0xFF));
         let bytes = build_ir(&pool, &formats);
         assert_eq!(Erc7730Ir::parse(&bytes), Err(IrError::BadField));
+    }
+
+    #[test]
+    fn deep_validation_accepts_authenticated_narrow_structured_width() {
+        let mut pool = scalar_pool();
+        *pool.last_mut().unwrap() = 1;
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&one_field_format([1, 2, 3, 4], FormatOp::Raw as u8));
+        assert!(Erc7730Ir::parse(&build_ir(&pool, &formats)).is_ok());
+    }
+
+    #[test]
+    fn deep_validation_requires_full_width_for_unsigned_container_fields() {
+        for field in [
+            crate::abi::container_field::VALUE,
+            crate::abi::container_field::CHAIN_ID,
+            crate::abi::container_field::NONCE,
+        ] {
+            let mut formats = std::vec![1];
+            formats.extend_from_slice(&one_field_format([1, 2, 3, 4], FormatOp::Raw as u8));
+
+            let narrow = unsigned_container_pool(field, 31);
+            assert_eq!(
+                Erc7730Ir::parse(&build_ir(&narrow, &formats)),
+                Err(IrError::BadField),
+                "accepted narrow width for container field {field}"
+            );
+
+            let full = unsigned_container_pool(field, 32);
+            assert!(
+                Erc7730Ir::parse(&build_ir(&full, &formats)).is_ok(),
+                "rejected full width for container field {field}"
+            );
+        }
     }
 
     #[test]
@@ -1377,10 +1439,13 @@ mod tests {
         let mut pool = interpolation_pool(1, &[]);
         let terminal_only_off = pool.len() as u16;
         pool.extend_from_slice(&[
-            3,
+            6,
             crate::render::params::PARAM_TERMINAL_KIND,
             1,
             crate::render::policy::TerminalKind::Unsigned as u8,
+            crate::render::params::PARAM_INTEGER_WIDTH,
+            1,
+            32,
         ]);
         let mut format = std::vec::Vec::new();
         format.extend_from_slice(&[1, 2, 3, 4]);
@@ -1457,10 +1522,12 @@ mod tests {
     }
 
     #[test]
-    fn schema_v3_is_rejected_after_terminal_kind_migration() {
+    fn prior_schemas_are_rejected_after_integer_width_migration() {
         let mut buf = minimal_header();
-        buf[0] = 0x03;
-        assert_eq!(Erc7730Ir::parse(&buf), Err(IrError::SchemaVersion));
+        for old_schema in [0x03, 0x04] {
+            buf[0] = old_schema;
+            assert_eq!(Erc7730Ir::parse(&buf), Err(IrError::SchemaVersion));
+        }
     }
 
     #[test]
