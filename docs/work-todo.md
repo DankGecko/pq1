@@ -4073,6 +4073,28 @@ review report.
   diff + runbook sub-slice only; signed-release-manifest binding, ERC-8176
   production provenance, and the remaining explicit §2.3 gates keep the parent
   item unchecked.
+  **Second-slice Phase-D merge closure completed 2026-07-19:** frozen technical
+  target `4b88038735ca57c4e6a82c6bbdf74fad401d958b`, tree
+  `52b63b5479ae315ea28adeeb61f9f852f03ce4f6`, is retained at
+  `review/erc7730-diff-registry-20260719-v1`. Dbgen 204 unit plus integration
+  suites, `pqsigner-erc7730` 242, xtask 60+10, focused clippy/rustfmt, manifest
+  JSON, descriptor drift, and diff checks are green. A pinned self-diff is
+  empty; two runs against adjacent upstream commit `56238d22` produced the
+  identical report SHA-256
+  `f6fb8abc8fe64a93e6a81e224664da0e4de626cef96f2d97c5f8a70fafaca9d1`,
+  while a wrong base revision fails closed. Opus 4.8 returned **GO** (session
+  `14a3fa3f-7eb8-4c68-a293-4efd8f442fee`, raw `opus.json`) and Kimi K3 returned
+  **GO** (session `session_f8c57574-3b08-4113-b949-eda2f17d87c0`, raw `kimi.md`)
+  under `/tmp/pqsigner-erc7730-diff-review-20260719-4b880387/`. Opus's sole
+  medium observation was not reproducible: full-replacement paths are forbidden
+  from targeting the excluded `tests` / `*.tests.*` namespace, and a genuine
+  rename is represented as an old-path removal plus an excluded-file addition;
+  Kimi independently found no blocker in that classification. GPT-5.6 SOL
+  inspected the frozen source but reached the fixed eight-minute cap without a
+  verdict or finding (thread `019f77e7-1e3b-7123-b2e2-5573e99013ef`, raw
+  `gpt.events.jsonl`); no retry or substitute was launched. This grants merge
+  evidence only, not production, shipment, forced-blind, ERC-8176,
+  release-signing, or firmware authority.
   **First-slice Phase-D merge closure completed 2026-07-19:** frozen technical
   target `70e9864b1c6e1bdcb5756fb2d8ca20fb8c018194`, tree
   `cc02c58f3b69477e375302ecd578f6225eb1a352`, is retained at
