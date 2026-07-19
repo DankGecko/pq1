@@ -25,6 +25,7 @@
 
 use std::path::PathBuf;
 
+use pqsigner_erc7730::binding::{cross_check_contract, BindingError};
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, VerifiedDescriptor};
 use pqsigner_erc7730::display::primitives::write_addr_full;
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir};
@@ -2764,15 +2765,33 @@ fn positive_serenita_deposit_binds_native_value_receiver_and_complete_referrer()
 
 fn assert_stakewise_claim_rendering(
     source_name: &str,
+    chain_id: u64,
     calldata: &[u8],
     signer: [u8; 20],
     expected_date: &str,
     expected_time: &str,
 ) {
     let res = build_registry();
-    let entry = find_leaf(res, source_name, 1);
+    let entry = find_leaf(res, source_name, chain_id);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify StakeWise leaf");
+    assert_eq!(
+        cross_check_contract(&verified.ir, chain_id, &entry.contract),
+        Ok(())
+    );
+    let wrong_chain = if chain_id == 1 { 560_048 } else { 1 };
+    assert_eq!(
+        cross_check_contract(&verified.ir, wrong_chain, &entry.contract),
+        Err(BindingError::ChainIdMismatch),
+        "{source_name} evidence must not authorize the same proxy on another chain"
+    );
+    let mut wrong_contract = entry.contract;
+    wrong_contract[19] ^= 1;
+    assert_eq!(
+        cross_check_contract(&verified.ir, chain_id, &wrong_contract),
+        Err(BindingError::ContractMismatch),
+        "{source_name} evidence must not authorize another proxy"
+    );
     assert_selector_matches(
         &verified.ir,
         calldata,
@@ -2784,7 +2803,7 @@ fn assert_stakewise_claim_rendering(
         calldata[68..100].try_into().expect("exit queue index word"),
     ];
 
-    let tx = envelope(1, entry.contract);
+    let tx = envelope(chain_id, entry.contract);
     let resolver = NameResolver::new();
     assert!(matches!(
         render_erc7730_pages(&tx, calldata, &verified, None, &resolver),
@@ -2884,6 +2903,7 @@ fn positive_stakewise_claims_bind_sender_ticket_timestamp_and_queue_index() {
     .expect("valid Serenita fixture calldata");
     assert_stakewise_claim_rendering(
         "calldata-EthVault.json",
+        1,
         &serenita_calldata,
         [0x66; 20],
         "2026-02-27",
@@ -2898,6 +2918,15 @@ fn positive_stakewise_claims_bind_sender_ticket_timestamp_and_queue_index() {
     let p2p_calldata = calldata_static("claimExitedAssets(uint256,uint256,uint256)", &p2p_words);
     assert_stakewise_claim_rendering(
         "calldata-NativeTokenVault.json",
+        1,
+        &p2p_calldata,
+        [0x77; 20],
+        "2025-01-01",
+        "00:00:00 UTC",
+    );
+    assert_stakewise_claim_rendering(
+        "calldata-NativeTokenVault.json",
+        560_048,
         &p2p_calldata,
         [0x77; 20],
         "2025-01-01",

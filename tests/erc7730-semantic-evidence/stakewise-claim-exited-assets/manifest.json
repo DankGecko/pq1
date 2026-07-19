@@ -1,0 +1,292 @@
+{
+  "schema_version": 1,
+  "scope": "StakeWise claimExitedAssets semantic evidence for the three PQ1-admitted P2P and Serenita vault proxies",
+  "captured_at_utc": "2026-07-19T13:45:00Z",
+  "selector": "0x8697d2c2",
+  "canonical_signature": "claimExitedAssets(uint256,uint256,uint256)",
+  "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+  "implementation_address": "0x927a83c679a5e1a6435d6bfaef7f20d4db23e2cc",
+  "blocks": [
+    {
+      "chain_id": 1,
+      "number": 25566776,
+      "number_hex": "0x1861e38",
+      "hash": "0x926e7fa2bf7071dd1eb19c14284f27a7219d3bfb29240d4064daa8417beb42a4",
+      "state_root": "0x708b68dd3da2ea4d137075bf8edebc26ba66b90362b38c349f3f8bed5628083d",
+      "timestamp": 1784464343,
+      "timestamp_utc": "2026-07-19T12:32:23Z",
+      "rpc_endpoints": [
+        "https://eth.drpc.org",
+        "https://rpc.flashbots.net"
+      ]
+    },
+    {
+      "chain_id": 560048,
+      "number": 3245600,
+      "number_hex": "0x318620",
+      "hash": "0x7558a3b331a8444d2a80a91f5a429ffab2dfd37288de2e48f91e71c851fbf7a6",
+      "state_root": "0x6a7af2392fa529d27ae19015f2d1c395ac23e5cfcd7fc8cc1389fe4f764663bb",
+      "timestamp": 1784467224,
+      "timestamp_utc": "2026-07-19T13:20:24Z",
+      "rpc_endpoints": [
+        "https://rpc.hoodi.ethpandaops.io",
+        "https://ethereum-hoodi-rpc.publicnode.com"
+      ]
+    }
+  ],
+  "runtime_artifacts": {
+    "proxy": {
+      "file": "runtime/ERC1967Proxy.hex",
+      "bytes": 130,
+      "keccak256": "0x95341690861a566af190df6392bba32f9f9645191a89ddd9252ffa8c061b624b"
+    },
+    "implementation_mainnet": {
+      "file": "runtime/EthVault.mainnet.hex",
+      "bytes": 19550,
+      "keccak256": "0xe6381554eb02cdb8fa2814920f1af952ed1580d43877f357045910fbad0ea20f"
+    },
+    "implementation_hoodi": {
+      "file": "runtime/EthVault.hoodi.hex",
+      "bytes": 19550,
+      "keccak256": "0x7872981c90d4d30f1626784d3a64de01c228a2c75c960cac9743d634ab9219da"
+    }
+  },
+  "deployments": [
+    {
+      "descriptor": "secure/data/erc7730/curations/files/registry/p2p/calldata-NativeTokenVault.json",
+      "chain_id": 1,
+      "address": "0xb72668d6ff7a0e318f83097a754c6aed0f8af034",
+      "implementation_slot_value": "0x000000000000000000000000927a83c679a5e1a6435d6bfaef7f20d4db23e2cc",
+      "implementation_runtime": "implementation_mainnet"
+    },
+    {
+      "descriptor": "secure/data/erc7730/curations/files/registry/serenita/calldata-EthVault.json",
+      "chain_id": 1,
+      "address": "0xb36fc5e542cb4fc562a624912f55da2758998113",
+      "implementation_slot_value": "0x000000000000000000000000927a83c679a5e1a6435d6bfaef7f20d4db23e2cc",
+      "implementation_runtime": "implementation_mainnet"
+    },
+    {
+      "descriptor": "secure/data/erc7730/curations/files/registry/p2p/calldata-NativeTokenVault.json",
+      "chain_id": 560048,
+      "address": "0x8f73c1ce7fe0e17f45b317b33620924a94256fbb",
+      "implementation_slot_value": "0x000000000000000000000000927a83c679a5e1a6435d6bfaef7f20d4db23e2cc",
+      "implementation_runtime": "implementation_hoodi"
+    }
+  ],
+  "verified_source": {
+    "explorer_url": "https://eth.blockscout.com/api/v2/smart-contracts/0x927a83c679a5e1a6435d6bfaef7f20d4db23e2cc",
+    "explorer_status": "is_verified=true; is_fully_verified=false",
+    "explorer_deployed_runtime_matches_mainnet_artifact": true,
+    "compiler": "v0.8.26+commit.8a97fa7a",
+    "evm_version": "cancun",
+    "optimizer_enabled": true,
+    "optimizer_runs": 200,
+    "upstream_repository": "https://github.com/stakewise/v3-core",
+    "upstream_release": "v4.0.1",
+    "upstream_commit": "c511cd912cb881f60cf2a32d6c5d5f533e5d04b5",
+    "upstream_tree": "6185defc0ea2c9d5e72f02bd3e1411e13684b7fc",
+    "openzeppelin_submodule_commit": "60b305a8f3ff0c7688f02ac470417b6bbf1c4d27",
+    "archived_files_match_verified_explorer_sources": true,
+    "files": [
+      {
+        "upstream_path": "contracts/vaults/ethereum/EthVault.sol",
+        "archive_file": "source/EthVault.sol",
+        "sha256": "897ec396a4947419cbbe39cbb77ea64728736f81ecf476c526598c604a2f4f77"
+      },
+      {
+        "upstream_path": "contracts/vaults/modules/VaultEnterExit.sol",
+        "archive_file": "source/VaultEnterExit.sol",
+        "sha256": "e06deda88b9f1ae963112deb3d9bd31d2d005b75cc5a2a5b71ec2ea093cedf8d"
+      },
+      {
+        "upstream_path": "contracts/interfaces/IVaultEnterExit.sol",
+        "archive_file": "source/IVaultEnterExit.sol",
+        "sha256": "dacbb3d4573bb6838149c50c832cde4fc91d8c1deac11d43e52c3e7f22156af4"
+      }
+    ]
+  },
+  "abi": {
+    "archive_file": "abi/claimExitedAssets.abi.json",
+    "archive_file_sha256": "bfbfec093575d85e7155a9bc011b35cdcbbf467e0eb4c80a85b8c70958071b3a",
+    "full_verified_abi_canonical_sha256": "64e045dc2604788d272e8f38624ff1496b9e49327f6af1ce7fdddd9a7119f963"
+  },
+  "claim_semantics": {
+    "request_lookup": "calculateExitedAssets(msg.sender, positionTicket, timestamp, exitQueueIndex)",
+    "request_delete": "delete _exitRequests[keccak256(abi.encode(msg.sender, timestamp, positionTicket))]",
+    "residual_request_key": "_exitRequests[keccak256(abi.encode(msg.sender, timestamp, newPositionTicket))]",
+    "transfer_recipient": "_transferVaultAssets(msg.sender, exitedAssets)",
+    "event_recipient": "ExitedAssetsClaimed(msg.sender, positionTicket, newPositionTicket, exitedAssets)",
+    "descriptor_receiver_path": "@.from"
+  },
+  "cross_chain_runtime": {
+    "rule": "After replacing only the declared chain/address immutable ranges, the mainnet and Hoodi runtime bytecode must be identical.",
+    "variant_ranges": [
+      {
+        "offset": 1452,
+        "length": 20,
+        "label": "osTokenVaultController",
+        "mainnet_hex": "2a261e60fb14586b474c208b1b7ac6d0f5000306",
+        "hoodi_hex": "140fc69eabd77fff91d9852b612b2323256f7ac1"
+      },
+      {
+        "offset": 2252,
+        "length": 20,
+        "label": "osTokenVaultController",
+        "mainnet_hex": "2a261e60fb14586b474c208b1b7ac6d0f5000306",
+        "hoodi_hex": "140fc69eabd77fff91d9852b612b2323256f7ac1"
+      },
+      {
+        "offset": 2599,
+        "length": 20,
+        "label": "osTokenConfig",
+        "mainnet_hex": "287d1e2a8de183a8bf8f2b09fa1340fbd766eb59",
+        "hoodi_hex": "5b817621ebe00622b9a71b53c942b392751c8197"
+      },
+      {
+        "offset": 3803,
+        "length": 20,
+        "label": "osTokenConfig",
+        "mainnet_hex": "287d1e2a8de183a8bf8f2b09fa1340fbd766eb59",
+        "hoodi_hex": "5b817621ebe00622b9a71b53c942b392751c8197"
+      },
+      {
+        "offset": 4702,
+        "length": 20,
+        "label": "vaultsRegistry",
+        "mainnet_hex": "3a0008a588772446f6e656133c2d5029cc4fc20e",
+        "hoodi_hex": "f16fea93d3253a401c3f73b0de890c6586740b25"
+      },
+      {
+        "offset": 6018,
+        "length": 20,
+        "label": "keeper",
+        "mainnet_hex": "6b5815467da09daa7dc83db21c9239d98bb487b5",
+        "hoodi_hex": "a7d1ac9d6f32b404c75626874ba56f7654c1dc0f"
+      },
+      {
+        "offset": 6658,
+        "length": 20,
+        "label": "keeper",
+        "mainnet_hex": "6b5815467da09daa7dc83db21c9239d98bb487b5",
+        "hoodi_hex": "a7d1ac9d6f32b404c75626874ba56f7654c1dc0f"
+      },
+      {
+        "offset": 7699,
+        "length": 20,
+        "label": "osTokenVaultEscrow",
+        "mainnet_hex": "09e84205df7c68907e619d07afd90143c5763605",
+        "hoodi_hex": "dc1347cc04d4a8945b98a09c3c5585286bba5c2b"
+      },
+      {
+        "offset": 9419,
+        "length": 20,
+        "label": "sharedMevEscrow",
+        "mainnet_hex": "48319f97e5da1233c21c48b80097c0fb7a20ff86",
+        "hoodi_hex": "51fd45baefb12f54766b5c4d639b360ea50063bd"
+      },
+      {
+        "offset": 11249,
+        "length": 20,
+        "label": "osTokenVaultController",
+        "mainnet_hex": "2a261e60fb14586b474c208b1b7ac6d0f5000306",
+        "hoodi_hex": "140fc69eabd77fff91d9852b612b2323256f7ac1"
+      },
+      {
+        "offset": 12082,
+        "length": 20,
+        "label": "keeper",
+        "mainnet_hex": "6b5815467da09daa7dc83db21c9239d98bb487b5",
+        "hoodi_hex": "a7d1ac9d6f32b404c75626874ba56f7654c1dc0f"
+      },
+      {
+        "offset": 12173,
+        "length": 20,
+        "label": "sharedMevEscrow",
+        "mainnet_hex": "48319f97e5da1233c21c48b80097c0fb7a20ff86",
+        "hoodi_hex": "51fd45baefb12f54766b5c4d639b360ea50063bd"
+      },
+      {
+        "offset": 13642,
+        "length": 20,
+        "label": "osTokenVaultController",
+        "mainnet_hex": "2a261e60fb14586b474c208b1b7ac6d0f5000306",
+        "hoodi_hex": "140fc69eabd77fff91d9852b612b2323256f7ac1"
+      },
+      {
+        "offset": 14007,
+        "length": 20,
+        "label": "osTokenVaultController",
+        "mainnet_hex": "2a261e60fb14586b474c208b1b7ac6d0f5000306",
+        "hoodi_hex": "140fc69eabd77fff91d9852b612b2323256f7ac1"
+      },
+      {
+        "offset": 14156,
+        "length": 20,
+        "label": "osTokenVaultController",
+        "mainnet_hex": "2a261e60fb14586b474c208b1b7ac6d0f5000306",
+        "hoodi_hex": "140fc69eabd77fff91d9852b612b2323256f7ac1"
+      },
+      {
+        "offset": 15419,
+        "length": 32,
+        "label": "chainId",
+        "mainnet_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+        "hoodi_hex": "0000000000000000000000000000000000000000000000000000000000088bb0"
+      },
+      {
+        "offset": 15756,
+        "length": 20,
+        "label": "keeper",
+        "mainnet_hex": "6b5815467da09daa7dc83db21c9239d98bb487b5",
+        "hoodi_hex": "a7d1ac9d6f32b404c75626874ba56f7654c1dc0f"
+      },
+      {
+        "offset": 15958,
+        "length": 20,
+        "label": "keeper",
+        "mainnet_hex": "6b5815467da09daa7dc83db21c9239d98bb487b5",
+        "hoodi_hex": "a7d1ac9d6f32b404c75626874ba56f7654c1dc0f"
+      },
+      {
+        "offset": 17536,
+        "length": 20,
+        "label": "osTokenConfig",
+        "mainnet_hex": "287d1e2a8de183a8bf8f2b09fa1340fbd766eb59",
+        "hoodi_hex": "5b817621ebe00622b9a71b53c942b392751c8197"
+      },
+      {
+        "offset": 17664,
+        "length": 20,
+        "label": "osTokenVaultController",
+        "mainnet_hex": "2a261e60fb14586b474c208b1b7ac6d0f5000306",
+        "hoodi_hex": "140fc69eabd77fff91d9852b612b2323256f7ac1"
+      },
+      {
+        "offset": 17940,
+        "length": 20,
+        "label": "depositDataRegistry",
+        "mainnet_hex": "75ab6ddce07556639333d3df1eaa684f5735223e",
+        "hoodi_hex": "93a3f880e07b27daca6ef2d3c23e77dbd6294487"
+      },
+      {
+        "offset": 17996,
+        "length": 20,
+        "label": "depositDataRegistry",
+        "mainnet_hex": "75ab6ddce07556639333d3df1eaa684f5735223e",
+        "hoodi_hex": "93a3f880e07b27daca6ef2d3c23e77dbd6294487"
+      }
+    ]
+  },
+  "metadata_scope": {
+    "token_metadata": "not applicable: claimExitedAssets has no tokenPath or trusted token metadata",
+    "receiver_name": "the descriptor binds the signed @.from address; optional local or ENS resolution cannot change the bound address",
+    "remaining_issue_scope": "broader protocol owner/name reconciliation for other accepted descriptors remains open in issue #378"
+  },
+  "residuals": [
+    "This is a fixed-block receipt; the EIP-1967 proxies can be upgraded after the pinned blocks.",
+    "The mainnet explorer source is verified but Blockscout reports is_fully_verified=false.",
+    "Hoodi source is established by exact equality to the mainnet instruction stream outside the pinned chain/address immutable ranges, not by a separate explorer verification.",
+    "This evidence grants no live-monitoring, production-shipment, fallback, or blind-signing authority."
+  ]
+}
