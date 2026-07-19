@@ -37,7 +37,7 @@ const FIXTURE_RECEIPT_HEX: &str =
 // Intentional 2026-07-18 schema-v4 rotation: every field now authenticates its
 // terminal kind and the compiler/device share one exhaustive formatter policy.
 // The upstream fixture bytes remain test-only and outside the catalogue.
-const PROD_ROOT_HEX: &str = "0074f39ed119ae4ed07a5d520b080f211033417bc66577a4fe7e82196df9c1ec";
+const PROD_ROOT_HEX: &str = "3fe9fa1fd69c6fc3134922ac8f8ecc538b810f83928007952cba55a570377c91";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1085,10 +1085,10 @@ fn upstream_fixture_corpus_is_exact_test_only_and_honestly_inventoried() {
                 .to_path_buf()
         })
         .collect();
-    assert_eq!(accepted.len(), 228);
-    assert_eq!(accepted.intersection(&tested_descriptors).count(), 143);
+    assert_eq!(accepted.len(), 230);
+    assert_eq!(accepted.intersection(&tested_descriptors).count(), 145);
     assert_eq!(accepted.difference(&tested_descriptors).count(), 85);
-    assert_eq!(tested_descriptors.difference(&accepted).count(), 129);
+    assert_eq!(tested_descriptors.difference(&accepted).count(), 127);
 }
 
 fn synth_bundle(blob: &[u8], ir_bytes: &[u8], leaf_index: usize) -> Vec<u8> {

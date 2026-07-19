@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 777688,
-    "sha256": "b068d3d337e3e21fb8e2111bc8abfe1371a036e218a70c0a6d4a84861591cdb1"
+    "bytes": 777762,
+    "sha256": "2a8be54366c0a59f568c1ff076f1a07800e0fcc0d1059d1eb72f8d45f24ea241"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -71,7 +71,7 @@
     },
     {
       "path": "xtask/src/erc7730_curation.rs",
-      "sha256": "a1f9b2a2821eeaead02bf9ae4b0d83d215c88678b259b9a21f3d451406d36c04"
+      "sha256": "b4c37a3e38a5827806f0b9e8e6e301321cf6016e51b07c451a40e166ccf58f84"
     },
     {
       "path": "xtask/src/erc7730_diff.rs",
@@ -87,8 +87,8 @@
       "path": "registry/aave/calldata-WrappedTokenGatewayV3.json",
       "upstream_bytes": 5491,
       "upstream_sha256": "c8951b348a03b33046bdbdf4460bb13b2afc9ec4e5e7fde81ba18fc71389eb5e",
-      "replacement_bytes": 5563,
-      "replacement_sha256": "6dcec09f2c05c34fd0e135fb672264c8e86c11ae5d197a50de39bf18e82b3028"
+      "replacement_bytes": 5599,
+      "replacement_sha256": "219ff840695198318ef79d47179d3a1aae3df276acf3c77afc6c79b1723343fb"
     },
     {
       "path": "registry/aave/calldata-lpv3.json",
@@ -103,6 +103,20 @@
       "upstream_sha256": "9f6c51f398c96f886970f2339ba7c05a4774af2d8db532d40533b7fa10e7feb2",
       "replacement_bytes": 2226,
       "replacement_sha256": "99ee45490b250eb53acac5184c337076a5d22761c07c8bcc72dc70ac81fddb64"
+    },
+    {
+      "path": "registry/lido/calldata-stETH.json",
+      "upstream_bytes": 2224,
+      "upstream_sha256": "8ad18b90294c6facc208c6c27de85ea21642ed22a9d743d238326563d0cf0604",
+      "replacement_bytes": 2242,
+      "replacement_sha256": "5a7e8da93f5865ad00d77e3d0b451c864cd6b497f0e9dc25f16c19691da32615"
+    },
+    {
+      "path": "registry/lido/calldata-wstETH-referral-staker.json",
+      "upstream_bytes": 703,
+      "upstream_sha256": "a55a4e458d67c20636bb8ea0dc1509b4bc958cc6a1571a7e268ff0523d9e1176",
+      "replacement_bytes": 721,
+      "replacement_sha256": "0567a571ec025cfc04d10b8c5bd3ab1f74090365254f92ed6a79ff4af855a3cd"
     },
     {
       "path": "registry/p2p/calldata-P2pOrgUnlimitedEthDepositor.json",
@@ -143,8 +157,8 @@
       "path": "registry/uniswap/calldata-UniswapV3Router02.json",
       "upstream_bytes": 6039,
       "upstream_sha256": "f2ced0c2ed44a7132a987365bb4f0aedd4d21091decc4aad3d327b7cb400193d",
-      "replacement_bytes": 6261,
-      "replacement_sha256": "0c894a7bc69d1879e2126172783e75e19bd367c7e1e139a9c5425ae2199522de"
+      "replacement_bytes": 6263,
+      "replacement_sha256": "953f834588c45827f8f36b3716a0fa0a37159d2e1bc51c17553ac3544ea9b417"
     },
     {
       "path": "registry/uniswap/eip712-UniswapX-DutchOrder.json",

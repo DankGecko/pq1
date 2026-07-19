@@ -166,8 +166,8 @@ fn registry_aave_v3_basic_lending_covers_every_unique_deployment() {
 
     assert_eq!(
         result.entries.len(),
-        428,
-        "Aave curation must not add leaves"
+        430,
+        "the bounded DeFi curation phase must add exactly two catalogue leaves"
     );
     assert_eq!(result.known_call_count, 4_542);
     assert_eq!(
@@ -180,6 +180,161 @@ fn registry_aave_v3_basic_lending_covers_every_unique_deployment() {
         "270a4bc71332868cbdc75c81a1cc92da8669a37e2bead6b7d193974b3e1d431d",
         "format acceptance must not change the known-call Bloom"
     );
+}
+
+#[test]
+fn registry_aave_wrapped_gateway_admits_referral_complete_calls_on_exact_deployments() {
+    let result = build_registry();
+    let source_name = "calldata-WrappedTokenGatewayV3.json";
+    let entries: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str()) == Some(source_name)
+        })
+        .collect();
+
+    let expected_deployments: BTreeSet<(u64, [u8; 20])> = [
+        (1, "d01607c3c5ecaba394d8be377a08590149325722"),
+        (10, "5f2508cae9923b02316254026cd43d7902866725"),
+        (100, "721b9abab6511b46b9ee83a1aba23bdacb004149"),
+        (137, "bc302053db3aa514a3c86b9221082f162b91ad63"),
+        (146, "061d8e131f26512348ee5fa42e2df1ba9d6505e9"),
+        (324, "ae2b00d676130bdf22582781bbba8f4f21e8b0ff"),
+        (1868, "6376d4df995f32f308f2d5049a7a320943023232"),
+        (8453, "a0d9c1e9e48ca30c8d8c3b5d69ff5dc1f6dffc24"),
+        (9745, "54bdcc37c4143f944a3ee51c892a6cbdf305e7a0"),
+        (42161, "5283beced7adf6d003225c13896e536f2d4264ff"),
+        (43114, "2825ce5921538d17cc15ae00a8b24ff759c6cdae"),
+        (59144, "31a239f3e39c5d8ba6b201ba81ed584492ae960f"),
+        (534352, "e79ca44408dae5a57ea2a9594532f1e84d2edaa4"),
+    ]
+    .into_iter()
+    .map(|(chain_id, address)| {
+        let decoded = hex::decode(address).expect("valid deployment address");
+        let mut contract = [0u8; 20];
+        contract.copy_from_slice(&decoded);
+        (chain_id, contract)
+    })
+    .collect();
+    let actual_deployments: BTreeSet<_> = entries
+        .iter()
+        .map(|entry| (entry.chain_id, entry.contract))
+        .collect();
+    assert_eq!(actual_deployments, expected_deployments);
+
+    let accepted = [
+        ([0x47, 0x4c, 0xf5, 0x3d], "depositETH"),
+        ([0xe7, 0x4f, 0x7b, 0x85], "borrowETH"),
+    ];
+    let permit_hash =
+        keccak256(b"withdrawETHWithPermit(address,uint256,address,uint256,uint8,bytes32,bytes32)");
+    let permit_selector = permit_hash[..4].try_into().expect("selector width");
+
+    for entry in entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Aave gateway IR parses");
+        for (selector, call_name) in accepted {
+            let format = ir
+                .find_format_by_selector(&selector)
+                .expect("Aave gateway format table parses")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{call_name} missing for chain {} contract 0x{}",
+                        entry.chain_id,
+                        hex::encode(entry.contract)
+                    )
+                });
+            let fields: Vec<_> = format
+                .fields()
+                .map(|field| field.expect("generated Aave gateway field parses"))
+                .collect();
+            assert_eq!(fields.len(), 4, "unexpected fields for {call_name}");
+            let referral = &fields[2];
+            assert_eq!(referral.label, b"Referral Code");
+            assert_eq!(
+                FormatOp::try_from(referral.format_op),
+                Ok(FormatOp::Raw),
+                "{call_name} must expose the complete referral word"
+            );
+            let params = parse_params(&ir, referral.param_off).expect("referral params parse");
+            assert_eq!(params.visibility, Visibility::Always);
+            assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+            assert!(
+                result
+                    .known_calls
+                    .contains(&(entry.chain_id, entry.contract, selector)),
+                "newly clear-signable tuple was not already in the exact known-call inventory"
+            );
+        }
+
+        assert!(
+            ir.find_format_by_selector(&permit_selector)
+                .expect("Aave gateway format table parses")
+                .is_none(),
+            "the hidden-signature permit variant must remain hard-refused"
+        );
+        assert!(result
+            .known_calls
+            .contains(&(entry.chain_id, entry.contract, permit_selector,)));
+    }
+}
+
+#[test]
+fn registry_lido_staking_admits_visible_referrals_on_exact_mainnet_contracts() {
+    let result = build_registry();
+    let expected = [
+        (
+            "calldata-stETH.json",
+            "ae7ab96520de3a18e5e111b5eaab095312d7fe84",
+            [0xa1, 0x90, 0x3e, 0xab],
+        ),
+        (
+            "calldata-wstETH-referral-staker.json",
+            "a88f0329c2c4ce51ba3fc619bbf44efe7120dd0d",
+            [0x94, 0x6f, 0xe3, 0xe8],
+        ),
+    ];
+
+    for (source_name, address, selector) in expected {
+        let entries: Vec<_> = result
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.source.file_name().and_then(|name| name.to_str()) == Some(source_name)
+            })
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "{source_name} must emit exactly its one pinned mainnet deployment"
+        );
+        let entry = entries[0];
+        let decoded = hex::decode(address).expect("valid Lido deployment address");
+        let mut contract = [0u8; 20];
+        contract.copy_from_slice(&decoded);
+        assert_eq!((entry.chain_id, entry.contract), (1, contract));
+
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Lido IR parses");
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("Lido format table parses")
+            .expect("newly admitted Lido staking format");
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("generated Lido field parses"))
+            .collect();
+        assert_eq!(fields.len(), 2);
+        let referral = &fields[1];
+        assert_eq!(referral.label, b"Referral");
+        assert_eq!(FormatOp::try_from(referral.format_op), Ok(FormatOp::Raw));
+        let params = parse_params(&ir, referral.param_off).expect("referral params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+        assert_eq!(params.terminal_kind, Some(TerminalKind::Address));
+        assert!(
+            result.known_calls.contains(&(1, contract, selector)),
+            "newly clear-signable Lido tuple was not already known"
+        );
+    }
 }
 
 #[test]
@@ -1462,11 +1617,11 @@ fn wrong_root_is_rejected() {
     );
 }
 
-/// Every Router02 format is unsafe under the current exact-operand policy:
-/// tuple dynamic routes lack C2 topology, single-hop shapes hide a price bound,
-/// and the V2-compatible `address[]` shape identifies only route endpoints.
+/// Router02's two single-hop tuple calls are safe only after the complete price
+/// limit becomes visible. Dynamic tuple routes and V2-compatible `address[]`
+/// routes still identify only endpoints, so they remain known hard refusals.
 #[test]
-fn vendored_uniswap_v3_router_endpoint_only_routes_are_omitted() {
+fn vendored_uniswap_v3_router_admits_only_operand_complete_single_hop_calls() {
     let root = workspace_root();
     let reg = root.join("secure/data/erc7730-registry");
     let desc = reg.join("registry/uniswap/calldata-UniswapV3Router02.json");
@@ -1479,10 +1634,73 @@ fn vendored_uniswap_v3_router_endpoint_only_routes_are_omitted() {
     );
 
     let registry = build_registry();
-    assert!(
-        !registry.entries.iter().any(|entry| entry.source == desc),
-        "no Router02 format fully displays every signed operand"
-    );
+    let entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| entry.source == desc)
+        .collect();
+    assert_eq!(entries.len(), 1, "Router02 has one pinned deployment");
+    let entry = entries[0];
+    let contract_raw =
+        hex::decode("68b3465833fb72a70ecdf485e0e4c7bd8665fc45").expect("valid Router02 address");
+    let mut contract = [0u8; 20];
+    contract.copy_from_slice(&contract_raw);
+    assert_eq!((entry.chain_id, entry.contract), (1, contract));
+
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Router02 IR parses");
+    let accepted: BTreeSet<[u8; 4]> = [[0x04, 0xe4, 0x5a, 0xaf], [0x50, 0x23, 0xb4, 0xdf]]
+        .into_iter()
+        .collect();
+    let actual: BTreeSet<_> = ir
+        .format_iter()
+        .map(|format| format.expect("Router02 format parses").selector)
+        .collect();
+    assert_eq!(actual, accepted, "only the two safe single-hop calls emit");
+
+    for selector in &accepted {
+        let format = ir
+            .find_format_by_selector(selector)
+            .expect("Router02 format table parses")
+            .expect("accepted single-hop format");
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("generated Router02 field parses"))
+            .collect();
+        assert_eq!(fields.len(), 5);
+        let price_limit = fields
+            .iter()
+            .find(|field| field.label == b"Price limit")
+            .expect("single-hop format shows the complete price limit");
+        assert_eq!(FormatOp::try_from(price_limit.format_op), Ok(FormatOp::Raw));
+        let params = parse_params(&ir, price_limit.param_off).expect("price-limit params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+        assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+        assert!(registry.known_calls.contains(&(1, contract, *selector)));
+    }
+
+    let selector_for = |signature: &[u8]| {
+        let hash = keccak256(signature);
+        <[u8; 4]>::try_from(&hash[..4]).expect("selector width")
+    };
+    let omitted = [
+        selector_for(b"exactInput((bytes,address,uint256,uint256))"),
+        selector_for(b"exactOutput((bytes,address,uint256,uint256))"),
+        selector_for(b"swapExactTokensForTokens(uint256,uint256,address[],address)"),
+        selector_for(b"swapTokensForExactTokens(uint256,uint256,address[],address)"),
+    ];
+    for selector in omitted {
+        assert!(
+            ir.find_format_by_selector(&selector)
+                .expect("Router02 format table parses")
+                .is_none(),
+            "endpoint-only Router02 call unexpectedly became clear-signable: 0x{}",
+            hex::encode(selector)
+        );
+        assert!(
+            registry.known_calls.contains(&(1, contract, selector)),
+            "omitted Router02 call must remain in the exact known-call inventory"
+        );
+    }
 }
 
 /// Correct `$ref` resolution must not make endpoint token metadata count as

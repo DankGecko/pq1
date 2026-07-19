@@ -70,7 +70,7 @@
             "params": { "types": ["eoa", "contract"], "sources": ["local", "ens"] },
             "visible": "always"
           },
-          { "path": "params.sqrtPriceLimitX96", "label": "Price limit", "format": "raw", "visible": "never" }
+          { "path": "params.sqrtPriceLimitX96", "label": "Price limit", "format": "raw", "visible": "always" }
         ]
       },
       "exactOutput((bytes path, address recipient, uint256 amountOut, uint256 amountInMaximum) params)": {
@@ -123,7 +123,7 @@
             "format": "addressName",
             "params": { "types": ["eoa", "contract"], "sources": ["local", "ens"] }
           },
-          { "path": "params.sqrtPriceLimitX96", "label": "Price limit", "format": "raw", "visible": "never" }
+          { "path": "params.sqrtPriceLimitX96", "label": "Price limit", "format": "raw", "visible": "always" }
         ]
       },
       "swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to)": {
