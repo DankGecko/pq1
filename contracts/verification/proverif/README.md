@@ -88,7 +88,9 @@ proverif /tmp/gate_off.pv   # RESULT ... reconstruct(ho2,he2) ... is false
   key as pre-shared. The SE050 **SCP03** handshake that establishes it is now
   modelled separately in `scp03_handshake.pv` (see below), which justifies that
   abstraction for the no-leak case. The OPTIGA Shielded Connection (TLS-PRF/CCM-8)
-  handshake remains a future model.
+  handshake is modelled in `optiga_shield_handshake.pv` (driver-derived — banner-
+  marked do-not-cite for freshness/replay) and re-derived from Infineon's
+  reference implementation in `optiga_shield_handshake_vendor.pv` (see below).
 - **Quantum-harvest residual** (Claim 7): perfect symbolic crypto cannot express
   it; it stays a documented open item (ML-KEM inner wrap).
 - **XOR-malleability / bit-flip**: `reconstruct` has no equational theory, so
@@ -158,6 +160,22 @@ the SCP03 model; results parallel it:
 
 The residual is **strictly weaker** than the SCP03 PIN one: `half_O` is one XOR
 half — by Claim 1 (proved in `dual_se_unlock.pv`) it is useless without `half_E`.
+
+### Vendor re-derivation (2026-07-17, `9ec109ad`)
+
+`optiga_shield_handshake_vendor.pv` re-derives the model from Infineon's own
+reference implementation (`optiga-trust-m` v5.6.0,
+`ifx_i2c_presentation_layer.c`) instead of from our driver. The external oracle
+earned its keep on the first pass: the driver-derived model above invents a
+host nonce the protocol does not have — the real handshake has exactly ONE
+nonce, copied out of the SlaveHello (`session_key = PRF(PBS, "Platform
+Binding", random_S)`). The host therefore contributes NO session freshness,
+and the same injective-agreement query that is `TRUE` here is **FALSE** under
+the vendor derivation. **Do not cite any freshness, replay or session-
+distinctness property from `optiga_shield_handshake.pv`** (its header carries
+the same banner); the secrecy and non-injective mutual-auth results are
+unaffected and independently pinned. The cross-session replay consequence is
+tracked as playbook SE5 / OP17-2.
 
 ---
 

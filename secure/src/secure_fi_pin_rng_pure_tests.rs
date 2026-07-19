@@ -103,6 +103,7 @@ const FUZZ_PROPS_SRC: &str = include_str!("fuzz_props.rs");
 const HOST_RNG_SRC: &str = include_str!("host_rng.rs");
 const RNG_SRC: &str = include_str!("rng.rs");
 const RNG_STRONG_SRC: &str = include_str!("rng_strong.rs");
+const RNG_STRONG_FOLD_SRC: &str = include_str!("rng_strong_fold.rs");
 const PIN_DIAG_SRC: &str = include_str!("pin_diag.rs");
 const TIMEOUT_SRC: &str = include_str!("timeout.rs");
 const CONFIRM_SRC: &str = include_str!("ui/confirm.rs");
@@ -1673,7 +1674,7 @@ mod timeout_source_text {
 // ═════════════════════════════════════════════════════════════════════
 
 mod rng_source_text {
-    use super::{HOST_RNG_SRC, RNG_SRC, RNG_STRONG_SRC};
+    use super::{HOST_RNG_SRC, RNG_SRC, RNG_STRONG_FOLD_SRC, RNG_STRONG_SRC};
 
     /// `rng::fill` and `rng::byte` MUST delegate based on the
     /// `stm32u585` feature, NOT some other random predicate. If the
@@ -1729,13 +1730,15 @@ mod rng_source_text {
     /// `rng_strong::fill` MUST XOR the SE-provided bytes into `buf`,
     /// not REPLACE them. XOR preserves entropy of the platform TRNG
     /// even if the SE is fully compromised. A `=` would let a
-    /// compromised SE clamp the buffer.
+    /// compromised SE clamp the buffer. (The fold itself lives in
+    /// `rng_strong_fold.rs`, split out of the `#[cfg(not(test))]`
+    /// `rng_strong` module so host tests can exercise it.)
     #[test]
     fn negative_rng_strong_xor_folds_se_bytes() {
-        let pos = RNG_STRONG_SRC
+        let pos = RNG_STRONG_FOLD_SRC
             .find("for i in 0..len {")
             .expect("XOR-fold loop not found");
-        let body = &RNG_STRONG_SRC[pos..pos + 200];
+        let body = &RNG_STRONG_FOLD_SRC[pos..pos + 200];
         assert!(
             body.contains("buf[off + i] ^= block[i];"),
             "rng_strong must XOR SE bytes into the buffer (^=) — using \
@@ -1752,25 +1755,52 @@ mod rng_source_text {
     /// layer (guarded by `#[cfg(feature = "mock-se")]`).
     #[test]
     fn negative_rng_strong_se_failure_is_fatal() {
-        // Production path: `?` propagation, NOT `.is_ok()` guard.
+        // Production path: the fold's `false` return gates an early
+        // `Err` — NOT a silent fall-through to platform-only entropy.
+        let pos = RNG_STRONG_SRC
+            .find("not(feature = \"mock-se\")")
+            .expect("rng_strong must gate a production-only SE branch");
+        let body = &RNG_STRONG_SRC[pos..pos + 400];
         assert!(
-            RNG_STRONG_SRC.contains("not(feature = \"mock-se\")"),
-            "rng_strong must have a production-only branch that \
-             propagates SE failure (gated `not(feature = mock-se)`)."
+            body.contains("return Err(());"),
+            "rng_strong production branch must propagate SE failure as \
+             Err — silent fall-through would let an EMFI attacker \
+             degrade entropy unnoticed."
         );
-        assert!(
-            RNG_STRONG_SRC.contains(
-                "unsafe { crate::se_random(&mut block[..len]) }.map_err"
-            ),
-            "rng_strong production branch must propagate SE failure \
-             via `?` / `map_err` — silent `.is_ok()` fall-through \
-             would let an EMFI attacker degrade entropy unnoticed."
-        );
-        // Mock-only path: keeps `.is_ok()` so QEMU dev builds work.
+        // Mock-only path: keeps the fold's return value ignored so QEMU
+        // dev builds work.
         assert!(
             RNG_STRONG_SRC.contains("feature = \"mock-se\""),
             "rng_strong must retain a `mock-se`-gated branch that \
              tolerates the absent TRNG on the mock backend."
+        );
+    }
+
+    /// Finding F27: the SE fold must hand the backend a FRESH, zeroed
+    /// block per chunk — `DualSecureElement::random` XORs into the
+    /// caller's buffer, so reusing the previous chunk's block would
+    /// re-fold chunk N's `OPTIGA ⊕ SE050` bytes into chunk N+1 and let
+    /// a repeat-stream fault on both SE TRNGs silently cancel the SE
+    /// contribution for the tail. The behavioural proof lives in
+    /// `rng_strong_fold.rs`'s `tests` module (compiled on host because
+    /// the fold is pure and kept out of the `#[cfg(not(test))]`
+    /// `rng_strong` module); this pins the load-bearing line against
+    /// accidental deletion.
+    #[test]
+    fn negative_rng_strong_zeroes_block_before_every_se_draw() {
+        let pos = RNG_STRONG_FOLD_SRC
+            .find("fn fold_se_blocks")
+            .expect("rng_strong must fold SE bytes via fold_se_blocks");
+        let body = &RNG_STRONG_FOLD_SRC[pos..];
+        let zero = body
+            .find("block[..len].fill(0);")
+            .expect("fold_se_blocks must zero the block before every SE draw (F27)");
+        let draw = body
+            .find("se_draw(&mut block[..len])")
+            .expect("fold_se_blocks must invoke the SE draw per chunk");
+        assert!(
+            zero < draw,
+            "the block must be zeroed BEFORE the SE draw, not after (F27)"
         );
     }
 

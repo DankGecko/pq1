@@ -35,7 +35,7 @@ fn device_keys() -> Result<([u8; 64], [u8; 32]), WrapError> {
     Ok((seed, huk_secret))
 }
 
-/// QEMU/host DEV key path. The device key hierarchy (`hw::{otp, huk,
+/// QEMU/host DEV key path. The device key hierarchy (`hw::{otp,
 /// secret_keys}`) is `stm32u585`-only, so off-target we derive DETERMINISTIC
 /// TEST keys from a fixed dev constant — this is what lets `make e2e` exercise
 /// the seal/open round-trip. NEVER a production path: `not(stm32u585)` is by

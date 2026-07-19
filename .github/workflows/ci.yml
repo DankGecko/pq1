@@ -81,12 +81,11 @@ jobs:
       # Ships its own --self-test negative control (asserted first).
       - name: HW-ASSUME ledger falsifiable (anchors / real tests / bidirectional ids)
         run: make -C contracts/verification verify-hw-assumptions
-      # C2: hand-typed MMIO bases vs ST's own CMSIS header. Skips cleanly (exit 0)
-      # when STM32CubeU5 is not checked out, so it is a no-op in CI today and a
-      # real gate on any box with the vendor SDK — including every dev machine
-      # that has ever built against CubeU5. Point it with STM32U5_CMSIS_HEADER.
-      - name: MMIO base addresses vs ST CMSIS header
-        run: make verify-mmio-addresses
+      # C2 (MMIO bases vs ST's CMSIS header) is NOT here: it SKIP-exits 0 when
+      # STM32CubeU5 is absent (never on CI runners), so as a CI step it was a
+      # permanent green no-op asserting nothing (F51). It is a real LOCAL gate —
+      # `make verify-mmio-addresses` on any box with the vendor SDK — declared
+      # local_documented in scripts/gate_enforcement.json.
 
   supply-chain-vet:
     name: cargo-vet (dependency audit attestation)
@@ -179,19 +178,23 @@ jobs:
             -p sphincs-c10 -p pqsigner-fi \
             -p sphincs-tz-bip39 -p fw-manifest -p sphincs-tz-shared \
             -p pqsigner-hal -p pqsigner-pq-seal -p masked-sha2 -p pqsigner-xtask \
-            -p fwsign
-      # Keep the host-only rollback models enrolled explicitly.
+            -p fwsign -p fwmeasure
+      # Keep the host-only fsbl-tests suites enrolled explicitly.
       # The whole fsbl-tests crate stays out of this job because its footprint
       # suite cross-compiles the real FSBL; these named suites have no Thumb or
-      # hardware dependency and must not silently disappear from CI.
-      - name: Rollback host models
+      # hardware dependency and must not silently disappear from CI. F42:
+      # source_invariants (render-before-branch trust chain, verify_images
+      # digest type, NV3007 constants, measured_boot self-attest pins) was
+      # green-when-run but enrolled in NO CI job until now.
+      - name: fsbl-tests host-only suites (rollback models + source invariants)
         run: |
           cargo test --locked -p pqsigner-fsbl-tests \
             --lib \
             --test draft09_floor_stage_model \
             --test draft09_codec_candidates \
             --test draft09_resource_envelope \
-            --test draft11_deletion_experiments
+            --test draft11_deletion_experiments \
+            --test source_invariants
       # ERC-7730 descriptor catalog gate: (1) the firmware-pinned
       # `ERC7730_DESCRIPTORS_ROOT` in secure/src/db_roots.rs must match a
       # fresh dbgen build — catches a forgotten `cargo run -p dbgen` after a
@@ -262,6 +265,36 @@ jobs:
       # 5p/5n, to reach the explicit ALL ASSERTIONS PASSED sentinel.
       - name: make e2e
         run: make e2e
+
+  firmware-target-gates:
+    name: Firmware-target gates (FSBL footprint + thumbv8m pair link)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+          targets: thumbv8m.main-none-eabi
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Install ARM bare-metal toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends gcc-arm-none-eabi
+      # F42: the 32 KiB legacy-region regression gate cross-compiles the real
+      # FSBL to thumbv8m — it was green-when-run but enrolled in NO CI job
+      # (host-tests deliberately excludes it: "belongs in a firmware-target
+      # job"). F21: the test now fails CLOSED when arm-none-eabi-size is
+      # absent in a CI context, so this step can never skip green again.
+      - name: FSBL footprint (32 KiB legacy-region regression gate)
+        run: cargo test --locked -p pqsigner-fsbl-tests --test footprint
+      # F45: nothing else in CI ever links the secure+nonsecure pair with the
+      # CMSE implib — veneer symbol drift (renamed/removed nsc_* export, or NS
+      # referencing a veneer the secure cfg gates out) fails only at NS link
+      # time. `make build-hw` builds the stm32u585 smoke image (non-shippable
+      # by construction: mock-se/e2e-test are on the production denylist),
+      # which emits --cmse-implib and links NS against the veneers object.
+      - name: thumbv8m secure+nonsecure pair link (CMSE implib)
+        run: make build-hw
 
   miri:
     name: Miri (UB in host-reachable unsafe)

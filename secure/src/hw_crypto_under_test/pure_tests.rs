@@ -8,7 +8,6 @@
 //!   - `secure/src/hw/saes_cmac.rs`   (CMAC-AES-256 over SAES-DHUK)
 //!   - `secure/src/hw/secret_keys.rs` (domain-separated subkey API)
 //!   - `secure/src/hw/otp.rs`         (rollback counter + device master)
-//!   - `secure/src/hw/huk.rs`         (per-device wrap key)
 //!   - `secure/src/hw/bhk.rs`         (Tier-2 BHK lifecycle)
 //!
 //! Because every file except `mmio.rs` imports `cortex_m` or peers that
@@ -50,7 +49,6 @@ const OTP_SRC: &str = include_str!("../hw/otp.rs");
 /// of this slice it is MMIO-free, so its behaviour is tested for real in its
 /// own module — these text pins only hold the *shape* of the D4 rule in place.
 const OTP_STATE_SRC: &str = include_str!("../otp_state.rs");
-const HUK_SRC: &str = include_str!("../hw/huk.rs");
 const BHK_SRC: &str = include_str!("../hw/bhk.rs");
 const MMIO_SRC: &str = include_str!("../hw/mmio.rs");
 
@@ -125,14 +123,6 @@ fn positive_otp_layout_constants() {
 }
 
 #[test]
-fn positive_huk_uid_base_address() {
-    assert!(
-        HUK_SRC.contains("const UID_BASE: u32 = 0x0BFA_0700;"),
-        "STM32U585 96-bit UID is at 0x0BFA_0700 (datasheet)"
-    );
-}
-
-#[test]
 fn positive_bhk_page_addresses() {
     assert!(BHK_SRC.contains("const BHK_PAGE_ADDR: u32 = 0x0C0F_C000;"));
     assert!(BHK_SRC.contains("const BHK_PAGE_NUM: u32 = 126;"));
@@ -150,11 +140,6 @@ fn positive_secret_keys_labels_present() {
     assert!(SECRET_KEYS_SRC.contains(r#"b"pqsigner/se050-scp03-mac-v1""#));
     assert!(SECRET_KEYS_SRC.contains(r#"b"pqsigner/se050-scp03-dek-v1""#));
     assert!(SECRET_KEYS_SRC.contains(r#"b"pqsigner/se050-admin-pin-v1""#));
-}
-
-#[test]
-fn positive_huk_domain_tag_present() {
-    assert!(HUK_SRC.contains(r#"b"pqsigner-device-key-v1""#));
 }
 
 #[test]
@@ -430,14 +415,6 @@ fn negative_secret_keys_se050_admin_pin_v1_label_unchanged() {
 }
 
 #[test]
-fn negative_huk_domain_tag_pqsigner_device_key_v1_unchanged() {
-    assert!(
-        HUK_SRC.contains(r#"b"pqsigner-device-key-v1""#),
-        "HUK derivation tag drift would invalidate every previously-sealed object"
-    );
-}
-
-#[test]
 fn negative_secret_keys_labels_are_versioned_with_v1_suffix() {
     // Bumping a label without on-chip rotation is a silent
     // data-corruption bug; module docstring requires `-v1`. Catch a
@@ -642,15 +619,6 @@ fn negative_otp_burn_uses_rng_strong_not_plain_rng() {
         OTP_SRC.contains("rng_strong::fill(&mut key)"),
         "burn_device_master must use rng_strong::fill (XOR-fold) not plain rng::fill"
     );
-}
-
-#[test]
-fn negative_huk_zeroizes_otp_master_and_uid() {
-    // HUK derivation pulls the OTP master and UID into the digest;
-    // both copies must be scrubbed before return (the caller only
-    // zeroizes the returned key).
-    assert!(HUK_SRC.contains("otp_master.zeroize();"));
-    assert!(HUK_SRC.contains("uid_z.zeroize();"));
 }
 
 #[test]
@@ -870,22 +838,6 @@ fn negative_legacy_otp_bump_skips_program_when_target_is_already_reached() {
 }
 
 #[test]
-fn negative_huk_mixes_uid_and_otp_master_separately() {
-    // Both inputs must enter the digest, in that order, so the per-die
-    // (UID) and per-board-provisioning (OTP) sources both contribute.
-    // A single h.update would defeat one of the layers.
-    assert!(HUK_SRC.contains("h.update(&uid);"));
-    assert!(HUK_SRC.contains("h.update(&otp_master);"));
-}
-
-#[test]
-fn negative_huk_includes_domain_tag_length_prefix() {
-    // Length-prefixing the tag prevents tag-suffix collisions across
-    // unrelated callers.
-    assert!(HUK_SRC.contains("h.update(&(domain_tag.len() as u32).to_le_bytes());"));
-}
-
-#[test]
 fn negative_mmio_reg32_construction_is_unsafe() {
     // The whole point of the typed-MMIO wrapper is to confine `unsafe`
     // to a single per-address construction. If Reg32::new were ever
@@ -923,7 +875,6 @@ fn negative_no_classical_signer_in_slice() {
             ("saes_cmac.rs", SAES_CMAC_SRC),
             ("secret_keys.rs", SECRET_KEYS_SRC),
             ("otp.rs", OTP_SRC),
-            ("huk.rs", HUK_SRC),
             ("bhk.rs", BHK_SRC),
             ("mmio.rs", MMIO_SRC),
         ] {

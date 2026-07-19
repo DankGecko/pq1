@@ -44,7 +44,7 @@
 //! draw a fresh `opt_rand` per signing call (F-13 follow-up; aligned
 //! with `docs/archive/work-todo-retired-2026-07-19.md` §10 "Multi-Source RNG").
 
-use zeroize::Zeroize;
+use crate::rng_strong_fold::fold_se_blocks;
 
 /// Fill `buf` with strong random bytes: platform TRNG XOR'd with the
 /// active SE backend's `random()` (which itself XOR-mixes all
@@ -78,31 +78,28 @@ pub fn fill(buf: &mut [u8]) -> Result<(), ()> {
     // For multi-SE backends the trait impl already XOR-folds the
     // per-source contributions internally and requires every chip to
     // succeed (see `DualSecureElement::random`). Block-by-block
-    // matches Trezor's pattern and keeps the SE TLV body small.
-    let mut block = [0u8; 32];
-    let mut off = 0;
-    while off < buf.len() {
-        let len = (buf.len() - off).min(block.len());
-        // SAFETY: the caller (sign path) has unlocked the SE, so the
-        // global SE handle is initialised.
-        #[cfg(all(not(test), not(feature = "mock-se")))]
-        {
-            unsafe { crate::se_random(&mut block[..len]) }.map_err(|_| {
-                block.zeroize();
-            })?;
-            for i in 0..len {
-                buf[off + i] ^= block[i];
-            }
+    // matches Trezor's pattern and keeps the SE TLV body small. The
+    // fold lives in `rng_strong_fold::fold_se_blocks` (split out so the
+    // host test suite can exercise it), which hands the backend a
+    // FRESH zeroed block per chunk — the backend XORs into the
+    // caller's buffer, so a stale block would re-fold the previous
+    // chunk's contribution into this one (finding F27).
+    #[cfg(all(not(test), not(feature = "mock-se")))]
+    {
+        // Production: an absent SE contribution is fatal — silently
+        // degrading to platform-only under EMFI / I2C glitching would
+        // let an attacker reduce entropy without anything noticing.
+        if !fold_se_blocks(buf, |b| unsafe { crate::se_random(b) }.is_ok()) {
+            return Err(());
         }
-        #[cfg(all(not(test), feature = "mock-se"))]
-        if unsafe { crate::se_random(&mut block[..len]) }.is_ok() {
-            for i in 0..len {
-                buf[off + i] ^= block[i];
-            }
-        }
-        off += len;
     }
-    block.zeroize();
+    // Dev/QEMU (`mock-se`): the mock backend has no TRNG, so an absent
+    // SE contribution is tolerated. CI gates production firmware on
+    // `mock-se` OFF.
+    #[cfg(all(not(test), feature = "mock-se"))]
+    {
+        let _ = fold_se_blocks(buf, |b| unsafe { crate::se_random(b) }.is_ok());
+    }
 
     // ── Step 3: fail-closed non-zero acceptance gate ────────────────
     // An all-zero buffer is a strong signal of a stuck-at-0 fault
@@ -121,3 +118,4 @@ pub fn fill(buf: &mut [u8]) -> Result<(), ()> {
 
     Ok(())
 }
+

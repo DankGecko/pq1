@@ -53,16 +53,14 @@
       rustToolchain =
         buildPkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
-      # Vendor every cargo dep — crates.io entries from Cargo.lock plus
-      # the one git pin (tropic01). Network is unavailable inside the
-      # sandbox; cargo reads from $CARGO_HOME/config.toml that points at
-      # the vendor directory installed by `cargoSetupHook`.
+      # Vendor every cargo dep — crates.io entries from Cargo.lock. Network is
+      # unavailable inside the sandbox; cargo reads from $CARGO_HOME/config.toml
+      # that points at the vendor directory installed by `cargoSetupHook`.
+      # No git pins remain: the tropic01 git dep was removed 2026-07-14 and
+      # deny.toml now forbids git sources, so importCargoLock needs no
+      # outputHashes.
       cargoVendor = buildPkgs.rustPlatform.importCargoLock {
         lockFile = ./Cargo.lock;
-        outputHashes = {
-          "tropic01-0.1.0" =
-            "sha256-6gGcHgTZyrEK9I4V3cQz9i9IlUDAx2aCr0S40UuHjOg=";
-        };
       };
 
       measureDrv = buildPkgs.stdenv.mkDerivation {

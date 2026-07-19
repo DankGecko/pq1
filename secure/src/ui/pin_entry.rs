@@ -80,7 +80,13 @@ pub fn enter_pin() -> PinEntryResult {
     }
     let mut pos: usize = 0;
 
-    timeout::reset_activity();
+    // HIGH-13 fix (work-todo X17-UI3): do NOT reset the inactivity
+    // timer on entry. This dialog is reachable from the NS-driven
+    // REQUEST_UNLOCK veneer, so an entry reset would let a hostile
+    // companion refresh the 120 s unlocked window with zero button
+    // presses — one spammed prompt per <120 s keeps the session alive
+    // forever. Only a real button event (below, inside the loop) counts
+    // as user activity, matching the `confirm()` contract.
 
     loop {
         render_pin_screen(&pin, pos);

@@ -251,6 +251,11 @@ permanently, absent an ARM release we do not control.**
   `shield.rs` and abstracts the framing. **A model derived from our driver can only prove we
   modelled ourselves consistently.** Re-deriving it from the vendor spec makes
   driver-vs-spec divergence detectable. That is a real upgrade and it is buildable now.
+  **Update 2026-07-17 (post-landing):** landed as `optiga_shield_handshake_vendor.pv`
+  (`9ec109ad`), re-derived from Infineon's reference implementation
+  (`ifx_i2c_presentation_layer.c`, v5.6.0). It immediately falsified the driver-derived
+  model's invented host nonce: injective host agreement is TRUE there and **FALSE** under
+  the vendor derivation — the host contributes no freshness (playbook SE5 / OP17-2).
 
 **Residual forever.** Bus electrical behaviour; the SE's side of the timing contract; that a
 50 µs guard-time violation is benign or loudly detected. Note there is **no public security
@@ -512,8 +517,8 @@ explicitly trusted, stated in the paper.
 | Kani over `t1oi2c` `crc16`/`build_frame`/`validate_frame` | **Not theatre** | Pure functions. No model. Proves what it says. |
 | Kani over page-124 scan/bump behind a *wired* `Flash` model | **Not theatre, conditionally** | Only once the seam is wired. As a parallel reimplementation beside a 2243-line driver with nothing detecting drift, it is theatre — and it currently under-models the security-load-bearing part (the F-15.r5 forward+reverse FI double-scan with fail-closed-to-CAPACITY, which is what page-124 exists to defend). |
 | TLA+ page-123 crash-atomicity (done) | **Not theatre** | Confirmed the SIGS-first ordering claim over 1M states. Honest about its own gap: no per-entry integrity → HW premise. |
-| Re-deriving `optiga_shield_handshake.pv` from Infineon I2C Protocol v2.03 §6 | **Not theatre** | The spec is an external ground truth the driver can diverge from. |
-| The current `optiga_shield_handshake.pv` | **Borderline theatre** | Derived from `shield.rs`; abstracts the framing. Proves self-consistency. Its own docstring says so — which is why it is borderline and not disqualifying. |
+| Re-deriving `optiga_shield_handshake.pv` from Infineon I2C Protocol v2.03 §6 | **Not theatre — DONE 2026-07-17** | Landed as `optiga_shield_handshake_vendor.pv` (`9ec109ad`, from Infineon's reference implementation); the external ground truth immediately diverged — it caught the driver model's invented host nonce (inj-agreement FALSE vendor-side). |
+| The current `optiga_shield_handshake.pv` | **Borderline theatre** | Derived from `shield.rs`; abstracts the framing. Proves self-consistency. Its own docstring says so — which is why it is borderline and not disqualifying. **2026-07-17: banner-marked do-not-cite for freshness/replay after the vendor re-derivation falsified its host-freshness result; secrecy/non-injective-auth results stand.** |
 | A hand-written SAU/IDAU/CMSE contract with no silicon differential | **Theatre** | Nothing could contradict it. `make gtzc-enforcement-hw` is worth more. |
 | Modelling OPTIGA/SE050 internals | **Theatre, unconditionally** | Pure relocation. No test can reach inside the die. Surface (e) is silicon-E2E-or-nothing. |
 | SVD-diff of hand-transcribed MMIO addresses | **Not theatre** | External artifact; the diff can fail; it would have caught 3 historical bugs. |
@@ -913,7 +918,9 @@ recovery proof" gate, not a new discovery.
    Scope: does not cover SAU/MPU/NVIC/SCB/UID/OTP, and encodes layout only.
 4. **Kani `t1oi2c`'s `crc16`/`build_frame`/`validate_frame`.** Pure functions; no seam work.
 5. **Re-derive `optiga_shield_handshake.pv` from Infineon I2C Protocol v2.03 §6** rather than
-   from `shield.rs`.
+   from `shield.rs`. **DONE 2026-07-17** (`9ec109ad`): `optiga_shield_handshake_vendor.pv`,
+   re-derived from the vendor reference implementation — it caught the driver-derived model's
+   invented host nonce (inj-agreement TRUE there, FALSE vendor-side; SE5 / OP17-2).
 6. **`shipping-thumb-ct-binsec`: the inventory's framing is still wrong, but do NOT propagate
    the "BINSEC decodes Thumb fine, only CMSE fails" correction — it does not reproduce.**
    *(Author-run on this box, 2026-07-17, superseding the workflow's G1 claim.)* The survey

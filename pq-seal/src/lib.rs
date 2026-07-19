@@ -64,7 +64,8 @@
 //! ## Scope
 //!
 //! Pure `no_std` logic. The caller (secure world) supplies the HUK-bound `seed`
-//! (`hw::huk`), the `huk_secret` (a second independent `hw::huk` label), fresh
+//! and the `huk_secret` (two independent `hw::secret_keys` labels — see
+//! `secure/src/pq_wrap.rs`), fresh
 //! TRNG `encaps_msg`, and the context `aad`. Firmware wiring (OPTIGA/SE050
 //! store+read, object sizing) is the integration step. ml-kem is
 //! RustCrypto-ACVP-validated; on-target NIST-vector + constant-time validation
@@ -88,7 +89,7 @@ pub const CT_LEN: usize = 1568;
 pub const TAG_LEN: usize = 16;
 /// Device keypair seed length (`d‖z`); the deterministic ML-KEM "secret key".
 pub const SEED_LEN: usize = 64;
-/// HUK secret length (a `hw::huk::derive_device_key` output).
+/// HUK secret length (a device-bound key from `hw::secret_keys`).
 pub const HUK_LEN: usize = 32;
 /// Fresh encapsulation-message length the caller must supply per `seal`.
 pub const ENCAPS_MSG_LEN: usize = 32;

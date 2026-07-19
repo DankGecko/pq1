@@ -203,8 +203,15 @@ Response is a status word only (no data).
 
 Returns:
 ```
-[provisioned u8] [locked u8] [pin_remaining u8]
+[locked u8] [pin_remaining u8]
 ```
+
+There is deliberately NO `provisioned` byte: the firmware once emitted
+one derived as `pin_remaining <= MAX_ATTEMPTS`, which is always true,
+so the byte was a constant-1 that reported "provisioned" even on a
+blank device (finding X17-UC2). Rather than lie, the byte was removed.
+A blank device runs the on-device first-boot wizard; detect that state
+from the wizard UI, not from GET_STATUS.
 
 ### 0x01 GET_DEVICE_INFO
 

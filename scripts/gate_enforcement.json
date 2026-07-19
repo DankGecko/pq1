@@ -248,6 +248,30 @@
       "why": "a LOCAL end-to-end convenience bundle (kernel + audit + lints + forge + Halmos/Certora advisory), NOT a single CI job. Its dead nested workflow (contracts/.github/... \u2014 GitHub never ran it) was removed 2026-07-02 (F1). Its constituent gates ARE per-PR: verify-build/audit/fv-lints/ledger-consistency/storage-mutators (lean-fv.yml), verify-transcription (a31-transcription.yml), forge test + codehash-freeze (ci.yml); the Halmos/Kontrol legs are verify-bytecode (also local_documented)."
     },
     {
+      "id": "verify-hw-assumptions",
+      "make": "make -C contracts/verification verify-hw-assumptions",
+      "polices_paths": [
+        "contracts/verification/docs/HW_ASSUMPTIONS.json",
+        "secure/src/**",
+        "shared/src/**",
+        "hal/src/**",
+        "Makefile"
+      ],
+      "runs_in": "ci.yml",
+      "enforcement": "per_pr_blocking",
+      "note": "HW-ASSUME ledger hygiene (C3 evidence anchors resolve into secure/, shared/, hal/ + the Makefiles; C5 is a tree-wide bidirectional id sweep). Deliberately in ci.yml invariant-gates and NOT lean-fv.yml: that workflow's paths filter watches contracts/verification/** only, so an edit to an anchored firmware file would never trigger it there (ci.yml:74-83). Enrolled 2026-07-19 (F50 — was invoked at ci.yml:83 but absent from this manifest; the completeness pass caught it)."
+    },
+    {
+      "id": "verify-mmio-addresses",
+      "make": "make verify-mmio-addresses",
+      "polices_paths": [
+        "secure/src/hw/**",
+        "secure/src/sau.rs"
+      ],
+      "enforcement": "local_documented",
+      "why": "diffs the hand-transcribed MMIO bases against ST's own CMSIS stm32u585xx.h, which lives in an STM32CubeU5 vendor checkout that is never present on CI runners. scripts/check_mmio_addresses.py SKIP-exits 0 when the header is absent, so the ci.yml step was a permanent green no-op asserting nothing (F51) — removed from ci.yml 2026-07-19. The gate stays a REAL check on every dev box with the vendor SDK (point STM32U5_CMSIS_HEADER= at the header), which is every machine that builds the hw targets."
+    },
+    {
       "id": "prod-check-ship",
       "make": "make prod-check-ship",
       "polices_paths": [

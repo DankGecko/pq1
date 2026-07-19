@@ -15,7 +15,7 @@
 //!
 //!   2. **Single bit-flip from FALSE to TRUE** — the chosen magic
 //!      constants `SEC_TRUE = 0x1AAA_AAAA` and `SEC_FALSE =
-//!      0x1555_5555` differ in 29 of 32 bit positions. No single
+//!      0x1555_5555` differ in 28 of 32 bit positions. No single
 //!      bit-flip can turn one into the other.
 //!
 //!   3. **Stuck-at on the load register** — readers go through
@@ -35,11 +35,11 @@
 
 use core::ptr::{read_volatile, write_volatile};
 
-/// True pattern. Hamming weight 16. Differs from `SEC_FALSE` by 29
+/// True pattern. Hamming weight 15. Differs from `SEC_FALSE` by 28
 /// bit positions — no single bit-flip can turn TRUE → FALSE.
 const SEC_TRUE: u32 = 0x1AAA_AAAA;
 
-/// False pattern. Hamming weight 17. Initial state of every
+/// False pattern. Hamming weight 15. Initial state of every
 /// `FihBool` is FALSE.
 const SEC_FALSE: u32 = 0x1555_5555;
 

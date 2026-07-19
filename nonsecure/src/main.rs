@@ -204,8 +204,14 @@ fn main() -> ! {
         let now_frame = usb::usb_frame_number();
         let _ = stack.transport.check_rx_timeout(now_frame);
         // Bound how long an abandoned chunked GET_RESPONSE drain may pin
-        // the pending buffer (30 s inter-chunk timeout).
+        // the pending buffer (30 s inter-chunk timeout; 120 s absolute
+        // total-drain deadline so a slow-drain keepalive can't pin the
+        // F11 router lease — finding F2).
         unsafe { stack.commands.check_response_timeout(now_frame) };
+        // Bound the total lifetime of a chained-APDU exchange (30 s) so a
+        // stalled or keepalive-dripped chain can't pin the lease either
+        // (work-todo X17-UC1).
+        unsafe { stack.commands.check_chain_timeout(now_frame) };
 
         if stack.device.poll(&mut [&mut stack.transport.hid]) {
             if poll_counter == 0 {

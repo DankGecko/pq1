@@ -27,9 +27,14 @@ use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Per-signature shuffle seed. Derived per-call from the
-/// `rng_strong` multi-source TRNG and fed to BOTH double-compute
-/// signs unchanged (re-drawing per sign would break the F-13
-/// byte-equality FI gate).
+/// `rng_strong` multi-source TRNG. The double-compute sign path
+/// (`secure/src/crypto.rs`) draws an INDEPENDENT seed for each of the
+/// two passes: the produced signature bytes are invariant for ANY
+/// seed (the correctness invariant above), so per-pass re-drawing
+/// cannot break the F-13 byte-equality FI gate — and a single shared
+/// seed would be strictly worse (two time-aligned SCA traces of the
+/// same computation, and a deterministic position-triggered HASH
+/// fault corrupting both passes at the same step to slip ct_eq).
 ///
 /// Internally, the seed is label-derived into per-purpose
 /// sub-shuffles (one per WOTS layer, one for FORS).

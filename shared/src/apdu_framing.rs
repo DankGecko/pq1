@@ -136,12 +136,24 @@ pub struct ChainState {
     ins: u8,
     /// Write cursor inside the caller-owned buffer.
     pos: usize,
+    /// USB SOF frames accumulated since this chain opened. Drives the
+    /// X17-UC1 total-chain-lifetime timeout — see [`Self::tick_timeout`].
+    elapsed_frames: u32,
 }
 
 impl ChainState {
+    /// Total lifetime bound for one chained exchange, in USB SOF frames
+    /// (nominal 1 ms cadence): 30 s, mirroring the GET_RESPONSE
+    /// inter-chunk drain timeout on the nonsecure side.
+    pub const CHAIN_TIMEOUT_FRAMES: u32 = 30_000;
+
     #[must_use]
     pub const fn new() -> Self {
-        Self { ins: 0, pos: 0 }
+        Self {
+            ins: 0,
+            pos: 0,
+            elapsed_frames: 0,
+        }
     }
 
     #[must_use]
@@ -158,6 +170,31 @@ impl ChainState {
     pub fn reset(&mut self) {
         self.ins = 0;
         self.pos = 0;
+        self.elapsed_frames = 0;
+    }
+
+    /// Accumulate `delta` elapsed USB SOF frames against the live
+    /// chain's lifetime budget (work-todo X17-UC1 / sweep finding F2).
+    /// The clock is NOT reset by chain activity — it is a
+    /// total-exchange deadline, not an idle timeout — so a host
+    /// keepalive-dripping chained APDUs cannot pin the F11
+    /// single-session router lease indefinitely, and a crashed client
+    /// that simply goes silent trips the same bound. When the budget
+    /// is exceeded with a chain live, the chain is reset and `true` is
+    /// returned so the caller can release the router lease. No-op when
+    /// no chain is in progress (the clock stays zeroed, so the next
+    /// chain always starts with a fresh budget).
+    pub fn tick_timeout(&mut self, delta: u32) -> bool {
+        if self.ins == 0 {
+            self.elapsed_frames = 0;
+            return false;
+        }
+        self.elapsed_frames = self.elapsed_frames.saturating_add(delta);
+        if self.elapsed_frames >= Self::CHAIN_TIMEOUT_FRAMES {
+            self.reset();
+            return true;
+        }
+        false
     }
 
     /// Step the state machine for one chained APDU. The caller is
@@ -306,7 +343,9 @@ impl HidFrameAssembler {
     ///   * `PingEcho` — caller must echo `report[..HID_REPORT_SIZE]`
     ///     back to the host.
     ///   * `Dropped` — frame was malformed, sequence/channel mismatched,
-    ///     or out-of-bounds. State has been reset.
+    ///     or out-of-bounds. State has been reset — unless the frame was
+    ///     a foreign-channel seq=0, which is dropped with the owner's
+    ///     in-progress stream left intact.
     pub fn process_frame(
         &mut self,
         report: &[u8],
@@ -338,16 +377,28 @@ impl HidFrameAssembler {
             if n < 7 {
                 return FrameOutcome::Dropped;
             }
-            // Abort + scrub if a fresh first-frame interrupts an
-            // in-progress reassembly. A host whose framing state has
-            // gone out of sync must restart from a clean slate; we
-            // do NOT silently let the new seq=0 reuse the buffer
-            // while old partial bytes linger past the new
-            // `rx_expected`. The host can recover by retrying its
-            // seq=0 once the abort response (`Dropped`) arrives.
-            // Tracks §19 P0 "Bounded APDU reassembly" in
-            // `docs/security/production-security.md` §2.4.
             if self.rx_pos > 0 {
+                // A seq=0 from a DIFFERENT channel mid-stream must NOT
+                // scrub the owner's partially reassembled APDU — that
+                // is a one-frame cross-channel starvation primitive
+                // (finding F1; §31a channel isolation, which the
+                // continuation path already enforces via the
+                // `channel != self.channel_id` mismatch check below).
+                // Drop the foreign frame, keep the owner's stream; the
+                // foreign host retries once the owner finishes.
+                if channel != self.channel_id {
+                    return FrameOutcome::Dropped;
+                }
+                // Same channel: abort + scrub when a fresh first-frame
+                // interrupts its own in-progress reassembly. A host
+                // whose framing state has gone out of sync must restart
+                // from a clean slate; we do NOT silently let the new
+                // seq=0 reuse the buffer while old partial bytes linger
+                // past the new `rx_expected`. `Dropped` produces no
+                // response at the transport layer, so the host recovers
+                // by retrying its seq=0 after its own timeout.
+                // Tracks §19 P0 "Bounded APDU reassembly" in
+                // `docs/security/production-security.md` §2.4.
                 let stale = core::cmp::min(self.rx_pos, buf.len());
                 for b in &mut buf[..stale] {
                     *b = 0;
@@ -764,6 +815,35 @@ mod fuzz_props {
         assert_eq!(s.pos(), 0);
     }
 
+    #[test]
+    fn chain_tick_timeout_bounds_total_chain_lifetime() {
+        // X17-UC1 / F2: a chain that never completes must not pin the
+        // router lease forever, whether the host crashed (silence) or
+        // keepalive-drips chunks (activity must NOT reset the clock).
+        let mut s = ChainState::new();
+        // No chain live: ticking is a no-op and never reports.
+        assert!(!s.tick_timeout(ChainState::CHAIN_TIMEOUT_FRAMES + 1));
+        assert_eq!(s.active_ins(), 0);
+
+        // Open a chain, then keep it busy: steps do not extend the
+        // lifetime budget (total-exchange deadline, not idle timeout).
+        let _ = s.step(0x30, 0x80, 10, 4096);
+        assert_eq!(s.active_ins(), 0x30);
+        assert!(!s.tick_timeout(ChainState::CHAIN_TIMEOUT_FRAMES - 1));
+        let _ = s.step(0x30, 0x80, 10, 4096); // mid-window activity
+        assert!(s.tick_timeout(1));
+        // Chain was reset; the caller releases the router lease.
+        assert_eq!(s.active_ins(), 0);
+        assert_eq!(s.pos(), 0);
+        // Edge-triggered: an immediate re-tick does not report again.
+        assert!(!s.tick_timeout(ChainState::CHAIN_TIMEOUT_FRAMES + 1));
+
+        // A fresh chain after a timeout starts with a fresh budget.
+        let _ = s.step(0x30, 0x80, 10, 4096);
+        assert!(!s.tick_timeout(ChainState::CHAIN_TIMEOUT_FRAMES - 1));
+        assert_eq!(s.active_ins(), 0x30);
+    }
+
     // ---------------------------------------------------------------
     // HID channel-ID isolation regression test (work-todo §31a)
     // ---------------------------------------------------------------
@@ -878,6 +958,64 @@ mod fuzz_props {
         // captured value but `rx_*` are reset.
         assert_eq!(asm.channel_id(), 0xCCCC);
         assert_eq!(asm.rx_expected(), 0);
+    }
+
+    #[test]
+    fn hid_cross_channel_first_frame_does_not_abort_in_progress_stream() {
+        // §31a / finding F1: while channel A's reassembly is in
+        // progress, a seq=0 frame from a FOREIGN channel B must be
+        // dropped WITHOUT scrubbing/resetting A's stream — otherwise B
+        // starves A at a cost of one frame vs A's whole transfer.
+        let mut buf = [0u8; MAX_APDU_RX];
+        let mut asm = HidFrameAssembler::new();
+
+        // Frame 0: channel 0xAAAA, expected 120 bytes (needs ≥1 cont).
+        let f0 = hid_first_frame(0xAAAA, 120, &[0x11; HID_FIRST_DATA]);
+        assert_eq!(
+            asm.process_frame(&f0, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::NeedMore
+        );
+        assert_eq!(asm.channel_id(), 0xAAAA);
+        assert_eq!(asm.rx_expected(), 120);
+
+        // Channel 0xBBBB injects its own first-frame mid-stream.
+        let foreign = hid_first_frame(0xBBBB, 300, &[0xEE; HID_FIRST_DATA]);
+        assert_eq!(
+            asm.process_frame(&foreign, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::Dropped
+        );
+        // A's stream is untouched: bookkeeping survives and the
+        // reassembly buffer was NOT scrubbed.
+        assert_eq!(asm.channel_id(), 0xAAAA);
+        assert_eq!(asm.rx_expected(), 120);
+        assert_eq!(&buf[..HID_FIRST_DATA], &[0x11; HID_FIRST_DATA]);
+
+        // A's continuation still assembles to completion.
+        let f1 = hid_cont_frame(0xAAAA, 1, &[0x22; HID_CONT_DATA]);
+        assert_eq!(
+            asm.process_frame(&f1, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::NeedMore
+        );
+        let f2 = hid_cont_frame(0xAAAA, 2, &[0x33; HID_CONT_DATA]);
+        assert_eq!(
+            asm.process_frame(&f2, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::ApduComplete(120)
+        );
+
+        // The same-channel desync-abort is preserved: A restarts with
+        // seq=0 mid-stream → scrub + reset + Dropped.
+        let f0_a = hid_first_frame(0xAAAA, 120, &[0x44; HID_FIRST_DATA]);
+        assert_eq!(
+            asm.process_frame(&f0_a, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::NeedMore
+        );
+        let desync = hid_first_frame(0xAAAA, 300, &[0x55; HID_FIRST_DATA]);
+        assert_eq!(
+            asm.process_frame(&desync, HID_REPORT_SIZE, &mut buf),
+            FrameOutcome::Dropped
+        );
+        assert_eq!(asm.rx_expected(), 0);
+        assert_eq!(&buf[..HID_FIRST_DATA], &[0u8; HID_FIRST_DATA]);
     }
 }
 

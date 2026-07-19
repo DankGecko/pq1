@@ -685,6 +685,30 @@ fn negative_request_unlock_uses_gated_unlock_not_raw_se_unlock() {
 }
 
 #[test]
+fn positive_request_unlock_short_circuits_when_already_unlocked() {
+    // Finding F3 (idempotence): an UNLOCK APDU on an already-unlocked
+    // device must return Ok WITHOUT popping a fresh trusted-UI PIN
+    // dialog — otherwise a hostile companion spams prompts
+    // (prompt-fatigue) and each wrong entry burns a lockout attempt.
+    // Pin that run() reads pin_verified (FI-hardened, same accessor as
+    // cmd_is_unlocked) BEFORE it can reach the enter_pin() call.
+    let fn_start = REQUEST_UNLOCK_SRC
+        .find("pub(super) unsafe fn run()")
+        .expect("cmd_request_unlock::run must exist");
+    let body = &REQUEST_UNLOCK_SRC[fn_start..];
+    let gate = body
+        .find("pin_verified.is_true_fi()")
+        .expect("run() must short-circuit on pin_verified when already unlocked (F3)");
+    let prompt = body
+        .find("enter_pin()")
+        .expect("run() must still drive enter_pin() for the locked path");
+    assert!(
+        gate < prompt,
+        "the already-unlocked short-circuit must precede enter_pin() (finding F3)"
+    );
+}
+
+#[test]
 fn positive_verify_pin_with_chip_has_entry_jitter_before_gated_unlock() {
     // §18 P1 — verify_pin_with_chip is the entry from the USB
     // `CMD_REQUEST_UNLOCK` veneer, the closest point to the external

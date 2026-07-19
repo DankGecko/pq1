@@ -700,6 +700,27 @@ fn negative_commit_checks_pin_verified_first() {
 }
 
 #[test]
+fn positive_commit_resets_idle_timer_only_with_live_context() {
+    // Finding F20: `cmd_fw_chunk.rs` documents "CHUNK does NOT reset
+    // the idle timer — BEGIN already did, and COMMIT will again", but
+    // COMMIT never did. Pin the reset AND its placement: it must come
+    // AFTER the live-context check so a context-free COMMIT spam (the
+    // `FwUpdateBadState` path) can't extend the 120 s idle window
+    // (X17-UI3 pattern), while a real finalize leaves the host a fresh
+    // window to recover from a dropped-context failure.
+    let ctx_check = COMMIT_SRC
+        .find("NscStatus::FwUpdateBadState as u32")
+        .expect("cmd_fw_commit must bail with FwUpdateBadState when no context");
+    let reset = COMMIT_SRC
+        .find("timeout::reset_activity();")
+        .expect("cmd_fw_commit must reset the idle timer (documented in cmd_fw_chunk.rs)");
+    assert!(
+        ctx_check < reset,
+        "the idle-timer reset must sit behind the live-context check, not on the spam path"
+    );
+}
+
+#[test]
 fn negative_status_checks_pin_verified_first() {
     // LOW-1 (fw-update audit 20260611): STATUS is pin-gated like every
     // other FW entry point. Pre-unlock the session context is already

@@ -12,7 +12,7 @@ fw-manifest       = { workspace = true }
 pqsigner-fi       = { workspace = true }
 # ML-KEM-1024 + HMAC(HUK) + AES-256-GCM hybrid inner wrap for the dual-SE
 # entropy halves (HNDL/CRQC defence). `secure/src/pq_wrap.rs` binds it to
-# `hw::huk` + the TRNG. See `docs/security/ml-kem-inner-wrap.md`.
+# `hw::secret_keys` + the TRNG. See `docs/security/ml-kem-inner-wrap.md`.
 pqsigner-pq-seal  = { workspace = true }
 # Pure-logic tx primitives (RLP, EIP-1559 envelope, U256, keccak256).
 # Extracted from `secure/src/tx/{rlp,eip1559,hash}.rs` in Phase 5 PR 5.1.

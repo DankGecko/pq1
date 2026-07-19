@@ -97,9 +97,11 @@ ML-KEM keypair, sk stored in secure flash."* We instead **derive the keypair
 deterministically from a HUK-bound 64-byte seed each boot** (`ml-kem`'s
 `DecapsulationKey::from_seed`, the FIPS-203 `d‖z` seed = the canonical sk
 serialization). This is strictly stronger: nothing lattice-secret is *stored* in
-plaintext, on a bus, or on an SE — the "sk" is `hw::huk::derive_device_key`
-output, per-die and deterministic across boots (exactly the "seal-at-write,
-unseal-at-read" property HUK already guarantees). Recovering a half therefore
+plaintext, on a bus, or on an SE — the "sk" is derived per boot from
+`hw::secret_keys` labels (`mlkem_seed` / `mlkem_wrap_secret`, see
+`secure/src/pq_wrap.rs`), per-die and deterministic across boots
+(exactly the "seal-at-write, unseal-at-read" property HUK already
+guarantees). Recovering a half therefore
 requires physical extraction of the *specific* U585 die + a working RDP-2 break
 + HUK extraction — and even then only one half, the other being on the other SE
 under a different ciphertext gated by that SE's retry counter.

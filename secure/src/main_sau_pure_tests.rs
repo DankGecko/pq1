@@ -556,6 +556,46 @@ fn positive_tz2_locks_security_config_after_enabling_sau() {
 }
 
 #[test]
+fn positive_aircr_sec_config_write_is_read_back_before_freeze() {
+    // X17-TZ1 (playbook TZ10): the AIRCR security-config write must be
+    // read-back verified BEFORE LOCKSVTAIRCR freezes it. The old
+    // "a read returns VECTKEYSTAT" justification only covered bits
+    // [31:16]; PRIS/BFHFNMINS/SYSRESETREQS are in the readable low
+    // half-word, so a skipped store would have frozen in silence
+    // (PRIS=0 → NS IRQ can preempt a secure veneer mid-handler).
+    let fn_start = SAU_SRC
+        .find("pub fn lock_security_config()")
+        .expect("lock_security_config() must exist");
+    let body = &SAU_SRC[fn_start..];
+    let write = body
+        .find("aircr.write(v);")
+        .expect("AIRCR write must exist");
+    let readback = body
+        .find("verify_or_halt(aircr.read() & AIRCR_SECCFG_MASK, v & AIRCR_SECCFG_MASK);")
+        .expect("AIRCR security-config write must be read-back verified (X17-TZ1)");
+    let freeze = body
+        .find("syscfg_cslckr.set_bits(CSLCKR_LOCKSAU | CSLCKR_LOCKSVTAIRCR);")
+        .expect("LOCKSVTAIRCR freeze must exist");
+    assert!(
+        write < readback && readback < freeze,
+        "AIRCR readback verify must sit between the write and the LOCKSVTAIRCR freeze"
+    );
+
+    // The mask must cover exactly the owned low-half-word security bits
+    // (never the VECTKEY/VECTKEYSTAT top half-word, which does not read
+    // back as written) and must include SYSRESETREQS only under
+    // mode-production — mirroring the write side's cfg gate.
+    assert!(
+        SAU_SRC.contains(
+            "const AIRCR_SECCFG_MASK: u32 = AIRCR_PRIS | AIRCR_BFHFNMINS;"
+        ) && SAU_SRC.contains(
+            "const AIRCR_SECCFG_MASK: u32 =\n            AIRCR_PRIS | AIRCR_BFHFNMINS | AIRCR_SYSRESETREQS;"
+        ),
+        "AIRCR_SECCFG_MASK must cover PRIS|BFHFNMINS (+SYSRESETREQS in production) and exclude the VECTKEY half-word"
+    );
+}
+
+#[test]
 fn positive_sau_region_count_is_four() {
     // The boot path programs exactly four regions: NS flash, NSC
     // veneers, NS data SRAM, NS peripherals. A fifth region would

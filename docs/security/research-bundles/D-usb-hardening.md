@@ -252,7 +252,7 @@ pub unsafe fn init() {
     // With TZEN=1, all GPIO pins default to secure (SECCFGR = 0xFFFF).
     // The USB OTG FS peripheral runs in NS domain, so it can only drive
     // pins that are marked as non-secure. Clear the security bits for
-    // PA11 (D-), PA12 (D+) and PB5 (TCPP03 EN), PB6 (CC1), PB7 (CC2).
+    // PA11 (D-), PA12 (D+), PA15 (CC1) and PB5 (TCPP03 EN), PB15 (CC2).
     REG.gpioa_seccfgr.clear_bits((1 << 11) | (1 << 12) | (1 << 15)); // PA11,12,15 = NS
     REG.gpiob_seccfgr.clear_bits((1 << 5) | (1 << 15)); // PB5,15 = NS
 
@@ -1311,10 +1311,31 @@ static mut PENDING_ELAPSED_FRAMES: u32 = 0;
 /// 30 s at the nominal 1 ms USB SOF cadence.
 const PENDING_TIMEOUT_FRAMES: u32 = 30_000;
 
+/// Absolute total-drain deadline (sweep finding F2): the inter-chunk
+/// timeout above is activity-reset by every GET_RESPONSE, so a
+/// slow-drain keepalive (one GET_RESPONSE every <30 s, final chunk
+/// never taken) would pin the F11 router lease forever. This second
+/// accumulator is NOT reset by drain activity; once it reaches
+/// `PENDING_ABS_TIMEOUT_FRAMES` the drain is scrubbed and the lease
+/// released regardless of keepalives. 120 s is ~7× the time a
+/// worst-case legitimate drain (17 initCode chunks, even at a
+/// pathological 5 s per GET_RESPONSE round-trip) could need.
+static mut PENDING_ABS_ELAPSED_FRAMES: u32 = 0;
+/// 120 s at the nominal 1 ms USB SOF cadence.
+const PENDING_ABS_TIMEOUT_FRAMES: u32 = 120_000;
+
+/// USB SOF frame of the last `check_chain_timeout` call — same
+/// wrap-safe delta pattern as `PENDING_LAST_FRAME`.
+static mut CHAIN_LAST_FRAME: u16 = 0;
+
 // ---------------------------------------------------------------------------
 // Firmware version
 // ---------------------------------------------------------------------------
 
+// Hardcoded placeholder, NOT the running image's identity: nothing
+// plumbs the real build version into this constant, so GET_DEVICE_INFO
+// returns these same bytes for every firmware. Companions must NOT key
+// protocol decisions (e.g. wire-format selection) on it.
 const FW_VERSION: [u8; 3] = [0x03, 0x00, 0x00];
 
 // ---------------------------------------------------------------------------
@@ -1427,11 +1448,13 @@ impl CommandRouter {
             INS_V2_OFFCHAIN_STATUS => return self.cmd_offchain_status(data),
             INS_V2_OFFCHAIN_SYNC => return self.cmd_offchain_sync(data),
 
-            // Firmware-update non-chained commands. CHUNK carries the
-            // 8-byte header + up to 1024 bytes of data — well under
-            // the 253-byte APDU data limit, so it's NOT chained:
-            // each CMD_FW_CHUNK is exactly one APDU. COMMIT / STATUS
-            // / ABORT have no payload.
+            // Firmware-update non-chained commands. CHUNK is not in
+            // the chained-INS set, so each CMD_FW_CHUNK is exactly one
+            // APDU: the u8 `Lc` caps one APDU at 255 payload bytes,
+            // i.e. the 8-byte header plus at most 247 bytes of chunk
+            // data on the wire (the `FW_MAX_CHUNK = 1024` protocol cap
+            // checked in `cmd_fw_chunk` is unreachable in one APDU).
+            // COMMIT / STATUS / ABORT have no payload.
             #[cfg(feature = "stm32u585")]
             INS_V2_FW_CHUNK => return self.cmd_fw_chunk(data),
             #[cfg(feature = "stm32u585")]
@@ -1582,17 +1605,24 @@ impl CommandRouter {
         let remaining = nsc_api::get_remaining_attempts();
         let unlocked = nsc_api::is_unlocked();
 
-        let provisioned: u8 = if remaining <= MAX_ATTEMPTS as u32 { 1 } else { 0 };
-
-        RESP_BUF[0] = provisioned;
-        RESP_BUF[1] = if unlocked { 0 } else { 1 };
-        RESP_BUF[2] = remaining as u8;
-        RESP_BUF[3] = (SW_OK >> 8) as u8;
-        RESP_BUF[4] = (SW_OK & 0xFF) as u8;
+        // Work-todo X17-UC2: the response carries NO `provisioned`
+        // byte. It used to lead the reply, derived as
+        // `remaining <= MAX_ATTEMPTS` — always true, so the byte was a
+        // constant-1 that lied on blank devices. The honest options
+        // were a real provisioning-state veneer (rejected: no such
+        // veneer exists and provisioning state is a live SE-chip probe,
+        // far too heavy and too much new NS-callable surface for a
+        // status poll) or deleting the byte — deleted. Companions must
+        // detect the unprovisioned state from the on-device first-boot
+        // wizard instead.
+        RESP_BUF[0] = if unlocked { 0 } else { 1 };
+        RESP_BUF[1] = remaining as u8;
+        RESP_BUF[2] = (SW_OK >> 8) as u8;
+        RESP_BUF[3] = (SW_OK & 0xFF) as u8;
 
         Response {
             ptr: RESP_BUF.as_ptr(),
-            len: 5,
+            len: 4,
         }
     }
 
@@ -1937,7 +1967,10 @@ impl CommandRouter {
         }
 
         // Progress — the host is actively draining, so reset the
-        // inter-chunk idle timeout accumulator.
+        // inter-chunk idle timeout accumulator. The absolute drain
+        // deadline (`PENDING_ABS_ELAPSED_FRAMES`, finding F2) is
+        // deliberately NOT reset here: keepalive activity must not
+        // extend the total-exchange bound.
         PENDING_ELAPSED_FRAMES = 0;
 
         let remaining = PENDING_LEN - PENDING_POS;
@@ -1969,12 +2002,16 @@ impl CommandRouter {
         }
     }
 
-    /// Enforce the 30-second GET_RESPONSE inter-chunk timeout. Call once
-    /// per NS poll-loop iteration with the current `OTG_DSTS.FNSOF`
-    /// (`usb::usb_frame_number`). If a chunked-response drain has been
-    /// idle (no GET_RESPONSE) for `PENDING_TIMEOUT_FRAMES`, scrub the
-    /// pending cursor so a stalled host can't pin the buffer. No-op when
-    /// no drain is in progress.
+    /// Enforce the GET_RESPONSE drain timeouts. Call once per NS
+    /// poll-loop iteration with the current `OTG_DSTS.FNSOF`
+    /// (`usb::usb_frame_number`). Two bounds, either one scrubs the
+    /// pending cursor and releases the router lease:
+    ///   * idle: no GET_RESPONSE for `PENDING_TIMEOUT_FRAMES` (30 s), so
+    ///     a stalled host can't pin the buffer;
+    ///   * absolute: `PENDING_ABS_TIMEOUT_FRAMES` (120 s) of total drain
+    ///     lifetime regardless of keepalive activity (finding F2), so a
+    ///     slow-drain can't pin the F11 lease indefinitely.
+    /// No-op when no drain is in progress.
     ///
     /// # Safety
     /// Touches the module `PENDING_*` static-mut state under the
@@ -1985,20 +2022,50 @@ impl CommandRouter {
             // No drain in progress — keep the clock reference fresh so
             // the first frame of the next drain measures a small delta.
             PENDING_ELAPSED_FRAMES = 0;
+            PENDING_ABS_ELAPSED_FRAMES = 0;
             PENDING_LAST_FRAME = now_frame;
             return;
         }
         let delta = now_frame.wrapping_sub(PENDING_LAST_FRAME) & 0x3FFF;
         PENDING_LAST_FRAME = now_frame;
         PENDING_ELAPSED_FRAMES = PENDING_ELAPSED_FRAMES.saturating_add(delta as u32);
-        if PENDING_ELAPSED_FRAMES >= PENDING_TIMEOUT_FRAMES {
-            // Abandoned drain — scrub, and release the router lease (F11) so a
-            // new channel can start a fresh exchange. A pending drain and a live
-            // chain are mutually exclusive, so clearing the owner here is safe.
+        // Activity resets the idle accumulator in `get_response` but
+        // never this absolute one.
+        PENDING_ABS_ELAPSED_FRAMES = PENDING_ABS_ELAPSED_FRAMES.saturating_add(delta as u32);
+        if PENDING_ELAPSED_FRAMES >= PENDING_TIMEOUT_FRAMES
+            || PENDING_ABS_ELAPSED_FRAMES >= PENDING_ABS_TIMEOUT_FRAMES
+        {
+            // Abandoned or over-long drain — scrub, and release the router
+            // lease (F11) so a new channel can start a fresh exchange. A
+            // pending drain and a live chain are mutually exclusive, so
+            // clearing the owner here is safe.
             PENDING_PTR = core::ptr::null();
             PENDING_LEN = 0;
             PENDING_POS = 0;
             PENDING_ELAPSED_FRAMES = 0;
+            PENDING_ABS_ELAPSED_FRAMES = 0;
+            ROUTER_OWNER = None;
+        }
+    }
+
+    /// Enforce the 30-second total-lifetime bound on a chained-APDU
+    /// exchange (work-todo X17-UC1). Call once per NS poll-loop
+    /// iteration, next to `check_response_timeout`. The chain state
+    /// machine itself (`ChainState::tick_timeout`) owns the clock and
+    /// the reset; on expiry this releases the F11 router lease so a
+    /// crashed or keepalive-dripping chain-opener cannot lock out every
+    /// other channel until power-cycle. No-op when no chain is live.
+    ///
+    /// # Safety
+    /// Touches the module `ROUTER_OWNER` static-mut state under the
+    /// single-threaded NS dispatcher invariant (same as `dispatch`).
+    pub unsafe fn check_chain_timeout(&mut self, now_frame: u16) {
+        let delta = now_frame.wrapping_sub(CHAIN_LAST_FRAME) & 0x3FFF;
+        CHAIN_LAST_FRAME = now_frame;
+        if self.chain.tick_timeout(delta as u32) {
+            // Chain lifetime expired — `tick_timeout` already reset the
+            // chain state. A live chain and a pending drain are mutually
+            // exclusive, so clearing the owner here is safe.
             ROUTER_OWNER = None;
         }
     }
@@ -2501,8 +2568,15 @@ Response is a status word only (no data).
 
 Returns:
 ```
-[provisioned u8] [locked u8] [pin_remaining u8]
+[locked u8] [pin_remaining u8]
 ```
+
+There is deliberately NO `provisioned` byte: the firmware once emitted
+one derived as `pin_remaining <= MAX_ATTEMPTS`, which is always true,
+so the byte was a constant-1 that reported "provisioned" even on a
+blank device (finding X17-UC2). Rather than lie, the byte was removed.
+A blank device runs the on-device first-boot wizard; detect that state
+from the wizard UI, not from GET_STATUS.
 
 ### 0x01 GET_DEVICE_INFO
 

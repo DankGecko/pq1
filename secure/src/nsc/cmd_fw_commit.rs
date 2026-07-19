@@ -29,6 +29,7 @@ use super::state::{peek_state, FW_UPDATE};
 use super::{GatewayArgs, HandlerGuard};
 use crate::fw_update::{self, verify::ImageCheckError};
 use crate::hw::{boot_state, flash, otp};
+use crate::timeout;
 use crate::ui;
 
 /// # Safety
@@ -50,6 +51,18 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
     let Some(ctx) = ctx_ref else {
         return NscStatus::FwUpdateBadState as u32;
     };
+
+    // Reset the idle activity timer — the contract documented in
+    // `cmd_fw_chunk.rs` ("CHUNK does NOT reset the idle timer — BEGIN
+    // already did, and COMMIT will again"). Reaching here means a live
+    // FW_UPDATE context exists, i.e. this COMMIT finalizes a real,
+    // user-confirmed BEGIN — not companion keepalive spam, so the
+    // no-context `FwUpdateBadState` path above deliberately does NOT
+    // reset (that would reopen the X17-UI3 idle-window-extension
+    // pattern). The reset matters on the failure paths below: they drop
+    // the context and let the host re-BEGIN, which needs a fresh 120 s
+    // window rather than whatever the BEGIN→…→COMMIT transfer left over.
+    timeout::reset_activity();
 
     // Re-hash + compare. A successful verify_images proves the bytes
     // streamed into the inactive slot match the vendor-signed manifest

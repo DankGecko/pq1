@@ -18,6 +18,18 @@ use crate::ui;
 pub(super) unsafe fn run() -> u32 {
     use crate::ui::pin_entry::{enter_pin, PinEntryResult};
 
+    // Finding F3 — REQUEST_UNLOCK must be idempotent: when the device
+    // is already unlocked the requested end state already holds, so
+    // respond `Ok` WITHOUT re-popping the trusted-UI PIN dialog.
+    // Otherwise a hostile companion can spam INS_V2_UNLOCK to keep
+    // unsolicited PIN prompts on the display (prompt-fatigue), where
+    // each wrong entry burns one of the lockout attempts. Reads
+    // `pin_verified` through the same FI-hardened accessor
+    // `cmd_is_unlocked` uses.
+    if state::peek_state(|s| s.pin_verified.is_true_fi()) {
+        return NscStatus::Ok as u32;
+    }
+
     // HIGH-7 fix: prevent SysTick idle-wipe from racing us while the
     // user is typing the PIN or while we are deriving master_secret.
     let _busy = super::HandlerGuard::enter();

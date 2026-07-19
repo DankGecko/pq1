@@ -126,7 +126,7 @@ pub unsafe fn init() {
     // With TZEN=1, all GPIO pins default to secure (SECCFGR = 0xFFFF).
     // The USB OTG FS peripheral runs in NS domain, so it can only drive
     // pins that are marked as non-secure. Clear the security bits for
-    // PA11 (D-), PA12 (D+) and PB5 (TCPP03 EN), PB6 (CC1), PB7 (CC2).
+    // PA11 (D-), PA12 (D+), PA15 (CC1) and PB5 (TCPP03 EN), PB15 (CC2).
     REG.gpioa_seccfgr.clear_bits((1 << 11) | (1 << 12) | (1 << 15)); // PA11,12,15 = NS
     REG.gpiob_seccfgr.clear_bits((1 << 5) | (1 << 15)); // PB5,15 = NS
 

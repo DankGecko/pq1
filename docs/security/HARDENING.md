@@ -297,7 +297,7 @@ Say this out loud to yourself before every commit:
 - Clean-room facility. No network on provisioning stations.
 - HSM-backed generation of per-device SCP03 keys, or EdgeLock 2GO.
 - Provisioning logs never contain secret material. Audit every log statement.
-- Factory acceptance proves only the authorized RDP-0 transport/attestation state. First-field acceptance, after owner verification, separately proves the RDP-2 self-lock, BHK first write, final secure-channel rotation, and seed-wizard completion.
+- Factory acceptance is a completion-flag check (`is_provisioned` + OTP sentinel read over probe-rs), not cryptographic per-unit attestation — a malicious provisioning station can forge it. Real per-unit attestation (SE050 ECKey attestation, #22 / S-G) is unbuilt. First-field acceptance, after owner verification, separately proves the RDP-2 self-lock, BHK first write, final secure-channel rotation, and seed-wizard completion.
 - Tamper-evident packaging between facility and user.
 - A provisioning station compromise compromises every device that passed through it during the compromise window. Have a plan.
 

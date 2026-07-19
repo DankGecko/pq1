@@ -540,6 +540,23 @@ mod stm32 {
         aircr.write(v);
         cortex_m::asm::dsb();
 
+        // X17-TZ1 (playbook TZ10): verify the security-config bits we
+        // just wrote BEFORE LOCKSVTAIRCR freezes them. The "a read
+        // returns VECTKEYSTAT" caveat covers ONLY bits [31:16] — PRIS /
+        // BFHFNMINS / SYSRESETREQS sit in the readable low half-word,
+        // so an FI'd/skipped store would otherwise sail into the freeze
+        // unnoticed (PRIS=0 → an NS IRQ can preempt a secure veneer
+        // mid-handler). Same unconditional fail-closed convention as
+        // the lock-bit readback below. Masked to exactly the bits this
+        // function owns; comparing against `v`'s masked value verifies
+        // both the PRIS/SYSRESETREQS sets AND the BFHFNMINS clear.
+        #[cfg(not(feature = "mode-production"))]
+        const AIRCR_SECCFG_MASK: u32 = AIRCR_PRIS | AIRCR_BFHFNMINS;
+        #[cfg(feature = "mode-production")]
+        const AIRCR_SECCFG_MASK: u32 =
+            AIRCR_PRIS | AIRCR_BFHFNMINS | AIRCR_SYSRESETREQS;
+        verify_or_halt(aircr.read() & AIRCR_SECCFG_MASK, v & AIRCR_SECCFG_MASK);
+
         // (2) Freeze SAU regions + AIRCR security-config, (3) freeze GTZC1
         // TZSC per-peripheral attributes. Both lock bits are sticky-set.
         syscfg_cslckr.set_bits(CSLCKR_LOCKSAU | CSLCKR_LOCKSVTAIRCR);
@@ -550,8 +567,10 @@ mod stm32 {
         // Write-readback self-check, UNCONDITIONAL + fail-closed (F6): the lock
         // bits must read back set before NS boots, in release too (the previous
         // `debug_assert_eq!` was a no-op under `--release`, so a faulted lock
-        // write left SAU/TZSC re-writable with nobody noticing). AIRCR is NOT
-        // checked here — a read returns VECTKEYSTAT, not VECTKEY.
+        // write left SAU/TZSC re-writable with nobody noticing). The AIRCR
+        // security-config bits were already verified above (X17-TZ1) — only
+        // the top-half VECTKEY field is unreadable (reads as VECTKEYSTAT), and
+        // the mask there deliberately excludes it.
         let want = CSLCKR_LOCKSAU | CSLCKR_LOCKSVTAIRCR;
         verify_or_halt(syscfg_cslckr.read() & want, want); // SAU/AIRCR lock bits
         verify_or_halt(tzsc_cr.read() & TZSC_CR_LCK, TZSC_CR_LCK); // TZSC CR.LCK

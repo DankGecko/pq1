@@ -8,6 +8,10 @@
 //! This is a legacy regression check, not production geometry or resource
 //! approval. Draft 1.1 proposes a 40,960-byte hard ceiling and separately
 //! requires physical LOAD-span and static-RAM/worst-case-stack gates.
+//!
+//! Toolchain handling (F21): when `arm-none-eabi-size` is absent the test
+//! FAILS CLOSED in a CI context (`CI` env var set — a skip there asserts
+//! nothing) and skips with a message only on local dev boxes.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -46,6 +50,15 @@ fn workspace_root() -> PathBuf {
 #[test]
 fn fsbl_release_flash_sections_fit_in_32kb() {
     if !toolchain_available() {
+        // Fail CLOSED in CI (GitHub Actions always sets CI=true): a gate that
+        // skips green there asserts nothing at all (F21 — this test silently
+        // passed on any toolchain-less CI image). Locally the skip stays
+        // ergonomic: install gcc-arm-none-eabi to run the gate for real.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "arm-none-eabi-size not on PATH in CI — install gcc-arm-none-eabi in \
+             the workflow. The FSBL 32 KB footprint gate must never skip green."
+        );
         eprintln!(
             "skipping: arm-none-eabi-size not on PATH. Install the \
              gcc-arm-none-eabi toolchain to enable this CI gate."

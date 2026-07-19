@@ -120,12 +120,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         }
     }
 
-    // Defense-in-depth: the manifest's declared image lengths are signed-
-    // over (so a network attacker can't change them), but the verify chain
-    // doesn't itself bound them against the actual A/B slot capacity.
-    // Without this check, a vendor-signed manifest declaring
-    // `secure_len = u32::MAX` would let later CHUNKs walk past the slot
-    // until `check_chunk`'s per-chunk `checked_add` on
+    // The manifest's declared image lengths are NOT signed-over (the
+    // signed preimage covers only `fw_version` and the two image hashes —
+    // see `fw-manifest`), and the verify chain doesn't bound them against
+    // the actual A/B slot capacity either — this check is the SOLE bound.
+    // Without it, a network attacker flipping `secure_len` to `u32::MAX`
+    // on an otherwise valid signed manifest would let later CHUNKs walk
+    // past the slot until `check_chunk`'s per-chunk `checked_add` on
     // `base_addr + chunk_offset` finally tripped — overwriting the other
     // slot / FSBL pages / etc. in the meantime. (Trezor enforces the
     // analogous bound against `FIRMWARE_MAXSIZE`.) See

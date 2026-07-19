@@ -9,7 +9,7 @@
 //! `docs/security/ml-kem-inner-wrap.md`). So the caller stores the 1568-byte
 //! ML-KEM `ct` in MCU secure flash (not a standalone secret — IND-CCA) and only
 //! the 48-byte `aead` on the SE. This is pure logic; the firmware binds `seed`
-//! + `huk_secret` from two `hw::huk` labels and `encaps_msg` from the TRNG.
+//! + `huk_secret` from two `hw::secret_keys` labels and `encaps_msg` from the TRNG.
 
 // `aad` (additional authenticated data) and `aead` (the sealed tail) are
 // distinct standard crypto terms that clippy::similar_names flags as too alike.

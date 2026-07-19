@@ -779,7 +779,7 @@ companions do not receive the seed or slot secrets and must not re-derive keys.
 
 ```
 GET_DEVICE_INFO                    → protocol, sig_size, EntryPoint version
-GET_STATUS                         → provisioned? locked?
+GET_STATUS                         → locked? pin_remaining?
 if locked:
     UNLOCK                         → user enters PIN on device
 GET_WALLET_ADDRESS(account_index=0) → <1 s first time, then wallet address

@@ -145,6 +145,11 @@ mod nsc;
 mod rng;
 #[cfg(not(test))]
 mod rng_strong;
+// Pure per-chunk SE-entropy fold used by `rng_strong` — kept OUT of
+// that `#[cfg(not(test))]` module so its logic (including the F27
+// fresh-block-per-chunk discipline) is compiled and exercised by the
+// host test suite.
+mod rng_strong_fold;
 mod pin;
 #[cfg(all(feature = "stm32u585", feature = "optiga-trust-m", not(test)))]
 mod pin_diag;
@@ -502,7 +507,7 @@ pub unsafe fn se_random(
 /// `pq_wrap::self_test` (which also checks cross-half AAD rejection), logs
 /// PASS/FAIL, exits cleanly via `SYS_EXIT` so `probe-rs`/QEMU returns. Never
 /// returns. This is the call that pulls ml-kem into the image (flash-delta
-/// measurement) and validates the `hw::huk` binding before piece 2b wires the
+/// measurement) and validates the HUK-secret binding before piece 2b wires the
 /// wrap into provision/reconstruct.
 #[cfg(feature = "mlkem-self-test")]
 fn mlkem_self_test_and_halt() -> ! {

@@ -4199,8 +4199,11 @@ verify-protocol-models: ## anti-vacuity: assert the protocol models' verdicts vs
 # blocking) — a gate that is green-when-run but never RUNS is false assurance (the
 # 2026-07-01 F1 finding: verify-ledger-consistency never fired on ledger-only edits).
 # Fast (grep + YAML parse, no build) → per-PR. `--self-test` = negative control.
+# F53: the self-test runs FIRST, like every sibling gate — an unwired negative
+# control leaves a silent regression of this meta-gate detected by nothing.
 .PHONY: verify-gate-enforcement
 verify-gate-enforcement: ## G1: assert every soundness gate is actually CI-enforced on its surface
+	@python3 scripts/check_gate_enforcement.py --self-test
 	python3 scripts/check_gate_enforcement.py
 
 # ---------------------------------------------------------------------------

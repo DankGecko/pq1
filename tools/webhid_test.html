@@ -870,7 +870,9 @@ const DeviceAPI = {
   async getStatus() {
     const r = await sendApdu(INS_GET_STATUS, 0, 0);
     if (r.sw !== SW_OK) throw new Error(`SW=0x${r.sw.toString(16)}`);
-    return { provisioned: r.data[0], locked: r.data[1], pinRemaining: r.data[2] };
+    // Wire format: [locked u8] [pin_remaining u8] — the old constant-1
+    // `provisioned` byte was removed (X17-UC2).
+    return { locked: r.data[0], pinRemaining: r.data[1] };
   },
 
   async unlock() {
@@ -1904,9 +1906,8 @@ $('submitBtn').addEventListener('click', async () => {
 async function refreshStatus() {
   try {
     const s = await DeviceAPI.getStatus();
-    log(`Status: provisioned=${s.provisioned}, locked=${s.locked}, pinRemaining=${s.pinRemaining}`);
-    if (s.provisioned === 0) setStatus('Not provisioned', 'err');
-    else if (s.locked) setStatus('Locked', 'warn');
+    log(`Status: locked=${s.locked}, pinRemaining=${s.pinRemaining}`);
+    if (s.locked) setStatus('Locked', 'warn');
     else {
       setStatus('Unlocked', 'ok');
       setButtonState(true, true);

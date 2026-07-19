@@ -570,6 +570,51 @@ fn negative_confirm_must_not_reset_activity_on_entry() {
 }
 
 #[test]
+fn negative_enter_pin_must_not_reset_activity_on_entry() {
+    // X17-UI3 — the HIGH-13 pattern on the NS-reachable PIN path.
+    // `enter_pin()` is driven by the REQUEST_UNLOCK veneer, so an
+    // entry reset would hand a hostile companion a way to refresh the
+    // 120 s unlocked window with zero button presses (one spammed
+    // prompt per <120 s keeps the session alive indefinitely). Only
+    // the post-`wait_button` reset inside the loop is legitimate user
+    // activity. Assert the entry-reset stays gone AND that the
+    // explanatory comment survives, so a refactor that re-introduces
+    // the reset is caught with a citation to the original bug.
+    assert!(
+        PIN_SRC.contains("HIGH-13 fix (work-todo X17-UI3): do NOT reset the inactivity\n    // timer on entry."),
+        "X17-UI3 comment must remain — it documents why the entry-reset is forbidden"
+    );
+    let prologue_start = PIN_SRC
+        .find("pub fn enter_pin() -> PinEntryResult {")
+        .expect("enter_pin fn must exist");
+    let loop_start = PIN_SRC[prologue_start..]
+        .find("loop {")
+        .expect("enter_pin must contain a main loop")
+        + prologue_start;
+    let prologue = &PIN_SRC[prologue_start..loop_start];
+    assert!(
+        !prologue.contains("timeout::reset_activity()"),
+        "X17-UI3: enter_pin() must NOT call timeout::reset_activity() before the input loop — \
+         spammed unlock prompts would otherwise refresh the inactivity window"
+    );
+    // Companion check: the reset MUST still happen inside the loop,
+    // after `wait_button` returns a real event (cf. the confirm()
+    // sibling test below) — deleting BOTH resets would idle-wipe the
+    // user mid-typing.
+    let loop_body = &PIN_SRC[loop_start..];
+    let wait = loop_body
+        .find("input().wait_button(&mut idle)")
+        .expect("enter_pin loop must wait on buttons");
+    let reset = loop_body
+        .find("timeout::reset_activity();")
+        .expect("enter_pin must keep the post-event reset (real user activity)");
+    assert!(
+        wait < reset,
+        "the in-loop reset_activity must follow wait_button (real user activity only)"
+    );
+}
+
+#[test]
 fn negative_confirm_only_resets_timer_after_a_button_event() {
     // Companion to the previous test: the reset MUST happen inside
     // the loop, AFTER the wait_button call returns Some(ev). If a

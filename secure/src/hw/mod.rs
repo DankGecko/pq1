@@ -70,12 +70,6 @@ pub mod otp;
 #[cfg(feature = "stm32u585")]
 pub mod boot_state;
 
-/// Device-bound wrap-key derivation (UID + OTP master). Only pulled
-/// in on real hardware because the QEMU flash backend is a RAM
-/// buffer and the QEMU UID is a constant.
-#[cfg(feature = "stm32u585")]
-pub mod huk;
-
 /// STM32U585 Secure AES (SAES) coprocessor driver — AES-256 ECB under
 /// KEYSEL={Software, DHUK, BHK, DHUK^BHK}. Tier 1 of the three-tier
 /// key hierarchy (work-todo #7). OFF by default; gated behind

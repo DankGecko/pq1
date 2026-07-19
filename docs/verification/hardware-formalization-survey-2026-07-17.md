@@ -546,7 +546,12 @@ response could cause a **duplicate apply** — a double-charged PIN attempt or a
 *The OPTIGA half is cheaper and better:* Infineon I2C v2.03 §6 is public and wire-complete, so
 re-deriving `optiga_shield_handshake.pv` from the **vendor spec** instead of from `shield.rs` is a real
 upgrade, buildable now. *Negative control:* a spec permitting a dropped R-block ack must violate the
-counting invariant. *Effort:* **3–4 wk.**
+counting invariant. *Effort:* **3–4 wk.** *Post-landing update (2026-07-17):* **LANDED same-day** as
+`optiga_shield_handshake_vendor.pv` (`9ec109ad`), re-derived from Infineon's reference implementation
+(`ifx_i2c_presentation_layer.c`, optiga-trust-m v5.6.0). The external oracle immediately caught the
+driver-derived model inventing a host nonce the protocol does not have — injective agreement TRUE in
+the driver-derived model, **FALSE** under the vendor derivation (the host contributes no session
+freshness; playbook SE5 / OP17-2).
 
 **P10. ES0499 read (days) + an errata-coverage table (manual, forever).**
 *First action, feeds P1/P2/P6:* **read ES0499 for a flash/OTP/ECC erratum.** It is the certificate's own
@@ -645,7 +650,9 @@ substitutes); the Lean/Aeneas track; the EasyCrypt track; the ERC-7730 surfaces.
    TN1545's four operational-environment objectives (P2).
 2. **`t1oi2c-framing-fsm-model`** — TLA+ alternating-bit/duplicate-apply model (P9). No prior art (§5.3).
 3. **`optiga-shield-spec-derived-model`** — re-derive the `.pv` from Infineon I2C v2.03 §6 rather than
-   from `shield.rs`.
+   from `shield.rs`. **LANDED 2026-07-17** (`9ec109ad`, `optiga_shield_handshake_vendor.pv`, derived
+   from the vendor reference implementation): caught the driver-derived model's invented host nonce —
+   inj-agreement TRUE there, FALSE vendor-side (SE5 / OP17-2).
 4. **`svd-register-transcription-gate`** — incl. `FLASH_OPTSR` OEM-lock bits (P3).
 5. **`trng-configuration-a-conformance`** — is `0x00F0_0D00` == RM0456 configuration A? (P4b/§4.6.)
 6. **`otp-halfburn-refutation`** — `is_device_master_burned()` accepts a single-QW burn (P6a) + the
