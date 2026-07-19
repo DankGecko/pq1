@@ -31,11 +31,12 @@ The semantic lane currently exercises four Merkle-verified PQ1 transcripts:
 an unsigned Type-2 Lido claim, a signed Type-2 Threshold stake, an unsigned
 EIP-155 legacy Lido transfer, and a flat-static Tally/UNI EIP-712 delegation.
 Corpus-derived mutations additionally pin proof and deployment binding,
-short/trailing static calldata refusal, and exact maximum-word rendering.
-Every presentation waiver is exact, case-owned, and consumed while walking the
-expected tokens in order; address waivers are also matched at their field
-position. The WETH `deposit()` fixture with trailing calldata remains an
-explicit PQ1 refusal.
+static and sole-dynamic offset/tail framing, exact EIP-712 member counts, and
+zero/maximum-word rendering. Every presentation waiver is exact, case-owned,
+and consumed while walking the expected tokens in order; address waivers are
+also class-pinned and matched at their field position. The long P2P string and
+the WETH `deposit()` fixture with trailing calldata remain explicit PQ1
+refusals.
 
 Refreshes must update the upstream SHA and fixture receipt in the same review
 as the vendored descriptor baseline. Do not hand-edit imported fixture JSON.

@@ -1457,6 +1457,114 @@ fn lido_claim_fixture_calldata_mutations_refuse_or_render_boundary_exactly() {
     );
 }
 
+#[test]
+fn p2p_dynamic_string_mutations_refuse_noncanonical_tail() {
+    let (_, raw) = fixture_case("registry/p2p/tests/calldata-P2pMessageSender.tests.json", 0);
+    let parsed = eip1559::parse(&raw).expect("P2P fixture is canonical unsigned Type-2");
+    assert_eq!(
+        parsed.data.get(..4),
+        Some(&keccak256(b"send(string)")[..4]),
+        "fixture selector is send(string)"
+    );
+    let to = parsed.tx.to.expect("P2P transaction target");
+    let registry = build_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == parsed.tx.chain_id
+                && entry.contract == to
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-P2pMessageSender.json")
+        })
+        .expect("accepted P2P descriptor leaf");
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("P2P bundle verifies");
+    cross_check_contract(&verified.ir, parsed.tx.chain_id, &to).expect("bind P2P descriptor");
+    assert!(matches!(
+        render_erc7730_pages(
+            &parsed.tx,
+            parsed.data,
+            &verified,
+            None,
+            &NameResolver::new(),
+        ),
+        Err(RenderErr::Reject("7730 string not displayable"))
+    ));
+
+    const MESSAGE: &[u8; 16] = b"withdraw-keys-v1";
+    let mut canonical = Vec::with_capacity(4 + 3 * 32);
+    canonical.extend_from_slice(&parsed.data[..4]);
+    let mut offset_word = [0u8; 32];
+    offset_word[31] = 32;
+    canonical.extend_from_slice(&offset_word);
+    let mut length_word = [0u8; 32];
+    length_word[31] = MESSAGE.len() as u8;
+    canonical.extend_from_slice(&length_word);
+    canonical.extend_from_slice(MESSAGE);
+    canonical.extend_from_slice(&[0u8; 16]);
+    assert_eq!(canonical.len(), 100, "selector plus one canonical ABI tail");
+
+    let mut canonical_tx = eip1559::parse(&raw).expect("reparse P2P shell").tx;
+    canonical_tx.data_len = canonical.len();
+    let canonical_pages = render_erc7730_pages(
+        &canonical_tx,
+        &canonical,
+        &verified,
+        None,
+        &NameResolver::new(),
+    )
+    .expect("canonical short P2P message renders");
+    let canonical_rows = normalized_rows(&canonical_pages);
+    let mut canonical_cursor = 0usize;
+    consume_normalized_token(&canonical_rows, &mut canonical_cursor, "Public keys");
+    consume_normalized_token(
+        &canonical_rows,
+        &mut canonical_cursor,
+        std::str::from_utf8(MESSAGE).expect("fixture message is ASCII"),
+    );
+    consume_normalized_token(&canonical_rows, &mut canonical_cursor, "16 bytes");
+
+    let mut aliased = canonical.clone();
+    aliased[35] = 0;
+    let mut aliased_tx = eip1559::parse(&raw).expect("reparse alias shell").tx;
+    aliased_tx.data_len = aliased.len();
+    assert!(matches!(
+        render_erc7730_pages(&aliased_tx, &aliased, &verified, None, &NameResolver::new(),),
+        Err(RenderErr::Reject("7730 res offset != head end"))
+    ));
+
+    let mut truncated = canonical.clone();
+    assert_eq!(truncated.pop(), Some(0));
+    let mut truncated_tx = eip1559::parse(&raw).expect("reparse truncation shell").tx;
+    truncated_tx.data_len = truncated.len();
+    assert!(matches!(
+        render_erc7730_pages(
+            &truncated_tx,
+            &truncated,
+            &verified,
+            None,
+            &NameResolver::new(),
+        ),
+        Err(RenderErr::Reject("7730 res pad oob"))
+    ));
+
+    let mut trailing = canonical;
+    trailing.push(0);
+    let mut trailing_tx = eip1559::parse(&raw).expect("reparse trailing shell").tx;
+    trailing_tx.data_len = trailing.len();
+    assert!(matches!(
+        render_erc7730_pages(
+            &trailing_tx,
+            &trailing,
+            &verified,
+            None,
+            &NameResolver::new(),
+        ),
+        Err(RenderErr::Reject("7730 res not whole tail"))
+    ));
+}
+
 fn render_adapted_contract_fixture(
     adapted: &AdaptedFixtureTx,
     source_name: &str,
@@ -1558,6 +1666,11 @@ fn legacy_lido_positive_matches_actual_merkle_verified_pq1_pages_with_exact_waiv
         .as_array()
         .expect("Lido wstETH expectedTexts");
     let waivers = case_waivers(relative_fixture, 3);
+    assert_eq!(
+        waivers.get(&3).map(|waiver| waiver.class.as_str()),
+        Some("line_wrapped_address_like"),
+        "the signed recipient waiver must retain its byte-binding class"
+    );
     let mut used_waivers = BTreeSet::new();
     let mut cursor = 0usize;
     let recipient_word: [u8; 32] = adapted.data[4..36]
@@ -1695,6 +1808,87 @@ fn tally_uni_eip712_positive_matches_actual_merkle_verified_pq1_pages() {
             && rendered.iter().any(|row| row == "delegatee")
             && rendered.iter().any(|row| row == "000000006b36ec80"),
         "non-vacuity: authenticated Tally UNI semantics were not all rendered: {rendered:?}"
+    );
+}
+
+#[test]
+fn tally_uni_eip712_length_and_boundary_mutations_are_injective() {
+    let fixture: Value = serde_json::from_slice(
+        &std::fs::read(
+            fixture_root().join("registry/tally/tests/eip712-tally-ethereum-uni-token.tests.json"),
+        )
+        .expect("read Tally UNI fixture"),
+    )
+    .expect("parse Tally UNI fixture");
+    let data = fixture["tests"][0]["data"]
+        .as_object()
+        .expect("Tally UNI EIP-712 data");
+    let encoded = encode_flat_static_eip712(data);
+    assert_eq!(encoded.encoded_data.len(), 3 * 32);
+
+    let registry = build_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == encoded.chain_id
+                && entry.contract == encoded.verifying_contract
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("eip712-tally-ethereum-uni-token.json")
+        })
+        .expect("accepted Tally UNI descriptor leaf");
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified =
+        verify_erc7730_bundle(&bundle, &registry.root).expect("Tally UNI bundle verifies");
+    cross_check_eip712(&verified.ir, encoded.chain_id, &encoded.domain_separator)
+        .expect("bind Tally UNI descriptor");
+
+    let render = |encoded_data: &[u8]| {
+        render_erc7730_eip712_pages(
+            encoded.chain_id,
+            &encoded.verifying_contract,
+            &encoded.primary_type_hash,
+            encoded_data,
+            &verified,
+            None,
+            &NameResolver::new(),
+        )
+    };
+
+    assert!(matches!(
+        render(&encoded.encoded_data[..2 * 32]),
+        Err(RenderErr::Reject("7730 ed len"))
+    ));
+    let mut hidden_member = encoded.encoded_data.clone();
+    hidden_member.extend_from_slice(&[0u8; 32]);
+    assert!(matches!(
+        render(&hidden_member),
+        Err(RenderErr::Reject("7730 ed len"))
+    ));
+
+    let zero_word = [0u8; 32];
+    let mut zero_nonce = encoded.encoded_data.clone();
+    zero_nonce[32..64].copy_from_slice(&zero_word);
+    let zero_pages = render(&zero_nonce).expect("zero nonce renders exactly");
+    let zero_rows = normalized_rows(&zero_pages);
+    let mut zero_cursor = 0usize;
+    consume_normalized_token(&zero_rows, &mut zero_cursor, "Nonce");
+    consume_raw_word(&zero_rows, &mut zero_cursor, &zero_word);
+    consume_normalized_token(&zero_rows, &mut zero_cursor, "Expiry");
+
+    let maximum_word = [0xffu8; 32];
+    let mut maximum_nonce = encoded.encoded_data.clone();
+    maximum_nonce[32..64].copy_from_slice(&maximum_word);
+    let maximum_pages = render(&maximum_nonce).expect("maximum nonce renders exactly");
+    let maximum_rows = normalized_rows(&maximum_pages);
+    let mut maximum_cursor = 0usize;
+    consume_normalized_token(&maximum_rows, &mut maximum_cursor, "Nonce");
+    consume_raw_word(&maximum_rows, &mut maximum_cursor, &maximum_word);
+    consume_normalized_token(&maximum_rows, &mut maximum_cursor, "Expiry");
+
+    assert_ne!(
+        zero_rows, maximum_rows,
+        "distinct boundary words must produce distinct trusted transcripts"
     );
 }
 
