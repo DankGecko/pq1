@@ -67,10 +67,11 @@ pub fn should_render(
 /// distinguishes them again under an opt-in setting. The on-wire byte
 /// is unchanged — only the renderer's interpretation differs.
 ///
-/// Callers wire `compact` from a renderer-level constant (today
-/// `crate::tx::display::erc7730::COMPACT_MODE = false`) so a future
-/// settings-page toggle can flip the const without touching every
-/// formatter.
+/// `compact == true` is retained for design and proof work. The selected
+/// product renderer wires a private compile-fenced `false`: dbgen currently
+/// gives Optional fields completeness credit as displayed, so exposing a UI
+/// or call-site toggle before #383's compiler/profile proof would create
+/// signed-but-unshown operands.
 pub fn should_render_with_mode(
     params: &ParamSet<'_>,
     resolved: Option<&AbiValue<'_>>,
