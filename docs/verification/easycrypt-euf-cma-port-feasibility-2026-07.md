@@ -1436,3 +1436,47 @@ formulation offered: treat `(member,address)` as an **extended tweak**, making t
 ordinary tagged-tweak separation while post-seed candidate grinding stays allowed.
 Citation fix: MM45 component premises are FL_SL_XMSS_MT_ES.ec:4075; the top theorem + discharge are
 SPHINCS_PLUS.ec:4338 / :4375 (my earlier "FL_SL:4338" was inside the component proof).
+
+### FOUNDATIONS RESOLVED 2026-07-19 — both models converge; the fix is a real choice (delete-conjunct vs discharge)
+
+Kimi K3's foundations pass SELF-CORRECTS its earlier alarm and converges with GPT-5.6 on the substance:
+
+**CONVERGED (both, verified):**
+- `A_wf_ht` does NOT exclude grinding forgers. Kimi's own correction: "it excludes *logging* member-`dfC`
+  queries; **grinding is transcript-invisible for an oracle-free forger**." The thinness worry is real ONLY
+  if the capstone hands the forger the collection oracle, or the discharge is never built.
+- **Input-level freshness is wrong and Kimi retracts it**: "targets are adversary-chosen/known in EUF-CMA;
+  TCR needs freshness of the COLLISION (x ≠ x'), not of the query history. No level of history-freshness
+  belongs in this assumption."
+- **Def C.1 (S-TCR(Prop)) IS the clean assumption and already admits grinding forgers** — don't invent a new
+  one. Our pick-before-`pp` staging is paper-faithful (paper App D:2198-2199 ≡ STCR_C.ec:173-176); the
+  counter-returning `O_Prop` is intrinsic to +C; the good-counter assumption is carried honestly as
+  `Grind.grind_fails`. **The avoidable part is the disj/member machinery layered on top.**
+- **The theorem worth stating** (both): *for all ORACLE-FREE EUF-CMA forgers F,
+  `Pr[EUF-CMA(F)] <= ... + InSec^{S-TCR(+C)}(Th+C; p_tgts) + ...`* with that term verbatim Def C.1.
+  **(i)-discharged and (ii) both deliver it; (i)-CARRIED does not.** So carry-and-document is NOT shippable.
+
+**DIVERGENCE — the actual decision:**
+- **GPT-5.6 → option (iii)**: keep `A_wf_ht`, document it accurately (pre-seed choose-phase separation), prove
+  its discharge against the concrete top-reduction image later, clean the assumption boundary.
+- **Kimi → option (ii), tightly scoped**: DELETE the `disj_lists` conjunct from our bespoke `S_TCR_C_Int_MA`
+  (:2126-2131); then `A_wf_ht`, `member_sep_disj` (:1999, applied :2218) and the whole `O_THFC_MA`
+  member-tagged transcript become dead code. Leaf success-transfer gets strictly SIMPLER (deletions, not new
+  obligations); branch-1 loses a premise; **nothing needs discharging above the leaf ever again**. Cost: days
+  + re-certification churn on two 0-admit files; edits are monotone weakenings.
+  Kimi's justification: the conjunct is *power-neutral* — the collection oracle merely logs while computing
+  the real `fc`, so an adversary can be re-wrapped to route forbidden queries inline with identical
+  behaviour ⇒ restricted and unrestricted classes have equal max success ⇒ artifact, not assumption.
+
+**MY ADJUDICATION FLAG (to settle before acting):** Kimi's power-neutrality rests on re-wrapping the
+adversary to compute the hash inline instead of querying — but during `pick` the adversary has **no `pp`**
+(that is the entire point of the hidden-seed phase), so it cannot compute inline there. If the re-wrap fails
+pre-seed, dropping the conjunct is a genuine (if mild) STRENGTHENING of the assumption, not a neutral
+cleanup — still sound for our upper bound, but it should be labelled as such rather than sold as free.
+
+**NOTE both models independently corrected my citation**: MM45 carries the premises at
+FL_SL_XMSS_MT_ES.ec:4075-4087 / :6306-6318 and discharges them in **SPHINCS_PLUS.ec:4375-4560**; Kimi adds
+that the discharge MECHANISM is "**the top adversary is oracle-free**" — stronger than "the reduction answers
+those queries itself". Our infrastructure for exactly that already exists (`member_aware_disj_discharged`,
+WOTS_C_Interactive.ec:2045-2054). Also flagged: the negative control `A_ht_dfC_breaks_wf` shows the premise is
+load-bearing *for the current win bool* — it is NOT evidence the restriction is semantically necessary.
