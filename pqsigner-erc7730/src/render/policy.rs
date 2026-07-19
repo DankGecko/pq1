@@ -177,12 +177,12 @@ pub const fn formatter_accepts_terminal(op: FormatOp, kind: TerminalKind) -> boo
         | FormatOp::NftName
         | FormatOp::Date
         | FormatOp::Duration
-        | FormatOp::Enum
         | FormatOp::Unit
         | FormatOp::ChainId => matches!(kind, TerminalKind::Unsigned),
-        FormatOp::AddressName
-        | FormatOp::TokenTicker
-        | FormatOp::InteroperableAddressName => matches!(kind, TerminalKind::Address),
+        FormatOp::Enum => matches!(kind, TerminalKind::Unsigned | TerminalKind::Bool),
+        FormatOp::AddressName | FormatOp::TokenTicker | FormatOp::InteroperableAddressName => {
+            matches!(kind, TerminalKind::Address)
+        }
         // Neither has an honest successful renderer in this firmware.  Keep
         // them explicit so adding a new opcode cannot inherit permissive
         // behavior through a wildcard arm.
@@ -244,9 +244,7 @@ pub const fn validate_field(
         FormatOp::TokenTicker | FormatOp::InteroperableAddressName => {
             (ParamMask::NONE, ParamMask::NONE)
         }
-        FormatOp::Calldata | FormatOp::Encrypted => {
-            return Err(PolicyError::UnsupportedFormatter)
-        }
+        FormatOp::Calldata | FormatOp::Encrypted => return Err(PolicyError::UnsupportedFormatter),
     };
 
     if !params.is_subset_of(allowed) {
@@ -293,11 +291,38 @@ mod tests {
                 let _ = directly_displays_terminal(op, kind);
             }
         }
-        assert!(formatter_accepts_terminal(FormatOp::AddressName, TerminalKind::Address));
-        assert!(!formatter_accepts_terminal(FormatOp::AddressName, TerminalKind::Unsigned));
-        assert!(formatter_accepts_terminal(FormatOp::Duration, TerminalKind::Unsigned));
-        assert!(!formatter_accepts_terminal(FormatOp::Duration, TerminalKind::Address));
-        assert!(!formatter_accepts_terminal(FormatOp::Encrypted, TerminalKind::FixedBytes));
+        assert!(formatter_accepts_terminal(
+            FormatOp::AddressName,
+            TerminalKind::Address
+        ));
+        assert!(!formatter_accepts_terminal(
+            FormatOp::AddressName,
+            TerminalKind::Unsigned
+        ));
+        assert!(formatter_accepts_terminal(
+            FormatOp::Duration,
+            TerminalKind::Unsigned
+        ));
+        assert!(!formatter_accepts_terminal(
+            FormatOp::Duration,
+            TerminalKind::Address
+        ));
+        assert!(formatter_accepts_terminal(
+            FormatOp::Enum,
+            TerminalKind::Unsigned
+        ));
+        assert!(formatter_accepts_terminal(
+            FormatOp::Enum,
+            TerminalKind::Bool
+        ));
+        assert!(!formatter_accepts_terminal(
+            FormatOp::Enum,
+            TerminalKind::Signed
+        ));
+        assert!(!formatter_accepts_terminal(
+            FormatOp::Encrypted,
+            TerminalKind::FixedBytes
+        ));
     }
 
     #[test]
@@ -310,6 +335,11 @@ mod tests {
             validate_field(FormatOp::Enum, TerminalKind::Unsigned, ParamMask::NONE),
             Err(PolicyError::ParameterRequirement)
         );
+        assert_eq!(
+            validate_field(FormatOp::Enum, TerminalKind::Bool, ParamMask::NONE),
+            Err(PolicyError::ParameterRequirement)
+        );
+        assert!(validate_field(FormatOp::Enum, TerminalKind::Bool, ParamMask::ENUM_REF).is_ok());
         assert!(validate_field(
             FormatOp::TokenAmount,
             TerminalKind::Unsigned,

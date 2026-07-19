@@ -1143,10 +1143,122 @@ fn registry_flying_tulip_nft_collections_expand_injectively() {
         }
     }
     assert_eq!(
-        format_count, 12,
-        "only the twelve bounded static formats expand"
+        format_count, 15,
+        "the twelve NFT formats plus three operator-approval formats expand"
     );
     assert_eq!(nft_field_count, 12);
+}
+
+#[test]
+fn registry_flying_tulip_pft_nft_admits_only_injective_operator_approval() {
+    let catalogue = build_registry();
+    let entries: Vec<_> = catalogue
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str()) == Some("calldata-PftNft.json")
+        })
+        .collect();
+
+    let expected_deployments: BTreeSet<(u64, [u8; 20])> = [
+        (1, "a4215daaf3745e14e96e169e0e7706c479ce04f2"),
+        (146, "a4215daaf3745e14e96e169e0e7706c479ce04f2"),
+        (146, "1d8051c90076faa5b683a3551ee4369d00f99d67"),
+    ]
+    .into_iter()
+    .map(|(chain_id, address)| {
+        let decoded = hex::decode(address).expect("valid Flying Tulip deployment address");
+        let mut contract = [0u8; 20];
+        contract.copy_from_slice(&decoded);
+        (chain_id, contract)
+    })
+    .collect();
+    let actual_deployments: BTreeSet<_> = entries
+        .iter()
+        .map(|entry| (entry.chain_id, entry.contract))
+        .collect();
+    assert_eq!(
+        actual_deployments, expected_deployments,
+        "pFT NFT must emit exactly its three pinned deployments"
+    );
+
+    let approve_selector = [0x09, 0x5e, 0xa7, 0xb3];
+    let operator_approval_selector = [0xa2, 0x2c, 0xb4, 0x65];
+    let expected_selectors: BTreeSet<[u8; 4]> = [approve_selector, operator_approval_selector]
+        .into_iter()
+        .collect();
+
+    for entry in entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated pFT NFT IR parses");
+        let actual_selectors: BTreeSet<_> = ir
+            .format_iter()
+            .map(|format| format.expect("pFT NFT format parses").selector)
+            .collect();
+        assert_eq!(
+            actual_selectors, expected_selectors,
+            "enum curation must add only setApprovalForAll beside approve"
+        );
+
+        let approval = ir
+            .find_format_by_selector(&operator_approval_selector)
+            .expect("pFT NFT format table parses")
+            .expect("setApprovalForAll is clear-signable");
+        let fields: Vec<_> = approval
+            .fields()
+            .map(|field| field.expect("generated pFT NFT field parses"))
+            .collect();
+        assert_eq!(
+            fields.len(),
+            2,
+            "operator approval must expose both operands"
+        );
+
+        let operator = &fields[0];
+        assert_eq!(operator.label, b"Operator");
+        assert_eq!(
+            FormatOp::try_from(operator.format_op),
+            Ok(FormatOp::AddressName)
+        );
+        let operator_params = parse_params(&ir, operator.param_off).expect("operator params parse");
+        assert_eq!(operator_params.visibility, Visibility::Always);
+        assert_eq!(operator_params.terminal_kind, Some(TerminalKind::Address));
+        assert_eq!(
+            operator_params.addr_types,
+            Some(0x04),
+            "operator rendering must remain contract-restricted"
+        );
+
+        let rights = &fields[1];
+        assert_eq!(rights.label, b"Access rights");
+        assert_eq!(FormatOp::try_from(rights.format_op), Ok(FormatOp::Enum));
+        let rights_params = parse_params(&ir, rights.param_off).expect("rights params parse");
+        assert_eq!(rights_params.visibility, Visibility::Always);
+        assert_eq!(rights_params.terminal_kind, Some(TerminalKind::Bool));
+        let enum_off = rights_params.enum_ref.expect("rights enum reference");
+        let deny_word = [0u8; 32];
+        let mut grant_word = [0u8; 32];
+        grant_word[31] = 1;
+        let deny =
+            pqsigner_erc7730::render::enums::lookup_enum_label(ir.pool, enum_off, &deny_word)
+                .expect("rights enum table is valid")
+                .expect("false enum value is enrolled");
+        let grant =
+            pqsigner_erc7730::render::enums::lookup_enum_label(ir.pool, enum_off, &grant_word)
+                .expect("rights enum table is valid")
+                .expect("true enum value is enrolled");
+        assert_eq!(deny, b"Deny all");
+        assert_eq!(grant, b"Grant all");
+        assert_ne!(deny, grant, "device-visible enum labels must be injective");
+
+        for selector in expected_selectors.iter().copied() {
+            assert!(
+                catalogue
+                    .known_calls
+                    .contains(&(entry.chain_id, entry.contract, selector)),
+                "clear-signable pFT NFT tuple must already be registry-known"
+            );
+        }
+    }
 }
 
 #[test]

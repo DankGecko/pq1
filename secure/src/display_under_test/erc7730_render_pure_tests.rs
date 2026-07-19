@@ -2780,6 +2780,147 @@ fn positive_aave_repay_unknown_enum_value_renders_raw_index_loudly() {
 }
 
 #[test]
+fn positive_flyingtulip_operator_approval_fixture_binds_operator_and_bool_enum() {
+    // Exact mainnet EIP-1559 rawTx from upstream Flying Tulip fixture case 1.
+    // The calldata is the canonical 68-byte `setApprovalForAll(address,bool)`
+    // payload carried by the RLP `b8 44` item.
+    let raw_tx = hex::decode(concat!(
+        "02f8ac010901843b9aca008307a12094a4215daaf3745e14e96e169e0e7706c479ce04f280b844",
+        "a22cb465000000000000000000000000d8da6bf26964af9d7eed9e03e53415d37aa96045",
+        "0000000000000000000000000000000000000000000000000000000000000001",
+        "c001a06aee32a58edaba9f35e7b16a46ba69e230d3fbb0f8c0d6b1f51c941773a1789a",
+        "a0615220ea757712d0e86b4ce78e62647555384cee3b9fb7036649f2aed629255d",
+    ))
+    .expect("valid upstream Flying Tulip rawTx");
+    assert_eq!(
+        hex::encode(keccak256(&raw_tx)),
+        "128b3c5323857a18254a326f1974c4817a0a8f9214128a25b3e2def1e64b71ab"
+    );
+    const CALLDATA_START: usize = 39;
+    const CALLDATA_LEN: usize = 4 + 2 * 32;
+    assert_eq!(&raw_tx[CALLDATA_START - 2..CALLDATA_START], &[0xb8, 0x44]);
+    assert_eq!(raw_tx[CALLDATA_START + CALLDATA_LEN], 0xc0);
+    let calldata = &raw_tx[CALLDATA_START..CALLDATA_START + CALLDATA_LEN];
+    assert_eq!(&calldata[..4], &[0xa2, 0x2c, 0xb4, 0x65]);
+
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-PftNft.json", 1);
+    assert_eq!(
+        hex::encode(entry.contract),
+        "a4215daaf3745e14e96e169e0e7706c479ce04f2"
+    );
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify pFT NFT leaf");
+    let signature = "setApprovalForAll(address,bool)";
+    assert_selector_matches(&verified.ir, calldata, signature);
+
+    let operator_word: [u8; 32] = calldata[4..36].try_into().expect("operator ABI word");
+    let approved_word: [u8; 32] = calldata[36..68].try_into().expect("approved ABI word");
+    let operator: [u8; 20] = operator_word[12..].try_into().expect("operator address");
+    assert_eq!(
+        hex::encode(operator),
+        "d8da6bf26964af9d7eed9e03e53415d37aa96045"
+    );
+    assert_eq!(approved_word, u256_from_u64(1).0);
+
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    let signer = [0x42; 20];
+    let render = |call: &[u8]| {
+        render_erc7730_pages_with_signer_checked(&tx, call, &verified, None, &resolver, &signer)
+    };
+    let rendered = render(calldata).expect("render Flying Tulip operator approval");
+    assert_eq!(
+        rendered.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert_eq!(
+        rendered.transcript_receipt.page_count() as usize,
+        rendered.pages.len
+    );
+    assert!(
+        rendered
+            .transcript_receipt
+            .range_matches(&rendered.pages, 0),
+        "receipt must bind the complete trusted-display transcript"
+    );
+    assert_all_pages_printable(&rendered.pages);
+    assert_full_address_field_page(&rendered.pages, "Operator", &operator);
+    assert_eq!(
+        page_strs(
+            &rendered.pages,
+            find_page_by_label(&rendered.pages, "Access rights")
+        ),
+        [
+            "Access rights".to_string(),
+            "Grant all".to_string(),
+            "".to_string(),
+            "".to_string(),
+        ]
+    );
+
+    let mut mutated_operator = operator;
+    mutated_operator[19] ^= 1;
+    let mutated_operator_calldata = calldata_static(
+        signature,
+        &[abi_address_word(mutated_operator), approved_word],
+    );
+    let mutated_operator_render = render(&mutated_operator_calldata)
+        .expect("render independently mutated Flying Tulip operator");
+    assert_full_address_field_page(
+        &mutated_operator_render.pages,
+        "Operator",
+        &mutated_operator,
+    );
+    assert_ne!(
+        rendered.pages.as_slice(),
+        mutated_operator_render.pages.as_slice(),
+        "one operator bit must change trusted pages"
+    );
+    assert!(
+        !rendered
+            .transcript_receipt
+            .exact_match(&mutated_operator_render.transcript_receipt),
+        "one operator bit must change the transcript receipt"
+    );
+
+    let denied_calldata = calldata_static(signature, &[operator_word, [0u8; 32]]);
+    let denied = render(&denied_calldata).expect("render canonical false approval");
+    assert_eq!(
+        page_strs(
+            &denied.pages,
+            find_page_by_label(&denied.pages, "Access rights")
+        ),
+        [
+            "Access rights".to_string(),
+            "Deny all".to_string(),
+            "".to_string(),
+            "".to_string(),
+        ]
+    );
+    assert_ne!(
+        rendered.pages.as_slice(),
+        denied.pages.as_slice(),
+        "the independently changed approved word must change trusted pages"
+    );
+    assert!(
+        !rendered
+            .transcript_receipt
+            .exact_match(&denied.transcript_receipt),
+        "the independently changed approved word must change the transcript receipt"
+    );
+
+    let noncanonical_bool = calldata_static(signature, &[operator_word, u256_from_u64(2).0]);
+    assert!(
+        matches!(
+            render(&noncanonical_bool),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+        ),
+        "ABI bool word 2 must hard-refuse instead of rendering an unknown enum"
+    );
+}
+
+#[test]
 fn nftname_small_id_keeps_raw_id_and_full_target_collection_identity() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-PftNft.json", 1);

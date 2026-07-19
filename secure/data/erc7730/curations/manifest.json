@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 778704,
-    "sha256": "d0ab0db95fc7e6f9a24c7d9dd5edbad3d0c70d354e7d401cc9947f9f40f801c5"
+    "bytes": 778697,
+    "sha256": "62d10a9244519af27f4ce038db34773050589024dd37d2328740b6161e7735da"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -71,7 +71,7 @@
     },
     {
       "path": "xtask/src/erc7730_curation.rs",
-      "sha256": "983172d5b15b18f2cc4990b36df735773e0c673a644190abd00debe7a21b18c5"
+      "sha256": "501ad66975e07d4630edfe299abb3c5aa7132d9cc5ed9f4728bbe3c5e1d65df1"
     },
     {
       "path": "xtask/src/erc7730_diff.rs",
@@ -103,6 +103,13 @@
       "upstream_sha256": "19afdd033c627a5e24bdc70af93e70e0068bb0760d100ddd297377bb8c4cc659",
       "replacement_bytes": 11697,
       "replacement_sha256": "9d6105d4fc42f2d3993a8badfc6084035b5e5eab71a92c13d56bbc4b89e0c469"
+    },
+    {
+      "path": "registry/flyingtulip/calldata-PftNft.json",
+      "upstream_bytes": 2324,
+      "upstream_sha256": "4d689ea91df44b08018e3fc6b381e5f259134178dbf81645997083143e7f615e",
+      "replacement_bytes": 2317,
+      "replacement_sha256": "a30abb996b18f39899ffa22cedd1e981a6ef958fe394671db3adb4ec9c3afd05"
     },
     {
       "path": "registry/flyingtulip/eip712-PftMarketplace-BuyOffer.json",
