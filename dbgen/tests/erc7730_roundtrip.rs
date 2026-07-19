@@ -846,6 +846,142 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
 }
 
 #[test]
+fn registry_lombard_lbtc_admits_operand_complete_permit_on_exact_deployments() {
+    let result = build_registry();
+    let expected_deployments = [
+        (
+            "calldata-lbtc-mainnet.json",
+            1u64,
+            "8236a87084f8b84306f72007f36f2618a5634494",
+        ),
+        (
+            "calldata-lbtc-sepolia.json",
+            11_155_111u64,
+            "731efa688f3679688cf60a3993b8658138953ed6",
+        ),
+    ];
+    let expected_signatures = [
+        "approve(address,uint256)",
+        "burn(uint256)",
+        "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)",
+        "redeem(uint256)",
+        "transfer(address,uint256)",
+        "transferFrom(address,address,uint256)",
+    ];
+    let expected_selectors: BTreeSet<[u8; 4]> = expected_signatures
+        .iter()
+        .map(|signature| {
+            keccak256(signature.as_bytes())[..4]
+                .try_into()
+                .expect("selector width")
+        })
+        .collect();
+    let permit_selector: [u8; 4] =
+        keccak256(b"permit(address,address,uint256,uint256,uint8,bytes32,bytes32)")[..4]
+            .try_into()
+            .expect("selector width");
+    assert_eq!(permit_selector, [0xd5, 0x05, 0xac, 0xcf]);
+
+    for (source_name, chain_id, address) in expected_deployments {
+        let entries: Vec<_> = result
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.source.file_name().and_then(|name| name.to_str()) == Some(source_name)
+            })
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "{source_name} must emit exactly its one pinned deployment"
+        );
+        let entry = entries[0];
+        assert_eq!(entry.chain_id, chain_id);
+        assert_eq!(hex::encode(entry.contract), address);
+
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated LBTC IR parses");
+        let actual_selectors: BTreeSet<_> = ir
+            .format_iter()
+            .map(|format| format.expect("LBTC format parses").selector)
+            .collect();
+        assert_eq!(
+            actual_selectors, expected_selectors,
+            "the curation must add permit without admitting mint or redeemForBtc"
+        );
+
+        let permit = ir
+            .find_format_by_selector(&permit_selector)
+            .expect("LBTC format table parses")
+            .expect("operand-complete LBTC permit is admitted");
+        let fields: Vec<_> = permit
+            .fields()
+            .map(|field| field.expect("generated LBTC permit field parses"))
+            .collect();
+        assert_eq!(fields.len(), 7);
+
+        let expected_fields = [
+            (
+                b"Owner".as_slice(),
+                FormatOp::AddressName,
+                TerminalKind::Address,
+            ),
+            (
+                b"Spender".as_slice(),
+                FormatOp::AddressName,
+                TerminalKind::Address,
+            ),
+            (
+                b"Allowance".as_slice(),
+                FormatOp::TokenAmount,
+                TerminalKind::Unsigned,
+            ),
+            (
+                b"Valid Until".as_slice(),
+                FormatOp::Date,
+                TerminalKind::Unsigned,
+            ),
+            (b"V".as_slice(), FormatOp::Raw, TerminalKind::Unsigned),
+            (b"R".as_slice(), FormatOp::Raw, TerminalKind::FixedBytes),
+            (b"S".as_slice(), FormatOp::Raw, TerminalKind::FixedBytes),
+        ];
+        for (field, (label, op, terminal_kind)) in fields.iter().zip(expected_fields) {
+            assert_eq!(field.label, label);
+            assert_eq!(FormatOp::try_from(field.format_op), Ok(op));
+            let params = parse_params(&ir, field.param_off).expect("permit field params parse");
+            assert_eq!(params.visibility, Visibility::Always);
+            assert_eq!(params.terminal_kind, Some(terminal_kind));
+        }
+        assert_eq!(
+            parse_params(&ir, fields[0].param_off)
+                .expect("owner params parse")
+                .addr_types,
+            Some(0x03),
+            "owner must remain restricted to wallet/EOA address rendering"
+        );
+        assert_eq!(
+            parse_params(&ir, fields[1].param_off)
+                .expect("spender params parse")
+                .addr_types,
+            Some(0x07),
+            "spender must retain EOA/wallet/contract address rendering"
+        );
+        assert_eq!(
+            parse_params(&ir, fields[3].param_off)
+                .expect("deadline params parse")
+                .date_encoding,
+            Some(0),
+            "deadline must render as an exact timestamp"
+        );
+        assert!(
+            result
+                .known_calls
+                .contains(&(entry.chain_id, entry.contract, permit_selector)),
+            "newly clear-signable LBTC permit must already be registry-known"
+        );
+    }
+}
+
+#[test]
 fn registry_runtime_token_path_keeps_static_intent_without_interpolation() {
     let result = build_registry();
     let entry = result
