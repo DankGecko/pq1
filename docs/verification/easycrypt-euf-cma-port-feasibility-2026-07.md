@@ -1160,3 +1160,34 @@ intermediate posts P and Q are satisfiable (honest deferrals, not false posts th
 milestone-2 rework NONE (R_leaf_C + leaf bound untouched). Residual = mechanical MM45 transcription (#1,#A,
 #B-coupling) + proof-plumbing over proven helpers (#B-okC) + one additive oracle-hop infra (O_V). No novel
 cryptographic difficulty remains. A focused grind proving the okC-ghost first is in progress.
+
+### UPDATE 2026-07-19 (cont.) — the discriminating +C content (okC-ghost) PROVEN 0-admit + audited genuine
+
+The crux — the one place a +C no-go could hide — is now a compiled, adversarially-audited fact.
+`okC_ghost` (drafts/_okc_ghost_dev.ec standalone + ported into _seam_byequiv_wip.ec, both CERTIFIED-0-ADMIT):
+running the WOTS+C hypertree reconstruction and obtaining a satisfied aggregate +C gate (allOkC=true) FORCES
+the per-layer constant-sum gate `predC(ThC p addr_cidx root_cidx counter_cidx)` at the extracted layer, on
+the ACTUAL reconstruction triple. Proven as: an ExtTri instrumented twin records per-layer (addr,root,counter);
+L3b (`root_from_sigC_okl_tri_char`) pins each okC-list entry = predC(ThC…) by while-invariant (via
+pkfsc_okC_post — THIS is the +C content, proven by construction not hypothesized); L3a ties the real
+`root_from_sigC` allOkC to `all idfun okl`; `okC_select` (via all_idfun_nth) selects the in-range layer.
+**Adversarial audit PASS** (independent recompile + proof-chain grep): genuine, non-vacuous, 0-admit/0-axiom
+— cidx range used only for the size bound (not trivializing), allOkC a hypothesis (not assumed), no smt in
+the chain, passes the discriminator test (arbitrary predC/ThC/reconstruction breaks it). NB the prover's
+FIRST attempt was a generic list tautology that hypothesized the +C content away; the auditor caught it and
+forced the correct construction — the audit stage earned its cost.
+
+**Honest residual (seam still 3 admits — NOT a compiled fact yet):** #A conseq bookkeeping (non-trivial
+{1}/{2} reconciliation, not the "trivial" first thought); #1 cube-build (MM45 :4143-4531 + the O_V oracle-hop
+infra); #B reconstruction — and the ghost does NOT `call`-plug into #B because the V-game INLINES its
+reconstruction, so consuming the ghost means RE-ESTABLISHING L3b's per-layer invariant inside the inlined
+V-loop (or a V-loop~tri-twin equiv): **real work, not mechanical consumption**. **Milestone-2 no-rework:
+downgraded to UNVERIFIED for the actual #B coupling** (the ghost needed no R_leaf_C change, consistent with
+no-rework, but #B's ghost-consumption was not exercised).
+
+**Gate-hygiene finding (important):** EasyCrypt treats `admit` as a WARNING, so `easycrypt compile` returns
+EXIT 0 even with admits — a compile-clean gate does NOT certify admit-freedom. TRUE 0-admit certification
+must ALSO grep the source for admit/assume tactics (+ axiom decls). Added `ec-certify.sh` (compile EXIT 0 AND
+admit/assume/axiom-free). All prior "0-admit" claims in this port were separately grep-verified, so they hold;
+but the gate script alone was insufficient. (Kin to the earlier lessons: `require` does not re-verify; a
+broken theory compiles EXIT 0.)
