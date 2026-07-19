@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 777762,
-    "sha256": "2a8be54366c0a59f568c1ff076f1a07800e0fcc0d1059d1eb72f8d45f24ea241"
+    "bytes": 777966,
+    "sha256": "4afd90dba4f8c8a760bb6fa487fe9d71d768723a2245b8c77e4b7fcc166b4765"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -71,7 +71,7 @@
     },
     {
       "path": "xtask/src/erc7730_curation.rs",
-      "sha256": "b4c37a3e38a5827806f0b9e8e6e301321cf6016e51b07c451a40e166ccf58f84"
+      "sha256": "4c02656bc62a8b182fc703b3254672b98186f7a06730b16b2845242603ddda6d"
     },
     {
       "path": "xtask/src/erc7730_diff.rs",
@@ -89,6 +89,13 @@
       "upstream_sha256": "c8951b348a03b33046bdbdf4460bb13b2afc9ec4e5e7fde81ba18fc71389eb5e",
       "replacement_bytes": 5599,
       "replacement_sha256": "219ff840695198318ef79d47179d3a1aae3df276acf3c77afc6c79b1723343fb"
+    },
+    {
+      "path": "registry/aave/calldata-lpv2.json",
+      "upstream_bytes": 4967,
+      "upstream_sha256": "f0f15002c5b5749a51ddc1641e40ec67afd51c93238c2901312100e59369c385",
+      "replacement_bytes": 5171,
+      "replacement_sha256": "1367b18f927cb31748de242e80db75ef2beccb4839df0b513390e7985258a55e"
     },
     {
       "path": "registry/aave/calldata-lpv3.json",

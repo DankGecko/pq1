@@ -2283,6 +2283,140 @@ fn positive_aave_basic_lending_renders_complete_referral_and_signed_fields() {
 }
 
 #[test]
+fn positive_aave_v2_borrow_and_deposit_bind_complete_referral_words() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-lpv2.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Aave V2 leaf");
+
+    let asset = [
+        0xda, 0xc1, 0x7f, 0x95, 0x8d, 0x2e, 0xe5, 0x23, 0xa2, 0x20, 0x62, 0x06, 0x99, 0x45, 0x97,
+        0xc1, 0x3d, 0x83, 0x1e, 0xc7,
+    ];
+    let debtor = [0x44u8; 20];
+    let collateral_recipient = [0x55u8; 20];
+    let signer = [0x66u8; 20];
+    let amount = u256_from_u64(500_000_000); // 500 USDT at six decimals.
+    let referral_code = 0x1234u16;
+    let token = Erc20Metadata {
+        chain_id: 1,
+        contract: asset,
+        decimals: 6,
+        name: b"Tether USD",
+        symbol: b"USDT",
+    };
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+
+    let cases = [
+        (
+            "borrow(address,uint256,uint256,uint16,address)",
+            calldata_borrow(asset, amount, u256_from_u64(2), referral_code, debtor),
+            calldata_borrow(asset, amount, u256_from_u64(2), referral_code ^ 1, debtor),
+            "Borrow",
+            "Amount to borrow",
+            "Debtor",
+            debtor,
+        ),
+        (
+            "deposit(address,uint256,address,uint16)",
+            calldata_aave_supply_like(
+                b"deposit(address,uint256,address,uint16)",
+                asset,
+                amount,
+                collateral_recipient,
+                referral_code,
+            ),
+            calldata_aave_supply_like(
+                b"deposit(address,uint256,address,uint16)",
+                asset,
+                amount,
+                collateral_recipient,
+                referral_code ^ 1,
+            ),
+            "Supply",
+            "Amount to supply",
+            "Collateral reci~",
+            collateral_recipient,
+        ),
+    ];
+
+    for (signature, calldata, mutated_calldata, intent, amount_label, recipient_label, recipient) in
+        cases
+    {
+        assert_selector_matches(&verified.ir, &calldata, signature);
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &calldata,
+            &verified,
+            Some(&token),
+            &resolver,
+            &signer,
+        )
+        .unwrap_or_else(|error| panic!("render Aave V2 {signature}: {error:?}"));
+        assert_eq!(
+            rendered.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "Aave V2 {signature} receipt must bind its complete rendered page range"
+        );
+        assert_all_pages_printable(&rendered.pages);
+        assert_eq!(
+            page_strs(&rendered.pages, intent_page_index(&rendered.pages))[0],
+            intent
+        );
+
+        let amount_rows = page_strs(
+            &rendered.pages,
+            find_page_by_label(&rendered.pages, amount_label),
+        );
+        assert!(
+            amount_rows.iter().any(|row| row.contains("500"))
+                && amount_rows.iter().any(|row| row.contains("USDT")),
+            "bound amount missing for {signature}: {amount_rows:?}"
+        );
+        assert_full_contract_identity_page(&rendered.pages, &asset);
+        assert_full_address_field_page(&rendered.pages, recipient_label, &recipient);
+
+        let referral_word: [u8; 32] = calldata[4 + 3 * 32..4 + 4 * 32]
+            .try_into()
+            .expect("Aave V2 referralCode ABI word");
+        assert_eq!(referral_word, abi_u16_word(referral_code));
+        assert_raw_word_pages(&rendered.pages, "Referral Code", &referral_word);
+
+        let mutated = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &mutated_calldata,
+            &verified,
+            Some(&token),
+            &resolver,
+            &signer,
+        )
+        .unwrap_or_else(|error| panic!("render mutated Aave V2 {signature}: {error:?}"));
+        let mutated_word: [u8; 32] = mutated_calldata[4 + 3 * 32..4 + 4 * 32]
+            .try_into()
+            .expect("mutated Aave V2 referralCode ABI word");
+        assert_eq!(mutated_word, abi_u16_word(referral_code ^ 1));
+        assert_raw_word_pages(&mutated.pages, "Referral Code", &mutated_word);
+        assert_ne!(
+            rendered.pages.as_slice(),
+            mutated.pages.as_slice(),
+            "one referralCode bit must change the Aave V2 trusted pages for {signature}"
+        );
+        assert!(
+            !rendered
+                .transcript_receipt
+                .exact_match(&mutated.transcript_receipt),
+            "one referralCode bit must change the Aave V2 transcript for {signature}"
+        );
+    }
+}
+
+#[test]
 fn positive_aave_repay_renders_enum_label() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-lpv3.json", 1);

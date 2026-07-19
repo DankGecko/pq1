@@ -6,7 +6,7 @@ The exact commit/tree and curation-manifest identity are machine-owned by the
 managed receipt below; they are not duplicated in hand-maintained prose. The
 checked-in corpus is **not byte-identical to that upstream revision**: the
 firmware-pinned `ERC7730_DESCRIPTORS_ROOT` is derived from the upstream baseline
-plus the 16 reviewed full-file replacements listed below, under
+plus the 17 reviewed full-file replacements listed below, under
 `secure/data/erc7730/policy.toml`. The strict manifest at
 `secure/data/erc7730/curations/manifest.json` binds the upstream repository,
 commit, tree, v2 schema, pristine/excluded/curated corpus receipts, policy,
@@ -42,13 +42,13 @@ tuple-set SHA-256, and Bloom bytes. Merkle-root or Bloom equality alone is not
 accepted as a faithfulness proof.
 
 <!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
-Checked-in curated receipt, verified against a fresh build by `--check`: **430 leaves**, **353,432-byte**
+Checked-in curated receipt, verified against a fresh build by `--check`: **430 leaves**, **354,011-byte**
 compiled companion catalogue, root
-`3fe9fa1fd69c6fc3134922ac8f8ecc538b810f83928007952cba55a570377c91`,
+`4d2efbbf01c4d6a3a100c1931b192a07ab403bac915b6591d3aa461e05adb8c6`,
 **4,542** canonical known-call tuples, tuple-set SHA-256
 `96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`.
 Curation manifest SHA-256
-`4d3c90b0cbb769bfac81eba7d50a1321c9039180ac7ee0298b948efbb85e6cd3` binds upstream commit
+`ac691ce8d9e924bf1fa11387b0777abe30b6f6128c4acf252c979923e560715a` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
 The Bloom contains 28,235 / 131,072 set bits, below the generator's 25% cap.
@@ -60,9 +60,10 @@ the machine-checked source/overlay identities live in the curation manifest,
 while the generated catalogue authority remains in the artifacts and managed
 receipt above.
 
-Current reviewed full-file replacements (16):
+Current reviewed full-file replacements (17):
 
 - `registry/aave/calldata-WrappedTokenGatewayV3.json`
+- `registry/aave/calldata-lpv2.json`
 - `registry/aave/calldata-lpv3.json`
 - `registry/flyingtulip/eip712-PftMarketplace-BuyOffer.json`
 - `registry/lido/calldata-stETH.json`

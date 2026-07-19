@@ -183,6 +183,121 @@ fn registry_aave_v3_basic_lending_covers_every_unique_deployment() {
 }
 
 #[test]
+fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
+    let result = build_registry();
+    let entries: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str()) == Some("calldata-lpv2.json")
+        })
+        .collect();
+
+    let expected_deployments: BTreeSet<(u64, [u8; 20])> = [
+        (1, "7d2768de32b0b80b7a3454c06bdac94a69ddc7a9"),
+        (137, "8dff5e27ea6b7ac08ebfdf9eb090f32ee9a30fcf"),
+        (43_114, "4f01aed16d97e3ab5ab2b501154dc9bb0f1a5a2c"),
+    ]
+    .into_iter()
+    .map(|(chain_id, address)| {
+        let decoded = hex::decode(address).expect("valid deployment address");
+        let mut contract = [0u8; 20];
+        contract.copy_from_slice(&decoded);
+        (chain_id, contract)
+    })
+    .collect();
+    let actual_deployments: BTreeSet<_> = entries
+        .iter()
+        .map(|entry| (entry.chain_id, entry.contract))
+        .collect();
+    assert_eq!(actual_deployments, expected_deployments);
+
+    let expected_signatures = [
+        "repay(address,uint256,uint256,address)",
+        "setUserUseReserveAsCollateral(address,bool)",
+        "withdraw(address,uint256,address)",
+        "swapBorrowRateMode(address,uint256)",
+        "borrow(address,uint256,uint256,uint16,address)",
+        "deposit(address,uint256,address,uint16)",
+    ];
+    let expected_selectors: BTreeSet<[u8; 4]> = expected_signatures
+        .iter()
+        .map(|signature| {
+            keccak256(signature.as_bytes())[..4]
+                .try_into()
+                .expect("selector width")
+        })
+        .collect();
+    let newly_admitted = [
+        (
+            "borrow(address,uint256,uint256,uint16,address)",
+            4usize,
+            3usize,
+        ),
+        ("deposit(address,uint256,address,uint16)", 3, 2),
+    ];
+
+    for entry in entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Aave V2 IR parses");
+        let actual_selectors: BTreeSet<_> = ir
+            .format_iter()
+            .map(|format| format.expect("Aave V2 format parses").selector)
+            .collect();
+        assert_eq!(
+            actual_selectors, expected_selectors,
+            "the curation must change only the two previously refused formats"
+        );
+
+        for (signature, field_count, referral_ordinal) in newly_admitted {
+            let hash = keccak256(signature.as_bytes());
+            let selector: [u8; 4] = hash[..4].try_into().expect("selector width");
+            let format = ir
+                .find_format_by_selector(&selector)
+                .expect("Aave V2 format table parses")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{signature} missing for chain {} contract 0x{}",
+                        entry.chain_id,
+                        hex::encode(entry.contract)
+                    )
+                });
+            let fields: Vec<_> = format
+                .fields()
+                .map(|field| field.expect("generated Aave V2 field parses"))
+                .collect();
+            assert_eq!(fields.len(), field_count);
+            let referral = &fields[referral_ordinal];
+            assert_eq!(referral.label, b"Referral Code");
+            assert_eq!(FormatOp::try_from(referral.format_op), Ok(FormatOp::Raw));
+            let params = parse_params(&ir, referral.param_off).expect("referral params parse");
+            assert_eq!(params.visibility, Visibility::Always);
+            assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+            assert!(
+                result
+                    .known_calls
+                    .contains(&(entry.chain_id, entry.contract, selector)),
+                "newly clear-signable tuple was not already in the exact known-call inventory"
+            );
+        }
+    }
+
+    assert_eq!(
+        result.entries.len(),
+        430,
+        "Aave V2 already owned three leaves"
+    );
+    assert_eq!(result.known_call_count, 4_542);
+    assert_eq!(
+        hex::encode(result.known_call_set_hash),
+        "96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(&result.known_calls_bloom)),
+        "270a4bc71332868cbdc75c81a1cc92da8669a37e2bead6b7d193974b3e1d431d"
+    );
+}
+
+#[test]
 fn registry_aave_wrapped_gateway_admits_referral_complete_calls_on_exact_deployments() {
     let result = build_registry();
     let source_name = "calldata-WrappedTokenGatewayV3.json";
