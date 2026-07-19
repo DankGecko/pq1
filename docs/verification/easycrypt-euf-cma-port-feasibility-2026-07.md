@@ -1064,3 +1064,40 @@ compile is the fact-converter (advisor discipline holds), but the risk it forces
 LOWER than "shape-only stub" implied — the forge already has the right counter-carrying shape. Next
 session: port C+V games (scaffold), then compile the seam soundness (`EqPr_Orig_V` + the `V ∧ valid_WOTSTWES
 ⟺ M_EUF_GCMA_WOTSC(R_leaf_C)` connection). That compile is the go/no-go, not `Eqv_Orig_C`.
+
+### UPDATE 2026-07-19 — adversarial verification of the seam (8-agent workflow): rework risk LOW, one genuine +C edit pinned
+
+Ran an 8-agent workflow (map + 4 independent adversarial skeptics + 2 drafters + rework critic, ~1.18M
+tokens) to convert the seam go/no-go from my reading to an adversarially-checked verdict. Result:
+
+**MILESTONE-2 REWORK RISK = LOW** (scoped to `R_MEUFGCMAWOTSC_EUFNAGCMA_C.forge` + `leaf_reduction_
+MEUFGCMAWOTSC_bound`). Each of 4 refutation axes was refuted on independently-confirmed source:
+ - *fidx/query-accounting*: `grindC = STCRC_WC.G.grind` is a PURE TOTAL OP (WOTS_C_Real.ec:223), ZERO
+   oracle queries; `Default.query` appends exactly one qs entry ⇒ fidx→qs one-for-one identical to MM45.
+ - *cidx-selection*: `okC` never enters `find`/`fidx`/return; our forge predicate (:646-651) is
+   byte-identical to MM45 (:2112-2119); reconstruction is total over pure ops.
+ - *valid_WOTSTWES counter-independence*: the predicate (:3268) is byte-for-byte counter-free.
+ - *telescoping bypass*: `okC` is a STRICTLY-ADDED conjunct — it can only SHRINK the valid-forgery set;
+   pkco/val_ap_trh byte-identical ⇒ no new bypass.
+The +C interface ALREADY COMPILES (R_leaf_C.forge returns `int*msgWOTS*(sigWOTS*cntr)` = the exact
+`Adv_MEUFGCMA_WOTSC.forge` type; the bound is proved against `O_MEUFGCMA_WOTSC_Default`). So the
+interface-shape worry is discharged in milestone-2; the residual is a WIN-CONDITION obligation.
+
+**CORRECTION to "mechanical": the seam is NOT mechanical — exactly ONE genuine +C divergence.**
+`WOTS_C_ES.verify` folds `okC = predC(ThC ps ad m' counter')` into `is_valid{2}` (WOTS_C_Scheme.ec:101,
+206), which MM45's `valid_WOTSTWES` and `find` both OMIT. So the +C seam byequiv must diverge from MM45
+at exactly one spot: (1) the C/V-game reconstruction whiles ACCUMULATE `allOkC` from `pkWOTS_from_sigWOTS_C`'s
+okC bit, so `allOkC{1}` sits in the `mu_split` bucket; (2) the conseq (:4537 analog) must RETAIN
+`is_valid{1}` (MM45 DROPS it); (3) discharge `okC{2}` from `allOkC{1}` at the final skip (:4645 analog),
+reusing the address+msg+counter alignment that already proves pk-equality — via the already-0-admit
+milestone-1 helpers `root_from_sigC_okl_eq` (:416), `all_idfun_nth` (:350), `pkfromsigC_verify_eq` (:321).
+This does NOT push work back onto R_leaf_C (at most a cosmetic okC side-accumulator in its while).
+
+**NEXT COMPILE TARGET (the go/no-go converter):** the +C FIRST `ler_add` branch byequiv (analog of
+:4107-4696): define `EUF_NAGCMA_FLSLXMSSMTTWCESNPRF_V` (is_valid inline gains `/\ allOkC`), then prove
+`Pr[V.main : (is_valid /\ is_fresh) /\ valid_WOTSTWES] <= Pr[M_EUF_GCMA_WOTSC_NPRF(R_leaf_C,
+O_MEUFGCMA_WOTSC_Default, FC.O_THFC_Default) : res]`. State against `O_MEUFGCMA_WOTSC_Default` FIRST — do
+NOT pre-build O_V/EqPr_Orig_V_C (whether the V-oracle is needed is compile-revealed; okC is oracle-
+independent). Crux ≈ 5 lines (retain is_valid{1} + okC-from-allOkC discharge). EVERYTHING IS UNBUILT
+(grep confirms no +C hypertree V-game exists) — "low rework, no mechanical surprise" is a reading-grounded,
+adversarially-checked PROJECTION, not compiled fact. The byequiv compile is what makes it fact.
