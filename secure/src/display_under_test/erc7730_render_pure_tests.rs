@@ -3702,6 +3702,11 @@ fn positive_defi_catalogue_lido_referral_addresses_are_complete_and_bound() {
             .unwrap_or_else(|error| panic!("verify Lido {source}: {error:?}"));
         let calldata = calldata_static(signature, &[abi_address_word(referral)]);
         let mutated_calldata = calldata_static(signature, &[abi_address_word(mutated_referral)]);
+        assert_eq!(
+            calldata.len(),
+            36,
+            "Lido staking calldata is one exact static word"
+        );
         assert_selector_matches(&verified.ir, &calldata, signature);
 
         let mut tx = envelope(1, entry.contract);
@@ -3722,10 +3727,42 @@ fn positive_defi_catalogue_lido_referral_addresses_are_complete_and_bound() {
             "Lido {signature} receipt must bind its complete rendered page range"
         );
         assert_all_pages_printable(&rendered.pages);
-        let _ = find_page_by_label(&rendered.pages, amount_label);
+        let amount_rows = page_strs(
+            &rendered.pages,
+            find_page_by_label(&rendered.pages, amount_label),
+        );
+        assert_eq!(amount_rows[1], "1.5 ETH");
         let referral_word: [u8; 32] = calldata[4..36].try_into().expect("Lido referral ABI word");
         assert_eq!(referral_word, abi_address_word(referral));
         assert_raw_word_pages(&rendered.pages, "Referral", &referral_word);
+
+        let mut mutated_value_tx = envelope(1, entry.contract);
+        mutated_value_tx.value = u256_from_u64(2_000_000_000_000_000_000);
+        let mutated_value = render_erc7730_pages_with_signer_checked(
+            &mutated_value_tx,
+            &calldata,
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        )
+        .unwrap_or_else(|error| panic!("render value-mutated Lido {signature}: {error:?}"));
+        let mutated_amount_rows = page_strs(
+            &mutated_value.pages,
+            find_page_by_label(&mutated_value.pages, amount_label),
+        );
+        assert_eq!(mutated_amount_rows[1], "2 ETH");
+        assert_ne!(
+            rendered.pages.as_slice(),
+            mutated_value.pages.as_slice(),
+            "a changed signed native value must change Lido trusted pages for {signature}"
+        );
+        assert!(
+            !rendered
+                .transcript_receipt
+                .exact_match(&mutated_value.transcript_receipt),
+            "a changed signed native value must change the Lido transcript for {signature}"
+        );
 
         let mutated = render_erc7730_pages_with_signer_checked(
             &tx,
@@ -3752,6 +3789,52 @@ fn positive_defi_catalogue_lido_referral_addresses_are_complete_and_bound() {
                 .exact_match(&mutated.transcript_receipt),
             "one referral-address bit must change the Lido transcript for {signature}"
         );
+
+        let zero_referral_calldata = calldata_static(signature, &[abi_address_word([0u8; 20])]);
+        let zero_referral = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &zero_referral_calldata,
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        )
+        .unwrap_or_else(|error| panic!("render zero-referral Lido {signature}: {error:?}"));
+        assert_raw_word_pages(&zero_referral.pages, "Referral", &[0u8; 32]);
+
+        let short = &calldata[..35];
+        assert!(matches!(
+            render_erc7730_pages_with_signer_checked(
+                &tx, short, &verified, None, &resolver, &signer,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 short head"
+            ))
+        ));
+
+        let mut trailing = calldata.clone();
+        trailing.push(0);
+        assert!(matches!(
+            render_erc7730_pages_with_signer_checked(
+                &tx, &trailing, &verified, None, &resolver, &signer,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 static calldata trailing"
+            ))
+        ));
+
+        let wrong_selector = calldata_static("unknownLido(address)", &[abi_address_word(referral)]);
+        assert!(matches!(
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                &wrong_selector,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+        ));
     }
 }
 

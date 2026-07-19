@@ -1,0 +1,242 @@
+{
+  "schema_version": 1,
+  "scope": "Semantic evidence for the two already-admitted Lido Ethereum staking routes: stETH submit(address) and WstETHReferralStaker stakeETH(address)",
+  "captured_at_utc": "2026-07-19T21:47:37Z",
+  "descriptors": [
+    {
+      "file": "secure/data/erc7730-registry/registry/lido/calldata-stETH.json",
+      "chain_id": 1,
+      "address": "0xae7ab96520de3a18e5e111b5eaab095312d7fe84",
+      "canonical_signature": "submit(address)",
+      "authored_signature": "submit(address _referral)",
+      "selector": "0xa1903eab",
+      "intent": "Stake ETH",
+      "interpolated_intent": "Stake {@.value} ETH",
+      "amount_label": "Amount"
+    },
+    {
+      "file": "secure/data/erc7730-registry/registry/lido/calldata-wstETH-referral-staker.json",
+      "chain_id": 1,
+      "address": "0xa88f0329c2c4ce51ba3fc619bbf44efe7120dd0d",
+      "canonical_signature": "stakeETH(address)",
+      "authored_signature": "stakeETH(address _referral)",
+      "selector": "0x946fe3e8",
+      "intent": "Stake ETH",
+      "interpolated_intent": "Stake {@.value} ETH",
+      "amount_label": "Amount to stake"
+    }
+  ],
+  "upstream": {
+    "lido_core": {
+      "repository": "https://github.com/lidofinance/core",
+      "release": "v3.0.2",
+      "commit": "2a2210baa3939f8079c47e8b45656b9d40e90650",
+      "tree": "e2ae4af39a0e80762604f8e99d59eb49b22cd6d9",
+      "commit_time": "2026-04-23T16:34:42+01:00",
+      "deployment_record": {
+        "upstream_path": "deployed-mainnet.json",
+        "archive_file": "deployment/deployed-mainnet.json",
+        "git_blob": "704fd04e55326c64f11795cfaaac142c6eaeaca7",
+        "sha256": "f191f22e3a841d2100a95d18c920d408bb66472a4b32d64d6685724c129fe61d",
+        "object_path": ".app:lido"
+      },
+      "source": {
+        "upstream_path": "contracts/0.4.24/Lido.sol",
+        "archive_file": "source/Lido.sol",
+        "git_blob": "8fff6b8891831a2d3ca6c1224245554a5d7b4613",
+        "sha256": "0c5e7f1ec557cfc14dcab62c0e601868e202527984cdc7e3b1bf4242a0528149",
+        "verified_explorer_source_sha256": "0c5e7f1ec557cfc14dcab62c0e601868e202527984cdc7e3b1bf4242a0528149"
+      }
+    },
+    "si_lidity": {
+      "repository": "https://github.com/lidofinance/si-lidity",
+      "address_record_commit": "a2f4857e29ca86e566dcf6ab3e1ce60d07bdce93",
+      "tree": "2fa03f631a25c3d3efa15eb4539548a672ab8dd9",
+      "commit_time": "2025-09-10T16:36:30+03:00",
+      "deployment_record": {
+        "upstream_path": "docs/silidity/deployed-contracts/mainnet.md",
+        "archive_file": "deployment/si-lidity-mainnet.md",
+        "git_blob": "5da7c23191db9b22d9212e77fc8d3df775ca49c9",
+        "sha256": "304781afda0dbd2049e4c804e51b152c89e35184eb880c7ebb9adfe31c75596f"
+      },
+      "source": {
+        "upstream_path": "si-contracts/0.8.25/w/WstethStaker.sol",
+        "archive_file": "source/WstethStaker.sol",
+        "git_blob": "7c24fdc17f324cdd06232bc6ea69c012afd736bd",
+        "sha256": "33ee379b8e0fa0f667afe5d33007d8c59a05268789f85c4807f4a71e409cd38d",
+        "verified_explorer_source_sha256": "33ee379b8e0fa0f667afe5d33007d8c59a05268789f85c4807f4a71e409cd38d"
+      }
+    }
+  },
+  "verified_explorer": {
+    "lido_implementation": {
+      "api": "https://eth.blockscout.com/api/v2/smart-contracts/0x6ca84080381e43938476814be61b779a8bb6a600",
+      "contract_name": "Lido",
+      "compiler": "v0.4.24+commit.e67f0147",
+      "evm_version": "constantinople",
+      "optimizer_enabled": true,
+      "optimizer_runs": 200,
+      "fully_verified": true,
+      "source_matches_archive": true,
+      "full_abi_canonical_sha256": "6feb7f7d8c0339219ee2ba562cbd4b7ac54df851ffeef00dca6414e2dcd75f69"
+    },
+    "referral_staker": {
+      "api": "https://eth.blockscout.com/api/v2/smart-contracts/0xa88f0329c2c4ce51ba3fc619bbf44efe7120dd0d",
+      "contract_name": "WstETHReferralStaker",
+      "compiler": "0.8.25+commit.b61c2a91",
+      "evm_version": "cancun",
+      "optimizer_enabled": true,
+      "optimizer_runs": 200,
+      "fully_verified": true,
+      "source_matches_archive": true,
+      "full_abi_canonical_sha256": "484c860141d297384513d91006a3a0e1d05f447429bfe6959b26bede20db42a4"
+    },
+    "boundary": "Explorer verification metadata was inspected but its full API response is not archived; the package independently archives the exact official sources, official address records, and fixed-block runtimes. It does not locally recompile either contract."
+  },
+  "abi": {
+    "lido_submit": {
+      "archive_file": "abi/Lido.submit.abi.json",
+      "archive_file_sha256": "c6be42298f0f2c12d3aa2b0665d13b8f1c11e49381e20247a70f674f2c6d72c8",
+      "entries": 1
+    },
+    "referral_staker": {
+      "upstream_path": "docs/static/abi/WstETHReferralStaker.json",
+      "archive_file": "abi/WstETHReferralStaker.abi.json",
+      "git_blob": "4c3a0a3aa9db0f9a1ea6de37f03003312b0df290",
+      "archive_file_sha256": "785b0ac7c7324df6781bdac35439c55ffd3cf68bea4609ba79ddcca967b4609d",
+      "canonical_sha256": "484c860141d297384513d91006a3a0e1d05f447429bfe6959b26bede20db42a4",
+      "entries": 6
+    }
+  },
+  "deployment": {
+    "chain_id": 1,
+    "fixed_block": {
+      "number": 25569139,
+      "number_hex": "0x1862773",
+      "hash": "0xe78f42069b24373fb7364e3728deb2f221f18f223f3367667321b759b92f0873",
+      "state_root": "0x5981542c65a7cf3b51d7d15f434950b32747fbe442cf302a43d2f91cd825147f",
+      "timestamp": 1784492819,
+      "timestamp_utc": "2026-07-19T20:26:59Z"
+    },
+    "steth": {
+      "proxy_address": "0xae7ab96520de3a18e5e111b5eaab095312d7fe84",
+      "implementation_address": "0x6ca84080381e43938476814be61b779a8bb6a600",
+      "proxy_type": 2,
+      "kernel": "0xb8ffc3cd6e7cf5a098a1c92f48009765b24088dc",
+      "app_id": "0x3ca7c3e38968823ccb4c78ea688df41356f182ae1d159e4ee608d30d68cef320"
+    },
+    "referral_staker": {
+      "address": "0xa88f0329c2c4ce51ba3fc619bbf44efe7120dd0d",
+      "steth": "0xae7ab96520de3a18e5e111b5eaab095312d7fe84",
+      "wsteth": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+      "constructor_wsteth": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+    }
+  },
+  "rpc": {
+    "receipt_encoding": "jq -s . over each operator's numbered response files in lexical filename order, with one final LF",
+    "collection_script": {
+      "file": "rpc/collect-fixed-block.sh",
+      "sha256": "6432d326098034b453b98d53a25b1102142236bcfe45ccd849e2edc7b5d8414d"
+    },
+    "receipts": [
+      {
+        "operator": "dRPC",
+        "endpoint": "https://eth.drpc.org",
+        "file": "rpc/drpc-fixed-block-receipt.json",
+        "sha256": "4ce0694dd6ab243c2622b0d01c289add395211ed5180e08519d324da2d8b9c3b"
+      },
+      {
+        "operator": "MEV Blocker",
+        "endpoint": "https://rpc.mevblocker.io",
+        "file": "rpc/mevblocker-fixed-block-receipt.json",
+        "sha256": "977a444e7c2ba6e44b5c5628141f47ffbf6fbfca3a1d251c2213da784f95f9ea"
+      }
+    ],
+    "response_ids": {
+      "chain_id": 1,
+      "block": 2,
+      "steth_proxy_code": 3,
+      "lido_implementation_code": 4,
+      "referral_staker_code": 5,
+      "proxy_implementation": 6,
+      "proxy_type": 7,
+      "proxy_kernel": 8,
+      "proxy_app_id": 9,
+      "staker_steth": 10,
+      "staker_wsteth": 11,
+      "shares_for_one_eth": 12,
+      "pooled_eth_for_one_share": 13,
+      "wsteth_for_one_steth": 14,
+      "steth_for_one_wsteth": 15
+    }
+  },
+  "runtime_artifacts": {
+    "steth_proxy": {
+      "file": "runtime/AppProxyUpgradeable.mainnet.hex",
+      "file_sha256": "d86b37e10d8aa2663c70ed94cc87b94ab615a35836f9aef0dea692ec6ee77c79",
+      "bytes": 1035,
+      "keccak256": "0xb9c1c929064cd21734c102a698e68bf617feefcfa5a9f62407c45401546736bf"
+    },
+    "lido_implementation": {
+      "file": "runtime/Lido.mainnet.hex",
+      "file_sha256": "f89a9b0febf1df7d3dd4639f0a2d66b479a5167f37a5841509947c5e2bdc2fd0",
+      "bytes": 23641,
+      "keccak256": "0x511ecf5357993f29e0653335fb0076dbe8e1590b8736168a3d3487c7fa2774e9"
+    },
+    "referral_staker": {
+      "file": "runtime/WstETHReferralStaker.mainnet.hex",
+      "file_sha256": "d7417d34e7cdf6503bea9dcff83e440afe631499f905f0f6ee6d6fff4ebe6d72",
+      "bytes": 1269,
+      "keccak256": "0x5f5dde8d8db450de3418211781535183deeea6281f5a468d29338f90f9ec385a",
+      "executable_prefix_bytes": 1216,
+      "cbor_metadata_bytes": 51
+    }
+  },
+  "fixed_block_outputs": {
+    "shares_for_one_eth": "806628474843576055",
+    "pooled_eth_for_one_share": "1239728116706917843",
+    "wsteth_for_one_steth": "806628474843576055",
+    "steth_for_one_wsteth": "1239728116706917843"
+  },
+  "wsteth_dependency": {
+    "evidence_manifest": "tests/erc7730-semantic-evidence/lido-wsteth-permit/manifest.json",
+    "evidence_manifest_sha256": "f9d9bdedc6e6e6b57948d680724b0951d3b7f8184bae117c1cdf1f2cc1c88fbd",
+    "runtime_file": "tests/erc7730-semantic-evidence/lido-wsteth-permit/runtime/WstETH.mainnet.hex",
+    "runtime_file_sha256": "7f714a911c4e8a42f57144dcca483545b95b0b36e90011bd23b95ba687c56457",
+    "runtime_bytes": 6492,
+    "runtime_keccak256": "0x630181884786c962140041cffa3acffbf39d8c93bde1a62b7b55046e57400557",
+    "source_file": "tests/erc7730-semantic-evidence/lido-wsteth-permit/source/WstETH.upstream.sol",
+    "source_file_sha256": "16aa9a9a729e86996c4c79c57774f1861d76cca0c4c1ca6b679045f3d814b1be",
+    "wrap_abi_file": "tests/erc7730-semantic-evidence/lido-wsteth-permit/abi/wrap.abi.json",
+    "wrap_abi_file_sha256": "359844513631838027cc1a7ff2bf7003d99af15d9fb00d73058c4b9dc24a409c"
+  },
+  "semantics": [
+    {
+      "canonical_signature": "submit(address)",
+      "source": [
+        "source/Lido.sol:485-487",
+        "source/Lido.sol:1025-1038"
+      ],
+      "successful_effect": "Requires nonzero msg.value and available live staking capacity, computes shares from live pooled-ETH/share state, mints those shares to msg.sender, increases buffered ether by exactly msg.value, and emits the exact sender, value, and signed referral.",
+      "signed_display_binding": "@.value is the exact ETH input and #._referral is the exact full address word forwarded to _submit.",
+      "output_residual": "The stETH share/token output is live-state-dependent and has no signed minimum."
+    },
+    {
+      "canonical_signature": "stakeETH(address)",
+      "source": [
+        "source/WstethStaker.sol:43-60",
+        "source/WstethStaker.sol:72-77"
+      ],
+      "successful_effect": "Forwards exact msg.value and the signed referral to stETH, converts returned shares to pooled ETH with ceiling division, wraps through the immutable canonical wstETH, and transfers the returned wstETH amount to msg.sender.",
+      "signed_display_binding": "@.value is the exact forwarded ETH input and #._referral is the exact full address word; zero is explicitly allowed and means no referral.",
+      "output_residual": "The wstETH output is live-state- and rounding-dependent and has no signed minimum."
+    }
+  ],
+  "residuals": [
+    "stETH is an upgradeable Aragon proxy; fixed-block implementation, kernel, appId, source, and runtime evidence do not guarantee future code.",
+    "Both routes can revert because of zero value, pause/rate-limit, balance, allowance, external-call, or recipient behavior. Evidence describes successful source semantics, not transaction success.",
+    "The resulting stETH/wstETH amount depends on live pooled-ETH/share state and rounding. PQ1 authenticates no minimum output or slippage bound for these routes.",
+    "The archived RPC operators are independent endpoints, not independent chain histories or a live-monitoring service.",
+    "This evidence grants no production-shipment, fallback, forced-blind, generic-signing, proxy-monitoring, or catalogue-expansion authority."
+  ]
+}
