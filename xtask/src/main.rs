@@ -67,6 +67,8 @@ Subcommands:
                           [--input-dir PATH] [--policy PATH]
                           [--out-binary PATH] [--out-review PATH]
                           [--e2e-input-dir PATH] [--e2e-out-binary PATH]
+                          [--known-calls-out PATH]
+                          [--known-calls-e2e-out PATH]
       Compile the production ERC-7730 catalogue from
       `secure/data/erc7730-registry/registry` plus
       `secure/data/erc7730-registry/ercs`, and the E2E catalogue from
@@ -80,6 +82,9 @@ Subcommands:
       With --check: rebuild in-memory and compare against the checked-in
       artifacts, including the capability-defining production/E2E ERC-20
       companion blobs and their exact root sections; exit non-zero on drift.
+      In write mode, selecting any custom input or policy requires every
+      output flag above to be explicit so a probe cannot overwrite an
+      implicit checked-in production artifact.
       `secure/src/db_roots.rs` is validation-only here and is regenerated with
       `cargo run -p dbgen`.
 
@@ -420,6 +425,37 @@ struct Erc7730Args {
     out_review: Option<PathBuf>,
     e2e_input_dir: Option<PathBuf>,
     e2e_out_binary: Option<PathBuf>,
+    known_calls_out: Option<PathBuf>,
+    known_calls_e2e_out: Option<PathBuf>,
+}
+
+fn validate_erc7730_probe_output_isolation(args: &Erc7730Args) -> Result<(), String> {
+    let uses_custom_inputs =
+        args.input_dir.is_some() || args.policy.is_some() || args.e2e_input_dir.is_some();
+    if args.check || !uses_custom_inputs {
+        return Ok(());
+    }
+
+    let mut missing = Vec::new();
+    for (flag, provided) in [
+        ("--out-binary", args.out_binary.is_some()),
+        ("--out-review", args.out_review.is_some()),
+        ("--e2e-out-binary", args.e2e_out_binary.is_some()),
+        ("--known-calls-out", args.known_calls_out.is_some()),
+        ("--known-calls-e2e-out", args.known_calls_e2e_out.is_some()),
+    ] {
+        if !provided {
+            missing.push(flag);
+        }
+    }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "custom ERC-7730 input/policy probes in write mode require every output path to be explicit; missing: {}",
+            missing.join(", ")
+        ))
+    }
 }
 
 fn parse_erc7730_args(args: &[String]) -> Result<Erc7730Args, String> {
@@ -462,6 +498,19 @@ fn parse_erc7730_args(args: &[String]) -> Result<Erc7730Args, String> {
                 i += 1;
                 out.e2e_out_binary = Some(PathBuf::from(
                     args.get(i).ok_or("--e2e-out-binary requires a value")?,
+                ));
+            }
+            "--known-calls-out" => {
+                i += 1;
+                out.known_calls_out = Some(PathBuf::from(
+                    args.get(i).ok_or("--known-calls-out requires a value")?,
+                ));
+            }
+            "--known-calls-e2e-out" => {
+                i += 1;
+                out.known_calls_e2e_out = Some(PathBuf::from(
+                    args.get(i)
+                        .ok_or("--known-calls-e2e-out requires a value")?,
                 ));
             }
             other => return Err(format!("unknown flag `{other}`")),
@@ -553,6 +602,10 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if let Err(error) = validate_erc7730_probe_output_isolation(&parsed) {
+        eprintln!("error: {error}");
+        return ExitCode::FAILURE;
+    }
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
     let workspace_root = manifest_dir
@@ -577,8 +630,12 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
     let e2e_out_binary = parsed
         .e2e_out_binary
         .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_E2E_OUT));
-    let known_calls_out = workspace_root.join(ERC7730_DEFAULT_KNOWN_CALLS);
-    let known_calls_e2e_out = workspace_root.join(ERC7730_DEFAULT_KNOWN_CALLS_E2E);
+    let known_calls_out = parsed
+        .known_calls_out
+        .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_KNOWN_CALLS));
+    let known_calls_e2e_out = parsed
+        .known_calls_e2e_out
+        .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_KNOWN_CALLS_E2E));
     let erc20_out = workspace_root.join(ERC20_DEFAULT_OUT);
     let erc20_e2e_out = workspace_root.join(ERC20_DEFAULT_E2E_OUT);
 
