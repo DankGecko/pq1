@@ -1283,3 +1283,35 @@ NOT a soundness break and NOT an R_leaf_C/leaf-bound rework (both untouched). FI
 add `allnchads` to seam_branch1_WOTSC + strengthen the part-0 seq post to carry the dropped ps/ad/pp
 equalities, then close the cube-build transcription. Carrying it needs a downstream re-check at the eventual
 component-assembly consumer (same as MM45 carries+discharges its type premises).
+
+### MILESTONE 2026-07-19 — the first ler_add branch byequiv is a COMPILED 0-admit FACT (seam go/no-go resolved YES)
+
+`seam_branch1_WOTSC` (drafts/_seam_byequiv_wip.ec) is CERTIFIED-0-ADMIT — independently re-verified (ec-certify:
+compile OK / 0 admit-tactics / 0 axiom; nested-strip tactic-position admits = 0; whole file EXIT0; committed
+HEAD 1bdd7ce) and adversarially AUDITED (statement intact, premises faithful, cube-build genuine not smt-forced).
+It proves: `Pr[EUF_NAGCMA_FLSLXMSSMTTWCESNPRF_V(A_ht,FC.O_THFC_Default).main : res /\ valid_WOTSTWES] <=
+Pr[M_EUF_GCMA_WOTSC_NPRF(R_MEUFGCMAWOTSC_EUFNAGCMA_C(A_ht), O_MEUFGCMA_WOTSC_Default, FC.O_THFC_Default) : res]`.
+This is the SEAM — the one place a +C hard-rework could have hidden — now a compiled fact, integrating: the
+proven okC-ghost (discriminating +C content), the O_V element-sampling oracle-hop, the #A conseq, and the full
+nested cube-build. Milestone-2 (R_leaf_C / leaf bound) UNTOUCHED throughout.
+
+PREMISE LIST (9, both address-discipline kinds carried, per the refined understanding): c<=p_tgts; hembdisj;
+hembinj; hencb; dfC<>8n; dfC<>8n*len; dfC<>8n*2; **A_wf_ht (member-based, pkcotype/dfC/Th+C axis)**;
+**allnchads (type-based, get_typeidx<>chtype, WOTS-chain axis)**. Plus module-separation restrictions.
+
+FOUR genuine +C reworks in the cube-build (found by ec-goal introspection, beyond rename): (1) side-2 sig
+names sigclp/sigcnt; (2) a NEW sig-counter maintenance conjunct grindC(addr,root){1}={2} (the ground counter,
+absent in MM45); (3) qualified WAddress.insubdK/DBLL.insubdK/DigestBlock.valP; (4) tree-hash size-leaf via
+smt(DigestBlock.valP) (MM45's bare /# lacked the digest-size fact). Consistent theme: no cryptographic wall,
+but EVERY "mechanical" layer needed real adaptation.
+
+NON-BLOCKING residuals (out of scope, honestly flagged): (a) the carried allnchads + the
+-EUF_NAGCMA_FLSLXMSSMTTWCESNPRF_C restriction must be dischargeable at the downstream ler_add/composition
+consumer (MM45 discharges its type premises at :4338; not re-checked here) — do NOT read this lemma's 0-admit
+as EUF-CMA closure; (b) stale in-proof comments (documentation lag, no soundness impact); (c) cited-TCB: the
+vendored MM45 `require import SPHINCS_PLUS` base carries its own axioms (local +C drafts verified 0-admit/0-axiom).
+
+STILL OPEN toward the SPHINCS+C capstone: the SECOND ler_add branch byequiv (uses the built tree reductions
+R_SMDTTCRCPKCO_C/R_SMDTTCRCTRH_C, with the deferred-seed +C wrinkle); the component-theorem assembly (chain
+branch-1 + branch-2 + leaf bound, discharge the carried premises); FORS+C (separate +C novelty, OPEN); the
+capstone composition + premise discharge.
