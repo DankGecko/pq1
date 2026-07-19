@@ -1101,3 +1101,33 @@ NOT pre-build O_V/EqPr_Orig_V_C (whether the V-oracle is needed is compile-revea
 independent). Crux ≈ 5 lines (retain is_valid{1} + okC-from-allOkC discharge). EVERYTHING IS UNBUILT
 (grep confirms no +C hypertree V-game exists) — "low rework, no mechanical surprise" is a reading-grounded,
 adversarially-checked PROJECTION, not compiled fact. The byequiv compile is what makes it fact.
+
+### UPDATE 2026-07-19 — seam byequiv: statement SETTLED + opening PROVEN; a reusable pRHL introspection unblock
+
+Two agent workflows on the seam byequiv (the go/no-go: `V ∧ valid_WOTSTWES ≤ M_EUF_GCMA_WOTSC(R_leaf_C)`):
+
+**Landed (compiles EXIT 0, in WIP `drafts/_seam_byequiv_wip.ec`):**
+ - The byequiv **STATEMENT is settled**, resolving the oracle-plumbing question that blocked me earlier:
+   the V-game's abstract collection oracle is instantiated with **`FC.O_THFC_Default`** — the SAME module
+   `M_EUF_GCMA_WOTSC_NPRF` hands `A_ht` on the RHS (`R_leaf_C` passes OC straight to `A(OC)`), and
+   `FC.Oracle_THFC` is structurally accepted where the V-game expects `FSSLXMTWES.TRHC.Oracle_THFC` (same
+   init/get_tweaks/query signature). RHS is literally the `leaf_reduction_MEUFGCMAWOTSC_bound` term ⇒ the
+   second `ler_add` step chains cleanly.
+ - The **opening choose-alignment is PROVEN**, exposing a +C *simplification*: both sides hand `A_ht` the
+   collection oracle directly (no MM45 `O_THFC` wrapper), so choose couples by collection-oracle glob
+   equality alone — no `typeidx<>chtype` bookkeeping invariant needed.
+ - **Milestone-2 rework: NONE** (re-confirmed a 4th time, code-traced): the okC discharge uses only the
+   already-0-admit helpers `pkfromsigC_verify_eq`/`all_idfun_nth`/`root_from_sigC_okl_eq`.
+
+**The residual + a genuine TOOLING unblock:** the remaining ~370-line cube-build bulk (MM45
+`FL_SL_XMSS_MT_ES.ec:4143-4531` analog) is mechanical transcription but needs pRHL goal introspection to
+tune the nested-`while` invariants. The batch gate (`easycrypt compile`, errors-only, ~4-8s/iter) does NOT
+print pRHL goal states — which is why the first grind stalled. **Fix: `easycrypt cli` (the proof-general
+REPL) DOES stream full relational goal states** (both program sides + `post`). Wrapped as
+`ec-goal.sh <file> <line>` (feed the file prefix into `cli`, dump the pending goal at the frontier). This
+is the EasyCrypt analog of `lean-lsp` for agent-driven proof development and unblocks the bulk (and all
+future pRHL work in this port). Validated on the actual stuck goal — the dumped `post` confirms the +C
+divergence is correctly wired: `(is_valid{1} /\ is_fresh{1}) /\ valid_WOTSTWES{1} => ... is_valid{2} ...`
+(is_valid{1}, carrying allOkC, retained; is_valid{2}, carrying okC, in the consequent). A max-effort grind
+with this tool is in progress. Real file `drafts/XMSSMT_C_Reduction.ec` stays 0-admit clean throughout;
+only the WIP carries the single bulk admit.
