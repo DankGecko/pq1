@@ -1620,3 +1620,61 @@ a free-floating stand-in "because it would be indistinguishable from faking the 
 arithmetic cannot be discharged in EC here); (c) R_leaf's forge-selection SOUNDNESS is still deferred
 (untouched by this track — the bound remains the D1-composition leg only); (d) the premise on A_ht is
 RESHAPED (into a mechanically-producible member-set audit), not eliminated.
+
+### 2026-07-19 — RESIDUAL PICKUP: R_top BUILT (A_wf DISCHARGED), forge-soundness residual proven STALE, branch-2 started
+
+Three parallel residual tracks, independently audited: **all three PASS**. (The auditor's `no_cert_file_edits:
+false` is a FALSE ATTRIBUTION — the only dirty do-not-modify file is drafts/FORS_C_TreePort.ec, mtime
+2026-07-17, diff byte-identical to what the PREVIOUS audit reported before these tracks existed, and no commit
+of any track touches it. It is the concurrent session's work.)
+
+**T1 — R_top BUILT + AUDITED + PAYOFF (drafts/_rtop_wip.ec, CERTIFIED-0-ADMIT, 8 commits).** This closes the
+`A_wf` discharge that has been open since the start of this program.
+ - **R_top defined**: the +C analog of MM45's R_FLSLXMSSMTTWESNPRFEUFNAGCMA_EUFCMA (SPHINCS_PLUS.ec:1490-1595),
+   FORS cube-build mirroring :1544-1587 (6 nested loops, 3 OC.query sites), simulated CMA oracle, forge that
+   installs the hypertree pk/sig list, runs F, and re-derives the forged FORS pk as the hypertree message.
+ - **The load-bearing condition is ENFORCED BY TYPING, not inspection** (stronger than I specified): a new
+   interface `Adv_EUFCMA_C (O : SOracle_CMA_C)` is a functor of the SIGNING oracle ALONE, so F structurally
+   CANNOT receive OC; auditor independently confirmed `A(O_CMA).forge` appears only in `forge` and `choose`
+   never mentions A. Consequently the audit is **PREMISE-FREE** (unlike R_leaf_C_members4, which needs
+   `call A_wf_ht`).
+ - **`R_top_members4` PROVED** — a real 6-nested-while Hoare proof, `othfcma_query_mem4` at each site
+   (FORS leaf 8n via DigestBlock.valP; node 8n*2 via size_trh_input; root 8n*k via size_trco_input); smt only
+   on size side-conditions; MM45's valid_tbfidx/insubdK/dist_adrstypes arithmetic NOT needed (type axis vs our
+   length axis), exactly as predicted. Proved first try.
+ - **PAYOFF `leaf_reduction_MEUFGCMAWOTSC_bound_Rtop`**: the leaf bound at `A_ht := R_top(F)` with the
+   member-set premise discharged — **NO adversary well-formedness hypothesis of any kind on F**. Remaining
+   hypotheses are the inherited WOTS+C side-conditions + the four abstract dfC facts; none constrain F.
+ - Controls incl. the compiled **`R_top_OC_leak_breaks_members4`**: building R_top_OC + F_leak with the
+   forbidden OC pass-through PROVES the postcondition fails ⇒ the no-leak condition is load-bearing.
+
+**T2 — the forge-soundness residual is STALE (drafts/_compose_wip.ec, CERTIFIED-0-ADMIT).** SPLIT VERDICT:
+ - **(b) "R_leaf_C's forge-selection correctness is unproven" is NOW FALSE.** `seam_branch1_WOTSC` IS that
+   direction: its LHS event is "A_ht produced a VALID (real +C verify: size-d, root-match, allOkC) and FRESH
+   forgery in the WOTS bucket", its RHS is "R_leaf_C(A_ht) WINS the WOTS+C game", and the conseq at :2559
+   discharges exactly that implication with nothing else assumed. A residual I had carried since milestone 2
+   was already closed by branch-1.
+ - **(a) stays TRUE of the leaf bound taken alone** (it bounds the WOTS+C game, not the hypertree game).
+ - **PRECISION**: what is discharged is the CONDITIONAL (bucket-win ⇒ R_leaf_C-win). Bucket REACHABILITY (the
+   flag disjunction) is a SEPARATE obligation — so the bound is not vacuous-by-emptiness. Anti-vacuity controls
+   run: dropping the S_TCR summand fails; flipping the find-predicate to the pkco-bucket disequality fails.
+ - **NEW RESIDUAL R1 (previously untracked, genuine):** the game-level **real → C → V hops are ABSENT** from
+   the port. branch-1's LHS is the _V_ game; both instrumented games are DEFINED but NEITHER hop lemma exists
+   (verified by a declaration-level grep over all of drafts/). This must be built before branch-1 says anything
+   about the REAL game.
+
+**T3 — branch-2 byequiv started (drafts/_seam_branch2_wip.ec, 3 labelled admits, 7 commits).** Closed: the
+statement + full combining scaffold (both mu_splits + ler_add chaining, over the SAME V-game instantiation and
+flag carrier branch-1 fixed, so the branches chain); the **ZERO CASE fully**, via a new 0-admit
+`ht_telescope_contra`; **PKCO PART 0 (choose alignment) fully**, including the inline/swap reindex and the
+cross-clone FC{1}~PKCOC{2} oracle hop (both verified to be Collection clones with identical instantiation).
+Two consequences of Track A's grind-in-find land here as concrete deltas from MM45: `swap 16 11` (not MM45's
+`swap 16 10` — +C inserts `allOkC <- true`) and `seq 7 7` (not `seq 7 8` — R.pick no longer has a `sigWOTStd`
+init). New operators ht_chad/ht_root/ht_cnt/ht_sigc characterize the honest +C sig-cube element and were
+checked TWO-SIDED (against both the V-game element line and find's grind-in-find rebuild).
+
+**REMAINING (precise):** R_top's and R_leaf's REDUCTION SOUNDNESS (the composed bound is still the
+D1-composition leg); FORS+C signer not wired into R_top's simulated CMA game (the load-bearing fact that
+survives: the +C delta does not touch `choose`, which is why the audit and payoff are unaffected); the four
+dfC-separation facts remain threaded hypotheses; R1 (real→C→V hops); R2 (the other two buckets = T3's work);
+capstone premise discharge for `allnchads`.
