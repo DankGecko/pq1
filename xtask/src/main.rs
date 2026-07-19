@@ -582,12 +582,12 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
     let erc20_out = workspace_root.join(ERC20_DEFAULT_OUT);
     let erc20_e2e_out = workspace_root.join(ERC20_DEFAULT_E2E_OUT);
 
-    // The normal CI drift gate also proves that the checked-in curated corpus
-    // is exactly reproducible from the strict overlay manifest. Custom input
-    // probes remain available without claiming anything about the production
-    // corpus.
-    let checked_overlay = if parsed.check
-        && input_dir == workspace_root.join(ERC7730_DEFAULT_INPUT)
+    // Default production generation always verifies the local manifest/tool
+    // identities before stamping its upstream commit into the review header.
+    // `--check` additionally proves that the checked-in curated corpus is
+    // exactly reproducible. Custom-input probes remain unstamped and make no
+    // production-corpus provenance claim.
+    let default_overlay = if input_dir == workspace_root.join(ERC7730_DEFAULT_INPUT)
         && policy == workspace_root.join(ERC7730_DEFAULT_POLICY)
     {
         let manifest_path = workspace_root.join(ERC7730_DEFAULT_CURATION_MANIFEST);
@@ -601,10 +601,12 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        let vendored_root = workspace_root.join("secure/data/erc7730-registry");
-        if let Err(error) = overlay.verify_checked_in_tree(&vendored_root) {
-            eprintln!("DRIFT: ERC-7730 curation overlay: {error}");
-            return ExitCode::FAILURE;
+        if parsed.check {
+            let vendored_root = workspace_root.join("secure/data/erc7730-registry");
+            if let Err(error) = overlay.verify_checked_in_tree(&vendored_root) {
+                eprintln!("DRIFT: ERC-7730 curation overlay: {error}");
+                return ExitCode::FAILURE;
+            }
         }
         Some(overlay)
     } else {
@@ -616,7 +618,7 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
     // is the registry root used to resolve `includes`. E2E stays strict.
     let registry_root = input_dir.parent().map(|p| p.to_path_buf());
     let Erc7730CatalogueBuild {
-        prod,
+        mut prod,
         prod_skips,
         e2e,
         prod_erc20,
@@ -634,6 +636,25 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if let Some(overlay) = default_overlay.as_ref() {
+        let review_source = match dbgen::erc7730::RegistryReviewSource::new(
+            overlay.upstream_commit(),
+            overlay.upstream_tree(),
+            overlay.manifest_sha256(),
+        ) {
+            Ok(source) => source,
+            Err(error) => {
+                eprintln!("error: ERC-7730 review provenance failed: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        if let Err(error) =
+            dbgen::erc7730::stamp_registry_review_source(&mut prod.review_text, &review_source)
+        {
+            eprintln!("error: ERC-7730 review provenance failed: {error}");
+            return ExitCode::FAILURE;
+        }
+    }
     if let Err(e) = dbgen::erc7730::round_trip_check(&prod) {
         eprintln!("error: prod round-trip failed: {e}");
         return ExitCode::FAILURE;
@@ -731,7 +752,7 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
             drift = true;
         }
         let registry_readme = workspace_root.join(ERC7730_REGISTRY_README);
-        let curation_receipt = checked_overlay
+        let curation_receipt = default_overlay
             .as_ref()
             .map(|overlay| Erc7730CurationReceipt {
                 manifest_sha256: overlay.manifest_sha256(),

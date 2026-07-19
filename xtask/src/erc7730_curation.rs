@@ -32,6 +32,7 @@ const TOOL_INPUT_PATHS: &[&str] = &[
     "Cargo.toml",
     "dbgen/Cargo.toml",
     "dbgen/src/erc7730.rs",
+    "dbgen/src/main.rs",
     "pqsigner-erc7730/Cargo.toml",
     "pqsigner-erc7730/src/ir.rs",
     "rust-toolchain.toml",

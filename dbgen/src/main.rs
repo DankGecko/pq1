@@ -102,11 +102,21 @@ fn main() {
         }
     }
 
+    // Production attestation enforcement is not implemented for the registry
+    // corpus yet. Refuse before resolving paths or writing any of the other DB
+    // artifacts so a failed production request cannot leave a partial refresh.
+    if force_production {
+        eprintln!(
+            "dbgen: --policy production is not yet supported for the ERC-7730 registry \
+             corpus (ERC-8176 attestation enforcement is not wired; the corpus builds in \
+             dev policy). Refusing rather than silently building the shipping catalogue \
+             unattested under a production flag."
+        );
+        std::process::exit(1);
+    }
+
     let root = repo_root();
     println!("dbgen: workspace root = {}", root.display());
-    if force_production {
-        println!("dbgen: --policy production (attestation enforcement ON)");
-    }
     if let Some(rr) = registry_root.as_ref() {
         println!("dbgen: --registry-root {}", rr.display());
     }
@@ -132,6 +142,12 @@ fn main() {
     let erc7730_policy = erc7730_dir.join("policy.toml");
     let erc7730_registry = root.join("secure/data/erc7730-registry");
     let erc7730_registry_input = erc7730_registry.join("registry");
+    let erc7730_curation_manifest = root.join("secure/data/erc7730/curations/manifest.json");
+    let erc7730_review_source = erc7730::load_registry_review_source(&erc7730_curation_manifest)
+        .unwrap_or_else(|error| {
+            eprintln!("dbgen: ERC-7730 review provenance failed: {error}");
+            std::process::exit(1);
+        });
     let erc7730_e2e_dir = root.join("secure/data/erc7730-e2e");
 
     // The full DB blobs live on the HOST (companion app), never in
@@ -290,27 +306,9 @@ fn main() {
     // companion looks up descriptors by `(chain_id, contract)` and
     // ships the matching IR + Merkle proof in the new sign-input
     // trailer slot (Phase 3 wires that path).
-    // Tolerant build over the vendored registry. Attestation enforcement
-    // (`--policy production`) does NOT yet apply to the SHIPPING registry corpus
-    // — the real ERC-8176 EAS record fetch + signature/identity verifier is a
-    // separate production step, and near-zero real EAS attestations exist yet.
-    // Merely flipping the policy boolean is explicitly insufficient. The
-    // corpus is therefore built in DEV policy regardless of the flag. Rather
-    // than let `--policy
-    // production` build the shipping catalogue unattested WHILE APPEARING to
-    // enforce attestation (an operator could ship believing it was attested),
-    // refuse it explicitly here (review 2.3). Remove this fence when the
-    // ERC-8176 flip lands and the tolerant path honours the policy.
-    if force_production {
-        eprintln!(
-            "dbgen: --policy production is not yet supported for the ERC-7730 registry \
-             corpus (ERC-8176 attestation enforcement is not wired; the corpus builds in \
-             dev policy). Refusing rather than silently building the shipping catalogue \
-             unattested under a production flag."
-        );
-        std::process::exit(1);
-    }
-    let (erc7730_res, skips) = erc7730::build_db_tolerant_with_erc20_capabilities(
+    // Tolerant DEV build over the vendored registry. The early CLI fence above
+    // rejects `--policy production` until real ERC-8176 verification lands.
+    let (mut erc7730_res, skips) = erc7730::build_db_tolerant_with_erc20_capabilities(
         &erc7730_registry_input,
         &erc7730_policy,
         Some(&erc7730_registry),
@@ -320,6 +318,11 @@ fn main() {
         eprintln!("dbgen: erc7730 registry db build failed: {e}");
         std::process::exit(1);
     });
+    erc7730::stamp_registry_review_source(&mut erc7730_res.review_text, &erc7730_review_source)
+        .unwrap_or_else(|error| {
+            eprintln!("dbgen: ERC-7730 review provenance failed: {error}");
+            std::process::exit(1);
+        });
     // The full per-skip detail + category roll-up is embedded in the
     // committed, drift-gated `erc7730.review.txt` (see `render_review`); echo
     // just the count here so an operator running dbgen sees at a glance that

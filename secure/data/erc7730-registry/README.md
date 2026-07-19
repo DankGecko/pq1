@@ -1,10 +1,10 @@
 # Vendored ERC-7730 registry security corpus
 
 **Upstream baseline:** vendored from
-[`ethereum/clear-signing-erc7730-registry`](https://github.com/ethereum/clear-signing-erc7730-registry)
-at commit **`784c87c925e8438e7b4736b2af85a501f8d2a265`** (vendoring review
-recorded 2026-06-30). The
-checked-in corpus is **not byte-identical to that upstream commit**: the
+[`ethereum/clear-signing-erc7730-registry`](https://github.com/ethereum/clear-signing-erc7730-registry).
+The exact commit/tree and curation-manifest identity are machine-owned by the
+managed receipt below; they are not duplicated in hand-maintained prose. The
+checked-in corpus is **not byte-identical to that upstream revision**: the
 firmware-pinned `ERC7730_DESCRIPTORS_ROOT` is derived from the upstream baseline
 plus the 14 reviewed full-file replacements listed below, under
 `secure/data/erc7730/policy.toml`. The strict manifest at
@@ -48,7 +48,7 @@ compiled companion catalogue, root
 **4,542** canonical known-call tuples, tuple-set SHA-256
 `96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`.
 Curation manifest SHA-256
-`db0236430cc7f2258bc39e243e35f3694c661030443eeb78030abe70dd4ffb59` binds upstream commit
+`e8b68e00095500cd028b51951d5fa8c7cfc5722aef7714a7f707c4bc2c65c4c0` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
 The Bloom contains 28,235 / 131,072 set bits, below the generator's 25% cap.
