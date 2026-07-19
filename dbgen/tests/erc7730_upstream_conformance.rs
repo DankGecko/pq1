@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712, BindingError};
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, BundleError};
 use pqsigner_erc7730::display::render::{render_erc7730_eip712_pages, render_erc7730_pages};
+use pqsigner_erc7730::display::DISPLAY_COLS;
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir};
 use pqsigner_erc7730::render::params::{parse as parse_params, NFT_COLLECTION_TO_PATH};
 use pqsigner_erc7730::render::RenderErr;
@@ -323,16 +324,73 @@ fn parse_fixture_address(value: &Value) -> [u8; 20] {
 }
 
 fn fixture_u256_word(value: &Value) -> [u8; 32] {
-    let number = value.as_u64().unwrap_or_else(|| {
-        value
-            .as_str()
-            .expect("fixture uint256 number or string")
-            .parse()
-            .expect("fixture uint256 decimal fits u64")
-    });
+    let decimal = match value {
+        Value::Number(number) => number.to_string(),
+        Value::String(text) => text.clone(),
+        _ => panic!("fixture uint256 number or string"),
+    };
+    assert!(!decimal.is_empty(), "fixture uint256 is empty");
+    assert!(
+        decimal.bytes().all(|byte| byte.is_ascii_digit()),
+        "fixture uint256 is not unsigned decimal"
+    );
+    assert!(
+        decimal == "0" || !decimal.starts_with('0'),
+        "fixture uint256 has a leading zero"
+    );
+
     let mut word = [0u8; 32];
-    word[24..].copy_from_slice(&number.to_be_bytes());
+    for digit in decimal.bytes() {
+        let mut carry = u16::from(digit - b'0');
+        for byte in word.iter_mut().rev() {
+            let product = u16::from(*byte) * 10 + carry;
+            *byte = product as u8;
+            carry = product >> 8;
+        }
+        assert_eq!(carry, 0, "fixture uint256 exceeds 256 bits");
+    }
     word
+}
+
+fn fixture_static_word(ty: &str, value: &Value) -> [u8; 32] {
+    match ty {
+        "address" => {
+            let mut word = [0u8; 32];
+            word[12..].copy_from_slice(&parse_fixture_address(value));
+            word
+        }
+        "bool" => {
+            let mut word = [0u8; 32];
+            word[31] = u8::from(value.as_bool().expect("fixture bool"));
+            word
+        }
+        "bytes32" => {
+            let text = value.as_str().expect("fixture bytes32 string");
+            let bytes = hex::decode(text.strip_prefix("0x").expect("fixture bytes32 0x prefix"))
+                .expect("fixture bytes32 hex");
+            bytes.try_into().expect("fixture bytes32 width")
+        }
+        _ if ty.starts_with("uint") => {
+            let suffix = &ty[4..];
+            let bits = if suffix.is_empty() {
+                256
+            } else {
+                suffix.parse::<usize>().expect("fixture uint width")
+            };
+            assert!(
+                (8..=256).contains(&bits) && bits % 8 == 0,
+                "fixture uint width is invalid"
+            );
+            let word = fixture_u256_word(value);
+            let width = bits / 8;
+            assert!(
+                word[..32 - width].iter().all(|byte| *byte == 0),
+                "fixture value does not fit {ty}"
+            );
+            word
+        }
+        _ => panic!("unsupported flat-static fixture member type `{ty}`"),
+    }
 }
 
 struct FlatStaticEip712 {
@@ -349,37 +407,36 @@ fn encode_flat_static_eip712(data: &serde_json::Map<String, Value>) -> FlatStati
     let domain_members = definitions["EIP712Domain"]
         .as_array()
         .expect("EIP712Domain members");
-    assert_eq!(
-        domain_members
-            .iter()
-            .map(|member| (
-                member["name"].as_str().expect("domain member name"),
-                member["type"].as_str().expect("domain member type")
-            ))
-            .collect::<Vec<_>>(),
-        vec![
-            ("name", "string"),
-            ("chainId", "uint256"),
-            ("verifyingContract", "address")
-        ],
-        "bounded fixture adapter only accepts the audited flat domain shape"
-    );
     let chain_id = domain["chainId"].as_u64().expect("fixture domain chainId");
     let verifying_contract = parse_fixture_address(&domain["verifyingContract"]);
-    let mut domain_preimage = Vec::with_capacity(128);
+    let mut domain_preimage = Vec::with_capacity((domain_members.len() + 1) * 32);
     domain_preimage.extend_from_slice(&keccak256(
         eip712_struct_definition("EIP712Domain", definitions).as_bytes(),
     ));
-    domain_preimage.extend_from_slice(&keccak256(
-        domain["name"]
-            .as_str()
-            .expect("fixture domain name")
-            .as_bytes(),
-    ));
-    domain_preimage.extend_from_slice(&fixture_u256_word(&domain["chainId"]));
-    let mut contract_word = [0u8; 32];
-    contract_word[12..].copy_from_slice(&verifying_contract);
-    domain_preimage.extend_from_slice(&contract_word);
+    let mut seen_domain_members = BTreeSet::new();
+    for member in domain_members {
+        let name = member["name"].as_str().expect("domain member name");
+        let ty = member["type"].as_str().expect("domain member type");
+        assert!(
+            seen_domain_members.insert(name),
+            "duplicate fixture domain member"
+        );
+        match (name, ty) {
+            ("name" | "version", "string") => domain_preimage.extend_from_slice(&keccak256(
+                domain[name]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("fixture domain {name}"))
+                    .as_bytes(),
+            )),
+            ("chainId", "uint256") | ("verifyingContract", "address") => {
+                domain_preimage.extend_from_slice(&fixture_static_word(ty, &domain[name]));
+            }
+            _ => panic!("unsupported flat-static fixture domain member `{ty} {name}`"),
+        }
+    }
+    assert!(seen_domain_members.contains("name"));
+    assert!(seen_domain_members.contains("chainId"));
+    assert!(seen_domain_members.contains("verifyingContract"));
 
     let primary_type = data["primaryType"].as_str().expect("fixture primaryType");
     let message = data["message"].as_object().expect("fixture message object");
@@ -390,16 +447,7 @@ fn encode_flat_static_eip712(data: &serde_json::Map<String, Value>) -> FlatStati
     for member in members {
         let name = member["name"].as_str().expect("message member name");
         let ty = member["type"].as_str().expect("message member type");
-        match ty {
-            "address" => {
-                let address = parse_fixture_address(&message[name]);
-                let mut word = [0u8; 32];
-                word[12..].copy_from_slice(&address);
-                encoded_data.extend_from_slice(&word);
-            }
-            "uint256" => encoded_data.extend_from_slice(&fixture_u256_word(&message[name])),
-            other => panic!("unsupported flat-static fixture member type `{other}`"),
-        }
+        encoded_data.extend_from_slice(&fixture_static_word(ty, &message[name]));
     }
 
     FlatStaticEip712 {
@@ -411,11 +459,31 @@ fn encode_flat_static_eip712(data: &serde_json::Map<String, Value>) -> FlatStati
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FixtureShellKind {
+    Type2,
+    LegacyOrBare,
+}
+
+fn classify_fixture_shell(raw: &[u8]) -> Result<FixtureShellKind, u8> {
+    let first = *raw.first().expect("empty fixture rawTx");
+    match first {
+        0x02 => Ok(FixtureShellKind::Type2),
+        unsupported @ 0x00..=0x7f => Err(unsupported),
+        _ => Ok(FixtureShellKind::LegacyOrBare),
+    }
+}
+
+fn supported_fixture_shell(raw: &[u8]) -> FixtureShellKind {
+    classify_fixture_shell(raw).unwrap_or_else(|unsupported| {
+        panic!("unsupported EIP-2718 fixture envelope type 0x{unsupported:02x}")
+    })
+}
+
 fn fixture_calldata(raw: &[u8]) -> &[u8] {
-    let (typed, payload, data_index) = if raw.first() == Some(&0x02) {
-        (true, &raw[1..], 7usize)
-    } else {
-        (false, raw, 5usize)
+    let (typed, payload, data_index) = match supported_fixture_shell(raw) {
+        FixtureShellKind::Type2 => (true, &raw[1..], 7usize),
+        FixtureShellKind::LegacyOrBare => (false, raw, 5usize),
     };
     let Ok((Item::List(list), used)) = decode_item(payload) else {
         assert!(!typed, "typed fixture must contain an RLP list");
@@ -472,7 +540,11 @@ fn push_rlp_list_prefix(payload_len: usize, out: &mut Vec<u8>) {
 // production signing authority; retain the nine signed transaction fields and
 // pass their canonical unsigned Type-2 form through the production parser.
 fn adapt_signed_type2_fixture(raw: &[u8]) -> AdaptedFixtureTx {
-    assert_eq!(raw.first(), Some(&0x02), "fixture is not Type-2");
+    assert_eq!(
+        supported_fixture_shell(raw),
+        FixtureShellKind::Type2,
+        "fixture is not Type-2"
+    );
     let (Item::List(list), used) = decode_item(&raw[1..]).expect("signed Type-2 outer RLP") else {
         panic!("signed Type-2 outer item is not a list");
     };
@@ -523,7 +595,11 @@ fn adapt_signed_type2_fixture(raw: &[u8]) -> AdaptedFixtureTx {
 // legacy parsing/signing stays unsupported; gas-price mapping exists only so
 // the real descriptor renderer can consume an `Eip1559Tx`-shaped fixture.
 fn adapt_legacy_eip155_fixture(raw: &[u8]) -> AdaptedFixtureTx {
-    assert_ne!(raw.first(), Some(&0x02), "fixture is not legacy");
+    assert_eq!(
+        supported_fixture_shell(raw),
+        FixtureShellKind::LegacyOrBare,
+        "fixture is not legacy"
+    );
     let (Item::List(list), used) = decode_item(raw).expect("legacy fixture outer RLP") else {
         panic!("legacy fixture outer item is not a list");
     };
@@ -731,24 +807,27 @@ fn inventory_fixture(path: &Path, stats: &mut FixtureStats, tested: &mut BTreeSe
             assert!(raw_tx.starts_with("0x"), "rawTx lacks 0x prefix");
             let raw = hex::decode(&raw_tx[2..]).expect("rawTx hex");
             assert!(!raw.is_empty(), "empty rawTx");
-            if raw[0] == 0x02 {
-                stats.type2_cases += 1;
-                match rlp_field_count(&raw, true).expect("type-2 fixture outer RLP") {
-                    9 => stats.type2_unsigned += 1,
-                    12 => stats.type2_signed += 1,
-                    count => panic!(
-                        "unexpected EIP-1559 field count {count} in {}",
-                        path.display()
-                    ),
+            match supported_fixture_shell(&raw) {
+                FixtureShellKind::Type2 => {
+                    stats.type2_cases += 1;
+                    match rlp_field_count(&raw, true).expect("type-2 fixture outer RLP") {
+                        9 => stats.type2_unsigned += 1,
+                        12 => stats.type2_signed += 1,
+                        count => panic!(
+                            "unexpected EIP-1559 field count {count} in {}",
+                            path.display()
+                        ),
+                    }
                 }
-            } else {
-                stats.legacy_cases += 1;
-                match rlp_field_count(&raw, false) {
-                    Some(count) => assert!(
-                        count >= 6,
-                        "legacy fixture has fewer than six transaction fields"
-                    ),
-                    None => stats.non_envelope_payload_cases += 1,
+                FixtureShellKind::LegacyOrBare => {
+                    stats.legacy_cases += 1;
+                    match rlp_field_count(&raw, false) {
+                        Some(count) => assert!(
+                            count >= 6,
+                            "legacy fixture has fewer than six transaction fields"
+                        ),
+                        None => stats.non_envelope_payload_cases += 1,
+                    }
                 }
             }
             if let Some(tx_hash) = case.get("txHash") {
@@ -869,6 +948,48 @@ fn fixture_case(relative: &str, case_index: usize) -> (Value, Vec<u8>) {
     let raw =
         hex::decode(raw_hex.strip_prefix("0x").expect("0x rawTx")).expect("fixture rawTx hex");
     (fixture, raw)
+}
+
+#[test]
+fn unsupported_typed_fixture_envelopes_refuse_before_projection() {
+    let (_, type2_raw) = fixture_case(
+        "registry/threshold/tests/calldata-RebateStaking.tests.json",
+        0,
+    );
+    assert_eq!(
+        classify_fixture_shell(&type2_raw),
+        Ok(FixtureShellKind::Type2)
+    );
+    for unsupported in 0x00u8..=0x7f {
+        if unsupported == 0x02 {
+            continue;
+        }
+        let mut mutated = type2_raw.clone();
+        mutated[0] = unsupported;
+        assert_eq!(
+            classify_fixture_shell(&mutated),
+            Err(unsupported),
+            "typed envelope 0x{unsupported:02x} reached fixture projection"
+        );
+    }
+
+    let mut type1 = type2_raw;
+    type1[0] = 0x01;
+    assert!(
+        std::panic::catch_unwind(|| fixture_calldata(&type1)).is_err(),
+        "the selector-projection path must use the typed-envelope guard"
+    );
+
+    let (_, bare) = fixture_case(
+        "registry/kyberswap/tests/calldata-MetaAggregationRouterV2.tests.json",
+        0,
+    );
+    assert_eq!(&bare[..4], &[0xe2, 0x1f, 0xd0, 0xe9]);
+    assert_eq!(
+        classify_fixture_shell(&bare),
+        Ok(FixtureShellKind::LegacyOrBare)
+    );
+    assert_eq!(fixture_calldata(&bare), bare.as_slice());
 }
 
 #[test]
@@ -1596,6 +1717,193 @@ fn render_adapted_contract_fixture(
     )
     .unwrap_or_else(|error| panic!("render {source_name}: {error:?}"));
     normalized_rows(&pages)
+}
+
+fn render_flat_eip712_fixture(encoded: &FlatStaticEip712, source_name: &str) -> Vec<String> {
+    let registry = build_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == encoded.chain_id
+                && entry.contract == encoded.verifying_contract
+                && entry.source.file_name().and_then(|name| name.to_str()) == Some(source_name)
+        })
+        .unwrap_or_else(|| panic!("accepted EIP-712 descriptor leaf for {source_name}"));
+    assert_eq!(
+        entry.primary_type_hash, encoded.primary_type_hash,
+        "fixture must select the descriptor's exact primary type"
+    );
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root)
+        .unwrap_or_else(|_| panic!("Merkle-verify {source_name}"));
+    cross_check_eip712(&verified.ir, encoded.chain_id, &encoded.domain_separator)
+        .unwrap_or_else(|_| panic!("bind {source_name}"));
+    let pages = render_erc7730_eip712_pages(
+        encoded.chain_id,
+        &encoded.verifying_contract,
+        &encoded.primary_type_hash,
+        &encoded.encoded_data,
+        &verified,
+        None,
+        &NameResolver::new(),
+    )
+    .unwrap_or_else(|error| panic!("render {source_name}: {error:?}"));
+    normalized_rows(&pages)
+}
+
+fn expected_static_word(ty: &str, expected: &str) -> [u8; 32] {
+    let compact: String = expected
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .collect();
+    let value = match ty {
+        "bool" => Value::Bool(match compact.as_str() {
+            "true" => true,
+            "false" => false,
+            _ => panic!("upstream bool expected text is not canonical"),
+        }),
+        "address" | "bytes32" => Value::String(compact),
+        _ if ty.starts_with("uint") => Value::String(compact),
+        _ => panic!("unsupported expected flat-static type `{ty}`"),
+    };
+    fixture_static_word(ty, &value)
+}
+
+fn displayed_fixture_label(label: &str) -> String {
+    assert!(label.is_ascii(), "upstream field label must be ASCII");
+    if label.len() <= DISPLAY_COLS {
+        return label.to_string();
+    }
+    let mut displayed = label.as_bytes()[..DISPLAY_COLS - 1].to_vec();
+    displayed.push(b'~');
+    String::from_utf8(displayed).expect("ASCII field label")
+}
+
+fn assert_flat_raw_eip712_fixture(
+    relative_fixture: &str,
+    source_name: &str,
+    expected_members: &[(&str, &str)],
+) -> Vec<String> {
+    assert!(
+        case_waivers(relative_fixture, 0).is_empty(),
+        "flat raw enrollment must not acquire a presentation waiver"
+    );
+    let fixture: Value = serde_json::from_slice(
+        &std::fs::read(fixture_root().join(relative_fixture)).expect("read EIP-712 fixture"),
+    )
+    .expect("parse EIP-712 fixture");
+    let case = &fixture["tests"][0];
+    let data = case["data"].as_object().expect("EIP-712 fixture data");
+    let primary_type = data["primaryType"].as_str().expect("fixture primary type");
+    let members = data["types"][primary_type]
+        .as_array()
+        .expect("fixture primary members");
+    let actual_members: Vec<_> = members
+        .iter()
+        .map(|member| {
+            (
+                member["name"].as_str().expect("fixture member name"),
+                member["type"].as_str().expect("fixture member type"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        actual_members, expected_members,
+        "fixture member shape drift"
+    );
+
+    let encoded = encode_flat_static_eip712(data);
+    assert_eq!(encoded.encoded_data.len(), expected_members.len() * 32);
+    let rendered = render_flat_eip712_fixture(&encoded, source_name);
+    let expected = case["expectedTexts"]
+        .as_array()
+        .expect("fixture expectedTexts");
+    assert_eq!(expected.len(), expected_members.len() * 2);
+    let message = data["message"].as_object().expect("fixture message");
+    let mut cursor = 0usize;
+    for (field_index, ((name, ty), pair)) in expected_members
+        .iter()
+        .zip(expected.chunks_exact(2))
+        .enumerate()
+    {
+        consume_normalized_token(
+            &rendered,
+            &mut cursor,
+            &displayed_fixture_label(pair[0].as_str().expect("upstream field label")),
+        );
+        let signed_word: [u8; 32] = encoded.encoded_data[field_index * 32..(field_index + 1) * 32]
+            .try_into()
+            .expect("encoded EIP-712 word");
+        assert_eq!(
+            fixture_static_word(ty, &message[*name]),
+            signed_word,
+            "fixture message did not produce the signed `{name}` word"
+        );
+        assert_eq!(
+            expected_static_word(ty, pair[1].as_str().expect("upstream expected field value")),
+            signed_word,
+            "upstream expected text did not bind the signed `{name}` word"
+        );
+        consume_raw_word(&rendered, &mut cursor, &signed_word);
+    }
+    rendered
+}
+
+#[test]
+fn smartcredit_flat_static_positive_matches_actual_merkle_verified_pq1_pages() {
+    let rendered = assert_flat_raw_eip712_fixture(
+        "registry/smartcredit/tests/eip712-smartcredit.tests.json",
+        "eip712-smartcredit.json",
+        &[
+            ("collateralAddress", "address"),
+            ("initialCollateralAmount", "uint256"),
+            ("loanAmount", "uint256"),
+            ("loanId", "bytes32"),
+            ("loanInterestRate", "uint64"),
+            ("loanTerm", "uint64"),
+            ("underlyingAddress", "address"),
+        ],
+    );
+    assert!(
+        rendered.iter().any(|row| row == "smartcredit.io")
+            && rendered.iter().any(|row| row == "loanid")
+            && rendered.iter().any(|row| row == "0000000000000352")
+            && rendered.iter().any(|row| row == "3d4e5f60718293ab"),
+        "non-vacuity: authenticated SmartCredit semantics were not rendered: {rendered:?}"
+    );
+}
+
+#[test]
+fn pooltogether_bool_positive_matches_actual_merkle_verified_pq1_pages() {
+    let rendered = assert_flat_raw_eip712_fixture(
+        "registry/tally/tests/eip712-tally-ethereum-pooltogether-governor.tests.json",
+        "eip712-tally-ethereum-pooltogether-governor.json",
+        &[("proposalId", "uint256"), ("support", "bool")],
+    );
+    assert!(
+        rendered.iter().any(|row| row == "proposalid")
+            && rendered.iter().any(|row| row == "support")
+            && rendered.iter().any(|row| row == "0000000000000003")
+            && rendered.iter().any(|row| row == "0000000000000001"),
+        "non-vacuity: authenticated PoolTogether bool semantics were not rendered: {rendered:?}"
+    );
+}
+
+#[test]
+fn tally_bravo_uint8_positive_matches_actual_merkle_verified_pq1_pages() {
+    let rendered = assert_flat_raw_eip712_fixture(
+        "registry/tally/tests/eip712-tally-ethereum-bravo-governor.tests.json",
+        "eip712-tally-ethereum-bravo-governor.json",
+        &[("proposalId", "uint256"), ("support", "uint8")],
+    );
+    assert!(
+        rendered.iter().any(|row| row == "uniswapgovernor")
+            && rendered.iter().any(|row| row == "proposalid")
+            && rendered.iter().any(|row| row == "00000000000000b2")
+            && rendered.iter().any(|row| row == "0000000000000001"),
+        "non-vacuity: authenticated Tally Bravo uint8 semantics were not rendered: {rendered:?}"
+    );
 }
 
 #[test]
