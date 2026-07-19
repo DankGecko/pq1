@@ -1480,3 +1480,47 @@ that the discharge MECHANISM is "**the top adversary is oracle-free**" — stron
 those queries itself". Our infrastructure for exactly that already exists (`member_aware_disj_discharged`,
 WOTS_C_Interactive.ec:2045-2054). Also flagged: the negative control `A_ht_dfC_breaks_wf` shows the premise is
 load-bearing *for the current win bool* — it is NOT evidence the restriction is semantically necessary.
+
+### ROUND-2 RULING 2026-07-19 — objection UPHELD; do NOT delete the conjunct; build the oracle-free top discharge
+
+GPT-5.6 round-2 (cross-examination) ruled on the delete-vs-discharge divergence. **My objection is CORRECT**;
+it withdrew any delete leaning. Verified by me against the paper text.
+
+**(1) Power-neutrality FAILS pre-seed.** `pick` has oracles but no `pp`; `find(pp)` has `pp` but no oracles
+(WOTS_C_Interactive.ec:302/319); `O_THFC_MA.query` computes with its PRIVATE stored seed and logs (:2071);
+the oracle interface never exposes `pp` (TweakableHashFunctions.eca:569). A re-wrapper therefore has exactly
+three options and all fail: call OC (creates the forbidden log entry), compute `thfc..pp..` inline
+(impossible — no `pp` in pick), or defer to `find` (not an equivalent simulation; the value may control later
+pre-seed target registrations, and `O.query` is gone by then). Formally, with C = the other five win
+conditions and D = the disjointness conjunct: `Pr[conjunct-free win] = Pr[C] = Pr[C/\D] + Pr[C/\¬D]`, so
+deletion adds exactly the collisions whose target coordinate was opened through the hidden-seed oracle;
+`sup Pr[C/\D] <= sup Pr[C]` with **no generic equality and no bound on the added term**. Deletion is a genuine
+STRENGTHENING, not a free cleanup.
+
+**(2) DECISIVE — the PAPER ITSELF imposes the separation.** paper-nist-pqc2022.txt:817-818: *"The main purpose
+of this oracle is to prepare for a challenge query. So the natural restriction we make is that queries to Thλ
+should use different tweaks from the ones that are used for challenge queries."* And Thλ exists precisely for
+our pre-seed problem (:812-816: no access to the public parameter at challenge-placement time ⇒ introduce Thλ,
+which *shares the public parameter with the challenger*). Literal Def C.1 gives A1 ONLY its p `O_Prop` queries
+(:1981-1992); App E's "oracle access to Th for A1" (:2293) is over a freshly generated Th, not an oracle
+initialised with the hidden challenge P. ⇒ **our collection oracle + separation IS the paper's Thλ device with
+the paper's own restriction. "Delete = return to the paper's assumption" is FALSE — deleting would DEPART from
+the paper.** Our modelling is more paper-faithful than the delete-position credited.
+
+**(3) The oracle-free top discharge is the recommended path — and needs no edits to certified files.**
+`A_wf_ht` can be discharged externally in a NEW integration file by instantiating the existing leaf lemma
+(XMSSMT_C_Reduction.ec:739) with the concrete top-reduction image, mirroring MM45 (component carries premises
+:6306; top discharges structurally SPHINCS_PLUS.ec:4430; the external forger first appears in `forge` :1615).
+Required additions: a `size(flatten roots) = 8*n*k` lemma, a fourth fact `dfC <> 8*n*k`, a nested-loop Hoare
+invariant that all top-owned entries have member <> dfC, then apply `R_leaf_C_A_wf_MA`. NOTE
+`member_aware_disj_discharged` (WOTS_C_Interactive.ec:2045) is NOT sufficient verbatim — it covers only
+{8n, 8n*len, 8n*2}, missing the top reduction's `8*n*k` calls (SPHINCS_PLUS.ec:1581). Medium proof-engineering
+cost, LOW semantic risk, **zero changes to WOTS_C_Interactive.ec / XMSSMT_C_Reduction.ec**.
+
+**(4) Residual honesty item (unchanged):** the discharge removes `A_wf_ht` but does NOT by itself bound the
+bespoke `Pr[S_TCR_C_Int_MA]` by standalone Def C.1 — hidden-seed non-target-member collection calls remain.
+Either prove that bridge, or state the paper-facing assumption in its collection-lifted form
+**`S-TCR(+C)(Th+C ∈ Thλ)`**, which is exactly how the paper states its own final bound (:833-837, Thm 5.2).
+
+DECISION ADOPTED: build the oracle-free top-image discharge in a new integration file; do NOT delete the
+conjunct; label the assumption as the Thλ-lifted S-TCR(+C) unless/until the standalone bridge is proved.
