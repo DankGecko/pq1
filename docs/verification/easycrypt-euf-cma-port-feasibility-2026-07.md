@@ -1131,3 +1131,32 @@ divergence is correctly wired: `(is_valid{1} /\ is_fresh{1}) /\ valid_WOTSTWES{1
 (is_valid{1}, carrying allOkC, retained; is_valid{2}, carrying okC, in the consequent). A max-effort grind
 with this tool is in progress. Real file `drafts/XMSSMT_C_Reduction.ec` stays 0-admit clean throughout;
 only the WIP carries the single bulk admit.
+
+### UPDATE 2026-07-19 (cont.) — seam byequiv reduced to 3 admits; structural tail PROVEN; O_V hop discovered
+
+Max-effort introspection grind (ec-goal.sh) on the bulk. Result: seam_branch1_WOTSC in the WIP
+(drafts/_seam_byequiv_wip.ec) compiles EXIT 0 with exactly **3 labeled admits**, structural tail PROVEN:
+
+**Proven admit-free this session:** part-0 choose-alignment; part-2 signing-loop coupling (counter threaded
+through the ((sigWOTS,cntr),ap) cube; needed adding ps{1}=ps{2} to the cube post); part-3 verify-inline +
+the conseq **RETAINING is_valid{1}** (the +C divergence-a; needed adding -EUF_NAGCMA_FLSLXMSSMTTWCESNPRF_C to
+the A_ht restriction for the module-write frame — sound, A_ht's only interface is OC); and the verify
+DISCHARGE (given Q supplies the okC gate, is_valid{2}=pk-match∧okC consumes it, is_valid{1} threads through).
+
+**3 residual admits, discriminating content isolated:**
+ - #A conseq bookkeeping — trivial, counter-free (size qs=c, uniq/disj from P; MM45 :4542-4546 verbatim).
+ - #1 cube-build (MM45 :4143-4531) — mechanical + a **newly-discovered prerequisite**: a WOTS+C
+   `O_orig→O_V` element-sampling oracle hop (analog of MM45 EqPr_Orig_V + the _V oracle at WOTS_TW_ES.ec
+   :2915-3277); no WOTS+C analog exists yet — additive game infra, +C delta trivial (grindC/encode
+   deterministic, commute with the reindex), does NOT change the lemma's conclusion (still Pr[…
+   O_MEUFGCMA_WOTSC_Default …]).
+ - #B reconstruction (MM45 :4554-4681) + **the okC-GHOST = the one discriminating +C step** — proving
+   allOkC{1} propagates to the extracted layer cidx's okC=predC(ThC…). This is a **proof-plumbing assembly
+   of the already-0-admit milestone-1 helpers** (all_idfun_nth/pkfromsigC_verify_eq/root_from_sigC_okl_eq):
+   the novel +C cryptographic content is already proven; #B assembles it.
+
+**Honest calibration:** the seam is NOT yet a compiled fact, but NO structural +C no-go was found; both
+intermediate posts P and Q are satisfiable (honest deferrals, not false posts the tail exploits);
+milestone-2 rework NONE (R_leaf_C + leaf bound untouched). Residual = mechanical MM45 transcription (#1,#A,
+#B-coupling) + proof-plumbing over proven helpers (#B-okC) + one additive oracle-hop infra (O_V). No novel
+cryptographic difficulty remains. A focused grind proving the okC-ghost first is in progress.
