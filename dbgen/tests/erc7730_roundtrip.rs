@@ -2234,7 +2234,7 @@ fn seed_corpus_path_programs_parse() {
 ///   - `pool[param_off]` is the blob length byte (or `param_off == 0`).
 ///   - The inner stream is `[tag][len][payload]*` with cursor staying
 ///     within `blob_len` bytes.
-///   - Every tag is in the known 0x30..=0x47 space.
+///   - Every tag is in the known 0x30..=0x48 space.
 ///   - Fixed-width tags carry the documented payload size.
 ///
 /// This complements the per-renderer unit tests in
@@ -2284,9 +2284,9 @@ fn seed_corpus_param_tlv_blobs_are_well_formed() {
                         field.label
                     );
                     // Tag must be in the documented contiguous space through
-                    // 0x47 (`PARAM_TERMINAL_KIND`).
+                    // 0x48 (`PARAM_INTEGER_WIDTH`).
                     assert!(
-                        (0x30u8..=0x47).contains(&tag),
+                        (0x30u8..=0x48).contains(&tag),
                         "unknown TLV tag 0x{:02X} in {:?} field {:?}",
                         tag,
                         ir.contract,
@@ -2307,6 +2307,18 @@ fn seed_corpus_param_tlv_blobs_are_well_formed() {
                             "fixed-1-byte tag 0x{:02X} in {:?}",
                             tag, field.label
                         ),
+                        0x48 => {
+                            assert_eq!(
+                                len, 1,
+                                "PARAM_INTEGER_WIDTH must be 1 B in {:?}",
+                                field.label
+                            );
+                            assert!(
+                                (1..=32).contains(&body[cursor]),
+                                "PARAM_INTEGER_WIDTH must be within 1..=32 in {:?}",
+                                field.label
+                            );
+                        }
                         0x37 => {
                             assert_eq!(len, 2, "PARAM_ENUM_REF must be 2 B in {:?}", field.label)
                         }

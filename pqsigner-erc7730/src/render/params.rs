@@ -36,7 +36,8 @@
 //! | 0x44 | `nft_collection`     | 20 B collection contract                   |
 //! | 0x45 | `nft_collection_path`| exact compiled `@.to` container path       |
 //! | 0x46 | `interpolated_intent`| v1 literal/field-ordinal bytecode (format) |
-//! | 0x47 | `terminal_kind`      | 1 B [`TerminalKind`] (schema v4, required) |
+//! | 0x47 | `terminal_kind`      | 1 B [`TerminalKind`] (required)            |
+//! | 0x48 | `integer_width`      | 1 B width in bytes, `1..=32` (integers)    |
 //!
 //! Wire-stable.
 //!
@@ -118,16 +119,22 @@ pub const NFT_COLLECTION_TO_PATH: [u8; 4] = [
 /// format's first field. The compiler resolves source paths to emitted field
 /// ordinals, so the device never parses JSON paths or braces while signing.
 pub const PARAM_INTERPOLATED_INTENT: u8 = 0x46;
-/// Mandatory schema-v4 authenticated semantic kind of the field terminal.
+/// Mandatory authenticated semantic kind of the field terminal.
 /// This closes the static-word ambiguity where the path alone cannot tell an
 /// address from a uint, bool, signed integer, or fixed bytes.
 pub const PARAM_TERMINAL_KIND: u8 = 0x47;
+/// Schema-v5 authenticated ABI width for an unsigned or signed integer
+/// terminal, expressed in bytes.  The parser requires exactly one byte in
+/// `1..=32`, requires the tag for integer terminal kinds, and forbids it for
+/// every other terminal kind.
+pub const PARAM_INTEGER_WIDTH: u8 = 0x48;
 pub const DYNAMIC_KIND_STRING: u8 = 0x01;
 pub const DYNAMIC_KIND_BYTES: u8 = 0x02;
 
-/// First constrained interpolation-program wire shape. This is a compatible,
-/// root-pinned TLV extension within IR schema v4; the program carries its own
-/// version so future grammars cannot be mixed-interpreted.
+/// First constrained interpolation-program wire shape. This root-pinned TLV
+/// extension was introduced in IR schema v4 and is retained unchanged in v5;
+/// the program carries its own version so future grammars cannot be
+/// mixed-interpreted.
 pub const INTERPOLATED_INTENT_VERSION: u8 = 0x01;
 /// Wire-parser storage bound. The current executable subset below accepts
 /// exactly one substitution and rejects every other count before walking the
@@ -386,9 +393,12 @@ pub struct ParamSet<'a> {
     /// ordinal zero; the IR validator enforces that placement and validates
     /// every referenced field before rendering can begin.
     pub interpolated_intent: Option<InterpolatedIntentProgram<'a>>,
-    /// Mandatory for every schema-v4 field.  Parsed from
+    /// Mandatory for every field.  Parsed from
     /// [`PARAM_TERMINAL_KIND`] and checked by the shared host/device policy.
     pub terminal_kind: Option<TerminalKind>,
+    /// Authenticated ABI integer width in bytes.  Present exactly for
+    /// [`TerminalKind::Unsigned`] and [`TerminalKind::Signed`].
+    pub integer_width_bytes: Option<u8>,
 }
 
 impl<'a> Default for ParamSet<'a> {
@@ -419,6 +429,7 @@ impl<'a> Default for ParamSet<'a> {
             nft_collection_path: None,
             interpolated_intent: None,
             terminal_kind: None,
+            integer_width_bytes: None,
         }
     }
 }
@@ -552,7 +563,7 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
         .ok_or(RenderErr::Reject("7730 bad param blob"))?;
 
     let mut cursor = 0usize;
-    // Tags 0x30..=0x47 fit in this bitmap. Singleton parameter TLVs are
+    // Tags 0x30..=0x48 fit in this bitmap. Singleton parameter TLVs are
     // canonical: accepting duplicates would make meaning order-dependent and
     // previously let a short visibility duplicate retain the first tag's tail.
     let mut seen_tags = 0u32;
@@ -569,7 +580,7 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
         let payload = &body[cursor..cursor + len];
         cursor += len;
 
-        if !(PARAM_TOKEN_PATH..=PARAM_TERMINAL_KIND).contains(&tag) {
+        if !(PARAM_TOKEN_PATH..=PARAM_INTEGER_WIDTH).contains(&tag) {
             return Err(RenderErr::Reject("7730 unknown tlv tag"));
         }
         let bit = 1u32 << (tag - PARAM_TOKEN_PATH);
@@ -625,6 +636,12 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
                     TerminalKind::try_from(payload[0])
                         .map_err(|_| RenderErr::Reject("7730 bad terminal kind"))?,
                 );
+            }
+            PARAM_INTEGER_WIDTH => {
+                if payload.len() != 1 || !(1..=32).contains(&payload[0]) {
+                    return Err(RenderErr::Reject("7730 bad integer width"));
+                }
+                p.integer_width_bytes = Some(payload[0]);
             }
             PARAM_THRESHOLD => {
                 p.threshold = Some(
@@ -748,6 +765,18 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
         }
     }
 
+    // Width is semantic only for ABI integers.  Deep IR validation separately
+    // requires terminal_kind on every field, but parse is also used directly
+    // by bounded tests and renderer helpers: do not let an orphan width or an
+    // integer kind without its width escape from this standalone boundary.
+    let is_integer = matches!(
+        p.terminal_kind,
+        Some(TerminalKind::Unsigned | TerminalKind::Signed)
+    );
+    if p.integer_width_bytes.is_some() != is_integer {
+        return Err(RenderErr::Reject("7730 integer width mismatch"));
+    }
+
     Ok(p)
 }
 
@@ -780,6 +809,92 @@ mod tests {
         assert_eq!(p.visibility, Visibility::Always);
         assert!(p.decimals.is_none());
         assert!(p.token.is_none());
+        assert!(p.terminal_kind.is_none());
+        assert!(p.integer_width_bytes.is_none());
+    }
+
+    #[test]
+    fn parses_authenticated_integer_width_for_both_integer_kinds() {
+        let bodies = [
+            [
+                PARAM_TERMINAL_KIND,
+                1,
+                TerminalKind::Unsigned as u8,
+                PARAM_INTEGER_WIDTH,
+                1,
+                1,
+            ],
+            [
+                PARAM_INTEGER_WIDTH,
+                1,
+                31,
+                PARAM_TERMINAL_KIND,
+                1,
+                TerminalKind::Signed as u8,
+            ],
+        ];
+
+        for (body, expected_kind, expected_width) in [
+            (bodies[0], TerminalKind::Unsigned, 1),
+            (bodies[1], TerminalKind::Signed, 31),
+        ] {
+            let mut pool = std::vec![0xFF, body.len() as u8];
+            pool.extend_from_slice(&body);
+            let bytes = ir_with_pool(&pool);
+            let ir = Erc7730Ir::parse(&bytes).unwrap();
+            let parsed = parse(&ir, 1).unwrap();
+            assert_eq!(parsed.terminal_kind, Some(expected_kind));
+            assert_eq!(parsed.integer_width_bytes, Some(expected_width));
+        }
+
+        let address_only = [PARAM_TERMINAL_KIND, 1, TerminalKind::Address as u8];
+        let mut pool = std::vec![0xFF, address_only.len() as u8];
+        pool.extend_from_slice(&address_only);
+        let bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
+        let parsed = parse(&ir, 1).unwrap();
+        assert_eq!(parsed.terminal_kind, Some(TerminalKind::Address));
+        assert_eq!(parsed.integer_width_bytes, None);
+    }
+
+    #[test]
+    fn rejects_malformed_or_inapplicable_integer_width() {
+        let cases = [
+            std::vec![PARAM_INTEGER_WIDTH, 0],
+            std::vec![PARAM_INTEGER_WIDTH, 2, 1, 2],
+            std::vec![PARAM_INTEGER_WIDTH, 1, 0],
+            std::vec![PARAM_INTEGER_WIDTH, 1, 33],
+            std::vec![PARAM_TERMINAL_KIND, 1, TerminalKind::Unsigned as u8,],
+            std::vec![PARAM_TERMINAL_KIND, 1, TerminalKind::Signed as u8],
+            std::vec![PARAM_INTEGER_WIDTH, 1, 8],
+            std::vec![
+                PARAM_TERMINAL_KIND,
+                1,
+                TerminalKind::Address as u8,
+                PARAM_INTEGER_WIDTH,
+                1,
+                20,
+            ],
+            std::vec![
+                PARAM_TERMINAL_KIND,
+                1,
+                TerminalKind::Unsigned as u8,
+                PARAM_INTEGER_WIDTH,
+                1,
+                8,
+                PARAM_INTEGER_WIDTH,
+                1,
+                8,
+            ],
+        ];
+
+        for body in cases {
+            let mut pool = std::vec![0xFF, body.len() as u8];
+            pool.extend_from_slice(&body);
+            let bytes = ir_with_pool(&pool);
+            let ir = Erc7730Ir::parse(&bytes).unwrap();
+            assert!(parse(&ir, 1).is_err(), "accepted malformed body {body:?}");
+        }
     }
 
     #[test]
@@ -1600,13 +1715,13 @@ mod kani_harnesses {
         kani::assume(4 + l <= N);
         let tag = pool[2];
         // "Unknown" = outside the CONTIGUOUS known-tag range
-        // `[0x30, PARAM_INTERPOLATED_INTENT]`.
+        // `[0x30, PARAM_INTEGER_WIDTH]`.
         // NB: the top bound is the HIGHEST known tag, not 0x3F — new tags were added
         // above the original 0x30..=0x3F block (`PARAM_CONST_VALUE` 0x40 in b37a052f,
         // `PARAM_NESTED_STRUCT` 0x41 in 2f4cc810), so a stale bound wrongly classifies
         // a known tag as unknown and the harness fails on a tag the parser correctly
         // accepts. Keep this in sync with the highest `PARAM_*` constant.
-        kani::assume(tag < PARAM_TOKEN_PATH || tag > PARAM_INTERPOLATED_INTENT);
+        kani::assume(tag < PARAM_TOKEN_PATH || tag > PARAM_INTEGER_WIDTH);
         let ir = mk_ir(&pool);
         assert!(parse(&ir, 1).is_err());
     }

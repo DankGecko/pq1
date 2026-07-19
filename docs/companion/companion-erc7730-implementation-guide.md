@@ -136,7 +136,8 @@ an exact `(chain, address)` lookup. Wildcard names never qualify.
 <!-- BEGIN XTASK-VERIFIED ERC7730 SEMANTIC CONTRACT -->
 ### Device semantic manifest (generated)
 
-- The host compiler and device require **IR schema v4 (`0x04`)**; this value is generated from `pqsigner_erc7730::ir::SCHEMA_VER`, and older schemas hard-refuse.
+- The host compiler and device require **IR schema v5 (`0x05`)**; this value is generated from `pqsigner_erc7730::ir::SCHEMA_VER`, and older schemas hard-refuse.
+- Schema v5 authenticates every `uintN`/`intN` width as `1..=32` bytes. Before any trusted ERC-7730 page is published, the device requires exact ABI zero extension for `uintN` and sign extension for `intN`; full-width `uint256`/`int256` retain every 32-byte word unchanged.
 
 | Wire opcode | Registry `format` | Device route |
 |------------:|-------------------|--------------|
@@ -171,11 +172,11 @@ Three things in the companion bundle:
    hand-authored seed corpus used by older bring-up snapshots.
 
    <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->
-   - Development catalogue: 355,220 B, 430 compiled leaves, 4,542
+   - Development catalogue: 357,890 B, 430 compiled leaves, 4,542
      exact registry-declared known-call tuples, provenance `dev-unattested`.
      The tuple-set SHA-256 receipt is
      `96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`.
-   - E2E fixture: 3,984 B, 8 compiled leaves.
+   - E2E fixture: 4,023 B, 8 compiled leaves.
    <!-- END XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->
 
    The blob does **not** embed its Merkle root. Bytes 0..31 are the catalogue
@@ -925,8 +926,8 @@ provenance remains blocked):
 <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 | Variant | Root | Catalog blob bytes | Compiled leaves |
 |---------|------|-------------------:|----------------:|
-| development (non-e2e) | `0x5d0e26465f3ce3decdfaa7448f23821395ba09f83e290bd2456a29ff0fdfeebf` | 355 220 | 430 |
-| e2e | `0xf8256e1bf1f41391eb337bf2ee3f85e59f738d0f6ed60c16eaa916e99842e4cf` | 3 984 | 8 |
+| development (non-e2e) | `0xee8e503b18e8ebc3bb2e9e0ed8ecad2988ec109dae9c904980ea0e24f374661d` | 357 890 | 430 |
+| e2e | `0x79375e5cd3d5aad1a6150cbbc1a5fb396ca38d01340f876246cf03913148855a` | 4 023 | 8 |
 <!-- END XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 
 Source of truth: fresh compiler output checked against `secure/src/db_roots.rs`

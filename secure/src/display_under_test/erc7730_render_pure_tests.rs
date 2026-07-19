@@ -186,7 +186,7 @@ fn safe_visible_nested_leaf(source_name: &str, chain_id: u64) -> &'static dbgen:
 }
 
 /// Build a compiler-authenticated C1 `string` descriptor, then coherently
-/// change both its authenticated dynamic-kind and schema-v4 terminal-kind TLVs
+/// change both its authenticated dynamic-kind and terminal-kind TLVs
 /// to `bytes`. Production dbgen refuses to emit arbitrary dynamic `bytes`; this
 /// process-private fixture proves the device parser independently refuses the
 /// now-forbidden `raw` + `DynamicBytes` pair.
@@ -3405,7 +3405,53 @@ fn positive_lombard_lbtc_permit_binds_every_static_word_on_both_deployments() {
                 "a {field} address with dirty ABI padding must hard-refuse on {source_name}"
             );
         }
+
+        // Solidity decodes `v` as uint8. A non-zero byte outside the retained
+        // low byte is therefore a non-canonical ABI spelling and must refuse,
+        // even though the raw formatter could display all 32 supplied bytes.
+        let mut dirty_v_words = words;
+        dirty_v_words[4][0] = 1;
+        let dirty_v = calldata_static(SIGNATURE, &dirty_v_words);
+        assert!(
+            matches!(
+                render(&dirty_v),
+                Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+            ),
+            "uint8 v with dirty high-byte padding must hard-refuse on {source_name}"
+        );
     }
+}
+
+#[test]
+fn tally_ballot_uint8_support_rejects_dirty_eip712_padding() {
+    let res = build_registry();
+    let entry = find_leaf(res, "eip712-tally-ethereum-bravo-governor.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Tally Ballot leaf");
+    let primary_type_hash = keccak256(b"Ballot(uint256 proposalId,uint8 support)");
+
+    let mut encoded_data = std::vec![0u8; 64];
+    encoded_data[31] = 7; // proposalId
+    encoded_data[63] = 1; // support:uint8
+    let render = |body: &[u8]| {
+        super::erc7730::render_erc7730_eip712_pages(
+            1,
+            &entry.contract,
+            &primary_type_hash,
+            body,
+            &verified,
+            None,
+            &NameResolver::new(),
+        )
+    };
+    render(&encoded_data).expect("canonical uint8 Ballot support renders");
+
+    let mut dirty = encoded_data;
+    dirty[32] = 1;
+    assert!(matches!(
+        render(&dirty),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+    ));
 }
 
 /// Pack-expansion sanity: the registry Lido `wstETH.wrap(uint256)`
@@ -4843,6 +4889,42 @@ fn v3_permit_single_renders_nested_members() {
         crate::fi::FAIL_SENTINEL,
         "nested V3 field corruption must fail the final transcript proof"
     );
+}
+
+#[test]
+fn v3_permit_single_rejects_hash_bound_dirty_uint160_padding() {
+    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let pth: [u8; 32] = [
+        0xf3, 0x84, 0x1c, 0xd1, 0xff, 0x00, 0x85, 0x02, 0x6a, 0x63, 0x27, 0xb6, 0x20, 0xb6, 0x79,
+        0x97, 0xce, 0x40, 0xf2, 0x82, 0xc8, 0x8a, 0x8e, 0x90, 0x5a, 0x7a, 0x56, 0x26, 0xe3, 0x10,
+        0xf3, 0xd0,
+    ];
+    let (mut top_ed, mut nested_blob) = permit_single_valid_vectors();
+
+    // PermitDetails.amount is uint160. Keep the companion-supplied body fully
+    // hash-bound by recomputing the committed hashStruct after dirtying one of
+    // the twelve forbidden high bytes; rejection must therefore come from the
+    // width belt, not from a vacuous hash mismatch.
+    nested_blob[2 + 32] = 1;
+    let rebound = super::erc7730::nested::hash_struct(&PERMIT_DETAILS_TYPEHASH, &nested_blob[2..]);
+    top_ed[..32].copy_from_slice(&rebound);
+
+    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
+    let verified = VerifiedDescriptor { ir };
+    let result = super::erc7730::render_erc7730_eip712_pages_v3(
+        1,
+        &[0u8; 20],
+        &pth,
+        &top_ed,
+        &nested_blob,
+        &verified,
+        None,
+        &NameResolver::new(),
+    );
+    assert!(matches!(
+        result,
+        Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+    ));
 }
 
 #[test]

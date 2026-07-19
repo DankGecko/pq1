@@ -35,10 +35,11 @@ const UPSTREAM_SHA: &str = "784c87c925e8438e7b4736b2af85a501f8d2a265";
 const FIXTURE_RECEIPT_DOMAIN: &[u8] = b"pqsigner/erc7730-excluded-fixture-corpus-v1";
 const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
-// Intentional 2026-07-18 schema-v4 rotation: every field now authenticates its
-// terminal kind and the compiler/device share one exhaustive formatter policy.
+// Intentional schema-v5 rotation: every integer field now authenticates its
+// original ABI width in addition to the terminal kind, so the device can
+// reject dirty zero/sign extension before trusted display publication.
 // The upstream fixture bytes remain test-only and outside the catalogue.
-const PROD_ROOT_HEX: &str = "5d0e26465f3ce3decdfaa7448f23821395ba09f83e290bd2456a29ff0fdfeebf";
+const PROD_ROOT_HEX: &str = "ee8e503b18e8ebc3bb2e9e0ed8ecad2988ec109dae9c904980ea0e24f374661d";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

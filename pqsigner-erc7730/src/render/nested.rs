@@ -38,14 +38,12 @@
 use core::convert::TryFrom;
 
 use crate::ir::{
-    Erc7730Ir, FieldEntry, FieldIter, FormatOp, IrError, PathOp, Visibility,
-    MAX_FIELDS_PER_FORMAT, MAX_NESTED_MEMBERS, MAX_NESTING,
+    Erc7730Ir, FieldEntry, FieldIter, FormatOp, IrError, PathOp, Visibility, MAX_FIELDS_PER_FORMAT,
+    MAX_NESTED_MEMBERS, MAX_NESTING,
 };
 
 use super::{
-    policy::{
-        label_has_visible_glyph, token_path_displays_identity, validate_field, TerminalKind,
-    },
+    policy::{label_has_visible_glyph, token_path_displays_identity, validate_field, TerminalKind},
     RenderErr,
 };
 
@@ -94,7 +92,8 @@ impl<'a> NestedStructParam<'a> {
     }
 }
 
-/// Allocation-free schema-v4 preflight for one complete nested-v3 subtree.
+/// Allocation-free nested-v3 preflight introduced in schema v4 and retained
+/// unchanged by schema v5.
 /// Returns the number of descent records consumed by this block plus all child
 /// anchors, which the enclosing format reconciles against its independently
 /// authenticated `nested_descent_count`.
@@ -119,7 +118,11 @@ pub(crate) fn validate_nested_ir(
     let remainder = np.member_count as usize % 8;
     if remainder != 0 {
         let allowed = (1u8 << remainder) - 1;
-        if np.addr_word_bmp.last().is_some_and(|byte| byte & !allowed != 0) {
+        if np
+            .addr_word_bmp
+            .last()
+            .is_some_and(|byte| byte & !allowed != 0)
+        {
             return Err(IrError::BadPoolEntry);
         }
     }
@@ -133,8 +136,8 @@ pub(crate) fn validate_nested_ir(
     for entry in np.sub_fields() {
         let field = entry?;
         let op = FormatOp::try_from(field.format_op)?;
-        let params = super::params::parse(ir, field.param_off)
-            .map_err(|_| IrError::BadPoolEntry)?;
+        let params =
+            super::params::parse(ir, field.param_off).map_err(|_| IrError::BadPoolEntry)?;
         let kind = params.terminal_kind.ok_or(IrError::BadField)?;
 
         if params.visibility != Visibility::Never && !label_has_visible_glyph(field.label) {
@@ -150,12 +153,7 @@ pub(crate) fn validate_nested_ir(
                 return Err(IrError::BadField);
             }
             validate_field(op, kind, params.policy_mask()).map_err(|_| IrError::BadField)?;
-            let child = validate_nested_ir(
-                ir,
-                child_payload,
-                np.member_count as usize,
-                depth + 1,
-            )?;
+            let child = validate_nested_ir(ir, child_payload, np.member_count as usize, depth + 1)?;
             descents = descents.checked_add(child).ok_or(IrError::OverCap)?;
             continue;
         }
@@ -170,9 +168,7 @@ pub(crate) fn validate_nested_ir(
         }
         if let Some(token_path) = params.token_path {
             let token_word = static_word_index(token_path).ok_or(IrError::BadField)?;
-            if token_word >= np.member_count as usize
-                || !token_path_displays_identity(op, kind)
-            {
+            if token_word >= np.member_count as usize || !token_path_displays_identity(op, kind) {
                 return Err(IrError::BadField);
             }
         }
@@ -256,7 +252,12 @@ pub fn parse_nested_struct_param(payload: &[u8]) -> Result<NestedStructParam<'_>
 /// bounds-checked against the REAL `blob`, so a crafted length only `Reject`s.
 pub fn read_next_nested_ed(blob: &[u8], cursor: usize) -> Result<(&[u8], usize), RenderErr> {
     let lo = blob
-        .get(cursor..cursor.checked_add(2).ok_or(RenderErr::Reject("7730 blob ovf"))?)
+        .get(
+            cursor
+                ..cursor
+                    .checked_add(2)
+                    .ok_or(RenderErr::Reject("7730 blob ovf"))?,
+        )
         .ok_or(RenderErr::Reject("7730 blob no len"))?;
     let len = u16::from_be_bytes([lo[0], lo[1]]) as usize;
     let data_start = cursor + 2;
@@ -363,7 +364,9 @@ pub fn validate_nested_structure(
 
         // Render path → a static local word strictly inside the nested struct.
         // Bounds-checked for EVERY sub-field (E4-2), credited only if shown.
-        let prog = ir.path_bytes(sf.path_off).map_err(|_| RenderErr::Reject("7730 nested path"))?;
+        let prog = ir
+            .path_bytes(sf.path_off)
+            .map_err(|_| RenderErr::Reject("7730 nested path"))?;
         let w = static_word_index(prog).ok_or(RenderErr::Reject("7730 nested dyn subfield"))?;
         if w >= mc {
             return Err(RenderErr::Reject("7730 nested ord oob"));
@@ -389,6 +392,60 @@ pub fn validate_nested_structure(
     for i in 0..mc {
         if np.local_word_is_address(i) && !covered[i] {
             return Err(RenderErr::Reject("7730 nested addr uncovered"));
+        }
+    }
+    Ok(())
+}
+
+/// Validate every elementary integer word in one already hash-bound EIP-712
+/// struct body. Nested anchors are validated when their own authenticated body
+/// is consumed; all other sub-fields, including hidden ones, are checked here
+/// before an item divider or member page is buffered.
+pub fn validate_nested_integer_words(
+    ir: &Erc7730Ir<'_>,
+    np: &NestedStructParam<'_>,
+    nested_ed: &[u8],
+) -> Result<(), RenderErr> {
+    use super::policy::{integer_word_is_canonical, TerminalKind};
+
+    let expected = (np.member_count as usize)
+        .checked_mul(32)
+        .ok_or(RenderErr::Reject("7730 nested integer len ovf"))?;
+    if nested_ed.len() != expected {
+        return Err(RenderErr::Reject("7730 nested integer len"));
+    }
+
+    for entry in np.sub_fields() {
+        let sf = entry.map_err(|_| RenderErr::Reject("7730 nested subfield"))?;
+        let params = super::params::parse(ir, sf.param_off)?;
+        if params.nested_struct.is_some() {
+            continue;
+        }
+        let Some(kind @ (TerminalKind::Unsigned | TerminalKind::Signed)) = params.terminal_kind
+        else {
+            continue;
+        };
+        let width = params
+            .integer_width_bytes
+            .ok_or(RenderErr::Reject("7730 nested integer width"))?;
+        let prog = ir
+            .path_bytes(sf.path_off)
+            .map_err(|_| RenderErr::Reject("7730 nested integer path"))?;
+        let word_index =
+            static_word_index(prog).ok_or(RenderErr::Reject("7730 nested integer dynamic"))?;
+        if word_index >= np.member_count as usize {
+            return Err(RenderErr::Reject("7730 nested integer ord oob"));
+        }
+        let start = word_index
+            .checked_mul(32)
+            .ok_or(RenderErr::Reject("7730 nested integer off ovf"))?;
+        let word: &[u8; 32] = nested_ed
+            .get(start..start + 32)
+            .ok_or(RenderErr::Reject("7730 nested integer oob"))?
+            .try_into()
+            .map_err(|_| RenderErr::Reject("7730 nested integer word"))?;
+        if !integer_word_is_canonical(kind, width, word) {
+            return Err(RenderErr::Reject("7730 noncanonical nested integer"));
         }
     }
     Ok(())
@@ -420,7 +477,8 @@ mod tests {
 
     /// A PermitSingle-shaped v0x03 payload: member_count 4, addr_bmp 0x01, two
     /// sub-fields (amount → render FieldIdx(1) + tokenPath at param_off; expiration
-    /// → render FieldIdx(2)). Both carry the mandatory schema-v4 terminal kind.
+    /// → render FieldIdx(2)). Both carry the mandatory schema-v5 terminal kind
+    /// and integer width.
     /// Path/param offsets index `pool` below.
     fn permit_single_payload() -> std::vec::Vec<u8> {
         let mut p = std::vec![NESTED_V3];
@@ -430,42 +488,43 @@ mod tests {
         p.push(0x00); // flags: non-array
         p.push(0x01); // addr_word_bmp: word 0 (token) is address
         p.push(2); // sub_field_cnt
-        // sub-field 0: amount — tokenAmount(0x03), label "amt"(3), path_off, param_off.
+                   // sub-field 0: amount — tokenAmount(0x03), label "amt"(3), path_off, param_off.
         p.push(0x03);
         p.push(3);
         p.extend_from_slice(b"amt");
         p.extend_from_slice(&1u16.to_be_bytes()); // path_off (render FieldIdx(1))
         p.extend_from_slice(&6u16.to_be_bytes()); // param_off (tokenPath FieldIdx(0))
-        // sub-field 1: expiration — date(0x05), label "exp"(3), path + kind params.
+                                                  // sub-field 1: expiration — date(0x05), label "exp"(3), path + kind params.
         p.push(0x05);
         p.push(3);
         p.extend_from_slice(b"exp");
-        p.extend_from_slice(&16u16.to_be_bytes()); // path_off (render FieldIdx(2))
-        p.extend_from_slice(&21u16.to_be_bytes()); // param_off (unsigned terminal kind)
+        p.extend_from_slice(&19u16.to_be_bytes()); // path_off (render FieldIdx(2))
+        p.extend_from_slice(&24u16.to_be_bytes()); // param_off (unsigned + width)
         p
     }
 
     /// Pool laying out the programs the payload above references:
     ///   off 1  : render FieldIdx(1)  = [len 4][10 20 00 01]
     ///   off 6  : params with tokenPath FieldIdx(0) + unsigned terminal kind
-    ///   off 16 : render FieldIdx(2) = [len 4][10 20 00 02]
-    ///   off 21 : params with unsigned terminal kind
+    ///   off 19 : render FieldIdx(2) = [len 4][10 20 00 02]
+    ///   off 24 : params with unsigned terminal kind + width
     fn permit_single_pool() -> std::vec::Vec<u8> {
         let mut pool = std::vec![0xFFu8]; // offset-0 filler
-        // off 1: render path FieldIdx(1)
+                                          // off 1: render path FieldIdx(1)
         pool.push(4);
         pool.extend_from_slice(&[0x10, 0x20, 0x00, 0x01]);
-        // off 6: tokenPath plus mandatory unsigned terminal kind.
-        pool.push(9); // blob_len
+        // off 6: tokenPath plus mandatory uint160 terminal semantics.
+        pool.push(12); // blob_len
         pool.push(0x30);
         pool.push(4);
         pool.extend_from_slice(&[0x10, 0x20, 0x00, 0x00]);
         pool.extend_from_slice(&[0x47, 1, TerminalKind::Unsigned as u8]);
-        // off 16: render path FieldIdx(2)
+        pool.extend_from_slice(&[0x48, 1, 20]);
+        // off 19: render path FieldIdx(2)
         pool.push(4);
         pool.extend_from_slice(&[0x10, 0x20, 0x00, 0x02]);
-        // off 21: mandatory unsigned terminal kind.
-        pool.extend_from_slice(&[3, 0x47, 1, TerminalKind::Unsigned as u8]);
+        // off 24: mandatory uint48 terminal semantics.
+        pool.extend_from_slice(&[6, 0x47, 1, TerminalKind::Unsigned as u8, 0x48, 1, 6]);
         pool
     }
 
@@ -596,7 +655,7 @@ mod tests {
             child.push(0x00); // flags: non-array
             child.push(0x00); // addr_word_bmp (mc 2 → 1 byte)
             child.push(0); // sub_field_cnt 0
-            // Pool: off 0 filler; off 1 = param blob [blob_len][0x41 tag][tlv_len][child].
+                           // Pool: off 0 filler; off 1 = param blob [blob_len][0x41 tag][tlv_len][child].
             let mut pool = std::vec![0xFFu8];
             let blob_len = 2 + child.len() + 3;
             pool.push(blob_len as u8);
@@ -638,7 +697,10 @@ mod tests {
         };
         // child word_pos 2 < parent member_count 3 → OK (bound-check passes; a
         // struct word is not an address bit, so no coverage is required).
-        assert!(run(2).is_ok(), "nested-anchor sub-field at an in-bounds word_pos passes");
+        assert!(
+            run(2).is_ok(),
+            "nested-anchor sub-field at an in-bounds word_pos passes"
+        );
         // child word_pos 3 == member_count → out of bounds → decline (E4-2).
         assert!(
             run(3).is_err(),
@@ -667,24 +729,24 @@ mod tests {
 
     /// Like `permit_single_payload` but the amount sub-field's `param_off` points
     /// at a pool blob carrying its tokenPath, terminal kind, AND a
-    /// `visible:never` TLV (pool offset 25, see
+    /// `visible:never` TLV (pool offset 31, see
     /// `permit_single_pool_amount_never`). The amount sub-field's
     /// `param_off` occupies payload bytes `[47..49]` (header 40 + fmt(1) +
     /// label_len(1) + "amt"(3) + path_off(2) = 47).
     fn permit_single_payload_amount_never() -> std::vec::Vec<u8> {
         let mut p = permit_single_payload();
-        p[47..49].copy_from_slice(&25u16.to_be_bytes());
+        p[47..49].copy_from_slice(&31u16.to_be_bytes());
         p
     }
 
-    /// The base pool (amount render @1, tokenPath blob @6, expiration render @16,
-    /// expiration kind @21, ending at offset 25) plus a
-    /// `tokenPath + visible:never + terminal-kind` blob at offset 25.
+    /// The base pool (amount render @1, tokenPath blob @6, expiration render @19,
+    /// expiration semantics @24, ending at offset 31) plus a
+    /// `tokenPath + visible:never + uint160 semantics` blob at offset 31.
     fn permit_single_pool_amount_never() -> std::vec::Vec<u8> {
-        let mut pool = permit_single_pool(); // len == 25
-        assert_eq!(pool.len(), 25);
-        // off 25: tokenPath + visibility:never + unsigned terminal kind.
-        pool.push(12);
+        let mut pool = permit_single_pool(); // len == 31
+        assert_eq!(pool.len(), 31);
+        // off 31: tokenPath + visibility:never + uint160 terminal semantics.
+        pool.push(15);
         pool.push(0x30);
         pool.push(4);
         pool.extend_from_slice(&[0x10, 0x20, 0x00, 0x00]);
@@ -692,6 +754,7 @@ mod tests {
         pool.push(1);
         pool.push(0x01);
         pool.extend_from_slice(&[0x47, 1, TerminalKind::Unsigned as u8]);
+        pool.extend_from_slice(&[0x48, 1, 20]);
         pool
     }
 }

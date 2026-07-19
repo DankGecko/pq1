@@ -47,7 +47,7 @@
     },
     {
       "path": "dbgen/src/erc7730.rs",
-      "sha256": "5807cb30bee0e33f22c03b57173d634f5537769d0e0bb2558df16fbefcd47fc4"
+      "sha256": "0e147b873f8267ccecec4af2fd90288e64a81e045757c849a57c15047f33662d"
     },
     {
       "path": "dbgen/src/main.rs",
@@ -59,7 +59,7 @@
     },
     {
       "path": "pqsigner-erc7730/src/ir.rs",
-      "sha256": "c2fd68d6d732837dc96df8f1035681d0b9c66995e5724534bf0a54bad767104a"
+      "sha256": "13f359a78b8f8fb5bde264fcd5f46dd1d05f7d45558f60a85e39f2f4652e2e76"
     },
     {
       "path": "rust-toolchain.toml",
@@ -79,7 +79,7 @@
     },
     {
       "path": "xtask/src/main.rs",
-      "sha256": "4143f4a73986fadefa020545d55898c44fbe048986cf451bb2afd3563c80e2ce"
+      "sha256": "5463154b26f823bf01daa0b0388bf4c92277794726898ae12f55414c592a3250"
     }
   ],
   "replacements": [

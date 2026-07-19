@@ -808,6 +808,7 @@ fn render_erc7730_eip712_pages_inner_into<'ir>(
         return Err(RenderErr::Reject("7730 ed len"));
     }
     let body = head_bounded_body(encoded_data, format.static_head_words)?;
+    formatters::validate_eip712_integer_words(&descriptor.ir, &format, body)?;
 
     let mut interpolation = InterpolationState::from_format(&descriptor.ir, &format)?;
     if interpolation.is_enrolled() {
@@ -1347,6 +1348,9 @@ fn render_nested_struct(
         // E2 address-coverage + E4-2 bounds ONCE (every element is the same
         // pinned struct shape → same addr_word_bmp + sub-field ordinals).
         pn::validate_nested_structure(ir, &np, COMPACT_MODE)?;
+        for elem_ed in elems.iter().take(elem_count) {
+            pn::validate_nested_integer_words(ir, &np, elem_ed)?;
+        }
         // Render each element with an "Item i of N" divider. `push_blank` → Err
         // on page-budget overflow → decline (NEVER truncate a tail — that is the
         // array-hiding WYSIWYS break one level down).
@@ -1381,6 +1385,7 @@ fn render_nested_struct(
         return Err(RenderErr::Reject("7730 nested binding"));
     }
     pn::validate_nested_structure(ir, &np, COMPACT_MODE)?;
+    pn::validate_nested_integer_words(ir, &np, nested_ed)?;
     render_nested_subfields(
         pages,
         ir,
