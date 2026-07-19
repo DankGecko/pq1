@@ -39,7 +39,7 @@
             "params": { "types": ["eoa"], "sources": ["local", "ens"] },
             "visible": "always"
           },
-          { "label": "Referral Code", "path": "referralCode", "visible": "never" },
+          { "label": "Referral Code", "path": "referralCode", "format": "raw", "visible": "always" },
           { "label": "Pool", "path": "pool", "format": "raw", "visible": "always" }
         ]
       },
@@ -119,7 +119,7 @@
         "fields": [
           { "path": "amount", "format": "amount", "label": "Amount to borrow", "visible": "always" },
           { "path": "@.from", "format": "addressName", "label": "Debtor", "params": { "types": ["eoa"], "sources": ["local", "ens"] } },
-          { "label": "Referral Code", "path": "referralCode", "visible": "never" },
+          { "label": "Referral Code", "path": "referralCode", "format": "raw", "visible": "always" },
           { "label": "Pool", "path": "pool", "format": "raw", "visible": "always" }
         ]
       }

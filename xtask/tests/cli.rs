@@ -24,6 +24,57 @@ fn checked_in_solidity() -> PathBuf {
     workspace_root().join("contracts/smart-wallet/src/generated/PqsignerProto.sol")
 }
 
+fn checked_in_erc7730_outputs() -> Vec<(PathBuf, Vec<u8>)> {
+    let workspace = workspace_root();
+    [
+        "tools/companion-stub/erc7730_db.bin",
+        "tools/companion-stub/erc7730_db_e2e.bin",
+        "secure/data/erc7730.review.txt",
+        "secure/data/erc7730-known-calls.bloom",
+        "secure/data/erc7730-known-calls-e2e.bloom",
+    ]
+    .into_iter()
+    .map(|relative| {
+        let path = workspace.join(relative);
+        let bytes = std::fs::read(&path).unwrap_or_else(|error| {
+            panic!(
+                "read checked-in ERC-7730 output {}: {error}",
+                path.display()
+            )
+        });
+        (path, bytes)
+    })
+    .collect()
+}
+
+fn assert_checked_in_erc7730_outputs_unchanged(before: &[(PathBuf, Vec<u8>)]) {
+    for (path, expected) in before {
+        let actual = std::fs::read(path).unwrap_or_else(|error| {
+            panic!(
+                "re-read checked-in ERC-7730 output {}: {error}",
+                path.display()
+            )
+        });
+        assert_eq!(
+            &actual,
+            expected,
+            "custom generation probe changed checked-in output {}",
+            path.display()
+        );
+    }
+}
+
+fn copy_probe_registry(root: &std::path::Path) -> PathBuf {
+    let registry = root.join("probe-registry/registry");
+    std::fs::create_dir_all(&registry).expect("create disposable probe registry");
+    std::fs::copy(
+        workspace_root().join("secure/data/erc7730-e2e/weth.json"),
+        registry.join("calldata-weth-probe.json"),
+    )
+    .expect("copy valid disposable probe descriptor");
+    registry
+}
+
 // ─────────────────────────────────────────────────────────────────
 //                            POSITIVE
 // ─────────────────────────────────────────────────────────────────
@@ -96,6 +147,65 @@ fn positive_check_mode_stdout_matches_checked_in_file_byte_for_byte() {
     );
 }
 
+#[test]
+fn positive_custom_erc7730_probe_with_all_explicit_outputs_is_isolated() {
+    let temp = tempfile::tempdir().expect("create custom generation probe directory");
+    let input = copy_probe_registry(temp.path());
+    let output_dir = temp.path().join("outputs");
+    std::fs::create_dir_all(&output_dir).expect("create explicit probe output directory");
+    let prod_blob = output_dir.join("prod.bin");
+    let review = output_dir.join("review.txt");
+    let e2e_blob = output_dir.join("e2e.bin");
+    let known_calls = output_dir.join("known-calls.bloom");
+    let known_calls_e2e = output_dir.join("known-calls-e2e.bloom");
+    let protected = checked_in_erc7730_outputs();
+
+    let output = Command::new(bin())
+        .arg("gen-erc7730-descriptors")
+        .arg("--input-dir")
+        .arg(&input)
+        .arg("--out-binary")
+        .arg(&prod_blob)
+        .arg("--out-review")
+        .arg(&review)
+        .arg("--e2e-out-binary")
+        .arg(&e2e_blob)
+        .arg("--known-calls-out")
+        .arg(&known_calls)
+        .arg("--known-calls-e2e-out")
+        .arg(&known_calls_e2e)
+        .output()
+        .expect("run isolated custom ERC-7730 generation probe");
+    assert!(
+        output.status.success(),
+        "fully isolated custom probe failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for path in [
+        &prod_blob,
+        &review,
+        &e2e_blob,
+        &known_calls,
+        &known_calls_e2e,
+    ] {
+        assert!(
+            std::fs::metadata(path)
+                .unwrap_or_else(|error| panic!("stat explicit output {}: {error}", path.display()))
+                .len()
+                > 0,
+            "explicit custom output is empty: {}",
+            path.display()
+        );
+    }
+    let review_text = std::fs::read_to_string(&review).expect("read disposable probe review");
+    assert!(
+        !review_text.contains("# Upstream registry commit:"),
+        "custom probe must remain provenance-unstamped"
+    );
+    assert_checked_in_erc7730_outputs_unchanged(&protected);
+}
+
 // ─────────────────────────────────────────────────────────────────
 //                            NEGATIVE
 // ─────────────────────────────────────────────────────────────────
@@ -122,6 +232,49 @@ fn negative_unknown_subcommand_exits_failure_with_explanation() {
         stderr.contains("frobnicate-the-solidity"),
         "stderr must echo the offending subcommand, got: {stderr}",
     );
+}
+
+#[test]
+fn negative_custom_erc7730_probe_refuses_before_any_implicit_output_write() {
+    let temp = tempfile::tempdir().expect("create custom generation refusal directory");
+    let explicit_blob = temp.path().join("sentinel-prod.bin");
+    let sentinel = b"must survive pre-write refusal";
+    let protected = checked_in_erc7730_outputs();
+
+    // Keep every fixture nonexistent: if the isolation guard regresses, input
+    // loading must still fail before any tracked output can be written.
+    for custom_flag in ["--input-dir", "--policy", "--e2e-input-dir"] {
+        std::fs::write(&explicit_blob, sentinel).expect("write explicit-output sentinel");
+        let custom_path = temp.path().join(custom_flag.trim_start_matches('-'));
+        let output = Command::new(bin())
+            .arg("gen-erc7730-descriptors")
+            .arg(custom_flag)
+            .arg(&custom_path)
+            .arg("--out-binary")
+            .arg(&explicit_blob)
+            .output()
+            .expect("run under-specified custom ERC-7730 generation probe");
+        assert!(
+            !output.status.success(),
+            "custom probe via {custom_flag} with implicit outputs must refuse"
+        );
+        let stderr = String::from_utf8(output.stderr).expect("custom-probe stderr utf8");
+        assert!(
+            stderr.contains("custom ERC-7730 input/policy probes in write mode")
+                && stderr.contains("--out-review")
+                && stderr.contains("--e2e-out-binary")
+                && stderr.contains("--known-calls-out")
+                && stderr.contains("--known-calls-e2e-out")
+                && !stderr.contains("prod build failed"),
+            "unexpected pre-write isolation diagnostic for {custom_flag}: {stderr}"
+        );
+        assert_eq!(
+            std::fs::read(&explicit_blob).expect("read explicit-output sentinel after refusal"),
+            sentinel,
+            "{custom_flag} guard must run before even an explicit output is written"
+        );
+    }
+    assert_checked_in_erc7730_outputs_unchanged(&protected);
 }
 
 #[test]

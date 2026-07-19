@@ -190,9 +190,21 @@ Both inputs are re-verified after building to catch concurrent drift. The
 command applies no curations, writes no registry or generated artifact, and
 labels `unregistered` as catalogue absence rather than claiming a runtime blind
 path. The recurring ceremony is recorded in the root-rotation owner document.
-This closes only the deterministic `diff-registry` + runbook sub-slice;
-signed-release-manifest binding, ERC-8176 production provenance, and the other
-explicit §2.3 gates remain open.
+This closes only the deterministic `diff-registry` + runbook sub-slice; the
+remaining non-authority §2.3 bookkeeping moved to the next bounded slice, while
+signed-release-manifest binding and ERC-8176 production provenance remain
+separately gated.
+
+**Phase-C remaining §2.3 provenance gates (2026-07-19):** the drift-gated
+`erc7730.review.txt` header now receives the upstream commit/tree and exact
+curation-manifest SHA-256 automatically from the same verified manifest
+snapshot used by generation. The generator's existing production-policy
+refusal now runs before any catalogue write. A source audit also confirmed that
+exact recorded-SHA re-vendoring, the filename-convention/omission tripwire, and
+the dev-unattested production CI quarantine were already implemented; the
+bullets below were stale, not additional missing mechanisms. This closes the
+non-authority-changing §2.3 batch without changing catalogue bytes, signing
+eligibility, release authority, or ERC-8176 status.
 
 ### 2.2 Duplicate-leaf precedence is alphabetical-filename (registry-squatting surface)
 Dedup on `(chain, contract, primary_type_hash, ctx)` keeps the lexicographically-first source
@@ -203,11 +215,14 @@ trusts for a covered contract on the next resync — recorded only in the discar
 byte-identical; keep silent-drop only for byte-identical dups. Effort S.
 
 ### 2.3 Provenance + resync workflow gaps (batch of S items)
-- Auto-stamp the upstream SHA: `vendor-registry` runs `git rev-parse HEAD` into the vendored
-  README **and** the `render_review` header, so the drift-gated artifact carries provenance
-  (today it's hand-typed with an in-file TODO). (xtask/src/main.rs:1224, dbgen erc7730.rs:4723)
-- Support re-vendoring at the *recorded* SHA so "renderer unlocked more descriptors" and
-  "upstream moved" are separate commits with single-cause root diffs.
+- Auto-stamp the upstream SHA: **implemented 2026-07-19.** Default production
+  generation stamps manifest-derived commit/tree/manifest SHA-256 into the
+  drift-gated review header; the README's managed receipt is the single
+  machine-owned copy rather than hand-maintained prose.
+- Re-vendor at the *recorded* SHA: **implemented by the strict overlay gate.**
+  `vendor-registry` accepts only the official checkout whose commit/tree match
+  the manifest, so renderer-only and upstream-movement diffs can remain
+  separate commits. The runbook records the detached-worktree invocation.
 - `xtask diff-registry`: **implemented in the bounded 2026-07-19 Phase-C
   slice** — A/B tolerant builds at two registry revisions report leaves
   gained/lost/IR-changed, exact clear/refused-known/unregistered transitions by
@@ -218,12 +233,15 @@ byte-identical; keep silent-drop only for byte-identical dups. Effort S.
   `docs/erc7730-root-rotation-and-update-policy.md`**; the command runs before
   manifest replacement, followed by reviewed collision resolution, vendoring,
   overlays, dbgen, review diff and commit.
-- `--policy production` is silently inert for the registry corpus (`let _ = force_production`,
-  dbgen/src/main.rs:303) — make it a hard error until the ERC-8176 attestation flip lands.
-- Filename-convention tripwire: scanner only sees `calldata-*.json`/`eip712-*.json`
-  (erc7730.rs:484-498); count unscanned JSONs containing a `context` key and warn/fail.
-- The review-file "dev mode — CI MUST reject" banner has no corresponding CI assertion yet;
-  track so it doesn't ride to ship.
+- `--policy production`: **hard-refused until the ERC-8176 flip.** The CLI
+  refusal now occurs before any generator output is written; the library policy
+  rejection remains independently tested.
+- Filename-convention tripwire: **implemented.** Every unselected JSON is
+  conservatively parsed/include-resolved for omission protection, and concrete
+  misnamed descriptors receive a drift-gated `UNSCANNED` skip receipt.
+- Dev-mode production quarantine: **implemented.** Generated Rust fences, the
+  `prod-erc7730-provenance-check` negative gate, fsbl regression tests, and CI
+  require the exact `dev-unattested` refusal until verified provenance lands.
 
 ### 2.4 Whole-corpus render smoke (close the parse-vs-render parity gap)
 CI round-trips every leaf through `ir.rs::parse` + Merkle verify, but **render** is tested

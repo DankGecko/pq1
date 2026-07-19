@@ -13,6 +13,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 use dbgen::erc7730::{
     build_db, build_db_tolerant, build_db_with_policy_override, CatalogueProvenance,
@@ -64,6 +65,27 @@ fn production_policy_rejects_unattested_seed_corpus() {
     assert!(
         err.contains("attestation") && err.contains("not implemented"),
         "unexpected production-rejection message: {err}"
+    );
+}
+
+#[test]
+fn dbgen_cli_rejects_production_before_generation_starts() {
+    let output = Command::new(env!("CARGO_BIN_EXE_dbgen"))
+        .args(["--policy", "production"])
+        .output()
+        .expect("run dbgen production-policy refusal");
+    assert!(!output.status.success(), "production request must fail");
+    assert!(
+        output.stdout.is_empty(),
+        "refusal must occur before dbgen starts or writes other catalogue artifacts: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--policy production is not yet supported")
+            && stderr.contains("ERC-8176 attestation enforcement is not wired")
+            && stderr.contains("Refusing rather than silently building"),
+        "unexpected production refusal: {stderr}"
     );
 }
 

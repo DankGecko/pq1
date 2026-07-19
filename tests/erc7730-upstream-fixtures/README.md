@@ -6,8 +6,8 @@ files from `ethereum/clear-signing-erc7730-registry` commit
 
 - Corpus: 272 files / 687,949 bytes / 510 positive cases.
 - Format inventory: 502 unique fixture-targeted source/format pairs against
-  815 accepted PQ1 source/format pairs; 287 intersect, 528 accepted formats
-  currently lack an upstream fixture, and 215 fixture targets remain outside
+  831 accepted PQ1 source/format pairs; 299 intersect, 532 accepted formats
+  currently lack an upstream fixture, and 203 fixture targets remain outside
   the accepted catalogue.
 - Receipt domain: `pqsigner/erc7730-excluded-fixture-corpus-v1`.
 - Receipt SHA-256:
@@ -30,8 +30,13 @@ downgrade or that untested descriptor formats are safe.
 The semantic lane currently exercises four Merkle-verified PQ1 transcripts:
 an unsigned Type-2 Lido claim, a signed Type-2 Threshold stake, an unsigned
 EIP-155 legacy Lido transfer, and a flat-static Tally/UNI EIP-712 delegation.
-Every presentation waiver is exact, case-owned, and must be consumed. The WETH
-`deposit()` fixture with trailing calldata remains an explicit PQ1 refusal.
+Corpus-derived mutations additionally pin proof and deployment binding,
+static and sole-dynamic offset/tail framing, exact EIP-712 member counts, and
+zero/maximum-word rendering. Every presentation waiver is exact, case-owned,
+and consumed while walking the expected tokens in order; address waivers are
+also class-pinned and matched at their field position. The long P2P string and
+the WETH `deposit()` fixture with trailing calldata remain explicit PQ1
+refusals.
 
 Refreshes must update the upstream SHA and fixture receipt in the same review
 as the vendored descriptor baseline. Do not hand-edit imported fixture JSON.

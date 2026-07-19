@@ -78,6 +78,24 @@ chain and stored in flash:
 
 ## Resync ceremony (the recurring operation)
 
+Keep renderer/compiler changes separate from upstream movement. For a
+renderer-only refresh, materialize the manifest-recorded revision in a clean
+detached worktree and re-vendor without changing the manifest:
+
+```bash
+recorded_sha="$(jq -r '.upstream.commit' \
+  secure/data/erc7730/curations/manifest.json)"
+git -C /path/to/clear-signing-erc7730-registry worktree add \
+  --detach /tmp/erc7730-recorded "$recorded_sha"
+cargo run --locked -p pqsigner-xtask -- vendor-registry \
+  --registry-root /tmp/erc7730-recorded
+```
+
+`vendor-registry` verifies that checkout against the manifest's exact official
+origin, commit, tree, schema and corpus before staging, so this path cannot
+silently include a newer upstream revision. The steps below are the separate
+upstream-movement ceremony.
+
 1. Before changing the manifest, compare its recorded upstream checkout with a
    clean candidate checkout:
 
@@ -112,8 +130,9 @@ chain and stored in flash:
    curated known-call count, tuple-set hash, and Bloom bytes to be identical
    before its checked install. There is no manual patch-reapplication step.
 5. `cargo run -p dbgen` — regenerate the blob, `db_roots.rs` root, and the
-   drift-gated `erc7730.review.txt` (now carrying the per-field breakdown +
-   `## skips` roll-up, finding 1.4).
+   drift-gated `erc7730.review.txt`. Its header carries the manifest-derived
+   upstream commit/tree and manifest SHA-256; its body carries the per-field
+   breakdown plus `## skips` roll-up (finding 1.4).
 6. **Review the review-file diff**: leaves gained/lost, any `degraded=` markers
    (finding 1.1), any new skips by category, any `CONFLICT` dedup error
    (finding 2.2). This is the human gate on what the device will trust.

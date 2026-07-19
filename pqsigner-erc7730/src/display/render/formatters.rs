@@ -2012,6 +2012,15 @@ fn render_enum(
         Resolved::Slot32(b) => *b,
         Resolved::Container(_) => return Err(RenderErr::Reject("7730 enum on container")),
     };
+    // ABI `bool` has exactly two canonical words: 0 and 1. Unsigned enums may
+    // render an unknown key as its exact raw integer, but applying that rule to
+    // a Bool terminal would make malformed ABI words look like meaningful
+    // boolean choices. Refuse before publishing any page instead.
+    if params.terminal_kind == Some(crate::render::policy::TerminalKind::Bool)
+        && (value[..31].iter().any(|&byte| byte != 0) || value[31] > 1)
+    {
+        return Err(RenderErr::Reject("7730 noncanonical bool enum"));
+    }
     // The descriptor MUST carry an `enum_ref` → the interned value→label
     // table; without it there is nothing to resolve against.
     let enum_off = params
@@ -4614,6 +4623,58 @@ mod adversarial_renderer_regressions {
             Err(RenderErr::Reject("7730 enum label too long"))
         ));
         assert_eq!(pages.len, 0, "rejection must occur before any partial page");
+    }
+
+    #[test]
+    fn bool_enum_accepts_only_canonical_zero_and_one_words() {
+        // Path at offset 1; enum table at offset 6 with the complete injective
+        // bool domain: 0 -> Deny, 1 -> Grant.
+        let mut pool = std::vec![0u8; 34];
+        pool[1] = 4;
+        pool[2] = PathOp::RootStructured as u8;
+        pool[3] = PathOp::FieldIdx as u8;
+        pool[6] = 2;
+        pool[15] = 4;
+        pool[16..20].copy_from_slice(b"Deny");
+        pool[27] = 1;
+        pool[28] = 5;
+        pool[29..34].copy_from_slice(b"Grant");
+
+        let ir = ir(&pool);
+        let mut params = ParamSet::default();
+        params.enum_ref = Some(6);
+        params.terminal_kind = Some(crate::render::policy::TerminalKind::Bool);
+        let enum_field = field(FormatOp::Enum as u8, 1);
+
+        for (word, expected) in [
+            ([0u8; 32], b"Deny".as_slice()),
+            (
+                {
+                    let mut word = [0u8; 32];
+                    word[31] = 1;
+                    word
+                },
+                b"Grant".as_slice(),
+            ),
+        ] {
+            let mut pages = Pages::with_len(0);
+            render_enum(&enum_field, &mut pages, &ir, &word, &tx(), &params)
+                .expect("canonical ABI bool renders");
+            assert_eq!(&pages.buf[0][1][..expected.len()], expected);
+        }
+
+        let mut noncanonical_two = [0u8; 32];
+        noncanonical_two[31] = 2;
+        let mut dirty_high_byte = [0u8; 32];
+        dirty_high_byte[0] = 1;
+        for word in [noncanonical_two, dirty_high_byte] {
+            let mut pages = Pages::with_len(0);
+            assert_eq!(
+                render_enum(&enum_field, &mut pages, &ir, &word, &tx(), &params),
+                Err(RenderErr::Reject("7730 noncanonical bool enum"))
+            );
+            assert_eq!(pages.len, 0, "invalid bool must refuse before publication");
+        }
     }
 
     fn dynamic_body(data: &[u8]) -> std::vec::Vec<u8> {
