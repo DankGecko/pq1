@@ -1223,3 +1223,31 @@ first branch open with a newly-discovered oracle-hop. "Mechanical" under-counted
 swaps examined are tractable and no novel cryptographic wall has been found; AI-assisted, the remainder LOOKS
 like proof-engineering rather than research — IF the mechanical characterization holds, and it has repeatedly
 expanded.* Not "weeks not months" as a settled fact; "no wall found so far."
+
+### UPDATE 2026-07-19 (cont.) — seam byequiv down to 1 admit (#A+#B CLOSED); 2nd-branch tree reductions typecheck
+
+Parallel workflow (3 agents, ~863k tokens). Results, auditor-verified:
+ - **#A (conseq) and #B (reconstruction + okC integration) CLOSED 0-admit** in _seam_byequiv_wip.ec — WIP now
+   has exactly ONE real admit (#1 cube-build). #B genuinely consumes the okC-ghost: a V-loop invariant clause
+   (C15) re-establishes the per-layer characterization `nth okl j = predC(ThC ps ad_j root_j counter_j)`
+   INSIDE the inlined reconstruction loop (maintained via all_idfun_rcons + pkWOTS_from_sigWOTS_C's definitional
+   okC), then extracts it via all_idfun_nth at the forgery layer cidx. **Audit: non-vacuous** (flipping Q's
+   predC conjunct to false breaks the compile), not smt-cheated, not hypothesized.
+ - **CONDITIONAL**: #A/#B are proven AGAINST the still-admitted cube-build post P (#1) — a specific MM45
+   qs-characterization (not vacuous), so meaningful, but the seam is NOT admit-free yet.
+ - **Load-bearing +C adaptation (not "mechanical"):** the +C `allOkC <- true` statement shifts MM45's
+   wp/seq boundary by one, so the folded conseq/Q antecedents bound STALE values ⇒ #A/#B unprovable as first
+   framed. Fixed by reframing the conseq/Q/tail antecedents to the real unfolded antecedent (seam-internal;
+   R_leaf_C + leaf-bound UNTOUCHED — milestone-2 no-rework holds).
+ - **Open integrity item:** the byequiv's A_ht restriction gained `-EUF_NAGCMA_FLSLXMSSMTTWCESNPRF_C` (for the
+   is_valid{1} module-write frame); argued sound but its discharge at the downstream ler_add consumer is
+   unverified.
+ - **2nd-branch tree reductions** R_SMDTTCRCPKCO_C / R_SMDTTCRCTRH_C built + typecheck (CERTIFIED-0-ADMIT,
+   drafts/_seam_tree_reductions_wip.ec). Caveat (real +C wrinkle): the SM-DT-TCR-C game reveals `pp` only at
+   find, but the +C encode site is SEED-dependent (grindC ps / encode_msgWOTS_C ps) whereas MM45's is not —
+   pick grinds against a witness-valued module-var seed; its equality with the game seed is deferred to the
+   downstream byequiv. Typecheck ≠ soundness (module defs only).
+
+Remaining on the first branch: #1 cube-build (MM45 :4167-4531 nested invariant) + its prerequisite O_V
+element-sampling oracle-hop (no WOTS+C analog exists yet). Consistent theme: each "mechanical" layer has
+needed real adaptation (okC edit, O_V hop, antecedent reframe) — no cryptographic wall, but real engineering.
