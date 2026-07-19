@@ -4009,6 +4009,12 @@ fn try_compile_eip712_nested(
             plan.push(NestedPlan::Flat(i));
             continue;
         }
+        // The v0x03 array anchor models exactly one render-all array level.
+        // Collapsing `T[][]` to the same boolean shape as `T[]` would let a
+        // one-wildcard path authenticate an unrenderable two-level value.
+        if array_suffix_dimensions(&parsed.top_types[pos]) > 1 {
+            return Ok(None);
+        }
         // Struct top member. v2 supports a single-level array of an
         // elementary-member struct; anything deeper → defer (belt-decline).
         if is_array && !array_element_is_v2_supported(base, parsed) {
@@ -4225,6 +4231,9 @@ fn compile_nested_block(
 
         if type_is_struct(seg_base, parsed) {
             // ── nested sub-anchor (struct member, or array-of-struct member) ──
+            if array_suffix_dimensions(&members[local_ord].1) > 1 {
+                return Ok(None);
+            }
             // An array-of-struct element must be v2-renderable (elementary members)
             // to match the on-device per-element render; deeper shapes defer.
             if seg_is_array && !array_element_is_v2_supported(seg_base, parsed) {
@@ -5245,6 +5254,11 @@ fn check_eip712_nested_member_completeness(
 ) -> Result<(), String> {
     let (base, is_array) = split_array_suffix(member_ty);
     if type_is_struct(base, parsed) {
+        if array_suffix_dimensions(member_ty) > 1 {
+            return Err(format!(
+                "EIP-712 format `{sig}`: nested member `{member_path}` has more than one array dimension (`{member_ty}`); trusted nested IR supports exactly one render-all array level"
+            ));
+        }
         if depth > MAX_STRUCT_DEPTH || visited.iter().any(|seen| seen == base) {
             return Err(format!(
                 "EIP-712 format `{sig}`: nested member `{member_path}` has a cyclic or deeper-than-{MAX_STRUCT_DEPTH} type; exact signed-leaf completeness cannot be proven"
@@ -6045,6 +6059,20 @@ fn split_array_suffix(ty: &str) -> (&str, bool) {
         Some(i) => (ty[..i].trim(), true),
         None => (ty.trim(), false),
     }
+}
+
+/// Number of array suffixes carried by a scalar/typed-data type. The existing
+/// boolean splitter is sufficient for type classification, but nested IR must
+/// distinguish `T[]` from `T[][]`: it authenticates exactly one array level.
+fn array_suffix_dimensions(ty: &str) -> usize {
+    ty.find('[')
+        .map(|start| {
+            ty.as_bytes()[start..]
+                .iter()
+                .filter(|&&b| b == b'[')
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 /// True when `base` (an array-stripped type name) is an EIP-712 struct
@@ -11147,6 +11175,48 @@ mod tests {
         );
         check_eip712_nested_field_completeness(sig, &fmt, &parsed)
             .expect("every member of every rendered array element is covered");
+    }
+
+    #[test]
+    fn eip712_multidimensional_struct_array_never_emits_active_nested_anchor() {
+        let sig = "Batch(Item[][] items,address spender)Item(address token,uint256 amount)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"items.[].amount","label":"Amount","format":"tokenAmount",
+               "params":{"tokenPath":"items.[].token"},"visible":"always"},
+              {"path":"spender","label":"Spender","format":"addressName","visible":"always"}
+            ]"#,
+        );
+        check_field_visibility(sig, &fmt, &parsed, CTX_EIP712)
+            .expect("the regression isolates array rank, not visibility");
+        let err = check_eip712_nested_field_completeness(sig, &fmt, &parsed)
+            .expect_err("one wildcard must not account for a two-dimensional signed array");
+        assert!(err.contains("more than one array dimension"), "{err}");
+
+        let mut ctx = test_ctx();
+        let mut pool = Pool::new();
+        assert!(
+            try_compile_eip712_nested(sig, &fmt, &parsed, &mut ctx, &mut pool, &BTreeMap::new(),)
+                .expect("unsupported rank must fail closed, not error in the emitter")
+                .is_none(),
+            "the independent emitter backstop must not produce an active v0x03 anchor"
+        );
+
+        let mut out = Vec::new();
+        let err = compile_one_format(
+            sig,
+            &fmt,
+            CTX_EIP712,
+            &mut ctx,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut out,
+            None,
+        )
+        .expect_err("an unsupported structured-array rank must be rejected before emission");
+        assert!(err.contains("more than one array dimension"), "{err}");
+        assert!(out.is_empty(), "no trusted format bytes may be emitted");
     }
 
     #[test]
