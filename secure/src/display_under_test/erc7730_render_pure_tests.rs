@@ -167,6 +167,17 @@ fn build_safe_visible_nested_fixtures(
                 .replace(
                     "\"encoding\": \"timestamp\"\n            }\n          }",
                     "\"encoding\": \"timestamp\"\n            },\n            \"visible\": \"always\"\n          }",
+                )
+                // Exact nested-leaf completeness also requires Permit2's
+                // per-permission nonce. The upstream descriptor omits it, so
+                // add it only to these process-private positive fixtures.
+                .replace(
+                    "        \"$id\": \"Permit2 Permit Single\",\n        \"intent\": \"Authorize spending of token\",\n        \"fields\": [",
+                    "        \"$id\": \"Permit2 Permit Single\",\n        \"intent\": \"Authorize spending of token\",\n        \"fields\": [\n          {\n            \"path\": \"details.nonce\",\n            \"label\": \"Nonce\",\n            \"visible\": \"always\"\n          },",
+                )
+                .replace(
+                    "        \"$id\": \"Permit2 Permit Batch\",\n        \"intent\": \"Authorize spending of tokens\",\n        \"fields\": [",
+                    "        \"$id\": \"Permit2 Permit Batch\",\n        \"intent\": \"Authorize spending of tokens\",\n        \"fields\": [\n          {\n            \"path\": \"details.[].nonce\",\n            \"label\": \"Nonce\",\n            \"visible\": \"always\"\n          },",
                 );
             assert!(!safe_text.contains("\"visible\": \"never\""));
             std::fs::write(&destination, safe_text).expect("write safe nested fixture");

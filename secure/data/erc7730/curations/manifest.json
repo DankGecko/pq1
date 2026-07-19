@@ -47,7 +47,7 @@
     },
     {
       "path": "dbgen/src/erc7730.rs",
-      "sha256": "0e147b873f8267ccecec4af2fd90288e64a81e045757c849a57c15047f33662d"
+      "sha256": "fdb358fd77b841d4350abc6e7b90c9873085d637dee4c0d490d1df29f1efc2df"
     },
     {
       "path": "dbgen/src/main.rs",

@@ -3205,6 +3205,17 @@ fn compile_one_format(
     // reassuring parameter-less clear-sign.
     check_field_visibility(sig, fmt, &parsed, context_kind)?;
 
+    // A nested EIP-712 struct's top-level encodeData word is its hashStruct,
+    // but clear-signing expands that commitment into member pages. Once the
+    // ordinary visibility rules have accepted the format, require every
+    // elementary nested member to be declared at its exact path. Keeping this
+    // after the visibility gate preserves the established first-error receipts
+    // for corpus formats that were already refused for an explicit hide, while
+    // ensuring no otherwise-eligible partial nested display can be pinned.
+    if context_kind == CTX_EIP712 {
+        check_eip712_nested_field_completeness(sig, fmt, &parsed)?;
+    }
+
     // Selector / discriminator slot — 4 bytes. For EIP-712 we also keep
     // the FULL 32-byte primary-type hash so the on-device renderer can
     // bind all 32 bytes (audit M-5), not just the 4-byte prefix it
@@ -4238,6 +4249,10 @@ fn compile_nested_block(
             else {
                 return Ok(None);
             };
+            // The recursive block accepted only after accounting for every one
+            // of this member's leaves, so the parent hashStruct/array word is
+            // covered as a complete child anchor rather than by a partial page.
+            covered[local_ord] = true;
             if child_payload.len() > MAX_POOL_TLV_PAYLOAD - 2 {
                 return Ok(None);
             }
@@ -4362,12 +4377,15 @@ fn compile_nested_block(
         }
     }
 
-    // E2 self-check: every address-typed local word must be covered by a visible
-    // child (else a dead / always-declined descriptor). The device enforces this
-    // independently; the primary build gate already refused any hidden address at
-    // any depth BEFORE compilation.
+    // Compiler self-check: every local member must be covered. Elementary
+    // members are covered only by a successfully compiled visible child (or a
+    // shown tokenAmount's local tokenPath); struct/array members are covered by
+    // a recursively complete child anchor. The device independently re-checks
+    // the address subset through `addr_bmp`; full signed-member completeness is
+    // load-bearing here because the compact runtime IR intentionally carries no
+    // general per-member type bitmap.
     for i in 0..member_count {
-        if (addr_bmp[i / 8] >> (i % 8)) & 1 == 1 && !covered[i] {
+        if !covered[i] {
             return Ok(None);
         }
     }
@@ -5120,24 +5138,13 @@ fn check_contract_field_completeness(
 /// [`check_contract_field_completeness`] (audit 2026-06-25 HIGH-1).
 ///
 /// The signed value is `structHash = keccak256(primary_type_hash ||
-/// encoded_data)`, where `encoded_data` is the 32-bytes-per-member encoding
-/// of the primary type's top-level members in declaration order. Each
-/// top-level member is exactly ONE head word: value types encode inline,
-/// `bytes`/`string` encode as their keccak, and a nested struct member
-/// encodes as its `hashStruct` — one word regardless. So, for the *signed-
-/// word coverage* purpose, there is no static-tuple-member granularity to
-/// chase here: a per-top-member coverage check accounts for every top-level
-/// word (which is what this lint proves).
-///
-/// The distinct hazard of an `address` hidden *inside* a nested struct
-/// member's `hashStruct` word (committed to the signature yet invisible) is
-/// NOT a coverage gap — the top-level member is still one declared word — so
-/// it is handled where it belongs: [`check_field_visibility`] descends the
-/// parsed `struct_defs` and requires every nested address to be shown, and
-/// the on-device `PARAM_NESTED_STRUCT` belt declines any nested-struct format
-/// to blind-sign (`VULN-erc7730-eip712-nested-struct-address-hide`). Keeping
-/// this lint at top-level granularity avoids over-refusing a benign
-/// address-free hidden sub-struct.
+/// encoded_data)`, where every primary member contributes one word. This pass
+/// accounts for those TOP-LEVEL words and preserves the established first-error
+/// ordering for already-refused corpus entries. A second pass,
+/// [`check_eip712_nested_field_completeness`], runs after visibility and proves
+/// exact elementary-leaf coverage inside every expanded hashStruct. A child
+/// path must never stand in for its siblings merely because they share one
+/// opaque parent word.
 ///
 /// Refuse to pin a descriptor unless every member is accounted for by a
 /// field of its own (rendered or `visible:"never"`) or as another field's
@@ -5176,6 +5183,121 @@ fn check_eip712_field_completeness(
         }
     }
     Ok(())
+}
+
+/// Require exact declaration coverage for every elementary member reachable
+/// through an EIP-712 nested struct. The trusted nested renderer expands a
+/// top-level hashStruct into member pages, so accounting for only the parent
+/// word would allow `details.token` to hide the signed `details.amount`.
+///
+/// Struct arrays use the canonical render-all wildcard (`details.[].amount`),
+/// and nested structs recurse to the same bounded depth as the compiler. A
+/// direct field may be visible or explicitly hidden here (the preceding
+/// visibility gate decides whether hiding it is safe); a tokenPath counts only
+/// when a visible tokenAmount consumes that exact scalar-address leaf.
+fn check_eip712_nested_field_completeness(
+    sig: &str,
+    fmt: &Format,
+    parsed: &ParsedFormatKey,
+) -> Result<(), String> {
+    for (idx, top_name) in parsed.top_names.iter().enumerate() {
+        let top_ty = &parsed.top_types[idx];
+        let (base, _) = split_array_suffix(top_ty);
+        if !type_is_struct(base, parsed) {
+            continue; // top-level scalar/array coverage is owned by the pass above.
+        }
+        // A field that targets the bare parent hashStruct is already refused by
+        // the existing visible-hash terminal-type gate (or, if hidden, by the
+        // visibility gate that ran immediately before this pass). Let that
+        // established, more specific refusal fire instead of replacing it with
+        // a missing-child diagnostic. A format with any bare-parent field can
+        // never reach nested-anchor emission, even if it also lists children.
+        if fmt.fields.iter().any(|field| {
+            field
+                .path
+                .as_deref()
+                .is_some_and(|path| path_matches_member(path, top_name))
+        }) {
+            continue;
+        }
+        let mut visited = Vec::new();
+        check_eip712_nested_member_completeness(
+            sig,
+            fmt,
+            parsed,
+            top_name,
+            top_ty,
+            0,
+            &mut visited,
+        )?;
+    }
+    Ok(())
+}
+
+fn check_eip712_nested_member_completeness(
+    sig: &str,
+    fmt: &Format,
+    parsed: &ParsedFormatKey,
+    member_path: &str,
+    member_ty: &str,
+    depth: usize,
+    visited: &mut Vec<String>,
+) -> Result<(), String> {
+    let (base, is_array) = split_array_suffix(member_ty);
+    if type_is_struct(base, parsed) {
+        if depth > MAX_STRUCT_DEPTH || visited.iter().any(|seen| seen == base) {
+            return Err(format!(
+                "EIP-712 format `{sig}`: nested member `{member_path}` has a cyclic or deeper-than-{MAX_STRUCT_DEPTH} type; exact signed-leaf completeness cannot be proven"
+            ));
+        }
+        let members = parsed
+            .struct_defs
+            .get(base)
+            .ok_or_else(|| format!("EIP-712 struct `{base}` has no definition"))?;
+        if members.is_empty() {
+            return Err(format!(
+                "EIP-712 format `{sig}`: nested member `{member_path}` has an empty struct type `{base}`; refusing an unrenderable hashStruct"
+            ));
+        }
+        let element_path = if is_array {
+            format!("{member_path}.[]")
+        } else {
+            member_path.to_string()
+        };
+        visited.push(base.to_string());
+        for (child_name, child_ty) in members {
+            let child_path = format!("{element_path}.{child_name}");
+            check_eip712_nested_member_completeness(
+                sig,
+                fmt,
+                parsed,
+                &child_path,
+                child_ty,
+                depth + 1,
+                visited,
+            )?;
+        }
+        visited.pop();
+        return Ok(());
+    }
+
+    let covered = fmt.fields.iter().any(|field| {
+        field
+            .path
+            .as_deref()
+            .is_some_and(|path| path_matches_member(path, member_path))
+            || shown_token_path(field, CTX_EIP712, parsed).is_some_and(|token_path| {
+                token_path_surfaces_exact_scalar_address(token_path, CTX_EIP712, parsed)
+                    && path_matches_member(token_path, member_path)
+            })
+    });
+    if covered {
+        return Ok(());
+    }
+
+    Err(format!(
+        "EIP-712 format `{sig}`: nested member `{member_path}` is neither rendered, explicitly hidden (`visible:\"never\"`), nor used as a shown tokenAmount's exact scalar-address `tokenPath`. Every elementary member folded into a nested hashStruct must be accounted for at exact leaf granularity"
+    ))
 }
 
 /// Does descriptor `path` surface the calldata word for tuple member
@@ -6708,6 +6830,17 @@ fn compile_structured_contract_path(
             // slot. A DYNAMIC tuple needs its own local head width and tail
             // topology to prove member offsets/canonical end placement; compact
             // IR does not carry those facts, so C2 must fail closed.
+            // A tuple ARRAY is also not a single tuple instance: descending
+            // `calls.to` through `(...)[N] calls` would select only element 0
+            // while the signature commits to every element. Reject only a
+            // trailing array suffix on THIS type; an ordinary tuple may safely
+            // contain an array member before the selected scalar because the
+            // width-aware slot calculation already accounts for it.
+            if find_last_array_open(this_ty.trim()).is_some() {
+                return Err(format!(
+                    "path descends through array-valued field `{name}` (`{this_ty}`); member descent would render only one element of the signed array"
+                ));
+            }
             if static_head_words(this_ty)? == HeadWidth::Dynamic {
                 return Err(format!(
                     "path descends through dynamic tuple `{name}` (`{this_ty}`); C2 tail topology is not represented in trusted IR"
@@ -6795,6 +6928,11 @@ fn compile_token_path_extraction(
         if !terminal {
             // Static tuple members stay inlined. Dynamic-tuple descent (C2)
             // needs tuple-local head/tail topology absent from compact IR.
+            if find_last_array_open(this_ty).is_some() {
+                return Err(format!(
+                    "tokenPath descends through array-valued field `{name}` (`{this_ty}`); member descent would identify a token from only one signed element"
+                ));
+            }
             if static_head_words(this_ty)? == HeadWidth::Dynamic {
                 return Err(format!(
                     "tokenPath descends through dynamic tuple `{name}` (`{this_ty}`); C2 tail topology is not represented in trusted IR"
@@ -6993,12 +7131,12 @@ fn format_static_head_words(context_kind: u8, parsed: &ParsedFormatKey) -> Resul
     u16::try_from(words).map_err(|_| format!("static head {words} words overflows u16"))
 }
 
-/// Map a name segment to a 2-byte BE field-index opcode arg. For the
-/// first name after the root we look it up in `parsed.top_names`;
-/// subsequent names use `parsed.inner_names[prev_top]`. If the name
-/// isn't found in the parsed format key (e.g. a nested struct we
-/// didn't parse), we encode the name's hash as a fall-back so Phase 5
-/// can resolve it via the runtime ABI shape table.
+/// Map a declared name segment to its 2-byte BE field ordinal. For the first
+/// name after the root we use `parsed.top_names`; subsequent names use the
+/// parsed tuple member list. Unknown names are a hard error: the device has no
+/// authenticated runtime name table, and truncating a name hash to 16 bits can
+/// alias a real ordinal (for example a bogus EIP-712 tokenPath aliasing member
+/// zero) while presenting the wrong token identity.
 fn resolve_field_index(
     parsed: &ParsedFormatKey,
     cur_top: Option<&str>,
@@ -7016,11 +7154,10 @@ fn resolve_field_index(
     if let Some(pos) = names.iter().position(|n| n == name) {
         return u16::try_from(pos).map_err(|_| format!("field index {pos} > u16::MAX"));
     }
-    // Fall-back: ABI hash. Compress to 16-bit so it fits the slot.
-    // Phase 5 walker resolves this via runtime introspection — for
-    // Phase 2 we just need to round-trip parse.
-    let h = keccak256(name.as_bytes());
-    Ok(u16::from_be_bytes([h[0], h[1]]))
+    let scope = cur_top
+        .map(|parent| format!("the parsed members of `{parent}`"))
+        .unwrap_or_else(|| "the format's top-level members".to_string());
+    Err(format!("path field `{name}` is not in {scope}"))
 }
 
 enum PathSeg<'a> {
@@ -9239,6 +9376,86 @@ mod tests {
         );
     }
 
+    #[test]
+    fn compile_path_rejects_fixed_tuple_array_member_descent() {
+        let p =
+            parse_format_key("execute((address to,uint256 value)[2] calls,address after)").unwrap();
+        for err in [
+            compile_path("#.calls.to", CTX_CONTRACT, &p)
+                .expect_err("a value path must not select tuple-array element zero"),
+            compile_token_path("#.calls.to", CTX_CONTRACT, &p)
+                .expect_err("a token path must not select tuple-array element zero"),
+        ] {
+            assert!(
+                err.contains("array"),
+                "refusal should name the array shape: {err}"
+            );
+        }
+        assert_eq!(
+            head_slot_of(&compile_path("#.after", CTX_CONTRACT, &p).unwrap()),
+            4,
+            "rejecting descent must not break width accounting past the array"
+        );
+
+        let tuple_with_inner_array =
+            parse_format_key("f((address[2] prior,address selected) cfg)").unwrap();
+        assert_eq!(
+            head_slot_of(
+                &compile_path("#.cfg.selected", CTX_CONTRACT, &tuple_with_inner_array).unwrap()
+            ),
+            2,
+            "an array inside an ordinary tuple is handled by width accounting, not rejected"
+        );
+    }
+
+    #[test]
+    fn eip712_token_path_rejects_unknown_name() {
+        let p = parse_format_key("Permit(address token,uint256 amount)").unwrap();
+        assert_eq!(
+            &keccak256(b"ghost6140")[..2],
+            &[0, 0],
+            "collision witness must alias ordinal zero under the removed fallback"
+        );
+        let err = compile_token_path("ghost6140", CTX_EIP712, &p)
+            .expect_err("an unknown typed-data name must not compile as a truncated hash");
+        assert!(
+            err.contains("ghost6140") && err.contains("not in"),
+            "refusal should name the unknown member: {err}"
+        );
+        assert_eq!(
+            compile_token_path("token", CTX_EIP712, &p).unwrap(),
+            [PATHOP_ROOT_STRUCT, PATHOP_FIELD_IDX, 0, 0],
+            "a declared field-zero token path keeps its exact wire bytes"
+        );
+    }
+
+    #[test]
+    fn eip712_format_rejects_unknown_token_path_end_to_end() {
+        let sig = "Permit(address token,uint256 amount)";
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"token","label":"Token","format":"addressName"},
+              {"path":"amount","label":"Amount","format":"tokenAmount",
+               "params":{"tokenPath":"ghost6140"}}
+            ]"#,
+        );
+        let mut ctx = test_ctx();
+        let mut pool = Pool::new();
+        let mut out = Vec::new();
+        let err = compile_one_format(
+            sig,
+            &fmt,
+            CTX_EIP712,
+            &mut ctx,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut out,
+            None,
+        )
+        .expect_err("an otherwise-complete format must reject a typo/collision tokenPath");
+        assert!(err.contains("ghost6140") && err.contains("not in"), "{err}");
+    }
+
     // ── Tier B: tokenPath byte-slice / array-index (tokenPath-ONLY) ──────────
     #[test]
     fn token_path_slice_ops_are_tokenpath_only() {
@@ -10848,6 +11065,128 @@ mod tests {
             err.contains("spender"),
             "error should name the first omitted member: {err}"
         );
+    }
+
+    #[test]
+    fn eip712_completeness_rejects_omitted_nested_scalar_member() {
+        let sig = "PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)\
+                   PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_with_paths(&["details.token", "spender", "sigDeadline"]);
+        let err = check_eip712_nested_field_completeness(sig, &fmt, &parsed)
+            .expect_err("one visible child must not cover omitted nested signed scalars");
+        assert!(
+            err.contains("details.amount"),
+            "refusal should name the first omitted nested member: {err}"
+        );
+    }
+
+    #[test]
+    fn eip712_completeness_rejects_omitted_array_element_member() {
+        let sig = "PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)\
+                   PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_with_paths(&["details.[].token", "spender", "sigDeadline"]);
+        let err = check_eip712_nested_field_completeness(sig, &fmt, &parsed)
+            .expect_err("one element child must not cover omitted members in every array element");
+        assert!(
+            err.contains("details.[].amount"),
+            "refusal should name the first omitted per-element member: {err}"
+        );
+    }
+
+    #[test]
+    fn eip712_nested_completeness_accepts_exact_full_coverage_and_token_path() {
+        let sig = "PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)\
+                   PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"details.amount","label":"Amount","format":"tokenAmount",
+               "params":{"tokenPath":"details.token"}},
+              {"path":"details.expiration","label":"Expiration","format":"date"},
+              {"path":"details.nonce","label":"Nonce","format":"raw"},
+              {"path":"spender","label":"Spender","format":"addressName"},
+              {"path":"sigDeadline","label":"Deadline","format":"date"}
+            ]"#,
+        );
+        check_eip712_field_completeness(sig, &fmt, &parsed).unwrap();
+        check_field_visibility(sig, &fmt, &parsed, CTX_EIP712).unwrap();
+        check_eip712_nested_field_completeness(sig, &fmt, &parsed).unwrap();
+
+        let mut ctx = test_ctx();
+        let mut pool = Pool::new();
+        let mut out = Vec::new();
+        compile_one_format(
+            sig,
+            &fmt,
+            CTX_EIP712,
+            &mut ctx,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut out,
+            None,
+        )
+        .expect("full nested coverage must still emit a clear-sign format");
+    }
+
+    #[test]
+    fn eip712_nested_array_completeness_accepts_full_element_coverage() {
+        let sig = "PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)\
+                   PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"details.[].amount","label":"Amount","format":"tokenAmount",
+               "params":{"tokenPath":"details.[].token"}},
+              {"path":"details.[].expiration","label":"Expiration","format":"date"},
+              {"path":"details.[].nonce","label":"Nonce","format":"raw"},
+              {"path":"spender","label":"Spender","format":"addressName"},
+              {"path":"sigDeadline","label":"Deadline","format":"date"}
+            ]"#,
+        );
+        check_eip712_nested_field_completeness(sig, &fmt, &parsed)
+            .expect("every member of every rendered array element is covered");
+    }
+
+    #[test]
+    fn eip712_nested_completeness_rejects_deep_leaf_omission() {
+        let sig = "Order(Outer outer)Inner(uint256 amount,uint256 nonce)\
+                   Outer(Inner inner,uint256 salt)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_with_paths(&["outer.inner.nonce", "outer.salt"]);
+        let err = check_eip712_nested_field_completeness(sig, &fmt, &parsed)
+            .expect_err("a sibling must not cover a missing transitive leaf");
+        assert!(err.contains("outer.inner.amount"), "{err}");
+    }
+
+    #[test]
+    fn eip712_incomplete_nested_format_is_rejected_end_to_end() {
+        let sig = "PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)\
+                   PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)";
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"details.token","label":"Token","format":"addressName"},
+              {"path":"spender","label":"Spender","format":"addressName"},
+              {"path":"sigDeadline","label":"Deadline","format":"date"}
+            ]"#,
+        );
+        let mut ctx = test_ctx();
+        let mut pool = Pool::new();
+        let mut out = Vec::new();
+        let err = compile_one_format(
+            sig,
+            &fmt,
+            CTX_EIP712,
+            &mut ctx,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut out,
+            None,
+        )
+        .expect_err("a partial nested format must never emit an authenticated anchor");
+        assert!(err.contains("details.amount"), "{err}");
+        assert!(out.is_empty(), "no format bytes may be emitted on refusal");
     }
 
     #[test]
