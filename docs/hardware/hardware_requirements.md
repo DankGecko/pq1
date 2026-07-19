@@ -213,13 +213,13 @@ hardware features above actually do something:
   `on_tamp_irq()` exist but aren't called from the boot path.
 - **Flip the TAMP IRQ from log-only to `trigger_lockout_wipe()`** — deliberate
   on the bring-up branch (probe-rs glitches false-trigger ITAMP9); production
-  must escalate. See `docs/production-todo.md` "TAMP escalation" and
-  `README.md` Phase-3 step 6.
+  must escalate. See `docs/archive/production-todo-retired-2026-07-19.md`
+  "TAMP escalation" and `README.md` Phase-3 step 6.
 - **BHK first write/load** exists only inside the `rdp2-self-lock` candidate,
   which is valid only with `mode-production`; do not run it from a generic,
   bench, or factory flow. The authenticated handoff, cut recovery,
   E140/SE050 ordering, silicon evidence, and production approval remain open.
-  See `docs/work-todo.md §7/#36` and `secure/src/hw/bhk.rs`.
+  See `docs/archive/work-todo-retired-2026-07-19.md` §7/#36 and `secure/src/hw/bhk.rs`.
 
 ## Cross-reference: feature → requirement → enforced/implemented → status
 

@@ -73,7 +73,7 @@ to the **+** rail, one from GND to the **–** rail.
 > line, so an OPTIGA reset pulse on D5 power-cycles the SE050 mid-write (we bricked a
 > provisioning run learning this). And yes, on this board the CN14 silkscreen is
 > off-by-one versus the user manual — the firmware drives PE0, which is the pad labeled
-> D6. Full story: `docs/work-todo.md` Completion Log 2026-04-23.
+> D6. Full story: `docs/archive/work-todo-retired-2026-07-19.md` Completion Log 2026-04-23.
 
 **NV3007 display — 8 wires:**
 
@@ -143,7 +143,7 @@ you're signing. First signature ≤ 3 s; ~1.1 s warm. (To re-run the wizard on a
 **The honest caveat:** a breadboard PQ1 is a real signer, not a hardened one. The dev
 build pairs the secure elements with bench keys, leaves the OPTIGA in its unlocked
 lifecycle state, keeps the debug port open, and its jumper wires are gloriously easy to
-probe. Production units burn all of that down at provisioning (`docs/production-todo.md`).
+probe. Production units burn all of that down at provisioning (`docs/archive/production-todo-retired-2026-07-19.md`).
 The cryptography is identical; the armor is not. Don't put your savings behind a
 breadboard — do use it to verify that everything we claim about the firmware is true, on
 hardware you own.

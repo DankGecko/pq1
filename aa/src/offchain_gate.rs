@@ -18,7 +18,7 @@
 //! plus a small owned `SlotLedger` / `OffchainLedger` model so the properties
 //! can be proven over **sequences** of adversarially-ordered operations — the
 //! reorder / replay / limit-slice discipline that catches the interactions a
-//! per-transition test misses (`docs/work-todo.md` §12e; the methodology is
+//! per-transition test misses (`docs/archive/work-todo-retired-2026-07-19.md` §12e; the methodology is
 //! ported from the Strix `business_logic.md` + `race_conditions.md` operator
 //! set — model invariants, then attack by sequencing).
 //!

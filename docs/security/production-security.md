@@ -3,7 +3,7 @@
 This document consolidates findings from 4 parallel AI deep-research
 sessions (bundles A, B, C, D — prompt E has not yet run) into a single
 actionable reference. It is *not* the code; it is the distilled plan.
-Implementation tasks track in `docs/work-todo.md` items #18-22.
+Implementation tasks track on `EthereumPhone/PQ1` (label `source:work-todo`, items #18-22).
 
 Raw research results live under `docs/security/research-bundles/results/`. Each
 finding below cites the responsible bundle plus any verification caveats.
@@ -19,7 +19,7 @@ factory-reset design see `docs/secure-elements/se050-factory-reset.md`.
 
 This is a dated synthesis, not a current priority list. Resolved or superseded
 items are marked in place; current authority lives in `docs/STATUS.md` and
-`docs/production-todo.md`.
+the `EthereumPhone/PQ1` issue tracker (label `source:production-todo`).
 
 1. **SLH-DSA verify-after-sign is inadequate**. Current code assumes
    signing the blob, re-verifying, and failing closed is enough. Per
@@ -482,8 +482,9 @@ change to work-todo #20 scope.
 > is exclusively the DHUK-wrapped SE050 BHK when `bhk` is enabled, and no
 > persistent firmware-update failure counter remains. The historical route
 > below that reused the OTP master as a final root is rejected for production.
-> Current lifecycle and rollback authority stays with `docs/production-todo.md`,
-> `docs/STATUS.md`, and the production-fenced rollback architecture record.
+> Current lifecycle and rollback authority stays with the `EthereumPhone/PQ1`
+> production items (label `source:production-todo`), `docs/STATUS.md`, and the
+> production-fenced rollback architecture record.
 
 **Threat context.** The OPTIGA Trust M pairing-secret flow that landed
 during early bring-up (`setup_pbs_no_handshake`, `hw/huk.rs`, flash page
@@ -762,8 +763,9 @@ posture, excluding the on-chain verifier work for a SHAKE migration.
 
 ## 5. What this doc is NOT
 
-- Not a code specification — see `docs/work-todo.md` for actionable
-  tasks with file paths, and the code itself once implemented.
+- Not a code specification — see the `EthereumPhone/PQ1` issue tracker
+  (label `source:work-todo`) for actionable tasks, and the code itself once
+  implemented.
 - Not a threat model — see `docs/security/HARDENING.md` and `CLAUDE.md`
   invariants. This doc documents *mitigations* surfaced by research,
   not the overall threat taxonomy.

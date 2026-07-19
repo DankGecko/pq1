@@ -17,7 +17,7 @@
 //! operations sealed — the attacker would also need to dump flash
 //! *before* `BHKLOCK` completes at boot. A compromise of the BHK alone
 //! (flash dump of the wrapped bytes + offline DHUK-ECB crack) does not
-//! unlock DHUK-keyed derivations. See `docs/work-todo.md` §"Tier 2 —
+//! unlock DHUK-keyed derivations. See `docs/archive/work-todo-retired-2026-07-19.md` §"Tier 2 —
 //! BHK" for the SE-to-axis split (DHUK → OPTIGA PBS; BHK → SE050 SCP03 +
 //! admin PIN).
 //!

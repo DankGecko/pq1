@@ -404,7 +404,7 @@ that 4128-byte decoding input: `decodeWrappedSig` evaluates `readWordBE` (a
 whole 4128-byte array through the kernel — only `native_decide` makes that
 tractable, and `native_decide` is banned on proof paths here. (Hence no concrete
 decode witness exists ANYWHERE in the development; it is a shared mechanization
-gap across the Claim-4/Invariants families, tracked in `docs/work-todo.md`.)
+gap across the Claim-4/Invariants families, tracked in `docs/archive/work-todo-retired-2026-07-19.md`.)
 
 The DECODE-FREE half is mechanized below: a live credit funds exactly one
 successful `execute` step (rules out a degenerate "`executeWithOffchainCount` is

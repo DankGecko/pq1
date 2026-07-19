@@ -26,8 +26,8 @@ the atomic multi-call **batch sign** flow. Do not use the legacy broad
   `FLAG_INCLUDE_INIT_CODE` with slot 0; `FLAG_REGISTER_SLOT` must remain clear.
   Wire v2 cannot complete a seedless slot rotation because the response omits
   the exact 64-byte new slot public key. Production companions must therefore
-  refuse Type 1 output until the reviewed protocol bump tracked in
-  `docs/work-todo.md` lands. Only the user-tx Type 2 is batched.
+  refuse Type 1 output until the reviewed protocol bump tracked on
+  `EthereumPhone/PQ1` (label `source:work-todo`) lands. Only the user-tx Type 2 is batched.
 
 ## When to use it
 

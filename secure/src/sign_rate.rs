@@ -33,7 +33,7 @@
 //!   - For a determined attacker who knows the PIN, the unlock+sign
 //!     cycle is bottlenecked by PIN entry (~5 s per cold unlock).
 //!
-//! **Future hardening** (tracked in `docs/work-todo.md §18b`): a
+//! **Future hardening** (tracked in `docs/archive/work-todo-retired-2026-07-19.md §18b`): a
 //! flash-persistent daily-quota (500/day) would defeat the
 //! power-cycle-bypass-burst-cap attack class. Deferred because flash
 //! writes on every sign add wear; out of scope for this commit.

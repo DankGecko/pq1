@@ -42,7 +42,7 @@
 //!
 //! Consumed by `crate::crypto::c10_sign_verified_with_progress` to
 //! draw a fresh `opt_rand` per signing call (F-13 follow-up; aligned
-//! with `docs/work-todo.md` §10 "Multi-Source RNG").
+//! with `docs/archive/work-todo-retired-2026-07-19.md` §10 "Multi-Source RNG").
 
 use zeroize::Zeroize;
 

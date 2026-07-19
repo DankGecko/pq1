@@ -8,8 +8,8 @@
 > [`companion-erc7730-implementation-guide.md`](companion-erc7730-implementation-guide.md).
 > In particular, seedless slot rotation is not executable on wire v2: keep
 > `FLAG_REGISTER_SLOT` clear, reject a nonzero Type-1 response, and do not retry
-> until the reviewed public-key/calldata protocol bump in `docs/work-todo.md`
-> lands.
+> until the reviewed public-key/calldata protocol bump tracked on
+> `EthereumPhone/PQ1` (label `source:work-todo`) lands.
 
 This is retained as historical architecture context for companion apps. It is
 not self-contained, and its detailed byte layouts and worked workflows have not

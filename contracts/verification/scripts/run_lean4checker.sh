@@ -97,7 +97,7 @@ echo "[lean4checker] building lean/ (${LEAN_DIR}) ..."
 # Cost: ~50-75s/module (each --fresh re-replays the module's import closure), so
 # the full sweep is ~40-60 min — it's a MANUAL pre-release gate, not in CI.
 # A faster real fix is to rename/relocate the colliding A3.1 auxiliary so the
-# single umbrella replay works again (tracked in docs/work-todo.md).
+# single umbrella replay works again (tracked in docs/archive/work-todo-retired-2026-07-19.md).
 cd "${LEAN_DIR}"
 if [ "${MODULE}" = "SphincsCVerify" ]; then
   mods="$(find SphincsCVerify -name '*.lean' | sed 's#\.lean$##; s#/#.#g' | sort)"

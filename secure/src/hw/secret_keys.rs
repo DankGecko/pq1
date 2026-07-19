@@ -47,7 +47,7 @@
 //! - **Unique per die after the required RDP transition.** Different STM32U585 silicon →
 //!   different DHUK → different derived bytes at RDP ≥ 1. (At RDP0
 //!   DHUK is a shared ST-substituted constant; all dev boards
-//!   produce the same derivations. See `docs/work-todo.md §7 Tier 1`
+//!   produce the same derivations. See `docs/archive/work-todo-retired-2026-07-19.md §7 Tier 1`
 //!   for the RDP/DHUK semantics.)
 //! - **Domain-separated.** CMAC / HMAC as PRFs give independent-
 //!   looking outputs per label.
@@ -214,7 +214,7 @@ const BHK_TEST_CONSTANT: [u8; 32] = *b"PQSIGNER-TEST-BHK-DHUK-WRAP-v1!!";
 /// Tier-2 BHK derivation entry point. Same shape as `derive_into` but
 /// resolves through the BHK SAES KEYSEL instead of DHUK, providing
 /// independent key material for the SE050 axis (see
-/// `docs/work-todo.md` §"Tier 2 — BHK").
+/// `docs/archive/work-todo-retired-2026-07-19.md` §"Tier 2 — BHK").
 ///
 /// Three cfg branches mirror `derive_into`:
 ///
@@ -362,7 +362,7 @@ pub fn se050_scp03_mac_key() -> Result<Zeroizing<[u8; 16]>, OtpError> {
 /// encrypts key values during a *future* `PUT KEY`), but it must still
 /// be derived rather than left as a known/zero value. Same BHK-axis
 /// derivation as the other two SCP03 keys + the admin PIN — see
-/// `se050_scp03_enc_key` and `docs/work-todo.md` #20 for why the SCP03
+/// `se050_scp03_enc_key` and `docs/archive/work-todo-retired-2026-07-19.md` #20 for why the SCP03
 /// keys are on the BHK axis (recoverable keyset + RDP2-stable BHK ⇒ no
 /// brick mode) while the OPTIGA PBS stays on DHUK (immutable E140).
 /// [`Zeroizing`] so the DEK auto-wipes on every caller return path (finding

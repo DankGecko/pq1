@@ -20,7 +20,7 @@
 //! `nsc/mod.rs` (audit tz-tamper 20260611 MEDIUM-1). Without those
 //! features the handler is log-only — the `gtzc-enforcement-hw`
 //! validation path relies on that to trip violations and read the
-//! counter back. See `docs/production-todo.md` §"GTZC1 TZSC ...
+//! counter back. See `docs/archive/production-todo-retired-2026-07-19.md` §"GTZC1 TZSC ...
 //! validation".
 
 use crate::hw::mmio::{Reg32, RoReg32};

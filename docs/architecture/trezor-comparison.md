@@ -4,7 +4,7 @@ Date: 2026-04-24
 Scope: `/home/nicola/repos/trezor-firmware` (monorepo, all models) vs `/home/nicola/repos/PQSigner_OS`
 Primary architectural twin: **T3W1 ("Trezor Safe 7") — STM32U5A9 + Optiga Trust M** — same MCU family, same SE chip, same TrustZone-M substrate.
 
-> **2026-06-30 — fresh critical pass extending this doc:** see **[`trezor-comparison-critical-port-2026-06.md`](./trezor-comparison-critical-port-2026-06.md)** (Trezor HEAD `a0fe1eccc2`). It covers areas this doc deliberately skipped (trusted-display UI framework, runtime resilience: HardFault/IWDG, RDI) and **critically re-examines several verdicts here** — notably it corrects: §2.4 NSC ptr-validate (now **closed-via-Kani**, C-3); §8.3 Pattern 2 OTP read-back (**already done** `otp.rs:372-377`, C-4); §3.2 SAES key-privilege split (**applet artifact, do not chase** — `7fb272bade`, C-2); the §8.2/§8.5 "monolithic S-world is fine, `secmon` N/A" stance (**deferred-with-rationale, not N/A** — `secmon` re-analysed: it is a separate signed image that trusts NS for what-you-sign, so a full port is declined on principle, but an MPU-lite S-privilege split of the largest attacker-data parsers — ERC-7730 walker (now the top surface, ~5k LOC + Aave traffic) / typed-call ABI / EIP-712 decoders — is the real residual; C-1); and refreshes the §8.6 THP text (which still cites the removed OLED). New code ports are ranked in that doc's TL;DR and tracked in `work-todo.md` under "Trezor critical-port pass (2026-06-30)".
+> **2026-06-30 — fresh critical pass extending this doc:** see **[`trezor-comparison-critical-port-2026-06.md`](./trezor-comparison-critical-port-2026-06.md)** (Trezor HEAD `a0fe1eccc2`). It covers areas this doc deliberately skipped (trusted-display UI framework, runtime resilience: HardFault/IWDG, RDI) and **critically re-examines several verdicts here** — notably it corrects: §2.4 NSC ptr-validate (now **closed-via-Kani**, C-3); §8.3 Pattern 2 OTP read-back (**already done** `otp.rs:372-377`, C-4); §3.2 SAES key-privilege split (**applet artifact, do not chase** — `7fb272bade`, C-2); the §8.2/§8.5 "monolithic S-world is fine, `secmon` N/A" stance (**deferred-with-rationale, not N/A** — `secmon` re-analysed: it is a separate signed image that trusts NS for what-you-sign, so a full port is declined on principle, but an MPU-lite S-privilege split of the largest attacker-data parsers — ERC-7730 walker (now the top surface, ~5k LOC + Aave traffic) / typed-call ABI / EIP-712 decoders — is the real residual; C-1); and refreshes the §8.6 THP text (which still cites the removed OLED). New code ports are ranked in that doc's TL;DR and tracked on `EthereumPhone/PQ1` (label `source:work-todo`) under "Trezor critical-port pass (2026-06-30)".
 
 > **2026-07-11 rollback correction.** The §8.3 claim that legacy
 > `otp::bump_to` is “DONE” or stronger than Trezor is superseded. Its two
@@ -252,8 +252,9 @@ as a Trezor-shipped configuration (already in our §6.3).
 
 ## Delta summary — what to actually do
 
-1. **§22 cross-ref** (5 min): add a sentence to work-todo §22 noting
-   Trezor's ML-DSA-44 attestation pattern + library choice + the
+1. **§22 cross-ref** (5 min): add a sentence to the §22 tracking issue on
+   `EthereumPhone/PQ1` (label `source:work-todo`) noting Trezor's
+   ML-DSA-44 attestation pattern + library choice + the
    host-side-disabled walkback as the deployment lesson.
 2. **`docs/architecture/architecture.md` invariant** (10 min): name "no inner
    pointers in NSC gateway wire formats" as a design rule, citing
@@ -433,7 +434,7 @@ Related, and a genuine gap PQSigner does not have: Trezor's `secure_aes` exposes
 
 ### 3.3 Pre-commit PIN counter (MCU-authoritative)
 
-`storage/storage.c:1171-1311` increments the MCU-side PIN counter **before** calling the SE verify. A mid-attempt power-loss or glitch still charges the attempt. **PQSigner already has this** — `nsc/mod.rs:265 gated_unlock` + `hw/flash.rs:522 pin_attempts_bump`, cited in `work-todo.md #4 Phase 1` as landed and modelled on Trezor. *Validates existing plan.*
+`storage/storage.c:1171-1311` increments the MCU-side PIN counter **before** calling the SE verify. A mid-attempt power-loss or glitch still charges the attempt. **PQSigner already has this** — `nsc/mod.rs:265 gated_unlock` + `hw/flash.rs:522 pin_attempts_bump`, cited in `docs/archive/work-todo-retired-2026-07-19.md` #4 Phase 1 as landed and modelled on Trezor. *Validates existing plan.*
 
 ### 3.4 Wipe-code side-channel defense
 
@@ -519,7 +520,7 @@ Net: nothing to fix here, but two things to keep in mind — (a) "regenerate BHK
 Per `CLAUDE.md` Development Posture: PQSigner is pre-production bring-up. Items below are prioritised for the eventual **hardening pass / production branch**, not the current bring-up branch where known regressions (e.g. TZSC=0) are acceptable while end-to-end wiring is being proven out. The ordering is "when hardening begins, do these first," not "interrupt bring-up now."
 
 **Before shipping production (restore the invariants):**
-1. Rewrite `secure/src/sau.rs` to implement Trezor's per-peripheral S-allowlist (§1.1). Closes the CRIT-4 `docs/work-todo.md` regression flagged in `CLAUDE.md`.
+1. Rewrite `secure/src/sau.rs` to implement Trezor's per-peripheral S-allowlist (§1.1). Closes the CRIT-4 `docs/archive/work-todo-retired-2026-07-19.md` regression flagged in `CLAUDE.md`.
 2. Port `wait_random()` + glitch sentinel into a `secure/src/fi.rs` helper and call it at PIN compare, C10 verify-before-release, and master-key zeroize (§2.6).
 
 **Hardening pass (high value, pick up during the dedicated branch):**
@@ -752,6 +753,6 @@ One narrow exception: if a future PQSigner ever ships **BLE** (Trezor's N4W1 pat
 | 8.5 | secret_keys diversifier compatibility | document the PQSigner-only keys | 15 min | P3 |
 | 8.6 | THP / encrypted transport | do not adopt (threats bound elsewhere) | — | N/A |
 
-The single highest-yield item is **8.4 — TAMP IRQ migration**. The agent produced a concrete porting plan with specific registers, bitmasks, and the ITAMP9 crypto-fault tamper that directly hardens against the FI attacks we run sweeps for. Worth promoting to work-todo §26's actionable status.
+The single highest-yield item is **8.4 — TAMP IRQ migration**. The agent produced a concrete porting plan with specific registers, bitmasks, and the ITAMP9 crypto-fault tamper that directly hardens against the FI attacks we run sweeps for. Worth promoting to actionable status on the `EthereumPhone/PQ1` tracker (label `source:work-todo`, §26).
 
 Second-tier: **8.3 register zero-out at FSBL→firmware jump**. Small, mechanical, eliminates a class of state-leak from FSBL → firmware that we currently don't bound.

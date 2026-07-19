@@ -41,7 +41,7 @@ pub use pqsigner_fi::{FAIL_SENTINEL, OK_SENTINEL};
 /// platform TRNG just makes the delay slightly less random in length,
 /// which weakens timing-channel defense at the margins but does not
 /// leak any secret. Cost/benefit clearly favours platform-only here.
-/// See §10 Phase 2 in `docs/work-todo.md`.
+/// See §10 Phase 2 in `docs/archive/work-todo-retired-2026-07-19.md`.
 #[inline(always)]
 fn rng_byte() -> u8 {
     #[cfg(not(test))]

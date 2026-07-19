@@ -168,7 +168,7 @@ pub(crate) fn kdf(static_key: &[u8; 16], dd: &[u8; 32]) -> [u8; 16] {
 /// used `0x00`. SE050 follows the SCP03 convention per AN12436 §5.2,
 /// but the chip recomputes the KCV and rejects on mismatch, so a
 /// sacrificial-part rehearsal is the real validation (see
-/// `docs/production-todo.md`).
+/// `docs/archive/production-todo-retired-2026-07-19.md`).
 pub fn scp03_kcv(key: &[u8; 16]) -> [u8; 3] {
     let ct = aes128_ecb_encrypt(key, &[0x01u8; 16]);
     [ct[0], ct[1], ct[2]]
@@ -223,7 +223,7 @@ pub const PUT_KEY_INS: u8 = 0xD8;
 /// **CONFIRM BEFORE THE CEREMONY RUNS** — these are best-effort from the
 /// GP spec / AN12436; the chip recomputes the KCV and every field and
 /// rejects on any mismatch, so the real validation is a sacrificial-part
-/// rehearsal (see `docs/production-todo.md` §"SE050 — SCP03 + ADMIN
+/// rehearsal (see `docs/archive/production-todo-retired-2026-07-19.md` §"SE050 — SCP03 + ADMIN
 /// provisioning"): the `P2` first-key-id / multiple-keys encoding; whether
 /// the encrypted-key-data length byte is `0x10` (key only — what we emit)
 /// or includes a 1-byte inner length prefix; the KCV filler block; the

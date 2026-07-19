@@ -242,9 +242,9 @@ tamp = ["stm32u585"]
 # latency from ~1 ms (SysTick poll) to ~hundreds of cycles. **Does not
 # change the trigger response** — the IRQ handler still logs + clears,
 # never halts and never wipes. Production hardening will flip the
-# trigger response separately (see `docs/production-todo.md` "TAMP
+# trigger response separately (see `docs/archive/production-todo-retired-2026-07-19.md` "TAMP
 # escalation"). Off by default while polled-mode soaks; see
-# `docs/work-todo.md` #26 for the flip-when criteria.
+# `docs/archive/work-todo-retired-2026-07-19.md` #26 for the flip-when criteria.
 tamp-irq = ["tamp"]
 # Production escalation for a TAMP tamper event (audit tz-tamper 20260611
 # MEDIUM-1). When OFF (bench/dev), `tamp::poll` / `tamp::on_tamp_irq` stay
@@ -562,7 +562,7 @@ boot-pulse = ["stm32u585"]
 sca-trigger = ["stm32u585"]
 optiga-reset-oids = ["optiga-trust-m"]  # RETIRED evidence-only feature. Unconditionally compile-fenced: it mis-targets the observed type-0x12 E0E3 device-certificate object as a type-0x11 anchor. No runnable profile may enable it.
 optiga-no-shield = []  # Dev mode: skip Shielded Connection (PRL) entirely — no setup_pbs_no_handshake, no ensure_shield, no encrypted I2C. PIN HMAC + entropy read/write still work via plaintext APDUs. Use when E140 is unreachable (current bricked test chip). NOT production-safe. See docs/secure-elements/optiga-brick-postmortem.md §7.
-optiga-lock-operational = []  # Controlled irreversible-validation primitive for non-E140 OPTIGA object locks (F1D0..F1D4 + F1E1) and separately gated S-2 experiments. Irreversible per OPTIGA SRM §"Life Cycle Status" — LcsO is monotonic, no reverse path exists. Ordinary `pair_for_first_boot` / `setup_pbs_no_handshake` NEVER ratchets E140, even when this feature is present. Work-todo #36 fixes the E140 actor as factory-side but leaves exact timing/order relative to the first-field final PBS rotation OPEN; the E140 ratchet primitive remains intentionally unwired. This feature grants no production authority and is unconditionally incompatible with prodtest. Enable only under an exact owner-authorized sacrificial plan until a reviewed lifecycle flow exists. See docs/production-todo.md and docs/secure-elements/optiga-brick-postmortem.md §5 + §7.
+optiga-lock-operational = []  # Controlled irreversible-validation primitive for non-E140 OPTIGA object locks (F1D0..F1D4 + F1E1) and separately gated S-2 experiments. Irreversible per OPTIGA SRM §"Life Cycle Status" — LcsO is monotonic, no reverse path exists. Ordinary `pair_for_first_boot` / `setup_pbs_no_handshake` NEVER ratchets E140, even when this feature is present. Work-todo #36 fixes the E140 actor as factory-side but leaves exact timing/order relative to the first-field final PBS rotation OPEN; the E140 ratchet primitive remains intentionally unwired. This feature grants no production authority and is unconditionally incompatible with prodtest. Enable only under an exact owner-authorized sacrificial plan until a reviewed lifecycle flow exists. See docs/archive/production-todo-retired-2026-07-19.md and docs/secure-elements/optiga-brick-postmortem.md §5 + §7.
 # Dev/bring-up ONLY: swap the STM32U585 OTP-stored device master key for a
 # compile-time fixed 32-byte constant. Lets us exercise the whole hw/otp.rs
 # + hw/secret_keys.rs + OPTIGA pairing-secret derivation pipeline on bench
@@ -649,7 +649,7 @@ dual-se = ["optiga-trust-m", "se050"]  # Both SEs active: XOR-split entropy acro
 # requires a fresh-TRNG per-device final rotation plus crash-safe durable public
 # state and recovery; that protocol is still OPEN. The existing irreversible
 # deterministic PUT KEY mechanism is `se050-rotate-scp03` and is bench/factory
-# evidence only. See work-todo #20 and docs/production-todo.md.
+# evidence only. See work-todo #20 and docs/archive/production-todo-retired-2026-07-19.md.
 se050-derived-scp03 = ["se050"]
 # Permit `establish()` to fall back to the PUBLISHED AN12436 factory SCP03 keys when the
 # derived-key handshake fails. This is needed ONLY by the provisioning/rotation tool
@@ -671,7 +671,7 @@ se050-scp03-allow-factory-fallback = ["se050-derived-scp03"]
 # to a board that still moves RDP around (the RDP1↔RDP0 dance mass-erases
 # the BHK page → dead SE050). The PUT KEY APDU framing is best-effort from GP 2.3 / AN12436
 # and MUST be validated on sacrificial parts before any real provisioning run. Listed in the
-# `compile_error!` fence in nsc/mod.rs. See work-todo #20 Stage B + docs/production-todo.md.
+# `compile_error!` fence in nsc/mod.rs. See work-todo #20 Stage B + docs/archive/production-todo-retired-2026-07-19.md.
 # Rotation inherently runs against a still-factory chip, so it MUST be able to
 # open a factory-key session → pulls in the fallback. (This is enabling it, not
 # the forbidden rotate⊕fallback compile_error: the rotation tool legitimately
@@ -712,7 +712,7 @@ optiga-nuclear-reset = ["optiga-trust-m", "optiga-no-shield"]
 # with an auto-provision fast-path). Used on bench boards where the
 # specific STM32U585 can't program user OTP (see the "STM32 OTP
 # master-key burn" pre-production-validation note in
-# `docs/production-todo.md`) but the developer still wants to
+# `docs/archive/production-todo-retired-2026-07-19.md`) but the developer still wants to
 # exercise the real first-boot wizard + PIN entry + standalone
 # unlock flow. Only meaningful alongside `otp-hardcoded-master-key`.
 # Like `otp-hardcoded-master-key`, makes the PBS a compile-time

@@ -504,7 +504,7 @@ impl Se050 {
     /// the matching keys (`establish()`'s probe-on-boot handles that).
     ///
     /// Pre-conditions the sacrificial evidence caller MUST have satisfied
-    /// (see `work-todo #20` Stage B + `docs/production-todo.md`): the unit is at its final
+    /// (see `work-todo #20` Stage B + `docs/archive/production-todo-retired-2026-07-19.md`): the unit is at its final
     /// per-die-DHUK RDP level (RDP ≥ 1) so the BHK is stable; the BHK has
     /// been provisioned; this is a factory-fresh chip still holding the
     /// `PLATFORM_*` keys (we `init()` here, which establishes SCP03 —

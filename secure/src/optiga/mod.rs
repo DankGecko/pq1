@@ -713,7 +713,7 @@ impl OptigaTrustM {
     /// [`Self::ensure_pbs_lcso_operational`] primitive, but this routine only
     /// writes the transport PBS and its rotatable metadata. See
     /// `docs/secure-elements/optiga-brick-postmortem.md` §3, §5, §7 and
-    /// `docs/production-todo.md`.
+    /// `docs/archive/production-todo-retired-2026-07-19.md`.
     fn setup_pbs_no_handshake(&mut self) -> Result<(), OptigaError> {
         // Derive the PBS from the device hardware root on real
         // hardware (DHUK-SAES / OTP-const / OTP-master per build — see
@@ -912,7 +912,7 @@ impl OptigaTrustM {
     /// reverse path). Once an OID is at Operational its metadata is
     /// frozen and can only be re-provisioned via a SetObjectProtected
     /// recovery flow authorised by a Trust Anchor — not something dev
-    /// iteration can undo. See `docs/production-todo.md`.
+    /// iteration can undo. See `docs/archive/production-todo-retired-2026-07-19.md`.
     ///
     /// Gated behind the `optiga-lock-operational` Cargo feature so that
     /// the default dev / Phase-A build leaves **all OIDs at
@@ -920,8 +920,8 @@ impl OptigaTrustM {
     /// explicitly authorized sacrificial-validation builds flip the feature
     /// on. A future production ceremony may call this primitive only after its
     /// actor/order and final-rotation recovery contract are reviewed and
-    /// silicon-validated. See `docs/work-todo.md` #24 P2 for the reversible
-    /// test matrix and `docs/production-todo.md` for the still-open one-way
+    /// silicon-validated. See `docs/archive/work-todo-retired-2026-07-19.md` #24 P2 for the reversible
+    /// test matrix and `docs/archive/production-todo-retired-2026-07-19.md` for the still-open one-way
     /// flow.
     unsafe fn lock_oid(&mut self, _oid: u16) -> Result<(), OptigaError> {
         #[cfg(not(feature = "optiga-lock-operational"))]

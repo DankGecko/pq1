@@ -125,7 +125,8 @@ TARGET (read first, in this order):
     inputs, generated catalogue, and root identity. Descriptor meaning stays with
     the clear-signing playbook.
   - docs/firmware/reproducible-builds.md, docs/STATUS.md,
-    docs/security/{threat-model,production-security}.md, docs/production-todo.md,
+    docs/security/{threat-model,production-security}.md,
+    docs/archive/production-todo-retired-2026-07-19.md,
     and the protected external-release-ledger sections of
     docs/security/a-b-firmware-rollback-architecture.md.
   - production-configuration playbook output for the exact candidate profile.

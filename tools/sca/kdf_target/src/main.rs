@@ -204,7 +204,7 @@ pub extern "C" fn sca_hmac_sha512_kdf(seed_ptr: *const u8, out_ptr: *mut u8) {
 /// Hamming weight of each entropy byte appears in a register during the
 /// `^`), which is (a) invisible to rainbow's address-only model and (b)
 /// single-trace for this boot-once reconstruction — see `tools/sca/README.md`
-/// §"dual-SE XOR" and `docs/work-todo.md` §18 (RDI is not the countermeasure
+/// §"dual-SE XOR" and `docs/archive/work-todo-retired-2026-07-19.md` §18 (RDI is not the countermeasure
 /// for a single-trace value-channel leak).
 #[no_mangle]
 pub extern "C" fn sca_dual_se_xor(in_ptr: *const u8, out_ptr: *mut u8) {

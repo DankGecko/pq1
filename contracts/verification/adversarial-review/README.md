@@ -158,7 +158,8 @@ never reads as "there is nothing."
   *and* Codex) so a single model's blind spot doesn't become yours; then submit
   the union to the required exact dual-review pair for disposition.
 - **The honest residuals are the to-verify list.** Triage them; promote real
-  ones to `docs/work-todo.md`. Do not file the report and feel safe.
+  ones to GitHub issues on `EthereumPhone/PQ1` (label `source:work-todo`, plus
+  `priority:*` / `surface:*` as relevant). Do not file the report and feel safe.
 
 ## What this does NOT do
 

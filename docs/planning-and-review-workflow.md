@@ -41,8 +41,9 @@ rule changes no technical requirement inside the preserved candidate.
    what becomes an accepted requirement or implementation, not what a model is
    allowed to consider.
 3. **Choose the smallest design that satisfies the evidence-backed
-   requirements.** Optional hardening remains visible in
-   [`work-todo.md`](work-todo.md); it does not silently accrete into the active
+   requirements.** Optional hardening remains visible as GitHub issues
+   (`EthereumPhone/PQ1`; `work-todo.md` was retired 2026-07-19 — see its stub);
+   it does not silently accrete into the active
    plan.
 4. **Prefer reversible evidence before irreversible action.** Source analysis,
    host models, fault-injection models, resource spikes, QEMU, and
@@ -269,9 +270,12 @@ surface; intersection alone is not a reason to interrupt other product work.
 - Land all load-bearing tracked and untracked inputs atomically.
 - Re-run the identity and drift checks immediately before staging and after
   landing.
-- Put reversible residual work in [`work-todo.md`](work-todo.md); put
-  irreversible factory/silicon work in
-  [`production-todo.md`](production-todo.md).
+- Put reversible residual work on the GitHub issue tracker
+  (`EthereumPhone/PQ1`, labels `source:work-todo` / `priority:*` /
+  `surface:*`); put irreversible factory/silicon work in issues labelled
+  `source:production-todo` (+ `ship-blocker` when it gates shipping). Both
+  TODO files were retired 2026-07-19; originals are archived under
+  `docs/archive/`.
 - Record the evidence receipt and the exact remaining blockers.
 
 ## 5. Requirements and scope may expand

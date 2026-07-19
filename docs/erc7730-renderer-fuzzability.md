@@ -156,5 +156,5 @@ production `unwrap_or("?")` semantics), and `nested.rs` keeps a direct `sha3`
 dep (already in the workspace via `tx-core`) because `hash_struct_array`'s
 streaming keccak fold has no buffer to hand the one-shot
 `tx_core::hash::keccak256`. Next milestones: M3 Tier-P0 formatter ∀, M4
-amount-decision factoring (see `docs/work-todo.md`, the "ERC-7730 formatter-∀
-faithfulness" item).
+amount-decision factoring (see the "ERC-7730 formatter-∀
+faithfulness" issue on `EthereumPhone/PQ1`, label `source:work-todo`).

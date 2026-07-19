@@ -83,7 +83,7 @@ same day (compute-only commands). Phase C landed 2026-05-19
 (communication tests for OPTIGA + SE050 + USB integrity). Phase D
 landed 2026-05-19 (interactive button test). Phase E landed
 2026-05-19 (NS-launch fix + USB INS dispatch + full Python HID
-framing). Phase F (operator manual photos) is tracked in work-todo §30.
+framing). Phase F (operator manual photos) is tracked on `EthereumPhone/PQ1` (label `source:work-todo`, formerly work-todo §30).
 
 Each `CMD_PRODTEST_*` is wired to a unique `INS_V2_PRODTEST_*` code
 (0x80..0x89) in the v2 APDU dispatcher; see `proto/src/lib.rs` for

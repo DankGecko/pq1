@@ -392,7 +392,7 @@ pub fn reason_from_sr(sr: u32) -> &'static str {
 /// reads `TAMP_SR`, logs the trigger reason via `secure_log!`,
 /// write-1-to-clears the flags, and returns. Never halts and never
 /// wipes — production hardening will flip the trigger response in a
-/// later commit (see `docs/production-todo.md` "TAMP escalation").
+/// later commit (see `docs/archive/production-todo-retired-2026-07-19.md` "TAMP escalation").
 ///
 /// Called from `DefaultHandler` in `main.rs` when `irqn == 2`
 /// (TAMP_IRQn on STM32U5).

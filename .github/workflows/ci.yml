@@ -2,7 +2,7 @@ name: CI
 
 # Born-green CI for PQSigner. Each job runs a command verified to pass on the
 # current tree (2026-06-16). The two pre-existing reds tracked in earlier
-# revisions of this file are now FIXED and GATED here (docs/work-todo.md §34):
+# revisions of this file are now FIXED and GATED here (docs/archive/work-todo-retired-2026-07-19.md §34):
 #   * usb_hw raw-MMIO source-pin (commit 4d1d6476 — raw read/write_volatile
 #     migrated to hw::mmio::Reg32). Gated by the `secure-tests` job (the full
 #     sphincs-tz-secure host suite: 2076 passed / 0 failed on this tree).

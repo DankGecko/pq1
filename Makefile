@@ -1233,8 +1233,8 @@ se050-stress-list:
 #    provisioning run (the chip recomputes the KCV/fields and rejects on
 #    mismatch, so a rehearsal that returns SW=0x9000 is the real proof).
 # Pre-conditions: RDP already at >=1 (so the BHK is its final per-die-DHUK
-# value), BHK provisioned, chip factory-fresh. See docs/production-todo.md
-# §"SE050 - SCP03 + ADMIN provisioning" + docs/work-todo.md #20.
+# value), BHK provisioned, chip factory-fresh. See docs/archive/production-todo-retired-2026-07-19.md
+# §"SE050 - SCP03 + ADMIN provisioning" + docs/archive/work-todo-retired-2026-07-19.md #20.
 # Watch the OLED / semihosting for "[SCP03-ROTATE] PUT KEY OK" / "FAIL".
 # SE050 SCP03-rotation ceremony feature set (single source of truth — consumed
 # by the flash target below AND the `se050-scp03-axis-parity` gate, finding F7,
@@ -2240,7 +2240,7 @@ override PROD_REQUIRED := mode-production optiga-lock-operational optiga-hw-coun
 # `optiga-lock-operational` exposes the irreversible OPTIGA LcsO ratchet; the
 # exact actor/order relative to the final pairing rotation is OPEN, so this
 # feature list grants no authority to flash or ratchet hardware. See
-# secure/Cargo.toml and docs/production-todo.md.
+# secure/Cargo.toml and docs/archive/production-todo-retired-2026-07-19.md.
 override PROD_SHIP_FEATURES := stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes-dhuk,se050-derived-scp03,mode-production,optiga-lock-operational,optiga-hw-counter,consumption-mask,tamp,tamp-wipe,tzic-wipe,bhk,rdp2-self-lock
 
 # Exact machine-readable provenance string emitted by dbgen only after a real
@@ -3237,7 +3237,7 @@ optiga-reset-oids:
 flash-hw-optiga-reset:
 	@echo "REFUSED: the retired E0E3 sample-anchor recovery path is mis-targeted"
 	@echo "for the observed OPTIGA SKU/revision and has no reviewed replacement."
-	@echo "It must not build, flash, or touch option bytes. See docs/production-todo.md S-2."
+	@echo "It must not build, flash, or touch option bytes. See docs/archive/production-todo-retired-2026-07-19.md S-2."
 	@false
 
 # Coverage-guided libFuzzer harnesses (`fuzz/`, kept as a standalone

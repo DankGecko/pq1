@@ -939,7 +939,7 @@ fn main() -> ! {
                 secure_log!(
                     "[S][lockdown] WARNING: RDP != Level 2 (got {:?}) — a shipping \
                      image must run only on an RDP2-locked device; SWD/JTAG is open \
-                     below RDP2. See docs/production-todo.md.",
+                     below RDP2. See docs/archive/production-todo-retired-2026-07-19.md.",
                     rdp
                 );
                 #[cfg(feature = "rdp-enforce-halt")]
@@ -961,7 +961,7 @@ fn main() -> ! {
                 secure_log!(
                     "[S][lockdown] WARNING: SECBOOTADD0R=0x{:08x} does NOT select the \
                      FSBL base (expected boot addr 0x0C00_0000) — secure boot may be \
-                     redirected. See docs/production-todo.md.",
+                     redirected. See docs/archive/production-todo-retired-2026-07-19.md.",
                     secboot
                 );
             }

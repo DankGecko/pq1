@@ -139,7 +139,7 @@ sphincs_rust/
 ├── fwsign/ fwmeasure/ fw-manifest/   host signer/verifier, measurement tool, manifest chain
 ├── dbgen/         host ERC20/names/selectors/ERC-7730 DB + Merkle-tree builder
 ├── tools/         webhid_test.html, wallet_run_hw.py, …
-└── docs/          architecture.md, HARDENING.md, work-todo.md, threat-model.md, …
+└── docs/          architecture.md, HARDENING.md, threat-model.md, …
 ```
 
 See `CLAUDE.md` for the full per-file map and the non-negotiable invariants.
@@ -423,7 +423,7 @@ Mode aliases: `mode-production` (no dev features) · `mode-bringup` (`debug-log`
 
 ## Bring-up Roadmap
 
-Each phase has a hard exit criterion before the next starts. Full backlog: `docs/work-todo.md`.
+Each phase has a hard exit criterion before the next starts. Full backlog: the `EthereumPhone/PQ1` issue tracker (labels `source:work-todo` / `source:production-todo`).
 
 - **Phase 0 — bring-up complete (today).** All-C10 firmware boots on the B-U585I-IOT02A; dual-SE split, three-way PIN-attempt enforcement, Tier-1 DHUK KDF, OPTIGA Shielded-Connection unlock, SE050 admin-wipe, and the FSBL firmware-update path all run end-to-end. The directional boot cross-check and known production-invariant regressions are stated in `CLAUDE.md`.
 - **Phase 1 — close the bring-up regressions (in progress).** Restore the GTZC `TZSC_SECCFGR` allowlist (incl. GTZC2 USB-OTG); strip `debug-log`/`e2e-test`/`mock-se` from production builds + restore the `compile_error!` fences; remove dev log/register dumps; wire TAMP IRQ → `trigger_lockout_wipe()`; move BOR/inactivity to the Secure-only TIM; land Tier 2 (BHK); step a board to RDP1 and re-validate per-die DHUK uniqueness.
@@ -548,7 +548,7 @@ separately authorizes named sacrificial hardware.
 
 ## Documentation
 
-Start with this README → `docs/STATUS.md` (the security/verification frontier — what is done, what is open, and why, with an evidence pointer per row) → `CLAUDE.md` (invariants, file map, conventions) → `docs/work-todo.md` (backlog) → the subsystem doc for your task.
+Start with this README → `docs/STATUS.md` (the security/verification frontier — what is done, what is open, and why, with an evidence pointer per row) → `CLAUDE.md` (invariants, file map, conventions) → the `EthereumPhone/PQ1` issue tracker (backlog — labels `source:work-todo` / `source:production-todo`) → the subsystem doc for your task.
 
 - **Architecture / hardening:** `CLAUDE.md`, `docs/security/HARDENING.md`, `docs/security/threat-model.md`, `docs/security/production-security.md`, `docs/security/brownout-hardening.md`. `docs/architecture/architecture.md` is the current index.
 - **Secure elements:** `docs/secure-elements/se050-userid-pin-auth.md`, `docs/secure-elements/se050-factory-reset.md`, `docs/secure-elements/optiga-bringup-status.md`, `docs/secure-elements/OPTIGATRUSTM/*.md`

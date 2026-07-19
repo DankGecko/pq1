@@ -36,8 +36,9 @@ their frozen bytes merely to resemble the current template.
    items invalid with evidence.
 5. An authorized maintainer files the byte-identical evidence/canonical report
    in a separate reporting commit and adds a row to the catalogue. End with the
-   mandatory honest residual and cross-link actionable work to
-   `docs/work-todo.md`.
+   mandatory honest residual and cross-link actionable work to the GitHub
+   issue tracker (`EthereumPhone/PQ1`; the retired `docs/work-todo.md`'s
+   successor — labels `source:work-todo`, `priority:*`, `surface:*`).
 
 The report is self-describing (frontmatter + per-finding status). From this
 directory,
@@ -68,7 +69,7 @@ lists their individual findings that are not closed out.
 | `resolved` | **every** finding is `✅ FIXED` / `☑️ ACCEPTED` / `🚫 INVALID` / `⏸ DEFERRED` (with a tracking link) |
 | `fixes-landed-production-blocked` | every code finding is handled, but a named deferred ship blocker still forbids production authority |
 
-**When you work through a report:** for each finding you handle, change its `Status:` line, append a one-line **Resolution** (what you did / a commit SHA + date, or why invalid/deferred), and — when nothing is left `🔲 OPEN` / `🔬 REVIEWED` — flip the report frontmatter `status:` to `resolved` (or `fixes-landed-production-blocked` when a named deferred finding still forbids shipping). Only an explicit owner decision may set `☑️ ACCEPTED`; record the owner, date, exact finding, target and frozen-report digests, accepted consequence, and scope. Ordinary maintainer authority does not include risk acceptance. Reviewer consensus is recommendation evidence, never acceptance authority. Cross-link the real work to `docs/work-todo.md` (which stays the master task list); this folder is the *review record*, work-todo is the *action list*.
+**When you work through a report:** for each finding you handle, change its `Status:` line, append a one-line **Resolution** (what you did / a commit SHA + date, or why invalid/deferred), and — when nothing is left `🔲 OPEN` / `🔬 REVIEWED` — flip the report frontmatter `status:` to `resolved` (or `fixes-landed-production-blocked` when a named deferred finding still forbids shipping). Only an explicit owner decision may set `☑️ ACCEPTED`; record the owner, date, exact finding, target and frozen-report digests, accepted consequence, and scope. Ordinary maintainer authority does not include risk acceptance. Reviewer consensus is recommendation evidence, never acceptance authority. Cross-link the real work to the `EthereumPhone/PQ1` GitHub issue tracker (labels `source:work-todo` / `source:production-todo`, plus `priority:*`, `surface:*`, `ship-blocker` — the retired owner-TODO files' successor); this folder is the *review record*, the issue tracker is the *action list*.
 
 The raw first-pass reports, lossless union (if used), cross-reviews, and
 cross-adjudication matrix are distinct artifacts. A union is an evidence

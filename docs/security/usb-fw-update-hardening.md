@@ -297,7 +297,7 @@ hardware required); CI can run it on a budget. Crashes land in
    capacity) — single highest-value change. ~5 lines in BEGIN.
 2. **Finding #2** (CT compare in `verify_vendor_fpr`) — 3 lines.
 3. **Findings #5/#6** — verify open questions; either close (with a
-   doc/work-todo note) or patch.
+   doc/`EthereumPhone/PQ1` note) or patch.
 4. **Finding #4** (per-CMD chain bound) — straightforward switch on `ins`.
 5. **Finding #3** (`write_chunk` belt-and-braces) — small refactor; do
    after the fuzz harness has a clean baseline, so we can confirm the

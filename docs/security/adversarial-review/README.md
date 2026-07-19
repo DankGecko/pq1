@@ -63,8 +63,9 @@ authorized maintainer may record its durable results in
 [`findings/TEMPLATE.md`](./findings/TEMPLATE.md). The cross-adjudication template
 is retained only for historical/specially authorized campaigns. `☑️ ACCEPTED`
 remains owner-only; a reviewer may recommend acceptance but cannot set it.
-The catalogue remains the review record and `docs/work-todo.md` the action
-list.
+The catalogue remains the review record and the `EthereumPhone/PQ1` GitHub
+issue tracker the action list (labels `source:work-todo` /
+`source:production-todo`, plus `priority:*`, `surface:*`, and `ship-blocker`).
 
 ## Running a pass
 

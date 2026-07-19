@@ -2,7 +2,7 @@
 
 The single page that disambiguates the ~50 Cargo features in `secure/Cargo.toml`. If you're trying to figure out **what root a given build uses for the OPTIGA PBS / SE050 admin PIN / SE050 SCP03**, or **which features are safe in a shipping image**, this is the doc.
 
-> See also: `secure/Cargo.toml` (feature definitions), `secure/src/nsc/mod.rs` (`compile_error!` production-build fence), `docs/security/HARDENING.md` §3-5 (invariants), `docs/production-todo.md` (irreversible factory gates), `docs/work-todo.md` (in-progress feature work), `docs/architecture/trezor-comparison.md` (the comparison this all came from).
+> See also: `secure/Cargo.toml` (feature definitions), `secure/src/nsc/mod.rs` (`compile_error!` production-build fence), `docs/security/HARDENING.md` §3-5 (invariants), `EthereumPhone/PQ1` issues labeled `source:production-todo` (irreversible factory gates) and `source:work-todo` (in-progress feature work), `docs/architecture/trezor-comparison.md` (the comparison this all came from).
 
 ---
 
@@ -153,9 +153,9 @@ For the exact list of each feature's implications (the `feature = [...]` tuples)
 
 ## 7. Cross-references
 
-- `docs/work-todo.md #7 Tier 1/2` — the DHUK/BHK silicon-root migration (Phase 2C call-site flip + activation).
-- `docs/work-todo.md #20 / "11. SCP03 Key Rotation"` — Stage A (derived keys + probe-on-boot, landed) + Stage B (PUT KEY code landed, ceremony deferred).
-- `docs/production-todo.md` — "Irreversible gates" + the factory-sequence checklist + the BHK-page first-write item.
+- `docs/archive/work-todo-retired-2026-07-19.md` #7 Tier 1/2 — the DHUK/BHK silicon-root migration (Phase 2C call-site flip + activation).
+- `docs/archive/work-todo-retired-2026-07-19.md` #20 / "11. SCP03 Key Rotation" — Stage A (derived keys + probe-on-boot, landed) + Stage B (PUT KEY code landed, ceremony deferred).
+- `docs/archive/production-todo-retired-2026-07-19.md` — "Irreversible gates" + the factory-sequence checklist + the BHK-page first-write item.
 - `docs/security/HARDENING.md §3.5` — the SE050 SCP03 rotation requirement (BHK root, RDP≥1 ordering, brick class).
 - `docs/architecture/trezor-comparison.md §6.5` — why the OPTIGA stays on DHUK and only the SE050 goes on BHK; the inverse trade-off Trezor takes with its BHK (storage-KEK stretching, regenerate-on-wipe).
 - `docs/secure-elements/optiga-brick-postmortem.md` — the brick class the on-demand HUK-derivation closes (the old flash-seal-tied PBS).

@@ -227,7 +227,7 @@ stable C symbols, then a `rainbow`/`lascar` harness.
   `mem_address` for all four modes (R-ENC decrypt + R-MAC CMAC, vary key / `half_E` / msg),
   with the leaky-S-box positive control confirming the pipeline detects leaks. Surfaced by
   the 2026-06-02 C10-sweep pre-flight (workflow wf_d0a3640f); full rationale
-  `docs/work-todo.md §18b`. *Scope*: emulation tests the unwrap *logic* + MAC-verify gate,
+  `docs/archive/work-todo-retired-2026-07-19.md §18b`. *Scope*: emulation tests the unwrap *logic* + MAC-verify gate,
   not SE050 silicon / I2C bus physics.
 
 - ~~**C10 verify-before-release — full version**~~ — **DONE** (`fault_sweep_c10v.py`
@@ -251,7 +251,7 @@ stable C symbols, then a `rainbow`/`lascar` harness.
   *Not yet done*: a `lascar` CPA against the actual **Tier-1 KDF** primitive
   (`hw::saes_cmac::cmac_dhuk`) — that's the *hardware* SAES (not emulated) on
   device; a software-CMAC-AES reference could be emulated, but at RDP0 the DHUK is
-  the ST-substituted constant anyway (`docs/work-todo.md §7`), so it'd be a
+  the ST-substituted constant anyway (`docs/archive/work-todo-retired-2026-07-19.md §7`), so it'd be a
   code-leakage test, not a key recovery. Also not done: SPA/template/single-trace
   analysis of the wrap key/keystream during the one-shot boot-time wrap (needs a
   profiling setup, not fixed-vs-random TVLA), and register-HW-channel DPA of the
@@ -872,7 +872,7 @@ weight of each entropy byte transiently in a register during the `^`), which is
 (a) invisible to rainbow's address-only model and (b) **single-trace** for this
 boot-once reconstruction. A random-delay timer (RDI) misaligns *many* traces; it
 does nothing against a single-trace SPA/template read, so RDI is not the
-countermeasure for this residual. See `docs/work-todo.md` §18 ("Emulation
+countermeasure for this residual. See `docs/archive/work-todo-retired-2026-07-19.md` §18 ("Emulation
 re-scope") for the full reasoning; on-silicon value-channel confirmation is
 tracked under §18b (`sca-trigger`).
 
@@ -884,7 +884,7 @@ that made SE050 responses come back **R-ENC encrypted + R-MAC authenticated**
 instead of plaintext-on-I2C. That path now decrypts `half_E` (one XOR half of
 the BIP-39 seed, invariant #1) inside the host, so it's new **secret-touching**
 code that no harness covered. Surfaced by the 2026-06-02 C10-sweep pre-flight
-(workflow wf_d0a3640f); full rationale in `docs/work-todo.md §18b`.
+(workflow wf_d0a3640f); full rationale in `docs/archive/work-todo-retired-2026-07-19.md §18b`.
 
 `scp03_target/` `#[path]`-includes the **real** firmware crypto primitives from
 `secure/src/scp03_logic.rs` (`aes128_cbc_decrypt`, `cmac_aes128`,
@@ -943,7 +943,7 @@ inside `unwrap_response` + `half_E` actually released (the finding); **register*
 **scaffold** = inside `build_forged_wrapped`, i.e. the harness faulting its *own*
 response builder (not a real attack — the attacker supplies the response on the
 bus). It exits non-zero only on a genuine `[skip]` gate bypass. Recommended fix
-(tracked in `docs/work-todo.md`): route the R-MAC verdict through
+(tracked in `docs/archive/work-todo-retired-2026-07-19.md`): route the R-MAC verdict through
 `fi::check_true_into_sentinel` + double-evaluate, exactly like `crypto.rs`'s C10
 gate. **Threat:** a bench attacker driving the I2C bus + a single precise glitch
 gets the host to accept a chosen `half_E` (one XOR half of the seed); `half_E`
@@ -1853,7 +1853,7 @@ because there's no SysTick to wait against on QEMU.
 
     **Mitigation owed:** flash-persistent daily quota (500/day)
     backed by the page-124 + RTC infrastructure. Tracked in
-    `docs/work-todo.md §18` as the still-open part of the
+    `docs/archive/work-todo-retired-2026-07-19.md §18` as the still-open part of the
     rate-limiter P0 — the 500/day half. ~80 LoC follow-up.
 
   - **Pre-PIN trace collection.** An attacker who has the device
@@ -1955,7 +1955,7 @@ SHA-256 block per ~32 bytes consumed. Microseconds. Stack: 43 + 13
      (now ~131k per slot post-F-13), the attack is well above the
      practical threshold for a non-state-actor adversary.
 
-Tracked in `docs/work-todo.md §18 P0` as the now-checked WOTS/FORS
+Tracked in `docs/archive/work-todo-retired-2026-07-19.md §18 P0` as the now-checked WOTS/FORS
 shuffling item.
 
 ### F-15 — PIN-lockout gates were FAIL-OUT — a single branch-skip on the lockout `if` bypassed the wipe and let brute-forcing past `MAX_ATTEMPTS = 10` continue — **MITIGATED (not provably fixed) in `nsc::gated_unlock` + `cmd_request_unlock::verify_pin_with_chip` (FAIL-IN pattern + sentinel gate + double-read; residual attack surface documented below)**
@@ -2094,7 +2094,7 @@ listed below are now closed; the rest stay as documented:
      `0xA5A5_A5A5` is rare and equipment-dependent but not
      theoretical. The Hamming weight (16) is moderate; a more
      aggressive constant choice (extreme weight 1 or 31) would push
-     this harder. Tracked in `docs/work-todo.md §18b` as
+     this harder. Tracked in `docs/archive/work-todo-retired-2026-07-19.md §18b` as
      "F-13/F-14 sentinel constant Hamming-weight upgrade."
 
   3. **Coordinated 2-fault on `check_true_into_sentinel` internals.**

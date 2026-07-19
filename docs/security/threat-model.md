@@ -139,7 +139,7 @@ portion; `make pin-gate-wipe-e2e` falsifies the ten-wrong lockout/wipe portion.
 The directional boot predicate needs a separate cold-reboot silicon receipt
 and remains OPEN.
 
-**⚠️ PROVISIONAL — currently violated by ship blocker S-1 (`docs/work-todo.md`).** **S-5 + S-6 RESOLVED 2026-05-28**, see closure notes below. Against a *desoldered-OPTIGA bench-rig* attacker (i.e. the threat that motivates the LUC at all), the OPTIGA leg of this claim does not hold in the current build: `F1D0.Change = ALW` (`secure/src/optiga/apdu.rs:930`, `:1059`) lets an attacker overwrite F1D0 with a chosen key, self-auth, and reset E120 indefinitely. On-board ordinary attempts still consume all three controls; firmware-side `gated_unlock` precharges MCU page 124 and SE050 independently enforces max-10, while E120 is a 32-use backstop. This is per-attempt composition, not symmetric three-counter boot reconciliation. Until S-1 is closed (F1D0 metadata tightened to `Auto(F1D0)` + LcsO ratchet), read this claim as "10 wrong PINs against MCU + SE050; OPTIGA contributes belt-and-braces *on-board* only." Re-establishing the OPTIGA desoldered-chip claim requires closing S-1 and re-running `pin-gate-hw-counter-e2e` against a ratcheted, owner-authorized sacrificial part with the tightened metadata.
+**⚠️ PROVISIONAL — currently violated by ship blocker S-1 (`EthereumPhone/PQ1`, label `ship-blocker`).** **S-5 + S-6 RESOLVED 2026-05-28**, see closure notes below. Against a *desoldered-OPTIGA bench-rig* attacker (i.e. the threat that motivates the LUC at all), the OPTIGA leg of this claim does not hold in the current build: `F1D0.Change = ALW` (`secure/src/optiga/apdu.rs:930`, `:1059`) lets an attacker overwrite F1D0 with a chosen key, self-auth, and reset E120 indefinitely. On-board ordinary attempts still consume all three controls; firmware-side `gated_unlock` precharges MCU page 124 and SE050 independently enforces max-10, while E120 is a 32-use backstop. This is per-attempt composition, not symmetric three-counter boot reconciliation. Until S-1 is closed (F1D0 metadata tightened to `Auto(F1D0)` + LcsO ratchet), read this claim as "10 wrong PINs against MCU + SE050; OPTIGA contributes belt-and-braces *on-board* only." Re-establishing the OPTIGA desoldered-chip claim requires closing S-1 and re-running `pin-gate-hw-counter-e2e` against a ratcheted, owner-authorized sacrificial part with the tightened metadata.
 
 **S-5 closure (2026-05-28):** `secure/src/se050/scp03.rs` now negotiates `P1=0x33` (full C-MAC + C-DEC + R-MAC + R-ENC); `scp03::unwrap_response` decrypts + R-MAC-verifies every response. `half_E` is no longer plaintext on the I²C bus during legitimate unlocks. Logic-analyzer silicon-verification still required to fully close the audit step. See `docs/security/security-review-2026-05.md` §C-7.
 
@@ -586,7 +586,7 @@ Tests that *should* exist but don't yet:
 
 ## 12. Roadmap to Production Posture
 
-In approximate phasing — the source of truth is `docs/work-todo.md`, this is the threat-model lens on the same work.
+In approximate phasing — the source of truth is the `EthereumPhone/PQ1` issue tracker (labels `source:work-todo` / `source:production-todo`), this is the threat-model lens on the same work.
 
 1. **Phase 0 — Device root-key architecture (work-todo #24).** Closes the OPTIGA-PBS-firmware-hash brick (§7.7 / §9.5-related). Lands `hw/otp.rs` master + `hw/secret_keys.rs` HKDF subkeys + OPTIGA `setup_pbs_no_handshake` rewrite + `hw/huk.rs` re-root. **Landed** (Tier 1 SAES-CMAC(DHUK)).
 2. **Phase 1 — Stage 2 brownout foundation (work-todo #21).** BOR/IWDG/ECC/PVD/TAMP/CSS at production defaults. Closes Masaryk-class glitch attacks (§7.9). Tracked.
@@ -629,7 +629,7 @@ Cross-references:
 - `docs/secure-elements/optiga-brick-postmortem.md` — concrete worked example of a class-of-failure we redesigned around.
 - `docs/firmware/firmware-update.md` — FW-update threat model deep-dive.
 - `docs/secure-elements/se050-userid-pin-auth.md`, `docs/secure-elements/optiga-bringup-status.md` — SE-specific design notes.
-- `docs/work-todo.md` — actionable tasks tracking the roadmap in §12.
+- `EthereumPhone/PQ1` issues (label `source:work-todo`) — actionable tasks tracking the roadmap in §12.
 
 ---
 

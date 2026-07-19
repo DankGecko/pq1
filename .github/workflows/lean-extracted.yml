@@ -84,7 +84,7 @@ jobs:
       # GUARANTEED <16 GB: FormatDecimalSpec is carved out of the default target
       # (verified locally 2026-07-07 — this step peaks ~2.3 GB).
       #
-      # ⚠ MEMORY (diagnosed 2026-07-07, tracked in docs/work-todo.md). The single
+      # ⚠ MEMORY (diagnosed 2026-07-07, tracked in docs/archive/work-todo-retired-2026-07-19.md). The single
       # declaration `FormatDecimalSpec.format_decimal_spec` (the end-to-end WYSIWYS
       # `U256::format_decimal` WP-monad composition) KERNEL-TYPECHECKS at ~42 GB
       # RSS / ~1470 s — over this 16 GB runner. ROOT CAUSE is the kernel typecheck

@@ -46,8 +46,8 @@ Current design addresses **E partially** (wipe flag) and **F partially**
 - Bundle A also surfaces: **SLH-DSA verify-after-sign is insufficient**
   per RFC 9814 + Genêt TCHES 2023. A single fault during signing
   produces a signature that often still verifies. Double-compute on
-  disjoint SRAM is mandatory. Tracked in work-todo.md #18, not in
-  this doc (out of brownout scope).
+  disjoint SRAM is mandatory. Tracked on `EthereumPhone/PQ1` (label
+  `source:work-todo`, item #18), not in this doc (out of brownout scope).
 - Bundle C surfaces: **we are currently signing with OptRand = 0**.
   That enables PRF(SK.seed) horizontal-DPA recovery in few traces.
   Fresh TRNG per signature required. Tracked in #18.
@@ -503,7 +503,7 @@ Addresses: residual risk at A, B, C even if Stages 1-4 have a bug.
 - **TAMP peripheral full config** — external tamper pins, temperature
   monitor, voltage monitor. Wallet-enclosure-design-dependent.
 - **Signed firmware update with brownout-safe flashing** — tracked
-  separately (`docs/work-todo.md` items 14/15/16).
+  separately on `EthereumPhone/PQ1` (label `source:work-todo`, items 14/15/16).
 
 ## Testing methodology
 

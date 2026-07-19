@@ -19,7 +19,7 @@ Owner decision (2026-07-14): keep the Tier-2 BHK split (SE050 SCP03 on BHK,
 OPTIGA PBS on DHUK). The ceremony is therefore BHK while the ship image is still
 DHUK until the phase-2B BHK provisioning lands and flips the ship image to BHK.
 This gate is EXPECTED to fail today; it is the machine-checkable reminder that
-the two must move to BHK in lockstep. See docs/work-todo.md (phase-2B BHK).
+the two must move to BHK in lockstep. See docs/archive/work-todo-retired-2026-07-19.md (phase-2B BHK).
 """
 import sys
 
@@ -58,7 +58,7 @@ def main(argv):
             f"FAIL (F7): axis mismatch — a chip rotated by the ceremony ({ceremony}) would\n"
             f"  fail SCP03 auth under the ship image ({ship}) and brick half_E. Align both\n"
             f"  axes before shipping. If this is the known BHK-vs-DHUK state pending phase-2B\n"
-            f"  BHK provisioning, that is expected — see docs/work-todo.md (phase-2B BHK).",
+            f"  BHK provisioning, that is expected — see docs/archive/work-todo-retired-2026-07-19.md (phase-2B BHK).",
             file=sys.stderr,
         )
         return 1

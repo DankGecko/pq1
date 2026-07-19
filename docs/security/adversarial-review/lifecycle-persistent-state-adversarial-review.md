@@ -13,7 +13,7 @@ OPTIGA and SE050 objects, not merely whether each local driver works.
 > the factory-burned per-device OTP master. The candidate then rotates SE050
 > to unsalted BHK-rooted final credentials and OPTIGA to a DHUK + page-127-
 > persisted-TRNG-salt final PBS. That flow is
-> tracked by `docs/work-todo.md` item 36 and has an **implemented candidate
+> tracked by `docs/archive/work-todo-retired-2026-07-19.md` item 36 and has an **implemented candidate
 > behind `rdp2-self-lock`, but is not production-approved or authorized for
 > execution**. Authenticated per-unit handoff must prove transport credentials
 > before rotation, and resume must distinguish old/new credentials and KVN.
@@ -49,7 +49,7 @@ and require an explicitly designated sacrificial device.
 |---|---|---|---|---|---|
 | LC1 | **Ambiguous lifecycle authority** | Device/fixture/user components infer different states (blank, factory, transit-verifiable, first-boot-in-progress, provisioned, recovery, RMA), so a privileged step runs from the wrong state | **OPEN for item 36.** The device-side candidate state machine and journal are implemented, but the authenticated per-unit factory handoff/receipt and production lifecycle authority are not closed. Existing `is_provisioned()` checks remain local observations rather than a cross-device lifecycle authority. Include connect-under-reset ship-state verification and the deliberate residual for a user who powers a transit-reflashed unit before verifying it. | Enumerate state predicates and produce two actors/stores whose classifications disagree | ❌ adversary/model |
 | LC2 | **Irreversible step before complete preflight** | RDP/LcsO/key rotation/counter advance happens before image, power, UID, option-byte, storage, and downstream-key checks succeed | **SHIP-BLOCKING IMPLEMENTATION/VALIDATION RISK.** The item-36 candidate performs preflight before RDP2 and uses commit-last journaling after rotation, but E140 lifecycle ordering and silicon cut-point evidence remain open. A BHK/pairing root created while RDP0 still supplies the shared DHUK may become unusable or retain the wrong security identity after the final transition. The legacy firmware-update floor ordering is a concrete warning (`VULN-fwcommit-otp-before-commit-brick.md`). | Dependency DAG + fail-before/fail-after injection at every irreversible edge | ⚠ model; silicon later |
-| LC3 | **Cross-store partial commit / half-provision** | STM32, OPTIGA, and SE050 disagree after reset; retry selects the wrong credentials or cannot erase the first write | **KNOWN CLASS, WITH A CURRENT LOCAL INSTANCE.** `VULN-provision-halfwrite-softbrick.md` records one rollback fix and a remaining silicon/credential residual. Separately, `secure/src/hw/bhk.rs::provision` writes two ciphertext quadwords without a commit marker while `is_provisioned()` accepts any non-`0xFF` byte. A cut after QW0 makes a torn BHK authoritative and prevents retry (`docs/work-todo.md` `sh-3`). The new first-boot rotation also re-opens the cross-store composition question. | Host fault injection around every durable write; require commit-last records; power-cut matrix on an authorized sacrificial device | ✅ host / ⚠ HW |
+| LC3 | **Cross-store partial commit / half-provision** | STM32, OPTIGA, and SE050 disagree after reset; retry selects the wrong credentials or cannot erase the first write | **KNOWN CLASS, WITH A CURRENT LOCAL INSTANCE.** `VULN-provision-halfwrite-softbrick.md` records one rollback fix and a remaining silicon/credential residual. Separately, `secure/src/hw/bhk.rs::provision` writes two ciphertext quadwords without a commit marker while `is_provisioned()` accepts any non-`0xFF` byte. A cut after QW0 makes a torn BHK authoritative and prevents retry (`docs/archive/work-todo-retired-2026-07-19.md` `sh-3`). The new first-boot rotation also re-opens the cross-store composition question. | Host fault injection around every durable write; require commit-last records; power-cut matrix on an authorized sacrificial device | ✅ host / ⚠ HW |
 | LC4 | **Non-idempotent resume or false completion receipt** | A torn journal, stale marker, discarded backend error, or duplicate command skips/repeats work or declares READY/WIPED early | **OPEN item-36 requirement plus a SOURCE-CONFIRMED REVIEW TARGET.** The boot block containing `"Wipe-in-progress flag set"` in `secure/src/main.rs` and `secure/src/nsc/cmd_request_unlock.rs::trigger_lockout_wipe` discard `factory_reset_admin()` errors, reset the MCU attempt counter, and display `WALLET WIPED`; a failed SE wipe can therefore be presented as success. Pairing-key rotation must also authenticate under the new keyset before commit—marker write alone is not proof. | Cut-point model + force every backend failure; success UI/receipt only after all postconditions | ✅ host/model + ⚠ HW |
 | LC5 | **Persistent-address / ownership collision** | Two features erase or reinterpret the same page, object, OID, OTP word, or backup register | **HISTORICAL INSTANCE STRUCTURALLY FIXED; CLASS REMAINS LIVE.** The persistent firmware-failure counter and its page-126 collision were removed; `secure/src/hw/flash.rs` and `secure/src/hw/bhk.rs` now assign page 126 only to BHK. Reconcile the now-stale `VULN-page126-bhk-fwfail-collision-brick.md` separately. Pages 123–127 and all SE objects still need one generated global ownership ledger. | Generate an ownership map from linker/config/constants; reject overlaps and unversioned aliases | ✅ structural |
 | LC6 | **Untrusted durable resource exhaustion** | A host can consume flash entries, SE objects, counter budget, erase endurance, or retry budget until normal signing is permanently wedged | **TWO FIXED WITNESSES, CLASS REMAINS LIVE.** The page-123 distinct-slot and value-inflation bricks are fixed, but show that local authorization checks miss global durability. | Stateful fuzzing with capacity/endurance bounds; prove reclamation or explicit terminal behavior | ✅ model/fuzz |
@@ -88,7 +88,7 @@ recovery costs or destroys.
    fixed witness while extending one generated ownership ledger across every
    flash page, option-byte/OTP field, TAMP backup register, SE050 object ID,
    and OPTIGA OID; comments alone are not a collision fence.
-4. **Adopted first-boot requirements.** `docs/work-todo.md` item 36 and
+4. **Adopted first-boot requirements.** `docs/archive/work-todo-retired-2026-07-19.md` item 36 and
    `docs/firmware/feature-flags.md` define the RDP0 shipment and post-lock key
    rotation ordering. An executing candidate now exists behind
    `rdp2-self-lock`; treat it as unapproved until authenticated handoff and
@@ -116,12 +116,13 @@ limit execution to source review, host-only simulations, and isolated scratch st
 TARGET (read first, in this order):
   - docs/security/adversarial-review/lifecycle-persistent-state-adversarial-review.md
     §A — LC1–LC10.
-  - docs/work-todo.md item 36 + docs/firmware/feature-flags.md — adopted RDP0→RDP2
+  - docs/archive/work-todo-retired-2026-07-19.md item 36 + docs/firmware/feature-flags.md — adopted RDP0→RDP2
     first-boot ordering; distinguish target design from implemented evidence.
   - docs/security/vulns/README.md and the five durable-brick/provision reports.
   - secure/src/{crypto,dual_se,offchain_state}.rs, secure/src/hw/{bhk,otp}.rs,
     secure/src/fw_update/, secure/src/nsc/.
-  - docs/provisioning/provisioning-reference.md, docs/production-todo.md, and
+  - docs/provisioning/provisioning-reference.md,
+    docs/archive/production-todo-retired-2026-07-19.md, and
     docs/security/threat-model.md — ceremonies, authority, and residuals.
 SCOPE THIS RUN: {{a lifecycle transition, store set, or recovery path}}.
 

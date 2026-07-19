@@ -17,7 +17,7 @@ self-locks the MCU to **RDP Level 2**, and rotates the secure-element pairing
 secrets off the factory-installed **transport** keysets to their final
 device-unique values — all **before the first PIN entry and before the seed
 wizard**. This document is the operator/field-diagnosis reference for that
-flow; the design decision record is `docs/work-todo.md` §36.
+flow; the design decision record is `docs/archive/work-todo-retired-2026-07-19.md` §36.
 
 Owner amendment (2026-07-14): #36's text places the RDP-2 self-lock in the
 FSBL, but it is implemented in the **secure app early-boot** (`secure/src/
@@ -183,7 +183,7 @@ space `0x08xx–0x0Fxx` is disjoint from the factory ceremony's
 
 Nothing here can be done in the dev environment; RDP-2 mistakes are
 unrecoverable, so validate on sacrificial parts first (same culture as the
-S-1/S-2/S-3 burn ceremony). See also `docs/production-todo.md`.
+S-1/S-2/S-3 burn ceremony). See also the `EthereumPhone/PQ1` production gates (labels `source:production-todo`, `ship-blocker`).
 
 1. **Power-cut matrix** (#36 (a)–(e)): induced cuts at every step boundary,
    incl. the unavoidable OPTSTRT window. The pure state machine's host

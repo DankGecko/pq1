@@ -385,15 +385,15 @@ review; do not weaken UserID policy merely to make the documentation symmetric.
 
 These are the **biggest open hardware-security items** and the highest-confidence physical attack
 chain. All three must close before any device ships; the EVT is where you *prove the attack* (on a
-pre-fix unit) and later *prove the fix* (on a locked unit). See `docs/production-todo.md` and the
-ship-blocker section of `docs/work-todo.md`.
+pre-fix unit) and later *prove the fix* (on a locked unit). See the `EthereumPhone/PQ1` issue
+tracker — production items under label `source:production-todo`, ship blockers under `ship-blocker`.
 
 - **S-1 — F1D0 `Change = ALW`.** A desoldered OPTIGA lets a bench attacker overwrite F1D0 with a
   chosen HMAC key, self-auth, reset E120, and brute-force PINs unbounded. (`secure/src/optiga/apdu.rs`.)
 - **S-2 — the type-`0x11` Protected-Update pool is not production-closed.** The observed E0E3 is a
   full type-`0x12` device certificate; the retired public-sample helper targeting it is a no-op, not
   the live anchor path. Pin and close `{E0E8,E0E9,E0EF}` and prevent device-certificate retyping.
-  **S-1 alone is insufficient; S-2 must close simultaneously.** (`docs/production-todo.md`.)
+  **S-1 alone is insufficient; S-2 must close simultaneously.** (`EthereumPhone/PQ1`, label `ship-blocker`.)
 - **S-3 — `optiga-hw-counter` must be mandatory.** Without the E120 hardware counter, a
   PBS-leaking/desoldered attacker gets unbounded HMAC attempts.
 
@@ -916,7 +916,7 @@ locked unit before sign-off.
 
 - Invariants & threat model: `docs/security/threat-model.md`, `README.md`
 - Audits: `docs/security/audits/{crypto-core,fault-injection,pin-unlock-lockstep,counter-replay-state,boot-fsbl,gateway-parsing,wysiwys-clearsign,sig-domain-separation}-*.md`
-- Security review + ship blockers: `docs/security/security-review-2026-05.md`, `docs/production-todo.md`, `docs/work-todo.md`
+- Security review + ship blockers: `docs/security/security-review-2026-05.md`, `EthereumPhone/PQ1` issues (labels `source:production-todo`, `source:work-todo`, `ship-blocker`)
 - SE bring-up: `docs/secure-elements/optiga-bringup-status.md`, `docs/secure-elements/optiga-brick-postmortem.md`, `docs/secure-elements/se050-userid-pin-auth.md`, `docs/secure-elements/se050-stress-harness.md`
 - Hardening / boot: `docs/security/HARDENING.md`, `docs/security/measured-boot.md`, `docs/firmware/reproducible-builds.md`
 - Known-vuln write-ups: `docs/VULN-*.md`, `docs/PROOF-*.md`
