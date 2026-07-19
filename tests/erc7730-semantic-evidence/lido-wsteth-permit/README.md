@@ -1,10 +1,11 @@
-# Lido wstETH calldata permit semantic evidence
+# Lido wstETH calldata semantic evidence
 
 This directory is the offline, fixed-block evidence input for the single
-Ethereum wstETH deployment whose calldata `permit` route PQ1 admits.
+Ethereum wstETH deployment whose calldata `permit` and `wrap` routes PQ1
+admits.
 
 It pins the direct runtime, ERC-1967 implementation-slot result, deployment
-receipt, verified permit ABI and source, official Lido source anchor, and the
+receipt, verified route ABIs and source, official Lido source anchor, and the
 fixed-block `name`, `symbol`, `decimals`, `stETH`, and `DOMAIN_SEPARATOR`
 results. dRPC and MEV Blocker returned identical results for every archived
 block, code, slot, transaction, receipt, and call value.
@@ -14,6 +15,12 @@ descriptor deployment, all seven calldata operands, the production ERC-20
 metadata row, and the on-device contract-binding check. It also checks the
 deployed permit semantics: deadline, owner nonce, EIP-712 hash, recovery,
 owner match, nonce increment, and approval.
+
+The wrap route evidence binds its single signed stETH amount to the verified
+source's nonzero check, stETH-share conversion, wstETH mint to `msg.sender`,
+and exact-amount stETH pull into the wrapper. The resulting wstETH amount
+depends on live share state and is not calldata, so PQ1 claims the exact stETH
+input and wrap action—not an exact future minted amount.
 
 Primary sources:
 

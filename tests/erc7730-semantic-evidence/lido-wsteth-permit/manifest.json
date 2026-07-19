@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "Lido wstETH calldata permit semantic evidence for the single PQ1-admitted Ethereum deployment",
+  "scope": "Lido wstETH calldata permit and wrap semantic evidence for the single PQ1-admitted Ethereum deployment",
   "captured_at_utc": "2026-07-19T14:45:25Z",
   "canonical_signature": "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)",
   "selector": "0xd505accf",
@@ -77,6 +77,20 @@
     "archive_file_sha256": "bae20db214b7fc7a2564379fa13097780b22e9d329414b83c9f3c30d000529e8",
     "full_verified_abi_canonical_sha256": "5fd2fa0074d446161eae3cda79d0d133754b9632983205cf1e7b57c0b850ad9d"
   },
+  "additional_routes": {
+    "wrap": {
+      "canonical_signature": "wrap(uint256)",
+      "selector": "0xea598cb0",
+      "abi": {
+        "archive_file": "abi/wrap.abi.json",
+        "archive_file_sha256": "359844513631838027cc1a7ff2bf7003d99af15d9fb00d73058c4b9dc24a409c"
+      },
+      "displayed_operand_paths": [
+        "#._stETHAmount"
+      ],
+      "output_residual": "The minted wstETH amount depends on live stETH share state and is not signed calldata."
+    }
+  },
   "fixed_block_calls": {
     "name": {
       "selector": "0x06fdde03",
@@ -118,6 +132,7 @@
   },
   "residuals": [
     "The permit nonce is current contract state authenticated by the permit signature, not signed calldata displayed by this descriptor.",
+    "The wrap route displays the exact stETH input but not the live-state-dependent wstETH amount minted in return.",
     "Blockscout marks the source verified and partially verified, but not fully verified.",
     "This is a fixed-block historical receipt and does not provide live deployment monitoring.",
     "This evidence grants no production-shipment, fallback, or blind-signing authority."

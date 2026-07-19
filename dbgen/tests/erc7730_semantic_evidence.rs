@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 
 use dbgen::erc7730::build_db_tolerant_with_erc20_capabilities;
 use pqsigner_erc7730::binding::{cross_check_contract, BindingError};
-use pqsigner_erc7730::ir::Erc7730Ir;
+use pqsigner_erc7730::ir::{Erc7730Ir, FormatOp, Visibility};
+use pqsigner_erc7730::render::params::parse as parse_params;
+use pqsigner_erc7730::render::policy::TerminalKind;
 use pqsigner_tx_core::hash::keccak256;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -846,4 +848,214 @@ fn lido_wsteth_source_abi_descriptor_and_metadata_agree_on_permit_semantics() {
         .any(|residual| residual
             .as_str()
             .is_some_and(|text| text.contains("nonce") && text.contains("not signed calldata"))));
+}
+
+#[test]
+fn lido_wsteth_wrap_source_abi_descriptor_and_metadata_agree_on_input_semantics() {
+    let root = workspace_root();
+    let evidence = lido_evidence_root();
+    let manifest = read_json(&evidence.join("manifest.json"));
+    let deployment = &manifest["deployment"];
+    let source_spec = &manifest["verified_source"];
+    let wrap_spec = &manifest["additional_routes"]["wrap"];
+    let signature = required_str(wrap_spec, "canonical_signature");
+
+    assert_eq!(signature, "wrap(uint256)");
+    let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+        .try_into()
+        .expect("wrap selector width");
+    assert_eq!(selector, [0xea, 0x59, 0x8c, 0xb0]);
+    assert_eq!(required_str(wrap_spec, "selector"), "0xea598cb0");
+
+    let flattened_bytes =
+        fs::read(evidence.join(required_str(source_spec, "archived_flattened_file")))
+            .expect("read archived flattened source");
+    assert_eq!(
+        sha256_hex(&flattened_bytes),
+        required_str(source_spec, "archived_flattened_sha256")
+    );
+    let upstream_bytes = fs::read(evidence.join(required_str(source_spec, "upstream_file")))
+        .expect("read archived official Lido source");
+    assert_eq!(
+        sha256_hex(&upstream_bytes),
+        required_str(source_spec, "upstream_file_sha256")
+    );
+
+    for (label, source_bytes) in [
+        ("verified flattened", flattened_bytes),
+        ("official Lido", upstream_bytes),
+    ] {
+        let source = String::from_utf8(source_bytes).expect("wrap source is UTF-8");
+        let wrap_start = source
+            .find("function wrap(uint256 _stETHAmount) external returns (uint256) {")
+            .unwrap_or_else(|| panic!("{label} wrap implementation"));
+        let wrap_tail = &source[wrap_start..];
+        let wrap_end = wrap_tail
+            .find("function unwrap(uint256 _wstETHAmount)")
+            .unwrap_or_else(|| panic!("{label} wrap implementation end"));
+        let wrap = normalized_whitespace(&wrap_tail[..wrap_end]);
+        assert_fragments_in_order(
+            &wrap,
+            &[
+                r#"require(_stETHAmount > 0, "wstETH: can't wrap zero stETH");"#,
+                "uint256 wstETHAmount = stETH.getSharesByPooledEth(_stETHAmount);",
+                "_mint(msg.sender, wstETHAmount);",
+                "stETH.transferFrom(msg.sender, address(this), _stETHAmount);",
+                "return wstETHAmount;",
+            ],
+        );
+    }
+
+    let abi_spec = &wrap_spec["abi"];
+    let abi_bytes =
+        fs::read(evidence.join(required_str(abi_spec, "archive_file"))).expect("read wrap ABI");
+    assert_eq!(
+        sha256_hex(&abi_bytes),
+        required_str(abi_spec, "archive_file_sha256")
+    );
+    let abi: Value = serde_json::from_slice(&abi_bytes).expect("parse wrap ABI");
+    let entries = abi.as_array().expect("wrap ABI array");
+    assert_eq!(entries.len(), 1);
+    let entry = &entries[0];
+    assert_eq!(entry["type"].as_str(), Some("function"));
+    assert_eq!(entry["name"].as_str(), Some("wrap"));
+    assert_eq!(entry["stateMutability"].as_str(), Some("nonpayable"));
+    let inputs = entry["inputs"].as_array().expect("wrap ABI inputs");
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0]["name"].as_str(), Some("_stETHAmount"));
+    assert_eq!(inputs[0]["type"].as_str(), Some("uint256"));
+    let outputs = entry["outputs"].as_array().expect("wrap ABI outputs");
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0]["type"].as_str(), Some("uint256"));
+    assert_eq!(
+        format!(
+            "{}({})",
+            entry["name"].as_str().unwrap(),
+            inputs[0]["type"].as_str().unwrap()
+        ),
+        signature
+    );
+
+    let descriptor_spec = &manifest["descriptor"];
+    let curated_bytes = fs::read(root.join(required_str(descriptor_spec, "curated_file")))
+        .expect("read curated Lido descriptor");
+    assert_eq!(
+        curated_bytes,
+        fs::read(root.join(required_str(descriptor_spec, "vendored_file")))
+            .expect("read vendored Lido descriptor"),
+        "curated and installed Lido descriptors diverged"
+    );
+    let descriptor: Value = serde_json::from_slice(&curated_bytes).expect("parse Lido descriptor");
+    let deployments = descriptor["context"]["contract"]["deployments"]
+        .as_array()
+        .expect("descriptor deployments");
+    assert_eq!(deployments.len(), 1);
+    assert_eq!(deployments[0]["chainId"].as_u64(), Some(1));
+    assert_eq!(
+        deployments[0]["address"]
+            .as_str()
+            .expect("descriptor address")
+            .to_ascii_lowercase(),
+        required_str(deployment, "address")
+    );
+    assert_eq!(
+        descriptor["metadata"]["constants"]["stETHaddress"]
+            .as_str()
+            .expect("stETH constant")
+            .to_ascii_lowercase(),
+        required_str(deployment, "constructor_argument_steth")
+    );
+
+    let format = &descriptor["display"]["formats"]["wrap(uint256 _stETHAmount)"];
+    assert_eq!(format["intent"].as_str(), Some("Wrap stETH"));
+    let fields = format["fields"].as_array().expect("wrap display fields");
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0]["label"].as_str(), Some("stETH amount"));
+    assert_eq!(fields[0]["path"].as_str(), Some("#._stETHAmount"));
+    assert_eq!(fields[0]["format"].as_str(), Some("tokenAmount"));
+    assert_eq!(fields[0]["visible"].as_str(), Some("always"));
+    assert_eq!(
+        fields[0]["params"]["token"].as_str(),
+        Some("$.metadata.constants.stETHaddress")
+    );
+    let displayed_paths: Vec<_> = wrap_spec["displayed_operand_paths"]
+        .as_array()
+        .expect("wrap displayed paths")
+        .iter()
+        .map(|path| path.as_str().expect("wrap displayed path"))
+        .collect();
+    assert_eq!(displayed_paths, ["#._stETHAmount"]);
+
+    let records = dbgen::load_erc20_records(&root.join("secure/data/erc20.json"))
+        .expect("load production ERC20 metadata");
+    let steth: Vec<_> = records
+        .iter()
+        .filter(|record| {
+            record.chain_id == 1
+                && record
+                    .address
+                    .eq_ignore_ascii_case(required_str(deployment, "constructor_argument_steth"))
+        })
+        .collect();
+    assert_eq!(steth.len(), 1);
+    assert_eq!(steth[0].name, "Liquid staked Ether 2.0");
+    assert_eq!(steth[0].symbol, "stETH");
+    assert_eq!(steth[0].decimals, 18);
+
+    let registry_root = root.join("secure/data/erc7730-registry");
+    let policy = root.join("secure/data/erc7730/policy.toml");
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+        .expect("build production ERC20 capability corpus");
+    let (registry, _) = build_db_tolerant_with_erc20_capabilities(
+        &registry_root.join("registry"),
+        &policy,
+        Some(&registry_root),
+        &erc20.capabilities,
+    )
+    .expect("build production ERC-7730 registry");
+    let entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str()) == Some("calldata-wstETH.json")
+        })
+        .collect();
+    assert_eq!(entries.len(), 1);
+    let registry_entry = entries[0];
+    assert_eq!(registry_entry.chain_id, 1);
+    assert_eq!(
+        hex::encode(registry_entry.contract),
+        required_str(deployment, "address").trim_start_matches("0x")
+    );
+    let ir = Erc7730Ir::parse(&registry_entry.ir_bytes).expect("parse generated Lido IR");
+    let format = ir
+        .find_format_by_selector(&selector)
+        .expect("Lido format table parses")
+        .expect("Lido wrap remains admitted");
+    let fields: Vec<_> = format
+        .fields()
+        .map(|field| field.expect("generated wrap field parses"))
+        .collect();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].label, b"stETH amount");
+    assert_eq!(
+        FormatOp::try_from(fields[0].format_op),
+        Ok(FormatOp::TokenAmount)
+    );
+    let params = parse_params(&ir, fields[0].param_off).expect("wrap field params parse");
+    assert_eq!(params.visibility, Visibility::Always);
+    assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+    assert_eq!(params.integer_width_bytes, Some(32));
+    assert_eq!(
+        params.token.map(hex::encode),
+        Some(
+            required_str(deployment, "constructor_argument_steth")
+                .trim_start_matches("0x")
+                .to_owned()
+        )
+    );
+
+    let output_residual = required_str(wrap_spec, "output_residual");
+    assert!(output_residual.contains("live stETH share state"));
+    assert!(output_residual.contains("not signed calldata"));
 }
