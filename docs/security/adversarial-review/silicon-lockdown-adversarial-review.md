@@ -133,6 +133,13 @@ the raw packet and gives the complete union to the exact Partner-A/Partner-B
 pair; only their symmetric cross-adjudication may assign dispositions. An
 authorized maintainer records the adjudicated result afterward.
 
+FILING — the coordinator files every kept adversarial-review candidate as a
+GitHub issue on EthereumPhone/PQ1 (labels `finding`, `priority:*`, `surface:*`;
+`ship-blocker` when the candidate gates production). The issue is the
+actionable record; any report under findings/ remains the frozen evidence.
+Phase-D merge-review outcomes are never filed as issues. Do not file issues
+yourself unless the coordinator's brief says so.
+
 MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   1. "What I tried to break and COULDN'T" — the layers whose enforcement/ordering held.
   2. "What I did NOT look at" — layers not walked, the on-silicon burn state (bench-only).

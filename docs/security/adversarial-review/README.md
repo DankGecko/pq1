@@ -57,8 +57,15 @@ or make it a merge blocker; cadence is owned by the planning workflow.
 Fast Phase-D reviews return three compact raw reports under
 [`../../planning-and-review-workflow.md`](../../planning-and-review-workflow.md).
 The coordinator reproduces concrete blockers directly; no pairwise cross or
-matrix is required. When a future owner-triggered full playbook sweep runs, an
-authorized maintainer may record its durable results in
+matrix is required. **Phase-D review outcomes are NOT filed as issues** —
+they are triaged and resolved inside the review. **Every kept finding from an
+adversarial-review discovery pass — a playbook sweep, a full-project sweep,
+or a §7b deep-gear run — IS filed as a GitHub issue on `EthereumPhone/PQ1`**
+(label `finding`, plus `priority:*`, `surface:*`, and `ship-blocker` when it
+gates production; use the finding issue form). The issue is the actionable
+record; reports under [`findings/`](./findings/README.md) are the frozen
+evidence. When a future owner-triggered full playbook sweep runs, an
+authorized maintainer may additionally record its durable results in
 [`findings/`](./findings/README.md) using
 [`findings/TEMPLATE.md`](./findings/TEMPLATE.md). The cross-adjudication template
 is retained only for historical/specially authorized campaigns. `☑️ ACCEPTED`

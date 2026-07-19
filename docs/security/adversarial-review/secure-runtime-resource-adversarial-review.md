@@ -162,6 +162,13 @@ docs/security/adversarial-review/findings/TEMPLATE.md:
   Status; the required exact partner pair does that only through symmetric
   cross-adjudication.
 
+FILING — the coordinator files every kept adversarial-review candidate as a
+GitHub issue on EthereumPhone/PQ1 (labels `finding`, `priority:*`, `surface:*`;
+`ship-blocker` when the candidate gates production). The issue is the
+actionable record; any report under findings/ remains the frozen evidence.
+Phase-D merge-review outcomes are never filed as issues. Do not file issues
+yourself unless the coordinator's brief says so.
+
 MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   1. What I tried to break and COULDN'T — strongest schedule/input/stack/watchdog attempt.
   2. What I did NOT inspect — target-only unsafe, exceptions, peripherals, artifact, silicon.
