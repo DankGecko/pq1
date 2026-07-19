@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "scope": "WETH9 deposit() semantic evidence for the two PQ1-admitted Ethereum and Sepolia deployments",
+  "captured_at_utc": "2026-07-19T20:59:42Z",
+  "canonical_signature": "deposit()",
+  "selector": "0xd0e30db0",
+  "descriptor": {
+    "vendored_file": "secure/data/erc7730-registry/registry/weth/calldata-weth.json",
+    "chain_deployments": [
+      {
+        "chain_id": 1,
+        "address": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+      },
+      {
+        "chain_id": 11155111,
+        "address": "0xfff9976782d46cc05630d1f6ebab18b2324d6b14"
+      }
+    ],
+    "intent": "Wrap",
+    "displayed_signed_fact": {
+      "path": "@.value",
+      "label": "Amount",
+      "format": "amount"
+    }
+  },
+  "semantic_effect": {
+    "payable": true,
+    "successful_effect": "Credits balanceOf[msg.sender] by exactly msg.value and emits Deposit(msg.sender, msg.value).",
+    "signed_display_binding": "The descriptor's @.value is the exact transaction value consumed by deposit(); deposit() has no calldata operands.",
+    "state_residual": "The prior and resulting WETH balance and contract ETH balance are live state. This fixed-block receipt does not claim future state or later code."
+  },
+  "deployments": [
+    {
+      "network": "ethereum-mainnet",
+      "chain_id": 1,
+      "address": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+      "official_deployment_record": {
+        "repository": "https://github.com/gnosis/canonical-weth",
+        "commit": "0dd1ea3e295eef916d0c6223ec63141137d22d67",
+        "tree": "2c9e8e2fca8fbddb42bf4fbad84c1fb3d8c28e03",
+        "archived_file": "deployment/canonical-weth-networks.json",
+        "archived_file_sha256": "529ee70765b6db4b52f698d61c3fd271da652507c01ed144103ab5c0c36adbe5",
+        "transaction_hash": "0xb95343413e459a0f97461812111254163ae53467855c0d73e0f1e7c5b8442fa3"
+      },
+      "evidence_block": {
+        "number": 25569139,
+        "number_hex": "0x1862773",
+        "hash": "0xe78f42069b24373fb7364e3728deb2f221f18f223f3367667321b759b92f0873",
+        "state_root": "0x5981542c65a7cf3b51d7d15f434950b32747fbe442cf302a43d2f91cd825147f",
+        "timestamp": 1784492819,
+        "timestamp_utc": "2026-07-19T20:26:59Z"
+      },
+      "rpc_endpoints": [
+        "https://eth.drpc.org",
+        "https://rpc.mevblocker.io"
+      ],
+      "runtime": {
+        "file": "runtime/WETH9.mainnet.hex",
+        "file_sha256": "9ff4a69f49010f989fe99e52228f2a5a4d6dec8c61dbb583cb9f3d442fca8864",
+        "bytes": 3124,
+        "keccak256": "0xd0a06b12ac47863b5c7be4185c2deaad1c61557033f56c7d4ea74429cbb25e23"
+      }
+    },
+    {
+      "network": "ethereum-sepolia",
+      "chain_id": 11155111,
+      "address": "0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
+      "deployment_provenance": "The ERC-7730 registry deployment is bound to the fully verified Blockscout contract and the fixed-block runtime; canonical-weth's historical networks.json predates Sepolia and does not list this deployment.",
+      "evidence_block": {
+        "number": 11308073,
+        "number_hex": "0xac8c29",
+        "hash": "0x1cdc564a5a6d0d1caf135574cd14eb16cfa973a8fef912e6aa1983ca5f1fc9bd",
+        "state_root": "0x80f26d6e5162827f8af20fa3a4b95297974618cfcdd1c6b5614e9ef1393d0893",
+        "timestamp": 1784492796,
+        "timestamp_utc": "2026-07-19T20:26:36Z"
+      },
+      "rpc_endpoints": [
+        "https://sepolia.drpc.org",
+        "https://sepolia.gateway.tenderly.co"
+      ],
+      "runtime": {
+        "file": "runtime/WETH9.sepolia.hex",
+        "file_sha256": "b56f1f8fec35399c0e8238c1c1ba7257b00a2e767e872aa6ab57c6ae26f5651a",
+        "bytes": 3124,
+        "keccak256": "0xc864e10689f2da18833652a3b075d43106e87f0f90d95ee64f6f0b33bc026083"
+      }
+    }
+  ],
+  "runtime_relationship": {
+    "executable_prefix_bytes": 3081,
+    "executable_prefix_keccak256": "0x2ed19494e7def0c00c199c9a7b1f938de6ec4603c65492cb6f41eb41ed92e602",
+    "executable_prefix_equal": true,
+    "metadata_offset_bytes": 3081,
+    "differing_bytes": 32,
+    "differing_range_inclusive": [
+      3090,
+      3121
+    ],
+    "explanation": "The executable instruction streams are byte-identical. Only the 32-byte Solidity swarm metadata content hash differs.",
+    "executable_prefix_forbidden_proxy_opcodes": {
+      "delegatecall": false,
+      "callcode": false,
+      "selfdestruct": false
+    }
+  },
+  "direct_contract_classification": {
+    "classification": "direct",
+    "fixed_block_evidence": [
+      "Exact RPC runtimes match each deployment's Blockscout-verified deployed bytecode.",
+      "The standard EIP-1967 implementation, admin, and beacon slots are zero at both fixed blocks.",
+      "The executable prefix is the verified WETH9 instruction stream and contains no DELEGATECALL, CALLCODE, or SELFDESTRUCT."
+    ],
+    "boundary": "The zero-slot checks alone would not exclude every bespoke proxy convention; the exact verified direct WETH9 runtime and absence of proxy dispatch opcodes carry the classification."
+  },
+  "metadata": {
+    "fixed_block_calls": {
+      "name": {
+        "selector": "0x06fdde03",
+        "decoded": "Wrapped Ether"
+      },
+      "symbol": {
+        "selector": "0x95d89b41",
+        "decoded": "WETH"
+      },
+      "decimals": {
+        "selector": "0x313ce567",
+        "decoded": 18
+      }
+    },
+    "agreement": "Both independent endpoints on both chains returned the same encoded values."
+  },
+  "verified_source": {
+    "compiler": "0.4.19+commit.c4cbbb05",
+    "evm_version": "default",
+    "optimizer_enabled": false,
+    "official_upstream": {
+      "repository": "https://github.com/dapphub/ds-weth",
+      "commit": "abb410d7a927f5c9b42e3bca83fa5701ed9a36b4",
+      "tree": "b878d5c6840050be1aeff4383401695e1b31dab9",
+      "commit_time": "2017-12-01T23:36:32Z",
+      "path": "src/weth9.sol",
+      "archived_file": "source/WETH9.upstream.sol",
+      "archived_file_sha256": "763dd16d90b9b591eca5b24b733301f500fbe18eeabc7bead848f60f2771857a"
+    },
+    "ethereum_mainnet": {
+      "explorer_url": "https://eth.blockscout.com/api/v2/smart-contracts/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+      "verification_status": "is_verified=true; is_partially_verified=true; is_fully_verified=false",
+      "decoded_explorer_source_sha256_crlf": "4a4205fff097f9364ebba3c8a32670a63fccffb39baddc0046a6da1ba398c767",
+      "archived_file": "source/WETH9.mainnet-verified.sol",
+      "archived_normalization": "CRLF converted to LF and one final LF retained",
+      "archived_file_sha256": "2ccaced60300fd5bda777aced34d3198a2243175f79d2e5922b1ebb543476da4"
+    },
+    "ethereum_sepolia": {
+      "explorer_url": "https://eth-sepolia.blockscout.com/api/v2/smart-contracts/0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
+      "verification_status": "is_verified=true; is_partially_verified=false; is_fully_verified=true",
+      "decoded_explorer_source_sha256_without_final_lf": "da45e026ef79eb05fce76c23d0d0bee27ebbf2aa69b3b583a179a1de7cd2313a",
+      "archived_file": "source/WETH9.verified.sol",
+      "archived_normalization": "One final LF added",
+      "archived_file_sha256": "7ec89ea43310a5bd6dfe2151c41a26d248a1ccfb10761b991f5edf6ab63d4cbb"
+    },
+    "source_difference": "The archived DappHub revision names the contract WETH9_; deployed verified sources name it WETH9, and Sepolia adds an Etherscan submission header. The deposit body and all executable semantics are otherwise identical."
+  },
+  "abi": {
+    "archive_file": "abi/WETH9.abi.json",
+    "archive_file_sha256": "9b45a4dee4322ccf1aa56451bd7e1ddeed5defb6d656e5df577f03f9a578f2dd",
+    "entries": 16,
+    "full_verified_abi_canonical_sha256": "a9a75d59dacd1f34f6d2a6c4072dd1b7b13c7367b7010ad76f218809c4f68a32",
+    "agreement": "Mainnet and Sepolia Blockscout verified ABIs have the same canonical JSON hash; deposit() is payable with no inputs or outputs."
+  },
+  "rpc_receipt": {
+    "file": "rpc/fixed-block-receipt.json",
+    "file_sha256": "8ab462b9802af185a3a73d433cb141eafa57f16cf921891491b459a2c191b6a2"
+  }
+}

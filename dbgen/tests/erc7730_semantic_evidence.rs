@@ -41,6 +41,10 @@ fn uniswap_evidence_root() -> PathBuf {
     workspace_root().join("tests/erc7730-semantic-evidence/uniswap-router02-single-hop")
 }
 
+fn weth9_evidence_root() -> PathBuf {
+    workspace_root().join("tests/erc7730-semantic-evidence/weth9-deposit")
+}
+
 fn read_json(path: &Path) -> Value {
     serde_json::from_slice(
         &fs::read(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display())),
@@ -120,6 +124,387 @@ fn eip712_domain_separator(
     encoded[120..128].copy_from_slice(&chain_id.to_be_bytes());
     encoded[140..160].copy_from_slice(contract);
     keccak256(&encoded)
+}
+
+#[test]
+fn weth9_deposit_descriptor_and_generated_ir_bind_msg_value_on_both_deployments() {
+    let root = workspace_root();
+    let descriptor_path =
+        root.join("secure/data/erc7730-registry/registry/weth/calldata-weth.json");
+    let descriptor_bytes = fs::read(&descriptor_path).expect("read vendored WETH descriptor");
+    let descriptor: Value =
+        serde_json::from_slice(&descriptor_bytes).expect("parse vendored WETH descriptor");
+
+    let expected_deployments = BTreeMap::from([
+        (1u64, "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2".to_owned()),
+        (
+            11_155_111u64,
+            "fff9976782d46cc05630d1f6ebab18b2324d6b14".to_owned(),
+        ),
+    ]);
+    let actual_deployments: BTreeMap<_, _> = descriptor["context"]["contract"]["deployments"]
+        .as_array()
+        .expect("WETH descriptor deployments")
+        .iter()
+        .map(|deployment| {
+            (
+                deployment["chainId"]
+                    .as_u64()
+                    .expect("WETH deployment chain"),
+                deployment["address"]
+                    .as_str()
+                    .expect("WETH deployment address")
+                    .trim_start_matches("0x")
+                    .to_ascii_lowercase(),
+            )
+        })
+        .collect();
+    assert_eq!(actual_deployments, expected_deployments);
+
+    let descriptor_format = &descriptor["display"]["formats"]["deposit()"];
+    assert_eq!(descriptor_format["intent"].as_str(), Some("Wrap"));
+    let descriptor_fields = descriptor_format["fields"]
+        .as_array()
+        .expect("WETH deposit fields");
+    assert_eq!(descriptor_fields.len(), 1);
+    assert_eq!(descriptor_fields[0]["label"].as_str(), Some("Amount"));
+    assert_eq!(descriptor_fields[0]["path"].as_str(), Some("@.value"));
+    assert_eq!(descriptor_fields[0]["format"].as_str(), Some("amount"));
+    assert!(
+        descriptor_fields[0].get("params").is_none(),
+        "native value semantics must come from the authenticated @.value path, not host metadata"
+    );
+
+    let signature = "deposit()";
+    let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+        .try_into()
+        .expect("deposit selector width");
+    assert_eq!(selector, [0xd0, 0xe3, 0x0d, 0xb0]);
+
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+        .expect("build production ERC20 capability corpus");
+    let registry_root = root.join("secure/data/erc7730-registry");
+    let (registry, _) = build_db_tolerant_with_erc20_capabilities(
+        &registry_root.join("registry"),
+        &root.join("secure/data/erc7730/policy.toml"),
+        Some(&registry_root),
+        &erc20.capabilities,
+    )
+    .expect("build production ERC-7730 registry");
+    let entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str()) == Some("calldata-weth.json")
+        })
+        .collect();
+    assert_eq!(entries.len(), 2, "both WETH deployments must emit leaves");
+
+    let expected_descriptor_hash: [u8; 32] =
+        decode_hex_text("9aa323ffec9549882000f358cd1a051e552cb7e7451c8e73b59f9408334bd462")
+            .try_into()
+            .expect("descriptor hash width");
+    for entry in entries {
+        assert_eq!(
+            expected_deployments.get(&entry.chain_id),
+            Some(&hex::encode(entry.contract)),
+            "generated WETH leaf deployment drifted"
+        );
+        assert_eq!(entry.descriptor_hash, expected_descriptor_hash);
+        assert_eq!(entry.ir_bytes.len(), 173, "WETH IR wire length drifted");
+
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("parse generated WETH IR");
+        assert_eq!(
+            cross_check_contract(&ir, entry.chain_id, &entry.contract),
+            Ok(())
+        );
+        assert_eq!(ir.owner, b"WETH");
+        assert_eq!(ir.contract_name, b"WETH");
+        assert_eq!(ir.format_count(), Ok(1));
+
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("WETH format table parses")
+            .expect("deposit remains admitted");
+        assert_eq!(format.selector, selector);
+        assert_eq!(format.intent, b"Wrap");
+        assert_eq!(format.static_head_words, 0);
+        assert_eq!(format.nested_descent_count, 0);
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("WETH deposit field parses"))
+            .collect();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].label, b"Amount");
+        assert_eq!(
+            FormatOp::try_from(fields[0].format_op),
+            Ok(FormatOp::Amount)
+        );
+        assert_eq!(
+            ir.path_bytes(fields[0].path_off)
+                .expect("WETH value path parses"),
+            [0x11, 0x20, 0x81, 0xaf],
+            "generated IR must read the signed transaction envelope's exact value word"
+        );
+        let params = parse_params(&ir, fields[0].param_off).expect("WETH amount params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+        assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+        assert_eq!(params.integer_width_bytes, Some(32));
+        assert!(params.token.is_none());
+        assert!(params.token_path.is_none());
+    }
+}
+
+#[test]
+fn weth9_fixed_block_evidence_binds_source_abi_runtime_and_rpc_agreement() {
+    let evidence = weth9_evidence_root();
+    let manifest = read_json(&evidence.join("manifest.json"));
+    assert_eq!(manifest["schema_version"].as_u64(), Some(1));
+    assert_eq!(required_str(&manifest, "canonical_signature"), "deposit()");
+    assert_eq!(required_str(&manifest, "selector"), "0xd0e30db0");
+    assert_eq!(manifest["semantic_effect"]["payable"].as_bool(), Some(true));
+    assert_eq!(
+        required_str(&manifest["descriptor"]["displayed_signed_fact"], "path"),
+        "@.value"
+    );
+
+    let receipt_spec = &manifest["rpc_receipt"];
+    let receipt_path = evidence.join(required_str(receipt_spec, "file"));
+    let receipt_bytes = fs::read(&receipt_path).expect("read WETH9 RPC receipt");
+    assert_eq!(
+        sha256_hex(&receipt_bytes),
+        required_str(receipt_spec, "file_sha256")
+    );
+    let receipt: Value = serde_json::from_slice(&receipt_bytes).expect("parse WETH9 RPC receipt");
+    assert_eq!(receipt["schema_version"].as_u64(), Some(1));
+    assert_eq!(
+        required_str(&receipt, "canonical_signature"),
+        required_str(&manifest, "canonical_signature")
+    );
+    assert_eq!(
+        required_str(&receipt, "selector"),
+        required_str(&manifest, "selector")
+    );
+
+    let receipt_networks = receipt["networks"]
+        .as_array()
+        .expect("WETH9 receipt networks");
+    let deployments = manifest["deployments"]
+        .as_array()
+        .expect("WETH9 manifest deployments");
+    assert_eq!(deployments.len(), 2);
+    assert_eq!(receipt_networks.len(), 2);
+    let mut runtimes = BTreeMap::<u64, Vec<u8>>::new();
+    for deployment in deployments {
+        let chain_id = deployment["chain_id"].as_u64().expect("WETH9 chain ID");
+        let address = required_str(deployment, "address");
+        let runtime_spec = &deployment["runtime"];
+        let runtime_file = required_str(runtime_spec, "file");
+        let runtime_artifact = fs::read(evidence.join(runtime_file)).expect("read WETH9 runtime");
+        assert_eq!(
+            sha256_hex(&runtime_artifact),
+            required_str(runtime_spec, "file_sha256")
+        );
+        let runtime = read_hex(&evidence.join(runtime_file));
+        assert_eq!(
+            u64::try_from(runtime.len()).expect("runtime length fits u64"),
+            runtime_spec["bytes"].as_u64().expect("runtime byte count")
+        );
+        assert_eq!(
+            keccak_hex(&runtime),
+            required_str(runtime_spec, "keccak256")
+        );
+        runtimes.insert(chain_id, runtime);
+
+        let network = receipt_networks
+            .iter()
+            .find(|network| network["chain_id"].as_u64() == Some(chain_id))
+            .expect("receipt owns each WETH9 deployment");
+        assert_eq!(required_str(network, "address"), address);
+        assert_eq!(
+            required_str(network, "runtime_file"),
+            required_str(runtime_spec, "file")
+        );
+        assert_eq!(network["endpoints"], deployment["rpc_endpoints"]);
+
+        let observations = network["observations"]
+            .as_array()
+            .expect("WETH9 RPC observations");
+        assert_eq!(observations.len(), 2, "two independent RPC observations");
+        assert_ne!(
+            required_str(&observations[0], "endpoint"),
+            required_str(&observations[1], "endpoint")
+        );
+        assert_eq!(observations[0]["block"], observations[1]["block"]);
+        assert_eq!(observations[0]["code"], observations[1]["code"]);
+        assert_eq!(
+            observations[0]["proxy_slots"],
+            observations[1]["proxy_slots"]
+        );
+        assert_eq!(observations[0]["calls"], observations[1]["calls"]);
+
+        for observation in observations {
+            let block = &observation["block"];
+            let expected_block = &deployment["evidence_block"];
+            for key in ["number", "number_hex", "hash", "state_root", "timestamp"] {
+                assert_eq!(
+                    block[key], expected_block[key],
+                    "fixed block drifted: {key}"
+                );
+            }
+            assert_eq!(
+                required_str(&observation["code"], "result_file"),
+                runtime_file
+            );
+            assert_eq!(observation["code"]["bytes"], runtime_spec["bytes"]);
+            assert_eq!(
+                required_str(&observation["code"], "keccak256"),
+                required_str(runtime_spec, "keccak256")
+            );
+            for slot in ["implementation", "admin", "beacon"] {
+                assert_eq!(
+                    required_str(&observation["proxy_slots"][slot], "result"),
+                    "0x0000000000000000000000000000000000000000000000000000000000000000"
+                );
+            }
+            assert_eq!(
+                observation["calls"]["name"]["decoded"].as_str(),
+                Some("Wrapped Ether")
+            );
+            assert_eq!(
+                observation["calls"]["symbol"]["decoded"].as_str(),
+                Some("WETH")
+            );
+            assert_eq!(
+                observation["calls"]["decimals"]["decoded"].as_u64(),
+                Some(18)
+            );
+        }
+    }
+
+    let mainnet = runtimes.get(&1).expect("mainnet WETH9 runtime");
+    let sepolia = runtimes.get(&11_155_111).expect("Sepolia WETH9 runtime");
+    assert_eq!(mainnet.len(), 3_124);
+    assert_eq!(mainnet.len(), sepolia.len());
+    let relationship = &manifest["runtime_relationship"];
+    let prefix_len = relationship["executable_prefix_bytes"]
+        .as_u64()
+        .expect("executable prefix length") as usize;
+    assert_eq!(prefix_len, 3_081);
+    assert_eq!(&mainnet[..prefix_len], &sepolia[..prefix_len]);
+    assert_eq!(
+        keccak_hex(&mainnet[..prefix_len]),
+        required_str(relationship, "executable_prefix_keccak256")
+    );
+    let mut pc = 0usize;
+    while pc < prefix_len {
+        let opcode = mainnet[pc];
+        assert!(
+            !matches!(opcode, 0xf2 | 0xf4 | 0xff),
+            "verified WETH9 executable contains proxy/destruction opcode 0x{opcode:02x} at {pc}"
+        );
+        pc += 1;
+        if (0x60..=0x7f).contains(&opcode) {
+            pc += usize::from(opcode - 0x5f);
+        }
+    }
+    assert_eq!(
+        pc, prefix_len,
+        "executable prefix ends on an opcode boundary"
+    );
+    let differing: Vec<_> = mainnet
+        .iter()
+        .zip(sepolia)
+        .enumerate()
+        .filter_map(|(index, (left, right))| (left != right).then_some(index))
+        .collect();
+    assert_eq!(differing, (3_090usize..=3_121).collect::<Vec<_>>());
+    assert_eq!(relationship["differing_bytes"].as_u64(), Some(32));
+
+    let source_specs = [
+        &manifest["verified_source"]["official_upstream"],
+        &manifest["verified_source"]["ethereum_mainnet"],
+        &manifest["verified_source"]["ethereum_sepolia"],
+    ];
+    let mut sources = Vec::new();
+    for spec in source_specs {
+        let path = evidence.join(required_str(spec, "archived_file"));
+        let bytes = fs::read(&path).expect("read archived WETH9 source");
+        assert_eq!(
+            sha256_hex(&bytes),
+            required_str(spec, "archived_file_sha256")
+        );
+        let source = String::from_utf8(bytes).expect("WETH9 source is UTF-8");
+        let normalized = normalized_whitespace(&source);
+        assert_fragments_in_order(
+            &normalized,
+            &[
+                "function deposit() public payable {",
+                "balanceOf[msg.sender] += msg.value;",
+                "Deposit(msg.sender, msg.value);",
+                "}",
+            ],
+        );
+        sources.push(source);
+    }
+    assert_eq!(
+        sources[0].replace("contract WETH9_", "contract WETH9"),
+        sources[1],
+        "official and mainnet-verified sources differ only in the contract name"
+    );
+    assert_eq!(
+        sources[2]
+            .strip_prefix("/**\n *Submitted for verification at Etherscan.io on 2017-12-12\n*/\n\n")
+            .expect("Sepolia verification header is pinned"),
+        sources[1]
+    );
+
+    let abi_spec = &manifest["abi"];
+    let abi_bytes =
+        fs::read(evidence.join(required_str(abi_spec, "archive_file"))).expect("read WETH9 ABI");
+    assert_eq!(
+        sha256_hex(&abi_bytes),
+        required_str(abi_spec, "archive_file_sha256")
+    );
+    let abi: Value = serde_json::from_slice(&abi_bytes).expect("parse WETH9 ABI");
+    assert_eq!(abi.as_array().map(Vec::len), Some(16));
+    let deposit = abi
+        .as_array()
+        .expect("WETH9 ABI array")
+        .iter()
+        .find(|entry| {
+            entry["type"].as_str() == Some("function") && entry["name"].as_str() == Some("deposit")
+        })
+        .expect("deposit ABI entry");
+    assert_eq!(deposit["stateMutability"].as_str(), Some("payable"));
+    assert_eq!(deposit["inputs"].as_array().map(Vec::len), Some(0));
+    assert_eq!(deposit["outputs"].as_array().map(Vec::len), Some(0));
+
+    let mainnet_record = &manifest["deployments"][0]["official_deployment_record"];
+    let deployment_bytes = fs::read(evidence.join(required_str(mainnet_record, "archived_file")))
+        .expect("read canonical WETH deployment record");
+    assert_eq!(
+        sha256_hex(&deployment_bytes),
+        required_str(mainnet_record, "archived_file_sha256")
+    );
+    let deployment_record: Value =
+        serde_json::from_slice(&deployment_bytes).expect("parse canonical WETH deployments");
+    assert_eq!(
+        deployment_record["WETH9"]["1"]["address"].as_str(),
+        Some("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")
+    );
+    assert_eq!(
+        deployment_record["WETH9"]["1"]["transactionHash"].as_str(),
+        Some(required_str(mainnet_record, "transaction_hash"))
+    );
+    assert!(
+        required_str(&manifest["direct_contract_classification"], "boundary")
+            .contains("zero-slot checks alone would not exclude every bespoke proxy")
+    );
+    assert_eq!(
+        manifest["direct_contract_classification"]["classification"].as_str(),
+        Some("direct")
+    );
 }
 
 #[test]

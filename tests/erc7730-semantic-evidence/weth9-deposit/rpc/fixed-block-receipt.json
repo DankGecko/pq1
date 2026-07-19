@@ -1,0 +1,265 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-07-19T20:59:42Z",
+  "scope": "Fixed-block two-independent-RPC observations for both PQ1-admitted WETH9 deposit() deployments",
+  "block_request": {
+    "method": "eth_getBlockByNumber",
+    "full_transactions": false
+  },
+  "selector": "0xd0e30db0",
+  "canonical_signature": "deposit()",
+  "networks": [
+    {
+      "network": "ethereum-mainnet",
+      "chain_id": 1,
+      "address": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+      "block": "0x1862773",
+      "runtime_file": "runtime/WETH9.mainnet.hex",
+      "endpoints": [
+        "https://eth.drpc.org",
+        "https://rpc.mevblocker.io"
+      ],
+      "observations": [
+        {
+          "endpoint": "https://eth.drpc.org",
+          "block": {
+            "number": 25569139,
+            "number_hex": "0x1862773",
+            "hash": "0xe78f42069b24373fb7364e3728deb2f221f18f223f3367667321b759b92f0873",
+            "state_root": "0x5981542c65a7cf3b51d7d15f434950b32747fbe442cf302a43d2f91cd825147f",
+            "timestamp": 1784492819,
+            "timestamp_hex": "0x6a5d3313",
+            "timestamp_utc": "2026-07-19T20:26:59Z"
+          },
+          "code": {
+            "request": {
+              "method": "eth_getCode",
+              "params": [
+                "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "0x1862773"
+              ]
+            },
+            "result_file": "runtime/WETH9.mainnet.hex",
+            "result_file_encoding": "The exact 0x-prefixed RPC result with line breaks inserted every 128 characters; remove ASCII whitespace to recover the result.",
+            "bytes": 3124,
+            "keccak256": "0xd0a06b12ac47863b5c7be4185c2deaad1c61557033f56c7d4ea74429cbb25e23"
+          },
+          "proxy_slots": {
+            "implementation": {
+              "slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "admin": {
+              "slot": "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "beacon": {
+              "slot": "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+            }
+          },
+          "calls": {
+            "name": {
+              "selector": "0x06fdde03",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000d5772617070656420457468657200000000000000000000000000000000000000",
+              "decoded": "Wrapped Ether"
+            },
+            "symbol": {
+              "selector": "0x95d89b41",
+              "result": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000045745544800000000000000000000000000000000000000000000000000000000",
+              "decoded": "WETH"
+            },
+            "decimals": {
+              "selector": "0x313ce567",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000012",
+              "decoded": 18
+            }
+          }
+        },
+        {
+          "endpoint": "https://rpc.mevblocker.io",
+          "block": {
+            "number": 25569139,
+            "number_hex": "0x1862773",
+            "hash": "0xe78f42069b24373fb7364e3728deb2f221f18f223f3367667321b759b92f0873",
+            "state_root": "0x5981542c65a7cf3b51d7d15f434950b32747fbe442cf302a43d2f91cd825147f",
+            "timestamp": 1784492819,
+            "timestamp_hex": "0x6a5d3313",
+            "timestamp_utc": "2026-07-19T20:26:59Z"
+          },
+          "code": {
+            "request": {
+              "method": "eth_getCode",
+              "params": [
+                "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "0x1862773"
+              ]
+            },
+            "result_file": "runtime/WETH9.mainnet.hex",
+            "result_file_encoding": "The exact 0x-prefixed RPC result with line breaks inserted every 128 characters; remove ASCII whitespace to recover the result.",
+            "bytes": 3124,
+            "keccak256": "0xd0a06b12ac47863b5c7be4185c2deaad1c61557033f56c7d4ea74429cbb25e23"
+          },
+          "proxy_slots": {
+            "implementation": {
+              "slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "admin": {
+              "slot": "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "beacon": {
+              "slot": "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+            }
+          },
+          "calls": {
+            "name": {
+              "selector": "0x06fdde03",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000d5772617070656420457468657200000000000000000000000000000000000000",
+              "decoded": "Wrapped Ether"
+            },
+            "symbol": {
+              "selector": "0x95d89b41",
+              "result": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000045745544800000000000000000000000000000000000000000000000000000000",
+              "decoded": "WETH"
+            },
+            "decimals": {
+              "selector": "0x313ce567",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000012",
+              "decoded": 18
+            }
+          }
+        }
+      ],
+      "agreement": "Both independent endpoints returned the same pinned block header fields, byte-for-byte runtime, three standard EIP-1967 slot values, and name/symbol/decimals call results."
+    },
+    {
+      "network": "ethereum-sepolia",
+      "chain_id": 11155111,
+      "address": "0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
+      "block": "0xac8c29",
+      "runtime_file": "runtime/WETH9.sepolia.hex",
+      "endpoints": [
+        "https://sepolia.drpc.org",
+        "https://sepolia.gateway.tenderly.co"
+      ],
+      "observations": [
+        {
+          "endpoint": "https://sepolia.drpc.org",
+          "block": {
+            "number": 11308073,
+            "number_hex": "0xac8c29",
+            "hash": "0x1cdc564a5a6d0d1caf135574cd14eb16cfa973a8fef912e6aa1983ca5f1fc9bd",
+            "state_root": "0x80f26d6e5162827f8af20fa3a4b95297974618cfcdd1c6b5614e9ef1393d0893",
+            "timestamp": 1784492796,
+            "timestamp_hex": "0x6a5d32fc",
+            "timestamp_utc": "2026-07-19T20:26:36Z"
+          },
+          "code": {
+            "request": {
+              "method": "eth_getCode",
+              "params": [
+                "0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
+                "0xac8c29"
+              ]
+            },
+            "result_file": "runtime/WETH9.sepolia.hex",
+            "result_file_encoding": "The exact 0x-prefixed RPC result with line breaks inserted every 128 characters; remove ASCII whitespace to recover the result.",
+            "bytes": 3124,
+            "keccak256": "0xc864e10689f2da18833652a3b075d43106e87f0f90d95ee64f6f0b33bc026083"
+          },
+          "proxy_slots": {
+            "implementation": {
+              "slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "admin": {
+              "slot": "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "beacon": {
+              "slot": "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+            }
+          },
+          "calls": {
+            "name": {
+              "selector": "0x06fdde03",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000d5772617070656420457468657200000000000000000000000000000000000000",
+              "decoded": "Wrapped Ether"
+            },
+            "symbol": {
+              "selector": "0x95d89b41",
+              "result": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000045745544800000000000000000000000000000000000000000000000000000000",
+              "decoded": "WETH"
+            },
+            "decimals": {
+              "selector": "0x313ce567",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000012",
+              "decoded": 18
+            }
+          }
+        },
+        {
+          "endpoint": "https://sepolia.gateway.tenderly.co",
+          "block": {
+            "number": 11308073,
+            "number_hex": "0xac8c29",
+            "hash": "0x1cdc564a5a6d0d1caf135574cd14eb16cfa973a8fef912e6aa1983ca5f1fc9bd",
+            "state_root": "0x80f26d6e5162827f8af20fa3a4b95297974618cfcdd1c6b5614e9ef1393d0893",
+            "timestamp": 1784492796,
+            "timestamp_hex": "0x6a5d32fc",
+            "timestamp_utc": "2026-07-19T20:26:36Z"
+          },
+          "code": {
+            "request": {
+              "method": "eth_getCode",
+              "params": [
+                "0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
+                "0xac8c29"
+              ]
+            },
+            "result_file": "runtime/WETH9.sepolia.hex",
+            "result_file_encoding": "The exact 0x-prefixed RPC result with line breaks inserted every 128 characters; remove ASCII whitespace to recover the result.",
+            "bytes": 3124,
+            "keccak256": "0xc864e10689f2da18833652a3b075d43106e87f0f90d95ee64f6f0b33bc026083"
+          },
+          "proxy_slots": {
+            "implementation": {
+              "slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "admin": {
+              "slot": "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "beacon": {
+              "slot": "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+            }
+          },
+          "calls": {
+            "name": {
+              "selector": "0x06fdde03",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000d5772617070656420457468657200000000000000000000000000000000000000",
+              "decoded": "Wrapped Ether"
+            },
+            "symbol": {
+              "selector": "0x95d89b41",
+              "result": "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000045745544800000000000000000000000000000000000000000000000000000000",
+              "decoded": "WETH"
+            },
+            "decimals": {
+              "selector": "0x313ce567",
+              "result": "0x0000000000000000000000000000000000000000000000000000000000000012",
+              "decoded": 18
+            }
+          }
+        }
+      ],
+      "agreement": "Both independent endpoints returned the same pinned block header fields, byte-for-byte runtime, three standard EIP-1967 slot values, and name/symbol/decimals call results."
+    }
+  ]
+}

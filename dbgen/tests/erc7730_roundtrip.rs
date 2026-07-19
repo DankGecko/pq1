@@ -298,6 +298,89 @@ fn registry_aave_v3_lending_and_permits_cover_every_unique_deployment() {
 }
 
 #[test]
+fn registry_weth9_deposit_binds_value_on_exact_deployments() {
+    let result = build_registry();
+    let entries: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str()) == Some("calldata-weth.json")
+        })
+        .collect();
+    let expected_deployments: BTreeSet<(u64, [u8; 20])> = [
+        (1, "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
+        (11_155_111, "fff9976782d46cc05630d1f6ebab18b2324d6b14"),
+    ]
+    .into_iter()
+    .map(|(chain_id, address)| {
+        let contract: [u8; 20] = hex::decode(address)
+            .expect("valid WETH9 deployment")
+            .try_into()
+            .expect("WETH9 address width");
+        (chain_id, contract)
+    })
+    .collect();
+    let actual_deployments: BTreeSet<_> = entries
+        .iter()
+        .map(|entry| (entry.chain_id, entry.contract))
+        .collect();
+    assert_eq!(actual_deployments, expected_deployments);
+
+    let selector: [u8; 4] = keccak256(b"deposit()")[..4]
+        .try_into()
+        .expect("selector width");
+    assert_eq!(selector, [0xd0, 0xe3, 0x0d, 0xb0]);
+    let mut value_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+    value_path.extend_from_slice(&container_field::VALUE.to_be_bytes());
+
+    for entry in entries {
+        assert_eq!(entry.ir_bytes.len(), 173, "WETH9 IR size drifted");
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated WETH9 IR parses");
+        let formats: Vec<_> = ir
+            .format_iter()
+            .map(|format| format.expect("WETH9 format parses"))
+            .collect();
+        assert_eq!(formats.len(), 1, "WETH9 admits only deposit()");
+        let deposit = ir
+            .find_format_by_selector(&selector)
+            .expect("WETH9 format table parses")
+            .expect("deposit() remains admitted");
+        assert_eq!(deposit.intent, b"Wrap");
+        assert_eq!(deposit.static_head_words, 0);
+        let fields: Vec<_> = deposit
+            .fields()
+            .map(|field| field.expect("WETH9 field parses"))
+            .collect();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].label, b"Amount");
+        assert_eq!(
+            FormatOp::try_from(fields[0].format_op),
+            Ok(FormatOp::Amount)
+        );
+        assert_eq!(
+            ir.path_bytes(fields[0].path_off)
+                .expect("WETH9 value path parses"),
+            value_path,
+            "deposit amount must bind the authenticated transaction value"
+        );
+        let params = parse_params(&ir, fields[0].param_off).expect("WETH9 params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+        assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+        assert_eq!(params.integer_width_bytes, Some(32));
+        assert!(result
+            .known_calls
+            .contains(&(entry.chain_id, entry.contract, selector)));
+    }
+
+    assert_eq!(result.entries.len(), 429);
+    assert_eq!(result.known_call_count, 4_542);
+    assert_eq!(
+        hex::encode(result.root),
+        "fda42f17fbb7b344f893c52199597e46edf3ae7413062d7cc44dd9bbfe6d2467"
+    );
+}
+
+#[test]
 fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
     let result = build_registry();
     let entries: Vec<_> = result
@@ -2744,6 +2827,116 @@ fn wrong_root_is_rejected() {
         matches!(err, pqsigner_erc7730::bundle::BundleError::Merkle),
         "expected Merkle, got {err:?}"
     );
+}
+
+#[test]
+fn unsupported_address_name_sender_address_drops_only_its_whole_format() {
+    let temp = tempfile::tempdir().expect("create senderAddress compiler fixture");
+    let policy_path = temp.path().join("policy.toml");
+    std::fs::write(
+        &policy_path,
+        "allow_unattested_dev_descriptors = true\nmin_attesters = 0\ntrusted_attesters = []\n",
+    )
+    .expect("write synthetic policy");
+    let descriptor_path = temp.path().join("calldata-sender-address.json");
+    std::fs::write(
+        &descriptor_path,
+        r#"{
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000001" }
+  ] } },
+  "metadata": { "owner": "Synthetic", "contractName": "SenderAddress" },
+  "display": { "formats": {
+    "route(address recipient,uint256 amount)": {
+      "intent": "Route",
+      "fields": [
+        {
+          "path": "recipient",
+          "label": "Recipient",
+          "format": "addressName",
+          "params": {
+            "senderAddress": ["0x0000000000000000000000000000000000000001"]
+          }
+        },
+        { "path": "amount", "label": "Amount", "format": "raw" }
+      ]
+    },
+    "transfer(address to,uint256 amount)": {
+      "intent": "Send",
+      "fields": [
+        { "path": "to", "label": "To", "format": "addressName" },
+        { "path": "amount", "label": "Amount", "format": "raw" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .expect("write synthetic descriptor");
+
+    let policy = load_policy(&policy_path).expect("load synthetic policy");
+    let strict_error = try_compile_one(&descriptor_path, &policy, Some(temp.path()))
+        .expect_err("strict compilation must reject unsupported senderAddress semantics");
+    assert!(
+        strict_error.contains("senderAddress") && strict_error.contains("unsupported"),
+        "unexpected strict refusal: {strict_error}"
+    );
+
+    let (result, skips) = build_db_tolerant(temp.path(), &policy_path, Some(temp.path()))
+        .expect("the unrelated safe format survives tolerant compilation");
+    assert_eq!(result.leaf_count, 1);
+    assert_eq!(result.entries.len(), 1);
+    let ir = Erc7730Ir::parse(&result.entries[0].ir_bytes).expect("synthetic IR parses");
+    assert_eq!(ir.format_count(), Ok(1));
+
+    let selector = |signature: &str| {
+        keccak256(signature.as_bytes())[..4]
+            .try_into()
+            .expect("selector width")
+    };
+    let unsafe_selector: [u8; 4] = selector("route(address,uint256)");
+    let safe_selector: [u8; 4] = selector("transfer(address,uint256)");
+    assert!(
+        ir.find_format_by_selector(&safe_selector)
+            .expect("safe selector lookup")
+            .is_some(),
+        "the unrelated safe format must survive"
+    );
+    assert!(
+        ir.find_format_by_selector(&unsafe_selector)
+            .expect("unsafe selector lookup")
+            .is_none(),
+        "the senderAddress-bearing format must be dropped as a unit"
+    );
+    let drop_receipts: Vec<_> = skips
+        .iter()
+        .filter(|skip| skip.reason.contains("PARTIAL FORMAT DROP"))
+        .collect();
+    assert_eq!(
+        drop_receipts.len(),
+        1,
+        "one unsafe format, one bound receipt"
+    );
+    assert!(
+        drop_receipts[0]
+            .reason
+            .contains("route(address recipient,uint256 amount)")
+            && drop_receipts[0].reason.contains("senderAddress")
+            && drop_receipts[0].reason.contains("unsupported"),
+        "drop receipt must bind the exact format and semantic parameter: {}",
+        drop_receipts[0].reason
+    );
+
+    let contract = {
+        let mut contract = [0u8; 20];
+        contract[19] = 1;
+        contract
+    };
+    for selector in [safe_selector, unsafe_selector] {
+        assert!(
+            result.known_calls.contains(&(1, contract, selector)),
+            "every declared selector must remain in exact omission protection"
+        );
+    }
 }
 
 /// Router02 assigns protocol semantics to sentinel recipient addresses and to

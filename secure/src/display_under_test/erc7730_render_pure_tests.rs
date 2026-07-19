@@ -2022,36 +2022,63 @@ fn positive_usdt_transfer_polygon_chain_pinning() {
 #[test]
 fn positive_weth_deposit_pulls_value_from_envelope() {
     let res = build_registry();
-    let entry = find_leaf(res, "calldata-weth.json", 1);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-
-    // deposit() is the zero-arg selector — the "Amount" field is
-    // sourced from `@.value` (container), not the calldata.
     let calldata = calldata_deposit();
-    assert_selector_matches(&verified.ir, &calldata, "deposit()");
+    assert_eq!(calldata, [0xd0, 0xe3, 0x0d, 0xb0]);
 
-    let mut tx = envelope(1, entry.contract);
-    tx.value = u256_from_u64(500_000_000_000_000_000); // 0.5 ETH
+    for (chain_id, expected_contract) in [
+        (1, "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
+        (11_155_111, "fff9976782d46cc05630d1f6ebab18b2324d6b14"),
+    ] {
+        let entry = find_leaf(res, "calldata-weth.json", chain_id);
+        assert_eq!(hex::encode(entry.contract), expected_contract);
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify WETH9 leaf");
+        cross_check_contract(&verified.ir, chain_id, &entry.contract)
+            .expect("bind exact WETH9 deployment");
+        assert_selector_matches(&verified.ir, &calldata, "deposit()");
 
-    let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
+        let render_value = |value| {
+            let mut tx = envelope(chain_id, entry.contract);
+            tx.value = u256_from_u64(value);
+            render_erc7730_pages(&tx, &calldata, &verified, None, &NameResolver::new())
+                .expect("render exact WETH9 deposit")
+        };
+        let half_pages = render_value(500_000_000_000_000_000);
+        assert_all_pages_printable(&half_pages);
+        let [intent_r0, owner_r, contract_r, _] =
+            page_strs(&half_pages, intent_page_index(&half_pages));
+        assert_eq!(intent_r0, "Wrap");
+        assert_eq!(owner_r, "WETH");
+        assert_eq!(contract_r, "WETH");
+        let half_rows = page_strs(&half_pages, find_page_by_label(&half_pages, "Amount"));
+        assert_eq!(half_rows[1], "0.5 ETH");
 
-    assert_all_pages_printable(&pages);
+        let one_pages = render_value(1_000_000_000_000_000_000);
+        let one_rows = page_strs(&one_pages, find_page_by_label(&one_pages, "Amount"));
+        assert_eq!(one_rows[1], "1 ETH");
+        assert_ne!(
+            half_rows, one_rows,
+            "transaction value must alter the transcript"
+        );
 
-    let [intent_r0, owner_r, contract_r, _] = page_strs(&pages, intent_page_index(&pages));
-    assert_eq!(intent_r0, "Wrap");
-    assert_eq!(owner_r, "WETH");
-    assert_eq!(contract_r, "WETH");
+        let mut trailing = calldata.clone();
+        trailing.push(0);
+        let mut tx = envelope(chain_id, entry.contract);
+        tx.value = u256_from_u64(500_000_000_000_000_000);
+        assert!(matches!(
+            render_erc7730_pages(&tx, &trailing, &verified, None, &NameResolver::new()),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 static calldata trailing"
+            ))
+        ));
 
-    // Amount page — 0.5 ETH at 18 decimals. review 4.3: the amount now prefers
-    // a SINGLE row ("0.5 ETH") instead of the old split ("0" / ".5 ETH").
-    let amount_page = find_page_by_label(&pages, "Amount");
-    let amount_rows = page_strs(&pages, amount_page);
-    assert_eq!(
-        amount_rows[1], "0.5 ETH",
-        "amount must render on a single row (4.3), got:\n{amount_rows:?}",
-    );
+        let mut withdraw = keccak256(b"withdraw(uint256)")[..4].to_vec();
+        withdraw.extend_from_slice(&u256_from_u64(1).0);
+        assert!(matches!(
+            render_erc7730_pages(&tx, &withdraw, &verified, None, &NameResolver::new()),
+            Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+        ));
+    }
 }
 
 #[test]

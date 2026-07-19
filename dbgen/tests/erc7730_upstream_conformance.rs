@@ -2635,3 +2635,59 @@ fn weth_upstream_positive_with_trailing_calldata_is_an_explicit_pq1_refusal() {
         ))
     ));
 }
+
+#[test]
+fn weth_canonical_deposit_renders_on_each_pinned_deployment_and_binds_value() {
+    fn value(raw: u64) -> U256 {
+        let mut bytes = [0u8; 32];
+        bytes[24..].copy_from_slice(&raw.to_be_bytes());
+        U256(bytes)
+    }
+
+    let registry = build_registry();
+    let selector = &keccak256(b"deposit()")[..4];
+    assert_eq!(selector, [0xd0, 0xe3, 0x0d, 0xb0]);
+    for (chain_id, address) in [
+        (1, "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
+        (11_155_111, "fff9976782d46cc05630d1f6ebab18b2324d6b14"),
+    ] {
+        let contract: [u8; 20] = hex::decode(address)
+            .expect("valid WETH9 address")
+            .try_into()
+            .expect("WETH9 address width");
+        let entry = registry
+            .entries
+            .iter()
+            .find(|entry| {
+                entry.chain_id == chain_id
+                    && entry.contract == contract
+                    && entry.source.file_name().and_then(|name| name.to_str())
+                        == Some("calldata-weth.json")
+            })
+            .expect("accepted WETH9 descriptor leaf");
+        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify WETH9 leaf");
+        cross_check_contract(&verified.ir, chain_id, &contract).expect("bind WETH9 deployment");
+
+        let render_value = |raw| {
+            let tx = Eip1559Tx {
+                chain_id,
+                to: Some(contract),
+                value: value(raw),
+                data_len: selector.len(),
+                ..Eip1559Tx::default()
+            };
+            let pages = render_erc7730_pages(&tx, selector, &verified, None, &NameResolver::new())
+                .expect("canonical four-byte WETH9 deposit renders");
+            normalized_rows(&pages)
+        };
+        let half = render_value(500_000_000_000_000_000);
+        let one = render_value(1_000_000_000_000_000_000);
+        assert!(half.iter().any(|row| row == "0.5eth"), "rows={half:?}");
+        assert!(one.iter().any(|row| row == "1eth"), "rows={one:?}");
+        assert_ne!(
+            half, one,
+            "distinct signed values need distinct transcripts"
+        );
+    }
+}
