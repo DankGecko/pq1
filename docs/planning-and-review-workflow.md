@@ -370,10 +370,14 @@ results; do not invent completion or start another campaign.
 
 ### Hard review bounds
 
-The three reviews form one parallel wave. Each reviewer gets **8 minutes total**
-and a maximum **800-word** response. No follow-up model turns, cross-review, or
-report rewrite are allowed. Already-running mandatory tests are separate and
-run once.
+The three reviews form one parallel wave. Each reviewer gets **15 minutes
+total** and a maximum **800-word** response. No follow-up model turns,
+cross-review, or report rewrite are allowed. Already-running mandatory tests
+are separate and run once. Reviewers must reserve the final stretch for
+synthesis: a partial compact report at the deadline beats a timed-out leg
+(the first 8-minute wave lost an entire reviewer to a mid-exploration
+timeout — the bound exists to stop campaign creep, not to price out the
+slowest model).
 
 At the deadline, the reviewer returns what it has with an honest `GAP`, or the
 coordinator records the leg as timed out. A timeout never causes the other two
@@ -414,6 +418,46 @@ trace. Conversely, one unsupported model assertion does not block landing. If
 the coordinator cannot resolve a stage-impacting disagreement quickly from the
 source/evidence, report it to the user as `UNRESOLVED` instead of launching more
 reviewers.
+
+## 7b. Deep review gear (owner-triggered only)
+
+The fast wave above is the right instrument for bounded per-candidate diffs.
+It is the wrong instrument where a shallow pass is itself the risk: actions
+that cannot be undone, and large piles of un-adjudicated findings. For those,
+run the **same three-reviewer pattern in deep gear** — identical discipline,
+longer budget, whole-surface scope.
+
+**Triggers (any one; the owner selects the surface):**
+
+1. An irreversible or production-authority-bearing action, **before**
+   execution: OTP/option-byte burns, SE lifecycle ratchets (the S-1/S-2
+   class), factory-ceremony steps, rollback-floor writes, first-boot
+   self-lock activation.
+2. A backlog of un-adjudicated single-coordinator findings before bulk
+   remediation: any unverified HIGH-severity candidate, or ten or more
+   candidates on one surface (an SE-driver-style pile).
+3. A pre-ship full-surface or full-project sweep.
+
+**Shape (identical discipline to §7 unless stated otherwise):**
+
+- The same three reviewers in fresh, mutually blind contexts with the same
+  short prompt. A missing or timed-out leg is recorded, never substituted.
+- Scope is a whole surface or artifact set, not one diff.
+- Budget: up to one working session (~4 hours wall-clock) per leg; no
+  response-word cap. Findings still lead with PoC-or-`suspicion,
+  unverified` honesty.
+- The coordinator reproduces every blocker/major claim from source or a
+  focused executable check before it is accepted; unsupported suspicions
+  remain `NOTE`s; disagreement that cannot be resolved from evidence is
+  reported `UNRESOLVED`, never voted away.
+- **No** pairwise disclosure, no cross-adjudication matrix, no digest
+  ceremony, no standing use: deep gear fires on these triggers only.
+
+**Output:** tracker issues created or updated (each candidate carrying its
+PoC-or-suspicion label), one compact coordinator decision, and the usual
+runtime receipt (reviewer/model, target identity, session identifier,
+completion status, raw report path). A deep-gear verdict on an irreversible
+action is a recommendation; the owner authorizes the action itself.
 
 ## 8. Minimal review context and output
 
