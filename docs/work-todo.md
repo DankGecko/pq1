@@ -611,6 +611,74 @@ fixes; line cites live in the playbook rows. Same candidate status as above.
 - [ ] **X17-UI3 — `pin_entry` resets the idle timer on dialog entry (LOW).** `pin_entry.rs:83` — the HIGH-13 pattern survives on the NS-reachable PIN path; each spammed unlock gifts a fresh 120 s window. Fix: delete the entry reset; extend the prologue test (playbook UI5).
 - [ ] **X17-FV1 — ProVerif citer staleness (LOW-MED, docs).** The M3 vendor re-derivation (`9ec109ad`, same day) pinned cross-session replay FALSE for the OPTIGA shield and banner-marked the driver-derived model do-not-cite; the citers didn't follow: `contracts/verification/proverif/README.md:90-91` ("handshake remains a future model", never mentions the vendor model), `contracts/verification/docs/THREAT_CLAIM_MAP.md:73` (anchors S-SE-TUNNEL-SNOOP to the fiction model; should record replay proven-possible + SE5/OP17-2 pointer), and the two 2026-07-17 verification docs recommend the re-derivation as future work post-landing. Fix the three citers. The FV playbook itself was updated (V9 detection: external-oracle re-derivation; Part D stale clause).
 
+## 🔎 Full-project adversarial sweep 2026-07-18 (discovery) — banked candidates
+
+From `docs/security/adversarial-review/findings/full-project-sweep-2026-07-18-discovery.md`
+(54 candidates, all `🔲 OPEN` — supplemental **pre-cross discovery evidence**,
+NOT cross-adjudicated; canonical recording requires the Partner-A/Partner-B
+cross-adjudication per `docs/planning-and-review-workflow.md`). 15 parallel
+first-principles lanes over all 16 playbook surfaces at HEAD `89c60063`;
+367 already-tracked items excluded up front; 29 clean-new + 25 carrying
+`overlap-check:` refs for adjudication. Coordinator re-verified on HEAD:
+F49 + F50 executed red (exit 1 each), F30 grep-verified. Full evidence,
+PoCs, per-surface verdicts, and the honest residual live in the report;
+one line per candidate below (severity; PoC/suspicion):
+
+- [ ] **F1 [USB-1]** — Cross-channel seq=0 aborts in-progress APDU reassembly; silent starvation bypassing the F11 lease + §31a isolation (low; PoC)
+- [ ] **F2 [USB-2]** — Slow-drain keepalive pins the single-session router lease indefinitely; 30 s timeout is activity-reset, not a total bound (low; PoC)
+- [ ] **F3 [USB-3]** — REQUEST_UNLOCK not idempotent: every host call pops a trusted-UI PIN dialog (prompt-fatigue/attempt-burn vector) (low; PoC)
+- [ ] **F4 [USB-4]** — Doc/comment drift on the USB attack surface, three spots (low; informational)
+- [ ] **F5 [TZGW-1]** — ICACHE + RAMCFG are NS-attributed; the SECCFGR3 "crypto allowlist, OTG-only exception" claim is false (medium; attribution PoC, RAMCFG-erase semantics suspicion)
+- [ ] **F6 [TZGW-2]** — MPCBB super-block config never locked and never read-back verified (low; PoC)
+- [ ] **F7 [TZGW-3/RUN-2]** — Production veneers run without `HandlerGuard`; idle-wipe+PendSV preemption aliases the `SE`/`DISPLAY`/`STATE` singletons (medium; schedule PoC, corruption suspicion)
+- [ ] **F8 [TZGW-4]** — `sau.rs` asserts a nonexistent SECCFGR4 "left untouched"; TZIC IER4=0 makes AHB3 NS probes silent (low; PoC)
+- [ ] **F9 [CS-1]** — `personal_sign` rendering non-injective: `?`-substitution + trailing-whitespace invisibility + no byte length (medium; PoC)
+- [ ] **F10 [CS-2]** — ERC-20 token amounts and legacy fee prices still round at ≤6 fraction digits; no exactness gate unlike native/ERC-7730 paths (low; PoC)
+- [ ] **F11 [CS-3]** — `ownerIndex` signed but never displayed on ordinary UserOp signs (low; PoC)
+- [ ] **F12 [CS-4]** — ERC-20 header/name silently truncated with no `~` marker (low; PoC)
+- [ ] **F13 [SCAFI-1]** — OPTIGA shielded-connection CCM tag check is a single-skip plain-bool gate with hand-rolled compare — the fault class the SCP03 twin was F-28/F-29-hardened against (medium; PoC)
+- [ ] **F14 [SCAFI-2]** — Scroll-to-end WYSIWYS gate (`seen_last`) is a bare stack bool feeding the confirm sentinel; one stuck-at bit authorizes signing (medium-low; PoC)
+- [ ] **F15 [SCAFI-3]** — Unpublished WOTS/FORS secret intermediates never zeroized in sphincs-c10 (low; suspicion)
+- [ ] **F16 [SCAFI-4]** — Durable counter commits (`last_userop_count_set`/`offchain_count_promote_to`/`register_slot`) lack the read-back + sentinel the `_bump` twins carry (low; PoC)
+- [ ] **F17 [SCAFI-5]** — `gated_unlock` success path swallows `pin_attempts_reset()` failure → correct-PIN drift toward lockout/wipe (low; PoC)
+- [ ] **F18 [SCAFI-6]** — `read_entropy_blob` ×3 gated by `is_true_fi()` plain bool, not the prescribed `check_sentinel` pattern (low; PoC)
+- [ ] **F19 [FWSB-1]** — CMD_FW_BEGIN erases 8 KB of the running monolithic image's own .text; the "cannot brick" guard is inert on every bootable build (medium; PoC built-ELF)
+- [ ] **F20 [FWSB-2]** — COMMIT never resets the idle timer despite `cmd_fw_chunk.rs` documenting that it does (low; PoC)
+- [ ] **F21 [FWSB-3]** — FSBL footprint CI gate silently passes when the ARM toolchain is absent (low; PoC)
+- [ ] **F22 [FWSB-4]** — QEMU gateway never dispatches CMD_FW_*; the FW path has no dynamic host e2e (low; PoC)
+- [ ] **F23 [SE-1]** — Post-lockout-wipe device is a permanent unrecoverable brick; "restore from seed" undeliverable (high; PoC source trace)
+- [ ] **F24 [SE-2]** — Wizard-misfire on a used device destroys the live wallet before failing: OPTIGA-first provision ordering + panic-on-any-error (high; PoC source trace)
+- [ ] **F25 [SE-3]** — E120 ratchets on every F1D0 execute incl. successful verifies; `reset_hw_pin_counter` failure aborts unlock post-verify (medium; suspicion)
+- [ ] **F26 [LIFE-1]** — Wipe-on-duress silently downgrades to decoy: swallowed arm error at provisioning + fail-open mode read at unlock (medium; PoC, two cut points)
+- [ ] **F27 [ENT-1]** — `rng_strong` multi-chunk fold reuses the previous chunk's SE block (low; PoC, latent)
+- [ ] **F28 [ENT-2]** — `shuffle.rs` doc comment inverts the implemented F-16 defense (low; PoC)
+- [ ] **F29 [ENT-3]** — `hw::huk::derive_device_key` — DHUK-flavored public API actually rooted in OTP-master, zero callers (low; suspicion, foot-gun class)
+- [ ] **F30 [RUN-1]** — No exception-priority programming anywhere: idle-wipe→PendSV re-unlock starves SysTick (guaranteed ~2 s IWDG false-bite in production) and blocks tamper escalation (high; PoC, coordinator grep-verified)
+- [ ] **F31 [RUN-3]** — IWDG coverage gaps: no watchdog before post-unlock `init()`, unbounded kick-forever boot grace, re-callable heartbeat registration (medium; PoC)
+- [ ] **F32 [RUN-4]** — SysTick `kick()` can interleave the `iwdg::init()` KR sequence and silently drop PR/RLR programming (low; suspicion, needs RM0456)
+- [ ] **F33 [RUN-5]** — Unexpected-IRQ `DefaultHandler` arm and absent NMI handler park the CPU in WFE forever with secrets resident; no zeroize (low; PoC, reachability conditional)
+- [ ] **F34 [OFFCHAIN-1]** — MAX_OFFCHAIN_GAP is companion-resettable at zero on-chain cost; the "≤100 unbacked sigs" claim is false (medium-low; PoC)
+- [ ] **F35 [OFFCHAIN-2]** — Post-restore re-registration needs no Type-1 rotation; any UserOp sign or SYNC-0 confirm registers the slot (low; PoC)
+- [ ] **F36 [OFFCHAIN-3]** — ERC-6492 counterfactual path is a second bootstrap-key few-time release channel with no bootstrap-side tally (low; PoC)
+- [ ] **F37 [OFFCHAIN-4]** — page-123 slot keys are seed-independent → cross-seed registration/counter inheritance (low; PoC)
+- [ ] **F38 [CHAIN-1]** — contracts/verity Lean model silently drops H-3 parity, the transient credit, and the H-2 self-call block vs the deployed wallet (low; PoC)
+- [ ] **F39 [TUI-1]** — Both-buttons chord confirm has no hold-duration floor and fires on rollover; a ~30 ms simultaneous tap is a full confirm (medium; PoC)
+- [ ] **F40 [TUI-2]** — Button timing calibration is one unvoted MMIO read; a single boot-time fault collapses long-press 500 ms → ~12 ms (low; suspicion, needs bench fault)
+- [ ] **F41 [TUI-3]** — `ui-capture` SHA-256-fingerprints secret-bearing frames; the `[UI-FP]` log is a seed-recovery oracle (low; PoC)
+- [ ] **F42 [PRODCFG-1]** — FSBL/measurement trust-chain test suites are green-when-run but enrolled in NO CI job (medium; PoC)
+- [ ] **F43 [PRODCFG-2]** — Stale `target/veneers.o`: cargo fresh-skip pairs the NS image with a *different* secure build's CMSE implib (medium; PoC reproduced)
+- [ ] **F44 [PRODCFG-3]** — Reproducibility evidence covers only the dev QEMU cfg; FSBL never byte-diffed; `gate_enforcement.json` overclaims the policed surface (low-medium; PoC)
+- [ ] **F45 [PRODCFG-4]** — No CI job ever links the thumbv8m secure+nonsecure pair (low; PoC)
+- [ ] **F46 [PRODCFG-5]** — `flake.nix` vendors a git pin (`tropic01`) no longer in `Cargo.lock` (low; suspicion)
+- [ ] **F47 [LOCK-1]** — `rdp-enforce-halt` × `rdp2-self-lock`: unfenced contradiction makes the mandatory self-lock unreachable (low; PoC)
+- [ ] **F48 [LOCK-2]** — Ship-profile WRP1A check accepts over-wide spans → passes the last pre-lock gate into a permanent RDP-2 brick (low; PoC)
+- [ ] **F49 [FV-1]** — `verify-extraction-freshness` RED on HEAD: aa-userop extraction stale post-V6; §33 theorems prove a pre-V6 artifact (high; executed, coordinator re-verified exit 1)
+- [ ] **F50 [FV-2]** — `verify-gate-enforcement` RED on HEAD: `verify-hw-assumptions` + `verify-mmio-addresses` escape the G1 manifest (medium; executed, coordinator re-verified exit 1)
+- [ ] **F51 [FV-3]** — `verify-mmio-addresses` is a permanent green no-op in CI (low; PoC)
+- [ ] **F52 [FV-4]** — Kontrol/KEVM leg has no proof-identity baseline; the F7 fix was never extended to it (low-medium; PoC + suspicion)
+- [ ] **F53 [FV-5]** — The G1 lint's own negative control is never run (low; PoC)
+- [ ] **F54 [FV-6]** — Extraction-freshness pins under-cover the generated file set (low; PoC)
+
 ## ⚠️ SHIP BLOCKERS — must be resolved before any unit leaves the bench
 
 These items are NOT part of the normal feature backlog. They are
