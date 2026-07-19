@@ -42,13 +42,13 @@ tuple-set SHA-256, and Bloom bytes. Merkle-root or Bloom equality alone is not
 accepted as a faithfulness proof.
 
 <!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
-Checked-in curated receipt, verified against a fresh build by `--check`: **430 leaves**, **354,011-byte**
+Checked-in curated receipt, verified against a fresh build by `--check`: **430 leaves**, **354,095-byte**
 compiled companion catalogue, root
-`4d2efbbf01c4d6a3a100c1931b192a07ab403bac915b6591d3aa461e05adb8c6`,
+`6b4f243d3f60f15fb64555d91861f702f852bdb400087a716627ece9dd4e1978`,
 **4,542** canonical known-call tuples, tuple-set SHA-256
 `96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`.
 Curation manifest SHA-256
-`ac691ce8d9e924bf1fa11387b0777abe30b6f6128c4acf252c979923e560715a` binds upstream commit
+`eb49d548e57e49640b1a3caf7330964f4c7ccb8ba09418e504cb4165dc8c9a73` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
 The Bloom contains 28,235 / 131,072 set bits, below the generator's 25% cap.

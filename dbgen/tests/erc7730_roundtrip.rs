@@ -298,6 +298,114 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
 }
 
 #[test]
+fn registry_serenita_deposit_admits_only_the_referrer_complete_route() {
+    let result = build_registry();
+    let entries: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-EthVault.json")
+        })
+        .collect();
+    assert_eq!(entries.len(), 1, "Serenita has one pinned deployment");
+    let entry = entries[0];
+    assert_eq!(entry.chain_id, 1);
+    assert_eq!(
+        hex::encode(entry.contract),
+        "b36fc5e542cb4fc562a624912f55da2758998113"
+    );
+
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Serenita IR parses");
+    let expected_signatures = [
+        "deposit(address,address)",
+        "enterExitQueue(uint256,address)",
+    ];
+    let expected_selectors: BTreeSet<[u8; 4]> = expected_signatures
+        .iter()
+        .map(|signature| {
+            keccak256(signature.as_bytes())[..4]
+                .try_into()
+                .expect("selector width")
+        })
+        .collect();
+    let actual_selectors: BTreeSet<_> = ir
+        .format_iter()
+        .map(|format| format.expect("Serenita format parses").selector)
+        .collect();
+    assert_eq!(
+        actual_selectors, expected_selectors,
+        "the curation must admit only deposit and preserve enterExitQueue"
+    );
+
+    let deposit_selector: [u8; 4] = keccak256(b"deposit(address,address)")[..4]
+        .try_into()
+        .expect("selector width");
+    let deposit = ir
+        .find_format_by_selector(&deposit_selector)
+        .expect("Serenita format table parses")
+        .expect("Serenita deposit is admitted");
+    let fields: Vec<_> = deposit
+        .fields()
+        .map(|field| field.expect("generated Serenita field parses"))
+        .collect();
+    assert_eq!(fields.len(), 3);
+    assert_eq!(fields[0].label, b"Rewards receiver");
+    assert_eq!(
+        FormatOp::try_from(fields[0].format_op),
+        Ok(FormatOp::AddressName)
+    );
+    assert_eq!(fields[1].label, b"Amount to stake");
+    assert_eq!(
+        FormatOp::try_from(fields[1].format_op),
+        Ok(FormatOp::Amount)
+    );
+    assert_eq!(fields[2].label, b"Referrer");
+    assert_eq!(
+        FormatOp::try_from(fields[2].format_op),
+        Ok(FormatOp::Raw),
+        "the complete signed referrer ABI word must render"
+    );
+    let referrer_params = parse_params(&ir, fields[2].param_off).expect("referrer params parse");
+    assert_eq!(referrer_params.visibility, Visibility::Always);
+    assert_eq!(referrer_params.terminal_kind, Some(TerminalKind::Address));
+    assert!(
+        result
+            .known_calls
+            .contains(&(entry.chain_id, entry.contract, deposit_selector)),
+        "newly clear-signable deposit was already registry-known"
+    );
+
+    for refused in [
+        "claimExitedAssets(uint256,uint256,uint256)",
+        "multicall(bytes[])",
+        "updateState((bytes32,int160,uint160,bytes32[]))",
+        "updateStateAndDeposit(address,address,(bytes32,int160,uint160,bytes32[]))",
+    ] {
+        let selector: [u8; 4] = keccak256(refused.as_bytes())[..4]
+            .try_into()
+            .expect("selector width");
+        assert!(
+            ir.find_format_by_selector(&selector)
+                .expect("Serenita format table parses")
+                .is_none(),
+            "unsafe Serenita format unexpectedly became clear-signable: {refused}"
+        );
+    }
+
+    assert_eq!(result.entries.len(), 430);
+    assert_eq!(result.known_call_count, 4_542);
+    assert_eq!(
+        hex::encode(result.known_call_set_hash),
+        "96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(&result.known_calls_bloom)),
+        "270a4bc71332868cbdc75c81a1cc92da8669a37e2bead6b7d193974b3e1d431d"
+    );
+}
+
+#[test]
 fn registry_aave_wrapped_gateway_admits_referral_complete_calls_on_exact_deployments() {
     let result = build_registry();
     let source_name = "calldata-WrappedTokenGatewayV3.json";

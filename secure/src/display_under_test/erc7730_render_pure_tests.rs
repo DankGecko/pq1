@@ -2417,6 +2417,147 @@ fn positive_aave_v2_borrow_and_deposit_bind_complete_referral_words() {
 }
 
 #[test]
+fn positive_serenita_deposit_binds_native_value_receiver_and_complete_referrer() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-EthVault.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Serenita leaf");
+
+    let receiver = [0x44u8; 20];
+    let referrer = [0x55u8; 20];
+    let signer = [0x66u8; 20];
+    let calldata = calldata_static(
+        "deposit(address,address)",
+        &[abi_address_word(receiver), abi_address_word(referrer)],
+    );
+    assert_selector_matches(&verified.ir, &calldata, "deposit(address,address)");
+
+    let resolver = NameResolver::new();
+    let mut tx = envelope(1, entry.contract);
+    tx.value = u256_from_u64(1_500_000_000_000_000_000);
+    let rendered = render_erc7730_pages_with_signer_checked(
+        &tx, &calldata, &verified, None, &resolver, &signer,
+    )
+    .expect("render Serenita deposit");
+    assert_eq!(
+        rendered.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert!(
+        rendered
+            .transcript_receipt
+            .range_matches(&rendered.pages, 0),
+        "Serenita receipt must bind its complete rendered page range"
+    );
+    assert_all_pages_printable(&rendered.pages);
+    assert_eq!(
+        page_strs(&rendered.pages, intent_page_index(&rendered.pages))[0],
+        "Stake ETH"
+    );
+
+    let amount_rows = page_strs(
+        &rendered.pages,
+        find_page_by_label(&rendered.pages, "Amount to stake"),
+    );
+    assert!(
+        amount_rows.iter().any(|row| row.contains("1.5"))
+            && amount_rows.iter().any(|row| row.contains("ETH")),
+        "bound native amount missing: {amount_rows:?}"
+    );
+    assert_full_address_field_page(&rendered.pages, "Rewards receiver", &receiver);
+    let referrer_word = abi_address_word(referrer);
+    assert_raw_word_pages(&rendered.pages, "Referrer", &referrer_word);
+
+    let mut mutated_referrer = referrer;
+    mutated_referrer[19] ^= 1;
+    let mutated_referrer_calldata = calldata_static(
+        "deposit(address,address)",
+        &[
+            abi_address_word(receiver),
+            abi_address_word(mutated_referrer),
+        ],
+    );
+    let mutated_referrer_render = render_erc7730_pages_with_signer_checked(
+        &tx,
+        &mutated_referrer_calldata,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("render mutated Serenita referrer");
+    assert_raw_word_pages(
+        &mutated_referrer_render.pages,
+        "Referrer",
+        &abi_address_word(mutated_referrer),
+    );
+    assert_ne!(
+        rendered.pages.as_slice(),
+        mutated_referrer_render.pages.as_slice(),
+        "one signed referrer bit must change trusted pages"
+    );
+    assert!(
+        !rendered
+            .transcript_receipt
+            .exact_match(&mutated_referrer_render.transcript_receipt),
+        "one signed referrer bit must change the transcript receipt"
+    );
+
+    let mut mutated_receiver = receiver;
+    mutated_receiver[19] ^= 1;
+    let mutated_receiver_calldata = calldata_static(
+        "deposit(address,address)",
+        &[
+            abi_address_word(mutated_receiver),
+            abi_address_word(referrer),
+        ],
+    );
+    let mutated_receiver_render = render_erc7730_pages_with_signer_checked(
+        &tx,
+        &mutated_receiver_calldata,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("render mutated Serenita receiver");
+    assert_ne!(
+        rendered.pages.as_slice(),
+        mutated_receiver_render.pages.as_slice(),
+        "one signed receiver bit must change trusted pages"
+    );
+    assert!(
+        !rendered
+            .transcript_receipt
+            .exact_match(&mutated_receiver_render.transcript_receipt),
+        "one signed receiver bit must change the transcript receipt"
+    );
+
+    let mut mutated_value_tx = tx;
+    mutated_value_tx.value = u256_from_u64(2_000_000_000_000_000_000);
+    let mutated_value_render = render_erc7730_pages_with_signer_checked(
+        &mutated_value_tx,
+        &calldata,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("render mutated Serenita native value");
+    assert_ne!(
+        rendered.pages.as_slice(),
+        mutated_value_render.pages.as_slice(),
+        "a changed signed native value must change trusted pages"
+    );
+    assert!(
+        !rendered
+            .transcript_receipt
+            .exact_match(&mutated_value_render.transcript_receipt),
+        "a changed signed native value must change the transcript receipt"
+    );
+}
+
+#[test]
 fn positive_aave_repay_renders_enum_label() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-lpv3.json", 1);

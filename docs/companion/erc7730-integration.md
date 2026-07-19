@@ -35,11 +35,11 @@ Current security contract:
 - The host compiler and device require **IR schema v4 (`0x04`)**; this value is
   generated from `pqsigner_erc7730::ir::SCHEMA_VER`, and older schemas hard-refuse.
 - The current regenerated development catalogue has **430 leaves**, root
-  `4d2efbbf01c4d6a3a100c1931b192a07ab403bac915b6591d3aa461e05adb8c6`,
+  `6b4f243d3f60f15fb64555d91861f702f852bdb400087a716627ece9dd4e1978`,
   and **4,542 exact known-call tuples**. The tuple-set receipt is SHA-256
   `96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`;
   Bloom occupancy is 28,235 / 131,072 bits under the compiler-enforced generation cap.
-- The current compiler report records **275** omitted descriptor/formats.
+- The current compiler report records **274** omitted descriptor/formats.
 <!-- END XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->
 - These receipts detect input/artifact drift. They do not turn Bloom insertion
   into a proof of parser completeness. The current independent types-only ABI
