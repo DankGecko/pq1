@@ -10,9 +10,22 @@
       "claimExitedAssets(uint256 positionTicket, uint256 timestamp, uint256 exitQueueIndex)": {
         "intent": "claim exited assets",
         "fields": [
-          { "label": "Position Ticket", "path": "#.positionTicket", "visible": "never" },
-          { "label": "Timestamp", "path": "#.timestamp", "visible": "never" },
-          { "label": "Exit Queue Index", "path": "#.exitQueueIndex", "visible": "never" }
+          {
+            "label": "Claim receiver",
+            "format": "addressName",
+            "params": { "types": ["eoa", "wallet", "contract"] },
+            "path": "@.from",
+            "visible": "always"
+          },
+          { "label": "Position Ticket", "path": "#.positionTicket", "format": "raw", "visible": "always" },
+          {
+            "label": "Exit initiated at",
+            "format": "date",
+            "params": { "encoding": "timestamp" },
+            "path": "#.timestamp",
+            "visible": "always"
+          },
+          { "label": "Exit Queue Index", "path": "#.exitQueueIndex", "format": "raw", "visible": "always" }
         ]
       },
       "deposit(address receiver, address referrer)": {

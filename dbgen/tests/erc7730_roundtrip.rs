@@ -297,8 +297,56 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
     );
 }
 
+fn assert_stakewise_claim_format(ir: &Erc7730Ir<'_>, format_name: &str) {
+    let selector: [u8; 4] = keccak256(b"claimExitedAssets(uint256,uint256,uint256)")[..4]
+        .try_into()
+        .expect("selector width");
+    let claim = ir
+        .find_format_by_selector(&selector)
+        .expect("StakeWise claim format table parses")
+        .unwrap_or_else(|| panic!("{format_name} claim route is admitted"));
+    let fields: Vec<_> = claim
+        .fields()
+        .map(|field| field.expect("generated StakeWise claim field parses"))
+        .collect();
+    assert_eq!(fields.len(), 4);
+
+    let expected = [
+        (b"Claim receiver".as_slice(), FormatOp::AddressName),
+        (b"Position Ticket".as_slice(), FormatOp::Raw),
+        (b"Exit initiated at".as_slice(), FormatOp::Date),
+        (b"Exit Queue Index".as_slice(), FormatOp::Raw),
+    ];
+    for (field, (label, op)) in fields.iter().zip(expected) {
+        assert_eq!(field.label, label);
+        assert_eq!(FormatOp::try_from(field.format_op), Ok(op));
+        let params = parse_params(ir, field.param_off).expect("claim field params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+    }
+
+    let mut sender_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+    sender_path.extend_from_slice(&container_field::FROM.to_be_bytes());
+    assert_eq!(
+        ir.path_bytes(fields[0].path_off)
+            .expect("claim receiver path parses"),
+        sender_path,
+        "the visible claim receiver must bind the authenticated @.from container field"
+    );
+    let receiver_params =
+        parse_params(ir, fields[0].param_off).expect("claim receiver params parse");
+    assert_eq!(receiver_params.addr_types, Some(0x07));
+    assert_eq!(receiver_params.terminal_kind, Some(TerminalKind::Address));
+    for field in [&fields[1], &fields[2], &fields[3]] {
+        let params = parse_params(ir, field.param_off).expect("claim scalar params parse");
+        assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+    }
+    let timestamp_params =
+        parse_params(ir, fields[2].param_off).expect("claim timestamp params parse");
+    assert_eq!(timestamp_params.date_encoding, Some(0));
+}
+
 #[test]
-fn registry_serenita_deposit_admits_only_the_referrer_complete_route() {
+fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
     let result = build_registry();
     let entries: Vec<_> = result
         .entries
@@ -318,6 +366,7 @@ fn registry_serenita_deposit_admits_only_the_referrer_complete_route() {
 
     let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Serenita IR parses");
     let expected_signatures = [
+        "claimExitedAssets(uint256,uint256,uint256)",
         "deposit(address,address)",
         "enterExitQueue(uint256,address)",
     ];
@@ -376,8 +425,18 @@ fn registry_serenita_deposit_admits_only_the_referrer_complete_route() {
         "newly clear-signable deposit was already registry-known"
     );
 
+    assert_stakewise_claim_format(&ir, "Serenita");
+    let claim_selector: [u8; 4] = keccak256(b"claimExitedAssets(uint256,uint256,uint256)")[..4]
+        .try_into()
+        .expect("selector width");
+    assert!(
+        result
+            .known_calls
+            .contains(&(entry.chain_id, entry.contract, claim_selector)),
+        "newly clear-signable Serenita claim was already registry-known"
+    );
+
     for refused in [
-        "claimExitedAssets(uint256,uint256,uint256)",
         "multicall(bytes[])",
         "updateState((bytes32,int160,uint160,bytes32[]))",
         "updateStateAndDeposit(address,address,(bytes32,int160,uint160,bytes32[]))",
@@ -390,6 +449,95 @@ fn registry_serenita_deposit_admits_only_the_referrer_complete_route() {
                 .expect("Serenita format table parses")
                 .is_none(),
             "unsafe Serenita format unexpectedly became clear-signable: {refused}"
+        );
+    }
+
+    assert_eq!(result.entries.len(), 430);
+    assert_eq!(result.known_call_count, 4_542);
+    assert_eq!(
+        hex::encode(result.known_call_set_hash),
+        "96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(&result.known_calls_bloom)),
+        "270a4bc71332868cbdc75c81a1cc92da8669a37e2bead6b7d193974b3e1d431d"
+    );
+}
+
+#[test]
+fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
+    let result = build_registry();
+    let source_name = "calldata-NativeTokenVault.json";
+    let entries: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str()) == Some(source_name)
+        })
+        .collect();
+    let expected_deployments: BTreeSet<(u64, [u8; 20])> = [
+        (1, "b72668d6ff7a0e318f83097a754c6aed0f8af034"),
+        (560_048, "8f73c1ce7fe0e17f45b317b33620924a94256fbb"),
+    ]
+    .into_iter()
+    .map(|(chain_id, address)| {
+        let decoded = hex::decode(address).expect("valid P2P deployment address");
+        let mut contract = [0u8; 20];
+        contract.copy_from_slice(&decoded);
+        (chain_id, contract)
+    })
+    .collect();
+    let actual_deployments: BTreeSet<_> = entries
+        .iter()
+        .map(|entry| (entry.chain_id, entry.contract))
+        .collect();
+    assert_eq!(actual_deployments, expected_deployments);
+
+    let expected_signatures = [
+        "claimExitedAssets(uint256,uint256,uint256)",
+        "deposit(address,address)",
+        "enterExitQueue(uint256,address)",
+    ];
+    let expected_selectors: BTreeSet<[u8; 4]> = expected_signatures
+        .iter()
+        .map(|signature| {
+            keccak256(signature.as_bytes())[..4]
+                .try_into()
+                .expect("selector width")
+        })
+        .collect();
+    let claim_selector: [u8; 4] = keccak256(b"claimExitedAssets(uint256,uint256,uint256)")[..4]
+        .try_into()
+        .expect("selector width");
+
+    for entry in entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated P2P vault IR parses");
+        let actual_selectors: BTreeSet<_> = ir
+            .format_iter()
+            .map(|format| format.expect("P2P vault format parses").selector)
+            .collect();
+        assert_eq!(
+            actual_selectors, expected_selectors,
+            "only the formerly refused claim route may join the two existing P2P formats"
+        );
+        assert_stakewise_claim_format(&ir, "P2P");
+        assert!(
+            result
+                .known_calls
+                .contains(&(entry.chain_id, entry.contract, claim_selector)),
+            "newly clear-signable P2P claim was already registry-known"
+        );
+
+        let update_selector: [u8; 4] =
+            keccak256(b"updateStateAndDeposit(address,address,(bytes32,int160,uint160,bytes32[]))")
+                [..4]
+                .try_into()
+                .expect("selector width");
+        assert!(
+            ir.find_format_by_selector(&update_selector)
+                .expect("P2P vault format table parses")
+                .is_none(),
+            "P2P dynamic harvest tuple must remain refused"
         );
     }
 

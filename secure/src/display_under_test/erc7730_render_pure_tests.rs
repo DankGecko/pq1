@@ -2557,6 +2557,149 @@ fn positive_serenita_deposit_binds_native_value_receiver_and_complete_referrer()
     );
 }
 
+fn assert_stakewise_claim_rendering(
+    source_name: &str,
+    calldata: &[u8],
+    signer: [u8; 20],
+    expected_date: &str,
+    expected_time: &str,
+) {
+    let res = build_registry();
+    let entry = find_leaf(res, source_name, 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify StakeWise leaf");
+    assert_selector_matches(
+        &verified.ir,
+        calldata,
+        "claimExitedAssets(uint256,uint256,uint256)",
+    );
+    let words: [[u8; 32]; 3] = [
+        calldata[4..36].try_into().expect("position ticket word"),
+        calldata[36..68].try_into().expect("timestamp word"),
+        calldata[68..100].try_into().expect("exit queue index word"),
+    ];
+
+    let tx = envelope(1, entry.contract);
+    let resolver = NameResolver::new();
+    assert!(matches!(
+        render_erc7730_pages(&tx, calldata, &verified, None, &resolver),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 from unbound"
+        ))
+    ));
+
+    let rendered = render_erc7730_pages_with_signer_checked(
+        &tx, calldata, &verified, None, &resolver, &signer,
+    )
+    .unwrap_or_else(|error| panic!("render {source_name} StakeWise claim: {error:?}"));
+    assert_eq!(
+        rendered.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert_eq!(
+        rendered.transcript_receipt.page_count() as usize,
+        rendered.pages.len
+    );
+    assert!(
+        rendered
+            .transcript_receipt
+            .range_matches(&rendered.pages, 0),
+        "{source_name} receipt must bind its complete rendered page range"
+    );
+    assert_all_pages_printable(&rendered.pages);
+    assert_full_address_field_page(&rendered.pages, "Claim receiver", &signer);
+    assert_raw_word_pages(&rendered.pages, "Position Ticket", &words[0]);
+    assert_eq!(
+        page_strs(
+            &rendered.pages,
+            find_page_by_label(&rendered.pages, "Exit initiated ~"),
+        ),
+        [
+            "Exit initiated ~".to_string(),
+            expected_date.to_string(),
+            expected_time.to_string(),
+            "> next".to_string(),
+        ]
+    );
+    assert_raw_word_pages(&rendered.pages, "Exit Queue Index", &words[2]);
+
+    let assert_mutation_changes_transcript =
+        |mutated_signer: [u8; 20], mutated_words: [[u8; 32]; 3], field: &str| {
+            let mutated_calldata =
+                calldata_static("claimExitedAssets(uint256,uint256,uint256)", &mutated_words);
+            let mutated = render_erc7730_pages_with_signer_checked(
+                &tx,
+                &mutated_calldata,
+                &verified,
+                None,
+                &resolver,
+                &mutated_signer,
+            )
+            .unwrap_or_else(|error| panic!("render mutated {source_name} {field}: {error:?}"));
+            assert_ne!(
+                rendered.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "one bound {field} bit must change the trusted pages for {source_name}"
+            );
+            assert!(
+                !rendered
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "one bound {field} bit must change the transcript receipt for {source_name}"
+            );
+        };
+
+    let mut mutated_signer = signer;
+    mutated_signer[19] ^= 1;
+    assert_mutation_changes_transcript(mutated_signer, words, "sender");
+
+    let mut mutated_ticket = words;
+    mutated_ticket[0][31] ^= 1;
+    assert_mutation_changes_transcript(signer, mutated_ticket, "position ticket");
+
+    let mut mutated_timestamp = words;
+    mutated_timestamp[1][31] ^= 1;
+    assert_mutation_changes_transcript(signer, mutated_timestamp, "timestamp");
+
+    let mut mutated_index = words;
+    mutated_index[2][31] ^= 1;
+    assert_mutation_changes_transcript(signer, mutated_index, "exit queue index");
+}
+
+#[test]
+fn positive_stakewise_claims_bind_sender_ticket_timestamp_and_queue_index() {
+    // Exact calldata from the mainnet Serenita registry fixture
+    // `tests/calldata-EthVault.tests.json` (typed-transaction envelope removed).
+    let serenita_calldata = hex::decode(concat!(
+        "8697d2c2",
+        "00000000000000000000000000000000000000000000012438bbbd73dccbbe02",
+        "0000000000000000000000000000000000000000000000000000000069a21277",
+        "000000000000000000000000000000000000000000000000000000000000007b",
+    ))
+    .expect("valid Serenita fixture calldata");
+    assert_stakewise_claim_rendering(
+        "calldata-EthVault.json",
+        &serenita_calldata,
+        [0x66; 20],
+        "2026-02-27",
+        "21:53:59 UTC",
+    );
+
+    let p2p_words = [
+        u256_from_u64(0x0102_0304_0506_0708).0,
+        u256_from_u64(1_735_689_600).0,
+        u256_from_u64(42).0,
+    ];
+    let p2p_calldata = calldata_static("claimExitedAssets(uint256,uint256,uint256)", &p2p_words);
+    assert_stakewise_claim_rendering(
+        "calldata-NativeTokenVault.json",
+        &p2p_calldata,
+        [0x77; 20],
+        "2025-01-01",
+        "00:00:00 UTC",
+    );
+}
+
 #[test]
 fn positive_aave_repay_renders_enum_label() {
     let res = build_registry();
