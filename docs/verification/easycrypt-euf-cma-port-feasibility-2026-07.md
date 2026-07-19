@@ -1388,3 +1388,51 @@ the stock game (type separation), pkco needs a member-aware variant, and the S-T
 freshness (the forger's grind hits the same member AND tweak as the targets, so even member-aware disj fails —
 only "don't query the exact target input, which the adversary doesn't know" works). **That is a foundations
 redesign, not a branch-2 decision.** Decide it BEFORE investing further in member-aware machinery.
+
+### CORRECTION 2026-07-19 — the "thin +C content" flag was WRONG (GPT-5.6, verified in source)
+
+The FOUNDATIONS FLAG recorded above (Kimi: "`A_wf_ht` forbids evaluating ThC ⇒ excludes GRINDING forgers ⇒
+branch-1's +C content is thin") is **INCORRECT**. GPT-5.6 refuted it and I verified every load-bearing claim:
+
+- `ThC` / `grindC` are **pure operators**, not oracle procedures (WOTS_C_Real.ec:175, :223). The ONLY thing
+  that appends to the member-aware transcript is an explicit `O_THFC_MA.query` call
+  (`tws_ma <- rcons tws_ma (df,tw)`, WOTS_C_Interactive.ec:2081).
+- The **phase split is deliberate and documented in our own file** (WOTS_C_Interactive.ec:75-76):
+  `pick`/`choose` = "has oracles, NO pp"; `find(pp)`/`forge` = "has pp, NO oracles". The adversary types
+  literally carry empty oracle lists: `proc forge(...) : ... {}` (XMSSMT_C_Reduction.ec:204),
+  `proc find(pp) : ... {}` (STCR_C.ec:175, WOTS_C_Interactive.ec:304).
+- ⇒ a +C forger grinds **after** the seed is revealed, in a phase with **no oracle access**, as pure
+  unrecorded computation. `A_wf_ht` constrains ONLY explicit member-`dfC` collection calls during the
+  pre-seed `choose` phase. **It does NOT restrict the forger's grinding.**
+- This is paper-faithful: the SPHINCS+C paper (in-repo `paper-nist-pqc2022.txt`) Definition C.1 splits the
+  S-TCR(Prop) adversary into A1 (registers p targets via the oracle, pre-seed) and A2 (gets P, computes
+  freely — grinding explicitly allowed); Appendix D uses Th only while P is hidden — exactly the role of our
+  collection oracle. Kimi's proposed "input-level freshness" is NOT standard S-TCR and is actually FALSE as a
+  premise: Def C.1 returns the counter j_i to the adversary, so the target input is public after registration
+  and candidate grinding at the same member AND tweak must be allowed.
+⇒ `A_wf_ht` should be described as a **pre-seed choose-phase auxiliary-collection separation premise**, not a
+non-grinding-forger restriction. Branch-1's +C content is NOT thin on these grounds.
+
+**What DOES survive as real, actionable (GPT-5.6):**
+1. The discharge is **prospective, not implemented** — the capstone still carries abstract `hfx`/`hbridge`
+   and there is no concrete shared top reduction (SPHINCS_C.ec:22, :189).
+2. **`8*n*k` gap**: MM45's top-reduction `choose` makes FORS collection calls at lengths `8n`, `8n*2`, and
+   `8n*k` (SPHINCS_PLUS.ec:1544/1568/1581). Our seam carries separation from the first two but not visibly
+   from `8n*k` — a concrete discharge needs that fact (or a pair-level invariant).
+3. **`A_wf_ht` is over-strong**: it bans EVERY member-`dfC` query (WOTS_C_Interactive.ec:2547) while the game
+   needs only the target tagged pair `(dfC, emb_tw T_i)` (:2126). Weakening it removes needless obligations.
+4. **The game-level bridge is DEFERRED** (WOTS_C_Interactive.ec:484): we prove a pointwise collision-predicate
+   bridge but not the full game-level reduction to standard `SM_DT_TCR_C`. Since abstract members `thfc df`
+   may be CORRELATED, TCR of `thfc dfC` alone does not automatically cover access to other members at the same
+   address. **Until that bridge exists the RHS must be labelled a custom collection-aware S-TCR(+C) advantage**,
+   or backed by an explicit domain-separation/independence assumption. (This is the honest-labelling issue.)
+
+**RECOMMENDATION (GPT-5.6, option iii — adopted):** keep `A_wf_ht` but document it accurately; prove its
+discharge for the concrete top-reduction image when that exists (auditing `8n*k` and +C-specific FORS calls —
+moderate Hoare work, far cheaper than reopening interactive-D.1); clean up the assumption boundary (prove the
+tagged-tweak game-level bridge OR state the collection-aware assumption honestly); optionally weaken `A_wf_ht`
+to the game-exact target-pair condition. Do **NOT** redo the leaf chain for input-level freshness. A clean
+formulation offered: treat `(member,address)` as an **extended tweak**, making the member-aware transcript
+ordinary tagged-tweak separation while post-seed candidate grinding stays allowed.
+Citation fix: MM45 component premises are FL_SL_XMSS_MT_ES.ec:4075; the top theorem + discharge are
+SPHINCS_PLUS.ec:4338 / :4375 (my earlier "FL_SL:4338" was inside the component proof).
