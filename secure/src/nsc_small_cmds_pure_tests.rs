@@ -977,6 +977,66 @@ fn negative_get_wallet_address_no_rotate_or_reset_paths() {
     }
 }
 
+#[test]
+fn positive_get_wallet_address_show_flag_is_opt_in_and_bounds_checked() {
+    // #472: the on-device address display fires ONLY on the companion's
+    // explicit `arg2 == 1`; any larger value is a wire-format error, and
+    // `0` keeps the legacy no-UI path byte-for-byte. Dropping the bounds
+    // check would let a companion bug silently suppress verification.
+    assert!(
+        GET_WALLET_ADDRESS_SRC.contains("let show = args.arg2;"),
+        "cmd_get_wallet_address must read the show flag from arg2"
+    );
+    assert!(
+        GET_WALLET_ADDRESS_SRC.contains("if show > 1 {"),
+        "cmd_get_wallet_address must reject show > 1 as InvalidPointer"
+    );
+    assert!(
+        GET_WALLET_ADDRESS_SRC.contains("if show == 1 {"),
+        "the trusted-display path must be gated on the explicit flag"
+    );
+}
+
+#[test]
+fn positive_get_wallet_address_show_path_confirms_before_ns_write() {
+    // #472 / WYSIWYS: the derived address must go through the trusted
+    // `Wallet addr #N` page + physical confirm BEFORE any NS-bound
+    // write, and a cancel must fail closed with `UserRejected` (no
+    // address bytes reach the companion).
+    assert!(
+        GET_WALLET_ADDRESS_SRC.contains("build_wallet_address_page(account_index, &address)"),
+        "the show path must render the account-bound wallet-address page"
+    );
+    assert!(
+        GET_WALLET_ADDRESS_SRC.contains("confirm_checked(core::slice::from_ref(&page))"),
+        "the show path must run the FI-hardened confirm dialog"
+    );
+    assert!(
+        GET_WALLET_ADDRESS_SRC.contains("NscStatus::UserRejected"),
+        "a cancelled address prompt must fail closed with UserRejected"
+    );
+    let confirm_pos = GET_WALLET_ADDRESS_SRC
+        .find("confirm_checked(core::slice::from_ref(&page))")
+        .expect("confirm present");
+    let write_pos = GET_WALLET_ADDRESS_SRC
+        .find("write_volatile(out_ptr")
+        .expect("volatile write present");
+    assert!(
+        confirm_pos < write_pos,
+        "the trusted-display confirm must precede the NS-buffer write"
+    );
+    // The veneer must forward the flag (QEMU mailbox already passes
+    // arg2 through `poll_gateway`).
+    assert!(
+        NSC_MOD_SRC.contains("pub extern \"cmse-nonsecure-entry\" fn nsc_get_wallet_address(\n    out_ptr: u32,\n    account_index: u32,\n    show: u32,\n) -> u32 {"),
+        "the stm32u585 veneer must accept and forward the show flag"
+    );
+    assert!(
+        NSC_MOD_SRC.contains("let args = GatewayArgs { arg0: out_ptr, arg1: account_index, arg2: show };"),
+        "the veneer must place the show flag in arg2"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // 8. Source-text invariant pins — `cmd_get_init_code.rs`
 // ─────────────────────────────────────────────────────────────────────

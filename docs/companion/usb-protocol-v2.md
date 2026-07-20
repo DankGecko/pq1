@@ -272,7 +272,7 @@ from the wizard UI, not from GET_STATUS.
 
 Returns a versioning + capability header. Bytes 0–1 are
 `protocol_version` (u16 BE) = `PROTOCOL_VERSION` from `proto/src/lib.rs`,
-currently **0x0201** (see §Protocol version history below). Reports
+currently **0x0202** (see §Protocol version history below). Reports
 `ep_version = 0x0006` (EntryPoint v0.6) and `sig_param_set = 2`
 (SPHINCS+C10, `C10_SIG_LEN = 4008`).
 
@@ -280,7 +280,12 @@ currently **0x0201** (see §Protocol version history below). Reports
 
 Input: empty for legacy `account_index = 0`, or `[account_index u32 BE]` for
 accounts `0..=255`. No chain id is accepted; wallet addresses are chain-
-independent by design.
+independent by design. Protocol 0x0202+ additionally accepts a trailing
+`[show u8]` flag: `0` behaves as absent; `1` paints the full EIP-55 address
+on the device OLED behind a physical confirm before the bytes are returned
+(#472 — user cancel yields `0x6982` and no address); any flag above 1 is
+rejected with `0x6A80`. Firmware < 0x0202 rejects the 5-byte body with
+`0x6700`, so gate the flag on the GET_DEVICE_INFO report.
 Output: 20-byte CREATE2-predicted ERC-1967 proxy address.
 First call after unlock takes <1 s (master keygen); cached afterwards.
 
@@ -418,9 +423,13 @@ longer dispatched (or are reserved for backwards-compat probing):
 
 ## Protocol version history
 
-Current `PROTOCOL_VERSION` (GET_DEVICE_INFO bytes 0–1): **0x0201**
+Current `PROTOCOL_VERSION` (GET_DEVICE_INFO bytes 0–1): **0x0202**
 (`proto/src/lib.rs`).
 
+- **0x0202 — GET_WALLET_ADDRESS `show` flag (#472):** INS 0x60 accepts
+  an optional trailing flag byte; `show = 1` displays the derived
+  address on the device OLED behind a physical confirm before it is
+  returned (see §0x60 GET_WALLET_ADDRESS).
 - **0x0201 — GET_STATUS layout bump (#440):** the 0x02 GET_STATUS
   response shrank from 5 bytes on the wire (3 data bytes + SW) to
   4 bytes (2 data bytes + SW). The leading `provisioned` byte was

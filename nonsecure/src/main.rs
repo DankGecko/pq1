@@ -266,7 +266,7 @@ fn main() -> ! {
         let payload = &mut *core::ptr::addr_of_mut!(PAYLOAD_BUF);
         let sig = &mut *core::ptr::addr_of_mut!(SIG_BUF);
         let mut sender = [0u8; 20];
-        let address_status = nsc_api::get_wallet_address(&mut sender, 0);
+        let address_status = nsc_api::get_wallet_address(&mut sender, 0, 0);
         assert_eq!(address_status, NscStatus::Ok as u32);
         let payload_len = build_value_transfer_payload(payload, &sender);
         let status = nsc_api::sign_userop(&payload[..payload_len], sig);

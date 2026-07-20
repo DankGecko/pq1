@@ -22,6 +22,17 @@
 //! `account_index` MUST be in `0..=MAX_ACCOUNT_INDEX` (8 bits). Account
 //! 0 reproduces the legacy single-account derivation byte-for-byte so
 //! pre-multi-account seeds keep their existing on-chain address.
+//!
+//! `arg2` is the companion's opt-in show-on-device flag (#472, Trezor
+//! receive-address parity):
+//!   * `0` — legacy behaviour: derive and return the address with no
+//!     trusted-UI round-trip;
+//!   * `1` — after derivation and BEFORE anything is written to the NS
+//!     buffer, show the full EIP-55 address (bound to `account_index`)
+//!     on the trusted OLED and require a physical confirm. Cancel /
+//!     idle-wipe fail closed: no NS-buffer write, `UserRejected` /
+//!     `IdleWipe` status;
+//!   * `>1` — wire-format error (`InvalidPointer`).
 
 use sha2::{Digest, Sha256};
 use sha3::Keccak256;
@@ -354,6 +365,15 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         return NscStatus::InvalidPointer as u32;
     }
 
+    // arg2 carries the show-on-device flag (#472). Anything above 1 is a
+    // wire-format error — refuse rather than silently treating it as 0,
+    // so a companion bug can never suppress the user verification it
+    // asked about.
+    let show = args.arg2;
+    if show > 1 {
+        return NscStatus::InvalidPointer as u32;
+    }
+
     let was_cached =
         super::state::with_state(|s| s.bootstrap_cache_lookup(account_index)).is_some();
     // SAFETY: `run` holds `HandlerGuard`, satisfying the helper contract.
@@ -361,6 +381,39 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         Ok(address) => address,
         Err(status) => return status as u32,
     };
+
+    // Opt-in trusted-display verification (#472): the derived address is
+    // shown and confirmed BEFORE any NS-bound write, so a cancelled
+    // prompt leaves the companion with no address bytes at all (fail
+    // closed). The page binds the exact account being answered; the
+    // confirm idiom mirrors `cmd_offchain_sync` (affirmative-sentinel
+    // gate, cancel → UserRejected, idle-wipe → zeroize + IdleWipe).
+    if show == 1 {
+        use crate::ui::confirm::{confirm_checked, ConfirmResult};
+        let page = match crate::tx::display::build_wallet_address_page(account_index, &address)
+        {
+            Some(page) => page,
+            None => return NscStatus::InternalError as u32,
+        };
+        let (cr, cr_verdict) = confirm_checked(core::slice::from_ref(&page));
+        match cr {
+            ConfirmResult::Confirmed => {}
+            ConfirmResult::Cancelled => {
+                crate::ui::show_status("Cancelled", "");
+                return NscStatus::UserRejected as u32;
+            }
+            ConfirmResult::IdleWipe => {
+                super::zeroize_sensitive_state();
+                return NscStatus::IdleWipe as u32;
+            }
+        }
+        // FI belt (UI1 / work-todo #12c): affirmative-sentinel gate; fail
+        // closed — a faulted confirm can never masquerade as consent.
+        if cr_verdict != crate::fi::OK_SENTINEL {
+            super::zeroize_sensitive_state();
+            return NscStatus::UserRejected as u32;
+        }
+    }
 
     // Write the mnemonic-bound CREATE2 address to the validated NS buffer.
     for i in 0..ADDR_LEN {

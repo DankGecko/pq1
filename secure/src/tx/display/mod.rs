@@ -49,6 +49,7 @@ mod value_page;
 // `pub(crate)` so the render-only golden harness (`ui::golden`) can drive the
 // renderer directly; private otherwise.
 pub(crate) mod value_transfer;
+mod wallet_address;
 
 pub(crate) use value_page::{
     enforce_from_page, enforce_paymaster_page, enforce_target_page, from_page_matches,
@@ -85,6 +86,7 @@ pub use safe_display::{
 pub use offchain_sync::build_offchain_sync_pages;
 pub use slot_rotation::build_slot_rotation_pages;
 pub use value_transfer::render_pages;
+pub use wallet_address::build_wallet_address_page;
 
 // `Page`/`DISPLAY_COLS`/`DISPLAY_ROWS` are no longer referenced here — `Pages`
 // (which used them) now lives in `pqsigner_erc7730::display`. The confirm loop

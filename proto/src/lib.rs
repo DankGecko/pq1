@@ -808,6 +808,14 @@ pub const INS_V2_SIGN_USEROP: u8 = 0x30;
 pub const INS_V2_SIGN_USEROP_BATCH: u8 = 0x32;
 
 // -- Address & account helpers (0x60-0x6F) --
+/// GET_WALLET_ADDRESS — return the 20-byte CREATE2-predicted wallet
+/// address for `account_index`. APDU body: empty (legacy, index 0),
+/// 4 bytes (`account_index` u32 BE), or — PROTOCOL_VERSION 0x0202+ —
+/// 5 bytes with a trailing `show` flag: `0` behaves as absent; `1`
+/// makes the device paint the full EIP-55 address on its OLED behind a
+/// physical confirm BEFORE returning it (#472; user cancel →
+/// `NscStatus::UserRejected`, no address bytes). Any flag value above 1
+/// is rejected with SW_WRONG_DATA.
 pub const INS_V2_GET_WALLET_ADDRESS: u8 = 0x60;
 pub const INS_V2_GET_INIT_CODE: u8 = 0x61;
 pub const INS_V2_SIGN_OFFCHAIN: u8 = 0x62;
@@ -1768,7 +1776,12 @@ pub const MAX_EXECUTE_BATCH_CALLDATA_LEN: usize = 18 * 1024; // 18,432
 /// #143), which originally shipped at 0x0200 without a bump (#440).
 /// 0x0201 guarantees the 2-byte `[locked][pin_remaining]` GET_STATUS
 /// layout; a 0x0200 report is ambiguous vintage (pre-production only).
-pub const PROTOCOL_VERSION: u16 = 0x0201;
+/// 0x0202: bumped for the GET_WALLET_ADDRESS optional trailing `show`
+/// flag byte (#472): present and `1` routes the derived address through
+/// the trusted-OLED confirm before it is returned. Older firmware
+/// rejects the 5-byte body with SW_WRONG_LENGTH, so companions must
+/// gate the flag on a >= 0x0202 report.
+pub const PROTOCOL_VERSION: u16 = 0x0202;
 
 /// ISO 7816-4 status words
 pub const SW_OK: u16 = 0x9000;

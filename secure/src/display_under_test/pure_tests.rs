@@ -782,7 +782,12 @@ fn positive_erc20_unknown_renders_warning_banner() {
 }
 
 #[test]
-fn negative_unknown_token_zero_approve_never_claims_revoke() {
+fn positive_unknown_token_zero_approve_paints_revoke_framing() {
+    // #474: approve(spender, 0) on an UNKNOWN token is an allowance
+    // revocation — the amount page must say so in words (same framing
+    // as the known-token header, erc7730 `write_erc20_header`) instead
+    // of a raw `0` that reads like a rendering glitch. The banner stays
+    // `approve`/`(decimals = ?)` — only the amount page changes.
     let mut tx = sample_tx();
     tx.value = U256::zero();
     let resolver = NameResolver::new();
@@ -796,6 +801,54 @@ fn negative_unknown_token_zero_approve_never_claims_revoke() {
     );
     assert_eq!(row_str(&pages.buf[0][0]), "! Unknown token");
     assert_eq!(row_str(&pages.buf[0][1]), "approve");
+    // Amount page for approve: banner, contract, spender, then amount.
+    assert_eq!(row_str(&pages.buf[3][0]), "Amount (raw):");
+    assert_eq!(row_str(&pages.buf[3][1]), "Revoke approval");
+}
+
+#[test]
+fn negative_unknown_token_revoke_framing_only_fires_on_exact_zero() {
+    // The revoke affordance must not swallow real amounts: a non-zero
+    // approve keeps the raw digits, and the `is_unlimited_amount`
+    // branch keeps its precedence (unlimited can never read "Revoke").
+    let mut tx = sample_tx();
+    tx.value = U256::zero();
+    let resolver = NameResolver::new();
+
+    let pages = render_erc20_unknown_pages(
+        &tx,
+        &Erc20Call::Approve {
+            spender: [0x44; 20],
+            amount: u256_from_u64(42),
+        },
+        &resolver,
+    );
+    assert_eq!(row_str(&pages.buf[3][1]), "42");
+
+    let pages = render_erc20_unknown_pages(
+        &tx,
+        &Erc20Call::Approve {
+            spender: [0x44; 20],
+            amount: U256([0xFFu8; 32]),
+        },
+        &resolver,
+    );
+    assert_eq!(
+        row_str(&pages.buf[3][1]),
+        "unlimited",
+        "is_unlimited_amount must keep precedence over the revoke framing"
+    );
+
+    // transfer(to, 0) is a zero SEND, not a revocation — raw `0` stays.
+    let pages = render_erc20_unknown_pages(
+        &tx,
+        &Erc20Call::Transfer {
+            to: [0x44; 20],
+            amount: U256::zero(),
+        },
+        &resolver,
+    );
+    assert_eq!(row_str(&pages.buf[3][1]), "0");
     assert!(pages
         .as_slice()
         .iter()

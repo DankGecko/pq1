@@ -884,7 +884,7 @@ fn main() -> ! {
     // obtains. Never bypass the secure-world sender gate under `e2e-test`:
     // these scenarios are its positive regression coverage.
     let mut wallet_sender = [0u8; 20];
-    let address_status = nsc_api::get_wallet_address(&mut wallet_sender, 0);
+    let address_status = nsc_api::get_wallet_address(&mut wallet_sender, 0, 0);
     assert_eq!(
         address_status,
         NscStatus::Ok as u32,

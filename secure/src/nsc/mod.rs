@@ -1834,15 +1834,17 @@ pub extern "cmse-nonsecure-entry" fn nsc_fw_abort() -> u32 {
 /// CMD_GET_WALLET_ADDRESS — compute CREATE2-predicted wallet address for
 /// `account_index` (0..=255). Account 0 is the legacy single-account
 /// derivation; higher indices yield independent on-chain wallets from
-/// the same BIP-39 seed.
+/// the same BIP-39 seed. `show = 1` routes the derived address through
+/// the trusted-OLED confirm (#472) before any NS-bound write.
 #[cfg(feature = "stm32u585")]
 #[no_mangle]
 pub extern "cmse-nonsecure-entry" fn nsc_get_wallet_address(
     out_ptr: u32,
     account_index: u32,
+    show: u32,
 ) -> u32 {
     secure_log!("[NSC] get_wallet_address (acct={})", account_index);
-    let args = GatewayArgs { arg0: out_ptr, arg1: account_index, arg2: 0 };
+    let args = GatewayArgs { arg0: out_ptr, arg1: account_index, arg2: show };
     let r = unsafe { cmd_get_wallet_address::run(&args) };
     secure_log!("[NSC] get_wallet_address -> {}", r);
     r

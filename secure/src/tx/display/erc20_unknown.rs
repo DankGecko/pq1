@@ -88,6 +88,14 @@ pub fn render_erc20_unknown_pages(
     };
     if matches!(call, Erc20Call::Approve { .. }) && is_unlimited_amount(&amount) {
         write_line(&mut pages.buf[p][1], "unlimited");
+    } else if matches!(call, Erc20Call::Approve { .. }) && amount.is_zero() {
+        // approve(spender, 0) is an allowance REVOCATION — say so in
+        // words (same framing as the known-token header,
+        // pqsigner-erc7730 `write_erc20_header`) instead of painting a
+        // raw `0` that reads like a rendering glitch (#474). The
+        // `is_unlimited_amount` branch keeps precedence; zero can never
+        // reach it.
+        write_line(&mut pages.buf[p][1], "Revoke approval");
     } else {
         // Raw integer: emit as a 78-digit max decimal across rows 1+2.
         let mut tmp = [0u8; 96];

@@ -238,7 +238,7 @@ Capability discovery. **Always call first.**
 
 | Offset | Size | Field             | Notes                                  |
 |--------|------|-------------------|----------------------------------------|
-| 0      | 2    | protocol_version  | u16 BE, currently `0x0201`             |
+| 0      | 2    | protocol_version  | u16 BE, currently `0x0202`             |
 | 2      | 3    | fw_version        | major, minor, patch (currently 3.0.0)  |
 | 5      | 16   | device_uid        | STM32 UID96; zeros on dev builds       |
 | 21     | 4    | capabilities      | u32 BE bitmap (see below)              |
@@ -310,14 +310,24 @@ Return the 20-byte CREATE2-predicted wallet address for a given
 <1 s of SPHINCS+C10 hypertree keygen inside the secure world; subsequent
 calls hit the firmware's SRAM LRU cache (capacity 16) and return in < 1 ms.
 
-**Request (0 or 4 bytes):**
+**Request (0, 4, or 5 bytes):**
 
 | Offset | Size | Field         | Notes                                    |
 |--------|------|---------------|------------------------------------------|
 | 0      | 4    | account_index | u32 BE, `0..=255`                        |
+| 4      | 1    | show          | optional; `0` = silent, `1` = display + confirm on device (protocol `0x0202`+) |
 
 An **empty body is accepted as `account_index = 0`** for companions that
-pre-date multi-account support.
+pre-date multi-account support; a 4-byte body means `show = 0`.
+
+The optional `show` flag (new in protocol `0x0202`): when `1`, the device
+paints the full EIP-55 address — bound to `account_index` — on its OLED
+behind a physical confirm BEFORE the address bytes are returned, so the
+user can verify a receive address against the companion UI (Trezor
+receive-address parity). A user cancel fails closed: `SW=0x6982`, no
+address bytes. Flag values above 1 are rejected (`SW=0x6A80`). Firmware
+reporting `< 0x0202` rejects the 5-byte body with `SW=0x6700`, so gate
+the flag on the GET_DEVICE_INFO version.
 
 **Response (20 bytes + SW):** Ethereum-style address. Same on every chain
 for a given `(seed, account_index)`.
@@ -875,10 +885,15 @@ can change lanes. This does not make wire v2 executable; companions must keep
 ### 11.5 Receive Address Verification
 
 ```
-addr ← GET_WALLET_ADDRESS(accountIndex)
-Device OLED shows "Your wallet address: 0x…"; user visually verifies.
+addr ← GET_WALLET_ADDRESS(accountIndex, show = 1)   // show flag: protocol 0x0202+
+Device OLED shows the full EIP-55 address behind a physical confirm; the user
+visually verifies it against the companion UI, then approves on device.
 Companion compares `addr` against any cached value and surfaces a warning on mismatch.
 ```
+
+The OLED display happens ONLY when the companion passes `show = 1`
+(firmware reporting `< 0x0202` has no display path and rejects the flag);
+without the flag the address is returned silently.
 
 ### 11.6 Recovery on a New Device
 
@@ -1130,9 +1145,12 @@ issue.
    the companion should never try to construct such a UserOp.
 5. **Counters are one-way.** Neither `bootstrapUses` nor `slotUses[i]`
    can be reset. Prompt the user well before exhaustion.
-6. **Address verification requires device confirmation.** Always direct
-   users to re-verify receive addresses on the device's LCD via
-   `GET_WALLET_ADDRESS`, not just in the companion UI.
+6. **Address verification requires device confirmation — opt in with the
+   `show` flag.** Always direct users to re-verify receive addresses on the
+   device's LCD: pass `show = 1` with `GET_WALLET_ADDRESS` (protocol
+   `0x0202`+), so the address appears on the trusted display behind a
+   physical confirm. Without the flag the device shows nothing and the
+   companion UI is the only display — do not rely on it alone.
 7. **Clear-sign data must match the pinned roots.** The companion supplies
    ERC-7730, ERC-20, names, Safe, and CoW bundles explicitly. A root/version
    mismatch fails closed; there is no NS-side lookup or display-text injection.

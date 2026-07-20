@@ -103,8 +103,8 @@ mod transport {
     }
 
     #[inline]
-    pub(super) fn get_wallet_address(out_ptr: *mut u8, account_index: u32) -> u32 {
-        unsafe { gateway_call(CMD_GET_WALLET_ADDRESS, out_ptr as u32, account_index, 0) }
+    pub(super) fn get_wallet_address(out_ptr: *mut u8, account_index: u32, show: u32) -> u32 {
+        unsafe { gateway_call(CMD_GET_WALLET_ADDRESS, out_ptr as u32, account_index, show) }
     }
 
     #[inline]
@@ -162,7 +162,7 @@ mod transport {
         fn nsc_sign_userop_batch(payload_ptr: u32, sig_out_ptr: u32, total_len: u32) -> u32;
         fn nsc_is_unlocked() -> u32;
         fn nsc_lock() -> u32;
-        fn nsc_get_wallet_address(out_ptr: u32, account_index: u32) -> u32;
+        fn nsc_get_wallet_address(out_ptr: u32, account_index: u32, show: u32) -> u32;
         fn nsc_get_init_code(in_ptr: u32, out_ptr: u32, in_len: u32) -> u32;
         fn nsc_sign_offchain(in_ptr: u32, out_ptr: u32, in_len: u32) -> u32;
         fn nsc_offchain_status(in_ptr: u32, out_ptr: u32, in_len: u32) -> u32;
@@ -258,8 +258,8 @@ mod transport {
     }
 
     #[inline]
-    pub(super) fn get_wallet_address(out_ptr: *mut u8, account_index: u32) -> u32 {
-        unsafe { nsc_get_wallet_address(out_ptr as u32, account_index) }
+    pub(super) fn get_wallet_address(out_ptr: *mut u8, account_index: u32, show: u32) -> u32 {
+        unsafe { nsc_get_wallet_address(out_ptr as u32, account_index, show) }
     }
 
     #[inline]
@@ -482,8 +482,14 @@ pub fn tzic_status() -> u32 {
 ///
 /// `account_index = 0` reproduces the legacy single-account address so
 /// pre-multi-account seeds keep their existing wallet.
-pub fn get_wallet_address(out: &mut [u8; 20], account_index: u32) -> u32 {
-    transport::get_wallet_address(out.as_mut_ptr(), account_index)
+///
+/// `show` is the opt-in trusted-display flag (#472): `1` makes the
+/// secure world paint the derived address on the device OLED behind a
+/// physical confirm before returning it (a user cancel fails closed
+/// with `UserRejected` and no address bytes); `0` returns the address
+/// with no on-device round-trip.
+pub fn get_wallet_address(out: &mut [u8; 20], account_index: u32, show: u32) -> u32 {
+    transport::get_wallet_address(out.as_mut_ptr(), account_index, show)
 }
 
 /// Compute the 4280-byte ERC-4337 initCode for

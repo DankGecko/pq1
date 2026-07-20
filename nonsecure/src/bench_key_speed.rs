@@ -180,7 +180,7 @@ fn main() -> ! {
     // companion already knows/caches this address; SIGN still includes its
     // own mandatory mnemonic-bound sender check.
     let mut wallet_sender = [0u8; 20];
-    let address_status = nsc_api::get_wallet_address(&mut wallet_sender, 0);
+    let address_status = nsc_api::get_wallet_address(&mut wallet_sender, 0, 0);
     if address_status != NscStatus::Ok as u32 {
         hprintln!(
             "[NS][bench] FAIL: GET_WALLET_ADDRESS(0) = status {}",

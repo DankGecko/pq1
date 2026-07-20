@@ -487,8 +487,8 @@ fn positive_confirm_e2e_test_fastpath_renders_all_pages_first() {
     // wait is short-circuited. Otherwise harnesses would silently miss
     // page-content regressions.
     assert!(CONFIRM_SRC.contains("#[cfg(feature = \"e2e-test\")]"));
-    assert!(CONFIRM_SRC.contains("for page in pages.iter() {"));
-    assert!(CONFIRM_SRC.contains("render_page(page);"));
+    assert!(CONFIRM_SRC.contains("for (idx, page) in pages.iter().enumerate() {"));
+    assert!(CONFIRM_SRC.contains("render_page(page, idx, pages.len());"));
     // e2e fast-path returns the affirmative sentinel so hardened callers accept.
     assert!(CONFIRM_SRC.contains("return (ConfirmResult::Confirmed, crate::fi::OK_SENTINEL);"));
 }
@@ -499,6 +499,32 @@ fn positive_confirm_idle_wipe_propagates_to_caller() {
     // the dialog must propagate the wipe — not silently retry, not
     // confirm.
     assert!(CONFIRM_SRC.contains("None => return (ConfirmResult::IdleWipe, crate::fi::FAIL_SENTINEL),"));
+}
+
+#[test]
+fn positive_confirm_page_position_indicator_is_draw_time_overlay() {
+    // #488 / TZP-17: every confirm page carries a right-aligned ` i/n`
+    // page-position indicator on the footer row. Two invariants make it
+    // safe against the WYSIWYS page-content proofs:
+    //   1. The overlay is applied to a STACK COPY of the footer row at
+    //      draw time — the pre-rendered page buffers are never mutated,
+    //      so the FI readback proofs still compare renderer bytes.
+    //   2. The fit rule is deterministic: `used` (footer trimmed of
+    //      trailing spaces) + indicator length must fit DISPLAY_COLS,
+    //      else the row is drawn unchanged — the indicator can never
+    //      overwrite footer content.
+    assert!(CONFIRM_SRC.contains("fn overlay_page_position("));
+    assert!(CONFIRM_SRC.contains("let mut footer = *row;"));
+    assert!(CONFIRM_SRC.contains("if used + ind_len > DISPLAY_COLS {"));
+    assert!(CONFIRM_SRC.contains("row[DISPLAY_COLS - ind_len..].copy_from_slice(&ind[..ind_len]);"));
+    // Both render paths (interactive loop + golden capture) must pass
+    // the page index/total so the indicator shows real positions.
+    assert!(CONFIRM_SRC.contains("render_page(&pages[idx], idx, pages.len());"));
+    let capture_pos = CONFIRM_SRC
+        .find("pub fn render_capture_pages(pages: &[Page]) {")
+        .expect("render_capture_pages must exist");
+    let capture_body = &CONFIRM_SRC[capture_pos..];
+    assert!(capture_body.contains("render_page(page, idx, pages.len());"));
 }
 
 // ─────────────────────────────────────────────────────────────────────

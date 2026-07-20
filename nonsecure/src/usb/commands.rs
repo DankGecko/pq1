@@ -484,18 +484,30 @@ impl CommandRouter {
     /// sender for this device's bootstrap C10 pubkey at `account_index`.
     /// Requires unlock.
     ///
-    /// APDU body layout: 4 bytes big-endian `account_index` (0..=255).
-    /// An empty body is accepted as `account_index == 0` so legacy
-    /// companion builds that pre-date multi-account derivation still
-    /// see their original single wallet.
+    /// APDU body layout: 4 bytes big-endian `account_index` (0..=255),
+    /// optionally followed by a 1-byte `show` flag (PROTOCOL_VERSION
+    /// 0x0202+): `0` (or absent) returns the address with no trusted-UI
+    /// round-trip; `1` first shows the address on the device OLED behind
+    /// a physical confirm (#472) — a user cancel fails closed with
+    /// `UserRejected` and no address bytes. Any flag value above 1 is
+    /// rejected. An empty body is accepted as `account_index == 0` so
+    /// legacy companion builds that pre-date multi-account derivation
+    /// still see their original single wallet.
     unsafe fn cmd_get_wallet_address(&self, data: &[u8]) -> Response {
-        let account_index = match data.len() {
-            0 => 0u32,
-            4 => u32::from_be_bytes([data[0], data[1], data[2], data[3]]),
+        let (account_index, show) = match data.len() {
+            0 => (0u32, 0u32),
+            4 => (u32::from_be_bytes([data[0], data[1], data[2], data[3]]), 0u32),
+            5 => {
+                let flag = u32::from(data[4]);
+                if flag > 1 {
+                    return self.sw_response(SW_WRONG_DATA);
+                }
+                (u32::from_be_bytes([data[0], data[1], data[2], data[3]]), flag)
+            }
             _ => return self.sw_response(SW_WRONG_LENGTH),
         };
         let mut addr = [0u8; 20];
-        let status = nsc_api::get_wallet_address(&mut addr, account_index);
+        let status = nsc_api::get_wallet_address(&mut addr, account_index, show);
         if status != NscStatus::Ok as u32 {
             return self.nsc_status_to_response(status);
         }

@@ -58,8 +58,8 @@ pub fn confirm_checked(pages: &[Page]) -> (ConfirmResult, u32) {
     // bypass is enough to make every cmd_* path non-interactive.
     #[cfg(feature = "e2e-test")]
     {
-        for page in pages.iter() {
-            render_page(page);
+        for (idx, page) in pages.iter().enumerate() {
+            render_page(page, idx, pages.len());
         }
         return (ConfirmResult::Confirmed, crate::fi::OK_SENTINEL);
     }
@@ -94,7 +94,7 @@ pub fn confirm_checked(pages: &[Page]) -> (ConfirmResult, u32) {
         // confirm dialogs count as activity.").
 
         loop {
-            render_page(&pages[idx]);
+            render_page(&pages[idx], idx, pages.len());
             // Sticky: once the final page has been displayed, confirm is
             // unlocked from any page. Reaching the last page requires
             // short-right past every intermediate page (short-right advances
@@ -166,13 +166,56 @@ pub fn confirm_checked(pages: &[Page]) -> (ConfirmResult, u32) {
     }
 }
 
-fn render_page(page: &Page) {
+fn render_page(page: &Page, idx: usize, total: usize) {
     let d = display();
     d.clear();
     for (row_idx, row) in page.iter().enumerate() {
-        d.draw_line(row_idx, super::ascii_str(row));
+        if row_idx == DISPLAY_ROWS - 1 {
+            // Page-position indicator (#488 / TZP-17): overlay ` i/n` on
+            // the footer row at DRAW time. The pre-rendered page buffers
+            // are never mutated — work on a stack copy so the confirm
+            // transcript and every FI page-content proof keep comparing
+            // the renderer's exact bytes.
+            let mut footer = *row;
+            overlay_page_position(&mut footer, idx, total);
+            d.draw_line(row_idx, super::ascii_str(&footer));
+        } else {
+            d.draw_line(row_idx, super::ascii_str(row));
+        }
     }
     d.flush();
+}
+
+/// Right-align a ` i/n` page-position indicator (e.g. ` 3/9`) onto a
+/// footer-row copy. Deterministic fit rule: let `used` be the row's
+/// length trimmed of trailing spaces and `ind` the formatted indicator
+/// (leading space + (idx+1) + '/' + total); the overlay is drawn only
+/// when `used + ind.len() <= DISPLAY_COLS`, otherwise the row is shown
+/// unchanged. Right-aligned means the indicator ends at the last column.
+fn overlay_page_position(row: &mut [u8; DISPLAY_COLS], idx: usize, total: usize) {
+    let mut ind = [b' '; DISPLAY_COLS];
+    let Some(ind_len) = format_page_indicator(idx, total, &mut ind) else {
+        return;
+    };
+    let used = row.iter().rposition(|&c| c != b' ').map_or(0, |p| p + 1);
+    if used + ind_len > DISPLAY_COLS {
+        return;
+    }
+    row[DISPLAY_COLS - ind_len..].copy_from_slice(&ind[..ind_len]);
+}
+
+/// Format ` i/n` (leading space, 1-based page number) into `out`,
+/// returning the indicator length. Returns `None` when the digits do not
+/// fit `out` — the caller then draws the footer unchanged (same fail-quiet
+/// behaviour as the width rule).
+fn format_page_indicator(idx: usize, total: usize, out: &mut [u8]) -> Option<usize> {
+    use pqsigner_erc7730::display::primitives::format_u64;
+    out[0] = b' ';
+    let n1 = format_u64(idx as u64 + 1, out.get_mut(1..)?)?;
+    let slash = 1 + n1;
+    *out.get_mut(slash)? = b'/';
+    let n2 = format_u64(total as u64, out.get_mut(slash + 1..)?)?;
+    Some(slash + 1 + n2)
 }
 
 /// Render a sequence of pre-rendered pages WITHOUT waiting for input — each is
@@ -182,7 +225,7 @@ fn render_page(page: &Page) {
 /// ui-golden too slow on QEMU's software SHA-256.
 #[cfg(feature = "ui-golden-render")]
 pub fn render_capture_pages(pages: &[Page]) {
-    for page in pages {
-        render_page(page);
+    for (idx, page) in pages.iter().enumerate() {
+        render_page(page, idx, pages.len());
     }
 }
