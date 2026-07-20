@@ -12,6 +12,8 @@
 //! Both backends export the same `Display` and `Input` types so the rest of
 //! the secure world is backend-agnostic.
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 #[cfg(feature = "ui-semihosting")]
 mod semihosting;
 #[cfg(feature = "ui-semihosting")]
@@ -152,6 +154,14 @@ impl Ui for lcd::Display {
 static mut DISPLAY: Option<Display> = None;
 static mut INPUT: Option<Input> = None;
 
+/// `true` only after [`init()`] has run to completion (both backends
+/// constructed and their `init()` returned). Gates the panic handler's
+/// best-effort fatal screen (EthereumPhone/PQ1 #484): a panic before or
+/// *inside* `init()` leaves this `false`, and the handler must not touch
+/// a half-initialized panel. Release store pairs with the Acquire load in
+/// [`display_if_ready`] so the `DISPLAY` write is visible with the flag.
+static UI_READY: AtomicBool = AtomicBool::new(false);
+
 /// Initialize the global Display and Input. Must be called once at boot.
 pub fn init() {
     unsafe {
@@ -166,11 +176,28 @@ pub fn init() {
             inp.init();
         }
     }
+    UI_READY.store(true, Ordering::Release);
 }
 
 #[allow(static_mut_refs)]
 pub fn display() -> &'static mut Display {
     unsafe { DISPLAY.as_mut().expect("ui::init() not called") }
+}
+
+/// Panic-handler display accessor (EthereumPhone/PQ1 #484 — best-effort
+/// RSOD). Unlike [`display()`], this is panic-free by construction: it
+/// returns `Some` only when [`init()`] ran to completion (`UI_READY`,
+/// Acquire), so `DISPLAY` is `Some` by that point and the `if let`
+/// caller-side needs no `expect`. A panic before/during `init()` reads
+/// `false` and the caller falls back to the silent WFI loop — a
+/// half-initialized panel must not be driven from the panic handler,
+/// where a second panic is abort/UB territory in `no_std`.
+#[allow(static_mut_refs)]
+pub fn display_if_ready() -> Option<&'static mut Display> {
+    if !UI_READY.load(Ordering::Acquire) {
+        return None;
+    }
+    unsafe { DISPLAY.as_mut() }
 }
 
 #[allow(static_mut_refs)]

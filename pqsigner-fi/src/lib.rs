@@ -247,6 +247,13 @@ pub fn fi_min(a: usize, b: usize) -> usize {
 ///
 /// Called from the `wait_random_loop` glitch paths. Do NOT print — a glitch
 /// that corrupted state may produce misleading output. Just stop.
+///
+/// This silence is the DELIBERATE exception to the firmware's fatal-screen
+/// policy (EthereumPhone/PQ1 #484: the secure-world `#[panic_handler]` draws
+/// a best-effort RSOD after zeroizing). A glitch halt must not touch any
+/// peripheral an attacker may control — the glitch that tripped the sentinel
+/// may also own the display/SPI bus, so even the panic screen is too much
+/// surface here. Just stop.
 #[inline(never)]
 fn halt_on_glitch() -> ! {
     // cfg(target_arch = "arm") not cfg(test): downstream crates (secure,

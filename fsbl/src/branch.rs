@@ -6,10 +6,20 @@
 //!
 //! 1. Re-point VTOR to the slot's vector table.
 //! 2. Set MSP to the slot's initial stack pointer.
-//! 3. Branch to the slot's reset handler.
+//! 3. Scrub every general-purpose register the FSBL may have dirtied
+//!    (r0, r1, r4–r12, lr) so the new image inherits no residue from
+//!    SPHINCS+ verification or flash/manifest parsing — the Trezor
+//!    boot-stage hygiene analog.
+//! 4. Branch to the slot's reset handler.
 //!
 //! After the branch we never return. The slot's own `#[cortex_m_rt::entry]`
 //! machinery zeroes BSS, copies .data, calls `main()`, etc.
+//!
+//! Register state at handoff: the only surviving registers are the two
+//! architectural handoff values — the slot's initial MSP (held in r2,
+//! moved into MSP *before* the scrub) and the reset-handler address
+//! (held in r3, the branch target) — plus SP by construction. Both are
+//! non-secret flash addresses; everything else is zeroed.
 
 use core::arch::asm;
 use core::ptr::read_volatile;
@@ -47,17 +57,41 @@ pub unsafe fn into_slot(slot: Slot) -> ! {
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
 
-    // Set MSP + jump. We're already in handler mode per the
+    // Set MSP + scrub + jump. We're already in handler mode per the
     // cortex-m-rt entry-path contract, so we can write MSP directly.
     // After the bx, the slot's reset handler takes over — it sees an
     // initialized MSP and the Thumb bit is already in the reset value
     // (cortex-m-rt always sets it).
+    //
+    // The handoff values are pinned to r2/r3 by explicit constraints so
+    // the scrub cannot clobber them; they necessarily stay live until
+    // the branch (both are non-secret flash addresses — see the module
+    // doc). MSP is installed FIRST, then every other GPR the FSBL's
+    // SPHINCS+ verify / flash / manifest parsing may have dirtied is
+    // zeroed, then we branch.
     unsafe {
         asm!(
-            "msr MSP, {msp}",
-            "bx {reset}",
-            msp = in(reg) msp,
-            reset = in(reg) reset,
+            // 1. Install the slot's stack pointer before any register
+            //    is cleared.
+            "msr MSP, r2",
+            // 2. Scrub every GPR except the r2/r3 handoff pair.
+            "mov r0, #0",
+            "mov r1, #0",
+            "mov r4, #0",
+            "mov r5, #0",
+            "mov r6, #0",
+            "mov r7, #0",
+            "mov r8, #0",
+            "mov r9, #0",
+            "mov r10, #0",
+            "mov r11, #0",
+            "mov r12, #0",
+            "mov lr, r0",
+            // 3. Branch; only r2 (already in MSP), r3 (target), and SP
+            //    carry state across.
+            "bx r3",
+            in("r2") msp,
+            in("r3") reset,
             options(noreturn)
         );
     }

@@ -4088,10 +4088,37 @@ unsafe fn HardFault(_ef: &cortex_m_rt::ExceptionFrame) -> ! {
 
 /// Custom panic handler: zeroizes all sensitive state before halting.
 /// This ensures secrets don't persist in RAM after a crash.
+///
+/// **Fatal screen (EthereumPhone/PQ1 #484 — Trezor RSOD analog).** After
+/// the wipe, draws a best-effort 4-row screen ("! FATAL ERROR" /
+/// "Secrets wiped" / "Power-cycle" / "to retry") so a tamper/crash is
+/// user-distinguishable from a silently bricked device. Best-effort BY
+/// DESIGN: the draw runs only when `ui::init()` completed
+/// (`ui::display_if_ready` — a panic-free accessor), uses only static
+/// strings (no alloc, no `format!`), and every helper it reaches
+/// (`clear`/`draw_line`/`flush` and their callees) contains no
+/// `unwrap`/`expect`/`panic!` — a second panic inside a
+/// `#[panic_handler]` is abort/UB territory in `no_std`. A drawing
+/// failure or an early-boot panic (UI not yet up) deliberately falls
+/// back to the silent WFI loop. The deliberate exception to this
+/// policy is `pqsigner_fi`'s glitch halt, which must not touch
+/// peripherals an attacker may control (see `halt_on_glitch`).
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     nsc::zeroize_sensitive_state();
+
+    // Issue #484 fatal screen. Secrets are already wiped, so row 1 is
+    // truthful. Every call on this path is panic-free by construction
+    // (see the handler doc + `ui::display_if_ready`).
+    if let Some(d) = ui::display_if_ready() {
+        d.clear();
+        d.draw_line(0, "! FATAL ERROR");
+        d.draw_line(1, "Secrets wiped");
+        d.draw_line(2, "Power-cycle");
+        d.draw_line(3, "to retry");
+        d.flush();
+    }
 
     #[cfg(feature = "debug-log")]
     {
