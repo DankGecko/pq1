@@ -1,0 +1,34 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 12,
+    "method": "eth_call",
+    "params": [
+      {
+        "from": "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e",
+        "to": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
+        "data": "0x5c60da1b"
+      },
+      {
+        "blockHash": "0xc764a3327787002b64c36ae2776c0f25a9c9e7fa8e94dc1748c04550adba4bfd",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 13,
+    "method": "eth_call",
+    "params": [
+      {
+        "from": "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e",
+        "to": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
+        "data": "0xf851a440"
+      },
+      {
+        "blockHash": "0xc764a3327787002b64c36ae2776c0f25a9c9e7fa8e94dc1748c04550adba4bfd",
+        "requireCanonical": true
+      }
+    ]
+  }
+]
