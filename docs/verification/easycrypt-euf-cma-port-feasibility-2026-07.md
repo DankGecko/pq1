@@ -1678,3 +1678,53 @@ D1-composition leg); FORS+C signer not wired into R_top's simulated CMA game (th
 survives: the +C delta does not touch `choose`, which is why the audit and payoff are unaffected); the four
 dfC-separation facts remain threaded hypotheses; R1 (real→C→V hops); R2 (the other two buckets = T3's work);
 capstone premise discharge for `allnchads`.
+
+### 2026-07-20 — game hops: C~V CLOSED 0-admit; REAL~C substantially ported; branch-2 no-template step CLOSED
+
+Two parallel tracks, independently audited: **BOTH PASS** (`no_forbidden_edits: true` — the attribution
+guidance worked, no repeat false violation).
+
+**H — GAME HOPS (drafts/_gamehops_wip.ec, 4 admits, 8 commits).**
+ - **HOP C~V CLOSED 0-ADMIT** (standalone certificate at commit 4f99e8f). Auditor-verified GENUINE: post is
+   `={res}` with NO weakening; the coupling is an explicit 4-level elementwise cube invariant + wp/skip
+   transcription, not an smt-forced shell.
+ - **The one genuinely +C obligation IS PROVED, not assumed:** V's accumulated `allOkC` is carried as
+   `allOkC0{1} = allOkC{2}` against C's INLINED `FL_SL_XMSS_MT_C_ES.verify -> root_from_sigC`, so the +C
+   constant-sum gate is literally the same object on both sides. Anti-vacuity: replacing V's gate with
+   `(allOkC \/ true)` breaks the proof.
+ - **A port artifact MM45 does NOT have:** our C game carries a SEPARATE `counterstd` cube while V carries a
+   FUSED `(sigWOTS,cntr)` cube, so MM45's `seq 12 12 ... by sim` does not apply. Closed with the explicit cube
+   invariant + the `rng_tidxdiv`/`rng_tidxmod` index ranges — which are LOAD-BEARING, not decoration: an
+   out-of-range `nth witness` on the fused side is `witness<:sigWOTS*cntr>`, which is NOT provably
+   `(witness<:sigWOTS>, witness<:cntr>)`. Tactic drift was real and as warned (swap 17 14 vs MM45 16; seq 13 12
+   vs 12 12; inline{1} 5 vs 3) — all resolved with ec-goal.sh, never guessed.
+ - **HOP REAL~C: substantially ported, 4 labelled admits** (LPTAIL/NTTAIL/TDTAIL/H1-B), each with its MM45
+   template range and pending goal. CLOSED: the tail drain, the leaves drain, the full 4-level cube
+   characterisation STATEMENT with both +C additions (counter cubes via `grindC` at the chtype keypair address;
+   sigWOTS via `encode_msgWOTS_C ... (grindC ...)` in place of MM45's `encode_msgWOTS`), and the ENTIRE
+   innermost (len) level incl. the `ch_comp` two-step->one-step composition. Remaining = 3 outer nested-while
+   maintenance steps (MM45:3743-3822) + the signing alignment (:3823-3961): mechanical-to-medium transcription,
+   NO new crypto content.
+ - **LIFT banked but CONDITIONAL:** `EqPr_..._Orig_V` + `seam_branch1_lifted_to_REAL` exist and the auditor
+   confirms the composition soundly licenses the lift — but it depends on the admitted REAL~C hop, so
+   **branch-1 does NOT yet lift to the REAL game.** Correctly not claimed. Nice correctness detail: the lift
+   REFUSES to mu_split on the REAL game (which never writes C.valid_WOTSTWES) and splits on the V side, which
+   legitimately writes that flag.
+
+**B2 — BRANCH-2 (drafts/_seam_branch2_wip.ec, 3 admits — count UNCHANGED, content materially reduced).**
+ - **ADMIT-1b(i) FULLY CLOSED 0-admit — the grind-in-find find-prologue `seq 0 4`, explicitly the ONE step
+   with NO MM45 template** (it exists only because of our grind-in-find refactor). Proved as a 4-deep
+   one-sided `while{2}` (d / nr_trees / l' / len).
+ - **ADMIT-1a reduced** from "the whole cube-build (MM45:4766-5100)" to "the inner-tree body only
+   (:4854-5093)": both the outer (per-layer) and middle (per-inner-tree) two-sided `while` invariants are now
+   STATED and BOTH adequacy gates CLOSED 0-admit (established-at-entry, and implying the next level).
+ - **8 new 0-admit pure lemmas/operators**, reduction-agnostic so they also serve the untouched TRH admit.
+   4 anti-vacuity controls run, all failing as required.
+ - **Honesty catch:** the prior STATUS block predicted `hencb` would be consumed in the find-prologue; it is
+   NOT (both sides encode with `encode_msgWOTS_C`). The block self-contradicted and its NOT-CLAIMED half was
+   the correct one. Also recorded 4 new port deltas (e.g. after the inlines `find` claims the unsuffixed local
+   names, so side-2 locals inside `pick` are `rootsntp0`/`root0`/... — writing `={rootsntp}` would be wrong).
+ - Explicitly stated: ZERO of the three originally-named admits is FULLY discharged; the count is unchanged.
+
+**NET:** the +C-specific content in both tracks is now proved (allOkC coupling; the no-template find-prologue);
+what remains in both is MM45 transcription with known template ranges.
