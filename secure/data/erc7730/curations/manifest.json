@@ -1,5 +1,5 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "mode": "full-file-replacement",
   "upstream": {
     "repository": "https://github.com/ethereum/clear-signing-erc7730-registry.git",
@@ -34,6 +34,10 @@
   },
   "tool_inputs": [
     {
+      "path": ".cargo/config.toml",
+      "sha256": "21aa0e684d8ee0a127a3bbd7bad91f9e7f5305cde7c86e2357a297aad071fe78"
+    },
+    {
       "path": "Cargo.lock",
       "sha256": "81539ec086a727f74dcaa50690ea4da99cf41eddc39689a323445faac5343323"
     },
@@ -46,40 +50,100 @@
       "sha256": "940cc37c55859098ea69554978793f235d8ccf8dff7afb4d0c83a46ecb3613f5"
     },
     {
-      "path": "dbgen/src/erc7730.rs",
-      "sha256": "c058a28526ea5284cbd98d97c640bbf043b7d52953468029f423e55c908b1122"
-    },
-    {
-      "path": "dbgen/src/main.rs",
-      "sha256": "3236afb587a8819bac1a25dd28aba5621f784790c399b6bacc945ccdba63a47d"
-    },
-    {
       "path": "pqsigner-erc7730/Cargo.toml",
       "sha256": "abcae0c2e3dd0a9ce25a0bd552372a98d2fefedef098dc0948c9f429f6b9a407"
     },
     {
-      "path": "pqsigner-erc7730/src/ir.rs",
-      "sha256": "7680ff43c778f4b8649426356d92dca5fef4e5b93aed5e111c8cfbc8ade6cea0"
+      "path": "pqsigner-fi/Cargo.toml",
+      "sha256": "4027fc0ff35b80777527dc50a687856b46a7406f6e665296d010f884ab8dcd30"
+    },
+    {
+      "path": "proto/Cargo.toml",
+      "sha256": "9f95dba9d786a964313fda1e0c7ff488ca6488032efa9905c352aa0a7afc3e04"
     },
     {
       "path": "rust-toolchain.toml",
       "sha256": "377b3d8b1fce9850e2f9add056c51c3f3b44d18cbc24c56d0d3225a7fbd58231"
     },
     {
+      "path": "shared/Cargo.toml",
+      "sha256": "70494540b3949197af27d1a4fcbace466e8361241a12efb6c4e2788826bb6789"
+    },
+    {
+      "path": "tx-core/Cargo.toml",
+      "sha256": "900124e36cc2c6ce2dbf900aebf35892a089d2cc03fbf37639baa37921c8ca88"
+    },
+    {
+      "path": "tx/Cargo.toml",
+      "sha256": "9c4f97dc14ce08d6488719ef066a21b61a86d8c0d1c41d20001856946587810a"
+    },
+    {
       "path": "xtask/Cargo.toml",
       "sha256": "fb8853c5969e14000d8c2af8b9a2e1189e3d793e2a5fc9d52bfcea6681b4fd2b"
+    }
+  ],
+  "tool_input_trees": [
+    {
+      "path": "dbgen",
+      "domain": "pqsigner/erc7730-tool-input-tree-v1",
+      "files": 13,
+      "bytes": 1158872,
+      "sha256": "c99dceb9608d4b73f1ac9c52f984de1d19e558734fec47f8f2ba5628eabfb6af"
     },
     {
-      "path": "xtask/src/erc7730_curation.rs",
-      "sha256": "538fe33bcf823734d2cef61311ad69f3dc3c6b32b90602c25411b52f96d49312"
+      "path": "pqsigner-erc7730",
+      "domain": "pqsigner/erc7730-tool-input-tree-v1",
+      "files": 23,
+      "bytes": 790007,
+      "sha256": "f15246c23ce0b72e53f24869c364c7d882befaa0c56dea0eba57f3cd421944ee"
     },
     {
-      "path": "xtask/src/erc7730_diff.rs",
-      "sha256": "43e50a5fa56c1487748c9fd574b52db842e4536a4c0ddb5fe7e23c63c53a1155"
+      "path": "pqsigner-fi",
+      "domain": "pqsigner/erc7730-tool-input-tree-v1",
+      "files": 4,
+      "bytes": 33478,
+      "sha256": "2063847882a793db455878d47f3642fba3f52248e7b70d891fe5e5bfd2528b5c"
     },
     {
-      "path": "xtask/src/main.rs",
-      "sha256": "5463154b26f823bf01daa0b0388bf4c92277794726898ae12f55414c592a3250"
+      "path": "proto",
+      "domain": "pqsigner/erc7730-tool-input-tree-v1",
+      "files": 9,
+      "bytes": 173604,
+      "sha256": "0740f038fefe50f87a8af96b31164c0e5499b4daf895f7781c656844c99abcd3"
+    },
+    {
+      "path": "shared",
+      "domain": "pqsigner/erc7730-tool-input-tree-v1",
+      "files": 12,
+      "bytes": 168616,
+      "sha256": "64f8c77320cdab849f31b2e81bcccc13b6fc280b031c9bb9ebbb992f2591aecc"
+    },
+    {
+      "path": "tx-core",
+      "domain": "pqsigner/erc7730-tool-input-tree-v1",
+      "files": 11,
+      "bytes": 112421,
+      "sha256": "32b0163ae7d8d730877fc685716b144cd56308f1a1005dd1d69d127cec5acf6d"
+    },
+    {
+      "path": "tx",
+      "domain": "pqsigner/erc7730-tool-input-tree-v1",
+      "files": 32,
+      "bytes": 307995,
+      "sha256": "9d531453b93c4e54bae4e110dca365efcab349ae0504500a6c629b32b6e16719"
+    },
+    {
+      "path": "xtask",
+      "domain": "pqsigner/erc7730-tool-input-tree-v1",
+      "files": 5,
+      "bytes": 267519,
+      "sha256": "73e83705b1e85b50303244342cc18e0a26b2318a7fa3e647cb9006659c9574e3"
+    }
+  ],
+  "capability_inputs": [
+    {
+      "path": "secure/data/erc20.json",
+      "sha256": "93dc4ef3c2cbcff7d605e08ff144e00149c921d6d64077361469a54df3e29785"
     }
   ],
   "replacements": [

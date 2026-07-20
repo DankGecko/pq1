@@ -16,7 +16,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use dbgen::erc7730::{
-    build_db, build_db_tolerant, build_db_with_policy_override, CatalogueProvenance,
+    build_db, build_db_tolerant, build_db_with_policy_override, load_policy, try_compile_one,
+    CatalogueProvenance,
 };
 
 fn expect_err<T>(res: Result<T, String>, msg: &str) -> String {
@@ -620,11 +621,13 @@ fn deployed_common_descriptor_is_flagged_and_covered_by_omission_filter() {
 
 #[test]
 fn unscanned_child_with_deployments_and_included_formats_is_known() {
-    let dir = make_tempdir("unscanned_child_include");
-    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
-    fs::write(dir.join("calldata-valid.json"), VALID_SIBLING_02).unwrap();
+    let root = make_tempdir("unscanned_child_include");
+    let registry = root.join("registry");
+    fs::create_dir(&registry).unwrap();
+    fs::write(root.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(registry.join("calldata-valid.json"), VALID_SIBLING_02).unwrap();
     fs::write(
-        dir.join("common-format.json"),
+        registry.join("common-format.json"),
         r#"{
   "metadata": { "owner": "Template", "contractName": "Template" },
   "display": { "formats": {
@@ -640,7 +643,7 @@ fn unscanned_child_with_deployments_and_included_formats_is_known() {
     )
     .unwrap();
     fs::write(
-        dir.join("common-child.json"),
+        registry.join("common-child.json"),
         r#"{
   "\u0063ontext": { "contract": { "deployments": [
     { "chainId": 1, "address": "0x0000000000000000000000000000000000000004" }
@@ -651,7 +654,7 @@ fn unscanned_child_with_deployments_and_included_formats_is_known() {
     .unwrap();
 
     let (res, skips) =
-        build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir)).expect("build");
+        build_db_tolerant(&registry, &root.join("policy.toml"), Some(&root)).expect("build");
     assert!(skips.iter().any(|skip| {
         skip.reason.contains("UNSCANNED")
             && skip.source.file_name().and_then(|name| name.to_str()) == Some("common-child.json")
@@ -894,14 +897,24 @@ const POLICY_DEV: &str =
     "allow_unattested_dev_descriptors = true\nmin_attesters = 0\ntrusted_attesters = []\n";
 
 const TEMPLATE_PERMIT: &str = r#"{
-  "metadata": { "owner": "Permit Template" },
-  "display": { "formats": { "templated()": { "intent": "Templated intent from include" } } }
+  "metadata": { "owner": "Permit Template", "contractName": "Permit Template" },
+  "display": { "formats": {
+    "templated()": { "intent": "Templated intent from include", "fields": [] }
+  } }
 }"#;
 
 const DESCRIPTOR_WITH_RELATIVE_INCLUDE: &str = r#"{
   "context": { "contract": { "deployments": [{ "chainId": 1, "address": "0x0000000000000000000000000000000000000001" }] } },
-  "includes": "./template_permit.json",
-  "display": { "formats": { "transfer(address,uint256)": { "intent": "Local override wins" } } }
+  "includes": "./common-permit.json",
+  "display": { "formats": {
+    "transfer(address to,uint256 amount)": {
+      "intent": "Local override wins",
+      "fields": [
+        { "path": "to", "label": "To", "format": "addressName" },
+        { "path": "amount", "label": "Amount", "format": "raw" }
+      ]
+    }
+  } }
 }"#;
 
 const DESCRIPTOR_WITH_REGISTRY_INCLUDE: &str = r#"{
@@ -911,28 +924,38 @@ const DESCRIPTOR_WITH_REGISTRY_INCLUDE: &str = r#"{
 
 #[test]
 fn include_relative_path_resolves_against_descriptor_dir() {
-    let dir = make_tempdir("rel_include");
-    fs::write(dir.join("policy.toml"), POLICY_DEV).unwrap();
-    fs::write(dir.join("template_permit.json"), TEMPLATE_PERMIT).unwrap();
+    let root = make_tempdir("rel_include");
+    let registry = root.join("registry");
+    fs::create_dir(&registry).unwrap();
+    fs::write(root.join("policy.toml"), POLICY_DEV).unwrap();
+    fs::write(registry.join("common-permit.json"), TEMPLATE_PERMIT).unwrap();
     fs::write(
-        dir.join("descriptor.json"),
+        registry.join("descriptor.json"),
         DESCRIPTOR_WITH_RELATIVE_INCLUDE,
     )
     .unwrap();
 
-    // registry_root is required for *any* include, even relative ones —
-    // the sandbox check canonicalises and verifies the resolved path is
-    // inside the registry_root. So we pass the tempdir as both.
-    let res = build_db_with_policy_override(&dir, &dir.join("policy.toml"), false, Some(&dir));
-    // We don't assert on the full IR (the test fixture is minimal and
-    // may not pass full schema validation) — but the error, if any,
-    // must NOT be the "includes requires --registry-root" rejection.
-    if let Err(e) = res {
-        assert!(
-            !e.contains("requires `--registry-root`"),
-            "include resolution didn't fire: {e}"
-        );
-    }
+    // Compile the concrete child directly: include-only common templates are
+    // inputs, not standalone catalogue descriptors. Parsing its emitted IR
+    // proves both the included and locally declared formats survived merging.
+    let policy = load_policy(&root.join("policy.toml")).unwrap();
+    let entries = try_compile_one(&registry.join("descriptor.json"), &policy, Some(&root))
+        .expect("relative include should resolve and compile");
+    assert_eq!(entries.len(), 1);
+    let ir = pqsigner_erc7730::ir::Erc7730Ir::parse(&entries[0].ir_bytes).unwrap();
+    let selectors = ir
+        .format_iter()
+        .map(|format| format.unwrap().selector)
+        .collect::<Vec<_>>();
+    let templated = pqsigner_tx_core::hash::keccak256(b"templated()");
+    let transfer = pqsigner_tx_core::hash::keccak256(b"transfer(address,uint256)");
+    assert_eq!(
+        selectors,
+        vec![
+            [templated[0], templated[1], templated[2], templated[3]],
+            [transfer[0], transfer[1], transfer[2], transfer[3]],
+        ]
+    );
 }
 
 #[test]

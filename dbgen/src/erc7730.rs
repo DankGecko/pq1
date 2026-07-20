@@ -8196,9 +8196,10 @@ fn utf16_codeunit_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 //      → strip the host + branch prefix and resolve as a relative
 //      path under `registry_root`.
 //
-// Any include that resolves OUTSIDE `registry_root` (e.g. via `..`
-// escapes) is rejected — this prevents a hostile descriptor from
-// pulling in arbitrary files on the host build machine.
+// Include authority is exactly the corpus covered by the checked-in receipt:
+// canonical non-fixture `.json` files below `registry/` or `ercs/`. Merely
+// remaining below `registry_root` is insufficient because root-level files,
+// fixture trees, and non-JSON files are deliberately absent from that receipt.
 // ─────────────────────────────────────────────────────────────────────
 
 fn resolve_include_path(
@@ -8234,15 +8235,53 @@ fn resolve_include_path(
             .join(include_ref)
     };
 
+    let candidate_metadata = fs::symlink_metadata(&candidate)
+        .map_err(|e| format!("inspect include `{include_ref}`: {e}"))?;
+    if candidate_metadata.file_type().is_symlink() || !candidate_metadata.is_file() {
+        return Err(format!(
+            "include `{include_ref}` must name a regular non-symlink corpus file"
+        ));
+    }
+
     let canonical = candidate
         .canonicalize()
         .map_err(|e| format!("canonicalize include `{include_ref}`: {e}"))?;
-    if !canonical.starts_with(&registry_root) {
+    validate_receipted_include_path(&registry_root, &canonical, include_ref)?;
+    Ok(canonical)
+}
+
+fn validate_receipted_include_path(
+    registry_root: &Path,
+    canonical: &Path,
+    include_ref: &str,
+) -> Result<(), String> {
+    let relative = canonical.strip_prefix(registry_root).map_err(|_| {
+        format!("include `{include_ref}` resolves outside registry-root — refusing")
+    })?;
+    let relative_text = relative
+        .to_str()
+        .ok_or_else(|| format!("include `{include_ref}` resolves to a non-UTF-8 corpus path"))?;
+    let mut components = relative.components();
+    let top = components.next().and_then(|component| match component {
+        std::path::Component::Normal(value) => value.to_str(),
+        _ => None,
+    });
+    let filename = relative
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("include `{include_ref}` has no canonical UTF-8 filename"))?;
+    if !matches!(top, Some("registry" | "ercs"))
+        || !filename.ends_with(".json")
+        || relative
+            .components()
+            .any(|component| component.as_os_str() == "tests")
+        || filename.contains(".tests.")
+    {
         return Err(format!(
-            "include `{include_ref}` resolves outside registry-root — refusing"
+            "include `{include_ref}` resolves outside the receipted registry/ercs JSON corpus: `{relative_text}`"
         ));
     }
-    Ok(canonical)
+    Ok(())
 }
 
 /// Deep-merge `over` on top of `base`. For object-typed leaves the
@@ -13684,6 +13723,57 @@ mod tests {
                 false,
             )
             .is_err());
+        }
+    }
+
+    #[test]
+    fn include_resolution_is_bounded_to_the_receipted_json_corpus() {
+        let temp = tempfile::tempdir().expect("create registry fixture");
+        let root = temp.path();
+        let registry_dir = root.join("registry/example");
+        let ercs_dir = root.join("ercs");
+        fs::create_dir_all(&registry_dir).unwrap();
+        fs::create_dir_all(&ercs_dir).unwrap();
+        let descriptor = registry_dir.join("descriptor.json");
+        fs::write(&descriptor, b"{}\n").unwrap();
+        fs::write(registry_dir.join("common.json"), b"{}\n").unwrap();
+        fs::write(ercs_dir.join("base.json"), b"{}\n").unwrap();
+
+        assert_eq!(
+            resolve_include_path(root, &descriptor, "common.json").unwrap(),
+            registry_dir.join("common.json").canonicalize().unwrap()
+        );
+        assert_eq!(
+            resolve_include_path(root, &descriptor, "../../ercs/base.json").unwrap(),
+            ercs_dir.join("base.json").canonicalize().unwrap()
+        );
+
+        fs::write(root.join("planted.json"), b"{}\n").unwrap();
+        let error = resolve_include_path(root, &descriptor, "../../planted.json").unwrap_err();
+        assert!(error.contains("outside the receipted"), "{error}");
+
+        for (relative, include_ref) in [
+            ("registry/example/common.txt", "common.txt"),
+            ("registry/example/hidden.tests.json", "hidden.tests.json"),
+            ("registry/example/tests/hidden.json", "tests/hidden.json"),
+        ] {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"{}\n").unwrap();
+            let error = resolve_include_path(root, &descriptor, include_ref).unwrap_err();
+            assert!(error.contains("outside the receipted"), "{error}");
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(
+                registry_dir.join("common.json"),
+                registry_dir.join("link.json"),
+            )
+            .unwrap();
+            let error = resolve_include_path(root, &descriptor, "link.json").unwrap_err();
+            assert!(error.contains("non-symlink"), "{error}");
         }
     }
 }
