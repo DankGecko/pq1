@@ -66,6 +66,61 @@ Host → Device:  GET_RESPONSE
 Device → Host:  [remaining bytes] SW=0x9000
 ```
 
+### Hard bounds: chain lifetime, drain deadlines, reassembly timeout
+
+The firmware bounds every multi-frame exchange so a stalled or hostile
+host cannot pin the single-session router lease (findings X17-UC1, F2,
+F11). All clocks tick at the USB SOF cadence (1 frame ≈ 1 ms).
+
+- **Command-chain total lifetime — 30 s**
+  (`ChainState::CHAIN_TIMEOUT_FRAMES = 30_000`,
+  `shared/src/apdu_framing.rs`). A chained upload (P1=0x80 … P1=0x00)
+  must complete within 30 s of its first block. This is a
+  total-exchange deadline, NOT an idle timeout: sending more blocks
+  does not extend it. On expiry the device silently resets the chain
+  and releases the session lease. A late P1=0x80 block is then accepted
+  as the FIRST block of a brand-new chain, and a following P1=0x00
+  block executes the truncated accumulation — the secure parsers reject
+  truncated payloads, so the host sees a late error SW (e.g. 0x6700 /
+  0x6A80) from the final block rather than a chain-abort signal at the
+  moment of expiry. Retry guidance: finish a chain well inside 30 s;
+  after any long pause or late failure, resend the entire chain from
+  block 0 — never try to resume a stale chain.
+
+- **GET_RESPONSE drain idle timeout — 30 s**
+  (`PENDING_TIMEOUT_FRAMES`, `nonsecure/src/usb/commands.rs`). Each
+  successful GET_RESPONSE resets this clock; 30 s of host silence
+  scrubs the pending response and releases the lease. Host-visible
+  effect: the next GET_RESPONSE returns SW 0x6985. Retry guidance:
+  re-issue the original command and drain without long pauses.
+
+- **GET_RESPONSE drain absolute deadline — 120 s**
+  (`PENDING_ABS_TIMEOUT_FRAMES`, same file). NOT reset by drain
+  activity: a drain must complete within 120 s of its first chunk
+  regardless of keepalives. Host-visible effect on expiry is the same
+  as the idle timeout (pending data scrubbed; next GET_RESPONSE →
+  0x6985). A worst-case legitimate drain (17 initCode chunks; a full
+  12,556-byte signing response) needs far less even at seconds per
+  round-trip, so 0x6985 mid-drain means the exchange is dead — restart
+  the command from scratch.
+
+- **Single-session router lease (F11)**
+  (`router_lease_allows`, `shared/src/apdu_framing.rs`). While any
+  chain or drain is live, APDUs arriving on a different HID channel are
+  refused with SW 0x6985 without disturbing the owning channel's state.
+  The lease releases when the exchange completes or one of the
+  deadlines above fires. Guidance: one host session at a time — a
+  second app or channel must wait out at most the bounds above.
+
+- **Transport RX reassembly timeout — 5 s**
+  (`RX_REASSEMBLY_TIMEOUT_FRAMES = 5000`,
+  `nonsecure/src/usb/transport.rs`). Once the first HID frame of an
+  APDU arrives, its continuation frames must complete within 5 s or the
+  partial reassembly is scrubbed. Host-visible effect: no response at
+  all — the device silently drops the partial APDU. Retry guidance:
+  send an APDU's HID frames back-to-back; after any gap over 5 s,
+  resend the whole APDU starting at sequence 0.
+
 ## Instruction Set
 
 > **Source of truth.** Authoritative INS values live in `proto/src/lib.rs`
@@ -87,7 +142,7 @@ After the all-C10 cutover, the v2 protocol exposes the following commands:
 | 0x62 | SIGN_OFFCHAIN          | Yes      | 0x00/0x80  |
 | 0x63 | OFFCHAIN_STATUS        | No       | 0          |
 | 0x70 | FW_BEGIN               | Yes      | 0x00/0x80  |
-| 0x71 | FW_CHUNK               | Yes      | 0x00/0x80  |
+| 0x71 | FW_CHUNK               | No       | 0          |
 | 0x72 | FW_COMMIT              | No       | 0          |
 | 0x73 | FW_STATUS              | No       | 0          |
 | 0x74 | FW_ABORT               | No       | 0          |
@@ -215,9 +270,11 @@ from the wizard UI, not from GET_STATUS.
 
 ### 0x01 GET_DEVICE_INFO
 
-Returns a versioning + capability header. Reports `ep_version = 0x0006`
-(EntryPoint v0.6) and `sig_param_set = 2` (SPHINCS+C10,
-`C10_SIG_LEN = 4008`).
+Returns a versioning + capability header. Bytes 0–1 are
+`protocol_version` (u16 BE) = `PROTOCOL_VERSION` from `proto/src/lib.rs`,
+currently **0x0201** (see §Protocol version history below). Reports
+`ep_version = 0x0006` (EntryPoint v0.6) and `sig_param_set = 2`
+(SPHINCS+C10, `C10_SIG_LEN = 4008`).
 
 ### 0x60 GET_WALLET_ADDRESS
 
@@ -358,3 +415,22 @@ longer dispatched (or are reserved for backwards-compat probing):
 | 0x6D00 | INS not supported |
 | 0x6E00 | CLA not supported |
 | 0x6F00 | Internal error |
+
+## Protocol version history
+
+Current `PROTOCOL_VERSION` (GET_DEVICE_INFO bytes 0–1): **0x0201**
+(`proto/src/lib.rs`).
+
+- **0x0201 — GET_STATUS layout bump (#440):** the 0x02 GET_STATUS
+  response shrank from 5 bytes on the wire (3 data bytes + SW) to
+  4 bytes (2 data bytes + SW). The leading `provisioned` byte was
+  removed (finding X17-UC2) because it was a constant-1 that reported
+  even blank devices as provisioned. Firmware reporting 0x0201 or
+  later always speaks the 2-byte `[locked][pin_remaining]` layout
+  (see §0x02 GET_STATUS).
+- **0x0200 ambiguity window:** the layout change originally shipped
+  WITHOUT a `PROTOCOL_VERSION` bump, so a 0x0200 report cannot
+  distinguish pre- from post-change firmware. Pre-production only,
+  with the companion shipped in lockstep. Companions MUST parse the
+  current 2-byte layout and SHOULD treat any 0x0200 device as
+  ambiguous vintage.

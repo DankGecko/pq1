@@ -250,14 +250,23 @@ lower = error kind):
 | `0x00` | all 3 steps passed |
 | `0x11` | step 1 (LEFT) timeout — operator did not press LEFT in 10 s |
 | `0x12` | step 1 (LEFT) **wrong button** — RIGHT pressed instead (swapped wires at the connector) |
+| `0x13` | step 1 (LEFT) **release timeout** — button never released within the step budget (stuck/welded contact) |
 | `0x21` | step 2 (RIGHT) timeout |
 | `0x22` | step 2 (RIGHT) **wrong button** — LEFT pressed instead |
+| `0x23` | step 2 (RIGHT) **release timeout** — button stuck/welded ON |
 | `0x31` | step 3 (BOTH) timeout — operator pressed only one or neither |
+| `0x33` | step 3 (BOTH) **release timeout** — a button is stuck/welded ON |
+
+The post-press release wait shares the same per-step 10 s budget as the
+press wait: a welded button fails the step with the `0x?3` code instead
+of hanging the unit (which the runner would see as a HID timeout and
+misreport as a harness error rather than a unit FAIL).
 
 Catches:
 - mechanically dead buttons (membrane broken / spring missing)
 - broken solder joint on either button
 - L/R wires physically swapped at the connector (`0x12` / `0x22`)
+- welded / stuck button contacts (`0x13` / `0x23` / `0x33`)
 - pull-up resistor open (button reads always-pressed → timeout fires
   on a different step than the operator intends)
 
@@ -355,6 +364,7 @@ and contact the firmware team — don't repair on the line."
 | BUTTON_TEST | step_status `0x11` / `0x21` | LEFT / RIGHT button mechanically dead | Re-solder button; retry. If persistent → set aside |
 | BUTTON_TEST | step_status `0x12` / `0x22` | LEFT/RIGHT wires SWAPPED at connector | Rewire connector; retry |
 | BUTTON_TEST | step_status `0x31` | Operator did not press both buttons; OR right button works alone but left doesn't | First retry with explicit "press both at once" demo; if persistent → re-solder LEFT button |
+| BUTTON_TEST | step_status `0x13` / `0x23` / `0x33` | Button contact welded/stuck ON (never released within the step budget) | Replace button; if persistent → set aside |
 
 REPORT VENDOR means: tag the unit, photograph the per-unit JSON
 report, log the chip's UID + lot number, and send the lot info to

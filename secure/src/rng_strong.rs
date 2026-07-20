@@ -89,7 +89,18 @@ pub fn fill(buf: &mut [u8]) -> Result<(), ()> {
         // Production: an absent SE contribution is fatal — silently
         // degrading to platform-only under EMFI / I2C glitching would
         // let an attacker reduce entropy without anything noticing.
-        if !fold_se_blocks(buf, |b| unsafe { crate::se_random(b) }.is_ok()) {
+        // SCAFI-6/F18 (#442): the gate runs through the codebase's
+        // FI-sentinel idiom instead of a plain `if !bool` — a bare
+        // branch on the fold's bool is one instruction-skip away from
+        // waiving the fatal-SE check. `check_true_into_sentinel`
+        // double-evaluates the fold (a second XOR-fold of fresh SE
+        // bytes is entropy-neutral) and the caller compares the
+        // Hamming-distant sentinel VALUE, so a skipped/garbled branch
+        // lands on the error path.
+        let se_ok = crate::fi::check_true_into_sentinel(|| {
+            fold_se_blocks(buf, |b| unsafe { crate::se_random(b) }.is_ok())
+        });
+        if se_ok != crate::fi::OK_SENTINEL {
             return Err(());
         }
     }

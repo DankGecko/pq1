@@ -1,12 +1,20 @@
 # Adversarial-review findings — the catalogue
 
-This folder is the **single repository home for canonical, post-cross-adjudication
-finding records** produced under the playbooks in the parent directory and the
-[FV playbook](../../../verification/fv-adversarial-review-playbook.md). Raw
-first passes and cross passes freeze outside the reviewed target; their digests
-and disposition matrix are cited here afterward. Consistent headers and
-per-finding status make it obvious which adjudicated findings have been worked
-through and which remain open.
+This folder is the **single repository home for adversarial-review finding
+records** produced under the playbooks in the parent directory and the
+[FV playbook](../../../verification/fv-adversarial-review-playbook.md). Under
+the **current** workflow
+([`docs/planning-and-review-workflow.md`](../../../planning-and-review-workflow.md)
+§7/§7b), review evidence comes from ONE simultaneous three-reviewer wave
+(gpt-5.6-sol `ultra` / Opus 4.8 `xhigh` / Kimi K3) plus coordinator triage —
+there is **no** Partner-A/Partner-B cross-adjudication step — and kept
+findings are filed as GitHub issues on `EthereumPhone/PQ1`. The older
+canonical-post-cross-adjudication lifecycle (raw first passes and cross
+passes freezing outside the reviewed target, their digests and disposition
+matrix cited here afterward) is **historical / specially-authorized-only**;
+see the note at the top of [TEMPLATE.md](./TEMPLATE.md). Consistent headers
+and per-finding status make it obvious which adjudicated findings have been
+worked through and which remain open.
 
 > **Sibling — confirmed-vuln writeups.** Individual *confirmed-and-fixed* vulnerability reports live in [`../../vulns/`](../../vulns/) (their own established folder, each with a fix). Those are a distinct flavor from adversarial-review *pass* reports; this folder catalogues the passes. (Consolidating `vulns/` into here is a possible future cleanup — it is heavily cross-referenced, so left separate for now.)
 
@@ -17,6 +25,14 @@ not grant exact-pair completion or a current recommendation; do not rewrite
 their frozen bytes merely to resemble the current template.
 
 ## How reviewed findings become repository state
+
+> **Current workflow:** steps 1–5 below are the old exact-pair lifecycle —
+> historical / specially-authorized-only under
+> [`docs/planning-and-review-workflow.md`](../../../planning-and-review-workflow.md)
+> §7/§7b. The current path is: one simultaneous three-reviewer wave →
+> coordinator triage → one GitHub issue per kept finding. Run steps 1–5 only
+> when a task-specific owner gate explicitly requires the old canonical-record
+> lifecycle.
 
 1. Both required partners write and digest independent first-pass reports
    **outside the reviewed target**. Preserve every candidate, raw origin ID,
@@ -85,7 +101,7 @@ Newest first. Add a row when you file a report; update the Status/Findings cells
 
 | Report | Surface | Date | Report status | Findings (open / handled) |
 |---|---|---|---|---|
-| [fv-deep-review-2026-07-19-coordinator](./fv-deep-review-2026-07-19-coordinator.md) | fv (post-remediation follow-up: F1–F11 status, gate/CI enforcement, claim-vs-theorem, Kani census, doc/tracker sync; plus external SOTA research) | 2026-07-19 | `open` (coordinator-led deep review with executed controls + mutually withheld Opus/GPT-5.6 refutation passes; not the frozen-pair sweep) | 13 open / 0 handled |
+| [fv-deep-review-2026-07-19-coordinator](./fv-deep-review-2026-07-19-coordinator.md) | fv (post-remediation follow-up: F1–F11 status, gate/CI enforcement, claim-vs-theorem, Kani census, doc/tracker sync; plus external SOTA research) | 2026-07-19 | `resolved` (coordinator-led deep review with executed controls + mutually withheld Opus/GPT-5.6 refutation passes; all 13 findings fixed same-day; F1's billing residual deferred to #456, Kontrol live-run to #197, research follow-ups #466/#467) | 0 open / 13 handled |
 | [full-project-sweep-2026-07-19-discovery](./full-project-sweep-2026-07-19-discovery.md) | multi (second sweep; 7 lanes over the erc7730-campaign diff, 2026-07-19 fix batches, and sweep-1 blind spots) | 2026-07-19 | `open` (supplemental pre-cross discovery evidence — not cross-adjudicated, not workflow completion) | 26 open / 0 handled (tracked as issues #430–#455) |
 | [full-project-sweep-2026-07-18-discovery](./full-project-sweep-2026-07-18-discovery.md) | multi (full PQSigner_OS sweep; 15 first-principles lanes over all 16 playbook surfaces) | 2026-07-18 | `open` (supplemental pre-cross discovery evidence — not cross-adjudicated, not workflow completion) | 54 open / 0 handled |
 | [clear-signing-pq1-forced-blind-architecture-2026-07-16](./clear-signing-pq1-forced-blind-architecture-2026-07-16.md) | multi (clear signing, hostile companion, trusted UI/FI, lifecycle, resources, prodconfig, provenance) | 2026-07-16 | `in-review` — frozen candidate NO-GO | 20 reviewed canonical groups / 0 handled; raw matrix = 13 confirmed, 10 narrowed, 3 unresolved, 1 refuted |

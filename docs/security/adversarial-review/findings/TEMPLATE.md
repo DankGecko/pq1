@@ -8,6 +8,16 @@ scope: <the specific claims / files / modes reviewed>
 status: in-review   # post-cross items start REVIEWED; see findings/README.md
 ---
 
+> **NOTE (2026-07-20):** This canonical-post-cross-adjudication template is
+> **historical / specially-authorized-only** under the current workflow.
+> `docs/planning-and-review-workflow.md` §7/§7b now prescribes ONE
+> simultaneous three-reviewer wave (gpt-5.6-sol `ultra` / Opus 4.8 `xhigh` /
+> Kimi K3) with coordinator triage and **no** Partner-A/Partner-B
+> cross-adjudication step; triaged findings are tracked as GitHub issues.
+> Use this template only when a task-specific owner gate explicitly requires
+> the old exact-pair canonical-record lifecycle. The template body below is
+> frozen and left unchanged.
+
 # Canonical adversarial-review findings — <surface> — YYYY-MM-DD
 
 > This is the post-cross-adjudication repository record. Do not use it as a

@@ -238,7 +238,7 @@ Capability discovery. **Always call first.**
 
 | Offset | Size | Field             | Notes                                  |
 |--------|------|-------------------|----------------------------------------|
-| 0      | 2    | protocol_version  | u16 BE, currently `0x0200`             |
+| 0      | 2    | protocol_version  | u16 BE, currently `0x0201`             |
 | 2      | 3    | fw_version        | major, minor, patch (currently 3.0.0)  |
 | 5      | 16   | device_uid        | STM32 UID96; zeros on dev builds       |
 | 21     | 4    | capabilities      | u32 BE bitmap (see below)              |
@@ -261,13 +261,18 @@ Check device state. No unlock required.
 
 **Request:** empty
 
-**Response (3 bytes + SW):**
+**Response (2 bytes + SW):**
 
 | Offset | Field         | Values                                  |
 |--------|---------------|-----------------------------------------|
-| 0      | provisioned   | 0 = not provisioned, 1 = provisioned    |
-| 1      | locked        | 0 = unlocked, 1 = locked                |
-| 2      | pin_remaining | 0–10 attempts remaining                 |
+| 0      | locked        | 0 = unlocked, 1 = locked                |
+| 1      | pin_remaining | 0–10 attempts remaining                 |
+
+There is deliberately NO `provisioned` byte: the old 3-byte layout led
+with one derived as `pin_remaining <= MAX_ATTEMPTS`, which is always
+true, so it reported "provisioned" even on a blank device. The byte was
+removed (finding X17-UC2). A blank device runs the on-device first-boot
+wizard; detect that state from the wizard UI, not from GET_STATUS.
 
 ---
 

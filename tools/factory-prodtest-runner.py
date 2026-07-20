@@ -168,9 +168,12 @@ BUTTON_STEP_DECODE = {
     0x00: ("PASS", "all 3 steps OK"),
     0x11: ("FAIL", "step 1 (LEFT) timeout — no press in 10 s"),
     0x12: ("FAIL", "step 1 (LEFT) wrong button — operator pressed RIGHT or wires are swapped"),
+    0x13: ("FAIL", "step 1 (LEFT) release timeout — button stuck/welded ON"),
     0x21: ("FAIL", "step 2 (RIGHT) timeout"),
     0x22: ("FAIL", "step 2 (RIGHT) wrong button — operator pressed LEFT or wires are swapped"),
+    0x23: ("FAIL", "step 2 (RIGHT) release timeout — button stuck/welded ON"),
     0x31: ("FAIL", "step 3 (BOTH) timeout — operator did not press both buttons together"),
+    0x33: ("FAIL", "step 3 (BOTH) release timeout — a button is stuck/welded ON"),
 }
 
 # Response status codes — mirror `proto/src/lib.rs::NscStatus`.

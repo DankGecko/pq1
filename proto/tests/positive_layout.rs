@@ -437,7 +437,8 @@ fn positive_usb_hid_constants() {
 
 #[test]
 fn positive_apdu_protocol_version_is_v2() {
-    assert_eq!(PROTOCOL_VERSION, 0x0200);
+    // 0x0201 = v2 with the GET_STATUS 2-byte layout guaranteed (#440).
+    assert_eq!(PROTOCOL_VERSION, 0x0201);
     assert_eq!(APDU_CLA_V2, 0xF0);
     assert_eq!(APDU_MAX_RESP, 253);
 }

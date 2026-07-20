@@ -15,10 +15,13 @@ status: open
 > adversarial lanes). It has **NOT** been cross-adjudicated. Every finding below
 > is `🔲 OPEN`; this report contains **no CONFIRMED / REFUTED / NARROWED /
 > UNRESOLVED dispositions**. It grants **no merge, shipment, hardware, or
-> adjudication authority**. Canonical recording requires the Partner-A /
-> Partner-B exact-pair cross-adjudication per
-> [`docs/planning-and-review-workflow.md`](../../../planning-and-review-workflow.md);
-> until that runs, nothing in this file is a canonical finding.
+> adjudication authority**. Canonical recording follows the current
+> three-reviewer regime in
+> [`docs/planning-and-review-workflow.md`](../../../planning-and-review-workflow.md)
+> §7/§7b: one simultaneous three-reviewer wave plus coordinator triage, with
+> **no** Partner-A / Partner-B cross-adjudication step; triaged items are
+> recorded as GitHub issues. Until that runs, nothing in this file is a
+> canonical finding.
 
 ## Sweep metadata
 
@@ -834,7 +837,8 @@ sweep's condensed residuals; nothing here is adjudicated.
 All actionable items from this sweep are banked in `docs/work-todo.md` under
 the dated **"Full-project adversarial sweep 2026-07-18 (discovery)"** entry;
 this report is the evidence record, not the tracking surface. Nothing in this
-report is canonical until it has been through the Partner-A / Partner-B
-exact-pair cross-adjudication per `docs/planning-and-review-workflow.md` —
-until then every item above remains `🔲 OPEN` discovery evidence with no merge,
+report is canonical until it has passed coordinator triage under the current
+three-reviewer regime in `docs/planning-and-review-workflow.md` §7/§7b (there
+is no Partner-A / Partner-B cross-adjudication step) — until then every item
+above remains `🔲 OPEN` discovery evidence with no merge,
 shipment, hardware, or adjudication authority.

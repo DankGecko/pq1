@@ -1762,7 +1762,13 @@ pub const EXECUTE_BATCH_SELECTOR: [u8; 4] = [0x7a, 0x38, 0x99, 0x33];
 pub const MAX_EXECUTE_BATCH_CALLDATA_LEN: usize = 18 * 1024; // 18,432
 
 /// v2 protocol version reported in GET_DEVICE_INFO.
-pub const PROTOCOL_VERSION: u16 = 0x0200;
+///
+/// 0x0201: bumped for the GET_STATUS wire-layout change (the constant-1
+/// `provisioned` byte was dropped — 5 → 4 bytes on the wire; X17-UC2 /
+/// #143), which originally shipped at 0x0200 without a bump (#440).
+/// 0x0201 guarantees the 2-byte `[locked][pin_remaining]` GET_STATUS
+/// layout; a 0x0200 report is ambiguous vintage (pre-production only).
+pub const PROTOCOL_VERSION: u16 = 0x0201;
 
 /// ISO 7816-4 status words
 pub const SW_OK: u16 = 0x9000;

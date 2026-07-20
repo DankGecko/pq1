@@ -1760,7 +1760,7 @@ mod rng_source_text {
         let pos = RNG_STRONG_SRC
             .find("not(feature = \"mock-se\")")
             .expect("rng_strong must gate a production-only SE branch");
-        let body = &RNG_STRONG_SRC[pos..pos + 400];
+        let body = &RNG_STRONG_SRC[pos..pos + 1200];
         assert!(
             body.contains("return Err(());"),
             "rng_strong production branch must propagate SE failure as \
@@ -1773,6 +1773,30 @@ mod rng_source_text {
             RNG_STRONG_SRC.contains("feature = \"mock-se\""),
             "rng_strong must retain a `mock-se`-gated branch that \
              tolerates the absent TRNG on the mock backend."
+        );
+    }
+
+    /// S2-F13 / #442: the production SE-failure gate must use the
+    /// codebase's FI-sentinel idiom (`fi::check_true_into_sentinel` +
+    /// an `!= crate::fi::OK_SENTINEL` VALUE compare), not a plain
+    /// single-skippable `if !bool` branch. SCAFI-6/F18 doctrine:
+    /// attacker-bypass-target gates are Hamming-distant sentinels.
+    #[test]
+    fn negative_rng_strong_se_failure_gate_uses_fi_sentinel() {
+        let pos = RNG_STRONG_SRC
+            .find("not(feature = \"mock-se\")")
+            .expect("rng_strong must gate a production-only SE branch");
+        let body = &RNG_STRONG_SRC[pos..pos + 1200];
+        assert!(
+            body.contains("check_true_into_sentinel"),
+            "rng_strong production SE-failure gate must evaluate through \
+             fi::check_true_into_sentinel (S2-F13/#442) — a plain `if !bool` \
+             is one instruction-skip away from waiving the fatal-SE check"
+        );
+        assert!(
+            body.contains("!= crate::fi::OK_SENTINEL"),
+            "rng_strong production SE-failure gate must compare the sentinel \
+             VALUE against OK_SENTINEL, not branch on a bool (S2-F13/#442)"
         );
     }
 

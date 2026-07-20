@@ -614,6 +614,119 @@ fn negative_enter_pin_must_not_reset_activity_on_entry() {
     );
 }
 
+/// Slice a `seed_wizard.rs` function body: from the end of its
+/// signature line to the next top-level `fn ` / `pub fn ` (or EOF).
+/// Source-text only — used by the #426 pins below.
+fn wizard_fn_body<'a>(src: &'a str, sig: &str) -> &'a str {
+    let start = src
+        .find(sig)
+        .unwrap_or_else(|| panic!("{sig} must exist"))
+        + sig.len();
+    let after = &src[start..];
+    let next_plain = after.find("\nfn ");
+    let next_pub = after.find("\npub fn ");
+    let end = match (next_plain, next_pub) {
+        (Some(a), Some(b)) => a.min(b),
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (None, None) => after.len(),
+    };
+    &after[..end]
+}
+
+#[test]
+fn negative_seed_wizard_must_not_reset_activity_on_step_entry() {
+    // #426 — the X17-UI3 keepalive shape on the first-boot path.
+    // `run_first_boot_wizard` restarts the whole flow on every
+    // cancel/idle, and each wizard step used to call
+    // `timeout::reset_activity()` in its prologue. Spammed navigation
+    // through those step entries would therefore keep refreshing the
+    // 120 s idle window with zero user activity — the same attack
+    // X17-UI3 closed on `enter_pin`. Assert the policy comment survives
+    // AND no step prologue calls reset_activity, so a refactor that
+    // re-introduces an entry reset is caught with a citation to the
+    // original bug.
+    assert!(
+        WIZARD_SRC.contains("X17-UI3 policy (#426)"),
+        "the #426 policy comment must remain — it documents why step-entry resets are forbidden"
+    );
+    const STEP_FNS: [&str; 6] = [
+        "pub fn choose_setup_mode() -> WizardChoice {",
+        "fn yes_no(title: &str) -> Option<bool> {",
+        "fn show_mnemonic_simple(m: &Mnemonic) -> WizardResult {",
+        "fn show_mnemonic_with_decoys(m: &Mnemonic) -> WizardResult {",
+        "fn enter_single_word(title: &str) -> EnterWordResult {",
+        "fn pick_candidate(title: &str, start: usize, end: usize) -> CandidateResult {",
+    ];
+    for sig in STEP_FNS {
+        let body = wizard_fn_body(WIZARD_SRC, sig);
+        let loop_start = body
+            .find("loop {")
+            .unwrap_or_else(|| panic!("{sig} must contain a main loop"));
+        let prologue = &body[..loop_start];
+        assert!(
+            !prologue.contains("timeout::reset_activity()"),
+            "#426: {sig} must NOT call timeout::reset_activity() before the input loop — \
+             spammed wizard navigation would otherwise refresh the 120 s idle window"
+        );
+    }
+}
+
+#[test]
+fn negative_seed_wizard_resets_activity_only_after_button_events() {
+    // Companion to the previous test (mirroring the
+    // `negative_enter_pin_must_not_reset_activity_on_entry` companion
+    // check): deleting BOTH the entry reset and the post-event reset
+    // would idle-wipe the user mid-typing. Every wizard input wait must
+    // still be followed by the reset once a real button event arrives.
+    // `show_mnemonic_with_decoys` waits inside
+    // `show_mnemonic_page_with_decoys`, so its wait marker is the page
+    // call rather than a literal `wait_button`.
+    const CASES: [(&str, &str); 7] = [
+        (
+            "pub fn choose_setup_mode() -> WizardChoice {",
+            "input().wait_button(&mut idle)",
+        ),
+        (
+            "fn yes_no(title: &str) -> Option<bool> {",
+            "input().wait_button(&mut idle)",
+        ),
+        (
+            "pub fn show_mnemonic(m: &Mnemonic) -> WizardResult {",
+            "input().wait_button(&mut idle)",
+        ),
+        (
+            "fn show_mnemonic_simple(m: &Mnemonic) -> WizardResult {",
+            "input().wait_button(&mut idle)",
+        ),
+        (
+            "fn show_mnemonic_with_decoys(m: &Mnemonic) -> WizardResult {",
+            "show_mnemonic_page_with_decoys(m, &decoys, page)",
+        ),
+        (
+            "fn enter_single_word(title: &str) -> EnterWordResult {",
+            "input().wait_button(&mut idle)",
+        ),
+        (
+            "fn pick_candidate(title: &str, start: usize, end: usize) -> CandidateResult {",
+            "input().wait_button(&mut idle)",
+        ),
+    ];
+    for (sig, wait_marker) in CASES {
+        let body = wizard_fn_body(WIZARD_SRC, sig);
+        let wait = body
+            .find(wait_marker)
+            .unwrap_or_else(|| panic!("{sig} must wait on a button event"));
+        let reset = body.find("timeout::reset_activity();").unwrap_or_else(|| {
+            panic!("{sig} must keep the post-event reset (real user activity)")
+        });
+        assert!(
+            wait < reset,
+            "#426: in {sig} the reset_activity must follow the button wait (real user activity only)"
+        );
+    }
+}
+
 #[test]
 fn negative_confirm_only_resets_timer_after_a_button_event() {
     // Companion to the previous test: the reset MUST happen inside
@@ -893,8 +1006,8 @@ fn negative_show_mnemonic_warning_screen_requires_explicit_right_press() {
     // press of Left should NOT silently advance into showing the
     // words.
     assert!(WIZARD_SRC.contains("show_status(\"Write 24 words\", \"L=cancel R=show\");"));
-    assert!(WIZARD_SRC.contains("Some((Button::Right, _)) => {}"));
-    assert!(WIZARD_SRC.contains("Some((Button::Left, _)) => return WizardResult::Cancelled,"));
+    assert!(WIZARD_SRC.contains("(Button::Right, _) => {}"));
+    assert!(WIZARD_SRC.contains("(Button::Left, _) => return WizardResult::Cancelled,"));
     assert!(WIZARD_SRC.contains("None => return WizardResult::IdleWipe,"));
 }
 

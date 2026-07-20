@@ -20,6 +20,17 @@
 //! | `Left`     | prev / decrement                             |
 //! | long-Right | confirm / advance / select                   |
 //! | long-Left  | cancel / back                                |
+//!
+//! ## X17-UI3 policy (#426)
+//!
+//! `timeout::reset_activity()` is called ONLY on real user activity: a
+//! button event returned by `wait_button`. No wizard-step entry may
+//! reset the inactivity timer — spammed navigation through step entries
+//! would otherwise keep refreshing the 120 s idle window with zero user
+//! interaction (the same keepalive-extension shape as X17-UI3 /
+//! pin_entry.rs:83). Every input loop below resets the timer right
+//! after its button wait returns `Some(ev)`, never in the prologue
+//! before the loop.
 
 use super::{display, input, show_status, Button, Press, DISPLAY_COLS, DISPLAY_ROWS};
 use crate::rng;
@@ -59,8 +70,6 @@ pub enum WizardError {
 pub fn choose_setup_mode() -> WizardChoice {
     let options = ["New Wallet", "Restore"];
     let mut idx: usize = 0;
-
-    timeout::reset_activity();
 
     loop {
         let d = display();
@@ -125,7 +134,6 @@ fn hold_message(ms: u32) {
 fn yes_no(title: &str) -> Option<bool> {
     let options = ["No", "Yes"];
     let mut idx: usize = 0;
-    timeout::reset_activity();
     loop {
         let d = display();
         d.clear();
@@ -259,10 +267,18 @@ pub fn show_mnemonic(m: &Mnemonic) -> WizardResult {
     // Warn the user before showing the secret.
     show_status("Write 24 words", "L=cancel R=show");
     let mut idle = || timeout::is_idle();
-    match input().wait_button(&mut idle) {
-        Some((Button::Right, _)) => {}
-        Some((Button::Left, _)) => return WizardResult::Cancelled,
+    let event = match input().wait_button(&mut idle) {
+        Some(ev) => ev,
         None => return WizardResult::IdleWipe,
+    };
+    // A button event IS real user activity — reset the timer (see the
+    // X17-UI3 policy note at the top of this file). This covers the
+    // R=show press that the deleted step-entry resets in
+    // `show_mnemonic_simple` / `show_mnemonic_with_decoys` used to proxy.
+    timeout::reset_activity();
+    match event {
+        (Button::Right, _) => {}
+        (Button::Left, _) => return WizardResult::Cancelled,
     }
 
     // Decoy frames are gated on `decoy-frames` (off by default).
@@ -289,7 +305,6 @@ pub fn show_mnemonic(m: &Mnemonic) -> WizardResult {
 fn show_mnemonic_simple(m: &Mnemonic) -> WizardResult {
     let mut page: usize = 0;
     let mut seen_last = false;
-    timeout::reset_activity();
 
     loop {
         render_mnemonic_page(m, page);
@@ -366,7 +381,6 @@ fn show_mnemonic_with_decoys(m: &Mnemonic) -> WizardResult {
 
     let mut page: usize = 0;
     let mut seen_last = false;
-    timeout::reset_activity();
 
     loop {
         let event = match show_mnemonic_page_with_decoys(m, &decoys, page) {
@@ -724,7 +738,6 @@ const MAX_LETTERS: usize = 4;
 fn enter_single_word(title: &str) -> EnterWordResult {
     let mut buf = [b'a'; MAX_LETTERS];
     let mut len: usize = 0;
-    timeout::reset_activity();
 
     loop {
         // Compute current prefix lookup. If we have at least one letter
@@ -864,7 +877,6 @@ enum CandidateResult {
 
 fn pick_candidate(title: &str, start: usize, end: usize) -> CandidateResult {
     let mut cur = start;
-    timeout::reset_activity();
 
     loop {
         render_candidate_screen(title, start, end, cur);

@@ -394,6 +394,24 @@ enum Mode {
     Decrypt,
 }
 
+/// Wipe SAES_KEYR0..7. Called on EVERY exit of `run_ecb_block` that can
+/// follow a software-key load (S2-F23/#452): the happy path scrubbed
+/// these registers, but the KeyInvalid / BusError / CcfTimeout exits
+/// returned first, leaving the key engine-resident until the next op's
+/// CR_IPRST (asserted-but-unverified to clear KEYR). KEYR4..7 sit past
+/// IVR0..3, so enumerate each register explicitly — pointer arithmetic
+/// across the non-contiguous region would hit IVR, not high KEYR.
+fn wipe_key_regs() {
+    REG.keyr0.write(0);
+    REG.keyr1.write(0);
+    REG.keyr2.write(0);
+    REG.keyr3.write(0);
+    REG.keyr4.write(0);
+    REG.keyr5.write(0);
+    REG.keyr6.write(0);
+    REG.keyr7.write(0);
+}
+
 fn run_ecb_block(
     keysel: KeySel,
     sw_key: Option<&[u8; 32]>,
@@ -447,14 +465,14 @@ fn run_ecb_block(
         // HAL contract: KEYR7 = first 4 bytes (MSB of key), KEYR0 =
         // last 4 bytes (LSB of key). Each u32 is read in native
         // little-endian from the source buffer.
-        let k0 = u32::from_le_bytes([key[0], key[1], key[2], key[3]]);
-        let k1 = u32::from_le_bytes([key[4], key[5], key[6], key[7]]);
-        let k2 = u32::from_le_bytes([key[8], key[9], key[10], key[11]]);
-        let k3 = u32::from_le_bytes([key[12], key[13], key[14], key[15]]);
-        let k4 = u32::from_le_bytes([key[16], key[17], key[18], key[19]]);
-        let k5 = u32::from_le_bytes([key[20], key[21], key[22], key[23]]);
-        let k6 = u32::from_le_bytes([key[24], key[25], key[26], key[27]]);
-        let k7 = u32::from_le_bytes([key[28], key[29], key[30], key[31]]);
+        let mut k0 = u32::from_le_bytes([key[0], key[1], key[2], key[3]]);
+        let mut k1 = u32::from_le_bytes([key[4], key[5], key[6], key[7]]);
+        let mut k2 = u32::from_le_bytes([key[8], key[9], key[10], key[11]]);
+        let mut k3 = u32::from_le_bytes([key[12], key[13], key[14], key[15]]);
+        let mut k4 = u32::from_le_bytes([key[16], key[17], key[18], key[19]]);
+        let mut k5 = u32::from_le_bytes([key[20], key[21], key[22], key[23]]);
+        let mut k6 = u32::from_le_bytes([key[24], key[25], key[26], key[27]]);
+        let mut k7 = u32::from_le_bytes([key[28], key[29], key[30], key[31]]);
         REG.keyr7.write(k0);
         REG.keyr6.write(k1);
         REG.keyr5.write(k2);
@@ -463,7 +481,29 @@ fn run_ecb_block(
         REG.keyr2.write(k5);
         REG.keyr1.write(k6);
         REG.keyr0.write(k7);
+        // S2-F23 (#452): wipe the stack copies now that the engine
+        // holds the key — k0..k7 must not linger past the load on ANY
+        // exit path. (The output scratch d0..d3 below was already
+        // zeroized while the key copies were not — inverted priority.)
+        k0.zeroize();
+        k1.zeroize();
+        k2.zeroize();
+        k3.zeroize();
+        k4.zeroize();
+        k5.zeroize();
+        k6.zeroize();
+        k7.zeroize();
     }
+
+    // S2-F23 (#452): once a software key is loaded, KEYR0..7 hold the
+    // secret until explicitly wiped. EVERY exit below — KeyInvalid,
+    // BusError, CcfTimeout, or success — must run this closure first;
+    // a later op's CR_IPRST is asserted-but-unverified to clear KEYR.
+    let wipe_sw_key = || {
+        if sw_key.is_some() {
+            wipe_key_regs();
+        }
+    };
 
     // For the BHK selectors (`Bhk` = "software key" loaded from the
     // TAMP backup registers, `DhukXorBhk` = DHUK XOR that), the SAES
@@ -504,6 +544,7 @@ fn run_ecb_block(
     while REG.sr.read() & SR_KEYVALID == 0 {
         t -= 1;
         if t == 0 {
+            wipe_sw_key();
             return Err(SaesError::KeyInvalid);
         }
     }
@@ -524,6 +565,7 @@ fn run_ecb_block(
         loop {
             let sr = REG.sr.read();
             if sr & (SR_RDERR | SR_WRERR) != 0 {
+                wipe_sw_key();
                 return Err(SaesError::BusError);
             }
             if sr & SR_CCF != 0 {
@@ -531,6 +573,7 @@ fn run_ecb_block(
             }
             t -= 1;
             if t == 0 {
+                wipe_sw_key();
                 return Err(SaesError::CcfTimeout);
             }
         }
@@ -567,6 +610,7 @@ fn run_ecb_block(
     loop {
         let sr = REG.sr.read();
         if sr & (SR_RDERR | SR_WRERR) != 0 {
+            wipe_sw_key();
             return Err(SaesError::BusError);
         }
         if sr & SR_CCF != 0 {
@@ -574,6 +618,7 @@ fn run_ecb_block(
         }
         t -= 1;
         if t == 0 {
+            wipe_sw_key();
             return Err(SaesError::CcfTimeout);
         }
     }
@@ -595,20 +640,9 @@ fn run_ecb_block(
     out[12..16].copy_from_slice(&d3);
 
     // Zero the key registers on exit so a later op with a different
-    // selector cannot accidentally pick up these bytes. KEYR4..7 sit
-    // past IVR0..3, so enumerate each register explicitly — pointer
-    // arithmetic across the non-contiguous region would hit IVR, not
-    // high KEYR.
-    if sw_key.is_some() {
-        REG.keyr0.write(0);
-        REG.keyr1.write(0);
-        REG.keyr2.write(0);
-        REG.keyr3.write(0);
-        REG.keyr4.write(0);
-        REG.keyr5.write(0);
-        REG.keyr6.write(0);
-        REG.keyr7.write(0);
-    }
+    // selector cannot accidentally pick up these bytes (S2-F23/#452:
+    // the same wipe runs on every error exit above).
+    wipe_sw_key();
 
     // Scrub intermediate stack scratch.
     let mut d0z = d0;

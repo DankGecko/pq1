@@ -517,7 +517,11 @@ pub(super) unsafe fn cmd_usb_loopback_run(args: &GatewayArgs) -> u32 {
 // the three-step LEFT → RIGHT → BOTH sequence. Each step has a 10 s
 // budget; pressing the WRONG button is diagnostically distinct from
 // timeout (swapped wires at the connector vs. dead solder), so the
-// step-status byte encodes both failure modes.
+// step-status byte encodes both failure modes. The post-press
+// release wait shares the same per-step budget (#453): a welded /
+// stuck button returns the step's STUCK code instead of wedging the
+// unit into a runner-side HID timeout (which the factory harness
+// would misreport as a runner error, not a unit FAIL).
 //
 // Why no latency reporting: at the operator's reaction time scale,
 // per-press latency is dominated by the human, not the GPIO. The fact
@@ -532,9 +536,12 @@ const BUTTON_TEST_OUT_LEN: usize = 4;
 const STEP_OK: u8 = 0x00;
 const STEP_LEFT_TIMEOUT: u8 = 0x11;
 const STEP_LEFT_WRONG: u8 = 0x12;
+const STEP_LEFT_STUCK: u8 = 0x13;
 const STEP_RIGHT_TIMEOUT: u8 = 0x21;
 const STEP_RIGHT_WRONG: u8 = 0x22;
+const STEP_RIGHT_STUCK: u8 = 0x23;
 const STEP_BOTH_TIMEOUT: u8 = 0x31;
+const STEP_BOTH_STUCK: u8 = 0x33;
 
 #[cfg(all(feature = "gpio-buttons", feature = "ui-lcd"))]
 fn show_button_prompt(line0: &str, line1: &str) {
@@ -548,12 +555,15 @@ fn show_button_prompt(line0: &str, line1: &str) {
 /// Wait for a single-button press (LEFT or RIGHT, exclusive). Returns
 /// `STEP_OK` on success, the supplied `timeout_code` if the timeout
 /// expires with no press, or `wrong_code` if the unexpected button
-/// fired first (swapped solder / wires).
+/// fired first (swapped solder / wires). The post-press release wait
+/// shares the same 10 s budget (#453): a button that never releases
+/// returns `stuck_code` (welded contact) rather than hanging.
 #[cfg(feature = "gpio-buttons")]
 fn run_single_button_step(
     expect_left: bool,
     timeout_code: u8,
     wrong_code: u8,
+    stuck_code: u8,
 ) -> u8 {
     use crate::hw::buttons::{busy_wait_ms, left_pressed, right_pressed};
 
@@ -583,7 +593,9 @@ fn run_single_button_step(
             };
             if still_pressed {
                 // Wait for clean release before returning so the next
-                // step starts from a known idle state.
+                // step starts from a known idle state. Bounded by the
+                // same per-step budget (#453): a welded button would
+                // otherwise wedge the unit here forever.
                 loop {
                     let still = if expect_left {
                         left_pressed()
@@ -593,7 +605,11 @@ fn run_single_button_step(
                     if !still {
                         break;
                     }
+                    if elapsed >= BUTTON_TEST_TIMEOUT_MS {
+                        return stuck_code;
+                    }
                     busy_wait_ms(BUTTON_TEST_POLL_MS);
+                    elapsed = elapsed.saturating_add(BUTTON_TEST_POLL_MS);
                 }
                 busy_wait_ms(BUTTON_TEST_DEBOUNCE_MS);
                 return STEP_OK;
@@ -620,9 +636,15 @@ fn run_both_button_step() -> u8 {
         if left_pressed() && right_pressed() {
             busy_wait_ms(BUTTON_TEST_DEBOUNCE_MS);
             if left_pressed() && right_pressed() {
-                // Wait for clean release.
+                // Wait for clean release. Bounded by the same per-step
+                // budget (#453): a welded button must return
+                // STEP_BOTH_STUCK, not wedge the unit.
                 while left_pressed() || right_pressed() {
+                    if elapsed >= BUTTON_TEST_TIMEOUT_MS {
+                        return STEP_BOTH_STUCK;
+                    }
                     busy_wait_ms(BUTTON_TEST_POLL_MS);
+                    elapsed = elapsed.saturating_add(BUTTON_TEST_POLL_MS);
                 }
                 busy_wait_ms(BUTTON_TEST_DEBOUNCE_MS);
                 return STEP_OK;
@@ -647,13 +669,13 @@ pub(super) unsafe fn cmd_button_test_run(args: &GatewayArgs) -> u32 {
     #[cfg(all(feature = "gpio-buttons", feature = "ui-lcd"))]
     let step_status = {
         show_button_prompt("PRESS LEFT", "  (10 s)");
-        let s1 = run_single_button_step(true, STEP_LEFT_TIMEOUT, STEP_LEFT_WRONG);
+        let s1 = run_single_button_step(true, STEP_LEFT_TIMEOUT, STEP_LEFT_WRONG, STEP_LEFT_STUCK);
         if s1 != STEP_OK {
             show_button_prompt("BTN FAIL", "step 1: LEFT");
             s1
         } else {
             show_button_prompt("PRESS RIGHT", "  (10 s)");
-            let s2 = run_single_button_step(false, STEP_RIGHT_TIMEOUT, STEP_RIGHT_WRONG);
+            let s2 = run_single_button_step(false, STEP_RIGHT_TIMEOUT, STEP_RIGHT_WRONG, STEP_RIGHT_STUCK);
             if s2 != STEP_OK {
                 show_button_prompt("BTN FAIL", "step 2: RIGHT");
                 s2
@@ -755,27 +777,33 @@ mod tests {
     #[test]
     fn positive_button_test_step_codes_have_compact_layout() {
         // Upper nibble = step (1, 2, 3); lower nibble = error kind
-        // (1=timeout, 2=wrong button). The fixture's error table
-        // depends on this — change the encoding and the operator
-        // manual decoder also has to change.
+        // (1=timeout, 2=wrong button, 3=release stuck — #453). The
+        // fixture's error table depends on this — change the encoding
+        // and the operator manual decoder also has to change.
         assert_eq!(STEP_OK, 0x00);
         assert_eq!(STEP_LEFT_TIMEOUT, 0x11);
         assert_eq!(STEP_LEFT_WRONG, 0x12);
+        assert_eq!(STEP_LEFT_STUCK, 0x13);
         assert_eq!(STEP_RIGHT_TIMEOUT, 0x21);
         assert_eq!(STEP_RIGHT_WRONG, 0x22);
+        assert_eq!(STEP_RIGHT_STUCK, 0x23);
         assert_eq!(STEP_BOTH_TIMEOUT, 0x31);
+        assert_eq!(STEP_BOTH_STUCK, 0x33);
         // Compact-encoding invariant: per-step error nibbles are
         // distinct and non-overlapping with success.
         for code in [
             STEP_LEFT_TIMEOUT,
             STEP_LEFT_WRONG,
+            STEP_LEFT_STUCK,
             STEP_RIGHT_TIMEOUT,
             STEP_RIGHT_WRONG,
+            STEP_RIGHT_STUCK,
             STEP_BOTH_TIMEOUT,
+            STEP_BOTH_STUCK,
         ] {
             assert_ne!(code, STEP_OK);
             assert!((code >> 4) >= 1 && (code >> 4) <= 3);
-            assert!((code & 0x0F) >= 1 && (code & 0x0F) <= 2);
+            assert!((code & 0x0F) >= 1 && (code & 0x0F) <= 3);
         }
     }
 

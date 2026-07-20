@@ -44,15 +44,21 @@ const LOCK_BIT: u32 = 1 << 31;
 const OPTLOCK_BIT: u32 = 1 << 30;
 const BSY: u32 = 1 << 16;
 
-fn wait_bsy() {
+/// Poll SECSR.BSY until the flash controller reports idle. Returns
+/// `false` on timeout (~10M nops) — the caller MUST fail closed: after
+/// a wedged/busy flash, proceeding to OPTSTRT / OBL_LAUNCH would commit
+/// unverified option-byte state that only operator eyeballing of the
+/// markers would catch (#454).
+fn wait_bsy() -> bool {
     unsafe {
         let mut n = 0u32;
         while read_volatile(SECSR) & BSY != 0 {
             cortex_m::asm::nop();
             n += 1;
-            if n > 10_000_000 { return; }
+            if n > 10_000_000 { return false; }
         }
     }
+    true
 }
 
 #[cortex_m_rt::entry]
@@ -68,8 +74,12 @@ fn main() -> ! {
         // [2] Read SECSR
         mark(read_volatile(SECSR));
 
-        // Wait for not busy
-        wait_bsy();
+        // Wait for not busy — fail closed BEFORE any flash/option-byte
+        // write if the controller is wedged (#454).
+        if !wait_bsy() {
+            mark(0xBAD0_0003);
+            loop { cortex_m::asm::bkpt(); }
+        }
 
         // Unlock secure flash controller
         write_volatile(SECKEYR, FLASH_KEY1);
@@ -117,7 +127,14 @@ fn main() -> ! {
 
         // Trigger OPTSTRT to commit option bytes to flash
         write_volatile(SECCR1, OPTSTRT);
-        wait_bsy();
+        // Fail closed if the commit never completes: do NOT fire
+        // OBL_LAUNCH on a wedged controller — halt with a distinct
+        // marker so the operator sees the fault instead of the tool
+        // silently applying partial option-byte state (#454).
+        if !wait_bsy() {
+            mark(0xBAD0_0004);
+            loop { cortex_m::asm::bkpt(); }
+        }
 
         // [8] SECSR after OPTSTRT (check for errors)
         mark(read_volatile(SECSR));

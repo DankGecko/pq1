@@ -588,6 +588,50 @@ fn negative_saes_decrypt_scratch_zeroized() {
 }
 
 #[test]
+fn negative_saes_key_stack_copies_zeroized_after_load() {
+    // S2-F23 / #452: k0..k7 hold the full 256-bit software key as u32
+    // locals. Zeroizing only the OUTPUT scratch d0..d3 while leaving
+    // the key copies on the stack is inverted priority — the key must
+    // be wiped right after the KEYR load so it cannot linger on any
+    // exit path. Pin each wipe.
+    for n in 0..=7 {
+        let needle = format!("k{n}.zeroize();");
+        assert!(
+            SAES_SRC.contains(&needle),
+            "missing stack-key wipe `{needle}` — see saes.rs key-load block (S2-F23/#452)"
+        );
+    }
+}
+
+#[test]
+fn negative_saes_error_exits_wipe_key_registers() {
+    // S2-F23 / #452: the KeyInvalid / BusError / CcfTimeout exits sit
+    // AFTER the software-key load — returning Err there without the
+    // KEYR scrub left the 32-byte key engine-resident until the next
+    // op (CR_IPRST is asserted-but-unverified to clear KEYR). Every
+    // post-load error return must be immediately preceded by
+    // wipe_sw_key(); the helper must exist and scrub all 8 registers.
+    assert!(
+        SAES_SRC.contains("fn wipe_key_regs() {"),
+        "the shared KEYR scrub helper must exist (S2-F23/#452)"
+    );
+    for variant in ["KeyInvalid", "BusError", "CcfTimeout"] {
+        let ret = format!("return Err(SaesError::{variant});");
+        let mut seen = 0usize;
+        for (idx, _) in SAES_SRC.match_indices(&ret) {
+            let before = SAES_SRC[..idx].trim_end();
+            let last_line = before.lines().last().unwrap_or("").trim();
+            assert_eq!(
+                last_line, "wipe_sw_key();",
+                "{ret} must be immediately preceded by wipe_sw_key(); (S2-F23/#452)"
+            );
+            seen += 1;
+        }
+        assert!(seen > 0, "expected at least one {ret} exit to pin");
+    }
+}
+
+#[test]
 fn negative_hkdf_expand_zeroizes_prev_t() {
     // Final T(i) is the same bytes as the user's last 32 bytes of OKM;
     // the explicit zeroize defeats a future change that tried to
