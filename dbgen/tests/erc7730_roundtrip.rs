@@ -681,7 +681,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.root),
-        "b4e20c980411ea305bd12e858f7515bcd3d8b6e8932f26e7952b6e19664a5bd4"
+        "2f50cd1ebef6b9532a2017fdf6aa95b808ff4355440a1510d8e164bdbebc6ae5"
     );
 }
 
@@ -2438,12 +2438,14 @@ fn registry_flying_tulip_session_manager_admits_only_injective_static_authority_
 }
 
 #[test]
-fn registry_endpoint_only_route_is_omitted_but_stays_known() {
+fn registry_unexpanded_endpoint_only_route_is_omitted_but_stays_known() {
     let catalogue = build_registry();
     let raw = hex::decode("a5e0829caced8ffdd4de3c43696c57f7d7a678ff").unwrap();
     let mut contract = [0u8; 20];
     contract.copy_from_slice(&raw);
-    let digest = keccak256(b"swapExactTokensForTokens(uint256,uint256,address[],address,uint256)");
+    let digest = keccak256(
+        b"swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
+    );
     let selector = [digest[0], digest[1], digest[2], digest[3]];
 
     assert!(known_call_may_contain(
@@ -3871,6 +3873,254 @@ fn vendored_uniswap_v3_router02_admits_only_four_exactly_guarded_routes() {
             known_call_may_contain(&registry.known_calls_bloom, 1, &contract, &selector),
             "every Router02 call must remain in the fail-closed Bloom: {signature}"
         );
+    }
+}
+
+/// QuickSwap V2's two token-to-token routes become complete only when the
+/// descriptor renders the entire ordered address path. Unlike Router02, the
+/// classic V2 router gives `to` its literal ABI meaning: no sender sentinel or
+/// word guard may be attached. The existing five all-static liquidity routes
+/// remain admitted, while every other declared dynamic/permit route remains
+/// protected by the exact and Bloom known-call inventories.
+#[test]
+fn vendored_quickswap_v2_admits_exactly_two_complete_token_swap_routes() {
+    let root = workspace_root();
+    let reg = root.join("secure/data/erc7730-registry");
+    let desc = reg.join("registry/quickswap/calldata-QuickSwap.json");
+    assert_eq!(
+        std::fs::read(&desc).expect("read vendored QuickSwap descriptor"),
+        std::fs::read(root.join(
+            "secure/data/erc7730/curations/files/registry/quickswap/calldata-QuickSwap.json",
+        ),)
+        .expect("read curated QuickSwap descriptor"),
+        "curated and vendored QuickSwap descriptors must stay byte-identical"
+    );
+
+    let registry = build_registry();
+    let quickswap_entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| entry.source == desc)
+        .collect();
+    assert_eq!(
+        quickswap_entries.len(),
+        1,
+        "the exact Polygon QuickSwap deployment must produce one leaf"
+    );
+    let ir = Erc7730Ir::parse(&quickswap_entries[0].ir_bytes).expect("QuickSwap IR parses");
+
+    let contract: [u8; 20] = hex::decode("a5e0829caced8ffdd4de3c43696c57f7d7a678ff")
+        .expect("valid QuickSwap address")
+        .try_into()
+        .expect("QuickSwap address width");
+    assert_eq!(
+        (quickswap_entries[0].chain_id, quickswap_entries[0].contract),
+        (137, contract)
+    );
+
+    let selector_for = |signature: &str| {
+        let hash = keccak256(signature.as_bytes());
+        <[u8; 4]>::try_from(&hash[..4]).expect("selector width")
+    };
+    let admitted_static = [
+        "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)",
+        "addLiquidityETH(address,uint256,uint256,uint256,address,uint256)",
+        "removeLiquidity(address,address,uint256,uint256,uint256,address,uint256)",
+        "removeLiquidityETH(address,uint256,uint256,uint256,address,uint256)",
+        "removeLiquidityETHSupportingFeeOnTransferTokens(address,uint256,uint256,uint256,address,uint256)",
+    ];
+    let selected_swaps = [
+        (
+            "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)",
+            [0x38, 0xed, 0x17, 0x39],
+            true,
+        ),
+        (
+            "swapTokensForExactTokens(uint256,uint256,address[],address,uint256)",
+            [0x88, 0x03, 0xdb, 0xee],
+            false,
+        ),
+    ];
+    let refused = [
+        "swapExactTokensForETH(uint256,uint256,address[],address,uint256)",
+        "swapExactETHForTokens(uint256,address[],address,uint256)",
+        "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
+        "swapTokensForExactETH(uint256,uint256,address[],address,uint256)",
+        "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)",
+        "removeLiquidityWithPermit(address,address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
+        "removeLiquidityETHWithPermit(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
+        "removeLiquidityETHWithPermitSupportingFeeOnTransferTokens(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
+    ];
+    for (signature, expected, _) in selected_swaps {
+        assert_eq!(selector_for(signature), expected);
+    }
+
+    let expected_admitted: BTreeSet<_> = admitted_static
+        .iter()
+        .map(|signature| selector_for(signature))
+        .chain(selected_swaps.iter().map(|(_, selector, _)| *selector))
+        .collect();
+    let actual_admitted: BTreeSet<_> = ir
+        .format_iter()
+        .map(|format| format.expect("QuickSwap format parses").selector)
+        .collect();
+    assert_eq!(
+        actual_admitted, expected_admitted,
+        "exactly five pre-existing static routes plus the two complete token swaps are admitted"
+    );
+    for signature in refused {
+        let selector = selector_for(signature);
+        assert!(
+            ir.find_format_by_selector(&selector)
+                .expect("QuickSwap format table parses")
+                .is_none(),
+            "excluded QuickSwap route entered trusted IR: {signature}"
+        );
+    }
+
+    let flat_path = |member: u8| {
+        vec![
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            member,
+        ]
+    };
+    let mut route_path = flat_path(2);
+    route_path.push(PathOp::ArrayAll as u8);
+    let first_token_path = [
+        PathOp::RootStructured as u8,
+        PathOp::FieldIdx as u8,
+        0,
+        2,
+        PathOp::FollowOffset as u8,
+        PathOp::ArrayIdx as u8,
+        0,
+        0,
+    ];
+    let last_token_path = [
+        PathOp::RootStructured as u8,
+        PathOp::FieldIdx as u8,
+        0,
+        2,
+        PathOp::FollowOffset as u8,
+        PathOp::ArrayLast as u8,
+    ];
+
+    for (_, selector, exact_input) in selected_swaps {
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("QuickSwap format table parses")
+            .expect("selected complete token swap exists");
+        assert_eq!(format.static_head_words, 5);
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("QuickSwap swap field parses"))
+            .collect();
+        assert_eq!(fields.len(), 5, "every signed swap operand is displayed");
+
+        let expected_labels: [&[u8]; 5] = if exact_input {
+            [
+                b"Amount to Send",
+                b"Minimum to Receive",
+                b"Route",
+                b"Beneficiary",
+                b"Deadline",
+            ]
+        } else {
+            [
+                b"Amount to Receive",
+                b"Maximum to Send",
+                b"Route",
+                b"Beneficiary",
+                b"Deadline",
+            ]
+        };
+        let expected_ops = [
+            FormatOp::TokenAmount,
+            FormatOp::TokenAmount,
+            FormatOp::AddressName,
+            FormatOp::AddressName,
+            FormatOp::Date,
+        ];
+        let expected_paths = [
+            flat_path(0),
+            flat_path(1),
+            route_path.clone(),
+            flat_path(3),
+            flat_path(4),
+        ];
+        let params: Vec<_> = fields
+            .iter()
+            .map(|field| parse_params(&ir, field.param_off).expect("QuickSwap params parse"))
+            .collect();
+        for (index, field) in fields.iter().enumerate() {
+            assert_eq!(field.label, expected_labels[index]);
+            assert_eq!(FormatOp::try_from(field.format_op), Ok(expected_ops[index]));
+            assert_eq!(
+                ir.path_bytes(field.path_off)
+                    .expect("QuickSwap field path parses"),
+                expected_paths[index],
+                "wrong authenticated path at field {index} selector 0x{}",
+                hex::encode(selector)
+            );
+            assert_eq!(params[index].visibility, Visibility::Always);
+            assert!(
+                params[index].sender_addresses.is_none(),
+                "classic V2 beneficiary must stay literal"
+            );
+            assert!(
+                params[index].word_guard.is_none(),
+                "classic V2 route must not inherit Router02 semantic guards"
+            );
+        }
+        assert_eq!(params[2].addr_types, Some(ADDR_TYPE_TOKEN));
+        assert_eq!(
+            params[0].token_path,
+            Some(if exact_input {
+                first_token_path.as_slice()
+            } else {
+                last_token_path.as_slice()
+            })
+        );
+        assert_eq!(
+            params[1].token_path,
+            Some(if exact_input {
+                last_token_path.as_slice()
+            } else {
+                first_token_path.as_slice()
+            })
+        );
+    }
+
+    let declared: BTreeSet<_> = admitted_static
+        .iter()
+        .copied()
+        .chain(selected_swaps.iter().map(|(signature, _, _)| *signature))
+        .chain(refused)
+        .collect();
+    let expected_known: BTreeSet<_> = declared
+        .iter()
+        .map(|signature| selector_for(signature))
+        .collect();
+    let actual_known: BTreeSet<_> = registry
+        .known_calls
+        .iter()
+        .filter_map(|(chain_id, candidate, selector)| {
+            (*chain_id == 137 && candidate == &contract).then_some(*selector)
+        })
+        .collect();
+    assert_eq!(
+        actual_known, expected_known,
+        "curation must not change QuickSwap's declared known-call inventory"
+    );
+    for selector in expected_known {
+        assert!(known_call_may_contain(
+            &registry.known_calls_bloom,
+            137,
+            &contract,
+            &selector,
+        ));
     }
 }
 

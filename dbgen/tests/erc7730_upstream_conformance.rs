@@ -18,7 +18,9 @@ use std::path::{Path, PathBuf};
 use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712, BindingError};
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, BundleError};
 use pqsigner_erc7730::display::primitives::{amount_is_exact_at_fraction_digits, write_addr_full};
-use pqsigner_erc7730::display::render::{render_erc7730_eip712_pages, render_erc7730_pages};
+use pqsigner_erc7730::display::render::{
+    render_erc7730_eip712_pages, render_erc7730_pages, render_erc7730_pages_with_signer_checked,
+};
 use pqsigner_erc7730::display::DISPLAY_COLS;
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir};
 use pqsigner_erc7730::render::params::{parse as parse_params, NFT_COLLECTION_TO_PATH};
@@ -37,10 +39,9 @@ const UPSTREAM_SHA: &str = "784c87c925e8438e7b4736b2af85a501f8d2a265";
 const FIXTURE_RECEIPT_DOMAIN: &[u8] = b"pqsigner/erc7730-excluded-fixture-corpus-v1";
 const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
-// Router02's two single-hop formats are enrolled only with exact authenticated
-// guards for their sentinel and partial-fill semantics. The upstream fixture
-// bytes remain test-only and outside the catalogue.
-const PROD_ROOT_HEX: &str = "b4e20c980411ea305bd12e858f7515bcd3d8b6e8932f26e7952b6e19664a5bd4";
+// The upstream fixture bytes remain test-only and outside the catalogue. This
+// root changes only when the separately curated production descriptors do.
+const PROD_ROOT_HEX: &str = "2f50cd1ebef6b9532a2017fdf6aa95b808ff4355440a1510d8e164bdbebc6ae5";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -926,6 +927,21 @@ fn upstream_fixture_targets_are_inventoried_at_format_granularity() {
         );
     }
 
+    for selector in [[0x38, 0xed, 0x17, 0x39], [0x88, 0x03, 0xdb, 0xee]] {
+        let quickswap_token_route = FormatKey {
+            source: PathBuf::from("quickswap/calldata-QuickSwap.json"),
+            id: FormatId::Calldata(selector),
+        };
+        assert!(
+            !fixture_targets.contains(&quickswap_token_route),
+            "QuickSwap has no pinned upstream positive for this selector; do not invent fixture coverage"
+        );
+        assert!(
+            accepted.contains(&quickswap_token_route),
+            "the complete QuickSwap token route must be admitted explicitly despite the honest fixture gap"
+        );
+    }
+
     let policy: Value = serde_json::from_slice(
         &std::fs::read(fixture_root().join("projection-policy.json"))
             .expect("read projection policy"),
@@ -949,6 +965,142 @@ fn upstream_fixture_targets_are_inventoried_at_format_granularity() {
             Some(u64::try_from(actual).expect("format coverage count fits u64")),
             "stale format-level fixture coverage receipt: {name}"
         );
+    }
+}
+
+#[test]
+fn quickswap_fixture_gap_still_has_merkle_verified_full_route_conformance() {
+    const ROUTER: [u8; 20] = [
+        0xa5, 0xe0, 0x82, 0x9c, 0xac, 0xed, 0x8f, 0xfd, 0xd4, 0xde, 0x3c, 0x43, 0x69, 0x6c, 0x57,
+        0xf7, 0xd7, 0xa6, 0x78, 0xff,
+    ];
+    const TOKEN_IN: [u8; 20] = [0x11; 20];
+    const TOKEN_MID: [u8; 20] = [0xab; 20];
+    const TOKEN_OUT: [u8; 20] = [0x22; 20];
+    const EXACT_INPUT: &str = "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)";
+    const EXACT_OUTPUT: &str =
+        "swapTokensForExactTokens(uint256,uint256,address[],address,uint256)";
+
+    fn word(value: u64) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[24..].copy_from_slice(&value.to_be_bytes());
+        out
+    }
+    fn address_word(address: [u8; 20]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[12..].copy_from_slice(&address);
+        out
+    }
+    fn calldata(
+        signature: &str,
+        first: u64,
+        second: u64,
+        path: &[[u8; 20]],
+        beneficiary: [u8; 20],
+        deadline: u64,
+    ) -> Vec<u8> {
+        let selector = keccak256(signature.as_bytes());
+        let mut out = Vec::with_capacity(4 + (6 + path.len()) * 32);
+        out.extend_from_slice(&selector[..4]);
+        out.extend_from_slice(&word(first));
+        out.extend_from_slice(&word(second));
+        out.extend_from_slice(&word(5 * 32));
+        out.extend_from_slice(&address_word(beneficiary));
+        out.extend_from_slice(&word(deadline));
+        out.extend_from_slice(&word(path.len() as u64));
+        for address in path {
+            out.extend_from_slice(&address_word(*address));
+        }
+        out
+    }
+
+    let registry = build_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == 137
+                && entry.contract == ROUTER
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-QuickSwap.json")
+        })
+        .expect("accepted Polygon QuickSwap descriptor leaf");
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified =
+        verify_erc7730_bundle(&bundle, &registry.root).expect("Merkle-verify QuickSwap descriptor");
+    cross_check_contract(&verified.ir, 137, &ROUTER).expect("bind QuickSwap descriptor");
+
+    let path = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
+    let beneficiary = [0x33; 20];
+    let tx = Eip1559Tx {
+        chain_id: 137,
+        to: Some(ROUTER),
+        ..Eip1559Tx::default()
+    };
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+
+    for (signature, first, second, first_label, first_token, second_label, second_token) in [
+        (
+            EXACT_INPUT,
+            1_500_000,
+            1_000_000,
+            "Amount to Send",
+            TOKEN_IN,
+            "Minimum to Rece~",
+            TOKEN_OUT,
+        ),
+        (
+            EXACT_OUTPUT,
+            1_000_000,
+            1_500_000,
+            "Amount to Recei~",
+            TOKEN_OUT,
+            "Maximum to Send",
+            TOKEN_IN,
+        ),
+    ] {
+        let call = calldata(signature, first, second, &path, beneficiary, 2_000_000_000);
+        assert_eq!(&call[..4], &keccak256(signature.as_bytes())[..4]);
+        let selector: [u8; 4] = call[..4].try_into().expect("selector width");
+        assert!(
+            verified
+                .ir
+                .find_format_by_selector(&selector)
+                .expect("QuickSwap format table parses")
+                .is_some(),
+            "admitted QuickSwap selector"
+        );
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &call, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render admitted QuickSwap {signature}: {error:?}"));
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "QuickSwap transcript receipt must bind every page"
+        );
+
+        let rows = normalized_rows(&rendered.pages);
+        let mut cursor = 0usize;
+        consume_normalized_token(&rows, &mut cursor, first_label);
+        consume_normalized_token(&rows, &mut cursor, &first.to_string());
+        consume_full_address(&rows, &mut cursor, &first_token);
+        consume_normalized_token(&rows, &mut cursor, second_label);
+        consume_normalized_token(&rows, &mut cursor, &second.to_string());
+        consume_full_address(&rows, &mut cursor, &second_token);
+        consume_normalized_token(&rows, &mut cursor, "Route");
+        consume_normalized_token(&rows, &mut cursor, "3 items");
+        for token in path {
+            consume_normalized_token(&rows, &mut cursor, "Route");
+            consume_full_address(&rows, &mut cursor, &token);
+        }
+        consume_normalized_token(&rows, &mut cursor, "Beneficiary");
+        consume_full_address(&rows, &mut cursor, &beneficiary);
+        consume_normalized_token(&rows, &mut cursor, "Deadline");
+        consume_normalized_token(&rows, &mut cursor, "2033-05-18");
+        consume_normalized_token(&rows, &mut cursor, "03:33:20 UTC");
     }
 }
 

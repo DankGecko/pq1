@@ -1,6 +1,6 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
-  "_curation_note": "PQSigner semantic curation: three all-static QuickSwap V2 remove-liquidity routes show the exact raw LP-token quantity consumed in addition to both minimum outputs, token identities, beneficiary, and deadline. Permit-bearing and dynamic-path routes remain refused. See tests/erc7730-semantic-evidence/quickswap-router02-remove-liquidity.",
+  "_curation_note": "PQSigner semantic curation: the two token-to-token swap routes show both bounded token amounts, the complete ordered path, literal beneficiary, and deadline; three all-static remove-liquidity routes show the exact raw LP-token quantity consumed in addition to both minimum outputs, token identities, beneficiary, and deadline. ETH swaps, fee-on-transfer swaps, permit-bearing routes, and other dynamic-path routes remain refused. See tests/erc7730-semantic-evidence/quickswap-router02-remove-liquidity.",
   "context": {
     "$id": "QuickSwap",
     "contract": { "deployments": [{ "chainId": 137, "address": "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff" }] }
@@ -28,6 +28,13 @@
             "label": "Minimum to Receive",
             "format": "tokenAmount",
             "params": { "tokenPath": "path.[-1]" },
+            "visible": "always"
+          },
+          {
+            "path": "path.[]",
+            "label": "Route",
+            "format": "addressName",
+            "params": { "types": ["token"] },
             "visible": "always"
           },
           {
@@ -100,6 +107,13 @@
             "label": "Maximum to Send",
             "format": "tokenAmount",
             "params": { "tokenPath": "path.[0]" },
+            "visible": "always"
+          },
+          {
+            "path": "path.[]",
+            "label": "Route",
+            "format": "addressName",
+            "params": { "types": ["token"] },
             "visible": "always"
           },
           {
