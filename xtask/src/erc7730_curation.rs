@@ -48,6 +48,7 @@ const TOOL_INPUT_PATHS: &[&str] = &[
     "xtask/Cargo.toml",
 ];
 const TOOL_INPUT_TREE_PATHS: &[&str] = &[
+    ".cargo",
     "dbgen",
     "pqsigner-erc7730",
     "pqsigner-fi",
@@ -58,6 +59,11 @@ const TOOL_INPUT_TREE_PATHS: &[&str] = &[
     "xtask",
 ];
 const CAPABILITY_INPUT_PATHS: &[&str] = &["secure/data/erc20.json"];
+// Cargo and rustup retain extensionless compatibility names and prefer them
+// when both forms exist. Their absence is therefore part of the receipt: an
+// unbound shadow file must fail before the declared `.toml` identity can be
+// mistaken for the effective configuration/toolchain selection.
+const FORBIDDEN_SHADOW_INPUT_PATHS: &[&str] = &[".cargo/config", "rust-toolchain"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CorpusReceipt {
@@ -171,6 +177,7 @@ impl VerifiedOverlay {
             )
         })?;
         validate_manifest_shape(&manifest)?;
+        verify_shadow_inputs_absent(workspace_root)?;
 
         verify_file_identity(workspace_root, &manifest.policy, "curation policy")?;
         for identity in &manifest.tool_inputs {
@@ -803,6 +810,28 @@ fn verify_file_identity(root: &Path, identity: &FileIdentity, label: &str) -> Re
             path.display(),
             identity.sha256
         ));
+    }
+    Ok(())
+}
+
+fn verify_shadow_inputs_absent(root: &Path) -> Result<(), String> {
+    for relative in FORBIDDEN_SHADOW_INPUT_PATHS {
+        let path = root.join(relative);
+        match fs::symlink_metadata(&path) {
+            Ok(_) => {
+                return Err(format!(
+                    "forbidden unreceipted legacy build-input shadow exists: {}",
+                    path.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "inspect forbidden legacy build-input shadow {}: {error}",
+                    path.display()
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -1447,6 +1476,34 @@ mod tests {
             symlink(tree.join("lib.rs"), tree.join("link.rs")).unwrap();
             let error = verify_tree_identity(workspace, &identity, "test tree").unwrap_err();
             assert!(error.contains("symlink is forbidden"), "{error}");
+        }
+    }
+
+    #[test]
+    fn legacy_build_input_shadows_are_rejected_even_when_symlinked() {
+        let temp = tempfile::tempdir().expect("create shadow-input fixture");
+        let root = temp.path();
+        fs::create_dir(root.join(".cargo")).unwrap();
+        assert!(verify_shadow_inputs_absent(root).is_ok());
+
+        for relative in FORBIDDEN_SHADOW_INPUT_PATHS {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"shadow\n").unwrap();
+            let error = verify_shadow_inputs_absent(root).unwrap_err();
+            assert!(error.contains("legacy build-input shadow"), "{error}");
+            fs::remove_file(path).unwrap();
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let target = root.join("effective.toml");
+            fs::write(&target, b"[env]\n").unwrap();
+            let shadow = root.join(".cargo/config");
+            symlink(&target, &shadow).unwrap();
+            let error = verify_shadow_inputs_absent(root).unwrap_err();
+            assert!(error.contains("legacy build-input shadow"), "{error}");
         }
     }
 

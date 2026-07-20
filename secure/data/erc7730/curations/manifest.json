@@ -84,6 +84,13 @@
   ],
   "tool_input_trees": [
     {
+      "path": ".cargo",
+      "domain": "pqsigner/erc7730-tool-input-tree-v1",
+      "files": 1,
+      "bytes": 1523,
+      "sha256": "51771c74b961edde3e811d7b80633daa785023b1bafbe6ce42a6bbb5793562c3"
+    },
+    {
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 13,
@@ -136,8 +143,8 @@
       "path": "xtask",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
-      "bytes": 267519,
-      "sha256": "73e83705b1e85b50303244342cc18e0a26b2318a7fa3e647cb9006659c9574e3"
+      "bytes": 269876,
+      "sha256": "ead89b932d0a7c2cbe5e5b04f0fe6f1b103800f9d9b571e8c8169a9c9f0e4d24"
     }
   ],
   "capability_inputs": [
