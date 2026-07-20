@@ -1862,3 +1862,52 @@ XMSSMT_C_Reduction.ec   compile=OK  admit-tactics=0  axiom-decls=0   CERTIFIED-0
 ```
 So the REAL~C + C~V game hops, R_top with its A_wf discharge, and the base reduction file are all genuinely
 admit-free under real compilation — no stale-cache false green anywhere.
+
+### MILESTONE 2026-07-20 — BRANCH-2 COMPLETE: seam_branch2 is CERTIFIED-0-ADMIT (independently canary-verified)
+
+The TRH branch's last admit closed and the transplant landed, so **both `ler_add` summands of the XMSS-MT+C
+component bound are now proved**.
+
+**`seam_branch2` — CERTIFIED-0-ADMIT** (compile=OK, admit-tactics=0, axiom-decls=0), on the exact committed
+bytes, via a REAL ~8-minute compile (the gate deletes the target's own .eco). Independent census on the
+comment-stripped source: 0 admits, 0 axiom/hypothesis/sorry/admitted. ADMIT-3 is gone, replaced by
+`by apply (seam_branch2_trh A_ht &m hencb allntrhads).` (line 5046).
+
+**AUDITOR'S INDEPENDENT VERIFICATION — the decisive evidence.** Rather than trusting either track, the auditor
+compiled a pristine copy (byte-identical for its first 5402 lines) with a tail canary
+`lemma AUDIT_CANARY_FALSE : false`: 8m09s, EXACTLY ONE error — `cannot save an incomplete proof` at the
+canary's own qed. EasyCrypt stops at the first error, so **no error before that line proves the entire body
+typechecked — both `seam_branch2_trh`'s qed and `seam_branch2`'s qed were accepted.** It explicitly defended
+against BOTH known gate failure modes: it pre-verified the container could write .eco into the scratch dir
+(killing the FALSE-RED artifact, see below), and the 8-minute duration rules out a stale-cache instant green.
+ - **STATEMENT INTACT:** seam_branch2's header through `proof.` extracted from the pre-integration commit and
+   from the current file — 1600 bytes each, **diff EMPTY**. The integration commit's ONLY deleted line is the
+   ADMIT-3 admit.
+ - **NO HIDDEN PREMISE:** `seam_branch2_trh` takes only `hencb` + `allntrhads` — a strict SUBSET of
+   seam_branch2's three premises, both already in scope. Nothing new enters its obligations.
+ - **GENUINE:** smt is NOT the top-level closer anywhere on the critical path; seam_branch2_trh ends in
+   structural rewriting (`by rewrite ... bs2intK. qed.`).
+ - Anti-vacuity RUN: deleting ONLY the apply line yields `cannot save an incomplete proof` ⇒ load-bearing.
+
+**THREE REAL TRH PORT DELTAS (not renames):** the conseq post loses MM45's `dist` conjunct by itself (it is
+literally `uqunz1ts`, closed by assumption during `/>`); `0 <= fidx` cannot use MM45's bare `?addr_ge0
+?mulr_ge0` cascade because we do not import IntOrder — the bare names are SILENT NO-OPS inside `?...` and
+MM45's focus indices are invalid (the port's one real compile failure); and MM45's `0 * (2 ^ h - 1)` padding is
+a hard error because bare `h` is AMBIGUOUS (FSSLXMTWES.h vs SPHINCS_PLUS.h).
+
+**FOURTH TOOLING HAZARD — a FALSE *RED* (mirror of the false greens):** the ec-grind container runs as uid
+1001 and cannot write into a host-created scratch subdir, so EasyCrypt typechecks the whole file successfully,
+fails ONLY on the .eco write, and **exits 1 with NO diagnostic**. That nearly produced a wrong "the premise IS
+consumed" conclusion. **Discriminator: rc=1 WITHOUT a `[critical]` line means it actually compiled.** (Its
+second-order trap — `bash scratch-ecc.sh F | tail -n` makes `$?` tail's, always 0 — is the same pipe bug fixed
+earlier, resurfacing in agent usage; capture rc with a redirect, not a pipe.)
+
+**HONESTY NOTE from the TRH agent:** it committed a causal claim ("fails so the rewrite can unify"), its own
+control CONTRADICTED it (the real cause is name ambiguity), and it RETRACTED the claim at the site and in a
+follow-up commit. The tactic was never wrong — only the stated reason.
+
+**STATE OF THE CHAIN NOW (all forced-recompile verified):** `seam_branch1_WOTSC` 0-admit; `seam_branch2`
+0-admit; the REAL~C and C~V game hops 0-admit; R_top + its A_wf discharge 0-admit; `XMSSMT_C_Reduction.ec`
+0-admit. Remaining toward an unconditional statement: assembling the two branches with the hops into a single
+REAL-game bound, discharging the three carried type premises (allnchads/allnpkcoads/allntrhads) at the
+capstone, R_top's reduction SOUNDNESS, and the FORS+C wiring.
