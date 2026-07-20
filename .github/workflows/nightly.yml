@@ -179,6 +179,19 @@ jobs:
         run: |
           cargo check --locked -p sphincs-tz-nonsecure --target thumbv8m.main-none-eabi \
             --no-default-features --features stm32u585,usb
+      # TZP-10 (#481): the prodtest feature set (secure prodtest,dev-testkey,
+      # saes-dhuk / nonsecure stm32u585,usb,prodtest) compiled in NO workflow —
+      # factory-image bit-rot would surface only at the line. Unlike the cargo
+      # checks above this is a full release cross-build, so it links via
+      # arm-none-eabi-ld and needs the ARM bare-metal toolchain.
+      - name: Install arm-none-eabi toolchain (arm-none-eabi-ld)
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
+      - name: make build-hw-prodtest (factory prodtest image compiles)
+        run: make build-hw-prodtest
+      # Host-side factory fixture runner unit tests (unittest, offline — same
+      # invocation form as the erc8176-coverage-test Makefile target).
+      - name: factory prodtest runner unit tests
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tools/test_factory_prodtest_runner.py
 
   ui-golden-render:
     name: UI golden (render-only)

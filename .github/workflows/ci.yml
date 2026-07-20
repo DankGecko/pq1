@@ -246,9 +246,59 @@ jobs:
             --no-default-features \
             --features mock-se,debug-log,ui-semihosting
 
+  coverage:
+    name: Line coverage (cargo llvm-cov — report-only baseline)
+    runs-on: ubuntu-latest
+    # TZP-7 (#478): no line-coverage measurement existed anywhere in CI. This
+    # job is a BASELINE ONLY — it produces the report + lcov.info artifact but
+    # enforces NO threshold; the ratcheting threshold is the issue's stated
+    # follow-up. The sequential --no-report runs below mirror the EXACT test
+    # invocations of the host-tests and secure-tests jobs (same crate sets,
+    # same flags) so coverage measures precisely what CI already executes.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: cargo install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      - name: cargo llvm-cov (host-test crate set, merged report)
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov --locked --no-report --tests \
+            -p pqsigner-proto -p pqsigner-tx-core -p pqsigner-aa \
+            -p pqsigner-domain -p pqsigner-tx -p pqsigner-erc7730 \
+            -p sphincs-c10 -p pqsigner-fi \
+            -p sphincs-tz-bip39 -p fw-manifest -p sphincs-tz-shared \
+            -p pqsigner-hal -p pqsigner-pq-seal -p masked-sha2 -p pqsigner-xtask \
+            -p fwsign -p fwmeasure
+          cargo llvm-cov --locked --no-report -p pqsigner-fsbl-tests \
+            --lib \
+            --test draft09_floor_stage_model \
+            --test draft09_codec_candidates \
+            --test draft09_resource_envelope \
+            --test draft11_deletion_experiments \
+            --test source_invariants
+          cargo llvm-cov --locked --no-report -p sphincs-tz-secure \
+            --no-default-features \
+            --features mock-se,debug-log,ui-semihosting
+          cargo llvm-cov --locked --no-report -p dbgen --tests
+          cargo llvm-cov report --lcov --output-path lcov.info
+      - name: Upload lcov.info
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: lcov-coverage
+          path: lcov.info
+          retention-days: 14
+
   qemu-e2e:
     name: QEMU unified-sign E2E
     runs-on: ubuntu-latest
+    # Generous bound for two release cross-builds + the ~40-scenario QEMU run
+    # (normally ~5-10 min); a hang previously ran to the 6 h default.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -265,6 +315,21 @@ jobs:
       # 5p/5n, to reach the explicit ALL ASSERTIONS PASSED sentinel.
       - name: make e2e
         run: make e2e
+      # TZP-12 (#483): publish the QEMU ELF pair + the interactive runner so
+      # companion/third-party developers can exercise the wallet UX without a
+      # firmware toolchain. The paths are exactly $(SECURE_ELF)/$(NONSECURE_ELF)
+      # as built by the Makefile `e2e` target. if: always() keeps the ELFs for
+      # debugging when the e2e assertions fail.
+      - name: Upload QEMU ELF pair + wallet runner
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qemu-e2e-artifacts
+          path: |
+            target/secure/thumbv8m.main-none-eabi/release/sphincs-tz-secure
+            target/nonsecure/thumbv8m.main-none-eabi/release/sphincs-tz-nonsecure
+            tools/wallet_run.py
+          retention-days: 14
 
   firmware-target-gates:
     name: Firmware-target gates (FSBL footprint + thumbv8m pair link)
@@ -295,6 +360,21 @@ jobs:
       # which emits --cmse-implib and links NS against the veneers object.
       - name: thumbv8m secure+nonsecure pair link (CMSE implib)
         run: make build-hw
+      # TZP-11 (#482): secure-slot capacity gate — fwmeasure's strict
+      # --require-secure-slot check enforces the 464 KiB A/B slot bound on the
+      # linked image (was diagnostic-only, enrolled in no workflow; the FSBL
+      # had its footprint gate above but the secure slot had none).
+      # `make size-report` hard-errors at parse time unless
+      # target/pqsigner-release/secure.elf exists (Makefile:2346), and
+      # `build-hw` leaves its ELFs under target/{secure,nonsecure}/…, so the
+      # pair is staged first. Verified locally on this tree: secure 355744 B of
+      # 475136 B slot (74.9%), ns 16992 B static of 65536 B SRAM2.
+      - name: Secure-slot capacity gate (make size-report)
+        run: |
+          mkdir -p target/pqsigner-release
+          cp target/secure/thumbv8m.main-none-eabi/release/sphincs-tz-secure target/pqsigner-release/secure.elf
+          cp target/nonsecure/thumbv8m.main-none-eabi/release/sphincs-tz-nonsecure target/pqsigner-release/nonsecure.elf
+          make size-report
 
   miri:
     name: Miri (UB in host-reachable unsafe)
