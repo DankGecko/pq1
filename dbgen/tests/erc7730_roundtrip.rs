@@ -283,7 +283,7 @@ fn registry_aave_v3_lending_and_permits_cover_every_unique_deployment() {
 
     assert_eq!(
         result.entries.len(),
-        429,
+        430,
         "the bounded DeFi curation phase must add exactly two catalogue leaves"
     );
     assert_eq!(result.known_call_count, 4_542);
@@ -374,11 +374,11 @@ fn registry_weth9_deposit_binds_value_on_exact_deployments() {
             .contains(&(entry.chain_id, entry.contract, selector)));
     }
 
-    assert_eq!(result.entries.len(), 429);
+    assert_eq!(result.entries.len(), 430);
     assert_eq!(result.known_call_count, 4_542);
     assert_eq!(
         hex::encode(result.root),
-        "fda42f17fbb7b344f893c52199597e46edf3ae7413062d7cc44dd9bbfe6d2467"
+        "8980453f9ef42a7dd9948403ef1b762732d5522e0ed596e82ae037d2362cc489"
     );
 }
 
@@ -483,7 +483,7 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
 
     assert_eq!(
         result.entries.len(),
-        429,
+        430,
         "Aave V2 already owned three leaves"
     );
     assert_eq!(result.known_call_count, 4_542);
@@ -705,7 +705,7 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
         );
     }
 
-    assert_eq!(result.entries.len(), 429);
+    assert_eq!(result.entries.len(), 430);
     assert_eq!(result.known_call_count, 4_542);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -813,7 +813,7 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
         );
     }
 
-    assert_eq!(result.entries.len(), 429);
+    assert_eq!(result.entries.len(), 430);
     assert_eq!(result.known_call_count, 4_542);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -1279,7 +1279,7 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
         "newly clear-signable permit was already registry-known"
     );
 
-    assert_eq!(result.entries.len(), 429);
+    assert_eq!(result.entries.len(), 430);
     assert_eq!(result.known_call_count, 4_542);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
