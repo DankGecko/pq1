@@ -3810,6 +3810,240 @@ fn positive_flyingtulip_operator_approval_fixture_binds_operator_and_bool_enum()
 }
 
 #[test]
+fn positive_flyingtulip_session_manager_static_authority_routes_bind_every_operand() {
+    const REFUSED: [&str; 6] = [
+        "createSession(address,uint48,uint48,uint32,uint16,(address,uint256)[],bytes32)",
+        "createSessionBySig(address,address,uint48,uint48,uint32,uint16,(address,uint256)[],bytes32,bytes)",
+        "invalidateNonceBySig(bytes32,uint256,uint256,address,bytes)",
+        "revokeSessionBySig(bytes32,uint256,bytes)",
+        "setAllowedTargets(address[],bool)",
+        "validateAndConsume(address,uint256,(bytes32,bytes32,uint256,uint256,address,uint256),bytes,address)",
+    ];
+
+    let registry = build_registry();
+    let entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-SessionManager.json")
+        })
+        .collect();
+    assert_eq!(
+        entries.len(),
+        7,
+        "SessionManager render coverage must span all seven deployments"
+    );
+
+    for entry in entries {
+        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &registry.root)
+            .expect("verify Flying Tulip SessionManager leaf");
+        cross_check_contract(&verified.ir, entry.chain_id, &entry.contract)
+            .expect("bind Flying Tulip SessionManager leaf");
+        for signature in REFUSED {
+            assert_selector_excluded(&verified.ir, signature);
+        }
+
+        let tx = envelope(entry.chain_id, entry.contract);
+        let resolver = NameResolver::new();
+        let signer = [0x42; 20];
+        let render = |signature: &str, words: &[[u8; 32]]| {
+            let calldata = calldata_static(signature, words);
+            assert_selector_matches(&verified.ir, &calldata, signature);
+            render_erc7730_pages_with_signer_checked(
+                &tx, &calldata, &verified, None, &resolver, &signer,
+            )
+        };
+
+        let session_id = [0x11; 32];
+        let revoked = render("revokeSession(bytes32)", &[session_id])
+            .expect("render Flying Tulip session revocation");
+        assert_eq!(
+            revoked.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        assert_eq!(
+            page_strs(&revoked.pages, intent_page_index(&revoked.pages))[0],
+            "Revoke session"
+        );
+        assert_all_pages_printable(&revoked.pages);
+        assert_raw_word_pages(&revoked.pages, "Session ID", &session_id);
+        let mut mutated_session_id = session_id;
+        mutated_session_id[31] ^= 1;
+        let mutated_revoke = render("revokeSession(bytes32)", &[mutated_session_id])
+            .expect("render independently mutated session ID");
+        assert_raw_word_pages(&mutated_revoke.pages, "Session ID", &mutated_session_id);
+        assert_ne!(
+            revoked.pages.as_slice(),
+            mutated_revoke.pages.as_slice(),
+            "one session-ID bit must change trusted pages"
+        );
+        assert!(
+            !revoked
+                .transcript_receipt
+                .exact_match(&mutated_revoke.transcript_receipt),
+            "one session-ID bit must change the transcript receipt"
+        );
+
+        let target = [0x22; 20];
+        let allowed_word = u256_from_u64(1).0;
+        let allowed = render(
+            "setAllowedTarget(address,bool)",
+            &[abi_address_word(target), allowed_word],
+        )
+        .expect("render allowed Flying Tulip session target");
+        assert_eq!(
+            allowed.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        let allowed_intent = page_strs(&allowed.pages, intent_page_index(&allowed.pages));
+        assert_eq!(
+            format!("{}{}", allowed_intent[0], allowed_intent[1]),
+            "Update allowed target"
+        );
+        assert_all_pages_printable(&allowed.pages);
+        assert_full_address_field_page(&allowed.pages, "Target", &target);
+        assert_eq!(
+            page_strs(&allowed.pages, find_page_by_label(&allowed.pages, "Access")),
+            [
+                "Access".to_string(),
+                "Allow".to_string(),
+                "".to_string(),
+                "".to_string(),
+            ]
+        );
+
+        let mut mutated_target = target;
+        mutated_target[19] ^= 1;
+        let mutated_target_render = render(
+            "setAllowedTarget(address,bool)",
+            &[abi_address_word(mutated_target), allowed_word],
+        )
+        .expect("render independently mutated session target");
+        assert_full_address_field_page(&mutated_target_render.pages, "Target", &mutated_target);
+        assert_ne!(
+            allowed.pages.as_slice(),
+            mutated_target_render.pages.as_slice(),
+            "one target bit must change trusted pages"
+        );
+        assert!(
+            !allowed
+                .transcript_receipt
+                .exact_match(&mutated_target_render.transcript_receipt),
+            "one target bit must change the transcript receipt"
+        );
+
+        let disallowed = render(
+            "setAllowedTarget(address,bool)",
+            &[abi_address_word(target), [0u8; 32]],
+        )
+        .expect("render canonical false session target access");
+        assert_eq!(
+            page_strs(
+                &disallowed.pages,
+                find_page_by_label(&disallowed.pages, "Access")
+            ),
+            [
+                "Access".to_string(),
+                "Disallow".to_string(),
+                "".to_string(),
+                "".to_string(),
+            ]
+        );
+        assert_ne!(
+            allowed.pages.as_slice(),
+            disallowed.pages.as_slice(),
+            "the signed access bool must change trusted pages"
+        );
+        assert!(
+            !allowed
+                .transcript_receipt
+                .exact_match(&disallowed.transcript_receipt),
+            "the signed access bool must change the transcript receipt"
+        );
+        assert!(
+            matches!(
+                render(
+                    "setAllowedTarget(address,bool)",
+                    &[abi_address_word(target), u256_from_u64(2).0],
+                ),
+                Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+            ),
+            "ABI bool word 2 must hard-refuse instead of rendering an unknown enum"
+        );
+
+        let pending_owner = [0x33; 20];
+        let ownership = render(
+            "transferOwnership(address)",
+            &[abi_address_word(pending_owner)],
+        )
+        .expect("render Flying Tulip pending-owner update");
+        assert_eq!(
+            ownership.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        let ownership_intent = page_strs(&ownership.pages, intent_page_index(&ownership.pages));
+        assert_eq!(
+            format!("{}{}", ownership_intent[0], ownership_intent[1]),
+            "Update pending owner"
+        );
+        assert_all_pages_printable(&ownership.pages);
+        assert_full_address_field_page(&ownership.pages, "Pending owner", &pending_owner);
+        let mut mutated_owner = pending_owner;
+        mutated_owner[19] ^= 1;
+        let mutated_ownership = render(
+            "transferOwnership(address)",
+            &[abi_address_word(mutated_owner)],
+        )
+        .expect("render independently mutated pending owner");
+        assert_full_address_field_page(&mutated_ownership.pages, "Pending owner", &mutated_owner);
+        assert_ne!(
+            ownership.pages.as_slice(),
+            mutated_ownership.pages.as_slice(),
+            "one pending-owner bit must change trusted pages"
+        );
+        assert!(
+            !ownership
+                .transcript_receipt
+                .exact_match(&mutated_ownership.transcript_receipt),
+            "one pending-owner bit must change the transcript receipt"
+        );
+
+        for signature in REFUSED {
+            let calldata = calldata_static(signature, &[]);
+            assert!(
+                matches!(
+                    render_erc7730_pages(&tx, &calldata, &verified, None, &resolver),
+                    Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+                ),
+                "refused SessionManager route must not render directly: {signature}"
+            );
+        }
+        let refused_calldata = calldata_static(REFUSED[0], &[]);
+        let mut dispatch_proofs = DispatchPageProofs::new();
+        dispatch_proofs.fail_initialize();
+        assert!(
+            pick_sign_pages(
+                &tx,
+                &refused_calldata,
+                &signer,
+                None,
+                None,
+                None,
+                Some(&verified),
+                None,
+                None,
+                &resolver,
+                &mut dispatch_proofs,
+            )
+            .is_err(),
+            "a bound descriptor must not fall back for a refused SessionManager route"
+        );
+    }
+}
+
+#[test]
 fn nftname_small_id_keeps_raw_id_and_full_target_collection_identity() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-PftNft.json", 1);

@@ -681,7 +681,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.root),
-        "f8a0dccff541de05984b3e614aeb60bb4e32bd909a7aa7eb62c248475bf03b6d"
+        "676fa196757d8ab4104f24f14513df5b68ca19a0e56a14838ceea75104bc53d0"
     );
 }
 
@@ -2200,6 +2200,238 @@ fn registry_flying_tulip_pft_nft_admits_only_injective_operator_approval() {
                     .known_calls
                     .contains(&(entry.chain_id, entry.contract, selector)),
                 "clear-signable pFT NFT tuple must already be registry-known"
+            );
+        }
+    }
+}
+
+#[test]
+fn registry_flying_tulip_session_manager_admits_only_injective_static_authority_routes() {
+    let catalogue = build_registry();
+    let entries: Vec<_> = catalogue
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-SessionManager.json")
+        })
+        .collect();
+
+    let expected_deployments: BTreeSet<(u64, [u8; 20])> = [
+        (1, "2daf4b445e7d659100b22a15c3eeb10e64ac5dc9"),
+        (1, "f9f3ddf2e96cabef94e2634c326dc6dde99360f8"),
+        (56, "c85cb743f72b3a9bb594faa7d46ee1efc61b7a42"),
+        (146, "2daf4b445e7d659100b22a15c3eeb10e64ac5dc9"),
+        (146, "109ae72778a0260571b9767477204f1ce41fbdff"),
+        (146, "52ef449d44cc4205fa44bf644dee15611fc30734"),
+        (43_114, "176592c8ed3f2d94ce4c3f1a4cff7d068176ac54"),
+    ]
+    .into_iter()
+    .map(|(chain_id, address)| {
+        let decoded = hex::decode(address).expect("valid SessionManager deployment address");
+        let mut contract = [0u8; 20];
+        contract.copy_from_slice(&decoded);
+        (chain_id, contract)
+    })
+    .collect();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| (entry.chain_id, entry.contract))
+            .collect::<BTreeSet<_>>(),
+        expected_deployments,
+        "SessionManager must emit exactly its seven pinned deployments"
+    );
+
+    const ADMITTED: [(&str, [u8; 4]); 5] = [
+        ("acceptOwnership()", [0x79, 0xba, 0x50, 0x97]),
+        ("renounceOwnership()", [0x71, 0x50, 0x18, 0xa6]),
+        ("revokeSession(bytes32)", [0xa7, 0xfe, 0xd3, 0x85]),
+        ("setAllowedTarget(address,bool)", [0xca, 0x1d, 0xd2, 0x2e]),
+        ("transferOwnership(address)", [0xf2, 0xfd, 0xe3, 0x8b]),
+    ];
+    const REFUSED: [(&str, [u8; 4]); 6] = [
+        (
+            "createSession(address,uint48,uint48,uint32,uint16,(address,uint256)[],bytes32)",
+            [0xc1, 0x45, 0x59, 0xe5],
+        ),
+        (
+            "createSessionBySig(address,address,uint48,uint48,uint32,uint16,(address,uint256)[],bytes32,bytes)",
+            [0x74, 0xd3, 0x6b, 0x01],
+        ),
+        (
+            "invalidateNonceBySig(bytes32,uint256,uint256,address,bytes)",
+            [0x90, 0x70, 0x68, 0x97],
+        ),
+        (
+            "revokeSessionBySig(bytes32,uint256,bytes)",
+            [0x1f, 0xc1, 0xdb, 0x86],
+        ),
+        (
+            "setAllowedTargets(address[],bool)",
+            [0x01, 0xe2, 0xae, 0x55],
+        ),
+        (
+            "validateAndConsume(address,uint256,(bytes32,bytes32,uint256,uint256,address,uint256),bytes,address)",
+            [0xce, 0x5c, 0xb6, 0xc0],
+        ),
+    ];
+    for (signature, expected) in ADMITTED.into_iter().chain(REFUSED) {
+        assert_eq!(
+            &keccak256(signature.as_bytes())[..4],
+            expected,
+            "pinned selector drift for {signature}"
+        );
+    }
+    let expected_selectors: BTreeSet<_> = ADMITTED.iter().map(|(_, selector)| *selector).collect();
+
+    for entry in entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated SessionManager IR parses");
+        let actual_selectors: BTreeSet<_> = ir
+            .format_iter()
+            .map(|format| format.expect("SessionManager format parses").selector)
+            .collect();
+        assert_eq!(
+            actual_selectors, expected_selectors,
+            "only five injective, all-static SessionManager authority routes may be advertised"
+        );
+
+        let revoke = ir
+            .find_format_by_selector(&[0xa7, 0xfe, 0xd3, 0x85])
+            .expect("SessionManager format table parses")
+            .expect("revokeSession is clear-signable");
+        assert_eq!(revoke.intent, b"Revoke session");
+        assert_eq!(revoke.static_head_words, 1);
+        let revoke_fields: Vec<_> = revoke
+            .fields()
+            .map(|field| field.expect("revokeSession field parses"))
+            .collect();
+        assert_eq!(revoke_fields.len(), 1);
+        assert_eq!(revoke_fields[0].label, b"Session ID");
+        assert_eq!(
+            FormatOp::try_from(revoke_fields[0].format_op),
+            Ok(FormatOp::Raw)
+        );
+        assert_eq!(
+            ir.path_bytes(revoke_fields[0].path_off)
+                .expect("session ID path parses"),
+            [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0]
+        );
+        let revoke_params =
+            parse_params(&ir, revoke_fields[0].param_off).expect("session ID params parse");
+        assert_eq!(revoke_params.visibility, Visibility::Always);
+        assert_eq!(revoke_params.terminal_kind, Some(TerminalKind::FixedBytes));
+
+        let target_access = ir
+            .find_format_by_selector(&[0xca, 0x1d, 0xd2, 0x2e])
+            .expect("SessionManager format table parses")
+            .expect("setAllowedTarget is clear-signable");
+        assert_eq!(target_access.intent, b"Update allowed target");
+        assert_eq!(target_access.static_head_words, 2);
+        let target_fields: Vec<_> = target_access
+            .fields()
+            .map(|field| field.expect("setAllowedTarget field parses"))
+            .collect();
+        assert_eq!(target_fields.len(), 2);
+        assert_eq!(target_fields[0].label, b"Target");
+        assert_eq!(
+            FormatOp::try_from(target_fields[0].format_op),
+            Ok(FormatOp::AddressName)
+        );
+        assert_eq!(
+            ir.path_bytes(target_fields[0].path_off)
+                .expect("target path parses"),
+            [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0]
+        );
+        let target_params =
+            parse_params(&ir, target_fields[0].param_off).expect("target params parse");
+        assert_eq!(target_params.visibility, Visibility::Always);
+        assert_eq!(target_params.terminal_kind, Some(TerminalKind::Address));
+
+        assert_eq!(target_fields[1].label, b"Access");
+        assert_eq!(
+            FormatOp::try_from(target_fields[1].format_op),
+            Ok(FormatOp::Enum)
+        );
+        assert_eq!(
+            ir.path_bytes(target_fields[1].path_off)
+                .expect("access path parses"),
+            [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 1]
+        );
+        let access_params =
+            parse_params(&ir, target_fields[1].param_off).expect("access params parse");
+        assert_eq!(access_params.visibility, Visibility::Always);
+        assert_eq!(access_params.terminal_kind, Some(TerminalKind::Bool));
+        let enum_off = access_params.enum_ref.expect("access enum reference");
+        let disallow =
+            pqsigner_erc7730::render::enums::lookup_enum_label(ir.pool, enum_off, &[0u8; 32])
+                .expect("access enum table is valid")
+                .expect("false access value is enrolled");
+        let mut allow_word = [0u8; 32];
+        allow_word[31] = 1;
+        let allow =
+            pqsigner_erc7730::render::enums::lookup_enum_label(ir.pool, enum_off, &allow_word)
+                .expect("access enum table is valid")
+                .expect("true access value is enrolled");
+        assert_eq!(disallow, b"Disallow");
+        assert_eq!(allow, b"Allow");
+        assert_ne!(disallow, allow, "access labels must remain injective");
+
+        let transfer = ir
+            .find_format_by_selector(&[0xf2, 0xfd, 0xe3, 0x8b])
+            .expect("SessionManager format table parses")
+            .expect("transferOwnership is clear-signable");
+        assert_eq!(transfer.intent, b"Update pending owner");
+        assert_eq!(transfer.static_head_words, 1);
+        let transfer_fields: Vec<_> = transfer
+            .fields()
+            .map(|field| field.expect("transferOwnership field parses"))
+            .collect();
+        assert_eq!(transfer_fields.len(), 1);
+        assert_eq!(transfer_fields[0].label, b"Pending owner");
+        assert_eq!(
+            FormatOp::try_from(transfer_fields[0].format_op),
+            Ok(FormatOp::AddressName)
+        );
+        assert_eq!(
+            ir.path_bytes(transfer_fields[0].path_off)
+                .expect("pending owner path parses"),
+            [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0]
+        );
+        let owner_params =
+            parse_params(&ir, transfer_fields[0].param_off).expect("pending owner params parse");
+        assert_eq!(owner_params.visibility, Visibility::Always);
+        assert_eq!(owner_params.terminal_kind, Some(TerminalKind::Address));
+
+        for (_, selector) in ADMITTED {
+            assert!(
+                catalogue
+                    .known_calls
+                    .contains(&(entry.chain_id, entry.contract, selector)),
+                "admitted SessionManager selector must remain exactly registry-known"
+            );
+        }
+        for (signature, selector) in REFUSED {
+            assert!(
+                ir.find_format_by_selector(&selector)
+                    .expect("SessionManager format table parses")
+                    .is_none(),
+                "unsafe SessionManager route became clear-signable: {signature}"
+            );
+            assert!(
+                catalogue
+                    .known_calls
+                    .contains(&(entry.chain_id, entry.contract, selector)),
+                "refused SessionManager route left the exact known-call inventory: {signature}"
+            );
+            assert!(
+                known_call_may_contain(
+                    &catalogue.known_calls_bloom,
+                    entry.chain_id,
+                    &entry.contract,
+                    &selector,
+                ),
+                "refused SessionManager route left the fail-closed Bloom: {signature}"
             );
         }
     }

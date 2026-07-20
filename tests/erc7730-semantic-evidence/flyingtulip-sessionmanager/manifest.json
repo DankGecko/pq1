@@ -1,0 +1,467 @@
+{
+  "schema_version": 1,
+  "scope": "FlyingTulip SessionManager source, deployment, and route semantics for the seven deployments admitted by PQ1",
+  "captured_at_utc": "2026-07-20T09:56:30Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
+  "descriptor": {
+    "vendored_file": "secure/data/erc7730-registry/registry/flyingtulip/calldata-SessionManager.json",
+    "vendored_file_sha256": "11ea474574a0791289ea877025184b90406018f79a6cbed9cf768dcacf8b562d",
+    "curation_overlay": "secure/data/erc7730/curations/files/registry/flyingtulip/calldata-SessionManager.json",
+    "curation_overlay_sha256": "11ea474574a0791289ea877025184b90406018f79a6cbed9cf768dcacf8b562d",
+    "deployments": [
+      {
+        "chain_id": 1,
+        "address": "0x2DaF4B445E7d659100b22a15c3EeB10e64ac5dC9"
+      },
+      {
+        "chain_id": 1,
+        "address": "0xF9f3ddF2E96Cabef94e2634c326DC6dde99360f8"
+      },
+      {
+        "chain_id": 56,
+        "address": "0xC85CB743f72B3a9Bb594Faa7d46EE1EFC61b7A42"
+      },
+      {
+        "chain_id": 146,
+        "address": "0x2DaF4B445E7d659100b22a15c3EeB10e64ac5dC9"
+      },
+      {
+        "chain_id": 146,
+        "address": "0x109AE72778a0260571b9767477204F1ce41FBdff"
+      },
+      {
+        "chain_id": 146,
+        "address": "0x52Ef449D44cC4205fa44bF644dEE15611FC30734"
+      },
+      {
+        "chain_id": 43114,
+        "address": "0x176592C8Ed3F2D94cE4c3F1a4cfF7d068176AC54"
+      }
+    ]
+  },
+  "sourcify_captures": [
+    {
+      "path": "sourcify/1-2daf4b445e7d659100b22a15c3eeb10e64ac5dc9.json",
+      "file_sha256": "50f840bf386d21335329c8579e87d1cc284631baaa7a433dcfd606c67864a3ec",
+      "response_payload_sha256": "8d263337d9718671ac10bff43c30ef492b758ace9f4ea50abc4558aaff6da955",
+      "response_url": "https://sourcify.dev/server/v2/contract/1/0x2DaF4B445E7d659100b22a15c3EeB10e64ac5dC9?fields=all",
+      "chain_id": 1,
+      "address": "0x2DaF4B445E7d659100b22a15c3EeB10e64ac5dC9",
+      "build_family": "current",
+      "match": "match",
+      "creation_match": "match",
+      "runtime_match": "match",
+      "verified_at_utc": "2026-03-25T11:24:30Z",
+      "archive_note": "The archived text is the exact response body followed by one repository newline; response_payload_sha256 excludes that final newline."
+    },
+    {
+      "path": "sourcify/1-f9f3ddf2e96cabef94e2634c326dc6dde99360f8.json",
+      "file_sha256": "bd0857ea6d2c1ff84a29b6666cb8df43e6bf8415c3b63ff9caeaed82a10e89ab",
+      "response_payload_sha256": "f96a582d3ce17c4c938f97dd69795c3dc522418a0b43849a28dccf1969373ea5",
+      "response_url": "https://sourcify.dev/server/v2/contract/1/0xF9f3ddF2E96Cabef94e2634c326DC6dde99360f8?fields=all",
+      "chain_id": 1,
+      "address": "0xF9f3ddF2E96Cabef94e2634c326DC6dde99360f8",
+      "build_family": "ft",
+      "match": "match",
+      "creation_match": "match",
+      "runtime_match": "match",
+      "verified_at_utc": "2026-05-15T08:12:52Z",
+      "archive_note": "The archived text is the exact response body followed by one repository newline; response_payload_sha256 excludes that final newline."
+    },
+    {
+      "path": "sourcify/56-c85cb743f72b3a9bb594faa7d46ee1efc61b7a42.json",
+      "file_sha256": "70fb95c92ea009db254baca8c4dc8fe43a678191156178934271b1c4b0a0e0cb",
+      "response_payload_sha256": "aa26f9902c05a8240212081ae73c4e3b9a2c95c1f6cd49e7f66291282b1bfd11",
+      "response_url": "https://sourcify.dev/server/v2/contract/56/0xC85CB743f72B3a9Bb594Faa7d46EE1EFC61b7A42?fields=all",
+      "chain_id": 56,
+      "address": "0xC85CB743f72B3a9Bb594Faa7d46EE1EFC61b7A42",
+      "build_family": "current",
+      "match": "match",
+      "creation_match": "match",
+      "runtime_match": "match",
+      "verified_at_utc": "2026-05-26T11:39:22Z",
+      "archive_note": "The archived text is the exact response body followed by one repository newline; response_payload_sha256 excludes that final newline."
+    }
+  ],
+  "shared_source": {
+    "ownable": {
+      "capture_path": "lib/openzeppelin-contracts/contracts/access/Ownable.sol",
+      "bytes": 3102,
+      "sha256": "38578bd71c0a909840e67202db527cc6b4e6b437e0f39f0c909da32c1e30cb81"
+    },
+    "ownable2step": {
+      "capture_path": "lib/openzeppelin-contracts/contracts/access/Ownable2Step.sol",
+      "bytes": 2476,
+      "sha256": "c75345d7b9feef17ae29f2a800ca2f65f8021cf80436a41d6ec00f57f5180f36"
+    },
+    "relationship": "Both build-family captures contain byte-identical Ownable and Ownable2Step source bodies."
+  },
+  "canonical_abi": {
+    "sha256": "15ec3faceb037af1ff6e5378474e0b7f6ecb7e77e91d090e514781d0880f243d",
+    "canonicalization": "SHA-256 of jq -cS '.abi' output including its trailing newline",
+    "relationship": "All three archived Sourcify captures produce this exact canonical ABI identity."
+  },
+  "build_families": [
+    {
+      "id": "current",
+      "compiler": "0.8.30+commit.73712a01",
+      "language": "Solidity",
+      "fully_qualified_name": "contracts/SessionManager.sol:SessionManager",
+      "settings": {
+        "via_ir": true,
+        "optimizer_enabled": true,
+        "optimizer_runs": 200,
+        "evm_version": "cancun",
+        "metadata_append_cbor": false,
+        "metadata_bytecode_hash": "none"
+      },
+      "primary_source": {
+        "capture_path": "contracts/SessionManager.sol",
+        "bytes": 17169,
+        "sha256": "5ea60be88555878e1e8ccce623e5cb3c5a0c72898713bea2aef1b937199c4075",
+        "eip712_domain_name": "ftUSD SessionManager"
+      },
+      "runtime_bytes": 7732,
+      "immutable_references": [
+        {
+          "ast_id": "5088",
+          "start": 6810,
+          "length": 32
+        },
+        {
+          "ast_id": "5090",
+          "start": 6993,
+          "length": 32
+        },
+        {
+          "ast_id": "5092",
+          "start": 6756,
+          "length": 32
+        },
+        {
+          "ast_id": "5094",
+          "start": 6889,
+          "length": 32
+        },
+        {
+          "ast_id": "5096",
+          "start": 6927,
+          "length": 32
+        },
+        {
+          "ast_id": "5099",
+          "start": 3099,
+          "length": 32
+        },
+        {
+          "ast_id": "5102",
+          "start": 3140,
+          "length": 32
+        }
+      ],
+      "normalized_runtime_sha256": "b83ed0508ae63363153a93612a8b61968277602febfa92ddae1cfbb81a51fd6c",
+      "normalization": "Replace only the seven Sourcify-declared 32-byte immutable-reference spans with zero bytes, then SHA-256 the decoded runtime.",
+      "deployments": [
+        {
+          "chain_id": 1,
+          "address": "0x2DaF4B445E7d659100b22a15c3EeB10e64ac5dC9"
+        },
+        {
+          "chain_id": 56,
+          "address": "0xC85CB743f72B3a9Bb594Faa7d46EE1EFC61b7A42"
+        },
+        {
+          "chain_id": 146,
+          "address": "0x2DaF4B445E7d659100b22a15c3EeB10e64ac5dC9"
+        },
+        {
+          "chain_id": 146,
+          "address": "0x109AE72778a0260571b9767477204F1ce41FBdff"
+        },
+        {
+          "chain_id": 146,
+          "address": "0x52Ef449D44cC4205fa44bF644dEE15611FC30734"
+        },
+        {
+          "chain_id": 43114,
+          "address": "0x176592C8Ed3F2D94cE4c3F1a4cfF7d068176AC54"
+        }
+      ],
+      "relationship": "Ethereum and BNB have exact Sourcify creation/runtime matches. All six decoded deployments become byte-identical after masking only these compiler-declared immutable spans."
+    },
+    {
+      "id": "ft",
+      "compiler": "0.8.30+commit.73712a01",
+      "language": "Solidity",
+      "fully_qualified_name": "contracts/session/SessionManager.sol:SessionManager",
+      "settings": {
+        "via_ir": true,
+        "optimizer_enabled": true,
+        "optimizer_runs": 200,
+        "evm_version": "cancun",
+        "metadata_append_cbor": false,
+        "metadata_bytecode_hash": "none"
+      },
+      "primary_source": {
+        "capture_path": "contracts/session/SessionManager.sol",
+        "bytes": 17109,
+        "sha256": "5930f95d860deb404b74741a9099b01ec714f08b9f986f966195ada9e377f300",
+        "eip712_domain_name": "FT SessionManager"
+      },
+      "runtime_bytes": 7853,
+      "immutable_references": [
+        {
+          "ast_id": "3064",
+          "start": 6931,
+          "length": 32
+        },
+        {
+          "ast_id": "3066",
+          "start": 7114,
+          "length": 32
+        },
+        {
+          "ast_id": "3068",
+          "start": 6877,
+          "length": 32
+        },
+        {
+          "ast_id": "3070",
+          "start": 7010,
+          "length": 32
+        },
+        {
+          "ast_id": "3072",
+          "start": 7048,
+          "length": 32
+        },
+        {
+          "ast_id": "3075",
+          "start": 3099,
+          "length": 32
+        },
+        {
+          "ast_id": "3078",
+          "start": 3140,
+          "length": 32
+        }
+      ],
+      "normalized_runtime_sha256": "a86db0d2fffd878154e062f7e36d2b378e8c0fe7f4f5ed96ed2159d26cd04aa7",
+      "normalization": "Replace only the seven Sourcify-declared 32-byte immutable-reference spans with zero bytes, then SHA-256 the decoded runtime.",
+      "deployments": [
+        {
+          "chain_id": 1,
+          "address": "0xF9f3ddF2E96Cabef94e2634c326DC6dde99360f8"
+        }
+      ],
+      "relationship": "The Ethereum deployment has an exact Sourcify creation/runtime match."
+    }
+  ],
+  "build_family_relationship": "The two top-level SessionManager sources differ only in import-path/formatting lines and the EIP-712 domain name. Their relevant route bodies, canonical ABI, and inherited Ownable/Ownable2Step sources are identical.",
+  "fixed_block_receipt": {
+    "path": "rpc/fixed-block-receipt.json",
+    "sha256": "ceff893e0b2f7b45597bd0c14f0c894d22a41941cbc00b3139e59fa94bbc7e16"
+  },
+  "deployments": [
+    {
+      "network": "ethereum-mainnet",
+      "chain_id": 1,
+      "address": "0x2DaF4B445E7d659100b22a15c3EeB10e64ac5dC9",
+      "build_family": "current",
+      "evidence_block": {
+        "number": 25572303,
+        "number_hex": "0x18633cf"
+      },
+      "runtime": {
+        "file": "runtime/1-2daf4b445e7d659100b22a15c3eeb10e64ac5dc9.hex",
+        "file_sha256": "bb6da8b6a4420ba985a7721eb64c52176018a2962974d0e0ffa5fff6cda462dd",
+        "bytes": 7732,
+        "decoded_sha256": "c995727383accc2bb569c3f5fcce68899a51117df962a9a8d6846e6b0f730774",
+        "keccak256": "0x7c79d4c8c47cae453fbac541867210cef5dc2bdd5442b9410a9974113f9fc6fc",
+        "normalized_sha256": "b83ed0508ae63363153a93612a8b61968277602febfa92ddae1cfbb81a51fd6c"
+      }
+    },
+    {
+      "network": "ethereum-mainnet",
+      "chain_id": 1,
+      "address": "0xF9f3ddF2E96Cabef94e2634c326DC6dde99360f8",
+      "build_family": "ft",
+      "evidence_block": {
+        "number": 25572303,
+        "number_hex": "0x18633cf"
+      },
+      "runtime": {
+        "file": "runtime/1-f9f3ddf2e96cabef94e2634c326dc6dde99360f8.hex",
+        "file_sha256": "f07a3dc5e7a89a7d2659fde7f5736b0ebe8430377202c2f7b3e4d9f4faeb8c78",
+        "bytes": 7853,
+        "decoded_sha256": "ec5257d4713a7c903d19ac6d2ad452e9e4a565c3caa8e91618330e0f64d5a289",
+        "keccak256": "0xe124781a5e8c1269d960fb35d8bd62f38db701c927bbdaa46d62cb8820f7f8a0",
+        "normalized_sha256": "a86db0d2fffd878154e062f7e36d2b378e8c0fe7f4f5ed96ed2159d26cd04aa7"
+      }
+    },
+    {
+      "network": "bnb-smart-chain-mainnet",
+      "chain_id": 56,
+      "address": "0xC85CB743f72B3a9Bb594Faa7d46EE1EFC61b7A42",
+      "build_family": "current",
+      "evidence_block": {
+        "number": 111063903,
+        "number_hex": "0x69eb35f"
+      },
+      "runtime": {
+        "file": "runtime/56-c85cb743f72b3a9bb594faa7d46ee1efc61b7a42.hex",
+        "file_sha256": "824de278589117da820992f843e409591e2b32c5d729f2177ae8957eeb310478",
+        "bytes": 7732,
+        "decoded_sha256": "faa685abb848681bffece9e98c70e130ac87e6c6e4f06863e8d4657756fa5a4c",
+        "keccak256": "0x7e800bd715549a1f94590ef8dbf4f152e1288706b33b3ec0d23459a5e55e8851",
+        "normalized_sha256": "b83ed0508ae63363153a93612a8b61968277602febfa92ddae1cfbb81a51fd6c"
+      }
+    },
+    {
+      "network": "sonic-mainnet",
+      "chain_id": 146,
+      "address": "0x2DaF4B445E7d659100b22a15c3EeB10e64ac5dC9",
+      "build_family": "current",
+      "evidence_block": {
+        "number": 76223125,
+        "number_hex": "0x48b1295"
+      },
+      "runtime": {
+        "file": "runtime/146-2daf4b445e7d659100b22a15c3eeb10e64ac5dc9.hex",
+        "file_sha256": "3193130c0fc2d1c18ed2ae5baec581c5bffc9728638672ed0d4d65316bc40680",
+        "bytes": 7732,
+        "decoded_sha256": "f2364bfd877902fd54334011e24f72b34a45f9d1864ee95a501f3b91104e0560",
+        "keccak256": "0x88b1282176acf1bb076b5015d7795d505d6bb47d5feb43a028d4b0106498ccd5",
+        "normalized_sha256": "b83ed0508ae63363153a93612a8b61968277602febfa92ddae1cfbb81a51fd6c"
+      }
+    },
+    {
+      "network": "sonic-mainnet",
+      "chain_id": 146,
+      "address": "0x109AE72778a0260571b9767477204F1ce41FBdff",
+      "build_family": "current",
+      "evidence_block": {
+        "number": 76223125,
+        "number_hex": "0x48b1295"
+      },
+      "runtime": {
+        "file": "runtime/146-109ae72778a0260571b9767477204f1ce41fbdff.hex",
+        "file_sha256": "e053980203143729890e8800e88c7a4d378ca5cf96c40cfdbd2399a7aa29dda9",
+        "bytes": 7732,
+        "decoded_sha256": "95ab7962a48d6c1d83ff71a4f20eef4a0950a52b1134c8edbaab5eb6186618b2",
+        "keccak256": "0x83422d32980bb131efd7ce65f4347d093ac787dc4088d651714d00f210d83cf2",
+        "normalized_sha256": "b83ed0508ae63363153a93612a8b61968277602febfa92ddae1cfbb81a51fd6c"
+      }
+    },
+    {
+      "network": "sonic-mainnet",
+      "chain_id": 146,
+      "address": "0x52Ef449D44cC4205fa44bF644dEE15611FC30734",
+      "build_family": "current",
+      "evidence_block": {
+        "number": 76223125,
+        "number_hex": "0x48b1295"
+      },
+      "runtime": {
+        "file": "runtime/146-52ef449d44cc4205fa44bf644dee15611fc30734.hex",
+        "file_sha256": "f0d8c5d7dced9d49f31a4946f43668047c8bd917b8582f67a7e587c39d927db4",
+        "bytes": 7732,
+        "decoded_sha256": "b3f853d7a027a4b4d4bbc0bea97c0f046cc3dc096c9318521be4484762968c78",
+        "keccak256": "0xde23671e91175c3b3a60455faf55b967d607be76defb97eec6a1f1b87d5f768f",
+        "normalized_sha256": "b83ed0508ae63363153a93612a8b61968277602febfa92ddae1cfbb81a51fd6c"
+      }
+    },
+    {
+      "network": "avalanche-c-chain-mainnet",
+      "chain_id": 43114,
+      "address": "0x176592C8Ed3F2D94cE4c3F1a4cfF7d068176AC54",
+      "build_family": "current",
+      "evidence_block": {
+        "number": 90778000,
+        "number_hex": "0x5692990"
+      },
+      "runtime": {
+        "file": "runtime/43114-176592c8ed3f2d94ce4c3f1a4cff7d068176ac54.hex",
+        "file_sha256": "dc0f5abb3f690ffc66307253c7312b8740b4e06e2d0ddea7ff86e07adee4d5d2",
+        "bytes": 7732,
+        "decoded_sha256": "12e9e3a8f512319dc53318828be1a94c3dcadcedd08313bf24d6d29e261cac56",
+        "keccak256": "0xe59d4a7c2a9536d567fa766d1859469f65b907111d381a3338f314b5bebd0952",
+        "normalized_sha256": "b83ed0508ae63363153a93612a8b61968277602febfa92ddae1cfbb81a51fd6c"
+      }
+    }
+  ],
+  "direct_contract_classification": {
+    "classification": "direct immutable-code deployments at the pinned blocks",
+    "evidence": [
+      "Both build families have exact Sourcify creation and runtime matches.",
+      "Every deployment belongs to one of those two families by exact decoded-runtime identity after masking only the family's seven compiler-declared immutable spans.",
+      "All supported fixed-block reads of the standard EIP-1967 implementation, admin, and beacon slots returned zero; BNB has one such provider plus Sourcify's independent nonproxy classification."
+    ],
+    "residual": "BNB MeowRPC historical slot reads were unavailable, and standard-slot zeros alone do not exclude every bespoke proxy. The full-match and normalized-runtime evidence carries this historical classification; no claim is made about future code or live state."
+  },
+  "admitted_routes": [
+    {
+      "name": "acceptOwnership",
+      "canonical_signature": "acceptOwnership()",
+      "selector": "0x79ba5097",
+      "semantics": "Only the pending owner can finalize the two-step handoff; this makes that account current owner and clears pendingOwner."
+    },
+    {
+      "name": "renounceOwnership",
+      "canonical_signature": "renounceOwnership()",
+      "selector": "0x715018a6",
+      "semantics": "Only the current owner can set the current owner to the zero address."
+    },
+    {
+      "name": "revokeSession",
+      "canonical_signature": "revokeSession(bytes32)",
+      "selector": "0xa7fed385",
+      "semantics": "The session must exist and msg.sender must equal its stored session owner; the exact sessionId is marked revoked."
+    },
+    {
+      "name": "setAllowedTarget",
+      "canonical_signature": "setAllowedTarget(address,bool)",
+      "selector": "0xca1dd22e",
+      "semantics": "Only the SessionManager's current owner can write the exact allowed bool for a nonzero target address. Both allow and disallow branches are security-relevant."
+    },
+    {
+      "name": "transferOwnership",
+      "canonical_signature": "transferOwnership(address)",
+      "selector": "0xf2fde38b",
+      "semantics": "Only the current owner can set or replace pendingOwner. The zero address cancels a pending handoff; current ownership is unchanged until acceptOwnership."
+    }
+  ],
+  "refused_routes": [
+    {
+      "name": "createSession",
+      "selector": "0xc14559e5",
+      "reason": "The dynamic token-limit tuple array is not injectively rendered."
+    },
+    {
+      "name": "createSessionBySig",
+      "selector": "0x74d36b01",
+      "reason": "The dynamic token-limit tuple array and owner signature are not injectively rendered."
+    },
+    {
+      "name": "invalidateNonceBySig",
+      "selector": "0x90706897",
+      "reason": "The signature-bearing authorization path remains outside the bounded all-static curation."
+    },
+    {
+      "name": "revokeSessionBySig",
+      "selector": "0x1fc1db86",
+      "reason": "The signature-bearing authorization path remains outside the bounded all-static curation."
+    },
+    {
+      "name": "setAllowedTargets",
+      "selector": "0x01e2ae55",
+      "reason": "The dynamic target array is not injectively rendered."
+    },
+    {
+      "name": "validateAndConsume",
+      "selector": "0xce5cb6c0",
+      "reason": "The dynamic delegate signature and session-consumption effects remain outside the bounded all-static curation."
+    }
+  ],
+  "boundary": "Historical source and fixed-block deployment evidence only. It grants no live-state, future-code, transaction-success, production, shipment, fallback, or blind-signing authority."
+}

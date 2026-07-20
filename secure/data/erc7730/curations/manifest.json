@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 780411,
-    "sha256": "5a7895113347811ddd72de1907e173d4093d6c1fda49cbc9d251f090cbb013ba"
+    "bytes": 781522,
+    "sha256": "dc79163a4a1efb3f6d6fbd6f3bc3caaaf53dfb4fc04cc7a4b7025be6c710854d"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -93,9 +93,9 @@
     {
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
-      "files": 14,
-      "bytes": 1242278,
-      "sha256": "cc61aea587af477aad7568edbdc4c97dea3dbb12ad6f0ba59c4da5811f398a74"
+      "files": 15,
+      "bytes": 1296930,
+      "sha256": "2ae78e7f78d23731ee7cd6e0b6b072257c2c7b6cea423d8a898fdcb3f71a8755"
     },
     {
       "path": "pqsigner-erc7730",
@@ -144,7 +144,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 269876,
-      "sha256": "844ca905f81264594872c0660948b39b21e03aa92967b8ac1bec63363b82f5ad"
+      "sha256": "b3b45722504097f8707988b47c512eb5ae23d2d58769bc1b698cde16f5736649"
     }
   ],
   "capability_inputs": [
@@ -195,6 +195,13 @@
       "upstream_sha256": "ba6acec05c016f114fd7cfe6be3171d3590fb18bee6b057ec03ea14a04b281e6",
       "replacement_bytes": 3985,
       "replacement_sha256": "16c3c693aa3f08e35e8a80fd383b7d08b0c5e77648bea1ab6541d21399c2146b"
+    },
+    {
+      "path": "registry/flyingtulip/calldata-SessionManager.json",
+      "upstream_bytes": 9639,
+      "upstream_sha256": "4e26b99c1d8c170e96a4190e3d68ccca1b57d7674896e954fb3c5f788f6bce0a",
+      "replacement_bytes": 10750,
+      "replacement_sha256": "11ea474574a0791289ea877025184b90406018f79a6cbed9cf768dcacf8b562d"
     },
     {
       "path": "registry/flyingtulip/eip712-PftMarketplace-BuyOffer.json",
