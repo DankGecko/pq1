@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "scope": "Permit2 EIP-712 source semantics for the three formats admitted by PQ1",
+  "captured_at_utc": "2026-07-20T18:44:34Z",
+  "upstream": {
+    "repository": "https://github.com/Uniswap/permit2",
+    "deployment_tag": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+    "tag_kind": "lightweight",
+    "commit": "cc306b601f172c51bc04334a109e98340456620b",
+    "tree": "0d35aeb758e99510961089df8f7dfd94b256e58f",
+    "commit_time": "2022-11-17T18:53:10-05:00",
+    "commit_subject": "feat: fix docs link (#152)",
+    "files": [
+      {
+        "path": "script/DeployPermit2.s.sol",
+        "sha256": "d1085fa275e065bc50af25389a5cc7f6b16b9cd5e947126ef677871bf46fb09f"
+      },
+      {
+        "path": "src/AllowanceTransfer.sol",
+        "sha256": "e8755950225a256cd458c02433958a9e614083b4e334bb9853ec4075bcb8ab92"
+      },
+      {
+        "path": "src/EIP712.sol",
+        "sha256": "195ebab17589ed34e23de94eb9238bd099acaba88cc64b49c2763c72083bec98"
+      },
+      {
+        "path": "src/Permit2.sol",
+        "sha256": "a19dd81d4edafe3bba0178abfc9063886c2981b4711a4cbbf3fac19370defc9a"
+      },
+      {
+        "path": "src/SignatureTransfer.sol",
+        "sha256": "b7a210d7349fd12b75e556a4d0d7ea5a7ea61b39264d53ea1299b03323f62991"
+      },
+      {
+        "path": "src/interfaces/IAllowanceTransfer.sol",
+        "sha256": "aeecef7ca9a72ee02f1ef8edfb44599339c5dc758cf382455c2f72fb77dffc74"
+      },
+      {
+        "path": "src/interfaces/IERC1271.sol",
+        "sha256": "ba35907d098ef8b6c6c967d522026d09c92c7e2344cc81e4ee89db8955fa4ca8"
+      },
+      {
+        "path": "src/interfaces/ISignatureTransfer.sol",
+        "sha256": "0a5d6ac59da350987693f40f0ff0a833f31b37e057645f8e6ed9a1dad691e45c"
+      },
+      {
+        "path": "src/libraries/Allowance.sol",
+        "sha256": "6c7d1edc74a9dca9940fa835db09302ed1a35019d69f4188351466e9a3fff458"
+      },
+      {
+        "path": "src/libraries/PermitHash.sol",
+        "sha256": "23f89633dbd02d8b52a33de3a915af5af73ff25e31f88b6cf994358f802efa60"
+      },
+      {
+        "path": "src/libraries/SignatureVerification.sol",
+        "sha256": "1804b3d7b1183225419ec8ee45daf89174ff3668315d71d28111d5fcc179f8e4"
+      }
+    ]
+  },
+  "eip712": {
+    "domain_type": "EIP712Domain(string name,uint256 chainId,address verifyingContract)",
+    "domain_typehash": "0x8cad95687ba82c2ce50e74f7b754645e5117c3a5bec8151c0726d5857980a866",
+    "name": "Permit2",
+    "name_hash": "0x9ac997416e8ff9d2ff6bebeb7149f65cdae5e32e2b90440b566bb3044041d36a",
+    "domain_fields": [
+      "name",
+      "chainId",
+      "verifyingContract"
+    ],
+    "types": [
+      {
+        "name": "PermitDetails",
+        "type_string": "PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)",
+        "typehash": "0x65626cad6cb96493bf6f5ebea28756c966f023ab9e8a83a7101849d5573b3678"
+      },
+      {
+        "name": "PermitSingle",
+        "type_string": "PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)",
+        "typehash": "0xf3841cd1ff0085026a6327b620b67997ce40f282c88a8e905a7a5626e310f3d0"
+      },
+      {
+        "name": "PermitBatch",
+        "type_string": "PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)",
+        "typehash": "0xaf1b0d30d2cab0380e68f0689007e3254993c596f2fdd0aaa7f4d04f79440863"
+      },
+      {
+        "name": "TokenPermissions",
+        "type_string": "TokenPermissions(address token,uint256 amount)",
+        "typehash": "0x618358ac3db8dc274f0cd8829da7e234bd48cd73c4a740aede1adec9846d06a1"
+      },
+      {
+        "name": "PermitTransferFrom",
+        "type_string": "PermitTransferFrom(TokenPermissions permitted,address spender,uint256 nonce,uint256 deadline)TokenPermissions(address token,uint256 amount)",
+        "typehash": "0x939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106"
+      }
+    ]
+  },
+  "semantics": {
+    "permit_single": {
+      "signed_terminals": [
+        "details.token",
+        "details.amount",
+        "details.expiration",
+        "details.nonce",
+        "spender",
+        "sigDeadline"
+      ],
+      "successful_effect": "Replaces allowance[owner][token][spender] with the signed uint160 amount and expiration, then increments the matching uint48 nonce.",
+      "expiration_zero": "The signed zero is stored as the current block timestamp, so it is not a Unix-epoch expiry.",
+      "uint160_max": "AllowanceTransfer does not decrement type(uint160).max, making only that exact amount an unlimited reusable allowance."
+    },
+    "permit_batch": {
+      "signed_terminals": [
+        "details.[].token",
+        "details.[].amount",
+        "details.[].expiration",
+        "details.[].nonce",
+        "spender",
+        "sigDeadline"
+      ],
+      "successful_effect": "Applies the PermitSingle allowance replacement and nonce increment independently to every signed details element."
+    },
+    "permit_transfer_from": {
+      "signed_terminals": [
+        "permitted.token",
+        "permitted.amount",
+        "spender",
+        "nonce",
+        "deadline"
+      ],
+      "spender_binding": "PermitHash inserts msg.sender as the signed spender.",
+      "one_time_cap": "The unordered nonce is consumed once and requestedAmount must not exceed permitted.amount.",
+      "unsigned_execution_fields": [
+        "transferDetails.to",
+        "transferDetails.requestedAmount"
+      ],
+      "residual": "The spender chooses the eventual recipient and requested amount when consuming the permit; the signed permitted.amount is a cap, not an exact transfer amount."
+    },
+    "signature_verification": {
+      "eoa_branch": "claimedSigner.code.length == 0 uses ecrecover for 64- or 65-byte signatures.",
+      "contract_branch": "Only a claimedSigner with deployed code is called through IERC1271.isValidSignature.",
+      "residual": "The pinned implementation has no ERC-6492 unwrap path. Counterfactual or otherwise code-less contract accounts therefore do not reach ERC-1271 validation, and deployed contract code/state at validation time remains live execution state."
+    }
+  },
+  "descriptors": {
+    "vendored": "secure/data/erc7730-registry/registry/uniswap/eip712-uniswap-permit2.json",
+    "curated": "secure/data/erc7730/curations/files/registry/uniswap/eip712-uniswap-permit2.json",
+    "sha256": "585cda2929c5e88e35d6c98aa6b8edd38e01a03288123d1d6bc60635c2119204",
+    "include": "secure/data/erc7730-registry/registry/uniswap/uniswap-common-eip712.json",
+    "include_sha256": "42308b598001e669b81aeb2a29d37bb28d7f422aed9ff5c44b443ce963f4b8ab",
+    "deployment_address": "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+  },
+  "deployment_runtime": {
+    "archived": false,
+    "fixed_block_evidence": false,
+    "claim": "none",
+    "reason": "Available latest-state runtime samples had no block-number and block-hash receipts. They were deliberately excluded rather than promoted into immutable deployment evidence."
+  },
+  "residuals": [
+    "The official deployment-address tag pins source semantics, but this bundle does not prove deployed runtime or state on any descriptor chain.",
+    "The descriptor include still declares deprecated Mumbai chain 80001; this evidence does not establish current availability there.",
+    "Permit2 execution still depends on live nonce, deadline, allowance, balance, token behavior, contract-wallet code, and transaction ordering.",
+    "This evidence grants no production-shipment, fallback, or blind-signing authority."
+  ]
+}

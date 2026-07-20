@@ -18,7 +18,9 @@ use std::path::{Path, PathBuf};
 use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712, BindingError};
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, BundleError};
 use pqsigner_erc7730::display::primitives::{amount_is_exact_at_fraction_digits, write_addr_full};
-use pqsigner_erc7730::display::render::{render_erc7730_eip712_pages, render_erc7730_pages};
+use pqsigner_erc7730::display::render::{
+    render_erc7730_eip712_pages, render_erc7730_pages, render_erc7730_pages_with_signer_checked,
+};
 use pqsigner_erc7730::display::DISPLAY_COLS;
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir};
 use pqsigner_erc7730::render::params::{parse as parse_params, NFT_COLLECTION_TO_PATH};
@@ -37,10 +39,9 @@ const UPSTREAM_SHA: &str = "784c87c925e8438e7b4736b2af85a501f8d2a265";
 const FIXTURE_RECEIPT_DOMAIN: &[u8] = b"pqsigner/erc7730-excluded-fixture-corpus-v1";
 const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
-// Router02's two single-hop formats are enrolled only with exact authenticated
-// guards for their sentinel and partial-fill semantics. The upstream fixture
-// bytes remain test-only and outside the catalogue.
-const PROD_ROOT_HEX: &str = "712ca64bb1a14054e52a4b9ad8bb980315b63f43d08c51cb7ec7bf1960e96d0b";
+// The upstream fixture bytes remain test-only and outside the catalogue. This
+// root changes only when the separately curated production descriptors do.
+const PROD_ROOT_HEX: &str = "e767a5f977d35af3137515cfbacbcc740b27df61e996c753281bd6b0ed2be40a";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -926,6 +927,46 @@ fn upstream_fixture_targets_are_inventoried_at_format_granularity() {
         );
     }
 
+    for selector in [
+        [0xe8, 0xe3, 0x37, 0x00],
+        [0xf3, 0x05, 0xd7, 0x19],
+        [0x38, 0xed, 0x17, 0x39],
+        [0x88, 0x03, 0xdb, 0xee],
+        [0x18, 0xcb, 0xaf, 0xe5],
+        [0x7f, 0xf3, 0x6a, 0xb5],
+        [0xfb, 0x3b, 0xdb, 0x41],
+        [0x4a, 0x25, 0xd9, 0x4a],
+        [0x5c, 0x11, 0xd7, 0x95],
+        [0xb6, 0xf9, 0xde, 0x95],
+        [0x79, 0x1a, 0xc9, 0x47],
+    ] {
+        let quickswap_reviewed_route = FormatKey {
+            source: PathBuf::from("quickswap/calldata-QuickSwap.json"),
+            id: FormatId::Calldata(selector),
+        };
+        assert!(
+            !fixture_targets.contains(&quickswap_reviewed_route),
+            "QuickSwap has no pinned upstream positive for this selector; do not invent fixture coverage"
+        );
+        assert!(
+            accepted.contains(&quickswap_reviewed_route),
+            "the reviewed QuickSwap route must be admitted explicitly despite the honest fixture gap"
+        );
+    }
+
+    let flyingtulip_plural_targets = FormatKey {
+        source: PathBuf::from("flyingtulip/calldata-SessionManager.json"),
+        id: FormatId::Calldata([0x01, 0xe2, 0xae, 0x55]),
+    };
+    assert!(
+        !fixture_targets.contains(&flyingtulip_plural_targets),
+        "FlyingTulip setAllowedTargets has no pinned upstream positive; do not invent fixture coverage"
+    );
+    assert!(
+        accepted.contains(&flyingtulip_plural_targets),
+        "the source-reviewed plural-target route must remain admitted despite the honest fixture gap"
+    );
+
     let policy: Value = serde_json::from_slice(
         &std::fs::read(fixture_root().join("projection-policy.json"))
             .expect("read projection policy"),
@@ -949,6 +990,543 @@ fn upstream_fixture_targets_are_inventoried_at_format_granularity() {
             Some(u64::try_from(actual).expect("format coverage count fits u64")),
             "stale format-level fixture coverage receipt: {name}"
         );
+    }
+}
+
+#[test]
+fn quickswap_fixture_gap_still_has_merkle_verified_complete_route_conformance() {
+    const ROUTER: [u8; 20] = [
+        0xa5, 0xe0, 0x82, 0x9c, 0xac, 0xed, 0x8f, 0xfd, 0xd4, 0xde, 0x3c, 0x43, 0x69, 0x6c, 0x57,
+        0xf7, 0xd7, 0xa6, 0x78, 0xff,
+    ];
+    const TOKEN_IN: [u8; 20] = [0x11; 20];
+    const TOKEN_MID: [u8; 20] = [0xab; 20];
+    const TOKEN_OUT: [u8; 20] = [0x22; 20];
+    const EXACT_INPUT: &str = "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)";
+    const EXACT_OUTPUT: &str =
+        "swapTokensForExactTokens(uint256,uint256,address[],address,uint256)";
+    const EXACT_INPUT_FOT: &str = "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)";
+    const ADD_LIQUIDITY: &str =
+        "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)";
+    const ADD_LIQUIDITY_NATIVE: &str =
+        "addLiquidityETH(address,uint256,uint256,uint256,address,uint256)";
+
+    fn word(value: u64) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[24..].copy_from_slice(&value.to_be_bytes());
+        out
+    }
+    fn address_word(address: [u8; 20]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[12..].copy_from_slice(&address);
+        out
+    }
+    fn calldata(
+        signature: &str,
+        first: u64,
+        second: u64,
+        path: &[[u8; 20]],
+        beneficiary: [u8; 20],
+        deadline: u64,
+    ) -> Vec<u8> {
+        let selector = keccak256(signature.as_bytes());
+        let mut out = Vec::with_capacity(4 + (6 + path.len()) * 32);
+        out.extend_from_slice(&selector[..4]);
+        out.extend_from_slice(&word(first));
+        out.extend_from_slice(&word(second));
+        out.extend_from_slice(&word(5 * 32));
+        out.extend_from_slice(&address_word(beneficiary));
+        out.extend_from_slice(&word(deadline));
+        out.extend_from_slice(&word(path.len() as u64));
+        for address in path {
+            out.extend_from_slice(&address_word(*address));
+        }
+        out
+    }
+    fn eth_input_calldata(
+        signature: &str,
+        amount_out_min: u64,
+        path: &[[u8; 20]],
+        beneficiary: [u8; 20],
+        deadline: u64,
+    ) -> Vec<u8> {
+        let selector = keccak256(signature.as_bytes());
+        let mut out = Vec::with_capacity(4 + (5 + path.len()) * 32);
+        out.extend_from_slice(&selector[..4]);
+        out.extend_from_slice(&word(amount_out_min));
+        out.extend_from_slice(&word(4 * 32));
+        out.extend_from_slice(&address_word(beneficiary));
+        out.extend_from_slice(&word(deadline));
+        out.extend_from_slice(&word(path.len() as u64));
+        for address in path {
+            out.extend_from_slice(&address_word(*address));
+        }
+        out
+    }
+    fn static_calldata(signature: &str, words: &[[u8; 32]]) -> Vec<u8> {
+        let selector = keccak256(signature.as_bytes());
+        let mut out = Vec::with_capacity(4 + words.len() * 32);
+        out.extend_from_slice(&selector[..4]);
+        for word in words {
+            out.extend_from_slice(word);
+        }
+        out
+    }
+
+    let registry = build_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == 137
+                && entry.contract == ROUTER
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-QuickSwap.json")
+        })
+        .expect("accepted Polygon QuickSwap descriptor leaf");
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified =
+        verify_erc7730_bundle(&bundle, &registry.root).expect("Merkle-verify QuickSwap descriptor");
+    cross_check_contract(&verified.ir, 137, &ROUTER).expect("bind QuickSwap descriptor");
+
+    let path = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
+    let beneficiary = [0x33; 20];
+    let tx = Eip1559Tx {
+        chain_id: 137,
+        to: Some(ROUTER),
+        ..Eip1559Tx::default()
+    };
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+
+    // These two routes have no upstream positive fixture. Exercise their
+    // separately source-reviewed descriptor formats through the actual
+    // production Merkle leaf without pretending the fixture corpus covers
+    // them. Every signed calldata word, plus the payable route's outer value,
+    // must alter both the trusted pages and their transcript receipt.
+    let lp_recipient = [0x33; 20];
+    let deadline = 2_000_000_000u64;
+    let add_liquidity = static_calldata(
+        ADD_LIQUIDITY,
+        &[
+            address_word(TOKEN_IN),
+            address_word(TOKEN_OUT),
+            word(1_500_000),
+            word(2_500_000),
+            word(1_400_000),
+            word(2_300_000),
+            address_word(lp_recipient),
+            word(deadline),
+        ],
+    );
+    assert_eq!(&add_liquidity[..4], &[0xe8, 0xe3, 0x37, 0x00]);
+    let add_rendered = render_erc7730_pages_with_signer_checked(
+        &tx,
+        &add_liquidity,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("render Merkle-verified QuickSwap addLiquidity");
+    assert!(
+        add_rendered
+            .transcript_receipt
+            .range_matches(&add_rendered.pages, 0),
+        "addLiquidity transcript receipt must bind every page"
+    );
+    let rows = normalized_rows(&add_rendered.pages);
+    let mut cursor = 0usize;
+    for (label, amount, token) in [
+        ("Maximum to Add", "1500000", TOKEN_IN),
+        ("Conditional Min", "1400000", TOKEN_IN),
+        ("Maximum to Add", "2500000", TOKEN_OUT),
+        ("Conditional Min", "2300000", TOKEN_OUT),
+    ] {
+        consume_normalized_token(&rows, &mut cursor, label);
+        consume_normalized_token(&rows, &mut cursor, amount);
+        consume_full_address(&rows, &mut cursor, &token);
+    }
+    consume_normalized_token(&rows, &mut cursor, "LP Recipient");
+    consume_full_address(&rows, &mut cursor, &lp_recipient);
+    consume_normalized_token(&rows, &mut cursor, "Deadline");
+    consume_normalized_token(&rows, &mut cursor, "2033-05-18");
+    consume_normalized_token(&rows, &mut cursor, "03:33:20 UTC");
+
+    let mut changed_token_in = TOKEN_IN;
+    changed_token_in[19] ^= 1;
+    let mut changed_token_out = TOKEN_OUT;
+    changed_token_out[19] ^= 1;
+    let mut changed_recipient = lp_recipient;
+    changed_recipient[19] ^= 1;
+    for (word_index, replacement) in [
+        (0usize, address_word(changed_token_in)),
+        (1, address_word(changed_token_out)),
+        (2, word(1_600_000)),
+        (3, word(2_600_000)),
+        (4, word(1_300_000)),
+        (5, word(2_200_000)),
+        (6, address_word(changed_recipient)),
+        (7, word(deadline + 1)),
+    ] {
+        let mut mutated = add_liquidity.clone();
+        mutated[4 + word_index * 32..4 + (word_index + 1) * 32].copy_from_slice(&replacement);
+        let changed = render_erc7730_pages_with_signer_checked(
+            &tx, &mutated, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| {
+            panic!("render canonical addLiquidity word-{word_index} mutation: {error:?}")
+        });
+        assert_ne!(
+            add_rendered.pages.as_slice(),
+            changed.pages.as_slice(),
+            "addLiquidity word {word_index} mutation must change trusted pages"
+        );
+        assert!(
+            !add_rendered
+                .transcript_receipt
+                .exact_match(&changed.transcript_receipt),
+            "addLiquidity word {word_index} mutation must change transcript receipt"
+        );
+    }
+
+    let add_liquidity_native = static_calldata(
+        ADD_LIQUIDITY_NATIVE,
+        &[
+            address_word(TOKEN_IN),
+            word(1_500_000),
+            word(1_400_000),
+            word(1_000_000_000_000_000_000),
+            address_word(lp_recipient),
+            word(deadline),
+        ],
+    );
+    assert_eq!(&add_liquidity_native[..4], &[0xf3, 0x05, 0xd7, 0x19]);
+    let native_tx = Eip1559Tx {
+        chain_id: 137,
+        to: Some(ROUTER),
+        value: U256(word(2_000_000_000_000_000_000)),
+        ..Eip1559Tx::default()
+    };
+    let native_rendered = render_erc7730_pages_with_signer_checked(
+        &native_tx,
+        &add_liquidity_native,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("render Merkle-verified QuickSwap addLiquidityETH");
+    assert!(
+        native_rendered
+            .transcript_receipt
+            .range_matches(&native_rendered.pages, 0),
+        "addLiquidityETH transcript receipt must bind every page"
+    );
+    let rows = normalized_rows(&native_rendered.pages);
+    let mut cursor = 0usize;
+    consume_normalized_token(&rows, &mut cursor, "Maximum to Add");
+    consume_normalized_token(&rows, &mut cursor, "2 POL");
+    consume_normalized_token(&rows, &mut cursor, "Maximum to Add");
+    consume_normalized_token(&rows, &mut cursor, "1500000");
+    consume_full_address(&rows, &mut cursor, &TOKEN_IN);
+    consume_normalized_token(&rows, &mut cursor, "Conditional Min");
+    consume_normalized_token(&rows, &mut cursor, "1400000");
+    consume_full_address(&rows, &mut cursor, &TOKEN_IN);
+    consume_normalized_token(&rows, &mut cursor, "Conditional Min");
+    consume_normalized_token(&rows, &mut cursor, "1 POL");
+    consume_normalized_token(&rows, &mut cursor, "LP Recipient");
+    consume_full_address(&rows, &mut cursor, &lp_recipient);
+    consume_normalized_token(&rows, &mut cursor, "Deadline");
+    consume_normalized_token(&rows, &mut cursor, "2033-05-18");
+    consume_normalized_token(&rows, &mut cursor, "03:33:20 UTC");
+
+    for (word_index, replacement) in [
+        (0usize, address_word(changed_token_in)),
+        (1, word(1_600_000)),
+        (2, word(1_300_000)),
+        (3, word(2_000_000_000_000_000_000)),
+        (4, address_word(changed_recipient)),
+        (5, word(deadline + 1)),
+    ] {
+        let mut mutated = add_liquidity_native.clone();
+        mutated[4 + word_index * 32..4 + (word_index + 1) * 32].copy_from_slice(&replacement);
+        let changed = render_erc7730_pages_with_signer_checked(
+            &native_tx, &mutated, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| {
+            panic!("render canonical addLiquidityETH word-{word_index} mutation: {error:?}")
+        });
+        assert_ne!(
+            native_rendered.pages.as_slice(),
+            changed.pages.as_slice(),
+            "addLiquidityETH word {word_index} mutation must change trusted pages"
+        );
+        assert!(
+            !native_rendered
+                .transcript_receipt
+                .exact_match(&changed.transcript_receipt),
+            "addLiquidityETH word {word_index} mutation must change transcript receipt"
+        );
+    }
+
+    let changed_native_tx = Eip1559Tx {
+        chain_id: 137,
+        to: Some(ROUTER),
+        value: U256(word(3_000_000_000_000_000_000)),
+        ..Eip1559Tx::default()
+    };
+    let changed_native = render_erc7730_pages_with_signer_checked(
+        &changed_native_tx,
+        &add_liquidity_native,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("render canonical addLiquidityETH outer-value mutation");
+    assert_ne!(
+        native_rendered.pages.as_slice(),
+        changed_native.pages.as_slice(),
+        "outer native maximum mutation must change trusted pages"
+    );
+    assert!(
+        !native_rendered
+            .transcript_receipt
+            .exact_match(&changed_native.transcript_receipt),
+        "outer native maximum mutation must change transcript receipt"
+    );
+
+    for (signature, first, second, first_label, first_token, second_label, second_token) in [
+        (
+            EXACT_INPUT,
+            1_500_000,
+            1_000_000,
+            "Amount to Send",
+            TOKEN_IN,
+            "Minimum to Rece~",
+            TOKEN_OUT,
+        ),
+        (
+            EXACT_OUTPUT,
+            1_000_000,
+            1_500_000,
+            "Amount to Recei~",
+            TOKEN_OUT,
+            "Maximum to Send",
+            TOKEN_IN,
+        ),
+        (
+            EXACT_INPUT_FOT,
+            1_500_000,
+            1_000_000,
+            "Requested Input",
+            TOKEN_IN,
+            "Minimum to Rece~",
+            TOKEN_OUT,
+        ),
+    ] {
+        let call = calldata(signature, first, second, &path, beneficiary, 2_000_000_000);
+        assert_eq!(&call[..4], &keccak256(signature.as_bytes())[..4]);
+        let selector: [u8; 4] = call[..4].try_into().expect("selector width");
+        assert!(
+            verified
+                .ir
+                .find_format_by_selector(&selector)
+                .expect("QuickSwap format table parses")
+                .is_some(),
+            "admitted QuickSwap selector"
+        );
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &call, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render admitted QuickSwap {signature}: {error:?}"));
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "QuickSwap transcript receipt must bind every page"
+        );
+
+        let rows = normalized_rows(&rendered.pages);
+        let mut cursor = 0usize;
+        consume_normalized_token(&rows, &mut cursor, first_label);
+        consume_normalized_token(&rows, &mut cursor, &first.to_string());
+        consume_full_address(&rows, &mut cursor, &first_token);
+        consume_normalized_token(&rows, &mut cursor, second_label);
+        consume_normalized_token(&rows, &mut cursor, &second.to_string());
+        consume_full_address(&rows, &mut cursor, &second_token);
+        consume_normalized_token(&rows, &mut cursor, "Route");
+        consume_normalized_token(&rows, &mut cursor, "3 items");
+        for token in path {
+            consume_normalized_token(&rows, &mut cursor, "Route");
+            consume_full_address(&rows, &mut cursor, &token);
+        }
+        consume_normalized_token(&rows, &mut cursor, "Beneficiary");
+        consume_full_address(&rows, &mut cursor, &beneficiary);
+        consume_normalized_token(&rows, &mut cursor, "Deadline");
+        consume_normalized_token(&rows, &mut cursor, "2033-05-18");
+        consume_normalized_token(&rows, &mut cursor, "03:33:20 UTC");
+    }
+
+    const EXACT_TOKENS_FOR_NATIVE: &str =
+        "swapExactTokensForETH(uint256,uint256,address[],address,uint256)";
+    const EXACT_NATIVE_FOR_TOKENS: &str =
+        "swapExactETHForTokens(uint256,address[],address,uint256)";
+    const NATIVE_FOR_EXACT_TOKENS: &str =
+        "swapETHForExactTokens(uint256,address[],address,uint256)";
+    const TOKENS_FOR_EXACT_NATIVE: &str =
+        "swapTokensForExactETH(uint256,uint256,address[],address,uint256)";
+    const EXACT_NATIVE_FOR_TOKENS_FOT: &str =
+        "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)";
+    const EXACT_TOKENS_FOR_NATIVE_FOT: &str = "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)";
+    let one_native = 1_000_000_000_000_000_000u64;
+    let one_and_half_native = 1_500_000_000_000_000_000u64;
+    let render_native = |signature: &str, call: &[u8], native_value: u64| {
+        let tx = Eip1559Tx {
+            chain_id: 137,
+            to: Some(ROUTER),
+            value: U256(word(native_value)),
+            ..Eip1559Tx::default()
+        };
+        let selector: [u8; 4] = call[..4].try_into().expect("selector width");
+        assert!(
+            verified
+                .ir
+                .find_format_by_selector(&selector)
+                .expect("QuickSwap format table parses")
+                .is_some(),
+            "admitted native QuickSwap selector: {signature}"
+        );
+        render_erc7730_pages_with_signer_checked(&tx, call, &verified, None, &resolver, &signer)
+            .unwrap_or_else(|error| panic!("render admitted QuickSwap {signature}: {error:?}"))
+    };
+
+    let native_cases = [
+        (
+            EXACT_TOKENS_FOR_NATIVE,
+            calldata(
+                EXACT_TOKENS_FOR_NATIVE,
+                1_500_000,
+                one_native,
+                &path,
+                beneficiary,
+                2_000_000_000,
+            ),
+            0,
+            [
+                ("Amount to Send", "1500000", Some(TOKEN_IN)),
+                ("Minimum to Rece~", "1 POL", None),
+            ],
+        ),
+        (
+            EXACT_NATIVE_FOR_TOKENS,
+            eth_input_calldata(
+                EXACT_NATIVE_FOR_TOKENS,
+                1_000_000,
+                &path,
+                beneficiary,
+                2_000_000_000,
+            ),
+            one_and_half_native,
+            [
+                ("Amount to Send", "1.5 POL", None),
+                ("Minimum to Rece~", "1000000", Some(TOKEN_OUT)),
+            ],
+        ),
+        (
+            NATIVE_FOR_EXACT_TOKENS,
+            eth_input_calldata(
+                NATIVE_FOR_EXACT_TOKENS,
+                1_000_000,
+                &path,
+                beneficiary,
+                2_000_000_000,
+            ),
+            one_and_half_native,
+            [
+                ("Maximum to Send", "1.5 POL", None),
+                ("Gross Output", "1000000", Some(TOKEN_OUT)),
+            ],
+        ),
+        (
+            TOKENS_FOR_EXACT_NATIVE,
+            calldata(
+                TOKENS_FOR_EXACT_NATIVE,
+                one_native,
+                1_500_000,
+                &path,
+                beneficiary,
+                2_000_000_000,
+            ),
+            0,
+            [
+                ("Amount to Recei~", "1 POL", None),
+                ("Maximum to Send", "1500000", Some(TOKEN_IN)),
+            ],
+        ),
+        (
+            EXACT_NATIVE_FOR_TOKENS_FOT,
+            eth_input_calldata(
+                EXACT_NATIVE_FOR_TOKENS_FOT,
+                1_000_000,
+                &path,
+                beneficiary,
+                2_000_000_000,
+            ),
+            one_and_half_native,
+            [
+                ("Amount to Send", "1.5 POL", None),
+                ("Minimum to Rece~", "1000000", Some(TOKEN_OUT)),
+            ],
+        ),
+        (
+            EXACT_TOKENS_FOR_NATIVE_FOT,
+            calldata(
+                EXACT_TOKENS_FOR_NATIVE_FOT,
+                1_500_000,
+                one_native,
+                &path,
+                beneficiary,
+                2_000_000_000,
+            ),
+            0,
+            [
+                ("Requested Input", "1500000", Some(TOKEN_IN)),
+                ("Minimum to Rece~", "1 POL", None),
+            ],
+        ),
+    ];
+
+    for (signature, call, native_value, amount_rows) in native_cases {
+        assert_eq!(&call[..4], &keccak256(signature.as_bytes())[..4]);
+        let rendered = render_native(signature, &call, native_value);
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "QuickSwap native transcript receipt must bind every page"
+        );
+        let rows = normalized_rows(&rendered.pages);
+        let mut cursor = 0usize;
+        for (label, amount, token) in amount_rows {
+            consume_normalized_token(&rows, &mut cursor, label);
+            consume_normalized_token(&rows, &mut cursor, amount);
+            if let Some(token) = token {
+                consume_full_address(&rows, &mut cursor, &token);
+            }
+        }
+        consume_normalized_token(&rows, &mut cursor, "Route");
+        consume_normalized_token(&rows, &mut cursor, "3 items");
+        for token in path {
+            consume_normalized_token(&rows, &mut cursor, "Route");
+            consume_full_address(&rows, &mut cursor, &token);
+        }
+        consume_normalized_token(&rows, &mut cursor, "Beneficiary");
+        consume_full_address(&rows, &mut cursor, &beneficiary);
+        consume_normalized_token(&rows, &mut cursor, "Deadline");
+        consume_normalized_token(&rows, &mut cursor, "2033-05-18");
+        consume_normalized_token(&rows, &mut cursor, "03:33:20 UTC");
     }
 }
 
@@ -1213,10 +1791,10 @@ fn upstream_fixture_corpus_is_exact_test_only_and_honestly_inventoried() {
                 .to_path_buf()
         })
         .collect();
-    assert_eq!(accepted.len(), 231);
-    assert_eq!(accepted.intersection(&tested_descriptors).count(), 147);
+    assert_eq!(accepted.len(), 232);
+    assert_eq!(accepted.intersection(&tested_descriptors).count(), 148);
     assert_eq!(accepted.difference(&tested_descriptors).count(), 84);
-    assert_eq!(tested_descriptors.difference(&accepted).count(), 125);
+    assert_eq!(tested_descriptors.difference(&accepted).count(), 124);
 }
 
 fn synth_bundle(blob: &[u8], ir_bytes: &[u8], leaf_index: usize) -> Vec<u8> {

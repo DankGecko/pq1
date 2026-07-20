@@ -3570,7 +3570,7 @@ fn lido_wsteth_remaining_routes_source_abi_descriptor_and_ir_agree() {
 }
 
 #[test]
-fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
+fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_restoration() {
     let root = workspace_root();
     let evidence = uniswap_evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));
@@ -3658,11 +3658,56 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
         constraints["outer_native_value_policy"].as_str(),
         Some("require_zero")
     );
+    assert_eq!(
+        constraints["v2_path_policy"].as_str(),
+        Some("render_every_signed_address")
+    );
+    assert_eq!(constraints["v2_path_render_cap"].as_u64(), Some(8));
+    assert_eq!(
+        constraints["input_label_policy"].as_str(),
+        Some("neutral_no_signer_payment_claim")
+    );
+
+    let hazards = manifest["semantic_hazards"]
+        .as_array()
+        .expect("semantic hazard array")
+        .iter()
+        .map(|hazard| hazard.as_str().expect("semantic hazard text"))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    for needle in [
+        "every v2 path address",
+        "amountoutmin",
+        "amountinmax",
+        "pre-existing router native balance",
+        "router-held erc-20 payment requires the amountin=0 router-payer branch",
+        "do not claim that the signer necessarily pays",
+    ] {
+        assert!(hazards.contains(needle), "manifest lost hazard: {needle}");
+    }
+
+    let review_text = normalized_whitespace(
+        &fs::read_to_string(evidence.join("README.md")).expect("read Uniswap review text"),
+    );
+    for needle in [
+        "selectors `0x472b43f3` and `0x42712a67`",
+        "every V2 `path` element selects a hop",
+        "pre-existing router native currency can still fund a WETH9 input",
+        "Router-held ERC-20 payment requires the `amountIn == 0` router-payer branch",
+        "labels are therefore neutral (`Swap input` and `Max swap input`)",
+        "all four admitted routes plus both packed-route refusals remain in the exact known-call set",
+    ] {
+        assert!(
+            review_text.contains(needle),
+            "review text lost source-derived statement: {needle}"
+        );
+    }
 
     let route_specs = manifest["policy"]["constrained_routes"]
         .as_array()
         .expect("excluded route array");
-    assert_eq!(route_specs.len(), 2);
+    assert_eq!(route_specs.len(), 4);
     let mut expected_routes = BTreeMap::<String, [u8; 4]>::new();
     for route in route_specs {
         let signature = required_str(route, "canonical_signature");
@@ -3684,6 +3729,14 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
                 "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))"
                     .to_owned(),
                 [0x50, 0x23, 0xb4, 0xdf],
+            ),
+            (
+                "swapExactTokensForTokens(uint256,uint256,address[],address)".to_owned(),
+                [0x47, 0x2b, 0x43, 0xf3],
+            ),
+            (
+                "swapTokensForExactTokens(uint256,uint256,address[],address)".to_owned(),
+                [0x42, 0x71, 0x2a, 0x67],
             ),
         ])
     );
@@ -3738,7 +3791,7 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
             String::from_utf8(bytes).expect("Solidity source is UTF-8"),
         );
     }
-    assert_eq!(archived_sources.len(), 6);
+    assert_eq!(archived_sources.len(), 9);
 
     let concrete = normalized_whitespace(&archived_sources["source/SwapRouter02.sol"]);
     assert!(concrete.contains(
@@ -3772,6 +3825,75 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
             "params.amountIn = IERC20(params.tokenIn).balanceOf(address(this));",
             "payer: hasAlreadyPaid ? address(this) : msg.sender",
             "require(amountOut >= params.amountOutMinimum, 'Too little received');",
+        ],
+    );
+
+    let v2_interface = normalized_whitespace(&archived_sources["source/IV2SwapRouter.sol"]);
+    assert!(v2_interface
+        .contains("Setting `amountIn` to 0 will cause the contract to look up its own balance"));
+    assert!(v2_interface.contains(
+        "function swapExactTokensForTokens( uint256 amountIn, uint256 amountOutMin, address[] calldata path, address to ) external payable returns (uint256 amountOut);"
+    ));
+    assert!(v2_interface.contains(
+        "function swapTokensForExactTokens( uint256 amountOut, uint256 amountInMax, address[] calldata path, address to ) external payable returns (uint256 amountIn);"
+    ));
+
+    let v2_router = normalized_whitespace(&archived_sources["source/V2SwapRouter.sol"]);
+    assert!(v2_router.contains(
+        "abstract contract V2SwapRouter is IV2SwapRouter, ImmutableState, PeripheryPaymentsWithFeeExtended"
+    ));
+    assert_eq!(
+        v2_router
+            .matches("if (to == Constants.MSG_SENDER) to = msg.sender; else if (to == Constants.ADDRESS_THIS) to = address(this);")
+            .count(),
+        2,
+        "both V2 routes must bind the two recipient sentinels"
+    );
+    assert_fragments_in_order(
+        &v2_router,
+        &[
+            "function _swap(address[] memory path, address _to) private",
+            "for (uint256 i; i < path.length - 1; i++)",
+            "(address input, address output) = (path[i], path[i + 1]);",
+            "address to = i < path.length - 2 ? UniswapV2Library.pairFor(factoryV2, output, path[i + 2]) : _to;",
+            "pair.swap(amount0Out, amount1Out, to, new bytes(0));",
+        ],
+    );
+    assert_fragments_in_order(
+        &v2_router,
+        &[
+            "function swapExactTokensForTokens(",
+            "if (amountIn == Constants.CONTRACT_BALANCE)",
+            "amountIn = IERC20(path[0]).balanceOf(address(this));",
+            "hasAlreadyPaid ? address(this) : msg.sender",
+            "uint256 balanceBefore = IERC20(path[path.length - 1]).balanceOf(to);",
+            "_swap(path, to);",
+            "amountOut = IERC20(path[path.length - 1]).balanceOf(to).sub(balanceBefore);",
+            "require(amountOut >= amountOutMin, 'Too little received');",
+        ],
+    );
+    assert_fragments_in_order(
+        &v2_router,
+        &[
+            "function swapTokensForExactTokens(",
+            "amountIn = UniswapV2Library.getAmountsIn(factoryV2, amountOut, path)[0];",
+            "require(amountIn <= amountInMax, 'Too much requested');",
+            "pay(path[0], msg.sender, UniswapV2Library.pairFor(factoryV2, path[0], path[1]), amountIn);",
+            "_swap(path, to);",
+        ],
+    );
+
+    let v2_library = normalized_whitespace(&archived_sources["source/UniswapV2Library.sol"]);
+    assert_fragments_in_order(
+        &v2_library,
+        &[
+            "function getAmountsIn(",
+            "require(path.length >= 2);",
+            "amounts = new uint256[](path.length);",
+            "amounts[amounts.length - 1] = amountOut;",
+            "for (uint256 i = path.length - 1; i > 0; i--)",
+            "getReserves(factory, path[i - 1], path[i]);",
+            "amounts[i - 1] = getAmountIn(amounts[i], reserveIn, reserveOut);",
         ],
     );
 
@@ -3869,7 +3991,95 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
     }
     assert_eq!(
         abi_signatures,
-        expected_routes.keys().cloned().collect::<BTreeSet<_>>()
+        expected_routes
+            .keys()
+            .filter(|signature| signature.contains("Single"))
+            .cloned()
+            .collect::<BTreeSet<_>>()
+    );
+
+    assert_eq!(
+        abi_spec["official_artifact_sha256"].as_str(),
+        Some("210a7bf29f26de9f45d35dac1214943eca41c3a002007dd6a0e1aa870bf2d2d1")
+    );
+    assert_eq!(
+        abi_spec["v2_multihop_official_artifact_subset"].as_bool(),
+        Some(true)
+    );
+    let v2_abi_bytes = fs::read(evidence.join(required_str(abi_spec, "v2_multihop_archive_file")))
+        .expect("read V2 multi-hop ABI subset");
+    assert_eq!(
+        sha256_hex(&v2_abi_bytes),
+        required_str(abi_spec, "v2_multihop_archive_file_sha256")
+    );
+    let v2_abi: Value =
+        serde_json::from_slice(&v2_abi_bytes).expect("parse V2 multi-hop ABI subset");
+    let v2_entries = v2_abi.as_array().expect("V2 multi-hop ABI array");
+    assert_eq!(v2_entries.len(), 2);
+    let mut v2_abi_signatures = BTreeSet::new();
+    for entry in v2_entries {
+        assert_eq!(entry["type"].as_str(), Some("function"));
+        assert_eq!(entry["stateMutability"].as_str(), Some("payable"));
+        let name = entry["name"].as_str().expect("V2 function name");
+        let expected_inputs: &[(&str, &str)] = match name {
+            "swapExactTokensForTokens" => &[
+                ("amountIn", "uint256"),
+                ("amountOutMin", "uint256"),
+                ("path", "address[]"),
+                ("to", "address"),
+            ],
+            "swapTokensForExactTokens" => &[
+                ("amountOut", "uint256"),
+                ("amountInMax", "uint256"),
+                ("path", "address[]"),
+                ("to", "address"),
+            ],
+            unexpected => panic!("unexpected V2 ABI route {unexpected}"),
+        };
+        let actual_inputs: Vec<_> = entry["inputs"]
+            .as_array()
+            .expect("V2 ABI inputs")
+            .iter()
+            .map(|input| {
+                (
+                    input["name"].as_str().expect("V2 input name"),
+                    input["type"].as_str().expect("V2 input type"),
+                )
+            })
+            .collect();
+        assert_eq!(actual_inputs, expected_inputs);
+        let signature = format!(
+            "{name}({})",
+            actual_inputs
+                .iter()
+                .map(|(_, ty)| *ty)
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        assert_eq!(
+            &keccak256(signature.as_bytes())[..4],
+            expected_routes[&signature].as_slice(),
+            "V2 ABI selector must derive from the exact four-argument tuple"
+        );
+        v2_abi_signatures.insert(signature);
+
+        let outputs = entry["outputs"].as_array().expect("V2 ABI outputs");
+        assert_eq!(outputs.len(), 1);
+        let expected_output = match name {
+            "swapExactTokensForTokens" => ("amountOut", "uint256"),
+            "swapTokensForExactTokens" => ("amountIn", "uint256"),
+            _ => unreachable!("ABI names checked above"),
+        };
+        assert_eq!(outputs[0]["name"].as_str(), Some(expected_output.0));
+        assert_eq!(outputs[0]["type"].as_str(), Some(expected_output.1));
+    }
+    assert_eq!(
+        v2_abi_signatures,
+        expected_routes
+            .keys()
+            .filter(|signature| signature.starts_with("swap"))
+            .cloned()
+            .collect::<BTreeSet<_>>()
     );
 
     let descriptor_spec = &manifest["descriptor"];
@@ -3897,7 +4107,10 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
             })
     }));
     let sentinel = required_str(descriptor_spec, "sender_address_sentinel");
-    for route in route_specs {
+    for route in route_specs
+        .iter()
+        .filter(|route| required_str(route, "canonical_signature").contains("Single"))
+    {
         let format_key = required_str(route, "descriptor_format_key");
         let fields = descriptor["display"]["formats"][format_key]["fields"]
             .as_array()
@@ -3921,6 +4134,94 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
         assert_eq!(value_fields[0]["label"].as_str(), Some("Native value"));
         assert_eq!(value_fields[0]["format"].as_str(), Some("amount"));
         assert_eq!(value_fields[0]["visible"].as_str(), Some("always"));
+    }
+
+    let v2_display_shapes: [(&str, [(&str, &str, &str); 5]); 2] = [
+        (
+            "swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to)",
+            [
+                ("@.value", "Native value", "amount"),
+                ("amountIn", "Swap input", "tokenAmount"),
+                ("amountOutMin", "Minimum receive", "tokenAmount"),
+                ("path.[]", "Route", "addressName"),
+                ("to", "Beneficiary", "addressName"),
+            ],
+        ),
+        (
+            "swapTokensForExactTokens(uint256 amountOut, uint256 amountInMax, address[] path, address to)",
+            [
+                ("@.value", "Native value", "amount"),
+                ("amountOut", "Amount to receive", "tokenAmount"),
+                ("amountInMax", "Max swap input", "tokenAmount"),
+                ("path.[]", "Route", "addressName"),
+                ("to", "Beneficiary", "addressName"),
+            ],
+        ),
+    ];
+    for (format_key, expected_shape) in v2_display_shapes {
+        let fields = descriptor["display"]["formats"][format_key]["fields"]
+            .as_array()
+            .unwrap_or_else(|| panic!("V2 multi-hop fields missing for {format_key}"));
+        let actual_shape: Vec<_> = fields
+            .iter()
+            .map(|field| {
+                (
+                    required_str(field, "path"),
+                    required_str(field, "label"),
+                    required_str(field, "format"),
+                )
+            })
+            .collect();
+        assert_eq!(actual_shape, expected_shape);
+        assert!(
+            fields
+                .iter()
+                .all(|field| field["visible"].as_str() == Some("always")),
+            "every V2 signed effect must be unconditionally visible"
+        );
+
+        let route_field = fields
+            .iter()
+            .find(|field| field["path"].as_str() == Some("path.[]"))
+            .expect("complete V2 route field");
+        let route_types = route_field["params"]["types"]
+            .as_array()
+            .expect("route address types");
+        assert_eq!(route_types.len(), 1);
+        assert_eq!(route_types[0].as_str(), Some("token"));
+
+        let recipient = fields
+            .iter()
+            .find(|field| field["path"].as_str() == Some("to"))
+            .expect("V2 beneficiary field");
+        let sender_addresses = recipient["params"]["senderAddress"]
+            .as_array()
+            .expect("V2 senderAddress annotation");
+        assert_eq!(sender_addresses.len(), 1);
+        assert_eq!(sender_addresses[0].as_str(), Some(sentinel));
+    }
+
+    let token_path_expectations = [
+        (
+            "swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to)",
+            [("amountIn", "path.[0]"), ("amountOutMin", "path.[-1]")],
+        ),
+        (
+            "swapTokensForExactTokens(uint256 amountOut, uint256 amountInMax, address[] path, address to)",
+            [("amountOut", "path.[-1]"), ("amountInMax", "path.[0]")],
+        ),
+    ];
+    for (format_key, expectations) in token_path_expectations {
+        let fields = descriptor["display"]["formats"][format_key]["fields"]
+            .as_array()
+            .expect("V2 multi-hop fields");
+        for (path, token_path) in expectations {
+            let field = fields
+                .iter()
+                .find(|field| field["path"].as_str() == Some(path))
+                .unwrap_or_else(|| panic!("missing V2 amount field {path}"));
+            assert_eq!(field["params"]["tokenPath"].as_str(), Some(token_path));
+        }
     }
 
     let registry_root = root.join("secure/data/erc7730-registry");
@@ -3947,19 +4248,66 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
         "one exact Router02 deployment leaf"
     );
     let ir = Erc7730Ir::parse(&router_entries[0].ir_bytes).expect("parse restored Router02 IR");
-    assert_eq!(ir.format_count(), Ok(2));
-    for (signature, selector) in expected_routes {
+    assert_eq!(ir.format_count(), Ok(4));
+    for (signature, selector) in &expected_routes {
         assert!(
-            ir.find_format_by_selector(&selector)
+            ir.find_format_by_selector(selector)
                 .expect("Router02 format table parses")
                 .is_some(),
             "{signature} must be present under constrained restoration"
         );
         assert!(
-            registry.known_calls.contains(&(1, contract, selector)),
+            registry.known_calls.contains(&(1, contract, *selector)),
             "{signature} must remain an exact known-call tuple"
         );
     }
+
+    let refused_specs = manifest["policy"]["continued_hard_refusals"]
+        .as_array()
+        .expect("continued hard-refusal array");
+    assert_eq!(refused_specs.len(), 2);
+    let mut expected_known_selectors = expected_routes.values().copied().collect::<BTreeSet<_>>();
+    for refusal in refused_specs {
+        let signature = required_str(refusal, "canonical_signature");
+        let selector: [u8; 4] = decode_hex_text(required_str(refusal, "selector"))
+            .try_into()
+            .expect("refused selector width");
+        assert_eq!(&keccak256(signature.as_bytes())[..4], selector.as_slice());
+        assert!(
+            ir.find_format_by_selector(&selector)
+                .expect("Router02 format table parses")
+                .is_none(),
+            "packed V3 route must remain refused: {signature}"
+        );
+        assert!(
+            registry.known_calls.contains(&(1, contract, selector)),
+            "packed V3 refusal escaped exact omission protection: {signature}"
+        );
+        assert!(expected_known_selectors.insert(selector));
+    }
+    assert_eq!(
+        expected_known_selectors,
+        BTreeSet::from([
+            [0x04, 0xe4, 0x5a, 0xaf],
+            [0x09, 0xb8, 0x13, 0x46],
+            [0x42, 0x71, 0x2a, 0x67],
+            [0x47, 0x2b, 0x43, 0xf3],
+            [0x50, 0x23, 0xb4, 0xdf],
+            [0xb8, 0x58, 0x18, 0x3f],
+        ]),
+        "manifest must name the exact Router02 selector inventory"
+    );
+    let actual_known_selectors = registry
+        .known_calls
+        .iter()
+        .filter_map(|(chain_id, address, selector)| {
+            (*chain_id == 1 && *address == contract).then_some(*selector)
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        actual_known_selectors, expected_known_selectors,
+        "Router02 exact known-call set changed independently of the reviewed six-route inventory"
+    );
 }
 
 #[test]
@@ -4809,7 +5157,7 @@ fn allowance_sources_fixed_deployments_descriptors_and_ir_agree() {
 }
 
 #[test]
-fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
+fn quickswap_router02_evidence_binds_add_remove_liquidity_and_v2_multihop_admission() {
     let root = workspace_root();
     let evidence = quickswap_evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));
@@ -4819,6 +5167,224 @@ fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
         manifest["policy"]["outcome"].as_str(),
         Some("constrained_admission")
     );
+    let mechanism = required_str(&manifest["policy"], "mechanism");
+    for needle in [
+        "two non-permit add-liquidity routes",
+        "desired token amounts and addLiquidityETH's signed outer value are displayed as Maximum to Add",
+        "Each minimum is displayed as Conditional Min",
+        "only the adjusted side is checked in a non-empty pair",
+        "neither minimum is checked in an empty pair",
+        "signed to address is the LP Recipient",
+        "pair identity and minted LP output are not signed or promised",
+        "six standard swaps, and all three fee-on-transfer swaps",
+        "amountIn is the signed nominal transfer request",
+        "token-output minima are recipient balance-delta minima",
+        "router's whole WETH balance after the swap",
+        "shows the signed outer value as Maximum to Send",
+        "the exact signed amountOut as Gross Output",
+        "refunds any excess outer value to msg.sender",
+        "Permit-bearing removals remain exact known-call hard refusals",
+    ] {
+        assert!(
+            mechanism.contains(needle),
+            "QuickSwap policy mechanism lost constrained-admission boundary: {needle}"
+        );
+    }
+    let constraints = &manifest["policy"]["constraints"];
+    assert_eq!(
+        constraints["swap_path_policy"].as_str(),
+        Some("render_every_signed_address")
+    );
+    assert_eq!(constraints["swap_path_render_cap"].as_u64(), Some(8));
+    assert_eq!(
+        constraints["swap_source_minimum_success_path_length"].as_u64(),
+        Some(2)
+    );
+    assert_eq!(
+        constraints["generic_renderer_minimum_path_length_predicate"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        constraints["empty_path_policy"].as_str(),
+        Some("refuse_during_endpoint_resolution")
+    );
+    assert_eq!(
+        constraints["one_address_path_policy"].as_str(),
+        Some("render_exactly_but_source_execution_reverts")
+    );
+    assert_eq!(
+        constraints["beneficiary_policy"].as_str(),
+        Some("literal_signed_address_no_sentinel")
+    );
+    assert_eq!(
+        constraints["add_liquidity_mutability"].as_str(),
+        Some("addLiquidity_nonpayable_addLiquidityETH_payable")
+    );
+    assert_eq!(
+        constraints["add_liquidity_desired_amount_policy"].as_str(),
+        Some(
+            "signed_desired_token_amounts_and_outer_native_value_are_inclusive_maxima_actual_deposits_are_live_reserve_derived"
+        )
+    );
+    assert_eq!(
+        constraints["add_liquidity_minimum_policy"].as_str(),
+        Some(
+            "only_the_live_reserve_adjusted_side_minimum_is_checked_in_a_nonempty_pair_neither_minimum_is_checked_in_an_empty_pair"
+        )
+    );
+    assert_eq!(
+        constraints["add_liquidity_recipient_policy"].as_str(),
+        Some("literal_signed_to_address_receives_live_state_derived_lp_output")
+    );
+    assert_eq!(
+        constraints["add_liquidity_native_refund_policy"].as_str(),
+        Some("excess_signed_outer_value_is_refunded_to_msg_sender_not_lp_recipient")
+    );
+    assert_eq!(
+        constraints["add_liquidity_output_policy"].as_str(),
+        Some(
+            "pair_identity_actual_deposits_and_minted_lp_amount_are_not_signed_and_remain_live_state_derived"
+        )
+    );
+    assert_eq!(
+        constraints["swap_mutability"].as_str(),
+        Some(
+            "swapExactETHForTokens_swapETHForExactTokens_and_swapExactETHForTokensSupportingFeeOnTransferTokens_payable_all_other_admitted_swaps_nonpayable"
+        )
+    );
+    assert_eq!(
+        constraints["fee_on_transfer_input_policy"].as_str(),
+        Some("signed_amount_in_is_nominal_transfer_request_actual_pair_receipt_can_be_lower")
+    );
+    assert_eq!(
+        constraints["fee_on_transfer_token_output_minimum_policy"].as_str(),
+        Some("signed_amount_out_min_is_checked_against_literal_beneficiary_balance_delta")
+    );
+    assert_eq!(
+        constraints["fee_on_transfer_native_output_policy"].as_str(),
+        Some("signed_amount_out_min_is_checked_against_router_whole_weth_balance_then_all_is_unwrapped_and_sent_including_preexisting_dust")
+    );
+    assert_eq!(
+        constraints["refundable_native_input_policy"].as_str(),
+        Some(
+            "signed_outer_value_is_maximum_live_required_input_is_wrapped_excess_is_refunded_to_msg_sender"
+        )
+    );
+    assert_eq!(
+        constraints["exact_output_token_display_policy"].as_str(),
+        Some(
+            "signed_amount_out_is_exact_gross_pair_transfer_not_guaranteed_net_beneficiary_receipt"
+        )
+    );
+    assert_eq!(
+        constraints["source_wrapped_native_endpoint"].as_str(),
+        Some("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270")
+    );
+    for route in [
+        "swapExactETHForTokens",
+        "swapETHForExactTokens",
+        "swapExactETHForTokensSupportingFeeOnTransferTokens",
+    ] {
+        assert_eq!(
+            constraints["source_native_endpoint_policy"][route].as_str(),
+            Some("path[0]")
+        );
+    }
+    for route in [
+        "swapExactTokensForETH",
+        "swapTokensForExactETH",
+        "swapExactTokensForETHSupportingFeeOnTransferTokens",
+    ] {
+        assert_eq!(
+            constraints["source_native_endpoint_policy"][route].as_str(),
+            Some("path[-1]")
+        );
+    }
+    assert_eq!(
+        constraints["generic_renderer_wrapped_endpoint_equality_predicate"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        constraints["invalid_wrapped_endpoint_policy"].as_str(),
+        Some("render_exactly_but_source_execution_reverts")
+    );
+
+    let hazards = manifest["semantic_hazards"]
+        .as_array()
+        .expect("QuickSwap semantic hazard array")
+        .iter()
+        .map(|hazard| hazard.as_str().expect("QuickSwap semantic hazard text"))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    for needle in [
+        "desired token amounts",
+        "inclusive maxima",
+        "checks only the minimum for the reserve-ratio-adjusted side",
+        "empty pair it checks neither signed minimum",
+        "lp recipient",
+        "pair identity",
+        "minted lp output",
+        "refunds excess signed outer value to msg.sender",
+        "every swap path address",
+        "at least two path addresses",
+        "one-address path",
+        "live reserves",
+        "less net value",
+        "literal signed to address",
+        "execution-block timestamp",
+        "wrapped-native address",
+        "invalid endpoint",
+        "exact signed outer native value",
+        "signed outer value as a maximum",
+        "refunds the excess to msg.sender",
+        "exact signed amountout as gross output",
+        "does not promise the beneficiary's net receipt",
+        "literal beneficiary's token balance delta",
+        "nominal amount requested from transferfrom",
+        "whole weth balance after the swap",
+        "pre-existing router weth dust",
+    ] {
+        assert!(hazards.contains(needle), "manifest lost hazard: {needle}");
+    }
+
+    let review_text = normalized_whitespace(
+        &fs::read_to_string(evidence.join("README.md")).expect("read QuickSwap review text"),
+    );
+    for needle in [
+        "add-liquidity selectors are `0xe8e33700` and `0xf305d719`",
+        "both actual deposits equal their signed desired amounts and neither signed minimum is checked",
+        "Only that adjusted side's signed minimum is checked",
+        "desired token amounts are therefore inclusive maxima",
+        "refunds any excess outer value to `msg.sender`",
+        "literal signed `to` address is the LP recipient",
+        "labels both desired token amounts and the payable outer native value `Maximum to Add`",
+        "labels each minimum `Conditional Min`",
+        "does not invent or display an exact LP-token identity or output amount",
+        "selectors `0x38ed1739` and `0x8803dbee`",
+        "native-asset selectors are `0x7ff36ab5`, `0xfb3bdb41`, `0x18cbafe5`, and `0x4a25d94a`",
+        "every `path` element selects a token",
+        "requires `path[0] == WETH`",
+        "requires the last path element to be `WETH`",
+        "no special `address(1)` or `address(2)` recipient sentinels",
+        "a canonical one-address path can render exactly",
+        "A wrong first or last endpoint therefore renders exactly and then reverts",
+        "fee-on-transfer or otherwise non-standard output token can deliver less net value",
+        "Clear signing describes the signed request; it does not promise that live execution will succeed",
+        "labels the signed outer value `Maximum to Send` and the signed token amount `Gross Output`",
+        "refunds any excess outer value to `msg.sender`",
+        "signed `amountOut` as the gross final pair transfer",
+        "fee-on-transfer selectors are `0x5c11d795`, `0xb6f9de95`, and `0x791ac947`",
+        "signed `amountIn` is labelled `Requested Input`",
+        "beneficiary's output-token balance before and after the swap",
+        "router's whole WETH balance after the swap",
+        "pre-existing router WETH dust",
+    ] {
+        assert!(
+            review_text.contains(needle),
+            "review text lost source-derived statement: {needle}"
+        );
+    }
 
     let deployment = &manifest["deployment"];
     assert_eq!(deployment["chain_id"].as_u64(), Some(137));
@@ -4831,11 +5397,12 @@ fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
     let contract: [u8; 20] = decode_hex_text(required_str(deployment, "address"))
         .try_into()
         .expect("QuickSwap address width");
+    let wrapped_native = required_str(constraints, "source_wrapped_native_endpoint");
 
     let admitted_specs = manifest["policy"]["admitted_routes"]
         .as_array()
         .expect("admitted route array");
-    assert_eq!(admitted_specs.len(), 3);
+    assert_eq!(admitted_specs.len(), 14);
     let mut admitted = BTreeMap::<String, [u8; 4]>::new();
     for route in admitted_specs {
         let signature = required_str(route, "canonical_signature");
@@ -4848,6 +5415,16 @@ fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
     assert_eq!(
         admitted,
         BTreeMap::from([
+            (
+                "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)"
+                    .to_owned(),
+                [0xe8, 0xe3, 0x37, 0x00],
+            ),
+            (
+                "addLiquidityETH(address,uint256,uint256,uint256,address,uint256)"
+                    .to_owned(),
+                [0xf3, 0x05, 0xd7, 0x19],
+            ),
             (
                 "removeLiquidity(address,address,uint256,uint256,uint256,address,uint256)"
                     .to_owned(),
@@ -4862,6 +5439,49 @@ fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
                 "removeLiquidityETHSupportingFeeOnTransferTokens(address,uint256,uint256,uint256,address,uint256)"
                     .to_owned(),
                 [0xaf, 0x29, 0x79, 0xeb],
+            ),
+            (
+                "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)"
+                    .to_owned(),
+                [0x38, 0xed, 0x17, 0x39],
+            ),
+            (
+                "swapTokensForExactTokens(uint256,uint256,address[],address,uint256)"
+                    .to_owned(),
+                [0x88, 0x03, 0xdb, 0xee],
+            ),
+            (
+                "swapExactETHForTokens(uint256,address[],address,uint256)".to_owned(),
+                [0x7f, 0xf3, 0x6a, 0xb5],
+            ),
+            (
+                "swapETHForExactTokens(uint256,address[],address,uint256)".to_owned(),
+                [0xfb, 0x3b, 0xdb, 0x41],
+            ),
+            (
+                "swapExactTokensForETH(uint256,uint256,address[],address,uint256)"
+                    .to_owned(),
+                [0x18, 0xcb, 0xaf, 0xe5],
+            ),
+            (
+                "swapTokensForExactETH(uint256,uint256,address[],address,uint256)"
+                    .to_owned(),
+                [0x4a, 0x25, 0xd9, 0x4a],
+            ),
+            (
+                "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)"
+                    .to_owned(),
+                [0x5c, 0x11, 0xd7, 0x95],
+            ),
+            (
+                "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)"
+                    .to_owned(),
+                [0xb6, 0xf9, 0xde, 0x95],
+            ),
+            (
+                "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)"
+                    .to_owned(),
+                [0x79, 0x1a, 0xc9, 0x47],
             ),
         ])
     );
@@ -4932,7 +5552,7 @@ fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
         );
         assert_eq!(
             decode_abi_word_address(required_str(&response["calls"], "WETH")),
-            "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"
+            wrapped_native.to_ascii_lowercase()
         );
         assert_eq!(
             response["deployment_transaction"]["hash"],
@@ -4975,6 +5595,8 @@ fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
     );
     assert_eq!(source_spec["evm_version"].as_str(), Some("istanbul"));
     assert_eq!(source_spec["optimizer_runs"].as_u64(), Some(999_999));
+    assert!(required_str(source_spec, "constructor_wrapped_native")
+        .eq_ignore_ascii_case(wrapped_native));
     let mut archived = BTreeMap::<String, String>::new();
     for file in source_spec["files"].as_array().expect("source file array") {
         let archive_file = required_str(file, "archive_file");
@@ -5009,6 +5631,57 @@ fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
     );
 
     let router = &archived["source/UniswapV2Router02.sol"];
+    let normalized_router = normalized_whitespace(router);
+    assert!(normalized_router.contains(
+        "modifier ensure(uint deadline) { require(deadline >= block.timestamp, 'UniswapV2Router: EXPIRED'); _; }"
+    ));
+    let add_internal = normalized_solidity_function(router, "function _addLiquidity(");
+    assert_fragments_in_order(
+        &add_internal,
+        &[
+            "getPair(tokenA, tokenB) == address(0)",
+            "createPair(tokenA, tokenB)",
+            "getReserves(factory, tokenA, tokenB)",
+            "if (reserveA == 0 && reserveB == 0)",
+            "(amountA, amountB) = (amountADesired, amountBDesired)",
+            "amountBOptimal = UniswapV2Library.quote(amountADesired, reserveA, reserveB)",
+            "amountBOptimal <= amountBDesired",
+            "amountBOptimal >= amountBMin",
+            "(amountA, amountB) = (amountADesired, amountBOptimal)",
+            "amountAOptimal = UniswapV2Library.quote(amountBDesired, reserveB, reserveA)",
+            "assert(amountAOptimal <= amountADesired)",
+            "amountAOptimal >= amountAMin",
+            "(amountA, amountB) = (amountAOptimal, amountBDesired)",
+        ],
+    );
+    let add = normalized_solidity_function(router, "function addLiquidity(");
+    assert_fragments_in_order(
+        &add,
+        &[
+            "external virtual override ensure(deadline)",
+            "_addLiquidity(tokenA, tokenB, amountADesired, amountBDesired, amountAMin, amountBMin)",
+            "UniswapV2Library.pairFor(factory, tokenA, tokenB)",
+            "safeTransferFrom(tokenA, msg.sender, pair, amountA)",
+            "safeTransferFrom(tokenB, msg.sender, pair, amountB)",
+            "IUniswapV2Pair(pair).mint(to)",
+        ],
+    );
+    assert!(!add.contains("payable"));
+    let add_native = normalized_solidity_function(router, "function addLiquidityETH(");
+    assert_fragments_in_order(
+        &add_native,
+        &[
+            "external virtual override payable ensure(deadline)",
+            "_addLiquidity( token, WETH, amountTokenDesired, msg.value, amountTokenMin, amountETHMin )",
+            "UniswapV2Library.pairFor(factory, token, WETH)",
+            "safeTransferFrom(token, msg.sender, pair, amountToken)",
+            "IWETH(WETH).deposit{value: amountETH}()",
+            "IWETH(WETH).transfer(pair, amountETH)",
+            "IUniswapV2Pair(pair).mint(to)",
+            "if (msg.value > amountETH) TransferHelper.safeTransferETH(msg.sender, msg.value - amountETH)",
+        ],
+    );
+    assert!(add_native.contains("payable"));
     let remove = normalized_solidity_function(router, "function removeLiquidity(");
     assert_fragments_in_order(
         &remove,
@@ -5047,6 +5720,196 @@ fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
             "safeTransferETH(to, amountETH)",
         ],
     );
+    let swap_loop = normalized_solidity_function(router, "function _swap(");
+    assert_fragments_in_order(
+        &swap_loop,
+        &[
+            "for (uint i; i < path.length - 1; i++)",
+            "(address input, address output) = (path[i], path[i + 1])",
+            "uint amountOut = amounts[i + 1]",
+            "address to = i < path.length - 2 ? UniswapV2Library.pairFor(factory, output, path[i + 2]) : _to",
+            "UniswapV2Library.pairFor(factory, input, output)",
+            "swap( amount0Out, amount1Out, to, new bytes(0) )",
+        ],
+    );
+    let swap_exact = normalized_solidity_function(router, "function swapExactTokensForTokens(");
+    assert_fragments_in_order(
+        &swap_exact,
+        &[
+            "address[] calldata path",
+            "address to",
+            "uint deadline",
+            "external virtual override ensure(deadline)",
+            "amounts = UniswapV2Library.getAmountsOut(factory, amountIn, path)",
+            "amounts[amounts.length - 1] >= amountOutMin",
+            "path[0], msg.sender, UniswapV2Library.pairFor(factory, path[0], path[1]), amounts[0]",
+            "_swap(amounts, path, to)",
+        ],
+    );
+    assert!(!swap_exact.contains("payable"));
+    let swap_for_exact = normalized_solidity_function(router, "function swapTokensForExactTokens(");
+    assert_fragments_in_order(
+        &swap_for_exact,
+        &[
+            "address[] calldata path",
+            "address to",
+            "uint deadline",
+            "external virtual override ensure(deadline)",
+            "amounts = UniswapV2Library.getAmountsIn(factory, amountOut, path)",
+            "amounts[0] <= amountInMax",
+            "path[0], msg.sender, UniswapV2Library.pairFor(factory, path[0], path[1]), amounts[0]",
+            "_swap(amounts, path, to)",
+        ],
+    );
+    assert!(!swap_for_exact.contains("payable"));
+    let swap_exact_native_input =
+        normalized_solidity_function(router, "function swapExactETHForTokens(");
+    assert_fragments_in_order(
+        &swap_exact_native_input,
+        &[
+            "address[] calldata path",
+            "address to",
+            "uint deadline",
+            "external virtual override payable ensure(deadline)",
+            "require(path[0] == WETH, 'UniswapV2Router: INVALID_PATH')",
+            "amounts = UniswapV2Library.getAmountsOut(factory, msg.value, path)",
+            "amounts[amounts.length - 1] >= amountOutMin",
+            "IWETH(WETH).deposit{value: amounts[0]}()",
+            "IWETH(WETH).transfer(UniswapV2Library.pairFor(factory, path[0], path[1]), amounts[0])",
+            "_swap(amounts, path, to)",
+        ],
+    );
+    assert!(swap_exact_native_input.contains("payable"));
+    let swap_exact_token_input =
+        normalized_solidity_function(router, "function swapExactTokensForETH(");
+    assert_fragments_in_order(
+        &swap_exact_token_input,
+        &[
+            "address[] calldata path",
+            "address to",
+            "uint deadline",
+            "external virtual override ensure(deadline)",
+            "require(path[path.length - 1] == WETH, 'UniswapV2Router: INVALID_PATH')",
+            "amounts = UniswapV2Library.getAmountsOut(factory, amountIn, path)",
+            "amounts[amounts.length - 1] >= amountOutMin",
+            "path[0], msg.sender, UniswapV2Library.pairFor(factory, path[0], path[1]), amounts[0]",
+            "_swap(amounts, path, address(this))",
+            "IWETH(WETH).withdraw(amounts[amounts.length - 1])",
+            "TransferHelper.safeTransferETH(to, amounts[amounts.length - 1])",
+        ],
+    );
+    assert!(!swap_exact_token_input.contains("payable"));
+    let swap_exact_native_output =
+        normalized_solidity_function(router, "function swapTokensForExactETH(");
+    assert_fragments_in_order(
+        &swap_exact_native_output,
+        &[
+            "address[] calldata path",
+            "address to",
+            "uint deadline",
+            "external virtual override ensure(deadline)",
+            "require(path[path.length - 1] == WETH, 'UniswapV2Router: INVALID_PATH')",
+            "amounts = UniswapV2Library.getAmountsIn(factory, amountOut, path)",
+            "amounts[0] <= amountInMax",
+            "path[0], msg.sender, UniswapV2Library.pairFor(factory, path[0], path[1]), amounts[0]",
+            "_swap(amounts, path, address(this))",
+            "IWETH(WETH).withdraw(amounts[amounts.length - 1])",
+            "TransferHelper.safeTransferETH(to, amounts[amounts.length - 1])",
+        ],
+    );
+    assert!(!swap_exact_native_output.contains("payable"));
+    let swap_refundable_native_input =
+        normalized_solidity_function(router, "function swapETHForExactTokens(");
+    assert_fragments_in_order(
+        &swap_refundable_native_input,
+        &[
+            "address[] calldata path",
+            "address to",
+            "uint deadline",
+            "external virtual override payable ensure(deadline)",
+            "require(path[0] == WETH, 'UniswapV2Router: INVALID_PATH')",
+            "amounts = UniswapV2Library.getAmountsIn(factory, amountOut, path)",
+            "amounts[0] <= msg.value",
+            "IWETH(WETH).deposit{value: amounts[0]}()",
+            "IWETH(WETH).transfer(UniswapV2Library.pairFor(factory, path[0], path[1]), amounts[0])",
+            "_swap(amounts, path, to)",
+            "if (msg.value > amounts[0]) TransferHelper.safeTransferETH(msg.sender, msg.value - amounts[0])",
+        ],
+    );
+    assert!(swap_refundable_native_input.contains("payable"));
+    let supporting_swap_loop =
+        normalized_solidity_function(router, "function _swapSupportingFeeOnTransferTokens(");
+    assert_fragments_in_order(
+        &supporting_swap_loop,
+        &[
+            "for (uint i; i < path.length - 1; i++)",
+            "(address input, address output) = (path[i], path[i + 1])",
+            "amountInput = IERC20(input).balanceOf(address(pair)).sub(reserveInput)",
+            "amountOutput = UniswapV2Library.getAmountOut(amountInput, reserveInput, reserveOutput)",
+            "address to = i < path.length - 2 ? UniswapV2Library.pairFor(factory, output, path[i + 2]) : _to",
+            "pair.swap(amount0Out, amount1Out, to, new bytes(0))",
+        ],
+    );
+    let supporting_token_output = normalized_solidity_function(
+        router,
+        "function swapExactTokensForTokensSupportingFeeOnTransferTokens(",
+    );
+    assert_fragments_in_order(
+        &supporting_token_output,
+        &[
+            "address[] calldata path",
+            "address to",
+            "uint deadline",
+            "external virtual override ensure(deadline)",
+            "path[0], msg.sender, UniswapV2Library.pairFor(factory, path[0], path[1]), amountIn",
+            "uint balanceBefore = IERC20(path[path.length - 1]).balanceOf(to)",
+            "_swapSupportingFeeOnTransferTokens(path, to)",
+            "IERC20(path[path.length - 1]).balanceOf(to).sub(balanceBefore) >= amountOutMin",
+        ],
+    );
+    assert!(!supporting_token_output.contains("payable"));
+    let supporting_native_input = normalized_solidity_function(
+        router,
+        "function swapExactETHForTokensSupportingFeeOnTransferTokens(",
+    );
+    assert_fragments_in_order(
+        &supporting_native_input,
+        &[
+            "address[] calldata path",
+            "address to",
+            "uint deadline",
+            "external virtual override payable ensure(deadline)",
+            "require(path[0] == WETH, 'UniswapV2Router: INVALID_PATH')",
+            "uint amountIn = msg.value",
+            "IWETH(WETH).deposit{value: amountIn}()",
+            "IWETH(WETH).transfer(UniswapV2Library.pairFor(factory, path[0], path[1]), amountIn)",
+            "uint balanceBefore = IERC20(path[path.length - 1]).balanceOf(to)",
+            "_swapSupportingFeeOnTransferTokens(path, to)",
+            "IERC20(path[path.length - 1]).balanceOf(to).sub(balanceBefore) >= amountOutMin",
+        ],
+    );
+    assert!(supporting_native_input.contains("payable"));
+    let swap_supporting_token_input = normalized_solidity_function(
+        router,
+        "function swapExactTokensForETHSupportingFeeOnTransferTokens(",
+    );
+    assert_fragments_in_order(
+        &swap_supporting_token_input,
+        &[
+            "address[] calldata path",
+            "address to",
+            "uint deadline",
+            "external virtual override ensure(deadline)",
+            "require(path[path.length - 1] == WETH, 'UniswapV2Router: INVALID_PATH')",
+            "path[0], msg.sender, UniswapV2Library.pairFor(factory, path[0], path[1]), amountIn",
+            "_swapSupportingFeeOnTransferTokens(path, address(this))",
+            "uint amountOut = IERC20(WETH).balanceOf(address(this))",
+            "amountOut >= amountOutMin",
+            "IWETH(WETH).withdraw(amountOut)",
+            "TransferHelper.safeTransferETH(to, amountOut)",
+        ],
+    );
+    assert!(!swap_supporting_token_input.contains("payable"));
     let library = normalized_whitespace(&archived["source/UniswapV2Library.sol"]);
     assert_fragments_in_order(
         &library,
@@ -5058,8 +5921,28 @@ fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
             "keccak256(abi.encodePacked(token0, token1))",
         ],
     );
+    assert_fragments_in_order(
+        &library,
+        &[
+            "function getAmountsOut(address factory, uint amountIn, address[] memory path)",
+            "require(path.length >= 2, 'UniswapV2Library: INVALID_PATH')",
+            "amounts = new uint[](path.length)",
+            "amounts[0] = amountIn",
+            "for (uint i; i < path.length - 1; i++)",
+            "getReserves(factory, path[i], path[i + 1])",
+            "amounts[i + 1] = getAmountOut(amounts[i], reserveIn, reserveOut)",
+            "function getAmountsIn(address factory, uint amountOut, address[] memory path)",
+            "require(path.length >= 2, 'UniswapV2Library: INVALID_PATH')",
+            "amounts = new uint[](path.length)",
+            "amounts[amounts.length - 1] = amountOut",
+            "for (uint i = path.length - 1; i > 0; i--)",
+            "getReserves(factory, path[i - 1], path[i])",
+            "amounts[i - 1] = getAmountIn(amounts[i], reserveIn, reserveOut)",
+        ],
+    );
 
     let abi_spec = &manifest["abi"];
+    assert_eq!(abi_spec["routes"].as_u64(), Some(14));
     let abi_bytes = fs::read(evidence.join(required_str(abi_spec, "archive_file")))
         .expect("read QuickSwap route ABI");
     assert_eq!(
@@ -5068,12 +5951,12 @@ fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
     );
     let abi: Value = serde_json::from_slice(&abi_bytes).expect("parse QuickSwap route ABI");
     let abi_entries = abi.as_array().expect("QuickSwap route ABI array");
-    assert_eq!(abi_entries.len(), 3);
+    assert_eq!(abi_entries.len(), 14);
+    let mut abi_signatures = BTreeSet::new();
     for entry in abi_entries {
-        assert_eq!(entry["stateMutability"].as_str(), Some("nonpayable"));
-        let types = entry["inputs"]
-            .as_array()
-            .unwrap()
+        assert_eq!(entry["type"].as_str(), Some("function"));
+        let inputs = entry["inputs"].as_array().expect("QuickSwap ABI inputs");
+        let types = inputs
             .iter()
             .map(|input| input["type"].as_str().unwrap())
             .collect::<Vec<_>>();
@@ -5082,7 +5965,138 @@ fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
             admitted.contains_key(&signature),
             "unexpected ABI route {signature}"
         );
+        let admitted_route = admitted_specs
+            .iter()
+            .find(|route| required_str(route, "canonical_signature") == signature)
+            .unwrap_or_else(|| panic!("missing manifest route for ABI signature {signature}"));
+        assert_eq!(
+            entry["stateMutability"].as_str(),
+            Some(required_str(admitted_route, "state_mutability")),
+            "source-derived mutability for {signature}"
+        );
+        assert_eq!(
+            &keccak256(signature.as_bytes())[..4],
+            admitted[&signature].as_slice(),
+            "QuickSwap ABI selector must derive from the exact canonical tuple"
+        );
+        assert!(abi_signatures.insert(signature.clone()));
+        if signature.starts_with("addLiquidity") {
+            let (expected_inputs, expected_outputs): (&[(&str, &str)], &[(&str, &str)]) =
+                match signature.as_str() {
+                    "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)" => (
+                        &[
+                            ("tokenA", "address"),
+                            ("tokenB", "address"),
+                            ("amountADesired", "uint256"),
+                            ("amountBDesired", "uint256"),
+                            ("amountAMin", "uint256"),
+                            ("amountBMin", "uint256"),
+                            ("to", "address"),
+                            ("deadline", "uint256"),
+                        ],
+                        &[
+                            ("amountA", "uint256"),
+                            ("amountB", "uint256"),
+                            ("liquidity", "uint256"),
+                        ],
+                    ),
+                    "addLiquidityETH(address,uint256,uint256,uint256,address,uint256)" => (
+                        &[
+                            ("token", "address"),
+                            ("amountTokenDesired", "uint256"),
+                            ("amountTokenMin", "uint256"),
+                            ("amountETHMin", "uint256"),
+                            ("to", "address"),
+                            ("deadline", "uint256"),
+                        ],
+                        &[
+                            ("amountToken", "uint256"),
+                            ("amountETH", "uint256"),
+                            ("liquidity", "uint256"),
+                        ],
+                    ),
+                    _ => panic!("unexpected admitted add-liquidity ABI {signature}"),
+                };
+            let actual_inputs = inputs
+                .iter()
+                .map(|input| {
+                    (
+                        input["name"].as_str().expect("add-liquidity input name"),
+                        input["type"].as_str().expect("add-liquidity input type"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual_inputs, expected_inputs, "ABI inputs for {signature}");
+            let actual_outputs = entry["outputs"]
+                .as_array()
+                .expect("add-liquidity ABI outputs")
+                .iter()
+                .map(|output| {
+                    (
+                        output["name"].as_str().expect("add-liquidity output name"),
+                        output["type"].as_str().expect("add-liquidity output type"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual_outputs, expected_outputs,
+                "ABI outputs for {signature}"
+            );
+        } else if signature.starts_with("swap") {
+            let expected_inputs: &[(&str, &str)] = match signature.as_str() {
+                "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)"
+                | "swapExactTokensForETH(uint256,uint256,address[],address,uint256)"
+                | "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)"
+                | "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)" => &[
+                    ("amountIn", "uint256"),
+                    ("amountOutMin", "uint256"),
+                    ("path", "address[]"),
+                    ("to", "address"),
+                    ("deadline", "uint256"),
+                ],
+                "swapTokensForExactTokens(uint256,uint256,address[],address,uint256)"
+                | "swapTokensForExactETH(uint256,uint256,address[],address,uint256)" => &[
+                    ("amountOut", "uint256"),
+                    ("amountInMax", "uint256"),
+                    ("path", "address[]"),
+                    ("to", "address"),
+                    ("deadline", "uint256"),
+                ],
+                "swapExactETHForTokens(uint256,address[],address,uint256)"
+                | "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)" => &[
+                    ("amountOutMin", "uint256"),
+                    ("path", "address[]"),
+                    ("to", "address"),
+                    ("deadline", "uint256"),
+                ],
+                "swapETHForExactTokens(uint256,address[],address,uint256)" => &[
+                    ("amountOut", "uint256"),
+                    ("path", "address[]"),
+                    ("to", "address"),
+                    ("deadline", "uint256"),
+                ],
+                _ => panic!("unexpected admitted swap ABI {signature}"),
+            };
+            let actual_inputs = inputs
+                .iter()
+                .map(|input| {
+                    (
+                        input["name"].as_str().expect("swap input name"),
+                        input["type"].as_str().expect("swap input type"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual_inputs, expected_inputs, "ABI inputs for {signature}");
+            if signature.contains("SupportingFeeOnTransferTokens") {
+                assert!(entry["outputs"].as_array().unwrap().is_empty());
+            } else {
+                assert_eq!(entry["outputs"].as_array().unwrap().len(), 1);
+                assert_eq!(entry["outputs"][0]["name"].as_str(), Some("amounts"));
+                assert_eq!(entry["outputs"][0]["type"].as_str(), Some("uint256[]"));
+            }
+        }
     }
+    assert_eq!(abi_signatures, admitted.keys().cloned().collect());
 
     let descriptor_spec = &manifest["descriptor"];
     let curated = fs::read(root.join(required_str(descriptor_spec, "curated_file")))
@@ -5105,7 +6119,10 @@ fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
             && candidate["address"].as_str().is_some_and(
                 |address| address.eq_ignore_ascii_case(required_str(deployment, "address"))
             )));
-    for route in admitted_specs {
+    for route in admitted_specs
+        .iter()
+        .filter(|route| route["semantic_kind"].as_str() == Some("remove_liquidity"))
+    {
         let fields = descriptor["display"]["formats"][required_str(route, "descriptor_format_key")]
             ["fields"]
             .as_array()
@@ -5114,6 +6131,285 @@ fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
         assert_eq!(fields[0]["label"].as_str(), Some("LP token amount"));
         assert_eq!(fields[0]["format"].as_str(), Some("raw"));
         assert_eq!(fields[0]["visible"].as_str(), Some("always"));
+    }
+
+    let add_display_shapes: [(&str, [(&str, &str, &str); 6]); 2] = [
+        (
+            "addLiquidity(address tokenA, address tokenB, uint256 amountADesired, uint256 amountBDesired, uint256 amountAMin, uint256 amountBMin, address to, uint256 deadline)",
+            [
+                ("amountADesired", "Maximum to Add", "tokenAmount"),
+                ("amountAMin", "Conditional Min", "tokenAmount"),
+                ("amountBDesired", "Maximum to Add", "tokenAmount"),
+                ("amountBMin", "Conditional Min", "tokenAmount"),
+                ("to", "LP Recipient", "addressName"),
+                ("deadline", "Deadline", "date"),
+            ],
+        ),
+        (
+            "addLiquidityETH(address token, uint256 amountTokenDesired, uint256 amountTokenMin, uint256 amountETHMin, address to, uint256 deadline)",
+            [
+                ("@.value", "Maximum to Add", "amount"),
+                ("amountTokenDesired", "Maximum to Add", "tokenAmount"),
+                ("amountTokenMin", "Conditional Min", "tokenAmount"),
+                ("amountETHMin", "Conditional Min", "amount"),
+                ("to", "LP Recipient", "addressName"),
+                ("deadline", "Deadline", "date"),
+            ],
+        ),
+    ];
+    for (format_key, expected_shape) in add_display_shapes {
+        let fields = descriptor["display"]["formats"][format_key]["fields"]
+            .as_array()
+            .unwrap_or_else(|| panic!("QuickSwap add-liquidity fields missing for {format_key}"));
+        let actual_shape = fields
+            .iter()
+            .map(|field| {
+                (
+                    required_str(field, "path"),
+                    required_str(field, "label"),
+                    required_str(field, "format"),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual_shape, expected_shape);
+        assert!(
+            fields.iter().all(|field| {
+                field["visible"].as_str() == Some("always")
+                    || (field["path"].as_str() == Some("deadline")
+                        && field.get("visible").is_none())
+            }),
+            "raw add-liquidity visibility must be explicit Always or the default-Always deadline convention for {format_key}"
+        );
+
+        let recipient = fields
+            .iter()
+            .find(|field| field["path"].as_str() == Some("to"))
+            .expect("literal QuickSwap LP recipient field");
+        assert!(recipient["params"].get("senderAddress").is_none());
+        assert_eq!(
+            recipient["params"]["types"].as_array().unwrap(),
+            &[Value::String("eoa".to_owned())]
+        );
+
+        let deadline = fields
+            .iter()
+            .find(|field| field["path"].as_str() == Some("deadline"))
+            .expect("signed QuickSwap add-liquidity deadline field");
+        assert_eq!(deadline["params"]["encoding"].as_str(), Some("timestamp"));
+    }
+
+    for (format_key, expectations) in [
+        (
+            "addLiquidity(address tokenA, address tokenB, uint256 amountADesired, uint256 amountBDesired, uint256 amountAMin, uint256 amountBMin, address to, uint256 deadline)",
+            &[
+                ("amountADesired", "tokenA"),
+                ("amountAMin", "tokenA"),
+                ("amountBDesired", "tokenB"),
+                ("amountBMin", "tokenB"),
+            ][..],
+        ),
+        (
+            "addLiquidityETH(address token, uint256 amountTokenDesired, uint256 amountTokenMin, uint256 amountETHMin, address to, uint256 deadline)",
+            &[
+                ("amountTokenDesired", "token"),
+                ("amountTokenMin", "token"),
+            ][..],
+        ),
+    ] {
+        let fields = descriptor["display"]["formats"][format_key]["fields"]
+            .as_array()
+            .expect("QuickSwap add-liquidity fields");
+        for &(path, token_path) in expectations {
+            let field = fields
+                .iter()
+                .find(|field| field["path"].as_str() == Some(path))
+                .unwrap_or_else(|| panic!("missing QuickSwap add-liquidity amount field {path}"));
+            assert_eq!(field["params"]["tokenPath"].as_str(), Some(token_path));
+        }
+    }
+
+    let swap_display_shapes: [(&str, [(&str, &str, &str); 5]); 9] = [
+        (
+            "swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+            [
+                ("amountIn", "Amount to Send", "tokenAmount"),
+                ("amountOutMin", "Minimum to Receive", "tokenAmount"),
+                ("path.[]", "Route", "addressName"),
+                ("to", "Beneficiary", "addressName"),
+                ("deadline", "Deadline", "date"),
+            ],
+        ),
+        (
+            "swapTokensForExactTokens(uint256 amountOut, uint256 amountInMax, address[] path, address to, uint256 deadline)",
+            [
+                ("amountOut", "Amount to Receive", "tokenAmount"),
+                ("amountInMax", "Maximum to Send", "tokenAmount"),
+                ("path.[]", "Route", "addressName"),
+                ("to", "Beneficiary", "addressName"),
+                ("deadline", "Deadline", "date"),
+            ],
+        ),
+        (
+            "swapExactETHForTokens(uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+            [
+                ("@.value", "Amount to Send", "amount"),
+                ("amountOutMin", "Minimum to Receive", "tokenAmount"),
+                ("path.[]", "Route", "addressName"),
+                ("to", "Beneficiary", "addressName"),
+                ("deadline", "Deadline", "date"),
+            ],
+        ),
+        (
+            "swapETHForExactTokens(uint256 amountOut, address[] path, address to, uint256 deadline)",
+            [
+                ("@.value", "Maximum to Send", "amount"),
+                ("amountOut", "Gross Output", "tokenAmount"),
+                ("path.[]", "Route", "addressName"),
+                ("to", "Beneficiary", "addressName"),
+                ("deadline", "Deadline", "date"),
+            ],
+        ),
+        (
+            "swapExactTokensForETH(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+            [
+                ("amountIn", "Amount to Send", "tokenAmount"),
+                ("amountOutMin", "Minimum to Receive", "amount"),
+                ("path.[]", "Route", "addressName"),
+                ("to", "Beneficiary", "addressName"),
+                ("deadline", "Deadline", "date"),
+            ],
+        ),
+        (
+            "swapTokensForExactETH(uint256 amountOut, uint256 amountInMax, address[] path, address to, uint256 deadline)",
+            [
+                ("amountOut", "Amount to Receive", "amount"),
+                ("amountInMax", "Maximum to Send", "tokenAmount"),
+                ("path.[]", "Route", "addressName"),
+                ("to", "Beneficiary", "addressName"),
+                ("deadline", "Deadline", "date"),
+            ],
+        ),
+        (
+            "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+            [
+                ("amountIn", "Requested Input", "tokenAmount"),
+                ("amountOutMin", "Minimum to Receive", "tokenAmount"),
+                ("path.[]", "Route", "addressName"),
+                ("to", "Beneficiary", "addressName"),
+                ("deadline", "Deadline", "date"),
+            ],
+        ),
+        (
+            "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+            [
+                ("@.value", "Amount to Send", "amount"),
+                ("amountOutMin", "Minimum to Receive", "tokenAmount"),
+                ("path.[]", "Route", "addressName"),
+                ("to", "Beneficiary", "addressName"),
+                ("deadline", "Deadline", "date"),
+            ],
+        ),
+        (
+            "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+            [
+                ("amountIn", "Requested Input", "tokenAmount"),
+                ("amountOutMin", "Minimum to Receive", "amount"),
+                ("path.[]", "Route", "addressName"),
+                ("to", "Beneficiary", "addressName"),
+                ("deadline", "Deadline", "date"),
+            ],
+        ),
+    ];
+    for (format_key, expected_shape) in swap_display_shapes {
+        let fields = descriptor["display"]["formats"][format_key]["fields"]
+            .as_array()
+            .unwrap_or_else(|| panic!("QuickSwap multi-hop fields missing for {format_key}"));
+        let actual_shape = fields
+            .iter()
+            .map(|field| {
+                (
+                    required_str(field, "path"),
+                    required_str(field, "label"),
+                    required_str(field, "format"),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual_shape, expected_shape);
+
+        let route = fields
+            .iter()
+            .find(|field| field["path"].as_str() == Some("path.[]"))
+            .expect("complete QuickSwap route field");
+        assert_eq!(route["visible"].as_str(), Some("always"));
+        assert_eq!(
+            route["params"]["types"].as_array().unwrap(),
+            &[Value::String("token".to_owned())]
+        );
+
+        let beneficiary = fields
+            .iter()
+            .find(|field| field["path"].as_str() == Some("to"))
+            .expect("literal QuickSwap beneficiary field");
+        assert!(beneficiary["params"].get("senderAddress").is_none());
+        assert_eq!(beneficiary["visible"].as_str(), Some("always"));
+
+        let deadline = fields
+            .iter()
+            .find(|field| field["path"].as_str() == Some("deadline"))
+            .expect("signed QuickSwap deadline field");
+        assert_eq!(deadline["params"]["encoding"].as_str(), Some("timestamp"));
+    }
+
+    let token_amount_bindings: [(&str, &[(&str, &str)]); 9] = [
+        (
+            "swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+            &[("amountIn", "path.[0]"), ("amountOutMin", "path.[-1]")],
+        ),
+        (
+            "swapTokensForExactTokens(uint256 amountOut, uint256 amountInMax, address[] path, address to, uint256 deadline)",
+            &[("amountOut", "path.[-1]"), ("amountInMax", "path.[0]")],
+        ),
+        (
+            "swapExactETHForTokens(uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+            &[("amountOutMin", "path.[-1]")],
+        ),
+        (
+            "swapETHForExactTokens(uint256 amountOut, address[] path, address to, uint256 deadline)",
+            &[("amountOut", "path.[-1]")],
+        ),
+        (
+            "swapExactTokensForETH(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+            &[("amountIn", "path.[0]")],
+        ),
+        (
+            "swapTokensForExactETH(uint256 amountOut, uint256 amountInMax, address[] path, address to, uint256 deadline)",
+            &[("amountInMax", "path.[0]")],
+        ),
+        (
+            "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+            &[("amountIn", "path.[0]"), ("amountOutMin", "path.[-1]")],
+        ),
+        (
+            "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+            &[("amountOutMin", "path.[-1]")],
+        ),
+        (
+            "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+            &[("amountIn", "path.[0]")],
+        ),
+    ];
+    for (format_key, expectations) in token_amount_bindings {
+        let fields = descriptor["display"]["formats"][format_key]["fields"]
+            .as_array()
+            .expect("QuickSwap multi-hop fields");
+        for &(path, token_path) in expectations {
+            let field = fields
+                .iter()
+                .find(|field| field["path"].as_str() == Some(path))
+                .unwrap_or_else(|| panic!("missing QuickSwap amount field {path}"));
+            assert_eq!(field["params"]["tokenPath"].as_str(), Some(token_path));
+            assert_eq!(field["visible"].as_str(), Some("always"));
+        }
     }
 
     let registry_root = root.join("secure/data/erc7730-registry");
@@ -5152,13 +6448,135 @@ fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
         admitted["removeLiquidity(address,address,uint256,uint256,uint256,address,uint256)"],
         admitted["removeLiquidityETH(address,uint256,uint256,uint256,address,uint256)"],
         admitted["removeLiquidityETHSupportingFeeOnTransferTokens(address,uint256,uint256,uint256,address,uint256)"],
+        admitted["swapExactTokensForTokens(uint256,uint256,address[],address,uint256)"],
+        admitted["swapTokensForExactTokens(uint256,uint256,address[],address,uint256)"],
+        admitted["swapExactETHForTokens(uint256,address[],address,uint256)"],
+        admitted["swapETHForExactTokens(uint256,address[],address,uint256)"],
+        admitted["swapExactTokensForETH(uint256,uint256,address[],address,uint256)"],
+        admitted["swapTokensForExactETH(uint256,uint256,address[],address,uint256)"],
+        admitted["swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)"],
+        admitted["swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)"],
+        admitted["swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)"],
     ]);
     assert_eq!(
         admitted_ir, expected_ir,
-        "only five static QuickSwap routes are admitted"
+        "only the two liquidity adds, three reviewed removals, six standard swaps, and three fee-on-transfer swaps are admitted"
     );
 
-    for route in admitted_specs {
+    for route in admitted_specs
+        .iter()
+        .filter(|route| route["semantic_kind"].as_str() == Some("add_liquidity"))
+    {
+        let signature = required_str(route, "canonical_signature");
+        let selector: [u8; 4] = decode_hex_text(required_str(route, "selector"))
+            .try_into()
+            .expect("QuickSwap add-liquidity selector width");
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("QuickSwap format table parses")
+            .expect("admitted QuickSwap add-liquidity route exists");
+        assert_eq!(
+            format.static_head_words as u64,
+            route["head_words"].as_u64().unwrap()
+        );
+        let fields = format
+            .fields()
+            .map(|field| field.expect("QuickSwap add-liquidity field parses"))
+            .collect::<Vec<_>>();
+        assert_eq!(fields.len(), 6);
+        assert!(fields.iter().all(|field| {
+            parse_params(&ir, field.param_off)
+                .expect("QuickSwap add-liquidity params parse")
+                .visibility
+                == Visibility::Always
+        }));
+
+        let (expected_labels, expected_ops, expected_paths): (&[&[u8]], &[FormatOp], Vec<Vec<u8>>) =
+            if signature.starts_with("addLiquidityETH") {
+                (
+                    &[
+                        b"Maximum to Add",
+                        b"Maximum to Add",
+                        b"Conditional Min",
+                        b"Conditional Min",
+                        b"LP Recipient",
+                        b"Deadline",
+                    ],
+                    &[
+                        FormatOp::Amount,
+                        FormatOp::TokenAmount,
+                        FormatOp::TokenAmount,
+                        FormatOp::Amount,
+                        FormatOp::AddressName,
+                        FormatOp::Date,
+                    ],
+                    vec![
+                        {
+                            let mut path =
+                                vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+                            path.extend_from_slice(&container_field::VALUE.to_be_bytes());
+                            path
+                        },
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 1],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 2],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 3],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 4],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 5],
+                    ],
+                )
+            } else {
+                (
+                    &[
+                        b"Maximum to Add",
+                        b"Conditional Min",
+                        b"Maximum to Add",
+                        b"Conditional Min",
+                        b"LP Recipient",
+                        b"Deadline",
+                    ],
+                    &[
+                        FormatOp::TokenAmount,
+                        FormatOp::TokenAmount,
+                        FormatOp::TokenAmount,
+                        FormatOp::TokenAmount,
+                        FormatOp::AddressName,
+                        FormatOp::Date,
+                    ],
+                    vec![
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 2],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 4],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 3],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 5],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 6],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 7],
+                    ],
+                )
+            };
+        for (((field, expected_label), expected_op), expected_path) in fields
+            .iter()
+            .zip(expected_labels)
+            .zip(expected_ops)
+            .zip(expected_paths)
+        {
+            assert_eq!(field.label, *expected_label, "label for {signature}");
+            assert_eq!(
+                FormatOp::try_from(field.format_op),
+                Ok(*expected_op),
+                "format op for {signature}"
+            );
+            assert_eq!(
+                ir.path_bytes(field.path_off).unwrap(),
+                expected_path,
+                "field path for {signature}"
+            );
+        }
+        assert!(registry.known_calls.contains(&(137, contract, selector)));
+    }
+
+    for route in admitted_specs
+        .iter()
+        .filter(|route| route["semantic_kind"].as_str() == Some("remove_liquidity"))
+    {
         let selector: [u8; 4] = decode_hex_text(required_str(route, "selector"))
             .try_into()
             .unwrap();
@@ -5196,10 +6614,214 @@ fn quickswap_router02_evidence_binds_static_remove_liquidity_admission() {
         assert!(registry.known_calls.contains(&(137, contract, selector)));
     }
 
-    for route in manifest["policy"]["excluded_routes"]
-        .as_array()
-        .expect("excluded route array")
+    for route in admitted_specs
+        .iter()
+        .filter(|route| required_str(route, "semantic_kind").contains("multihop_swap"))
     {
+        let selector: [u8; 4] = decode_hex_text(required_str(route, "selector"))
+            .try_into()
+            .expect("QuickSwap swap selector width");
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("QuickSwap format table parses")
+            .expect("admitted QuickSwap swap exists");
+        assert_eq!(
+            format.static_head_words as u64,
+            route["head_words"].as_u64().unwrap()
+        );
+        let fields = format
+            .fields()
+            .map(|field| field.expect("QuickSwap swap field parses"))
+            .collect::<Vec<_>>();
+        assert_eq!(fields.len(), 5);
+
+        let semantic_kind = required_str(route, "semantic_kind");
+        let path_word = route["path_word"].as_u64().unwrap() as u8;
+        let structured_amount_path = |slot: u8| {
+            vec![
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                slot,
+            ]
+        };
+        let container_value_path = || {
+            let mut path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+            path.extend_from_slice(&container_field::VALUE.to_be_bytes());
+            path
+        };
+        let token_endpoint_path = |last: bool| {
+            let mut path = vec![
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                path_word,
+                PathOp::FollowOffset as u8,
+            ];
+            if last {
+                path.push(PathOp::ArrayLast as u8);
+            } else {
+                path.extend_from_slice(&[PathOp::ArrayIdx as u8, 0, 0]);
+            }
+            path
+        };
+        let amount_expectations: [(FormatOp, Vec<u8>, Option<Vec<u8>>); 2] = match semantic_kind {
+            "exact_input_multihop_swap"
+            | "nominal_token_input_recipient_balance_delta_token_output_multihop_swap" => [
+                (
+                    FormatOp::TokenAmount,
+                    structured_amount_path(0),
+                    Some(token_endpoint_path(false)),
+                ),
+                (
+                    FormatOp::TokenAmount,
+                    structured_amount_path(1),
+                    Some(token_endpoint_path(true)),
+                ),
+            ],
+            "exact_output_multihop_swap" => [
+                (
+                    FormatOp::TokenAmount,
+                    structured_amount_path(0),
+                    Some(token_endpoint_path(true)),
+                ),
+                (
+                    FormatOp::TokenAmount,
+                    structured_amount_path(1),
+                    Some(token_endpoint_path(false)),
+                ),
+            ],
+            "exact_native_input_multihop_swap"
+            | "exact_native_input_recipient_balance_delta_token_output_multihop_swap" => [
+                (FormatOp::Amount, container_value_path(), None),
+                (
+                    FormatOp::TokenAmount,
+                    structured_amount_path(0),
+                    Some(token_endpoint_path(true)),
+                ),
+            ],
+            "refundable_max_native_input_exact_gross_token_output_multihop_swap" => [
+                (FormatOp::Amount, container_value_path(), None),
+                (
+                    FormatOp::TokenAmount,
+                    structured_amount_path(0),
+                    Some(token_endpoint_path(true)),
+                ),
+            ],
+            "exact_token_input_native_output_multihop_swap"
+            | "nominal_token_input_whole_router_weth_native_output_multihop_swap" => [
+                (
+                    FormatOp::TokenAmount,
+                    structured_amount_path(0),
+                    Some(token_endpoint_path(false)),
+                ),
+                (FormatOp::Amount, structured_amount_path(1), None),
+            ],
+            "token_input_exact_native_output_multihop_swap" => [
+                (FormatOp::Amount, structured_amount_path(0), None),
+                (
+                    FormatOp::TokenAmount,
+                    structured_amount_path(1),
+                    Some(token_endpoint_path(false)),
+                ),
+            ],
+            _ => panic!("unexpected QuickSwap swap kind {semantic_kind}"),
+        };
+        for (field, (expected_op, expected_path, expected_token_path)) in
+            fields[..2].iter().zip(amount_expectations)
+        {
+            assert_eq!(FormatOp::try_from(field.format_op), Ok(expected_op));
+            assert_eq!(
+                ir.path_bytes(field.path_off)
+                    .expect("swap amount path parses"),
+                expected_path
+            );
+            let params = parse_params(&ir, field.param_off).expect("swap amount params parse");
+            assert_eq!(params.visibility, Visibility::Always);
+            assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+            assert_eq!(params.integer_width_bytes, Some(32));
+            assert_eq!(params.token_path, expected_token_path.as_deref());
+        }
+
+        assert_eq!(fields[2].label, b"Route");
+        assert_eq!(
+            FormatOp::try_from(fields[2].format_op),
+            Ok(FormatOp::AddressName)
+        );
+        assert_eq!(
+            ir.path_bytes(fields[2].path_off)
+                .expect("swap route path parses"),
+            [
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                path_word,
+                PathOp::ArrayAll as u8,
+            ]
+        );
+        let route_params = parse_params(&ir, fields[2].param_off).expect("swap route params parse");
+        assert_eq!(route_params.visibility, Visibility::Always);
+        assert_eq!(route_params.terminal_kind, Some(TerminalKind::Address));
+        assert!(route_params.sender_addresses.is_none());
+
+        assert_eq!(fields[3].label, b"Beneficiary");
+        assert_eq!(
+            FormatOp::try_from(fields[3].format_op),
+            Ok(FormatOp::AddressName)
+        );
+        assert_eq!(
+            ir.path_bytes(fields[3].path_off)
+                .expect("swap beneficiary path parses"),
+            [
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                path_word + 1,
+            ]
+        );
+        let beneficiary =
+            parse_params(&ir, fields[3].param_off).expect("swap beneficiary params parse");
+        assert_eq!(beneficiary.visibility, Visibility::Always);
+        assert_eq!(beneficiary.terminal_kind, Some(TerminalKind::Address));
+        assert!(
+            beneficiary.sender_addresses.is_none(),
+            "classic QuickSwap to must remain a literal address"
+        );
+
+        assert_eq!(fields[4].label, b"Deadline");
+        assert_eq!(FormatOp::try_from(fields[4].format_op), Ok(FormatOp::Date));
+        assert_eq!(
+            ir.path_bytes(fields[4].path_off)
+                .expect("swap deadline path parses"),
+            [
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                path_word + 2,
+            ]
+        );
+        let deadline = parse_params(&ir, fields[4].param_off).expect("swap deadline params parse");
+        assert_eq!(deadline.terminal_kind, Some(TerminalKind::Unsigned));
+        assert_eq!(deadline.integer_width_bytes, Some(32));
+        assert!(registry.known_calls.contains(&(137, contract, selector)));
+    }
+
+    let excluded_routes = manifest["policy"]["excluded_routes"]
+        .as_array()
+        .expect("excluded route array");
+    assert_eq!(excluded_routes.len(), 3);
+    assert_eq!(
+        excluded_routes
+            .iter()
+            .map(|route| required_str(route, "canonical_signature"))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "removeLiquidityWithPermit(address,address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
+            "removeLiquidityETHWithPermit(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
+            "removeLiquidityETHWithPermitSupportingFeeOnTransferTokens(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
+        ])
+    );
+    for route in excluded_routes {
         let signature = required_str(route, "canonical_signature");
         let selector: [u8; 4] = decode_hex_text(required_str(route, "selector"))
             .try_into()

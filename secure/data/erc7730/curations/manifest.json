@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 782785,
-    "sha256": "33a18c7888ef0245797f42bfdbee90df6ffddf5056b92c16a66675ced34d759e"
+    "bytes": 789546,
+    "sha256": "f9120a582842887a8d0ff29b1cb26e5e430665e6c49c4bf9535174902c97144f"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -93,9 +93,9 @@
     {
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
-      "files": 17,
-      "bytes": 1417562,
-      "sha256": "6bd02eb0a54941ff07b6bd7a46f7cd95dfd89857b0a4d84ddd2bd709a762339a"
+      "files": 18,
+      "bytes": 1580809,
+      "sha256": "b02782c9222ff4d14f55cbd561dcbba273110039f71617efc9b9d91ea52921e5"
     },
     {
       "path": "pqsigner-erc7730",
@@ -122,8 +122,8 @@
       "path": "shared",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 12,
-      "bytes": 168616,
-      "sha256": "64f8c77320cdab849f31b2e81bcccc13b6fc280b031c9bb9ebbb992f2591aecc"
+      "bytes": 170076,
+      "sha256": "dee4a1f83b03c21ab27999d2a8697eb7bd66cc3670aa46903e1ad7fbd9491208"
     },
     {
       "path": "tx-core",
@@ -144,7 +144,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 269876,
-      "sha256": "34aca5611d3ac145f0502456ef7d0592edd695a8e2ab5866036ecd65536de304"
+      "sha256": "8efb6bb370134b1a4854a39332fe580f7cb9e08252c321e19001a60adfffb658"
     }
   ],
   "capability_inputs": [
@@ -207,8 +207,8 @@
       "path": "registry/flyingtulip/calldata-SessionManager.json",
       "upstream_bytes": 9639,
       "upstream_sha256": "4e26b99c1d8c170e96a4190e3d68ccca1b57d7674896e954fb3c5f788f6bce0a",
-      "replacement_bytes": 10750,
-      "replacement_sha256": "11ea474574a0791289ea877025184b90406018f79a6cbed9cf768dcacf8b562d"
+      "replacement_bytes": 11287,
+      "replacement_sha256": "dcb847584d82d692f196a1ea9acdc1534cd868c36aaa35bcb58afedbb3ca20b2"
     },
     {
       "path": "registry/flyingtulip/eip712-PftMarketplace-BuyOffer.json",
@@ -305,8 +305,8 @@
       "path": "registry/quickswap/calldata-QuickSwap.json",
       "upstream_bytes": 15749,
       "upstream_sha256": "19e2481f20414ae9b6669050c9740f919ca3896713693df7b50e60dba685d15f",
-      "replacement_bytes": 16413,
-      "replacement_sha256": "87b1a00b3ad310315ef62e954c555d538abc8a093cb362828560906ff1210320"
+      "replacement_bytes": 20411,
+      "replacement_sha256": "c5b6e9f2cd030e6d61402c29289f0c3d6fc11419ae6a15cf98de43c8ce7d4dab"
     },
     {
       "path": "registry/serenita/calldata-EthVault.json",
@@ -347,8 +347,8 @@
       "path": "registry/uniswap/calldata-UniswapV3Router02.json",
       "upstream_bytes": 6039,
       "upstream_sha256": "f2ced0c2ed44a7132a987365bb4f0aedd4d21091decc4aad3d327b7cb400193d",
-      "replacement_bytes": 6702,
-      "replacement_sha256": "679272181ccbcba2774ef089815b904ff04fd0310c92c4531803485319141db0"
+      "replacement_bytes": 7427,
+      "replacement_sha256": "eab87b0c8056a17d8f23d7e8058ea4db4a2e61075379ba94396283586917d543"
     },
     {
       "path": "registry/uniswap/eip712-UniswapX-DutchOrder.json",
@@ -382,8 +382,8 @@
       "path": "registry/uniswap/eip712-uniswap-permit2.json",
       "upstream_bytes": 3348,
       "upstream_sha256": "c94c89c58e6c17723f087516df4c3dc0d57a86b11799c68b8830b317f515768f",
-      "replacement_bytes": 3463,
-      "replacement_sha256": "73a71f6d6a8b0421e4f07ce814282bf94f8ef03a1d6660b5ccf6eddf4c9936dc"
+      "replacement_bytes": 4964,
+      "replacement_sha256": "585cda2929c5e88e35d6c98aa6b8edd38e01a03288123d1d6bc60635c2119204"
     },
     {
       "path": "registry/walletconnect/calldata-wct.json",

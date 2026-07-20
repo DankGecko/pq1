@@ -101,94 +101,6 @@ fn build_registry() -> &'static dbgen::erc7730::Erc7730BuildResult {
     })
 }
 
-/// Real descriptors whose nested renderer shapes are valuable test vectors but
-/// which the shipping catalogue now correctly excludes because they contain
-/// hidden non-address material. For renderer tests only, compile copies in a
-/// process-private temporary registry after promoting both explicit
-/// `visible:"never"` fields and the few legacy fields whose omitted visibility
-/// defaults to hidden. This preserves the original ABI/type tree and runs
-/// through the real dbgen compiler, while making the emitted fixture satisfy
-/// the same strict hidden-material policy as production.
-const SAFE_VISIBLE_NESTED_FIXTURES: &[(&str, &str)] = &[(
-    "eip712-uniswap-permit2.json",
-    "registry/uniswap/eip712-uniswap-permit2.json",
-)];
-
-fn build_safe_visible_nested_fixtures(
-) -> &'static std::collections::BTreeMap<String, Vec<dbgen::erc7730::Emitted>> {
-    static FIXTURES: std::sync::OnceLock<
-        std::collections::BTreeMap<String, Vec<dbgen::erc7730::Emitted>>,
-    > = std::sync::OnceLock::new();
-    FIXTURES.get_or_init(|| {
-        let source_root = workspace_root().join("secure/data/erc7730-registry");
-        let temp_root = std::env::temp_dir().join(format!(
-            "pqsigner-erc7730-safe-visible-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&temp_root);
-        std::fs::create_dir_all(temp_root.join("registry/uniswap"))
-            .expect("create synthetic Uniswap fixture dir");
-        // Every Uniswap fixture includes this context-only template.
-        std::fs::copy(
-            source_root.join("registry/uniswap/uniswap-common-eip712.json"),
-            temp_root.join("registry/uniswap/uniswap-common-eip712.json"),
-        )
-        .expect("copy synthetic fixture include");
-
-        let policy = dbgen::erc7730::Policy::default();
-        let mut emitted_by_source = std::collections::BTreeMap::new();
-        for &(source_name, relative) in SAFE_VISIBLE_NESTED_FIXTURES {
-            let source = source_root.join(relative);
-            let destination = temp_root.join(relative);
-            let text = std::fs::read_to_string(&source).expect("read nested fixture source");
-            assert!(
-                text.contains("\"visible\": \"never\""),
-                "fixture {source_name} must exercise the hidden-material gate"
-            );
-            let safe_text = text
-                .replace("\"visible\": \"never\"", "\"visible\": \"always\"")
-                // PermitBatch predates the explicit-visibility requirement on
-                // its amount/tokenPath and expiration fields. Promote those
-                // two omitted values in this process-private positive only.
-                .replace(
-                    "\"tokenPath\": \"details.[].token\"\n            }\n          }",
-                    "\"tokenPath\": \"details.[].token\"\n            },\n            \"visible\": \"always\"\n          }",
-                )
-                // PermitSingle and PermitBatch both omitted visibility on the
-                // nested expiration field; make both explicit test positives.
-                .replace(
-                    "\"encoding\": \"timestamp\"\n            }\n          }",
-                    "\"encoding\": \"timestamp\"\n            },\n            \"visible\": \"always\"\n          }",
-                )
-                // Exact nested-leaf completeness also requires Permit2's
-                // per-permission nonce. The upstream descriptor omits it, so
-                // add it only to these process-private positive fixtures.
-                .replace(
-                    "        \"$id\": \"Permit2 Permit Single\",\n        \"intent\": \"Authorize spending of token\",\n        \"fields\": [",
-                    "        \"$id\": \"Permit2 Permit Single\",\n        \"intent\": \"Authorize spending of token\",\n        \"fields\": [\n          {\n            \"path\": \"details.nonce\",\n            \"label\": \"Nonce\",\n            \"visible\": \"always\"\n          },",
-                )
-                .replace(
-                    "        \"$id\": \"Permit2 Permit Batch\",\n        \"intent\": \"Authorize spending of tokens\",\n        \"fields\": [",
-                    "        \"$id\": \"Permit2 Permit Batch\",\n        \"intent\": \"Authorize spending of tokens\",\n        \"fields\": [\n          {\n            \"path\": \"details.[].nonce\",\n            \"label\": \"Nonce\",\n            \"visible\": \"always\"\n          },",
-                );
-            assert!(!safe_text.contains("\"visible\": \"never\""));
-            std::fs::write(&destination, safe_text).expect("write safe nested fixture");
-            let emitted = dbgen::erc7730::try_compile_one(&destination, &policy, Some(&temp_root))
-                .unwrap_or_else(|e| panic!("safe visible fixture {source_name} must compile: {e}"));
-            emitted_by_source.insert(source_name.to_string(), emitted);
-        }
-        let _ = std::fs::remove_dir_all(&temp_root);
-        emitted_by_source
-    })
-}
-
-fn safe_visible_nested_leaf(source_name: &str, chain_id: u64) -> &'static dbgen::erc7730::Emitted {
-    build_safe_visible_nested_fixtures()
-        .get(source_name)
-        .and_then(|entries| entries.iter().find(|entry| entry.chain_id == chain_id))
-        .unwrap_or_else(|| panic!("no safe visible nested fixture for {source_name} on {chain_id}"))
-}
-
 /// Build a compiler-authenticated C1 `string` descriptor, then coherently
 /// change both its authenticated dynamic-kind and terminal-kind TLVs
 /// to `bytes`. Production dbgen refuses to emit arbitrary dynamic `bytes`; this
@@ -303,7 +215,6 @@ fn eip712_hash_only_values_have_no_verified_runtime_leaf() {
 fn explicit_hidden_material_descriptors_have_no_verified_runtime_leaf() {
     for source_name in [
         "eip712-permit-ethereum-link.json",
-        "eip712-uniswap-permit2.json",
         "eip712-UniswapX-ExclusiveDutchOrder.json",
         "eip712-UniswapX-DutchOrder.json",
         "eip712-UniswapX-LimitOrder.json",
@@ -338,6 +249,13 @@ fn find_leaf<'a>(
                     .collect::<Vec<_>>()
             )
         })
+}
+
+/// Permit2's three fully visible formats are production catalogue entries.
+/// Renderer conformance must therefore use the exact Merkle-root-bound leaf,
+/// never a process-private descriptor rewrite that can drift from shipping.
+fn production_permit2_leaf(chain_id: u64) -> &'static dbgen::erc7730::Emitted {
+    find_leaf(build_registry(), "eip712-uniswap-permit2.json", chain_id)
 }
 
 /// Reconstruct the bundle the companion would ship for the on-wire
@@ -644,7 +562,23 @@ fn find_page_by_label(pages: &Pages, label: &str) -> usize {
 }
 
 fn assert_raw_word_pages(pages: &Pages, label: &str, word: &[u8; 32]) {
-    let first = find_page_by_label(pages, label);
+    assert_nth_raw_word_pages(pages, label, 0, word);
+}
+
+fn assert_nth_raw_word_pages(pages: &Pages, label: &str, occurrence: usize, word: &[u8; 32]) {
+    let first = pages
+        .as_slice()
+        .iter()
+        .enumerate()
+        .filter(|(_, page)| row_str(&page[0]) == label && row_str(&page[3]) == "1/2 > next")
+        .nth(occurrence)
+        .map(|(index, _)| index)
+        .unwrap_or_else(|| {
+            panic!(
+                "no raw-word occurrence {occurrence} for {label:?}; full dump:\n{}",
+                dump_pages(pages)
+            )
+        });
     assert!(first + 1 < pages.len, "raw word lacks its second page");
     let encoded = hex::encode(word);
     assert_eq!(
@@ -700,6 +634,21 @@ fn assert_full_unverified_token_identity_page(pages: &Pages, contract: &[u8; 20]
         pages.buf[page][1..4],
         expected,
         "unbound token pages must carry the exact signed token contract"
+    );
+}
+
+fn assert_some_full_unverified_token_identity_page(pages: &Pages, contract: &[u8; 20]) {
+    let mut expected = [[b' '; DISPLAY_COLS]; 3];
+    let [r1, r2, r3] = &mut expected;
+    write_addr_full(r1, r2, r3, contract);
+    assert!(
+        pages
+            .as_slice()
+            .iter()
+            .any(|page| { row_str(&page[0]) == "Token (UNVERIFI~" && page[1..4] == expected }),
+        "unbound token pages must carry exact signed token contract 0x{}\n{}",
+        hex::encode(contract),
+        dump_pages(pages)
     );
 }
 
@@ -3800,14 +3749,59 @@ fn positive_flyingtulip_operator_approval_fixture_binds_operator_and_bool_enum()
     );
 }
 
+const FLYINGTULIP_SET_ALLOWED_TARGETS: &str = "setAllowedTargets(address[],bool)";
+
+fn flyingtulip_set_allowed_targets_calldata(targets: &[[u8; 20]], allowed: u64) -> Vec<u8> {
+    let mut calldata = keccak256(FLYINGTULIP_SET_ALLOWED_TARGETS.as_bytes())[..4].to_vec();
+    calldata.extend_from_slice(&u256_from_u64(64).0); // two-word head ends here
+    calldata.extend_from_slice(&u256_from_u64(allowed).0);
+    calldata.extend_from_slice(&u256_from_u64(targets.len() as u64).0);
+    for target in targets {
+        calldata.extend_from_slice(&abi_address_word(*target));
+    }
+    calldata
+}
+
+fn assert_complete_flyingtulip_target_pages(pages: &Pages, targets: &[[u8; 20]]) {
+    let target_pages = pages
+        .as_slice()
+        .iter()
+        .filter(|page| row_str(&page[0]) == "Targets")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        target_pages.len(),
+        targets.len() + 1,
+        "target array must show one count page and every signed address:\n{}",
+        dump_pages(pages)
+    );
+    assert!(
+        page_strs(pages, find_page_by_label(pages, "Targets"))
+            .iter()
+            .any(|row| row.contains(&format!("{} items", targets.len()))),
+        "target count must be explicit:\n{}",
+        dump_pages(pages)
+    );
+
+    for (index, target) in targets.iter().enumerate() {
+        let mut expected = [[b' '; DISPLAY_COLS]; 4];
+        expected[0][..7].copy_from_slice(b"Targets");
+        let [_, r1, r2, r3] = &mut expected;
+        write_addr_full(r1, r2, r3, target);
+        assert_eq!(
+            *target_pages[index + 1],
+            expected,
+            "target element {index} must show all 20 signed address bytes"
+        );
+    }
+}
+
 #[test]
 fn positive_flyingtulip_session_manager_static_authority_routes_bind_every_operand() {
-    const REFUSED: [&str; 6] = [
+    const REFUSED: [&str; 5] = [
         "createSession(address,uint48,uint48,uint32,uint16,(address,uint256)[],bytes32)",
         "createSessionBySig(address,address,uint48,uint48,uint32,uint16,(address,uint256)[],bytes32,bytes)",
         "invalidateNonceBySig(bytes32,uint256,uint256,address,bytes)",
         "revokeSessionBySig(bytes32,uint256,bytes)",
-        "setAllowedTargets(address[],bool)",
         "validateAndConsume(address,uint256,(bytes32,bytes32,uint256,uint256,address,uint256),bytes,address)",
     ];
 
@@ -4031,6 +4025,238 @@ fn positive_flyingtulip_session_manager_static_authority_routes_bind_every_opera
             .is_err(),
             "a bound descriptor must not fall back for a refused SessionManager route"
         );
+    }
+}
+
+#[test]
+fn production_flyingtulip_set_allowed_targets_binds_order_and_refuses_bad_framing() {
+    let registry = build_registry();
+    let entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-SessionManager.json")
+        })
+        .collect();
+    assert_eq!(
+        entries.len(),
+        7,
+        "target-array render coverage must span all seven SessionManager deployments"
+    );
+
+    let zero: [[u8; 20]; 0] = [];
+    let one = [[0u8; 20]];
+    let two = [[0x11; 20], [0x22; 20]];
+    let eight = [
+        [0x31; 20], [0x32; 20], [0x33; 20], [0x34; 20], [0x35; 20], [0x36; 20], [0x37; 20],
+        [0x38; 20],
+    ];
+
+    for entry in entries {
+        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &registry.root)
+            .expect("verify Flying Tulip SessionManager leaf");
+        cross_check_contract(&verified.ir, entry.chain_id, &entry.contract)
+            .expect("bind Flying Tulip SessionManager leaf");
+        let tx = envelope(entry.chain_id, entry.contract);
+        let resolver = NameResolver::new();
+        let signer = [0x42; 20];
+        let render = |calldata: &[u8]| {
+            render_erc7730_pages_with_signer_checked(
+                &tx, calldata, &verified, None, &resolver, &signer,
+            )
+        };
+
+        for targets in [&zero[..], &one[..], &two[..], &eight[..]] {
+            for (allowed, expected_access) in [(0u64, "Disallow"), (1u64, "Allow")] {
+                let calldata = flyingtulip_set_allowed_targets_calldata(targets, allowed);
+                assert_selector_matches(&verified.ir, &calldata, FLYINGTULIP_SET_ALLOWED_TARGETS);
+                let rendered = render(&calldata).unwrap_or_else(|error| {
+                    panic!(
+                        "render {} targets with access {allowed}: {error:?}",
+                        targets.len()
+                    )
+                });
+                assert_eq!(
+                    rendered.transcript_receipt.state_code(),
+                    INTENT_PUBLICATION_STATIC
+                );
+                assert!(
+                    rendered
+                        .transcript_receipt
+                        .range_matches(&rendered.pages, 0),
+                    "the complete target-array transcript must be bound"
+                );
+                assert_all_pages_printable(&rendered.pages);
+                let intent = page_strs(&rendered.pages, intent_page_index(&rendered.pages));
+                assert_eq!(
+                    format!("{}{}", intent[0], intent[1]),
+                    "Update allowed targets"
+                );
+                assert_complete_flyingtulip_target_pages(&rendered.pages, targets);
+                assert_eq!(
+                    page_strs(
+                        &rendered.pages,
+                        find_page_by_label(&rendered.pages, "Access")
+                    ),
+                    [
+                        "Access".to_string(),
+                        expected_access.to_string(),
+                        String::new(),
+                        String::new(),
+                    ]
+                );
+
+                let mut proofs = DispatchPageProofs::new();
+                proofs.fail_initialize();
+                let dispatched = pick_sign_pages(
+                    &tx,
+                    &calldata,
+                    &signer,
+                    None,
+                    None,
+                    None,
+                    Some(&verified),
+                    None,
+                    None,
+                    &resolver,
+                    &mut proofs,
+                )
+                .expect("production dispatcher must select the authenticated target-array leaf");
+                assert_eq!(
+                    dispatched.as_slice(),
+                    rendered.pages.as_slice(),
+                    "dispatcher and direct renderer must publish identical trusted pages"
+                );
+                let mut verdict = crate::fi::FAIL_SENTINEL;
+                proofs.final_set_proof(&dispatched, &tx, false, &mut verdict);
+                assert_eq!(
+                    verdict,
+                    crate::fi::OK_SENTINEL,
+                    "dispatcher proof must bind the complete target-array transcript"
+                );
+            }
+        }
+
+        let baseline_calldata = flyingtulip_set_allowed_targets_calldata(&two, 1);
+        let baseline = render(&baseline_calldata).expect("render two-target baseline");
+        for index in 0..two.len() {
+            let mut mutated_targets = two;
+            mutated_targets[index][19] ^= 1;
+            let mutated_calldata = flyingtulip_set_allowed_targets_calldata(&mutated_targets, 1);
+            let mutated = render(&mutated_calldata)
+                .unwrap_or_else(|error| panic!("render mutated target {index}: {error:?}"));
+            assert_complete_flyingtulip_target_pages(&mutated.pages, &mutated_targets);
+            assert_ne!(
+                baseline.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "target element {index} mutation must change trusted pages"
+            );
+            assert!(
+                !baseline
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "target element {index} mutation must change the transcript receipt"
+            );
+        }
+
+        let reordered_targets = [two[1], two[0]];
+        let reordered_calldata = flyingtulip_set_allowed_targets_calldata(&reordered_targets, 1);
+        let reordered = render(&reordered_calldata).expect("render reordered target array");
+        assert_complete_flyingtulip_target_pages(&reordered.pages, &reordered_targets);
+        assert_ne!(
+            baseline.pages.as_slice(),
+            reordered.pages.as_slice(),
+            "target reordering must change trusted pages"
+        );
+        assert!(
+            !baseline
+                .transcript_receipt
+                .exact_match(&reordered.transcript_receipt),
+            "target reordering must change the transcript receipt"
+        );
+
+        let disallowed_calldata = flyingtulip_set_allowed_targets_calldata(&two, 0);
+        let disallowed = render(&disallowed_calldata).expect("render disallowed target array");
+        assert_ne!(
+            baseline.pages.as_slice(),
+            disallowed.pages.as_slice(),
+            "access-bool mutation must change trusted pages"
+        );
+        assert!(
+            !baseline
+                .transcript_receipt
+                .exact_match(&disallowed.transcript_receipt),
+            "access-bool mutation must change the transcript receipt"
+        );
+
+        let mut malformed = Vec::new();
+        for offset in [32u64, 65, 96] {
+            let mut calldata = baseline_calldata.clone();
+            calldata[4..36].copy_from_slice(&u256_from_u64(offset).0);
+            malformed.push((calldata, "noncanonical array offset"));
+        }
+        let mut huge_offset = baseline_calldata.clone();
+        huge_offset[4] = 1;
+        malformed.push((huge_offset, "oversized array offset"));
+
+        let count_offset = 4 + 2 * 32;
+        for count in [1u64, 3] {
+            let mut calldata = baseline_calldata.clone();
+            calldata[count_offset..count_offset + 32].copy_from_slice(&u256_from_u64(count).0);
+            malformed.push((calldata, "array length inconsistent with calldata"));
+        }
+        let mut huge_count = baseline_calldata.clone();
+        huge_count[count_offset] = 1;
+        malformed.push((huge_count, "oversized array length"));
+
+        let mut trailing = baseline_calldata.clone();
+        trailing.extend_from_slice(&[0u8; 32]);
+        malformed.push((trailing, "trailing calldata word"));
+        let mut truncated = baseline_calldata.clone();
+        truncated.pop();
+        malformed.push((truncated, "truncated array element"));
+
+        let mut dirty_address = baseline_calldata.clone();
+        dirty_address[4 + 3 * 32] = 1;
+        malformed.push((dirty_address, "dirty address padding"));
+
+        let noncanonical_bool = flyingtulip_set_allowed_targets_calldata(&two, 2);
+        malformed.push((noncanonical_bool, "noncanonical bool 2"));
+
+        let nine = [[0x77; 20]; 9];
+        let over_cap = flyingtulip_set_allowed_targets_calldata(&nine, 1);
+        malformed.push((over_cap, "nine target elements"));
+
+        for (calldata, case) in malformed {
+            assert!(
+                matches!(
+                    render(&calldata),
+                    Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+                ),
+                "{case} must hard-refuse"
+            );
+            let mut proofs = DispatchPageProofs::new();
+            proofs.fail_initialize();
+            assert!(
+                pick_sign_pages(
+                    &tx,
+                    &calldata,
+                    &signer,
+                    None,
+                    None,
+                    None,
+                    Some(&verified),
+                    None,
+                    None,
+                    &resolver,
+                    &mut proofs,
+                )
+                .is_err(),
+                "{case} must refuse through dispatch without a blind fallback"
+            );
+        }
     }
 }
 
@@ -5811,7 +6037,7 @@ fn production_lido_requests_bind_amounts_and_effective_owner() {
 ///    regression guard.)
 /// 2. **End-to-end render** — the sole-dynamic arrays whose siblings my generic
 ///    calldata satisfies actually RENDER every element (array-tail-hiding
-///    closed). `visible:never` arrays (e.g. `setAllowedTargets`, Raw+hidden)
+///    closed). `visible:never` arrays (for example Raw+hidden fields)
 ///    and multi-field functions my stub calldata can't fully satisfy simply
 ///    don't reach the ≥4-page bar — that's fine, they're covered by (1) and
 ///    must not crash.
@@ -6644,10 +6870,10 @@ fn eip712_v2_two_pass_transcript_binds_static_warning_and_fields() {
 //
 // A pinned EIP-712 descriptor whose primary type has a nested struct member
 // (a single opaque `hashStruct` word this renderer cannot expand) MUST be
-// declined to blind-sign, not partially clear-signed or mis-resolved. Driven
-// by a safe-visible, dbgen-emitted copy of the real Uniswap Permit2 descriptor
-// (its `PermitSingle` / `PermitTransferFrom` nest a `PermitDetails` /
-// `TokenPermissions` struct). Production absence is asserted separately.
+// declined to blind-sign, not partially clear-signed or mis-resolved. The
+// supported single-rank Permit2 shapes below are driven directly by their
+// shipping catalogue leaf; an unsupported multidimensional shape remains a
+// process-private authenticated-refusal fixture.
 // ───────────────────────────────────────────────────────────────────────
 #[test]
 fn multidimensional_struct_array_bare_marker_declines_on_device() {
@@ -6742,7 +6968,7 @@ fn v2_kind_declines_nested_permit2() {
     // descent finds no DFS record to bind the `PermitDetails` hashStruct word,
     // so the whole render Rejects. A companion must use the V3 entry. This keeps
     // the "old kind never clear-signs a nested format" guarantee.
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
     assert!(matches!(ir.context_kind, ContextKind::Eip712));
 
@@ -6774,9 +7000,9 @@ fn v2_kind_declines_nested_permit2() {
 }
 
 // ───────────────────────────────────────────────────────────────────────
-// THE DECISIVE nested-EIP-712 test (design §3 rule 6): a safe-visible copy of
-// the real Permit2 PermitSingle type drives the V3 render path. Every explicit
-// descriptor field is visible in this fixture. The binding test proves that
+// THE DECISIVE nested-EIP-712 test (design §3 rule 6): the production Permit2
+// PermitSingle leaf drives the V3 render path. Every signed terminal field is
+// visible in the shipping descriptor. The binding test proves that
 // flipping ANY nested word or the committed top-level `details` word declines.
 // (a) alone would pass even if the keccak binding were never checked; (b) is
 // what proves shown ⟺ signed.
@@ -6825,14 +7051,9 @@ fn permit_single_vectors(
 
 #[test]
 fn v3_permit_single_renders_nested_members() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
-    // PermitSingle primary-type hash in the safe-visible Permit2 fixture.
-    let pth: [u8; 32] = [
-        0xf3, 0x84, 0x1c, 0xd1, 0xff, 0x00, 0x85, 0x02, 0x6a, 0x63, 0x27, 0xb6, 0x20, 0xb6, 0x79,
-        0x97, 0xce, 0x40, 0xf2, 0x82, 0xc8, 0x8a, 0x8e, 0x90, 0x5a, 0x7a, 0x56, 0x26, 0xe3, 0x10,
-        0xf3, 0xd0,
-    ];
+    let pth = PERMIT_SINGLE_TYPEHASH;
     let token = [
         0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e, 0x9E, 0xb0,
         0xcE, 0x36, 0x06, 0xeB, 0x48,
@@ -6844,8 +7065,8 @@ fn v3_permit_single_renders_nested_members() {
     let (top_ed, nested_blob) = permit_single_vectors(
         token,
         1_000_000_000,
-        1_735_689_600,
-        0,
+        1_704_067_200,
+        7,
         spender,
         1_735_689_600,
     );
@@ -6873,10 +7094,19 @@ fn v3_permit_single_renders_nested_members() {
         dump.contains("1000000000"),
         "nested amount must render:\n{dump}"
     );
-    // nested expiration is a timestamp date → a 2025 date renders.
+    let expiration: [u8; 32] = nested_blob[2 + 64..2 + 96]
+        .try_into()
+        .expect("PermitSingle expiration word");
+    let nonce: [u8; 32] = nested_blob[2 + 96..2 + 128]
+        .try_into()
+        .expect("PermitSingle nonce word");
+    assert_raw_word_pages(&pages, "Expiry (0=now)", &expiration);
+    assert_raw_word_pages(&pages, "Allowance nonce", &nonce);
+    let _ = find_page_by_label(&pages, "Allowance");
+    let _ = find_page_by_label(&pages, "Sig deadline");
     assert!(
         dump.contains("2025"),
-        "nested expiration date must render:\n{dump}"
+        "signature deadline must render:\n{dump}"
     );
 
     let spender_page = find_page_by_label(&pages, "Spender");
@@ -6896,8 +7126,73 @@ fn v3_permit_single_renders_nested_members() {
 }
 
 #[test]
+fn v3_permit_single_expiry_zero_and_uint160_unlimited_are_semantically_exact() {
+    let leaf = production_permit2_leaf(1);
+    let token = [
+        0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e, 0x9E, 0xb0,
+        0xcE, 0x36, 0x06, 0xeB, 0x48,
+    ];
+    let spender = [
+        0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5, 0xa6, 0xcC,
+        0x9D, 0x4B, 0x2b, 0x7F, 0xAD,
+    ];
+    let (base_top, base_blob) = permit_single_vectors(token, 1, 0, 9, spender, 1_735_689_600);
+    let render = |top: &[u8], blob: &[u8]| {
+        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("Permit2 IR parses");
+        let verified = VerifiedDescriptor { ir };
+        super::erc7730::render_erc7730_eip712_pages_v3(
+            1,
+            &[0u8; 20],
+            &PERMIT_SINGLE_TYPEHASH,
+            top,
+            blob,
+            &verified,
+            None,
+            &NameResolver::new(),
+        )
+    };
+
+    let zero_expiry = render(&base_top, &base_blob).expect("zero-expiry PermitSingle renders");
+    let expiration: [u8; 32] = base_blob[2 + 64..2 + 96]
+        .try_into()
+        .expect("zero expiration word");
+    assert_raw_word_pages(&zero_expiry, "Expiry (0=now)", &expiration);
+    assert!(
+        !dump_pages(&zero_expiry).contains("1970"),
+        "Permit2 expiration zero must not be presented as Unix epoch"
+    );
+
+    let render_amount = |last_byte: u8| {
+        let mut top = base_top.clone();
+        let mut blob = base_blob.clone();
+        let amount = &mut blob[2 + 32..2 + 64];
+        amount.fill(0);
+        amount[12..].fill(0xff);
+        amount[31] = last_byte;
+        let rebound = super::erc7730::nested::hash_struct(&PERMIT_DETAILS_TYPEHASH, &blob[2..]);
+        top[..32].copy_from_slice(&rebound);
+        render(&top, &blob).expect("canonical uint160 allowance renders")
+    };
+
+    let unlimited = render_amount(0xff);
+    assert!(
+        dump_pages(&unlimited)
+            .to_ascii_lowercase()
+            .contains("unlimited"),
+        "exact uint160::MAX must carry the reusable unlimited-allowance warning"
+    );
+    let finite = render_amount(0xfe);
+    assert!(
+        !dump_pages(&finite)
+            .to_ascii_lowercase()
+            .contains("unlimited"),
+        "uint160::MAX - 1 must remain a finite numeric allowance"
+    );
+}
+
+#[test]
 fn v3_permit_single_rejects_hash_bound_dirty_uint160_padding() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let pth: [u8; 32] = [
         0xf3, 0x84, 0x1c, 0xd1, 0xff, 0x00, 0x85, 0x02, 0x6a, 0x63, 0x27, 0xb6, 0x20, 0xb6, 0x79,
         0x97, 0xce, 0x40, 0xf2, 0x82, 0xc8, 0x8a, 0x8e, 0x90, 0x5a, 0x7a, 0x56, 0x26, 0xe3, 0x10,
@@ -6933,7 +7228,7 @@ fn v3_permit_single_rejects_hash_bound_dirty_uint160_padding() {
 
 #[test]
 fn v3_permit_single_binding_is_non_vacuous() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let pth: [u8; 32] = [
         0xf3, 0x84, 0x1c, 0xd1, 0xff, 0x00, 0x85, 0x02, 0x6a, 0x63, 0x27, 0xb6, 0x20, 0xb6, 0x79,
         0x97, 0xce, 0x40, 0xf2, 0x82, 0xc8, 0x8a, 0x8e, 0x90, 0x5a, 0x7a, 0x56, 0x26, 0xe3, 0x10,
@@ -7057,7 +7352,7 @@ fn eip712_format_ndc_offset(ir_bytes: &[u8], target: &[u8; 32]) -> Option<usize>
 /// IR cannot become a `VerifiedDescriptor` at all.
 #[test]
 fn v3_reconciliation_rejects_wrong_pinned_descent_count() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
 
     // Locate PermitSingle's format header nested_descent_count byte. The permit2
     // leaf now carries three formats (PermitSingle, PermitTransferFrom,
@@ -7102,7 +7397,7 @@ fn v3_reconciliation_rejects_wrong_pinned_descent_count() {
 /// live exploit — but the cursor check must fire.)
 #[test]
 fn v3_reconciliation_rejects_trailing_nested_blob() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let (top_ed, mut nested_blob) = permit_single_valid_vectors();
     nested_blob.push(0xEE); // one unconsumed trailing byte
 
@@ -7143,7 +7438,7 @@ const PERMIT_TRANSFER_FROM_TYPEHASH: [u8; 32] = [
 /// committed `permitted` word declines (binding is live for the 2-member shape).
 #[test]
 fn v3_permit_transfer_from_renders_and_flip_declines() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let token = [
         0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e, 0x9E, 0xb0,
         0xcE, 0x36, 0x06, 0xeB, 0x48,
@@ -7163,7 +7458,7 @@ fn v3_permit_transfer_from_renders_and_flip_declines() {
     let mut top_ed = std::vec![0u8; 128];
     top_ed[0..32].copy_from_slice(&permitted_hs);
     top_ed[32 + 12..64].copy_from_slice(&spender);
-    top_ed[64 + 24..96].copy_from_slice(&42u64.to_be_bytes()); // nonce (VISIBLE fixture)
+    top_ed[64 + 24..96].copy_from_slice(&42u64.to_be_bytes()); // one-time nonce
     top_ed[96 + 24..128].copy_from_slice(&1_735_689_600u64.to_be_bytes()); // deadline (SHOWN)
 
     let mut nested_blob = std::vec![0u8; 2];
@@ -7196,6 +7491,38 @@ fn v3_permit_transfer_from_renders_and_flip_declines() {
     );
     assert!(dump.contains("2025"), "deadline date must render:\n{dump}");
     assert!(!dump.contains("hidden"), "sanity");
+    let _ = find_page_by_label(&pages, "Maximum transfer");
+    let _ = find_page_by_label(&pages, "Deadline");
+    let nonce: [u8; 32] = top_ed[64..96].try_into().expect("PermitTransferFrom nonce");
+    assert_raw_word_pages(&pages, "Nonce", &nonce);
+    assert!(
+        !dump.contains("transfer 500000000"),
+        "the signed cap must not be presented as an exact transfer"
+    );
+
+    let render_maximum = |last_byte: u8| {
+        let mut ed = top_ed.clone();
+        let mut blob = nested_blob.clone();
+        blob[2 + 32..2 + 64].fill(0xff);
+        blob[2 + 63] = last_byte;
+        let rebound = super::erc7730::nested::hash_struct(&TOKEN_PERMISSIONS_TYPEHASH, &blob[2..]);
+        ed[..32].copy_from_slice(&rebound);
+        render(&ed, &blob).expect("canonical uint256 transfer cap renders")
+    };
+    let any_amount = render_maximum(0xff);
+    assert!(
+        dump_pages(&any_amount)
+            .to_ascii_lowercase()
+            .contains("any amount"),
+        "exact uint256::MAX must state that the spender may choose any amount"
+    );
+    let finite = render_maximum(0xfe);
+    assert!(
+        !dump_pages(&finite)
+            .to_ascii_lowercase()
+            .contains("any amount"),
+        "uint256::MAX - 1 must remain a finite one-time cap"
+    );
 
     // Flip the committed `permitted` hashStruct word → decline (binding live).
     for byte in [0usize, 15, 31] {
@@ -7222,7 +7549,7 @@ const PERMIT_BATCH_TYPEHASH: [u8; 32] = [
 ];
 
 /// A REAL 2-element Permit2 `PermitBatch` (v2 array-of-struct). el0 = USDC/1e9/
-/// 2025-01-01/nonce0, el1 = WETH/5e18/2026-01-01/nonce1. The committed `details`
+/// expiry 1735689600/nonce7, el1 = WETH/5e18/expiry 1767225600/nonce11. The committed `details`
 /// word is the foundry-pinned array binding `keccak(hashStruct(el0)‖hashStruct(el1))
 /// = 0x57b01054…` (recomputed here via the SAME device primitive — not circular:
 /// the device recomputes from the IR-pinned type_hash + the blob; a flip in
@@ -7245,11 +7572,12 @@ fn permit_batch_vectors() -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
     el0[12..32].copy_from_slice(&usdc);
     el0[32 + 24..64].copy_from_slice(&1_000_000_000u64.to_be_bytes());
     el0[64 + 24..96].copy_from_slice(&1_735_689_600u64.to_be_bytes());
+    el0[96 + 24..128].copy_from_slice(&7u64.to_be_bytes());
     let mut el1 = std::vec![0u8; 128];
     el1[12..32].copy_from_slice(&weth);
     el1[32 + 24..64].copy_from_slice(&5_000_000_000_000_000_000u64.to_be_bytes());
     el1[64 + 24..96].copy_from_slice(&1_767_225_600u64.to_be_bytes());
-    el1[96 + 24..128].copy_from_slice(&1u64.to_be_bytes());
+    el1[96 + 24..128].copy_from_slice(&11u64.to_be_bytes());
 
     let details_word =
         super::erc7730::nested::hash_struct_array(&PERMIT_DETAILS_TYPEHASH, &[&el0[..], &el1[..]]);
@@ -7267,9 +7595,81 @@ fn permit_batch_vectors() -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
     (top_ed, blob)
 }
 
+fn permit_batch_repeated_vectors(count: u16) -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
+    assert!((1..=6).contains(&count));
+    let token = [
+        0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e, 0x9E, 0xb0,
+        0xcE, 0x36, 0x06, 0xeB, 0x48,
+    ];
+    let spender = [
+        0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5, 0xa6, 0xcC,
+        0x9D, 0x4B, 0x2b, 0x7F, 0xAD,
+    ];
+    let mut elements = std::vec::Vec::new();
+    for index in 0..count {
+        let mut element = std::vec![0u8; 128];
+        element[12..32].copy_from_slice(&token);
+        element[32 + 24..64].copy_from_slice(&(1_000_000u64 + index as u64).to_be_bytes());
+        element[64 + 24..96].copy_from_slice(&(1_735_689_600u64 + index as u64).to_be_bytes());
+        element[96 + 24..128].copy_from_slice(&(index as u64 + 1).to_be_bytes());
+        elements.push(element);
+    }
+    let refs: std::vec::Vec<&[u8]> = elements.iter().map(|element| element.as_slice()).collect();
+    let details_word = super::erc7730::nested::hash_struct_array(&PERMIT_DETAILS_TYPEHASH, &refs);
+    let mut top_ed = std::vec![0u8; 96];
+    top_ed[..32].copy_from_slice(&details_word);
+    top_ed[32 + 12..64].copy_from_slice(&spender);
+    top_ed[64 + 24..96].copy_from_slice(&1_767_225_600u64.to_be_bytes());
+
+    let mut blob = count.to_be_bytes().to_vec();
+    for element in elements {
+        blob.extend_from_slice(&128u16.to_be_bytes());
+        blob.extend_from_slice(&element);
+    }
+    (top_ed, blob)
+}
+
+#[test]
+fn v3_permit_batch_page_budget_is_atomic_at_the_verified_boundary() {
+    let leaf = production_permit2_leaf(1);
+    for count in 1..=6u16 {
+        let (top_ed, blob) = permit_batch_repeated_vectors(count);
+        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("Permit2 IR parses");
+        let verified = VerifiedDescriptor { ir };
+        let result = super::erc7730::render_erc7730_eip712_pages_v3(
+            1,
+            &[0u8; 20],
+            &PERMIT_BATCH_TYPEHASH,
+            &top_ed,
+            &blob,
+            &verified,
+            None,
+            &NameResolver::new(),
+        );
+        if count <= 3 {
+            let pages = result.unwrap_or_else(|error| {
+                panic!("{count}-element PermitBatch must fit completely: {error:?}")
+            });
+            let dump = dump_pages(&pages).to_ascii_lowercase();
+            assert!(
+                dump.contains(&format!("item {count} of {count}")),
+                "accepted batch must include its final complete element:\n{dump}"
+            );
+        } else {
+            assert!(
+                matches!(
+                    result,
+                    Err(crate::tx::erc7730_render::RenderErr::PageBudget)
+                ),
+                "{count}-element PermitBatch must fail atomically at the page boundary"
+            );
+        }
+    }
+}
+
 #[test]
 fn v3_permit_batch_array_renders_both_elements() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let (top_ed, blob) = permit_batch_vectors();
     let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
     let verified = VerifiedDescriptor { ir };
@@ -7306,14 +7706,25 @@ fn v3_permit_batch_array_renders_both_elements() {
     // The "Item 1 of 2" / "Item 2 of 2" dividers.
     assert!(dump.contains("item 1 of 2"), "element 0 divider:\n{dump}");
     assert!(dump.contains("item 2 of 2"), "element 1 divider:\n{dump}");
-    // Both element expiration dates.
-    assert!(dump.contains("2025"), "element 0 expiration:\n{dump}");
-    assert!(dump.contains("2026"), "element 1 expiration:\n{dump}");
+    let expiry0: [u8; 32] = blob[4 + 64..4 + 96].try_into().expect("element 0 expiry");
+    let nonce0: [u8; 32] = blob[4 + 96..4 + 128].try_into().expect("element 0 nonce");
+    let expiry1: [u8; 32] = blob[134 + 64..134 + 96]
+        .try_into()
+        .expect("element 1 expiry");
+    let nonce1: [u8; 32] = blob[134 + 96..134 + 128]
+        .try_into()
+        .expect("element 1 nonce");
+    assert_nth_raw_word_pages(&pages, "Expiry (0=now)", 0, &expiry0);
+    assert_nth_raw_word_pages(&pages, "Expiry (0=now)", 1, &expiry1);
+    assert_nth_raw_word_pages(&pages, "Allowance nonce", 0, &nonce0);
+    assert_nth_raw_word_pages(&pages, "Allowance nonce", 1, &nonce1);
+    let _ = find_page_by_label(&pages, "Spender");
+    let _ = find_page_by_label(&pages, "Sig deadline");
 }
 
 #[test]
 fn v3_permit_batch_array_binding_is_non_vacuous() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let (top_ed, blob) = permit_batch_vectors();
 
     let render = |ed: &[u8], b: &[u8]| {
@@ -7388,13 +7799,13 @@ fn erc2612_permit_with_hidden_owner_is_excluded() {
 // ───────────────────────────────────────────────────────────────────────
 // Tier B: canonical dynamic tokenPath framing — Uniswap swaps.
 //
-// Endpoint tokenPaths identify amount metadata; they do not display a complete
-// signed packed route or address array. The two all-static Router02 single-hop
-// calls are admitted only with authenticated recipient/amount/price/value
-// semantics. The four broader routes remain absent and known hard refusals. A
-// process-private safe fixture adds `path.[]`, preserving the runtime
-// extraction/framing backstop while requiring all route addresses to reach the
-// display.
+// Endpoint tokenPaths identify amount metadata; they do not by themselves
+// display a complete signed packed route or address array. Production admits
+// the two all-static Router02 single-hop calls and the two V2 `address[]`
+// routes only with authenticated recipient/amount/value semantics. The packed
+// V3 byte-path routes remain known hard refusals. A process-private fixture is
+// retained as a compiler-level collection-path backstop; the production tests
+// below exercise the real Merkle-bound Router02 leaf.
 // ───────────────────────────────────────────────────────────────────────
 const UNI_V3: [u8; 20] = [
     0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
@@ -7407,6 +7818,9 @@ const UNI_EXACT_INPUT_SINGLE: &str =
     "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))";
 const UNI_EXACT_OUTPUT_SINGLE: &str =
     "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))";
+const UNI_SWAP_EXACT_TOKENS: &str = "swapExactTokensForTokens(uint256,uint256,address[],address)";
+const UNI_SWAP_TOKENS_FOR_EXACT: &str =
+    "swapTokensForExactTokens(uint256,uint256,address[],address)";
 
 fn calldata_uniswap_single(
     signature: &str,
@@ -7438,20 +7852,25 @@ fn calldata_uniswap_exact_output(recipient: [u8; 20]) -> Vec<u8> {
 }
 
 #[test]
-fn production_uniswap_router02_admits_only_guarded_single_hop_and_keeps_all_calls_known() {
+fn production_uniswap_router02_admits_only_guarded_routes_and_keeps_all_calls_known() {
     let registry = build_registry();
     let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
     let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Router02 IR parses");
-    assert_eq!(ir.format_count(), Ok(2));
+    assert_eq!(ir.format_count(), Ok(4));
 
-    for signature in [UNI_EXACT_INPUT_SINGLE, UNI_EXACT_OUTPUT_SINGLE] {
+    for signature in [
+        UNI_EXACT_INPUT_SINGLE,
+        UNI_EXACT_OUTPUT_SINGLE,
+        UNI_SWAP_EXACT_TOKENS,
+        UNI_SWAP_TOKENS_FOR_EXACT,
+    ] {
         let selector = keccak256(signature.as_bytes());
         let key: [u8; 4] = selector[..4].try_into().expect("selector width");
         assert!(
             ir.find_format_by_selector(&key)
                 .expect("Router02 format table parses")
                 .is_some(),
-            "guarded Router02 single-hop call must be admitted: {signature}"
+            "guarded Router02 call must be admitted: {signature}"
         );
     }
 
@@ -7460,10 +7879,14 @@ fn production_uniswap_router02_admits_only_guarded_single_hop_and_keeps_all_call
         UNI_EXACT_OUTPUT_SINGLE,
         "exactInput((bytes,address,uint256,uint256))",
         "exactOutput((bytes,address,uint256,uint256))",
-        "swapExactTokensForTokens(uint256,uint256,address[],address)",
-        "swapTokensForExactTokens(uint256,uint256,address[],address)",
+        UNI_SWAP_EXACT_TOKENS,
+        UNI_SWAP_TOKENS_FOR_EXACT,
     ] {
-        if signature != UNI_EXACT_INPUT_SINGLE && signature != UNI_EXACT_OUTPUT_SINGLE {
+        if matches!(
+            signature,
+            "exactInput((bytes,address,uint256,uint256))"
+                | "exactOutput((bytes,address,uint256,uint256))"
+        ) {
             assert_selector_excluded(&ir, signature);
         }
         let digest = keccak256(signature.as_bytes());
@@ -7818,6 +8241,310 @@ fn calldata_v2_swap(
     d
 }
 
+fn uniswap_v2_swap_calldata(
+    signature: &str,
+    first_amount: u64,
+    second_amount: u64,
+    path: &[[u8; 20]],
+    recipient: [u8; 20],
+) -> Vec<u8> {
+    let digest = keccak256(signature.as_bytes());
+    let selector: [u8; 4] = digest[..4].try_into().expect("selector width");
+    calldata_v2_swap(
+        selector,
+        u256_from_u64(first_amount),
+        u256_from_u64(second_amount),
+        path,
+        recipient,
+    )
+}
+
+fn assert_complete_route_pages(pages: &Pages, path: &[[u8; 20]]) {
+    let route_pages = pages
+        .as_slice()
+        .iter()
+        .filter(|page| row_str(&page[0]) == "Route")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        route_pages.len(),
+        path.len() + 1,
+        "route must show one count page and every signed address:\n{}",
+        dump_pages(pages)
+    );
+    assert!(
+        page_strs(pages, find_page_by_label(pages, "Route"))
+            .iter()
+            .any(|row| row.contains(&format!("{} items", path.len()))),
+        "route count must be explicit:\n{}",
+        dump_pages(pages)
+    );
+
+    for (index, address) in path.iter().enumerate() {
+        let mut expected = [[b' '; DISPLAY_COLS]; 4];
+        expected[0][..5].copy_from_slice(b"Route");
+        let [_, r1, r2, r3] = &mut expected;
+        write_addr_full(r1, r2, r3, address);
+        assert_eq!(
+            *route_pages[index + 1],
+            expected,
+            "route element {index} must show all 20 signed address bytes"
+        );
+    }
+}
+
+#[test]
+fn production_uniswap_router02_multihop_renders_every_operand_and_binds_transcript() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let recipient = [0x33; 20];
+    let path = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
+
+    for (signature, first_label, second_label) in [
+        (UNI_SWAP_EXACT_TOKENS, "Swap input", "Minimum receive"),
+        (
+            UNI_SWAP_TOKENS_FOR_EXACT,
+            "Amount to recei~",
+            "Max swap input",
+        ),
+    ] {
+        let calldata = uniswap_v2_swap_calldata(signature, 1_500_000, 1_000_000, &path, recipient);
+        assert_selector_matches(&verified.ir, &calldata, signature);
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render production {signature}: {error:?}"));
+        assert_all_pages_printable(&rendered.pages);
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "receipt must bind the complete production transcript for {signature}"
+        );
+        let _ = find_page_by_label(&rendered.pages, first_label);
+        let _ = find_page_by_label(&rendered.pages, second_label);
+        assert_complete_route_pages(&rendered.pages, &path);
+        assert_full_address_field_page(&rendered.pages, "Beneficiary", &recipient);
+        let native_value = page_strs(
+            &rendered.pages,
+            find_page_by_label(&rendered.pages, "Native value"),
+        );
+        assert!(
+            native_value.iter().any(|row| row.contains('0')),
+            "the exact guarded zero outer value must be visible: {native_value:?}"
+        );
+
+        let mut scalar_offsets = vec![
+            (4 + 31, "first amount"),
+            (4 + 32 + 31, "second amount"),
+            (4 + 3 * 32 + 31, "beneficiary"),
+        ];
+        let route_start = 4 + 4 * 32 + 32;
+        for index in 0..path.len() {
+            scalar_offsets.push((route_start + index * 32 + 31, "route element"));
+        }
+        for (offset, label) in scalar_offsets {
+            let mut mutated_calldata = calldata.clone();
+            mutated_calldata[offset] ^= 1;
+            let mutated = render_erc7730_pages_with_signer_checked(
+                &tx,
+                &mutated_calldata,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            )
+            .unwrap_or_else(|error| {
+                panic!("canonical {label} mutation must render for {signature}: {error:?}")
+            });
+            assert_ne!(
+                rendered.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "{label} mutation must change trusted pages for {signature}"
+            );
+            assert!(
+                !rendered
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "{label} mutation must change the receipt for {signature}"
+            );
+        }
+
+        let mut funded = envelope(1, UNI_V3);
+        funded.value = u256_from_u64(1);
+        assert!(
+            render_erc7730_pages_with_signer_checked(
+                &funded, &calldata, &verified, None, &resolver, &signer,
+            )
+            .is_err(),
+            "nonzero outer value must refuse {signature}"
+        );
+    }
+}
+
+#[test]
+fn production_uniswap_router02_multihop_sender_and_amount_guards_fail_closed() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let path = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
+    let signer = [0x44; 20];
+    let mut mutated_signer = signer;
+    mutated_signer[19] ^= 1;
+    let mut address_one = [0u8; 20];
+    address_one[19] = 1;
+    let mut address_two = [0u8; 20];
+    address_two[19] = 2;
+
+    for signature in [UNI_SWAP_EXACT_TOKENS, UNI_SWAP_TOKENS_FOR_EXACT] {
+        let sentinel =
+            uniswap_v2_swap_calldata(signature, 1_500_000, 1_000_000, &path, address_one);
+        assert!(matches!(
+            render_erc7730_pages(&tx, &sentinel, &verified, None, &resolver),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 sender unbound"
+            ))
+        ));
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &sentinel, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render sender sentinel {signature}: {error:?}"));
+        assert_full_address_field_page(&rendered.pages, "Beneficiary", &signer);
+        let mutated = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &sentinel,
+            &verified,
+            None,
+            &resolver,
+            &mutated_signer,
+        )
+        .unwrap_or_else(|error| panic!("render mutated signer {signature}: {error:?}"));
+        assert_full_address_field_page(&mutated.pages, "Beneficiary", &mutated_signer);
+        assert_ne!(rendered.pages.as_slice(), mutated.pages.as_slice());
+        assert!(!rendered
+            .transcript_receipt
+            .exact_match(&mutated.transcript_receipt));
+
+        let forbidden =
+            uniswap_v2_swap_calldata(signature, 1_500_000, 1_000_000, &path, address_two);
+        assert!(
+            render_erc7730_pages_with_signer_checked(
+                &tx, &forbidden, &verified, None, &resolver, &signer,
+            )
+            .is_err(),
+            "address(2) must refuse {signature}"
+        );
+    }
+
+    let zero_input =
+        uniswap_v2_swap_calldata(UNI_SWAP_EXACT_TOKENS, 0, 1_000_000, &path, [0x33; 20]);
+    assert!(
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &zero_input,
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        )
+        .is_err(),
+        "exact-input amountIn=0 must refuse"
+    );
+}
+
+#[test]
+fn production_uniswap_router02_multihop_rejects_noncanonical_array_framing() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let path = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
+    let render = |calldata: &[u8]| {
+        render_erc7730_pages_with_signer_checked(&tx, calldata, &verified, None, &resolver, &signer)
+    };
+
+    for signature in [UNI_SWAP_EXACT_TOKENS, UNI_SWAP_TOKENS_FOR_EXACT] {
+        let baseline = uniswap_v2_swap_calldata(signature, 1_500_000, 1_000_000, &path, [0x33; 20]);
+        assert!(
+            render(&baseline).is_ok(),
+            "canonical {signature} must render"
+        );
+
+        let mut dirty_recipient = baseline.clone();
+        dirty_recipient[4 + 3 * 32] = 1;
+        assert!(
+            render(&dirty_recipient).is_err(),
+            "dirty recipient must refuse"
+        );
+        for index in 0..path.len() {
+            let mut dirty_path = baseline.clone();
+            dirty_path[4 + 4 * 32 + 32 + index * 32] = 1;
+            assert!(
+                render(&dirty_path).is_err(),
+                "dirty route address {index} must refuse {signature}"
+            );
+        }
+
+        let mut high_offset = baseline.clone();
+        high_offset[4 + 2 * 32] = 1;
+        assert!(render(&high_offset).is_err(), "huge offset must refuse");
+        let mut gapped_offset = baseline.clone();
+        gapped_offset[4 + 2 * 32 + 31] = 160;
+        assert!(
+            render(&gapped_offset).is_err(),
+            "non-head-end offset must refuse"
+        );
+
+        let count_offset = 4 + 4 * 32;
+        let mut high_count = baseline.clone();
+        high_count[count_offset] = 1;
+        assert!(render(&high_count).is_err(), "huge count must refuse");
+        for bad_count in [0u8, 2, 4] {
+            let mut malformed = baseline.clone();
+            malformed[count_offset + 31] = bad_count;
+            assert!(
+                render(&malformed).is_err(),
+                "noncanonical count {bad_count} must refuse {signature}"
+            );
+        }
+
+        let mut trailing = baseline.clone();
+        trailing.extend_from_slice(&[0u8; 32]);
+        assert!(render(&trailing).is_err(), "trailing word must refuse");
+        let mut short = baseline.clone();
+        short.pop();
+        assert!(render(&short).is_err(), "short tail must refuse");
+        assert!(
+            render(&baseline[..4 + 4 * 32 - 1]).is_err(),
+            "short head must refuse"
+        );
+
+        let eight = [[0x77; 20]; 8];
+        let at_cap = uniswap_v2_swap_calldata(signature, 1_500_000, 1_000_000, &eight, [0x33; 20]);
+        let at_cap_rendered = render(&at_cap)
+            .unwrap_or_else(|error| panic!("eight route elements must render: {error:?}"));
+        assert_complete_route_pages(&at_cap_rendered.pages, &eight);
+
+        let nine = [[0x77; 20]; 9];
+        let over_budget =
+            uniswap_v2_swap_calldata(signature, 1_500_000, 1_000_000, &nine, [0x33; 20]);
+        assert!(
+            render(&over_budget).is_err(),
+            "nine route elements exceed the human-review budget"
+        );
+    }
+}
+
 fn render_safe_uni_result(
     calldata: &[u8],
     token: Option<&Erc20Metadata<'_>>,
@@ -7868,7 +8595,7 @@ fn uniswap_exact_input_c2_output_slice_is_excluded() {
 }
 
 #[test]
-fn uniswap_v2_swap_binds_first_and_last_array_element() {
+fn synthetic_uniswap_v2_swap_binds_first_and_last_array_element() {
     // 3-hop path so `[-1]` genuinely selects the LAST element, not index 1.
     // Unlike upstream, the synthetic descriptor also renders `path.[]`.
     let path = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
@@ -7918,27 +8645,51 @@ fn uniswap_v2_swap_binds_first_and_last_array_element() {
         route_pages, 4,
         "whole-route display must include one count page plus all three elements"
     );
-    assert_uniswap_router_call_excluded_but_known(
-        "swapExactTokensForTokens(uint256,uint256,address[],address)",
-    );
 }
 
 // ───────────────────────────────────────────────────────────────────────
-// QuickSwap V2 Router02 — three static remove-liquidity routes only.
-// LP-token metadata is derived rather than signed, so the exact liquidity
-// word is deliberately rendered raw. Permit and dynamic-path routes remain
-// known hard refusals.
+// QuickSwap V2 Router02 — six complete standard swaps, all three
+// fee-on-transfer swaps, and the five previously admitted static liquidity
+// routes. LP-token metadata is derived rather than signed, so the exact
+// liquidity word is deliberately rendered raw. Permit routes and every other
+// omitted route remain known hard refusals.
 // ───────────────────────────────────────────────────────────────────────
 const QUICKSWAP_ROUTER: [u8; 20] = [
     0xa5, 0xe0, 0x82, 0x9c, 0xac, 0xed, 0x8f, 0xfd, 0xd4, 0xde, 0x3c, 0x43, 0x69, 0x6c, 0x57, 0xf7,
     0xd7, 0xa6, 0x78, 0xff,
 ];
+const QUICKSWAP_ADD: &str =
+    "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)";
+const QUICKSWAP_ADD_NATIVE: &str =
+    "addLiquidityETH(address,uint256,uint256,uint256,address,uint256)";
 const QUICKSWAP_REMOVE: &str =
     "removeLiquidity(address,address,uint256,uint256,uint256,address,uint256)";
 const QUICKSWAP_REMOVE_NATIVE: &str =
     "removeLiquidityETH(address,uint256,uint256,uint256,address,uint256)";
 const QUICKSWAP_REMOVE_NATIVE_FOT: &str =
     "removeLiquidityETHSupportingFeeOnTransferTokens(address,uint256,uint256,uint256,address,uint256)";
+const QUICKSWAP_SWAP_EXACT_TOKENS: &str =
+    "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)";
+const QUICKSWAP_SWAP_TOKENS_FOR_EXACT: &str =
+    "swapTokensForExactTokens(uint256,uint256,address[],address,uint256)";
+const QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE: &str =
+    "swapExactTokensForETH(uint256,uint256,address[],address,uint256)";
+const QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS: &str =
+    "swapExactETHForTokens(uint256,address[],address,uint256)";
+const QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE: &str =
+    "swapTokensForExactETH(uint256,uint256,address[],address,uint256)";
+const QUICKSWAP_SWAP_EXACT_TOKENS_FOT: &str =
+    "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)";
+const QUICKSWAP_SWAP_EXACT_NATIVE_FOT: &str =
+    "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)";
+const QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT: &str =
+    "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)";
+const QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS: &str =
+    "swapETHForExactTokens(uint256,address[],address,uint256)";
+const QUICKSWAP_WMATIC: [u8; 20] = [
+    0x0d, 0x50, 0x0b, 0x1d, 0x8e, 0x8e, 0xf3, 0x1e, 0x21, 0xc9, 0x9d, 0x1d, 0xb9, 0xa6, 0x44, 0x4d,
+    0x3a, 0xdf, 0x12, 0x70,
+];
 
 fn quickswap_liquidity_word() -> [u8; 32] {
     [
@@ -7946,6 +8697,52 @@ fn quickswap_liquidity_word() -> [u8; 32] {
         0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
         0x1e, 0x1f,
     ]
+}
+
+fn quickswap_add_calldata(
+    token_a: [u8; 20],
+    token_b: [u8; 20],
+    amount_a_desired: U256,
+    amount_b_desired: U256,
+    amount_a_min: U256,
+    amount_b_min: U256,
+    recipient: [u8; 20],
+    deadline: U256,
+) -> Vec<u8> {
+    calldata_static(
+        QUICKSWAP_ADD,
+        &[
+            abi_address_word(token_a),
+            abi_address_word(token_b),
+            amount_a_desired.0,
+            amount_b_desired.0,
+            amount_a_min.0,
+            amount_b_min.0,
+            abi_address_word(recipient),
+            deadline.0,
+        ],
+    )
+}
+
+fn quickswap_add_native_calldata(
+    token: [u8; 20],
+    amount_token_desired: U256,
+    amount_token_min: U256,
+    amount_native_min: U256,
+    recipient: [u8; 20],
+    deadline: U256,
+) -> Vec<u8> {
+    calldata_static(
+        QUICKSWAP_ADD_NATIVE,
+        &[
+            abi_address_word(token),
+            amount_token_desired.0,
+            amount_token_min.0,
+            amount_native_min.0,
+            abi_address_word(recipient),
+            deadline.0,
+        ],
+    )
 }
 
 fn quickswap_remove_calldata(signature: &str) -> Vec<u8> {
@@ -7981,6 +8778,61 @@ fn quickswap_remove_calldata(signature: &str) -> Vec<u8> {
     }
 }
 
+fn quickswap_swap_calldata(
+    signature: &str,
+    first_amount: U256,
+    second_amount: U256,
+    path: &[[u8; 20]],
+    beneficiary: [u8; 20],
+    deadline: U256,
+) -> Vec<u8> {
+    let selector = keccak256(signature.as_bytes());
+    let native_input = matches!(
+        signature,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS
+            | QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS
+            | QUICKSWAP_SWAP_EXACT_NATIVE_FOT
+    );
+    assert!(
+        native_input
+            || matches!(
+                signature,
+                QUICKSWAP_SWAP_EXACT_TOKENS
+                    | QUICKSWAP_SWAP_TOKENS_FOR_EXACT
+                    | QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE
+                    | QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE
+                    | QUICKSWAP_SWAP_EXACT_TOKENS_FOT
+                    | QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT
+            ),
+        "unsupported QuickSwap swap route: {signature}"
+    );
+    let head_words = if native_input { 4 } else { 5 };
+    let mut calldata = Vec::with_capacity(4 + (head_words + 1 + path.len()) * 32);
+    calldata.extend_from_slice(&selector[..4]);
+    calldata.extend_from_slice(&first_amount.0);
+    if !native_input {
+        calldata.extend_from_slice(&second_amount.0);
+    }
+    calldata.extend_from_slice(&u256_from_u64((head_words * 32) as u64).0);
+    calldata.extend_from_slice(&abi_address_word(beneficiary));
+    calldata.extend_from_slice(&deadline.0);
+    calldata.extend_from_slice(&u256_from_u64(path.len() as u64).0);
+    for token in path {
+        calldata.extend_from_slice(&abi_address_word(*token));
+    }
+    calldata
+}
+
+fn quickswap_meta(contract: [u8; 20], symbol: &'static [u8]) -> Erc20Metadata<'static> {
+    Erc20Metadata {
+        chain_id: 137,
+        contract,
+        decimals: 6,
+        name: symbol,
+        symbol,
+    }
+}
+
 fn assert_some_page_shows_full_address(pages: &Pages, address: &[u8; 20]) {
     let mut expected = [[b' '; DISPLAY_COLS]; 3];
     let [r1, r2, r3] = &mut expected;
@@ -7993,8 +8845,18 @@ fn assert_some_page_shows_full_address(pages: &Pages, address: &[u8; 20]) {
     );
 }
 
+fn quickswap_rows_with_label(pages: &Pages, label: &str) -> Vec<[String; 4]> {
+    pages
+        .as_slice()
+        .iter()
+        .enumerate()
+        .filter(|(_, page)| row_str(&page[0]) == label)
+        .map(|(index, _)| page_strs(pages, index))
+        .collect()
+}
+
 #[test]
-fn production_quickswap_admits_exactly_five_static_routes_and_refuses_broader_calls() {
+fn production_quickswap_admits_exactly_fourteen_bounded_routes_and_refuses_permits() {
     let registry = build_registry();
     let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
     assert_eq!(entry.contract, QUICKSWAP_ROUTER);
@@ -8003,6 +8865,15 @@ fn production_quickswap_admits_exactly_five_static_routes_and_refuses_broader_ca
     let ir = &verified.ir;
 
     let admitted_signatures = [
+        QUICKSWAP_SWAP_EXACT_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS,
+        QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOT,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT,
         "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)",
         "addLiquidityETH(address,uint256,uint256,uint256,address,uint256)",
         QUICKSWAP_REMOVE,
@@ -8017,7 +8888,31 @@ fn production_quickswap_admits_exactly_five_static_routes_and_refuses_broader_ca
         .iter()
         .map(|signature| keccak256(signature.as_bytes())[..4].try_into().unwrap())
         .collect();
+    assert_eq!(expected.len(), 14, "all admitted selectors must be unique");
     assert_eq!(admitted, expected);
+    assert_eq!(
+        &keccak256(QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS.as_bytes())[..4],
+        &[0xfb, 0x3b, 0xdb, 0x41],
+        "swapETHForExactTokens selector must stay pinned"
+    );
+    for (signature, selector) in [
+        (QUICKSWAP_SWAP_EXACT_TOKENS_FOT, [0x5c, 0x11, 0xd7, 0x95]),
+        (QUICKSWAP_SWAP_EXACT_NATIVE_FOT, [0xb6, 0xf9, 0xde, 0x95]),
+        (
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT,
+            [0x79, 0x1a, 0xc9, 0x47],
+        ),
+    ] {
+        assert_eq!(
+            &keccak256(signature.as_bytes())[..4],
+            &selector,
+            "fee-on-transfer selector must stay pinned for {signature}"
+        );
+        assert!(
+            admitted.contains(&selector),
+            "fee-on-transfer selector must be present in trusted IR: {signature}"
+        );
+    }
 
     for signature in [
         QUICKSWAP_REMOVE,
@@ -8032,16 +8927,48 @@ fn production_quickswap_admits_exactly_five_static_routes_and_refuses_broader_ca
         "removeLiquidityWithPermit(address,address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
         "removeLiquidityETHWithPermit(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
         "removeLiquidityETHWithPermitSupportingFeeOnTransferTokens(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
-        "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)",
-        "swapExactTokensForETH(uint256,uint256,address[],address,uint256)",
-        "swapExactETHForTokens(uint256,address[],address,uint256)",
-        "swapTokensForExactTokens(uint256,uint256,address[],address,uint256)",
-        "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
-        "swapTokensForExactETH(uint256,uint256,address[],address,uint256)",
-        "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)",
     ];
     let tx = envelope(137, QUICKSWAP_ROUTER);
     let resolver = NameResolver::new();
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOT,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT,
+    ] {
+        let digest = keccak256(signature.as_bytes());
+        let selector: [u8; 4] = digest[..4].try_into().expect("selector width");
+        assert!(
+            registry
+                .known_calls
+                .contains(&(137, QUICKSWAP_ROUTER, selector)),
+            "admitted FOT call must remain exactly known: {signature}"
+        );
+        assert!(pqsigner_erc7730::known_calls::may_contain(
+            &registry.known_calls_bloom,
+            137,
+            &QUICKSWAP_ROUTER,
+            &selector,
+        ));
+        let mut missing_descriptor_proofs = DispatchPageProofs::new();
+        missing_descriptor_proofs.fail_initialize();
+        assert!(
+            pick_sign_pages(
+                &tx,
+                &selector,
+                &[0u8; 20],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &resolver,
+                &mut missing_descriptor_proofs,
+            )
+            .is_err(),
+            "admitted FOT call must hard-refuse when its descriptor trailer is omitted: {signature}"
+        );
+    }
     for signature in excluded {
         assert_selector_excluded(ir, signature);
         let digest = keccak256(signature.as_bytes());
@@ -8083,6 +9010,1552 @@ fn production_quickswap_admits_exactly_five_static_routes_and_refuses_broader_ca
             .is_err(),
             "known excluded QuickSwap call must not fall back: {signature}"
         );
+
+        let mut missing_descriptor_proofs = DispatchPageProofs::new();
+        missing_descriptor_proofs.fail_initialize();
+        assert!(
+            pick_sign_pages(
+                &tx,
+                &calldata,
+                &[0u8; 20],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &resolver,
+                &mut missing_descriptor_proofs,
+            )
+            .is_err(),
+            "known excluded QuickSwap call must hard-refuse when the descriptor trailer is omitted: {signature}"
+        );
+    }
+}
+
+#[test]
+fn production_quickswap_add_liquidity_renders_exact_bounds_and_token_bindings() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let tx = envelope(137, QUICKSWAP_ROUTER);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let recipient = [0x33; 20];
+    let deadline = u256_from_u64(2_000_000_000);
+    let calldata = quickswap_add_calldata(
+        TOKEN_IN,
+        TOKEN_OUT,
+        u256_from_u64(1_500_000),
+        u256_from_u64(2_500_000),
+        u256_from_u64(1_000_000),
+        u256_from_u64(2_000_000),
+        recipient,
+        deadline,
+    );
+    assert_selector_matches(&verified.ir, &calldata, QUICKSWAP_ADD);
+
+    let token_a = quickswap_meta(TOKEN_IN, b"TKA");
+    let rendered_a = render_erc7730_pages_with_signer_checked(
+        &tx,
+        &calldata,
+        &verified,
+        Some(&token_a),
+        &resolver,
+        &signer,
+    )
+    .expect("render QuickSwap addLiquidity with token-A metadata");
+    assert_eq!(
+        rendered_a.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert!(
+        rendered_a
+            .transcript_receipt
+            .range_matches(&rendered_a.pages, 0),
+        "receipt must bind the complete addLiquidity transcript"
+    );
+    assert_all_pages_printable(&rendered_a.pages);
+    assert_eq!(
+        page_strs(&rendered_a.pages, intent_page_index(&rendered_a.pages)),
+        [
+            "Add Liquidity".to_string(),
+            "QuickSwap".to_string(),
+            "QuickSwap".to_string(),
+            "> next".to_string(),
+        ]
+    );
+    assert_eq!(
+        quickswap_rows_with_label(&rendered_a.pages, "Maximum to Add"),
+        vec![
+            [
+                "Maximum to Add".to_string(),
+                "1.5 TKA".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+            [
+                "Maximum to Add".to_string(),
+                "2500000".to_string(),
+                String::new(),
+                "! raw, dec=?".to_string(),
+            ],
+        ]
+    );
+    assert_eq!(
+        quickswap_rows_with_label(&rendered_a.pages, "Conditional Min"),
+        vec![
+            [
+                "Conditional Min".to_string(),
+                "1 TKA".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+            [
+                "Conditional Min".to_string(),
+                "2000000".to_string(),
+                String::new(),
+                "! raw, dec=?".to_string(),
+            ],
+        ]
+    );
+    assert_full_contract_identity_page(&rendered_a.pages, &TOKEN_IN);
+    assert_some_full_unverified_token_identity_page(&rendered_a.pages, &TOKEN_OUT);
+    assert_full_address_field_page(&rendered_a.pages, "LP Recipient", &recipient);
+    assert_eq!(
+        page_strs(
+            &rendered_a.pages,
+            find_page_by_label(&rendered_a.pages, "Deadline"),
+        ),
+        [
+            "Deadline".to_string(),
+            "2033-05-18".to_string(),
+            "03:33:20 UTC".to_string(),
+            "> next".to_string(),
+        ]
+    );
+
+    // A single metadata proof must bind only its exact chain+contract. Swap
+    // the proof to token B and require the scaling/identity pages to swap too;
+    // a shared ticker is never allowed to relabel both signed token operands.
+    let token_b = quickswap_meta(TOKEN_OUT, b"TKB");
+    let rendered_b = render_erc7730_pages_with_signer_checked(
+        &tx,
+        &calldata,
+        &verified,
+        Some(&token_b),
+        &resolver,
+        &signer,
+    )
+    .expect("render QuickSwap addLiquidity with token-B metadata");
+    assert_eq!(
+        quickswap_rows_with_label(&rendered_b.pages, "Maximum to Add"),
+        vec![
+            [
+                "Maximum to Add".to_string(),
+                "1500000".to_string(),
+                String::new(),
+                "! raw, dec=?".to_string(),
+            ],
+            [
+                "Maximum to Add".to_string(),
+                "2.5 TKB".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+        ]
+    );
+    assert_eq!(
+        quickswap_rows_with_label(&rendered_b.pages, "Conditional Min"),
+        vec![
+            [
+                "Conditional Min".to_string(),
+                "1000000".to_string(),
+                String::new(),
+                "! raw, dec=?".to_string(),
+            ],
+            [
+                "Conditional Min".to_string(),
+                "2 TKB".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+        ]
+    );
+    assert_full_contract_identity_page(&rendered_b.pages, &TOKEN_OUT);
+    assert_some_full_unverified_token_identity_page(&rendered_b.pages, &TOKEN_IN);
+    assert!(
+        rendered_b
+            .transcript_receipt
+            .range_matches(&rendered_b.pages, 0),
+        "metadata choice must still produce a fully bound transcript"
+    );
+    assert!(
+        !rendered_a
+            .transcript_receipt
+            .exact_match(&rendered_b.transcript_receipt),
+        "independent token bindings must produce distinct trusted transcripts"
+    );
+}
+
+#[test]
+fn production_quickswap_add_liquidity_native_renders_refundable_maximum_exactly() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let recipient = [0x33; 20];
+    let deadline = u256_from_u64(2_000_000_000);
+    let calldata = quickswap_add_native_calldata(
+        TOKEN_IN,
+        u256_from_u64(1_500_000),
+        u256_from_u64(1_000_000),
+        u256_from_u64(1_000_000_000_000_000_000),
+        recipient,
+        deadline,
+    );
+    assert_selector_matches(&verified.ir, &calldata, QUICKSWAP_ADD_NATIVE);
+    let mut tx = envelope(137, QUICKSWAP_ROUTER);
+    tx.value = u256_from_u64(2_000_000_000_000_000_000);
+    let token = quickswap_meta(TOKEN_IN, b"TKN");
+
+    let rendered = render_erc7730_pages_with_signer_checked(
+        &tx,
+        &calldata,
+        &verified,
+        Some(&token),
+        &resolver,
+        &signer,
+    )
+    .expect("render QuickSwap addLiquidityETH");
+    assert_eq!(
+        rendered.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert!(rendered
+        .transcript_receipt
+        .range_matches(&rendered.pages, 0));
+    assert_all_pages_printable(&rendered.pages);
+    assert_eq!(
+        page_strs(&rendered.pages, intent_page_index(&rendered.pages)),
+        [
+            "Add Liquidity".to_string(),
+            "QuickSwap".to_string(),
+            "QuickSwap".to_string(),
+            "> next".to_string(),
+        ]
+    );
+    assert_eq!(
+        quickswap_rows_with_label(&rendered.pages, "Maximum to Add"),
+        vec![
+            [
+                "Maximum to Add".to_string(),
+                "2 POL".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+            [
+                "Maximum to Add".to_string(),
+                "1.5 TKN".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+        ],
+        "msg.value is the refundable native maximum, not an exact deposit claim"
+    );
+    assert_eq!(
+        quickswap_rows_with_label(&rendered.pages, "Conditional Min"),
+        vec![
+            [
+                "Conditional Min".to_string(),
+                "1 TKN".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+            [
+                "Conditional Min".to_string(),
+                "1 POL".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+        ]
+    );
+    assert_full_contract_identity_page(&rendered.pages, &TOKEN_IN);
+    assert_full_address_field_page(&rendered.pages, "LP Recipient", &recipient);
+    assert_eq!(
+        page_strs(
+            &rendered.pages,
+            find_page_by_label(&rendered.pages, "Deadline"),
+        ),
+        [
+            "Deadline".to_string(),
+            "2033-05-18".to_string(),
+            "03:33:20 UTC".to_string(),
+            "> next".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn production_quickswap_add_liquidity_mutations_change_transcript_or_refuse_inexact_native() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let recipient = [0x33; 20];
+    let deadline = u256_from_u64(2_000_000_000);
+    let add_calldata = quickswap_add_calldata(
+        TOKEN_IN,
+        TOKEN_OUT,
+        u256_from_u64(1_500_000),
+        u256_from_u64(2_500_000),
+        u256_from_u64(1_000_000),
+        u256_from_u64(2_000_000),
+        recipient,
+        deadline,
+    );
+    let add_native_calldata = quickswap_add_native_calldata(
+        TOKEN_IN,
+        u256_from_u64(1_500_000),
+        u256_from_u64(1_000_000),
+        u256_from_u64(1_000_000_000_000_000_000),
+        recipient,
+        deadline,
+    );
+    let add_tx = envelope(137, QUICKSWAP_ROUTER);
+    let mut add_native_tx = envelope(137, QUICKSWAP_ROUTER);
+    add_native_tx.value = u256_from_u64(2_000_000_000_000_000_000);
+
+    for (signature, calldata, tx, word_count, inexact_native_word) in [
+        (QUICKSWAP_ADD, add_calldata, &add_tx, 8usize, None),
+        (
+            QUICKSWAP_ADD_NATIVE,
+            add_native_calldata.clone(),
+            &add_native_tx,
+            6usize,
+            Some(3usize),
+        ),
+    ] {
+        let baseline = render_erc7730_pages_with_signer_checked(
+            tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render canonical {signature}: {error:?}"));
+        assert!(baseline
+            .transcript_receipt
+            .range_matches(&baseline.pages, 0));
+
+        for word_index in 0..word_count {
+            let mut mutated_calldata = calldata.clone();
+            mutated_calldata[4 + word_index * 32 + 31] ^= 1;
+            match render_erc7730_pages_with_signer_checked(
+                tx,
+                &mutated_calldata,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            ) {
+                Ok(mutated) => {
+                    assert_ne!(
+                        baseline.pages.as_slice(),
+                        mutated.pages.as_slice(),
+                        "calldata word {word_index} must change trusted pages for {signature}"
+                    );
+                    assert!(
+                        !baseline
+                            .transcript_receipt
+                            .exact_match(&mutated.transcript_receipt),
+                        "calldata word {word_index} must change the receipt for {signature}"
+                    );
+                }
+                Err(crate::tx::erc7730_render::RenderErr::Reject("7730 inexact scaled value")) => {
+                    assert_eq!(
+                        Some(word_index),
+                        inexact_native_word,
+                        "only the one-wei native-minimum mutation may refuse exactly"
+                    )
+                }
+                Err(error) => panic!(
+                    "unexpected mutation refusal for {signature} word {word_index}: {error:?}"
+                ),
+            }
+        }
+    }
+
+    let baseline = render_erc7730_pages_with_signer_checked(
+        &add_native_tx,
+        &add_native_calldata,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("render canonical addLiquidityETH value");
+    let mut changed_value_tx = envelope(137, QUICKSWAP_ROUTER);
+    changed_value_tx.value = u256_from_u64(3_000_000_000_000_000_000);
+    let changed_value = render_erc7730_pages_with_signer_checked(
+        &changed_value_tx,
+        &add_native_calldata,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("render changed exact addLiquidityETH maximum");
+    assert_ne!(baseline.pages.as_slice(), changed_value.pages.as_slice());
+    assert!(!baseline
+        .transcript_receipt
+        .exact_match(&changed_value.transcript_receipt));
+
+    let mut inexact_value_tx = envelope(137, QUICKSWAP_ROUTER);
+    inexact_value_tx.value = u256_from_u64(2_000_000_000_000_000_001);
+    assert!(matches!(
+        render_erc7730_pages_with_signer_checked(
+            &inexact_value_tx,
+            &add_native_calldata,
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 inexact scaled value"
+        ))
+    ));
+}
+
+#[test]
+fn production_quickswap_nonpayable_add_liquidity_shows_nonzero_outer_value() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let calldata = quickswap_add_calldata(
+        TOKEN_IN,
+        TOKEN_OUT,
+        u256_from_u64(1_500_000),
+        u256_from_u64(2_500_000),
+        u256_from_u64(1_000_000),
+        u256_from_u64(2_000_000),
+        [0x33; 20],
+        u256_from_u64(2_000_000_000),
+    );
+    let mut tx = envelope(137, QUICKSWAP_ROUTER);
+    tx.value = u256_from_u64(1_000_000_000_000_000_000);
+    let mut proofs = DispatchPageProofs::new();
+    proofs.fail_initialize();
+    let pages = pick_sign_pages(
+        &tx,
+        &calldata,
+        &signer,
+        None,
+        None,
+        None,
+        Some(&verified),
+        None,
+        None,
+        &resolver,
+        &mut proofs,
+    )
+    .expect("nonpayable addLiquidity must display outer value before contract revert");
+    assert_eq!(
+        page_strs(&pages, find_page_by_label(&pages, "! NATIVE POL")),
+        [
+            "! NATIVE POL".to_string(),
+            "1.000000 POL".to_string(),
+            String::new(),
+            "> next".to_string(),
+        ]
+    );
+    let mut verdict = crate::fi::FAIL_SENTINEL;
+    proofs.final_set_proof(&pages, &tx, false, &mut verdict);
+    assert_eq!(
+        verdict,
+        crate::fi::OK_SENTINEL,
+        "dispatcher proof must bind the loud nonpayable outer-value page"
+    );
+}
+
+#[test]
+fn production_quickswap_token_multihop_renders_full_routes_and_exact_operands() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let tx = envelope(137, QUICKSWAP_ROUTER);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let beneficiary = [0x33; 20];
+    let deadline = u256_from_u64(2_000_000_000);
+    let route_two = [TOKEN_IN, TOKEN_OUT];
+    let route_three = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
+    let route_eight = [
+        TOKEN_IN, [0x31; 20], [0x32; 20], [0x33; 20], [0x34; 20], [0x35; 20], [0x36; 20], TOKEN_OUT,
+    ];
+
+    for (signature, first, second, first_label, second_label) in [
+        (
+            QUICKSWAP_SWAP_EXACT_TOKENS,
+            u256_from_u64(1_500_000),
+            u256_from_u64(1_000_000),
+            "Amount to Send",
+            "Minimum to Rece~",
+        ),
+        (
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT,
+            u256_from_u64(1_000_000),
+            u256_from_u64(1_500_000),
+            "Amount to Recei~",
+            "Maximum to Send",
+        ),
+        // A fee-on-transfer token can debit or deliver a different amount;
+        // this word is only the router's signed transferFrom request.
+        (
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOT,
+            u256_from_u64(1_500_000),
+            u256_from_u64(1_000_000),
+            "Requested Input",
+            "Minimum to Rece~",
+        ),
+    ] {
+        let exact_input = matches!(
+            signature,
+            QUICKSWAP_SWAP_EXACT_TOKENS | QUICKSWAP_SWAP_EXACT_TOKENS_FOT
+        );
+        for path in [
+            route_two.as_slice(),
+            route_three.as_slice(),
+            route_eight.as_slice(),
+        ] {
+            let calldata =
+                quickswap_swap_calldata(signature, first, second, path, beneficiary, deadline);
+            assert_selector_matches(&verified.ir, &calldata, signature);
+            let rendered = render_erc7730_pages_with_signer_checked(
+                &tx, &calldata, &verified, None, &resolver, &signer,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "render QuickSwap {signature} with {} tokens: {error:?}",
+                    path.len()
+                )
+            });
+            assert_all_pages_printable(&rendered.pages);
+            assert_complete_route_pages(&rendered.pages, path);
+            assert_full_address_field_page(&rendered.pages, "Beneficiary", &beneficiary);
+            let first_rows = page_strs(
+                &rendered.pages,
+                find_page_by_label(&rendered.pages, first_label),
+            );
+            let second_rows = page_strs(
+                &rendered.pages,
+                find_page_by_label(&rendered.pages, second_label),
+            );
+            assert!(
+                first_rows[1..3]
+                    .iter()
+                    .any(|row| row.contains(if exact_input { "1500000" } else { "1000000" })),
+                "first signed amount must render exactly without assumed decimals: {first_rows:?}"
+            );
+            assert!(
+                second_rows[1..3].iter().any(|row| row.contains(
+                    if exact_input {
+                        "1000000"
+                    } else {
+                        "1500000"
+                    }
+                )),
+                "second signed amount must render exactly without assumed decimals: {second_rows:?}"
+            );
+            assert_some_full_unverified_token_identity_page(&rendered.pages, &TOKEN_IN);
+            assert_some_full_unverified_token_identity_page(&rendered.pages, &TOKEN_OUT);
+            assert_eq!(
+                page_strs(
+                    &rendered.pages,
+                    find_page_by_label(&rendered.pages, "Deadline"),
+                ),
+                [
+                    "Deadline".to_string(),
+                    "2033-05-18".to_string(),
+                    "03:33:20 UTC".to_string(),
+                    "> next".to_string(),
+                ],
+                "the exact signed deadline must be visible"
+            );
+            assert!(
+                rendered
+                    .transcript_receipt
+                    .range_matches(&rendered.pages, 0),
+                "receipt must bind every QuickSwap page for {signature}"
+            );
+        }
+
+        // Bind the tokenAmount endpoint paths independently. Metadata for the
+        // first route address may scale only the input/max-input field, while
+        // metadata for the last address may scale only the output/min-output
+        // field. This catches a path.[0] / path.[-1] swap in either selector.
+        let calldata = quickswap_swap_calldata(
+            signature,
+            first,
+            second,
+            &route_three,
+            beneficiary,
+            deadline,
+        );
+        let input_meta = quickswap_meta(TOKEN_IN, b"TIN");
+        let input_bound = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &calldata,
+            &verified,
+            Some(&input_meta),
+            &resolver,
+            &signer,
+        )
+        .expect("render QuickSwap input-token binding");
+        let input_label = if exact_input {
+            first_label
+        } else {
+            second_label
+        };
+        let output_label = if exact_input {
+            second_label
+        } else {
+            first_label
+        };
+        let input_rows = page_strs(
+            &input_bound.pages,
+            find_page_by_label(&input_bound.pages, input_label),
+        );
+        assert_eq!(input_rows[1], "1.5 TIN", "input endpoint binding");
+        assert_full_contract_identity_page(&input_bound.pages, &TOKEN_IN);
+        let unbound_output_rows = page_strs(
+            &input_bound.pages,
+            find_page_by_label(&input_bound.pages, output_label),
+        );
+        assert!(
+            unbound_output_rows[1..3]
+                .iter()
+                .any(|row| row.contains("1000000")),
+            "input metadata must not scale the unbound output endpoint: {unbound_output_rows:?}"
+        );
+        assert_some_full_unverified_token_identity_page(&input_bound.pages, &TOKEN_OUT);
+
+        let output_meta = quickswap_meta(TOKEN_OUT, b"TOUT");
+        let output_bound = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &calldata,
+            &verified,
+            Some(&output_meta),
+            &resolver,
+            &signer,
+        )
+        .expect("render QuickSwap output-token binding");
+        let output_rows = page_strs(
+            &output_bound.pages,
+            find_page_by_label(&output_bound.pages, output_label),
+        );
+        assert_eq!(output_rows[1], "1 TOUT", "output endpoint binding");
+        assert_full_contract_identity_page(&output_bound.pages, &TOKEN_OUT);
+        let unbound_input_rows = page_strs(
+            &output_bound.pages,
+            find_page_by_label(&output_bound.pages, input_label),
+        );
+        assert!(
+            unbound_input_rows[1..3]
+                .iter()
+                .any(|row| row.contains("1500000")),
+            "output metadata must not scale the unbound input endpoint: {unbound_input_rows:?}"
+        );
+        assert_some_full_unverified_token_identity_page(&output_bound.pages, &TOKEN_IN);
+    }
+}
+
+#[test]
+fn production_quickswap_native_swaps_render_full_routes_and_exact_operands() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let beneficiary = [0x33; 20];
+    let deadline = u256_from_u64(2_000_000_000);
+    let one_native = u256_from_u64(1_000_000_000_000_000_000);
+
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS,
+        QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT,
+    ] {
+        let native_input = matches!(
+            signature,
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS
+                | QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS
+                | QUICKSWAP_SWAP_EXACT_NATIVE_FOT
+        );
+        let route_two = if native_input {
+            vec![QUICKSWAP_WMATIC, TOKEN_OUT]
+        } else {
+            vec![TOKEN_IN, QUICKSWAP_WMATIC]
+        };
+        let route_three = if native_input {
+            vec![QUICKSWAP_WMATIC, TOKEN_MID, TOKEN_OUT]
+        } else {
+            vec![TOKEN_IN, TOKEN_MID, QUICKSWAP_WMATIC]
+        };
+        let route_eight = if native_input {
+            vec![
+                QUICKSWAP_WMATIC,
+                [0x31; 20],
+                [0x32; 20],
+                [0x33; 20],
+                [0x34; 20],
+                [0x35; 20],
+                [0x36; 20],
+                TOKEN_OUT,
+            ]
+        } else {
+            vec![
+                TOKEN_IN,
+                [0x31; 20],
+                [0x32; 20],
+                [0x33; 20],
+                [0x34; 20],
+                [0x35; 20],
+                [0x36; 20],
+                QUICKSWAP_WMATIC,
+            ]
+        };
+        let (
+            first,
+            second,
+            token_label,
+            native_label,
+            raw_token_amount,
+            token_contract,
+            token_symbol,
+            bound_token_amount,
+        ): (U256, U256, &str, &str, &str, [u8; 20], &[u8], &str) = match signature {
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE => (
+                u256_from_u64(1_500_000),
+                one_native,
+                "Amount to Send",
+                "Minimum to Rece~",
+                "1500000",
+                TOKEN_IN,
+                b"TIN",
+                "1.5 TIN",
+            ),
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT => (
+                u256_from_u64(1_500_000),
+                one_native,
+                "Requested Input",
+                "Minimum to Rece~",
+                "1500000",
+                TOKEN_IN,
+                b"TIN",
+                "1.5 TIN",
+            ),
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS | QUICKSWAP_SWAP_EXACT_NATIVE_FOT => (
+                u256_from_u64(1_000_000),
+                U256::default(),
+                "Minimum to Rece~",
+                "Amount to Send",
+                "1000000",
+                TOKEN_OUT,
+                b"TOUT",
+                "1 TOUT",
+            ),
+            QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS => (
+                u256_from_u64(1_000_000),
+                U256::default(),
+                "Gross Output",
+                "Maximum to Send",
+                "1000000",
+                TOKEN_OUT,
+                b"TOUT",
+                "1 TOUT",
+            ),
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => (
+                one_native,
+                u256_from_u64(1_500_000),
+                "Maximum to Send",
+                "Amount to Recei~",
+                "1500000",
+                TOKEN_IN,
+                b"TIN",
+                "1.5 TIN",
+            ),
+            _ => unreachable!(),
+        };
+        let mut tx = envelope(137, QUICKSWAP_ROUTER);
+        if native_input {
+            tx.value = one_native;
+        }
+
+        for path in [&route_two[..], &route_three[..], &route_eight[..]] {
+            let calldata =
+                quickswap_swap_calldata(signature, first, second, path, beneficiary, deadline);
+            assert_selector_matches(&verified.ir, &calldata, signature);
+            let rendered = render_erc7730_pages_with_signer_checked(
+                &tx, &calldata, &verified, None, &resolver, &signer,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "render QuickSwap {signature} with {} tokens: {error:?}",
+                    path.len()
+                )
+            });
+            assert_all_pages_printable(&rendered.pages);
+            assert_complete_route_pages(&rendered.pages, path);
+            assert_full_address_field_page(&rendered.pages, "Beneficiary", &beneficiary);
+            let token_rows = page_strs(
+                &rendered.pages,
+                find_page_by_label(&rendered.pages, token_label),
+            );
+            assert!(
+                token_rows[1..3]
+                    .iter()
+                    .any(|row| row.contains(raw_token_amount)),
+                "the exact signed token amount must render without invented metadata: {token_rows:?}"
+            );
+            assert_full_unverified_token_identity_page(&rendered.pages, &token_contract);
+            let native_rows = page_strs(
+                &rendered.pages,
+                find_page_by_label(&rendered.pages, native_label),
+            );
+            assert_eq!(
+                native_rows[1], "1 POL",
+                "the native side must use Polygon's authenticated ticker"
+            );
+            assert_eq!(
+                page_strs(
+                    &rendered.pages,
+                    find_page_by_label(&rendered.pages, "Deadline"),
+                ),
+                [
+                    "Deadline".to_string(),
+                    "2033-05-18".to_string(),
+                    "03:33:20 UTC".to_string(),
+                    "> next".to_string(),
+                ],
+                "the exact signed deadline must be visible"
+            );
+            assert!(
+                rendered
+                    .transcript_receipt
+                    .range_matches(&rendered.pages, 0),
+                "receipt must bind every QuickSwap page for {signature}"
+            );
+        }
+
+        let calldata = quickswap_swap_calldata(
+            signature,
+            first,
+            second,
+            &route_three,
+            beneficiary,
+            deadline,
+        );
+        let metadata = quickswap_meta(token_contract, token_symbol);
+        let bound = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &calldata,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        )
+        .expect("render QuickSwap native-route token binding");
+        let token_rows = page_strs(&bound.pages, find_page_by_label(&bound.pages, token_label));
+        assert_eq!(token_rows[1], bound_token_amount);
+        assert_full_contract_identity_page(&bound.pages, &token_contract);
+    }
+}
+
+#[test]
+fn production_quickswap_native_swap_mutations_change_transcript_or_refuse() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let beneficiary = [0x33; 20];
+    let deadline = u256_from_u64(2_000_000_000);
+    let one_native = u256_from_u64(1_000_000_000_000_000_000);
+
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS,
+        QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT,
+    ] {
+        let native_input = matches!(
+            signature,
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS
+                | QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS
+                | QUICKSWAP_SWAP_EXACT_NATIVE_FOT
+        );
+        let path = if native_input {
+            [QUICKSWAP_WMATIC, TOKEN_MID, TOKEN_OUT]
+        } else {
+            [TOKEN_IN, TOKEN_MID, QUICKSWAP_WMATIC]
+        };
+        let (first, second, head_words, beneficiary_word, deadline_word) = match signature {
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE | QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT => {
+                (u256_from_u64(1_500_000), one_native, 5, 3, 4)
+            }
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS
+            | QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS
+            | QUICKSWAP_SWAP_EXACT_NATIVE_FOT => {
+                (u256_from_u64(1_000_000), U256::default(), 4, 2, 3)
+            }
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => {
+                (one_native, u256_from_u64(1_500_000), 5, 3, 4)
+            }
+            _ => unreachable!(),
+        };
+        let mut tx = envelope(137, QUICKSWAP_ROUTER);
+        if native_input {
+            tx.value = one_native;
+        }
+        let calldata =
+            quickswap_swap_calldata(signature, first, second, &path, beneficiary, deadline);
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .expect("render canonical QuickSwap native swap");
+        let native_amount_operand = match signature {
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE | QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT => {
+                Some("second amount")
+            }
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => Some("first amount"),
+            _ => None,
+        };
+
+        let mut offsets = vec![
+            (4 + 31, "first amount"),
+            (4 + beneficiary_word * 32 + 31, "beneficiary"),
+            (4 + deadline_word * 32 + 31, "deadline"),
+        ];
+        if !native_input {
+            offsets.push((4 + 32 + 31, "second amount"));
+        }
+        let path_start = 4 + head_words * 32 + 32;
+        for index in 0..path.len() {
+            offsets.push((path_start + index * 32 + 31, "route element"));
+        }
+        for (offset, operand) in offsets {
+            let mut mutated_calldata = calldata.clone();
+            mutated_calldata[offset] ^= 1;
+            let mutated = match render_erc7730_pages_with_signer_checked(
+                &tx,
+                &mutated_calldata,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            ) {
+                Ok(mutated) => mutated,
+                Err(error) => {
+                    assert_eq!(
+                        native_amount_operand,
+                        Some(operand),
+                        "only an inexact native-amount mutation may refuse for {signature}: {error:?}"
+                    );
+                    continue;
+                }
+            };
+            assert_ne!(
+                rendered.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "{operand} mutation must change QuickSwap pages for {signature}"
+            );
+            assert!(
+                !rendered
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "{operand} mutation must change QuickSwap receipt for {signature}"
+            );
+        }
+
+        if native_input {
+            let mut mutated_tx = tx;
+            mutated_tx.value = u256_from_u64(2_000_000_000_000_000_000);
+            let mutated = render_erc7730_pages_with_signer_checked(
+                &mutated_tx,
+                &calldata,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            )
+            .expect("render mutated QuickSwap native input");
+            assert_ne!(rendered.pages.as_slice(), mutated.pages.as_slice());
+            assert!(!rendered
+                .transcript_receipt
+                .exact_match(&mutated.transcript_receipt));
+        }
+    }
+}
+
+#[test]
+fn production_quickswap_nonpayable_swaps_show_nonzero_outer_value_before_revert() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT,
+    ] {
+        let path = if matches!(
+            signature,
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE
+                | QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE
+                | QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT
+        ) {
+            [TOKEN_IN, QUICKSWAP_WMATIC]
+        } else {
+            [TOKEN_IN, TOKEN_OUT]
+        };
+        let (first, second) = match signature {
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE | QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT => {
+                (
+                    u256_from_u64(1_500_000),
+                    u256_from_u64(1_000_000_000_000_000_000),
+                )
+            }
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => (
+                u256_from_u64(1_000_000_000_000_000_000),
+                u256_from_u64(1_500_000),
+            ),
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOT => (u256_from_u64(1_500_000), u256_from_u64(1_000_000)),
+            _ => unreachable!(),
+        };
+        let calldata = quickswap_swap_calldata(
+            signature,
+            first,
+            second,
+            &path,
+            [0x33; 20],
+            u256_from_u64(2_000_000_000),
+        );
+        let mut tx = envelope(137, QUICKSWAP_ROUTER);
+        tx.value = u256_from_u64(1_000_000_000_000_000_000);
+        let mut proofs = DispatchPageProofs::new();
+        proofs.fail_initialize();
+        let pages = pick_sign_pages(
+            &tx,
+            &calldata,
+            &signer,
+            None,
+            None,
+            None,
+            Some(&verified),
+            None,
+            None,
+            &resolver,
+            &mut proofs,
+        )
+        .unwrap_or_else(|_| {
+            panic!("nonpayable {signature} must display value before its contract-level revert")
+        });
+        let native_rows = page_strs(&pages, find_page_by_label(&pages, "! NATIVE POL"));
+        assert_eq!(native_rows[1], "1.000000 POL");
+        let mut verdict = crate::fi::FAIL_SENTINEL;
+        proofs.final_set_proof(&pages, &tx, false, &mut verdict);
+        assert_eq!(
+            verdict,
+            crate::fi::OK_SENTINEL,
+            "dispatcher receipt must bind the loud outer-value page"
+        );
+    }
+}
+
+#[test]
+fn production_quickswap_token_multihop_mutations_change_transcript_or_refuse() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let tx = envelope(137, QUICKSWAP_ROUTER);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let path = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
+
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOT,
+    ] {
+        let calldata = quickswap_swap_calldata(
+            signature,
+            u256_from_u64(1_500_000),
+            u256_from_u64(1_000_000),
+            &path,
+            [0x33; 20],
+            u256_from_u64(2_000_000_000),
+        );
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .expect("render canonical QuickSwap swap");
+
+        let mut offsets = vec![
+            (4 + 31, "first amount"),
+            (4 + 32 + 31, "second amount"),
+            (4 + 3 * 32 + 31, "beneficiary"),
+            (4 + 4 * 32 + 31, "deadline"),
+        ];
+        let path_start = 4 + 5 * 32 + 32;
+        for index in 0..path.len() {
+            offsets.push((path_start + index * 32 + 31, "route element"));
+        }
+        for (offset, operand) in offsets {
+            let mut mutated_calldata = calldata.clone();
+            mutated_calldata[offset] ^= 1;
+            let mutated = render_erc7730_pages_with_signer_checked(
+                &tx,
+                &mutated_calldata,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            )
+            .unwrap_or_else(|error| {
+                panic!("canonical {operand} mutation must render for {signature}: {error:?}")
+            });
+            assert_ne!(
+                rendered.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "{operand} mutation must change QuickSwap pages for {signature}"
+            );
+            assert!(
+                !rendered
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "{operand} mutation must change QuickSwap receipt for {signature}"
+            );
+        }
+    }
+}
+
+#[test]
+fn production_quickswap_special_beneficiaries_remain_literal() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let mut address_one = [0u8; 20];
+    address_one[19] = 1;
+    let mut address_two = [0u8; 20];
+    address_two[19] = 2;
+
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS,
+        QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOT,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT,
+    ] {
+        let native_input = matches!(
+            signature,
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS
+                | QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS
+                | QUICKSWAP_SWAP_EXACT_NATIVE_FOT
+        );
+        let path = if native_input {
+            [QUICKSWAP_WMATIC, TOKEN_OUT]
+        } else if matches!(
+            signature,
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE
+                | QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE
+                | QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT
+        ) {
+            [TOKEN_IN, QUICKSWAP_WMATIC]
+        } else {
+            [TOKEN_IN, TOKEN_OUT]
+        };
+        let (first, second) = match signature {
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS
+            | QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS
+            | QUICKSWAP_SWAP_EXACT_NATIVE_FOT => (u256_from_u64(1_000_000), U256::default()),
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE | QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT => {
+                (
+                    u256_from_u64(1_500_000),
+                    u256_from_u64(1_000_000_000_000_000_000),
+                )
+            }
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => (
+                u256_from_u64(1_000_000_000_000_000_000),
+                u256_from_u64(1_500_000),
+            ),
+            _ => (u256_from_u64(1_500_000), u256_from_u64(1_000_000)),
+        };
+        let mut tx = envelope(137, QUICKSWAP_ROUTER);
+        if native_input {
+            tx.value = u256_from_u64(1_000_000_000_000_000_000);
+        }
+        for beneficiary in [address_one, address_two] {
+            let calldata = quickswap_swap_calldata(
+                signature,
+                first,
+                second,
+                &path,
+                beneficiary,
+                u256_from_u64(2_000_000_000),
+            );
+            let rendered = render_erc7730_pages_with_signer_checked(
+                &tx, &calldata, &verified, None, &resolver, &signer,
+            )
+            .unwrap_or_else(|error| panic!("literal beneficiary must render: {error:?}"));
+            assert_full_address_field_page(&rendered.pages, "Beneficiary", &beneficiary);
+            assert_ne!(
+                beneficiary, signer,
+                "test must distinguish literal from signer"
+            );
+        }
+    }
+}
+
+#[test]
+fn production_quickswap_invalid_native_endpoint_is_exact_but_contract_reverts() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let wrong_endpoint_path = [TOKEN_IN, TOKEN_OUT];
+
+    // The pinned router requires path[0] == WMATIC for native-input swaps and
+    // path[-1] == WMATIC for native-output swaps. The authenticated generic
+    // address[] IR has no protocol-specific literal endpoint predicate. It
+    // therefore shows both wrong signed addresses exactly; the deployed
+    // contract then rejects the request with INVALID_PATH.
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS,
+        QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT,
+    ] {
+        let native_input = matches!(
+            signature,
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS
+                | QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS
+                | QUICKSWAP_SWAP_EXACT_NATIVE_FOT
+        );
+        let (first, second) = match signature {
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE | QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT => {
+                (
+                    u256_from_u64(1_500_000),
+                    u256_from_u64(1_000_000_000_000_000_000),
+                )
+            }
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS
+            | QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS
+            | QUICKSWAP_SWAP_EXACT_NATIVE_FOT => (u256_from_u64(1_000_000), U256::default()),
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => (
+                u256_from_u64(1_000_000_000_000_000_000),
+                u256_from_u64(1_500_000),
+            ),
+            _ => unreachable!(),
+        };
+        let calldata = quickswap_swap_calldata(
+            signature,
+            first,
+            second,
+            &wrong_endpoint_path,
+            [0x33; 20],
+            u256_from_u64(2_000_000_000),
+        );
+        let mut tx = envelope(137, QUICKSWAP_ROUTER);
+        if native_input {
+            tx.value = u256_from_u64(1_000_000_000_000_000_000);
+        }
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .expect("wrong WMATIC endpoint renders exactly before source-level revert");
+        assert_complete_route_pages(&rendered.pages, &wrong_endpoint_path);
+        assert!(rendered
+            .transcript_receipt
+            .range_matches(&rendered.pages, 0));
+    }
+}
+
+#[test]
+fn production_quickswap_one_token_route_is_exact_but_guaranteed_to_revert() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+
+    // The deployed V2 router requires path.length >= 2 and therefore reverts
+    // this call. The generic canonical address[] renderer intentionally has no
+    // protocol-specific minimum-count guard: it still shows the one signed
+    // address exactly. Every tokenAmount endpoint binds to that same address.
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS,
+        QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOT,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT,
+    ] {
+        let native_input = matches!(
+            signature,
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS
+                | QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS
+                | QUICKSWAP_SWAP_EXACT_NATIVE_FOT
+        );
+        let one = [
+            if matches!(
+                signature,
+                QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE
+                    | QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS
+                    | QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS
+                    | QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE
+                    | QUICKSWAP_SWAP_EXACT_NATIVE_FOT
+                    | QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT
+            ) {
+                QUICKSWAP_WMATIC
+            } else {
+                TOKEN_IN
+            },
+        ];
+        let (first, second) = match signature {
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS
+            | QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS
+            | QUICKSWAP_SWAP_EXACT_NATIVE_FOT => (u256_from_u64(1_000_000), U256::default()),
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE | QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT => {
+                (
+                    u256_from_u64(1_500_000),
+                    u256_from_u64(1_000_000_000_000_000_000),
+                )
+            }
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => (
+                u256_from_u64(1_000_000_000_000_000_000),
+                u256_from_u64(1_500_000),
+            ),
+            _ => (u256_from_u64(1_500_000), u256_from_u64(1_000_000)),
+        };
+        let mut tx = envelope(137, QUICKSWAP_ROUTER);
+        if native_input {
+            tx.value = u256_from_u64(1_000_000_000_000_000_000);
+        }
+        let calldata = quickswap_swap_calldata(
+            signature,
+            first,
+            second,
+            &one,
+            [0x33; 20],
+            u256_from_u64(2_000_000_000),
+        );
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .expect("canonical one-element route renders exactly before contract revert");
+        assert_complete_route_pages(&rendered.pages, &one);
+        let identity_pages = rendered
+            .pages
+            .as_slice()
+            .iter()
+            .filter(|page| row_str(&page[0]) == "Token (UNVERIFI~")
+            .count();
+        let expected_identity_pages = usize::from(matches!(
+            signature,
+            QUICKSWAP_SWAP_EXACT_TOKENS
+                | QUICKSWAP_SWAP_TOKENS_FOR_EXACT
+                | QUICKSWAP_SWAP_EXACT_TOKENS_FOT
+        )) + 1;
+        assert_eq!(
+            identity_pages, expected_identity_pages,
+            "every tokenAmount endpoint must expose the sole signed token identity"
+        );
+    }
+}
+
+#[test]
+fn production_quickswap_multihop_noncanonical_framing_refuses() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS,
+        QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOT,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT,
+    ] {
+        let native_input = matches!(
+            signature,
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS
+                | QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS
+                | QUICKSWAP_SWAP_EXACT_NATIVE_FOT
+        );
+        let native_output = matches!(
+            signature,
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE
+                | QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE
+                | QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT
+        );
+        let path = if native_input {
+            [QUICKSWAP_WMATIC, TOKEN_MID, TOKEN_OUT]
+        } else if native_output {
+            [TOKEN_IN, TOKEN_MID, QUICKSWAP_WMATIC]
+        } else {
+            [TOKEN_IN, TOKEN_MID, TOKEN_OUT]
+        };
+        let (first, second, head_words, path_word, beneficiary_word) = match signature {
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS
+            | QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS
+            | QUICKSWAP_SWAP_EXACT_NATIVE_FOT => {
+                (u256_from_u64(1_000_000), U256::default(), 4, 1, 2)
+            }
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE | QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT => {
+                (
+                    u256_from_u64(1_500_000),
+                    u256_from_u64(1_000_000_000_000_000_000),
+                    5,
+                    2,
+                    3,
+                )
+            }
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => (
+                u256_from_u64(1_000_000_000_000_000_000),
+                u256_from_u64(1_500_000),
+                5,
+                2,
+                3,
+            ),
+            _ => (u256_from_u64(1_500_000), u256_from_u64(1_000_000), 5, 2, 3),
+        };
+        let mut tx = envelope(137, QUICKSWAP_ROUTER);
+        if native_input {
+            tx.value = u256_from_u64(1_000_000_000_000_000_000);
+        }
+        let render = |calldata: &[u8]| {
+            render_erc7730_pages_with_signer_checked(
+                &tx, calldata, &verified, None, &resolver, &signer,
+            )
+        };
+        let baseline = quickswap_swap_calldata(
+            signature,
+            first,
+            second,
+            &path,
+            [0x33; 20],
+            u256_from_u64(2_000_000_000),
+        );
+        assert!(render(&baseline).is_ok(), "canonical route must render");
+
+        let empty = quickswap_swap_calldata(
+            signature,
+            first,
+            second,
+            &[],
+            [0x33; 20],
+            u256_from_u64(2_000_000_000),
+        );
+        assert!(render(&empty).is_err(), "empty endpoint path must refuse");
+
+        let mut nine = [[0x77; 20]; 9];
+        if native_input {
+            nine[0] = QUICKSWAP_WMATIC;
+        } else if native_output {
+            nine[8] = QUICKSWAP_WMATIC;
+        }
+        let over_cap = quickswap_swap_calldata(
+            signature,
+            first,
+            second,
+            &nine,
+            [0x33; 20],
+            u256_from_u64(2_000_000_000),
+        );
+        assert!(
+            render(&over_cap).is_err(),
+            "nine route elements exceed the review cap"
+        );
+
+        let offset_word = 4 + path_word * 32;
+        let canonical_offset = (head_words * 32) as u64;
+        for (offset, case) in [
+            (canonical_offset - 32, "head alias"),
+            (canonical_offset + 1, "misaligned"),
+            (canonical_offset + 32, "gap"),
+        ] {
+            let mut malformed = baseline.clone();
+            malformed[offset_word..offset_word + 32].copy_from_slice(&u256_from_u64(offset).0);
+            assert!(render(&malformed).is_err(), "{case} offset must refuse");
+        }
+
+        let mut dirty_beneficiary = baseline.clone();
+        dirty_beneficiary[4 + beneficiary_word * 32] = 1;
+        assert!(
+            render(&dirty_beneficiary).is_err(),
+            "dirty beneficiary padding must refuse"
+        );
+        let path_start = 4 + head_words * 32 + 32;
+        for index in 0..path.len() {
+            let mut dirty_path = baseline.clone();
+            dirty_path[path_start + index * 32] = 1;
+            assert!(
+                render(&dirty_path).is_err(),
+                "dirty route-address padding {index} must refuse"
+            );
+        }
+
+        assert!(
+            render(&baseline[..4 + head_words * 32 - 1]).is_err(),
+            "truncated static head must refuse"
+        );
+        let mut short_tail = baseline.clone();
+        short_tail.pop();
+        assert!(render(&short_tail).is_err(), "truncated tail must refuse");
+        let mut trailing = baseline.clone();
+        trailing.extend_from_slice(&[0u8; 32]);
+        assert!(render(&trailing).is_err(), "trailing word must refuse");
     }
 }
 
@@ -8180,18 +10653,14 @@ fn hx32(s: &str) -> [u8; 32] {
     o
 }
 
-/// v3 fixture-wide safety: recursive descent remains a GENERAL renderer
-/// capability even though the real descriptors that hid signed members are no
-/// longer authenticated. Exercise every format in the safe-visible dbgen-emitted
-/// fixture set with hostile nested blobs and require panic/OOB freedom.
+/// v3 catalogue-wide safety: exercise every authenticated production format
+/// carrying a nested descent with hostile blobs and require fail-closed,
+/// panic/OOB-free behavior.
 #[test]
 fn v3_all_nested_eip712_leaves_are_panic_safe_and_fail_closed() {
+    let mut nested_type_hashes = std::collections::BTreeSet::new();
     let resolver = NameResolver::new();
-    let mut nested_leaf_formats = 0usize;
-    for entry in build_safe_visible_nested_fixtures()
-        .values()
-        .flat_map(|entries| entries.iter())
-    {
+    for entry in &build_registry().entries {
         let Ok(ir) = Erc7730Ir::parse(&entry.ir_bytes) else {
             continue;
         };
@@ -8205,7 +10674,7 @@ fn v3_all_nested_eip712_leaves_are_panic_safe_and_fail_closed() {
             if fmt.nested_descent_count == 0 {
                 continue; // no nested anchor in this format
             }
-            nested_leaf_formats += 1;
+            nested_type_hashes.insert(fmt.type_hash);
             let pth = fmt.type_hash;
             let ed = std::vec![0u8; fmt.static_head_words as usize * 32];
             for blob in [
@@ -8233,12 +10702,17 @@ fn v3_all_nested_eip712_leaves_are_panic_safe_and_fail_closed() {
             }
         }
     }
-    // Permit2 (Single/Batch/TransferFrom) and SessionManager provide four
-    // distinct safe nested formats (single struct + arrays-of-struct).
-    assert!(
-        nested_leaf_formats >= 4,
-        "expected many nested EIP-712 leaf-formats across the corpus, got {nested_leaf_formats}"
-    );
+    for expected in [
+        PERMIT_SINGLE_TYPEHASH,
+        PERMIT_BATCH_TYPEHASH,
+        PERMIT_TRANSFER_FROM_TYPEHASH,
+    ] {
+        assert!(
+            nested_type_hashes.contains(&expected),
+            "production Permit2 type 0x{} was not exercised",
+            hex::encode(expected)
+        );
+    }
 }
 
 /// The two curated FlyingTulip `Session` descriptors are production leaves for

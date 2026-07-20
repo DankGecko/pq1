@@ -383,10 +383,10 @@
     "derived_from": "blockscout/PoolImplementation.json"
   },
   "expected_catalogue": {
-    "entries": 435,
-    "root": "0x712ca64bb1a14054e52a4b9ad8bb980315b63f43d08c51cb7ec7bf1960e96d0b",
-    "known_calls": 4544,
-    "known_call_set_sha256": "0x593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781",
-    "known_call_bloom_sha256": "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628"
+    "entries": 450,
+    "root": "0xe767a5f977d35af3137515cfbacbcc740b27df61e996c753281bd6b0ed2be40a",
+    "known_calls": 4546,
+    "known_call_set_sha256": "0x7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555",
+    "known_call_bloom_sha256": "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984"
   }
 }

@@ -95,10 +95,31 @@ unsafe fn config_output_high(port_base: u32, p: u32) {
 }
 
 unsafe fn pulse_low(port_base: u32, p: u32, ms: u32) {
+    pulse_low_cycles(port_base, p, 160_000 * ms); // 160 MHz × ms → ms-long delay
+}
+
+/// Datasheet-conformant low time for the *real* OPTIGA RST pulse.
+///
+/// OPTIGA Trust M datasheet v3.70 Table 14 ("Startup of I2C interface for
+/// warm resets") bounds the RST low phase to **10 µs ≤ t_low ≤ 2500 µs**
+/// ("at the latest t2 after the falling edge of RST, the terminal must set
+/// RST to high level"). The old 20 "code-ms" pulse (~60 ms wall-clock with
+/// the ~3× `delay()` calibration below) exceeded the 2.5 ms maximum ~24×.
+/// 64 000 cycles is 0.4 ms nominal at 160 MHz ≈ ~1.2 ms wall-clock —
+/// comfortably inside the window from both sides.
+///
+/// Only the LOW duration changed relative to the empirically-validated
+/// sequence: the GPIO write ordering (BSRR-high prime → MODER/OTYPER/
+/// OSPEEDR/PUPDR RMW → BSRR stores), the decoy pulses, and the priming
+/// delay are untouched, since that sequencing — not the pulse width — was
+/// the load-bearing part of the "no visible edge" quirk (module docs).
+const RST_LOW_CYCLES: u32 = 64_000;
+
+unsafe fn pulse_low_cycles(port_base: u32, p: u32, low_cycles: u32) {
     let bsrr = (port_base + 0x18) as *mut u32;
     // Reset bit: BSRR bit (16 + p)
     write_volatile(bsrr, 1u32 << (16 + p));
-    cortex_m::asm::delay(160_000 * ms); // 160 MHz × ms → ms-long delay
+    cortex_m::asm::delay(low_cycles);
     // Set bit
     write_volatile(bsrr, 1u32 << p);
     // Gap high between pulses
@@ -142,7 +163,9 @@ pub fn run() {
 
         pulse_low(GPIOA_BASE, 4,  5);  // PA4 (disconnected, harmless)
         pulse_low(GPIOD_BASE, 5, 10);  // PD5 (disconnected, harmless)
-        pulse_low(GPIOE_BASE, 0, 20);  // PE0 — OPTIGA silicon reset
+        // PE0 — OPTIGA silicon reset. Datasheet-bounded low time (10 µs
+        // ≤ t_low ≤ 2.5 ms, Table 14) — see `RST_LOW_CYCLES`.
+        pulse_low_cycles(GPIOE_BASE, 0, RST_LOW_CYCLES);
 
         // Trailing idle high (matches the 50 ms settle in `OptigaTrustM::init`).
         cortex_m::asm::delay(160_000 * 100);

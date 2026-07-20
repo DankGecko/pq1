@@ -125,9 +125,21 @@ const STATE_RESP_READY: u8 = 0x40;
 
 /// Compute the Infineon IFX I2C CRC-16 over `data`.
 ///
-/// This is Infineon's custom nibble-based CRC algorithm. It is NOT the
-/// same as the CRC-16/CCITT used by SE050's T1oI2C. Getting this wrong
-/// causes every frame to be rejected by the chip.
+/// This is byte-for-byte the "more efficient implementation" from the
+/// Infineon I2C Protocol v2.03 §8.1.2, and is equivalent to
+/// CRC-16/KERMIT (poly 0x8408 reflected, init 0x0000 — the §8.1.1
+/// reference impl; equivalence verified against 20 k random vectors +
+/// the standard check value `"123456789"` → 0x2189, 2026-07-20). It is
+/// NOT the same as the CRC-16/CCITT variant used by SE050's T1oI2C.
+/// Getting this wrong causes every frame to be rejected by the chip.
+///
+/// ⚠ FCS byte order — spec erratum, do NOT "fix": §3.3 of the same PDF
+/// says the FCS field is transmitted "low byte || high byte", but real
+/// Trust M silicon and Infineon's own host library transmit the HIGH
+/// byte first, which is what `build_data_frame` / `build_ack_frame` /
+/// `validate_frame` do. Every working exchange proves it (a swapped
+/// order would fail 100% of frames in both directions). Aligning the
+/// code with the PDF sentence would brick the link.
 pub fn crc16(data: &[u8]) -> u16 {
     let mut crc: u16 = 0;
     for &byte in data {
@@ -315,8 +327,13 @@ impl IfxState {
     // Polling helpers
     // -----------------------------------------------------------------------
 
-    /// NOP delay loop (~1 ms at 160 MHz). Uses `cortex_m::asm::delay` —
-    /// a `for _ in 0..N { nop() }` version gets elided by LTO.
+    /// Nominal-1 ms delay slot. 40 k cycles is 0.25 ms *nominal* at
+    /// 160 MHz; `cortex_m::asm::delay` wall-clocks to roughly 3× nominal
+    /// on this core (see the calibration note in `pin_diag.rs`), so one
+    /// slot is ~0.75 ms — and each poll iteration adds an I2C register
+    /// read on top, landing near the intended ~1 ms cadence. Uses
+    /// `cortex_m::asm::delay` — a `for _ in 0..N { nop() }` version gets
+    /// elided by LTO.
     fn delay_1ms() {
         cortex_m::asm::delay(40_000);
     }
@@ -357,8 +374,8 @@ impl IfxState {
 
     /// Perform a soft reset of the OPTIGA Trust M.
     ///
-    /// Writes `0x0000` to register 0x88, then polls I2C_STATE until the
-    /// chip is ready (~15 ms for warm reset).
+    /// Writes `0x0000` to register 0x88, waits out the warm-reset
+    /// startup time, then ReSynchs the data-link layer.
     pub unsafe fn soft_reset(&mut self) -> Result<(), IfxError> {
         secure_log!("[OPTIGA/ifx] soft_reset: writing REG_SOFT_RESET(0x88)");
         if let Err(e) = self.write_register(REG_SOFT_RESET, &[0x00, 0x00]) {
@@ -367,7 +384,15 @@ impl IfxState {
         }
         secure_log!("[OPTIGA/ifx] soft_reset: REG_SOFT_RESET write ACKed");
 
-        for _ in 0..20 {
+        // Warm-reset settle: datasheet v3.70 Table 14 applies to
+        // SW-triggered resets — the host must wait tSTARTUP ≥ 15 ms,
+        // extended to 20 ms max when NVM programming was pending before
+        // the reset (exactly the SetData-wedge state this reset is used
+        // to clear). 40 slots ≈ 30 ms wall-clock (see `delay_1ms`),
+        // margin over the 20 ms worst case; the earlier 20-slot wait
+        // (~15 ms) sat exactly at the minimum and leaned on the ReSynch
+        // write's NACK-retry window to absorb the NVM-pending case.
+        for _ in 0..40 {
             Self::delay_1ms();
         }
 

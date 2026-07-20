@@ -140,13 +140,20 @@
         "$id": "swapExactTokensForTokens",
         "intent": "Swap",
         "fields": [
-          { "path": "amountIn", "label": "Amount to Send", "format": "tokenAmount", "params": { "tokenPath": "path.[0]" } },
-          { "path": "amountOutMin", "label": "Minimum to Receive", "format": "tokenAmount", "params": { "tokenPath": "path.[-1]" } },
+          { "path": "@.value", "label": "Native value", "format": "amount", "visible": "always" },
+          { "path": "amountIn", "label": "Swap input", "format": "tokenAmount", "params": { "tokenPath": "path.[0]" }, "visible": "always" },
+          { "path": "amountOutMin", "label": "Minimum receive", "format": "tokenAmount", "params": { "tokenPath": "path.[-1]" }, "visible": "always" },
+          { "path": "path.[]", "label": "Route", "format": "addressName", "params": { "types": ["token"] }, "visible": "always" },
           {
             "path": "to",
-            "label": "Recipient",
+            "label": "Beneficiary",
             "format": "addressName",
-            "params": { "types": ["eoa", "contract"], "sources": ["local", "ens"] }
+            "params": {
+              "types": ["eoa", "contract"],
+              "sources": ["local", "ens"],
+              "senderAddress": ["0x0000000000000000000000000000000000000001"]
+            },
+            "visible": "always"
           }
         ]
       },
@@ -154,17 +161,20 @@
         "$id": "swapTokensForExactTokens",
         "intent": "Swap",
         "fields": [
-          { "path": "amountOut", "label": "Amount to Receive", "format": "tokenAmount", "params": { "tokenPath": "path.[-1]" } },
-          { "path": "amountInMax", "label": "Maximum to Send", "format": "tokenAmount", "params": { "tokenPath": "path.[0]" } },
+          { "path": "@.value", "label": "Native value", "format": "amount", "visible": "always" },
+          { "path": "amountOut", "label": "Amount to receive", "format": "tokenAmount", "params": { "tokenPath": "path.[-1]" }, "visible": "always" },
+          { "path": "amountInMax", "label": "Max swap input", "format": "tokenAmount", "params": { "tokenPath": "path.[0]" }, "visible": "always" },
+          { "path": "path.[]", "label": "Route", "format": "addressName", "params": { "types": ["token"] }, "visible": "always" },
           {
             "path": "to",
-            "label": "Recipient",
+            "label": "Beneficiary",
             "format": "addressName",
             "params": {
               "types": ["eoa", "contract"],
               "sources": ["local", "ens"],
               "senderAddress": ["0x0000000000000000000000000000000000000001"]
-            }
+            },
+            "visible": "always"
           }
         ]
       }

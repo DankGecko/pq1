@@ -40,7 +40,7 @@ use pqsigner_erc7730::ir::{
 };
 use pqsigner_erc7730::known_calls::may_contain as known_call_may_contain;
 use pqsigner_erc7730::render::params::{
-    parse as parse_params, DYNAMIC_KIND_BYTES, WORD_GUARD_EQ, WORD_GUARD_NE,
+    parse as parse_params, ADDR_TYPE_TOKEN, DYNAMIC_KIND_BYTES, WORD_GUARD_EQ, WORD_GUARD_NE,
 };
 use pqsigner_erc7730::render::policy::TerminalKind;
 use pqsigner_tx_core::hash::keccak256;
@@ -539,18 +539,18 @@ fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment(
 
     assert_eq!(
         result.entries.len(),
-        435,
-        "PQ-incompatible permit removal must preserve the 435-leaf catalogue"
+        450,
+        "PQ-incompatible permit removal must preserve the 450-leaf catalogue"
     );
-    assert_eq!(result.known_call_count, 4_544);
+    assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781",
+        "7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555",
         "permit refusal must not change the declared known-call tuple set"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628",
+        "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984",
         "permit refusal must not change the known-call Bloom"
     );
 }
@@ -677,11 +677,11 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
             .contains(&(entry.chain_id, entry.contract, withdraw_selector)));
     }
 
-    assert_eq!(result.entries.len(), 435);
-    assert_eq!(result.known_call_count, 4_544);
+    assert_eq!(result.entries.len(), 450);
+    assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.root),
-        "712ca64bb1a14054e52a4b9ad8bb980315b63f43d08c51cb7ec7bf1960e96d0b"
+        "e767a5f977d35af3137515cfbacbcc740b27df61e996c753281bd6b0ed2be40a"
     );
 }
 
@@ -786,17 +786,17 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
 
     assert_eq!(
         result.entries.len(),
-        435,
+        450,
         "Aave V2 already owned three leaves"
     );
-    assert_eq!(result.known_call_count, 4_544);
+    assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781"
+        "7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628"
+        "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984"
     );
 }
 
@@ -1008,15 +1008,15 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
         );
     }
 
-    assert_eq!(result.entries.len(), 435);
-    assert_eq!(result.known_call_count, 4_544);
+    assert_eq!(result.entries.len(), 450);
+    assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781"
+        "7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628"
+        "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984"
     );
 }
 
@@ -1116,15 +1116,15 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
         );
     }
 
-    assert_eq!(result.entries.len(), 435);
-    assert_eq!(result.known_call_count, 4_544);
+    assert_eq!(result.entries.len(), 450);
+    assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781"
+        "7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628"
+        "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984"
     );
 }
 
@@ -1641,15 +1641,15 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
         "newly clear-signable permit was already registry-known"
     );
 
-    assert_eq!(result.entries.len(), 435);
-    assert_eq!(result.known_call_count, 4_544);
+    assert_eq!(result.entries.len(), 450);
+    assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781"
+        "7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628"
+        "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984"
     );
 }
 
@@ -2206,7 +2206,7 @@ fn registry_flying_tulip_pft_nft_admits_only_injective_operator_approval() {
 }
 
 #[test]
-fn registry_flying_tulip_session_manager_admits_only_injective_static_authority_routes() {
+fn registry_flying_tulip_session_manager_admits_only_injective_authority_routes() {
     let catalogue = build_registry();
     let entries: Vec<_> = catalogue
         .entries
@@ -2243,14 +2243,18 @@ fn registry_flying_tulip_session_manager_admits_only_injective_static_authority_
         "SessionManager must emit exactly its seven pinned deployments"
     );
 
-    const ADMITTED: [(&str, [u8; 4]); 5] = [
+    const ADMITTED: [(&str, [u8; 4]); 6] = [
         ("acceptOwnership()", [0x79, 0xba, 0x50, 0x97]),
         ("renounceOwnership()", [0x71, 0x50, 0x18, 0xa6]),
         ("revokeSession(bytes32)", [0xa7, 0xfe, 0xd3, 0x85]),
         ("setAllowedTarget(address,bool)", [0xca, 0x1d, 0xd2, 0x2e]),
+        (
+            "setAllowedTargets(address[],bool)",
+            [0x01, 0xe2, 0xae, 0x55],
+        ),
         ("transferOwnership(address)", [0xf2, 0xfd, 0xe3, 0x8b]),
     ];
-    const REFUSED: [(&str, [u8; 4]); 6] = [
+    const REFUSED: [(&str, [u8; 4]); 5] = [
         (
             "createSession(address,uint48,uint48,uint32,uint16,(address,uint256)[],bytes32)",
             [0xc1, 0x45, 0x59, 0xe5],
@@ -2266,10 +2270,6 @@ fn registry_flying_tulip_session_manager_admits_only_injective_static_authority_
         (
             "revokeSessionBySig(bytes32,uint256,bytes)",
             [0x1f, 0xc1, 0xdb, 0x86],
-        ),
-        (
-            "setAllowedTargets(address[],bool)",
-            [0x01, 0xe2, 0xae, 0x55],
         ),
         (
             "validateAndConsume(address,uint256,(bytes32,bytes32,uint256,uint256,address,uint256),bytes,address)",
@@ -2293,7 +2293,7 @@ fn registry_flying_tulip_session_manager_admits_only_injective_static_authority_
             .collect();
         assert_eq!(
             actual_selectors, expected_selectors,
-            "only five injective, all-static SessionManager authority routes may be advertised"
+            "only six fully rendered, injective SessionManager authority routes may be advertised"
         );
 
         let revoke = ir
@@ -2377,6 +2377,89 @@ fn registry_flying_tulip_session_manager_admits_only_injective_static_authority_
         assert_eq!(allow, b"Allow");
         assert_ne!(disallow, allow, "access labels must remain injective");
 
+        let targets_access = ir
+            .find_format_by_selector(&[0x01, 0xe2, 0xae, 0x55])
+            .expect("SessionManager format table parses")
+            .expect("setAllowedTargets is clear-signable");
+        assert_eq!(targets_access.intent, b"Update allowed targets");
+        assert_eq!(targets_access.static_head_words, 2);
+        let targets_fields: Vec<_> = targets_access
+            .fields()
+            .map(|field| field.expect("setAllowedTargets field parses"))
+            .collect();
+        assert_eq!(targets_fields.len(), 2);
+        assert_eq!(targets_fields[0].label, b"Targets");
+        assert_eq!(
+            FormatOp::try_from(targets_fields[0].format_op),
+            Ok(FormatOp::AddressName)
+        );
+        assert_eq!(
+            ir.path_bytes(targets_fields[0].path_off)
+                .expect("targets array path parses"),
+            [
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                0,
+                PathOp::ArrayAll as u8,
+            ]
+        );
+        let targets_params =
+            parse_params(&ir, targets_fields[0].param_off).expect("targets params parse");
+        assert_eq!(targets_params.visibility, Visibility::Always);
+        assert_eq!(targets_params.terminal_kind, Some(TerminalKind::Address));
+        assert_eq!(
+            targets_params.addr_types,
+            Some(0x37),
+            "every declared target address class must survive compilation"
+        );
+        assert_eq!(
+            targets_params.addr_sources,
+            Some(0x03),
+            "local and ENS address-name sources must survive compilation"
+        );
+
+        assert_eq!(targets_fields[1].label, b"Access");
+        assert_eq!(
+            FormatOp::try_from(targets_fields[1].format_op),
+            Ok(FormatOp::Enum)
+        );
+        assert_eq!(
+            ir.path_bytes(targets_fields[1].path_off)
+                .expect("targets access path parses"),
+            [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 1]
+        );
+        let targets_access_params =
+            parse_params(&ir, targets_fields[1].param_off).expect("targets access params parse");
+        assert_eq!(targets_access_params.visibility, Visibility::Always);
+        assert_eq!(
+            targets_access_params.terminal_kind,
+            Some(TerminalKind::Bool)
+        );
+        let targets_enum_off = targets_access_params
+            .enum_ref
+            .expect("targets access enum reference");
+        let targets_disallow = pqsigner_erc7730::render::enums::lookup_enum_label(
+            ir.pool,
+            targets_enum_off,
+            &[0u8; 32],
+        )
+        .expect("targets access enum table is valid")
+        .expect("false targets access value is enrolled");
+        let targets_allow = pqsigner_erc7730::render::enums::lookup_enum_label(
+            ir.pool,
+            targets_enum_off,
+            &allow_word,
+        )
+        .expect("targets access enum table is valid")
+        .expect("true targets access value is enrolled");
+        assert_eq!(targets_disallow, b"Disallow");
+        assert_eq!(targets_allow, b"Allow");
+        assert_ne!(
+            targets_disallow, targets_allow,
+            "targets access labels must remain injective"
+        );
+
         let transfer = ir
             .find_format_by_selector(&[0xf2, 0xfd, 0xe3, 0x8b])
             .expect("SessionManager format table parses")
@@ -2438,12 +2521,14 @@ fn registry_flying_tulip_session_manager_admits_only_injective_static_authority_
 }
 
 #[test]
-fn registry_endpoint_only_route_is_omitted_but_stays_known() {
+fn registry_expanded_quickswap_route_is_admitted_and_stays_known() {
     let catalogue = build_registry();
     let raw = hex::decode("a5e0829caced8ffdd4de3c43696c57f7d7a678ff").unwrap();
     let mut contract = [0u8; 20];
     contract.copy_from_slice(&raw);
-    let digest = keccak256(b"swapExactTokensForTokens(uint256,uint256,address[],address,uint256)");
+    let digest = keccak256(
+        b"swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
+    );
     let selector = [digest[0], digest[1], digest[2], digest[3]];
 
     assert!(known_call_may_contain(
@@ -2452,7 +2537,7 @@ fn registry_endpoint_only_route_is_omitted_but_stays_known() {
         &contract,
         &selector,
     ));
-    assert!(!catalogue.entries.iter().any(|entry| {
+    assert!(catalogue.entries.iter().any(|entry| {
         entry.chain_id == 137
             && entry.contract == contract
             && Erc7730Ir::parse(&entry.ir_bytes).is_ok_and(|ir| {
@@ -3553,12 +3638,13 @@ fn unenrolled_address_name_sender_address_drops_only_its_whole_format() {
 }
 
 /// Router02 assigns protocol semantics to sentinel recipient addresses and to
-/// zero amounts. Only the two exactly enrolled single-hop selectors may enter
-/// trusted IR, and every enrolled sender/word predicate must stay attached to
-/// its exact authenticated path. The four broader routes remain absent from the
-/// leaf while all six declared selectors stay in exact/Bloom omission defense.
+/// zero amounts. Only the four exactly enrolled single-hop and full-address-
+/// route selectors may enter trusted IR, and every enrolled sender/word
+/// predicate must stay attached to its exact authenticated path. The two
+/// packed-byte routes remain absent while all six declared selectors stay in
+/// exact/Bloom omission defense.
 #[test]
-fn vendored_uniswap_v3_router02_admits_only_exactly_guarded_single_hop_routes() {
+fn vendored_uniswap_v3_router02_admits_only_four_exactly_guarded_routes() {
     let root = workspace_root();
     let reg = root.join("secure/data/erc7730-registry");
     let desc = reg.join("registry/uniswap/calldata-UniswapV3Router02.json");
@@ -3582,7 +3668,7 @@ fn vendored_uniswap_v3_router02_admits_only_exactly_guarded_single_hop_routes() 
         "the exact mainnet Router02 deployment must produce one leaf"
     );
     let ir = Erc7730Ir::parse(&router_entries[0].ir_bytes).expect("Router02 IR parses");
-    assert_eq!(ir.format_count(), Ok(2));
+    assert_eq!(ir.format_count(), Ok(4));
 
     let contract_raw =
         hex::decode("68b3465833fb72a70ecdf485e0e4c7bd8665fc45").expect("valid Router02 address");
@@ -3603,21 +3689,33 @@ fn vendored_uniswap_v3_router02_admits_only_exactly_guarded_single_hop_routes() 
     ];
     assert_eq!(selector_for(declared[0]), [0x04, 0xe4, 0x5a, 0xaf]);
     assert_eq!(selector_for(declared[1]), [0x50, 0x23, 0xb4, 0xdf]);
+    assert_eq!(selector_for(declared[4]), [0x47, 0x2b, 0x43, 0xf3]);
+    assert_eq!(selector_for(declared[5]), [0x42, 0x71, 0x2a, 0x67]);
 
     let input_selector = selector_for(declared[0]);
     let output_selector = selector_for(declared[1]);
+    let multihop_input_selector = selector_for(declared[4]);
+    let multihop_output_selector = selector_for(declared[5]);
     let admitted: BTreeSet<_> = ir
         .format_iter()
         .map(|format| format.expect("Router02 format parses").selector)
         .collect();
-    assert_eq!(admitted, BTreeSet::from([input_selector, output_selector]));
-    for signature in &declared[2..] {
+    assert_eq!(
+        admitted,
+        BTreeSet::from([
+            input_selector,
+            output_selector,
+            multihop_input_selector,
+            multihop_output_selector,
+        ])
+    );
+    for signature in &declared[2..4] {
         let selector = selector_for(signature);
         assert!(
             ir.find_format_by_selector(&selector)
                 .expect("Router02 format table parses")
                 .is_none(),
-            "unenrolled/broader route must remain absent from IR: {signature}"
+            "packed-byte route must remain absent from IR: {signature}"
         );
     }
 
@@ -3670,6 +3768,12 @@ fn vendored_uniswap_v3_router02_admits_only_exactly_guarded_single_hop_routes() 
             .iter()
             .map(|field| parse_params(&ir, field.param_off).expect("Router02 params parse"))
             .collect();
+        assert!(
+            params
+                .iter()
+                .all(|params| params.visibility == Visibility::Always),
+            "every admitted single-hop field must be visible"
+        );
         for (index, parsed) in params.iter().enumerate() {
             if index == 4 {
                 assert_eq!(parsed.sender_addresses, Some(sender_one.as_slice()));
@@ -3705,6 +3809,143 @@ fn vendored_uniswap_v3_router02_admits_only_exactly_guarded_single_hop_routes() 
         }
     }
 
+    let flat_path = |member: u8| {
+        vec![
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            member,
+        ]
+    };
+    let mut route_path = flat_path(2);
+    route_path.push(PathOp::ArrayAll as u8);
+    let first_token_path = [
+        PathOp::RootStructured as u8,
+        PathOp::FieldIdx as u8,
+        0,
+        2,
+        PathOp::FollowOffset as u8,
+        PathOp::ArrayIdx as u8,
+        0,
+        0,
+    ];
+    let last_token_path = [
+        PathOp::RootStructured as u8,
+        PathOp::FieldIdx as u8,
+        0,
+        2,
+        PathOp::FollowOffset as u8,
+        PathOp::ArrayLast as u8,
+    ];
+
+    for (selector, exact_input) in [
+        (multihop_input_selector, true),
+        (multihop_output_selector, false),
+    ] {
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("Router02 format table parses")
+            .expect("enrolled full-route selector is present");
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("Router02 multihop field parses"))
+            .collect();
+        assert_eq!(fields.len(), 5, "every signed route operand is displayed");
+
+        let expected_labels: [&[u8]; 5] = if exact_input {
+            [
+                b"Native value",
+                b"Swap input",
+                b"Minimum receive",
+                b"Route",
+                b"Beneficiary",
+            ]
+        } else {
+            [
+                b"Native value",
+                b"Amount to receive",
+                b"Max swap input",
+                b"Route",
+                b"Beneficiary",
+            ]
+        };
+        let expected_ops = [
+            FormatOp::Amount,
+            FormatOp::TokenAmount,
+            FormatOp::TokenAmount,
+            FormatOp::AddressName,
+            FormatOp::AddressName,
+        ];
+        let expected_paths = [
+            value_path.clone(),
+            flat_path(0),
+            flat_path(1),
+            route_path.clone(),
+            flat_path(3),
+        ];
+        let params: Vec<_> = fields
+            .iter()
+            .map(|field| parse_params(&ir, field.param_off).expect("Router02 params parse"))
+            .collect();
+        for (index, field) in fields.iter().enumerate() {
+            assert_eq!(field.label, expected_labels[index]);
+            assert_eq!(FormatOp::try_from(field.format_op), Ok(expected_ops[index]));
+            assert_eq!(
+                ir.path_bytes(field.path_off)
+                    .expect("Router02 multihop path parses"),
+                expected_paths[index],
+                "wrong authenticated multihop path at field {index}"
+            );
+            assert_eq!(params[index].visibility, Visibility::Always);
+        }
+        assert_eq!(params[3].addr_types, Some(ADDR_TYPE_TOKEN));
+        assert_eq!(
+            params[1].token_path,
+            Some(if exact_input {
+                first_token_path.as_slice()
+            } else {
+                last_token_path.as_slice()
+            })
+        );
+        assert_eq!(
+            params[2].token_path,
+            Some(if exact_input {
+                last_token_path.as_slice()
+            } else {
+                first_token_path.as_slice()
+            })
+        );
+
+        for (index, parsed) in params.iter().enumerate() {
+            if index == 4 {
+                assert_eq!(parsed.sender_addresses, Some(sender_one.as_slice()));
+                assert!(parsed.sender_address_matches(&sender_one));
+            } else {
+                assert!(
+                    parsed.sender_addresses.is_none(),
+                    "sender substitution leaked onto multihop field {index}"
+                );
+            }
+        }
+
+        let assert_guard = |index: usize, mode: u8, expected: &[u8; 32]| {
+            let guard = params[index]
+                .word_guard
+                .unwrap_or_else(|| panic!("multihop field {index} is missing its guard"));
+            assert_eq!(guard.mode(), mode);
+            assert_eq!(guard.expected(), expected);
+        };
+        assert_guard(0, WORD_GUARD_EQ, &zero_word);
+        assert_guard(4, WORD_GUARD_NE, &address_two_word);
+        assert!(params[2].word_guard.is_none());
+        assert!(params[3].word_guard.is_none());
+        if exact_input {
+            assert_guard(1, WORD_GUARD_NE, &zero_word);
+        } else {
+            assert!(params[1].word_guard.is_none());
+        }
+    }
+
     for signature in declared {
         let selector = selector_for(signature);
         assert!(
@@ -3715,6 +3956,595 @@ fn vendored_uniswap_v3_router02_admits_only_exactly_guarded_single_hop_routes() 
             known_call_may_contain(&registry.known_calls_bloom, 1, &contract, &selector),
             "every Router02 call must remain in the fail-closed Bloom: {signature}"
         );
+    }
+}
+
+/// QuickSwap V2's six standard and three fee-on-transfer token/native routes
+/// become complete only when the descriptor renders the entire ordered address
+/// path. Unlike Router02, the classic V2 router gives `to` its literal ABI
+/// meaning: no sender sentinel or word guard may be attached. The existing five
+/// all-static liquidity routes remain admitted, while permit routes remain
+/// protected by the exact and Bloom known-call inventories.
+#[test]
+fn vendored_quickswap_v2_admits_exactly_nine_complete_swap_routes() {
+    let root = workspace_root();
+    let reg = root.join("secure/data/erc7730-registry");
+    let desc = reg.join("registry/quickswap/calldata-QuickSwap.json");
+    assert_eq!(
+        std::fs::read(&desc).expect("read vendored QuickSwap descriptor"),
+        std::fs::read(root.join(
+            "secure/data/erc7730/curations/files/registry/quickswap/calldata-QuickSwap.json",
+        ),)
+        .expect("read curated QuickSwap descriptor"),
+        "curated and vendored QuickSwap descriptors must stay byte-identical"
+    );
+
+    let registry = build_registry();
+    let quickswap_entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| entry.source == desc)
+        .collect();
+    assert_eq!(
+        quickswap_entries.len(),
+        1,
+        "the exact Polygon QuickSwap deployment must produce one leaf"
+    );
+    let ir = Erc7730Ir::parse(&quickswap_entries[0].ir_bytes).expect("QuickSwap IR parses");
+
+    let contract: [u8; 20] = hex::decode("a5e0829caced8ffdd4de3c43696c57f7d7a678ff")
+        .expect("valid QuickSwap address")
+        .try_into()
+        .expect("QuickSwap address width");
+    assert_eq!(
+        (quickswap_entries[0].chain_id, quickswap_entries[0].contract),
+        (137, contract)
+    );
+
+    let selector_for = |signature: &str| {
+        let hash = keccak256(signature.as_bytes());
+        <[u8; 4]>::try_from(&hash[..4]).expect("selector width")
+    };
+    let admitted_static = [
+        "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)",
+        "addLiquidityETH(address,uint256,uint256,uint256,address,uint256)",
+        "removeLiquidity(address,address,uint256,uint256,uint256,address,uint256)",
+        "removeLiquidityETH(address,uint256,uint256,uint256,address,uint256)",
+        "removeLiquidityETHSupportingFeeOnTransferTokens(address,uint256,uint256,uint256,address,uint256)",
+    ];
+    #[derive(Clone, Copy)]
+    enum SwapKind {
+        TokenExactInput,
+        TokenExactOutput,
+        TokenForNativeExactInput,
+        NativeForTokenExactInput,
+        NativeForTokenExactOutput,
+        TokenForNativeExactOutput,
+    }
+    let selected_swaps = [
+        (
+            "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)",
+            [0x38, 0xed, 0x17, 0x39],
+            SwapKind::TokenExactInput,
+        ),
+        (
+            "swapTokensForExactTokens(uint256,uint256,address[],address,uint256)",
+            [0x88, 0x03, 0xdb, 0xee],
+            SwapKind::TokenExactOutput,
+        ),
+        (
+            "swapExactTokensForETH(uint256,uint256,address[],address,uint256)",
+            [0x18, 0xcb, 0xaf, 0xe5],
+            SwapKind::TokenForNativeExactInput,
+        ),
+        (
+            "swapExactETHForTokens(uint256,address[],address,uint256)",
+            [0x7f, 0xf3, 0x6a, 0xb5],
+            SwapKind::NativeForTokenExactInput,
+        ),
+        (
+            "swapETHForExactTokens(uint256,address[],address,uint256)",
+            [0xfb, 0x3b, 0xdb, 0x41],
+            SwapKind::NativeForTokenExactOutput,
+        ),
+        (
+            "swapTokensForExactETH(uint256,uint256,address[],address,uint256)",
+            [0x4a, 0x25, 0xd9, 0x4a],
+            SwapKind::TokenForNativeExactOutput,
+        ),
+        (
+            "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
+            [0x5c, 0x11, 0xd7, 0x95],
+            SwapKind::TokenExactInput,
+        ),
+        (
+            "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)",
+            [0xb6, 0xf9, 0xde, 0x95],
+            SwapKind::NativeForTokenExactInput,
+        ),
+        (
+            "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
+            [0x79, 0x1a, 0xc9, 0x47],
+            SwapKind::TokenForNativeExactInput,
+        ),
+    ];
+    let refused = [
+        "removeLiquidityWithPermit(address,address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
+        "removeLiquidityETHWithPermit(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
+        "removeLiquidityETHWithPermitSupportingFeeOnTransferTokens(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
+    ];
+    for (signature, expected, _) in selected_swaps {
+        assert_eq!(selector_for(signature), expected);
+    }
+    let expected_admitted: BTreeSet<_> = admitted_static
+        .iter()
+        .map(|signature| selector_for(signature))
+        .chain(selected_swaps.iter().map(|(_, selector, _)| *selector))
+        .collect();
+    let actual_admitted: BTreeSet<_> = ir
+        .format_iter()
+        .map(|format| format.expect("QuickSwap format parses").selector)
+        .collect();
+    assert_eq!(
+        actual_admitted, expected_admitted,
+        "exactly five pre-existing static routes plus nine complete swaps are admitted"
+    );
+    for signature in refused {
+        let selector = selector_for(signature);
+        assert!(
+            ir.find_format_by_selector(&selector)
+                .expect("QuickSwap format table parses")
+                .is_none(),
+            "excluded QuickSwap route entered trusted IR: {signature}"
+        );
+    }
+
+    let flat_path = |member: u8| {
+        vec![
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            member,
+        ]
+    };
+    let route_path = |member: u8| {
+        let mut path = flat_path(member);
+        path.push(PathOp::ArrayAll as u8);
+        path
+    };
+    let token_path = |member: u8, last: bool| {
+        let mut path = flat_path(member);
+        path.push(PathOp::FollowOffset as u8);
+        if last {
+            path.push(PathOp::ArrayLast as u8);
+        } else {
+            path.extend_from_slice(&[PathOp::ArrayIdx as u8, 0, 0]);
+        }
+        path
+    };
+    let mut value_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+    value_path.extend_from_slice(&container_field::VALUE.to_be_bytes());
+
+    // The two liquidity-add routes predate the multi-hop curation, but they
+    // still grant clear-sign authority and therefore need the same exact IR
+    // contract. Desired amounts are source-level maxima, each minimum is only
+    // conditionally enforced by Router02's reserve branch, `to` receives LP
+    // tokens, and the payable route's outer value is a refundable maximum.
+    for (signature, expected_selector, head_words, expected_fields) in [
+        (
+            "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)",
+            [0xe8, 0xe3, 0x37, 0x00],
+            8u16,
+            vec![
+                (
+                    b"Maximum to Add".as_slice(),
+                    FormatOp::TokenAmount,
+                    flat_path(2),
+                    Some(flat_path(0)),
+                ),
+                (
+                    b"Conditional Min".as_slice(),
+                    FormatOp::TokenAmount,
+                    flat_path(4),
+                    Some(flat_path(0)),
+                ),
+                (
+                    b"Maximum to Add".as_slice(),
+                    FormatOp::TokenAmount,
+                    flat_path(3),
+                    Some(flat_path(1)),
+                ),
+                (
+                    b"Conditional Min".as_slice(),
+                    FormatOp::TokenAmount,
+                    flat_path(5),
+                    Some(flat_path(1)),
+                ),
+                (
+                    b"LP Recipient".as_slice(),
+                    FormatOp::AddressName,
+                    flat_path(6),
+                    None,
+                ),
+                (b"Deadline".as_slice(), FormatOp::Date, flat_path(7), None),
+            ],
+        ),
+        (
+            "addLiquidityETH(address,uint256,uint256,uint256,address,uint256)",
+            [0xf3, 0x05, 0xd7, 0x19],
+            6u16,
+            vec![
+                (
+                    b"Maximum to Add".as_slice(),
+                    FormatOp::Amount,
+                    value_path.clone(),
+                    None,
+                ),
+                (
+                    b"Maximum to Add".as_slice(),
+                    FormatOp::TokenAmount,
+                    flat_path(1),
+                    Some(flat_path(0)),
+                ),
+                (
+                    b"Conditional Min".as_slice(),
+                    FormatOp::TokenAmount,
+                    flat_path(2),
+                    Some(flat_path(0)),
+                ),
+                (
+                    b"Conditional Min".as_slice(),
+                    FormatOp::Amount,
+                    flat_path(3),
+                    None,
+                ),
+                (
+                    b"LP Recipient".as_slice(),
+                    FormatOp::AddressName,
+                    flat_path(4),
+                    None,
+                ),
+                (b"Deadline".as_slice(), FormatOp::Date, flat_path(5), None),
+            ],
+        ),
+    ] {
+        let selector = selector_for(signature);
+        assert_eq!(
+            selector, expected_selector,
+            "QuickSwap liquidity-add selector drifted: {signature}"
+        );
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("QuickSwap format table parses")
+            .expect("QuickSwap liquidity-add route exists");
+        assert_eq!(format.intent, b"Add Liquidity");
+        assert_eq!(format.static_head_words, head_words);
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("QuickSwap liquidity-add field parses"))
+            .collect();
+        assert_eq!(fields.len(), expected_fields.len());
+
+        for (index, (field, (label, op, path, token_path))) in
+            fields.iter().zip(expected_fields.iter()).enumerate()
+        {
+            assert_eq!(field.label, *label, "wrong label at field {index}");
+            assert_eq!(
+                FormatOp::try_from(field.format_op),
+                Ok(*op),
+                "wrong formatter at field {index}"
+            );
+            assert_eq!(
+                ir.path_bytes(field.path_off)
+                    .expect("QuickSwap liquidity-add path parses"),
+                path,
+                "wrong authenticated path at field {index}"
+            );
+            let params =
+                parse_params(&ir, field.param_off).expect("QuickSwap liquidity-add params parse");
+            assert_eq!(params.visibility, Visibility::Always);
+            assert_eq!(
+                params.token_path,
+                token_path.as_deref(),
+                "wrong token identity path at field {index}"
+            );
+            assert!(
+                params.sender_addresses.is_none(),
+                "classic Router02 LP recipient must remain literal"
+            );
+            assert!(
+                params.word_guard.is_none(),
+                "liquidity-add route must not acquire an unrelated word guard"
+            );
+            assert_eq!(
+                params.terminal_kind,
+                Some(match op {
+                    FormatOp::AddressName => TerminalKind::Address,
+                    FormatOp::Amount | FormatOp::TokenAmount | FormatOp::Date => {
+                        TerminalKind::Unsigned
+                    }
+                    _ => unreachable!("unexpected liquidity-add formatter"),
+                })
+            );
+        }
+
+        let recipient =
+            parse_params(&ir, fields[4].param_off).expect("QuickSwap LP recipient params parse");
+        assert_eq!(fields[4].label, b"LP Recipient");
+        assert_eq!(recipient.terminal_kind, Some(TerminalKind::Address));
+        assert!(recipient.sender_addresses.is_none());
+        assert!(recipient.word_guard.is_none());
+    }
+
+    for (signature, selector, kind) in selected_swaps {
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("QuickSwap format table parses")
+            .expect("selected complete standard swap exists");
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("QuickSwap swap field parses"))
+            .collect();
+        assert_eq!(fields.len(), 5, "every signed swap operand is displayed");
+
+        let (
+            head_words,
+            path_member,
+            mut expected_labels,
+            expected_ops,
+            expected_paths,
+            token_paths,
+        ): (
+            u16,
+            u8,
+            [&[u8]; 5],
+            [FormatOp; 5],
+            [Vec<u8>; 5],
+            [Option<Vec<u8>>; 5],
+        ) = match kind {
+            SwapKind::TokenExactInput => (
+                5,
+                2,
+                [
+                    b"Amount to Send",
+                    b"Minimum to Receive",
+                    b"Route",
+                    b"Beneficiary",
+                    b"Deadline",
+                ],
+                [
+                    FormatOp::TokenAmount,
+                    FormatOp::TokenAmount,
+                    FormatOp::AddressName,
+                    FormatOp::AddressName,
+                    FormatOp::Date,
+                ],
+                [
+                    flat_path(0),
+                    flat_path(1),
+                    route_path(2),
+                    flat_path(3),
+                    flat_path(4),
+                ],
+                [
+                    Some(token_path(2, false)),
+                    Some(token_path(2, true)),
+                    None,
+                    None,
+                    None,
+                ],
+            ),
+            SwapKind::TokenExactOutput => (
+                5,
+                2,
+                [
+                    b"Amount to Receive",
+                    b"Maximum to Send",
+                    b"Route",
+                    b"Beneficiary",
+                    b"Deadline",
+                ],
+                [
+                    FormatOp::TokenAmount,
+                    FormatOp::TokenAmount,
+                    FormatOp::AddressName,
+                    FormatOp::AddressName,
+                    FormatOp::Date,
+                ],
+                [
+                    flat_path(0),
+                    flat_path(1),
+                    route_path(2),
+                    flat_path(3),
+                    flat_path(4),
+                ],
+                [
+                    Some(token_path(2, true)),
+                    Some(token_path(2, false)),
+                    None,
+                    None,
+                    None,
+                ],
+            ),
+            SwapKind::TokenForNativeExactInput => (
+                5,
+                2,
+                [
+                    b"Amount to Send",
+                    b"Minimum to Receive",
+                    b"Route",
+                    b"Beneficiary",
+                    b"Deadline",
+                ],
+                [
+                    FormatOp::TokenAmount,
+                    FormatOp::Amount,
+                    FormatOp::AddressName,
+                    FormatOp::AddressName,
+                    FormatOp::Date,
+                ],
+                [
+                    flat_path(0),
+                    flat_path(1),
+                    route_path(2),
+                    flat_path(3),
+                    flat_path(4),
+                ],
+                [Some(token_path(2, false)), None, None, None, None],
+            ),
+            SwapKind::NativeForTokenExactInput => (
+                4,
+                1,
+                [
+                    b"Amount to Send",
+                    b"Minimum to Receive",
+                    b"Route",
+                    b"Beneficiary",
+                    b"Deadline",
+                ],
+                [
+                    FormatOp::Amount,
+                    FormatOp::TokenAmount,
+                    FormatOp::AddressName,
+                    FormatOp::AddressName,
+                    FormatOp::Date,
+                ],
+                [
+                    value_path.clone(),
+                    flat_path(0),
+                    route_path(1),
+                    flat_path(2),
+                    flat_path(3),
+                ],
+                [None, Some(token_path(1, true)), None, None, None],
+            ),
+            SwapKind::NativeForTokenExactOutput => (
+                4,
+                1,
+                [
+                    b"Maximum to Send",
+                    b"Gross Output",
+                    b"Route",
+                    b"Beneficiary",
+                    b"Deadline",
+                ],
+                [
+                    FormatOp::Amount,
+                    FormatOp::TokenAmount,
+                    FormatOp::AddressName,
+                    FormatOp::AddressName,
+                    FormatOp::Date,
+                ],
+                [
+                    value_path.clone(),
+                    flat_path(0),
+                    route_path(1),
+                    flat_path(2),
+                    flat_path(3),
+                ],
+                [None, Some(token_path(1, true)), None, None, None],
+            ),
+            SwapKind::TokenForNativeExactOutput => (
+                5,
+                2,
+                [
+                    b"Amount to Receive",
+                    b"Maximum to Send",
+                    b"Route",
+                    b"Beneficiary",
+                    b"Deadline",
+                ],
+                [
+                    FormatOp::Amount,
+                    FormatOp::TokenAmount,
+                    FormatOp::AddressName,
+                    FormatOp::AddressName,
+                    FormatOp::Date,
+                ],
+                [
+                    flat_path(0),
+                    flat_path(1),
+                    route_path(2),
+                    flat_path(3),
+                    flat_path(4),
+                ],
+                [None, Some(token_path(2, false)), None, None, None],
+            ),
+        };
+        if matches!(
+            signature,
+            "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)"
+                | "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)"
+        ) {
+            expected_labels[0] = b"Requested Input";
+        }
+        assert_eq!(format.static_head_words, head_words);
+        let params: Vec<_> = fields
+            .iter()
+            .map(|field| parse_params(&ir, field.param_off).expect("QuickSwap params parse"))
+            .collect();
+        for (index, field) in fields.iter().enumerate() {
+            assert_eq!(field.label, expected_labels[index]);
+            assert_eq!(FormatOp::try_from(field.format_op), Ok(expected_ops[index]));
+            assert_eq!(
+                ir.path_bytes(field.path_off)
+                    .expect("QuickSwap field path parses"),
+                expected_paths[index],
+                "wrong authenticated path at field {index} selector 0x{}",
+                hex::encode(selector)
+            );
+            assert_eq!(params[index].visibility, Visibility::Always);
+            assert!(
+                params[index].sender_addresses.is_none(),
+                "classic V2 beneficiary must stay literal"
+            );
+            assert!(
+                params[index].word_guard.is_none(),
+                "classic V2 route must not inherit Router02 semantic guards"
+            );
+            assert_eq!(
+                params[index].token_path,
+                token_paths[index].as_deref(),
+                "wrong token identity path at field {index} selector 0x{}",
+                hex::encode(selector)
+            );
+        }
+        assert_eq!(params[2].addr_types, Some(ADDR_TYPE_TOKEN));
+        assert_eq!(
+            ir.path_bytes(fields[2].path_off)
+                .expect("QuickSwap route path parses"),
+            route_path(path_member)
+        );
+    }
+
+    let declared: BTreeSet<_> = admitted_static
+        .iter()
+        .copied()
+        .chain(selected_swaps.iter().map(|(signature, _, _)| *signature))
+        .chain(refused)
+        .collect();
+    let expected_known: BTreeSet<_> = declared
+        .iter()
+        .map(|signature| selector_for(signature))
+        .collect();
+    let actual_known: BTreeSet<_> = registry
+        .known_calls
+        .iter()
+        .filter_map(|(chain_id, candidate, selector)| {
+            (*chain_id == 137 && candidate == &contract).then_some(*selector)
+        })
+        .collect();
+    assert_eq!(
+        actual_known, expected_known,
+        "curation must not change QuickSwap's declared known-call inventory"
+    );
+    for selector in expected_known {
+        assert!(known_call_may_contain(
+            &registry.known_calls_bloom,
+            137,
+            &contract,
+            &selector,
+        ));
     }
 }
 
@@ -3772,37 +4602,151 @@ fn leaf_ir_carrying(
         .map(|e| e.ir_bytes.clone())
 }
 
+/// Permit2 is admitted only after the curation shows every signed terminal
+/// field and corrects the one-time transfer wording. Bind the authored JSON,
+/// exact deployment set, all three full type hashes, and every Merkle leaf.
 #[test]
-fn permit2_formats_with_hidden_members_are_not_emitted() {
-    let registry = build_registry();
-    let permit2 = hex_bytes("000000000022d473030f116ddee9f6b43ac78ba3");
-    for type_hash in [
-        "f3841cd1ff0085026a6327b620b67997ce40f282c88a8e905a7a5626e310f3d0",
-        "939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106",
-    ] {
-        let type_hash = hex_bytes(type_hash);
+fn vendored_permit2_admits_exactly_three_operand_complete_formats() {
+    const RELATIVE: &str = "registry/uniswap/eip712-uniswap-permit2.json";
+    const ADDRESS: [u8; 20] = [
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x22, 0xd4, 0x73, 0x03, 0x0f, 0x11, 0x6d, 0xde, 0xe9, 0xf6,
+        0xb4, 0x3a, 0xc7, 0x8b, 0xa3,
+    ];
+    const UINT160_MAX: &str = "0x000000000000000000000000ffffffffffffffffffffffffffffffffffffffff";
+    const UINT256_MAX: &str = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+
+    let root = workspace_root();
+    let installed = std::fs::read(root.join("secure/data/erc7730-registry").join(RELATIVE))
+        .expect("read installed Permit2 descriptor");
+    let curated = std::fs::read(
+        root.join("secure/data/erc7730/curations/files")
+            .join(RELATIVE),
+    )
+    .expect("read curated Permit2 descriptor");
+    assert_eq!(installed, curated, "installed Permit2 curation drifted");
+
+    let descriptor: serde_json::Value =
+        serde_json::from_slice(&installed).expect("parse installed Permit2 descriptor");
+    let formats = descriptor["display"]["formats"]
+        .as_object()
+        .expect("Permit2 formats object");
+    let expected_paths = [
+        (
+            "PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)",
+            ["spender", "details.amount", "details.expiration", "details.nonce", "sigDeadline"].as_slice(),
+        ),
+        (
+            "PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)",
+            ["spender", "details.[].amount", "details.[].expiration", "details.[].nonce", "sigDeadline"].as_slice(),
+        ),
+        (
+            "PermitTransferFrom(TokenPermissions permitted,address spender,uint256 nonce,uint256 deadline)TokenPermissions(address token,uint256 amount)",
+            ["spender", "permitted.amount", "deadline", "nonce"].as_slice(),
+        ),
+    ];
+    assert_eq!(formats.len(), expected_paths.len());
+    for (signature, paths) in expected_paths {
+        let format = formats
+            .get(signature)
+            .unwrap_or_else(|| panic!("missing Permit2 format {signature}"));
+        let fields = format["fields"].as_array().expect("Permit2 fields array");
         assert!(
-            leaf_ir_carrying(&registry, &permit2, &type_hash).is_none(),
-            "Permit2 format with explicit signed-but-unseen members must stay absent"
+            fields
+                .iter()
+                .all(|field| field["visible"].as_str() == Some("always")),
+            "every authored Permit2 field must be explicitly visible: {signature}"
+        );
+        let actual: BTreeSet<_> = fields
+            .iter()
+            .map(|field| field["path"].as_str().expect("Permit2 field path"))
+            .collect();
+        let expected: BTreeSet<_> = paths.iter().copied().collect();
+        assert_eq!(
+            actual, expected,
+            "signed-path coverage drifted: {signature}"
         );
     }
-}
 
-/// Fail-closed corpus guard: the vendored Permit2 descriptor explicitly hides
-/// `nonce`. Completeness therefore succeeds, but the independent visibility
-/// gate must keep `PermitTransferFrom` out of the shipped DB until the nonce is
-/// rendered. An upstream or local edit must not silently re-enable the format.
-#[test]
-fn vendored_permit2_transfer_from_hidden_nonce_is_not_emitted() {
+    let single = &formats["PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)"];
+    let batch = &formats["PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)"];
+    for format in [single, batch] {
+        assert_eq!(format["fields"][1]["params"]["threshold"], UINT160_MAX);
+        assert_eq!(format["fields"][1]["params"]["message"], "Unlimited");
+        assert_eq!(format["fields"][2]["label"], "Expiry (0=now)");
+        assert_eq!(format["fields"][2]["format"], "raw");
+    }
+    let transfer = &formats["PermitTransferFrom(TokenPermissions permitted,address spender,uint256 nonce,uint256 deadline)TokenPermissions(address token,uint256 amount)"];
+    assert_eq!(transfer["intent"], "Authorize one-time token pull");
+    assert!(transfer.get("interpolatedIntent").is_none());
+    assert_eq!(transfer["fields"][1]["label"], "Maximum transfer");
+    assert_eq!(transfer["fields"][1]["params"]["threshold"], UINT256_MAX);
+    assert_eq!(transfer["fields"][1]["params"]["message"], "Any amount");
+
     let registry = build_registry();
-    let permit2 = hex_bytes("000000000022d473030f116ddee9f6b43ac78ba3");
-    let ptf = hex_bytes("939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106");
-    // The Permit2 contract also hosts UniswapX witness orders, so select by the
-    // full type hash rather than a contract-only first match.
-    assert!(
-        leaf_ir_carrying(&registry, &permit2, &ptf).is_none(),
-        "PermitTransferFrom with a signed-but-unseen nonce must not reach the runtime catalogue"
-    );
+    let entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("eip712-uniswap-permit2.json")
+        })
+        .collect();
+    let expected_chains: BTreeSet<u64> = [
+        1, 10, 56, 137, 146, 8453, 42161, 42220, 43114, 80001, 81457, 84532, 421614, 11155111,
+        11155420,
+    ]
+    .into_iter()
+    .collect();
+    let actual_chains: BTreeSet<u64> = entries.iter().map(|entry| entry.chain_id).collect();
+    assert_eq!(actual_chains, expected_chains);
+    assert_eq!(entries.len(), expected_chains.len());
+
+    let permit_transfer_from_hash: [u8; 32] =
+        hex_bytes("939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106")
+            .try_into()
+            .expect("32-byte PermitTransferFrom type hash");
+    let expected_hashes: BTreeSet<[u8; 32]> = [
+        "f3841cd1ff0085026a6327b620b67997ce40f282c88a8e905a7a5626e310f3d0",
+        "af1b0d30d2cab0380e68f0689007e3254993c596f2fdd0aaa7f4d04f79440863",
+        "939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106",
+    ]
+    .map(|hash| {
+        hex_bytes(hash)
+            .try_into()
+            .expect("32-byte Permit2 type hash")
+    })
+    .into_iter()
+    .collect();
+    let depth = proof_depth(&registry.blob);
+    for entry in entries {
+        assert_eq!(entry.contract, ADDRESS);
+        assert_eq!(entry.context_kind, CTX_EIP712);
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Permit2 IR parses");
+        let formats: Vec<_> = ir
+            .format_iter()
+            .map(|format| format.expect("Permit2 format parses"))
+            .collect();
+        let hashes: BTreeSet<_> = formats.iter().map(|format| format.type_hash).collect();
+        assert_eq!(hashes, expected_hashes);
+        assert!(formats
+            .iter()
+            .all(|format| format.nested_descent_count == 1));
+        for format in &formats {
+            let expected_words = if format.type_hash == permit_transfer_from_hash {
+                4
+            } else {
+                3
+            };
+            assert_eq!(format.static_head_words, expected_words);
+        }
+
+        let proof = extract_proof(&registry.blob, entry.leaf_index, depth);
+        let bundle = synth_bundle(&entry.ir_bytes, entry.leaf_index as u32, &proof);
+        let verified = verify_erc7730_bundle(&bundle, &registry.root)
+            .expect("production Permit2 proof verifies");
+        cross_check_eip712(&verified.ir, entry.chain_id, &verified.ir.domain_separator)
+            .expect("Permit2 domain/deployment binding round-trips");
+    }
 }
 
 /// UniswapX witness-order descriptors hide nonces, deadlines, validation

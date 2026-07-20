@@ -332,12 +332,13 @@ const MAX_STRUCT_DEPTH: usize = 8;
 // ─────────────────────────────────────────────────────────────────────
 
 /// SHA-256(JCS(resolved descriptor JSON)) after both curated Router02 copies
-/// gained the final visible `@.value` fields. Any descriptor-byte semantic
-/// drift changes this binding and returns the formats to fail-closed exclusion
-/// until an owner reviews and updates the enrollment.
+/// gained their final visible value, full-route, and sender-semantic fields.
+/// Any descriptor-byte semantic drift changes this binding and returns the
+/// formats to fail-closed exclusion until an owner reviews and updates the
+/// enrollment.
 const ROUTER02_DESCRIPTOR_HASH: [u8; 32] = [
-    0xb3, 0x7e, 0xb5, 0x21, 0xfd, 0x3c, 0x92, 0x0a, 0xaa, 0xd3, 0xa3, 0x95, 0xc4, 0x82, 0x09, 0xf0,
-    0x7d, 0x0b, 0x0f, 0x00, 0x50, 0x81, 0x28, 0x81, 0x5d, 0x6f, 0x1b, 0x41, 0x23, 0xac, 0xcd, 0x62,
+    0x92, 0x56, 0xcb, 0xd0, 0xd0, 0xef, 0x12, 0xf4, 0xad, 0xa2, 0x88, 0xd4, 0x42, 0xc8, 0xc5, 0xf8,
+    0xb1, 0xf6, 0xc5, 0x1a, 0x16, 0x3e, 0xe3, 0x62, 0x7f, 0x5d, 0x30, 0x29, 0x65, 0xdc, 0x51, 0xbe,
 ];
 
 /// SHA-256(JCS(resolved descriptor JSON)) for the curated Lido
@@ -440,7 +441,43 @@ const ROUTER02_EXACT_OUTPUT_GUARDS: [SemanticWordGuard; 3] = [
     },
 ];
 
-const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 4] = [
+const ROUTER02_MULTIHOP_EXACT_INPUT_GUARDS: [SemanticWordGuard; 3] = [
+    SemanticWordGuard {
+        path: "to",
+        terminal_type: "address",
+        operation: WORD_GUARD_NE,
+        word: ADDRESS_TWO_WORD,
+    },
+    SemanticWordGuard {
+        path: "amountIn",
+        terminal_type: "uint256",
+        operation: WORD_GUARD_NE,
+        word: ZERO_WORD,
+    },
+    SemanticWordGuard {
+        path: "@.value",
+        terminal_type: "uint256",
+        operation: WORD_GUARD_EQ,
+        word: ZERO_WORD,
+    },
+];
+
+const ROUTER02_MULTIHOP_EXACT_OUTPUT_GUARDS: [SemanticWordGuard; 2] = [
+    SemanticWordGuard {
+        path: "to",
+        terminal_type: "address",
+        operation: WORD_GUARD_NE,
+        word: ADDRESS_TWO_WORD,
+    },
+    SemanticWordGuard {
+        path: "@.value",
+        terminal_type: "uint256",
+        operation: WORD_GUARD_EQ,
+        word: ZERO_WORD,
+    },
+];
+
+const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 6] = [
     SemanticFormatEnrollment {
         descriptor_hash: ROUTER02_DESCRIPTOR_HASH,
         chain_id: 1,
@@ -468,6 +505,32 @@ const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 4] = [
             sentinels: &ROUTER02_SENDER_SENTINELS,
         },
         guards: &ROUTER02_EXACT_OUTPUT_GUARDS,
+    },
+    SemanticFormatEnrollment {
+        descriptor_hash: ROUTER02_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: ROUTER02_MAINNET,
+        canonical_signature: "swapExactTokensForTokens(uint256,uint256,address[],address)",
+        selector: [0x47, 0x2b, 0x43, 0xf3],
+        sender: SemanticSenderEnrollment {
+            path: "to",
+            terminal_type: "address",
+            sentinels: &ROUTER02_SENDER_SENTINELS,
+        },
+        guards: &ROUTER02_MULTIHOP_EXACT_INPUT_GUARDS,
+    },
+    SemanticFormatEnrollment {
+        descriptor_hash: ROUTER02_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: ROUTER02_MAINNET,
+        canonical_signature: "swapTokensForExactTokens(uint256,uint256,address[],address)",
+        selector: [0x42, 0x71, 0x2a, 0x67],
+        sender: SemanticSenderEnrollment {
+            path: "to",
+            terminal_type: "address",
+            sentinels: &ROUTER02_SENDER_SENTINELS,
+        },
+        guards: &ROUTER02_MULTIHOP_EXACT_OUTPUT_GUARDS,
     },
     SemanticFormatEnrollment {
         descriptor_hash: LIDO_QUEUE_DESCRIPTOR_HASH,
@@ -12457,6 +12520,14 @@ mod tests {
                 ROUTER02_MAINNET,
                 "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))",
             ),
+            (
+                ROUTER02_MAINNET,
+                "swapExactTokensForTokens(uint256,uint256,address[],address)",
+            ),
+            (
+                ROUTER02_MAINNET,
+                "swapTokensForExactTokens(uint256,uint256,address[],address)",
+            ),
             (LIDO_QUEUE_MAINNET, "requestWithdrawals(uint256[],address)"),
             (
                 LIDO_QUEUE_MAINNET,
@@ -12472,10 +12543,22 @@ mod tests {
             assert_eq!(enrollment.canonical_signature, signature);
             assert_eq!(enrollment.chain_id, 1);
         }
+        for deadline_signature in [
+            "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)",
+            "swapTokensForExactTokens(uint256,uint256,address[],address,uint256)",
+        ] {
+            let digest = keccak256(deadline_signature.as_bytes());
+            assert!(
+                !SEMANTIC_FORMAT_ENROLLMENTS
+                    .iter()
+                    .any(|enrollment| enrollment.selector == digest[..4]),
+                "five-argument deadline route must not inherit four-argument Router02 authority"
+            );
+        }
     }
 
     #[test]
-    fn production_router02_tolerant_compile_emits_exactly_two_single_hop_formats() {
+    fn production_router02_tolerant_compile_emits_exactly_four_guarded_formats() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("workspace root")
@@ -12502,15 +12585,98 @@ mod tests {
             .format_iter()
             .map(|format| format.expect("canonical format"))
             .collect();
-        assert_eq!(formats.len(), 2);
-        assert_eq!(formats[0].selector, [0x04, 0xe4, 0x5a, 0xaf]);
-        assert_eq!(formats[1].selector, [0x50, 0x23, 0xb4, 0xdf]);
-        assert!(formats.iter().all(|format| format.field_count == 6));
+        let selectors: BTreeSet<_> = formats.iter().map(|format| format.selector).collect();
+        assert_eq!(
+            selectors,
+            BTreeSet::from([
+                [0x04, 0xe4, 0x5a, 0xaf],
+                [0x50, 0x23, 0xb4, 0xdf],
+                [0x47, 0x2b, 0x43, 0xf3],
+                [0x42, 0x71, 0x2a, 0x67],
+            ])
+        );
+
+        for (selector, exact_input) in [
+            ([0x47, 0x2b, 0x43, 0xf3], true),
+            ([0x42, 0x71, 0x2a, 0x67], false),
+        ] {
+            let format = ir
+                .find_format_by_selector(&selector)
+                .expect("Router02 format table parses")
+                .expect("enrolled full-route selector");
+            let fields: Vec<_> = format
+                .fields()
+                .map(|field| field.expect("Router02 field parses"))
+                .collect();
+            assert_eq!(fields.len(), 5);
+            assert_eq!(fields[0].label, b"Native value");
+            assert_eq!(
+                fields[1].label,
+                if exact_input {
+                    b"Swap input".as_slice()
+                } else {
+                    b"Amount to receive".as_slice()
+                }
+            );
+            assert_eq!(
+                fields[2].label,
+                if exact_input {
+                    b"Minimum receive".as_slice()
+                } else {
+                    b"Max swap input".as_slice()
+                }
+            );
+            assert_eq!(fields[3].label, b"Route");
+            assert_eq!(fields[4].label, b"Beneficiary");
+            assert_eq!(
+                ir.path_bytes(fields[3].path_off)
+                    .expect("full route path parses"),
+                [PATHOP_ROOT_STRUCT, PATHOP_FIELD_IDX, 0, 2, PATHOP_ARRAY_ALL,]
+            );
+
+            let params: Vec<_> = fields
+                .iter()
+                .map(|field| {
+                    pqsigner_erc7730::render::params::parse(&ir, field.param_off)
+                        .expect("Router02 params parse")
+                })
+                .collect();
+            assert_eq!(params[3].addr_types, Some(ADDR_TYPE_TOKEN));
+            assert_eq!(params[4].sender_addresses, Some(ADDRESS_ONE.as_slice()));
+            assert_eq!(
+                params[0].word_guard.expect("value guard").mode(),
+                WORD_GUARD_EQ
+            );
+            assert_eq!(
+                params[0].word_guard.expect("value guard").expected(),
+                &ZERO_WORD
+            );
+            assert_eq!(
+                params[4].word_guard.expect("recipient guard").mode(),
+                WORD_GUARD_NE
+            );
+            assert_eq!(
+                params[4].word_guard.expect("recipient guard").expected(),
+                &ADDRESS_TWO_WORD
+            );
+            if exact_input {
+                assert_eq!(
+                    params[1].word_guard.expect("input guard").expected(),
+                    &ZERO_WORD
+                );
+            } else {
+                assert!(params[1].word_guard.is_none());
+            }
+            assert!(params[2].word_guard.is_none());
+            assert!(params[3].word_guard.is_none());
+        }
         assert_eq!(
             drops.len(),
-            4,
-            "dynamic/multihop routes remain explicit partial drops"
+            2,
+            "only the two packed-byte routes remain explicit partial drops"
         );
+        assert!(drops.iter().any(|drop| drop.contains("`exactInput(")));
+        assert!(drops.iter().any(|drop| drop.contains("`exactOutput(")));
     }
 
     #[test]

@@ -675,20 +675,36 @@ fn negative_oid_pin_ctr_is_e120_first_luc() {
 }
 
 #[test]
-fn negative_response_parser_status_table_pin_errors() {
-    // ASSUMPTION ATTACKED: the response parser maps three distinct
-    // OPTIGA error codes to `PinIncorrect`. Dropping a mapping leaks
-    // an attacker's ability to distinguish "wrong PIN" from "AUTHREF
-    // missing" — a tiny side channel that could bypass lockout in a
-    // sophisticated attack scenario.
-    assert!(APDU_SRC.contains("OPTIGA_ERR_INVALID_PASSWORD:  u8 = 0x02;"));
-    assert!(APDU_SRC.contains("OPTIGA_ERR_ACCESS_DENIED:     u8 = 0x07;"));
-    assert!(APDU_SRC.contains("OPTIGA_ERR_AUTH_FAILURE:      u8 = 0x2F;"));
-    assert!(APDU_SRC.contains("OPTIGA_ERR_COUNTER_EXCEEDED:  u8 = 0x0E;"));
-    // …and that they all coalesce to a single PinIncorrect arm:
+fn negative_response_parser_sta_model_matches_v3_silicon() {
+    // ASSUMPTION ATTACKED: per SRM v3.70 §"Response Status Codes" a V3
+    // part returns ONLY Sta ∈ {0x00, 0xFF}; the specific reason lives in
+    // the Last Error Code data object (0xF1C2). An earlier revision
+    // mapped fictional per-reason Sta values (0x02/0x07/0x0E/0x2F —
+    // 0x02 does not even exist in the V3 error table) onto
+    // PinIncorrect/PinLocked; those arms were dead code on silicon, and
+    // PIN semantics must come from context (the E120 lockout pre-check
+    // plus the verify-site collapse in `authenticate_and_read`), never
+    // from `Sta`. Re-introducing a per-reason `Sta` mapping would be
+    // spec fiction that silently rewires the PIN error paths.
     assert!(
-        APDU_SRC.contains("OPTIGA_ERR_INVALID_PASSWORD\n            | OPTIGA_ERR_AUTH_FAILURE\n            | OPTIGA_ERR_ACCESS_DENIED => OptigaError::PinIncorrect"),
-        "all three PIN-error codes must map to PinIncorrect; do not leak which one fired"
+        !APDU_SRC.contains("0x02;"),
+        "no per-reason Sta constants — V3 Sta is only 0x00/0xFF (audit 2026-07-20)"
+    );
+    assert!(
+        APDU_SRC.contains("return Err(OptigaError::Status(status));"),
+        "parse_response must surface any non-zero Sta as the opaque Status(_) verdict"
+    );
+    // The diagnostics reader must fetch the Last Error Code WITHOUT the
+    // CLEAR_LAST_ERROR flag: the MSB-triggered flush has priority over
+    // command evaluation, so an 0x81 read would zero the code before the
+    // read executes and always report "no error".
+    assert!(
+        APDU_SRC.contains("OID_LAST_ERROR: u16 = 0xF1C2;"),
+        "Last Error Code object is 0xF1C2 per SRM common data structures"
+    );
+    assert!(
+        APDU_SRC.contains("ApduBuf::new(CMD_GET_DATA_OBJECT & !CMD_CLEAR_LAST_ERROR, PARAM_DATA)"),
+        "read_last_error must send Cmd=0x01 (MSB clear), not 0x81"
     );
 }
 

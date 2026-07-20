@@ -482,6 +482,33 @@ fn flyingtulip_sessionmanager_fixed_block_provenance_and_semantics_are_bound() {
     assert_eq!(target["fields"][1]["visible"].as_str(), Some("always"));
     assert!(target.get("interpolatedIntent").is_none());
 
+    let targets = &formats["setAllowedTargets(address[] targets, bool allowed)"];
+    assert_eq!(targets["intent"].as_str(), Some("Update allowed targets"));
+    assert_eq!(
+        targets["fields"]
+            .as_array()
+            .expect("allowed-target batch fields")
+            .len(),
+        2
+    );
+    assert_eq!(targets["fields"][0]["path"].as_str(), Some("targets.[]"));
+    assert_eq!(targets["fields"][0]["label"].as_str(), Some("Targets"));
+    assert_eq!(targets["fields"][0]["format"].as_str(), Some("addressName"));
+    assert_eq!(
+        targets["fields"][0]["params"], target["fields"][0]["params"],
+        "batch and scalar target addresses must retain the same exact rendering policy"
+    );
+    assert_eq!(targets["fields"][0]["visible"].as_str(), Some("always"));
+    assert_eq!(targets["fields"][1]["path"].as_str(), Some("allowed"));
+    assert_eq!(targets["fields"][1]["label"].as_str(), Some("Access"));
+    assert_eq!(targets["fields"][1]["format"].as_str(), Some("enum"));
+    assert_eq!(
+        targets["fields"][1]["params"]["$ref"].as_str(),
+        Some("$.metadata.enums.targetAccess")
+    );
+    assert_eq!(targets["fields"][1]["visible"].as_str(), Some("always"));
+    assert!(targets.get("interpolatedIntent").is_none());
+
     let transfer = &formats["transferOwnership(address newOwner)"];
     assert_eq!(transfer["intent"].as_str(), Some("Update pending owner"));
     assert_eq!(
@@ -508,6 +535,7 @@ fn flyingtulip_sessionmanager_fixed_block_provenance_and_semantics_are_bound() {
         ("renounceOwnership()", "0x715018a6"),
         ("revokeSession(bytes32)", "0xa7fed385"),
         ("setAllowedTarget(address,bool)", "0xca1dd22e"),
+        ("setAllowedTargets(address[],bool)", "0x01e2ae55"),
         ("transferOwnership(address)", "0xf2fde38b"),
     ]);
     let refused_signatures = BTreeMap::from([
@@ -526,10 +554,6 @@ fn flyingtulip_sessionmanager_fixed_block_provenance_and_semantics_are_bound() {
         (
             "revokeSessionBySig(bytes32,uint256,bytes)",
             ("revokeSessionBySig", "0x1fc1db86"),
-        ),
-        (
-            "setAllowedTargets(address[],bool)",
-            ("setAllowedTargets", "0x01e2ae55"),
         ),
         (
             "validateAndConsume(address,uint256,(bytes32,bytes32,uint256,uint256,address,uint256),bytes,address)",
@@ -575,6 +599,28 @@ fn flyingtulip_sessionmanager_fixed_block_provenance_and_semantics_are_bound() {
             .copied()
             .collect::<BTreeMap<_, _>>()
     );
+    let batch_route = manifest["admitted_routes"]
+        .as_array()
+        .expect("admitted routes")
+        .iter()
+        .find(|route| route["name"].as_str() == Some("setAllowedTargets"))
+        .expect("setAllowedTargets admission record");
+    let batch_semantics = required_str(batch_route, "semantics");
+    for fact in [
+        "current owner",
+        "ordered target array",
+        "same signed allowed bool",
+        "empty array is a no-op",
+        "duplicate targets",
+        "zero target reverts the whole transaction",
+        "at most eight elements",
+        "hard-refuses longer arrays",
+    ] {
+        assert!(
+            batch_semantics.contains(fact),
+            "batch semantics omitted `{fact}`"
+        );
+    }
 
     let families = manifest["build_families"]
         .as_array()
@@ -1162,6 +1208,23 @@ fn flyingtulip_sessionmanager_fixed_block_provenance_and_semantics_are_bound() {
         assert!(set_target.contains(
             "function setAllowedTarget(address target, bool allowed) external onlyOwner { _setAllowedTarget(target, allowed); }"
         ));
+        let set_targets = normalized_solidity_function(primary, "function setAllowedTargets(");
+        assert_fragments_in_order(
+            &set_targets,
+            &[
+                "function setAllowedTargets(address[] calldata targets, bool allowed) external onlyOwner",
+                "uint256 len = targets.length;",
+                "for (uint256 i = 0; i < len; i++) {",
+                "_setAllowedTarget(targets[i], allowed);",
+            ],
+        );
+        assert_eq!(
+            set_targets
+                .matches("_setAllowedTarget(targets[i], allowed);")
+                .count(),
+            1,
+            "the batch loop must apply the shared boolean exactly once per iteration"
+        );
         let set_target_internal =
             normalized_solidity_function(primary, "function _setAllowedTarget(");
         assert_fragments_in_order(
@@ -1180,6 +1243,10 @@ fn flyingtulip_sessionmanager_fixed_block_provenance_and_semantics_are_bound() {
     assert_eq!(
         normalized_solidity_function(primary_sources[0], "function setAllowedTarget("),
         normalized_solidity_function(primary_sources[1], "function setAllowedTarget(")
+    );
+    assert_eq!(
+        normalized_solidity_function(primary_sources[0], "function setAllowedTargets("),
+        normalized_solidity_function(primary_sources[1], "function setAllowedTargets(")
     );
     assert_eq!(
         normalized_solidity_function(primary_sources[0], "function _setAllowedTarget("),
@@ -1491,5 +1558,7 @@ fn flyingtulip_sessionmanager_fixed_block_provenance_and_semantics_are_bound() {
             .contains("standard-slot zeros alone do not exclude every bespoke proxy")
     );
     assert!(required_str(&manifest, "boundary").contains("no live-state"));
+    assert!(required_str(&manifest, "boundary").contains("longer than eight"));
+    assert!(required_str(&manifest, "boundary").contains("truncating the signed tail"));
     assert!(required_str(&manifest, "boundary").contains("blind-signing authority"));
 }
