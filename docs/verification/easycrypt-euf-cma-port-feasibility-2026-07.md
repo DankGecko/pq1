@@ -1728,3 +1728,49 @@ guidance worked, no repeat false violation).
 
 **NET:** the +C-specific content in both tracks is now proved (allOkC coupling; the no-template find-prologue);
 what remains in both is MM45 transcription with known template ranges.
+
+### 2026-07-20 — REAL~C CLOSED: the game-hop chain now starts from the REAL game (still conditional on branch-2)
+
+Two parallel continuations, independently audited: **BOTH PASS**, including `h2_lift_claim_honest: true`.
+
+**H2 — ALL FOUR REAL~C ADMITS CLOSED; drafts/_gamehops_wip.ec is CERTIFIED-0-ADMIT** (5 commits).
+`Eqv_EUFNAGCMA_FLSLXMSSMTTWCESNPRF_Orig_C` is now 0-admit, so with the already-closed C~V hop the chain
+REAL ~ C ~ V is complete. Auditor verification that the statement was not weakened to make it provable: the
+hop statement is **byte-identical across all seven commits** from pre-closure to post
+(`={glob A, glob OC} ==> ={res}`), and the region contains only two conseq steps (`==> ={sigl}`,
+`==> ={sapl}`) — **no `==> true`, no `(true)` intermediate post**; no `declare axiom`/`hypothesis` hiding a
+closure. The transitive dependency sweep (the check ec-certify CANNOT give, since `require` loads .eco without
+re-verifying) comes back CLEAN, so the 0-admit claim bottoms out in real proofs.
+ - **THE LIFT IS HONEST AND STILL CONDITIONAL.** `seam_branch1_lifted_to_REAL`'s LHS is the genuine REAL game,
+   and the complement summand `Pr[V : res /\ !valid_WOTSTWES]` is EXPLICIT IN THE STATEMENT rather than buried;
+   the in-file note reads "HONEST STATUS OF THE LIFT — STILL NOT UNCONDITIONAL". So: the hop chain genuinely
+   STARTS from the REAL game, but the branch-1 bound is not yet an unconditional REAL-game bound — the
+   complement bucket is exactly branch-2's two tree reductions.
+ - Seven port deltas MM45's script does not tell you were recorded, incl. one NOT in the prior residual note
+   and load-bearing: MM45 removes `O_THFC_Default.init(ps)` via `inline *`, which we cannot (our OC is
+   abstract), and the invariant form `call (: ={glob OC})` is REJECTED on a direct OC call. Fix: swap the
+   independent `ad <- adz` past the sampling/init so wp can consume it, then discharge the identical prefix
+   with a FORWARD `seq 2 2 : (={glob A, glob OC, ps}); 1: by sim` — the seq post must stay purely relational
+   (sim rejects `ad{2} = adz`).
+ - AXIOM SCOPE (honest): the ONLY two axiom declarations in the entire transitive require-closure are
+   `dpp_ll` (STCR_C.ec:53, a clone-parameter losslessness side condition) and MM45's own `dist_adrstypes`
+   (SPHINCS_PLUS.ec:111, address-type distinctness). Neither is a smuggled cryptographic assumption.
+
+**B3 — branch-2: 3 admits (count unchanged), but 1a shrank to a leaf.** ADMIT-1a-INNERTREE went from the whole
+inner-tree body (MM45:4854-5170) to a single entry/exit leaf (:5163-5177). CLOSED 0-admit: part (a) the
+side-2-only tree-hash nodes loop (:4854-4943) and part (b) the ENTIRE two-sided l' loop (:4944-5162) —
+invariant, per-keypair body (len loop + one-sided chain-walk), per-keypair leaf, full ts/uniq/leaves
+bookkeeping. **Grind-in-find made this SIMPLER than MM45**: side 2's `pick` has no `em` and builds no
+signature, so the chain-walk is a plain 0..w-1 walk and MM45's `if (i0 = em_ele)` sig-reveal branches were
+DELETED; at the l' level MM45's `={sigWOTSlp}` is replaced by the one-sided `ht_sigc_at` characterisation.
+Remaining: the 1a leaf (small), 1b-rest (root reordering + signing simulation + extraction), and ADMIT-3 TRH
+(untouched, the larger branch, MM45:5338-6298).
+
+**TOOLING FIX (my bug, found by the REAL~C track):** `ec-goal.sh` had a hardcoded `timeout 90`; on these large
+files cli was killed mid-transcript and the script then printed **the last goal it had seen — from a DIFFERENT
+lemma — with no warning**. A silent wrong answer handed to an agent. FIXED: default 600s (EC_GOAL_TIMEOUT
+override) and a timeout now exits 124 with a DO-NOT-TRUST banner. Also recorded the fast-loop technique that
+made this session feasible: a gutted copy with every OTHER proof body replaced by `admit.` and all statements
+untouched — goal states inside the target proof stay byte-identical, and it compiles in ~18s vs ~2min.
+(Coordination note: a concurrent session overwrote an agent's probe script in the shared scratchpad; agents
+should namespace scratch files under a private subdir.)
