@@ -71,7 +71,7 @@
     },
     {
       "path": "xtask/src/erc7730_curation.rs",
-      "sha256": "65b5bba321ce7e1dd754be3e472b3fba5bc0b0cb05ab6e3ed59bc4e732e4fb98"
+      "sha256": "538fe33bcf823734d2cef61311ad69f3dc3c6b32b90602c25411b52f96d49312"
     },
     {
       "path": "xtask/src/erc7730_diff.rs",
