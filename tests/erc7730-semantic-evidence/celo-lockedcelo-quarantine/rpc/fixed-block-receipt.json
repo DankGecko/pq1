@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-07-20T12:42:00Z",
+  "network": "celo-mainnet",
+  "chain_id": 42220,
+  "block": {
+    "number": 72649728,
+    "number_hex": "0x4548c00",
+    "hash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+    "parent_hash": "0x98df262766665ba08ac9c3e9fb67c907f0e2ab7e5a9be6721e728a69afd63d24",
+    "state_root": "0x16ef9a83ecb75fd3214684fe2a8c9a2ff91a60a483d1eff5886b9a55b10ae855",
+    "timestamp": 1784550486,
+    "timestamp_utc": "2026-07-20T12:28:06Z"
+  },
+  "queries": {
+    "registry": "0x000000000000000000000000000000000000ce10",
+    "registry_signature": "getAddressForString(string)",
+    "registry_selector": "0x853db323",
+    "locked_gold_calldata": "0x853db3230000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000a4c6f636b6564476f6c6400000000000000000000000000000000000000000000",
+    "locked_celo_calldata": "0x853db3230000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000a4c6f636b656443656c6f00000000000000000000000000000000000000000000",
+    "registry_return": "0x0000000000000000000000006cc083aed9e3ebe302a6336dbc7c921c9f03349e",
+    "proxy": "0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E",
+    "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+    "implementation_slot_return": "0x00000000000000000000000055e1a0c8f376964bd339167476063bfed7f213d5",
+    "implementation": "0x55E1A0C8f376964bd339167476063bFED7f213d5"
+  },
+  "runtime_identity": {
+    "proxy": {
+      "bytes": 2585,
+      "sha256": "eaab648c13c1c75b6bbc77f8c9ed1654505c28c9b41b03af1250f854a0be1ee5",
+      "keccak256": "0x45ab8fc4093acc16d5e4c341276dc0ec237959e6633c43e7f210f654c4e9cb9d"
+    },
+    "implementation": {
+      "bytes": 34216,
+      "sha256": "93327e32f5724e62578fd9402fd3faa28a25a15910d55584f4d97a82064483ac",
+      "keccak256": "0x8641efe2187f0f58d3b521f01ee3e18f8d62373d01350c255a23a9a81996fa29"
+    }
+  },
+  "providers": [
+    {
+      "name": "Celo Forno",
+      "url": "https://forno.celo.org",
+      "block_header_agrees": true,
+      "locked_gold_registry_call_agrees": true,
+      "locked_celo_registry_call_agrees": true,
+      "implementation_slot_agrees": true,
+      "proxy_runtime_agrees": true,
+      "implementation_runtime_agrees": true
+    },
+    {
+      "name": "dRPC",
+      "url": "https://celo.drpc.org",
+      "block_header_agrees": true,
+      "locked_gold_registry_call_agrees": true,
+      "locked_celo_registry_call_agrees": true,
+      "implementation_slot_agrees": true,
+      "proxy_runtime_agrees": true,
+      "implementation_runtime_agrees": true
+    },
+    {
+      "name": "Ankr",
+      "url": "https://rpc.ankr.com/celo",
+      "block_header_agrees": true,
+      "locked_gold_registry_call_agrees": true,
+      "locked_celo_registry_call_agrees": true,
+      "implementation_slot_agrees": true,
+      "proxy_runtime_agrees": true,
+      "implementation_runtime_agrees": true
+    }
+  ],
+  "method": "Each provider returned the same block header. State queries used the EIP-1898 selector {blockHash, requireCanonical:true}; runtime hashes were computed over decoded bytecode. The checked-in runtime files were captured from Celo Forno at the same fixed block and match all three providers."
+}

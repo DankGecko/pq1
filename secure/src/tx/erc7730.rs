@@ -245,6 +245,36 @@ mod known_call_tests {
             crate::fi::OK_SENTINEL,
         );
     }
+
+    #[test]
+    fn pinned_filter_quarantines_stale_locked_celo_deployments() {
+        let deployments = [
+            (42_220, "55e1a0c8f376964bd339167476063bfed7f213d5"),
+            (44_787, "6a4cc5693dc5bfa3799c699f3b941ba2cb00c341"),
+        ];
+        let selectors = [
+            [0x58, 0xf8, 0x4a, 0x78], // delegateGovernanceVotes(address,uint256)
+            [0xf8, 0x3d, 0x08, 0xba], // lock()
+            [0xb2, 0xfb, 0x30, 0xcb], // relock(uint256,uint256)
+            [0x18, 0x62, 0x9a, 0x92], // revokeDelegatedGovernanceVotes(address,uint256)
+            [0x61, 0x98, 0xe3, 0x39], // unlock(uint256)
+            [0x2e, 0x1a, 0x7d, 0x4d], // withdraw(uint256)
+        ];
+
+        for (chain_id, address) in deployments {
+            let decoded = hex::decode(address).expect("valid LockedCelo address");
+            let mut contract = [0u8; 20];
+            contract.copy_from_slice(&decoded);
+            for selector in selectors {
+                assert_ne!(
+                    proof(chain_id, &contract, &selector),
+                    crate::fi::OK_SENTINEL,
+                    "stale LockedCelo tuple must never authorize fallback: chain={chain_id} contract=0x{address} selector=0x{}",
+                    hex::encode(selector),
+                );
+            }
+        }
+    }
 }
 // The live render path walks path programs through `render::resolve`.
 // Deliberately expose only the container-field constants needed by that path;

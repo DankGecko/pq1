@@ -44,8 +44,8 @@ Current security contract:
 - Schema v5 authenticates every `uintN`/`intN` width and hard-refuses dirty ABI
   zero/sign extension before publishing trusted clear-signing pages; full-width
   `uint256`/`int256` words remain unchanged.
-- The current regenerated development catalogue has **437 leaves**, root
-  `99e4b2556f5a77d6e7d9b8f07b067e9b87a4187b3e472375e602877a2810bcfe`,
+- The current regenerated development catalogue has **435 leaves**, root
+  `712ca64bb1a14054e52a4b9ad8bb980315b63f43d08c51cb7ec7bf1960e96d0b`,
   and **4,544 exact known-call tuples**. The tuple-set receipt is SHA-256
   `593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781`;
   Bloom occupancy is 28,248 / 131,072 bits under the compiler-enforced generation cap.

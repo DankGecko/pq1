@@ -539,8 +539,8 @@ fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment(
 
     assert_eq!(
         result.entries.len(),
-        437,
-        "PQ-incompatible permit removal must preserve the 437-leaf catalogue"
+        435,
+        "PQ-incompatible permit removal must preserve the 435-leaf catalogue"
     );
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
@@ -677,11 +677,11 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
             .contains(&(entry.chain_id, entry.contract, withdraw_selector)));
     }
 
-    assert_eq!(result.entries.len(), 437);
+    assert_eq!(result.entries.len(), 435);
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.root),
-        "99e4b2556f5a77d6e7d9b8f07b067e9b87a4187b3e472375e602877a2810bcfe"
+        "712ca64bb1a14054e52a4b9ad8bb980315b63f43d08c51cb7ec7bf1960e96d0b"
     );
 }
 
@@ -786,7 +786,7 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
 
     assert_eq!(
         result.entries.len(),
-        437,
+        435,
         "Aave V2 already owned three leaves"
     );
     assert_eq!(result.known_call_count, 4_544);
@@ -1008,7 +1008,7 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
         );
     }
 
-    assert_eq!(result.entries.len(), 437);
+    assert_eq!(result.entries.len(), 435);
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -1116,7 +1116,7 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
         );
     }
 
-    assert_eq!(result.entries.len(), 437);
+    assert_eq!(result.entries.len(), 435);
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -1641,7 +1641,7 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
         "newly clear-signable permit was already registry-known"
     );
 
-    assert_eq!(result.entries.len(), 437);
+    assert_eq!(result.entries.len(), 435);
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
