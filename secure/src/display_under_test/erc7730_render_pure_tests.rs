@@ -7388,13 +7388,13 @@ fn erc2612_permit_with_hidden_owner_is_excluded() {
 // ───────────────────────────────────────────────────────────────────────
 // Tier B: canonical dynamic tokenPath framing — Uniswap swaps.
 //
-// Endpoint tokenPaths identify amount metadata; they do not display a complete
-// signed packed route or address array. The two all-static Router02 single-hop
-// calls are admitted only with authenticated recipient/amount/price/value
-// semantics. The four broader routes remain absent and known hard refusals. A
-// process-private safe fixture adds `path.[]`, preserving the runtime
-// extraction/framing backstop while requiring all route addresses to reach the
-// display.
+// Endpoint tokenPaths identify amount metadata; they do not by themselves
+// display a complete signed packed route or address array. Production admits
+// the two all-static Router02 single-hop calls and the two V2 `address[]`
+// routes only with authenticated recipient/amount/value semantics. The packed
+// V3 byte-path routes remain known hard refusals. A process-private fixture is
+// retained as a compiler-level collection-path backstop; the production tests
+// below exercise the real Merkle-bound Router02 leaf.
 // ───────────────────────────────────────────────────────────────────────
 const UNI_V3: [u8; 20] = [
     0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
@@ -7407,6 +7407,9 @@ const UNI_EXACT_INPUT_SINGLE: &str =
     "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))";
 const UNI_EXACT_OUTPUT_SINGLE: &str =
     "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))";
+const UNI_SWAP_EXACT_TOKENS: &str = "swapExactTokensForTokens(uint256,uint256,address[],address)";
+const UNI_SWAP_TOKENS_FOR_EXACT: &str =
+    "swapTokensForExactTokens(uint256,uint256,address[],address)";
 
 fn calldata_uniswap_single(
     signature: &str,
@@ -7438,20 +7441,25 @@ fn calldata_uniswap_exact_output(recipient: [u8; 20]) -> Vec<u8> {
 }
 
 #[test]
-fn production_uniswap_router02_admits_only_guarded_single_hop_and_keeps_all_calls_known() {
+fn production_uniswap_router02_admits_only_guarded_routes_and_keeps_all_calls_known() {
     let registry = build_registry();
     let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
     let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Router02 IR parses");
-    assert_eq!(ir.format_count(), Ok(2));
+    assert_eq!(ir.format_count(), Ok(4));
 
-    for signature in [UNI_EXACT_INPUT_SINGLE, UNI_EXACT_OUTPUT_SINGLE] {
+    for signature in [
+        UNI_EXACT_INPUT_SINGLE,
+        UNI_EXACT_OUTPUT_SINGLE,
+        UNI_SWAP_EXACT_TOKENS,
+        UNI_SWAP_TOKENS_FOR_EXACT,
+    ] {
         let selector = keccak256(signature.as_bytes());
         let key: [u8; 4] = selector[..4].try_into().expect("selector width");
         assert!(
             ir.find_format_by_selector(&key)
                 .expect("Router02 format table parses")
                 .is_some(),
-            "guarded Router02 single-hop call must be admitted: {signature}"
+            "guarded Router02 call must be admitted: {signature}"
         );
     }
 
@@ -7460,10 +7468,14 @@ fn production_uniswap_router02_admits_only_guarded_single_hop_and_keeps_all_call
         UNI_EXACT_OUTPUT_SINGLE,
         "exactInput((bytes,address,uint256,uint256))",
         "exactOutput((bytes,address,uint256,uint256))",
-        "swapExactTokensForTokens(uint256,uint256,address[],address)",
-        "swapTokensForExactTokens(uint256,uint256,address[],address)",
+        UNI_SWAP_EXACT_TOKENS,
+        UNI_SWAP_TOKENS_FOR_EXACT,
     ] {
-        if signature != UNI_EXACT_INPUT_SINGLE && signature != UNI_EXACT_OUTPUT_SINGLE {
+        if matches!(
+            signature,
+            "exactInput((bytes,address,uint256,uint256))"
+                | "exactOutput((bytes,address,uint256,uint256))"
+        ) {
             assert_selector_excluded(&ir, signature);
         }
         let digest = keccak256(signature.as_bytes());
@@ -7818,6 +7830,310 @@ fn calldata_v2_swap(
     d
 }
 
+fn uniswap_v2_swap_calldata(
+    signature: &str,
+    first_amount: u64,
+    second_amount: u64,
+    path: &[[u8; 20]],
+    recipient: [u8; 20],
+) -> Vec<u8> {
+    let digest = keccak256(signature.as_bytes());
+    let selector: [u8; 4] = digest[..4].try_into().expect("selector width");
+    calldata_v2_swap(
+        selector,
+        u256_from_u64(first_amount),
+        u256_from_u64(second_amount),
+        path,
+        recipient,
+    )
+}
+
+fn assert_complete_route_pages(pages: &Pages, path: &[[u8; 20]]) {
+    let route_pages = pages
+        .as_slice()
+        .iter()
+        .filter(|page| row_str(&page[0]) == "Route")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        route_pages.len(),
+        path.len() + 1,
+        "route must show one count page and every signed address:\n{}",
+        dump_pages(pages)
+    );
+    assert!(
+        page_strs(pages, find_page_by_label(pages, "Route"))
+            .iter()
+            .any(|row| row.contains(&format!("{} items", path.len()))),
+        "route count must be explicit:\n{}",
+        dump_pages(pages)
+    );
+
+    for (index, address) in path.iter().enumerate() {
+        let mut expected = [[b' '; DISPLAY_COLS]; 4];
+        expected[0][..5].copy_from_slice(b"Route");
+        let [_, r1, r2, r3] = &mut expected;
+        write_addr_full(r1, r2, r3, address);
+        assert_eq!(
+            *route_pages[index + 1],
+            expected,
+            "route element {index} must show all 20 signed address bytes"
+        );
+    }
+}
+
+#[test]
+fn production_uniswap_router02_multihop_renders_every_operand_and_binds_transcript() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let recipient = [0x33; 20];
+    let path = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
+
+    for (signature, first_label, second_label) in [
+        (UNI_SWAP_EXACT_TOKENS, "Swap input", "Minimum receive"),
+        (
+            UNI_SWAP_TOKENS_FOR_EXACT,
+            "Amount to recei~",
+            "Max swap input",
+        ),
+    ] {
+        let calldata = uniswap_v2_swap_calldata(signature, 1_500_000, 1_000_000, &path, recipient);
+        assert_selector_matches(&verified.ir, &calldata, signature);
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render production {signature}: {error:?}"));
+        assert_all_pages_printable(&rendered.pages);
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "receipt must bind the complete production transcript for {signature}"
+        );
+        let _ = find_page_by_label(&rendered.pages, first_label);
+        let _ = find_page_by_label(&rendered.pages, second_label);
+        assert_complete_route_pages(&rendered.pages, &path);
+        assert_full_address_field_page(&rendered.pages, "Beneficiary", &recipient);
+        let native_value = page_strs(
+            &rendered.pages,
+            find_page_by_label(&rendered.pages, "Native value"),
+        );
+        assert!(
+            native_value.iter().any(|row| row.contains('0')),
+            "the exact guarded zero outer value must be visible: {native_value:?}"
+        );
+
+        let mut scalar_offsets = vec![
+            (4 + 31, "first amount"),
+            (4 + 32 + 31, "second amount"),
+            (4 + 3 * 32 + 31, "beneficiary"),
+        ];
+        let route_start = 4 + 4 * 32 + 32;
+        for index in 0..path.len() {
+            scalar_offsets.push((route_start + index * 32 + 31, "route element"));
+        }
+        for (offset, label) in scalar_offsets {
+            let mut mutated_calldata = calldata.clone();
+            mutated_calldata[offset] ^= 1;
+            let mutated = render_erc7730_pages_with_signer_checked(
+                &tx,
+                &mutated_calldata,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            )
+            .unwrap_or_else(|error| {
+                panic!("canonical {label} mutation must render for {signature}: {error:?}")
+            });
+            assert_ne!(
+                rendered.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "{label} mutation must change trusted pages for {signature}"
+            );
+            assert!(
+                !rendered
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "{label} mutation must change the receipt for {signature}"
+            );
+        }
+
+        let mut funded = envelope(1, UNI_V3);
+        funded.value = u256_from_u64(1);
+        assert!(
+            render_erc7730_pages_with_signer_checked(
+                &funded, &calldata, &verified, None, &resolver, &signer,
+            )
+            .is_err(),
+            "nonzero outer value must refuse {signature}"
+        );
+    }
+}
+
+#[test]
+fn production_uniswap_router02_multihop_sender_and_amount_guards_fail_closed() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let path = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
+    let signer = [0x44; 20];
+    let mut mutated_signer = signer;
+    mutated_signer[19] ^= 1;
+    let mut address_one = [0u8; 20];
+    address_one[19] = 1;
+    let mut address_two = [0u8; 20];
+    address_two[19] = 2;
+
+    for signature in [UNI_SWAP_EXACT_TOKENS, UNI_SWAP_TOKENS_FOR_EXACT] {
+        let sentinel =
+            uniswap_v2_swap_calldata(signature, 1_500_000, 1_000_000, &path, address_one);
+        assert!(matches!(
+            render_erc7730_pages(&tx, &sentinel, &verified, None, &resolver),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 sender unbound"
+            ))
+        ));
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &sentinel, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render sender sentinel {signature}: {error:?}"));
+        assert_full_address_field_page(&rendered.pages, "Beneficiary", &signer);
+        let mutated = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &sentinel,
+            &verified,
+            None,
+            &resolver,
+            &mutated_signer,
+        )
+        .unwrap_or_else(|error| panic!("render mutated signer {signature}: {error:?}"));
+        assert_full_address_field_page(&mutated.pages, "Beneficiary", &mutated_signer);
+        assert_ne!(rendered.pages.as_slice(), mutated.pages.as_slice());
+        assert!(!rendered
+            .transcript_receipt
+            .exact_match(&mutated.transcript_receipt));
+
+        let forbidden =
+            uniswap_v2_swap_calldata(signature, 1_500_000, 1_000_000, &path, address_two);
+        assert!(
+            render_erc7730_pages_with_signer_checked(
+                &tx, &forbidden, &verified, None, &resolver, &signer,
+            )
+            .is_err(),
+            "address(2) must refuse {signature}"
+        );
+    }
+
+    let zero_input =
+        uniswap_v2_swap_calldata(UNI_SWAP_EXACT_TOKENS, 0, 1_000_000, &path, [0x33; 20]);
+    assert!(
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &zero_input,
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        )
+        .is_err(),
+        "exact-input amountIn=0 must refuse"
+    );
+}
+
+#[test]
+fn production_uniswap_router02_multihop_rejects_noncanonical_array_framing() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let path = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
+    let render = |calldata: &[u8]| {
+        render_erc7730_pages_with_signer_checked(&tx, calldata, &verified, None, &resolver, &signer)
+    };
+
+    for signature in [UNI_SWAP_EXACT_TOKENS, UNI_SWAP_TOKENS_FOR_EXACT] {
+        let baseline = uniswap_v2_swap_calldata(signature, 1_500_000, 1_000_000, &path, [0x33; 20]);
+        assert!(
+            render(&baseline).is_ok(),
+            "canonical {signature} must render"
+        );
+
+        let mut dirty_recipient = baseline.clone();
+        dirty_recipient[4 + 3 * 32] = 1;
+        assert!(
+            render(&dirty_recipient).is_err(),
+            "dirty recipient must refuse"
+        );
+        for index in 0..path.len() {
+            let mut dirty_path = baseline.clone();
+            dirty_path[4 + 4 * 32 + 32 + index * 32] = 1;
+            assert!(
+                render(&dirty_path).is_err(),
+                "dirty route address {index} must refuse {signature}"
+            );
+        }
+
+        let mut high_offset = baseline.clone();
+        high_offset[4 + 2 * 32] = 1;
+        assert!(render(&high_offset).is_err(), "huge offset must refuse");
+        let mut gapped_offset = baseline.clone();
+        gapped_offset[4 + 2 * 32 + 31] = 160;
+        assert!(
+            render(&gapped_offset).is_err(),
+            "non-head-end offset must refuse"
+        );
+
+        let count_offset = 4 + 4 * 32;
+        let mut high_count = baseline.clone();
+        high_count[count_offset] = 1;
+        assert!(render(&high_count).is_err(), "huge count must refuse");
+        for bad_count in [0u8, 2, 4] {
+            let mut malformed = baseline.clone();
+            malformed[count_offset + 31] = bad_count;
+            assert!(
+                render(&malformed).is_err(),
+                "noncanonical count {bad_count} must refuse {signature}"
+            );
+        }
+
+        let mut trailing = baseline.clone();
+        trailing.extend_from_slice(&[0u8; 32]);
+        assert!(render(&trailing).is_err(), "trailing word must refuse");
+        let mut short = baseline.clone();
+        short.pop();
+        assert!(render(&short).is_err(), "short tail must refuse");
+        assert!(
+            render(&baseline[..4 + 4 * 32 - 1]).is_err(),
+            "short head must refuse"
+        );
+
+        let eight = [[0x77; 20]; 8];
+        let at_cap = uniswap_v2_swap_calldata(signature, 1_500_000, 1_000_000, &eight, [0x33; 20]);
+        let at_cap_rendered = render(&at_cap)
+            .unwrap_or_else(|error| panic!("eight route elements must render: {error:?}"));
+        assert_complete_route_pages(&at_cap_rendered.pages, &eight);
+
+        let nine = [[0x77; 20]; 9];
+        let over_budget =
+            uniswap_v2_swap_calldata(signature, 1_500_000, 1_000_000, &nine, [0x33; 20]);
+        assert!(
+            render(&over_budget).is_err(),
+            "nine route elements exceed the human-review budget"
+        );
+    }
+}
+
 fn render_safe_uni_result(
     calldata: &[u8],
     token: Option<&Erc20Metadata<'_>>,
@@ -7868,7 +8184,7 @@ fn uniswap_exact_input_c2_output_slice_is_excluded() {
 }
 
 #[test]
-fn uniswap_v2_swap_binds_first_and_last_array_element() {
+fn synthetic_uniswap_v2_swap_binds_first_and_last_array_element() {
     // 3-hop path so `[-1]` genuinely selects the LAST element, not index 1.
     // Unlike upstream, the synthetic descriptor also renders `path.[]`.
     let path = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
@@ -7917,9 +8233,6 @@ fn uniswap_v2_swap_binds_first_and_last_array_element() {
     assert_eq!(
         route_pages, 4,
         "whole-route display must include one count page plus all three elements"
-    );
-    assert_uniswap_router_call_excluded_but_known(
-        "swapExactTokensForTokens(uint256,uint256,address[],address)",
     );
 }
 

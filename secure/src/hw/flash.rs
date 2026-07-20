@@ -665,6 +665,13 @@ pub fn is_wipe_armed() -> bool {
 // but before the wizard sets the mode falls back to decoy (loses no funds),
 // matching the wipe-flag convention. Same QW lifecycle — `erase_admin_page`
 // (wipe finish) clears it back to decoy, and the next wizard re-collects.
+//
+// F26/LIFE-1 (cut point B): the READ is fail-closed — anything OTHER than
+// the pristine-blank byte (0xFF) means wipe. Only a deliberately-blank QW
+// (never armed, or cleanly cleared by `erase_admin_page`) selects decoy;
+// the armed 0x00 AND every unknown/torn/glitch pattern select the
+// destruction path, so an ambiguous read can never silently downgrade the
+// user's chosen protection to the decoy.
 const DURESS_WIPE_MODE_OFFSET: u32 = 32;
 const DURESS_WIPE_MODE_SET: u8 = 0x00;
 
@@ -687,11 +694,16 @@ pub unsafe fn arm_duress_wipe_mode() -> Result<(), ()> {
 /// Returns true iff the device is configured to WIPE on a duress-PIN
 /// unlock (vs the default: open the decoy wallet). Read by
 /// `nsc::gated_unlock` in the duress-match branch.
+///
+/// FAIL-CLOSED (F26/LIFE-1): true unless the byte reads the
+/// pristine-blank `0xFF`. The armed value (`DURESS_WIPE_MODE_SET`)
+/// and any unknown/torn pattern both read as wipe — only a
+/// deliberately-blank QW opens the decoy.
 #[cfg(feature = "duress-pin")]
 pub fn is_duress_wipe_mode() -> bool {
     let src = (ADMIN_PAGE_ADDR + DURESS_WIPE_MODE_OFFSET) as *const u8;
     // SAFETY: fixed in-flash address inside page 125; memory-mapped read.
-    unsafe { read_volatile(src) == DURESS_WIPE_MODE_SET }
+    unsafe { read_volatile(src) != 0xFF }
 }
 
 // ---------------------------------------------------------------------------
@@ -2034,7 +2046,21 @@ pub unsafe fn offchain_count_register_slot(slot_key: &[u8; 8]) -> Result<(), ()>
     }
     let qw = entry_qw(slot_key, OFFCHAIN_TYPE_USEROP, 0);
     // SAFETY: forwarded contract.
-    unsafe { write_entry(&qw) }
+    unsafe { write_entry(&qw)? };
+    // FI hardening (F16/SCAFI-4): read-back + sentinel-gated re-check,
+    // mirroring the `offchain_count_bump` / `userop_sigs_bump` twins —
+    // a suppressed write or a value-faulted entry (wrong slot key) must
+    // not report success. `write_quadword_verified` only proves the QW
+    // landed AS GIVEN, not that `entry_qw` produced the intended value.
+    if !offchain_count_is_registered(slot_key) {
+        return Err(());
+    }
+    if crate::fi::check_true_into_sentinel(|| offchain_count_is_registered(slot_key))
+        != crate::fi::OK_SENTINEL
+    {
+        return Err(());
+    }
+    Ok(())
 }
 
 /// Bump the off-chain sig counter to `new_count`. Reverts via `Err(())`
@@ -2126,7 +2152,23 @@ pub unsafe fn offchain_count_promote_to(slot_key: &[u8; 8], target: u64) -> Resu
     }
     let qw = entry_qw(slot_key, OFFCHAIN_TYPE_COUNT, target);
     // SAFETY: forwarded contract.
-    unsafe { write_entry(&qw) }
+    unsafe { write_entry(&qw)? };
+    // FI hardening (F16/SCAFI-4): read-back + sentinel-gated re-check,
+    // mirroring `offchain_count_bump` — a suppressed write or a
+    // value-faulted entry (wrong slot key or count) must fail, not
+    // silently leave the local view below the on-chain high-water mark.
+    // `write_quadword_verified` only proves the QW landed AS GIVEN, not
+    // that `entry_qw` produced the intended value.
+    let post = offchain_count_read(slot_key);
+    if post != target {
+        return Err(());
+    }
+    if crate::fi::check_true_into_sentinel(|| offchain_count_read(slot_key) == target)
+        != crate::fi::OK_SENTINEL
+    {
+        return Err(());
+    }
+    Ok(())
 }
 
 /// Update the last_userop_count snapshot for `slot_key`. Idempotent if
@@ -2177,7 +2219,23 @@ pub unsafe fn last_userop_count_set(slot_key: &[u8; 8], count: u64) -> Result<()
     }
     let qw = entry_qw(slot_key, OFFCHAIN_TYPE_USEROP, count);
     // SAFETY: forwarded contract.
-    unsafe { write_entry(&qw) }
+    unsafe { write_entry(&qw)? };
+    // FI hardening (F16/SCAFI-4): read-back + sentinel-gated re-check,
+    // mirroring the `offchain_count_bump` / `userop_sigs_bump` twins —
+    // a suppressed write or a value-faulted entry (wrong slot key or
+    // count) must not report success. `write_quadword_verified` only
+    // proves the QW landed AS GIVEN, not that `entry_qw` produced the
+    // intended value.
+    let post = last_userop_count_read(slot_key);
+    if post != count {
+        return Err(());
+    }
+    if crate::fi::check_true_into_sentinel(|| last_userop_count_read(slot_key) == count)
+        != crate::fi::OK_SENTINEL
+    {
+        return Err(());
+    }
+    Ok(())
 }
 
 /// Read the durable per-slot tally of Type-2 (slot-key) UserOp signatures

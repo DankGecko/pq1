@@ -1005,7 +1005,11 @@ pub fn unlock_with_master(master: [u8; 32]) {
 ///      attacker who reliably cuts power mid-verify could brute-
 ///      force without burning MCU attempts.
 ///   3. Call `WalletStore::unlock`. On `Ok`, erase the counter
-///      (fresh start); on `Err`, leave the bump committed.
+///      (fresh start); on `Err`, leave the bump committed. If the
+///      erase itself fails, refuse with `InternalError` (fail-closed)
+///      rather than release the master with the counter still charged
+///      — a swallowed reset failure would drift a correct-PIN device
+///      toward a spurious lockout/wipe (F17/SCAFI-5).
 ///   4. If the flash bump itself fails (PROGERR or post-write
 ///      readback mismatch), refuse the attempt with
 ///      `InternalError`. Prevents the "glitch flash writes to
@@ -1140,20 +1144,31 @@ pub unsafe fn gated_unlock(
             // observer notices the latency, the secret is already gone),
             // so we skip the duress_pad. The downstream Err arm returns
             // PinLocked WITHOUT resetting page-124 (the wipe is terminal).
+            //
+            // F26/LIFE-1 (cut point B): FAIL-IN shape. The decoy release
+            // — the attacker's bypass target under coercion — is the
+            // EXPLICIT conditional riding the Hamming-distant sentinel
+            // (which double-reads the mode byte with a wait_random
+            // between); the wipe is the fall-through. A skipped/garbled
+            // branch or a faulted read lands on WIPE, never on decoy.
+            // The read itself is fail-closed (`is_duress_wipe_mode`:
+            // only a pristine-blank QW means decoy).
             #[cfg(feature = "stm32u585")]
-            let wipe_mode = crate::hw::flash::is_duress_wipe_mode();
+            let open_decoy = crate::fi::check_true_into_sentinel(|| {
+                !crate::hw::flash::is_duress_wipe_mode()
+            });
             #[cfg(not(feature = "stm32u585"))]
-            let wipe_mode = false;
-            if wipe_mode {
+            let open_decoy = crate::fi::check_true_into_sentinel(|| true);
+            if open_decoy == crate::fi::OK_SENTINEL {
+                se.duress_pad(pin);
+                Ok(m)
+            } else {
                 use zeroize::Zeroize;
                 m.zeroize();
                 crate::fi::zeroize_barrier();
                 secure_log!("[NSC] duress=wipe configured — wiping device");
                 let _ = se.factory_reset_admin();
                 Err(UnlockError::PinLocked)
-            } else {
-                se.duress_pad(pin);
-                Ok(m)
             }
         }
         Err(_) => se.unlock(pin),
@@ -1187,8 +1202,25 @@ pub unsafe fn gated_unlock(
 
     match result {
         Ok(master) if verdict == crate::fi::OK_SENTINEL => {
+            // F17/SCAFI-5: do NOT swallow a page-124 reset failure.
+            // The pre-commit above charged the counter BEFORE the SE
+            // verify; a silently-failed reset leaves it charged after
+            // a CORRECT PIN, so N good unlocks accumulate N markers →
+            // spurious 10-attempt lockout → trigger_lockout_wipe (a
+            // silent self-brick with no diagnostic). FAIL-IN like the
+            // bump gate above: the refusal is the fall-through, the
+            // `Ok(master)` release rides on the Hamming-distant
+            // sentinel. Nothing was stamped into SecureState yet, so
+            // failing closed here costs only a retry.
             #[cfg(feature = "stm32u585")]
-            let _ = crate::hw::flash::pin_attempts_reset();
+            {
+                let reset_result = crate::hw::flash::pin_attempts_reset();
+                let reset_ok =
+                    crate::fi::check_true_into_sentinel(|| reset_result.is_ok());
+                if reset_ok != crate::fi::OK_SENTINEL {
+                    return Err(UnlockError::InternalError);
+                }
+            }
             Ok(master)
         }
         Ok(_) => {

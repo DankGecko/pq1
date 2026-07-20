@@ -60,6 +60,16 @@ pub fn reset_counters() {
     SIGNS_THIS_SESSION.store(0, Ordering::Relaxed);
 }
 
+/// Number of signs registered in the current unlock session. Exposed
+/// for the X17-FI2 verified-success read-back in
+/// `crypto::c10_sign_verified_with_progress`: a glitch that skips
+/// `bl pre_sign` leaves this counter un-advanced, so the caller can
+/// require the +1 postcondition before stamping the CFI step instead
+/// of trusting the fallible call's return register.
+pub fn signs_this_session() -> u32 {
+    SIGNS_THIS_SESSION.load(Ordering::Relaxed)
+}
+
 /// Check whether a sign is permitted right now. Called at the top of
 /// `crypto::c10_sign_verified_with_progress`, ONCE per output
 /// signature (the F-13 double-compute inside that wrapper counts as
@@ -165,7 +175,14 @@ mod tests {
     #[test]
     fn first_sign_ok() {
         reset_counters();
+        assert_eq!(signs_this_session(), 0);
         assert!(pre_sign().is_ok());
+        assert_eq!(
+            signs_this_session(),
+            1,
+            "pre_sign must advance the session counter by exactly one \
+             (the X17-FI2 read-back postcondition crypto.rs relies on)"
+        );
     }
 
     /// Session cap is enforced — past MAX_SIGNS_PER_SESSION, sign is

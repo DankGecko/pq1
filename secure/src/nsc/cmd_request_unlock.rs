@@ -34,7 +34,7 @@ pub(super) unsafe fn run() -> u32 {
     // user is typing the PIN or while we are deriving master_secret.
     let _busy = super::HandlerGuard::enter();
 
-    let pin = match enter_pin() {
+    let mut pin = match enter_pin() {
         PinEntryResult::Pin(p) => p,
         PinEntryResult::Cancelled | PinEntryResult::Mismatch => {
             // Mismatch is unreachable here (only enter_pin_with_confirm
@@ -52,8 +52,9 @@ pub(super) unsafe fn run() -> u32 {
 
     let result = verify_pin_with_chip(&pin);
 
-    let mut pin_copy = pin;
-    pin_copy.zeroize();
+    // X17-TUI2 / UI9: zeroize the ORIGINAL binding. Zeroizing a
+    // duplicate of the array left the live `[u8; 8]` PIN on the stack.
+    pin.zeroize();
 
     result
 }
@@ -142,10 +143,12 @@ unsafe fn verify_pin_with_chip(pin: &[u8; 8]) -> u32 {
             trigger_lockout_wipe()
         }
         Err(UnlockError::InternalError) => {
-            // Includes the "flash bump failed" fault-injection refusal
-            // from gated_unlock. MCU counter is not bumped in that
-            // case — neither is SE counter, because we never called
-            // the chip. Attack surface bounded.
+            // Covers the "flash bump failed" fault-injection refusal
+            // from gated_unlock (MCU counter not bumped, SE never
+            // called) and the F17/SCAFI-5 "post-success reset failed"
+            // refusal (SE verify succeeded but page 124 stayed
+            // charged — fail-closed, user retries). Attack surface
+            // bounded.
             NscStatus::InternalError as u32
         }
     }

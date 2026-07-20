@@ -467,9 +467,24 @@ mod stm32 {
         // world never learns the violation happened. TZIC turns
         // that into NVIC IRQ 8, dispatched in
         // `main::DefaultHandler` to `hw::tzic::on_violation()`.
-        // SECCFGR4 is left untouched (AHB3 peripherals stay at
-        // their NS reset default; nothing security-critical there
-        // on this branch), so its IER mask is 0.
+        //
+        // IER4 = 0 (sweep F8 / TZGW-4): the U585 TZSC bank stops at
+        // SECCFGR3 — there is NO SECCFGR4 (CMSIS/PAC
+        // `GTZC1_TZSC_TypeDef`: SECCFGR1..3 at 0x10..0x18; 0x1C
+        // reserved). TZIC IER4 nonetheless exists and covers the
+        // AHB3/memory group: GPDMA1, FLASH(_REG), OTFDEC1/2, TZSC1,
+        // TZIC1, OCTOSPI/FSMC memories, BKPSRAM, SRAM1-3 + MPCBB1-3
+        // register blocks. Those targets are not TZSC-attributable —
+        // they are hardwired secure or self-governed (FLASH via its
+        // SECWM watermark, GPDMA per-channel SECCFGR, TZSC/TZIC
+        // secure-privileged-only, SRAMs via MPCBB) — so with IER4 = 0
+        // an NS probe of them is still blocked by hardware but raises
+        // NO violation event: the block never reaches
+        // `violation_count`/`LAST_SR`. Accepted instrumentation gap,
+        // not an enforcement hole (no AHB3-group peripheral is under
+        // our SECCFGR image); if AHB3 forensics become a requirement,
+        // set the matching IER4 bits — no TZSC write is possible or
+        // needed for that.
         crate::hw::tzic::configure(seccfgr1, seccfgr2, seccfgr3, 0);
     }
 

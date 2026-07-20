@@ -3604,8 +3604,21 @@ fn main() -> ! {
             #[cfg(feature = "duress-pin")]
             {
                 if duress_pin.is_some() && ui::seed_wizard::choose_duress_wipe_mode() {
+                    // F26/LIFE-1 (cut point A): do NOT swallow an arm
+                    // failure. `secure_log!` compiles out in production,
+                    // so the old path kept provisioning with page-125
+                    // QW2 left blank = decoy — a silent downgrade of the
+                    // protection the user JUST chose, surfaced exactly
+                    // under the coercion it was meant for. Fail closed
+                    // like every other provisioning failure (see
+                    // `provision_from_mnemonic` below, which panics on
+                    // error): warn on the trusted display, then panic.
+                    // The panic handler wipes SRAM secrets and halts;
+                    // the next boot re-runs the wizard from scratch.
                     if hw::flash::arm_duress_wipe_mode().is_err() {
-                        secure_log!("[S] [DURESS] arm_duress_wipe_mode FAILED — defaulting to decoy");
+                        secure_log!("[S] [DURESS] arm_duress_wipe_mode FAILED — refusing to provision (wipe→decoy downgrade)");
+                        ui::show_status("Duress setup failed", "power cycle to retry");
+                        panic!("arm_duress_wipe_mode failed — refuse silent wipe→decoy downgrade");
                     }
                 }
             }
@@ -3887,7 +3900,8 @@ fn SysTick() {
 /// **Safety contract for future contributors:** before unmasking any
 /// new NVIC line (`NVIC.ISER0..3` writes), add a matching dispatch
 /// arm here. Otherwise the IRQ silently routes to "unexpected" and
-/// the handler stalls in WFE — easy to misdiagnose as a hang.
+/// the handler wipes secrets and resets (F33/RUN-5) — easy to
+/// misdiagnose as an unrelated reboot loop.
 #[cfg(all(not(test), feature = "stm32u585"))]
 #[cortex_m_rt::exception]
 unsafe fn DefaultHandler(irqn: i16) {
@@ -3901,14 +3915,22 @@ unsafe fn DefaultHandler(irqn: i16) {
         // counter to confirm enforcement is working.
         8 => unsafe { hw::tzic::on_violation() }, // GTZC_IRQn
 
-        // Unmatched — log + halt in WFE. NOT a panic so the host
-        // semihosting backend gets a chance to flush the log line
-        // before the chip stops responding.
+        // Unmatched — log, wipe secrets, reset (F33/RUN-5). NOT a
+        // panic so the host semihosting backend gets a chance to
+        // flush the log line before the chip resets. Reachability
+        // (honest): today nothing but TAMP (`tamp-irq`) and GTZC is
+        // NVIC-enabled, so this arm fires only on a bug, a fault-
+        // injection glitch, or a contributor unmasking a line without
+        // adding a dispatch arm (the contract above). The old
+        // WFE-park left `master_secret`/`SLOT_CACHE` resident until
+        // the IWDG bit — and forever on non-`iwdg` builds. Same
+        // policy as HardFault: zeroize the SRAM secret caches, then
+        // reset (NOT the destructive SE wipe — see HardFault).
         _ => {
-            secure_log!("[IRQ] unexpected irqn={} — halting", irqn);
-            loop {
-                cortex_m::asm::wfe();
-            }
+            secure_log!("[IRQ] unexpected irqn={} — wiping secrets + resetting", irqn);
+            nsc::zeroize_sensitive_state();
+            crate::fi::zeroize_barrier();
+            cortex_m::peripheral::SCB::sys_reset()
         }
     }
 }
@@ -4006,6 +4028,26 @@ fn PendSV() {
         // Clear the re-entry guard on normal loop exit.
         core::ptr::write_volatile(core::ptr::addr_of_mut!(PENDSV_IN_FLIGHT), 0);
     }
+}
+
+/// **F33/RUN-5 — NMI gets the same zeroize + reset policy as HardFault.**
+///
+/// cortex-m-rt's default NMI handler is an infinite loop with no wipe:
+/// an NMI would park the CPU with `master_secret`, the reconstructed
+/// entropy, and the cached slot `SigningKey` still live in secure SRAM.
+/// **Reachability (honest): today NO NMI source is armed** — enabling
+/// CSS/ECCD-NMI is tracked separately (`#21-tamp-css_pvd`) — so this
+/// fires only on a fault-injection glitch, a bug, or when that work
+/// lands. The response is deliberately the HardFault one: wipe the SRAM
+/// secret caches, then `sys_reset()` (startup re-zeroes `.bss`; the
+/// abnormal-reset path re-locks). NOT the destructive SE wipe — see the
+/// HardFault rationale below.
+#[cfg(all(not(test), feature = "stm32u585"))]
+#[cortex_m_rt::exception]
+unsafe fn NonMaskableInt() -> ! {
+    nsc::zeroize_sensitive_state();
+    crate::fi::zeroize_barrier();
+    cortex_m::peripheral::SCB::sys_reset()
 }
 
 /// **rr-1 (Trezor-port) — route synchronous CPU faults to zeroize + reset.**

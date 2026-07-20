@@ -255,15 +255,33 @@ pub(super) unsafe fn run(_args: &GatewayArgs) -> u32 {
         let flash_manifest: &[u8; MANIFEST_SIZE] =
             unsafe { &*(manifest_addr as *const [u8; MANIFEST_SIZE]) };
         let committed = ManifestRef::new(flash_manifest);
-        let manifest_ok = committed.verify_structural().is_ok()
-            && committed.verify_crc().is_ok()
-            && committed.verify_digest().is_ok()
-            && committed.verify_rollback(new_rollback_floor).is_ok();
-        let pointer_ok = matches!(
-            boot_state::read(),
-            Ok(bs) if bs.active_slot == inactive && bs.last_good_version == new_version
-        );
-        if !manifest_ok || !pointer_ok {
+        // FI-hardening (X17-FW1 / playbook FW11): this is the LAST
+        // authorization gate before the irreversible OTP floor bump, so a
+        // bare `if !(a && b) { return }` reject would be one branch-flip
+        // away from falling through to `otp::bump_to` — two coordinated
+        // faults (tear the manifest write + skip the reject) brick the
+        // device (new slot boot-invalid, old slot floor-excluded). Route
+        // both verdicts through `check_true_into_sentinel` (double-
+        // evaluated + Hamming-distant sentinel) with
+        // `scrub_sentinel_register` between the paired callsites (stale-r0
+        // defence, F-15.r1), matching `verify_images`' aggregate-gate
+        // pattern. The closures RE-RUN the verifications; `black_box`
+        // stops LLVM from proving a re-evaluation redundant (F-1).
+        crate::fi::wait_random();
+        let manifest_gate = crate::fi::check_true_into_sentinel(|| {
+            core::hint::black_box(committed.verify_structural().is_ok())
+                && core::hint::black_box(committed.verify_crc().is_ok())
+                && core::hint::black_box(committed.verify_digest().is_ok())
+                && core::hint::black_box(committed.verify_rollback(new_rollback_floor).is_ok())
+        });
+        crate::fi::scrub_sentinel_register();
+        let pointer_gate = crate::fi::check_true_into_sentinel(|| {
+            core::hint::black_box(matches!(
+                boot_state::read(),
+                Ok(bs) if bs.active_slot == inactive && bs.last_good_version == new_version
+            ))
+        });
+        if manifest_gate != crate::fi::OK_SENTINEL || pointer_gate != crate::fi::OK_SENTINEL {
             // No OTP bump has happened: the old slot still boots. Drop the
             // streaming context so a retry goes through a fresh, user-gated
             // BEGIN (which re-erases + re-streams the inactive slot).

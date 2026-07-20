@@ -1131,9 +1131,48 @@ fn negative_default_handler_logs_unexpected_irqs_instead_of_silent_drop() {
         dh_body.contains("_ => {"),
         "DefaultHandler must keep its catch-all arm — see Safety contract at lines 2779-2782"
     );
+    // F33/RUN-5: the unexpected-IRQ arm must wipe secrets and reset —
+    // the old WFE-park left master_secret/SLOT_CACHE resident until the
+    // IWDG bit (and forever on non-iwdg builds).
     assert!(
-        dh_body.contains("cortex_m::asm::wfe();"),
-        "Unmatched IRQ must park in WFE rather than fall through"
+        dh_body.contains("nsc::zeroize_sensitive_state();"),
+        "Unmatched IRQ must zeroize SRAM secrets (F33/RUN-5)"
+    );
+    assert!(
+        dh_body.contains("SCB::sys_reset()"),
+        "Unmatched IRQ must reset after zeroizing (F33/RUN-5)"
+    );
+    assert!(
+        !dh_body.contains("cortex_m::asm::wfe();"),
+        "Unmatched IRQ must NOT park in WFE with secrets resident (F33/RUN-5)"
+    );
+}
+
+#[test]
+fn negative_nmi_handler_zeroizes_and_resets() {
+    // F33/RUN-5: without a named NMI handler, cortex-m-rt's default is
+    // an infinite loop — an NMI would park the CPU with secrets
+    // resident. The handler must exist and follow the HardFault policy:
+    // zeroize the SRAM secret caches, then sys_reset. (Today no NMI
+    // source is armed; CSS/ECCD-NMI enabling is #21-tamp-css_pvd.)
+    let nmi_start = MAIN_SRC
+        .find("unsafe fn NonMaskableInt()")
+        .expect("NMI handler must exist (F33/RUN-5)");
+    let nmi = &MAIN_SRC[nmi_start..];
+    let body_start = nmi.find('{').expect("NMI body must open");
+    let body_end = body_start + nmi[body_start..].find("\n}\n").expect("NMI must close");
+    let body = &nmi[body_start..body_end];
+    assert!(
+        body.contains("nsc::zeroize_sensitive_state();"),
+        "NMI handler must zeroize SRAM secrets before resetting (F33/RUN-5)"
+    );
+    assert!(
+        body.contains("SCB::sys_reset()"),
+        "NMI handler must reset after zeroizing (F33/RUN-5)"
+    );
+    assert!(
+        !body.contains("trigger_intrusion_wipe"),
+        "NMI handler must NOT arm the destructive dual-SE wipe (same rationale as HardFault)"
     );
 }
 
@@ -1221,6 +1260,48 @@ fn negative_systick_passes_idle_bounded_trusted_ui_state_to_iwdg() {
             "SysTick lost watchdog input `{landmark}`"
         );
     }
+}
+
+#[test]
+fn negative_iwdg_init_kr_sequence_is_atomic() {
+    // F32/RUN-4: `iwdg::init` runs with SysTick already live, and the
+    // SysTick boot-grace path writes `KR=0xAAAA` every tick. A kick
+    // landing between KEY_ACCESS and the PR/RLR writes revokes PR/RLR
+    // write access → prescaler/reload silently dropped (watchdog keeps
+    // its ~0.5 s reset-default timeout while every budget assumes ~2 s).
+    // The unlock → PR → RLR window must run inside a critical section.
+    let init_start = IWDG_SRC
+        .find("pub fn init() {")
+        .expect("iwdg::init missing");
+    let init_body = &IWDG_SRC[init_start..];
+    let free_pos = init_body
+        .find("cortex_m::interrupt::free(|_| {")
+        .expect("iwdg::init must program KEY_ACCESS → PR → RLR inside cortex_m::interrupt::free (F32/RUN-4)");
+    let free_end = free_pos
+        + init_body[free_pos..]
+            .find("});")
+            .expect("critical section never closes");
+    let access_pos = init_body
+        .find("REG.kr.write(KEY_ACCESS);")
+        .expect("KEY_ACCESS write missing");
+    let pr_pos = init_body
+        .find("REG.pr.write(PR_DIV_256);")
+        .expect("PR write missing");
+    let rlr_pos = init_body
+        .find("REG.rlr.write(RLR_2S);")
+        .expect("RLR write missing");
+    assert!(
+        access_pos > free_pos && pr_pos > free_pos && rlr_pos > free_pos,
+        "KEY_ACCESS/PR/RLR writes must be inside the critical section"
+    );
+    assert!(
+        access_pos < free_end && pr_pos < free_end && rlr_pos < free_end,
+        "KEY_ACCESS/PR/RLR writes must be inside the critical section"
+    );
+    assert!(
+        access_pos < pr_pos && pr_pos < rlr_pos,
+        "KR unlock must precede PR, which must precede RLR"
+    );
 }
 
 #[test]
@@ -1426,5 +1507,39 @@ fn positive_wipe_on_duress_flag_armed_before_provision() {
     assert!(
         arm_pos < prov_pos,
         "arm_duress_wipe_mode must be written BEFORE provision_from_mnemonic",
+    );
+}
+
+#[test]
+fn negative_wipe_on_duress_arm_failure_is_not_swallowed() {
+    // F26/LIFE-1 (cut point A): an arm_duress_wipe_mode failure during
+    // provisioning must NOT be a log-only "default to decoy" —
+    // secure_log! compiles out in production, so the downgrade was
+    // invisible to the user who just asked for wipe-on-duress. The
+    // failure must surface on the trusted display and refuse to
+    // provision (panic! — the same fail-closed convention as
+    // provision_from_mnemonic; the next boot re-runs the wizard).
+    // Anchor on the WIZARD site (a duress-UI playground and the
+    // duress prodtest also reference these symbols and would win a
+    // plain `find`).
+    let base = MAIN_SRC
+        .find("duress_pin.is_some() && ui::seed_wizard::choose_duress_wipe_mode()")
+        .expect("wizard duress-mode choice present");
+    let err_pos = base
+        + MAIN_SRC[base..]
+            .find("arm_duress_wipe_mode().is_err()")
+            .expect("arm error path present");
+    let window = &MAIN_SRC[err_pos..(err_pos + 2500).min(MAIN_SRC.len())];
+    assert!(
+        window.contains("ui::show_status"),
+        "arm failure must warn on the trusted display, not vanish into secure_log!"
+    );
+    assert!(
+        window.contains("panic!"),
+        "arm failure must refuse to provision in the downgraded (decoy) state"
+    );
+    assert!(
+        !window.contains("defaulting to decoy"),
+        "F26/LIFE-1: the silent wipe→decoy downgrade must not come back"
     );
 }
