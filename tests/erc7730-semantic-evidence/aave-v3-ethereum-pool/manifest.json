@@ -1,0 +1,392 @@
+{
+  "schema_version": 1,
+  "scope": "Aave V3 Ethereum Pool: deployed semantics for the ten PQ1 clear-signable routes",
+  "captured_at_utc": "2026-07-20T13:48:46Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
+  "boundary": "Historical fixed-block evidence for the chain-1 upgradeable Pool proxy only. No authority for future upgrades, the other fourteen unique deployments, transaction success, reserve/token metadata, hardware, production, shipment, fallback, or blind signing.",
+  "bundle_files": [
+    {
+      "path": "README.md",
+      "sha256": "eea51d122430ffe6910b441e5f187fff4ab978474c3a178155eefd974fc4ab7a"
+    },
+    {
+      "path": "collect.sh",
+      "sha256": "577d855ebc0ff66c935607e6de10a0f7a1b164306bcb7dbc57bc0a1791cf34a6"
+    }
+  ],
+  "descriptor": {
+    "vendored_file": "secure/data/erc7730-registry/registry/aave/calldata-lpv3.json",
+    "vendored_file_sha256": "9d6105d4fc42f2d3993a8badfc6084035b5e5eab71a92c13d56bbc4b89e0c469",
+    "curation_overlay": "secure/data/erc7730/curations/files/registry/aave/calldata-lpv3.json",
+    "curation_overlay_sha256": "9d6105d4fc42f2d3993a8badfc6084035b5e5eab71a92c13d56bbc4b89e0c469",
+    "chain_id": 1,
+    "pool_proxy": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
+    "descriptor_hash": "0x10ba6d8ec7faf43cc910e4cfb9e0cb6c27a0d50a2ebd3431fb82bea43a275882",
+    "erc8176_hash": "0x77f5d5b1aa13e62c6d84eaa77223ad133e157c1550a7614cb708f8aa74b82163",
+    "ir_bytes": 1134,
+    "format_count": 10,
+    "field_count": 27,
+    "degraded_fields": 0,
+    "admitted_routes": [
+      {
+        "canonical_signature": "approvePositionManager(address,bool)",
+        "selector": "0xb8caa7c5",
+        "intent": "Approve Manager",
+        "fields": 2
+      },
+      {
+        "canonical_signature": "borrow(address,uint256,uint256,uint16,address)",
+        "selector": "0xa415bcad",
+        "intent": "Borrow",
+        "fields": 4
+      },
+      {
+        "canonical_signature": "deposit(address,uint256,address,uint16)",
+        "selector": "0xe8eda9df",
+        "intent": "Supply",
+        "fields": 3
+      },
+      {
+        "canonical_signature": "renouncePositionManagerRole(address)",
+        "selector": "0xfea149a6",
+        "intent": "Revoke Manager Role",
+        "fields": 2
+      },
+      {
+        "canonical_signature": "repay(address,uint256,uint256,address)",
+        "selector": "0x573ade81",
+        "intent": "Repay loan",
+        "fields": 3
+      },
+      {
+        "canonical_signature": "repayWithATokens(address,uint256,uint256)",
+        "selector": "0x2dad97d4",
+        "intent": "Repay with aTokens",
+        "fields": 3
+      },
+      {
+        "canonical_signature": "setUserUseReserveAsCollateral(address,bool)",
+        "selector": "0x5a3b74b9",
+        "intent": "Manage collateral",
+        "fields": 2
+      },
+      {
+        "canonical_signature": "setUserUseReserveAsCollateralOnBehalfOf(address,bool,address)",
+        "selector": "0x972b35fa",
+        "intent": "Manage collateral",
+        "fields": 3
+      },
+      {
+        "canonical_signature": "supply(address,uint256,address,uint16)",
+        "selector": "0x617ba037",
+        "intent": "Supply",
+        "fields": 3
+      },
+      {
+        "canonical_signature": "withdraw(address,uint256,address)",
+        "selector": "0x69328dec",
+        "intent": "Withdraw",
+        "fields": 2
+      }
+    ],
+    "refused_routes": [
+      {
+        "canonical_signature": "multicall(bytes[])",
+        "selector": "0xac9650d8"
+      },
+      {
+        "canonical_signature": "repayWithPermit(address,uint256,uint256,address,uint256,uint8,bytes32,bytes32)",
+        "selector": "0xee3e210b"
+      },
+      {
+        "canonical_signature": "supplyWithPermit(address,uint256,address,uint16,uint256,uint8,bytes32,bytes32)",
+        "selector": "0x02c205f0"
+      }
+    ]
+  },
+  "fixed_block": {
+    "number": 25574144,
+    "number_hex": "0x1863b00",
+    "hash": "0xc764a3327787002b64c36ae2776c0f25a9c9e7fa8e94dc1748c04550adba4bfd",
+    "parent_hash": "0xd874b44ee0035a420b0bc099fd9d231a6b57f47c9e9d77d1976db1bd9e2327aa",
+    "state_root": "0x093297f3201225733791d1ea446c4387d94b2fb51f0d49b7311207669c8682b3",
+    "timestamp": 1784553131,
+    "timestamp_hex": "0x6a5e1eab",
+    "timestamp_utc": "2026-07-20T13:12:11Z"
+  },
+  "contracts": {
+    "addresses_provider": "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e",
+    "pool_proxy": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
+    "pool_implementation": "0x728a138A4823392C2EFA55e028d434F526fE03CF",
+    "pool_revision": 11,
+    "borrow_logic": "0x52Da0ce88202D1542543598D1e1e27F0d344726A",
+    "supply_logic": "0x584C7d8c4cb05304FE5Ac7fbc97f20A10Fb07564",
+    "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+  },
+  "rpc": {
+    "requests": [
+      {
+        "batch": "admin",
+        "path": "rpc/raw/request-admin.json",
+        "sha256": "f31043f5421aac49111de03408df91073675137d38746ce41f1ad73b21b7817e"
+      },
+      {
+        "batch": "identity",
+        "path": "rpc/raw/request-identity.json",
+        "sha256": "50c9df5bdf1d4725d437af6f71c4874d1707ba3b9776c09cc8327b129d54c698"
+      },
+      {
+        "batch": "implementation",
+        "path": "rpc/raw/request-implementation.json",
+        "sha256": "e3e339aa9b9d35c24516972eaa9d922b70fd288cd48eb4b50a02d126e4244ff1"
+      },
+      {
+        "batch": "libraries",
+        "path": "rpc/raw/request-libraries.json",
+        "sha256": "18b8377d8e363428a77f41a4cec3525c6632f2c35c168dd10126b80760a3ba38"
+      },
+      {
+        "batch": "proxy",
+        "path": "rpc/raw/request-proxy.json",
+        "sha256": "a1f61f953933b4edaf48510f1ce3b208c3d08c6e43244946c3a92dcfe9ff398d"
+      }
+    ],
+    "providers": [
+      {
+        "name": "dRPC",
+        "url": "https://eth.drpc.org",
+        "responses": [
+          {
+            "batch": "admin",
+            "path": "rpc/raw/response-drpc-admin.json",
+            "sha256": "2eaf07f38d9eac439722288976972ae320c33a8c833449a7be7943f0d39eed3b"
+          },
+          {
+            "batch": "identity",
+            "path": "rpc/raw/response-drpc-identity.json",
+            "sha256": "1cc6832ab9e262613ad8bc0ee19ed2d83dd9cebed282472e999219ffc64a968c"
+          },
+          {
+            "batch": "implementation",
+            "path": "rpc/raw/response-drpc-implementation.json",
+            "sha256": "b6a94be75dcdc4aa8b13951f33497e4a26d78308448280d76200b36060447294"
+          },
+          {
+            "batch": "libraries",
+            "path": "rpc/raw/response-drpc-libraries.json",
+            "sha256": "f766c2f261d8cdcc2ed5509551d34db8d3d4555ab9e8e62a7d76fa987b1d26db"
+          },
+          {
+            "batch": "proxy",
+            "path": "rpc/raw/response-drpc-proxy.json",
+            "sha256": "b97e77fa8aec7d3cb206a203ab7fdd6fa6f5cc3346590a9adbb77deba543976e"
+          }
+        ]
+      },
+      {
+        "name": "MEV Blocker",
+        "url": "https://rpc.mevblocker.io",
+        "responses": [
+          {
+            "batch": "admin",
+            "path": "rpc/raw/response-mevblocker-admin.json",
+            "sha256": "ba161a152603ed5868f5301a855a05f4b1894c4da5a0041acfb9bf1b3963ee15"
+          },
+          {
+            "batch": "identity",
+            "path": "rpc/raw/response-mevblocker-identity.json",
+            "sha256": "49530fa84336f4ececdad6b305c5dbc8f76891e020b1421c130f6cdfa244fc5f"
+          },
+          {
+            "batch": "implementation",
+            "path": "rpc/raw/response-mevblocker-implementation.json",
+            "sha256": "57e5a59de49e27fe9d8d34773eeaa20528587247e9c2c6468bb93dc4cd650df9"
+          },
+          {
+            "batch": "libraries",
+            "path": "rpc/raw/response-mevblocker-libraries.json",
+            "sha256": "6be36c91f659763ca37e68be9392d4264af9dce3fa34f0f63bc50875a8cb1a2f"
+          },
+          {
+            "batch": "proxy",
+            "path": "rpc/raw/response-mevblocker-proxy.json",
+            "sha256": "ab289c371db9e1a46485907f153baa60e1878aa77089a8c88e77a883d57eed10"
+          }
+        ]
+      },
+      {
+        "name": "Tenderly",
+        "url": "https://mainnet.gateway.tenderly.co",
+        "responses": [
+          {
+            "batch": "admin",
+            "path": "rpc/raw/response-tenderly-admin.json",
+            "sha256": "2eaf07f38d9eac439722288976972ae320c33a8c833449a7be7943f0d39eed3b"
+          },
+          {
+            "batch": "identity",
+            "path": "rpc/raw/response-tenderly-identity.json",
+            "sha256": "abb35790fb99455f9bad929cdee76aea0fa803dd19ca5a8007007b6b092ac066"
+          },
+          {
+            "batch": "implementation",
+            "path": "rpc/raw/response-tenderly-implementation.json",
+            "sha256": "b6a94be75dcdc4aa8b13951f33497e4a26d78308448280d76200b36060447294"
+          },
+          {
+            "batch": "libraries",
+            "path": "rpc/raw/response-tenderly-libraries.json",
+            "sha256": "f766c2f261d8cdcc2ed5509551d34db8d3d4555ab9e8e62a7d76fa987b1d26db"
+          },
+          {
+            "batch": "proxy",
+            "path": "rpc/raw/response-tenderly-proxy.json",
+            "sha256": "b97e77fa8aec7d3cb206a203ab7fdd6fa6f5cc3346590a9adbb77deba543976e"
+          }
+        ]
+      }
+    ]
+  },
+  "runtimes": [
+    {
+      "key": "borrow_logic",
+      "address": "0x52Da0ce88202D1542543598D1e1e27F0d344726A",
+      "rpc_id": 10,
+      "path": "runtime/BorrowLogic.ethereum-mainnet.hex",
+      "file_sha256": "5743432a308540a96715c0030df45cc455ed777f008291d3924a81d121be0c5e",
+      "bytes": 9587,
+      "decoded_sha256": "d2a10086acd99c8ef4a17b04175b494a262771611218e201d3b2797af009b106",
+      "keccak256": "0xdb9bb1c68eae0ef32f1653dc1bbb7b7ac50636d2e090a5d8d8056c62367a18d2"
+    },
+    {
+      "key": "pool_implementation",
+      "address": "0x728a138A4823392C2EFA55e028d434F526fE03CF",
+      "rpc_id": 7,
+      "path": "runtime/PoolImplementation.ethereum-mainnet.hex",
+      "file_sha256": "8a51f09d7824b1d2eff68f01af3db743e39788733dbf9167183d6d3b30f3e1ed",
+      "bytes": 21146,
+      "decoded_sha256": "fbd5bf315821d290d18b3a06cafb2f69457075388eae50b6134f490cf83cb049",
+      "keccak256": "0x530cdbba5eb9487cd5d041bb74b7a1936ad3230bf9e361893ecd025373c7fbe5"
+    },
+    {
+      "key": "pool_proxy",
+      "address": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
+      "rpc_id": 4,
+      "path": "runtime/PoolProxy.ethereum-mainnet.hex",
+      "file_sha256": "716e0bc0b81eebb39636c6beccf05432e343fdf507a3f95bf8bebf8333719566",
+      "bytes": 2400,
+      "decoded_sha256": "bf8a408a1f5440c167d91fa2d972deb23bb4d809e8dd089009885ec88a826f88",
+      "keccak256": "0x96107dc4006b4c7fecd1827cfb275ffeef31e6194cd50466f85f8eb24ccf2679"
+    },
+    {
+      "key": "supply_logic",
+      "address": "0x584C7d8c4cb05304FE5Ac7fbc97f20A10Fb07564",
+      "rpc_id": 11,
+      "path": "runtime/SupplyLogic.ethereum-mainnet.hex",
+      "file_sha256": "594ab9a694c1cf494f94824b05c3ac387016fc859b8b4bf252907100bfcfab0a",
+      "bytes": 10302,
+      "decoded_sha256": "fcbc57009ef05e2bb43e8fc1a56960b6ee1d45a66309dc9680865d59d411d19e",
+      "keccak256": "0xd7a886e7fff585881ef03af514c58a96b9c188f9502bc0d0a49fb472cd2eee6e"
+    }
+  ],
+  "upstream": {
+    "address_book": {
+      "repository": "https://github.com/aave-dao/aave-address-book",
+      "commit": "7e444a1e73b538fd0b9e093e5156401d6fccca7d",
+      "tree": "b87cc868bac4c5ac2a0cb970ef3973e15350e9df",
+      "files": [
+        {
+          "upstream_path": "src/AaveV3Ethereum.sol",
+          "path": "source/AaveV3Ethereum.sol",
+          "sha256": "1a862b7389de3d59ee77680a8edb451a29e630a07813a0c5becdce65d730a22a"
+        }
+      ]
+    },
+    "origin": {
+      "repository": "https://github.com/aave-dao/aave-v3-origin",
+      "commit": "fd1fbd9150426ca8ace9cee45b4acf912ae84f5b",
+      "tree": "e4986ad5868db92d6551b25a9191393cdecfdef4",
+      "files": [
+        {
+          "upstream_path": "src/contracts/protocol/libraries/logic/BorrowLogic.sol",
+          "path": "source/BorrowLogic.sol",
+          "sha256": "daf57b87b1f9b669b7103c156ac6ae192b31ec74a60d57dc69e63730345d30bc"
+        },
+        {
+          "upstream_path": "src/contracts/protocol/pool/Pool.sol",
+          "path": "source/Pool.sol",
+          "sha256": "ec6dbae72f43777446d8320f94eccbc6ae1dbe5daf1942502264bf0e35ef00fc"
+        },
+        {
+          "upstream_path": "src/contracts/instances/PoolInstance.sol",
+          "path": "source/PoolInstance.sol",
+          "sha256": "0062f84b7d8597fc9d25853a73fff8100e41cc9d6d3bc51b5571d15c1ae4c918"
+        },
+        {
+          "upstream_path": "src/contracts/protocol/libraries/logic/SupplyLogic.sol",
+          "path": "source/SupplyLogic.sol",
+          "sha256": "51a8ed9ed08bbe673809dd09af698f8a3f8de1f4aef9c83a04ae2fcfa62161a6"
+        }
+      ]
+    }
+  },
+  "blockscout": [
+    {
+      "key": "borrow_logic",
+      "url": "https://eth.blockscout.com/api/v2/smart-contracts/0x52Da0ce88202D1542543598D1e1e27F0d344726A",
+      "path": "blockscout/BorrowLogic.json",
+      "sha256": "0805a52ee96728738efaea0c6051bbc3b746d1e7116f7aeef9143a8902911313",
+      "name": "BorrowLogic",
+      "compiler": "v0.8.27+commit.40a35a09",
+      "evm_version": "shanghai",
+      "verification": "partial",
+      "changed_bytecode": false
+    },
+    {
+      "key": "pool_implementation",
+      "url": "https://eth.blockscout.com/api/v2/smart-contracts/0x728a138A4823392C2EFA55e028d434F526fE03CF",
+      "path": "blockscout/PoolImplementation.json",
+      "sha256": "c3e118fdeba418386c2101bf0e1312bf4ea532d30b6143ff441d08a7e697a4e6",
+      "name": "PoolInstance",
+      "compiler": "v0.8.27+commit.40a35a09",
+      "evm_version": "cancun",
+      "verification": "partial",
+      "changed_bytecode": false
+    },
+    {
+      "key": "pool_proxy",
+      "url": "https://eth.blockscout.com/api/v2/smart-contracts/0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
+      "path": "blockscout/PoolProxy.json",
+      "sha256": "320382c40f507f915e224230ffaa85a0b0a77b3e273d96ca17a13e1852960c44",
+      "name": "InitializableImmutableAdminUpgradeabilityProxy",
+      "compiler": "0.8.10+commit.fc410830",
+      "evm_version": "berlin",
+      "verification": "full",
+      "changed_bytecode": false
+    },
+    {
+      "key": "supply_logic",
+      "url": "https://eth.blockscout.com/api/v2/smart-contracts/0x584C7d8c4cb05304FE5Ac7fbc97f20A10Fb07564",
+      "path": "blockscout/SupplyLogic.json",
+      "sha256": "31fe7ec916938a929b968181b99377a6b32aeeae0f2586a97ac3a01148d5a826",
+      "name": "SupplyLogic",
+      "compiler": "v0.8.27+commit.40a35a09",
+      "evm_version": "shanghai",
+      "verification": "partial",
+      "changed_bytecode": false
+    }
+  ],
+  "abi": {
+    "path": "abi/Pool.routes.abi.json",
+    "sha256": "66db7603bcf3011fc1142941036d0fac19f22117bfd3e5f6e4f1a27b98965a40",
+    "entries": 10,
+    "derived_from": "blockscout/PoolImplementation.json"
+  },
+  "expected_catalogue": {
+    "entries": 435,
+    "root": "0x712ca64bb1a14054e52a4b9ad8bb980315b63f43d08c51cb7ec7bf1960e96d0b",
+    "known_calls": 4544,
+    "known_call_set_sha256": "0x593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781",
+    "known_call_bloom_sha256": "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628"
+  }
+}
