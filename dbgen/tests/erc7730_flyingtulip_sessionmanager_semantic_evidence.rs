@@ -10,12 +10,35 @@ use sha2::{Digest, Sha256};
 
 const ZERO_WORD: &str = "0x0000000000000000000000000000000000000000000000000000000000000000";
 
+const ASSET_LIMIT_EIP712_TYPE: &str = "AssetLimit(address token,uint256 limit)";
+const SESSION_EIP712_TYPE: &str = "Session(address owner,address delegate,uint48 validAfter,uint48 validUntil,uint32 maxCalls,uint16 maxFeeBps,AssetLimit[] limits,bytes32 salt)AssetLimit(address token,uint256 limit)";
+const ASSET_LIMIT_EIP712_TYPEHASH: &str =
+    "0x269888c0029efe9424c548a264e5ee66803094ad203b068ca44e278b02db9d6f";
+const SESSION_EIP712_TYPEHASH: &str =
+    "0x10e2e916a5d944a9c9fa82748951934e444783850c4cb366694967607dbd2fc5";
+const UINT256_MAX_HEX: &str = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+const EIP712_NAME_IMMUTABLE_START: usize = 3_099;
+const EIP712_VERSION_IMMUTABLE_START: usize = 3_140;
+
 const DEPLOYMENTS: &[(u64, &str)] = &[
     (1, "2daf4b445e7d659100b22a15c3eeb10e64ac5dc9"),
     (1, "f9f3ddf2e96cabef94e2634c326dc6dde99360f8"),
     (56, "c85cb743f72b3a9bb594faa7d46ee1efc61b7a42"),
     (146, "2daf4b445e7d659100b22a15c3eeb10e64ac5dc9"),
     (146, "109ae72778a0260571b9767477204f1ce41fbdff"),
+    (146, "52ef449d44cc4205fa44bf644dee15611fc30734"),
+    (43_114, "176592c8ed3f2d94ce4c3f1a4cff7d068176ac54"),
+];
+
+const FT_EIP712_DEPLOYMENTS: &[(u64, &str)] = &[
+    (1, "f9f3ddf2e96cabef94e2634c326dc6dde99360f8"),
+    (146, "109ae72778a0260571b9767477204f1ce41fbdff"),
+];
+
+const FTUSD_EIP712_DEPLOYMENTS: &[(u64, &str)] = &[
+    (1, "2daf4b445e7d659100b22a15c3eeb10e64ac5dc9"),
+    (56, "c85cb743f72b3a9bb594faa7d46ee1efc61b7a42"),
+    (146, "2daf4b445e7d659100b22a15c3eeb10e64ac5dc9"),
     (146, "52ef449d44cc4205fa44bf644dee15611fc30734"),
     (43_114, "176592c8ed3f2d94ce4c3f1a4cff7d068176ac54"),
 ];
@@ -362,6 +385,21 @@ fn source_hash(capture: &Value, path: &str) -> String {
 
 fn selector(signature: &str) -> String {
     format!("0x{}", hex::encode(&keccak256(signature.as_bytes())[..4]))
+}
+
+fn decode_short_string_immutable(runtime: &[u8], start: usize) -> String {
+    let word = runtime
+        .get(start..start + 32)
+        .expect("ShortString immutable is inside the runtime");
+    let length = usize::from(word[31]);
+    assert!(length <= 31, "ShortString length fits its inline encoding");
+    assert!(
+        word[length..31].iter().all(|byte| *byte == 0),
+        "ShortString padding is zero"
+    );
+    std::str::from_utf8(&word[..length])
+        .expect("EIP-712 domain ShortString is UTF-8")
+        .to_owned()
 }
 
 #[test]
@@ -716,6 +754,132 @@ fn flyingtulip_sessionmanager_fixed_block_provenance_and_semantics_are_bound() {
         runtimes.insert((*chain_id, (*address).to_owned()), runtime);
     }
 
+    assert_eq!(
+        keccak_hex(ASSET_LIMIT_EIP712_TYPE.as_bytes()),
+        ASSET_LIMIT_EIP712_TYPEHASH
+    );
+    assert_eq!(
+        keccak_hex(SESSION_EIP712_TYPE.as_bytes()),
+        SESSION_EIP712_TYPEHASH
+    );
+    assert_eq!(decode_hex_text(UINT256_MAX_HEX), vec![0xff; 32]);
+    let asset_limit_typehash = keccak256(ASSET_LIMIT_EIP712_TYPE.as_bytes());
+    let session_typehash = keccak256(SESSION_EIP712_TYPE.as_bytes());
+    for runtime in runtimes.values() {
+        assert_eq!(
+            runtime
+                .windows(32)
+                .filter(|window| *window == asset_limit_typehash.as_slice())
+                .count(),
+            1,
+            "the deployed runtime contains the exact AssetLimit type hash once"
+        );
+        assert_eq!(
+            runtime
+                .windows(32)
+                .filter(|window| *window == session_typehash.as_slice())
+                .count(),
+            1,
+            "the deployed runtime contains the exact Session type hash once"
+        );
+    }
+
+    let eip712_descriptor_specs: [(&str, &str, &[(u64, &str)]); 2] = [
+        (
+            "eip712-SessionManager-FT.json",
+            "FT SessionManager",
+            FT_EIP712_DEPLOYMENTS,
+        ),
+        (
+            "eip712-SessionManager-ftUSD.json",
+            "ftUSD SessionManager",
+            FTUSD_EIP712_DEPLOYMENTS,
+        ),
+    ];
+    let mut described_deployments = BTreeSet::new();
+    for (file_name, domain_name, expected_partition) in eip712_descriptor_specs {
+        let registry_path = workspace
+            .join("secure/data/erc7730-registry/registry/flyingtulip")
+            .join(file_name);
+        let overlay_path = workspace
+            .join("secure/data/erc7730/curations/files/registry/flyingtulip")
+            .join(file_name);
+        let registry_bytes = fs::read(&registry_path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", registry_path.display()));
+        let overlay_bytes = fs::read(&overlay_path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", overlay_path.display()));
+        assert_eq!(overlay_bytes, registry_bytes, "curation overlay drift");
+        let descriptor: Value =
+            serde_json::from_slice(&registry_bytes).expect("parse Session EIP-712 descriptor");
+
+        let eip712_context = &descriptor["context"]["eip712"];
+        assert_eq!(eip712_context["domain"]["name"].as_str(), Some(domain_name));
+        assert_eq!(eip712_context["domain"]["version"].as_str(), Some("1"));
+        let expected_partition: BTreeSet<_> = expected_partition
+            .iter()
+            .map(|(chain_id, address)| (*chain_id, (*address).to_owned()))
+            .collect();
+        let actual_partition = deployment_set(&eip712_context["deployments"]);
+        assert_eq!(actual_partition, expected_partition);
+        for deployment in &actual_partition {
+            assert!(
+                described_deployments.insert(deployment.clone()),
+                "EIP-712 deployment partitions do not overlap"
+            );
+            let runtime = runtimes
+                .get(deployment)
+                .expect("descriptor deployment has archived runtime evidence");
+            assert_eq!(
+                decode_short_string_immutable(runtime, EIP712_NAME_IMMUTABLE_START),
+                domain_name
+            );
+            assert_eq!(
+                decode_short_string_immutable(runtime, EIP712_VERSION_IMMUTABLE_START),
+                "1"
+            );
+        }
+
+        let formats = descriptor["display"]["formats"]
+            .as_object()
+            .expect("Session EIP-712 formats");
+        assert_eq!(formats.len(), 1);
+        let format = formats
+            .get(SESSION_EIP712_TYPE)
+            .expect("exact Session and AssetLimit EIP-712 type graph");
+        let fields = format["fields"].as_array().expect("Session display fields");
+        assert_eq!(fields.len(), 8);
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| required_str(field, "path"))
+                .collect::<Vec<_>>(),
+            vec![
+                "owner",
+                "delegate",
+                "validAfter",
+                "validUntil",
+                "maxCalls",
+                "maxFeeBps",
+                "limits.[].limit",
+                "salt",
+            ]
+        );
+        assert!(fields
+            .iter()
+            .all(|field| field["visible"].as_str() == Some("always")));
+
+        let limit = &fields[6];
+        assert_eq!(limit["format"].as_str(), Some("tokenAmount"));
+        assert_eq!(
+            limit["params"]["tokenPath"].as_str(),
+            Some("limits.[].token")
+        );
+        assert_eq!(limit["params"]["threshold"].as_str(), Some(UINT256_MAX_HEX));
+        assert_eq!(limit["params"]["message"].as_str(), Some("Unlimited"));
+        assert_eq!(fields[7]["format"].as_str(), Some("raw"));
+    }
+    assert_eq!(described_deployments, expected_deployments);
+
     let mut captures_by_family: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     for capture_spec in manifest["sourcify_captures"]
         .as_array()
@@ -899,10 +1063,89 @@ fn flyingtulip_sessionmanager_fixed_block_provenance_and_semantics_are_bound() {
         for capture in captures {
             assert_eq!(source_content(capture, primary_path), primary);
         }
+        let expected_domain_name = required_str(&family["primary_source"], "eip712_domain_name");
+        assert_eq!(
+            normalized_solidity_function(primary, "constructor("),
+            format!(
+                "constructor(address initialOwner) EIP712(\"{expected_domain_name}\", \"1\") Ownable(initialOwner) {{}}"
+            )
+        );
         primary_sources.push(primary);
     }
     assert_eq!(primary_sources.len(), 2);
     for primary in &primary_sources {
+        let normalized_primary = normalized_whitespace(primary);
+        assert_fragments_in_order(
+            &normalized_primary,
+            &[
+                "bytes32 private constant _ASSET_LIMIT_TYPEHASH =",
+                ASSET_LIMIT_EIP712_TYPE,
+                "bytes32 private constant _SESSION_TYPEHASH =",
+                SESSION_EIP712_TYPE,
+            ],
+        );
+
+        let create_by_signature =
+            normalized_solidity_function(primary, "function createSessionBySig(");
+        assert_fragments_in_order(
+            &create_by_signature,
+            &[
+                "bytes32 limitsHash = _hashLimits(limits);",
+                "bytes32 digest = _hashTypedDataV4(",
+                "keccak256(",
+                "abi.encode(",
+                "_SESSION_TYPEHASH,",
+                "owner_,",
+                "delegate,",
+                "validAfter,",
+                "validUntil,",
+                "maxCalls,",
+                "maxFeeBps,",
+                "limitsHash,",
+                "salt",
+                "if (!SignatureChecker.isValidSignatureNow(owner_, digest, ownerSignature)) {",
+                "revert InvalidSignature();",
+                "sessionId = _createSession(",
+                "owner_, delegate, validAfter, validUntil, maxCalls, maxFeeBps, limits, salt",
+            ],
+        );
+
+        let hash_limits = normalized_solidity_function(primary, "function _hashLimits(");
+        assert_fragments_in_order(
+            &hash_limits,
+            &[
+                "uint256 len = limits.length;",
+                "bytes32[] memory hashes = new bytes32[](len);",
+                "for (uint256 i = 0; i < len; i++) {",
+                "hashes[i] = keccak256(abi.encode(_ASSET_LIMIT_TYPEHASH, limits[i].token, limits[i].limit));",
+                "return keccak256(abi.encodePacked(hashes));",
+            ],
+        );
+
+        let create_session = normalized_solidity_function(primary, "function _createSession(");
+        assert_fragments_in_order(
+            &create_session,
+            &[
+                "address token = limits[i].token;",
+                "uint256 limit = limits[i].limit;",
+                "if (token == address(0)) revert ZeroAddress();",
+                "if (limit == 0) revert AssetNotAllowed(token);",
+                "if (tokenAllowance[sessionId][token] != 0) revert DuplicateAsset(token);",
+                "tokenAllowance[sessionId][token] = limit;",
+            ],
+        );
+
+        let validate = normalized_solidity_function(primary, "function validateAndConsume(");
+        let allowance_rule = "if (spendAmount != 0) { if (spendToken == address(0)) revert ZeroAddress(); uint256 allowance = tokenAllowance[call.sessionId][spendToken]; if (allowance == 0) revert AssetNotAllowed(spendToken); if (allowance != type(uint256).max) { if (spendAmount > allowance) { revert AssetLimitExceeded(spendToken, spendAmount, allowance); } tokenAllowance[call.sessionId][spendToken] = allowance - spendAmount; } }";
+        assert!(validate.contains(allowance_rule));
+        assert_eq!(
+            validate
+                .matches("tokenAllowance[call.sessionId][spendToken] =")
+                .count(),
+            1,
+            "the finite-allowance branch is the only allowance write"
+        );
+
         let revoke = normalized_solidity_function(primary, "function revokeSession(");
         assert_fragments_in_order(
             &revoke,
@@ -942,12 +1185,68 @@ fn flyingtulip_sessionmanager_fixed_block_provenance_and_semantics_are_bound() {
         normalized_solidity_function(primary_sources[0], "function _setAllowedTarget("),
         normalized_solidity_function(primary_sources[1], "function _setAllowedTarget(")
     );
+    assert_eq!(
+        normalized_solidity_function(primary_sources[0], "function createSessionBySig("),
+        normalized_solidity_function(primary_sources[1], "function createSessionBySig(")
+    );
+    assert_eq!(
+        normalized_solidity_function(primary_sources[0], "function _hashLimits("),
+        normalized_solidity_function(primary_sources[1], "function _hashLimits(")
+    );
+    assert_eq!(
+        normalized_solidity_function(primary_sources[0], "function validateAndConsume("),
+        normalized_solidity_function(primary_sources[1], "function validateAndConsume(")
+    );
 
     let first_capture = captures_by_family
         .values()
         .next()
         .and_then(|captures| captures.first())
         .expect("at least one Sourcify capture");
+    let eip712 = source_content(
+        first_capture,
+        "lib/openzeppelin-contracts/contracts/utils/cryptography/EIP712.sol",
+    );
+    let eip712_constructor = normalized_solidity_function(eip712, "constructor(");
+    assert_fragments_in_order(
+        &eip712_constructor,
+        &[
+            "_name = name.toShortStringWithFallback(_nameFallback);",
+            "_version = version.toShortStringWithFallback(_versionFallback);",
+            "_hashedName = keccak256(bytes(name));",
+            "_hashedVersion = keccak256(bytes(version));",
+        ],
+    );
+    let typed_data_hash = normalized_solidity_function(eip712, "function _hashTypedDataV4(");
+    assert!(typed_data_hash
+        .contains("return MessageHashUtils.toTypedDataHash(_domainSeparatorV4(), structHash);"));
+
+    let short_strings = source_content(
+        first_capture,
+        "lib/openzeppelin-contracts/contracts/utils/ShortStrings.sol",
+    );
+    let encode_short_string =
+        normalized_solidity_function(short_strings, "function toShortString(");
+    assert_fragments_in_order(
+        &encode_short_string,
+        &[
+            "bytes memory bstr = bytes(str);",
+            "if (bstr.length > 0x1f)",
+            "return ShortString.wrap(bytes32(uint256(bytes32(bstr)) | bstr.length));",
+        ],
+    );
+    let decode_short_string =
+        normalized_solidity_function(short_strings, "function toString(ShortString");
+    assert_fragments_in_order(
+        &decode_short_string,
+        &[
+            "uint256 len = byteLength(sstr);",
+            "mstore(str, len)",
+            "mstore(add(str, 0x20), sstr)",
+            "return str;",
+        ],
+    );
+
     let ownable = source_content(
         first_capture,
         "lib/openzeppelin-contracts/contracts/access/Ownable.sol",

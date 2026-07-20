@@ -6,7 +6,7 @@ The exact commit/tree and curation-manifest identity are machine-owned by the
 managed receipt below; they are not duplicated in hand-maintained prose. The
 checked-in corpus is **not byte-identical to that upstream revision**: the
 firmware-pinned `ERC7730_DESCRIPTORS_ROOT` is derived from the upstream baseline
-plus the 31 reviewed full-file replacements listed below, under
+plus the 33 reviewed full-file replacements listed below, under
 `secure/data/erc7730/policy.toml`. The strict manifest at
 `secure/data/erc7730/curations/manifest.json` binds the upstream repository,
 commit, tree, v2 schema, pristine/excluded/curated corpus receipts, policy,
@@ -42,13 +42,13 @@ tuple-set SHA-256, and Bloom bytes. Merkle-root or Bloom equality alone is not
 accepted as a faithfulness proof.
 
 <!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
-Checked-in curated receipt, verified against a fresh build by `--check`: **430 leaves**, **359,946-byte**
+Checked-in curated receipt, verified against a fresh build by `--check`: **437 leaves**, **366,010-byte**
 compiled companion catalogue, root
-`676fa196757d8ab4104f24f14513df5b68ca19a0e56a14838ceea75104bc53d0`,
+`450ed1985601eda4e95f04538f6c9edb921caf51e745ce541ca79a2cee3e45fb`,
 **4,544** canonical known-call tuples, tuple-set SHA-256
 `593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781`.
 Curation manifest SHA-256
-`6d1d46bec11c820717575d4bc2e5826d0c320285f6e2e446d9ed6484f136e000` binds upstream commit
+`52c95c37a40c59e9b9f8b61985fcfafe239dd332ab568b6ffc4e7530323c06c0` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
 The Bloom contains 28,248 / 131,072 set bits, below the generator's 25% cap.
@@ -60,7 +60,7 @@ the machine-checked source/overlay identities live in the curation manifest,
 while the generated catalogue authority remains in the artifacts and managed
 receipt above.
 
-Current reviewed full-file replacements (31):
+Current reviewed full-file replacements (33):
 
 - `ercs/calldata-erc20-tokens.json`
 - `registry/aave/calldata-WrappedTokenGatewayV3.json`
@@ -70,6 +70,8 @@ Current reviewed full-file replacements (31):
 - `registry/flyingtulip/calldata-PositionsManager.json`
 - `registry/flyingtulip/calldata-SessionManager.json`
 - `registry/flyingtulip/eip712-PftMarketplace-BuyOffer.json`
+- `registry/flyingtulip/eip712-SessionManager-FT.json`
+- `registry/flyingtulip/eip712-SessionManager-ftUSD.json`
 - `registry/lido/calldata-WithdrawalQueueERC721.json`
 - `registry/lido/calldata-stETH.json`
 - `registry/lido/calldata-wstETH-referral-staker.json`

@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 781522,
-    "sha256": "dc79163a4a1efb3f6d6fbd6f3bc3caaaf53dfb4fc04cc7a4b7025be6c710854d"
+    "bytes": 781582,
+    "sha256": "beee93154b6d32437d7b34a5324e7dbc55ee8abd64a640afa752a855b92b2a87"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -94,8 +94,8 @@
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 15,
-      "bytes": 1296930,
-      "sha256": "2ae78e7f78d23731ee7cd6e0b6b072257c2c7b6cea423d8a898fdcb3f71a8755"
+      "bytes": 1310243,
+      "sha256": "ec1959188b33f594bd8ff9cc02b009fbd407fe15d606c947e2cb2aed82e8dc08"
     },
     {
       "path": "pqsigner-erc7730",
@@ -144,7 +144,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 269876,
-      "sha256": "b3b45722504097f8707988b47c512eb5ae23d2d58769bc1b698cde16f5736649"
+      "sha256": "dc4f462f62680b90e19fde495f7d317785ec00980117c257e2a0449574ac0197"
     }
   ],
   "capability_inputs": [
@@ -209,6 +209,20 @@
       "upstream_sha256": "9f6c51f398c96f886970f2339ba7c05a4774af2d8db532d40533b7fa10e7feb2",
       "replacement_bytes": 2226,
       "replacement_sha256": "99ee45490b250eb53acac5184c337076a5d22761c07c8bcc72dc70ac81fddb64"
+    },
+    {
+      "path": "registry/flyingtulip/eip712-SessionManager-FT.json",
+      "upstream_bytes": 3069,
+      "upstream_sha256": "1c62a2c51aeb265e38d30c65ccc812bea3f6e35d381247541b17f0542bf5c7c2",
+      "replacement_bytes": 3099,
+      "replacement_sha256": "331aae6b33c1fa6998acb17d4cb7861c5aecd2f67252c6e9b8953e69e62ad57e"
+    },
+    {
+      "path": "registry/flyingtulip/eip712-SessionManager-ftUSD.json",
+      "upstream_bytes": 3424,
+      "upstream_sha256": "3f9af2a41ced1c6c8de90ae1c1be9a5a42ad5fc99ca77369a3f4c92e315a48a9",
+      "replacement_bytes": 3454,
+      "replacement_sha256": "bfe3eca47fb53a433547a93069a74647f804148419aa96795512490f13b3d1c9"
     },
     {
       "path": "registry/lido/calldata-WithdrawalQueueERC721.json",

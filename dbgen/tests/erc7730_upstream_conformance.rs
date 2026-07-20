@@ -40,7 +40,7 @@ const FIXTURE_RECEIPT_HEX: &str =
 // Router02's two single-hop formats are enrolled only with exact authenticated
 // guards for their sentinel and partial-fill semantics. The upstream fixture
 // bytes remain test-only and outside the catalogue.
-const PROD_ROOT_HEX: &str = "676fa196757d8ab4104f24f14513df5b68ca19a0e56a14838ceea75104bc53d0";
+const PROD_ROOT_HEX: &str = "450ed1985601eda4e95f04538f6c9edb921caf51e745ce541ca79a2cee3e45fb";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1213,10 +1213,10 @@ fn upstream_fixture_corpus_is_exact_test_only_and_honestly_inventoried() {
                 .to_path_buf()
         })
         .collect();
-    assert_eq!(accepted.len(), 230);
-    assert_eq!(accepted.intersection(&tested_descriptors).count(), 145);
+    assert_eq!(accepted.len(), 232);
+    assert_eq!(accepted.intersection(&tested_descriptors).count(), 147);
     assert_eq!(accepted.difference(&tested_descriptors).count(), 85);
-    assert_eq!(tested_descriptors.difference(&accepted).count(), 127);
+    assert_eq!(tested_descriptors.difference(&accepted).count(), 125);
 }
 
 fn synth_bundle(blob: &[u8], ir_bytes: &[u8], leaf_index: usize) -> Vec<u8> {

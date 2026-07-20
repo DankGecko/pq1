@@ -15,17 +15,18 @@
 //! lookup) would not have been caught by any unit test.
 //!
 //! Inputs are NOT hand-rolled IR fixtures. Shipping cases come from the real
-//! registry through `dbgen`; nested renderer-only cases use process-private
-//! copies compiled by the same dbgen after changing every explicit
-//! `visible:"never"` to `visible:"always"`. Real unsafe sources or individual
-//! formats in a partially admitted source are separately asserted absent.
+//! registry through `dbgen`; the remaining unsafe nested renderer-only cases
+//! use process-private copies compiled by the same dbgen after changing every
+//! explicit `visible:"never"` to `visible:"always"`. Real unsafe sources or
+//! individual formats in a partially admitted source are separately asserted
+//! absent.
 //! UniswapX cannot be made into an equivalent safe positive fixture (dynamic
 //! bytes expose only a hash, and showing all fields exceeds the page budget),
 //! so those historical vectors are exclusion tests.
 
 use std::path::PathBuf;
 
-use pqsigner_erc7730::binding::{cross_check_contract, BindingError};
+use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712, BindingError};
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, VerifiedDescriptor};
 use pqsigner_erc7730::display::primitives::write_addr_full;
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir};
@@ -108,16 +109,10 @@ fn build_registry() -> &'static dbgen::erc7730::Erc7730BuildResult {
 /// defaults to hidden. This preserves the original ABI/type tree and runs
 /// through the real dbgen compiler, while making the emitted fixture satisfy
 /// the same strict hidden-material policy as production.
-const SAFE_VISIBLE_NESTED_FIXTURES: &[(&str, &str)] = &[
-    (
-        "eip712-uniswap-permit2.json",
-        "registry/uniswap/eip712-uniswap-permit2.json",
-    ),
-    (
-        "eip712-SessionManager-FT.json",
-        "registry/flyingtulip/eip712-SessionManager-FT.json",
-    ),
-];
+const SAFE_VISIBLE_NESTED_FIXTURES: &[(&str, &str)] = &[(
+    "eip712-uniswap-permit2.json",
+    "registry/uniswap/eip712-uniswap-permit2.json",
+)];
 
 fn build_safe_visible_nested_fixtures(
 ) -> &'static std::collections::BTreeMap<String, Vec<dbgen::erc7730::Emitted>> {
@@ -133,9 +128,6 @@ fn build_safe_visible_nested_fixtures(
         let _ = std::fs::remove_dir_all(&temp_root);
         std::fs::create_dir_all(temp_root.join("registry/uniswap"))
             .expect("create synthetic Uniswap fixture dir");
-        std::fs::create_dir_all(temp_root.join("registry/flyingtulip"))
-            .expect("create synthetic SessionManager fixture dir");
-
         // Every Uniswap fixture includes this context-only template.
         std::fs::copy(
             source_root.join("registry/uniswap/uniswap-common-eip712.json"),
@@ -316,7 +308,6 @@ fn explicit_hidden_material_descriptors_have_no_verified_runtime_leaf() {
         "eip712-UniswapX-DutchOrder.json",
         "eip712-UniswapX-LimitOrder.json",
         "eip712-uniswap-V2DutchOrder.json",
-        "eip712-SessionManager-FT.json",
     ] {
         assert_registry_source_excluded(source_name);
     }
@@ -8008,18 +7999,21 @@ fn v3_all_nested_eip712_leaves_are_panic_safe_and_fail_closed() {
     );
 }
 
-/// Nested `tokenAmount` FULL vocabulary (threshold + message) in a top-level
-/// array-of-struct: flyingtulip SessionManager `Session(...AssetLimit[] limits...)`.
-/// Each `AssetLimit(token, limit)` renders `limit` as a tokenAmount whose
-/// `threshold = max-uint` maps to the message "Unlimited" — the same "approve
-/// unlimited" display the top-level path has, now reachable inside a nested
-/// element. Proves the dbgen nested-subfield vocabulary extension end-to-end
-/// (element 0 = a normal limit renders the number; element 1 = max-uint renders
-/// "Unlimited").
+/// The two curated FlyingTulip `Session` descriptors are production leaves for
+/// exactly seven domain/deployment contexts. Verify every Merkle leaf and its
+/// EIP-712 binding, then render every signed member from the real catalogue.
+/// The nested `AssetLimit(token, limit)` vocabulary includes the max-uint
+/// threshold message (`Unlimited`), while the formerly-hidden salt is shown as
+/// a complete raw word. Exhaustive one-byte mutations must either change the
+/// trusted pages or make the request fail closed.
 #[test]
-fn v3_session_manager_nested_tokenamount_threshold_renders_unlimited() {
-    use super::erc7730::nested::{hash_struct, hash_struct_array};
-    let leaf = safe_visible_nested_leaf("eip712-SessionManager-FT.json", 1);
+fn v3_production_session_manager_eip712_is_complete_and_mutation_bound() {
+    use std::collections::BTreeSet;
+
+    use super::erc7730::nested::hash_struct_array;
+
+    const FT_SOURCE: &str = "eip712-SessionManager-FT.json";
+    const FTUSD_SOURCE: &str = "eip712-SessionManager-ftUSD.json";
     let pth = hx32("10e2e916a5d944a9c9fa82748951934e444783850c4cb366694967607dbd2fc5");
     let asset_limit_th = hx32("269888c0029efe9424c548a264e5ee66803094ad203b068ca44e278b02db9d6f");
     let wa = |a: [u8; 20]| {
@@ -8040,6 +8034,8 @@ fn v3_session_manager_nested_tokenamount_threshold_renders_unlimited() {
         0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27, 0xeA, 0xD9,
         0x08, 0x3C, 0x75, 0x6C, 0xc2,
     ];
+    let owner = [0x71; 20];
+    let delegate = [0x72; 20];
 
     // AssetLimit: token, limit (2 words). el0 normal, el1 = max-uint → "Unlimited".
     let mut el0 = std::vec![0u8; 64];
@@ -8049,13 +8045,12 @@ fn v3_session_manager_nested_tokenamount_threshold_renders_unlimited() {
     el1[0..32].copy_from_slice(&wa(weth));
     el1[32..64].copy_from_slice(&[0xFFu8; 32]); // max-uint => >= threshold => "Unlimited"
     let limits_word = hash_struct_array(&asset_limit_th, &[&el0[..], &el1[..]]);
-    let _ = hash_struct; // (single-struct primitive unused here; array path only)
 
     // Session top_ed (8 words): owner, delegate, validAfter, validUntil, maxCalls,
     // maxFeeBps, limits, salt.
     let mut top_ed = std::vec![0u8; 256];
-    top_ed[0..32].copy_from_slice(&wa([0x71; 20])); // owner
-    top_ed[32..64].copy_from_slice(&wa([0x72; 20])); // delegate
+    top_ed[0..32].copy_from_slice(&wa(owner));
+    top_ed[32..64].copy_from_slice(&wa(delegate));
     top_ed[64..96].copy_from_slice(&wu(1_735_689_600)); // validAfter (2025)
     top_ed[96..128].copy_from_slice(&wu(1_767_225_600)); // validUntil (2026)
     top_ed[128..160].copy_from_slice(&wu(50)); // maxCalls
@@ -8071,41 +8066,225 @@ fn v3_session_manager_nested_tokenamount_threshold_renders_unlimited() {
     blob.extend_from_slice(&64u16.to_be_bytes());
     blob.extend_from_slice(&el1);
 
-    let render = |ed: &[u8], b: &[u8]| {
-        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("SessionManager IR parses");
-        let verified = VerifiedDescriptor { ir };
+    let expected: BTreeSet<(String, u64, String)> = [
+        (FT_SOURCE, 1, "f9f3ddf2e96cabef94e2634c326dc6dde99360f8"),
+        (FT_SOURCE, 146, "109ae72778a0260571b9767477204f1ce41fbdff"),
+        (FTUSD_SOURCE, 1, "2daf4b445e7d659100b22a15c3eeb10e64ac5dc9"),
+        (FTUSD_SOURCE, 56, "c85cb743f72b3a9bb594faa7d46ee1efc61b7a42"),
+        (
+            FTUSD_SOURCE,
+            146,
+            "2daf4b445e7d659100b22a15c3eeb10e64ac5dc9",
+        ),
+        (
+            FTUSD_SOURCE,
+            146,
+            "52ef449d44cc4205fa44bf644dee15611fc30734",
+        ),
+        (
+            FTUSD_SOURCE,
+            43_114,
+            "176592c8ed3f2d94ce4c3f1a4cff7d068176ac54",
+        ),
+    ]
+    .into_iter()
+    .map(|(source, chain_id, contract)| (source.to_string(), chain_id, contract.to_string()))
+    .collect();
+
+    let registry = build_registry();
+    let entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.source.file_name().and_then(|name| name.to_str()),
+                Some(FT_SOURCE) | Some(FTUSD_SOURCE)
+            )
+        })
+        .collect();
+    let observed: BTreeSet<_> = entries
+        .iter()
+        .map(|entry| {
+            (
+                entry
+                    .source
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("SessionManager source filename")
+                    .to_string(),
+                entry.chain_id,
+                hex::encode(entry.contract),
+            )
+        })
+        .collect();
+    assert_eq!(
+        observed, expected,
+        "exact curated domain/deployment inventory"
+    );
+    assert_eq!(entries.len(), 7);
+
+    let mut domain_separators = BTreeSet::new();
+    for entry in entries {
+        let source_name = entry
+            .source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("SessionManager source filename");
+        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &registry.root)
+            .expect("production SessionManager Merkle leaf verifies");
+        assert!(matches!(verified.ir.context_kind, ContextKind::Eip712));
+        assert_eq!(verified.ir.chain_id, entry.chain_id);
+        assert_eq!(verified.ir.contract, entry.contract);
+        assert!(domain_separators.insert(verified.ir.domain_separator));
+        assert_eq!(
+            cross_check_eip712(&verified.ir, entry.chain_id, &verified.ir.domain_separator,),
+            Ok(())
+        );
+        assert_eq!(
+            cross_check_eip712(
+                &verified.ir,
+                entry.chain_id.wrapping_add(1),
+                &verified.ir.domain_separator,
+            ),
+            Err(BindingError::ChainIdMismatch)
+        );
+        let mut wrong_domain = verified.ir.domain_separator;
+        wrong_domain[0] ^= 0x01;
+        assert_eq!(
+            cross_check_eip712(&verified.ir, entry.chain_id, &wrong_domain),
+            Err(BindingError::DomainSeparatorMismatch)
+        );
+
+        let mut formats = verified.ir.format_iter();
+        let format = formats
+            .next()
+            .expect("one Session format")
+            .expect("valid Session format");
+        assert!(
+            formats.next().is_none(),
+            "one format per Session descriptor"
+        );
+        assert_eq!(format.type_hash, pth);
+        assert_eq!(format.static_head_words, 8);
+        assert_eq!(format.field_count, 8);
+        assert_eq!(format.nested_descent_count, 1);
+
         let resolver = NameResolver::new();
-        super::erc7730::render_erc7730_eip712_pages_v3(
-            1, &[0u8; 20], &pth, ed, b, &verified, None, &resolver,
-        )
-    };
-    let pages = render(&top_ed, &blob).expect("valid SessionManager clear-signs");
-    assert_all_pages_printable(&pages);
-    let dump = dump_pages(&pages).to_lowercase();
-    assert!(dump.contains("7171717171"), "owner shown:\n{dump}");
-    assert!(dump.contains("7272727272"), "delegate shown:\n{dump}");
-    assert!(
-        dump.contains("2025") && dump.contains("2026"),
-        "validAfter/Until dates:\n{dump}"
+        let render = |type_hash: &[u8; 32], ed: &[u8], nested: &[u8]| {
+            super::erc7730::render_erc7730_eip712_pages_v3(
+                entry.chain_id,
+                &entry.contract,
+                type_hash,
+                ed,
+                nested,
+                &verified,
+                None,
+                &resolver,
+            )
+        };
+        let pages = render(&pth, &top_ed, &blob)
+            .unwrap_or_else(|error| panic!("{source_name} must clear-sign: {error:?}"));
+        assert_all_pages_printable(&pages);
+        assert_full_address_field_page(&pages, "Owner", &owner);
+        assert_full_address_field_page(&pages, "Delegate", &delegate);
+        assert_raw_word_pages(&pages, "Max calls", &wu(50));
+        assert_raw_word_pages(&pages, "Salt", &[0xAB; 32]);
+
+        let dump = dump_pages(&pages).to_lowercase();
+        assert!(
+            dump.contains("2025-01-01") && dump.contains("2026-01-01"),
+            "both exact validity dates render:\n{dump}"
+        );
+        let max_fee = page_strs(&pages, find_page_by_label(&pages, "Max fee")).join(" ");
+        assert!(
+            max_fee.to_lowercase().contains("30 bps"),
+            "maxFeeBps renders with its unit: {max_fee:?}\n{dump}"
+        );
+        assert!(
+            dump.contains("1000001"),
+            "element 0 finite limit renders the number:\n{dump}"
+        );
+        assert!(
+            dump.contains("unlimited"),
+            "element 1 max-uint renders Unlimited:\n{dump}"
+        );
+        assert!(
+            dump.contains("a0b86991c6218b") && dump.contains("c02aaa39"),
+            "both exact nested token identities render:\n{dump}"
+        );
+        assert!(
+            dump.contains("item 1 of 2") && dump.contains("item 2 of 2"),
+            "per-element dividers render:\n{dump}"
+        );
+        if source_name == FT_SOURCE {
+            assert!(
+                dump.contains("create session"),
+                "FT intent renders:\n{dump}"
+            );
+        } else {
+            assert!(
+                dump.contains("create ftusd ses") && dump.contains("| sion |"),
+                "ftUSD intent renders:\n{dump}"
+            );
+        }
+
+        // Every byte in EIP-712 encodeData is signed. A one-byte change must
+        // therefore alter at least one trusted page or refuse the request.
+        for byte in 0..top_ed.len() {
+            let mut changed_ed = top_ed.clone();
+            changed_ed[byte] ^= 0x01;
+            if let Ok(changed_pages) = render(&pth, &changed_ed, &blob) {
+                assert_ne!(
+                    changed_pages.as_slice(),
+                    pages.as_slice(),
+                    "signed encodeData byte {byte} was not represented for {source_name} chain {}",
+                    entry.chain_id,
+                );
+            }
+        }
+        // Every nested byte is committed by the displayed limits hash; with
+        // the top-level commitment fixed, each one-byte change must decline.
+        for byte in 0..blob.len() {
+            let mut changed_blob = blob.clone();
+            changed_blob[byte] ^= 0x01;
+            assert!(
+                render(&pth, &top_ed, &changed_blob).is_err(),
+                "unbound nested byte {byte} rendered for {source_name} chain {}",
+                entry.chain_id,
+            );
+        }
+
+        let mut wrong_type = pth;
+        wrong_type[0] ^= 0x01;
+        assert!(render(&wrong_type, &top_ed, &blob).is_err());
+        assert!(render(&pth, &top_ed[..top_ed.len() - 1], &blob).is_err());
+        let mut trailing_ed = top_ed.clone();
+        trailing_ed.push(0);
+        assert!(render(&pth, &trailing_ed, &blob).is_err());
+
+        // Empty and over-cap arrays are still cryptographically well-bound,
+        // but the bounded renderer deliberately refuses them.
+        let empty_elements: [&[u8]; 0] = [];
+        let mut empty_ed = top_ed.clone();
+        empty_ed[192..224].copy_from_slice(&hash_struct_array(&asset_limit_th, &empty_elements));
+        assert!(render(&pth, &empty_ed, &[0, 0]).is_err());
+
+        let seven_elements = vec![el0.clone(); 7];
+        let seven_refs: Vec<&[u8]> = seven_elements.iter().map(Vec::as_slice).collect();
+        let mut seven_ed = top_ed.clone();
+        seven_ed[192..224].copy_from_slice(&hash_struct_array(&asset_limit_th, &seven_refs));
+        let mut seven_blob = Vec::new();
+        seven_blob.extend_from_slice(&7u16.to_be_bytes());
+        for element in &seven_elements {
+            seven_blob.extend_from_slice(&64u16.to_be_bytes());
+            seven_blob.extend_from_slice(element);
+        }
+        assert!(render(&pth, &seven_ed, &seven_blob).is_err());
+    }
+    assert_eq!(
+        domain_separators.len(),
+        7,
+        "every deployment/domain is unique"
     );
-    assert!(
-        dump.contains("1000001"),
-        "element 0 finite limit renders the number:\n{dump}"
-    );
-    assert!(
-        dump.contains("unlimited"),
-        "element 1 (max-uint) renders the threshold message 'Unlimited':\n{dump}"
-    );
-    assert!(
-        dump.contains("item 1 of 2") && dump.contains("item 2 of 2"),
-        "per-element dividers:\n{dump}"
-    );
-    assert!(
-        dump.contains("abababab"),
-        "formerly-hidden salt must be visible in the safe fixture:\n{dump}"
-    );
-    // Flip a nested word (element 1's limit) → array binding breaks → decline.
-    let mut b = blob.clone();
-    b[2 + 2 + 64 + 2 + 40] ^= 0x01; // inside el1's limit word
-    assert!(render(&top_ed, &b).is_err(), "flip el1 limit declines");
 }

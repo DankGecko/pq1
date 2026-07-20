@@ -539,8 +539,8 @@ fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment(
 
     assert_eq!(
         result.entries.len(),
-        430,
-        "PQ-incompatible permit removal must preserve the 430-leaf catalogue"
+        437,
+        "PQ-incompatible permit removal must preserve the 437-leaf catalogue"
     );
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
@@ -677,11 +677,11 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
             .contains(&(entry.chain_id, entry.contract, withdraw_selector)));
     }
 
-    assert_eq!(result.entries.len(), 430);
+    assert_eq!(result.entries.len(), 437);
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.root),
-        "676fa196757d8ab4104f24f14513df5b68ca19a0e56a14838ceea75104bc53d0"
+        "450ed1985601eda4e95f04538f6c9edb921caf51e745ce541ca79a2cee3e45fb"
     );
 }
 
@@ -786,7 +786,7 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
 
     assert_eq!(
         result.entries.len(),
-        430,
+        437,
         "Aave V2 already owned three leaves"
     );
     assert_eq!(result.known_call_count, 4_544);
@@ -1008,7 +1008,7 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
         );
     }
 
-    assert_eq!(result.entries.len(), 430);
+    assert_eq!(result.entries.len(), 437);
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -1116,7 +1116,7 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
         );
     }
 
-    assert_eq!(result.entries.len(), 430);
+    assert_eq!(result.entries.len(), 437);
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -1641,7 +1641,7 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
         "newly clear-signable permit was already registry-known"
     );
 
-    assert_eq!(result.entries.len(), 430);
+    assert_eq!(result.entries.len(), 437);
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -2684,7 +2684,19 @@ fn registry_all_display_material_is_runtime_parseable() {
                 FormatOp::try_from(field.format_op).unwrap();
                 let params = parse_params(&ir, field.param_off).unwrap();
                 if field.path_off == 0 {
-                    assert!(params.const_value.is_some());
+                    match (params.const_value, params.nested_struct) {
+                        (Some(_), None) => {
+                            assert_eq!(params.terminal_kind, Some(TerminalKind::ConstantText));
+                        }
+                        (None, Some(nested)) => {
+                            assert!(!nested.is_empty());
+                            assert_eq!(params.terminal_kind, Some(TerminalKind::NestedStruct));
+                        }
+                        _ => panic!(
+                            "{}: path-less field must be exactly one of a constant annotation or nested-struct anchor",
+                            entry.source.display()
+                        ),
+                    }
                 } else {
                     assert!(!ir.path_bytes(field.path_off).unwrap().is_empty());
                 }
