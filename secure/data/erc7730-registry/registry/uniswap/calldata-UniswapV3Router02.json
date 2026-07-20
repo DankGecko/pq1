@@ -42,9 +42,10 @@
         "$id": "exactInputSingle",
         "intent": "swap",
         "fields": [
+          { "path": "@.value", "label": "Native value", "format": "amount", "visible": "always" },
           {
             "path": "params.amountIn",
-            "label": "Send",
+            "label": "Swap input",
             "format": "tokenAmount",
             "params": { "tokenPath": "params.tokenIn" },
             "visible": "always"
@@ -108,9 +109,10 @@
         "$id": "exactOutputSingle",
         "intent": "Swap",
         "fields": [
+          { "path": "@.value", "label": "Native value", "format": "amount", "visible": "always" },
           {
             "path": "params.amountInMaximum",
-            "label": "Maximum Amount In",
+            "label": "Max swap input",
             "format": "tokenAmount",
             "params": { "tokenPath": "params.tokenIn" }
           },

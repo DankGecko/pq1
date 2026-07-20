@@ -1,11 +1,22 @@
 {
   "schema_version": 1,
-  "scope": "Uniswap SwapRouter02 exactInputSingle and exactOutputSingle semantic evidence for PQ1 fail-closed exclusion",
+  "scope": "Uniswap SwapRouter02 exactInputSingle and exactOutputSingle semantic evidence for PQ1 constrained restoration",
   "captured_at_utc": "2026-07-19T15:30:00Z",
   "policy": {
-    "outcome": "fail_closed_exclusion",
-    "mechanism": "The standard senderAddress annotation on each recipient is unsupported by PQ1, so tolerant compilation emits no Router02 leaf while declared call collection retains both known-call tuples.",
-    "excluded_routes": [
+    "outcome": "constrained_restoration",
+    "mechanism": "PQ1 restores only the two single-hop routes under device-enforced semantics: senderAddress address(1) resolves to the signed UserOperation sender, address(2) refuses, exactInputSingle amountIn=0 refuses, nonzero sqrtPriceLimitX96 refuses, and nonzero @.value refuses. Each admitted format renders the exact signed zero @.value as Native value. Unsupported Router02 routes and runtime combinations remain exact known-call hard refusals.",
+    "constraints": {
+      "recipient_sender_sentinel": "0x0000000000000000000000000000000000000001",
+      "recipient_router_sentinel": "0x0000000000000000000000000000000000000002",
+      "recipient_router_sentinel_policy": "reject",
+      "exact_input_zero_amount_policy": "reject",
+      "nonzero_sqrt_price_limit_policy": "reject",
+      "outer_native_value_policy": "require_zero",
+      "outer_native_value_path": "@.value",
+      "outer_native_value_label": "Native value",
+      "outer_native_value_format": "amount"
+    },
+    "constrained_routes": [
       {
         "canonical_signature": "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
         "selector": "0x04e45aaf",
@@ -102,8 +113,53 @@
         "archive_file": "source/Constants.sol",
         "upstream_path": "contracts/libraries/Constants.sol",
         "sha256": "ad6c525483d98318531f48d1652efdcc6d57e8fc466f584f3d61c02b592a5ba1"
+      },
+      {
+        "archive_file": "source/PeripheryPaymentsWithFeeExtended.sol",
+        "upstream_path": "contracts/base/PeripheryPaymentsWithFeeExtended.sol",
+        "sha256": "0060f610c4a072d8f63bcb96df688a24756497134f85402a1643f3480b1dbe2a"
+      },
+      {
+        "archive_file": "source/PeripheryPaymentsExtended.sol",
+        "upstream_path": "contracts/base/PeripheryPaymentsExtended.sol",
+        "sha256": "bab5dd5d9fc56f12a61be1621e70e036d544393dcdd7fa9dc1a6c0cda85e3dc4"
       }
     ]
+  },
+  "payment_dependency": {
+    "inheritance_path": [
+      "contracts/V3SwapRouter.sol -> contracts/base/PeripheryPaymentsWithFeeExtended.sol",
+      "contracts/base/PeripheryPaymentsWithFeeExtended.sol -> contracts/base/PeripheryPaymentsExtended.sol",
+      "contracts/base/PeripheryPaymentsExtended.sol -> @uniswap/v3-periphery/contracts/base/PeripheryPayments.sol"
+    ],
+    "swap_router_package": {
+      "archive_file": "dependency/swap-router-contracts-package.json",
+      "upstream_path": "package.json",
+      "sha256": "c03fde74b76ad1b73fe7d61414364aa44e34a082975c5a5dce46396174ed2693",
+      "declared_dependency": "@uniswap/v3-periphery@1.3.0"
+    },
+    "swap_router_lock": {
+      "archive_file": "dependency/v3-periphery-1.3.0.yarn.lock",
+      "upstream_path": "yarn.lock lines 1063-1074",
+      "sha256": "0d87e3b26ea460a547484cd5f27f9859d16e9ea8c20831c5946ed6775543b8e2",
+      "resolved_tarball": "https://registry.yarnpkg.com/@uniswap/v3-periphery/-/v3-periphery-1.3.0.tgz",
+      "resolved_tarball_sha1": "37f0a1ef6025221722e50e9f3f2009c2d5d6e4ec",
+      "integrity": "sha512-HjHdI5RkjBl8zz3bqHShrbULFoZSrjbbrRHoO2vbzn+WRzTa6xY4PWphZv2Tlcb38YEKfKHp6NPl5hVedac8uw=="
+    },
+    "v3_periphery_source": {
+      "upstream_repository": "https://github.com/Uniswap/v3-periphery",
+      "upstream_release": "v1.3.0",
+      "annotated_tag_object": "6cd299b1882eae1d557c55793934ff68ac5d0a1f",
+      "tag_signature_status": "unsigned",
+      "upstream_commit": "80f26c86c57b8a5e4b913f42844d4c8bd274d058",
+      "upstream_tree": "3e6b813fb79a72f76dc5b8dd2ebf59f986e02516",
+      "upstream_commit_time": "2021-11-05T14:17:06Z",
+      "archive_file": "source/PeripheryPayments.sol",
+      "upstream_path": "contracts/base/PeripheryPayments.sol",
+      "sha256": "68cef83e01906a13f4a2bb1c12a9e99fad3e957eea6ddbb54bac30ba3b06a436",
+      "locked_tarball_file_sha256": "68cef83e01906a13f4a2bb1c12a9e99fad3e957eea6ddbb54bac30ba3b06a436"
+    },
+    "payment_semantics": "pay(token,payer,recipient,value) wraps native currency only when token==WETH9 and the router native balance covers value; otherwise it transfers tokens already held by the router when payer==address(this), or pulls token funds from payer with transferFrom."
   },
   "abi": {
     "archive_file": "abi/single-hop.abi.json",
@@ -116,7 +172,7 @@
   "descriptor": {
     "curated_file": "secure/data/erc7730/curations/files/registry/uniswap/calldata-UniswapV3Router02.json",
     "vendored_file": "secure/data/erc7730-registry/registry/uniswap/calldata-UniswapV3Router02.json",
-    "sha256": "79703872432fa4a4ad6b51d00cc4093a0def94c41a0c49e4e4dac28dbfe7db67",
+    "sha256": "679272181ccbcba2774ef089815b904ff04fd0310c92c4531803485319141db0",
     "sender_address_sentinel": "0x0000000000000000000000000000000000000001"
   },
   "semantic_hazards": [
@@ -124,12 +180,14 @@
     "exactInputSingle amountIn=0 consumes the router's entire tokenIn balance and changes the payer to the router.",
     "A nonzero exact-input price limit can make amountIn a cap rather than an exact consumed amount.",
     "A nonzero exact-output price limit permits amountOutReceived to be smaller than the requested amountOut.",
-    "The payable route and native/WETH funding context are not represented by the current PQ1 display."
+    "The outer payable value is independent of the tuple amounts; both constrained formats therefore render the exact signed @.value explicitly.",
+    "PeripheryPayments pays with wrapped native currency only when tokenIn is WETH9 and the router native balance covers the payment; otherwise it uses router-held tokens or transferFrom on the selected payer."
   ],
   "residuals": [
     "This is a fixed-block historical receipt for Ethereum chain 1 and does not provide live deployment monitoring.",
     "Blockscout marks the source partially verified rather than fully verified; the 21 repo-owned verified sources were byte-identical to the pinned official release.",
-    "Restoration requires explicit, device-verifiable sentinel, amount-zero, price-limit, recipient, and funding semantics.",
+    "The constrained restoration depends on device-verifiable sentinel, amount-zero, price-limit, recipient, and outer-value-zero checks; unsupported combinations remain hard refusals.",
+    "The v3-periphery v1.3.0 tag is annotated but unsigned; the exact dependency is independently pinned by the swap-router package, lockfile tarball digest, commit/tree, archived source hash, and tarball/source byte equality.",
     "The known-call Bloom is probabilistic, but both exact tuples are also asserted against the exact builder set offline.",
     "This evidence grants no production-shipment, fallback, generic signing, legacy-transaction, or blind-signing authority."
   ]
