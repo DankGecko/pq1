@@ -42,16 +42,16 @@ tuple-set SHA-256, and Bloom bytes. Merkle-root or Bloom equality alone is not
 accepted as a faithfulness proof.
 
 <!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
-Checked-in curated receipt, verified against a fresh build by `--check`: **435 leaves**, **365,247-byte**
+Checked-in curated receipt, verified against a fresh build by `--check`: **435 leaves**, **365,570-byte**
 compiled companion catalogue, root
-`2f50cd1ebef6b9532a2017fdf6aa95b808ff4355440a1510d8e164bdbebc6ae5`,
-**4,544** canonical known-call tuples, tuple-set SHA-256
-`593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781`.
+`5a2e1dd05f5d3331a04611afc8184d9bfe43a71f0f5d9986eee4a4c3740bf2f3`,
+**4,546** canonical known-call tuples, tuple-set SHA-256
+`7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555`.
 Curation manifest SHA-256
-`6281a66646ff83153da43eb2bd6a7c2637a5cf7323cc4f802927b065bbf8cbee` binds upstream commit
+`4ee3db699b7c033a4f98aa803d4f1e380eb362e205682be5b0a6f92ca1fa04bf` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
-The Bloom contains 28,248 / 131,072 set bits, below the generator's 25% cap.
+The Bloom contains 28,261 / 131,072 set bits, below the generator's 25% cap.
 <!-- END XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
 
 The `.pqsigner-erc7730-vendor` file is an exact machine-owned directory

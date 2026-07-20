@@ -542,15 +542,15 @@ fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment(
         435,
         "PQ-incompatible permit removal must preserve the 435-leaf catalogue"
     );
-    assert_eq!(result.known_call_count, 4_544);
+    assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781",
+        "7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555",
         "permit refusal must not change the declared known-call tuple set"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628",
+        "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984",
         "permit refusal must not change the known-call Bloom"
     );
 }
@@ -678,10 +678,10 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     }
 
     assert_eq!(result.entries.len(), 435);
-    assert_eq!(result.known_call_count, 4_544);
+    assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.root),
-        "2f50cd1ebef6b9532a2017fdf6aa95b808ff4355440a1510d8e164bdbebc6ae5"
+        "5a2e1dd05f5d3331a04611afc8184d9bfe43a71f0f5d9986eee4a4c3740bf2f3"
     );
 }
 
@@ -789,14 +789,14 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
         435,
         "Aave V2 already owned three leaves"
     );
-    assert_eq!(result.known_call_count, 4_544);
+    assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781"
+        "7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628"
+        "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984"
     );
 }
 
@@ -1009,14 +1009,14 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
     }
 
     assert_eq!(result.entries.len(), 435);
-    assert_eq!(result.known_call_count, 4_544);
+    assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781"
+        "7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628"
+        "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984"
     );
 }
 
@@ -1117,14 +1117,14 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
     }
 
     assert_eq!(result.entries.len(), 435);
-    assert_eq!(result.known_call_count, 4_544);
+    assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781"
+        "7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628"
+        "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984"
     );
 }
 
@@ -1642,14 +1642,14 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
     );
 
     assert_eq!(result.entries.len(), 435);
-    assert_eq!(result.known_call_count, 4_544);
+    assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781"
+        "7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628"
+        "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984"
     );
 }
 
@@ -3876,14 +3876,15 @@ fn vendored_uniswap_v3_router02_admits_only_four_exactly_guarded_routes() {
     }
 }
 
-/// QuickSwap V2's two token-to-token routes become complete only when the
-/// descriptor renders the entire ordered address path. Unlike Router02, the
-/// classic V2 router gives `to` its literal ABI meaning: no sender sentinel or
-/// word guard may be attached. The existing five all-static liquidity routes
-/// remain admitted, while every other declared dynamic/permit route remains
-/// protected by the exact and Bloom known-call inventories.
+/// QuickSwap V2's five selected standard token/native routes become complete only when
+/// the descriptor renders the entire ordered address path. Unlike Router02,
+/// the classic V2 router gives `to` its literal ABI meaning: no sender sentinel
+/// or word guard may be attached. The existing five all-static liquidity
+/// routes remain admitted, while fee-on-transfer, native-input exact-output,
+/// and permit routes remain protected by the exact and Bloom known-call
+/// inventories.
 #[test]
-fn vendored_quickswap_v2_admits_exactly_two_complete_token_swap_routes() {
+fn vendored_quickswap_v2_admits_exactly_five_complete_standard_swap_routes() {
     let root = workspace_root();
     let reg = root.join("secure/data/erc7730-registry");
     let desc = reg.join("registry/quickswap/calldata-QuickSwap.json");
@@ -3929,29 +3930,63 @@ fn vendored_quickswap_v2_admits_exactly_two_complete_token_swap_routes() {
         "removeLiquidityETH(address,uint256,uint256,uint256,address,uint256)",
         "removeLiquidityETHSupportingFeeOnTransferTokens(address,uint256,uint256,uint256,address,uint256)",
     ];
+    #[derive(Clone, Copy)]
+    enum SwapKind {
+        TokenExactInput,
+        TokenExactOutput,
+        TokenForNativeExactInput,
+        NativeForTokenExactInput,
+        TokenForNativeExactOutput,
+    }
     let selected_swaps = [
         (
             "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)",
             [0x38, 0xed, 0x17, 0x39],
-            true,
+            SwapKind::TokenExactInput,
         ),
         (
             "swapTokensForExactTokens(uint256,uint256,address[],address,uint256)",
             [0x88, 0x03, 0xdb, 0xee],
-            false,
+            SwapKind::TokenExactOutput,
+        ),
+        (
+            "swapExactTokensForETH(uint256,uint256,address[],address,uint256)",
+            [0x18, 0xcb, 0xaf, 0xe5],
+            SwapKind::TokenForNativeExactInput,
+        ),
+        (
+            "swapExactETHForTokens(uint256,address[],address,uint256)",
+            [0x7f, 0xf3, 0x6a, 0xb5],
+            SwapKind::NativeForTokenExactInput,
+        ),
+        (
+            "swapTokensForExactETH(uint256,uint256,address[],address,uint256)",
+            [0x4a, 0x25, 0xd9, 0x4a],
+            SwapKind::TokenForNativeExactOutput,
         ),
     ];
     let refused = [
-        "swapExactTokensForETH(uint256,uint256,address[],address,uint256)",
-        "swapExactETHForTokens(uint256,address[],address,uint256)",
         "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
-        "swapTokensForExactETH(uint256,uint256,address[],address,uint256)",
         "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)",
+        "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
+        "swapETHForExactTokens(uint256,address[],address,uint256)",
         "removeLiquidityWithPermit(address,address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
         "removeLiquidityETHWithPermit(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
         "removeLiquidityETHWithPermitSupportingFeeOnTransferTokens(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
     ];
     for (signature, expected, _) in selected_swaps {
+        assert_eq!(selector_for(signature), expected);
+    }
+    for (signature, expected) in [
+        (
+            "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
+            [0x79, 0x1a, 0xc9, 0x47],
+        ),
+        (
+            "swapETHForExactTokens(uint256,address[],address,uint256)",
+            [0xfb, 0x3b, 0xdb, 0x41],
+        ),
+    ] {
         assert_eq!(selector_for(signature), expected);
     }
 
@@ -3966,7 +4001,7 @@ fn vendored_quickswap_v2_admits_exactly_two_complete_token_swap_routes() {
         .collect();
     assert_eq!(
         actual_admitted, expected_admitted,
-        "exactly five pre-existing static routes plus the two complete token swaps are admitted"
+        "exactly five pre-existing static routes plus five complete standard swaps are admitted"
     );
     for signature in refused {
         let selector = selector_for(signature);
@@ -3986,70 +4021,205 @@ fn vendored_quickswap_v2_admits_exactly_two_complete_token_swap_routes() {
             member,
         ]
     };
-    let mut route_path = flat_path(2);
-    route_path.push(PathOp::ArrayAll as u8);
-    let first_token_path = [
-        PathOp::RootStructured as u8,
-        PathOp::FieldIdx as u8,
-        0,
-        2,
-        PathOp::FollowOffset as u8,
-        PathOp::ArrayIdx as u8,
-        0,
-        0,
-    ];
-    let last_token_path = [
-        PathOp::RootStructured as u8,
-        PathOp::FieldIdx as u8,
-        0,
-        2,
-        PathOp::FollowOffset as u8,
-        PathOp::ArrayLast as u8,
-    ];
+    let route_path = |member: u8| {
+        let mut path = flat_path(member);
+        path.push(PathOp::ArrayAll as u8);
+        path
+    };
+    let token_path = |member: u8, last: bool| {
+        let mut path = flat_path(member);
+        path.push(PathOp::FollowOffset as u8);
+        if last {
+            path.push(PathOp::ArrayLast as u8);
+        } else {
+            path.extend_from_slice(&[PathOp::ArrayIdx as u8, 0, 0]);
+        }
+        path
+    };
+    let mut value_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+    value_path.extend_from_slice(&container_field::VALUE.to_be_bytes());
 
-    for (_, selector, exact_input) in selected_swaps {
+    for (_, selector, kind) in selected_swaps {
         let format = ir
             .find_format_by_selector(&selector)
             .expect("QuickSwap format table parses")
-            .expect("selected complete token swap exists");
-        assert_eq!(format.static_head_words, 5);
+            .expect("selected complete standard swap exists");
         let fields: Vec<_> = format
             .fields()
             .map(|field| field.expect("QuickSwap swap field parses"))
             .collect();
         assert_eq!(fields.len(), 5, "every signed swap operand is displayed");
 
-        let expected_labels: [&[u8]; 5] = if exact_input {
-            [
-                b"Amount to Send",
-                b"Minimum to Receive",
-                b"Route",
-                b"Beneficiary",
-                b"Deadline",
-            ]
-        } else {
-            [
-                b"Amount to Receive",
-                b"Maximum to Send",
-                b"Route",
-                b"Beneficiary",
-                b"Deadline",
-            ]
+        let (head_words, path_member, expected_labels, expected_ops, expected_paths, token_paths): (
+            u16,
+            u8,
+            [&[u8]; 5],
+            [FormatOp; 5],
+            [Vec<u8>; 5],
+            [Option<Vec<u8>>; 5],
+        ) = match kind {
+            SwapKind::TokenExactInput => (
+                5,
+                2,
+                [
+                    b"Amount to Send",
+                    b"Minimum to Receive",
+                    b"Route",
+                    b"Beneficiary",
+                    b"Deadline",
+                ],
+                [
+                    FormatOp::TokenAmount,
+                    FormatOp::TokenAmount,
+                    FormatOp::AddressName,
+                    FormatOp::AddressName,
+                    FormatOp::Date,
+                ],
+                [
+                    flat_path(0),
+                    flat_path(1),
+                    route_path(2),
+                    flat_path(3),
+                    flat_path(4),
+                ],
+                [
+                    Some(token_path(2, false)),
+                    Some(token_path(2, true)),
+                    None,
+                    None,
+                    None,
+                ],
+            ),
+            SwapKind::TokenExactOutput => (
+                5,
+                2,
+                [
+                    b"Amount to Receive",
+                    b"Maximum to Send",
+                    b"Route",
+                    b"Beneficiary",
+                    b"Deadline",
+                ],
+                [
+                    FormatOp::TokenAmount,
+                    FormatOp::TokenAmount,
+                    FormatOp::AddressName,
+                    FormatOp::AddressName,
+                    FormatOp::Date,
+                ],
+                [
+                    flat_path(0),
+                    flat_path(1),
+                    route_path(2),
+                    flat_path(3),
+                    flat_path(4),
+                ],
+                [
+                    Some(token_path(2, true)),
+                    Some(token_path(2, false)),
+                    None,
+                    None,
+                    None,
+                ],
+            ),
+            SwapKind::TokenForNativeExactInput => (
+                5,
+                2,
+                [
+                    b"Amount to Send",
+                    b"Minimum to Receive",
+                    b"Route",
+                    b"Beneficiary",
+                    b"Deadline",
+                ],
+                [
+                    FormatOp::TokenAmount,
+                    FormatOp::Amount,
+                    FormatOp::AddressName,
+                    FormatOp::AddressName,
+                    FormatOp::Date,
+                ],
+                [
+                    flat_path(0),
+                    flat_path(1),
+                    route_path(2),
+                    flat_path(3),
+                    flat_path(4),
+                ],
+                [
+                    Some(token_path(2, false)),
+                    None,
+                    None,
+                    None,
+                    None,
+                ],
+            ),
+            SwapKind::NativeForTokenExactInput => (
+                4,
+                1,
+                [
+                    b"Amount to Send",
+                    b"Minimum to Receive",
+                    b"Route",
+                    b"Beneficiary",
+                    b"Deadline",
+                ],
+                [
+                    FormatOp::Amount,
+                    FormatOp::TokenAmount,
+                    FormatOp::AddressName,
+                    FormatOp::AddressName,
+                    FormatOp::Date,
+                ],
+                [
+                    value_path.clone(),
+                    flat_path(0),
+                    route_path(1),
+                    flat_path(2),
+                    flat_path(3),
+                ],
+                [
+                    None,
+                    Some(token_path(1, true)),
+                    None,
+                    None,
+                    None,
+                ],
+            ),
+            SwapKind::TokenForNativeExactOutput => (
+                5,
+                2,
+                [
+                    b"Amount to Receive",
+                    b"Maximum to Send",
+                    b"Route",
+                    b"Beneficiary",
+                    b"Deadline",
+                ],
+                [
+                    FormatOp::Amount,
+                    FormatOp::TokenAmount,
+                    FormatOp::AddressName,
+                    FormatOp::AddressName,
+                    FormatOp::Date,
+                ],
+                [
+                    flat_path(0),
+                    flat_path(1),
+                    route_path(2),
+                    flat_path(3),
+                    flat_path(4),
+                ],
+                [
+                    None,
+                    Some(token_path(2, false)),
+                    None,
+                    None,
+                    None,
+                ],
+            ),
         };
-        let expected_ops = [
-            FormatOp::TokenAmount,
-            FormatOp::TokenAmount,
-            FormatOp::AddressName,
-            FormatOp::AddressName,
-            FormatOp::Date,
-        ];
-        let expected_paths = [
-            flat_path(0),
-            flat_path(1),
-            route_path.clone(),
-            flat_path(3),
-            flat_path(4),
-        ];
+        assert_eq!(format.static_head_words, head_words);
         let params: Vec<_> = fields
             .iter()
             .map(|field| parse_params(&ir, field.param_off).expect("QuickSwap params parse"))
@@ -4073,23 +4243,18 @@ fn vendored_quickswap_v2_admits_exactly_two_complete_token_swap_routes() {
                 params[index].word_guard.is_none(),
                 "classic V2 route must not inherit Router02 semantic guards"
             );
+            assert_eq!(
+                params[index].token_path,
+                token_paths[index].as_deref(),
+                "wrong token identity path at field {index} selector 0x{}",
+                hex::encode(selector)
+            );
         }
         assert_eq!(params[2].addr_types, Some(ADDR_TYPE_TOKEN));
         assert_eq!(
-            params[0].token_path,
-            Some(if exact_input {
-                first_token_path.as_slice()
-            } else {
-                last_token_path.as_slice()
-            })
-        );
-        assert_eq!(
-            params[1].token_path,
-            Some(if exact_input {
-                last_token_path.as_slice()
-            } else {
-                first_token_path.as_slice()
-            })
+            ir.path_bytes(fields[2].path_off)
+                .expect("QuickSwap route path parses"),
+            route_path(path_member)
         );
     }
 

@@ -8237,11 +8237,11 @@ fn synthetic_uniswap_v2_swap_binds_first_and_last_array_element() {
 }
 
 // ───────────────────────────────────────────────────────────────────────
-// QuickSwap V2 Router02 — two complete token-to-token routes plus the five
+// QuickSwap V2 Router02 — five complete standard swaps plus the five
 // previously admitted static liquidity routes. LP-token metadata is derived
 // rather than signed, so the exact liquidity word is deliberately rendered
-// raw. ETH swaps, fee-on-transfer swaps, permit routes, and every other
-// omitted route remain known hard refusals.
+// raw. Fee-on-transfer swaps, the native-input exact-output swap, permit
+// routes, and every other omitted route remain known hard refusals.
 // ───────────────────────────────────────────────────────────────────────
 const QUICKSWAP_ROUTER: [u8; 20] = [
     0xa5, 0xe0, 0x82, 0x9c, 0xac, 0xed, 0x8f, 0xfd, 0xd4, 0xde, 0x3c, 0x43, 0x69, 0x6c, 0x57, 0xf7,
@@ -8257,6 +8257,24 @@ const QUICKSWAP_SWAP_EXACT_TOKENS: &str =
     "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)";
 const QUICKSWAP_SWAP_TOKENS_FOR_EXACT: &str =
     "swapTokensForExactTokens(uint256,uint256,address[],address,uint256)";
+const QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE: &str =
+    "swapExactTokensForETH(uint256,uint256,address[],address,uint256)";
+const QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS: &str =
+    "swapExactETHForTokens(uint256,address[],address,uint256)";
+const QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE: &str =
+    "swapTokensForExactETH(uint256,uint256,address[],address,uint256)";
+const QUICKSWAP_SWAP_EXACT_TOKENS_FOT: &str =
+    "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)";
+const QUICKSWAP_SWAP_EXACT_NATIVE_FOT: &str =
+    "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)";
+const QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT: &str =
+    "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)";
+const QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS: &str =
+    "swapETHForExactTokens(uint256,address[],address,uint256)";
+const QUICKSWAP_WMATIC: [u8; 20] = [
+    0x0d, 0x50, 0x0b, 0x1d, 0x8e, 0x8e, 0xf3, 0x1e, 0x21, 0xc9, 0x9d, 0x1d, 0xb9, 0xa6, 0x44, 0x4d,
+    0x3a, 0xdf, 0x12, 0x70,
+];
 
 fn quickswap_liquidity_word() -> [u8; 32] {
     [
@@ -8308,11 +8326,27 @@ fn quickswap_swap_calldata(
     deadline: U256,
 ) -> Vec<u8> {
     let selector = keccak256(signature.as_bytes());
-    let mut calldata = Vec::with_capacity(4 + (6 + path.len()) * 32);
+    let native_input = signature == QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS;
+    assert!(
+        native_input
+            || matches!(
+                signature,
+                QUICKSWAP_SWAP_EXACT_TOKENS
+                    | QUICKSWAP_SWAP_TOKENS_FOR_EXACT
+                    | QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE
+                    | QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE
+                    | QUICKSWAP_SWAP_EXACT_TOKENS_FOT
+            ),
+        "unsupported QuickSwap swap route: {signature}"
+    );
+    let head_words = if native_input { 4 } else { 5 };
+    let mut calldata = Vec::with_capacity(4 + (head_words + 1 + path.len()) * 32);
     calldata.extend_from_slice(&selector[..4]);
     calldata.extend_from_slice(&first_amount.0);
-    calldata.extend_from_slice(&second_amount.0);
-    calldata.extend_from_slice(&u256_from_u64(5 * 32).0);
+    if !native_input {
+        calldata.extend_from_slice(&second_amount.0);
+    }
+    calldata.extend_from_slice(&u256_from_u64((head_words * 32) as u64).0);
     calldata.extend_from_slice(&abi_address_word(beneficiary));
     calldata.extend_from_slice(&deadline.0);
     calldata.extend_from_slice(&u256_from_u64(path.len() as u64).0);
@@ -8345,7 +8379,7 @@ fn assert_some_page_shows_full_address(pages: &Pages, address: &[u8; 20]) {
 }
 
 #[test]
-fn production_quickswap_admits_exactly_seven_bounded_routes_and_refuses_broader_calls() {
+fn production_quickswap_admits_exactly_ten_bounded_routes_and_refuses_broader_calls() {
     let registry = build_registry();
     let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
     assert_eq!(entry.contract, QUICKSWAP_ROUTER);
@@ -8356,6 +8390,9 @@ fn production_quickswap_admits_exactly_seven_bounded_routes_and_refuses_broader_
     let admitted_signatures = [
         QUICKSWAP_SWAP_EXACT_TOKENS,
         QUICKSWAP_SWAP_TOKENS_FOR_EXACT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
         "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)",
         "addLiquidityETH(address,uint256,uint256,uint256,address,uint256)",
         QUICKSWAP_REMOVE,
@@ -8385,11 +8422,10 @@ fn production_quickswap_admits_exactly_seven_bounded_routes_and_refuses_broader_
         "removeLiquidityWithPermit(address,address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
         "removeLiquidityETHWithPermit(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
         "removeLiquidityETHWithPermitSupportingFeeOnTransferTokens(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
-        "swapExactTokensForETH(uint256,uint256,address[],address,uint256)",
-        "swapExactETHForTokens(uint256,address[],address,uint256)",
-        "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
-        "swapTokensForExactETH(uint256,uint256,address[],address,uint256)",
-        "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)",
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOT,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT,
+        QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS,
     ];
     let tx = envelope(137, QUICKSWAP_ROUTER);
     let resolver = NameResolver::new();
@@ -8397,6 +8433,15 @@ fn production_quickswap_admits_exactly_seven_bounded_routes_and_refuses_broader_
         assert_selector_excluded(ir, signature);
         let digest = keccak256(signature.as_bytes());
         let selector: [u8; 4] = digest[..4].try_into().expect("selector width");
+        match signature {
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE_FOT => {
+                assert_eq!(selector, [0x79, 0x1a, 0xc9, 0x47]);
+            }
+            QUICKSWAP_SWAP_NATIVE_FOR_EXACT_TOKENS => {
+                assert_eq!(selector, [0xfb, 0x3b, 0xdb, 0x41]);
+            }
+            _ => {}
+        }
         assert!(
             registry
                 .known_calls
@@ -8433,6 +8478,26 @@ fn production_quickswap_admits_exactly_seven_bounded_routes_and_refuses_broader_
             )
             .is_err(),
             "known excluded QuickSwap call must not fall back: {signature}"
+        );
+
+        let mut missing_descriptor_proofs = DispatchPageProofs::new();
+        missing_descriptor_proofs.fail_initialize();
+        assert!(
+            pick_sign_pages(
+                &tx,
+                &calldata,
+                &[0u8; 20],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &resolver,
+                &mut missing_descriptor_proofs,
+            )
+            .is_err(),
+            "known excluded QuickSwap call must hard-refuse when the descriptor trailer is omitted: {signature}"
         );
     }
 }
@@ -8598,6 +8663,365 @@ fn production_quickswap_token_multihop_renders_full_routes_and_exact_operands() 
 }
 
 #[test]
+fn production_quickswap_native_swaps_render_full_routes_and_exact_operands() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let beneficiary = [0x33; 20];
+    let deadline = u256_from_u64(2_000_000_000);
+    let one_native = u256_from_u64(1_000_000_000_000_000_000);
+
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
+    ] {
+        let native_input = signature == QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS;
+        let route_two = if native_input {
+            vec![QUICKSWAP_WMATIC, TOKEN_OUT]
+        } else {
+            vec![TOKEN_IN, QUICKSWAP_WMATIC]
+        };
+        let route_three = if native_input {
+            vec![QUICKSWAP_WMATIC, TOKEN_MID, TOKEN_OUT]
+        } else {
+            vec![TOKEN_IN, TOKEN_MID, QUICKSWAP_WMATIC]
+        };
+        let route_eight = if native_input {
+            vec![
+                QUICKSWAP_WMATIC,
+                [0x31; 20],
+                [0x32; 20],
+                [0x33; 20],
+                [0x34; 20],
+                [0x35; 20],
+                [0x36; 20],
+                TOKEN_OUT,
+            ]
+        } else {
+            vec![
+                TOKEN_IN,
+                [0x31; 20],
+                [0x32; 20],
+                [0x33; 20],
+                [0x34; 20],
+                [0x35; 20],
+                [0x36; 20],
+                QUICKSWAP_WMATIC,
+            ]
+        };
+        let (
+            first,
+            second,
+            token_label,
+            native_label,
+            raw_token_amount,
+            token_contract,
+            token_symbol,
+            bound_token_amount,
+        ): (U256, U256, &str, &str, &str, [u8; 20], &[u8], &str) = match signature {
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE => (
+                u256_from_u64(1_500_000),
+                one_native,
+                "Amount to Send",
+                "Minimum to Rece~",
+                "1500000",
+                TOKEN_IN,
+                b"TIN",
+                "1.5 TIN",
+            ),
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS => (
+                u256_from_u64(1_000_000),
+                U256::default(),
+                "Minimum to Rece~",
+                "Amount to Send",
+                "1000000",
+                TOKEN_OUT,
+                b"TOUT",
+                "1 TOUT",
+            ),
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => (
+                one_native,
+                u256_from_u64(1_500_000),
+                "Maximum to Send",
+                "Amount to Recei~",
+                "1500000",
+                TOKEN_IN,
+                b"TIN",
+                "1.5 TIN",
+            ),
+            _ => unreachable!(),
+        };
+        let mut tx = envelope(137, QUICKSWAP_ROUTER);
+        if native_input {
+            tx.value = one_native;
+        }
+
+        for path in [&route_two[..], &route_three[..], &route_eight[..]] {
+            let calldata =
+                quickswap_swap_calldata(signature, first, second, path, beneficiary, deadline);
+            assert_selector_matches(&verified.ir, &calldata, signature);
+            let rendered = render_erc7730_pages_with_signer_checked(
+                &tx, &calldata, &verified, None, &resolver, &signer,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "render QuickSwap {signature} with {} tokens: {error:?}",
+                    path.len()
+                )
+            });
+            assert_all_pages_printable(&rendered.pages);
+            assert_complete_route_pages(&rendered.pages, path);
+            assert_full_address_field_page(&rendered.pages, "Beneficiary", &beneficiary);
+            let token_rows = page_strs(
+                &rendered.pages,
+                find_page_by_label(&rendered.pages, token_label),
+            );
+            assert!(
+                token_rows[1..3]
+                    .iter()
+                    .any(|row| row.contains(raw_token_amount)),
+                "the exact signed token amount must render without invented metadata: {token_rows:?}"
+            );
+            let native_rows = page_strs(
+                &rendered.pages,
+                find_page_by_label(&rendered.pages, native_label),
+            );
+            assert_eq!(
+                native_rows[1], "1 POL",
+                "the native side must use Polygon's authenticated ticker"
+            );
+            assert_eq!(
+                page_strs(
+                    &rendered.pages,
+                    find_page_by_label(&rendered.pages, "Deadline"),
+                ),
+                [
+                    "Deadline".to_string(),
+                    "2033-05-18".to_string(),
+                    "03:33:20 UTC".to_string(),
+                    "> next".to_string(),
+                ],
+                "the exact signed deadline must be visible"
+            );
+            assert!(
+                rendered
+                    .transcript_receipt
+                    .range_matches(&rendered.pages, 0),
+                "receipt must bind every QuickSwap page for {signature}"
+            );
+        }
+
+        let calldata = quickswap_swap_calldata(
+            signature,
+            first,
+            second,
+            &route_three,
+            beneficiary,
+            deadline,
+        );
+        let metadata = quickswap_meta(token_contract, token_symbol);
+        let bound = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &calldata,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        )
+        .expect("render QuickSwap native-route token binding");
+        let token_rows = page_strs(&bound.pages, find_page_by_label(&bound.pages, token_label));
+        assert_eq!(token_rows[1], bound_token_amount);
+        assert_full_contract_identity_page(&bound.pages, &token_contract);
+    }
+}
+
+#[test]
+fn production_quickswap_native_swap_mutations_change_transcript_or_refuse() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let beneficiary = [0x33; 20];
+    let deadline = u256_from_u64(2_000_000_000);
+    let one_native = u256_from_u64(1_000_000_000_000_000_000);
+
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
+    ] {
+        let native_input = signature == QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS;
+        let path = if native_input {
+            [QUICKSWAP_WMATIC, TOKEN_MID, TOKEN_OUT]
+        } else {
+            [TOKEN_IN, TOKEN_MID, QUICKSWAP_WMATIC]
+        };
+        let (first, second, head_words, beneficiary_word, deadline_word) = match signature {
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE => {
+                (u256_from_u64(1_500_000), one_native, 5, 3, 4)
+            }
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS => {
+                (u256_from_u64(1_000_000), U256::default(), 4, 2, 3)
+            }
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => {
+                (one_native, u256_from_u64(1_500_000), 5, 3, 4)
+            }
+            _ => unreachable!(),
+        };
+        let mut tx = envelope(137, QUICKSWAP_ROUTER);
+        if native_input {
+            tx.value = one_native;
+        }
+        let calldata =
+            quickswap_swap_calldata(signature, first, second, &path, beneficiary, deadline);
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .expect("render canonical QuickSwap native swap");
+        let native_amount_operand = match signature {
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE => Some("second amount"),
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => Some("first amount"),
+            _ => None,
+        };
+
+        let mut offsets = vec![
+            (4 + 31, "first amount"),
+            (4 + beneficiary_word * 32 + 31, "beneficiary"),
+            (4 + deadline_word * 32 + 31, "deadline"),
+        ];
+        if !native_input {
+            offsets.push((4 + 32 + 31, "second amount"));
+        }
+        let path_start = 4 + head_words * 32 + 32;
+        for index in 0..path.len() {
+            offsets.push((path_start + index * 32 + 31, "route element"));
+        }
+        for (offset, operand) in offsets {
+            let mut mutated_calldata = calldata.clone();
+            mutated_calldata[offset] ^= 1;
+            let mutated = match render_erc7730_pages_with_signer_checked(
+                &tx,
+                &mutated_calldata,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            ) {
+                Ok(mutated) => mutated,
+                Err(error) => {
+                    assert_eq!(
+                        native_amount_operand,
+                        Some(operand),
+                        "only an inexact native-amount mutation may refuse for {signature}: {error:?}"
+                    );
+                    continue;
+                }
+            };
+            assert_ne!(
+                rendered.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "{operand} mutation must change QuickSwap pages for {signature}"
+            );
+            assert!(
+                !rendered
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "{operand} mutation must change QuickSwap receipt for {signature}"
+            );
+        }
+
+        if native_input {
+            let mut mutated_tx = tx;
+            mutated_tx.value = u256_from_u64(2_000_000_000_000_000_000);
+            let mutated = render_erc7730_pages_with_signer_checked(
+                &mutated_tx,
+                &calldata,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            )
+            .expect("render mutated QuickSwap native input");
+            assert_ne!(rendered.pages.as_slice(), mutated.pages.as_slice());
+            assert!(!rendered
+                .transcript_receipt
+                .exact_match(&mutated.transcript_receipt));
+        }
+    }
+}
+
+#[test]
+fn production_quickswap_nonpayable_native_outputs_show_nonzero_outer_value_before_revert() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let path = [TOKEN_IN, QUICKSWAP_WMATIC];
+
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
+    ] {
+        let (first, second) = if signature == QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE {
+            (
+                u256_from_u64(1_500_000),
+                u256_from_u64(1_000_000_000_000_000_000),
+            )
+        } else {
+            (
+                u256_from_u64(1_000_000_000_000_000_000),
+                u256_from_u64(1_500_000),
+            )
+        };
+        let calldata = quickswap_swap_calldata(
+            signature,
+            first,
+            second,
+            &path,
+            [0x33; 20],
+            u256_from_u64(2_000_000_000),
+        );
+        let mut tx = envelope(137, QUICKSWAP_ROUTER);
+        tx.value = u256_from_u64(1_000_000_000_000_000_000);
+        let mut proofs = DispatchPageProofs::new();
+        proofs.fail_initialize();
+        let pages = pick_sign_pages(
+            &tx,
+            &calldata,
+            &signer,
+            None,
+            None,
+            None,
+            Some(&verified),
+            None,
+            None,
+            &resolver,
+            &mut proofs,
+        )
+        .unwrap_or_else(|_| {
+            panic!("nonpayable {signature} must display value before its contract-level revert")
+        });
+        let native_rows = page_strs(&pages, find_page_by_label(&pages, "! NATIVE POL"));
+        assert_eq!(native_rows[1], "1.000000 POL");
+        let mut verdict = crate::fi::FAIL_SENTINEL;
+        proofs.final_set_proof(&pages, &tx, false, &mut verdict);
+        assert_eq!(
+            verdict,
+            crate::fi::OK_SENTINEL,
+            "dispatcher receipt must bind the loud outer-value page"
+        );
+    }
+}
+
+#[test]
 fn production_quickswap_token_multihop_mutations_change_transcript_or_refuse() {
     let registry = build_registry();
     let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
@@ -8667,21 +9091,52 @@ fn production_quickswap_special_beneficiaries_remain_literal() {
     let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
     let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
-    let tx = envelope(137, QUICKSWAP_ROUTER);
     let resolver = NameResolver::new();
     let signer = [0x44; 20];
-    let path = [TOKEN_IN, TOKEN_OUT];
     let mut address_one = [0u8; 20];
     address_one[19] = 1;
     let mut address_two = [0u8; 20];
     address_two[19] = 2;
 
-    for signature in [QUICKSWAP_SWAP_EXACT_TOKENS, QUICKSWAP_SWAP_TOKENS_FOR_EXACT] {
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
+    ] {
+        let native_input = signature == QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS;
+        let path = if native_input {
+            [QUICKSWAP_WMATIC, TOKEN_OUT]
+        } else if matches!(
+            signature,
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE | QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE
+        ) {
+            [TOKEN_IN, QUICKSWAP_WMATIC]
+        } else {
+            [TOKEN_IN, TOKEN_OUT]
+        };
+        let (first, second) = match signature {
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS => (u256_from_u64(1_000_000), U256::default()),
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE => (
+                u256_from_u64(1_500_000),
+                u256_from_u64(1_000_000_000_000_000_000),
+            ),
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => (
+                u256_from_u64(1_000_000_000_000_000_000),
+                u256_from_u64(1_500_000),
+            ),
+            _ => (u256_from_u64(1_500_000), u256_from_u64(1_000_000)),
+        };
+        let mut tx = envelope(137, QUICKSWAP_ROUTER);
+        if native_input {
+            tx.value = u256_from_u64(1_000_000_000_000_000_000);
+        }
         for beneficiary in [address_one, address_two] {
             let calldata = quickswap_swap_calldata(
                 signature,
-                u256_from_u64(1_500_000),
-                u256_from_u64(1_000_000),
+                first,
+                second,
                 &path,
                 beneficiary,
                 u256_from_u64(2_000_000_000),
@@ -8700,25 +9155,114 @@ fn production_quickswap_special_beneficiaries_remain_literal() {
 }
 
 #[test]
+fn production_quickswap_invalid_native_endpoint_is_exact_but_contract_reverts() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let wrong_endpoint_path = [TOKEN_IN, TOKEN_OUT];
+
+    // The pinned router requires path[0] == WMATIC for native-input swaps and
+    // path[-1] == WMATIC for native-output swaps. The authenticated generic
+    // address[] IR has no protocol-specific literal endpoint predicate. It
+    // therefore shows both wrong signed addresses exactly; the deployed
+    // contract then rejects the request with INVALID_PATH.
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
+    ] {
+        let native_input = signature == QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS;
+        let (first, second) = match signature {
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE => (
+                u256_from_u64(1_500_000),
+                u256_from_u64(1_000_000_000_000_000_000),
+            ),
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS => (u256_from_u64(1_000_000), U256::default()),
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => (
+                u256_from_u64(1_000_000_000_000_000_000),
+                u256_from_u64(1_500_000),
+            ),
+            _ => unreachable!(),
+        };
+        let calldata = quickswap_swap_calldata(
+            signature,
+            first,
+            second,
+            &wrong_endpoint_path,
+            [0x33; 20],
+            u256_from_u64(2_000_000_000),
+        );
+        let mut tx = envelope(137, QUICKSWAP_ROUTER);
+        if native_input {
+            tx.value = u256_from_u64(1_000_000_000_000_000_000);
+        }
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .expect("wrong WMATIC endpoint renders exactly before source-level revert");
+        assert_complete_route_pages(&rendered.pages, &wrong_endpoint_path);
+        assert!(rendered
+            .transcript_receipt
+            .range_matches(&rendered.pages, 0));
+    }
+}
+
+#[test]
 fn production_quickswap_one_token_route_is_exact_but_guaranteed_to_revert() {
     let registry = build_registry();
     let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
     let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
-    let tx = envelope(137, QUICKSWAP_ROUTER);
     let resolver = NameResolver::new();
     let signer = [0x44; 20];
-    let one = [TOKEN_IN];
 
     // The deployed V2 router requires path.length >= 2 and therefore reverts
     // this call. The generic canonical address[] renderer intentionally has no
     // protocol-specific minimum-count guard: it still shows the one signed
-    // address exactly, and both endpoint tokenPaths bind to that same address.
-    for signature in [QUICKSWAP_SWAP_EXACT_TOKENS, QUICKSWAP_SWAP_TOKENS_FOR_EXACT] {
+    // address exactly. Every tokenAmount endpoint binds to that same address.
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
+    ] {
+        let native_input = signature == QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS;
+        let one = [
+            if matches!(
+                signature,
+                QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE
+                    | QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS
+                    | QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE
+            ) {
+                QUICKSWAP_WMATIC
+            } else {
+                TOKEN_IN
+            },
+        ];
+        let (first, second) = match signature {
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS => (u256_from_u64(1_000_000), U256::default()),
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE => (
+                u256_from_u64(1_500_000),
+                u256_from_u64(1_000_000_000_000_000_000),
+            ),
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => (
+                u256_from_u64(1_000_000_000_000_000_000),
+                u256_from_u64(1_500_000),
+            ),
+            _ => (u256_from_u64(1_500_000), u256_from_u64(1_000_000)),
+        };
+        let mut tx = envelope(137, QUICKSWAP_ROUTER);
+        if native_input {
+            tx.value = u256_from_u64(1_000_000_000_000_000_000);
+        }
         let calldata = quickswap_swap_calldata(
             signature,
-            u256_from_u64(1_500_000),
-            u256_from_u64(1_000_000),
+            first,
+            second,
             &one,
             [0x33; 20],
             u256_from_u64(2_000_000_000),
@@ -8734,32 +9278,78 @@ fn production_quickswap_one_token_route_is_exact_but_guaranteed_to_revert() {
             .iter()
             .filter(|page| row_str(&page[0]) == "Token (UNVERIFI~")
             .count();
+        let expected_identity_pages = usize::from(matches!(
+            signature,
+            QUICKSWAP_SWAP_EXACT_TOKENS | QUICKSWAP_SWAP_TOKENS_FOR_EXACT
+        )) + 1;
         assert_eq!(
-            identity_pages, 2,
-            "both amount endpoints must expose the sole signed token identity"
+            identity_pages, expected_identity_pages,
+            "every tokenAmount endpoint must expose the sole signed token identity"
         );
     }
 }
 
 #[test]
-fn production_quickswap_token_multihop_noncanonical_framing_refuses() {
+fn production_quickswap_multihop_noncanonical_framing_refuses() {
     let registry = build_registry();
     let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
     let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
-    let tx = envelope(137, QUICKSWAP_ROUTER);
     let resolver = NameResolver::new();
     let signer = [0x44; 20];
-    let path = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
-    let render = |calldata: &[u8]| {
-        render_erc7730_pages_with_signer_checked(&tx, calldata, &verified, None, &resolver, &signer)
-    };
 
-    for signature in [QUICKSWAP_SWAP_EXACT_TOKENS, QUICKSWAP_SWAP_TOKENS_FOR_EXACT] {
+    for signature in [
+        QUICKSWAP_SWAP_EXACT_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT,
+        QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE,
+        QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS,
+        QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE,
+    ] {
+        let native_input = signature == QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS;
+        let native_output = matches!(
+            signature,
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE | QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE
+        );
+        let path = if native_input {
+            [QUICKSWAP_WMATIC, TOKEN_MID, TOKEN_OUT]
+        } else if native_output {
+            [TOKEN_IN, TOKEN_MID, QUICKSWAP_WMATIC]
+        } else {
+            [TOKEN_IN, TOKEN_MID, TOKEN_OUT]
+        };
+        let (first, second, head_words, path_word, beneficiary_word) = match signature {
+            QUICKSWAP_SWAP_EXACT_NATIVE_FOR_TOKENS => {
+                (u256_from_u64(1_000_000), U256::default(), 4, 1, 2)
+            }
+            QUICKSWAP_SWAP_EXACT_TOKENS_FOR_NATIVE => (
+                u256_from_u64(1_500_000),
+                u256_from_u64(1_000_000_000_000_000_000),
+                5,
+                2,
+                3,
+            ),
+            QUICKSWAP_SWAP_TOKENS_FOR_EXACT_NATIVE => (
+                u256_from_u64(1_000_000_000_000_000_000),
+                u256_from_u64(1_500_000),
+                5,
+                2,
+                3,
+            ),
+            _ => (u256_from_u64(1_500_000), u256_from_u64(1_000_000), 5, 2, 3),
+        };
+        let mut tx = envelope(137, QUICKSWAP_ROUTER);
+        if native_input {
+            tx.value = u256_from_u64(1_000_000_000_000_000_000);
+        }
+        let render = |calldata: &[u8]| {
+            render_erc7730_pages_with_signer_checked(
+                &tx, calldata, &verified, None, &resolver, &signer,
+            )
+        };
         let baseline = quickswap_swap_calldata(
             signature,
-            u256_from_u64(1_500_000),
-            u256_from_u64(1_000_000),
+            first,
+            second,
             &path,
             [0x33; 20],
             u256_from_u64(2_000_000_000),
@@ -8768,19 +9358,24 @@ fn production_quickswap_token_multihop_noncanonical_framing_refuses() {
 
         let empty = quickswap_swap_calldata(
             signature,
-            u256_from_u64(1_500_000),
-            u256_from_u64(1_000_000),
+            first,
+            second,
             &[],
             [0x33; 20],
             u256_from_u64(2_000_000_000),
         );
         assert!(render(&empty).is_err(), "empty endpoint path must refuse");
 
-        let nine = [[0x77; 20]; 9];
+        let mut nine = [[0x77; 20]; 9];
+        if native_input {
+            nine[0] = QUICKSWAP_WMATIC;
+        } else if native_output {
+            nine[8] = QUICKSWAP_WMATIC;
+        }
         let over_cap = quickswap_swap_calldata(
             signature,
-            u256_from_u64(1_500_000),
-            u256_from_u64(1_000_000),
+            first,
+            second,
             &nine,
             [0x33; 20],
             u256_from_u64(2_000_000_000),
@@ -8790,20 +9385,25 @@ fn production_quickswap_token_multihop_noncanonical_framing_refuses() {
             "nine route elements exceed the review cap"
         );
 
-        let offset_word = 4 + 2 * 32;
-        for (offset, case) in [(128u64, "head alias"), (161, "misaligned"), (192, "gap")] {
+        let offset_word = 4 + path_word * 32;
+        let canonical_offset = (head_words * 32) as u64;
+        for (offset, case) in [
+            (canonical_offset - 32, "head alias"),
+            (canonical_offset + 1, "misaligned"),
+            (canonical_offset + 32, "gap"),
+        ] {
             let mut malformed = baseline.clone();
             malformed[offset_word..offset_word + 32].copy_from_slice(&u256_from_u64(offset).0);
             assert!(render(&malformed).is_err(), "{case} offset must refuse");
         }
 
         let mut dirty_beneficiary = baseline.clone();
-        dirty_beneficiary[4 + 3 * 32] = 1;
+        dirty_beneficiary[4 + beneficiary_word * 32] = 1;
         assert!(
             render(&dirty_beneficiary).is_err(),
             "dirty beneficiary padding must refuse"
         );
-        let path_start = 4 + 5 * 32 + 32;
+        let path_start = 4 + head_words * 32 + 32;
         for index in 0..path.len() {
             let mut dirty_path = baseline.clone();
             dirty_path[path_start + index * 32] = 1;
@@ -8814,7 +9414,7 @@ fn production_quickswap_token_multihop_noncanonical_framing_refuses() {
         }
 
         assert!(
-            render(&baseline[..4 + 5 * 32 - 1]).is_err(),
+            render(&baseline[..4 + head_words * 32 - 1]).is_err(),
             "truncated static head must refuse"
         );
         let mut short_tail = baseline.clone();

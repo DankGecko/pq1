@@ -41,7 +41,7 @@ const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
 // The upstream fixture bytes remain test-only and outside the catalogue. This
 // root changes only when the separately curated production descriptors do.
-const PROD_ROOT_HEX: &str = "2f50cd1ebef6b9532a2017fdf6aa95b808ff4355440a1510d8e164bdbebc6ae5";
+const PROD_ROOT_HEX: &str = "5a2e1dd05f5d3331a04611afc8184d9bfe43a71f0f5d9986eee4a4c3740bf2f3";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -927,18 +927,24 @@ fn upstream_fixture_targets_are_inventoried_at_format_granularity() {
         );
     }
 
-    for selector in [[0x38, 0xed, 0x17, 0x39], [0x88, 0x03, 0xdb, 0xee]] {
-        let quickswap_token_route = FormatKey {
+    for selector in [
+        [0x38, 0xed, 0x17, 0x39],
+        [0x88, 0x03, 0xdb, 0xee],
+        [0x18, 0xcb, 0xaf, 0xe5],
+        [0x7f, 0xf3, 0x6a, 0xb5],
+        [0x4a, 0x25, 0xd9, 0x4a],
+    ] {
+        let quickswap_standard_route = FormatKey {
             source: PathBuf::from("quickswap/calldata-QuickSwap.json"),
             id: FormatId::Calldata(selector),
         };
         assert!(
-            !fixture_targets.contains(&quickswap_token_route),
+            !fixture_targets.contains(&quickswap_standard_route),
             "QuickSwap has no pinned upstream positive for this selector; do not invent fixture coverage"
         );
         assert!(
-            accepted.contains(&quickswap_token_route),
-            "the complete QuickSwap token route must be admitted explicitly despite the honest fixture gap"
+            accepted.contains(&quickswap_standard_route),
+            "the complete QuickSwap standard route must be admitted explicitly despite the honest fixture gap"
         );
     }
 
@@ -969,7 +975,7 @@ fn upstream_fixture_targets_are_inventoried_at_format_granularity() {
 }
 
 #[test]
-fn quickswap_fixture_gap_still_has_merkle_verified_full_route_conformance() {
+fn quickswap_fixture_gap_still_has_merkle_verified_standard_route_conformance() {
     const ROUTER: [u8; 20] = [
         0xa5, 0xe0, 0x82, 0x9c, 0xac, 0xed, 0x8f, 0xfd, 0xd4, 0xde, 0x3c, 0x43, 0x69, 0x6c, 0x57,
         0xf7, 0xd7, 0xa6, 0x78, 0xff,
@@ -1005,6 +1011,26 @@ fn quickswap_fixture_gap_still_has_merkle_verified_full_route_conformance() {
         out.extend_from_slice(&word(first));
         out.extend_from_slice(&word(second));
         out.extend_from_slice(&word(5 * 32));
+        out.extend_from_slice(&address_word(beneficiary));
+        out.extend_from_slice(&word(deadline));
+        out.extend_from_slice(&word(path.len() as u64));
+        for address in path {
+            out.extend_from_slice(&address_word(*address));
+        }
+        out
+    }
+    fn eth_input_calldata(
+        signature: &str,
+        amount_out_min: u64,
+        path: &[[u8; 20]],
+        beneficiary: [u8; 20],
+        deadline: u64,
+    ) -> Vec<u8> {
+        let selector = keccak256(signature.as_bytes());
+        let mut out = Vec::with_capacity(4 + (5 + path.len()) * 32);
+        out.extend_from_slice(&selector[..4]);
+        out.extend_from_slice(&word(amount_out_min));
+        out.extend_from_slice(&word(4 * 32));
         out.extend_from_slice(&address_word(beneficiary));
         out.extend_from_slice(&word(deadline));
         out.extend_from_slice(&word(path.len() as u64));
@@ -1090,6 +1116,115 @@ fn quickswap_fixture_gap_still_has_merkle_verified_full_route_conformance() {
         consume_normalized_token(&rows, &mut cursor, second_label);
         consume_normalized_token(&rows, &mut cursor, &second.to_string());
         consume_full_address(&rows, &mut cursor, &second_token);
+        consume_normalized_token(&rows, &mut cursor, "Route");
+        consume_normalized_token(&rows, &mut cursor, "3 items");
+        for token in path {
+            consume_normalized_token(&rows, &mut cursor, "Route");
+            consume_full_address(&rows, &mut cursor, &token);
+        }
+        consume_normalized_token(&rows, &mut cursor, "Beneficiary");
+        consume_full_address(&rows, &mut cursor, &beneficiary);
+        consume_normalized_token(&rows, &mut cursor, "Deadline");
+        consume_normalized_token(&rows, &mut cursor, "2033-05-18");
+        consume_normalized_token(&rows, &mut cursor, "03:33:20 UTC");
+    }
+
+    const EXACT_TOKENS_FOR_NATIVE: &str =
+        "swapExactTokensForETH(uint256,uint256,address[],address,uint256)";
+    const EXACT_NATIVE_FOR_TOKENS: &str =
+        "swapExactETHForTokens(uint256,address[],address,uint256)";
+    const TOKENS_FOR_EXACT_NATIVE: &str =
+        "swapTokensForExactETH(uint256,uint256,address[],address,uint256)";
+    let one_native = 1_000_000_000_000_000_000u64;
+    let one_and_half_native = 1_500_000_000_000_000_000u64;
+    let render_native = |signature: &str, call: &[u8], native_value: u64| {
+        let tx = Eip1559Tx {
+            chain_id: 137,
+            to: Some(ROUTER),
+            value: U256(word(native_value)),
+            ..Eip1559Tx::default()
+        };
+        let selector: [u8; 4] = call[..4].try_into().expect("selector width");
+        assert!(
+            verified
+                .ir
+                .find_format_by_selector(&selector)
+                .expect("QuickSwap format table parses")
+                .is_some(),
+            "admitted native QuickSwap selector: {signature}"
+        );
+        render_erc7730_pages_with_signer_checked(&tx, call, &verified, None, &resolver, &signer)
+            .unwrap_or_else(|error| panic!("render admitted QuickSwap {signature}: {error:?}"))
+    };
+
+    let native_cases = [
+        (
+            EXACT_TOKENS_FOR_NATIVE,
+            calldata(
+                EXACT_TOKENS_FOR_NATIVE,
+                1_500_000,
+                one_native,
+                &path,
+                beneficiary,
+                2_000_000_000,
+            ),
+            0,
+            [
+                ("Amount to Send", "1500000", Some(TOKEN_IN)),
+                ("Minimum to Rece~", "1 POL", None),
+            ],
+        ),
+        (
+            EXACT_NATIVE_FOR_TOKENS,
+            eth_input_calldata(
+                EXACT_NATIVE_FOR_TOKENS,
+                1_000_000,
+                &path,
+                beneficiary,
+                2_000_000_000,
+            ),
+            one_and_half_native,
+            [
+                ("Amount to Send", "1.5 POL", None),
+                ("Minimum to Rece~", "1000000", Some(TOKEN_OUT)),
+            ],
+        ),
+        (
+            TOKENS_FOR_EXACT_NATIVE,
+            calldata(
+                TOKENS_FOR_EXACT_NATIVE,
+                one_native,
+                1_500_000,
+                &path,
+                beneficiary,
+                2_000_000_000,
+            ),
+            0,
+            [
+                ("Amount to Recei~", "1 POL", None),
+                ("Maximum to Send", "1500000", Some(TOKEN_IN)),
+            ],
+        ),
+    ];
+
+    for (signature, call, native_value, amount_rows) in native_cases {
+        assert_eq!(&call[..4], &keccak256(signature.as_bytes())[..4]);
+        let rendered = render_native(signature, &call, native_value);
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "QuickSwap native transcript receipt must bind every page"
+        );
+        let rows = normalized_rows(&rendered.pages);
+        let mut cursor = 0usize;
+        for (label, amount, token) in amount_rows {
+            consume_normalized_token(&rows, &mut cursor, label);
+            consume_normalized_token(&rows, &mut cursor, amount);
+            if let Some(token) = token {
+                consume_full_address(&rows, &mut cursor, &token);
+            }
+        }
         consume_normalized_token(&rows, &mut cursor, "Route");
         consume_normalized_token(&rows, &mut cursor, "3 items");
         for token in path {

@@ -1,6 +1,6 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
-  "_curation_note": "PQSigner semantic curation: the two token-to-token swap routes show both bounded token amounts, the complete ordered path, literal beneficiary, and deadline; three all-static remove-liquidity routes show the exact raw LP-token quantity consumed in addition to both minimum outputs, token identities, beneficiary, and deadline. ETH swaps, fee-on-transfer swaps, permit-bearing routes, and other dynamic-path routes remain refused. See tests/erc7730-semantic-evidence/quickswap-router02-remove-liquidity.",
+  "_curation_note": "PQSigner semantic curation: five standard token/native swap routes show both bounded amounts, the complete ordered path, literal beneficiary, and deadline; three all-static remove-liquidity routes show the exact raw LP-token quantity consumed in addition to both minimum outputs, token identities, beneficiary, and deadline. The two source-defined swaps absent from the upstream descriptor are declared only so the exact known-call filter hard-refuses them without a descriptor: no clear-sign authority is granted. Fee-on-transfer swaps, permit-bearing routes, and other dynamic-path routes remain refused. See tests/erc7730-semantic-evidence/quickswap-router02-remove-liquidity.",
   "context": {
     "$id": "QuickSwap",
     "contract": { "deployments": [{ "chainId": 137, "address": "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff" }] }
@@ -60,6 +60,13 @@
           },
           { "path": "amountOutMin", "label": "Minimum to Receive", "format": "amount", "visible": "always" },
           {
+            "path": "path.[]",
+            "label": "Route",
+            "format": "addressName",
+            "params": { "types": ["token"] },
+            "visible": "always"
+          },
+          {
             "path": "to",
             "label": "Beneficiary",
             "format": "addressName",
@@ -79,6 +86,13 @@
             "label": "Minimum to Receive",
             "format": "tokenAmount",
             "params": { "tokenPath": "path.[-1]" },
+            "visible": "always"
+          },
+          {
+            "path": "path.[]",
+            "label": "Route",
+            "format": "addressName",
+            "params": { "types": ["token"] },
             "visible": "always"
           },
           {
@@ -154,6 +168,28 @@
           { "path": "deadline", "label": "Deadline", "format": "date", "params": { "encoding": "timestamp" } }
         ]
       },
+      "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)": {
+        "$id": "swapExactTokensForETHSupportingFeeOnTransferTokens",
+        "intent": "Swap",
+        "fields": [
+          {
+            "path": "amountIn",
+            "label": "Amount to Send",
+            "format": "tokenAmount",
+            "params": { "tokenPath": "path.[0]" },
+            "visible": "always"
+          },
+          { "path": "amountOutMin", "label": "Minimum to Receive", "format": "amount", "visible": "always" },
+          {
+            "path": "to",
+            "label": "Beneficiary",
+            "format": "addressName",
+            "params": { "types": ["eoa"], "sources": ["local", "ens"] },
+            "visible": "always"
+          },
+          { "path": "deadline", "label": "Deadline", "format": "date", "params": { "encoding": "timestamp" } }
+        ]
+      },
       "swapTokensForExactETH(uint256 amountOut, uint256 amountInMax, address[] path, address to, uint256 deadline)": {
         "$id": "swapTokensForExactETH",
         "intent": "Swap",
@@ -164,6 +200,35 @@
             "label": "Maximum to Send",
             "format": "tokenAmount",
             "params": { "tokenPath": "path.[0]" },
+            "visible": "always"
+          },
+          {
+            "path": "path.[]",
+            "label": "Route",
+            "format": "addressName",
+            "params": { "types": ["token"] },
+            "visible": "always"
+          },
+          {
+            "path": "to",
+            "label": "Beneficiary",
+            "format": "addressName",
+            "params": { "types": ["eoa"], "sources": ["local", "ens"] },
+            "visible": "always"
+          },
+          { "path": "deadline", "label": "Deadline", "format": "date", "params": { "encoding": "timestamp" } }
+        ]
+      },
+      "swapETHForExactTokens(uint256 amountOut, address[] path, address to, uint256 deadline)": {
+        "$id": "swapETHForExactTokens",
+        "intent": "Swap",
+        "fields": [
+          { "path": "@.value", "label": "Maximum to Send", "format": "amount" },
+          {
+            "path": "amountOut",
+            "label": "Amount to Receive",
+            "format": "tokenAmount",
+            "params": { "tokenPath": "path.[-1]" },
             "visible": "always"
           },
           {

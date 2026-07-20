@@ -384,9 +384,9 @@
   },
   "expected_catalogue": {
     "entries": 435,
-    "root": "0x2f50cd1ebef6b9532a2017fdf6aa95b808ff4355440a1510d8e164bdbebc6ae5",
-    "known_calls": 4544,
-    "known_call_set_sha256": "0x593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781",
-    "known_call_bloom_sha256": "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628"
+    "root": "0x5a2e1dd05f5d3331a04611afc8184d9bfe43a71f0f5d9986eee4a4c3740bf2f3",
+    "known_calls": 4546,
+    "known_call_set_sha256": "0x7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555",
+    "known_call_bloom_sha256": "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984"
   }
 }

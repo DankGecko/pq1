@@ -1,17 +1,29 @@
 # QuickSwap V2 Router02 constrained-route evidence
 
-This offline bundle binds PQ1's constrained ERC-7730 admission of five routes
+This offline bundle binds PQ1's constrained ERC-7730 admission of eight routes
 on Polygon's canonical QuickSwap V2 Router02 deployment:
 
 - three all-static, non-permit remove-liquidity routes; and
-- exactly `swapExactTokensForTokens(uint256,uint256,address[],address,uint256)`
-  and `swapTokensForExactTokens(uint256,uint256,address[],address,uint256)`.
+- two token-to-token multi-hop swaps; and
+- exactly three standard native-asset swaps:
+  `swapExactETHForTokens(uint256,address[],address,uint256)`,
+  `swapExactTokensForETH(uint256,uint256,address[],address,uint256)`, and
+  `swapTokensForExactETH(uint256,uint256,address[],address,uint256)`.
 
-The two swaps are the classic deadline-bearing five-argument Router02
-functions, selectors `0x38ed1739` and `0x8803dbee`. They are distinct from
-Uniswap SwapRouter02's four-argument functions, selectors `0x472b43f3` and
-`0x42712a67`. The archived ABI subset preserves the pinned official source's
-input names, types, order, nonpayable mutability, and return values.
+The token-to-token swaps are the classic deadline-bearing five-argument
+Router02 functions, selectors `0x38ed1739` and `0x8803dbee`. They are distinct
+from Uniswap SwapRouter02's four-argument functions, selectors `0x472b43f3`
+and `0x42712a67`. The three native-asset selectors are `0x7ff36ab5`,
+`0x18cbafe5`, and `0x4a25d94a`, respectively. The archived ABI subset preserves
+the pinned official source's input names, types, order, payable/nonpayable
+mutability, and return values.
+
+Two additional source-defined routes are intentionally descriptor-declared
+only to enter the exact and Bloom known-call refusal sets:
+`swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)`
+(`0x791ac947`) and
+`swapETHForExactTokens(uint256,address[],address,uint256)` (`0xfb3bdb41`).
+They remain absent from trusted IR and gain no clear-sign authority.
 
 The runtime was captured by EIP-1898 block hash from independent public RPC
 fronts. The archived official QuickSwap source snapshot and build files match
@@ -35,6 +47,17 @@ The pinned router and library source establish all of the following:
   backwards through every hop, caps the first amount by `amountInMax`,
   transfers that live-state-derived input from `msg.sender`, and sends the
   final hop to the exact signed `to` address; and
+- `swapExactETHForTokens` is payable, requires `path[0] == WETH`, uses the exact
+  signed outer `msg.value` as its input, wraps it, enforces the signed token
+  `amountOutMin`, and sends the final token hop to the literal `to` address;
+- `swapExactTokensForETH` is nonpayable, requires the last path element to be
+  `WETH`, transfers the signed token `amountIn`, enforces the signed native
+  `amountOutMin`, unwraps the final WETH amount, and sends native currency to
+  the literal `to` address;
+- `swapTokensForExactETH` is nonpayable, requires the last path element to be
+  `WETH`, fixes the signed native `amountOut`, caps the live-state-derived token
+  input by `amountInMax`, unwraps the exact output, and sends native currency
+  to the literal `to` address; and
 - unlike SwapRouter02, the classic router has no special `address(1)` or
   `address(2)` recipient sentinels: `to` is always literal.
 
@@ -45,11 +68,16 @@ hops. Empty paths fail endpoint resolution. The generic array renderer has no
 per-format minimum-count predicate, so a canonical one-address path can render
 exactly even though the official router then reverts on its `path.length >= 2`
 check. Clear signing describes the signed request; it does not promise that
-live execution will succeed.
+live execution will succeed. The same boundary applies to native routes: the
+full signed route is shown, but the generic format has no authenticated
+per-format equality predicate for the pinned Polygon wrapped-native endpoint
+`0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270`. A wrong first or last endpoint
+therefore renders exactly and then reverts on the router's explicit WETH check.
 
 ## Honest live-state residuals
 
-The display binds the signed route, amounts/caps, beneficiary, and deadline.
+The display binds the signed route, amounts/caps, beneficiary, deadline, and,
+for `swapExactETHForTokens`, the exact signed outer native value.
 It cannot bind live reserves, pair/token code and behavior, balances,
 allowances, transfer taxes, miner/validator timestamp choice, or intervening
 state changes. In particular, `amountOutMin` and exact `amountOut` are gross
@@ -69,7 +97,10 @@ The fee-on-transfer removal variant also checks gross pair token output rather
 than the beneficiary's net post-tax receipt and transfers the router's entire
 selected-token balance, which can include dust, to the signed beneficiary.
 
-Permit-bearing removal routes and every other swap route remain known calls
-that hard-refuse clear signing. This bundle grants no authority to those
-routes, other deployments, fallback/blind signing, live-state success, hardware
-readiness, or shipment.
+Permit-bearing removal routes, fee-on-transfer swap routes, the refundable
+exact-output native-input route, and every other descriptor-declared swap route
+remain known calls that hard-refuse clear signing. The two refusal-only
+declarations above are catalogue inputs for that refusal behavior, not trusted
+display formats. This bundle grants no authority to those routes, other
+deployments, fallback/blind signing, live-state success, hardware readiness, or
+shipment.
