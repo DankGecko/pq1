@@ -88,6 +88,18 @@
   },
   {
     "type": "function",
+    "name": "swapETHForExactTokens",
+    "stateMutability": "payable",
+    "inputs": [
+      { "name": "amountOut", "type": "uint256" },
+      { "name": "path", "type": "address[]" },
+      { "name": "to", "type": "address" },
+      { "name": "deadline", "type": "uint256" }
+    ],
+    "outputs": [{ "name": "amounts", "type": "uint256[]" }]
+  },
+  {
+    "type": "function",
     "name": "swapExactTokensForETH",
     "stateMutability": "nonpayable",
     "inputs": [

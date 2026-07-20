@@ -226,9 +226,16 @@
           { "path": "@.value", "label": "Maximum to Send", "format": "amount" },
           {
             "path": "amountOut",
-            "label": "Amount to Receive",
+            "label": "Gross Output",
             "format": "tokenAmount",
             "params": { "tokenPath": "path.[-1]" },
+            "visible": "always"
+          },
+          {
+            "path": "path.[]",
+            "label": "Route",
+            "format": "addressName",
+            "params": { "types": ["token"] },
             "visible": "always"
           },
           {

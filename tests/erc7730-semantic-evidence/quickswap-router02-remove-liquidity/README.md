@@ -1,29 +1,29 @@
 # QuickSwap V2 Router02 constrained-route evidence
 
-This offline bundle binds PQ1's constrained ERC-7730 admission of eight routes
+This offline bundle binds PQ1's constrained ERC-7730 admission of nine routes
 on Polygon's canonical QuickSwap V2 Router02 deployment:
 
 - three all-static, non-permit remove-liquidity routes; and
 - two token-to-token multi-hop swaps; and
-- exactly three standard native-asset swaps:
+- exactly four selected native-asset swaps:
   `swapExactETHForTokens(uint256,address[],address,uint256)`,
+  `swapETHForExactTokens(uint256,address[],address,uint256)`,
   `swapExactTokensForETH(uint256,uint256,address[],address,uint256)`, and
   `swapTokensForExactETH(uint256,uint256,address[],address,uint256)`.
 
 The token-to-token swaps are the classic deadline-bearing five-argument
 Router02 functions, selectors `0x38ed1739` and `0x8803dbee`. They are distinct
 from Uniswap SwapRouter02's four-argument functions, selectors `0x472b43f3`
-and `0x42712a67`. The three native-asset selectors are `0x7ff36ab5`,
-`0x18cbafe5`, and `0x4a25d94a`, respectively. The archived ABI subset preserves
-the pinned official source's input names, types, order, payable/nonpayable
-mutability, and return values.
+and `0x42712a67`. The four native-asset selectors are `0x7ff36ab5`,
+`0xfb3bdb41`, `0x18cbafe5`, and `0x4a25d94a`, respectively. The archived ABI
+subset preserves the pinned official source's input names, types, order,
+payable/nonpayable mutability, and return values.
 
-Two additional source-defined routes are intentionally descriptor-declared
-only to enter the exact and Bloom known-call refusal sets:
+One additional source-defined route is intentionally descriptor-declared only
+to enter the exact and Bloom known-call refusal sets:
 `swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)`
-(`0x791ac947`) and
-`swapETHForExactTokens(uint256,address[],address,uint256)` (`0xfb3bdb41`).
-They remain absent from trusted IR and gain no clear-sign authority.
+(`0x791ac947`). It remains absent from trusted IR and gains no clear-sign
+authority.
 
 The runtime was captured by EIP-1898 block hash from independent public RPC
 fronts. The archived official QuickSwap source snapshot and build files match
@@ -50,6 +50,11 @@ The pinned router and library source establish all of the following:
 - `swapExactETHForTokens` is payable, requires `path[0] == WETH`, uses the exact
   signed outer `msg.value` as its input, wraps it, enforces the signed token
   `amountOutMin`, and sends the final token hop to the literal `to` address;
+- `swapETHForExactTokens` is payable, requires `path[0] == WETH`, fixes the
+  signed `amountOut` as the gross final pair transfer, derives the required
+  native input backwards from live reserves, requires that input to be at most
+  the signed outer `msg.value`, wraps only the required input, and refunds any
+  excess outer value to `msg.sender` before returning;
 - `swapExactTokensForETH` is nonpayable, requires the last path element to be
   `WETH`, transfers the signed token `amountIn`, enforces the signed native
   `amountOutMin`, unwraps the final WETH amount, and sends native currency to
@@ -63,6 +68,9 @@ The pinned router and library source establish all of the following:
 
 PQ1 therefore renders every signed `path` address as `Route`, in order, and
 uses the first and last signed elements as the input/output token identities.
+For `swapETHForExactTokens`, it labels the signed outer value `Maximum to Send`
+and the signed token amount `Gross Output`; it does not call that gross pair
+transfer the beneficiary's guaranteed net receipt.
 Paths above the device's eight-address review cap refuse instead of hiding
 hops. Empty paths fail endpoint resolution. The generic array renderer has no
 per-format minimum-count predicate, so a canonical one-address path can render
@@ -76,17 +84,21 @@ therefore renders exactly and then reverts on the router's explicit WETH check.
 
 ## Honest live-state residuals
 
-The display binds the signed route, amounts/caps, beneficiary, deadline, and,
-for `swapExactETHForTokens`, the exact signed outer native value.
+The display binds the signed route, amounts/caps, beneficiary, deadline, the
+exact signed outer native input for `swapExactETHForTokens`, and the signed
+outer native maximum for `swapETHForExactTokens`.
 It cannot bind live reserves, pair/token code and behavior, balances,
 allowances, transfer taxes, miner/validator timestamp choice, or intervening
 state changes. In particular, `amountOutMin` and exact `amountOut` are gross
 pair transfer amounts: a fee-on-transfer or otherwise non-standard output token
 can deliver less net value to the beneficiary. Exact-output's actual input is
 derived from live pair reserves and is only bounded by the displayed
-`amountInMax`. Malicious or non-standard tokens can also violate ordinary
-ERC-20 transfer assumptions. These residuals are not signed calldata and are
-not presented as guarantees.
+`amountInMax` or, for `swapETHForExactTokens`, `Maximum to Send`. Malicious or
+non-standard tokens can also violate ordinary ERC-20 transfer assumptions. For
+the refundable exact-output route, the actual native input and refund depend on
+those live reserves; only their signed upper bound and the exact gross output
+request are claimed. These residuals are not signed calldata and are not
+presented as guarantees.
 
 For remove-liquidity, `liquidity` is the exact LP-token base-unit quantity
 transferred to the derived pair and burned, but the pair identity and LP-token
@@ -97,10 +109,9 @@ The fee-on-transfer removal variant also checks gross pair token output rather
 than the beneficiary's net post-tax receipt and transfers the router's entire
 selected-token balance, which can include dust, to the signed beneficiary.
 
-Permit-bearing removal routes, fee-on-transfer swap routes, the refundable
-exact-output native-input route, and every other descriptor-declared swap route
-remain known calls that hard-refuse clear signing. The two refusal-only
-declarations above are catalogue inputs for that refusal behavior, not trusted
-display formats. This bundle grants no authority to those routes, other
-deployments, fallback/blind signing, live-state success, hardware readiness, or
-shipment.
+Permit-bearing removal routes, fee-on-transfer swap routes, and every other
+descriptor-declared swap route remain known calls that hard-refuse clear
+signing. The refusal-only declaration above is a catalogue input for that
+refusal behavior, not a trusted display format. This bundle grants no authority
+to those routes, other deployments, fallback/blind signing, live-state success,
+hardware readiness, or shipment.

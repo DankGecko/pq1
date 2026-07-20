@@ -5169,9 +5169,12 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
     );
     let mechanism = required_str(&manifest["policy"], "mechanism");
     for needle in [
-        "intentionally declared only to enter the exact and Bloom known-call refusal sets",
-        "remain absent from trusted IR",
-        "gain no clear-sign authority",
+        "exactly four selected native-asset swaps",
+        "shows the signed outer value as Maximum to Send",
+        "the exact signed amountOut as Gross Output",
+        "refunds any excess outer value to msg.sender",
+        "The source-defined 0x791ac947 route is intentionally declared only to enter the exact and Bloom known-call refusal sets",
+        "it remains absent from trusted IR and gains no clear-sign authority",
     ] {
         assert!(
             mechanism.contains(needle),
@@ -5206,16 +5209,32 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
     );
     assert_eq!(
         constraints["swap_mutability"].as_str(),
-        Some("swapExactETHForTokens_payable_all_other_admitted_swaps_nonpayable")
+        Some(
+            "swapExactETHForTokens_and_swapETHForExactTokens_payable_all_other_admitted_swaps_nonpayable"
+        )
+    );
+    assert_eq!(
+        constraints["refundable_native_input_policy"].as_str(),
+        Some(
+            "signed_outer_value_is_maximum_live_required_input_is_wrapped_excess_is_refunded_to_msg_sender"
+        )
+    );
+    assert_eq!(
+        constraints["exact_output_token_display_policy"].as_str(),
+        Some(
+            "signed_amount_out_is_exact_gross_pair_transfer_not_guaranteed_net_beneficiary_receipt"
+        )
     );
     assert_eq!(
         constraints["source_wrapped_native_endpoint"].as_str(),
         Some("0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270")
     );
-    assert_eq!(
-        constraints["source_native_endpoint_policy"]["swapExactETHForTokens"].as_str(),
-        Some("path[0]")
-    );
+    for route in ["swapExactETHForTokens", "swapETHForExactTokens"] {
+        assert_eq!(
+            constraints["source_native_endpoint_policy"][route].as_str(),
+            Some("path[0]")
+        );
+    }
     for route in ["swapExactTokensForETH", "swapTokensForExactETH"] {
         assert_eq!(
             constraints["source_native_endpoint_policy"][route].as_str(),
@@ -5250,6 +5269,10 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
         "wrapped-native address",
         "invalid endpoint",
         "exact signed outer native value",
+        "signed outer value as a maximum",
+        "refunds the excess to msg.sender",
+        "exact signed amountout as gross output",
+        "does not promise the beneficiary's net receipt",
         "exact and bloom known-call refusal",
         "absent from trusted ir",
         "no clear-sign authority",
@@ -5262,7 +5285,7 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
     );
     for needle in [
         "selectors `0x38ed1739` and `0x8803dbee`",
-        "native-asset selectors are `0x7ff36ab5`, `0x18cbafe5`, and `0x4a25d94a`",
+        "native-asset selectors are `0x7ff36ab5`, `0xfb3bdb41`, `0x18cbafe5`, and `0x4a25d94a`",
         "every `path` element selects a token",
         "requires `path[0] == WETH`",
         "requires the last path element to be `WETH`",
@@ -5271,8 +5294,10 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
         "A wrong first or last endpoint therefore renders exactly and then reverts",
         "fee-on-transfer or otherwise non-standard output token can deliver less net value",
         "Clear signing describes the signed request; it does not promise that live execution will succeed",
-        "`0x791ac947`) and `swapETHForExactTokens(uint256,address[],address,uint256)` (`0xfb3bdb41`)",
-        "They remain absent from trusted IR and gain no clear-sign authority",
+        "labels the signed outer value `Maximum to Send` and the signed token amount `Gross Output`",
+        "refunds any excess outer value to `msg.sender`",
+        "signed `amountOut` as the gross final pair transfer",
+        "(`0x791ac947`). It remains absent from trusted IR and gains no clear-sign authority",
     ] {
         assert!(
             review_text.contains(needle),
@@ -5296,7 +5321,7 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
     let admitted_specs = manifest["policy"]["admitted_routes"]
         .as_array()
         .expect("admitted route array");
-    assert_eq!(admitted_specs.len(), 8);
+    assert_eq!(admitted_specs.len(), 9);
     let mut admitted = BTreeMap::<String, [u8; 4]>::new();
     for route in admitted_specs {
         let signature = required_str(route, "canonical_signature");
@@ -5339,6 +5364,10 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
                 [0x7f, 0xf3, 0x6a, 0xb5],
             ),
             (
+                "swapETHForExactTokens(uint256,address[],address,uint256)".to_owned(),
+                [0xfb, 0x3b, 0xdb, 0x41],
+            ),
+            (
                 "swapExactTokensForETH(uint256,uint256,address[],address,uint256)"
                     .to_owned(),
                 [0x18, 0xcb, 0xaf, 0xe5],
@@ -5350,16 +5379,10 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
             ),
         ])
     );
-    let refusal_only_source_routes = BTreeMap::from([
-        (
-            "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
-            [0x79, 0x1a, 0xc9, 0x47],
-        ),
-        (
-            "swapETHForExactTokens(uint256,address[],address,uint256)",
-            [0xfb, 0x3b, 0xdb, 0x41],
-        ),
-    ]);
+    let refusal_only_source_routes = BTreeMap::from([(
+        "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
+        [0x79, 0x1a, 0xc9, 0x47],
+    )]);
 
     let runtime_spec = &manifest["runtime"];
     let runtime_file = evidence.join(required_str(runtime_spec, "file"));
@@ -5724,6 +5747,7 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
     );
 
     let abi_spec = &manifest["abi"];
+    assert_eq!(abi_spec["routes"].as_u64(), Some(9));
     let abi_bytes = fs::read(evidence.join(required_str(abi_spec, "archive_file")))
         .expect("read QuickSwap route ABI");
     assert_eq!(
@@ -5732,7 +5756,7 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
     );
     let abi: Value = serde_json::from_slice(&abi_bytes).expect("parse QuickSwap route ABI");
     let abi_entries = abi.as_array().expect("QuickSwap route ABI array");
-    assert_eq!(abi_entries.len(), 8);
+    assert_eq!(abi_entries.len(), 9);
     let mut abi_signatures = BTreeSet::new();
     for entry in abi_entries {
         assert_eq!(entry["type"].as_str(), Some("function"));
@@ -5781,6 +5805,12 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
                 ],
                 "swapExactETHForTokens(uint256,address[],address,uint256)" => &[
                     ("amountOutMin", "uint256"),
+                    ("path", "address[]"),
+                    ("to", "address"),
+                    ("deadline", "uint256"),
+                ],
+                "swapETHForExactTokens(uint256,address[],address,uint256)" => &[
+                    ("amountOut", "uint256"),
                     ("path", "address[]"),
                     ("to", "address"),
                     ("deadline", "uint256"),
@@ -5839,7 +5869,7 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
         assert_eq!(fields[0]["visible"].as_str(), Some("always"));
     }
 
-    let swap_display_shapes: [(&str, [(&str, &str, &str); 5]); 5] = [
+    let swap_display_shapes: [(&str, [(&str, &str, &str); 5]); 6] = [
         (
             "swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)",
             [
@@ -5865,6 +5895,16 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
             [
                 ("@.value", "Amount to Send", "amount"),
                 ("amountOutMin", "Minimum to Receive", "tokenAmount"),
+                ("path.[]", "Route", "addressName"),
+                ("to", "Beneficiary", "addressName"),
+                ("deadline", "Deadline", "date"),
+            ],
+        ),
+        (
+            "swapETHForExactTokens(uint256 amountOut, address[] path, address to, uint256 deadline)",
+            [
+                ("@.value", "Maximum to Send", "amount"),
+                ("amountOut", "Gross Output", "tokenAmount"),
                 ("path.[]", "Route", "addressName"),
                 ("to", "Beneficiary", "addressName"),
                 ("deadline", "Deadline", "date"),
@@ -5931,7 +5971,7 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
         assert_eq!(deadline["params"]["encoding"].as_str(), Some("timestamp"));
     }
 
-    let token_amount_bindings: [(&str, &[(&str, &str)]); 5] = [
+    let token_amount_bindings: [(&str, &[(&str, &str)]); 6] = [
         (
             "swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)",
             &[("amountIn", "path.[0]"), ("amountOutMin", "path.[-1]")],
@@ -5943,6 +5983,10 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
         (
             "swapExactETHForTokens(uint256 amountOutMin, address[] path, address to, uint256 deadline)",
             &[("amountOutMin", "path.[-1]")],
+        ),
+        (
+            "swapETHForExactTokens(uint256 amountOut, address[] path, address to, uint256 deadline)",
+            &[("amountOut", "path.[-1]")],
         ),
         (
             "swapExactTokensForETH(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)",
@@ -6006,12 +6050,13 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
         admitted["swapExactTokensForTokens(uint256,uint256,address[],address,uint256)"],
         admitted["swapTokensForExactTokens(uint256,uint256,address[],address,uint256)"],
         admitted["swapExactETHForTokens(uint256,address[],address,uint256)"],
+        admitted["swapETHForExactTokens(uint256,address[],address,uint256)"],
         admitted["swapExactTokensForETH(uint256,uint256,address[],address,uint256)"],
         admitted["swapTokensForExactETH(uint256,uint256,address[],address,uint256)"],
     ]);
     assert_eq!(
         admitted_ir, expected_ir,
-        "only the two liquidity adds, three reviewed removals, two token swaps, and three native swaps are admitted"
+        "only the two liquidity adds, three reviewed removals, two token swaps, and four native swaps are admitted"
     );
 
     for route in admitted_specs
@@ -6139,6 +6184,14 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
                     Some(token_endpoint_path(true)),
                 ),
             ],
+            "refundable_max_native_input_exact_gross_token_output_multihop_swap" => [
+                (FormatOp::Amount, container_value_path(), None),
+                (
+                    FormatOp::TokenAmount,
+                    structured_amount_path(0),
+                    Some(token_endpoint_path(true)),
+                ),
+            ],
             "exact_token_input_native_output_multihop_swap" => [
                 (
                     FormatOp::TokenAmount,
@@ -6239,7 +6292,7 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
     let excluded_routes = manifest["policy"]["excluded_routes"]
         .as_array()
         .expect("excluded route array");
-    assert_eq!(excluded_routes.len(), 7);
+    assert_eq!(excluded_routes.len(), 6);
     assert_eq!(
         excluded_routes
             .iter()
@@ -6252,7 +6305,6 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
             "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
             "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)",
             "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
-            "swapETHForExactTokens(uint256,address[],address,uint256)",
         ])
     );
     for route in excluded_routes {

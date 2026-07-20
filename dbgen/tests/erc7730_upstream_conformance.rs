@@ -41,7 +41,7 @@ const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
 // The upstream fixture bytes remain test-only and outside the catalogue. This
 // root changes only when the separately curated production descriptors do.
-const PROD_ROOT_HEX: &str = "bb58ecae79875d1882d3d257913cca93e3b151f48cf4af8e3de8567ded86c315";
+const PROD_ROOT_HEX: &str = "b4ec673c1f4ed4488f304d4b75d554e6c0c676742eb788f9c2ef15aba878a9de";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -932,6 +932,7 @@ fn upstream_fixture_targets_are_inventoried_at_format_granularity() {
         [0x88, 0x03, 0xdb, 0xee],
         [0x18, 0xcb, 0xaf, 0xe5],
         [0x7f, 0xf3, 0x6a, 0xb5],
+        [0xfb, 0x3b, 0xdb, 0x41],
         [0x4a, 0x25, 0xd9, 0x4a],
     ] {
         let quickswap_standard_route = FormatKey {
@@ -1133,6 +1134,8 @@ fn quickswap_fixture_gap_still_has_merkle_verified_standard_route_conformance() 
         "swapExactTokensForETH(uint256,uint256,address[],address,uint256)";
     const EXACT_NATIVE_FOR_TOKENS: &str =
         "swapExactETHForTokens(uint256,address[],address,uint256)";
+    const NATIVE_FOR_EXACT_TOKENS: &str =
+        "swapETHForExactTokens(uint256,address[],address,uint256)";
     const TOKENS_FOR_EXACT_NATIVE: &str =
         "swapTokensForExactETH(uint256,uint256,address[],address,uint256)";
     let one_native = 1_000_000_000_000_000_000u64;
@@ -1187,6 +1190,21 @@ fn quickswap_fixture_gap_still_has_merkle_verified_standard_route_conformance() 
             [
                 ("Amount to Send", "1.5 POL", None),
                 ("Minimum to Rece~", "1000000", Some(TOKEN_OUT)),
+            ],
+        ),
+        (
+            NATIVE_FOR_EXACT_TOKENS,
+            eth_input_calldata(
+                NATIVE_FOR_EXACT_TOKENS,
+                1_000_000,
+                &path,
+                beneficiary,
+                2_000_000_000,
+            ),
+            one_and_half_native,
+            [
+                ("Maximum to Send", "1.5 POL", None),
+                ("Gross Output", "1000000", Some(TOKEN_OUT)),
             ],
         ),
         (
