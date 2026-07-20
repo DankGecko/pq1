@@ -45,7 +45,7 @@ Current security contract:
   zero/sign extension before publishing trusted clear-signing pages; full-width
   `uint256`/`int256` words remain unchanged.
 - The current regenerated development catalogue has **450 leaves**, root
-  `120a49d4679f92e9991d95982c8f5e848aa709a4de26c3c299e0dfcf0f73835e`,
+  `e767a5f977d35af3137515cfbacbcc740b27df61e996c753281bd6b0ed2be40a`,
   and **4,546 exact known-call tuples**. The tuple-set receipt is SHA-256
   `7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555`;
   Bloom occupancy is 28,261 / 131,072 bits under the compiler-enforced generation cap.

@@ -1,6 +1,6 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
-  "_curation_note": "PQSigner semantic curation: three all-static SessionManager routes show every signed operand with source-accurate intent. Target access renders both allow and disallow branches; Ownable2Step transferOwnership is labelled as a pending-owner update; dynamic and signature-bearing routes remain refused. See tests/erc7730-semantic-evidence/flyingtulip-sessionmanager.",
+  "_curation_note": "PQSigner semantic curation: three all-static SessionManager routes and one bounded dynamic target-list route show every signed operand with source-accurate intent. Target access renders both allow and disallow branches; setAllowedTargets renders at most eight ordered targets and refuses longer arrays; Ownable2Step transferOwnership is labelled as a pending-owner update; other dynamic and signature-bearing routes remain refused. See tests/erc7730-semantic-evidence/flyingtulip-sessionmanager.",
   "context": {
     "contract": {
       "deployments": [

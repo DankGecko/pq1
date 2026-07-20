@@ -5,9 +5,9 @@
   "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
   "descriptor": {
     "vendored_file": "secure/data/erc7730-registry/registry/flyingtulip/calldata-SessionManager.json",
-    "vendored_file_sha256": "87d64c8acc76adb75a473444b2e0266596b38ef4be72497e9ebcc5dac1e0739a",
+    "vendored_file_sha256": "dcb847584d82d692f196a1ea9acdc1534cd868c36aaa35bcb58afedbb3ca20b2",
     "curation_overlay": "secure/data/erc7730/curations/files/registry/flyingtulip/calldata-SessionManager.json",
-    "curation_overlay_sha256": "87d64c8acc76adb75a473444b2e0266596b38ef4be72497e9ebcc5dac1e0739a",
+    "curation_overlay_sha256": "dcb847584d82d692f196a1ea9acdc1534cd868c36aaa35bcb58afedbb3ca20b2",
     "deployments": [
       {
         "chain_id": 1,
