@@ -792,8 +792,15 @@ fn negative_request_unlock_zeroizes_pin_buffer_before_return() {
     // lingering plaintext PINs. The handler must `.zeroize()` the
     // PIN buffer after verify, no matter the outcome.
     assert!(
-        REQUEST_UNLOCK_SRC.contains("pin_copy.zeroize()"),
-        "cmd_request_unlock must zeroize the local PIN copy on every return path"
+        REQUEST_UNLOCK_SRC.contains("pin.zeroize()"),
+        "cmd_request_unlock must zeroize the PIN buffer on every return path"
+    );
+    // X17-TUI2 (playbook UI9): the wipe must target the ORIGINAL
+    // `[u8; 8]` binding. Zeroizing a `pin_copy` duplicate left the
+    // live PIN on the stack.
+    assert!(
+        !REQUEST_UNLOCK_SRC.contains("pin_copy"),
+        "cmd_request_unlock must zeroize the original PIN binding, not a copy (X17-TUI2)"
     );
 }
 

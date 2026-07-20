@@ -445,14 +445,25 @@ fn positive_confirm_long_button_semantics() {
     // demoted to "advance one page" so the user cannot authorise a signature
     // from page 0 without seeing the dispatcher-spliced value / gas / refund /
     // fingerprint pages. Mirrors the seed wizard's `seen_last` gate.
-    assert!(CONFIRM_SRC.contains("let mut seen_last = false;"));
-    assert!(CONFIRM_SRC.contains("seen_last = true;"));
-    assert!(CONFIRM_SRC.contains("if seen_last {"));
+    //
+    // F14/SCAFI-2: the gate variable itself is FI-hardened — a `FihBool`
+    // (complement-pair storage + double-read) consumed via the
+    // Hamming-distant `check_sentinel`, not a bare stack bool feeding a
+    // plain `if`. A single stuck-at/bit-flip on a plain bool made all
+    // reads return `true` and self-authorised the confirm.
+    assert!(CONFIRM_SRC.contains("let mut seen_last = crate::fih::FihBool::new_false();"));
+    assert!(CONFIRM_SRC.contains("seen_last.set_true();"));
+    assert!(CONFIRM_SRC.contains("seen_last.check_sentinel()"));
+    assert!(CONFIRM_SRC.contains("gate == crate::fi::OK_SENTINEL"));
+    assert!(
+        !CONFIRM_SRC.contains("let mut seen_last = false;"),
+        "F14/SCAFI-2: the scroll-to-end gate must not regress to a bare stack bool"
+    );
     // FI-hardened accept (UI1 / work-todo #12c): the affirmative branch borns
     // the sign-gate sentinel HERE, from `seen_last`, alongside the `Confirmed`
     // verdict — so the enum and the sentinel are two words set at the same
     // decision point. Dropping this un-hardens the confirm gate.
-    assert!(CONFIRM_SRC.contains("crate::fi::check_true_into_sentinel(|| seen_last)"));
+    assert!(CONFIRM_SRC.contains("return (ConfirmResult::Confirmed, gate);"));
     // A long-right before the end must NOT confirm — it advances instead.
     assert!(!CONFIRM_SRC
         .contains("(Button::Right, Press::Long) => return ConfirmResult::Confirmed,"));

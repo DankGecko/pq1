@@ -603,7 +603,7 @@ Production-ship is gated on Phases 0–5 (Phase 6 descoped 2026-07-07; its accep
 
 ## 13. Glossary and Cross-References
 
-- **BHK** — Boot Hardware Key. 32 B of TRNG in HDP-protected flash, loaded into TAMP backup registers at boot, SAES-only after lock. STM32U585 hardware feature.
+- **BHK** — Boot Hardware Key. 32 B of TRNG loaded into TAMP backup registers at boot, SAES-only after lock. STM32U585 hardware feature. "HDP-protected flash" storage is Trezor's pattern and a *deferred* PQSigner layer, not current: the ship profile sets `HDP1EN = HDP2EN = 0` and nothing in `secure/src` engages HDP, so the `bhk`-feature BHK sits in ordinary bank-1 flash page 126, DHUK-wrapped (tracked as the deferred HDP1 item, `EthereumPhone/PQ1` issue #39).
 - **CMSE** — Cortex-M Security Extensions. ARMv8-M's secure-gateway / `cmse-nonsecure-entry` veneer mechanism.
 - **DHUK** — Device Hardware Unique Key. Factory-fused 256-bit per-chip key in ST silicon. SAES-only access; at RDP0 is an ST-substituted constant shared across bench boards; per-die uniqueness only kicks in at RDP ≥ 1.
 - **GTZC** — Global TrustZone Controller. Per-peripheral S/NS attribution on STM32U5.

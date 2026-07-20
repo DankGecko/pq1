@@ -515,6 +515,17 @@ secure_aes}/stm32u5/` shows Trezor stacks three keys:
 | **BHK** | 32 B of device TRNG in HDP-protected flash page, loaded into TAMP backup registers at boot | First boot, on-device | SAES-only after `TAMP_SECCFGR.BHKLOCK`; software can't read post-boot | Yes (regeneration = factory reset) |
 | **OTP master** | 32 B of device TRNG in flash OTP block | First boot, on-device (`secret_keys.c:177-194`) | Readable by secure-world firmware | Yes (OTP is permanent per silicon) |
 
+> **PQSigner current state (2026-07-20):** the BHK row above is Trezor's
+> architecture; in PQSigner the HDP hide-protect layer is *deferred*, not
+> current. The ship profile leaves HDP disabled (`HDP1EN = HDP2EN = 0`;
+> nothing in `secure/src` writes `SECWM1R2`/`SECHDPCR`, and
+> `verify_ship_profile` has no HDP field), so the implemented
+> `bhk`-feature BHK sits in *ordinary* bank-1 flash page 126
+> (`0x0C0F_C000`), DHUK-wrapped — a flash dump exposes only the wrapped
+> blob. HDP1 (enable + `HDP1_PEND` covering the FSBL + `HDP1_ACCDIS` at
+> boot-exit) is the tracked deferred item (`EthereumPhone/PQ1` issue #39);
+> when it lands it also joins `verify_ship_profile`.
+
 Trezor derives per-purpose keys (OPTIGA pairing, TROPIC01 pairing,
 storage salt, NRF auth, MCU device-auth) from the OTP master via HMAC.
 The DHUK and BHK additionally encrypt the OTP master and other secrets

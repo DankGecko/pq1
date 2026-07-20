@@ -80,8 +80,23 @@ pub fn c10_sign_verified_with_progress(
     // the gateway callers translate to `NscStatus::CryptoError`.
     // The companion can prompt the user to re-unlock; a fresh PIN
     // entry re-arms the session budget via `mark_unlocked`.
+    //
+    // X17-FI2 (playbook FI11): bind the CFI bump to the step's VERIFIED
+    // success, not the fallible call's return register. `pre_sign()?`
+    // alone lets a glitch that skips `bl pre_sign` with a stale-Ok
+    // register waive the F-17 session budget yet still stamp the step —
+    // fail-closure there would be ABI luck, not design. `pre_sign`
+    // commits by advancing the session counter by exactly one; require
+    // that postcondition before bumping (a skip now needs a second,
+    // coordinated fault on this read-back).
     #[cfg(not(test))]
-    crate::sign_rate::pre_sign()?;
+    {
+        let signs_before = crate::sign_rate::signs_this_session();
+        crate::sign_rate::pre_sign()?;
+        if crate::sign_rate::signs_this_session() != signs_before.wrapping_add(1) {
+            return Err(());
+        }
+    }
     cfi.bump(CFI_STEP_RATE_LIMIT);
 
     // FI-hardening, layer 1 of 2: double-compute (RFC 9814 §A.2 / Genêt
@@ -139,6 +154,28 @@ pub fn c10_sign_verified_with_progress(
         crate::fi::zeroize_barrier();
         return Err(());
     }
+    // X17-FI2 (playbook FI11): bind the CFI bump to the draw's VERIFIED
+    // success, not the fallible call's return register. A glitch that
+    // skips `bl rng_strong::fill` (stale-Ok register) leaves this
+    // pre-zeroed buffer all-zero — an all-zero OptRand is the Genêt
+    // deterministic-reuse class and must never reach signing with every
+    // gate green. `rng_strong::fill`'s own internal all-zero gate
+    // cannot catch this (it was skipped along with the call), so the
+    // acceptance check is repeated here, outside the call, before the
+    // step is stamped. OR-accumulator: no short-circuit, no early-out
+    // branch on the scan.
+    #[cfg(not(test))]
+    {
+        let mut acc: u8 = 0;
+        for &b in opt_rand_buf.iter() {
+            acc |= b;
+        }
+        if acc == 0 {
+            opt_rand_buf.zeroize();
+            crate::fi::zeroize_barrier();
+            return Err(());
+        }
+    }
     let opt_rand: Option<&[u8; sphincs_c10::params::N]> = Some(&opt_rand_buf);
     cfi.bump(CFI_STEP_OPT_RAND);
 
@@ -186,6 +223,29 @@ pub fn c10_sign_verified_with_progress(
         opt_rand_buf.zeroize();
         crate::fi::zeroize_barrier();
         return Err(());
+    }
+    // X17-FI2 (playbook FI11): same verified-success binding as the
+    // OptRand draw above — a glitch that skips one `bl rng_strong::fill`
+    // (stale-Ok register) leaves that seed all-zero, i.e. a known,
+    // predictable shuffle order (the F-16 DPA defence gone) with every
+    // gate green. Require BOTH seeds nonzero before stamping the step;
+    // each seed's own acceptance check inside `fill` was skipped with
+    // the call. OR-accumulators: no short-circuit on the scans.
+    #[cfg(not(test))]
+    {
+        let mut acc_a: u8 = 0;
+        let mut acc_b: u8 = 0;
+        for i in 0..32 {
+            acc_a |= shuffle_seed_a[i];
+            acc_b |= shuffle_seed_b[i];
+        }
+        if acc_a == 0 || acc_b == 0 {
+            shuffle_seed_a.zeroize();
+            shuffle_seed_b.zeroize();
+            opt_rand_buf.zeroize();
+            crate::fi::zeroize_barrier();
+            return Err(());
+        }
     }
     let shuffle_a = sphincs_c10::shuffle::ShuffleSeed(shuffle_seed_a);
     let shuffle_b = sphincs_c10::shuffle::ShuffleSeed(shuffle_seed_b);
@@ -265,11 +325,15 @@ pub fn c10_sign_verified_with_progress(
     // F-18 final CFI check: every critical step bumped the counter
     // with its unique magic; the running total must match the
     // compile-time `CFI_EXPECTED`. A glitch that skipped any one
-    // step's `bump` (or skipped the step itself, since the bump
-    // follows it directly) leaves the counter short by exactly that
-    // step's magic → fail closed. Routed through the F-2 Hamming-
-    // distant sentinel idiom so a skip of the verify call itself
-    // doesn't bypass.
+    // step's `bump` leaves the counter short by exactly that step's
+    // magic → fail closed. The three fallible steps (rate limit,
+    // OptRand draw, shuffle-seed draws) gate their bumps on VERIFIED
+    // step success (X17-FI2): a single-instruction skip of the
+    // fallible `bl` alone no longer reaches the bump on a stale
+    // return register. The remaining steps are infallible and
+    // downstream-gated (a skipped sign diverges at ct_eq). Routed
+    // through the F-2 Hamming-distant sentinel idiom so a skip of
+    // the verify call itself doesn't bypass.
     if cfi.check_into_sentinel(CFI_EXPECTED) != crate::fi::OK_SENTINEL {
         // fi-2: a short CFI counter means a critical step was skipped by a
         // glitch → confirmed fault → relock (see the ct_eq site above).

@@ -81,10 +81,13 @@ struct IwdgRegs {
     sr: Reg32,  // status (PVU/RVU/WVU) @ 0x0C
 }
 
-// SAFETY: each address is a real, 4-byte-aligned IWDG MMIO register,
-// touched single-threaded from secure boot (`init`) and the secure
-// SysTick handler (`kick` / `systick_watch_and_kick`). SysTick never
-// re-enters itself, so there is no aliasing between the two writers.
+// SAFETY: each address is a real, 4-byte-aligned IWDG MMIO register.
+// Two writers exist: `init` (secure boot) and the secure SysTick
+// handler (`kick` / `systick_watch_and_kick`), and SysTick is ALREADY
+// live when `init` runs — so `init`'s KEY_ACCESS → PR → RLR window is
+// protected by a `cortex_m::interrupt::free` critical section (F32/
+// RUN-4), and every other access is a single 32-bit volatile write
+// (indivisible on its own). SysTick never re-enters itself.
 #[cfg(feature = "iwdg")]
 const REG: IwdgRegs = unsafe {
     IwdgRegs {
@@ -173,9 +176,25 @@ pub fn init() {
     // timeout (PR=/4, RLR=0xFFF) gives ample margin to finish this
     // config before the first bite.
     REG.kr.write(KEY_START);
-    REG.kr.write(KEY_ACCESS);
-    REG.pr.write(PR_DIV_256);
-    REG.rlr.write(RLR_2S);
+    // F32/RUN-4: the KEY_ACCESS → PR → RLR sequence must be atomic
+    // w.r.t. SysTick. `init` runs with SysTick ALREADY live (SysTick
+    // starts at boot; `iwdg::init` runs much later), and the SysTick
+    // boot-grace path (`NS_HEARTBEAT_ADDR == 0`) writes `KR=0xAAAA`
+    // every tick — a kick landing between KEY_ACCESS and the PR/RLR
+    // writes revokes PR/RLR write access (a non-0x5555 KR write
+    // re-locks the window) and the new prescaler/reload are silently
+    // dropped: the watchdog keeps its reset-default ~0.5 s timeout
+    // while every liveness budget assumes ~2 s. The critical section
+    // makes the sequence indivisible. The SR-settle spin and the final
+    // reload stay OUTSIDE it — a stuck LSI-domain update must not wedge
+    // the system with interrupts masked, and the reload needs no access
+    // unlock. A kick during the settle window is harmless: PR/RLR were
+    // already written; only their LSI-domain propagation is in flight.
+    cortex_m::interrupt::free(|_| {
+        REG.kr.write(KEY_ACCESS);
+        REG.pr.write(PR_DIV_256);
+        REG.rlr.write(RLR_2S);
+    });
     // Wait for PVU | RVU | WVU (SR bits 2:0) to clear — the new
     // prescaler/reload have propagated to the LSI clock domain.
     while REG.sr.read() & 0b111 != 0 {

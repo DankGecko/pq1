@@ -798,6 +798,31 @@ fn negative_offchain_count_bump_readback_verified() {
 }
 
 #[test]
+fn negative_durable_counter_commits_readback_verified() {
+    // F16/SCAFI-4: the durable counter commits that are NOT the `_bump`
+    // twins (`offchain_count_promote_to`, `last_userop_count_set`,
+    // `offchain_count_register_slot`) must carry the same post-write
+    // value-level read-back + FI-sentinel re-check —
+    // `write_quadword_verified` only proves the QW landed AS GIVEN, not
+    // that `entry_qw` produced the intended (slot key, count) value.
+    assert!(FLASH_SRC.contains(
+        "let post = offchain_count_read(slot_key);\n    if post != target {"
+    ));
+    assert!(FLASH_SRC.contains(
+        "crate::fi::check_true_into_sentinel(|| offchain_count_read(slot_key) == target)"
+    ));
+    assert!(FLASH_SRC.contains(
+        "let post = last_userop_count_read(slot_key);\n    if post != count {"
+    ));
+    assert!(FLASH_SRC.contains(
+        "crate::fi::check_true_into_sentinel(|| last_userop_count_read(slot_key) == count)"
+    ));
+    assert!(FLASH_SRC.contains(
+        "crate::fi::check_true_into_sentinel(|| offchain_count_is_registered(slot_key))"
+    ));
+}
+
+#[test]
 fn negative_offchain_count_read_fi_double_scan_halt_on_mismatch() {
     // F-12 fix per the in-file docstring: forward + reverse scan,
     // halt on mismatch by returning u64::MAX (fail-closed — every
@@ -1005,6 +1030,24 @@ fn negative_flash_pin_attempts_reset_inside_interrupt_free() {
     assert!(
         body.contains("cortex_m::interrupt::free"),
         "pin_attempts_reset MUST run inside cortex_m::interrupt::free"
+    );
+}
+
+#[test]
+fn negative_flash_duress_wipe_mode_read_is_fail_closed() {
+    // F26/LIFE-1 (cut point B): the duress-mode read must fail CLOSED —
+    // only the pristine-blank byte (0xFF) means decoy; the armed 0x00
+    // AND any unknown/torn pattern must mean wipe. The old
+    // `== DURESS_WIPE_MODE_SET` shape let any glitch/torn read silently
+    // downgrade wipe-on-duress to the decoy wallet.
+    let body = extract_body(FLASH_SRC, "pub fn is_duress_wipe_mode() -> bool {");
+    assert!(
+        body.contains("!= 0xFF"),
+        "is_duress_wipe_mode must return true for anything but pristine-blank (fail-closed)"
+    );
+    assert!(
+        !body.contains("== DURESS_WIPE_MODE_SET"),
+        "F26/LIFE-1: an exact-match read fails OPEN to decoy on torn/unknown patterns"
     );
 }
 

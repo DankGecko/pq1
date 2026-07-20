@@ -1331,6 +1331,34 @@ fn negative_commit_maps_otp_exhaustion_to_distinct_error_code() {
     );
 }
 
+#[test]
+fn negative_commit_pre_otp_authorization_gate_is_sentinel_hardened() {
+    // X17-FW1 / playbook FW11: the pre-OTP re-verify is the LAST
+    // authorization gate before the irreversible OTP floor bump. A bare
+    // `&&`/`if` chain there is one branch-flip away from falling through
+    // to `otp::bump_to` with a boot-invalid new slot and the old slot
+    // floor-excluded. Both verdicts (manifest chain + boot-state pointer)
+    // must be routed through `check_true_into_sentinel`, with
+    // `scrub_sentinel_register` between the paired callsites (stale-r0
+    // defence), matching `verify_images`' aggregate-gate pattern.
+    assert!(
+        COMMIT_SRC.contains("let manifest_gate = crate::fi::check_true_into_sentinel("),
+        "pre-OTP manifest re-verify must be sentinel-hardened (X17-FW1), not a bare bool"
+    );
+    assert!(
+        COMMIT_SRC.contains("let pointer_gate = crate::fi::check_true_into_sentinel("),
+        "pre-OTP boot-state pointer check must be sentinel-hardened (X17-FW1), not a bare bool"
+    );
+    assert!(
+        COMMIT_SRC.contains("crate::fi::scrub_sentinel_register()"),
+        "paired pre-OTP sentinel callsites must be separated by scrub_sentinel_register (F-15.r1)"
+    );
+    assert!(
+        COMMIT_SRC.contains("!= crate::fi::OK_SENTINEL"),
+        "pre-OTP gate must compare verdicts against OK_SENTINEL (sentinel-encoded, not a raw bool)"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // 15. Negative: source-text invariant pins — FI-hardened signature
 //     verify in the underlying verify_manifest helper.

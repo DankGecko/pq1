@@ -77,7 +77,13 @@ pub fn confirm_checked(pages: &[Page]) -> (ConfirmResult, u32) {
         // WYSIWYS mitigation in the firmware. Mirrors the identical
         // `seen_last` gate the seed-backup wizard already enforces
         // (`seed_wizard::show_mnemonic_simple`).
-        let mut seen_last = false;
+        //
+        // F14/SCAFI-2: the gate variable is a `FihBool` (complement-pair
+        // storage + double-read), NOT a bare stack bool — a single
+        // stuck-at/bit-flip on a plain `seen_last: bool` made every read
+        // (the gate AND the sentinel closure) read `true`, authorising
+        // signing without ever reaching the final page.
+        let mut seen_last = crate::fih::FihBool::new_false();
         // HIGH-13 fix: do NOT reset the inactivity timer on entry.
         // NS can spam SIGN_USEROP / request-unlock calls; each call
         // lands us here and the old code reset the timer before the
@@ -95,7 +101,7 @@ pub fn confirm_checked(pages: &[Page]) -> (ConfirmResult, u32) {
             // one page at a time and is capped at the end), so the whole set
             // has been shown before this flips true.
             if idx + 1 >= pages.len() {
-                seen_last = true;
+                seen_last.set_true();
             }
 
             let mut idle = || timeout::is_idle();
@@ -129,17 +135,21 @@ pub fn confirm_checked(pages: &[Page]) -> (ConfirmResult, u32) {
                     }
                 }
                 (Button::Right, Press::Long) => {
-                    if seen_last {
+                    // F14/SCAFI-2: the gate compares the Hamming-distant
+                    // sentinel born from the FihBool (`check_sentinel` =
+                    // `check_true_into_sentinel(is_true_fi)`), never a bare
+                    // bool branch. A garbage/stuck register reads ≠
+                    // OK_SENTINEL and falls through to "advance one page"
+                    // (fail-closed).
+                    let gate = seen_last.check_sentinel();
+                    if gate == crate::fi::OK_SENTINEL {
                         // Affirmative accept. Born the sentinel HERE, at the
                         // decision point, from `seen_last` (the scroll-to-end
                         // gate) — NOT recomputed from the returned enum, which a
                         // value-fault could forge. The `Confirmed` verdict and
                         // the sign-gate sentinel are two independent words set
                         // at the same instruction.
-                        return (
-                            ConfirmResult::Confirmed,
-                            crate::fi::check_true_into_sentinel(|| seen_last),
-                        );
+                        return (ConfirmResult::Confirmed, gate);
                     }
                     // Not yet scrolled to the end — treat the long-press as
                     // "next page" so the user is guided through the remaining

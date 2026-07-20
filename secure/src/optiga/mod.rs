@@ -2023,12 +2023,11 @@ impl OptigaTrustM {
         #[cfg(feature = "optiga-hw-counter")]
         {
             secure_log!("[OPTIGA/prov] step 1c: provision_hw_pin_counter (E120)");
-            let pin_secret = Self::derive_pin_secret(pin);
+            let mut pin_secret = Self::derive_pin_secret(pin);
             let result = unsafe {
                 self.provision_hw_pin_counter(Self::HW_PIN_CTR_LIMIT, &pin_secret)
             };
-            let mut ps = pin_secret;
-            ps.zeroize();
+            pin_secret.zeroize();
             if let Err(e) = result {
                 secure_log!("[OPTIGA/prov] provision_hw_pin_counter FAILED: {:?}", e);
                 return Err(e);

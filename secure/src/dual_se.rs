@@ -214,29 +214,26 @@ impl WalletStore for DualSecureElement {
         // real one.
         secure_log!("[DUAL/duress] start");
         let mut half_o = self.generate_split_half()?;
-        let half_e = xor_32(entropy, &half_o);
+        let mut half_e = xor_32(entropy, &half_o);
 
         if let Err(e) = self.optiga.provision_duress(&half_o, master_secret, vk, bootstrap_vk, duress_pin) {
             secure_log!("[DUAL/duress] optiga.provision_duress FAILED: {:?}", e);
             half_o.zeroize();
             crate::fi::zeroize_barrier();
-            let mut he = half_e;
-            he.zeroize();
+            half_e.zeroize();
             return Err(e);
         }
         if let Err(e) = self.se050.provision_duress(&half_e, master_secret, vk, bootstrap_vk, duress_pin) {
             secure_log!("[DUAL/duress] se050.provision_duress FAILED: {:?}", e);
             half_o.zeroize();
             crate::fi::zeroize_barrier();
-            let mut he = half_e;
-            he.zeroize();
+            half_e.zeroize();
             return Err(e);
         }
 
         half_o.zeroize();
         crate::fi::zeroize_barrier();
-        let mut he = half_e;
-        he.zeroize();
+        half_e.zeroize();
         crate::fi::zeroize_barrier();
         secure_log!("[DUAL/duress] Provisioned decoy: entropy XOR-split across OPTIGA + SE050");
         Ok(())

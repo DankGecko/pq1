@@ -881,6 +881,21 @@ fn negative_shield_zeroize_on_drop_for_secret_material() {
 }
 
 #[test]
+fn negative_provision_hw_pin_counter_zeroizes_original_pin_secret() {
+    // X17-TUI2 family (playbook UI9): step 1c must zeroize the
+    // ORIGINAL `pin_secret` binding. Zeroizing a moved copy leaves
+    // the KDF-derived PIN secret live on the stack.
+    assert!(
+        MOD_SRC.contains("self.provision_hw_pin_counter(Self::HW_PIN_CTR_LIMIT, &pin_secret)"),
+        "step 1c must pass the pin_secret into provision_hw_pin_counter"
+    );
+    assert!(
+        !MOD_SRC.contains("let mut ps = pin_secret;"),
+        "step 1c must zeroize the original pin_secret binding, not a copy (X17-TUI2 family)"
+    );
+}
+
+#[test]
 fn negative_shield_pbs_is_64_bytes() {
     // ASSUMPTION ATTACKED: OPTIGA SRM mandates a 64-byte PBS. Truncating
     // to 32 bytes silently halves the effective key entropy.

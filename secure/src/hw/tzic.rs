@@ -8,8 +8,11 @@
 //! instrument* that proves GTZC enforcement is working.
 //!
 //! Bit positions in `IERx` / `SRx` / `FCRx` match `TZSC_SECCFGRx` 1:1
-//! for the same peripheral, so the same masks `sau::stm32` builds for
-//! SECCFGR are reused as IER masks.
+//! for the same peripheral on banks 1–3, so the same masks
+//! `sau::stm32` builds for SECCFGR are reused as IER masks. Bank 4 has
+//! NO SECCFGR counterpart — the U585 TZSC stops at SECCFGR3 — so IER4
+//! is a forensic-only mask over the AHB3/memory group (see
+//! [`configure`]).
 //!
 //! Behaviour: log the offender via `secure_log!`, increment a counter,
 //! and — under `tzic-wipe` — fire [`trigger_intrusion_wipe`], the
@@ -110,14 +113,19 @@ pub fn enable_test_target_clocks() {
 }
 
 /// Enable illegal-access IRQ for the peripherals marked SECURE in
-/// `seccfgr{1,2,3,4}`. Caller passes the same masks `sau::stm32`
+/// `seccfgr{1,2,3}`. Caller passes the same masks `sau::stm32`
 /// just wrote to TZSC — bit positions are identical between the two
-/// register banks.
-pub fn configure(seccfgr1: u32, seccfgr2: u32, seccfgr3: u32, seccfgr4: u32) {
+/// register banks for banks 1–3. `ier4_mask` has no SECCFGR source:
+/// the U585 TZSC has no SECCFGR4, and IER4 covers the AHB3/memory
+/// group (GPDMA1, FLASH, OTFDEC, TZSC1/TZIC1, OCTOSPI/FSMC, BKPSRAM,
+/// SRAM1-3/MPCBB1-3), which is hardwired secure or self-governed.
+/// `sau` passes 0 — probes there stay blocked-but-uncounted (see the
+/// IER4 note at the `configure` call site in `sau.rs`).
+pub fn configure(seccfgr1: u32, seccfgr2: u32, seccfgr3: u32, ier4_mask: u32) {
     REG.ier1.write(seccfgr1);
     REG.ier2.write(seccfgr2);
     REG.ier3.write(seccfgr3);
-    REG.ier4.write(seccfgr4);
+    REG.ier4.write(ier4_mask);
 
     // Clear any latent SR flags from before IER was unmasked. FCR is
     // write-1-to-clear.

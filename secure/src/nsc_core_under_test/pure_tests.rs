@@ -281,6 +281,42 @@ fn positive_pre_commit_pattern_in_gated_unlock() {
 }
 
 #[test]
+fn negative_gated_unlock_reset_failure_fails_closed() {
+    // F17/SCAFI-5: the success arm must NOT swallow a page-124 reset
+    // failure (`let _ = pin_attempts_reset()`). The counter was
+    // pre-charged BEFORE the SE verify, so a silently-failed reset
+    // leaves it charged after a CORRECT PIN — N good unlocks then
+    // accumulate N markers → spurious lockout → lockout wipe. The
+    // reset verdict must ride the FAIL-IN sentinel and refuse the
+    // unlock (InternalError) on failure. Window is scoped to
+    // gated_unlock so the (deliberate) best-effort discard in the
+    // reconcile wipe path is not flagged.
+    let start = NSC_MOD_SRC
+        .find("pub unsafe fn gated_unlock")
+        .expect("gated_unlock must exist");
+    let end = NSC_MOD_SRC
+        .find("/// Boot-time directional rollback check")
+        .expect("gated_unlock body window must close before reconcile");
+    let body = &NSC_MOD_SRC[start..end];
+    assert!(
+        body.contains("let reset_result = crate::hw::flash::pin_attempts_reset();"),
+        "the success arm must bind the reset result, not discard it",
+    );
+    assert!(
+        body.contains("check_true_into_sentinel(|| reset_result.is_ok())"),
+        "the reset verdict must ride the FAIL-IN sentinel",
+    );
+    assert!(
+        body.contains("return Err(UnlockError::InternalError);"),
+        "a failed reset must refuse the unlock (fail-closed)",
+    );
+    assert!(
+        !body.contains("let _ = crate::hw::flash::pin_attempts_reset();"),
+        "F17/SCAFI-5: the success arm must not swallow pin_attempts_reset failure",
+    );
+}
+
+#[test]
 fn positive_gated_unlock_duress_first_dispatch() {
     // §32 P3: gated_unlock must try the DECOY credential first and only
     // fall through to the real unlock on no-match — the ordering that
@@ -325,6 +361,33 @@ fn positive_gated_unlock_wipe_on_duress_branch() {
     assert!(
         !after[..locked_pos].contains("pin_attempts_reset"),
         "no pin_attempts_reset between the wipe and the PinLocked return (confused state)",
+    );
+}
+
+#[test]
+fn negative_gated_unlock_duress_decoy_is_explicit_sentinel_conditional() {
+    // F26/LIFE-1 (cut point B): the decoy release (the attacker's
+    // bypass target under coercion) must be the EXPLICIT conditional
+    // riding the Hamming-distant sentinel; the wipe must be the
+    // fall-through. The old `if wipe_mode { wipe } else { decoy }`
+    // shape made decoy the fall-through — one glitch on the mode read
+    // (or a skipped compare) silently downgraded wipe-on-duress to the
+    // decoy wallet, the inverted FAIL-OUT shape the F-15 idiom bans.
+    assert!(
+        NSC_MOD_SRC.contains("let open_decoy = crate::fi::check_true_into_sentinel(|| {"),
+        "the decoy release must ride check_true_into_sentinel",
+    );
+    assert!(
+        NSC_MOD_SRC.contains("!crate::hw::flash::is_duress_wipe_mode()"),
+        "the sentinel closure must (double-)read the fail-closed mode byte",
+    );
+    assert!(
+        NSC_MOD_SRC.contains("if open_decoy == crate::fi::OK_SENTINEL {"),
+        "decoy must be the explicit OK_SENTINEL conditional (wipe = fall-through)",
+    );
+    assert!(
+        !NSC_MOD_SRC.contains("let wipe_mode = crate::hw::flash::is_duress_wipe_mode();"),
+        "F26/LIFE-1: the bare-bool FAIL-OUT mode read must not come back",
     );
 }
 

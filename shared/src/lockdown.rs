@@ -100,6 +100,14 @@ pub const BOR_LEV_MASK: u32 = 0x7;
 /// an OEM2 password enabling a later RDP-2 → RDP-1 regression. Exact register
 /// (FLASH_NSSR vs FLASH_OPTSR) + bit positions are a runbook pin; the mask is
 /// isolated here so the correction is one line.
+///
+/// Fail direction (playbook SL8): a wrong register/bit guess makes the mask
+/// read constant-0 bits, so `oem_locks_absent` passes VACUOUSLY — fail-open:
+/// a unit with a planted OEM2 regression password sails through the one gate
+/// that exists to catch it. This mask has no wrong-guess mode that fails
+/// closed. Host tests exercise only the comparator on synthetic values, never
+/// the shipped register read, so the #36 bench readback (issue #46) is the
+/// sole pin — the gate is not load-bearing until that lands.
 pub const OEM1LOCK: u32 = 1 << 26;
 pub const OEM2LOCK: u32 = 1 << 27;
 
@@ -135,6 +143,12 @@ pub const SHIP_PROFILE_U585: ShipProfile = ShipProfile {
 };
 
 /// Verify `FLASH_OPTR` matches the ship profile's TZEN + RDP fields.
+///
+/// NOTE (playbook SL9): this is deliberately a PARTIAL mask — the remaining
+/// OPTR bits (SWAP_BANK, nSWBOOT0, nBOOT0, NRST_MODE, …) are not compared
+/// here and are preserved verbatim into the permanent RDP-2 state. The exact
+/// masked compare (full expected OPTR + don't-care mask) is being handled
+/// separately; do not describe this check as verifying the full ship OPTR.
 #[must_use]
 pub const fn optr_matches_ship(optr: u32, p: &ShipProfile) -> Result<(), ObField> {
     if optr & OPTR_TZEN == 0 {
@@ -164,6 +178,14 @@ pub const fn secwm_bank2_all_ns(secwm2r1: u32) -> bool {
 /// `END` in bits `[22:16]`, `UNLOCK` in bit `[31]` (0 = locked). We require
 /// `UNLOCK==0` and the `[STRT..=END]` span to cover pages 0..=3. The exact
 /// bit fields are a runbook pin; kept in one place for a one-line fix.
+///
+/// Fail direction per sub-field (playbook SL8), under a wrong layout guess
+/// whose misread bits return constant 0: `UNLOCK` passes vacuously (fail-open
+/// — a cleared write-protect goes unreported); `STRT==0` passes vacuously
+/// (fail-open — a span starting past page 0 goes unreported); `END>=3` FAILS
+/// (fail-closed — the false-halt direction bricks every genuine first boot:
+/// a reliability hazard, not a security hole). Host tests cannot see either
+/// direction; the #36 bench readback (issue #46) is the sole pin.
 #[must_use]
 pub const fn wrp1a_covers_fsbl(wrp1ar: u32) -> bool {
     let unlock = (wrp1ar >> 31) & 1;

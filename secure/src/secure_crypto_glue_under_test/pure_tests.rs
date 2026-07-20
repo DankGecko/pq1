@@ -1377,6 +1377,47 @@ fn positive_crypto_sign_rate_limit_gates_call() {
 }
 
 #[test]
+fn positive_crypto_cfi_bumps_gated_on_verified_step_success() {
+    // X17-FI2 (playbook FI11): the three fallible steps gate their
+    // `cfi.bump` on the step's VERIFIED success — a glitch that skips
+    // the fallible `bl` (stale-Ok return register) must not stamp the
+    // step with an un-charged rate limit, an all-zero OptRand, or an
+    // all-zero shuffle seed. Pin each acceptance check BEFORE its bump.
+    let rate_check = CRYPTO_SRC
+        .find("crate::sign_rate::signs_this_session() != signs_before.wrapping_add(1)")
+        .expect("FI11: RATE_LIMIT bump must be gated on the session-counter +1 read-back");
+    let rate_bump = CRYPTO_SRC
+        .find("cfi.bump(CFI_STEP_RATE_LIMIT)")
+        .expect("F-18: RATE_LIMIT bump missing");
+    assert!(
+        rate_check < rate_bump,
+        "FI11: rate-limit read-back must precede cfi.bump(CFI_STEP_RATE_LIMIT)"
+    );
+
+    let opt_check = CRYPTO_SRC
+        .find("if acc == 0 {")
+        .expect("FI11: OPT_RAND bump must be gated on a post-fill nonzero acceptance check");
+    let opt_bump = CRYPTO_SRC
+        .find("cfi.bump(CFI_STEP_OPT_RAND)")
+        .expect("F-18: OPT_RAND bump missing");
+    assert!(
+        opt_check < opt_bump,
+        "FI11: OptRand acceptance check must precede cfi.bump(CFI_STEP_OPT_RAND)"
+    );
+
+    let shuffle_check = CRYPTO_SRC
+        .find("if acc_a == 0 || acc_b == 0 {")
+        .expect("FI11: SHUFFLE bump must be gated on a both-seeds-nonzero acceptance check");
+    let shuffle_bump = CRYPTO_SRC
+        .find("cfi.bump(CFI_STEP_SHUFFLE)")
+        .expect("F-18: SHUFFLE bump missing");
+    assert!(
+        shuffle_check < shuffle_bump,
+        "FI11: shuffle-seed acceptance check must precede cfi.bump(CFI_STEP_SHUFFLE)"
+    );
+}
+
+#[test]
 fn positive_crypto_sphincs_master_kdf_tag_is_exact() {
     // CLAUDE.md "What NOT to do — No casual KDF tag changes". The
     // bootstrap-derivation tag is the very first thing that breaks
@@ -1464,7 +1505,7 @@ fn positive_dual_se_xor_split_recipe_present() {
     // CLAUDE.md invariant #1: "BIP-39 entropy is XOR-split: half_O
     // on OPTIGA, half_E on SE050. Neither chip alone reveals any bit."
     assert!(
-        DUAL_SE_SRC.contains("let half_e = xor_32(entropy, &half_o);"),
+        DUAL_SE_SRC.contains("let mut half_e = xor_32(entropy, &half_o);"),
         "dual_se.rs must compute half_e = entropy XOR half_o (invariant #1)",
     );
 }
@@ -1588,6 +1629,21 @@ fn positive_dual_se_unlock_zeroizes_full_entropy_and_halves() {
     assert!(
         full_zeroize >= 2,
         "full_entropy must be zeroized on both success + failure paths; found {full_zeroize}",
+    );
+}
+
+#[test]
+fn negative_dual_se_provision_duress_zeroizes_original_half_e() {
+    // X17-TUI2 family (playbook UI9): `half_e` must be zeroized in
+    // place on every exit from provision_duress. Moving it into a
+    // `he` copy and zeroizing that leaves the SE050 half live.
+    assert!(
+        DUAL_SE_SRC.contains("let mut half_e = xor_32(entropy, &half_o);"),
+        "half_e must be a mutable binding so it can be wiped in place"
+    );
+    assert!(
+        !DUAL_SE_SRC.contains("let mut he = half_e;"),
+        "provision_duress must zeroize the original half_e binding, not a copy (X17-TUI2 family)"
     );
 }
 
