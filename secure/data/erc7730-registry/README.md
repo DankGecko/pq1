@@ -48,7 +48,7 @@ compiled companion catalogue, root
 **4,546** canonical known-call tuples, tuple-set SHA-256
 `7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555`.
 Curation manifest SHA-256
-`b9f224322504f8534da8b234d376ea0b9f2fc145590929316f60f1e8fd11cd8b` binds upstream commit
+`e084f16bc0ba08ea130a22c4602d05c3e86d457aede63d93d8dbfe23e65bd419` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
 The Bloom contains 28,261 / 131,072 set bits, below the generator's 25% cap.

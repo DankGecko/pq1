@@ -16,9 +16,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use dbgen::erc7730::{
-    build_db, build_db_tolerant, build_db_with_policy_override, load_policy, try_compile_one,
-    CatalogueProvenance,
+    build_db, build_db_tolerant, build_db_with_policy_override, load_policy, round_trip_check,
+    try_compile_one, CatalogueProvenance,
 };
+use pqsigner_erc7730::ir::Erc7730Ir;
+use pqsigner_erc7730::known_calls::may_contain as known_call_may_contain;
 
 fn expect_err<T>(res: Result<T, String>, msg: &str) -> String {
     match res {
@@ -318,6 +320,800 @@ fn per_deployment_partial_format_drop_is_reported_once() {
         duplicate_drop_count, 1,
         "per-deployment compilation must not duplicate one source-format receipt"
     );
+}
+
+#[test]
+fn pqsigner_deployment_formats_only_narrows_leaves_not_known_calls() {
+    let dir = make_tempdir("deployment_format_allowlist");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(
+        dir.join("calldata-scoped.json"),
+        r#"{
+  "_pqsigner": { "deploymentFormats": [
+    {
+      "chainId": 1,
+      "address": "0x0000000000000000000000000000000000000001",
+      "formats": ["transfer(address to,uint256 amount)"]
+    },
+    {
+      "chainId": 56,
+      "address": "0x0000000000000000000000000000000000000002",
+      "formats": ["approve(address spender,uint256 amount)"]
+    }
+  ] },
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000001" },
+    { "chainId": 56, "address": "0x0000000000000000000000000000000000000002" },
+    { "chainId": 137, "address": "0x0000000000000000000000000000000000000003" }
+  ] } },
+  "metadata": { "owner": "Scope Test", "contractName": "ScopeTest" },
+  "display": { "formats": {
+    "transfer(address to,uint256 amount)": {
+      "intent": "Send",
+      "fields": [
+        { "path": "to", "format": "addressName", "label": "To" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    },
+    "approve(address spender,uint256 amount)": {
+      "intent": "Approve",
+      "fields": [
+        { "path": "spender", "format": "addressName", "label": "Spender" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+
+    let (result, skips) = build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir))
+        .expect("a restrictive deployment/format admission must build");
+    assert_eq!(
+        result.leaf_count, 2,
+        "only the two admitted deployments emit"
+    );
+    round_trip_check(&result).expect("narrowed catalogue round-trips");
+
+    let expected_leaves = [
+        (1, 1, [0xa9, 0x05, 0x9c, 0xbb]),
+        (56, 2, [0x09, 0x5e, 0xa7, 0xb3]),
+    ];
+    for (entry, (chain_id, address_tail, selector)) in result.entries.iter().zip(expected_leaves) {
+        assert_eq!(entry.chain_id, chain_id);
+        assert_eq!(entry.contract[..19], [0; 19]);
+        assert_eq!(entry.contract[19], address_tail);
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("admitted IR parses");
+        let formats = ir
+            .format_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("admitted formats parse");
+        assert_eq!(formats.len(), 1);
+        assert_eq!(formats[0].selector, selector);
+    }
+
+    assert_eq!(
+        result.known_call_count, 6,
+        "both declared selectors on all three source deployments remain known"
+    );
+    for (chain_id, address_tail) in [(1, 1), (56, 2), (137, 3)] {
+        let mut contract = [0u8; 20];
+        contract[19] = address_tail;
+        for selector in [[0xa9, 0x05, 0x9c, 0xbb], [0x09, 0x5e, 0xa7, 0xb3]] {
+            assert!(
+                result.known_calls.contains(&(chain_id, contract, selector)),
+                "missing exact known-call tuple chain={chain_id} selector=0x{}",
+                hex::encode(selector)
+            );
+            assert!(known_call_may_contain(
+                &result.known_calls_bloom,
+                chain_id,
+                &contract,
+                &selector
+            ));
+        }
+    }
+    assert!(skips.iter().any(|skip| {
+        skip.reason.contains("PARTIAL FORMAT DROP")
+            && skip
+                .reason
+                .contains("approve(address spender,uint256 amount)")
+            && skip.reason.contains("chain_id=1")
+            && skip.reason.contains("deploymentFormats allowlist")
+    }));
+    assert!(skips.iter().any(|skip| {
+        skip.reason.contains("PARTIAL FORMAT DROP")
+            && skip.reason.contains("transfer(address to,uint256 amount)")
+            && skip.reason.contains("chain_id=56")
+            && skip.reason.contains("deploymentFormats allowlist")
+    }));
+    assert!(skips.iter().any(|skip| {
+        skip.reason.contains("chain_id=137") && skip.reason.contains("deploymentFormats allowlist")
+    }));
+
+    let mut unscoped: serde_json::Value = serde_json::from_slice(
+        &fs::read(dir.join("calldata-scoped.json")).expect("read scoped descriptor"),
+    )
+    .expect("parse scoped descriptor");
+    unscoped
+        .as_object_mut()
+        .expect("descriptor object")
+        .remove("_pqsigner");
+    let unscoped_dir = make_tempdir("deployment_format_hash_binding");
+    fs::write(unscoped_dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    let unscoped_path = unscoped_dir.join("calldata-unscoped.json");
+    fs::write(
+        &unscoped_path,
+        serde_json::to_vec_pretty(&unscoped).unwrap(),
+    )
+    .unwrap();
+    let policy = load_policy(&unscoped_dir.join("policy.toml")).unwrap();
+    let unscoped_entries = try_compile_one(&unscoped_path, &policy, Some(&unscoped_dir))
+        .expect("ordinary descriptor compiles");
+    assert_eq!(unscoped_entries.len(), 3);
+    for entry in &unscoped_entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("ordinary IR parses");
+        assert_eq!(ir.format_iter().count(), 2);
+    }
+    assert!(unscoped_entries
+        .iter()
+        .all(|entry| entry.descriptor_hash != result.entries[0].descriptor_hash));
+    assert!(unscoped_entries
+        .iter()
+        .all(|entry| entry.erc8176_hash != result.entries[0].erc8176_hash));
+}
+
+#[test]
+fn pqsigner_deployment_formats_rejects_every_nonrestrictive_or_ambiguous_shape() {
+    let base: serde_json::Value = serde_json::from_str(
+        r#"{
+  "_pqsigner": { "deploymentFormats": [{
+    "chainId": 1,
+    "address": "0x0000000000000000000000000000000000000001",
+    "formats": ["transfer(address to,uint256 amount)"]
+  }] },
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000001" }
+  ] } },
+  "metadata": { "owner": "Scope Test", "contractName": "ScopeTest" },
+  "display": { "formats": {
+    "transfer(address to,uint256 amount)": {
+      "intent": "Send",
+      "fields": [
+        { "path": "to", "format": "addressName", "label": "To" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+
+    let mut cases = Vec::new();
+
+    let mut empty_admissions = base.clone();
+    empty_admissions["_pqsigner"]["deploymentFormats"] = serde_json::json!([]);
+    cases.push(("empty_admissions", empty_admissions, "must not be empty"));
+
+    let mut missing_admissions = base.clone();
+    missing_admissions["_pqsigner"] = serde_json::json!({});
+    cases.push((
+        "missing_admissions",
+        missing_admissions,
+        "missing field `deploymentFormats`",
+    ));
+
+    let mut null_extension = base.clone();
+    null_extension["_pqsigner"] = serde_json::Value::Null;
+    cases.push((
+        "null_extension",
+        null_extension,
+        "must be an object, not null",
+    ));
+
+    let mut malformed_address = base.clone();
+    malformed_address["_pqsigner"]["deploymentFormats"][0]["address"] = serde_json::json!("0x1234");
+    cases.push(("malformed_address", malformed_address, "address is invalid"));
+
+    let mut outside_deployment = base.clone();
+    outside_deployment["_pqsigner"]["deploymentFormats"][0]["chainId"] = serde_json::json!(10);
+    cases.push((
+        "outside_deployment",
+        outside_deployment,
+        "is not a declared contract deployment",
+    ));
+
+    let mut empty_formats = base.clone();
+    empty_formats["_pqsigner"]["deploymentFormats"][0]["formats"] = serde_json::json!([]);
+    cases.push(("empty_formats", empty_formats, "formats must not be empty"));
+
+    let mut unknown_format = base.clone();
+    unknown_format["_pqsigner"]["deploymentFormats"][0]["formats"] =
+        serde_json::json!(["burn(uint256 amount)"]);
+    cases.push(("unknown_format", unknown_format, "names unknown format"));
+
+    let mut duplicate_format = base.clone();
+    duplicate_format["_pqsigner"]["deploymentFormats"][0]["formats"] = serde_json::json!([
+        "transfer(address to,uint256 amount)",
+        "transfer(address to,uint256 amount)"
+    ]);
+    cases.push(("duplicate_format", duplicate_format, "formats duplicates"));
+
+    let mut duplicate_deployment = base.clone();
+    let duplicate = duplicate_deployment["_pqsigner"]["deploymentFormats"][0].clone();
+    duplicate_deployment["_pqsigner"]["deploymentFormats"] =
+        serde_json::json!([duplicate.clone(), duplicate]);
+    cases.push((
+        "duplicate_deployment",
+        duplicate_deployment,
+        "deploymentFormats duplicates",
+    ));
+
+    let mut normalized_duplicate = base.clone();
+    normalized_duplicate["context"]["contract"]["deployments"][0]["address"] =
+        serde_json::json!("0x00000000000000000000000000000000000000aB");
+    normalized_duplicate["_pqsigner"]["deploymentFormats"][0]["address"] =
+        serde_json::json!("0x00000000000000000000000000000000000000AB");
+    let mut differently_cased = normalized_duplicate["_pqsigner"]["deploymentFormats"][0].clone();
+    differently_cased["address"] = serde_json::json!("0x00000000000000000000000000000000000000ab");
+    normalized_duplicate["_pqsigner"]["deploymentFormats"] = serde_json::json!([
+        normalized_duplicate["_pqsigner"]["deploymentFormats"][0].clone(),
+        differently_cased
+    ]);
+    cases.push((
+        "normalized_duplicate",
+        normalized_duplicate,
+        "deploymentFormats duplicates",
+    ));
+
+    let mut unknown_nested_key = base.clone();
+    unknown_nested_key["_pqsigner"]["widensAuthority"] = serde_json::json!(true);
+    cases.push((
+        "unknown_nested_key",
+        unknown_nested_key,
+        "unknown field `widensAuthority`",
+    ));
+
+    let mut unknown_admission_key = base.clone();
+    unknown_admission_key["_pqsigner"]["deploymentFormats"][0]["note"] =
+        serde_json::json!("not authenticated semantics");
+    cases.push((
+        "unknown_admission_key",
+        unknown_admission_key,
+        "unknown field `note`",
+    ));
+
+    let mut eip712_context = base.clone();
+    eip712_context["context"] = serde_json::json!({
+        "eip712": {
+            "deployments": [{
+                "chainId": 1,
+                "address": "0x0000000000000000000000000000000000000001"
+            }]
+        }
+    });
+    cases.push(("eip712_context", eip712_context, "contract-context only"));
+
+    for (name, descriptor, expected) in cases {
+        let dir = make_tempdir(name);
+        fs::write(dir.join("policy.toml"), POLICY_DEV).unwrap();
+        let path = dir.join("calldata-scoped.json");
+        fs::write(&path, serde_json::to_vec_pretty(&descriptor).unwrap()).unwrap();
+        let policy = load_policy(&dir.join("policy.toml")).unwrap();
+        let error = expect_err(
+            try_compile_one(&path, &policy, Some(&dir)),
+            "invalid deploymentFormats shape must fail closed",
+        );
+        assert!(
+            error.contains(expected),
+            "{name}: expected `{expected}` in `{error}`"
+        );
+    }
+}
+
+#[test]
+fn duplicate_root_pqsigner_keys_are_rejected_before_authority_is_selected() {
+    let dir = make_tempdir("duplicate_root_pqsigner_key");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    let path = dir.join("calldata-duplicate-root.json");
+    fs::write(
+        &path,
+        r#"{
+  "_pqsigner": { "deploymentFormats": [{
+    "chainId": 1,
+    "address": "0x0000000000000000000000000000000000000001",
+    "formats": ["transfer(address to,uint256 amount)"]
+  }] },
+  "_pqsigner": { "deploymentFormats": [{
+    "chainId": 1,
+    "address": "0x0000000000000000000000000000000000000001",
+    "formats": [
+      "transfer(address to,uint256 amount)",
+      "approve(address spender,uint256 amount)"
+    ]
+  }] },
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000001" }
+  ] } },
+  "metadata": { "owner": "Duplicate Test", "contractName": "DuplicateTest" },
+  "display": { "formats": {
+    "transfer(address to,uint256 amount)": {
+      "intent": "Send",
+      "fields": [
+        { "path": "to", "format": "addressName", "label": "To" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    },
+    "approve(address spender,uint256 amount)": {
+      "intent": "Approve",
+      "fields": [
+        { "path": "spender", "format": "addressName", "label": "Spender" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+
+    let policy = load_policy(&dir.join("policy.toml")).unwrap();
+    let error = expect_err(
+        try_compile_one(&path, &policy, Some(&dir)),
+        "duplicate root authority keys must fail closed",
+    );
+    assert!(
+        error.contains("duplicate JSON object key `_pqsigner`"),
+        "unexpected duplicate-key rejection: {error}"
+    );
+
+    let catalogue_error = expect_err(
+        build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir)),
+        "the tolerant catalogue must not turn duplicate authority keys into a skip",
+    );
+    assert!(
+        catalogue_error.contains("calldata-duplicate-root.json")
+            && catalogue_error.contains("known-call omission scan failed closed")
+            && catalogue_error.contains("duplicate JSON object key `_pqsigner`"),
+        "unexpected tolerant-catalogue rejection: {catalogue_error}"
+    );
+}
+
+#[test]
+fn duplicate_nested_admission_keys_are_rejected_after_json_unescaping() {
+    let dir = make_tempdir("duplicate_nested_admission_key");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    let path = dir.join("calldata-duplicate-admission.json");
+    fs::write(
+        &path,
+        r#"{
+  "_pqsigner": { "deploymentFormats": [{
+    "chainId": 1,
+    "chain\u0049d": 56,
+    "address": "0x0000000000000000000000000000000000000002",
+    "formats": ["transfer(address to,uint256 amount)"]
+  }] },
+  "context": { "contract": { "deployments": [
+    { "chainId": 56, "address": "0x0000000000000000000000000000000000000002" }
+  ] } },
+  "metadata": { "owner": "Duplicate Test", "contractName": "DuplicateTest" },
+  "display": { "formats": {
+    "transfer(address to,uint256 amount)": {
+      "intent": "Send",
+      "fields": [
+        { "path": "to", "format": "addressName", "label": "To" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+
+    let policy = load_policy(&dir.join("policy.toml")).unwrap();
+    let error = expect_err(
+        try_compile_one(&path, &policy, Some(&dir)),
+        "duplicate nested admission keys must fail closed",
+    );
+    assert!(
+        error.contains("duplicate JSON object key `chainId`"),
+        "unexpected duplicate-key rejection: {error}"
+    );
+}
+
+#[test]
+fn duplicate_include_keys_are_rejected_before_merge() {
+    let root = make_tempdir("duplicate_include_key");
+    let registry = root.join("registry");
+    fs::create_dir(&registry).unwrap();
+    fs::write(root.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(
+        registry.join("common-duplicate.json"),
+        r#"{
+  "metadata": {
+    "owner": "First Owner",
+    "owner": "Second Owner",
+    "contractName": "DuplicateInclude"
+  }
+}"#,
+    )
+    .unwrap();
+    let path = registry.join("calldata-leaf.json");
+    fs::write(
+        &path,
+        r#"{
+  "includes": "./common-duplicate.json",
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000003" }
+  ] } },
+  "display": { "formats": {
+    "transfer(address to,uint256 amount)": {
+      "intent": "Send",
+      "fields": [
+        { "path": "to", "format": "addressName", "label": "To" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+
+    let policy = load_policy(&root.join("policy.toml")).unwrap();
+    let error = expect_err(
+        try_compile_one(&path, &policy, Some(&root)),
+        "duplicate include keys must fail closed",
+    );
+    assert!(
+        error.contains("parse include")
+            && error.contains("common-duplicate.json")
+            && error.contains("duplicate JSON object key `owner`"),
+        "unexpected duplicate-key rejection: {error}"
+    );
+}
+
+#[test]
+fn pqsigner_key_is_reserved_to_each_json_document_root() {
+    let base = serde_json::json!({
+      "_pqsigner": { "deploymentFormats": [{
+        "chainId": 1,
+        "address": "0x0000000000000000000000000000000000000001",
+        "formats": ["transfer(address to,uint256 amount)"]
+      }] },
+      "context": { "contract": { "deployments": [
+        { "chainId": 1, "address": "0x0000000000000000000000000000000000000001" },
+        { "chainId": 56, "address": "0x0000000000000000000000000000000000000002" }
+      ] } },
+      "metadata": { "owner": "Placement Test", "contractName": "PlacementTest" },
+      "display": { "formats": {
+        "transfer(address to,uint256 amount)": {
+          "intent": "Send",
+          "fields": [
+            { "path": "to", "format": "addressName", "label": "To" },
+            { "path": "amount", "format": "raw", "label": "Amount" }
+          ]
+        },
+        "approve(address spender,uint256 amount)": {
+          "intent": "Approve",
+          "fields": [
+            { "path": "spender", "format": "addressName", "label": "Spender" },
+            { "path": "amount", "format": "raw", "label": "Amount" }
+          ]
+        }
+      } }
+    });
+
+    for location in ["metadata", "display"] {
+        let dir = make_tempdir(&format!("misplaced_pqsigner_{location}"));
+        fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+        let mut descriptor = base.clone();
+        let extension = descriptor
+            .as_object_mut()
+            .unwrap()
+            .remove("_pqsigner")
+            .unwrap();
+        descriptor[location]
+            .as_object_mut()
+            .unwrap()
+            .insert("_pqsigner".to_string(), extension);
+        let path = dir.join("calldata-misplaced.json");
+        fs::write(&path, serde_json::to_vec_pretty(&descriptor).unwrap()).unwrap();
+
+        let policy = load_policy(&dir.join("policy.toml")).unwrap();
+        let error = expect_err(
+            try_compile_one(&path, &policy, Some(&dir)),
+            "a misplaced narrowing block must not restore the full cross-product",
+        );
+        assert!(
+            error.contains("reserved key `_pqsigner` may appear only at a JSON document root"),
+            "{location}: unexpected misplaced-key rejection: {error}"
+        );
+    }
+
+    let root = make_tempdir("misplaced_pqsigner_include");
+    let registry = root.join("registry");
+    fs::create_dir(&registry).unwrap();
+    fs::write(root.join("policy.toml"), POLICY_DEV_2).unwrap();
+    let mut descriptor = base;
+    let extension = descriptor
+        .as_object_mut()
+        .unwrap()
+        .remove("_pqsigner")
+        .unwrap();
+    descriptor["includes"] = serde_json::json!("./common-misplaced.json");
+    fs::write(
+        registry.join("calldata-leaf.json"),
+        serde_json::to_vec_pretty(&descriptor).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        registry.join("common-misplaced.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "metadata": { "_pqsigner": extension }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let policy = load_policy(&root.join("policy.toml")).unwrap();
+    let error = expect_err(
+        try_compile_one(&registry.join("calldata-leaf.json"), &policy, Some(&root)),
+        "a misplaced include narrowing block must fail before merge",
+    );
+    assert!(
+        error.contains("parse include")
+            && error.contains("common-misplaced.json")
+            && error.contains("reserved key `_pqsigner` may appear only at a JSON document root"),
+        "unexpected include misplaced-key rejection: {error}"
+    );
+}
+
+#[test]
+fn pqsigner_selected_format_cannot_hide_omitted_selector_collision() {
+    let dir = make_tempdir("deployment_format_selector_collision");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(
+        dir.join("calldata-safe.json"),
+        transfer_descriptor("To", "Amount"),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("calldata-selector-collision.json"),
+        r#"{
+  "_pqsigner": { "deploymentFormats": [{
+    "chainId": 1,
+    "address": "0x0000000000000000000000000000000000000003",
+    "formats": ["approve(address spender,uint256 amount)"]
+  }] },
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000003" }
+  ] } },
+  "metadata": { "owner": "Collision", "contractName": "Collision" },
+  "display": { "formats": {
+    "approve(address spender,uint256 amount)": {
+      "intent": "Approve",
+      "fields": [
+        { "path": "spender", "format": "addressName", "label": "Spender" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    },
+    "watch_tg_invmru_2f69f1b(address first,address second)": {
+      "intent": "Collision",
+      "fields": [
+        { "path": "first", "format": "addressName", "label": "First" },
+        { "path": "second", "format": "addressName", "label": "Second" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+
+    let (result, skips) = build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir))
+        .expect("selector-colliding admission must remain a known hard refusal");
+    assert_eq!(result.leaf_count, 1, "only the independent safe descriptor");
+    let collision_skip = skips
+        .iter()
+        .find(|skip| {
+            skip.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-selector-collision.json")
+        })
+        .expect("colliding admission must carry a skip receipt");
+    assert!(
+        collision_skip.reason.contains("selector 0x095ea7b3")
+            && collision_skip
+                .reason
+                .contains("collides with source formats")
+            && collision_skip
+                .reason
+                .contains("selector-only runtime dispatch cannot authenticate"),
+        "unexpected collision refusal: {}",
+        collision_skip.reason
+    );
+
+    let mut contract = [0u8; 20];
+    contract[19] = 3;
+    let selector = [0x09, 0x5e, 0xa7, 0xb3];
+    assert!(result.known_calls.contains(&(1, contract, selector)));
+    assert!(known_call_may_contain(
+        &result.known_calls_bloom,
+        1,
+        &contract,
+        &selector
+    ));
+}
+
+#[test]
+fn pqsigner_selected_format_cannot_collide_with_dropped_other_descriptor() {
+    let dir = make_tempdir("deployment_format_cross_descriptor_collision");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(
+        dir.join("calldata-safe.json"),
+        transfer_descriptor("To", "Amount"),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("calldata-admitted.json"),
+        r#"{
+  "_pqsigner": { "deploymentFormats": [{
+    "chainId": 1,
+    "address": "0x0000000000000000000000000000000000000003",
+    "formats": ["approve(address spender,uint256 amount)"]
+  }] },
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000003" }
+  ] } },
+  "metadata": { "owner": "Admitted", "contractName": "Admitted" },
+  "display": { "formats": {
+    "approve(address spender,uint256 amount)": {
+      "intent": "Approve",
+      "fields": [
+        { "path": "spender", "format": "addressName", "label": "Spender" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("calldata-dropped-collision.json"),
+        r#"{
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000003" }
+  ] } },
+  "metadata": { "owner": "Dropped", "contractName": "Dropped" },
+  "display": { "formats": {
+    "watch_tg_invmru_2f69f1b(address first,address second)": {
+      "intent": "Collision",
+      "fields": [
+        { "path": "first", "format": "addressName", "label": "First" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+
+    let (result, skips) = build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir))
+        .expect("cross-descriptor collision must remain a known hard refusal");
+    assert_eq!(result.leaf_count, 1, "only the independent safe descriptor");
+    let admitted_skip = skips
+        .iter()
+        .find(|skip| {
+            skip.source.file_name().and_then(|name| name.to_str()) == Some("calldata-admitted.json")
+        })
+        .expect("admitted side of the collision must be refused");
+    assert!(
+        admitted_skip.reason.contains("collides catalogue-wide")
+            && admitted_skip.reason.contains("approve(address,uint256)")
+            && admitted_skip
+                .reason
+                .contains("watch_tg_invmru_2f69f1b(address,address)"),
+        "unexpected catalogue-wide collision refusal: {}",
+        admitted_skip.reason
+    );
+    assert!(skips.iter().any(|skip| {
+        skip.source.file_name().and_then(|name| name.to_str())
+            == Some("calldata-dropped-collision.json")
+    }));
+
+    let mut contract = [0u8; 20];
+    contract[19] = 3;
+    let selector = [0x09, 0x5e, 0xa7, 0xb3];
+    assert!(result.known_calls.contains(&(1, contract, selector)));
+    assert!(known_call_may_contain(
+        &result.known_calls_bloom,
+        1,
+        &contract,
+        &selector
+    ));
+}
+
+#[test]
+fn pqsigner_selected_uncompilable_format_drops_the_whole_descriptor_but_stays_known() {
+    let dir = make_tempdir("deployment_format_selected_failure");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(
+        dir.join("calldata-mixed.json"),
+        r#"{
+  "_pqsigner": { "deploymentFormats": [
+    {
+      "chainId": 1,
+      "address": "0x0000000000000000000000000000000000000001",
+      "formats": [
+        "transfer(address to,uint256 amount)",
+        "approve(address spender,uint256 amount)"
+      ]
+    }
+  ] },
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000001" }
+  ] } },
+  "metadata": { "owner": "Scope Test", "contractName": "ScopeTest" },
+  "display": { "formats": {
+    "transfer(address to,uint256 amount)": {
+      "intent": "Send",
+      "fields": [
+        { "path": "to", "format": "addressName", "label": "To", "visible": "always" },
+        { "path": "amount", "format": "raw", "label": "Amount", "visible": "always" }
+      ]
+    },
+    "approve(address spender,uint256 amount)": {
+      "intent": "Approve",
+      "fields": [
+        { "path": "spender", "format": "addressName", "label": "Spender", "visible": "never" },
+        { "path": "amount", "format": "raw", "label": "Amount", "visible": "always" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("calldata-safe.json"),
+        r#"{
+  "context": { "contract": { "deployments": [
+    { "chainId": 137, "address": "0x0000000000000000000000000000000000000003" }
+  ] } },
+  "metadata": { "owner": "Safe Test", "contractName": "SafeTest" },
+  "display": { "formats": {
+    "ping(uint256 value)": {
+      "intent": "Ping",
+      "fields": [
+        { "path": "value", "format": "raw", "label": "Value", "visible": "always" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+
+    let (result, skips) = build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir))
+        .expect("tolerant catalogue keeps the independent safe descriptor");
+    assert_eq!(result.leaf_count, 1);
+    assert_eq!(
+        result.entries[0]
+            .source
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some("calldata-safe.json")
+    );
+    round_trip_check(&result).expect("surviving descriptor round-trips");
+    assert!(skips.iter().any(|skip| {
+        skip.source.file_name().and_then(|name| name.to_str()) == Some("calldata-mixed.json")
+    }));
+
+    let mut contract = [0u8; 20];
+    contract[19] = 1;
+    for selector in [[0xa9, 0x05, 0x9c, 0xbb], [0x09, 0x5e, 0xa7, 0xb3]] {
+        assert!(result.known_calls.contains(&(1, contract, selector)));
+        assert!(known_call_may_contain(
+            &result.known_calls_bloom,
+            1,
+            &contract,
+            &selector
+        ));
+    }
 }
 
 #[test]

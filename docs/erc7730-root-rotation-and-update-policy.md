@@ -129,6 +129,13 @@ upstream-movement ceremony.
    proves the final curated-corpus receipt, and requires the pristine and
    curated known-call count, tuple-set hash, and Bloom bytes to be identical
    before its checked install. There is no manual patch-reapplication step.
+   A replacement may use the PQSigner-local `_pqsigner.deploymentFormats`
+   constraint to select exact format keys for exact already-declared contract
+   deployments. The compiler rejects null, empty, duplicate, unknown, malformed,
+   out-of-context, or catalogue-wide selector-colliding entries, and compiles
+   each admitted set atomically. This extension can only remove authenticated leaves: the
+   independent known-call scan deliberately ignores it, so every omitted source
+   deployment/format tuple remains a hard refusal.
 5. `cargo run -p dbgen` — regenerate the blob, `db_roots.rs` root, and the
    drift-gated `erc7730.review.txt`. Its header carries the manifest-derived
    upstream commit/tree and manifest SHA-256; its body carries the per-field

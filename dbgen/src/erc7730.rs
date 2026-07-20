@@ -72,11 +72,138 @@ use pqsigner_erc7730::render::{
     },
 };
 use pqsigner_tx_core::hash::keccak256;
+use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Recursive JSON syntax preflight that rejects duplicate object keys before
+/// `serde_json::Value` can collapse them with last-write-wins semantics.
+///
+/// Descriptor hashes and `_pqsigner` admission policy are both derived from
+/// the parsed value, so accepting two textual representations for one key
+/// would let the discarded representation escape both validation and JCS
+/// hashing. Object keys are compared after JSON unescaping.
+struct RejectDuplicateJsonKeys;
+
+impl<'de> Deserialize<'de> for RejectDuplicateJsonKeys {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(RejectDuplicateJsonKeysVisitor)
+    }
+}
+
+struct RejectDuplicateJsonKeysVisitor;
+
+impl<'de> Visitor<'de> for RejectDuplicateJsonKeysVisitor {
+    type Value = RejectDuplicateJsonKeys;
+
+    fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("valid JSON without duplicate object keys")
+    }
+
+    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+        Ok(RejectDuplicateJsonKeys)
+    }
+
+    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
+        Ok(RejectDuplicateJsonKeys)
+    }
+
+    fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
+        Ok(RejectDuplicateJsonKeys)
+    }
+
+    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+        Ok(RejectDuplicateJsonKeys)
+    }
+
+    fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(RejectDuplicateJsonKeys)
+    }
+
+    fn visit_string<E>(self, _value: String) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(RejectDuplicateJsonKeys)
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(RejectDuplicateJsonKeys)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while sequence
+            .next_element::<RejectDuplicateJsonKeys>()?
+            .is_some()
+        {}
+        Ok(RejectDuplicateJsonKeys)
+    }
+
+    fn visit_map<A>(self, mut object: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut keys = BTreeSet::new();
+        while let Some(key) = object.next_key::<String>()? {
+            if !keys.insert(key.clone()) {
+                return Err(<A::Error as serde::de::Error>::custom(format!(
+                    "duplicate JSON object key `{key}`"
+                )));
+            }
+            object.next_value::<RejectDuplicateJsonKeys>()?;
+        }
+        Ok(RejectDuplicateJsonKeys)
+    }
+}
+
+fn contains_reserved_pqsigner_key(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(object) => {
+            object.contains_key("_pqsigner") || object.values().any(contains_reserved_pqsigner_key)
+        }
+        serde_json::Value::Array(values) => values.iter().any(contains_reserved_pqsigner_key),
+        _ => false,
+    }
+}
+
+fn parse_json_value_rejecting_duplicate_keys(
+    raw: &[u8],
+) -> Result<serde_json::Value, serde_json::Error> {
+    let mut preflight = serde_json::Deserializer::from_slice(raw);
+    RejectDuplicateJsonKeys::deserialize(&mut preflight)?;
+    preflight.end()?;
+    let json: serde_json::Value = serde_json::from_slice(raw)?;
+
+    // `_pqsigner` is an authority-narrowing extension, so silently ignoring a
+    // correctly spelled block merely because it was nested under a permissive
+    // upstream metadata/display object would restore the unrestricted
+    // deployment × format cross-product. Each root or include is its own JSON
+    // document: permit the reserved key only on that document's root object,
+    // before include merging or JCS hashing.
+    let misplaced = match &json {
+        serde_json::Value::Object(root) => root.values().any(contains_reserved_pqsigner_key),
+        other => contains_reserved_pqsigner_key(other),
+    };
+    if misplaced {
+        return Err(<serde_json::Error as serde::de::Error>::custom(
+            "reserved key `_pqsigner` may appear only at a JSON document root",
+        ));
+    }
+
+    Ok(json)
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // Catalog header constants (mirrored from the other on-disk DBs).
@@ -609,9 +736,36 @@ struct Descriptor {
     /// It has no rendering or policy semantics.
     #[serde(default)]
     _curation_note: Option<serde_json::Value>,
+    /// PQSigner-local, fail-closed curation constraints. These can only narrow
+    /// the ordinary descriptor deployment × format cross-product; they never
+    /// add a deployment, format, selector, or runtime interpretation. The
+    /// extension remains inside the JCS descriptor hash and the hash-bound
+    /// full-file curation overlay.
+    #[serde(rename = "_pqsigner", default)]
+    pqsigner: Option<PqsignerCuration>,
     context: Context,
     metadata: Metadata,
     display: Display,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PqsignerCuration {
+    /// Exact per-deployment format allowlists. When present, only listed
+    /// deployment/format pairs may emit authenticated leaves. Unlisted source
+    /// declarations remain in the independently generated known-call set and
+    /// therefore continue to hard-refuse rather than becoming blind-signable.
+    #[serde(rename = "deploymentFormats")]
+    deployment_formats: Vec<DeploymentFormatAdmission>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeploymentFormatAdmission {
+    #[serde(rename = "chainId")]
+    chain_id: u64,
+    address: String,
+    formats: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1002,6 +1156,18 @@ pub fn try_compile_one_with_erc20_capabilities(
     registry_root: Option<&Path>,
     erc20_capabilities: &Erc20Capabilities,
 ) -> Result<Vec<Emitted>, String> {
+    // A standalone coverage probe still needs the complete selector-signature
+    // inventory for this descriptor (raw plus include-resolved views). That
+    // keeps the public single-file path from bypassing the same collision gate
+    // used by the full catalogue build.
+    let mut declared_known_calls = BTreeSet::new();
+    let mut declared_contract_signatures = DeclaredContractSignatures::new();
+    collect_declared_contract_calls(
+        path,
+        registry_root,
+        &mut declared_known_calls,
+        &mut declared_contract_signatures,
+    )?;
     // The coverage scan reports whole-descriptor compilability (strict).
     compile_descriptor(
         path,
@@ -1010,6 +1176,7 @@ pub fn try_compile_one_with_erc20_capabilities(
         false,
         &mut Vec::new(),
         erc20_capabilities,
+        Some(&declared_contract_signatures),
     )
 }
 
@@ -1277,11 +1444,16 @@ fn build_db_inner(
     // is later rejected by strict WYSIWYS compilation. Otherwise an
     // unsupported/high-risk or broken registry shape could silently regain a
     // blind-sign path merely because the safer compiler dropped it.
-    let mut declared_known_calls = BTreeSet::<(u64, [u8; 20], [u8; 4])>::new();
+    let mut declared_known_calls = BTreeSet::<ContractCallKey>::new();
+    let mut declared_contract_signatures = DeclaredContractSignatures::new();
     for src in &unscanned_declared_sources {
-        let resolved =
-            collect_declared_contract_calls(src, registry_root, &mut declared_known_calls)
-                .map_err(|e| omission_scan_error(src, input_dir, registry_root, &e))?;
+        let resolved = collect_declared_contract_calls(
+            src,
+            registry_root,
+            &mut declared_known_calls,
+            &mut declared_contract_signatures,
+        )
+        .map_err(|e| omission_scan_error(src, input_dir, registry_root, &e))?;
         if has_concrete_descriptor_shape(&resolved) {
             skips.push(SkipReport {
                 source: src.clone(),
@@ -1294,9 +1466,18 @@ fn build_db_inner(
         }
     }
     for src in &sources {
-        let _resolved =
-            collect_declared_contract_calls(src, registry_root, &mut declared_known_calls)
-                .map_err(|e| omission_scan_error(src, input_dir, registry_root, &e))?;
+        let _resolved = collect_declared_contract_calls(
+            src,
+            registry_root,
+            &mut declared_known_calls,
+            &mut declared_contract_signatures,
+        )
+        .map_err(|e| omission_scan_error(src, input_dir, registry_root, &e))?;
+    }
+    // Compile only after the omission preflight has inventoried every source.
+    // A scoped descriptor must therefore see selector collisions declared by
+    // later files, dropped files, and misnamed-but-concrete tripwire files.
+    for src in &sources {
         let mut partial_format_drops = Vec::new();
         match compile_descriptor(
             src,
@@ -1305,6 +1486,7 @@ fn build_db_inner(
             tolerant,
             &mut partial_format_drops,
             erc20_capabilities,
+            Some(&declared_contract_signatures),
         ) {
             Ok(entries) => {
                 // A descriptor can retain safe formats while other source
@@ -1615,10 +1797,14 @@ fn reject_duplicate_eip712_format_bindings(emitted: &[Emitted]) -> Result<(), St
     Ok(())
 }
 
+type ContractCallKey = (u64, [u8; 20], [u8; 4]);
+type DeclaredContractSignatures = BTreeMap<ContractCallKey, BTreeSet<String>>;
+
 fn collect_declared_contract_calls(
     path: &Path,
     registry_root: Option<&Path>,
-    out: &mut BTreeSet<(u64, [u8; 20], [u8; 4])>,
+    out: &mut BTreeSet<ContractCallKey>,
+    signatures: &mut DeclaredContractSignatures,
 ) -> Result<serde_json::Value, String> {
     // Scan the raw descriptor first so local declarations remain visible even
     // when an include contributes a different half of the tuple. The resolved
@@ -1629,18 +1815,19 @@ fn collect_declared_contract_calls(
     // Bloom false positives, whereas dropping either view could be a false
     // negative.
     let raw = fs::read(path).map_err(|e| format!("read: {e}"))?;
-    let raw_json: serde_json::Value =
-        serde_json::from_slice(&raw).map_err(|e| format!("parse: {e}"))?;
-    collect_contract_calls_from_json(&raw_json, out)?;
+    let raw_json =
+        parse_json_value_rejecting_duplicate_keys(&raw).map_err(|e| format!("parse: {e}"))?;
+    collect_contract_calls_from_json(&raw_json, out, signatures)?;
 
     let json = load_resolved_descriptor_json(path, registry_root)?;
-    collect_contract_calls_from_json(&json, out)?;
+    collect_contract_calls_from_json(&json, out, signatures)?;
     Ok(json)
 }
 
 fn collect_contract_calls_from_json(
     json: &serde_json::Value,
-    out: &mut BTreeSet<(u64, [u8; 20], [u8; 4])>,
+    out: &mut BTreeSet<ContractCallKey>,
+    signatures: &mut DeclaredContractSignatures,
 ) -> Result<(), String> {
     let Some(deployments_value) = json.pointer("/context/contract/deployments") else {
         return Ok(()); // EIP-712 descriptor or an include-only template.
@@ -1655,7 +1842,7 @@ fn collect_contract_calls_from_json(
         .as_object()
         .ok_or_else(|| "display.formats is not an object".to_string())?;
 
-    let mut selectors = BTreeSet::<[u8; 4]>::new();
+    let mut selectors = BTreeMap::<[u8; 4], BTreeSet<String>>::new();
     for signature in formats.keys() {
         // Selector derivation is deliberately less permissive than blind
         // omission but independent of WYSIWYS name validation. Duplicate
@@ -1663,7 +1850,10 @@ fn collect_contract_calls_from_json(
         // still determined entirely by the types; it must remain known.
         let canonical = contract_selector_signature(signature)?;
         let digest = keccak256(canonical.as_bytes());
-        selectors.insert([digest[0], digest[1], digest[2], digest[3]]);
+        selectors
+            .entry([digest[0], digest[1], digest[2], digest[3]])
+            .or_default()
+            .insert(canonical);
     }
 
     for (index, deployment) in deployments.iter().enumerate() {
@@ -1677,8 +1867,13 @@ fn collect_contract_calls_from_json(
             .ok_or_else(|| format!("contract deployment[{index}] has no string address"))?;
         let contract = parse_address(address)
             .map_err(|e| format!("contract deployment[{index}] address: {e}"))?;
-        for selector in &selectors {
-            out.insert((chain_id, contract, *selector));
+        for (selector, canonical_signatures) in &selectors {
+            let key = (chain_id, contract, *selector);
+            out.insert(key);
+            signatures
+                .entry(key)
+                .or_default()
+                .extend(canonical_signatures.iter().cloned());
         }
     }
     Ok(())
@@ -2219,8 +2414,8 @@ fn load_resolved_descriptor_json(
     registry_root: Option<&Path>,
 ) -> Result<serde_json::Value, String> {
     let raw = fs::read(path).map_err(|e| format!("read: {e}"))?;
-    let mut json: serde_json::Value =
-        serde_json::from_slice(&raw).map_err(|e| format!("parse: {e}"))?;
+    let mut json =
+        parse_json_value_rejecting_duplicate_keys(&raw).map_err(|e| format!("parse: {e}"))?;
 
     // Resolve top-level includes before either compilation or the independent
     // registry-known-call scan. Keeping one loader prevents a skipped format
@@ -2251,7 +2446,7 @@ fn load_resolved_descriptor_json(
         let inc_path = resolve_include_path(root, &including_path, &inc)?;
         let inc_raw =
             fs::read(&inc_path).map_err(|e| format!("read include {}: {e}", inc_path.display()))?;
-        let inc_json: serde_json::Value = serde_json::from_slice(&inc_raw)
+        let inc_json = parse_json_value_rejecting_duplicate_keys(&inc_raw)
             .map_err(|e| format!("parse include {}: {e}", inc_path.display()))?;
         if let Some(obj) = json.as_object_mut() {
             obj.remove("includes");
@@ -2269,8 +2464,21 @@ fn compile_descriptor(
     tolerant: bool,
     partial_format_drops: &mut Vec<String>,
     erc20_capabilities: &Erc20Capabilities,
+    declared_contract_signatures: Option<&DeclaredContractSignatures>,
 ) -> Result<Vec<Emitted>, String> {
     let json = load_resolved_descriptor_json(path, registry_root)?;
+
+    // `Option<T>` normally treats an explicit JSON `null` like an absent
+    // field. That is unsafe for a narrowing extension: a reviewer could see
+    // `_pqsigner` in a curated descriptor while the compiler silently emits
+    // the ordinary full deployment × format cross-product. Missing means
+    // unscoped; present must be a concrete, validated object.
+    if json
+        .get("_pqsigner")
+        .is_some_and(serde_json::Value::is_null)
+    {
+        return Err("schema: `_pqsigner` must be an object, not null".to_string());
+    }
 
     let descriptor: Descriptor =
         serde_json::from_value(json.clone()).map_err(|e| format!("schema: {e}"))?;
@@ -2320,6 +2528,20 @@ fn compile_descriptor(
         CONTRACT_NAME_FIELD_LEN - 1,
     );
 
+    // Decide context kind + collect deployment tuples before moving metadata
+    // into the compile context: the local curation constraint is validated
+    // against the exact resolved source declarations, never against a
+    // best-effort string match during leaf emission.
+    let (context_kind, deployments) =
+        resolve_deployments(&descriptor.context).map_err(|e| format!("deployments: {e}"))?;
+    let deployment_formats = validate_deployment_format_admissions(
+        descriptor.pqsigner.as_ref(),
+        context_kind,
+        &deployments,
+        &descriptor.display,
+        declared_contract_signatures,
+    )?;
+
     // Resolve constants and enums into the IR pool (lazily, only
     // entries actually referenced get emitted).
     let base_ctx = CompileCtx {
@@ -2330,10 +2552,6 @@ fn compile_descriptor(
         contract_name: contract_name.clone(),
     };
 
-    // Decide context kind + collect deployment tuples.
-    let (context_kind, deployments) =
-        resolve_deployments(&descriptor.context).map_err(|e| format!("deployments: {e}"))?;
-
     // Interpolation enrollment can differ by deployment: a static token may
     // be authenticated on one chain but absent from the exact ERC-20 metadata
     // corpus on another. Compile each body against its deployment capability
@@ -2343,6 +2561,19 @@ fn compile_descriptor(
     for dep in deployments {
         let (chain_id, contract_addr, domain_separator) =
             resolve_per_deployment(context_kind, &descriptor.context, &dep)?;
+        let allowed_formats = match deployment_formats.as_ref() {
+            None => None,
+            Some(admissions) => match admissions.get(&(chain_id, contract_addr)) {
+                Some(formats) => Some(formats),
+                None => {
+                    partial_format_drops.push(format!(
+                        "deployment chain_id={chain_id} contract=0x{} excluded by the authenticated PQSigner deploymentFormats allowlist",
+                        hex::encode(contract_addr)
+                    ));
+                    continue;
+                }
+            },
+        };
         let deployment = InterpolationDeployment {
             chain_id,
             contract: contract_addr,
@@ -2357,6 +2588,7 @@ fn compile_descriptor(
             tolerant,
             &mut deployment_drops,
             Some(&deployment),
+            allowed_formats,
         )?;
         // The same unsupported source format is normally rediscovered for
         // every deployment. Keep one stable review receipt per exact reason.
@@ -2479,6 +2711,144 @@ fn resolve_deployments(ctx: &Context) -> Result<(u8, Vec<Deployment>), String> {
     } else {
         Err("context has neither `contract` nor `eip712`".to_string())
     }
+}
+
+type DeploymentFormatAdmissions = BTreeMap<(u64, [u8; 20]), BTreeSet<String>>;
+
+/// Validate the PQSigner-local deployment/format allowlist and lower its
+/// checksummed/string declarations into exact binary catalogue bindings.
+///
+/// The extension is deliberately monotone: every admitted tuple and format
+/// must already exist in the ordinary descriptor. Omitting a deployment or
+/// format can only remove a leaf/selector from clear-signing; the independent
+/// known-call scan ignores this extension and retains all original tuples as
+/// hard refusals.
+fn validate_deployment_format_admissions(
+    pqsigner: Option<&PqsignerCuration>,
+    context_kind: u8,
+    deployments: &[Deployment],
+    display: &Display,
+    declared_contract_signatures: Option<&DeclaredContractSignatures>,
+) -> Result<Option<DeploymentFormatAdmissions>, String> {
+    let Some(pqsigner) = pqsigner else {
+        return Ok(None);
+    };
+    if context_kind != CTX_CONTRACT {
+        return Err("_pqsigner.deploymentFormats is contract-context only".to_string());
+    }
+    if pqsigner.deployment_formats.is_empty() {
+        return Err("_pqsigner.deploymentFormats must not be empty".to_string());
+    }
+
+    let mut declared_deployments = BTreeSet::new();
+    for (index, deployment) in deployments.iter().enumerate() {
+        let address = parse_address(&deployment.address).map_err(|error| {
+            format!(
+                "context.contract.deployments[{index}] address is invalid while validating _pqsigner.deploymentFormats: {error}"
+            )
+        })?;
+        declared_deployments.insert((deployment.chain_id, address));
+    }
+
+    // An EVM call is dispatched by its four-byte selector, not by the source
+    // signature string used as the ERC-7730 format key. Narrowing one of two
+    // colliding signatures would otherwise authenticate the selected decoder
+    // for calldata intended for the omitted signature, while the known-call
+    // filter could not distinguish them. Precompute every source collision and
+    // refuse any admission that selects a member of one.
+    let mut source_formats_by_selector = BTreeMap::<[u8; 4], Vec<String>>::new();
+    for signature in display.formats.keys() {
+        let canonical = contract_selector_signature(signature).map_err(|error| {
+            format!(
+                "format `{signature}` cannot be selector-bound while validating _pqsigner.deploymentFormats: {error}"
+            )
+        })?;
+        let digest = keccak256(canonical.as_bytes());
+        source_formats_by_selector
+            .entry([digest[0], digest[1], digest[2], digest[3]])
+            .or_default()
+            .push(signature.clone());
+    }
+
+    let mut admissions = BTreeMap::new();
+    for (index, admission) in pqsigner.deployment_formats.iter().enumerate() {
+        let address = parse_address(&admission.address).map_err(|error| {
+            format!("_pqsigner.deploymentFormats[{index}].address is invalid: {error}")
+        })?;
+        let binding = (admission.chain_id, address);
+        if !declared_deployments.contains(&binding) {
+            return Err(format!(
+                "_pqsigner.deploymentFormats[{index}] chain_id={} contract=0x{} is not a declared contract deployment",
+                admission.chain_id,
+                hex::encode(address)
+            ));
+        }
+        if admission.formats.is_empty() {
+            return Err(format!(
+                "_pqsigner.deploymentFormats[{index}].formats must not be empty"
+            ));
+        }
+
+        let mut formats = BTreeSet::new();
+        for (format_index, signature) in admission.formats.iter().enumerate() {
+            if !display.formats.contains_key(signature) {
+                return Err(format!(
+                    "_pqsigner.deploymentFormats[{index}].formats[{format_index}] names unknown format `{signature}`"
+                ));
+            }
+            let canonical = contract_selector_signature(signature).map_err(|error| {
+                format!(
+                    "_pqsigner.deploymentFormats[{index}].formats[{format_index}] cannot be selector-bound: {error}"
+                )
+            })?;
+            let digest = keccak256(canonical.as_bytes());
+            let selector = [digest[0], digest[1], digest[2], digest[3]];
+            let colliders = source_formats_by_selector
+                .get(&selector)
+                .expect("selected source format was inventoried above");
+            if colliders.len() != 1 {
+                return Err(format!(
+                    "_pqsigner.deploymentFormats[{index}].formats[{format_index}] selects `{signature}` with selector 0x{}, which collides with source formats {:?}; selector-only runtime dispatch cannot authenticate this narrowing",
+                    hex::encode(selector),
+                    colliders
+                ));
+            }
+            if let Some(declared_contract_signatures) = declared_contract_signatures {
+                let key = (admission.chain_id, address, selector);
+                let catalogue_signatures = declared_contract_signatures.get(&key).ok_or_else(|| {
+                    format!(
+                        "internal: selected `{signature}` has no catalogue-wide source-signature inventory for chain_id={} contract=0x{} selector=0x{}",
+                        admission.chain_id,
+                        hex::encode(address),
+                        hex::encode(selector)
+                    )
+                })?;
+                if catalogue_signatures.len() != 1 || !catalogue_signatures.contains(&canonical) {
+                    return Err(format!(
+                        "_pqsigner.deploymentFormats[{index}].formats[{format_index}] selects `{signature}` for chain_id={} contract=0x{} selector=0x{}, which collides catalogue-wide with canonical source signatures {:?}; selector-only runtime dispatch cannot authenticate this narrowing",
+                        admission.chain_id,
+                        hex::encode(address),
+                        hex::encode(selector),
+                        catalogue_signatures
+                    ));
+                }
+            }
+            if !formats.insert(signature.clone()) {
+                return Err(format!(
+                    "_pqsigner.deploymentFormats[{index}].formats duplicates `{signature}`"
+                ));
+            }
+        }
+        if admissions.insert(binding, formats).is_some() {
+            return Err(format!(
+                "_pqsigner.deploymentFormats duplicates chain_id={} contract=0x{}",
+                admission.chain_id,
+                hex::encode(address)
+            ));
+        }
+    }
+
+    Ok(Some(admissions))
 }
 
 fn reject_unsupported_context_semantics(ctx: &Context) -> Result<(), String> {
@@ -2694,7 +3064,15 @@ fn compile_formats(
     ctx: &mut CompileCtx,
     tolerant: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    compile_formats_reporting(display, context_kind, ctx, tolerant, &mut Vec::new(), None)
+    compile_formats_reporting(
+        display,
+        context_kind,
+        ctx,
+        tolerant,
+        &mut Vec::new(),
+        None,
+        None,
+    )
 }
 
 fn compile_formats_reporting(
@@ -2704,12 +3082,22 @@ fn compile_formats_reporting(
     tolerant: bool,
     partial_format_drops: &mut Vec<String>,
     interpolation_deployment: Option<&InterpolationDeployment<'_>>,
+    allowed_formats: Option<&BTreeSet<String>>,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let n = display.formats.len();
+    let n = allowed_formats.map_or(display.formats.len(), BTreeSet::len);
+    // An explicit curation admission is an atomic reviewed set. Ordinary
+    // unscoped descriptors retain the historical tolerant behavior, but an
+    // admitted format may never disappear while sibling admissions still
+    // acquire authority.
+    let allow_partial_format_drops = tolerant && allowed_formats.is_none();
     if n == 0 {
-        return Err("display.formats is empty".to_string());
+        return Err(if allowed_formats.is_some() {
+            "deploymentFormats selected no formats".to_string()
+        } else {
+            "display.formats is empty".to_string()
+        });
     }
-    if !tolerant && n > MAX_FORMATS {
+    if !allow_partial_format_drops && n > MAX_FORMATS {
         return Err(format!("format count {n} > MAX_FORMATS ({MAX_FORMATS})"));
     }
 
@@ -2727,6 +3115,21 @@ fn compile_formats_reporting(
     let mut format_errs: Vec<String> = Vec::new();
     let mut flat: Vec<(&str, Format)> = Vec::with_capacity(n);
     for (sig, fmt) in display.formats.iter() {
+        if allowed_formats.is_some_and(|allowed| !allowed.contains(sig)) {
+            let deployment = interpolation_deployment
+                .map(|deployment| {
+                    format!(
+                        " for chain_id={} contract=0x{}",
+                        deployment.chain_id,
+                        hex::encode(deployment.contract)
+                    )
+                })
+                .unwrap_or_default();
+            format_errs.push(format!(
+                "format `{sig}` excluded{deployment} by the authenticated PQSigner deploymentFormats allowlist"
+            ));
+            continue;
+        }
         // 1.3: an unmodelled top-level format/field key would be silently
         // dropped — exactly how `$ref` shipped degraded raw (finding 1.1).
         // Refuse the format instead of guessing. params SUB-keys are still
@@ -2742,7 +3145,7 @@ fn compile_formats_reporting(
                 "format `{sig}`: unmodeled descriptor key `{key}` — dbgen does not act on it and \
                  would silently drop it; refusing (finding 1.3)"
             );
-            if tolerant {
+            if allow_partial_format_drops {
                 format_errs.push(msg);
                 continue;
             }
@@ -2755,7 +3158,7 @@ fn compile_formats_reporting(
         // strict mode.
         let resolved = match resolve_display_refs(&fmt.fields, display.definitions.as_ref()) {
             Ok(r) => r,
-            Err(e) if tolerant => {
+            Err(e) if allow_partial_format_drops => {
                 format_errs.push(format!("format `{sig}`: {e}"));
                 continue;
             }
@@ -2773,7 +3176,9 @@ fn compile_formats_reporting(
                 },
             )),
             // Was a silent drop; record it so the skip report shows why.
-            Err(e) if tolerant => format_errs.push(format!("format `{sig}`: {e}")),
+            Err(e) if allow_partial_format_drops => {
+                format_errs.push(format!("format `{sig}`: {e}"))
+            }
             Err(e) => return Err(format!("format `{sig}`: {e}")),
         }
     }
@@ -2809,7 +3214,7 @@ fn compile_formats_reporting(
                     encode_enum_table(table).map_err(|e| format!("enum `{name}` encoding: {e}"))
                 }) {
                 Ok(enc) => enc,
-                Err(_) if tolerant => continue,
+                Err(_) if allow_partial_format_drops => continue,
                 Err(e) => return Err(e),
             };
             let off = pool.push_raw(&encoded)?;
@@ -2826,7 +3231,7 @@ fn compile_formats_reporting(
     // `?`-fails the whole descriptor on the first bad format.
     let mut survivors: Vec<Vec<u8>> = Vec::with_capacity(n);
     for &(sig, ref fmt) in flat.iter() {
-        if tolerant && survivors.len() >= MAX_FORMATS {
+        if allow_partial_format_drops && survivors.len() >= MAX_FORMATS {
             format_errs.push(format!(
                 "format `{sig}`: omitted because the descriptor already emitted MAX_FORMATS ({MAX_FORMATS}) safe formats"
             ));
@@ -2844,7 +3249,7 @@ fn compile_formats_reporting(
             interpolation_deployment,
         ) {
             Ok(()) => survivors.push(one),
-            Err(e) if tolerant => {
+            Err(e) if allow_partial_format_drops => {
                 format_errs.push(format!("format `{sig}`: {e}"));
             }
             Err(e) => return Err(e),
@@ -9243,8 +9648,12 @@ mod tests {
                 "f(MyStruct value)": {"intent": "Call", "fields": []}
             }}
         });
-        let err = collect_contract_calls_from_json(&json, &mut BTreeSet::new())
-            .expect_err("an unknown canonical type must abort omission scanning");
+        let err = collect_contract_calls_from_json(
+            &json,
+            &mut BTreeSet::new(),
+            &mut DeclaredContractSignatures::new(),
+        )
+        .expect_err("an unknown canonical type must abort omission scanning");
         assert!(
             err.contains("unsupported ABI type `MyStruct`"),
             "got: {err}"
@@ -9263,11 +9672,16 @@ mod tests {
             }}
         });
         let mut declared = BTreeSet::new();
-        collect_contract_calls_from_json(&json, &mut declared).unwrap();
+        let mut signatures = DeclaredContractSignatures::new();
+        collect_contract_calls_from_json(&json, &mut declared, &mut signatures).unwrap();
         assert_eq!(declared.len(), 1);
-        let (_, _, selector) = declared.iter().next().unwrap();
+        let key @ (_, _, selector) = declared.iter().next().unwrap();
         let digest = keccak256(b"$foo(uint256)");
         assert_eq!(*selector, [digest[0], digest[1], digest[2], digest[3]]);
+        assert_eq!(
+            signatures.get(key),
+            Some(&BTreeSet::from(["$foo(uint256)".to_string()]))
+        );
     }
 
     #[test]
@@ -10633,9 +11047,16 @@ mod tests {
         // TOLERANT: keep the renderable `transfer`, drop `swap` → 1 format,
         // while preserving the exact overloaded signature in the receipt.
         let mut drops = Vec::new();
-        let (buf, _pool) =
-            compile_formats_reporting(&display, CTX_CONTRACT, &mut ctx, true, &mut drops, None)
-                .unwrap();
+        let (buf, _pool) = compile_formats_reporting(
+            &display,
+            CTX_CONTRACT,
+            &mut ctx,
+            true,
+            &mut drops,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(buf[0], 1, "exactly one surviving format (transfer)");
         assert_eq!(drops.len(), 1);
         assert!(drops[0].contains("swap(uint256[] amounts)"), "{:?}", drops);
@@ -12573,6 +12994,7 @@ mod tests {
             true,
             &mut drops,
             &Erc20Capabilities::default(),
+            None,
         )
         .expect("tolerant Router02 compile");
         assert_eq!(entries.len(), 1, "one exact mainnet deployment leaf");
@@ -12697,6 +13119,7 @@ mod tests {
             true,
             &mut drops,
             &erc20.capabilities,
+            None,
         )
         .expect("tolerant Lido queue compile");
         assert_eq!(entries.len(), 1, "one exact mainnet deployment leaf");
