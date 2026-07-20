@@ -2022,3 +2022,41 @@ the canary's own qed. EasyCrypt halts at the first error, so nothing before 8886
 (including `EUFNAGCMA_FLSLXMSSMTTWCESNPRF_Unfolded`) typechecks and every proof closes. So `CERTIFIED-0-ADMIT`
 on the unfold file is now verified at THREE independent levels (build track → workflow auditor → this session),
 matching the earlier component-theorem verification standard.
+
+### 2026-07-21 — Wave 1: item 1 (S-TCR summand) RESOLVED at the honest level; item 4 (PRF hop) STRUCTURE + composition, 2 legs open
+
+First items on the new fast require-base (XmssmtCC_All; ~2s compiles). Both audited HONEST, neither overstates.
+
+**ITEM 1 — S-TCR summand: DONE at the honest level (drafts/stcr_reduction_wip.ec, CERTIFIED-0-ADMIT,
+canary-verified).** Resolves the "summand 4 is not a standard assumption" caveat correctly:
+ - `summand4_le_std` (in exact component-theorem syntax): bounds summand 4 by the standard single-member
+   SM-DT-TCR(+C) 2nd-preimage advantage on member `thfc dfC`, consuming the PROVEN predicate bridge
+   `S_TCR_C_Int_MA_win_implies_2ndpreimage`. So the +C summand now rests on **the paper's named collection-aware
+   S-TCR(+C) / InSec notion (Def C.1, Thm 5.2)**, and its winning event is a genuine standard TCR collision.
+   `disj_lists_nil` documents the twsMA=[] collapse to verbatim Def C.1. 0 axioms; two modelling hyps
+   (emb_in_len/emb_in_inj) THREADED (not axioms), both negative-control-verified load-bearing.
+ - **HONEST NAMING CAVEAT (audit-flagged):** the RHS is still the paper's Def C.1 INTERACTIVE notion (counter/
+   grind oracle), NOT a plain non-interactive SM-DT-TCR; the `std`/`asStd` naming could momentarily mislead.
+ - **PART 2 — reduction to PLAIN SM-DT-TCR: BLOCKED, and the block is a MACHINE-CHECKED FINDING.** Two
+   obstruction lemmas (`grind_via_OC_breaks_disj`, `readd_tweak_breaks_dist`) prove: the +C challenge oracle
+   grinds a pp-dependent counter and RETURNS it; a reduction can't reproduce that in the standard oracle
+   interface (pp hidden until find) without recording the target tweak into twsO or twsOC, falsifying
+   dist/disj_lists on exactly the winning runs. ⇒ **the +C message-compression layer genuinely needs the
+   counter-oracle S-TCR(+C) assumption, not plain SM-DT-TCR** — a rigorous reason (matching the paper's ROM
+   argument), not a hand-wave. This is the correct, final resolution: summand 4 IS the paper's assumption, and
+   here is why it can be nothing weaker.
+
+**ITEM 4 — PRF hop: STRUCTURE + composition proved, 2 byequiv legs OPEN (drafts/prf_hop_wip.ec, 2 admits).**
+ - Defined `FL_SL_XMSS_MT_C_ES_PRF` (PRF-keyed +C-hypertree keygen), `EUF_NAGCMA_FLSLXMSSMTTWCESPRF` (PRF game),
+   and `R_SKGPRF_FLSLXMSSMTC` (genuine R_SKGPRF-style reduction to the SKG PRF property) — all TYPECHECK.
+ - `SKGPRF_hop` (Pr[PRF-game] <= Pr[NPRF-game] + |SKG-PRF term|) and `SKGPRF_hop_composed` (folds into the
+   component theorem) are ADMIT-FREE proofs — but they CONSUME two admitted byequiv legs, so the composed
+   bound is CONTINGENT.
+ - **The 2 open legs (precise):** `EqPr_PRF_false` (setup seq: `sim` cannot carry the keygen-LOCAL{1} =
+   O_PRF-GLOBAL{2} key equality + the RHS-only `!b{2}` predicate across A.choose + the abstract OC.init) and
+   `EqPr_NPRF_true` (not attempted). A known EC pattern — closeable with an explicit invariant instead of sim.
+ - **Scope honesty (disclosed):** stated at the HYPERTREE level; MKG is N/A here (only SKG applies); does NOT
+   compose to a full-scheme PRF hop (FORS+C keys + MKG term deferred with the FORS+C item).
+
+Net: item 1 resolved honestly (with a bonus impossibility result); item 4 is structurally there with 2 focused
+byequiv legs to close. Remaining: item 3 (FORS+C wiring), item 2 (R_top soundness), item 5 (capstone).
