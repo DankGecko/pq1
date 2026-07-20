@@ -3,7 +3,8 @@
 This package binds PQ1's FlyingTulip SessionManager clear-signing routes to the
 seven deployments named by the vendored ERC-7730 descriptor.
 
-Three newly admitted all-static routes expose every signed operand:
+Four curated routes expose every signed operand: three all-static routes and
+one bounded sole-dynamic-array route:
 
 - `revokeSession(bytes32)` shows the exact session ID. The verified source
   requires an existing session and its stored owner as caller, then marks it
@@ -11,16 +12,21 @@ Three newly admitted all-static routes expose every signed operand:
 - `setAllowedTarget(address,bool)` shows the exact target and both `Allow` and
   `Disallow`. It is current-manager-owner-only, rejects the zero target, and
   stores the exact boolean.
+- `setAllowedTargets(address[],bool)` shows the explicit target count, every
+  target address, and the shared `Allow` or `Disallow` choice. The verified
+  source applies `_setAllowedTarget` to each element in order under
+  `onlyOwner`; an empty list is a no-op, and any zero target reverts the whole
+  transaction. PQ1 deliberately hard-refuses lists longer than eight rather
+  than truncate a signed tail.
 - `transferOwnership(address)` is labelled as a pending-owner update. Under
   OpenZeppelin `Ownable2Step`, it sets or replaces `pendingOwner`; zero cancels
   a pending handoff, and current ownership changes only through
   `acceptOwnership()`.
 
 The descriptor's existing `acceptOwnership()` and `renounceOwnership()` routes
-remain admitted. Six dynamic or signature-bearing routes remain registry-known
-hard refusals: `createSession`, `createSessionBySig`,
-`invalidateNonceBySig`, `revokeSessionBySig`, `setAllowedTargets`, and
-`validateAndConsume`.
+remain admitted. Five tuple-array or signature-bearing routes remain
+registry-known hard refusals: `createSession`, `createSessionBySig`,
+`invalidateNonceBySig`, `revokeSessionBySig`, and `validateAndConsume`.
 
 ## Source and deployment binding
 

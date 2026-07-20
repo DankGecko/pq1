@@ -681,7 +681,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.root),
-        "89e5209101fc50fba8af1870b6f36bab7621338954f53d63ad2cb0328a2a9eef"
+        "120a49d4679f92e9991d95982c8f5e848aa709a4de26c3c299e0dfcf0f73835e"
     );
 }
 
@@ -2206,7 +2206,7 @@ fn registry_flying_tulip_pft_nft_admits_only_injective_operator_approval() {
 }
 
 #[test]
-fn registry_flying_tulip_session_manager_admits_only_injective_static_authority_routes() {
+fn registry_flying_tulip_session_manager_admits_only_injective_authority_routes() {
     let catalogue = build_registry();
     let entries: Vec<_> = catalogue
         .entries
@@ -2243,14 +2243,18 @@ fn registry_flying_tulip_session_manager_admits_only_injective_static_authority_
         "SessionManager must emit exactly its seven pinned deployments"
     );
 
-    const ADMITTED: [(&str, [u8; 4]); 5] = [
+    const ADMITTED: [(&str, [u8; 4]); 6] = [
         ("acceptOwnership()", [0x79, 0xba, 0x50, 0x97]),
         ("renounceOwnership()", [0x71, 0x50, 0x18, 0xa6]),
         ("revokeSession(bytes32)", [0xa7, 0xfe, 0xd3, 0x85]),
         ("setAllowedTarget(address,bool)", [0xca, 0x1d, 0xd2, 0x2e]),
+        (
+            "setAllowedTargets(address[],bool)",
+            [0x01, 0xe2, 0xae, 0x55],
+        ),
         ("transferOwnership(address)", [0xf2, 0xfd, 0xe3, 0x8b]),
     ];
-    const REFUSED: [(&str, [u8; 4]); 6] = [
+    const REFUSED: [(&str, [u8; 4]); 5] = [
         (
             "createSession(address,uint48,uint48,uint32,uint16,(address,uint256)[],bytes32)",
             [0xc1, 0x45, 0x59, 0xe5],
@@ -2266,10 +2270,6 @@ fn registry_flying_tulip_session_manager_admits_only_injective_static_authority_
         (
             "revokeSessionBySig(bytes32,uint256,bytes)",
             [0x1f, 0xc1, 0xdb, 0x86],
-        ),
-        (
-            "setAllowedTargets(address[],bool)",
-            [0x01, 0xe2, 0xae, 0x55],
         ),
         (
             "validateAndConsume(address,uint256,(bytes32,bytes32,uint256,uint256,address,uint256),bytes,address)",
@@ -2293,7 +2293,7 @@ fn registry_flying_tulip_session_manager_admits_only_injective_static_authority_
             .collect();
         assert_eq!(
             actual_selectors, expected_selectors,
-            "only five injective, all-static SessionManager authority routes may be advertised"
+            "only six fully rendered, injective SessionManager authority routes may be advertised"
         );
 
         let revoke = ir
@@ -2376,6 +2376,89 @@ fn registry_flying_tulip_session_manager_admits_only_injective_static_authority_
         assert_eq!(disallow, b"Disallow");
         assert_eq!(allow, b"Allow");
         assert_ne!(disallow, allow, "access labels must remain injective");
+
+        let targets_access = ir
+            .find_format_by_selector(&[0x01, 0xe2, 0xae, 0x55])
+            .expect("SessionManager format table parses")
+            .expect("setAllowedTargets is clear-signable");
+        assert_eq!(targets_access.intent, b"Update allowed targets");
+        assert_eq!(targets_access.static_head_words, 2);
+        let targets_fields: Vec<_> = targets_access
+            .fields()
+            .map(|field| field.expect("setAllowedTargets field parses"))
+            .collect();
+        assert_eq!(targets_fields.len(), 2);
+        assert_eq!(targets_fields[0].label, b"Targets");
+        assert_eq!(
+            FormatOp::try_from(targets_fields[0].format_op),
+            Ok(FormatOp::AddressName)
+        );
+        assert_eq!(
+            ir.path_bytes(targets_fields[0].path_off)
+                .expect("targets array path parses"),
+            [
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                0,
+                PathOp::ArrayAll as u8,
+            ]
+        );
+        let targets_params =
+            parse_params(&ir, targets_fields[0].param_off).expect("targets params parse");
+        assert_eq!(targets_params.visibility, Visibility::Always);
+        assert_eq!(targets_params.terminal_kind, Some(TerminalKind::Address));
+        assert_eq!(
+            targets_params.addr_types,
+            Some(0x37),
+            "every declared target address class must survive compilation"
+        );
+        assert_eq!(
+            targets_params.addr_sources,
+            Some(0x03),
+            "local and ENS address-name sources must survive compilation"
+        );
+
+        assert_eq!(targets_fields[1].label, b"Access");
+        assert_eq!(
+            FormatOp::try_from(targets_fields[1].format_op),
+            Ok(FormatOp::Enum)
+        );
+        assert_eq!(
+            ir.path_bytes(targets_fields[1].path_off)
+                .expect("targets access path parses"),
+            [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 1]
+        );
+        let targets_access_params =
+            parse_params(&ir, targets_fields[1].param_off).expect("targets access params parse");
+        assert_eq!(targets_access_params.visibility, Visibility::Always);
+        assert_eq!(
+            targets_access_params.terminal_kind,
+            Some(TerminalKind::Bool)
+        );
+        let targets_enum_off = targets_access_params
+            .enum_ref
+            .expect("targets access enum reference");
+        let targets_disallow = pqsigner_erc7730::render::enums::lookup_enum_label(
+            ir.pool,
+            targets_enum_off,
+            &[0u8; 32],
+        )
+        .expect("targets access enum table is valid")
+        .expect("false targets access value is enrolled");
+        let targets_allow = pqsigner_erc7730::render::enums::lookup_enum_label(
+            ir.pool,
+            targets_enum_off,
+            &allow_word,
+        )
+        .expect("targets access enum table is valid")
+        .expect("true targets access value is enrolled");
+        assert_eq!(targets_disallow, b"Disallow");
+        assert_eq!(targets_allow, b"Allow");
+        assert_ne!(
+            targets_disallow, targets_allow,
+            "targets access labels must remain injective"
+        );
 
         let transfer = ir
             .find_format_by_selector(&[0xf2, 0xfd, 0xe3, 0x8b])

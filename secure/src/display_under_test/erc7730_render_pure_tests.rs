@@ -3749,14 +3749,59 @@ fn positive_flyingtulip_operator_approval_fixture_binds_operator_and_bool_enum()
     );
 }
 
+const FLYINGTULIP_SET_ALLOWED_TARGETS: &str = "setAllowedTargets(address[],bool)";
+
+fn flyingtulip_set_allowed_targets_calldata(targets: &[[u8; 20]], allowed: u64) -> Vec<u8> {
+    let mut calldata = keccak256(FLYINGTULIP_SET_ALLOWED_TARGETS.as_bytes())[..4].to_vec();
+    calldata.extend_from_slice(&u256_from_u64(64).0); // two-word head ends here
+    calldata.extend_from_slice(&u256_from_u64(allowed).0);
+    calldata.extend_from_slice(&u256_from_u64(targets.len() as u64).0);
+    for target in targets {
+        calldata.extend_from_slice(&abi_address_word(*target));
+    }
+    calldata
+}
+
+fn assert_complete_flyingtulip_target_pages(pages: &Pages, targets: &[[u8; 20]]) {
+    let target_pages = pages
+        .as_slice()
+        .iter()
+        .filter(|page| row_str(&page[0]) == "Targets")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        target_pages.len(),
+        targets.len() + 1,
+        "target array must show one count page and every signed address:\n{}",
+        dump_pages(pages)
+    );
+    assert!(
+        page_strs(pages, find_page_by_label(pages, "Targets"))
+            .iter()
+            .any(|row| row.contains(&format!("{} items", targets.len()))),
+        "target count must be explicit:\n{}",
+        dump_pages(pages)
+    );
+
+    for (index, target) in targets.iter().enumerate() {
+        let mut expected = [[b' '; DISPLAY_COLS]; 4];
+        expected[0][..7].copy_from_slice(b"Targets");
+        let [_, r1, r2, r3] = &mut expected;
+        write_addr_full(r1, r2, r3, target);
+        assert_eq!(
+            *target_pages[index + 1],
+            expected,
+            "target element {index} must show all 20 signed address bytes"
+        );
+    }
+}
+
 #[test]
 fn positive_flyingtulip_session_manager_static_authority_routes_bind_every_operand() {
-    const REFUSED: [&str; 6] = [
+    const REFUSED: [&str; 5] = [
         "createSession(address,uint48,uint48,uint32,uint16,(address,uint256)[],bytes32)",
         "createSessionBySig(address,address,uint48,uint48,uint32,uint16,(address,uint256)[],bytes32,bytes)",
         "invalidateNonceBySig(bytes32,uint256,uint256,address,bytes)",
         "revokeSessionBySig(bytes32,uint256,bytes)",
-        "setAllowedTargets(address[],bool)",
         "validateAndConsume(address,uint256,(bytes32,bytes32,uint256,uint256,address,uint256),bytes,address)",
     ];
 
@@ -3980,6 +4025,238 @@ fn positive_flyingtulip_session_manager_static_authority_routes_bind_every_opera
             .is_err(),
             "a bound descriptor must not fall back for a refused SessionManager route"
         );
+    }
+}
+
+#[test]
+fn production_flyingtulip_set_allowed_targets_binds_order_and_refuses_bad_framing() {
+    let registry = build_registry();
+    let entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-SessionManager.json")
+        })
+        .collect();
+    assert_eq!(
+        entries.len(),
+        7,
+        "target-array render coverage must span all seven SessionManager deployments"
+    );
+
+    let zero: [[u8; 20]; 0] = [];
+    let one = [[0u8; 20]];
+    let two = [[0x11; 20], [0x22; 20]];
+    let eight = [
+        [0x31; 20], [0x32; 20], [0x33; 20], [0x34; 20], [0x35; 20], [0x36; 20], [0x37; 20],
+        [0x38; 20],
+    ];
+
+    for entry in entries {
+        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &registry.root)
+            .expect("verify Flying Tulip SessionManager leaf");
+        cross_check_contract(&verified.ir, entry.chain_id, &entry.contract)
+            .expect("bind Flying Tulip SessionManager leaf");
+        let tx = envelope(entry.chain_id, entry.contract);
+        let resolver = NameResolver::new();
+        let signer = [0x42; 20];
+        let render = |calldata: &[u8]| {
+            render_erc7730_pages_with_signer_checked(
+                &tx, calldata, &verified, None, &resolver, &signer,
+            )
+        };
+
+        for targets in [&zero[..], &one[..], &two[..], &eight[..]] {
+            for (allowed, expected_access) in [(0u64, "Disallow"), (1u64, "Allow")] {
+                let calldata = flyingtulip_set_allowed_targets_calldata(targets, allowed);
+                assert_selector_matches(&verified.ir, &calldata, FLYINGTULIP_SET_ALLOWED_TARGETS);
+                let rendered = render(&calldata).unwrap_or_else(|error| {
+                    panic!(
+                        "render {} targets with access {allowed}: {error:?}",
+                        targets.len()
+                    )
+                });
+                assert_eq!(
+                    rendered.transcript_receipt.state_code(),
+                    INTENT_PUBLICATION_STATIC
+                );
+                assert!(
+                    rendered
+                        .transcript_receipt
+                        .range_matches(&rendered.pages, 0),
+                    "the complete target-array transcript must be bound"
+                );
+                assert_all_pages_printable(&rendered.pages);
+                let intent = page_strs(&rendered.pages, intent_page_index(&rendered.pages));
+                assert_eq!(
+                    format!("{}{}", intent[0], intent[1]),
+                    "Update allowed targets"
+                );
+                assert_complete_flyingtulip_target_pages(&rendered.pages, targets);
+                assert_eq!(
+                    page_strs(
+                        &rendered.pages,
+                        find_page_by_label(&rendered.pages, "Access")
+                    ),
+                    [
+                        "Access".to_string(),
+                        expected_access.to_string(),
+                        String::new(),
+                        String::new(),
+                    ]
+                );
+
+                let mut proofs = DispatchPageProofs::new();
+                proofs.fail_initialize();
+                let dispatched = pick_sign_pages(
+                    &tx,
+                    &calldata,
+                    &signer,
+                    None,
+                    None,
+                    None,
+                    Some(&verified),
+                    None,
+                    None,
+                    &resolver,
+                    &mut proofs,
+                )
+                .expect("production dispatcher must select the authenticated target-array leaf");
+                assert_eq!(
+                    dispatched.as_slice(),
+                    rendered.pages.as_slice(),
+                    "dispatcher and direct renderer must publish identical trusted pages"
+                );
+                let mut verdict = crate::fi::FAIL_SENTINEL;
+                proofs.final_set_proof(&dispatched, &tx, false, &mut verdict);
+                assert_eq!(
+                    verdict,
+                    crate::fi::OK_SENTINEL,
+                    "dispatcher proof must bind the complete target-array transcript"
+                );
+            }
+        }
+
+        let baseline_calldata = flyingtulip_set_allowed_targets_calldata(&two, 1);
+        let baseline = render(&baseline_calldata).expect("render two-target baseline");
+        for index in 0..two.len() {
+            let mut mutated_targets = two;
+            mutated_targets[index][19] ^= 1;
+            let mutated_calldata = flyingtulip_set_allowed_targets_calldata(&mutated_targets, 1);
+            let mutated = render(&mutated_calldata)
+                .unwrap_or_else(|error| panic!("render mutated target {index}: {error:?}"));
+            assert_complete_flyingtulip_target_pages(&mutated.pages, &mutated_targets);
+            assert_ne!(
+                baseline.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "target element {index} mutation must change trusted pages"
+            );
+            assert!(
+                !baseline
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "target element {index} mutation must change the transcript receipt"
+            );
+        }
+
+        let reordered_targets = [two[1], two[0]];
+        let reordered_calldata = flyingtulip_set_allowed_targets_calldata(&reordered_targets, 1);
+        let reordered = render(&reordered_calldata).expect("render reordered target array");
+        assert_complete_flyingtulip_target_pages(&reordered.pages, &reordered_targets);
+        assert_ne!(
+            baseline.pages.as_slice(),
+            reordered.pages.as_slice(),
+            "target reordering must change trusted pages"
+        );
+        assert!(
+            !baseline
+                .transcript_receipt
+                .exact_match(&reordered.transcript_receipt),
+            "target reordering must change the transcript receipt"
+        );
+
+        let disallowed_calldata = flyingtulip_set_allowed_targets_calldata(&two, 0);
+        let disallowed = render(&disallowed_calldata).expect("render disallowed target array");
+        assert_ne!(
+            baseline.pages.as_slice(),
+            disallowed.pages.as_slice(),
+            "access-bool mutation must change trusted pages"
+        );
+        assert!(
+            !baseline
+                .transcript_receipt
+                .exact_match(&disallowed.transcript_receipt),
+            "access-bool mutation must change the transcript receipt"
+        );
+
+        let mut malformed = Vec::new();
+        for offset in [32u64, 65, 96] {
+            let mut calldata = baseline_calldata.clone();
+            calldata[4..36].copy_from_slice(&u256_from_u64(offset).0);
+            malformed.push((calldata, "noncanonical array offset"));
+        }
+        let mut huge_offset = baseline_calldata.clone();
+        huge_offset[4] = 1;
+        malformed.push((huge_offset, "oversized array offset"));
+
+        let count_offset = 4 + 2 * 32;
+        for count in [1u64, 3] {
+            let mut calldata = baseline_calldata.clone();
+            calldata[count_offset..count_offset + 32].copy_from_slice(&u256_from_u64(count).0);
+            malformed.push((calldata, "array length inconsistent with calldata"));
+        }
+        let mut huge_count = baseline_calldata.clone();
+        huge_count[count_offset] = 1;
+        malformed.push((huge_count, "oversized array length"));
+
+        let mut trailing = baseline_calldata.clone();
+        trailing.extend_from_slice(&[0u8; 32]);
+        malformed.push((trailing, "trailing calldata word"));
+        let mut truncated = baseline_calldata.clone();
+        truncated.pop();
+        malformed.push((truncated, "truncated array element"));
+
+        let mut dirty_address = baseline_calldata.clone();
+        dirty_address[4 + 3 * 32] = 1;
+        malformed.push((dirty_address, "dirty address padding"));
+
+        let noncanonical_bool = flyingtulip_set_allowed_targets_calldata(&two, 2);
+        malformed.push((noncanonical_bool, "noncanonical bool 2"));
+
+        let nine = [[0x77; 20]; 9];
+        let over_cap = flyingtulip_set_allowed_targets_calldata(&nine, 1);
+        malformed.push((over_cap, "nine target elements"));
+
+        for (calldata, case) in malformed {
+            assert!(
+                matches!(
+                    render(&calldata),
+                    Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+                ),
+                "{case} must hard-refuse"
+            );
+            let mut proofs = DispatchPageProofs::new();
+            proofs.fail_initialize();
+            assert!(
+                pick_sign_pages(
+                    &tx,
+                    &calldata,
+                    &signer,
+                    None,
+                    None,
+                    None,
+                    Some(&verified),
+                    None,
+                    None,
+                    &resolver,
+                    &mut proofs,
+                )
+                .is_err(),
+                "{case} must refuse through dispatch without a blind fallback"
+            );
+        }
     }
 }
 
@@ -5760,7 +6037,7 @@ fn production_lido_requests_bind_amounts_and_effective_owner() {
 ///    regression guard.)
 /// 2. **End-to-end render** — the sole-dynamic arrays whose siblings my generic
 ///    calldata satisfies actually RENDER every element (array-tail-hiding
-///    closed). `visible:never` arrays (e.g. `setAllowedTargets`, Raw+hidden)
+///    closed). `visible:never` arrays (for example Raw+hidden fields)
 ///    and multi-field functions my stub calldata can't fully satisfy simply
 ///    don't reach the ≥4-page bar — that's fine, they're covered by (1) and
 ///    must not crash.

@@ -5,9 +5,9 @@
   "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
   "descriptor": {
     "vendored_file": "secure/data/erc7730-registry/registry/flyingtulip/calldata-SessionManager.json",
-    "vendored_file_sha256": "11ea474574a0791289ea877025184b90406018f79a6cbed9cf768dcacf8b562d",
+    "vendored_file_sha256": "87d64c8acc76adb75a473444b2e0266596b38ef4be72497e9ebcc5dac1e0739a",
     "curation_overlay": "secure/data/erc7730/curations/files/registry/flyingtulip/calldata-SessionManager.json",
-    "curation_overlay_sha256": "11ea474574a0791289ea877025184b90406018f79a6cbed9cf768dcacf8b562d",
+    "curation_overlay_sha256": "87d64c8acc76adb75a473444b2e0266596b38ef4be72497e9ebcc5dac1e0739a",
     "deployments": [
       {
         "chain_id": 1,
@@ -425,6 +425,12 @@
       "semantics": "Only the SessionManager's current owner can write the exact allowed bool for a nonzero target address. Both allow and disallow branches are security-relevant."
     },
     {
+      "name": "setAllowedTargets",
+      "canonical_signature": "setAllowedTargets(address[],bool)",
+      "selector": "0x01e2ae55",
+      "semantics": "Only the SessionManager's current owner can iterate the exact ordered target array and apply the same signed allowed bool to every element. An empty array is a no-op, duplicate targets are processed in order, and any zero target reverts the whole transaction. PQ1 renders every target for arrays of at most eight elements and hard-refuses longer arrays."
+    },
+    {
       "name": "transferOwnership",
       "canonical_signature": "transferOwnership(address)",
       "selector": "0xf2fde38b",
@@ -453,15 +459,10 @@
       "reason": "The signature-bearing authorization path remains outside the bounded all-static curation."
     },
     {
-      "name": "setAllowedTargets",
-      "selector": "0x01e2ae55",
-      "reason": "The dynamic target array is not injectively rendered."
-    },
-    {
       "name": "validateAndConsume",
       "selector": "0xce5cb6c0",
       "reason": "The dynamic delegate signature and session-consumption effects remain outside the bounded all-static curation."
     }
   ],
-  "boundary": "Historical source and fixed-block deployment evidence only. It grants no live-state, future-code, transaction-success, production, shipment, fallback, or blind-signing authority."
+  "boundary": "Historical source and fixed-block deployment evidence only. PQ1 intentionally hard-refuses setAllowedTargets arrays longer than eight elements rather than truncating the signed tail. This evidence grants no live-state, future-code, transaction-success, production, shipment, fallback, or blind-signing authority."
 }

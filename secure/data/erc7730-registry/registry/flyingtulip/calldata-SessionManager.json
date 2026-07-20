@@ -285,20 +285,37 @@
         ]
       },
       "setAllowedTargets(address[] targets, bool allowed)": {
-        "intent": "Manage session manager",
+        "intent": "Update allowed targets",
         "fields": [
           {
             "path": "targets.[]",
             "label": "Targets",
-            "visible": "never"
+            "format": "addressName",
+            "params": {
+              "types": [
+                "wallet",
+                "eoa",
+                "contract",
+                "token",
+                "collection"
+              ],
+              "sources": [
+                "local",
+                "ens"
+              ]
+            },
+            "visible": "always"
           },
           {
             "path": "allowed",
-            "label": "Allowed",
-            "visible": "never"
+            "label": "Access",
+            "format": "enum",
+            "params": {
+              "$ref": "$.metadata.enums.targetAccess"
+            },
+            "visible": "always"
           }
-        ],
-        "interpolatedIntent": "Allow targets {allowed}"
+        ]
       },
       "transferOwnership(address newOwner)": {
         "intent": "Update pending owner",

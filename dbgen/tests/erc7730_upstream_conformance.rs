@@ -41,7 +41,7 @@ const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
 // The upstream fixture bytes remain test-only and outside the catalogue. This
 // root changes only when the separately curated production descriptors do.
-const PROD_ROOT_HEX: &str = "89e5209101fc50fba8af1870b6f36bab7621338954f53d63ad2cb0328a2a9eef";
+const PROD_ROOT_HEX: &str = "120a49d4679f92e9991d95982c8f5e848aa709a4de26c3c299e0dfcf0f73835e";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -953,6 +953,19 @@ fn upstream_fixture_targets_are_inventoried_at_format_granularity() {
             "the reviewed QuickSwap route must be admitted explicitly despite the honest fixture gap"
         );
     }
+
+    let flyingtulip_plural_targets = FormatKey {
+        source: PathBuf::from("flyingtulip/calldata-SessionManager.json"),
+        id: FormatId::Calldata([0x01, 0xe2, 0xae, 0x55]),
+    };
+    assert!(
+        !fixture_targets.contains(&flyingtulip_plural_targets),
+        "FlyingTulip setAllowedTargets has no pinned upstream positive; do not invent fixture coverage"
+    );
+    assert!(
+        accepted.contains(&flyingtulip_plural_targets),
+        "the source-reviewed plural-target route must remain admitted despite the honest fixture gap"
+    );
 
     let policy: Value = serde_json::from_slice(
         &std::fs::read(fixture_root().join("projection-policy.json"))
