@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-07-20T07:08:00Z",
+  "storage_slots": {
+    "eip1967_implementation": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+    "polygon_matic_implementation": "0xbaab7dbf64751104133af04abc7d9979f0fda3b059a322a8333f533d3f32bf7f"
+  },
+  "blocks": [
+    {
+      "network": "ethereum",
+      "chain_id": 1,
+      "number": 25572297,
+      "number_hex": "0x18633c9",
+      "hash": "0xc45d40e0538326f7313f06955c9a32179b7bf6c20d1ecbb38e70dbf4150acb7b",
+      "parent_hash": "0x4f1c1ce4f8f3c283c424f5b9bb575e5eca486fd9154de49eadea930cecdb826a",
+      "state_root": "0x2eb2e8a9a1b068faac2d66e95b4a8fdae73a8c422dc30c42f183fbd6d8ab0cf1",
+      "timestamp_hex": "0x6a5dc7b7",
+      "timestamp_utc": "2026-07-20T07:01:11Z",
+      "purpose": "WCT",
+      "rpc_agreement": ["https://eth.drpc.org", "https://1rpc.io/eth", "https://rpc.flashbots.net"]
+    },
+    {
+      "network": "optimism",
+      "chain_id": 10,
+      "number": 154466049,
+      "number_hex": "0x934f701",
+      "hash": "0x5ec2c86ee867c9f6ba10a4426b4fa0b11e771ac3c5df12703cba3bb9eca36960",
+      "parent_hash": "0x80f953a159d3a541f68f51ec1f553df1f547fb47ba89e43cd09ecd87df459c0e",
+      "state_root": "0x7e228fdc3404ff427c6648120d3b5baf0972bf4f1c5886167b6a89fd532b60ec",
+      "timestamp_hex": "0x6a5dc7bb",
+      "timestamp_utc": "2026-07-20T07:01:15Z",
+      "purpose": "WCT"
+    },
+    {
+      "network": "base",
+      "chain_id": 8453,
+      "number": 48870764,
+      "number_hex": "0x2e9b56c",
+      "hash": "0x2dff1e9aeaf7875d659eec5d04db0aa1c863fa669b300b06e662748d6787763b",
+      "parent_hash": "0x94781b8b0bab4d0ecf88ce5c10558e5bcadb4d672fe73ae52f8bd2a413e6964d",
+      "state_root": "0xeeb3f1b61b972ceef4e6985dd3eb17f60b79377bb81cb92f46c3d88272d628ec",
+      "timestamp_hex": "0x6a5dc7bb",
+      "timestamp_utc": "2026-07-20T07:01:15Z",
+      "purpose": "WCT"
+    },
+    {
+      "network": "ethereum",
+      "chain_id": 1,
+      "number": 25572303,
+      "number_hex": "0x18633cf",
+      "hash": "0xa25d10de4629dfcf1c04918573a88e22dafe46f57aa040e656d165390c9f25a8",
+      "timestamp_hex": "0x6a5dc7ff",
+      "timestamp_utc": "2026-07-20T07:02:23Z",
+      "purpose": "FlyingTulip"
+    },
+    {
+      "network": "sonic",
+      "chain_id": 146,
+      "number": 76223125,
+      "number_hex": "0x48b1295",
+      "hash": "0x67e183e96e60f3a47b541e46e4db7960cba7d919ea47c6e4ab51db8d07f3c01c",
+      "timestamp_hex": "0x6a5dc800",
+      "timestamp_utc": "2026-07-20T07:02:24Z",
+      "purpose": "FlyingTulip"
+    },
+    {
+      "network": "ethereum",
+      "chain_id": 1,
+      "number": 25572315,
+      "number_hex": "0x18633db",
+      "hash": "0x4b7ea31250fba7fd9a08fc2d296170719e6cbcba93bcad6ed5406d46f6542327",
+      "parent_hash": "0x4d2cb60afc019db2fdb2b824b8b79bbfef814bb22cbf0c7adc389e03f1b537fb",
+      "state_root": "0x1d80c98510abf141c328d950f598c093e5bda6675b4becce7cd9421e4ce67fba",
+      "timestamp_hex": "0x6a5dc88f",
+      "timestamp_utc": "2026-07-20T07:04:47Z",
+      "purpose": "USDT",
+      "deprecated_call_result": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "rpc_agreement": ["https://eth.drpc.org", "https://1rpc.io/eth"]
+    },
+    {
+      "network": "polygon",
+      "chain_id": 137,
+      "number": 90550835,
+      "number_hex": "0x565b233",
+      "hash": "0x02df2814e904a541e181c617b9c92aa893abee09709a1cc2ff0a5521b42d6ae4",
+      "parent_hash": "0x7da57013a9a379860c9f16c8dc94911d1fe67bea65053ecb54f7838a1677f1c1",
+      "state_root": "0xcc0a21b484d7cf94caf1d31c6384d383fb54225fc1f9da888035a7018112c8d4",
+      "timestamp_hex": "0x6a5dc932",
+      "timestamp_utc": "2026-07-20T07:07:30Z",
+      "purpose": "USDT",
+      "rpc_agreement": ["https://polygon.drpc.org", "https://1rpc.io/matic", "https://polygon-bor-rpc.publicnode.com"]
+    }
+  ],
+  "deployments": [
+    {"family":"WCT","chain_id":1,"proxy":"0xef4461891dfb3ac8572ccf7c794664a8dd927945","implementation":"0xf27d4fb3b1c194f94b9966cc75b4bbb686008c8c","slot":"eip1967_implementation","proxy_runtime_bytes":1501,"proxy_runtime_sha256":"3723b91bff481370688080bd221019b83a3053a21757157072b373b8e77d2717","implementation_runtime_bytes":13946,"implementation_runtime_sha256":"29ef99a63b7a1b7b8b9536c952797aba57eeae47fca71cc2da02e93808c0312f"},
+    {"family":"WCT","chain_id":10,"proxy":"0xef4461891dfb3ac8572ccf7c794664a8dd927945","implementation":"0x46a4c6bada93ac565b7ef6d7d9be24ca09735e22","slot":"eip1967_implementation","proxy_runtime_bytes":1501,"proxy_runtime_sha256":"3723b91bff481370688080bd221019b83a3053a21757157072b373b8e77d2717","implementation_runtime_bytes":16145,"implementation_runtime_sha256":"53d06ab3aba6c2780aa6e0ca10d6656eac272f032620d4bea06b8d6bc77adc02"},
+    {"family":"WCT","chain_id":8453,"proxy":"0xef4461891dfb3ac8572ccf7c794664a8dd927945","implementation":"0x1b9fc26a506b8cc98f65de60f337c43f97bb2d40","slot":"eip1967_implementation","proxy_runtime_bytes":1501,"proxy_runtime_sha256":"3723b91bff481370688080bd221019b83a3053a21757157072b373b8e77d2717","implementation_runtime_bytes":16145,"implementation_runtime_sha256":"53d06ab3aba6c2780aa6e0ca10d6656eac272f032620d4bea06b8d6bc77adc02"},
+    {"family":"FlyingTulip","chain_id":1,"proxy":"0xbe4050a73a7fb384c65e885a15c33461a4b20055","implementation":"0xaa3d5fc84b43219391539714be5f0681aefca23b","slot":"eip1967_implementation","proxy_runtime_bytes":76,"implementation_runtime_bytes":24139,"implementation_runtime_sha256":"c11ef71aeecd942bc539c0571dcff288162d1676691a8a8525e4068227f11320"},
+    {"family":"FlyingTulip","chain_id":146,"proxy":"0xbe4050a73a7fb384c65e885a15c33461a4b20055","implementation":"0xaa3d5fc84b43219391539714be5f0681aefca23b","slot":"eip1967_implementation","proxy_runtime_bytes":76,"implementation_runtime_bytes":24139,"implementation_runtime_sha256":"c11ef71aeecd942bc539c0571dcff288162d1676691a8a8525e4068227f11320"},
+    {"family":"FlyingTulip","chain_id":146,"proxy":"0x82ffb119eeed117bae7a2cf38ce52eaba3871821","implementation":"0xb47e68e861a1661ac7f0f033b98f641a2fe565b9","slot":"eip1967_implementation","proxy_runtime_bytes":76,"implementation_runtime_bytes":24139,"implementation_runtime_sha256":"14a26e817af8fea02742f6616d1dae3812f02c22c837eb98132ebeab36d4a569"},
+    {"family":"USDT","chain_id":1,"address":"0xdac17f958d2ee523a2206206994597c13d831ec7","classification":"direct","runtime_bytes":11075,"runtime_sha256":"6d967f98f2f3843065688dc2065248e3686b56fc0b6ddfa82007df016148becb"},
+    {"family":"USDT","chain_id":137,"proxy":"0xc2132d05d31c914a87c6611c10748aeb04b58e8f","implementation":"0x90040487a6c9f949c4f07cadcfb0f3b8eeab4229","slot":"polygon_matic_implementation","proxy_runtime_bytes":2949,"proxy_runtime_sha256":"0cd149812b7b2771b19cd25fb19df5fe6f4d6d2a54f447bb9c95319754b952c0","implementation_runtime_bytes":14504,"implementation_runtime_sha256":"34f3113efd4304e54c0848601a88900999464c7f346ce8b1826669c1729215ac"}
+  ],
+  "boundary": "This receipt pins deployment-to-runtime/source relationships at the listed blocks. It does not claim future implementation or state immutability. Runtime bodies are represented by byte lengths and SHA-256 digests rather than duplicated here."
+}

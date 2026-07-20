@@ -88,6 +88,219 @@ fn build_e2e() -> Erc7730BuildResult {
 }
 
 #[test]
+fn registry_allowance_threshold_curations_are_structurally_exact() {
+    let root = workspace_root();
+    let curated_root = root.join("secure/data/erc7730/curations/files");
+    let installed_root = root.join("secure/data/erc7730-registry");
+    let curated_paths = [
+        "ercs/calldata-erc20-tokens.json",
+        "registry/flyingtulip/calldata-PositionsManager.json",
+        "registry/tether/calldata-usdt.json",
+        "registry/walletconnect/calldata-wct.json",
+    ];
+    for relative in curated_paths {
+        let curated = std::fs::read(curated_root.join(relative))
+            .unwrap_or_else(|error| panic!("read curated {relative}: {error}"));
+        let installed = std::fs::read(installed_root.join(relative))
+            .unwrap_or_else(|error| panic!("read installed {relative}: {error}"));
+        assert_eq!(
+            installed, curated,
+            "installed descriptor diverged from its receipted curation: {relative}"
+        );
+    }
+
+    // The generic ERC-20 support descriptor is not itself a catalogue leaf,
+    // so bind its no-threshold policy directly as well as checking its exact
+    // curated/installed byte identity above.
+    let generic_erc20: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(installed_root.join("ercs/calldata-erc20-tokens.json"))
+            .expect("read installed generic ERC-20 descriptor"),
+    )
+    .expect("parse installed generic ERC-20 descriptor");
+    let generic_approve =
+        &generic_erc20["display"]["formats"]["approve(address _spender, uint256 _value)"];
+    let generic_amount = generic_approve["fields"]
+        .as_array()
+        .expect("generic ERC-20 approve fields")
+        .iter()
+        .find(|field| field["path"].as_str() == Some("_value"))
+        .expect("generic ERC-20 approve amount field");
+    assert!(generic_amount["params"].get("threshold").is_none());
+    assert!(generic_amount["params"].get("message").is_none());
+
+    let result = build_registry();
+    let approve_selector: [u8; 4] = keccak256(b"approve(address,uint256)")[..4]
+        .try_into()
+        .expect("approve selector width");
+
+    let wct_contract: [u8; 20] = hex::decode("ef4461891dfb3ac8572ccf7c794664a8dd927945")
+        .expect("valid WCT deployment")
+        .try_into()
+        .expect("WCT address width");
+    let expected_wct: BTreeSet<_> = [1u64, 10, 8_453]
+        .into_iter()
+        .map(|chain_id| (chain_id, wct_contract))
+        .collect();
+    let wct_entries: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str()) == Some("calldata-wct.json")
+        })
+        .collect();
+    assert_eq!(
+        wct_entries
+            .iter()
+            .map(|entry| (entry.chain_id, entry.contract))
+            .collect::<BTreeSet<_>>(),
+        expected_wct
+    );
+    for entry in wct_entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated WCT IR parses");
+        let approve = ir
+            .find_format_by_selector(&approve_selector)
+            .expect("WCT format table parses")
+            .expect("WCT approve remains admitted");
+        let fields: Vec<_> = approve
+            .fields()
+            .map(|field| field.expect("WCT approve field parses"))
+            .collect();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[1].label, b"Amount");
+        assert_eq!(
+            FormatOp::try_from(fields[1].format_op),
+            Ok(FormatOp::TokenAmount)
+        );
+        let amount = parse_params(&ir, fields[1].param_off).expect("WCT amount params parse");
+        assert_eq!(amount.threshold.copied(), Some([0xff; 32]));
+        assert!(
+            amount.message.is_none(),
+            "WCT uses the trusted default wording"
+        );
+    }
+
+    let flying_tulip_entries: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-PositionsManager.json")
+        })
+        .collect();
+    let expected_flying_tulip: BTreeSet<(u64, [u8; 20])> = [
+        (1, "be4050a73a7fb384c65e885a15c33461a4b20055"),
+        (146, "be4050a73a7fb384c65e885a15c33461a4b20055"),
+        (146, "82ffb119eeed117bae7a2cf38ce52eaba3871821"),
+    ]
+    .into_iter()
+    .map(|(chain_id, address)| {
+        (
+            chain_id,
+            hex::decode(address)
+                .expect("valid Flying Tulip deployment")
+                .try_into()
+                .expect("Flying Tulip address width"),
+        )
+    })
+    .collect();
+    assert_eq!(
+        flying_tulip_entries
+            .iter()
+            .map(|entry| (entry.chain_id, entry.contract))
+            .collect::<BTreeSet<_>>(),
+        expected_flying_tulip
+    );
+    for entry in flying_tulip_entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Flying Tulip IR parses");
+        for (signature, amount_ordinal) in [
+            ("borrow(address,uint256)", 0usize),
+            ("approveBorrow(address,address,uint256)", 1usize),
+        ] {
+            let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+                .try_into()
+                .expect("Flying Tulip selector width");
+            let format = ir
+                .find_format_by_selector(&selector)
+                .expect("Flying Tulip format table parses")
+                .unwrap_or_else(|| panic!("Flying Tulip route missing: {signature}"));
+            let fields: Vec<_> = format
+                .fields()
+                .map(|field| field.expect("Flying Tulip field parses"))
+                .collect();
+            let amount = parse_params(&ir, fields[amount_ordinal].param_off)
+                .expect("Flying Tulip amount params parse");
+            assert!(amount.threshold.is_none(), "{signature} gained a shorthand");
+            assert!(
+                amount.message.is_none(),
+                "{signature} gained threshold wording"
+            );
+        }
+
+        let engine_selector: [u8; 4] = keccak256(b"approveEngine(address,address,uint256)")[..4]
+            .try_into()
+            .expect("approveEngine selector width");
+        let engine = ir
+            .find_format_by_selector(&engine_selector)
+            .expect("Flying Tulip format table parses")
+            .expect("approveEngine remains admitted");
+        let engine_fields: Vec<_> = engine
+            .fields()
+            .map(|field| field.expect("approveEngine field parses"))
+            .collect();
+        assert_eq!(engine_fields.len(), 2);
+        let allowance = parse_params(&ir, engine_fields[1].param_off)
+            .expect("approveEngine allowance params parse");
+        assert_eq!(allowance.threshold.copied(), Some([0xff; 32]));
+        assert_eq!(allowance.message, Some(b"Unlimited".as_slice()));
+    }
+
+    let usdt_entries: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str()) == Some("calldata-usdt.json")
+        })
+        .collect();
+    let expected_usdt: BTreeSet<(u64, [u8; 20])> = [
+        (1, "dac17f958d2ee523a2206206994597c13d831ec7"),
+        (137, "c2132d05d31c914a87c6611c10748aeb04b58e8f"),
+    ]
+    .into_iter()
+    .map(|(chain_id, address)| {
+        (
+            chain_id,
+            hex::decode(address)
+                .expect("valid USDT deployment")
+                .try_into()
+                .expect("USDT address width"),
+        )
+    })
+    .collect();
+    assert_eq!(
+        usdt_entries
+            .iter()
+            .map(|entry| (entry.chain_id, entry.contract))
+            .collect::<BTreeSet<_>>(),
+        expected_usdt
+    );
+    for entry in usdt_entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated USDT IR parses");
+        let approve = ir
+            .find_format_by_selector(&approve_selector)
+            .expect("USDT format table parses")
+            .expect("USDT approve remains admitted");
+        let fields: Vec<_> = approve
+            .fields()
+            .map(|field| field.expect("USDT approve field parses"))
+            .collect();
+        assert_eq!(fields.len(), 2);
+        let amount = parse_params(&ir, fields[1].param_off).expect("USDT amount params parse");
+        assert!(amount.threshold.is_none());
+        assert!(amount.message.is_none());
+    }
+}
+
+#[test]
 fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment() {
     let result = build_registry();
     let entries: Vec<_> = result
@@ -325,7 +538,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.root),
-        "5a9d33b35056486b8133148730ce908b12963873a0a372117efa3eee7fe84b3c"
+        "d40e2d5f706d80961428062a24ae0fc144c6e10f98d512e69d20fedf8cca7f74"
     );
 }
 

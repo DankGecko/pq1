@@ -40,7 +40,7 @@ const FIXTURE_RECEIPT_HEX: &str =
 // Router02's two single-hop formats are enrolled only with exact authenticated
 // guards for their sentinel and partial-fill semantics. The upstream fixture
 // bytes remain test-only and outside the catalogue.
-const PROD_ROOT_HEX: &str = "5a9d33b35056486b8133148730ce908b12963873a0a372117efa3eee7fe84b3c";
+const PROD_ROOT_HEX: &str = "d40e2d5f706d80961428062a24ae0fc144c6e10f98d512e69d20fedf8cca7f74";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

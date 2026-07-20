@@ -1018,59 +1018,322 @@ fn flyingtulip_dynamic_token_path_keeps_static_intent_and_exact_token_identity()
 }
 
 #[test]
-fn positive_usdt_approve_unlimited_renders_approve_intent() {
+fn usdt_shared_descriptor_never_claims_unlimited_on_either_deployment() {
     let res = build_registry();
-    let entry = find_leaf(res, "calldata-usdt.json", 1);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-
-    // U256::MAX is the canonical "approve unlimited" sentinel; the
-    // descriptor sets `threshold` to 0x8000...0000 (top bit) — any
-    // value above renders as "unlimited" via tokenAmount.
-    let calldata = calldata_approve([0x44u8; 20], u256_max());
-    assert_selector_matches(&verified.ir, &calldata, "approve(address,uint256)");
-
-    let tx = envelope(1, entry.contract);
-    let usdt_meta = Erc20Metadata {
-        chain_id: 1,
-        contract: entry.contract,
-        decimals: 6,
-        name: b"Tether USD",
-        symbol: b"USDT",
-    };
     let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&usdt_meta), &resolver)
-        .expect("render");
+    let spender = [0x44u8; 20];
+    let mut old_threshold_minus_one = [0xff; 32];
+    old_threshold_minus_one[0] = 0x7f;
+    let mut old_threshold = [0u8; 32];
+    old_threshold[0] = 0x80;
+    let mut max_minus_one = [0xff; 32];
+    max_minus_one[31] = 0xfe;
 
-    assert_all_pages_printable(&pages);
+    for chain_id in [1, 137] {
+        let entry = find_leaf(res, "calldata-usdt.json", chain_id);
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify USDT leaf");
+        let tx = envelope(chain_id, entry.contract);
+        let metadata = Erc20Metadata {
+            chain_id,
+            contract: entry.contract,
+            decimals: 6,
+            name: b"Tether USD",
+            symbol: b"USDT",
+        };
+        let render = |amount: [u8; 32]| {
+            let calldata = calldata_approve(spender, U256(amount));
+            assert_selector_matches(&verified.ir, &calldata, "approve(address,uint256)");
+            render_erc7730_pages(&tx, &calldata, &verified, Some(&metadata), &resolver)
+                .expect("render exact USDT approval")
+        };
 
-    let [intent_r0, _, _, _] = page_strs(&pages, intent_page_index(&pages));
-    assert_eq!(intent_r0, "Approve");
+        let ordinary = render(u256_from_u64(1_000_000).0);
+        assert_eq!(
+            page_strs(&ordinary, intent_page_index(&ordinary))[0],
+            "Approve"
+        );
+        assert_full_address_field_page(&ordinary, "Spender", &spender);
+        assert!(
+            page_strs(&ordinary, find_page_by_label(&ordinary, "Amount"))[1..3]
+                .iter()
+                .any(|row| row.contains("1 USDT"))
+        );
+        assert_full_contract_identity_page(&ordinary, &entry.contract);
 
-    // Spender page must be present (labelled "Spender" per the
-    // descriptor).
-    let _spender_page = find_page_by_label(&pages, "Spender");
+        for (name, value) in [
+            ("old threshold minus one", old_threshold_minus_one),
+            ("old threshold", old_threshold),
+            ("max minus one", max_minus_one),
+            ("max", [0xff; 32]),
+        ] {
+            let pages = render(value);
+            let dump = dump_pages(&pages);
+            assert!(
+                !dump.to_ascii_lowercase().contains("unlimited"),
+                "{name} must not inherit a shared infinity claim on chain {chain_id}:\n{dump}"
+            );
+            assert_raw_word_pages(&pages, "Amount", &value);
+            assert_full_address_field_page(&pages, "Spender", &spender);
+            assert_full_contract_identity_page(&pages, &entry.contract);
+        }
+    }
+}
 
-    // Amount page — for U256::MAX with the descriptor's threshold set,
-    // `render_token_amount` short-circuits the digit formatter and
-    // writes "unlimited <ticker>" on row 1. No `!AMOUNT OVERFLOW`
-    // banner, no truncated decimal soup — just the human-readable
-    // sentinel.
-    let amount_page = find_page_by_label(&pages, "Amount");
-    let amount_rows = page_strs(&pages, amount_page);
-    let amount_blob = amount_rows.join("\n");
-    assert!(
-        amount_blob.to_lowercase().contains("unlimited"),
-        "approve(MAX) should render 'unlimited', got:\n{amount_blob}",
+#[test]
+fn walletconnect_wct_allowance_threshold_is_max_only_on_all_deployments() {
+    let res = build_registry();
+    let resolver = NameResolver::new();
+    let spender = [0x51u8; 20];
+    let mut old_threshold_minus_one = [0xff; 32];
+    old_threshold_minus_one[0] = 0x7f;
+    let mut old_threshold = [0u8; 32];
+    old_threshold[0] = 0x80;
+    let mut max_minus_one = [0xff; 32];
+    max_minus_one[31] = 0xfe;
+
+    for chain_id in [1, 10, 8453] {
+        let entry = find_leaf(res, "calldata-wct.json", chain_id);
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify WCT leaf");
+        let tx = envelope(chain_id, entry.contract);
+        let metadata = Erc20Metadata {
+            chain_id,
+            contract: entry.contract,
+            decimals: 18,
+            name: b"WalletConnect Token",
+            symbol: b"WCT",
+        };
+        let render = |amount: [u8; 32]| {
+            let calldata = calldata_approve(spender, U256(amount));
+            render_erc7730_pages(&tx, &calldata, &verified, Some(&metadata), &resolver)
+        };
+
+        let ordinary = render(u256_from_u64(1_000_000_000_000_000_000).0)
+            .expect("render exact one-WCT approval");
+        assert_full_address_field_page(&ordinary, "Spender", &spender);
+        assert!(
+            page_strs(&ordinary, find_page_by_label(&ordinary, "Amount"))[1..3]
+                .iter()
+                .any(|row| row.contains("1 WCT"))
+        );
+        assert_full_contract_identity_page(&ordinary, &entry.contract);
+
+        let max = render([0xff; 32]).expect("render exact WCT infinity sentinel");
+        assert_eq!(
+            page_strs(&max, find_page_by_label(&max, "Amount")),
+            [
+                "Amount".to_string(),
+                "unlimited WCT".to_string(),
+                "".to_string(),
+                "> next".to_string(),
+            ]
+        );
+        assert_full_address_field_page(&max, "Spender", &spender);
+        assert_full_contract_identity_page(&max, &entry.contract);
+
+        for (name, finite) in [
+            ("old threshold minus one", old_threshold_minus_one),
+            ("old threshold", old_threshold),
+            ("max minus one", max_minus_one),
+        ] {
+            assert!(
+                matches!(
+                    render(finite),
+                    Err(crate::tx::erc7730_render::RenderErr::Reject(
+                        "7730 inexact scaled value"
+                    ))
+                ),
+                "finite WCT approval at {name} must not inherit the max-only label on chain {chain_id}"
+            );
+        }
+    }
+}
+
+#[test]
+fn flyingtulip_borrow_is_finite_while_engine_max_is_unlimited() {
+    let res = build_registry();
+    let resolver = NameResolver::new();
+    let delegate = [0x61u8; 20];
+    let engine = [0x62u8; 20];
+    let asset = [0x63u8; 20];
+    let entries: Vec<_> = res
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-PositionsManager.json")
+        })
+        .collect();
+    assert_eq!(
+        entries.len(),
+        3,
+        "all admitted PositionsManager deployments"
     );
-    assert!(
-        amount_blob.contains("USDT"),
-        "unlimited row should carry the ticker, got:\n{amount_blob}",
-    );
-    assert!(
-        !amount_blob.contains("AMOUNT OVERFLOW"),
-        "threshold check must short-circuit before the overflow fallback, got:\n{amount_blob}",
-    );
+
+    let mut old_threshold_minus_one = [0xff; 32];
+    old_threshold_minus_one[0] = 0x7f;
+    let mut old_threshold = [0u8; 32];
+    old_threshold[0] = 0x80;
+    let mut max_minus_one = [0xff; 32];
+    max_minus_one[31] = 0xfe;
+
+    for entry in entries {
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified =
+            verify_erc7730_bundle(&bundle, &res.root).expect("verify PositionsManager leaf");
+        let tx = envelope(entry.chain_id, entry.contract);
+        let metadata = Erc20Metadata {
+            chain_id: entry.chain_id,
+            contract: asset,
+            decimals: 6,
+            name: b"USD Coin",
+            symbol: b"USDC",
+        };
+        let render = |signature: &str, actor: [u8; 20], amount: [u8; 32]| {
+            let calldata = calldata_static(
+                signature,
+                &[abi_address_word(actor), abi_address_word(asset), amount],
+            );
+            render_erc7730_pages(&tx, &calldata, &verified, Some(&metadata), &resolver)
+                .expect("render exact PositionsManager allowance")
+        };
+
+        let ordinary_borrow = render(
+            "approveBorrow(address,address,uint256)",
+            delegate,
+            u256_from_u64(1_000_000).0,
+        );
+        assert_full_address_field_page(&ordinary_borrow, "Delegate", &delegate);
+        assert!(page_strs(
+            &ordinary_borrow,
+            find_page_by_label(&ordinary_borrow, "Allowance")
+        )[1..3]
+            .iter()
+            .any(|row| row.contains("1 USDC")));
+        assert_full_contract_identity_page(&ordinary_borrow, &asset);
+
+        for (name, value) in [
+            ("old threshold minus one", old_threshold_minus_one),
+            ("old threshold", old_threshold),
+            ("max minus one", max_minus_one),
+            ("max", [0xff; 32]),
+        ] {
+            let borrow = render("approveBorrow(address,address,uint256)", delegate, value);
+            let dump = dump_pages(&borrow);
+            assert!(
+                !dump.to_ascii_lowercase().contains("unlimited"),
+                "finite borrow-delegation storage at {name} must not be called unlimited:\n{dump}"
+            );
+            assert_raw_word_pages(&borrow, "Allowance", &value);
+            assert_full_address_field_page(&borrow, "Delegate", &delegate);
+            assert_full_contract_identity_page(&borrow, &asset);
+        }
+
+        let max_engine = render("approveEngine(address,address,uint256)", engine, [0xff; 32]);
+        assert_eq!(
+            page_strs(&max_engine, find_page_by_label(&max_engine, "Allowance")),
+            [
+                "Allowance".to_string(),
+                "Unlimited USDC".to_string(),
+                "".to_string(),
+                "> next".to_string(),
+            ]
+        );
+        assert_full_address_field_page(&max_engine, "Engine", &engine);
+        assert_full_contract_identity_page(&max_engine, &asset);
+
+        for (name, finite) in [
+            ("old threshold minus one", old_threshold_minus_one),
+            ("old threshold", old_threshold),
+            ("max minus one", max_minus_one),
+        ] {
+            let engine_pages = render("approveEngine(address,address,uint256)", engine, finite);
+            let dump = dump_pages(&engine_pages);
+            assert!(
+                !dump.to_ascii_lowercase().contains("unlimited"),
+                "finite engine allowance at {name} must not inherit the max-only label:\n{dump}"
+            );
+            assert_raw_word_pages(&engine_pages, "Allowance", &finite);
+        }
+    }
+}
+
+#[test]
+fn allowance_threshold_curations_keep_static_operands_and_framing_exact() {
+    let registry = build_registry();
+    let resolver = NameResolver::new();
+
+    for (source, chain_id, signature, words) in [
+        (
+            "calldata-usdt.json",
+            1,
+            "approve(address,uint256)",
+            vec![abi_address_word([0x41; 20]), [0xff; 32]],
+        ),
+        (
+            "calldata-wct.json",
+            1,
+            "approve(address,uint256)",
+            vec![abi_address_word([0x42; 20]), [0xff; 32]],
+        ),
+        (
+            "calldata-PositionsManager.json",
+            1,
+            "approveBorrow(address,address,uint256)",
+            vec![
+                abi_address_word([0x43; 20]),
+                abi_address_word([0x44; 20]),
+                [0xff; 32],
+            ],
+        ),
+        (
+            "calldata-PositionsManager.json",
+            1,
+            "approveEngine(address,address,uint256)",
+            vec![
+                abi_address_word([0x45; 20]),
+                abi_address_word([0x46; 20]),
+                [0xff; 32],
+            ],
+        ),
+    ] {
+        let entry = find_leaf(registry, source, chain_id);
+        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified =
+            verify_erc7730_bundle(&bundle, &registry.root).expect("verify allowance leaf");
+        let tx = envelope(chain_id, entry.contract);
+        let calldata = calldata_static(signature, &words);
+
+        let mut dirty_address = calldata.clone();
+        dirty_address[4] = 1;
+        assert!(matches!(
+            render_erc7730_pages(&tx, &dirty_address, &verified, None, &resolver),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 noncanonical address"
+            ))
+        ));
+        assert!(matches!(
+            render_erc7730_pages(
+                &tx,
+                &calldata[..calldata.len() - 1],
+                &verified,
+                None,
+                &resolver,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 short head"
+            ))
+        ));
+        let mut trailing = calldata;
+        trailing.push(0);
+        assert!(matches!(
+            render_erc7730_pages(&tx, &trailing, &verified, None, &resolver),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 static calldata trailing"
+            ))
+        ));
+    }
 }
 
 #[test]
@@ -1371,13 +1634,10 @@ fn positive_unlimited_uses_descriptor_message_param() {
 }
 
 #[test]
-fn positive_usdt_approve_unlimited_unbound_renders_unlimited_not_overflow() {
-    // review 4.5: an unlimited approval of an UNKNOWN (unbound) token used to
-    // render "!AMOUNT OVERFLOW" — the raw 2^256-1 overflows the amount
-    // formatter, an alarming banner with no meaning for the single most
-    // dangerous action, exactly when trust is LOWEST. It must now render
-    // "unlimited" + "(unverified)". Same REAL USDT approve descriptor
-    // (threshold set), but NO metadata supplied → the token cannot bind.
+fn usdt_approve_max_unbound_renders_the_exact_raw_word() {
+    // The shared Ethereum/Polygon descriptor has no implementation-wide
+    // infinity sentinel. Without a matching metadata proof, max therefore
+    // remains an exact raw integer rather than acquiring semantic wording.
     let res = build_registry();
     let entry = find_leaf(res, "calldata-usdt.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
@@ -1388,21 +1648,13 @@ fn positive_usdt_approve_unlimited_unbound_renders_unlimited_not_overflow() {
     let resolver = NameResolver::new();
     let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
     assert_all_pages_printable(&pages);
-
-    let amount_page = find_page_by_label(&pages, "Amount");
-    let amount_blob = page_strs(&pages, amount_page).join("\n");
+    let dump = dump_pages(&pages);
     assert!(
-        amount_blob.to_lowercase().contains("unlimited"),
-        "unbound approve(MAX) must render 'unlimited', got:\n{amount_blob}"
+        !dump.to_ascii_lowercase().contains("unlimited"),
+        "unbound approve(MAX) must not invent an infinity claim:\n{dump}"
     );
-    assert!(
-        !amount_blob.contains("OVERFLOW"),
-        "must NOT render the alarming overflow banner for an unlimited approve:\n{amount_blob}"
-    );
-    assert!(
-        amount_blob.contains("(unverified)"),
-        "unbound must mark the missing token identity:\n{amount_blob}"
-    );
+    assert_raw_word_pages(&pages, "Amount", &[0xff; 32]);
+    assert_full_unverified_token_identity_page(&pages, &entry.contract);
 }
 
 #[test]
@@ -1437,22 +1689,23 @@ fn positive_erc7730_golden_grid_hash() {
         "golden hash must bind rendered content (spender change did not move it)"
     );
 
-    // Re-blessed after inspecting the full grid: the intentional envelope
-    // hardening adds a lossless EIP-1559 nonce page (`Nonce: 7`) between the
-    // exact fee budget and confirmation. All descriptor intent/field pages are
-    // otherwise unchanged.
+    // Re-blessed after inspecting the full grid: the shared Ethereum/Polygon
+    // USDT descriptor can no longer claim one implementation-wide infinity
+    // sentinel, so MAX is shown as the exact raw 256-bit word instead of the
+    // semantic `unlimited` shorthand. The signed spender and every envelope
+    // page remain bound by this digest.
     #[cfg(not(feature = "erc7730-dev-unattested"))]
     const GOLDEN: [u8; 32] = [
-        0x4b, 0xa2, 0x70, 0x68, 0xd8, 0x81, 0xed, 0xb6, 0xe9, 0x51, 0x08, 0x02, 0x30, 0x02, 0xf1,
-        0xc8, 0xad, 0xae, 0xfb, 0x8c, 0x36, 0x30, 0x63, 0xde, 0x00, 0xab, 0xa6, 0x07, 0x55, 0xa4,
-        0x4c, 0x61,
+        0xba, 0x87, 0x66, 0xce, 0x54, 0xb3, 0x40, 0x79, 0x33, 0x2c, 0x3b, 0x95, 0xaf, 0x30, 0x4d,
+        0xc3, 0x08, 0x36, 0x68, 0xb1, 0x6c, 0x18, 0x39, 0xbd, 0x39, 0x14, 0x1b, 0x07, 0x2b, 0x31,
+        0x71, 0xef,
     ];
     // Same reviewed grid with the mandatory dev-unattested warning prepended.
     #[cfg(feature = "erc7730-dev-unattested")]
     const GOLDEN: [u8; 32] = [
-        0xc1, 0x3d, 0x17, 0x94, 0x49, 0x46, 0x08, 0xf9, 0x2e, 0xf7, 0x55, 0xca, 0x09, 0x79, 0xf2,
-        0xcd, 0x08, 0x4f, 0x77, 0x21, 0x3f, 0x0d, 0x75, 0xd8, 0x6a, 0xad, 0x3b, 0xe7, 0x64, 0x4c,
-        0xbe, 0x7b,
+        0xae, 0xfe, 0xc8, 0x69, 0x32, 0xba, 0xae, 0x83, 0xb4, 0x6d, 0xfd, 0x7d, 0xae, 0x7f, 0x9e,
+        0x05, 0x90, 0xba, 0x85, 0x7d, 0x18, 0x96, 0x45, 0x3f, 0x93, 0x17, 0xa1, 0xd6, 0xa8, 0x0f,
+        0x25, 0x61,
     ];
     assert_eq!(
         h, GOLDEN,

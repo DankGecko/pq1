@@ -54,6 +54,10 @@ fn weth9_evidence_root() -> PathBuf {
     workspace_root().join("tests/erc7730-semantic-evidence/weth9-deposit")
 }
 
+fn allowance_threshold_evidence_root() -> PathBuf {
+    workspace_root().join("tests/erc7730-semantic-evidence/allowance-threshold-honesty")
+}
+
 fn read_json(path: &Path) -> Value {
     serde_json::from_slice(
         &fs::read(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display())),
@@ -4533,5 +4537,269 @@ fn lido_queue_source_abi_descriptor_and_ir_agree_on_seven_admitted_routes() {
         assert_eq!(owner.visibility, Visibility::Always);
         assert_eq!(owner.terminal_kind, Some(TerminalKind::Address));
         assert_eq!(owner.sender_addresses, Some(sender_zero.as_slice()));
+    }
+}
+
+#[test]
+fn allowance_sources_fixed_deployments_descriptors_and_ir_agree() {
+    let root = workspace_root();
+    let evidence = allowance_threshold_evidence_root();
+    let manifest = read_json(&evidence.join("manifest.json"));
+    assert_eq!(manifest["schema_version"].as_u64(), Some(1));
+    assert_eq!(
+        manifest["sources"][0]["commit"].as_str(),
+        Some("0a9a7260344e671f62087547cb3c0cf49b464986")
+    );
+    assert_eq!(
+        manifest["sources"][0]["openzeppelin_version"].as_str(),
+        Some("5.0.2")
+    );
+
+    let receipt_spec = &manifest["fixed_block_receipt"];
+    assert_eq!(
+        required_str(receipt_spec, "sha256"),
+        "8d2ba0c0322713ca793c752cb1100c61a39a69e49adef4bc72e2f21a2f40c531"
+    );
+    let receipt_bytes = fs::read(evidence.join(required_str(receipt_spec, "file")))
+        .expect("read allowance fixed-block receipt");
+    assert_eq!(
+        sha256_hex(&receipt_bytes),
+        required_str(receipt_spec, "sha256")
+    );
+    let receipt: Value =
+        serde_json::from_slice(&receipt_bytes).expect("parse allowance fixed-block receipt");
+    assert_eq!(receipt["blocks"].as_array().map(Vec::len), Some(7));
+    assert_eq!(receipt["deployments"].as_array().map(Vec::len), Some(8));
+
+    let deployment_set: BTreeSet<_> = receipt["deployments"]
+        .as_array()
+        .expect("allowance deployment array")
+        .iter()
+        .map(|deployment| {
+            (
+                required_str(deployment, "family").to_owned(),
+                deployment["chain_id"].as_u64().expect("deployment chain"),
+                deployment["proxy"]
+                    .as_str()
+                    .or_else(|| deployment["address"].as_str())
+                    .expect("deployment address")
+                    .to_ascii_lowercase(),
+                deployment["implementation"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_ascii_lowercase(),
+            )
+        })
+        .collect();
+    let expected_deployments: BTreeSet<_> = [
+        (
+            "WCT",
+            1,
+            "0xef4461891dfb3ac8572ccf7c794664a8dd927945",
+            "0xf27d4fb3b1c194f94b9966cc75b4bbb686008c8c",
+        ),
+        (
+            "WCT",
+            10,
+            "0xef4461891dfb3ac8572ccf7c794664a8dd927945",
+            "0x46a4c6bada93ac565b7ef6d7d9be24ca09735e22",
+        ),
+        (
+            "WCT",
+            8_453,
+            "0xef4461891dfb3ac8572ccf7c794664a8dd927945",
+            "0x1b9fc26a506b8cc98f65de60f337c43f97bb2d40",
+        ),
+        (
+            "FlyingTulip",
+            1,
+            "0xbe4050a73a7fb384c65e885a15c33461a4b20055",
+            "0xaa3d5fc84b43219391539714be5f0681aefca23b",
+        ),
+        (
+            "FlyingTulip",
+            146,
+            "0xbe4050a73a7fb384c65e885a15c33461a4b20055",
+            "0xaa3d5fc84b43219391539714be5f0681aefca23b",
+        ),
+        (
+            "FlyingTulip",
+            146,
+            "0x82ffb119eeed117bae7a2cf38ce52eaba3871821",
+            "0xb47e68e861a1661ac7f0f033b98f641a2fe565b9",
+        ),
+        ("USDT", 1, "0xdac17f958d2ee523a2206206994597c13d831ec7", ""),
+        (
+            "USDT",
+            137,
+            "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
+            "0x90040487a6c9f949c4f07cadcfb0f3b8eeab4229",
+        ),
+    ]
+    .into_iter()
+    .map(|(family, chain, address, implementation)| {
+        (
+            family.to_owned(),
+            chain,
+            address.to_owned(),
+            implementation.to_owned(),
+        )
+    })
+    .collect();
+    assert_eq!(deployment_set, expected_deployments);
+
+    let deprecated = receipt["blocks"]
+        .as_array()
+        .expect("allowance block array")
+        .iter()
+        .find(|block| {
+            block["purpose"].as_str() == Some("USDT") && block["chain_id"].as_u64() == Some(1)
+        })
+        .expect("Ethereum USDT fixed block");
+    assert_eq!(
+        deprecated["deprecated_call_result"].as_str(),
+        Some("0x0000000000000000000000000000000000000000000000000000000000000000")
+    );
+
+    let source_specs = manifest["sources"]
+        .as_array()
+        .expect("allowance source array");
+    assert_eq!(source_specs.len(), 4);
+    for source in source_specs {
+        let excerpt = evidence.join(required_str(source, "excerpt"));
+        let bytes = fs::read(&excerpt)
+            .unwrap_or_else(|error| panic!("read {}: {error}", excerpt.display()));
+        assert_eq!(
+            sha256_hex(&bytes),
+            required_str(source, "excerpt_sha256"),
+            "allowance source excerpt drifted: {}",
+            excerpt.display()
+        );
+    }
+
+    let wct = normalized_whitespace(
+        &fs::read_to_string(evidence.join("source/WCT.ERC20Upgradeable.allowance.excerpt.sol"))
+            .expect("read WCT allowance source excerpt"),
+    );
+    assert_fragments_in_order(
+        &wct,
+        &[
+            "function _spendAllowance(address owner, address spender, uint256 value)",
+            "if (currentAllowance != type(uint256).max)",
+            "_approve(owner, spender, currentAllowance - value, false);",
+        ],
+    );
+    let flying_tulip = normalized_whitespace(
+        &fs::read_to_string(evidence.join("source/PositionsManager.allowance.excerpt.sol"))
+            .expect("read FlyingTulip allowance source excerpt"),
+    );
+    assert!(flying_tulip.contains("if (allowance == type(uint256).max) return;"));
+    assert!(flying_tulip
+        .contains("borrowAllowance[user][msg.sender][borrowAsset] = allowance - borrowAmount;"));
+    let ethereum_usdt = normalized_whitespace(
+        &fs::read_to_string(evidence.join("source/TetherToken.ethereum.allowance.excerpt.sol"))
+            .expect("read Ethereum USDT allowance source excerpt"),
+    );
+    assert!(ethereum_usdt.contains("uint public constant MAX_UINT = 2**256 - 1;"));
+    assert!(ethereum_usdt.contains("if (_allowance < MAX_UINT)"));
+    let polygon_usdt = normalized_whitespace(
+        &fs::read_to_string(evidence.join("source/UChildUSDT0.polygon.allowance.excerpt.sol"))
+            .expect("read Polygon USDT allowance source excerpt"),
+    );
+    assert!(polygon_usdt.contains(
+        "_approve(sender, _msgSender(), _allowances[sender][_msgSender()].sub(amount, \"ERC20: transfer amount exceeds allowance\"));"
+    ));
+
+    for descriptor in manifest["descriptors"]
+        .as_array()
+        .expect("allowance descriptor array")
+    {
+        let path = root.join(required_str(descriptor, "path"));
+        let bytes =
+            fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        assert_eq!(sha256_hex(&bytes), required_str(descriptor, "sha256"));
+    }
+
+    let registry_root = root.join("secure/data/erc7730-registry");
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+        .expect("build production ERC20 capability corpus");
+    let (registry, _) = build_db_tolerant_with_erc20_capabilities(
+        &registry_root.join("registry"),
+        &root.join("secure/data/erc7730/policy.toml"),
+        Some(&registry_root),
+        &erc20.capabilities,
+    )
+    .expect("build production ERC-7730 registry");
+
+    for (source, signature, label, threshold, message, expected_entries) in [
+        (
+            "calldata-wct.json",
+            "approve(address,uint256)",
+            b"Amount".as_slice(),
+            Some([0xff; 32]),
+            None,
+            3usize,
+        ),
+        (
+            "calldata-usdt.json",
+            "approve(address,uint256)",
+            b"Amount".as_slice(),
+            None,
+            None,
+            2usize,
+        ),
+        (
+            "calldata-PositionsManager.json",
+            "approveBorrow(address,address,uint256)",
+            b"Allowance".as_slice(),
+            None,
+            None,
+            3usize,
+        ),
+        (
+            "calldata-PositionsManager.json",
+            "approveEngine(address,address,uint256)",
+            b"Allowance".as_slice(),
+            Some([0xff; 32]),
+            Some(b"Unlimited".as_slice()),
+            3usize,
+        ),
+    ] {
+        let entries: Vec<_> = registry
+            .entries
+            .iter()
+            .filter(|entry| entry.source.file_name().and_then(|name| name.to_str()) == Some(source))
+            .collect();
+        assert_eq!(
+            entries.len(),
+            expected_entries,
+            "deployment count for {source}"
+        );
+        let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+            .try_into()
+            .expect("allowance selector width");
+        for entry in entries {
+            let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("parse allowance IR");
+            let format = ir
+                .find_format_by_selector(&selector)
+                .expect("allowance format table parses")
+                .unwrap_or_else(|| panic!("missing allowance format {signature}"));
+            let field = format
+                .fields()
+                .map(|field| field.expect("allowance field parses"))
+                .find(|field| field.label == label)
+                .unwrap_or_else(|| panic!("missing allowance field for {signature}"));
+            assert_eq!(
+                FormatOp::try_from(field.format_op),
+                Ok(FormatOp::TokenAmount)
+            );
+            let params = parse_params(&ir, field.param_off).expect("allowance params parse");
+            assert_eq!(
+                params.threshold.copied(),
+                threshold,
+                "threshold for {signature}"
+            );
+            assert_eq!(params.message, message, "message for {signature}");
+        }
     }
 }

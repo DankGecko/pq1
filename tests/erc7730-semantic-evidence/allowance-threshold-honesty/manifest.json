@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "evidence_level": "E0 source plus E1 structural/render tests",
+  "fixed_block_receipt": {
+    "file": "rpc/fixed-block-receipt.json",
+    "sha256": "8d2ba0c0322713ca793c752cb1100c61a39a69e49adef4bc72e2f21a2f40c531"
+  },
+  "sources": [
+    {
+      "id": "wct-openzeppelin-allowance",
+      "excerpt": "source/WCT.ERC20Upgradeable.allowance.excerpt.sol",
+      "excerpt_sha256": "2c56f0433c89ee500b062f1c6f07fd6d674dff2df582c05e82801fe46e4e8668",
+      "repository": "https://github.com/WalletConnect/contracts",
+      "commit": "0a9a7260344e671f62087547cb3c0cf49b464986",
+      "tree": "74165485b81b04065876062f78a26604ca880dd9",
+      "wct_sha256": "3bc560a90575c6eb019ff6d9dcd05896f946d9321423a905235a51d5f5de31f0",
+      "l2wct_sha256": "5ad795bedc9e971cef5a7b7a81487339042ee615f4be1d603a79e84ebad1593c",
+      "ntt_token_sha256": "b4d5578b40529719e088714b796bb287f7d9f6925016fc21e6cf69101e966cb5",
+      "openzeppelin_erc20_upgradeable_sha256": "a671661c93ff63f065e4ad077f4d6f41ce41f3cd0c43e30a68d0c1c989bd4765",
+      "openzeppelin_version": "5.0.2"
+    },
+    {
+      "id": "flyingtulip-positions-manager",
+      "excerpt": "source/PositionsManager.allowance.excerpt.sol",
+      "excerpt_sha256": "1b7804f4a67557fe4aba6e876bdf87f12a4ca26e48139a58d8ffbc8d4cb3fe50",
+      "verified_source_url": "https://eth.blockscout.com/api/v2/smart-contracts/0xaa3d5fc84b43219391539714be5f0681aefca23b",
+      "explorer_capture_sha256": "c2560b4633c54e69385f8dcd5a4503a8b2c12812e4b4a8ff65c9ee9f7c0416db",
+      "full_source_bytes": 55886,
+      "full_source_sha256": "3e1ac64c1cd8717952fe83761691d35b4b7d7b28cdcfcd7218e9d5a8046b90a0"
+    },
+    {
+      "id": "ethereum-usdt",
+      "excerpt": "source/TetherToken.ethereum.allowance.excerpt.sol",
+      "excerpt_sha256": "20cb5ed7353ffd32a0a703c5728584b25cf48b6378f87cecc491dfb641f1af44",
+      "verified_source_url": "https://eth.blockscout.com/api/v2/smart-contracts/0xdac17f958d2ee523a2206206994597c13d831ec7",
+      "explorer_capture_sha256": "a520f93b96ef433b09921d2d2447d9c11cb185474779ccefd7f9d41e850ecde1",
+      "full_source_bytes": 14888,
+      "full_source_sha256": "36bf0b5747dfe7f79a03c9bc09af63e93e352d3c61199fbf025fd2c962b485f8"
+    },
+    {
+      "id": "polygon-usdt",
+      "excerpt": "source/UChildUSDT0.polygon.allowance.excerpt.sol",
+      "excerpt_sha256": "7beff5df65ff086e0271dc303675d3fc1c0602d632346ee2272f3235a1b69466",
+      "proxy_source_url": "https://polygon.blockscout.com/api/v2/smart-contracts/0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
+      "implementation_source_url": "https://polygon.blockscout.com/api/v2/smart-contracts/0x90040487a6c9f949c4f07cadcfb0f3b8eeab4229",
+      "proxy_capture_sha256": "50166e7ecd4bf984d8dad311cb5c1035208e6fe08b42ed5832971b22c5cc1a03",
+      "implementation_capture_sha256": "64d5980e96e006ece94a8d552c1690241b6980c974d0f81a034432a55a2ab5b3",
+      "implementation_main_source_sha256": "0d7130bf5a3e8200150661b7bf8a99d4d3156cace7108b3c614b15b3ac3ab73e",
+      "uchild_erc20_source_sha256": "73fbffa5ee18dfc0b223aecbe8805a6900378a578f5cee5d837bc335e0a1c370"
+    }
+  ],
+  "descriptors": [
+    {
+      "path": "secure/data/erc7730-registry/ercs/calldata-erc20-tokens.json",
+      "sha256": "fb81b5d7cdb61ee9bc43aa054434aaede83451fdf52eb5c0913c886558793e19"
+    },
+    {
+      "path": "secure/data/erc7730-registry/registry/flyingtulip/calldata-PositionsManager.json",
+      "sha256": "16c3c693aa3f08e35e8a80fd383b7d08b0c5e77648bea1ab6541d21399c2146b"
+    },
+    {
+      "path": "secure/data/erc7730-registry/registry/tether/calldata-usdt.json",
+      "sha256": "8507a19d2667cf914c7d035c3451826276b1f165f80589c4777a5c9c4c3f3e96"
+    },
+    {
+      "path": "secure/data/erc7730-registry/registry/walletconnect/calldata-wct.json",
+      "sha256": "03e9417c997403089af73dffabf7d909923a1477caedece9bbfa08ea16b29dfe"
+    }
+  ],
+  "residuals": [
+    "WCT, FlyingTulip, and Polygon USDT are upgradeable; this package binds only the listed fixed-block implementations.",
+    "Ethereum USDT can redirect to upgradedAddress if deprecated becomes true; the fixed-block receipt records deprecated=false.",
+    "The generic ERC-20 descriptor intentionally makes no contract-specific infinity claim."
+  ]
+}
