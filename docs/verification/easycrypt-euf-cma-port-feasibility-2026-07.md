@@ -2011,3 +2011,14 @@ typing). Each statement is character-identical to the component premise under A_
 summand 4 (the +C S-TCR term) to a standard assumption OR state it as the paper's Thl-lifted S-TCR(+C); prove
 R_top's reduction SOUNDNESS; wire FORS+C; add the PRF (NPRF->PRF) hop; and assemble T's discharges + U's
 unfold + the losslessness facts into one capstone lemma (currently these live in separate compilation units).
+
+### 2026-07-20 — U-file (unfold) 0-admit INDEPENDENTLY re-confirmed by my own forced canary compile
+
+The workflow auditor had confirmed the T file with its own canary compile but the U-file compile had not
+returned at its report time. I reproduced it myself: pristine copy of `drafts/_assembly_unfold_wip.ec` (8882
+lines) + an appended `lemma _U_AUDIT_CANARY : false`, real forced compile (target .eco deleted, chmod-777
+scratch). Result: `rc=1`, and the SOLE `[critical]` line is `cannot save an incomplete proof` at line 8886 —
+the canary's own qed. EasyCrypt halts at the first error, so nothing before 8886 errored ⇒ the entire body
+(including `EUFNAGCMA_FLSLXMSSMTTWCESNPRF_Unfolded`) typechecks and every proof closes. So `CERTIFIED-0-ADMIT`
+on the unfold file is now verified at THREE independent levels (build track → workflow auditor → this session),
+matching the earlier component-theorem verification standard.
