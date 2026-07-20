@@ -1968,3 +1968,46 @@ clone axiom, not the first of many.** (Plus `dpp_ll` in STCR_C.ec and MM45's own
 0-admit, modulo eleven disclosed premises + one undisclosed clone axiom (now disclosed here) + the four scope
 caveats above. It is NOT yet a SPHINCS+C EUF-CMA theorem: that needs the capstone composition, the premise
 discharges, R_top's reduction soundness, FORS+C, and the PRF hop.
+
+### 2026-07-20 (cont.) — WOTS-TW summand UNFOLDED to base-hash terms; all four R_top restriction premises DISCHARGED
+
+Two parallel tracks on the certified component theorem, independently audited: **both FAITHFUL AND HONEST**
+(u_honest / t_honest / no_hidden_premise all true; verdict: no overstatement, dropped summand, or papered
+oracle mismatch). Grind.ec's self-contradictory disclosure comment was corrected first (enum_spec IS a
+clone-inherited undischarged obligation, now disclosed).
+
+**U — the WOTS-TW GAME summand is now BASE-HASH TERMS** (drafts/_assembly_unfold_wip.ec:8708,
+`EUFNAGCMA_FLSLXMSSMTTWCESNPRF_Unfolded`, CERTIFIED-0-ADMIT via a real ~12-min compile with the .eco written).
+Instantiated MM45's premise-free `MEUFGCMA_WOTSTWESNPRF` (WOTS_TW_ES.ec:6269) at
+A := R_int_WOTSTW(R_leaf_C(A_ht)) to replace summand 1 with `(w-2)*|UD(false)-UD(true)| + TCR + PRE`. The bound
+is now SIX summands: **1-3 UD/TCR/PRE [base hash], 5-6 pkco/trh SM-DT-TCR-C [base hash]** — and **4 =
+S_TCR_C_Int_MA, the bespoke +C grinding-counter interactive S-TCR game [NOT a base hash assumption], carried
+unchanged, still awaiting its own reduction (MM45 has no counterpart).** So the audit's goal is met FOR THE
+WOTS-TW SUMMAND (5 of 6 are now base-hash), not yet for the whole bound.
+ - **TWO new premises CARRIED, disclosed in the header (11 -> 13):** the losslessness facts
+   `A_ht_choose_ll` / `A_ht_forge_ll` — the exact analogue of MM45's own section declare-axioms
+   (FL_SL_XMSS_MT_ES.ec:2742/2750), UNAVOIDABLE because A_ht is abstract. The composed-reduction losslessness
+   obligations were genuinely PROVED (while-variant scripts) down to these abstract-adversary facts. Both
+   RUN-verified load-bearing (premise:=true breaks the apply).
+ - **Oracle instances line up with NO bridge:** WOTS_TW_ES.ec:450 does `clone import Collection as FC`, so its
+   bare `O_THFC_Default` IS `FC.O_THFC_Default` — machine-verified via `print`; the composition is a plain
+   smt() with no cross-clone hop.
+
+**T — ALL FOUR adversary-restriction premises DISCHARGED for R_top** (drafts/_rtop_typeaudit_wip.ec,
+admit=0/axiom=0, auditor's own canary compile GREEN): `R_top_allnchads` (chtype), `R_top_allnpkcoads`
+(pkcotype), `R_top_allntrhads` (trhxtype), plus bonus `R_top_A_wf_ht` (the member axis in exact
+capstone-collapsed form). **The failure mode I flagged was AVOIDED:** the pkco/trh lemmas are stated over
+`R_SMDTTCRCPKCO_C(R_top(F),..).O_THFC` / `R_SMDTTCRCTRH_C(R_top(F),..).O_THFC` — the EXACT instances the
+component theorem names — NOT over R_top's own instance. Premise-free in F (oracle-freeness enforced by
+typing). Each statement is character-identical to the component premise under A_ht := R_top(F).
+ - **Disclosed side-conditions (not hidden):** `R_top_A_wf_ht` needs a FOURTH `dfC <> 8*n*k` fact (explicit in
+   its signature); and the T file is a SEPARATE compilation unit that reproduces R_SMDTTCRCPKCO_C/
+   R_SMDTTCRCTRH_C locally, so cross-file MODULE IDENTITY is a carried assumption (bodies diffed identical).
+ - Out of scope, labelled: R_top reduction SOUNDNESS (R3) and the FORS+C signer wiring (R4) — R_top still
+   simulates SPHINCS+ with a +C hypertree.
+
+**WHERE THE CAPSTONE STANDS NOW:** all four restriction premises HAVE a discharge for the concrete top-image
+(T), and the WOTS-TW summand rests on base hashes (U). What remains for a SPHINCS+C EUF-CMA theorem: reduce
+summand 4 (the +C S-TCR term) to a standard assumption OR state it as the paper's Thl-lifted S-TCR(+C); prove
+R_top's reduction SOUNDNESS; wire FORS+C; add the PRF (NPRF->PRF) hop; and assemble T's discharges + U's
+unfold + the losslessness facts into one capstone lemma (currently these live in separate compilation units).
