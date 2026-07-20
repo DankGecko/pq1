@@ -1891,7 +1891,11 @@ mod pin_diag_source_text {
     /// `run()` MUST pulse PA4, PD5, PE0 in that order — the empirically
     /// validated sequence that produces a visible OPTIGA RST edge.
     /// Reordering or dropping any of them caused "no visible edge on the
-    /// LA" (see pin_diag.rs:113-128).
+    /// LA" (see pin_diag.rs:113-128). The PE0 leg moved to the
+    /// datasheet-bounded `pulse_low_cycles` form (10 µs ≤ t_low ≤ 2.5 ms,
+    /// OPTIGA Table 14) in origin commit `2368003a`; the pin therefore
+    /// accepts exactly that call shape and rejects a regression to the
+    /// old unbounded `pulse_low` form.
     #[test]
     fn positive_run_keeps_empirical_pulse_sequence() {
         let pos = PIN_DIAG_SRC
@@ -1904,11 +1908,19 @@ mod pin_diag_source_text {
         let body = &PIN_DIAG_SRC[pos..next_fn];
         let pa4_pos = body.find("pulse_low(GPIOA_BASE, 4,").expect("PA4 pulse missing");
         let pd5_pos = body.find("pulse_low(GPIOD_BASE, 5,").expect("PD5 pulse missing");
-        let pe0_pos = body.find("pulse_low(GPIOE_BASE, 0,").expect("PE0 pulse missing");
+        let pe0_pos = body
+            .find("pulse_low_cycles(GPIOE_BASE, 0,")
+            .expect("PE0 pulse missing (datasheet-bounded pulse_low_cycles form)");
         assert!(
             pa4_pos < pd5_pos && pd5_pos < pe0_pos,
             "pulse order must be PA4 → PD5 → PE0 (PE0 is the actual OPTIGA \
              RST wire; PA4/PD5 are empirically-load-bearing preamble decoys)."
+        );
+        assert!(
+            !body.contains("pulse_low(GPIOE_BASE, 0,"),
+            "PE0 must use the datasheet-bounded pulse_low_cycles form \
+             (RST_LOW_CYCLES; OPTIGA Table 14 t_low ≤ 2.5 ms), not the old \
+             ~60 ms unbounded pulse_low."
         );
     }
 
