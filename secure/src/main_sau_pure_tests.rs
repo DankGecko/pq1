@@ -522,7 +522,7 @@ fn positive_tz2_locks_security_config_after_enabling_sau() {
         "const TZSC_CR_ADDR: u32 = TZSC_BASE;",
         "const TZSC_CR_LCK: u32 = 1 << 0;",
         "const SCB_AIRCR_ADDR: u32 = 0xE000_ED0C;",
-        "const AIRCR_PRIS: u32 = 1 << 14;",
+        "const AIRCR_PRIS: u32 = 1 << 10;",
         "const AIRCR_BFHFNMINS: u32 = 1 << 13;",
         // The two lock writes + the AIRCR fixup must all be present.
         "syscfg_cslckr.set_bits(CSLCKR_LOCKSAU | CSLCKR_LOCKSVTAIRCR);",
@@ -542,6 +542,31 @@ fn positive_tz2_locks_security_config_after_enabling_sau() {
         SAU_SRC.contains("#[cfg(feature = \"mode-production\")]\n    const AIRCR_SYSRESETREQS: u32 = 1 << 3;"),
         "tz-2: AIRCR_SYSRESETREQS must be gated behind mode-production"
     );
+
+    // SYSCFG clock enable must precede the CSLCKR lock write (2026-07-19
+    // bench brick: RCC_APB3ENR is zero out of reset, nothing else enabled
+    // SYSCFG, so the lock write was silently RAZ/WI until the F6 readback
+    // verify WFE-halted every boot).
+    {
+        let fn_start = SAU_SRC
+            .find("pub fn lock_security_config()")
+            .expect("lock_security_config() must exist");
+        let body = &SAU_SRC[fn_start..];
+        let clock = body
+            .find("rcc_apb3enr.set_bits(RCC_APB3ENR_SYSCFGEN);")
+            .expect("lock_security_config must enable the SYSCFG clock before CSLCKR");
+        let cslckr = body
+            .find("syscfg_cslckr.set_bits(CSLCKR_LOCKSAU | CSLCKR_LOCKSVTAIRCR);")
+            .expect("CSLCKR lock write must exist");
+        assert!(
+            clock < cslckr,
+            "SYSCFGEN must be set BEFORE the CSLCKR lock write (else the lock is silently dropped on hardware)"
+        );
+        assert!(
+            SAU_SRC.contains("const RCC_APB3ENR_SYSCFGEN: u32 = 1 << 1;"),
+            "SYSCFGEN must be RCC_APB3ENR bit 1 (CMSIS RCC_APB3ENR_SYSCFGEN)"
+        );
+    }
 
     // GTZC2 (RTC-domain: TAMP/BKP) must NOT be locked — it is unconfigured
     // on this branch (tracked TAMP/GTZC2 follow-up), and locking it would
@@ -592,6 +617,26 @@ fn positive_aircr_sec_config_write_is_read_back_before_freeze() {
             "const AIRCR_SECCFG_MASK: u32 =\n            AIRCR_PRIS | AIRCR_BFHFNMINS | AIRCR_SYSRESETREQS;"
         ),
         "AIRCR_SECCFG_MASK must cover PRIS|BFHFNMINS (+SYSRESETREQS in production) and exclude the VECTKEY half-word"
+    );
+
+    // Constants guard (2026-07-19 bench brick): PRIS is AIRCR bit 10,
+    // NOT bit 14 — a `1 << 14` PRIS constant writes a reserved bit
+    // (readback zero) and WFE-halts every hardware boot at the X17-TZ1
+    // verify. Pin the exact ARMv8-M bit positions so a wrong-bit edit
+    // fails on the host, not on the bench (core_cm33.h:
+    // SCB_AIRCR_PRIS_Pos=10, SCB_AIRCR_BFHFNMINS_Pos=13,
+    // SCB_AIRCR_SYSRESETREQS_Pos=3).
+    assert!(
+        SAU_SRC.contains("const AIRCR_PRIS: u32 = 1 << 10;"),
+        "AIRCR_PRIS must be AIRCR bit 10 (1 << 10) — bit 14 is reserved and WFE-bricks the boot"
+    );
+    assert!(
+        SAU_SRC.contains("const AIRCR_BFHFNMINS: u32 = 1 << 13;"),
+        "AIRCR_BFHFNMINS must be AIRCR bit 13 (1 << 13)"
+    );
+    assert!(
+        SAU_SRC.contains("const AIRCR_SYSRESETREQS: u32 = 1 << 3;"),
+        "AIRCR_SYSRESETREQS must be AIRCR bit 3 (1 << 3)"
     );
 }
 

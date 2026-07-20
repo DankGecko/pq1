@@ -490,7 +490,7 @@ mod stm32 {
     const SCB_AIRCR_ADDR: u32 = 0xE000_ED0C;
     const AIRCR_VECTKEY: u32 = 0x05FA << 16; // required on every write
     const AIRCR_VECTKEY_MASK: u32 = 0xFFFF << 16;
-    const AIRCR_PRIS: u32 = 1 << 14; // secure IRQs outprioritize NS
+    const AIRCR_PRIS: u32 = 1 << 10; // secure IRQs outprioritize NS (ARMv8-M AIRCR bit 10 — NOT bit 14; core_cm33.h SCB_AIRCR_PRIS_Pos)
     const AIRCR_BFHFNMINS: u32 = 1 << 13; // 0 = BusFault/HardFault/NMI are SECURE
     #[cfg(feature = "mode-production")]
     const AIRCR_SYSRESETREQS: u32 = 1 << 3; // restrict SYSRESETREQ to secure
@@ -524,6 +524,19 @@ mod stm32 {
         let aircr = unsafe { Reg32::new(SCB_AIRCR_ADDR) };
         let syscfg_cslckr = unsafe { Reg32::new(SYSCFG_CSLCKR_ADDR) };
         let tzsc_cr = unsafe { Reg32::new(TZSC_CR_ADDR) };
+
+        // SYSCFG clock must be ON before any CSLCKR access: RCC_APB3ENR
+        // is zero out of reset and nothing else in the boot enables it,
+        // so the lock write below was silently dropped (RAZ/WI) on
+        // hardware until the F6 readback verify caught it
+        // (2026-07-19 bench brick). SYSCFGEN = RCC_APB3ENR bit 1
+        // (CMSIS `RCC_APB3ENR_SYSCFGEN`). Left running: the lock bits
+        // must stay readable, and the SYSCFG draw is negligible.
+        const RCC_APB3ENR_ADDR: u32 = 0x5602_0C00 + 0xA8;
+        const RCC_APB3ENR_SYSCFGEN: u32 = 1 << 1;
+        let rcc_apb3enr = unsafe { Reg32::new(RCC_APB3ENR_ADDR) };
+        rcc_apb3enr.set_bits(RCC_APB3ENR_SYSCFGEN);
+        cortex_m::asm::dsb();
 
         // (1) AIRCR — set the security attributes BEFORE they are frozen
         // by LOCKSVTAIRCR below. VECTKEY must be re-supplied on every
