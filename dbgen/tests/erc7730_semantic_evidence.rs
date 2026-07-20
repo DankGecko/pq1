@@ -2988,7 +2988,7 @@ fn lido_wsteth_remaining_routes_source_abi_descriptor_and_ir_agree() {
 }
 
 #[test]
-fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
+fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
     let root = workspace_root();
     let evidence = uniswap_evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));
@@ -2996,7 +2996,7 @@ fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
     assert_eq!(manifest["schema_version"].as_u64(), Some(1));
     assert_eq!(
         manifest["policy"]["outcome"].as_str(),
-        Some("fail_closed_exclusion")
+        Some("constrained_restoration")
     );
     assert_eq!(
         manifest["verified_source"]["upstream_release"].as_str(),
@@ -3059,7 +3059,25 @@ fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
         "68b3465833fb72a70ecdf485e0e4c7bd8665fc45"
     );
 
-    let route_specs = manifest["policy"]["excluded_routes"]
+    let constraints = &manifest["policy"]["constraints"];
+    assert_eq!(
+        constraints["recipient_router_sentinel_policy"].as_str(),
+        Some("reject")
+    );
+    assert_eq!(
+        constraints["exact_input_zero_amount_policy"].as_str(),
+        Some("reject")
+    );
+    assert_eq!(
+        constraints["nonzero_sqrt_price_limit_policy"].as_str(),
+        Some("reject")
+    );
+    assert_eq!(
+        constraints["outer_native_value_policy"].as_str(),
+        Some("require_zero")
+    );
+
+    let route_specs = manifest["policy"]["constrained_routes"]
         .as_array()
         .expect("excluded route array");
     assert_eq!(route_specs.len(), 2);
@@ -3138,7 +3156,7 @@ fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
             String::from_utf8(bytes).expect("Solidity source is UTF-8"),
         );
     }
-    assert_eq!(archived_sources.len(), 4);
+    assert_eq!(archived_sources.len(), 6);
 
     let concrete = normalized_whitespace(&archived_sources["source/SwapRouter02.sol"]);
     assert!(concrete.contains(
@@ -3172,6 +3190,44 @@ fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
             "params.amountIn = IERC20(params.tokenIn).balanceOf(address(this));",
             "payer: hasAlreadyPaid ? address(this) : msg.sender",
             "require(amountOut >= params.amountOutMinimum, 'Too little received');",
+        ],
+    );
+
+    let payment_dependency = &manifest["payment_dependency"];
+    for key in ["swap_router_package", "swap_router_lock", "v3_periphery_source"] {
+        let receipt = &payment_dependency[key];
+        let bytes = fs::read(evidence.join(required_str(receipt, "archive_file")))
+            .unwrap_or_else(|error| panic!("read Uniswap dependency {key}: {error}"));
+        assert_eq!(sha256_hex(&bytes), required_str(receipt, "sha256"));
+    }
+    assert_eq!(
+        payment_dependency["swap_router_package"]["declared_dependency"].as_str(),
+        Some("@uniswap/v3-periphery@1.3.0")
+    );
+    assert_eq!(
+        payment_dependency["v3_periphery_source"]["upstream_commit"].as_str(),
+        Some("80f26c86c57b8a5e4b913f42844d4c8bd274d058")
+    );
+    assert_eq!(
+        payment_dependency["v3_periphery_source"]["locked_tarball_file_sha256"].as_str(),
+        payment_dependency["v3_periphery_source"]["sha256"].as_str()
+    );
+    let payments = normalized_whitespace(&fs::read_to_string(
+        evidence.join(required_str(
+            &payment_dependency["v3_periphery_source"],
+            "archive_file",
+        )),
+    )
+    .expect("read pinned PeripheryPayments source"));
+    assert_fragments_in_order(
+        &payments,
+        &[
+            "function pay(",
+            "if (token == WETH9 && address(this).balance >= value)",
+            "IWETH9(WETH9).deposit{value: value}();",
+            "else if (payer == address(this))",
+            "TransferHelper.safeTransfer(token, recipient, value);",
+            "TransferHelper.safeTransferFrom(token, payer, recipient, value);",
         ],
     );
     assert_fragments_in_order(
@@ -3270,6 +3326,15 @@ fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
             .expect("senderAddress annotation");
         assert_eq!(sender_addresses.len(), 1);
         assert_eq!(sender_addresses[0].as_str(), Some(sentinel));
+
+        let value_fields: Vec<_> = fields
+            .iter()
+            .filter(|field| field["path"].as_str() == Some("@.value"))
+            .collect();
+        assert_eq!(value_fields.len(), 1);
+        assert_eq!(value_fields[0]["label"].as_str(), Some("Native value"));
+        assert_eq!(value_fields[0]["format"].as_str(), Some("amount"));
+        assert_eq!(value_fields[0]["visible"].as_str(), Some("always"));
     }
 
     let registry_root = root.join("secure/data/erc7730-registry");
@@ -3282,14 +3347,24 @@ fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
         &erc20.capabilities,
     )
     .expect("build production ERC-7730 registry");
-    assert!(
-        registry.entries.iter().all(|entry| {
+    let router_entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| {
             entry.source.file_name().and_then(|name| name.to_str())
-                != Some("calldata-UniswapV3Router02.json")
-        }),
-        "Router02 must emit no production descriptor leaf"
-    );
+                == Some("calldata-UniswapV3Router02.json")
+        })
+        .collect();
+    assert_eq!(router_entries.len(), 1, "one exact Router02 deployment leaf");
+    let ir = Erc7730Ir::parse(&router_entries[0].ir_bytes).expect("parse restored Router02 IR");
+    assert_eq!(ir.format_count(), Ok(2));
     for (signature, selector) in expected_routes {
+        assert!(
+            ir.find_format_by_selector(&selector)
+                .expect("Router02 format table parses")
+                .is_some(),
+            "{signature} must be present under constrained restoration"
+        );
         assert!(
             registry.known_calls.contains(&(1, contract, selector)),
             "{signature} must remain an exact known-call tuple"
