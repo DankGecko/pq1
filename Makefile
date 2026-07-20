@@ -1781,11 +1781,20 @@ test-unit: ## Rust workspace unit tests (host)
 #   make check-codegen
 #
 # Or as part of `make prod-erc7730-provenance-check` (Phase 2 onwards).
-.PHONY: check-codegen check-erc7730-descriptors check-solidity-constants check-research-bundles erc8176-coverage erc8176-coverage-test
+.PHONY: check-codegen check-erc7730-build-input-shadows check-erc7730-descriptors check-solidity-constants check-research-bundles erc8176-coverage erc8176-coverage-test
 check-codegen: check-erc7730-descriptors check-solidity-constants check-research-bundles
 	@echo "==> codegen artifacts in sync"
 
-check-erc7730-descriptors:
+check-erc7730-build-input-shadows:
+	@set -eu; \
+	for path in .cargo/config rust-toolchain; do \
+	    if [ -e "$$path" ] || [ -L "$$path" ]; then \
+	        echo "ERROR: legacy ERC-7730 build-input shadow '$$path' is forbidden" >&2; \
+	        exit 1; \
+	    fi; \
+	done
+
+check-erc7730-descriptors: check-erc7730-build-input-shadows
 	@echo "==> Checking ERC-7730 descriptor catalog (xtask --check)"
 	@cargo run --locked -q -p pqsigner-xtask -- gen-erc7730-descriptors --check
 

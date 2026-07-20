@@ -204,7 +204,7 @@ jobs:
       # `make check-erc7730-descriptors`; wired here so the catalog can never
       # drift on merge.
       - name: ERC-7730 descriptor catalog in-sync (drift gate)
-        run: cargo run --locked -q -p pqsigner-xtask -- gen-erc7730-descriptors --check
+        run: make check-erc7730-descriptors
       # Deterministic/offline: malformed, revoked, and expired EAS rows must
       # never contribute to a descriptor's trusted-attester threshold.
       - name: ERC-8176 coverage checker regressions (offline)
