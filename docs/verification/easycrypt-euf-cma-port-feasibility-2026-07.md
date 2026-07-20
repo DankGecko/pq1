@@ -1911,3 +1911,60 @@ follow-up commit. The tactic was never wrong — only the stated reason.
 0-admit. Remaining toward an unconditional statement: assembling the two branches with the hops into a single
 REAL-game bound, discharging the three carried type premises (allnchads/allnpkcoads/allntrhads) at the
 capstone, R_top's reduction SOUNDNESS, and the FORS+C wiring.
+
+## MILESTONE 2026-07-20 — THE XMSS-MT+C COMPONENT THEOREM IS PROVED (real game, 0-admit, canary-verified)
+
+`lemma EUFNAGCMA_FLSLXMSSMTTWCESNPRF` (drafts/_assembly_wip.ec:8439) proves, for the **REAL** EUF-NAGCMA game:
+
+```
+Pr[EUF_NAGCMA_FLSLXMSSMTTWCESNPRF(A_ht, FC.O_THFC_Default).main() @ &m : res]
+  <=  Pr[M_EUF_GCMA_WOTSTWESNPRF(R_int_WOTSTW(R_leaf_C(A_ht)), ...)]        (WOTS-TW)
+    + Pr[S_TCR_C_Int_MA(R_int_STCRC(R_leaf_C(A_ht)), ...)]                  (the +C S-TCR term)
+    + Pr[PKCOC_TCR.SM_DT_TCR_C(R_SMDTTCRCPKCO_C(A_ht), ...)]                (pkco)
+    + Pr[TRHC_TCR.SM_DT_TCR_C(R_SMDTTCRCTRH_C(A_ht), ...)]                  (trh)
+```
+proved by chaining `seam_branch1_lifted_to_REAL` and `seam_branch2`. This is the +C analog of MM45's
+component theorem, and it is the culmination of the whole chain: game hops (REAL~C~V), branch-1 (WOTS bucket),
+branch-2 (pkco+trh buckets), the okC-ghost, the O_V oracle hop, grind-in-find, and R_top's A_wf discharge.
+
+**INDEPENDENT AUDIT — the auditor ran its OWN gates, not the tracks':**
+ - CANARY forced real compile: pristine 8588-line body + a canary lemma proving false ⇒ the ONLY error is at
+   the canary's own qed (line 8592). EasyCrypt halts at the first error, so **the entire body typechecks and
+   all 47 proofs close**. Its own comment-stripped sweep: 0 admit tactics, 0 axiom decls.
+ - **LHS INTEGRITY — it really is the REAL game**, not the V game: the module is defined exactly once (:278),
+   distinct from `_C` (:1177) and `_V` (:1419), uses real keygen/sign and the +C verify (size gate + root
+   match + allOkC). ZERO occurrences of any `valid_*` flag in the statement.
+ - **NO DROPPED SUMMAND**, verified by breaking a DIFFERENT one than the track did: deleting the trh summand
+   (whole-file diff = only those lines) gives `cannot prove goal (strict)` at the smt() line, WITH a
+   `[critical]` line (so it is not the uid-1001 false-red). Load-bearing on the real, un-gutted artifact.
+ - Premises: ELEVEN, the exact union of the two ingredients, `move=>` intro list matching 1:1. The four hoare
+   premises sit over FOUR DIFFERENT oracle instances and are carried SEPARATELY — no cross-instance
+   identification is assumed. Carrying them is MM45-faithful (its component theorem carries three and
+   discharges them only at the capstone). Non-vacuity of the member premise is separately PROVEN by
+   `A_ht_dfC_breaks_wf`, which exhibits a concrete violating adversary.
+
+**THE ONE REAL FINDING — a premise-DISCLOSURE gap (audit flipped `premises_fully_disclosed` to false):**
+the header advertises eleven premises and claims to be "exactly the union", but a **clone-inherited axiom
+rides in undisclosed**: `drafts/Grind.ec:47` clones `FinType as CntrFT` and its `enum_spec` obligation is never
+realized (the file's own comment even asserts "No new axiom is introduced" — that is wrong as stated; it is
+carried as a modelling fact that the counter type is finite/enumerable). Not a soundness break — the real
+counter type IS finite — but the premise list is incomplete AS ADVERTISED and must be disclosed. The auditor
+BOUNDED the leak: `TweakableHashFunctions.eca` has exactly one axiom (`in_collection`) and STCR_C realizes it,
+and the `dpp` losslessness obligation is realized ⇒ **`enum_spec` is the SOLE port-introduced undischarged
+clone axiom, not the first of many.** (Plus `dpp_ll` in STCR_C.ec and MM45's own base axioms as cited TCB.)
+
+**SCOPE CAVEATS — these must travel with any quotation of the theorem:**
+ 1. **OC is FIXED to `FC.O_THFC_Default`**, not universally quantified. A version quantified over OC is NOT proved.
+ 2. **This is the NPRF game** (WOTS keys sampled uniformly from a cube), not the full PRF-keyed scheme. The
+    key-generation PRF hop is a separate deliverable. Faithful to MM45's component level, but this is NOT the
+    complete scheme.
+ 3. **The WOTS-TW summand is left as the M-EUF-GCMA game term, NOT unfolded** into UD/TCR/PRE. MM45's analog
+    unfolds to five summands. So this is a component theorem relative to a GAME, not relative to base hash
+    assumptions.
+ 4. The four adversary-restriction premises are CARRIED, discharged only at the capstone (R_top discharges the
+    member-based one for the concrete reduction image; the three type premises remain).
+
+**HONEST HEADLINE:** the XMSS-MT+C hypertree component bound is machine-checked end-to-end over the real game,
+0-admit, modulo eleven disclosed premises + one undisclosed clone axiom (now disclosed here) + the four scope
+caveats above. It is NOT yet a SPHINCS+C EUF-CMA theorem: that needs the capstone composition, the premise
+discharges, R_top's reduction soundness, FORS+C, and the PRF hop.
