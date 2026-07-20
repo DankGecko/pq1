@@ -1,0 +1,303 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-07-20T09:56:30Z",
+  "scope": "Fixed-block observations for all seven FlyingTulip SessionManager deployments admitted by PQ1",
+  "methods": {
+    "header": "eth_getBlockByNumber",
+    "runtime": "eth_getCode",
+    "storage": "eth_getStorageAt"
+  },
+  "proxy_slots": {
+    "implementation": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+    "admin": "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103",
+    "beacon": "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50"
+  },
+  "networks": [
+    {
+      "network": "ethereum-mainnet",
+      "chain_id": 1,
+      "block": {
+        "number": 25572303,
+        "number_hex": "0x18633cf",
+        "hash": "0xa25d10de4629dfcf1c04918573a88e22dafe46f57aa040e656d165390c9f25a8",
+        "state_root": "0xb4fc82abc66910cd96b56bb245dcdae2af48111e831ededf615fe351e64395fd",
+        "timestamp": 1784530943,
+        "timestamp_hex": "0x6a5dc7ff",
+        "timestamp_utc": "2026-07-20T07:02:23Z",
+        "observed_identically_by": [
+          "https://eth.drpc.org",
+          "https://rpc.mevblocker.io"
+        ]
+      },
+      "deployments": [
+        {
+          "address": "0x2DaF4B445E7d659100b22a15c3EeB10e64ac5dC9",
+          "runtime_file": "runtime/1-2daf4b445e7d659100b22a15c3eeb10e64ac5dc9.hex",
+          "runtime": {
+            "bytes": 7732,
+            "sha256": "c995727383accc2bb569c3f5fcce68899a51117df962a9a8d6846e6b0f730774",
+            "keccak256": "0x7c79d4c8c47cae453fbac541867210cef5dc2bdd5442b9410a9974113f9fc6fc"
+          },
+          "observations": [
+            {
+              "endpoint": "https://eth.drpc.org",
+              "runtime_matches_archive": true,
+              "proxy_slot_results": {
+                "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            },
+            {
+              "endpoint": "https://rpc.mevblocker.io",
+              "runtime_matches_archive": true,
+              "proxy_slot_results": {
+                "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          ]
+        },
+        {
+          "address": "0xF9f3ddF2E96Cabef94e2634c326DC6dde99360f8",
+          "runtime_file": "runtime/1-f9f3ddf2e96cabef94e2634c326dc6dde99360f8.hex",
+          "runtime": {
+            "bytes": 7853,
+            "sha256": "ec5257d4713a7c903d19ac6d2ad452e9e4a565c3caa8e91618330e0f64d5a289",
+            "keccak256": "0xe124781a5e8c1269d960fb35d8bd62f38db701c927bbdaa46d62cb8820f7f8a0"
+          },
+          "observations": [
+            {
+              "endpoint": "https://eth.drpc.org",
+              "runtime_matches_archive": true,
+              "proxy_slot_results": {
+                "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            },
+            {
+              "endpoint": "https://rpc.mevblocker.io",
+              "runtime_matches_archive": true,
+              "proxy_slot_results": {
+                "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          ]
+        }
+      ],
+      "agreement": "Both endpoints returned the pinned header, both complete runtimes, and zero values for all three standard EIP-1967 slots."
+    },
+    {
+      "network": "bnb-smart-chain-mainnet",
+      "chain_id": 56,
+      "block": {
+        "number": 111063903,
+        "number_hex": "0x69eb35f",
+        "hash": "0x0553475f8e725c169d86cd7e3c5299c08eeac6ddb60cd22a283917a262891449",
+        "state_root": "0xea1cd575ec69b443e6568c8bb84f6c6f8d70ba66aee5e99d5303086cad6de11f",
+        "timestamp": 1784538246,
+        "timestamp_hex": "0x6a5de486",
+        "timestamp_utc": "2026-07-20T09:04:06Z",
+        "observed_identically_by": [
+          "https://bsc-mainnet.public.blastapi.io",
+          "https://bsc.meowrpc.com"
+        ]
+      },
+      "deployments": [
+        {
+          "address": "0xC85CB743f72B3a9Bb594Faa7d46EE1EFC61b7A42",
+          "runtime_file": "runtime/56-c85cb743f72b3a9bb594faa7d46ee1efc61b7a42.hex",
+          "runtime": {
+            "bytes": 7732,
+            "sha256": "faa685abb848681bffece9e98c70e130ac87e6c6e4f06863e8d4657756fa5a4c",
+            "keccak256": "0x7e800bd715549a1f94590ef8dbf4f152e1288706b33b3ec0d23459a5e55e8851"
+          },
+          "observations": [
+            {
+              "endpoint": "https://bsc-mainnet.public.blastapi.io",
+              "runtime_matches_archive": true,
+              "proxy_slot_results": {
+                "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            },
+            {
+              "endpoint": "https://bsc.meowrpc.com",
+              "runtime_matches_archive": true,
+              "proxy_slot_results": null,
+              "proxy_slot_error": "Historical eth_getStorageAt was unavailable from this provider at capture."
+            }
+          ]
+        }
+      ],
+      "agreement": "Both endpoints returned the pinned header and complete runtime. BlastAPI returned zero values for all three standard EIP-1967 slots; MeowRPC historical slot reads were unavailable. Sourcify independently classifies this exact deployment as nonproxy."
+    },
+    {
+      "network": "sonic-mainnet",
+      "chain_id": 146,
+      "block": {
+        "number": 76223125,
+        "number_hex": "0x48b1295",
+        "hash": "0x67e183e96e60f3a47b541e46e4db7960cba7d919ea47c6e4ab51db8d07f3c01c",
+        "state_root": "0x18259c4f7aef70429fe18fe185769b0ee61300bdd249ee4277045f6f667ab9ad",
+        "timestamp": 1784530944,
+        "timestamp_hex": "0x6a5dc800",
+        "timestamp_utc": "2026-07-20T07:02:24Z",
+        "observed_identically_by": [
+          "https://sonic.drpc.org",
+          "https://1rpc.io/sonic"
+        ]
+      },
+      "deployments": [
+        {
+          "address": "0x2DaF4B445E7d659100b22a15c3EeB10e64ac5dC9",
+          "runtime_file": "runtime/146-2daf4b445e7d659100b22a15c3eeb10e64ac5dc9.hex",
+          "runtime": {
+            "bytes": 7732,
+            "sha256": "f2364bfd877902fd54334011e24f72b34a45f9d1864ee95a501f3b91104e0560",
+            "keccak256": "0x88b1282176acf1bb076b5015d7795d505d6bb47d5feb43a028d4b0106498ccd5"
+          },
+          "observations": [
+            {
+              "endpoint": "https://sonic.drpc.org",
+              "runtime_matches_archive": true,
+              "proxy_slot_results": {
+                "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            },
+            {
+              "endpoint": "https://1rpc.io/sonic",
+              "runtime_matches_archive": true,
+              "proxy_slot_results": {
+                "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          ]
+        },
+        {
+          "address": "0x109AE72778a0260571b9767477204F1ce41FBdff",
+          "runtime_file": "runtime/146-109ae72778a0260571b9767477204f1ce41fbdff.hex",
+          "runtime": {
+            "bytes": 7732,
+            "sha256": "95ab7962a48d6c1d83ff71a4f20eef4a0950a52b1134c8edbaab5eb6186618b2",
+            "keccak256": "0x83422d32980bb131efd7ce65f4347d093ac787dc4088d651714d00f210d83cf2"
+          },
+          "observations": [
+            {
+              "endpoint": "https://sonic.drpc.org",
+              "runtime_matches_archive": true,
+              "proxy_slot_results": {
+                "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            },
+            {
+              "endpoint": "https://1rpc.io/sonic",
+              "runtime_matches_archive": true,
+              "proxy_slot_results": {
+                "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          ]
+        },
+        {
+          "address": "0x52Ef449D44cC4205fa44bF644dEE15611FC30734",
+          "runtime_file": "runtime/146-52ef449d44cc4205fa44bf644dee15611fc30734.hex",
+          "runtime": {
+            "bytes": 7732,
+            "sha256": "b3f853d7a027a4b4d4bbc0bea97c0f046cc3dc096c9318521be4484762968c78",
+            "keccak256": "0xde23671e91175c3b3a60455faf55b967d607be76defb97eec6a1f1b87d5f768f"
+          },
+          "observations": [
+            {
+              "endpoint": "https://sonic.drpc.org",
+              "runtime_matches_archive": true,
+              "proxy_slot_results": {
+                "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            },
+            {
+              "endpoint": "https://1rpc.io/sonic",
+              "runtime_matches_archive": true,
+              "proxy_slot_results": {
+                "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          ]
+        }
+      ],
+      "agreement": "Both endpoints returned the pinned header, all three complete runtimes, and zero values for all three standard EIP-1967 slots."
+    },
+    {
+      "network": "avalanche-c-chain-mainnet",
+      "chain_id": 43114,
+      "block": {
+        "number": 90778000,
+        "number_hex": "0x5692990",
+        "hash": "0x3ee78fade9e6def9fa07b239b8d177d2210bf4eab5e30cb7872f6acca2ce0a5c",
+        "state_root": "0x2a347c1656510c7e245096cd25d94873373a372c5473da2169df88795154aa3c",
+        "timestamp": 1784538179,
+        "timestamp_hex": "0x6a5de443",
+        "timestamp_utc": "2026-07-20T09:02:59Z",
+        "observed_identically_by": [
+          "https://avalanche.drpc.org",
+          "https://api.avax.network/ext/bc/C/rpc"
+        ]
+      },
+      "deployments": [
+        {
+          "address": "0x176592C8Ed3F2D94cE4c3F1a4cfF7d068176AC54",
+          "runtime_file": "runtime/43114-176592c8ed3f2d94ce4c3f1a4cff7d068176ac54.hex",
+          "runtime": {
+            "bytes": 7732,
+            "sha256": "12e9e3a8f512319dc53318828be1a94c3dcadcedd08313bf24d6d29e261cac56",
+            "keccak256": "0xe59d4a7c2a9536d567fa766d1859469f65b907111d381a3338f314b5bebd0952"
+          },
+          "observations": [
+            {
+              "endpoint": "https://avalanche.drpc.org",
+              "runtime_matches_archive": true,
+              "proxy_slot_results": {
+                "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            },
+            {
+              "endpoint": "https://api.avax.network/ext/bc/C/rpc",
+              "runtime_matches_archive": true,
+              "proxy_slot_results": {
+                "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          ]
+        }
+      ],
+      "agreement": "Both endpoints returned the pinned header, the complete runtime, and zero values for all three standard EIP-1967 slots."
+    }
+  ],
+  "residuals": [
+    "Zero standard EIP-1967 slots do not by themselves exclude a bespoke proxy or future code replacement.",
+    "BNB MeowRPC supplied independent header/runtime agreement but not historical storage; only BlastAPI supplied the BNB zero-slot observation.",
+    "The direct-code classification is carried by full Sourcify creation/runtime matches for both build families and exact normalized runtime identity across all seven deployments.",
+    "These are historical fixed-block observations, not live monitoring or a prediction of transaction success."
+  ]
+}

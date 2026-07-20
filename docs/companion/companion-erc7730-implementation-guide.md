@@ -49,7 +49,7 @@ order they will bite you.
    - [6.5 CMD_SIGN_OFFCHAIN — kind=3 EIP-712 typed with NESTED structs (Permit2 / UniswapX)](#65-cmd_sign_offchain--kind3-eip-712-typed-with-nested-structs-permit2--uniswapx)
 7. [Worked examples](#7-worked-examples)
    - [7.1 USDT transfer on mainnet](#71-usdt-transfer-on-mainnet)
-   - [7.2 USDT approve unlimited](#72-usdt-approve-unlimited)
+   - [7.2 USDT approve max (exact, not unlimited)](#72-usdt-approve-max-exact-not-unlimited)
    - [7.3 WETH deposit (zero-arg, value from envelope)](#73-weth-deposit-zero-arg-value-from-envelope)
    - [7.4 USDC TransferWithAuthorization (currently refused)](#74-usdc-transferwithauthorization-currently-refused)
    - [7.5 Batch signing and the current slot-rotation blocker](#75-batch-signing-and-the-current-slot-rotation-blocker)
@@ -172,11 +172,11 @@ Three things in the companion bundle:
    hand-authored seed corpus used by older bring-up snapshots.
 
    <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->
-   - Development catalogue: 363,935 B, 429 compiled leaves, 4,542
+   - Development catalogue: 366,010 B, 437 compiled leaves, 4,544
      exact registry-declared known-call tuples, provenance `dev-unattested`.
      The tuple-set SHA-256 receipt is
-     `96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`.
-   - E2E fixture: 4,023 B, 8 compiled leaves.
+     `593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781`.
+   - E2E fixture: 3,968 B, 8 compiled leaves.
    <!-- END XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->
 
    The blob does **not** embed its Merkle root. Bytes 0..31 are the catalogue
@@ -721,7 +721,7 @@ Companion-side flow:
    `callData = executeWithOffchainCount(1, new_offchain_count, USDT, 0, data)`,
    then ship it to the bundler.
 
-### 7.2 USDT approve unlimited
+### 7.2 USDT approve max (exact, not unlimited)
 
 Dapp request:
 
@@ -734,12 +734,14 @@ eth_sendTransaction({
 })
 ```
 
-Lookup hits the same `registry/tether/calldata-usdt.json` entry. The descriptor
-sets a `threshold` parameter on the amount field; the renderer compares the
-value to that threshold before running the digit formatter, so the
-`!AMOUNT OVERFLOW` banner that pre-fix builds emitted for `uint256.MAX`
-is short-circuited. Because this example still supplies no ERC-20 metadata
-bundle, the token cannot be authenticated and no ticker is claimed.
+Lookup hits the same `registry/tether/calldata-usdt.json` entry. That descriptor
+is shared by the Ethereum and Polygon deployments and intentionally carries no
+`threshold` for the approval amount. Ethereum USDT treats the exact maximum as
+a non-decrementing allowance, while Polygon USDT decrements it. A shared
+descriptor therefore cannot safely call that value unlimited on both chains,
+and the renderer makes no infinity assumption for it. Because this example
+still supplies no ERC-20 metadata bundle, the token cannot be authenticated and
+no ticker is claimed.
 
 Expected display:
 
@@ -747,11 +749,17 @@ Expected display:
 Page 0: "** DEV BUILD **" / "Unattested" / "descriptor" / "> next"
 Page 1: "Approve" / "Tether Limited" / "Tether USD" / "> next"
 Page 2: "Spender" / "0x444444…" / "..." / "> next"
-Page 3: "Amount" / "unlimited" / "(unverified)" / "> next"
-Page 4+: exact "Token (UNVERIFIED)" identity and renderer envelope, followed
+Page 3: "Amount" / "ffffffffffffffff" / "ffffffffffffffff" / "1/2 > next"
+Page 4: "Amount" / "ffffffffffffffff" / "ffffffffffffffff" / "2/2 > next"
+Page 5+: exact "Token (UNVERIFIED)" identity and renderer envelope, followed
          append-only by signer, target, conditional nonce lane, exact gas,
          fingerprint and confirm
 ```
+
+Supplying matching Merkle-verified USDT metadata authenticates the token
+identity and ticker, but it does not add infinity semantics. The maximum
+allowance remains exact raw data and is never labelled unlimited by this shared
+descriptor.
 
 ### 7.3 WETH deposit (zero-arg, value from envelope)
 
@@ -926,8 +934,8 @@ provenance remains blocked):
 <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 | Variant | Root | Catalog blob bytes | Compiled leaves |
 |---------|------|-------------------:|----------------:|
-| development (non-e2e) | `0xfda42f17fbb7b344f893c52199597e46edf3ae7413062d7cc44dd9bbfe6d2467` | 363 935 | 429 |
-| e2e | `0x79375e5cd3d5aad1a6150cbbc1a5fb396ca38d01340f876246cf03913148855a` | 4 023 | 8 |
+| development (non-e2e) | `0x450ed1985601eda4e95f04538f6c9edb921caf51e745ce541ca79a2cee3e45fb` | 366 010 | 437 |
+| e2e | `0xa2bde3ae909a23a1ab45c533ffcbcdfb35345101ee750da96a3cd6f890040cb4` | 3 968 | 8 |
 <!-- END XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 
 Source of truth: fresh compiler output checked against `secure/src/db_roots.rs`
@@ -1072,13 +1080,21 @@ refusing at the verified-descriptor render gate:
   `TransferWithAuthorization` descriptor is refused for its hidden nonce, as
   described in §7.4.
 
-Bonus UX from the same commit: `render_token_amount` now honors
-`params.threshold`. ERC-20 `approve(uint256.MAX)` against USDT displays
-`"unlimited USDT"` only when an exact Merkle-verified USDT metadata bundle
-supplies the ticker. Without that metadata it displays `"unlimited"` plus
-`"(unverified)"` and the exact token identity instead of the previous
-`"!AMOUNT OVERFLOW"` fallback. The descriptor's existing `threshold` TLV (tag
-`0x32`) needs no new wire field; authenticated ticker/decimals still require the
+`render_token_amount` still honors an authenticated `params.threshold`: values
+at or above it use the descriptor's message, or the default `unlimited`
+wording. Threshold meaning is contract-specific, however, and is never inferred
+from the generic ERC-20 operation:
+
+- WalletConnect WCT and FlyingTulip `approveEngine` set the threshold to exact
+  `uint256.MAX`, so only that value receives the unlimited label.
+- FlyingTulip `approveBorrow` and the shared Ethereum/Polygon USDT descriptor
+  carry no threshold, so even `uint256.MAX` remains an exact allowance value.
+- The generic ERC-20 descriptor carries no threshold and makes no infinity
+  assumption for arbitrary token contracts.
+
+Because the renderer's comparison is `value >= threshold`, a maximum-value
+threshold is equality over `uint256`. The existing threshold TLV (tag `0x32`)
+needs no new wire field; authenticated ticker/decimals still require the
 existing ERC-20 trailer.
 
 ### 12.2 `interpolatedIntent` has a constrained scalar-amount path

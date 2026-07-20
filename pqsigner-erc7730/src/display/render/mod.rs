@@ -493,6 +493,11 @@ fn render_erc7730_pages_inner_into<'ir>(
     // unprovable from the current IR and hard-refuse.
     formatters::validate_contract_calldata_framing(&descriptor.ir, &format, full_body)?;
 
+    // Semantic word predicates are format-wide authority checks, not rendering
+    // hints. Evaluate every guard after canonical framing but before painting
+    // the reassuring authenticated banner or any operand page.
+    formatters::validate_contract_word_guards(&descriptor.ir, &format, body, tx)?;
+
     // 2. Banner — page 0. Exact-zero approval wording is derived only when a
     // Merkle-authenticated ERC-20 capability binds this chain+contract and the
     // signed calldata is the strict canonical `approve(address,uint256)`

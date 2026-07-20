@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "Lido WithdrawalQueueERC721 semantic evidence for the five PQ1-admitted mainnet routes and the deliberately refused requestWithdrawals route",
+  "scope": "Lido WithdrawalQueueERC721 semantic evidence for the seven PQ1-admitted mainnet routes, including both non-permit withdrawal-request routes",
   "captured_at_utc": "2026-07-19T18:49:25Z",
   "upstream": {
     "repository": "https://github.com/lidofinance/core",
@@ -99,10 +99,10 @@
   },
   "abi": {
     "archive_file": "abi/routes.abi.json",
-    "archive_file_sha256": "d5aaa5d80ba7f7d34b1c472fd5992ecefbbe8209548442b698819254bf005531",
+    "archive_file_sha256": "7da98a8b91d33588f4a19464deae95caf7f36a6575268c3ceda80d25ba31ec15",
     "encoding": "jq -cS canonical JSON with one final LF",
     "source_full_verified_abi_canonical_sha256": "144f64cd43555b23e5ee6d7d64043bb22aa739e18d52b751488bddfe195bf5fd",
-    "entries": 6
+    "entries": 7
   },
   "routes": [
     {
@@ -183,10 +183,10 @@
       "state_residual": "Current ownership, claimed status, and caller token/global approval determine success. The NFT conveys the withdrawal claim right, not an immediate stETH or ETH transfer."
     },
     {
-      "status": "refused",
+      "status": "admitted",
       "canonical_signature": "requestWithdrawals(uint256[],address)",
       "selector": "0xd6681042",
-      "intended_operand_paths": [
+      "displayed_operand_paths": [
         "#._amounts.[]",
         "#._owner"
       ],
@@ -195,9 +195,24 @@
         "source/WithdrawalQueue.sol:373-381",
         "source/WithdrawalQueueBase.sol:362-390"
       ],
-      "successful_effect": "For each signed stETH amount, transfers that amount from msg.sender, computes live shares, enqueues a request, and mints an unstETH NFT to the signed owner; address(0) is replaced by msg.sender.",
-      "refusal_reason": "The effective owner is conditional: a signed zero address means msg.sender. The current addressName opcode cannot authenticate that sender fallback, so PQ1 drops this format instead of displaying zero as the owner.",
-      "state_residual": "Pause state, allowance, balance, stETH share conversion and rounding, generated request IDs, timestamps, later finalization, and eventual ETH output are live. An empty array may complete without creating a request."
+      "successful_effect": "For each signed stETH amount, checks the protocol's stETH request bounds, transfers that amount from msg.sender, computes live shares, enqueues a request, and mints an unstETH NFT to the effective owner. A signed address(0) owner is replaced by msg.sender.",
+      "state_residual": "Pause state, allowance, balance, stETH share conversion and rounding, generated request IDs, timestamps, later finalization, and eventual ETH output are live. No exact ETH output is signed or guaranteed. An empty array may complete without creating a request."
+    },
+    {
+      "status": "admitted",
+      "canonical_signature": "requestWithdrawalsWstETH(uint256[],address)",
+      "selector": "0x19aa6257",
+      "displayed_operand_paths": [
+        "#._amounts.[]",
+        "#._owner"
+      ],
+      "source": [
+        "source/WithdrawalQueue.sol:138-154",
+        "source/WithdrawalQueue.sol:383-392",
+        "source/WithdrawalQueueBase.sol:362-390"
+      ],
+      "successful_effect": "For each signed wstETH amount, transfers that amount from msg.sender, unwraps it to a live stETH amount, checks that stETH amount against the protocol's request bounds, computes live shares, enqueues a request, and mints an unstETH NFT to the effective owner. A signed address(0) owner is replaced by msg.sender.",
+      "state_residual": "Pause state, allowance, balance, the live wstETH-to-stETH conversion and rounding, stETH share conversion and rounding, generated request IDs, timestamps, later finalization, and eventual ETH output are live. Neither the intermediate stETH amount nor an exact ETH output is signed or guaranteed. An empty array may complete without creating a request."
     }
   ],
   "residuals": [
@@ -205,7 +220,8 @@
     "The archived v2.0.0 sources and verified runtime bind successful source semantics, not transaction success against future contract state.",
     "Claim output and request creation/finalization outputs depend on live protocol state and are not guaranteed by the displayed calldata.",
     "safeTransferFrom executes an external receiver callback after the ownership write and can have post-callback state beyond the signed transfer operands.",
-    "requestWithdrawals remains hard-refused in PQ1 until the conditional zero-owner-to-sender meaning is authenticated and displayed; this package does not expand signing authority.",
+    "The two non-permit request routes are admitted only under exact descriptor, deployment, selector, and sender-substitution enrollment: PQ1 displays the signed nonzero owner or the independently derived executing sender when the signed owner is zero.",
+    "requestWithdrawalsWithPermit remains hard-refused because its effect-bearing permit tuple members are hidden; requestWithdrawalsWstETHWithPermit remains hard-refused because its hidden permit tuple is not accounted for member by member. Both stay outside this admitted ABI subset, and this package does not expand permit signing authority.",
     "This evidence grants no live-monitoring, production-shipment, fallback, forced-blind, or generic signing authority."
   ]
 }

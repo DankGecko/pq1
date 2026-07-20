@@ -1170,9 +1170,20 @@ fn render_address_name(
     params: &ParamSet<'_>,
     device_signer: Option<&[u8; 20]>,
 ) -> Result<(), RenderErr> {
-    let addr = match resolve_path(ir, field.path_off, body)? {
+    let resolved = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => canonical_address_word(b)?,
         Resolved::Container(idx) => container_addr(tx, idx, device_signer)?,
+    };
+    // `senderAddress` is an exact descriptor-authenticated sentinel list, not
+    // an address-range heuristic. Resolve and canonicalize the signed word
+    // first; only a complete member match may substitute the independently
+    // derived UserOperation sender. A generic renderer without that binding
+    // fails closed instead of painting the sentinel as a beneficiary.
+    let substituted_sender = params.sender_address_matches(&resolved);
+    let addr = if substituted_sender {
+        *device_signer.ok_or(RenderErr::Reject("7730 sender unbound"))?
+    } else {
+        resolved
     };
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
@@ -1181,7 +1192,7 @@ fn render_address_name(
     // entity type. When a descriptor declares either restriction we cannot
     // prove a resolved label satisfies it, so retain WYSIWYS by showing the
     // complete address instead of substituting a possibly-disallowed name.
-    if params.addr_types.is_some() || params.addr_sources.is_some() {
+    if substituted_sender || params.addr_types.is_some() || params.addr_sources.is_some() {
         write_addr_full(r1, r2, r3, &addr);
     } else {
         write_addr_full_or_name(r1, r2, r3, &addr, tx.chain_id, resolver);
@@ -1629,6 +1640,52 @@ pub(crate) fn validate_contract_calldata_framing(
 
     if dynamic_slot.is_none() && full_body.len() != head_end {
         return Err(RenderErr::Reject("7730 static calldata trailing"));
+    }
+    Ok(())
+}
+
+/// Evaluate every authenticated scalar word guard before the contract intent
+/// banner or any field page is published. Deep IR validation restricts guards
+/// to always-visible static address/unsigned fields; these local checks retain
+/// that fail-closed contract if a faulted in-memory view reaches the renderer.
+pub(crate) fn validate_contract_word_guards(
+    ir: &Erc7730Ir<'_>,
+    format: &FormatHeader<'_>,
+    body: &[u8],
+    tx: &Eip1559Tx,
+) -> Result<(), RenderErr> {
+    for field_result in format.fields() {
+        let field = field_result.map_err(|_| RenderErr::Reject("7730 bad field"))?;
+        let params = parse_params(ir, field.param_off)?;
+        let Some(guard) = params.word_guard else {
+            continue;
+        };
+        if params.visibility != crate::ir::Visibility::Always {
+            return Err(RenderErr::Reject("7730 guarded field hidden"));
+        }
+        validate_path_static_head(ir, field.path_off, format.static_head_words)?;
+        let actual = match resolve_path(ir, field.path_off, body)? {
+            Resolved::Slot32(word) => *word,
+            Resolved::Container(container_field::VALUE) => {
+                if params.terminal_kind != Some(TerminalKind::Unsigned)
+                    || params.integer_width_bytes != Some(32)
+                {
+                    return Err(RenderErr::Reject("7730 bad guarded value"));
+                }
+                container_u256(tx, container_field::VALUE)?
+            }
+            Resolved::Container(_) => return Err(RenderErr::Reject("7730 bad guarded container")),
+        };
+        match params.terminal_kind {
+            Some(TerminalKind::Unsigned) => require_integer_word_canonical(&params, &actual)?,
+            Some(TerminalKind::Address) => {
+                canonical_address_word(&actual)?;
+            }
+            _ => return Err(RenderErr::Reject("7730 bad guarded kind")),
+        }
+        if !guard.accepts(&actual) {
+            return Err(RenderErr::Reject("7730 word guard failed"));
+        }
     }
     Ok(())
 }
@@ -4584,6 +4641,139 @@ mod adversarial_renderer_regressions {
             signing_hash: [0; 32],
             userop_fields: None,
         }
+    }
+
+    fn guarded_pool(path: [u8; 4], mode: u8, expected: [u8; 32]) -> std::vec::Vec<u8> {
+        use crate::render::params::{PARAM_INTEGER_WIDTH, PARAM_TERMINAL_KIND, PARAM_WORD_GUARD};
+        let mut body = std::vec![PARAM_WORD_GUARD, 33, mode];
+        body.extend_from_slice(&expected);
+        body.extend_from_slice(&[
+            PARAM_TERMINAL_KIND,
+            1,
+            TerminalKind::Unsigned as u8,
+            PARAM_INTEGER_WIDTH,
+            1,
+            32,
+        ]);
+        let mut pool = std::vec![0, path.len() as u8];
+        pool.extend_from_slice(&path);
+        pool.push(body.len() as u8);
+        pool.extend_from_slice(&body);
+        pool
+    }
+
+    #[test]
+    fn sender_address_substitution_is_exact_and_requires_the_bound_signer() {
+        static SENTINEL: [u8; 20] = {
+            let mut value = [0u8; 20];
+            value[19] = 1;
+            value
+        };
+        let signer = [0xABu8; 20];
+        let mut body = [0u8; 32];
+        body[12..].copy_from_slice(&SENTINEL);
+        let mut params = ParamSet::default();
+        params.sender_addresses = Some(&SENTINEL);
+
+        let mut pages = Pages::with_len(0);
+        render_address_name(
+            &field(FormatOp::AddressName as u8, 1),
+            &mut pages,
+            &ir(&SLOT_POOL),
+            &body,
+            &tx(),
+            &NameResolver::new(),
+            &params,
+            Some(&signer),
+        )
+        .expect("exact sentinel substitutes");
+        let mut expected_r1 = [b' '; DISPLAY_COLS];
+        let mut expected_r2 = [b' '; DISPLAY_COLS];
+        let mut expected_r3 = [b' '; DISPLAY_COLS];
+        write_addr_full(
+            &mut expected_r1,
+            &mut expected_r2,
+            &mut expected_r3,
+            &signer,
+        );
+        assert_eq!(pages.buf[0][1], expected_r1);
+        assert_eq!(pages.buf[0][2], expected_r2);
+        assert_eq!(pages.buf[0][3], expected_r3);
+
+        let mut no_signer_pages = Pages::with_len(0);
+        assert_eq!(
+            render_address_name(
+                &field(FormatOp::AddressName as u8, 1),
+                &mut no_signer_pages,
+                &ir(&SLOT_POOL),
+                &body,
+                &tx(),
+                &NameResolver::new(),
+                &params,
+                None,
+            ),
+            Err(RenderErr::Reject("7730 sender unbound"))
+        );
+        assert_eq!(no_signer_pages.len, 0);
+
+        body[31] = 3;
+        let mut near_pages = Pages::with_len(0);
+        render_address_name(
+            &field(FormatOp::AddressName as u8, 1),
+            &mut near_pages,
+            &ir(&SLOT_POOL),
+            &body,
+            &tx(),
+            &NameResolver::new(),
+            &params,
+            None,
+        )
+        .expect("near sentinel remains literal");
+        assert_ne!(near_pages.buf[0][1], expected_r1);
+    }
+
+    #[test]
+    fn word_guard_preflight_enforces_structured_and_outer_value_words() {
+        use crate::render::params::{WORD_GUARD_EQ, WORD_GUARD_NE};
+
+        let structured = [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0];
+        let mut forbidden = [0u8; 32];
+        forbidden[31] = 2;
+        let pool = guarded_pool(structured, WORD_GUARD_NE, forbidden);
+        let fields = one_field_bytes(FormatOp::Amount as u8, 1, 6);
+        let fmt = format(&fields, 1, 1);
+        let descriptor = ir(&pool);
+        assert_eq!(
+            validate_contract_word_guards(&descriptor, &fmt, &forbidden, &tx()),
+            Err(RenderErr::Reject("7730 word guard failed"))
+        );
+        let mut allowed = forbidden;
+        allowed[31] = 1;
+        assert_eq!(
+            validate_contract_word_guards(&descriptor, &fmt, &allowed, &tx()),
+            Ok(())
+        );
+
+        let container_value = [
+            PathOp::RootContainer as u8,
+            PathOp::FieldIdx as u8,
+            (container_field::VALUE >> 8) as u8,
+            container_field::VALUE as u8,
+        ];
+        let pool = guarded_pool(container_value, WORD_GUARD_EQ, [0u8; 32]);
+        let descriptor = ir(&pool);
+        let fields = one_field_bytes(FormatOp::Amount as u8, 1, 6);
+        let fmt = format(&fields, 1, 1);
+        assert_eq!(
+            validate_contract_word_guards(&descriptor, &fmt, &[0u8; 32], &tx()),
+            Ok(())
+        );
+        let mut funded = tx();
+        funded.value.0[31] = 1;
+        assert_eq!(
+            validate_contract_word_guards(&descriptor, &fmt, &[0u8; 32], &funded),
+            Err(RenderErr::Reject("7730 word guard failed"))
+        );
     }
 
     #[test]

@@ -14,33 +14,56 @@ use std::process::Command;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-const MANIFEST_VERSION: u64 = 1;
+const MANIFEST_VERSION: u64 = 2;
 const OVERLAY_MODE: &str = "full-file-replacement";
 const UPSTREAM_REPOSITORY: &str = "https://github.com/ethereum/clear-signing-erc7730-registry.git";
 const VENDOR_CORPUS_DOMAIN: &str = "pqsigner/erc7730-vendor-corpus-v1";
 const EXCLUDED_FIXTURE_CORPUS_DOMAIN: &str = "pqsigner/erc7730-excluded-fixture-corpus-v1";
+const TOOL_INPUT_TREE_DOMAIN: &str = "pqsigner/erc7730-tool-input-tree-v1";
 const UPSTREAM_SCHEMA_PATH: &str = "specs/erc7730-v2.schema.json";
 const POLICY_PATH: &str = "secure/data/erc7730/policy.toml";
 const REPLACEMENT_DIRECTORY: &str = "files";
+const VENDORED_MARKER_PATH: &str = ".pqsigner-erc7730-vendor";
+const VENDORED_README_PATH: &str = "README.md";
 
-// This is an intentionally explicit identity set, not a claim that a source
-// digest grants release authority. It binds the host compiler entry point,
-// descriptor compiler/parser, dependency resolution, and pinned toolchain used
-// for this curation receipt. Signed-release binding remains a later gate.
+// These scalar identities bind dependency resolution, workspace configuration,
+// crate boundaries, and the selected toolchain. The recursively receipted
+// crate trees below bind the complete in-repository compilation closure used
+// by the host curation/compiler path, including future modules, build scripts,
+// custom target paths, and data files.
+// This is still a source receipt, not signed-release or build-environment
+// authority; those remain later gates.
 const TOOL_INPUT_PATHS: &[&str] = &[
+    ".cargo/config.toml",
     "Cargo.lock",
     "Cargo.toml",
     "dbgen/Cargo.toml",
-    "dbgen/src/erc7730.rs",
-    "dbgen/src/main.rs",
     "pqsigner-erc7730/Cargo.toml",
-    "pqsigner-erc7730/src/ir.rs",
+    "pqsigner-fi/Cargo.toml",
+    "proto/Cargo.toml",
     "rust-toolchain.toml",
+    "shared/Cargo.toml",
+    "tx-core/Cargo.toml",
+    "tx/Cargo.toml",
     "xtask/Cargo.toml",
-    "xtask/src/erc7730_curation.rs",
-    "xtask/src/erc7730_diff.rs",
-    "xtask/src/main.rs",
 ];
+const TOOL_INPUT_TREE_PATHS: &[&str] = &[
+    ".cargo",
+    "dbgen",
+    "pqsigner-erc7730",
+    "pqsigner-fi",
+    "proto",
+    "shared",
+    "tx-core",
+    "tx",
+    "xtask",
+];
+const CAPABILITY_INPUT_PATHS: &[&str] = &["secure/data/erc20.json"];
+// Cargo and rustup retain extensionless compatibility names and prefer them
+// when both forms exist. Their absence is therefore part of the receipt: an
+// unbound shadow file must fail before the declared `.toml` identity can be
+// mistaken for the effective configuration/toolchain selection.
+const FORBIDDEN_SHADOW_INPUT_PATHS: &[&str] = &[".cargo/config", "rust-toolchain"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CorpusReceipt {
@@ -73,6 +96,8 @@ struct Manifest {
     curated_corpus: CorpusIdentity,
     policy: FileIdentity,
     tool_inputs: Vec<FileIdentity>,
+    tool_input_trees: Vec<TreeIdentity>,
+    capability_inputs: Vec<FileIdentity>,
     replacements: Vec<Replacement>,
 }
 
@@ -100,6 +125,16 @@ struct CorpusIdentity {
 #[serde(deny_unknown_fields)]
 struct FileIdentity {
     path: String,
+    sha256: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TreeIdentity {
+    path: String,
+    domain: String,
+    files: u64,
+    bytes: u64,
     sha256: String,
 }
 
@@ -142,10 +177,17 @@ impl VerifiedOverlay {
             )
         })?;
         validate_manifest_shape(&manifest)?;
+        verify_shadow_inputs_absent(workspace_root)?;
 
         verify_file_identity(workspace_root, &manifest.policy, "curation policy")?;
         for identity in &manifest.tool_inputs {
             verify_file_identity(workspace_root, identity, "curation tool input")?;
+        }
+        for identity in &manifest.tool_input_trees {
+            verify_tree_identity(workspace_root, identity, "curation tool input tree")?;
+        }
+        for identity in &manifest.capability_inputs {
+            verify_file_identity(workspace_root, identity, "curation capability input")?;
         }
 
         let manifest_parent = manifest_path.parent().ok_or_else(|| {
@@ -578,6 +620,48 @@ fn validate_manifest_shape(manifest: &Manifest) -> Result<(), String> {
         validate_lower_hex(&identity.sha256, 32, "tool input SHA-256")?;
     }
 
+    let tree_paths = manifest
+        .tool_input_trees
+        .iter()
+        .map(|identity| identity.path.as_str())
+        .collect::<Vec<_>>();
+    if tree_paths != TOOL_INPUT_TREE_PATHS {
+        return Err(format!(
+            "tool input tree identity set/order mismatch: expected {TOOL_INPUT_TREE_PATHS:?}, got {tree_paths:?}"
+        ));
+    }
+    for identity in &manifest.tool_input_trees {
+        validate_repo_relative_path(&identity.path, false)?;
+        if identity.domain != TOOL_INPUT_TREE_DOMAIN {
+            return Err(format!(
+                "tool input tree domain mismatch for {}: expected `{TOOL_INPUT_TREE_DOMAIN}`, got `{}`",
+                identity.path, identity.domain
+            ));
+        }
+        if identity.files == 0 {
+            return Err(format!(
+                "tool input tree must contain at least one file: {}",
+                identity.path
+            ));
+        }
+        validate_lower_hex(&identity.sha256, 32, "tool input tree SHA-256")?;
+    }
+
+    let capability_paths = manifest
+        .capability_inputs
+        .iter()
+        .map(|identity| identity.path.as_str())
+        .collect::<Vec<_>>();
+    if capability_paths != CAPABILITY_INPUT_PATHS {
+        return Err(format!(
+            "capability input identity set/order mismatch: expected {CAPABILITY_INPUT_PATHS:?}, got {capability_paths:?}"
+        ));
+    }
+    for identity in &manifest.capability_inputs {
+        validate_repo_relative_path(&identity.path, false)?;
+        validate_lower_hex(&identity.sha256, 32, "capability input SHA-256")?;
+    }
+
     if manifest.replacements.is_empty() {
         return Err("curation manifest must declare at least one replacement".to_string());
     }
@@ -730,6 +814,108 @@ fn verify_file_identity(root: &Path, identity: &FileIdentity, label: &str) -> Re
     Ok(())
 }
 
+fn verify_shadow_inputs_absent(root: &Path) -> Result<(), String> {
+    for relative in FORBIDDEN_SHADOW_INPUT_PATHS {
+        let path = root.join(relative);
+        match fs::symlink_metadata(&path) {
+            Ok(_) => {
+                return Err(format!(
+                    "forbidden unreceipted legacy build-input shadow exists: {}",
+                    path.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "inspect forbidden legacy build-input shadow {}: {error}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn verify_tree_identity(root: &Path, identity: &TreeIdentity, label: &str) -> Result<(), String> {
+    let tree_root = root.join(&identity.path);
+    let files = collect_regular_tree_files(&tree_root)?;
+    let actual = corpus_receipt(root, &files, identity.domain.as_bytes())?;
+    let expected = CorpusReceipt {
+        file_count: usize::try_from(identity.files)
+            .map_err(|_| format!("{label} file count does not fit usize: {}", identity.path))?,
+        byte_count: identity.bytes,
+        sha256: parse_sha256(&identity.sha256)?,
+    };
+    if actual == expected {
+        return Ok(());
+    }
+    Err(format!(
+        "{label} receipt mismatch for {}: expected files={} bytes={} sha256={}, got files={} bytes={} sha256={}",
+        identity.path,
+        expected.file_count,
+        expected.byte_count,
+        hex::encode(expected.sha256),
+        actual.file_count,
+        actual.byte_count,
+        hex::encode(actual.sha256),
+    ))
+}
+
+fn collect_regular_tree_files(root: &Path) -> Result<BTreeSet<PathBuf>, String> {
+    let metadata = fs::symlink_metadata(root)
+        .map_err(|error| format!("inspect tool input tree {}: {error}", root.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!(
+            "tool input tree root must be a non-symlink directory: {}",
+            root.display()
+        ));
+    }
+    let mut out = BTreeSet::new();
+    collect_regular_tree_files_recursive(root, &mut out)?;
+    Ok(out)
+}
+
+fn collect_regular_tree_files_recursive(
+    directory: &Path,
+    out: &mut BTreeSet<PathBuf>,
+) -> Result<(), String> {
+    for entry in fs::read_dir(directory)
+        .map_err(|error| format!("read tool input tree {}: {error}", directory.display()))?
+    {
+        let entry = entry.map_err(|error| {
+            format!(
+                "read tool input tree entry under {}: {error}",
+                directory.display()
+            )
+        })?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|error| {
+            format!("inspect tool input tree entry {}: {error}", path.display())
+        })?;
+        if file_type.is_symlink() {
+            return Err(format!(
+                "symlink is forbidden in tool input tree: {}",
+                path.display()
+            ));
+        }
+        if file_type.is_dir() {
+            collect_regular_tree_files_recursive(&path, out)?;
+        } else if file_type.is_file() {
+            // Validate UTF-8/canonical spelling before accepting the path into
+            // the deterministic receipt. `corpus_receipt` repeats this check
+            // for the workspace-relative spelling it hashes.
+            path_to_slash_string(&path)?;
+            out.insert(path);
+        } else {
+            return Err(format!(
+                "unsupported tool input tree entry: {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn verify_file_bytes(
     path: &Path,
     expected_len: u64,
@@ -852,11 +1038,72 @@ fn collect_replacement_files_recursive(
 }
 
 fn collect_curated_corpus_files(root: &Path) -> Result<BTreeSet<PathBuf>, String> {
+    validate_curated_root_inventory(root)?;
     let mut out = BTreeSet::new();
     for top in ["registry", "ercs"] {
         collect_curated_corpus_recursive(&root.join(top), false, &mut out)?;
     }
     Ok(out)
+}
+
+fn validate_curated_root_inventory(root: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(root)
+        .map_err(|error| format!("inspect curated registry root {}: {error}", root.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!(
+            "curated registry root must be a non-symlink directory: {}",
+            root.display()
+        ));
+    }
+
+    let mut saw_registry = false;
+    let mut saw_ercs = false;
+    for entry in fs::read_dir(root)
+        .map_err(|error| format!("read curated registry root {}: {error}", root.display()))?
+    {
+        let entry = entry.map_err(|error| {
+            format!(
+                "read curated registry root entry under {}: {error}",
+                root.display()
+            )
+        })?;
+        let path = entry.path();
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| format!("non-UTF-8 curated registry root entry: {}", path.display()))?;
+        let file_type = entry.file_type().map_err(|error| {
+            format!(
+                "inspect curated registry root entry {}: {error}",
+                path.display()
+            )
+        })?;
+        if file_type.is_symlink() {
+            return Err(format!(
+                "symlink is forbidden at curated registry root: {}",
+                path.display()
+            ));
+        }
+        match name.as_str() {
+            "registry" | "ercs" if file_type.is_dir() => {
+                saw_registry |= name == "registry";
+                saw_ercs |= name == "ercs";
+            }
+            VENDORED_MARKER_PATH | VENDORED_README_PATH if file_type.is_file() => {}
+            _ => {
+                return Err(format!(
+                    "unexpected unreceipted curated registry root entry: {}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    if !saw_registry || !saw_ercs {
+        return Err(
+            "curated registry root must contain registry/ and ercs/ directories".to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn collect_curated_corpus_recursive(
@@ -1035,6 +1282,8 @@ mod tests {
                     sha256: "66".repeat(32),
                 },
                 tool_inputs: Vec::new(),
+                tool_input_trees: Vec::new(),
+                capability_inputs: Vec::new(),
                 replacements: vec![replacement],
             },
             manifest_sha256: [0u8; 32],
@@ -1170,6 +1419,176 @@ mod tests {
     }
 
     #[test]
+    fn curated_corpus_rejects_unreceipted_top_level_entries() {
+        let temp = tempfile::tempdir().expect("create curated-root fixture");
+        let root = temp.path();
+        fs::create_dir(root.join("registry")).unwrap();
+        fs::create_dir(root.join("ercs")).unwrap();
+        fs::write(root.join(VENDORED_MARKER_PATH), b"pinned\n").unwrap();
+        fs::write(root.join(VENDORED_README_PATH), b"metadata\n").unwrap();
+        assert!(collect_curated_corpus_files(root).is_ok());
+
+        fs::write(root.join("planted.json"), b"{}\n").unwrap();
+        let error = collect_curated_corpus_files(root).unwrap_err();
+        assert!(error.contains("unexpected unreceipted"), "{error}");
+        fs::remove_file(root.join("planted.json")).unwrap();
+
+        fs::create_dir(root.join("specs")).unwrap();
+        let error = collect_curated_corpus_files(root).unwrap_err();
+        assert!(error.contains("unexpected unreceipted"), "{error}");
+    }
+
+    #[test]
+    fn tool_input_tree_receipt_binds_inventory_bytes_and_file_types() {
+        let temp = tempfile::tempdir().expect("create tool-input-tree fixture");
+        let workspace = temp.path();
+        let tree = workspace.join("crate/src");
+        fs::create_dir_all(tree.join("nested")).unwrap();
+        fs::write(tree.join("lib.rs"), b"mod nested;\n").unwrap();
+        fs::write(tree.join("nested/mod.rs"), b"pub fn value() -> u8 { 1 }\n").unwrap();
+
+        let files = collect_regular_tree_files(&tree).unwrap();
+        let receipt = corpus_receipt(workspace, &files, TOOL_INPUT_TREE_DOMAIN.as_bytes()).unwrap();
+        let identity = TreeIdentity {
+            path: "crate/src".to_string(),
+            domain: TOOL_INPUT_TREE_DOMAIN.to_string(),
+            files: receipt.file_count as u64,
+            bytes: receipt.byte_count,
+            sha256: hex::encode(receipt.sha256),
+        };
+        verify_tree_identity(workspace, &identity, "test tree").unwrap();
+
+        fs::write(tree.join("nested/mod.rs"), b"pub fn value() -> u8 { 2 }\n").unwrap();
+        assert!(verify_tree_identity(workspace, &identity, "test tree")
+            .unwrap_err()
+            .contains("receipt mismatch"));
+        fs::write(tree.join("nested/mod.rs"), b"pub fn value() -> u8 { 1 }\n").unwrap();
+
+        fs::write(tree.join("added.dat"), b"bound include asset\n").unwrap();
+        assert!(verify_tree_identity(workspace, &identity, "test tree")
+            .unwrap_err()
+            .contains("receipt mismatch"));
+        fs::remove_file(tree.join("added.dat")).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(tree.join("lib.rs"), tree.join("link.rs")).unwrap();
+            let error = verify_tree_identity(workspace, &identity, "test tree").unwrap_err();
+            assert!(error.contains("symlink is forbidden"), "{error}");
+        }
+    }
+
+    #[test]
+    fn legacy_build_input_shadows_are_rejected_even_when_symlinked() {
+        let temp = tempfile::tempdir().expect("create shadow-input fixture");
+        let root = temp.path();
+        fs::create_dir(root.join(".cargo")).unwrap();
+        assert!(verify_shadow_inputs_absent(root).is_ok());
+
+        for relative in FORBIDDEN_SHADOW_INPUT_PATHS {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"shadow\n").unwrap();
+            let error = verify_shadow_inputs_absent(root).unwrap_err();
+            assert!(error.contains("legacy build-input shadow"), "{error}");
+            fs::remove_file(path).unwrap();
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let target = root.join("effective.toml");
+            fs::write(&target, b"[env]\n").unwrap();
+            let shadow = root.join(".cargo/config");
+            symlink(&target, &shadow).unwrap();
+            let error = verify_shadow_inputs_absent(root).unwrap_err();
+            assert!(error.contains("legacy build-input shadow"), "{error}");
+        }
+    }
+
+    #[test]
+    fn checked_in_tool_tree_inventory_covers_output_construction_closure() {
+        let required = [
+            "dbgen/src/erc20.rs",
+            "dbgen/src/erc7730.rs",
+            "dbgen/src/lib.rs",
+            "dbgen/src/merkle.rs",
+            "pqsigner-erc7730/src/abi.rs",
+            "pqsigner-erc7730/src/bundle.rs",
+            "pqsigner-erc7730/src/display/primitives.rs",
+            "pqsigner-erc7730/src/known_calls.rs",
+            "pqsigner-erc7730/src/render/enums.rs",
+            "pqsigner-erc7730/src/render/mod.rs",
+            "pqsigner-erc7730/src/render/nested.rs",
+            "pqsigner-erc7730/src/render/params.rs",
+            "pqsigner-erc7730/src/render/policy.rs",
+            "pqsigner-fi/src/lib.rs",
+            "proto/src/lib.rs",
+            "shared/src/db_format.rs",
+            "shared/src/lib.rs",
+            "tx-core/src/hash.rs",
+            "tx-core/src/lib.rs",
+            "tx/src/erc20/bundle.rs",
+            "tx/src/erc20/merkle.rs",
+            "tx/src/erc20/mod.rs",
+            "tx/src/lib.rs",
+            "tx/src/wire.rs",
+            "xtask/src/erc7730_curation.rs",
+            "xtask/src/main.rs",
+        ];
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask is one directory below workspace")
+            .to_path_buf();
+        let mut inventory = BTreeSet::new();
+        for relative in TOOL_INPUT_TREE_PATHS {
+            inventory.extend(
+                collect_regular_tree_files(&workspace.join(relative))
+                    .expect("collect checked-in tool tree")
+                    .into_iter()
+                    .map(|path| {
+                        path_to_slash_string(path.strip_prefix(&workspace).unwrap()).unwrap()
+                    }),
+            );
+        }
+        for path in required {
+            assert!(inventory.contains(path), "missing closure canary: {path}");
+        }
+    }
+
+    #[test]
+    #[ignore = "owner utility: print exact manifest-v2 input receipts after source freeze"]
+    fn print_checked_in_manifest_v2_input_receipts() {
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask is one directory below workspace")
+            .to_path_buf();
+        for relative in TOOL_INPUT_PATHS {
+            let bytes = fs::read(workspace.join(relative)).unwrap();
+            println!("FILE {relative} {}", hex::encode(Sha256::digest(bytes)));
+        }
+        for relative in TOOL_INPUT_TREE_PATHS {
+            let files = collect_regular_tree_files(&workspace.join(relative)).unwrap();
+            let receipt =
+                corpus_receipt(&workspace, &files, TOOL_INPUT_TREE_DOMAIN.as_bytes()).unwrap();
+            println!(
+                "TREE {relative} {} {} {}",
+                receipt.file_count,
+                receipt.byte_count,
+                hex::encode(receipt.sha256)
+            );
+        }
+        for relative in CAPABILITY_INPUT_PATHS {
+            let bytes = fs::read(workspace.join(relative)).unwrap();
+            println!(
+                "CAPABILITY {relative} {}",
+                hex::encode(Sha256::digest(bytes))
+            );
+        }
+    }
+
+    #[test]
     fn checked_in_manifest_replacements_and_curated_corpus_are_exact() {
         let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -1182,7 +1601,7 @@ mod tests {
             .verify_checked_in_tree(&workspace.join("secure/data/erc7730-registry"))
             .expect("checked-in curated corpus");
         assert_eq!(receipt.file_count, 387);
-        assert_eq!(receipt.byte_count, 779_819);
-        assert_eq!(overlay.replacement_count(), 24);
+        assert_eq!(receipt.byte_count, 781_582);
+        assert_eq!(overlay.replacement_count(), 33);
     }
 }

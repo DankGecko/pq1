@@ -84,10 +84,10 @@
             "params": { "types": ["eoa"], "sources": ["local", "ens"] },
             "visible": "always"
           },
-          { "label": "Deadline", "path": "deadline", "format": "date", "params": { "encoding": "timestamp" }, "visible": "always" },
-          { "label": "Permit V", "path": "permitV", "format": "raw", "visible": "always" },
-          { "label": "Permit R", "path": "permitR", "format": "raw", "visible": "always" },
-          { "label": "Permit S", "path": "permitS", "format": "raw", "visible": "always" }
+          { "label": "Deadline", "path": "deadline", "visible": "never" },
+          { "label": "Permit V", "path": "permitV", "visible": "never" },
+          { "label": "Permit R", "path": "permitR", "visible": "never" },
+          { "label": "Permit S", "path": "permitS", "visible": "never" }
         ]
       },
       "repayWithATokens(address asset, uint256 amount, uint256 interestRateMode)": {
@@ -255,11 +255,11 @@
             "params": { "types": ["eoa"], "sources": ["local", "ens"] },
             "visible": "always"
           },
-          { "label": "Referral Code", "path": "referralCode", "format": "raw", "visible": "always" },
-          { "label": "Deadline", "path": "deadline", "format": "date", "params": { "encoding": "timestamp" }, "visible": "always" },
-          { "label": "Permit V", "path": "permitV", "format": "raw", "visible": "always" },
-          { "label": "Permit R", "path": "permitR", "format": "raw", "visible": "always" },
-          { "label": "Permit S", "path": "permitS", "format": "raw", "visible": "always" }
+          { "label": "Referral Code", "path": "referralCode", "visible": "never" },
+          { "label": "Deadline", "path": "deadline", "visible": "never" },
+          { "label": "Permit V", "path": "permitV", "visible": "never" },
+          { "label": "Permit R", "path": "permitR", "visible": "never" },
+          { "label": "Permit S", "path": "permitS", "visible": "never" }
         ]
       },
       "approvePositionManager(address positionManager, bool approve)": {

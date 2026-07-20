@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "scope": "PQSmartWallet compatibility boundary for three Aave V3 v/r/s permit routes",
+  "captured_at_utc": "2026-07-20T05:18:04Z",
+  "revision_sources": {
+    "revision_11_commit": "fd1fbd9150426ca8ace9cee45b4acf912ae84f5b",
+    "revision_10_commit": "e8feb287e4bc492c62a5c1c19086262c6e223b37",
+    "permit_behavior": "Both revisions catch failed v/r/s permit attempts before executing the ordinary supply or repay path."
+  },
+  "upstream": [
+    {
+      "repository": "https://github.com/aave-dao/aave-v3-origin",
+      "commit": "fd1fbd9150426ca8ace9cee45b4acf912ae84f5b",
+      "upstream_path": "src/contracts/protocol/pool/Pool.sol",
+      "full_file_sha256": "ec6dbae72f43777446d8320f94eccbc6ae1dbe5daf1942502264bf0e35ef00fc",
+      "archive_file": "source/Pool.permit.excerpt.sol",
+      "archive_file_sha256": "525e0497dd2080847379cf7481585e6afa4193d9111fde9c39ebba5d3c8e8282"
+    },
+    {
+      "repository": "https://github.com/aave-dao/aave-v3-origin",
+      "commit": "fd1fbd9150426ca8ace9cee45b4acf912ae84f5b",
+      "upstream_path": "src/contracts/protocol/tokenization/AToken.sol",
+      "full_file_sha256": "513164270664a93dc7714a95f32fe9388a34b19650ca46af71e356b22c9cc439",
+      "archive_file": "source/AToken.permit.excerpt.sol",
+      "archive_file_sha256": "87aa3e7113a1f0799194aa8fd0247921cc7690ed15991b1d3f5544648aa9a237"
+    },
+    {
+      "repository": "https://github.com/aave-dao/aave-v3-origin",
+      "commit": "fd1fbd9150426ca8ace9cee45b4acf912ae84f5b",
+      "upstream_path": "src/contracts/helpers/WrappedTokenGatewayV3.sol",
+      "full_file_sha256": "7e6ca1463df95699c7e6a14dd80ab85e56bdf1b4dca03b2a1d8f3324fee6c91a",
+      "archive_file": "source/WrappedTokenGatewayV3.permit.excerpt.sol",
+      "archive_file_sha256": "6c09c8f9c33f3f74cd2132225abca7d93e1159b813152f6929919e9c85a44c55"
+    }
+  ],
+  "pqsmartwallet": {
+    "contract": "contracts/smart-wallet/src/PQSmartWallet.sol",
+    "generated_constants": "contracts/smart-wallet/src/generated/PqsignerProto.sol",
+    "c10_signature_bytes": 4008,
+    "signature_wrapper_bytes": 4128
+  },
+  "conclusion": "The Aave routes bind permit owner to the executing wallet but provide only v/r/s; they cannot transport PQSmartWallet's required C10 wrapper. Current implementations catch the failed permit and duplicate already-admitted non-permit paths when prior allowance exists, so the permit variants remain hard-refused."
+}

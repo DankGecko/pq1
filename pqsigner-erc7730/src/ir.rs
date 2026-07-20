@@ -556,6 +556,8 @@ impl<'a> Erc7730Ir<'a> {
                     .map_err(|_| IrError::BadPoolEntry)?;
                 let kind = params.terminal_kind.ok_or(IrError::BadField)?;
 
+                validate_word_guard(self, &field, kind, &params)?;
+
                 if params.visibility != Visibility::Never
                     && !crate::render::policy::label_has_visible_glyph(field.label)
                 {
@@ -787,6 +789,91 @@ fn validate_terminal_path_shape(
         }
     }
     Ok(())
+}
+
+/// Validate the orthogonal exact-word predicate independently of formatter
+/// policy. Guards are contract-calldata preconditions: accepting one on typed
+/// data, a hidden/conditional field, or a dynamic/constant path would create a
+/// predicate that the contract renderer never evaluates or the user never
+/// sees. The expected value is canonical for the authenticated terminal type,
+/// preventing impossible-EQ and vacuous-NE guards over dirty ABI encodings.
+fn validate_word_guard(
+    ir: &Erc7730Ir<'_>,
+    field: &FieldEntry<'_>,
+    kind: crate::render::policy::TerminalKind,
+    params: &crate::render::params::ParamSet<'_>,
+) -> Result<(), IrError> {
+    use crate::render::policy::{integer_word_is_canonical, TerminalKind};
+
+    let Some(guard) = params.word_guard else {
+        return Ok(());
+    };
+    if !matches!(ir.context_kind, ContextKind::Contract)
+        || params.visibility != Visibility::Always
+        || !matches!(kind, TerminalKind::Unsigned | TerminalKind::Address)
+        || field.path_off == 0
+    {
+        return Err(IrError::BadField);
+    }
+
+    let path = ir.path_bytes(field.path_off)?;
+    validate_word_guard_scalar_path(path)?;
+    if path.first().copied() == Some(PathOp::RootContainer as u8)
+        && (kind != TerminalKind::Unsigned || params.integer_width_bytes != Some(32))
+    {
+        return Err(IrError::BadField);
+    }
+    let expected = guard.expected();
+    match kind {
+        TerminalKind::Address if expected[..12].iter().any(|&byte| byte != 0) => {
+            Err(IrError::BadField)
+        }
+        TerminalKind::Unsigned => {
+            let width = params.integer_width_bytes.ok_or(IrError::BadField)?;
+            if integer_word_is_canonical(kind, width, expected) {
+                Ok(())
+            } else {
+                Err(IrError::BadField)
+            }
+        }
+        TerminalKind::Address => Ok(()),
+        _ => Err(IrError::BadField),
+    }
+}
+
+fn validate_word_guard_scalar_path(path: &[u8]) -> Result<(), IrError> {
+    match path
+        .first()
+        .copied()
+        .and_then(|byte| PathOp::try_from(byte).ok())
+    {
+        Some(PathOp::RootStructured) => {
+            let mut cursor = 1usize;
+            let mut steps = 0usize;
+            while cursor < path.len() {
+                if path.get(cursor).copied() != Some(PathOp::FieldIdx as u8) {
+                    return Err(IrError::BadField);
+                }
+                cursor = cursor.checked_add(3).ok_or(IrError::BadField)?;
+                if cursor > path.len() {
+                    return Err(IrError::BadField);
+                }
+                steps += 1;
+            }
+            if steps == 0 {
+                return Err(IrError::BadField);
+            }
+            Ok(())
+        }
+        Some(PathOp::RootContainer)
+            if path.len() == 4
+                && path[1] == PathOp::FieldIdx as u8
+                && u16::from_be_bytes([path[2], path[3]]) == crate::abi::container_field::VALUE =>
+        {
+            Ok(())
+        }
+        _ => Err(IrError::BadField),
+    }
 }
 
 fn validate_pool_entry(pool: &[u8], off: u16) -> Result<(), IrError> {
@@ -1230,6 +1317,41 @@ mod tests {
         ]
     }
 
+    fn guarded_scalar_pool(
+        path: [u8; 4],
+        kind: crate::render::policy::TerminalKind,
+        width: Option<u8>,
+        sender: Option<[u8; 20]>,
+        visibility: Option<Visibility>,
+        mode: u8,
+        expected: [u8; 32],
+    ) -> std::vec::Vec<u8> {
+        use crate::render::params::{
+            PARAM_INTEGER_WIDTH, PARAM_SENDER_ADDRESS, PARAM_TERMINAL_KIND, PARAM_VISIBILITY,
+            PARAM_WORD_GUARD,
+        };
+
+        let mut body = std::vec![PARAM_WORD_GUARD, 33, mode];
+        body.extend_from_slice(&expected);
+        if let Some(sentinel) = sender {
+            body.extend_from_slice(&[PARAM_SENDER_ADDRESS, 20]);
+            body.extend_from_slice(&sentinel);
+        }
+        if let Some(visibility) = visibility {
+            body.extend_from_slice(&[PARAM_VISIBILITY, 1, visibility as u8]);
+        }
+        body.extend_from_slice(&[PARAM_TERMINAL_KIND, 1, kind as u8]);
+        if let Some(width) = width {
+            body.extend_from_slice(&[PARAM_INTEGER_WIDTH, 1, width]);
+        }
+
+        let mut pool = std::vec![0, path.len() as u8];
+        pool.extend_from_slice(&path);
+        pool.push(body.len() as u8);
+        pool.extend_from_slice(&body);
+        pool
+    }
+
     fn unsigned_container_pool(field: u16, width_bytes: u8) -> std::vec::Vec<u8> {
         std::vec![
             0,
@@ -1299,6 +1421,131 @@ mod tests {
     fn deep_validation_rejects_format_count_over_cap() {
         let bytes = build_ir(&[], &[(MAX_FORMATS as u8) + 1]);
         assert_eq!(Erc7730Ir::parse(&bytes), Err(IrError::OverCap));
+    }
+
+    #[test]
+    fn deep_validation_accepts_static_word_guards_and_address_sender_substitution() {
+        use crate::render::{params::WORD_GUARD_NE, policy::TerminalKind};
+
+        let structured = [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0];
+        let mut forbidden_recipient = [0u8; 32];
+        forbidden_recipient[31] = 2;
+        let pool = guarded_scalar_pool(
+            structured,
+            TerminalKind::Address,
+            None,
+            Some({
+                let mut sentinel = [0u8; 20];
+                sentinel[19] = 1;
+                sentinel
+            }),
+            None,
+            WORD_GUARD_NE,
+            forbidden_recipient,
+        );
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&one_field_format([1, 2, 3, 4], FormatOp::AddressName as u8));
+        assert!(Erc7730Ir::parse(&build_ir(&pool, &formats)).is_ok());
+
+        let container_value = [
+            PathOp::RootContainer as u8,
+            PathOp::FieldIdx as u8,
+            (crate::abi::container_field::VALUE >> 8) as u8,
+            crate::abi::container_field::VALUE as u8,
+        ];
+        let pool = guarded_scalar_pool(
+            container_value,
+            TerminalKind::Unsigned,
+            Some(32),
+            None,
+            None,
+            crate::render::params::WORD_GUARD_EQ,
+            [0u8; 32],
+        );
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&one_field_format([5, 6, 7, 8], FormatOp::Amount as u8));
+        assert!(Erc7730Ir::parse(&build_ir(&pool, &formats)).is_ok());
+    }
+
+    #[test]
+    fn deep_validation_rejects_hidden_dirty_or_misapplied_word_semantics() {
+        use crate::render::{params::WORD_GUARD_EQ, policy::TerminalKind};
+
+        let structured = [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0];
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&one_field_format([1, 2, 3, 4], FormatOp::Amount as u8));
+
+        let hidden = guarded_scalar_pool(
+            structured,
+            TerminalKind::Unsigned,
+            Some(32),
+            None,
+            Some(Visibility::Never),
+            WORD_GUARD_EQ,
+            [0u8; 32],
+        );
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&hidden, &formats)),
+            Err(IrError::BadField)
+        );
+
+        let mut dirty_uint24 = [0u8; 32];
+        dirty_uint24[0] = 1;
+        let dirty = guarded_scalar_pool(
+            structured,
+            TerminalKind::Unsigned,
+            Some(3),
+            None,
+            None,
+            WORD_GUARD_EQ,
+            dirty_uint24,
+        );
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&dirty, &formats)),
+            Err(IrError::BadField)
+        );
+
+        let address = guarded_scalar_pool(
+            structured,
+            TerminalKind::Address,
+            None,
+            Some([1u8; 20]),
+            None,
+            WORD_GUARD_EQ,
+            [0u8; 32],
+        );
+        let mut wrong_formatter = std::vec![1];
+        wrong_formatter.extend_from_slice(&one_field_format(
+            [9, 8, 7, 6],
+            FormatOp::InteroperableAddressName as u8,
+        ));
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&address, &wrong_formatter)),
+            Err(IrError::BadField)
+        );
+
+        let container_to = [
+            PathOp::RootContainer as u8,
+            PathOp::FieldIdx as u8,
+            (crate::abi::container_field::TO >> 8) as u8,
+            crate::abi::container_field::TO as u8,
+        ];
+        let disallowed_container = guarded_scalar_pool(
+            container_to,
+            TerminalKind::Address,
+            None,
+            None,
+            None,
+            WORD_GUARD_EQ,
+            [0u8; 32],
+        );
+        let mut address_format = std::vec![1];
+        address_format
+            .extend_from_slice(&one_field_format([4, 3, 2, 1], FormatOp::AddressName as u8));
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&disallowed_container, &address_format)),
+            Err(IrError::BadField)
+        );
     }
 
     #[test]

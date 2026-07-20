@@ -15,17 +15,18 @@
 //! lookup) would not have been caught by any unit test.
 //!
 //! Inputs are NOT hand-rolled IR fixtures. Shipping cases come from the real
-//! registry through `dbgen`; nested renderer-only cases use process-private
-//! copies compiled by the same dbgen after changing every explicit
-//! `visible:"never"` to `visible:"always"`. Real unsafe sources or individual
-//! formats in a partially admitted source are separately asserted absent.
+//! registry through `dbgen`; the remaining unsafe nested renderer-only cases
+//! use process-private copies compiled by the same dbgen after changing every
+//! explicit `visible:"never"` to `visible:"always"`. Real unsafe sources or
+//! individual formats in a partially admitted source are separately asserted
+//! absent.
 //! UniswapX cannot be made into an equivalent safe positive fixture (dynamic
 //! bytes expose only a hash, and showing all fields exceeds the page budget),
 //! so those historical vectors are exclusion tests.
 
 use std::path::PathBuf;
 
-use pqsigner_erc7730::binding::{cross_check_contract, BindingError};
+use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712, BindingError};
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, VerifiedDescriptor};
 use pqsigner_erc7730::display::primitives::write_addr_full;
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir};
@@ -108,16 +109,10 @@ fn build_registry() -> &'static dbgen::erc7730::Erc7730BuildResult {
 /// defaults to hidden. This preserves the original ABI/type tree and runs
 /// through the real dbgen compiler, while making the emitted fixture satisfy
 /// the same strict hidden-material policy as production.
-const SAFE_VISIBLE_NESTED_FIXTURES: &[(&str, &str)] = &[
-    (
-        "eip712-uniswap-permit2.json",
-        "registry/uniswap/eip712-uniswap-permit2.json",
-    ),
-    (
-        "eip712-SessionManager-FT.json",
-        "registry/flyingtulip/eip712-SessionManager-FT.json",
-    ),
-];
+const SAFE_VISIBLE_NESTED_FIXTURES: &[(&str, &str)] = &[(
+    "eip712-uniswap-permit2.json",
+    "registry/uniswap/eip712-uniswap-permit2.json",
+)];
 
 fn build_safe_visible_nested_fixtures(
 ) -> &'static std::collections::BTreeMap<String, Vec<dbgen::erc7730::Emitted>> {
@@ -133,9 +128,6 @@ fn build_safe_visible_nested_fixtures(
         let _ = std::fs::remove_dir_all(&temp_root);
         std::fs::create_dir_all(temp_root.join("registry/uniswap"))
             .expect("create synthetic Uniswap fixture dir");
-        std::fs::create_dir_all(temp_root.join("registry/flyingtulip"))
-            .expect("create synthetic SessionManager fixture dir");
-
         // Every Uniswap fixture includes this context-only template.
         std::fs::copy(
             source_root.join("registry/uniswap/uniswap-common-eip712.json"),
@@ -167,6 +159,17 @@ fn build_safe_visible_nested_fixtures(
                 .replace(
                     "\"encoding\": \"timestamp\"\n            }\n          }",
                     "\"encoding\": \"timestamp\"\n            },\n            \"visible\": \"always\"\n          }",
+                )
+                // Exact nested-leaf completeness also requires Permit2's
+                // per-permission nonce. The upstream descriptor omits it, so
+                // add it only to these process-private positive fixtures.
+                .replace(
+                    "        \"$id\": \"Permit2 Permit Single\",\n        \"intent\": \"Authorize spending of token\",\n        \"fields\": [",
+                    "        \"$id\": \"Permit2 Permit Single\",\n        \"intent\": \"Authorize spending of token\",\n        \"fields\": [\n          {\n            \"path\": \"details.nonce\",\n            \"label\": \"Nonce\",\n            \"visible\": \"always\"\n          },",
+                )
+                .replace(
+                    "        \"$id\": \"Permit2 Permit Batch\",\n        \"intent\": \"Authorize spending of tokens\",\n        \"fields\": [",
+                    "        \"$id\": \"Permit2 Permit Batch\",\n        \"intent\": \"Authorize spending of tokens\",\n        \"fields\": [\n          {\n            \"path\": \"details.[].nonce\",\n            \"label\": \"Nonce\",\n            \"visible\": \"always\"\n          },",
                 );
             assert!(!safe_text.contains("\"visible\": \"never\""));
             std::fs::write(&destination, safe_text).expect("write safe nested fixture");
@@ -305,7 +308,6 @@ fn explicit_hidden_material_descriptors_have_no_verified_runtime_leaf() {
         "eip712-UniswapX-DutchOrder.json",
         "eip712-UniswapX-LimitOrder.json",
         "eip712-uniswap-V2DutchOrder.json",
-        "eip712-SessionManager-FT.json",
     ] {
         assert_registry_source_excluded(source_name);
     }
@@ -417,6 +419,15 @@ fn calldata_approve(spender: [u8; 20], amount: U256) -> Vec<u8> {
 /// pulls from the container path.
 fn calldata_deposit() -> Vec<u8> {
     vec![0xd0, 0xe3, 0x0d, 0xb0]
+}
+
+/// Canonical WETH9 `withdraw(uint256)` calldata. The amount is a full-width
+/// unsigned word, so every one of its 32 bytes is effect-bearing.
+fn calldata_weth_withdraw(amount: U256) -> Vec<u8> {
+    let mut data = Vec::with_capacity(36);
+    data.extend_from_slice(&[0x2e, 0x1a, 0x7d, 0x4d]);
+    data.extend_from_slice(&amount.0);
+    data
 }
 
 /// Aave V3 `borrow(address asset, uint256 amount, uint256 interestRateMode,
@@ -998,59 +1009,322 @@ fn flyingtulip_dynamic_token_path_keeps_static_intent_and_exact_token_identity()
 }
 
 #[test]
-fn positive_usdt_approve_unlimited_renders_approve_intent() {
+fn usdt_shared_descriptor_never_claims_unlimited_on_either_deployment() {
     let res = build_registry();
-    let entry = find_leaf(res, "calldata-usdt.json", 1);
-    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
-
-    // U256::MAX is the canonical "approve unlimited" sentinel; the
-    // descriptor sets `threshold` to 0x8000...0000 (top bit) — any
-    // value above renders as "unlimited" via tokenAmount.
-    let calldata = calldata_approve([0x44u8; 20], u256_max());
-    assert_selector_matches(&verified.ir, &calldata, "approve(address,uint256)");
-
-    let tx = envelope(1, entry.contract);
-    let usdt_meta = Erc20Metadata {
-        chain_id: 1,
-        contract: entry.contract,
-        decimals: 6,
-        name: b"Tether USD",
-        symbol: b"USDT",
-    };
     let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&usdt_meta), &resolver)
-        .expect("render");
+    let spender = [0x44u8; 20];
+    let mut old_threshold_minus_one = [0xff; 32];
+    old_threshold_minus_one[0] = 0x7f;
+    let mut old_threshold = [0u8; 32];
+    old_threshold[0] = 0x80;
+    let mut max_minus_one = [0xff; 32];
+    max_minus_one[31] = 0xfe;
 
-    assert_all_pages_printable(&pages);
+    for chain_id in [1, 137] {
+        let entry = find_leaf(res, "calldata-usdt.json", chain_id);
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify USDT leaf");
+        let tx = envelope(chain_id, entry.contract);
+        let metadata = Erc20Metadata {
+            chain_id,
+            contract: entry.contract,
+            decimals: 6,
+            name: b"Tether USD",
+            symbol: b"USDT",
+        };
+        let render = |amount: [u8; 32]| {
+            let calldata = calldata_approve(spender, U256(amount));
+            assert_selector_matches(&verified.ir, &calldata, "approve(address,uint256)");
+            render_erc7730_pages(&tx, &calldata, &verified, Some(&metadata), &resolver)
+                .expect("render exact USDT approval")
+        };
 
-    let [intent_r0, _, _, _] = page_strs(&pages, intent_page_index(&pages));
-    assert_eq!(intent_r0, "Approve");
+        let ordinary = render(u256_from_u64(1_000_000).0);
+        assert_eq!(
+            page_strs(&ordinary, intent_page_index(&ordinary))[0],
+            "Approve"
+        );
+        assert_full_address_field_page(&ordinary, "Spender", &spender);
+        assert!(
+            page_strs(&ordinary, find_page_by_label(&ordinary, "Amount"))[1..3]
+                .iter()
+                .any(|row| row.contains("1 USDT"))
+        );
+        assert_full_contract_identity_page(&ordinary, &entry.contract);
 
-    // Spender page must be present (labelled "Spender" per the
-    // descriptor).
-    let _spender_page = find_page_by_label(&pages, "Spender");
+        for (name, value) in [
+            ("old threshold minus one", old_threshold_minus_one),
+            ("old threshold", old_threshold),
+            ("max minus one", max_minus_one),
+            ("max", [0xff; 32]),
+        ] {
+            let pages = render(value);
+            let dump = dump_pages(&pages);
+            assert!(
+                !dump.to_ascii_lowercase().contains("unlimited"),
+                "{name} must not inherit a shared infinity claim on chain {chain_id}:\n{dump}"
+            );
+            assert_raw_word_pages(&pages, "Amount", &value);
+            assert_full_address_field_page(&pages, "Spender", &spender);
+            assert_full_contract_identity_page(&pages, &entry.contract);
+        }
+    }
+}
 
-    // Amount page — for U256::MAX with the descriptor's threshold set,
-    // `render_token_amount` short-circuits the digit formatter and
-    // writes "unlimited <ticker>" on row 1. No `!AMOUNT OVERFLOW`
-    // banner, no truncated decimal soup — just the human-readable
-    // sentinel.
-    let amount_page = find_page_by_label(&pages, "Amount");
-    let amount_rows = page_strs(&pages, amount_page);
-    let amount_blob = amount_rows.join("\n");
-    assert!(
-        amount_blob.to_lowercase().contains("unlimited"),
-        "approve(MAX) should render 'unlimited', got:\n{amount_blob}",
+#[test]
+fn walletconnect_wct_allowance_threshold_is_max_only_on_all_deployments() {
+    let res = build_registry();
+    let resolver = NameResolver::new();
+    let spender = [0x51u8; 20];
+    let mut old_threshold_minus_one = [0xff; 32];
+    old_threshold_minus_one[0] = 0x7f;
+    let mut old_threshold = [0u8; 32];
+    old_threshold[0] = 0x80;
+    let mut max_minus_one = [0xff; 32];
+    max_minus_one[31] = 0xfe;
+
+    for chain_id in [1, 10, 8453] {
+        let entry = find_leaf(res, "calldata-wct.json", chain_id);
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify WCT leaf");
+        let tx = envelope(chain_id, entry.contract);
+        let metadata = Erc20Metadata {
+            chain_id,
+            contract: entry.contract,
+            decimals: 18,
+            name: b"WalletConnect Token",
+            symbol: b"WCT",
+        };
+        let render = |amount: [u8; 32]| {
+            let calldata = calldata_approve(spender, U256(amount));
+            render_erc7730_pages(&tx, &calldata, &verified, Some(&metadata), &resolver)
+        };
+
+        let ordinary = render(u256_from_u64(1_000_000_000_000_000_000).0)
+            .expect("render exact one-WCT approval");
+        assert_full_address_field_page(&ordinary, "Spender", &spender);
+        assert!(
+            page_strs(&ordinary, find_page_by_label(&ordinary, "Amount"))[1..3]
+                .iter()
+                .any(|row| row.contains("1 WCT"))
+        );
+        assert_full_contract_identity_page(&ordinary, &entry.contract);
+
+        let max = render([0xff; 32]).expect("render exact WCT infinity sentinel");
+        assert_eq!(
+            page_strs(&max, find_page_by_label(&max, "Amount")),
+            [
+                "Amount".to_string(),
+                "unlimited WCT".to_string(),
+                "".to_string(),
+                "> next".to_string(),
+            ]
+        );
+        assert_full_address_field_page(&max, "Spender", &spender);
+        assert_full_contract_identity_page(&max, &entry.contract);
+
+        for (name, finite) in [
+            ("old threshold minus one", old_threshold_minus_one),
+            ("old threshold", old_threshold),
+            ("max minus one", max_minus_one),
+        ] {
+            assert!(
+                matches!(
+                    render(finite),
+                    Err(crate::tx::erc7730_render::RenderErr::Reject(
+                        "7730 inexact scaled value"
+                    ))
+                ),
+                "finite WCT approval at {name} must not inherit the max-only label on chain {chain_id}"
+            );
+        }
+    }
+}
+
+#[test]
+fn flyingtulip_borrow_is_finite_while_engine_max_is_unlimited() {
+    let res = build_registry();
+    let resolver = NameResolver::new();
+    let delegate = [0x61u8; 20];
+    let engine = [0x62u8; 20];
+    let asset = [0x63u8; 20];
+    let entries: Vec<_> = res
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-PositionsManager.json")
+        })
+        .collect();
+    assert_eq!(
+        entries.len(),
+        3,
+        "all admitted PositionsManager deployments"
     );
-    assert!(
-        amount_blob.contains("USDT"),
-        "unlimited row should carry the ticker, got:\n{amount_blob}",
-    );
-    assert!(
-        !amount_blob.contains("AMOUNT OVERFLOW"),
-        "threshold check must short-circuit before the overflow fallback, got:\n{amount_blob}",
-    );
+
+    let mut old_threshold_minus_one = [0xff; 32];
+    old_threshold_minus_one[0] = 0x7f;
+    let mut old_threshold = [0u8; 32];
+    old_threshold[0] = 0x80;
+    let mut max_minus_one = [0xff; 32];
+    max_minus_one[31] = 0xfe;
+
+    for entry in entries {
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified =
+            verify_erc7730_bundle(&bundle, &res.root).expect("verify PositionsManager leaf");
+        let tx = envelope(entry.chain_id, entry.contract);
+        let metadata = Erc20Metadata {
+            chain_id: entry.chain_id,
+            contract: asset,
+            decimals: 6,
+            name: b"USD Coin",
+            symbol: b"USDC",
+        };
+        let render = |signature: &str, actor: [u8; 20], amount: [u8; 32]| {
+            let calldata = calldata_static(
+                signature,
+                &[abi_address_word(actor), abi_address_word(asset), amount],
+            );
+            render_erc7730_pages(&tx, &calldata, &verified, Some(&metadata), &resolver)
+                .expect("render exact PositionsManager allowance")
+        };
+
+        let ordinary_borrow = render(
+            "approveBorrow(address,address,uint256)",
+            delegate,
+            u256_from_u64(1_000_000).0,
+        );
+        assert_full_address_field_page(&ordinary_borrow, "Delegate", &delegate);
+        assert!(page_strs(
+            &ordinary_borrow,
+            find_page_by_label(&ordinary_borrow, "Allowance")
+        )[1..3]
+            .iter()
+            .any(|row| row.contains("1 USDC")));
+        assert_full_contract_identity_page(&ordinary_borrow, &asset);
+
+        for (name, value) in [
+            ("old threshold minus one", old_threshold_minus_one),
+            ("old threshold", old_threshold),
+            ("max minus one", max_minus_one),
+            ("max", [0xff; 32]),
+        ] {
+            let borrow = render("approveBorrow(address,address,uint256)", delegate, value);
+            let dump = dump_pages(&borrow);
+            assert!(
+                !dump.to_ascii_lowercase().contains("unlimited"),
+                "finite borrow-delegation storage at {name} must not be called unlimited:\n{dump}"
+            );
+            assert_raw_word_pages(&borrow, "Allowance", &value);
+            assert_full_address_field_page(&borrow, "Delegate", &delegate);
+            assert_full_contract_identity_page(&borrow, &asset);
+        }
+
+        let max_engine = render("approveEngine(address,address,uint256)", engine, [0xff; 32]);
+        assert_eq!(
+            page_strs(&max_engine, find_page_by_label(&max_engine, "Allowance")),
+            [
+                "Allowance".to_string(),
+                "Unlimited USDC".to_string(),
+                "".to_string(),
+                "> next".to_string(),
+            ]
+        );
+        assert_full_address_field_page(&max_engine, "Engine", &engine);
+        assert_full_contract_identity_page(&max_engine, &asset);
+
+        for (name, finite) in [
+            ("old threshold minus one", old_threshold_minus_one),
+            ("old threshold", old_threshold),
+            ("max minus one", max_minus_one),
+        ] {
+            let engine_pages = render("approveEngine(address,address,uint256)", engine, finite);
+            let dump = dump_pages(&engine_pages);
+            assert!(
+                !dump.to_ascii_lowercase().contains("unlimited"),
+                "finite engine allowance at {name} must not inherit the max-only label:\n{dump}"
+            );
+            assert_raw_word_pages(&engine_pages, "Allowance", &finite);
+        }
+    }
+}
+
+#[test]
+fn allowance_threshold_curations_keep_static_operands_and_framing_exact() {
+    let registry = build_registry();
+    let resolver = NameResolver::new();
+
+    for (source, chain_id, signature, words) in [
+        (
+            "calldata-usdt.json",
+            1,
+            "approve(address,uint256)",
+            vec![abi_address_word([0x41; 20]), [0xff; 32]],
+        ),
+        (
+            "calldata-wct.json",
+            1,
+            "approve(address,uint256)",
+            vec![abi_address_word([0x42; 20]), [0xff; 32]],
+        ),
+        (
+            "calldata-PositionsManager.json",
+            1,
+            "approveBorrow(address,address,uint256)",
+            vec![
+                abi_address_word([0x43; 20]),
+                abi_address_word([0x44; 20]),
+                [0xff; 32],
+            ],
+        ),
+        (
+            "calldata-PositionsManager.json",
+            1,
+            "approveEngine(address,address,uint256)",
+            vec![
+                abi_address_word([0x45; 20]),
+                abi_address_word([0x46; 20]),
+                [0xff; 32],
+            ],
+        ),
+    ] {
+        let entry = find_leaf(registry, source, chain_id);
+        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified =
+            verify_erc7730_bundle(&bundle, &registry.root).expect("verify allowance leaf");
+        let tx = envelope(chain_id, entry.contract);
+        let calldata = calldata_static(signature, &words);
+
+        let mut dirty_address = calldata.clone();
+        dirty_address[4] = 1;
+        assert!(matches!(
+            render_erc7730_pages(&tx, &dirty_address, &verified, None, &resolver),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 noncanonical address"
+            ))
+        ));
+        assert!(matches!(
+            render_erc7730_pages(
+                &tx,
+                &calldata[..calldata.len() - 1],
+                &verified,
+                None,
+                &resolver,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 short head"
+            ))
+        ));
+        let mut trailing = calldata;
+        trailing.push(0);
+        assert!(matches!(
+            render_erc7730_pages(&tx, &trailing, &verified, None, &resolver),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 static calldata trailing"
+            ))
+        ));
+    }
 }
 
 #[test]
@@ -1351,13 +1625,10 @@ fn positive_unlimited_uses_descriptor_message_param() {
 }
 
 #[test]
-fn positive_usdt_approve_unlimited_unbound_renders_unlimited_not_overflow() {
-    // review 4.5: an unlimited approval of an UNKNOWN (unbound) token used to
-    // render "!AMOUNT OVERFLOW" — the raw 2^256-1 overflows the amount
-    // formatter, an alarming banner with no meaning for the single most
-    // dangerous action, exactly when trust is LOWEST. It must now render
-    // "unlimited" + "(unverified)". Same REAL USDT approve descriptor
-    // (threshold set), but NO metadata supplied → the token cannot bind.
+fn usdt_approve_max_unbound_renders_the_exact_raw_word() {
+    // The shared Ethereum/Polygon descriptor has no implementation-wide
+    // infinity sentinel. Without a matching metadata proof, max therefore
+    // remains an exact raw integer rather than acquiring semantic wording.
     let res = build_registry();
     let entry = find_leaf(res, "calldata-usdt.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
@@ -1368,21 +1639,13 @@ fn positive_usdt_approve_unlimited_unbound_renders_unlimited_not_overflow() {
     let resolver = NameResolver::new();
     let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver).expect("render");
     assert_all_pages_printable(&pages);
-
-    let amount_page = find_page_by_label(&pages, "Amount");
-    let amount_blob = page_strs(&pages, amount_page).join("\n");
+    let dump = dump_pages(&pages);
     assert!(
-        amount_blob.to_lowercase().contains("unlimited"),
-        "unbound approve(MAX) must render 'unlimited', got:\n{amount_blob}"
+        !dump.to_ascii_lowercase().contains("unlimited"),
+        "unbound approve(MAX) must not invent an infinity claim:\n{dump}"
     );
-    assert!(
-        !amount_blob.contains("OVERFLOW"),
-        "must NOT render the alarming overflow banner for an unlimited approve:\n{amount_blob}"
-    );
-    assert!(
-        amount_blob.contains("(unverified)"),
-        "unbound must mark the missing token identity:\n{amount_blob}"
-    );
+    assert_raw_word_pages(&pages, "Amount", &[0xff; 32]);
+    assert_full_unverified_token_identity_page(&pages, &entry.contract);
 }
 
 #[test]
@@ -1417,22 +1680,23 @@ fn positive_erc7730_golden_grid_hash() {
         "golden hash must bind rendered content (spender change did not move it)"
     );
 
-    // Re-blessed after inspecting the full grid: the intentional envelope
-    // hardening adds a lossless EIP-1559 nonce page (`Nonce: 7`) between the
-    // exact fee budget and confirmation. All descriptor intent/field pages are
-    // otherwise unchanged.
+    // Re-blessed after inspecting the full grid: the shared Ethereum/Polygon
+    // USDT descriptor can no longer claim one implementation-wide infinity
+    // sentinel, so MAX is shown as the exact raw 256-bit word instead of the
+    // semantic `unlimited` shorthand. The signed spender and every envelope
+    // page remain bound by this digest.
     #[cfg(not(feature = "erc7730-dev-unattested"))]
     const GOLDEN: [u8; 32] = [
-        0x4b, 0xa2, 0x70, 0x68, 0xd8, 0x81, 0xed, 0xb6, 0xe9, 0x51, 0x08, 0x02, 0x30, 0x02, 0xf1,
-        0xc8, 0xad, 0xae, 0xfb, 0x8c, 0x36, 0x30, 0x63, 0xde, 0x00, 0xab, 0xa6, 0x07, 0x55, 0xa4,
-        0x4c, 0x61,
+        0xba, 0x87, 0x66, 0xce, 0x54, 0xb3, 0x40, 0x79, 0x33, 0x2c, 0x3b, 0x95, 0xaf, 0x30, 0x4d,
+        0xc3, 0x08, 0x36, 0x68, 0xb1, 0x6c, 0x18, 0x39, 0xbd, 0x39, 0x14, 0x1b, 0x07, 0x2b, 0x31,
+        0x71, 0xef,
     ];
     // Same reviewed grid with the mandatory dev-unattested warning prepended.
     #[cfg(feature = "erc7730-dev-unattested")]
     const GOLDEN: [u8; 32] = [
-        0xc1, 0x3d, 0x17, 0x94, 0x49, 0x46, 0x08, 0xf9, 0x2e, 0xf7, 0x55, 0xca, 0x09, 0x79, 0xf2,
-        0xcd, 0x08, 0x4f, 0x77, 0x21, 0x3f, 0x0d, 0x75, 0xd8, 0x6a, 0xad, 0x3b, 0xe7, 0x64, 0x4c,
-        0xbe, 0x7b,
+        0xae, 0xfe, 0xc8, 0x69, 0x32, 0xba, 0xae, 0x83, 0xb4, 0x6d, 0xfd, 0x7d, 0xae, 0x7f, 0x9e,
+        0x05, 0x90, 0xba, 0x85, 0x7d, 0x18, 0x96, 0x45, 0x3f, 0x93, 0x17, 0xa1, 0xd6, 0xa8, 0x0f,
+        0x25, 0x61,
     ];
     assert_eq!(
         h, GOLDEN,
@@ -1657,223 +1921,83 @@ fn positive_defi_catalogue_aave_gateway_referral_codes_are_complete_and_bound() 
 }
 
 #[test]
-fn positive_aave_permits_bind_every_static_operand_and_real_supply_fixture() {
-    let res = build_registry();
+fn aave_pqsmartwallet_incompatible_permit_calls_remain_known_but_refused() {
+    let registry = build_registry();
     let resolver = NameResolver::new();
-    let signer = [0x42u8; 20];
-    let parse_address = |value: &str| -> [u8; 20] {
-        hex::decode(value)
-            .expect("valid address hex")
-            .try_into()
-            .expect("address width")
-    };
 
-    // Exact calldata item extracted from case 5 of the pinned upstream
-    // `registry/aave/tests/calldata-lpv3.tests.json` fixture. Keeping the
-    // selector and all eight words byte-for-byte here makes the trusted-render
-    // test independent of Ledger's envelope projection.
-    let supply_fixture = hex::decode(concat!(
-        "02c205f0",
-        "0000000000000000000000007f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
-        "0000000000000000000000000000000000000000000000197a8f6dd551980000",
-        "0000000000000000000000006c413690c19cfc80c3db3211c80993bf642c6456",
-        "0000000000000000000000000000000000000000000000000000000000000000",
-        "0000000000000000000000000000000000000000000000000000000069b43d1a",
-        "000000000000000000000000000000000000000000000000000000000000001c",
-        "2c188c792ac9f04ac0c3d7f13a06566ccb9fcf651106778ad2002644afff9112",
-        "00b0c2c79281fc66d3fc577743a761addf6b0fb5c5256ac983bc7fd01973ce5e",
-    ))
-    .expect("valid upstream Aave supplyWithPermit calldata");
-    assert_eq!(
-        hex::encode(keccak256(&supply_fixture)),
-        "ecf233dabfe52e1bc169a8dfe1bf1276d4aa0fe5ca57096077654689bd1e634e"
-    );
-    let supply_words: [[u8; 32]; 8] = core::array::from_fn(|index| {
-        supply_fixture[4 + index * 32..4 + (index + 1) * 32]
-            .try_into()
-            .expect("static Aave fixture word")
-    });
+    for (source_name, signature, word_count) in [
+        (
+            "calldata-WrappedTokenGatewayV3.json",
+            "withdrawETHWithPermit(address,uint256,address,uint256,uint8,bytes32,bytes32)",
+            7,
+        ),
+        (
+            "calldata-lpv3.json",
+            "repayWithPermit(address,uint256,uint256,address,uint256,uint8,bytes32,bytes32)",
+            8,
+        ),
+        (
+            "calldata-lpv3.json",
+            "supplyWithPermit(address,uint256,address,uint16,uint256,uint8,bytes32,bytes32)",
+            8,
+        ),
+    ] {
+        let entry = find_leaf(registry, source_name, 1);
+        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &registry.root)
+            .unwrap_or_else(|error| panic!("verify Aave leaf for {signature}: {error:?}"));
+        cross_check_contract(&verified.ir, 1, &entry.contract)
+            .unwrap_or_else(|error| panic!("bind Aave leaf for {signature}: {error:?}"));
+        assert_selector_excluded(&verified.ir, signature);
 
-    let asset: [u8; 20] = supply_words[0][12..].try_into().expect("asset address");
-    let pool = parse_address("87870bca3f3fd6335c3f4ce8392d69350b4fa4e2");
-    let recipient = parse_address("6c413690c19cfc80c3db3211c80993bf642c6456");
-    let gateway_words = [
-        abi_address_word(pool),
-        u256_from_u64(1_500_000_000_000_000_000).0,
-        abi_address_word(recipient),
-        supply_words[4],
-        supply_words[5],
-        supply_words[6],
-        supply_words[7],
-    ];
-    let repay_words = [
-        abi_address_word(asset),
-        u256_from_u64(500_000_000).0,
-        u256_from_u64(2).0,
-        abi_address_word(recipient),
-        supply_words[4],
-        supply_words[5],
-        supply_words[6],
-        supply_words[7],
-    ];
+        let digest = keccak256(signature.as_bytes());
+        let selector: [u8; 4] = digest[..4].try_into().expect("selector width");
+        assert!(
+            registry
+                .known_calls
+                .contains(&(1, entry.contract, selector)),
+            "excluded Aave permit call must remain exactly known: {signature}"
+        );
+        assert!(
+            pqsigner_erc7730::known_calls::may_contain(
+                &registry.known_calls_bloom,
+                1,
+                &entry.contract,
+                &selector,
+            ),
+            "excluded Aave permit call must remain in the fail-closed Bloom: {signature}"
+        );
 
-    let run_case = |source_name: &str,
-                    signature: &str,
-                    words: &[[u8; 32]],
-                    intent: &str,
-                    address_fields: &[(usize, &str)],
-                    raw_fields: &[(usize, &str)]| {
-        let entry = find_leaf(res, source_name, 1);
-        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
-        let verified = verify_erc7730_bundle(&bundle, &res.root)
-            .unwrap_or_else(|error| panic!("verify Aave {signature}: {error:?}"));
-        let calldata = calldata_static(signature, words);
-        assert_selector_matches(&verified.ir, &calldata, signature);
+        let calldata = calldata_static(signature, &vec![[0u8; 32]; word_count]);
         let tx = envelope(1, entry.contract);
-        let rendered = render_erc7730_pages_with_signer_checked(
-            &tx, &calldata, &verified, None, &resolver, &signer,
-        )
-        .unwrap_or_else(|error| panic!("render Aave {signature}: {error:?}"));
-        assert_eq!(
-            rendered.transcript_receipt.state_code(),
-            INTENT_PUBLICATION_STATIC
+        assert!(
+            matches!(
+                render_erc7730_pages(&tx, &calldata, &verified, None, &resolver),
+                Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+            ),
+            "excluded Aave permit call must not render directly: {signature}"
         );
-        assert!(rendered
-            .transcript_receipt
-            .range_matches(&rendered.pages, 0));
-        assert_all_pages_printable(&rendered.pages);
-        assert_eq!(
-            page_strs(&rendered.pages, intent_page_index(&rendered.pages))[0],
-            intent
-        );
-        let _ = find_page_by_label(&rendered.pages, "Deadline");
 
-        for (word_index, label) in address_fields {
-            let address: [u8; 20] = words[*word_index][12..]
-                .try_into()
-                .expect("Aave address word");
-            assert_full_address_field_page(&rendered.pages, label, &address);
-        }
-        for (word_index, label) in raw_fields {
-            assert_raw_word_pages(&rendered.pages, label, &words[*word_index]);
-        }
-        if source_name == "calldata-lpv3.json" {
-            assert_full_unverified_token_identity_page(&rendered.pages, &asset);
-        }
-
-        // Every ABI word is independently effect-bearing or part of the
-        // embedded permit. Change it without disturbing canonical padding and
-        // require the trusted pages plus transcript receipt to move.
-        for word_index in 0..words.len() {
-            let mut mutated_words = words.to_vec();
-            if word_index == 1 {
-                mutated_words[word_index] = u256_from_u64(1_000_000_000_000_000_000).0;
-            } else {
-                mutated_words[word_index][31] ^= 1;
-            }
-            assert_ne!(mutated_words[word_index], words[word_index]);
-            let mutated_calldata = calldata_static(signature, &mutated_words);
-            let mutated = render_erc7730_pages_with_signer_checked(
+        let mut dispatch_proofs = DispatchPageProofs::new();
+        dispatch_proofs.fail_initialize();
+        assert!(
+            pick_sign_pages(
                 &tx,
-                &mutated_calldata,
-                &verified,
+                &calldata,
+                &[0u8; 20],
+                None,
+                None,
+                None,
+                Some(&verified),
+                None,
                 None,
                 &resolver,
-                &signer,
+                &mut dispatch_proofs,
             )
-            .unwrap_or_else(|error| {
-                panic!("render mutated Aave {signature} word {word_index}: {error:?}")
-            });
-            assert_ne!(
-                rendered.pages.as_slice(),
-                mutated.pages.as_slice(),
-                "Aave {signature} word {word_index} must change trusted pages"
-            );
-            assert!(
-                !rendered
-                    .transcript_receipt
-                    .exact_match(&mutated.transcript_receipt),
-                "Aave {signature} word {word_index} must change the transcript receipt"
-            );
-        }
-    };
-
-    run_case(
-        "calldata-WrappedTokenGatewayV3.json",
-        "withdrawETHWithPermit(address,uint256,address,uint256,uint8,bytes32,bytes32)",
-        &gateway_words,
-        "Withdraw",
-        &[(2, "To recipient")],
-        &[
-            (0, "Pool"),
-            (4, "Permit V"),
-            (5, "Permit R"),
-            (6, "Permit S"),
-        ],
-    );
-    run_case(
-        "calldata-lpv3.json",
-        "repayWithPermit(address,uint256,uint256,address,uint256,uint8,bytes32,bytes32)",
-        &repay_words,
-        "Repay loan",
-        &[(3, "For debt holder")],
-        &[(5, "Permit V"), (6, "Permit R"), (7, "Permit S")],
-    );
-    run_case(
-        "calldata-lpv3.json",
-        "supplyWithPermit(address,uint256,address,uint16,uint256,uint8,bytes32,bytes32)",
-        &supply_words,
-        "Supply",
-        &[(2, "Collateral reci~")],
-        &[
-            (3, "Referral Code"),
-            (5, "Permit V"),
-            (6, "Permit R"),
-            (7, "Permit S"),
-        ],
-    );
-    assert_eq!(
-        calldata_static(
-            "supplyWithPermit(address,uint256,address,uint16,uint256,uint8,bytes32,bytes32)",
-            &supply_words,
-        ),
-        supply_fixture,
-        "the semantic case must remain byte-identical to the pinned upstream fixture calldata"
-    );
-
-    // Re-render the exact upstream fixture with its exact token metadata to
-    // pin the friendly amount path in addition to the metadata-independent
-    // word-mutation checks above.
-    let pool_entry = find_leaf(res, "calldata-lpv3.json", 1);
-    let pool_bundle = synth_bundle(&res.blob, &pool_entry.ir_bytes, pool_entry.leaf_index);
-    let pool_verified =
-        verify_erc7730_bundle(&pool_bundle, &res.root).expect("verify Aave Pool leaf");
-    let wsteth = Erc20Metadata {
-        chain_id: 1,
-        contract: asset,
-        decimals: 18,
-        name: b"Wrapped liquid staked Ether 2.0",
-        symbol: b"wstETH",
-    };
-    let rendered_fixture = render_erc7730_pages_with_signer_checked(
-        &envelope(1, pool_entry.contract),
-        &supply_fixture,
-        &pool_verified,
-        Some(&wsteth),
-        &resolver,
-        &signer,
-    )
-    .expect("render exact upstream Aave supplyWithPermit fixture");
-    let amount_rows = page_strs(
-        &rendered_fixture.pages,
-        find_page_by_label(&rendered_fixture.pages, "Amount to supply"),
-    );
-    assert!(
-        amount_rows.iter().any(|row| row.contains("470"))
-            && amount_rows.iter().any(|row| row.contains("wstETH")),
-        "exact fixture amount/token missing: {amount_rows:?}"
-    );
-    assert_full_contract_identity_page(&rendered_fixture.pages, &asset);
+            .is_err(),
+            "bound descriptor must refuse without fallback for excluded Aave permit call: {signature}"
+        );
+    }
 }
 
 #[test]
@@ -2020,7 +2144,7 @@ fn positive_usdt_transfer_polygon_chain_pinning() {
 }
 
 #[test]
-fn positive_weth_deposit_pulls_value_from_envelope() {
+fn positive_weth_deposit_and_withdraw_bind_exact_amounts() {
     let res = build_registry();
     let calldata = calldata_deposit();
     assert_eq!(calldata, [0xd0, 0xe3, 0x0d, 0xb0]);
@@ -2072,11 +2196,101 @@ fn positive_weth_deposit_pulls_value_from_envelope() {
             ))
         ));
 
-        let mut withdraw = keccak256(b"withdraw(uint256)")[..4].to_vec();
-        withdraw.extend_from_slice(&u256_from_u64(1).0);
+        let metadata = (chain_id == 1).then_some(Erc20Metadata {
+            chain_id,
+            contract: entry.contract,
+            decimals: 18,
+            name: b"Wrapped Ether",
+            symbol: b"WETH",
+        });
+        let render_withdraw = |amount| {
+            let withdraw = calldata_weth_withdraw(u256_from_u64(amount));
+            let tx = envelope(chain_id, entry.contract);
+            let pages = render_erc7730_pages(
+                &tx,
+                &withdraw,
+                &verified,
+                metadata.as_ref(),
+                &NameResolver::new(),
+            )
+            .expect("render exact WETH9 withdraw");
+            (pages, withdraw)
+        };
+
+        let half_amount = 500_000_000_000_000_000;
+        let (half_withdraw_pages, half_withdraw) = render_withdraw(half_amount);
+        assert_eq!(half_withdraw.len(), 36);
+        assert_eq!(
+            &half_withdraw[4..],
+            &u256_from_u64(half_amount).0,
+            "the transcript input must carry the exact withdrawal word"
+        );
+        assert_all_pages_printable(&half_withdraw_pages);
+        let [intent_r0, owner_r, contract_r, _] = page_strs(
+            &half_withdraw_pages,
+            intent_page_index(&half_withdraw_pages),
+        );
+        assert_eq!(intent_r0, "Unwrap");
+        assert_eq!(owner_r, "WETH");
+        assert_eq!(contract_r, "WETH");
+        let amount_rows = page_strs(
+            &half_withdraw_pages,
+            find_page_by_label(&half_withdraw_pages, "Amount"),
+        )
+        .join(" ");
+        let amount_compact: String = amount_rows
+            .chars()
+            .filter(|character| !character.is_ascii_whitespace())
+            .collect();
+        if chain_id == 1 {
+            assert!(
+                amount_rows.contains("0.5 WETH"),
+                "mainnet metadata must scale the exact word: {amount_rows:?}"
+            );
+            assert_full_contract_identity_page(&half_withdraw_pages, &entry.contract);
+        } else {
+            assert!(
+                amount_compact.contains("500000000000000000")
+                    && amount_rows.contains("! raw, dec=?"),
+                "Sepolia without metadata must show the exact raw word: {amount_rows:?}"
+            );
+            assert_full_unverified_token_identity_page(&half_withdraw_pages, &entry.contract);
+        }
+
+        let (one_withdraw_pages, _) = render_withdraw(1_000_000_000_000_000_000);
+        assert_ne!(
+            dump_pages(&half_withdraw_pages),
+            dump_pages(&one_withdraw_pages),
+            "changing the signed withdrawal word must change the transcript"
+        );
+
+        let short = &half_withdraw[..half_withdraw.len() - 1];
+        let tx = envelope(chain_id, entry.contract);
         assert!(matches!(
-            render_erc7730_pages(&tx, &withdraw, &verified, None, &NameResolver::new()),
-            Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+            render_erc7730_pages(
+                &tx,
+                short,
+                &verified,
+                metadata.as_ref(),
+                &NameResolver::new(),
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 short head"
+            ))
+        ));
+        let mut trailing_withdraw = half_withdraw.clone();
+        trailing_withdraw.push(0);
+        assert!(matches!(
+            render_erc7730_pages(
+                &tx,
+                &trailing_withdraw,
+                &verified,
+                metadata.as_ref(),
+                &NameResolver::new(),
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 static calldata trailing"
+            ))
         ));
     }
 }
@@ -2138,7 +2352,7 @@ fn negative_unknown_selector_returns_no_format() {
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
-    // 0xdeadbeef — selector not in the registry WETH descriptor (deposit only).
+    // 0xdeadbeef — selector not in the bounded registry WETH descriptor.
     let calldata = vec![0xde, 0xad, 0xbe, 0xef];
     let tx = envelope(1, entry.contract);
     let resolver = NameResolver::new();
@@ -3587,6 +3801,240 @@ fn positive_flyingtulip_operator_approval_fixture_binds_operator_and_bool_enum()
 }
 
 #[test]
+fn positive_flyingtulip_session_manager_static_authority_routes_bind_every_operand() {
+    const REFUSED: [&str; 6] = [
+        "createSession(address,uint48,uint48,uint32,uint16,(address,uint256)[],bytes32)",
+        "createSessionBySig(address,address,uint48,uint48,uint32,uint16,(address,uint256)[],bytes32,bytes)",
+        "invalidateNonceBySig(bytes32,uint256,uint256,address,bytes)",
+        "revokeSessionBySig(bytes32,uint256,bytes)",
+        "setAllowedTargets(address[],bool)",
+        "validateAndConsume(address,uint256,(bytes32,bytes32,uint256,uint256,address,uint256),bytes,address)",
+    ];
+
+    let registry = build_registry();
+    let entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-SessionManager.json")
+        })
+        .collect();
+    assert_eq!(
+        entries.len(),
+        7,
+        "SessionManager render coverage must span all seven deployments"
+    );
+
+    for entry in entries {
+        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &registry.root)
+            .expect("verify Flying Tulip SessionManager leaf");
+        cross_check_contract(&verified.ir, entry.chain_id, &entry.contract)
+            .expect("bind Flying Tulip SessionManager leaf");
+        for signature in REFUSED {
+            assert_selector_excluded(&verified.ir, signature);
+        }
+
+        let tx = envelope(entry.chain_id, entry.contract);
+        let resolver = NameResolver::new();
+        let signer = [0x42; 20];
+        let render = |signature: &str, words: &[[u8; 32]]| {
+            let calldata = calldata_static(signature, words);
+            assert_selector_matches(&verified.ir, &calldata, signature);
+            render_erc7730_pages_with_signer_checked(
+                &tx, &calldata, &verified, None, &resolver, &signer,
+            )
+        };
+
+        let session_id = [0x11; 32];
+        let revoked = render("revokeSession(bytes32)", &[session_id])
+            .expect("render Flying Tulip session revocation");
+        assert_eq!(
+            revoked.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        assert_eq!(
+            page_strs(&revoked.pages, intent_page_index(&revoked.pages))[0],
+            "Revoke session"
+        );
+        assert_all_pages_printable(&revoked.pages);
+        assert_raw_word_pages(&revoked.pages, "Session ID", &session_id);
+        let mut mutated_session_id = session_id;
+        mutated_session_id[31] ^= 1;
+        let mutated_revoke = render("revokeSession(bytes32)", &[mutated_session_id])
+            .expect("render independently mutated session ID");
+        assert_raw_word_pages(&mutated_revoke.pages, "Session ID", &mutated_session_id);
+        assert_ne!(
+            revoked.pages.as_slice(),
+            mutated_revoke.pages.as_slice(),
+            "one session-ID bit must change trusted pages"
+        );
+        assert!(
+            !revoked
+                .transcript_receipt
+                .exact_match(&mutated_revoke.transcript_receipt),
+            "one session-ID bit must change the transcript receipt"
+        );
+
+        let target = [0x22; 20];
+        let allowed_word = u256_from_u64(1).0;
+        let allowed = render(
+            "setAllowedTarget(address,bool)",
+            &[abi_address_word(target), allowed_word],
+        )
+        .expect("render allowed Flying Tulip session target");
+        assert_eq!(
+            allowed.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        let allowed_intent = page_strs(&allowed.pages, intent_page_index(&allowed.pages));
+        assert_eq!(
+            format!("{}{}", allowed_intent[0], allowed_intent[1]),
+            "Update allowed target"
+        );
+        assert_all_pages_printable(&allowed.pages);
+        assert_full_address_field_page(&allowed.pages, "Target", &target);
+        assert_eq!(
+            page_strs(&allowed.pages, find_page_by_label(&allowed.pages, "Access")),
+            [
+                "Access".to_string(),
+                "Allow".to_string(),
+                "".to_string(),
+                "".to_string(),
+            ]
+        );
+
+        let mut mutated_target = target;
+        mutated_target[19] ^= 1;
+        let mutated_target_render = render(
+            "setAllowedTarget(address,bool)",
+            &[abi_address_word(mutated_target), allowed_word],
+        )
+        .expect("render independently mutated session target");
+        assert_full_address_field_page(&mutated_target_render.pages, "Target", &mutated_target);
+        assert_ne!(
+            allowed.pages.as_slice(),
+            mutated_target_render.pages.as_slice(),
+            "one target bit must change trusted pages"
+        );
+        assert!(
+            !allowed
+                .transcript_receipt
+                .exact_match(&mutated_target_render.transcript_receipt),
+            "one target bit must change the transcript receipt"
+        );
+
+        let disallowed = render(
+            "setAllowedTarget(address,bool)",
+            &[abi_address_word(target), [0u8; 32]],
+        )
+        .expect("render canonical false session target access");
+        assert_eq!(
+            page_strs(
+                &disallowed.pages,
+                find_page_by_label(&disallowed.pages, "Access")
+            ),
+            [
+                "Access".to_string(),
+                "Disallow".to_string(),
+                "".to_string(),
+                "".to_string(),
+            ]
+        );
+        assert_ne!(
+            allowed.pages.as_slice(),
+            disallowed.pages.as_slice(),
+            "the signed access bool must change trusted pages"
+        );
+        assert!(
+            !allowed
+                .transcript_receipt
+                .exact_match(&disallowed.transcript_receipt),
+            "the signed access bool must change the transcript receipt"
+        );
+        assert!(
+            matches!(
+                render(
+                    "setAllowedTarget(address,bool)",
+                    &[abi_address_word(target), u256_from_u64(2).0],
+                ),
+                Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+            ),
+            "ABI bool word 2 must hard-refuse instead of rendering an unknown enum"
+        );
+
+        let pending_owner = [0x33; 20];
+        let ownership = render(
+            "transferOwnership(address)",
+            &[abi_address_word(pending_owner)],
+        )
+        .expect("render Flying Tulip pending-owner update");
+        assert_eq!(
+            ownership.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        let ownership_intent = page_strs(&ownership.pages, intent_page_index(&ownership.pages));
+        assert_eq!(
+            format!("{}{}", ownership_intent[0], ownership_intent[1]),
+            "Update pending owner"
+        );
+        assert_all_pages_printable(&ownership.pages);
+        assert_full_address_field_page(&ownership.pages, "Pending owner", &pending_owner);
+        let mut mutated_owner = pending_owner;
+        mutated_owner[19] ^= 1;
+        let mutated_ownership = render(
+            "transferOwnership(address)",
+            &[abi_address_word(mutated_owner)],
+        )
+        .expect("render independently mutated pending owner");
+        assert_full_address_field_page(&mutated_ownership.pages, "Pending owner", &mutated_owner);
+        assert_ne!(
+            ownership.pages.as_slice(),
+            mutated_ownership.pages.as_slice(),
+            "one pending-owner bit must change trusted pages"
+        );
+        assert!(
+            !ownership
+                .transcript_receipt
+                .exact_match(&mutated_ownership.transcript_receipt),
+            "one pending-owner bit must change the transcript receipt"
+        );
+
+        for signature in REFUSED {
+            let calldata = calldata_static(signature, &[]);
+            assert!(
+                matches!(
+                    render_erc7730_pages(&tx, &calldata, &verified, None, &resolver),
+                    Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+                ),
+                "refused SessionManager route must not render directly: {signature}"
+            );
+        }
+        let refused_calldata = calldata_static(REFUSED[0], &[]);
+        let mut dispatch_proofs = DispatchPageProofs::new();
+        dispatch_proofs.fail_initialize();
+        assert!(
+            pick_sign_pages(
+                &tx,
+                &refused_calldata,
+                &signer,
+                None,
+                None,
+                None,
+                Some(&verified),
+                None,
+                None,
+                &resolver,
+                &mut dispatch_proofs,
+            )
+            .is_err(),
+            "a bound descriptor must not fall back for a refused SessionManager route"
+        );
+    }
+}
+
+#[test]
 fn nftname_small_id_keeps_raw_id_and_full_target_collection_identity() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-PftNft.json", 1);
@@ -3702,6 +4150,11 @@ fn positive_defi_catalogue_lido_referral_addresses_are_complete_and_bound() {
             .unwrap_or_else(|error| panic!("verify Lido {source}: {error:?}"));
         let calldata = calldata_static(signature, &[abi_address_word(referral)]);
         let mutated_calldata = calldata_static(signature, &[abi_address_word(mutated_referral)]);
+        assert_eq!(
+            calldata.len(),
+            36,
+            "Lido staking calldata is one exact static word"
+        );
         assert_selector_matches(&verified.ir, &calldata, signature);
 
         let mut tx = envelope(1, entry.contract);
@@ -3722,10 +4175,42 @@ fn positive_defi_catalogue_lido_referral_addresses_are_complete_and_bound() {
             "Lido {signature} receipt must bind its complete rendered page range"
         );
         assert_all_pages_printable(&rendered.pages);
-        let _ = find_page_by_label(&rendered.pages, amount_label);
+        let amount_rows = page_strs(
+            &rendered.pages,
+            find_page_by_label(&rendered.pages, amount_label),
+        );
+        assert_eq!(amount_rows[1], "1.5 ETH");
         let referral_word: [u8; 32] = calldata[4..36].try_into().expect("Lido referral ABI word");
         assert_eq!(referral_word, abi_address_word(referral));
         assert_raw_word_pages(&rendered.pages, "Referral", &referral_word);
+
+        let mut mutated_value_tx = envelope(1, entry.contract);
+        mutated_value_tx.value = u256_from_u64(2_000_000_000_000_000_000);
+        let mutated_value = render_erc7730_pages_with_signer_checked(
+            &mutated_value_tx,
+            &calldata,
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        )
+        .unwrap_or_else(|error| panic!("render value-mutated Lido {signature}: {error:?}"));
+        let mutated_amount_rows = page_strs(
+            &mutated_value.pages,
+            find_page_by_label(&mutated_value.pages, amount_label),
+        );
+        assert_eq!(mutated_amount_rows[1], "2 ETH");
+        assert_ne!(
+            rendered.pages.as_slice(),
+            mutated_value.pages.as_slice(),
+            "a changed signed native value must change Lido trusted pages for {signature}"
+        );
+        assert!(
+            !rendered
+                .transcript_receipt
+                .exact_match(&mutated_value.transcript_receipt),
+            "a changed signed native value must change the Lido transcript for {signature}"
+        );
 
         let mutated = render_erc7730_pages_with_signer_checked(
             &tx,
@@ -3752,6 +4237,268 @@ fn positive_defi_catalogue_lido_referral_addresses_are_complete_and_bound() {
                 .exact_match(&mutated.transcript_receipt),
             "one referral-address bit must change the Lido transcript for {signature}"
         );
+
+        let zero_referral_calldata = calldata_static(signature, &[abi_address_word([0u8; 20])]);
+        let zero_referral = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &zero_referral_calldata,
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        )
+        .unwrap_or_else(|error| panic!("render zero-referral Lido {signature}: {error:?}"));
+        assert_raw_word_pages(&zero_referral.pages, "Referral", &[0u8; 32]);
+
+        let short = &calldata[..35];
+        assert!(matches!(
+            render_erc7730_pages_with_signer_checked(
+                &tx, short, &verified, None, &resolver, &signer,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 short head"
+            ))
+        ));
+
+        let mut trailing = calldata.clone();
+        trailing.push(0);
+        assert!(matches!(
+            render_erc7730_pages_with_signer_checked(
+                &tx, &trailing, &verified, None, &resolver, &signer,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 static calldata trailing"
+            ))
+        ));
+
+        let wrong_selector = calldata_static("unknownLido(address)", &[abi_address_word(referral)]);
+        assert!(matches!(
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                &wrong_selector,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+        ));
+    }
+}
+
+#[test]
+fn lido_steth_approve_transfer_and_max_threshold_are_exact() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-stETH.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Lido stETH leaf");
+    let tx = envelope(1, entry.contract);
+    let metadata = Erc20Metadata {
+        chain_id: 1,
+        contract: entry.contract,
+        decimals: 18,
+        name: b"Liquid staked Ether 2.0",
+        symbol: b"stETH",
+    };
+    let resolver = NameResolver::new();
+    let signer = [0x61; 20];
+    let spender = [0x62; 20];
+    let recipient = [0x63; 20];
+
+    let render = |calldata: &[u8]| {
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            calldata,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        )
+    };
+
+    let one_steth = u256_from_u64(1_000_000_000_000_000_000);
+    let approve = calldata_approve(spender, one_steth);
+    assert_eq!(approve.len(), 68);
+    let approved = render(&approve).expect("render exact stETH approval");
+    assert_full_address_field_page(&approved.pages, "Spender", &spender);
+    assert!(page_strs(
+        &approved.pages,
+        find_page_by_label(&approved.pages, "Amount")
+    )[1..3]
+        .iter()
+        .any(|row| row.contains("1 stETH")));
+    assert_full_contract_identity_page(&approved.pages, &entry.contract);
+
+    let transfer = calldata_transfer(recipient, one_steth);
+    assert_eq!(transfer.len(), 68);
+    let transferred = render(&transfer).expect("render exact stETH transfer request");
+    assert_full_address_field_page(&transferred.pages, "Recipient", &recipient);
+    assert!(page_strs(
+        &transferred.pages,
+        find_page_by_label(&transferred.pages, "Amount")
+    )[1..3]
+        .iter()
+        .any(|row| row.contains("1 stETH")));
+    assert_full_contract_identity_page(&transferred.pages, &entry.contract);
+
+    let mutated_transfer = calldata_transfer(recipient, u256_from_u64(2_000_000_000_000_000_000));
+    let mutated = render(&mutated_transfer).expect("render changed stETH transfer request");
+    assert_ne!(transferred.pages.as_slice(), mutated.pages.as_slice());
+    assert!(!transferred
+        .transcript_receipt
+        .exact_match(&mutated.transcript_receipt));
+
+    let approved_max = render(&calldata_approve(spender, u256_max()))
+        .expect("exact uint256 max remains the stETH infinite-allowance sentinel");
+    assert_eq!(
+        page_strs(
+            &approved_max.pages,
+            find_page_by_label(&approved_max.pages, "Amount")
+        ),
+        [
+            "Amount".to_string(),
+            "Unlimited stETH".to_string(),
+            "".to_string(),
+            "> next".to_string(),
+        ]
+    );
+
+    let mut old_threshold_minus_one = [0xff; 32];
+    old_threshold_minus_one[0] = 0x7f;
+    let mut old_threshold = [0u8; 32];
+    old_threshold[0] = 0x80;
+    let mut max_minus_one = [0xff; 32];
+    max_minus_one[31] = 0xfe;
+    for (name, finite) in [
+        ("old threshold minus one", old_threshold_minus_one),
+        ("old threshold", old_threshold),
+        ("max minus one", max_minus_one),
+    ] {
+        assert!(
+            matches!(
+                render(&calldata_approve(spender, U256(finite))),
+                Err(crate::tx::erc7730_render::RenderErr::Reject(
+                    "7730 inexact scaled value"
+                ))
+            ),
+            "finite stETH approval at {name} must not inherit the max-only shorthand"
+        );
+    }
+
+    let mut dirty_spender = approve.clone();
+    dirty_spender[4] = 1;
+    assert!(matches!(
+        render(&dirty_spender),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 noncanonical address"
+        ))
+    ));
+    assert!(matches!(
+        render(&approve[..approve.len() - 1]),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 short head"
+        ))
+    ));
+    let mut trailing = approve.clone();
+    trailing.push(0);
+    assert!(matches!(
+        render(&trailing),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 static calldata trailing"
+        ))
+    ));
+}
+
+#[test]
+fn lido_wsteth_allowance_threshold_is_max_only_for_all_three_routes() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-wstETH.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Lido wstETH leaf");
+    let tx = envelope(1, entry.contract);
+    let metadata = Erc20Metadata {
+        chain_id: 1,
+        contract: entry.contract,
+        decimals: 18,
+        name: b"Wrapped liquid staked Ether 2.0",
+        symbol: b"wstETH",
+    };
+    let resolver = NameResolver::new();
+    let signer = [0x71; 20];
+    let owner = [0x72; 20];
+    let spender = [0x73; 20];
+
+    let mut old_threshold_minus_one = [0xff; 32];
+    old_threshold_minus_one[0] = 0x7f;
+    let mut old_threshold = [0u8; 32];
+    old_threshold[0] = 0x80;
+    let mut max_minus_one = [0xff; 32];
+    max_minus_one[31] = 0xfe;
+
+    for (signature, amount_index, base_words) in [
+        (
+            "approve(address,uint256)",
+            1usize,
+            vec![abi_address_word(spender), [0xff; 32]],
+        ),
+        (
+            "increaseAllowance(address,uint256)",
+            1usize,
+            vec![abi_address_word(spender), [0xff; 32]],
+        ),
+        (
+            "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)",
+            2usize,
+            vec![
+                abi_address_word(owner),
+                abi_address_word(spender),
+                [0xff; 32],
+                u256_from_u64(2_000_000_000).0,
+                u256_from_u64(27).0,
+                [0x55; 32],
+                [0xaa; 32],
+            ],
+        ),
+    ] {
+        let render_words = |words: &[[u8; 32]]| {
+            let calldata = calldata_static(signature, words);
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                &calldata,
+                &verified,
+                Some(&metadata),
+                &resolver,
+                &signer,
+            )
+        };
+
+        let rendered_max = render_words(&base_words)
+            .unwrap_or_else(|error| panic!("render max-only {signature}: {error:?}"));
+        assert_eq!(
+            page_strs(
+                &rendered_max.pages,
+                find_page_by_label(&rendered_max.pages, "Amount")
+            )[1..3],
+            ["Max uint256".to_string(), "wstETH".to_string()]
+        );
+
+        for (name, finite) in [
+            ("old threshold minus one", old_threshold_minus_one),
+            ("old threshold", old_threshold),
+            ("max minus one", max_minus_one),
+        ] {
+            let mut words = base_words.clone();
+            words[amount_index] = finite;
+            assert!(
+                matches!(
+                    render_words(&words),
+                    Err(crate::tx::erc7730_render::RenderErr::Reject(
+                        "7730 inexact scaled value"
+                    ))
+                ),
+                "finite wstETH value at {name} must not inherit the max-only label for {signature}"
+            );
+        }
     }
 }
 
@@ -3865,8 +4612,8 @@ fn positive_lido_wsteth_permit_fixture_binds_every_signed_word() {
         ),
         [
             "Amount".to_string(),
-            "Unlimited wstETH".to_string(),
-            "".to_string(),
+            "Max uint256".to_string(),
+            "wstETH".to_string(),
             "> next".to_string(),
         ]
     );
@@ -4669,10 +5416,14 @@ fn rw_body(amounts: &[U256], owner: [u8; 20]) -> Vec<u8> {
     b
 }
 
-fn rw_calldata(amounts: &[U256], owner: [u8; 20]) -> Vec<u8> {
-    let mut d = keccak256(b"requestWithdrawals(uint256[],address)")[..4].to_vec();
+fn rw_calldata_for(signature: &str, amounts: &[U256], owner: [u8; 20]) -> Vec<u8> {
+    let mut d = keccak256(signature.as_bytes())[..4].to_vec();
     d.extend_from_slice(&rw_body(amounts, owner));
     d
+}
+
+fn rw_calldata(amounts: &[U256], owner: [u8; 20]) -> Vec<u8> {
+    rw_calldata_for("requestWithdrawals(uint256[],address)", amounts, owner)
 }
 
 /// The Lido `_amounts.[]` array field + the format's `static_head_words`,
@@ -4869,37 +5620,182 @@ fn positive_synthetic_ref_field_renders_bound_token_amount() {
     );
 }
 
-/// Lido treats `_owner == address(0)` as the transaction sender, while nonzero
-/// values select an independent initial NFT owner. The current device cannot
-/// evaluate `senderAddress`, so neither branch may inherit trusted wording.
+/// The production Lido queue leaf clear-signs both non-permit request routes.
+/// Every amount is displayed, a zero owner is replaced only by the independently
+/// bound signer, and a literal nonzero owner remains literal. The real catalogue
+/// must retain the sole-array framing and eight-element human-review cap.
 #[test]
-fn lido_request_withdrawals_zero_and_nonzero_owner_are_no_format() {
+fn production_lido_requests_bind_amounts_and_effective_owner() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-WithdrawalQueueERC721.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Lido NFT leaf");
-    let signature = "requestWithdrawals(uint256[],address)";
-    assert_selector_excluded(&verified.ir, signature);
     let tx = envelope(1, entry.contract);
     let resolver = NameResolver::new();
     let signer = [0x92; 20];
-    for owner in [[0u8; 20], [0x55u8; 20]] {
-        let calldata = rw_calldata(&[u256_from_u64(1_000_000_000_000_000_000)], owner);
-        assert_eq!(
-            &calldata[..4],
-            &keccak256(signature.as_bytes())[..4],
-            "test must exercise the excluded requestWithdrawals selector"
-        );
+    let mut mutated_signer = signer;
+    mutated_signer[19] ^= 1;
+    let literal_owner = [0x55; 20];
+    let steth: [u8; 20] = hex::decode("ae7ab96520de3a18e5e111b5eaab095312d7fe84")
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let wsteth: [u8; 20] = hex::decode("7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0")
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+    for (signature, amount_label, owner_label, token, symbol) in [
+        (
+            "requestWithdrawals(uint256[],address)",
+            "Amount",
+            "Initial NFT own~",
+            steth,
+            &b"stETH"[..],
+        ),
+        (
+            "requestWithdrawalsWstETH(uint256[],address)",
+            "Amount to withd~",
+            "Beneficiary",
+            wsteth,
+            &b"wstETH"[..],
+        ),
+    ] {
+        let metadata = Erc20Metadata {
+            chain_id: 1,
+            contract: token,
+            decimals: 18,
+            name: symbol,
+            symbol,
+        };
+        let amounts = [
+            u256_from_u64(1_000_000_000_000_000_000),
+            u256_from_u64(2_500_000_000_000_000_000),
+            u256_from_u64(300_000_000_000_000_000),
+        ];
+        let zero_owner = rw_calldata_for(signature, &amounts, [0u8; 20]);
+        assert_selector_matches(&verified.ir, &zero_owner, signature);
+
+        assert!(matches!(
+            render_erc7730_pages(&tx, &zero_owner, &verified, Some(&metadata), &resolver),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 sender unbound"
+            ))
+        ));
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &zero_owner,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        )
+        .unwrap_or_else(|error| panic!("render zero-owner {signature}: {error:?}"));
+        assert_all_pages_printable(&rendered.pages);
+        assert_full_address_field_page(&rendered.pages, owner_label, &signer);
+        assert_full_contract_identity_page(&rendered.pages, &token);
+        let dump = dump_pages(&rendered.pages);
         assert!(
-            matches!(
-                render_erc7730_pages_with_signer_checked(
-                    &tx, &calldata, &verified, None, &resolver, &signer,
-                ),
-                Err(crate::tx::erc7730_render::RenderErr::NoFormat)
-            ),
-            "owner={} must hard-refuse as NoFormat",
-            hex::encode(owner)
+            dump.contains("3 items"),
+            "array count missing for {signature}:\n{dump}"
         );
+        assert_eq!(
+            rendered
+                .pages
+                .as_slice()
+                .iter()
+                .filter(|page| row_str(&page[0]) == amount_label)
+                .count(),
+            4,
+            "header plus every amount must render for {signature}:\n{dump}"
+        );
+        assert!(rendered
+            .transcript_receipt
+            .range_matches(&rendered.pages, 0));
+
+        let mutated = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &zero_owner,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &mutated_signer,
+        )
+        .unwrap_or_else(|error| panic!("render mutated signer {signature}: {error:?}"));
+        assert_full_address_field_page(&mutated.pages, owner_label, &mutated_signer);
+        assert_ne!(rendered.pages.as_slice(), mutated.pages.as_slice());
+        assert!(!rendered
+            .transcript_receipt
+            .exact_match(&mutated.transcript_receipt));
+
+        let literal = rw_calldata_for(signature, &amounts, literal_owner);
+        let literal_pages =
+            render_erc7730_pages(&tx, &literal, &verified, Some(&metadata), &resolver)
+                .unwrap_or_else(|error| panic!("render literal owner {signature}: {error:?}"));
+        assert_full_address_field_page(&literal_pages, owner_label, &literal_owner);
+
+        for count in [0usize, 1, 8] {
+            let values = vec![u256_from_u64(1_000_000_000_000_000_000); count];
+            let calldata = rw_calldata_for(signature, &values, [0u8; 20]);
+            let pages = render_erc7730_pages_with_signer_checked(
+                &tx,
+                &calldata,
+                &verified,
+                Some(&metadata),
+                &resolver,
+                &signer,
+            )
+            .unwrap_or_else(|error| panic!("render {count}-element {signature}: {error:?}"));
+            assert!(
+                dump_pages(&pages.pages).contains(&format!("{count} items")),
+                "array count must be explicit for {signature}"
+            );
+            assert_eq!(
+                pages
+                    .pages
+                    .as_slice()
+                    .iter()
+                    .filter(|page| row_str(&page[0]) == amount_label)
+                    .count(),
+                count + 1,
+                "header plus all {count} elements must render for {signature}"
+            );
+        }
+
+        let nine = vec![u256_from_u64(1_000_000_000_000_000_000); 9];
+        assert!(render_erc7730_pages_with_signer_checked(
+            &tx,
+            &rw_calldata_for(signature, &nine, [0u8; 20]),
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        )
+        .is_err());
+
+        let mut wrong_offset = zero_owner.clone();
+        wrong_offset[4 + 31] = 96;
+        assert!(render_erc7730_pages_with_signer_checked(
+            &tx,
+            &wrong_offset,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        )
+        .is_err());
+
+        let mut trailing = zero_owner.clone();
+        trailing.extend_from_slice(&[0u8; 32]);
+        assert!(render_erc7730_pages_with_signer_checked(
+            &tx,
+            &trailing,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        )
+        .is_err());
     }
 }
 
@@ -5090,6 +5986,26 @@ fn c1_opaque_bytes_decline_without_lossy_preview() {
 /// 5, `receiver` at head word 8 (the non-leading-static-tuple slots the
 /// slot-confusion fix guards). If the flatten mis-computed any member's slot,
 /// the rendered value would differ from the encoded word and this fails.
+fn morpho_call(
+    signature: &str,
+    loan: [u8; 20],
+    collateral: [u8; 20],
+    oracle: [u8; 20],
+    irm: [u8; 20],
+    lltv: [u8; 32],
+    trailing_words: &[[u8; 32]],
+) -> Vec<u8> {
+    let mut words = vec![
+        abi_address_word(loan),
+        abi_address_word(collateral),
+        abi_address_word(oracle),
+        abi_address_word(irm),
+        lltv,
+    ];
+    words.extend_from_slice(trailing_words);
+    calldata_static(signature, &words)
+}
+
 #[test]
 fn morpho_borrow_nested_tuple_group_renders_exact_values() {
     let res = build_registry();
@@ -5103,7 +6019,10 @@ fn morpho_borrow_nested_tuple_group_renders_exact_values() {
         w[12..].copy_from_slice(&a);
         w
     };
-    let loan = [0x11u8; 20];
+    let loan: [u8; 20] = hex::decode("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+        .unwrap()
+        .try_into()
+        .unwrap();
     let collat = [0x22u8; 20];
     let oracle = [0x33u8; 20];
     let irm = [0x44u8; 20];
@@ -5118,7 +6037,7 @@ fn morpho_borrow_nested_tuple_group_renders_exact_values() {
     cd.extend_from_slice(&addr_word(oracle)); // slot 2: oracle
     cd.extend_from_slice(&addr_word(irm)); // slot 3: irm
     cd.extend_from_slice(&u256_from_u64(0xBEEF).0); // slot 4: lltv
-    cd.extend_from_slice(&u256_from_u64(0xA55E5).0); // slot 5: assets (AFTER tuple)
+    cd.extend_from_slice(&u256_from_u64(1_500_000).0); // slot 5: assets = 1.5 USDC
     cd.extend_from_slice(&u256_from_u64(0).0); // slot 6: shares
     cd.extend_from_slice(&addr_word(on_behalf)); // slot 7: onBehalf
     cd.extend_from_slice(&addr_word(receiver)); // slot 8: receiver
@@ -5126,17 +6045,21 @@ fn morpho_borrow_nested_tuple_group_renders_exact_values() {
     assert_selector_matches(&verified.ir, &cd, types_sig);
 
     let tx = envelope(1, entry.contract);
+    let usdc = Erc20Metadata {
+        chain_id: 1,
+        contract: loan,
+        decimals: 6,
+        name: b"USD Coin",
+        symbol: b"USDC",
+    };
     let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &cd, &verified, None, &resolver).expect("render");
+    let pages = render_erc7730_pages(&tx, &cd, &verified, Some(&usdc), &resolver).expect("render");
     assert_all_pages_printable(&pages);
     let dump = dump_pages(&pages).to_lowercase();
 
     // Tuple members read from their exact slots (addresses not in ERC20_DB/ENS
     // render as the raw calldata address — still faithful to the signed word).
-    assert!(
-        dump.contains("1111"),
-        "loanToken (tuple slot 0) not read:\n{dump}"
-    );
+    assert_full_address_field_page(&pages, "Loan Token", &loan);
     assert!(
         dump.contains("2222"),
         "collateralToken (tuple slot 1) not read:\n{dump}"
@@ -5155,8 +6078,10 @@ fn morpho_borrow_nested_tuple_group_renders_exact_values() {
     );
     // Post-tuple args at their WIDTH-AWARE head slots (not logical ordinals).
     assert!(
-        dump.contains("a55e5"),
-        "assets (head slot 5, AFTER the 5-word tuple) not read:\n{dump}"
+        page_strs(&pages, find_page_by_label(&pages, "Assets"))[1..3]
+            .iter()
+            .any(|row| row.contains("1.5 USDC")),
+        "assets must resolve from head slot 5 and bind loanToken from tuple slot 0:\n{dump}"
     );
     assert!(
         dump.contains("6666"),
@@ -5170,6 +6095,220 @@ fn morpho_borrow_nested_tuple_group_renders_exact_values() {
     let _ = find_page_by_label(&pages, "Loan Token");
     let _ = find_page_by_label(&pages, "Assets");
     let _ = find_page_by_label(&pages, "Receiver");
+}
+
+#[test]
+fn morpho_withdraw_assets_and_shares_keep_the_exact_input_mode_on_both_chains() {
+    let res = build_registry();
+    let deployments = [
+        (
+            1u64,
+            hex::decode("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        ),
+        (
+            8453u64,
+            hex::decode("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        ),
+    ];
+    let collateral = [0x22u8; 20];
+    let oracle = [0x33u8; 20];
+    let irm = [0x44u8; 20];
+    let on_behalf = [0x66u8; 20];
+    let receiver = [0x77u8; 20];
+    let signature =
+        "withdraw((address,address,address,address,uint256),uint256,uint256,address,address)";
+
+    for (chain_id, loan) in deployments {
+        let entry = find_leaf(res, "calldata-MorphoBlue.json", chain_id);
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Morpho leaf");
+        let tx = envelope(chain_id, entry.contract);
+        let usdc = Erc20Metadata {
+            chain_id,
+            contract: loan,
+            decimals: 6,
+            name: b"USD Coin",
+            symbol: b"USDC",
+        };
+        let resolver = NameResolver::new();
+
+        let assets_call = morpho_call(
+            signature,
+            loan,
+            collateral,
+            oracle,
+            irm,
+            u256_from_u64(860_000_000_000_000_000).0,
+            &[
+                u256_from_u64(2_500_000).0,
+                [0u8; 32],
+                abi_address_word(on_behalf),
+                abi_address_word(receiver),
+            ],
+        );
+        assert_selector_matches(&verified.ir, &assets_call, signature);
+        let asset_pages =
+            render_erc7730_pages(&tx, &assets_call, &verified, Some(&usdc), &resolver)
+                .expect("render Morpho asset withdrawal");
+        let asset_dump = dump_pages(&asset_pages);
+        assert!(
+            page_strs(&asset_pages, find_page_by_label(&asset_pages, "Assets"))[1..3]
+                .iter()
+                .any(|row| row.contains("2.5 USDC")),
+            "asset-mode input must render the exact signed loan-token amount:\n{asset_dump}"
+        );
+        assert_raw_word_pages(&asset_pages, "Shares", &[0u8; 32]);
+        assert_full_address_field_page(&asset_pages, "On Behalf", &on_behalf);
+        assert_full_address_field_page(&asset_pages, "Receiver", &receiver);
+
+        let share_word = u256_from_u64(0x12_3456).0;
+        let shares_call = morpho_call(
+            signature,
+            loan,
+            collateral,
+            oracle,
+            irm,
+            u256_from_u64(860_000_000_000_000_000).0,
+            &[
+                [0u8; 32],
+                share_word,
+                abi_address_word(on_behalf),
+                abi_address_word(receiver),
+            ],
+        );
+        let share_pages =
+            render_erc7730_pages(&tx, &shares_call, &verified, Some(&usdc), &resolver)
+                .expect("render Morpho share withdrawal");
+        let share_dump = dump_pages(&share_pages);
+        assert!(
+            page_strs(
+                &share_pages,
+                find_page_by_label(&share_pages, "Assets")
+            )[1..3]
+                .iter()
+                .any(|row| row.contains("0 USDC")),
+            "share-mode input must preserve the signed zero assets instead of inventing a live-state conversion:\n{share_dump}"
+        );
+        assert_raw_word_pages(&share_pages, "Shares", &share_word);
+    }
+}
+
+#[test]
+fn morpho_withdraw_collateral_amount_binds_collateral_token_not_loan_token() {
+    let res = build_registry();
+    let deployments = [
+        (
+            1u64,
+            hex::decode("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+            hex::decode("C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        ),
+        (
+            8453u64,
+            hex::decode("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+            hex::decode("4200000000000000000000000000000000000006")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        ),
+    ];
+    let oracle = [0x33u8; 20];
+    let irm = [0x44u8; 20];
+    let on_behalf = [0x66u8; 20];
+    let receiver = [0x77u8; 20];
+    let signature =
+        "withdrawCollateral((address,address,address,address,uint256),uint256,address,address)";
+
+    for (chain_id, loan, collateral) in deployments {
+        let entry = find_leaf(res, "calldata-MorphoBlue.json", chain_id);
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Morpho leaf");
+        let calldata = morpho_call(
+            signature,
+            loan,
+            collateral,
+            oracle,
+            irm,
+            u256_from_u64(860_000_000_000_000_000).0,
+            &[
+                u256_from_u64(40_000_000_000_000_000).0,
+                abi_address_word(on_behalf),
+                abi_address_word(receiver),
+            ],
+        );
+        assert_selector_matches(&verified.ir, &calldata, signature);
+        let weth = Erc20Metadata {
+            chain_id,
+            contract: collateral,
+            decimals: 18,
+            name: b"Wrapped Ether",
+            symbol: b"WETH",
+        };
+        let resolver = NameResolver::new();
+        let tx = envelope(chain_id, entry.contract);
+        let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&weth), &resolver)
+            .expect("render Morpho collateral withdrawal");
+        let dump = dump_pages(&pages);
+        assert!(
+            page_strs(&pages, find_page_by_label(&pages, "Assets"))[1..3]
+                .iter()
+                .any(|row| row.contains("0.04 WETH")),
+            "collateral withdrawal must bind assets to marketParams.collateralToken, never loanToken:\n{dump}"
+        );
+        assert_full_address_field_page(&pages, "Loan Token", &loan);
+        assert_full_address_field_page(&pages, "Collateral Token", &collateral);
+        assert_full_address_field_page(&pages, "On Behalf", &on_behalf);
+        assert_full_address_field_page(&pages, "Receiver", &receiver);
+    }
+}
+
+#[test]
+fn morpho_callback_bearing_routes_remain_refused_on_both_deployments() {
+    let res = build_registry();
+    for chain_id in [1u64, 8453] {
+        let entry = find_leaf(res, "calldata-MorphoBlue.json", chain_id);
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Morpho IR parses");
+        for admitted in [
+            "borrow((address,address,address,address,uint256),uint256,uint256,address,address)",
+            "withdraw((address,address,address,address,uint256),uint256,uint256,address,address)",
+            "withdrawCollateral((address,address,address,address,uint256),uint256,address,address)",
+        ] {
+            let selector: [u8; 4] = keccak256(admitted.as_bytes())[..4].try_into().unwrap();
+            assert!(
+                ir.find_format_by_selector(&selector)
+                    .expect("valid Morpho format table")
+                    .is_some(),
+                "callback-free route must remain admitted on chain {chain_id}: {admitted}"
+            );
+        }
+        for refused in [
+            "supply((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+            "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+            "supplyCollateral((address,address,address,address,uint256),uint256,address,bytes)",
+        ] {
+            let selector: [u8; 4] = keccak256(refused.as_bytes())[..4].try_into().unwrap();
+            assert!(
+                ir.find_format_by_selector(&selector)
+                    .expect("valid Morpho format table")
+                    .is_none(),
+                "effect-bearing callback bytes must stay refused on chain {chain_id}: {refused}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -5510,6 +6649,92 @@ fn eip712_v2_two_pass_transcript_binds_static_warning_and_fields() {
 // (its `PermitSingle` / `PermitTransferFrom` nest a `PermitDetails` /
 // `TokenPermissions` struct). Production absence is asserted separately.
 // ───────────────────────────────────────────────────────────────────────
+#[test]
+fn multidimensional_struct_array_bare_marker_declines_on_device() {
+    const SIG: &str = "Batch(Item[][] items,address spender)Item(address token,uint256 amount)";
+    let temp_root =
+        std::env::temp_dir().join(format!("pqsigner-erc7730-rank-belt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_root);
+    std::fs::create_dir_all(&temp_root).expect("create rank-belt fixture dir");
+    let source = temp_root.join("rank-belt.json");
+    let contract = [0x5Au8; 20];
+    let contract_hex: String = contract.iter().map(|byte| format!("{byte:02x}")).collect();
+    std::fs::write(
+        &source,
+        format!(
+            r#"{{
+              "context": {{ "eip712": {{
+                "deployments": [{{ "chainId": 1, "address": "0x{contract_hex}" }}],
+                "domain": {{ "name": "Rank Belt" }}
+              }} }},
+              "metadata": {{ "owner": "Test" }},
+              "display": {{ "formats": {{
+                "{SIG}": {{
+                  "intent": "Batch",
+                  "fields": [
+                    {{ "path": "items.[].amount", "label": "Amount", "format": "tokenAmount",
+                       "params": {{ "tokenPath": "items.[].token" }}, "visible": "always" }},
+                    {{ "path": "spender", "label": "Spender", "format": "addressName",
+                       "visible": "always" }}
+                  ]
+                }}
+              }} }}
+            }}"#
+        ),
+    )
+    .expect("write rank-belt fixture");
+    let mut emitted = dbgen::erc7730::try_compile_one(
+        &source,
+        &dbgen::erc7730::Policy::default(),
+        Some(&temp_root),
+    )
+    .expect("unsupported rank emits authenticated refusal IR");
+    let _ = std::fs::remove_dir_all(&temp_root);
+    let leaf = emitted
+        .pop()
+        .expect("one deployment emits one refusal leaf");
+    assert!(emitted.is_empty());
+
+    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("bare-refusal IR is schema-valid");
+    let format = ir
+        .format_iter()
+        .next()
+        .expect("one format")
+        .expect("valid refusal format");
+    assert_eq!(format.field_count, 1);
+    assert_eq!(format.nested_descent_count, 0);
+    let field = format
+        .fields()
+        .next()
+        .expect("one field")
+        .expect("valid field");
+    let params = pqsigner_erc7730::render::params::parse(&ir, field.param_off)
+        .expect("valid refusal params");
+    assert_eq!(params.nested_struct, Some(&[0x01][..]));
+
+    let verified = VerifiedDescriptor { ir };
+    let primary_type_hash = keccak256(SIG.as_bytes());
+    let encoded_data = [0u8; 64];
+    let result = super::erc7730::render_erc7730_eip712_pages_v3(
+        1,
+        &contract,
+        &primary_type_hash,
+        &encoded_data,
+        &[],
+        &verified,
+        None,
+        &NameResolver::new(),
+    );
+    match result {
+        Err(crate::tx::erc7730_render::RenderErr::Reject(message)) => assert!(
+            message.contains("nested unsupported"),
+            "device must reject specifically on the bare nested marker: {message}"
+        ),
+        Err(other) => panic!("expected bare-marker Reject, got {other:?}"),
+        Ok(_) => panic!("multidimensional struct-array refusal IR must never clear-sign"),
+    }
+}
+
 #[test]
 fn v2_kind_declines_nested_permit2() {
     // Post-Phase-5: a nested-struct format signed via the OLD kind
@@ -6164,12 +7389,12 @@ fn erc2612_permit_with_hidden_owner_is_excluded() {
 // Tier B: canonical dynamic tokenPath framing — Uniswap swaps.
 //
 // Endpoint tokenPaths identify amount metadata; they do not display a complete
-// signed packed route or address array. Router02 also assigns protocol meaning
-// to sentinel recipients and zero amounts. The production source is therefore
-// entirely excluded until PQ1 can authenticate and enforce those semantics.
-// All six declared calls remain known hard refusals. A process-private safe
-// fixture adds `path.[]`, preserving the runtime extraction/framing backstop
-// while requiring all route addresses to reach the display.
+// signed packed route or address array. The two all-static Router02 single-hop
+// calls are admitted only with authenticated recipient/amount/price/value
+// semantics. The four broader routes remain absent and known hard refusals. A
+// process-private safe fixture adds `path.[]`, preserving the runtime
+// extraction/framing backstop while requiring all route addresses to reach the
+// display.
 // ───────────────────────────────────────────────────────────────────────
 const UNI_V3: [u8; 20] = [
     0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
@@ -6178,25 +7403,74 @@ const UNI_V3: [u8; 20] = [
 const TOKEN_IN: [u8; 20] = [0x11; 20];
 const TOKEN_MID: [u8; 20] = [0xAB; 20];
 const TOKEN_OUT: [u8; 20] = [0x22; 20];
+const UNI_EXACT_INPUT_SINGLE: &str =
+    "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))";
+const UNI_EXACT_OUTPUT_SINGLE: &str =
+    "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))";
+
+fn calldata_uniswap_single(
+    signature: &str,
+    recipient: [u8; 20],
+    first_amount: u64,
+    second_amount: u64,
+    sqrt_price_limit_x96: u64,
+) -> Vec<u8> {
+    calldata_static(
+        signature,
+        &[
+            abi_address_word(TOKEN_IN),
+            abi_address_word(TOKEN_OUT),
+            u256_from_u64(3_000).0,
+            abi_address_word(recipient),
+            u256_from_u64(first_amount).0,
+            u256_from_u64(second_amount).0,
+            u256_from_u64(sqrt_price_limit_x96).0,
+        ],
+    )
+}
+
+fn calldata_uniswap_exact_input(recipient: [u8; 20]) -> Vec<u8> {
+    calldata_uniswap_single(UNI_EXACT_INPUT_SINGLE, recipient, 1_500_000, 1_000_000, 0)
+}
+
+fn calldata_uniswap_exact_output(recipient: [u8; 20]) -> Vec<u8> {
+    calldata_uniswap_single(UNI_EXACT_OUTPUT_SINGLE, recipient, 1_000_000, 1_500_000, 0)
+}
 
 #[test]
-fn production_uniswap_router02_is_excluded_but_every_declared_call_stays_known() {
+fn production_uniswap_router02_admits_only_guarded_single_hop_and_keeps_all_calls_known() {
     let registry = build_registry();
-    assert_registry_source_excluded("calldata-UniswapV3Router02.json");
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Router02 IR parses");
+    assert_eq!(ir.format_count(), Ok(2));
+
+    for signature in [UNI_EXACT_INPUT_SINGLE, UNI_EXACT_OUTPUT_SINGLE] {
+        let selector = keccak256(signature.as_bytes());
+        let key: [u8; 4] = selector[..4].try_into().expect("selector width");
+        assert!(
+            ir.find_format_by_selector(&key)
+                .expect("Router02 format table parses")
+                .is_some(),
+            "guarded Router02 single-hop call must be admitted: {signature}"
+        );
+    }
 
     for signature in [
-        "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
-        "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+        UNI_EXACT_INPUT_SINGLE,
+        UNI_EXACT_OUTPUT_SINGLE,
         "exactInput((bytes,address,uint256,uint256))",
         "exactOutput((bytes,address,uint256,uint256))",
         "swapExactTokensForTokens(uint256,uint256,address[],address)",
         "swapTokensForExactTokens(uint256,uint256,address[],address)",
     ] {
+        if signature != UNI_EXACT_INPUT_SINGLE && signature != UNI_EXACT_OUTPUT_SINGLE {
+            assert_selector_excluded(&ir, signature);
+        }
         let digest = keccak256(signature.as_bytes());
         let selector: [u8; 4] = digest[..4].try_into().expect("selector width");
         assert!(
             registry.known_calls.contains(&(1, UNI_V3, selector)),
-            "excluded Router02 call must remain known and fail closed: {signature}"
+            "every Router02 call must remain exactly known: {signature}"
         );
         assert!(
             pqsigner_erc7730::known_calls::may_contain(
@@ -6205,7 +7479,258 @@ fn production_uniswap_router02_is_excluded_but_every_declared_call_stays_known()
                 &UNI_V3,
                 &selector,
             ),
-            "excluded Router02 call must remain in the fail-closed Bloom: {signature}"
+            "every Router02 call must remain in the fail-closed Bloom: {signature}"
+        );
+    }
+}
+
+#[test]
+fn production_uniswap_router02_single_hop_zero_price_and_value_render_literal_recipient() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let recipient = [0x33; 20];
+
+    for (signature, calldata) in [
+        (
+            UNI_EXACT_INPUT_SINGLE,
+            calldata_uniswap_exact_input(recipient),
+        ),
+        (
+            UNI_EXACT_OUTPUT_SINGLE,
+            calldata_uniswap_exact_output(recipient),
+        ),
+    ] {
+        assert_selector_matches(&verified.ir, &calldata, signature);
+        let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver)
+            .unwrap_or_else(|error| panic!("render {signature}: {error:?}"));
+        assert_all_pages_printable(&pages);
+        assert_full_address_field_page(&pages, "Beneficiary", &recipient);
+        assert_raw_word_pages(&pages, "Price limit", &[0u8; 32]);
+        let native_value = page_strs(&pages, find_page_by_label(&pages, "Native value"));
+        assert!(
+            native_value.iter().any(|row| row.contains('0')),
+            "zero outer value must be visible for {signature}: {native_value:?}"
+        );
+    }
+}
+
+#[test]
+fn production_uniswap_router02_sender_sentinel_binds_only_the_authenticated_signer() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let mut sender_sentinel = [0u8; 20];
+    sender_sentinel[19] = 1;
+    let signer = [0x44; 20];
+    let mut mutated_signer = signer;
+    mutated_signer[19] ^= 1;
+
+    for (signature, calldata) in [
+        (
+            UNI_EXACT_INPUT_SINGLE,
+            calldata_uniswap_exact_input(sender_sentinel),
+        ),
+        (
+            UNI_EXACT_OUTPUT_SINGLE,
+            calldata_uniswap_exact_output(sender_sentinel),
+        ),
+    ] {
+        assert!(matches!(
+            render_erc7730_pages(&tx, &calldata, &verified, None, &resolver),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 sender unbound"
+            ))
+        ));
+
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render sentinel {signature}: {error:?}"));
+        assert_full_address_field_page(&rendered.pages, "Beneficiary", &signer);
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "sentinel render receipt must bind every page for {signature}"
+        );
+
+        let mutated = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &calldata,
+            &verified,
+            None,
+            &resolver,
+            &mutated_signer,
+        )
+        .unwrap_or_else(|error| panic!("render mutated signer {signature}: {error:?}"));
+        assert_full_address_field_page(&mutated.pages, "Beneficiary", &mutated_signer);
+        assert_ne!(rendered.pages.as_slice(), mutated.pages.as_slice());
+        assert!(
+            !rendered
+                .transcript_receipt
+                .exact_match(&mutated.transcript_receipt),
+            "signer mutation must change the trusted transcript for {signature}"
+        );
+    }
+}
+
+#[test]
+fn production_uniswap_router02_semantic_guards_and_static_framing_fail_closed() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let recipient = [0x33; 20];
+    let render = |envelope: &Eip1559Tx, calldata: &[u8]| {
+        render_erc7730_pages_with_signer_checked(
+            envelope, calldata, &verified, None, &resolver, &signer,
+        )
+    };
+
+    let mut sender_two = [0u8; 20];
+    sender_two[19] = 2;
+    for calldata in [
+        calldata_uniswap_exact_input(sender_two),
+        calldata_uniswap_exact_output(sender_two),
+    ] {
+        assert!(render(&tx, &calldata).is_err(), "address(2) must refuse");
+    }
+
+    let zero_exact_input =
+        calldata_uniswap_single(UNI_EXACT_INPUT_SINGLE, recipient, 0, 1_000_000, 0);
+    assert!(
+        render(&tx, &zero_exact_input).is_err(),
+        "zero exactInput amount must refuse"
+    );
+
+    for (signature, baseline) in [
+        (
+            UNI_EXACT_INPUT_SINGLE,
+            calldata_uniswap_exact_input(recipient),
+        ),
+        (
+            UNI_EXACT_OUTPUT_SINGLE,
+            calldata_uniswap_exact_output(recipient),
+        ),
+    ] {
+        let mut nonzero_price = baseline.clone();
+        nonzero_price[4 + 6 * 32 + 31] = 1;
+        assert!(
+            render(&tx, &nonzero_price).is_err(),
+            "nonzero price limit must refuse {signature}"
+        );
+
+        let mut funded = envelope(1, UNI_V3);
+        funded.value = u256_from_u64(1);
+        assert!(
+            render(&funded, &baseline).is_err(),
+            "nonzero outer value must refuse {signature}"
+        );
+
+        let mut short = baseline.clone();
+        short.pop();
+        assert!(
+            render(&tx, &short).is_err(),
+            "short static tuple must refuse {signature}"
+        );
+        let mut trailing = baseline.clone();
+        trailing.push(0);
+        assert!(
+            render(&tx, &trailing).is_err(),
+            "trailing static data must refuse {signature}"
+        );
+
+        for (word, label) in [
+            (0usize, "dirty tokenIn address"),
+            (2usize, "dirty uint24 fee"),
+            (3usize, "dirty recipient address"),
+            (6usize, "dirty uint160 price"),
+        ] {
+            let mut dirty = baseline.clone();
+            dirty[4 + word * 32] = 1;
+            assert!(
+                render(&tx, &dirty).is_err(),
+                "{label} must refuse {signature}"
+            );
+        }
+    }
+}
+
+#[test]
+fn production_uniswap_router02_tuple_and_value_mutations_change_transcript_or_refuse() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let recipient = [0x33; 20];
+
+    for (signature, baseline) in [
+        (
+            UNI_EXACT_INPUT_SINGLE,
+            calldata_uniswap_exact_input(recipient),
+        ),
+        (
+            UNI_EXACT_OUTPUT_SINGLE,
+            calldata_uniswap_exact_output(recipient),
+        ),
+    ] {
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &baseline, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render baseline {signature}: {error:?}"));
+
+        for word in 0..7usize {
+            let mut mutated_calldata = baseline.clone();
+            mutated_calldata[4 + word * 32 + 31] ^= 1;
+            match render_erc7730_pages_with_signer_checked(
+                &tx,
+                &mutated_calldata,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            ) {
+                Ok(mutated) => {
+                    assert_ne!(
+                        rendered.pages.as_slice(),
+                        mutated.pages.as_slice(),
+                        "tuple word {word} mutation must change pages for {signature}"
+                    );
+                    assert!(
+                        !rendered
+                            .transcript_receipt
+                            .exact_match(&mutated.transcript_receipt),
+                        "tuple word {word} mutation must change receipt for {signature}"
+                    );
+                }
+                Err(_) => assert_eq!(
+                    word, 6,
+                    "only the guarded price word should reject a canonical low-byte mutation for {signature}"
+                ),
+            }
+        }
+
+        let mut funded = envelope(1, UNI_V3);
+        funded.value = u256_from_u64(1);
+        assert!(
+            render_erc7730_pages_with_signer_checked(
+                &funded, &baseline, &verified, None, &resolver, &signer,
+            )
+            .is_err(),
+            "outer value mutation must refuse {signature}"
         );
     }
 }
@@ -6312,7 +7837,9 @@ fn render_safe_uni(calldata: &[u8], token: Option<&Erc20Metadata<'_>>) -> Pages 
 
 fn assert_uniswap_router_call_excluded_but_known(signature: &str) {
     let registry = build_registry();
-    assert_registry_source_excluded("calldata-UniswapV3Router02.json");
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Router02 IR parses");
+    assert_selector_excluded(&ir, signature);
     let digest = keccak256(signature.as_bytes());
     let selector: [u8; 4] = digest[..4].try_into().expect("selector width");
     assert!(
@@ -6472,18 +7999,21 @@ fn v3_all_nested_eip712_leaves_are_panic_safe_and_fail_closed() {
     );
 }
 
-/// Nested `tokenAmount` FULL vocabulary (threshold + message) in a top-level
-/// array-of-struct: flyingtulip SessionManager `Session(...AssetLimit[] limits...)`.
-/// Each `AssetLimit(token, limit)` renders `limit` as a tokenAmount whose
-/// `threshold = max-uint` maps to the message "Unlimited" — the same "approve
-/// unlimited" display the top-level path has, now reachable inside a nested
-/// element. Proves the dbgen nested-subfield vocabulary extension end-to-end
-/// (element 0 = a normal limit renders the number; element 1 = max-uint renders
-/// "Unlimited").
+/// The two curated FlyingTulip `Session` descriptors are production leaves for
+/// exactly seven domain/deployment contexts. Verify every Merkle leaf and its
+/// EIP-712 binding, then render every signed member from the real catalogue.
+/// The nested `AssetLimit(token, limit)` vocabulary includes the max-uint
+/// threshold message (`Unlimited`), while the formerly-hidden salt is shown as
+/// a complete raw word. Exhaustive one-byte mutations must either change the
+/// trusted pages or make the request fail closed.
 #[test]
-fn v3_session_manager_nested_tokenamount_threshold_renders_unlimited() {
-    use super::erc7730::nested::{hash_struct, hash_struct_array};
-    let leaf = safe_visible_nested_leaf("eip712-SessionManager-FT.json", 1);
+fn v3_production_session_manager_eip712_is_complete_and_mutation_bound() {
+    use std::collections::BTreeSet;
+
+    use super::erc7730::nested::hash_struct_array;
+
+    const FT_SOURCE: &str = "eip712-SessionManager-FT.json";
+    const FTUSD_SOURCE: &str = "eip712-SessionManager-ftUSD.json";
     let pth = hx32("10e2e916a5d944a9c9fa82748951934e444783850c4cb366694967607dbd2fc5");
     let asset_limit_th = hx32("269888c0029efe9424c548a264e5ee66803094ad203b068ca44e278b02db9d6f");
     let wa = |a: [u8; 20]| {
@@ -6504,6 +8034,8 @@ fn v3_session_manager_nested_tokenamount_threshold_renders_unlimited() {
         0xC0u8, 0x2a, 0xaA, 0x39, 0xb2, 0x23, 0xFE, 0x8D, 0x0A, 0x0e, 0x5C, 0x4F, 0x27, 0xeA, 0xD9,
         0x08, 0x3C, 0x75, 0x6C, 0xc2,
     ];
+    let owner = [0x71; 20];
+    let delegate = [0x72; 20];
 
     // AssetLimit: token, limit (2 words). el0 normal, el1 = max-uint → "Unlimited".
     let mut el0 = std::vec![0u8; 64];
@@ -6513,13 +8045,12 @@ fn v3_session_manager_nested_tokenamount_threshold_renders_unlimited() {
     el1[0..32].copy_from_slice(&wa(weth));
     el1[32..64].copy_from_slice(&[0xFFu8; 32]); // max-uint => >= threshold => "Unlimited"
     let limits_word = hash_struct_array(&asset_limit_th, &[&el0[..], &el1[..]]);
-    let _ = hash_struct; // (single-struct primitive unused here; array path only)
 
     // Session top_ed (8 words): owner, delegate, validAfter, validUntil, maxCalls,
     // maxFeeBps, limits, salt.
     let mut top_ed = std::vec![0u8; 256];
-    top_ed[0..32].copy_from_slice(&wa([0x71; 20])); // owner
-    top_ed[32..64].copy_from_slice(&wa([0x72; 20])); // delegate
+    top_ed[0..32].copy_from_slice(&wa(owner));
+    top_ed[32..64].copy_from_slice(&wa(delegate));
     top_ed[64..96].copy_from_slice(&wu(1_735_689_600)); // validAfter (2025)
     top_ed[96..128].copy_from_slice(&wu(1_767_225_600)); // validUntil (2026)
     top_ed[128..160].copy_from_slice(&wu(50)); // maxCalls
@@ -6535,41 +8066,225 @@ fn v3_session_manager_nested_tokenamount_threshold_renders_unlimited() {
     blob.extend_from_slice(&64u16.to_be_bytes());
     blob.extend_from_slice(&el1);
 
-    let render = |ed: &[u8], b: &[u8]| {
-        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("SessionManager IR parses");
-        let verified = VerifiedDescriptor { ir };
+    let expected: BTreeSet<(String, u64, String)> = [
+        (FT_SOURCE, 1, "f9f3ddf2e96cabef94e2634c326dc6dde99360f8"),
+        (FT_SOURCE, 146, "109ae72778a0260571b9767477204f1ce41fbdff"),
+        (FTUSD_SOURCE, 1, "2daf4b445e7d659100b22a15c3eeb10e64ac5dc9"),
+        (FTUSD_SOURCE, 56, "c85cb743f72b3a9bb594faa7d46ee1efc61b7a42"),
+        (
+            FTUSD_SOURCE,
+            146,
+            "2daf4b445e7d659100b22a15c3eeb10e64ac5dc9",
+        ),
+        (
+            FTUSD_SOURCE,
+            146,
+            "52ef449d44cc4205fa44bf644dee15611fc30734",
+        ),
+        (
+            FTUSD_SOURCE,
+            43_114,
+            "176592c8ed3f2d94ce4c3f1a4cff7d068176ac54",
+        ),
+    ]
+    .into_iter()
+    .map(|(source, chain_id, contract)| (source.to_string(), chain_id, contract.to_string()))
+    .collect();
+
+    let registry = build_registry();
+    let entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.source.file_name().and_then(|name| name.to_str()),
+                Some(FT_SOURCE) | Some(FTUSD_SOURCE)
+            )
+        })
+        .collect();
+    let observed: BTreeSet<_> = entries
+        .iter()
+        .map(|entry| {
+            (
+                entry
+                    .source
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("SessionManager source filename")
+                    .to_string(),
+                entry.chain_id,
+                hex::encode(entry.contract),
+            )
+        })
+        .collect();
+    assert_eq!(
+        observed, expected,
+        "exact curated domain/deployment inventory"
+    );
+    assert_eq!(entries.len(), 7);
+
+    let mut domain_separators = BTreeSet::new();
+    for entry in entries {
+        let source_name = entry
+            .source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("SessionManager source filename");
+        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &registry.root)
+            .expect("production SessionManager Merkle leaf verifies");
+        assert!(matches!(verified.ir.context_kind, ContextKind::Eip712));
+        assert_eq!(verified.ir.chain_id, entry.chain_id);
+        assert_eq!(verified.ir.contract, entry.contract);
+        assert!(domain_separators.insert(verified.ir.domain_separator));
+        assert_eq!(
+            cross_check_eip712(&verified.ir, entry.chain_id, &verified.ir.domain_separator,),
+            Ok(())
+        );
+        assert_eq!(
+            cross_check_eip712(
+                &verified.ir,
+                entry.chain_id.wrapping_add(1),
+                &verified.ir.domain_separator,
+            ),
+            Err(BindingError::ChainIdMismatch)
+        );
+        let mut wrong_domain = verified.ir.domain_separator;
+        wrong_domain[0] ^= 0x01;
+        assert_eq!(
+            cross_check_eip712(&verified.ir, entry.chain_id, &wrong_domain),
+            Err(BindingError::DomainSeparatorMismatch)
+        );
+
+        let mut formats = verified.ir.format_iter();
+        let format = formats
+            .next()
+            .expect("one Session format")
+            .expect("valid Session format");
+        assert!(
+            formats.next().is_none(),
+            "one format per Session descriptor"
+        );
+        assert_eq!(format.type_hash, pth);
+        assert_eq!(format.static_head_words, 8);
+        assert_eq!(format.field_count, 8);
+        assert_eq!(format.nested_descent_count, 1);
+
         let resolver = NameResolver::new();
-        super::erc7730::render_erc7730_eip712_pages_v3(
-            1, &[0u8; 20], &pth, ed, b, &verified, None, &resolver,
-        )
-    };
-    let pages = render(&top_ed, &blob).expect("valid SessionManager clear-signs");
-    assert_all_pages_printable(&pages);
-    let dump = dump_pages(&pages).to_lowercase();
-    assert!(dump.contains("7171717171"), "owner shown:\n{dump}");
-    assert!(dump.contains("7272727272"), "delegate shown:\n{dump}");
-    assert!(
-        dump.contains("2025") && dump.contains("2026"),
-        "validAfter/Until dates:\n{dump}"
+        let render = |type_hash: &[u8; 32], ed: &[u8], nested: &[u8]| {
+            super::erc7730::render_erc7730_eip712_pages_v3(
+                entry.chain_id,
+                &entry.contract,
+                type_hash,
+                ed,
+                nested,
+                &verified,
+                None,
+                &resolver,
+            )
+        };
+        let pages = render(&pth, &top_ed, &blob)
+            .unwrap_or_else(|error| panic!("{source_name} must clear-sign: {error:?}"));
+        assert_all_pages_printable(&pages);
+        assert_full_address_field_page(&pages, "Owner", &owner);
+        assert_full_address_field_page(&pages, "Delegate", &delegate);
+        assert_raw_word_pages(&pages, "Max calls", &wu(50));
+        assert_raw_word_pages(&pages, "Salt", &[0xAB; 32]);
+
+        let dump = dump_pages(&pages).to_lowercase();
+        assert!(
+            dump.contains("2025-01-01") && dump.contains("2026-01-01"),
+            "both exact validity dates render:\n{dump}"
+        );
+        let max_fee = page_strs(&pages, find_page_by_label(&pages, "Max fee")).join(" ");
+        assert!(
+            max_fee.to_lowercase().contains("30 bps"),
+            "maxFeeBps renders with its unit: {max_fee:?}\n{dump}"
+        );
+        assert!(
+            dump.contains("1000001"),
+            "element 0 finite limit renders the number:\n{dump}"
+        );
+        assert!(
+            dump.contains("unlimited"),
+            "element 1 max-uint renders Unlimited:\n{dump}"
+        );
+        assert!(
+            dump.contains("a0b86991c6218b") && dump.contains("c02aaa39"),
+            "both exact nested token identities render:\n{dump}"
+        );
+        assert!(
+            dump.contains("item 1 of 2") && dump.contains("item 2 of 2"),
+            "per-element dividers render:\n{dump}"
+        );
+        if source_name == FT_SOURCE {
+            assert!(
+                dump.contains("create session"),
+                "FT intent renders:\n{dump}"
+            );
+        } else {
+            assert!(
+                dump.contains("create ftusd ses") && dump.contains("| sion |"),
+                "ftUSD intent renders:\n{dump}"
+            );
+        }
+
+        // Every byte in EIP-712 encodeData is signed. A one-byte change must
+        // therefore alter at least one trusted page or refuse the request.
+        for byte in 0..top_ed.len() {
+            let mut changed_ed = top_ed.clone();
+            changed_ed[byte] ^= 0x01;
+            if let Ok(changed_pages) = render(&pth, &changed_ed, &blob) {
+                assert_ne!(
+                    changed_pages.as_slice(),
+                    pages.as_slice(),
+                    "signed encodeData byte {byte} was not represented for {source_name} chain {}",
+                    entry.chain_id,
+                );
+            }
+        }
+        // Every nested byte is committed by the displayed limits hash; with
+        // the top-level commitment fixed, each one-byte change must decline.
+        for byte in 0..blob.len() {
+            let mut changed_blob = blob.clone();
+            changed_blob[byte] ^= 0x01;
+            assert!(
+                render(&pth, &top_ed, &changed_blob).is_err(),
+                "unbound nested byte {byte} rendered for {source_name} chain {}",
+                entry.chain_id,
+            );
+        }
+
+        let mut wrong_type = pth;
+        wrong_type[0] ^= 0x01;
+        assert!(render(&wrong_type, &top_ed, &blob).is_err());
+        assert!(render(&pth, &top_ed[..top_ed.len() - 1], &blob).is_err());
+        let mut trailing_ed = top_ed.clone();
+        trailing_ed.push(0);
+        assert!(render(&pth, &trailing_ed, &blob).is_err());
+
+        // Empty and over-cap arrays are still cryptographically well-bound,
+        // but the bounded renderer deliberately refuses them.
+        let empty_elements: [&[u8]; 0] = [];
+        let mut empty_ed = top_ed.clone();
+        empty_ed[192..224].copy_from_slice(&hash_struct_array(&asset_limit_th, &empty_elements));
+        assert!(render(&pth, &empty_ed, &[0, 0]).is_err());
+
+        let seven_elements = vec![el0.clone(); 7];
+        let seven_refs: Vec<&[u8]> = seven_elements.iter().map(Vec::as_slice).collect();
+        let mut seven_ed = top_ed.clone();
+        seven_ed[192..224].copy_from_slice(&hash_struct_array(&asset_limit_th, &seven_refs));
+        let mut seven_blob = Vec::new();
+        seven_blob.extend_from_slice(&7u16.to_be_bytes());
+        for element in &seven_elements {
+            seven_blob.extend_from_slice(&64u16.to_be_bytes());
+            seven_blob.extend_from_slice(element);
+        }
+        assert!(render(&pth, &seven_ed, &seven_blob).is_err());
+    }
+    assert_eq!(
+        domain_separators.len(),
+        7,
+        "every deployment/domain is unique"
     );
-    assert!(
-        dump.contains("1000001"),
-        "element 0 finite limit renders the number:\n{dump}"
-    );
-    assert!(
-        dump.contains("unlimited"),
-        "element 1 (max-uint) renders the threshold message 'Unlimited':\n{dump}"
-    );
-    assert!(
-        dump.contains("item 1 of 2") && dump.contains("item 2 of 2"),
-        "per-element dividers:\n{dump}"
-    );
-    assert!(
-        dump.contains("abababab"),
-        "formerly-hidden salt must be visible in the safe fixture:\n{dump}"
-    );
-    // Flip a nested word (element 1's limit) → array binding breaks → decline.
-    let mut b = blob.clone();
-    b[2 + 2 + 64 + 2 + 40] ^= 0x01; // inside el1's limit word
-    assert!(render(&top_ed, &b).is_err(), "flip el1 limit declines");
 }

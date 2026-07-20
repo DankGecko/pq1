@@ -302,6 +302,21 @@ const PARAM_TERMINAL_KIND: u8 = 0x47;
 /// preserves its one-byte wire shape while letting the device reject dirty
 /// zero/sign extension on narrow integers.
 const PARAM_INTEGER_WIDTH: u8 = 0x48;
+/// Standard ERC-7730 `addressName.params.senderAddress` sentinel list. The
+/// payload is one or more descriptor-order 20-byte addresses concatenated
+/// without a count byte. Emission is gated by an exact semantic enrollment;
+/// merely publishing `senderAddress` in a descriptor grants no substitution
+/// authority.
+const PARAM_SENDER_ADDRESS: u8 = 0x49;
+/// Authenticated field-local ABI-word predicate. Payload:
+/// `operation:u8 || canonical_word:[u8;32]`, where operation is one of the
+/// `WORD_GUARD_*` constants below. The device evaluates every guard in a
+/// format-wide preflight before painting trusted pages.
+const PARAM_WORD_GUARD: u8 = 0x4A;
+const WORD_GUARD_EQ: u8 = 0x00;
+const WORD_GUARD_NE: u8 = 0x01;
+const WORD_GUARD_PAYLOAD_LEN: usize = 33;
+const MAX_SENDER_ADDRESSES: usize = 2;
 const DYNAMIC_KIND_STRING: u8 = 0x01;
 const INTERPOLATED_INTENT_VERSION: u8 = 0x01;
 const MAX_INTERPOLATED_SUBSTITUTIONS: usize = 3;
@@ -311,6 +326,176 @@ const MAX_INTERPOLATED_INTENT_LEN: usize = 32;
 /// Matches the on-device `ir::MAX_NESTING`; a type deeper than this (or a
 /// malformed cyclic one) is refused rather than reasoned about.
 const MAX_STRUCT_DEPTH: usize = 8;
+
+// ─────────────────────────────────────────────────────────────────────
+// Exact semantic enrollments.
+// ─────────────────────────────────────────────────────────────────────
+
+/// SHA-256(JCS(resolved descriptor JSON)) after both curated Router02 copies
+/// gained the final visible `@.value` fields. Any descriptor-byte semantic
+/// drift changes this binding and returns the formats to fail-closed exclusion
+/// until an owner reviews and updates the enrollment.
+const ROUTER02_DESCRIPTOR_HASH: [u8; 32] = [
+    0xb3, 0x7e, 0xb5, 0x21, 0xfd, 0x3c, 0x92, 0x0a, 0xaa, 0xd3, 0xa3, 0x95, 0xc4, 0x82, 0x09, 0xf0,
+    0x7d, 0x0b, 0x0f, 0x00, 0x50, 0x81, 0x28, 0x81, 0x5d, 0x6f, 0x1b, 0x41, 0x23, 0xac, 0xcd, 0x62,
+];
+
+/// SHA-256(JCS(resolved descriptor JSON)) for the curated Lido
+/// WithdrawalQueueERC721 descriptor. The two batch-request routes may use the
+/// standard zero-address `senderAddress` sentinel only while every descriptor
+/// byte, deployment and selector still matches this reviewed enrollment.
+const LIDO_QUEUE_DESCRIPTOR_HASH: [u8; 32] = [
+    0x68, 0xf0, 0x49, 0x5c, 0x61, 0xd4, 0x94, 0x10, 0x0c, 0x46, 0x5a, 0x54, 0xbe, 0x6f, 0xdb, 0x26,
+    0xb5, 0x4d, 0xb1, 0x86, 0x86, 0x48, 0xf9, 0x85, 0x38, 0x47, 0xda, 0xfa, 0xa4, 0x51, 0x9e, 0x1f,
+];
+
+const ROUTER02_MAINNET: [u8; 20] = [
+    0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
+    0x86, 0x65, 0xfc, 0x45,
+];
+const LIDO_QUEUE_MAINNET: [u8; 20] = [
+    0x88, 0x9e, 0xdc, 0x2e, 0xda, 0xb5, 0xf4, 0x0e, 0x90, 0x2b, 0x86, 0x4a, 0xd4, 0xd7, 0xad, 0xe8,
+    0xe4, 0x12, 0xf9, 0xb1,
+];
+const ADDRESS_ZERO: [u8; 20] = [0u8; 20];
+const ADDRESS_ONE: [u8; 20] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+const ADDRESS_TWO_WORD: [u8; 32] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
+];
+const ZERO_WORD: [u8; 32] = [0u8; 32];
+const ROUTER02_SENDER_SENTINELS: [[u8; 20]; 1] = [ADDRESS_ONE];
+const LIDO_QUEUE_SENDER_SENTINELS: [[u8; 20]; 1] = [ADDRESS_ZERO];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SemanticSenderEnrollment {
+    path: &'static str,
+    terminal_type: &'static str,
+    sentinels: &'static [[u8; 20]],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SemanticWordGuard {
+    path: &'static str,
+    terminal_type: &'static str,
+    operation: u8,
+    word: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SemanticFormatEnrollment {
+    descriptor_hash: [u8; 32],
+    chain_id: u64,
+    contract: [u8; 20],
+    canonical_signature: &'static str,
+    selector: [u8; 4],
+    sender: SemanticSenderEnrollment,
+    guards: &'static [SemanticWordGuard],
+}
+
+const ROUTER02_EXACT_INPUT_GUARDS: [SemanticWordGuard; 4] = [
+    SemanticWordGuard {
+        path: "params.recipient",
+        terminal_type: "address",
+        operation: WORD_GUARD_NE,
+        word: ADDRESS_TWO_WORD,
+    },
+    SemanticWordGuard {
+        path: "params.amountIn",
+        terminal_type: "uint256",
+        operation: WORD_GUARD_NE,
+        word: ZERO_WORD,
+    },
+    SemanticWordGuard {
+        path: "params.sqrtPriceLimitX96",
+        terminal_type: "uint160",
+        operation: WORD_GUARD_EQ,
+        word: ZERO_WORD,
+    },
+    SemanticWordGuard {
+        path: "@.value",
+        terminal_type: "uint256",
+        operation: WORD_GUARD_EQ,
+        word: ZERO_WORD,
+    },
+];
+
+const ROUTER02_EXACT_OUTPUT_GUARDS: [SemanticWordGuard; 3] = [
+    SemanticWordGuard {
+        path: "params.recipient",
+        terminal_type: "address",
+        operation: WORD_GUARD_NE,
+        word: ADDRESS_TWO_WORD,
+    },
+    SemanticWordGuard {
+        path: "params.sqrtPriceLimitX96",
+        terminal_type: "uint160",
+        operation: WORD_GUARD_EQ,
+        word: ZERO_WORD,
+    },
+    SemanticWordGuard {
+        path: "@.value",
+        terminal_type: "uint256",
+        operation: WORD_GUARD_EQ,
+        word: ZERO_WORD,
+    },
+];
+
+const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 4] = [
+    SemanticFormatEnrollment {
+        descriptor_hash: ROUTER02_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: ROUTER02_MAINNET,
+        canonical_signature:
+            "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+        selector: [0x04, 0xe4, 0x5a, 0xaf],
+        sender: SemanticSenderEnrollment {
+            path: "params.recipient",
+            terminal_type: "address",
+            sentinels: &ROUTER02_SENDER_SENTINELS,
+        },
+        guards: &ROUTER02_EXACT_INPUT_GUARDS,
+    },
+    SemanticFormatEnrollment {
+        descriptor_hash: ROUTER02_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: ROUTER02_MAINNET,
+        canonical_signature:
+            "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+        selector: [0x50, 0x23, 0xb4, 0xdf],
+        sender: SemanticSenderEnrollment {
+            path: "params.recipient",
+            terminal_type: "address",
+            sentinels: &ROUTER02_SENDER_SENTINELS,
+        },
+        guards: &ROUTER02_EXACT_OUTPUT_GUARDS,
+    },
+    SemanticFormatEnrollment {
+        descriptor_hash: LIDO_QUEUE_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: LIDO_QUEUE_MAINNET,
+        canonical_signature: "requestWithdrawals(uint256[],address)",
+        selector: [0xd6, 0x68, 0x10, 0x42],
+        sender: SemanticSenderEnrollment {
+            path: "#._owner",
+            terminal_type: "address",
+            sentinels: &LIDO_QUEUE_SENDER_SENTINELS,
+        },
+        guards: &[],
+    },
+    SemanticFormatEnrollment {
+        descriptor_hash: LIDO_QUEUE_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: LIDO_QUEUE_MAINNET,
+        canonical_signature: "requestWithdrawalsWstETH(uint256[],address)",
+        selector: [0x19, 0xaa, 0x62, 0x57],
+        sender: SemanticSenderEnrollment {
+            path: "#._owner",
+            terminal_type: "address",
+            sentinels: &LIDO_QUEUE_SENDER_SENTINELS,
+        },
+        guards: &[],
+    },
+];
 
 // Visibility byte values (matching `pqsigner_erc7730::ir::Visibility`).
 const VIS_ALWAYS: u8 = 0x00;
@@ -3205,6 +3390,27 @@ fn compile_one_format(
     // reassuring parameter-less clear-sign.
     check_field_visibility(sig, fmt, &parsed, context_kind)?;
 
+    // A nested EIP-712 struct's top-level encodeData word is its hashStruct,
+    // but clear-signing expands that commitment into member pages. Once the
+    // ordinary visibility rules have accepted the format, require every
+    // elementary nested member to be declared at its exact path. Keeping this
+    // after the visibility gate preserves the established first-error receipts
+    // for corpus formats that were already refused for an explicit hide, while
+    // ensuring no otherwise-eligible partial nested display can be pinned.
+    let mut nested_rank_refusal = false;
+    if context_kind == CTX_EIP712 {
+        match check_eip712_nested_field_completeness(sig, fmt, &parsed) {
+            Ok(()) => {}
+            Err(NestedCompletenessError::UnsupportedStructuredArrayRank(_)) => {
+                // Preserve the build-time rank rejection as a typed outcome,
+                // then emit only the device's canonical hard-refusal marker.
+                // The independent lowerer must also reject the shape below.
+                nested_rank_refusal = true;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+
     // Selector / discriminator slot — 4 bytes. For EIP-712 we also keep
     // the FULL 32-byte primary-type hash so the on-device renderer can
     // bind all 32 bytes (audit M-5), not just the 4-byte prefix it
@@ -3232,6 +3438,24 @@ fn compile_one_format(
         let h = eip712_type_hash.expect("eip712 type hash computed above");
         [h[0], h[1], h[2], h[3]]
     };
+
+    let semantic_enrollment = if context_kind == CTX_CONTRACT {
+        semantic_enrollment_for(
+            ctx.descriptor_hash,
+            interpolation_deployment,
+            canonical_contract_signature
+                .as_deref()
+                .expect("contract signature computed above"),
+            selector,
+        )
+    } else {
+        None
+    };
+    if format_declares_sender_address(fmt) && semantic_enrollment.is_none() {
+        return Err(format!(
+            "format `{sig}` declares senderAddress without an exact descriptor/deployment/selector semantic enrollment"
+        ));
+    }
 
     // Sanity: field count.
     if fmt.fields.len() > MAX_FIELDS_PER_FORMAT {
@@ -3281,9 +3505,19 @@ fn compile_one_format(
     // declines the whole format to blind-sign. `nested_descent_count` is the E1
     // reconciliation pin: the number of nested descent points the device MUST
     // bind, derived HERE (independent of the render traversal).
+    let mut emitted_bare_nested_refusal = false;
     let (mut compiled, nested_descent_count): (Vec<CompiledFieldOut>, u8) = if has_nested_struct {
         match try_compile_eip712_nested(sig, fmt, &parsed, ctx, pool, enum_offsets)? {
+            Some(_) if nested_rank_refusal => {
+                return Err(format!(
+                    "format `{sig}`: nested rank admission rejected the shape but the independent lowerer produced an active anchor"
+                ));
+            }
             Some(res) => res,
+            None if nested_rank_refusal => {
+                emitted_bare_nested_refusal = true;
+                (compile_bare_nested_refusal(pool)?, 0)
+            }
             None => (
                 compile_flat_fields(
                     sig,
@@ -3314,25 +3548,40 @@ fn compile_one_format(
         )
     };
 
+    if let Some(enrollment) = semantic_enrollment {
+        apply_semantic_enrollment(
+            sig,
+            fmt,
+            context_kind,
+            &parsed,
+            ctx,
+            pool,
+            &mut compiled,
+            enrollment,
+        )?;
+    }
+
     // `interpolatedIntent` is presentation derived from values that keep their
     // ordinary field pages. The host resolves braces to final emitted field
     // ordinals; the device receives only a tiny authenticated token program.
     // Valid upstream shapes outside this first scalar-amount subset retain the
     // descriptor's static `intent` and emit no program. Once emitted, however,
     // runtime witness failure is fatal and can never fall back to static copy.
-    if let Some(program) = compile_interpolated_intent(
-        sig,
-        fmt,
-        context_kind,
-        &parsed,
-        ctx,
-        interpolation_deployment,
-    )? {
-        let first = compiled
-            .first_mut()
-            .ok_or_else(|| format!("format `{sig}` interpolation has no emitted field"))?;
-        first.param_off =
-            pool.append_param_tlv(first.param_off, PARAM_INTERPOLATED_INTENT, &program)?;
+    if !emitted_bare_nested_refusal {
+        if let Some(program) = compile_interpolated_intent(
+            sig,
+            fmt,
+            context_kind,
+            &parsed,
+            ctx,
+            interpolation_deployment,
+        )? {
+            let first = compiled
+                .first_mut()
+                .ok_or_else(|| format!("format `{sig}` interpolation has no emitted field"))?;
+            first.param_off =
+                pool.append_param_tlv(first.param_off, PARAM_INTERPOLATED_INTENT, &program)?;
+        }
     }
 
     // Emit format header.
@@ -3372,6 +3621,292 @@ struct CompiledFieldOut {
     label: Vec<u8>,
     path_off: u16,
     param_off: u16,
+}
+
+fn semantic_enrollment_for(
+    descriptor_hash: [u8; 32],
+    deployment: Option<&InterpolationDeployment<'_>>,
+    canonical_signature: &str,
+    selector: [u8; 4],
+) -> Option<&'static SemanticFormatEnrollment> {
+    let deployment = deployment?;
+    SEMANTIC_FORMAT_ENROLLMENTS.iter().find(|entry| {
+        entry.descriptor_hash == descriptor_hash
+            && entry.chain_id == deployment.chain_id
+            && entry.contract == deployment.contract
+            && entry.canonical_signature == canonical_signature
+            && entry.selector == selector
+    })
+}
+
+fn format_declares_sender_address(fmt: &Format) -> bool {
+    fmt.fields.iter().any(|field| {
+        field
+            .params
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|params| params.contains_key("senderAddress"))
+    })
+}
+
+fn compile_sender_addresses(
+    value: &serde_json::Value,
+    ctx: &CompileCtx,
+) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut push = |raw: &str, index: usize| -> Result<(), String> {
+        let address = resolve_address_or_const(raw, ctx)?;
+        if out
+            .chunks_exact(20)
+            .any(|existing| existing == address.as_slice())
+        {
+            return Err(format!(
+                "addressName.senderAddress[{index}] duplicates an earlier address"
+            ));
+        }
+        out.extend_from_slice(&address);
+        Ok(())
+    };
+
+    match value {
+        serde_json::Value::String(address) => push(address, 0)?,
+        serde_json::Value::Array(addresses) => {
+            if addresses.is_empty() {
+                return Err("addressName.senderAddress list must not be empty".to_string());
+            }
+            if addresses.len() > MAX_SENDER_ADDRESSES {
+                return Err(format!(
+                    "addressName.senderAddress list has {} entries (max {MAX_SENDER_ADDRESSES})",
+                    addresses.len()
+                ));
+            }
+            for (index, value) in addresses.iter().enumerate() {
+                let address = value.as_str().ok_or_else(|| {
+                    format!("addressName.senderAddress[{index}] must be a string")
+                })?;
+                push(address, index)?;
+            }
+        }
+        _ => {
+            return Err(
+                "addressName.senderAddress must be an address string or non-empty address array"
+                    .to_string(),
+            )
+        }
+    }
+    Ok(out)
+}
+
+fn semantic_terminal_type_for_path(
+    path: &str,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+) -> Result<String, String> {
+    match path.trim() {
+        "@.to" | "@.from" => Ok("address".to_string()),
+        "@.value" | "@.chainId" | "@.nonce" => Ok("uint256".to_string()),
+        path if path.starts_with('@') => Err(format!(
+            "semantic enrollment names unsupported container path `{path}`"
+        )),
+        path => rendered_path_terminal_type(path, context_kind, parsed)?
+            .ok_or_else(|| format!("semantic enrollment path `{path}` has no terminal type")),
+    }
+}
+
+fn validate_semantic_guard_word(
+    guard: &SemanticWordGuard,
+    semantics: TerminalSemantics,
+) -> Result<(), String> {
+    if !matches!(guard.operation, WORD_GUARD_EQ | WORD_GUARD_NE) {
+        return Err(format!(
+            "semantic guard `{}` has unknown operation 0x{:02x}",
+            guard.path, guard.operation
+        ));
+    }
+    match semantics.kind {
+        TerminalKind::Address => {
+            if guard.word[..12].iter().any(|&byte| byte != 0) {
+                return Err(format!(
+                    "semantic guard `{}` has a non-canonical address word",
+                    guard.path
+                ));
+            }
+        }
+        TerminalKind::Unsigned => {
+            let width = semantics.integer_width_bytes.ok_or_else(|| {
+                format!("semantic guard `{}` unsigned type has no width", guard.path)
+            })? as usize;
+            if guard.word[..32 - width].iter().any(|&byte| byte != 0) {
+                return Err(format!(
+                    "semantic guard `{}` exceeds its authenticated unsigned width",
+                    guard.path
+                ));
+            }
+        }
+        other => {
+            return Err(format!(
+                "semantic guard `{}` terminal {other:?} is not a static Address/Unsigned word",
+                guard.path
+            ))
+        }
+    }
+    Ok(())
+}
+
+/// Validate and lower one exact source-level semantic enrollment.
+///
+/// Every enrolled path must exist exactly once in the descriptor's visible
+/// flat field list and must retain the enrolled Solidity terminal type. This
+/// deliberately refuses synthetic or hidden guard-only fields: the user sees
+/// the same signed word whose predicate grants clear-signing authority.
+fn apply_semantic_enrollment(
+    sig: &str,
+    fmt: &Format,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+    ctx: &CompileCtx,
+    pool: &mut Pool,
+    compiled: &mut [CompiledFieldOut],
+    enrollment: &SemanticFormatEnrollment,
+) -> Result<(), String> {
+    if context_kind != CTX_CONTRACT || compiled.len() != fmt.fields.len() {
+        return Err(format!(
+            "format `{sig}` semantic enrollment requires one flat contract field per source field"
+        ));
+    }
+
+    let sender_fields: Vec<usize> = fmt
+        .fields
+        .iter()
+        .enumerate()
+        .filter_map(|(index, field)| {
+            field
+                .params
+                .as_ref()
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|params| params.contains_key("senderAddress"))
+                .then_some(index)
+        })
+        .collect();
+    if sender_fields.len() != 1 {
+        return Err(format!(
+            "format `{sig}` semantic enrollment requires exactly one senderAddress field, found {}",
+            sender_fields.len()
+        ));
+    }
+    let sender_index = sender_fields[0];
+    let sender_field = &fmt.fields[sender_index];
+    if sender_field.path.as_deref() != Some(enrollment.sender.path) {
+        return Err(format!(
+            "format `{sig}` senderAddress path {:?} does not match enrollment `{}`",
+            sender_field.path, enrollment.sender.path
+        ));
+    }
+    if parse_format_name(sender_field.format.as_deref().unwrap_or("raw"))? != FMT_ADDRESS_NAME {
+        return Err(format!(
+            "format `{sig}` senderAddress field must use addressName"
+        ));
+    }
+    if !matches!(sender_field.visible.as_deref(), None | Some("always")) {
+        return Err(format!(
+            "format `{sig}` senderAddress field must be always visible"
+        ));
+    }
+    let sender_type =
+        semantic_terminal_type_for_path(enrollment.sender.path, context_kind, parsed)?;
+    if sender_type != enrollment.sender.terminal_type || sender_type != "address" {
+        return Err(format!(
+            "format `{sig}` senderAddress terminal `{sender_type}` does not match enrolled `{}`",
+            enrollment.sender.terminal_type
+        ));
+    }
+    if enrollment.sender.sentinels.is_empty()
+        || enrollment.sender.sentinels.len() > MAX_SENDER_ADDRESSES
+    {
+        return Err(format!(
+            "format `{sig}` enrollment has invalid senderAddress cardinality {}",
+            enrollment.sender.sentinels.len()
+        ));
+    }
+    let source_sender = sender_field
+        .params
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .and_then(|params| params.get("senderAddress"))
+        .ok_or_else(|| format!("format `{sig}` enrolled senderAddress is missing"))?;
+    let sender_payload = compile_sender_addresses(source_sender, ctx)?;
+    let expected_sender_payload: Vec<u8> = enrollment
+        .sender
+        .sentinels
+        .iter()
+        .flat_map(|address| address.iter().copied())
+        .collect();
+    if sender_payload != expected_sender_payload {
+        return Err(format!(
+            "format `{sig}` senderAddress values do not exactly match semantic enrollment"
+        ));
+    }
+    compiled[sender_index].param_off = pool.append_param_tlv(
+        compiled[sender_index].param_off,
+        PARAM_SENDER_ADDRESS,
+        &sender_payload,
+    )?;
+
+    let mut guarded_paths = BTreeSet::new();
+    for guard in enrollment.guards {
+        if !guarded_paths.insert(guard.path) {
+            return Err(format!(
+                "format `{sig}` semantic enrollment repeats guard path `{}`",
+                guard.path
+            ));
+        }
+        let matches: Vec<usize> = fmt
+            .fields
+            .iter()
+            .enumerate()
+            .filter_map(|(index, field)| {
+                (field.path.as_deref() == Some(guard.path)).then_some(index)
+            })
+            .collect();
+        if matches.len() != 1 {
+            return Err(format!(
+                "format `{sig}` semantic guard path `{}` must be present exactly once, found {}",
+                guard.path,
+                matches.len()
+            ));
+        }
+        let index = matches[0];
+        let field = &fmt.fields[index];
+        if !matches!(field.visible.as_deref(), None | Some("always")) {
+            return Err(format!(
+                "format `{sig}` semantic guard path `{}` must be always visible",
+                guard.path
+            ));
+        }
+        let terminal_type = semantic_terminal_type_for_path(guard.path, context_kind, parsed)?;
+        if terminal_type != guard.terminal_type {
+            return Err(format!(
+                "format `{sig}` semantic guard path `{}` terminal `{terminal_type}` does not match enrolled `{}`",
+                guard.path, guard.terminal_type
+            ));
+        }
+        let (base, is_array) = split_array_suffix(&terminal_type);
+        if is_array {
+            return Err(format!(
+                "format `{sig}` semantic guard path `{}` is not a static scalar",
+                guard.path
+            ));
+        }
+        let semantics = terminal_semantics_from_type(base)?;
+        validate_semantic_guard_word(guard, semantics)?;
+
+        let mut payload = [0u8; WORD_GUARD_PAYLOAD_LEN];
+        payload[0] = guard.operation;
+        payload[1..].copy_from_slice(&guard.word);
+        compiled[index].param_off =
+            pool.append_param_tlv(compiled[index].param_off, PARAM_WORD_GUARD, &payload)?;
+    }
+    Ok(())
 }
 
 /// Resolve a rendered path back to the canonical ABI/EIP-712 terminal type.
@@ -3534,10 +4069,6 @@ fn terminal_semantics_from_type(ty: &str) -> Result<TerminalSemantics, String> {
     ))
 }
 
-fn terminal_kind_from_type(ty: &str) -> Result<TerminalKind, String> {
-    Ok(terminal_semantics_from_type(ty)?.kind)
-}
-
 fn terminal_semantics_for_path(
     path: &str,
     context_kind: u8,
@@ -3635,7 +4166,9 @@ fn param_mask_from_compiled_tlvs(body: &[u8]) -> Result<ParamMask, String> {
             PARAM_VISIBILITY
             | PARAM_INTERPOLATED_INTENT
             | PARAM_TERMINAL_KIND
-            | PARAM_INTEGER_WIDTH => continue,
+            | PARAM_INTEGER_WIDTH
+            | PARAM_SENDER_ADDRESS
+            | PARAM_WORD_GUARD => continue,
             other => return Err(format!("unknown compiled parameter tag 0x{other:02x}")),
         };
         mask = mask.union(bit);
@@ -3922,6 +4455,30 @@ fn compile_flat_fields(
     Ok(compiled)
 }
 
+/// Emit the one canonical, schema-valid field used when nested lowering cannot
+/// safely represent a descriptor. The bare `PARAM_NESTED_STRUCT=[0x01]` marker
+/// is the only behaviorally relevant part: the device sees it before resolving
+/// a field and rejects the whole format. A constant-text terminal and visible
+/// label merely satisfy the ordinary schema-v5 field invariants without
+/// depending on any unsupported descriptor path.
+fn compile_bare_nested_refusal(pool: &mut Pool) -> Result<Vec<CompiledFieldOut>, String> {
+    let mut param_blob = Vec::new();
+    push_tlv(&mut param_blob, PARAM_NESTED_STRUCT, &[0x01])?;
+    push_tlv(&mut param_blob, PARAM_CONST_VALUE, b"Unsupported")?;
+    push_terminal_semantics(
+        &mut param_blob,
+        TerminalSemantics::non_integer(TerminalKind::ConstantText),
+    )?;
+    let param_off = intern_param_blob(pool, &param_blob)?;
+
+    Ok(vec![CompiledFieldOut {
+        format_op: FMT_RAW,
+        label: b"Unsupported".to_vec(),
+        path_off: 0,
+        param_off,
+    }])
+}
+
 /// One planned output record for an EIP-712 nested-struct format.
 enum NestedPlan {
     /// A flat top-level field (its index into `fmt.fields`).
@@ -3997,6 +4554,12 @@ fn try_compile_eip712_nested(
             }
             plan.push(NestedPlan::Flat(i));
             continue;
+        }
+        // The v0x03 array anchor models exactly one render-all array level.
+        // Collapsing `T[][]` to the same boolean shape as `T[]` would let a
+        // one-wildcard path authenticate an unrenderable two-level value.
+        if array_suffix_dimensions(&parsed.top_types[pos]) > 1 {
+            return Ok(None);
         }
         // Struct top member. v2 supports a single-level array of an
         // elementary-member struct; anything deeper → defer (belt-decline).
@@ -4214,6 +4777,9 @@ fn compile_nested_block(
 
         if type_is_struct(seg_base, parsed) {
             // ── nested sub-anchor (struct member, or array-of-struct member) ──
+            if array_suffix_dimensions(&members[local_ord].1) > 1 {
+                return Ok(None);
+            }
             // An array-of-struct element must be v2-renderable (elementary members)
             // to match the on-device per-element render; deeper shapes defer.
             if seg_is_array && !array_element_is_v2_supported(seg_base, parsed) {
@@ -4238,6 +4804,10 @@ fn compile_nested_block(
             else {
                 return Ok(None);
             };
+            // The recursive block accepted only after accounting for every one
+            // of this member's leaves, so the parent hashStruct/array word is
+            // covered as a complete child anchor rather than by a partial page.
+            covered[local_ord] = true;
             if child_payload.len() > MAX_POOL_TLV_PAYLOAD - 2 {
                 return Ok(None);
             }
@@ -4315,6 +4885,7 @@ fn compile_nested_block(
                 field,
                 abs_prefix,
                 members,
+                parsed,
                 &mut covered,
                 terminal_kind,
                 !is_hidden,
@@ -4362,12 +4933,15 @@ fn compile_nested_block(
         }
     }
 
-    // E2 self-check: every address-typed local word must be covered by a visible
-    // child (else a dead / always-declined descriptor). The device enforces this
-    // independently; the primary build gate already refused any hidden address at
-    // any depth BEFORE compilation.
+    // Compiler self-check: every local member must be covered. Elementary
+    // members are covered only by a successfully compiled visible child (or a
+    // shown tokenAmount's local tokenPath); struct/array members are covered by
+    // a recursively complete child anchor. The device independently re-checks
+    // the address subset through `addr_bmp`; full signed-member completeness is
+    // load-bearing here because the compact runtime IR intentionally carries no
+    // general per-member type bitmap.
     for i in 0..member_count {
-        if (addr_bmp[i / 8] >> (i % 8)) & 1 == 1 && !covered[i] {
+        if !covered[i] {
             return Ok(None);
         }
     }
@@ -4496,6 +5070,7 @@ fn compile_nested_subfield_params(
     field: &FieldDef,
     abs_prefix: &str,
     members: &[(String, String)],
+    parsed: &ParsedFormatKey,
     covered: &mut [bool],
     terminal_kind: TerminalKind,
     shown: bool,
@@ -4561,7 +5136,12 @@ fn compile_nested_subfield_params(
             if !token_path_displays_identity(format_op_from_wire(format_op)?, terminal_kind) {
                 return Ok(None);
             }
-            if terminal_kind_from_type(&members[tok_ord as usize].1)? != TerminalKind::Address {
+            // A token identity must be the elementary scalar itself. Deriving a
+            // broad terminal kind from `address[]` strips its suffix, and a
+            // malicious EIP-712 tail may also define a custom struct literally
+            // named `address`; either case would reinterpret an opaque array /
+            // hashStruct word as a token address. Use the full parsed type path.
+            if !token_path_surfaces_exact_scalar_address(tp, CTX_EIP712, parsed) {
                 return Ok(None);
             }
             if shown {
@@ -4695,7 +5275,13 @@ fn compile_params(
             "threshold",
             "message",
         ],
-        FMT_ADDRESS_NAME | FMT_INTEROP_ADDR_NAME => &["types", "sources"],
+        // `senderAddress` has authority beyond cosmetic address formatting: a
+        // sentinel is substituted with the independently authenticated signer.
+        // It is accepted syntactically only for addressName and is consumed
+        // later by `apply_semantic_enrollment`, which requires an exact
+        // descriptor/deployment/selector/path binding before emitting TLV 0x49.
+        FMT_ADDRESS_NAME => &["types", "sources", "senderAddress"],
+        FMT_INTEROP_ADDR_NAME => &["types", "sources"],
         FMT_NFT_NAME => &["collection", "collectionPath"],
         FMT_DATE => &["encoding"],
         FMT_ENUM => &["$ref", "ref"],
@@ -4832,6 +5418,13 @@ fn compile_params(
                 }
                 push_tlv(&mut out, PARAM_ADDR_SOURCES, &[bits])?;
             }
+            // `senderAddress`, when present, is deliberately not emitted here.
+            // `compile_one_format` first proves an exact semantic enrollment,
+            // then `apply_semantic_enrollment` resolves and emits it together
+            // with every required word guard. Keeping the authority-bearing
+            // lowering in one place prevents a generic params-only path from
+            // silently unlocking another descriptor (notably the two Lido
+            // formats that also publish this standard annotation).
         }
         FMT_DATE => {
             if let Some(enc) = params.get("encoding") {
@@ -5120,24 +5713,13 @@ fn check_contract_field_completeness(
 /// [`check_contract_field_completeness`] (audit 2026-06-25 HIGH-1).
 ///
 /// The signed value is `structHash = keccak256(primary_type_hash ||
-/// encoded_data)`, where `encoded_data` is the 32-bytes-per-member encoding
-/// of the primary type's top-level members in declaration order. Each
-/// top-level member is exactly ONE head word: value types encode inline,
-/// `bytes`/`string` encode as their keccak, and a nested struct member
-/// encodes as its `hashStruct` — one word regardless. So, for the *signed-
-/// word coverage* purpose, there is no static-tuple-member granularity to
-/// chase here: a per-top-member coverage check accounts for every top-level
-/// word (which is what this lint proves).
-///
-/// The distinct hazard of an `address` hidden *inside* a nested struct
-/// member's `hashStruct` word (committed to the signature yet invisible) is
-/// NOT a coverage gap — the top-level member is still one declared word — so
-/// it is handled where it belongs: [`check_field_visibility`] descends the
-/// parsed `struct_defs` and requires every nested address to be shown, and
-/// the on-device `PARAM_NESTED_STRUCT` belt declines any nested-struct format
-/// to blind-sign (`VULN-erc7730-eip712-nested-struct-address-hide`). Keeping
-/// this lint at top-level granularity avoids over-refusing a benign
-/// address-free hidden sub-struct.
+/// encoded_data)`, where every primary member contributes one word. This pass
+/// accounts for those TOP-LEVEL words and preserves the established first-error
+/// ordering for already-refused corpus entries. A second pass,
+/// [`check_eip712_nested_field_completeness`], runs after visibility and proves
+/// exact elementary-leaf coverage inside every expanded hashStruct. A child
+/// path must never stand in for its siblings merely because they share one
+/// opaque parent word.
 ///
 /// Refuse to pin a descriptor unless every member is accounted for by a
 /// field of its own (rendered or `visible:"never"`) or as another field's
@@ -5176,6 +5758,169 @@ fn check_eip712_field_completeness(
         }
     }
     Ok(())
+}
+
+/// Typed nested-completeness outcome. Unsupported structured-array rank is the
+/// one admission failure that the caller converts into authenticated refusal
+/// IR; every other failure remains a generator error.
+#[derive(Debug)]
+enum NestedCompletenessError {
+    UnsupportedStructuredArrayRank(String),
+    Refusal(String),
+}
+
+impl NestedCompletenessError {
+    #[cfg(test)]
+    fn contains(&self, needle: &str) -> bool {
+        self.to_string().contains(needle)
+    }
+}
+
+impl core::fmt::Display for NestedCompletenessError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnsupportedStructuredArrayRank(message) | Self::Refusal(message) => {
+                f.write_str(message)
+            }
+        }
+    }
+}
+
+impl From<String> for NestedCompletenessError {
+    fn from(message: String) -> Self {
+        Self::Refusal(message)
+    }
+}
+
+/// Require exact declaration coverage for every elementary member reachable
+/// through an EIP-712 nested struct. The trusted nested renderer expands a
+/// top-level hashStruct into member pages, so accounting for only the parent
+/// word would allow `details.token` to hide the signed `details.amount`.
+///
+/// Struct arrays use the canonical render-all wildcard (`details.[].amount`),
+/// and nested structs recurse to the same bounded depth as the compiler. A
+/// direct field may be visible or explicitly hidden here (the preceding
+/// visibility gate decides whether hiding it is safe); a tokenPath counts only
+/// when a visible tokenAmount consumes that exact scalar-address leaf.
+fn check_eip712_nested_field_completeness(
+    sig: &str,
+    fmt: &Format,
+    parsed: &ParsedFormatKey,
+) -> Result<(), NestedCompletenessError> {
+    for (idx, top_name) in parsed.top_names.iter().enumerate() {
+        let top_ty = &parsed.top_types[idx];
+        let (base, _) = split_array_suffix(top_ty);
+        if !type_is_struct(base, parsed) {
+            continue; // top-level scalar/array coverage is owned by the pass above.
+        }
+        // Rank is a property of the signed type, not of whichever descriptor
+        // path happens to appear first. Check it before the bare-parent
+        // first-error shortcut so `T[][]` cannot bypass this admission gate.
+        if array_suffix_dimensions(top_ty) > 1 {
+            return Err(NestedCompletenessError::UnsupportedStructuredArrayRank(format!(
+                "EIP-712 format `{sig}`: nested member `{top_name}` has more than one array dimension (`{top_ty}`); trusted nested IR supports exactly one render-all array level"
+            )));
+        }
+        // A field that targets the bare parent hashStruct is already refused by
+        // the existing visible-hash terminal-type gate (or, if hidden, by the
+        // visibility gate that ran immediately before this pass). Let that
+        // established, more specific refusal fire instead of replacing it with
+        // a missing-child diagnostic. A format with any bare-parent field can
+        // never reach nested-anchor emission, even if it also lists children.
+        if fmt.fields.iter().any(|field| {
+            field
+                .path
+                .as_deref()
+                .is_some_and(|path| path_matches_member(path, top_name))
+        }) {
+            continue;
+        }
+        let mut visited = Vec::new();
+        check_eip712_nested_member_completeness(
+            sig,
+            fmt,
+            parsed,
+            top_name,
+            top_ty,
+            0,
+            &mut visited,
+        )?;
+    }
+    Ok(())
+}
+
+fn check_eip712_nested_member_completeness(
+    sig: &str,
+    fmt: &Format,
+    parsed: &ParsedFormatKey,
+    member_path: &str,
+    member_ty: &str,
+    depth: usize,
+    visited: &mut Vec<String>,
+) -> Result<(), NestedCompletenessError> {
+    let (base, is_array) = split_array_suffix(member_ty);
+    if type_is_struct(base, parsed) {
+        if array_suffix_dimensions(member_ty) > 1 {
+            return Err(NestedCompletenessError::UnsupportedStructuredArrayRank(format!(
+                "EIP-712 format `{sig}`: nested member `{member_path}` has more than one array dimension (`{member_ty}`); trusted nested IR supports exactly one render-all array level"
+            )));
+        }
+        if depth > MAX_STRUCT_DEPTH || visited.iter().any(|seen| seen == base) {
+            return Err(format!(
+                "EIP-712 format `{sig}`: nested member `{member_path}` has a cyclic or deeper-than-{MAX_STRUCT_DEPTH} type; exact signed-leaf completeness cannot be proven"
+            )
+            .into());
+        }
+        let members = parsed
+            .struct_defs
+            .get(base)
+            .ok_or_else(|| format!("EIP-712 struct `{base}` has no definition"))?;
+        if members.is_empty() {
+            return Err(format!(
+                "EIP-712 format `{sig}`: nested member `{member_path}` has an empty struct type `{base}`; refusing an unrenderable hashStruct"
+            )
+            .into());
+        }
+        let element_path = if is_array {
+            format!("{member_path}.[]")
+        } else {
+            member_path.to_string()
+        };
+        visited.push(base.to_string());
+        for (child_name, child_ty) in members {
+            let child_path = format!("{element_path}.{child_name}");
+            check_eip712_nested_member_completeness(
+                sig,
+                fmt,
+                parsed,
+                &child_path,
+                child_ty,
+                depth + 1,
+                visited,
+            )?;
+        }
+        visited.pop();
+        return Ok(());
+    }
+
+    let covered = fmt.fields.iter().any(|field| {
+        field
+            .path
+            .as_deref()
+            .is_some_and(|path| path_matches_member(path, member_path))
+            || shown_token_path(field, CTX_EIP712, parsed).is_some_and(|token_path| {
+                token_path_surfaces_exact_scalar_address(token_path, CTX_EIP712, parsed)
+                    && path_matches_member(token_path, member_path)
+            })
+    });
+    if covered {
+        return Ok(());
+    }
+
+    Err(format!(
+        "EIP-712 format `{sig}`: nested member `{member_path}` is neither rendered, explicitly hidden (`visible:\"never\"`), nor used as a shown tokenAmount's exact scalar-address `tokenPath`. Every elementary member folded into a nested hashStruct must be accounted for at exact leaf granularity"
+    )
+    .into())
 }
 
 /// Does descriptor `path` surface the calldata word for tuple member
@@ -5925,6 +6670,20 @@ fn split_array_suffix(ty: &str) -> (&str, bool) {
     }
 }
 
+/// Number of array suffixes carried by a scalar/typed-data type. The existing
+/// boolean splitter is sufficient for type classification, but nested IR must
+/// distinguish `T[]` from `T[][]`: it authenticates exactly one array level.
+fn array_suffix_dimensions(ty: &str) -> usize {
+    ty.find('[')
+        .map(|start| {
+            ty.as_bytes()[start..]
+                .iter()
+                .filter(|&&b| b == b'[')
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 /// True when `base` (an array-stripped type name) is an EIP-712 struct
 /// defined in the format key's tail.
 fn type_is_struct(base: &str, parsed: &ParsedFormatKey) -> bool {
@@ -6462,7 +7221,46 @@ fn compile_token_path(
     context_kind: u8,
     parsed: &ParsedFormatKey,
 ) -> Result<Vec<u8>, String> {
-    compile_path_inner(path, context_kind, parsed, true)
+    let program = compile_path_inner(path, context_kind, parsed, true)?;
+    let exact_scalar = token_path_surfaces_exact_scalar_address(path, context_kind, parsed);
+    let authenticated_target = program.as_slice() == NFT_COLLECTION_TO_PATH.as_slice();
+    let checked_extraction = token_path_uses_checked_address_extraction(path, context_kind)?;
+    if exact_scalar || authenticated_target || checked_extraction {
+        return Ok(program);
+    }
+    Err(format!(
+        "tokenPath `{path}` does not resolve to one authenticated token identity (an exact scalar address, `@.to`, or a checked 20-byte/address[] extraction)"
+    ))
+}
+
+/// Whether `path` requests one of the contract-calldata extraction forms whose
+/// type/width is proven by [`compile_token_path_extraction`]. This is evaluated
+/// only after the path compiler succeeds; it distinguishes one selected token
+/// address from the multi-value `[]` render-all program.
+fn token_path_uses_checked_address_extraction(
+    path: &str,
+    context_kind: u8,
+) -> Result<bool, String> {
+    if context_kind != CTX_CONTRACT {
+        return Ok(false);
+    }
+    let path = path.trim();
+    let rest = if let Some(rest) = path.strip_prefix('#') {
+        rest.trim_start_matches('.')
+    } else if path.starts_with('@') || path.starts_with('$') {
+        return Ok(false);
+    } else {
+        path
+    };
+    Ok(matches!(
+        tokenize_path(rest)?.last(),
+        Some(
+            PathSeg::ArrayIdx(_)
+                | PathSeg::ArrayLast
+                | PathSeg::ArraySlice(_, _)
+                | PathSeg::ArraySliceLast(_)
+        )
+    ))
 }
 
 fn compile_path_inner(
@@ -6708,6 +7506,17 @@ fn compile_structured_contract_path(
             // slot. A DYNAMIC tuple needs its own local head width and tail
             // topology to prove member offsets/canonical end placement; compact
             // IR does not carry those facts, so C2 must fail closed.
+            // A tuple ARRAY is also not a single tuple instance: descending
+            // `calls.to` through `(...)[N] calls` would select only element 0
+            // while the signature commits to every element. Reject only a
+            // trailing array suffix on THIS type; an ordinary tuple may safely
+            // contain an array member before the selected scalar because the
+            // width-aware slot calculation already accounts for it.
+            if find_last_array_open(this_ty.trim()).is_some() {
+                return Err(format!(
+                    "path descends through array-valued field `{name}` (`{this_ty}`); member descent would render only one element of the signed array"
+                ));
+            }
             if static_head_words(this_ty)? == HeadWidth::Dynamic {
                 return Err(format!(
                     "path descends through dynamic tuple `{name}` (`{this_ty}`); C2 tail topology is not represented in trusted IR"
@@ -6795,6 +7604,11 @@ fn compile_token_path_extraction(
         if !terminal {
             // Static tuple members stay inlined. Dynamic-tuple descent (C2)
             // needs tuple-local head/tail topology absent from compact IR.
+            if find_last_array_open(this_ty).is_some() {
+                return Err(format!(
+                    "tokenPath descends through array-valued field `{name}` (`{this_ty}`); member descent would identify a token from only one signed element"
+                ));
+            }
             if static_head_words(this_ty)? == HeadWidth::Dynamic {
                 return Err(format!(
                     "tokenPath descends through dynamic tuple `{name}` (`{this_ty}`); C2 tail topology is not represented in trusted IR"
@@ -6993,12 +7807,12 @@ fn format_static_head_words(context_kind: u8, parsed: &ParsedFormatKey) -> Resul
     u16::try_from(words).map_err(|_| format!("static head {words} words overflows u16"))
 }
 
-/// Map a name segment to a 2-byte BE field-index opcode arg. For the
-/// first name after the root we look it up in `parsed.top_names`;
-/// subsequent names use `parsed.inner_names[prev_top]`. If the name
-/// isn't found in the parsed format key (e.g. a nested struct we
-/// didn't parse), we encode the name's hash as a fall-back so Phase 5
-/// can resolve it via the runtime ABI shape table.
+/// Map a declared name segment to its 2-byte BE field ordinal. For the first
+/// name after the root we use `parsed.top_names`; subsequent names use the
+/// parsed tuple member list. Unknown names are a hard error: the device has no
+/// authenticated runtime name table, and truncating a name hash to 16 bits can
+/// alias a real ordinal (for example a bogus EIP-712 tokenPath aliasing member
+/// zero) while presenting the wrong token identity.
 fn resolve_field_index(
     parsed: &ParsedFormatKey,
     cur_top: Option<&str>,
@@ -7016,11 +7830,10 @@ fn resolve_field_index(
     if let Some(pos) = names.iter().position(|n| n == name) {
         return u16::try_from(pos).map_err(|_| format!("field index {pos} > u16::MAX"));
     }
-    // Fall-back: ABI hash. Compress to 16-bit so it fits the slot.
-    // Phase 5 walker resolves this via runtime introspection — for
-    // Phase 2 we just need to round-trip parse.
-    let h = keccak256(name.as_bytes());
-    Ok(u16::from_be_bytes([h[0], h[1]]))
+    let scope = cur_top
+        .map(|parent| format!("the parsed members of `{parent}`"))
+        .unwrap_or_else(|| "the format's top-level members".to_string());
+    Err(format!("path field `{name}` is not in {scope}"))
 }
 
 enum PathSeg<'a> {
@@ -7424,9 +8237,10 @@ fn utf16_codeunit_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 //      → strip the host + branch prefix and resolve as a relative
 //      path under `registry_root`.
 //
-// Any include that resolves OUTSIDE `registry_root` (e.g. via `..`
-// escapes) is rejected — this prevents a hostile descriptor from
-// pulling in arbitrary files on the host build machine.
+// Include authority is exactly the corpus covered by the checked-in receipt:
+// canonical non-fixture `.json` files below `registry/` or `ercs/`. Merely
+// remaining below `registry_root` is insufficient because root-level files,
+// fixture trees, and non-JSON files are deliberately absent from that receipt.
 // ─────────────────────────────────────────────────────────────────────
 
 fn resolve_include_path(
@@ -7462,15 +8276,53 @@ fn resolve_include_path(
             .join(include_ref)
     };
 
+    let candidate_metadata = fs::symlink_metadata(&candidate)
+        .map_err(|e| format!("inspect include `{include_ref}`: {e}"))?;
+    if candidate_metadata.file_type().is_symlink() || !candidate_metadata.is_file() {
+        return Err(format!(
+            "include `{include_ref}` must name a regular non-symlink corpus file"
+        ));
+    }
+
     let canonical = candidate
         .canonicalize()
         .map_err(|e| format!("canonicalize include `{include_ref}`: {e}"))?;
-    if !canonical.starts_with(&registry_root) {
+    validate_receipted_include_path(&registry_root, &canonical, include_ref)?;
+    Ok(canonical)
+}
+
+fn validate_receipted_include_path(
+    registry_root: &Path,
+    canonical: &Path,
+    include_ref: &str,
+) -> Result<(), String> {
+    let relative = canonical.strip_prefix(registry_root).map_err(|_| {
+        format!("include `{include_ref}` resolves outside registry-root — refusing")
+    })?;
+    let relative_text = relative
+        .to_str()
+        .ok_or_else(|| format!("include `{include_ref}` resolves to a non-UTF-8 corpus path"))?;
+    let mut components = relative.components();
+    let top = components.next().and_then(|component| match component {
+        std::path::Component::Normal(value) => value.to_str(),
+        _ => None,
+    });
+    let filename = relative
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("include `{include_ref}` has no canonical UTF-8 filename"))?;
+    if !matches!(top, Some("registry" | "ercs"))
+        || !filename.ends_with(".json")
+        || relative
+            .components()
+            .any(|component| component.as_os_str() == "tests")
+        || filename.contains(".tests.")
+    {
         return Err(format!(
-            "include `{include_ref}` resolves outside registry-root — refusing"
+            "include `{include_ref}` resolves outside the receipted registry/ercs JSON corpus: `{relative_text}`"
         ));
     }
-    Ok(canonical)
+    Ok(())
 }
 
 /// Deep-merge `over` on top of `base`. For object-typed leaves the
@@ -7767,6 +8619,25 @@ fn review_param_semantics(
     }
     if let Some(width) = params.integer_width_bytes {
         parts.push(format!("integerWidthBytes={width}"));
+    }
+    if let Some(addresses) = params.sender_addresses {
+        let members = addresses
+            .chunks_exact(pqsigner_erc7730::render::params::SENDER_ADDRESS_LEN)
+            .map(|address| format!("0x{}", hex::encode(address)))
+            .collect::<Vec<_>>()
+            .join(",");
+        parts.push(format!("senderAddress=[{members}]"));
+    }
+    if let Some(guard) = params.word_guard {
+        let operation = match guard.mode() {
+            pqsigner_erc7730::render::params::WORD_GUARD_EQ => "eq",
+            pqsigner_erc7730::render::params::WORD_GUARD_NE => "ne",
+            _ => "unknown",
+        };
+        parts.push(format!(
+            "wordGuard={operation}(0x{})",
+            hex::encode(guard.expected())
+        ));
     }
     Ok(format!("{{{}}}", parts.join(",")))
 }
@@ -9239,6 +10110,108 @@ mod tests {
         );
     }
 
+    #[test]
+    fn compile_path_rejects_fixed_tuple_array_member_descent() {
+        let p =
+            parse_format_key("execute((address to,uint256 value)[2] calls,address after)").unwrap();
+        for err in [
+            compile_path("#.calls.to", CTX_CONTRACT, &p)
+                .expect_err("a value path must not select tuple-array element zero"),
+            compile_token_path("#.calls.to", CTX_CONTRACT, &p)
+                .expect_err("a token path must not select tuple-array element zero"),
+        ] {
+            assert!(
+                err.contains("array"),
+                "refusal should name the array shape: {err}"
+            );
+        }
+        assert_eq!(
+            head_slot_of(&compile_path("#.after", CTX_CONTRACT, &p).unwrap()),
+            4,
+            "rejecting descent must not break width accounting past the array"
+        );
+
+        let tuple_with_inner_array =
+            parse_format_key("f((address[2] prior,address selected) cfg)").unwrap();
+        assert_eq!(
+            head_slot_of(
+                &compile_path("#.cfg.selected", CTX_CONTRACT, &tuple_with_inner_array).unwrap()
+            ),
+            2,
+            "an array inside an ordinary tuple is handled by width accounting, not rejected"
+        );
+    }
+
+    #[test]
+    fn eip712_token_path_rejects_unknown_name() {
+        let p = parse_format_key("Permit(address token,uint256 amount)").unwrap();
+        assert_eq!(
+            &keccak256(b"ghost6140")[..2],
+            &[0, 0],
+            "collision witness must alias ordinal zero under the removed fallback"
+        );
+        let err = compile_token_path("ghost6140", CTX_EIP712, &p)
+            .expect_err("an unknown typed-data name must not compile as a truncated hash");
+        assert!(
+            err.contains("ghost6140") && err.contains("not in"),
+            "refusal should name the unknown member: {err}"
+        );
+        assert_eq!(
+            compile_token_path("token", CTX_EIP712, &p).unwrap(),
+            [PATHOP_ROOT_STRUCT, PATHOP_FIELD_IDX, 0, 0],
+            "a declared field-zero token path keeps its exact wire bytes"
+        );
+    }
+
+    #[test]
+    fn token_paths_require_exact_address_endpoints_or_checked_extraction() {
+        let p =
+            parse_format_key("f(uint256 amount,bool flag,address token,address[] route)").unwrap();
+        for invalid in ["flag", "route.[]"] {
+            let err = compile_token_path(invalid, CTX_CONTRACT, &p)
+                .expect_err("a non-scalar or multi-value endpoint is not one token identity");
+            assert!(err.contains("token identity"), "{invalid}: {err}");
+        }
+        assert!(
+            compile_token_path("route", CTX_CONTRACT, &p).is_err(),
+            "a bare dynamic array is not a token identity either"
+        );
+        assert!(compile_token_path("token", CTX_CONTRACT, &p).is_ok());
+        assert!(compile_token_path("route.[0]", CTX_CONTRACT, &p).is_ok());
+        assert_eq!(
+            compile_token_path("@.to", CTX_CONTRACT, &p).unwrap(),
+            NFT_COLLECTION_TO_PATH,
+            "the authenticated target-address identity remains supported"
+        );
+    }
+
+    #[test]
+    fn eip712_format_rejects_unknown_token_path_end_to_end() {
+        let sig = "Permit(address token,uint256 amount)";
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"token","label":"Token","format":"addressName"},
+              {"path":"amount","label":"Amount","format":"tokenAmount",
+               "params":{"tokenPath":"ghost6140"}}
+            ]"#,
+        );
+        let mut ctx = test_ctx();
+        let mut pool = Pool::new();
+        let mut out = Vec::new();
+        let err = compile_one_format(
+            sig,
+            &fmt,
+            CTX_EIP712,
+            &mut ctx,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut out,
+            None,
+        )
+        .expect_err("an otherwise-complete format must reject a typo/collision tokenPath");
+        assert!(err.contains("ghost6140") && err.contains("not in"), "{err}");
+    }
+
     // ── Tier B: tokenPath byte-slice / array-index (tokenPath-ONLY) ──────────
     #[test]
     fn token_path_slice_ops_are_tokenpath_only() {
@@ -9936,6 +10909,14 @@ mod tests {
         assert_eq!(PARAM_NFT_COLLECTION, params::PARAM_NFT_COLLECTION);
         assert_eq!(PARAM_NFT_COLLECTION_PATH, params::PARAM_NFT_COLLECTION_PATH);
         assert_eq!(PARAM_INTERPOLATED_INTENT, params::PARAM_INTERPOLATED_INTENT);
+        assert_eq!(PARAM_TERMINAL_KIND, params::PARAM_TERMINAL_KIND);
+        assert_eq!(PARAM_INTEGER_WIDTH, params::PARAM_INTEGER_WIDTH);
+        assert_eq!(PARAM_SENDER_ADDRESS, params::PARAM_SENDER_ADDRESS);
+        assert_eq!(PARAM_WORD_GUARD, params::PARAM_WORD_GUARD);
+        assert_eq!(MAX_SENDER_ADDRESSES, params::MAX_SENDER_ADDRESSES);
+        assert_eq!(WORD_GUARD_PAYLOAD_LEN, params::WORD_GUARD_PAYLOAD_LEN);
+        assert_eq!(WORD_GUARD_EQ, params::WORD_GUARD_EQ);
+        assert_eq!(WORD_GUARD_NE, params::WORD_GUARD_NE);
         assert_eq!(
             INTERPOLATED_INTENT_VERSION,
             params::INTERPOLATED_INTENT_VERSION
@@ -10851,6 +11832,246 @@ mod tests {
     }
 
     #[test]
+    fn eip712_completeness_rejects_omitted_nested_scalar_member() {
+        let sig = "PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)\
+                   PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_with_paths(&["details.token", "spender", "sigDeadline"]);
+        let err = check_eip712_nested_field_completeness(sig, &fmt, &parsed)
+            .expect_err("one visible child must not cover omitted nested signed scalars");
+        assert!(
+            err.contains("details.amount"),
+            "refusal should name the first omitted nested member: {err}"
+        );
+    }
+
+    #[test]
+    fn eip712_completeness_rejects_omitted_array_element_member() {
+        let sig = "PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)\
+                   PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_with_paths(&["details.[].token", "spender", "sigDeadline"]);
+        let err = check_eip712_nested_field_completeness(sig, &fmt, &parsed)
+            .expect_err("one element child must not cover omitted members in every array element");
+        assert!(
+            err.contains("details.[].amount"),
+            "refusal should name the first omitted per-element member: {err}"
+        );
+    }
+
+    #[test]
+    fn eip712_nested_completeness_accepts_exact_full_coverage_and_token_path() {
+        let sig = "PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)\
+                   PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"details.amount","label":"Amount","format":"tokenAmount",
+               "params":{"tokenPath":"details.token"}},
+              {"path":"details.expiration","label":"Expiration","format":"date"},
+              {"path":"details.nonce","label":"Nonce","format":"raw"},
+              {"path":"spender","label":"Spender","format":"addressName"},
+              {"path":"sigDeadline","label":"Deadline","format":"date"}
+            ]"#,
+        );
+        check_eip712_field_completeness(sig, &fmt, &parsed).unwrap();
+        check_field_visibility(sig, &fmt, &parsed, CTX_EIP712).unwrap();
+        check_eip712_nested_field_completeness(sig, &fmt, &parsed).unwrap();
+
+        let mut ctx = test_ctx();
+        let mut pool = Pool::new();
+        let mut out = Vec::new();
+        compile_one_format(
+            sig,
+            &fmt,
+            CTX_EIP712,
+            &mut ctx,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut out,
+            None,
+        )
+        .expect("full nested coverage must still emit a clear-sign format");
+    }
+
+    #[test]
+    fn eip712_nested_array_completeness_accepts_full_element_coverage() {
+        let sig = "PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)\
+                   PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"details.[].amount","label":"Amount","format":"tokenAmount",
+               "params":{"tokenPath":"details.[].token"}},
+              {"path":"details.[].expiration","label":"Expiration","format":"date"},
+              {"path":"details.[].nonce","label":"Nonce","format":"raw"},
+              {"path":"spender","label":"Spender","format":"addressName"},
+              {"path":"sigDeadline","label":"Deadline","format":"date"}
+            ]"#,
+        );
+        check_eip712_nested_field_completeness(sig, &fmt, &parsed)
+            .expect("every member of every rendered array element is covered");
+    }
+
+    #[test]
+    fn eip712_multidimensional_struct_array_emits_only_bare_refusal() {
+        let sig = "Batch(Item[][] items,address spender)Item(address token,uint256 amount)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"items.[].amount","label":"Amount","format":"tokenAmount",
+               "params":{"tokenPath":"items.[].token"},"visible":"always"},
+              {"path":"spender","label":"Spender","format":"addressName","visible":"always"}
+            ]"#,
+        );
+        check_field_visibility(sig, &fmt, &parsed, CTX_EIP712)
+            .expect("the regression isolates array rank, not visibility");
+        let err = check_eip712_nested_field_completeness(sig, &fmt, &parsed)
+            .expect_err("one wildcard must not account for a two-dimensional signed array");
+        assert!(err.contains("more than one array dimension"), "{err}");
+        let bare_parent = fmt_from_fields(
+            r#"[
+              {"path":"items","label":"Items","visible":"never"},
+              {"path":"spender","label":"Spender","format":"addressName","visible":"always"}
+            ]"#,
+        );
+        let err = check_eip712_nested_field_completeness(sig, &bare_parent, &parsed)
+            .expect_err("a bare-parent field must not bypass signed array-rank admission");
+        assert!(err.contains("more than one array dimension"), "{err}");
+
+        let mut ctx = test_ctx();
+        let mut pool = Pool::new();
+        assert!(
+            try_compile_eip712_nested(sig, &fmt, &parsed, &mut ctx, &mut pool, &BTreeMap::new(),)
+                .expect("unsupported rank must fail closed, not error in the emitter")
+                .is_none(),
+            "the independent emitter backstop must not produce an active v0x03 anchor"
+        );
+
+        let mut ctx = test_ctx();
+        let mut pool = Pool::new();
+        let mut out = Vec::new();
+        compile_one_format(
+            sig,
+            &fmt,
+            CTX_EIP712,
+            &mut ctx,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut out,
+            None,
+        )
+        .expect("unsupported rank must lower only to canonical device-refusal IR");
+
+        assert_eq!(out[4], 1, "refusal format has one canonical carrier field");
+        assert_eq!(out[8], 0, "bare refusal carries no active nested descent");
+        let field = 9 + out[5] as usize + 32;
+        assert_eq!(out[field], FMT_RAW);
+        let label_len = out[field + 1] as usize;
+        assert_eq!(&out[field + 2..field + 2 + label_len], b"Unsupported");
+        let offsets = field + 2 + label_len;
+        assert_eq!(u16::from_be_bytes([out[offsets], out[offsets + 1]]), 0);
+        let param_off = u16::from_be_bytes([out[offsets + 2], out[offsets + 3]]) as usize;
+        assert_ne!(param_off, 0);
+
+        let pool = pool.into_bytes();
+        let blob_len = pool[param_off] as usize;
+        let blob = &pool[param_off + 1..param_off + 1 + blob_len];
+        let mut cursor = 0;
+        let mut bare_marker = false;
+        let mut active_anchor = false;
+        while cursor + 2 <= blob.len() {
+            let tag = blob[cursor];
+            let len = blob[cursor + 1] as usize;
+            let payload = &blob[cursor + 2..cursor + 2 + len];
+            if tag == PARAM_NESTED_STRUCT {
+                bare_marker |= payload == [0x01];
+                active_anchor |= payload.first() == Some(&0x03);
+            }
+            cursor += 2 + len;
+        }
+        assert_eq!(cursor, blob.len());
+        assert!(
+            bare_marker,
+            "rank refusal must carry the device belt marker"
+        );
+        assert!(
+            !active_anchor,
+            "rank refusal must never carry an active v0x03 anchor"
+        );
+    }
+
+    #[test]
+    fn nested_token_path_rejects_array_hash_and_primitive_named_struct() {
+        let sig = "Order(Outer outer)Outer(uint256 amount,address[] tokens)address(bytes32 salt)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"outer.amount","label":"Amount","format":"tokenAmount",
+               "params":{"tokenPath":"outer.tokens"},"visible":"always"},
+              {"path":"outer.tokens.[].salt","label":"Salt","format":"raw",
+               "visible":"always"}
+            ]"#,
+        );
+        check_eip712_field_completeness(sig, &fmt, &parsed).unwrap();
+        check_field_visibility(sig, &fmt, &parsed, CTX_EIP712).unwrap();
+        check_eip712_nested_field_completeness(sig, &fmt, &parsed).unwrap();
+
+        let mut ctx = test_ctx();
+        let mut pool = Pool::new();
+        assert!(
+            try_compile_eip712_nested(sig, &fmt, &parsed, &mut ctx, &mut pool, &BTreeMap::new(),)
+                .expect("the nested emitter must fail closed without a build error")
+                .is_none(),
+            "an array hashStruct word must never lower as a token address"
+        );
+        assert!(
+            compile_token_path("outer.tokens", CTX_EIP712, &parsed).is_err(),
+            "the shared flat tokenPath compiler must reject the same ambiguous endpoint"
+        );
+    }
+
+    #[test]
+    fn eip712_nested_completeness_rejects_deep_leaf_omission() {
+        let sig = "Order(Outer outer)Inner(uint256 amount,uint256 nonce)\
+                   Outer(Inner inner,uint256 salt)";
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_with_paths(&["outer.inner.nonce", "outer.salt"]);
+        let err = check_eip712_nested_field_completeness(sig, &fmt, &parsed)
+            .expect_err("a sibling must not cover a missing transitive leaf");
+        assert!(err.contains("outer.inner.amount"), "{err}");
+    }
+
+    #[test]
+    fn eip712_incomplete_nested_format_is_rejected_end_to_end() {
+        let sig = "PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)\
+                   PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)";
+        let fmt = fmt_from_fields(
+            r#"[
+              {"path":"details.token","label":"Token","format":"addressName"},
+              {"path":"spender","label":"Spender","format":"addressName"},
+              {"path":"sigDeadline","label":"Deadline","format":"date"}
+            ]"#,
+        );
+        let mut ctx = test_ctx();
+        let mut pool = Pool::new();
+        let mut out = Vec::new();
+        let err = compile_one_format(
+            sig,
+            &fmt,
+            CTX_EIP712,
+            &mut ctx,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut out,
+            None,
+        )
+        .expect_err("a partial nested format must never emit an authenticated anchor");
+        assert!(err.contains("details.amount"), "{err}");
+        assert!(out.is_empty(), "no format bytes may be emitted on refusal");
+    }
+
+    #[test]
     fn eip712_completeness_accepts_full_coverage() {
         // Every member has a field — passes (mirrors the shipped
         // circle-usdc-{rwa,twa} authorization descriptors).
@@ -10921,6 +12142,466 @@ mod tests {
             owner: String::new(),
             contract_name: String::new(),
         }
+    }
+
+    fn router02_format(exact_input: bool) -> (&'static str, Format) {
+        let (signature, first_path, first_label, second_path, second_label) = if exact_input {
+            (
+                "exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96) params)",
+                "params.amountIn",
+                "Send",
+                "params.amountOutMinimum",
+                "Minimum to Receive",
+            )
+        } else {
+            (
+                "exactOutputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountOut,uint256 amountInMaximum,uint160 sqrtPriceLimitX96) params)",
+                "params.amountInMaximum",
+                "Maximum Amount In",
+                "params.amountOut",
+                "Amount to Receive",
+            )
+        };
+        let format = serde_json::from_value(serde_json::json!({
+            "intent": "Swap",
+            "fields": [
+                {
+                    "path": first_path,
+                    "label": first_label,
+                    "format": "tokenAmount",
+                    "params": { "tokenPath": "params.tokenIn" },
+                    "visible": "always"
+                },
+                {
+                    "path": second_path,
+                    "label": second_label,
+                    "format": "tokenAmount",
+                    "params": { "tokenPath": "params.tokenOut" },
+                    "visible": "always"
+                },
+                {
+                    "path": "params.fee",
+                    "label": "Uniswap fee",
+                    "format": "unit",
+                    "params": { "decimals": 4, "base": "%", "prefix": false },
+                    "visible": "always"
+                },
+                {
+                    "path": "params.recipient",
+                    "label": "Beneficiary",
+                    "format": "addressName",
+                    "params": {
+                        "types": ["eoa", "contract"],
+                        "sources": ["local", "ens"],
+                        "senderAddress": ["0x0000000000000000000000000000000000000001"]
+                    },
+                    "visible": "always"
+                },
+                {
+                    "path": "params.sqrtPriceLimitX96",
+                    "label": "Price limit",
+                    "format": "raw",
+                    "visible": "always"
+                },
+                {
+                    "path": "@.value",
+                    "label": "Native value",
+                    "format": "raw",
+                    "visible": "always"
+                }
+            ]
+        }))
+        .expect("valid Router02 test format");
+        (signature, format)
+    }
+
+    fn contract_format_param_offsets(format: &[u8]) -> Vec<u16> {
+        assert!(format.len() >= 9, "contract format header");
+        let field_count = format[4] as usize;
+        let intent_len = format[5] as usize;
+        let mut cursor = 9 + intent_len;
+        let mut offsets = Vec::with_capacity(field_count);
+        for _ in 0..field_count {
+            let label_len = format[cursor + 1] as usize;
+            let offsets_at = cursor + 2 + label_len;
+            offsets.push(u16::from_be_bytes([
+                format[offsets_at + 2],
+                format[offsets_at + 3],
+            ]));
+            cursor = offsets_at + 4;
+        }
+        assert_eq!(cursor, format.len(), "consume exact contract format bytes");
+        offsets
+    }
+
+    fn compile_router02_test_format(
+        exact_input: bool,
+        ctx: &mut CompileCtx,
+        deployment: &InterpolationDeployment<'_>,
+    ) -> Result<(Pool, Vec<u8>, Vec<u16>), String> {
+        let (sig, fmt) = router02_format(exact_input);
+        let mut pool = Pool::new();
+        let mut format = Vec::new();
+        compile_one_format(
+            sig,
+            &fmt,
+            CTX_CONTRACT,
+            ctx,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut format,
+            Some(deployment),
+        )?;
+        let offsets = contract_format_param_offsets(&format);
+        Ok((pool, format, offsets))
+    }
+
+    fn expected_guard(operation: u8, word: [u8; 32]) -> [u8; WORD_GUARD_PAYLOAD_LEN] {
+        let mut payload = [0u8; WORD_GUARD_PAYLOAD_LEN];
+        payload[0] = operation;
+        payload[1..].copy_from_slice(&word);
+        payload
+    }
+
+    #[test]
+    fn router02_exact_enrollment_emits_only_the_required_sender_and_word_guards() {
+        let capabilities = Erc20Capabilities::default();
+        let deployment = InterpolationDeployment {
+            chain_id: 1,
+            contract: ROUTER02_MAINNET,
+            erc20_capabilities: &capabilities,
+        };
+
+        for exact_input in [true, false] {
+            let mut ctx = test_ctx();
+            ctx.descriptor_hash = ROUTER02_DESCRIPTOR_HASH;
+            let (pool, format, offsets) =
+                compile_router02_test_format(exact_input, &mut ctx, &deployment)
+                    .expect("exact enrollment compiles");
+            assert_eq!(offsets.len(), 6, "no synthetic guard-only field");
+            assert_eq!(
+                &format[..4],
+                if exact_input {
+                    &[0x04, 0xe4, 0x5a, 0xaf]
+                } else {
+                    &[0x50, 0x23, 0xb4, 0xdf]
+                }
+            );
+
+            assert_eq!(
+                find_tlv(&pool, offsets[3], PARAM_SENDER_ADDRESS),
+                Some(ADDRESS_ONE.as_slice())
+            );
+            assert_eq!(
+                find_tlv(&pool, offsets[3], PARAM_WORD_GUARD),
+                Some(expected_guard(WORD_GUARD_NE, ADDRESS_TWO_WORD).as_slice())
+            );
+            assert_eq!(
+                find_tlv(&pool, offsets[4], PARAM_WORD_GUARD),
+                Some(expected_guard(WORD_GUARD_EQ, ZERO_WORD).as_slice())
+            );
+            assert_eq!(
+                find_tlv(&pool, offsets[5], PARAM_WORD_GUARD),
+                Some(expected_guard(WORD_GUARD_EQ, ZERO_WORD).as_slice())
+            );
+            assert!(find_tlv(&pool, offsets[1], PARAM_WORD_GUARD).is_none());
+            assert!(find_tlv(&pool, offsets[2], PARAM_WORD_GUARD).is_none());
+            if exact_input {
+                assert_eq!(
+                    find_tlv(&pool, offsets[0], PARAM_WORD_GUARD),
+                    Some(expected_guard(WORD_GUARD_NE, ZERO_WORD).as_slice())
+                );
+            } else {
+                assert!(find_tlv(&pool, offsets[0], PARAM_WORD_GUARD).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn sender_address_requires_the_complete_exact_enrollment_key() {
+        let capabilities = Erc20Capabilities::default();
+        let exact = InterpolationDeployment {
+            chain_id: 1,
+            contract: ROUTER02_MAINNET,
+            erc20_capabilities: &capabilities,
+        };
+
+        let mut wrong_hash = test_ctx();
+        wrong_hash.descriptor_hash = [0x55; 32];
+        let error = compile_router02_test_format(true, &mut wrong_hash, &exact)
+            .err()
+            .expect("descriptor hash mismatch must refuse")
+            .to_string();
+        assert!(error.contains("without an exact"), "{error}");
+
+        let wrong_chain = InterpolationDeployment {
+            chain_id: 10,
+            ..exact
+        };
+        let mut exact_hash = test_ctx();
+        exact_hash.descriptor_hash = ROUTER02_DESCRIPTOR_HASH;
+        let error = compile_router02_test_format(true, &mut exact_hash, &wrong_chain)
+            .err()
+            .expect("chain mismatch must refuse")
+            .to_string();
+        assert!(error.contains("without an exact"), "{error}");
+
+        let wrong_contract = InterpolationDeployment {
+            contract: [0x44; 20],
+            ..exact
+        };
+        let mut exact_hash = test_ctx();
+        exact_hash.descriptor_hash = ROUTER02_DESCRIPTOR_HASH;
+        let error = compile_router02_test_format(true, &mut exact_hash, &wrong_contract)
+            .err()
+            .expect("contract mismatch must refuse")
+            .to_string();
+        assert!(error.contains("without an exact"), "{error}");
+    }
+
+    #[test]
+    fn exact_enrollment_requires_every_visible_guard_path_once() {
+        let capabilities = Erc20Capabilities::default();
+        let deployment = InterpolationDeployment {
+            chain_id: 1,
+            contract: ROUTER02_MAINNET,
+            erc20_capabilities: &capabilities,
+        };
+        let (sig, mut format) = router02_format(true);
+        format
+            .fields
+            .retain(|field| field.path.as_deref() != Some("@.value"));
+        let mut pool = Pool::new();
+        let mut out = Vec::new();
+        let mut exact_hash = test_ctx();
+        exact_hash.descriptor_hash = ROUTER02_DESCRIPTOR_HASH;
+        let error = compile_one_format(
+            sig,
+            &format,
+            CTX_CONTRACT,
+            &mut exact_hash,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut out,
+            Some(&deployment),
+        )
+        .expect_err("missing enrolled @.value field must refuse");
+        assert!(
+            error.contains("`@.value` must be present exactly once"),
+            "{error}"
+        );
+
+        let (_, mut hidden) = router02_format(true);
+        hidden.fields[5].visible = Some("never".to_string());
+        let mut pool = Pool::new();
+        let mut exact_hash = test_ctx();
+        exact_hash.descriptor_hash = ROUTER02_DESCRIPTOR_HASH;
+        let error = compile_one_format(
+            sig,
+            &hidden,
+            CTX_CONTRACT,
+            &mut exact_hash,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut Vec::new(),
+            Some(&deployment),
+        )
+        .expect_err("hidden enrolled guard field must refuse");
+        assert!(
+            error.contains("must be always visible") || error.contains("visible:\"never\""),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn sender_address_list_is_canonical_and_bounded() {
+        let ctx = test_ctx();
+        assert_eq!(
+            compile_sender_addresses(
+                &serde_json::json!("0x0000000000000000000000000000000000000001"),
+                &ctx,
+            )
+            .unwrap(),
+            ADDRESS_ONE
+        );
+        assert!(compile_sender_addresses(&serde_json::json!([]), &ctx).is_err());
+        assert!(compile_sender_addresses(
+            &serde_json::json!([
+                "0x0000000000000000000000000000000000000001",
+                "0x0000000000000000000000000000000000000001"
+            ]),
+            &ctx,
+        )
+        .is_err());
+        assert!(compile_sender_addresses(
+            &serde_json::json!([
+                "0x0000000000000000000000000000000000000001",
+                "0x0000000000000000000000000000000000000002",
+                "0x0000000000000000000000000000000000000003"
+            ]),
+            &ctx,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn semantic_enrollment_selectors_are_independently_recomputed() {
+        assert_eq!(PARAM_SENDER_ADDRESS, 0x49);
+        assert_eq!(PARAM_WORD_GUARD, 0x4A);
+        let expected = [
+            (
+                ROUTER02_MAINNET,
+                "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+            ),
+            (
+                ROUTER02_MAINNET,
+                "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+            ),
+            (LIDO_QUEUE_MAINNET, "requestWithdrawals(uint256[],address)"),
+            (
+                LIDO_QUEUE_MAINNET,
+                "requestWithdrawalsWstETH(uint256[],address)",
+            ),
+        ];
+        for (enrollment, (contract, signature)) in
+            SEMANTIC_FORMAT_ENROLLMENTS.into_iter().zip(expected)
+        {
+            let digest = keccak256(enrollment.canonical_signature.as_bytes());
+            assert_eq!(enrollment.selector, digest[..4]);
+            assert_eq!(enrollment.contract, contract);
+            assert_eq!(enrollment.canonical_signature, signature);
+            assert_eq!(enrollment.chain_id, 1);
+        }
+    }
+
+    #[test]
+    fn production_router02_tolerant_compile_emits_exactly_two_single_hop_formats() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf();
+        let descriptor = root
+            .join("secure/data/erc7730-registry/registry/uniswap/calldata-UniswapV3Router02.json");
+        let mut drops = Vec::new();
+        let entries = compile_descriptor(
+            &descriptor,
+            &Policy::default(),
+            None,
+            true,
+            &mut drops,
+            &Erc20Capabilities::default(),
+        )
+        .expect("tolerant Router02 compile");
+        assert_eq!(entries.len(), 1, "one exact mainnet deployment leaf");
+        let entry = &entries[0];
+        assert_eq!(entry.descriptor_hash, ROUTER02_DESCRIPTOR_HASH);
+        assert_eq!((entry.chain_id, entry.contract), (1, ROUTER02_MAINNET));
+
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("device accepts emitted Router02 IR");
+        let formats: Vec<_> = ir
+            .format_iter()
+            .map(|format| format.expect("canonical format"))
+            .collect();
+        assert_eq!(formats.len(), 2);
+        assert_eq!(formats[0].selector, [0x04, 0xe4, 0x5a, 0xaf]);
+        assert_eq!(formats[1].selector, [0x50, 0x23, 0xb4, 0xdf]);
+        assert!(formats.iter().all(|format| format.field_count == 6));
+        assert_eq!(
+            drops.len(),
+            4,
+            "dynamic/multihop routes remain explicit partial drops"
+        );
+    }
+
+    #[test]
+    fn production_lido_queue_tolerant_compile_emits_both_sender_bound_request_routes() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf();
+        let descriptor = root
+            .join("secure/data/erc7730-registry/registry/lido/calldata-WithdrawalQueueERC721.json");
+        let erc20 = crate::erc20::build_db(&root.join("secure/data/erc20.json"))
+            .expect("build production ERC20 capabilities");
+        let mut drops = Vec::new();
+        let entries = compile_descriptor(
+            &descriptor,
+            &Policy::default(),
+            None,
+            true,
+            &mut drops,
+            &erc20.capabilities,
+        )
+        .expect("tolerant Lido queue compile");
+        assert_eq!(entries.len(), 1, "one exact mainnet deployment leaf");
+        let entry = &entries[0];
+        assert_eq!(entry.descriptor_hash, LIDO_QUEUE_DESCRIPTOR_HASH);
+        assert_eq!((entry.chain_id, entry.contract), (1, LIDO_QUEUE_MAINNET));
+
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("device accepts emitted Lido IR");
+        let selectors: BTreeSet<_> = ir
+            .format_iter()
+            .map(|format| format.expect("canonical format").selector)
+            .collect();
+        for selector in [[0xd6, 0x68, 0x10, 0x42], [0x19, 0xaa, 0x62, 0x57]] {
+            assert!(
+                selectors.contains(&selector),
+                "missing selector 0x{}; present={:?}; drops={drops:#?}",
+                hex::encode(selector),
+                selectors
+            );
+        }
+        assert_eq!(selectors.len(), 7, "five legacy plus two request routes");
+        assert_eq!(drops.len(), 4, "permit and batch-claim routes stay refused");
+    }
+
+    /// Owner utility for replacing
+    /// `ROUTER02_DESCRIPTOR_HASH`. This is intentionally
+    /// ignored during ordinary tests because it reads the checked-in corpus.
+    #[test]
+    #[ignore = "owner utility: prints SHA-256(JCS(resolved Router02 descriptor))"]
+    fn print_router02_descriptor_hash_after_curation() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf();
+        let descriptor = root.join(
+            "secure/data/erc7730/curations/files/registry/uniswap/calldata-UniswapV3Router02.json",
+        );
+        let json = load_resolved_descriptor_json(&descriptor, None).expect("load descriptor");
+        let hash = sha256_of(&jcs_canonicalize(&json).expect("JCS descriptor"));
+        eprintln!(
+            "Router02 semantic enrollment descriptor hash: 0x{}",
+            hex::encode(hash)
+        );
+        assert_eq!(
+            hash, ROUTER02_DESCRIPTOR_HASH,
+            "semantic enrollment must remain bound to exact final curation"
+        );
+    }
+
+    /// Owner utility for replacing `LIDO_QUEUE_DESCRIPTOR_HASH` after an
+    /// intentional curation update.
+    #[test]
+    #[ignore = "owner utility: prints SHA-256(JCS(resolved Lido queue descriptor))"]
+    fn print_lido_queue_descriptor_hash_after_curation() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf();
+        let descriptor = root.join(
+            "secure/data/erc7730/curations/files/registry/lido/calldata-WithdrawalQueueERC721.json",
+        );
+        let json = load_resolved_descriptor_json(&descriptor, None).expect("load descriptor");
+        let hash = sha256_of(&jcs_canonicalize(&json).expect("JCS descriptor"));
+        eprintln!(
+            "Lido queue semantic enrollment descriptor hash: 0x{}",
+            hex::encode(hash)
+        );
+        assert_eq!(
+            hash, LIDO_QUEUE_DESCRIPTOR_HASH,
+            "semantic enrollment must remain bound to exact final curation"
+        );
     }
 
     #[test]
@@ -12166,6 +13847,57 @@ mod tests {
                 false,
             )
             .is_err());
+        }
+    }
+
+    #[test]
+    fn include_resolution_is_bounded_to_the_receipted_json_corpus() {
+        let temp = tempfile::tempdir().expect("create registry fixture");
+        let root = temp.path();
+        let registry_dir = root.join("registry/example");
+        let ercs_dir = root.join("ercs");
+        fs::create_dir_all(&registry_dir).unwrap();
+        fs::create_dir_all(&ercs_dir).unwrap();
+        let descriptor = registry_dir.join("descriptor.json");
+        fs::write(&descriptor, b"{}\n").unwrap();
+        fs::write(registry_dir.join("common.json"), b"{}\n").unwrap();
+        fs::write(ercs_dir.join("base.json"), b"{}\n").unwrap();
+
+        assert_eq!(
+            resolve_include_path(root, &descriptor, "common.json").unwrap(),
+            registry_dir.join("common.json").canonicalize().unwrap()
+        );
+        assert_eq!(
+            resolve_include_path(root, &descriptor, "../../ercs/base.json").unwrap(),
+            ercs_dir.join("base.json").canonicalize().unwrap()
+        );
+
+        fs::write(root.join("planted.json"), b"{}\n").unwrap();
+        let error = resolve_include_path(root, &descriptor, "../../planted.json").unwrap_err();
+        assert!(error.contains("outside the receipted"), "{error}");
+
+        for (relative, include_ref) in [
+            ("registry/example/common.txt", "common.txt"),
+            ("registry/example/hidden.tests.json", "hidden.tests.json"),
+            ("registry/example/tests/hidden.json", "tests/hidden.json"),
+        ] {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"{}\n").unwrap();
+            let error = resolve_include_path(root, &descriptor, include_ref).unwrap_err();
+            assert!(error.contains("outside the receipted"), "{error}");
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(
+                registry_dir.join("common.json"),
+                registry_dir.join("link.json"),
+            )
+            .unwrap();
+            let error = resolve_include_path(root, &descriptor, "link.json").unwrap_err();
+            assert!(error.contains("non-symlink"), "{error}");
         }
     }
 }

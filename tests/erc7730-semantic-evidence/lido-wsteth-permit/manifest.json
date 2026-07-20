@@ -195,6 +195,16 @@
   "descriptor": {
     "curated_file": "secure/data/erc7730/curations/files/registry/lido/calldata-wstETH.json",
     "vendored_file": "secure/data/erc7730-registry/registry/lido/calldata-wstETH.json",
+    "max_value_display": {
+      "routes": [
+        "approve(address,uint256)",
+        "increaseAllowance(address,uint256)",
+        "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)"
+      ],
+      "threshold": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "message": "Max uint256",
+      "meaning": "Because uint256 has no value above this threshold, the label is a one-to-one rendering of the exact signed maximum value. It does not claim that wstETH treats max as non-decrementing or contract-defined infinity."
+    },
     "permit_operand_paths": [
       "#.owner",
       "#.spender",
@@ -211,6 +221,7 @@
     "The unwrap route displays the exact wstETH input but not the live-state-dependent stETH amount transferred in return.",
     "Approve sets a signed replacement allowance, but a nonzero-to-nonzero approval retains the standard ERC-20 transaction-ordering race.",
     "IncreaseAllowance and decreaseAllowance display the signed delta; the prior and resulting allowances are live state and are not signed calldata.",
+    "wstETH has no infinite-allowance exception: transferFrom decrements even uint256::MAX. The max-only Max uint256 label denotes the exact signed constant, not an unlimited contract state.",
     "TransferFrom consumes the executing caller's live allowance from the signed sender; the remaining allowance is not displayed.",
     "Blockscout marks the source verified and partially verified, but not fully verified.",
     "This is a fixed-block historical receipt: it does not prove later code or state and does not provide live deployment monitoring.",

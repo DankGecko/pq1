@@ -10,8 +10,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use dbgen::erc7730::build_db_tolerant_with_erc20_capabilities;
+use pqsigner_erc7730::abi::container_field;
 use pqsigner_erc7730::binding::{cross_check_contract, BindingError};
-use pqsigner_erc7730::ir::{Erc7730Ir, FormatOp, Visibility};
+use pqsigner_erc7730::ir::{Erc7730Ir, FormatOp, PathOp, Visibility};
 use pqsigner_erc7730::render::params::parse as parse_params;
 use pqsigner_erc7730::render::policy::TerminalKind;
 use pqsigner_tx_core::hash::keccak256;
@@ -37,12 +38,24 @@ fn lido_queue_evidence_root() -> PathBuf {
     workspace_root().join("tests/erc7730-semantic-evidence/lido-withdrawal-queue")
 }
 
+fn lido_staking_evidence_root() -> PathBuf {
+    workspace_root().join("tests/erc7730-semantic-evidence/lido-staking")
+}
+
+fn aave_permit_evidence_root() -> PathBuf {
+    workspace_root().join("tests/erc7730-semantic-evidence/aave-pq-permit-compatibility")
+}
+
 fn uniswap_evidence_root() -> PathBuf {
     workspace_root().join("tests/erc7730-semantic-evidence/uniswap-router02-single-hop")
 }
 
 fn weth9_evidence_root() -> PathBuf {
     workspace_root().join("tests/erc7730-semantic-evidence/weth9-deposit")
+}
+
+fn allowance_threshold_evidence_root() -> PathBuf {
+    workspace_root().join("tests/erc7730-semantic-evidence/allowance-threshold-honesty")
 }
 
 fn read_json(path: &Path) -> Value {
@@ -95,6 +108,61 @@ fn assert_fragments_in_order(haystack: &str, fragments: &[&str]) {
     }
 }
 
+fn rpc_response(receipt: &Value, id: u64) -> &Value {
+    receipt
+        .as_array()
+        .expect("RPC receipt is an array")
+        .iter()
+        .find(|response| response["id"].as_u64() == Some(id))
+        .unwrap_or_else(|| panic!("RPC receipt is missing response id {id}"))
+}
+
+fn decode_abi_word_address(text: &str) -> String {
+    let word = decode_hex_text(text);
+    assert_eq!(word.len(), 32, "ABI address result is one word");
+    assert_eq!(&word[..12], &[0u8; 12], "ABI address padding changed");
+    format!("0x{}", hex::encode(&word[12..]))
+}
+
+fn decode_abi_word_u128(text: &str) -> u128 {
+    let word = decode_hex_text(text);
+    assert_eq!(word.len(), 32, "ABI integer result is one word");
+    assert_eq!(&word[..16], &[0u8; 16], "test value exceeds u128");
+    u128::from_be_bytes(word[16..].try_into().expect("u128 word width"))
+}
+
+fn normalized_solidity_function(source: &str, signature: &str) -> String {
+    let start = source
+        .find(signature)
+        .unwrap_or_else(|| panic!("missing Solidity function signature: {signature}"));
+    let open = source[start..]
+        .find('{')
+        .map(|offset| start + offset)
+        .unwrap_or_else(|| panic!("missing Solidity function body: {signature}"));
+    let mut depth = 0usize;
+    let mut end = None;
+    for (offset, byte) in source.as_bytes()[open..].iter().enumerate() {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.checked_sub(1).expect("balanced Solidity braces");
+                if depth == 0 {
+                    end = Some(open + offset + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let definition = &source[start..end.expect("complete Solidity function body")];
+    let code_without_line_comments = definition
+        .lines()
+        .map(|line| line.split_once("//").map_or(line, |(code, _)| code))
+        .collect::<Vec<_>>()
+        .join("\n");
+    normalized_whitespace(&code_without_line_comments)
+}
+
 fn decode_abi_string_result(text: &str) -> String {
     let bytes = decode_hex_text(text);
     assert!(bytes.len() >= 64, "ABI string result is truncated");
@@ -107,6 +175,122 @@ fn decode_abi_string_result(text: &str) -> String {
         "ABI string payload is truncated"
     );
     String::from_utf8(bytes[64..64 + length].to_vec()).expect("ABI string is UTF-8")
+}
+
+#[test]
+fn aave_v3_vrs_permit_routes_cannot_carry_pqsmartwallet_authorization() {
+    let root = aave_permit_evidence_root();
+    let manifest = read_json(&root.join("manifest.json"));
+    assert_eq!(manifest["schema_version"].as_u64(), Some(1));
+    assert_eq!(
+        required_str(&manifest["revision_sources"], "revision_11_commit"),
+        "fd1fbd9150426ca8ace9cee45b4acf912ae84f5b"
+    );
+    assert_eq!(
+        required_str(&manifest["revision_sources"], "revision_10_commit"),
+        "e8feb287e4bc492c62a5c1c19086262c6e223b37"
+    );
+
+    let upstream = manifest["upstream"]
+        .as_array()
+        .expect("Aave upstream evidence is an array");
+    assert_eq!(upstream.len(), 3);
+    for artifact in upstream {
+        assert_eq!(
+            required_str(artifact, "repository"),
+            "https://github.com/aave-dao/aave-v3-origin"
+        );
+        assert_eq!(
+            required_str(artifact, "commit"),
+            "fd1fbd9150426ca8ace9cee45b4acf912ae84f5b"
+        );
+        let archive = root.join(required_str(artifact, "archive_file"));
+        let bytes = fs::read(&archive)
+            .unwrap_or_else(|error| panic!("read {}: {error}", archive.display()));
+        assert_eq!(
+            sha256_hex(&bytes),
+            required_str(artifact, "archive_file_sha256"),
+            "Aave source excerpt drifted: {}",
+            archive.display()
+        );
+        assert_eq!(required_str(artifact, "full_file_sha256").len(), 64);
+    }
+
+    let pool = normalized_whitespace(
+        &fs::read_to_string(root.join("source/Pool.permit.excerpt.sol"))
+            .expect("read Aave Pool excerpt"),
+    );
+    assert_fragments_in_order(
+        &pool,
+        &[
+            "function supply(",
+            "user: _msgSender()",
+            "function supplyWithPermit(",
+            "IERC20WithPermit(asset).permit( _msgSender(), address(this), amount, deadline, permitV, permitR, permitS ) {} catch {}",
+            "user: _msgSender()",
+            "function repay(",
+            "user: _msgSender()",
+            "function repayWithPermit(",
+            "IERC20WithPermit(asset).permit( _msgSender(), address(this), amount, deadline, permitV, permitR, permitS ) {} catch {}",
+            "user: _msgSender()",
+        ],
+    );
+    assert_eq!(
+        pool.matches("supplierEModeCategory: _usersEModeCategory[onBehalfOf]")
+            .count(),
+        2,
+        "permit and ordinary supply must share the same continuation"
+    );
+    assert_eq!(
+        pool.matches("useATokens: false").count(),
+        2,
+        "permit and ordinary repay must share the same continuation"
+    );
+
+    let gateway = normalized_whitespace(
+        &fs::read_to_string(root.join("source/WrappedTokenGatewayV3.permit.excerpt.sol"))
+            .expect("read Aave gateway excerpt"),
+    );
+    assert_fragments_in_order(
+        &gateway,
+        &[
+            "function withdrawETH(",
+            "aWETH.transferFrom(msg.sender, address(this), amountToWithdraw)",
+            "function withdrawETHWithPermit(",
+            "aWETH.permit(msg.sender, address(this), amount, deadline, permitV, permitR, permitS) {} catch {}",
+            "aWETH.transferFrom(msg.sender, address(this), amountToWithdraw)",
+        ],
+    );
+
+    let atoken = normalized_whitespace(
+        &fs::read_to_string(root.join("source/AToken.permit.excerpt.sol"))
+            .expect("read Aave aToken excerpt"),
+    );
+    assert!(atoken
+        .contains("require(owner == ECDSA.recover(digest, v, r, s), Errors.InvalidSignature())"));
+
+    let workspace = workspace_root();
+    let wallet = fs::read_to_string(workspace.join("contracts/smart-wallet/src/PQSmartWallet.sol"))
+        .expect("read PQSmartWallet source");
+    assert!(wallet.contains("target.call{value: value}(data)"));
+    assert!(wallet.contains("targets[i].call{value: values[i]}(datas[i])"));
+    assert!(wallet.contains("if (signature.length != 96 + paddedInner) return false;"));
+    assert!(wallet.contains("if (innerLen != C10_SIG_LEN) return false;"));
+
+    let constants = fs::read_to_string(
+        workspace.join("contracts/smart-wallet/src/generated/PqsignerProto.sol"),
+    )
+    .expect("read generated signature constants");
+    assert!(constants.contains("uint256 internal constant C10_SIG_LEN = 4008;"));
+    assert!(constants.contains("uint256 internal constant SIG_WRAPPER_LEN = 4128;"));
+    assert_eq!(
+        manifest["pqsmartwallet"]["c10_signature_bytes"].as_u64(),
+        Some(4008)
+    );
+    assert_eq!(
+        manifest["pqsmartwallet"]["signature_wrapper_bytes"].as_u64(),
+        Some(4128)
+    );
 }
 
 fn eip712_domain_separator(
@@ -127,7 +311,7 @@ fn eip712_domain_separator(
 }
 
 #[test]
-fn weth9_deposit_descriptor_and_generated_ir_bind_msg_value_on_both_deployments() {
+fn weth9_deposit_and_withdraw_descriptor_and_generated_ir_bind_exact_signed_amounts() {
     let root = workspace_root();
     let descriptor_path =
         root.join("secure/data/erc7730-registry/registry/weth/calldata-weth.json");
@@ -161,25 +345,57 @@ fn weth9_deposit_descriptor_and_generated_ir_bind_msg_value_on_both_deployments(
         .collect();
     assert_eq!(actual_deployments, expected_deployments);
 
-    let descriptor_format = &descriptor["display"]["formats"]["deposit()"];
-    assert_eq!(descriptor_format["intent"].as_str(), Some("Wrap"));
-    let descriptor_fields = descriptor_format["fields"]
+    let descriptor_formats = descriptor["display"]["formats"]
+        .as_object()
+        .expect("WETH descriptor formats");
+    assert_eq!(
+        descriptor_formats
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["deposit()", "withdraw(uint256 wad)"])
+    );
+
+    let deposit_descriptor = &descriptor_formats["deposit()"];
+    assert_eq!(deposit_descriptor["intent"].as_str(), Some("Wrap"));
+    let deposit_fields = deposit_descriptor["fields"]
         .as_array()
         .expect("WETH deposit fields");
-    assert_eq!(descriptor_fields.len(), 1);
-    assert_eq!(descriptor_fields[0]["label"].as_str(), Some("Amount"));
-    assert_eq!(descriptor_fields[0]["path"].as_str(), Some("@.value"));
-    assert_eq!(descriptor_fields[0]["format"].as_str(), Some("amount"));
+    assert_eq!(deposit_fields.len(), 1);
+    assert_eq!(deposit_fields[0]["label"].as_str(), Some("Amount"));
+    assert_eq!(deposit_fields[0]["path"].as_str(), Some("@.value"));
+    assert_eq!(deposit_fields[0]["format"].as_str(), Some("amount"));
     assert!(
-        descriptor_fields[0].get("params").is_none(),
+        deposit_fields[0].get("params").is_none(),
         "native value semantics must come from the authenticated @.value path, not host metadata"
     );
 
-    let signature = "deposit()";
-    let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+    let withdraw_descriptor = &descriptor_formats["withdraw(uint256 wad)"];
+    assert_eq!(withdraw_descriptor["intent"].as_str(), Some("Unwrap"));
+    let withdraw_fields = withdraw_descriptor["fields"]
+        .as_array()
+        .expect("WETH withdraw fields");
+    assert_eq!(withdraw_fields.len(), 1);
+    assert_eq!(withdraw_fields[0]["label"].as_str(), Some("Amount"));
+    assert_eq!(withdraw_fields[0]["path"].as_str(), Some("wad"));
+    assert_eq!(withdraw_fields[0]["format"].as_str(), Some("tokenAmount"));
+    assert_eq!(withdraw_fields[0]["visible"].as_str(), Some("always"));
+    assert_eq!(
+        withdraw_fields[0]["params"]["tokenPath"].as_str(),
+        Some("@.to"),
+        "withdraw amount identity must be the authenticated exact target contract"
+    );
+
+    let deposit_signature = "deposit()";
+    let deposit_selector: [u8; 4] = keccak256(deposit_signature.as_bytes())[..4]
         .try_into()
         .expect("deposit selector width");
-    assert_eq!(selector, [0xd0, 0xe3, 0x0d, 0xb0]);
+    assert_eq!(deposit_selector, [0xd0, 0xe3, 0x0d, 0xb0]);
+    let withdraw_signature = "withdraw(uint256)";
+    let withdraw_selector: [u8; 4] = keccak256(withdraw_signature.as_bytes())[..4]
+        .try_into()
+        .expect("withdraw selector width");
+    assert_eq!(withdraw_selector, [0x2e, 0x1a, 0x7d, 0x4d]);
 
     let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
         .expect("build production ERC20 capability corpus");
@@ -201,7 +417,7 @@ fn weth9_deposit_descriptor_and_generated_ir_bind_msg_value_on_both_deployments(
     assert_eq!(entries.len(), 2, "both WETH deployments must emit leaves");
 
     let expected_descriptor_hash: [u8; 32] =
-        decode_hex_text("9aa323ffec9549882000f358cd1a051e552cb7e7451c8e73b59f9408334bd462")
+        decode_hex_text("e0e7cdedb3078b0ae2542baf084a519a0897a295ae75bf92fc18cfb89f2293e2")
             .try_into()
             .expect("descriptor hash width");
     for entry in entries {
@@ -211,7 +427,7 @@ fn weth9_deposit_descriptor_and_generated_ir_bind_msg_value_on_both_deployments(
             "generated WETH leaf deployment drifted"
         );
         assert_eq!(entry.descriptor_hash, expected_descriptor_hash);
-        assert_eq!(entry.ir_bytes.len(), 173, "WETH IR wire length drifted");
+        assert_eq!(entry.ir_bytes.len(), 218, "WETH IR wire length drifted");
 
         let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("parse generated WETH IR");
         assert_eq!(
@@ -220,17 +436,17 @@ fn weth9_deposit_descriptor_and_generated_ir_bind_msg_value_on_both_deployments(
         );
         assert_eq!(ir.owner, b"WETH");
         assert_eq!(ir.contract_name, b"WETH");
-        assert_eq!(ir.format_count(), Ok(1));
+        assert_eq!(ir.format_count(), Ok(2));
 
-        let format = ir
-            .find_format_by_selector(&selector)
+        let deposit = ir
+            .find_format_by_selector(&deposit_selector)
             .expect("WETH format table parses")
             .expect("deposit remains admitted");
-        assert_eq!(format.selector, selector);
-        assert_eq!(format.intent, b"Wrap");
-        assert_eq!(format.static_head_words, 0);
-        assert_eq!(format.nested_descent_count, 0);
-        let fields: Vec<_> = format
+        assert_eq!(deposit.selector, deposit_selector);
+        assert_eq!(deposit.intent, b"Wrap");
+        assert_eq!(deposit.static_head_words, 0);
+        assert_eq!(deposit.nested_descent_count, 0);
+        let fields: Vec<_> = deposit
             .fields()
             .map(|field| field.expect("WETH deposit field parses"))
             .collect();
@@ -252,6 +468,49 @@ fn weth9_deposit_descriptor_and_generated_ir_bind_msg_value_on_both_deployments(
         assert_eq!(params.integer_width_bytes, Some(32));
         assert!(params.token.is_none());
         assert!(params.token_path.is_none());
+
+        let withdraw = ir
+            .find_format_by_selector(&withdraw_selector)
+            .expect("WETH format table parses")
+            .expect("withdraw remains admitted");
+        assert_eq!(withdraw.selector, withdraw_selector);
+        assert_eq!(withdraw.intent, b"Unwrap");
+        assert_eq!(withdraw.static_head_words, 1);
+        assert_eq!(withdraw.nested_descent_count, 0);
+        let fields: Vec<_> = withdraw
+            .fields()
+            .map(|field| field.expect("WETH withdraw field parses"))
+            .collect();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].label, b"Amount");
+        assert_eq!(
+            FormatOp::try_from(fields[0].format_op),
+            Ok(FormatOp::TokenAmount)
+        );
+        assert_eq!(
+            ir.path_bytes(fields[0].path_off)
+                .expect("WETH withdraw amount path parses"),
+            [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0],
+            "withdraw must display the exact first uint256 calldata word"
+        );
+        let params =
+            parse_params(&ir, fields[0].param_off).expect("WETH token amount params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+        assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+        assert_eq!(params.integer_width_bytes, Some(32));
+        assert!(params.token.is_none());
+        let mut target_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+        target_path.extend_from_slice(&container_field::TO.to_be_bytes());
+        assert_eq!(params.token_path, Some(target_path.as_slice()));
+
+        for selector in [deposit_selector, withdraw_selector] {
+            assert!(
+                registry
+                    .known_calls
+                    .contains(&(entry.chain_id, entry.contract, selector)),
+                "each admitted WETH route must be an exact known-call tuple"
+            );
+        }
     }
 }
 
@@ -260,13 +519,67 @@ fn weth9_fixed_block_evidence_binds_source_abi_runtime_and_rpc_agreement() {
     let evidence = weth9_evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));
     assert_eq!(manifest["schema_version"].as_u64(), Some(1));
-    assert_eq!(required_str(&manifest, "canonical_signature"), "deposit()");
-    assert_eq!(required_str(&manifest, "selector"), "0xd0e30db0");
-    assert_eq!(manifest["semantic_effect"]["payable"].as_bool(), Some(true));
+    let routes = manifest["routes"].as_array().expect("WETH9 routes");
+    assert_eq!(routes.len(), 2);
+    let route_by_key: BTreeMap<_, _> = routes
+        .iter()
+        .map(|route| (required_str(route, "key"), route))
+        .collect();
     assert_eq!(
-        required_str(&manifest["descriptor"]["displayed_signed_fact"], "path"),
+        route_by_key.keys().copied().collect::<BTreeSet<_>>(),
+        BTreeSet::from(["deposit", "withdraw"])
+    );
+    let deposit_route = route_by_key["deposit"];
+    assert_eq!(
+        required_str(deposit_route, "descriptor_signature"),
+        "deposit()"
+    );
+    assert_eq!(
+        required_str(deposit_route, "canonical_signature"),
+        "deposit()"
+    );
+    assert_eq!(required_str(deposit_route, "selector"), "0xd0e30db0");
+    assert_eq!(required_str(deposit_route, "state_mutability"), "payable");
+    assert_eq!(
+        required_str(&deposit_route["displayed_signed_facts"][0], "path"),
         "@.value"
     );
+    assert_eq!(
+        required_str(deposit_route, "successful_effect"),
+        "Credits balanceOf[msg.sender] by exactly msg.value and emits Deposit(msg.sender, msg.value)."
+    );
+
+    let withdraw_route = route_by_key["withdraw"];
+    assert_eq!(
+        required_str(withdraw_route, "descriptor_signature"),
+        "withdraw(uint256 wad)"
+    );
+    assert_eq!(
+        required_str(withdraw_route, "canonical_signature"),
+        "withdraw(uint256)"
+    );
+    assert_eq!(required_str(withdraw_route, "selector"), "0x2e1a7d4d");
+    assert_eq!(
+        required_str(withdraw_route, "state_mutability"),
+        "nonpayable"
+    );
+    let withdraw_fact = &withdraw_route["displayed_signed_facts"][0];
+    assert_eq!(required_str(withdraw_fact, "path"), "wad");
+    assert_eq!(required_str(withdraw_fact, "format"), "tokenAmount");
+    assert_eq!(required_str(withdraw_fact, "token_path"), "@.to");
+    assert_eq!(required_str(withdraw_fact, "visibility"), "always");
+    assert_eq!(
+        required_str(withdraw_route, "successful_effect"),
+        "Requires balanceOf[msg.sender] >= wad, subtracts exactly wad from that balance, transfers exactly wad wei of native ETH to msg.sender, and emits Withdrawal(msg.sender, wad)."
+    );
+    for route in routes {
+        let signature = required_str(route, "canonical_signature");
+        assert_eq!(
+            format!("0x{}", hex::encode(&keccak256(signature.as_bytes())[..4])),
+            required_str(route, "selector"),
+            "WETH9 route selector drifted"
+        );
+    }
 
     let receipt_spec = &manifest["rpc_receipt"];
     let receipt_path = evidence.join(required_str(receipt_spec, "file"));
@@ -279,12 +592,15 @@ fn weth9_fixed_block_evidence_binds_source_abi_runtime_and_rpc_agreement() {
     assert_eq!(receipt["schema_version"].as_u64(), Some(1));
     assert_eq!(
         required_str(&receipt, "canonical_signature"),
-        required_str(&manifest, "canonical_signature")
+        required_str(deposit_route, "canonical_signature"),
+        "the immutable receipt retains its original deposit capture label"
     );
     assert_eq!(
         required_str(&receipt, "selector"),
-        required_str(&manifest, "selector")
+        required_str(deposit_route, "selector")
     );
+    assert!(required_str(receipt_spec, "capture_label_boundary")
+        .contains("complete-runtime, proxy-slot, and metadata observations"));
 
     let receipt_networks = receipt["networks"]
         .as_array()
@@ -443,7 +759,18 @@ fn weth9_fixed_block_evidence_binds_source_abi_runtime_and_rpc_agreement() {
                 "balanceOf[msg.sender] += msg.value;",
                 "Deposit(msg.sender, msg.value);",
                 "}",
+                "function withdraw(uint wad) public {",
+                "require(balanceOf[msg.sender] >= wad);",
+                "balanceOf[msg.sender] -= wad;",
+                "msg.sender.transfer(wad);",
+                "Withdrawal(msg.sender, wad);",
+                "}",
             ],
+        );
+        assert_eq!(
+            normalized_solidity_function(&source, "function withdraw(uint wad) public"),
+            "function withdraw(uint wad) public { require(balanceOf[msg.sender] >= wad); balanceOf[msg.sender] -= wad; msg.sender.transfer(wad); Withdrawal(msg.sender, wad); }",
+            "the pinned withdrawal must debit, pay, and report the same exact signed wad"
         );
         sources.push(source);
     }
@@ -479,6 +806,31 @@ fn weth9_fixed_block_evidence_binds_source_abi_runtime_and_rpc_agreement() {
     assert_eq!(deposit["stateMutability"].as_str(), Some("payable"));
     assert_eq!(deposit["inputs"].as_array().map(Vec::len), Some(0));
     assert_eq!(deposit["outputs"].as_array().map(Vec::len), Some(0));
+    let withdraw = abi
+        .as_array()
+        .expect("WETH9 ABI array")
+        .iter()
+        .find(|entry| {
+            entry["type"].as_str() == Some("function") && entry["name"].as_str() == Some("withdraw")
+        })
+        .expect("withdraw ABI entry");
+    assert_eq!(withdraw["stateMutability"].as_str(), Some("nonpayable"));
+    assert_eq!(withdraw["payable"].as_bool(), Some(false));
+    let withdraw_inputs = withdraw["inputs"].as_array().expect("withdraw ABI inputs");
+    assert_eq!(withdraw_inputs.len(), 1);
+    assert_eq!(withdraw_inputs[0]["name"].as_str(), Some("wad"));
+    assert_eq!(withdraw_inputs[0]["type"].as_str(), Some("uint256"));
+    assert_eq!(withdraw["outputs"].as_array().map(Vec::len), Some(0));
+    assert_eq!(
+        format!(
+            "{}({})",
+            withdraw["name"].as_str().expect("withdraw ABI name"),
+            withdraw_inputs[0]["type"]
+                .as_str()
+                .expect("withdraw ABI input type")
+        ),
+        required_str(withdraw_route, "canonical_signature")
+    );
 
     let mainnet_record = &manifest["deployments"][0]["official_deployment_record"];
     let deployment_bytes = fs::read(evidence.join(required_str(mainnet_record, "archived_file")))
@@ -505,6 +857,944 @@ fn weth9_fixed_block_evidence_binds_source_abi_runtime_and_rpc_agreement() {
         manifest["direct_contract_classification"]["classification"].as_str(),
         Some("direct")
     );
+}
+
+#[test]
+fn lido_staking_fixed_block_evidence_binds_proxy_runtime_and_rpc_agreement() {
+    let root = workspace_root();
+    let evidence = lido_staking_evidence_root();
+    let manifest = read_json(&evidence.join("manifest.json"));
+    assert_eq!(manifest["schema_version"].as_u64(), Some(1));
+
+    for upstream in [
+        &manifest["upstream"]["lido_core"],
+        &manifest["upstream"]["si_lidity"],
+    ] {
+        for key in ["deployment_record", "source"] {
+            if let Some(spec) = upstream.get(key) {
+                let archive_file = required_str(spec, "archive_file");
+                let bytes = fs::read(evidence.join(archive_file))
+                    .unwrap_or_else(|error| panic!("read {archive_file}: {error}"));
+                assert_eq!(
+                    sha256_hex(&bytes),
+                    required_str(spec, "sha256"),
+                    "official Lido artifact drifted: {archive_file}"
+                );
+            }
+        }
+    }
+
+    let core_deployment = read_json(&evidence.join("deployment/deployed-mainnet.json"));
+    let core_lido = &core_deployment["app:lido"];
+    let steth = &manifest["deployment"]["steth"];
+    assert!(core_lido["proxy"]["address"]
+        .as_str()
+        .expect("official stETH proxy")
+        .eq_ignore_ascii_case(required_str(steth, "proxy_address")));
+    assert!(core_lido["implementation"]["address"]
+        .as_str()
+        .expect("official stETH implementation")
+        .eq_ignore_ascii_case(required_str(steth, "implementation_address")));
+    assert_eq!(
+        core_lido["implementation"]["contract"].as_str(),
+        Some("contracts/0.4.24/Lido.sol")
+    );
+    assert_eq!(
+        core_lido["aragonApp"]["id"].as_str(),
+        Some(required_str(steth, "app_id"))
+    );
+
+    let si_deployment = fs::read_to_string(evidence.join("deployment/si-lidity-mainnet.md"))
+        .expect("read official referral-staker deployment record");
+    assert!(si_deployment.contains("0xa88f0329C2c4ce51ba3fc619BBf44efE7120Dd0d"));
+    assert!(!si_deployment.contains("0xeC9d1B39594cde226CB3CFdf703C657983517EeE"));
+
+    let script_spec = &manifest["rpc"]["collection_script"];
+    let script_bytes = fs::read(evidence.join(required_str(script_spec, "file")))
+        .expect("read Lido RPC collection script");
+    assert_eq!(
+        sha256_hex(&script_bytes),
+        required_str(script_spec, "sha256")
+    );
+    let script = String::from_utf8(script_bytes).expect("collection script is UTF-8");
+    assert_fragments_in_order(
+        &script,
+        &[
+            "block=0x1862773",
+            "steth=0xae7ab96520de3a18e5e111b5eaab095312d7fe84",
+            "implementation=0x6ca84080381e43938476814be61b779a8bb6a600",
+            "staker=0xa88f0329c2c4ce51ba3fc619bbf44efe7120dd0d",
+            "collect_endpoint drpc https://eth.drpc.org",
+            "collect_endpoint mevblocker https://rpc.mevblocker.io",
+        ],
+    );
+
+    let receipt_specs = manifest["rpc"]["receipts"]
+        .as_array()
+        .expect("two Lido RPC receipts");
+    assert_eq!(receipt_specs.len(), 2);
+    assert_ne!(
+        required_str(&receipt_specs[0], "endpoint"),
+        required_str(&receipt_specs[1], "endpoint")
+    );
+    let mut receipts = Vec::new();
+    for spec in receipt_specs {
+        let bytes = fs::read(evidence.join(required_str(spec, "file")))
+            .expect("read endpoint-specific Lido RPC receipt");
+        assert_eq!(sha256_hex(&bytes), required_str(spec, "sha256"));
+        let receipt: Value = serde_json::from_slice(&bytes).expect("parse Lido RPC receipt");
+        let responses = receipt.as_array().expect("RPC receipt array");
+        assert_eq!(responses.len(), 15);
+        assert_eq!(
+            responses
+                .iter()
+                .map(|response| response["id"].as_u64().expect("numeric RPC id"))
+                .collect::<BTreeSet<_>>(),
+            (1u64..=15).collect()
+        );
+        for response in responses {
+            assert_eq!(response["jsonrpc"].as_str(), Some("2.0"));
+            assert!(response.get("error").is_none());
+            assert!(response.get("result").is_some());
+        }
+        receipts.push(receipt);
+    }
+    for id in 1u64..=15 {
+        assert_eq!(
+            rpc_response(&receipts[0], id)["result"],
+            rpc_response(&receipts[1], id)["result"],
+            "independent RPC results disagree for response id {id}"
+        );
+    }
+
+    assert_eq!(
+        rpc_response(&receipts[0], 1)["result"].as_str(),
+        Some("0x1")
+    );
+    let block = &rpc_response(&receipts[0], 2)["result"];
+    let fixed_block = &manifest["deployment"]["fixed_block"];
+    assert_eq!(block["number"], fixed_block["number_hex"]);
+    assert_eq!(block["hash"], fixed_block["hash"]);
+    assert_eq!(block["stateRoot"], fixed_block["state_root"]);
+    assert_eq!(block["timestamp"].as_str(), Some("0x6a5d3313"));
+
+    let runtime_bindings = [
+        ("steth_proxy", 3u64),
+        ("lido_implementation", 4u64),
+        ("referral_staker", 5u64),
+    ];
+    let mut runtimes = BTreeMap::<String, Vec<u8>>::new();
+    for (name, id) in runtime_bindings {
+        let spec = &manifest["runtime_artifacts"][name];
+        let artifact = fs::read(evidence.join(required_str(spec, "file")))
+            .unwrap_or_else(|error| panic!("read {name} runtime: {error}"));
+        assert_eq!(sha256_hex(&artifact), required_str(spec, "file_sha256"));
+        let runtime = decode_hex_text(
+            &String::from_utf8(artifact).unwrap_or_else(|_| panic!("{name} runtime is hex text")),
+        );
+        assert_eq!(
+            runtime.len() as u64,
+            spec["bytes"].as_u64().expect("runtime bytes")
+        );
+        assert_eq!(keccak_hex(&runtime), required_str(spec, "keccak256"));
+        assert_eq!(
+            runtime,
+            decode_hex_text(
+                rpc_response(&receipts[0], id)["result"]
+                    .as_str()
+                    .expect("RPC code result")
+            ),
+            "archived {name} runtime differs from the raw RPC result"
+        );
+        runtimes.insert(name.to_owned(), runtime);
+    }
+
+    assert_eq!(
+        decode_abi_word_address(
+            rpc_response(&receipts[0], 6)["result"]
+                .as_str()
+                .expect("implementation result")
+        ),
+        required_str(steth, "implementation_address")
+    );
+    assert_eq!(
+        decode_abi_word_u128(
+            rpc_response(&receipts[0], 7)["result"]
+                .as_str()
+                .expect("proxy type result")
+        ),
+        steth["proxy_type"].as_u64().expect("proxy type") as u128
+    );
+    assert_eq!(
+        decode_abi_word_address(
+            rpc_response(&receipts[0], 8)["result"]
+                .as_str()
+                .expect("kernel result")
+        ),
+        required_str(steth, "kernel")
+    );
+    assert_eq!(
+        rpc_response(&receipts[0], 9)["result"].as_str(),
+        Some(required_str(steth, "app_id"))
+    );
+
+    let staker = &manifest["deployment"]["referral_staker"];
+    assert_eq!(
+        decode_abi_word_address(
+            rpc_response(&receipts[0], 10)["result"]
+                .as_str()
+                .expect("staker stETH result")
+        ),
+        required_str(staker, "steth")
+    );
+    assert_eq!(
+        decode_abi_word_address(
+            rpc_response(&receipts[0], 11)["result"]
+                .as_str()
+                .expect("staker wstETH result")
+        ),
+        required_str(staker, "wsteth")
+    );
+
+    for (key, id) in [
+        ("shares_for_one_eth", 12u64),
+        ("pooled_eth_for_one_share", 13u64),
+        ("wsteth_for_one_steth", 14u64),
+        ("steth_for_one_wsteth", 15u64),
+    ] {
+        assert_eq!(
+            decode_abi_word_u128(
+                rpc_response(&receipts[0], id)["result"]
+                    .as_str()
+                    .expect("rate result")
+            ),
+            required_str(&manifest["fixed_block_outputs"], key)
+                .parse::<u128>()
+                .expect("manifest rate is u128"),
+            "fixed-block rate receipt drifted: {key}"
+        );
+    }
+
+    let staker_runtime = runtimes
+        .get("referral_staker")
+        .expect("referral-staker runtime");
+    let staker_spec = &manifest["runtime_artifacts"]["referral_staker"];
+    let prefix_len = staker_spec["executable_prefix_bytes"]
+        .as_u64()
+        .expect("executable prefix bytes") as usize;
+    let metadata_len = staker_spec["cbor_metadata_bytes"]
+        .as_u64()
+        .expect("CBOR metadata bytes") as usize;
+    assert_eq!(staker_runtime.len(), prefix_len + metadata_len + 2);
+    assert_eq!(
+        u16::from_be_bytes(
+            staker_runtime[staker_runtime.len() - 2..]
+                .try_into()
+                .expect("CBOR length suffix")
+        ) as usize,
+        metadata_len
+    );
+    let dependency = &manifest["wsteth_dependency"];
+    for (path_key, hash_key) in [
+        ("evidence_manifest", "evidence_manifest_sha256"),
+        ("runtime_file", "runtime_file_sha256"),
+        ("source_file", "source_file_sha256"),
+        ("wrap_abi_file", "wrap_abi_file_sha256"),
+    ] {
+        let bytes = fs::read(root.join(required_str(dependency, path_key)))
+            .unwrap_or_else(|error| panic!("read reused wstETH evidence: {error}"));
+        assert_eq!(sha256_hex(&bytes), required_str(dependency, hash_key));
+    }
+    let wsteth_runtime = read_hex(&root.join(required_str(dependency, "runtime_file")));
+    assert_eq!(
+        wsteth_runtime.len() as u64,
+        dependency["runtime_bytes"].as_u64().expect("wstETH bytes")
+    );
+    assert_eq!(
+        keccak_hex(&wsteth_runtime),
+        required_str(dependency, "runtime_keccak256")
+    );
+}
+
+#[test]
+fn lido_staking_archived_explorer_responses_bind_source_to_fixed_block_runtime() {
+    let evidence = lido_staking_evidence_root();
+    let manifest = read_json(&evidence.join("manifest.json"));
+    let cases = [
+        (
+            "lido_implementation",
+            "0x6ca84080381e43938476814be61b779a8bb6a600",
+            "Lido",
+            "v0.4.24+commit.e67f0147",
+            "constantinople",
+            "contracts/0.4.24/Lido.sol",
+            "source/Lido.sol",
+            "runtime/Lido.mainnet.hex",
+            36usize,
+            112usize,
+            None,
+        ),
+        (
+            "referral_staker",
+            "0xa88f0329c2c4ce51ba3fc619bbf44efe7120dd0d",
+            "WstETHReferralStaker",
+            "0.8.25+commit.b61c2a91",
+            "cancun",
+            "si-contracts/0.8.25/w/WstethStaker.sol",
+            "source/WstethStaker.sol",
+            "runtime/WstETHReferralStaker.mainnet.hex",
+            4usize,
+            6usize,
+            Some("0x0000000000000000000000007f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"),
+        ),
+    ];
+
+    for (
+        key,
+        address,
+        contract_name,
+        compiler,
+        evm_version,
+        file_path,
+        source_file,
+        runtime_file,
+        additional_source_count,
+        abi_entry_count,
+        constructor_args,
+    ) in cases
+    {
+        let spec = &manifest["verified_explorer"][key];
+        assert_eq!(required_str(spec, "address"), address);
+        assert!(required_str(spec, "api").ends_with(address));
+        assert_eq!(required_str(spec, "contract_name"), contract_name);
+        assert_eq!(required_str(spec, "compiler"), compiler);
+        assert_eq!(required_str(spec, "evm_version"), evm_version);
+        assert_eq!(required_str(spec, "file_path"), file_path);
+        assert_eq!(spec["fully_verified"].as_bool(), Some(true));
+        assert_eq!(spec["source_matches_archive"].as_bool(), Some(true));
+        assert_eq!(
+            spec["deployed_bytecode_matches_fixed_block_runtime"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            spec["additional_sources"].as_u64(),
+            Some(additional_source_count as u64)
+        );
+        assert_eq!(spec["abi_entries"].as_u64(), Some(abi_entry_count as u64));
+
+        let response_bytes = fs::read(evidence.join(required_str(spec, "archive_file")))
+            .unwrap_or_else(|error| panic!("read archived {key} explorer response: {error}"));
+        assert_eq!(
+            sha256_hex(&response_bytes),
+            required_str(spec, "archive_file_sha256")
+        );
+        let response: Value = serde_json::from_slice(&response_bytes)
+            .unwrap_or_else(|error| panic!("parse archived {key} explorer response: {error}"));
+
+        assert_eq!(response["name"].as_str(), Some(contract_name));
+        assert_eq!(response["compiler_version"].as_str(), Some(compiler));
+        assert_eq!(response["evm_version"].as_str(), Some(evm_version));
+        assert_eq!(response["file_path"].as_str(), Some(file_path));
+        assert_eq!(response["language"].as_str(), Some("solidity"));
+        assert_eq!(response["is_verified"].as_bool(), Some(true));
+        assert_eq!(response["is_fully_verified"].as_bool(), Some(true));
+        assert_eq!(response["is_partially_verified"].as_bool(), Some(false));
+        assert_eq!(response["is_changed_bytecode"].as_bool(), Some(false));
+        assert_eq!(response["creation_status"].as_str(), Some("success"));
+        assert!(response["conflicting_implementations"].is_null());
+        assert!(response["proxy_type"].is_null());
+        assert_eq!(
+            response["implementations"].as_array().map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(
+            response["optimization_enabled"].as_bool(),
+            spec["optimizer_enabled"].as_bool()
+        );
+        assert_eq!(
+            response["optimization_runs"].as_u64(),
+            spec["optimizer_runs"].as_u64()
+        );
+        assert_eq!(
+            response["compiler_settings"]["evmVersion"].as_str(),
+            Some(evm_version)
+        );
+        assert_eq!(
+            response["compiler_settings"]["optimizer"]["enabled"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            response["compiler_settings"]["optimizer"]["runs"].as_u64(),
+            Some(200)
+        );
+        assert!(response["compiler_settings"]
+            .as_object()
+            .is_some_and(|v| !v.is_empty()));
+        assert!(!required_str(&response, "creation_bytecode").is_empty());
+
+        let official_source = fs::read(evidence.join(source_file))
+            .unwrap_or_else(|error| panic!("read official {key} source: {error}"));
+        assert_eq!(
+            required_str(&response, "source_code").as_bytes(),
+            official_source,
+            "Blockscout's verified primary source must equal the official archive"
+        );
+        let fixed_block_runtime = read_hex(&evidence.join(runtime_file));
+        assert_eq!(
+            decode_hex_text(required_str(&response, "deployed_bytecode")),
+            fixed_block_runtime,
+            "Blockscout's verified deployed bytecode must equal both fixed-block RPC observations"
+        );
+
+        let additional_sources = response["additional_sources"]
+            .as_array()
+            .expect("complete explorer response retains additional sources");
+        assert_eq!(additional_sources.len(), additional_source_count);
+        let mut additional_paths = BTreeSet::new();
+        for source in additional_sources {
+            assert!(additional_paths.insert(required_str(source, "file_path")));
+            assert!(!required_str(source, "source_code").is_empty());
+        }
+        let abi = response["abi"]
+            .as_array()
+            .expect("complete explorer response retains full ABI");
+        assert_eq!(abi.len(), abi_entry_count);
+        assert_eq!(response["constructor_args"].as_str(), constructor_args);
+    }
+
+    let staker_response = read_json(&evidence.join(required_str(
+        &manifest["verified_explorer"]["referral_staker"],
+        "archive_file",
+    )));
+    assert_eq!(
+        staker_response["abi"],
+        read_json(&evidence.join("abi/WstETHReferralStaker.abi.json"))
+    );
+    assert_eq!(
+        decode_abi_word_address(required_str(&staker_response, "constructor_args")),
+        required_str(
+            &manifest["deployment"]["referral_staker"],
+            "constructor_wsteth"
+        )
+    );
+
+    let lido_response = read_json(&evidence.join(required_str(
+        &manifest["verified_explorer"]["lido_implementation"],
+        "archive_file",
+    )));
+    let archived_submit = read_json(&evidence.join("abi/Lido.submit.abi.json"));
+    let verified_submit = lido_response["abi"]
+        .as_array()
+        .expect("Lido full verified ABI")
+        .iter()
+        .find(|entry| {
+            entry["type"].as_str() == Some("function") && entry["name"].as_str() == Some("submit")
+        })
+        .expect("verified Lido ABI contains submit");
+    assert_eq!(verified_submit, &archived_submit[0]);
+}
+
+#[test]
+fn lido_staking_source_abi_descriptor_and_ir_bind_both_routes() {
+    let root = workspace_root();
+    let evidence = lido_staking_evidence_root();
+    let manifest = read_json(&evidence.join("manifest.json"));
+
+    let lido_source_spec = &manifest["upstream"]["lido_core"]["source"];
+    let lido_source_bytes = fs::read(evidence.join(required_str(lido_source_spec, "archive_file")))
+        .expect("read official Lido source");
+    assert_eq!(
+        sha256_hex(&lido_source_bytes),
+        required_str(lido_source_spec, "sha256")
+    );
+    let lido_source = String::from_utf8(lido_source_bytes).expect("Lido source is UTF-8");
+    assert_eq!(
+        normalized_solidity_function(&lido_source, "function submit(address _referral)"),
+        "function submit(address _referral) external payable returns (uint256) { return _submit(_referral); }"
+    );
+    assert_eq!(
+        normalized_solidity_function(&lido_source, "function _submit(address _referral)"),
+        "function _submit(address _referral) internal returns (uint256) { require(msg.value != 0, \"ZERO_DEPOSIT\"); _decreaseStakingLimit(msg.value); uint256 sharesAmount = getSharesByPooledEth(msg.value); _mintShares(msg.sender, sharesAmount); _setBufferedEther(_getBufferedEther() + msg.value); emit Submitted(msg.sender, msg.value, _referral); _emitTransferAfterMintingShares(msg.sender, sharesAmount); return sharesAmount; }"
+    );
+
+    let staker_source_spec = &manifest["upstream"]["si_lidity"]["source"];
+    let staker_source_bytes =
+        fs::read(evidence.join(required_str(staker_source_spec, "archive_file")))
+            .expect("read official referral-staker source");
+    assert_eq!(
+        sha256_hex(&staker_source_bytes),
+        required_str(staker_source_spec, "sha256")
+    );
+    let staker_source =
+        String::from_utf8(staker_source_bytes).expect("referral-staker source is UTF-8");
+    assert_eq!(
+        normalized_solidity_function(&staker_source, "constructor(IWstETH _wstETH)"),
+        "constructor(IWstETH _wstETH) { wstETH = _wstETH; stETH = IStETH(wstETH.stETH()); stETH.approve(address(wstETH), type(uint256).max); }"
+    );
+    assert_eq!(
+        normalized_solidity_function(&staker_source, "function stakeETH(address _referral)"),
+        "function stakeETH(address _referral) external payable returns (uint256) { uint256 stethAmount = _getPooledEthBySharesRoundUp(stETH.submit{value: msg.value}(_referral)); uint256 wstETHAmount = wstETH.wrap(stethAmount); wstETH.transfer(msg.sender, wstETHAmount); return wstETHAmount; }"
+    );
+    assert_eq!(
+        normalized_solidity_function(
+            &staker_source,
+            "function _getPooledEthBySharesRoundUp(uint256 _sharesAmount)"
+        ),
+        "function _getPooledEthBySharesRoundUp(uint256 _sharesAmount) internal view returns (uint256) { uint256 numeratorInEther = stETH.getTotalPooledEther(); uint256 denominatorInShares = stETH.getTotalShares(); return Math.ceilDiv(_sharesAmount * numeratorInEther, denominatorInShares); }"
+    );
+    assert_eq!(
+        normalized_solidity_function(&staker_source, "receive() external payable"),
+        "receive() external payable { revert EthTransferNotAllowed(); }"
+    );
+    assert!(staker_source.contains("can be zero address"));
+
+    let submit_abi_spec = &manifest["abi"]["lido_submit"];
+    let submit_abi_bytes = fs::read(evidence.join(required_str(submit_abi_spec, "archive_file")))
+        .expect("read Lido submit ABI");
+    assert_eq!(
+        sha256_hex(&submit_abi_bytes),
+        required_str(submit_abi_spec, "archive_file_sha256")
+    );
+    let submit_abi: Value = serde_json::from_slice(&submit_abi_bytes).expect("parse submit ABI");
+    let submit = &submit_abi.as_array().expect("submit ABI array")[0];
+    assert_eq!(submit["name"].as_str(), Some("submit"));
+    assert_eq!(submit["stateMutability"].as_str(), Some("payable"));
+    assert_eq!(submit["inputs"][0]["type"].as_str(), Some("address"));
+    assert_eq!(submit["outputs"][0]["type"].as_str(), Some("uint256"));
+
+    let staker_abi_spec = &manifest["abi"]["referral_staker"];
+    let staker_abi_bytes = fs::read(evidence.join(required_str(staker_abi_spec, "archive_file")))
+        .expect("read referral-staker ABI");
+    assert_eq!(
+        sha256_hex(&staker_abi_bytes),
+        required_str(staker_abi_spec, "archive_file_sha256")
+    );
+    let staker_abi: Value =
+        serde_json::from_slice(&staker_abi_bytes).expect("parse referral-staker ABI");
+    assert_eq!(staker_abi.as_array().map(Vec::len), Some(6));
+    let stake_eth = staker_abi
+        .as_array()
+        .expect("referral-staker ABI array")
+        .iter()
+        .find(|entry| {
+            entry["type"].as_str() == Some("function") && entry["name"].as_str() == Some("stakeETH")
+        })
+        .expect("stakeETH ABI entry");
+    assert_eq!(stake_eth["stateMutability"].as_str(), Some("payable"));
+    assert_eq!(stake_eth["inputs"][0]["type"].as_str(), Some("address"));
+    assert_eq!(stake_eth["outputs"][0]["type"].as_str(), Some("uint256"));
+    for getter in ["stETH", "wstETH"] {
+        let entry = staker_abi
+            .as_array()
+            .expect("referral-staker ABI array")
+            .iter()
+            .find(|entry| {
+                entry["type"].as_str() == Some("function") && entry["name"].as_str() == Some(getter)
+            })
+            .unwrap_or_else(|| panic!("missing {getter} immutable getter"));
+        assert_eq!(entry["stateMutability"].as_str(), Some("view"));
+        assert_eq!(entry["outputs"][0]["type"].as_str(), Some("address"));
+    }
+
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+        .expect("build production ERC20 capability corpus");
+    let registry_root = root.join("secure/data/erc7730-registry");
+    let (registry, _) = build_db_tolerant_with_erc20_capabilities(
+        &registry_root.join("registry"),
+        &root.join("secure/data/erc7730/policy.toml"),
+        Some(&registry_root),
+        &erc20.capabilities,
+    )
+    .expect("build production ERC-7730 registry");
+
+    for route in manifest["descriptors"]
+        .as_array()
+        .expect("Lido descriptor routes")
+    {
+        let descriptor_path = root.join(required_str(route, "file"));
+        let descriptor = read_json(&descriptor_path);
+        let deployment = &descriptor["context"]["contract"]["deployments"][0];
+        assert_eq!(deployment["chainId"].as_u64(), Some(1));
+        assert!(deployment["address"]
+            .as_str()
+            .expect("descriptor deployment address")
+            .eq_ignore_ascii_case(required_str(route, "address")));
+        let authored_signature = required_str(route, "authored_signature");
+        let descriptor_format = &descriptor["display"]["formats"][authored_signature];
+        assert_eq!(
+            descriptor_format["intent"].as_str(),
+            Some(required_str(route, "intent"))
+        );
+        assert_eq!(
+            descriptor_format["interpolatedIntent"].as_str(),
+            Some(required_str(route, "interpolated_intent"))
+        );
+        let descriptor_fields = descriptor_format["fields"]
+            .as_array()
+            .expect("Lido descriptor fields");
+        assert_eq!(descriptor_fields.len(), 2);
+        assert_eq!(
+            descriptor_fields[0]["label"].as_str(),
+            Some(required_str(route, "amount_label"))
+        );
+        assert_eq!(descriptor_fields[0]["path"].as_str(), Some("@.value"));
+        assert_eq!(descriptor_fields[0]["format"].as_str(), Some("amount"));
+        assert_eq!(descriptor_fields[1]["label"].as_str(), Some("Referral"));
+        assert_eq!(descriptor_fields[1]["path"].as_str(), Some("#._referral"));
+        assert_eq!(descriptor_fields[1]["format"].as_str(), Some("raw"));
+        assert_eq!(descriptor_fields[1]["visible"].as_str(), Some("always"));
+
+        let source_name = descriptor_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("descriptor file name");
+        let contract: [u8; 20] = decode_hex_text(required_str(route, "address"))
+            .try_into()
+            .expect("Lido deployment address width");
+        let entry = registry
+            .entries
+            .iter()
+            .find(|entry| {
+                entry.chain_id == 1
+                    && entry.contract == contract
+                    && entry.source.file_name().and_then(|name| name.to_str()) == Some(source_name)
+            })
+            .unwrap_or_else(|| panic!("missing generated Lido leaf for {source_name}"));
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("parse generated Lido IR");
+        assert_eq!(cross_check_contract(&ir, 1, &contract), Ok(()));
+        let canonical_signature = required_str(route, "canonical_signature");
+        let selector: [u8; 4] = keccak256(canonical_signature.as_bytes())[..4]
+            .try_into()
+            .expect("selector width");
+        assert_eq!(
+            format!("0x{}", hex::encode(selector)),
+            required_str(route, "selector")
+        );
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("Lido format table parses")
+            .expect("Lido staking route remains admitted");
+        assert_eq!(format.intent, b"Stake ETH");
+        assert_eq!(format.static_head_words, 1);
+        assert_eq!(format.nested_descent_count, 0);
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("generated Lido field parses"))
+            .collect();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(
+            fields[0].label,
+            required_str(route, "amount_label").as_bytes()
+        );
+        assert_eq!(
+            FormatOp::try_from(fields[0].format_op),
+            Ok(FormatOp::Amount)
+        );
+        let mut value_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+        value_path.extend_from_slice(&container_field::VALUE.to_be_bytes());
+        assert_eq!(
+            ir.path_bytes(fields[0].path_off)
+                .expect("Lido value path parses"),
+            value_path
+        );
+        let amount_params = parse_params(&ir, fields[0].param_off).expect("Lido amount params");
+        assert_eq!(amount_params.visibility, Visibility::Always);
+        assert_eq!(amount_params.terminal_kind, Some(TerminalKind::Unsigned));
+        assert_eq!(amount_params.integer_width_bytes, Some(32));
+        assert!(amount_params.token.is_none());
+        assert!(amount_params.token_path.is_none());
+
+        assert_eq!(fields[1].label, b"Referral");
+        assert_eq!(FormatOp::try_from(fields[1].format_op), Ok(FormatOp::Raw));
+        assert_eq!(
+            ir.path_bytes(fields[1].path_off)
+                .expect("Lido referral path parses"),
+            [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0,]
+        );
+        let referral_params = parse_params(&ir, fields[1].param_off).expect("Lido referral params");
+        assert_eq!(referral_params.visibility, Visibility::Always);
+        assert_eq!(referral_params.terminal_kind, Some(TerminalKind::Address));
+        assert!(registry.known_calls.contains(&(1, contract, selector)));
+    }
+
+    let semantics = manifest["semantics"].as_array().expect("Lido semantics");
+    assert_eq!(semantics.len(), 2);
+    assert!(semantics
+        .iter()
+        .all(|route| required_str(route, "output_residual").contains("no signed minimum")));
+    assert!(manifest["residuals"]
+        .as_array()
+        .expect("Lido residuals")
+        .iter()
+        .any(|residual| residual
+            .as_str()
+            .is_some_and(|text| text.contains("upgradeable Aragon proxy"))));
+}
+
+#[test]
+fn lido_steth_erc20_source_abi_descriptor_metadata_and_ir_agree() {
+    let root = workspace_root();
+    let evidence = lido_staking_evidence_root();
+    let manifest = read_json(&evidence.join("manifest.json"));
+    let route_spec = &manifest["additional_routes"]["steth_erc20"];
+    let routes = route_spec["routes"]
+        .as_array()
+        .expect("stETH ERC-20 route inventory");
+    assert_eq!(routes.len(), 2);
+    assert_eq!(
+        routes
+            .iter()
+            .map(|route| required_str(route, "key"))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["approve", "transfer"])
+    );
+
+    let explorer_spec = &manifest["verified_explorer"]["lido_implementation"];
+    let explorer = read_json(&evidence.join(required_str(explorer_spec, "archive_file")));
+    let additional_sources = explorer["additional_sources"]
+        .as_array()
+        .expect("verified Lido additional sources");
+    let mut inherited = BTreeMap::<String, String>::new();
+    for source_spec in manifest["upstream"]["lido_core"]["inherited_sources"]
+        .as_array()
+        .expect("inherited source inventory")
+    {
+        let path = required_str(source_spec, "explorer_additional_source_path");
+        assert_eq!(required_str(source_spec, "upstream_path"), path);
+        assert_eq!(required_str(source_spec, "git_blob").len(), 40);
+        let matches: Vec<_> = additional_sources
+            .iter()
+            .filter(|source| source["file_path"].as_str() == Some(path))
+            .collect();
+        assert_eq!(matches.len(), 1, "verified source match for {path}");
+        let source = required_str(matches[0], "source_code");
+        assert_eq!(source.len() as u64, source_spec["bytes"].as_u64().unwrap());
+        assert_eq!(
+            sha256_hex(source.as_bytes()),
+            required_str(source_spec, "sha256")
+        );
+        inherited.insert(path.to_owned(), source.to_owned());
+    }
+    assert_eq!(inherited.len(), 2);
+    let steth_permit = &inherited["contracts/0.4.24/StETHPermit.sol"];
+    let steth = &inherited["contracts/0.4.24/StETH.sol"];
+    assert!(steth_permit.contains("import {StETH} from \"./StETH.sol\";"));
+    assert!(steth_permit.contains("contract StETHPermit is IERC2612, StETH"));
+
+    let lido_source = fs::read_to_string(evidence.join(required_str(
+        &manifest["upstream"]["lido_core"]["source"],
+        "archive_file",
+    )))
+    .expect("read official Lido source");
+    assert!(lido_source.contains("import {StETHPermit} from \"./StETHPermit.sol\";"));
+    assert!(lido_source.contains("contract Lido is Versioned, StETHPermit, AragonApp"));
+
+    assert!(steth.contains("uint256 constant internal INFINITE_ALLOWANCE = ~uint256(0);"));
+    assert_eq!(
+        normalized_solidity_function(steth, "function approve(address _spender, uint256 _amount)"),
+        "function approve(address _spender, uint256 _amount) external returns (bool) { _approve(msg.sender, _spender, _amount); return true; }"
+    );
+    assert_eq!(
+        normalized_solidity_function(steth, "function transfer(address _recipient, uint256 _amount)"),
+        "function transfer(address _recipient, uint256 _amount) external returns (bool) { _transfer(msg.sender, _recipient, _amount); return true; }"
+    );
+    assert_eq!(
+        normalized_solidity_function(steth, "function _approve(address _owner, address _spender, uint256 _amount)"),
+        "function _approve(address _owner, address _spender, uint256 _amount) internal { require(_owner != address(0), \"APPROVE_FROM_ZERO_ADDR\"); require(_spender != address(0), \"APPROVE_TO_ZERO_ADDR\"); allowances[_owner][_spender] = _amount; emit Approval(_owner, _spender, _amount); }"
+    );
+    assert_eq!(
+        normalized_solidity_function(steth, "function _spendAllowance(address _owner, address _spender, uint256 _amount)"),
+        "function _spendAllowance(address _owner, address _spender, uint256 _amount) internal { uint256 currentAllowance = allowances[_owner][_spender]; if (currentAllowance != INFINITE_ALLOWANCE) { require(currentAllowance >= _amount, \"ALLOWANCE_EXCEEDED\"); _approve(_owner, _spender, currentAllowance - _amount); } }"
+    );
+    assert_eq!(
+        normalized_solidity_function(steth, "function getSharesByPooledEth(uint256 _ethAmount)"),
+        "function getSharesByPooledEth(uint256 _ethAmount) public view returns (uint256) { require(_ethAmount < UINT128_MAX, \"ETH_TOO_LARGE\"); return (_ethAmount * _getShareRateDenominator()) / _getShareRateNumerator(); }"
+    );
+    assert_eq!(
+        normalized_solidity_function(steth, "function _transfer(address _sender, address _recipient, uint256 _amount)"),
+        "function _transfer(address _sender, address _recipient, uint256 _amount) internal { uint256 _sharesToTransfer = getSharesByPooledEth(_amount); _transferShares(_sender, _recipient, _sharesToTransfer); _emitTransferEvents(_sender, _recipient, _amount, _sharesToTransfer); }"
+    );
+
+    let descriptor_bytes = fs::read(root.join(required_str(route_spec, "descriptor_file")))
+        .expect("read installed stETH descriptor");
+    assert_eq!(
+        descriptor_bytes,
+        fs::read(root.join(required_str(route_spec, "curated_file")))
+            .expect("read curated stETH descriptor"),
+        "curated and installed stETH descriptors diverged"
+    );
+    let descriptor: Value =
+        serde_json::from_slice(&descriptor_bytes).expect("parse stETH descriptor");
+    let deployment = &descriptor["context"]["contract"]["deployments"]
+        .as_array()
+        .expect("stETH deployment array")[0];
+    assert_eq!(
+        deployment["chainId"].as_u64(),
+        route_spec["chain_id"].as_u64()
+    );
+    assert!(deployment["address"]
+        .as_str()
+        .expect("stETH deployment address")
+        .eq_ignore_ascii_case(required_str(route_spec, "address")));
+    assert!(descriptor["metadata"]["constants"]["stETHaddress"]
+        .as_str()
+        .expect("stETH token constant")
+        .eq_ignore_ascii_case(required_str(route_spec, "address")));
+
+    let full_abi = explorer["abi"].as_array().expect("verified Lido ABI");
+    let formats = descriptor["display"]["formats"]
+        .as_object()
+        .expect("stETH descriptor formats");
+    for route in routes {
+        let signature = required_str(route, "canonical_signature");
+        let (name, params) = signature.split_once('(').expect("canonical signature");
+        let input_types: Vec<_> = params
+            .strip_suffix(')')
+            .expect("canonical signature close")
+            .split(',')
+            .collect();
+        let abi_matches: Vec<_> = full_abi
+            .iter()
+            .filter(|entry| {
+                entry["type"].as_str() == Some("function")
+                    && entry["name"].as_str() == Some(name)
+                    && entry["inputs"].as_array().is_some_and(|inputs| {
+                        inputs
+                            .iter()
+                            .filter_map(|input| input["type"].as_str())
+                            .eq(input_types.iter().copied())
+                    })
+            })
+            .collect();
+        assert_eq!(abi_matches.len(), 1, "verified ABI route for {signature}");
+        assert_eq!(
+            abi_matches[0]["stateMutability"].as_str(),
+            Some("nonpayable")
+        );
+        assert_eq!(abi_matches[0]["outputs"][0]["type"].as_str(), Some("bool"));
+
+        let authored = required_str(route, "authored_signature");
+        let format = &formats[authored];
+        assert_eq!(
+            format["intent"].as_str(),
+            Some(required_str(route, "intent"))
+        );
+        let fields = format["fields"].as_array().expect("stETH route fields");
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field["path"].as_str().expect("field path"))
+                .collect::<Vec<_>>(),
+            route["displayed_operand_paths"]
+                .as_array()
+                .expect("manifest displayed paths")
+                .iter()
+                .map(|path| path.as_str().expect("manifest displayed path"))
+                .collect::<Vec<_>>()
+        );
+        assert!(fields.iter().all(|field| field["visible"] == "always"));
+        if required_str(route, "key") == "approve" {
+            assert_eq!(
+                fields[1]["params"]["threshold"].as_str(),
+                Some("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+            );
+            assert_eq!(fields[1]["params"]["message"].as_str(), Some("Unlimited"));
+            assert!(required_str(route, "max_semantics").contains("uint256::MAX"));
+            assert!(required_str(route, "max_semantics").contains("every smaller"));
+        } else {
+            assert!(fields[1]["params"]["threshold"].is_null());
+            assert!(required_str(route, "state_residual").contains("floor rounding"));
+            assert!(required_str(route, "state_residual").contains("zero shares"));
+        }
+    }
+
+    let records = dbgen::load_erc20_records(&root.join("secure/data/erc20.json"))
+        .expect("load production ERC20 metadata");
+    let metadata: Vec<_> = records
+        .iter()
+        .filter(|record| {
+            record.chain_id == 1
+                && record
+                    .address
+                    .eq_ignore_ascii_case(required_str(route_spec, "address"))
+        })
+        .collect();
+    assert_eq!(metadata.len(), 1);
+    assert_eq!(metadata[0].name, "Liquid staked Ether 2.0");
+    assert_eq!(metadata[0].symbol, "stETH");
+    assert_eq!(metadata[0].decimals, 18);
+
+    let contract: [u8; 20] = decode_hex_text(required_str(route_spec, "address"))
+        .try_into()
+        .expect("stETH contract width");
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+        .expect("build production ERC20 capability corpus");
+    let registry_root = root.join("secure/data/erc7730-registry");
+    let (registry, _) = build_db_tolerant_with_erc20_capabilities(
+        &registry_root.join("registry"),
+        &root.join("secure/data/erc7730/policy.toml"),
+        Some(&registry_root),
+        &erc20.capabilities,
+    )
+    .expect("build production ERC-7730 registry");
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == 1
+                && entry.contract == contract
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-stETH.json")
+        })
+        .expect("generated stETH leaf");
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("parse generated stETH IR");
+    assert_eq!(cross_check_contract(&ir, 1, &contract), Ok(()));
+    for route in routes {
+        let signature = required_str(route, "canonical_signature");
+        let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+            .try_into()
+            .expect("stETH selector width");
+        assert_eq!(
+            format!("0x{}", hex::encode(selector)),
+            required_str(route, "selector")
+        );
+        assert!(registry.known_calls.contains(&(1, contract, selector)));
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("stETH format table parses")
+            .expect("stETH ERC-20 route remains admitted");
+        assert_eq!(format.static_head_words, 2);
+        assert_eq!(format.nested_descent_count, 0);
+        assert_eq!(format.intent, required_str(route, "intent").as_bytes());
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("generated stETH field parses"))
+            .collect();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(
+            FormatOp::try_from(fields[0].format_op),
+            Ok(FormatOp::AddressName)
+        );
+        assert_eq!(
+            FormatOp::try_from(fields[1].format_op),
+            Ok(FormatOp::TokenAmount)
+        );
+        let address_params = parse_params(&ir, fields[0].param_off).expect("address params");
+        assert_eq!(address_params.visibility, Visibility::Always);
+        assert_eq!(address_params.terminal_kind, Some(TerminalKind::Address));
+        let amount_params = parse_params(&ir, fields[1].param_off).expect("amount params");
+        assert_eq!(amount_params.visibility, Visibility::Always);
+        assert_eq!(amount_params.terminal_kind, Some(TerminalKind::Unsigned));
+        assert_eq!(amount_params.integer_width_bytes, Some(32));
+        assert_eq!(amount_params.token.copied(), Some(contract));
+        if required_str(route, "key") == "approve" {
+            assert_eq!(amount_params.threshold.copied(), Some([0xff; 32]));
+            assert_eq!(amount_params.message, Some(b"Unlimited".as_slice()));
+        } else {
+            assert!(amount_params.threshold.is_none());
+            assert!(amount_params.message.is_none());
+        }
+    }
 }
 
 #[test]
@@ -1561,6 +2851,20 @@ fn lido_wsteth_source_abi_descriptor_and_metadata_agree_on_permit_semantics() {
         assert_eq!(field["format"].as_str(), Some(format));
         assert_eq!(field["visible"].as_str(), Some("always"));
     }
+    let max_value_display = &descriptor_spec["max_value_display"];
+    assert_eq!(
+        fields[2]["params"]["threshold"].as_str(),
+        Some(required_str(max_value_display, "threshold"))
+    );
+    assert_eq!(
+        fields[2]["params"]["message"].as_str(),
+        Some(required_str(max_value_display, "message"))
+    );
+    assert_eq!(required_str(max_value_display, "message"), "Max uint256");
+    let max_meaning = required_str(max_value_display, "meaning");
+    assert!(max_meaning.contains("one-to-one"));
+    assert!(max_meaning.contains("does not claim"));
+    assert!(max_meaning.contains("non-decrementing"));
     let manifest_paths: Vec<_> = descriptor_spec["permit_operand_paths"]
         .as_array()
         .expect("manifest operand paths")
@@ -1643,7 +2947,14 @@ fn lido_wsteth_source_abi_descriptor_and_metadata_agree_on_permit_semantics() {
         .find_format_by_selector(&permit_selector)
         .expect("Lido format table parses")
         .expect("Lido permit remains admitted");
-    assert_eq!(format.fields().count(), 7);
+    let ir_fields: Vec<_> = format
+        .fields()
+        .map(|field| field.expect("generated permit field parses"))
+        .collect();
+    assert_eq!(ir_fields.len(), 7);
+    let amount_params = parse_params(&ir, ir_fields[2].param_off).expect("permit amount params");
+    assert_eq!(amount_params.threshold.copied(), Some([0xff; 32]));
+    assert_eq!(amount_params.message, Some(b"Max uint256".as_slice()));
 
     assert!(manifest["residuals"]
         .as_array()
@@ -2184,21 +3495,20 @@ fn lido_wsteth_remaining_routes_source_abi_descriptor_and_ir_agree() {
                     ("approve", "#.amount") | ("increaseAllowance", "#.addedValue")
                 );
                 if threshold_expected {
-                    let mut threshold = [0u8; 32];
-                    threshold[0] = 0x80;
+                    let threshold = [0xff; 32];
                     assert_eq!(
                         descriptor_field["params"]["threshold"].as_str(),
-                        Some("0x8000000000000000000000000000000000000000000000000000000000000000")
+                        Some("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
                     );
                     assert_eq!(
                         descriptor_field["params"]["message"].as_str(),
-                        Some("Unlimited")
+                        Some("Max uint256")
                     );
                     assert_eq!(
                         params.threshold.map(|value| value.as_slice()),
                         Some(threshold.as_slice())
                     );
-                    assert_eq!(params.message, Some(b"Unlimited".as_slice()));
+                    assert_eq!(params.message, Some(b"Max uint256".as_slice()));
                 } else {
                     assert!(params.threshold.is_none());
                     assert!(params.message.is_none());
@@ -2256,7 +3566,7 @@ fn lido_wsteth_remaining_routes_source_abi_descriptor_and_ir_agree() {
 }
 
 #[test]
-fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
+fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
     let root = workspace_root();
     let evidence = uniswap_evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));
@@ -2264,7 +3574,7 @@ fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
     assert_eq!(manifest["schema_version"].as_u64(), Some(1));
     assert_eq!(
         manifest["policy"]["outcome"].as_str(),
-        Some("fail_closed_exclusion")
+        Some("constrained_restoration")
     );
     assert_eq!(
         manifest["verified_source"]["upstream_release"].as_str(),
@@ -2327,7 +3637,25 @@ fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
         "68b3465833fb72a70ecdf485e0e4c7bd8665fc45"
     );
 
-    let route_specs = manifest["policy"]["excluded_routes"]
+    let constraints = &manifest["policy"]["constraints"];
+    assert_eq!(
+        constraints["recipient_router_sentinel_policy"].as_str(),
+        Some("reject")
+    );
+    assert_eq!(
+        constraints["exact_input_zero_amount_policy"].as_str(),
+        Some("reject")
+    );
+    assert_eq!(
+        constraints["nonzero_sqrt_price_limit_policy"].as_str(),
+        Some("reject")
+    );
+    assert_eq!(
+        constraints["outer_native_value_policy"].as_str(),
+        Some("require_zero")
+    );
+
+    let route_specs = manifest["policy"]["constrained_routes"]
         .as_array()
         .expect("excluded route array");
     assert_eq!(route_specs.len(), 2);
@@ -2406,7 +3734,7 @@ fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
             String::from_utf8(bytes).expect("Solidity source is UTF-8"),
         );
     }
-    assert_eq!(archived_sources.len(), 4);
+    assert_eq!(archived_sources.len(), 6);
 
     let concrete = normalized_whitespace(&archived_sources["source/SwapRouter02.sol"]);
     assert!(concrete.contains(
@@ -2440,6 +3768,48 @@ fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
             "params.amountIn = IERC20(params.tokenIn).balanceOf(address(this));",
             "payer: hasAlreadyPaid ? address(this) : msg.sender",
             "require(amountOut >= params.amountOutMinimum, 'Too little received');",
+        ],
+    );
+
+    let payment_dependency = &manifest["payment_dependency"];
+    for key in [
+        "swap_router_package",
+        "swap_router_lock",
+        "v3_periphery_source",
+    ] {
+        let receipt = &payment_dependency[key];
+        let bytes = fs::read(evidence.join(required_str(receipt, "archive_file")))
+            .unwrap_or_else(|error| panic!("read Uniswap dependency {key}: {error}"));
+        assert_eq!(sha256_hex(&bytes), required_str(receipt, "sha256"));
+    }
+    assert_eq!(
+        payment_dependency["swap_router_package"]["declared_dependency"].as_str(),
+        Some("@uniswap/v3-periphery@1.3.0")
+    );
+    assert_eq!(
+        payment_dependency["v3_periphery_source"]["upstream_commit"].as_str(),
+        Some("80f26c86c57b8a5e4b913f42844d4c8bd274d058")
+    );
+    assert_eq!(
+        payment_dependency["v3_periphery_source"]["locked_tarball_file_sha256"].as_str(),
+        payment_dependency["v3_periphery_source"]["sha256"].as_str()
+    );
+    let payments = normalized_whitespace(
+        &fs::read_to_string(evidence.join(required_str(
+            &payment_dependency["v3_periphery_source"],
+            "archive_file",
+        )))
+        .expect("read pinned PeripheryPayments source"),
+    );
+    assert_fragments_in_order(
+        &payments,
+        &[
+            "function pay(",
+            "if (token == WETH9 && address(this).balance >= value)",
+            "IWETH9(WETH9).deposit{value: value}();",
+            "else if (payer == address(this))",
+            "TransferHelper.safeTransfer(token, recipient, value);",
+            "TransferHelper.safeTransferFrom(token, payer, recipient, value);",
         ],
     );
     assert_fragments_in_order(
@@ -2538,6 +3908,15 @@ fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
             .expect("senderAddress annotation");
         assert_eq!(sender_addresses.len(), 1);
         assert_eq!(sender_addresses[0].as_str(), Some(sentinel));
+
+        let value_fields: Vec<_> = fields
+            .iter()
+            .filter(|field| field["path"].as_str() == Some("@.value"))
+            .collect();
+        assert_eq!(value_fields.len(), 1);
+        assert_eq!(value_fields[0]["label"].as_str(), Some("Native value"));
+        assert_eq!(value_fields[0]["format"].as_str(), Some("amount"));
+        assert_eq!(value_fields[0]["visible"].as_str(), Some("always"));
     }
 
     let registry_root = root.join("secure/data/erc7730-registry");
@@ -2550,14 +3929,28 @@ fn uniswap_router02_evidence_binds_fail_closed_single_hop_exclusion() {
         &erc20.capabilities,
     )
     .expect("build production ERC-7730 registry");
-    assert!(
-        registry.entries.iter().all(|entry| {
+    let router_entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| {
             entry.source.file_name().and_then(|name| name.to_str())
-                != Some("calldata-UniswapV3Router02.json")
-        }),
-        "Router02 must emit no production descriptor leaf"
+                == Some("calldata-UniswapV3Router02.json")
+        })
+        .collect();
+    assert_eq!(
+        router_entries.len(),
+        1,
+        "one exact Router02 deployment leaf"
     );
+    let ir = Erc7730Ir::parse(&router_entries[0].ir_bytes).expect("parse restored Router02 IR");
+    assert_eq!(ir.format_count(), Ok(2));
     for (signature, selector) in expected_routes {
+        assert!(
+            ir.find_format_by_selector(&selector)
+                .expect("Router02 format table parses")
+                .is_some(),
+            "{signature} must be present under constrained restoration"
+        );
         assert!(
             registry.known_calls.contains(&(1, contract, selector)),
             "{signature} must remain an exact known-call tuple"
@@ -2742,12 +4135,12 @@ fn lido_queue_evidence_pins_upgradeable_proxy_and_official_sources() {
 }
 
 #[test]
-fn lido_queue_source_abi_descriptor_and_ir_agree_on_five_routes_and_one_refusal() {
+fn lido_queue_source_abi_descriptor_and_ir_agree_on_seven_admitted_routes() {
     let root = workspace_root();
     let evidence = lido_queue_evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));
     let routes = manifest["routes"].as_array().expect("Lido route array");
-    assert_eq!(routes.len(), 6);
+    assert_eq!(routes.len(), 7);
 
     let expected = BTreeMap::from([
         (
@@ -2799,10 +4192,20 @@ fn lido_queue_source_abi_descriptor_and_ir_agree_on_five_routes_and_one_refusal(
         (
             "requestWithdrawals(uint256[],address)",
             (
-                "refused",
+                "admitted",
                 vec![
                     ("Amount", "#._amounts.[]", "tokenAmount"),
                     ("Initial NFT owner", "#._owner", "addressName"),
+                ],
+            ),
+        ),
+        (
+            "requestWithdrawalsWstETH(uint256[],address)",
+            (
+                "admitted",
+                vec![
+                    ("Amount to withdraw", "#._amounts.[]", "tokenAmount"),
+                    ("Beneficiary", "#._owner", "addressName"),
                 ],
             ),
         ),
@@ -2847,7 +4250,17 @@ fn lido_queue_source_abi_descriptor_and_ir_agree_on_five_routes_and_one_refusal(
             "function requestWithdrawals(uint256[] calldata _amounts, address _owner)",
             "if (_owner == address(0)) _owner = msg.sender;",
             "requestIds = new uint256[](_amounts.length);",
+            "_checkWithdrawalRequestAmount(_amounts[i]);",
             "requestIds[i] = _requestWithdrawal(_amounts[i], _owner);",
+        ],
+    );
+    assert_fragments_in_order(
+        queue,
+        &[
+            "function requestWithdrawalsWstETH(uint256[] calldata _amounts, address _owner)",
+            "if (_owner == address(0)) _owner = msg.sender;",
+            "requestIds = new uint256[](_amounts.length);",
+            "requestIds[i] = _requestWithdrawalWstETH(_amounts[i], _owner);",
         ],
     );
     assert_fragments_in_order(
@@ -2857,6 +4270,18 @@ fn lido_queue_source_abi_descriptor_and_ir_agree_on_five_routes_and_one_refusal(
             "STETH.transferFrom(msg.sender, address(this), _amountOfStETH);",
             "uint256 amountOfShares = STETH.getSharesByPooledEth(_amountOfStETH);",
             "requestId = _enqueue(uint128(_amountOfStETH), uint128(amountOfShares), _owner);",
+            "_emitTransfer(address(0), _owner, requestId);",
+        ],
+    );
+    assert_fragments_in_order(
+        queue,
+        &[
+            "function _requestWithdrawalWstETH(uint256 _amountOfWstETH, address _owner)",
+            "WSTETH.transferFrom(msg.sender, address(this), _amountOfWstETH);",
+            "uint256 amountOfStETH = WSTETH.unwrap(_amountOfWstETH);",
+            "_checkWithdrawalRequestAmount(amountOfStETH);",
+            "uint256 amountOfShares = STETH.getSharesByPooledEth(amountOfStETH);",
+            "requestId = _enqueue(uint128(amountOfStETH), uint128(amountOfShares), _owner);",
             "_emitTransfer(address(0), _owner, requestId);",
         ],
     );
@@ -2992,15 +4417,20 @@ fn lido_queue_source_abi_descriptor_and_ir_agree_on_five_routes_and_one_refusal(
             assert_eq!(field["format"].as_str(), Some(*format));
         }
     }
-    let request = descriptor_formats
-        .iter()
-        .find(|(authored, _)| canonicalize(authored) == "requestWithdrawals(uint256[],address)")
-        .expect("requestWithdrawals descriptor format")
-        .1;
-    assert_eq!(
-        request["fields"][1]["params"]["senderAddress"][0].as_str(),
-        Some("0x0000000000000000000000000000000000000000")
-    );
+    for signature in [
+        "requestWithdrawals(uint256[],address)",
+        "requestWithdrawalsWstETH(uint256[],address)",
+    ] {
+        let request = descriptor_formats
+            .iter()
+            .find(|(authored, _)| canonicalize(authored) == signature)
+            .unwrap_or_else(|| panic!("{signature} descriptor format"))
+            .1;
+        assert_eq!(
+            request["fields"][1]["params"]["senderAddress"][0].as_str(),
+            Some("0x0000000000000000000000000000000000000000")
+        );
+    }
 
     let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
         .expect("build production ERC20 capability corpus");
@@ -3055,5 +4485,321 @@ fn lido_queue_source_abi_descriptor_and_ir_agree_on_five_routes_and_one_refusal(
             "{} must remain an exact known-call tuple",
             required_str(route, "canonical_signature")
         );
+    }
+
+    let sender_zero = [0u8; 20];
+    for signature in [
+        "requestWithdrawals(uint256[],address)",
+        "requestWithdrawalsWstETH(uint256[],address)",
+    ] {
+        let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+            .try_into()
+            .expect("selector width");
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("Lido queue format table parses")
+            .expect("request route is admitted");
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("request field parses"))
+            .collect();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(
+            FormatOp::try_from(fields[0].format_op),
+            Ok(FormatOp::TokenAmount)
+        );
+        assert_eq!(
+            ir.path_bytes(fields[0].path_off)
+                .expect("request amount path parses"),
+            [
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                0,
+                PathOp::ArrayAll as u8,
+            ]
+        );
+        let amount = parse_params(&ir, fields[0].param_off).expect("amount params parse");
+        assert_eq!(amount.visibility, Visibility::Always);
+        assert_eq!(amount.terminal_kind, Some(TerminalKind::Unsigned));
+        assert!(amount.sender_addresses.is_none());
+
+        assert_eq!(
+            FormatOp::try_from(fields[1].format_op),
+            Ok(FormatOp::AddressName)
+        );
+        assert_eq!(
+            ir.path_bytes(fields[1].path_off)
+                .expect("request owner path parses"),
+            [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 1,]
+        );
+        let owner = parse_params(&ir, fields[1].param_off).expect("owner params parse");
+        assert_eq!(owner.visibility, Visibility::Always);
+        assert_eq!(owner.terminal_kind, Some(TerminalKind::Address));
+        assert_eq!(owner.sender_addresses, Some(sender_zero.as_slice()));
+    }
+}
+
+#[test]
+fn allowance_sources_fixed_deployments_descriptors_and_ir_agree() {
+    let root = workspace_root();
+    let evidence = allowance_threshold_evidence_root();
+    let manifest = read_json(&evidence.join("manifest.json"));
+    assert_eq!(manifest["schema_version"].as_u64(), Some(1));
+    assert_eq!(
+        manifest["sources"][0]["commit"].as_str(),
+        Some("0a9a7260344e671f62087547cb3c0cf49b464986")
+    );
+    assert_eq!(
+        manifest["sources"][0]["openzeppelin_version"].as_str(),
+        Some("5.0.2")
+    );
+
+    let receipt_spec = &manifest["fixed_block_receipt"];
+    assert_eq!(
+        required_str(receipt_spec, "sha256"),
+        "8d2ba0c0322713ca793c752cb1100c61a39a69e49adef4bc72e2f21a2f40c531"
+    );
+    let receipt_bytes = fs::read(evidence.join(required_str(receipt_spec, "file")))
+        .expect("read allowance fixed-block receipt");
+    assert_eq!(
+        sha256_hex(&receipt_bytes),
+        required_str(receipt_spec, "sha256")
+    );
+    let receipt: Value =
+        serde_json::from_slice(&receipt_bytes).expect("parse allowance fixed-block receipt");
+    assert_eq!(receipt["blocks"].as_array().map(Vec::len), Some(7));
+    assert_eq!(receipt["deployments"].as_array().map(Vec::len), Some(8));
+
+    let deployment_set: BTreeSet<_> = receipt["deployments"]
+        .as_array()
+        .expect("allowance deployment array")
+        .iter()
+        .map(|deployment| {
+            (
+                required_str(deployment, "family").to_owned(),
+                deployment["chain_id"].as_u64().expect("deployment chain"),
+                deployment["proxy"]
+                    .as_str()
+                    .or_else(|| deployment["address"].as_str())
+                    .expect("deployment address")
+                    .to_ascii_lowercase(),
+                deployment["implementation"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_ascii_lowercase(),
+            )
+        })
+        .collect();
+    let expected_deployments: BTreeSet<_> = [
+        (
+            "WCT",
+            1,
+            "0xef4461891dfb3ac8572ccf7c794664a8dd927945",
+            "0xf27d4fb3b1c194f94b9966cc75b4bbb686008c8c",
+        ),
+        (
+            "WCT",
+            10,
+            "0xef4461891dfb3ac8572ccf7c794664a8dd927945",
+            "0x46a4c6bada93ac565b7ef6d7d9be24ca09735e22",
+        ),
+        (
+            "WCT",
+            8_453,
+            "0xef4461891dfb3ac8572ccf7c794664a8dd927945",
+            "0x1b9fc26a506b8cc98f65de60f337c43f97bb2d40",
+        ),
+        (
+            "FlyingTulip",
+            1,
+            "0xbe4050a73a7fb384c65e885a15c33461a4b20055",
+            "0xaa3d5fc84b43219391539714be5f0681aefca23b",
+        ),
+        (
+            "FlyingTulip",
+            146,
+            "0xbe4050a73a7fb384c65e885a15c33461a4b20055",
+            "0xaa3d5fc84b43219391539714be5f0681aefca23b",
+        ),
+        (
+            "FlyingTulip",
+            146,
+            "0x82ffb119eeed117bae7a2cf38ce52eaba3871821",
+            "0xb47e68e861a1661ac7f0f033b98f641a2fe565b9",
+        ),
+        ("USDT", 1, "0xdac17f958d2ee523a2206206994597c13d831ec7", ""),
+        (
+            "USDT",
+            137,
+            "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
+            "0x90040487a6c9f949c4f07cadcfb0f3b8eeab4229",
+        ),
+    ]
+    .into_iter()
+    .map(|(family, chain, address, implementation)| {
+        (
+            family.to_owned(),
+            chain,
+            address.to_owned(),
+            implementation.to_owned(),
+        )
+    })
+    .collect();
+    assert_eq!(deployment_set, expected_deployments);
+
+    let deprecated = receipt["blocks"]
+        .as_array()
+        .expect("allowance block array")
+        .iter()
+        .find(|block| {
+            block["purpose"].as_str() == Some("USDT") && block["chain_id"].as_u64() == Some(1)
+        })
+        .expect("Ethereum USDT fixed block");
+    assert_eq!(
+        deprecated["deprecated_call_result"].as_str(),
+        Some("0x0000000000000000000000000000000000000000000000000000000000000000")
+    );
+
+    let source_specs = manifest["sources"]
+        .as_array()
+        .expect("allowance source array");
+    assert_eq!(source_specs.len(), 4);
+    for source in source_specs {
+        let excerpt = evidence.join(required_str(source, "excerpt"));
+        let bytes = fs::read(&excerpt)
+            .unwrap_or_else(|error| panic!("read {}: {error}", excerpt.display()));
+        assert_eq!(
+            sha256_hex(&bytes),
+            required_str(source, "excerpt_sha256"),
+            "allowance source excerpt drifted: {}",
+            excerpt.display()
+        );
+    }
+
+    let wct = normalized_whitespace(
+        &fs::read_to_string(evidence.join("source/WCT.ERC20Upgradeable.allowance.excerpt.sol"))
+            .expect("read WCT allowance source excerpt"),
+    );
+    assert_fragments_in_order(
+        &wct,
+        &[
+            "function _spendAllowance(address owner, address spender, uint256 value)",
+            "if (currentAllowance != type(uint256).max)",
+            "_approve(owner, spender, currentAllowance - value, false);",
+        ],
+    );
+    let flying_tulip = normalized_whitespace(
+        &fs::read_to_string(evidence.join("source/PositionsManager.allowance.excerpt.sol"))
+            .expect("read FlyingTulip allowance source excerpt"),
+    );
+    assert!(flying_tulip.contains("if (allowance == type(uint256).max) return;"));
+    assert!(flying_tulip
+        .contains("borrowAllowance[user][msg.sender][borrowAsset] = allowance - borrowAmount;"));
+    let ethereum_usdt = normalized_whitespace(
+        &fs::read_to_string(evidence.join("source/TetherToken.ethereum.allowance.excerpt.sol"))
+            .expect("read Ethereum USDT allowance source excerpt"),
+    );
+    assert!(ethereum_usdt.contains("uint public constant MAX_UINT = 2**256 - 1;"));
+    assert!(ethereum_usdt.contains("if (_allowance < MAX_UINT)"));
+    let polygon_usdt = normalized_whitespace(
+        &fs::read_to_string(evidence.join("source/UChildUSDT0.polygon.allowance.excerpt.sol"))
+            .expect("read Polygon USDT allowance source excerpt"),
+    );
+    assert!(polygon_usdt.contains(
+        "_approve(sender, _msgSender(), _allowances[sender][_msgSender()].sub(amount, \"ERC20: transfer amount exceeds allowance\"));"
+    ));
+
+    for descriptor in manifest["descriptors"]
+        .as_array()
+        .expect("allowance descriptor array")
+    {
+        let path = root.join(required_str(descriptor, "path"));
+        let bytes =
+            fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        assert_eq!(sha256_hex(&bytes), required_str(descriptor, "sha256"));
+    }
+
+    let registry_root = root.join("secure/data/erc7730-registry");
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+        .expect("build production ERC20 capability corpus");
+    let (registry, _) = build_db_tolerant_with_erc20_capabilities(
+        &registry_root.join("registry"),
+        &root.join("secure/data/erc7730/policy.toml"),
+        Some(&registry_root),
+        &erc20.capabilities,
+    )
+    .expect("build production ERC-7730 registry");
+
+    for (source, signature, label, threshold, message, expected_entries) in [
+        (
+            "calldata-wct.json",
+            "approve(address,uint256)",
+            b"Amount".as_slice(),
+            Some([0xff; 32]),
+            None,
+            3usize,
+        ),
+        (
+            "calldata-usdt.json",
+            "approve(address,uint256)",
+            b"Amount".as_slice(),
+            None,
+            None,
+            2usize,
+        ),
+        (
+            "calldata-PositionsManager.json",
+            "approveBorrow(address,address,uint256)",
+            b"Allowance".as_slice(),
+            None,
+            None,
+            3usize,
+        ),
+        (
+            "calldata-PositionsManager.json",
+            "approveEngine(address,address,uint256)",
+            b"Allowance".as_slice(),
+            Some([0xff; 32]),
+            Some(b"Unlimited".as_slice()),
+            3usize,
+        ),
+    ] {
+        let entries: Vec<_> = registry
+            .entries
+            .iter()
+            .filter(|entry| entry.source.file_name().and_then(|name| name.to_str()) == Some(source))
+            .collect();
+        assert_eq!(
+            entries.len(),
+            expected_entries,
+            "deployment count for {source}"
+        );
+        let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+            .try_into()
+            .expect("allowance selector width");
+        for entry in entries {
+            let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("parse allowance IR");
+            let format = ir
+                .find_format_by_selector(&selector)
+                .expect("allowance format table parses")
+                .unwrap_or_else(|| panic!("missing allowance format {signature}"));
+            let field = format
+                .fields()
+                .map(|field| field.expect("allowance field parses"))
+                .find(|field| field.label == label)
+                .unwrap_or_else(|| panic!("missing allowance field for {signature}"));
+            assert_eq!(
+                FormatOp::try_from(field.format_op),
+                Ok(FormatOp::TokenAmount)
+            );
+            let params = parse_params(&ir, field.param_off).expect("allowance params parse");
+            assert_eq!(
+                params.threshold.copied(),
+                threshold,
+                "threshold for {signature}"
+            );
+            assert_eq!(params.message, message, "message for {signature}");
+        }
     }
 }

@@ -110,9 +110,7 @@
             "label": "Allowance",
             "format": "tokenAmount",
             "params": {
-              "tokenPath": "asset",
-              "threshold": "0x8000000000000000000000000000000000000000000000000000000000000000",
-              "message": "Unlimited"
+              "tokenPath": "asset"
             },
             "visible": "always"
           }
@@ -143,7 +141,7 @@
             "format": "tokenAmount",
             "params": {
               "tokenPath": "asset",
-              "threshold": "0x8000000000000000000000000000000000000000000000000000000000000000",
+              "threshold": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
               "message": "Unlimited"
             },
             "visible": "always"

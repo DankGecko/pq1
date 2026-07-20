@@ -29,8 +29,8 @@
             "path": "#.amount",
             "params": {
               "token": "$.metadata.constants.wstETHaddress",
-              "threshold": "0x8000000000000000000000000000000000000000000000000000000000000000",
-              "message": "Unlimited"
+              "threshold": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+              "message": "Max uint256"
             },
             "visible": "always"
           }
@@ -71,8 +71,8 @@
             "path": "#.addedValue",
             "params": {
               "token": "$.metadata.constants.wstETHaddress",
-              "threshold": "0x8000000000000000000000000000000000000000000000000000000000000000",
-              "message": "Unlimited"
+              "threshold": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+              "message": "Max uint256"
             },
             "visible": "always"
           }
@@ -102,8 +102,8 @@
             "path": "#.value",
             "params": {
               "token": "$.metadata.constants.wstETHaddress",
-              "threshold": "0x8000000000000000000000000000000000000000000000000000000000000000",
-              "message": "Unlimited"
+              "threshold": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+              "message": "Max uint256"
             },
             "visible": "always"
           },
