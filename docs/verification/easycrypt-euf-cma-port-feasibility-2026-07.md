@@ -1819,3 +1819,46 @@ number goes UP while the granularity gets strictly FINER.
 
 **STATE:** branch-2 PKCO has 1 admit left (1b-rest-(iii): the A.forge call, reconstruction loop, pkco collision
 extraction + fidx arithmetic, PLUS the two +C post conjuncts above); TRH has 4 finer admits pending transplant.
+
+### 2026-07-20 — branch-2 PKCO half 0-ADMIT; TRH one sub-part left; THIRD gate defect fixed + ALL claims re-verified
+
+**P2 — the LAST PKCO admit is CLOSED.** `ADMIT-1b-rest-(iii)` (A_ht.forge call + d-step reconstruction loop +
+pkco collision extraction + fidx arithmetic; MM45 :5150-5325 plus two +C post components) is proved, so **the
+ENTIRE PKCO half of `seam_branch2` is 0-admit**: the chain `seq 5 10 -> seq 7 7 -> seq 0 4 -> seq 2 2 -> (iii)`
+is derived end-to-end from the two programs, and the first `ler_add` summand carries no admit.
+ - **NO new premises forced.** `seam_branch2`'s statement is BYTE-IDENTICAL (sha256 ef4885d989143120) across
+   all six commits — auditor-verified, no premise sneak-in. Stronger: part (iii) consumes NONE of the three
+   hypotheses (RUN control: prefixing its tactic block with `clear hencb allnpkcoads allntrhads.` still
+   compiles clean on the exact admit ladder). Structural reason: `Adv_...forge` has an EMPTY oracle annotation,
+   so the adversary cannot append to the THFC tws during forge and the type conjunct survives the call free.
+ - **CORRECTION to my earlier framing:** the disjointness discharged in (iii) is the GENERIC TYPE-INDEX form
+   (`! has (mem tws) (unzip1 ts)`, via hasPn/mapP/allP), NOT a member-aware notion — it imports none of
+   branch-1's `member_sep_disj`/`dfC` machinery. Branch-1's member-aware obligation is a DIFFERENT obligation
+   living in `seam_branch1_WOTSC`. I had conflated them.
+
+**T2 — TRH is one sub-part from done.** `ADMIT-TRH-1a-NODESBODY` (the ~326-line inner node tree-hash level with
+target-set bookkeeping, MM45 :5625-5950 — the largest block of the branch), `-KEYPAIRLEAF` (incl. the
+collection-input LENGTH bridge) and `-INNERTREE-LEAF` are all CLOSED 0-admit ⇒ **TRH PART 1a is 0-admit at all
+three levels**. `ADMIT-TRH-1b-rest` (i) root reordering + (ii) the whole signing-loop simulation are closed;
+only (iii) remains. NO new premises forced (the TRH branch is type-disjoint from the WOTS-chain axis, so none
+of branch-1's extra premises are needed). Its file shows 4 admits, but 3 are the STALE COPY of `seam_branch2`
+it forked from — the real TRH residual is ONE.
+
+**THIRD GATE DEFECT (mine), found by the auditor: STALE .eco CACHE HITS.** EasyCrypt skips recompilation when
+the target's own `.eco` is newer than its `.ec`, so `ec-certify` could return an INSTANT `compile=OK` **without
+ever reading the current file**. The auditor caught it with full pristine compiles + a `DELIBERATE_BREAK`
+canary (3m21s / 5m36s, sole error at the canary line). FIXED: the gate now deletes the target's own `.eco`
+first (never dependencies). Honest cost: 3-6 min per real compile. Negative control correctly FAILS.
+(Running tally of gate defects, all caught by agents, none by me: (1) exit status was `tail`'s, always 0;
+(2) `ec-goal.sh` 90s timeout silently printed a goal from a DIFFERENT lemma; (3) stale-.eco green.)
+
+**RE-VERIFICATION UNDER THE FIXED GATE (forced real recompiles, no cache) — ALL CLAIMS HOLD:**
+```
+_gamehops_wip.ec        compile=OK  admit-tactics=0  axiom-decls=0   CERTIFIED-0-ADMIT
+_rtop_wip.ec            compile=OK  admit-tactics=0  axiom-decls=0   CERTIFIED-0-ADMIT
+_seam_branch2_wip.ec    compile=OK  admit-tactics=1  axiom-decls=0   (ADMIT-3 / TRH — expected)
+_branch2_trh_wip.ec     compile=OK  admit-tactics=4  axiom-decls=0   (3 stale-copy + 1 real TRH residual)
+XMSSMT_C_Reduction.ec   compile=OK  admit-tactics=0  axiom-decls=0   CERTIFIED-0-ADMIT
+```
+So the REAL~C + C~V game hops, R_top with its A_wf discharge, and the base reduction file are all genuinely
+admit-free under real compilation — no stale-cache false green anywhere.
