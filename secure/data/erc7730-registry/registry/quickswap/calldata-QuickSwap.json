@@ -146,7 +146,7 @@
         "fields": [
           {
             "path": "amountIn",
-            "label": "Amount to Send",
+            "label": "Requested Input",
             "format": "tokenAmount",
             "params": { "tokenPath": "path.[0]" },
             "visible": "always"
@@ -156,6 +156,13 @@
             "label": "Minimum to Receive",
             "format": "tokenAmount",
             "params": { "tokenPath": "path.[-1]" },
+            "visible": "always"
+          },
+          {
+            "path": "path.[]",
+            "label": "Route",
+            "format": "addressName",
+            "params": { "types": ["token"] },
             "visible": "always"
           },
           {
@@ -174,12 +181,19 @@
         "fields": [
           {
             "path": "amountIn",
-            "label": "Amount to Send",
+            "label": "Requested Input",
             "format": "tokenAmount",
             "params": { "tokenPath": "path.[0]" },
             "visible": "always"
           },
           { "path": "amountOutMin", "label": "Minimum to Receive", "format": "amount", "visible": "always" },
+          {
+            "path": "path.[]",
+            "label": "Route",
+            "format": "addressName",
+            "params": { "types": ["token"] },
+            "visible": "always"
+          },
           {
             "path": "to",
             "label": "Beneficiary",
@@ -258,6 +272,13 @@
             "label": "Minimum to Receive",
             "format": "tokenAmount",
             "params": { "tokenPath": "path.[-1]" },
+            "visible": "always"
+          },
+          {
+            "path": "path.[]",
+            "label": "Route",
+            "format": "addressName",
+            "params": { "types": ["token"] },
             "visible": "always"
           },
           {

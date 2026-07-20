@@ -41,7 +41,7 @@ const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
 // The upstream fixture bytes remain test-only and outside the catalogue. This
 // root changes only when the separately curated production descriptors do.
-const PROD_ROOT_HEX: &str = "b4ec673c1f4ed4488f304d4b75d554e6c0c676742eb788f9c2ef15aba878a9de";
+const PROD_ROOT_HEX: &str = "c7ba3f392752f530aec9a1eee657db1ec6f1fe414031c4071909fa45e197afe2";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -934,18 +934,21 @@ fn upstream_fixture_targets_are_inventoried_at_format_granularity() {
         [0x7f, 0xf3, 0x6a, 0xb5],
         [0xfb, 0x3b, 0xdb, 0x41],
         [0x4a, 0x25, 0xd9, 0x4a],
+        [0x5c, 0x11, 0xd7, 0x95],
+        [0xb6, 0xf9, 0xde, 0x95],
+        [0x79, 0x1a, 0xc9, 0x47],
     ] {
-        let quickswap_standard_route = FormatKey {
+        let quickswap_complete_route = FormatKey {
             source: PathBuf::from("quickswap/calldata-QuickSwap.json"),
             id: FormatId::Calldata(selector),
         };
         assert!(
-            !fixture_targets.contains(&quickswap_standard_route),
+            !fixture_targets.contains(&quickswap_complete_route),
             "QuickSwap has no pinned upstream positive for this selector; do not invent fixture coverage"
         );
         assert!(
-            accepted.contains(&quickswap_standard_route),
-            "the complete QuickSwap standard route must be admitted explicitly despite the honest fixture gap"
+            accepted.contains(&quickswap_complete_route),
+            "the complete QuickSwap route must be admitted explicitly despite the honest fixture gap"
         );
     }
 
@@ -976,7 +979,7 @@ fn upstream_fixture_targets_are_inventoried_at_format_granularity() {
 }
 
 #[test]
-fn quickswap_fixture_gap_still_has_merkle_verified_standard_route_conformance() {
+fn quickswap_fixture_gap_still_has_merkle_verified_complete_route_conformance() {
     const ROUTER: [u8; 20] = [
         0xa5, 0xe0, 0x82, 0x9c, 0xac, 0xed, 0x8f, 0xfd, 0xd4, 0xde, 0x3c, 0x43, 0x69, 0x6c, 0x57,
         0xf7, 0xd7, 0xa6, 0x78, 0xff,
@@ -987,6 +990,7 @@ fn quickswap_fixture_gap_still_has_merkle_verified_standard_route_conformance() 
     const EXACT_INPUT: &str = "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)";
     const EXACT_OUTPUT: &str =
         "swapTokensForExactTokens(uint256,uint256,address[],address,uint256)";
+    const EXACT_INPUT_FOT: &str = "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)";
 
     fn word(value: u64) -> [u8; 32] {
         let mut out = [0u8; 32];
@@ -1086,6 +1090,15 @@ fn quickswap_fixture_gap_still_has_merkle_verified_standard_route_conformance() 
             "Maximum to Send",
             TOKEN_IN,
         ),
+        (
+            EXACT_INPUT_FOT,
+            1_500_000,
+            1_000_000,
+            "Requested Input",
+            TOKEN_IN,
+            "Minimum to Rece~",
+            TOKEN_OUT,
+        ),
     ] {
         let call = calldata(signature, first, second, &path, beneficiary, 2_000_000_000);
         assert_eq!(&call[..4], &keccak256(signature.as_bytes())[..4]);
@@ -1138,6 +1151,9 @@ fn quickswap_fixture_gap_still_has_merkle_verified_standard_route_conformance() 
         "swapETHForExactTokens(uint256,address[],address,uint256)";
     const TOKENS_FOR_EXACT_NATIVE: &str =
         "swapTokensForExactETH(uint256,uint256,address[],address,uint256)";
+    const EXACT_NATIVE_FOR_TOKENS_FOT: &str =
+        "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)";
+    const EXACT_TOKENS_FOR_NATIVE_FOT: &str = "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)";
     let one_native = 1_000_000_000_000_000_000u64;
     let one_and_half_native = 1_500_000_000_000_000_000u64;
     let render_native = |signature: &str, call: &[u8], native_value: u64| {
@@ -1221,6 +1237,37 @@ fn quickswap_fixture_gap_still_has_merkle_verified_standard_route_conformance() 
             [
                 ("Amount to Recei~", "1 POL", None),
                 ("Maximum to Send", "1500000", Some(TOKEN_IN)),
+            ],
+        ),
+        (
+            EXACT_NATIVE_FOR_TOKENS_FOT,
+            eth_input_calldata(
+                EXACT_NATIVE_FOR_TOKENS_FOT,
+                1_000_000,
+                &path,
+                beneficiary,
+                2_000_000_000,
+            ),
+            one_and_half_native,
+            [
+                ("Amount to Send", "1.5 POL", None),
+                ("Minimum to Rece~", "1000000", Some(TOKEN_OUT)),
+            ],
+        ),
+        (
+            EXACT_TOKENS_FOR_NATIVE_FOT,
+            calldata(
+                EXACT_TOKENS_FOR_NATIVE_FOT,
+                1_500_000,
+                one_native,
+                &path,
+                beneficiary,
+                2_000_000_000,
+            ),
+            0,
+            [
+                ("Requested Input", "1500000", Some(TOKEN_IN)),
+                ("Minimum to Rece~", "1 POL", None),
             ],
         ),
     ];

@@ -1601,7 +1601,7 @@ mod tests {
             .verify_checked_in_tree(&workspace.join("secure/data/erc7730-registry"))
             .expect("checked-in curated corpus");
         assert_eq!(receipt.file_count, 387);
-        assert_eq!(receipt.byte_count, 788_347);
+        assert_eq!(receipt.byte_count, 788_952);
         assert_eq!(overlay.replacement_count(), 35);
     }
 }

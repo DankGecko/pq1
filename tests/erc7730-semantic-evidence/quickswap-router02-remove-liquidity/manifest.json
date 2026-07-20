@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "scope": "QuickSwap V2 Router02 remove-liquidity, token-to-token, and selected native-asset multi-hop semantic evidence for PQ1 constrained ERC-7730 admission",
+  "scope": "QuickSwap V2 Router02 remove-liquidity and standard plus fee-on-transfer multi-hop semantic evidence for PQ1 constrained ERC-7730 admission",
   "captured_at_utc": "2026-07-20T11:24:00Z",
   "policy": {
     "outcome": "constrained_admission",
-    "mechanism": "PQ1 admits three all-static non-permit remove-liquidity routes, exactly two standard token-to-token swaps, and exactly four selected native-asset swaps. The exact signed LP-token quantity is shown as an unscaled raw uint256 because the pair address and LP-token decimals are not signed. Each admitted swap renders every signed path address in order, binds its token amounts to the signed first/last token identities, and shows its native amount or maximum, literal beneficiary, and deadline. swapETHForExactTokens shows the signed outer value as Maximum to Send, the exact signed amountOut as Gross Output, and does not promise the beneficiary's net receipt; the router wraps only the live-reserve-derived required input and refunds any excess outer value to msg.sender. Paths above eight addresses refuse instead of truncating. Permit-bearing removals, fee-on-transfer swaps, and every other descriptor-declared swap remain exact known-call hard refusals. The source-defined 0x791ac947 route is intentionally declared only to enter the exact and Bloom known-call refusal sets; it remains absent from trusted IR and gains no clear-sign authority.",
+    "mechanism": "PQ1 admits three all-static non-permit remove-liquidity routes, six standard swaps, and all three fee-on-transfer swaps. The exact signed LP-token quantity is shown as an unscaled raw uint256 because the pair address and LP-token decimals are not signed. Each admitted swap renders every signed path address in order, binds its token amounts to the signed first/last token identities, and shows its native amount or maximum, literal beneficiary, and deadline. For fee-on-transfer routes, amountIn is the signed nominal transfer request rather than the amount that reaches the first pair; token-output minima are recipient balance-delta minima; and token-to-native output is the router's whole WETH balance after the swap, which can include pre-existing dust. swapETHForExactTokens shows the signed outer value as Maximum to Send, the exact signed amountOut as Gross Output, and does not promise the beneficiary's net receipt; the router wraps only the live-reserve-derived required input and refunds any excess outer value to msg.sender. Paths above eight addresses refuse instead of truncating. Permit-bearing removals remain exact known-call hard refusals. The two pre-existing add-liquidity routes are outside this evidence bundle.",
     "constraints": {
       "swap_path_policy": "render_every_signed_address",
       "swap_path_render_cap": 8,
@@ -14,15 +14,20 @@
       "one_address_path_policy": "render_exactly_but_source_execution_reverts",
       "beneficiary_policy": "literal_signed_address_no_sentinel",
       "deadline_policy": "signed_unix_timestamp_checked_against_execution_block_timestamp",
-      "swap_mutability": "swapExactETHForTokens_and_swapETHForExactTokens_payable_all_other_admitted_swaps_nonpayable",
+      "swap_mutability": "swapExactETHForTokens_swapETHForExactTokens_and_swapExactETHForTokensSupportingFeeOnTransferTokens_payable_all_other_admitted_swaps_nonpayable",
       "refundable_native_input_policy": "signed_outer_value_is_maximum_live_required_input_is_wrapped_excess_is_refunded_to_msg_sender",
       "exact_output_token_display_policy": "signed_amount_out_is_exact_gross_pair_transfer_not_guaranteed_net_beneficiary_receipt",
+      "fee_on_transfer_input_policy": "signed_amount_in_is_nominal_transfer_request_actual_pair_receipt_can_be_lower",
+      "fee_on_transfer_token_output_minimum_policy": "signed_amount_out_min_is_checked_against_literal_beneficiary_balance_delta",
+      "fee_on_transfer_native_output_policy": "signed_amount_out_min_is_checked_against_router_whole_weth_balance_then_all_is_unwrapped_and_sent_including_preexisting_dust",
       "source_wrapped_native_endpoint": "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
       "source_native_endpoint_policy": {
         "swapExactETHForTokens": "path[0]",
         "swapETHForExactTokens": "path[0]",
+        "swapExactETHForTokensSupportingFeeOnTransferTokens": "path[0]",
         "swapExactTokensForETH": "path[-1]",
-        "swapTokensForExactETH": "path[-1]"
+        "swapTokensForExactETH": "path[-1]",
+        "swapExactTokensForETHSupportingFeeOnTransferTokens": "path[-1]"
       },
       "generic_renderer_wrapped_endpoint_equality_predicate": false,
       "invalid_wrapped_endpoint_policy": "render_exactly_but_source_execution_reverts"
@@ -108,15 +113,39 @@
         "path_word": 2,
         "state_mutability": "nonpayable",
         "semantic_kind": "token_input_exact_native_output_multihop_swap"
+      },
+      {
+        "canonical_signature": "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
+        "selector": "0x5c11d795",
+        "descriptor_format_key": "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+        "head_words": 5,
+        "path_word": 2,
+        "state_mutability": "nonpayable",
+        "semantic_kind": "nominal_token_input_recipient_balance_delta_token_output_multihop_swap"
+      },
+      {
+        "canonical_signature": "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)",
+        "selector": "0xb6f9de95",
+        "descriptor_format_key": "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+        "head_words": 4,
+        "path_word": 1,
+        "state_mutability": "payable",
+        "semantic_kind": "exact_native_input_recipient_balance_delta_token_output_multihop_swap"
+      },
+      {
+        "canonical_signature": "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
+        "selector": "0x791ac947",
+        "descriptor_format_key": "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)",
+        "head_words": 5,
+        "path_word": 2,
+        "state_mutability": "nonpayable",
+        "semantic_kind": "nominal_token_input_whole_router_weth_native_output_multihop_swap"
       }
     ],
     "excluded_routes": [
       { "canonical_signature": "removeLiquidityWithPermit(address,address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)", "selector": "0x2195995c", "reason": "signature-bearing permit authority remains outside this slice" },
       { "canonical_signature": "removeLiquidityETHWithPermit(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)", "selector": "0xded9382a", "reason": "signature-bearing permit authority remains outside this slice" },
-      { "canonical_signature": "removeLiquidityETHWithPermitSupportingFeeOnTransferTokens(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)", "selector": "0x5b0d5984", "reason": "signature-bearing permit authority remains outside this slice" },
-      { "canonical_signature": "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)", "selector": "0x5c11d795", "reason": "fee-on-transfer swap semantics remain outside this slice" },
-      { "canonical_signature": "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)", "selector": "0xb6f9de95", "reason": "fee-on-transfer swap semantics remain outside this slice" },
-      { "canonical_signature": "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)", "selector": "0x791ac947", "descriptor_role": "exact_and_bloom_known_call_refusal_only", "trusted_ir": false, "reason": "declared solely for exact and Bloom known-call refusal; fee-on-transfer native-output semantics remain outside trusted IR" }
+      { "canonical_signature": "removeLiquidityETHWithPermitSupportingFeeOnTransferTokens(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)", "selector": "0x5b0d5984", "reason": "signature-bearing permit authority remains outside this slice" }
     ]
   },
   "deployment": {
@@ -184,14 +213,14 @@
   },
   "abi": {
     "archive_file": "abi/remove-liquidity.abi.json",
-    "archive_file_sha256": "ecee7214d50c67c32d728b1e65645367ae360ed3e53ca80cf517fa94d55070ce",
-    "routes": 9,
+    "archive_file_sha256": "a942fe3d082cbc811ab7a957ee4bd20916182438766a38315268955c50276729",
+    "routes": 12,
     "source_derived_subset": true
   },
   "descriptor": {
     "curated_file": "secure/data/erc7730/curations/files/registry/quickswap/calldata-QuickSwap.json",
     "vendored_file": "secure/data/erc7730-registry/registry/quickswap/calldata-QuickSwap.json",
-    "sha256": "4468662dc49c96b2954975c9612c1f44bc9a3852a2d75bac870be61fe867778f"
+    "sha256": "354ed71af1287b857b02fff5af56e5625d2d9c3211fb7ac84d2c2be3c3856b8a"
   },
   "semantic_hazards": [
     "LP-token decimals and the derived pair address are not signed calldata, so liquidity must remain an exact raw uint256 rather than a scaled tokenAmount.",
@@ -199,13 +228,16 @@
     "The supporting-fee route transfers the router's entire current balance of the selected token, so it can also sweep pre-existing router dust to the signed beneficiary.",
     "Every swap path address determines a token identity, adjacent pair, hop direction, intermediate receiver, or final output token; endpoint-only display would hide signed execution effects.",
     "The source requires at least two path addresses for successful execution. Empty paths refuse during endpoint resolution, while the generic renderer can exactly show a canonical one-address path that the router subsequently rejects; admission does not promise execution success.",
-    "The four native swaps require the pinned Polygon wrapped-native address at path[0] or path[-1]. The complete route is displayed, but the generic renderer has no per-format endpoint-equality predicate, so an invalid endpoint renders exactly and then the source rejects it.",
-    "swapExactETHForTokens is payable and binds its input to the exact signed outer native value; swapETHForExactTokens is payable and treats the signed outer value as a maximum, wraps only the live required input, and refunds the excess to msg.sender; the two token-to-native swaps are nonpayable and bind their native minimum or exact output to calldata.",
+    "The six native swaps require the pinned Polygon wrapped-native address at path[0] or path[-1]. The complete route is displayed, but the generic renderer has no per-format endpoint-equality predicate, so an invalid endpoint renders exactly and then the source rejects it.",
+    "swapExactETHForTokens and swapExactETHForTokensSupportingFeeOnTransferTokens are payable and bind their input to the exact signed outer native value; swapETHForExactTokens is payable and treats the signed outer value as a maximum, wraps only the live required input, and refunds the excess to msg.sender; the three token-to-native swaps are nonpayable and bind their native minimum or exact output to calldata.",
     "Exact-input derives gross output from live reserves and compares it with amountOutMin; exact-output derives live required input and caps it with amountInMax or the signed outer native maximum. swapETHForExactTokens displays its exact signed amountOut as gross output and does not promise the beneficiary's net receipt.",
-    "Fee-on-transfer or otherwise non-standard output tokens can deliver less net value than the gross amountOutMin or amountOut transferred by the pair.",
+    "For the two supporting-fee token-output routes, amountOutMin is checked against the literal beneficiary's token balance delta and therefore describes that observed net increase rather than a gross pair transfer; arbitrary token behavior and rebasing remain outside the signed request.",
+    "For supporting-fee routes with token input, amountIn is the nominal amount requested from transferFrom; transfer tax can make the first pair receive less, and non-standard tokens can debit a different economic amount.",
+    "swapExactTokensForETHSupportingFeeOnTransferTokens measures the router's whole WETH balance after the swap rather than a before/after delta, checks that whole balance against amountOutMin, then unwraps and transfers all of it; pre-existing router WETH dust can increase the native output.",
+    "Fee-on-transfer or otherwise non-standard output tokens can still deliver less net value than the gross amountOut or amountOutMin used by the standard swap routes.",
     "Live reserves, pair and token bytecode/behavior, balances, allowances, transfer taxes, execution-block timestamp, and intervening state are not signed calldata and are not displayed as guarantees.",
     "The beneficiary is the literal signed to address; classic QuickSwap Router02 has no address(1) or address(2) recipient sentinels.",
-    "The source-defined 0x791ac947 route is descriptor-declared solely for exact and Bloom known-call refusal and remains absent from trusted IR; this evidence grants it no clear-sign authority.",
+    "All three fee-on-transfer swaps are admitted only for the pinned Polygon Router02 deployment and preserve the same complete-route, literal-beneficiary, deadline, path-cap, and wrapped-native revert boundaries as the standard swaps.",
     "The official repository was created after deployment; deployment identity rests on QuickSwap's official address list plus the deployment transaction and verified source, with the pinned repository commit serving as an exact source mirror."
   ]
 }

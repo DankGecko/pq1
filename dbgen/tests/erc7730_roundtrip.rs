@@ -681,7 +681,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.root),
-        "b4ec673c1f4ed4488f304d4b75d554e6c0c676742eb788f9c2ef15aba878a9de"
+        "c7ba3f392752f530aec9a1eee657db1ec6f1fe414031c4071909fa45e197afe2"
     );
 }
 
@@ -2438,7 +2438,7 @@ fn registry_flying_tulip_session_manager_admits_only_injective_static_authority_
 }
 
 #[test]
-fn registry_unexpanded_endpoint_only_route_is_omitted_but_stays_known() {
+fn registry_expanded_quickswap_route_is_admitted_and_stays_known() {
     let catalogue = build_registry();
     let raw = hex::decode("a5e0829caced8ffdd4de3c43696c57f7d7a678ff").unwrap();
     let mut contract = [0u8; 20];
@@ -2454,7 +2454,7 @@ fn registry_unexpanded_endpoint_only_route_is_omitted_but_stays_known() {
         &contract,
         &selector,
     ));
-    assert!(!catalogue.entries.iter().any(|entry| {
+    assert!(catalogue.entries.iter().any(|entry| {
         entry.chain_id == 137
             && entry.contract == contract
             && Erc7730Ir::parse(&entry.ir_bytes).is_ok_and(|ir| {
@@ -3876,15 +3876,14 @@ fn vendored_uniswap_v3_router02_admits_only_four_exactly_guarded_routes() {
     }
 }
 
-/// QuickSwap V2's six selected standard token/native routes become complete only when
-/// the descriptor renders the entire ordered address path. Unlike Router02,
-/// the classic V2 router gives `to` its literal ABI meaning: no sender sentinel
-/// or word guard may be attached. The existing five all-static liquidity
-/// routes remain admitted, while fee-on-transfer and permit routes remain
-/// protected by the exact and Bloom known-call
-/// inventories.
+/// QuickSwap V2's six standard and three fee-on-transfer token/native routes
+/// become complete only when the descriptor renders the entire ordered address
+/// path. Unlike Router02, the classic V2 router gives `to` its literal ABI
+/// meaning: no sender sentinel or word guard may be attached. The existing five
+/// all-static liquidity routes remain admitted, while permit routes remain
+/// protected by the exact and Bloom known-call inventories.
 #[test]
-fn vendored_quickswap_v2_admits_exactly_six_complete_standard_swap_routes() {
+fn vendored_quickswap_v2_admits_exactly_nine_complete_swap_routes() {
     let root = workspace_root();
     let reg = root.join("secure/data/erc7730-registry");
     let desc = reg.join("registry/quickswap/calldata-QuickSwap.json");
@@ -3970,11 +3969,23 @@ fn vendored_quickswap_v2_admits_exactly_six_complete_standard_swap_routes() {
             [0x4a, 0x25, 0xd9, 0x4a],
             SwapKind::TokenForNativeExactOutput,
         ),
+        (
+            "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
+            [0x5c, 0x11, 0xd7, 0x95],
+            SwapKind::TokenExactInput,
+        ),
+        (
+            "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)",
+            [0xb6, 0xf9, 0xde, 0x95],
+            SwapKind::NativeForTokenExactInput,
+        ),
+        (
+            "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
+            [0x79, 0x1a, 0xc9, 0x47],
+            SwapKind::TokenForNativeExactInput,
+        ),
     ];
     let refused = [
-        "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
-        "swapExactETHForTokensSupportingFeeOnTransferTokens(uint256,address[],address,uint256)",
-        "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
         "removeLiquidityWithPermit(address,address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
         "removeLiquidityETHWithPermit(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
         "removeLiquidityETHWithPermitSupportingFeeOnTransferTokens(address,uint256,uint256,uint256,address,uint256,bool,uint8,bytes32,bytes32)",
@@ -3982,13 +3993,6 @@ fn vendored_quickswap_v2_admits_exactly_six_complete_standard_swap_routes() {
     for (signature, expected, _) in selected_swaps {
         assert_eq!(selector_for(signature), expected);
     }
-    for (signature, expected) in [(
-        "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)",
-        [0x79, 0x1a, 0xc9, 0x47],
-    )] {
-        assert_eq!(selector_for(signature), expected);
-    }
-
     let expected_admitted: BTreeSet<_> = admitted_static
         .iter()
         .map(|signature| selector_for(signature))
@@ -4000,7 +4004,7 @@ fn vendored_quickswap_v2_admits_exactly_six_complete_standard_swap_routes() {
         .collect();
     assert_eq!(
         actual_admitted, expected_admitted,
-        "exactly five pre-existing static routes plus six complete standard swaps are admitted"
+        "exactly five pre-existing static routes plus nine complete swaps are admitted"
     );
     for signature in refused {
         let selector = selector_for(signature);
@@ -4038,7 +4042,7 @@ fn vendored_quickswap_v2_admits_exactly_six_complete_standard_swap_routes() {
     let mut value_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
     value_path.extend_from_slice(&container_field::VALUE.to_be_bytes());
 
-    for (_, selector, kind) in selected_swaps {
+    for (signature, selector, kind) in selected_swaps {
         let format = ir
             .find_format_by_selector(&selector)
             .expect("QuickSwap format table parses")
@@ -4049,7 +4053,14 @@ fn vendored_quickswap_v2_admits_exactly_six_complete_standard_swap_routes() {
             .collect();
         assert_eq!(fields.len(), 5, "every signed swap operand is displayed");
 
-        let (head_words, path_member, expected_labels, expected_ops, expected_paths, token_paths): (
+        let (
+            head_words,
+            path_member,
+            mut expected_labels,
+            expected_ops,
+            expected_paths,
+            token_paths,
+        ): (
             u16,
             u8,
             [&[u8]; 5],
@@ -4145,13 +4156,7 @@ fn vendored_quickswap_v2_admits_exactly_six_complete_standard_swap_routes() {
                     flat_path(3),
                     flat_path(4),
                 ],
-                [
-                    Some(token_path(2, false)),
-                    None,
-                    None,
-                    None,
-                    None,
-                ],
+                [Some(token_path(2, false)), None, None, None, None],
             ),
             SwapKind::NativeForTokenExactInput => (
                 4,
@@ -4177,13 +4182,7 @@ fn vendored_quickswap_v2_admits_exactly_six_complete_standard_swap_routes() {
                     flat_path(2),
                     flat_path(3),
                 ],
-                [
-                    None,
-                    Some(token_path(1, true)),
-                    None,
-                    None,
-                    None,
-                ],
+                [None, Some(token_path(1, true)), None, None, None],
             ),
             SwapKind::NativeForTokenExactOutput => (
                 4,
@@ -4209,13 +4208,7 @@ fn vendored_quickswap_v2_admits_exactly_six_complete_standard_swap_routes() {
                     flat_path(2),
                     flat_path(3),
                 ],
-                [
-                    None,
-                    Some(token_path(1, true)),
-                    None,
-                    None,
-                    None,
-                ],
+                [None, Some(token_path(1, true)), None, None, None],
             ),
             SwapKind::TokenForNativeExactOutput => (
                 5,
@@ -4241,15 +4234,16 @@ fn vendored_quickswap_v2_admits_exactly_six_complete_standard_swap_routes() {
                     flat_path(3),
                     flat_path(4),
                 ],
-                [
-                    None,
-                    Some(token_path(2, false)),
-                    None,
-                    None,
-                    None,
-                ],
+                [None, Some(token_path(2, false)), None, None, None],
             ),
         };
+        if matches!(
+            signature,
+            "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)"
+                | "swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)"
+        ) {
+            expected_labels[0] = b"Requested Input";
+        }
         assert_eq!(format.static_head_words, head_words);
         let params: Vec<_> = fields
             .iter()
