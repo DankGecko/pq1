@@ -302,6 +302,21 @@ const PARAM_TERMINAL_KIND: u8 = 0x47;
 /// preserves its one-byte wire shape while letting the device reject dirty
 /// zero/sign extension on narrow integers.
 const PARAM_INTEGER_WIDTH: u8 = 0x48;
+/// Standard ERC-7730 `addressName.params.senderAddress` sentinel list. The
+/// payload is one or more descriptor-order 20-byte addresses concatenated
+/// without a count byte. Emission is gated by an exact semantic enrollment;
+/// merely publishing `senderAddress` in a descriptor grants no substitution
+/// authority.
+const PARAM_SENDER_ADDRESS: u8 = 0x49;
+/// Authenticated field-local ABI-word predicate. Payload:
+/// `operation:u8 || canonical_word:[u8;32]`, where operation is one of the
+/// `WORD_GUARD_*` constants below. The device evaluates every guard in a
+/// format-wide preflight before painting trusted pages.
+const PARAM_WORD_GUARD: u8 = 0x4A;
+const WORD_GUARD_EQ: u8 = 0x00;
+const WORD_GUARD_NE: u8 = 0x01;
+const WORD_GUARD_PAYLOAD_LEN: usize = 33;
+const MAX_SENDER_ADDRESSES: usize = 2;
 const DYNAMIC_KIND_STRING: u8 = 0x01;
 const INTERPOLATED_INTENT_VERSION: u8 = 0x01;
 const MAX_INTERPOLATED_SUBSTITUTIONS: usize = 3;
@@ -311,6 +326,135 @@ const MAX_INTERPOLATED_INTENT_LEN: usize = 32;
 /// Matches the on-device `ir::MAX_NESTING`; a type deeper than this (or a
 /// malformed cyclic one) is refused rather than reasoned about.
 const MAX_STRUCT_DEPTH: usize = 8;
+
+// ─────────────────────────────────────────────────────────────────────
+// Exact semantic enrollments.
+// ─────────────────────────────────────────────────────────────────────
+
+/// SHA-256(JCS(resolved descriptor JSON)) after both curated Router02 copies
+/// gained the final visible `@.value` fields. Any descriptor-byte semantic
+/// drift changes this binding and returns the formats to fail-closed exclusion
+/// until an owner reviews and updates the enrollment.
+const ROUTER02_DESCRIPTOR_HASH: [u8; 32] = [
+    0xb3, 0x7e, 0xb5, 0x21, 0xfd, 0x3c, 0x92, 0x0a, 0xaa, 0xd3, 0xa3, 0x95, 0xc4, 0x82, 0x09, 0xf0,
+    0x7d, 0x0b, 0x0f, 0x00, 0x50, 0x81, 0x28, 0x81, 0x5d, 0x6f, 0x1b, 0x41, 0x23, 0xac, 0xcd, 0x62,
+];
+
+const ROUTER02_MAINNET: [u8; 20] = [
+    0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
+    0x86, 0x65, 0xfc, 0x45,
+];
+const ADDRESS_ONE: [u8; 20] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+const ADDRESS_TWO_WORD: [u8; 32] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
+];
+const ZERO_WORD: [u8; 32] = [0u8; 32];
+const ROUTER02_SENDER_SENTINELS: [[u8; 20]; 1] = [ADDRESS_ONE];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SemanticSenderEnrollment {
+    path: &'static str,
+    terminal_type: &'static str,
+    sentinels: &'static [[u8; 20]],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SemanticWordGuard {
+    path: &'static str,
+    terminal_type: &'static str,
+    operation: u8,
+    word: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SemanticFormatEnrollment {
+    descriptor_hash: [u8; 32],
+    chain_id: u64,
+    contract: [u8; 20],
+    canonical_signature: &'static str,
+    selector: [u8; 4],
+    sender: SemanticSenderEnrollment,
+    guards: &'static [SemanticWordGuard],
+}
+
+const ROUTER02_EXACT_INPUT_GUARDS: [SemanticWordGuard; 4] = [
+    SemanticWordGuard {
+        path: "params.recipient",
+        terminal_type: "address",
+        operation: WORD_GUARD_NE,
+        word: ADDRESS_TWO_WORD,
+    },
+    SemanticWordGuard {
+        path: "params.amountIn",
+        terminal_type: "uint256",
+        operation: WORD_GUARD_NE,
+        word: ZERO_WORD,
+    },
+    SemanticWordGuard {
+        path: "params.sqrtPriceLimitX96",
+        terminal_type: "uint160",
+        operation: WORD_GUARD_EQ,
+        word: ZERO_WORD,
+    },
+    SemanticWordGuard {
+        path: "@.value",
+        terminal_type: "uint256",
+        operation: WORD_GUARD_EQ,
+        word: ZERO_WORD,
+    },
+];
+
+const ROUTER02_EXACT_OUTPUT_GUARDS: [SemanticWordGuard; 3] = [
+    SemanticWordGuard {
+        path: "params.recipient",
+        terminal_type: "address",
+        operation: WORD_GUARD_NE,
+        word: ADDRESS_TWO_WORD,
+    },
+    SemanticWordGuard {
+        path: "params.sqrtPriceLimitX96",
+        terminal_type: "uint160",
+        operation: WORD_GUARD_EQ,
+        word: ZERO_WORD,
+    },
+    SemanticWordGuard {
+        path: "@.value",
+        terminal_type: "uint256",
+        operation: WORD_GUARD_EQ,
+        word: ZERO_WORD,
+    },
+];
+
+const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 2] = [
+    SemanticFormatEnrollment {
+        descriptor_hash: ROUTER02_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: ROUTER02_MAINNET,
+        canonical_signature:
+            "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+        selector: [0x04, 0xe4, 0x5a, 0xaf],
+        sender: SemanticSenderEnrollment {
+            path: "params.recipient",
+            terminal_type: "address",
+            sentinels: &ROUTER02_SENDER_SENTINELS,
+        },
+        guards: &ROUTER02_EXACT_INPUT_GUARDS,
+    },
+    SemanticFormatEnrollment {
+        descriptor_hash: ROUTER02_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: ROUTER02_MAINNET,
+        canonical_signature:
+            "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+        selector: [0x50, 0x23, 0xb4, 0xdf],
+        sender: SemanticSenderEnrollment {
+            path: "params.recipient",
+            terminal_type: "address",
+            sentinels: &ROUTER02_SENDER_SENTINELS,
+        },
+        guards: &ROUTER02_EXACT_OUTPUT_GUARDS,
+    },
+];
 
 // Visibility byte values (matching `pqsigner_erc7730::ir::Visibility`).
 const VIS_ALWAYS: u8 = 0x00;
@@ -3254,6 +3398,24 @@ fn compile_one_format(
         [h[0], h[1], h[2], h[3]]
     };
 
+    let semantic_enrollment = if context_kind == CTX_CONTRACT {
+        semantic_enrollment_for(
+            ctx.descriptor_hash,
+            interpolation_deployment,
+            canonical_contract_signature
+                .as_deref()
+                .expect("contract signature computed above"),
+            selector,
+        )
+    } else {
+        None
+    };
+    if format_declares_sender_address(fmt) && semantic_enrollment.is_none() {
+        return Err(format!(
+            "format `{sig}` declares senderAddress without an exact descriptor/deployment/selector semantic enrollment"
+        ));
+    }
+
     // Sanity: field count.
     if fmt.fields.len() > MAX_FIELDS_PER_FORMAT {
         return Err(format!(
@@ -3345,6 +3507,19 @@ fn compile_one_format(
         )
     };
 
+    if let Some(enrollment) = semantic_enrollment {
+        apply_semantic_enrollment(
+            sig,
+            fmt,
+            context_kind,
+            &parsed,
+            ctx,
+            pool,
+            &mut compiled,
+            enrollment,
+        )?;
+    }
+
     // `interpolatedIntent` is presentation derived from values that keep their
     // ordinary field pages. The host resolves braces to final emitted field
     // ordinals; the device receives only a tiny authenticated token program.
@@ -3405,6 +3580,292 @@ struct CompiledFieldOut {
     label: Vec<u8>,
     path_off: u16,
     param_off: u16,
+}
+
+fn semantic_enrollment_for(
+    descriptor_hash: [u8; 32],
+    deployment: Option<&InterpolationDeployment<'_>>,
+    canonical_signature: &str,
+    selector: [u8; 4],
+) -> Option<&'static SemanticFormatEnrollment> {
+    let deployment = deployment?;
+    SEMANTIC_FORMAT_ENROLLMENTS.iter().find(|entry| {
+        entry.descriptor_hash == descriptor_hash
+            && entry.chain_id == deployment.chain_id
+            && entry.contract == deployment.contract
+            && entry.canonical_signature == canonical_signature
+            && entry.selector == selector
+    })
+}
+
+fn format_declares_sender_address(fmt: &Format) -> bool {
+    fmt.fields.iter().any(|field| {
+        field
+            .params
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|params| params.contains_key("senderAddress"))
+    })
+}
+
+fn compile_sender_addresses(
+    value: &serde_json::Value,
+    ctx: &CompileCtx,
+) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut push = |raw: &str, index: usize| -> Result<(), String> {
+        let address = resolve_address_or_const(raw, ctx)?;
+        if out
+            .chunks_exact(20)
+            .any(|existing| existing == address.as_slice())
+        {
+            return Err(format!(
+                "addressName.senderAddress[{index}] duplicates an earlier address"
+            ));
+        }
+        out.extend_from_slice(&address);
+        Ok(())
+    };
+
+    match value {
+        serde_json::Value::String(address) => push(address, 0)?,
+        serde_json::Value::Array(addresses) => {
+            if addresses.is_empty() {
+                return Err("addressName.senderAddress list must not be empty".to_string());
+            }
+            if addresses.len() > MAX_SENDER_ADDRESSES {
+                return Err(format!(
+                    "addressName.senderAddress list has {} entries (max {MAX_SENDER_ADDRESSES})",
+                    addresses.len()
+                ));
+            }
+            for (index, value) in addresses.iter().enumerate() {
+                let address = value.as_str().ok_or_else(|| {
+                    format!("addressName.senderAddress[{index}] must be a string")
+                })?;
+                push(address, index)?;
+            }
+        }
+        _ => {
+            return Err(
+                "addressName.senderAddress must be an address string or non-empty address array"
+                    .to_string(),
+            )
+        }
+    }
+    Ok(out)
+}
+
+fn semantic_terminal_type_for_path(
+    path: &str,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+) -> Result<String, String> {
+    match path.trim() {
+        "@.to" | "@.from" => Ok("address".to_string()),
+        "@.value" | "@.chainId" | "@.nonce" => Ok("uint256".to_string()),
+        path if path.starts_with('@') => Err(format!(
+            "semantic enrollment names unsupported container path `{path}`"
+        )),
+        path => rendered_path_terminal_type(path, context_kind, parsed)?
+            .ok_or_else(|| format!("semantic enrollment path `{path}` has no terminal type")),
+    }
+}
+
+fn validate_semantic_guard_word(
+    guard: &SemanticWordGuard,
+    semantics: TerminalSemantics,
+) -> Result<(), String> {
+    if !matches!(guard.operation, WORD_GUARD_EQ | WORD_GUARD_NE) {
+        return Err(format!(
+            "semantic guard `{}` has unknown operation 0x{:02x}",
+            guard.path, guard.operation
+        ));
+    }
+    match semantics.kind {
+        TerminalKind::Address => {
+            if guard.word[..12].iter().any(|&byte| byte != 0) {
+                return Err(format!(
+                    "semantic guard `{}` has a non-canonical address word",
+                    guard.path
+                ));
+            }
+        }
+        TerminalKind::Unsigned => {
+            let width = semantics.integer_width_bytes.ok_or_else(|| {
+                format!("semantic guard `{}` unsigned type has no width", guard.path)
+            })? as usize;
+            if guard.word[..32 - width].iter().any(|&byte| byte != 0) {
+                return Err(format!(
+                    "semantic guard `{}` exceeds its authenticated unsigned width",
+                    guard.path
+                ));
+            }
+        }
+        other => {
+            return Err(format!(
+                "semantic guard `{}` terminal {other:?} is not a static Address/Unsigned word",
+                guard.path
+            ))
+        }
+    }
+    Ok(())
+}
+
+/// Validate and lower one exact source-level semantic enrollment.
+///
+/// Every enrolled path must exist exactly once in the descriptor's visible
+/// flat field list and must retain the enrolled Solidity terminal type. This
+/// deliberately refuses synthetic or hidden guard-only fields: the user sees
+/// the same signed word whose predicate grants clear-signing authority.
+fn apply_semantic_enrollment(
+    sig: &str,
+    fmt: &Format,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+    ctx: &CompileCtx,
+    pool: &mut Pool,
+    compiled: &mut [CompiledFieldOut],
+    enrollment: &SemanticFormatEnrollment,
+) -> Result<(), String> {
+    if context_kind != CTX_CONTRACT || compiled.len() != fmt.fields.len() {
+        return Err(format!(
+            "format `{sig}` semantic enrollment requires one flat contract field per source field"
+        ));
+    }
+
+    let sender_fields: Vec<usize> = fmt
+        .fields
+        .iter()
+        .enumerate()
+        .filter_map(|(index, field)| {
+            field
+                .params
+                .as_ref()
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|params| params.contains_key("senderAddress"))
+                .then_some(index)
+        })
+        .collect();
+    if sender_fields.len() != 1 {
+        return Err(format!(
+            "format `{sig}` semantic enrollment requires exactly one senderAddress field, found {}",
+            sender_fields.len()
+        ));
+    }
+    let sender_index = sender_fields[0];
+    let sender_field = &fmt.fields[sender_index];
+    if sender_field.path.as_deref() != Some(enrollment.sender.path) {
+        return Err(format!(
+            "format `{sig}` senderAddress path {:?} does not match enrollment `{}`",
+            sender_field.path, enrollment.sender.path
+        ));
+    }
+    if parse_format_name(sender_field.format.as_deref().unwrap_or("raw"))? != FMT_ADDRESS_NAME {
+        return Err(format!(
+            "format `{sig}` senderAddress field must use addressName"
+        ));
+    }
+    if !matches!(sender_field.visible.as_deref(), None | Some("always")) {
+        return Err(format!(
+            "format `{sig}` senderAddress field must be always visible"
+        ));
+    }
+    let sender_type =
+        semantic_terminal_type_for_path(enrollment.sender.path, context_kind, parsed)?;
+    if sender_type != enrollment.sender.terminal_type || sender_type != "address" {
+        return Err(format!(
+            "format `{sig}` senderAddress terminal `{sender_type}` does not match enrolled `{}`",
+            enrollment.sender.terminal_type
+        ));
+    }
+    if enrollment.sender.sentinels.is_empty()
+        || enrollment.sender.sentinels.len() > MAX_SENDER_ADDRESSES
+    {
+        return Err(format!(
+            "format `{sig}` enrollment has invalid senderAddress cardinality {}",
+            enrollment.sender.sentinels.len()
+        ));
+    }
+    let source_sender = sender_field
+        .params
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .and_then(|params| params.get("senderAddress"))
+        .ok_or_else(|| format!("format `{sig}` enrolled senderAddress is missing"))?;
+    let sender_payload = compile_sender_addresses(source_sender, ctx)?;
+    let expected_sender_payload: Vec<u8> = enrollment
+        .sender
+        .sentinels
+        .iter()
+        .flat_map(|address| address.iter().copied())
+        .collect();
+    if sender_payload != expected_sender_payload {
+        return Err(format!(
+            "format `{sig}` senderAddress values do not exactly match semantic enrollment"
+        ));
+    }
+    compiled[sender_index].param_off = pool.append_param_tlv(
+        compiled[sender_index].param_off,
+        PARAM_SENDER_ADDRESS,
+        &sender_payload,
+    )?;
+
+    let mut guarded_paths = BTreeSet::new();
+    for guard in enrollment.guards {
+        if !guarded_paths.insert(guard.path) {
+            return Err(format!(
+                "format `{sig}` semantic enrollment repeats guard path `{}`",
+                guard.path
+            ));
+        }
+        let matches: Vec<usize> = fmt
+            .fields
+            .iter()
+            .enumerate()
+            .filter_map(|(index, field)| {
+                (field.path.as_deref() == Some(guard.path)).then_some(index)
+            })
+            .collect();
+        if matches.len() != 1 {
+            return Err(format!(
+                "format `{sig}` semantic guard path `{}` must be present exactly once, found {}",
+                guard.path,
+                matches.len()
+            ));
+        }
+        let index = matches[0];
+        let field = &fmt.fields[index];
+        if !matches!(field.visible.as_deref(), None | Some("always")) {
+            return Err(format!(
+                "format `{sig}` semantic guard path `{}` must be always visible",
+                guard.path
+            ));
+        }
+        let terminal_type = semantic_terminal_type_for_path(guard.path, context_kind, parsed)?;
+        if terminal_type != guard.terminal_type {
+            return Err(format!(
+                "format `{sig}` semantic guard path `{}` terminal `{terminal_type}` does not match enrolled `{}`",
+                guard.path, guard.terminal_type
+            ));
+        }
+        let (base, is_array) = split_array_suffix(&terminal_type);
+        if is_array {
+            return Err(format!(
+                "format `{sig}` semantic guard path `{}` is not a static scalar",
+                guard.path
+            ));
+        }
+        let semantics = terminal_semantics_from_type(base)?;
+        validate_semantic_guard_word(guard, semantics)?;
+
+        let mut payload = [0u8; WORD_GUARD_PAYLOAD_LEN];
+        payload[0] = guard.operation;
+        payload[1..].copy_from_slice(&guard.word);
+        compiled[index].param_off =
+            pool.append_param_tlv(compiled[index].param_off, PARAM_WORD_GUARD, &payload)?;
+    }
+    Ok(())
 }
 
 /// Resolve a rendered path back to the canonical ABI/EIP-712 terminal type.
@@ -3664,7 +4125,9 @@ fn param_mask_from_compiled_tlvs(body: &[u8]) -> Result<ParamMask, String> {
             PARAM_VISIBILITY
             | PARAM_INTERPOLATED_INTENT
             | PARAM_TERMINAL_KIND
-            | PARAM_INTEGER_WIDTH => continue,
+            | PARAM_INTEGER_WIDTH
+            | PARAM_SENDER_ADDRESS
+            | PARAM_WORD_GUARD => continue,
             other => return Err(format!("unknown compiled parameter tag 0x{other:02x}")),
         };
         mask = mask.union(bit);
@@ -4771,7 +5234,13 @@ fn compile_params(
             "threshold",
             "message",
         ],
-        FMT_ADDRESS_NAME | FMT_INTEROP_ADDR_NAME => &["types", "sources"],
+        // `senderAddress` has authority beyond cosmetic address formatting: a
+        // sentinel is substituted with the independently authenticated signer.
+        // It is accepted syntactically only for addressName and is consumed
+        // later by `apply_semantic_enrollment`, which requires an exact
+        // descriptor/deployment/selector/path binding before emitting TLV 0x49.
+        FMT_ADDRESS_NAME => &["types", "sources", "senderAddress"],
+        FMT_INTEROP_ADDR_NAME => &["types", "sources"],
         FMT_NFT_NAME => &["collection", "collectionPath"],
         FMT_DATE => &["encoding"],
         FMT_ENUM => &["$ref", "ref"],
@@ -4908,6 +5377,13 @@ fn compile_params(
                 }
                 push_tlv(&mut out, PARAM_ADDR_SOURCES, &[bits])?;
             }
+            // `senderAddress`, when present, is deliberately not emitted here.
+            // `compile_one_format` first proves an exact semantic enrollment,
+            // then `apply_semantic_enrollment` resolves and emits it together
+            // with every required word guard. Keeping the authority-bearing
+            // lowering in one place prevents a generic params-only path from
+            // silently unlocking another descriptor (notably the two Lido
+            // formats that also publish this standard annotation).
         }
         FMT_DATE => {
             if let Some(enc) = params.get("encoding") {
@@ -8064,6 +8540,25 @@ fn review_param_semantics(
     if let Some(width) = params.integer_width_bytes {
         parts.push(format!("integerWidthBytes={width}"));
     }
+    if let Some(addresses) = params.sender_addresses {
+        let members = addresses
+            .chunks_exact(pqsigner_erc7730::render::params::SENDER_ADDRESS_LEN)
+            .map(|address| format!("0x{}", hex::encode(address)))
+            .collect::<Vec<_>>()
+            .join(",");
+        parts.push(format!("senderAddress=[{members}]"));
+    }
+    if let Some(guard) = params.word_guard {
+        let operation = match guard.mode() {
+            pqsigner_erc7730::render::params::WORD_GUARD_EQ => "eq",
+            pqsigner_erc7730::render::params::WORD_GUARD_NE => "ne",
+            _ => "unknown",
+        };
+        parts.push(format!(
+            "wordGuard={operation}(0x{})",
+            hex::encode(guard.expected())
+        ));
+    }
     Ok(format!("{{{}}}", parts.join(",")))
 }
 
@@ -10334,6 +10829,14 @@ mod tests {
         assert_eq!(PARAM_NFT_COLLECTION, params::PARAM_NFT_COLLECTION);
         assert_eq!(PARAM_NFT_COLLECTION_PATH, params::PARAM_NFT_COLLECTION_PATH);
         assert_eq!(PARAM_INTERPOLATED_INTENT, params::PARAM_INTERPOLATED_INTENT);
+        assert_eq!(PARAM_TERMINAL_KIND, params::PARAM_TERMINAL_KIND);
+        assert_eq!(PARAM_INTEGER_WIDTH, params::PARAM_INTEGER_WIDTH);
+        assert_eq!(PARAM_SENDER_ADDRESS, params::PARAM_SENDER_ADDRESS);
+        assert_eq!(PARAM_WORD_GUARD, params::PARAM_WORD_GUARD);
+        assert_eq!(MAX_SENDER_ADDRESSES, params::MAX_SENDER_ADDRESSES);
+        assert_eq!(WORD_GUARD_PAYLOAD_LEN, params::WORD_GUARD_PAYLOAD_LEN);
+        assert_eq!(WORD_GUARD_EQ, params::WORD_GUARD_EQ);
+        assert_eq!(WORD_GUARD_NE, params::WORD_GUARD_NE);
         assert_eq!(
             INTERPOLATED_INTENT_VERSION,
             params::INTERPOLATED_INTENT_VERSION
@@ -11559,6 +12062,383 @@ mod tests {
             owner: String::new(),
             contract_name: String::new(),
         }
+    }
+
+    fn router02_format(exact_input: bool) -> (&'static str, Format) {
+        let (signature, first_path, first_label, second_path, second_label) = if exact_input {
+            (
+                "exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96) params)",
+                "params.amountIn",
+                "Send",
+                "params.amountOutMinimum",
+                "Minimum to Receive",
+            )
+        } else {
+            (
+                "exactOutputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountOut,uint256 amountInMaximum,uint160 sqrtPriceLimitX96) params)",
+                "params.amountInMaximum",
+                "Maximum Amount In",
+                "params.amountOut",
+                "Amount to Receive",
+            )
+        };
+        let format = serde_json::from_value(serde_json::json!({
+            "intent": "Swap",
+            "fields": [
+                {
+                    "path": first_path,
+                    "label": first_label,
+                    "format": "tokenAmount",
+                    "params": { "tokenPath": "params.tokenIn" },
+                    "visible": "always"
+                },
+                {
+                    "path": second_path,
+                    "label": second_label,
+                    "format": "tokenAmount",
+                    "params": { "tokenPath": "params.tokenOut" },
+                    "visible": "always"
+                },
+                {
+                    "path": "params.fee",
+                    "label": "Uniswap fee",
+                    "format": "unit",
+                    "params": { "decimals": 4, "base": "%", "prefix": false },
+                    "visible": "always"
+                },
+                {
+                    "path": "params.recipient",
+                    "label": "Beneficiary",
+                    "format": "addressName",
+                    "params": {
+                        "types": ["eoa", "contract"],
+                        "sources": ["local", "ens"],
+                        "senderAddress": ["0x0000000000000000000000000000000000000001"]
+                    },
+                    "visible": "always"
+                },
+                {
+                    "path": "params.sqrtPriceLimitX96",
+                    "label": "Price limit",
+                    "format": "raw",
+                    "visible": "always"
+                },
+                {
+                    "path": "@.value",
+                    "label": "Native value",
+                    "format": "raw",
+                    "visible": "always"
+                }
+            ]
+        }))
+        .expect("valid Router02 test format");
+        (signature, format)
+    }
+
+    fn contract_format_param_offsets(format: &[u8]) -> Vec<u16> {
+        assert!(format.len() >= 9, "contract format header");
+        let field_count = format[4] as usize;
+        let intent_len = format[5] as usize;
+        let mut cursor = 9 + intent_len;
+        let mut offsets = Vec::with_capacity(field_count);
+        for _ in 0..field_count {
+            let label_len = format[cursor + 1] as usize;
+            let offsets_at = cursor + 2 + label_len;
+            offsets.push(u16::from_be_bytes([
+                format[offsets_at + 2],
+                format[offsets_at + 3],
+            ]));
+            cursor = offsets_at + 4;
+        }
+        assert_eq!(cursor, format.len(), "consume exact contract format bytes");
+        offsets
+    }
+
+    fn compile_router02_test_format(
+        exact_input: bool,
+        ctx: &mut CompileCtx,
+        deployment: &InterpolationDeployment<'_>,
+    ) -> Result<(Pool, Vec<u8>, Vec<u16>), String> {
+        let (sig, fmt) = router02_format(exact_input);
+        let mut pool = Pool::new();
+        let mut format = Vec::new();
+        compile_one_format(
+            sig,
+            &fmt,
+            CTX_CONTRACT,
+            ctx,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut format,
+            Some(deployment),
+        )?;
+        let offsets = contract_format_param_offsets(&format);
+        Ok((pool, format, offsets))
+    }
+
+    fn expected_guard(operation: u8, word: [u8; 32]) -> [u8; WORD_GUARD_PAYLOAD_LEN] {
+        let mut payload = [0u8; WORD_GUARD_PAYLOAD_LEN];
+        payload[0] = operation;
+        payload[1..].copy_from_slice(&word);
+        payload
+    }
+
+    #[test]
+    fn router02_exact_enrollment_emits_only_the_required_sender_and_word_guards() {
+        let capabilities = Erc20Capabilities::default();
+        let deployment = InterpolationDeployment {
+            chain_id: 1,
+            contract: ROUTER02_MAINNET,
+            erc20_capabilities: &capabilities,
+        };
+
+        for exact_input in [true, false] {
+            let mut ctx = test_ctx();
+            ctx.descriptor_hash = ROUTER02_DESCRIPTOR_HASH;
+            let (pool, format, offsets) =
+                compile_router02_test_format(exact_input, &mut ctx, &deployment)
+                    .expect("exact enrollment compiles");
+            assert_eq!(offsets.len(), 6, "no synthetic guard-only field");
+            assert_eq!(
+                &format[..4],
+                if exact_input {
+                    &[0x04, 0xe4, 0x5a, 0xaf]
+                } else {
+                    &[0x50, 0x23, 0xb4, 0xdf]
+                }
+            );
+
+            assert_eq!(
+                find_tlv(&pool, offsets[3], PARAM_SENDER_ADDRESS),
+                Some(ADDRESS_ONE.as_slice())
+            );
+            assert_eq!(
+                find_tlv(&pool, offsets[3], PARAM_WORD_GUARD),
+                Some(expected_guard(WORD_GUARD_NE, ADDRESS_TWO_WORD).as_slice())
+            );
+            assert_eq!(
+                find_tlv(&pool, offsets[4], PARAM_WORD_GUARD),
+                Some(expected_guard(WORD_GUARD_EQ, ZERO_WORD).as_slice())
+            );
+            assert_eq!(
+                find_tlv(&pool, offsets[5], PARAM_WORD_GUARD),
+                Some(expected_guard(WORD_GUARD_EQ, ZERO_WORD).as_slice())
+            );
+            assert!(find_tlv(&pool, offsets[1], PARAM_WORD_GUARD).is_none());
+            assert!(find_tlv(&pool, offsets[2], PARAM_WORD_GUARD).is_none());
+            if exact_input {
+                assert_eq!(
+                    find_tlv(&pool, offsets[0], PARAM_WORD_GUARD),
+                    Some(expected_guard(WORD_GUARD_NE, ZERO_WORD).as_slice())
+                );
+            } else {
+                assert!(find_tlv(&pool, offsets[0], PARAM_WORD_GUARD).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn sender_address_requires_the_complete_exact_enrollment_key() {
+        let capabilities = Erc20Capabilities::default();
+        let exact = InterpolationDeployment {
+            chain_id: 1,
+            contract: ROUTER02_MAINNET,
+            erc20_capabilities: &capabilities,
+        };
+
+        let mut wrong_hash = test_ctx();
+        wrong_hash.descriptor_hash = [0x55; 32];
+        let error = compile_router02_test_format(true, &mut wrong_hash, &exact)
+            .err()
+            .expect("descriptor hash mismatch must refuse")
+            .to_string();
+        assert!(error.contains("without an exact"), "{error}");
+
+        let wrong_chain = InterpolationDeployment {
+            chain_id: 10,
+            ..exact
+        };
+        let mut exact_hash = test_ctx();
+        exact_hash.descriptor_hash = ROUTER02_DESCRIPTOR_HASH;
+        let error = compile_router02_test_format(true, &mut exact_hash, &wrong_chain)
+            .err()
+            .expect("chain mismatch must refuse")
+            .to_string();
+        assert!(error.contains("without an exact"), "{error}");
+
+        let wrong_contract = InterpolationDeployment {
+            contract: [0x44; 20],
+            ..exact
+        };
+        let mut exact_hash = test_ctx();
+        exact_hash.descriptor_hash = ROUTER02_DESCRIPTOR_HASH;
+        let error = compile_router02_test_format(true, &mut exact_hash, &wrong_contract)
+            .err()
+            .expect("contract mismatch must refuse")
+            .to_string();
+        assert!(error.contains("without an exact"), "{error}");
+    }
+
+    #[test]
+    fn exact_enrollment_requires_every_visible_guard_path_once() {
+        let capabilities = Erc20Capabilities::default();
+        let deployment = InterpolationDeployment {
+            chain_id: 1,
+            contract: ROUTER02_MAINNET,
+            erc20_capabilities: &capabilities,
+        };
+        let (sig, mut format) = router02_format(true);
+        format
+            .fields
+            .retain(|field| field.path.as_deref() != Some("@.value"));
+        let mut pool = Pool::new();
+        let mut out = Vec::new();
+        let mut exact_hash = test_ctx();
+        exact_hash.descriptor_hash = ROUTER02_DESCRIPTOR_HASH;
+        let error = compile_one_format(
+            sig,
+            &format,
+            CTX_CONTRACT,
+            &mut exact_hash,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut out,
+            Some(&deployment),
+        )
+        .expect_err("missing enrolled @.value field must refuse");
+        assert!(
+            error.contains("`@.value` must be present exactly once"),
+            "{error}"
+        );
+
+        let (_, mut hidden) = router02_format(true);
+        hidden.fields[5].visible = Some("never".to_string());
+        let mut pool = Pool::new();
+        let mut exact_hash = test_ctx();
+        exact_hash.descriptor_hash = ROUTER02_DESCRIPTOR_HASH;
+        let error = compile_one_format(
+            sig,
+            &hidden,
+            CTX_CONTRACT,
+            &mut exact_hash,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut Vec::new(),
+            Some(&deployment),
+        )
+        .expect_err("hidden enrolled guard field must refuse");
+        assert!(
+            error.contains("must be always visible") || error.contains("visible:\"never\""),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn sender_address_list_is_canonical_and_bounded() {
+        let ctx = test_ctx();
+        assert_eq!(
+            compile_sender_addresses(
+                &serde_json::json!("0x0000000000000000000000000000000000000001"),
+                &ctx,
+            )
+            .unwrap(),
+            ADDRESS_ONE
+        );
+        assert!(compile_sender_addresses(&serde_json::json!([]), &ctx).is_err());
+        assert!(compile_sender_addresses(
+            &serde_json::json!([
+                "0x0000000000000000000000000000000000000001",
+                "0x0000000000000000000000000000000000000001"
+            ]),
+            &ctx,
+        )
+        .is_err());
+        assert!(compile_sender_addresses(
+            &serde_json::json!([
+                "0x0000000000000000000000000000000000000001",
+                "0x0000000000000000000000000000000000000002",
+                "0x0000000000000000000000000000000000000003"
+            ]),
+            &ctx,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn semantic_enrollment_selectors_are_independently_recomputed() {
+        assert_eq!(PARAM_SENDER_ADDRESS, 0x49);
+        assert_eq!(PARAM_WORD_GUARD, 0x4A);
+        for enrollment in SEMANTIC_FORMAT_ENROLLMENTS {
+            let digest = keccak256(enrollment.canonical_signature.as_bytes());
+            assert_eq!(enrollment.selector, digest[..4]);
+            assert_eq!(enrollment.contract, ROUTER02_MAINNET);
+            assert_eq!(enrollment.chain_id, 1);
+        }
+    }
+
+    #[test]
+    fn production_router02_tolerant_compile_emits_exactly_two_single_hop_formats() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf();
+        let descriptor = root.join(
+            "secure/data/erc7730-registry/registry/uniswap/calldata-UniswapV3Router02.json",
+        );
+        let mut drops = Vec::new();
+        let entries = compile_descriptor(
+            &descriptor,
+            &Policy::default(),
+            None,
+            true,
+            &mut drops,
+            &Erc20Capabilities::default(),
+        )
+        .expect("tolerant Router02 compile");
+        assert_eq!(entries.len(), 1, "one exact mainnet deployment leaf");
+        let entry = &entries[0];
+        assert_eq!(entry.descriptor_hash, ROUTER02_DESCRIPTOR_HASH);
+        assert_eq!((entry.chain_id, entry.contract), (1, ROUTER02_MAINNET));
+
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("device accepts emitted Router02 IR");
+        let formats: Vec<_> = ir
+            .format_iter()
+            .map(|format| format.expect("canonical format"))
+            .collect();
+        assert_eq!(formats.len(), 2);
+        assert_eq!(formats[0].selector, [0x04, 0xe4, 0x5a, 0xaf]);
+        assert_eq!(formats[1].selector, [0x50, 0x23, 0xb4, 0xdf]);
+        assert!(formats.iter().all(|format| format.field_count == 6));
+        assert_eq!(
+            drops.len(),
+            4,
+            "dynamic/multihop routes remain explicit partial drops"
+        );
+    }
+
+    /// Owner utility for replacing
+    /// `ROUTER02_DESCRIPTOR_HASH`. This is intentionally
+    /// ignored during ordinary tests because it reads the checked-in corpus.
+    #[test]
+    #[ignore = "owner utility: prints SHA-256(JCS(resolved Router02 descriptor))"]
+    fn print_router02_descriptor_hash_after_curation() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf();
+        let descriptor = root.join(
+            "secure/data/erc7730/curations/files/registry/uniswap/calldata-UniswapV3Router02.json",
+        );
+        let json = load_resolved_descriptor_json(&descriptor, None).expect("load descriptor");
+        let hash = sha256_of(&jcs_canonicalize(&json).expect("JCS descriptor"));
+        eprintln!(
+            "Router02 semantic enrollment descriptor hash: 0x{}",
+            hex::encode(hash)
+        );
+        assert_eq!(
+            hash, ROUTER02_DESCRIPTOR_HASH,
+            "semantic enrollment must remain bound to exact final curation"
+        );
     }
 
     #[test]
