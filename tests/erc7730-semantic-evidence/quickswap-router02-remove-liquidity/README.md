@@ -1,8 +1,11 @@
 # QuickSwap V2 Router02 constrained-route evidence
 
-This offline bundle binds PQ1's constrained ERC-7730 admission of twelve routes
+This offline bundle binds PQ1's constrained ERC-7730 admission of fourteen routes
 on Polygon's canonical QuickSwap V2 Router02 deployment:
 
+- two non-permit add-liquidity routes,
+  `addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)`
+  and `addLiquidityETH(address,uint256,uint256,uint256,address,uint256)`; and
 - three all-static, non-permit remove-liquidity routes; and
 - two token-to-token multi-hop swaps; and
 - exactly four selected native-asset swaps:
@@ -16,6 +19,7 @@ on Polygon's canonical QuickSwap V2 Router02 deployment:
   and
   `swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)`.
 
+The two add-liquidity selectors are `0xe8e33700` and `0xf305d719`, respectively.
 The token-to-token swaps are the classic deadline-bearing five-argument
 Router02 functions, selectors `0x38ed1739` and `0x8803dbee`. They are distinct
 from Uniswap SwapRouter02's four-argument functions, selectors `0x472b43f3`
@@ -33,6 +37,39 @@ The runtime was captured by EIP-1898 block hash from independent public RPC
 fronts. The archived official QuickSwap source snapshot and build files match
 the verified flattened deployment source under the normalization described in
 `manifest.json`.
+
+## Source-derived add-liquidity semantics
+
+The pinned router and library source establish all of the following:
+
+- `_addLiquidity` creates a missing pair, reads its live reserves, and uses the
+  reserve ratio to choose the actual token deposits;
+- for an empty pair, both actual deposits equal their signed desired amounts
+  and neither signed minimum is checked;
+- for a non-empty pair, one actual deposit equals its signed desired amount and
+  the other is the reserve-ratio optimum. Only that adjusted side's signed
+  minimum is checked; the full-desired side's minimum is not checked in that
+  branch;
+- the signed desired token amounts are therefore inclusive maxima for the
+  actual deposits, not promises that the router will transfer both amounts;
+- `addLiquidity` transfers the two live-reserve-derived actual amounts from
+  `msg.sender` to the derived pair and asks that pair to mint a live-state-
+  derived LP-token amount to the literal signed `to` address;
+- `addLiquidityETH` supplies the exact signed outer `msg.value` to
+  `_addLiquidity` as the desired native side, so the outer value is an inclusive
+  maximum. It wraps and deposits only the live-reserve-derived actual native
+  amount, then refunds any excess outer value to `msg.sender`;
+- `addLiquidityETH` likewise transfers only its live-reserve-derived actual
+  token amount, and the literal signed `to` address is the LP recipient; and
+- neither route signs the pair address or LP-token output amount; pair creation,
+  existing reserves, token behavior, pair behavior, actual deposits, and minted
+  LP output remain live-state-derived.
+
+PQ1 therefore labels both desired token amounts and the payable outer native
+value `Maximum to Add`. It labels each minimum `Conditional Min`, because the
+source checks only the adjusted side in a non-empty pair and checks neither side
+in an empty pair. The exact signed `to` address is labelled `LP Recipient`; PQ1
+does not invent or display an exact LP-token identity or output amount.
 
 ## Source-derived swap semantics
 
@@ -108,7 +145,18 @@ therefore renders exactly and then reverts on the router's explicit WETH check.
 
 ## Honest live-state residuals
 
-The display binds the signed route, requested amounts/caps, beneficiary,
+For add-liquidity, the display binds the signed token identities, desired
+maxima, conditional minima, LP recipient, deadline, and the signed outer native
+maximum where applicable. It does not bind the live pair address, pair
+existence or code, reserves, actual deposited amounts, LP-token identity or
+decimals, or minted LP output. The actual deposits depend on the live reserve
+ratio. Transfer-tax or otherwise non-standard tokens can make the pair receive
+less than the router's computed transfer amount, and pair donations or
+non-standard pair behavior can change the minted output. For `addLiquidityETH`,
+the actual native deposit and refund depend on live reserves; excess outer value
+is refunded to `msg.sender`, not the signed LP recipient.
+
+For swaps, the display binds the signed route, requested amounts/caps, beneficiary,
 deadline, the exact signed outer native inputs for `swapExactETHForTokens` and
 `swapExactETHForTokensSupportingFeeOnTransferTokens`, and the signed outer
 native maximum for `swapETHForExactTokens`.
@@ -145,7 +193,5 @@ than the beneficiary's net post-tax receipt and transfers the router's entire
 selected-token balance, which can include dust, to the signed beneficiary.
 
 Permit-bearing removal routes remain known calls that hard-refuse clear
-signing. The two pre-existing add-liquidity routes are outside this evidence
-bundle. This bundle grants no authority to those routes, other deployments,
-fallback/blind signing, live-state success,
-hardware readiness, or shipment.
+signing. This bundle grants no authority to other routes, other deployments,
+fallback/blind signing, live-state success, hardware readiness, or shipment.

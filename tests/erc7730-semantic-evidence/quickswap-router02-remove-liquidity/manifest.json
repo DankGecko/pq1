@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "scope": "QuickSwap V2 Router02 remove-liquidity and standard plus fee-on-transfer multi-hop semantic evidence for PQ1 constrained ERC-7730 admission",
+  "scope": "QuickSwap V2 Router02 add/remove-liquidity and standard plus fee-on-transfer multi-hop semantic evidence for PQ1 constrained ERC-7730 admission",
   "captured_at_utc": "2026-07-20T11:24:00Z",
   "policy": {
     "outcome": "constrained_admission",
-    "mechanism": "PQ1 admits three all-static non-permit remove-liquidity routes, six standard swaps, and all three fee-on-transfer swaps. The exact signed LP-token quantity is shown as an unscaled raw uint256 because the pair address and LP-token decimals are not signed. Each admitted swap renders every signed path address in order, binds its token amounts to the signed first/last token identities, and shows its native amount or maximum, literal beneficiary, and deadline. For fee-on-transfer routes, amountIn is the signed nominal transfer request rather than the amount that reaches the first pair; token-output minima are recipient balance-delta minima; and token-to-native output is the router's whole WETH balance after the swap, which can include pre-existing dust. swapETHForExactTokens shows the signed outer value as Maximum to Send, the exact signed amountOut as Gross Output, and does not promise the beneficiary's net receipt; the router wraps only the live-reserve-derived required input and refunds any excess outer value to msg.sender. Paths above eight addresses refuse instead of truncating. Permit-bearing removals remain exact known-call hard refusals. The two pre-existing add-liquidity routes are outside this evidence bundle.",
+    "mechanism": "PQ1 admits two non-permit add-liquidity routes, three all-static non-permit remove-liquidity routes, six standard swaps, and all three fee-on-transfer swaps. For add-liquidity, desired token amounts and addLiquidityETH's signed outer value are displayed as Maximum to Add because actual deposits are live-reserve-derived and at most those signed values. Each minimum is displayed as Conditional Min because only the adjusted side is checked in a non-empty pair and neither minimum is checked in an empty pair. The signed to address is the LP Recipient; the pair identity and minted LP output are not signed or promised, and addLiquidityETH refunds excess outer value to msg.sender. The exact signed remove-liquidity LP-token quantity is shown as an unscaled raw uint256 because the pair address and LP-token decimals are not signed. Each admitted swap renders every signed path address in order, binds its token amounts to the signed first/last token identities, and shows its native amount or maximum, literal beneficiary, and deadline. For fee-on-transfer routes, amountIn is the signed nominal transfer request rather than the amount that reaches the first pair; token-output minima are recipient balance-delta minima; and token-to-native output is the router's whole WETH balance after the swap, which can include pre-existing dust. swapETHForExactTokens shows the signed outer value as Maximum to Send, the exact signed amountOut as Gross Output, and does not promise the beneficiary's net receipt; the router wraps only the live-reserve-derived required input and refunds any excess outer value to msg.sender. Paths above eight addresses refuse instead of truncating. Permit-bearing removals remain exact known-call hard refusals.",
     "constraints": {
       "swap_path_policy": "render_every_signed_address",
       "swap_path_render_cap": 8,
@@ -14,6 +14,12 @@
       "one_address_path_policy": "render_exactly_but_source_execution_reverts",
       "beneficiary_policy": "literal_signed_address_no_sentinel",
       "deadline_policy": "signed_unix_timestamp_checked_against_execution_block_timestamp",
+      "add_liquidity_mutability": "addLiquidity_nonpayable_addLiquidityETH_payable",
+      "add_liquidity_desired_amount_policy": "signed_desired_token_amounts_and_outer_native_value_are_inclusive_maxima_actual_deposits_are_live_reserve_derived",
+      "add_liquidity_minimum_policy": "only_the_live_reserve_adjusted_side_minimum_is_checked_in_a_nonempty_pair_neither_minimum_is_checked_in_an_empty_pair",
+      "add_liquidity_recipient_policy": "literal_signed_to_address_receives_live_state_derived_lp_output",
+      "add_liquidity_native_refund_policy": "excess_signed_outer_value_is_refunded_to_msg_sender_not_lp_recipient",
+      "add_liquidity_output_policy": "pair_identity_actual_deposits_and_minted_lp_amount_are_not_signed_and_remain_live_state_derived",
       "swap_mutability": "swapExactETHForTokens_swapETHForExactTokens_and_swapExactETHForTokensSupportingFeeOnTransferTokens_payable_all_other_admitted_swaps_nonpayable",
       "refundable_native_input_policy": "signed_outer_value_is_maximum_live_required_input_is_wrapped_excess_is_refunded_to_msg_sender",
       "exact_output_token_display_policy": "signed_amount_out_is_exact_gross_pair_transfer_not_guaranteed_net_beneficiary_receipt",
@@ -33,6 +39,29 @@
       "invalid_wrapped_endpoint_policy": "render_exactly_but_source_execution_reverts"
     },
     "admitted_routes": [
+      {
+        "canonical_signature": "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)",
+        "selector": "0xe8e33700",
+        "descriptor_format_key": "addLiquidity(address tokenA, address tokenB, uint256 amountADesired, uint256 amountBDesired, uint256 amountAMin, uint256 amountBMin, address to, uint256 deadline)",
+        "head_words": 8,
+        "desired_words": [2, 3],
+        "minimum_words": [4, 5],
+        "recipient_word": 6,
+        "state_mutability": "nonpayable",
+        "semantic_kind": "add_liquidity"
+      },
+      {
+        "canonical_signature": "addLiquidityETH(address,uint256,uint256,uint256,address,uint256)",
+        "selector": "0xf305d719",
+        "descriptor_format_key": "addLiquidityETH(address token, uint256 amountTokenDesired, uint256 amountTokenMin, uint256 amountETHMin, address to, uint256 deadline)",
+        "head_words": 6,
+        "desired_words": [1],
+        "minimum_words": [2, 3],
+        "native_desired_source": "@.value",
+        "recipient_word": 4,
+        "state_mutability": "payable",
+        "semantic_kind": "add_liquidity"
+      },
       {
         "canonical_signature": "removeLiquidity(address,address,uint256,uint256,uint256,address,uint256)",
         "selector": "0xbaa2abde",
@@ -213,16 +242,22 @@
   },
   "abi": {
     "archive_file": "abi/remove-liquidity.abi.json",
-    "archive_file_sha256": "a942fe3d082cbc811ab7a957ee4bd20916182438766a38315268955c50276729",
-    "routes": 12,
+    "archive_file_sha256": "0f413ff8a12a722fb98e15eff441c6ca216160d85edd169e07d5b48693b49dc7",
+    "routes": 14,
     "source_derived_subset": true
   },
   "descriptor": {
     "curated_file": "secure/data/erc7730/curations/files/registry/quickswap/calldata-QuickSwap.json",
     "vendored_file": "secure/data/erc7730-registry/registry/quickswap/calldata-QuickSwap.json",
-    "sha256": "354ed71af1287b857b02fff5af56e5625d2d9c3211fb7ac84d2c2be3c3856b8a"
+    "sha256": "c5b6e9f2cd030e6d61402c29289f0c3d6fc11419ae6a15cf98de43c8ce7d4dab"
   },
   "semantic_hazards": [
+    "For add-liquidity, signed desired token amounts and addLiquidityETH's signed outer native value are inclusive maxima; actual deposits are selected from live reserves and can be lower.",
+    "For a non-empty pair, _addLiquidity checks only the minimum for the reserve-ratio-adjusted side and does not check the full-desired side's minimum; for an empty pair it checks neither signed minimum.",
+    "The signed add-liquidity to address is the LP recipient, not a recipient of the deposited assets or a guarantee of an LP amount.",
+    "The add-liquidity pair identity, pair existence and code, reserves, actual deposits, LP-token identity and decimals, and minted LP output are live-state-derived rather than signed request facts.",
+    "addLiquidityETH wraps only its live-reserve-derived actual native amount and refunds excess signed outer value to msg.sender rather than the signed LP recipient.",
+    "Transfer-tax and otherwise non-standard tokens can make an add-liquidity pair receive less than the router's computed transfer amount; pair donations or non-standard pair behavior can change minted output.",
     "LP-token decimals and the derived pair address are not signed calldata, so liquidity must remain an exact raw uint256 rather than a scaled tokenAmount.",
     "The supporting-fee route checks the pair's gross token burn output against amountTokenMin; a transfer-tax token can deliver less net value to the beneficiary.",
     "The supporting-fee route transfers the router's entire current balance of the selected token, so it can also sweep pre-existing router dust to the signed beneficiary.",

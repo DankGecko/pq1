@@ -681,7 +681,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.root),
-        "c7ba3f392752f530aec9a1eee657db1ec6f1fe414031c4071909fa45e197afe2"
+        "89e5209101fc50fba8af1870b6f36bab7621338954f53d63ad2cb0328a2a9eef"
     );
 }
 
@@ -4041,6 +4041,157 @@ fn vendored_quickswap_v2_admits_exactly_nine_complete_swap_routes() {
     };
     let mut value_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
     value_path.extend_from_slice(&container_field::VALUE.to_be_bytes());
+
+    // The two liquidity-add routes predate the multi-hop curation, but they
+    // still grant clear-sign authority and therefore need the same exact IR
+    // contract. Desired amounts are source-level maxima, each minimum is only
+    // conditionally enforced by Router02's reserve branch, `to` receives LP
+    // tokens, and the payable route's outer value is a refundable maximum.
+    for (signature, expected_selector, head_words, expected_fields) in [
+        (
+            "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)",
+            [0xe8, 0xe3, 0x37, 0x00],
+            8u16,
+            vec![
+                (
+                    b"Maximum to Add".as_slice(),
+                    FormatOp::TokenAmount,
+                    flat_path(2),
+                    Some(flat_path(0)),
+                ),
+                (
+                    b"Conditional Min".as_slice(),
+                    FormatOp::TokenAmount,
+                    flat_path(4),
+                    Some(flat_path(0)),
+                ),
+                (
+                    b"Maximum to Add".as_slice(),
+                    FormatOp::TokenAmount,
+                    flat_path(3),
+                    Some(flat_path(1)),
+                ),
+                (
+                    b"Conditional Min".as_slice(),
+                    FormatOp::TokenAmount,
+                    flat_path(5),
+                    Some(flat_path(1)),
+                ),
+                (
+                    b"LP Recipient".as_slice(),
+                    FormatOp::AddressName,
+                    flat_path(6),
+                    None,
+                ),
+                (b"Deadline".as_slice(), FormatOp::Date, flat_path(7), None),
+            ],
+        ),
+        (
+            "addLiquidityETH(address,uint256,uint256,uint256,address,uint256)",
+            [0xf3, 0x05, 0xd7, 0x19],
+            6u16,
+            vec![
+                (
+                    b"Maximum to Add".as_slice(),
+                    FormatOp::Amount,
+                    value_path.clone(),
+                    None,
+                ),
+                (
+                    b"Maximum to Add".as_slice(),
+                    FormatOp::TokenAmount,
+                    flat_path(1),
+                    Some(flat_path(0)),
+                ),
+                (
+                    b"Conditional Min".as_slice(),
+                    FormatOp::TokenAmount,
+                    flat_path(2),
+                    Some(flat_path(0)),
+                ),
+                (
+                    b"Conditional Min".as_slice(),
+                    FormatOp::Amount,
+                    flat_path(3),
+                    None,
+                ),
+                (
+                    b"LP Recipient".as_slice(),
+                    FormatOp::AddressName,
+                    flat_path(4),
+                    None,
+                ),
+                (b"Deadline".as_slice(), FormatOp::Date, flat_path(5), None),
+            ],
+        ),
+    ] {
+        let selector = selector_for(signature);
+        assert_eq!(
+            selector, expected_selector,
+            "QuickSwap liquidity-add selector drifted: {signature}"
+        );
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("QuickSwap format table parses")
+            .expect("QuickSwap liquidity-add route exists");
+        assert_eq!(format.intent, b"Add Liquidity");
+        assert_eq!(format.static_head_words, head_words);
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("QuickSwap liquidity-add field parses"))
+            .collect();
+        assert_eq!(fields.len(), expected_fields.len());
+
+        for (index, (field, (label, op, path, token_path))) in
+            fields.iter().zip(expected_fields.iter()).enumerate()
+        {
+            assert_eq!(field.label, *label, "wrong label at field {index}");
+            assert_eq!(
+                FormatOp::try_from(field.format_op),
+                Ok(*op),
+                "wrong formatter at field {index}"
+            );
+            assert_eq!(
+                ir.path_bytes(field.path_off)
+                    .expect("QuickSwap liquidity-add path parses"),
+                path,
+                "wrong authenticated path at field {index}"
+            );
+            let params =
+                parse_params(&ir, field.param_off).expect("QuickSwap liquidity-add params parse");
+            assert_eq!(params.visibility, Visibility::Always);
+            assert_eq!(
+                params.token_path,
+                token_path.as_deref(),
+                "wrong token identity path at field {index}"
+            );
+            assert!(
+                params.sender_addresses.is_none(),
+                "classic Router02 LP recipient must remain literal"
+            );
+            assert!(
+                params.word_guard.is_none(),
+                "liquidity-add route must not acquire an unrelated word guard"
+            );
+            assert_eq!(
+                params.terminal_kind,
+                Some(match op {
+                    FormatOp::AddressName => TerminalKind::Address,
+                    FormatOp::Amount | FormatOp::TokenAmount | FormatOp::Date => {
+                        TerminalKind::Unsigned
+                    }
+                    _ => unreachable!("unexpected liquidity-add formatter"),
+                })
+            );
+        }
+
+        let recipient =
+            parse_params(&ir, fields[4].param_off).expect("QuickSwap LP recipient params parse");
+        assert_eq!(fields[4].label, b"LP Recipient");
+        assert_eq!(recipient.terminal_kind, Some(TerminalKind::Address));
+        assert!(recipient.sender_addresses.is_none());
+        assert!(recipient.word_guard.is_none());
+    }
 
     for (signature, selector, kind) in selected_swaps {
         let format = ir

@@ -1,6 +1,6 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
-  "_curation_note": "PQSigner semantic curation: five standard token/native swap routes show both bounded amounts, the complete ordered path, literal beneficiary, and deadline; three all-static remove-liquidity routes show the exact raw LP-token quantity consumed in addition to both minimum outputs, token identities, beneficiary, and deadline. The two source-defined swaps absent from the upstream descriptor are declared only so the exact known-call filter hard-refuses them without a descriptor: no clear-sign authority is granted. Fee-on-transfer swaps, permit-bearing routes, and other dynamic-path routes remain refused. See tests/erc7730-semantic-evidence/quickswap-router02-remove-liquidity.",
+  "_curation_note": "PQSigner semantic curation: six standard and three fee-on-transfer token/native swap routes show every signed path element and source-honest amount bounds; two add-liquidity routes show signed contribution maxima, branch-conditional minima, literal LP recipient, deadline, and the refundable native maximum; three all-static remove-liquidity routes show the exact raw LP-token quantity consumed in addition to both minimum outputs, token identities, beneficiary, and deadline. Permit-bearing routes and other omitted calls remain exact known-call refusals. See tests/erc7730-semantic-evidence/quickswap-router02-remove-liquidity.",
   "context": {
     "$id": "QuickSwap",
     "contract": { "deployments": [{ "chainId": 137, "address": "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff" }] }
@@ -297,35 +297,35 @@
         "fields": [
           {
             "path": "amountADesired",
-            "label": "Desired amount",
+            "label": "Maximum to Add",
             "format": "tokenAmount",
             "params": { "tokenPath": "tokenA" },
             "visible": "always"
           },
           {
             "path": "amountAMin",
-            "label": "Minimum amount",
+            "label": "Conditional Min",
             "format": "tokenAmount",
             "params": { "tokenPath": "tokenA" },
             "visible": "always"
           },
           {
             "path": "amountBDesired",
-            "label": "Desired amount",
+            "label": "Maximum to Add",
             "format": "tokenAmount",
             "params": { "tokenPath": "tokenB" },
             "visible": "always"
           },
           {
             "path": "amountBMin",
-            "label": "Minimum amount",
+            "label": "Conditional Min",
             "format": "tokenAmount",
             "params": { "tokenPath": "tokenB" },
             "visible": "always"
           },
           {
             "path": "to",
-            "label": "Beneficiary",
+            "label": "LP Recipient",
             "format": "addressName",
             "params": { "types": ["eoa"], "sources": ["local", "ens"] },
             "visible": "always"
@@ -337,24 +337,25 @@
         "$id": "addLiquidityETH",
         "intent": "Add Liquidity",
         "fields": [
+          { "path": "@.value", "label": "Maximum to Add", "format": "amount", "visible": "always" },
           {
             "path": "amountTokenDesired",
-            "label": "Desired amount",
+            "label": "Maximum to Add",
             "format": "tokenAmount",
             "params": { "tokenPath": "token" },
             "visible": "always"
           },
           {
             "path": "amountTokenMin",
-            "label": "Minimum amount",
+            "label": "Conditional Min",
             "format": "tokenAmount",
             "params": { "tokenPath": "token" },
             "visible": "always"
           },
-          { "path": "amountETHMin", "label": "Minimum amount", "format": "amount", "visible": "always" },
+          { "path": "amountETHMin", "label": "Conditional Min", "format": "amount", "visible": "always" },
           {
             "path": "to",
-            "label": "Beneficiary",
+            "label": "LP Recipient",
             "format": "addressName",
             "params": { "types": ["eoa"], "sources": ["local", "ens"] },
             "visible": "always"

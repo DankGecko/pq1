@@ -41,7 +41,7 @@ const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
 // The upstream fixture bytes remain test-only and outside the catalogue. This
 // root changes only when the separately curated production descriptors do.
-const PROD_ROOT_HEX: &str = "c7ba3f392752f530aec9a1eee657db1ec6f1fe414031c4071909fa45e197afe2";
+const PROD_ROOT_HEX: &str = "89e5209101fc50fba8af1870b6f36bab7621338954f53d63ad2cb0328a2a9eef";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -928,6 +928,8 @@ fn upstream_fixture_targets_are_inventoried_at_format_granularity() {
     }
 
     for selector in [
+        [0xe8, 0xe3, 0x37, 0x00],
+        [0xf3, 0x05, 0xd7, 0x19],
         [0x38, 0xed, 0x17, 0x39],
         [0x88, 0x03, 0xdb, 0xee],
         [0x18, 0xcb, 0xaf, 0xe5],
@@ -938,17 +940,17 @@ fn upstream_fixture_targets_are_inventoried_at_format_granularity() {
         [0xb6, 0xf9, 0xde, 0x95],
         [0x79, 0x1a, 0xc9, 0x47],
     ] {
-        let quickswap_complete_route = FormatKey {
+        let quickswap_reviewed_route = FormatKey {
             source: PathBuf::from("quickswap/calldata-QuickSwap.json"),
             id: FormatId::Calldata(selector),
         };
         assert!(
-            !fixture_targets.contains(&quickswap_complete_route),
+            !fixture_targets.contains(&quickswap_reviewed_route),
             "QuickSwap has no pinned upstream positive for this selector; do not invent fixture coverage"
         );
         assert!(
-            accepted.contains(&quickswap_complete_route),
-            "the complete QuickSwap route must be admitted explicitly despite the honest fixture gap"
+            accepted.contains(&quickswap_reviewed_route),
+            "the reviewed QuickSwap route must be admitted explicitly despite the honest fixture gap"
         );
     }
 
@@ -991,6 +993,10 @@ fn quickswap_fixture_gap_still_has_merkle_verified_complete_route_conformance() 
     const EXACT_OUTPUT: &str =
         "swapTokensForExactTokens(uint256,uint256,address[],address,uint256)";
     const EXACT_INPUT_FOT: &str = "swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)";
+    const ADD_LIQUIDITY: &str =
+        "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)";
+    const ADD_LIQUIDITY_NATIVE: &str =
+        "addLiquidityETH(address,uint256,uint256,uint256,address,uint256)";
 
     fn word(value: u64) -> [u8; 32] {
         let mut out = [0u8; 32];
@@ -1044,6 +1050,15 @@ fn quickswap_fixture_gap_still_has_merkle_verified_complete_route_conformance() 
         }
         out
     }
+    fn static_calldata(signature: &str, words: &[[u8; 32]]) -> Vec<u8> {
+        let selector = keccak256(signature.as_bytes());
+        let mut out = Vec::with_capacity(4 + words.len() * 32);
+        out.extend_from_slice(&selector[..4]);
+        for word in words {
+            out.extend_from_slice(word);
+        }
+        out
+    }
 
     let registry = build_registry();
     let entry = registry
@@ -1070,6 +1085,204 @@ fn quickswap_fixture_gap_still_has_merkle_verified_complete_route_conformance() 
     };
     let resolver = NameResolver::new();
     let signer = [0x44; 20];
+
+    // These two routes have no upstream positive fixture. Exercise their
+    // separately source-reviewed descriptor formats through the actual
+    // production Merkle leaf without pretending the fixture corpus covers
+    // them. Every signed calldata word, plus the payable route's outer value,
+    // must alter both the trusted pages and their transcript receipt.
+    let lp_recipient = [0x33; 20];
+    let deadline = 2_000_000_000u64;
+    let add_liquidity = static_calldata(
+        ADD_LIQUIDITY,
+        &[
+            address_word(TOKEN_IN),
+            address_word(TOKEN_OUT),
+            word(1_500_000),
+            word(2_500_000),
+            word(1_400_000),
+            word(2_300_000),
+            address_word(lp_recipient),
+            word(deadline),
+        ],
+    );
+    assert_eq!(&add_liquidity[..4], &[0xe8, 0xe3, 0x37, 0x00]);
+    let add_rendered = render_erc7730_pages_with_signer_checked(
+        &tx,
+        &add_liquidity,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("render Merkle-verified QuickSwap addLiquidity");
+    assert!(
+        add_rendered
+            .transcript_receipt
+            .range_matches(&add_rendered.pages, 0),
+        "addLiquidity transcript receipt must bind every page"
+    );
+    let rows = normalized_rows(&add_rendered.pages);
+    let mut cursor = 0usize;
+    for (label, amount, token) in [
+        ("Maximum to Add", "1500000", TOKEN_IN),
+        ("Conditional Min", "1400000", TOKEN_IN),
+        ("Maximum to Add", "2500000", TOKEN_OUT),
+        ("Conditional Min", "2300000", TOKEN_OUT),
+    ] {
+        consume_normalized_token(&rows, &mut cursor, label);
+        consume_normalized_token(&rows, &mut cursor, amount);
+        consume_full_address(&rows, &mut cursor, &token);
+    }
+    consume_normalized_token(&rows, &mut cursor, "LP Recipient");
+    consume_full_address(&rows, &mut cursor, &lp_recipient);
+    consume_normalized_token(&rows, &mut cursor, "Deadline");
+    consume_normalized_token(&rows, &mut cursor, "2033-05-18");
+    consume_normalized_token(&rows, &mut cursor, "03:33:20 UTC");
+
+    let mut changed_token_in = TOKEN_IN;
+    changed_token_in[19] ^= 1;
+    let mut changed_token_out = TOKEN_OUT;
+    changed_token_out[19] ^= 1;
+    let mut changed_recipient = lp_recipient;
+    changed_recipient[19] ^= 1;
+    for (word_index, replacement) in [
+        (0usize, address_word(changed_token_in)),
+        (1, address_word(changed_token_out)),
+        (2, word(1_600_000)),
+        (3, word(2_600_000)),
+        (4, word(1_300_000)),
+        (5, word(2_200_000)),
+        (6, address_word(changed_recipient)),
+        (7, word(deadline + 1)),
+    ] {
+        let mut mutated = add_liquidity.clone();
+        mutated[4 + word_index * 32..4 + (word_index + 1) * 32].copy_from_slice(&replacement);
+        let changed = render_erc7730_pages_with_signer_checked(
+            &tx, &mutated, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| {
+            panic!("render canonical addLiquidity word-{word_index} mutation: {error:?}")
+        });
+        assert_ne!(
+            add_rendered.pages.as_slice(),
+            changed.pages.as_slice(),
+            "addLiquidity word {word_index} mutation must change trusted pages"
+        );
+        assert!(
+            !add_rendered
+                .transcript_receipt
+                .exact_match(&changed.transcript_receipt),
+            "addLiquidity word {word_index} mutation must change transcript receipt"
+        );
+    }
+
+    let add_liquidity_native = static_calldata(
+        ADD_LIQUIDITY_NATIVE,
+        &[
+            address_word(TOKEN_IN),
+            word(1_500_000),
+            word(1_400_000),
+            word(1_000_000_000_000_000_000),
+            address_word(lp_recipient),
+            word(deadline),
+        ],
+    );
+    assert_eq!(&add_liquidity_native[..4], &[0xf3, 0x05, 0xd7, 0x19]);
+    let native_tx = Eip1559Tx {
+        chain_id: 137,
+        to: Some(ROUTER),
+        value: U256(word(2_000_000_000_000_000_000)),
+        ..Eip1559Tx::default()
+    };
+    let native_rendered = render_erc7730_pages_with_signer_checked(
+        &native_tx,
+        &add_liquidity_native,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("render Merkle-verified QuickSwap addLiquidityETH");
+    assert!(
+        native_rendered
+            .transcript_receipt
+            .range_matches(&native_rendered.pages, 0),
+        "addLiquidityETH transcript receipt must bind every page"
+    );
+    let rows = normalized_rows(&native_rendered.pages);
+    let mut cursor = 0usize;
+    consume_normalized_token(&rows, &mut cursor, "Maximum to Add");
+    consume_normalized_token(&rows, &mut cursor, "2 POL");
+    consume_normalized_token(&rows, &mut cursor, "Maximum to Add");
+    consume_normalized_token(&rows, &mut cursor, "1500000");
+    consume_full_address(&rows, &mut cursor, &TOKEN_IN);
+    consume_normalized_token(&rows, &mut cursor, "Conditional Min");
+    consume_normalized_token(&rows, &mut cursor, "1400000");
+    consume_full_address(&rows, &mut cursor, &TOKEN_IN);
+    consume_normalized_token(&rows, &mut cursor, "Conditional Min");
+    consume_normalized_token(&rows, &mut cursor, "1 POL");
+    consume_normalized_token(&rows, &mut cursor, "LP Recipient");
+    consume_full_address(&rows, &mut cursor, &lp_recipient);
+    consume_normalized_token(&rows, &mut cursor, "Deadline");
+    consume_normalized_token(&rows, &mut cursor, "2033-05-18");
+    consume_normalized_token(&rows, &mut cursor, "03:33:20 UTC");
+
+    for (word_index, replacement) in [
+        (0usize, address_word(changed_token_in)),
+        (1, word(1_600_000)),
+        (2, word(1_300_000)),
+        (3, word(2_000_000_000_000_000_000)),
+        (4, address_word(changed_recipient)),
+        (5, word(deadline + 1)),
+    ] {
+        let mut mutated = add_liquidity_native.clone();
+        mutated[4 + word_index * 32..4 + (word_index + 1) * 32].copy_from_slice(&replacement);
+        let changed = render_erc7730_pages_with_signer_checked(
+            &native_tx, &mutated, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| {
+            panic!("render canonical addLiquidityETH word-{word_index} mutation: {error:?}")
+        });
+        assert_ne!(
+            native_rendered.pages.as_slice(),
+            changed.pages.as_slice(),
+            "addLiquidityETH word {word_index} mutation must change trusted pages"
+        );
+        assert!(
+            !native_rendered
+                .transcript_receipt
+                .exact_match(&changed.transcript_receipt),
+            "addLiquidityETH word {word_index} mutation must change transcript receipt"
+        );
+    }
+
+    let changed_native_tx = Eip1559Tx {
+        chain_id: 137,
+        to: Some(ROUTER),
+        value: U256(word(3_000_000_000_000_000_000)),
+        ..Eip1559Tx::default()
+    };
+    let changed_native = render_erc7730_pages_with_signer_checked(
+        &changed_native_tx,
+        &add_liquidity_native,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("render canonical addLiquidityETH outer-value mutation");
+    assert_ne!(
+        native_rendered.pages.as_slice(),
+        changed_native.pages.as_slice(),
+        "outer native maximum mutation must change trusted pages"
+    );
+    assert!(
+        !native_rendered
+            .transcript_receipt
+            .exact_match(&changed_native.transcript_receipt),
+        "outer native maximum mutation must change transcript receipt"
+    );
 
     for (signature, first, second, first_label, first_token, second_label, second_token) in [
         (

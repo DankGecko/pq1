@@ -8381,6 +8381,10 @@ const QUICKSWAP_ROUTER: [u8; 20] = [
     0xa5, 0xe0, 0x82, 0x9c, 0xac, 0xed, 0x8f, 0xfd, 0xd4, 0xde, 0x3c, 0x43, 0x69, 0x6c, 0x57, 0xf7,
     0xd7, 0xa6, 0x78, 0xff,
 ];
+const QUICKSWAP_ADD: &str =
+    "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)";
+const QUICKSWAP_ADD_NATIVE: &str =
+    "addLiquidityETH(address,uint256,uint256,uint256,address,uint256)";
 const QUICKSWAP_REMOVE: &str =
     "removeLiquidity(address,address,uint256,uint256,uint256,address,uint256)";
 const QUICKSWAP_REMOVE_NATIVE: &str =
@@ -8416,6 +8420,52 @@ fn quickswap_liquidity_word() -> [u8; 32] {
         0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
         0x1e, 0x1f,
     ]
+}
+
+fn quickswap_add_calldata(
+    token_a: [u8; 20],
+    token_b: [u8; 20],
+    amount_a_desired: U256,
+    amount_b_desired: U256,
+    amount_a_min: U256,
+    amount_b_min: U256,
+    recipient: [u8; 20],
+    deadline: U256,
+) -> Vec<u8> {
+    calldata_static(
+        QUICKSWAP_ADD,
+        &[
+            abi_address_word(token_a),
+            abi_address_word(token_b),
+            amount_a_desired.0,
+            amount_b_desired.0,
+            amount_a_min.0,
+            amount_b_min.0,
+            abi_address_word(recipient),
+            deadline.0,
+        ],
+    )
+}
+
+fn quickswap_add_native_calldata(
+    token: [u8; 20],
+    amount_token_desired: U256,
+    amount_token_min: U256,
+    amount_native_min: U256,
+    recipient: [u8; 20],
+    deadline: U256,
+) -> Vec<u8> {
+    calldata_static(
+        QUICKSWAP_ADD_NATIVE,
+        &[
+            abi_address_word(token),
+            amount_token_desired.0,
+            amount_token_min.0,
+            amount_native_min.0,
+            abi_address_word(recipient),
+            deadline.0,
+        ],
+    )
 }
 
 fn quickswap_remove_calldata(signature: &str) -> Vec<u8> {
@@ -8516,6 +8566,16 @@ fn assert_some_page_shows_full_address(pages: &Pages, address: &[u8; 20]) {
         hex::encode(address),
         dump_pages(pages)
     );
+}
+
+fn quickswap_rows_with_label(pages: &Pages, label: &str) -> Vec<[String; 4]> {
+    pages
+        .as_slice()
+        .iter()
+        .enumerate()
+        .filter(|(_, page)| row_str(&page[0]) == label)
+        .map(|(index, _)| page_strs(pages, index))
+        .collect()
 }
 
 #[test]
@@ -8694,6 +8754,456 @@ fn production_quickswap_admits_exactly_fourteen_bounded_routes_and_refuses_permi
             "known excluded QuickSwap call must hard-refuse when the descriptor trailer is omitted: {signature}"
         );
     }
+}
+
+#[test]
+fn production_quickswap_add_liquidity_renders_exact_bounds_and_token_bindings() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let tx = envelope(137, QUICKSWAP_ROUTER);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let recipient = [0x33; 20];
+    let deadline = u256_from_u64(2_000_000_000);
+    let calldata = quickswap_add_calldata(
+        TOKEN_IN,
+        TOKEN_OUT,
+        u256_from_u64(1_500_000),
+        u256_from_u64(2_500_000),
+        u256_from_u64(1_000_000),
+        u256_from_u64(2_000_000),
+        recipient,
+        deadline,
+    );
+    assert_selector_matches(&verified.ir, &calldata, QUICKSWAP_ADD);
+
+    let token_a = quickswap_meta(TOKEN_IN, b"TKA");
+    let rendered_a = render_erc7730_pages_with_signer_checked(
+        &tx,
+        &calldata,
+        &verified,
+        Some(&token_a),
+        &resolver,
+        &signer,
+    )
+    .expect("render QuickSwap addLiquidity with token-A metadata");
+    assert_eq!(
+        rendered_a.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert!(
+        rendered_a
+            .transcript_receipt
+            .range_matches(&rendered_a.pages, 0),
+        "receipt must bind the complete addLiquidity transcript"
+    );
+    assert_all_pages_printable(&rendered_a.pages);
+    assert_eq!(
+        page_strs(&rendered_a.pages, intent_page_index(&rendered_a.pages)),
+        [
+            "Add Liquidity".to_string(),
+            "QuickSwap".to_string(),
+            "QuickSwap".to_string(),
+            "> next".to_string(),
+        ]
+    );
+    assert_eq!(
+        quickswap_rows_with_label(&rendered_a.pages, "Maximum to Add"),
+        vec![
+            [
+                "Maximum to Add".to_string(),
+                "1.5 TKA".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+            [
+                "Maximum to Add".to_string(),
+                "2500000".to_string(),
+                String::new(),
+                "! raw, dec=?".to_string(),
+            ],
+        ]
+    );
+    assert_eq!(
+        quickswap_rows_with_label(&rendered_a.pages, "Conditional Min"),
+        vec![
+            [
+                "Conditional Min".to_string(),
+                "1 TKA".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+            [
+                "Conditional Min".to_string(),
+                "2000000".to_string(),
+                String::new(),
+                "! raw, dec=?".to_string(),
+            ],
+        ]
+    );
+    assert_full_contract_identity_page(&rendered_a.pages, &TOKEN_IN);
+    assert_some_full_unverified_token_identity_page(&rendered_a.pages, &TOKEN_OUT);
+    assert_full_address_field_page(&rendered_a.pages, "LP Recipient", &recipient);
+    assert_eq!(
+        page_strs(
+            &rendered_a.pages,
+            find_page_by_label(&rendered_a.pages, "Deadline"),
+        ),
+        [
+            "Deadline".to_string(),
+            "2033-05-18".to_string(),
+            "03:33:20 UTC".to_string(),
+            "> next".to_string(),
+        ]
+    );
+
+    // A single metadata proof must bind only its exact chain+contract. Swap
+    // the proof to token B and require the scaling/identity pages to swap too;
+    // a shared ticker is never allowed to relabel both signed token operands.
+    let token_b = quickswap_meta(TOKEN_OUT, b"TKB");
+    let rendered_b = render_erc7730_pages_with_signer_checked(
+        &tx,
+        &calldata,
+        &verified,
+        Some(&token_b),
+        &resolver,
+        &signer,
+    )
+    .expect("render QuickSwap addLiquidity with token-B metadata");
+    assert_eq!(
+        quickswap_rows_with_label(&rendered_b.pages, "Maximum to Add"),
+        vec![
+            [
+                "Maximum to Add".to_string(),
+                "1500000".to_string(),
+                String::new(),
+                "! raw, dec=?".to_string(),
+            ],
+            [
+                "Maximum to Add".to_string(),
+                "2.5 TKB".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+        ]
+    );
+    assert_eq!(
+        quickswap_rows_with_label(&rendered_b.pages, "Conditional Min"),
+        vec![
+            [
+                "Conditional Min".to_string(),
+                "1000000".to_string(),
+                String::new(),
+                "! raw, dec=?".to_string(),
+            ],
+            [
+                "Conditional Min".to_string(),
+                "2 TKB".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+        ]
+    );
+    assert_full_contract_identity_page(&rendered_b.pages, &TOKEN_OUT);
+    assert_some_full_unverified_token_identity_page(&rendered_b.pages, &TOKEN_IN);
+    assert!(
+        rendered_b
+            .transcript_receipt
+            .range_matches(&rendered_b.pages, 0),
+        "metadata choice must still produce a fully bound transcript"
+    );
+    assert!(
+        !rendered_a
+            .transcript_receipt
+            .exact_match(&rendered_b.transcript_receipt),
+        "independent token bindings must produce distinct trusted transcripts"
+    );
+}
+
+#[test]
+fn production_quickswap_add_liquidity_native_renders_refundable_maximum_exactly() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let recipient = [0x33; 20];
+    let deadline = u256_from_u64(2_000_000_000);
+    let calldata = quickswap_add_native_calldata(
+        TOKEN_IN,
+        u256_from_u64(1_500_000),
+        u256_from_u64(1_000_000),
+        u256_from_u64(1_000_000_000_000_000_000),
+        recipient,
+        deadline,
+    );
+    assert_selector_matches(&verified.ir, &calldata, QUICKSWAP_ADD_NATIVE);
+    let mut tx = envelope(137, QUICKSWAP_ROUTER);
+    tx.value = u256_from_u64(2_000_000_000_000_000_000);
+    let token = quickswap_meta(TOKEN_IN, b"TKN");
+
+    let rendered = render_erc7730_pages_with_signer_checked(
+        &tx,
+        &calldata,
+        &verified,
+        Some(&token),
+        &resolver,
+        &signer,
+    )
+    .expect("render QuickSwap addLiquidityETH");
+    assert_eq!(
+        rendered.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert!(rendered
+        .transcript_receipt
+        .range_matches(&rendered.pages, 0));
+    assert_all_pages_printable(&rendered.pages);
+    assert_eq!(
+        page_strs(&rendered.pages, intent_page_index(&rendered.pages)),
+        [
+            "Add Liquidity".to_string(),
+            "QuickSwap".to_string(),
+            "QuickSwap".to_string(),
+            "> next".to_string(),
+        ]
+    );
+    assert_eq!(
+        quickswap_rows_with_label(&rendered.pages, "Maximum to Add"),
+        vec![
+            [
+                "Maximum to Add".to_string(),
+                "2 POL".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+            [
+                "Maximum to Add".to_string(),
+                "1.5 TKN".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+        ],
+        "msg.value is the refundable native maximum, not an exact deposit claim"
+    );
+    assert_eq!(
+        quickswap_rows_with_label(&rendered.pages, "Conditional Min"),
+        vec![
+            [
+                "Conditional Min".to_string(),
+                "1 TKN".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+            [
+                "Conditional Min".to_string(),
+                "1 POL".to_string(),
+                String::new(),
+                "> next".to_string(),
+            ],
+        ]
+    );
+    assert_full_contract_identity_page(&rendered.pages, &TOKEN_IN);
+    assert_full_address_field_page(&rendered.pages, "LP Recipient", &recipient);
+    assert_eq!(
+        page_strs(
+            &rendered.pages,
+            find_page_by_label(&rendered.pages, "Deadline"),
+        ),
+        [
+            "Deadline".to_string(),
+            "2033-05-18".to_string(),
+            "03:33:20 UTC".to_string(),
+            "> next".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn production_quickswap_add_liquidity_mutations_change_transcript_or_refuse_inexact_native() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let recipient = [0x33; 20];
+    let deadline = u256_from_u64(2_000_000_000);
+    let add_calldata = quickswap_add_calldata(
+        TOKEN_IN,
+        TOKEN_OUT,
+        u256_from_u64(1_500_000),
+        u256_from_u64(2_500_000),
+        u256_from_u64(1_000_000),
+        u256_from_u64(2_000_000),
+        recipient,
+        deadline,
+    );
+    let add_native_calldata = quickswap_add_native_calldata(
+        TOKEN_IN,
+        u256_from_u64(1_500_000),
+        u256_from_u64(1_000_000),
+        u256_from_u64(1_000_000_000_000_000_000),
+        recipient,
+        deadline,
+    );
+    let add_tx = envelope(137, QUICKSWAP_ROUTER);
+    let mut add_native_tx = envelope(137, QUICKSWAP_ROUTER);
+    add_native_tx.value = u256_from_u64(2_000_000_000_000_000_000);
+
+    for (signature, calldata, tx, word_count, inexact_native_word) in [
+        (QUICKSWAP_ADD, add_calldata, &add_tx, 8usize, None),
+        (
+            QUICKSWAP_ADD_NATIVE,
+            add_native_calldata.clone(),
+            &add_native_tx,
+            6usize,
+            Some(3usize),
+        ),
+    ] {
+        let baseline = render_erc7730_pages_with_signer_checked(
+            tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render canonical {signature}: {error:?}"));
+        assert!(baseline
+            .transcript_receipt
+            .range_matches(&baseline.pages, 0));
+
+        for word_index in 0..word_count {
+            let mut mutated_calldata = calldata.clone();
+            mutated_calldata[4 + word_index * 32 + 31] ^= 1;
+            match render_erc7730_pages_with_signer_checked(
+                tx,
+                &mutated_calldata,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            ) {
+                Ok(mutated) => {
+                    assert_ne!(
+                        baseline.pages.as_slice(),
+                        mutated.pages.as_slice(),
+                        "calldata word {word_index} must change trusted pages for {signature}"
+                    );
+                    assert!(
+                        !baseline
+                            .transcript_receipt
+                            .exact_match(&mutated.transcript_receipt),
+                        "calldata word {word_index} must change the receipt for {signature}"
+                    );
+                }
+                Err(crate::tx::erc7730_render::RenderErr::Reject("7730 inexact scaled value")) => {
+                    assert_eq!(
+                        Some(word_index),
+                        inexact_native_word,
+                        "only the one-wei native-minimum mutation may refuse exactly"
+                    )
+                }
+                Err(error) => panic!(
+                    "unexpected mutation refusal for {signature} word {word_index}: {error:?}"
+                ),
+            }
+        }
+    }
+
+    let baseline = render_erc7730_pages_with_signer_checked(
+        &add_native_tx,
+        &add_native_calldata,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("render canonical addLiquidityETH value");
+    let mut changed_value_tx = envelope(137, QUICKSWAP_ROUTER);
+    changed_value_tx.value = u256_from_u64(3_000_000_000_000_000_000);
+    let changed_value = render_erc7730_pages_with_signer_checked(
+        &changed_value_tx,
+        &add_native_calldata,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("render changed exact addLiquidityETH maximum");
+    assert_ne!(baseline.pages.as_slice(), changed_value.pages.as_slice());
+    assert!(!baseline
+        .transcript_receipt
+        .exact_match(&changed_value.transcript_receipt));
+
+    let mut inexact_value_tx = envelope(137, QUICKSWAP_ROUTER);
+    inexact_value_tx.value = u256_from_u64(2_000_000_000_000_000_001);
+    assert!(matches!(
+        render_erc7730_pages_with_signer_checked(
+            &inexact_value_tx,
+            &add_native_calldata,
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 inexact scaled value"
+        ))
+    ));
+}
+
+#[test]
+fn production_quickswap_nonpayable_add_liquidity_shows_nonzero_outer_value() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-QuickSwap.json", 137);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify QuickSwap leaf");
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let calldata = quickswap_add_calldata(
+        TOKEN_IN,
+        TOKEN_OUT,
+        u256_from_u64(1_500_000),
+        u256_from_u64(2_500_000),
+        u256_from_u64(1_000_000),
+        u256_from_u64(2_000_000),
+        [0x33; 20],
+        u256_from_u64(2_000_000_000),
+    );
+    let mut tx = envelope(137, QUICKSWAP_ROUTER);
+    tx.value = u256_from_u64(1_000_000_000_000_000_000);
+    let mut proofs = DispatchPageProofs::new();
+    proofs.fail_initialize();
+    let pages = pick_sign_pages(
+        &tx,
+        &calldata,
+        &signer,
+        None,
+        None,
+        None,
+        Some(&verified),
+        None,
+        None,
+        &resolver,
+        &mut proofs,
+    )
+    .expect("nonpayable addLiquidity must display outer value before contract revert");
+    assert_eq!(
+        page_strs(&pages, find_page_by_label(&pages, "! NATIVE POL")),
+        [
+            "! NATIVE POL".to_string(),
+            "1.000000 POL".to_string(),
+            String::new(),
+            "> next".to_string(),
+        ]
+    );
+    let mut verdict = crate::fi::FAIL_SENTINEL;
+    proofs.final_set_proof(&pages, &tx, false, &mut verdict);
+    assert_eq!(
+        verdict,
+        crate::fi::OK_SENTINEL,
+        "dispatcher proof must bind the loud nonpayable outer-value page"
+    );
 }
 
 #[test]

@@ -5157,7 +5157,7 @@ fn allowance_sources_fixed_deployments_descriptors_and_ir_agree() {
 }
 
 #[test]
-fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission() {
+fn quickswap_router02_evidence_binds_add_remove_liquidity_and_v2_multihop_admission() {
     let root = workspace_root();
     let evidence = quickswap_evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));
@@ -5169,6 +5169,13 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
     );
     let mechanism = required_str(&manifest["policy"], "mechanism");
     for needle in [
+        "two non-permit add-liquidity routes",
+        "desired token amounts and addLiquidityETH's signed outer value are displayed as Maximum to Add",
+        "Each minimum is displayed as Conditional Min",
+        "only the adjusted side is checked in a non-empty pair",
+        "neither minimum is checked in an empty pair",
+        "signed to address is the LP Recipient",
+        "pair identity and minted LP output are not signed or promised",
         "six standard swaps, and all three fee-on-transfer swaps",
         "amountIn is the signed nominal transfer request",
         "token-output minima are recipient balance-delta minima",
@@ -5177,7 +5184,6 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
         "the exact signed amountOut as Gross Output",
         "refunds any excess outer value to msg.sender",
         "Permit-bearing removals remain exact known-call hard refusals",
-        "two pre-existing add-liquidity routes are outside this evidence bundle",
     ] {
         assert!(
             mechanism.contains(needle),
@@ -5209,6 +5215,36 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
     assert_eq!(
         constraints["beneficiary_policy"].as_str(),
         Some("literal_signed_address_no_sentinel")
+    );
+    assert_eq!(
+        constraints["add_liquidity_mutability"].as_str(),
+        Some("addLiquidity_nonpayable_addLiquidityETH_payable")
+    );
+    assert_eq!(
+        constraints["add_liquidity_desired_amount_policy"].as_str(),
+        Some(
+            "signed_desired_token_amounts_and_outer_native_value_are_inclusive_maxima_actual_deposits_are_live_reserve_derived"
+        )
+    );
+    assert_eq!(
+        constraints["add_liquidity_minimum_policy"].as_str(),
+        Some(
+            "only_the_live_reserve_adjusted_side_minimum_is_checked_in_a_nonempty_pair_neither_minimum_is_checked_in_an_empty_pair"
+        )
+    );
+    assert_eq!(
+        constraints["add_liquidity_recipient_policy"].as_str(),
+        Some("literal_signed_to_address_receives_live_state_derived_lp_output")
+    );
+    assert_eq!(
+        constraints["add_liquidity_native_refund_policy"].as_str(),
+        Some("excess_signed_outer_value_is_refunded_to_msg_sender_not_lp_recipient")
+    );
+    assert_eq!(
+        constraints["add_liquidity_output_policy"].as_str(),
+        Some(
+            "pair_identity_actual_deposits_and_minted_lp_amount_are_not_signed_and_remain_live_state_derived"
+        )
     );
     assert_eq!(
         constraints["swap_mutability"].as_str(),
@@ -5282,6 +5318,14 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
         .join(" ")
         .to_ascii_lowercase();
     for needle in [
+        "desired token amounts",
+        "inclusive maxima",
+        "checks only the minimum for the reserve-ratio-adjusted side",
+        "empty pair it checks neither signed minimum",
+        "lp recipient",
+        "pair identity",
+        "minted lp output",
+        "refunds excess signed outer value to msg.sender",
         "every swap path address",
         "at least two path addresses",
         "one-address path",
@@ -5308,6 +5352,15 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
         &fs::read_to_string(evidence.join("README.md")).expect("read QuickSwap review text"),
     );
     for needle in [
+        "add-liquidity selectors are `0xe8e33700` and `0xf305d719`",
+        "both actual deposits equal their signed desired amounts and neither signed minimum is checked",
+        "Only that adjusted side's signed minimum is checked",
+        "desired token amounts are therefore inclusive maxima",
+        "refunds any excess outer value to `msg.sender`",
+        "literal signed `to` address is the LP recipient",
+        "labels both desired token amounts and the payable outer native value `Maximum to Add`",
+        "labels each minimum `Conditional Min`",
+        "does not invent or display an exact LP-token identity or output amount",
         "selectors `0x38ed1739` and `0x8803dbee`",
         "native-asset selectors are `0x7ff36ab5`, `0xfb3bdb41`, `0x18cbafe5`, and `0x4a25d94a`",
         "every `path` element selects a token",
@@ -5349,7 +5402,7 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
     let admitted_specs = manifest["policy"]["admitted_routes"]
         .as_array()
         .expect("admitted route array");
-    assert_eq!(admitted_specs.len(), 12);
+    assert_eq!(admitted_specs.len(), 14);
     let mut admitted = BTreeMap::<String, [u8; 4]>::new();
     for route in admitted_specs {
         let signature = required_str(route, "canonical_signature");
@@ -5362,6 +5415,16 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
     assert_eq!(
         admitted,
         BTreeMap::from([
+            (
+                "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)"
+                    .to_owned(),
+                [0xe8, 0xe3, 0x37, 0x00],
+            ),
+            (
+                "addLiquidityETH(address,uint256,uint256,uint256,address,uint256)"
+                    .to_owned(),
+                [0xf3, 0x05, 0xd7, 0x19],
+            ),
             (
                 "removeLiquidity(address,address,uint256,uint256,uint256,address,uint256)"
                     .to_owned(),
@@ -5572,6 +5635,53 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
     assert!(normalized_router.contains(
         "modifier ensure(uint deadline) { require(deadline >= block.timestamp, 'UniswapV2Router: EXPIRED'); _; }"
     ));
+    let add_internal = normalized_solidity_function(router, "function _addLiquidity(");
+    assert_fragments_in_order(
+        &add_internal,
+        &[
+            "getPair(tokenA, tokenB) == address(0)",
+            "createPair(tokenA, tokenB)",
+            "getReserves(factory, tokenA, tokenB)",
+            "if (reserveA == 0 && reserveB == 0)",
+            "(amountA, amountB) = (amountADesired, amountBDesired)",
+            "amountBOptimal = UniswapV2Library.quote(amountADesired, reserveA, reserveB)",
+            "amountBOptimal <= amountBDesired",
+            "amountBOptimal >= amountBMin",
+            "(amountA, amountB) = (amountADesired, amountBOptimal)",
+            "amountAOptimal = UniswapV2Library.quote(amountBDesired, reserveB, reserveA)",
+            "assert(amountAOptimal <= amountADesired)",
+            "amountAOptimal >= amountAMin",
+            "(amountA, amountB) = (amountAOptimal, amountBDesired)",
+        ],
+    );
+    let add = normalized_solidity_function(router, "function addLiquidity(");
+    assert_fragments_in_order(
+        &add,
+        &[
+            "external virtual override ensure(deadline)",
+            "_addLiquidity(tokenA, tokenB, amountADesired, amountBDesired, amountAMin, amountBMin)",
+            "UniswapV2Library.pairFor(factory, tokenA, tokenB)",
+            "safeTransferFrom(tokenA, msg.sender, pair, amountA)",
+            "safeTransferFrom(tokenB, msg.sender, pair, amountB)",
+            "IUniswapV2Pair(pair).mint(to)",
+        ],
+    );
+    assert!(!add.contains("payable"));
+    let add_native = normalized_solidity_function(router, "function addLiquidityETH(");
+    assert_fragments_in_order(
+        &add_native,
+        &[
+            "external virtual override payable ensure(deadline)",
+            "_addLiquidity( token, WETH, amountTokenDesired, msg.value, amountTokenMin, amountETHMin )",
+            "UniswapV2Library.pairFor(factory, token, WETH)",
+            "safeTransferFrom(token, msg.sender, pair, amountToken)",
+            "IWETH(WETH).deposit{value: amountETH}()",
+            "IWETH(WETH).transfer(pair, amountETH)",
+            "IUniswapV2Pair(pair).mint(to)",
+            "if (msg.value > amountETH) TransferHelper.safeTransferETH(msg.sender, msg.value - amountETH)",
+        ],
+    );
+    assert!(add_native.contains("payable"));
     let remove = normalized_solidity_function(router, "function removeLiquidity(");
     assert_fragments_in_order(
         &remove,
@@ -5832,7 +5942,7 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
     );
 
     let abi_spec = &manifest["abi"];
-    assert_eq!(abi_spec["routes"].as_u64(), Some(12));
+    assert_eq!(abi_spec["routes"].as_u64(), Some(14));
     let abi_bytes = fs::read(evidence.join(required_str(abi_spec, "archive_file")))
         .expect("read QuickSwap route ABI");
     assert_eq!(
@@ -5841,7 +5951,7 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
     );
     let abi: Value = serde_json::from_slice(&abi_bytes).expect("parse QuickSwap route ABI");
     let abi_entries = abi.as_array().expect("QuickSwap route ABI array");
-    assert_eq!(abi_entries.len(), 12);
+    assert_eq!(abi_entries.len(), 14);
     let mut abi_signatures = BTreeSet::new();
     for entry in abi_entries {
         assert_eq!(entry["type"].as_str(), Some("function"));
@@ -5870,7 +5980,69 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
             "QuickSwap ABI selector must derive from the exact canonical tuple"
         );
         assert!(abi_signatures.insert(signature.clone()));
-        if signature.starts_with("swap") {
+        if signature.starts_with("addLiquidity") {
+            let (expected_inputs, expected_outputs): (&[(&str, &str)], &[(&str, &str)]) =
+                match signature.as_str() {
+                    "addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)" => (
+                        &[
+                            ("tokenA", "address"),
+                            ("tokenB", "address"),
+                            ("amountADesired", "uint256"),
+                            ("amountBDesired", "uint256"),
+                            ("amountAMin", "uint256"),
+                            ("amountBMin", "uint256"),
+                            ("to", "address"),
+                            ("deadline", "uint256"),
+                        ],
+                        &[
+                            ("amountA", "uint256"),
+                            ("amountB", "uint256"),
+                            ("liquidity", "uint256"),
+                        ],
+                    ),
+                    "addLiquidityETH(address,uint256,uint256,uint256,address,uint256)" => (
+                        &[
+                            ("token", "address"),
+                            ("amountTokenDesired", "uint256"),
+                            ("amountTokenMin", "uint256"),
+                            ("amountETHMin", "uint256"),
+                            ("to", "address"),
+                            ("deadline", "uint256"),
+                        ],
+                        &[
+                            ("amountToken", "uint256"),
+                            ("amountETH", "uint256"),
+                            ("liquidity", "uint256"),
+                        ],
+                    ),
+                    _ => panic!("unexpected admitted add-liquidity ABI {signature}"),
+                };
+            let actual_inputs = inputs
+                .iter()
+                .map(|input| {
+                    (
+                        input["name"].as_str().expect("add-liquidity input name"),
+                        input["type"].as_str().expect("add-liquidity input type"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual_inputs, expected_inputs, "ABI inputs for {signature}");
+            let actual_outputs = entry["outputs"]
+                .as_array()
+                .expect("add-liquidity ABI outputs")
+                .iter()
+                .map(|output| {
+                    (
+                        output["name"].as_str().expect("add-liquidity output name"),
+                        output["type"].as_str().expect("add-liquidity output type"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual_outputs, expected_outputs,
+                "ABI outputs for {signature}"
+            );
+        } else if signature.starts_with("swap") {
             let expected_inputs: &[(&str, &str)] = match signature.as_str() {
                 "swapExactTokensForTokens(uint256,uint256,address[],address,uint256)"
                 | "swapExactTokensForETH(uint256,uint256,address[],address,uint256)"
@@ -5959,6 +6131,101 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
         assert_eq!(fields[0]["label"].as_str(), Some("LP token amount"));
         assert_eq!(fields[0]["format"].as_str(), Some("raw"));
         assert_eq!(fields[0]["visible"].as_str(), Some("always"));
+    }
+
+    let add_display_shapes: [(&str, [(&str, &str, &str); 6]); 2] = [
+        (
+            "addLiquidity(address tokenA, address tokenB, uint256 amountADesired, uint256 amountBDesired, uint256 amountAMin, uint256 amountBMin, address to, uint256 deadline)",
+            [
+                ("amountADesired", "Maximum to Add", "tokenAmount"),
+                ("amountAMin", "Conditional Min", "tokenAmount"),
+                ("amountBDesired", "Maximum to Add", "tokenAmount"),
+                ("amountBMin", "Conditional Min", "tokenAmount"),
+                ("to", "LP Recipient", "addressName"),
+                ("deadline", "Deadline", "date"),
+            ],
+        ),
+        (
+            "addLiquidityETH(address token, uint256 amountTokenDesired, uint256 amountTokenMin, uint256 amountETHMin, address to, uint256 deadline)",
+            [
+                ("@.value", "Maximum to Add", "amount"),
+                ("amountTokenDesired", "Maximum to Add", "tokenAmount"),
+                ("amountTokenMin", "Conditional Min", "tokenAmount"),
+                ("amountETHMin", "Conditional Min", "amount"),
+                ("to", "LP Recipient", "addressName"),
+                ("deadline", "Deadline", "date"),
+            ],
+        ),
+    ];
+    for (format_key, expected_shape) in add_display_shapes {
+        let fields = descriptor["display"]["formats"][format_key]["fields"]
+            .as_array()
+            .unwrap_or_else(|| panic!("QuickSwap add-liquidity fields missing for {format_key}"));
+        let actual_shape = fields
+            .iter()
+            .map(|field| {
+                (
+                    required_str(field, "path"),
+                    required_str(field, "label"),
+                    required_str(field, "format"),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual_shape, expected_shape);
+        assert!(
+            fields.iter().all(|field| {
+                field["visible"].as_str() == Some("always")
+                    || (field["path"].as_str() == Some("deadline")
+                        && field.get("visible").is_none())
+            }),
+            "raw add-liquidity visibility must be explicit Always or the default-Always deadline convention for {format_key}"
+        );
+
+        let recipient = fields
+            .iter()
+            .find(|field| field["path"].as_str() == Some("to"))
+            .expect("literal QuickSwap LP recipient field");
+        assert!(recipient["params"].get("senderAddress").is_none());
+        assert_eq!(
+            recipient["params"]["types"].as_array().unwrap(),
+            &[Value::String("eoa".to_owned())]
+        );
+
+        let deadline = fields
+            .iter()
+            .find(|field| field["path"].as_str() == Some("deadline"))
+            .expect("signed QuickSwap add-liquidity deadline field");
+        assert_eq!(deadline["params"]["encoding"].as_str(), Some("timestamp"));
+    }
+
+    for (format_key, expectations) in [
+        (
+            "addLiquidity(address tokenA, address tokenB, uint256 amountADesired, uint256 amountBDesired, uint256 amountAMin, uint256 amountBMin, address to, uint256 deadline)",
+            &[
+                ("amountADesired", "tokenA"),
+                ("amountAMin", "tokenA"),
+                ("amountBDesired", "tokenB"),
+                ("amountBMin", "tokenB"),
+            ][..],
+        ),
+        (
+            "addLiquidityETH(address token, uint256 amountTokenDesired, uint256 amountTokenMin, uint256 amountETHMin, address to, uint256 deadline)",
+            &[
+                ("amountTokenDesired", "token"),
+                ("amountTokenMin", "token"),
+            ][..],
+        ),
+    ] {
+        let fields = descriptor["display"]["formats"][format_key]["fields"]
+            .as_array()
+            .expect("QuickSwap add-liquidity fields");
+        for &(path, token_path) in expectations {
+            let field = fields
+                .iter()
+                .find(|field| field["path"].as_str() == Some(path))
+                .unwrap_or_else(|| panic!("missing QuickSwap add-liquidity amount field {path}"));
+            assert_eq!(field["params"]["tokenPath"].as_str(), Some(token_path));
+        }
     }
 
     let swap_display_shapes: [(&str, [(&str, &str, &str); 5]); 9] = [
@@ -6195,6 +6462,116 @@ fn quickswap_router02_evidence_binds_remove_liquidity_and_v2_multihop_admission(
         admitted_ir, expected_ir,
         "only the two liquidity adds, three reviewed removals, six standard swaps, and three fee-on-transfer swaps are admitted"
     );
+
+    for route in admitted_specs
+        .iter()
+        .filter(|route| route["semantic_kind"].as_str() == Some("add_liquidity"))
+    {
+        let signature = required_str(route, "canonical_signature");
+        let selector: [u8; 4] = decode_hex_text(required_str(route, "selector"))
+            .try_into()
+            .expect("QuickSwap add-liquidity selector width");
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("QuickSwap format table parses")
+            .expect("admitted QuickSwap add-liquidity route exists");
+        assert_eq!(
+            format.static_head_words as u64,
+            route["head_words"].as_u64().unwrap()
+        );
+        let fields = format
+            .fields()
+            .map(|field| field.expect("QuickSwap add-liquidity field parses"))
+            .collect::<Vec<_>>();
+        assert_eq!(fields.len(), 6);
+        assert!(fields.iter().all(|field| {
+            parse_params(&ir, field.param_off)
+                .expect("QuickSwap add-liquidity params parse")
+                .visibility
+                == Visibility::Always
+        }));
+
+        let (expected_labels, expected_ops, expected_paths): (&[&[u8]], &[FormatOp], Vec<Vec<u8>>) =
+            if signature.starts_with("addLiquidityETH") {
+                (
+                    &[
+                        b"Maximum to Add",
+                        b"Maximum to Add",
+                        b"Conditional Min",
+                        b"Conditional Min",
+                        b"LP Recipient",
+                        b"Deadline",
+                    ],
+                    &[
+                        FormatOp::Amount,
+                        FormatOp::TokenAmount,
+                        FormatOp::TokenAmount,
+                        FormatOp::Amount,
+                        FormatOp::AddressName,
+                        FormatOp::Date,
+                    ],
+                    vec![
+                        {
+                            let mut path =
+                                vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+                            path.extend_from_slice(&container_field::VALUE.to_be_bytes());
+                            path
+                        },
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 1],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 2],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 3],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 4],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 5],
+                    ],
+                )
+            } else {
+                (
+                    &[
+                        b"Maximum to Add",
+                        b"Conditional Min",
+                        b"Maximum to Add",
+                        b"Conditional Min",
+                        b"LP Recipient",
+                        b"Deadline",
+                    ],
+                    &[
+                        FormatOp::TokenAmount,
+                        FormatOp::TokenAmount,
+                        FormatOp::TokenAmount,
+                        FormatOp::TokenAmount,
+                        FormatOp::AddressName,
+                        FormatOp::Date,
+                    ],
+                    vec![
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 2],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 4],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 3],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 5],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 6],
+                        vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 7],
+                    ],
+                )
+            };
+        for (((field, expected_label), expected_op), expected_path) in fields
+            .iter()
+            .zip(expected_labels)
+            .zip(expected_ops)
+            .zip(expected_paths)
+        {
+            assert_eq!(field.label, *expected_label, "label for {signature}");
+            assert_eq!(
+                FormatOp::try_from(field.format_op),
+                Ok(*expected_op),
+                "format op for {signature}"
+            );
+            assert_eq!(
+                ir.path_bytes(field.path_off).unwrap(),
+                expected_path,
+                "field path for {signature}"
+            );
+        }
+        assert!(registry.known_calls.contains(&(137, contract, selector)));
+    }
 
     for route in admitted_specs
         .iter()
