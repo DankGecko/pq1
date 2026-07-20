@@ -684,7 +684,7 @@ compile_error!(
 // per-device derived transport keys (`se050-derived-scp03`), not
 // the published AN12436 factory keyset. Without the feature,
 // `scp03::load_platform_keys` returns `PLATFORM_{ENC,MAC,DEK}` — the public
-// SE050E OEF-0xA921 constants — and `establish()` derives the session keys from
+// SE050C2 OEF-0xA201 constants — and `establish()` derives the session keys from
 // them, so a logic analyzer on I2C1 reconstructs `s_enc`/`s_rmac` from the
 // on-wire SCP03 handshake challenges and DECRYPTS `half_E` (the SE050 seed share)
 // out of every unlock. `scp03_logic.rs` says it outright: such a channel is

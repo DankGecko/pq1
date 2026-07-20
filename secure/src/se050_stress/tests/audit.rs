@@ -400,14 +400,34 @@ stress_test!(AUDIT_WRITE_ONCE_ENFORCED, "audit_write_once_enforced", Tier::Destr
 /// a different value. Non-breaking: an unauthenticated identity read, no
 /// state change.
 ///
-/// **Finding (2026-06-02 silicon):** the OEF id `0xA921` is an ORDERING
-/// identifier and is NOT present anywhere in the GetVersion response — so the
-/// runtime check pins AppletConfig, not the OEF. The OM-SE050ARD-E (SE050E2)
-/// reports applet `v7.2.0`, `AppletConfig=0x3F9F`, `SecureBox=0xFFFF`. 7-byte
-/// VersionInfo layout per AN12413: `[major][minor][patch][AppletConfig:2 BE][SecureBox:2 BE]`.
+/// **Finding (2026-06-02 silicon):** the OEF id is an ORDERING identifier and
+/// is NOT present anywhere in the GetVersion response — so the runtime check
+/// pins AppletConfig, not the OEF. The OM-SE050ARD-E bench part (SE050E2, OEF
+/// `0xA921`) reports applet `v7.2.0`, `AppletConfig=0x3F9F`,
+/// `SecureBox=0xFFFF`. 7-byte VersionInfo layout per AN12413:
+/// `[major][minor][patch][AppletConfig:2 BE][SecureBox:2 BE]`.
+///
+/// **Production part = SE050C2HQ1/Z01SDZ (OEF `0xA201`, applet 3.x).** Its
+/// AppletConfig is a different, not-yet-captured fingerprint (see
+/// `ACCEPTED_APPLET_CONFIGS` below); the GetVersion SELECT/APDU shape is
+/// generation-identical, so only the expected value differs.
 fn audit_se050_version_identity(ctx: &mut StressCtx) -> StressResult {
-    // SE050E2 (OM-SE050ARD-E) variant fingerprint, captured on-silicon.
-    const SE050E2_APPLET_CONFIG: u16 = 0x3F9F;
+    // Anti-substitution AppletConfig fingerprints — the variant feature bitmap
+    // (AN12413 §4.3.23 Table 40), silicon-captured per part (NXP does not
+    // publish it, and it is NOT the OEF id). A substituted different-variant
+    // part reports a value not in this list and fails the gate below.
+    //
+    //   SE050E2 (OM-SE050ARD-E bench): 0x3F9F, captured 2026-06-02.
+    //   SE050C2 (SE050C2HQ1/Z01SDZ, the finalized production part): NOT YET
+    //     CAPTURED — the C2's feature set differs from the E2's (no
+    //     Curve448/GMAC/CCM-GCM), so its fingerprint differs too. On the first
+    //     C2 bring-up read the `AppletConfig=0x....` value logged below and add
+    //     it here; until then a C2 run fails this gate LOUDLY with its observed
+    //     value in the log (the intended capture workflow).
+    const ACCEPTED_APPLET_CONFIGS: &[u16] = &[
+        0x3F9F, // SE050E2 (bench)
+        // TODO(C2-silicon): 0x____, // SE050C2 (SE050C2HQ1/Z01SDZ) — capture + pin
+    ];
 
     let mut buf = [0u8; 48];
     let n = ctx.get_version_ext(&mut buf)?;
@@ -433,12 +453,17 @@ fn audit_se050_version_identity(ctx: &mut StressCtx) -> StressResult {
         j += 4;
     }
 
-    // Anti-substitution: the variant must be the SE050E2 we ordered.
+    // Anti-substitution: accept only a pinned known-good fingerprint. Once the
+    // SE050C2 value is captured and added above, this confirms the production
+    // C2; until then only the E2 bench value passes.
     ctx.assert_true(
-        "AppletConfig == 0x3F9F (SE050E2 variant — anti-substitution)",
-        applet_config == SE050E2_APPLET_CONFIG,
+        "AppletConfig matches a pinned SE050E2/SE050C2 fingerprint (anti-substitution)",
+        ACCEPTED_APPLET_CONFIGS.contains(&applet_config),
     )?;
-    secure_log!("[S][stress][audit-ver] PASS: SE050E2 variant confirmed (AppletConfig 0x3F9F)");
+    secure_log!(
+        "[S][stress][audit-ver] PASS: known SE050 variant (AppletConfig 0x{:04x})",
+        applet_config
+    );
     Ok(())
 }
 stress_test!(AUDIT_SE050_VERSION_IDENTITY, "audit_se050_version_identity", Tier::Safe, audit_se050_version_identity);
