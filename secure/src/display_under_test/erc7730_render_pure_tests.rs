@@ -5761,6 +5761,26 @@ fn c1_opaque_bytes_decline_without_lossy_preview() {
 /// 5, `receiver` at head word 8 (the non-leading-static-tuple slots the
 /// slot-confusion fix guards). If the flatten mis-computed any member's slot,
 /// the rendered value would differ from the encoded word and this fails.
+fn morpho_call(
+    signature: &str,
+    loan: [u8; 20],
+    collateral: [u8; 20],
+    oracle: [u8; 20],
+    irm: [u8; 20],
+    lltv: [u8; 32],
+    trailing_words: &[[u8; 32]],
+) -> Vec<u8> {
+    let mut words = vec![
+        abi_address_word(loan),
+        abi_address_word(collateral),
+        abi_address_word(oracle),
+        abi_address_word(irm),
+        lltv,
+    ];
+    words.extend_from_slice(trailing_words);
+    calldata_static(signature, &words)
+}
+
 #[test]
 fn morpho_borrow_nested_tuple_group_renders_exact_values() {
     let res = build_registry();
@@ -5774,7 +5794,10 @@ fn morpho_borrow_nested_tuple_group_renders_exact_values() {
         w[12..].copy_from_slice(&a);
         w
     };
-    let loan = [0x11u8; 20];
+    let loan: [u8; 20] = hex::decode("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+        .unwrap()
+        .try_into()
+        .unwrap();
     let collat = [0x22u8; 20];
     let oracle = [0x33u8; 20];
     let irm = [0x44u8; 20];
@@ -5789,7 +5812,7 @@ fn morpho_borrow_nested_tuple_group_renders_exact_values() {
     cd.extend_from_slice(&addr_word(oracle)); // slot 2: oracle
     cd.extend_from_slice(&addr_word(irm)); // slot 3: irm
     cd.extend_from_slice(&u256_from_u64(0xBEEF).0); // slot 4: lltv
-    cd.extend_from_slice(&u256_from_u64(0xA55E5).0); // slot 5: assets (AFTER tuple)
+    cd.extend_from_slice(&u256_from_u64(1_500_000).0); // slot 5: assets = 1.5 USDC
     cd.extend_from_slice(&u256_from_u64(0).0); // slot 6: shares
     cd.extend_from_slice(&addr_word(on_behalf)); // slot 7: onBehalf
     cd.extend_from_slice(&addr_word(receiver)); // slot 8: receiver
@@ -5797,17 +5820,21 @@ fn morpho_borrow_nested_tuple_group_renders_exact_values() {
     assert_selector_matches(&verified.ir, &cd, types_sig);
 
     let tx = envelope(1, entry.contract);
+    let usdc = Erc20Metadata {
+        chain_id: 1,
+        contract: loan,
+        decimals: 6,
+        name: b"USD Coin",
+        symbol: b"USDC",
+    };
     let resolver = NameResolver::new();
-    let pages = render_erc7730_pages(&tx, &cd, &verified, None, &resolver).expect("render");
+    let pages = render_erc7730_pages(&tx, &cd, &verified, Some(&usdc), &resolver).expect("render");
     assert_all_pages_printable(&pages);
     let dump = dump_pages(&pages).to_lowercase();
 
     // Tuple members read from their exact slots (addresses not in ERC20_DB/ENS
     // render as the raw calldata address — still faithful to the signed word).
-    assert!(
-        dump.contains("1111"),
-        "loanToken (tuple slot 0) not read:\n{dump}"
-    );
+    assert_full_address_field_page(&pages, "Loan Token", &loan);
     assert!(
         dump.contains("2222"),
         "collateralToken (tuple slot 1) not read:\n{dump}"
@@ -5826,8 +5853,10 @@ fn morpho_borrow_nested_tuple_group_renders_exact_values() {
     );
     // Post-tuple args at their WIDTH-AWARE head slots (not logical ordinals).
     assert!(
-        dump.contains("a55e5"),
-        "assets (head slot 5, AFTER the 5-word tuple) not read:\n{dump}"
+        page_strs(&pages, find_page_by_label(&pages, "Assets"))[1..3]
+            .iter()
+            .any(|row| row.contains("1.5 USDC")),
+        "assets must resolve from head slot 5 and bind loanToken from tuple slot 0:\n{dump}"
     );
     assert!(
         dump.contains("6666"),
@@ -5841,6 +5870,220 @@ fn morpho_borrow_nested_tuple_group_renders_exact_values() {
     let _ = find_page_by_label(&pages, "Loan Token");
     let _ = find_page_by_label(&pages, "Assets");
     let _ = find_page_by_label(&pages, "Receiver");
+}
+
+#[test]
+fn morpho_withdraw_assets_and_shares_keep_the_exact_input_mode_on_both_chains() {
+    let res = build_registry();
+    let deployments = [
+        (
+            1u64,
+            hex::decode("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        ),
+        (
+            8453u64,
+            hex::decode("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        ),
+    ];
+    let collateral = [0x22u8; 20];
+    let oracle = [0x33u8; 20];
+    let irm = [0x44u8; 20];
+    let on_behalf = [0x66u8; 20];
+    let receiver = [0x77u8; 20];
+    let signature =
+        "withdraw((address,address,address,address,uint256),uint256,uint256,address,address)";
+
+    for (chain_id, loan) in deployments {
+        let entry = find_leaf(res, "calldata-MorphoBlue.json", chain_id);
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Morpho leaf");
+        let tx = envelope(chain_id, entry.contract);
+        let usdc = Erc20Metadata {
+            chain_id,
+            contract: loan,
+            decimals: 6,
+            name: b"USD Coin",
+            symbol: b"USDC",
+        };
+        let resolver = NameResolver::new();
+
+        let assets_call = morpho_call(
+            signature,
+            loan,
+            collateral,
+            oracle,
+            irm,
+            u256_from_u64(860_000_000_000_000_000).0,
+            &[
+                u256_from_u64(2_500_000).0,
+                [0u8; 32],
+                abi_address_word(on_behalf),
+                abi_address_word(receiver),
+            ],
+        );
+        assert_selector_matches(&verified.ir, &assets_call, signature);
+        let asset_pages =
+            render_erc7730_pages(&tx, &assets_call, &verified, Some(&usdc), &resolver)
+                .expect("render Morpho asset withdrawal");
+        let asset_dump = dump_pages(&asset_pages);
+        assert!(
+            page_strs(&asset_pages, find_page_by_label(&asset_pages, "Assets"))[1..3]
+                .iter()
+                .any(|row| row.contains("2.5 USDC")),
+            "asset-mode input must render the exact signed loan-token amount:\n{asset_dump}"
+        );
+        assert_raw_word_pages(&asset_pages, "Shares", &[0u8; 32]);
+        assert_full_address_field_page(&asset_pages, "On Behalf", &on_behalf);
+        assert_full_address_field_page(&asset_pages, "Receiver", &receiver);
+
+        let share_word = u256_from_u64(0x12_3456).0;
+        let shares_call = morpho_call(
+            signature,
+            loan,
+            collateral,
+            oracle,
+            irm,
+            u256_from_u64(860_000_000_000_000_000).0,
+            &[
+                [0u8; 32],
+                share_word,
+                abi_address_word(on_behalf),
+                abi_address_word(receiver),
+            ],
+        );
+        let share_pages =
+            render_erc7730_pages(&tx, &shares_call, &verified, Some(&usdc), &resolver)
+                .expect("render Morpho share withdrawal");
+        let share_dump = dump_pages(&share_pages);
+        assert!(
+            page_strs(
+                &share_pages,
+                find_page_by_label(&share_pages, "Assets")
+            )[1..3]
+                .iter()
+                .any(|row| row.contains("0 USDC")),
+            "share-mode input must preserve the signed zero assets instead of inventing a live-state conversion:\n{share_dump}"
+        );
+        assert_raw_word_pages(&share_pages, "Shares", &share_word);
+    }
+}
+
+#[test]
+fn morpho_withdraw_collateral_amount_binds_collateral_token_not_loan_token() {
+    let res = build_registry();
+    let deployments = [
+        (
+            1u64,
+            hex::decode("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+            hex::decode("C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        ),
+        (
+            8453u64,
+            hex::decode("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+            hex::decode("4200000000000000000000000000000000000006")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        ),
+    ];
+    let oracle = [0x33u8; 20];
+    let irm = [0x44u8; 20];
+    let on_behalf = [0x66u8; 20];
+    let receiver = [0x77u8; 20];
+    let signature =
+        "withdrawCollateral((address,address,address,address,uint256),uint256,address,address)";
+
+    for (chain_id, loan, collateral) in deployments {
+        let entry = find_leaf(res, "calldata-MorphoBlue.json", chain_id);
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Morpho leaf");
+        let calldata = morpho_call(
+            signature,
+            loan,
+            collateral,
+            oracle,
+            irm,
+            u256_from_u64(860_000_000_000_000_000).0,
+            &[
+                u256_from_u64(40_000_000_000_000_000).0,
+                abi_address_word(on_behalf),
+                abi_address_word(receiver),
+            ],
+        );
+        assert_selector_matches(&verified.ir, &calldata, signature);
+        let weth = Erc20Metadata {
+            chain_id,
+            contract: collateral,
+            decimals: 18,
+            name: b"Wrapped Ether",
+            symbol: b"WETH",
+        };
+        let resolver = NameResolver::new();
+        let tx = envelope(chain_id, entry.contract);
+        let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&weth), &resolver)
+            .expect("render Morpho collateral withdrawal");
+        let dump = dump_pages(&pages);
+        assert!(
+            page_strs(&pages, find_page_by_label(&pages, "Assets"))[1..3]
+                .iter()
+                .any(|row| row.contains("0.04 WETH")),
+            "collateral withdrawal must bind assets to marketParams.collateralToken, never loanToken:\n{dump}"
+        );
+        assert_full_address_field_page(&pages, "Loan Token", &loan);
+        assert_full_address_field_page(&pages, "Collateral Token", &collateral);
+        assert_full_address_field_page(&pages, "On Behalf", &on_behalf);
+        assert_full_address_field_page(&pages, "Receiver", &receiver);
+    }
+}
+
+#[test]
+fn morpho_callback_bearing_routes_remain_refused_on_both_deployments() {
+    let res = build_registry();
+    for chain_id in [1u64, 8453] {
+        let entry = find_leaf(res, "calldata-MorphoBlue.json", chain_id);
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Morpho IR parses");
+        for admitted in [
+            "borrow((address,address,address,address,uint256),uint256,uint256,address,address)",
+            "withdraw((address,address,address,address,uint256),uint256,uint256,address,address)",
+            "withdrawCollateral((address,address,address,address,uint256),uint256,address,address)",
+        ] {
+            let selector: [u8; 4] = keccak256(admitted.as_bytes())[..4].try_into().unwrap();
+            assert!(
+                ir.find_format_by_selector(&selector)
+                    .expect("valid Morpho format table")
+                    .is_some(),
+                "callback-free route must remain admitted on chain {chain_id}: {admitted}"
+            );
+        }
+        for refused in [
+            "supply((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+            "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+            "supplyCollateral((address,address,address,address,uint256),uint256,address,bytes)",
+        ] {
+            let selector: [u8; 4] = keccak256(refused.as_bytes())[..4].try_into().unwrap();
+            assert!(
+                ir.find_format_by_selector(&selector)
+                    .expect("valid Morpho format table")
+                    .is_none(),
+                "effect-bearing callback bytes must stay refused on chain {chain_id}: {refused}"
+            );
+        }
+    }
 }
 
 #[test]

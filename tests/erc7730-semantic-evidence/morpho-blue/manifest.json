@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "scope": "Morpho Blue borrow, withdraw, and withdrawCollateral semantics for the canonical Ethereum and Base deployments admitted by PQ1",
+  "captured_at_utc": "2026-07-20T08:16:17Z",
+  "descriptor": {
+    "vendored_file": "secure/data/erc7730-registry/registry/morpho/calldata-MorphoBlue.json",
+    "sha256": "f440730cf7d55ffdbba54010b5e95f791a2d4b85c64e3324c66287d100209ea7",
+    "deployments": [
+      { "chain_id": 1, "address": "0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb" },
+      { "chain_id": 8453, "address": "0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb" }
+    ]
+  },
+  "upstream": {
+    "repository": "https://github.com/morpho-org/morpho-blue",
+    "tag": "v1.0.0",
+    "commit": "55d2d99304fb3fb930c688462ae2ccabb1d533ad",
+    "tree": "d965742101dfb21cd22ec262324a016184f0bfb2",
+    "forge_std_commit": "2f112697506eab12d433a65fdc31a639548fe365",
+    "source_files": [
+      { "path": "source/Morpho.sol", "upstream_path": "src/Morpho.sol", "sha256": "7f66c064ad0bdc046382fa65f449bb5a0b9181d5d03b65e3c8438226d437b9ce" },
+      { "path": "source/IMorpho.sol", "upstream_path": "src/interfaces/IMorpho.sol", "sha256": "24f96c2860c42cd5834c56cdb159c56435acaee0716d34d54ca18bd755edc97c" },
+      { "path": "source/MarketParamsLib.sol", "upstream_path": "src/libraries/MarketParamsLib.sol", "sha256": "94af290e2a2094b8547b925449484d247bce87cce4fed8902ecf82dd2b49242e" },
+      { "path": "source/SharesMathLib.sol", "upstream_path": "src/libraries/SharesMathLib.sol", "sha256": "4580deb1b1a3f2ea0b60f2305708428975613d1e94d404d647bcc573a7b2a2f0" },
+      { "path": "source/UtilsLib.sol", "upstream_path": "src/libraries/UtilsLib.sol", "sha256": "9d0c8a0855b2f9e9f92111cdf32bdbbd1ff97b7584f0f958b695f2c4cb0d1b34" },
+      { "path": "source/foundry.toml", "upstream_path": "foundry.toml", "sha256": "b0f2c6ed118cf9350816d8fbf941de4a8f6f6f77ed875a275185c8d8c8e0a265" }
+    ]
+  },
+  "abi": {
+    "path": "abi/Morpho.routes.abi.json",
+    "sha256": "6f65d5b6fcb9f11e6b798327897dc1eb607d157b017ec26562b88c282622da4b",
+    "source": "Exact borrow, withdraw, and withdrawCollateral entries selected from the v1.0.0 forge artifact ABI"
+  },
+  "build": {
+    "command": "FOUNDRY_PROFILE=build forge build",
+    "compiler": "0.8.19+commit.7dd6d404",
+    "via_ir": true,
+    "optimizer_enabled": true,
+    "optimizer_runs": 999999,
+    "evm_version": "paris",
+    "metadata_file": "build/Morpho.v1.0.0.metadata.json",
+    "metadata_file_sha256": "c82c64f096d8d59f793e4d512fcd7d5f8bf403e9da012a86595c8ad6a104a4ca",
+    "deployed_runtime": {
+      "file": "build/Morpho.v1.0.0.deployed-runtime.hex",
+      "file_sha256": "2ae7ed819bfdd6ead0fb9e2034dcc2fe251517c1ba03ad41c66d2bda58319aa0",
+      "bytes": 15623,
+      "decoded_sha256": "d4321bba327c3f073f18d7e3f27d351fd0f55b5e7e06fd55764efc253f0d855b",
+      "keccak256": "0x4b0f275432c47adf8919d6d66d85e5fd6e98107aa1646b0f5e7931c6c8ee91d9"
+    },
+    "immutable_references": [
+      { "ast_id": "64", "start": 6282, "length": 32 },
+      { "ast_id": "64", "start": 9401, "length": 32 }
+    ],
+    "relationship": "Masking exactly the two forge-reported DOMAIN_SEPARATOR immutable references to zero makes each deployed runtime byte-identical to this official v1.0.0 build. No other deployed byte differs."
+  },
+  "fixed_block_receipt": {
+    "path": "rpc/fixed-block-receipt.json",
+    "sha256": "23cfe605bf4153dc267d0e15030a9246e0556be93deb7e9d51752a938951c94f"
+  },
+  "deployments": [
+    {
+      "network": "ethereum-mainnet",
+      "chain_id": 1,
+      "address": "0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb",
+      "evidence_block": { "number": 25572592, "number_hex": "0x18634f0", "hash": "0xb98c65bd42f9284477487b9418687dfe4b581b031eebd26e5ed01d06364f2da1", "state_root": "0x42d41e33025d925b142d8e9653befaa8d871178a5a4b80f84945f7be69c41a1c" },
+      "runtime": { "file": "runtime/Morpho.ethereum.hex", "file_sha256": "0921afe3c405c8c28d12e876909c40f72f389c52dfb03554f248276f84948001", "bytes": 15623, "decoded_sha256": "fd5aa16eea01735e0e33e51e913a27f7d5ed998adc0cec2bf1f9ea368d9e1bdf", "keccak256": "0xfa259fa317198f88f5fa3c119f06c066295dbcd47d715e0a30e1bcf94c02ef8c" },
+      "domain_separator": "0xec6ac4ec6469375712b671d38548b711c7a4a17b4db99be41e0eb9f28cafdd2d"
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "address": "0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb",
+      "evidence_block": { "number": 48872656, "number_hex": "0x2e9bcd0", "hash": "0x608abd85f2fe19aa885aa66b18c714799525e6fc3160d3c0e804bd9d0273b773", "state_root": "0x24f059baef2bc148556df0392143f490eaa29aa30ab429d7107aa3e2a2e666ff" },
+      "runtime": { "file": "runtime/Morpho.base.hex", "file_sha256": "2268f504089233da8b261bf86ebe08d1c7db566aaff6eabbd23078dad26282fa", "bytes": 15623, "decoded_sha256": "629bbc7ddbf2ee69170f5b962ef3e0fa73147ef070655cf12074bacccdf3064b", "keccak256": "0xaa76348c0b91e5dfcece228ef6847b0c5081656d2def05c5617bcab659f0b819" },
+      "domain_separator": "0xc6022463533fe30be3a35b0825db824f0250c798d392b1874768ad2778eaad20"
+    }
+  ],
+  "direct_contract_classification": {
+    "classification": "direct immutable-code deployment",
+    "evidence": [
+      "Both fixed-block runtimes match the official v1.0.0 build outside the two compiler-declared immutable references.",
+      "Both independent RPC operators per chain returned zero for the standard EIP-1967 implementation, admin, and beacon slots.",
+      "The only cross-chain runtime differences are the two repeated chain-specific DOMAIN_SEPARATOR immutable words."
+    ],
+    "boundary": "The standard-slot checks alone do not exclude every bespoke proxy. Exact build/runtime equality carries the direct-code classification."
+  },
+  "routes": [
+    {
+      "name": "borrow",
+      "canonical_signature": "borrow((address,address,address,address,uint256),uint256,uint256,address,address)",
+      "selector": "0x50d8cd4b",
+      "asset_token_path": "#.marketParams.loanToken",
+      "semantics": "Exactly one of assets and shares must be zero. Asset mode mints borrow shares rounded up for the exact signed loan-token assets; share mode derives loan-token assets rounded down from the exact signed shares. The authorized onBehalf position incurs the debt and receiver receives the resulting loan-token assets.",
+      "residual": "Accrued market totals, authorization state, oracle price, health, liquidity, and share conversion are live state. The display shows both signed input words and does not predict the derived output."
+    },
+    {
+      "name": "withdraw",
+      "canonical_signature": "withdraw((address,address,address,address,uint256),uint256,uint256,address,address)",
+      "selector": "0x5c2bea49",
+      "asset_token_path": "#.marketParams.loanToken",
+      "semantics": "Exactly one of assets and shares must be zero. Asset mode burns supply shares rounded up for the exact signed loan-token assets; share mode derives loan-token assets rounded down from the exact signed shares. The authorized onBehalf supply position is reduced and receiver receives the resulting loan-token assets.",
+      "residual": "Accrued market totals, authorization state, liquidity, and share conversion are live state. The display shows both signed input words and does not predict the derived output."
+    },
+    {
+      "name": "withdrawCollateral",
+      "canonical_signature": "withdrawCollateral((address,address,address,address,uint256),uint256,address,address)",
+      "selector": "0x8720316d",
+      "asset_token_path": "#.marketParams.collateralToken",
+      "semantics": "The exact nonzero signed assets amount is subtracted from the authorized onBehalf collateral position and the exact collateral-token amount is transferred to receiver after the resulting position passes the health check.",
+      "residual": "Authorization state, accrued interest, oracle price, and post-withdraw health are live state. The display does not claim success."
+    }
+  ],
+  "refused_routes": [
+    { "name": "supply", "selector": "0xa99aad89", "reason": "Effect-bearing arbitrary callback bytes are not injectively rendered." },
+    { "name": "repay", "selector": "0x20b76e81", "reason": "Effect-bearing arbitrary callback bytes are not injectively rendered." },
+    { "name": "supplyCollateral", "selector": "0x238d6579", "reason": "Effect-bearing arbitrary callback bytes are not injectively rendered." }
+  ],
+  "boundary": "Historical fixed-block and source evidence only. It grants no live-state, future-code, production, shipment, fallback, or blind-signing authority."
+}

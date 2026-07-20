@@ -301,6 +301,149 @@ fn registry_allowance_threshold_curations_are_structurally_exact() {
 }
 
 #[test]
+fn registry_morpho_blue_assets_bind_the_signed_market_token_on_both_chains() {
+    let root = workspace_root();
+    let relative = "registry/morpho/calldata-MorphoBlue.json";
+    let curated = std::fs::read(
+        root.join("secure/data/erc7730/curations/files")
+            .join(relative),
+    )
+    .expect("read curated Morpho descriptor");
+    let installed = std::fs::read(root.join("secure/data/erc7730-registry").join(relative))
+        .expect("read installed Morpho descriptor");
+    assert_eq!(
+        installed, curated,
+        "installed Morpho descriptor diverged from its receipted curation"
+    );
+    let descriptor: serde_json::Value =
+        serde_json::from_slice(&installed).expect("parse curated Morpho descriptor");
+    assert!(descriptor["_curation_note"]
+        .as_str()
+        .expect("Morpho curation note")
+        .contains("exact signed market loan/collateral token identity"));
+
+    let result = build_registry();
+    let contract: [u8; 20] = hex::decode("bbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb")
+        .expect("valid Morpho address")
+        .try_into()
+        .expect("Morpho address width");
+    let entries: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-MorphoBlue.json")
+        })
+        .collect();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| (entry.chain_id, entry.contract))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([(1u64, contract), (8_453u64, contract)])
+    );
+
+    let admitted = [
+        (
+            "borrow((address,address,address,address,uint256),uint256,uint256,address,address)",
+            0u16,
+            true,
+        ),
+        (
+            "withdraw((address,address,address,address,uint256),uint256,uint256,address,address)",
+            0u16,
+            true,
+        ),
+        (
+            "withdrawCollateral((address,address,address,address,uint256),uint256,address,address)",
+            1u16,
+            false,
+        ),
+    ];
+    let refused = [
+        "supply((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+        "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+        "supplyCollateral((address,address,address,address,uint256),uint256,address,bytes)",
+    ];
+
+    for entry in entries {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Morpho IR parses");
+        assert_eq!(
+            ir.format_iter().count(),
+            admitted.len(),
+            "only the callback-free Morpho routes may be advertised"
+        );
+        for (signature, token_member, has_shares) in admitted {
+            let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+                .try_into()
+                .expect("Morpho selector width");
+            let format = ir
+                .find_format_by_selector(&selector)
+                .expect("Morpho format table parses")
+                .unwrap_or_else(|| panic!("Morpho route missing: {signature}"));
+            let fields: Vec<_> = format
+                .fields()
+                .map(|field| field.expect("Morpho field parses"))
+                .collect();
+            assert_eq!(fields[5].label, b"Assets");
+            assert_eq!(
+                FormatOp::try_from(fields[5].format_op),
+                Ok(FormatOp::TokenAmount),
+                "{signature} assets regressed to an unscaled raw word"
+            );
+            assert_eq!(
+                ir.path_bytes(fields[5].path_off)
+                    .expect("Morpho assets path parses"),
+                [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 5],
+                "{signature} assets must bind ABI head word 5"
+            );
+            let params = parse_params(&ir, fields[5].param_off).expect("Morpho asset params parse");
+            assert_eq!(
+                params.token_path,
+                Some(
+                    &[
+                        PathOp::RootStructured as u8,
+                        PathOp::FieldIdx as u8,
+                        0,
+                        0,
+                        PathOp::FieldIdx as u8,
+                        (token_member >> 8) as u8,
+                        token_member as u8,
+                    ][..]
+                ),
+                "{signature} assets bound the wrong market token member"
+            );
+            if has_shares {
+                assert_eq!(fields[6].label, b"Shares");
+                assert_eq!(
+                    FormatOp::try_from(fields[6].format_op),
+                    Ok(FormatOp::Raw),
+                    "state-dependent Morpho shares must remain exact raw units"
+                );
+            }
+        }
+
+        for signature in refused {
+            let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+                .try_into()
+                .expect("Morpho selector width");
+            assert!(
+                ir.find_format_by_selector(&selector)
+                    .expect("Morpho format table parses")
+                    .is_none(),
+                "callback-bearing route became clear-signable: {signature}"
+            );
+            assert!(
+                result
+                    .known_calls
+                    .contains(&(entry.chain_id, entry.contract, selector)),
+                "refused Morpho route left the exact known-call inventory: {signature}"
+            );
+        }
+    }
+}
+
+#[test]
 fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment() {
     let result = build_registry();
     let entries: Vec<_> = result
@@ -538,7 +681,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.root),
-        "d40e2d5f706d80961428062a24ae0fc144c6e10f98d512e69d20fedf8cca7f74"
+        "f8a0dccff541de05984b3e614aeb60bb4e32bd909a7aa7eb62c248475bf03b6d"
     );
 }
 

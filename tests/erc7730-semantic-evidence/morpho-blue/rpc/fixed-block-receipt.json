@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-07-20T08:16:17Z",
+  "scope": "Fixed-block two-independent-RPC observations for both ERC-7730 Morpho Blue deployments admitted by PQ1",
+  "address": "0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb",
+  "proxy_slots": {
+    "implementation": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+    "admin": "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103",
+    "beacon": "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50"
+  },
+  "networks": [
+    {
+      "network": "ethereum-mainnet",
+      "chain_id": 1,
+      "block": "0x18634f0",
+      "runtime_file": "runtime/Morpho.ethereum.hex",
+      "runtime": {
+        "bytes": 15623,
+        "sha256": "fd5aa16eea01735e0e33e51e913a27f7d5ed998adc0cec2bf1f9ea368d9e1bdf",
+        "keccak256": "0xfa259fa317198f88f5fa3c119f06c066295dbcd47d715e0a30e1bcf94c02ef8c"
+      },
+      "observations": [
+        {
+          "endpoint": "https://eth.drpc.org",
+          "header": {
+            "number": 25572592,
+            "number_hex": "0x18634f0",
+            "hash": "0xb98c65bd42f9284477487b9418687dfe4b581b031eebd26e5ed01d06364f2da1",
+            "state_root": "0x42d41e33025d925b142d8e9653befaa8d871178a5a4b80f84945f7be69c41a1c",
+            "timestamp": 1784534423,
+            "timestamp_hex": "0x6a5dd597",
+            "timestamp_utc": "2026-07-20T08:00:23Z"
+          },
+          "code": {
+            "method": "eth_getCode",
+            "block": "0x18634f0",
+            "bytes": 15623,
+            "keccak256": "0xfa259fa317198f88f5fa3c119f06c066295dbcd47d715e0a30e1bcf94c02ef8c"
+          },
+          "proxy_slot_results": {
+            "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        {
+          "endpoint": "https://1rpc.io/eth",
+          "header": {
+            "number": 25572592,
+            "number_hex": "0x18634f0",
+            "hash": "0xb98c65bd42f9284477487b9418687dfe4b581b031eebd26e5ed01d06364f2da1",
+            "state_root": "0x42d41e33025d925b142d8e9653befaa8d871178a5a4b80f84945f7be69c41a1c",
+            "timestamp": 1784534423,
+            "timestamp_hex": "0x6a5dd597",
+            "timestamp_utc": "2026-07-20T08:00:23Z"
+          },
+          "code": {
+            "method": "eth_getCode",
+            "block": "0x18634f0",
+            "bytes": 15623,
+            "keccak256": "0xfa259fa317198f88f5fa3c119f06c066295dbcd47d715e0a30e1bcf94c02ef8c"
+          },
+          "proxy_slot_results": {
+            "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        }
+      ],
+      "agreement": "Both endpoints returned the same pinned header, complete runtime, and zero values for all three standard EIP-1967 slots."
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "block": "0x2e9bcd0",
+      "runtime_file": "runtime/Morpho.base.hex",
+      "runtime": {
+        "bytes": 15623,
+        "sha256": "629bbc7ddbf2ee69170f5b962ef3e0fa73147ef070655cf12074bacccdf3064b",
+        "keccak256": "0xaa76348c0b91e5dfcece228ef6847b0c5081656d2def05c5617bcab659f0b819"
+      },
+      "observations": [
+        {
+          "endpoint": "https://base.drpc.org",
+          "header": {
+            "number": 48872656,
+            "number_hex": "0x2e9bcd0",
+            "hash": "0x608abd85f2fe19aa885aa66b18c714799525e6fc3160d3c0e804bd9d0273b773",
+            "state_root": "0x24f059baef2bc148556df0392143f490eaa29aa30ab429d7107aa3e2a2e666ff",
+            "timestamp": 1784534659,
+            "timestamp_hex": "0x6a5dd683",
+            "timestamp_utc": "2026-07-20T08:04:19Z"
+          },
+          "code": {
+            "method": "eth_getCode",
+            "block": "0x2e9bcd0",
+            "bytes": 15623,
+            "keccak256": "0xaa76348c0b91e5dfcece228ef6847b0c5081656d2def05c5617bcab659f0b819"
+          },
+          "proxy_slot_results": {
+            "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        {
+          "endpoint": "https://mainnet.base.org",
+          "header": {
+            "number": 48872656,
+            "number_hex": "0x2e9bcd0",
+            "hash": "0x608abd85f2fe19aa885aa66b18c714799525e6fc3160d3c0e804bd9d0273b773",
+            "state_root": "0x24f059baef2bc148556df0392143f490eaa29aa30ab429d7107aa3e2a2e666ff",
+            "timestamp": 1784534659,
+            "timestamp_hex": "0x6a5dd683",
+            "timestamp_utc": "2026-07-20T08:04:19Z"
+          },
+          "code": {
+            "method": "eth_getCode",
+            "block": "0x2e9bcd0",
+            "bytes": 15623,
+            "keccak256": "0xaa76348c0b91e5dfcece228ef6847b0c5081656d2def05c5617bcab659f0b819"
+          },
+          "proxy_slot_results": {
+            "implementation": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "admin": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "beacon": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        }
+      ],
+      "agreement": "Both endpoints returned the same pinned header, complete runtime, and zero values for all three standard EIP-1967 slots."
+    }
+  ]
+}
