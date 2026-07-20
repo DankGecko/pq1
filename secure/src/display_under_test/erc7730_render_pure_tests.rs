@@ -5605,6 +5605,92 @@ fn eip712_v2_two_pass_transcript_binds_static_warning_and_fields() {
 // `TokenPermissions` struct). Production absence is asserted separately.
 // ───────────────────────────────────────────────────────────────────────
 #[test]
+fn multidimensional_struct_array_bare_marker_declines_on_device() {
+    const SIG: &str = "Batch(Item[][] items,address spender)Item(address token,uint256 amount)";
+    let temp_root =
+        std::env::temp_dir().join(format!("pqsigner-erc7730-rank-belt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_root);
+    std::fs::create_dir_all(&temp_root).expect("create rank-belt fixture dir");
+    let source = temp_root.join("rank-belt.json");
+    let contract = [0x5Au8; 20];
+    let contract_hex: String = contract.iter().map(|byte| format!("{byte:02x}")).collect();
+    std::fs::write(
+        &source,
+        format!(
+            r#"{{
+              "context": {{ "eip712": {{
+                "deployments": [{{ "chainId": 1, "address": "0x{contract_hex}" }}],
+                "domain": {{ "name": "Rank Belt" }}
+              }} }},
+              "metadata": {{ "owner": "Test" }},
+              "display": {{ "formats": {{
+                "{SIG}": {{
+                  "intent": "Batch",
+                  "fields": [
+                    {{ "path": "items.[].amount", "label": "Amount", "format": "tokenAmount",
+                       "params": {{ "tokenPath": "items.[].token" }}, "visible": "always" }},
+                    {{ "path": "spender", "label": "Spender", "format": "addressName",
+                       "visible": "always" }}
+                  ]
+                }}
+              }} }}
+            }}"#
+        ),
+    )
+    .expect("write rank-belt fixture");
+    let mut emitted = dbgen::erc7730::try_compile_one(
+        &source,
+        &dbgen::erc7730::Policy::default(),
+        Some(&temp_root),
+    )
+    .expect("unsupported rank emits authenticated refusal IR");
+    let _ = std::fs::remove_dir_all(&temp_root);
+    let leaf = emitted
+        .pop()
+        .expect("one deployment emits one refusal leaf");
+    assert!(emitted.is_empty());
+
+    let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("bare-refusal IR is schema-valid");
+    let format = ir
+        .format_iter()
+        .next()
+        .expect("one format")
+        .expect("valid refusal format");
+    assert_eq!(format.field_count, 1);
+    assert_eq!(format.nested_descent_count, 0);
+    let field = format
+        .fields()
+        .next()
+        .expect("one field")
+        .expect("valid field");
+    let params = pqsigner_erc7730::render::params::parse(&ir, field.param_off)
+        .expect("valid refusal params");
+    assert_eq!(params.nested_struct, Some(&[0x01][..]));
+
+    let verified = VerifiedDescriptor { ir };
+    let primary_type_hash = keccak256(SIG.as_bytes());
+    let encoded_data = [0u8; 64];
+    let result = super::erc7730::render_erc7730_eip712_pages_v3(
+        1,
+        &contract,
+        &primary_type_hash,
+        &encoded_data,
+        &[],
+        &verified,
+        None,
+        &NameResolver::new(),
+    );
+    match result {
+        Err(crate::tx::erc7730_render::RenderErr::Reject(message)) => assert!(
+            message.contains("nested unsupported"),
+            "device must reject specifically on the bare nested marker: {message}"
+        ),
+        Err(other) => panic!("expected bare-marker Reject, got {other:?}"),
+        Ok(_) => panic!("multidimensional struct-array refusal IR must never clear-sign"),
+    }
+}
+
+#[test]
 fn v2_kind_declines_nested_permit2() {
     // Post-Phase-5: a nested-struct format signed via the OLD kind
     // (`render_erc7730_eip712_pages`, no `nested_blob`) MUST still decline — the

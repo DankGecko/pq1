@@ -3212,8 +3212,18 @@ fn compile_one_format(
     // after the visibility gate preserves the established first-error receipts
     // for corpus formats that were already refused for an explicit hide, while
     // ensuring no otherwise-eligible partial nested display can be pinned.
+    let mut nested_rank_refusal = false;
     if context_kind == CTX_EIP712 {
-        check_eip712_nested_field_completeness(sig, fmt, &parsed)?;
+        match check_eip712_nested_field_completeness(sig, fmt, &parsed) {
+            Ok(()) => {}
+            Err(NestedCompletenessError::UnsupportedStructuredArrayRank(_)) => {
+                // Preserve the build-time rank rejection as a typed outcome,
+                // then emit only the device's canonical hard-refusal marker.
+                // The independent lowerer must also reject the shape below.
+                nested_rank_refusal = true;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
     }
 
     // Selector / discriminator slot — 4 bytes. For EIP-712 we also keep
@@ -3292,9 +3302,19 @@ fn compile_one_format(
     // declines the whole format to blind-sign. `nested_descent_count` is the E1
     // reconciliation pin: the number of nested descent points the device MUST
     // bind, derived HERE (independent of the render traversal).
+    let mut emitted_bare_nested_refusal = false;
     let (mut compiled, nested_descent_count): (Vec<CompiledFieldOut>, u8) = if has_nested_struct {
         match try_compile_eip712_nested(sig, fmt, &parsed, ctx, pool, enum_offsets)? {
+            Some(_) if nested_rank_refusal => {
+                return Err(format!(
+                    "format `{sig}`: nested rank admission rejected the shape but the independent lowerer produced an active anchor"
+                ));
+            }
             Some(res) => res,
+            None if nested_rank_refusal => {
+                emitted_bare_nested_refusal = true;
+                (compile_bare_nested_refusal(pool)?, 0)
+            }
             None => (
                 compile_flat_fields(
                     sig,
@@ -3331,19 +3351,21 @@ fn compile_one_format(
     // Valid upstream shapes outside this first scalar-amount subset retain the
     // descriptor's static `intent` and emit no program. Once emitted, however,
     // runtime witness failure is fatal and can never fall back to static copy.
-    if let Some(program) = compile_interpolated_intent(
-        sig,
-        fmt,
-        context_kind,
-        &parsed,
-        ctx,
-        interpolation_deployment,
-    )? {
-        let first = compiled
-            .first_mut()
-            .ok_or_else(|| format!("format `{sig}` interpolation has no emitted field"))?;
-        first.param_off =
-            pool.append_param_tlv(first.param_off, PARAM_INTERPOLATED_INTENT, &program)?;
+    if !emitted_bare_nested_refusal {
+        if let Some(program) = compile_interpolated_intent(
+            sig,
+            fmt,
+            context_kind,
+            &parsed,
+            ctx,
+            interpolation_deployment,
+        )? {
+            let first = compiled
+                .first_mut()
+                .ok_or_else(|| format!("format `{sig}` interpolation has no emitted field"))?;
+            first.param_off =
+                pool.append_param_tlv(first.param_off, PARAM_INTERPOLATED_INTENT, &program)?;
+        }
     }
 
     // Emit format header.
@@ -3927,6 +3949,30 @@ fn compile_flat_fields(
         compiled.push(cf);
     }
     Ok(compiled)
+}
+
+/// Emit the one canonical, schema-valid field used when nested lowering cannot
+/// safely represent a descriptor. The bare `PARAM_NESTED_STRUCT=[0x01]` marker
+/// is the only behaviorally relevant part: the device sees it before resolving
+/// a field and rejects the whole format. A constant-text terminal and visible
+/// label merely satisfy the ordinary schema-v5 field invariants without
+/// depending on any unsupported descriptor path.
+fn compile_bare_nested_refusal(pool: &mut Pool) -> Result<Vec<CompiledFieldOut>, String> {
+    let mut param_blob = Vec::new();
+    push_tlv(&mut param_blob, PARAM_NESTED_STRUCT, &[0x01])?;
+    push_tlv(&mut param_blob, PARAM_CONST_VALUE, b"Unsupported")?;
+    push_terminal_semantics(
+        &mut param_blob,
+        TerminalSemantics::non_integer(TerminalKind::ConstantText),
+    )?;
+    let param_off = intern_param_blob(pool, &param_blob)?;
+
+    Ok(vec![CompiledFieldOut {
+        format_op: FMT_RAW,
+        label: b"Unsupported".to_vec(),
+        path_off: 0,
+        param_off,
+    }])
 }
 
 /// One planned output record for an EIP-712 nested-struct format.
@@ -5197,6 +5243,38 @@ fn check_eip712_field_completeness(
     Ok(())
 }
 
+/// Typed nested-completeness outcome. Unsupported structured-array rank is the
+/// one admission failure that the caller converts into authenticated refusal
+/// IR; every other failure remains a generator error.
+#[derive(Debug)]
+enum NestedCompletenessError {
+    UnsupportedStructuredArrayRank(String),
+    Refusal(String),
+}
+
+impl NestedCompletenessError {
+    #[cfg(test)]
+    fn contains(&self, needle: &str) -> bool {
+        self.to_string().contains(needle)
+    }
+}
+
+impl core::fmt::Display for NestedCompletenessError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnsupportedStructuredArrayRank(message) | Self::Refusal(message) => {
+                f.write_str(message)
+            }
+        }
+    }
+}
+
+impl From<String> for NestedCompletenessError {
+    fn from(message: String) -> Self {
+        Self::Refusal(message)
+    }
+}
+
 /// Require exact declaration coverage for every elementary member reachable
 /// through an EIP-712 nested struct. The trusted nested renderer expands a
 /// top-level hashStruct into member pages, so accounting for only the parent
@@ -5211,12 +5289,20 @@ fn check_eip712_nested_field_completeness(
     sig: &str,
     fmt: &Format,
     parsed: &ParsedFormatKey,
-) -> Result<(), String> {
+) -> Result<(), NestedCompletenessError> {
     for (idx, top_name) in parsed.top_names.iter().enumerate() {
         let top_ty = &parsed.top_types[idx];
         let (base, _) = split_array_suffix(top_ty);
         if !type_is_struct(base, parsed) {
             continue; // top-level scalar/array coverage is owned by the pass above.
+        }
+        // Rank is a property of the signed type, not of whichever descriptor
+        // path happens to appear first. Check it before the bare-parent
+        // first-error shortcut so `T[][]` cannot bypass this admission gate.
+        if array_suffix_dimensions(top_ty) > 1 {
+            return Err(NestedCompletenessError::UnsupportedStructuredArrayRank(format!(
+                "EIP-712 format `{sig}`: nested member `{top_name}` has more than one array dimension (`{top_ty}`); trusted nested IR supports exactly one render-all array level"
+            )));
         }
         // A field that targets the bare parent hashStruct is already refused by
         // the existing visible-hash terminal-type gate (or, if hidden, by the
@@ -5254,18 +5340,19 @@ fn check_eip712_nested_member_completeness(
     member_ty: &str,
     depth: usize,
     visited: &mut Vec<String>,
-) -> Result<(), String> {
+) -> Result<(), NestedCompletenessError> {
     let (base, is_array) = split_array_suffix(member_ty);
     if type_is_struct(base, parsed) {
         if array_suffix_dimensions(member_ty) > 1 {
-            return Err(format!(
+            return Err(NestedCompletenessError::UnsupportedStructuredArrayRank(format!(
                 "EIP-712 format `{sig}`: nested member `{member_path}` has more than one array dimension (`{member_ty}`); trusted nested IR supports exactly one render-all array level"
-            ));
+            )));
         }
         if depth > MAX_STRUCT_DEPTH || visited.iter().any(|seen| seen == base) {
             return Err(format!(
                 "EIP-712 format `{sig}`: nested member `{member_path}` has a cyclic or deeper-than-{MAX_STRUCT_DEPTH} type; exact signed-leaf completeness cannot be proven"
-            ));
+            )
+            .into());
         }
         let members = parsed
             .struct_defs
@@ -5274,7 +5361,8 @@ fn check_eip712_nested_member_completeness(
         if members.is_empty() {
             return Err(format!(
                 "EIP-712 format `{sig}`: nested member `{member_path}` has an empty struct type `{base}`; refusing an unrenderable hashStruct"
-            ));
+            )
+            .into());
         }
         let element_path = if is_array {
             format!("{member_path}.[]")
@@ -5314,7 +5402,8 @@ fn check_eip712_nested_member_completeness(
 
     Err(format!(
         "EIP-712 format `{sig}`: nested member `{member_path}` is neither rendered, explicitly hidden (`visible:\"never\"`), nor used as a shown tokenAmount's exact scalar-address `tokenPath`. Every elementary member folded into a nested hashStruct must be accounted for at exact leaf granularity"
-    ))
+    )
+    .into())
 }
 
 /// Does descriptor `path` surface the calldata word for tuple member
@@ -11242,7 +11331,7 @@ mod tests {
     }
 
     #[test]
-    fn eip712_multidimensional_struct_array_never_emits_active_nested_anchor() {
+    fn eip712_multidimensional_struct_array_emits_only_bare_refusal() {
         let sig = "Batch(Item[][] items,address spender)Item(address token,uint256 amount)";
         let parsed = parse_format_key(sig).unwrap();
         let fmt = fmt_from_fields(
@@ -11257,6 +11346,15 @@ mod tests {
         let err = check_eip712_nested_field_completeness(sig, &fmt, &parsed)
             .expect_err("one wildcard must not account for a two-dimensional signed array");
         assert!(err.contains("more than one array dimension"), "{err}");
+        let bare_parent = fmt_from_fields(
+            r#"[
+              {"path":"items","label":"Items","visible":"never"},
+              {"path":"spender","label":"Spender","format":"addressName","visible":"always"}
+            ]"#,
+        );
+        let err = check_eip712_nested_field_completeness(sig, &bare_parent, &parsed)
+            .expect_err("a bare-parent field must not bypass signed array-rank admission");
+        assert!(err.contains("more than one array dimension"), "{err}");
 
         let mut ctx = test_ctx();
         let mut pool = Pool::new();
@@ -11267,8 +11365,10 @@ mod tests {
             "the independent emitter backstop must not produce an active v0x03 anchor"
         );
 
+        let mut ctx = test_ctx();
+        let mut pool = Pool::new();
         let mut out = Vec::new();
-        let err = compile_one_format(
+        compile_one_format(
             sig,
             &fmt,
             CTX_EIP712,
@@ -11278,9 +11378,44 @@ mod tests {
             &mut out,
             None,
         )
-        .expect_err("an unsupported structured-array rank must be rejected before emission");
-        assert!(err.contains("more than one array dimension"), "{err}");
-        assert!(out.is_empty(), "no trusted format bytes may be emitted");
+        .expect("unsupported rank must lower only to canonical device-refusal IR");
+
+        assert_eq!(out[4], 1, "refusal format has one canonical carrier field");
+        assert_eq!(out[8], 0, "bare refusal carries no active nested descent");
+        let field = 9 + out[5] as usize + 32;
+        assert_eq!(out[field], FMT_RAW);
+        let label_len = out[field + 1] as usize;
+        assert_eq!(&out[field + 2..field + 2 + label_len], b"Unsupported");
+        let offsets = field + 2 + label_len;
+        assert_eq!(u16::from_be_bytes([out[offsets], out[offsets + 1]]), 0);
+        let param_off = u16::from_be_bytes([out[offsets + 2], out[offsets + 3]]) as usize;
+        assert_ne!(param_off, 0);
+
+        let pool = pool.into_bytes();
+        let blob_len = pool[param_off] as usize;
+        let blob = &pool[param_off + 1..param_off + 1 + blob_len];
+        let mut cursor = 0;
+        let mut bare_marker = false;
+        let mut active_anchor = false;
+        while cursor + 2 <= blob.len() {
+            let tag = blob[cursor];
+            let len = blob[cursor + 1] as usize;
+            let payload = &blob[cursor + 2..cursor + 2 + len];
+            if tag == PARAM_NESTED_STRUCT {
+                bare_marker |= payload == [0x01];
+                active_anchor |= payload.first() == Some(&0x03);
+            }
+            cursor += 2 + len;
+        }
+        assert_eq!(cursor, blob.len());
+        assert!(
+            bare_marker,
+            "rank refusal must carry the device belt marker"
+        );
+        assert!(
+            !active_anchor,
+            "rank refusal must never carry an active v0x03 anchor"
+        );
     }
 
     #[test]
