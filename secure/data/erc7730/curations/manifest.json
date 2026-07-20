@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 781582,
-    "sha256": "beee93154b6d32437d7b34a5324e7dbc55ee8abd64a640afa752a855b92b2a87"
+    "bytes": 782785,
+    "sha256": "33a18c7888ef0245797f42bfdbee90df6ffddf5056b92c16a66675ced34d759e"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -93,9 +93,9 @@
     {
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
-      "files": 15,
-      "bytes": 1310243,
-      "sha256": "ec1959188b33f594bd8ff9cc02b009fbd407fe15d606c947e2cb2aed82e8dc08"
+      "files": 16,
+      "bytes": 1363456,
+      "sha256": "b7b2707e7189c065d77c6c21b4c1feeecd1438fd37be62daace6e620b3fa107f"
     },
     {
       "path": "pqsigner-erc7730",
@@ -144,7 +144,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 269876,
-      "sha256": "dc4f462f62680b90e19fde495f7d317785ec00980117c257e2a0449574ac0197"
+      "sha256": "34aca5611d3ac145f0502456ef7d0592edd695a8e2ab5866036ecd65536de304"
     }
   ],
   "capability_inputs": [
@@ -181,6 +181,13 @@
       "upstream_sha256": "19afdd033c627a5e24bdc70af93e70e0068bb0760d100ddd297377bb8c4cc659",
       "replacement_bytes": 11697,
       "replacement_sha256": "9d6105d4fc42f2d3993a8badfc6084035b5e5eab71a92c13d56bbc4b89e0c469"
+    },
+    {
+      "path": "registry/celo/calldata-locked_celo.json",
+      "upstream_bytes": 3838,
+      "upstream_sha256": "4066152b05d76b5ecec8024a075659fccbda35fb4e35804ef3bc318d188e2f30",
+      "replacement_bytes": 4377,
+      "replacement_sha256": "ed23cd8f7bfe76efe67ba3ac4d8b8d8a2d941260472060b77263a4513c2d6cb4"
     },
     {
       "path": "registry/flyingtulip/calldata-PftNft.json",
@@ -293,6 +300,13 @@
       "upstream_sha256": "64be6591af3a86287c7478728ff4d81cfabc94ecf85435022230f6ff50755b5e",
       "replacement_bytes": 2504,
       "replacement_sha256": "ee8b405e19674c61429188d0d5bf2a34273d0d0eabac1b8e8da1982019c25524"
+    },
+    {
+      "path": "registry/quickswap/calldata-QuickSwap.json",
+      "upstream_bytes": 15749,
+      "upstream_sha256": "19e2481f20414ae9b6669050c9740f919ca3896713693df7b50e60dba685d15f",
+      "replacement_bytes": 16413,
+      "replacement_sha256": "87b1a00b3ad310315ef62e954c555d538abc8a093cb362828560906ff1210320"
     },
     {
       "path": "registry/serenita/calldata-EthVault.json",

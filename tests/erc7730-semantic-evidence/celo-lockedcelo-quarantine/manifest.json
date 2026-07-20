@@ -1,0 +1,295 @@
+{
+  "schema_version": 1,
+  "scope": "Celo LockedCelo descriptor deployment quarantine: mainnet implementation-versus-proxy mismatch and legacy Alfajores non-authority",
+  "captured_at_utc": "2026-07-20T13:07:00Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
+  "policy": {
+    "outcome": "hard_refusal_quarantine",
+    "mechanism": "The curation preserves each declared deployment in the independent known-call inventory but makes every descriptor format fail PQ1's strict visible-signed-operand compiler gate. No descriptor leaf is admitted for either deployment, so all six registry-known selectors remain hard refusals rather than falling through to blind signing.",
+    "known_call_quarantine": [
+      {
+        "canonical_signature": "delegateGovernanceVotes(address,uint256)",
+        "selector": "0x58f84a78"
+      },
+      {
+        "canonical_signature": "lock()",
+        "selector": "0xf83d08ba"
+      },
+      {
+        "canonical_signature": "relock(uint256,uint256)",
+        "selector": "0xb2fb30cb"
+      },
+      {
+        "canonical_signature": "revokeDelegatedGovernanceVotes(address,uint256)",
+        "selector": "0x18629a92"
+      },
+      {
+        "canonical_signature": "unlock(uint256)",
+        "selector": "0x6198e339"
+      },
+      {
+        "canonical_signature": "withdraw(uint256)",
+        "selector": "0x2e1a7d4d"
+      }
+    ]
+  },
+  "descriptor": {
+    "vendored_file": "secure/data/erc7730-registry/registry/celo/calldata-locked_celo.json",
+    "vendored_file_sha256": "ed23cd8f7bfe76efe67ba3ac4d8b8d8a2d941260472060b77263a4513c2d6cb4",
+    "curation_overlay": "secure/data/erc7730/curations/files/registry/celo/calldata-locked_celo.json",
+    "curation_overlay_sha256": "ed23cd8f7bfe76efe67ba3ac4d8b8d8a2d941260472060b77263a4513c2d6cb4",
+    "claimed_deployments": [
+      {
+        "chain_id": 42220,
+        "address": "0x55E1A0C8f376964bd339167476063bFED7f213d5",
+        "actual_role_at_fixed_block": "implementation behind the Registry-selected LockedGold/LockedCelo proxy, not the canonical user-facing proxy"
+      },
+      {
+        "chain_id": 44787,
+        "address": "0x6a4CC5693DC5BFA3799C699F3B941bA2Cb00c341",
+        "actual_role_at_capture": "official Celo MCP configuration identifies it as legacy Alfajores LockedGold; this package does not establish current live-state or audited-source authority"
+      }
+    ]
+  },
+  "celo_mainnet": {
+    "chain_id": 42220,
+    "registry_address": "0x000000000000000000000000000000000000ce10",
+    "registry_lookup_signature": "getAddressForString(string)",
+    "registry_lookup_selector": "0x853db323",
+    "registry_keys": [
+      "LockedGold",
+      "LockedCelo"
+    ],
+    "resolved_proxy": "0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E",
+    "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+    "resolved_implementation": "0x55E1A0C8f376964bd339167476063bFED7f213d5",
+    "descriptor_target": "0x55E1A0C8f376964bd339167476063bFED7f213d5",
+    "fixed_block": {
+      "number": 72649728,
+      "number_hex": "0x4548c00",
+      "hash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+      "parent_hash": "0x98df262766665ba08ac9c3e9fb67c907f0e2ab7e5a9be6721e728a69afd63d24",
+      "state_root": "0x16ef9a83ecb75fd3214684fe2a8c9a2ff91a60a483d1eff5886b9a55b10ae855",
+      "timestamp": 1784550486,
+      "timestamp_utc": "2026-07-20T12:28:06Z"
+    },
+    "rpc_receipt": {
+      "path": "rpc/fixed-block-receipt.json",
+      "sha256": "433c1ea9e725500589a959462c8fe31ae40b22990ea28ac5bdd2149a968174ac",
+      "public_provider_fronts": 3,
+      "request_batches": [
+        {
+          "name": "identity",
+          "path": "rpc/raw/request-identity.json",
+          "sha256": "dd380a649bd9274e01368eb63a5681a34e8ae2d62db0dacb9c1ce66aea35ec09"
+        },
+        {
+          "name": "proxy",
+          "path": "rpc/raw/request-proxy.json",
+          "sha256": "05076834a91058c27f837de36811541c90b9e65e38dcd0d2f2dfaae449cf3cf5"
+        },
+        {
+          "name": "implementation",
+          "path": "rpc/raw/request-implementation.json",
+          "sha256": "ea6ee8ab2d99dc986b5c915ecf68befbbd867aa5c942718d173c4d3d1b0958d6"
+        }
+      ],
+      "provider_responses": [
+        {
+          "name": "Celo Forno",
+          "url": "https://forno.celo.org",
+          "files": [
+            {
+              "batch": "identity",
+              "path": "rpc/raw/response-forno-identity.json",
+              "sha256": "ac078f8e14485e5b1f845c2deca2cae1609a837d66b16e6ec600917084fa2ea0"
+            },
+            {
+              "batch": "proxy",
+              "path": "rpc/raw/response-forno-proxy.json",
+              "sha256": "de51f19f45384e04bf04dd7be852660374cbf2911339509434468c69ebad96be"
+            },
+            {
+              "batch": "implementation",
+              "path": "rpc/raw/response-forno-implementation.json",
+              "sha256": "d90709a66c602fd1527a20caf94a3a82434c37bc1e0b103364c0e5efa7f695c2"
+            }
+          ]
+        },
+        {
+          "name": "dRPC",
+          "url": "https://celo.drpc.org",
+          "files": [
+            {
+              "batch": "identity",
+              "path": "rpc/raw/response-drpc-identity.json",
+              "sha256": "ca7e51ffddee703f64a0933b6da760374a44f180e60e027b969c1d55bb5bd23f"
+            },
+            {
+              "batch": "proxy",
+              "path": "rpc/raw/response-drpc-proxy.json",
+              "sha256": "c31471c4fc2366f0ddb222f7699aba12a3a5ca0ede7f04209f71fcbe922ba111"
+            },
+            {
+              "batch": "implementation",
+              "path": "rpc/raw/response-drpc-implementation.json",
+              "sha256": "3bb32b8ccdf8dbff65e8a76d6a1f764247ec033106bce664cdc2eb38a40ab124"
+            }
+          ]
+        },
+        {
+          "name": "Ankr",
+          "url": "https://rpc.ankr.com/celo",
+          "files": [
+            {
+              "batch": "identity",
+              "path": "rpc/raw/response-ankr-identity.json",
+              "sha256": "ca7e51ffddee703f64a0933b6da760374a44f180e60e027b969c1d55bb5bd23f"
+            },
+            {
+              "batch": "proxy",
+              "path": "rpc/raw/response-ankr-proxy.json",
+              "sha256": "c31471c4fc2366f0ddb222f7699aba12a3a5ca0ede7f04209f71fcbe922ba111"
+            },
+            {
+              "batch": "implementation",
+              "path": "rpc/raw/response-ankr-implementation.json",
+              "sha256": "3bb32b8ccdf8dbff65e8a76d6a1f764247ec033106bce664cdc2eb38a40ab124"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "runtimes": {
+    "proxy": {
+      "address": "0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E",
+      "file": "runtime/LockedGoldProxy.celo-mainnet.hex",
+      "file_sha256": "e394521aeb7812100a1f9304bc4ef9d02c24ac0d96e26eb0baac75bbbd43193a",
+      "bytes": 2585,
+      "decoded_sha256": "eaab648c13c1c75b6bbc77f8c9ed1654505c28c9b41b03af1250f854a0be1ee5",
+      "keccak256": "0x45ab8fc4093acc16d5e4c341276dc0ec237959e6633c43e7f210f654c4e9cb9d"
+    },
+    "implementation": {
+      "address": "0x55E1A0C8f376964bd339167476063bFED7f213d5",
+      "file": "runtime/LockedGold.implementation.celo-mainnet.hex",
+      "file_sha256": "0b0d81b807e92ac97fb84f8a997889d6b5ed135d368034dd63daedaf5a9d4c42",
+      "bytes": 34216,
+      "decoded_sha256": "93327e32f5724e62578fd9402fd3faa28a25a15910d55584f4d97a82064483ac",
+      "keccak256": "0x8641efe2187f0f58d3b521f01ee3e18f8d62373d01350c255a23a9a81996fa29"
+    }
+  },
+  "blockscout": {
+    "proxy": {
+      "url": "https://celo.blockscout.com/api/v2/smart-contracts/0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E",
+      "file": "blockscout/LockedGoldProxy.json",
+      "file_sha256": "ef20380512d98a87b5fb6659e1fd941805394bd744704861049b21b574025c62",
+      "name": "LockedGoldProxy",
+      "compiler": "0.5.8+commit.23d335f2",
+      "evm_version": "petersburg",
+      "fully_verified": true,
+      "changed_bytecode": false,
+      "proxy_type": "eip1967",
+      "implementation": "0x55E1A0C8f376964bd339167476063bFED7f213d5"
+    },
+    "implementation": {
+      "url": "https://celo.blockscout.com/api/v2/smart-contracts/0x55E1A0C8f376964bd339167476063bFED7f213d5",
+      "file": "blockscout/LockedGold.implementation.json",
+      "file_sha256": "7c0454e02696277e193f1f45d65f4ef28ff9b568d0be3d7d28c3f7a3fb8ad6d1",
+      "name": "LockedGold",
+      "compiler": "0.5.13+commit.5b0b510c",
+      "evm_version": "istanbul",
+      "fully_verified": true,
+      "changed_bytecode": false,
+      "proxy_type": null
+    },
+    "boundary": "Blockscout verification corroborates the fixed-block RPC identity and provides ABI/source/build metadata; it is not a substitute for the independent Registry and storage-slot reads."
+  },
+  "official_sources": {
+    "celo_monorepo_current": {
+      "repository": "https://github.com/celo-org/celo-monorepo",
+      "commit": "045aa0061b7d0e9655ff3673cbd25a1bf2b4b74a",
+      "tree": "7118b9c76adcb7aa9afd844d4c2986f19055afb1",
+      "files": [
+        {
+          "path": "source/LockedGold.sol",
+          "upstream_path": "packages/protocol/contracts/governance/LockedGold.sol",
+          "bytes": 36812,
+          "sha256": "8644f267f6689a75474520171e485d5220999c44f06d68aa69876981ca7f9d3f",
+          "relationship": "Byte-identical to the Blockscout primary implementation source_code field."
+        },
+        {
+          "path": "source/Registry.sol",
+          "upstream_path": "packages/protocol/contracts/common/Registry.sol",
+          "bytes": 3732,
+          "sha256": "523b6c9ea1e3fc3e0fb17604a6821b0b25e7e47727f707826d3ee563e96db483"
+        }
+      ]
+    },
+    "celo_monorepo_proxy_build": {
+      "repository": "https://github.com/celo-org/celo-monorepo",
+      "commit": "5ade57c620a90b0d04aa4038f5f43316ad95f49e",
+      "tree": "1bf0f08d6c485634f32b1477136a09584ae51b13",
+      "files": [
+        {
+          "path": "source/LockedGoldProxy.sol",
+          "upstream_path": "packages/protocol/contracts/governance/proxies/LockedGoldProxy.sol",
+          "bytes": 134,
+          "sha256": "869d6e60bc4f303f9f09cf3ed651c7e5ed3a7eeefbef0baffa7d4cc6c34d301b"
+        },
+        {
+          "path": "source/Proxy.sol",
+          "upstream_path": "packages/protocol/contracts/common/Proxy.sol",
+          "bytes": 5358,
+          "sha256": "83ebdf23b5f2d14b643e97e6645c3ae3405d7020be9d0b2dc7f358447a653953"
+        }
+      ],
+      "relationship": "Both files are byte-identical to the corresponding Blockscout verified proxy source_code fields."
+    }
+  },
+  "deployment_identity": {
+    "current_core_contracts": {
+      "url": "https://docs.celo.org/tooling/contracts/core-contracts.md",
+      "file": "deployment/core-contracts.md",
+      "file_sha256": "71e46c0c7e7cea57b7561f89adf12f83567ce77ed04dbc1f7ca4b2f78c1ce399",
+      "mainnet_locked_celo": "0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E",
+      "mainnet_locked_gold": "0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E",
+      "mainnet_registry": "0x000000000000000000000000000000000000ce10"
+    },
+    "celo_mcp_config": {
+      "repository": "https://github.com/celo-org/celo-mcp",
+      "commit": "f398d1de5bdb7c810eeb6c3d225a4ba1a27bc162",
+      "tree": "27ed13570c997fa3f44b56b56cdf9d5b35c1f15c",
+      "file": "deployment/contracts.py",
+      "file_sha256": "70c786dbd11d13c56565a08903ea0273b5e524565736c55262d85e8b3b636e87",
+      "mainnet_locked_gold": "0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E",
+      "alfajores_locked_gold": "0x6a4CC5693DC5BFA3799C699F3B941bA2Cb00c341"
+    },
+    "governance_upgrade_record": {
+      "file": "governance/release-9-proposal.json",
+      "file_sha256": "d4b4487395ad94a5018e53fe119a66773b67120c1bf0f2afaea0ec3c5ecbcd8f",
+      "upstream_repository": "https://github.com/celo-org/celo-monorepo",
+      "upstream_commit": "045aa0061b7d0e9655ff3673cbd25a1bf2b4b74a",
+      "relationship": "The historical official proposal targets _setImplementation on LockedGoldProxy at 0x6cC083..., corroborating the proxy as the governance upgrade target. Its old implementation argument is historical and does not establish the current implementation; the fixed-block storage read does."
+    }
+  },
+  "abi": {
+    "file": "abi/LockedGold.abi.json",
+    "file_sha256": "81b720774c8baf1514e7e6e315217437a3e276e666dbec7e4bded34937d56d75",
+    "derivation": "jq -S '.abi' over blockscout/LockedGold.implementation.json, including the final newline",
+    "quarantined_routes": 6
+  },
+  "testnet_residual": {
+    "network": "Alfajores",
+    "chain_id": 44787,
+    "descriptor_address": "0x6a4CC5693DC5BFA3799C699F3B941bA2Cb00c341",
+    "supported_identity": "The exact address is still named as Alfajores LockedGold in the official celo-org/celo-mcp configuration captured above.",
+    "unsettled": "Alfajores is absent from the current core-contract address document, which now lists Celo Sepolia. Legacy Alfajores explorer/RPC history, current Registry state, proxy slot, runtime, and verified source were not independently reproduced in this bounded package. Therefore the old deployment has identity evidence but no sufficient present clear-signing authority and remains quarantined."
+  },
+  "semantic_hazards": [
+    "The mainnet descriptor binds all six formats to the implementation address even though both official deployment records and three fixed-block RPC providers identify the proxy as LockedGold/LockedCelo.",
+    "Calling a proxy implementation directly executes against the implementation address's own storage and balance, not the Registry-selected proxy's state; verified ABI equivalence does not repair target identity.",
+    "The implementation is upgradeable behind the proxy. This package is a fixed-block receipt, not live monitoring or future implementation authority.",
+    "The legacy Alfajores address lacks the fixed-block, runtime, proxy-state, and source evidence required for admission in this slice."
+  ]
+}

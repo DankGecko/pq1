@@ -1,0 +1,42 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "locked-celo",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x000000000000000000000000000000000000ce10",
+        "data": "0x853db3230000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000a4c6f636b656443656c6f00000000000000000000000000000000000000000000"
+      },
+      {
+        "blockHash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "implementation-slot",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "proxy-code",
+    "method": "eth_getCode",
+    "params": [
+      "0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E",
+      {
+        "blockHash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+        "requireCanonical": true
+      }
+    ]
+  }
+]
