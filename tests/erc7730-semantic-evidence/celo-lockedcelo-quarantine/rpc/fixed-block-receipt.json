@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "captured_at_utc": "2026-07-20T12:42:00Z",
+  "captured_at_utc": "2026-07-20T13:06:33Z",
   "network": "celo-mainnet",
   "chain_id": 42220,
   "block": {
@@ -40,33 +40,35 @@
     {
       "name": "Celo Forno",
       "url": "https://forno.celo.org",
-      "block_header_agrees": true,
-      "locked_gold_registry_call_agrees": true,
-      "locked_celo_registry_call_agrees": true,
-      "implementation_slot_agrees": true,
-      "proxy_runtime_agrees": true,
-      "implementation_runtime_agrees": true
+      "raw_response_files": [
+        "rpc/raw/response-forno-identity.json",
+        "rpc/raw/response-forno-proxy.json",
+        "rpc/raw/response-forno-implementation.json"
+      ]
     },
     {
       "name": "dRPC",
       "url": "https://celo.drpc.org",
-      "block_header_agrees": true,
-      "locked_gold_registry_call_agrees": true,
-      "locked_celo_registry_call_agrees": true,
-      "implementation_slot_agrees": true,
-      "proxy_runtime_agrees": true,
-      "implementation_runtime_agrees": true
+      "raw_response_files": [
+        "rpc/raw/response-drpc-identity.json",
+        "rpc/raw/response-drpc-proxy.json",
+        "rpc/raw/response-drpc-implementation.json"
+      ]
     },
     {
       "name": "Ankr",
       "url": "https://rpc.ankr.com/celo",
-      "block_header_agrees": true,
-      "locked_gold_registry_call_agrees": true,
-      "locked_celo_registry_call_agrees": true,
-      "implementation_slot_agrees": true,
-      "proxy_runtime_agrees": true,
-      "implementation_runtime_agrees": true
+      "raw_response_files": [
+        "rpc/raw/response-ankr-identity.json",
+        "rpc/raw/response-ankr-proxy.json",
+        "rpc/raw/response-ankr-implementation.json"
+      ]
     }
   ],
-  "method": "Each provider returned the same block header. State queries used the EIP-1898 selector {blockHash, requireCanonical:true}; runtime hashes were computed over decoded bytecode. The checked-in runtime files were captured from Celo Forno at the same fixed block and match all three providers."
+  "request_files": [
+    "rpc/raw/request-identity.json",
+    "rpc/raw/request-proxy.json",
+    "rpc/raw/request-implementation.json"
+  ],
+  "method": "The response files are the unmodified JSON bodies returned by each named public RPC endpoint for the corresponding checked-in request batches. State queries use the EIP-1898 selector {blockHash, requireCanonical:true}. Offline tests validate the exact requests and derive block, Registry, storage-slot, and runtime agreement from every raw response; no provider agreement flag is trusted."
 }

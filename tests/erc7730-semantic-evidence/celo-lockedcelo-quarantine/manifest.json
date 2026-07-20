@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "scope": "Celo LockedCelo descriptor deployment quarantine: mainnet implementation-versus-proxy mismatch and legacy Alfajores non-authority",
-  "captured_at_utc": "2026-07-20T12:45:00Z",
+  "captured_at_utc": "2026-07-20T13:07:00Z",
   "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
   "policy": {
     "outcome": "hard_refusal_quarantine",
@@ -75,12 +75,89 @@
     },
     "rpc_receipt": {
       "path": "rpc/fixed-block-receipt.json",
-      "sha256": "555eb6bf2bc75a749abf5436a7dd95a5dbcb07390760f64722e597f8aff11889",
-      "independent_provider_fronts": 3,
-      "providers": [
-        "Celo Forno",
-        "dRPC",
-        "Ankr"
+      "sha256": "433c1ea9e725500589a959462c8fe31ae40b22990ea28ac5bdd2149a968174ac",
+      "public_provider_fronts": 3,
+      "request_batches": [
+        {
+          "name": "identity",
+          "path": "rpc/raw/request-identity.json",
+          "sha256": "dd380a649bd9274e01368eb63a5681a34e8ae2d62db0dacb9c1ce66aea35ec09"
+        },
+        {
+          "name": "proxy",
+          "path": "rpc/raw/request-proxy.json",
+          "sha256": "05076834a91058c27f837de36811541c90b9e65e38dcd0d2f2dfaae449cf3cf5"
+        },
+        {
+          "name": "implementation",
+          "path": "rpc/raw/request-implementation.json",
+          "sha256": "ea6ee8ab2d99dc986b5c915ecf68befbbd867aa5c942718d173c4d3d1b0958d6"
+        }
+      ],
+      "provider_responses": [
+        {
+          "name": "Celo Forno",
+          "url": "https://forno.celo.org",
+          "files": [
+            {
+              "batch": "identity",
+              "path": "rpc/raw/response-forno-identity.json",
+              "sha256": "ac078f8e14485e5b1f845c2deca2cae1609a837d66b16e6ec600917084fa2ea0"
+            },
+            {
+              "batch": "proxy",
+              "path": "rpc/raw/response-forno-proxy.json",
+              "sha256": "de51f19f45384e04bf04dd7be852660374cbf2911339509434468c69ebad96be"
+            },
+            {
+              "batch": "implementation",
+              "path": "rpc/raw/response-forno-implementation.json",
+              "sha256": "d90709a66c602fd1527a20caf94a3a82434c37bc1e0b103364c0e5efa7f695c2"
+            }
+          ]
+        },
+        {
+          "name": "dRPC",
+          "url": "https://celo.drpc.org",
+          "files": [
+            {
+              "batch": "identity",
+              "path": "rpc/raw/response-drpc-identity.json",
+              "sha256": "ca7e51ffddee703f64a0933b6da760374a44f180e60e027b969c1d55bb5bd23f"
+            },
+            {
+              "batch": "proxy",
+              "path": "rpc/raw/response-drpc-proxy.json",
+              "sha256": "c31471c4fc2366f0ddb222f7699aba12a3a5ca0ede7f04209f71fcbe922ba111"
+            },
+            {
+              "batch": "implementation",
+              "path": "rpc/raw/response-drpc-implementation.json",
+              "sha256": "3bb32b8ccdf8dbff65e8a76d6a1f764247ec033106bce664cdc2eb38a40ab124"
+            }
+          ]
+        },
+        {
+          "name": "Ankr",
+          "url": "https://rpc.ankr.com/celo",
+          "files": [
+            {
+              "batch": "identity",
+              "path": "rpc/raw/response-ankr-identity.json",
+              "sha256": "ca7e51ffddee703f64a0933b6da760374a44f180e60e027b969c1d55bb5bd23f"
+            },
+            {
+              "batch": "proxy",
+              "path": "rpc/raw/response-ankr-proxy.json",
+              "sha256": "c31471c4fc2366f0ddb222f7699aba12a3a5ca0ede7f04209f71fcbe922ba111"
+            },
+            {
+              "batch": "implementation",
+              "path": "rpc/raw/response-ankr-implementation.json",
+              "sha256": "3bb32b8ccdf8dbff65e8a76d6a1f764247ec033106bce664cdc2eb38a40ab124"
+            }
+          ]
+        }
       ]
     }
   },

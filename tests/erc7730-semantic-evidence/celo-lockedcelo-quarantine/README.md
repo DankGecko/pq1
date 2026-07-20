@@ -8,8 +8,7 @@ or enable blind signing.
 ## Mainnet mismatch
 
 At Celo mainnet block 72,649,728 (`0x4548c00`, hash
-`0x810df7ac…bf4a3c`), three independent public RPC fronts agreed on all of the
-following:
+`0x810df7ac…bf4a3c`), three public RPC fronts agreed on all of the following:
 
 - Registry `0x000000000000000000000000000000000000ce10` returns
   `0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E` for both `LockedGold`
@@ -26,8 +25,11 @@ balance, not the Registry-selected proxy's state. PQ1 therefore cannot present
 those calls as canonical Locked CELO actions.
 
 `rpc/fixed-block-receipt.json` records the complete call data, block identity,
-slot, returned words, runtime hashes, and provider agreement. The two runtime
-files are the Forno captures at that exact block.
+slot, returned words, runtime hashes, and paths to the checked-in request and
+raw response batches under `rpc/raw/`. Offline tests validate every request and
+derive the Registry, slot, header, and runtime agreement from each response;
+they do not trust summary agreement flags. The two runtime files are the Forno
+captures at that exact block and are byte-compared with every provider response.
 
 ## Source, ABI, and deployment identity
 
