@@ -1774,3 +1774,48 @@ made this session feasible: a gutted copy with every OTHER proof body replaced b
 untouched — goal states inside the target proof stay byte-identical, and it compiles in ~18s vs ~2min.
 (Coordination note: a concurrent session overwrote an agent's probe script in the shared scratchpad; agents
 should namespace scratch files under a private subdir.)
+
+### 2026-07-20 (cont.) — branch-2 PKCO nearly done (3->2 admits); TRH developed in parallel; two more METHOD hazards
+
+Audited: **both tracks PASS** (p_genuine, t_selfcontained, no_forbidden_edits all true).
+
+**P — PKCO finish (drafts/_seam_branch2_wip.ec, 3 -> 2 admits, 3 commits).**
+ - **ADMIT-1a-INNERTREE-LEAF CLOSED** ⇒ **PART 1a (cube-build establishment) is now 0-admit at ALL THREE
+   levels** (outer/middle/inner-tree), so the `seq 7 7` post is DERIVED from the programs rather than merely
+   proved adequate — that was explicitly under NOT-CLAIMED in the incoming block.
+ - **ADMIT-1b-rest (i) root reordering + (ii) THE WHOLE SIGNING-LOOP SIMULATION closed 0-admit.** The +C
+   content here is real: MM45 discharges this entire step with `seq 2 2 ...; by conseq />; sim` because ITS two
+   signature cubes are equal AS LISTS. **`sim` is unavailable to us** — side 1 reads a (sigWOTS,cntr) PAIR from
+   the honest cube while side 2 BUILDS the pair from R.sigWOTStd and R.counterstd (grind-in-find defers the
+   cube to find). They agree only by TRANSITIVITY through ht_sigc, which required producing the edivz index
+   bounds first. Auditor read `ht_sigcube_transitivity` in full: genuine, non-vacuous.
+ - Auditor's strong check: **smt() appears only on bounded index/telescope side goals with explicit hints and
+   is NEVER the top-level closer**; the seq 2 2 post carries the full ~19-conjunct cube invariant (no weakening).
+ - **CORRECTION to an inherited claim:** the previous block asserted 1b part (iii) "carries over from MM45
+   UNCHANGED". FALSE — its post carries two conjuncts MM45 lacks: `dist{2}` and
+   `STCRC_WC.Col.disj_lists twsO{2} twsOC{2}` (the member-aware disjointness obligation). Now corrected in-file.
+
+**T — TRH branch (drafts/_branch2_trh_wip.ec).** The agent DIED on an API stream-idle timeout, but the
+incremental-commit discipline preserved **5 commits** of real work: PART 1a skeleton (outer+middle two-sided
+while invariants), the PART 1a ADEQUACY GATE (0-admit), the PART 1a LAYER-RCONS (0-admit), the INNERTREE
+sub-skeleton, and the l' KEYPAIR body incl. the chain walk (0-admit). Its block carries 4 honest, finer-grained
+admits (TRH-1a-NODESBODY / -KEYPAIRLEAF / -INNERTREE-LEAF / TRH-1b-rest).
+
+**TRANSPLANT MECHANICS (flagged by the auditor):** T forked from P BEFORE P's two closures, so T's shared
+prefix still contains the OLD 1a/1b admits. Only T's APPENDED TRH block may be moved onto P's current file,
+then recompiled. Note the count arithmetic: transplanting replaces P's single ADMIT-3 with T's 4 — the raw
+number goes UP while the granularity gets strictly FINER.
+
+**TWO MORE METHOD HAZARDS (both cost real time; now recorded):**
+ 1. **EasyCrypt's `trivial` NEVER FAILS** — it closes the goal if it can and is a SILENT NO-OP otherwise. In a
+    gutted fast-loop copy whose tail is a row of `admit.`s, a non-closing `trivial` is absorbed by the next
+    admit and the batch compile still exits 0: a **FALSE GREEN that scratch-ecc.sh cannot detect**. The
+    reliable closure gate for a gutted copy is the EXACT TRAILING-ADMIT-COUNT LADDER (k-1 must fail downstream,
+    k clean, k+1 reports "all goals are closed"). The real file's `qed` with N admits remains the strongest gate,
+    since EasyCrypt refuses to save an incomplete proof.
+ 2. **`ec-goal.sh` can print a STALE PRE-`split` GOAL** after a `split` that in fact succeeded — a second
+    reliability failure in that script (the first was the silent timeout truncation, fixed earlier today).
+    Treat its output as a hint, not ground truth, and cross-check with the admit ladder.
+
+**STATE:** branch-2 PKCO has 1 admit left (1b-rest-(iii): the A.forge call, reconstruction loop, pkco collision
+extraction + fidx arithmetic, PLUS the two +C post conjuncts above); TRH has 4 finer admits pending transplant.
