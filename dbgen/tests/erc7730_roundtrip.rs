@@ -539,8 +539,8 @@ fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment(
 
     assert_eq!(
         result.entries.len(),
-        435,
-        "PQ-incompatible permit removal must preserve the 435-leaf catalogue"
+        450,
+        "PQ-incompatible permit removal must preserve the 450-leaf catalogue"
     );
     assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
@@ -677,11 +677,11 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
             .contains(&(entry.chain_id, entry.contract, withdraw_selector)));
     }
 
-    assert_eq!(result.entries.len(), 435);
+    assert_eq!(result.entries.len(), 450);
     assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.root),
-        "5a2e1dd05f5d3331a04611afc8184d9bfe43a71f0f5d9986eee4a4c3740bf2f3"
+        "bb58ecae79875d1882d3d257913cca93e3b151f48cf4af8e3de8567ded86c315"
     );
 }
 
@@ -786,7 +786,7 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
 
     assert_eq!(
         result.entries.len(),
-        435,
+        450,
         "Aave V2 already owned three leaves"
     );
     assert_eq!(result.known_call_count, 4_546);
@@ -1008,7 +1008,7 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
         );
     }
 
-    assert_eq!(result.entries.len(), 435);
+    assert_eq!(result.entries.len(), 450);
     assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -1116,7 +1116,7 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
         );
     }
 
-    assert_eq!(result.entries.len(), 435);
+    assert_eq!(result.entries.len(), 450);
     assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -1641,7 +1641,7 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
         "newly clear-signable permit was already registry-known"
     );
 
-    assert_eq!(result.entries.len(), 435);
+    assert_eq!(result.entries.len(), 450);
     assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -4343,37 +4343,151 @@ fn leaf_ir_carrying(
         .map(|e| e.ir_bytes.clone())
 }
 
+/// Permit2 is admitted only after the curation shows every signed terminal
+/// field and corrects the one-time transfer wording. Bind the authored JSON,
+/// exact deployment set, all three full type hashes, and every Merkle leaf.
 #[test]
-fn permit2_formats_with_hidden_members_are_not_emitted() {
-    let registry = build_registry();
-    let permit2 = hex_bytes("000000000022d473030f116ddee9f6b43ac78ba3");
-    for type_hash in [
-        "f3841cd1ff0085026a6327b620b67997ce40f282c88a8e905a7a5626e310f3d0",
-        "939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106",
-    ] {
-        let type_hash = hex_bytes(type_hash);
+fn vendored_permit2_admits_exactly_three_operand_complete_formats() {
+    const RELATIVE: &str = "registry/uniswap/eip712-uniswap-permit2.json";
+    const ADDRESS: [u8; 20] = [
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x22, 0xd4, 0x73, 0x03, 0x0f, 0x11, 0x6d, 0xde, 0xe9, 0xf6,
+        0xb4, 0x3a, 0xc7, 0x8b, 0xa3,
+    ];
+    const UINT160_MAX: &str = "0x000000000000000000000000ffffffffffffffffffffffffffffffffffffffff";
+    const UINT256_MAX: &str = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+
+    let root = workspace_root();
+    let installed = std::fs::read(root.join("secure/data/erc7730-registry").join(RELATIVE))
+        .expect("read installed Permit2 descriptor");
+    let curated = std::fs::read(
+        root.join("secure/data/erc7730/curations/files")
+            .join(RELATIVE),
+    )
+    .expect("read curated Permit2 descriptor");
+    assert_eq!(installed, curated, "installed Permit2 curation drifted");
+
+    let descriptor: serde_json::Value =
+        serde_json::from_slice(&installed).expect("parse installed Permit2 descriptor");
+    let formats = descriptor["display"]["formats"]
+        .as_object()
+        .expect("Permit2 formats object");
+    let expected_paths = [
+        (
+            "PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)",
+            ["spender", "details.amount", "details.expiration", "details.nonce", "sigDeadline"].as_slice(),
+        ),
+        (
+            "PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)",
+            ["spender", "details.[].amount", "details.[].expiration", "details.[].nonce", "sigDeadline"].as_slice(),
+        ),
+        (
+            "PermitTransferFrom(TokenPermissions permitted,address spender,uint256 nonce,uint256 deadline)TokenPermissions(address token,uint256 amount)",
+            ["spender", "permitted.amount", "deadline", "nonce"].as_slice(),
+        ),
+    ];
+    assert_eq!(formats.len(), expected_paths.len());
+    for (signature, paths) in expected_paths {
+        let format = formats
+            .get(signature)
+            .unwrap_or_else(|| panic!("missing Permit2 format {signature}"));
+        let fields = format["fields"].as_array().expect("Permit2 fields array");
         assert!(
-            leaf_ir_carrying(&registry, &permit2, &type_hash).is_none(),
-            "Permit2 format with explicit signed-but-unseen members must stay absent"
+            fields
+                .iter()
+                .all(|field| field["visible"].as_str() == Some("always")),
+            "every authored Permit2 field must be explicitly visible: {signature}"
+        );
+        let actual: BTreeSet<_> = fields
+            .iter()
+            .map(|field| field["path"].as_str().expect("Permit2 field path"))
+            .collect();
+        let expected: BTreeSet<_> = paths.iter().copied().collect();
+        assert_eq!(
+            actual, expected,
+            "signed-path coverage drifted: {signature}"
         );
     }
-}
 
-/// Fail-closed corpus guard: the vendored Permit2 descriptor explicitly hides
-/// `nonce`. Completeness therefore succeeds, but the independent visibility
-/// gate must keep `PermitTransferFrom` out of the shipped DB until the nonce is
-/// rendered. An upstream or local edit must not silently re-enable the format.
-#[test]
-fn vendored_permit2_transfer_from_hidden_nonce_is_not_emitted() {
+    let single = &formats["PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)"];
+    let batch = &formats["PermitBatch(PermitDetails[] details,address spender,uint256 sigDeadline)PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)"];
+    for format in [single, batch] {
+        assert_eq!(format["fields"][1]["params"]["threshold"], UINT160_MAX);
+        assert_eq!(format["fields"][1]["params"]["message"], "Unlimited");
+        assert_eq!(format["fields"][2]["label"], "Expiry (0=now)");
+        assert_eq!(format["fields"][2]["format"], "raw");
+    }
+    let transfer = &formats["PermitTransferFrom(TokenPermissions permitted,address spender,uint256 nonce,uint256 deadline)TokenPermissions(address token,uint256 amount)"];
+    assert_eq!(transfer["intent"], "Authorize one-time token pull");
+    assert!(transfer.get("interpolatedIntent").is_none());
+    assert_eq!(transfer["fields"][1]["label"], "Maximum transfer");
+    assert_eq!(transfer["fields"][1]["params"]["threshold"], UINT256_MAX);
+    assert_eq!(transfer["fields"][1]["params"]["message"], "Any amount");
+
     let registry = build_registry();
-    let permit2 = hex_bytes("000000000022d473030f116ddee9f6b43ac78ba3");
-    let ptf = hex_bytes("939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106");
-    // The Permit2 contract also hosts UniswapX witness orders, so select by the
-    // full type hash rather than a contract-only first match.
-    assert!(
-        leaf_ir_carrying(&registry, &permit2, &ptf).is_none(),
-        "PermitTransferFrom with a signed-but-unseen nonce must not reach the runtime catalogue"
-    );
+    let entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("eip712-uniswap-permit2.json")
+        })
+        .collect();
+    let expected_chains: BTreeSet<u64> = [
+        1, 10, 56, 137, 146, 8453, 42161, 42220, 43114, 80001, 81457, 84532, 421614, 11155111,
+        11155420,
+    ]
+    .into_iter()
+    .collect();
+    let actual_chains: BTreeSet<u64> = entries.iter().map(|entry| entry.chain_id).collect();
+    assert_eq!(actual_chains, expected_chains);
+    assert_eq!(entries.len(), expected_chains.len());
+
+    let permit_transfer_from_hash: [u8; 32] =
+        hex_bytes("939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106")
+            .try_into()
+            .expect("32-byte PermitTransferFrom type hash");
+    let expected_hashes: BTreeSet<[u8; 32]> = [
+        "f3841cd1ff0085026a6327b620b67997ce40f282c88a8e905a7a5626e310f3d0",
+        "af1b0d30d2cab0380e68f0689007e3254993c596f2fdd0aaa7f4d04f79440863",
+        "939c21a48a8dbe3a9a2404a1d46691e4d39f6583d6ec6b35714604c986d80106",
+    ]
+    .map(|hash| {
+        hex_bytes(hash)
+            .try_into()
+            .expect("32-byte Permit2 type hash")
+    })
+    .into_iter()
+    .collect();
+    let depth = proof_depth(&registry.blob);
+    for entry in entries {
+        assert_eq!(entry.contract, ADDRESS);
+        assert_eq!(entry.context_kind, CTX_EIP712);
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Permit2 IR parses");
+        let formats: Vec<_> = ir
+            .format_iter()
+            .map(|format| format.expect("Permit2 format parses"))
+            .collect();
+        let hashes: BTreeSet<_> = formats.iter().map(|format| format.type_hash).collect();
+        assert_eq!(hashes, expected_hashes);
+        assert!(formats
+            .iter()
+            .all(|format| format.nested_descent_count == 1));
+        for format in &formats {
+            let expected_words = if format.type_hash == permit_transfer_from_hash {
+                4
+            } else {
+                3
+            };
+            assert_eq!(format.static_head_words, expected_words);
+        }
+
+        let proof = extract_proof(&registry.blob, entry.leaf_index, depth);
+        let bundle = synth_bundle(&entry.ir_bytes, entry.leaf_index as u32, &proof);
+        let verified = verify_erc7730_bundle(&bundle, &registry.root)
+            .expect("production Permit2 proof verifies");
+        cross_check_eip712(&verified.ir, entry.chain_id, &verified.ir.domain_separator)
+            .expect("Permit2 domain/deployment binding round-trips");
+    }
 }
 
 /// UniswapX witness-order descriptors hide nonces, deadlines, validation

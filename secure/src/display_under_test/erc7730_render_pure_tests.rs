@@ -101,94 +101,6 @@ fn build_registry() -> &'static dbgen::erc7730::Erc7730BuildResult {
     })
 }
 
-/// Real descriptors whose nested renderer shapes are valuable test vectors but
-/// which the shipping catalogue now correctly excludes because they contain
-/// hidden non-address material. For renderer tests only, compile copies in a
-/// process-private temporary registry after promoting both explicit
-/// `visible:"never"` fields and the few legacy fields whose omitted visibility
-/// defaults to hidden. This preserves the original ABI/type tree and runs
-/// through the real dbgen compiler, while making the emitted fixture satisfy
-/// the same strict hidden-material policy as production.
-const SAFE_VISIBLE_NESTED_FIXTURES: &[(&str, &str)] = &[(
-    "eip712-uniswap-permit2.json",
-    "registry/uniswap/eip712-uniswap-permit2.json",
-)];
-
-fn build_safe_visible_nested_fixtures(
-) -> &'static std::collections::BTreeMap<String, Vec<dbgen::erc7730::Emitted>> {
-    static FIXTURES: std::sync::OnceLock<
-        std::collections::BTreeMap<String, Vec<dbgen::erc7730::Emitted>>,
-    > = std::sync::OnceLock::new();
-    FIXTURES.get_or_init(|| {
-        let source_root = workspace_root().join("secure/data/erc7730-registry");
-        let temp_root = std::env::temp_dir().join(format!(
-            "pqsigner-erc7730-safe-visible-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&temp_root);
-        std::fs::create_dir_all(temp_root.join("registry/uniswap"))
-            .expect("create synthetic Uniswap fixture dir");
-        // Every Uniswap fixture includes this context-only template.
-        std::fs::copy(
-            source_root.join("registry/uniswap/uniswap-common-eip712.json"),
-            temp_root.join("registry/uniswap/uniswap-common-eip712.json"),
-        )
-        .expect("copy synthetic fixture include");
-
-        let policy = dbgen::erc7730::Policy::default();
-        let mut emitted_by_source = std::collections::BTreeMap::new();
-        for &(source_name, relative) in SAFE_VISIBLE_NESTED_FIXTURES {
-            let source = source_root.join(relative);
-            let destination = temp_root.join(relative);
-            let text = std::fs::read_to_string(&source).expect("read nested fixture source");
-            assert!(
-                text.contains("\"visible\": \"never\""),
-                "fixture {source_name} must exercise the hidden-material gate"
-            );
-            let safe_text = text
-                .replace("\"visible\": \"never\"", "\"visible\": \"always\"")
-                // PermitBatch predates the explicit-visibility requirement on
-                // its amount/tokenPath and expiration fields. Promote those
-                // two omitted values in this process-private positive only.
-                .replace(
-                    "\"tokenPath\": \"details.[].token\"\n            }\n          }",
-                    "\"tokenPath\": \"details.[].token\"\n            },\n            \"visible\": \"always\"\n          }",
-                )
-                // PermitSingle and PermitBatch both omitted visibility on the
-                // nested expiration field; make both explicit test positives.
-                .replace(
-                    "\"encoding\": \"timestamp\"\n            }\n          }",
-                    "\"encoding\": \"timestamp\"\n            },\n            \"visible\": \"always\"\n          }",
-                )
-                // Exact nested-leaf completeness also requires Permit2's
-                // per-permission nonce. The upstream descriptor omits it, so
-                // add it only to these process-private positive fixtures.
-                .replace(
-                    "        \"$id\": \"Permit2 Permit Single\",\n        \"intent\": \"Authorize spending of token\",\n        \"fields\": [",
-                    "        \"$id\": \"Permit2 Permit Single\",\n        \"intent\": \"Authorize spending of token\",\n        \"fields\": [\n          {\n            \"path\": \"details.nonce\",\n            \"label\": \"Nonce\",\n            \"visible\": \"always\"\n          },",
-                )
-                .replace(
-                    "        \"$id\": \"Permit2 Permit Batch\",\n        \"intent\": \"Authorize spending of tokens\",\n        \"fields\": [",
-                    "        \"$id\": \"Permit2 Permit Batch\",\n        \"intent\": \"Authorize spending of tokens\",\n        \"fields\": [\n          {\n            \"path\": \"details.[].nonce\",\n            \"label\": \"Nonce\",\n            \"visible\": \"always\"\n          },",
-                );
-            assert!(!safe_text.contains("\"visible\": \"never\""));
-            std::fs::write(&destination, safe_text).expect("write safe nested fixture");
-            let emitted = dbgen::erc7730::try_compile_one(&destination, &policy, Some(&temp_root))
-                .unwrap_or_else(|e| panic!("safe visible fixture {source_name} must compile: {e}"));
-            emitted_by_source.insert(source_name.to_string(), emitted);
-        }
-        let _ = std::fs::remove_dir_all(&temp_root);
-        emitted_by_source
-    })
-}
-
-fn safe_visible_nested_leaf(source_name: &str, chain_id: u64) -> &'static dbgen::erc7730::Emitted {
-    build_safe_visible_nested_fixtures()
-        .get(source_name)
-        .and_then(|entries| entries.iter().find(|entry| entry.chain_id == chain_id))
-        .unwrap_or_else(|| panic!("no safe visible nested fixture for {source_name} on {chain_id}"))
-}
-
 /// Build a compiler-authenticated C1 `string` descriptor, then coherently
 /// change both its authenticated dynamic-kind and terminal-kind TLVs
 /// to `bytes`. Production dbgen refuses to emit arbitrary dynamic `bytes`; this
@@ -303,7 +215,6 @@ fn eip712_hash_only_values_have_no_verified_runtime_leaf() {
 fn explicit_hidden_material_descriptors_have_no_verified_runtime_leaf() {
     for source_name in [
         "eip712-permit-ethereum-link.json",
-        "eip712-uniswap-permit2.json",
         "eip712-UniswapX-ExclusiveDutchOrder.json",
         "eip712-UniswapX-DutchOrder.json",
         "eip712-UniswapX-LimitOrder.json",
@@ -338,6 +249,13 @@ fn find_leaf<'a>(
                     .collect::<Vec<_>>()
             )
         })
+}
+
+/// Permit2's three fully visible formats are production catalogue entries.
+/// Renderer conformance must therefore use the exact Merkle-root-bound leaf,
+/// never a process-private descriptor rewrite that can drift from shipping.
+fn production_permit2_leaf(chain_id: u64) -> &'static dbgen::erc7730::Emitted {
+    find_leaf(build_registry(), "eip712-uniswap-permit2.json", chain_id)
 }
 
 /// Reconstruct the bundle the companion would ship for the on-wire
@@ -644,7 +562,23 @@ fn find_page_by_label(pages: &Pages, label: &str) -> usize {
 }
 
 fn assert_raw_word_pages(pages: &Pages, label: &str, word: &[u8; 32]) {
-    let first = find_page_by_label(pages, label);
+    assert_nth_raw_word_pages(pages, label, 0, word);
+}
+
+fn assert_nth_raw_word_pages(pages: &Pages, label: &str, occurrence: usize, word: &[u8; 32]) {
+    let first = pages
+        .as_slice()
+        .iter()
+        .enumerate()
+        .filter(|(_, page)| row_str(&page[0]) == label && row_str(&page[3]) == "1/2 > next")
+        .nth(occurrence)
+        .map(|(index, _)| index)
+        .unwrap_or_else(|| {
+            panic!(
+                "no raw-word occurrence {occurrence} for {label:?}; full dump:\n{}",
+                dump_pages(pages)
+            )
+        });
     assert!(first + 1 < pages.len, "raw word lacks its second page");
     let encoded = hex::encode(word);
     assert_eq!(
@@ -6644,10 +6578,10 @@ fn eip712_v2_two_pass_transcript_binds_static_warning_and_fields() {
 //
 // A pinned EIP-712 descriptor whose primary type has a nested struct member
 // (a single opaque `hashStruct` word this renderer cannot expand) MUST be
-// declined to blind-sign, not partially clear-signed or mis-resolved. Driven
-// by a safe-visible, dbgen-emitted copy of the real Uniswap Permit2 descriptor
-// (its `PermitSingle` / `PermitTransferFrom` nest a `PermitDetails` /
-// `TokenPermissions` struct). Production absence is asserted separately.
+// declined to blind-sign, not partially clear-signed or mis-resolved. The
+// supported single-rank Permit2 shapes below are driven directly by their
+// shipping catalogue leaf; an unsupported multidimensional shape remains a
+// process-private authenticated-refusal fixture.
 // ───────────────────────────────────────────────────────────────────────
 #[test]
 fn multidimensional_struct_array_bare_marker_declines_on_device() {
@@ -6742,7 +6676,7 @@ fn v2_kind_declines_nested_permit2() {
     // descent finds no DFS record to bind the `PermitDetails` hashStruct word,
     // so the whole render Rejects. A companion must use the V3 entry. This keeps
     // the "old kind never clear-signs a nested format" guarantee.
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
     assert!(matches!(ir.context_kind, ContextKind::Eip712));
 
@@ -6774,9 +6708,9 @@ fn v2_kind_declines_nested_permit2() {
 }
 
 // ───────────────────────────────────────────────────────────────────────
-// THE DECISIVE nested-EIP-712 test (design §3 rule 6): a safe-visible copy of
-// the real Permit2 PermitSingle type drives the V3 render path. Every explicit
-// descriptor field is visible in this fixture. The binding test proves that
+// THE DECISIVE nested-EIP-712 test (design §3 rule 6): the production Permit2
+// PermitSingle leaf drives the V3 render path. Every signed terminal field is
+// visible in the shipping descriptor. The binding test proves that
 // flipping ANY nested word or the committed top-level `details` word declines.
 // (a) alone would pass even if the keccak binding were never checked; (b) is
 // what proves shown ⟺ signed.
@@ -6825,14 +6759,9 @@ fn permit_single_vectors(
 
 #[test]
 fn v3_permit_single_renders_nested_members() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
-    // PermitSingle primary-type hash in the safe-visible Permit2 fixture.
-    let pth: [u8; 32] = [
-        0xf3, 0x84, 0x1c, 0xd1, 0xff, 0x00, 0x85, 0x02, 0x6a, 0x63, 0x27, 0xb6, 0x20, 0xb6, 0x79,
-        0x97, 0xce, 0x40, 0xf2, 0x82, 0xc8, 0x8a, 0x8e, 0x90, 0x5a, 0x7a, 0x56, 0x26, 0xe3, 0x10,
-        0xf3, 0xd0,
-    ];
+    let pth = PERMIT_SINGLE_TYPEHASH;
     let token = [
         0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e, 0x9E, 0xb0,
         0xcE, 0x36, 0x06, 0xeB, 0x48,
@@ -6844,8 +6773,8 @@ fn v3_permit_single_renders_nested_members() {
     let (top_ed, nested_blob) = permit_single_vectors(
         token,
         1_000_000_000,
-        1_735_689_600,
-        0,
+        1_704_067_200,
+        7,
         spender,
         1_735_689_600,
     );
@@ -6873,10 +6802,19 @@ fn v3_permit_single_renders_nested_members() {
         dump.contains("1000000000"),
         "nested amount must render:\n{dump}"
     );
-    // nested expiration is a timestamp date → a 2025 date renders.
+    let expiration: [u8; 32] = nested_blob[2 + 64..2 + 96]
+        .try_into()
+        .expect("PermitSingle expiration word");
+    let nonce: [u8; 32] = nested_blob[2 + 96..2 + 128]
+        .try_into()
+        .expect("PermitSingle nonce word");
+    assert_raw_word_pages(&pages, "Expiry (0=now)", &expiration);
+    assert_raw_word_pages(&pages, "Allowance nonce", &nonce);
+    let _ = find_page_by_label(&pages, "Allowance");
+    let _ = find_page_by_label(&pages, "Sig deadline");
     assert!(
         dump.contains("2025"),
-        "nested expiration date must render:\n{dump}"
+        "signature deadline must render:\n{dump}"
     );
 
     let spender_page = find_page_by_label(&pages, "Spender");
@@ -6896,8 +6834,73 @@ fn v3_permit_single_renders_nested_members() {
 }
 
 #[test]
+fn v3_permit_single_expiry_zero_and_uint160_unlimited_are_semantically_exact() {
+    let leaf = production_permit2_leaf(1);
+    let token = [
+        0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e, 0x9E, 0xb0,
+        0xcE, 0x36, 0x06, 0xeB, 0x48,
+    ];
+    let spender = [
+        0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5, 0xa6, 0xcC,
+        0x9D, 0x4B, 0x2b, 0x7F, 0xAD,
+    ];
+    let (base_top, base_blob) = permit_single_vectors(token, 1, 0, 9, spender, 1_735_689_600);
+    let render = |top: &[u8], blob: &[u8]| {
+        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("Permit2 IR parses");
+        let verified = VerifiedDescriptor { ir };
+        super::erc7730::render_erc7730_eip712_pages_v3(
+            1,
+            &[0u8; 20],
+            &PERMIT_SINGLE_TYPEHASH,
+            top,
+            blob,
+            &verified,
+            None,
+            &NameResolver::new(),
+        )
+    };
+
+    let zero_expiry = render(&base_top, &base_blob).expect("zero-expiry PermitSingle renders");
+    let expiration: [u8; 32] = base_blob[2 + 64..2 + 96]
+        .try_into()
+        .expect("zero expiration word");
+    assert_raw_word_pages(&zero_expiry, "Expiry (0=now)", &expiration);
+    assert!(
+        !dump_pages(&zero_expiry).contains("1970"),
+        "Permit2 expiration zero must not be presented as Unix epoch"
+    );
+
+    let render_amount = |last_byte: u8| {
+        let mut top = base_top.clone();
+        let mut blob = base_blob.clone();
+        let amount = &mut blob[2 + 32..2 + 64];
+        amount.fill(0);
+        amount[12..].fill(0xff);
+        amount[31] = last_byte;
+        let rebound = super::erc7730::nested::hash_struct(&PERMIT_DETAILS_TYPEHASH, &blob[2..]);
+        top[..32].copy_from_slice(&rebound);
+        render(&top, &blob).expect("canonical uint160 allowance renders")
+    };
+
+    let unlimited = render_amount(0xff);
+    assert!(
+        dump_pages(&unlimited)
+            .to_ascii_lowercase()
+            .contains("unlimited"),
+        "exact uint160::MAX must carry the reusable unlimited-allowance warning"
+    );
+    let finite = render_amount(0xfe);
+    assert!(
+        !dump_pages(&finite)
+            .to_ascii_lowercase()
+            .contains("unlimited"),
+        "uint160::MAX - 1 must remain a finite numeric allowance"
+    );
+}
+
+#[test]
 fn v3_permit_single_rejects_hash_bound_dirty_uint160_padding() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let pth: [u8; 32] = [
         0xf3, 0x84, 0x1c, 0xd1, 0xff, 0x00, 0x85, 0x02, 0x6a, 0x63, 0x27, 0xb6, 0x20, 0xb6, 0x79,
         0x97, 0xce, 0x40, 0xf2, 0x82, 0xc8, 0x8a, 0x8e, 0x90, 0x5a, 0x7a, 0x56, 0x26, 0xe3, 0x10,
@@ -6933,7 +6936,7 @@ fn v3_permit_single_rejects_hash_bound_dirty_uint160_padding() {
 
 #[test]
 fn v3_permit_single_binding_is_non_vacuous() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let pth: [u8; 32] = [
         0xf3, 0x84, 0x1c, 0xd1, 0xff, 0x00, 0x85, 0x02, 0x6a, 0x63, 0x27, 0xb6, 0x20, 0xb6, 0x79,
         0x97, 0xce, 0x40, 0xf2, 0x82, 0xc8, 0x8a, 0x8e, 0x90, 0x5a, 0x7a, 0x56, 0x26, 0xe3, 0x10,
@@ -7057,7 +7060,7 @@ fn eip712_format_ndc_offset(ir_bytes: &[u8], target: &[u8; 32]) -> Option<usize>
 /// IR cannot become a `VerifiedDescriptor` at all.
 #[test]
 fn v3_reconciliation_rejects_wrong_pinned_descent_count() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
 
     // Locate PermitSingle's format header nested_descent_count byte. The permit2
     // leaf now carries three formats (PermitSingle, PermitTransferFrom,
@@ -7102,7 +7105,7 @@ fn v3_reconciliation_rejects_wrong_pinned_descent_count() {
 /// live exploit — but the cursor check must fire.)
 #[test]
 fn v3_reconciliation_rejects_trailing_nested_blob() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let (top_ed, mut nested_blob) = permit_single_valid_vectors();
     nested_blob.push(0xEE); // one unconsumed trailing byte
 
@@ -7143,7 +7146,7 @@ const PERMIT_TRANSFER_FROM_TYPEHASH: [u8; 32] = [
 /// committed `permitted` word declines (binding is live for the 2-member shape).
 #[test]
 fn v3_permit_transfer_from_renders_and_flip_declines() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let token = [
         0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e, 0x9E, 0xb0,
         0xcE, 0x36, 0x06, 0xeB, 0x48,
@@ -7163,7 +7166,7 @@ fn v3_permit_transfer_from_renders_and_flip_declines() {
     let mut top_ed = std::vec![0u8; 128];
     top_ed[0..32].copy_from_slice(&permitted_hs);
     top_ed[32 + 12..64].copy_from_slice(&spender);
-    top_ed[64 + 24..96].copy_from_slice(&42u64.to_be_bytes()); // nonce (VISIBLE fixture)
+    top_ed[64 + 24..96].copy_from_slice(&42u64.to_be_bytes()); // one-time nonce
     top_ed[96 + 24..128].copy_from_slice(&1_735_689_600u64.to_be_bytes()); // deadline (SHOWN)
 
     let mut nested_blob = std::vec![0u8; 2];
@@ -7196,6 +7199,38 @@ fn v3_permit_transfer_from_renders_and_flip_declines() {
     );
     assert!(dump.contains("2025"), "deadline date must render:\n{dump}");
     assert!(!dump.contains("hidden"), "sanity");
+    let _ = find_page_by_label(&pages, "Maximum transfer");
+    let _ = find_page_by_label(&pages, "Deadline");
+    let nonce: [u8; 32] = top_ed[64..96].try_into().expect("PermitTransferFrom nonce");
+    assert_raw_word_pages(&pages, "Nonce", &nonce);
+    assert!(
+        !dump.contains("transfer 500000000"),
+        "the signed cap must not be presented as an exact transfer"
+    );
+
+    let render_maximum = |last_byte: u8| {
+        let mut ed = top_ed.clone();
+        let mut blob = nested_blob.clone();
+        blob[2 + 32..2 + 64].fill(0xff);
+        blob[2 + 63] = last_byte;
+        let rebound = super::erc7730::nested::hash_struct(&TOKEN_PERMISSIONS_TYPEHASH, &blob[2..]);
+        ed[..32].copy_from_slice(&rebound);
+        render(&ed, &blob).expect("canonical uint256 transfer cap renders")
+    };
+    let any_amount = render_maximum(0xff);
+    assert!(
+        dump_pages(&any_amount)
+            .to_ascii_lowercase()
+            .contains("any amount"),
+        "exact uint256::MAX must state that the spender may choose any amount"
+    );
+    let finite = render_maximum(0xfe);
+    assert!(
+        !dump_pages(&finite)
+            .to_ascii_lowercase()
+            .contains("any amount"),
+        "uint256::MAX - 1 must remain a finite one-time cap"
+    );
 
     // Flip the committed `permitted` hashStruct word → decline (binding live).
     for byte in [0usize, 15, 31] {
@@ -7222,7 +7257,7 @@ const PERMIT_BATCH_TYPEHASH: [u8; 32] = [
 ];
 
 /// A REAL 2-element Permit2 `PermitBatch` (v2 array-of-struct). el0 = USDC/1e9/
-/// 2025-01-01/nonce0, el1 = WETH/5e18/2026-01-01/nonce1. The committed `details`
+/// expiry 1735689600/nonce7, el1 = WETH/5e18/expiry 1767225600/nonce11. The committed `details`
 /// word is the foundry-pinned array binding `keccak(hashStruct(el0)‖hashStruct(el1))
 /// = 0x57b01054…` (recomputed here via the SAME device primitive — not circular:
 /// the device recomputes from the IR-pinned type_hash + the blob; a flip in
@@ -7245,11 +7280,12 @@ fn permit_batch_vectors() -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
     el0[12..32].copy_from_slice(&usdc);
     el0[32 + 24..64].copy_from_slice(&1_000_000_000u64.to_be_bytes());
     el0[64 + 24..96].copy_from_slice(&1_735_689_600u64.to_be_bytes());
+    el0[96 + 24..128].copy_from_slice(&7u64.to_be_bytes());
     let mut el1 = std::vec![0u8; 128];
     el1[12..32].copy_from_slice(&weth);
     el1[32 + 24..64].copy_from_slice(&5_000_000_000_000_000_000u64.to_be_bytes());
     el1[64 + 24..96].copy_from_slice(&1_767_225_600u64.to_be_bytes());
-    el1[96 + 24..128].copy_from_slice(&1u64.to_be_bytes());
+    el1[96 + 24..128].copy_from_slice(&11u64.to_be_bytes());
 
     let details_word =
         super::erc7730::nested::hash_struct_array(&PERMIT_DETAILS_TYPEHASH, &[&el0[..], &el1[..]]);
@@ -7267,9 +7303,81 @@ fn permit_batch_vectors() -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
     (top_ed, blob)
 }
 
+fn permit_batch_repeated_vectors(count: u16) -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
+    assert!((1..=6).contains(&count));
+    let token = [
+        0xA0u8, 0xb8, 0x69, 0x91, 0xc6, 0x21, 0x8b, 0x36, 0xc1, 0xd1, 0x9D, 0x4a, 0x2e, 0x9E, 0xb0,
+        0xcE, 0x36, 0x06, 0xeB, 0x48,
+    ];
+    let spender = [
+        0x3fu8, 0xC9, 0x1A, 0x3a, 0xfd, 0x70, 0x39, 0x5C, 0xd4, 0x96, 0xC6, 0x47, 0xd5, 0xa6, 0xcC,
+        0x9D, 0x4B, 0x2b, 0x7F, 0xAD,
+    ];
+    let mut elements = std::vec::Vec::new();
+    for index in 0..count {
+        let mut element = std::vec![0u8; 128];
+        element[12..32].copy_from_slice(&token);
+        element[32 + 24..64].copy_from_slice(&(1_000_000u64 + index as u64).to_be_bytes());
+        element[64 + 24..96].copy_from_slice(&(1_735_689_600u64 + index as u64).to_be_bytes());
+        element[96 + 24..128].copy_from_slice(&(index as u64 + 1).to_be_bytes());
+        elements.push(element);
+    }
+    let refs: std::vec::Vec<&[u8]> = elements.iter().map(|element| element.as_slice()).collect();
+    let details_word = super::erc7730::nested::hash_struct_array(&PERMIT_DETAILS_TYPEHASH, &refs);
+    let mut top_ed = std::vec![0u8; 96];
+    top_ed[..32].copy_from_slice(&details_word);
+    top_ed[32 + 12..64].copy_from_slice(&spender);
+    top_ed[64 + 24..96].copy_from_slice(&1_767_225_600u64.to_be_bytes());
+
+    let mut blob = count.to_be_bytes().to_vec();
+    for element in elements {
+        blob.extend_from_slice(&128u16.to_be_bytes());
+        blob.extend_from_slice(&element);
+    }
+    (top_ed, blob)
+}
+
+#[test]
+fn v3_permit_batch_page_budget_is_atomic_at_the_verified_boundary() {
+    let leaf = production_permit2_leaf(1);
+    for count in 1..=6u16 {
+        let (top_ed, blob) = permit_batch_repeated_vectors(count);
+        let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("Permit2 IR parses");
+        let verified = VerifiedDescriptor { ir };
+        let result = super::erc7730::render_erc7730_eip712_pages_v3(
+            1,
+            &[0u8; 20],
+            &PERMIT_BATCH_TYPEHASH,
+            &top_ed,
+            &blob,
+            &verified,
+            None,
+            &NameResolver::new(),
+        );
+        if count <= 3 {
+            let pages = result.unwrap_or_else(|error| {
+                panic!("{count}-element PermitBatch must fit completely: {error:?}")
+            });
+            let dump = dump_pages(&pages).to_ascii_lowercase();
+            assert!(
+                dump.contains(&format!("item {count} of {count}")),
+                "accepted batch must include its final complete element:\n{dump}"
+            );
+        } else {
+            assert!(
+                matches!(
+                    result,
+                    Err(crate::tx::erc7730_render::RenderErr::PageBudget)
+                ),
+                "{count}-element PermitBatch must fail atomically at the page boundary"
+            );
+        }
+    }
+}
+
 #[test]
 fn v3_permit_batch_array_renders_both_elements() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let (top_ed, blob) = permit_batch_vectors();
     let ir = Erc7730Ir::parse(&leaf.ir_bytes).expect("permit2 IR parses");
     let verified = VerifiedDescriptor { ir };
@@ -7306,14 +7414,25 @@ fn v3_permit_batch_array_renders_both_elements() {
     // The "Item 1 of 2" / "Item 2 of 2" dividers.
     assert!(dump.contains("item 1 of 2"), "element 0 divider:\n{dump}");
     assert!(dump.contains("item 2 of 2"), "element 1 divider:\n{dump}");
-    // Both element expiration dates.
-    assert!(dump.contains("2025"), "element 0 expiration:\n{dump}");
-    assert!(dump.contains("2026"), "element 1 expiration:\n{dump}");
+    let expiry0: [u8; 32] = blob[4 + 64..4 + 96].try_into().expect("element 0 expiry");
+    let nonce0: [u8; 32] = blob[4 + 96..4 + 128].try_into().expect("element 0 nonce");
+    let expiry1: [u8; 32] = blob[134 + 64..134 + 96]
+        .try_into()
+        .expect("element 1 expiry");
+    let nonce1: [u8; 32] = blob[134 + 96..134 + 128]
+        .try_into()
+        .expect("element 1 nonce");
+    assert_nth_raw_word_pages(&pages, "Expiry (0=now)", 0, &expiry0);
+    assert_nth_raw_word_pages(&pages, "Expiry (0=now)", 1, &expiry1);
+    assert_nth_raw_word_pages(&pages, "Allowance nonce", 0, &nonce0);
+    assert_nth_raw_word_pages(&pages, "Allowance nonce", 1, &nonce1);
+    let _ = find_page_by_label(&pages, "Spender");
+    let _ = find_page_by_label(&pages, "Sig deadline");
 }
 
 #[test]
 fn v3_permit_batch_array_binding_is_non_vacuous() {
-    let leaf = safe_visible_nested_leaf("eip712-uniswap-permit2.json", 1);
+    let leaf = production_permit2_leaf(1);
     let (top_ed, blob) = permit_batch_vectors();
 
     let render = |ed: &[u8], b: &[u8]| {
@@ -9520,18 +9639,14 @@ fn hx32(s: &str) -> [u8; 32] {
     o
 }
 
-/// v3 fixture-wide safety: recursive descent remains a GENERAL renderer
-/// capability even though the real descriptors that hid signed members are no
-/// longer authenticated. Exercise every format in the safe-visible dbgen-emitted
-/// fixture set with hostile nested blobs and require panic/OOB freedom.
+/// v3 catalogue-wide safety: exercise every authenticated production format
+/// carrying a nested descent with hostile blobs and require fail-closed,
+/// panic/OOB-free behavior.
 #[test]
 fn v3_all_nested_eip712_leaves_are_panic_safe_and_fail_closed() {
+    let mut nested_type_hashes = std::collections::BTreeSet::new();
     let resolver = NameResolver::new();
-    let mut nested_leaf_formats = 0usize;
-    for entry in build_safe_visible_nested_fixtures()
-        .values()
-        .flat_map(|entries| entries.iter())
-    {
+    for entry in &build_registry().entries {
         let Ok(ir) = Erc7730Ir::parse(&entry.ir_bytes) else {
             continue;
         };
@@ -9545,7 +9660,7 @@ fn v3_all_nested_eip712_leaves_are_panic_safe_and_fail_closed() {
             if fmt.nested_descent_count == 0 {
                 continue; // no nested anchor in this format
             }
-            nested_leaf_formats += 1;
+            nested_type_hashes.insert(fmt.type_hash);
             let pth = fmt.type_hash;
             let ed = std::vec![0u8; fmt.static_head_words as usize * 32];
             for blob in [
@@ -9573,12 +9688,17 @@ fn v3_all_nested_eip712_leaves_are_panic_safe_and_fail_closed() {
             }
         }
     }
-    // Permit2 (Single/Batch/TransferFrom) and SessionManager provide four
-    // distinct safe nested formats (single struct + arrays-of-struct).
-    assert!(
-        nested_leaf_formats >= 4,
-        "expected many nested EIP-712 leaf-formats across the corpus, got {nested_leaf_formats}"
-    );
+    for expected in [
+        PERMIT_SINGLE_TYPEHASH,
+        PERMIT_BATCH_TYPEHASH,
+        PERMIT_TRANSFER_FROM_TYPEHASH,
+    ] {
+        assert!(
+            nested_type_hashes.contains(&expected),
+            "production Permit2 type 0x{} was not exercised",
+            hex::encode(expected)
+        );
+    }
 }
 
 /// The two curated FlyingTulip `Session` descriptors are production leaves for

@@ -1,5 +1,6 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
+  "_curation_note": "PQSigner semantic curation: all signed terminal fields are shown for PermitSingle, PermitBatch, and PermitTransferFrom. Reusable allowances label expiration as raw `Expiry (0=now)` because Permit2 stores zero as the current block timestamp, and only the exact uint160 maximum renders as Unlimited. PermitTransferFrom is described as a one-time spender pull cap: its eventual recipient and requested amount are deliberately unsigned and are not implied by the display. Permit2 ERC-1271 validation requires owner code at validation time and does not unwrap ERC-6492. See tests/erc7730-semantic-evidence/uniswap-permit2.",
   "includes": "uniswap-common-eip712.json",
   "display": {
     "formats": {
@@ -15,25 +16,35 @@
           },
           {
             "path": "details.amount",
-            "label": "Amount allowance",
+            "label": "Allowance",
             "format": "tokenAmount",
             "params": {
-              "tokenPath": "details.token"
+              "tokenPath": "details.token",
+              "threshold": "0x000000000000000000000000ffffffffffffffffffffffffffffffffffffffff",
+              "message": "Unlimited"
             },
             "visible": "always"
           },
           {
             "path": "details.expiration",
-            "label": "Approval expires",
+            "label": "Expiry (0=now)",
+            "format": "raw",
+            "visible": "always"
+          },
+          {
+            "path": "details.nonce",
+            "label": "Allowance nonce",
+            "format": "raw",
+            "visible": "always"
+          },
+          {
+            "path": "sigDeadline",
+            "label": "Sig deadline",
             "format": "date",
             "params": {
               "encoding": "timestamp"
-            }
-          },
-          {
-            "label": "Sig Deadline",
-            "path": "sigDeadline",
-            "visible": "never"
+            },
+            "visible": "always"
           }
         ]
       },
@@ -49,30 +60,41 @@
           },
           {
             "path": "details.[].amount",
-            "label": "Amount allowance",
+            "label": "Allowance",
             "format": "tokenAmount",
             "params": {
-              "tokenPath": "details.[].token"
-            }
+              "tokenPath": "details.[].token",
+              "threshold": "0x000000000000000000000000ffffffffffffffffffffffffffffffffffffffff",
+              "message": "Unlimited"
+            },
+            "visible": "always"
           },
           {
             "path": "details.[].expiration",
-            "label": "Approval expires",
+            "label": "Expiry (0=now)",
+            "format": "raw",
+            "visible": "always"
+          },
+          {
+            "path": "details.[].nonce",
+            "label": "Allowance nonce",
+            "format": "raw",
+            "visible": "always"
+          },
+          {
+            "path": "sigDeadline",
+            "label": "Sig deadline",
             "format": "date",
             "params": {
               "encoding": "timestamp"
-            }
-          },
-          {
-            "label": "Sig Deadline",
-            "path": "sigDeadline",
-            "visible": "never"
+            },
+            "visible": "always"
           }
         ]
       },
       "PermitTransferFrom(TokenPermissions permitted,address spender,uint256 nonce,uint256 deadline)TokenPermissions(address token,uint256 amount)": {
         "$id": "Permit2 Permit Transfer",
-        "intent": "Authorize token transfer",
+        "intent": "Authorize one-time token pull",
         "fields": [
           {
             "path": "spender",
@@ -91,10 +113,12 @@
           },
           {
             "path": "permitted.amount",
-            "label": "Amount",
+            "label": "Maximum transfer",
             "format": "tokenAmount",
             "params": {
-              "tokenPath": "permitted.token"
+              "tokenPath": "permitted.token",
+              "threshold": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+              "message": "Any amount"
             },
             "visible": "always"
           },
@@ -110,10 +134,10 @@
           {
             "label": "Nonce",
             "path": "nonce",
-            "visible": "never"
+            "format": "raw",
+            "visible": "always"
           }
-        ],
-        "interpolatedIntent": "Transfer {permitted.amount}"
+        ]
       }
     }
   }

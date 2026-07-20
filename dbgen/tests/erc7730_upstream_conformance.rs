@@ -41,7 +41,7 @@ const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
 // The upstream fixture bytes remain test-only and outside the catalogue. This
 // root changes only when the separately curated production descriptors do.
-const PROD_ROOT_HEX: &str = "5a2e1dd05f5d3331a04611afc8184d9bfe43a71f0f5d9986eee4a4c3740bf2f3";
+const PROD_ROOT_HEX: &str = "bb58ecae79875d1882d3d257913cca93e3b151f48cf4af8e3de8567ded86c315";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1500,10 +1500,10 @@ fn upstream_fixture_corpus_is_exact_test_only_and_honestly_inventoried() {
                 .to_path_buf()
         })
         .collect();
-    assert_eq!(accepted.len(), 231);
-    assert_eq!(accepted.intersection(&tested_descriptors).count(), 147);
+    assert_eq!(accepted.len(), 232);
+    assert_eq!(accepted.intersection(&tested_descriptors).count(), 148);
     assert_eq!(accepted.difference(&tested_descriptors).count(), 84);
-    assert_eq!(tested_descriptors.difference(&accepted).count(), 125);
+    assert_eq!(tested_descriptors.difference(&accepted).count(), 124);
 }
 
 fn synth_bundle(blob: &[u8], ir_bytes: &[u8], leaf_index: usize) -> Vec<u8> {
