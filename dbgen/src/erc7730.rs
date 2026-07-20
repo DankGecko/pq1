@@ -340,16 +340,31 @@ const ROUTER02_DESCRIPTOR_HASH: [u8; 32] = [
     0x7d, 0x0b, 0x0f, 0x00, 0x50, 0x81, 0x28, 0x81, 0x5d, 0x6f, 0x1b, 0x41, 0x23, 0xac, 0xcd, 0x62,
 ];
 
+/// SHA-256(JCS(resolved descriptor JSON)) for the curated Lido
+/// WithdrawalQueueERC721 descriptor. The two batch-request routes may use the
+/// standard zero-address `senderAddress` sentinel only while every descriptor
+/// byte, deployment and selector still matches this reviewed enrollment.
+const LIDO_QUEUE_DESCRIPTOR_HASH: [u8; 32] = [
+    0x68, 0xf0, 0x49, 0x5c, 0x61, 0xd4, 0x94, 0x10, 0x0c, 0x46, 0x5a, 0x54, 0xbe, 0x6f, 0xdb, 0x26,
+    0xb5, 0x4d, 0xb1, 0x86, 0x86, 0x48, 0xf9, 0x85, 0x38, 0x47, 0xda, 0xfa, 0xa4, 0x51, 0x9e, 0x1f,
+];
+
 const ROUTER02_MAINNET: [u8; 20] = [
     0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
     0x86, 0x65, 0xfc, 0x45,
 ];
+const LIDO_QUEUE_MAINNET: [u8; 20] = [
+    0x88, 0x9e, 0xdc, 0x2e, 0xda, 0xb5, 0xf4, 0x0e, 0x90, 0x2b, 0x86, 0x4a, 0xd4, 0xd7, 0xad, 0xe8,
+    0xe4, 0x12, 0xf9, 0xb1,
+];
+const ADDRESS_ZERO: [u8; 20] = [0u8; 20];
 const ADDRESS_ONE: [u8; 20] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
 const ADDRESS_TWO_WORD: [u8; 32] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
 ];
 const ZERO_WORD: [u8; 32] = [0u8; 32];
 const ROUTER02_SENDER_SENTINELS: [[u8; 20]; 1] = [ADDRESS_ONE];
+const LIDO_QUEUE_SENDER_SENTINELS: [[u8; 20]; 1] = [ADDRESS_ZERO];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SemanticSenderEnrollment {
@@ -425,7 +440,7 @@ const ROUTER02_EXACT_OUTPUT_GUARDS: [SemanticWordGuard; 3] = [
     },
 ];
 
-const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 2] = [
+const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 4] = [
     SemanticFormatEnrollment {
         descriptor_hash: ROUTER02_DESCRIPTOR_HASH,
         chain_id: 1,
@@ -453,6 +468,32 @@ const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 2] = [
             sentinels: &ROUTER02_SENDER_SENTINELS,
         },
         guards: &ROUTER02_EXACT_OUTPUT_GUARDS,
+    },
+    SemanticFormatEnrollment {
+        descriptor_hash: LIDO_QUEUE_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: LIDO_QUEUE_MAINNET,
+        canonical_signature: "requestWithdrawals(uint256[],address)",
+        selector: [0xd6, 0x68, 0x10, 0x42],
+        sender: SemanticSenderEnrollment {
+            path: "#._owner",
+            terminal_type: "address",
+            sentinels: &LIDO_QUEUE_SENDER_SENTINELS,
+        },
+        guards: &[],
+    },
+    SemanticFormatEnrollment {
+        descriptor_hash: LIDO_QUEUE_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: LIDO_QUEUE_MAINNET,
+        canonical_signature: "requestWithdrawalsWstETH(uint256[],address)",
+        selector: [0x19, 0xaa, 0x62, 0x57],
+        sender: SemanticSenderEnrollment {
+            path: "#._owner",
+            terminal_type: "address",
+            sentinels: &LIDO_QUEUE_SENDER_SENTINELS,
+        },
+        guards: &[],
     },
 ];
 
@@ -12407,10 +12448,28 @@ mod tests {
     fn semantic_enrollment_selectors_are_independently_recomputed() {
         assert_eq!(PARAM_SENDER_ADDRESS, 0x49);
         assert_eq!(PARAM_WORD_GUARD, 0x4A);
-        for enrollment in SEMANTIC_FORMAT_ENROLLMENTS {
+        let expected = [
+            (
+                ROUTER02_MAINNET,
+                "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+            ),
+            (
+                ROUTER02_MAINNET,
+                "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+            ),
+            (LIDO_QUEUE_MAINNET, "requestWithdrawals(uint256[],address)"),
+            (
+                LIDO_QUEUE_MAINNET,
+                "requestWithdrawalsWstETH(uint256[],address)",
+            ),
+        ];
+        for (enrollment, (contract, signature)) in
+            SEMANTIC_FORMAT_ENROLLMENTS.into_iter().zip(expected)
+        {
             let digest = keccak256(enrollment.canonical_signature.as_bytes());
             assert_eq!(enrollment.selector, digest[..4]);
-            assert_eq!(enrollment.contract, ROUTER02_MAINNET);
+            assert_eq!(enrollment.contract, contract);
+            assert_eq!(enrollment.canonical_signature, signature);
             assert_eq!(enrollment.chain_id, 1);
         }
     }
@@ -12421,9 +12480,8 @@ mod tests {
             .parent()
             .expect("workspace root")
             .to_path_buf();
-        let descriptor = root.join(
-            "secure/data/erc7730-registry/registry/uniswap/calldata-UniswapV3Router02.json",
-        );
+        let descriptor = root
+            .join("secure/data/erc7730-registry/registry/uniswap/calldata-UniswapV3Router02.json");
         let mut drops = Vec::new();
         let entries = compile_descriptor(
             &descriptor,
@@ -12455,6 +12513,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn production_lido_queue_tolerant_compile_emits_both_sender_bound_request_routes() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf();
+        let descriptor = root
+            .join("secure/data/erc7730-registry/registry/lido/calldata-WithdrawalQueueERC721.json");
+        let erc20 = crate::erc20::build_db(&root.join("secure/data/erc20.json"))
+            .expect("build production ERC20 capabilities");
+        let mut drops = Vec::new();
+        let entries = compile_descriptor(
+            &descriptor,
+            &Policy::default(),
+            None,
+            true,
+            &mut drops,
+            &erc20.capabilities,
+        )
+        .expect("tolerant Lido queue compile");
+        assert_eq!(entries.len(), 1, "one exact mainnet deployment leaf");
+        let entry = &entries[0];
+        assert_eq!(entry.descriptor_hash, LIDO_QUEUE_DESCRIPTOR_HASH);
+        assert_eq!((entry.chain_id, entry.contract), (1, LIDO_QUEUE_MAINNET));
+
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("device accepts emitted Lido IR");
+        let selectors: BTreeSet<_> = ir
+            .format_iter()
+            .map(|format| format.expect("canonical format").selector)
+            .collect();
+        for selector in [[0xd6, 0x68, 0x10, 0x42], [0x19, 0xaa, 0x62, 0x57]] {
+            assert!(
+                selectors.contains(&selector),
+                "missing selector 0x{}; present={:?}; drops={drops:#?}",
+                hex::encode(selector),
+                selectors
+            );
+        }
+        assert_eq!(selectors.len(), 7, "five legacy plus two request routes");
+        assert_eq!(drops.len(), 4, "permit and batch-claim routes stay refused");
+    }
+
     /// Owner utility for replacing
     /// `ROUTER02_DESCRIPTOR_HASH`. This is intentionally
     /// ignored during ordinary tests because it reads the checked-in corpus.
@@ -12476,6 +12576,30 @@ mod tests {
         );
         assert_eq!(
             hash, ROUTER02_DESCRIPTOR_HASH,
+            "semantic enrollment must remain bound to exact final curation"
+        );
+    }
+
+    /// Owner utility for replacing `LIDO_QUEUE_DESCRIPTOR_HASH` after an
+    /// intentional curation update.
+    #[test]
+    #[ignore = "owner utility: prints SHA-256(JCS(resolved Lido queue descriptor))"]
+    fn print_lido_queue_descriptor_hash_after_curation() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf();
+        let descriptor = root.join(
+            "secure/data/erc7730/curations/files/registry/lido/calldata-WithdrawalQueueERC721.json",
+        );
+        let json = load_resolved_descriptor_json(&descriptor, None).expect("load descriptor");
+        let hash = sha256_of(&jcs_canonicalize(&json).expect("JCS descriptor"));
+        eprintln!(
+            "Lido queue semantic enrollment descriptor hash: 0x{}",
+            hex::encode(hash)
+        );
+        assert_eq!(
+            hash, LIDO_QUEUE_DESCRIPTOR_HASH,
             "semantic enrollment must remain bound to exact final curation"
         );
     }

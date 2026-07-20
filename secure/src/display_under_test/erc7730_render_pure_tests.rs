@@ -4763,10 +4763,14 @@ fn rw_body(amounts: &[U256], owner: [u8; 20]) -> Vec<u8> {
     b
 }
 
-fn rw_calldata(amounts: &[U256], owner: [u8; 20]) -> Vec<u8> {
-    let mut d = keccak256(b"requestWithdrawals(uint256[],address)")[..4].to_vec();
+fn rw_calldata_for(signature: &str, amounts: &[U256], owner: [u8; 20]) -> Vec<u8> {
+    let mut d = keccak256(signature.as_bytes())[..4].to_vec();
     d.extend_from_slice(&rw_body(amounts, owner));
     d
+}
+
+fn rw_calldata(amounts: &[U256], owner: [u8; 20]) -> Vec<u8> {
+    rw_calldata_for("requestWithdrawals(uint256[],address)", amounts, owner)
 }
 
 /// The Lido `_amounts.[]` array field + the format's `static_head_words`,
@@ -4963,37 +4967,182 @@ fn positive_synthetic_ref_field_renders_bound_token_amount() {
     );
 }
 
-/// Lido treats `_owner == address(0)` as the transaction sender, while nonzero
-/// values select an independent initial NFT owner. The current device cannot
-/// evaluate `senderAddress`, so neither branch may inherit trusted wording.
+/// The production Lido queue leaf clear-signs both non-permit request routes.
+/// Every amount is displayed, a zero owner is replaced only by the independently
+/// bound signer, and a literal nonzero owner remains literal. The real catalogue
+/// must retain the sole-array framing and eight-element human-review cap.
 #[test]
-fn lido_request_withdrawals_zero_and_nonzero_owner_are_no_format() {
+fn production_lido_requests_bind_amounts_and_effective_owner() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-WithdrawalQueueERC721.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Lido NFT leaf");
-    let signature = "requestWithdrawals(uint256[],address)";
-    assert_selector_excluded(&verified.ir, signature);
     let tx = envelope(1, entry.contract);
     let resolver = NameResolver::new();
     let signer = [0x92; 20];
-    for owner in [[0u8; 20], [0x55u8; 20]] {
-        let calldata = rw_calldata(&[u256_from_u64(1_000_000_000_000_000_000)], owner);
-        assert_eq!(
-            &calldata[..4],
-            &keccak256(signature.as_bytes())[..4],
-            "test must exercise the excluded requestWithdrawals selector"
-        );
+    let mut mutated_signer = signer;
+    mutated_signer[19] ^= 1;
+    let literal_owner = [0x55; 20];
+    let steth: [u8; 20] = hex::decode("ae7ab96520de3a18e5e111b5eaab095312d7fe84")
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let wsteth: [u8; 20] = hex::decode("7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0")
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+    for (signature, amount_label, owner_label, token, symbol) in [
+        (
+            "requestWithdrawals(uint256[],address)",
+            "Amount",
+            "Initial NFT own~",
+            steth,
+            &b"stETH"[..],
+        ),
+        (
+            "requestWithdrawalsWstETH(uint256[],address)",
+            "Amount to withd~",
+            "Beneficiary",
+            wsteth,
+            &b"wstETH"[..],
+        ),
+    ] {
+        let metadata = Erc20Metadata {
+            chain_id: 1,
+            contract: token,
+            decimals: 18,
+            name: symbol,
+            symbol,
+        };
+        let amounts = [
+            u256_from_u64(1_000_000_000_000_000_000),
+            u256_from_u64(2_500_000_000_000_000_000),
+            u256_from_u64(300_000_000_000_000_000),
+        ];
+        let zero_owner = rw_calldata_for(signature, &amounts, [0u8; 20]);
+        assert_selector_matches(&verified.ir, &zero_owner, signature);
+
+        assert!(matches!(
+            render_erc7730_pages(&tx, &zero_owner, &verified, Some(&metadata), &resolver),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 sender unbound"
+            ))
+        ));
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &zero_owner,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        )
+        .unwrap_or_else(|error| panic!("render zero-owner {signature}: {error:?}"));
+        assert_all_pages_printable(&rendered.pages);
+        assert_full_address_field_page(&rendered.pages, owner_label, &signer);
+        assert_full_contract_identity_page(&rendered.pages, &token);
+        let dump = dump_pages(&rendered.pages);
         assert!(
-            matches!(
-                render_erc7730_pages_with_signer_checked(
-                    &tx, &calldata, &verified, None, &resolver, &signer,
-                ),
-                Err(crate::tx::erc7730_render::RenderErr::NoFormat)
-            ),
-            "owner={} must hard-refuse as NoFormat",
-            hex::encode(owner)
+            dump.contains("3 items"),
+            "array count missing for {signature}:\n{dump}"
         );
+        assert_eq!(
+            rendered
+                .pages
+                .as_slice()
+                .iter()
+                .filter(|page| row_str(&page[0]) == amount_label)
+                .count(),
+            4,
+            "header plus every amount must render for {signature}:\n{dump}"
+        );
+        assert!(rendered
+            .transcript_receipt
+            .range_matches(&rendered.pages, 0));
+
+        let mutated = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &zero_owner,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &mutated_signer,
+        )
+        .unwrap_or_else(|error| panic!("render mutated signer {signature}: {error:?}"));
+        assert_full_address_field_page(&mutated.pages, owner_label, &mutated_signer);
+        assert_ne!(rendered.pages.as_slice(), mutated.pages.as_slice());
+        assert!(!rendered
+            .transcript_receipt
+            .exact_match(&mutated.transcript_receipt));
+
+        let literal = rw_calldata_for(signature, &amounts, literal_owner);
+        let literal_pages =
+            render_erc7730_pages(&tx, &literal, &verified, Some(&metadata), &resolver)
+                .unwrap_or_else(|error| panic!("render literal owner {signature}: {error:?}"));
+        assert_full_address_field_page(&literal_pages, owner_label, &literal_owner);
+
+        for count in [0usize, 1, 8] {
+            let values = vec![u256_from_u64(1_000_000_000_000_000_000); count];
+            let calldata = rw_calldata_for(signature, &values, [0u8; 20]);
+            let pages = render_erc7730_pages_with_signer_checked(
+                &tx,
+                &calldata,
+                &verified,
+                Some(&metadata),
+                &resolver,
+                &signer,
+            )
+            .unwrap_or_else(|error| panic!("render {count}-element {signature}: {error:?}"));
+            assert!(
+                dump_pages(&pages.pages).contains(&format!("{count} items")),
+                "array count must be explicit for {signature}"
+            );
+            assert_eq!(
+                pages
+                    .pages
+                    .as_slice()
+                    .iter()
+                    .filter(|page| row_str(&page[0]) == amount_label)
+                    .count(),
+                count + 1,
+                "header plus all {count} elements must render for {signature}"
+            );
+        }
+
+        let nine = vec![u256_from_u64(1_000_000_000_000_000_000); 9];
+        assert!(render_erc7730_pages_with_signer_checked(
+            &tx,
+            &rw_calldata_for(signature, &nine, [0u8; 20]),
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        )
+        .is_err());
+
+        let mut wrong_offset = zero_owner.clone();
+        wrong_offset[4 + 31] = 96;
+        assert!(render_erc7730_pages_with_signer_checked(
+            &tx,
+            &wrong_offset,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        )
+        .is_err());
+
+        let mut trailing = zero_owner.clone();
+        trailing.extend_from_slice(&[0u8; 32]);
+        assert!(render_erc7730_pages_with_signer_checked(
+            &tx,
+            &trailing,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        )
+        .is_err());
     }
 }
 

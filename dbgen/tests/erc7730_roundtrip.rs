@@ -378,7 +378,7 @@ fn registry_weth9_deposit_binds_value_on_exact_deployments() {
     assert_eq!(result.known_call_count, 4_542);
     assert_eq!(
         hex::encode(result.root),
-        "8980453f9ef42a7dd9948403ef1b762732d5522e0ed596e82ae037d2362cc489"
+        "a91af6790d0d33b3f2b9c7a97bbab4f2b3d254ee2fe53fd8c0bb35696af8c7b6"
     );
 }
 
@@ -1006,7 +1006,7 @@ fn registry_lido_staking_admits_visible_referrals_on_exact_mainnet_contracts() {
 }
 
 #[test]
-fn registry_lido_withdrawal_queue_pins_five_honest_routes_and_refuses_sender_sentinel() {
+fn registry_lido_withdrawal_queue_pins_seven_honest_routes_and_sender_semantics() {
     let result = build_registry();
     let entries: Vec<_> = result
         .entries
@@ -1031,6 +1031,8 @@ fn registry_lido_withdrawal_queue_pins_five_honest_routes_and_refuses_sender_sen
         "safeTransferFrom(address,address,uint256)",
         "setApprovalForAll(address,bool)",
         "transferFrom(address,address,uint256)",
+        "requestWithdrawals(uint256[],address)",
+        "requestWithdrawalsWstETH(uint256[],address)",
     ];
     let expected_selectors: BTreeSet<[u8; 4]> = admitted
         .iter()
@@ -1129,10 +1131,80 @@ fn registry_lido_withdrawal_queue_pins_five_honest_routes_and_refuses_sender_sen
         ],
     );
 
+    let sender_zero = [0u8; 20];
+    for (signature, intent, amount_label, owner_label) in [
+        (
+            "requestWithdrawals(uint256[],address)",
+            &b"Request Withdrawal"[..],
+            &b"Amount"[..],
+            &b"Initial NFT owner"[..],
+        ),
+        (
+            "requestWithdrawalsWstETH(uint256[],address)",
+            &b"Request withdrawal"[..],
+            &b"Amount to withdraw"[..],
+            &b"Beneficiary"[..],
+        ),
+    ] {
+        let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+            .try_into()
+            .expect("selector width");
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("Lido queue format table parses")
+            .unwrap_or_else(|| panic!("admitted Lido request missing: {signature}"));
+        assert_eq!(format.intent, intent);
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("Lido request field parses"))
+            .collect();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].label, amount_label);
+        assert_eq!(
+            FormatOp::try_from(fields[0].format_op),
+            Ok(FormatOp::TokenAmount)
+        );
+        assert_eq!(
+            ir.path_bytes(fields[0].path_off)
+                .expect("amount array path parses"),
+            [
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                0,
+                PathOp::ArrayAll as u8,
+            ]
+        );
+        let amount_params = parse_params(&ir, fields[0].param_off).expect("amount params parse");
+        assert_eq!(amount_params.visibility, Visibility::Always);
+        assert_eq!(amount_params.terminal_kind, Some(TerminalKind::Unsigned));
+        assert!(amount_params.sender_addresses.is_none());
+
+        assert_eq!(fields[1].label, owner_label);
+        assert_eq!(
+            FormatOp::try_from(fields[1].format_op),
+            Ok(FormatOp::AddressName)
+        );
+        assert_eq!(
+            ir.path_bytes(fields[1].path_off)
+                .expect("owner path parses"),
+            [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 1,]
+        );
+        let owner_params = parse_params(&ir, fields[1].param_off).expect("owner params parse");
+        assert_eq!(owner_params.visibility, Visibility::Always);
+        assert_eq!(owner_params.terminal_kind, Some(TerminalKind::Address));
+        assert_eq!(
+            owner_params.sender_addresses,
+            Some(sender_zero.as_slice()),
+            "zero owner must be the only authenticated sender sentinel"
+        );
+        assert!(result
+            .known_calls
+            .contains(&(entry.chain_id, entry.contract, selector)));
+    }
+
     let refused = [
-        "requestWithdrawals(uint256[],address)",
         "requestWithdrawalsWithPermit(uint256[],address,(uint256,uint256,uint8,bytes32,bytes32))",
-        "requestWithdrawalsWstETH(uint256[],address)",
         "requestWithdrawalsWstETHWithPermit(uint256[],address,(uint256,uint256,uint8,bytes32,bytes32))",
         "claimWithdrawals(uint256[],uint256[])",
         "claimWithdrawalsTo(uint256[],uint256[],address)",

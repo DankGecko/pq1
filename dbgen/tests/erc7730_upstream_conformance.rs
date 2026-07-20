@@ -40,7 +40,7 @@ const FIXTURE_RECEIPT_HEX: &str =
 // Router02's two single-hop formats are enrolled only with exact authenticated
 // guards for their sentinel and partial-fill semantics. The upstream fixture
 // bytes remain test-only and outside the catalogue.
-const PROD_ROOT_HEX: &str = "8980453f9ef42a7dd9948403ef1b762732d5522e0ed596e82ae037d2362cc489";
+const PROD_ROOT_HEX: &str = "a91af6790d0d33b3f2b9c7a97bbab4f2b3d254ee2fe53fd8c0bb35696af8c7b6";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1471,7 +1471,7 @@ fn lido_claim_positive_matches_actual_merkle_verified_pq1_pages_with_exact_waive
 }
 
 #[test]
-fn lido_withdrawal_queue_upstream_frontier_refuses_unsafe_requests_and_renders_transfers() {
+fn lido_withdrawal_queue_upstream_frontier_renders_nonpermit_request_and_transfers() {
     let relative_fixture = "registry/lido/tests/calldata-WithdrawalQueueERC721.tests.json";
     let registry = build_registry();
     let entry = registry
@@ -1488,8 +1488,45 @@ fn lido_withdrawal_queue_upstream_frontier_refuses_unsafe_requests_and_renders_t
         verify_erc7730_bundle(&bundle, &registry.root).expect("Merkle-verify Lido queue");
     cross_check_contract(&verified.ir, 1, &entry.contract).expect("bind Lido queue");
 
+    let request_signature = "requestWithdrawals(uint256[],address)";
+    let (_, raw) = fixture_case(relative_fixture, 0);
+    let parsed = eip1559::parse(&raw).expect("canonical unsigned Lido request fixture");
+    assert_eq!(parsed.tx.to, Some(entry.contract));
+    assert_eq!(
+        parsed.data.get(..4),
+        Some(&keccak256(request_signature.as_bytes())[..4])
+    );
+    assert_eq!(parsed.data.len(), 132, "one array element plus owner");
+    let owner: [u8; 20] = parsed.data[48..68].try_into().expect("request owner");
+    assert_ne!(owner, [0u8; 20], "upstream fixture uses a literal owner");
+    // The upstream amount has more nonzero fractional digits than PQ1's exact
+    // scaled display budget. Without an independently supplied ERC-20 proof,
+    // the renderer therefore shows the exact raw integer and token identity;
+    // the verified-metadata path correctly refuses this particular value
+    // instead of rounding it. Exact scaled positives are covered by the
+    // production device-render test.
+    let pages = render_erc7730_pages(
+        &parsed.tx,
+        parsed.data,
+        &verified,
+        None,
+        &NameResolver::new(),
+    )
+    .expect("render admitted Lido request fixture");
+    let rendered = normalized_rows(&pages);
+    assert!(
+        rendered.iter().any(|row| row.contains("request"))
+            && rendered.iter().any(|row| row.contains("withdraw")),
+        "Lido request intent missing: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|row| row == "1items"),
+        "array count missing: {rendered:?}"
+    );
+    let mut owner_cursor = 0usize;
+    consume_full_address(&rendered, &mut owner_cursor, &owner);
+
     for (case_index, signature) in [
-        (0usize, "requestWithdrawals(uint256[],address)"),
         (
             1,
             "requestWithdrawalsWithPermit(uint256[],address,(uint256,uint256,uint8,bytes32,bytes32))",

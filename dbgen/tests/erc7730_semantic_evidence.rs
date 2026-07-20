@@ -3549,12 +3549,12 @@ fn lido_queue_evidence_pins_upgradeable_proxy_and_official_sources() {
 }
 
 #[test]
-fn lido_queue_source_abi_descriptor_and_ir_agree_on_five_routes_and_one_refusal() {
+fn lido_queue_source_abi_descriptor_and_ir_agree_on_seven_admitted_routes() {
     let root = workspace_root();
     let evidence = lido_queue_evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));
     let routes = manifest["routes"].as_array().expect("Lido route array");
-    assert_eq!(routes.len(), 6);
+    assert_eq!(routes.len(), 7);
 
     let expected = BTreeMap::from([
         (
@@ -3606,10 +3606,20 @@ fn lido_queue_source_abi_descriptor_and_ir_agree_on_five_routes_and_one_refusal(
         (
             "requestWithdrawals(uint256[],address)",
             (
-                "refused",
+                "admitted",
                 vec![
                     ("Amount", "#._amounts.[]", "tokenAmount"),
                     ("Initial NFT owner", "#._owner", "addressName"),
+                ],
+            ),
+        ),
+        (
+            "requestWithdrawalsWstETH(uint256[],address)",
+            (
+                "admitted",
+                vec![
+                    ("Amount to withdraw", "#._amounts.[]", "tokenAmount"),
+                    ("Beneficiary", "#._owner", "addressName"),
                 ],
             ),
         ),
@@ -3654,7 +3664,17 @@ fn lido_queue_source_abi_descriptor_and_ir_agree_on_five_routes_and_one_refusal(
             "function requestWithdrawals(uint256[] calldata _amounts, address _owner)",
             "if (_owner == address(0)) _owner = msg.sender;",
             "requestIds = new uint256[](_amounts.length);",
+            "_checkWithdrawalRequestAmount(_amounts[i]);",
             "requestIds[i] = _requestWithdrawal(_amounts[i], _owner);",
+        ],
+    );
+    assert_fragments_in_order(
+        queue,
+        &[
+            "function requestWithdrawalsWstETH(uint256[] calldata _amounts, address _owner)",
+            "if (_owner == address(0)) _owner = msg.sender;",
+            "requestIds = new uint256[](_amounts.length);",
+            "requestIds[i] = _requestWithdrawalWstETH(_amounts[i], _owner);",
         ],
     );
     assert_fragments_in_order(
@@ -3664,6 +3684,18 @@ fn lido_queue_source_abi_descriptor_and_ir_agree_on_five_routes_and_one_refusal(
             "STETH.transferFrom(msg.sender, address(this), _amountOfStETH);",
             "uint256 amountOfShares = STETH.getSharesByPooledEth(_amountOfStETH);",
             "requestId = _enqueue(uint128(_amountOfStETH), uint128(amountOfShares), _owner);",
+            "_emitTransfer(address(0), _owner, requestId);",
+        ],
+    );
+    assert_fragments_in_order(
+        queue,
+        &[
+            "function _requestWithdrawalWstETH(uint256 _amountOfWstETH, address _owner)",
+            "WSTETH.transferFrom(msg.sender, address(this), _amountOfWstETH);",
+            "uint256 amountOfStETH = WSTETH.unwrap(_amountOfWstETH);",
+            "_checkWithdrawalRequestAmount(amountOfStETH);",
+            "uint256 amountOfShares = STETH.getSharesByPooledEth(amountOfStETH);",
+            "requestId = _enqueue(uint128(amountOfStETH), uint128(amountOfShares), _owner);",
             "_emitTransfer(address(0), _owner, requestId);",
         ],
     );
@@ -3799,15 +3831,20 @@ fn lido_queue_source_abi_descriptor_and_ir_agree_on_five_routes_and_one_refusal(
             assert_eq!(field["format"].as_str(), Some(*format));
         }
     }
-    let request = descriptor_formats
-        .iter()
-        .find(|(authored, _)| canonicalize(authored) == "requestWithdrawals(uint256[],address)")
-        .expect("requestWithdrawals descriptor format")
-        .1;
-    assert_eq!(
-        request["fields"][1]["params"]["senderAddress"][0].as_str(),
-        Some("0x0000000000000000000000000000000000000000")
-    );
+    for signature in [
+        "requestWithdrawals(uint256[],address)",
+        "requestWithdrawalsWstETH(uint256[],address)",
+    ] {
+        let request = descriptor_formats
+            .iter()
+            .find(|(authored, _)| canonicalize(authored) == signature)
+            .unwrap_or_else(|| panic!("{signature} descriptor format"))
+            .1;
+        assert_eq!(
+            request["fields"][1]["params"]["senderAddress"][0].as_str(),
+            Some("0x0000000000000000000000000000000000000000")
+        );
+    }
 
     let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
         .expect("build production ERC20 capability corpus");
@@ -3862,5 +3899,57 @@ fn lido_queue_source_abi_descriptor_and_ir_agree_on_five_routes_and_one_refusal(
             "{} must remain an exact known-call tuple",
             required_str(route, "canonical_signature")
         );
+    }
+
+    let sender_zero = [0u8; 20];
+    for signature in [
+        "requestWithdrawals(uint256[],address)",
+        "requestWithdrawalsWstETH(uint256[],address)",
+    ] {
+        let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+            .try_into()
+            .expect("selector width");
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("Lido queue format table parses")
+            .expect("request route is admitted");
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("request field parses"))
+            .collect();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(
+            FormatOp::try_from(fields[0].format_op),
+            Ok(FormatOp::TokenAmount)
+        );
+        assert_eq!(
+            ir.path_bytes(fields[0].path_off)
+                .expect("request amount path parses"),
+            [
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                0,
+                PathOp::ArrayAll as u8,
+            ]
+        );
+        let amount = parse_params(&ir, fields[0].param_off).expect("amount params parse");
+        assert_eq!(amount.visibility, Visibility::Always);
+        assert_eq!(amount.terminal_kind, Some(TerminalKind::Unsigned));
+        assert!(amount.sender_addresses.is_none());
+
+        assert_eq!(
+            FormatOp::try_from(fields[1].format_op),
+            Ok(FormatOp::AddressName)
+        );
+        assert_eq!(
+            ir.path_bytes(fields[1].path_off)
+                .expect("request owner path parses"),
+            [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 1,]
+        );
+        let owner = parse_params(&ir, fields[1].param_off).expect("owner params parse");
+        assert_eq!(owner.visibility, Visibility::Always);
+        assert_eq!(owner.terminal_kind, Some(TerminalKind::Address));
+        assert_eq!(owner.sender_addresses, Some(sender_zero.as_slice()));
     }
 }
