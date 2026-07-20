@@ -6344,12 +6344,12 @@ fn erc2612_permit_with_hidden_owner_is_excluded() {
 // Tier B: canonical dynamic tokenPath framing — Uniswap swaps.
 //
 // Endpoint tokenPaths identify amount metadata; they do not display a complete
-// signed packed route or address array. Router02 also assigns protocol meaning
-// to sentinel recipients and zero amounts. The production source is therefore
-// entirely excluded until PQ1 can authenticate and enforce those semantics.
-// All six declared calls remain known hard refusals. A process-private safe
-// fixture adds `path.[]`, preserving the runtime extraction/framing backstop
-// while requiring all route addresses to reach the display.
+// signed packed route or address array. The two all-static Router02 single-hop
+// calls are admitted only with authenticated recipient/amount/price/value
+// semantics. The four broader routes remain absent and known hard refusals. A
+// process-private safe fixture adds `path.[]`, preserving the runtime
+// extraction/framing backstop while requiring all route addresses to reach the
+// display.
 // ───────────────────────────────────────────────────────────────────────
 const UNI_V3: [u8; 20] = [
     0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
@@ -6358,25 +6358,74 @@ const UNI_V3: [u8; 20] = [
 const TOKEN_IN: [u8; 20] = [0x11; 20];
 const TOKEN_MID: [u8; 20] = [0xAB; 20];
 const TOKEN_OUT: [u8; 20] = [0x22; 20];
+const UNI_EXACT_INPUT_SINGLE: &str =
+    "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))";
+const UNI_EXACT_OUTPUT_SINGLE: &str =
+    "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))";
+
+fn calldata_uniswap_single(
+    signature: &str,
+    recipient: [u8; 20],
+    first_amount: u64,
+    second_amount: u64,
+    sqrt_price_limit_x96: u64,
+) -> Vec<u8> {
+    calldata_static(
+        signature,
+        &[
+            abi_address_word(TOKEN_IN),
+            abi_address_word(TOKEN_OUT),
+            u256_from_u64(3_000).0,
+            abi_address_word(recipient),
+            u256_from_u64(first_amount).0,
+            u256_from_u64(second_amount).0,
+            u256_from_u64(sqrt_price_limit_x96).0,
+        ],
+    )
+}
+
+fn calldata_uniswap_exact_input(recipient: [u8; 20]) -> Vec<u8> {
+    calldata_uniswap_single(UNI_EXACT_INPUT_SINGLE, recipient, 1_500_000, 1_000_000, 0)
+}
+
+fn calldata_uniswap_exact_output(recipient: [u8; 20]) -> Vec<u8> {
+    calldata_uniswap_single(UNI_EXACT_OUTPUT_SINGLE, recipient, 1_000_000, 1_500_000, 0)
+}
 
 #[test]
-fn production_uniswap_router02_is_excluded_but_every_declared_call_stays_known() {
+fn production_uniswap_router02_admits_only_guarded_single_hop_and_keeps_all_calls_known() {
     let registry = build_registry();
-    assert_registry_source_excluded("calldata-UniswapV3Router02.json");
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Router02 IR parses");
+    assert_eq!(ir.format_count(), Ok(2));
+
+    for signature in [UNI_EXACT_INPUT_SINGLE, UNI_EXACT_OUTPUT_SINGLE] {
+        let selector = keccak256(signature.as_bytes());
+        let key: [u8; 4] = selector[..4].try_into().expect("selector width");
+        assert!(
+            ir.find_format_by_selector(&key)
+                .expect("Router02 format table parses")
+                .is_some(),
+            "guarded Router02 single-hop call must be admitted: {signature}"
+        );
+    }
 
     for signature in [
-        "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))",
-        "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))",
+        UNI_EXACT_INPUT_SINGLE,
+        UNI_EXACT_OUTPUT_SINGLE,
         "exactInput((bytes,address,uint256,uint256))",
         "exactOutput((bytes,address,uint256,uint256))",
         "swapExactTokensForTokens(uint256,uint256,address[],address)",
         "swapTokensForExactTokens(uint256,uint256,address[],address)",
     ] {
+        if signature != UNI_EXACT_INPUT_SINGLE && signature != UNI_EXACT_OUTPUT_SINGLE {
+            assert_selector_excluded(&ir, signature);
+        }
         let digest = keccak256(signature.as_bytes());
         let selector: [u8; 4] = digest[..4].try_into().expect("selector width");
         assert!(
             registry.known_calls.contains(&(1, UNI_V3, selector)),
-            "excluded Router02 call must remain known and fail closed: {signature}"
+            "every Router02 call must remain exactly known: {signature}"
         );
         assert!(
             pqsigner_erc7730::known_calls::may_contain(
@@ -6385,7 +6434,258 @@ fn production_uniswap_router02_is_excluded_but_every_declared_call_stays_known()
                 &UNI_V3,
                 &selector,
             ),
-            "excluded Router02 call must remain in the fail-closed Bloom: {signature}"
+            "every Router02 call must remain in the fail-closed Bloom: {signature}"
+        );
+    }
+}
+
+#[test]
+fn production_uniswap_router02_single_hop_zero_price_and_value_render_literal_recipient() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let recipient = [0x33; 20];
+
+    for (signature, calldata) in [
+        (
+            UNI_EXACT_INPUT_SINGLE,
+            calldata_uniswap_exact_input(recipient),
+        ),
+        (
+            UNI_EXACT_OUTPUT_SINGLE,
+            calldata_uniswap_exact_output(recipient),
+        ),
+    ] {
+        assert_selector_matches(&verified.ir, &calldata, signature);
+        let pages = render_erc7730_pages(&tx, &calldata, &verified, None, &resolver)
+            .unwrap_or_else(|error| panic!("render {signature}: {error:?}"));
+        assert_all_pages_printable(&pages);
+        assert_full_address_field_page(&pages, "Beneficiary", &recipient);
+        assert_raw_word_pages(&pages, "Price limit", &[0u8; 32]);
+        let native_value = page_strs(&pages, find_page_by_label(&pages, "Native value"));
+        assert!(
+            native_value.iter().any(|row| row.contains('0')),
+            "zero outer value must be visible for {signature}: {native_value:?}"
+        );
+    }
+}
+
+#[test]
+fn production_uniswap_router02_sender_sentinel_binds_only_the_authenticated_signer() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let mut sender_sentinel = [0u8; 20];
+    sender_sentinel[19] = 1;
+    let signer = [0x44; 20];
+    let mut mutated_signer = signer;
+    mutated_signer[19] ^= 1;
+
+    for (signature, calldata) in [
+        (
+            UNI_EXACT_INPUT_SINGLE,
+            calldata_uniswap_exact_input(sender_sentinel),
+        ),
+        (
+            UNI_EXACT_OUTPUT_SINGLE,
+            calldata_uniswap_exact_output(sender_sentinel),
+        ),
+    ] {
+        assert!(matches!(
+            render_erc7730_pages(&tx, &calldata, &verified, None, &resolver),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 sender unbound"
+            ))
+        ));
+
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &calldata, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render sentinel {signature}: {error:?}"));
+        assert_full_address_field_page(&rendered.pages, "Beneficiary", &signer);
+        assert!(
+            rendered
+                .transcript_receipt
+                .range_matches(&rendered.pages, 0),
+            "sentinel render receipt must bind every page for {signature}"
+        );
+
+        let mutated = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &calldata,
+            &verified,
+            None,
+            &resolver,
+            &mutated_signer,
+        )
+        .unwrap_or_else(|error| panic!("render mutated signer {signature}: {error:?}"));
+        assert_full_address_field_page(&mutated.pages, "Beneficiary", &mutated_signer);
+        assert_ne!(rendered.pages.as_slice(), mutated.pages.as_slice());
+        assert!(
+            !rendered
+                .transcript_receipt
+                .exact_match(&mutated.transcript_receipt),
+            "signer mutation must change the trusted transcript for {signature}"
+        );
+    }
+}
+
+#[test]
+fn production_uniswap_router02_semantic_guards_and_static_framing_fail_closed() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let recipient = [0x33; 20];
+    let render = |envelope: &Eip1559Tx, calldata: &[u8]| {
+        render_erc7730_pages_with_signer_checked(
+            envelope, calldata, &verified, None, &resolver, &signer,
+        )
+    };
+
+    let mut sender_two = [0u8; 20];
+    sender_two[19] = 2;
+    for calldata in [
+        calldata_uniswap_exact_input(sender_two),
+        calldata_uniswap_exact_output(sender_two),
+    ] {
+        assert!(render(&tx, &calldata).is_err(), "address(2) must refuse");
+    }
+
+    let zero_exact_input =
+        calldata_uniswap_single(UNI_EXACT_INPUT_SINGLE, recipient, 0, 1_000_000, 0);
+    assert!(
+        render(&tx, &zero_exact_input).is_err(),
+        "zero exactInput amount must refuse"
+    );
+
+    for (signature, baseline) in [
+        (
+            UNI_EXACT_INPUT_SINGLE,
+            calldata_uniswap_exact_input(recipient),
+        ),
+        (
+            UNI_EXACT_OUTPUT_SINGLE,
+            calldata_uniswap_exact_output(recipient),
+        ),
+    ] {
+        let mut nonzero_price = baseline.clone();
+        nonzero_price[4 + 6 * 32 + 31] = 1;
+        assert!(
+            render(&tx, &nonzero_price).is_err(),
+            "nonzero price limit must refuse {signature}"
+        );
+
+        let mut funded = envelope(1, UNI_V3);
+        funded.value = u256_from_u64(1);
+        assert!(
+            render(&funded, &baseline).is_err(),
+            "nonzero outer value must refuse {signature}"
+        );
+
+        let mut short = baseline.clone();
+        short.pop();
+        assert!(
+            render(&tx, &short).is_err(),
+            "short static tuple must refuse {signature}"
+        );
+        let mut trailing = baseline.clone();
+        trailing.push(0);
+        assert!(
+            render(&tx, &trailing).is_err(),
+            "trailing static data must refuse {signature}"
+        );
+
+        for (word, label) in [
+            (0usize, "dirty tokenIn address"),
+            (2usize, "dirty uint24 fee"),
+            (3usize, "dirty recipient address"),
+            (6usize, "dirty uint160 price"),
+        ] {
+            let mut dirty = baseline.clone();
+            dirty[4 + word * 32] = 1;
+            assert!(
+                render(&tx, &dirty).is_err(),
+                "{label} must refuse {signature}"
+            );
+        }
+    }
+}
+
+#[test]
+fn production_uniswap_router02_tuple_and_value_mutations_change_transcript_or_refuse() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let recipient = [0x33; 20];
+
+    for (signature, baseline) in [
+        (
+            UNI_EXACT_INPUT_SINGLE,
+            calldata_uniswap_exact_input(recipient),
+        ),
+        (
+            UNI_EXACT_OUTPUT_SINGLE,
+            calldata_uniswap_exact_output(recipient),
+        ),
+    ] {
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &baseline, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render baseline {signature}: {error:?}"));
+
+        for word in 0..7usize {
+            let mut mutated_calldata = baseline.clone();
+            mutated_calldata[4 + word * 32 + 31] ^= 1;
+            match render_erc7730_pages_with_signer_checked(
+                &tx,
+                &mutated_calldata,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            ) {
+                Ok(mutated) => {
+                    assert_ne!(
+                        rendered.pages.as_slice(),
+                        mutated.pages.as_slice(),
+                        "tuple word {word} mutation must change pages for {signature}"
+                    );
+                    assert!(
+                        !rendered
+                            .transcript_receipt
+                            .exact_match(&mutated.transcript_receipt),
+                        "tuple word {word} mutation must change receipt for {signature}"
+                    );
+                }
+                Err(_) => assert_eq!(
+                    word, 6,
+                    "only the guarded price word should reject a canonical low-byte mutation for {signature}"
+                ),
+            }
+        }
+
+        let mut funded = envelope(1, UNI_V3);
+        funded.value = u256_from_u64(1);
+        assert!(
+            render_erc7730_pages_with_signer_checked(
+                &funded, &baseline, &verified, None, &resolver, &signer,
+            )
+            .is_err(),
+            "outer value mutation must refuse {signature}"
         );
     }
 }
@@ -6492,7 +6792,9 @@ fn render_safe_uni(calldata: &[u8], token: Option<&Erc20Metadata<'_>>) -> Pages 
 
 fn assert_uniswap_router_call_excluded_but_known(signature: &str) {
     let registry = build_registry();
-    assert_registry_source_excluded("calldata-UniswapV3Router02.json");
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Router02 IR parses");
+    assert_selector_excluded(&ir, signature);
     let digest = keccak256(signature.as_bytes());
     let selector: [u8; 4] = digest[..4].try_into().expect("selector width");
     assert!(
