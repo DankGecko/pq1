@@ -37,10 +37,10 @@ const UPSTREAM_SHA: &str = "784c87c925e8438e7b4736b2af85a501f8d2a265";
 const FIXTURE_RECEIPT_DOMAIN: &[u8] = b"pqsigner/erc7730-excluded-fixture-corpus-v1";
 const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
-// Router02's two single-hop formats are deliberately excluded until PQ1 can
-// enforce their sentinel and partial-fill semantics. The upstream fixture
+// Router02's two single-hop formats are enrolled only with exact authenticated
+// guards for their sentinel and partial-fill semantics. The upstream fixture
 // bytes remain test-only and outside the catalogue.
-const PROD_ROOT_HEX: &str = "fda42f17fbb7b344f893c52199597e46edf3ae7413062d7cc44dd9bbfe6d2467";
+const PROD_ROOT_HEX: &str = "8980453f9ef42a7dd9948403ef1b762732d5522e0ed596e82ae037d2362cc489";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -911,6 +911,21 @@ fn upstream_fixture_targets_are_inventoried_at_format_granularity() {
     let fixture_without_accepted_format: BTreeSet<_> =
         fixture_targets.difference(&accepted).collect();
 
+    for selector in [[0x04, 0xe4, 0x5a, 0xaf], [0x50, 0x23, 0xb4, 0xdf]] {
+        let router02_single_hop = FormatKey {
+            source: PathBuf::from("uniswap/calldata-UniswapV3Router02.json"),
+            id: FormatId::Calldata(selector),
+        };
+        assert!(
+            fixture_targets.contains(&router02_single_hop),
+            "Router02 single-hop selector is absent from the pinned upstream fixtures"
+        );
+        assert!(
+            accepted.contains(&router02_single_hop),
+            "Router02 single-hop selector is absent from the production catalogue"
+        );
+    }
+
     let policy: Value = serde_json::from_slice(
         &std::fs::read(fixture_root().join("projection-policy.json"))
             .expect("read projection policy"),
@@ -1198,10 +1213,10 @@ fn upstream_fixture_corpus_is_exact_test_only_and_honestly_inventoried() {
                 .to_path_buf()
         })
         .collect();
-    assert_eq!(accepted.len(), 229);
-    assert_eq!(accepted.intersection(&tested_descriptors).count(), 144);
+    assert_eq!(accepted.len(), 230);
+    assert_eq!(accepted.intersection(&tested_descriptors).count(), 145);
     assert_eq!(accepted.difference(&tested_descriptors).count(), 85);
-    assert_eq!(tested_descriptors.difference(&accepted).count(), 128);
+    assert_eq!(tested_descriptors.difference(&accepted).count(), 127);
 }
 
 fn synth_bundle(blob: &[u8], ir_bytes: &[u8], leaf_index: usize) -> Vec<u8> {
