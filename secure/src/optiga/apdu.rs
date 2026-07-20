@@ -12,7 +12,10 @@
 //!
 //! CMD bytes always carry the `CLEAR_LAST_ERROR` flag (0x80) — the chip uses
 //! the low 7 bits to select the operation. E.g. GetDataObject is sent as
-//! `0x81`, not `0x01`.
+//! `0x81`, not `0x01`. The one exception is [`read_last_error`]: the MSB-
+//! triggered flush has priority over command evaluation (SRM footnote to
+//! Table "Command Codes"), so reading the Last Error Code object with `0x81`
+//! would clear it before the read executes — that helper sends bare `0x01`.
 //!
 //! InData is **positional** for the primitives we use (not TLV). GetDataObject
 //! InData is `OID(2) | Offset(2) | Length(2)`; SetDataObject InData is
@@ -295,14 +298,31 @@ const DTYPE_PBS:     u8 = 0x22;
 const DTYPE_AUTHREF: u8 = 0x31;
 
 // ---------------------------------------------------------------------------
-// OPTIGA status codes (low byte of response status)
+// OPTIGA status codes
 // ---------------------------------------------------------------------------
 
-const OPTIGA_STATUS_SUCCESS:        u8 = 0x00;
-const OPTIGA_ERR_INVALID_PASSWORD:  u8 = 0x02;
-const OPTIGA_ERR_ACCESS_DENIED:     u8 = 0x07;
-const OPTIGA_ERR_COUNTER_EXCEEDED:  u8 = 0x0E;
-const OPTIGA_ERR_AUTH_FAILURE:      u8 = 0x2F;
+/// Response `Sta` byte: success.
+///
+/// Per SRM v3.70 §"Response Status Codes" the ONLY other value V3 silicon
+/// returns is 0xFF ("general error") — the specific reason is stored in the
+/// Last Error Code data object (0xF1C2, see [`read_last_error`]), never in
+/// `Sta`. An earlier revision of this file mapped per-reason `Sta` values
+/// (0x02 / 0x07 / 0x0E / 0x2F) onto `PinIncorrect` / `PinLocked`; those arms
+/// were dead code on real silicon (and 0x02 does not exist in the V3 error
+/// table at all — the codes are Last-Error-Code values: 0x07 = access
+/// conditions not satisfied, 0x0E = counter threshold exceeded, 0x2F =
+/// authorization failure). PIN semantics are derived from context instead:
+/// the E120 pre-check supplies `PinLocked` and the verify call site in
+/// `authenticate_and_read` collapses a chip-level `Status(_)` refusal to
+/// `PinIncorrect`.
+const OPTIGA_STATUS_SUCCESS: u8 = 0x00;
+
+/// Last Error Code data object (SRM §"Common data structures"). One byte;
+/// cleared when read, and implicitly flushed by any Cmd byte with the MSB
+/// set — which is every command this driver sends except the dedicated
+/// reader below.
+#[cfg(feature = "debug-log")]
+const OID_LAST_ERROR: u16 = 0xF1C2;
 
 // ---------------------------------------------------------------------------
 // APDU builder
@@ -388,13 +408,13 @@ fn parse_response(resp: &[u8], len: usize) -> Result<&[u8], OptigaError> {
     let data_len = ((resp[2] as usize) << 8) | resp[3] as usize;
 
     if status != OPTIGA_STATUS_SUCCESS {
-        return Err(match status {
-            OPTIGA_ERR_INVALID_PASSWORD
-            | OPTIGA_ERR_AUTH_FAILURE
-            | OPTIGA_ERR_ACCESS_DENIED => OptigaError::PinIncorrect,
-            OPTIGA_ERR_COUNTER_EXCEEDED => OptigaError::PinLocked,
-            _ => OptigaError::Status(status),
-        });
+        // In practice `status` is 0xFF: V3 silicon puts the specific
+        // reason in the Last Error Code object (0xF1C2), not in `Sta`.
+        // Surface the opaque chip verdict; callers that need PIN
+        // semantics derive them from context (E120 lockout pre-check,
+        // verify-site collapse in `authenticate_and_read`) — never from
+        // this byte.
+        return Err(OptigaError::Status(status));
     }
 
     if 4 + data_len > len {
@@ -449,6 +469,35 @@ pub unsafe fn open_application(ifx: &mut IfxState) -> Result<(), OptigaError> {
     let n = ifx.transceive(apdu, &mut resp)?;
     let _ = parse_response(&resp, n)?;
     Ok(())
+}
+
+/// Read (and thereby clear) the 1-byte Last Error Code object (0xF1C2) —
+/// the only place V3 silicon reports WHY a command failed (`Sta` itself is
+/// just 0xFF; see [`OPTIGA_STATUS_SUCCESS`]).
+///
+/// Diagnostics only: control flow must never branch on the returned code
+/// (PIN semantics come from the E120 pre-check + verify-site collapse),
+/// and any failure here returns `None` rather than turning a failed
+/// exchange into a second hard error.
+///
+/// Sends `CMD_GET_DATA_OBJECT & !CMD_CLEAR_LAST_ERROR` (bare 0x01): the
+/// MSB-triggered flush has priority over command evaluation, so an 0x81
+/// read would zero the code before the read executes.
+#[cfg(feature = "debug-log")]
+pub unsafe fn read_last_error(
+    ifx: &mut IfxState,
+    shield: &mut ShieldedConnection,
+) -> Option<u8> {
+    let mut ab = ApduBuf::new(CMD_GET_DATA_OBJECT & !CMD_CLEAR_LAST_ERROR, PARAM_DATA);
+    ab.write_u16(OID_LAST_ERROR);
+    ab.write_u16(0x0000);
+    ab.write_u16(0x0001);
+    let apdu = ab.finish();
+
+    let mut resp = [0u8; 16];
+    let n = send_command(ifx, shield, apdu, &mut resp).ok()?;
+    let payload = parse_response(&resp, n).ok()?;
+    payload.first().copied()
 }
 
 /// `SetObjectProtected` — commit a CBOR-signed manifest or fragment.

@@ -136,9 +136,12 @@ impl OptigaTrustM {
             #[cfg(feature = "stm32u585")]
             crate::pin_diag::run();
 
-            // Cold-boot settle: the datasheet STARTUP_TIME is worst-case
-            // 12 s but typical warm-reset is 15 ms. Wait 50 ms — enough for
-            // warm reset, covered by the retry loop for colder starts.
+            // Post-reset settle: datasheet v3.70 Tables 13/14 require the
+            // host to wait tSTARTUP ≥ 15 ms after power-on or the RST
+            // rising edge, extended to 20 ms max when NVM programming was
+            // pending before the reset. 8 M cycles is ≥ 50 ms wall-clock —
+            // comfortable margin, and the probe retry loop below covers
+            // anything slower.
             //
             // Use `cortex_m::asm::delay(N)` instead of a hand-rolled NOP
             // loop. LTO is legally allowed to drop the loop counter around
@@ -1510,7 +1513,8 @@ impl OptigaTrustM {
     /// MUST be called inside a session that has already HMAC-verified
     /// `OID_AUTH_REF` this session — E120's Change AC is
     /// `Auto(OID_AUTH_REF)`, so without that the SetDataObject rejects
-    /// with `OPTIGA_ERR_ACCESS_DENIED`. `authenticate_and_read` calls
+    /// (Sta=0xFF; Last Error Code 0x07, access conditions not
+    /// satisfied). `authenticate_and_read` calls
     /// this right after a successful `hmac_verify` (same session, same
     /// AuthRef still authorized).
     #[cfg(feature = "optiga-hw-counter")]
@@ -2276,9 +2280,11 @@ impl OptigaTrustM {
             // Under `optiga-hw-counter` the silicon counter at E120
             // replaces the F1E1 soft counter:
             //   - "attempts exceeded" gate is enforced by the chip via
-            //     LUC(E120) on F1D0's Execute AC; a locked-out chip
-            //     returns `OPTIGA_ERR_COUNTER_EXCEEDED` from hmac_verify
-            //     without consuming further silicon budget.
+            //     LUC(E120) on F1D0's Execute AC; a locked-out chip fails
+            //     hmac_verify with Sta=0xFF (Last Error Code 0x0E, counter
+            //     threshold exceeded) without consuming further silicon
+            //     budget. The firmware-visible lockout verdict comes from
+            //     the E120 read below, not from the status byte.
             //   - The pre-verify bump (and its CRIT-6 readback) is gone
             //     — silicon does the bump atomically, a glitch that
             //     suppresses it also suppresses the verify itself
@@ -2466,10 +2472,28 @@ impl OptigaTrustM {
                 }
                 Err(e) => {
                     secure_log!("[OPTIGA/auth] hmac_verify FAILED: {:?}", e);
+                    // Diagnostics only (bring-up builds): fetch the chip's
+                    // Last Error Code — 0x2F = authorization failure (wrong
+                    // PIN), 0x0E = LUC threshold exceeded, 0x07 = access
+                    // conditions not satisfied. Control flow deliberately
+                    // does NOT branch on it: lockout is pre-checked via
+                    // E120 above, and any chip-level refusal maps to
+                    // PinIncorrect below.
+                    #[cfg(feature = "debug-log")]
+                    {
+                        if let Some(lec) =
+                            apdu::read_last_error(&mut self.ifx, &mut self.shield)
+                        {
+                            secure_log!("[OPTIGA/auth] last error code = 0x{:02x}", lec);
+                        }
+                    }
+                    // `Sta` is only 0x00/0xFF on V3 silicon (see
+                    // `apdu::parse_response`): a `Status(_)` here is "the
+                    // chip answered no", which — with the lockout already
+                    // pre-checked — means wrong PIN. Bus-level faults keep
+                    // their own variants so callers can distinguish.
                     return Err(match e {
-                        OptigaError::PinIncorrect
-                        | OptigaError::Status(_)
-                        | OptigaError::PinLocked => OptigaError::PinIncorrect,
+                        OptigaError::Status(_) => OptigaError::PinIncorrect,
                         other => other,
                     });
                 }

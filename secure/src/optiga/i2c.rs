@@ -25,6 +25,27 @@ pub enum I2cError {
 
 const TIMEOUT_LOOPS: u32 = 1_000_000;
 
+/// GUARD_TIME pad — Trust M requires ≥ 50 µs from the STOP of one
+/// transaction to the START of the next on the same device (SRM
+/// "Protocol stack variation": GUARD_TIME = 50 µs; datasheet bring-up
+/// notes: "the specified guard time must be applied between each
+/// attempt of write / read operation by the Host", and per the IFX I2C
+/// spec it must be respected even if another address — i.e. the SE050
+/// on this shared bus — was accessed in between). Every OPTIGA
+/// transaction funnels through [`write`] / [`read`] / [`probe_addr`],
+/// so a leading pad here enforces the bound structurally instead of
+/// relying on inter-transaction code-path latency: the DATA-read →
+/// ACK-write turn in `ifx_i2c::receive_response` could otherwise
+/// restart in single-digit µs after a short frame. 8 000 cycles is
+/// 50 µs nominal at 160 MHz (~150 µs wall-clock with the ~3× `delay`
+/// calibration — see `pin_diag.rs`), still ≪ one frame time at
+/// 400 kHz, so the throughput cost is noise. Violations were
+/// previously absorbed by NACK-retry loops; a pad is deterministic.
+#[inline]
+fn guard_time_pad() {
+    cortex_m::asm::delay(8_000);
+}
+
 // ---------------------------------------------------------------------------
 // I2C1 register block — typed handles so the unsafe register-address
 // construction happens exactly once at module scope.
@@ -112,6 +133,7 @@ fn configure_transfer(addr: u8, nbytes: u8, direction: u32, flags: u32) {
 /// Probe a single 7-bit I2C address with a 0-byte write. Returns `Ok(())`
 /// iff the slave ACKs.
 pub fn probe_addr(addr: u8) -> Result<(), I2cError> {
+    guard_time_pad();
     REG.icr.write(ICR_NACKCF | ICR_STOPCF | ICR_BERRCF | ICR_ARLOCF);
 
     let cr2: u32 = ((addr as u32) << 1)
@@ -177,6 +199,8 @@ pub fn write(data: &[u8]) -> Result<(), I2cError> {
         return Ok(());
     }
 
+    guard_time_pad();
+
     let mut offset = 0;
     while offset < total {
         let remaining = total - offset;
@@ -216,6 +240,8 @@ pub fn read(buf: &mut [u8]) -> Result<(), I2cError> {
     if total == 0 {
         return Ok(());
     }
+
+    guard_time_pad();
 
     let mut offset = 0;
     while offset < total {
