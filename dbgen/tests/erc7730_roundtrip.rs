@@ -286,21 +286,21 @@ fn registry_aave_v3_lending_and_permits_cover_every_unique_deployment() {
         430,
         "the bounded DeFi curation phase must add exactly two catalogue leaves"
     );
-    assert_eq!(result.known_call_count, 4_542);
+    assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b",
+        "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781",
         "format acceptance must not change the declared known-call tuple set"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "270a4bc71332868cbdc75c81a1cc92da8669a37e2bead6b7d193974b3e1d431d",
+        "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628",
         "format acceptance must not change the known-call Bloom"
     );
 }
 
 #[test]
-fn registry_weth9_deposit_binds_value_on_exact_deployments() {
+fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     let result = build_registry();
     let entries: Vec<_> = result
         .entries
@@ -328,23 +328,34 @@ fn registry_weth9_deposit_binds_value_on_exact_deployments() {
         .collect();
     assert_eq!(actual_deployments, expected_deployments);
 
-    let selector: [u8; 4] = keccak256(b"deposit()")[..4]
+    let deposit_selector: [u8; 4] = keccak256(b"deposit()")[..4]
         .try_into()
         .expect("selector width");
-    assert_eq!(selector, [0xd0, 0xe3, 0x0d, 0xb0]);
+    assert_eq!(deposit_selector, [0xd0, 0xe3, 0x0d, 0xb0]);
+    let withdraw_selector: [u8; 4] = keccak256(b"withdraw(uint256)")[..4]
+        .try_into()
+        .expect("selector width");
+    assert_eq!(withdraw_selector, [0x2e, 0x1a, 0x7d, 0x4d]);
     let mut value_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
     value_path.extend_from_slice(&container_field::VALUE.to_be_bytes());
+    let withdraw_amount_path = [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0];
+    let mut token_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+    token_path.extend_from_slice(&container_field::TO.to_be_bytes());
 
     for entry in entries {
-        assert_eq!(entry.ir_bytes.len(), 173, "WETH9 IR size drifted");
+        assert_eq!(entry.ir_bytes.len(), 218, "WETH9 IR size drifted");
         let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated WETH9 IR parses");
         let formats: Vec<_> = ir
             .format_iter()
             .map(|format| format.expect("WETH9 format parses"))
             .collect();
-        assert_eq!(formats.len(), 1, "WETH9 admits only deposit()");
+        assert_eq!(
+            formats.len(),
+            2,
+            "WETH9 admits deposit() and withdraw(uint256)"
+        );
         let deposit = ir
-            .find_format_by_selector(&selector)
+            .find_format_by_selector(&deposit_selector)
             .expect("WETH9 format table parses")
             .expect("deposit() remains admitted");
         assert_eq!(deposit.intent, b"Wrap");
@@ -371,14 +382,50 @@ fn registry_weth9_deposit_binds_value_on_exact_deployments() {
         assert_eq!(params.integer_width_bytes, Some(32));
         assert!(result
             .known_calls
-            .contains(&(entry.chain_id, entry.contract, selector)));
+            .contains(&(entry.chain_id, entry.contract, deposit_selector)));
+
+        let withdraw = ir
+            .find_format_by_selector(&withdraw_selector)
+            .expect("WETH9 format table parses")
+            .expect("withdraw(uint256) is admitted only on the pinned deployments");
+        assert_eq!(withdraw.intent, b"Unwrap");
+        assert_eq!(withdraw.static_head_words, 1);
+        let fields: Vec<_> = withdraw
+            .fields()
+            .map(|field| field.expect("WETH9 withdraw field parses"))
+            .collect();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].label, b"Amount");
+        assert_eq!(
+            FormatOp::try_from(fields[0].format_op),
+            Ok(FormatOp::TokenAmount)
+        );
+        assert_eq!(
+            ir.path_bytes(fields[0].path_off)
+                .expect("WETH9 withdraw amount path parses"),
+            withdraw_amount_path,
+            "withdraw amount must bind calldata word zero"
+        );
+        let params =
+            parse_params(&ir, fields[0].param_off).expect("WETH9 withdraw amount params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+        assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+        assert_eq!(params.integer_width_bytes, Some(32));
+        assert_eq!(
+            params.token_path,
+            Some(token_path.as_slice()),
+            "withdraw amount must bind token identity to the exact transaction target"
+        );
+        assert!(result
+            .known_calls
+            .contains(&(entry.chain_id, entry.contract, withdraw_selector)));
     }
 
     assert_eq!(result.entries.len(), 430);
-    assert_eq!(result.known_call_count, 4_542);
+    assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.root),
-        "a91af6790d0d33b3f2b9c7a97bbab4f2b3d254ee2fe53fd8c0bb35696af8c7b6"
+        "d4f227c97e7c0e1163f8d63ae2a9b2a01024e633b1360683f5ce343b12cdb6ce"
     );
 }
 
@@ -486,14 +533,14 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
         430,
         "Aave V2 already owned three leaves"
     );
-    assert_eq!(result.known_call_count, 4_542);
+    assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b"
+        "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "270a4bc71332868cbdc75c81a1cc92da8669a37e2bead6b7d193974b3e1d431d"
+        "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628"
     );
 }
 
@@ -706,14 +753,14 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
     }
 
     assert_eq!(result.entries.len(), 430);
-    assert_eq!(result.known_call_count, 4_542);
+    assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b"
+        "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "270a4bc71332868cbdc75c81a1cc92da8669a37e2bead6b7d193974b3e1d431d"
+        "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628"
     );
 }
 
@@ -814,14 +861,14 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
     }
 
     assert_eq!(result.entries.len(), 430);
-    assert_eq!(result.known_call_count, 4_542);
+    assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b"
+        "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "270a4bc71332868cbdc75c81a1cc92da8669a37e2bead6b7d193974b3e1d431d"
+        "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628"
     );
 }
 
@@ -1352,14 +1399,14 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
     );
 
     assert_eq!(result.entries.len(), 430);
-    assert_eq!(result.known_call_count, 4_542);
+    assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b"
+        "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "270a4bc71332868cbdc75c81a1cc92da8669a37e2bead6b7d193974b3e1d431d"
+        "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628"
     );
 }
 

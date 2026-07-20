@@ -40,7 +40,7 @@ const FIXTURE_RECEIPT_HEX: &str =
 // Router02's two single-hop formats are enrolled only with exact authenticated
 // guards for their sentinel and partial-fill semantics. The upstream fixture
 // bytes remain test-only and outside the catalogue.
-const PROD_ROOT_HEX: &str = "a91af6790d0d33b3f2b9c7a97bbab4f2b3d254ee2fe53fd8c0bb35696af8c7b6";
+const PROD_ROOT_HEX: &str = "d4f227c97e7c0e1163f8d63ae2a9b2a01024e633b1360683f5ce343b12cdb6ce";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2689,7 +2689,7 @@ fn weth_upstream_positive_with_trailing_calldata_is_an_explicit_pq1_refusal() {
 }
 
 #[test]
-fn weth_canonical_deposit_renders_on_each_pinned_deployment_and_binds_value() {
+fn weth_canonical_deposit_and_withdraw_render_on_each_pinned_deployment() {
     fn value(raw: u64) -> U256 {
         let mut bytes = [0u8; 32];
         bytes[24..].copy_from_slice(&raw.to_be_bytes());
@@ -2697,8 +2697,12 @@ fn weth_canonical_deposit_renders_on_each_pinned_deployment_and_binds_value() {
     }
 
     let registry = build_registry();
-    let selector = &keccak256(b"deposit()")[..4];
-    assert_eq!(selector, [0xd0, 0xe3, 0x0d, 0xb0]);
+    let deposit_selector = &keccak256(b"deposit()")[..4];
+    assert_eq!(deposit_selector, [0xd0, 0xe3, 0x0d, 0xb0]);
+    let withdraw_selector = &keccak256(b"withdraw(uint256)")[..4];
+    assert_eq!(withdraw_selector, [0x2e, 0x1a, 0x7d, 0x4d]);
+    let records = dbgen::load_erc20_records(&workspace_root().join("secure/data/erc20.json"))
+        .expect("load production ERC20 metadata");
     for (chain_id, address) in [
         (1, "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
         (11_155_111, "fff9976782d46cc05630d1f6ebab18b2324d6b14"),
@@ -2721,25 +2725,109 @@ fn weth_canonical_deposit_renders_on_each_pinned_deployment_and_binds_value() {
         let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify WETH9 leaf");
         cross_check_contract(&verified.ir, chain_id, &contract).expect("bind WETH9 deployment");
 
-        let render_value = |raw| {
+        let render_deposit = |raw| {
             let tx = Eip1559Tx {
                 chain_id,
                 to: Some(contract),
                 value: value(raw),
-                data_len: selector.len(),
+                data_len: deposit_selector.len(),
                 ..Eip1559Tx::default()
             };
-            let pages = render_erc7730_pages(&tx, selector, &verified, None, &NameResolver::new())
-                .expect("canonical four-byte WETH9 deposit renders");
+            let pages =
+                render_erc7730_pages(&tx, deposit_selector, &verified, None, &NameResolver::new())
+                    .expect("canonical four-byte WETH9 deposit renders");
             normalized_rows(&pages)
         };
-        let half = render_value(500_000_000_000_000_000);
-        let one = render_value(1_000_000_000_000_000_000);
+        let half = render_deposit(500_000_000_000_000_000);
+        let one = render_deposit(1_000_000_000_000_000_000);
         assert!(half.iter().any(|row| row == "0.5eth"), "rows={half:?}");
         assert!(one.iter().any(|row| row == "1eth"), "rows={one:?}");
         assert_ne!(
             half, one,
             "distinct signed values need distinct transcripts"
         );
+
+        let record = records.iter().find(|record| {
+            record.chain_id == chain_id
+                && dbgen::parse_hex_address(&record.address).ok() == Some(contract)
+        });
+        let metadata = if chain_id == 1 {
+            let record = record.expect("production mainnet WETH metadata");
+            assert_eq!(
+                (
+                    record.name.as_str(),
+                    record.symbol.as_str(),
+                    record.decimals
+                ),
+                ("Wrapped Ether", "WETH", 18)
+            );
+            Some(Erc20Metadata {
+                chain_id,
+                contract,
+                decimals: record.decimals,
+                name: record.name.as_bytes(),
+                symbol: record.symbol.as_bytes(),
+            })
+        } else {
+            assert!(
+                record.is_none(),
+                "Sepolia WETH must not gain an unreviewed production metadata scale"
+            );
+            None
+        };
+        let render_withdraw = |raw| {
+            let mut calldata = withdraw_selector.to_vec();
+            calldata.extend_from_slice(&value(raw).0);
+            let tx = Eip1559Tx {
+                chain_id,
+                to: Some(contract),
+                data_len: calldata.len(),
+                ..Eip1559Tx::default()
+            };
+            let pages = render_erc7730_pages(
+                &tx,
+                &calldata,
+                &verified,
+                metadata.as_ref(),
+                &NameResolver::new(),
+            )
+            .expect("canonical WETH9 withdraw renders");
+            (pages, calldata)
+        };
+        let (half_withdraw_pages, half_withdraw_calldata) =
+            render_withdraw(500_000_000_000_000_000);
+        assert_eq!(half_withdraw_calldata.len(), 36);
+        assert_eq!(
+            &half_withdraw_calldata[4..],
+            &value(500_000_000_000_000_000).0,
+            "the rendered amount must be the exact calldata word"
+        );
+        let half_withdraw = normalized_rows(&half_withdraw_pages);
+        assert!(
+            half_withdraw.iter().any(|row| row == "unwrap"),
+            "withdraw intent is absent: {half_withdraw:?}"
+        );
+        let (one_withdraw_pages, _) = render_withdraw(1_000_000_000_000_000_000);
+        let one_withdraw = normalized_rows(&one_withdraw_pages);
+        assert_ne!(
+            half_withdraw, one_withdraw,
+            "distinct signed withdraw words need distinct transcripts"
+        );
+        if chain_id == 1 {
+            assert!(
+                half_withdraw.iter().any(|row| row == "0.5weth"),
+                "mainnet metadata must scale the exact word as WETH: {half_withdraw:?}"
+            );
+            let mut cursor = 0;
+            consume_full_address(&half_withdraw, &mut cursor, &contract);
+        } else {
+            assert!(
+                half_withdraw.join("").contains("500000000000000000")
+                    && half_withdraw.iter().any(|row| row == "!raw,dec=?"),
+                "Sepolia without metadata must expose the exact raw amount: {half_withdraw:?}"
+            );
+            let mut cursor = 0;
+            consume_full_address(&half_withdraw, &mut cursor, &contract);
+        }
     }
 }

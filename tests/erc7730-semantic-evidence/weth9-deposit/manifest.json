@@ -1,9 +1,7 @@
 {
   "schema_version": 1,
-  "scope": "WETH9 deposit() semantic evidence for the two PQ1-admitted Ethereum and Sepolia deployments",
+  "scope": "WETH9 deposit() and withdraw(uint256) semantic evidence for the two PQ1-admitted Ethereum and Sepolia deployments",
   "captured_at_utc": "2026-07-19T20:59:42Z",
-  "canonical_signature": "deposit()",
-  "selector": "0xd0e30db0",
   "descriptor": {
     "vendored_file": "secure/data/erc7730-registry/registry/weth/calldata-weth.json",
     "chain_deployments": [
@@ -15,20 +13,49 @@
         "chain_id": 11155111,
         "address": "0xfff9976782d46cc05630d1f6ebab18b2324d6b14"
       }
-    ],
-    "intent": "Wrap",
-    "displayed_signed_fact": {
-      "path": "@.value",
-      "label": "Amount",
-      "format": "amount"
+    ]
+  },
+  "routes": [
+    {
+      "key": "deposit",
+      "descriptor_signature": "deposit()",
+      "canonical_signature": "deposit()",
+      "selector": "0xd0e30db0",
+      "intent": "Wrap",
+      "state_mutability": "payable",
+      "displayed_signed_facts": [
+        {
+          "path": "@.value",
+          "label": "Amount",
+          "format": "amount",
+          "visibility": "always"
+        }
+      ],
+      "successful_effect": "Credits balanceOf[msg.sender] by exactly msg.value and emits Deposit(msg.sender, msg.value).",
+      "signed_display_binding": "The descriptor's @.value is the exact transaction value consumed by deposit(); deposit() has no calldata operands.",
+      "state_residual": "The prior and resulting WETH balance and contract ETH balance are live state. This fixed-block receipt does not claim future state or later code."
+    },
+    {
+      "key": "withdraw",
+      "descriptor_signature": "withdraw(uint256 wad)",
+      "canonical_signature": "withdraw(uint256)",
+      "selector": "0x2e1a7d4d",
+      "intent": "Unwrap",
+      "state_mutability": "nonpayable",
+      "displayed_signed_facts": [
+        {
+          "path": "wad",
+          "label": "Amount",
+          "format": "tokenAmount",
+          "token_path": "@.to",
+          "visibility": "always"
+        }
+      ],
+      "successful_effect": "Requires balanceOf[msg.sender] >= wad, subtracts exactly wad from that balance, transfers exactly wad wei of native ETH to msg.sender, and emits Withdrawal(msg.sender, wad).",
+      "signed_display_binding": "The displayed amount is the exact uint256 calldata word. tokenPath @.to binds its WETH identity to the authenticated exact target deployment; the payout recipient is necessarily msg.sender rather than a hidden calldata operand.",
+      "state_residual": "The caller's current WETH balance, the contract's ETH balance, and recipient acceptance determine success. This fixed-block receipt does not claim transaction success, future state, or later code."
     }
-  },
-  "semantic_effect": {
-    "payable": true,
-    "successful_effect": "Credits balanceOf[msg.sender] by exactly msg.value and emits Deposit(msg.sender, msg.value).",
-    "signed_display_binding": "The descriptor's @.value is the exact transaction value consumed by deposit(); deposit() has no calldata operands.",
-    "state_residual": "The prior and resulting WETH balance and contract ETH balance are live state. This fixed-block receipt does not claim future state or later code."
-  },
+  ],
   "deployments": [
     {
       "network": "ethereum-mainnet",
@@ -158,17 +185,18 @@
       "archived_normalization": "One final LF added",
       "archived_file_sha256": "7ec89ea43310a5bd6dfe2151c41a26d248a1ccfb10761b991f5edf6ab63d4cbb"
     },
-    "source_difference": "The archived DappHub revision names the contract WETH9_; deployed verified sources name it WETH9, and Sepolia adds an Etherscan submission header. The deposit body and all executable semantics are otherwise identical."
+    "source_difference": "The archived DappHub revision names the contract WETH9_; deployed verified sources name it WETH9, and Sepolia adds an Etherscan submission header. The deposit and withdraw bodies and all executable semantics are otherwise identical."
   },
   "abi": {
     "archive_file": "abi/WETH9.abi.json",
     "archive_file_sha256": "9b45a4dee4322ccf1aa56451bd7e1ddeed5defb6d656e5df577f03f9a578f2dd",
     "entries": 16,
     "full_verified_abi_canonical_sha256": "a9a75d59dacd1f34f6d2a6c4072dd1b7b13c7367b7010ad76f218809c4f68a32",
-    "agreement": "Mainnet and Sepolia Blockscout verified ABIs have the same canonical JSON hash; deposit() is payable with no inputs or outputs."
+    "agreement": "Mainnet and Sepolia Blockscout verified ABIs have the same canonical JSON hash; deposit() is payable with no inputs or outputs, and withdraw(uint256) is nonpayable with one uint256 wad input and no outputs."
   },
   "rpc_receipt": {
     "file": "rpc/fixed-block-receipt.json",
-    "file_sha256": "8ab462b9802af185a3a73d433cb141eafa57f16cf921891491b459a2c191b6a2"
+    "file_sha256": "8ab462b9802af185a3a73d433cb141eafa57f16cf921891491b459a2c191b6a2",
+    "capture_label_boundary": "The immutable receipt retains its original deposit() label, but its complete-runtime, proxy-slot, and metadata observations bind the whole deployed WETH9 implementation, including withdraw(uint256)."
   }
 }

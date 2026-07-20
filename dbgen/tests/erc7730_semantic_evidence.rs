@@ -187,7 +187,7 @@ fn eip712_domain_separator(
 }
 
 #[test]
-fn weth9_deposit_descriptor_and_generated_ir_bind_msg_value_on_both_deployments() {
+fn weth9_deposit_and_withdraw_descriptor_and_generated_ir_bind_exact_signed_amounts() {
     let root = workspace_root();
     let descriptor_path =
         root.join("secure/data/erc7730-registry/registry/weth/calldata-weth.json");
@@ -221,25 +221,57 @@ fn weth9_deposit_descriptor_and_generated_ir_bind_msg_value_on_both_deployments(
         .collect();
     assert_eq!(actual_deployments, expected_deployments);
 
-    let descriptor_format = &descriptor["display"]["formats"]["deposit()"];
-    assert_eq!(descriptor_format["intent"].as_str(), Some("Wrap"));
-    let descriptor_fields = descriptor_format["fields"]
+    let descriptor_formats = descriptor["display"]["formats"]
+        .as_object()
+        .expect("WETH descriptor formats");
+    assert_eq!(
+        descriptor_formats
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["deposit()", "withdraw(uint256 wad)"])
+    );
+
+    let deposit_descriptor = &descriptor_formats["deposit()"];
+    assert_eq!(deposit_descriptor["intent"].as_str(), Some("Wrap"));
+    let deposit_fields = deposit_descriptor["fields"]
         .as_array()
         .expect("WETH deposit fields");
-    assert_eq!(descriptor_fields.len(), 1);
-    assert_eq!(descriptor_fields[0]["label"].as_str(), Some("Amount"));
-    assert_eq!(descriptor_fields[0]["path"].as_str(), Some("@.value"));
-    assert_eq!(descriptor_fields[0]["format"].as_str(), Some("amount"));
+    assert_eq!(deposit_fields.len(), 1);
+    assert_eq!(deposit_fields[0]["label"].as_str(), Some("Amount"));
+    assert_eq!(deposit_fields[0]["path"].as_str(), Some("@.value"));
+    assert_eq!(deposit_fields[0]["format"].as_str(), Some("amount"));
     assert!(
-        descriptor_fields[0].get("params").is_none(),
+        deposit_fields[0].get("params").is_none(),
         "native value semantics must come from the authenticated @.value path, not host metadata"
     );
 
-    let signature = "deposit()";
-    let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+    let withdraw_descriptor = &descriptor_formats["withdraw(uint256 wad)"];
+    assert_eq!(withdraw_descriptor["intent"].as_str(), Some("Unwrap"));
+    let withdraw_fields = withdraw_descriptor["fields"]
+        .as_array()
+        .expect("WETH withdraw fields");
+    assert_eq!(withdraw_fields.len(), 1);
+    assert_eq!(withdraw_fields[0]["label"].as_str(), Some("Amount"));
+    assert_eq!(withdraw_fields[0]["path"].as_str(), Some("wad"));
+    assert_eq!(withdraw_fields[0]["format"].as_str(), Some("tokenAmount"));
+    assert_eq!(withdraw_fields[0]["visible"].as_str(), Some("always"));
+    assert_eq!(
+        withdraw_fields[0]["params"]["tokenPath"].as_str(),
+        Some("@.to"),
+        "withdraw amount identity must be the authenticated exact target contract"
+    );
+
+    let deposit_signature = "deposit()";
+    let deposit_selector: [u8; 4] = keccak256(deposit_signature.as_bytes())[..4]
         .try_into()
         .expect("deposit selector width");
-    assert_eq!(selector, [0xd0, 0xe3, 0x0d, 0xb0]);
+    assert_eq!(deposit_selector, [0xd0, 0xe3, 0x0d, 0xb0]);
+    let withdraw_signature = "withdraw(uint256)";
+    let withdraw_selector: [u8; 4] = keccak256(withdraw_signature.as_bytes())[..4]
+        .try_into()
+        .expect("withdraw selector width");
+    assert_eq!(withdraw_selector, [0x2e, 0x1a, 0x7d, 0x4d]);
 
     let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
         .expect("build production ERC20 capability corpus");
@@ -261,7 +293,7 @@ fn weth9_deposit_descriptor_and_generated_ir_bind_msg_value_on_both_deployments(
     assert_eq!(entries.len(), 2, "both WETH deployments must emit leaves");
 
     let expected_descriptor_hash: [u8; 32] =
-        decode_hex_text("9aa323ffec9549882000f358cd1a051e552cb7e7451c8e73b59f9408334bd462")
+        decode_hex_text("e0e7cdedb3078b0ae2542baf084a519a0897a295ae75bf92fc18cfb89f2293e2")
             .try_into()
             .expect("descriptor hash width");
     for entry in entries {
@@ -271,7 +303,7 @@ fn weth9_deposit_descriptor_and_generated_ir_bind_msg_value_on_both_deployments(
             "generated WETH leaf deployment drifted"
         );
         assert_eq!(entry.descriptor_hash, expected_descriptor_hash);
-        assert_eq!(entry.ir_bytes.len(), 173, "WETH IR wire length drifted");
+        assert_eq!(entry.ir_bytes.len(), 218, "WETH IR wire length drifted");
 
         let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("parse generated WETH IR");
         assert_eq!(
@@ -280,17 +312,17 @@ fn weth9_deposit_descriptor_and_generated_ir_bind_msg_value_on_both_deployments(
         );
         assert_eq!(ir.owner, b"WETH");
         assert_eq!(ir.contract_name, b"WETH");
-        assert_eq!(ir.format_count(), Ok(1));
+        assert_eq!(ir.format_count(), Ok(2));
 
-        let format = ir
-            .find_format_by_selector(&selector)
+        let deposit = ir
+            .find_format_by_selector(&deposit_selector)
             .expect("WETH format table parses")
             .expect("deposit remains admitted");
-        assert_eq!(format.selector, selector);
-        assert_eq!(format.intent, b"Wrap");
-        assert_eq!(format.static_head_words, 0);
-        assert_eq!(format.nested_descent_count, 0);
-        let fields: Vec<_> = format
+        assert_eq!(deposit.selector, deposit_selector);
+        assert_eq!(deposit.intent, b"Wrap");
+        assert_eq!(deposit.static_head_words, 0);
+        assert_eq!(deposit.nested_descent_count, 0);
+        let fields: Vec<_> = deposit
             .fields()
             .map(|field| field.expect("WETH deposit field parses"))
             .collect();
@@ -312,6 +344,49 @@ fn weth9_deposit_descriptor_and_generated_ir_bind_msg_value_on_both_deployments(
         assert_eq!(params.integer_width_bytes, Some(32));
         assert!(params.token.is_none());
         assert!(params.token_path.is_none());
+
+        let withdraw = ir
+            .find_format_by_selector(&withdraw_selector)
+            .expect("WETH format table parses")
+            .expect("withdraw remains admitted");
+        assert_eq!(withdraw.selector, withdraw_selector);
+        assert_eq!(withdraw.intent, b"Unwrap");
+        assert_eq!(withdraw.static_head_words, 1);
+        assert_eq!(withdraw.nested_descent_count, 0);
+        let fields: Vec<_> = withdraw
+            .fields()
+            .map(|field| field.expect("WETH withdraw field parses"))
+            .collect();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].label, b"Amount");
+        assert_eq!(
+            FormatOp::try_from(fields[0].format_op),
+            Ok(FormatOp::TokenAmount)
+        );
+        assert_eq!(
+            ir.path_bytes(fields[0].path_off)
+                .expect("WETH withdraw amount path parses"),
+            [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0],
+            "withdraw must display the exact first uint256 calldata word"
+        );
+        let params =
+            parse_params(&ir, fields[0].param_off).expect("WETH token amount params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+        assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+        assert_eq!(params.integer_width_bytes, Some(32));
+        assert!(params.token.is_none());
+        let mut target_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+        target_path.extend_from_slice(&container_field::TO.to_be_bytes());
+        assert_eq!(params.token_path, Some(target_path.as_slice()));
+
+        for selector in [deposit_selector, withdraw_selector] {
+            assert!(
+                registry
+                    .known_calls
+                    .contains(&(entry.chain_id, entry.contract, selector)),
+                "each admitted WETH route must be an exact known-call tuple"
+            );
+        }
     }
 }
 
@@ -320,13 +395,67 @@ fn weth9_fixed_block_evidence_binds_source_abi_runtime_and_rpc_agreement() {
     let evidence = weth9_evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));
     assert_eq!(manifest["schema_version"].as_u64(), Some(1));
-    assert_eq!(required_str(&manifest, "canonical_signature"), "deposit()");
-    assert_eq!(required_str(&manifest, "selector"), "0xd0e30db0");
-    assert_eq!(manifest["semantic_effect"]["payable"].as_bool(), Some(true));
+    let routes = manifest["routes"].as_array().expect("WETH9 routes");
+    assert_eq!(routes.len(), 2);
+    let route_by_key: BTreeMap<_, _> = routes
+        .iter()
+        .map(|route| (required_str(route, "key"), route))
+        .collect();
     assert_eq!(
-        required_str(&manifest["descriptor"]["displayed_signed_fact"], "path"),
+        route_by_key.keys().copied().collect::<BTreeSet<_>>(),
+        BTreeSet::from(["deposit", "withdraw"])
+    );
+    let deposit_route = route_by_key["deposit"];
+    assert_eq!(
+        required_str(deposit_route, "descriptor_signature"),
+        "deposit()"
+    );
+    assert_eq!(
+        required_str(deposit_route, "canonical_signature"),
+        "deposit()"
+    );
+    assert_eq!(required_str(deposit_route, "selector"), "0xd0e30db0");
+    assert_eq!(required_str(deposit_route, "state_mutability"), "payable");
+    assert_eq!(
+        required_str(&deposit_route["displayed_signed_facts"][0], "path"),
         "@.value"
     );
+    assert_eq!(
+        required_str(deposit_route, "successful_effect"),
+        "Credits balanceOf[msg.sender] by exactly msg.value and emits Deposit(msg.sender, msg.value)."
+    );
+
+    let withdraw_route = route_by_key["withdraw"];
+    assert_eq!(
+        required_str(withdraw_route, "descriptor_signature"),
+        "withdraw(uint256 wad)"
+    );
+    assert_eq!(
+        required_str(withdraw_route, "canonical_signature"),
+        "withdraw(uint256)"
+    );
+    assert_eq!(required_str(withdraw_route, "selector"), "0x2e1a7d4d");
+    assert_eq!(
+        required_str(withdraw_route, "state_mutability"),
+        "nonpayable"
+    );
+    let withdraw_fact = &withdraw_route["displayed_signed_facts"][0];
+    assert_eq!(required_str(withdraw_fact, "path"), "wad");
+    assert_eq!(required_str(withdraw_fact, "format"), "tokenAmount");
+    assert_eq!(required_str(withdraw_fact, "token_path"), "@.to");
+    assert_eq!(required_str(withdraw_fact, "visibility"), "always");
+    assert_eq!(
+        required_str(withdraw_route, "successful_effect"),
+        "Requires balanceOf[msg.sender] >= wad, subtracts exactly wad from that balance, transfers exactly wad wei of native ETH to msg.sender, and emits Withdrawal(msg.sender, wad)."
+    );
+    for route in routes {
+        let signature = required_str(route, "canonical_signature");
+        assert_eq!(
+            format!("0x{}", hex::encode(&keccak256(signature.as_bytes())[..4])),
+            required_str(route, "selector"),
+            "WETH9 route selector drifted"
+        );
+    }
 
     let receipt_spec = &manifest["rpc_receipt"];
     let receipt_path = evidence.join(required_str(receipt_spec, "file"));
@@ -339,12 +468,15 @@ fn weth9_fixed_block_evidence_binds_source_abi_runtime_and_rpc_agreement() {
     assert_eq!(receipt["schema_version"].as_u64(), Some(1));
     assert_eq!(
         required_str(&receipt, "canonical_signature"),
-        required_str(&manifest, "canonical_signature")
+        required_str(deposit_route, "canonical_signature"),
+        "the immutable receipt retains its original deposit capture label"
     );
     assert_eq!(
         required_str(&receipt, "selector"),
-        required_str(&manifest, "selector")
+        required_str(deposit_route, "selector")
     );
+    assert!(required_str(receipt_spec, "capture_label_boundary")
+        .contains("complete-runtime, proxy-slot, and metadata observations"));
 
     let receipt_networks = receipt["networks"]
         .as_array()
@@ -503,7 +635,18 @@ fn weth9_fixed_block_evidence_binds_source_abi_runtime_and_rpc_agreement() {
                 "balanceOf[msg.sender] += msg.value;",
                 "Deposit(msg.sender, msg.value);",
                 "}",
+                "function withdraw(uint wad) public {",
+                "require(balanceOf[msg.sender] >= wad);",
+                "balanceOf[msg.sender] -= wad;",
+                "msg.sender.transfer(wad);",
+                "Withdrawal(msg.sender, wad);",
+                "}",
             ],
+        );
+        assert_eq!(
+            normalized_solidity_function(&source, "function withdraw(uint wad) public"),
+            "function withdraw(uint wad) public { require(balanceOf[msg.sender] >= wad); balanceOf[msg.sender] -= wad; msg.sender.transfer(wad); Withdrawal(msg.sender, wad); }",
+            "the pinned withdrawal must debit, pay, and report the same exact signed wad"
         );
         sources.push(source);
     }
@@ -539,6 +682,31 @@ fn weth9_fixed_block_evidence_binds_source_abi_runtime_and_rpc_agreement() {
     assert_eq!(deposit["stateMutability"].as_str(), Some("payable"));
     assert_eq!(deposit["inputs"].as_array().map(Vec::len), Some(0));
     assert_eq!(deposit["outputs"].as_array().map(Vec::len), Some(0));
+    let withdraw = abi
+        .as_array()
+        .expect("WETH9 ABI array")
+        .iter()
+        .find(|entry| {
+            entry["type"].as_str() == Some("function") && entry["name"].as_str() == Some("withdraw")
+        })
+        .expect("withdraw ABI entry");
+    assert_eq!(withdraw["stateMutability"].as_str(), Some("nonpayable"));
+    assert_eq!(withdraw["payable"].as_bool(), Some(false));
+    let withdraw_inputs = withdraw["inputs"].as_array().expect("withdraw ABI inputs");
+    assert_eq!(withdraw_inputs.len(), 1);
+    assert_eq!(withdraw_inputs[0]["name"].as_str(), Some("wad"));
+    assert_eq!(withdraw_inputs[0]["type"].as_str(), Some("uint256"));
+    assert_eq!(withdraw["outputs"].as_array().map(Vec::len), Some(0));
+    assert_eq!(
+        format!(
+            "{}({})",
+            withdraw["name"].as_str().expect("withdraw ABI name"),
+            withdraw_inputs[0]["type"]
+                .as_str()
+                .expect("withdraw ABI input type")
+        ),
+        required_str(withdraw_route, "canonical_signature")
+    );
 
     let mainnet_record = &manifest["deployments"][0]["official_deployment_record"];
     let deployment_bytes = fs::read(evidence.join(required_str(mainnet_record, "archived_file")))
@@ -3194,7 +3362,11 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
     );
 
     let payment_dependency = &manifest["payment_dependency"];
-    for key in ["swap_router_package", "swap_router_lock", "v3_periphery_source"] {
+    for key in [
+        "swap_router_package",
+        "swap_router_lock",
+        "v3_periphery_source",
+    ] {
         let receipt = &payment_dependency[key];
         let bytes = fs::read(evidence.join(required_str(receipt, "archive_file")))
             .unwrap_or_else(|error| panic!("read Uniswap dependency {key}: {error}"));
@@ -3212,13 +3384,13 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
         payment_dependency["v3_periphery_source"]["locked_tarball_file_sha256"].as_str(),
         payment_dependency["v3_periphery_source"]["sha256"].as_str()
     );
-    let payments = normalized_whitespace(&fs::read_to_string(
-        evidence.join(required_str(
+    let payments = normalized_whitespace(
+        &fs::read_to_string(evidence.join(required_str(
             &payment_dependency["v3_periphery_source"],
             "archive_file",
-        )),
-    )
-    .expect("read pinned PeripheryPayments source"));
+        )))
+        .expect("read pinned PeripheryPayments source"),
+    );
     assert_fragments_in_order(
         &payments,
         &[
@@ -3355,7 +3527,11 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
                 == Some("calldata-UniswapV3Router02.json")
         })
         .collect();
-    assert_eq!(router_entries.len(), 1, "one exact Router02 deployment leaf");
+    assert_eq!(
+        router_entries.len(),
+        1,
+        "one exact Router02 deployment leaf"
+    );
     let ir = Erc7730Ir::parse(&router_entries[0].ir_bytes).expect("parse restored Router02 IR");
     assert_eq!(ir.format_count(), Ok(2));
     for (signature, selector) in expected_routes {

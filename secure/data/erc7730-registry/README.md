@@ -6,7 +6,7 @@ The exact commit/tree and curation-manifest identity are machine-owned by the
 managed receipt below; they are not duplicated in hand-maintained prose. The
 checked-in corpus is **not byte-identical to that upstream revision**: the
 firmware-pinned `ERC7730_DESCRIPTORS_ROOT` is derived from the upstream baseline
-plus the 23 reviewed full-file replacements listed below, under
+plus the 25 reviewed full-file replacements listed below, under
 `secure/data/erc7730/policy.toml`. The strict manifest at
 `secure/data/erc7730/curations/manifest.json` binds the upstream repository,
 commit, tree, v2 schema, pristine/excluded/curated corpus receipts, policy,
@@ -42,16 +42,16 @@ tuple-set SHA-256, and Bloom bytes. Merkle-root or Bloom equality alone is not
 accepted as a faithfulness proof.
 
 <!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
-Checked-in curated receipt, verified against a fresh build by `--check`: **430 leaves**, **365,223-byte**
+Checked-in curated receipt, verified against a fresh build by `--check`: **430 leaves**, **365,313-byte**
 compiled companion catalogue, root
-`a91af6790d0d33b3f2b9c7a97bbab4f2b3d254ee2fe53fd8c0bb35696af8c7b6`,
-**4,542** canonical known-call tuples, tuple-set SHA-256
-`96ea46d23d2f321a81030b77a61a243a003c1ceb6d0dca8df32ba838bcc0c88b`.
+`d4f227c97e7c0e1163f8d63ae2a9b2a01024e633b1360683f5ce343b12cdb6ce`,
+**4,544** canonical known-call tuples, tuple-set SHA-256
+`593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781`.
 Curation manifest SHA-256
-`f26917e96befd161039f602d6420059d1a62c70b33c34e0017a1b36a71b3672a` binds upstream commit
+`9a25fb8446bd9f4c75b257a723858112dee9a8858cc46c3d8f25e5a418f74915` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
-The Bloom contains 28,235 / 131,072 set bits, below the generator's 25% cap.
+The Bloom contains 28,248 / 131,072 set bits, below the generator's 25% cap.
 <!-- END XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
 
 The `.pqsigner-erc7730-vendor` file is an exact machine-owned directory
@@ -60,13 +60,14 @@ the machine-checked source/overlay identities live in the curation manifest,
 while the generated catalogue authority remains in the artifacts and managed
 receipt above.
 
-Current reviewed full-file replacements (23):
+Current reviewed full-file replacements (25):
 
 - `registry/aave/calldata-WrappedTokenGatewayV3.json`
 - `registry/aave/calldata-lpv2.json`
 - `registry/aave/calldata-lpv3.json`
 - `registry/flyingtulip/calldata-PftNft.json`
 - `registry/flyingtulip/eip712-PftMarketplace-BuyOffer.json`
+- `registry/lido/calldata-WithdrawalQueueERC721.json`
 - `registry/lido/calldata-stETH.json`
 - `registry/lido/calldata-wstETH-referral-staker.json`
 - `registry/lido/calldata-wstETH.json`
@@ -85,6 +86,7 @@ Current reviewed full-file replacements (23):
 - `registry/uniswap/eip712-UniswapX-LimitOrder.json`
 - `registry/uniswap/eip712-uniswap-V2DutchOrder.json`
 - `registry/uniswap/eip712-uniswap-permit2.json`
+- `registry/weth/calldata-weth.json`
 
 Do not make ad-hoc edits outside that reviewed curation set. Adding, removing,
 or changing a curation requires the same review and root-rotation ceremony.

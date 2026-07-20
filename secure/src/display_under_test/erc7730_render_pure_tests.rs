@@ -430,6 +430,15 @@ fn calldata_deposit() -> Vec<u8> {
     vec![0xd0, 0xe3, 0x0d, 0xb0]
 }
 
+/// Canonical WETH9 `withdraw(uint256)` calldata. The amount is a full-width
+/// unsigned word, so every one of its 32 bytes is effect-bearing.
+fn calldata_weth_withdraw(amount: U256) -> Vec<u8> {
+    let mut data = Vec::with_capacity(36);
+    data.extend_from_slice(&[0x2e, 0x1a, 0x7d, 0x4d]);
+    data.extend_from_slice(&amount.0);
+    data
+}
+
 /// Aave V3 `borrow(address asset, uint256 amount, uint256 interestRateMode,
 /// uint16 referralCode, address onBehalfOf)` — all-static 5-word head.
 /// Used to exercise the `enum` formatter on `interestRateMode`.
@@ -2031,7 +2040,7 @@ fn positive_usdt_transfer_polygon_chain_pinning() {
 }
 
 #[test]
-fn positive_weth_deposit_pulls_value_from_envelope() {
+fn positive_weth_deposit_and_withdraw_bind_exact_amounts() {
     let res = build_registry();
     let calldata = calldata_deposit();
     assert_eq!(calldata, [0xd0, 0xe3, 0x0d, 0xb0]);
@@ -2083,11 +2092,101 @@ fn positive_weth_deposit_pulls_value_from_envelope() {
             ))
         ));
 
-        let mut withdraw = keccak256(b"withdraw(uint256)")[..4].to_vec();
-        withdraw.extend_from_slice(&u256_from_u64(1).0);
+        let metadata = (chain_id == 1).then_some(Erc20Metadata {
+            chain_id,
+            contract: entry.contract,
+            decimals: 18,
+            name: b"Wrapped Ether",
+            symbol: b"WETH",
+        });
+        let render_withdraw = |amount| {
+            let withdraw = calldata_weth_withdraw(u256_from_u64(amount));
+            let tx = envelope(chain_id, entry.contract);
+            let pages = render_erc7730_pages(
+                &tx,
+                &withdraw,
+                &verified,
+                metadata.as_ref(),
+                &NameResolver::new(),
+            )
+            .expect("render exact WETH9 withdraw");
+            (pages, withdraw)
+        };
+
+        let half_amount = 500_000_000_000_000_000;
+        let (half_withdraw_pages, half_withdraw) = render_withdraw(half_amount);
+        assert_eq!(half_withdraw.len(), 36);
+        assert_eq!(
+            &half_withdraw[4..],
+            &u256_from_u64(half_amount).0,
+            "the transcript input must carry the exact withdrawal word"
+        );
+        assert_all_pages_printable(&half_withdraw_pages);
+        let [intent_r0, owner_r, contract_r, _] = page_strs(
+            &half_withdraw_pages,
+            intent_page_index(&half_withdraw_pages),
+        );
+        assert_eq!(intent_r0, "Unwrap");
+        assert_eq!(owner_r, "WETH");
+        assert_eq!(contract_r, "WETH");
+        let amount_rows = page_strs(
+            &half_withdraw_pages,
+            find_page_by_label(&half_withdraw_pages, "Amount"),
+        )
+        .join(" ");
+        let amount_compact: String = amount_rows
+            .chars()
+            .filter(|character| !character.is_ascii_whitespace())
+            .collect();
+        if chain_id == 1 {
+            assert!(
+                amount_rows.contains("0.5 WETH"),
+                "mainnet metadata must scale the exact word: {amount_rows:?}"
+            );
+            assert_full_contract_identity_page(&half_withdraw_pages, &entry.contract);
+        } else {
+            assert!(
+                amount_compact.contains("500000000000000000")
+                    && amount_rows.contains("! raw, dec=?"),
+                "Sepolia without metadata must show the exact raw word: {amount_rows:?}"
+            );
+            assert_full_unverified_token_identity_page(&half_withdraw_pages, &entry.contract);
+        }
+
+        let (one_withdraw_pages, _) = render_withdraw(1_000_000_000_000_000_000);
+        assert_ne!(
+            dump_pages(&half_withdraw_pages),
+            dump_pages(&one_withdraw_pages),
+            "changing the signed withdrawal word must change the transcript"
+        );
+
+        let short = &half_withdraw[..half_withdraw.len() - 1];
+        let tx = envelope(chain_id, entry.contract);
         assert!(matches!(
-            render_erc7730_pages(&tx, &withdraw, &verified, None, &NameResolver::new()),
-            Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+            render_erc7730_pages(
+                &tx,
+                short,
+                &verified,
+                metadata.as_ref(),
+                &NameResolver::new(),
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 short head"
+            ))
+        ));
+        let mut trailing_withdraw = half_withdraw.clone();
+        trailing_withdraw.push(0);
+        assert!(matches!(
+            render_erc7730_pages(
+                &tx,
+                &trailing_withdraw,
+                &verified,
+                metadata.as_ref(),
+                &NameResolver::new(),
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 static calldata trailing"
+            ))
         ));
     }
 }
@@ -2149,7 +2248,7 @@ fn negative_unknown_selector_returns_no_format() {
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify");
 
-    // 0xdeadbeef — selector not in the registry WETH descriptor (deposit only).
+    // 0xdeadbeef — selector not in the bounded registry WETH descriptor.
     let calldata = vec![0xde, 0xad, 0xbe, 0xef];
     let tx = envelope(1, entry.contract);
     let resolver = NameResolver::new();
