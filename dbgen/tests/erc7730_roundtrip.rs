@@ -39,7 +39,9 @@ use pqsigner_erc7730::ir::{
     ContextKind, Erc7730Ir, FormatOp, PathOp, Visibility, CTX_CONTRACT, CTX_EIP712,
 };
 use pqsigner_erc7730::known_calls::may_contain as known_call_may_contain;
-use pqsigner_erc7730::render::params::{parse as parse_params, DYNAMIC_KIND_BYTES};
+use pqsigner_erc7730::render::params::{
+    parse as parse_params, DYNAMIC_KIND_BYTES, WORD_GUARD_EQ, WORD_GUARD_NE,
+};
 use pqsigner_erc7730::render::policy::TerminalKind;
 use pqsigner_tx_core::hash::keccak256;
 use sha2::{Digest, Sha256};
@@ -2830,7 +2832,7 @@ fn wrong_root_is_rejected() {
 }
 
 #[test]
-fn unsupported_address_name_sender_address_drops_only_its_whole_format() {
+fn unenrolled_address_name_sender_address_drops_only_its_whole_format() {
     let temp = tempfile::tempdir().expect("create senderAddress compiler fixture");
     let policy_path = temp.path().join("policy.toml");
     std::fs::write(
@@ -2875,10 +2877,11 @@ fn unsupported_address_name_sender_address_drops_only_its_whole_format() {
 
     let policy = load_policy(&policy_path).expect("load synthetic policy");
     let strict_error = try_compile_one(&descriptor_path, &policy, Some(temp.path()))
-        .expect_err("strict compilation must reject unsupported senderAddress semantics");
-    assert!(
-        strict_error.contains("senderAddress") && strict_error.contains("unsupported"),
-        "unexpected strict refusal: {strict_error}"
+        .expect_err("strict compilation must reject unenrolled senderAddress authority");
+    let enrollment_error = "format `route(address recipient,uint256 amount)` declares senderAddress without an exact descriptor/deployment/selector semantic enrollment";
+    assert_eq!(
+        strict_error, enrollment_error,
+        "the refusal must identify the exact unenrolled authority boundary"
     );
 
     let (result, skips) = build_db_tolerant(temp.path(), &policy_path, Some(temp.path()))
@@ -2921,8 +2924,8 @@ fn unsupported_address_name_sender_address_drops_only_its_whole_format() {
             .reason
             .contains("route(address recipient,uint256 amount)")
             && drop_receipts[0].reason.contains("senderAddress")
-            && drop_receipts[0].reason.contains("unsupported"),
-        "drop receipt must bind the exact format and semantic parameter: {}",
+            && drop_receipts[0].reason.contains(enrollment_error),
+        "drop receipt must bind the exact format and enrollment failure: {}",
         drop_receipts[0].reason
     );
 
@@ -2936,17 +2939,20 @@ fn unsupported_address_name_sender_address_drops_only_its_whole_format() {
             result.known_calls.contains(&(1, contract, selector)),
             "every declared selector must remain in exact omission protection"
         );
+        assert!(
+            known_call_may_contain(&result.known_calls_bloom, 1, &contract, &selector),
+            "every declared selector must remain in Bloom omission protection"
+        );
     }
 }
 
 /// Router02 assigns protocol semantics to sentinel recipient addresses and to
-/// zero amounts. The curated descriptor declares the standard `senderAddress`
-/// substitution for `address(1)`, but PQ1 does not implement that authenticated
-/// semantic parameter yet. Tolerant compilation must therefore emit no
-/// Router02 leaf at all. Every declared selector remains in the exact known-call
-/// inventory and Bloom filter, so omission cannot downgrade to blind signing.
+/// zero amounts. Only the two exactly enrolled single-hop selectors may enter
+/// trusted IR, and every enrolled sender/word predicate must stay attached to
+/// its exact authenticated path. The four broader routes remain absent from the
+/// leaf while all six declared selectors stay in exact/Bloom omission defense.
 #[test]
-fn vendored_uniswap_v3_router02_is_known_but_fully_excluded_without_sender_semantics() {
+fn vendored_uniswap_v3_router02_admits_only_exactly_guarded_single_hop_routes() {
     let root = workspace_root();
     let reg = root.join("secure/data/erc7730-registry");
     let desc = reg.join("registry/uniswap/calldata-UniswapV3Router02.json");
@@ -2959,10 +2965,18 @@ fn vendored_uniswap_v3_router02_is_known_but_fully_excluded_without_sender_seman
     );
 
     let registry = build_registry();
-    assert!(
-        !registry.entries.iter().any(|entry| entry.source == desc),
-        "Router02 must not emit a trusted-display leaf while senderAddress and sentinel semantics are unsupported"
+    let router_entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| entry.source == desc)
+        .collect();
+    assert_eq!(
+        router_entries.len(),
+        1,
+        "the exact mainnet Router02 deployment must produce one leaf"
     );
+    let ir = Erc7730Ir::parse(&router_entries[0].ir_bytes).expect("Router02 IR parses");
+    assert_eq!(ir.format_count(), Ok(2));
 
     let contract_raw =
         hex::decode("68b3465833fb72a70ecdf485e0e4c7bd8665fc45").expect("valid Router02 address");
@@ -2984,15 +2998,116 @@ fn vendored_uniswap_v3_router02_is_known_but_fully_excluded_without_sender_seman
     assert_eq!(selector_for(declared[0]), [0x04, 0xe4, 0x5a, 0xaf]);
     assert_eq!(selector_for(declared[1]), [0x50, 0x23, 0xb4, 0xdf]);
 
+    let input_selector = selector_for(declared[0]);
+    let output_selector = selector_for(declared[1]);
+    let admitted: BTreeSet<_> = ir
+        .format_iter()
+        .map(|format| format.expect("Router02 format parses").selector)
+        .collect();
+    assert_eq!(admitted, BTreeSet::from([input_selector, output_selector]));
+    for signature in &declared[2..] {
+        let selector = selector_for(signature);
+        assert!(
+            ir.find_format_by_selector(&selector)
+                .expect("Router02 format table parses")
+                .is_none(),
+            "unenrolled/broader route must remain absent from IR: {signature}"
+        );
+    }
+
+    let mut sender_one = [0u8; 20];
+    sender_one[19] = 1;
+    let mut address_two_word = [0u8; 32];
+    address_two_word[31] = 2;
+    let zero_word = [0u8; 32];
+    let mut value_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+    value_path.extend_from_slice(&container_field::VALUE.to_be_bytes());
+    let structured_path = |member: u8| {
+        vec![
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+            PathOp::FieldIdx as u8,
+            0,
+            member,
+        ]
+    };
+
+    for (selector, exact_input) in [(input_selector, true), (output_selector, false)] {
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("Router02 format table parses")
+            .expect("enrolled single-hop selector is present");
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("Router02 field parses"))
+            .collect();
+        assert_eq!(fields.len(), 6, "no synthetic or omitted tuple fields");
+        let expected_slots = if exact_input {
+            [None, Some(4), Some(5), Some(2), Some(3), Some(6)]
+        } else {
+            [None, Some(5), Some(4), Some(2), Some(3), Some(6)]
+        };
+        for (index, (field, slot)) in fields.iter().zip(expected_slots).enumerate() {
+            let expected_path = slot.map_or_else(|| value_path.clone(), structured_path);
+            assert_eq!(
+                ir.path_bytes(field.path_off)
+                    .expect("Router02 field path parses"),
+                expected_path,
+                "wrong authenticated path for field {index} selector 0x{}",
+                hex::encode(selector)
+            );
+        }
+
+        let params: Vec<_> = fields
+            .iter()
+            .map(|field| parse_params(&ir, field.param_off).expect("Router02 params parse"))
+            .collect();
+        for (index, parsed) in params.iter().enumerate() {
+            if index == 4 {
+                assert_eq!(parsed.sender_addresses, Some(sender_one.as_slice()));
+                assert!(parsed.sender_address_matches(&sender_one));
+            } else {
+                assert!(
+                    parsed.sender_addresses.is_none(),
+                    "sender substitution leaked onto field {index}"
+                );
+            }
+        }
+
+        let assert_guard = |index: usize, mode: u8, expected: &[u8; 32]| {
+            let guard = params[index]
+                .word_guard
+                .unwrap_or_else(|| panic!("field {index} is missing its semantic guard"));
+            assert_eq!(guard.mode(), mode, "wrong guard mode on field {index}");
+            assert_eq!(
+                guard.expected(),
+                expected,
+                "wrong guard word on field {index}"
+            );
+        };
+        assert_guard(0, WORD_GUARD_EQ, &zero_word);
+        assert_guard(4, WORD_GUARD_NE, &address_two_word);
+        assert_guard(5, WORD_GUARD_EQ, &zero_word);
+        assert!(params[2].word_guard.is_none());
+        assert!(params[3].word_guard.is_none());
+        if exact_input {
+            assert_guard(1, WORD_GUARD_NE, &zero_word);
+        } else {
+            assert!(params[1].word_guard.is_none());
+        }
+    }
+
     for signature in declared {
         let selector = selector_for(signature);
         assert!(
             registry.known_calls.contains(&(1, contract, selector)),
-            "excluded Router02 call must remain in the exact known-call inventory: {signature}"
+            "every Router02 call must remain in the exact known-call inventory: {signature}"
         );
         assert!(
             known_call_may_contain(&registry.known_calls_bloom, 1, &contract, &selector),
-            "excluded Router02 call must remain in the fail-closed Bloom: {signature}"
+            "every Router02 call must remain in the fail-closed Bloom: {signature}"
         );
     }
 }
