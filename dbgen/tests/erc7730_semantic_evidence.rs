@@ -1528,6 +1528,272 @@ fn lido_staking_source_abi_descriptor_and_ir_bind_both_routes() {
 }
 
 #[test]
+fn lido_steth_erc20_source_abi_descriptor_metadata_and_ir_agree() {
+    let root = workspace_root();
+    let evidence = lido_staking_evidence_root();
+    let manifest = read_json(&evidence.join("manifest.json"));
+    let route_spec = &manifest["additional_routes"]["steth_erc20"];
+    let routes = route_spec["routes"]
+        .as_array()
+        .expect("stETH ERC-20 route inventory");
+    assert_eq!(routes.len(), 2);
+    assert_eq!(
+        routes
+            .iter()
+            .map(|route| required_str(route, "key"))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["approve", "transfer"])
+    );
+
+    let explorer_spec = &manifest["verified_explorer"]["lido_implementation"];
+    let explorer = read_json(&evidence.join(required_str(explorer_spec, "archive_file")));
+    let additional_sources = explorer["additional_sources"]
+        .as_array()
+        .expect("verified Lido additional sources");
+    let mut inherited = BTreeMap::<String, String>::new();
+    for source_spec in manifest["upstream"]["lido_core"]["inherited_sources"]
+        .as_array()
+        .expect("inherited source inventory")
+    {
+        let path = required_str(source_spec, "explorer_additional_source_path");
+        assert_eq!(required_str(source_spec, "upstream_path"), path);
+        assert_eq!(required_str(source_spec, "git_blob").len(), 40);
+        let matches: Vec<_> = additional_sources
+            .iter()
+            .filter(|source| source["file_path"].as_str() == Some(path))
+            .collect();
+        assert_eq!(matches.len(), 1, "verified source match for {path}");
+        let source = required_str(matches[0], "source_code");
+        assert_eq!(source.len() as u64, source_spec["bytes"].as_u64().unwrap());
+        assert_eq!(
+            sha256_hex(source.as_bytes()),
+            required_str(source_spec, "sha256")
+        );
+        inherited.insert(path.to_owned(), source.to_owned());
+    }
+    assert_eq!(inherited.len(), 2);
+    let steth_permit = &inherited["contracts/0.4.24/StETHPermit.sol"];
+    let steth = &inherited["contracts/0.4.24/StETH.sol"];
+    assert!(steth_permit.contains("import {StETH} from \"./StETH.sol\";"));
+    assert!(steth_permit.contains("contract StETHPermit is IERC2612, StETH"));
+
+    let lido_source = fs::read_to_string(evidence.join(required_str(
+        &manifest["upstream"]["lido_core"]["source"],
+        "archive_file",
+    )))
+    .expect("read official Lido source");
+    assert!(lido_source.contains("import {StETHPermit} from \"./StETHPermit.sol\";"));
+    assert!(lido_source.contains("contract Lido is Versioned, StETHPermit, AragonApp"));
+
+    assert!(steth.contains("uint256 constant internal INFINITE_ALLOWANCE = ~uint256(0);"));
+    assert_eq!(
+        normalized_solidity_function(steth, "function approve(address _spender, uint256 _amount)"),
+        "function approve(address _spender, uint256 _amount) external returns (bool) { _approve(msg.sender, _spender, _amount); return true; }"
+    );
+    assert_eq!(
+        normalized_solidity_function(steth, "function transfer(address _recipient, uint256 _amount)"),
+        "function transfer(address _recipient, uint256 _amount) external returns (bool) { _transfer(msg.sender, _recipient, _amount); return true; }"
+    );
+    assert_eq!(
+        normalized_solidity_function(steth, "function _approve(address _owner, address _spender, uint256 _amount)"),
+        "function _approve(address _owner, address _spender, uint256 _amount) internal { require(_owner != address(0), \"APPROVE_FROM_ZERO_ADDR\"); require(_spender != address(0), \"APPROVE_TO_ZERO_ADDR\"); allowances[_owner][_spender] = _amount; emit Approval(_owner, _spender, _amount); }"
+    );
+    assert_eq!(
+        normalized_solidity_function(steth, "function _spendAllowance(address _owner, address _spender, uint256 _amount)"),
+        "function _spendAllowance(address _owner, address _spender, uint256 _amount) internal { uint256 currentAllowance = allowances[_owner][_spender]; if (currentAllowance != INFINITE_ALLOWANCE) { require(currentAllowance >= _amount, \"ALLOWANCE_EXCEEDED\"); _approve(_owner, _spender, currentAllowance - _amount); } }"
+    );
+    assert_eq!(
+        normalized_solidity_function(steth, "function getSharesByPooledEth(uint256 _ethAmount)"),
+        "function getSharesByPooledEth(uint256 _ethAmount) public view returns (uint256) { require(_ethAmount < UINT128_MAX, \"ETH_TOO_LARGE\"); return (_ethAmount * _getShareRateDenominator()) / _getShareRateNumerator(); }"
+    );
+    assert_eq!(
+        normalized_solidity_function(steth, "function _transfer(address _sender, address _recipient, uint256 _amount)"),
+        "function _transfer(address _sender, address _recipient, uint256 _amount) internal { uint256 _sharesToTransfer = getSharesByPooledEth(_amount); _transferShares(_sender, _recipient, _sharesToTransfer); _emitTransferEvents(_sender, _recipient, _amount, _sharesToTransfer); }"
+    );
+
+    let descriptor_bytes = fs::read(root.join(required_str(route_spec, "descriptor_file")))
+        .expect("read installed stETH descriptor");
+    assert_eq!(
+        descriptor_bytes,
+        fs::read(root.join(required_str(route_spec, "curated_file")))
+            .expect("read curated stETH descriptor"),
+        "curated and installed stETH descriptors diverged"
+    );
+    let descriptor: Value =
+        serde_json::from_slice(&descriptor_bytes).expect("parse stETH descriptor");
+    let deployment = &descriptor["context"]["contract"]["deployments"]
+        .as_array()
+        .expect("stETH deployment array")[0];
+    assert_eq!(
+        deployment["chainId"].as_u64(),
+        route_spec["chain_id"].as_u64()
+    );
+    assert!(deployment["address"]
+        .as_str()
+        .expect("stETH deployment address")
+        .eq_ignore_ascii_case(required_str(route_spec, "address")));
+    assert!(descriptor["metadata"]["constants"]["stETHaddress"]
+        .as_str()
+        .expect("stETH token constant")
+        .eq_ignore_ascii_case(required_str(route_spec, "address")));
+
+    let full_abi = explorer["abi"].as_array().expect("verified Lido ABI");
+    let formats = descriptor["display"]["formats"]
+        .as_object()
+        .expect("stETH descriptor formats");
+    for route in routes {
+        let signature = required_str(route, "canonical_signature");
+        let (name, params) = signature.split_once('(').expect("canonical signature");
+        let input_types: Vec<_> = params
+            .strip_suffix(')')
+            .expect("canonical signature close")
+            .split(',')
+            .collect();
+        let abi_matches: Vec<_> = full_abi
+            .iter()
+            .filter(|entry| {
+                entry["type"].as_str() == Some("function")
+                    && entry["name"].as_str() == Some(name)
+                    && entry["inputs"].as_array().is_some_and(|inputs| {
+                        inputs
+                            .iter()
+                            .filter_map(|input| input["type"].as_str())
+                            .eq(input_types.iter().copied())
+                    })
+            })
+            .collect();
+        assert_eq!(abi_matches.len(), 1, "verified ABI route for {signature}");
+        assert_eq!(
+            abi_matches[0]["stateMutability"].as_str(),
+            Some("nonpayable")
+        );
+        assert_eq!(abi_matches[0]["outputs"][0]["type"].as_str(), Some("bool"));
+
+        let authored = required_str(route, "authored_signature");
+        let format = &formats[authored];
+        assert_eq!(
+            format["intent"].as_str(),
+            Some(required_str(route, "intent"))
+        );
+        let fields = format["fields"].as_array().expect("stETH route fields");
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field["path"].as_str().expect("field path"))
+                .collect::<Vec<_>>(),
+            route["displayed_operand_paths"]
+                .as_array()
+                .expect("manifest displayed paths")
+                .iter()
+                .map(|path| path.as_str().expect("manifest displayed path"))
+                .collect::<Vec<_>>()
+        );
+        assert!(fields.iter().all(|field| field["visible"] == "always"));
+        if required_str(route, "key") == "approve" {
+            assert_eq!(
+                fields[1]["params"]["threshold"].as_str(),
+                Some("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+            );
+            assert_eq!(fields[1]["params"]["message"].as_str(), Some("Unlimited"));
+            assert!(required_str(route, "max_semantics").contains("uint256::MAX"));
+            assert!(required_str(route, "max_semantics").contains("every smaller"));
+        } else {
+            assert!(fields[1]["params"]["threshold"].is_null());
+            assert!(required_str(route, "state_residual").contains("floor rounding"));
+            assert!(required_str(route, "state_residual").contains("zero shares"));
+        }
+    }
+
+    let records = dbgen::load_erc20_records(&root.join("secure/data/erc20.json"))
+        .expect("load production ERC20 metadata");
+    let metadata: Vec<_> = records
+        .iter()
+        .filter(|record| {
+            record.chain_id == 1
+                && record
+                    .address
+                    .eq_ignore_ascii_case(required_str(route_spec, "address"))
+        })
+        .collect();
+    assert_eq!(metadata.len(), 1);
+    assert_eq!(metadata[0].name, "Liquid staked Ether 2.0");
+    assert_eq!(metadata[0].symbol, "stETH");
+    assert_eq!(metadata[0].decimals, 18);
+
+    let contract: [u8; 20] = decode_hex_text(required_str(route_spec, "address"))
+        .try_into()
+        .expect("stETH contract width");
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+        .expect("build production ERC20 capability corpus");
+    let registry_root = root.join("secure/data/erc7730-registry");
+    let (registry, _) = build_db_tolerant_with_erc20_capabilities(
+        &registry_root.join("registry"),
+        &root.join("secure/data/erc7730/policy.toml"),
+        Some(&registry_root),
+        &erc20.capabilities,
+    )
+    .expect("build production ERC-7730 registry");
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == 1
+                && entry.contract == contract
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("calldata-stETH.json")
+        })
+        .expect("generated stETH leaf");
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("parse generated stETH IR");
+    assert_eq!(cross_check_contract(&ir, 1, &contract), Ok(()));
+    for route in routes {
+        let signature = required_str(route, "canonical_signature");
+        let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+            .try_into()
+            .expect("stETH selector width");
+        assert_eq!(
+            format!("0x{}", hex::encode(selector)),
+            required_str(route, "selector")
+        );
+        assert!(registry.known_calls.contains(&(1, contract, selector)));
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("stETH format table parses")
+            .expect("stETH ERC-20 route remains admitted");
+        assert_eq!(format.static_head_words, 2);
+        assert_eq!(format.nested_descent_count, 0);
+        assert_eq!(format.intent, required_str(route, "intent").as_bytes());
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("generated stETH field parses"))
+            .collect();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(
+            FormatOp::try_from(fields[0].format_op),
+            Ok(FormatOp::AddressName)
+        );
+        assert_eq!(
+            FormatOp::try_from(fields[1].format_op),
+            Ok(FormatOp::TokenAmount)
+        );
+        let address_params = parse_params(&ir, fields[0].param_off).expect("address params");
+        assert_eq!(address_params.visibility, Visibility::Always);
+        assert_eq!(address_params.terminal_kind, Some(TerminalKind::Address));
+        let amount_params = parse_params(&ir, fields[1].param_off).expect("amount params");
+        assert_eq!(amount_params.visibility, Visibility::Always);
+        assert_eq!(amount_params.terminal_kind, Some(TerminalKind::Unsigned));
+        assert_eq!(amount_params.integer_width_bytes, Some(32));
+        assert_eq!(amount_params.token.copied(), Some(contract));
+        if required_str(route, "key") == "approve" {
+            assert_eq!(amount_params.threshold.copied(), Some([0xff; 32]));
+            assert_eq!(amount_params.message, Some(b"Unlimited".as_slice()));
+        } else {
+            assert!(amount_params.threshold.is_none());
+            assert!(amount_params.message.is_none());
+        }
+    }
+}
+
+#[test]
 fn stakewise_fixed_block_runtimes_match_the_archived_receipt() {
     let evidence = stakewise_evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));
@@ -2581,6 +2847,20 @@ fn lido_wsteth_source_abi_descriptor_and_metadata_agree_on_permit_semantics() {
         assert_eq!(field["format"].as_str(), Some(format));
         assert_eq!(field["visible"].as_str(), Some("always"));
     }
+    let max_value_display = &descriptor_spec["max_value_display"];
+    assert_eq!(
+        fields[2]["params"]["threshold"].as_str(),
+        Some(required_str(max_value_display, "threshold"))
+    );
+    assert_eq!(
+        fields[2]["params"]["message"].as_str(),
+        Some(required_str(max_value_display, "message"))
+    );
+    assert_eq!(required_str(max_value_display, "message"), "Max uint256");
+    let max_meaning = required_str(max_value_display, "meaning");
+    assert!(max_meaning.contains("one-to-one"));
+    assert!(max_meaning.contains("does not claim"));
+    assert!(max_meaning.contains("non-decrementing"));
     let manifest_paths: Vec<_> = descriptor_spec["permit_operand_paths"]
         .as_array()
         .expect("manifest operand paths")
@@ -2663,7 +2943,14 @@ fn lido_wsteth_source_abi_descriptor_and_metadata_agree_on_permit_semantics() {
         .find_format_by_selector(&permit_selector)
         .expect("Lido format table parses")
         .expect("Lido permit remains admitted");
-    assert_eq!(format.fields().count(), 7);
+    let ir_fields: Vec<_> = format
+        .fields()
+        .map(|field| field.expect("generated permit field parses"))
+        .collect();
+    assert_eq!(ir_fields.len(), 7);
+    let amount_params = parse_params(&ir, ir_fields[2].param_off).expect("permit amount params");
+    assert_eq!(amount_params.threshold.copied(), Some([0xff; 32]));
+    assert_eq!(amount_params.message, Some(b"Max uint256".as_slice()));
 
     assert!(manifest["residuals"]
         .as_array()
@@ -3204,21 +3491,20 @@ fn lido_wsteth_remaining_routes_source_abi_descriptor_and_ir_agree() {
                     ("approve", "#.amount") | ("increaseAllowance", "#.addedValue")
                 );
                 if threshold_expected {
-                    let mut threshold = [0u8; 32];
-                    threshold[0] = 0x80;
+                    let threshold = [0xff; 32];
                     assert_eq!(
                         descriptor_field["params"]["threshold"].as_str(),
-                        Some("0x8000000000000000000000000000000000000000000000000000000000000000")
+                        Some("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
                     );
                     assert_eq!(
                         descriptor_field["params"]["message"].as_str(),
-                        Some("Unlimited")
+                        Some("Max uint256")
                     );
                     assert_eq!(
                         params.threshold.map(|value| value.as_slice()),
                         Some(threshold.as_slice())
                     );
-                    assert_eq!(params.message, Some(b"Unlimited".as_slice()));
+                    assert_eq!(params.message, Some(b"Max uint256".as_slice()));
                 } else {
                     assert!(params.threshold.is_none());
                     assert!(params.message.is_none());

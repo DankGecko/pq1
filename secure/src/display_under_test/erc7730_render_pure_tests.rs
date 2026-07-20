@@ -3809,6 +3809,222 @@ fn positive_defi_catalogue_lido_referral_addresses_are_complete_and_bound() {
 }
 
 #[test]
+fn lido_steth_approve_transfer_and_max_threshold_are_exact() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-stETH.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Lido stETH leaf");
+    let tx = envelope(1, entry.contract);
+    let metadata = Erc20Metadata {
+        chain_id: 1,
+        contract: entry.contract,
+        decimals: 18,
+        name: b"Liquid staked Ether 2.0",
+        symbol: b"stETH",
+    };
+    let resolver = NameResolver::new();
+    let signer = [0x61; 20];
+    let spender = [0x62; 20];
+    let recipient = [0x63; 20];
+
+    let render = |calldata: &[u8]| {
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            calldata,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        )
+    };
+
+    let one_steth = u256_from_u64(1_000_000_000_000_000_000);
+    let approve = calldata_approve(spender, one_steth);
+    assert_eq!(approve.len(), 68);
+    let approved = render(&approve).expect("render exact stETH approval");
+    assert_full_address_field_page(&approved.pages, "Spender", &spender);
+    assert!(page_strs(
+        &approved.pages,
+        find_page_by_label(&approved.pages, "Amount")
+    )[1..3]
+        .iter()
+        .any(|row| row.contains("1 stETH")));
+    assert_full_contract_identity_page(&approved.pages, &entry.contract);
+
+    let transfer = calldata_transfer(recipient, one_steth);
+    assert_eq!(transfer.len(), 68);
+    let transferred = render(&transfer).expect("render exact stETH transfer request");
+    assert_full_address_field_page(&transferred.pages, "Recipient", &recipient);
+    assert!(page_strs(
+        &transferred.pages,
+        find_page_by_label(&transferred.pages, "Amount")
+    )[1..3]
+        .iter()
+        .any(|row| row.contains("1 stETH")));
+    assert_full_contract_identity_page(&transferred.pages, &entry.contract);
+
+    let mutated_transfer = calldata_transfer(recipient, u256_from_u64(2_000_000_000_000_000_000));
+    let mutated = render(&mutated_transfer).expect("render changed stETH transfer request");
+    assert_ne!(transferred.pages.as_slice(), mutated.pages.as_slice());
+    assert!(!transferred
+        .transcript_receipt
+        .exact_match(&mutated.transcript_receipt));
+
+    let approved_max = render(&calldata_approve(spender, u256_max()))
+        .expect("exact uint256 max remains the stETH infinite-allowance sentinel");
+    assert_eq!(
+        page_strs(
+            &approved_max.pages,
+            find_page_by_label(&approved_max.pages, "Amount")
+        ),
+        [
+            "Amount".to_string(),
+            "Unlimited stETH".to_string(),
+            "".to_string(),
+            "> next".to_string(),
+        ]
+    );
+
+    let mut old_threshold_minus_one = [0xff; 32];
+    old_threshold_minus_one[0] = 0x7f;
+    let mut old_threshold = [0u8; 32];
+    old_threshold[0] = 0x80;
+    let mut max_minus_one = [0xff; 32];
+    max_minus_one[31] = 0xfe;
+    for (name, finite) in [
+        ("old threshold minus one", old_threshold_minus_one),
+        ("old threshold", old_threshold),
+        ("max minus one", max_minus_one),
+    ] {
+        assert!(
+            matches!(
+                render(&calldata_approve(spender, U256(finite))),
+                Err(crate::tx::erc7730_render::RenderErr::Reject(
+                    "7730 inexact scaled value"
+                ))
+            ),
+            "finite stETH approval at {name} must not inherit the max-only shorthand"
+        );
+    }
+
+    let mut dirty_spender = approve.clone();
+    dirty_spender[4] = 1;
+    assert!(matches!(
+        render(&dirty_spender),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 noncanonical address"
+        ))
+    ));
+    assert!(matches!(
+        render(&approve[..approve.len() - 1]),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 short head"
+        ))
+    ));
+    let mut trailing = approve.clone();
+    trailing.push(0);
+    assert!(matches!(
+        render(&trailing),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 static calldata trailing"
+        ))
+    ));
+}
+
+#[test]
+fn lido_wsteth_allowance_threshold_is_max_only_for_all_three_routes() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-wstETH.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Lido wstETH leaf");
+    let tx = envelope(1, entry.contract);
+    let metadata = Erc20Metadata {
+        chain_id: 1,
+        contract: entry.contract,
+        decimals: 18,
+        name: b"Wrapped liquid staked Ether 2.0",
+        symbol: b"wstETH",
+    };
+    let resolver = NameResolver::new();
+    let signer = [0x71; 20];
+    let owner = [0x72; 20];
+    let spender = [0x73; 20];
+
+    let mut old_threshold_minus_one = [0xff; 32];
+    old_threshold_minus_one[0] = 0x7f;
+    let mut old_threshold = [0u8; 32];
+    old_threshold[0] = 0x80;
+    let mut max_minus_one = [0xff; 32];
+    max_minus_one[31] = 0xfe;
+
+    for (signature, amount_index, base_words) in [
+        (
+            "approve(address,uint256)",
+            1usize,
+            vec![abi_address_word(spender), [0xff; 32]],
+        ),
+        (
+            "increaseAllowance(address,uint256)",
+            1usize,
+            vec![abi_address_word(spender), [0xff; 32]],
+        ),
+        (
+            "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)",
+            2usize,
+            vec![
+                abi_address_word(owner),
+                abi_address_word(spender),
+                [0xff; 32],
+                u256_from_u64(2_000_000_000).0,
+                u256_from_u64(27).0,
+                [0x55; 32],
+                [0xaa; 32],
+            ],
+        ),
+    ] {
+        let render_words = |words: &[[u8; 32]]| {
+            let calldata = calldata_static(signature, words);
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                &calldata,
+                &verified,
+                Some(&metadata),
+                &resolver,
+                &signer,
+            )
+        };
+
+        let rendered_max = render_words(&base_words)
+            .unwrap_or_else(|error| panic!("render max-only {signature}: {error:?}"));
+        assert_eq!(
+            page_strs(
+                &rendered_max.pages,
+                find_page_by_label(&rendered_max.pages, "Amount")
+            )[1..3],
+            ["Max uint256".to_string(), "wstETH".to_string()]
+        );
+
+        for (name, finite) in [
+            ("old threshold minus one", old_threshold_minus_one),
+            ("old threshold", old_threshold),
+            ("max minus one", max_minus_one),
+        ] {
+            let mut words = base_words.clone();
+            words[amount_index] = finite;
+            assert!(
+                matches!(
+                    render_words(&words),
+                    Err(crate::tx::erc7730_render::RenderErr::Reject(
+                        "7730 inexact scaled value"
+                    ))
+                ),
+                "finite wstETH value at {name} must not inherit the max-only label for {signature}"
+            );
+        }
+    }
+}
+
+#[test]
 fn positive_lido_wsteth_permit_fixture_binds_every_signed_word() {
     // Exact mainnet EIP-1559 rawTx from the upstream Lido wstETH fixture. The
     // RLP item immediately before calldata is `b8 e4`: a 228-byte byte string.
@@ -3918,8 +4134,8 @@ fn positive_lido_wsteth_permit_fixture_binds_every_signed_word() {
         ),
         [
             "Amount".to_string(),
-            "Unlimited wstETH".to_string(),
-            "".to_string(),
+            "Max uint256".to_string(),
+            "wstETH".to_string(),
             "> next".to_string(),
         ]
     );

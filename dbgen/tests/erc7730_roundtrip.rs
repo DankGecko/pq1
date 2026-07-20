@@ -325,7 +325,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.root),
-        "a505b61997a455043db15299460db88443853f2817435e2e5c8a2ffbe2851a15"
+        "5a9d33b35056486b8133148730ce908b12963873a0a372117efa3eee7fe84b3c"
     );
 }
 

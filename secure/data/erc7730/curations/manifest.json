@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 779937,
-    "sha256": "fd447f8e47af5b8dacd2c78358425aebd21e858c1d9b59024d50b2ad9f7de4fb"
+    "bytes": 779943,
+    "sha256": "9d1f037839f509e52554896fc0786ef10d4c479239162862e3bc613107972473"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -94,8 +94,8 @@
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 13,
-      "bytes": 1185743,
-      "sha256": "8978e324f5a0c415c78e123dc83857eb0bc7e4770b323019b7b7609fb3291395"
+      "bytes": 1199576,
+      "sha256": "c7f5c3cd47236314b10ed35a68fea77d36560fac87ea818bb081ed81ed31de6a"
     },
     {
       "path": "pqsigner-erc7730",
@@ -144,7 +144,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 269876,
-      "sha256": "d5a9a911a48b1d0ea343de92270fe7094b2a0cd1a98e28bb8569ca1b86006a62"
+      "sha256": "257263d4a63c9525dc3362f0df41625ff26e7eb82e348a85ad56333c880831ac"
     }
   ],
   "capability_inputs": [
@@ -201,7 +201,7 @@
       "upstream_bytes": 2224,
       "upstream_sha256": "8ad18b90294c6facc208c6c27de85ea21642ed22a9d743d238326563d0cf0604",
       "replacement_bytes": 2242,
-      "replacement_sha256": "5a7e8da93f5865ad00d77e3d0b451c864cd6b497f0e9dc25f16c19691da32615"
+      "replacement_sha256": "00685fca826592fd1623283ef92b7f2e54924a651b29dee67423f4c3c2ca55e7"
     },
     {
       "path": "registry/lido/calldata-wstETH-referral-staker.json",
@@ -214,8 +214,8 @@
       "path": "registry/lido/calldata-wstETH.json",
       "upstream_bytes": 6561,
       "upstream_sha256": "a5fe1954ebc04c6f236e237566d374c474368a5346446a23a1cca6171026378b",
-      "replacement_bytes": 6615,
-      "replacement_sha256": "0b79330448eded486fffa6f2504cb283ae973101bfc0b92e6e31b08511f6ad2f"
+      "replacement_bytes": 6621,
+      "replacement_sha256": "93087f2eeee21fa4ecaef5a646ecb938f37be8127ba1cd363b1be9d80566c692"
     },
     {
       "path": "registry/lombard/calldata-lbtc-mainnet.json",

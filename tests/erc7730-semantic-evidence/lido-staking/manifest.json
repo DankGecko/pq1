@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "Semantic evidence for the two already-admitted Lido Ethereum staking routes: stETH submit(address) and WstETHReferralStaker stakeETH(address)",
+  "scope": "Semantic evidence for four already-admitted Lido Ethereum routes: stETH submit(address), approve(address,uint256), transfer(address,uint256), and WstETHReferralStaker stakeETH(address)",
   "captured_at_utc": "2026-07-19T21:47:37Z",
   "descriptors": [
     {
@@ -26,6 +26,43 @@
       "amount_label": "Amount to stake"
     }
   ],
+  "additional_routes": {
+    "steth_erc20": {
+      "descriptor_file": "secure/data/erc7730-registry/registry/lido/calldata-stETH.json",
+      "curated_file": "secure/data/erc7730/curations/files/registry/lido/calldata-stETH.json",
+      "chain_id": 1,
+      "address": "0xae7ab96520de3a18e5e111b5eaab095312d7fe84",
+      "routes": [
+        {
+          "key": "approve",
+          "canonical_signature": "approve(address,uint256)",
+          "authored_signature": "approve(address _spender, uint256 _amount)",
+          "selector": "0x095ea7b3",
+          "intent": "Approve stETH",
+          "displayed_operand_paths": [
+            "#._spender",
+            "#._amount"
+          ],
+          "successful_effect": "Sets allowance[msg.sender][_spender] exactly to the signed _amount.",
+          "max_semantics": "Only exact uint256::MAX is INFINITE_ALLOWANCE and remains non-decrementing when spent; every smaller allowance is finite.",
+          "state_residual": "The prior allowance and transaction ordering are live state; a nonzero-to-nonzero approval retains the standard ERC-20 allowance race."
+        },
+        {
+          "key": "transfer",
+          "canonical_signature": "transfer(address,uint256)",
+          "authored_signature": "transfer(address _recipient, uint256 _amount)",
+          "selector": "0xa9059cbb",
+          "intent": "Transfer stETH",
+          "displayed_operand_paths": [
+            "#._recipient",
+            "#._amount"
+          ],
+          "successful_effect": "Converts the signed token amount to shares with floor division and moves those shares from msg.sender to the signed recipient while emitting the signed token amount.",
+          "state_residual": "Live share state and floor rounding determine the moved shares and recipient balance credit; the credit can be below the signed token amount, and tiny nonzero token amounts can map to zero shares."
+        }
+      ]
+    }
+  },
   "upstream": {
     "lido_core": {
       "repository": "https://github.com/lidofinance/core",
@@ -45,7 +82,23 @@
         "archive_file": "source/Lido.sol",
         "git_blob": "8fff6b8891831a2d3ca6c1224245554a5d7b4613",
         "sha256": "0c5e7f1ec557cfc14dcab62c0e601868e202527984cdc7e3b1bf4242a0528149"
-      }
+      },
+      "inherited_sources": [
+        {
+          "upstream_path": "contracts/0.4.24/StETHPermit.sol",
+          "explorer_additional_source_path": "contracts/0.4.24/StETHPermit.sol",
+          "git_blob": "11d42249149e932343319859e56e5c8444f6a0ca",
+          "sha256": "cc4e37048f98024a92c337b6209ba3dd7c2cc4e8cfbc526b6f755057fac9baef",
+          "bytes": 6461
+        },
+        {
+          "upstream_path": "contracts/0.4.24/StETH.sol",
+          "explorer_additional_source_path": "contracts/0.4.24/StETH.sol",
+          "git_blob": "b8c8d47f2571d018c938d994c4debf375b84b45a",
+          "sha256": "63ebed0e205b602fe2e427bb09c111479f98253bd02f96ac052b38202d3713bd",
+          "bytes": 23702
+        }
+      ]
     },
     "si_lidity": {
       "repository": "https://github.com/lidofinance/si-lidity",
@@ -210,7 +263,7 @@
   },
   "wsteth_dependency": {
     "evidence_manifest": "tests/erc7730-semantic-evidence/lido-wsteth-permit/manifest.json",
-    "evidence_manifest_sha256": "f9d9bdedc6e6e6b57948d680724b0951d3b7f8184bae117c1cdf1f2cc1c88fbd",
+    "evidence_manifest_sha256": "3855d8fe6c0997259cce21d5e77f5d8ccddc155dc8315f337c79ba0803fcbb75",
     "runtime_file": "tests/erc7730-semantic-evidence/lido-wsteth-permit/runtime/WstETH.mainnet.hex",
     "runtime_file_sha256": "7f714a911c4e8a42f57144dcca483545b95b0b36e90011bd23b95ba687c56457",
     "runtime_bytes": 6492,
@@ -244,8 +297,10 @@
   ],
   "residuals": [
     "stETH is an upgradeable Aragon proxy; fixed-block implementation, kernel, appId, source, and runtime evidence do not guarantee future code.",
-    "Both routes can revert because of zero value, pause/rate-limit, balance, allowance, external-call, or recipient behavior. Evidence describes successful source semantics, not transaction success.",
+    "The staking routes can revert because of zero value, pause/rate-limit, balance, allowance, external-call, or recipient behavior. The ERC-20 routes can revert because of address, balance, pause, share-rate, or size checks. Evidence describes successful source semantics, not transaction success.",
     "The resulting stETH/wstETH amount depends on live pooled-ETH/share state and rounding. PQ1 authenticates no minimum output or slippage bound for these routes.",
+    "stETH transfer displays the exact signed token request, but floor conversion moves shares whose live balance credit can be lower; it does not promise exact recipient credit.",
+    "Only exact uint256::MAX receives the stETH Unlimited label; every smaller finite value must render exactly or refuse before confirmation.",
     "The archived RPC operators are independent endpoints, not independent chain histories or a live-monitoring service.",
     "This evidence grants no production-shipment, fallback, forced-blind, generic-signing, proxy-monitoring, or catalogue-expansion authority."
   ]
