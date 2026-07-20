@@ -106,9 +106,9 @@ pub const fn integer_word_is_canonical(
 
 /// Semantic parameter-presence bitmap.  Visibility's selector byte and the
 /// mandatory terminal-kind and integer-width bytes are carried separately.
-/// The interpolation program is format metadata and is stripped before this
-/// field-local policy runs; its placement and targets are validated by
-/// `Erc7730Ir`.
+/// The interpolation program is format metadata and the exact-word guard is an
+/// orthogonal precondition; both are stripped before this field-local policy
+/// runs and validated by `Erc7730Ir`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ParamMask(u32);
 
@@ -135,6 +135,7 @@ impl ParamMask {
     pub const DYNAMIC_KIND: Self = Self(1 << 19);
     pub const NFT_COLLECTION: Self = Self(1 << 20);
     pub const NFT_COLLECTION_PATH: Self = Self(1 << 21);
+    pub const SENDER_ADDRESS: Self = Self(1 << 22);
 
     pub const NONE: Self = Self(0);
 
@@ -274,7 +275,9 @@ pub const fn validate_field(
         ),
         FormatOp::Date => (ParamMask::DATE_ENCODING, ParamMask::NONE),
         FormatOp::AddressName => (
-            ParamMask::ADDR_TYPES.union(ParamMask::ADDR_SOURCES),
+            ParamMask::ADDR_TYPES
+                .union(ParamMask::ADDR_SOURCES)
+                .union(ParamMask::SENDER_ADDRESS),
             ParamMask::NONE,
         ),
         FormatOp::Enum => (ParamMask::ENUM_REF, ParamMask::ENUM_REF),
@@ -499,6 +502,28 @@ mod tests {
             ParamMask::THRESHOLD.union(ParamMask::MESSAGE)
         )
         .is_ok());
+        assert!(validate_field(
+            FormatOp::AddressName,
+            TerminalKind::Address,
+            ParamMask::SENDER_ADDRESS
+        )
+        .is_ok());
+        assert_eq!(
+            validate_field(
+                FormatOp::InteroperableAddressName,
+                TerminalKind::Address,
+                ParamMask::SENDER_ADDRESS
+            ),
+            Err(PolicyError::ParameterApplicability)
+        );
+        assert_eq!(
+            validate_field(
+                FormatOp::Raw,
+                TerminalKind::Address,
+                ParamMask::SENDER_ADDRESS
+            ),
+            Err(PolicyError::ParameterApplicability)
+        );
     }
 
     #[test]

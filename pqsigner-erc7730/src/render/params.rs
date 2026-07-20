@@ -38,6 +38,8 @@
 //! | 0x46 | `interpolated_intent`| v1 literal/field-ordinal bytecode (format) |
 //! | 0x47 | `terminal_kind`      | 1 B [`TerminalKind`] (required)            |
 //! | 0x48 | `integer_width`      | 1 B width in bytes, `1..=32` (integers)    |
+//! | 0x49 | `sender_address`     | 1–2 unique concatenated 20 B sentinels     |
+//! | 0x4A | `word_guard`         | mode (0=EQ, 1=NE) + exact 32 B word        |
 //!
 //! Wire-stable.
 //!
@@ -128,6 +130,19 @@ pub const PARAM_TERMINAL_KIND: u8 = 0x47;
 /// `1..=32`, requires the tag for integer terminal kinds, and forbids it for
 /// every other terminal kind.
 pub const PARAM_INTEGER_WIDTH: u8 = 0x48;
+/// Descriptor-authenticated `addressName.params.senderAddress` sentinels.
+/// An exact calldata-address match is substituted with the independently
+/// derived UserOperation sender. The local bound keeps parsing and matching
+/// fixed-capacity; a larger standard list fails closed.
+pub const PARAM_SENDER_ADDRESS: u8 = 0x49;
+pub const SENDER_ADDRESS_LEN: usize = 20;
+pub const MAX_SENDER_ADDRESSES: usize = 2;
+/// Field-local, format-wide-enforced scalar precondition. The renderer checks
+/// every enrolled guard before publishing the intent banner.
+pub const PARAM_WORD_GUARD: u8 = 0x4A;
+pub const WORD_GUARD_PAYLOAD_LEN: usize = 33;
+pub const WORD_GUARD_EQ: u8 = 0;
+pub const WORD_GUARD_NE: u8 = 1;
 pub const DYNAMIC_KIND_STRING: u8 = 0x01;
 pub const DYNAMIC_KIND_BYTES: u8 = 0x02;
 
@@ -162,6 +177,35 @@ pub const MAX_INTERPOLATED_INTENT_LEN: usize = 32;
 pub struct InterpolatedIntentProgram<'a> {
     payload: &'a [u8],
     substitution_count: u8,
+}
+
+/// Canonically parsed exact-word predicate. The expected word remains borrowed
+/// from the Merkle-authenticated IR pool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WordGuard<'a> {
+    mode: u8,
+    expected: &'a [u8; 32],
+}
+
+impl<'a> WordGuard<'a> {
+    #[must_use]
+    pub const fn mode(self) -> u8 {
+        self.mode
+    }
+
+    #[must_use]
+    pub const fn expected(self) -> &'a [u8; 32] {
+        self.expected
+    }
+
+    #[must_use]
+    pub fn accepts(self, actual: &[u8; 32]) -> bool {
+        match self.mode {
+            WORD_GUARD_EQ => actual == self.expected,
+            WORD_GUARD_NE => actual != self.expected,
+            _ => false,
+        }
+    }
 }
 
 impl<'a> InterpolatedIntentProgram<'a> {
@@ -399,6 +443,13 @@ pub struct ParamSet<'a> {
     /// Authenticated ABI integer width in bytes.  Present exactly for
     /// [`TerminalKind::Unsigned`] and [`TerminalKind::Signed`].
     pub integer_width_bytes: Option<u8>,
+    /// One or two exact descriptor-authenticated address sentinels. Only the
+    /// `addressName` formatter may consume this parameter.
+    pub sender_addresses: Option<&'a [u8]>,
+    /// Orthogonal scalar predicate evaluated format-wide before publication.
+    /// It is deliberately excluded from [`ParamSet::policy_mask`] because it
+    /// constrains a field without changing its formatter semantics.
+    pub word_guard: Option<WordGuard<'a>>,
 }
 
 impl<'a> Default for ParamSet<'a> {
@@ -430,6 +481,8 @@ impl<'a> Default for ParamSet<'a> {
             interpolated_intent: None,
             terminal_kind: None,
             integer_width_bytes: None,
+            sender_addresses: None,
+            word_guard: None,
         }
     }
 }
@@ -442,6 +495,16 @@ impl ParamSet<'_> {
         self.native_currency_addresses.is_some_and(|addresses| {
             addresses
                 .chunks_exact(NATIVE_CURRENCY_ADDRESS_LEN)
+                .any(|candidate| candidate == address.as_slice())
+        })
+    }
+
+    /// True only for an exact complete member of the authenticated
+    /// `senderAddress` list.
+    pub fn sender_address_matches(&self, address: &[u8; 20]) -> bool {
+        self.sender_addresses.is_some_and(|addresses| {
+            addresses
+                .chunks_exact(SENDER_ADDRESS_LEN)
                 .any(|candidate| candidate == address.as_slice())
         })
     }
@@ -518,16 +581,16 @@ impl ParamSet<'_> {
         if self.nft_collection_path.is_some() {
             mask = mask.union(ParamMask::NFT_COLLECTION_PATH);
         }
+        if self.sender_addresses.is_some() {
+            mask = mask.union(ParamMask::SENDER_ADDRESS);
+        }
         mask
     }
 }
 
-fn native_currency_list_is_canonical(payload: &[u8]) -> bool {
-    let count = payload.len() / NATIVE_CURRENCY_ADDRESS_LEN;
-    if payload.is_empty()
-        || payload.len() % NATIVE_CURRENCY_ADDRESS_LEN != 0
-        || count > MAX_NATIVE_CURRENCY_ADDRESSES
-    {
+fn address_list_is_canonical(payload: &[u8], max: usize) -> bool {
+    let count = payload.len() / SENDER_ADDRESS_LEN;
+    if payload.is_empty() || payload.len() % SENDER_ADDRESS_LEN != 0 || count > max {
         return false;
     }
 
@@ -538,7 +601,15 @@ fn native_currency_list_is_canonical(payload: &[u8]) -> bool {
     // The reviewed bound is exactly two members, so canonical duplicate
     // detection needs one fixed comparison rather than a general nested walk.
     // This keeps both secure runtime cost and the exhaustive proof small.
-    payload[..NATIVE_CURRENCY_ADDRESS_LEN] != payload[NATIVE_CURRENCY_ADDRESS_LEN..]
+    payload[..SENDER_ADDRESS_LEN] != payload[SENDER_ADDRESS_LEN..]
+}
+
+fn native_currency_list_is_canonical(payload: &[u8]) -> bool {
+    address_list_is_canonical(payload, MAX_NATIVE_CURRENCY_ADDRESSES)
+}
+
+fn sender_address_list_is_canonical(payload: &[u8]) -> bool {
+    address_list_is_canonical(payload, MAX_SENDER_ADDRESSES)
 }
 
 /// Parse a TLV parameter blob located at `param_off` inside the IR's
@@ -563,7 +634,7 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
         .ok_or(RenderErr::Reject("7730 bad param blob"))?;
 
     let mut cursor = 0usize;
-    // Tags 0x30..=0x48 fit in this bitmap. Singleton parameter TLVs are
+    // Tags 0x30..=0x4A fit in this bitmap. Singleton parameter TLVs are
     // canonical: accepting duplicates would make meaning order-dependent and
     // previously let a short visibility duplicate retain the first tag's tail.
     let mut seen_tags = 0u32;
@@ -580,7 +651,7 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
         let payload = &body[cursor..cursor + len];
         cursor += len;
 
-        if !(PARAM_TOKEN_PATH..=PARAM_INTEGER_WIDTH).contains(&tag) {
+        if !(PARAM_TOKEN_PATH..=PARAM_WORD_GUARD).contains(&tag) {
             return Err(RenderErr::Reject("7730 unknown tlv tag"));
         }
         let bit = 1u32 << (tag - PARAM_TOKEN_PATH);
@@ -642,6 +713,26 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
                     return Err(RenderErr::Reject("7730 bad integer width"));
                 }
                 p.integer_width_bytes = Some(payload[0]);
+            }
+            PARAM_SENDER_ADDRESS => {
+                if !sender_address_list_is_canonical(payload) {
+                    return Err(RenderErr::Reject("7730 bad sender address"));
+                }
+                p.sender_addresses = Some(payload);
+            }
+            PARAM_WORD_GUARD => {
+                if payload.len() != WORD_GUARD_PAYLOAD_LEN
+                    || !matches!(payload[0], WORD_GUARD_EQ | WORD_GUARD_NE)
+                {
+                    return Err(RenderErr::Reject("7730 bad word guard"));
+                }
+                let expected = payload[1..]
+                    .try_into()
+                    .map_err(|_| RenderErr::Reject("7730 bad word guard"))?;
+                p.word_guard = Some(WordGuard {
+                    mode: payload[0],
+                    expected,
+                });
             }
             PARAM_THRESHOLD => {
                 p.threshold = Some(
@@ -1054,6 +1145,96 @@ mod tests {
                 "accepted payload length {}",
                 payload.len()
             );
+        }
+    }
+
+    #[test]
+    fn parses_sender_addresses_and_exact_word_guards() {
+        let first = [0x01u8; SENDER_ADDRESS_LEN];
+        let second = [0x02u8; SENDER_ADDRESS_LEN];
+        let mut expected = [0u8; 32];
+        expected[31] = 7;
+
+        let mut body = std::vec::Vec::new();
+        body.extend_from_slice(&[PARAM_SENDER_ADDRESS, 40]);
+        body.extend_from_slice(&first);
+        body.extend_from_slice(&second);
+        body.extend_from_slice(&[
+            PARAM_WORD_GUARD,
+            WORD_GUARD_PAYLOAD_LEN as u8,
+            WORD_GUARD_NE,
+        ]);
+        body.extend_from_slice(&expected);
+        body.extend_from_slice(&[
+            PARAM_TERMINAL_KIND,
+            1,
+            TerminalKind::Unsigned as u8,
+            PARAM_INTEGER_WIDTH,
+            1,
+            32,
+        ]);
+        let mut pool = std::vec![0xFF, body.len() as u8];
+        pool.extend_from_slice(&body);
+        let bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
+        let parsed = parse(&ir, 1).unwrap();
+        assert!(parsed.sender_address_matches(&first));
+        assert!(parsed.sender_address_matches(&second));
+        assert!(!parsed.sender_address_matches(&[0x03; 20]));
+        let guard = parsed.word_guard.expect("guard parsed");
+        assert_eq!(guard.mode(), WORD_GUARD_NE);
+        assert_eq!(guard.expected(), &expected);
+        assert!(!guard.accepts(&expected));
+        expected[31] ^= 1;
+        assert!(guard.accepts(&expected));
+    }
+
+    #[test]
+    fn rejects_noncanonical_sender_lists_and_word_guards() {
+        for payload in [
+            std::vec![0x11; 0],
+            std::vec![0x11; 19],
+            std::vec![0x11; 21],
+            std::vec![0x11; 40], // duplicate pair
+            std::vec![0x11; 60],
+        ] {
+            let mut pool = std::vec![
+                0xFF,
+                (2 + payload.len()) as u8,
+                PARAM_SENDER_ADDRESS,
+                payload.len() as u8,
+            ];
+            pool.extend_from_slice(&payload);
+            let bytes = ir_with_pool(&pool);
+            let ir = Erc7730Ir::parse(&bytes).unwrap();
+            assert!(matches!(
+                parse(&ir, 1),
+                Err(RenderErr::Reject("7730 bad sender address"))
+            ));
+        }
+
+        for payload in [
+            std::vec![WORD_GUARD_EQ; 32],
+            std::vec![WORD_GUARD_EQ; 34],
+            {
+                let mut payload = std::vec![0u8; WORD_GUARD_PAYLOAD_LEN];
+                payload[0] = 2;
+                payload
+            },
+        ] {
+            let mut pool = std::vec![
+                0xFF,
+                (2 + payload.len()) as u8,
+                PARAM_WORD_GUARD,
+                payload.len() as u8,
+            ];
+            pool.extend_from_slice(&payload);
+            let bytes = ir_with_pool(&pool);
+            let ir = Erc7730Ir::parse(&bytes).unwrap();
+            assert!(matches!(
+                parse(&ir, 1),
+                Err(RenderErr::Reject("7730 bad word guard"))
+            ));
         }
     }
 
@@ -1715,13 +1896,13 @@ mod kani_harnesses {
         kani::assume(4 + l <= N);
         let tag = pool[2];
         // "Unknown" = outside the CONTIGUOUS known-tag range
-        // `[0x30, PARAM_INTEGER_WIDTH]`.
+        // `[0x30, PARAM_WORD_GUARD]`.
         // NB: the top bound is the HIGHEST known tag, not 0x3F — new tags were added
         // above the original 0x30..=0x3F block (`PARAM_CONST_VALUE` 0x40 in b37a052f,
         // `PARAM_NESTED_STRUCT` 0x41 in 2f4cc810), so a stale bound wrongly classifies
         // a known tag as unknown and the harness fails on a tag the parser correctly
         // accepts. Keep this in sync with the highest `PARAM_*` constant.
-        kani::assume(tag < PARAM_TOKEN_PATH || tag > PARAM_INTEGER_WIDTH);
+        kani::assume(tag < PARAM_TOKEN_PATH || tag > PARAM_WORD_GUARD);
         let ir = mk_ir(&pool);
         assert!(parse(&ir, 1).is_err());
     }
