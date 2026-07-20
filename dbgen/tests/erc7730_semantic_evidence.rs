@@ -42,6 +42,10 @@ fn lido_staking_evidence_root() -> PathBuf {
     workspace_root().join("tests/erc7730-semantic-evidence/lido-staking")
 }
 
+fn aave_permit_evidence_root() -> PathBuf {
+    workspace_root().join("tests/erc7730-semantic-evidence/aave-pq-permit-compatibility")
+}
+
 fn uniswap_evidence_root() -> PathBuf {
     workspace_root().join("tests/erc7730-semantic-evidence/uniswap-router02-single-hop")
 }
@@ -167,6 +171,122 @@ fn decode_abi_string_result(text: &str) -> String {
         "ABI string payload is truncated"
     );
     String::from_utf8(bytes[64..64 + length].to_vec()).expect("ABI string is UTF-8")
+}
+
+#[test]
+fn aave_v3_vrs_permit_routes_cannot_carry_pqsmartwallet_authorization() {
+    let root = aave_permit_evidence_root();
+    let manifest = read_json(&root.join("manifest.json"));
+    assert_eq!(manifest["schema_version"].as_u64(), Some(1));
+    assert_eq!(
+        required_str(&manifest["revision_sources"], "revision_11_commit"),
+        "fd1fbd9150426ca8ace9cee45b4acf912ae84f5b"
+    );
+    assert_eq!(
+        required_str(&manifest["revision_sources"], "revision_10_commit"),
+        "e8feb287e4bc492c62a5c1c19086262c6e223b37"
+    );
+
+    let upstream = manifest["upstream"]
+        .as_array()
+        .expect("Aave upstream evidence is an array");
+    assert_eq!(upstream.len(), 3);
+    for artifact in upstream {
+        assert_eq!(
+            required_str(artifact, "repository"),
+            "https://github.com/aave-dao/aave-v3-origin"
+        );
+        assert_eq!(
+            required_str(artifact, "commit"),
+            "fd1fbd9150426ca8ace9cee45b4acf912ae84f5b"
+        );
+        let archive = root.join(required_str(artifact, "archive_file"));
+        let bytes = fs::read(&archive)
+            .unwrap_or_else(|error| panic!("read {}: {error}", archive.display()));
+        assert_eq!(
+            sha256_hex(&bytes),
+            required_str(artifact, "archive_file_sha256"),
+            "Aave source excerpt drifted: {}",
+            archive.display()
+        );
+        assert_eq!(required_str(artifact, "full_file_sha256").len(), 64);
+    }
+
+    let pool = normalized_whitespace(
+        &fs::read_to_string(root.join("source/Pool.permit.excerpt.sol"))
+            .expect("read Aave Pool excerpt"),
+    );
+    assert_fragments_in_order(
+        &pool,
+        &[
+            "function supply(",
+            "user: _msgSender()",
+            "function supplyWithPermit(",
+            "IERC20WithPermit(asset).permit( _msgSender(), address(this), amount, deadline, permitV, permitR, permitS ) {} catch {}",
+            "user: _msgSender()",
+            "function repay(",
+            "user: _msgSender()",
+            "function repayWithPermit(",
+            "IERC20WithPermit(asset).permit( _msgSender(), address(this), amount, deadline, permitV, permitR, permitS ) {} catch {}",
+            "user: _msgSender()",
+        ],
+    );
+    assert_eq!(
+        pool.matches("supplierEModeCategory: _usersEModeCategory[onBehalfOf]")
+            .count(),
+        2,
+        "permit and ordinary supply must share the same continuation"
+    );
+    assert_eq!(
+        pool.matches("useATokens: false").count(),
+        2,
+        "permit and ordinary repay must share the same continuation"
+    );
+
+    let gateway = normalized_whitespace(
+        &fs::read_to_string(root.join("source/WrappedTokenGatewayV3.permit.excerpt.sol"))
+            .expect("read Aave gateway excerpt"),
+    );
+    assert_fragments_in_order(
+        &gateway,
+        &[
+            "function withdrawETH(",
+            "aWETH.transferFrom(msg.sender, address(this), amountToWithdraw)",
+            "function withdrawETHWithPermit(",
+            "aWETH.permit(msg.sender, address(this), amount, deadline, permitV, permitR, permitS) {} catch {}",
+            "aWETH.transferFrom(msg.sender, address(this), amountToWithdraw)",
+        ],
+    );
+
+    let atoken = normalized_whitespace(
+        &fs::read_to_string(root.join("source/AToken.permit.excerpt.sol"))
+            .expect("read Aave aToken excerpt"),
+    );
+    assert!(atoken
+        .contains("require(owner == ECDSA.recover(digest, v, r, s), Errors.InvalidSignature())"));
+
+    let workspace = workspace_root();
+    let wallet = fs::read_to_string(workspace.join("contracts/smart-wallet/src/PQSmartWallet.sol"))
+        .expect("read PQSmartWallet source");
+    assert!(wallet.contains("target.call{value: value}(data)"));
+    assert!(wallet.contains("targets[i].call{value: values[i]}(datas[i])"));
+    assert!(wallet.contains("if (signature.length != 96 + paddedInner) return false;"));
+    assert!(wallet.contains("if (innerLen != C10_SIG_LEN) return false;"));
+
+    let constants = fs::read_to_string(
+        workspace.join("contracts/smart-wallet/src/generated/PqsignerProto.sol"),
+    )
+    .expect("read generated signature constants");
+    assert!(constants.contains("uint256 internal constant C10_SIG_LEN = 4008;"));
+    assert!(constants.contains("uint256 internal constant SIG_WRAPPER_LEN = 4128;"));
+    assert_eq!(
+        manifest["pqsmartwallet"]["c10_signature_bytes"].as_u64(),
+        Some(4008)
+    );
+    assert_eq!(
+        manifest["pqsmartwallet"]["signature_wrapper_bytes"].as_u64(),
+        Some(4128)
+    );
 }
 
 fn eip712_domain_separator(

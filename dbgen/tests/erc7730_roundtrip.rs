@@ -87,52 +87,8 @@ fn build_e2e() -> Erc7730BuildResult {
     build_db(&dir, &policy).expect("build E2E corpus")
 }
 
-fn assert_aave_permit_format(
-    ir: &Erc7730Ir<'_>,
-    signature: &str,
-    expected: &[(&[u8], FormatOp, TerminalKind, Option<u8>)],
-) -> [u8; 4] {
-    let hash = keccak256(signature.as_bytes());
-    let selector: [u8; 4] = hash[..4].try_into().expect("selector width");
-    let format = ir
-        .find_format_by_selector(&selector)
-        .expect("Aave permit format table parses")
-        .unwrap_or_else(|| panic!("operand-complete Aave permit missing: {signature}"));
-    let fields: Vec<_> = format
-        .fields()
-        .map(|field| field.expect("generated Aave permit field parses"))
-        .collect();
-    assert_eq!(
-        fields.len(),
-        expected.len(),
-        "unexpected fields for {signature}"
-    );
-
-    for (field, (label, op, terminal_kind, width)) in fields.iter().zip(expected) {
-        assert_eq!(field.label, *label, "wrong label for {signature}");
-        assert_eq!(
-            FormatOp::try_from(field.format_op),
-            Ok(*op),
-            "wrong formatter for {signature} field {:?}",
-            core::str::from_utf8(label).expect("ASCII test label")
-        );
-        let params = parse_params(ir, field.param_off).expect("Aave permit params parse");
-        assert_eq!(params.visibility, Visibility::Always);
-        assert_eq!(params.terminal_kind, Some(*terminal_kind));
-        assert_eq!(params.integer_width_bytes, *width);
-        if *op == FormatOp::Date {
-            assert_eq!(
-                params.date_encoding,
-                Some(0),
-                "deadline must be a timestamp"
-            );
-        }
-    }
-    selector
-}
-
 #[test]
-fn registry_aave_v3_lending_and_permits_cover_every_unique_deployment() {
+fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment() {
     let result = build_registry();
     let entries: Vec<_> = result
         .entries
@@ -156,7 +112,11 @@ fn registry_aave_v3_lending_and_permits_cover_every_unique_deployment() {
         ("deposit(address,uint256,address,uint16)", 3, 2),
         ("supply(address,uint256,address,uint16)", 3, 2),
     ];
-    let still_refused = ["multicall(bytes[])"];
+    let still_refused = [
+        "repayWithPermit(address,uint256,uint256,address,uint256,uint8,bytes32,bytes32)",
+        "supplyWithPermit(address,uint256,address,uint16,uint256,uint8,bytes32,bytes32)",
+        "multicall(bytes[])",
+    ];
 
     for entry in entries {
         let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Aave V3 IR parses");
@@ -194,81 +154,6 @@ fn registry_aave_v3_lending_and_permits_cover_every_unique_deployment() {
             assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
         }
 
-        let repay_selector = assert_aave_permit_format(
-            &ir,
-            "repayWithPermit(address,uint256,uint256,address,uint256,uint8,bytes32,bytes32)",
-            &[
-                (
-                    b"Amount to repay",
-                    FormatOp::TokenAmount,
-                    TerminalKind::Unsigned,
-                    Some(32),
-                ),
-                (
-                    b"Interest rate mode",
-                    FormatOp::Enum,
-                    TerminalKind::Unsigned,
-                    Some(32),
-                ),
-                (
-                    b"For debt holder",
-                    FormatOp::AddressName,
-                    TerminalKind::Address,
-                    None,
-                ),
-                (
-                    b"Deadline",
-                    FormatOp::Date,
-                    TerminalKind::Unsigned,
-                    Some(32),
-                ),
-                (b"Permit V", FormatOp::Raw, TerminalKind::Unsigned, Some(1)),
-                (b"Permit R", FormatOp::Raw, TerminalKind::FixedBytes, None),
-                (b"Permit S", FormatOp::Raw, TerminalKind::FixedBytes, None),
-            ],
-        );
-        let supply_selector = assert_aave_permit_format(
-            &ir,
-            "supplyWithPermit(address,uint256,address,uint16,uint256,uint8,bytes32,bytes32)",
-            &[
-                (
-                    b"Amount to supply",
-                    FormatOp::TokenAmount,
-                    TerminalKind::Unsigned,
-                    Some(32),
-                ),
-                (
-                    b"Collateral recipient",
-                    FormatOp::AddressName,
-                    TerminalKind::Address,
-                    None,
-                ),
-                (
-                    b"Referral Code",
-                    FormatOp::Raw,
-                    TerminalKind::Unsigned,
-                    Some(2),
-                ),
-                (
-                    b"Deadline",
-                    FormatOp::Date,
-                    TerminalKind::Unsigned,
-                    Some(32),
-                ),
-                (b"Permit V", FormatOp::Raw, TerminalKind::Unsigned, Some(1)),
-                (b"Permit R", FormatOp::Raw, TerminalKind::FixedBytes, None),
-                (b"Permit S", FormatOp::Raw, TerminalKind::FixedBytes, None),
-            ],
-        );
-        for selector in [repay_selector, supply_selector] {
-            assert!(
-                result
-                    .known_calls
-                    .contains(&(entry.chain_id, entry.contract, selector)),
-                "newly clear-signable Aave permit must already be registry-known"
-            );
-        }
-
         for signature in still_refused {
             let hash = keccak256(signature.as_bytes());
             let selector: [u8; 4] = hash[..4].try_into().expect("selector width");
@@ -276,7 +161,22 @@ fn registry_aave_v3_lending_and_permits_cover_every_unique_deployment() {
                 ir.find_format_by_selector(&selector)
                     .expect("Aave format table parses")
                     .is_none(),
-                "unsafe Aave format unexpectedly became clear-signable: {signature}"
+                "PQ-incompatible or incomplete Aave format became clear-signable: {signature}"
+            );
+            assert!(
+                result
+                    .known_calls
+                    .contains(&(entry.chain_id, entry.contract, selector)),
+                "refused Aave route must stay in the exact known-call inventory: {signature}"
+            );
+            assert!(
+                known_call_may_contain(
+                    &result.known_calls_bloom,
+                    entry.chain_id,
+                    &entry.contract,
+                    &selector,
+                ),
+                "refused Aave route must remain fail-closed in the Bloom: {signature}"
             );
         }
     }
@@ -284,18 +184,18 @@ fn registry_aave_v3_lending_and_permits_cover_every_unique_deployment() {
     assert_eq!(
         result.entries.len(),
         430,
-        "the bounded DeFi curation phase must add exactly two catalogue leaves"
+        "PQ-incompatible permit removal must preserve the 430-leaf catalogue"
     );
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
         "593a8c77ccb5323cdd2fc2830af32916722dfc3fb570aa33ca94b7fcdf8dd781",
-        "format acceptance must not change the declared known-call tuple set"
+        "permit refusal must not change the declared known-call tuple set"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
         "af61b17f4bddd54b0a7b9840b01517cffdd0e80f23f85ba0bb7abc30540bb628",
-        "format acceptance must not change the known-call Bloom"
+        "permit refusal must not change the known-call Bloom"
     );
 }
 
@@ -425,7 +325,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.root),
-        "d4f227c97e7c0e1163f8d63ae2a9b2a01024e633b1360683f5ce343b12cdb6ce"
+        "a505b61997a455043db15299460db88443853f2817435e2e5c8a2ffbe2851a15"
     );
 }
 
@@ -873,7 +773,7 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
 }
 
 #[test]
-fn registry_aave_wrapped_gateway_admits_complete_basic_and_permit_calls() {
+fn registry_aave_wrapped_gateway_refuses_pq_incompatible_permit_call() {
     let result = build_registry();
     let source_name = "calldata-WrappedTokenGatewayV3.json";
     let entries: Vec<_> = result
@@ -957,40 +857,27 @@ fn registry_aave_wrapped_gateway_admits_complete_basic_and_permit_calls() {
             );
         }
 
-        assert_eq!(
-            assert_aave_permit_format(
-                &ir,
-                "withdrawETHWithPermit(address,uint256,address,uint256,uint8,bytes32,bytes32)",
-                &[
-                    (
-                        b"Amount to withdraw",
-                        FormatOp::TokenAmount,
-                        TerminalKind::Unsigned,
-                        Some(32)
-                    ),
-                    (
-                        b"To recipient",
-                        FormatOp::AddressName,
-                        TerminalKind::Address,
-                        None
-                    ),
-                    (b"Pool", FormatOp::Raw, TerminalKind::Address, None),
-                    (
-                        b"Deadline",
-                        FormatOp::Date,
-                        TerminalKind::Unsigned,
-                        Some(32)
-                    ),
-                    (b"Permit V", FormatOp::Raw, TerminalKind::Unsigned, Some(1)),
-                    (b"Permit R", FormatOp::Raw, TerminalKind::FixedBytes, None),
-                    (b"Permit S", FormatOp::Raw, TerminalKind::FixedBytes, None),
-                ],
-            ),
-            permit_selector
+        assert!(
+            ir.find_format_by_selector(&permit_selector)
+                .expect("Aave gateway format table parses")
+                .is_none(),
+            "withdrawETHWithPermit cannot transport a PQSmartWallet signature"
         );
-        assert!(result
-            .known_calls
-            .contains(&(entry.chain_id, entry.contract, permit_selector,)));
+        assert!(
+            result
+                .known_calls
+                .contains(&(entry.chain_id, entry.contract, permit_selector)),
+            "refused gateway permit must remain exactly known"
+        );
+        assert!(
+            known_call_may_contain(
+                &result.known_calls_bloom,
+                entry.chain_id,
+                &entry.contract,
+                &permit_selector,
+            ),
+            "refused gateway permit must remain fail-closed in the Bloom"
+        );
     }
 }
 
