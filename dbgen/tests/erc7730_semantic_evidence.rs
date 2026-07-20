@@ -3570,7 +3570,7 @@ fn lido_wsteth_remaining_routes_source_abi_descriptor_and_ir_agree() {
 }
 
 #[test]
-fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
+fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_restoration() {
     let root = workspace_root();
     let evidence = uniswap_evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));
@@ -3658,11 +3658,56 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
         constraints["outer_native_value_policy"].as_str(),
         Some("require_zero")
     );
+    assert_eq!(
+        constraints["v2_path_policy"].as_str(),
+        Some("render_every_signed_address")
+    );
+    assert_eq!(constraints["v2_path_render_cap"].as_u64(), Some(8));
+    assert_eq!(
+        constraints["input_label_policy"].as_str(),
+        Some("neutral_no_signer_payment_claim")
+    );
+
+    let hazards = manifest["semantic_hazards"]
+        .as_array()
+        .expect("semantic hazard array")
+        .iter()
+        .map(|hazard| hazard.as_str().expect("semantic hazard text"))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    for needle in [
+        "every v2 path address",
+        "amountoutmin",
+        "amountinmax",
+        "pre-existing router native balance",
+        "router-held erc-20 payment requires the amountin=0 router-payer branch",
+        "do not claim that the signer necessarily pays",
+    ] {
+        assert!(hazards.contains(needle), "manifest lost hazard: {needle}");
+    }
+
+    let review_text = normalized_whitespace(
+        &fs::read_to_string(evidence.join("README.md")).expect("read Uniswap review text"),
+    );
+    for needle in [
+        "selectors `0x472b43f3` and `0x42712a67`",
+        "every V2 `path` element selects a hop",
+        "pre-existing router native currency can still fund a WETH9 input",
+        "Router-held ERC-20 payment requires the `amountIn == 0` router-payer branch",
+        "labels are therefore neutral (`Swap input` and `Max swap input`)",
+        "all four admitted routes plus both packed-route refusals remain in the exact known-call set",
+    ] {
+        assert!(
+            review_text.contains(needle),
+            "review text lost source-derived statement: {needle}"
+        );
+    }
 
     let route_specs = manifest["policy"]["constrained_routes"]
         .as_array()
         .expect("excluded route array");
-    assert_eq!(route_specs.len(), 2);
+    assert_eq!(route_specs.len(), 4);
     let mut expected_routes = BTreeMap::<String, [u8; 4]>::new();
     for route in route_specs {
         let signature = required_str(route, "canonical_signature");
@@ -3684,6 +3729,14 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
                 "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))"
                     .to_owned(),
                 [0x50, 0x23, 0xb4, 0xdf],
+            ),
+            (
+                "swapExactTokensForTokens(uint256,uint256,address[],address)".to_owned(),
+                [0x47, 0x2b, 0x43, 0xf3],
+            ),
+            (
+                "swapTokensForExactTokens(uint256,uint256,address[],address)".to_owned(),
+                [0x42, 0x71, 0x2a, 0x67],
             ),
         ])
     );
@@ -3738,7 +3791,7 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
             String::from_utf8(bytes).expect("Solidity source is UTF-8"),
         );
     }
-    assert_eq!(archived_sources.len(), 6);
+    assert_eq!(archived_sources.len(), 9);
 
     let concrete = normalized_whitespace(&archived_sources["source/SwapRouter02.sol"]);
     assert!(concrete.contains(
@@ -3772,6 +3825,75 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
             "params.amountIn = IERC20(params.tokenIn).balanceOf(address(this));",
             "payer: hasAlreadyPaid ? address(this) : msg.sender",
             "require(amountOut >= params.amountOutMinimum, 'Too little received');",
+        ],
+    );
+
+    let v2_interface = normalized_whitespace(&archived_sources["source/IV2SwapRouter.sol"]);
+    assert!(v2_interface
+        .contains("Setting `amountIn` to 0 will cause the contract to look up its own balance"));
+    assert!(v2_interface.contains(
+        "function swapExactTokensForTokens( uint256 amountIn, uint256 amountOutMin, address[] calldata path, address to ) external payable returns (uint256 amountOut);"
+    ));
+    assert!(v2_interface.contains(
+        "function swapTokensForExactTokens( uint256 amountOut, uint256 amountInMax, address[] calldata path, address to ) external payable returns (uint256 amountIn);"
+    ));
+
+    let v2_router = normalized_whitespace(&archived_sources["source/V2SwapRouter.sol"]);
+    assert!(v2_router.contains(
+        "abstract contract V2SwapRouter is IV2SwapRouter, ImmutableState, PeripheryPaymentsWithFeeExtended"
+    ));
+    assert_eq!(
+        v2_router
+            .matches("if (to == Constants.MSG_SENDER) to = msg.sender; else if (to == Constants.ADDRESS_THIS) to = address(this);")
+            .count(),
+        2,
+        "both V2 routes must bind the two recipient sentinels"
+    );
+    assert_fragments_in_order(
+        &v2_router,
+        &[
+            "function _swap(address[] memory path, address _to) private",
+            "for (uint256 i; i < path.length - 1; i++)",
+            "(address input, address output) = (path[i], path[i + 1]);",
+            "address to = i < path.length - 2 ? UniswapV2Library.pairFor(factoryV2, output, path[i + 2]) : _to;",
+            "pair.swap(amount0Out, amount1Out, to, new bytes(0));",
+        ],
+    );
+    assert_fragments_in_order(
+        &v2_router,
+        &[
+            "function swapExactTokensForTokens(",
+            "if (amountIn == Constants.CONTRACT_BALANCE)",
+            "amountIn = IERC20(path[0]).balanceOf(address(this));",
+            "hasAlreadyPaid ? address(this) : msg.sender",
+            "uint256 balanceBefore = IERC20(path[path.length - 1]).balanceOf(to);",
+            "_swap(path, to);",
+            "amountOut = IERC20(path[path.length - 1]).balanceOf(to).sub(balanceBefore);",
+            "require(amountOut >= amountOutMin, 'Too little received');",
+        ],
+    );
+    assert_fragments_in_order(
+        &v2_router,
+        &[
+            "function swapTokensForExactTokens(",
+            "amountIn = UniswapV2Library.getAmountsIn(factoryV2, amountOut, path)[0];",
+            "require(amountIn <= amountInMax, 'Too much requested');",
+            "pay(path[0], msg.sender, UniswapV2Library.pairFor(factoryV2, path[0], path[1]), amountIn);",
+            "_swap(path, to);",
+        ],
+    );
+
+    let v2_library = normalized_whitespace(&archived_sources["source/UniswapV2Library.sol"]);
+    assert_fragments_in_order(
+        &v2_library,
+        &[
+            "function getAmountsIn(",
+            "require(path.length >= 2);",
+            "amounts = new uint256[](path.length);",
+            "amounts[amounts.length - 1] = amountOut;",
+            "for (uint256 i = path.length - 1; i > 0; i--)",
+            "getReserves(factory, path[i - 1], path[i]);",
+            "amounts[i - 1] = getAmountIn(amounts[i], reserveIn, reserveOut);",
         ],
     );
 
@@ -3869,7 +3991,95 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
     }
     assert_eq!(
         abi_signatures,
-        expected_routes.keys().cloned().collect::<BTreeSet<_>>()
+        expected_routes
+            .keys()
+            .filter(|signature| signature.contains("Single"))
+            .cloned()
+            .collect::<BTreeSet<_>>()
+    );
+
+    assert_eq!(
+        abi_spec["official_artifact_sha256"].as_str(),
+        Some("210a7bf29f26de9f45d35dac1214943eca41c3a002007dd6a0e1aa870bf2d2d1")
+    );
+    assert_eq!(
+        abi_spec["v2_multihop_official_artifact_subset"].as_bool(),
+        Some(true)
+    );
+    let v2_abi_bytes = fs::read(evidence.join(required_str(abi_spec, "v2_multihop_archive_file")))
+        .expect("read V2 multi-hop ABI subset");
+    assert_eq!(
+        sha256_hex(&v2_abi_bytes),
+        required_str(abi_spec, "v2_multihop_archive_file_sha256")
+    );
+    let v2_abi: Value =
+        serde_json::from_slice(&v2_abi_bytes).expect("parse V2 multi-hop ABI subset");
+    let v2_entries = v2_abi.as_array().expect("V2 multi-hop ABI array");
+    assert_eq!(v2_entries.len(), 2);
+    let mut v2_abi_signatures = BTreeSet::new();
+    for entry in v2_entries {
+        assert_eq!(entry["type"].as_str(), Some("function"));
+        assert_eq!(entry["stateMutability"].as_str(), Some("payable"));
+        let name = entry["name"].as_str().expect("V2 function name");
+        let expected_inputs: &[(&str, &str)] = match name {
+            "swapExactTokensForTokens" => &[
+                ("amountIn", "uint256"),
+                ("amountOutMin", "uint256"),
+                ("path", "address[]"),
+                ("to", "address"),
+            ],
+            "swapTokensForExactTokens" => &[
+                ("amountOut", "uint256"),
+                ("amountInMax", "uint256"),
+                ("path", "address[]"),
+                ("to", "address"),
+            ],
+            unexpected => panic!("unexpected V2 ABI route {unexpected}"),
+        };
+        let actual_inputs: Vec<_> = entry["inputs"]
+            .as_array()
+            .expect("V2 ABI inputs")
+            .iter()
+            .map(|input| {
+                (
+                    input["name"].as_str().expect("V2 input name"),
+                    input["type"].as_str().expect("V2 input type"),
+                )
+            })
+            .collect();
+        assert_eq!(actual_inputs, expected_inputs);
+        let signature = format!(
+            "{name}({})",
+            actual_inputs
+                .iter()
+                .map(|(_, ty)| *ty)
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        assert_eq!(
+            &keccak256(signature.as_bytes())[..4],
+            expected_routes[&signature].as_slice(),
+            "V2 ABI selector must derive from the exact four-argument tuple"
+        );
+        v2_abi_signatures.insert(signature);
+
+        let outputs = entry["outputs"].as_array().expect("V2 ABI outputs");
+        assert_eq!(outputs.len(), 1);
+        let expected_output = match name {
+            "swapExactTokensForTokens" => ("amountOut", "uint256"),
+            "swapTokensForExactTokens" => ("amountIn", "uint256"),
+            _ => unreachable!("ABI names checked above"),
+        };
+        assert_eq!(outputs[0]["name"].as_str(), Some(expected_output.0));
+        assert_eq!(outputs[0]["type"].as_str(), Some(expected_output.1));
+    }
+    assert_eq!(
+        v2_abi_signatures,
+        expected_routes
+            .keys()
+            .filter(|signature| signature.starts_with("swap"))
+            .cloned()
+            .collect::<BTreeSet<_>>()
     );
 
     let descriptor_spec = &manifest["descriptor"];
@@ -3897,7 +4107,10 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
             })
     }));
     let sentinel = required_str(descriptor_spec, "sender_address_sentinel");
-    for route in route_specs {
+    for route in route_specs
+        .iter()
+        .filter(|route| required_str(route, "canonical_signature").contains("Single"))
+    {
         let format_key = required_str(route, "descriptor_format_key");
         let fields = descriptor["display"]["formats"][format_key]["fields"]
             .as_array()
@@ -3921,6 +4134,94 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
         assert_eq!(value_fields[0]["label"].as_str(), Some("Native value"));
         assert_eq!(value_fields[0]["format"].as_str(), Some("amount"));
         assert_eq!(value_fields[0]["visible"].as_str(), Some("always"));
+    }
+
+    let v2_display_shapes: [(&str, [(&str, &str, &str); 5]); 2] = [
+        (
+            "swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to)",
+            [
+                ("@.value", "Native value", "amount"),
+                ("amountIn", "Swap input", "tokenAmount"),
+                ("amountOutMin", "Minimum receive", "tokenAmount"),
+                ("path.[]", "Route", "addressName"),
+                ("to", "Beneficiary", "addressName"),
+            ],
+        ),
+        (
+            "swapTokensForExactTokens(uint256 amountOut, uint256 amountInMax, address[] path, address to)",
+            [
+                ("@.value", "Native value", "amount"),
+                ("amountOut", "Amount to receive", "tokenAmount"),
+                ("amountInMax", "Max swap input", "tokenAmount"),
+                ("path.[]", "Route", "addressName"),
+                ("to", "Beneficiary", "addressName"),
+            ],
+        ),
+    ];
+    for (format_key, expected_shape) in v2_display_shapes {
+        let fields = descriptor["display"]["formats"][format_key]["fields"]
+            .as_array()
+            .unwrap_or_else(|| panic!("V2 multi-hop fields missing for {format_key}"));
+        let actual_shape: Vec<_> = fields
+            .iter()
+            .map(|field| {
+                (
+                    required_str(field, "path"),
+                    required_str(field, "label"),
+                    required_str(field, "format"),
+                )
+            })
+            .collect();
+        assert_eq!(actual_shape, expected_shape);
+        assert!(
+            fields
+                .iter()
+                .all(|field| field["visible"].as_str() == Some("always")),
+            "every V2 signed effect must be unconditionally visible"
+        );
+
+        let route_field = fields
+            .iter()
+            .find(|field| field["path"].as_str() == Some("path.[]"))
+            .expect("complete V2 route field");
+        let route_types = route_field["params"]["types"]
+            .as_array()
+            .expect("route address types");
+        assert_eq!(route_types.len(), 1);
+        assert_eq!(route_types[0].as_str(), Some("token"));
+
+        let recipient = fields
+            .iter()
+            .find(|field| field["path"].as_str() == Some("to"))
+            .expect("V2 beneficiary field");
+        let sender_addresses = recipient["params"]["senderAddress"]
+            .as_array()
+            .expect("V2 senderAddress annotation");
+        assert_eq!(sender_addresses.len(), 1);
+        assert_eq!(sender_addresses[0].as_str(), Some(sentinel));
+    }
+
+    let token_path_expectations = [
+        (
+            "swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to)",
+            [("amountIn", "path.[0]"), ("amountOutMin", "path.[-1]")],
+        ),
+        (
+            "swapTokensForExactTokens(uint256 amountOut, uint256 amountInMax, address[] path, address to)",
+            [("amountOut", "path.[-1]"), ("amountInMax", "path.[0]")],
+        ),
+    ];
+    for (format_key, expectations) in token_path_expectations {
+        let fields = descriptor["display"]["formats"][format_key]["fields"]
+            .as_array()
+            .expect("V2 multi-hop fields");
+        for (path, token_path) in expectations {
+            let field = fields
+                .iter()
+                .find(|field| field["path"].as_str() == Some(path))
+                .unwrap_or_else(|| panic!("missing V2 amount field {path}"));
+            assert_eq!(field["params"]["tokenPath"].as_str(), Some(token_path));
+        }
     }
 
     let registry_root = root.join("secure/data/erc7730-registry");
@@ -3947,19 +4248,66 @@ fn uniswap_router02_evidence_binds_constrained_single_hop_restoration() {
         "one exact Router02 deployment leaf"
     );
     let ir = Erc7730Ir::parse(&router_entries[0].ir_bytes).expect("parse restored Router02 IR");
-    assert_eq!(ir.format_count(), Ok(2));
-    for (signature, selector) in expected_routes {
+    assert_eq!(ir.format_count(), Ok(4));
+    for (signature, selector) in &expected_routes {
         assert!(
-            ir.find_format_by_selector(&selector)
+            ir.find_format_by_selector(selector)
                 .expect("Router02 format table parses")
                 .is_some(),
             "{signature} must be present under constrained restoration"
         );
         assert!(
-            registry.known_calls.contains(&(1, contract, selector)),
+            registry.known_calls.contains(&(1, contract, *selector)),
             "{signature} must remain an exact known-call tuple"
         );
     }
+
+    let refused_specs = manifest["policy"]["continued_hard_refusals"]
+        .as_array()
+        .expect("continued hard-refusal array");
+    assert_eq!(refused_specs.len(), 2);
+    let mut expected_known_selectors = expected_routes.values().copied().collect::<BTreeSet<_>>();
+    for refusal in refused_specs {
+        let signature = required_str(refusal, "canonical_signature");
+        let selector: [u8; 4] = decode_hex_text(required_str(refusal, "selector"))
+            .try_into()
+            .expect("refused selector width");
+        assert_eq!(&keccak256(signature.as_bytes())[..4], selector.as_slice());
+        assert!(
+            ir.find_format_by_selector(&selector)
+                .expect("Router02 format table parses")
+                .is_none(),
+            "packed V3 route must remain refused: {signature}"
+        );
+        assert!(
+            registry.known_calls.contains(&(1, contract, selector)),
+            "packed V3 refusal escaped exact omission protection: {signature}"
+        );
+        assert!(expected_known_selectors.insert(selector));
+    }
+    assert_eq!(
+        expected_known_selectors,
+        BTreeSet::from([
+            [0x04, 0xe4, 0x5a, 0xaf],
+            [0x09, 0xb8, 0x13, 0x46],
+            [0x42, 0x71, 0x2a, 0x67],
+            [0x47, 0x2b, 0x43, 0xf3],
+            [0x50, 0x23, 0xb4, 0xdf],
+            [0xb8, 0x58, 0x18, 0x3f],
+        ]),
+        "manifest must name the exact Router02 selector inventory"
+    );
+    let actual_known_selectors = registry
+        .known_calls
+        .iter()
+        .filter_map(|(chain_id, address, selector)| {
+            (*chain_id == 1 && *address == contract).then_some(*selector)
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        actual_known_selectors, expected_known_selectors,
+        "Router02 exact known-call set changed independently of the reviewed six-route inventory"
+    );
 }
 
 #[test]

@@ -40,7 +40,7 @@ use pqsigner_erc7730::ir::{
 };
 use pqsigner_erc7730::known_calls::may_contain as known_call_may_contain;
 use pqsigner_erc7730::render::params::{
-    parse as parse_params, DYNAMIC_KIND_BYTES, WORD_GUARD_EQ, WORD_GUARD_NE,
+    parse as parse_params, ADDR_TYPE_TOKEN, DYNAMIC_KIND_BYTES, WORD_GUARD_EQ, WORD_GUARD_NE,
 };
 use pqsigner_erc7730::render::policy::TerminalKind;
 use pqsigner_tx_core::hash::keccak256;
@@ -681,7 +681,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_544);
     assert_eq!(
         hex::encode(result.root),
-        "712ca64bb1a14054e52a4b9ad8bb980315b63f43d08c51cb7ec7bf1960e96d0b"
+        "b4e20c980411ea305bd12e858f7515bcd3d8b6e8932f26e7952b6e19664a5bd4"
     );
 }
 
@@ -3553,12 +3553,13 @@ fn unenrolled_address_name_sender_address_drops_only_its_whole_format() {
 }
 
 /// Router02 assigns protocol semantics to sentinel recipient addresses and to
-/// zero amounts. Only the two exactly enrolled single-hop selectors may enter
-/// trusted IR, and every enrolled sender/word predicate must stay attached to
-/// its exact authenticated path. The four broader routes remain absent from the
-/// leaf while all six declared selectors stay in exact/Bloom omission defense.
+/// zero amounts. Only the four exactly enrolled single-hop and full-address-
+/// route selectors may enter trusted IR, and every enrolled sender/word
+/// predicate must stay attached to its exact authenticated path. The two
+/// packed-byte routes remain absent while all six declared selectors stay in
+/// exact/Bloom omission defense.
 #[test]
-fn vendored_uniswap_v3_router02_admits_only_exactly_guarded_single_hop_routes() {
+fn vendored_uniswap_v3_router02_admits_only_four_exactly_guarded_routes() {
     let root = workspace_root();
     let reg = root.join("secure/data/erc7730-registry");
     let desc = reg.join("registry/uniswap/calldata-UniswapV3Router02.json");
@@ -3582,7 +3583,7 @@ fn vendored_uniswap_v3_router02_admits_only_exactly_guarded_single_hop_routes() 
         "the exact mainnet Router02 deployment must produce one leaf"
     );
     let ir = Erc7730Ir::parse(&router_entries[0].ir_bytes).expect("Router02 IR parses");
-    assert_eq!(ir.format_count(), Ok(2));
+    assert_eq!(ir.format_count(), Ok(4));
 
     let contract_raw =
         hex::decode("68b3465833fb72a70ecdf485e0e4c7bd8665fc45").expect("valid Router02 address");
@@ -3603,21 +3604,33 @@ fn vendored_uniswap_v3_router02_admits_only_exactly_guarded_single_hop_routes() 
     ];
     assert_eq!(selector_for(declared[0]), [0x04, 0xe4, 0x5a, 0xaf]);
     assert_eq!(selector_for(declared[1]), [0x50, 0x23, 0xb4, 0xdf]);
+    assert_eq!(selector_for(declared[4]), [0x47, 0x2b, 0x43, 0xf3]);
+    assert_eq!(selector_for(declared[5]), [0x42, 0x71, 0x2a, 0x67]);
 
     let input_selector = selector_for(declared[0]);
     let output_selector = selector_for(declared[1]);
+    let multihop_input_selector = selector_for(declared[4]);
+    let multihop_output_selector = selector_for(declared[5]);
     let admitted: BTreeSet<_> = ir
         .format_iter()
         .map(|format| format.expect("Router02 format parses").selector)
         .collect();
-    assert_eq!(admitted, BTreeSet::from([input_selector, output_selector]));
-    for signature in &declared[2..] {
+    assert_eq!(
+        admitted,
+        BTreeSet::from([
+            input_selector,
+            output_selector,
+            multihop_input_selector,
+            multihop_output_selector,
+        ])
+    );
+    for signature in &declared[2..4] {
         let selector = selector_for(signature);
         assert!(
             ir.find_format_by_selector(&selector)
                 .expect("Router02 format table parses")
                 .is_none(),
-            "unenrolled/broader route must remain absent from IR: {signature}"
+            "packed-byte route must remain absent from IR: {signature}"
         );
     }
 
@@ -3670,6 +3683,12 @@ fn vendored_uniswap_v3_router02_admits_only_exactly_guarded_single_hop_routes() 
             .iter()
             .map(|field| parse_params(&ir, field.param_off).expect("Router02 params parse"))
             .collect();
+        assert!(
+            params
+                .iter()
+                .all(|params| params.visibility == Visibility::Always),
+            "every admitted single-hop field must be visible"
+        );
         for (index, parsed) in params.iter().enumerate() {
             if index == 4 {
                 assert_eq!(parsed.sender_addresses, Some(sender_one.as_slice()));
@@ -3696,6 +3715,143 @@ fn vendored_uniswap_v3_router02_admits_only_exactly_guarded_single_hop_routes() 
         assert_guard(0, WORD_GUARD_EQ, &zero_word);
         assert_guard(4, WORD_GUARD_NE, &address_two_word);
         assert_guard(5, WORD_GUARD_EQ, &zero_word);
+        assert!(params[2].word_guard.is_none());
+        assert!(params[3].word_guard.is_none());
+        if exact_input {
+            assert_guard(1, WORD_GUARD_NE, &zero_word);
+        } else {
+            assert!(params[1].word_guard.is_none());
+        }
+    }
+
+    let flat_path = |member: u8| {
+        vec![
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            member,
+        ]
+    };
+    let mut route_path = flat_path(2);
+    route_path.push(PathOp::ArrayAll as u8);
+    let first_token_path = [
+        PathOp::RootStructured as u8,
+        PathOp::FieldIdx as u8,
+        0,
+        2,
+        PathOp::FollowOffset as u8,
+        PathOp::ArrayIdx as u8,
+        0,
+        0,
+    ];
+    let last_token_path = [
+        PathOp::RootStructured as u8,
+        PathOp::FieldIdx as u8,
+        0,
+        2,
+        PathOp::FollowOffset as u8,
+        PathOp::ArrayLast as u8,
+    ];
+
+    for (selector, exact_input) in [
+        (multihop_input_selector, true),
+        (multihop_output_selector, false),
+    ] {
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("Router02 format table parses")
+            .expect("enrolled full-route selector is present");
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("Router02 multihop field parses"))
+            .collect();
+        assert_eq!(fields.len(), 5, "every signed route operand is displayed");
+
+        let expected_labels: [&[u8]; 5] = if exact_input {
+            [
+                b"Native value",
+                b"Swap input",
+                b"Minimum receive",
+                b"Route",
+                b"Beneficiary",
+            ]
+        } else {
+            [
+                b"Native value",
+                b"Amount to receive",
+                b"Max swap input",
+                b"Route",
+                b"Beneficiary",
+            ]
+        };
+        let expected_ops = [
+            FormatOp::Amount,
+            FormatOp::TokenAmount,
+            FormatOp::TokenAmount,
+            FormatOp::AddressName,
+            FormatOp::AddressName,
+        ];
+        let expected_paths = [
+            value_path.clone(),
+            flat_path(0),
+            flat_path(1),
+            route_path.clone(),
+            flat_path(3),
+        ];
+        let params: Vec<_> = fields
+            .iter()
+            .map(|field| parse_params(&ir, field.param_off).expect("Router02 params parse"))
+            .collect();
+        for (index, field) in fields.iter().enumerate() {
+            assert_eq!(field.label, expected_labels[index]);
+            assert_eq!(FormatOp::try_from(field.format_op), Ok(expected_ops[index]));
+            assert_eq!(
+                ir.path_bytes(field.path_off)
+                    .expect("Router02 multihop path parses"),
+                expected_paths[index],
+                "wrong authenticated multihop path at field {index}"
+            );
+            assert_eq!(params[index].visibility, Visibility::Always);
+        }
+        assert_eq!(params[3].addr_types, Some(ADDR_TYPE_TOKEN));
+        assert_eq!(
+            params[1].token_path,
+            Some(if exact_input {
+                first_token_path.as_slice()
+            } else {
+                last_token_path.as_slice()
+            })
+        );
+        assert_eq!(
+            params[2].token_path,
+            Some(if exact_input {
+                last_token_path.as_slice()
+            } else {
+                first_token_path.as_slice()
+            })
+        );
+
+        for (index, parsed) in params.iter().enumerate() {
+            if index == 4 {
+                assert_eq!(parsed.sender_addresses, Some(sender_one.as_slice()));
+                assert!(parsed.sender_address_matches(&sender_one));
+            } else {
+                assert!(
+                    parsed.sender_addresses.is_none(),
+                    "sender substitution leaked onto multihop field {index}"
+                );
+            }
+        }
+
+        let assert_guard = |index: usize, mode: u8, expected: &[u8; 32]| {
+            let guard = params[index]
+                .word_guard
+                .unwrap_or_else(|| panic!("multihop field {index} is missing its guard"));
+            assert_eq!(guard.mode(), mode);
+            assert_eq!(guard.expected(), expected);
+        };
+        assert_guard(0, WORD_GUARD_EQ, &zero_word);
+        assert_guard(4, WORD_GUARD_NE, &address_two_word);
         assert!(params[2].word_guard.is_none());
         assert!(params[3].word_guard.is_none());
         if exact_input {
