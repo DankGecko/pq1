@@ -42,6 +42,7 @@
 //! | 0x4A | `word_guard`         | mode (0=EQ, 1=NE) + exact 32 B word        |
 //! | 0x4B | `exact_empty_bytes`  | empty (requires sole canonical empty tail) |
 //! | 0x4C | `eip712_string_preimage` | 1 B evidence-stream ordinal          |
+//! | 0x4D | `dynamic_tail_topology` | v1, 2–4 `(head_slot, kind)` records    |
 //!
 //! Wire-stable.
 //!
@@ -55,6 +56,7 @@ use crate::{
 };
 
 use super::{
+    calldata_topology::TailTopology,
     policy::{ParamMask, TerminalKind},
     RenderErr,
 };
@@ -154,6 +156,11 @@ pub const PARAM_EXACT_EMPTY_BYTES: u8 = 0x4B;
 /// zero-based record ordinal; the enclosing format validator enforces the
 /// canonical traversal sequence and the EIP-712-only static-word topology.
 pub const PARAM_EIP712_STRING_PREIMAGE: u8 = 0x4C;
+/// Format-level authenticated topology for two to four top-level dynamic ABI
+/// objects. The versioned payload is parsed here; deep IR validation pins the
+/// marker to field zero of a contract format and checks every head slot against
+/// that format's authenticated static head.
+pub const PARAM_DYNAMIC_TAIL_TOPOLOGY: u8 = 0x4D;
 pub const DYNAMIC_KIND_STRING: u8 = 0x01;
 pub const DYNAMIC_KIND_BYTES: u8 = 0x02;
 
@@ -469,6 +476,10 @@ pub struct ParamSet<'a> {
     /// [`TerminalKind::Eip712StringHashWord`] field; deep IR validation owns
     /// that context and path check.
     pub eip712_string_preimage_ordinal: Option<u8>,
+    /// Format-level authenticated dynamic-tail topology. This is deliberately
+    /// excluded from [`Self::policy_mask`]: it constrains the complete contract
+    /// format rather than changing field-local formatter semantics.
+    pub dynamic_tail_topology: Option<TailTopology>,
 }
 
 impl<'a> Default for ParamSet<'a> {
@@ -504,6 +515,7 @@ impl<'a> Default for ParamSet<'a> {
             word_guard: None,
             exact_empty_bytes: false,
             eip712_string_preimage_ordinal: None,
+            dynamic_tail_topology: None,
         }
     }
 }
@@ -661,7 +673,7 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
         .ok_or(RenderErr::Reject("7730 bad param blob"))?;
 
     let mut cursor = 0usize;
-    // Tags 0x30..=0x4C fit in this bitmap. Singleton parameter TLVs are
+    // Tags 0x30..=0x4D fit in this bitmap. Singleton parameter TLVs are
     // canonical: accepting duplicates would make meaning order-dependent and
     // previously let a short visibility duplicate retain the first tag's tail.
     let mut seen_tags = 0u32;
@@ -678,7 +690,7 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
         let payload = &body[cursor..cursor + len];
         cursor += len;
 
-        if !(PARAM_TOKEN_PATH..=PARAM_EIP712_STRING_PREIMAGE).contains(&tag) {
+        if !(PARAM_TOKEN_PATH..=PARAM_DYNAMIC_TAIL_TOPOLOGY).contains(&tag) {
             return Err(RenderErr::Reject("7730 unknown tlv tag"));
         }
         let bit = 1u32 << (tag - PARAM_TOKEN_PATH);
@@ -772,6 +784,9 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
                     return Err(RenderErr::Reject("7730 bad string-preimage marker"));
                 }
                 p.eip712_string_preimage_ordinal = Some(payload[0]);
+            }
+            PARAM_DYNAMIC_TAIL_TOPOLOGY => {
+                p.dynamic_tail_topology = Some(TailTopology::parse(payload)?);
             }
             PARAM_THRESHOLD => {
                 p.threshold = Some(
@@ -943,6 +958,7 @@ mod tests {
         assert!(p.terminal_kind.is_none());
         assert!(p.integer_width_bytes.is_none());
         assert!(p.eip712_string_preimage_ordinal.is_none());
+        assert!(p.dynamic_tail_topology.is_none());
     }
 
     #[test]
@@ -1669,6 +1685,60 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_tail_topology_marker_is_versioned_exact_and_format_level() {
+        use crate::render::calldata_topology::{TailKind, TOPOLOGY_VERSION};
+
+        let payload = [
+            TOPOLOGY_VERSION,
+            2,
+            0,
+            0,
+            TailKind::Blob as u8,
+            0,
+            1,
+            TailKind::StaticWordArray as u8,
+        ];
+        let mut body = std::vec![PARAM_DYNAMIC_TAIL_TOPOLOGY, payload.len() as u8];
+        body.extend_from_slice(&payload);
+        let mut pool = std::vec![0xFF, body.len() as u8];
+        pool.extend_from_slice(&body);
+        let bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
+        let parsed = parse(&ir, 1).unwrap();
+        assert!(parsed.dynamic_tail_topology.is_some());
+        assert_eq!(parsed.policy_mask(), ParamMask::NONE);
+
+        let malformed = [
+            std::vec![],
+            std::vec![TOPOLOGY_VERSION + 1, 2, 0, 0, 1, 0, 1, 1],
+            std::vec![TOPOLOGY_VERSION, 1, 0, 0, 1],
+            std::vec![TOPOLOGY_VERSION, 2, 0, 0, 1],
+            std::vec![TOPOLOGY_VERSION, 2, 0, 0, 1, 0, 1, 1, 0],
+            std::vec![TOPOLOGY_VERSION, 2, 0, 1, 1, 0, 1, 1],
+            std::vec![TOPOLOGY_VERSION, 2, 0, 0, 0xFF, 0, 1, 1],
+        ];
+        for payload in malformed {
+            let mut body = std::vec![PARAM_DYNAMIC_TAIL_TOPOLOGY, payload.len() as u8];
+            body.extend_from_slice(&payload);
+            let mut pool = std::vec![0xFF, body.len() as u8];
+            pool.extend_from_slice(&body);
+            let bytes = ir_with_pool(&pool);
+            let ir = Erc7730Ir::parse(&bytes).unwrap();
+            assert!(parse(&ir, 1).is_err(), "accepted topology {payload:?}");
+        }
+
+        let mut duplicate = std::vec![PARAM_DYNAMIC_TAIL_TOPOLOGY, payload.len() as u8];
+        duplicate.extend_from_slice(&payload);
+        duplicate.extend_from_slice(&[PARAM_DYNAMIC_TAIL_TOPOLOGY, payload.len() as u8]);
+        duplicate.extend_from_slice(&payload);
+        let mut pool = std::vec![0xFF, duplicate.len() as u8];
+        pool.extend_from_slice(&duplicate);
+        let bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
+        assert!(parse(&ir, 1).is_err());
+    }
+
+    #[test]
     fn rejects_invalid_or_duplicate_dynamic_kind() {
         for body in [
             std::vec![PARAM_DYNAMIC_KIND, 1, 0xFF],
@@ -2005,13 +2075,13 @@ mod kani_harnesses {
         kani::assume(4 + l <= N);
         let tag = pool[2];
         // "Unknown" = outside the CONTIGUOUS known-tag range
-        // `[0x30, PARAM_EIP712_STRING_PREIMAGE]`.
+        // `[0x30, PARAM_DYNAMIC_TAIL_TOPOLOGY]`.
         // NB: the top bound is the HIGHEST known tag, not 0x3F — new tags were added
         // above the original 0x30..=0x3F block (`PARAM_CONST_VALUE` 0x40 in b37a052f,
         // `PARAM_NESTED_STRUCT` 0x41 in 2f4cc810), so a stale bound wrongly classifies
         // a known tag as unknown and the harness fails on a tag the parser correctly
         // accepts. Keep this in sync with the highest `PARAM_*` constant.
-        kani::assume(tag < PARAM_TOKEN_PATH || tag > PARAM_EIP712_STRING_PREIMAGE);
+        kani::assume(tag < PARAM_TOKEN_PATH || tag > PARAM_DYNAMIC_TAIL_TOPOLOGY);
         let ir = mk_ir(&pool);
         assert!(parse(&ir, 1).is_err());
     }

@@ -591,6 +591,7 @@ impl<'a> Erc7730Ir<'a> {
             let mut actual_string_preimages = 0u8;
             let mut calldata_fields = 0u8;
             let mut dynamic_value_paths = 0u8;
+            let mut has_dynamic_tail_topology = false;
             let packed_v3_identity = is_uniswap_router02_packed_identity(self, &header);
             while let Some(field) = fields.next() {
                 let field = field?;
@@ -614,6 +615,22 @@ impl<'a> Erc7730Ir<'a> {
                 let params = crate::render::params::parse(self, field.param_off)
                     .map_err(|_| IrError::BadPoolEntry)?;
                 let kind = params.terminal_kind.ok_or(IrError::BadField)?;
+
+                if let Some(topology) = params.dynamic_tail_topology.as_ref() {
+                    // The topology is format-level signing authority with one
+                    // canonical location. It is never a field-local semantic
+                    // parameter and is unavailable to EIP-712/nested fields.
+                    if field_ordinal != 0
+                        || has_dynamic_tail_topology
+                        || !matches!(self.context_kind, ContextKind::Contract)
+                    {
+                        return Err(IrError::BadFormat);
+                    }
+                    topology
+                        .validate_static_head(header.static_head_words)
+                        .map_err(|_| IrError::BadFormat)?;
+                    has_dynamic_tail_topology = true;
+                }
 
                 if field.path_off != 0
                     && self.path_bytes(field.path_off)?.last().copied()
@@ -687,6 +704,7 @@ impl<'a> Erc7730Ir<'a> {
                             {
                                 return Err(IrError::BadField);
                             }
+                            reject_nested_dynamic_tail_topology(self, payload, 1)?;
                             crate::render::policy::validate_field(op, kind, params.policy_mask())
                                 .map_err(|_| IrError::BadField)?;
                             let consumed = crate::render::nested::validate_nested_ir(
@@ -746,7 +764,8 @@ impl<'a> Erc7730Ir<'a> {
             )
             .map_err(|_| IrError::BadFormat)?
             .is_some();
-            if (calldata_fields > 0 && (calldata_fields != 1 || dynamic_value_paths != 1))
+            if (calldata_fields > 0
+                && (calldata_fields != 1 || !has_dynamic_tail_topology && dynamic_value_paths != 1))
                 || parent_enrolled != (calldata_fields == 1)
             {
                 return Err(IrError::BadFormat);
@@ -835,6 +854,37 @@ impl<'a> Erc7730Ir<'a> {
         }
         Ok(())
     }
+}
+
+/// Reject the contract-only format topology marker from every nested EIP-712
+/// sub-field, including descendants. Nested parameter blobs are parsed by the
+/// shared TLV parser and the marker is intentionally absent from field policy,
+/// so the enclosing deep validator must make this authority boundary explicit
+/// instead of allowing an inert second wire spelling.
+fn reject_nested_dynamic_tail_topology(
+    ir: &Erc7730Ir<'_>,
+    payload: &[u8],
+    depth: usize,
+) -> Result<(), IrError> {
+    if depth == 0 || depth > MAX_NESTING {
+        return Err(IrError::OverCap);
+    }
+    let nested = crate::render::nested::parse_nested_struct_param(payload)
+        .map_err(|_| IrError::BadPoolEntry)?;
+    for field in nested.sub_fields() {
+        let field = field?;
+        let params =
+            crate::render::params::parse(ir, field.param_off).map_err(|_| IrError::BadPoolEntry)?;
+        if params.dynamic_tail_topology.is_some() {
+            return Err(IrError::BadFormat);
+        }
+        if let Some(child) = params.nested_struct {
+            if child.first() == Some(&crate::render::nested::NESTED_V3) {
+                reject_nested_dynamic_tail_topology(ir, child, depth + 1)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Validate the schema-v6 authority to replace one signed EIP-712 string-hash
@@ -1879,6 +1929,44 @@ mod tests {
         offset
     }
 
+    fn tail_topology_payload(
+        records: &[(u16, crate::render::calldata_topology::TailKind)],
+    ) -> std::vec::Vec<u8> {
+        use crate::render::calldata_topology::TOPOLOGY_VERSION;
+
+        let mut payload = std::vec![TOPOLOGY_VERSION, records.len() as u8];
+        for &(slot, kind) in records {
+            payload.extend_from_slice(&slot.to_be_bytes());
+            payload.push(kind as u8);
+        }
+        payload
+    }
+
+    fn topology_tlv(
+        records: &[(u16, crate::render::calldata_topology::TailKind)],
+    ) -> std::vec::Vec<u8> {
+        let payload = tail_topology_payload(records);
+        let mut tlv = std::vec![
+            crate::render::params::PARAM_DYNAMIC_TAIL_TOPOLOGY,
+            payload.len() as u8,
+        ];
+        tlv.extend_from_slice(&payload);
+        tlv
+    }
+
+    fn scalar_params(extra_tlvs: &[u8]) -> std::vec::Vec<u8> {
+        let mut params = extra_tlvs.to_vec();
+        params.extend_from_slice(&[
+            crate::render::params::PARAM_TERMINAL_KIND,
+            1,
+            crate::render::policy::TerminalKind::Unsigned as u8,
+            crate::render::params::PARAM_INTEGER_WIDTH,
+            1,
+            32,
+        ]);
+        params
+    }
+
     fn encoded_field(
         op: FormatOp,
         label: &[u8],
@@ -1899,6 +1987,24 @@ mod tests {
         calldata_first: bool,
         add_second_dynamic_path: bool,
     ) -> std::vec::Vec<u8> {
+        nested_calldata_ir_with_target_params(
+            field_path,
+            callee_path,
+            extra_nested_params,
+            calldata_first,
+            add_second_dynamic_path,
+            &[],
+        )
+    }
+
+    fn nested_calldata_ir_with_target_params(
+        field_path: &[u8],
+        callee_path: &[u8],
+        extra_nested_params: &[u8],
+        calldata_first: bool,
+        add_second_dynamic_path: bool,
+        extra_target_params: &[u8],
+    ) -> std::vec::Vec<u8> {
         use crate::render::{
             calldata_policy::{
                 TEST_NESTED_CALLDATA_DESCRIPTOR_HASH, TEST_NESTED_CALLDATA_PARENT_CONTRACT,
@@ -1916,10 +2022,9 @@ mod tests {
             &mut pool,
             &[PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0],
         );
-        let target_param_off = append_pool_entry(
-            &mut pool,
-            &[PARAM_TERMINAL_KIND, 1, TerminalKind::Address as u8],
-        );
+        let mut target_params = extra_target_params.to_vec();
+        target_params.extend_from_slice(&[PARAM_TERMINAL_KIND, 1, TerminalKind::Address as u8]);
+        let target_param_off = append_pool_entry(&mut pool, &target_params);
         let nested_path_off = append_pool_entry(&mut pool, field_path);
         let mut nested_params = std::vec![
             PARAM_DYNAMIC_KIND,
@@ -2006,11 +2111,7 @@ mod tests {
         pool.extend_from_slice(path);
 
         let param_off = pool.len() as u16;
-        let mut body = std::vec![
-            crate::render::params::PARAM_TERMINAL_KIND,
-            1,
-            kind as u8,
-        ];
+        let mut body = std::vec![crate::render::params::PARAM_TERMINAL_KIND, 1, kind as u8,];
         if let Some(ordinal) = ordinal {
             body.extend_from_slice(&[
                 crate::render::params::PARAM_EIP712_STRING_PREIMAGE,
@@ -2260,6 +2361,47 @@ mod tests {
     }
 
     #[test]
+    fn nested_calldata_allows_other_dynamic_paths_only_with_authenticated_topology() {
+        use crate::render::{
+            calldata_policy::{
+                TEST_NESTED_CALLDATA_CALLEE_PATH, TEST_NESTED_CALLDATA_ENROLLMENTS,
+                TEST_NESTED_CALLDATA_FIELD_PATH,
+            },
+            calldata_topology::TailKind,
+        };
+
+        let legacy = nested_calldata_ir(
+            &TEST_NESTED_CALLDATA_FIELD_PATH,
+            &TEST_NESTED_CALLDATA_CALLEE_PATH,
+            &[],
+            false,
+            true,
+        );
+        assert_eq!(
+            Erc7730Ir::parse_with_nested_calldata_enrollments(
+                &legacy,
+                TEST_NESTED_CALLDATA_ENROLLMENTS,
+            ),
+            Err(IrError::BadFormat)
+        );
+
+        let records = [(0, TailKind::Blob), (1, TailKind::Blob)];
+        let marked = nested_calldata_ir_with_target_params(
+            &TEST_NESTED_CALLDATA_FIELD_PATH,
+            &TEST_NESTED_CALLDATA_CALLEE_PATH,
+            &[],
+            false,
+            true,
+            &topology_tlv(&records),
+        );
+        assert!(Erc7730Ir::parse_with_nested_calldata_enrollments(
+            &marked,
+            TEST_NESTED_CALLDATA_ENROLLMENTS,
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn nested_calldata_deep_validation_rejects_near_semantics() {
         use crate::render::{
             calldata_policy::{
@@ -2369,6 +2511,150 @@ mod tests {
     }
 
     #[test]
+    fn deep_validation_accepts_one_contract_tail_topology_on_field_zero() {
+        use crate::render::calldata_topology::TailKind;
+
+        let records = [(0, TailKind::Blob), (1, TailKind::StaticWordArray)];
+        let mut pool = std::vec![0];
+        let path_off = append_pool_entry(
+            &mut pool,
+            &[PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0],
+        );
+        let param_off = append_pool_entry(&mut pool, &scalar_params(&topology_tlv(&records)));
+        let field = encoded_field(FormatOp::Amount, b"Value", path_off, param_off);
+        let format = exact_empty_format([1, 2, 3, 4], 2, &[field]);
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&format);
+        assert!(Erc7730Ir::parse(&build_ir(&pool, &formats)).is_ok());
+
+        // Absence retains the established static-format interpretation.
+        let mut legacy_formats = std::vec![1];
+        legacy_formats.extend_from_slice(&one_field_format([5, 6, 7, 8], FormatOp::Amount as u8));
+        assert!(Erc7730Ir::parse(&build_ir(&scalar_pool(), &legacy_formats)).is_ok());
+    }
+
+    #[test]
+    fn deep_validation_rejects_tail_topology_outside_field_zero_or_static_head() {
+        use crate::render::calldata_topology::TailKind;
+
+        let records = [(0, TailKind::Blob), (1, TailKind::StaticWordArray)];
+        let mut pool = std::vec![0];
+        let path_off = append_pool_entry(
+            &mut pool,
+            &[PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0],
+        );
+        let plain_params = append_pool_entry(&mut pool, &scalar_params(&[]));
+        let topology_params = append_pool_entry(&mut pool, &scalar_params(&topology_tlv(&records)));
+        let fields = [
+            encoded_field(FormatOp::Amount, b"First", path_off, plain_params),
+            encoded_field(FormatOp::Amount, b"Second", path_off, topology_params),
+        ];
+        let format = exact_empty_format([1, 2, 3, 4], 2, &fields);
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&format);
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&pool, &formats)),
+            Err(IrError::BadFormat)
+        );
+
+        let duplicate_fields = [
+            encoded_field(FormatOp::Amount, b"First", path_off, topology_params),
+            encoded_field(FormatOp::Amount, b"Second", path_off, topology_params),
+        ];
+        let duplicate = exact_empty_format([1, 2, 3, 4], 2, &duplicate_fields);
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&duplicate);
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&pool, &formats)),
+            Err(IrError::BadFormat)
+        );
+
+        let outside = [(0, TailKind::Blob), (2, TailKind::StaticWordArray)];
+        let mut pool = std::vec![0];
+        let path_off = append_pool_entry(
+            &mut pool,
+            &[PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0],
+        );
+        let param_off = append_pool_entry(&mut pool, &scalar_params(&topology_tlv(&outside)));
+        let field = encoded_field(FormatOp::Amount, b"Value", path_off, param_off);
+        let format = exact_empty_format([1, 2, 3, 4], 2, &[field]);
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&format);
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&pool, &formats)),
+            Err(IrError::BadFormat)
+        );
+    }
+
+    #[test]
+    fn deep_validation_rejects_tail_topology_in_eip712_context() {
+        use crate::render::calldata_topology::TailKind;
+
+        let records = [(0, TailKind::Blob), (1, TailKind::StaticWordArray)];
+        let mut pool = std::vec![0];
+        let path_off = append_pool_entry(
+            &mut pool,
+            &[PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0],
+        );
+        let param_off = append_pool_entry(&mut pool, &scalar_params(&topology_tlv(&records)));
+        let field = encoded_field(FormatOp::Amount, b"Value", path_off, param_off);
+        let format = eip712_format([1, 2, 3, 4], 2, 0, &[field]);
+        assert_eq!(
+            Erc7730Ir::parse(&build_eip712_ir(&pool, &format)),
+            Err(IrError::BadFormat)
+        );
+    }
+
+    #[test]
+    fn deep_validation_rejects_tail_topology_in_nested_eip712_subfield() {
+        use crate::render::{
+            calldata_topology::TailKind,
+            nested::NESTED_V3,
+            params::{PARAM_NESTED_STRUCT, PARAM_TERMINAL_KIND},
+            policy::TerminalKind,
+        };
+
+        let records = [(0, TailKind::Blob), (1, TailKind::StaticWordArray)];
+        let mut pool = std::vec![0];
+        let nested_path_off = append_pool_entry(
+            &mut pool,
+            &[PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0],
+        );
+        let nested_param_off =
+            append_pool_entry(&mut pool, &scalar_params(&topology_tlv(&records)));
+        let nested_field = encoded_field(
+            FormatOp::Amount,
+            b"Nested value",
+            nested_path_off,
+            nested_param_off,
+        );
+
+        let mut nested_payload = std::vec![NESTED_V3, 0, 0]; // parent word position
+        nested_payload.extend_from_slice(&[0u8; 32]); // nested type hash
+        nested_payload.extend_from_slice(&1u16.to_be_bytes()); // one local word
+        nested_payload.push(0); // scalar struct
+        nested_payload.push(0); // no address-typed local words
+        nested_payload.push(1); // one sub-field
+        nested_payload.extend_from_slice(&nested_field);
+
+        let mut anchor_params = std::vec![PARAM_NESTED_STRUCT, nested_payload.len() as u8];
+        anchor_params.extend_from_slice(&nested_payload);
+        anchor_params.extend_from_slice(&[
+            PARAM_TERMINAL_KIND,
+            1,
+            TerminalKind::NestedStruct as u8,
+        ]);
+        let anchor_param_off = append_pool_entry(&mut pool, &anchor_params);
+        let anchor = encoded_field(FormatOp::Raw, b"Nested", 0, anchor_param_off);
+        let mut format = eip712_format([1, 2, 3, 4], 1, 0, &[anchor]);
+        format[8] = 1; // one authenticated nested descent
+        assert_eq!(
+            Erc7730Ir::parse(&build_eip712_ir(&pool, &format)),
+            Err(IrError::BadFormat)
+        );
+    }
+
+    #[test]
     fn deep_validation_rejects_unmarked_or_misbound_exact_empty_bytes() {
         use crate::render::params::{PARAM_VISIBILITY, PARAM_WORD_GUARD};
 
@@ -2461,12 +2747,9 @@ mod tests {
     fn deep_validation_rejects_string_preimage_count_and_ordinal_drift() {
         use crate::render::policy::TerminalKind;
 
-        for (header_count, ordinals) in [
-            (0, &[0][..]),
-            (1, &[][..]),
-            (2, &[1, 0][..]),
-            (2, &[0][..]),
-        ] {
+        for (header_count, ordinals) in
+            [(0, &[0][..]), (1, &[][..]), (2, &[1, 0][..]), (2, &[0][..])]
+        {
             let mut pool = std::vec![0];
             let mut fields = std::vec::Vec::new();
             for (slot, ordinal) in ordinals.iter().copied().enumerate() {
