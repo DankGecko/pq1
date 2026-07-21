@@ -152,3 +152,64 @@ journal and MUST be resumable across resets (§4). Order:
 
 Gaps between this document and the code are defects in one or the other;
 R2.4 is the one known intentional gap as of 2026-07-21.
+
+## 8. Factory input state — exactly what the factory must have done
+
+The device-side flow assumes, and where possible verifies, the following
+ship state. This list mirrors the canonical responsibility split in
+[`first-boot-provisioning.md`](first-boot-provisioning.md#authoritative-factory--first-boot-responsibility-split)
+(keep them in sync; the quarantined operator manual is
+[`factory-provisioning.md`](factory-provisioning.md) — as of 2026-07-21
+there is **no authorized factory ceremony**, so this section is required
+*state*, not an operator instruction).
+
+All factory steps run at **RDP-0** on the production line, under read-back
+QA, before any secret exists on the MCU:
+
+- **F1 Flash** the reproducible batch-uniform image: FSBL + secure + NS app
+  into the A/B slots. Batch-uniform means byte-identical across every unit
+  of a release — nothing per-device in flash.
+- **F2 Option bytes** — the full ship profile (`lockdown.rs`
+  `SHIP_PROFILE_U585`): TZEN=1, SECWM1/2, SECBOOTADD0, **WRP1A over the
+  FSBL pages**, BOR_LEV, BOOT_LOCK/nBOOT, OEM-key finalization —
+  **everything EXCEPT RDP, which stays 0**. There is no factory RDP burn of
+  any level, on any path. (WRP is reversible at RDP-0, so this step is
+  non-irreversible for the MCU; the user verifies it over SWD and Phase A
+  re-verifies it as R2.1 before making it permanent.)
+- **F3 OTP master** — burn the per-device OTP master from the factory TRNG
+  (`otp::ensure_device_master`). Factory-side because the initial two-QW
+  burn is not crash-retry-safe, and it is the root from which every
+  transport keyset derives (HKDF; transport keys are
+  public-by-assumption).
+- **F4 SE050** — create the admin UserID + user-object OID
+  structure/policies; rotate SCP03 from the AN12436 defaults to the
+  per-device **transport** keyset (GP `PUT KEY` under `PLATFORM_DEK`);
+  transport lock if applicable.
+- **F5 OPTIGA** — write the **transport PBS** to E140 with metadata keeping
+  the `Conf(E140)` arm so the PBS stays shield-rotatable (this is what
+  makes R3.4 possible); F1D0 `Change=Auto(F1D0)` (S-1); PQ1-HSM
+  trust-anchor cert at 0xE0E3 + neutralize the TA pool 0xE0E4..0xE0E8
+  (S-2); provision the E120 LUC, bind F1D0 `Execute=LUC`, freeze the F1E1
+  soft counter (S-3); **LcsO=Op ratchet** on the locked OIDs — the
+  SE-internal point of no return stays on the factory line, never
+  on-device.
+- **F6** The #22 attestation/binding manifest burn (when it lands).
+- **F7 Read-back QA** over SWD (connect-under-reset) against the
+  reproducible build — encouraged, deliberately **not** load-bearing (the
+  user's own verification is the load-bearing check).
+- **F8 Ship at RDP-0** with SWD + NRST pads accessible. Pages 123–127
+  blank. The only SE pairing material in existence is the public transport
+  values.
+
+Factory MUST NOT: program RDP to any level; perform the BHK write; install
+any final (post-rotation) pairing credential; create or ever see a wallet
+seed; write anything to pages 123–127; retain any per-device secret beyond
+the transport keysets (which first boot rotates dead).
+
+Verification coverage from the device side: Phase A directly verifies F2
+(R2.1), F8's blank pages (R2.2), and F3's presence (R2.3). F1 is verified
+by the *user* over SWD plus the FSBL measurement, not by this flow. F4/F5
+are only indirectly checked — Phase B's rotations fail with `E08F0` if the
+SEs are not in the expected transport state — and their irreversible
+ordering + silicon receipts are exactly the OPEN ship-blocker gates
+(S-1/S-2/S-3).
