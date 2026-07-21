@@ -1,13 +1,21 @@
 # Build Your Own PQ1
 
-*Snapshot 2026-07-14.*
+*Snapshot 2026-07-21.*
 
-The PQ1 isn't open-source as a gesture. The **entire wallet — post-quantum signer, dual
-secure elements, trusted display, PIN gating — runs on four boards you can order today**,
-no custom PCB, no NDA'd datasheet, no factory. This is not a stripped-down demo: it is the
-exact bench rig the shipping firmware is developed and silicon-validated on. Roughly
-**$150 in parts** and an afternoon of jumper wires gets you a working post-quantum
-ERC-4337 hardware wallet that signs real SPHINCS+C10 transactions on its own screen.
+Every hardware wallet claims to be open source. Here's our test: **can you build the
+product yourself, from the vendor's own repo, and end up with the real thing?**
+
+For the PQ1 the answer is yes. The **entire wallet — post-quantum signer, dual secure
+elements, trusted display, PIN gating — runs on four boards you can order today**: no
+custom PCB, no NDA'd datasheet, no factory, no secret provisioning step you have to take
+our word for. This is not a stripped-down demo or a "community edition" — it is the exact
+bench rig the shipping firmware is developed and silicon-validated on, built from the
+same repo we build factory images from. Roughly **$150 in parts** and an afternoon of jumper wires
+gets you a working post-quantum ERC-4337 hardware wallet that signs real SPHINCS+C10
+transactions on its own screen.
+
+That's the point of this page. Not "trust us, it's audited" — *build it, boot it, read
+every line it runs.*
 
 Don't want to buy anything? The whole wallet also boots in QEMU:
 
@@ -23,7 +31,7 @@ make play        # interactive wallet in QEMU — arrow keys, PIN entry, seed wi
 |---|------|------------------------|-----|---------|
 | 1 | **ST B-U585I-IOT02A** Discovery kit | The wallet itself — STM32U585 (Cortex-M33, TrustZone), hardware SHA-256/SAES/TRNG. The on-board ST-LINK/V3E is your programmer, so no extra probe needed. | [Mouser](https://www.mouser.com/ProductDetail/STMicroelectronics/B-U585I-IOT02A) | $70 |
 | 2 | **Infineon OPTIGA™ Trust M Shield** (`TRUSTMV3SHIELDTOBO1`) | Secure element #1 (Trust M V3, CC EAL6+). Holds one XOR half of your seed entropy; talks encrypted I²C (Shielded Connection). | [Mouser](https://www.mouser.com/ProductDetail/Infineon-Technologies/TRUSTMV3SHIELDTOBO1) | $15 |
-| 3 | **NXP OM-SE050ARD-E** dev kit | Secure element #2 (EdgeLock SE050E, CC EAL6+). Holds the other entropy half + silicon PIN counter; talks SCP03. **Must be the `-E` variant** — the firmware pins the SE050E's `AppletConfig` and will reject other variants. | [Mouser](https://www.mouser.com/ProductDetail/NXP-Semiconductors/OM-SE050ARD-E) | $40 |
+| 3 | **NXP OM-SE050ARD-E** dev kit | Secure element #2 (EdgeLock SE050E, CC EAL6+). Holds the other entropy half + silicon PIN counter; talks SCP03. Get the `-E` variant — it's the SE050 you can actually buy on a dev board, and the firmware's anti-substitution check currently pins its fingerprint. ⚠ Needs the two-minute SCP03 keyset swap described under "Flash it" before the build will talk to it. | [Mouser](https://www.mouser.com/ProductDetail/NXP-Semiconductors/OM-SE050ARD-E) | $40 |
 | 4 | **NV3007 1.65″ IPS display module**, 142×428, 8-pin SPI header (`GND·VCC·SCK·MOS·RES·DC·CS·BLK`) | The trusted display — PIN entry, seed words, and every transaction render here, inside the secure world. Get the breakout-board version, not the bare FPC panel. | [AliExpress — the exact breakout we use](https://www.aliexpress.com/item/1005008894658602.html) · reference module: [EastRising ER-TFTM1.65-2](https://www.buydisplay.com/1-65-inch-142x428-ips-tft-lcd-display-module-for-arduino-raspberry-pi) | $10 |
 | 5 | Solderless breadboard, 400-point (1×) | Holds the OPTIGA shield, the two buttons, and the 3V3/GND rails. | [Mouser (BB400T)](https://www.mouser.com/ProductDetail/BusBoard-Prototype-Systems/BB400T) | $7 |
 | 6 | Jumper wires — one 40-pack **M–F** + one 40-pack **M–M** (~20 actually used) | Everything below is point-to-point 2.54 mm jumpers. | [Mouser (Adafruit 826, M–F)](https://www.mouser.com/ProductDetail/Adafruit/826) · [Mouser (Adafruit 758, M–M)](https://www.mouser.com/ProductDetail/Adafruit/758) | $9 |
@@ -107,6 +115,19 @@ cargo install probe-rs-tools
 # + STM32CubeProgrammer from st.com (writes the TrustZone option bytes; free account)
 ```
 
+> ⚠ **One code tweak first — SE050 SCP03 keyset (as of 2026-07-20).** The production
+> part was finalized as the SE050**C2** (`SE050C2HQ1/Z01SDZ`), and the factory SCP03
+> platform keys in `secure/src/scp03_logic.rs` were retargeted to it (commit
+> `66a9926f`). The dev kit above carries an SE050**E2**, which ships with a
+> *different* published keyset (OEF `A921`) — so an unmodified build fails SCP03 with
+> a card-cryptogram mismatch and the wallet never provisions. Fix: restore the three
+> `PLATFORM_{ENC,MAC,DEK}` constants to the E2 values before building —
+> `git show 66a9926f^:secure/src/scp03_logic.rs` prints them (they're the published
+> AN12436 factory keys, also in NXP's plug-and-trust `ex_sss_tp_scp03_keys.h`). Keep
+> it as a local edit; don't commit it. Both keysets are public — on a bench build the
+> SCP03 channel is structural, not confidential, either way (see the caveat at the
+> bottom).
+
 Then, with the Micro-USB cable on the ST-LINK port:
 
 ```bash
@@ -147,5 +168,12 @@ probe. Production units burn all of that down at provisioning (`docs/archive/pro
 The cryptography is identical; the armor is not. Don't put your savings behind a
 breadboard — do use it to verify that everything we claim about the firmware is true, on
 hardware you own.
+
+That's the trade the PQ1 offers: the breadboard proves there's nothing hidden; the
+production unit is the same design with the armor on — locked lifecycle states, sealed
+per-device provisioning, closed debug port, one enclosure instead of twenty jumpers.
+You can hold the open version in one hand and the hardened one in the other and know
+both were built from this repo — same signer, same drivers, same trusted-display code,
+with the production hardening features you can read right here switched on.
 
 Questions, bugs, or a wiring photo you're proud of → open an issue.
