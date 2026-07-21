@@ -2060,3 +2060,43 @@ canary-verified).** Resolves the "summand 4 is not a standard assumption" caveat
 
 Net: item 1 resolved honestly (with a bonus impossibility result); item 4 is structurally there with 2 focused
 byequiv legs to close. Remaining: item 3 (FORS+C wiring), item 2 (R_top soundness), item 5 (capstone).
+
+### 2026-07-21 — Wave 2: item 4 (PRF hop) CLOSED; item 3 (FORS+C wiring) milestone met (R_top_C typechecks)
+
+Both tracks audited PASS, no overstatement (independent forced-recompile + canary + negative controls).
+
+**ITEM 4 — PRF hop: CLOSED (drafts/prf_hop_wip.ec, CERTIFIED-0-ADMIT).** The two open byequiv legs are now
+machine-checked admit-free:
+ - `EqPr_PRF_false` (b=false) and `EqPr_NPRF_true` (b=true) closed via the standard early-vs-late sampling swap:
+   swap the RHS O_PRF init block DOWN past the abstract prefix (ad<-adz; ps<$; OC.init; A.choose) so NO one-sided
+   fact crosses the direct abstract OC.init (which rejects `call (: ={glob OC})` — the exact XmssmtCC_All.ec:4683
+   branch-1 precedent), carrying the one-sided b/ad via a 3-arg conseq side-2 hoare (the Reprogramming.ec:312
+   idiom). False leg couples ss{1}=k{2} at the cube (rcondf b=false); true leg ports MM45's lazy/eager
+   map-domain invariant WOTS-only with per-query freshness via HA.eq_adrs_idxsq address-injectivity.
+ - `SKGPRF_hop` + `SKGPRF_hop_composed` are now UNCONDITIONAL (previously consumed the 2 admits). smt() appears
+   only in the top-level hop arithmetic (a<=b+|a-b|), never forcing a byequiv (audit-confirmed). Statements
+   byte-identical to the admit-era versions. 0 admits / 0 axioms / 0 new premises (one stdlib `FMap` import).
+   Two negative controls (flip a freshness index; off-by-one domain range) both FAIL → injectivity + invariant
+   load-bearing. Scope unchanged: hypertree-level SKG hop; full-scheme MKG term still deferred with FORS+C.
+
+**ITEM 3 — FORS+C wiring: milestone met (drafts/rtop_forsc_wip.ec, R_top_C typechecks CERTIFIED-0-ADMIT).**
+`R_top_C : Adv_EUFNAGCMA_FLSLXMSSMTTWCESNPRF` is the C10 FORS+C variant of the base R_top (XmssmtCC_All.ec:9443).
+ - MODEL CHOICE (decisive, not a shortcut): target the DEPLOYED C10 FORS model, not the paper model. The base's
+   top sig type `sigSPHINCSPLUSTWC = mkey * FTWES.sigFORSTW * sigFLSLXMSSMTTWC` (XmssmtCC_All.ec:9419) is ALREADY
+   the C10 shape (mkey*sigFORSTW, no counter). So my 5-delta plan's "3-arg grinding mco" + "mkeygen swap" are
+   PAPER-model deltas that are legitimately N/A here (FTWES.mco is 2-arg; the FORS cube is built via OC.query,
+   no keygen call) — honestly explained, audit-confirmed not faked.
+ - THE ONE REAL +C DELTA, wired concretely: O_CMA.sign replaces R_top's memoized uniform draw
+   (`mk <$ dmkey; mmap`) with the C10 fresh CONDITIONED draw `mk <$ dcond dmkey (good_fors m)` (mmap dropped),
+   where `good_fors m mk = (nth witness (FTWES.g (FTWES.mco mk m)) (k-1)).`3 = 0` is `predC_fors` UNFOLDED onto
+   FTWES's concrete g/mco — so the simulated oracle's grinding-conditioning is tied to the SAME digest the
+   reduction evaluates (faithful; not an abstract stand-in). choose / FTWES.mco / FL_FORS_ES_NPRF.sign /
+   pkFORS_from_sigFORSTW are byte-identical to R_top (all +C-invariant).
+ - HONEST RESIDUAL (deferred to the soundness track, NOT a typecheck barrier): `good_pos` / `p_nu` — the
+   positive-good-mass assumption (for some mk, good_fors holds); `dcond` is well-typed for any predicate (zero
+   good-mass degrades to dnull, a dead signer, rather than failing to compile). good_pos is a NAMED assumption
+   already carried in FORS_C10.ec, needed only for the LOSS term — the FORS-side analogue of Grind.ec's
+   grind_fails/p_nu WOTS carry. Reduction SOUNDNESS (item 2) explicitly deferred, not claimed.
+
+STATUS OF THE 5 ITEMS: item 1 RESOLVED (honest relabel + impossibility finding); item 4 CLOSED; item 3
+milestone (R_top_C typechecks). REMAINING: item 2 (R_top_C soundness — the crux) then item 5 (capstone).
