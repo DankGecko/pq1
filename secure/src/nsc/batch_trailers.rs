@@ -400,6 +400,99 @@ mod tests {
     }
 
     #[test]
+    fn routes_each_proof_set_only_to_its_declared_batch_member() {
+        use pqsigner_erc7730::{
+            bundle::leaf_hash,
+            ir::{CTX_CONTRACT, HEADER_LEN, SCHEMA_VER},
+            proof_set::{
+                verify_erc7730_proof_set_with_leaf_count, ERC7730_PROOF_SET_COUNT,
+                ERC7730_PROOF_SET_MAGIC, ERC7730_PROOF_SET_VERSION,
+            },
+        };
+        use sha2::{Digest, Sha256};
+
+        fn minimal_ir(contract: [u8; 20]) -> alloc::vec::Vec<u8> {
+            let mut ir = alloc::vec![0u8; HEADER_LEN];
+            ir[0] = SCHEMA_VER;
+            ir[1] = CTX_CONTRACT;
+            ir[2..10].copy_from_slice(&1u64.to_be_bytes());
+            ir[10..30].copy_from_slice(&contract);
+            let pool_off = HEADER_LEN as u16;
+            ir[126..128].copy_from_slice(&pool_off.to_be_bytes());
+            ir[128..130].copy_from_slice(&pool_off.to_be_bytes());
+            ir[132..134].copy_from_slice(&1u16.to_be_bytes());
+            ir.push(0); // zero formats
+            ir
+        }
+
+        fn node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+            let mut hasher = Sha256::new();
+            hasher.update([0x01]);
+            hasher.update(left);
+            hasher.update(right);
+            hasher.finalize().into()
+        }
+
+        fn legacy_bundle(ir: &[u8], index: u32, sibling: &[u8; 32]) -> alloc::vec::Vec<u8> {
+            let mut bundle = alloc::vec::Vec::new();
+            bundle.extend_from_slice(&(ir.len() as u16).to_be_bytes());
+            bundle.extend_from_slice(ir);
+            bundle.extend_from_slice(&index.to_be_bytes());
+            bundle.extend_from_slice(&1u32.to_be_bytes());
+            bundle.extend_from_slice(sibling);
+            bundle
+        }
+
+        fn proof_set(first: &[u8], second: &[u8]) -> alloc::vec::Vec<u8> {
+            let mut payload = alloc::vec::Vec::new();
+            payload.extend_from_slice(&ERC7730_PROOF_SET_MAGIC.to_be_bytes());
+            payload.push(ERC7730_PROOF_SET_VERSION);
+            payload.push(ERC7730_PROOF_SET_COUNT as u8);
+            payload.extend_from_slice(&(first.len() as u16).to_be_bytes());
+            payload.extend_from_slice(first);
+            payload.extend_from_slice(&(second.len() as u16).to_be_bytes());
+            payload.extend_from_slice(second);
+            payload
+        }
+
+        let member_0_contract = [0x11; 20];
+        let member_1_contract = [0x22; 20];
+        let member_0_ir = minimal_ir(member_0_contract);
+        let member_1_ir = minimal_ir(member_1_contract);
+        let member_0_leaf = leaf_hash(&member_0_ir);
+        let member_1_leaf = leaf_hash(&member_1_ir);
+        let root = node_hash(&member_0_leaf, &member_1_leaf);
+        let member_0_bundle = legacy_bundle(&member_0_ir, 0, &member_1_leaf);
+        let member_1_bundle = legacy_bundle(&member_1_ir, 1, &member_0_leaf);
+        let member_0_proof_set = proof_set(&member_0_bundle, &member_1_bundle);
+        let member_1_proof_set = proof_set(&member_1_bundle, &member_0_bundle);
+
+        // Put member 1 first on the wire so record order cannot masquerade as
+        // routing authority. `tx_idx` alone must retain each complete set.
+        let snap = build(&[
+            (TRAILER_KIND_ERC7730, 1, &member_1_proof_set),
+            (TRAILER_KIND_ERC7730, 0, &member_0_proof_set),
+        ]);
+        let parsed = parse_all(&snap, 0, snap.len(), 2).expect("two routed proof sets");
+        let mut seen = [false; 2];
+        for record in parsed.iter_kind(TRAILER_KIND_ERC7730) {
+            let raw = &snap[record.start..record.start + record.len];
+            let verified = verify_erc7730_proof_set_with_leaf_count(raw, &root, 2)
+                .expect("routed payload remains a complete valid proof set");
+            let member = record.tx_idx as usize;
+            let expected_contract = if member == 0 {
+                member_0_contract
+            } else {
+                member_1_contract
+            };
+            assert_eq!(verified.outer.descriptor.ir.contract, expected_contract);
+            assert!(!seen[member], "proof set routed twice to member {member}");
+            seen[member] = true;
+        }
+        assert_eq!(seen, [true, true]);
+    }
+
+    #[test]
     fn parses_batch_wide_name() {
         let payload = [0u8; 64];
         let snap = build(&[(TRAILER_KIND_NAME, TRAILER_TX_IDX_BATCH_WIDE, &payload)]);
@@ -496,16 +589,18 @@ mod tests {
     }
 
     #[test]
-    fn refuses_total_payload_budget_exceeded() {
-        // 2 × ERC-7730 proof sets (10268 each) + 1 × Safe v1 (4379)
-        // = 24915 B > 24576 B. Refuses the third record while leaving
-        // the aggregate batch budget unchanged.
+    fn refuses_total_payload_at_exactly_one_byte_over_budget() {
+        // 2 × ERC-7730 proof sets (10268 each) + 4041 Safe-v1 bytes
+        // = exactly 24577 B: the first forbidden aggregate byte.
         let max_7730 = alloc::vec![0u8; ERC7730_MAX_TRAILER_LEN];
-        let max_safe = alloc::vec![0u8; SAFE_V1_PAYLOAD_MAX];
+        let remainder = TRAILERS_TOTAL_MAX_LEN + 1 - 2 * ERC7730_MAX_TRAILER_LEN;
+        assert!(remainder <= SAFE_V1_PAYLOAD_MAX);
+        assert_eq!(2 * ERC7730_MAX_TRAILER_LEN + remainder, 24_577);
+        let safe = alloc::vec![0u8; remainder];
         let snap = build(&[
             (TRAILER_KIND_ERC7730, 0, &max_7730),
             (TRAILER_KIND_ERC7730, 1, &max_7730),
-            (TRAILER_KIND_SAFE_V1, 0, &max_safe),
+            (TRAILER_KIND_SAFE_V1, 0, &safe),
         ]);
         assert!(parse_all(&snap, 0, snap.len(), 4).is_err());
     }
