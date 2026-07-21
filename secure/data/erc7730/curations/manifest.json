@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 798716,
-    "sha256": "c57f0d9ccd8949b0f6b8d921a89303c92d8cea4de6076cd1d73b25f2720ed04e"
+    "bytes": 800055,
+    "sha256": "e4d351cf0fd94cf6c46157b977e8b8452d4052a9caaaf0816a05e28a176325f0"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -145,9 +145,9 @@
     {
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
-      "files": 21,
-      "bytes": 1814438,
-      "sha256": "17efd07d022682d8e74e1bd1dfba2bb0c37cafd5c6aa1f5298fe5cb06e862c21"
+      "files": 22,
+      "bytes": 1852447,
+      "sha256": "f75a34fab08c12879134e82661c03b8888a1794f59cdeae5f8c77628873340e2"
     },
     {
       "path": "pqsigner-erc7730",
@@ -196,7 +196,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 280708,
-      "sha256": "52c7f673f6314084c451b0717ba723f1e9acfe760ae87e86d32c259e72b8b556"
+      "sha256": "2e864bf9abd0b22796708200a8358bdf240180c9ca49e10e55efdb4c69b97c4c"
     }
   ],
   "capability_inputs": [
@@ -345,6 +345,13 @@
       "upstream_sha256": "f79cc8eb93054c1233f5cd044a2d4b2f5ba82a4162d4890dc182a1bbfea22fc7",
       "replacement_bytes": 4666,
       "replacement_sha256": "974178982fc146e9c83992085524f0fabe3bba9882e2dcff91c6974f1037f49c"
+    },
+    {
+      "path": "registry/midas/calldata-MinterVault.json",
+      "upstream_bytes": 10375,
+      "upstream_sha256": "e669ebac6228aac7ac8c5f391f8000df0f2812b0284bd61a78f528c01eff40db",
+      "replacement_bytes": 11714,
+      "replacement_sha256": "3114a49201b28e7bf0764d233861eba22d407c18428de265351a08e3ce9d6944"
     },
     {
       "path": "registry/morpho/calldata-MorphoBlue.json",

@@ -1,0 +1,35 @@
+{
+  "author": {
+    "date": "2025-09-04T14:42:51Z",
+    "email": "kostyamospan@users.noreply.github.com",
+    "name": "kostyamospan"
+  },
+  "committer": {
+    "date": "2025-09-04T14:42:51Z",
+    "email": "kostyamospan@users.noreply.github.com",
+    "name": "kostyamospan"
+  },
+  "html_url": "https://github.com/midas-apps/contracts/commit/237c56a85e51560a977d9473ce3f939d877f2a4f",
+  "message": "feat: composite data feed",
+  "node_id": "C_kwDOM5VlPtoAKDIzN2M1NmE4NWU1MTU2MGE5NzdkOTQ3M2NlM2Y5MzlkODc3ZjJhNGY",
+  "parents": [
+    {
+      "html_url": "https://github.com/midas-apps/contracts/commit/47b50d623068f3e66101fb98a93f44ff17659522",
+      "sha": "47b50d623068f3e66101fb98a93f44ff17659522",
+      "url": "https://api.github.com/repos/midas-apps/contracts/git/commits/47b50d623068f3e66101fb98a93f44ff17659522"
+    }
+  ],
+  "sha": "237c56a85e51560a977d9473ce3f939d877f2a4f",
+  "tree": {
+    "sha": "1cff2a6fe8ad0f97e312a28624e9b32166f0d942",
+    "url": "https://api.github.com/repos/midas-apps/contracts/git/trees/1cff2a6fe8ad0f97e312a28624e9b32166f0d942"
+  },
+  "url": "https://api.github.com/repos/midas-apps/contracts/git/commits/237c56a85e51560a977d9473ce3f939d877f2a4f",
+  "verification": {
+    "payload": "tree 1cff2a6fe8ad0f97e312a28624e9b32166f0d942\nparent 47b50d623068f3e66101fb98a93f44ff17659522\nauthor kostyamospan <kostyamospan@users.noreply.github.com> 1756996971 +0300\ncommitter kostyamospan <kostyamospan@users.noreply.github.com> 1756996971 +0300\n\nfeat: composite data feed\n",
+    "reason": "valid",
+    "signature": "-----BEGIN PGP SIGNATURE-----\n\niQEzBAABCAAdFiEEyWNWW2NkzancbX1Ujf9Prf3EhQYFAmi5pWsACgkQjf9Prf3E\nhQYSMwf+MHNqcwzWa4n3zPhqnpvji10qK+rnGslZANecwSSpjlxA6l59PBqJ581l\nzbd5ym4OE8QI0FMaNx4qJeh9GuhvPHrjRAJkOlUzVZFXaB2y1Gmkk3lOR8468c9l\neVVwKaXTBfi9rqKbA0eSg8JDxyEO2reKCKW36Dthvvno4WOVNI0LqAJCyq8+zW2u\nnL1JMYmphppgFFrWEGCgC8CTPw18dd5OMfGniN+CGf7tzM1mUIeM09zd7SYgkZmP\n0Dj0R1MPvjXSgAVyz+Rv7Yhmc+WKPd/Dj/bX0qBIT/FNkznjoC/TLQTpGVBCaxBM\nALK+AoHmgWPTBqJbcq1zuFMco4+AaQ==\n=y+iW\n-----END PGP SIGNATURE-----",
+    "verified": true,
+    "verified_at": "2025-09-04T14:42:56Z"
+  }
+}

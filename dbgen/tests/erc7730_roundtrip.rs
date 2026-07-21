@@ -1449,6 +1449,277 @@ fn registry_celo_validators_add_first_member_is_mainnet_only_and_alfajores_stays
 }
 
 #[test]
+fn registry_midas_mtbill_admits_only_the_common_instant_deposit_route() {
+    const RELATIVE: &str = "registry/midas/calldata-MinterVault.json";
+    const CHAIN_ID: u64 = 1;
+    const SIGNATURE: &str =
+        "depositInstant(address tokenIn, uint256 amountToken, uint256 minReceiveAmount, bytes32 referrerId)";
+    const CANONICAL_SIGNATURE: &str = "depositInstant(address,uint256,uint256,bytes32)";
+
+    let root = workspace_root();
+    let curated = std::fs::read(
+        root.join("secure/data/erc7730/curations/files")
+            .join(RELATIVE),
+    )
+    .expect("read curated Midas MinterVault descriptor");
+    let installed = std::fs::read(root.join("secure/data/erc7730-registry").join(RELATIVE))
+        .expect("read installed Midas MinterVault descriptor");
+    assert_eq!(
+        installed, curated,
+        "installed Midas descriptor diverged from its receipted curation"
+    );
+
+    let descriptor: serde_json::Value =
+        serde_json::from_slice(&installed).expect("parse curated Midas descriptor");
+    let note = descriptor["_curation_note"]
+        .as_str()
+        .expect("Midas curation note");
+    for boundary in ["18-decimal", "referrer", "live", "future proxy"] {
+        assert!(
+            note.contains(boundary),
+            "Midas curation note lost boundary {boundary:?}"
+        );
+    }
+    let admissions = descriptor["_pqsigner"]["deploymentFormats"]
+        .as_array()
+        .expect("Midas deploymentFormats array");
+    assert_eq!(admissions.len(), 1);
+    assert_eq!(admissions[0]["chainId"].as_u64(), Some(CHAIN_ID));
+    assert_eq!(
+        admissions[0]["address"]
+            .as_str()
+            .map(str::to_ascii_lowercase),
+        Some("0x99361435420711723af805f08187c9e6bf796683".to_string())
+    );
+    assert_eq!(
+        admissions[0]["formats"],
+        serde_json::json!([SIGNATURE]),
+        "only the common four-argument instant route may be admitted"
+    );
+
+    let deployments = descriptor["context"]["contract"]["deployments"]
+        .as_array()
+        .expect("Midas deployments array");
+    assert_eq!(
+        deployments.len(),
+        75,
+        "curation must preserve the complete pinned upstream deployment inventory"
+    );
+    let declared_formats = descriptor["display"]["formats"]
+        .as_object()
+        .expect("Midas formats object");
+    assert_eq!(
+        declared_formats.len(),
+        4,
+        "curation must preserve all upstream known-call signatures"
+    );
+
+    let catalogue = build_registry();
+    let contract: [u8; 20] = hex::decode("99361435420711723af805f08187c9e6bf796683")
+        .expect("valid mTBILL DepositVault address")
+        .try_into()
+        .expect("mTBILL DepositVault address width");
+    let entries: Vec<_> = catalogue
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-MinterVault.json")
+        })
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "only one Midas deployment may emit a leaf"
+    );
+    let entry = entries[0];
+    assert_eq!((entry.chain_id, entry.contract), (CHAIN_ID, contract));
+
+    let proof = extract_proof(
+        &catalogue.blob,
+        entry.leaf_index,
+        proof_depth(&catalogue.blob),
+    );
+    let bundle = synth_bundle(&entry.ir_bytes, entry.leaf_index as u32, &proof);
+    let verified = verify_erc7730_bundle(&bundle, &catalogue.root)
+        .expect("production Midas descriptor proof verifies");
+    cross_check_contract(&verified.ir, CHAIN_ID, &contract)
+        .expect("Midas deployment binding round-trips");
+
+    let selector: [u8; 4] = keccak256(CANONICAL_SIGNATURE.as_bytes())[..4]
+        .try_into()
+        .expect("Midas selector width");
+    assert_eq!(selector, [0xc0, 0x2d, 0xd2, 0x7a]);
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Midas IR parses");
+    assert_eq!(ir.format_count(), Ok(1));
+    let format = ir
+        .find_format_by_selector(&selector)
+        .expect("Midas format table parses")
+        .expect("common instant-deposit route is admitted");
+    assert_eq!(format.intent, b"Issue mTBILL now");
+    assert_eq!(format.static_head_words, 4);
+    let fields: Vec<_> = format
+        .fields()
+        .map(|field| field.expect("Midas field parses"))
+        .collect();
+    assert_eq!(
+        fields.len(),
+        5,
+        "all signed operands plus beneficiary render"
+    );
+    assert_eq!(
+        fields.iter().map(|field| field.label).collect::<Vec<_>>(),
+        [
+            b"Payment Token".as_slice(),
+            b"Payment Amount".as_slice(),
+            b"Minimum mTBILL".as_slice(),
+            b"Referral ID".as_slice(),
+            b"Beneficiary".as_slice(),
+        ]
+    );
+    assert_eq!(
+        fields
+            .iter()
+            .map(|field| FormatOp::try_from(field.format_op).expect("known Midas formatter"))
+            .collect::<Vec<_>>(),
+        [
+            FormatOp::AddressName,
+            FormatOp::Unit,
+            FormatOp::TokenAmount,
+            FormatOp::Raw,
+            FormatOp::AddressName,
+        ]
+    );
+
+    for (index, field) in fields[..4].iter().enumerate() {
+        assert_eq!(
+            ir.path_bytes(field.path_off)
+                .expect("Midas operand path parses"),
+            [
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                index as u8,
+            ],
+            "Midas field {index} bound the wrong signed word"
+        );
+        assert_eq!(
+            parse_params(&ir, field.param_off)
+                .expect("Midas operand params parse")
+                .visibility,
+            Visibility::Always
+        );
+    }
+    let payment_token = parse_params(&ir, fields[0].param_off).expect("token params parse");
+    assert_eq!(payment_token.terminal_kind, Some(TerminalKind::Address));
+    assert_eq!(payment_token.addr_types, Some(ADDR_TYPE_TOKEN));
+
+    let payment_amount = parse_params(&ir, fields[1].param_off).expect("amount params parse");
+    assert_eq!(payment_amount.terminal_kind, Some(TerminalKind::Unsigned));
+    assert_eq!(payment_amount.decimals, Some(18));
+    assert_eq!(payment_amount.base, Some(b"token".as_slice()));
+    assert_eq!(payment_amount.prefix, Some(0));
+    assert!(
+        payment_amount.token_path.is_none() && payment_amount.token.is_none(),
+        "normalized DepositVault amount must not inherit payment-token decimals"
+    );
+
+    let minimum = parse_params(&ir, fields[2].param_off).expect("minimum params parse");
+    let mtbill: [u8; 20] = hex::decode("dd629e5241cbc5919847783e6c96b2de4754e438")
+        .expect("valid mTBILL address")
+        .try_into()
+        .expect("mTBILL address width");
+    assert_eq!(minimum.terminal_kind, Some(TerminalKind::Unsigned));
+    assert_eq!(minimum.token, Some(&mtbill));
+    assert!(minimum.token_path.is_none());
+
+    let referral = parse_params(&ir, fields[3].param_off).expect("referral params parse");
+    assert_eq!(referral.terminal_kind, Some(TerminalKind::FixedBytes));
+    assert_eq!(referral.visibility, Visibility::Always);
+
+    let mut sender_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+    sender_path.extend_from_slice(&container_field::FROM.to_be_bytes());
+    assert_eq!(
+        ir.path_bytes(fields[4].path_off)
+            .expect("beneficiary path parses"),
+        sender_path,
+        "beneficiary must bind the authenticated signer container field"
+    );
+    let beneficiary = parse_params(&ir, fields[4].param_off).expect("beneficiary params parse");
+    assert_eq!(beneficiary.terminal_kind, Some(TerminalKind::Address));
+    assert_eq!(beneficiary.visibility, Visibility::Always);
+
+    let refused = [
+        "depositInstant(address,uint256,uint256,bytes32,address)",
+        "depositRequest(address,uint256,bytes32)",
+        "depositRequest(address,uint256,bytes32,address)",
+    ]
+    .map(|signature| {
+        keccak256(signature.as_bytes())[..4]
+            .try_into()
+            .expect("Midas refused selector width")
+    });
+    for refused_selector in refused {
+        assert!(
+            ir.find_format_by_selector(&refused_selector)
+                .expect("Midas format table parses")
+                .is_none(),
+            "out-of-scope Midas route unexpectedly became clear-signable"
+        );
+    }
+
+    let known_selectors: Vec<[u8; 4]> = declared_formats
+        .keys()
+        .map(|signature| {
+            let canonical = signature.split('(').next().expect("function name");
+            let params = signature
+                .split_once('(')
+                .and_then(|(_, rest)| rest.strip_suffix(')'))
+                .expect("Midas signature params")
+                .split(',')
+                .map(|param| {
+                    param
+                        .trim()
+                        .split_whitespace()
+                        .next()
+                        .expect("parameter type")
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            let canonical = format!("{canonical}({params})");
+            keccak256(canonical.as_bytes())[..4]
+                .try_into()
+                .expect("known Midas selector width")
+        })
+        .collect();
+    for deployment in deployments {
+        let chain_id = deployment["chainId"].as_u64().expect("Midas chain id");
+        let address: [u8; 20] = hex::decode(
+            deployment["address"]
+                .as_str()
+                .expect("Midas deployment address")
+                .trim_start_matches("0x"),
+        )
+        .expect("hex Midas deployment address")
+        .try_into()
+        .expect("Midas deployment address width");
+        for selector in &known_selectors {
+            assert!(
+                catalogue
+                    .known_calls
+                    .contains(&(chain_id, address, *selector)),
+                "Midas tuple left exact known-call coverage"
+            );
+            assert!(
+                known_call_may_contain(&catalogue.known_calls_bloom, chain_id, &address, selector,),
+                "Midas tuple left the fail-closed known-call Bloom"
+            );
+        }
+    }
+    assert_eq!(catalogue.known_call_count, 4_552);
+}
+
+#[test]
 fn registry_morpho_blue_assets_bind_the_signed_market_token_on_both_chains() {
     let root = workspace_root();
     let relative = "registry/morpho/calldata-MorphoBlue.json";
@@ -1687,8 +1958,8 @@ fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment(
 
     assert_eq!(
         result.entries.len(),
-        451,
-        "PQ-incompatible permit removal must preserve the 451-leaf catalogue"
+        452,
+        "PQ-incompatible permit removal must preserve the 452-leaf catalogue"
     );
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
@@ -1825,11 +2096,11 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
             .contains(&(entry.chain_id, entry.contract, withdraw_selector)));
     }
 
-    assert_eq!(result.entries.len(), 451);
+    assert_eq!(result.entries.len(), 452);
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.root),
-        "f491b2e3e52011ada0ae14660a2c32506b719f369a35b52f5f574ed4dd3c685e"
+        "afc205221e2af04cb52e0f9cc32f0b77abb052e96c2324cfe4d1aa1519a99661"
     );
 }
 
@@ -1934,7 +2205,7 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
 
     assert_eq!(
         result.entries.len(),
-        451,
+        452,
         "Aave V2 already owned three leaves"
     );
     assert_eq!(result.known_call_count, 4_552);
@@ -2156,7 +2427,7 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
         );
     }
 
-    assert_eq!(result.entries.len(), 451);
+    assert_eq!(result.entries.len(), 452);
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -2264,7 +2535,7 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
         );
     }
 
-    assert_eq!(result.entries.len(), 451);
+    assert_eq!(result.entries.len(), 452);
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -2789,7 +3060,7 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
         "newly clear-signable permit was already registry-known"
     );
 
-    assert_eq!(result.entries.len(), 451);
+    assert_eq!(result.entries.len(), 452);
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.known_call_set_hash),

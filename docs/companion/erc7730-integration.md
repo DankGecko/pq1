@@ -44,12 +44,12 @@ Current security contract:
 - Schema v5 authenticates every `uintN`/`intN` width and hard-refuses dirty ABI
   zero/sign extension before publishing trusted clear-signing pages; full-width
   `uint256`/`int256` words remain unchanged.
-- The current regenerated development catalogue has **451 leaves**, root
-  `f491b2e3e52011ada0ae14660a2c32506b719f369a35b52f5f574ed4dd3c685e`,
+- The current regenerated development catalogue has **452 leaves**, root
+  `afc205221e2af04cb52e0f9cc32f0b77abb052e96c2324cfe4d1aa1519a99661`,
   and **4,552 exact known-call tuples**. The tuple-set receipt is SHA-256
   `0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9`;
   Bloom occupancy is 28,293 / 131,072 bits under the compiler-enforced generation cap.
-- The current compiler report records **252** omitted descriptor/formats.
+- The current compiler report records **328** omitted descriptor/formats.
 <!-- END XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->
 - These receipts detect input/artifact drift. They do not turn Bloom insertion
   into a proof of parser completeness. The current independent types-only ABI

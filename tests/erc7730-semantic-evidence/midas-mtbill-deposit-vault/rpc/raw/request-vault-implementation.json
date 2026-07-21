@@ -1,0 +1,14 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "vault-implementation-code",
+    "method": "eth_getCode",
+    "params": [
+      "0xC8AF8477f3CaA89F60Fe9d1f48EeE5433C55982B",
+      {
+        "blockHash": "0x747c9dfcb1988c490d72011332edaebdea48acba3a29df44a82be5ecdeceb7fb",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

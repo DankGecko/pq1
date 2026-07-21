@@ -1512,6 +1512,409 @@ fn production_celo_validators_add_first_member_renders_all_signed_operands_mainn
 }
 
 #[test]
+fn production_midas_mtbill_instant_deposit_is_operand_complete_and_exactly_scoped() {
+    use pqsigner_erc7730::display::MAX_PAGES;
+
+    const CHAIN_ID: u64 = 1;
+    const SIGNATURE: &str = "depositInstant(address,uint256,uint256,bytes32)";
+    const SELECTOR: [u8; 4] = [0xc0, 0x2d, 0xd2, 0x7a];
+    const CUSTOM_RECIPIENT: &str = "depositInstant(address,uint256,uint256,bytes32,address)";
+    const REQUEST: &str = "depositRequest(address,uint256,bytes32)";
+    const REQUEST_RECIPIENT: &str = "depositRequest(address,uint256,bytes32,address)";
+
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-MinterVault.json", CHAIN_ID);
+    let vault: [u8; 20] = hex::decode("99361435420711723af805f08187c9e6bf796683")
+        .expect("canonical mTBILL DepositVault")
+        .try_into()
+        .expect("address width");
+    assert_eq!(entry.contract, vault);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root)
+        .expect("verify production mTBILL DepositVault leaf");
+    cross_check_contract(&verified.ir, CHAIN_ID, &vault)
+        .expect("bind production mTBILL DepositVault leaf");
+    assert!(matches!(
+        cross_check_contract(&verified.ir, 10, &vault),
+        Err(BindingError::ChainIdMismatch)
+    ));
+    assert!(matches!(
+        cross_check_contract(&verified.ir, CHAIN_ID, &[0x55; 20]),
+        Err(BindingError::ContractMismatch)
+    ));
+    assert_eq!(verified.ir.format_count(), Ok(1));
+    assert_eq!(&keccak256(SIGNATURE.as_bytes())[..4], &SELECTOR);
+    for refused in [CUSTOM_RECIPIENT, REQUEST, REQUEST_RECIPIENT] {
+        assert_selector_excluded(&verified.ir, refused);
+    }
+
+    let usdc: [u8; 20] = hex::decode("a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
+        .expect("USDC address")
+        .try_into()
+        .expect("address width");
+    let mtbill: [u8; 20] = hex::decode("dd629e5241cbc5919847783e6c96b2de4754e438")
+        .expect("mTBILL address")
+        .try_into()
+        .expect("address width");
+    let metadata = Erc20Metadata {
+        chain_id: CHAIN_ID,
+        contract: mtbill,
+        decimals: 18,
+        name: b"Midas US Treasury Bill Token",
+        symbol: b"mTBILL",
+    };
+    let signer = [0x42; 20];
+    let mut changed_signer = signer;
+    changed_signer[19] ^= 1;
+    let resolver = NameResolver::new();
+    let referral = [
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+        0xff, 0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76, 0x87, 0x98, 0xa9, 0xba, 0xcb, 0xdc, 0xed,
+        0xfe, 0x0f,
+    ];
+    let words = [
+        abi_address_word(usdc),
+        u256_from_u128(2_000_000_000_000_000_000).0,
+        u256_from_u128(1_900_000_000_000_000_000).0,
+        referral,
+    ];
+    let calldata = calldata_static(SIGNATURE, &words);
+    assert_eq!(calldata.len(), 4 + 4 * 32);
+    assert_eq!(&calldata[..4], &SELECTOR);
+    assert_selector_matches(&verified.ir, &calldata, SIGNATURE);
+    let tx = envelope(CHAIN_ID, vault);
+
+    let render_with = |candidate_words: &[[u8; 32]; 4], candidate_signer: &[u8; 20]| {
+        let candidate = calldata_static(SIGNATURE, candidate_words);
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &candidate,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            candidate_signer,
+        )
+    };
+    let baseline = render_with(&words, &signer).expect("mTBILL instant deposit renders");
+    assert_eq!(
+        baseline.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert!(
+        baseline
+            .transcript_receipt
+            .range_matches(&baseline.pages, 0),
+        "the transcript receipt must bind every trusted Midas page"
+    );
+    assert_all_pages_printable(&baseline.pages);
+    assert!(
+        baseline.pages.len <= MAX_PAGES,
+        "complete referral and beneficiary display must fit the fixed page budget"
+    );
+    assert_eq!(
+        page_strs(&baseline.pages, intent_page_index(&baseline.pages))[0],
+        "Issue mTBILL now"
+    );
+    assert_full_address_field_page(&baseline.pages, "Payment Token", &usdc);
+    let payment_rows = page_strs(
+        &baseline.pages,
+        find_page_by_label(&baseline.pages, "Payment Amount"),
+    );
+    assert!(
+        payment_rows.iter().any(|row| row.contains("2 token")),
+        "normalized 18-decimal input must render as 2 token: {payment_rows:?}"
+    );
+    let minimum_rows = page_strs(
+        &baseline.pages,
+        find_page_by_label(&baseline.pages, "Minimum mTBILL"),
+    );
+    assert!(
+        minimum_rows.iter().any(|row| row.contains("1.9 mTBILL")),
+        "minimum must use static 18-decimal mTBILL metadata: {minimum_rows:?}"
+    );
+    assert_raw_word_pages(&baseline.pages, "Referral ID", &referral);
+    assert_full_address_field_page(&baseline.pages, "Beneficiary", &signer);
+
+    for (word_index, operand) in [
+        (0usize, "payment token"),
+        (1, "payment amount"),
+        (2, "minimum mTBILL"),
+        (3, "referral ID"),
+    ] {
+        let mut mutated_words = words;
+        mutated_words[word_index] = match word_index {
+            1 => u256_from_u128(3_000_000_000_000_000_000).0,
+            2 => u256_from_u128(1_800_000_000_000_000_000).0,
+            _ => {
+                let mut word = mutated_words[word_index];
+                word[31] ^= 1;
+                word
+            }
+        };
+        let mutated = render_with(&mutated_words, &signer)
+            .unwrap_or_else(|error| panic!("render independently mutated {operand}: {error:?}"));
+        assert_ne!(
+            baseline.pages.as_slice(),
+            mutated.pages.as_slice(),
+            "changing only {operand} must change trusted pages"
+        );
+        assert!(
+            !baseline
+                .transcript_receipt
+                .exact_match(&mutated.transcript_receipt),
+            "changing only {operand} must change the transcript receipt"
+        );
+    }
+    for word_index in [1usize, 2] {
+        let mut inexact = words;
+        inexact[word_index][31] ^= 1;
+        assert!(
+            render_with(&inexact, &signer).is_err(),
+            "a value that cannot be shown injectively must refuse"
+        );
+    }
+    let changed_beneficiary =
+        render_with(&words, &changed_signer).expect("changed authenticated signer renders");
+    assert_full_address_field_page(&changed_beneficiary.pages, "Beneficiary", &changed_signer);
+    assert_ne!(
+        baseline.pages.as_slice(),
+        changed_beneficiary.pages.as_slice(),
+        "authenticated beneficiary changes must be visible"
+    );
+    assert!(!baseline
+        .transcript_receipt
+        .exact_match(&changed_beneficiary.transcript_receipt));
+
+    let mut dirty_token = words;
+    dirty_token[0][0] = 1;
+    assert!(
+        render_with(&dirty_token, &signer).is_err(),
+        "dirty address padding must refuse"
+    );
+    assert!(matches!(
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &calldata[..calldata.len() - 1],
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 short head"
+        ))
+    ));
+    let mut trailing = calldata.clone();
+    trailing.push(0);
+    assert!(matches!(
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &trailing,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 static calldata trailing"
+        ))
+    ));
+
+    let mut tampered_bundle = bundle.clone();
+    *tampered_bundle
+        .last_mut()
+        .expect("Midas bundle has proof bytes") ^= 1;
+    assert!(
+        verify_erc7730_bundle(&tampered_bundle, &registry.root).is_err(),
+        "a tampered Midas Merkle proof must fail closed"
+    );
+
+    let mut proofs = DispatchPageProofs::new();
+    proofs.fail_initialize();
+    let mut dispatched = pick_sign_pages(
+        &tx,
+        &calldata,
+        &signer,
+        None,
+        None,
+        None,
+        Some(&verified),
+        Some(&metadata),
+        None,
+        &resolver,
+        &mut proofs,
+    )
+    .expect("dispatcher selects the exact mTBILL instant-deposit route");
+    assert_eq!(dispatched.as_slice(), baseline.pages.as_slice());
+    let mut verdict = crate::fi::FAIL_SENTINEL;
+    proofs.final_set_proof(&dispatched, &tx, false, &mut verdict);
+    assert_eq!(verdict, crate::fi::OK_SENTINEL);
+    dispatched.buf[find_page_by_label(&dispatched, "Referral ID")][1][0] ^= 1;
+    verdict = crate::fi::FAIL_SENTINEL;
+    proofs.final_set_proof(&dispatched, &tx, false, &mut verdict);
+    assert_ne!(
+        verdict,
+        crate::fi::OK_SENTINEL,
+        "corrupting visible referral bytes must invalidate the dispatcher proof"
+    );
+
+    let refused_cases = [
+        (
+            CUSTOM_RECIPIENT,
+            vec![
+                abi_address_word(usdc),
+                words[1],
+                words[2],
+                referral,
+                abi_address_word([0x77; 20]),
+            ],
+        ),
+        (REQUEST, vec![abi_address_word(usdc), words[1], referral]),
+        (
+            REQUEST_RECIPIENT,
+            vec![
+                abi_address_word(usdc),
+                words[1],
+                referral,
+                abi_address_word([0x77; 20]),
+            ],
+        ),
+    ];
+    for (signature, refused_words) in refused_cases {
+        let refused_calldata = calldata_static(signature, &refused_words);
+        let selector: [u8; 4] = refused_calldata[..4]
+            .try_into()
+            .expect("refused selector width");
+        assert!(
+            registry.known_calls.contains(&(CHAIN_ID, vault, selector)),
+            "out-of-scope Midas route must stay exact-known"
+        );
+        assert!(pqsigner_erc7730::known_calls::may_contain(
+            &registry.known_calls_bloom,
+            CHAIN_ID,
+            &vault,
+            &selector,
+        ));
+        assert!(matches!(
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                &refused_calldata,
+                &verified,
+                Some(&metadata),
+                &resolver,
+                &signer,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+        ));
+        for descriptor in [Some(&verified), None] {
+            let mut refused_proofs = DispatchPageProofs::new();
+            refused_proofs.fail_initialize();
+            assert!(
+                pick_sign_pages(
+                    &tx,
+                    &refused_calldata,
+                    &signer,
+                    None,
+                    None,
+                    None,
+                    descriptor,
+                    Some(&metadata),
+                    None,
+                    &resolver,
+                    &mut refused_proofs,
+                )
+                .is_err(),
+                "{signature} must not fall back with or without a descriptor"
+            );
+        }
+    }
+
+    let excluded_contract: [u8; 20] = hex::decode("a8a5c4ff4c86a459ebbdc39c5be77833b3a15d88")
+        .expect("excluded Midas deployment")
+        .try_into()
+        .expect("address width");
+    assert!(
+        registry
+            .known_calls
+            .contains(&(CHAIN_ID, excluded_contract, SELECTOR)),
+        "other Midas deployments remain exact-known"
+    );
+    assert!(pqsigner_erc7730::known_calls::may_contain(
+        &registry.known_calls_bloom,
+        CHAIN_ID,
+        &excluded_contract,
+        &SELECTOR,
+    ));
+    assert!(matches!(
+        cross_check_contract(&verified.ir, CHAIN_ID, &excluded_contract),
+        Err(BindingError::ContractMismatch)
+    ));
+
+    // The signing handler turns a mis-bound proof into `None` before entering
+    // the dispatcher. Exercise that production boundary directly: the
+    // FI-hardened binding proof must refuse the borrowed descriptor, then the
+    // independently pinned known-call filter must prevent fallback.
+    let mut bind_verdict = crate::fi::FAIL_SENTINEL;
+    let mut bind_cfi = crate::fi::CfiCounter::new();
+    crate::tx::erc7730::prove_contract_binding(
+        &verified.ir,
+        &bundle,
+        &registry.root,
+        CHAIN_ID,
+        &excluded_contract,
+        &mut bind_verdict,
+        &mut bind_cfi,
+    );
+    assert_ne!(bind_verdict, crate::fi::OK_SENTINEL);
+    assert_eq!(
+        bind_cfi.check_into_sentinel(crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED),
+        crate::fi::OK_SENTINEL,
+        "the rejecting binding proof must still complete its CFI transcript"
+    );
+
+    let excluded_tx = envelope(CHAIN_ID, excluded_contract);
+    let mut excluded_proofs = DispatchPageProofs::new();
+    excluded_proofs.fail_initialize();
+    assert!(
+        pick_sign_pages(
+            &excluded_tx,
+            &calldata,
+            &signer,
+            None,
+            None,
+            None,
+            None,
+            Some(&metadata),
+            None,
+            &resolver,
+            &mut excluded_proofs,
+        )
+        .is_err(),
+        "a rejected Midas binding must never acquire fallback authority"
+    );
+
+    let mut missing_descriptor_proofs = DispatchPageProofs::new();
+    missing_descriptor_proofs.fail_initialize();
+    assert!(
+        pick_sign_pages(
+            &tx,
+            &calldata,
+            &signer,
+            None,
+            None,
+            None,
+            None,
+            Some(&metadata),
+            None,
+            &resolver,
+            &mut missing_descriptor_proofs,
+        )
+        .is_err(),
+        "an exact known call without its descriptor must hard-refuse"
+    );
+}
+
+#[test]
 fn production_celo_election_revokes_render_every_signed_operand_mainnet_only() {
     use pqsigner_erc7730::ir::FormatOp;
 

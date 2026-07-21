@@ -173,7 +173,7 @@ Three things in the companion bundle:
    hand-authored seed corpus used by older bring-up snapshots.
 
    <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->
-   - Development catalogue: 387,984 B, 451 compiled leaves, 4,552
+   - Development catalogue: 388,690 B, 452 compiled leaves, 4,552
      exact registry-declared known-call tuples, provenance `dev-unattested`.
      The tuple-set SHA-256 receipt is
      `0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9`.
@@ -935,7 +935,7 @@ provenance remains blocked):
 <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 | Variant | Root | Catalog blob bytes | Compiled leaves |
 |---------|------|-------------------:|----------------:|
-| development (non-e2e) | `0xf491b2e3e52011ada0ae14660a2c32506b719f369a35b52f5f574ed4dd3c685e` | 387 984 | 451 |
+| development (non-e2e) | `0xafc205221e2af04cb52e0f9cc32f0b77abb052e96c2324cfe4d1aa1519a99661` | 388 690 | 452 |
 | e2e | `0xa2bde3ae909a23a1ab45c533ffcbcdfb35345101ee750da96a3cd6f890040cb4` | 3 968 | 8 |
 <!-- END XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 
