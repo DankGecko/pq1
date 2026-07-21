@@ -19,6 +19,9 @@ child semantics. The first slice is complete when:
   from the signed parent bytes and authenticated parent IR;
 - the child descriptor binds to that derived chain and target and contains the
   derived selector;
+- the selected child format passes the same head-bound, canonical ABI framing,
+  and format-wide word-guard preflight over that exact interval before any
+  child page is published;
 - a one-level scoped child render composes atomically into the parent's single
   31-page transcript, with one outer envelope and one final confirmation;
 - every missing, ambiguous, malformed, recursive, non-`CALL`, or over-budget
@@ -63,10 +66,11 @@ remains deferred under the project workflow and existing tracker items.
 | Child semantics are rooted | Host supplies a friendly decoder for attacker calldata | Every distinct child IR carries its own proof under the firmware-pinned root |
 | Parent bytes select the child | Proof describes a different call than the signed tail | Device derives interval, target, chain, and selector; host supplies none of those as facts |
 | Exact ABI ownership | Gaps, aliases, padding, or suffixes carry hidden signed bytes | Reuse the sole-C1 exact-whole-tail resolver before any page publication |
-| Execution meaning is enrolled | A `delegatecall` is presented as a call to the library address | Only exact parent descriptor/deployment/selector/path enrollments with ordinary zero-value `CALL` semantics may compile and render |
-| Child context is not invented | Child `@.value`, `@.from`, or nonce displays synthetic zero/identity | First slice exposes only inherited chain, resolved `@.to`, and authenticated zero call value; `@.from`/nonce use rejects |
+| Child ABI is canonical | A rooted child format paints selected fields while malformed head/tails, hidden fields, or failed guards retain different signed meaning | Run the complete contract head-bound, format-framing, and word-guard preflight on the exact child interval before its boundary or intent page |
+| Execution meaning is enrolled | A `delegatecall` is presented as a call to the library address | Only exact, source-evidenced parent descriptor/deployment/selector/path enrollments with ordinary zero-value `CALL` semantics may compile and render; the device does not derive execution mode from calldata |
+| Child context is not invented | Child `@.value`, `@.from`, or nonce displays synthetic zero/identity | First slice exposes only inherited chain, resolved `@.to`, and enrolled zero call value; `@.from`/nonce use rejects |
 | Composition is complete | Child pages truncate or replace parent facts | One atomic page buffer, global cap 31, one outer envelope/final confirmation |
-| Native Safe authority stays first | Generic recursion bypasses stricter Safe/MultiSend operation rules | Existing CoW/Safe/MultiSend claim and render paths retain precedence; failed native claims remain fatal |
+| Native authority cannot hide below the parent | A Safe/CoW/MultiSend child selector bypasses the outer-only native dispatch ladder | Before child descriptor selection, a selector-reservation gate hard-refuses every selector claimed by the current native decoders; outer native precedence and fatal failed claims also remain unchanged |
 | Faulted binding cannot publish | A skipped target/selector check still reaches confirm | Duplicate pure binding derivation, child bundle binding proof, and the existing two-pass exact transcript receipt all include the nested binding |
 
 ## 4. Selected wire and proof model
@@ -102,11 +106,19 @@ legacy one-bundle wire and avoids sending a duplicate proof. It preserves a
 possible route for same-contract multicall descriptors, but does not establish
 their execution semantics or admit Aave: source and deployment evidence may
 instead require a separate delegatecall/same-context model. Selection must be
-unique: exactly one descriptor in the verified set must bind to the derived
-`(chain,target,selector)`; ambiguity rejects.
+unique in both dimensions: exactly one descriptor in the verified set must
+bind to the derived `(chain,target)`, and exactly one format inside the selected
+IR must match the derived selector. Either ambiguity rejects, including on the
+one-bundle reuse path.
 
-`ERC7730_TRAILER_VERSION` becomes the companion capability version for this
-compatible extension. Single and batch payload caps are updated, but the batch
+The wrapper `version = 1` is only its envelope-syntax version. It is not the
+existing `ERC7730_TRAILER_VERSION` and is not a discoverable device feature by
+itself. Add a shared `CAP_ERC7730_PROOF_SET = 1 << 2` bit to the
+`GET_DEVICE_INFO` capability bitmap (bit 1 remains retired). A companion sends
+the wrapper only when this exact bit is present; otherwise it may send a legacy
+single bundle or must refuse a distinct-child request. Tests pin old/new
+negotiation and prove that firmware-version placeholder bytes are never used
+for this decision. Single and batch payload caps are updated, but the batch
 aggregate trailer budget remains 24 KiB and refuses combinations that do not
 fit.
 
@@ -120,7 +132,14 @@ enrollment table, consumed by both `dbgen` and the device preflight, binds:
 - the single calldata field ordinal and exact canonical C1 `bytes` path;
 - the canonical static-address `calleePath` (or frozen `@.to` path);
 - ordinary `CALL` semantics; and
-- an authenticated zero child call value.
+- an enrolled zero child call value.
+
+Every table row carries the exact source/deployment evidence identity used to
+justify those execution facts (repository and immutable revision, deployment,
+and code identity or proxy-resolution evidence). These are source-evidenced
+firmware policy facts, not facts derived from the signed child bytes, and no UI
+wording may imply otherwise. The Phase-C fixture row is explicitly test-only;
+the production table stays empty.
 
 The selected format must contain exactly one `Calldata` field. Its terminal
 kind is `DynamicBytes`, its visibility is `always`, `calleePath` is mandatory,
@@ -151,9 +170,23 @@ Before pages are touched, the device:
 6. resolves the enrolled callee path as a canonical address;
 7. requires at least four child bytes and derives the selector from bytes
    `[0..4]` (no host-supplied selector);
-8. uniquely selects a verified descriptor for the inherited chain, target, and
-   selector; and
-9. rejects if the selected child format itself contains `Calldata`.
+8. applies a child-only selector-reservation gate before descriptor selection,
+   rejecting selector collisions with Safe `approveHash`, Safe
+   `execTransaction`, CoW `setPreSignature`, and `multiSend` regardless of
+   target (a deliberately conservative first-slice rule);
+9. uniquely selects a verified descriptor for the inherited chain and target,
+   then uniquely selects one format inside it for the derived selector;
+10. rejects if the selected child format itself contains `Calldata`; and
+11. before publishing the child boundary or intent, runs the same
+    `head_bounded_body`, complete contract-calldata framing, and format-wide
+    word-guard checks used by a top-level contract render over exactly the
+    derived child interval.
+
+The shared preflight is parameterized over an explicit contract container
+context; it must not fabricate an `Eip1559Tx` from the parent. For the child it
+contains inherited chain, resolved target, and the enrolled zero call value.
+Use of `@.from` or `@.nonce` is rejected during deep validation/preflight, so
+neither value can be synthesized accidentally.
 
 The secure caller derives this binding twice around a randomized gap, requires
 an exact match, and performs the existing FI-hardened membership/context proof
@@ -192,19 +225,25 @@ under their existing exact chain/address checks.
 
 Native CoW, Safe `approveHash`, Safe `execTransaction`, and MultiSend keep their
 current higher-priority dispatch. A payload that claims a native Safe shape but
-fails its native verifier cannot retry through this generic path.
+fails its native verifier cannot retry through this generic path. That outer
+ordering is not considered protection for a derived child: the child-only
+selector-reservation gate is evaluated in the shared nested-binding path used
+by both single and batch signing, before proof selection and again before child
+page publication under the duplicated binding receipt.
 
 ## 6. Scope, alternatives, and deletion candidates
 
 Included Phase-C slices:
 
 1. **N1 — proof-set transport:** parser/verifier, capability/cap constants,
-   single/batch routing, legacy compatibility, and FI-bound raw bundle handles.
+   `GET_DEVICE_INFO` negotiation, single/batch routing, legacy compatibility,
+   and FI-bound raw bundle handles.
 2. **N2 — authenticated parent policy:** shared exact enrollment, address-only
    callee compiler, host/device field policy, and dormant production catalogue.
 3. **N3 — binding and scoped render:** exact interval derivation, unique child
-   selection, FI binding, nested boundary/child semantics, transcript receipt,
-   page/depth/native-precedence gates.
+   descriptor/format selection, full child preflight, child-native reservation,
+   FI binding, nested boundary/child semantics, transcript receipt, and
+   page/depth/outer-native-precedence gates.
 4. **N4 — executable evidence and integration:** synthetic two-contract
    catalogue fixture, host render/dispatcher tests, malformed proof/framing
    tests, companion helper/docs, generated drift checks, target link and
@@ -260,10 +299,13 @@ Mandatory merge evidence for the combined candidate:
 | Cut / requirement | Executable evidence |
 |---|---|
 | Legacy wire compatibility | old one-bundle positive vectors and exact byte round trips |
+| Capability negotiation | proof-set bit reported exactly; old/no-bit companion path never sends wrapper; firmware placeholder version bytes have no effect |
 | Proof-set exactness | success plus bad magic/version/count/order/root/index/length/truncation/trailing/duplicate/over-cap cases |
 | Parent interval ownership | flips covering offset, length, head overlap, gap, alias, padding, suffix, short selector, and child data |
-| Target/selector/chain binding | dirty address, wrong target/chain/selector/descriptor, ambiguous set, and field/callee-path mutations refuse |
+| Target/selector/chain binding | dirty address, wrong target/chain/selector/descriptor, ambiguous descriptor set, duplicate selector format, and field/callee-path mutations refuse |
+| Child ABI canonicality | child short head, static suffix, dynamic gap/alias/dirty padding/trailing bytes, hidden malformed field, and failed word guard all refuse before the child boundary |
 | Fixed execution policy | unenrolled parent, non-address callee, selector/amount/spender params, nonzero/delegate/unknown call modes refuse |
+| Native child exclusion | all four reserved child selectors refuse with valid generic evidence in single and batch paths; one-byte selector misses continue through ordinary binding |
 | No recursion/cycle | child format containing `Calldata`, extra child evidence, and repeated/deeper attempts refuse |
 | Container honesty | child `@.from`/`@.nonce` refuse; zero value and inherited chain/target controls render exactly |
 | Complete transcript | parent/child signed-byte flip changes exact pages or refuses; page 31 succeeds where intended and page 32 refuses atomically |
@@ -280,13 +322,17 @@ does not convert a missing verdict into a pass.
 
 ## 9. Review, convergence, landing, and rollback
 
-Architecture boundary: freeze this document on the clean baseline and run one
-simultaneous GPT-5.6 SOL / Opus 4.8 / Kimi K3 architecture wave with the same
-short prompt. Reproduce concrete blockers locally. The user's instruction to
-complete the ordered ERC-7730 roadmap supplies the maintainer direction to
-enter the bounded N1-N4 Phase-C campaign if architecture has no reproduced
-blocker; it does not authorize a real descriptor, incompatible expansion, or
-external action.
+Architecture boundary: the first simultaneous GPT-5.6 SOL / Opus 4.8 / Kimi
+K3 wave reviewed commit `08ce92c1983ea7ff0cd5e2879e5a4cb6a449d959`,
+tree `b7a290d469a211493fa4220134501cc2e0d70cd8`. Coordinator reproduction retained
+the child-preflight, derived-child native-reservation, explicit-capability,
+source-evidence wording, and same-IR selector-uniqueness corrections above;
+duplicate or unsupported concerns were not expanded into new work. Freeze this
+combined remediation and run the one required fresh architecture re-review.
+The user's instruction to complete the ordered ERC-7730 roadmap supplies the
+maintainer direction to enter the bounded N1-N4 Phase-C campaign when that
+review has no reproduced blocker; it does not authorize a real descriptor,
+incompatible expansion, or external action.
 
 Phase-D stopping point and closed checklist:
 
