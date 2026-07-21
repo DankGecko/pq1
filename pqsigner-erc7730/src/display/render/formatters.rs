@@ -21,14 +21,13 @@
 //!
 //! Static types (uint*, int*, address, bytes32, bool, and static tuples) are
 //! read from the exact authenticated head. Dynamic support is deliberately
-//! narrower: one top-level C1 `bytes`/`string` leaf, or one supported primitive
-//! dynamic array, may occupy the sole canonical tail. The sole C2 exception is
-//! the deployment-scoped Router02 packed-path mode, whose exact tuple body and
-//! complete route are independently preflighted. A format-level preflight
-//! validates the offset, length, zero right-padding, and exact end-of-calldata
-//! framing before visibility is evaluated. Every other C2 descent, multiple
-//! dynamic tails, aliasing, gaps, and trailing bytes hard-refuse the known call;
-//! they never fall through to a less complete rendering.
+//! bounded: the legacy sole C1 `bytes`/`string` or primitive-array tail remains
+//! byte-identical, while a versioned format marker may authenticate two to four
+//! top-level blob/static-word-array objects. The sole C2 exception is the
+//! deployment-scoped Router02 packed-path mode. A format-level preflight proves
+//! exact ordered tail partitioning before visibility or intent publication.
+//! Dynamic tuples, aliasing, gaps, unconsumed objects, and trailing bytes hard-
+//! refuse the known call; they never fall through to a less complete rendering.
 
 use super::super::primitives::{
     amount_is_exact_at_fraction_digits, chain_name, format_u64, formatted_collapses_to_zero,
@@ -52,6 +51,10 @@ use pqsigner_tx_core::eip1559::U256;
 // tests reach it as `formatters::resolve_array`.
 use crate::display::{ascii_str, DISPLAY_COLS, MAX_PAGES};
 pub use crate::render::array::resolve_array;
+use crate::render::array::MAX_ARRAY_RENDER;
+use crate::render::calldata_topology::{
+    validate_exact_partition, TailInterval, TailKind, TailPartition, TailTopology,
+};
 use crate::render::params::{
     nft_collection_path_is_current_slice, parse as parse_params, ParamSet, DATE_ENC_BLOCKHEIGHT,
     DATE_ENC_TIMESTAMP, DYNAMIC_KIND_BYTES, DYNAMIC_KIND_STRING, WORD_GUARD_EQ, WORD_GUARD_NE,
@@ -207,6 +210,7 @@ pub(super) enum Resolved<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ContractCalldataMode {
     Standard,
+    MultiTail(TailPartition),
     UniswapV3Path(Direction),
 }
 
@@ -1922,6 +1926,66 @@ fn bind_sole_dynamic_slot(seen: &mut Option<usize>, slot: usize) -> Result<(), R
     }
 }
 
+/// Recover the sole format-level topology marker from its canonical field-zero
+/// location. Deep IR validation owns the primary placement rule; this local
+/// scan keeps the publication boundary fail-closed if a malformed in-memory IR
+/// view reaches it.
+fn authenticated_dynamic_tail_topology(
+    ir: &Erc7730Ir<'_>,
+    format: &FormatHeader<'_>,
+) -> Result<Option<TailTopology>, RenderErr> {
+    let mut topology = None;
+    for (ordinal, field_result) in format.fields().enumerate() {
+        let field = field_result.map_err(|_| RenderErr::Reject("7730 bad field"))?;
+        let params = parse_params(ir, field.param_off)?;
+        if let Some(candidate) = params.dynamic_tail_topology {
+            if ordinal != 0 || topology.is_some() || ir.context_kind != ContextKind::Contract {
+                return Err(RenderErr::Reject("7730 topology placement"));
+            }
+            candidate.validate_static_head(format.static_head_words)?;
+            topology = Some(candidate);
+        }
+    }
+    Ok(topology)
+}
+
+/// Bind one field/token reference to the authenticated interval of matching
+/// kind and record that the format actually consumes the topology record.
+fn consume_partition_record(
+    consumed: &mut u8,
+    partition: &TailPartition,
+    slot: usize,
+    kind: TailKind,
+) -> Result<TailInterval, RenderErr> {
+    let (ordinal, interval) = partition.find(slot, kind)?;
+    mark_partition_record(consumed, ordinal)?;
+    Ok(interval)
+}
+
+fn mark_partition_record(consumed: &mut u8, ordinal: usize) -> Result<(), RenderErr> {
+    let bit = 1u8
+        .checked_shl(u32::try_from(ordinal).map_err(|_| RenderErr::Reject("7730 topology bit"))?)
+        .ok_or(RenderErr::Reject("7730 topology bit"))?;
+    *consumed |= bit;
+    Ok(())
+}
+
+fn require_all_partition_records_consumed(
+    consumed: u8,
+    partition: &TailPartition,
+) -> Result<(), RenderErr> {
+    let count =
+        u32::try_from(partition.len()).map_err(|_| RenderErr::Reject("7730 topology bit"))?;
+    let expected = 1u8
+        .checked_shl(count)
+        .ok_or(RenderErr::Reject("7730 topology bit"))?
+        .wrapping_sub(1);
+    if consumed != expected {
+        return Err(RenderErr::Reject("7730 topology unconsumed tail"));
+    }
+    Ok(())
+}
+
 /// Parse the exact sole-array program emitted by dbgen:
 /// `RootStructured FieldIdx(slot) ArrayAll`.
 fn sole_array_slot(ir: &Erc7730Ir<'_>, path_off: u16) -> Result<usize, RenderErr> {
@@ -1938,14 +2002,10 @@ fn sole_array_slot(ir: &Erc7730Ir<'_>, path_off: u16) -> Result<usize, RenderErr
     Ok(u16::from_be_bytes([prog[2], prog[3]]) as usize)
 }
 
-/// Validate a top-level C1 `bytes`/`string` leaf as the sole exact tail.
-fn validate_c1_dynamic_leaf<'a>(
-    ir: &Erc7730Ir<'_>,
+fn validate_dynamic_leaf_params(
     field: &FieldEntry<'_>,
     params: &ParamSet<'_>,
-    full_body: &'a [u8],
-    static_head_words: u16,
-) -> Result<(usize, &'a [u8]), RenderErr> {
+) -> Result<(), RenderErr> {
     if !matches!(
         params.dynamic_kind,
         Some(DYNAMIC_KIND_STRING) | Some(DYNAMIC_KIND_BYTES)
@@ -1960,6 +2020,18 @@ fn validate_c1_dynamic_leaf<'a>(
     {
         return Err(RenderErr::Reject("7730 bad exact-empty field"));
     }
+    Ok(())
+}
+
+/// Validate a top-level C1 `bytes`/`string` leaf as the sole exact tail.
+fn validate_c1_dynamic_leaf<'a>(
+    ir: &Erc7730Ir<'_>,
+    field: &FieldEntry<'_>,
+    params: &ParamSet<'_>,
+    full_body: &'a [u8],
+    static_head_words: u16,
+) -> Result<(usize, &'a [u8]), RenderErr> {
+    validate_dynamic_leaf_params(field, params)?;
     let prog = ir
         .path_bytes(field.path_off)
         .map_err(|_| RenderErr::Reject("7730 bad dynamic path"))?;
@@ -1988,17 +2060,59 @@ fn validate_c1_dynamic_leaf<'a>(
     Ok((slot, data))
 }
 
+/// Validate one direct dynamic blob against an already-proven multi-tail
+/// partition. The path must identify the same authenticated head slot and the
+/// EVM-resolved object start must equal the partition boundary.
+fn validate_partitioned_dynamic_leaf<'a>(
+    ir: &Erc7730Ir<'_>,
+    field: &FieldEntry<'_>,
+    params: &ParamSet<'_>,
+    full_body: &'a [u8],
+    static_head_words: u16,
+    partition: &TailPartition,
+    consumed: &mut u8,
+) -> Result<(usize, &'a [u8]), RenderErr> {
+    validate_dynamic_leaf_params(field, params)?;
+    let prog = ir
+        .path_bytes(field.path_off)
+        .map_err(|_| RenderErr::Reject("7730 bad dynamic path"))?;
+    if prog.first() != Some(&(PathOp::RootStructured as u8)) {
+        return Err(RenderErr::Reject("7730 dyn bad root"));
+    }
+    let slot = crate::render::resolve::c1_dynamic_slot(&prog[1..])?;
+    if slot >= usize::from(static_head_words) {
+        return Err(RenderErr::Reject("7730 dynamic slot out of head"));
+    }
+    let interval = consume_partition_record(consumed, partition, slot, TailKind::Blob)?;
+    let off = match crate::render::resolve::resolve_structured(&prog[1..], full_body)? {
+        crate::render::resolve::Leaf::Dynamic(off) => off,
+        crate::render::resolve::Leaf::Word(_) => {
+            return Err(RenderErr::Reject("7730 dyn leaf is word"));
+        }
+    };
+    if off != interval.object_start {
+        return Err(RenderErr::Reject("7730 dynamic partition mismatch"));
+    }
+    let data = interval.data(full_body)?;
+    if params.exact_empty_bytes && !data.is_empty() {
+        return Err(RenderErr::Reject("7730 res dynamic not empty"));
+    }
+    Ok((slot, data))
+}
+
 /// Format-level canonical ABI preflight for contract calldata.
 ///
 /// This runs before visibility and before any pages are painted, so hidden
 /// fields cannot bypass framing validation. Today's IR can prove exact layout
-/// for all-static calls, sole top-level dynamic tails (C1 string/bytes, a sole
-/// primitive array, or a sole tokenPath bytes/address[] container), and the
-/// exact deployment-scoped Router02 packed-path C2 mode:
+/// for all-static calls, legacy sole top-level dynamic tails, an authenticated
+/// two-to-four-object top-level partition, and the exact deployment-scoped
+/// Router02 packed-path C2 mode:
 ///
 /// * all-static: calldata body length equals the authenticated head length;
 /// * sole dynamic: offset equals head end and the padded object consumes the
 ///   complete body;
+/// * bounded multi-tail: authenticated slots/kinds exactly tile the bytes after
+///   the head, and every topology record is consumed by a field/token path;
 /// * every dynamic reference names the same head slot;
 /// * generic C2 dynamic-tuple descent and the retired relaxed multi-array marker
 ///   reject;
@@ -2019,6 +2133,15 @@ pub(crate) fn validate_contract_calldata_framing(
     if full_body.len() < head_end {
         return Err(RenderErr::Reject("7730 short head"));
     }
+    let topology = authenticated_dynamic_tail_topology(ir, format)?;
+    let partition = match topology {
+        Some(topology) => Some(validate_exact_partition(
+            &topology,
+            full_body,
+            format.static_head_words,
+        )?),
+        None => None,
+    };
 
     // The new packed-path opcode is the sole minting point for C2 authority.
     // Authenticate the exact deployment/selector/five-field shape, then parse
@@ -2034,7 +2157,7 @@ pub(crate) fn validate_contract_calldata_framing(
         }
     }
     if packed_fields != 0 {
-        if packed_fields != 1 {
+        if packed_fields != 1 || partition.is_some() {
             return Err(RenderErr::Reject("7730 v3 field count"));
         }
         let direction = validate_uniswap_v3_runtime_format(ir, format, container)?;
@@ -2043,6 +2166,7 @@ pub(crate) fn validate_contract_calldata_framing(
     }
 
     let mut dynamic_slot: Option<usize> = None;
+    let mut consumed_partition_records = 0u8;
     for field_result in format.fields() {
         let field = field_result.map_err(|_| RenderErr::Reject("7730 bad field"))?;
         let params = parse_params(ir, field.param_off)?;
@@ -2060,10 +2184,24 @@ pub(crate) fn validate_contract_calldata_framing(
                 return Err(RenderErr::Reject("7730 multi-array framing"));
             }
             let slot = sole_array_slot(ir, field.path_off)?;
-            bind_sole_dynamic_slot(&mut dynamic_slot, slot)?;
             // Exact offset/head/end checks run even for `visible:never`.
-            let (elems_start, count) =
-                resolve_array(&field, ir, full_body, format.static_head_words)?;
+            let (elems_start, count) = if let Some(partition) = &partition {
+                let interval = consume_partition_record(
+                    &mut consumed_partition_records,
+                    partition,
+                    slot,
+                    TailKind::StaticWordArray,
+                )?;
+                let count = usize::try_from(interval.count)
+                    .map_err(|_| RenderErr::Reject("7730 arr count"))?;
+                if count > MAX_ARRAY_RENDER {
+                    return Err(RenderErr::Reject("7730 arr over cap"));
+                }
+                (interval.data_start, count)
+            } else {
+                bind_sole_dynamic_slot(&mut dynamic_slot, slot)?;
+                resolve_array(&field, ir, full_body, format.static_head_words)?
+            };
             for index in 0..count {
                 let word = array_element_word(full_body, elems_start, index)?;
                 require_integer_word_canonical(&params, word)?;
@@ -2075,14 +2213,26 @@ pub(crate) fn validate_contract_calldata_framing(
                 if !ends_on_follow {
                     return Err(RenderErr::Reject("7730 C2 framing unsupported"));
                 }
-                let (slot, _data) = validate_c1_dynamic_leaf(
-                    ir,
-                    &field,
-                    &params,
-                    full_body,
-                    format.static_head_words,
-                )?;
-                bind_sole_dynamic_slot(&mut dynamic_slot, slot)?;
+                if let Some(partition) = &partition {
+                    let _ = validate_partitioned_dynamic_leaf(
+                        ir,
+                        &field,
+                        &params,
+                        full_body,
+                        format.static_head_words,
+                        partition,
+                        &mut consumed_partition_records,
+                    )?;
+                } else {
+                    let (slot, _data) = validate_c1_dynamic_leaf(
+                        ir,
+                        &field,
+                        &params,
+                        full_body,
+                        format.static_head_words,
+                    )?;
+                    bind_sole_dynamic_slot(&mut dynamic_slot, slot)?;
+                }
             }
         }
 
@@ -2093,15 +2243,29 @@ pub(crate) fn validate_contract_calldata_framing(
             if token_path.first() != Some(&(PathOp::RootStructured as u8)) {
                 return Err(RenderErr::Reject("7730 bad token path root"));
             }
-            let slot = crate::render::resolve::validate_canonical_token_tail(
-                &token_path[1..],
-                full_body,
-                format.static_head_words,
-            )?;
-            bind_sole_dynamic_slot(&mut dynamic_slot, slot)?;
+            if let Some(partition) = &partition {
+                let (_slot, ordinal) = crate::render::resolve::validate_partitioned_token_tail(
+                    &token_path[1..],
+                    full_body,
+                    format.static_head_words,
+                    partition,
+                )?;
+                mark_partition_record(&mut consumed_partition_records, ordinal)?;
+            } else {
+                let slot = crate::render::resolve::validate_canonical_token_tail(
+                    &token_path[1..],
+                    full_body,
+                    format.static_head_words,
+                )?;
+                bind_sole_dynamic_slot(&mut dynamic_slot, slot)?;
+            }
         }
     }
 
+    if let Some(partition) = partition {
+        require_all_partition_records_consumed(consumed_partition_records, &partition)?;
+        return Ok(ContractCalldataMode::MultiTail(partition));
+    }
     if dynamic_slot.is_none() && full_body.len() != head_end {
         return Err(RenderErr::Reject("7730 static calldata trailing"));
     }
@@ -2168,15 +2332,17 @@ pub(crate) fn validate_contract_word_guards(
     Ok(())
 }
 
-/// Resolve a dynamic (`bytes`/`string`) leaf to its data slice (full body).
-fn resolve_dynamic<'a>(
+/// Resolve a direct dynamic blob through the authority minted by the complete
+/// format preflight. Sole-tail and partitioned modes share the same path walk;
+/// only the authenticated object boundary differs.
+pub(crate) fn resolve_dynamic_geometry<'a>(
     ir: &Erc7730Ir<'_>,
     path_off: u16,
     body: &'a [u8],
     static_head_words: u16,
-    exact_empty: bool,
-) -> Result<&'a [u8], RenderErr> {
-    use crate::render::resolve::{resolve_structured, Leaf};
+    mode: ContractCalldataMode,
+) -> Result<crate::render::resolve::CanonicalDynamicTail<'a>, RenderErr> {
+    use crate::render::resolve::{canonical_dynamic_whole_tail, resolve_structured, Leaf};
     if path_off == 0 {
         return Err(RenderErr::Reject("7730 dyn no path"));
     }
@@ -2199,13 +2365,50 @@ fn resolve_dynamic<'a>(
     let head_end = (static_head_words as usize)
         .checked_mul(32)
         .ok_or(RenderErr::Reject("7730 dynamic head ovf"))?;
-    match resolve_structured(&prog[1..], body)? {
-        Leaf::Dynamic(o) if exact_empty => {
-            crate::render::resolve::read_exact_empty_dynamic_whole_tail(body, o, head_end)
+    let object_start = match resolve_structured(&prog[1..], body)? {
+        Leaf::Dynamic(offset) => offset,
+        Leaf::Word(_) => return Err(RenderErr::Reject("7730 dyn leaf is word")),
+    };
+    match mode {
+        ContractCalldataMode::Standard => {
+            canonical_dynamic_whole_tail(body, object_start, head_end)
         }
-        Leaf::Dynamic(o) => crate::render::resolve::read_dynamic_whole_tail(body, o, head_end),
-        Leaf::Word(_) => Err(RenderErr::Reject("7730 dyn leaf is word")),
+        ContractCalldataMode::MultiTail(partition) => {
+            if partition.head_end() != head_end || partition.body_end() != body.len() {
+                return Err(RenderErr::Reject("7730 dynamic partition bounds"));
+            }
+            let (_, interval) = partition.find(slot, TailKind::Blob)?;
+            if object_start != interval.object_start {
+                return Err(RenderErr::Reject("7730 dynamic partition mismatch"));
+            }
+            let data = interval.data(body)?;
+            Ok(crate::render::resolve::CanonicalDynamicTail {
+                length_word_start: interval.object_start,
+                data_start: interval.data_start,
+                data_end: interval.data_end,
+                padded_end: interval.object_end,
+                data,
+            })
+        }
+        ContractCalldataMode::UniswapV3Path(_) => {
+            Err(RenderErr::Reject("7730 dynamic mode mismatch"))
+        }
     }
+}
+
+fn resolve_dynamic<'a>(
+    ir: &Erc7730Ir<'_>,
+    path_off: u16,
+    body: &'a [u8],
+    static_head_words: u16,
+    mode: ContractCalldataMode,
+    exact_empty: bool,
+) -> Result<&'a [u8], RenderErr> {
+    let geometry = resolve_dynamic_geometry(ir, path_off, body, static_head_words, mode)?;
+    if exact_empty && !geometry.data.is_empty() {
+        return Err(RenderErr::Reject("7730 res dynamic not empty"));
+    }
+    Ok(geometry.data)
 }
 
 /// Maximum exact preimage admitted for one authenticated EIP-712 string-hash
@@ -2355,12 +2558,38 @@ fn write_eip712_string_footer(
 /// distinguishable from display padding (`"alice"` != `"alice "`).
 const DYN_TEXT_MAX: usize = 2 * DISPLAY_COLS;
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(super) fn render_dynamic_bytes(
     field: &FieldEntry<'_>,
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     full_body: &[u8],
     static_head_words: u16,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    params: &ParamSet<'_>,
+) -> Result<(), RenderErr> {
+    render_dynamic_bytes_with_mode(
+        field,
+        pages,
+        ir,
+        full_body,
+        static_head_words,
+        ContractCalldataMode::Standard,
+        erc20,
+        resolver,
+        params,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn render_dynamic_bytes_with_mode(
+    field: &FieldEntry<'_>,
+    pages: &mut Pages,
+    ir: &Erc7730Ir<'_>,
+    full_body: &[u8],
+    static_head_words: u16,
+    mode: ContractCalldataMode,
     _erc20: Option<&Erc20Metadata<'_>>,
     _resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
@@ -2386,6 +2615,7 @@ pub(super) fn render_dynamic_bytes(
         field.path_off,
         full_body,
         static_head_words,
+        mode,
         exact_empty,
     )?;
     if exact_empty {
@@ -2444,19 +2674,49 @@ fn write_bytes_len_row(row: &mut [u8; DISPLAY_COLS], n: usize) {
     }
 }
 
-/// Render EVERY element of a sole top-level dynamic array (`<arg>.[]`).
+/// Render EVERY element of a supported top-level dynamic array (`<arg>.[]`).
 ///
 /// Safety (WYSIWYS): the array's offset word lives in the static head and is
-/// bound by the same `slot < static_head_words` guard as scalar fields; the
-/// tail is then followed via `walk`'s hardened `read_offset_word` /
-/// `read_length_word` (so the device reads the SAME bytes the EVM decodes),
-/// and TWO exact-placement equalities pin the array as the entire dynamic
-/// tail — `offset == head_end` and `offset + 32 + count*32 == body.len()` —
-/// which (given the dbgen sole-dynamic-arg constraint) forecloses the whole
-/// aliasing / overlap / trailing-garbage surface. EVERY element is rendered
-/// (or the field declines-to-blind): showing a subset is the array-tail-
-/// hiding hazard.
+/// bound by the same `slot < static_head_words` guard as scalar fields. The
+/// legacy sole-tail mode retains its exact-placement equalities; multi-tail
+/// mode consumes an interval from the format-wide authenticated partition.
+/// Both modes therefore bind the bytes the EVM decodes while excluding
+/// aliases, gaps, and trailing data. EVERY element is rendered (or the field
+/// declines-to-blind): showing a subset is the array-tail-hiding hazard.
+fn resolve_array_with_mode(
+    field: &FieldEntry<'_>,
+    ir: &Erc7730Ir<'_>,
+    full_body: &[u8],
+    static_head_words: u16,
+    mode: ContractCalldataMode,
+) -> Result<(usize, usize), RenderErr> {
+    if array_all_is_multi(ir, field.path_off)? {
+        return Err(RenderErr::Reject("7730 multi-array framing"));
+    }
+    match mode {
+        ContractCalldataMode::Standard => resolve_array(field, ir, full_body, static_head_words),
+        ContractCalldataMode::MultiTail(partition) => {
+            let head_end = usize::from(static_head_words)
+                .checked_mul(32)
+                .ok_or(RenderErr::Reject("7730 arr head ovf"))?;
+            if partition.head_end() != head_end || partition.body_end() != full_body.len() {
+                return Err(RenderErr::Reject("7730 arr partition bounds"));
+            }
+            let slot = sole_array_slot(ir, field.path_off)?;
+            let (_, interval) = partition.find(slot, TailKind::StaticWordArray)?;
+            let count =
+                usize::try_from(interval.count).map_err(|_| RenderErr::Reject("7730 arr count"))?;
+            if count > MAX_ARRAY_RENDER {
+                return Err(RenderErr::Reject("7730 arr over cap"));
+            }
+            Ok((interval.data_start, count))
+        }
+        ContractCalldataMode::UniswapV3Path(_) => Err(RenderErr::Reject("7730 arr mode mismatch")),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(super) fn render_array(
     field: &FieldEntry<'_>,
     pages: &mut Pages,
@@ -2468,13 +2728,35 @@ pub(super) fn render_array(
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
-    // Only the Kani-proven sole whole-tail layout is accepted. The retired
-    // FollowOffset marker selected a relaxed multi-dynamic resolver that could
-    // not exclude aliasing, gaps, or signed trailing objects from current IR.
-    if array_all_is_multi(ir, field.path_off)? {
-        return Err(RenderErr::Reject("7730 multi-array framing"));
-    }
-    let (elems_start, count) = resolve_array(field, ir, full_body, static_head_words)?;
+    render_array_with_mode(
+        field,
+        pages,
+        ir,
+        full_body,
+        static_head_words,
+        ContractCalldataMode::Standard,
+        container,
+        erc20,
+        resolver,
+        params,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn render_array_with_mode(
+    field: &FieldEntry<'_>,
+    pages: &mut Pages,
+    ir: &Erc7730Ir<'_>,
+    full_body: &[u8],
+    static_head_words: u16,
+    mode: ContractCalldataMode,
+    container: &ContractContainerCtx,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    params: &ParamSet<'_>,
+) -> Result<(), RenderErr> {
+    let (elems_start, count) =
+        resolve_array_with_mode(field, ir, full_body, static_head_words, mode)?;
     let fmt = FormatOp::try_from(field.format_op).map_err(|_| RenderErr::Reject("7730 arr fmt"))?;
 
     // Canonical integer extension is independent of visibility and formatter.
@@ -5575,6 +5857,91 @@ mod adversarial_renderer_regressions {
         body
     }
 
+    fn push_pool_entry(pool: &mut std::vec::Vec<u8>, body: &[u8]) -> u16 {
+        let offset = u16::try_from(pool.len()).unwrap();
+        pool.push(u8::try_from(body.len()).unwrap());
+        pool.extend_from_slice(body);
+        offset
+    }
+
+    fn push_field_bytes(
+        fields: &mut std::vec::Vec<u8>,
+        label: &[u8],
+        path_off: u16,
+        param_off: u16,
+    ) {
+        fields.push(FormatOp::Raw as u8);
+        fields.push(u8::try_from(label.len()).unwrap());
+        fields.extend_from_slice(label);
+        fields.extend_from_slice(&path_off.to_be_bytes());
+        fields.extend_from_slice(&param_off.to_be_bytes());
+    }
+
+    fn two_blob_topology_fixture(
+        first: &[u8],
+        second: &[u8],
+    ) -> (std::vec::Vec<u8>, std::vec::Vec<u8>, std::vec::Vec<u8>) {
+        use crate::render::calldata_topology::{TAIL_KIND_BLOB, TOPOLOGY_VERSION};
+        use crate::render::params::{PARAM_DYNAMIC_KIND, PARAM_DYNAMIC_TAIL_TOPOLOGY};
+
+        let mut pool = std::vec![0];
+        let path0 = push_pool_entry(
+            &mut pool,
+            &[
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                0,
+                PathOp::FollowOffset as u8,
+            ],
+        );
+        let path1 = push_pool_entry(
+            &mut pool,
+            &[
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                1,
+                PathOp::FollowOffset as u8,
+            ],
+        );
+        let topology = [
+            TOPOLOGY_VERSION,
+            2,
+            0,
+            0,
+            TAIL_KIND_BLOB,
+            0,
+            1,
+            TAIL_KIND_BLOB,
+        ];
+        let mut first_params = std::vec![PARAM_DYNAMIC_TAIL_TOPOLOGY, topology.len() as u8,];
+        first_params.extend_from_slice(&topology);
+        first_params.extend_from_slice(&[PARAM_DYNAMIC_KIND, 1, DYNAMIC_KIND_STRING]);
+        let first_param = push_pool_entry(&mut pool, &first_params);
+        let second_param =
+            push_pool_entry(&mut pool, &[PARAM_DYNAMIC_KIND, 1, DYNAMIC_KIND_STRING]);
+
+        let mut fields = std::vec::Vec::new();
+        push_field_bytes(&mut fields, b"First", path0, first_param);
+        push_field_bytes(&mut fields, b"Second", path1, second_param);
+
+        let first_padded = first.len().div_ceil(32) * 32;
+        let second_padded = second.len().div_ceil(32) * 32;
+        let first_start = 64usize;
+        let second_start = first_start + 32 + first_padded;
+        let mut body = std::vec![0u8; second_start + 32 + second_padded];
+        body[24..32].copy_from_slice(&(first_start as u64).to_be_bytes());
+        body[56..64].copy_from_slice(&(second_start as u64).to_be_bytes());
+        body[first_start + 24..first_start + 32]
+            .copy_from_slice(&(first.len() as u64).to_be_bytes());
+        body[first_start + 32..first_start + 32 + first.len()].copy_from_slice(first);
+        body[second_start + 24..second_start + 32]
+            .copy_from_slice(&(second.len() as u64).to_be_bytes());
+        body[second_start + 32..second_start + 32 + second.len()].copy_from_slice(second);
+        (pool, fields, body)
+    }
+
     fn field(op: u8, path_off: u16) -> FieldEntry<'static> {
         FieldEntry {
             format_op: op,
@@ -6307,6 +6674,100 @@ mod adversarial_renderer_regressions {
         assert_eq!(
             validate_contract_calldata_framing(&descriptor, &fmt, &trailing, &tx()),
             Err(RenderErr::Reject("7730 res not whole tail"))
+        );
+    }
+
+    #[test]
+    fn format_preflight_accepts_and_renders_two_exact_blob_tails() {
+        let (pool, fields, body) = two_blob_topology_fixture(b"alice", b"vienna");
+        let descriptor = Erc7730Ir {
+            pool: &pool,
+            ..ir(&[])
+        };
+        let fmt = format(&fields, 2, 2);
+        let mode = validate_contract_calldata_framing(&descriptor, &fmt, &body, &tx()).unwrap();
+        let ContractCalldataMode::MultiTail(partition) = mode else {
+            panic!("topology marker did not mint multi-tail authority");
+        };
+        assert_eq!(partition.len(), 2);
+
+        let resolver = NameResolver::new();
+        let mut pages = Pages::with_len(0);
+        for field in fmt.fields() {
+            let field = field.unwrap();
+            let params = parse_params(&descriptor, field.param_off).unwrap();
+            render_dynamic_bytes_with_mode(
+                &field,
+                &mut pages,
+                &descriptor,
+                &body,
+                2,
+                mode,
+                None,
+                &resolver,
+                &params,
+            )
+            .unwrap();
+        }
+        assert_eq!(pages.len, 2);
+        assert_eq!(&pages.buf[0][1][..5], b"alice");
+        assert_eq!(&pages.buf[1][1][..6], b"vienna");
+
+        let (_, _, changed) = two_blob_topology_fixture(b"alice", b"berlin");
+        let changed_mode =
+            validate_contract_calldata_framing(&descriptor, &fmt, &changed, &tx()).unwrap();
+        let second = fmt.fields().nth(1).unwrap().unwrap();
+        let params = parse_params(&descriptor, second.param_off).unwrap();
+        let mut changed_pages = Pages::with_len(0);
+        render_dynamic_bytes_with_mode(
+            &second,
+            &mut changed_pages,
+            &descriptor,
+            &changed,
+            2,
+            changed_mode,
+            None,
+            &resolver,
+            &params,
+        )
+        .unwrap();
+        assert_eq!(&changed_pages.buf[0][1][..6], b"berlin");
+        assert_ne!(pages.buf[1], changed_pages.buf[0]);
+    }
+
+    #[test]
+    fn multi_tail_preflight_rejects_alias_gap_padding_suffix_and_unconsumed_tail() {
+        let (pool, fields, body) = two_blob_topology_fixture(b"abc", b"z");
+        let descriptor = Erc7730Ir {
+            pool: &pool,
+            ..ir(&[])
+        };
+        let fmt = format(&fields, 2, 2);
+
+        let mut alias = body.clone();
+        alias[56..64].copy_from_slice(&64u64.to_be_bytes());
+        assert!(validate_contract_calldata_framing(&descriptor, &fmt, &alias, &tx()).is_err());
+
+        let mut gap = body.clone();
+        gap[56..64].copy_from_slice(&160u64.to_be_bytes());
+        assert!(validate_contract_calldata_framing(&descriptor, &fmt, &gap, &tx()).is_err());
+
+        let mut dirty_padding = body.clone();
+        dirty_padding[64 + 32 + 3] = 1;
+        assert!(
+            validate_contract_calldata_framing(&descriptor, &fmt, &dirty_padding, &tx()).is_err()
+        );
+
+        let mut suffix = body.clone();
+        suffix.extend_from_slice(&[0u8; 32]);
+        assert!(validate_contract_calldata_framing(&descriptor, &fmt, &suffix, &tx()).is_err());
+
+        let first_field_len = 2 + b"First".len() + 4;
+        let one_field = &fields[..first_field_len];
+        let incomplete = format(one_field, 1, 2);
+        assert_eq!(
+            validate_contract_calldata_framing(&descriptor, &incomplete, &body, &tx()),
+            Err(RenderErr::Reject("7730 topology unconsumed tail"))
         );
     }
 

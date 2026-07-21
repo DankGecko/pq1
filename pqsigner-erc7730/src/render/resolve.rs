@@ -35,7 +35,10 @@ use pqsigner_tx::typed_call::abi::{read_length_word, read_offset_word, MAX_DYNAM
 
 use crate::ir::PathOp;
 
-use super::RenderErr;
+use super::{
+    calldata_topology::{TailKind, TailPartition},
+    RenderErr,
+};
 
 /// Upper bound on navigation ops in one path program (defence-in-depth against a
 /// pathological pinned descriptor; real programs are ≤ ~5 ops). Also bounds the
@@ -527,6 +530,60 @@ pub fn validate_canonical_token_tail(
     // malformed dynamic tokenPath into the old raw-amount fallback.
     let _ = resolve_token_address(prog, body)?;
     Ok(slot)
+}
+
+/// Validate a direct dynamic tokenPath against an authenticated multi-tail
+/// partition. The shared extraction parser remains the sole interpreter for
+/// slice/index/last semantics; this function adds the format-wide slot, kind,
+/// object-boundary, and complete-address-array checks required before any page
+/// is published.
+///
+/// Returns `(head_slot, topology_ordinal)` so the caller can prove every
+/// authenticated topology record is consumed by at least one field/token path.
+pub fn validate_partitioned_token_tail(
+    prog: &[u8],
+    body: &[u8],
+    static_head_words: u16,
+    partition: &TailPartition,
+) -> Result<(usize, usize), RenderErr> {
+    let (nav, extraction) = split_extraction(prog)?;
+    let slot = c1_dynamic_slot(nav)?;
+    let head_end = usize::from(static_head_words)
+        .checked_mul(32)
+        .ok_or(RenderErr::Reject("7730 tok head ovf"))?;
+    if slot >= usize::from(static_head_words)
+        || partition.head_end() != head_end
+        || partition.body_end() != body.len()
+    {
+        return Err(RenderErr::Reject("7730 tok partition bounds"));
+    }
+    let kind = match extraction {
+        Some(Extract::Slice { .. }) => TailKind::Blob,
+        Some(Extract::Index(_)) | Some(Extract::Last) => TailKind::StaticWordArray,
+        None => return Err(RenderErr::Reject("7730 tok dynamic no extraction")),
+    };
+    let (ordinal, interval) = partition.find(slot, kind)?;
+    let offset = match resolve_structured(nav, body)? {
+        Leaf::Dynamic(offset) => offset,
+        Leaf::Word(_) => return Err(RenderErr::Reject("7730 tok partition word")),
+    };
+    if offset != interval.object_start {
+        return Err(RenderErr::Reject("7730 tok partition mismatch"));
+    }
+    if kind == TailKind::StaticWordArray {
+        let elems = interval.data(body)?;
+        if elems.len() % 32 != 0
+            || elems
+                .chunks_exact(32)
+                .any(|word| word[..12].iter().any(|&byte| byte != 0))
+        {
+            return Err(RenderErr::Reject("7730 tok dirty address"));
+        }
+    }
+    // Bind slice bounds, selected array index, and empty-last rejection through
+    // the same production resolver used by the paint path.
+    let _ = resolve_token_address(prog, body)?;
+    Ok((slot, ordinal))
 }
 
 /// Canonical right-aligned ABI address word at `body[off..off+32]`.

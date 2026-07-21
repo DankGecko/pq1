@@ -18,13 +18,13 @@ use crate::render::calldata_policy::{
     ACTIVE_NESTED_CALLDATA_ENROLLMENTS,
 };
 use crate::render::params::{parse as parse_params, ParamSet};
-use crate::render::resolve::{canonical_dynamic_whole_tail, resolve_structured, Leaf};
 use crate::render::RenderErr;
 use pqsigner_tx_core::eip1559::Eip1559Tx;
 use sha2::{Digest, Sha256};
 
 use super::formatters::{
-    validate_contract_calldata_framing, validate_contract_word_guards, ContractContainerCtx,
+    resolve_dynamic_geometry, validate_contract_calldata_framing, validate_contract_word_guards,
+    ContractContainerCtx,
 };
 use super::{head_bounded_body, Pages};
 
@@ -187,17 +187,13 @@ pub(super) fn derive_bound_with_enrollments<'data, 'ir>(
         enrollments,
         parent_key,
     )?;
-    let path_ops = field_path
-        .get(1..)
-        .ok_or(RenderErr::Reject("7730 nested field path"))?;
-    let offset = match resolve_structured(path_ops, parent_full_body)? {
-        Leaf::Dynamic(offset) => offset,
-        Leaf::Word(_) => return Err(RenderErr::Reject("7730 nested field not dynamic")),
-    };
-    let head_end = usize::from(parent_format.static_head_words)
-        .checked_mul(32)
-        .ok_or(RenderErr::Reject("7730 nested head overflow"))?;
-    let geometry = canonical_dynamic_whole_tail(parent_full_body, offset, head_end)?;
+    let geometry = resolve_dynamic_geometry(
+        &parent.descriptor.ir,
+        field.path_off,
+        parent_full_body,
+        parent_format.static_head_words,
+        parent_mode,
+    )?;
     let interval_start = geometry
         .data_start
         .checked_add(4)
@@ -575,8 +571,9 @@ mod tests {
         TEST_NESTED_CALLDATA_PARENT_CONTRACT, TEST_NESTED_CALLDATA_PARENT_SELECTOR,
     };
     use crate::render::params::{
-        DYNAMIC_KIND_BYTES, DYNAMIC_KIND_STRING, PARAM_DYNAMIC_KIND, PARAM_NESTED_CALLEE,
-        PARAM_TERMINAL_KIND, PARAM_VISIBILITY, PARAM_WORD_GUARD, WORD_GUARD_NE,
+        DYNAMIC_KIND_BYTES, DYNAMIC_KIND_STRING, PARAM_DYNAMIC_KIND,
+        PARAM_DYNAMIC_TAIL_TOPOLOGY, PARAM_NESTED_CALLEE, PARAM_TERMINAL_KIND, PARAM_VISIBILITY,
+        PARAM_WORD_GUARD, WORD_GUARD_NE,
     };
     use crate::render::policy::TerminalKind;
     use pqsigner_tx::names::NameResolver;
@@ -689,6 +686,90 @@ mod tests {
             encoded_field(FormatOp::Calldata, b"Child call", child_path, child_params),
         ];
         let format = encoded_format(TEST_NESTED_CALLDATA_PARENT_SELECTOR, b"Forward", 2, &fields);
+        contract_ir_bytes(
+            TEST_CHAIN_ID,
+            TEST_NESTED_CALLDATA_PARENT_CONTRACT,
+            TEST_NESTED_CALLDATA_DESCRIPTOR_HASH,
+            &pool,
+            &[format],
+            b"Parent",
+        )
+    }
+
+    fn multi_tail_outer_ir_bytes() -> std::vec::Vec<u8> {
+        use crate::render::calldata_topology::{TAIL_KIND_BLOB, TOPOLOGY_VERSION};
+
+        let mut pool = std::vec![0];
+        let target_path = append_pool_entry(
+            &mut pool,
+            &[PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0],
+        );
+        let topology = [
+            TOPOLOGY_VERSION,
+            2,
+            0,
+            1,
+            TAIL_KIND_BLOB,
+            0,
+            2,
+            TAIL_KIND_BLOB,
+        ];
+        let mut target_param_bytes = std::vec![
+            PARAM_DYNAMIC_TAIL_TOPOLOGY,
+            u8::try_from(topology.len()).unwrap(),
+        ];
+        target_param_bytes.extend_from_slice(&topology);
+        target_param_bytes.extend_from_slice(&[
+            PARAM_TERMINAL_KIND,
+            1,
+            TerminalKind::Address as u8,
+        ]);
+        let target_params = append_pool_entry(&mut pool, &target_param_bytes);
+        let child_path = append_pool_entry(&mut pool, &TEST_NESTED_CALLDATA_FIELD_PATH);
+        let child_params = append_pool_entry(
+            &mut pool,
+            &[
+                PARAM_DYNAMIC_KIND,
+                1,
+                DYNAMIC_KIND_BYTES,
+                PARAM_NESTED_CALLEE,
+                4,
+                TEST_NESTED_CALLDATA_CALLEE_PATH[0],
+                TEST_NESTED_CALLDATA_CALLEE_PATH[1],
+                TEST_NESTED_CALLDATA_CALLEE_PATH[2],
+                TEST_NESTED_CALLDATA_CALLEE_PATH[3],
+                PARAM_TERMINAL_KIND,
+                1,
+                TerminalKind::DynamicBytes as u8,
+            ],
+        );
+        let memo_path = append_pool_entry(
+            &mut pool,
+            &[
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                2,
+                PathOp::FollowOffset as u8,
+            ],
+        );
+        let memo_params = append_pool_entry(
+            &mut pool,
+            &[
+                PARAM_DYNAMIC_KIND,
+                1,
+                DYNAMIC_KIND_STRING,
+                PARAM_TERMINAL_KIND,
+                1,
+                TerminalKind::DynamicString as u8,
+            ],
+        );
+        let fields = [
+            encoded_field(FormatOp::AddressName, b"Target", target_path, target_params),
+            encoded_field(FormatOp::Calldata, b"Child call", child_path, child_params),
+            encoded_field(FormatOp::Raw, b"Memo", memo_path, memo_params),
+        ];
+        let format = encoded_format(TEST_NESTED_CALLDATA_PARENT_SELECTOR, b"Forward", 3, &fields);
         contract_ir_bytes(
             TEST_CHAIN_ID,
             TEST_NESTED_CALLDATA_PARENT_CONTRACT,
@@ -938,6 +1019,30 @@ mod tests {
         data
     }
 
+    fn multi_tail_outer_calldata(child: &[u8], memo: &[u8]) -> std::vec::Vec<u8> {
+        let head_end = 3 * 32;
+        let child_padded = child.len().div_ceil(32) * 32;
+        let child_start = head_end;
+        let memo_start = child_start + 32 + child_padded;
+        let memo_padded = memo.len().div_ceil(32) * 32;
+        let mut data = TEST_NESTED_CALLDATA_PARENT_SELECTOR.to_vec();
+        data.extend_from_slice(&[0u8; 12]);
+        data.extend_from_slice(&CHILD_TARGET);
+        data.extend_from_slice(&[0u8; 24]);
+        data.extend_from_slice(&(child_start as u64).to_be_bytes());
+        data.extend_from_slice(&[0u8; 24]);
+        data.extend_from_slice(&(memo_start as u64).to_be_bytes());
+        data.extend_from_slice(&[0u8; 24]);
+        data.extend_from_slice(&(child.len() as u64).to_be_bytes());
+        data.extend_from_slice(child);
+        data.resize(4 + memo_start, 0);
+        data.extend_from_slice(&[0u8; 24]);
+        data.extend_from_slice(&(memo.len() as u64).to_be_bytes());
+        data.extend_from_slice(memo);
+        data.resize(4 + memo_start + 32 + memo_padded, 0);
+        data
+    }
+
     fn tx() -> Eip1559Tx {
         Eip1559Tx {
             chain_id: TEST_CHAIN_ID,
@@ -1177,6 +1282,76 @@ mod tests {
             .position(|page| trim(&page[0]) == b"Transfer")
             .unwrap();
         assert!(call_pages[0].0 < transfer_page);
+    }
+
+    #[test]
+    fn nested_child_interval_uses_the_authenticated_multi_tail_partition() {
+        let outer_bytes = multi_tail_outer_ir_bytes();
+        let child_bytes = child_ir_bytes(CHILD_SELECTOR);
+        let proof_set = VerifiedProofSet {
+            raw_payload: &[],
+            outer: VerifiedBundleRef {
+                descriptor: VerifiedDescriptor {
+                    ir: Erc7730Ir::parse_with_nested_calldata_enrollments(
+                        &outer_bytes,
+                        TEST_NESTED_CALLDATA_ENROLLMENTS,
+                    )
+                    .unwrap(),
+                },
+                raw_bundle: &[],
+                leaf_index: 3,
+            },
+            child: Some(VerifiedBundleRef {
+                descriptor: VerifiedDescriptor {
+                    ir: Erc7730Ir::parse(&child_bytes).unwrap(),
+                },
+                raw_bundle: &[],
+                leaf_index: 7,
+            }),
+        };
+        let child_data = child_calldata(CHILD_SELECTOR);
+        let outer_data = multi_tail_outer_calldata(&child_data, b"memo");
+        let signer = [0xA5; 20];
+        let bound = derive_bound_with_enrollments(
+            &tx(),
+            &outer_data,
+            &proof_set,
+            &signer,
+            TEST_NESTED_CALLDATA_ENROLLMENTS,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(bound.child_data, child_data);
+        assert_eq!(
+            bound.binding.interval,
+            CanonicalChildInterval {
+                start: 132,
+                end: 168,
+            }
+        );
+
+        let mut dirty_later_padding = outer_data.clone();
+        *dirty_later_padding.last_mut().unwrap() = 1;
+        assert!(derive_bound_with_enrollments(
+            &tx(),
+            &dirty_later_padding,
+            &proof_set,
+            &signer,
+            TEST_NESTED_CALLDATA_ENROLLMENTS,
+        )
+        .is_err());
+
+        let mut aliased_later_tail = outer_data;
+        aliased_later_tail[4 + 64..4 + 96].fill(0);
+        aliased_later_tail[4 + 95] = 96;
+        assert!(derive_bound_with_enrollments(
+            &tx(),
+            &aliased_later_tail,
+            &proof_set,
+            &signer,
+            TEST_NESTED_CALLDATA_ENROLLMENTS,
+        )
+        .is_err());
     }
 
     #[test]

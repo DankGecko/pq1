@@ -1239,23 +1239,32 @@ collection requires exact `(chain, address)` metadata. Chain-zero wildcard
 metadata never qualifies. A missing name retains the complete raw identity and
 does not authorize blind signing.
 
-### 12.5 Dynamic ABI framing is deliberately narrow
+### 12.5 Dynamic ABI framing is topology-bound and bounded
 
-`render_erc7730_pages` accepts exact all-static calldata and one narrow
-dynamic shape: a **sole top-level C1 tail** containing a `string`/`bytes`,
-a supported primitive array, or a dynamic `tokenPath`. The dynamic offset
-must equal the static-head length; its declared data, zero ABI
-right-padding, and padded end must consume the entire calldata body.
-This format-level preflight runs before visibility, so hiding a dynamic
-field does not bypass its framing checks.
+`render_erc7730_pages` accepts exact all-static calldata and the established
+**sole top-level C1 tail** containing a `string`/`bytes`, a supported primitive
+array, or a dynamic `tokenPath`. The sole-tail path remains byte-identical: its
+offset equals the static-head length and its canonical object consumes the
+complete calldata body.
 
-C2 dynamic-tuple descent, C3/multiple dynamic tails, aliased offsets,
-gaps, non-zero padding, and trailing bytes are not trusted shapes.
-`dbgen` omits those formats and the runtime rejects them independently.
-For a firmware-known/verified call, any such render failure is a hard
-refusal, never a typed- or blind-sign fallback. The legacy walker was
-removed and therefore cannot expand this policy through a second runtime
-decoder.
+Formats with two through four supported top-level dynamic objects carry a
+versioned, Merkle-rooted topology marker compiled from the complete canonical
+function signature. It records each dynamic offset-word slot and whether the
+object is a `bytes`/`string` blob or an array of one-word static primitives.
+Before visibility or any page publication, the device requires the first
+offset to equal the authenticated head end, every later offset to equal the
+previous object's exact padded end, zero blob padding, checked and aligned
+spans, and final consumption of the complete calldata body. Every dynamic
+field must match one topology record and every record must be consumed. This
+excludes aliases, overlap, reordering, gaps, hidden tails, and trailing bytes.
+The tail count and total body are independently capped.
+
+Dynamic tuples, tuple-local tails, `bytes[]`, arrays of tuple/dynamic elements,
+displayed value slices or indexes, and more than four tails remain untrusted.
+`dbgen` omits those formats and runtime independently rejects malformed or
+contradictory rooted IR. For a firmware-known/verified call, any framing or
+render failure is a hard refusal, never a typed- or blind-sign fallback. No
+second permissive runtime walker exists.
 
 ## See also
 

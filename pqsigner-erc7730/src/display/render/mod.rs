@@ -1792,12 +1792,13 @@ fn render_one_field(
             // (byte-identical scalar path). A nested sub-field never routes
             // here (nested_ed is exact-length, no `[]` member in v1).
             if formatters::path_ends_with_array_all(ir, field.path_off)? {
-                formatters::render_array(
+                formatters::render_array_with_mode(
                     field,
                     pages,
                     ir,
                     full_body,
                     static_head_words,
+                    calldata_mode,
                     container,
                     erc20,
                     resolver,
@@ -1807,12 +1808,13 @@ fn render_one_field(
             } else if formatters::path_is_dynamic_leaf(ir, field.path_off)? {
                 // C1: a dynamic `bytes`/`string` leaf — its value is in the
                 // calldata tail (needs the FULL body).
-                formatters::render_dynamic_bytes(
+                formatters::render_dynamic_bytes_with_mode(
                     field,
                     pages,
                     ir,
                     full_body,
                     static_head_words,
+                    calldata_mode,
                     erc20,
                     resolver,
                     params,
