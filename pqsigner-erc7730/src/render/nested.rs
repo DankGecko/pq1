@@ -140,6 +140,15 @@ pub(crate) fn validate_nested_ir(
             super::params::parse(ir, field.param_off).map_err(|_| IrError::BadPoolEntry)?;
         let kind = params.terminal_kind.ok_or(IrError::BadField)?;
 
+        // `PARAM_EXACT_EMPTY_BYTES` has one topology: an always-visible,
+        // top-level contract-calldata C1 tail. A nested EIP-712 member is a
+        // static encoded-data word, so accepting the marker here would let a
+        // future compiler/catalogue drift reuse its meaning where no exact
+        // empty ABI tail exists.
+        if params.exact_empty_bytes {
+            return Err(IrError::BadField);
+        }
+
         if params.visibility != Visibility::Never && !label_has_visible_glyph(field.label) {
             return Err(IrError::BadAscii);
         }
@@ -603,6 +612,50 @@ mod tests {
         assert_eq!(static_word_index(&[0x10, 0x25]), None);
         // Missing RootStructured → None.
         assert_eq!(static_word_index(&[0x20, 0x00, 0x01]), None);
+    }
+
+    #[test]
+    fn validate_nested_ir_rejects_exact_empty_bytes_marker() {
+        use crate::render::params::{
+            DYNAMIC_KIND_BYTES, PARAM_DYNAMIC_KIND, PARAM_EXACT_EMPTY_BYTES, PARAM_TERMINAL_KIND,
+        };
+
+        let mut pool = std::vec![0xFFu8];
+        // off 1: nested-local static word 0. This is deliberately not a C1
+        // FollowOffset path: nested EIP-712 encodeData has no ABI tail.
+        pool.extend_from_slice(&[4, 0x10, 0x20, 0x00, 0x00]);
+        // off 6: the otherwise policy-valid Raw/DynamicBytes marker pair.
+        pool.extend_from_slice(&[
+            8,
+            PARAM_DYNAMIC_KIND,
+            1,
+            DYNAMIC_KIND_BYTES,
+            PARAM_TERMINAL_KIND,
+            1,
+            TerminalKind::DynamicBytes as u8,
+            PARAM_EXACT_EMPTY_BYTES,
+            0,
+        ]);
+
+        let mut payload = std::vec![NESTED_V3];
+        payload.extend_from_slice(&0u16.to_be_bytes());
+        payload.extend_from_slice(&[0xAB; 32]);
+        payload.extend_from_slice(&1u16.to_be_bytes());
+        payload.push(0); // flags
+        payload.push(0); // no address-bearing words
+        payload.push(1); // one sub-field
+        payload.push(crate::ir::FormatOp::Raw as u8);
+        payload.push(8);
+        payload.extend_from_slice(b"Callback");
+        payload.extend_from_slice(&1u16.to_be_bytes());
+        payload.extend_from_slice(&6u16.to_be_bytes());
+
+        let ir_bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&ir_bytes).expect("minimal IR");
+        assert_eq!(
+            validate_nested_ir(&ir, &payload, 1, 1),
+            Err(IrError::BadField)
+        );
     }
 
     #[test]

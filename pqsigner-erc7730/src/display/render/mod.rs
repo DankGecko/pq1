@@ -1496,6 +1496,12 @@ fn render_nested_subfields(
     for sf in np.sub_fields() {
         let sf = sf.map_err(|_| RenderErr::Reject("7730 nested subfield"))?;
         let sf_params = parse_params(ir, sf.param_off)?;
+        // Runtime belt behind deep IR validation: the exact-empty marker is
+        // meaningful only for a top-level contract-calldata C1 tail. Nested
+        // EIP-712 encodeData contains static words, never that ABI topology.
+        if sf_params.exact_empty_bytes {
+            return Err(RenderErr::Reject("7730 exact-empty nested"));
+        }
         // v3 depth-2+: a sub-field that is ITSELF a nested struct/array-of-struct
         // (`witness.info`, `witness.outputs`). Recurse: the CURRENT struct's
         // `nested_ed` is the child's `parent_body` — the child's committed

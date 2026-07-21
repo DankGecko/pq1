@@ -4378,7 +4378,11 @@ fn validate_exact_empty_bytes_format_source(
         .path
         .strip_prefix("#.")
         .ok_or_else(|| format!("format `{sig}` exact-empty path must be direct structured C1"))?;
-    if member.is_empty() || member.bytes().any(|byte| matches!(byte, b'.' | b'[' | b']')) {
+    if member.is_empty()
+        || member
+            .bytes()
+            .any(|byte| matches!(byte, b'.' | b'[' | b']'))
+    {
         return Err(format!(
             "format `{sig}` exact-empty path `{}` is not a direct top-level field",
             enrollment.path
@@ -9513,6 +9517,9 @@ fn review_param_semantics(
         };
         parts.push(format!("dynamicKind={name}(0x{kind:02x})"));
     }
+    if params.exact_empty_bytes {
+        parts.push("exactEmptyBytes=true".to_string());
+    }
     if let Some(collection) = params.nft_collection {
         parts.push(format!("nftCollection=0x{}", hex::encode(collection)));
     }
@@ -13702,13 +13709,10 @@ mod tests {
             selector,
         )
         .is_some());
-        assert!(exact_empty_bytes_enrollment_for(
-            [0x55; 32],
-            Some(&exact),
-            signature,
-            selector,
-        )
-        .is_none());
+        assert!(
+            exact_empty_bytes_enrollment_for([0x55; 32], Some(&exact), signature, selector,)
+                .is_none()
+        );
         assert!(exact_empty_bytes_enrollment_for(
             MORPHO_BLUE_DESCRIPTOR_HASH,
             Some(&InterpolationDeployment {
@@ -14046,9 +14050,8 @@ mod tests {
             .parent()
             .expect("workspace root")
             .to_path_buf();
-        let descriptor = root.join(
-            "secure/data/erc7730/curations/files/registry/morpho/calldata-MorphoBlue.json",
-        );
+        let descriptor = root
+            .join("secure/data/erc7730/curations/files/registry/morpho/calldata-MorphoBlue.json");
         let json = load_resolved_descriptor_json(&descriptor, None).expect("load descriptor");
         let hash = sha256_of(&jcs_canonicalize(&json).expect("JCS descriptor"));
         eprintln!(
@@ -14748,6 +14751,14 @@ mod tests {
                 "nftCollectionPath=0x{}",
                 hex::encode(collection_path)
             )));
+
+        let mut exact_empty = ParamSet::default();
+        exact_empty.dynamic_kind = Some(pqsigner_erc7730::render::params::DYNAMIC_KIND_BYTES);
+        exact_empty.exact_empty_bytes = true;
+        exact_empty.terminal_kind = Some(TerminalKind::DynamicBytes);
+        let decoded = review_param_semantics(&exact_empty).expect("review semantics");
+        assert!(decoded.contains("dynamicKind=bytes(0x02)"));
+        assert!(decoded.contains("exactEmptyBytes=true"));
     }
 
     #[test]
