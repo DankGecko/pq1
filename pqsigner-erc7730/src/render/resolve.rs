@@ -137,11 +137,15 @@ pub fn resolve_structured(prog: &[u8], body: &[u8]) -> Result<Leaf, RenderErr> {
     }
 }
 
-/// Bounds of a canonical ABI dynamic blob.
-struct DynamicBounds {
-    data_start: usize,
-    data_end: usize,
-    padded_end: usize,
+/// Bounds of a canonical ABI dynamic blob. Shared with the authenticated
+/// multi-tail partition so sole-tail and multi-tail blobs cannot acquire
+/// drifting length or zero-padding rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CanonicalBlobBounds {
+    pub(crate) len: u32,
+    pub(crate) data_start: usize,
+    pub(crate) data_end: usize,
+    pub(crate) padded_end: usize,
 }
 
 /// Exact geometry of one canonical dynamic blob that owns the complete ABI
@@ -175,7 +179,10 @@ pub struct CanonicalDynamicTail<'a> {
 /// arbitrary padding would therefore let two byte-distinct authorizations
 /// paint identical trusted-display pages. Keep the check in this shared reader
 /// so rendered strings and tokenPath byte slices cannot diverge.
-fn dynamic_bounds(body: &[u8], off: usize) -> Result<DynamicBounds, RenderErr> {
+pub(crate) fn canonical_blob_bounds(
+    body: &[u8],
+    off: usize,
+) -> Result<CanonicalBlobBounds, RenderErr> {
     let len_word = body
         .get(off..off.checked_add(32).ok_or(RenderErr::Reject("7730 res ovf"))?)
         .ok_or(RenderErr::Reject("7730 res no len"))?;
@@ -205,7 +212,8 @@ fn dynamic_bounds(body: &[u8], off: usize) -> Result<DynamicBounds, RenderErr> {
     if padding.iter().any(|&b| b != 0) {
         return Err(RenderErr::Reject("7730 res dirty pad"));
     }
-    Ok(DynamicBounds {
+    Ok(CanonicalBlobBounds {
+        len,
         data_start,
         data_end,
         padded_end,
@@ -218,7 +226,7 @@ fn dynamic_bounds(body: &[u8], off: usize) -> Result<DynamicBounds, RenderErr> {
 /// follow this one; callers that own the sole tail must use
 /// [`read_dynamic_whole_tail`].
 pub fn read_dynamic(body: &[u8], off: usize) -> Result<&[u8], RenderErr> {
-    let bounds = dynamic_bounds(body, off)?;
+    let bounds = canonical_blob_bounds(body, off)?;
     body.get(bounds.data_start..bounds.data_end)
         .ok_or(RenderErr::Reject("7730 res data oob"))
 }
@@ -255,7 +263,7 @@ pub fn canonical_dynamic_whole_tail(
     if off != expected_off {
         return Err(RenderErr::Reject("7730 res offset != head end"));
     }
-    let bounds = dynamic_bounds(body, off)?;
+    let bounds = canonical_blob_bounds(body, off)?;
     if bounds.padded_end != body.len() {
         return Err(RenderErr::Reject("7730 res not whole tail"));
     }
