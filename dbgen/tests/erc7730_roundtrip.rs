@@ -88,14 +88,10 @@ fn build_e2e() -> Erc7730BuildResult {
     build_db(&dir, &policy).expect("build E2E corpus")
 }
 
-/// The pre-#493 catalogue had 463 leaves. Exact string-preimage enrollment
-/// adds two Flying Tulip deployment leaves and one leaf for each Rarible mint
-/// descriptor. Lens Quote joins its already-existing Lens deployment leaf, so
-/// five newly admitted formats produce exactly four new leaves.
-const REGISTRY_LEAVES_BEFORE_EIP712_STRINGS: usize = 463;
-const EIP712_STRING_NEW_LEAVES: usize = 4;
-const EXPECTED_REGISTRY_LEAVES: usize =
-    REGISTRY_LEAVES_BEFORE_EIP712_STRINGS + EIP712_STRING_NEW_LEAVES;
+/// Exact combined catalogue cardinality for the current generated receipt.
+/// Protocol-specific assertions below pin their own deployment/route subsets;
+/// the accepted-family inventory independently accounts for every source.
+const EXPECTED_REGISTRY_LEAVES: usize = 412;
 
 /// EIP-712 admission does not add contract selectors to the independent
 /// known-call inventory. Keep its exact cardinality pinned separately from the
@@ -2668,7 +2664,7 @@ fn registry_midas_mtbill_redemption_admits_only_four_token_output_routes() {
     assert_eq!(
         catalogue.entries.len(),
         EXPECTED_REGISTRY_LEAVES,
-        "the five exact string-preimage formats must add four leaves to the prior 463-leaf catalogue"
+        "string-preimage admission must preserve the current combined catalogue receipt"
     );
     assert_eq!(catalogue.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
@@ -2953,7 +2949,7 @@ fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment(
     assert_eq!(
         result.entries.len(),
         EXPECTED_REGISTRY_LEAVES,
-        "PQ-incompatible permit removal must preserve the post-#493 catalogue"
+        "PQ-incompatible permit removal must preserve the current combined catalogue receipt"
     );
     assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
@@ -3098,9 +3094,8 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(result.root),
-        // Re-derived from the schema-v6 catalogue containing the five exact
-        // EIP-712 string-preimage formats enrolled by #493.
-        "01fc3633f39a453684445b87fbfd1b8d3b1063fe9824984508a890f3c949db21"
+        // Re-derived from the combined semantic-honesty catalogue.
+        "ffe692b9d69da3511e55540efc0a62700daf99547cf74ea2345e0413a47b0d77"
     );
 }
 

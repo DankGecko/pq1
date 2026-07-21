@@ -87,7 +87,7 @@
   "artifacts": [
     {
       "path": "README.md",
-      "sha256": "f5d39b8f2c1d2ae5cb5ce7b18d7b3e812abf4746fb8a7cfe87944bedad4f60fe"
+      "sha256": "6488475cc7d7195f286f9dc3e4a9b917ce55b4fbb3ccb918967cbd52472a43c2"
     },
     {
       "path": "abi/LayerswapDepository.deposit-routes.abi.json",
@@ -99,7 +99,7 @@
     },
     {
       "path": "collect.sh",
-      "sha256": "e046baed257ef9717288230b672594a1225a574d9dd4eec74e6ac2578bd38ea8"
+      "sha256": "dae2085ab7254ef5e88f743fbff7560499bc576ef0b81b4feace963dfac0d56c"
     },
     {
       "path": "compiler/LayerswapDepository.standard-input.json",
@@ -127,7 +127,7 @@
     },
     {
       "path": "rpc/request.json",
-      "sha256": "f682048eeff2e3d0761a5c7f3f714ad5b0a98ce75c9d327936a7304ea49231f5"
+      "sha256": "e9945721bd44c01a7bb91183cf3cd7e84e103de4b14d59836fd98dd11a4b71ce"
     },
     {
       "path": "rpc/response-flashbots.json",
