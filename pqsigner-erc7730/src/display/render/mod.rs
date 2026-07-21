@@ -33,11 +33,20 @@ pub mod formatters;
 pub mod intent;
 pub mod nested;
 
+pub use calldata_nested::{
+    derive_nested_call, nested_binding_commitment, CanonicalChildInterval, LeafIdentity,
+    NestedCallBinding,
+};
+
 use super::primitives::{
     format_u64, hex_nibble, known_native_ticker, write_array_item_row, write_chain, write_line,
     write_native_amount_two_rows, write_native_currency_row, AmountFit,
 };
 use crate::bundle::VerifiedDescriptor;
+use crate::proof_set::VerifiedProofSet;
+use crate::render::calldata_policy::{
+    NestedCalldataEnrollment, ACTIVE_NESTED_CALLDATA_ENROLLMENTS,
+};
 use crate::render::params::{
     parse as parse_params, InterpolatedIntentProgram, MAX_INTERPOLATED_SUBSTITUTIONS,
 };
@@ -364,6 +373,16 @@ impl RenderedFieldWitness {
 /// independently.
 const COMPACT_MODE: bool = false;
 
+#[derive(Clone, Copy)]
+struct NestedCalldataRenderCtx<'ctx, 'ir> {
+    tx: &'ctx Eip1559Tx,
+    inner_data: &'ctx [u8],
+    proof_set: &'ctx VerifiedProofSet<'ir>,
+    device_signer: &'ctx [u8; 20],
+    expected: NestedCallBinding,
+    enrollments: &'ctx [NestedCalldataEnrollment],
+}
+
 // A one-line constant flip must fail the build instead of silently turning
 // authenticated Optional operands into signed-but-unshown data. Removal or
 // relaxation of this fence is itself a review-visible product-policy change.
@@ -482,6 +501,39 @@ pub fn render_erc7730_pages_with_signer_checked<'ir>(
     })
 }
 
+/// Proof-set contract render used by the secure dispatcher after it has
+/// independently derived and FI-checked `expected_nested`.
+///
+/// A nested parent must supply `Some(binding)` and an ordinary parent must
+/// supply `None`; the renderer re-derives that decision before touching pages.
+/// Nested transcripts use the V2 receipt domain and commitment, while ordinary
+/// legacy proof sets retain byte-identical V1 receipts.
+pub fn render_erc7730_proof_set_pages_with_signer_checked<'ir>(
+    tx: &Eip1559Tx,
+    inner_data: &[u8],
+    proof_set: &VerifiedProofSet<'ir>,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    device_signer: &[u8; 20],
+    expected_nested: Option<&NestedCallBinding>,
+) -> Result<ContractRenderOutput, RenderErr> {
+    let mut pages = Pages::with_len(0);
+    let transcript_receipt = render_erc7730_proof_set_pages_with_signer_into(
+        tx,
+        inner_data,
+        proof_set,
+        erc20,
+        resolver,
+        device_signer,
+        expected_nested,
+        &mut pages,
+    )?;
+    Ok(ContractRenderOutput {
+        pages,
+        transcript_receipt,
+    })
+}
+
 /// Render a complete contract transcript into caller-owned empty storage and
 /// return its exact-page receipt. The secure dispatcher invokes this twice
 /// around a volatile poison/reset. The two passes reuse one logical transcript
@@ -510,6 +562,104 @@ pub fn render_erc7730_pages_with_signer_into<'ir>(
     )
 }
 
+/// Render one rooted proof set into caller-owned empty storage. The expected
+/// nested binding is caller authority produced by a separate derivation/FI
+/// path, never state reported by this renderer.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub fn render_erc7730_proof_set_pages_with_signer_into<'ir>(
+    tx: &Eip1559Tx,
+    inner_data: &[u8],
+    proof_set: &VerifiedProofSet<'ir>,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    device_signer: &[u8; 20],
+    expected_nested: Option<&NestedCallBinding>,
+    pages: &mut Pages,
+) -> Result<ContractTranscriptReceipt, RenderErr> {
+    render_erc7730_proof_set_pages_with_signer_into_with_enrollments(
+        tx,
+        inner_data,
+        proof_set,
+        erc20,
+        resolver,
+        device_signer,
+        expected_nested,
+        ACTIVE_NESTED_CALLDATA_ENROLLMENTS,
+        pages,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn render_erc7730_proof_set_pages_with_signer_into_with_enrollments<'ir>(
+    tx: &Eip1559Tx,
+    inner_data: &[u8],
+    proof_set: &VerifiedProofSet<'ir>,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    device_signer: &[u8; 20],
+    expected_nested: Option<&NestedCallBinding>,
+    enrollments: &[NestedCalldataEnrollment],
+    pages: &mut Pages,
+) -> Result<ContractTranscriptReceipt, RenderErr> {
+    let mut canary: u32 = 0;
+    // SAFETY: unique live local; volatile access is the renderer's existing
+    // stack-overrun belt and must not be folded away.
+    unsafe { core::ptr::write_volatile(&mut canary, STACK_CANARY) };
+
+    let result = (|| {
+        let derived = calldata_nested::derive_bound_with_enrollments(
+            tx,
+            inner_data,
+            proof_set,
+            device_signer,
+            enrollments,
+        )?
+        .map(|bound| bound.binding);
+        let expected = expected_nested.copied();
+        if derived != expected {
+            return Err(RenderErr::Reject("7730 nested expected binding mismatch"));
+        }
+        let nested = expected.map(|expected| NestedCalldataRenderCtx {
+            tx,
+            inner_data,
+            proof_set,
+            device_signer,
+            expected,
+            enrollments,
+        });
+        render_erc7730_pages_inner_into(
+            tx,
+            inner_data,
+            &proof_set.outer.descriptor,
+            erc20,
+            resolver,
+            Some(device_signer),
+            nested,
+            pages,
+        )
+        .and_then(|state| match expected {
+            Some(binding) => ContractTranscriptReceipt::from_pages_with_nested(
+                state,
+                pages,
+                &nested_binding_commitment(&binding),
+            ),
+            None => ContractTranscriptReceipt::from_pages(state, pages),
+        })
+    })();
+
+    // SAFETY: read the same unique live slot written above.
+    let final_canary = unsafe { core::ptr::read_volatile(&canary) };
+    assert!(
+        final_canary == STACK_CANARY,
+        "ERC-7730 proof-set renderer stack canary smashed (got {:#x}, expected {:#x})",
+        final_canary,
+        STACK_CANARY
+    );
+    result
+}
+
 #[inline(never)]
 fn render_erc7730_pages_scoped_into<'ir>(
     tx: &Eip1559Tx,
@@ -535,6 +685,7 @@ fn render_erc7730_pages_scoped_into<'ir>(
         erc20,
         resolver,
         device_signer,
+        None,
         pages,
     );
 
@@ -551,6 +702,7 @@ fn render_erc7730_pages_scoped_into<'ir>(
 }
 
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 fn render_erc7730_pages_inner_into<'ir>(
     tx: &Eip1559Tx,
     inner_data: &[u8],
@@ -558,6 +710,7 @@ fn render_erc7730_pages_inner_into<'ir>(
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
     device_signer: Option<&[u8; 20]>,
+    nested_calldata: Option<NestedCalldataRenderCtx<'_, 'ir>>,
     pages: &mut Pages,
 ) -> Result<u32, RenderErr> {
     if pages.len != 0 {
@@ -581,118 +734,16 @@ fn render_erc7730_pages_inner_into<'ir>(
         tx.nonce,
         device_signer.copied(),
     );
-    // Head-bound guard (defence-in-depth behind the width-aware path
-    // slots). Truncate the calldata body to the format's ABI static head
-    // so any field whose resolved slot lands beyond the static head — a
-    // malformed descriptor reading into the dynamic tail — fails the
-    // walker's `body.get(slot..)` bound and is rejected, never silently
-    // rendered. Field slots are always < static_head_words by
-    // construction, so this never rejects a well-formed descriptor. See
-    // `docs/security/vulns/VULN-erc7730-walker-slot-confusion.md`.
-    let body = head_bounded_body(&inner_data[4..], format.static_head_words)?;
-    // The FULL (untruncated) body is handed only to canonical dynamic-tail
-    // validation/rendering (sole string/bytes, primitive array, or tokenPath
-    // container). Static scalar fields keep using the head-bounded `body`.
-    let full_body = &inner_data[4..];
-
-    // Canonical ABI framing is a format-wide property, not a visible-field
-    // property. Run the preflight before painting any pages and before
-    // visibility can skip a field: all-static calls must consume exactly the
-    // authenticated head, while every supported dynamic shape must be one
-    // exact whole tail. Generic C2 dynamic tuples and relaxed multi-array tails
-    // hard-refuse; the exact Router02 packed-path mode is authenticated and
-    // wholly parsed by this preflight before it is returned.
-    let calldata_mode =
-        formatters::validate_contract_calldata_framing(
-            &descriptor.ir,
-            &format,
-            full_body,
-            &container,
-        )?;
-
-    // Semantic word predicates are format-wide authority checks, not rendering
-    // hints. Evaluate every guard after canonical framing but before painting
-    // the reassuring authenticated banner or any operand page.
-    formatters::validate_contract_word_guards(
-        &descriptor.ir,
-        &format,
-        body,
-        full_body,
-        calldata_mode,
-        &container,
-    )?;
-
-    // 2. Banner — page 0. Exact-zero approval wording is derived only when a
-    // Merkle-authenticated ERC-20 capability binds this chain+contract and the
-    // signed calldata is the strict canonical `approve(address,uint256)`
-    // frame. Selector-only inference is forbidden because ERC-721 collides.
-    let derived_intent =
-        authenticated_contract_intent(
-            &container,
-            inner_data,
-            &descriptor.ir,
-            &format,
-            body,
-            erc20,
-        )?;
-    let mut interpolation = InterpolationState::from_format(&descriptor.ir, &format)?;
-    if derived_intent.is_some() && interpolation.is_enrolled() {
-        return Err(RenderErr::Reject("7730 conflicting derived intents"));
-    }
-    // An enrolled interpolation never pre-paints the reassuring authenticated
-    // static title. If publication is fault-skipped, this unmistakable invalid
-    // state remains and cannot satisfy either the local or secure readback.
-    const UNPUBLISHED_INTERPOLATED_TITLE: &[u8] = b"! INTENT INVALID";
-    let initial_intent = if interpolation.is_enrolled() {
-        Some(UNPUBLISHED_INTERPOLATED_TITLE)
-    } else {
-        derived_intent
-    };
-    let intent_page = intent::render_intent_banner(pages, &descriptor.ir, &format, initial_intent)?;
-
-    // 4. Iterate fields. Contract-context formats never carry a
-    //    `PARAM_NESTED_STRUCT` field (dbgen only emits it for EIP-712), so the
-    //    nested descent never triggers here — pass an empty context.
-    let field_pages_before = pages.as_slice().len();
-    render_fields(
+    let transcript_state = render_contract_format_scope(
         pages,
-        &descriptor.ir,
+        inner_data,
+        descriptor,
         &format,
-        body,
-        full_body,
-        calldata_mode,
         &container,
         erc20,
         resolver,
-        &mut NestedCtx::default(),
-        &mut interpolation,
+        nested_calldata,
     )?;
-
-    // 4b. WYSIWYS belt (VULN-erc7730-visible-never-noparam-clearsign). A
-    // contract-context known shape that DECLARES fields but renders NONE of
-    // them — every field `visible:"never"` — would otherwise present a
-    // trusted clear-sign (banner + envelope + confirm) with none of the
-    // call's parameters shown: a blind-sign wearing a reassuring clear-sign
-    // banner, worse than an honest loud blind-sign. Reject the render; the
-    // secure dispatcher hard-refuses this verified/known tuple. The build-time
-    // visibility gate (`dbgen::erc7730::check_field_visibility`) already
-    // prevents such descriptors entering the Merkle-pinned root; this is the
-    // on-device structural backstop that holds even if one ever slips in.
-    // Zero-field formats (`deposit()`) declare no fields and are unaffected;
-    // payable stakes (`submit`) render their `@.value` field and pass.
-    if format.field_count > 0 && pages.as_slice().len() == field_pages_before {
-        return Err(RenderErr::Reject("7730 no visible fields"));
-    }
-    let published_interpolation = interpolation.finish()?;
-    if let Some(interpolated) = published_interpolation.as_ref() {
-        intent::repaint_intent_banner(
-            pages,
-            intent_page,
-            &descriptor.ir,
-            &format,
-            &interpolated.bytes[..interpolated.len as usize],
-        )?;
-    }
 
     // 5. Envelope pages (chain / fee / nonce). Mirrors the tail of the
     //    erc20_known renderer so the user always sees gas + chain
@@ -702,11 +753,104 @@ fn render_erc7730_pages_inner_into<'ir>(
     // 6. Final confirm-button page.
     append_confirm_page(pages)?;
 
-    // Retain the local exact-page reconstruction belt after every renderer-
-    // owned append. The secure dispatcher adds the independent full second
-    // render; this local check still catches a deterministic skipped repaint
-    // that could otherwise be common to both passes.
-    let transcript_state = match published_interpolation {
+    Ok(transcript_state)
+}
+
+/// Render one authenticated contract-format scope into the caller's existing
+/// page buffer. This function deliberately owns no gas/nonce envelope and no
+/// confirmation page, so the same implementation can paint a child call
+/// without creating a second authorization boundary.
+#[allow(clippy::too_many_arguments)]
+fn render_contract_format_scope<'ir>(
+    pages: &mut Pages,
+    inner_data: &[u8],
+    descriptor: &VerifiedDescriptor<'ir>,
+    format: &crate::ir::FormatHeader<'ir>,
+    container: &formatters::ContractContainerCtx,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    nested_calldata: Option<NestedCalldataRenderCtx<'_, 'ir>>,
+) -> Result<u32, RenderErr> {
+    let full_body = inner_data
+        .get(4..)
+        .ok_or(RenderErr::Reject("7730 short selector"))?;
+    // Static scalar walkers receive only the authenticated ABI head. Dynamic
+    // paths receive the complete body only after the format-wide exact-framing
+    // preflight below.
+    let body = head_bounded_body(full_body, format.static_head_words)?;
+    let calldata_mode = formatters::validate_contract_calldata_framing(
+        &descriptor.ir,
+        format,
+        full_body,
+        container,
+    )?;
+    formatters::validate_contract_word_guards(
+        &descriptor.ir,
+        format,
+        body,
+        full_body,
+        calldata_mode,
+        container,
+    )?;
+
+    // Exact-zero approval wording remains capability-bound to the concrete
+    // scope's chain and target. A child can reuse the independently verified
+    // metadata only when those checks match it exactly.
+    let derived_intent = authenticated_contract_intent(
+        container,
+        inner_data,
+        &descriptor.ir,
+        format,
+        body,
+        erc20,
+    )?;
+    let mut interpolation = InterpolationState::from_format(&descriptor.ir, format)?;
+    if derived_intent.is_some() && interpolation.is_enrolled() {
+        return Err(RenderErr::Reject("7730 conflicting derived intents"));
+    }
+    const UNPUBLISHED_INTERPOLATED_TITLE: &[u8] = b"! INTENT INVALID";
+    let initial_intent = if interpolation.is_enrolled() {
+        Some(UNPUBLISHED_INTERPOLATED_TITLE)
+    } else {
+        derived_intent
+    };
+    let intent_page =
+        intent::render_intent_banner(pages, &descriptor.ir, format, initial_intent)?;
+
+    let field_pages_before = pages.as_slice().len();
+    render_fields(
+        pages,
+        &descriptor.ir,
+        format,
+        body,
+        full_body,
+        calldata_mode,
+        container,
+        erc20,
+        resolver,
+        &mut NestedCtx::default(),
+        &mut interpolation,
+        nested_calldata,
+    )?;
+    if format.field_count > 0 && pages.as_slice().len() == field_pages_before {
+        return Err(RenderErr::Reject("7730 no visible fields"));
+    }
+
+    let published_interpolation = interpolation.finish()?;
+    if let Some(interpolated) = published_interpolation.as_ref() {
+        intent::repaint_intent_banner(
+            pages,
+            intent_page,
+            &descriptor.ir,
+            format,
+            &interpolated.bytes[..interpolated.len as usize],
+        )?;
+    }
+
+    // Rebuild the publication result locally before returning control to the
+    // outer composer. The secure caller still performs its independent full
+    // second render and receipt comparison.
+    match published_interpolation {
         Some(first) => {
             let second = interpolation
                 .finish()?
@@ -716,7 +860,7 @@ fn render_erc7730_pages_inner_into<'ir>(
             }
             let expected_page = intent::build_intent_page(
                 &descriptor.ir,
-                &format,
+                format,
                 Some(&second.bytes[..second.len as usize]),
             );
             let actual = pages
@@ -726,12 +870,10 @@ fn render_erc7730_pages_inner_into<'ir>(
             if !intent::page_exact(actual, &expected_page) {
                 return Err(RenderErr::Reject("7730 intent publication mismatch"));
             }
-            INTENT_PUBLICATION_INTERPOLATED
+            Ok(INTENT_PUBLICATION_INTERPOLATED)
         }
-        None => INTENT_PUBLICATION_STATIC,
-    };
-
-    Ok(transcript_state)
+        None => Ok(INTENT_PUBLICATION_STATIC),
+    }
 }
 
 /// Entry point for EIP-712 typed-data renders driven by the
@@ -995,6 +1137,7 @@ fn render_erc7730_eip712_pages_inner_into<'ir>(
         resolver,
         &mut nested_ctx,
         &mut interpolation,
+        None,
     )?;
     // E1 reconciliation (the top-level analog of the belt): the device must have
     // BOUND every nested descent and exact-string record the descriptor pins,
@@ -1253,10 +1396,11 @@ fn append_interpolated_bytes(
     Ok(())
 }
 
-fn render_fields(
+#[allow(clippy::too_many_arguments)]
+fn render_fields<'ir>(
     pages: &mut Pages,
-    ir: &crate::ir::Erc7730Ir<'_>,
-    format: &crate::ir::FormatHeader<'_>,
+    ir: &crate::ir::Erc7730Ir<'ir>,
+    format: &crate::ir::FormatHeader<'ir>,
     body: &[u8],
     full_body: &[u8],
     calldata_mode: formatters::ContractCalldataMode,
@@ -1265,10 +1409,29 @@ fn render_fields(
     resolver: &NameResolver<'_>,
     nested: &mut NestedCtx<'_>,
     interpolation: &mut InterpolationState<'_>,
+    nested_calldata: Option<NestedCalldataRenderCtx<'_, 'ir>>,
 ) -> Result<(), RenderErr> {
     for (field_ordinal, field_result) in format.fields().enumerate() {
         let field = field_result.map_err(|_| RenderErr::Reject("7730 bad field"))?;
         let params = parse_params(ir, field.param_off)?;
+        if field.format_op == crate::ir::FormatOp::Calldata as u8 {
+            let nested_calldata = nested_calldata
+                .ok_or(RenderErr::Reject("7730 nested proof set required"))?;
+            let field_ordinal = u8::try_from(field_ordinal)
+                .map_err(|_| RenderErr::Reject("7730 nested ordinal overflow"))?;
+            render_nested_calldata_field(
+                pages,
+                ir,
+                &field,
+                &params,
+                field_ordinal,
+                erc20,
+                resolver,
+                nested_calldata,
+            )?;
+            interpolation.record(field_ordinal, None)?;
+            continue;
+        }
         // Schema-v6 EIP-712 string preimages share the V3 evidence stream with
         // nested-struct records. The authenticated marker is consumed in field
         // traversal order, before ordinary visibility/formatter dispatch: the
@@ -1359,6 +1522,66 @@ fn render_fields(
             resolver,
         )?;
         interpolation.record(field_ordinal as u8, witness)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_nested_calldata_field<'ir>(
+    pages: &mut Pages,
+    parent_ir: &crate::ir::Erc7730Ir<'ir>,
+    field: &crate::ir::FieldEntry<'ir>,
+    params: &crate::render::params::ParamSet<'ir>,
+    field_ordinal: u8,
+    erc20: Option<&Erc20Metadata<'_>>,
+    resolver: &NameResolver<'_>,
+    context: NestedCalldataRenderCtx<'_, 'ir>,
+) -> Result<(), RenderErr> {
+    if params.visibility != crate::ir::Visibility::Always
+        || field_ordinal != context.expected.field_ordinal
+    {
+        return Err(RenderErr::Reject("7730 nested publication field mismatch"));
+    }
+    let field_path = parent_ir
+        .path_bytes(field.path_off)
+        .map_err(|_| RenderErr::Reject("7730 nested publication path"))?;
+    if field_path != context.expected.field_path {
+        return Err(RenderErr::Reject("7730 nested publication path mismatch"));
+    }
+
+    // Re-derive immediately before the boundary page. The first derivation ran
+    // before any page was touched; this second one prevents a skipped or
+    // faulted publication-time target/selector decision from inheriting that
+    // earlier authority implicitly.
+    let rebound = calldata_nested::derive_bound_with_enrollments(
+        context.tx,
+        context.inner_data,
+        context.proof_set,
+        context.device_signer,
+        context.enrollments,
+    )?
+    .ok_or(RenderErr::Reject("7730 nested binding disappeared"))?;
+    if rebound.binding != context.expected {
+        return Err(RenderErr::Reject("7730 nested binding changed"));
+    }
+    calldata_nested::require_non_reserved_child_selector(&rebound.binding.child_selector)?;
+
+    calldata_nested::render_boundary(pages, field.label, &rebound.binding.child_target)?;
+    let child_state = render_contract_format_scope(
+        pages,
+        rebound.child_data,
+        &rebound.child_descriptor,
+        &rebound.child_format,
+        &rebound.child_container,
+        erc20,
+        resolver,
+        None,
+    )?;
+    // Selected child interpolation is rejected during binding preflight. Keep
+    // a publication-side belt so the outer transcript-state classifier cannot
+    // silently become incomplete if that rule changes in only one place.
+    if child_state != INTENT_PUBLICATION_STATIC {
+        return Err(RenderErr::Reject("7730 nested child publication state"));
     }
     Ok(())
 }

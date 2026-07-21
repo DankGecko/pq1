@@ -1072,6 +1072,7 @@ name = "pqsigner-erc7730"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "pqsigner-proto",
  "pqsigner-tx",
  "pqsigner-tx-core",
  "sha2",
