@@ -274,7 +274,12 @@ Returns a versioning + capability header. Bytes 0–1 are
 `protocol_version` (u16 BE) = `PROTOCOL_VERSION` from `proto/src/lib.rs`,
 currently **0x0202** (see §Protocol version history below). Reports
 `ep_version = 0x0006` (EntryPoint v0.6) and `sig_param_set = 2`
-(SPHINCS+C10, `C10_SIG_LEN = 4008`).
+(SPHINCS+C10, `C10_SIG_LEN = 4008`). Capability bit 0 is
+`CAP_SIGN_USEROP`; bit 1 is retired and remains clear; bit 2 is
+`CAP_ERC7730_PROOF_SET`. A companion may emit the versioned two-bundle
+ERC-7730 envelope only when bit 2 is set. Do not infer that support from the
+three `fw_version` bytes: they are currently a fixed placeholder rather than
+the running image identity.
 
 ### 0x60 GET_WALLET_ADDRESS
 

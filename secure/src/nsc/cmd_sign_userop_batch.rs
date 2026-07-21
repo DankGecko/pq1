@@ -77,7 +77,7 @@ use crate::tx::display::pick_sign_pages;
 use crate::tx::eip1559::{Eip1559Tx, UserOpDisplayFields, U256};
 use crate::tx::eip712::cowswap::VerifiedCowswapV3;
 use crate::tx::eip712::safe::VerifiedSafeV1;
-use crate::tx::erc7730::VerifiedDescriptor;
+use crate::tx::erc7730::VerifiedProofSet;
 use crate::ui;
 
 use super::batch_trailers::parse_all as parse_batch_trailers;
@@ -110,7 +110,7 @@ struct RoutedTrailers<'a> {
     erc20: Option<Erc20Metadata<'a>>,
     cow_order: Option<VerifiedCowswapV3>,
     safe_v1: Option<VerifiedSafeV1<'a>>,
-    erc7730: Option<VerifiedDescriptor<'a>>,
+    erc7730: Option<VerifiedProofSet<'a>>,
     selector: Option<SelectorMeta<'a>>,
 }
 
@@ -551,7 +551,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 }
             }
             TRAILER_KIND_ERC7730 => {
-                let v_res = crate::tx::erc7730::verify_erc7730_bundle(
+                let v_res = crate::tx::erc7730::verify_erc7730_proof_set(
                     bytes,
                     &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
                 );
@@ -564,6 +564,7 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                     continue;
                 }
                 let v = v_res.unwrap();
+                let outer = v.outer;
                 let ptx = parsed[rec.tx_idx as usize].as_ref().unwrap();
                 let mut bind_verdict_slot = 0u32;
                 // SAFETY: unique local; volatile FAIL state survives LTO if
@@ -574,8 +575,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
                 let mut bind_cfi = crate::fi::CfiCounter::new();
                 crate::tx::erc7730::prove_contract_binding(
-                    &v.ir,
-                    bytes,
+                    &outer.descriptor.ir,
+                    outer.raw_bundle,
                     &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
                     chain_id,
                     &ptx.to,
@@ -1228,7 +1229,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             r.and_then(|r| r.cow_order.as_ref()),
             r.and_then(|r| r.safe_v1.as_ref()),
             safe_exec_verified.as_ref(),
-            r.and_then(|r| r.erc7730.as_ref()),
+            r.and_then(|r| {
+                r.erc7730
+                    .as_ref()
+                    .map(|set| &set.outer.descriptor)
+            }),
             chain_verified_erc20,
             r.and_then(|r| r.selector.as_ref()),
             &resolver,

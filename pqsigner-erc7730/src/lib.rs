@@ -69,4 +69,5 @@ pub mod bundle;
 pub mod display;
 pub mod ir;
 pub mod known_calls;
+pub mod proof_set;
 pub mod render;

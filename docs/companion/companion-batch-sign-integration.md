@@ -123,7 +123,7 @@ one `NameResolver` shared across renders.
 | 4 | `TRAILER_KIND_SAFE_V1`       | 4379 | `tx::eip712::safe::verify_and_bind_trailer`            | inner tx at `tx_idx` |
 | 5 | `TRAILER_KIND_SEL_CURATED`   | 1100 | `selectors::verify_selector_bundle` (`SELECTOR_DB_ROOT`) | inner tx at `tx_idx` |
 | 6 | `TRAILER_KIND_SEL_SELFATTEST`|   68 | `selectors::parse_self_attest_bundle` (keccak self-check) | inner tx at `tx_idx` |
-| 7 | `TRAILER_KIND_ERC7730`       | 5130 | `tx::erc7730::verify_erc7730_bundle` (`ERC7730_DESCRIPTORS_ROOT`) | inner tx at `tx_idx` |
+| 7 | `TRAILER_KIND_ERC7730`       | 10268 | `tx::erc7730::verify_erc7730_proof_set` (`ERC7730_DESCRIPTORS_ROOT`) | inner tx at `tx_idx` |
 | 8 | `TRAILER_KIND_NAME`          | 1093 | `names::verify_name_bundle` (`NAMES_DB_ROOT`)          | batch-wide (`tx_idx == 0xff`) |
 
 The firmware refuses at parse time:
@@ -139,6 +139,13 @@ The firmware refuses at parse time:
 * per-kind `len > cap` from the table above.
 * `Σ len > TRAILERS_TOTAL_MAX_LEN (24 576)` across all records.
 * any trailing bytes past the last record.
+
+A kind-7 payload may remain one legacy bundle (maximum 5130 bytes). When
+GET_DEVICE_INFO capability bit 2 (`CAP_ERC7730_PROOF_SET`) is set, it may
+instead be the exact version-1 ordered outer/child envelope described in the
+canonical ERC-7730 companion guide. The unchanged 24 KiB aggregate budget can
+hold two maximum-size proof sets, but not every batch member at that maximum;
+preflight both the per-record and aggregate limits.
 
 ### Downgrade-mitigation gates (per inner tx)
 

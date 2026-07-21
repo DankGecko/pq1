@@ -793,6 +793,17 @@ pub const APDU_CLA_V2: u8 = 0xF0;
 pub const INS_V2_GET_DEVICE_INFO: u8 = 0x01;
 pub const INS_V2_GET_STATUS: u8 = 0x02;
 
+/// `GET_DEVICE_INFO.capabilities` bit 0: the unified UserOperation signing
+/// command is available.
+pub const CAP_SIGN_USEROP: u32 = 1 << 0;
+/// `GET_DEVICE_INFO.capabilities` bit 2: contract-call ERC-7730 trailers may
+/// use the versioned two-bundle proof-set envelope. Bit 1 is retired and MUST
+/// remain clear. Companions must gate the envelope on this bit rather than the
+/// placeholder firmware-version bytes.
+pub const CAP_ERC7730_PROOF_SET: u32 = 1 << 2;
+/// Capability bitmap emitted by the current firmware.
+pub const DEVICE_CAPABILITIES: u32 = CAP_SIGN_USEROP | CAP_ERC7730_PROOF_SET;
+
 // -- Session management (0x10-0x1F) --
 pub const INS_V2_UNLOCK: u8 = 0x10;
 pub const INS_V2_LOCK: u8 = 0x11;
@@ -1007,7 +1018,7 @@ pub const MAX_OFFCHAIN_EIP712_ENCODED_DATA_LEN: usize = 512;
 /// encoded_data_len(2) + encoded_data + erc7730_trailer(2 + payload)`.
 pub const MAX_OFFCHAIN_EIP712_TYPED_LEN: usize =
     2 + 32 + 32 + 2 + MAX_OFFCHAIN_EIP712_ENCODED_DATA_LEN
-        + 2 + ERC7730_MAX_TRAILER_LEN;
+        + 2 + ERC7730_LEGACY_BUNDLE_MAX_LEN;
 
 /// Maximum length of the descriptor-selected display-witness stream carried in
 /// the legacy-named `nested_blob` section of an
@@ -1029,7 +1040,7 @@ pub const MAX_OFFCHAIN_EIP712_NESTED_LEN: usize = 2048;
 pub const MAX_OFFCHAIN_EIP712_TYPED_V3_LEN: usize =
     2 + 32 + 32 + 2 + MAX_OFFCHAIN_EIP712_ENCODED_DATA_LEN
         + 2 + MAX_OFFCHAIN_EIP712_NESTED_LEN
-        + 2 + ERC7730_MAX_TRAILER_LEN;
+        + 2 + ERC7730_LEGACY_BUNDLE_MAX_LEN;
 
 /// Maximum input length the gateway will accept for `CMD_SIGN_OFFCHAIN`.
 /// Sized for the largest valid request across all kinds.
@@ -1072,9 +1083,12 @@ pub const OFFCHAIN_KIND_EIP712_TYPED_V3: u8 = 3;
 
 // ─── ERC-7730 clear-signing descriptor trailer ───────────────────────
 //
-// The trailer is the same wire shape consumed by
+// A legacy trailer is the wire shape consumed by
 // `pqsigner_erc7730::bundle::verify_erc7730_bundle`:
 //   ir_len(2 BE) || ir || leaf_index(4 BE) || proof_depth(4 BE) || proof
+// Contract-call signing may instead carry the proof-set envelope:
+//   magic(0xe773) || version(1) || count(2) ||
+//   2 * (legacy_bundle_len(u16 BE) || legacy_bundle)
 // Framed by the dispatcher as `[u16 BE len][payload]` between the
 // self-attest trailer and the names trailer on the sign-input wire.
 
@@ -1088,14 +1102,25 @@ pub const ERC7730_IR_MAX: usize = 4096;
 /// Cap on Merkle proof depth. Mirrors
 /// `pqsigner_erc7730::bundle::MAX_PROOF_DEPTH`.
 pub const ERC7730_PROOF_MAX_DEPTH: usize = 32;
-/// Maximum trailer payload length (the inner bytes inside the
-/// `[u16 BE len]` envelope on the wire). Identical to
+/// Maximum length of one legacy descriptor bundle. Identical to
 /// `pqsigner_erc7730::bundle::MAX_ERC7730_BUNDLE_LEN`.
-pub const ERC7730_MAX_TRAILER_LEN: usize =
+pub const ERC7730_LEGACY_BUNDLE_MAX_LEN: usize =
     2                                  // ir_len prefix
     + ERC7730_IR_MAX
     + 4 + 4                            // leaf_index + proof_depth
     + ERC7730_PROOF_MAX_DEPTH * 32;
+/// Versioned proof-set magic. This cannot prefix a valid legacy bundle because
+/// `0xe773` is greater than [`ERC7730_IR_MAX`].
+pub const ERC7730_PROOF_SET_MAGIC: u16 = 0xe773;
+/// Proof-set envelope syntax version. Independent of
+/// [`ERC7730_TRAILER_VERSION`].
+pub const ERC7730_PROOF_SET_VERSION: u8 = 1;
+/// The first envelope format carries exactly an outer and one distinct child.
+pub const ERC7730_PROOF_SET_COUNT: usize = 2;
+/// Maximum contract-call ERC-7730 trailer payload:
+/// `magic(2) + version(1) + count(1) + 2 * (len(2) + legacy(5130))`.
+pub const ERC7730_MAX_TRAILER_LEN: usize =
+    4 + ERC7730_PROOF_SET_COUNT * (2 + ERC7730_LEGACY_BUNDLE_MAX_LEN);
 
 /// CMD_SIGN_OFFCHAIN response (deployed path): post-bump count then C10
 /// sig. Selected when `OFFCHAIN_FLAG_ACCOUNT_DEPLOYED` is set in the

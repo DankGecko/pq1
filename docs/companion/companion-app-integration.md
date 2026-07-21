@@ -239,7 +239,7 @@ Capability discovery. **Always call first.**
 | Offset | Size | Field             | Notes                                  |
 |--------|------|-------------------|----------------------------------------|
 | 0      | 2    | protocol_version  | u16 BE, currently `0x0202`             |
-| 2      | 3    | fw_version        | major, minor, patch (currently 3.0.0)  |
+| 2      | 3    | fw_version        | placeholder bytes; do not gate features |
 | 5      | 16   | device_uid        | STM32 UID96; zeros on dev builds       |
 | 21     | 4    | capabilities      | u32 BE bitmap (see below)              |
 | 25     | 1    | sig_param_set     | `2` = SPHINCS+C10 (128-bit)            |
@@ -249,9 +249,19 @@ Capability discovery. **Always call first.**
 | 36     | 2    | ep_version        | u16 BE = `0x0006` (EntryPoint v0.6)    |
 | 38     | 2    | wrapper_overhead  | u16 BE = `SIG_TYPE2_HEADER_LEN`     |
 
-**Capability bitmap** — currently advertises `CAP_SIGN_USEROP` only.
-All other legacy flags are zero. Do not rely on individual bits beyond
-this; instead branch on `ep_version` and `sig_param_set`.
+**Capability bitmap:**
+
+| Bit | Constant | Meaning |
+|----:|----------|---------|
+| 0 | `CAP_SIGN_USEROP` | unified UserOperation signing is available |
+| 1 | retired | must remain clear; do not reuse the former slot flag |
+| 2 | `CAP_ERC7730_PROOF_SET` | contract-call ERC-7730 trailers accept the version-1 two-bundle proof-set envelope |
+
+Gate proof-set emission on bit 2 exactly. With the bit clear, send only the
+legacy one-bundle payload even if `fw_version` appears newer. The current
+`fw_version` bytes are a hard-coded placeholder, not the running image's
+identity. Ignore unknown capability bits; continue to branch independently on
+`ep_version` and `sig_param_set` for their respective semantics.
 
 ---
 

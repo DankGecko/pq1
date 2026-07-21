@@ -89,6 +89,48 @@ fn positive_batch_trailer_kind_enum_values_stable() {
 }
 
 #[test]
+fn positive_erc7730_proof_set_caps_match_exact_wire() {
+    assert_eq!(ERC7730_LEGACY_BUNDLE_MAX_LEN, 5_130);
+    assert_eq!(ERC7730_PROOF_SET_MAGIC, 0xe773);
+    assert_eq!(ERC7730_PROOF_SET_VERSION, 1);
+    assert_eq!(ERC7730_PROOF_SET_COUNT, 2);
+    assert_eq!(ERC7730_MAX_TRAILER_LEN, 10_268);
+    assert_eq!(
+        ERC7730_MAX_TRAILER_LEN,
+        4 + ERC7730_PROOF_SET_COUNT * (2 + ERC7730_LEGACY_BUNDLE_MAX_LEN)
+    );
+}
+
+#[test]
+fn positive_device_capabilities_advertise_proof_set_without_reusing_retired_bit() {
+    assert_eq!(CAP_SIGN_USEROP, 1 << 0);
+    assert_eq!(CAP_ERC7730_PROOF_SET, 1 << 2);
+    assert_eq!(DEVICE_CAPABILITIES, (1 << 0) | (1 << 2));
+    assert_eq!(DEVICE_CAPABILITIES & (1 << 1), 0, "bit 1 stays retired");
+}
+
+#[test]
+fn positive_proof_set_negotiation_depends_only_on_capability_bit() {
+    // Companion-side wire selection is deliberately independent of the three
+    // placeholder firmware-version bytes returned by GET_DEVICE_INFO.
+    const PLACEHOLDER_FW_VERSION: [u8; 3] = [0x03, 0x00, 0x00];
+    const FUTURE_LOOKING_FW_VERSION: [u8; 3] = [0xff, 0xff, 0xff];
+    let may_send_proof_set = |capabilities: u32, _fw_version: [u8; 3]| {
+        capabilities & CAP_ERC7730_PROOF_SET != 0
+    };
+
+    assert!(!may_send_proof_set(0, PLACEHOLDER_FW_VERSION));
+    assert!(!may_send_proof_set(
+        CAP_SIGN_USEROP,
+        FUTURE_LOOKING_FW_VERSION,
+    ));
+    assert!(may_send_proof_set(
+        CAP_ERC7730_PROOF_SET,
+        PLACEHOLDER_FW_VERSION,
+    ));
+}
+
+#[test]
 fn positive_max_trailers_per_batch_covers_worst_case() {
     // Realistic worst case: every inner tx carries five live per-tx kinds
     // (ERC-20, COW_ORDER, SAFE_V1, ERC-7730, plus one of
@@ -229,6 +271,14 @@ fn positive_sign_offchain_max_input_bounds_personal_sign() {
     // V3 (nested) is the ceiling — guards against a future refactor that
     // drops it from the SIGN_OFFCHAIN_INPUT_MAX_LEN formula.
     assert!(MAX_OFFCHAIN_EIP712_TYPED_V3_LEN > MAX_OFFCHAIN_EIP712_TYPED_LEN);
+    // Nested calldata proof sets are a contract-call wire capability. The
+    // off-chain EIP-712 kinds retain their exact one-bundle cap rather than
+    // reserving an unused second 5 KiB proof in the shared snapshot.
+    assert_eq!(
+        MAX_OFFCHAIN_EIP712_TYPED_LEN,
+        2 + 32 + 32 + 2 + MAX_OFFCHAIN_EIP712_ENCODED_DATA_LEN
+            + 2 + ERC7730_LEGACY_BUNDLE_MAX_LEN
+    );
 }
 
 #[test]

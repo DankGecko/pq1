@@ -335,11 +335,11 @@ Notes:
 
 ## 5. Bundle assembly
 
-Build the **inner ERC-7730 bundle** first. Each command then places that bundle
-in exactly one command-specific `[u16 BE len][payload]` slot. Do not prefix it
-here and then add another length at the command site. The bundle is what
-`pqsigner_erc7730::bundle::verify_erc7730_bundle`
-parses byte-for-byte:
+Build each **legacy ERC-7730 bundle** first. Each command then places either one
+legacy bundle or, for capability-gated contract calls, the proof-set payload in
+exactly one command-specific `[u16 BE len][payload]` slot. Do not prefix that
+payload here and then add another length at the command site. A legacy bundle
+is what `pqsigner_erc7730::bundle::verify_erc7730_bundle` parses byte-for-byte:
 
 ```
 bundle =
@@ -367,11 +367,37 @@ Trailer size bounds:
 
 - `ir_len` ≤ 4096 (firmware `ERC7730_IR_MAX`)
 - `proof_depth` ≤ 32
-- Total bundle ≤ 4096 + 10 + 32 × 32 = 5130 (firmware
-  `ERC7730_MAX_TRAILER_LEN`)
+- Total legacy bundle ≤ 4096 + 10 + 32 × 32 = 5130 (firmware
+  `ERC7730_LEGACY_BUNDLE_MAX_LEN`)
 
 If your assembled bundle is longer than 5130 B, you've packed the
 wrong thing — re-check `ir_len` against the catalog entry.
+
+Contract-call signing (`SIGN_USEROP` and `SIGN_USEROP_BATCH`) also accepts this
+exact version-1 proof-set envelope when GET_DEVICE_INFO capability bit 2
+(`CAP_ERC7730_PROOF_SET`) is set:
+
+```
+proof_set =
+    u16_be(0xe773)
+ || u8(1)                         // version
+ || u8(2)                         // exact record count
+ || u16_be(outer_bundle_len) || outer_legacy_bundle
+ || u16_be(child_bundle_len) || child_legacy_bundle
+```
+
+The two records are ordered: record 0 authenticates the outer signed call and
+record 1 authenticates its child. Each legacy bundle is independently verified
+against the same firmware root and 5130-byte cap. The complete proof set is at
+most 10268 bytes (`ERC7730_MAX_TRAILER_LEN`) and must end exactly after record
+1. The firmware rejects unknown versions/counts, malformed lengths, trailing
+bytes, and the same authenticated descriptor leaf in both records—even if two
+different proof paths or catalogue indices encode it. Same-descriptor nesting
+uses the legacy one-bundle reuse path.
+
+When capability bit 2 is clear, send only the legacy wire. Never infer proof-set
+support from the placeholder `fw_version` bytes. `SIGN_OFFCHAIN` EIP-712 remains
+legacy-only and must never receive this wrapper.
 
 TypeScript reference (≈ 30 lines):
 
@@ -426,7 +452,7 @@ sign_userop_payload =
  || u16_be(safe_v1_bundle_len)       || safe_v1_bundle   // optional
  || u16_be(selector_bundle_len)      || selector_bundle  // optional
  || u16_be(self_attest_bundle_len)   || self_attest      // optional
- || **u16_be(erc7730_bundle_len)     || erc7730_bundle** // wire-optional; mandatory for direct/non-exempt known calls
+ || **u16_be(erc7730_payload_len)    || erc7730_payload** // legacy or capability-gated proof set
  || names_section                                        // 1-B count + bundles
 ```
 
@@ -465,7 +491,8 @@ names count.
 The atomic multi-UserOp sign command uses the wire-v2 TLV trailer list described
 in [`companion-batch-sign-integration.md`](companion-batch-sign-integration.md).
 Attach one kind-7 `TRAILER_KIND_ERC7730` record per matching member, with that
-member's `tx_idx`. Every firmware-known member needs its own verified proof;
+member's `tx_idx`. Its payload may be one legacy bundle or the capability-gated
+proof set from §5. Every firmware-known member needs its own verified proof;
 omitting any one aborts the whole atomic batch. Emit a zero `trailer_count` byte
 only when the batch has no trailer of any kind; ERC-20, CoW, Safe, selector, or
 name records still count even when no member has an ERC-7730 descriptor.
@@ -502,7 +529,7 @@ payload =
  || u8[32] primary_type_hash            // keccak256(encodeType(primaryType, types))
  || u16_be(encoded_data_len)            // ≤ 512 (MAX_OFFCHAIN_EIP712_ENCODED_DATA_LEN)
  || u8[encoded_data_len] encoded_data   // canonical EIP-712 encodeData body, without typeHash
- || u16_be(trailer_len)                 // ≤ 5130 (ERC7730_MAX_TRAILER_LEN)
+ || u16_be(trailer_len)                 // ≤ 5130 (ERC7730_LEGACY_BUNDLE_MAX_LEN)
  || u8[trailer_len] erc7730_bundle      // inner bundle (§5)
 ```
 
@@ -940,7 +967,7 @@ companion-side.
 | EIP-712 sign with mismatched domain_separator     | Status: `"7730 binding fail"`. NO blind-sign fallback for kind=2 — error returned to dapp.                                                                      |
 | No descriptor for firmware-known contract call    | Hard refusal: `"7730 proof needed"`, unless this is the explicitly supported Safe native ERC-20 path with exact chain/contract-bound Merkle metadata and strict ABI decode. Direct known calls require the descriptor. |
 | No trailer for genuinely unknown contract call    | Generic value/ERC-20/typed/blind ladder remains available (Bloom false positives may conservatively refuse).                                                    |
-| Bundle > 5130 bytes                               | No generic `"erc7730 too big"` status exists. Single-UserOp positional framing reports `"bad erc7730"`; batch reports `"trailer len>cap"`; off-chain typed framing may report a framing or bundle-verification failure. Treat every path as a hard companion error. |
+| Legacy bundle > 5130 bytes, or contract proof set > 10268 bytes | No generic `"erc7730 too big"` status exists. Single-UserOp positional framing reports `"bad erc7730"`; batch reports `"trailer len>cap"`; off-chain typed framing remains legacy-only and may report a framing or bundle-verification failure. Treat every path as a hard companion error. |
 | Verified descriptor lacks the calldata selector   | `RenderErr::NoFormat` → hard refusal. This is a companion/catalog mismatch, never downgrade permission.                                                         |
 | Blob/expected-root pairing differs from firmware's pinned root | EVERY trailer fails `"7730 bundle fail"`. The blob contains no root; release metadata or independent recomputation must establish the expected pairing. |
 | EIP-712 (kind=2) trailer sent for a **contract-context** descriptor | The descriptor cannot render that typed message and the sign refuses. Use kind=2 ONLY for a matching `eip712` descriptor/deployment.                              |
@@ -1019,7 +1046,10 @@ Companion-side pre-release:
       (5e-7730/5e-7730-mismatch), and off-chain typed data (5p). These tests
       call the NSC API directly; separately test USB/APDU framing and the
       production-language catalogue helper.
-- [ ] Trailer assembly produces ≤ 5130 B for every catalog entry.
+- [ ] Every legacy bundle is ≤ 5130 B; every contract proof set is ≤ 10268 B;
+      batch records also fit the unchanged 24 KiB aggregate trailer budget.
+- [ ] Proof sets are emitted only when GET_DEVICE_INFO capability bit 2 is set;
+      no version-string fallback exists, and off-chain typed signs stay legacy-only.
 - [ ] Treat `"7730 bundle fail"`, `"7730 binding fail"`, or
       `"7730 proof needed"` as a hard catalogue/proof error; never retry a
       direct/non-exempt firmware-known call without the trailer. The only

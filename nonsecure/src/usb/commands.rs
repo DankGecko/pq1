@@ -54,8 +54,9 @@ const CHAIN_BUF_LEN_SIGN: usize = SIGN_USEROP_HEADER_LEN
     // CoW order trailer: 2-byte length + canonical + two ERC-20 bundles.
     + 2
     + COW_ORDER_TRAILER_MAX_LEN
-    // ERC-7730 clear-signing descriptor trailer (Phase 3): 2-byte
-    // length + bundle (up to ERC7730_MAX_TRAILER_LEN = 5130 B). Sits
+    // ERC-7730 clear-signing descriptor trailer: 2-byte length plus
+    // either one legacy bundle or a two-bundle proof set (up to
+    // ERC7730_MAX_TRAILER_LEN = 10268 B). Sits
     // between self-attest and names per the wire-format ordering in
     // `docs/archive/handoff-erc7730-phase3.md` §"Canonical wire formats".
     + 2
@@ -184,9 +185,10 @@ const FW_VERSION: [u8; 3] = [0x03, 0x00, 0x00];
 // Capability bits (reported by GET_DEVICE_INFO).
 // ---------------------------------------------------------------------------
 
-const CAP_SIGN_USEROP: u32 = 1 << 0; // the one sign command
 // Bit 1 (CAP_FLASH_NEXT_Q) is retired — post-C10-cutover the firmware
 // is stateless for slot selection; the companion drives rotation.
+// Bit 2 advertises the versioned ERC-7730 proof-set envelope. Both live bits
+// are sourced from pqsigner-proto through sphincs-tz-shared.
 
 // ---------------------------------------------------------------------------
 // Response wrapper
@@ -407,7 +409,7 @@ impl CommandRouter {
         RESP_BUF[p..p + 16].fill(0); // device_uid placeholder
         p += 16;
 
-        let caps = CAP_SIGN_USEROP;
+        let caps = DEVICE_CAPABILITIES;
         RESP_BUF[p..p + 4].copy_from_slice(&caps.to_be_bytes());
         p += 4;
 

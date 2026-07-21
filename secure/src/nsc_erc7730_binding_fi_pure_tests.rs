@@ -15,6 +15,7 @@ const ERC7730_GLUE: &str = include_str!("tx/erc7730.rs");
 const DISPLAY_DISPATCH: &str = include_str!("tx/display/dispatch.rs");
 const ERC7730_DISPLAY_SHIM: &str = include_str!("tx/display/erc7730/mod.rs");
 const SAFE_DISPLAY: &str = include_str!("tx/display/safe_display.rs");
+const NONSECURE_COMMANDS: &str = include_str!("../../nonsecure/src/usb/commands.rs");
 
 fn count_substr(haystack: &str, needle: &str) -> usize {
     haystack.match_indices(needle).count()
@@ -181,6 +182,30 @@ fn every_signing_surface_requires_volatile_verdict_and_caller_cfi() {
         assert!(source.contains("bind_cfi_verdict_a"));
         assert!(source.contains("bind_cfi_verdict_b"));
     }
+}
+
+#[test]
+fn proof_set_routes_only_contract_calls_and_retains_ordered_evidence() {
+    for source in [CMD_SIGN_USEROP, CMD_SIGN_USEROP_BATCH] {
+        assert_eq!(count_substr(source, "verify_erc7730_proof_set("), 1);
+        assert!(source.contains("VerifiedProofSet"));
+        assert!(source.contains("let outer = v.outer;"));
+        assert!(source.contains("outer.raw_bundle"));
+        assert!(source.contains("&outer.descriptor.ir"));
+        assert!(source.contains(".map(|set| &set.outer.descriptor)"));
+    }
+
+    assert_eq!(count_substr(CMD_SIGN_OFFCHAIN, "verify_erc7730_bundle("), 1);
+    assert_eq!(count_substr(CMD_SIGN_OFFCHAIN, "verify_erc7730_proof_set("), 0);
+}
+
+#[test]
+fn get_device_info_advertises_shared_capabilities_not_placeholder_version_policy() {
+    assert!(NONSECURE_COMMANDS.contains("const FW_VERSION: [u8; 3] = [0x03, 0x00, 0x00];"));
+    assert!(NONSECURE_COMMANDS.contains("let caps = DEVICE_CAPABILITIES;"));
+    assert!(NONSECURE_COMMANDS.contains("Companions must NOT key"));
+    assert!(!NONSECURE_COMMANDS.contains("const CAP_SIGN_USEROP"));
+    assert!(!NONSECURE_COMMANDS.contains("const CAP_ERC7730_PROOF_SET"));
 }
 
 #[test]

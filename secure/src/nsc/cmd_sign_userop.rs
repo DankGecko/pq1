@@ -567,9 +567,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
 
     // ── 5a-quinquies. Optional ERC-7730 clear-signing descriptor ───
     //
-    // Wire layout: `[u16 BE len][payload]`, payload is exactly the
-    // bundle format consumed by `pqsigner_erc7730::bundle::verify_erc7730_bundle`:
-    //   ir_len(2 BE) || ir || leaf_index(4 BE) || proof_depth(4 BE) || proof
+    // Wire layout: `[u16 BE len][payload]`. The payload is either one exact
+    // legacy bundle or the capability-gated versioned proof-set envelope. A
+    // proof set retains ordered, zero-copy raw handles for the outer and child
+    // legacy bundles; this slice still renders only the outer descriptor.
     //
     // Verified inline against the firmware-pinned
     // `ERC7730_DESCRIPTORS_ROOT` (Phase 2 emits this root from the
@@ -602,23 +603,23 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     // ERC-7730 tuple, missing verification hard-refuses. Only tuples absent
     // from that filter may continue through the generic typed/blind ladder
     // (Bloom false positives refuse an unknown call, the safe direction).
-    let erc7730_verified: Option<crate::tx::erc7730::VerifiedDescriptor<'_>> = if erc7730_trailer
+    let erc7730_verified: Option<crate::tx::erc7730::VerifiedProofSet<'_>> = if erc7730_trailer
         .len
         > 0
     {
         let bytes = &snap[erc7730_trailer.start..erc7730_trailer.start + erc7730_trailer.len];
-        match crate::tx::erc7730::verify_erc7730_bundle(
+        match crate::tx::erc7730::verify_erc7730_proof_set(
             bytes,
             &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
         ) {
             Ok(v) => {
+                let outer = v.outer;
                 // Caller-owned FI transcript: the non-inlined proof
-                // independently re-verifies this exact bundle/root and
-                // its binding twice, requires both parses to reproduce
-                // `v.ir`, volatile-publishes into a FAIL-initialized slot,
-                // and bumps this caller's CFI counter internally. Skipping
-                // either the first Merkle reject or this whole call cannot
-                // admit an unrooted/mis-bound descriptor.
+                // independently re-verifies the exact outer legacy sub-bundle
+                // and its binding twice, requires both parses to reproduce the
+                // outer IR, volatile-publishes into a FAIL-initialized slot,
+                // and bumps this caller's CFI counter internally. The child is
+                // retained but has no rendering authority in N1.
                 let mut bind_verdict_slot = 0u32;
                 // SAFETY: unique initialized local; volatile so LTO cannot
                 // erase the fail state as dead before the callee overwrite.
@@ -628,8 +629,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
                 let mut bind_cfi = crate::fi::CfiCounter::new();
                 crate::tx::erc7730::prove_contract_binding(
-                    &v.ir,
-                    bytes,
+                    &outer.descriptor.ir,
+                    outer.raw_bundle,
                     &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
                     chain_id,
                     &to_address,
@@ -675,13 +676,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                     } else {
                         #[cfg(feature = "debug-log")]
                         {
-                            let c = &v.ir.contract;
+                            let c = &outer.descriptor.ir.contract;
                             secure_log!(
                                     "[ERC-7730] matched: chain={} contract=0x{:02x}{:02x}{:02x}{:02x}..{:02x}{:02x}{:02x}{:02x} ir_len={}",
-                                    v.ir.chain_id,
+                                    outer.descriptor.ir.chain_id,
                                     c[0], c[1], c[2], c[3],
                                     c[16], c[17], c[18], c[19],
-                                    v.ir.raw.len(),
+                                    outer.descriptor.ir.raw.len(),
                                 );
                         }
                         Some(v)
@@ -1430,7 +1431,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         cow_order_verified.as_ref(),
         safe_v1_verified.as_ref(),
         safe_exec_verified.as_ref(),
-        erc7730_verified.as_ref(),
+        erc7730_verified
+            .as_ref()
+            .map(|set| &set.outer.descriptor),
         chain_verified_meta.as_ref(),
         selector_verified.as_ref(),
         &resolver,

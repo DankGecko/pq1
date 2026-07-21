@@ -1533,7 +1533,8 @@ fn pin_handler_render_and_digest_glue_matches_replication() {
         (
             "let mut pages = match pick_sign_pages( &tx_for_display, inner_data, &sender,
              cow_order_verified.as_ref(), safe_v1_verified.as_ref(), safe_exec_verified.as_ref(),
-             erc7730_verified.as_ref(), chain_verified_meta.as_ref(), selector_verified.as_ref(),
+             erc7730_verified.as_ref().map(|set| &set.outer.descriptor),
+             chain_verified_meta.as_ref(), selector_verified.as_ref(),
              &resolver, &mut dispatch_page_proofs, )",
             "handler §8 render dispatch drifted",
         ),

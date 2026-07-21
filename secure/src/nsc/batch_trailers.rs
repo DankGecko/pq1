@@ -497,18 +497,28 @@ mod tests {
 
     #[test]
     fn refuses_total_payload_budget_exceeded() {
-        // 4 × ERC-7730 (5130 each, one per inner tx) + 1 × Safe v1
-        // (4379) = 24899 B > 24576 B. Refuses the fifth record.
+        // 2 × ERC-7730 proof sets (10268 each) + 1 × Safe v1 (4379)
+        // = 24915 B > 24576 B. Refuses the third record while leaving
+        // the aggregate batch budget unchanged.
         let max_7730 = alloc::vec![0u8; ERC7730_MAX_TRAILER_LEN];
         let max_safe = alloc::vec![0u8; SAFE_V1_PAYLOAD_MAX];
         let snap = build(&[
             (TRAILER_KIND_ERC7730, 0, &max_7730),
             (TRAILER_KIND_ERC7730, 1, &max_7730),
-            (TRAILER_KIND_ERC7730, 2, &max_7730),
-            (TRAILER_KIND_ERC7730, 3, &max_7730),
             (TRAILER_KIND_SAFE_V1, 0, &max_safe),
         ]);
         assert!(parse_all(&snap, 0, snap.len(), 4).is_err());
+    }
+
+    #[test]
+    fn accepts_two_max_proof_sets_within_unchanged_total_budget() {
+        let max_7730 = alloc::vec![0u8; ERC7730_MAX_TRAILER_LEN];
+        let snap = build(&[
+            (TRAILER_KIND_ERC7730, 0, &max_7730),
+            (TRAILER_KIND_ERC7730, 1, &max_7730),
+        ]);
+        let parsed = parse_all(&snap, 0, snap.len(), 2).expect("within 24 KiB budget");
+        assert_eq!(parsed.count, 2);
     }
 
     #[test]

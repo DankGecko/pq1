@@ -23,6 +23,25 @@ pub use pqsigner_erc7730::ir::{
     FormatOp, IrError, PathOp, Visibility, HEADER_LEN, MAX_FIELDS_PER_FORMAT,
     MAX_FORMATS, MAX_IR_LEN, MAX_NESTING, MAX_POOL_ENTRY_LEN, SCHEMA_VER,
 };
+pub use pqsigner_erc7730::proof_set::{
+    ProofSetError, VerifiedBundleRef, VerifiedProofSet, ERC7730_PROOF_SET_COUNT,
+    ERC7730_PROOF_SET_MAGIC, ERC7730_PROOF_SET_VERSION, MAX_ERC7730_PROOF_SET_LEN,
+};
+
+// The protocol crate owns the cross-world wire caps while the pure interpreter
+// owns the parser. Make any drift a build failure rather than accepting more
+// bytes than the verifier can consume (or silently truncating a valid set).
+const _: () = assert!(
+    sphincs_tz_shared::ERC7730_LEGACY_BUNDLE_MAX_LEN == MAX_ERC7730_BUNDLE_LEN
+);
+const _: () =
+    assert!(sphincs_tz_shared::ERC7730_MAX_TRAILER_LEN == MAX_ERC7730_PROOF_SET_LEN);
+const _: () =
+    assert!(sphincs_tz_shared::ERC7730_PROOF_SET_MAGIC == ERC7730_PROOF_SET_MAGIC);
+const _: () =
+    assert!(sphincs_tz_shared::ERC7730_PROOF_SET_VERSION == ERC7730_PROOF_SET_VERSION);
+const _: () =
+    assert!(sphincs_tz_shared::ERC7730_PROOF_SET_COUNT == ERC7730_PROOF_SET_COUNT);
 
 /// Firmware verifier with canonical-index enforcement tied to the generated
 /// root's real leaf count. The generic host verifier intentionally remains
@@ -33,6 +52,20 @@ pub fn verify_erc7730_bundle<'a>(
 ) -> Result<VerifiedDescriptor<'a>, BundleError> {
     pqsigner_erc7730::bundle::verify_erc7730_bundle_with_leaf_count(
         bundle,
+        root,
+        crate::db_roots::ERC7730_DESCRIPTOR_COUNT,
+    )
+}
+
+/// Firmware proof-set verifier with canonical-index enforcement tied to the
+/// generated root's real leaf count. The returned raw handles borrow directly
+/// from the secure-side TOCTOU snapshot.
+pub fn verify_erc7730_proof_set<'a>(
+    payload: &'a [u8],
+    root: &[u8; 32],
+) -> Result<VerifiedProofSet<'a>, ProofSetError> {
+    pqsigner_erc7730::proof_set::verify_erc7730_proof_set_with_leaf_count(
+        payload,
         root,
         crate::db_roots::ERC7730_DESCRIPTOR_COUNT,
     )
