@@ -1,6 +1,6 @@
 ![PQ1](docs/pq1_banner_image.jpg)
 
-# PQSigner OS
+# PQ1
 
 A **post-quantum ERC-4337 hardware wallet** (the **PQ1**) where every primitive that protects the seed — at rest, in transit between chips, in firmware updates, in transaction signing — is a NIST PQC standard or a Grover-resistant symmetric primitive. The secure elements' channel layers (which we cannot replace) are symmetric-rooted — no public-key handshake ever crosses a bus — so even against a future CRQC the strongest attack on recorded traffic is depth-limited Grover key search (NIST Category 1, the same floor as the SPHINCS+C10 signatures themselves).
 
