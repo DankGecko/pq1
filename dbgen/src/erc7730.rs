@@ -69,8 +69,11 @@ use pqsigner_erc7730::render::{
         NestedCalldataExecution, NestedCalldataParentKey, NestedCalleeLocation,
         PRODUCTION_NESTED_CALLDATA_ENROLLMENTS,
     },
+    calldata_topology::{
+        MAX_DYNAMIC_TAILS, TAIL_KIND_BLOB, TAIL_KIND_STATIC_WORD_ARRAY, TOPOLOGY_VERSION,
+    },
     enums::ENUM_DISPLAY_BYTES,
-    params::NFT_COLLECTION_TO_PATH,
+    params::{NFT_COLLECTION_TO_PATH, PARAM_DYNAMIC_TAIL_TOPOLOGY},
     policy::{
         directly_displays_terminal, label_has_visible_glyph, token_path_displays_identity,
         validate_field as validate_field_policy, ParamMask, TerminalKind,
@@ -341,8 +344,9 @@ const PATHOP_ROOT_METADATA: u8 = 0x12;
 const PATHOP_FIELD_IDX: u8 = 0x20;
 // Wire constants for the device-side path bytecode (canonical wire space shared
 // with the on-device `PathOp` enum). In a rendered-VALUE path dbgen emits only
-// ArrayAll (render-all of a sole dynamic array) — single-index / slice / last are
-// refused there (they would hide an array's other elements). ArrayIdx / ArraySlice
+// ArrayAll (render every element of a bounded dynamic array) — single-index /
+// slice / last are refused there (they would hide an array's other elements).
+// ArrayIdx / ArraySlice
 // / ArrayLast ARE emitted, but ONLY inside a `tokenAmount`'s `PARAM_TOKEN_PATH`
 // TLV (token-IDENTITY extraction from a dynamic swap leg — Tier B, see
 // `compile_token_path_extraction`), never in a rendered-value program. Encoding:
@@ -353,8 +357,9 @@ const PATHOP_ARRAY_SLICE: u8 = 0x22;
 const PATHOP_ARRAY_LAST: u8 = 0x23;
 const PATHOP_ARRAY_ALL: u8 = 0x24;
 /// Follow the ABI offset word at the current head slot into the calldata tail
-/// (sole-tail C1 dynamic `bytes`/`string` and Tier-B token extraction). C2
-/// dynamic-tuple descent and C3 multi-dynamic tails are generator-refused.
+/// (dynamic `bytes`/`string` and Tier-B token extraction). Multi-tail formats
+/// authenticate the complete top-level partition separately; C2 dynamic-tuple
+/// descent remains generator-refused.
 /// Device: `render::resolve::resolve_structured`.
 const PATHOP_FOLLOW_OFFSET: u8 = 0x25;
 
@@ -4298,20 +4303,17 @@ fn compile_one_format_with_nested_calldata_enrollments(
         None
     };
 
-    // Runtime can canonically frame one dynamic top-level ABI object as the
-    // sole whole tail (`offset == head_end`, padded end == body end). With two
-    // or more dynamic top-level arguments, offsets/ordering/aliasing require a
-    // complete ABI tail-topology proof that the compact IR does not carry.
-    // Reject the entire format — including hidden fields and tokenPaths — so a
-    // descriptor cannot bypass preflight by making one dynamic object unseen.
-    if context_kind == CTX_CONTRACT {
-        let dynamic_count = top_level_dynamic_arg_count(&parsed)?;
-        if dynamic_count > 1 {
-            return Err(format!(
-                "format `{sig}` has {dynamic_count} dynamic top-level arguments; trusted calldata rendering supports at most one canonically framed whole-tail dynamic object"
-            ));
-        }
-    }
+    // Derive the complete multi-tail topology from the canonical signature,
+    // never from descriptor visibility or the subset of fields that happen to
+    // render. The authenticated field-zero marker lets runtime prove one exact
+    // ordered partition of every tail byte before any trusted page is painted.
+    // Static and sole-tail formats deliberately emit no marker and retain their
+    // byte-identical legacy interpretation.
+    let dynamic_tail_topology = if context_kind == CTX_CONTRACT {
+        derive_dynamic_tail_topology(&parsed).map_err(|error| format!("format `{sig}`: {error}"))?
+    } else {
+        None
+    };
 
     // Audit H-3: refuse to pin a contract-context descriptor that leaves
     // any calldata argument unaccounted for. The on-device renderer can't
@@ -4631,6 +4633,14 @@ fn compile_one_format_with_nested_calldata_enrollments(
         }
     }
 
+    if let Some(topology) = dynamic_tail_topology {
+        let first = compiled
+            .first_mut()
+            .ok_or_else(|| format!("format `{sig}` dynamic-tail topology has no emitted field"))?;
+        first.param_off =
+            pool.append_param_tlv(first.param_off, PARAM_DYNAMIC_TAIL_TOPOLOGY, &topology)?;
+    }
+
     // Emit format header.
     out.extend_from_slice(&selector); // 4 B
     out.push(compiled.len() as u8); // 1 B field_count
@@ -4639,12 +4649,12 @@ fn compile_one_format_with_nested_calldata_enrollments(
                                                              // Schema v4: E1 reconciliation pin — the count of nested-EIP-712 struct
                                                              // descent points (`PARAM_NESTED_STRUCT` v0x03 anchors) the device MUST bind
                                                              // before signing. Independent of the render traversal, so a regression that
-    // makes descent conditional under-consumes and declines. `0` until the
+                                                             // makes descent conditional under-consumes and declines. `0` until the
                                                              // nested-anchor emission lands (next increment) and for every non-nested /
                                                              // contract format.
     out.push(nested_descent_count); // 1 B nested_descent_count
-    // Schema v6: independently derived count of exact EIP-712 string-preimage
-    // records. Contract and unenrolled formats always carry zero.
+                                    // Schema v6: independently derived count of exact EIP-712 string-preimage
+                                    // records. Contract and unenrolled formats always carry zero.
     out.push(string_preimage_count); // 1 B string_preimage_count
     out.extend_from_slice(intent.as_bytes()); // intent_len B
                                               // EIP-712 only: full 32-byte primary-type hash (audit M-5). Contract
@@ -4732,9 +4742,7 @@ fn validate_eip712_string_preimage_format_source(
     parsed: &ParsedFormatKey,
     enrollment: &Eip712StringPreimageEnrollment,
 ) -> Result<u8, String> {
-    if enrollment.fields.is_empty()
-        || enrollment.fields.len() > MAX_EIP712_STRING_PREIMAGES
-    {
+    if enrollment.fields.is_empty() || enrollment.fields.len() > MAX_EIP712_STRING_PREIMAGES {
         return Err(format!(
             "format `{sig}` string-preimage enrollment count {} is outside 1..={MAX_EIP712_STRING_PREIMAGES}",
             enrollment.fields.len()
@@ -5898,11 +5906,7 @@ fn compile_one_field_with_profile(
         }
     }
     if let Some(ordinal) = eip712_string_preimage_ordinal {
-        push_tlv(
-            &mut param_blob,
-            PARAM_EIP712_STRING_PREIMAGE,
-            &[ordinal],
-        )?;
+        push_tlv(&mut param_blob, PARAM_EIP712_STRING_PREIMAGE, &[ordinal])?;
     }
     // Format-level nested-struct marker (see `has_nested_struct` in
     // `compile_one_format`). Parked on the first field; the device rejects
@@ -5996,10 +6000,7 @@ fn compile_flat_fields(
             emit_bare_marker && i == 0,
             allow_packed_v3_path,
             exact_empty_bytes_path.is_some_and(|path| field.path.as_deref() == Some(path)),
-            eip712_string_preimage_ordinal_for_field(
-                eip712_string_preimage_enrollment,
-                field,
-            ),
+            eip712_string_preimage_ordinal_for_field(eip712_string_preimage_enrollment, field),
             nested_calldata_enrollment
                 .is_some_and(|enrollment| enrollment.field_ordinal as usize == i),
         )?;
@@ -8638,8 +8639,8 @@ fn head_slot_words(ty: &str) -> Result<u32, String> {
 }
 
 /// Count top-level ABI arguments whose head word is an offset into the dynamic
-/// tail. The bounded renderer admits at most one such object per contract
-/// format, allowing runtime to prove it owns the entire canonical tail.
+/// tail. Retained for the exact sole-empty-bytes enrollment, whose meaning is
+/// intentionally narrower than generic authenticated multi-tail framing.
 fn top_level_dynamic_arg_count(parsed: &ParsedFormatKey) -> Result<usize, String> {
     let mut count = 0usize;
     for ty in &parsed.top_types {
@@ -8650,6 +8651,78 @@ fn top_level_dynamic_arg_count(parsed: &ParsedFormatKey) -> Result<usize, String
         }
     }
     Ok(count)
+}
+
+/// Derive the authenticated, format-level topology for a bounded multi-tail
+/// contract signature. Records cover every dynamic top-level argument in
+/// canonical argument order, including arguments a descriptor marks hidden.
+///
+/// The legacy zero/one-tail encodings carry no marker. Multi-tail admission is
+/// deliberately narrow: raw blobs (`bytes`/`string`) and dynamic arrays whose
+/// elements are exactly one static ABI word. Tuple-local tails, dynamic array
+/// elements, nested arrays, and fixed arrays containing dynamic values remain
+/// outside this authority and fail closed at build time.
+fn derive_dynamic_tail_topology(parsed: &ParsedFormatKey) -> Result<Option<Vec<u8>>, String> {
+    let mut dynamic = Vec::new();
+    let mut head_slot = 0u32;
+
+    for ty in &parsed.top_types {
+        let width = static_head_words(ty)?;
+        if width == HeadWidth::Dynamic {
+            dynamic.push((head_slot, ty.trim()));
+        }
+        let contribution = match width {
+            HeadWidth::Words(words) => words,
+            HeadWidth::Dynamic => 1,
+        };
+        head_slot = head_slot
+            .checked_add(contribution)
+            .ok_or_else(|| "top-level ABI head width overflow".to_string())?;
+    }
+
+    if dynamic.len() <= 1 {
+        return Ok(None);
+    }
+    if dynamic.len() > MAX_DYNAMIC_TAILS {
+        return Err(format!(
+            "{} dynamic top-level arguments exceed the authenticated topology cap of {MAX_DYNAMIC_TAILS}",
+            dynamic.len()
+        ));
+    }
+
+    let count = u8::try_from(dynamic.len())
+        .map_err(|_| "dynamic top-level argument count overflows u8".to_string())?;
+    let mut payload = Vec::with_capacity(2 + dynamic.len() * 3);
+    payload.push(TOPOLOGY_VERSION);
+    payload.push(count);
+
+    let mut previous_slot = None;
+    for (slot, ty) in dynamic {
+        let slot = u16::try_from(slot)
+            .map_err(|_| format!("dynamic head slot {slot} for `{ty}` overflows u16"))?;
+        if let Some(previous) = previous_slot {
+            if slot <= previous {
+                return Err(format!(
+                    "dynamic head slots are not strictly increasing: {slot} follows {previous}"
+                ));
+            }
+        }
+        previous_slot = Some(slot);
+
+        let kind = if matches!(ty, "bytes" | "string") {
+            TAIL_KIND_BLOB
+        } else if dynamic_array_static_elem(ty).is_some() {
+            TAIL_KIND_STATIC_WORD_ARRAY
+        } else {
+            return Err(format!(
+                "dynamic top-level type `{ty}` at head slot {slot} is unsupported by authenticated multi-tail topology; expected `bytes`, `string`, or `T[]` with one static primitive word"
+            ));
+        };
+        payload.extend_from_slice(&slot.to_be_bytes());
+        payload.push(kind);
+    }
+
+    Ok(Some(payload))
 }
 
 /// Recursively compute a type's ABI static head width. The crux of the
@@ -9084,8 +9157,8 @@ fn compile_structured_contract_path(
             _ => {
                 return Err(
                     "contract calldata path uses array index/slice — unsupported \
-                     (dynamic-tail access; only `<arg>.[]` render-all of a sole \
-                      dynamic array is supported)"
+                     (dynamic-tail access; only `<arg>.[]` render-all of a \
+                      top-level dynamic array is supported)"
                         .to_string(),
                 )
             }
@@ -9140,14 +9213,11 @@ fn compile_structured_contract_path(
                     // to the length-prefixed blob in the tail (reading the SAME
                     // position the contract decodes). Dynamic ARRAYS are rendered
                     // via the `<arg>.[]` (`compile_array_all_path`) route, not
-                    // here; a bare dynamic tuple is not a displayable leaf.
+                    // here; a bare dynamic tuple is not a displayable leaf. A
+                    // multi-tail format separately authenticates and validates
+                    // the complete partition before resolving this path.
                     let t = this_ty.trim();
                     if t == "bytes" || t == "string" {
-                        if top_level_dynamic_arg_count(parsed)? != 1 {
-                            return Err(format!(
-                                "dynamic `{t}` field `{name}` is not the signature's sole dynamic top-level argument"
-                            ));
-                        }
                         out.push(PATHOP_FOLLOW_OFFSET);
                     } else {
                         return Err(format!(
@@ -9306,11 +9376,6 @@ fn compile_token_path_extraction(
 
         // Terminal: the container the extraction reads. Must be dynamic; follow
         // its head-slot offset to the tail region, then emit the extraction op.
-        if top_level_dynamic_arg_count(parsed)? != 1 {
-            return Err(format!(
-                "tokenPath dynamic container `{name}` (`{this_ty}`) is not the signature's sole dynamic top-level argument"
-            ));
-        }
         match extract {
             PathSeg::ArraySlice(_, _) | PathSeg::ArraySliceLast(_) => {
                 if this_ty != "bytes" && this_ty != "string" {
@@ -9391,11 +9456,10 @@ fn compile_token_path_extraction(
 /// Compile a `<arg>.[]` path that renders EVERY element of a top-level
 /// dynamic array of static primitives. Emits `FieldIdx(offset-word-slot) +
 /// ArrayAll`. Refuses unless the array is a top-level `T[]` (T a static
-/// primitive) AND the SOLE dynamic argument of the function — the on-device
-/// renderer then enforces EXACT tail placement (offset == head-end, array ==
-/// the whole tail), which is what makes following the dynamic tail WYSIWYS-
-/// safe without a full ABI walk. Single-index `[i]` / `[-1]` / slices stay
-/// refused (they would hide the array's other elements).
+/// primitive). The on-device renderer either enforces legacy sole-tail framing
+/// or obtains this array's exact interval from an authenticated multi-tail
+/// partition. Single-index `[i]` / `[-1]` / slices stay refused (they would
+/// hide the array's other elements).
 fn compile_array_all_path(
     name_segs: &[PathSeg<'_>],
     parsed: &ParsedFormatKey,
@@ -9424,15 +9488,6 @@ fn compile_array_all_path(
             "array `[]` path field `{name}` (`{this_ty}`) must be a dynamic array of a static \
              primitive (uintN/intN/address/bool/bytesN); nested / dynamic / tuple element arrays \
              are unsupported"
-        ));
-    }
-    // Exact framing requires the rendered array to own the entire ABI tail.
-    // Relaxed multi-dynamic placement cannot prove canonical ordering/aliasing
-    // from compact IR, so C3 is no longer emitted.
-    let dyn_count = top_level_dynamic_arg_count(parsed)?;
-    if dyn_count != 1 {
-        return Err(format!(
-            "array `[]` field `{name}` is one of {dyn_count} dynamic top-level arguments; render-all requires the sole canonical whole tail"
         ));
     }
     // Offset-word slot = sum of preceding args' head widths (the array's one
@@ -11248,8 +11303,7 @@ mod tests {
         let pool_bytes = pool.into_bytes();
         let path_len = pool_bytes[compiled.path_off as usize] as usize;
         assert_eq!(
-            &pool_bytes[compiled.path_off as usize + 1
-                ..compiled.path_off as usize + 1 + path_len],
+            &pool_bytes[compiled.path_off as usize + 1..compiled.path_off as usize + 1 + path_len],
             [PATHOP_ROOT_STRUCT, PATHOP_FIELD_IDX, 0, 0],
             "EIP-712 string paths name the signed hash word directly; they never FollowOffset"
         );
@@ -11360,9 +11414,9 @@ mod tests {
 
         const BAD_FIELDS: [Eip712StringPreimageFieldEnrollment; 1] =
             [Eip712StringPreimageFieldEnrollment {
-            path: "orderId",
-            ordinal: 1,
-        }];
+                path: "orderId",
+                ordinal: 1,
+            }];
         let bad_ordinal_enrollment = Eip712StringPreimageEnrollment {
             fields: &BAD_FIELDS,
             ..*enrollment
@@ -12377,7 +12431,7 @@ mod tests {
 
     #[test]
     fn compile_array_all_gate() {
-        // ACCEPT: `<arg>.[]` render-all on a SOLE top-level dynamic array of a
+        // ACCEPT: `<arg>.[]` render-all on a top-level dynamic array of a
         // static primitive → FieldIdx(offset-slot) + ArrayAll.
         let p = parse_format_key("requestWithdrawals(uint256[] _amounts, address _owner)").unwrap();
         let prog = compile_path("_amounts.[]", CTX_CONTRACT, &p).unwrap();
@@ -12401,13 +12455,13 @@ mod tests {
             "last"
         );
 
-        // REFUSE C3: an array that is NOT the sole dynamic arg cannot prove
-        // canonical tail ordering/aliasing from compact IR.
+        // Multi-tail keeps the exact same field-local program. Runtime obtains
+        // the array interval from the separately authenticated topology; dbgen
+        // must not invent a FollowOffset+ArrayAll dialect.
         let two_dyn = parse_format_key("f(uint256[] a, bytes b)").unwrap();
-        assert!(
-            compile_path("a.[]", CTX_CONTRACT, &two_dyn).is_err(),
-            "C3 multi-dynamic array"
-        );
+        let multi_prog = compile_path("a.[]", CTX_CONTRACT, &two_dyn).unwrap();
+        assert_eq!(multi_prog, prog);
+        assert!(!multi_prog.contains(&PATHOP_FOLLOW_OFFSET));
 
         // REFUSE: dynamic element type (`string[]`) and nested array (`uint256[][]`).
         let dyn_elem = parse_format_key("f(string[] xs)").unwrap();
@@ -12435,22 +12489,98 @@ mod tests {
     }
 
     #[test]
-    fn contract_dynamic_framing_rejects_multi_tail_and_c2() {
-        let multi = parse_format_key("f(string text,bytes payload)").unwrap();
-        assert!(compile_path("text", CTX_CONTRACT, &multi).is_err());
-        assert!(compile_token_path("payload.[0:20]", CTX_CONTRACT, &multi).is_err());
+    fn dynamic_tail_topology_derives_exact_blob_payload() {
+        let parsed = parse_format_key("f(bytes payload,string note)").unwrap();
+        assert_eq!(
+            derive_dynamic_tail_topology(&parsed).unwrap(),
+            Some(vec![
+                TOPOLOGY_VERSION,
+                2,
+                0,
+                0,
+                TAIL_KIND_BLOB,
+                0,
+                1,
+                TAIL_KIND_BLOB,
+            ])
+        );
 
+        for legacy in ["f(uint256 value)", "f(string note)"] {
+            let parsed = parse_format_key(legacy).unwrap();
+            assert_eq!(
+                derive_dynamic_tail_topology(&parsed).unwrap(),
+                None,
+                "static and sole-tail formats must not gain a marker: {legacy}"
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_tail_topology_uses_absolute_slots_and_mixed_kinds() {
+        // bytes occupies slot 0; the fixed array spans slots 1..3; address[]
+        // therefore occupies offset slot 3 and the final string slot 4.
+        let parsed = parse_format_key(
+            "f(bytes payload,uint256[2] fixedWords,address[] recipients,string note)",
+        )
+        .unwrap();
+        assert_eq!(
+            derive_dynamic_tail_topology(&parsed).unwrap(),
+            Some(vec![
+                TOPOLOGY_VERSION,
+                3,
+                0,
+                0,
+                TAIL_KIND_BLOB,
+                0,
+                3,
+                TAIL_KIND_STATIC_WORD_ARRAY,
+                0,
+                4,
+                TAIL_KIND_BLOB,
+            ])
+        );
+    }
+
+    #[test]
+    fn dynamic_tail_topology_caps_count_and_rejects_unsupported_kinds() {
+        let too_many = parse_format_key("f(bytes a,string b,bytes c,string d,bytes e)").unwrap();
+        let error =
+            derive_dynamic_tail_topology(&too_many).expect_err("cap plus one must fail closed");
+        assert!(
+            error.contains("5 dynamic top-level arguments") && error.contains("topology cap"),
+            "unexpected cap refusal: {error}"
+        );
+
+        for signature in [
+            "f(bytes a,(uint256 value,bytes note) cfg)",
+            "f(bytes a,bytes[] values)",
+            "f(bytes a,uint256[][] values)",
+            "f(bytes a,bytes[2] values)",
+            "f(bytes a,(uint256 value,address owner)[] values)",
+        ] {
+            let parsed = parse_format_key(signature).unwrap();
+            let error = derive_dynamic_tail_topology(&parsed)
+                .expect_err("unsupported dynamic kind must fail closed");
+            assert!(
+                error.contains("unsupported by authenticated multi-tail topology"),
+                "unexpected refusal for {signature}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn compiler_emits_multi_tail_marker_only_on_field_zero() {
         let fmt = fmt_from_fields(
             r#"[
-                {"path":"text","label":"Text","format":"raw"},
-                {"path":"payload","label":"Payload","format":"raw","visible":"never"}
+                {"path":"first","label":"First","format":"raw"},
+                {"path":"second","label":"Second","format":"raw"}
             ]"#,
         );
         let mut ctx = test_ctx();
         let mut pool = Pool::new();
         let mut out = Vec::new();
-        let err = compile_one_format(
-            "f(string text,bytes payload)",
+        compile_one_format(
+            "f(string first,string second)",
             &fmt,
             CTX_CONTRACT,
             &mut ctx,
@@ -12459,12 +12589,57 @@ mod tests {
             &mut out,
             None,
         )
-        .expect_err("format-level preflight must include hidden dynamic fields");
-        assert!(
-            err.contains("2 dynamic top-level arguments")
-                && err.contains("at most one canonically framed whole-tail"),
-            "unexpected multi-tail refusal: {err}"
+        .expect("supported two-tail format compiles");
+        let offsets = contract_format_param_offsets(&out);
+        let expected = [
+            TOPOLOGY_VERSION,
+            2,
+            0,
+            0,
+            TAIL_KIND_BLOB,
+            0,
+            1,
+            TAIL_KIND_BLOB,
+        ];
+        assert_eq!(
+            find_tlv(&pool, offsets[0], PARAM_DYNAMIC_TAIL_TOPOLOGY),
+            Some(expected.as_slice())
         );
+        assert_eq!(
+            find_tlv(&pool, offsets[1], PARAM_DYNAMIC_TAIL_TOPOLOGY),
+            None,
+            "the format-level marker is placement-pinned to field zero"
+        );
+
+        let sole_fmt = fmt_from_fields(r#"[{"path":"only","label":"Only","format":"raw"}]"#);
+        let mut sole_pool = Pool::new();
+        let mut sole_out = Vec::new();
+        compile_one_format(
+            "f(string only)",
+            &sole_fmt,
+            CTX_CONTRACT,
+            &mut test_ctx(),
+            &mut sole_pool,
+            &BTreeMap::new(),
+            &mut sole_out,
+            None,
+        )
+        .expect("legacy sole-tail format compiles");
+        let sole_offsets = contract_format_param_offsets(&sole_out);
+        assert_eq!(
+            find_tlv(&sole_pool, sole_offsets[0], PARAM_DYNAMIC_TAIL_TOPOLOGY),
+            None,
+            "legacy sole-tail output must not carry the new marker"
+        );
+    }
+
+    #[test]
+    fn multi_tail_paths_reuse_bounded_ops_but_c2_and_value_indexes_stay_refused() {
+        let multi = parse_format_key("f(string text,address[] route)").unwrap();
+        assert!(compile_path("text", CTX_CONTRACT, &multi).is_ok());
+        assert!(compile_token_path("route.[-1]", CTX_CONTRACT, &multi).is_ok());
+        assert!(compile_path("route.[]", CTX_CONTRACT, &multi).is_ok());
+        assert!(compile_path("route[0]", CTX_CONTRACT, &multi).is_err());
 
         let c2 =
             parse_format_key("setConfig((uint256 amount,address token,bytes note) cfg)").unwrap();
@@ -13910,8 +14085,8 @@ mod tests {
                 &BTreeMap::new(),
                 None,
             )
-                .expect("unsupported rank must fail closed, not error in the emitter")
-                .is_none(),
+            .expect("unsupported rank must fail closed, not error in the emitter")
+            .is_none(),
             "the independent emitter backstop must not produce an active v0x03 anchor"
         );
 
@@ -13997,8 +14172,8 @@ mod tests {
                 &BTreeMap::new(),
                 None,
             )
-                .expect("the nested emitter must fail closed without a build error")
-                .is_none(),
+            .expect("the nested emitter must fail closed without a build error")
+            .is_none(),
             "an array hashStruct word must never lower as a token address"
         );
         assert!(
@@ -14293,12 +14468,10 @@ mod tests {
                 serde_json::Value::String("unsupported".to_string()),
             );
             extra_semantics.fields[1].params = Some(serde_json::Value::Object(params));
-            let error = compile_nested_calldata_fixture(
-                &extra_semantics,
-                TEST_NESTED_CALLDATA_ENROLLMENTS,
-            )
-            .err()
-            .unwrap_or_else(|| panic!("nested semantic `{forbidden}` is outside N2"));
+            let error =
+                compile_nested_calldata_fixture(&extra_semantics, TEST_NESTED_CALLDATA_ENROLLMENTS)
+                    .err()
+                    .unwrap_or_else(|| panic!("nested semantic `{forbidden}` is outside N2"));
             assert!(error.contains("only mandatory calleePath"), "{error}");
         }
 
@@ -15060,10 +15233,7 @@ mod tests {
                 assert_eq!(path[0], PATHOP_ROOT_STRUCT);
                 assert_eq!(path[1], PATHOP_FIELD_IDX);
                 assert!(!path.contains(&PATHOP_FOLLOW_OFFSET));
-                marked.push((
-                    evidence_ordinal,
-                    u16::from_be_bytes([path[2], path[3]]),
-                ));
+                marked.push((evidence_ordinal, u16::from_be_bytes([path[2], path[3]])));
             }
             assert_eq!(
                 marked,
