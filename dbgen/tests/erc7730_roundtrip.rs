@@ -301,6 +301,180 @@ fn registry_allowance_threshold_curations_are_structurally_exact() {
 }
 
 #[test]
+fn registry_celo_election_vote_is_mainnet_only_and_alfajores_stays_known() {
+    let root = workspace_root();
+    let relative = "registry/celo/calldata-celo_election.json";
+    let curated = std::fs::read(
+        root.join("secure/data/erc7730/curations/files")
+            .join(relative),
+    )
+    .expect("read curated Celo Election descriptor");
+    let installed = std::fs::read(root.join("secure/data/erc7730-registry").join(relative))
+        .expect("read installed Celo Election descriptor");
+    assert_eq!(
+        installed, curated,
+        "installed Celo Election descriptor diverged from its receipted curation"
+    );
+
+    let catalogue = build_registry();
+    let mainnet_contract: [u8; 20] = hex::decode("8d6677192144292870907e3fa8a5527fe55a7ff6")
+        .expect("valid Celo mainnet Election address")
+        .try_into()
+        .expect("Celo mainnet Election address width");
+    let alfajores_contract: [u8; 20] = hex::decode("1c3edf937cfc2f6f51784d20deb1af1f9a8655fa")
+        .expect("valid Alfajores Election address")
+        .try_into()
+        .expect("Alfajores Election address width");
+    let election_entries: Vec<_> = catalogue
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-celo_election.json")
+        })
+        .collect();
+    assert_eq!(
+        election_entries
+            .iter()
+            .map(|entry| (entry.chain_id, entry.contract))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            (42_220u64, mainnet_contract),
+            (44_787u64, alfajores_contract),
+        ]),
+        "curation must preserve exactly the two declared Election deployments"
+    );
+
+    let selector_for = |signature: &str| {
+        let hash = keccak256(signature.as_bytes());
+        <[u8; 4]>::try_from(&hash[..4]).expect("Election selector width")
+    };
+    let activate_selector = selector_for("activate(address)");
+    let activate_for_selector = selector_for("activateForAccount(address,address)");
+    let vote_selector = selector_for("vote(address,uint256,address,address)");
+    assert_eq!(activate_selector, [0x1c, 0x5a, 0x9d, 0x9c]);
+    assert_eq!(activate_for_selector, [0xc1, 0x44, 0x70, 0xc4]);
+    assert_eq!(vote_selector, [0x58, 0x0d, 0x74, 0x7a]);
+
+    let find_entry = |chain_id: u64, contract: [u8; 20]| {
+        election_entries
+            .iter()
+            .copied()
+            .find(|entry| entry.chain_id == chain_id && entry.contract == contract)
+            .unwrap_or_else(|| panic!("missing Election leaf for chain {chain_id}"))
+    };
+    let mainnet_entry = find_entry(42_220, mainnet_contract);
+    let alfajores_entry = find_entry(44_787, alfajores_contract);
+    let mainnet_ir = Erc7730Ir::parse(&mainnet_entry.ir_bytes).expect("mainnet Election IR parses");
+    let alfajores_ir =
+        Erc7730Ir::parse(&alfajores_entry.ir_bytes).expect("Alfajores Election IR parses");
+
+    let mainnet_formats: BTreeSet<_> = mainnet_ir
+        .format_iter()
+        .map(|format| format.expect("mainnet Election format parses").selector)
+        .collect();
+    assert_eq!(
+        mainnet_formats,
+        BTreeSet::from([activate_selector, activate_for_selector, vote_selector]),
+        "mainnet must add only vote beside the two existing activation routes"
+    );
+    let alfajores_formats: BTreeSet<_> = alfajores_ir
+        .format_iter()
+        .map(|format| format.expect("Alfajores Election format parses").selector)
+        .collect();
+    assert_eq!(
+        alfajores_formats,
+        BTreeSet::from([activate_selector, activate_for_selector]),
+        "Alfajores must preserve exactly its two existing activation routes"
+    );
+    assert!(
+        alfajores_ir
+            .find_format_by_selector(&vote_selector)
+            .expect("Alfajores Election format table parses")
+            .is_none(),
+        "Alfajores vote must remain absent so runtime resolves it as NoFormat"
+    );
+
+    let vote = mainnet_ir
+        .find_format_by_selector(&vote_selector)
+        .expect("mainnet Election format table parses")
+        .expect("mainnet Election vote is admitted");
+    assert_eq!(vote.intent, b"Vote");
+    assert_eq!(vote.static_head_words, 4);
+    let vote_fields: Vec<_> = vote
+        .fields()
+        .map(|field| field.expect("mainnet Election vote field parses"))
+        .collect();
+    assert_eq!(vote_fields.len(), 4);
+    let expected = [
+        (b"Validator Group".as_slice(), FormatOp::AddressName),
+        (b"CELO to Vote".as_slice(), FormatOp::Amount),
+        (b"Fewer-Vote Hint".as_slice(), FormatOp::AddressName),
+        (b"More-Vote Hint".as_slice(), FormatOp::AddressName),
+    ];
+    for (index, (field, (label, op))) in vote_fields.iter().zip(expected).enumerate() {
+        assert_eq!(field.label, label);
+        assert_eq!(FormatOp::try_from(field.format_op), Ok(op));
+        assert_eq!(
+            mainnet_ir
+                .path_bytes(field.path_off)
+                .expect("Election vote field path parses"),
+            [
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                u8::try_from(index).expect("Election vote field index fits u8"),
+            ],
+            "Election vote field order/path drifted at ordinal {index}"
+        );
+        let params =
+            parse_params(&mainnet_ir, field.param_off).expect("Election vote params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+        if index == 1 {
+            assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+            assert_eq!(params.integer_width_bytes, Some(32));
+            assert!(params.addr_types.is_none());
+        } else {
+            assert_eq!(params.terminal_kind, Some(TerminalKind::Address));
+            assert_eq!(
+                params.addr_types,
+                Some(0x06),
+                "group and both sorted-list hints must retain exact full-address rendering"
+            );
+            assert!(params.integer_width_bytes.is_none());
+        }
+    }
+
+    for (entry, selectors) in [
+        (
+            mainnet_entry,
+            [activate_selector, activate_for_selector, vote_selector].as_slice(),
+        ),
+        (alfajores_entry, [vote_selector].as_slice()),
+    ] {
+        for selector in selectors {
+            assert!(
+                catalogue
+                    .known_calls
+                    .contains(&(entry.chain_id, entry.contract, *selector)),
+                "Election selector left the exact known-call inventory on chain {}",
+                entry.chain_id
+            );
+            assert!(
+                known_call_may_contain(
+                    &catalogue.known_calls_bloom,
+                    entry.chain_id,
+                    &entry.contract,
+                    selector,
+                ),
+                "Election selector left the fail-closed Bloom on chain {}",
+                entry.chain_id
+            );
+        }
+    }
+}
+
+#[test]
 fn registry_morpho_blue_assets_bind_the_signed_market_token_on_both_chains() {
     let root = workspace_root();
     let relative = "registry/morpho/calldata-MorphoBlue.json";
@@ -681,7 +855,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.root),
-        "41ae7d87893c5bd14f478ef2e0a22a05831283df677f3f581895833bc8eab551"
+        "9844ab43597e196adc3ffbe6577f7864a0069150393eee96ee3f0f4d75e8a5ca"
     );
 }
 

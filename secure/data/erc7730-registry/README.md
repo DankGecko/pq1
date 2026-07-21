@@ -6,7 +6,7 @@ The exact commit/tree and curation-manifest identity are machine-owned by the
 managed receipt below; they are not duplicated in hand-maintained prose. The
 checked-in corpus is **not byte-identical to that upstream revision**: the
 firmware-pinned `ERC7730_DESCRIPTORS_ROOT` is derived from the upstream baseline
-plus the 35 reviewed full-file replacements listed below, under
+plus the 36 reviewed full-file replacements listed below, under
 `secure/data/erc7730/policy.toml`. The strict manifest at
 `secure/data/erc7730/curations/manifest.json` binds the upstream repository,
 commit, tree, v2 schema, pristine/excluded/curated corpus receipts, policy,
@@ -43,13 +43,13 @@ tuple-set SHA-256, and Bloom bytes. Merkle-root or Bloom equality alone is not
 accepted as a faithfulness proof.
 
 <!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
-Checked-in curated receipt, verified against a fresh build by `--check`: **451 leaves**, **386,982-byte**
+Checked-in curated receipt, verified against a fresh build by `--check`: **451 leaves**, **387,092-byte**
 compiled companion catalogue, root
-`41ae7d87893c5bd14f478ef2e0a22a05831283df677f3f581895833bc8eab551`,
+`9844ab43597e196adc3ffbe6577f7864a0069150393eee96ee3f0f4d75e8a5ca`,
 **4,552** canonical known-call tuples, tuple-set SHA-256
 `0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9`.
 Curation manifest SHA-256
-`073276cb021ed8ca68791c61f8e0a622950e6bffa2514a683e6089bcfb1dd38d` binds upstream commit
+`f5b72f86aa01ef6af5b45db4dc208da132cc7c2b55302e74b168f0a55e4db5b6` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
 Manifest v3 authorizes exactly **10** curation-added known-call tuples and no deletions.
@@ -62,12 +62,13 @@ the machine-checked source/overlay identities live in the curation manifest,
 while the generated catalogue authority remains in the artifacts and managed
 receipt above.
 
-Current reviewed full-file replacements (35):
+Current reviewed full-file replacements (36):
 
 - `ercs/calldata-erc20-tokens.json`
 - `registry/aave/calldata-WrappedTokenGatewayV3.json`
 - `registry/aave/calldata-lpv2.json`
 - `registry/aave/calldata-lpv3.json`
+- `registry/celo/calldata-celo_election.json`
 - `registry/celo/calldata-locked_celo.json`
 - `registry/flyingtulip/calldata-PftNft.json`
 - `registry/flyingtulip/calldata-PositionsManager.json`

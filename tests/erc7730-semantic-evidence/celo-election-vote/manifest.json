@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "scope": "Celo Election vote(address,uint256,address,address) at the Registry-selected mainnet proxy",
+  "captured_at_utc": "2026-07-21T04:51:19Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
+  "boundary": "Historical fixed-block evidence admits vote only for Celo mainnet. It does not monitor future upgrades or authorize vote on legacy Alfajores, blind signing, hardware, shipment, or transaction-success claims.",
+  "descriptor": {
+    "vendored_file": "secure/data/erc7730-registry/registry/celo/calldata-celo_election.json",
+    "curation_overlay": "secure/data/erc7730/curations/files/registry/celo/calldata-celo_election.json",
+    "file_sha256": "5340d986a06e1f20e816fc1c4626f9f15430cfa2e114af0090d6a85ea64e7e88",
+    "upstream_sha256": "a4adc06d56600e19740174f2d3d05c20906c0226f5ac2c6048f9d4b6ea16bbff",
+    "deployments": [
+      {
+        "chain_id": 42220,
+        "address": "0x8D6677192144292870907E3Fa8A5527fE55A7ff6",
+        "admitted_formats": [
+          "activate(address)",
+          "activateForAccount(address,address)",
+          "vote(address,uint256,address,address)"
+        ],
+        "refused_formats": [
+          "revokeActive(address,uint256,address,address,uint256)",
+          "revokeAllActive(address,address,address,uint256)",
+          "revokePending(address,uint256,address,address,uint256)"
+        ]
+      },
+      {
+        "chain_id": 44787,
+        "address": "0x1c3eDf937CFc2F6F51784D20DEB1af1F9a8655fA",
+        "admitted_formats": [
+          "activate(address)",
+          "activateForAccount(address,address)"
+        ],
+        "refused_formats": [
+          "revokeActive(address,uint256,address,address,uint256)",
+          "revokeAllActive(address,address,address,uint256)",
+          "revokePending(address,uint256,address,address,uint256)",
+          "vote(address,uint256,address,address)"
+        ]
+      }
+    ]
+  },
+  "fixed_block": {
+    "chain_id": 42220,
+    "number": 72649728,
+    "number_hex": "0x4548c00",
+    "hash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+    "parent_hash": "0x98df262766665ba08ac9c3e9fb67c907f0e2ab7e5a9be6721e728a69afd63d24",
+    "state_root": "0x16ef9a83ecb75fd3214684fe2a8c9a2ff91a60a483d1eff5886b9a55b10ae855",
+    "timestamp": 1784550486,
+    "timestamp_utc": "2026-07-20T12:28:06Z"
+  },
+  "contracts": {
+    "registry": "0x000000000000000000000000000000000000ce10",
+    "registry_key": "Election",
+    "registry_lookup_selector": "0x853db323",
+    "proxy": "0x8D6677192144292870907E3Fa8A5527fE55A7ff6",
+    "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+    "implementation": "0x74f9e5ee4071b9b35d127000a20f8e964009cb57"
+  },
+  "rpc": {
+    "requests": [
+      { "batch": "identity", "artifact": "rpc/raw/request-identity.json" },
+      { "batch": "proxy", "artifact": "rpc/raw/request-proxy.json" },
+      { "batch": "implementation", "artifact": "rpc/raw/request-implementation.json" }
+    ],
+    "providers": [
+      {
+        "name": "Celo Forno",
+        "url": "https://forno.celo.org",
+        "responses": [
+          { "batch": "identity", "artifact": "rpc/raw/response-forno-identity.json" },
+          { "batch": "proxy", "artifact": "rpc/raw/response-forno-proxy.json" },
+          { "batch": "implementation", "artifact": "rpc/raw/response-forno-implementation.json" }
+        ]
+      },
+      {
+        "name": "dRPC",
+        "url": "https://celo.drpc.org",
+        "responses": [
+          { "batch": "identity", "artifact": "rpc/raw/response-drpc-identity.json" },
+          { "batch": "proxy", "artifact": "rpc/raw/response-drpc-proxy.json" },
+          { "batch": "implementation", "artifact": "rpc/raw/response-drpc-implementation.json" }
+        ]
+      },
+      {
+        "name": "Ankr",
+        "url": "https://rpc.ankr.com/celo",
+        "responses": [
+          { "batch": "identity", "artifact": "rpc/raw/response-ankr-identity.json" },
+          { "batch": "proxy", "artifact": "rpc/raw/response-ankr-proxy.json" },
+          { "batch": "implementation", "artifact": "rpc/raw/response-ankr-implementation.json" }
+        ]
+      }
+    ]
+  },
+  "runtimes": {
+    "proxy": {
+      "artifact": "runtime/ElectionProxy.celo-mainnet.hex",
+      "bytes": 2585,
+      "decoded_sha256": "a61442fd4c5488d47304b69f1095df7d43f84452c6ec167240aedad24b15b07e",
+      "keccak256": "0xd08fc44496e675c5f17cc64fbfa66a7267f709a2a5040cd794c9286eabc30555"
+    },
+    "implementation": {
+      "artifact": "runtime/Election.implementation.celo-mainnet.hex",
+      "bytes": 47571,
+      "decoded_sha256": "d66474681b8923edb1b0b9e6ecc70d83e65b275af05cd2b410d7ec10c2c73694",
+      "keccak256": "0xc6136fb57faf25134ba0d322b25044261211b90e0d656449399773a1637ad841"
+    }
+  },
+  "blockscout": {
+    "proxy": {
+      "artifact": "blockscout/ElectionProxy.json",
+      "name": "AccountsProxy",
+      "verification": "partial",
+      "proxy_type": "eip1967"
+    },
+    "implementation": {
+      "artifact": "blockscout/Election.implementation.json",
+      "name": "Election",
+      "verification": "partial",
+      "compiler": "v0.5.14+commit.01f1aaa4",
+      "evm_version": "istanbul"
+    }
+  },
+  "official_source": {
+    "repository": "https://github.com/celo-org/celo-monorepo",
+    "commit": "045aa0061b7d0e9655ff3673cbd25a1bf2b4b74a",
+    "tree": "7118b9c76adcb7aa9afd844d4c2986f19055afb1",
+    "files": [
+      { "artifact": "source/Election.sol", "upstream": "packages/protocol/contracts/governance/Election.sol" },
+      { "artifact": "source/Accounts.sol", "upstream": "packages/protocol/contracts/common/Accounts.sol" },
+      { "artifact": "source/GoldToken.sol", "upstream": "packages/protocol/contracts/common/GoldToken.sol" },
+      { "artifact": "source/LockedGold.sol", "upstream": "packages/protocol/contracts/governance/LockedGold.sol" },
+      { "artifact": "source/Registry.sol", "upstream": "packages/protocol/contracts/common/Registry.sol" },
+      { "artifact": "source/AddressSortedLinkedList.sol", "upstream": "packages/protocol/contracts/common/linkedlists/AddressSortedLinkedList.sol" },
+      { "artifact": "source/SortedLinkedList.sol", "upstream": "packages/protocol/contracts/common/linkedlists/SortedLinkedList.sol" }
+    ]
+  },
+  "deployment_sources": {
+    "current_core_contracts": "deployment/core-contracts.md",
+    "current_testnet_policy": "deployment/celo-sepolia.md",
+    "official_org_mcp_commit": "f398d1de5bdb7c810eeb6c3d225a4ba1a27bc162",
+    "official_org_mcp_addresses": "deployment/contracts.py"
+  },
+  "abi": {
+    "artifact": "abi/Election.vote.abi.json",
+    "canonical_signature": "vote(address,uint256,address,address)",
+    "selector": "0x580d747a",
+    "state_mutability": "nonpayable",
+    "returns": "bool"
+  },
+  "semantics": {
+    "group": "eligible validator-group account whose pending and total vote values increase",
+    "value": "18-decimal native CELO moved from the effective account's non-voting locked balance into pending votes",
+    "lesser": "sorted-list key for a group with fewer votes, or zero at the boundary; not a recipient",
+    "greater": "sorted-list key for a group with more votes, or zero at the boundary; not a recipient",
+    "caller": "msg.sender resolves through Accounts.voteSignerToAccount; the live effective account can differ from the immediate caller",
+    "success_residual": "eligibility, capacity, signer authorization, group-count policy, balance, and hint validity remain live-state preconditions"
+  },
+  "alfajores_residual": {
+    "chain_id": 44787,
+    "descriptor_address": "0x1c3eDf937CFc2F6F51784D20DEB1af1F9a8655fA",
+    "address_corroboration": "official-org celo-mcp pinned configuration",
+    "current_policy": "Celo Sepolia replaced Alfajores and starts with fresh state",
+    "fixed_block_rpc_authority": false,
+    "runtime_authority": false,
+    "source_authority": false,
+    "vote_admitted": false
+  },
+  "artifacts": [
+    { "path": "README.md", "sha256": "34c989160e24b688afb5669f0961acd499cd82d09593578ae11c4dad6ea58496" },
+    { "path": "abi/Election.vote.abi.json", "sha256": "1b5e9932664f17793e5a7bd5fc620149419579339681bd1277f4c274843c64e8" },
+    { "path": "blockscout/Election.implementation.json", "sha256": "cd1d86575417deb13fe48583e642d6eec33946f94f1318a83eb5109e0d3b4cb6" },
+    { "path": "blockscout/ElectionProxy.json", "sha256": "a93a18df727a04f44a673d65ba112ee5e8e99fc65589bbbed1604a06d5456b86" },
+    { "path": "collect.sh", "sha256": "1c8efca807dc6f6e27d6dc95be742e837f85d00aa3d0155639e9ef6f11be4c9f" },
+    { "path": "deployment/celo-sepolia.md", "sha256": "14429e2b330100f7da8d562d00eb160736e3bc4fecc43883b445b661ab3927b2" },
+    { "path": "deployment/contracts.py", "sha256": "70c786dbd11d13c56565a08903ea0273b5e524565736c55262d85e8b3b636e87" },
+    { "path": "deployment/core-contracts.md", "sha256": "71e46c0c7e7cea57b7561f89adf12f83567ce77ed04dbc1f7ca4b2f78c1ce399" },
+    { "path": "rpc/raw/request-identity.json", "sha256": "07a10fb013a75a084fbe8be0f73b3b04ba5d276a06d695eea5c7b88767b0b1c3" },
+    { "path": "rpc/raw/request-implementation.json", "sha256": "9f96efe3b081668edb06a69a467f3fbb81ae68df6e84904eb9b71f39e94ec8ae" },
+    { "path": "rpc/raw/request-proxy.json", "sha256": "5319aca5c95a3dc680b958fe32b74cc260e7322c851b1af52731ff667833846a" },
+    { "path": "rpc/raw/response-ankr-identity.json", "sha256": "97df292dfc0c1d7103cc471f45a55cc20eaf67f3f7a2c9882705241156e51b28" },
+    { "path": "rpc/raw/response-ankr-implementation.json", "sha256": "dc363db139508b9522763d5999182007ac01dd08bfc3ef539634025cf24d1c0d" },
+    { "path": "rpc/raw/response-ankr-proxy.json", "sha256": "86d5efd4c428c1d896f71cd7d28a5b6865703556143b7a94ff74880325704ade" },
+    { "path": "rpc/raw/response-drpc-identity.json", "sha256": "97df292dfc0c1d7103cc471f45a55cc20eaf67f3f7a2c9882705241156e51b28" },
+    { "path": "rpc/raw/response-drpc-implementation.json", "sha256": "dc363db139508b9522763d5999182007ac01dd08bfc3ef539634025cf24d1c0d" },
+    { "path": "rpc/raw/response-drpc-proxy.json", "sha256": "86d5efd4c428c1d896f71cd7d28a5b6865703556143b7a94ff74880325704ade" },
+    { "path": "rpc/raw/response-forno-identity.json", "sha256": "976ef2daa5c9eb912df87aa19f13b76585366d5b9953c9f7f3fa08262330493a" },
+    { "path": "rpc/raw/response-forno-implementation.json", "sha256": "89853588dd9f47f3814fdb9825b907d159cf5bcd463d405c11996b022b44310e" },
+    { "path": "rpc/raw/response-forno-proxy.json", "sha256": "c9c2b820364af40a9d1a96aa2307e0f3000083847f4a0738279d67b7c13aa893" },
+    { "path": "runtime/Election.implementation.celo-mainnet.hex", "sha256": "0d38ccc7207eed0282aed80ba3879521e474b6f9c818b9981a139832ccab483d" },
+    { "path": "runtime/ElectionProxy.celo-mainnet.hex", "sha256": "dfd3c2945b2853c9d51c08a6382a6809a7c34312ae79464760d13fe0eb3fb427" },
+    { "path": "source/Accounts.sol", "sha256": "d7ba92f22a2acf0f1a7d047b204c86c39d14f9e5ed82ec2af4b784bf25bc2bb0" },
+    { "path": "source/AddressSortedLinkedList.sol", "sha256": "6314ca11ebad4d8733a089e5639eb14ae4b94928d51c7425b859e7700b23d7b3" },
+    { "path": "source/Election.sol", "sha256": "f4f897289538a084161c179ddf61dbd06284f8aec521c794c8c0a0912241d191" },
+    { "path": "source/GoldToken.sol", "sha256": "64c64036f87999607cd2eb676bc8f14e17438565e74838981869cc0fce7501fb" },
+    { "path": "source/LockedGold.sol", "sha256": "8644f267f6689a75474520171e485d5220999c44f06d68aa69876981ca7f9d3f" },
+    { "path": "source/Registry.sol", "sha256": "523b6c9ea1e3fc3e0fb17604a6821b0b25e7e47727f707826d3ee563e96db483" },
+    { "path": "source/SortedLinkedList.sol", "sha256": "2979db1df67d1b9789d73e71a3319e2ec2469143de30671fba32061ebe6d68d1" }
+  ]
+}
