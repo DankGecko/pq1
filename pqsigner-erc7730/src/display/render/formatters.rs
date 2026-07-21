@@ -45,7 +45,7 @@ use crate::ir::{
 };
 use pqsigner_tx::erc20::bundle::Erc20Metadata;
 use pqsigner_tx::names::NameResolver;
-use pqsigner_tx_core::eip1559::{Eip1559Tx, U256};
+use pqsigner_tx_core::eip1559::U256;
 // `resolve_array` (the load-bearing dynamic-array tail resolver, which reuses
 // `walk`'s Kani-proven readers) lives in the host crate so it is itself
 // Kani-verifiable; `render_array` is a thin renderer over its result, and the
@@ -77,6 +77,97 @@ const INTERPOLATED_AMOUNT_POLICY: InterpolatedAmountPolicy = InterpolatedAmountP
     trim_trailing_zeros: true,
     reject_zero_collapse: true,
 };
+
+/// Exact contract-container values available to field resolution.
+///
+/// Field formatters intentionally receive this narrow view instead of an
+/// [`Eip1559Tx`](pqsigner_tx_core::eip1559::Eip1559Tx). A top-level transaction
+/// can expose its independently bound sender and nonce, while a scoped child
+/// call or EIP-712 domain deliberately leaves both unavailable. The container
+/// readers below reject an unavailable value; callers must never synthesize a
+/// zero nonce or sender merely to reuse the formatter path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ContractContainerCtx {
+    pub(super) chain_id: u64,
+    pub(super) target: [u8; 20],
+    pub(super) value: U256,
+    from: Option<[u8; 20]>,
+    nonce: Option<u64>,
+}
+
+impl ContractContainerCtx {
+    /// Top-level contract call with the signed envelope nonce and an optional,
+    /// independently derived signer identity.
+    pub(super) const fn outer(
+        chain_id: u64,
+        target: [u8; 20],
+        value: U256,
+        nonce: u64,
+        from: Option<[u8; 20]>,
+    ) -> Self {
+        Self {
+            chain_id,
+            target,
+            value,
+            from,
+            nonce: Some(nonce),
+        }
+    }
+
+    /// Scoped contract-like context with no sender or nonce authority, used by
+    /// EIP-712 field rendering. Nested calls must use [`Self::child`] so their
+    /// zero-value invariant is fixed by construction.
+    pub(super) const fn scoped(chain_id: u64, target: [u8; 20], value: U256) -> Self {
+        Self {
+            chain_id,
+            target,
+            value,
+            from: None,
+            nonce: None,
+        }
+    }
+
+    /// First-slice nested call context. Execution policy fixes the child value
+    /// to zero and deliberately grants neither sender nor nonce authority.
+    /// Keeping this constructor separate from [`Self::scoped`] prevents the
+    /// nested renderer from accidentally threading a host- or parent-supplied
+    /// value into the child call.
+    #[allow(dead_code)] // N3a publishes the context; the bounded child renderer follows in N3b.
+    pub(crate) const fn child(chain_id: u64, target: [u8; 20]) -> Self {
+        Self {
+            chain_id,
+            target,
+            value: U256::zero(),
+            from: None,
+            nonce: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod container_context_tests {
+    use super::*;
+
+    #[test]
+    fn child_context_is_zero_value_and_refuses_from_and_nonce() {
+        let target = [0xA5; 20];
+        let child = ContractContainerCtx::child(8453, target);
+
+        assert_eq!(
+            container_u256(&child, container_field::VALUE),
+            Ok([0u8; 32])
+        );
+        assert_eq!(
+            container_u256(&child, container_field::NONCE),
+            Err(RenderErr::Reject("7730 nonce unbound"))
+        );
+        assert_eq!(
+            container_addr(&child, container_field::FROM),
+            Err(RenderErr::Reject("7730 from unbound"))
+        );
+        assert_eq!(container_addr(&child, container_field::TO), Ok(target));
+    }
+}
 
 /// Pure pre-publication decision shared by every authenticated scaled-amount
 /// sink. Keeping this decision outside the painters lets bounded verification
@@ -268,17 +359,23 @@ pub(crate) fn validate_eip712_integer_words(
 /// Read a container field value (u256-shaped) by its keccak-prefix
 /// index. Returns a 32-byte BE word equivalent for the formatter to
 /// re-interpret.
-pub(super) fn container_u256(tx: &Eip1559Tx, idx: u16) -> Result<[u8; 32], RenderErr> {
+pub(super) fn container_u256(
+    container: &ContractContainerCtx,
+    idx: u16,
+) -> Result<[u8; 32], RenderErr> {
     match idx {
-        container_field::VALUE => Ok(tx.value.0),
+        container_field::VALUE => Ok(container.value.0),
         container_field::CHAIN_ID => {
             let mut b = [0u8; 32];
-            b[24..].copy_from_slice(&tx.chain_id.to_be_bytes());
+            b[24..].copy_from_slice(&container.chain_id.to_be_bytes());
             Ok(b)
         }
         container_field::NONCE => {
+            let nonce = container
+                .nonce
+                .ok_or(RenderErr::Reject("7730 nonce unbound"))?;
             let mut b = [0u8; 32];
-            b[24..].copy_from_slice(&tx.nonce.to_be_bytes());
+            b[24..].copy_from_slice(&nonce.to_be_bytes());
             Ok(b)
         }
         _ => Err(RenderErr::Reject("7730 cnt no u256")),
@@ -289,34 +386,35 @@ pub(super) fn container_u256(tx: &Eip1559Tx, idx: u16) -> Result<[u8; 32], Rende
 /// is ABI-word encoded (12 zero bytes followed by the 20-byte sender), while
 /// numeric formatters continue to reject it through [`container_u256`].
 fn container_raw_word(
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     idx: u16,
-    device_signer: Option<&[u8; 20]>,
 ) -> Result<[u8; 32], RenderErr> {
     if idx == container_field::FROM {
-        let sender = device_signer.ok_or(RenderErr::Reject("7730 from unbound"))?;
+        let sender = container
+            .from
+            .as_ref()
+            .ok_or(RenderErr::Reject("7730 from unbound"))?;
         let mut word = [0u8; 32];
         word[12..].copy_from_slice(sender);
         return Ok(word);
     }
-    container_u256(tx, idx)
+    container_u256(container, idx)
 }
 
 /// Read a container field as an address. Returns the 20-byte slice for
 /// `@.to` / `@.from`.
 pub(super) fn container_addr(
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     idx: u16,
-    device_signer: Option<&[u8; 20]>,
 ) -> Result<[u8; 20], RenderErr> {
     match idx {
-        container_field::TO => tx.to.ok_or(RenderErr::Reject("7730 no to")),
+        container_field::TO => Ok(container.target),
         // `@.from` is the AA wallet's own address. It is populated only by the
         // secure UserOp handlers after mnemonic derivation and sender binding;
         // native transactions and EIP-712 synthetic envelopes have no
         // `userop_fields` and therefore still fail closed here.
-        container_field::FROM => device_signer
-            .copied()
+        container_field::FROM => container
+            .from
             .ok_or(RenderErr::Reject("7730 from unbound")),
         _ => Err(RenderErr::Reject("7730 cnt no addr")),
     }
@@ -410,11 +508,10 @@ pub(super) fn dispatch(
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     body: &[u8],
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
-    device_signer: Option<&[u8; 20]>,
 ) -> Result<Option<RenderedFieldWitness>, RenderErr> {
     let op =
         FormatOp::try_from(field.format_op).map_err(|_| RenderErr::Reject("7730 bad format op"))?;
@@ -435,22 +532,28 @@ pub(super) fn dispatch(
     require_integer_path_canonical(ir, field, body, params)?;
     match formatter_route(op) {
         FormatterRoute::Raw => {
-            render_raw(field, pages, ir, body, tx, params, device_signer).map(|()| None)
+            render_raw(field, pages, ir, body, container, params).map(|()| None)
         }
-        FormatterRoute::Amount => render_amount(field, pages, ir, body, tx, params),
+        FormatterRoute::Amount => render_amount(field, pages, ir, body, container, params),
         FormatterRoute::TokenAmount => {
-            render_token_amount(field, pages, ir, body, tx, erc20, resolver, params)
+            render_token_amount(field, pages, ir, body, container, erc20, resolver, params)
         }
         FormatterRoute::NftName => {
-            render_nft_name(field, pages, ir, body, tx, resolver, params).map(|()| None)
+            render_nft_name(field, pages, ir, body, container, resolver, params).map(|()| None)
         }
-        FormatterRoute::Date => render_date(field, pages, ir, body, tx, params).map(|()| None),
-        FormatterRoute::Duration => render_duration(field, pages, ir, body, tx).map(|()| None),
+        FormatterRoute::Date => {
+            render_date(field, pages, ir, body, container, params).map(|()| None)
+        }
+        FormatterRoute::Duration => {
+            render_duration(field, pages, ir, body, container).map(|()| None)
+        }
         FormatterRoute::AddressName => {
-            render_address_name(field, pages, ir, body, tx, resolver, params, device_signer)
+            render_address_name(field, pages, ir, body, container, resolver, params)
                 .map(|()| None)
         }
-        FormatterRoute::Enum => render_enum(field, pages, ir, body, tx, params).map(|()| None),
+        FormatterRoute::Enum => {
+            render_enum(field, pages, ir, body, container, params).map(|()| None)
+        }
         FormatterRoute::Unit => {
             // The current painter supports the standard suffix placement only.
             // Do not silently ignore a descriptor requesting a prefix or an
@@ -458,26 +561,27 @@ pub(super) fn dispatch(
             if params.prefix.is_some_and(|v| v != 0) || params.suffix.is_some() {
                 return Err(RenderErr::Reject("7730 unit affix unsupported"));
             }
-            render_unit(field, pages, ir, body, tx, params).map(|()| None)
+            render_unit(field, pages, ir, body, container, params).map(|()| None)
         }
         FormatterRoute::HardRefuseCalldata => {
             super::calldata_nested::render(field, pages, params).map(|()| None)
         }
-        FormatterRoute::ChainId => render_chain_id(field, pages, ir, body, tx).map(|()| None),
+        FormatterRoute::ChainId => {
+            render_chain_id(field, pages, ir, body, container).map(|()| None)
+        }
         FormatterRoute::TokenTicker => render_token_ticker(
             field,
             pages,
             ir,
             body,
-            tx,
+            container,
             erc20,
             resolver,
             params,
-            device_signer,
         )
         .map(|()| None),
         FormatterRoute::InteroperableAddressName => {
-            render_interop_address_name(field, pages, ir, body, tx, resolver, device_signer)
+            render_interop_address_name(field, pages, ir, body, container, resolver)
                 .map(|()| None)
         }
         FormatterRoute::HardRefuseEncrypted => {
@@ -558,13 +662,13 @@ fn mark_router02_role(seen: &mut u8, role: u8) -> Result<(), RenderErr> {
 fn validate_uniswap_v3_runtime_format(
     ir: &Erc7730Ir<'_>,
     format: &FormatHeader<'_>,
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
 ) -> Result<Direction, RenderErr> {
     if !matches!(ir.context_kind, ContextKind::Contract)
         || ir.chain_id != UNISWAP_ROUTER02_CHAIN_ID
         || ir.contract != UNISWAP_ROUTER02_MAINNET
-        || tx.chain_id != UNISWAP_ROUTER02_CHAIN_ID
-        || tx.to.as_ref() != Some(&UNISWAP_ROUTER02_MAINNET)
+        || container.chain_id != UNISWAP_ROUTER02_CHAIN_ID
+        || container.target != UNISWAP_ROUTER02_MAINNET
         || format.static_head_words != 1
         || format.field_count != 5
         || format.nested_descent_count != 0
@@ -870,9 +974,8 @@ fn render_raw(
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     body: &[u8],
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     _params: &ParamSet<'_>,
-    device_signer: Option<&[u8; 20]>,
 ) -> Result<(), RenderErr> {
     let bytes = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => *b,
@@ -880,7 +983,7 @@ fn render_raw(
         // unsupported container (finding F4): `unwrap_or([0u8; 32])` showed an
         // all-zero 32-byte value while the signed UserOp committed a nonzero
         // one (e.g. raw `@.to`). Fail closed.
-        Resolved::Container(idx) => container_raw_word(tx, idx, device_signer)?,
+        Resolved::Container(idx) => container_raw_word(container, idx)?,
     };
     // A 16-col row holds 16 hex chars = 8 bytes, so the full 32-byte signed
     // word needs FOUR hex rows across two pages, so EVERY signed byte is shown
@@ -897,12 +1000,12 @@ fn render_amount(
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     body: &[u8],
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     params: &ParamSet<'_>,
 ) -> Result<Option<RenderedFieldWitness>, RenderErr> {
     let raw = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => *b,
-        Resolved::Container(idx) => container_u256(tx, idx)?,
+        Resolved::Container(idx) => container_u256(container, idx)?,
     };
     let value = U256(raw);
     // WHICH decimals/ticker paint — the pure, ∀-proven decision half (M4
@@ -910,7 +1013,7 @@ fn render_amount(
     // only a chain in the firmware's audited native table may inherit 18;
     // unknown chains render the exact raw integer instead of an assumed scale.
     // See `amount_decision::amount_decision`.
-    let Some(d) = amount_decision(tx.chain_id, params) else {
+    let Some(d) = amount_decision(container.chain_id, params) else {
         let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
         write_label_row(pages, p, field.label);
         let fit = {
@@ -963,7 +1066,7 @@ fn render_token_amount(
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     body: &[u8],
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
@@ -971,7 +1074,7 @@ fn render_token_amount(
     // Resolve the amount slot.
     let raw = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => *b,
-        Resolved::Container(idx) => container_u256(tx, idx)?,
+        Resolved::Container(idx) => container_u256(container, idx)?,
     };
     let value = U256(raw);
 
@@ -979,7 +1082,7 @@ fn render_token_amount(
     // back to params.token literal). Used to decide which decimals /
     // symbol to display.
     let token_addr = if params.token_path.is_some() || params.token.is_some() {
-        Some(resolve_token_address(ir, body, tx, params)?)
+        Some(resolve_token_address(ir, body, container, params)?)
     } else {
         None
     };
@@ -993,7 +1096,7 @@ fn render_token_amount(
     // threshold gate HOISTED ABOVE the bound match (review 4.5), the
     // validated `message` override (review 3.6), the M-4 raw fallback and
     // the MEDIUM-1 identity-page rule.
-    let decision = token_amount_decision(&raw, token_addr, erc20, tx.chain_id, params);
+    let decision = token_amount_decision(&raw, token_addr, erc20, container.chain_id, params);
 
     // Every `Bound` arm has an authenticated scale: either a descriptor-pinned
     // native sentinel or exact-chain/address ERC-20 metadata. Enforce the same
@@ -1062,7 +1165,7 @@ fn render_token_amount(
                         || matches!(
                                 (token_addr, erc20),
                                 (Some(addr), Some(meta))
-                                    if meta.chain_id == tx.chain_id && meta.contract == addr
+                                    if meta.chain_id == container.chain_id && meta.contract == addr
                         );
                     if metadata_chain_bound {
                         witness = make_amount_witness(raw, decimals, ticker);
@@ -1107,7 +1210,7 @@ fn render_token_amount(
         let ap = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
         write_label_row(pages, ap, b"Token (UNVERIFIED)");
         let [_, ar1, ar2, ar3] = pages.page_mut(ap);
-        write_addr_full_or_name(ar1, ar2, ar3, &addr, tx.chain_id, resolver);
+        write_addr_full_or_name(ar1, ar2, ar3, &addr, container.chain_id, resolver);
     }
     Ok(witness)
 }
@@ -1280,7 +1383,7 @@ fn render_nft_name(
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     body: &[u8],
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
@@ -1299,10 +1402,10 @@ fn render_nft_name(
     if !nft_params_are_canonical(params) {
         return Err(RenderErr::Reject("7730 nft collection unbound"));
     }
-    let collection = resolve_nft_collection(body, tx, params)?;
+    let collection = resolve_nft_collection(body, container, params)?;
     let value = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => *b,
-        Resolved::Container(idx) => container_u256(tx, idx)?,
+        Resolved::Container(idx) => container_u256(container, idx)?,
     };
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
@@ -1328,13 +1431,13 @@ fn render_nft_name(
     let cp = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     let friendly = if collection == ir.contract && !ir.contract_name.is_empty() {
         Some(ir.contract_name)
-    } else if tx.chain_id == 0 {
+    } else if container.chain_id == 0 {
         // Chain id zero is the names DB's wildcard-entry sentinel, not a real
         // exact chain capability. `lookup_exact(0, ..)` would otherwise turn a
         // wildcard record into an NFT semantic identity.
         None
     } else {
-        resolver.lookup_exact(tx.chain_id, &collection)
+        resolver.lookup_exact(container.chain_id, &collection)
     };
     if let Some(name) = friendly {
         write_verified_nft_collection_label(pages.row_mut(cp, 0), name)?;
@@ -1348,14 +1451,14 @@ fn render_nft_name(
 
 fn resolve_nft_collection(
     _body: &[u8],
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     params: &ParamSet<'_>,
 ) -> Result<[u8; 20], RenderErr> {
     if let Some(path) = params.nft_collection_path {
         if !nft_collection_path_is_current_slice(path) {
             return Err(RenderErr::Reject("7730 bad nft collection path"));
         }
-        return tx.to.ok_or(RenderErr::Reject("7730 no to"));
+        return Ok(container.target);
     }
     params
         .nft_collection
@@ -1391,14 +1494,14 @@ fn render_date(
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     body: &[u8],
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
     let bytes = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => *b,
-        Resolved::Container(idx) => container_u256(tx, idx)?,
+        Resolved::Container(idx) => container_u256(container, idx)?,
     };
     let secs = match read_u64_be_tail(&bytes) {
         Some(s) => s,
@@ -1455,13 +1558,13 @@ fn render_duration(
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     body: &[u8],
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
 ) -> Result<(), RenderErr> {
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
     let bytes = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => *b,
-        Resolved::Container(idx) => container_u256(tx, idx)?,
+        Resolved::Container(idx) => container_u256(container, idx)?,
     };
     let secs = match read_u64_be_tail(&bytes) {
         Some(s) => s,
@@ -1480,14 +1583,13 @@ fn render_address_name(
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     body: &[u8],
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
-    device_signer: Option<&[u8; 20]>,
 ) -> Result<(), RenderErr> {
     let resolved = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => canonical_address_word(b)?,
-        Resolved::Container(idx) => container_addr(tx, idx, device_signer)?,
+        Resolved::Container(idx) => container_addr(container, idx)?,
     };
     // `senderAddress` is an exact descriptor-authenticated sentinel list, not
     // an address-range heuristic. Resolve and canonicalize the signed word
@@ -1496,7 +1598,9 @@ fn render_address_name(
     // fails closed instead of painting the sentinel as a beneficiary.
     let substituted_sender = params.sender_address_matches(&resolved);
     let addr = if substituted_sender {
-        *device_signer.ok_or(RenderErr::Reject("7730 sender unbound"))?
+        container
+            .from
+            .ok_or(RenderErr::Reject("7730 sender unbound"))?
     } else {
         resolved
     };
@@ -1510,7 +1614,7 @@ fn render_address_name(
     if substituted_sender || params.addr_types.is_some() || params.addr_sources.is_some() {
         write_addr_full(r1, r2, r3, &addr);
     } else {
-        write_addr_full_or_name(r1, r2, r3, &addr, tx.chain_id, resolver);
+        write_addr_full_or_name(r1, r2, r3, &addr, container.chain_id, resolver);
     }
     Ok(())
 }
@@ -1907,7 +2011,7 @@ pub(crate) fn validate_contract_calldata_framing(
     ir: &Erc7730Ir<'_>,
     format: &FormatHeader<'_>,
     full_body: &[u8],
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
 ) -> Result<ContractCalldataMode, RenderErr> {
     let head_end = (format.static_head_words as usize)
         .checked_mul(32)
@@ -1933,7 +2037,7 @@ pub(crate) fn validate_contract_calldata_framing(
         if packed_fields != 1 {
             return Err(RenderErr::Reject("7730 v3 field count"));
         }
-        let direction = validate_uniswap_v3_runtime_format(ir, format, tx)?;
+        let direction = validate_uniswap_v3_runtime_format(ir, format, container)?;
         parse_router02_body(full_body)?;
         return Ok(ContractCalldataMode::UniswapV3Path(direction));
     }
@@ -2014,7 +2118,7 @@ pub(crate) fn validate_contract_word_guards(
     head_body: &[u8],
     full_body: &[u8],
     mode: ContractCalldataMode,
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
 ) -> Result<(), RenderErr> {
     for field_result in format.fields() {
         let field = field_result.map_err(|_| RenderErr::Reject("7730 bad field"))?;
@@ -2046,7 +2150,7 @@ pub(crate) fn validate_contract_word_guards(
                 {
                     return Err(RenderErr::Reject("7730 bad guarded value"));
                 }
-                container_u256(tx, container_field::VALUE)?
+                container_u256(container, container_field::VALUE)?
             }
             Resolved::Container(_) => return Err(RenderErr::Reject("7730 bad guarded container")),
         };
@@ -2257,7 +2361,6 @@ pub(super) fn render_dynamic_bytes(
     ir: &Erc7730Ir<'_>,
     full_body: &[u8],
     static_head_words: u16,
-    _tx: &Eip1559Tx,
     _erc20: Option<&Erc20Metadata<'_>>,
     _resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
@@ -2360,7 +2463,7 @@ pub(super) fn render_array(
     ir: &Erc7730Ir<'_>,
     full_body: &[u8],
     static_head_words: u16,
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
@@ -2400,7 +2503,7 @@ pub(super) fn render_array(
                 .get(..head_end)
                 .ok_or(RenderErr::Reject("7730 arr head oob"))?;
             let token_addr = if params.token_path.is_some() || params.token.is_some() {
-                Some(resolve_token_address(ir, head, tx, params)?)
+                Some(resolve_token_address(ir, head, container, params)?)
             } else {
                 None
             };
@@ -2418,7 +2521,7 @@ pub(super) fn render_array(
     // identity, or any earlier element can mutate `Pages`. Unknown-scale
     // amount/token paths deliberately remain exact raw-integer renderings.
     let scaled_decimals = match fmt {
-        FormatOp::Amount => amount_decision(tx.chain_id, params).map(|d| d.decimals),
+        FormatOp::Amount => amount_decision(container.chain_id, params).map(|d| d.decimals),
         FormatOp::Unit => Some(unit_decision(params).decimals),
         FormatOp::TokenAmount => bound_token.map(|(decimals, _, _)| decimals),
         _ => None,
@@ -2448,13 +2551,22 @@ pub(super) fn render_array(
         let ap = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
         write_label_row(pages, ap, b"Token (UNVERIFIED)");
         let [_, ar1, ar2, ar3] = pages.page_mut(ap);
-        write_addr_full_or_name(ar1, ar2, ar3, &addr, tx.chain_id, resolver);
+        write_addr_full_or_name(ar1, ar2, ar3, &addr, container.chain_id, resolver);
     }
 
     // 9. One page per element — EVERY element (array-tail-hiding closed).
     for i in 0..count {
         let word32 = array_element_word(full_body, elems_start, i)?;
-        render_array_element(field, fmt, word32, pages, tx, bound_token, resolver, params)?;
+        render_array_element(
+            field,
+            fmt,
+            word32,
+            pages,
+            container,
+            bound_token,
+            resolver,
+            params,
+        )?;
     }
     Ok(())
 }
@@ -2527,7 +2639,7 @@ fn render_array_element(
     fmt: FormatOp,
     word: &[u8; 32],
     pages: &mut Pages,
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     bound_token: Option<(u32, &[u8], [u8; 20])>,
     resolver: &NameResolver<'_>,
     params: &ParamSet<'_>,
@@ -2537,7 +2649,7 @@ fn render_array_element(
     match fmt {
         FormatOp::Amount => {
             let value = U256(*word);
-            let Some(amount) = amount_decision(tx.chain_id, params) else {
+            let Some(amount) = amount_decision(container.chain_id, params) else {
                 let [_, r1, r2, foot] = pages.page_mut(p);
                 let fit = write_amount_two_rows(r1, r2, &value, 0, 0, false, true, "");
                 if fit == AmountFit::Full {
@@ -2640,7 +2752,7 @@ fn render_array_element(
             if params.addr_types.is_some() || params.addr_sources.is_some() {
                 write_addr_full(r1, r2, r3, &a);
             } else {
-                write_addr_full_or_name(r1, r2, r3, &a, tx.chain_id, resolver);
+                write_addr_full_or_name(r1, r2, r3, &a, container.chain_id, resolver);
             }
             Ok(())
         }
@@ -2674,7 +2786,7 @@ fn render_enum(
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     body: &[u8],
-    tx: &Eip1559Tx,
+    _container: &ContractContainerCtx,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
     // Resolve the field's value (a single static-head word). `@`-container
@@ -2706,7 +2818,6 @@ fn render_enum(
     // (the user sees the real value, not a substituted gloss) and strictly more
     // informative than blind-signing everything.
     let Some(label) = crate::render::enums::lookup_enum_label(ir.pool, enum_off, &value)? else {
-        let _ = tx;
         let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
         write_label_row(pages, p, field.label);
         let fit = {
@@ -2728,7 +2839,6 @@ fn render_enum(
     if label.len() > 3 * DISPLAY_COLS {
         return Err(RenderErr::Reject("7730 enum label too long"));
     }
-    let _ = tx;
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
     let [_, r1, r2, r3] = pages.page_mut(p);
@@ -2748,12 +2858,12 @@ fn render_unit(
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     body: &[u8],
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     params: &ParamSet<'_>,
 ) -> Result<(), RenderErr> {
     let bytes = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => *b,
-        Resolved::Container(idx) => container_u256(tx, idx)?,
+        Resolved::Container(idx) => container_u256(container, idx)?,
     };
     let value = U256(bytes);
     // Decision half factored to `amount_decision::unit_decision` (M4):
@@ -2791,22 +2901,22 @@ fn render_chain_id(
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     body: &[u8],
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
 ) -> Result<(), RenderErr> {
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
     // FAITHFUL formatter (audit 2026-06-26 — faithless-formatter class). Render
-    // the chain id at the field's OWN signed word, not `tx.chain_id`
+    // the chain id at the field's OWN signed word, not the container chain id
     // unconditionally. The old body discarded `field.path`/`body`, so a field
     // pointing at a calldata / typed-data word (e.g. a cross-chain bridge's
     // destination chain) displayed the UserOp's *execution* chain while the
     // signature committed to a different value (display != signed) — and the
     // host completeness lint still credited the field as covered, so the gap
     // shipped unwarned. `@.chainId` resolves through the container arm to
-    // `tx.chain_id`, preserving the envelope use-case.
+    // the container chain id, preserving the envelope use-case.
     let bytes = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => *b,
-        Resolved::Container(idx) => container_u256(tx, idx)?,
+        Resolved::Container(idx) => container_u256(container, idx)?,
     };
     let [_, r1, r2, foot] = pages.page_mut(p);
     match read_u64_be_tail(&bytes) {
@@ -2837,11 +2947,10 @@ fn render_token_ticker(
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     body: &[u8],
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
     _params: &ParamSet<'_>,
-    device_signer: Option<&[u8; 20]>,
 ) -> Result<(), RenderErr> {
     let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p, field.label);
@@ -2854,7 +2963,7 @@ fn render_token_ticker(
     // credits `field.path` as covered, so the signed token operand went unshown.
     let addr = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => canonical_address_word(b)?,
-        Resolved::Container(idx) => container_addr(tx, idx, device_signer)?,
+        Resolved::Container(idx) => container_addr(container, idx)?,
     };
     match erc20 {
         Some(meta) if addr == meta.contract => {
@@ -2875,7 +2984,7 @@ fn render_token_ticker(
         // (mirrors render_token_amount's unbound "Token (UNVERIFIED)" page).
         _ => {
             let [_, r1, r2, r3] = pages.page_mut(p);
-            write_addr_full_or_name(r1, r2, r3, &addr, tx.chain_id, resolver);
+            write_addr_full_or_name(r1, r2, r3, &addr, container.chain_id, resolver);
         }
     }
     Ok(())
@@ -2886,23 +2995,22 @@ fn render_interop_address_name(
     pages: &mut Pages,
     ir: &Erc7730Ir<'_>,
     body: &[u8],
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     _resolver: &NameResolver<'_>,
-    device_signer: Option<&[u8; 20]>,
 ) -> Result<(), RenderErr> {
     // ERC-3770 long form: `eip155:<chainId>:0x<addr>`. The chain short-
     // name registry is out of scope (would require a separate name DB
     // on-device); long form is unambiguous and self-describing.
     let addr = match resolve_path(ir, field.path_off, body)? {
         Resolved::Slot32(b) => canonical_address_word(b)?,
-        Resolved::Container(idx) => container_addr(tx, idx, device_signer)?,
+        Resolved::Container(idx) => container_addr(container, idx)?,
     };
     let p1 = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
     write_label_row(pages, p1, field.label);
     let [_, scheme, id_head, id_tail] = pages.page_mut(p1);
     write_line(scheme, "eip155:");
     let mut digits = [0u8; 20];
-    let n = format_u64(tx.chain_id, &mut digits)
+    let n = format_u64(container.chain_id, &mut digits)
         .ok_or(RenderErr::Reject("7730 interop chain overflow"))?;
     if n + 1 <= DISPLAY_COLS {
         id_head[..n].copy_from_slice(&digits[..n]);
@@ -3272,7 +3380,7 @@ fn format_duration(mut secs: u64, row: &mut [u8; DISPLAY_COLS]) -> bool {
 pub(super) fn resolve_token_address(
     ir: &Erc7730Ir<'_>,
     body: &[u8],
-    tx: &Eip1559Tx,
+    container: &ContractContainerCtx,
     params: &ParamSet<'_>,
 ) -> Result<[u8; 20], RenderErr> {
     if let Some(tp) = params.token_path {
@@ -3289,7 +3397,7 @@ pub(super) fn resolve_token_address(
             PathOp::try_from(tp[0]).map_err(|_| RenderErr::Reject("7730 bad tokpath root"))?;
         return match root {
             PathOp::RootStructured => crate::render::resolve::resolve_token_address(&tp[1..], body),
-            _ => canonical_address_word(&resolve_path_bytes(tp, body, tx)?),
+            _ => canonical_address_word(&resolve_path_bytes(tp, body, container)?),
         };
     }
     if let Some(t) = params.token {
@@ -3303,7 +3411,11 @@ pub(super) fn resolve_token_address(
 /// Mirrors [`resolve_path`] but operates on a pre-extracted program
 /// slice — used by `tokenPath` which is stored as a raw program inside
 /// the parameter TLV blob.
-fn resolve_path_bytes(prog: &[u8], body: &[u8], tx: &Eip1559Tx) -> Result<[u8; 32], RenderErr> {
+fn resolve_path_bytes(
+    prog: &[u8],
+    body: &[u8],
+    container: &ContractContainerCtx,
+) -> Result<[u8; 32], RenderErr> {
     if prog.is_empty() {
         return Err(RenderErr::Reject("7730 empty path"));
     }
@@ -3350,12 +3462,11 @@ fn resolve_path_bytes(prog: &[u8], body: &[u8], tx: &Eip1559Tx) -> Result<[u8; 3
             let idx = u16::from_be_bytes([prog[p + 1], prog[p + 2]]);
             match idx {
                 container_field::TO => {
-                    let addr = tx.to.ok_or(RenderErr::Reject("7730 no to"))?;
                     let mut out = [0u8; 32];
-                    out[12..].copy_from_slice(&addr);
+                    out[12..].copy_from_slice(&container.target);
                     Ok(out)
                 }
-                _ => container_u256(tx, idx),
+                _ => container_u256(container, idx),
             }
         }
         _ => Err(RenderErr::Reject("7730 path no root")),
@@ -3756,20 +3867,12 @@ mod faithless_formatter_fixed {
         ]
     }
 
-    fn envelope_chain(chain_id: u64) -> Eip1559Tx {
-        Eip1559Tx {
-            chain_id,
-            nonce: 0,
-            max_priority_fee_per_gas: U256::zero(),
-            max_fee_per_gas: U256::zero(),
-            gas_limit: 0,
-            to: Some([0u8; 20]),
-            value: U256::zero(),
-            data_len: 0,
-            access_list_count: 0,
-            signing_hash: [0u8; 32],
-            userop_fields: None,
-        }
+    fn envelope_chain(chain_id: u64) -> ContractContainerCtx {
+        ContractContainerCtx::outer(chain_id, [0u8; 20], U256::zero(), 0, None)
+    }
+
+    fn envelope_chain_with_sender(chain_id: u64, sender: [u8; 20]) -> ContractContainerCtx {
+        ContractContainerCtx::outer(chain_id, [0u8; 20], U256::zero(), 0, Some(sender))
     }
 
     fn field(op: FormatOp) -> FieldEntry<'static> {
@@ -3807,7 +3910,7 @@ mod faithless_formatter_fixed {
 
     #[test]
     fn chain_id_container_root_still_shows_envelope() {
-        // `@.chainId` (container root) must keep rendering `tx.chain_id`.
+        // `@.chainId` (container root) must keep rendering the context chain.
         let prog = [
             PathOp::RootContainer as u8,
             PathOp::FieldIdx as u8,
@@ -3837,23 +3940,22 @@ mod faithless_formatter_fixed {
                 &tx,
                 &resolver,
                 &ParamSet::default(),
-                None,
             ),
             Err(RenderErr::Reject("7730 from unbound"))
         );
         assert_eq!(absent_pages.len, 0);
 
         let sender = [0x11u8; 20];
+        let sender_ctx = envelope_chain_with_sender(1, sender);
         let mut pages = Pages::with_len(0);
         render_address_name(
             &field(FormatOp::AddressName),
             &mut pages,
             &ir,
             &[],
-            &tx,
+            &sender_ctx,
             &resolver,
             &ParamSet::default(),
-            Some(&sender),
         )
         .expect("bound @.from renders");
         assert_eq!(&pages.buf[0][1], b"0x11111111111111");
@@ -3864,16 +3966,16 @@ mod faithless_formatter_fixed {
         for byte in 0..sender.len() {
             let mut changed = sender;
             changed[byte] ^= 1;
+            let changed_ctx = envelope_chain_with_sender(1, changed);
             let mut changed_pages = Pages::with_len(0);
             render_address_name(
                 &field(FormatOp::AddressName),
                 &mut changed_pages,
                 &ir,
                 &[],
-                &tx,
+                &changed_ctx,
                 &resolver,
                 &ParamSet::default(),
-                Some(&changed),
             )
             .expect("changed @.from renders");
             assert_ne!(
@@ -3886,17 +3988,16 @@ mod faithless_formatter_fixed {
     #[test]
     fn raw_from_is_an_exact_zero_padded_abi_address_word() {
         let ir = ir_with_path(&container_prog(container_field::FROM));
-        let tx = envelope_chain(1);
         let sender = [0x22u8; 20];
+        let sender_ctx = envelope_chain_with_sender(1, sender);
         let mut pages = Pages::with_len(0);
         render_raw(
             &field(FormatOp::Raw),
             &mut pages,
             &ir,
             &[],
-            &tx,
+            &sender_ctx,
             &ParamSet::default(),
-            Some(&sender),
         )
         .expect("raw @.from renders");
         assert_eq!(pages.len, 2);
@@ -3959,7 +4060,6 @@ mod faithless_formatter_fixed {
             None,
             &resolver,
             &params,
-            None,
         )
         .expect("renders");
         // Full address shown: write_addr_full_or_name paints "0x" + hex on r1.
@@ -4002,7 +4102,6 @@ mod faithless_formatter_fixed {
             Some(&meta),
             &resolver,
             &params,
-            None,
         )
         .expect("renders");
         assert_eq!(pages.len, 2);
@@ -4038,7 +4137,6 @@ mod faithless_formatter_fixed {
                 Some(&meta),
                 &resolver,
                 &params,
-                None,
             )
             .expect("renders");
             pages
@@ -4076,7 +4174,6 @@ mod faithless_formatter_fixed {
                 Some(&meta),
                 &NameResolver::new(),
                 &ParamSet::default(),
-                None,
             ),
             Err(RenderErr::PageBudget)
         );
@@ -4129,20 +4226,8 @@ mod block_height_magnitude_fixed {
         [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0]
     }
 
-    fn envelope() -> Eip1559Tx {
-        Eip1559Tx {
-            chain_id: 1,
-            nonce: 0,
-            max_priority_fee_per_gas: U256::zero(),
-            max_fee_per_gas: U256::zero(),
-            gas_limit: 0,
-            to: Some([0u8; 20]),
-            value: U256::zero(),
-            data_len: 0,
-            access_list_count: 0,
-            signing_hash: [0u8; 32],
-            userop_fields: None,
-        }
+    fn envelope() -> ContractContainerCtx {
+        ContractContainerCtx::outer(1, [0u8; 20], U256::zero(), 0, None)
     }
 
     fn date_field() -> FieldEntry<'static> {
@@ -4246,20 +4331,8 @@ mod encrypted_formatter_declines {
         }
     }
 
-    fn envelope() -> Eip1559Tx {
-        Eip1559Tx {
-            chain_id: 1,
-            nonce: 0,
-            max_priority_fee_per_gas: U256::zero(),
-            max_fee_per_gas: U256::zero(),
-            gas_limit: 0,
-            to: Some([0u8; 20]),
-            value: U256::zero(),
-            data_len: 0,
-            access_list_count: 0,
-            signing_hash: [0u8; 32],
-            userop_fields: None,
-        }
+    fn envelope() -> ContractContainerCtx {
+        ContractContainerCtx::outer(1, [0u8; 20], U256::zero(), 0, None)
     }
 
     /// `render_encrypted` must REJECT — never emit a confirmable page — even
@@ -4303,9 +4376,7 @@ mod encrypted_formatter_declines {
             param_off: 0,
         };
         let mut pages = Pages::with_len(0);
-        let r = dispatch(
-            &field, &mut pages, &ir, &body, &tx, None, &resolver, &params, None,
-        );
+        let r = dispatch(&field, &mut pages, &ir, &body, &tx, None, &resolver, &params);
         assert!(
             r.is_err(),
             "encrypted field must abort the descriptor render"
@@ -4371,20 +4442,8 @@ mod kani_harness {
         }
     }
 
-    fn envelope() -> Eip1559Tx {
-        Eip1559Tx {
-            chain_id: 1,
-            nonce: 0,
-            max_priority_fee_per_gas: U256::zero(),
-            max_fee_per_gas: U256::zero(),
-            gas_limit: 0,
-            to: Some([0u8; 20]),
-            value: U256::zero(),
-            data_len: 0,
-            access_list_count: 0,
-            signing_hash: [0u8; 32],
-            userop_fields: None,
-        }
+    fn envelope() -> ContractContainerCtx {
+        ContractContainerCtx::outer(1, [0u8; 20], U256::zero(), 0, None)
     }
 
     fn mk_field(op: u8, path_off: u16) -> FieldEntry<'static> {
@@ -5038,20 +5097,8 @@ mod token_amount_threshold_host_tests {
         }
     }
 
-    fn envelope() -> Eip1559Tx {
-        Eip1559Tx {
-            chain_id: 1,
-            nonce: 0,
-            max_priority_fee_per_gas: U256::zero(),
-            max_fee_per_gas: U256::zero(),
-            gas_limit: 0,
-            to: Some([0u8; 20]),
-            value: U256::zero(),
-            data_len: 0,
-            access_list_count: 0,
-            signing_hash: [0u8; 32],
-            userop_fields: None,
-        }
+    fn envelope() -> ContractContainerCtx {
+        ContractContainerCtx::outer(1, [0u8; 20], U256::zero(), 0, None)
     }
 
     fn unlimited_params(threshold: &[u8; 32]) -> ParamSet<'_> {
@@ -5187,20 +5234,12 @@ mod adversarial_renderer_regressions {
         }
     }
 
-    fn tx() -> Eip1559Tx {
-        Eip1559Tx {
-            chain_id: 1,
-            nonce: 0,
-            max_priority_fee_per_gas: U256::zero(),
-            max_fee_per_gas: U256::zero(),
-            gas_limit: 0,
-            to: Some([0; 20]),
-            value: U256::zero(),
-            data_len: 0,
-            access_list_count: 0,
-            signing_hash: [0; 32],
-            userop_fields: None,
-        }
+    fn tx() -> ContractContainerCtx {
+        ContractContainerCtx::outer(1, [0u8; 20], U256::zero(), 0, None)
+    }
+
+    fn tx_with_sender(sender: [u8; 20]) -> ContractContainerCtx {
+        ContractContainerCtx::outer(1, [0u8; 20], U256::zero(), 0, Some(sender))
     }
 
     fn guarded_pool(path: [u8; 4], mode: u8, expected: [u8; 32]) -> std::vec::Vec<u8> {
@@ -5241,10 +5280,9 @@ mod adversarial_renderer_regressions {
             &mut pages,
             &ir(&SLOT_POOL),
             &body,
-            &tx(),
+            &tx_with_sender(signer),
             &NameResolver::new(),
             &params,
-            Some(&signer),
         )
         .expect("exact sentinel substitutes");
         let mut expected_r1 = [b' '; DISPLAY_COLS];
@@ -5270,7 +5308,6 @@ mod adversarial_renderer_regressions {
                 &tx(),
                 &NameResolver::new(),
                 &params,
-                None,
             ),
             Err(RenderErr::Reject("7730 sender unbound"))
         );
@@ -5286,7 +5323,6 @@ mod adversarial_renderer_regressions {
             &tx(),
             &NameResolver::new(),
             &params,
-            None,
         )
         .expect("near sentinel remains literal");
         assert_ne!(near_pages.buf[0][1], expected_r1);
@@ -5413,7 +5449,7 @@ mod adversarial_renderer_regressions {
         );
 
         let mut envelope = tx();
-        envelope.to = Some([0xA4; 20]);
+        envelope.target = [0xA4; 20];
         params.nft_collection_path = Some(&EXACT_TO);
         assert_eq!(
             resolve_nft_collection(&[0xFFu8; 32], &envelope, &params),
@@ -6518,7 +6554,6 @@ mod adversarial_renderer_regressions {
             &ir(&DYNAMIC_POOL),
             &dynamic_body(b"same prefix, attacker-controlled suffix"),
             1,
-            &tx(),
             None,
             &NameResolver::new(),
             &params,
@@ -6542,7 +6577,6 @@ mod adversarial_renderer_regressions {
                 &ir(&DYNAMIC_POOL),
                 &body,
                 1,
-                &tx(),
                 None,
                 &resolver,
                 &params,
@@ -6559,7 +6593,6 @@ mod adversarial_renderer_regressions {
                 &ir(&DYNAMIC_POOL),
                 &body,
                 1,
-                &tx(),
                 None,
                 &resolver,
                 &params,
@@ -6580,7 +6613,6 @@ mod adversarial_renderer_regressions {
                 &ir(&DYNAMIC_POOL),
                 &dynamic_body(data),
                 1,
-                &tx(),
                 None,
                 &NameResolver::new(),
                 &params,
@@ -6780,7 +6812,6 @@ mod adversarial_renderer_regressions {
                 None,
                 &resolver,
                 &ParamSet::default(),
-                None,
             ),
             Err(RenderErr::Reject("7730 noncanonical address"))
         );
@@ -6794,7 +6825,6 @@ mod adversarial_renderer_regressions {
                 &body,
                 &tx,
                 &resolver,
-                None,
             ),
             Err(RenderErr::Reject("7730 noncanonical address"))
         );
@@ -6814,7 +6844,6 @@ mod adversarial_renderer_regressions {
             &body,
             &tx,
             &NameResolver::new(),
-            None,
         )
         .unwrap();
         assert_eq!(&pages.buf[0][1][..7], b"eip155:");
@@ -6838,7 +6867,6 @@ mod adversarial_renderer_regressions {
                 None,
                 &resolver,
                 &params,
-                None,
             ),
             Err(RenderErr::Reject("7730 bad const shape"))
         );
@@ -6852,7 +6880,6 @@ mod adversarial_renderer_regressions {
                 None,
                 &resolver,
                 &params,
-                None,
             ),
             Err(RenderErr::Reject("7730 bad format op"))
         );

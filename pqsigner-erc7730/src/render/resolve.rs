@@ -144,6 +144,29 @@ struct DynamicBounds {
     padded_end: usize,
 }
 
+/// Exact geometry of one canonical dynamic blob that owns the complete ABI
+/// tail.
+///
+/// Every offset is relative to byte zero of the `body` passed to
+/// [`canonical_dynamic_whole_tail`]. Keeping these positions next to the
+/// borrowed data prevents later nested-calldata binding code from recovering
+/// security-critical intervals through pointer arithmetic or a second,
+/// potentially drifting ABI walk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CanonicalDynamicTail<'a> {
+    /// Start of the 32-byte ABI length word.
+    pub length_word_start: usize,
+    /// First declared data byte, immediately after the length word.
+    pub data_start: usize,
+    /// Exclusive end of the declared data bytes (padding excluded).
+    pub data_end: usize,
+    /// Exclusive end of the zero-padded ABI object. For a whole tail this is
+    /// exactly `body.len()`.
+    pub padded_end: usize,
+    /// The declared dynamic bytes, excluding the length word and right padding.
+    pub data: &'a [u8],
+}
+
 /// Validate the length/data/right-padding framing of one ABI dynamic blob.
 ///
 /// Solidity's canonical ABI encoding right-pads `bytes`/`string` data to a
@@ -212,6 +235,23 @@ pub fn read_dynamic_whole_tail(
     off: usize,
     expected_off: usize,
 ) -> Result<&[u8], RenderErr> {
+    Ok(canonical_dynamic_whole_tail(body, off, expected_off)?.data)
+}
+
+/// Validate and expose the exact geometry of a sole canonical ABI dynamic
+/// tail.
+///
+/// This is the geometry-bearing sibling of [`read_dynamic_whole_tail`]. It
+/// enforces the same offset-at-head-end, checked length arithmetic, zero right
+/// padding, and exact end-of-body rules, but also returns the authenticated
+/// half-open data interval for callers that must bind the precise signed byte
+/// range. The legacy slice reader delegates here so the two interpretations
+/// cannot drift.
+pub fn canonical_dynamic_whole_tail(
+    body: &[u8],
+    off: usize,
+    expected_off: usize,
+) -> Result<CanonicalDynamicTail<'_>, RenderErr> {
     if off != expected_off {
         return Err(RenderErr::Reject("7730 res offset != head end"));
     }
@@ -219,8 +259,16 @@ pub fn read_dynamic_whole_tail(
     if bounds.padded_end != body.len() {
         return Err(RenderErr::Reject("7730 res not whole tail"));
     }
-    body.get(bounds.data_start..bounds.data_end)
-        .ok_or(RenderErr::Reject("7730 res data oob"))
+    let data = body
+        .get(bounds.data_start..bounds.data_end)
+        .ok_or(RenderErr::Reject("7730 res data oob"))?;
+    Ok(CanonicalDynamicTail {
+        length_word_start: off,
+        data_start: bounds.data_start,
+        data_end: bounds.data_end,
+        padded_end: bounds.padded_end,
+        data,
+    })
 }
 
 /// Extract a dynamic blob only when it is the sole canonical ABI tail and its
@@ -653,26 +701,64 @@ mod tests {
     }
 
     #[test]
-    fn whole_tail_reader_rejects_alias_and_trailing_bytes() {
+    fn whole_tail_geometry_is_exact_and_reader_delegates_to_it() {
         let mut body = Vec::new();
         body.extend_from_slice(&w(32));
         body.extend_from_slice(&w(3));
         let mut padded = [0u8; 32];
         padded[..3].copy_from_slice(b"abc");
         body.extend_from_slice(&padded);
+        let geometry = canonical_dynamic_whole_tail(&body, 32, 32).unwrap();
+        assert_eq!(geometry.length_word_start, 32);
+        assert_eq!(geometry.data_start, 64);
+        assert_eq!(geometry.data_end, 67);
+        assert_eq!(geometry.padded_end, 96);
+        assert_eq!(geometry.data, b"abc");
         assert_eq!(read_dynamic_whole_tail(&body, 32, 32).unwrap(), b"abc");
+    }
+
+    #[test]
+    fn whole_tail_geometry_rejects_alias_gap_padding_trailing_and_overflow() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&w(32));
+        body.extend_from_slice(&w(3));
+        let mut padded = [0u8; 32];
+        padded[..3].copy_from_slice(b"abc");
+        body.extend_from_slice(&padded);
+
+        // A resolved object before the authenticated head end aliases the head.
         assert_eq!(
-            read_dynamic_whole_tail(&body, 32, 64),
+            canonical_dynamic_whole_tail(&body, 32, 64),
             Err(RenderErr::Reject("7730 res offset != head end"))
         );
+
+        // A resolved object after the authenticated head end leaves a signed
+        // gap, even if bytes at that later position could form another object.
+        assert_eq!(
+            canonical_dynamic_whole_tail(&body, 64, 32),
+            Err(RenderErr::Reject("7730 res offset != head end"))
+        );
+
+        let mut dirty = body.clone();
+        dirty[67] = 1;
+        assert_eq!(
+            canonical_dynamic_whole_tail(&dirty, 32, 32),
+            Err(RenderErr::Reject("7730 res dirty pad"))
+        );
+
         body.extend_from_slice(&[0u8; 32]);
         assert_eq!(
-            read_dynamic_whole_tail(&body, 32, 32),
+            canonical_dynamic_whole_tail(&body, 32, 32),
             Err(RenderErr::Reject("7730 res not whole tail"))
         );
         // The generic reader stays composable for independently validated
         // multi-object encodings; only the sole-tail reader owns EOF.
         assert_eq!(read_dynamic(&body, 32).unwrap(), b"abc");
+
+        assert_eq!(
+            canonical_dynamic_whole_tail(&[], usize::MAX, usize::MAX),
+            Err(RenderErr::Reject("7730 res ovf"))
+        );
     }
 
     #[test]

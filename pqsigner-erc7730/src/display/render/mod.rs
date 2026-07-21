@@ -471,6 +471,14 @@ fn render_erc7730_pages_inner_into<'ir>(
         .find_format_by_selector(&selector)
         .map_err(|_| RenderErr::Reject("7730 bad formats"))?
         .ok_or(RenderErr::NoFormat)?;
+    let target = tx.to.ok_or(RenderErr::Reject("7730 no to"))?;
+    let container = formatters::ContractContainerCtx::outer(
+        tx.chain_id,
+        target,
+        tx.value,
+        tx.nonce,
+        device_signer.copied(),
+    );
     // Head-bound guard (defence-in-depth behind the width-aware path
     // slots). Truncate the calldata body to the format's ABI static head
     // so any field whose resolved slot lands beyond the static head — a
@@ -493,7 +501,12 @@ fn render_erc7730_pages_inner_into<'ir>(
     // hard-refuse; the exact Router02 packed-path mode is authenticated and
     // wholly parsed by this preflight before it is returned.
     let calldata_mode =
-        formatters::validate_contract_calldata_framing(&descriptor.ir, &format, full_body, tx)?;
+        formatters::validate_contract_calldata_framing(
+            &descriptor.ir,
+            &format,
+            full_body,
+            &container,
+        )?;
 
     // Semantic word predicates are format-wide authority checks, not rendering
     // hints. Evaluate every guard after canonical framing but before painting
@@ -504,7 +517,7 @@ fn render_erc7730_pages_inner_into<'ir>(
         body,
         full_body,
         calldata_mode,
-        tx,
+        &container,
     )?;
 
     // 2. Banner — page 0. Exact-zero approval wording is derived only when a
@@ -512,7 +525,14 @@ fn render_erc7730_pages_inner_into<'ir>(
     // signed calldata is the strict canonical `approve(address,uint256)`
     // frame. Selector-only inference is forbidden because ERC-721 collides.
     let derived_intent =
-        authenticated_contract_intent(tx, inner_data, &descriptor.ir, &format, body, erc20)?;
+        authenticated_contract_intent(
+            &container,
+            inner_data,
+            &descriptor.ir,
+            &format,
+            body,
+            erc20,
+        )?;
     let mut interpolation = InterpolationState::from_format(&descriptor.ir, &format)?;
     if derived_intent.is_some() && interpolation.is_enrolled() {
         return Err(RenderErr::Reject("7730 conflicting derived intents"));
@@ -539,10 +559,9 @@ fn render_erc7730_pages_inner_into<'ir>(
         body,
         full_body,
         calldata_mode,
-        tx,
+        &container,
         erc20,
         resolver,
-        device_signer,
         &mut NestedCtx::default(),
         &mut interpolation,
     )?;
@@ -814,23 +833,15 @@ fn render_erc7730_eip712_pages_inner_into<'ir>(
     }
     let format = format.ok_or(RenderErr::NoFormat)?;
 
-    // 2. Build a synthetic envelope tx so the formatters can render
-    //    `@.chainId` / `@.to` / `@.value` against the EIP-712 domain.
-    //    `value` defaults to zero (no on-chain transfer for typed-data
-    //    signing); `to` is the verifying contract.
-    let synth_tx = Eip1559Tx {
+    // 2. Expose only the EIP-712 domain's authenticated container values.
+    //    There is no transaction sender or nonce on this signing surface, so
+    //    both remain unavailable and any descriptor use rejects instead of
+    //    inheriting a synthetic zero/identity.
+    let container = formatters::ContractContainerCtx::scoped(
         chain_id,
-        nonce: 0,
-        max_priority_fee_per_gas: pqsigner_tx_core::eip1559::U256::zero(),
-        max_fee_per_gas: pqsigner_tx_core::eip1559::U256::zero(),
-        gas_limit: 0,
-        to: Some(*verifying_contract),
-        value: pqsigner_tx_core::eip1559::U256::zero(),
-        data_len: 0,
-        access_list_count: 0,
-        signing_hash: [0u8; 32],
-        userop_fields: None,
-    };
+        *verifying_contract,
+        U256::zero(),
+    );
 
     // Head-bound guard — see `render_erc7730_pages_inner`. For EIP-712
     // `encodeData` every member is exactly one 32-byte word, so
@@ -877,10 +888,9 @@ fn render_erc7730_eip712_pages_inner_into<'ir>(
         body,
         body,
         formatters::ContractCalldataMode::Standard,
-        &synth_tx,
+        &container,
         erc20,
         resolver,
-        None,
         &mut nested_ctx,
         &mut interpolation,
     )?;
@@ -928,7 +938,7 @@ fn head_bounded_body(body: &[u8], static_head_words: u16) -> Result<&[u8], Rende
 /// ERC-20 semantics despite the shared ERC-721 `approve(address,uint256)`
 /// selector.
 fn authenticated_contract_intent<'a>(
-    tx: &Eip1559Tx,
+    container: &formatters::ContractContainerCtx,
     inner_data: &[u8],
     ir: &crate::ir::Erc7730Ir<'_>,
     format: &crate::ir::FormatHeader<'_>,
@@ -938,9 +948,9 @@ fn authenticated_contract_intent<'a>(
     let Some(meta) = erc20 else {
         return Ok(None);
     };
-    if meta.chain_id != tx.chain_id
-        || tx.to.as_ref() != Some(&meta.contract)
-        || ir.chain_id != tx.chain_id
+    if meta.chain_id != container.chain_id
+        || container.target != meta.contract
+        || ir.chain_id != container.chain_id
         || ir.contract != meta.contract
     {
         return Ok(None);
@@ -990,7 +1000,7 @@ fn authenticated_contract_intent<'a>(
                     formatters::resolve_path(ir, field.path_off, body)?
                 {
                     if core::ptr::eq(word.as_ptr(), body[32..].as_ptr())
-                        && formatters::resolve_token_address(ir, body, tx, &params)?
+                        && formatters::resolve_token_address(ir, body, container, &params)?
                             == meta.contract
                     {
                         allowance_visible = true;
@@ -1148,10 +1158,9 @@ fn render_fields(
     body: &[u8],
     full_body: &[u8],
     calldata_mode: formatters::ContractCalldataMode,
-    tx: &Eip1559Tx,
+    container: &formatters::ContractContainerCtx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
-    device_signer: Option<&[u8; 20]>,
     nested: &mut NestedCtx<'_>,
     interpolation: &mut InterpolationState<'_>,
 ) -> Result<(), RenderErr> {
@@ -1227,10 +1236,9 @@ fn render_fields(
                 body,
                 nested,
                 1,
-                tx,
+                container,
                 erc20,
                 resolver,
-                device_signer,
             )?;
             interpolation.record(field_ordinal as u8, None)?;
             continue;
@@ -1244,10 +1252,9 @@ fn render_fields(
             full_body,
             format.static_head_words,
             calldata_mode,
-            tx,
+            container,
             erc20,
             resolver,
-            device_signer,
         )?;
         interpolation.record(field_ordinal as u8, witness)?;
     }
@@ -1431,10 +1438,9 @@ fn render_one_field(
     full_body: &[u8],
     static_head_words: u16,
     calldata_mode: formatters::ContractCalldataMode,
-    tx: &Eip1559Tx,
+    container: &formatters::ContractContainerCtx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
-    device_signer: Option<&[u8; 20]>,
 ) -> Result<Option<RenderedFieldWitness>, RenderErr> {
     match should_render_with_mode(params, None, COMPACT_MODE) {
         Action::Render => {
@@ -1467,7 +1473,7 @@ fn render_one_field(
                     ir,
                     full_body,
                     static_head_words,
-                    tx,
+                    container,
                     erc20,
                     resolver,
                     params,
@@ -1482,7 +1488,6 @@ fn render_one_field(
                     ir,
                     full_body,
                     static_head_words,
-                    tx,
                     erc20,
                     resolver,
                     params,
@@ -1505,11 +1510,10 @@ fn render_one_field(
                     pages,
                     ir,
                     full_body,
-                    tx,
+                    container,
                     erc20,
                     resolver,
                     params,
-                    device_signer,
                 )
             } else if formatters::token_path_needs_full_body(params) {
                 // A Tier-B tokenPath is accepted only after the format-wide
@@ -1521,11 +1525,10 @@ fn render_one_field(
                     pages,
                     ir,
                     full_body,
-                    tx,
+                    container,
                     erc20,
                     resolver,
                     params,
-                    device_signer,
                 )
             } else {
                 // Static-head scalar — head-bounded body (byte-identical).
@@ -1534,11 +1537,10 @@ fn render_one_field(
                     pages,
                     ir,
                     body,
-                    tx,
+                    container,
                     erc20,
                     resolver,
                     params,
-                    device_signer,
                 )
             }
         }
@@ -1566,10 +1568,9 @@ fn render_nested_struct(
     parent_body: &[u8],
     nested: &mut NestedCtx<'_>,
     depth: u8,
-    tx: &Eip1559Tx,
+    container: &formatters::ContractContainerCtx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
-    device_signer: Option<&[u8; 20]>,
 ) -> Result<(), RenderErr> {
     use crate::render::nested as pn;
     use subtle::ConstantTimeEq;
@@ -1667,10 +1668,9 @@ fn render_nested_struct(
                 elem_ed,
                 nested,
                 depth,
-                tx,
+                container,
                 erc20,
                 resolver,
-                device_signer,
             )?;
         }
         return Ok(());
@@ -1696,10 +1696,9 @@ fn render_nested_struct(
         nested_ed,
         nested,
         depth,
-        tx,
+        container,
         erc20,
         resolver,
-        device_signer,
     )?;
     Ok(())
 }
@@ -1717,10 +1716,9 @@ fn render_nested_subfields(
     nested_ed: &[u8],
     nested: &mut NestedCtx<'_>,
     depth: u8,
-    tx: &Eip1559Tx,
+    container: &formatters::ContractContainerCtx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
-    device_signer: Option<&[u8; 20]>,
 ) -> Result<(), RenderErr> {
     for sf in np.sub_fields() {
         let sf = sf.map_err(|_| RenderErr::Reject("7730 nested subfield"))?;
@@ -1761,10 +1759,9 @@ fn render_nested_subfields(
                 nested_ed,
                 nested,
                 depth + 1,
-                tx,
+                container,
                 erc20,
                 resolver,
-                device_signer,
             )?;
             continue;
         }
@@ -1779,10 +1776,9 @@ fn render_nested_subfields(
             nested_ed,
             np.member_count,
             formatters::ContractCalldataMode::Standard,
-            tx,
+            container,
             erc20,
             resolver,
-            device_signer,
         )?;
     }
     Ok(())
