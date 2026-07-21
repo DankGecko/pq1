@@ -17,7 +17,7 @@
 //! ```text
 //!   [dsep_present:2][domain_separator:32][primary_type_hash:32]
 //!   [encoded_data_len:2][encoded_data:encoded_data_len]
-//!   (V3 only) [nested_blob_len:2][nested_blob:nested_blob_len]
+//!   (V3 only) [witness_blob_len:2][witness_blob:witness_blob_len]
 //!   [trailer_len:2][trailer:trailer_len]
 //! ```
 //! The final `trailer` MUST end exactly at `payload.len()` — the wire-level
@@ -36,7 +36,9 @@ pub struct Eip712TypedFrame<'a> {
     pub primary_type_hash: [u8; 32],
     /// ABI-encoded struct data (`keccak256(typehash || encoded_data)`).
     pub encoded_data: &'a [u8],
-    /// V3 nested-encodeData blob (DISPLAY-only; empty for non-V3).
+    /// V3 descriptor-selected display-witness blob (DISPLAY-only; empty for
+    /// non-V3). The retained field name is wire/API compatibility; authenticated
+    /// IR selects nested-struct versus string-preimage record grammar.
     pub nested_blob: &'a [u8],
     /// The ERC-7730 descriptor bundle trailer.
     pub trailer: &'a [u8],

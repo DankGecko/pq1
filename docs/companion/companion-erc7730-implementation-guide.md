@@ -46,7 +46,7 @@ order they will bite you.
    - [6.2 CMD_SIGN_USEROP_BATCH (0x32)](#62-cmd_sign_userop_batch-0x32)
    - [6.3 CMD_SIGN_OFFCHAIN (0x62) — kind=2 EIP-712 typed](#63-cmd_sign_offchain-0x62--kind2-eip-712-typed)
    - [6.4 CMD_SIGN_OFFCHAIN — kind=0 / kind=1 fingerprint pages](#64-cmd_sign_offchain--kind0--kind1-fingerprint-pages)
-   - [6.5 CMD_SIGN_OFFCHAIN — kind=3 EIP-712 typed with NESTED structs (Permit2 / UniswapX)](#65-cmd_sign_offchain--kind3-eip-712-typed-with-nested-structs-permit2--uniswapx)
+   - [6.5 CMD_SIGN_OFFCHAIN — kind=3 EIP-712 typed with display witnesses](#65-cmd_sign_offchain--kind3-eip-712-typed-with-display-witnesses)
 7. [Worked examples](#7-worked-examples)
    - [7.1 USDT transfer on mainnet](#71-usdt-transfer-on-mainnet)
    - [7.2 USDT approve max (exact, not unlimited)](#72-usdt-approve-max-exact-not-unlimited)
@@ -136,8 +136,9 @@ an exact `(chain, address)` lookup. Wildcard names never qualify.
 <!-- BEGIN XTASK-VERIFIED ERC7730 SEMANTIC CONTRACT -->
 ### Device semantic manifest (generated)
 
-- The host compiler and device require **IR schema v5 (`0x05`)**; this value is generated from `pqsigner_erc7730::ir::SCHEMA_VER`, and older schemas hard-refuse.
+- The host compiler and device require **IR schema v6 (`0x06`)**; this value is generated from `pqsigner_erc7730::ir::SCHEMA_VER`, and older schemas hard-refuse.
 - Schema v5 authenticates every `uintN`/`intN` width as `1..=32` bytes. Before any trusted ERC-7730 page is published, the device requires exact ABI zero extension for `uintN` and sign extension for `intN`; full-width `uint256`/`int256` retain every 32-byte word unchanged.
+- Schema v6 admits at most two explicitly enrolled top-level EIP-712 string preimages per format. Authenticated direct-word paths, sequential ordinals, an independent format count, exact witness-stream consumption, and a full 32-byte Keccak comparison bind every displayed byte to the signed member word before publication. Missing, reordered, non-ASCII, over-128-byte, hash-mismatched, trailing, or page-overflow evidence hard-refuses; it never authorizes typed-to-blind fallback.
 
 | Wire opcode | Registry `format` | Device route |
 |------------:|-------------------|--------------|
@@ -173,11 +174,11 @@ Three things in the companion bundle:
    hand-authored seed corpus used by older bring-up snapshots.
 
    <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->
-   - Development catalogue: 399,433 B, 463 compiled leaves, 4,580
+   - Development catalogue: 404,904 B, 467 compiled leaves, 4,580
      exact registry-declared known-call tuples, provenance `dev-unattested`.
      The tuple-set SHA-256 receipt is
      `b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829`.
-   - E2E fixture: 3,968 B, 8 compiled leaves.
+   - E2E fixture: 3,993 B, 8 compiled leaves.
    <!-- END XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->
 
    The blob does **not** embed its Merkle root. Bytes 0..31 are the catalogue
@@ -544,7 +545,7 @@ firmware-internal replay-safe nested digest that the C10 signature covers. No
 companion-side clear-sign or names-bundle section exists for these kinds.
 Appending bytes either makes RAW32 invalid or changes the PERSONAL_SIGN message.
 
-### 6.5 CMD_SIGN_OFFCHAIN — kind=3 EIP-712 typed with NESTED structs (Permit2 / UniswapX)
+### 6.5 CMD_SIGN_OFFCHAIN — kind=3 EIP-712 typed with display witnesses
 
 Kind 3 is a wire capability, not proof that a named protocol is currently in
 the compiled catalogue. The checked-in `secure/data/erc7730.review.txt` is
@@ -560,12 +561,20 @@ is inside. Permit2 `PermitSingle`/`PermitBatch`/`PermitTransferFrom` and all six
 UniswapX order variants (`DutchOrder`, `ExclusiveDutchOrder`, `LimitOrder`,
 `V2DutchOrder`, …) are of this shape.
 
-**When to use kind=3:** iff the descriptor's format for this `primary_type_hash`
-declares nested members — i.e. its pinned format header has
-`nested_descent_count > 0`. (If it is `0`, use kind=2 §6.3; kind=3 with an empty
-`nested_blob` also works but kind=2 is simpler.) A format that has nested members
-MUST be signed via kind=3 — kind=2 provides no `nested_blob`, so the device finds
-no record to bind the nested `hashStruct` word and declines the whole render.
+Schema v6 also permits a frozen set of direct top-level `string` members. Their
+signed `encodeData` word is `keccak256(exact UTF-8 bytes)`, so the device needs
+the exact preimage before it can show the value. This is not generic string
+authority: the authenticated descriptor leaf pins the deployment, full primary
+type hash, exact member path, traversal ordinal, and per-format record count.
+Only printable ASCII strings of at most 128 bytes are accepted in this phase.
+
+**When to use kind=3:** iff the descriptor's format for this
+`primary_type_hash` has `nested_descent_count > 0` **or**
+`string_preimage_count > 0` in its authenticated format header. If both are
+zero, use kind=2 (§6.3); kind=3 with an empty witness blob also works, but kind=2
+is simpler. A format with either non-zero count MUST use kind=3. Kind=2 provides
+no witness blob, so the device cannot bind the hidden preimage and declines the
+whole render. This downgrade is a refusal, never permission to sign a raw hash.
 
 The payload is kind=2's, with a `nested_blob` section inserted **between**
 `encoded_data` and the trailer:
@@ -579,29 +588,30 @@ payload =
  || u8[32] primary_type_hash            // keccak256(encodeType(primaryType, types))
  || u16_be(encoded_data_len)            // ≤ 512
  || u8[encoded_data_len] encoded_data   // canonical EIP-712 encodeData body, without typeHash
- || u16_be(nested_blob_len)             // ≤ 2048 (MAX_OFFCHAIN_EIP712_NESTED_LEN); 0 if no nested member
- || u8[nested_blob_len] nested_blob     // DFS records, see below — DISPLAY-ONLY, not signed
+ || u16_be(nested_blob_len)             // ≤ 2048 (legacy name; descriptor-selected witness stream)
+ || u8[nested_blob_len] nested_blob     // traversal records, see below — DISPLAY-ONLY, not signed
  || u16_be(trailer_len)                 // ERC-7730 bundle (§5)
  || u8[trailer_len] erc7730_bundle
 ```
 
 The **signed digest is UNCHANGED** — the firmware still signs
 `keccak(0x1901 ∥ domain_separator ∥ keccak(primary_type_hash ∥ encoded_data))`.
-The `nested_blob` feeds ONLY the on-device display binding, which proves the shown
-nested content equals the opaque words already inside `encoded_data`. A wrong
-`nested_blob` can therefore only cause a **decline**, never a wrong signature.
+The legacy-named `nested_blob` feeds ONLY the on-device display binding, which
+proves each shown nested value or string preimage equals the opaque word already
+inside `encoded_data`. It never enters the signed digest. A wrong witness blob
+can therefore only cause a **decline**, never a wrong signature.
 
-#### Building `nested_blob` — DFS record order
+#### Building `nested_blob` — authenticated traversal order
 
-`nested_blob` is a **depth-first** concatenation of one record per nested descent
-point, in the **exact order the device descends the descriptor's fields**. The
-descent order is: walk the format's fields top-to-bottom; each nested-struct or
-array-of-struct member is a descent point; recurse **into** a nested struct
-depth-first (its own nested members' records come immediately after its record,
-before the parent's later sibling records). This is deterministic and computable
-from the descriptor alone — build your records by mirroring that walk.
+`nested_blob` is a concatenation of records in the **exact authenticated field
+traversal order**. Walk the format fields top-to-bottom. A marked top-level
+string consumes one string record at that point. A nested struct or
+array-of-struct consumes its existing record grammar and recurses depth-first;
+its child records therefore precede the parent's later sibling fields. The IR
+marker at each consumption point chooses the grammar—the companion supplies no
+record tag, path, label, or word index.
 
-Two record shapes, chosen by whether the member is an array:
+Three record shapes are selected by authenticated IR:
 
 ```
 single nested struct  (a struct member):
@@ -612,7 +622,18 @@ array-of-struct       (a T[] member):
  || u16_be(len) || u8[len] elem0_ed               // each len == member_count × 32
  || u16_be(len) || u8[len] elem1_ed
  || …                                             // elem_count records
+
+top-level string preimage:
+    u16_be(len) || u8[len] exact_string_bytes      // len 0..=128; bytes 0x20..=0x7e
 ```
+
+For a string record, emit the exact UTF-8 bytes without normalization,
+replacement, clipping, or a terminating NUL. Before publishing any field page,
+the device requires `keccak256(exact_string_bytes)` to equal the exact signed
+member word selected by the authenticated direct path. It then shows every byte
+in 32-byte parts with the exact length and part number; length zero still gets
+an explicit page. Swapped two-string records, replay from another request,
+truncation, controls/non-ASCII, and length 129 all refuse.
 
 - `nested_ed` (and each `elem_i_ed`) is the **EIP-712 `encodeData` of that nested
   struct** — exactly `member_count × 32` bytes, where `member_count` is the nested
@@ -630,6 +651,8 @@ array-of-struct       (a T[] member):
 
 **Reconciliation the firmware enforces (get any of these wrong → decline):**
 - exactly one record per pinned descent point (records consumed == `nested_descent_count`);
+- exactly one record per enrolled string marker, with sequential authenticated
+  ordinals (strings consumed == `string_preimage_count`, maximum 2);
 - the DFS cursor ends EXACTLY at `nested_blob_len` (no trailing/padding bytes);
 - each `nested_ed` length == the pinned `member_count × 32`;
 - `elem_count` in `1..=6`;
@@ -637,6 +660,11 @@ array-of-struct       (a T[] member):
 
 None of these is a security risk if wrong (the blob is display-only), but the order
 will not clear-sign — so mirror the device's field-descent order precisely.
+
+The unchanged page and 2 KiB blob budgets are part of acceptance. Large valid
+Rarible creator/royalty arrays can exceed the trusted-display budget and must be
+reported as unsupported for that request; companions must not shorten an array,
+clip a URI, or retry with kind=2.
 
 ## 7. Worked examples
 
@@ -935,8 +963,8 @@ provenance remains blocked):
 <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 | Variant | Root | Catalog blob bytes | Compiled leaves |
 |---------|------|-------------------:|----------------:|
-| development (non-e2e) | `0x568b7da7092a41dbcd4d229f98fc9e8dd01fe12ed9d45211de5c46b61cad9945` | 399 433 | 463 |
-| e2e | `0xa2bde3ae909a23a1ab45c533ffcbcdfb35345101ee750da96a3cd6f890040cb4` | 3 968 | 8 |
+| development (non-e2e) | `0x01fc3633f39a453684445b87fbfd1b8d3b1063fe9824984508a890f3c949db21` | 404 904 | 467 |
+| e2e | `0x7de80ae894ebab000cf7a071b8413533d0436951db43c806706712d60704fceb` | 3 993 | 8 |
 <!-- END XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 
 Source of truth: fresh compiler output checked against `secure/src/db_roots.rs`

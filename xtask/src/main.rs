@@ -1190,6 +1190,10 @@ fn render_erc7730_semantic_contract() -> String {
         out,
         "- Schema v5 authenticates every `uintN`/`intN` width as `1..=32` bytes. Before any trusted ERC-7730 page is published, the device requires exact ABI zero extension for `uintN` and sign extension for `intN`; full-width `uint256`/`int256` retain every 32-byte word unchanged."
     );
+    let _ = writeln!(
+        out,
+        "- Schema v6 admits at most two explicitly enrolled top-level EIP-712 string preimages per format. Authenticated direct-word paths, sequential ordinals, an independent format count, exact witness-stream consumption, and a full 32-byte Keccak comparison bind every displayed byte to the signed member word before publication. Missing, reordered, non-ASCII, over-128-byte, hash-mismatched, trailing, or page-overflow evidence hard-refuses; it never authorizes typed-to-blind fallback."
+    );
     let _ = writeln!(out);
     let _ = writeln!(out, "| Wire opcode | Registry `format` | Device route |");
     let _ = writeln!(out, "|------------:|-------------------|--------------|");
@@ -1280,6 +1284,9 @@ fn render_erc7730_integration_facts(
             "- Schema v5 authenticates every `uintN`/`intN` width and hard-refuses dirty ABI\n",
             "  zero/sign extension before publishing trusted clear-signing pages; full-width\n",
             "  `uint256`/`int256` words remain unchanged.\n",
+            "- Schema v6 binds explicitly enrolled top-level EIP-712 string preimages to their\n",
+            "  exact signed words and hard-refuses missing, reordered, mismatched, non-ASCII,\n",
+            "  over-128-byte, trailing, or page-overflow display evidence without fallback.\n",
             "- The current regenerated development catalogue has **{} leaves**, root\n",
             "  `{}`,\n",
             "  and **{} exact known-call tuples**. The tuple-set receipt is SHA-256\n",
@@ -1828,11 +1835,13 @@ mod tests {
         )
         .expect("fresh semantic contract");
 
-        assert_eq!(pqsigner_erc7730::ir::SCHEMA_VER, 0x05);
-        assert!(semantics.contains("IR schema v5 (`0x05`)"));
-        assert!(!semantics.contains("IR schema v4 (`0x04`)"));
+        assert_eq!(pqsigner_erc7730::ir::SCHEMA_VER, 0x06);
+        assert!(semantics.contains("IR schema v6 (`0x06`)"));
+        assert!(!semantics.contains("IR schema v5 (`0x05`)"));
         assert!(semantics
             .contains("exact ABI zero extension for `uintN` and sign extension for `intN`"));
+        assert!(semantics.contains("at most two explicitly enrolled top-level EIP-712 string preimages"));
+        assert!(semantics.contains("typed-to-blind fallback"));
         assert!(
             semantics.contains("full-width `uint256`/`int256` retain every 32-byte word unchanged")
         );
@@ -1861,8 +1870,13 @@ mod tests {
         let semantics = render_erc7730_semantic_contract();
         let guide = format!("prefix\n{semantics}\nsuffix\n");
         for stale in [
-            guide.replacen("IR schema v5 (`0x05`)", "IR schema v4 (`0x04`)", 1),
+            guide.replacen("IR schema v6 (`0x06`)", "IR schema v5 (`0x05`)", 1),
             guide.replacen("exact ABI zero extension", "best-effort ABI extension", 1),
+            guide.replacen(
+                "at most two explicitly enrolled top-level EIP-712 string preimages",
+                "arbitrary EIP-712 strings",
+                1,
+            ),
             guide.replacen("`0x04` | `nftName`", "`0x09` | `nftName`", 1),
             guide.replacen(
                 "hard refusal (nested calldata unsupported)",
@@ -1907,11 +1921,13 @@ mod tests {
             &facts,
         )
         .expect("fresh integration facts");
-        assert_eq!(pqsigner_erc7730::ir::SCHEMA_VER, 0x05);
-        assert!(facts.contains("IR schema v5 (`0x05`)"));
-        assert!(!facts.contains("IR schema v4 (`0x04`)"));
+        assert_eq!(pqsigner_erc7730::ir::SCHEMA_VER, 0x06);
+        assert!(facts.contains("IR schema v6 (`0x06`)"));
+        assert!(!facts.contains("IR schema v5 (`0x05`)"));
         assert!(facts.contains("hard-refuses dirty ABI"));
         assert!(facts.contains("`uint256`/`int256` words remain unchanged"));
+        assert!(facts.contains("binds explicitly enrolled top-level EIP-712 string preimages"));
+        assert!(facts.contains("without fallback"));
         assert!(facts.contains("5 / 128 bits"));
     }
 
@@ -1925,8 +1941,13 @@ mod tests {
         let facts = render_erc7730_integration_facts(&root, 420, 4_542, &tuple_hash, &bloom, 274);
         let doc = format!("prefix\n{facts}\nsuffix\n");
         for stale in [
-            doc.replacen("IR schema v5 (`0x05`)", "IR schema v4 (`0x04`)", 1),
+            doc.replacen("IR schema v6 (`0x06`)", "IR schema v5 (`0x05`)", 1),
             doc.replacen("hard-refuses dirty ABI", "accepts dirty ABI", 1),
+            doc.replacen(
+                "binds explicitly enrolled top-level EIP-712 string preimages",
+                "accepts arbitrary EIP-712 strings",
+                1,
+            ),
             doc.replacen("420 leaves", "419 leaves", 1),
             doc.replacen(&hex::encode(root), &hex::encode([0x33; 32]), 1),
             doc.replacen("4,542 exact", "4,541 exact", 1),

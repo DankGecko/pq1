@@ -75,7 +75,7 @@ HEADER_MAGIC = b"P730"
 HEADER_LEN = 32
 ENTRY_LEN = 72
 IR_HEADER_LEN = 134
-IR_SCHEMA_VERSION = 5
+IR_SCHEMA_VERSION = 6
 IR_MAX_LEN = 4096
 IR_MAX_FORMATS = 32
 IR_MAX_FIELDS = 24
@@ -248,14 +248,23 @@ def _parse_ir(ir: bytes) -> dict:
     selectors: set[bytes] = set()
     type_hashes: list[bytes] = []
     for format_index in range(count):
-        if cursor + 9 > len(formats):
+        if cursor + 10 > len(formats):
             raise ValueError(f"IR format {format_index} header is truncated")
         selector = bytes(formats[cursor : cursor + 4])
         field_count = formats[cursor + 4]
         intent_len = formats[cursor + 5]
+        string_preimage_count = formats[cursor + 9]
         if field_count > IR_MAX_FIELDS:
             raise ValueError(f"IR format {format_index} field count exceeds cap")
-        cursor += 9  # selector, counts, static-head words, nested-descent count
+        if string_preimage_count > 2:
+            raise ValueError(
+                f"IR format {format_index} string-preimage count exceeds cap"
+            )
+        if context_kind == CTX_CONTRACT and string_preimage_count:
+            raise ValueError(
+                f"IR contract format {format_index} carries string-preimage evidence"
+            )
+        cursor += 10  # selector, counts, static-head words, nested/string counts
         if cursor + intent_len > len(formats):
             raise ValueError(f"IR format {format_index} intent is truncated")
         intent = formats[cursor : cursor + intent_len]

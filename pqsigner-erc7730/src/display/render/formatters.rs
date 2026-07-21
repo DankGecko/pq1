@@ -50,7 +50,7 @@ use pqsigner_tx_core::eip1559::{Eip1559Tx, U256};
 // `walk`'s Kani-proven readers) lives in the host crate so it is itself
 // Kani-verifiable; `render_array` is a thin renderer over its result, and the
 // tests reach it as `formatters::resolve_array`.
-use crate::display::{ascii_str, DISPLAY_COLS};
+use crate::display::{ascii_str, DISPLAY_COLS, MAX_PAGES};
 pub use crate::render::array::resolve_array;
 use crate::render::params::{
     nft_collection_path_is_current_slice, parse as parse_params, ParamSet, DATE_ENC_BLOCKHEIGHT,
@@ -2102,6 +2102,145 @@ fn resolve_dynamic<'a>(
         Leaf::Dynamic(o) => crate::render::resolve::read_dynamic_whole_tail(body, o, head_end),
         Leaf::Word(_) => Err(RenderErr::Reject("7730 dyn leaf is word")),
     }
+}
+
+/// Maximum exact preimage admitted for one authenticated EIP-712 string-hash
+/// member. Four 32-byte pages keep both display and witness consumption
+/// bounded; longer strings refuse rather than clip or substitute their hash.
+pub(super) const EIP712_STRING_PREIMAGE_MAX: usize = 128;
+const EIP712_STRING_BYTES_PER_PAGE: usize = 2 * DISPLAY_COLS;
+
+/// Resolve the exact direct EIP-712 member word selected by authenticated IR.
+/// This deliberately accepts only `RootStructured / FieldIdx(slot)`: an
+/// EIP-712 string member carries its Keccak commitment in the static member
+/// word and has no ABI tail or `FollowOffset` to resolve.
+pub(super) fn resolve_eip712_string_hash_word<'body>(
+    ir: &Erc7730Ir<'_>,
+    field: &FieldEntry<'_>,
+    body: &'body [u8],
+    static_head_words: u16,
+) -> Result<&'body [u8; 32], RenderErr> {
+    if field.format_op != FormatOp::Raw as u8 || field.path_off == 0 {
+        return Err(RenderErr::Reject("7730 string hash path shape"));
+    }
+    let path = ir
+        .path_bytes(field.path_off)
+        .map_err(|_| RenderErr::Reject("7730 string hash path"))?;
+    if path.len() != 4
+        || path[0] != PathOp::RootStructured as u8
+        || path[1] != PathOp::FieldIdx as u8
+    {
+        return Err(RenderErr::Reject("7730 string hash path shape"));
+    }
+    let slot = u16::from_be_bytes([path[2], path[3]]);
+    if slot >= static_head_words {
+        return Err(RenderErr::Reject("7730 string hash slot"));
+    }
+    let start = usize::from(slot)
+        .checked_mul(32)
+        .ok_or(RenderErr::Reject("7730 string hash slot overflow"))?;
+    let end = start
+        .checked_add(32)
+        .ok_or(RenderErr::Reject("7730 string hash slot overflow"))?;
+    body.get(start..end)
+        .ok_or(RenderErr::Reject("7730 string hash word missing"))?
+        .try_into()
+        .map_err(|_| RenderErr::Reject("7730 string hash word missing"))
+}
+
+/// Paint a previously hash-authenticated EIP-712 string preimage exactly.
+/// Validation and the complete page reservation happen before the first page
+/// mutation. Every accepted byte occupies its deterministic display cell, and
+/// each page repeats the authenticated label plus `part/total` and exact byte
+/// length, so trailing spaces cannot collapse into display padding.
+pub(super) fn render_eip712_string_preimage(
+    field: &FieldEntry<'_>,
+    pages: &mut Pages,
+    preimage: &[u8],
+) -> Result<(), RenderErr> {
+    if field.format_op != FormatOp::Raw as u8 {
+        return Err(RenderErr::Reject("7730 string formatter mismatch"));
+    }
+    if preimage.len() > EIP712_STRING_PREIMAGE_MAX
+        || !preimage.iter().all(|byte| (0x20..0x7f).contains(byte))
+    {
+        return Err(RenderErr::Reject("7730 string not displayable"));
+    }
+    let page_count = if preimage.is_empty() {
+        1
+    } else {
+        preimage.len().div_ceil(EIP712_STRING_BYTES_PER_PAGE)
+    };
+    if page_count > MAX_PAGES.saturating_sub(pages.len) {
+        return Err(RenderErr::PageBudget);
+    }
+
+    for part in 0..page_count {
+        // This cannot fail after the complete reservation check above; retain
+        // the normal hard-refusal mapping as a local defense if Pages changes.
+        let page = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+        write_label_row(pages, page, field.label);
+        if preimage.is_empty() {
+            write_line_bytes(pages.row_mut(page, 1), b"<empty>");
+        } else {
+            let start = part * EIP712_STRING_BYTES_PER_PAGE;
+            let end = (start + EIP712_STRING_BYTES_PER_PAGE).min(preimage.len());
+            let chunk = &preimage[start..end];
+            let first_end = chunk.len().min(DISPLAY_COLS);
+            write_line_bytes(pages.row_mut(page, 1), &chunk[..first_end]);
+            if chunk.len() > DISPLAY_COLS {
+                write_line_bytes(pages.row_mut(page, 2), &chunk[DISPLAY_COLS..]);
+            }
+        }
+        write_eip712_string_footer(
+            pages.row_mut(page, 3),
+            part + 1,
+            page_count,
+            preimage.len(),
+        );
+    }
+    Ok(())
+}
+
+fn append_small_decimal(
+    row: &mut [u8; DISPLAY_COLS],
+    mut position: usize,
+    value: usize,
+) -> usize {
+    let mut digits = [0u8; 3];
+    let mut remaining = value;
+    let mut count = 0usize;
+    loop {
+        digits[count] = b'0' + (remaining % 10) as u8;
+        count += 1;
+        remaining /= 10;
+        if remaining == 0 {
+            break;
+        }
+    }
+    for index in (0..count).rev() {
+        row[position] = digits[index];
+        position += 1;
+    }
+    position
+}
+
+fn write_eip712_string_footer(
+    row: &mut [u8; DISPLAY_COLS],
+    part: usize,
+    total: usize,
+    byte_len: usize,
+) {
+    *row = [b' '; DISPLAY_COLS];
+    // Under the fixed caps the longest footer is `4/4 128 bytes` (13 cells).
+    let mut position = append_small_decimal(row, 0, part);
+    row[position] = b'/';
+    position += 1;
+    position = append_small_decimal(row, position, total);
+    row[position] = b' ';
+    position += 1;
+    position = append_small_decimal(row, position, byte_len);
+    row[position..position + 6].copy_from_slice(b" bytes");
 }
 
 /// C1: render a dynamic ABI `string` field only when dbgen authenticated its
@@ -4838,6 +4977,26 @@ mod kani_harness {
         assert!(pages.buf[0][2] == *b"4626            ");
         assert!(pages.buf[0][3] == [b' '; DISPLAY_COLS]);
     }
+
+    /// Two distinct accepted one-byte preimages cannot paint the same trusted
+    /// display transcript. This is the smallest universal injectivity harness;
+    /// host boundary tests cover multi-page chunking and exact-length framing.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn fmt_p0_eip712_string_one_byte_is_injective() {
+        let left: u8 = kani::any();
+        let right: u8 = kani::any();
+        kani::assume((0x20..0x7f).contains(&left));
+        kani::assume((0x20..0x7f).contains(&right));
+        kani::assume(left != right);
+
+        let field = mk_field(FormatOp::Raw as u8, 1);
+        let mut left_pages = Pages::with_len(0);
+        let mut right_pages = Pages::with_len(0);
+        assert!(render_eip712_string_preimage(&field, &mut left_pages, &[left]).is_ok());
+        assert!(render_eip712_string_preimage(&field, &mut right_pages, &[right]).is_ok());
+        assert!(left_pages.as_slice() != right_pages.as_slice());
+    }
 }
 
 #[cfg(test)]
@@ -5401,6 +5560,7 @@ mod adversarial_renderer_regressions {
             field_count,
             static_head_words: head_words,
             nested_descent_count: 0,
+            string_preimage_count: 0,
             intent: b"Test",
             type_hash: [0u8; 32],
             fields_buf,
@@ -6433,6 +6593,145 @@ mod adversarial_renderer_regressions {
         assert_ne!(plain.as_slice(), spaced.as_slice());
         assert_eq!(&plain.buf[0][3][..7], b"5 bytes");
         assert_eq!(&spaced.buf[0][3][..7], b"6 bytes");
+    }
+
+    fn render_eip712_string(data: &[u8]) -> Result<Pages, RenderErr> {
+        let mut pages = Pages::with_len(0);
+        render_eip712_string_preimage(&field(FormatOp::Raw as u8, 1), &mut pages, data)?;
+        Ok(pages)
+    }
+
+    #[test]
+    fn eip712_string_painter_covers_zero_one_and_page_boundaries() {
+        let empty = render_eip712_string(b"").unwrap();
+        assert_eq!(empty.len, 1);
+        assert_eq!(&empty.buf[0][1][..7], b"<empty>");
+        assert_eq!(&empty.buf[0][3][..11], b"1/1 0 bytes");
+
+        for (len, expected_pages, footer) in [
+            (1usize, 1usize, b"1/1 1 bytes".as_slice()),
+            (32, 1, b"1/1 32 bytes".as_slice()),
+            (33, 2, b"2/2 33 bytes".as_slice()),
+            (128, 4, b"4/4 128 bytes".as_slice()),
+        ] {
+            let data = std::vec![b'x'; len];
+            let pages = render_eip712_string(&data).unwrap();
+            assert_eq!(pages.len, expected_pages);
+            assert_eq!(
+                &pages.buf[expected_pages - 1][3][..footer.len()],
+                footer
+            );
+            let mut painted = std::vec::Vec::new();
+            for page in &pages.buf[..pages.len] {
+                painted.extend_from_slice(&page[1]);
+                painted.extend_from_slice(&page[2]);
+            }
+            assert_eq!(&painted[..len], data.as_slice());
+        }
+    }
+
+    #[test]
+    fn eip712_string_painter_is_injective_for_content_and_trailing_spaces() {
+        let alice = render_eip712_string(b"alice").unwrap();
+        let alicf = render_eip712_string(b"alicf").unwrap();
+        let trailing = render_eip712_string(b"alice ").unwrap();
+        assert_ne!(alice.as_slice(), alicf.as_slice());
+        assert_ne!(alice.as_slice(), trailing.as_slice());
+        assert_eq!(&alice.buf[0][3][..11], b"1/1 5 bytes");
+        assert_eq!(&trailing.buf[0][3][..11], b"1/1 6 bytes");
+    }
+
+    #[test]
+    fn eip712_string_painter_refuses_129_and_non_ascii_without_mutation() {
+        for invalid in [
+            std::vec![b'x'; EIP712_STRING_PREIMAGE_MAX + 1],
+            std::vec![b'\n'],
+            std::vec![0x7f],
+            std::vec![0x80],
+        ] {
+            let mut pages = Pages::with_len(1);
+            pages.buf[0][0][0] = b'X';
+            let before_len = pages.len;
+            let before_buf = pages.buf;
+            assert_eq!(
+                render_eip712_string_preimage(
+                    &field(FormatOp::Raw as u8, 1),
+                    &mut pages,
+                    &invalid,
+                ),
+                Err(RenderErr::Reject("7730 string not displayable"))
+            );
+            assert_eq!(pages.len, before_len);
+            assert_eq!(pages.buf, before_buf);
+        }
+    }
+
+    #[test]
+    fn eip712_string_page_budget_refusal_is_atomic() {
+        let mut pages = Pages::with_len(MAX_PAGES - 3);
+        pages.buf[MAX_PAGES - 4][0][0] = b'Z';
+        let before_len = pages.len;
+        let before_buf = pages.buf;
+        assert_eq!(
+            render_eip712_string_preimage(
+                &field(FormatOp::Raw as u8, 1),
+                &mut pages,
+                &[b'x'; EIP712_STRING_PREIMAGE_MAX],
+            ),
+            Err(RenderErr::PageBudget)
+        );
+        assert_eq!(pages.len, before_len);
+        assert_eq!(pages.buf, before_buf);
+    }
+
+    #[test]
+    fn eip712_string_hash_word_requires_exact_direct_static_path() {
+        const DIRECT_SLOT_ONE: [u8; 6] = [
+            0,
+            4,
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            1,
+        ];
+        const WITH_FOLLOW_OFFSET: [u8; 7] = [
+            0,
+            5,
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            1,
+            PathOp::FollowOffset as u8,
+        ];
+        let mut body = [0u8; 64];
+        body[32..].fill(0x5a);
+        let direct = resolve_eip712_string_hash_word(
+            &ir(&DIRECT_SLOT_ONE),
+            &field(FormatOp::Raw as u8, 1),
+            &body,
+            2,
+        )
+        .unwrap();
+        assert_eq!(direct, &[0x5a; 32]);
+
+        assert_eq!(
+            resolve_eip712_string_hash_word(
+                &ir(&DIRECT_SLOT_ONE),
+                &field(FormatOp::Raw as u8, 1),
+                &body,
+                1,
+            ),
+            Err(RenderErr::Reject("7730 string hash slot"))
+        );
+        assert_eq!(
+            resolve_eip712_string_hash_word(
+                &ir(&WITH_FOLLOW_OFFSET),
+                &field(FormatOp::Raw as u8, 1),
+                &body,
+                2,
+            ),
+            Err(RenderErr::Reject("7730 string hash path shape"))
+        );
     }
 
     #[test]

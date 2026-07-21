@@ -431,9 +431,12 @@ fn weth9_deposit_and_withdraw_descriptor_and_generated_ir_bind_exact_signed_amou
             "generated WETH leaf deployment drifted"
         );
         assert_eq!(entry.descriptor_hash, expected_descriptor_hash);
-        assert_eq!(entry.ir_bytes.len(), 218, "WETH IR wire length drifted");
-
         let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("parse generated WETH IR");
+        assert_eq!(
+            entry.ir_bytes.len(),
+            218 + ir.format_count().expect("WETH format count") as usize,
+            "schema v6 adds exactly one string-preimage count byte to each format header"
+        );
         assert_eq!(
             cross_check_contract(&ir, entry.chain_id, &entry.contract),
             Ok(())

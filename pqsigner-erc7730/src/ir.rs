@@ -15,7 +15,7 @@
 //!
 //! ```text
 //!   off  size  field
-//!    0    1   schema_ver         (0x05 — see SCHEMA_VER)
+//!    0    1   schema_ver         (0x06 — see SCHEMA_VER)
 //!    1    1   context_kind       (CTX_CONTRACT | CTX_EIP712)
 //!    2    8   chain_id (u64 BE)  (for EIP-712: domain.chainId)
 //!   10   20   contract           (for EIP-712: domain.verifyingContract)
@@ -71,8 +71,13 @@ use core::convert::TryFrom;
 /// or sign extension instead of silently displaying a dirty narrow word as a
 /// different full-width integer. Old v4 leaves hard-refuse because omitting
 /// this width changes the accepted meaning of the same 32-byte word.
+/// Bumped `0x05 -> 0x06` for exact authenticated EIP-712 string preimages. The
+/// format header gained an independent `string_preimage_count` reconciliation
+/// pin, and marked fields gained a distinct terminal kind plus ordered evidence
+/// ordinal. Old v5 leaves hard-refuse rather than treating a signed string hash
+/// word as calldata or as directly displayable text.
 /// See `docs/security/vulns/VULN-erc7730-walker-slot-confusion.md`.
-pub const SCHEMA_VER: u8 = 0x05;
+pub const SCHEMA_VER: u8 = 0x06;
 pub const HEADER_LEN: usize = 134;
 
 /// Upper bound on a nested EIP-712 struct's own member count (the number
@@ -86,8 +91,12 @@ pub const MAX_NESTED_MEMBERS: usize = 32;
 /// visible sub-fields plus a divider, and the whole array must fit inside
 /// `MAX_PAGES` after the banner/chain/confirm pages — and the collect-verify
 /// buffer. `elem_count > MAX_NESTED_ARRAY` (or `== 0`) declines. Introduced by
-/// schema v4 and retained unchanged by schema v5.
+/// schema v4 and retained unchanged by schema v6.
 pub const MAX_NESTED_ARRAY: usize = 6;
+
+/// Maximum exact EIP-712 string preimages consumed by one format. This is a
+/// format-authenticated reconciliation count, not a host-selected capacity.
+pub const MAX_EIP712_STRING_PREIMAGES: usize = 2;
 
 pub const CTX_CONTRACT: u8 = 0x01;
 pub const CTX_EIP712: u8 = 0x02;
@@ -553,6 +562,9 @@ impl<'a> Erc7730Ir<'a> {
             {
                 return Err(IrError::BadFormat);
             }
+            if header.string_preimage_count as usize > MAX_EIP712_STRING_PREIMAGES {
+                return Err(IrError::OverCap);
+            }
             let mut fields = header.fields();
             let mut field_ordinal = 0u8;
             let mut interpolated_intent = None;
@@ -560,6 +572,7 @@ impl<'a> Erc7730Ir<'a> {
             let mut saw_bare_nested_marker = false;
             let mut packed_v3_path_fields = 0u8;
             let mut exact_empty_bytes_fields = 0u8;
+            let mut actual_string_preimages = 0u8;
             let packed_v3_identity = is_uniswap_router02_packed_identity(self, &header);
             while let Some(field) = fields.next() {
                 let field = field?;
@@ -574,7 +587,7 @@ impl<'a> Erc7730Ir<'a> {
                     validate_path_program(path)?;
                 }
                 if field.param_off == 0 {
-                    // Schema v5 requires the authenticated terminal-kind TLV
+                    // Schema v6 requires the authenticated terminal-kind TLV
                     // even when a formatter has no other parameters. Integer
                     // kinds additionally require their authenticated width.
                     return Err(IrError::BadField);
@@ -583,6 +596,20 @@ impl<'a> Erc7730Ir<'a> {
                 let params = crate::render::params::parse(self, field.param_off)
                     .map_err(|_| IrError::BadPoolEntry)?;
                 let kind = params.terminal_kind.ok_or(IrError::BadField)?;
+
+                if validate_eip712_string_preimage_field(
+                    self,
+                    &header,
+                    &field,
+                    op,
+                    kind,
+                    &params,
+                    actual_string_preimages,
+                )? {
+                    actual_string_preimages = actual_string_preimages
+                        .checked_add(1)
+                        .ok_or(IrError::OverCap)?;
+                }
 
                 validate_word_guard(self, &field, kind, &params, packed_v3_identity)?;
                 if validate_exact_empty_bytes_field(self, &header, &field, op, kind, &params)? {
@@ -722,6 +749,9 @@ impl<'a> Erc7730Ir<'a> {
                 || saw_bare_nested_marker && actual_nested_descents != 0
                 || matches!(self.context_kind, ContextKind::Contract)
                     && header.nested_descent_count != 0
+                || actual_string_preimages != header.string_preimage_count
+                || matches!(self.context_kind, ContextKind::Contract)
+                    && header.string_preimage_count != 0
             {
                 return Err(IrError::BadFormat);
             }
@@ -749,6 +779,62 @@ impl<'a> Erc7730Ir<'a> {
         }
         Ok(())
     }
+}
+
+/// Validate the schema-v6 authority to replace one signed EIP-712 string-hash
+/// word with a separately supplied exact preimage.
+///
+/// The marker is deliberately a top-level static-word capability: the path is
+/// exactly `RootStructured / FieldIdx(slot)`, the slot is inside the
+/// authenticated member count, and marker ordinals are the canonical
+/// `0..string_preimage_count` sequence in visible-field traversal order. This
+/// function authenticates only the IR topology; runtime code must still hash
+/// the complete evidence bytes and compare all 32 committed bytes before any
+/// page is published.
+fn validate_eip712_string_preimage_field(
+    ir: &Erc7730Ir<'_>,
+    format: &FormatHeader<'_>,
+    field: &FieldEntry<'_>,
+    op: FormatOp,
+    kind: crate::render::policy::TerminalKind,
+    params: &crate::render::params::ParamSet<'_>,
+    expected_ordinal: u8,
+) -> Result<bool, IrError> {
+    use crate::render::policy::TerminalKind;
+
+    let Some(ordinal) = params.eip712_string_preimage_ordinal else {
+        return if kind == TerminalKind::Eip712StringHashWord {
+            Err(IrError::BadField)
+        } else {
+            Ok(false)
+        };
+    };
+
+    if !matches!(ir.context_kind, ContextKind::Eip712)
+        || params.visibility != Visibility::Always
+        || op != FormatOp::Raw
+        || kind != TerminalKind::Eip712StringHashWord
+        || params.dynamic_kind.is_some()
+        || field.path_off == 0
+        || ordinal != expected_ordinal
+        || ordinal >= format.string_preimage_count
+        || ordinal as usize >= MAX_EIP712_STRING_PREIMAGES
+    {
+        return Err(IrError::BadField);
+    }
+
+    let path = ir.path_bytes(field.path_off)?;
+    if path.len() != 4
+        || path[0] != PathOp::RootStructured as u8
+        || path[1] != PathOp::FieldIdx as u8
+    {
+        return Err(IrError::BadField);
+    }
+    let slot = u16::from_be_bytes([path[2], path[3]]);
+    if slot >= format.static_head_words {
+        return Err(IrError::BadField);
+    }
+    Ok(true)
 }
 
 /// Validate the narrow authenticated authority carried by
@@ -800,7 +886,7 @@ fn validate_exact_empty_bytes_field(
 
 /// Independently reconcile an authenticated terminal kind with the structural
 /// path shape available to the device.  The semantic kind itself is supplied
-/// by schema v5; this belt prevents a dynamic/constant/container path from
+/// by schema v6; this belt prevents a dynamic/constant/container path from
 /// contradicting that authenticated claim.
 fn validate_terminal_path_shape(
     ir: &Erc7730Ir<'_>,
@@ -1230,6 +1316,7 @@ fn validate_interpolated_scalar_path(prog: &[u8]) -> Result<(), IrError> {
 ///   intent_len           u8       (≤ 254, printable ASCII)
 ///   static_head_words    u16 BE   (ABI static head, in 32-byte words)
 ///   nested_descent_count u8       (introduced in v4 — E1 reconciliation pin)
+///   string_preimage_count u8      (introduced in v6 — exact evidence pin)
 ///   intent               [u8; intent_len]
 ///   type_hash            [u8; 32] (EIP-712 context ONLY — see below)
 ///   field                [u8; ...]*  (field_count entries — see FieldEntry)
@@ -1265,8 +1352,13 @@ pub struct FormatHeader<'a> {
     /// regression tripwire, not a tautology: a future edit that makes descent
     /// conditional drops the runtime consume-count below this pin → decline.
     /// `0` for every contract-context format and every non-nested EIP-712
-    /// format. Introduced in schema v4 and retained by schema v5.
+    /// format. Introduced in schema v4 and retained by schema v6.
     pub nested_descent_count: u8,
+    /// Number of exact EIP-712 string preimages consumed by this format. Deep
+    /// validation requires exactly this many top-level markers, with ordinals
+    /// `0..count` in field traversal order. Contract formats must carry zero.
+    /// Introduced in schema v6.
+    pub string_preimage_count: u8,
     /// Trimmed printable ASCII intent string ("Sign", "Wrap", …).
     pub intent: &'a [u8],
     /// Full 32-byte EIP-712 primary-type hash (`keccak256(encodeType)`).
@@ -1366,8 +1458,9 @@ impl<'a> Iterator for FormatIter<'a> {
         self.remaining -= 1;
         let mut p = self.cursor;
         // Header: 4 (selector) + 1 (field_count) + 1 (intent_len)
-        //         + 2 (static_head_words) + 1 (nested_descent_count).
-        if p + 9 > self.buf.len() {
+        //         + 2 (static_head_words) + 1 (nested_descent_count)
+        //         + 1 (string_preimage_count).
+        if p + 10 > self.buf.len() {
             return Some(Err(IrError::BadFormat));
         }
         let mut selector = [0u8; 4];
@@ -1379,7 +1472,8 @@ impl<'a> Iterator for FormatIter<'a> {
         let intent_len = self.buf[p + 5] as usize;
         let static_head_words = u16::from_be_bytes([self.buf[p + 6], self.buf[p + 7]]);
         let nested_descent_count = self.buf[p + 8];
-        p += 9;
+        let string_preimage_count = self.buf[p + 9];
+        p += 10;
         if p + intent_len > self.buf.len() {
             return Some(Err(IrError::BadFormat));
         }
@@ -1418,6 +1512,7 @@ impl<'a> Iterator for FormatIter<'a> {
             field_count,
             static_head_words,
             nested_descent_count,
+            string_preimage_count,
             intent,
             type_hash,
             fields_buf,
@@ -1438,7 +1533,7 @@ impl<'a> FieldIter<'a> {
     /// FieldEntry wire format (`format_op | label_len | label | path_off |
     /// param_off`), so the nested-struct renderer reuses this exact parser —
     /// including its label-ASCII + bounds checks — instead of re-implementing
-    /// it. Introduced in schema v4 and retained by schema v5.
+    /// it. Introduced in schema v4 and retained by schema v6.
     pub fn from_buf(buf: &'a [u8], count: u8) -> Self {
         FieldIter {
             buf,
@@ -1561,6 +1656,7 @@ mod tests {
         out.push(0); // intent len
         out.extend_from_slice(&1u16.to_be_bytes()); // static head words
         out.push(0); // nested descent count
+        out.push(0); // string preimage count
         out.push(format_op);
         out.push(1); // label len
         out.push(b'X');
@@ -1595,8 +1691,7 @@ mod tests {
         extra_tlvs: &[u8],
     ) -> (std::vec::Vec<u8>, u16) {
         use crate::render::params::{
-            DYNAMIC_KIND_BYTES, PARAM_DYNAMIC_KIND, PARAM_EXACT_EMPTY_BYTES,
-            PARAM_TERMINAL_KIND,
+            DYNAMIC_KIND_BYTES, PARAM_DYNAMIC_KIND, PARAM_EXACT_EMPTY_BYTES, PARAM_TERMINAL_KIND,
         };
 
         let mut pool = std::vec![
@@ -1645,10 +1740,77 @@ mod tests {
         format.push(0);
         format.extend_from_slice(&head_words.to_be_bytes());
         format.push(0);
+        format.push(0);
         for field in fields {
             format.extend_from_slice(field);
         }
         format
+    }
+
+    fn eip712_string_field(
+        pool: &mut std::vec::Vec<u8>,
+        path: &[u8],
+        ordinal: Option<u8>,
+        kind: crate::render::policy::TerminalKind,
+        op: FormatOp,
+        extra_tlvs: &[u8],
+    ) -> std::vec::Vec<u8> {
+        let path_off = pool.len() as u16;
+        pool.push(path.len() as u8);
+        pool.extend_from_slice(path);
+
+        let param_off = pool.len() as u16;
+        let mut body = std::vec![
+            crate::render::params::PARAM_TERMINAL_KIND,
+            1,
+            kind as u8,
+        ];
+        if let Some(ordinal) = ordinal {
+            body.extend_from_slice(&[
+                crate::render::params::PARAM_EIP712_STRING_PREIMAGE,
+                1,
+                ordinal,
+            ]);
+        }
+        body.extend_from_slice(extra_tlvs);
+        pool.push(body.len() as u8);
+        pool.extend_from_slice(&body);
+
+        let mut field = std::vec![op as u8, 6];
+        field.extend_from_slice(b"String");
+        field.extend_from_slice(&path_off.to_be_bytes());
+        field.extend_from_slice(&param_off.to_be_bytes());
+        field
+    }
+
+    fn eip712_format(
+        selector: [u8; 4],
+        head_words: u16,
+        string_preimage_count: u8,
+        fields: &[std::vec::Vec<u8>],
+    ) -> std::vec::Vec<u8> {
+        let mut format = std::vec::Vec::new();
+        format.extend_from_slice(&selector);
+        format.push(fields.len() as u8);
+        format.push(0); // intent len
+        format.extend_from_slice(&head_words.to_be_bytes());
+        format.push(0); // nested descent count
+        format.push(string_preimage_count);
+        let mut type_hash = [0u8; 32];
+        type_hash[..4].copy_from_slice(&selector);
+        format.extend_from_slice(&type_hash);
+        for field in fields {
+            format.extend_from_slice(field);
+        }
+        format
+    }
+
+    fn build_eip712_ir(pool: &[u8], format: &[u8]) -> std::vec::Vec<u8> {
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(format);
+        let mut bytes = build_ir(pool, &formats);
+        bytes[1] = CTX_EIP712;
+        bytes
     }
 
     fn guarded_scalar_pool(
@@ -1863,16 +2025,234 @@ mod tests {
         );
 
         let contract_format = exact_empty_format(selector, 1, &[field]);
-        let mut eip712_format = contract_format[..9].to_vec();
+        let mut eip712_format = contract_format[..10].to_vec();
         let mut type_hash = [0u8; 32];
         type_hash[..4].copy_from_slice(&selector);
         eip712_format.extend_from_slice(&type_hash);
-        eip712_format.extend_from_slice(&contract_format[9..]);
+        eip712_format.extend_from_slice(&contract_format[10..]);
         let mut formats = std::vec![1];
         formats.extend_from_slice(&eip712_format);
         let mut bytes = build_ir(&pool, &formats);
         bytes[1] = CTX_EIP712;
         assert_eq!(Erc7730Ir::parse(&bytes), Err(IrError::BadField));
+    }
+
+    #[test]
+    fn deep_validation_accepts_ordered_top_level_eip712_string_preimages() {
+        use crate::render::policy::TerminalKind;
+
+        let mut pool = std::vec![0];
+        let first = eip712_string_field(
+            &mut pool,
+            &[PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0],
+            Some(0),
+            TerminalKind::Eip712StringHashWord,
+            FormatOp::Raw,
+            &[],
+        );
+        let second = eip712_string_field(
+            &mut pool,
+            &[PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 2],
+            Some(1),
+            TerminalKind::Eip712StringHashWord,
+            FormatOp::Raw,
+            &[],
+        );
+        let format = eip712_format([1, 2, 3, 4], 3, 2, &[first, second]);
+        let bytes = build_eip712_ir(&pool, &format);
+        let parsed = Erc7730Ir::parse(&bytes).unwrap();
+        let header = parsed.format_iter().next().unwrap().unwrap();
+        assert_eq!(header.string_preimage_count, 2);
+    }
+
+    #[test]
+    fn deep_validation_rejects_string_preimage_count_and_ordinal_drift() {
+        use crate::render::policy::TerminalKind;
+
+        for (header_count, ordinals) in [
+            (0, &[0][..]),
+            (1, &[][..]),
+            (2, &[1, 0][..]),
+            (2, &[0][..]),
+        ] {
+            let mut pool = std::vec![0];
+            let mut fields = std::vec::Vec::new();
+            for (slot, ordinal) in ordinals.iter().copied().enumerate() {
+                fields.push(eip712_string_field(
+                    &mut pool,
+                    &[
+                        PathOp::RootStructured as u8,
+                        PathOp::FieldIdx as u8,
+                        0,
+                        slot as u8,
+                    ],
+                    Some(ordinal),
+                    TerminalKind::Eip712StringHashWord,
+                    FormatOp::Raw,
+                    &[],
+                ));
+            }
+            let format = eip712_format([1, 2, 3, 4], 2, header_count, &fields);
+            assert!(
+                Erc7730Ir::parse(&build_eip712_ir(&pool, &format)).is_err(),
+                "accepted count={header_count}, ordinals={ordinals:?}"
+            );
+        }
+
+        let over_cap = eip712_format(
+            [1, 2, 3, 4],
+            1,
+            (MAX_EIP712_STRING_PREIMAGES + 1) as u8,
+            &[],
+        );
+        assert_eq!(
+            Erc7730Ir::parse(&build_eip712_ir(&[], &over_cap)),
+            Err(IrError::OverCap)
+        );
+
+        let mut contract_format = one_field_format([1, 2, 3, 4], FormatOp::Raw as u8);
+        contract_format[9] = 1;
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&contract_format);
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&scalar_pool(), &formats)),
+            Err(IrError::BadFormat)
+        );
+
+        let mut pool = std::vec![0];
+        let field = eip712_string_field(
+            &mut pool,
+            &[PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0],
+            Some(0),
+            TerminalKind::Eip712StringHashWord,
+            FormatOp::Raw,
+            &[],
+        );
+        let mut contract_marker = std::vec![1, 2, 3, 4, 1, 0, 0, 1, 0, 1];
+        contract_marker.extend_from_slice(&field);
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&contract_marker);
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&pool, &formats)),
+            Err(IrError::BadField)
+        );
+    }
+
+    #[test]
+    fn deep_validation_rejects_noncanonical_eip712_string_marker_topologies() {
+        use crate::render::{
+            params::{DYNAMIC_KIND_STRING, PARAM_DYNAMIC_KIND, PARAM_VISIBILITY},
+            policy::TerminalKind,
+        };
+
+        struct Case<'a> {
+            path: &'a [u8],
+            ordinal: Option<u8>,
+            kind: TerminalKind,
+            op: FormatOp,
+            extra_tlvs: &'a [u8],
+            head_words: u16,
+        }
+
+        let direct = [PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0];
+        let followed = [
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+            PathOp::FollowOffset as u8,
+        ];
+        let container = [PathOp::RootContainer as u8, PathOp::FieldIdx as u8, 0, 0];
+        let hidden = [PARAM_VISIBILITY, 1, Visibility::Never as u8];
+        let dynamic = [PARAM_DYNAMIC_KIND, 1, DYNAMIC_KIND_STRING];
+        let cases = [
+            Case {
+                path: &direct,
+                ordinal: None,
+                kind: TerminalKind::Eip712StringHashWord,
+                op: FormatOp::Raw,
+                extra_tlvs: &[],
+                head_words: 1,
+            },
+            Case {
+                path: &direct,
+                ordinal: Some(1),
+                kind: TerminalKind::Eip712StringHashWord,
+                op: FormatOp::Raw,
+                extra_tlvs: &[],
+                head_words: 1,
+            },
+            Case {
+                path: &direct,
+                ordinal: Some(0),
+                kind: TerminalKind::Eip712StringHashWord,
+                op: FormatOp::Amount,
+                extra_tlvs: &[],
+                head_words: 1,
+            },
+            Case {
+                path: &direct,
+                ordinal: Some(0),
+                kind: TerminalKind::Address,
+                op: FormatOp::Raw,
+                extra_tlvs: &[],
+                head_words: 1,
+            },
+            Case {
+                path: &direct,
+                ordinal: Some(0),
+                kind: TerminalKind::Eip712StringHashWord,
+                op: FormatOp::Raw,
+                extra_tlvs: &hidden,
+                head_words: 1,
+            },
+            Case {
+                path: &direct,
+                ordinal: Some(0),
+                kind: TerminalKind::Eip712StringHashWord,
+                op: FormatOp::Raw,
+                extra_tlvs: &dynamic,
+                head_words: 1,
+            },
+            Case {
+                path: &followed,
+                ordinal: Some(0),
+                kind: TerminalKind::Eip712StringHashWord,
+                op: FormatOp::Raw,
+                extra_tlvs: &[],
+                head_words: 1,
+            },
+            Case {
+                path: &container,
+                ordinal: Some(0),
+                kind: TerminalKind::Eip712StringHashWord,
+                op: FormatOp::Raw,
+                extra_tlvs: &[],
+                head_words: 1,
+            },
+            Case {
+                path: &direct,
+                ordinal: Some(0),
+                kind: TerminalKind::Eip712StringHashWord,
+                op: FormatOp::Raw,
+                extra_tlvs: &[],
+                head_words: 0,
+            },
+        ];
+
+        for case in cases {
+            let mut pool = std::vec![0];
+            let field = eip712_string_field(
+                &mut pool,
+                case.path,
+                case.ordinal,
+                case.kind,
+                case.op,
+                case.extra_tlvs,
+            );
+            let format = eip712_format([1, 2, 3, 4], case.head_words, 1, &[field]);
+            assert!(Erc7730Ir::parse(&build_eip712_ir(&pool, &format)).is_err());
+        }
     }
 
     #[test]
@@ -2108,6 +2488,7 @@ mod tests {
         format.push(0); // intent len
         format.extend_from_slice(&2u16.to_be_bytes());
         format.push(0); // nested descent count
+        format.push(0); // string preimage count
         for param_off in [terminal_only_off, 6u16] {
             format.push(FormatOp::Amount as u8);
             format.push(1);
@@ -2177,9 +2558,9 @@ mod tests {
     }
 
     #[test]
-    fn prior_schemas_are_rejected_after_integer_width_migration() {
+    fn prior_schemas_are_rejected_after_string_preimage_migration() {
         let mut buf = minimal_header();
-        for old_schema in [0x03, 0x04] {
+        for old_schema in [0x03, 0x04, 0x05] {
             buf[0] = old_schema;
             assert_eq!(Erc7730Ir::parse(&buf), Err(IrError::SchemaVersion));
         }

@@ -1,7 +1,7 @@
 //! Shared authenticated-field admissibility policy.
 //!
 //! The host compiler knows the Solidity / EIP-712 terminal type, while the
-//! device receives only compact authenticated IR.  Schema v5 carries one
+//! device receives only compact authenticated IR.  Schema v6 carries one
 //! mandatory [`TerminalKind`] byte in every field's parameter blob plus the
 //! original ABI width for integer terminals.  Both sides execute this module's
 //! same exhaustive matrix before a field can be admitted or rendered.  Keeping
@@ -16,7 +16,7 @@ use crate::ir::FormatOp;
 /// Values are wire constants carried by `PARAM_TERMINAL_KIND`.  Arrays carry
 /// the kind of each rendered element; array-ness remains explicit in the path
 /// bytecode (`ArrayAll`).  These values were introduced by schema v4 and remain
-/// byte-for-byte stable in schema v5; do not renumber them.
+/// byte-for-byte stable in schema v6; do not renumber them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum TerminalKind {
@@ -29,10 +29,16 @@ pub enum TerminalKind {
     DynamicBytes = 0x07,
     ConstantText = 0x08,
     NestedStruct = 0x09,
+    /// The signed EIP-712 member is the 32-byte `keccak256(string_bytes)` word.
+    /// A separately supplied exact preimage may be displayed only after the
+    /// renderer authenticates it against that word. This is deliberately not
+    /// [`DynamicString`](Self::DynamicString), whose `FollowOffset` semantics
+    /// belong exclusively to contract calldata.
+    Eip712StringHashWord = 0x0A,
 }
 
 impl TerminalKind {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Unsigned,
         Self::Signed,
         Self::Address,
@@ -42,6 +48,7 @@ impl TerminalKind {
         Self::DynamicBytes,
         Self::ConstantText,
         Self::NestedStruct,
+        Self::Eip712StringHashWord,
     ];
 }
 
@@ -59,6 +66,7 @@ impl TryFrom<u8> for TerminalKind {
             0x07 => Ok(Self::DynamicBytes),
             0x08 => Ok(Self::ConstantText),
             0x09 => Ok(Self::NestedStruct),
+            0x0A => Ok(Self::Eip712StringHashWord),
             _ => Err(()),
         }
     }
@@ -137,6 +145,7 @@ impl ParamMask {
     pub const NFT_COLLECTION_PATH: Self = Self(1 << 21);
     pub const SENDER_ADDRESS: Self = Self(1 << 22);
     pub const EXACT_EMPTY_BYTES: Self = Self(1 << 23);
+    pub const EIP712_STRING_PREIMAGE: Self = Self(1 << 24);
 
     pub const NONE: Self = Self(0);
 
@@ -217,6 +226,7 @@ pub const fn formatter_accepts_terminal(op: FormatOp, kind: TerminalKind) -> boo
                 | TerminalKind::DynamicBytes
                 | TerminalKind::ConstantText
                 | TerminalKind::NestedStruct
+                | TerminalKind::Eip712StringHashWord
         ),
         FormatOp::Amount
         | FormatOp::TokenAmount
@@ -263,6 +273,10 @@ pub const fn validate_field(
             ),
             TerminalKind::ConstantText => (ParamMask::CONST_VALUE, ParamMask::CONST_VALUE),
             TerminalKind::NestedStruct => (ParamMask::NESTED_STRUCT, ParamMask::NESTED_STRUCT),
+            TerminalKind::Eip712StringHashWord => (
+                ParamMask::EIP712_STRING_PREIMAGE,
+                ParamMask::EIP712_STRING_PREIMAGE,
+            ),
             _ => (ParamMask::NONE, ParamMask::NONE),
         },
         FormatOp::Amount | FormatOp::Duration | FormatOp::ChainId => {
@@ -561,6 +575,36 @@ mod tests {
                 ParamMask::DYNAMIC_KIND.union(ParamMask::EXACT_EMPTY_BYTES)
             ),
             Err(PolicyError::ParameterApplicability)
+        );
+        assert!(validate_field(
+            FormatOp::Raw,
+            TerminalKind::Eip712StringHashWord,
+            ParamMask::EIP712_STRING_PREIMAGE
+        )
+        .is_ok());
+        assert_eq!(
+            validate_field(
+                FormatOp::Raw,
+                TerminalKind::Eip712StringHashWord,
+                ParamMask::NONE
+            ),
+            Err(PolicyError::ParameterRequirement)
+        );
+        assert_eq!(
+            validate_field(
+                FormatOp::Raw,
+                TerminalKind::Eip712StringHashWord,
+                ParamMask::EIP712_STRING_PREIMAGE.union(ParamMask::DYNAMIC_KIND)
+            ),
+            Err(PolicyError::ParameterApplicability)
+        );
+        assert_eq!(
+            validate_field(
+                FormatOp::Amount,
+                TerminalKind::Eip712StringHashWord,
+                ParamMask::EIP712_STRING_PREIMAGE
+            ),
+            Err(PolicyError::FormatterType)
         );
     }
 

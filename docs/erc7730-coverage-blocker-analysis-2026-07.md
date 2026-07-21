@@ -39,9 +39,18 @@ mean “175 features remain to implement.” Practical review buckets are:
   and full consumption remain design-gated in [#347](https://github.com/EthereumPhone/PQ1/issues/347).
 - **Packed/sliced protocol blobs:** aggregator paths, BTC scripts, and similar
   protocol-specific encodings stay refused without authenticated framing.
-- **EIP-712 capability gaps:** nested structs/arrays and string-preimage display
-  need dedicated treatment; the bounded string work is
-  [#493](https://github.com/EthereumPhone/PQ1/issues/493).
+- **Bounded EIP-712 strings ([#493](https://github.com/EthereumPhone/PQ1/issues/493),
+  candidate snapshot only):** of the 11 vendored EIP-712 format keys whose
+  canonical type contains `string`, exactly five formats in four descriptors are
+  enrolled: Flying Tulip `CancelOrder` and `TpslGroupCancel`, Lens `Quote`, and
+  Rarible `Mint721` and `Mint1155`.
+- **Six string-bearing formats remain refused in this snapshot:** Hyperliquid
+  `Withdraw` has three string fields (the bound is two) and a hidden signed
+  `time`; Lens `Comment`, `Mirror`, and `Post` also require array/bytes topology
+  and honest treatment of hidden signed members, while `SetProfileMetadataURI`
+  has a hidden signed `deadline` and is not exact-enrolled; Safe
+  `AddAddressBookEntry` puts the string inside a structured array and hides
+  signed `totp`. These are independent blockers, not unfinished #493 enrollment.
 
 Blind signing is not a coverage substitute; any voluntary forced-blind authority
 is a separate owner decision in [#329](https://github.com/EthereumPhone/PQ1/issues/329).

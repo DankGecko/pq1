@@ -208,8 +208,9 @@ fn positive_sign_offchain_output_deployed_layout() {
 fn positive_sign_offchain_max_input_bounds_personal_sign() {
     // Phase 3 (ERC-7730) added an optional EIP-712 typed-data path
     // (MAX_OFFCHAIN_EIP712_TYPED_LEN) plus an attestation trailer; Phase 5
-    // added the v0x03 nested-EIP-712 variant (MAX_OFFCHAIN_EIP712_TYPED_V3_LEN,
-    // which inserts a nested-encodeData blob before the trailer). The
+    // added the v0x03 EIP-712 display-witness variant
+    // (MAX_OFFCHAIN_EIP712_TYPED_V3_LEN, which inserts a descriptor-selected
+    // nested/string witness blob before the trailer). The
     // max-input bound is the longest of the THREE payload shapes:
     //   header + max(personal_sign, eip712_typed, eip712_typed_v3).
     // (The V3 variant is the largest, so it sets the ceiling.)

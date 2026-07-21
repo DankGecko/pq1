@@ -1272,11 +1272,17 @@ fn aave_v3_generated_ir_exactly_matches_the_ten_evidenced_routes() {
     for entry in &entries {
         assert_eq!(entry.descriptor_hash, descriptor_hash);
         assert_eq!(entry.erc8176_hash, erc8176_hash);
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Aave IR parses");
+        let schema_v5_ir_bytes = descriptor_manifest["ir_bytes"].as_u64().unwrap() as usize;
+        assert_eq!(
+            schema_v5_ir_bytes, 1_134,
+            "archived schema-v5 IR receipt drifted"
+        );
         assert_eq!(
             entry.ir_bytes.len(),
-            descriptor_manifest["ir_bytes"].as_u64().unwrap() as usize
+            schema_v5_ir_bytes + ir.format_count().expect("Aave format count") as usize,
+            "schema v6 adds exactly one string-preimage count byte to each format header"
         );
-        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated Aave IR parses");
         assert_eq!(
             cross_check_contract(&ir, entry.chain_id, &entry.contract),
             Ok(())
@@ -1459,28 +1465,52 @@ fn aave_v3_generated_ir_exactly_matches_the_ten_evidenced_routes() {
     assert_eq!(ethereum_entry.descriptor_hash, descriptor_hash);
 
     let expected = &manifest["expected_catalogue"];
+    // This archived receipt is part of the historical Aave evidence and must
+    // remain immutable even as later, independently reviewed descriptors move
+    // the production catalogue root.
+    assert_eq!(expected["entries"].as_u64(), Some(453));
     assert_eq!(
-        registry.entries.len() as u64,
-        expected["entries"].as_u64().unwrap()
+        required_str(expected, "root"),
+        "0x48aac419f76889375e21dd7813b0abefafa02485a5d1f52e510d854d97192e96"
+    );
+    assert_eq!(expected["known_calls"].as_u64(), Some(4_552));
+    assert_eq!(
+        required_str(expected, "known_call_set_sha256"),
+        "0x0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9"
     );
     assert_eq!(
-        registry.leaf_count as u64,
-        expected["entries"].as_u64().unwrap()
+        required_str(expected, "known_call_bloom_sha256"),
+        "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade"
+    );
+
+    assert_eq!(
+        registry.entries.len(),
+        467,
+        "current production catalogue leaf count drifted"
     );
     assert_eq!(
-        format!("0x{}", hex::encode(registry.root)),
-        required_str(expected, "root")
+        registry.leaf_count, 467,
+        "current production catalogue Merkle leaf count drifted"
     );
     assert_eq!(
-        registry.known_call_count as u64,
-        expected["known_calls"].as_u64().unwrap()
+        registry.blob.len(),
+        404_904,
+        "current production catalogue blob size drifted"
     );
     assert_eq!(
-        format!("0x{}", hex::encode(registry.known_call_set_hash)),
-        required_str(expected, "known_call_set_sha256")
+        hex::encode(registry.root),
+        "01fc3633f39a453684445b87fbfd1b8d3b1063fe9824984508a890f3c949db21"
+    );
+    assert_eq!(
+        registry.known_call_count, 4_580,
+        "current exact known-call count drifted"
+    );
+    assert_eq!(
+        hex::encode(registry.known_call_set_hash),
+        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
     );
     assert_eq!(
         sha256_hex(&registry.known_calls_bloom),
-        required_str(expected, "known_call_bloom_sha256")
+        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9"
     );
 }

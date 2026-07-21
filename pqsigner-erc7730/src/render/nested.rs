@@ -93,7 +93,7 @@ impl<'a> NestedStructParam<'a> {
 }
 
 /// Allocation-free nested-v3 preflight introduced in schema v4 and retained
-/// unchanged by schema v5.
+/// unchanged by schema v6.
 /// Returns the number of descent records consumed by this block plus all child
 /// anchors, which the enclosing format reconciles against its independently
 /// authenticated `nested_descent_count`.
@@ -139,6 +139,15 @@ pub(crate) fn validate_nested_ir(
         let params =
             super::params::parse(ir, field.param_off).map_err(|_| IrError::BadPoolEntry)?;
         let kind = params.terminal_kind.ok_or(IrError::BadField)?;
+
+        // Schema-v6 string-preimage evidence is deliberately top-level only.
+        // A nested member has its own hashStruct binding grammar and cannot
+        // borrow the parent format's string-evidence ordinal stream.
+        if params.eip712_string_preimage_ordinal.is_some()
+            || kind == TerminalKind::Eip712StringHashWord
+        {
+            return Err(IrError::BadField);
+        }
 
         // `PARAM_EXACT_EMPTY_BYTES` has one topology: an always-visible,
         // top-level contract-calldata C1 tail. A nested EIP-712 member is a
@@ -336,6 +345,11 @@ pub fn validate_nested_structure(
         let kind = params
             .terminal_kind
             .ok_or(RenderErr::Reject("7730 nested terminal kind"))?;
+        if params.eip712_string_preimage_ordinal.is_some()
+            || kind == TerminalKind::Eip712StringHashWord
+        {
+            return Err(RenderErr::Reject("7730 nested string preimage"));
+        }
         validate_field(op, kind, params.policy_mask())
             .map_err(|_| RenderErr::Reject("7730 nested field policy"))?;
 
@@ -427,6 +441,11 @@ pub fn validate_nested_integer_words(
     for entry in np.sub_fields() {
         let sf = entry.map_err(|_| RenderErr::Reject("7730 nested subfield"))?;
         let params = super::params::parse(ir, sf.param_off)?;
+        if params.eip712_string_preimage_ordinal.is_some()
+            || params.terminal_kind == Some(TerminalKind::Eip712StringHashWord)
+        {
+            return Err(RenderErr::Reject("7730 nested string preimage"));
+        }
         if params.nested_struct.is_some() {
             continue;
         }
@@ -547,6 +566,57 @@ mod tests {
         assert_eq!(np.addr_word_bmp, &[0x01]);
         assert_eq!(np.sub_field_cnt, 2);
         assert_eq!(np.sub_fields().count(), 2);
+    }
+
+    #[test]
+    fn nested_subfields_reject_eip712_string_preimage_authority() {
+        use crate::render::params::{
+            PARAM_EIP712_STRING_PREIMAGE, PARAM_TERMINAL_KIND,
+        };
+
+        let mut pool = std::vec![0xFF, 4];
+        pool.extend_from_slice(&[
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+        ]);
+        pool.extend_from_slice(&[
+            6,
+            PARAM_TERMINAL_KIND,
+            1,
+            TerminalKind::Eip712StringHashWord as u8,
+            PARAM_EIP712_STRING_PREIMAGE,
+            1,
+            0,
+        ]);
+
+        let mut payload = std::vec![NESTED_V3];
+        payload.extend_from_slice(&0u16.to_be_bytes());
+        payload.extend_from_slice(&[0xAB; 32]);
+        payload.extend_from_slice(&1u16.to_be_bytes());
+        payload.push(0); // flags
+        payload.push(0); // address bitmap
+        payload.push(1); // sub-field count
+        payload.extend_from_slice(&[FormatOp::Raw as u8, 1, b'S']);
+        payload.extend_from_slice(&1u16.to_be_bytes());
+        payload.extend_from_slice(&6u16.to_be_bytes());
+
+        let np = parse_nested_struct_param(&payload).unwrap();
+        let ir_bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&ir_bytes).unwrap();
+        assert_eq!(
+            validate_nested_structure(&ir, &np, false),
+            Err(RenderErr::Reject("7730 nested string preimage"))
+        );
+        assert_eq!(
+            validate_nested_ir(&ir, &payload, 1, 1),
+            Err(IrError::BadField)
+        );
+        assert_eq!(
+            validate_nested_integer_words(&ir, &np, &[0u8; 32]),
+            Err(RenderErr::Reject("7730 nested string preimage"))
+        );
     }
 
     #[test]

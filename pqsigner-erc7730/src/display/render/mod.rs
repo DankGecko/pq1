@@ -672,9 +672,10 @@ pub fn render_erc7730_eip712_pages_into<'ir>(
 }
 
 /// Entry point for the `OFFCHAIN_KIND_EIP712_TYPED_V3 = 3` sign path — the
-/// nested-EIP-712 variant. Identical to [`render_erc7730_eip712_pages`] plus the
-/// companion-supplied DFS `nested_blob` (`[u16 len][nested_ed]` records) that
-/// backs the nested-struct DISPLAY binding.
+/// descriptor-evidence variant. Identical to [`render_erc7730_eip712_pages`]
+/// plus the companion-supplied descriptor-ordered `nested_blob`: nested struct
+/// records and schema-v6 exact string-preimage records share this bounded
+/// stream and cursor.
 ///
 /// The device threads `nested_blob` into the nested-aware renderer: for each
 /// `PARAM_NESTED_STRUCT` member it verifies `hash_struct(pinned type_hash,
@@ -866,6 +867,8 @@ fn render_erc7730_eip712_pages_inner_into<'ir>(
         blob: nested_blob,
         cursor: 0,
         records_consumed: 0,
+        string_preimages_consumed: 0,
+        allow_eip712_string_preimages: true,
     };
     render_fields(
         pages,
@@ -882,17 +885,15 @@ fn render_erc7730_eip712_pages_inner_into<'ir>(
         &mut interpolation,
     )?;
     // E1 reconciliation (the top-level analog of the belt): the device must have
-    // BOUND every nested descent point the descriptor pins, and consumed the
-    // WHOLE `nested_blob`. `nested_descent_count` is dbgen-pinned INDEPENDENT of
-    // this traversal, so a regression that makes descent conditional
-    // under-consumes and trips here; a `cursor != blob.len()` means a companion
-    // padded the blob with an unbound record (E4-3). Either → decline.
-    if nested_ctx.records_consumed != format.nested_descent_count as u16 {
-        return Err(RenderErr::Reject("7730 nested descent mismatch"));
-    }
-    if nested_ctx.cursor != nested_blob.len() {
-        return Err(RenderErr::Reject("7730 nested blob trailing"));
-    }
+    // BOUND every nested descent and exact-string record the descriptor pins,
+    // and consumed the WHOLE shared evidence blob. Both counts are dbgen-pinned
+    // independently of traversal; under-consumption, an omitted marker, or a
+    // companion-padded trailing record therefore declines the whole request.
+    reconcile_eip712_evidence(
+        &nested_ctx,
+        format.nested_descent_count,
+        format.string_preimage_count,
+    )?;
     // WYSIWYS belt (VULN-erc7730-visible-never-noparam-clearsign), typed-data
     // sibling of the calldata guard above. A typed-data format that declares
     // members but renders none (all `visible:"never"`) would sign an
@@ -1002,17 +1003,35 @@ fn authenticated_contract_intent<'a>(
     Ok((spender_visible && allowance_visible).then_some(b"Revoke approval"))
 }
 
-/// Threaded through [`render_fields`] to carry the nested-EIP-712 struct DFS
-/// state (Phase 5). Empty (`Default`) for the calldata path and for a non-nested
-/// typed message; a V3 typed message supplies the companion `blob` and the
-/// renderer advances `cursor` + `records_consumed` as it binds each nested
-/// member. The EIP-712 inner reconciles the final state against the format's
-/// PINNED `nested_descent_count` (E1) + `blob.len()` (E4-3).
+/// Threaded through [`render_fields`] to carry the descriptor-selected EIP-712
+/// evidence stream. Empty (`Default`) for calldata; a typed message enables
+/// exact-string witnesses and V3 supplies the shared blob. Nested struct and
+/// string records advance one cursor but independent counters, all reconciled
+/// against authenticated format counts plus exact EOF.
 #[derive(Default)]
 struct NestedCtx<'a> {
     blob: &'a [u8],
     cursor: usize,
     records_consumed: u16,
+    string_preimages_consumed: u16,
+    allow_eip712_string_preimages: bool,
+}
+
+fn reconcile_eip712_evidence(
+    nested: &NestedCtx<'_>,
+    expected_nested_descents: u8,
+    expected_string_preimages: u8,
+) -> Result<(), RenderErr> {
+    if nested.records_consumed != u16::from(expected_nested_descents) {
+        return Err(RenderErr::Reject("7730 nested descent mismatch"));
+    }
+    if nested.string_preimages_consumed != u16::from(expected_string_preimages) {
+        return Err(RenderErr::Reject("7730 string preimage count mismatch"));
+    }
+    if nested.cursor != nested.blob.len() {
+        return Err(RenderErr::Reject("7730 evidence blob trailing"));
+    }
+    Ok(())
 }
 
 /// Contract-render state for one authenticated `interpolatedIntent` program.
@@ -1139,6 +1158,53 @@ fn render_fields(
     for (field_ordinal, field_result) in format.fields().enumerate() {
         let field = field_result.map_err(|_| RenderErr::Reject("7730 bad field"))?;
         let params = parse_params(ir, field.param_off)?;
+        // Schema-v6 EIP-712 string preimages share the V3 evidence stream with
+        // nested-struct records. The authenticated marker is consumed in field
+        // traversal order, before ordinary visibility/formatter dispatch: the
+        // signed member word is the Keccak commitment, never an ABI offset.
+        // Requiring the marker and terminal kind as an exact pair is a local
+        // publication-boundary belt behind deep IR validation.
+        let string_ordinal = params.eip712_string_preimage_ordinal;
+        let string_terminal = params.terminal_kind
+            == Some(crate::render::policy::TerminalKind::Eip712StringHashWord);
+        if string_ordinal.is_some() || string_terminal {
+            let ordinal = string_ordinal
+                .ok_or(RenderErr::Reject("7730 string marker mismatch"))?;
+            if !string_terminal
+                || !nested.allow_eip712_string_preimages
+                || field.format_op != crate::ir::FormatOp::Raw as u8
+                || params.visibility != crate::ir::Visibility::Always
+                || params.policy_mask()
+                    != crate::render::policy::ParamMask::EIP712_STRING_PREIMAGE
+                || params.interpolated_intent.is_some()
+                || params.integer_width_bytes.is_some()
+                || params.word_guard.is_some()
+            {
+                return Err(RenderErr::Reject("7730 string marker mismatch"));
+            }
+            if !matches!(
+                should_render_with_mode(&params, None, COMPACT_MODE),
+                Action::Render
+            ) {
+                return Err(RenderErr::Reject("7730 string visibility mismatch"));
+            }
+            let committed = formatters::resolve_eip712_string_hash_word(
+                ir,
+                &field,
+                body,
+                format.static_head_words,
+            )?;
+            let (preimage, next_cursor, next_count) =
+                bind_next_eip712_string_preimage(nested, ordinal, committed)?;
+            // The painter validates its complete bounded byte domain and page
+            // reservation before its first push, so PageBudget cannot leave a
+            // partially painted string. Commit stream state only after paint.
+            formatters::render_eip712_string_preimage(&field, pages, preimage)?;
+            nested.cursor = next_cursor;
+            nested.string_preimages_consumed = next_count;
+            interpolation.record(field_ordinal as u8, None)?;
+            continue;
+        }
         // Nested-EIP-712 struct descent (Phase 5). E1: the descent + keccak
         // binding run on the STRUCTURAL marker ALONE, BEFORE and INDEPENDENT of
         // the visibility decision — a hidden/skipped sub-field is just a word
@@ -1186,6 +1252,169 @@ fn render_fields(
         interpolation.record(field_ordinal as u8, witness)?;
     }
     Ok(())
+}
+
+/// Parse and authenticate one exact EIP-712 string-preimage record without
+/// mutating the shared stream state. The caller commits `next_cursor` and
+/// `next_count` only after the all-or-nothing painter succeeds.
+fn bind_next_eip712_string_preimage<'a>(
+    nested: &NestedCtx<'a>,
+    ordinal: u8,
+    committed: &[u8; 32],
+) -> Result<(&'a [u8], usize, u16), RenderErr> {
+    if !nested.allow_eip712_string_preimages
+        || usize::from(ordinal) >= crate::ir::MAX_EIP712_STRING_PREIMAGES
+        || u16::from(ordinal) != nested.string_preimages_consumed
+    {
+        return Err(RenderErr::Reject("7730 string preimage order"));
+    }
+
+    let length_end = nested
+        .cursor
+        .checked_add(2)
+        .ok_or(RenderErr::Reject("7730 string length overflow"))?;
+    let length_bytes = nested
+        .blob
+        .get(nested.cursor..length_end)
+        .ok_or(RenderErr::Reject("7730 string length missing"))?;
+    let length = usize::from(u16::from_be_bytes([length_bytes[0], length_bytes[1]]));
+    if length > formatters::EIP712_STRING_PREIMAGE_MAX {
+        return Err(RenderErr::Reject("7730 string preimage too long"));
+    }
+    let next_cursor = length_end
+        .checked_add(length)
+        .ok_or(RenderErr::Reject("7730 string record overflow"))?;
+    let preimage = nested
+        .blob
+        .get(length_end..next_cursor)
+        .ok_or(RenderErr::Reject("7730 string preimage truncated"))?;
+    if !preimage.iter().all(|byte| (0x20..0x7f).contains(byte)) {
+        return Err(RenderErr::Reject("7730 string preimage non-ascii"));
+    }
+
+    let actual: [u8; 32] = sha3::Keccak256::digest(preimage).into();
+    if !bool::from(actual.ct_eq(committed)) {
+        return Err(RenderErr::Reject("7730 string preimage binding"));
+    }
+    let next_count = nested
+        .string_preimages_consumed
+        .checked_add(1)
+        .ok_or(RenderErr::Reject("7730 string count overflow"))?;
+    Ok((preimage, next_cursor, next_count))
+}
+
+#[cfg(test)]
+mod eip712_string_evidence_tests {
+    use super::*;
+
+    fn hash(bytes: &[u8]) -> [u8; 32] {
+        sha3::Keccak256::digest(bytes).into()
+    }
+
+    fn append_record(blob: &mut std::vec::Vec<u8>, bytes: &[u8]) {
+        blob.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+        blob.extend_from_slice(bytes);
+    }
+
+    fn ctx(blob: &[u8]) -> NestedCtx<'_> {
+        NestedCtx {
+            blob,
+            cursor: 0,
+            records_consumed: 0,
+            string_preimages_consumed: 0,
+            allow_eip712_string_preimages: true,
+        }
+    }
+
+    #[test]
+    fn exact_record_binds_without_mutating_stream_state() {
+        let mut blob = std::vec::Vec::new();
+        append_record(&mut blob, b"ipfs://example");
+        let state = ctx(&blob);
+        let (preimage, next_cursor, next_count) =
+            bind_next_eip712_string_preimage(&state, 0, &hash(b"ipfs://example")).unwrap();
+        assert_eq!(preimage, b"ipfs://example");
+        assert_eq!(next_cursor, blob.len());
+        assert_eq!(next_count, 1);
+        assert_eq!(state.cursor, 0);
+        assert_eq!(state.string_preimages_consumed, 0);
+    }
+
+    #[test]
+    fn missing_truncated_oversized_and_hash_mismatch_records_refuse() {
+        let cases: &[(&[u8], [u8; 32], &str)] = &[
+            (&[], hash(b""), "7730 string length missing"),
+            (&[0], hash(b""), "7730 string length missing"),
+            (&[0, 2, b'a'], hash(b"a"), "7730 string preimage truncated"),
+            (&[0, 129], hash(b""), "7730 string preimage too long"),
+            (&[0, 1, b'b'], hash(b"a"), "7730 string preimage binding"),
+        ];
+        for (blob, committed, reason) in cases {
+            let state = ctx(blob);
+            assert_eq!(
+                bind_next_eip712_string_preimage(&state, 0, committed),
+                Err(RenderErr::Reject(reason))
+            );
+            assert_eq!(state.cursor, 0);
+            assert_eq!(state.string_preimages_consumed, 0);
+        }
+    }
+
+    #[test]
+    fn ordinal_and_record_reordering_refuse() {
+        let mut blob = std::vec::Vec::new();
+        append_record(&mut blob, b"second");
+        let state = ctx(&blob);
+        assert_eq!(
+            bind_next_eip712_string_preimage(&state, 1, &hash(b"second")),
+            Err(RenderErr::Reject("7730 string preimage order"))
+        );
+        assert_eq!(
+            bind_next_eip712_string_preimage(&state, 0, &hash(b"first")),
+            Err(RenderErr::Reject("7730 string preimage binding"))
+        );
+    }
+
+    #[test]
+    fn mixed_string_and_nested_records_share_one_exact_cursor() {
+        let nested_ed = [0x42; 32];
+        let mut blob = std::vec::Vec::new();
+        append_record(&mut blob, b"first");
+        append_record(&mut blob, &nested_ed);
+        append_record(&mut blob, b"second");
+        let mut state = ctx(&blob);
+
+        let (_, cursor, count) =
+            bind_next_eip712_string_preimage(&state, 0, &hash(b"first")).unwrap();
+        state.cursor = cursor;
+        state.string_preimages_consumed = count;
+        let (parsed_nested, cursor) =
+            crate::render::nested::read_next_nested_ed(state.blob, state.cursor).unwrap();
+        assert_eq!(parsed_nested, nested_ed);
+        state.cursor = cursor;
+        state.records_consumed = 1;
+        let (_, cursor, count) =
+            bind_next_eip712_string_preimage(&state, 1, &hash(b"second")).unwrap();
+        state.cursor = cursor;
+        state.string_preimages_consumed = count;
+        assert_eq!(reconcile_eip712_evidence(&state, 1, 2), Ok(()));
+    }
+
+    #[test]
+    fn final_reconciliation_rejects_missing_and_extra_records() {
+        let empty = ctx(&[]);
+        assert_eq!(
+            reconcile_eip712_evidence(&empty, 0, 1),
+            Err(RenderErr::Reject("7730 string preimage count mismatch"))
+        );
+
+        let extra_blob = [0, 0];
+        let extra = ctx(&extra_blob);
+        assert_eq!(
+            reconcile_eip712_evidence(&extra, 0, 0),
+            Err(RenderErr::Reject("7730 evidence blob trailing"))
+        );
+    }
 }
 
 /// Render one already-parsed field (top-level OR a nested sub-field) against
@@ -1501,6 +1730,16 @@ fn render_nested_subfields(
         // EIP-712 encodeData contains static words, never that ABI topology.
         if sf_params.exact_empty_bytes {
             return Err(RenderErr::Reject("7730 exact-empty nested"));
+        }
+        // This phase authenticates direct top-level EIP-712 member words only.
+        // A marker or terminal-kind smuggled into a nested sub-field must not
+        // reach ordinary Raw dispatch and display the hash as though it were
+        // the string value.
+        if sf_params.eip712_string_preimage_ordinal.is_some()
+            || sf_params.terminal_kind
+                == Some(crate::render::policy::TerminalKind::Eip712StringHashWord)
+        {
+            return Err(RenderErr::Reject("7730 string preimage nested"));
         }
         // v3 depth-2+: a sub-field that is ITSELF a nested struct/array-of-struct
         // (`witness.info`, `witness.outputs`). Recurse: the CURRENT struct's

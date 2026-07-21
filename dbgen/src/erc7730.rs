@@ -57,8 +57,8 @@ use pqsigner_erc7730::bundle::{leaf_hash, verify_erc7730_bundle_with_leaf_count}
 use pqsigner_erc7730::display::primitives::known_native_ticker;
 use pqsigner_erc7730::ir::{
     Erc7730Ir, FormatOp, CONTRACT_NAME_FIELD_LEN, CTX_CONTRACT, CTX_EIP712, ERC20_APPROVE_SELECTOR,
-    HEADER_LEN, MAX_FIELDS_PER_FORMAT, MAX_FORMATS, MAX_IR_LEN, MAX_NESTED_MEMBERS,
-    OWNER_FIELD_LEN, SCHEMA_VER,
+    HEADER_LEN, MAX_EIP712_STRING_PREIMAGES, MAX_FIELDS_PER_FORMAT, MAX_FORMATS, MAX_IR_LEN,
+    MAX_NESTED_MEMBERS, OWNER_FIELD_LEN, SCHEMA_VER,
 };
 use pqsigner_erc7730::known_calls::{
     insert as insert_known_call, may_contain as known_call_may_contain, BLOOM_BYTES,
@@ -452,6 +452,10 @@ const WORD_GUARD_PAYLOAD_LEN: usize = 33;
 /// dynamic tail must contain exactly zero data bytes.  Dbgen emits this only
 /// through an exact descriptor/deployment/signature/path enrollment.
 const PARAM_EXACT_EMPTY_BYTES: u8 = 0x4B;
+/// Schema-v6 ordinal selecting one exact preimage from the authenticated
+/// EIP-712 evidence stream. Emission is restricted to the descriptor-,
+/// deployment-, typehash-, and source-shape-bound enrollments below.
+const PARAM_EIP712_STRING_PREIMAGE: u8 = 0x4C;
 const MAX_SENDER_ADDRESSES: usize = 2;
 const DYNAMIC_KIND_STRING: u8 = 0x01;
 const DYNAMIC_KIND_BYTES: u8 = 0x02;
@@ -554,6 +558,184 @@ struct ExactEmptyBytesEnrollment {
     selector: [u8; 4],
     path: &'static str,
 }
+
+/// One top-level typed-data `string` whose exact bytes may be supplied through
+/// the descriptor-selected evidence stream. `ordinal` is evidence traversal
+/// order, not the member's EIP-712 word index; the latter is independently
+/// derived from the exact source path and signature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Eip712StringPreimageFieldEnrollment {
+    path: &'static str,
+    ordinal: u8,
+}
+
+/// Narrow authority for displaying an EIP-712 string preimage. Every identity
+/// component is exact: changing any descriptor byte, deployment, encodeType,
+/// typehash, field set, ordering, or ordinal returns the format to the ordinary
+/// opaque-hash refusal path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Eip712StringPreimageEnrollment {
+    descriptor_hash: [u8; 32],
+    chain_id: u64,
+    contract: [u8; 20],
+    canonical_signature: &'static str,
+    type_hash: [u8; 32],
+    fields: &'static [Eip712StringPreimageFieldEnrollment],
+}
+
+const FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH: [u8; 32] = [
+    0x97, 0x90, 0x95, 0xa6, 0xbb, 0x8f, 0x99, 0x21, 0xe8, 0x6c, 0x3f, 0x72, 0x7c, 0x4a, 0xba, 0x59,
+    0x77, 0xc6, 0x19, 0x64, 0xaf, 0x52, 0xaa, 0xbd, 0x0b, 0xfe, 0xfd, 0xbb, 0x6e, 0x7a, 0x8d, 0x8a,
+];
+const LENS_HUB_DESCRIPTOR_HASH: [u8; 32] = [
+    0xdc, 0x60, 0x57, 0x80, 0x60, 0x1c, 0x05, 0x75, 0xba, 0x5a, 0xac, 0xf0, 0x58, 0xbe, 0x0f, 0xd1,
+    0x98, 0x08, 0xff, 0x7b, 0x22, 0x9f, 0xee, 0xca, 0x95, 0xa5, 0x2b, 0xa1, 0xfe, 0x67, 0x52, 0x6d,
+];
+const RARIBLE_ERC721_DESCRIPTOR_HASH: [u8; 32] = [
+    0xfb, 0x4d, 0x50, 0x8b, 0xe1, 0xc9, 0xfe, 0x88, 0x29, 0xd3, 0x41, 0x65, 0xc0, 0x99, 0xc0, 0xfc,
+    0x66, 0xfe, 0x36, 0x52, 0x98, 0x36, 0x72, 0x0a, 0xda, 0xc5, 0xb3, 0x85, 0x4c, 0x35, 0xee, 0xcb,
+];
+const RARIBLE_ERC1155_DESCRIPTOR_HASH: [u8; 32] = [
+    0x4c, 0xdf, 0x6b, 0x62, 0x45, 0xa5, 0xb4, 0x65, 0x32, 0x0e, 0x66, 0x8c, 0xfc, 0xa0, 0x25, 0x9d,
+    0xa1, 0x3a, 0xf8, 0xdc, 0xf1, 0x10, 0x47, 0xc1, 0x07, 0x5e, 0xe6, 0xbb, 0x0f, 0x2b, 0xf9, 0x87,
+];
+
+const FLYING_TULIP_MAINNET: [u8; 20] = [
+    0xf9, 0xf3, 0xdd, 0xf2, 0xe9, 0x6c, 0xab, 0xef, 0x94, 0xe2, 0x63, 0x4c, 0x32, 0x6d, 0xc6, 0xdd,
+    0xe9, 0x93, 0x60, 0xf8,
+];
+const FLYING_TULIP_SONIC: [u8; 20] = [
+    0x10, 0x9a, 0xe7, 0x27, 0x78, 0xa0, 0x26, 0x05, 0x71, 0xb9, 0x76, 0x74, 0x77, 0x20, 0x4f, 0x1c,
+    0xe4, 0x1f, 0xbd, 0xff,
+];
+const LENS_HUB_POLYGON: [u8; 20] = [
+    0xdb, 0x46, 0xd1, 0xdc, 0x15, 0x56, 0x34, 0xfb, 0xc7, 0x32, 0xf9, 0x2e, 0x85, 0x3b, 0x10, 0xb2,
+    0x88, 0xad, 0x5a, 0x1d,
+];
+const RARIBLE_ERC721_MAINNET: [u8; 20] = [
+    0xc9, 0x15, 0x44, 0x24, 0xb8, 0x23, 0xb1, 0x05, 0x79, 0x89, 0x5c, 0xcb, 0xe4, 0x42, 0xd4, 0x1b,
+    0x9a, 0xbd, 0x96, 0xed,
+];
+const RARIBLE_ERC1155_MAINNET: [u8; 20] = [
+    0xb6, 0x6a, 0x60, 0x3f, 0x4c, 0xfe, 0x17, 0xe3, 0xd2, 0x7b, 0x87, 0xa8, 0xbf, 0xca, 0xd3, 0x19,
+    0x85, 0x65, 0x18, 0xb8,
+];
+
+const CANCEL_ORDER_TYPE_HASH: [u8; 32] = [
+    0x5f, 0xf6, 0x3c, 0xb9, 0xae, 0x8d, 0x80, 0x0a, 0xf4, 0xf8, 0xce, 0x6d, 0x88, 0x29, 0x46, 0x91,
+    0xa5, 0xb8, 0x22, 0x8b, 0x88, 0xd8, 0x1f, 0xbb, 0x70, 0x93, 0x2c, 0xa1, 0x8f, 0x28, 0x2c, 0xaf,
+];
+const TPSL_GROUP_CANCEL_TYPE_HASH: [u8; 32] = [
+    0x97, 0xc3, 0x00, 0x4f, 0x02, 0x2e, 0xea, 0xd1, 0xb9, 0x56, 0x5d, 0xf4, 0x52, 0x67, 0x75, 0xd1,
+    0x0c, 0x55, 0xd9, 0x27, 0xdb, 0xc6, 0xc6, 0x2c, 0x9b, 0x8a, 0x97, 0xc6, 0x8f, 0xb0, 0xd8, 0x89,
+];
+const LENS_QUOTE_TYPE_HASH: [u8; 32] = [
+    0x01, 0xe4, 0x59, 0x78, 0x60, 0xed, 0x5c, 0xb6, 0x94, 0xb6, 0x27, 0x51, 0x25, 0xe9, 0x2f, 0x89,
+    0x7d, 0xeb, 0xa4, 0xcb, 0x25, 0xb3, 0x87, 0x89, 0x47, 0x0e, 0x98, 0x2a, 0xc0, 0xf0, 0xbb, 0xa8,
+];
+const RARIBLE_MINT721_TYPE_HASH: [u8; 32] = [
+    0xf6, 0x43, 0x26, 0x04, 0x5a, 0xf5, 0xfd, 0x7e, 0x15, 0x29, 0x7b, 0xa9, 0x39, 0xf8, 0x5b, 0x55,
+    0x04, 0x74, 0xd3, 0x89, 0x9d, 0xaa, 0x47, 0xd2, 0xbc, 0x1f, 0xfb, 0xdb, 0x9c, 0xed, 0x34, 0x4e,
+];
+const RARIBLE_MINT1155_TYPE_HASH: [u8; 32] = [
+    0xfb, 0x98, 0x87, 0x07, 0xeb, 0xb3, 0x38, 0x69, 0x4f, 0x31, 0x87, 0x60, 0xb0, 0xfd, 0x5c, 0xfe,
+    0x75, 0x6d, 0x00, 0xa2, 0xad, 0xe2, 0x51, 0xfd, 0xa1, 0x10, 0xb8, 0x0c, 0x33, 0x6a, 0x3c, 0x7f,
+];
+
+const CANCEL_ORDER_STRING_FIELDS: [Eip712StringPreimageFieldEnrollment; 1] =
+    [Eip712StringPreimageFieldEnrollment {
+        path: "orderId",
+        ordinal: 0,
+    }];
+const TPSL_GROUP_CANCEL_STRING_FIELDS: [Eip712StringPreimageFieldEnrollment; 2] = [
+    Eip712StringPreimageFieldEnrollment {
+        path: "positionId",
+        ordinal: 0,
+    },
+    Eip712StringPreimageFieldEnrollment {
+        path: "tpslGroupId",
+        ordinal: 1,
+    },
+];
+const LENS_QUOTE_STRING_FIELDS: [Eip712StringPreimageFieldEnrollment; 1] =
+    [Eip712StringPreimageFieldEnrollment {
+        path: "contentURI",
+        ordinal: 0,
+    }];
+const RARIBLE_TOKEN_URI_STRING_FIELDS: [Eip712StringPreimageFieldEnrollment; 1] =
+    [Eip712StringPreimageFieldEnrollment {
+        path: "tokenURI",
+        ordinal: 0,
+    }];
+
+const CANCEL_ORDER_SIGNATURE: &str = "CancelOrder(string orderId)";
+const TPSL_GROUP_CANCEL_SIGNATURE: &str =
+    "TpslGroupCancel(address user,string positionId,string tpslGroupId,uint256 deadline)";
+const LENS_QUOTE_SIGNATURE: &str =
+    "Quote(uint256 profileId,string contentURI,uint256 pointedProfileId,uint256 pointedPubId,uint256 nonce,uint256 deadline)";
+const RARIBLE_MINT721_SIGNATURE: &str =
+    "Mint721(uint256 tokenId,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)";
+const RARIBLE_MINT1155_SIGNATURE: &str =
+    "Mint1155(uint256 tokenId,uint256 supply,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)";
+
+const EIP712_STRING_PREIMAGE_ENROLLMENTS: [Eip712StringPreimageEnrollment; 7] = [
+    Eip712StringPreimageEnrollment {
+        descriptor_hash: FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: FLYING_TULIP_MAINNET,
+        canonical_signature: CANCEL_ORDER_SIGNATURE,
+        type_hash: CANCEL_ORDER_TYPE_HASH,
+        fields: &CANCEL_ORDER_STRING_FIELDS,
+    },
+    Eip712StringPreimageEnrollment {
+        descriptor_hash: FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
+        chain_id: 146,
+        contract: FLYING_TULIP_SONIC,
+        canonical_signature: CANCEL_ORDER_SIGNATURE,
+        type_hash: CANCEL_ORDER_TYPE_HASH,
+        fields: &CANCEL_ORDER_STRING_FIELDS,
+    },
+    Eip712StringPreimageEnrollment {
+        descriptor_hash: FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: FLYING_TULIP_MAINNET,
+        canonical_signature: TPSL_GROUP_CANCEL_SIGNATURE,
+        type_hash: TPSL_GROUP_CANCEL_TYPE_HASH,
+        fields: &TPSL_GROUP_CANCEL_STRING_FIELDS,
+    },
+    Eip712StringPreimageEnrollment {
+        descriptor_hash: FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
+        chain_id: 146,
+        contract: FLYING_TULIP_SONIC,
+        canonical_signature: TPSL_GROUP_CANCEL_SIGNATURE,
+        type_hash: TPSL_GROUP_CANCEL_TYPE_HASH,
+        fields: &TPSL_GROUP_CANCEL_STRING_FIELDS,
+    },
+    Eip712StringPreimageEnrollment {
+        descriptor_hash: LENS_HUB_DESCRIPTOR_HASH,
+        chain_id: 137,
+        contract: LENS_HUB_POLYGON,
+        canonical_signature: LENS_QUOTE_SIGNATURE,
+        type_hash: LENS_QUOTE_TYPE_HASH,
+        fields: &LENS_QUOTE_STRING_FIELDS,
+    },
+    Eip712StringPreimageEnrollment {
+        descriptor_hash: RARIBLE_ERC721_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: RARIBLE_ERC721_MAINNET,
+        canonical_signature: RARIBLE_MINT721_SIGNATURE,
+        type_hash: RARIBLE_MINT721_TYPE_HASH,
+        fields: &RARIBLE_TOKEN_URI_STRING_FIELDS,
+    },
+    Eip712StringPreimageEnrollment {
+        descriptor_hash: RARIBLE_ERC1155_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: RARIBLE_ERC1155_MAINNET,
+        canonical_signature: RARIBLE_MINT1155_SIGNATURE,
+        type_hash: RARIBLE_MINT1155_TYPE_HASH,
+        fields: &RARIBLE_TOKEN_URI_STRING_FIELDS,
+    },
+];
 
 const ROUTER02_EXACT_INPUT_GUARDS: [SemanticWordGuard; 4] = [
     SemanticWordGuard {
@@ -4093,6 +4275,22 @@ fn compile_one_format(
     } else {
         None
     };
+    let eip712_string_preimage_enrollment = if context_kind == CTX_EIP712 {
+        eip712_string_preimage_enrollment_for(
+            ctx.descriptor_hash,
+            interpolation_deployment,
+            sig,
+            eip712_type_hash.expect("EIP-712 type hash computed above"),
+        )
+    } else {
+        None
+    };
+    let string_preimage_count = match eip712_string_preimage_enrollment {
+        Some(enrollment) => {
+            validate_eip712_string_preimage_format_source(sig, fmt, &parsed, enrollment)?
+        }
+        None => 0,
+    };
     if let Some(enrollment) = exact_empty_bytes_enrollment {
         validate_exact_empty_bytes_format_source(sig, fmt, &parsed, enrollment)?;
     }
@@ -4138,8 +4336,8 @@ fn compile_one_format(
     // an EIP-712 primary type with a nested struct member carries an opaque
     // `hashStruct` word the device cannot expand. Flag it here (parked on the
     // first field, since the header schema has no spare byte) so the device
-    // declines the whole format to blind-sign rather than partially
-    // clear-signing it or painting a struct word as a garbage value. The
+    // declines the whole format rather than partially clear-signing it,
+    // painting a struct word as a garbage value, or authorizing fallback. The
     // build-time visibility gate above is the primary defense; this is the
     // defense-in-depth backstop. Only meaningful for EIP-712 (contract keys
     // have no `struct_defs`).
@@ -4157,12 +4355,20 @@ fn compile_one_format(
     // `docs/erc7730-nested-eip712-render-design.md`). An unsupported nested
     // shape (array / depth>1 / uncompilable child / uncovered address) falls
     // back to flat fields + the bare `[0x01]` belt marker so the device
-    // declines the whole format to blind-sign. `nested_descent_count` is the E1
+    // refuses the whole format. `nested_descent_count` is the E1
     // reconciliation pin: the number of nested descent points the device MUST
     // bind, derived HERE (independent of the render traversal).
     let mut emitted_bare_nested_refusal = false;
     let (mut compiled, nested_descent_count): (Vec<CompiledFieldOut>, u8) = if has_nested_struct {
-        match try_compile_eip712_nested(sig, fmt, &parsed, ctx, pool, enum_offsets)? {
+        match try_compile_eip712_nested(
+            sig,
+            fmt,
+            &parsed,
+            ctx,
+            pool,
+            enum_offsets,
+            eip712_string_preimage_enrollment,
+        )? {
             Some(_) if nested_rank_refusal => {
                 return Err(format!(
                     "format `{sig}`: nested rank admission rejected the shape but the independent lowerer produced an active anchor"
@@ -4185,6 +4391,7 @@ fn compile_one_format(
                     true,
                     false,
                     None,
+                    eip712_string_preimage_enrollment,
                 )?,
                 0,
             ),
@@ -4202,6 +4409,7 @@ fn compile_one_format(
                 false,
                 packed_v3_path_enrolled,
                 exact_empty_bytes_enrollment.map(|entry| entry.path),
+                eip712_string_preimage_enrollment,
             )?,
             0,
         )
@@ -4251,10 +4459,13 @@ fn compile_one_format(
                                                              // Schema v4: E1 reconciliation pin — the count of nested-EIP-712 struct
                                                              // descent points (`PARAM_NESTED_STRUCT` v0x03 anchors) the device MUST bind
                                                              // before signing. Independent of the render traversal, so a regression that
-                                                             // makes descent conditional under-consumes and declines. `0` until the
+    // makes descent conditional under-consumes and declines. `0` until the
                                                              // nested-anchor emission lands (next increment) and for every non-nested /
                                                              // contract format.
     out.push(nested_descent_count); // 1 B nested_descent_count
+    // Schema v6: independently derived count of exact EIP-712 string-preimage
+    // records. Contract and unenrolled formats always carry zero.
+    out.push(string_preimage_count); // 1 B string_preimage_count
     out.extend_from_slice(intent.as_bytes()); // intent_len B
                                               // EIP-712 only: full 32-byte primary-type hash (audit M-5). Contract
                                               // formats omit this so their on-wire bytes are unchanged.
@@ -4312,6 +4523,137 @@ fn exact_empty_bytes_enrollment_for(
             && entry.canonical_signature == canonical_signature
             && entry.selector == selector
     })
+}
+
+fn eip712_string_preimage_enrollment_for(
+    descriptor_hash: [u8; 32],
+    deployment: Option<&InterpolationDeployment<'_>>,
+    canonical_signature: &str,
+    type_hash: [u8; 32],
+) -> Option<&'static Eip712StringPreimageEnrollment> {
+    let deployment = deployment?;
+    EIP712_STRING_PREIMAGE_ENROLLMENTS.iter().find(|entry| {
+        entry.descriptor_hash == descriptor_hash
+            && entry.chain_id == deployment.chain_id
+            && entry.contract == deployment.contract
+            && entry.canonical_signature == canonical_signature
+            && entry.type_hash == type_hash
+    })
+}
+
+/// Re-derive the source authority represented by a string-preimage enrollment.
+/// The enrollment identity lookup deliberately does not suffice on its own:
+/// this pass pins the exact dynamic-string field set, descriptor traversal
+/// order, effective visibility, formatter, top-level member type, and static
+/// EIP-712 word path. It returns the independently counted header pin.
+fn validate_eip712_string_preimage_format_source(
+    sig: &str,
+    fmt: &Format,
+    parsed: &ParsedFormatKey,
+    enrollment: &Eip712StringPreimageEnrollment,
+) -> Result<u8, String> {
+    if enrollment.fields.is_empty()
+        || enrollment.fields.len() > MAX_EIP712_STRING_PREIMAGES
+    {
+        return Err(format!(
+            "format `{sig}` string-preimage enrollment count {} is outside 1..={MAX_EIP712_STRING_PREIMAGES}",
+            enrollment.fields.len()
+        ));
+    }
+    if keccak256(sig.as_bytes()) != enrollment.type_hash {
+        return Err(format!(
+            "format `{sig}` string-preimage enrollment typehash does not match the exact encodeType"
+        ));
+    }
+    for (expected, field) in enrollment.fields.iter().enumerate() {
+        if usize::from(field.ordinal) != expected {
+            return Err(format!(
+                "format `{sig}` string-preimage enrollment ordinals must be canonical 0..count in field traversal order"
+            ));
+        }
+    }
+
+    // Derive the complete source string set without consulting the enrollment
+    // paths. This catches added, removed, duplicated, reordered, hidden, and
+    // nested string fields before any marker can be emitted.
+    let mut derived: Vec<(usize, &str)> = Vec::new();
+    for (field_idx, field) in fmt.fields.iter().enumerate() {
+        let Some(path) = field.path.as_deref() else {
+            continue;
+        };
+        if rendered_path_terminal_type(path, CTX_EIP712, parsed)?.as_deref() == Some("string") {
+            derived.push((field_idx, path));
+        }
+    }
+    let enrolled_paths: Vec<_> = enrollment.fields.iter().map(|field| field.path).collect();
+    let derived_paths: Vec<_> = derived.iter().map(|(_, path)| *path).collect();
+    if derived_paths != enrolled_paths {
+        return Err(format!(
+            "format `{sig}` string-preimage source field set/order drift: expected {enrolled_paths:?}, got {derived_paths:?}"
+        ));
+    }
+
+    for ((field_idx, path), enrolled) in derived.iter().zip(enrollment.fields) {
+        let field = &fmt.fields[*field_idx];
+        if *path != enrolled.path {
+            return Err(format!(
+                "format `{sig}` string-preimage field order drift at ordinal {}",
+                enrolled.ordinal
+            ));
+        }
+        if field.format.as_deref() != Some("raw") {
+            return Err(format!(
+                "format `{sig}` string-preimage field `{path}` must explicitly use raw format"
+            ));
+        }
+        if !matches!(field.visible.as_deref(), None | Some("always")) {
+            return Err(format!(
+                "format `{sig}` string-preimage field `{path}` must be visible always"
+            ));
+        }
+        let member_ordinal = parsed
+            .top_names
+            .iter()
+            .position(|name| name == path)
+            .ok_or_else(|| {
+                format!(
+                    "format `{sig}` string-preimage field `{path}` is not a direct top-level member"
+                )
+            })?;
+        if parsed.top_types.get(member_ordinal).map(String::as_str) != Some("string") {
+            return Err(format!(
+                "format `{sig}` string-preimage field `{path}` terminal type is not exactly string"
+            ));
+        }
+        let member_ordinal = u16::try_from(member_ordinal)
+            .map_err(|_| format!("format `{sig}` has too many top-level members"))?;
+        let expected_path = [
+            PATHOP_ROOT_STRUCT,
+            PATHOP_FIELD_IDX,
+            (member_ordinal >> 8) as u8,
+            member_ordinal as u8,
+        ];
+        if compile_path(path, CTX_EIP712, parsed)?.as_slice() != expected_path {
+            return Err(format!(
+                "format `{sig}` string-preimage field `{path}` is not the exact static EIP-712 word path"
+            ));
+        }
+    }
+
+    u8::try_from(derived.len())
+        .map_err(|_| format!("format `{sig}` has too many string-preimage fields"))
+}
+
+fn eip712_string_preimage_ordinal_for_field(
+    enrollment: Option<&Eip712StringPreimageEnrollment>,
+    field: &FieldDef,
+) -> Option<u8> {
+    let path = field.path.as_deref()?;
+    enrollment?
+        .fields
+        .iter()
+        .find(|entry| entry.path == path)
+        .map(|entry| entry.ordinal)
 }
 
 fn format_declares_sender_address(fmt: &Format) -> bool {
@@ -4988,6 +5330,7 @@ fn param_mask_from_compiled_tlvs(body: &[u8]) -> Result<ParamMask, String> {
             PARAM_NFT_COLLECTION => ParamMask::NFT_COLLECTION,
             PARAM_NFT_COLLECTION_PATH => ParamMask::NFT_COLLECTION_PATH,
             PARAM_EXACT_EMPTY_BYTES => ParamMask::EXACT_EMPTY_BYTES,
+            PARAM_EIP712_STRING_PREIMAGE => ParamMask::EIP712_STRING_PREIMAGE,
             // Format metadata / mandatory terminal semantics are validated at
             // their own enclosing boundaries, not as formatter parameters.
             PARAM_VISIBILITY
@@ -5025,6 +5368,7 @@ fn format_interprets_numeric_sign(format_op: u8) -> bool {
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn compile_one_field(
     sig: &str,
@@ -5049,6 +5393,7 @@ fn compile_one_field(
         emit_nested_marker,
         false,
         false,
+        None,
     )
 }
 
@@ -5065,6 +5410,7 @@ fn compile_one_field_with_profile(
     emit_nested_marker: bool,
     allow_packed_v3_path: bool,
     allow_exact_empty_bytes: bool,
+    eip712_string_preimage_ordinal: Option<u8>,
 ) -> Result<CompiledFieldOut, String> {
     if field.path.is_some() && field.value.is_some() {
         return Err(format!(
@@ -5144,10 +5490,23 @@ fn compile_one_field_with_profile(
         Some(path) => rendered_path_terminal_type(path, context_kind, parsed)?,
         None => None,
     };
-    let terminal_semantics = match field.path.as_deref() {
-        Some(path) => terminal_semantics_for_path(path, context_kind, parsed)?,
-        None if const_value.is_some() => TerminalSemantics::non_integer(TerminalKind::ConstantText),
-        None => {
+    let terminal_semantics = match (field.path.as_deref(), eip712_string_preimage_ordinal) {
+        (Some(path), Some(_)) => {
+            if context_kind != CTX_EIP712
+                || rendered_path_terminal_type(path, context_kind, parsed)?.as_deref()
+                    != Some("string")
+            {
+                return Err(format!(
+                    "format `{sig}` field[{field_idx}] string-preimage authority reached a non-EIP-712-string terminal"
+                ));
+            }
+            TerminalSemantics::non_integer(TerminalKind::Eip712StringHashWord)
+        }
+        (Some(path), None) => terminal_semantics_for_path(path, context_kind, parsed)?,
+        (None, None) if const_value.is_some() => {
+            TerminalSemantics::non_integer(TerminalKind::ConstantText)
+        }
+        (None, _) => {
             return Err(format!(
                 "format `{sig}` field[{field_idx}] has no schema-v5 terminal semantics"
             ))
@@ -5164,6 +5523,7 @@ fn compile_one_field_with_profile(
     // has already rejected every hidden non-address operand, including opaque
     // dynamic/hashStruct words.
     if context_kind == CTX_EIP712
+        && eip712_string_preimage_ordinal.is_none()
         && field.visible.as_deref() != Some("never")
         && terminal_type
             .as_deref()
@@ -5199,6 +5559,13 @@ fn compile_one_field_with_profile(
             _ => {}
         }
     }
+    if eip712_string_preimage_ordinal.is_some()
+        && (format_op != FMT_RAW || !matches!(field.visible.as_deref(), None | Some("always")))
+    {
+        return Err(format!(
+            "format `{sig}` field[{field_idx}] string-preimage authority requires a visible raw field"
+        ));
+    }
 
     // 3. Compile params + visibility into a single TLV blob.
     let mut param_blob = compile_params(
@@ -5230,6 +5597,13 @@ fn compile_one_field_with_profile(
             }
             _ => {}
         }
+    }
+    if let Some(ordinal) = eip712_string_preimage_ordinal {
+        push_tlv(
+            &mut param_blob,
+            PARAM_EIP712_STRING_PREIMAGE,
+            &[ordinal],
+        )?;
     }
     // Format-level nested-struct marker (see `has_nested_struct` in
     // `compile_one_format`). Parked on the first field; the device rejects
@@ -5306,6 +5680,7 @@ fn compile_flat_fields(
     emit_bare_marker: bool,
     allow_packed_v3_path: bool,
     exact_empty_bytes_path: Option<&str>,
+    eip712_string_preimage_enrollment: Option<&Eip712StringPreimageEnrollment>,
 ) -> Result<Vec<CompiledFieldOut>, String> {
     let mut compiled: Vec<CompiledFieldOut> = Vec::with_capacity(fmt.fields.len());
     for (i, field) in fmt.fields.iter().enumerate() {
@@ -5321,6 +5696,10 @@ fn compile_flat_fields(
             emit_bare_marker && i == 0,
             allow_packed_v3_path,
             exact_empty_bytes_path.is_some_and(|path| field.path.as_deref() == Some(path)),
+            eip712_string_preimage_ordinal_for_field(
+                eip712_string_preimage_enrollment,
+                field,
+            ),
         )?;
         compiled.push(cf);
     }
@@ -5400,6 +5779,7 @@ fn try_compile_eip712_nested(
     ctx: &mut CompileCtx,
     pool: &mut Pool,
     enum_offsets: &BTreeMap<String, u16>,
+    eip712_string_preimage_enrollment: Option<&Eip712StringPreimageEnrollment>,
 ) -> Result<Option<(Vec<CompiledFieldOut>, u8)>, String> {
     let mut plan: Vec<NestedPlan> = Vec::new();
     // top-member name -> index into `plan` of its anchor (first appearance).
@@ -5473,7 +5853,7 @@ fn try_compile_eip712_nested(
     for item in &plan {
         match item {
             NestedPlan::Flat(i) => {
-                let cf = compile_one_field(
+                let cf = compile_one_field_with_profile(
                     sig,
                     *i,
                     &fmt.fields[*i],
@@ -5483,6 +5863,12 @@ fn try_compile_eip712_nested(
                     pool,
                     enum_offsets,
                     false,
+                    false,
+                    false,
+                    eip712_string_preimage_ordinal_for_field(
+                        eip712_string_preimage_enrollment,
+                        &fmt.fields[*i],
+                    ),
                 )?;
                 compiled.push(cf);
             }
@@ -9520,6 +9906,9 @@ fn review_param_semantics(
     if params.exact_empty_bytes {
         parts.push("exactEmptyBytes=true".to_string());
     }
+    if let Some(ordinal) = params.eip712_string_preimage_ordinal {
+        parts.push(format!("eip712StringPreimageOrdinal={ordinal}"));
+    }
     if let Some(collection) = params.nft_collection {
         parts.push(format!("nftCollection=0x{}", hex::encode(collection)));
     }
@@ -9567,6 +9956,7 @@ fn review_param_semantics(
             TerminalKind::DynamicBytes => "dynamicBytes",
             TerminalKind::ConstantText => "constantText",
             TerminalKind::NestedStruct => "nestedStruct",
+            TerminalKind::Eip712StringHashWord => "eip712StringHashWord",
         };
         parts.push(format!("terminalKind={name}(0x{:02x})", kind as u8));
     }
@@ -9618,12 +10008,13 @@ fn review_field_breakdown(ir_bytes: &[u8]) -> (Vec<String>, usize, usize) {
             break;
         };
         lines.push(format!(
-            "         · format [0x{}] intent={} intent_raw=0x{} static_head_words={} nested_descent_count={}",
+            "         · format [0x{}] intent={} intent_raw=0x{} static_head_words={} nested_descent_count={} string_preimage_count={}",
             hex::encode(fmt.selector),
             review_ascii(fmt.intent),
             hex::encode(fmt.intent),
             fmt.static_head_words,
             fmt.nested_descent_count,
+            fmt.string_preimage_count,
         ));
         for (field_ordinal, field) in fmt.fields().enumerate() {
             let Ok(field) = field else {
@@ -10455,6 +10846,254 @@ mod tests {
                 "unexpected refusal for {sig}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn enrolled_eip712_string_preimage_emits_exact_static_word_marker() {
+        let sig = CANCEL_ORDER_SIGNATURE;
+        let parsed = parse_format_key(sig).unwrap();
+        let fmt = fmt_from_fields(
+            r#"[
+                {"path":"orderId","label":"Order ID","format":"raw","visible":"always"}
+            ]"#,
+        );
+        let capabilities = Erc20Capabilities::default();
+        let deployment = InterpolationDeployment {
+            chain_id: 1,
+            contract: FLYING_TULIP_MAINNET,
+            erc20_capabilities: &capabilities,
+        };
+        let enrollment = eip712_string_preimage_enrollment_for(
+            FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
+            Some(&deployment),
+            sig,
+            CANCEL_ORDER_TYPE_HASH,
+        )
+        .expect("exact descriptor/deployment/encodeType enrollment");
+        assert_eq!(
+            validate_eip712_string_preimage_format_source(sig, &fmt, &parsed, enrollment),
+            Ok(1)
+        );
+
+        let mut pool = Pool::new();
+        let compiled = compile_one_field_with_profile(
+            sig,
+            0,
+            &fmt.fields[0],
+            CTX_EIP712,
+            &parsed,
+            &mut test_ctx(),
+            &mut pool,
+            &BTreeMap::new(),
+            false,
+            false,
+            false,
+            Some(0),
+        )
+        .expect("enrolled direct string field compiles");
+        assert_eq!(compiled.format_op, FMT_RAW);
+        assert_eq!(
+            find_tlv(&pool, compiled.param_off, PARAM_EIP712_STRING_PREIMAGE),
+            Some(&[0][..])
+        );
+        assert_eq!(
+            find_tlv(&pool, compiled.param_off, PARAM_TERMINAL_KIND),
+            Some(&[TerminalKind::Eip712StringHashWord as u8][..])
+        );
+        let pool_bytes = pool.into_bytes();
+        let path_len = pool_bytes[compiled.path_off as usize] as usize;
+        assert_eq!(
+            &pool_bytes[compiled.path_off as usize + 1
+                ..compiled.path_off as usize + 1 + path_len],
+            [PATHOP_ROOT_STRUCT, PATHOP_FIELD_IDX, 0, 0],
+            "EIP-712 string paths name the signed hash word directly; they never FollowOffset"
+        );
+    }
+
+    #[test]
+    fn eip712_string_preimage_enrollment_identity_and_source_drift_fail_closed() {
+        let capabilities = Erc20Capabilities::default();
+        let exact = InterpolationDeployment {
+            chain_id: 1,
+            contract: FLYING_TULIP_MAINNET,
+            erc20_capabilities: &capabilities,
+        };
+        assert!(eip712_string_preimage_enrollment_for(
+            [0x55; 32],
+            Some(&exact),
+            CANCEL_ORDER_SIGNATURE,
+            CANCEL_ORDER_TYPE_HASH,
+        )
+        .is_none());
+        assert!(eip712_string_preimage_enrollment_for(
+            FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
+            Some(&InterpolationDeployment {
+                chain_id: 146,
+                ..exact
+            }),
+            CANCEL_ORDER_SIGNATURE,
+            CANCEL_ORDER_TYPE_HASH,
+        )
+        .is_none());
+        assert!(eip712_string_preimage_enrollment_for(
+            FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
+            Some(&exact),
+            "CancelOrder(string other)",
+            CANCEL_ORDER_TYPE_HASH,
+        )
+        .is_none());
+        let mut wrong_type_hash = CANCEL_ORDER_TYPE_HASH;
+        wrong_type_hash[31] ^= 1;
+        assert!(eip712_string_preimage_enrollment_for(
+            FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
+            Some(&exact),
+            CANCEL_ORDER_SIGNATURE,
+            wrong_type_hash,
+        )
+        .is_none());
+
+        let enrollment = eip712_string_preimage_enrollment_for(
+            FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
+            Some(&exact),
+            CANCEL_ORDER_SIGNATURE,
+            CANCEL_ORDER_TYPE_HASH,
+        )
+        .unwrap();
+        let parsed = parse_format_key(CANCEL_ORDER_SIGNATURE).unwrap();
+        for (field_json, needle) in [
+            (
+                r#"[{"path":"orderId","label":"Order ID","format":"amount","visible":"always"}]"#,
+                "explicitly use raw",
+            ),
+            (
+                r#"[{"path":"orderId","label":"Order ID","format":"raw","visible":"optional"}]"#,
+                "visible always",
+            ),
+            (
+                r#"[
+                    {"path":"orderId","label":"Order ID","format":"raw","visible":"always"},
+                    {"path":"orderId","label":"Duplicate","format":"raw","visible":"always"}
+                ]"#,
+                "field set/order drift",
+            ),
+        ] {
+            let fmt = fmt_from_fields(field_json);
+            let error = validate_eip712_string_preimage_format_source(
+                CANCEL_ORDER_SIGNATURE,
+                &fmt,
+                &parsed,
+                enrollment,
+            )
+            .expect_err("source drift must revoke preimage authority");
+            assert!(error.contains(needle), "unexpected refusal: {error}");
+        }
+
+        let tpsl_enrollment = EIP712_STRING_PREIMAGE_ENROLLMENTS
+            .iter()
+            .find(|entry| {
+                entry.chain_id == 1 && entry.canonical_signature == TPSL_GROUP_CANCEL_SIGNATURE
+            })
+            .unwrap();
+        let tpsl_parsed = parse_format_key(TPSL_GROUP_CANCEL_SIGNATURE).unwrap();
+        let mut reordered = fmt_from_fields(
+            r#"[
+                {"path":"user","label":"User","format":"addressName","visible":"always"},
+                {"path":"positionId","label":"Position","format":"raw","visible":"always"},
+                {"path":"tpslGroupId","label":"Group","format":"raw","visible":"always"},
+                {"path":"deadline","label":"Deadline","format":"date","visible":"always"}
+            ]"#,
+        );
+        reordered.fields.swap(1, 2);
+        assert!(validate_eip712_string_preimage_format_source(
+            TPSL_GROUP_CANCEL_SIGNATURE,
+            &reordered,
+            &tpsl_parsed,
+            tpsl_enrollment,
+        )
+        .expect_err("string evidence traversal reorder must be refused")
+        .contains("field set/order drift"));
+
+        const BAD_FIELDS: [Eip712StringPreimageFieldEnrollment; 1] =
+            [Eip712StringPreimageFieldEnrollment {
+            path: "orderId",
+            ordinal: 1,
+        }];
+        let bad_ordinal_enrollment = Eip712StringPreimageEnrollment {
+            fields: &BAD_FIELDS,
+            ..*enrollment
+        };
+        assert!(validate_eip712_string_preimage_format_source(
+            CANCEL_ORDER_SIGNATURE,
+            &fmt_from_fields(
+                r#"[{"path":"orderId","label":"Order ID","format":"raw","visible":"always"}]"#
+            ),
+            &parsed,
+            &bad_ordinal_enrollment,
+        )
+        .expect_err("non-canonical marker ordinal must be refused")
+        .contains("ordinals must be canonical"));
+
+        const NESTED_FIELDS: [Eip712StringPreimageFieldEnrollment; 1] =
+            [Eip712StringPreimageFieldEnrollment {
+                path: "meta.orderId",
+                ordinal: 0,
+            }];
+        let nested_sig = "Envelope(Meta meta)Meta(string orderId)";
+        let nested_enrollment = Eip712StringPreimageEnrollment {
+            canonical_signature: nested_sig,
+            type_hash: keccak256(nested_sig.as_bytes()),
+            fields: &NESTED_FIELDS,
+            ..*enrollment
+        };
+        assert!(validate_eip712_string_preimage_format_source(
+            nested_sig,
+            &fmt_from_fields(
+                r#"[{"path":"meta.orderId","label":"Order ID","format":"raw","visible":"always"}]"#
+            ),
+            &parse_format_key(nested_sig).unwrap(),
+            &nested_enrollment,
+        )
+        .expect_err("nested child strings are outside the enrolled topology")
+        .contains("not a direct top-level member"));
+    }
+
+    #[test]
+    fn neighbouring_unenrolled_eip712_strings_remain_opaque() {
+        let mut ctx = test_ctx();
+        ctx.descriptor_hash = LENS_HUB_DESCRIPTOR_HASH;
+        let capabilities = Erc20Capabilities::default();
+        let deployment = InterpolationDeployment {
+            chain_id: 137,
+            contract: LENS_HUB_POLYGON,
+            erc20_capabilities: &capabilities,
+        };
+        let error = {
+            let fmt = fmt_from_fields(
+                r#"[
+                    {"path":"profileId","label":"Profile","format":"raw"},
+                    {"path":"metadataURI","label":"Metadata URI","format":"raw"},
+                    {"path":"nonce","label":"Nonce","format":"raw"},
+                    {"path":"deadline","label":"Deadline","format":"raw"}
+                ]"#,
+            );
+            let mut pool = Pool::new();
+            let mut out = Vec::new();
+            compile_one_format(
+                "SetProfileMetadataURI(uint256 profileId,string metadataURI,uint256 nonce,uint256 deadline)",
+                &fmt,
+                CTX_EIP712,
+                &mut ctx,
+                &mut pool,
+                &BTreeMap::new(),
+                &mut out,
+                Some(&deployment),
+            )
+            .expect_err("same descriptor/deployment does not enroll neighbouring strings")
+        };
+        assert!(
+            error.contains("opaque hash word"),
+            "unenrolled Lens string must preserve the legacy refusal: {error}"
+        );
     }
 
     #[test]
@@ -11884,6 +12523,10 @@ mod tests {
         assert_eq!(PARAM_SENDER_ADDRESS, params::PARAM_SENDER_ADDRESS);
         assert_eq!(PARAM_WORD_GUARD, params::PARAM_WORD_GUARD);
         assert_eq!(PARAM_EXACT_EMPTY_BYTES, params::PARAM_EXACT_EMPTY_BYTES);
+        assert_eq!(
+            PARAM_EIP712_STRING_PREIMAGE,
+            params::PARAM_EIP712_STRING_PREIMAGE
+        );
         assert_eq!(MAX_SENDER_ADDRESSES, params::MAX_SENDER_ADDRESSES);
         assert_eq!(WORD_GUARD_PAYLOAD_LEN, params::WORD_GUARD_PAYLOAD_LEN);
         assert_eq!(WORD_GUARD_EQ, params::WORD_GUARD_EQ);
@@ -12913,7 +13556,15 @@ mod tests {
         let mut ctx = test_ctx();
         let mut pool = Pool::new();
         assert!(
-            try_compile_eip712_nested(sig, &fmt, &parsed, &mut ctx, &mut pool, &BTreeMap::new(),)
+            try_compile_eip712_nested(
+                sig,
+                &fmt,
+                &parsed,
+                &mut ctx,
+                &mut pool,
+                &BTreeMap::new(),
+                None,
+            )
                 .expect("unsupported rank must fail closed, not error in the emitter")
                 .is_none(),
             "the independent emitter backstop must not produce an active v0x03 anchor"
@@ -12936,7 +13587,8 @@ mod tests {
 
         assert_eq!(out[4], 1, "refusal format has one canonical carrier field");
         assert_eq!(out[8], 0, "bare refusal carries no active nested descent");
-        let field = 9 + out[5] as usize + 32;
+        assert_eq!(out[9], 0, "bare refusal carries no string preimages");
+        let field = 10 + out[5] as usize + 32;
         assert_eq!(out[field], FMT_RAW);
         let label_len = out[field + 1] as usize;
         assert_eq!(&out[field + 2..field + 2 + label_len], b"Unsupported");
@@ -12991,7 +13643,15 @@ mod tests {
         let mut ctx = test_ctx();
         let mut pool = Pool::new();
         assert!(
-            try_compile_eip712_nested(sig, &fmt, &parsed, &mut ctx, &mut pool, &BTreeMap::new(),)
+            try_compile_eip712_nested(
+                sig,
+                &fmt,
+                &parsed,
+                &mut ctx,
+                &mut pool,
+                &BTreeMap::new(),
+                None,
+            )
                 .expect("the nested emitter must fail closed without a build error")
                 .is_none(),
             "an array hashStruct word must never lower as a token address"
@@ -13272,10 +13932,11 @@ mod tests {
     }
 
     fn contract_format_param_offsets(format: &[u8]) -> Vec<u16> {
-        assert!(format.len() >= 9, "contract format header");
+        assert!(format.len() >= 10, "contract format header");
         let field_count = format[4] as usize;
         let intent_len = format[5] as usize;
-        let mut cursor = 9 + intent_len;
+        assert_eq!(format[9], 0, "contract formats carry no string preimages");
+        let mut cursor = 10 + intent_len;
         let mut offsets = Vec::with_capacity(field_count);
         for _ in 0..field_count {
             let label_len = format[cursor + 1] as usize;
@@ -13620,6 +14281,7 @@ mod tests {
         assert_eq!(PARAM_SENDER_ADDRESS, 0x49);
         assert_eq!(PARAM_WORD_GUARD, 0x4A);
         assert_eq!(PARAM_EXACT_EMPTY_BYTES, 0x4B);
+        assert_eq!(PARAM_EIP712_STRING_PREIMAGE, 0x4C);
         let expected = [
             (
                 ROUTER02_MAINNET,
@@ -13749,6 +14411,149 @@ mod tests {
             wrong_selector,
         )
         .is_none());
+    }
+
+    #[test]
+    fn eip712_string_enrollment_hashes_match_exact_registry_sources() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf();
+        for (relative, expected) in [
+            (
+                "secure/data/erc7730-registry/registry/flyingtulip/eip712-SpotOrderCancel.json",
+                FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
+            ),
+            (
+                "secure/data/erc7730-registry/registry/lens/eip712-lens-lenshub.json",
+                LENS_HUB_DESCRIPTOR_HASH,
+            ),
+            (
+                "secure/data/erc7730-registry/registry/rarible/eip712-rarible-erc-721.json",
+                RARIBLE_ERC721_DESCRIPTOR_HASH,
+            ),
+            (
+                "secure/data/erc7730-registry/registry/rarible/eip712-rarible-erc-1155.json",
+                RARIBLE_ERC1155_DESCRIPTOR_HASH,
+            ),
+        ] {
+            let json = load_resolved_descriptor_json(&root.join(relative), None)
+                .unwrap_or_else(|error| panic!("load {relative}: {error}"));
+            assert_eq!(
+                sha256_of(&jcs_canonicalize(&json).expect("JCS descriptor")),
+                expected,
+                "string-preimage authority must stay bound to exact {relative} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn production_eip712_string_enrollments_emit_only_exact_marked_words() {
+        fn assert_marked_format(
+            entry: &Emitted,
+            type_hash: [u8; 32],
+            expected_word_ordinals: &[u16],
+        ) {
+            let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("device accepts emitted IR");
+            let format = ir
+                .format_iter()
+                .map(|format| format.expect("canonical format"))
+                .find(|format| format.type_hash == type_hash)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing enrolled typehash 0x{} for chain {} contract 0x{}",
+                        hex::encode(type_hash),
+                        entry.chain_id,
+                        hex::encode(entry.contract)
+                    )
+                });
+            assert_eq!(
+                usize::from(format.string_preimage_count),
+                expected_word_ordinals.len()
+            );
+
+            let mut marked = Vec::new();
+            for field in format.fields() {
+                let field = field.expect("canonical field");
+                let params = pqsigner_erc7730::render::params::parse(&ir, field.param_off)
+                    .expect("canonical params");
+                let Some(evidence_ordinal) = params.eip712_string_preimage_ordinal else {
+                    continue;
+                };
+                assert_eq!(
+                    params.terminal_kind,
+                    Some(TerminalKind::Eip712StringHashWord)
+                );
+                let path = ir.path_bytes(field.path_off).expect("canonical path");
+                assert_eq!(path.len(), 4, "preimage marker must stay top-level");
+                assert_eq!(path[0], PATHOP_ROOT_STRUCT);
+                assert_eq!(path[1], PATHOP_FIELD_IDX);
+                assert!(!path.contains(&PATHOP_FOLLOW_OFFSET));
+                marked.push((
+                    evidence_ordinal,
+                    u16::from_be_bytes([path[2], path[3]]),
+                ));
+            }
+            assert_eq!(
+                marked,
+                expected_word_ordinals
+                    .iter()
+                    .enumerate()
+                    .map(|(evidence_ordinal, word_ordinal)| {
+                        (evidence_ordinal as u8, *word_ordinal)
+                    })
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf();
+        let cases: [(&str, usize, &[([u8; 32], &[u16])]); 4] = [
+            (
+                "secure/data/erc7730-registry/registry/flyingtulip/eip712-SpotOrderCancel.json",
+                2,
+                &[
+                    (CANCEL_ORDER_TYPE_HASH, &[0]),
+                    (TPSL_GROUP_CANCEL_TYPE_HASH, &[1, 2]),
+                ],
+            ),
+            (
+                "secure/data/erc7730-registry/registry/lens/eip712-lens-lenshub.json",
+                1,
+                &[(LENS_QUOTE_TYPE_HASH, &[1])],
+            ),
+            (
+                "secure/data/erc7730-registry/registry/rarible/eip712-rarible-erc-721.json",
+                1,
+                &[(RARIBLE_MINT721_TYPE_HASH, &[1])],
+            ),
+            (
+                "secure/data/erc7730-registry/registry/rarible/eip712-rarible-erc-1155.json",
+                1,
+                &[(RARIBLE_MINT1155_TYPE_HASH, &[2])],
+            ),
+        ];
+        for (relative, deployment_count, formats) in cases {
+            let mut drops = Vec::new();
+            let entries = compile_descriptor(
+                &root.join(relative),
+                &Policy::default(),
+                None,
+                true,
+                &mut drops,
+                &Erc20Capabilities::default(),
+                None,
+            )
+            .unwrap_or_else(|error| panic!("compile {relative}: {error}"));
+            assert_eq!(entries.len(), deployment_count, "{relative}");
+            for entry in &entries {
+                for (type_hash, word_ordinals) in formats {
+                    assert_marked_format(entry, *type_hash, word_ordinals);
+                }
+            }
+        }
     }
 
     #[test]
@@ -14759,6 +15564,13 @@ mod tests {
         let decoded = review_param_semantics(&exact_empty).expect("review semantics");
         assert!(decoded.contains("dynamicKind=bytes(0x02)"));
         assert!(decoded.contains("exactEmptyBytes=true"));
+
+        let mut string_preimage = ParamSet::default();
+        string_preimage.eip712_string_preimage_ordinal = Some(1);
+        string_preimage.terminal_kind = Some(TerminalKind::Eip712StringHashWord);
+        let decoded = review_param_semantics(&string_preimage).expect("review semantics");
+        assert!(decoded.contains("eip712StringPreimageOrdinal=1"));
+        assert!(decoded.contains("terminalKind=eip712StringHashWord(0x0a)"));
     }
 
     #[test]
@@ -14797,6 +15609,7 @@ mod tests {
         assert!(review.contains(
             "format [0xb6b55f25] intent=\"Deposit collateral\" intent_raw=0x4465706f73697420636f6c6c61746572616c"
         ));
+        assert!(review.contains("nested_descent_count=0 string_preimage_count=0"));
         assert!(review.contains("field[0] op=amount"));
         assert!(review.contains("label=\"Amount\" path=0x"));
         assert!(review.contains("params_tlv=0x"));
@@ -14999,6 +15812,7 @@ mod tests {
             &mut test_ctx(),
             &mut pool,
             &BTreeMap::new(),
+            None,
         )
         .unwrap()
         .expect("supported nested scalar shape");

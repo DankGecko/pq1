@@ -197,16 +197,16 @@ fn assert_registry_source_excluded(source_name: &str) {
 }
 
 #[test]
-fn eip712_hash_only_values_have_no_verified_runtime_leaf() {
+fn unenrolled_eip712_hash_only_values_have_no_verified_runtime_leaf() {
     let registry = build_registry();
-    for source_name in ["eip712-withdraw.json", "eip712-SpotOrderCancel.json"] {
+    for source_name in ["eip712-withdraw.json"] {
         assert!(
             !registry.entries.iter().any(|entry| {
                 entry.source.file_name().and_then(|n| n.to_str()) == Some(source_name)
             }),
             "{source_name} contains visible EIP-712 dynamic strings whose encodeData words are \
-             hashes, not values; catalogue absence is required so no verified descriptor can \
-             reach the secure renderer"
+             hashes, not values, and has no exact schema-v6 enrollment; catalogue absence is \
+             required so no verified descriptor can reach the secure renderer"
         );
     }
 }
@@ -10043,6 +10043,442 @@ fn eip712_v2_two_pass_transcript_binds_static_warning_and_fields() {
 }
 
 // ───────────────────────────────────────────────────────────────────────
+// Schema-v6 exact EIP-712 string preimages — production catalogue evidence.
+// ───────────────────────────────────────────────────────────────────────
+
+const FT_CANCEL_SOURCE: &str = "eip712-SpotOrderCancel.json";
+const LENS_SOURCE: &str = "eip712-lens-lenshub.json";
+const RARIBLE_721_SOURCE: &str = "eip712-rarible-erc-721.json";
+const RARIBLE_1155_SOURCE: &str = "eip712-rarible-erc-1155.json";
+const CANCEL_ORDER_SIG: &str = "CancelOrder(string orderId)";
+const TPSL_CANCEL_SIG: &str =
+    "TpslGroupCancel(address user,string positionId,string tpslGroupId,uint256 deadline)";
+const LENS_QUOTE_SIG: &str =
+    "Quote(uint256 profileId,string contentURI,uint256 pointedProfileId,uint256 pointedPubId,uint256 nonce,uint256 deadline)";
+const RARIBLE_721_SIG: &str =
+    "Mint721(uint256 tokenId,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)";
+const RARIBLE_1155_SIG: &str =
+    "Mint1155(uint256 tokenId,uint256 supply,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)";
+
+fn evidence_record(bytes: &[u8]) -> Vec<u8> {
+    let mut record = Vec::with_capacity(2 + bytes.len());
+    record.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+    record.extend_from_slice(bytes);
+    record
+}
+
+fn append_struct_array_record(blob: &mut Vec<u8>, elements: &[Vec<u8>]) {
+    blob.extend_from_slice(&(elements.len() as u16).to_be_bytes());
+    for element in elements {
+        blob.extend_from_slice(&(element.len() as u16).to_be_bytes());
+        blob.extend_from_slice(element);
+    }
+}
+
+fn encoded_words(words: &[[u8; 32]]) -> Vec<u8> {
+    words.iter().flat_map(|word| word.iter().copied()).collect()
+}
+
+fn part_ed(account: [u8; 20], value: u64) -> Vec<u8> {
+    let mut encoded = vec![0u8; 64];
+    encoded[12..32].copy_from_slice(&account);
+    encoded[56..64].copy_from_slice(&value.to_be_bytes());
+    encoded
+}
+
+fn render_registry_eip712_v3(
+    entry: &dbgen::erc7730::Emitted,
+    type_hash: &[u8; 32],
+    encoded_data: &[u8],
+    evidence: &[u8],
+) -> Result<Pages, crate::tx::erc7730_render::RenderErr> {
+    let registry = build_registry();
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("production leaf verifies");
+    super::erc7730::render_erc7730_eip712_pages_v3(
+        entry.chain_id,
+        &entry.contract,
+        type_hash,
+        encoded_data,
+        evidence,
+        &verified,
+        None,
+        &NameResolver::new(),
+    )
+}
+
+fn assert_exact_string_pages(pages: &Pages, label: &str, expected: &[u8]) {
+    let indices: Vec<usize> = pages
+        .as_slice()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, page)| (row_str(&page[0]) == label).then_some(index))
+        .collect();
+    let total = expected.len().max(1).div_ceil(2 * DISPLAY_COLS);
+    assert_eq!(indices.len(), total, "string page count for {label:?}");
+    for (part, index) in indices.into_iter().enumerate() {
+        let start = part * 2 * DISPLAY_COLS;
+        let end = (start + 2 * DISPLAY_COLS).min(expected.len());
+        let chunk = &expected[start..end];
+        if expected.is_empty() {
+            assert_eq!(row_str(&pages.buf[index][1]), "<empty>");
+            assert!(pages.buf[index][2].iter().all(|byte| *byte == b' '));
+        } else {
+            let first = chunk.len().min(DISPLAY_COLS);
+            assert_eq!(&pages.buf[index][1][..first], &chunk[..first]);
+            assert!(pages.buf[index][1][first..].iter().all(|byte| *byte == b' '));
+            let second = chunk.len().saturating_sub(DISPLAY_COLS);
+            assert_eq!(
+                &pages.buf[index][2][..second],
+                &chunk[first..first + second]
+            );
+            assert!(pages.buf[index][2][second..].iter().all(|byte| *byte == b' '));
+        }
+        assert_eq!(
+            row_str(&pages.buf[index][3]),
+            format!("{}/{} {} bytes", part + 1, total, expected.len())
+        );
+    }
+}
+
+#[test]
+fn production_eip712_string_preimage_inventory_is_exact_and_canonical() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use pqsigner_erc7730::ir::{FormatOp, PathOp, Visibility};
+    use pqsigner_erc7730::render::policy::{ParamMask, TerminalKind};
+
+    let hashes = [
+        (CANCEL_ORDER_SIG, vec![0u16]),
+        (TPSL_CANCEL_SIG, vec![1u16, 2]),
+        (LENS_QUOTE_SIG, vec![1u16]),
+        (RARIBLE_721_SIG, vec![1u16]),
+        (RARIBLE_1155_SIG, vec![2u16]),
+    ];
+    let expected_slots: BTreeMap<[u8; 32], Vec<u16>> = hashes
+        .iter()
+        .map(|(signature, slots)| (keccak256(signature.as_bytes()), slots.clone()))
+        .collect();
+    let expected_combos: BTreeSet<(String, u64, String, [u8; 32])> = [
+        (FT_CANCEL_SOURCE, 1, "f9f3ddf2e96cabef94e2634c326dc6dde99360f8", CANCEL_ORDER_SIG),
+        (FT_CANCEL_SOURCE, 1, "f9f3ddf2e96cabef94e2634c326dc6dde99360f8", TPSL_CANCEL_SIG),
+        (FT_CANCEL_SOURCE, 146, "109ae72778a0260571b9767477204f1ce41fbdff", CANCEL_ORDER_SIG),
+        (FT_CANCEL_SOURCE, 146, "109ae72778a0260571b9767477204f1ce41fbdff", TPSL_CANCEL_SIG),
+        (LENS_SOURCE, 137, "db46d1dc155634fbc732f92e853b10b288ad5a1d", LENS_QUOTE_SIG),
+        (RARIBLE_721_SOURCE, 1, "c9154424b823b10579895ccbe442d41b9abd96ed", RARIBLE_721_SIG),
+        (RARIBLE_1155_SOURCE, 1, "b66a603f4cfe17e3d27b87a8bfcad319856518b8", RARIBLE_1155_SIG),
+    ]
+    .into_iter()
+    .map(|(source, chain, contract, signature)| {
+        (source.to_string(), chain, contract.to_string(), keccak256(signature.as_bytes()))
+    })
+    .collect();
+
+    let registry = build_registry();
+    let mut observed_combos = BTreeSet::new();
+    let mut descriptors = BTreeSet::new();
+    let mut distinct_formats = BTreeSet::new();
+    let mut distinct_members = BTreeSet::new();
+    let mut deployment_members = 0usize;
+    for entry in &registry.entries {
+        let parsed = Erc7730Ir::parse(&entry.ir_bytes).expect("generated production IR parses");
+        let has_strings = parsed
+            .format_iter()
+            .any(|format| format.expect("format parses").string_preimage_count != 0);
+        if !has_strings {
+            continue;
+        }
+        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &registry.root)
+            .expect("string-preimage production leaf verifies");
+        let source = entry
+            .source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("source filename");
+        descriptors.insert(source.to_string());
+        for format in verified.ir.format_iter() {
+            let format = format.expect("format parses");
+            if format.string_preimage_count == 0 {
+                continue;
+            }
+            observed_combos.insert((
+                source.to_string(),
+                entry.chain_id,
+                hex::encode(entry.contract),
+                format.type_hash,
+            ));
+            distinct_formats.insert(format.type_hash);
+            let expected = expected_slots
+                .get(&format.type_hash)
+                .unwrap_or_else(|| panic!("unexpected string format 0x{}", hex::encode(format.type_hash)));
+            assert_eq!(format.string_preimage_count as usize, expected.len());
+            let mut seen = Vec::new();
+            for field in format.fields() {
+                let field = field.expect("field parses");
+                let params = pqsigner_erc7730::render::params::parse(&verified.ir, field.param_off)
+                    .expect("field params parse");
+                let Some(ordinal) = params.eip712_string_preimage_ordinal else {
+                    continue;
+                };
+                assert_eq!(ordinal as usize, seen.len());
+                assert_eq!(field.format_op, FormatOp::Raw as u8);
+                assert_eq!(params.visibility, Visibility::Always);
+                assert_eq!(params.terminal_kind, Some(TerminalKind::Eip712StringHashWord));
+                assert_eq!(params.policy_mask(), ParamMask::EIP712_STRING_PREIMAGE);
+                assert!(params.dynamic_kind.is_none());
+                let path = verified.ir.path_bytes(field.path_off).expect("direct member path");
+                assert_eq!(path.len(), 4);
+                assert_eq!(path[0], PathOp::RootStructured as u8);
+                assert_eq!(path[1], PathOp::FieldIdx as u8);
+                let slot = u16::from_be_bytes([path[2], path[3]]);
+                assert!(slot < format.static_head_words);
+                assert_eq!(slot, expected[ordinal as usize]);
+                seen.push(slot);
+                distinct_members.insert((format.type_hash, slot));
+                deployment_members += 1;
+            }
+            assert_eq!(&seen, expected);
+        }
+    }
+
+    assert_eq!(observed_combos, expected_combos);
+    assert_eq!(descriptors.len(), 4, "exact descriptor inventory");
+    assert_eq!(observed_combos.len(), 7, "deployment-format combinations");
+    assert_eq!(distinct_formats.len(), 5, "distinct enrolled formats");
+    assert_eq!(distinct_members.len(), 6, "distinct marked members");
+    assert_eq!(deployment_members, 9, "deployment-expanded marked members");
+}
+
+#[test]
+fn v3_cancel_order_renders_empty_and_exact_preimage_while_v2_refuses() {
+    let entry = find_leaf(build_registry(), FT_CANCEL_SOURCE, 1);
+    let type_hash = keccak256(CANCEL_ORDER_SIG.as_bytes());
+    for preimage in [&b""[..], &b"FT-order-2026/07/21 trailing space "[..]] {
+        let encoded_data = keccak256(preimage).to_vec();
+        let evidence = evidence_record(preimage);
+        let pages = render_registry_eip712_v3(entry, &type_hash, &encoded_data, &evidence)
+            .expect("exact CancelOrder preimage renders through V3");
+        assert_exact_string_pages(&pages, "Order ID", preimage);
+        assert_all_pages_printable(&pages);
+
+        let registry = build_registry();
+        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("leaf verifies");
+        assert!(super::erc7730::render_erc7730_eip712_pages(
+            entry.chain_id,
+            &entry.contract,
+            &type_hash,
+            &encoded_data,
+            &verified,
+            None,
+            &NameResolver::new(),
+        )
+        .is_err());
+        assert!(render_registry_eip712_v3(entry, &type_hash, &encoded_data, &[]).is_err());
+    }
+}
+
+#[test]
+fn v3_tpsl_two_string_stream_rejects_reorder_omission_padding_and_mutation() {
+    let entry = find_leaf(build_registry(), FT_CANCEL_SOURCE, 1);
+    let type_hash = keccak256(TPSL_CANCEL_SIG.as_bytes());
+    let position = b"position-123";
+    let group = b"group-456";
+    let encoded_data = encoded_words(&[
+        abi_address_word([0x44; 20]),
+        keccak256(position),
+        keccak256(group),
+        u256_from_u64(1_735_689_600).0,
+    ]);
+    let first = evidence_record(position);
+    let second = evidence_record(group);
+    let mut evidence = first.clone();
+    evidence.extend_from_slice(&second);
+    let pages = render_registry_eip712_v3(entry, &type_hash, &encoded_data, &evidence)
+        .expect("ordered two-string evidence renders");
+    assert_exact_string_pages(&pages, "Position ID", position);
+    assert_exact_string_pages(&pages, "TP/SL group", group);
+
+    let mut swapped = second;
+    swapped.extend_from_slice(&first);
+    let mut extra = evidence.clone();
+    extra.push(0);
+    let mut changed_word = encoded_data.clone();
+    changed_word[32] ^= 1;
+    let mut changed_preimage = evidence.clone();
+    changed_preimage[2] ^= 1;
+    for (candidate_ed, candidate_evidence) in [
+        (&encoded_data[..], &swapped[..]),
+        (&encoded_data[..], &first[..]),
+        (&encoded_data[..], &extra[..]),
+        (&changed_word[..], &evidence[..]),
+        (&encoded_data[..], &changed_preimage[..]),
+    ] {
+        assert!(
+            render_registry_eip712_v3(entry, &type_hash, candidate_ed, candidate_evidence)
+                .is_err(),
+            "malformed two-string evidence must refuse"
+        );
+    }
+}
+
+#[test]
+fn v3_lens_quote_renders_the_exact_multi_page_content_uri() {
+    let entry = find_leaf(build_registry(), LENS_SOURCE, 137);
+    let type_hash = keccak256(LENS_QUOTE_SIG.as_bytes());
+    let content_uri = b"ipfs://bafybeigdyrzt5lens-content-uri";
+    assert!(content_uri.len() > 2 * DISPLAY_COLS);
+    let encoded_data = encoded_words(&[
+        u256_from_u64(17).0,
+        keccak256(content_uri),
+        u256_from_u64(23).0,
+        u256_from_u64(29).0,
+        u256_from_u64(31).0,
+        u256_from_u64(1_735_689_600).0,
+    ]);
+    let evidence = evidence_record(content_uri);
+
+    let pages = render_registry_eip712_v3(entry, &type_hash, &encoded_data, &evidence)
+        .expect("exact Lens Quote contentURI renders through V3");
+    assert_exact_string_pages(&pages, "contentURI", content_uri);
+    assert_all_pages_printable(&pages);
+
+    let mut mismatched = encoded_data.clone();
+    mismatched[32] ^= 1;
+    assert!(render_registry_eip712_v3(entry, &type_hash, &mismatched, &evidence).is_err());
+}
+
+#[test]
+fn v3_rarible_mixed_string_and_nested_streams_fit_small_721_and_refuse_large_1155_suffix() {
+    use super::erc7730::nested::hash_struct_array;
+    use super::eip1271::{append_eip1271_context_pages, OffchainConfirmContext};
+    use pqsigner_erc7730::display::MAX_PAGES;
+
+    let part_type_hash = keccak256(b"Part(address account,uint96 value)");
+    let creator = part_ed([0x11; 20], 10_000);
+    let royalty = part_ed([0x22; 20], 500);
+    let creator_hash = hash_struct_array(&part_type_hash, &[creator.as_slice()]);
+    let royalty_hash = hash_struct_array(&part_type_hash, &[royalty.as_slice()]);
+    let uri_721 = b"ipfs://small";
+    let top_721 = encoded_words(&[
+        u256_from_u64(7).0,
+        keccak256(uri_721),
+        creator_hash,
+        royalty_hash,
+    ]);
+    let mut evidence_721 = evidence_record(uri_721);
+    append_struct_array_record(&mut evidence_721, &[creator.clone()]);
+    append_struct_array_record(&mut evidence_721, &[royalty.clone()]);
+    let leaf_721 = find_leaf(build_registry(), RARIBLE_721_SOURCE, 1);
+    let pages_721 = render_registry_eip712_v3(
+        leaf_721,
+        &keccak256(RARIBLE_721_SIG.as_bytes()),
+        &top_721,
+        &evidence_721,
+    )
+    .expect("small Mint721 mixed evidence stream renders");
+    assert_exact_string_pages(&pages_721, "Token URI", uri_721);
+    let dump_721 = dump_pages(&pages_721);
+    assert!(dump_721.contains("1111111111111111"));
+    assert!(dump_721.contains("2222222222222222"));
+    assert_eq!(dump_721.matches("Item 1 of 1").count(), 2);
+
+    let creators = vec![part_ed([0x31; 20], 5_000), part_ed([0x32; 20], 5_000)];
+    let royalties = vec![part_ed([0x41; 20], 250), part_ed([0x42; 20], 250)];
+    let creator_refs: Vec<&[u8]> = creators.iter().map(Vec::as_slice).collect();
+    let royalty_refs: Vec<&[u8]> = royalties.iter().map(Vec::as_slice).collect();
+    let uri_1155 = [b'x'; 100];
+    let top_1155 = encoded_words(&[
+        u256_from_u64(9).0,
+        u256_from_u64(2).0,
+        keccak256(&uri_1155),
+        hash_struct_array(&part_type_hash, &creator_refs),
+        hash_struct_array(&part_type_hash, &royalty_refs),
+    ]);
+    let mut evidence_1155 = evidence_record(&uri_1155);
+    append_struct_array_record(&mut evidence_1155, &creators);
+    append_struct_array_record(&mut evidence_1155, &royalties);
+    let leaf_1155 = find_leaf(build_registry(), RARIBLE_1155_SOURCE, 1);
+    let type_hash_1155 = keccak256(RARIBLE_1155_SIG.as_bytes());
+    let registry = build_registry();
+    let bundle = synth_bundle(&registry.blob, &leaf_1155.ir_bytes, leaf_1155.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("Mint1155 leaf verifies");
+
+    // The production checked renderer itself refuses this exact worst admitted
+    // catalogue shape. The handler therefore never receives a confirmable
+    // transcript and cannot downgrade it to RAW32/blind signing.
+    assert!(matches!(
+        super::erc7730_secure_shim::render_erc7730_eip712_pages_v3_checked(
+            leaf_1155.chain_id,
+            &leaf_1155.contract,
+            &type_hash_1155,
+            &top_1155,
+            &evidence_1155,
+            &verified,
+            None,
+            &NameResolver::new(),
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::PageBudget)
+    ));
+
+    // Inspect the scratch buffer used by one render pass: it reaches the fixed
+    // limit without truncating the already-painted exact URI. Both unchanged
+    // handler suffix builders then refuse atomically.
+    let mut attempted = Pages::with_len(0);
+    assert!(matches!(
+        super::erc7730::render_erc7730_eip712_pages_v3_into(
+            leaf_1155.chain_id,
+            &leaf_1155.contract,
+            &type_hash_1155,
+            &top_1155,
+            &evidence_1155,
+            &verified,
+            None,
+            &NameResolver::new(),
+            &mut attempted,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::PageBudget)
+    ));
+    assert_eq!(attempted.len, MAX_PAGES);
+    assert_exact_string_pages(&attempted, "Token URI", &uri_1155);
+    let partial_dump = dump_pages(&attempted);
+    assert!(!partial_dump.contains("Raw32"));
+    assert!(!partial_dump.contains("Blind"));
+
+    let original_len = attempted.len;
+    let original_pages = attempted.buf;
+    assert!(
+        append_fingerprint_for_test(&mut attempted, Erc8213Kind::Eip712Final([0xA5; 32]))
+            .is_err(),
+        "handler must refuse rather than omit the fingerprint"
+    );
+    let context = OffchainConfirmContext::new(
+        sphincs_tz_shared::OFFCHAIN_KIND_EIP712_TYPED_V3,
+        1,
+        0,
+        0,
+        [0x55; 20],
+        true,
+        1,
+        0,
+        65_536,
+        [0xA6; 32],
+    );
+    let mut cfi = crate::fi::CfiCounter::new();
+    assert!(
+        append_eip1271_context_pages(&mut attempted, &context, &mut cfi).is_err(),
+        "handler must refuse rather than omit its authorization context"
+    );
+    assert_eq!(attempted.len, original_len);
+    assert_eq!(
+        &attempted.buf[..original_len],
+        &original_pages[..original_len],
+        "suffix failures must not truncate or rewrite any exact renderer page"
+    );
+}
+
+// ───────────────────────────────────────────────────────────────────────
 // VULN-erc7730-eip712-nested-struct-address-hide — on-device belt.
 //
 // A pinned EIP-712 descriptor whose primary type has a nested struct member
@@ -10495,9 +10931,10 @@ fn permit_single_valid_vectors() -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
 
 /// Walk an EIP-712 IR's formats section and return the byte offset of the
 /// `nested_descent_count` byte of the format whose `type_hash == target`.
-/// Mirrors `ir::FormatIter` (fixed prefix 9 B: selector(4) field_count(1)
-/// intent_len(1) static_head_words(2) nested_descent_count(1); then intent;
-/// then type_hash(32) for EIP-712; then `field_count` FieldEntry records).
+/// Mirrors `ir::FormatIter` (fixed prefix 10 B: selector(4) field_count(1)
+/// intent_len(1) static_head_words(2) nested_descent_count(1)
+/// string_preimage_count(1); then intent; then type_hash(32) for EIP-712;
+/// then `field_count` FieldEntry records).
 fn eip712_format_ndc_offset(ir_bytes: &[u8], target: &[u8; 32]) -> Option<usize> {
     let formats_off = u16::from_be_bytes([ir_bytes[128], ir_bytes[129]]) as usize;
     let count = *ir_bytes.get(formats_off)? as usize;
@@ -10506,7 +10943,7 @@ fn eip712_format_ndc_offset(ir_bytes: &[u8], target: &[u8; 32]) -> Option<usize>
         let entry_start = p;
         let field_count = *ir_bytes.get(p + 4)? as usize;
         let intent_len = *ir_bytes.get(p + 5)? as usize;
-        p += 9 + intent_len; // fixed prefix + intent
+        p += 10 + intent_len; // fixed prefix + intent
         let th = ir_bytes.get(p..p + 32)?;
         let matched = th == target;
         p += 32; // EIP-712 type_hash

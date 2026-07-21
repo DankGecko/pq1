@@ -88,6 +88,20 @@ fn build_e2e() -> Erc7730BuildResult {
     build_db(&dir, &policy).expect("build E2E corpus")
 }
 
+/// The pre-#493 catalogue had 463 leaves. Exact string-preimage enrollment
+/// adds two Flying Tulip deployment leaves and one leaf for each Rarible mint
+/// descriptor. Lens Quote joins its already-existing Lens deployment leaf, so
+/// five newly admitted formats produce exactly four new leaves.
+const REGISTRY_LEAVES_BEFORE_EIP712_STRINGS: usize = 463;
+const EIP712_STRING_NEW_LEAVES: usize = 4;
+const EXPECTED_REGISTRY_LEAVES: usize =
+    REGISTRY_LEAVES_BEFORE_EIP712_STRINGS + EIP712_STRING_NEW_LEAVES;
+
+/// EIP-712 admission does not add contract selectors to the independent
+/// known-call inventory. Keep its exact cardinality pinned separately from the
+/// Merkle-leaf count.
+const EXPECTED_KNOWN_CALL_TUPLES: usize = 4_580;
+
 #[derive(Clone, Copy)]
 enum OneinchExpectedBinding {
     From,
@@ -1883,8 +1897,8 @@ fn registry_oneinch_v6_cancellation_controls_admit_only_verified_deployments() {
         }
     }
     assert_eq!(target_known_call_tuples, 28);
-    assert_eq!(catalogue.entries.len(), 463);
-    assert_eq!(catalogue.known_call_count, 4_580);
+    assert_eq!(catalogue.entries.len(), EXPECTED_REGISTRY_LEAVES);
+    assert_eq!(catalogue.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(catalogue.known_call_set_hash),
         "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
@@ -2288,7 +2302,7 @@ fn registry_midas_mtbill_admits_all_four_deposit_vault_routes() {
             );
         }
     }
-    assert_eq!(catalogue.known_call_count, 4_580);
+    assert_eq!(catalogue.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
 }
 
 #[test]
@@ -2653,10 +2667,10 @@ fn registry_midas_mtbill_redemption_admits_only_four_token_output_routes() {
     }
     assert_eq!(
         catalogue.entries.len(),
-        463,
-        "the ten reviewed 1inch leaves must raise the prior 453-leaf catalogue to 463"
+        EXPECTED_REGISTRY_LEAVES,
+        "the five exact string-preimage formats must add four leaves to the prior 463-leaf catalogue"
     );
-    assert_eq!(catalogue.known_call_count, 4_580);
+    assert_eq!(catalogue.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(catalogue.known_call_set_hash),
         "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
@@ -2938,10 +2952,10 @@ fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment(
 
     assert_eq!(
         result.entries.len(),
-        463,
-        "PQ-incompatible permit removal must preserve the 463-leaf catalogue"
+        EXPECTED_REGISTRY_LEAVES,
+        "PQ-incompatible permit removal must preserve the post-#493 catalogue"
     );
-    assert_eq!(result.known_call_count, 4_580);
+    assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
         "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829",
@@ -2998,7 +3012,6 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     token_path.extend_from_slice(&container_field::TO.to_be_bytes());
 
     for entry in entries {
-        assert_eq!(entry.ir_bytes.len(), 218, "WETH9 IR size drifted");
         let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("generated WETH9 IR parses");
         let formats: Vec<_> = ir
             .format_iter()
@@ -3008,6 +3021,11 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
             formats.len(),
             2,
             "WETH9 admits deposit() and withdraw(uint256)"
+        );
+        assert_eq!(
+            entry.ir_bytes.len(),
+            218 + formats.len(),
+            "schema v6 adds exactly one string-preimage count byte to each format header"
         );
         let deposit = ir
             .find_format_by_selector(&deposit_selector)
@@ -3076,11 +3094,13 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
             .contains(&(entry.chain_id, entry.contract, withdraw_selector)));
     }
 
-    assert_eq!(result.entries.len(), 463);
-    assert_eq!(result.known_call_count, 4_580);
+    assert_eq!(result.entries.len(), EXPECTED_REGISTRY_LEAVES);
+    assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(result.root),
-        "568b7da7092a41dbcd4d229f98fc9e8dd01fe12ed9d45211de5c46b61cad9945"
+        // Re-derived from the schema-v6 catalogue containing the five exact
+        // EIP-712 string-preimage formats enrolled by #493.
+        "01fc3633f39a453684445b87fbfd1b8d3b1063fe9824984508a890f3c949db21"
     );
 }
 
@@ -3185,10 +3205,10 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
 
     assert_eq!(
         result.entries.len(),
-        463,
+        EXPECTED_REGISTRY_LEAVES,
         "Aave V2 already owned three leaves"
     );
-    assert_eq!(result.known_call_count, 4_580);
+    assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
         "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
@@ -3407,8 +3427,8 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
         );
     }
 
-    assert_eq!(result.entries.len(), 463);
-    assert_eq!(result.known_call_count, 4_580);
+    assert_eq!(result.entries.len(), EXPECTED_REGISTRY_LEAVES);
+    assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
         "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
@@ -3515,8 +3535,8 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
         );
     }
 
-    assert_eq!(result.entries.len(), 463);
-    assert_eq!(result.known_call_count, 4_580);
+    assert_eq!(result.entries.len(), EXPECTED_REGISTRY_LEAVES);
+    assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
         "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
@@ -4040,8 +4060,8 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
         "newly clear-signable permit was already registry-known"
     );
 
-    assert_eq!(result.entries.len(), 463);
-    assert_eq!(result.known_call_count, 4_580);
+    assert_eq!(result.entries.len(), EXPECTED_REGISTRY_LEAVES);
+    assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
         "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
@@ -4325,38 +4345,283 @@ fn registry_scalar_interpolation_enrollment_is_explicit_and_bounded() {
 }
 
 #[test]
-fn eip712_hash_only_value_sources_are_not_emitted_to_runtime_catalogue() {
-    let root = workspace_root();
-    let reg = root.join("secure/data/erc7730-registry");
-    let policy = root.join("secure/data/erc7730/policy.toml");
-    let (catalogue, skips) = build_db_tolerant(&reg.join("registry"), &policy, Some(&reg))
-        .expect("build registry corpus");
+fn eip712_string_preimages_admit_only_the_five_exact_formats() {
+    #[derive(Clone, Copy)]
+    struct EnrolledStringFormat {
+        source: &'static str,
+        signature: &'static str,
+        deployments: &'static [(u64, &'static str)],
+        signed_word_ordinals: &'static [u16],
+    }
 
-    // Concrete exploit: all three human-meaningful Hyperliquid Withdraw
-    // values are dynamic strings. EIP-712 encodeData contains only their
-    // keccak words, so no verified bundle for this source may exist.
-    for source_name in ["eip712-withdraw.json", "eip712-SpotOrderCancel.json"] {
+    const FLYING_TULIP_DEPLOYMENTS: &[(u64, &str)] = &[
+        (1, "f9f3ddf2e96cabef94e2634c326dc6dde99360f8"),
+        (146, "109ae72778a0260571b9767477204f1ce41fbdff"),
+    ];
+    const LENS_DEPLOYMENT: &[(u64, &str)] =
+        &[(137, "db46d1dc155634fbc732f92e853b10b288ad5a1d")];
+    const RARIBLE_721_DEPLOYMENT: &[(u64, &str)] =
+        &[(1, "c9154424b823b10579895ccbe442d41b9abd96ed")];
+    const RARIBLE_1155_DEPLOYMENT: &[(u64, &str)] =
+        &[(1, "b66a603f4cfe17e3d27b87a8bfcad319856518b8")];
+
+    let enrolled = [
+        EnrolledStringFormat {
+            source: "flyingtulip/eip712-SpotOrderCancel.json",
+            signature: "CancelOrder(string orderId)",
+            deployments: FLYING_TULIP_DEPLOYMENTS,
+            signed_word_ordinals: &[0],
+        },
+        EnrolledStringFormat {
+            source: "flyingtulip/eip712-SpotOrderCancel.json",
+            signature:
+                "TpslGroupCancel(address user,string positionId,string tpslGroupId,uint256 deadline)",
+            deployments: FLYING_TULIP_DEPLOYMENTS,
+            signed_word_ordinals: &[1, 2],
+        },
+        EnrolledStringFormat {
+            source: "lens/eip712-lens-lenshub.json",
+            signature:
+                "Quote(uint256 profileId,string contentURI,uint256 pointedProfileId,uint256 pointedPubId,uint256 nonce,uint256 deadline)",
+            deployments: LENS_DEPLOYMENT,
+            signed_word_ordinals: &[1],
+        },
+        EnrolledStringFormat {
+            source: "rarible/eip712-rarible-erc-721.json",
+            signature:
+                "Mint721(uint256 tokenId,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)",
+            deployments: RARIBLE_721_DEPLOYMENT,
+            signed_word_ordinals: &[1],
+        },
+        EnrolledStringFormat {
+            source: "rarible/eip712-rarible-erc-1155.json",
+            signature:
+                "Mint1155(uint256 tokenId,uint256 supply,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)",
+            deployments: RARIBLE_1155_DEPLOYMENT,
+            signed_word_ordinals: &[2],
+        },
+    ];
+    let refused = [
+        (
+            "hyperliquid/eip712-withdraw.json",
+            "HyperliquidTransaction:Withdraw(string hyperliquidChain,string destination,string amount,uint64 time)",
+        ),
+        (
+            "lens/eip712-lens-lenshub.json",
+            "Comment(uint256 profileId,string contentURI,uint256 pointedProfileId,uint256 pointedPubId,uint256[] referrerProfileIds,uint256[] referrerPubIds,bytes referenceModuleData,address[] actionModules,bytes[] actionModulesInitDatas,address referenceModule,bytes referenceModuleInitData,uint256 nonce,uint256 deadline)",
+        ),
+        (
+            "lens/eip712-lens-lenshub.json",
+            "Mirror(uint256 profileId,string metadataURI,uint256 pointedProfileId,uint256 pointedPubId,uint256[] referrerProfileIds,uint256[] referrerPubIds,bytes referenceModuleData,uint256 nonce,uint256 deadline)",
+        ),
+        (
+            "lens/eip712-lens-lenshub.json",
+            "Post(uint256 profileId,string contentURI,address[] actionModules,bytes[] actionModulesInitDatas,address referenceModule,bytes referenceModuleInitData,uint256 nonce,uint256 deadline)",
+        ),
+        (
+            "lens/eip712-lens-lenshub.json",
+            "SetProfileMetadataURI(uint256 profileId,string metadataURI,uint256 nonce,uint256 deadline)",
+        ),
+        (
+            "safe/eip712-Safe-Multisig.json",
+            "AddAddressBookEntry(AddressBookEntry[] entries,uint256 totp)AddressBookEntry(string alias,address address)",
+        ),
+    ];
+
+    fn signature_mentions_string(signature: &str) -> bool {
+        signature
+            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .any(|token| token == "string")
+    }
+
+    fn collect_declared_eip712_strings(
+        directory: &Path,
+        registry_root: &Path,
+        output: &mut BTreeSet<(String, String)>,
+    ) {
+        for entry in std::fs::read_dir(directory).expect("read registry directory") {
+            let entry = entry.expect("read registry entry");
+            let path = entry.path();
+            if path.is_dir() {
+                collect_declared_eip712_strings(&path, registry_root, output);
+                continue;
+            }
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            let descriptor: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(&path).expect("read registry descriptor"),
+            )
+            .expect("parse registry descriptor");
+            if !descriptor["context"]["eip712"].is_object() {
+                continue;
+            }
+            let Some(formats) = descriptor["display"]["formats"].as_object() else {
+                continue;
+            };
+            let relative = path
+                .strip_prefix(registry_root)
+                .expect("descriptor remains below registry root")
+                .to_string_lossy()
+                .replace('\\', "/");
+            for signature in formats.keys().filter(|key| signature_mentions_string(key)) {
+                output.insert((relative.clone(), signature.clone()));
+            }
+        }
+    }
+
+    fn parse_address(address: &str) -> [u8; 20] {
+        hex::decode(address)
+            .expect("hex enrolled address")
+            .try_into()
+            .expect("enrolled address width")
+    }
+
+    fn assert_exact_string_markers(
+        ir: &Erc7730Ir<'_>,
+        format: FormatHeader<'_>,
+        signed_word_ordinals: &[u16],
+    ) {
+        assert_eq!(
+            usize::from(format.string_preimage_count),
+            signed_word_ordinals.len()
+        );
+        let mut marked = Vec::new();
+        for field in format.fields() {
+            let field = field.expect("enrolled string field parses");
+            let params = parse_params(ir, field.param_off).expect("enrolled string params parse");
+            let Some(evidence_ordinal) = params.eip712_string_preimage_ordinal else {
+                continue;
+            };
+            assert_eq!(FormatOp::try_from(field.format_op), Ok(FormatOp::Raw));
+            assert_eq!(
+                params.terminal_kind,
+                Some(TerminalKind::Eip712StringHashWord)
+            );
+            assert_eq!(params.visibility, Visibility::Always);
+            let path = ir
+                .path_bytes(field.path_off)
+                .expect("enrolled string path parses");
+            assert_eq!(
+                path.len(),
+                4,
+                "string preimage must bind one direct EIP-712 word"
+            );
+            assert_eq!(path[0], PathOp::RootStructured as u8);
+            assert_eq!(path[1], PathOp::FieldIdx as u8);
+            assert!(!path.contains(&(PathOp::FollowOffset as u8)));
+            marked.push((
+                evidence_ordinal,
+                u16::from_be_bytes([path[2], path[3]]),
+            ));
+        }
+        let expected: Vec<_> = signed_word_ordinals
+            .iter()
+            .enumerate()
+            .map(|(evidence_ordinal, signed_word_ordinal)| {
+                (evidence_ordinal as u8, *signed_word_ordinal)
+            })
+            .collect();
+        assert_eq!(marked, expected);
+    }
+
+    let root = workspace_root();
+    let registry_root = root.join("secure/data/erc7730-registry/registry");
+    let policy = root.join("secure/data/erc7730/policy.toml");
+    let registry_parent = root.join("secure/data/erc7730-registry");
+    let (catalogue, skips) =
+        build_db_tolerant(&registry_root, &policy, Some(&registry_parent))
+            .expect("build registry corpus");
+
+    // Pin the complete source inventory so a newly vendored EIP-712 string
+    // cannot silently escape both the enrolled and explicitly refused sets.
+    let expected_inventory: BTreeSet<_> = enrolled
+        .iter()
+        .map(|format| (format.source.to_string(), format.signature.to_string()))
+        .chain(
+            refused
+                .iter()
+                .map(|(source, signature)| (source.to_string(), signature.to_string())),
+        )
+        .collect();
+    let mut declared_inventory = BTreeSet::new();
+    collect_declared_eip712_strings(
+        &registry_root,
+        &registry_root,
+        &mut declared_inventory,
+    );
+    assert_eq!(
+        declared_inventory, expected_inventory,
+        "every vendored EIP-712 string format must be exactly enrolled or explicitly refused"
+    );
+
+    let enrolled_identities: BTreeSet<_> = enrolled
+        .iter()
+        .map(|format| (format.source, keccak256(format.signature.as_bytes())))
+        .collect();
+    let mut expected_instances = BTreeSet::new();
+    for format in &enrolled {
+        let type_hash = keccak256(format.signature.as_bytes());
+        for &(chain_id, address) in format.deployments {
+            expected_instances.insert((
+                format.source.to_string(),
+                chain_id,
+                parse_address(address),
+                type_hash,
+            ));
+        }
+    }
+
+    let mut actual_instances = BTreeSet::new();
+    for entry in &catalogue.entries {
+        let source = entry
+            .source
+            .strip_prefix(&registry_root)
+            .expect("emitted descriptor remains below registry root")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("enrolled EIP-712 leaf parses");
+        for format in ir.format_iter().map(Result::unwrap) {
+            if !enrolled_identities.contains(&(source.as_str(), format.type_hash)) {
+                continue;
+            }
+            let enrollment = enrolled
+                .iter()
+                .find(|candidate| {
+                    candidate.source == source
+                        && keccak256(candidate.signature.as_bytes()) == format.type_hash
+                })
+                .expect("emitted string format has exact enrollment");
+            assert_exact_string_markers(&ir, format, enrollment.signed_word_ordinals);
+            actual_instances.insert((
+                source.clone(),
+                entry.chain_id,
+                entry.contract,
+                format.type_hash,
+            ));
+        }
+    }
+    assert_eq!(actual_instances, expected_instances);
+    assert_eq!(actual_instances.len(), 7, "five formats span seven exact deployments");
+
+    for (source, signature) in refused {
+        let type_hash = keccak256(signature.as_bytes());
         assert!(
             !catalogue.entries.iter().any(|entry| {
-                entry.source.file_name().and_then(|n| n.to_str()) == Some(source_name)
+                entry.source.ends_with(source)
+                    && Erc7730Ir::parse(&entry.ir_bytes).is_ok_and(|ir| {
+                        ir.format_iter().any(|format| {
+                            format.is_ok_and(|format| format.type_hash == type_hash)
+                        })
+                    })
             }),
-            "{source_name} must not reach the runtime catalogue"
+            "unenrolled EIP-712 string format became clear-signable: {source} :: {signature}"
         );
-        let skip = skips
-            .iter()
-            .find(|skip| skip.source.file_name().and_then(|n| n.to_str()) == Some(source_name))
-            .unwrap_or_else(|| panic!("missing visible skip record for {source_name}"));
         assert!(
-            (skip
-                .reason
-                .contains("visible EIP-712 terminal type `string`")
-                && skip.reason.contains("opaque hash word"))
-                || (skip.reason.contains("visible:\"never\"")
-                    && skip
-                        .reason
-                        .contains("every signed non-address operand must be shown")),
-            "unexpected {source_name} skip reason: {}",
-            skip.reason
+            skips
+                .iter()
+                .any(|skip| skip.source.ends_with(source) && skip.reason.contains(signature)),
+            "missing exact skip receipt for {source} :: {signature}"
         );
     }
 }
@@ -5449,14 +5714,24 @@ fn successful_stub_output(output: Output) -> Vec<u8> {
 #[test]
 fn companion_stub_context_and_full_type_hash_lookup_verify_on_device() {
     let root_dir = workspace_root();
-    let db_path = root_dir.join("tools/companion-stub/erc7730_db.bin");
+    let tracked_db_path = root_dir.join("tools/companion-stub/erc7730_db.bin");
     let stub_path = root_dir.join("tools/companion-stub/erc7730_trailer.py");
-    assert!(db_path.is_file(), "tracked companion catalogue is missing");
+    assert!(
+        tracked_db_path.is_file(),
+        "tracked companion catalogue is missing"
+    );
     assert!(
         stub_path.is_file(),
         "tracked companion reference is missing"
     );
     let result = build_registry();
+    // Exercise the current schema-v6/10-byte-format-header blob built in this
+    // test. The tracked artifact is regenerated only at the later catalogue
+    // landing boundary and must not make this source-level roundtrip depend on
+    // an earlier phase's schema-v5 bytes.
+    let fixture_dir = tempfile::tempdir().expect("create companion fixture directory");
+    let db_path = fixture_dir.path().join("erc7730-schema-v6.bin");
+    std::fs::write(&db_path, &result.blob).expect("write current companion fixture");
     let type_hash_hex = "40ac9f6aa27075e64c1ed1ea2e831b20b8c25efdeb6b79fd0cf683c9a9c50725";
     let type_hash: [u8; 32] = hex::decode(type_hash_hex).unwrap().try_into().unwrap();
     let deployments = [
@@ -5685,9 +5960,11 @@ fn companion_stub_context_and_full_type_hash_lookup_verify_on_device() {
 #[test]
 fn companion_stub_finds_secondary_eip712_type_inside_leaf() {
     let root_dir = workspace_root();
-    let db_path = root_dir.join("tools/companion-stub/erc7730_db.bin");
     let stub_path = root_dir.join("tools/companion-stub/erc7730_trailer.py");
     let catalogue = build_registry();
+    let fixture_dir = tempfile::tempdir().expect("create companion fixture directory");
+    let db_path = fixture_dir.path().join("erc7730-schema-v6.bin");
+    std::fs::write(&db_path, &catalogue.blob).expect("write current companion fixture");
     let (chain_id, contract, domain_separator, secondary_type_hash) = catalogue
         .entries
         .iter()

@@ -223,8 +223,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                 return NscStatus::InvalidPointer as u32;
             }
             // Minimum payload: dsep_present(2) + dsep(32) + pth(32) + edl(2) +
-            // edata(0) + nested_blob_len(2) + nested_blob(0) + trailer_len(2) +
-            // trailer(0) = 72 B (the extra 2 B vs kind=2 is the nested_blob_len).
+            // edata(0) + witness_blob_len(2) + witness_blob(0) + trailer_len(2)
+            // + trailer(0) = 72 B. The retained parser field name is
+            // `nested_blob`; schema-v6 IR may also select exact string-preimage
+            // records from the same display-only section.
             if payload_len < 2 + 32 + 32 + 2 + 2 + 2 {
                 crate::ui::show_status("EIP-1271", "typed too short");
                 return NscStatus::InvalidPointer as u32;
@@ -438,7 +440,8 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         // offchain_eip712_exact_consumption`). Behaviour-identical to the prior
         // inline walk — the same refusal banner on each error (mapped via
         // `Eip712FrameError::status_str`) and the same domain_separator /
-        // primary_type_hash / encoded_data / nested_blob (V3) / trailer sections.
+        // primary_type_hash / encoded_data / display-witness blob (V3; legacy
+        // field name `nested_blob`) / trailer sections.
         // The upstream kind-dispatch `payload_len` min/max gate stays in place.
         let frame = match pqsigner_aa::offchain_header::parse_eip712_typed_frame(payload, is_v3) {
             Ok(f) => f,

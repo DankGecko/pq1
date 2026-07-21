@@ -41,6 +41,7 @@
 //! | 0x49 | `sender_address`     | 1–2 unique concatenated 20 B sentinels     |
 //! | 0x4A | `word_guard`         | mode (0=EQ, 1=NE) + exact 32 B word        |
 //! | 0x4B | `exact_empty_bytes`  | empty (requires sole canonical empty tail) |
+//! | 0x4C | `eip712_string_preimage` | 1 B evidence-stream ordinal          |
 //!
 //! Wire-stable.
 //!
@@ -148,11 +149,16 @@ pub const WORD_GUARD_NE: u8 = 1;
 /// canonical ABI tail and must contain exactly zero data bytes. The parameter
 /// is a zero-payload marker: any payload is non-canonical and rejected.
 pub const PARAM_EXACT_EMPTY_BYTES: u8 = 0x4B;
+/// Schema-v6 marker selecting one exact string-preimage record from the
+/// companion's descriptor-selected evidence stream. The payload is the
+/// zero-based record ordinal; the enclosing format validator enforces the
+/// canonical traversal sequence and the EIP-712-only static-word topology.
+pub const PARAM_EIP712_STRING_PREIMAGE: u8 = 0x4C;
 pub const DYNAMIC_KIND_STRING: u8 = 0x01;
 pub const DYNAMIC_KIND_BYTES: u8 = 0x02;
 
 /// First constrained interpolation-program wire shape. This root-pinned TLV
-/// extension was introduced in IR schema v4 and is retained unchanged in v5;
+/// extension was introduced in IR schema v4 and is retained unchanged in v6;
 /// the program carries its own version so future grammars cannot be
 /// mixed-interpreted.
 pub const INTERPOLATED_INTENT_VERSION: u8 = 0x01;
@@ -458,6 +464,11 @@ pub struct ParamSet<'a> {
     /// Authenticated zero-payload assertion that this dynamic `bytes` field is
     /// accepted only when its sole canonical ABI tail is exactly empty.
     pub exact_empty_bytes: bool,
+    /// Zero-based ordinal of the exact string preimage in the format's
+    /// evidence traversal. Legal only for a top-level EIP-712
+    /// [`TerminalKind::Eip712StringHashWord`] field; deep IR validation owns
+    /// that context and path check.
+    pub eip712_string_preimage_ordinal: Option<u8>,
 }
 
 impl<'a> Default for ParamSet<'a> {
@@ -492,6 +503,7 @@ impl<'a> Default for ParamSet<'a> {
             sender_addresses: None,
             word_guard: None,
             exact_empty_bytes: false,
+            eip712_string_preimage_ordinal: None,
         }
     }
 }
@@ -596,6 +608,9 @@ impl ParamSet<'_> {
         if self.exact_empty_bytes {
             mask = mask.union(ParamMask::EXACT_EMPTY_BYTES);
         }
+        if self.eip712_string_preimage_ordinal.is_some() {
+            mask = mask.union(ParamMask::EIP712_STRING_PREIMAGE);
+        }
         mask
     }
 }
@@ -646,7 +661,7 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
         .ok_or(RenderErr::Reject("7730 bad param blob"))?;
 
     let mut cursor = 0usize;
-    // Tags 0x30..=0x4B fit in this bitmap. Singleton parameter TLVs are
+    // Tags 0x30..=0x4C fit in this bitmap. Singleton parameter TLVs are
     // canonical: accepting duplicates would make meaning order-dependent and
     // previously let a short visibility duplicate retain the first tag's tail.
     let mut seen_tags = 0u32;
@@ -663,7 +678,7 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
         let payload = &body[cursor..cursor + len];
         cursor += len;
 
-        if !(PARAM_TOKEN_PATH..=PARAM_EXACT_EMPTY_BYTES).contains(&tag) {
+        if !(PARAM_TOKEN_PATH..=PARAM_EIP712_STRING_PREIMAGE).contains(&tag) {
             return Err(RenderErr::Reject("7730 unknown tlv tag"));
         }
         let bit = 1u32 << (tag - PARAM_TOKEN_PATH);
@@ -751,6 +766,12 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
                     return Err(RenderErr::Reject("7730 bad exact-empty marker"));
                 }
                 p.exact_empty_bytes = true;
+            }
+            PARAM_EIP712_STRING_PREIMAGE => {
+                if payload.len() != 1 {
+                    return Err(RenderErr::Reject("7730 bad string-preimage marker"));
+                }
+                p.eip712_string_preimage_ordinal = Some(payload[0]);
             }
             PARAM_THRESHOLD => {
                 p.threshold = Some(
@@ -920,6 +941,7 @@ mod tests {
         assert!(p.token.is_none());
         assert!(p.terminal_kind.is_none());
         assert!(p.integer_width_bytes.is_none());
+        assert!(p.eip712_string_preimage_ordinal.is_none());
     }
 
     #[test]
@@ -1586,24 +1608,50 @@ mod tests {
         let ir = Erc7730Ir::parse(&bytes).unwrap();
         let parsed = parse(&ir, 1).unwrap();
         assert!(parsed.exact_empty_bytes);
-        assert!(parsed
-            .policy_mask()
-            .contains(ParamMask::EXACT_EMPTY_BYTES));
+        assert!(parsed.policy_mask().contains(ParamMask::EXACT_EMPTY_BYTES));
 
         for bad in [
             std::vec![PARAM_EXACT_EMPTY_BYTES, 1, 0],
-            std::vec![
-                PARAM_EXACT_EMPTY_BYTES,
-                0,
-                PARAM_EXACT_EMPTY_BYTES,
-                0,
-            ],
+            std::vec![PARAM_EXACT_EMPTY_BYTES, 0, PARAM_EXACT_EMPTY_BYTES, 0,],
         ] {
             let mut pool = std::vec![0xFF, bad.len() as u8];
             pool.extend_from_slice(&bad);
             let bytes = ir_with_pool(&pool);
             let ir = Erc7730Ir::parse(&bytes).unwrap();
             assert!(parse(&ir, 1).is_err());
+        }
+    }
+
+    #[test]
+    fn eip712_string_preimage_marker_is_one_byte_and_singleton() {
+        let body = [PARAM_EIP712_STRING_PREIMAGE, 1, 1];
+        let mut pool = std::vec![0xFF, body.len() as u8];
+        pool.extend_from_slice(&body);
+        let bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
+        let parsed = parse(&ir, 1).unwrap();
+        assert_eq!(parsed.eip712_string_preimage_ordinal, Some(1));
+        assert!(parsed
+            .policy_mask()
+            .contains(ParamMask::EIP712_STRING_PREIMAGE));
+
+        for bad in [
+            std::vec![PARAM_EIP712_STRING_PREIMAGE, 0],
+            std::vec![PARAM_EIP712_STRING_PREIMAGE, 2, 0, 1],
+            std::vec![
+                PARAM_EIP712_STRING_PREIMAGE,
+                1,
+                0,
+                PARAM_EIP712_STRING_PREIMAGE,
+                1,
+                1,
+            ],
+        ] {
+            let mut pool = std::vec![0xFF, bad.len() as u8];
+            pool.extend_from_slice(&bad);
+            let bytes = ir_with_pool(&pool);
+            let ir = Erc7730Ir::parse(&bytes).unwrap();
+            assert!(parse(&ir, 1).is_err(), "accepted malformed marker {bad:?}");
         }
     }
 
@@ -1944,13 +1992,13 @@ mod kani_harnesses {
         kani::assume(4 + l <= N);
         let tag = pool[2];
         // "Unknown" = outside the CONTIGUOUS known-tag range
-        // `[0x30, PARAM_EXACT_EMPTY_BYTES]`.
+        // `[0x30, PARAM_EIP712_STRING_PREIMAGE]`.
         // NB: the top bound is the HIGHEST known tag, not 0x3F — new tags were added
         // above the original 0x30..=0x3F block (`PARAM_CONST_VALUE` 0x40 in b37a052f,
         // `PARAM_NESTED_STRUCT` 0x41 in 2f4cc810), so a stale bound wrongly classifies
         // a known tag as unknown and the harness fails on a tag the parser correctly
         // accepts. Keep this in sync with the highest `PARAM_*` constant.
-        kani::assume(tag < PARAM_TOKEN_PATH || tag > PARAM_EXACT_EMPTY_BYTES);
+        kani::assume(tag < PARAM_TOKEN_PATH || tag > PARAM_EIP712_STRING_PREIMAGE);
         let ir = mk_ir(&pool);
         assert!(parse(&ir, 1).is_err());
     }
@@ -1974,6 +2022,29 @@ mod kani_harnesses {
                 assert!(params.exact_empty_bytes);
             }
             Err(_) => assert!(len != 0),
+        }
+    }
+
+    /// The schema-v6 exact-string marker is accepted only with one ordinal
+    /// byte. Context, topology, ordering, and count reconciliation are owned by
+    /// `Erc7730Ir::validate_formats`; this harness pins the standalone TLV
+    /// parser's shape and value preservation.
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn params_eip712_string_preimage_one_byte_sound() {
+        const N: usize = 8;
+        let pool: [u8; N] = kani::any();
+        let len = pool[3] as usize;
+        kani::assume((pool[1] as usize) == 2 + len);
+        kani::assume(4 + len <= N);
+        kani::assume(pool[2] == PARAM_EIP712_STRING_PREIMAGE);
+        let ir = mk_ir(&pool);
+        match parse(&ir, 1) {
+            Ok(params) => {
+                assert!(len == 1);
+                assert!(params.eip712_string_preimage_ordinal == Some(pool[4]));
+            }
+            Err(_) => assert!(len != 1),
         }
     }
 
