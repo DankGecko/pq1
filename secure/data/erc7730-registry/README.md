@@ -31,7 +31,8 @@ cargo run --locked -p pqsigner-xtask -- vendor-registry \
 The command refuses any origin/HEAD/tree/schema/corpus mismatch or relevant
 dirty upstream input, copies the pristine baseline to staging, applies only the
 manifest's full-file replacements, and installs only after the curated corpus
-receipt and unchanged known-call tuple set/Bloom are proven. There is no manual
+receipt and exact manifest-authorized known-call additions with no deletions are
+proven. There is no manual
 "reapply the patch" step. `gen-erc7730-descriptors --check` independently
 rejects local manifest, replacement, policy, selected tool-input, or checked-in
 curated-corpus drift. The complete ceremony and review requirements live in
@@ -48,9 +49,10 @@ compiled companion catalogue, root
 **4,546** canonical known-call tuples, tuple-set SHA-256
 `7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555`.
 Curation manifest SHA-256
-`e084f16bc0ba08ea130a22c4602d05c3e86d457aede63d93d8dbfe23e65bd419` binds upstream commit
+`389e55da5add8b1d572728af779d8f9fc65dc3cd923a80a61fc530a9ecfa0865` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
+Manifest v3 authorizes exactly **4** curation-added known-call tuples and no deletions.
 The Bloom contains 28,261 / 131,072 set bits, below the generator's 25% cap.
 <!-- END XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
 

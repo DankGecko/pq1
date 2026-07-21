@@ -1,5 +1,5 @@
 {
-  "manifest_version": 2,
+  "manifest_version": 3,
   "mode": "full-file-replacement",
   "upstream": {
     "repository": "https://github.com/ethereum/clear-signing-erc7730-registry.git",
@@ -32,6 +32,28 @@
     "path": "secure/data/erc7730/policy.toml",
     "sha256": "8c553b0ab2ddf7f8c6d00ff34954a3312bb3c5b981a101fe71e3733e07490877"
   },
+  "known_call_additions": [
+    {
+      "chain_id": 1,
+      "contract": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+      "selector": "0x2e1a7d4d"
+    },
+    {
+      "chain_id": 137,
+      "contract": "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
+      "selector": "0x791ac947"
+    },
+    {
+      "chain_id": 137,
+      "contract": "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
+      "selector": "0xfb3bdb41"
+    },
+    {
+      "chain_id": 11155111,
+      "contract": "0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
+      "selector": "0x2e1a7d4d"
+    }
+  ],
   "tool_inputs": [
     {
       "path": ".cargo/config.toml",
@@ -143,8 +165,8 @@
       "path": "xtask",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
-      "bytes": 269876,
-      "sha256": "8efb6bb370134b1a4854a39332fe580f7cb9e08252c321e19001a60adfffb658"
+      "bytes": 280563,
+      "sha256": "91f545613afb9acb1f6d50e93741f11cb93639ffa1b00d838f6f2bef35e1ad86"
     }
   ],
   "capability_inputs": [

@@ -14,7 +14,7 @@ use std::process::Command;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-const MANIFEST_VERSION: u64 = 2;
+const MANIFEST_VERSION: u64 = 3;
 const OVERLAY_MODE: &str = "full-file-replacement";
 const UPSTREAM_REPOSITORY: &str = "https://github.com/ethereum/clear-signing-erc7730-registry.git";
 const VENDOR_CORPUS_DOMAIN: &str = "pqsigner/erc7730-vendor-corpus-v1";
@@ -87,6 +87,8 @@ pub(crate) struct ReplacementIdentity {
     pub(crate) replacement_sha256: [u8; 32],
 }
 
+pub(crate) type KnownCall = (u64, [u8; 20], [u8; 4]);
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
@@ -95,10 +97,19 @@ struct Manifest {
     upstream: UpstreamIdentity,
     curated_corpus: CorpusIdentity,
     policy: FileIdentity,
+    known_call_additions: Vec<KnownCallAddition>,
     tool_inputs: Vec<FileIdentity>,
     tool_input_trees: Vec<TreeIdentity>,
     capability_inputs: Vec<FileIdentity>,
     replacements: Vec<Replacement>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KnownCallAddition {
+    chain_id: u64,
+    contract: String,
+    selector: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -233,6 +244,46 @@ impl VerifiedOverlay {
 
     pub(crate) fn policy_sha256(&self) -> Result<[u8; 32], String> {
         parse_sha256(&self.manifest.policy.sha256)
+    }
+
+    pub(crate) fn known_call_addition_count(&self) -> usize {
+        self.manifest.known_call_additions.len()
+    }
+
+    /// Prove that curation changed omission-filter authority only by the exact
+    /// manifest-bound tuple additions. Deletions are never permitted: an
+    /// upstream-declared call must remain a hard refusal even when its curated
+    /// renderer leaf is narrowed or removed.
+    pub(crate) fn verify_known_call_delta(
+        &self,
+        pristine: &[KnownCall],
+        curated: &[KnownCall],
+    ) -> Result<(), String> {
+        let pristine = exact_known_call_set("pristine", pristine)?;
+        let curated = exact_known_call_set("curated", curated)?;
+        let removed = pristine.difference(&curated).copied().collect::<Vec<_>>();
+        if !removed.is_empty() {
+            return Err(format!(
+                "curation known-call policy forbids deletions: {}",
+                summarize_known_calls(&removed)
+            ));
+        }
+
+        let expected = validate_known_call_additions(&self.manifest.known_call_additions)?;
+        let actual = curated
+            .difference(&pristine)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if actual != expected {
+            let undeclared = actual.difference(&expected).copied().collect::<Vec<_>>();
+            let missing = expected.difference(&actual).copied().collect::<Vec<_>>();
+            return Err(format!(
+                "curation known-call additions differ from the exact manifest policy: undeclared={} missing={}",
+                summarize_known_calls(&undeclared),
+                summarize_known_calls(&missing)
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn replacement_identities(&self) -> Result<Vec<ReplacementIdentity>, String> {
@@ -585,6 +636,7 @@ fn validate_manifest_shape(manifest: &Manifest) -> Result<(), String> {
         ));
     }
     validate_lower_hex(&manifest.policy.sha256, 32, "curation policy SHA-256")?;
+    validate_known_call_additions(&manifest.known_call_additions)?;
 
     validate_corpus_identity(
         &manifest.upstream.corpus,
@@ -694,6 +746,79 @@ fn validate_manifest_shape(manifest: &Manifest) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn validate_known_call_additions(
+    declared: &[KnownCallAddition],
+) -> Result<BTreeSet<KnownCall>, String> {
+    let mut additions = BTreeSet::new();
+    let mut previous = None;
+    for addition in declared {
+        let call = (
+            addition.chain_id,
+            parse_prefixed_lower_hex::<20>(&addition.contract, "known-call contract")?,
+            parse_prefixed_lower_hex::<4>(&addition.selector, "known-call selector")?,
+        );
+        if previous.is_some_and(|prior| prior >= call) {
+            return Err(format!(
+                "known-call additions must be unique and canonically sorted; {} follows {}",
+                format_known_call(&call),
+                previous
+                    .as_ref()
+                    .map(format_known_call)
+                    .unwrap_or_else(|| "<none>".to_string())
+            ));
+        }
+        additions.insert(call);
+        previous = Some(call);
+    }
+    Ok(additions)
+}
+
+fn exact_known_call_set(label: &str, calls: &[KnownCall]) -> Result<BTreeSet<KnownCall>, String> {
+    let set = calls.iter().copied().collect::<BTreeSet<_>>();
+    if set.len() != calls.len() {
+        return Err(format!(
+            "{label} known-call inventory contains duplicate tuples"
+        ));
+    }
+    Ok(set)
+}
+
+fn parse_prefixed_lower_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], String> {
+    let encoded = value
+        .strip_prefix("0x")
+        .ok_or_else(|| format!("{label} must use canonical lowercase 0x-prefixed hex"))?;
+    validate_lower_hex(encoded, N, label)?;
+    let bytes = hex::decode(encoded).map_err(|error| format!("decode {label}: {error}"))?;
+    bytes
+        .try_into()
+        .map_err(|_| format!("decoded {label} has the wrong length"))
+}
+
+fn format_known_call(call: &KnownCall) -> String {
+    format!(
+        "({},0x{},0x{})",
+        call.0,
+        hex::encode(call.1),
+        hex::encode(call.2)
+    )
+}
+
+fn summarize_known_calls(calls: &[KnownCall]) -> String {
+    const LIMIT: usize = 8;
+    if calls.is_empty() {
+        return "[]".to_string();
+    }
+    let mut rendered = calls
+        .iter()
+        .take(LIMIT)
+        .map(format_known_call)
+        .collect::<Vec<_>>();
+    if calls.len() > LIMIT {
+        rendered.push(format!("... +{} more", calls.len() - LIMIT));
+    }
+    format!("[{}]", rendered.join(", "))
 }
 
 fn validate_corpus_identity(
@@ -1281,6 +1406,7 @@ mod tests {
                     path: POLICY_PATH.to_string(),
                     sha256: "66".repeat(32),
                 },
+                known_call_additions: Vec::new(),
                 tool_inputs: Vec::new(),
                 tool_input_trees: Vec::new(),
                 capability_inputs: Vec::new(),
@@ -1333,6 +1459,135 @@ mod tests {
         let error = overlay.apply_to_staging(&staging).unwrap_err();
         assert!(error.contains("curation replacement mismatch"));
         assert_eq!(fs::read(&target).unwrap(), before, "failure wrote target");
+    }
+
+    fn known_call_addition(chain_id: u64, address: &str, selector: &str) -> KnownCallAddition {
+        KnownCallAddition {
+            chain_id,
+            contract: address.to_string(),
+            selector: selector.to_string(),
+        }
+    }
+
+    #[test]
+    fn known_call_delta_permits_only_the_four_manifest_additions_and_no_deletions() {
+        let temp = tempfile::tempdir().expect("create curation test directory");
+        let replacement = one_replacement(
+            "registry/example/calldata-example.json",
+            b"upstream",
+            b"curated",
+        );
+        let mut overlay = test_overlay(temp.path(), replacement);
+        overlay.manifest.known_call_additions = vec![
+            known_call_addition(
+                1,
+                "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "0x2e1a7d4d",
+            ),
+            known_call_addition(
+                137,
+                "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
+                "0x791ac947",
+            ),
+            known_call_addition(
+                137,
+                "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
+                "0xfb3bdb41",
+            ),
+            known_call_addition(
+                11_155_111,
+                "0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
+                "0x2e1a7d4d",
+            ),
+        ];
+
+        let pristine_call = (1, [0x11; 20], [0xaa, 0xbb, 0xcc, 0xdd]);
+        let expected =
+            validate_known_call_additions(&overlay.manifest.known_call_additions).unwrap();
+        let pristine = vec![pristine_call];
+        let mut curated = pristine.clone();
+        curated.extend(expected.iter().copied());
+        overlay
+            .verify_known_call_delta(&pristine, &curated)
+            .expect("the exact four reviewed additions must pass");
+
+        let mut with_fifth = curated.clone();
+        with_fifth.push((10, [0x22; 20], [0x12, 0x34, 0x56, 0x78]));
+        let error = overlay
+            .verify_known_call_delta(&pristine, &with_fifth)
+            .expect_err("an undeclared fifth addition must fail closed");
+        assert!(error.contains("undeclared=[(10,0x2222"), "{error}");
+
+        let error = overlay
+            .verify_known_call_delta(&pristine, &curated[1..])
+            .expect_err("curation may not delete an upstream known call");
+        assert!(error.contains("policy forbids deletions"), "{error}");
+
+        let without_declared = &curated[..curated.len() - 1];
+        let error = overlay
+            .verify_known_call_delta(&pristine, without_declared)
+            .expect_err("every declared addition must be present in curated output");
+        assert!(error.contains("missing=[(11155111,"), "{error}");
+
+        let mut duplicate_pristine = pristine.clone();
+        duplicate_pristine.push(pristine_call);
+        let error = overlay
+            .verify_known_call_delta(&duplicate_pristine, &curated)
+            .expect_err("duplicate generated inventories must fail closed");
+        assert!(error.contains("contains duplicate tuples"), "{error}");
+    }
+
+    #[test]
+    fn known_call_addition_policy_requires_canonical_unique_exact_width_hex() {
+        let valid = known_call_addition(
+            1,
+            "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+            "0x2e1a7d4d",
+        );
+        assert!(validate_known_call_additions(std::slice::from_ref(&valid)).is_ok());
+
+        let duplicate = vec![valid.clone(), valid.clone()];
+        assert!(validate_known_call_additions(&duplicate)
+            .unwrap_err()
+            .contains("unique and canonically sorted"));
+
+        let unsorted = vec![
+            known_call_addition(137, &valid.contract, &valid.selector),
+            valid.clone(),
+        ];
+        assert!(validate_known_call_additions(&unsorted)
+            .unwrap_err()
+            .contains("unique and canonically sorted"));
+
+        for invalid in [
+            known_call_addition(
+                1,
+                "0xC02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                &valid.selector,
+            ),
+            known_call_addition(
+                1,
+                "c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                &valid.selector,
+            ),
+            known_call_addition(
+                1,
+                "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756c",
+                &valid.selector,
+            ),
+            known_call_addition(1, &valid.contract, "0x2e1a7d4"),
+            known_call_addition(1, &valid.contract, "0X2e1a7d4d"),
+        ] {
+            assert!(
+                validate_known_call_additions(&[invalid]).is_err(),
+                "non-canonical tuple policy was accepted"
+            );
+        }
+
+        assert!(serde_json::from_str::<KnownCallAddition>(
+            r#"{"chain_id":1,"contract":"0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2","selector":"0x2e1a7d4d","extra":true}"#
+        )
+        .is_err());
     }
 
     #[test]
@@ -1558,8 +1813,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "owner utility: print exact manifest-v2 input receipts after source freeze"]
-    fn print_checked_in_manifest_v2_input_receipts() {
+    #[ignore = "owner utility: print exact manifest-v3 input receipts after source freeze"]
+    fn print_checked_in_manifest_v3_input_receipts() {
         let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("xtask is one directory below workspace")

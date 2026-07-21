@@ -118,7 +118,8 @@ Subcommands:
       production corpus into `secure/data/erc7730-registry/`, validate the
       pinned upstream Git/schema/corpus identities, and apply the default
       hash-bound full-file curation overlay. Then VERIFY the curated corpus
-      receipt and unchanged known-call tuple set/Bloom before installation.
+      receipt and exact manifest-authorized known-call additions with no
+      deletions before installation.
       `--no-curation-overlay` is accepted only with a distinct explicit --out
       for disposable pristine-baseline analysis; it cannot replace the
       checked-in production corpus.
@@ -815,6 +816,7 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
                 manifest_sha256: overlay.manifest_sha256(),
                 upstream_commit: overlay.upstream_commit(),
                 upstream_tree: overlay.upstream_tree(),
+                known_call_addition_count: overlay.known_call_addition_count(),
             });
         if let Err(e) = diff_erc7730_registry_readme(
             &registry_readme,
@@ -1305,6 +1307,7 @@ struct Erc7730CurationReceipt<'a> {
     manifest_sha256: [u8; 32],
     upstream_commit: &'a str,
     upstream_tree: &'a str,
+    known_call_addition_count: usize,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1360,10 +1363,12 @@ fn render_erc7730_registry_receipt(
                     "`{}` binds upstream commit\n",
                     "`{}` and tree\n",
                     "`{}`.\n",
+                    "Manifest v3 authorizes exactly **{}** curation-added known-call tuples and no deletions.\n",
                 ),
                 hex::encode(receipt.manifest_sha256),
                 receipt.upstream_commit,
                 receipt.upstream_tree,
+                grouped_decimal(receipt.known_call_addition_count, ','),
             )
         })
         .unwrap_or_default();
@@ -1953,6 +1958,7 @@ mod tests {
             manifest_sha256: manifest_hash,
             upstream_commit: &upstream_commit,
             upstream_tree: &upstream_tree,
+            known_call_addition_count: 4,
         };
         let receipt = render_erc7730_registry_receipt(
             &root,
@@ -1975,6 +1981,7 @@ mod tests {
         assert!(receipt.contains(&hex::encode(manifest_hash)));
         assert!(receipt.contains(&upstream_commit));
         assert!(receipt.contains(&upstream_tree));
+        assert!(receipt.contains("exactly **4** curation-added known-call tuples"));
     }
 
     #[test]
@@ -1998,6 +2005,7 @@ mod tests {
                 manifest_sha256: manifest_hash,
                 upstream_commit: &upstream_commit,
                 upstream_tree: &upstream_tree,
+                known_call_addition_count: 4,
             }),
         );
         let readme = format!("prefix\n{receipt}\nsuffix\n");
@@ -2010,6 +2018,11 @@ mod tests {
             readme.replacen(&hex::encode(manifest_hash), &hex::encode([0x66; 32]), 1),
             readme.replacen(&upstream_commit, &"77".repeat(20), 1),
             readme.replacen(&upstream_tree, &"88".repeat(20), 1),
+            readme.replacen(
+                "exactly **4** curation-added",
+                "exactly **3** curation-added",
+                1,
+            ),
             readme.replacen("5 / 128 set bits", "4 / 128 set bits", 1),
             readme.replacen(ERC7730_REGISTRY_RECEIPT_BEGIN, "", 1),
             format!("{readme}\n{receipt}"),
@@ -3188,7 +3201,7 @@ fn cmd_vendor_registry(args: &[String]) -> ExitCode {
             );
             println!("out:   {}", out.display());
             let proof_label = if receipt.overlay.is_some() {
-                "hash-bound curated catalogue + unchanged known-call authority reproduced ✓"
+                "hash-bound curated catalogue + exact manifest-authorized known-call additions reproduced ✓"
             } else {
                 "exact pristine catalogue + known-call coverage reproduced ✓"
             };
@@ -3215,12 +3228,17 @@ fn cmd_vendor_registry(args: &[String]) -> ExitCode {
                 receipt.installed_corpus.byte_count,
                 hex_lower(&receipt.installed_corpus.sha256)
             );
-            if let Some((count, manifest_hash, commit, tree)) = receipt.overlay {
+            if let Some((count, manifest_hash, commit, tree, known_call_additions)) =
+                receipt.overlay
+            {
                 println!(
                     "curation overlay: {count} full-file replacements, manifest SHA-256 {}",
                     hex_lower(&manifest_hash)
                 );
                 println!("upstream Git: commit {commit}, tree {tree}");
+                println!(
+                    "known-call policy: {known_call_additions} exact additions, zero deletions"
+                );
             } else {
                 println!("curation overlay: disabled for disposable baseline output");
             }
@@ -3249,7 +3267,7 @@ struct VendorReceipt {
     erc20: Erc20CapabilityReceipt,
     upstream_corpus: erc7730_curation::CorpusReceipt,
     installed_corpus: erc7730_curation::CorpusReceipt,
-    overlay: Option<(usize, [u8; 32], String, String)>,
+    overlay: Option<(usize, [u8; 32], String, String, usize)>,
     excluded_fixture_count: usize,
     excluded_fixture_hash: [u8; 32],
 }
@@ -3408,10 +3426,19 @@ fn vendor_registry(
     )
     .map_err(|e| format!("rebuild from staged tree: {e}"))?;
     let vendored = &staged_build.catalogue;
+    let known_call_authority_faithful = if let Some(overlay) = overlay {
+        overlay
+            .verify_known_call_delta(&result.known_calls, &vendored.known_calls)
+            .map_err(|error| format!("FAITHFULNESS CHECK FAILED — {error}"))?;
+        true
+    } else {
+        vendored.known_calls == result.known_calls
+            && vendored.known_call_count == result.known_call_count
+            && vendored.known_call_set_hash == result.known_call_set_hash
+            && vendored.known_calls_bloom == result.known_calls_bloom
+    };
     let common_authority_faithful = vendored.provenance == result.provenance
-        && vendored.known_call_count == result.known_call_count
-        && vendored.known_call_set_hash == result.known_call_set_hash
-        && vendored.known_calls_bloom == result.known_calls_bloom
+        && known_call_authority_faithful
         && staged_build.erc20 == source_build.erc20;
     let catalogue_faithful = overlay.is_some()
         || (vendored.root == result.root
@@ -3425,7 +3452,7 @@ fn vendor_registry(
              source:   root={} leaves={} provenance={} known_calls={} tuple_hash={}\n\
              staged:   root={} leaves={} provenance={} known_calls={} tuple_hash={}\n\
              ERC-20 capability input: sha256={} root={} entries={} capabilities={}\n\
-             exact checks: blob={} bloom={} review={} erc20_receipt={} overlay_mode={}",
+             exact checks: blob={} known_call_authority={} review={} erc20_receipt={} overlay_mode={}",
             hex_lower(&result.root),
             result.leaf_count,
             result.provenance.as_str(),
@@ -3441,7 +3468,7 @@ fn vendor_registry(
             prod_erc20.receipt.entry_count,
             prod_erc20.receipt.capability_count,
             vendored.blob == result.blob,
-            vendored.known_calls_bloom == result.known_calls_bloom,
+            known_call_authority_faithful,
             vendored.review_text == result.review_text,
             staged_build.erc20 == source_build.erc20,
             overlay.is_some(),
@@ -3473,6 +3500,7 @@ fn vendor_registry(
                 overlay.manifest_sha256(),
                 overlay.upstream_commit().to_string(),
                 overlay.upstream_tree().to_string(),
+                overlay.known_call_addition_count(),
             )
         }),
         excluded_fixture_count: excluded_fixture_corpus.file_count,
