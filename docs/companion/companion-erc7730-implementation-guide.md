@@ -155,6 +155,7 @@ an exact `(chain, address)` lookup. Wildcard names never qualify.
 | `0x0C` | `tokenTicker` | implemented renderer (fail closed on invalid input) |
 | `0x0D` | `interoperableAddressName` | implemented renderer (fail closed on invalid input) |
 | `0x0E` | `encrypted` | hard refusal (signed operand hidden) |
+| `0x0F` | `uniswapV3Path` | implemented renderer (fail closed on invalid input) |
 
 - For a verified, request-bound descriptor, **every `RenderErr` variant is a hard refusal** through an exhaustive production match. A new variant cannot compile until it receives that policy; no variant authorizes typed-call, selector-label, or blind-sign fallback.
 - ERC-8213 is mandatory and atomic for every companion/dapp-supplied signed payload: exactly 2 pages (banner + hash) surface the complete 32-byte digest at 8 bytes per display row. If both pages do not fit, the signing caller refuses; it never leaves an orphan banner or signs without the complete hash. The sole current exemption is the firmware-constructed Type-1 slot-rotation operation: its calldata combines firmware constants with seed-derived slot-owner material that is intentionally unavailable before the rotation consent boundary, so that dialog instead renders the complete slot index and bootstrap-use consequence.
@@ -172,7 +173,7 @@ Three things in the companion bundle:
    hand-authored seed corpus used by older bring-up snapshots.
 
    <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->
-   - Development catalogue: 385,713 B, 450 compiled leaves, 4,546
+   - Development catalogue: 386,065 B, 450 compiled leaves, 4,546
      exact registry-declared known-call tuples, provenance `dev-unattested`.
      The tuple-set SHA-256 receipt is
      `7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555`.
@@ -934,7 +935,7 @@ provenance remains blocked):
 <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 | Variant | Root | Catalog blob bytes | Compiled leaves |
 |---------|------|-------------------:|----------------:|
-| development (non-e2e) | `0xe767a5f977d35af3137515cfbacbcc740b27df61e996c753281bd6b0ed2be40a` | 385 713 | 450 |
+| development (non-e2e) | `0x80bf38e383bfd9b3d22d20045e30c542be69233f70de7c2aeddb68fe666980c6` | 386 065 | 450 |
 | e2e | `0xa2bde3ae909a23a1ab45c533ffcbcdfb35345101ee750da96a3cd6f890040cb4` | 3 968 | 8 |
 <!-- END XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 

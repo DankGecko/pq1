@@ -41,7 +41,7 @@ const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
 // The upstream fixture bytes remain test-only and outside the catalogue. This
 // root changes only when the separately curated production descriptors do.
-const PROD_ROOT_HEX: &str = "e767a5f977d35af3137515cfbacbcc740b27df61e996c753281bd6b0ed2be40a";
+const PROD_ROOT_HEX: &str = "80bf38e383bfd9b3d22d20045e30c542be69233f70de7c2aeddb68fe666980c6";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -912,18 +912,23 @@ fn upstream_fixture_targets_are_inventoried_at_format_granularity() {
     let fixture_without_accepted_format: BTreeSet<_> =
         fixture_targets.difference(&accepted).collect();
 
-    for selector in [[0x04, 0xe4, 0x5a, 0xaf], [0x50, 0x23, 0xb4, 0xdf]] {
-        let router02_single_hop = FormatKey {
+    for selector in [
+        [0x04, 0xe4, 0x5a, 0xaf],
+        [0x50, 0x23, 0xb4, 0xdf],
+        [0xb8, 0x58, 0x18, 0x3f],
+        [0x09, 0xb8, 0x13, 0x46],
+    ] {
+        let router02_reviewed_v3 = FormatKey {
             source: PathBuf::from("uniswap/calldata-UniswapV3Router02.json"),
             id: FormatId::Calldata(selector),
         };
         assert!(
-            fixture_targets.contains(&router02_single_hop),
-            "Router02 single-hop selector is absent from the pinned upstream fixtures"
+            fixture_targets.contains(&router02_reviewed_v3),
+            "Router02 reviewed V3 selector is absent from the pinned upstream fixtures"
         );
         assert!(
-            accepted.contains(&router02_single_hop),
-            "Router02 single-hop selector is absent from the production catalogue"
+            accepted.contains(&router02_reviewed_v3),
+            "Router02 reviewed V3 selector is absent from the production catalogue"
         );
     }
 

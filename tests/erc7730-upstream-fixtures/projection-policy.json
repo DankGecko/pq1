@@ -13,10 +13,10 @@
   },
   "format_coverage": {
     "fixture_targets": 502,
-    "accepted_formats": 853,
-    "fixture_targets_accepted": 303,
+    "accepted_formats": 855,
+    "fixture_targets_accepted": 305,
     "accepted_without_fixture": 550,
-    "fixture_without_accepted_format": 199
+    "fixture_without_accepted_format": 197
   },
   "semantic_incompatibilities": [
     {

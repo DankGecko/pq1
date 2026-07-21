@@ -230,6 +230,7 @@ pub const fn formatter_accepts_terminal(op: FormatOp, kind: TerminalKind) -> boo
         // Neither has an honest successful renderer in this firmware.  Keep
         // them explicit so adding a new opcode cannot inherit permissive
         // behavior through a wildcard arm.
+        FormatOp::UniswapV3Path => matches!(kind, TerminalKind::DynamicBytes),
         FormatOp::Calldata | FormatOp::Encrypted => false,
     }
 }
@@ -290,6 +291,7 @@ pub const fn validate_field(
         FormatOp::TokenTicker | FormatOp::InteroperableAddressName => {
             (ParamMask::NONE, ParamMask::NONE)
         }
+        FormatOp::UniswapV3Path => (ParamMask::DYNAMIC_KIND, ParamMask::DYNAMIC_KIND),
         FormatOp::Calldata | FormatOp::Encrypted => return Err(PolicyError::UnsupportedFormatter),
     };
 

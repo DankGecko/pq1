@@ -7801,11 +7801,13 @@ fn erc2612_permit_with_hidden_owner_is_excluded() {
 //
 // Endpoint tokenPaths identify amount metadata; they do not by themselves
 // display a complete signed packed route or address array. Production admits
-// the two all-static Router02 single-hop calls and the two V2 `address[]`
-// routes only with authenticated recipient/amount/value semantics. The packed
-// V3 byte-path routes remain known hard refusals. A process-private fixture is
-// retained as a compiler-level collection-path backstop; the production tests
-// below exercise the real Merkle-bound Router02 leaf.
+// the two all-static Router02 single-hop calls, the two V2 `address[]` routes,
+// and the two exactly enrolled packed-V3 tuple routes only with authenticated
+// recipient/amount/value semantics. Packed V3 paths use a selector-derived
+// direction, show every token and fee without a lossy summary, and reject any
+// noncanonical tuple/tail framing. A process-private fixture is retained as a
+// compiler-level collection-path backstop; the production tests below exercise
+// the real Merkle-bound Router02 leaf.
 // ───────────────────────────────────────────────────────────────────────
 const UNI_V3: [u8; 20] = [
     0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
@@ -7818,9 +7820,19 @@ const UNI_EXACT_INPUT_SINGLE: &str =
     "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))";
 const UNI_EXACT_OUTPUT_SINGLE: &str =
     "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))";
+const UNI_EXACT_INPUT_PACKED: &str = "exactInput((bytes,address,uint256,uint256))";
+const UNI_EXACT_OUTPUT_PACKED: &str = "exactOutput((bytes,address,uint256,uint256))";
 const UNI_SWAP_EXACT_TOKENS: &str = "swapExactTokensForTokens(uint256,uint256,address[],address)";
 const UNI_SWAP_TOKENS_FOR_EXACT: &str =
     "swapTokensForExactTokens(uint256,uint256,address[],address)";
+
+const UNI_PACKED_OUTER_OFFSET_WORD: usize = 4;
+const UNI_PACKED_PATH_OFFSET_WORD: usize = UNI_PACKED_OUTER_OFFSET_WORD + 32;
+const UNI_PACKED_RECIPIENT_WORD: usize = UNI_PACKED_PATH_OFFSET_WORD + 32;
+const UNI_PACKED_FIRST_AMOUNT_WORD: usize = UNI_PACKED_RECIPIENT_WORD + 32;
+const UNI_PACKED_SECOND_AMOUNT_WORD: usize = UNI_PACKED_FIRST_AMOUNT_WORD + 32;
+const UNI_PACKED_PATH_LENGTH_WORD: usize = UNI_PACKED_SECOND_AMOUNT_WORD + 32;
+const UNI_PACKED_PATH_DATA: usize = UNI_PACKED_PATH_LENGTH_WORD + 32;
 
 fn calldata_uniswap_single(
     signature: &str,
@@ -7851,16 +7863,85 @@ fn calldata_uniswap_exact_output(recipient: [u8; 20]) -> Vec<u8> {
     calldata_uniswap_single(UNI_EXACT_OUTPUT_SINGLE, recipient, 1_000_000, 1_500_000, 0)
 }
 
+/// Pack a route in its literal calldata order: `token (uint24 fee token)+`.
+fn uniswap_v3_packed_path(tokens: &[[u8; 20]], fees: &[u32]) -> Vec<u8> {
+    assert_eq!(tokens.len(), fees.len() + 1, "one more token than fee");
+    let mut path = Vec::with_capacity(20 + fees.len() * 23);
+    path.extend_from_slice(&tokens[0]);
+    for (index, fee) in fees.iter().copied().enumerate() {
+        assert!(fee <= 0x00ff_ffff, "fee must fit uint24");
+        path.extend_from_slice(&fee.to_be_bytes()[1..]);
+        path.extend_from_slice(&tokens[index + 1]);
+    }
+    path
+}
+
+/// Encode the route from the user's execution order. Router02 exact-output
+/// calldata stores its path backwards, while exact-input stores it forwards.
+/// The trusted renderer must derive that distinction from the signed selector.
+fn uniswap_v3_execution_path(signature: &str, tokens: &[[u8; 20]], fees: &[u32]) -> Vec<u8> {
+    assert_eq!(tokens.len(), fees.len() + 1, "one more token than fee");
+    match signature {
+        UNI_EXACT_INPUT_PACKED => uniswap_v3_packed_path(tokens, fees),
+        UNI_EXACT_OUTPUT_PACKED => {
+            let reverse_tokens = tokens.iter().rev().copied().collect::<Vec<_>>();
+            let reverse_fees = fees.iter().rev().copied().collect::<Vec<_>>();
+            uniswap_v3_packed_path(&reverse_tokens, &reverse_fees)
+        }
+        _ => panic!("unsupported packed Router02 signature: {signature}"),
+    }
+}
+
+/// Canonical ABI encoding of Router02's sole dynamic
+/// `(bytes,address,uint256,uint256)` tuple. `path` is already in the literal
+/// calldata order so malformed-path tests can bypass the execution-order
+/// helper without bypassing ABI framing.
+fn calldata_uniswap_packed_raw(
+    signature: &str,
+    path: &[u8],
+    recipient: [u8; 20],
+    first_amount: U256,
+    second_amount: U256,
+) -> Vec<u8> {
+    let selector = keccak256(signature.as_bytes());
+    let padded_path_len = (path.len() + 31) / 32 * 32;
+    let mut calldata = Vec::with_capacity(UNI_PACKED_PATH_DATA + padded_path_len);
+    calldata.extend_from_slice(&selector[..4]);
+    calldata.extend_from_slice(&u256_from_u64(32).0); // sole outer tuple offset
+    calldata.extend_from_slice(&u256_from_u64(128).0); // bytes tail after four-word tuple head
+    calldata.extend_from_slice(&abi_address_word(recipient));
+    calldata.extend_from_slice(&first_amount.0);
+    calldata.extend_from_slice(&second_amount.0);
+    calldata.extend_from_slice(&u256_from_u64(path.len() as u64).0);
+    calldata.extend_from_slice(path);
+    calldata.resize(UNI_PACKED_PATH_DATA + padded_path_len, 0);
+    calldata
+}
+
+fn calldata_uniswap_packed(
+    signature: &str,
+    tokens: &[[u8; 20]],
+    fees: &[u32],
+    recipient: [u8; 20],
+    first_amount: U256,
+    second_amount: U256,
+) -> Vec<u8> {
+    let path = uniswap_v3_execution_path(signature, tokens, fees);
+    calldata_uniswap_packed_raw(signature, &path, recipient, first_amount, second_amount)
+}
+
 #[test]
-fn production_uniswap_router02_admits_only_guarded_routes_and_keeps_all_calls_known() {
+fn production_uniswap_router02_admits_all_six_guarded_routes_and_keeps_them_known() {
     let registry = build_registry();
     let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
     let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Router02 IR parses");
-    assert_eq!(ir.format_count(), Ok(4));
+    assert_eq!(ir.format_count(), Ok(6));
 
     for signature in [
         UNI_EXACT_INPUT_SINGLE,
         UNI_EXACT_OUTPUT_SINGLE,
+        UNI_EXACT_INPUT_PACKED,
+        UNI_EXACT_OUTPUT_PACKED,
         UNI_SWAP_EXACT_TOKENS,
         UNI_SWAP_TOKENS_FOR_EXACT,
     ] {
@@ -7877,18 +7958,11 @@ fn production_uniswap_router02_admits_only_guarded_routes_and_keeps_all_calls_kn
     for signature in [
         UNI_EXACT_INPUT_SINGLE,
         UNI_EXACT_OUTPUT_SINGLE,
-        "exactInput((bytes,address,uint256,uint256))",
-        "exactOutput((bytes,address,uint256,uint256))",
+        UNI_EXACT_INPUT_PACKED,
+        UNI_EXACT_OUTPUT_PACKED,
         UNI_SWAP_EXACT_TOKENS,
         UNI_SWAP_TOKENS_FOR_EXACT,
     ] {
-        if matches!(
-            signature,
-            "exactInput((bytes,address,uint256,uint256))"
-                | "exactOutput((bytes,address,uint256,uint256))"
-        ) {
-            assert_selector_excluded(&ir, signature);
-        }
         let digest = keccak256(signature.as_bytes());
         let selector: [u8; 4] = digest[..4].try_into().expect("selector width");
         assert!(
@@ -7904,6 +7978,537 @@ fn production_uniswap_router02_admits_only_guarded_routes_and_keeps_all_calls_kn
             ),
             "every Router02 call must remain in the fail-closed Bloom: {signature}"
         );
+    }
+}
+
+fn assert_complete_packed_v3_route_pages(
+    pages: &Pages,
+    execution_tokens: &[[u8; 20]],
+    execution_fees: &[u32],
+) {
+    let route_pages = pages
+        .as_slice()
+        .iter()
+        .filter(|page| row_str(&page[0]) == "Route")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        route_pages.len(),
+        execution_tokens.len(),
+        "packed route must have exactly one full-address page per token and no summary page:\n{}",
+        dump_pages(pages)
+    );
+    for (index, token) in execution_tokens.iter().enumerate() {
+        let mut expected = [[b' '; DISPLAY_COLS]; 4];
+        expected[0][..5].copy_from_slice(b"Route");
+        let [_, r1, r2, r3] = &mut expected;
+        write_addr_full(r1, r2, r3, token);
+        assert_eq!(
+            *route_pages[index], expected,
+            "packed route token {index} must show all 20 signed bytes in execution order"
+        );
+    }
+
+    let fee_pages = pages
+        .as_slice()
+        .iter()
+        .filter(|page| row_str(&page[0]) == "Pool fee (ppm)")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fee_pages.len(),
+        execution_fees.len(),
+        "packed route must have exactly one raw uint24 page per fee:\n{}",
+        dump_pages(pages)
+    );
+    for (index, fee) in execution_fees.iter().copied().enumerate() {
+        assert_eq!(
+            [
+                row_str(&fee_pages[index][0]),
+                row_str(&fee_pages[index][1]),
+                row_str(&fee_pages[index][2]),
+                row_str(&fee_pages[index][3]),
+            ],
+            [
+                "Pool fee (ppm)".to_string(),
+                format!("{fee} ppm"),
+                String::new(),
+                String::new(),
+            ],
+            "packed route fee {index} must show the exact unsigned uint24 in execution order"
+        );
+    }
+}
+
+#[test]
+fn production_uniswap_router02_packed_routes_render_one_and_five_hops_in_execution_order() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let recipient = [0x33; 20];
+    let routes = [
+        (vec![TOKEN_IN, TOKEN_OUT], vec![500u32]),
+        (
+            vec![
+                [0x10; 20], [0x20; 20], [0x30; 20], [0x40; 20], [0x50; 20], [0x60; 20],
+            ],
+            vec![1u32, 500, 3_000, 10_000, 0x00ab_cdef],
+        ),
+    ];
+
+    for signature in [UNI_EXACT_INPUT_PACKED, UNI_EXACT_OUTPUT_PACKED] {
+        for (tokens, fees) in &routes {
+            let packed = uniswap_v3_execution_path(signature, tokens, fees);
+            if signature == UNI_EXACT_INPUT_PACKED {
+                assert_eq!(&packed[..20], &tokens[0]);
+            } else {
+                assert_eq!(
+                    &packed[..20],
+                    tokens.last().expect("route has output token"),
+                    "exact-output calldata must carry the reverse path"
+                );
+            }
+            let calldata = calldata_uniswap_packed(
+                signature,
+                tokens,
+                fees,
+                recipient,
+                u256_from_u64(1_500_000),
+                u256_from_u64(1_000_000),
+            );
+            assert_selector_matches(&verified.ir, &calldata, signature);
+            let rendered = render_erc7730_pages_with_signer_checked(
+                &tx, &calldata, &verified, None, &resolver, &signer,
+            )
+            .unwrap_or_else(|error| {
+                panic!("render {signature} with {} hops: {error:?}", fees.len())
+            });
+            assert_all_pages_printable(&rendered.pages);
+            assert_complete_packed_v3_route_pages(&rendered.pages, tokens, fees);
+            assert_full_address_field_page(&rendered.pages, "Beneficiary", &recipient);
+            assert!(
+                rendered
+                    .transcript_receipt
+                    .range_matches(&rendered.pages, 0),
+                "the complete packed-route transcript must be receipt-bound"
+            );
+        }
+    }
+}
+
+#[test]
+fn production_uniswap_router02_packed_sender_amount_and_value_guards_are_exact() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let mut changed_signer = signer;
+    changed_signer[19] ^= 1;
+    let tokens = [TOKEN_IN, TOKEN_OUT];
+    let fees = [500u32];
+    let mut address_one = [0u8; 20];
+    address_one[19] = 1;
+    let mut address_two = [0u8; 20];
+    address_two[19] = 2;
+
+    for signature in [UNI_EXACT_INPUT_PACKED, UNI_EXACT_OUTPUT_PACKED] {
+        let sentinel = calldata_uniswap_packed(
+            signature,
+            &tokens,
+            &fees,
+            address_one,
+            u256_from_u64(1_500_000),
+            u256_from_u64(1_000_000),
+        );
+        assert!(matches!(
+            render_erc7730_pages(&tx, &sentinel, &verified, None, &resolver),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 sender unbound"
+            ))
+        ));
+        let rendered = render_erc7730_pages_with_signer_checked(
+            &tx, &sentinel, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("render packed sentinel {signature}: {error:?}"));
+        assert_full_address_field_page(&rendered.pages, "Beneficiary", &signer);
+        let changed = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &sentinel,
+            &verified,
+            None,
+            &resolver,
+            &changed_signer,
+        )
+        .unwrap_or_else(|error| panic!("render changed packed signer {signature}: {error:?}"));
+        assert_full_address_field_page(&changed.pages, "Beneficiary", &changed_signer);
+        assert_ne!(rendered.pages.as_slice(), changed.pages.as_slice());
+        assert!(!rendered
+            .transcript_receipt
+            .exact_match(&changed.transcript_receipt));
+
+        let forbidden = calldata_uniswap_packed(
+            signature,
+            &tokens,
+            &fees,
+            address_two,
+            u256_from_u64(1_500_000),
+            u256_from_u64(1_000_000),
+        );
+        assert!(
+            render_erc7730_pages_with_signer_checked(
+                &tx, &forbidden, &verified, None, &resolver, &signer,
+            )
+            .is_err(),
+            "address(2) must refuse {signature}"
+        );
+
+        let canonical = calldata_uniswap_packed(
+            signature,
+            &tokens,
+            &fees,
+            [0x33; 20],
+            u256_from_u64(1_500_000),
+            u256_from_u64(1_000_000),
+        );
+        let mut funded = envelope(1, UNI_V3);
+        funded.value = u256_from_u64(1);
+        assert!(
+            render_erc7730_pages_with_signer_checked(
+                &funded, &canonical, &verified, None, &resolver, &signer,
+            )
+            .is_err(),
+            "nonzero outer value must refuse {signature}"
+        );
+    }
+
+    let zero_input = calldata_uniswap_packed(
+        UNI_EXACT_INPUT_PACKED,
+        &tokens,
+        &fees,
+        [0x33; 20],
+        U256::default(),
+        u256_from_u64(1_000_000),
+    );
+    assert!(
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &zero_input,
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        )
+        .is_err(),
+        "packed exactInput amountIn=0 must refuse"
+    );
+    let zero_minimum = calldata_uniswap_packed(
+        UNI_EXACT_INPUT_PACKED,
+        &tokens,
+        &fees,
+        [0x33; 20],
+        u256_from_u64(1_500_000),
+        U256::default(),
+    );
+    render_erc7730_pages_with_signer_checked(
+        &tx,
+        &zero_minimum,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("exactInput amountOutMinimum=0 is shown, not silently given an unrelated guard");
+
+    for (amount_out, input_cap) in [
+        (U256::default(), u256_from_u64(1_500_000)),
+        (u256_from_u64(1_000_000), U256::default()),
+        (U256::default(), U256::default()),
+    ] {
+        let zero_semantic = calldata_uniswap_packed(
+            UNI_EXACT_OUTPUT_PACKED,
+            &tokens,
+            &fees,
+            [0x33; 20],
+            amount_out,
+            input_cap,
+        );
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &zero_semantic,
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        )
+        .expect("exactOutput zero amount/cap must not inherit exactInput's nonzero guard");
+    }
+}
+
+#[test]
+fn production_uniswap_router02_packed_framing_and_hop_bounds_never_fall_back() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let tokens = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
+    let fees = [500u32, 3_000];
+    let six_hop_tokens = [
+        [0x10; 20], [0x20; 20], [0x30; 20], [0x40; 20], [0x50; 20], [0x60; 20], [0x70; 20],
+    ];
+    let six_hop_fees = [1u32, 2, 3, 4, 5, 6];
+
+    for signature in [UNI_EXACT_INPUT_PACKED, UNI_EXACT_OUTPUT_PACKED] {
+        let packed = uniswap_v3_execution_path(signature, &tokens, &fees);
+        let baseline = calldata_uniswap_packed_raw(
+            signature,
+            &packed,
+            [0x33; 20],
+            u256_from_u64(1_500_000),
+            u256_from_u64(1_000_000),
+        );
+        render_erc7730_pages_with_signer_checked(
+            &tx, &baseline, &verified, None, &resolver, &signer,
+        )
+        .unwrap_or_else(|error| panic!("canonical packed tuple must render: {error:?}"));
+
+        let mut malformed: Vec<(Vec<u8>, &'static str)> = Vec::new();
+
+        for (outer_offset, case) in [
+            (0u64, "outer tuple head alias"),
+            (33, "misaligned outer tuple offset"),
+            (64, "gapped outer tuple offset"),
+        ] {
+            let mut calldata = baseline.clone();
+            calldata[UNI_PACKED_OUTER_OFFSET_WORD..UNI_PACKED_OUTER_OFFSET_WORD + 32]
+                .copy_from_slice(&u256_from_u64(outer_offset).0);
+            malformed.push((calldata, case));
+        }
+        let mut huge_outer = baseline.clone();
+        huge_outer[UNI_PACKED_OUTER_OFFSET_WORD] = 1;
+        malformed.push((huge_outer, "oversized outer tuple offset"));
+
+        for (path_offset, case) in [
+            (96u64, "path tail aliases tuple head"),
+            (129, "misaligned path offset"),
+            (160, "gapped path offset"),
+        ] {
+            let mut calldata = baseline.clone();
+            calldata[UNI_PACKED_PATH_OFFSET_WORD..UNI_PACKED_PATH_OFFSET_WORD + 32]
+                .copy_from_slice(&u256_from_u64(path_offset).0);
+            malformed.push((calldata, case));
+        }
+        let mut huge_path_offset = baseline.clone();
+        huge_path_offset[UNI_PACKED_PATH_OFFSET_WORD] = 1;
+        malformed.push((huge_path_offset, "oversized path offset"));
+
+        for (claimed_len, case) in [
+            (
+                packed.len() as u64 - 1,
+                "short nonintegral claimed path length",
+            ),
+            (
+                packed.len() as u64 + 1,
+                "long nonintegral claimed path length",
+            ),
+        ] {
+            let mut calldata = baseline.clone();
+            calldata[UNI_PACKED_PATH_LENGTH_WORD..UNI_PACKED_PATH_LENGTH_WORD + 32]
+                .copy_from_slice(&u256_from_u64(claimed_len).0);
+            malformed.push((calldata, case));
+        }
+        let mut huge_length = baseline.clone();
+        huge_length[UNI_PACKED_PATH_LENGTH_WORD] = 1;
+        malformed.push((huge_length, "oversized path length"));
+
+        let padding_start = UNI_PACKED_PATH_DATA + packed.len();
+        assert!(
+            padding_start < baseline.len(),
+            "two-hop fixture has padding"
+        );
+        let mut dirty_padding = baseline.clone();
+        dirty_padding[padding_start] = 1;
+        malformed.push((dirty_padding, "nonzero bytes padding"));
+
+        let mut trailing_byte = baseline.clone();
+        trailing_byte.push(0);
+        malformed.push((trailing_byte, "trailing byte after exact tail"));
+        let mut trailing_word = baseline.clone();
+        trailing_word.extend_from_slice(&[0u8; 32]);
+        malformed.push((trailing_word, "trailing word after exact tail"));
+        let mut truncated_tail = baseline.clone();
+        truncated_tail.pop();
+        malformed.push((truncated_tail, "truncated zero padding"));
+        malformed.push((
+            baseline[..UNI_PACKED_PATH_LENGTH_WORD].to_vec(),
+            "truncated tuple before path length",
+        ));
+
+        let mut dirty_recipient = baseline.clone();
+        dirty_recipient[UNI_PACKED_RECIPIENT_WORD] = 1;
+        malformed.push((dirty_recipient, "noncanonical recipient high padding"));
+
+        let zero_hop = uniswap_v3_packed_path(&[[0x10; 20]], &[]);
+        malformed.push((
+            calldata_uniswap_packed_raw(
+                signature,
+                &zero_hop,
+                [0x33; 20],
+                u256_from_u64(1_500_000),
+                u256_from_u64(1_000_000),
+            ),
+            "zero-hop path",
+        ));
+        let mut nonintegral = packed.clone();
+        nonintegral.push(0);
+        malformed.push((
+            calldata_uniswap_packed_raw(
+                signature,
+                &nonintegral,
+                [0x33; 20],
+                u256_from_u64(1_500_000),
+                u256_from_u64(1_000_000),
+            ),
+            "nonintegral hop stride",
+        ));
+        malformed.push((
+            calldata_uniswap_packed(
+                signature,
+                &six_hop_tokens,
+                &six_hop_fees,
+                [0x33; 20],
+                u256_from_u64(1_500_000),
+                u256_from_u64(1_000_000),
+            ),
+            "six-hop path exceeds review cap",
+        ));
+
+        for (calldata, case) in malformed {
+            assert!(
+                matches!(
+                    render_erc7730_pages_with_signer_checked(
+                        &tx, &calldata, &verified, None, &resolver, &signer,
+                    ),
+                    Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+                ),
+                "{case} must hard-refuse for {signature}"
+            );
+            let mut proofs = DispatchPageProofs::new();
+            proofs.fail_initialize();
+            assert!(
+                pick_sign_pages(
+                    &tx,
+                    &calldata,
+                    &signer,
+                    None,
+                    None,
+                    None,
+                    Some(&verified),
+                    None,
+                    None,
+                    &resolver,
+                    &mut proofs,
+                )
+                .is_err(),
+                "{case} must refuse through dispatch without a blind fallback for {signature}"
+            );
+        }
+    }
+}
+
+#[test]
+fn production_uniswap_router02_packed_every_operand_byte_changes_transcript_or_refuses() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let tokens = [TOKEN_IN, TOKEN_MID, TOKEN_OUT];
+    let fees = [500u32, 3_000];
+
+    for signature in [UNI_EXACT_INPUT_PACKED, UNI_EXACT_OUTPUT_PACKED] {
+        let packed = uniswap_v3_execution_path(signature, &tokens, &fees);
+        let baseline_calldata = calldata_uniswap_packed_raw(
+            signature,
+            &packed,
+            [0x33; 20],
+            u256_from_u64(1_500_000),
+            u256_from_u64(1_000_000),
+        );
+        let baseline = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &baseline_calldata,
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        )
+        .unwrap_or_else(|error| panic!("render mutation baseline {signature}: {error:?}"));
+
+        let assert_changed_or_refused = |mutated: &[u8], case: &str| {
+            if let Ok(changed) = render_erc7730_pages_with_signer_checked(
+                &tx, mutated, &verified, None, &resolver, &signer,
+            ) {
+                assert_ne!(
+                    baseline.pages.as_slice(),
+                    changed.pages.as_slice(),
+                    "{case} changed silently for {signature}"
+                );
+                assert!(
+                    !baseline
+                        .transcript_receipt
+                        .exact_match(&changed.transcript_receipt),
+                    "{case} preserved the transcript receipt for {signature}"
+                );
+            }
+        };
+
+        for packed_token_index in 0..tokens.len() {
+            let token_start = UNI_PACKED_PATH_DATA + packed_token_index * 23;
+            for byte_index in 0..20usize {
+                let mut mutated = baseline_calldata.clone();
+                mutated[token_start + byte_index] ^= 1;
+                assert_changed_or_refused(
+                    &mutated,
+                    &format!("packed token {packed_token_index} byte {byte_index}"),
+                );
+            }
+        }
+        for packed_fee_index in 0..fees.len() {
+            let fee_start = UNI_PACKED_PATH_DATA + packed_fee_index * 23 + 20;
+            for byte_index in 0..3usize {
+                let mut mutated = baseline_calldata.clone();
+                mutated[fee_start + byte_index] ^= 1;
+                assert_changed_or_refused(
+                    &mutated,
+                    &format!("packed fee {packed_fee_index} byte {byte_index}"),
+                );
+            }
+        }
+        for byte_index in 0..20usize {
+            let mut mutated = baseline_calldata.clone();
+            mutated[UNI_PACKED_RECIPIENT_WORD + 12 + byte_index] ^= 1;
+            assert_changed_or_refused(&mutated, &format!("recipient byte {byte_index}"));
+        }
+        for (word_start, label) in [
+            (UNI_PACKED_FIRST_AMOUNT_WORD, "first amount"),
+            (UNI_PACKED_SECOND_AMOUNT_WORD, "second amount"),
+        ] {
+            for byte_index in 0..32usize {
+                let mut mutated = baseline_calldata.clone();
+                mutated[word_start + byte_index] ^= 1;
+                assert_changed_or_refused(&mutated, &format!("{label} byte {byte_index}"));
+            }
+        }
     }
 }
 
@@ -8560,38 +9165,6 @@ fn render_safe_uni_result(
 
 fn render_safe_uni(calldata: &[u8], token: Option<&Erc20Metadata<'_>>) -> Pages {
     render_safe_uni_result(calldata, token).expect("render safe route")
-}
-
-fn assert_uniswap_router_call_excluded_but_known(signature: &str) {
-    let registry = build_registry();
-    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
-    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Router02 IR parses");
-    assert_selector_excluded(&ir, signature);
-    let digest = keccak256(signature.as_bytes());
-    let selector: [u8; 4] = digest[..4].try_into().expect("selector width");
-    assert!(
-        registry.known_calls.contains(&(1, UNI_V3, selector)),
-        "excluded Router02 call must remain known and fail closed: {signature}"
-    );
-    assert!(
-        pqsigner_erc7730::known_calls::may_contain(
-            &registry.known_calls_bloom,
-            1,
-            &UNI_V3,
-            &selector,
-        ),
-        "excluded Router02 call must remain in the fail-closed Bloom: {signature}"
-    );
-}
-
-#[test]
-fn uniswap_exact_input_c2_input_slice_is_excluded() {
-    assert_uniswap_router_call_excluded_but_known("exactInput((bytes,address,uint256,uint256))");
-}
-
-#[test]
-fn uniswap_exact_input_c2_output_slice_is_excluded() {
-    assert_uniswap_router_call_excluded_but_known("exactOutput((bytes,address,uint256,uint256))");
 }
 
 #[test]
@@ -10639,8 +11212,55 @@ fn production_quickswap_remove_liquidity_renders_every_signed_byte_or_refuses() 
 }
 
 #[test]
-fn uniswap_exact_input_c2_decoy_path_cannot_reach_renderer() {
-    assert_uniswap_router_call_excluded_but_known("exactInput((bytes,address,uint256,uint256))");
+fn production_uniswap_packed_c1_decoy_cannot_bypass_exact_tuple_preflight() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-UniswapV3Router02.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Router02 leaf");
+    let tx = envelope(1, UNI_V3);
+    let resolver = NameResolver::new();
+    let signer = [0x44; 20];
+    let packed = uniswap_v3_packed_path(&[TOKEN_IN, TOKEN_OUT], &[500]);
+
+    for signature in [UNI_EXACT_INPUT_PACKED, UNI_EXACT_OUTPUT_PACKED] {
+        // A canonical *C1 bytes* tail carrying a valid packed path is not the
+        // selected `(bytes,address,uint256,uint256)` tuple. The exact enrolled
+        // selector must not let this decoy borrow the special C2 renderer.
+        let selector = keccak256(signature.as_bytes());
+        let padded_len = (packed.len() + 31) / 32 * 32;
+        let mut decoy = Vec::with_capacity(4 + 64 + padded_len);
+        decoy.extend_from_slice(&selector[..4]);
+        decoy.extend_from_slice(&u256_from_u64(32).0);
+        decoy.extend_from_slice(&u256_from_u64(packed.len() as u64).0);
+        decoy.extend_from_slice(&packed);
+        decoy.resize(4 + 64 + padded_len, 0);
+
+        assert!(matches!(
+            render_erc7730_pages_with_signer_checked(
+                &tx, &decoy, &verified, None, &resolver, &signer,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(_))
+        ));
+        let mut proofs = DispatchPageProofs::new();
+        proofs.fail_initialize();
+        assert!(
+            pick_sign_pages(
+                &tx,
+                &decoy,
+                &signer,
+                None,
+                None,
+                None,
+                Some(&verified),
+                None,
+                None,
+                &resolver,
+                &mut proofs,
+            )
+            .is_err(),
+            "C1 decoy must hard-refuse without fallback for {signature}"
+        );
+    }
 }
 
 /// Parse a 64-char hex string into a `[u8; 32]` for the remaining synthetic

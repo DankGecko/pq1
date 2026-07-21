@@ -489,14 +489,23 @@ fn render_erc7730_pages_inner_into<'ir>(
     // property. Run the preflight before painting any pages and before
     // visibility can skip a field: all-static calls must consume exactly the
     // authenticated head, while every supported dynamic shape must be one
-    // exact whole tail. C2 dynamic tuples and relaxed multi-array tails are
-    // unprovable from the current IR and hard-refuse.
-    formatters::validate_contract_calldata_framing(&descriptor.ir, &format, full_body)?;
+    // exact whole tail. Generic C2 dynamic tuples and relaxed multi-array tails
+    // hard-refuse; the exact Router02 packed-path mode is authenticated and
+    // wholly parsed by this preflight before it is returned.
+    let calldata_mode =
+        formatters::validate_contract_calldata_framing(&descriptor.ir, &format, full_body, tx)?;
 
     // Semantic word predicates are format-wide authority checks, not rendering
     // hints. Evaluate every guard after canonical framing but before painting
     // the reassuring authenticated banner or any operand page.
-    formatters::validate_contract_word_guards(&descriptor.ir, &format, body, tx)?;
+    formatters::validate_contract_word_guards(
+        &descriptor.ir,
+        &format,
+        body,
+        full_body,
+        calldata_mode,
+        tx,
+    )?;
 
     // 2. Banner — page 0. Exact-zero approval wording is derived only when a
     // Merkle-authenticated ERC-20 capability binds this chain+contract and the
@@ -529,6 +538,7 @@ fn render_erc7730_pages_inner_into<'ir>(
         &format,
         body,
         full_body,
+        calldata_mode,
         tx,
         erc20,
         resolver,
@@ -863,6 +873,7 @@ fn render_erc7730_eip712_pages_inner_into<'ir>(
         &format,
         body,
         body,
+        formatters::ContractCalldataMode::Standard,
         &synth_tx,
         erc20,
         resolver,
@@ -1117,6 +1128,7 @@ fn render_fields(
     format: &crate::ir::FormatHeader<'_>,
     body: &[u8],
     full_body: &[u8],
+    calldata_mode: formatters::ContractCalldataMode,
     tx: &Eip1559Tx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
@@ -1165,6 +1177,7 @@ fn render_fields(
             body,
             full_body,
             format.static_head_words,
+            calldata_mode,
             tx,
             erc20,
             resolver,
@@ -1188,6 +1201,7 @@ fn render_one_field(
     body: &[u8],
     full_body: &[u8],
     static_head_words: u16,
+    calldata_mode: formatters::ContractCalldataMode,
     tx: &Eip1559Tx,
     erc20: Option<&Erc20Metadata<'_>>,
     resolver: &NameResolver<'_>,
@@ -1201,6 +1215,16 @@ fn render_one_field(
             // compiler; malformed authenticated IR must still fail closed.
             formatters::validate_path_static_head(ir, field.path_off, static_head_words)?;
             formatters::validate_token_path_static_head(params, static_head_words)?;
+            let op = crate::ir::FormatOp::try_from(field.format_op)
+                .map_err(|_| RenderErr::Reject("7730 bad format op"))?;
+            if op == crate::ir::FormatOp::UniswapV3Path {
+                let formatters::ContractCalldataMode::UniswapV3Path(direction) = calldata_mode
+                else {
+                    return Err(RenderErr::Reject("7730 v3 path outside enrolled mode"));
+                };
+                formatters::render_uniswap_v3_path(field, pages, ir, full_body, direction, params)?;
+                return Ok(None);
+            }
             // A field whose path ends in `[]` (ArrayAll) renders every
             // element of a sole dynamic array — it needs the FULL body and
             // its own exact-placement tail walk. Every other field stays on
@@ -1236,11 +1260,28 @@ fn render_one_field(
                 )?;
                 Ok(None)
             } else if formatters::path_needs_full_body(ir, field.path_off)? {
-                // C2 dynamic-tuple placement cannot be reconstructed exactly
-                // from today's IR (the nested head width/tail topology is not
-                // encoded). The format-wide preflight already rejects it,
-                // and this local belt prevents a future call-site bypass.
-                return Err(RenderErr::Reject("7730 C2 framing unsupported"));
+                // C2 is readable only under the exact Router02 mode minted by
+                // the whole-body preflight, and only for one of that format's
+                // authenticated scalar/token endpoint roles. Every generic C2
+                // path retains the historical hard refusal.
+                if !matches!(
+                    calldata_mode,
+                    formatters::ContractCalldataMode::UniswapV3Path(_)
+                ) || !formatters::router02_c2_scalar_field(ir, field, params)?
+                {
+                    return Err(RenderErr::Reject("7730 C2 framing unsupported"));
+                }
+                formatters::dispatch(
+                    field,
+                    pages,
+                    ir,
+                    full_body,
+                    tx,
+                    erc20,
+                    resolver,
+                    params,
+                    device_signer,
+                )
             } else if formatters::token_path_needs_full_body(params) {
                 // A Tier-B tokenPath is accepted only after the format-wide
                 // preflight proved a sole C1 bytes/address[] whole tail. Paint
@@ -1492,6 +1533,7 @@ fn render_nested_subfields(
             nested_ed,
             nested_ed,
             np.member_count,
+            formatters::ContractCalldataMode::Standard,
             tx,
             erc20,
             resolver,

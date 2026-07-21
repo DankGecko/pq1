@@ -45,11 +45,11 @@ Current security contract:
   zero/sign extension before publishing trusted clear-signing pages; full-width
   `uint256`/`int256` words remain unchanged.
 - The current regenerated development catalogue has **450 leaves**, root
-  `e767a5f977d35af3137515cfbacbcc740b27df61e996c753281bd6b0ed2be40a`,
+  `80bf38e383bfd9b3d22d20045e30c542be69233f70de7c2aeddb68fe666980c6`,
   and **4,546 exact known-call tuples**. The tuple-set receipt is SHA-256
   `7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555`;
   Bloom occupancy is 28,261 / 131,072 bits under the compiler-enforced generation cap.
-- The current compiler report records **248** omitted descriptor/formats.
+- The current compiler report records **246** omitted descriptor/formats.
 <!-- END XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->
 - These receipts detect input/artifact drift. They do not turn Bloom insertion
   into a proof of parser completeness. The current independent types-only ABI

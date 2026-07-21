@@ -17,6 +17,7 @@ pub mod nested;
 pub mod params;
 pub mod policy;
 pub mod resolve;
+pub mod uniswap_v3_path;
 pub mod visibility;
 
 /// Why the ERC-7730 renderer refused to take responsibility for this

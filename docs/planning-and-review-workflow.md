@@ -603,7 +603,7 @@ Evidence already green: <ONE SHORT PARAGRAPH>.
 Inspect the diff and affected callers source-first for concrete security or
 correctness blockers. Keep the target immutable. Use read-only commands only;
 no edits, hardware, external writes, prior reports, status prose, or playbook
-catalogs. Ignore style and optional hardening. You have 8 minutes and
+catalogs. Ignore style and optional hardening. You have 15 minutes and
 800 words.
 
 Return exactly:

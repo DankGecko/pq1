@@ -15,9 +15,10 @@
         "$id": "exactInput",
         "intent": "Swap",
         "fields": [
+          { "path": "@.value", "label": "Native value", "format": "amount", "visible": "always" },
           {
             "path": "params.amountIn",
-            "label": "Amount to Send",
+            "label": "Swap input",
             "format": "tokenAmount",
             "params": { "tokenPath": "params.path.[0:20]" },
             "visible": "always"
@@ -29,11 +30,16 @@
             "params": { "tokenPath": "params.path.[-20:]" },
             "visible": "always"
           },
+          { "path": "params.path", "label": "Route", "format": "uniswapV3Path", "visible": "always" },
           {
             "path": "params.recipient",
             "label": "Beneficiary",
             "format": "addressName",
-            "params": { "types": ["eoa", "contract"], "sources": ["local", "ens"] },
+            "params": {
+              "types": ["eoa", "contract"],
+              "sources": ["local", "ens"],
+              "senderAddress": ["0x0000000000000000000000000000000000000001"]
+            },
             "visible": "always"
           }
         ]
@@ -82,9 +88,10 @@
         "$id": "exactOutput",
         "intent": "Swap",
         "fields": [
+          { "path": "@.value", "label": "Native value", "format": "amount", "visible": "always" },
           {
             "path": "params.amountInMaximum",
-            "label": "Maximum Amount In",
+            "label": "Max swap input",
             "format": "tokenAmount",
             "params": { "tokenPath": "params.path.[-20:]" },
             "visible": "always"
@@ -96,11 +103,16 @@
             "params": { "tokenPath": "params.path.[0:20]" },
             "visible": "always"
           },
+          { "path": "params.path", "label": "Route", "format": "uniswapV3Path", "visible": "always" },
           {
             "path": "params.recipient",
             "label": "Beneficiary",
             "format": "addressName",
-            "params": { "types": ["eoa", "contract"], "sources": ["local", "ens"] },
+            "params": {
+              "types": ["eoa", "contract"],
+              "sources": ["local", "ens"],
+              "senderAddress": ["0x0000000000000000000000000000000000000001"]
+            },
             "visible": "always"
           }
         ]

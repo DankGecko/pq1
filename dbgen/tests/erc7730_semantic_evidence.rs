@@ -3570,7 +3570,7 @@ fn lido_wsteth_remaining_routes_source_abi_descriptor_and_ir_agree() {
 }
 
 #[test]
-fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_restoration() {
+fn uniswap_router02_evidence_binds_all_six_constrained_routes() {
     let root = workspace_root();
     let evidence = uniswap_evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));
@@ -3664,6 +3664,24 @@ fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_res
     );
     assert_eq!(constraints["v2_path_render_cap"].as_u64(), Some(8));
     assert_eq!(
+        constraints["packed_v3_path_policy"].as_str(),
+        Some("render_every_full_token_address_and_uint24_fee")
+    );
+    assert_eq!(
+        constraints["packed_v3_path_encoding"].as_str(),
+        Some("token[20] || (fee[3] || token[20]){1..5}")
+    );
+    assert_eq!(constraints["packed_v3_path_min_pools"].as_u64(), Some(1));
+    assert_eq!(constraints["packed_v3_path_max_pools"].as_u64(), Some(5));
+    assert_eq!(
+        constraints["packed_v3_exact_input_direction"].as_str(),
+        Some("encoded_forward")
+    );
+    assert_eq!(
+        constraints["packed_v3_exact_output_direction"].as_str(),
+        Some("encoded_reverse_display_execution_forward")
+    );
+    assert_eq!(
         constraints["input_label_policy"].as_str(),
         Some("neutral_no_signer_payment_claim")
     );
@@ -3678,6 +3696,9 @@ fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_res
         .to_ascii_lowercase();
     for needle in [
         "every v2 path address",
+        "every packed v3 path byte",
+        "canonical framing",
+        "exactoutput display must therefore reverse both token and fee traversal",
         "amountoutmin",
         "amountinmax",
         "pre-existing router native balance",
@@ -3696,7 +3717,10 @@ fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_res
         "pre-existing router native currency can still fund a WETH9 input",
         "Router-held ERC-20 payment requires the `amountIn == 0` router-payer branch",
         "labels are therefore neutral (`Swap input` and `Max swap input`)",
-        "all four admitted routes plus both packed-route refusals remain in the exact known-call set",
+        "Only canonical `token[20] || (fee[3] || token[20]){1..5}` paths are admitted",
+        "signed exact-output selector selects reverse presentation",
+        "23-byte hop stride",
+        "all six admitted routes remain in the exact known-call set",
     ] {
         assert!(
             review_text.contains(needle),
@@ -3707,7 +3731,7 @@ fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_res
     let route_specs = manifest["policy"]["constrained_routes"]
         .as_array()
         .expect("excluded route array");
-    assert_eq!(route_specs.len(), 4);
+    assert_eq!(route_specs.len(), 6);
     let mut expected_routes = BTreeMap::<String, [u8; 4]>::new();
     for route in route_specs {
         let signature = required_str(route, "canonical_signature");
@@ -3729,6 +3753,14 @@ fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_res
                 "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint160))"
                     .to_owned(),
                 [0x50, 0x23, 0xb4, 0xdf],
+            ),
+            (
+                "exactInput((bytes,address,uint256,uint256))".to_owned(),
+                [0xb8, 0x58, 0x18, 0x3f],
+            ),
+            (
+                "exactOutput((bytes,address,uint256,uint256))".to_owned(),
+                [0x09, 0xb8, 0x13, 0x46],
             ),
             (
                 "swapExactTokensForTokens(uint256,uint256,address[],address)".to_owned(),
@@ -3812,6 +3844,15 @@ fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_res
     assert!(interface.contains(
         "function exactOutputSingle(ExactOutputSingleParams calldata params) external payable returns (uint256 amountIn);"
     ));
+    assert!(interface.contains(
+        "function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);"
+    ));
+    assert!(interface.contains(
+        "function exactOutput(ExactOutputParams calldata params) external payable returns (uint256 amountIn);"
+    ));
+    assert!(interface.contains(
+        "Swaps as little as possible of one token for `amountOut` of another along the specified path (reversed)"
+    ));
 
     let router = normalized_whitespace(&archived_sources["source/V3SwapRouter.sol"]);
     assert!(router.matches(
@@ -3825,6 +3866,35 @@ fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_res
             "params.amountIn = IERC20(params.tokenIn).balanceOf(address(this));",
             "payer: hasAlreadyPaid ? address(this) : msg.sender",
             "require(amountOut >= params.amountOutMinimum, 'Too little received');",
+        ],
+    );
+    assert_fragments_in_order(
+        &router,
+        &[
+            "function exactInput(ExactInputParams memory params) external payable override returns (uint256 amountOut)",
+            "(address tokenIn, , ) = params.path.decodeFirstPool();",
+            "bool hasMultiplePools = params.path.hasMultiplePools();",
+            "path: params.path.getFirstPool()",
+            "params.path = params.path.skipToken();",
+            "require(amountOut >= params.amountOutMinimum, 'Too little received');",
+        ],
+    );
+    assert_fragments_in_order(
+        &router,
+        &[
+            "function exactOutputInternal(",
+            "(address tokenOut, address tokenIn, uint24 fee) = data.path.decodeFirstPool();",
+            "function exactOutput(ExactOutputParams calldata params) external payable override returns (uint256 amountIn)",
+            "SwapCallbackData({path: params.path, payer: msg.sender})",
+            "require(amountIn <= params.amountInMaximum, 'Too much requested');",
+        ],
+    );
+    assert_fragments_in_order(
+        &router,
+        &[
+            "if (data.path.hasMultiplePools()) {",
+            "data.path = data.path.skipToken();",
+            "exactOutputInternal(amountToPay, msg.sender, 0, data);",
         ],
     );
 
@@ -3936,6 +4006,63 @@ fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_res
             "else if (payer == address(this))",
             "TransferHelper.safeTransfer(token, recipient, value);",
             "TransferHelper.safeTransferFrom(token, payer, recipient, value);",
+        ],
+    );
+    let path_spec = &manifest["packed_path_dependency"];
+    assert_eq!(
+        path_spec["upstream_commit"].as_str(),
+        Some("80f26c86c57b8a5e4b913f42844d4c8bd274d058")
+    );
+    assert_eq!(path_spec["bytes"].as_u64(), Some(2_787));
+    assert_eq!(path_spec["address_bytes"].as_u64(), Some(20));
+    assert_eq!(path_spec["fee_bytes"].as_u64(), Some(3));
+    assert_eq!(path_spec["hop_stride_bytes"].as_u64(), Some(23));
+    assert_eq!(path_spec["one_pool_bytes"].as_u64(), Some(43));
+    assert_eq!(path_spec["two_pool_min_bytes"].as_u64(), Some(66));
+    assert_eq!(
+        path_spec["pool_count_formula"].as_str(),
+        Some("(path.length - 20) / 23")
+    );
+    assert_eq!(
+        path_spec["first_pool_decode"].as_str(),
+        Some("tokenA@0, fee@20, tokenB@23")
+    );
+    assert_eq!(path_spec["next_pool_step"].as_str(), Some("skip 23 bytes"));
+    assert_eq!(
+        path_spec["locked_tarball_file_sha256"].as_str(),
+        path_spec["sha256"].as_str()
+    );
+    let path_bytes = fs::read(evidence.join(required_str(path_spec, "archive_file")))
+        .expect("read pinned Path.sol");
+    assert_eq!(path_bytes.len(), 2_787);
+    assert_eq!(sha256_hex(&path_bytes), required_str(path_spec, "sha256"));
+    let path_source =
+        normalized_whitespace(&String::from_utf8(path_bytes).expect("Path.sol source is UTF-8"));
+    for source_constant in [
+        "uint256 private constant ADDR_SIZE = 20;",
+        "uint256 private constant FEE_SIZE = 3;",
+        "uint256 private constant NEXT_OFFSET = ADDR_SIZE + FEE_SIZE;",
+        "uint256 private constant POP_OFFSET = NEXT_OFFSET + ADDR_SIZE;",
+        "uint256 private constant MULTIPLE_POOLS_MIN_LENGTH = POP_OFFSET + NEXT_OFFSET;",
+    ] {
+        assert!(
+            path_source.contains(source_constant),
+            "Path.sol lost framing constant {source_constant}"
+        );
+    }
+    assert_fragments_in_order(
+        &path_source,
+        &[
+            "function numPools(bytes memory path) internal pure returns (uint256)",
+            "return ((path.length - ADDR_SIZE) / NEXT_OFFSET);",
+            "function decodeFirstPool(bytes memory path)",
+            "tokenA = path.toAddress(0);",
+            "fee = path.toUint24(ADDR_SIZE);",
+            "tokenB = path.toAddress(NEXT_OFFSET);",
+            "function getFirstPool(bytes memory path) internal pure returns (bytes memory)",
+            "return path.slice(0, POP_OFFSET);",
+            "function skipToken(bytes memory path) internal pure returns (bytes memory)",
+            "return path.slice(NEXT_OFFSET, path.length - NEXT_OFFSET);",
         ],
     );
     assert_fragments_in_order(
@@ -4136,6 +4263,94 @@ fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_res
         assert_eq!(value_fields[0]["visible"].as_str(), Some("always"));
     }
 
+    let packed_display_shapes = [
+        (
+            "exactInput((bytes,address,uint256,uint256))",
+            [
+                ("@.value", "Native value", "amount"),
+                ("params.amountIn", "Swap input", "tokenAmount"),
+                (
+                    "params.amountOutMinimum",
+                    "Minimum to Receive",
+                    "tokenAmount",
+                ),
+                ("params.path", "Route", "uniswapV3Path"),
+                ("params.recipient", "Beneficiary", "addressName"),
+            ],
+            [
+                ("params.amountIn", "params.path.[0:20]"),
+                ("params.amountOutMinimum", "params.path.[-20:]"),
+            ],
+        ),
+        (
+            "exactOutput((bytes,address,uint256,uint256))",
+            [
+                ("@.value", "Native value", "amount"),
+                ("params.amountInMaximum", "Max swap input", "tokenAmount"),
+                ("params.amountOut", "Amount to Receive", "tokenAmount"),
+                ("params.path", "Route", "uniswapV3Path"),
+                ("params.recipient", "Beneficiary", "addressName"),
+            ],
+            [
+                ("params.amountInMaximum", "params.path.[-20:]"),
+                ("params.amountOut", "params.path.[0:20]"),
+            ],
+        ),
+    ];
+    for (signature, expected_shape, token_paths) in packed_display_shapes {
+        let route = route_specs
+            .iter()
+            .find(|route| required_str(route, "canonical_signature") == signature)
+            .unwrap_or_else(|| panic!("missing packed route receipt {signature}"));
+        let format_key = required_str(route, "descriptor_format_key");
+        let fields = descriptor["display"]["formats"][format_key]["fields"]
+            .as_array()
+            .unwrap_or_else(|| panic!("packed fields missing for {signature}"));
+        let actual_shape: Vec<_> = fields
+            .iter()
+            .map(|field| {
+                (
+                    required_str(field, "path"),
+                    required_str(field, "label"),
+                    required_str(field, "format"),
+                )
+            })
+            .collect();
+        assert_eq!(actual_shape, expected_shape);
+        assert!(
+            fields
+                .iter()
+                .all(|field| field["visible"].as_str() == Some("always")),
+            "every packed V3 operand must be unconditionally visible"
+        );
+
+        let path_field = fields
+            .iter()
+            .find(|field| field["path"].as_str() == Some("params.path"))
+            .expect("packed route field");
+        assert!(
+            path_field.get("params").is_none(),
+            "packed path direction must come from the signed selector, not descriptor params"
+        );
+        let recipient = fields
+            .iter()
+            .find(|field| field["path"].as_str() == Some("params.recipient"))
+            .expect("packed beneficiary field");
+        let sender_addresses = recipient["params"]["senderAddress"]
+            .as_array()
+            .expect("packed senderAddress annotation");
+        assert_eq!(sender_addresses.len(), 1);
+        assert_eq!(sender_addresses[0].as_str(), Some(sentinel));
+
+        for (amount_path, token_path) in token_paths {
+            let amount = fields
+                .iter()
+                .find(|field| field["path"].as_str() == Some(amount_path))
+                .unwrap_or_else(|| panic!("missing packed amount field {amount_path}"));
+            assert_eq!(amount["params"]["tokenPath"].as_str(), Some(token_path));
+        }
+    }
+
     let v2_display_shapes: [(&str, [(&str, &str, &str); 5]); 2] = [
         (
             "swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to)",
@@ -4248,7 +4463,7 @@ fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_res
         "one exact Router02 deployment leaf"
     );
     let ir = Erc7730Ir::parse(&router_entries[0].ir_bytes).expect("parse restored Router02 IR");
-    assert_eq!(ir.format_count(), Ok(4));
+    assert_eq!(ir.format_count(), Ok(6));
     for (signature, selector) in &expected_routes {
         assert!(
             ir.find_format_by_selector(selector)
@@ -4265,7 +4480,10 @@ fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_res
     let refused_specs = manifest["policy"]["continued_hard_refusals"]
         .as_array()
         .expect("continued hard-refusal array");
-    assert_eq!(refused_specs.len(), 2);
+    assert!(
+        refused_specs.is_empty(),
+        "the two packed V3 routes are now constrained admissions"
+    );
     let mut expected_known_selectors = expected_routes.values().copied().collect::<BTreeSet<_>>();
     for refusal in refused_specs {
         let signature = required_str(refusal, "canonical_signature");
@@ -4277,11 +4495,11 @@ fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_res
             ir.find_format_by_selector(&selector)
                 .expect("Router02 format table parses")
                 .is_none(),
-            "packed V3 route must remain refused: {signature}"
+            "continued hard refusal unexpectedly entered IR: {signature}"
         );
         assert!(
             registry.known_calls.contains(&(1, contract, selector)),
-            "packed V3 refusal escaped exact omission protection: {signature}"
+            "continued hard refusal escaped exact omission protection: {signature}"
         );
         assert!(expected_known_selectors.insert(selector));
     }
@@ -4295,7 +4513,7 @@ fn uniswap_router02_evidence_binds_constrained_v3_single_hop_and_v2_multihop_res
             [0x50, 0x23, 0xb4, 0xdf],
             [0xb8, 0x58, 0x18, 0x3f],
         ]),
-        "manifest must name the exact Router02 selector inventory"
+        "manifest must name the exact six-route Router02 selector inventory"
     );
     let actual_known_selectors = registry
         .known_calls

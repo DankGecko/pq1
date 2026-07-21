@@ -282,7 +282,7 @@ def _parse_ir(ir: bytes) -> dict:
                 )
             format_op = formats[cursor]
             label_len = formats[cursor + 1]
-            if not 0x01 <= format_op <= 0x0E:
+            if not 0x01 <= format_op <= 0x0F:
                 raise ValueError(
                     f"IR format {format_index} field {field_index} has bad format opcode"
                 )

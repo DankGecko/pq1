@@ -1846,6 +1846,9 @@ mod tests {
         assert!(
             semantics.contains("| `0x0E` | `encrypted` | hard refusal (signed operand hidden) |")
         );
+        assert!(semantics.contains(
+            "| `0x0F` | `uniswapV3Path` | implemented renderer (fail closed on invalid input) |"
+        ));
         assert!(semantics.contains("**every `RenderErr` variant is a hard refusal**"));
         assert!(semantics.contains("exactly 2 pages (banner + hash)"));
         assert!(semantics.contains("complete 32-byte digest at 8 bytes per display row"));

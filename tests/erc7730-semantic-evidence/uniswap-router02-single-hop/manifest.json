@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "scope": "Uniswap SwapRouter02 V3 single-hop and V2 multi-hop semantic evidence for PQ1 constrained restoration",
-  "captured_at_utc": "2026-07-19T15:30:00Z",
+  "scope": "Uniswap SwapRouter02 V3 single-hop, packed V3 multi-hop, and V2 multi-hop semantic evidence for PQ1 constrained restoration",
+  "captured_at_utc": "2026-07-21T02:52:57Z",
   "policy": {
     "outcome": "constrained_restoration",
-    "mechanism": "PQ1 restores two V3 single-hop routes and exactly two V2 multi-hop routes under device-enforced semantics. Every admitted route renders the exact signed zero @.value, recipient address(1) resolves to the signed UserOperation sender, and address(2) refuses. Exact-input amountIn=0 refuses; V3 nonzero sqrtPriceLimitX96 refuses; V2 renders every signed path address and rejects paths above the renderer cap. Labels stay neutral because pre-existing router native currency can fund a WETH9 input even though this transaction cannot fund the router; the rejected amountIn=0 branch is the route to router-held ERC-20 payment. Packed V3 routes and every other unsupported runtime combination remain exact known-call hard refusals.",
+    "mechanism": "PQ1 restores two V3 single-hop routes, the two packed V3 multi-hop routes, and exactly two V2 multi-hop routes under device-enforced semantics. Every admitted route renders the exact signed zero @.value, recipient address(1) resolves to the signed UserOperation sender, and address(2) refuses. Exact-input amountIn=0 refuses; V3 single-hop nonzero sqrtPriceLimitX96 refuses; V2 renders every signed path address and rejects paths above its renderer cap. Packed V3 renders every full token address and uint24 pool fee, accepts only canonical 20+n*(3+20) byte paths with one through five pools, and derives forward versus reverse presentation from the signed selector so exactOutput is shown in execution/user direction. Labels stay neutral because pre-existing router native currency can fund a WETH9 input even though this transaction cannot fund the router; the rejected amountIn=0 branch is the route to router-held ERC-20 payment. Every other unsupported runtime combination remains an exact known-call hard refusal.",
     "constraints": {
       "recipient_sender_sentinel": "0x0000000000000000000000000000000000000001",
       "recipient_router_sentinel": "0x0000000000000000000000000000000000000002",
@@ -17,6 +17,12 @@
       "outer_native_value_format": "amount",
       "v2_path_policy": "render_every_signed_address",
       "v2_path_render_cap": 8,
+      "packed_v3_path_policy": "render_every_full_token_address_and_uint24_fee",
+      "packed_v3_path_encoding": "token[20] || (fee[3] || token[20]){1..5}",
+      "packed_v3_path_min_pools": 1,
+      "packed_v3_path_max_pools": 5,
+      "packed_v3_exact_input_direction": "encoded_forward",
+      "packed_v3_exact_output_direction": "encoded_reverse_display_execution_forward",
       "input_label_policy": "neutral_no_signer_payment_claim"
     },
     "constrained_routes": [
@@ -31,6 +37,16 @@
         "descriptor_format_key": "exactOutputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountOut, uint256 amountInMaximum, uint160 sqrtPriceLimitX96) params)"
       },
       {
+        "canonical_signature": "exactInput((bytes,address,uint256,uint256))",
+        "selector": "0xb858183f",
+        "descriptor_format_key": "exactInput((bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum) params)"
+      },
+      {
+        "canonical_signature": "exactOutput((bytes,address,uint256,uint256))",
+        "selector": "0x09b81346",
+        "descriptor_format_key": "exactOutput((bytes path, address recipient, uint256 amountOut, uint256 amountInMaximum) params)"
+      },
+      {
         "canonical_signature": "swapExactTokensForTokens(uint256,uint256,address[],address)",
         "selector": "0x472b43f3",
         "descriptor_format_key": "swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to)"
@@ -41,16 +57,7 @@
         "descriptor_format_key": "swapTokensForExactTokens(uint256 amountOut, uint256 amountInMax, address[] path, address to)"
       }
     ],
-    "continued_hard_refusals": [
-      {
-        "canonical_signature": "exactInput((bytes,address,uint256,uint256))",
-        "selector": "0xb858183f"
-      },
-      {
-        "canonical_signature": "exactOutput((bytes,address,uint256,uint256))",
-        "selector": "0x09b81346"
-      }
-    ]
+    "continued_hard_refusals": []
   },
   "deployment": {
     "chain_id": 1,
@@ -200,6 +207,25 @@
     },
     "payment_semantics": "pay(token,payer,recipient,value) wraps native currency only when token==WETH9 and the router native balance covers value; otherwise it transfers tokens already held by the router when payer==address(this), or pulls token funds from payer with transferFrom."
   },
+  "packed_path_dependency": {
+    "upstream_repository": "https://github.com/Uniswap/v3-periphery",
+    "upstream_release": "v1.3.0",
+    "upstream_commit": "80f26c86c57b8a5e4b913f42844d4c8bd274d058",
+    "upstream_tree": "3e6b813fb79a72f76dc5b8dd2ebf59f986e02516",
+    "archive_file": "source/Path.sol",
+    "upstream_path": "contracts/libraries/Path.sol",
+    "bytes": 2787,
+    "sha256": "42edaa8b6c577bee7a24b2f1d377fa7fb7649526a935040ccdd1a91a7f3b46a0",
+    "locked_tarball_file_sha256": "42edaa8b6c577bee7a24b2f1d377fa7fb7649526a935040ccdd1a91a7f3b46a0",
+    "address_bytes": 20,
+    "fee_bytes": 3,
+    "hop_stride_bytes": 23,
+    "one_pool_bytes": 43,
+    "two_pool_min_bytes": 66,
+    "pool_count_formula": "(path.length - 20) / 23",
+    "first_pool_decode": "tokenA@0, fee@20, tokenB@23",
+    "next_pool_step": "skip 23 bytes"
+  },
   "abi": {
     "archive_file": "abi/single-hop.abi.json",
     "archive_file_sha256": "7c0893ac24d4724f15ce423ff696f32e609a0732006df8a42d611be36426a83d",
@@ -214,27 +240,30 @@
   "descriptor": {
     "curated_file": "secure/data/erc7730/curations/files/registry/uniswap/calldata-UniswapV3Router02.json",
     "vendored_file": "secure/data/erc7730-registry/registry/uniswap/calldata-UniswapV3Router02.json",
-    "sha256": "eab87b0c8056a17d8f23d7e8058ea4db4a2e61075379ba94396283586917d543",
+    "sha256": "99d3583b6853aa38f9f8448def50dfb6d64ab4e1dfcc0bd88b1e8aacae9464ae",
     "sender_address_sentinel": "0x0000000000000000000000000000000000000001"
   },
   "semantic_hazards": [
     "recipient address(1) resolves to msg.sender and address(2) resolves to the router itself.",
-    "exactInputSingle and swapExactTokensForTokens amountIn=0 consume the router's entire tokenIn balance and change the payer to the router.",
+    "exactInputSingle, packed exactInput, and swapExactTokensForTokens amountIn=0 consume the router's entire tokenIn balance and change the payer to the router.",
     "A nonzero exact-input price limit can make amountIn a cap rather than an exact consumed amount.",
     "A nonzero exact-output price limit permits amountOutReceived to be smaller than the requested amountOut.",
     "Every V2 path address determines a hop, pair, intermediate receiver, and final output token; endpoint-only rendering would hide signed execution effects.",
+    "Every packed V3 path byte determines a token address or uint24 fee; its canonical framing is one initial 20-byte token followed by one or more 23-byte fee-and-token hops.",
+    "Packed exactInput consumes the path from its first pool forward, while packed exactOutput encodes tokenOut-to-tokenIn and executes recursively in reverse; exactOutput display must therefore reverse both token and fee traversal into input-to-output order.",
     "swapExactTokensForTokens enforces amountOutMin against the final recipient balance delta, while swapTokensForExactTokens computes every hop's required input and enforces amountInMax.",
-    "The outer payable value is independent of route amounts; all four constrained formats render the exact signed @.value explicitly and require it to be zero.",
+    "The outer payable value is independent of route amounts; all six constrained formats render the exact signed @.value explicitly and require it to be zero.",
     "PeripheryPayments can wrap pre-existing router native currency when tokenIn is WETH9; router-held ERC-20 payment requires the amountIn=0 router-payer branch, which the admitted exact-input routes reject.",
     "Requiring @.value=0 prevents this transaction from funding the router, but a pre-existing router native balance can still fund a WETH9 input; labels therefore do not claim that the signer necessarily pays the displayed input."
   ],
   "residuals": [
     "This is a fixed-block historical receipt for Ethereum chain 1 and does not provide live deployment monitoring.",
     "Blockscout marks the source partially verified rather than fully verified; the 21 repo-owned verified sources were byte-identical to the pinned official release.",
-    "The constrained restoration depends on device-verifiable sentinel, amount-zero, price-limit, complete-path, recipient, and outer-value-zero checks; unsupported combinations remain hard refusals.",
+    "The constrained restoration depends on device-verifiable sentinel, amount-zero, price-limit, canonical packed-path framing, complete-path, selector-derived direction, recipient, and outer-value-zero checks; unsupported combinations remain hard refusals.",
     "The v3-periphery v1.3.0 tag is annotated but unsigned; the exact dependency is independently pinned by the swap-router package, lockfile tarball digest, commit/tree, archived source hash, and tarball/source byte equality.",
     "The V2 path renderer is deliberately capped at eight addresses; longer paths remain hard refusals even though the contract can execute them.",
-    "The known-call Bloom is probabilistic, but all four admitted tuples and both packed-route refusals are asserted against the exact builder set offline.",
+    "The packed V3 path renderer is deliberately capped at five pools; longer paths remain hard refusals even though the contract can execute them.",
+    "The known-call Bloom is probabilistic, but all six admitted tuples are asserted against the exact builder set offline.",
     "This evidence grants no production-shipment, fallback, generic signing, legacy-transaction, or blind-signing authority."
   ]
 }

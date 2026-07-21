@@ -1,4 +1,4 @@
-//! Per-formatter renderers driven by `FormatOp` (0x01..0x0E).
+//! Per-formatter renderers driven by `FormatOp` (0x01..0x0F).
 //!
 //! Each formatter writes 1–2 pages into the supplied [`Pages`] buffer
 //! and returns `Result<(), RenderErr>`. Page budget is enforced via
@@ -22,9 +22,11 @@
 //! Static types (uint*, int*, address, bytes32, bool, and static tuples) are
 //! read from the exact authenticated head. Dynamic support is deliberately
 //! narrower: one top-level C1 `bytes`/`string` leaf, or one supported primitive
-//! dynamic array, may occupy the sole canonical tail. A format-level preflight
+//! dynamic array, may occupy the sole canonical tail. The sole C2 exception is
+//! the deployment-scoped Router02 packed-path mode, whose exact tuple body and
+//! complete route are independently preflighted. A format-level preflight
 //! validates the offset, length, zero right-padding, and exact end-of-calldata
-//! framing before visibility is evaluated. C2 dynamic-tuple descent, multiple
+//! framing before visibility is evaluated. Every other C2 descent, multiple
 //! dynamic tails, aliasing, gaps, and trailing bytes hard-refuse the known call;
 //! they never fall through to a less complete rendering.
 
@@ -37,7 +39,10 @@ use super::amount_decision::{
     amount_decision, token_amount_decision, unit_decision, TokenAmountArm,
 };
 use crate::abi::container_field;
-use crate::ir::{Erc7730Ir, FieldEntry, FormatHeader, FormatOp, PathOp};
+use crate::ir::{
+    ContextKind, Erc7730Ir, FieldEntry, FormatHeader, FormatOp, PathOp, UNISWAP_ROUTER02_CHAIN_ID,
+    UNISWAP_ROUTER02_MAINNET, UNISWAP_V3_EXACT_INPUT_SELECTOR, UNISWAP_V3_EXACT_OUTPUT_SELECTOR,
+};
 use pqsigner_tx::erc20::bundle::Erc20Metadata;
 use pqsigner_tx::names::NameResolver;
 use pqsigner_tx_core::eip1559::{Eip1559Tx, U256};
@@ -49,9 +54,10 @@ use crate::display::{ascii_str, DISPLAY_COLS};
 pub use crate::render::array::resolve_array;
 use crate::render::params::{
     nft_collection_path_is_current_slice, parse as parse_params, ParamSet, DATE_ENC_BLOCKHEIGHT,
-    DATE_ENC_TIMESTAMP, DYNAMIC_KIND_BYTES, DYNAMIC_KIND_STRING,
+    DATE_ENC_TIMESTAMP, DYNAMIC_KIND_BYTES, DYNAMIC_KIND_STRING, WORD_GUARD_EQ, WORD_GUARD_NE,
 };
 use crate::render::policy::{integer_word_is_canonical, TerminalKind};
+use crate::render::uniswap_v3_path::{parse_router02_body, Direction};
 use crate::render::RenderErr;
 
 use super::{Pages, RenderedFieldWitness};
@@ -98,6 +104,19 @@ pub(super) enum Resolved<'a> {
     Slot32(&'a [u8; 32]),
     /// `@`-rooted access; caller looks up the field on `tx`.
     Container(u16),
+}
+
+/// Contract-calldata authority selected by the format-wide preflight.
+///
+/// `Standard` retains the existing head-bounded scalar/C1 rules. The only
+/// mode allowed to resolve C2 paths is minted after an exact Router02
+/// deployment + selector + five-field IR check and a whole-body ABI/path
+/// parse. Direction is derived from that signed selector, never from a
+/// descriptor parameter or companion-controlled byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ContractCalldataMode {
+    Standard,
+    UniswapV3Path(Direction),
 }
 
 /// Walk a path program (length-prefixed at `ir.pool[path_off]`) and
@@ -327,6 +346,7 @@ pub enum FormatterRoute {
     TokenTicker,
     InteroperableAddressName,
     HardRefuseEncrypted,
+    UniswapV3Path,
 }
 
 impl FormatterRoute {
@@ -354,6 +374,7 @@ impl FormatterRoute {
             Self::TokenTicker => Self::IMPLEMENTED_STATUS,
             Self::InteroperableAddressName => Self::IMPLEMENTED_STATUS,
             Self::HardRefuseEncrypted => "hard refusal (signed operand hidden)",
+            Self::UniswapV3Path => Self::IMPLEMENTED_STATUS,
         }
     }
 }
@@ -377,6 +398,7 @@ pub const fn formatter_route(op: FormatOp) -> FormatterRoute {
         FormatOp::TokenTicker => FormatterRoute::TokenTicker,
         FormatOp::InteroperableAddressName => FormatterRoute::InteroperableAddressName,
         FormatOp::Encrypted => FormatterRoute::HardRefuseEncrypted,
+        FormatOp::UniswapV3Path => FormatterRoute::UniswapV3Path,
     }
 }
 
@@ -461,7 +483,281 @@ pub(super) fn dispatch(
         FormatterRoute::HardRefuseEncrypted => {
             render_encrypted(field, pages, params).map(|()| None)
         }
+        // The complete packed-path renderer needs the full canonically framed
+        // Router02 body plus the selected format's signed selector. The
+        // format-level caller intercepts this route after its exact C2
+        // preflight; reaching the scalar dispatcher is always a refusal.
+        FormatterRoute::UniswapV3Path => {
+            Err(RenderErr::Reject("7730 v3 path missing format context"))
+        }
     }
+}
+
+const ROUTER02_SENDER_SENTINEL: [u8; 20] =
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+const ROUTER02_ZERO_WORD: [u8; 32] = [0u8; 32];
+const ROUTER02_ADDRESS_TWO_WORD: [u8; 32] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
+];
+
+fn router02_packed_member_path(path: &[u8], member: u16, dynamic: bool) -> bool {
+    let expected_len = if dynamic { 9 } else { 8 };
+    path.len() == expected_len
+        && path[0] == PathOp::RootStructured as u8
+        && path[1] == PathOp::FieldIdx as u8
+        && path[2..4] == [0, 0]
+        && path[4] == PathOp::FollowOffset as u8
+        && path[5] == PathOp::FieldIdx as u8
+        && path[6..8] == member.to_be_bytes()
+        && (!dynamic || path[8] == PathOp::FollowOffset as u8)
+}
+
+fn router02_packed_token_path(path: &[u8], member: u16) -> bool {
+    if path.len() != 15
+        || !router02_packed_member_path(&path[..9], 0, true)
+        || path[9] != PathOp::ArraySlice as u8
+        || path[12..14] != 20u16.to_be_bytes()
+    {
+        return false;
+    }
+    match member {
+        2 => path[10..12] == 0u16.to_be_bytes() && path[14] == 0,
+        3 => path[10..12] == 0u16.to_be_bytes() && path[14] == 1,
+        _ => false,
+    }
+}
+
+fn router02_container_value_path(path: &[u8]) -> bool {
+    let value = container_field::VALUE.to_be_bytes();
+    path == [
+        PathOp::RootContainer as u8,
+        PathOp::FieldIdx as u8,
+        value[0],
+        value[1],
+    ]
+}
+
+fn router02_guard_matches(params: &ParamSet<'_>, mode: u8, expected: &[u8; 32]) -> bool {
+    params
+        .word_guard
+        .is_some_and(|guard| guard.mode() == mode && guard.expected() == expected)
+}
+
+fn mark_router02_role(seen: &mut u8, role: u8) -> Result<(), RenderErr> {
+    if *seen & role != 0 {
+        return Err(RenderErr::Reject("7730 v3 duplicate field role"));
+    }
+    *seen |= role;
+    Ok(())
+}
+
+/// Reconstruct the only C2 authority admitted by the device directly from the
+/// authenticated IR and the actual transaction. This intentionally duplicates
+/// the deep IR parser's belt at the point where full calldata becomes readable:
+/// a future generic C2 formatter cannot acquire this mode by selector alone.
+fn validate_uniswap_v3_runtime_format(
+    ir: &Erc7730Ir<'_>,
+    format: &FormatHeader<'_>,
+    tx: &Eip1559Tx,
+) -> Result<Direction, RenderErr> {
+    if !matches!(ir.context_kind, ContextKind::Contract)
+        || ir.chain_id != UNISWAP_ROUTER02_CHAIN_ID
+        || ir.contract != UNISWAP_ROUTER02_MAINNET
+        || tx.chain_id != UNISWAP_ROUTER02_CHAIN_ID
+        || tx.to.as_ref() != Some(&UNISWAP_ROUTER02_MAINNET)
+        || format.static_head_words != 1
+        || format.field_count != 5
+        || format.nested_descent_count != 0
+    {
+        return Err(RenderErr::Reject("7730 v3 identity mismatch"));
+    }
+    let direction = match format.selector {
+        UNISWAP_V3_EXACT_INPUT_SELECTOR => Direction::Forward,
+        UNISWAP_V3_EXACT_OUTPUT_SELECTOR => Direction::Reverse,
+        _ => return Err(RenderErr::Reject("7730 v3 selector mismatch")),
+    };
+
+    const VALUE: u8 = 1 << 0;
+    const AMOUNT_2: u8 = 1 << 1;
+    const AMOUNT_3: u8 = 1 << 2;
+    const PATH: u8 = 1 << 3;
+    const RECIPIENT: u8 = 1 << 4;
+    const ALL: u8 = VALUE | AMOUNT_2 | AMOUNT_3 | PATH | RECIPIENT;
+    let mut seen = 0u8;
+
+    for field_result in format.fields() {
+        let field = field_result.map_err(|_| RenderErr::Reject("7730 bad field"))?;
+        let op = FormatOp::try_from(field.format_op)
+            .map_err(|_| RenderErr::Reject("7730 bad format op"))?;
+        let params = parse_params(ir, field.param_off)?;
+        if params.visibility != crate::ir::Visibility::Always
+            || params.interpolated_intent.is_some()
+        {
+            return Err(RenderErr::Reject("7730 v3 field not unconditional"));
+        }
+        let path = ir
+            .path_bytes(field.path_off)
+            .map_err(|_| RenderErr::Reject("7730 v3 bad field path"))?;
+        match op {
+            FormatOp::Amount => {
+                if !router02_container_value_path(path)
+                    || params.terminal_kind != Some(TerminalKind::Unsigned)
+                    || params.integer_width_bytes != Some(32)
+                    || !router02_guard_matches(&params, WORD_GUARD_EQ, &ROUTER02_ZERO_WORD)
+                {
+                    return Err(RenderErr::Reject("7730 v3 bad native value field"));
+                }
+                mark_router02_role(&mut seen, VALUE)?;
+            }
+            FormatOp::TokenAmount => {
+                if params.terminal_kind != Some(TerminalKind::Unsigned)
+                    || params.integer_width_bytes != Some(32)
+                {
+                    return Err(RenderErr::Reject("7730 v3 bad amount kind"));
+                }
+                let member = if router02_packed_member_path(path, 2, false) {
+                    mark_router02_role(&mut seen, AMOUNT_2)?;
+                    2
+                } else if router02_packed_member_path(path, 3, false) {
+                    mark_router02_role(&mut seen, AMOUNT_3)?;
+                    3
+                } else {
+                    return Err(RenderErr::Reject("7730 v3 bad amount path"));
+                };
+                if !params
+                    .token_path
+                    .is_some_and(|token_path| router02_packed_token_path(token_path, member))
+                {
+                    return Err(RenderErr::Reject("7730 v3 bad amount token path"));
+                }
+                let guard_ok = match (direction, member) {
+                    (Direction::Forward, 2) => {
+                        router02_guard_matches(&params, WORD_GUARD_NE, &ROUTER02_ZERO_WORD)
+                    }
+                    _ => params.word_guard.is_none(),
+                };
+                if !guard_ok {
+                    return Err(RenderErr::Reject("7730 v3 bad amount guard"));
+                }
+            }
+            FormatOp::AddressName => {
+                if !router02_packed_member_path(path, 1, false)
+                    || params.terminal_kind != Some(TerminalKind::Address)
+                    || params.sender_addresses != Some(&ROUTER02_SENDER_SENTINEL[..])
+                    || !router02_guard_matches(&params, WORD_GUARD_NE, &ROUTER02_ADDRESS_TWO_WORD)
+                {
+                    return Err(RenderErr::Reject("7730 v3 bad recipient field"));
+                }
+                mark_router02_role(&mut seen, RECIPIENT)?;
+            }
+            FormatOp::UniswapV3Path => {
+                if !router02_packed_member_path(path, 0, true)
+                    || params.terminal_kind != Some(TerminalKind::DynamicBytes)
+                    || params.dynamic_kind != Some(DYNAMIC_KIND_BYTES)
+                    || params.word_guard.is_some()
+                {
+                    return Err(RenderErr::Reject("7730 v3 bad route field"));
+                }
+                mark_router02_role(&mut seen, PATH)?;
+            }
+            _ => return Err(RenderErr::Reject("7730 v3 unexpected field")),
+        }
+    }
+    if seen != ALL {
+        return Err(RenderErr::Reject("7730 v3 incomplete field roles"));
+    }
+    Ok(direction)
+}
+
+pub(super) fn router02_c2_scalar_field(
+    ir: &Erc7730Ir<'_>,
+    field: &FieldEntry<'_>,
+    params: &ParamSet<'_>,
+) -> Result<bool, RenderErr> {
+    let path = ir
+        .path_bytes(field.path_off)
+        .map_err(|_| RenderErr::Reject("7730 v3 bad scalar path"))?;
+    let op =
+        FormatOp::try_from(field.format_op).map_err(|_| RenderErr::Reject("7730 bad format op"))?;
+    Ok(match op {
+        FormatOp::AddressName => router02_packed_member_path(path, 1, false),
+        FormatOp::TokenAmount => {
+            let member = if router02_packed_member_path(path, 2, false) {
+                2
+            } else if router02_packed_member_path(path, 3, false) {
+                3
+            } else {
+                return Ok(false);
+            };
+            params
+                .token_path
+                .is_some_and(|token_path| router02_packed_token_path(token_path, member))
+        }
+        _ => false,
+    })
+}
+
+/// Paint every token and fee in display/execution order. No summary page is
+/// added: five hops already require eleven injective route pages, and retaining
+/// the existing 31-page transaction cap is part of the fail-closed envelope.
+pub(super) fn render_uniswap_v3_path(
+    field: &FieldEntry<'_>,
+    pages: &mut Pages,
+    ir: &Erc7730Ir<'_>,
+    full_body: &[u8],
+    direction: Direction,
+    params: &ParamSet<'_>,
+) -> Result<(), RenderErr> {
+    let path_program = ir
+        .path_bytes(field.path_off)
+        .map_err(|_| RenderErr::Reject("7730 v3 bad route path"))?;
+    if field.format_op != FormatOp::UniswapV3Path as u8
+        || !router02_packed_member_path(path_program, 0, true)
+        || params.terminal_kind != Some(TerminalKind::DynamicBytes)
+        || params.dynamic_kind != Some(DYNAMIC_KIND_BYTES)
+    {
+        return Err(RenderErr::Reject("7730 v3 route mismatch"));
+    }
+
+    // Parse the complete body before the first route page. This is a local belt
+    // behind the identical format-wide preflight and keeps this renderer safe
+    // if a future caller bypasses that entry point.
+    let path = parse_router02_body(full_body)?;
+    let hops = path.hop_count();
+    for index in 0..=hops {
+        let token = path.token(index, direction)?;
+        let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+        write_line(pages.row_mut(p, 0), "Route");
+        let [_, r1, r2, r3] = pages.page_mut(p);
+        write_addr_full(r1, r2, r3, &token);
+
+        if index < hops {
+            let fee = path.fee(index, direction)?;
+            let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+            write_line(pages.row_mut(p, 0), "Pool fee (ppm)");
+            write_u64_with_suffix(pages.row_mut(p, 1), u64::from(fee), b" ppm")?;
+        }
+    }
+    Ok(())
+}
+
+fn write_u64_with_suffix(
+    row: &mut [u8; DISPLAY_COLS],
+    value: u64,
+    suffix: &[u8],
+) -> Result<(), RenderErr> {
+    let mut digits = [0u8; 20];
+    let len = format_u64(value, &mut digits).ok_or(RenderErr::Reject("7730 v3 fee"))?;
+    let end = len
+        .checked_add(suffix.len())
+        .ok_or(RenderErr::Reject("7730 v3 fee"))?;
+    if end > DISPLAY_COLS {
+        return Err(RenderErr::Reject("7730 v3 fee"));
+    }
+    *row = [b' '; DISPLAY_COLS];
+    row[..len].copy_from_slice(&digits[..len]);
+    row[len..end].copy_from_slice(suffix);
+    Ok(())
 }
 
 /// Constant annotations may carry visibility, but no formatter-specific
@@ -1561,14 +1857,18 @@ fn validate_c1_dynamic_leaf<'a>(
 ///
 /// This runs before visibility and before any pages are painted, so hidden
 /// fields cannot bypass framing validation. Today's IR can prove exact layout
-/// only for all-static calls and sole top-level dynamic tails (C1 string/bytes,
-/// a sole primitive array, or a sole tokenPath bytes/address[] container):
+/// for all-static calls, sole top-level dynamic tails (C1 string/bytes, a sole
+/// primitive array, or a sole tokenPath bytes/address[] container), and the
+/// exact deployment-scoped Router02 packed-path C2 mode:
 ///
 /// * all-static: calldata body length equals the authenticated head length;
 /// * sole dynamic: offset equals head end and the padded object consumes the
 ///   complete body;
 /// * every dynamic reference names the same head slot;
-/// * C2 dynamic-tuple descent and the retired relaxed multi-array marker reject.
+/// * generic C2 dynamic-tuple descent and the retired relaxed multi-array marker
+///   reject;
+/// * Router02 C2 requires the exact chain, target, selector, five field roles,
+///   guards, canonical recipient, whole path tail, and hop cap.
 ///
 /// Dbgen enforces the corresponding signature-level restrictions. This belt
 /// independently covers hidden paths and authenticated-but-malformed IR.
@@ -1576,12 +1876,35 @@ pub(crate) fn validate_contract_calldata_framing(
     ir: &Erc7730Ir<'_>,
     format: &FormatHeader<'_>,
     full_body: &[u8],
-) -> Result<(), RenderErr> {
+    tx: &Eip1559Tx,
+) -> Result<ContractCalldataMode, RenderErr> {
     let head_end = (format.static_head_words as usize)
         .checked_mul(32)
         .ok_or(RenderErr::Reject("7730 head overflow"))?;
     if full_body.len() < head_end {
         return Err(RenderErr::Reject("7730 short head"));
+    }
+
+    // The new packed-path opcode is the sole minting point for C2 authority.
+    // Authenticate the exact deployment/selector/five-field shape, then parse
+    // the entire Router02 body (including path cap, padding, exact end and
+    // recipient canonicality) before guards or any reassuring page can run.
+    let mut packed_fields = 0u8;
+    for field_result in format.fields() {
+        let field = field_result.map_err(|_| RenderErr::Reject("7730 bad field"))?;
+        if field.format_op == FormatOp::UniswapV3Path as u8 {
+            packed_fields = packed_fields
+                .checked_add(1)
+                .ok_or(RenderErr::Reject("7730 v3 field count"))?;
+        }
+    }
+    if packed_fields != 0 {
+        if packed_fields != 1 {
+            return Err(RenderErr::Reject("7730 v3 field count"));
+        }
+        let direction = validate_uniswap_v3_runtime_format(ir, format, tx)?;
+        parse_router02_body(full_body)?;
+        return Ok(ContractCalldataMode::UniswapV3Path(direction));
     }
 
     let mut dynamic_slot: Option<usize> = None;
@@ -1641,7 +1964,7 @@ pub(crate) fn validate_contract_calldata_framing(
     if dynamic_slot.is_none() && full_body.len() != head_end {
         return Err(RenderErr::Reject("7730 static calldata trailing"));
     }
-    Ok(())
+    Ok(ContractCalldataMode::Standard)
 }
 
 /// Evaluate every authenticated scalar word guard before the contract intent
@@ -1651,7 +1974,9 @@ pub(crate) fn validate_contract_calldata_framing(
 pub(crate) fn validate_contract_word_guards(
     ir: &Erc7730Ir<'_>,
     format: &FormatHeader<'_>,
-    body: &[u8],
+    head_body: &[u8],
+    full_body: &[u8],
+    mode: ContractCalldataMode,
     tx: &Eip1559Tx,
 ) -> Result<(), RenderErr> {
     for field_result in format.fields() {
@@ -1664,7 +1989,19 @@ pub(crate) fn validate_contract_word_guards(
             return Err(RenderErr::Reject("7730 guarded field hidden"));
         }
         validate_path_static_head(ir, field.path_off, format.static_head_words)?;
-        let actual = match resolve_path(ir, field.path_off, body)? {
+        let field_body = if path_needs_full_body(ir, field.path_off)? {
+            match mode {
+                ContractCalldataMode::UniswapV3Path(_)
+                    if router02_c2_scalar_field(ir, &field, &params)? =>
+                {
+                    full_body
+                }
+                _ => return Err(RenderErr::Reject("7730 guarded C2 unsupported")),
+            }
+        } else {
+            head_body
+        };
+        let actual = match resolve_path(ir, field.path_off, field_body)? {
             Resolved::Slot32(word) => *word,
             Resolved::Container(container_field::VALUE) => {
                 if params.terminal_kind != Some(TerminalKind::Unsigned)
@@ -3022,6 +3359,12 @@ mod semantic_manifest_tests {
                 "encrypted",
                 FormatterRoute::HardRefuseEncrypted,
                 "hard refusal (signed operand hidden)",
+            ),
+            (
+                0x0F,
+                "uniswapV3Path",
+                FormatterRoute::UniswapV3Path,
+                IMPLEMENTED,
             ),
         ];
 
@@ -4744,13 +5087,27 @@ mod adversarial_renderer_regressions {
         let fmt = format(&fields, 1, 1);
         let descriptor = ir(&pool);
         assert_eq!(
-            validate_contract_word_guards(&descriptor, &fmt, &forbidden, &tx()),
+            validate_contract_word_guards(
+                &descriptor,
+                &fmt,
+                &forbidden,
+                &forbidden,
+                ContractCalldataMode::Standard,
+                &tx(),
+            ),
             Err(RenderErr::Reject("7730 word guard failed"))
         );
         let mut allowed = forbidden;
         allowed[31] = 1;
         assert_eq!(
-            validate_contract_word_guards(&descriptor, &fmt, &allowed, &tx()),
+            validate_contract_word_guards(
+                &descriptor,
+                &fmt,
+                &allowed,
+                &allowed,
+                ContractCalldataMode::Standard,
+                &tx(),
+            ),
             Ok(())
         );
 
@@ -4765,13 +5122,27 @@ mod adversarial_renderer_regressions {
         let fields = one_field_bytes(FormatOp::Amount as u8, 1, 6);
         let fmt = format(&fields, 1, 1);
         assert_eq!(
-            validate_contract_word_guards(&descriptor, &fmt, &[0u8; 32], &tx()),
+            validate_contract_word_guards(
+                &descriptor,
+                &fmt,
+                &[0u8; 32],
+                &[0u8; 32],
+                ContractCalldataMode::Standard,
+                &tx(),
+            ),
             Ok(())
         );
         let mut funded = tx();
         funded.value.0[31] = 1;
         assert_eq!(
-            validate_contract_word_guards(&descriptor, &fmt, &[0u8; 32], &funded),
+            validate_contract_word_guards(
+                &descriptor,
+                &fmt,
+                &[0u8; 32],
+                &[0u8; 32],
+                ContractCalldataMode::Standard,
+                &funded,
+            ),
             Err(RenderErr::Reject("7730 word guard failed"))
         );
     }
@@ -5639,11 +6010,11 @@ mod adversarial_renderer_regressions {
         let fmt = format(&fields, 1, 1);
         let descriptor = ir(&SLOT_POOL);
         assert_eq!(
-            validate_contract_calldata_framing(&descriptor, &fmt, &[0u8; 32]),
-            Ok(())
+            validate_contract_calldata_framing(&descriptor, &fmt, &[0u8; 32], &tx()),
+            Ok(ContractCalldataMode::Standard)
         );
         assert_eq!(
-            validate_contract_calldata_framing(&descriptor, &fmt, &[0u8; 64]),
+            validate_contract_calldata_framing(&descriptor, &fmt, &[0u8; 64], &tx()),
             Err(RenderErr::Reject("7730 static calldata trailing"))
         );
     }
@@ -5673,20 +6044,20 @@ mod adversarial_renderer_regressions {
         };
         let canonical = dynamic_body(b"hidden");
         assert_eq!(
-            validate_contract_calldata_framing(&descriptor, &fmt, &canonical),
-            Ok(())
+            validate_contract_calldata_framing(&descriptor, &fmt, &canonical, &tx()),
+            Ok(ContractCalldataMode::Standard)
         );
 
         let mut dirty = canonical.clone();
         *dirty.last_mut().unwrap() = 1;
         assert_eq!(
-            validate_contract_calldata_framing(&descriptor, &fmt, &dirty),
+            validate_contract_calldata_framing(&descriptor, &fmt, &dirty, &tx()),
             Err(RenderErr::Reject("7730 res dirty pad"))
         );
         let mut trailing = canonical;
         trailing.extend_from_slice(&[0u8; 32]);
         assert_eq!(
-            validate_contract_calldata_framing(&descriptor, &fmt, &trailing),
+            validate_contract_calldata_framing(&descriptor, &fmt, &trailing, &tx()),
             Err(RenderErr::Reject("7730 res not whole tail"))
         );
     }
@@ -5712,7 +6083,7 @@ mod adversarial_renderer_regressions {
         let mut c2_body = [0u8; 64];
         c2_body[31] = 32;
         assert_eq!(
-            validate_contract_calldata_framing(&c2_ir, &fmt, &c2_body),
+            validate_contract_calldata_framing(&c2_ir, &fmt, &c2_body, &tx()),
             Err(RenderErr::Reject("7730 C2 framing unsupported"))
         );
 
@@ -5720,7 +6091,7 @@ mod adversarial_renderer_regressions {
         let mut multi_body = [0u8; 64];
         multi_body[31] = 32;
         assert_eq!(
-            validate_contract_calldata_framing(&multi_ir, &fmt, &multi_body),
+            validate_contract_calldata_framing(&multi_ir, &fmt, &multi_body, &tx()),
             Err(RenderErr::Reject("7730 multi-array framing"))
         );
     }
@@ -5764,19 +6135,19 @@ mod adversarial_renderer_regressions {
         body[116..119].copy_from_slice(&[0, 0x0b, 0xb8]);
         body[119..139].copy_from_slice(&[0x22; 20]);
         assert_eq!(
-            validate_contract_calldata_framing(&descriptor, &fmt, &body),
-            Ok(())
+            validate_contract_calldata_framing(&descriptor, &fmt, &body, &tx()),
+            Ok(ContractCalldataMode::Standard)
         );
 
         let mut dirty = body.clone();
         *dirty.last_mut().unwrap() = 1;
         assert_eq!(
-            validate_contract_calldata_framing(&descriptor, &fmt, &dirty),
+            validate_contract_calldata_framing(&descriptor, &fmt, &dirty, &tx()),
             Err(RenderErr::Reject("7730 res dirty pad"))
         );
         body.extend_from_slice(&[0u8; 32]);
         assert_eq!(
-            validate_contract_calldata_framing(&descriptor, &fmt, &body),
+            validate_contract_calldata_framing(&descriptor, &fmt, &body, &tx()),
             Err(RenderErr::Reject("7730 res not whole tail"))
         );
     }
@@ -6127,6 +6498,133 @@ mod adversarial_renderer_regressions {
                 None,
             ),
             Err(RenderErr::Reject("7730 bad format op"))
+        );
+    }
+
+    fn router02_path_ir() -> Erc7730Ir<'static> {
+        static POOL: [u8; 11] = [
+            0,
+            9,
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+            PathOp::FollowOffset as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+            PathOp::FollowOffset as u8,
+        ];
+        ir(&POOL)
+    }
+
+    fn router02_body(path: &[u8]) -> std::vec::Vec<u8> {
+        fn push_word(body: &mut std::vec::Vec<u8>, value: usize) {
+            let mut word = [0u8; 32];
+            word[24..].copy_from_slice(&(value as u64).to_be_bytes());
+            body.extend_from_slice(&word);
+        }
+
+        let mut body = std::vec::Vec::new();
+        push_word(&mut body, 32); // outer tuple offset
+        push_word(&mut body, 128); // tuple path offset
+        push_word(&mut body, 1); // canonical recipient address(1)
+        push_word(&mut body, 7); // amount A
+        push_word(&mut body, 11); // amount B
+        push_word(&mut body, path.len());
+        body.extend_from_slice(path);
+        body.resize(body.len() + (32 - path.len() % 32) % 32, 0);
+        body
+    }
+
+    fn assert_route_address(page: &[[u8; DISPLAY_COLS]; 4], address: &[u8; 20]) {
+        let mut r1 = [b' '; DISPLAY_COLS];
+        let mut r2 = [b' '; DISPLAY_COLS];
+        let mut r3 = [b' '; DISPLAY_COLS];
+        write_addr_full(&mut r1, &mut r2, &mut r3, address);
+        assert_eq!(page[1], r1);
+        assert_eq!(page[2], r2);
+        assert_eq!(page[3], r3);
+    }
+
+    #[test]
+    fn uniswap_v3_route_renders_every_token_and_fee_in_selector_direction() {
+        let token_a = [0x11; 20];
+        let token_b = [0x22; 20];
+        let token_c = [0x33; 20];
+        let mut packed = std::vec::Vec::new();
+        packed.extend_from_slice(&token_a);
+        packed.extend_from_slice(&[0x00, 0x0b, 0xb8]); // 3000 ppm
+        packed.extend_from_slice(&token_b);
+        packed.extend_from_slice(&[0x00, 0x01, 0xf4]); // 500 ppm
+        packed.extend_from_slice(&token_c);
+        let body = router02_body(&packed);
+        let route = field(FormatOp::UniswapV3Path as u8, 1);
+        let mut params = ParamSet::default();
+        params.terminal_kind = Some(TerminalKind::DynamicBytes);
+        params.dynamic_kind = Some(DYNAMIC_KIND_BYTES);
+
+        let mut forward = Pages::with_len(0);
+        render_uniswap_v3_path(
+            &route,
+            &mut forward,
+            &router02_path_ir(),
+            &body,
+            Direction::Forward,
+            &params,
+        )
+        .expect("forward route renders");
+        assert_eq!(forward.len, 5);
+        assert_eq!(&forward.buf[0][0][..5], b"Route");
+        assert_route_address(&forward.buf[0], &token_a);
+        assert_eq!(&forward.buf[1][0][..14], b"Pool fee (ppm)");
+        assert_eq!(&forward.buf[1][1][..8], b"3000 ppm");
+        assert_eq!(forward.buf[1][2], [b' '; DISPLAY_COLS]);
+        assert_eq!(forward.buf[1][3], [b' '; DISPLAY_COLS]);
+        assert_route_address(&forward.buf[2], &token_b);
+        assert_eq!(&forward.buf[3][1][..7], b"500 ppm");
+        assert_route_address(&forward.buf[4], &token_c);
+
+        let mut reverse = Pages::with_len(0);
+        render_uniswap_v3_path(
+            &route,
+            &mut reverse,
+            &router02_path_ir(),
+            &body,
+            Direction::Reverse,
+            &params,
+        )
+        .expect("reverse route renders");
+        assert_eq!(reverse.len, 5);
+        assert_route_address(&reverse.buf[0], &token_c);
+        assert_eq!(&reverse.buf[1][1][..7], b"500 ppm");
+        assert_route_address(&reverse.buf[2], &token_b);
+        assert_eq!(&reverse.buf[3][1][..8], b"3000 ppm");
+        assert_route_address(&reverse.buf[4], &token_a);
+    }
+
+    #[test]
+    fn uniswap_v3_route_page_exhaustion_refuses_without_truncation_success() {
+        let mut packed = std::vec::Vec::new();
+        packed.extend_from_slice(&[0x11; 20]);
+        packed.extend_from_slice(&[0x00, 0x0b, 0xb8]);
+        packed.extend_from_slice(&[0x22; 20]);
+        let body = router02_body(&packed);
+        let route = field(FormatOp::UniswapV3Path as u8, 1);
+        let mut params = ParamSet::default();
+        params.terminal_kind = Some(TerminalKind::DynamicBytes);
+        params.dynamic_kind = Some(DYNAMIC_KIND_BYTES);
+        let mut pages = Pages::with_len(crate::display::MAX_PAGES - 2);
+        assert_eq!(
+            render_uniswap_v3_path(
+                &route,
+                &mut pages,
+                &router02_path_ir(),
+                &body,
+                Direction::Forward,
+                &params,
+            ),
+            Err(RenderErr::PageBudget)
         );
     }
 

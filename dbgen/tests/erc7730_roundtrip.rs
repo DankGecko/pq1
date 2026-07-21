@@ -681,7 +681,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_546);
     assert_eq!(
         hex::encode(result.root),
-        "e767a5f977d35af3137515cfbacbcc740b27df61e996c753281bd6b0ed2be40a"
+        "80bf38e383bfd9b3d22d20045e30c542be69233f70de7c2aeddb68fe666980c6"
     );
 }
 
@@ -2578,13 +2578,38 @@ fn registry_runtime_dead_opaque_bytes_are_omitted_but_stay_known() {
     let reg = root.join("secure/data/erc7730-registry");
     let policy = root.join("secure/data/erc7730/policy.toml");
     let (catalogue, skips) = build_db_tolerant(&reg.join("registry"), &policy, Some(&reg)).unwrap();
+    let mut router02 = [0u8; 20];
+    router02.copy_from_slice(
+        &hex::decode("68b3465833fb72a70ecdf485e0e4c7bd8665fc45").expect("Router02 address"),
+    );
 
     for entry in &catalogue.entries {
         let ir = Erc7730Ir::parse(&entry.ir_bytes).unwrap();
         for format in ir.format_iter() {
-            for field in format.unwrap().fields() {
+            let format = format.unwrap();
+            for field in format.fields() {
                 let field = field.unwrap();
                 let params = parse_params(&ir, field.param_off).unwrap();
+                if params.dynamic_kind == Some(DYNAMIC_KIND_BYTES) {
+                    assert_eq!(entry.chain_id, 1, "packed bytes escaped reviewed chain");
+                    assert_eq!(entry.contract, router02, "packed bytes escaped Router02");
+                    assert!(
+                        matches!(
+                            format.selector,
+                            [0xb8, 0x58, 0x18, 0x3f] | [0x09, 0xb8, 0x13, 0x46]
+                        ),
+                        "packed bytes escaped reviewed Router02 selectors"
+                    );
+                    assert_eq!(
+                        FormatOp::try_from(field.format_op),
+                        Ok(FormatOp::UniswapV3Path),
+                        "dynamic bytes gained an unreviewed renderer"
+                    );
+                    assert_eq!(field.label, b"Route");
+                    assert_eq!(params.visibility, Visibility::Always);
+                    assert_eq!(params.terminal_kind, Some(TerminalKind::DynamicBytes));
+                    continue;
+                }
                 assert_ne!(
                     params.dynamic_kind,
                     Some(DYNAMIC_KIND_BYTES),
@@ -3637,24 +3662,23 @@ fn unenrolled_address_name_sender_address_drops_only_its_whole_format() {
     }
 }
 
-/// Router02 assigns protocol semantics to sentinel recipient addresses and to
-/// zero amounts. Only the four exactly enrolled single-hop and full-address-
-/// route selectors may enter trusted IR, and every enrolled sender/word
-/// predicate must stay attached to its exact authenticated path. The two
-/// packed-byte routes remain absent while all six declared selectors stay in
-/// exact/Bloom omission defense.
+/// Router02 assigns protocol semantics to sentinel recipient addresses, zero
+/// amounts, and packed V3 path direction. Exactly six enrolled selectors may
+/// enter trusted IR. Every sender/word predicate stays attached to its exact
+/// authenticated path, and the two packed-byte routes retain their reviewed C2
+/// tuple shape, dynamic-bytes framing, endpoint binding, and custom formatter.
 #[test]
-fn vendored_uniswap_v3_router02_admits_only_four_exactly_guarded_routes() {
+fn vendored_uniswap_v3_router02_admits_all_six_exactly_guarded_routes() {
     let root = workspace_root();
     let reg = root.join("secure/data/erc7730-registry");
     let desc = reg.join("registry/uniswap/calldata-UniswapV3Router02.json");
     let policy = load_policy(&root.join("secure/data/erc7730/policy.toml")).expect("load policy");
-    let err = try_compile_one(&desc, &policy, Some(&reg))
-        .expect_err("strict compile must refuse the first unsafe C2 format");
-    assert!(
-        err.contains("params.path") && err.contains("neither rendered"),
-        "unexpected strict error: {err}"
-    );
+    let strict_entries = try_compile_one(&desc, &policy, Some(&reg))
+        .expect("strict compile must admit the exact enrolled Router02 formats");
+    assert_eq!(strict_entries.len(), 1);
+    let strict_ir =
+        Erc7730Ir::parse(&strict_entries[0].ir_bytes).expect("strict Router02 IR parses");
+    assert_eq!(strict_ir.format_count(), Ok(6));
 
     let registry = build_registry();
     let router_entries: Vec<_> = registry
@@ -3668,7 +3692,7 @@ fn vendored_uniswap_v3_router02_admits_only_four_exactly_guarded_routes() {
         "the exact mainnet Router02 deployment must produce one leaf"
     );
     let ir = Erc7730Ir::parse(&router_entries[0].ir_bytes).expect("Router02 IR parses");
-    assert_eq!(ir.format_count(), Ok(4));
+    assert_eq!(ir.format_count(), Ok(6));
 
     let contract_raw =
         hex::decode("68b3465833fb72a70ecdf485e0e4c7bd8665fc45").expect("valid Router02 address");
@@ -3689,11 +3713,15 @@ fn vendored_uniswap_v3_router02_admits_only_four_exactly_guarded_routes() {
     ];
     assert_eq!(selector_for(declared[0]), [0x04, 0xe4, 0x5a, 0xaf]);
     assert_eq!(selector_for(declared[1]), [0x50, 0x23, 0xb4, 0xdf]);
+    assert_eq!(selector_for(declared[2]), [0xb8, 0x58, 0x18, 0x3f]);
+    assert_eq!(selector_for(declared[3]), [0x09, 0xb8, 0x13, 0x46]);
     assert_eq!(selector_for(declared[4]), [0x47, 0x2b, 0x43, 0xf3]);
     assert_eq!(selector_for(declared[5]), [0x42, 0x71, 0x2a, 0x67]);
 
     let input_selector = selector_for(declared[0]);
     let output_selector = selector_for(declared[1]);
+    let packed_input_selector = selector_for(declared[2]);
+    let packed_output_selector = selector_for(declared[3]);
     let multihop_input_selector = selector_for(declared[4]);
     let multihop_output_selector = selector_for(declared[5]);
     let admitted: BTreeSet<_> = ir
@@ -3705,19 +3733,12 @@ fn vendored_uniswap_v3_router02_admits_only_four_exactly_guarded_routes() {
         BTreeSet::from([
             input_selector,
             output_selector,
+            packed_input_selector,
+            packed_output_selector,
             multihop_input_selector,
             multihop_output_selector,
         ])
     );
-    for signature in &declared[2..4] {
-        let selector = selector_for(signature);
-        assert!(
-            ir.find_format_by_selector(&selector)
-                .expect("Router02 format table parses")
-                .is_none(),
-            "packed-byte route must remain absent from IR: {signature}"
-        );
-    }
 
     let mut sender_one = [0u8; 20];
     sender_one[19] = 1;
@@ -3800,6 +3821,145 @@ fn vendored_uniswap_v3_router02_admits_only_four_exactly_guarded_routes() {
         assert_guard(0, WORD_GUARD_EQ, &zero_word);
         assert_guard(4, WORD_GUARD_NE, &address_two_word);
         assert_guard(5, WORD_GUARD_EQ, &zero_word);
+        assert!(params[2].word_guard.is_none());
+        assert!(params[3].word_guard.is_none());
+        if exact_input {
+            assert_guard(1, WORD_GUARD_NE, &zero_word);
+        } else {
+            assert!(params[1].word_guard.is_none());
+        }
+    }
+
+    let packed_member_path = |member: u8, dynamic: bool| {
+        let mut path = vec![
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            0,
+            PathOp::FollowOffset as u8,
+            PathOp::FieldIdx as u8,
+            0,
+            member,
+        ];
+        if dynamic {
+            path.push(PathOp::FollowOffset as u8);
+        }
+        path
+    };
+    let packed_token_path = |from_end: bool| {
+        let mut path = packed_member_path(0, true);
+        path.extend_from_slice(&[PathOp::ArraySlice as u8, 0, 0, 0, 20, u8::from(from_end)]);
+        path
+    };
+
+    for (selector, exact_input) in [
+        (packed_input_selector, true),
+        (packed_output_selector, false),
+    ] {
+        let format = ir
+            .find_format_by_selector(&selector)
+            .expect("Router02 format table parses")
+            .expect("enrolled packed selector is present");
+        assert_eq!(
+            format.static_head_words, 1,
+            "outer tuple is the only C1 word"
+        );
+        assert_eq!(format.nested_descent_count, 0);
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("Router02 packed field parses"))
+            .collect();
+        assert_eq!(fields.len(), 5, "every packed route operand is displayed");
+
+        let expected_labels: [&[u8]; 5] = if exact_input {
+            [
+                b"Native value",
+                b"Swap input",
+                b"Minimum to Receive",
+                b"Route",
+                b"Beneficiary",
+            ]
+        } else {
+            [
+                b"Native value",
+                b"Max swap input",
+                b"Amount to Receive",
+                b"Route",
+                b"Beneficiary",
+            ]
+        };
+        let expected_ops = [
+            FormatOp::Amount,
+            FormatOp::TokenAmount,
+            FormatOp::TokenAmount,
+            FormatOp::UniswapV3Path,
+            FormatOp::AddressName,
+        ];
+        let expected_paths = if exact_input {
+            [
+                value_path.clone(),
+                packed_member_path(2, false),
+                packed_member_path(3, false),
+                packed_member_path(0, true),
+                packed_member_path(1, false),
+            ]
+        } else {
+            [
+                value_path.clone(),
+                packed_member_path(3, false),
+                packed_member_path(2, false),
+                packed_member_path(0, true),
+                packed_member_path(1, false),
+            ]
+        };
+        let params: Vec<_> = fields
+            .iter()
+            .map(|field| parse_params(&ir, field.param_off).expect("packed params parse"))
+            .collect();
+        for index in 0..fields.len() {
+            assert_eq!(fields[index].label, expected_labels[index]);
+            assert_eq!(
+                FormatOp::try_from(fields[index].format_op),
+                Ok(expected_ops[index])
+            );
+            assert_eq!(
+                ir.path_bytes(fields[index].path_off)
+                    .expect("packed field path parses"),
+                expected_paths[index],
+                "wrong authenticated packed path at field {index}"
+            );
+            assert_eq!(params[index].visibility, Visibility::Always);
+        }
+
+        assert_eq!(
+            params[1].token_path,
+            Some(packed_token_path(!exact_input).as_slice())
+        );
+        assert_eq!(
+            params[2].token_path,
+            Some(packed_token_path(exact_input).as_slice())
+        );
+        assert_eq!(params[3].terminal_kind, Some(TerminalKind::DynamicBytes));
+        assert_eq!(params[3].dynamic_kind, Some(DYNAMIC_KIND_BYTES));
+        assert!(params[3].token_path.is_none());
+        assert_eq!(params[4].sender_addresses, Some(sender_one.as_slice()));
+        assert!(params[4].sender_address_matches(&sender_one));
+        for index in 0..4 {
+            assert!(
+                params[index].sender_addresses.is_none(),
+                "sender substitution leaked onto packed field {index}"
+            );
+        }
+
+        let assert_guard = |index: usize, mode: u8, expected: &[u8; 32]| {
+            let guard = params[index]
+                .word_guard
+                .unwrap_or_else(|| panic!("packed field {index} is missing its guard"));
+            assert_eq!(guard.mode(), mode);
+            assert_eq!(guard.expected(), expected);
+        };
+        assert_guard(0, WORD_GUARD_EQ, &zero_word);
+        assert_guard(4, WORD_GUARD_NE, &address_two_word);
         assert!(params[2].word_guard.is_none());
         assert!(params[3].word_guard.is_none());
         if exact_input {

@@ -367,6 +367,10 @@ const FMT_CHAIN_ID: u8 = 0x0B;
 const FMT_TOKEN_TICKER: u8 = 0x0C;
 const FMT_INTEROP_ADDR_NAME: u8 = 0x0D;
 const FMT_ENCRYPTED: u8 = 0x0E;
+/// PQSigner-only complete renderer for an enrolled Router02 packed V3 path.
+/// Merely naming this formatter never grants authority: `compile_one_format`
+/// requires an exact descriptor/deployment/signature/selector enrollment.
+const FMT_UNISWAP_V3_PATH: u8 = 0x0F;
 
 const PARAM_TOKEN_PATH: u8 = 0x30;
 const PARAM_TOKEN: u8 = 0x31;
@@ -445,6 +449,7 @@ const WORD_GUARD_NE: u8 = 0x01;
 const WORD_GUARD_PAYLOAD_LEN: usize = 33;
 const MAX_SENDER_ADDRESSES: usize = 2;
 const DYNAMIC_KIND_STRING: u8 = 0x01;
+const DYNAMIC_KIND_BYTES: u8 = 0x02;
 const INTERPOLATED_INTENT_VERSION: u8 = 0x01;
 const MAX_INTERPOLATED_SUBSTITUTIONS: usize = 3;
 const MAX_INTERPOLATED_INTENT_LEN: usize = 32;
@@ -464,8 +469,8 @@ const MAX_STRUCT_DEPTH: usize = 8;
 /// formats to fail-closed exclusion until an owner reviews and updates the
 /// enrollment.
 const ROUTER02_DESCRIPTOR_HASH: [u8; 32] = [
-    0x92, 0x56, 0xcb, 0xd0, 0xd0, 0xef, 0x12, 0xf4, 0xad, 0xa2, 0x88, 0xd4, 0x42, 0xc8, 0xc5, 0xf8,
-    0xb1, 0xf6, 0xc5, 0x1a, 0x16, 0x3e, 0xe3, 0x62, 0x7f, 0x5d, 0x30, 0x29, 0x65, 0xdc, 0x51, 0xbe,
+    0xa1, 0x35, 0x68, 0xdb, 0x5a, 0x0f, 0xe9, 0xae, 0xc5, 0xd6, 0xdd, 0x30, 0xbe, 0x22, 0x98, 0xba,
+    0xc6, 0x96, 0x5c, 0x66, 0xda, 0x9d, 0x99, 0x9b, 0x2f, 0x10, 0x07, 0x2a, 0xfc, 0x13, 0xa6, 0x38,
 ];
 
 /// SHA-256(JCS(resolved descriptor JSON)) for the curated Lido
@@ -518,6 +523,9 @@ struct SemanticFormatEnrollment {
     selector: [u8; 4],
     sender: SemanticSenderEnrollment,
     guards: &'static [SemanticWordGuard],
+    /// Permit the narrowly modeled dynamic `(bytes,address,uint256,uint256)`
+    /// Router02 tuple and require exactly one full packed-path formatter.
+    packed_v3_path: bool,
 }
 
 const ROUTER02_EXACT_INPUT_GUARDS: [SemanticWordGuard; 4] = [
@@ -604,7 +612,43 @@ const ROUTER02_MULTIHOP_EXACT_OUTPUT_GUARDS: [SemanticWordGuard; 2] = [
     },
 ];
 
-const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 6] = [
+const ROUTER02_PACKED_EXACT_INPUT_GUARDS: [SemanticWordGuard; 3] = [
+    SemanticWordGuard {
+        path: "params.recipient",
+        terminal_type: "address",
+        operation: WORD_GUARD_NE,
+        word: ADDRESS_TWO_WORD,
+    },
+    SemanticWordGuard {
+        path: "params.amountIn",
+        terminal_type: "uint256",
+        operation: WORD_GUARD_NE,
+        word: ZERO_WORD,
+    },
+    SemanticWordGuard {
+        path: "@.value",
+        terminal_type: "uint256",
+        operation: WORD_GUARD_EQ,
+        word: ZERO_WORD,
+    },
+];
+
+const ROUTER02_PACKED_EXACT_OUTPUT_GUARDS: [SemanticWordGuard; 2] = [
+    SemanticWordGuard {
+        path: "params.recipient",
+        terminal_type: "address",
+        operation: WORD_GUARD_NE,
+        word: ADDRESS_TWO_WORD,
+    },
+    SemanticWordGuard {
+        path: "@.value",
+        terminal_type: "uint256",
+        operation: WORD_GUARD_EQ,
+        word: ZERO_WORD,
+    },
+];
+
+const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 8] = [
     SemanticFormatEnrollment {
         descriptor_hash: ROUTER02_DESCRIPTOR_HASH,
         chain_id: 1,
@@ -618,6 +662,7 @@ const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 6] = [
             sentinels: &ROUTER02_SENDER_SENTINELS,
         },
         guards: &ROUTER02_EXACT_INPUT_GUARDS,
+        packed_v3_path: false,
     },
     SemanticFormatEnrollment {
         descriptor_hash: ROUTER02_DESCRIPTOR_HASH,
@@ -632,6 +677,35 @@ const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 6] = [
             sentinels: &ROUTER02_SENDER_SENTINELS,
         },
         guards: &ROUTER02_EXACT_OUTPUT_GUARDS,
+        packed_v3_path: false,
+    },
+    SemanticFormatEnrollment {
+        descriptor_hash: ROUTER02_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: ROUTER02_MAINNET,
+        canonical_signature: "exactInput((bytes,address,uint256,uint256))",
+        selector: [0xb8, 0x58, 0x18, 0x3f],
+        sender: SemanticSenderEnrollment {
+            path: "params.recipient",
+            terminal_type: "address",
+            sentinels: &ROUTER02_SENDER_SENTINELS,
+        },
+        guards: &ROUTER02_PACKED_EXACT_INPUT_GUARDS,
+        packed_v3_path: true,
+    },
+    SemanticFormatEnrollment {
+        descriptor_hash: ROUTER02_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: ROUTER02_MAINNET,
+        canonical_signature: "exactOutput((bytes,address,uint256,uint256))",
+        selector: [0x09, 0xb8, 0x13, 0x46],
+        sender: SemanticSenderEnrollment {
+            path: "params.recipient",
+            terminal_type: "address",
+            sentinels: &ROUTER02_SENDER_SENTINELS,
+        },
+        guards: &ROUTER02_PACKED_EXACT_OUTPUT_GUARDS,
+        packed_v3_path: true,
     },
     SemanticFormatEnrollment {
         descriptor_hash: ROUTER02_DESCRIPTOR_HASH,
@@ -645,6 +719,7 @@ const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 6] = [
             sentinels: &ROUTER02_SENDER_SENTINELS,
         },
         guards: &ROUTER02_MULTIHOP_EXACT_INPUT_GUARDS,
+        packed_v3_path: false,
     },
     SemanticFormatEnrollment {
         descriptor_hash: ROUTER02_DESCRIPTOR_HASH,
@@ -658,6 +733,7 @@ const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 6] = [
             sentinels: &ROUTER02_SENDER_SENTINELS,
         },
         guards: &ROUTER02_MULTIHOP_EXACT_OUTPUT_GUARDS,
+        packed_v3_path: false,
     },
     SemanticFormatEnrollment {
         descriptor_hash: LIDO_QUEUE_DESCRIPTOR_HASH,
@@ -671,6 +747,7 @@ const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 6] = [
             sentinels: &LIDO_QUEUE_SENDER_SENTINELS,
         },
         guards: &[],
+        packed_v3_path: false,
     },
     SemanticFormatEnrollment {
         descriptor_hash: LIDO_QUEUE_DESCRIPTOR_HASH,
@@ -684,6 +761,7 @@ const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 6] = [
             sentinels: &LIDO_QUEUE_SENDER_SENTINELS,
         },
         guards: &[],
+        packed_v3_path: false,
     },
 ];
 
@@ -3924,6 +4002,16 @@ fn compile_one_format(
             "format `{sig}` declares senderAddress without an exact descriptor/deployment/selector semantic enrollment"
         ));
     }
+    let declares_packed_v3_path = format_declares_packed_v3_path(fmt);
+    let packed_v3_path_enrolled = semantic_enrollment.is_some_and(|entry| entry.packed_v3_path);
+    if declares_packed_v3_path != packed_v3_path_enrolled {
+        return Err(format!(
+            "format `{sig}` packed V3 path formatter requires exactly one matching descriptor/deployment/signature/selector semantic enrollment"
+        ));
+    }
+    if packed_v3_path_enrolled {
+        validate_packed_v3_format_source(sig, fmt, &parsed)?;
+    }
 
     // Sanity: field count.
     if fmt.fields.len() > MAX_FIELDS_PER_FORMAT {
@@ -3996,6 +4084,7 @@ fn compile_one_format(
                     pool,
                     enum_offsets,
                     true,
+                    false,
                 )?,
                 0,
             ),
@@ -4011,6 +4100,7 @@ fn compile_one_format(
                 pool,
                 enum_offsets,
                 false,
+                packed_v3_path_enrolled,
             )?,
             0,
         )
@@ -4115,6 +4205,82 @@ fn format_declares_sender_address(fmt: &Format) -> bool {
             .and_then(serde_json::Value::as_object)
             .is_some_and(|params| params.contains_key("senderAddress"))
     })
+}
+
+fn format_declares_packed_v3_path(fmt: &Format) -> bool {
+    fmt.fields
+        .iter()
+        .any(|field| field.format.as_deref() == Some("uniswapV3Path"))
+}
+
+/// Source-level gate for the only dynamic-tuple shape the trusted IR admits.
+/// The exact descriptor hash and deployment enrollment are necessary but not
+/// sufficient: independently require the reviewed Router02 tuple/member names
+/// and one visible full-path field so a future curation cannot reuse the
+/// capability for a different `bytes` meaning.
+fn validate_packed_v3_format_source(
+    sig: &str,
+    fmt: &Format,
+    parsed: &ParsedFormatKey,
+) -> Result<(), String> {
+    let expected_members: &[&str] = match parsed.types_signature.as_str() {
+        "exactInput((bytes,address,uint256,uint256))" => {
+            &["path", "recipient", "amountIn", "amountOutMinimum"]
+        }
+        "exactOutput((bytes,address,uint256,uint256))" => {
+            &["path", "recipient", "amountOut", "amountInMaximum"]
+        }
+        _ => {
+            return Err(format!(
+                "format `{sig}` is not an enrolled Router02 packed V3 signature"
+            ))
+        }
+    };
+    if parsed.top_names != ["params"]
+        || parsed.top_types != ["(bytes,address,uint256,uint256)"]
+        || parsed.inner_types.get("params").map(Vec::as_slice)
+            != Some(&[
+                "bytes".to_string(),
+                "address".to_string(),
+                "uint256".to_string(),
+                "uint256".to_string(),
+            ])
+        || parsed
+            .inner_names
+            .get("params")
+            .map(|names| names.iter().map(String::as_str).collect::<Vec<_>>())
+            .as_deref()
+            != Some(expected_members)
+    {
+        return Err(format!(
+            "format `{sig}` does not have the exact enrolled `(bytes path,address recipient,uint256,uint256) params` shape"
+        ));
+    }
+
+    let packed_fields = fmt
+        .fields
+        .iter()
+        .filter(|field| field.format.as_deref() == Some("uniswapV3Path"))
+        .collect::<Vec<_>>();
+    if packed_fields.len() != 1 {
+        return Err(format!(
+            "format `{sig}` requires exactly one uniswapV3Path field, found {}",
+            packed_fields.len()
+        ));
+    }
+    let field = packed_fields[0];
+    if field.path.as_deref() != Some("params.path")
+        || field.visible.as_deref() != Some("always")
+        || field
+            .params
+            .as_ref()
+            .is_some_and(|params| !params.as_object().is_some_and(serde_json::Map::is_empty))
+    {
+        return Err(format!(
+            "format `{sig}` packed path must be the visible, parameter-free full `params.path` field"
+        ));
+    }
+    Ok(())
 }
 
 fn compile_sender_addresses(
@@ -4666,6 +4832,7 @@ fn format_interprets_numeric_sign(format_op: u8) -> bool {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_one_field(
     sig: &str,
     field_idx: usize,
@@ -4677,6 +4844,33 @@ fn compile_one_field(
     enum_offsets: &BTreeMap<String, u16>,
     emit_nested_marker: bool,
 ) -> Result<CompiledFieldOut, String> {
+    compile_one_field_with_profile(
+        sig,
+        field_idx,
+        field,
+        context_kind,
+        parsed,
+        ctx,
+        pool,
+        enum_offsets,
+        emit_nested_marker,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_one_field_with_profile(
+    sig: &str,
+    field_idx: usize,
+    field: &FieldDef,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+    ctx: &mut CompileCtx,
+    pool: &mut Pool,
+    enum_offsets: &BTreeMap<String, u16>,
+    emit_nested_marker: bool,
+    allow_packed_v3_path: bool,
+) -> Result<CompiledFieldOut, String> {
     if field.path.is_some() && field.value.is_some() {
         return Err(format!(
             "format `{sig}` field[{field_idx}] carries both `path` and constant `value`"
@@ -4686,8 +4880,9 @@ fn compile_one_field(
     //    annotation field, capture its literal string.
     let (path_off, const_value): (u16, Option<String>) = match field.path.as_deref() {
         Some(path) => {
-            let path_program = compile_path(path, context_kind, parsed)
-                .map_err(|e| format!("format `{sig}` field[{field_idx}] path `{path}`: {e}"))?;
+            let path_program =
+                compile_path_with_profile(path, context_kind, parsed, allow_packed_v3_path)
+                    .map_err(|e| format!("format `{sig}` field[{field_idx}] path `{path}`: {e}"))?;
             if path_program.len() > MAX_PATH_PROGRAM_LEN {
                 return Err(format!(
                     "format `{sig}` field[{field_idx}] path program too long ({} > {MAX_PATH_PROGRAM_LEN})",
@@ -4799,6 +4994,7 @@ fn compile_one_field(
                     "format `{sig}` field[{field_idx}] dynamic `string` must use raw format; opcode 0x{format_op:02x} semantics cannot be ignored"
                 ));
             }
+            Some("bytes") if format_op == FMT_UNISWAP_V3_PATH && allow_packed_v3_path => {}
             Some("bytes") => {
                 return Err(format!(
                     "format `{sig}` field[{field_idx}] has opaque dynamic `bytes`; the runtime intentionally has no injective renderer for arbitrary semantic bytes and would hard-refuse every payload, so this unusable format must not be advertised in the authenticated catalogue"
@@ -4819,6 +5015,7 @@ fn compile_one_field(
         parsed,
         ctx,
         enum_offsets,
+        allow_packed_v3_path,
     )?;
     if let Some(cv) = &const_value {
         push_tlv(&mut param_blob, PARAM_CONST_VALUE, cv.as_bytes())?;
@@ -4827,6 +5024,9 @@ fn compile_one_field(
         match terminal_type.as_deref() {
             Some("string") => {
                 push_tlv(&mut param_blob, PARAM_DYNAMIC_KIND, &[DYNAMIC_KIND_STRING])?
+            }
+            Some("bytes") if format_op == FMT_UNISWAP_V3_PATH && allow_packed_v3_path => {
+                push_tlv(&mut param_blob, PARAM_DYNAMIC_KIND, &[DYNAMIC_KIND_BYTES])?
             }
             _ => {}
         }
@@ -4904,10 +5104,11 @@ fn compile_flat_fields(
     pool: &mut Pool,
     enum_offsets: &BTreeMap<String, u16>,
     emit_bare_marker: bool,
+    allow_packed_v3_path: bool,
 ) -> Result<Vec<CompiledFieldOut>, String> {
     let mut compiled: Vec<CompiledFieldOut> = Vec::with_capacity(fmt.fields.len());
     for (i, field) in fmt.fields.iter().enumerate() {
-        let cf = compile_one_field(
+        let cf = compile_one_field_with_profile(
             sig,
             i,
             field,
@@ -4917,6 +5118,7 @@ fn compile_flat_fields(
             pool,
             enum_offsets,
             emit_bare_marker && i == 0,
+            allow_packed_v3_path,
         )?;
         compiled.push(cf);
     }
@@ -5698,6 +5900,7 @@ fn compile_params(
     parsed: &ParsedFormatKey,
     ctx: &mut CompileCtx,
     enum_offsets: &BTreeMap<String, u16>,
+    allow_packed_v3_path: bool,
 ) -> Result<Vec<u8>, String> {
     let mut out: Vec<u8> = Vec::new();
 
@@ -5756,7 +5959,8 @@ fn compile_params(
         FMT_UNIT => &["base", "decimals", "prefix"],
         FMT_CALLDATA => &["selector", "calleePath"],
         FMT_ENCRYPTED => &["fallbackLabel"],
-        FMT_RAW | FMT_AMOUNT | FMT_DURATION | FMT_CHAIN_ID | FMT_TOKEN_TICKER => &[],
+        FMT_RAW | FMT_AMOUNT | FMT_DURATION | FMT_CHAIN_ID | FMT_TOKEN_TICKER
+        | FMT_UNISWAP_V3_PATH => &[],
         _ => return Err(format!("unknown format opcode: 0x{format_op:02x}")),
     };
     for key in params.keys() {
@@ -5774,8 +5978,9 @@ fn compile_params(
                 let tp = tp
                     .as_str()
                     .ok_or_else(|| "tokenAmount.tokenPath must be a string".to_string())?;
-                let prog = compile_token_path(tp, context_kind, parsed)
-                    .map_err(|e| format!("tokenPath `{tp}`: {e}"))?;
+                let prog =
+                    compile_token_path_with_profile(tp, context_kind, parsed, allow_packed_v3_path)
+                        .map_err(|e| format!("tokenPath `{tp}`: {e}"))?;
                 push_tlv(&mut out, PARAM_TOKEN_PATH, &prog)?;
             }
             if let Some(t) = params.get("token") {
@@ -5985,7 +6190,7 @@ fn compile_params(
             let s = clean_ascii_truncated(label, MAX_POOL_TLV_PAYLOAD);
             push_tlv(&mut out, PARAM_FALLBACK_LABEL, s.as_bytes())?;
         }
-        FMT_RAW | FMT_AMOUNT | FMT_CHAIN_ID | FMT_TOKEN_TICKER => {
+        FMT_RAW | FMT_AMOUNT | FMT_CHAIN_ID | FMT_TOKEN_TICKER | FMT_UNISWAP_V3_PATH => {
             // No formatter-specific params on the seed corpus today.
             // Any unrecognized keys are ignored — keeps us forward-
             // compatible with future spec extensions.
@@ -6011,6 +6216,7 @@ fn parse_format_name(name: &str) -> Result<u8, String> {
         "chainId" => FMT_CHAIN_ID,
         "tokenTicker" => FMT_TOKEN_TICKER,
         "interoperableAddressName" => FMT_INTEROP_ADDR_NAME,
+        "uniswapV3Path" => FMT_UNISWAP_V3_PATH,
         // WYSIWYS (audit 2026-06-29): `encrypted` is REFUSED. There is no
         // honest way to clear-sign a value the format says to hide — the
         // firmware renderer would commit the field's path to the signed
@@ -7674,7 +7880,16 @@ fn parse_fixed_array_len(suffix: &str) -> Result<Option<u32>, String> {
 /// the tokenPath-only-slice invariant: only [`compile_token_path`] may emit an
 /// extraction op, so a slice can never reach a shown value.
 fn compile_path(path: &str, context_kind: u8, parsed: &ParsedFormatKey) -> Result<Vec<u8>, String> {
-    compile_path_inner(path, context_kind, parsed, false)
+    compile_path_with_profile(path, context_kind, parsed, false)
+}
+
+fn compile_path_with_profile(
+    path: &str,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+    allow_packed_v3_path: bool,
+) -> Result<Vec<u8>, String> {
+    compile_path_inner(path, context_kind, parsed, false, allow_packed_v3_path)
 }
 
 /// Compile a `tokenPath` (a `tokenAmount`'s token-IDENTIFICATION address).
@@ -7689,7 +7904,16 @@ fn compile_token_path(
     context_kind: u8,
     parsed: &ParsedFormatKey,
 ) -> Result<Vec<u8>, String> {
-    let program = compile_path_inner(path, context_kind, parsed, true)?;
+    compile_token_path_with_profile(path, context_kind, parsed, false)
+}
+
+fn compile_token_path_with_profile(
+    path: &str,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+    allow_packed_v3_path: bool,
+) -> Result<Vec<u8>, String> {
+    let program = compile_path_inner(path, context_kind, parsed, true, allow_packed_v3_path)?;
     let exact_scalar = token_path_surfaces_exact_scalar_address(path, context_kind, parsed);
     let authenticated_target = program.as_slice() == NFT_COLLECTION_TO_PATH.as_slice();
     let checked_extraction = token_path_uses_checked_address_extraction(path, context_kind)?;
@@ -7736,6 +7960,7 @@ fn compile_path_inner(
     context_kind: u8,
     parsed: &ParsedFormatKey,
     is_token_path: bool,
+    allow_packed_v3_path: bool,
 ) -> Result<Vec<u8>, String> {
     let path = path.trim();
     if path.is_empty() {
@@ -7797,7 +8022,13 @@ fn compile_path_inner(
     //     another. See `compile_structured_contract_path` +
     //     `docs/security/vulns/VULN-erc7730-walker-slot-confusion.md`.
     if root == PATHOP_ROOT_STRUCT && context_kind == CTX_CONTRACT {
-        compile_structured_contract_path(&tokenize_path(rest)?, parsed, &mut out, is_token_path)?;
+        compile_structured_contract_path(
+            &tokenize_path(rest)?,
+            parsed,
+            &mut out,
+            is_token_path,
+            allow_packed_v3_path,
+        )?;
         return Ok(out);
     }
 
@@ -7854,11 +8085,32 @@ fn compile_path_inner(
 ///   * terminates on a non-single-word type (dynamic, or a multi-word
 ///     array/tuple the renderer would misread as one 32-byte word);
 ///   * names a field absent from the function signature.
+fn is_exact_router02_packed_v3_shape(parsed: &ParsedFormatKey) -> bool {
+    let exact_signature = matches!(
+        parsed.types_signature.as_str(),
+        "exactInput((bytes,address,uint256,uint256))"
+            | "exactOutput((bytes,address,uint256,uint256))"
+    );
+    let exact_top = parsed.top_names.len() == 1
+        && parsed.top_names[0] == "params"
+        && parsed.top_types.len() == 1
+        && parsed.top_types[0] == "(bytes,address,uint256,uint256)";
+    let exact_types = parsed.inner_types.get("params").is_some_and(|types| {
+        types.len() == 4
+            && types[0] == "bytes"
+            && types[1] == "address"
+            && types[2] == "uint256"
+            && types[3] == "uint256"
+    });
+    exact_signature && exact_top && exact_types
+}
+
 fn compile_structured_contract_path(
     segs: &[PathSeg<'_>],
     parsed: &ParsedFormatKey,
     out: &mut Vec<u8>,
     is_token_path: bool,
+    allow_packed_v3_path: bool,
 ) -> Result<(), String> {
     // A trailing `[]` (ArrayAll) renders EVERY element of a top-level dynamic
     // array — the only array op the renderer supports. Single-index `[i]` /
@@ -7883,7 +8135,13 @@ fn compile_structured_contract_path(
                     | PathSeg::ArraySlice(_, _)
                     | PathSeg::ArraySliceLast(_)
             ) {
-                return compile_token_path_extraction(&segs[..segs.len() - 1], last, parsed, out);
+                return compile_token_path_extraction(
+                    &segs[..segs.len() - 1],
+                    last,
+                    parsed,
+                    out,
+                    allow_packed_v3_path,
+                );
             }
         }
     }
@@ -7986,9 +8244,21 @@ fn compile_structured_contract_path(
                 ));
             }
             if static_head_words(this_ty)? == HeadWidth::Dynamic {
-                return Err(format!(
-                    "path descends through dynamic tuple `{name}` (`{this_ty}`); C2 tail topology is not represented in trusted IR"
-                ));
+                if !allow_packed_v3_path
+                    || depth != 0
+                    || pos != 0
+                    || names.len() != 2
+                    || !is_exact_router02_packed_v3_shape(parsed)
+                {
+                    return Err(format!(
+                        "path descends through dynamic tuple `{name}` (`{this_ty}`); C2 tail topology is not represented in trusted IR"
+                    ));
+                }
+                // Exact Router02 exception: the sole top-level dynamic tuple
+                // begins at offset 32 and has the reviewed four-word local
+                // head. Runtime re-proves both offsets and whole-tail framing
+                // before any page is painted.
+                out.push(PATHOP_FOLLOW_OFFSET);
             }
             let inner = parsed.inner_types.get(name).ok_or_else(|| {
                 format!("path descends into `{name}`, which is not a parsed tuple argument")
@@ -8024,6 +8294,7 @@ fn compile_token_path_extraction(
     extract: &PathSeg<'_>,
     parsed: &ParsedFormatKey,
     out: &mut Vec<u8>,
+    allow_packed_v3_path: bool,
 ) -> Result<(), String> {
     const ADDR_SLICE_LEN: u32 = 20;
 
@@ -8078,9 +8349,17 @@ fn compile_token_path_extraction(
                 ));
             }
             if static_head_words(this_ty)? == HeadWidth::Dynamic {
-                return Err(format!(
-                    "tokenPath descends through dynamic tuple `{name}` (`{this_ty}`); C2 tail topology is not represented in trusted IR"
-                ));
+                if !allow_packed_v3_path
+                    || depth != 0
+                    || pos != 0
+                    || names.len() != 2
+                    || !is_exact_router02_packed_v3_shape(parsed)
+                {
+                    return Err(format!(
+                        "tokenPath descends through dynamic tuple `{name}` (`{this_ty}`); C2 tail topology is not represented in trusted IR"
+                    ));
+                }
+                out.push(PATHOP_FOLLOW_OFFSET);
             }
             let inner = parsed.inner_types.get(name).ok_or_else(|| {
                 format!("tokenPath descends into `{name}`, which is not a parsed tuple argument")
@@ -8841,6 +9120,7 @@ fn fmt_op_name(op: u8) -> &'static str {
         0x0C => "tokenTicker",
         0x0D => "interopAddressName",
         0x0E => "encrypted",
+        0x0F => "uniswapV3Path",
         _ => "?unknown",
     }
 }
@@ -11368,6 +11648,7 @@ mod tests {
             FormatOp::InteroperableAddressName as u8
         );
         assert_eq!(FMT_ENCRYPTED, FormatOp::Encrypted as u8);
+        assert_eq!(FMT_UNISWAP_V3_PATH, FormatOp::UniswapV3Path as u8);
 
         // Param TLV tags.
         assert_eq!(PARAM_TOKEN_PATH, params::PARAM_TOKEN_PATH);
@@ -12699,6 +12980,91 @@ mod tests {
         (signature, format)
     }
 
+    fn router02_packed_format(exact_input: bool) -> (&'static str, Format) {
+        let (
+            signature,
+            amount_in_path,
+            amount_in_label,
+            amount_out_path,
+            amount_out_label,
+            token_in_path,
+            token_out_path,
+        ) = if exact_input {
+            (
+                "exactInput((bytes path,address recipient,uint256 amountIn,uint256 amountOutMinimum) params)",
+                "params.amountIn",
+                "Swap input",
+                "params.amountOutMinimum",
+                "Minimum to Receive",
+                "params.path.[0:20]",
+                "params.path.[-20:]",
+            )
+        } else {
+            (
+                "exactOutput((bytes path,address recipient,uint256 amountOut,uint256 amountInMaximum) params)",
+                "params.amountInMaximum",
+                "Max swap input",
+                "params.amountOut",
+                "Amount to Receive",
+                "params.path.[-20:]",
+                "params.path.[0:20]",
+            )
+        };
+        let format = serde_json::from_value(serde_json::json!({
+            "intent": "Swap",
+            "fields": [
+                {
+                    "path": "@.value", "label": "Native value", "format": "amount",
+                    "visible": "always"
+                },
+                {
+                    "path": amount_in_path, "label": amount_in_label, "format": "tokenAmount",
+                    "params": { "tokenPath": token_in_path }, "visible": "always"
+                },
+                {
+                    "path": amount_out_path, "label": amount_out_label, "format": "tokenAmount",
+                    "params": { "tokenPath": token_out_path }, "visible": "always"
+                },
+                {
+                    "path": "params.path", "label": "Route", "format": "uniswapV3Path",
+                    "visible": "always"
+                },
+                {
+                    "path": "params.recipient", "label": "Beneficiary", "format": "addressName",
+                    "params": {
+                        "types": ["eoa", "contract"], "sources": ["local", "ens"],
+                        "senderAddress": ["0x0000000000000000000000000000000000000001"]
+                    },
+                    "visible": "always"
+                }
+            ]
+        }))
+        .expect("valid packed Router02 test format");
+        (signature, format)
+    }
+
+    fn compile_router02_packed_test_format(
+        exact_input: bool,
+        ctx: &mut CompileCtx,
+        deployment: &InterpolationDeployment<'_>,
+    ) -> Result<(Pool, Vec<u8>, Vec<u16>), String> {
+        let (sig, fmt) = router02_packed_format(exact_input);
+        let mut pool = Pool::new();
+        let mut format = Vec::new();
+        compile_one_format(
+            sig,
+            &fmt,
+            CTX_CONTRACT,
+            ctx,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut format,
+            Some(deployment),
+        )?;
+        let offsets = contract_format_param_offsets(&format);
+        Ok((pool, format, offsets))
+    }
+
     fn contract_format_param_offsets(format: &[u8]) -> Vec<u16> {
         assert!(format.len() >= 9, "contract format header");
         let field_count = format[4] as usize;
@@ -12844,6 +13210,121 @@ mod tests {
     }
 
     #[test]
+    fn packed_v3_path_requires_exact_enrollment_and_reviewed_source_shape() {
+        let capabilities = Erc20Capabilities::default();
+        let exact = InterpolationDeployment {
+            chain_id: 1,
+            contract: ROUTER02_MAINNET,
+            erc20_capabilities: &capabilities,
+        };
+
+        for exact_input in [true, false] {
+            let mut ctx = test_ctx();
+            ctx.descriptor_hash = ROUTER02_DESCRIPTOR_HASH;
+            let (pool, format, offsets) =
+                compile_router02_packed_test_format(exact_input, &mut ctx, &exact)
+                    .expect("exact packed enrollment compiles");
+            assert_eq!(offsets.len(), 5);
+            assert_eq!(format[4], 5);
+            assert_eq!(
+                find_tlv(&pool, offsets[3], PARAM_DYNAMIC_KIND),
+                Some(&[DYNAMIC_KIND_BYTES][..])
+            );
+
+            for (descriptor_hash, deployment) in [
+                ([0x55; 32], exact),
+                (
+                    ROUTER02_DESCRIPTOR_HASH,
+                    InterpolationDeployment {
+                        chain_id: 10,
+                        ..exact
+                    },
+                ),
+                (
+                    ROUTER02_DESCRIPTOR_HASH,
+                    InterpolationDeployment {
+                        contract: [0x44; 20],
+                        ..exact
+                    },
+                ),
+            ] {
+                let mut ctx = test_ctx();
+                ctx.descriptor_hash = descriptor_hash;
+                let error = compile_router02_packed_test_format(exact_input, &mut ctx, &deployment)
+                    .err()
+                    .expect("any enrollment-key mismatch must refuse");
+                assert!(
+                    error.contains("without an exact")
+                        || error.contains("packed V3 path formatter requires"),
+                    "{error}"
+                );
+            }
+
+            let (sig, mut missing_marker) = router02_packed_format(exact_input);
+            missing_marker.fields[3].format = Some("raw".to_string());
+            let mut ctx = test_ctx();
+            ctx.descriptor_hash = ROUTER02_DESCRIPTOR_HASH;
+            let error = compile_one_format(
+                sig,
+                &missing_marker,
+                CTX_CONTRACT,
+                &mut ctx,
+                &mut Pool::new(),
+                &BTreeMap::new(),
+                &mut Vec::new(),
+                Some(&exact),
+            )
+            .expect_err("an enrolled selector without its complete route marker must refuse");
+            assert!(
+                error.contains("packed V3 path formatter requires"),
+                "{error}"
+            );
+
+            let (sig, mut wrong_path) = router02_packed_format(exact_input);
+            wrong_path.fields[3].path = Some("params.recipient".to_string());
+            let mut ctx = test_ctx();
+            ctx.descriptor_hash = ROUTER02_DESCRIPTOR_HASH;
+            let error = compile_one_format(
+                sig,
+                &wrong_path,
+                CTX_CONTRACT,
+                &mut ctx,
+                &mut Pool::new(),
+                &BTreeMap::new(),
+                &mut Vec::new(),
+                Some(&exact),
+            )
+            .expect_err("the packed formatter must consume the complete params.path");
+            assert!(
+                error.contains("full `params.path` field")
+                    || error.contains("tuple member `params.path`"),
+                "{error}"
+            );
+        }
+
+        let (sig, unreviewed) = router02_packed_format(true);
+        let unrelated_sig = sig.replacen("exactInput", "otherInput", 1);
+        let mut ctx = test_ctx();
+        ctx.descriptor_hash = ROUTER02_DESCRIPTOR_HASH;
+        let error = compile_one_format(
+            &unrelated_sig,
+            &unreviewed,
+            CTX_CONTRACT,
+            &mut ctx,
+            &mut Pool::new(),
+            &BTreeMap::new(),
+            &mut Vec::new(),
+            Some(&exact),
+        )
+        .expect_err("an unrelated selector must not gain the packed capability");
+        assert!(
+            error.contains("without an exact")
+                || error.contains("packed V3 path formatter requires"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn exact_enrollment_requires_every_visible_guard_path_once() {
         let capabilities = Erc20Capabilities::default();
         let deployment = InterpolationDeployment {
@@ -12943,6 +13424,14 @@ mod tests {
             ),
             (
                 ROUTER02_MAINNET,
+                "exactInput((bytes,address,uint256,uint256))",
+            ),
+            (
+                ROUTER02_MAINNET,
+                "exactOutput((bytes,address,uint256,uint256))",
+            ),
+            (
+                ROUTER02_MAINNET,
                 "swapExactTokensForTokens(uint256,uint256,address[],address)",
             ),
             (
@@ -12979,7 +13468,7 @@ mod tests {
     }
 
     #[test]
-    fn production_router02_tolerant_compile_emits_exactly_four_guarded_formats() {
+    fn production_router02_tolerant_compile_emits_all_six_guarded_formats() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("workspace root")
@@ -13013,10 +13502,88 @@ mod tests {
             BTreeSet::from([
                 [0x04, 0xe4, 0x5a, 0xaf],
                 [0x50, 0x23, 0xb4, 0xdf],
+                [0xb8, 0x58, 0x18, 0x3f],
+                [0x09, 0xb8, 0x13, 0x46],
                 [0x47, 0x2b, 0x43, 0xf3],
                 [0x42, 0x71, 0x2a, 0x67],
             ])
         );
+
+        for (selector, exact_input) in [
+            ([0xb8, 0x58, 0x18, 0x3f], true),
+            ([0x09, 0xb8, 0x13, 0x46], false),
+        ] {
+            let format = ir
+                .find_format_by_selector(&selector)
+                .expect("Router02 format table parses")
+                .expect("enrolled packed-route selector");
+            assert_eq!(format.static_head_words, 1);
+            let fields: Vec<_> = format
+                .fields()
+                .map(|field| field.expect("packed Router02 field parses"))
+                .collect();
+            assert_eq!(fields.len(), 5);
+            assert_eq!(fields[0].label, b"Native value");
+            assert_eq!(fields[3].format_op, FMT_UNISWAP_V3_PATH);
+            assert_eq!(fields[3].label, b"Route");
+            assert_eq!(fields[4].label, b"Beneficiary");
+            assert_eq!(
+                ir.path_bytes(fields[3].path_off)
+                    .expect("packed route path parses"),
+                [
+                    PATHOP_ROOT_STRUCT,
+                    PATHOP_FIELD_IDX,
+                    0,
+                    0,
+                    PATHOP_FOLLOW_OFFSET,
+                    PATHOP_FIELD_IDX,
+                    0,
+                    0,
+                    PATHOP_FOLLOW_OFFSET,
+                ]
+            );
+
+            let params: Vec<_> = fields
+                .iter()
+                .map(|field| {
+                    pqsigner_erc7730::render::params::parse(&ir, field.param_off)
+                        .expect("packed Router02 params parse")
+                })
+                .collect();
+            assert_eq!(params[3].dynamic_kind, Some(DYNAMIC_KIND_BYTES));
+            assert!(params[3].token_path.is_none());
+            assert_eq!(params[4].sender_addresses, Some(ADDRESS_ONE.as_slice()));
+            assert_eq!(
+                params[0].word_guard.expect("value guard").mode(),
+                WORD_GUARD_EQ
+            );
+            assert_eq!(
+                params[0].word_guard.expect("value guard").expected(),
+                &ZERO_WORD
+            );
+            assert_eq!(
+                params[4].word_guard.expect("recipient guard").mode(),
+                WORD_GUARD_NE
+            );
+            assert_eq!(
+                params[4].word_guard.expect("recipient guard").expected(),
+                &ADDRESS_TWO_WORD
+            );
+            if exact_input {
+                assert_eq!(
+                    params[1].word_guard.expect("input guard").mode(),
+                    WORD_GUARD_NE
+                );
+                assert_eq!(
+                    params[1].word_guard.expect("input guard").expected(),
+                    &ZERO_WORD
+                );
+            } else {
+                assert!(params[1].word_guard.is_none());
+            }
+            assert!(params[2].word_guard.is_none());
+            assert!(params[3].word_guard.is_none());
+        }
 
         for (selector, exact_input) in [
             ([0x47, 0x2b, 0x43, 0xf3], true),
@@ -13092,13 +13659,10 @@ mod tests {
             assert!(params[2].word_guard.is_none());
             assert!(params[3].word_guard.is_none());
         }
-        assert_eq!(
-            drops.len(),
-            2,
-            "only the two packed-byte routes remain explicit partial drops"
+        assert!(
+            drops.is_empty(),
+            "all six Router02 formats are complete and enrolled: {drops:#?}"
         );
-        assert!(drops.iter().any(|drop| drop.contains("`exactInput(")));
-        assert!(drops.iter().any(|drop| drop.contains("`exactOutput(")));
     }
 
     #[test]

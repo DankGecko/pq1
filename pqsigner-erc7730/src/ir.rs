@@ -103,6 +103,17 @@ pub const MAX_POOL_ENTRY_LEN: usize = 256;
 /// mirrors that policy so a hostile authenticated IR cannot reintroduce it.
 pub const ERC20_APPROVE_SELECTOR: [u8; 4] = [0x09, 0x5E, 0xA7, 0xB3];
 
+/// The first packed-path capability is deliberately deployment-scoped. These
+/// constants are device-side belts behind dbgen's descriptor-hash enrollment;
+/// a selector collision at any other address remains ordinary unsupported C2.
+pub const UNISWAP_ROUTER02_CHAIN_ID: u64 = 1;
+pub const UNISWAP_ROUTER02_MAINNET: [u8; 20] = [
+    0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
+    0x86, 0x65, 0xfc, 0x45,
+];
+pub const UNISWAP_V3_EXACT_INPUT_SELECTOR: [u8; 4] = [0xb8, 0x58, 0x18, 0x3f];
+pub const UNISWAP_V3_EXACT_OUTPUT_SELECTOR: [u8; 4] = [0x09, 0xb8, 0x13, 0x46];
+
 pub const OWNER_FIELD_LEN: usize = 16;
 pub const CONTRACT_NAME_FIELD_LEN: usize = 16;
 
@@ -247,6 +258,12 @@ pub enum FormatOp {
     TokenTicker = 0x0C,
     InteroperableAddressName = 0x0D,
     Encrypted = 0x0E,
+    /// PQSigner-authenticated rendering of the complete Uniswap V3 packed
+    /// `token(20) | fee(3) | token(20) ...` path. Admission is additionally
+    /// restricted to exact Router02 semantic enrollments by dbgen and the
+    /// contract-calldata preflight; this is not a generic dynamic-bytes
+    /// formatter.
+    UniswapV3Path = 0x0F,
 }
 
 impl FormatOp {
@@ -254,7 +271,7 @@ impl FormatOp {
     /// semantic-documentation guards iterate this array instead of maintaining
     /// a second list that can silently swap entries (notably `NftName = 0x04`
     /// and `Unit = 0x09`).
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Raw,
         Self::Amount,
         Self::TokenAmount,
@@ -269,6 +286,7 @@ impl FormatOp {
         Self::TokenTicker,
         Self::InteroperableAddressName,
         Self::Encrypted,
+        Self::UniswapV3Path,
     ];
 
     /// ERC-7730 JSON spelling compiled to this wire opcode.
@@ -289,6 +307,7 @@ impl FormatOp {
             Self::TokenTicker => "tokenTicker",
             Self::InteroperableAddressName => "interoperableAddressName",
             Self::Encrypted => "encrypted",
+            Self::UniswapV3Path => "uniswapV3Path",
         }
     }
 }
@@ -311,6 +330,7 @@ impl TryFrom<u8> for FormatOp {
             0x0C => Ok(FormatOp::TokenTicker),
             0x0D => Ok(FormatOp::InteroperableAddressName),
             0x0E => Ok(FormatOp::Encrypted),
+            0x0F => Ok(FormatOp::UniswapV3Path),
             _ => Err(IrError::BadField),
         }
     }
@@ -538,9 +558,16 @@ impl<'a> Erc7730Ir<'a> {
             let mut interpolated_intent = None;
             let mut actual_nested_descents = 0u8;
             let mut saw_bare_nested_marker = false;
+            let mut packed_v3_path_fields = 0u8;
+            let packed_v3_identity = is_uniswap_router02_packed_identity(self, &header);
             while let Some(field) = fields.next() {
                 let field = field?;
                 let op = FormatOp::try_from(field.format_op)?;
+                if op == FormatOp::UniswapV3Path {
+                    packed_v3_path_fields = packed_v3_path_fields
+                        .checked_add(1)
+                        .ok_or(IrError::OverCap)?;
+                }
                 if field.path_off != 0 {
                     let path = self.path_bytes(field.path_off)?;
                     validate_path_program(path)?;
@@ -556,7 +583,7 @@ impl<'a> Erc7730Ir<'a> {
                     .map_err(|_| IrError::BadPoolEntry)?;
                 let kind = params.terminal_kind.ok_or(IrError::BadField)?;
 
-                validate_word_guard(self, &field, kind, &params)?;
+                validate_word_guard(self, &field, kind, &params, packed_v3_identity)?;
 
                 if params.visibility != Visibility::Never
                     && !crate::render::policy::label_has_visible_glyph(field.label)
@@ -631,6 +658,7 @@ impl<'a> Erc7730Ir<'a> {
             if fields.cursor() != header.fields_buf.len() {
                 return Err(IrError::BadFormat);
             }
+            validate_uniswap_v3_format(self, &header, packed_v3_path_fields, packed_v3_identity)?;
             if let Some(program) = interpolated_intent {
                 // Belt behind `InterpolatedIntentProgram::parse`: the current
                 // executable subset is exactly one substitution followed by
@@ -791,6 +819,190 @@ fn validate_terminal_path_shape(
     Ok(())
 }
 
+fn is_uniswap_router02_packed_identity(ir: &Erc7730Ir<'_>, format: &FormatHeader<'_>) -> bool {
+    matches!(ir.context_kind, ContextKind::Contract)
+        && ir.chain_id == UNISWAP_ROUTER02_CHAIN_ID
+        && ir.contract == UNISWAP_ROUTER02_MAINNET
+        && matches!(
+            format.selector,
+            UNISWAP_V3_EXACT_INPUT_SELECTOR | UNISWAP_V3_EXACT_OUTPUT_SELECTOR
+        )
+}
+
+fn router02_packed_member_path(path: &[u8], member: u16, dynamic: bool) -> bool {
+    let expected_len = if dynamic { 9 } else { 8 };
+    path.len() == expected_len
+        && path[0] == PathOp::RootStructured as u8
+        && path[1] == PathOp::FieldIdx as u8
+        && path[2..4] == [0, 0]
+        && path[4] == PathOp::FollowOffset as u8
+        && path[5] == PathOp::FieldIdx as u8
+        && path[6..8] == member.to_be_bytes()
+        && (!dynamic || path[8] == PathOp::FollowOffset as u8)
+}
+
+fn is_router02_packed_scalar_path(path: &[u8]) -> bool {
+    (1..=3).any(|member| router02_packed_member_path(path, member, false))
+}
+
+fn is_router02_packed_token_path(path: &[u8], member: u16) -> bool {
+    if path.len() != 15
+        || !router02_packed_member_path(&path[..9], 0, true)
+        || path[9] != PathOp::ArraySlice as u8
+        || path[12..14] != 20u16.to_be_bytes()
+    {
+        return false;
+    }
+    match member {
+        2 => path[10..12] == 0u16.to_be_bytes() && path[14] == 0,
+        3 => path[10..12] == 0u16.to_be_bytes() && path[14] == 1,
+        _ => false,
+    }
+}
+
+/// Deep device-side belt for the only active C2 format. A forged authenticated
+/// IR cannot use the new opcode as a generic `bytes` renderer or reuse the
+/// Router02 selector while changing the five reviewed operand roles.
+fn validate_uniswap_v3_format(
+    ir: &Erc7730Ir<'_>,
+    format: &FormatHeader<'_>,
+    packed_fields: u8,
+    packed_identity: bool,
+) -> Result<(), IrError> {
+    if packed_fields == 0 {
+        return Ok(());
+    }
+    if packed_fields != 1
+        || !packed_identity
+        || format.static_head_words != 1
+        || format.field_count != 5
+        || format.nested_descent_count != 0
+    {
+        return Err(IrError::BadFormat);
+    }
+
+    let mut saw_value = false;
+    let mut saw_amount_member_2 = false;
+    let mut saw_amount_member_3 = false;
+    let mut saw_recipient = false;
+    let mut saw_route = false;
+    let zero_word = [0u8; 32];
+    let mut address_two_word = [0u8; 32];
+    address_two_word[31] = 2;
+    for field in format.fields() {
+        let field = field?;
+        let op = FormatOp::try_from(field.format_op)?;
+        let params =
+            crate::render::params::parse(ir, field.param_off).map_err(|_| IrError::BadPoolEntry)?;
+        if params.visibility != Visibility::Always {
+            return Err(IrError::BadField);
+        }
+        let path = ir.path_bytes(field.path_off)?;
+        match op {
+            FormatOp::Amount => {
+                let value = crate::abi::container_field::VALUE.to_be_bytes();
+                if saw_value
+                    || field.label != b"Native value"
+                    || path
+                        != [
+                            PathOp::RootContainer as u8,
+                            PathOp::FieldIdx as u8,
+                            value[0],
+                            value[1],
+                        ]
+                    || !params.word_guard.is_some_and(|guard| {
+                        guard.mode() == crate::render::params::WORD_GUARD_EQ
+                            && guard.expected() == &zero_word
+                    })
+                {
+                    return Err(IrError::BadField);
+                }
+                saw_value = true;
+            }
+            FormatOp::TokenAmount => {
+                let member = if router02_packed_member_path(path, 2, false) {
+                    2
+                } else if router02_packed_member_path(path, 3, false) {
+                    3
+                } else {
+                    return Err(IrError::BadField);
+                };
+                if !params
+                    .token_path
+                    .is_some_and(|token_path| is_router02_packed_token_path(token_path, member))
+                {
+                    return Err(IrError::BadField);
+                }
+                let (seen, expected_label, guard_required) = match (format.selector, member) {
+                    (UNISWAP_V3_EXACT_INPUT_SELECTOR, 2) => {
+                        (&mut saw_amount_member_2, b"Swap input".as_slice(), true)
+                    }
+                    (UNISWAP_V3_EXACT_INPUT_SELECTOR, 3) => (
+                        &mut saw_amount_member_3,
+                        b"Minimum to Receive".as_slice(),
+                        false,
+                    ),
+                    (UNISWAP_V3_EXACT_OUTPUT_SELECTOR, 2) => (
+                        &mut saw_amount_member_2,
+                        b"Amount to Receive".as_slice(),
+                        false,
+                    ),
+                    (UNISWAP_V3_EXACT_OUTPUT_SELECTOR, 3) => (
+                        &mut saw_amount_member_3,
+                        b"Max swap input".as_slice(),
+                        false,
+                    ),
+                    _ => return Err(IrError::BadField),
+                };
+                if *seen || field.label != expected_label {
+                    return Err(IrError::BadField);
+                }
+                match (guard_required, params.word_guard) {
+                    (true, Some(guard))
+                        if guard.mode() == crate::render::params::WORD_GUARD_NE
+                            && guard.expected() == &zero_word => {}
+                    (false, None) => {}
+                    _ => return Err(IrError::BadField),
+                }
+                *seen = true;
+            }
+            FormatOp::AddressName => {
+                if saw_recipient
+                    || field.label != b"Beneficiary"
+                    || !router02_packed_member_path(path, 1, false)
+                    || params.sender_addresses
+                        != Some(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1][..])
+                    || !params.word_guard.is_some_and(|guard| {
+                        guard.mode() == crate::render::params::WORD_GUARD_NE
+                            && guard.expected() == &address_two_word
+                    })
+                {
+                    return Err(IrError::BadField);
+                }
+                saw_recipient = true;
+            }
+            FormatOp::UniswapV3Path => {
+                if saw_route
+                    || field.label != b"Route"
+                    || !router02_packed_member_path(path, 0, true)
+                    || params.terminal_kind
+                        != Some(crate::render::policy::TerminalKind::DynamicBytes)
+                    || params.dynamic_kind != Some(crate::render::params::DYNAMIC_KIND_BYTES)
+                    || params.word_guard.is_some()
+                {
+                    return Err(IrError::BadField);
+                }
+                saw_route = true;
+            }
+            _ => return Err(IrError::BadField),
+        }
+    }
+    if !(saw_value && saw_amount_member_2 && saw_amount_member_3 && saw_recipient && saw_route) {
+        return Err(IrError::BadFormat);
+    }
+    Ok(())
+}
+
 /// Validate the orthogonal exact-word predicate independently of formatter
 /// policy. Guards are contract-calldata preconditions: accepting one on typed
 /// data, a hidden/conditional field, or a dynamic/constant path would create a
@@ -802,6 +1014,7 @@ fn validate_word_guard(
     field: &FieldEntry<'_>,
     kind: crate::render::policy::TerminalKind,
     params: &crate::render::params::ParamSet<'_>,
+    allow_packed_v3_c2: bool,
 ) -> Result<(), IrError> {
     use crate::render::policy::{integer_word_is_canonical, TerminalKind};
 
@@ -817,7 +1030,7 @@ fn validate_word_guard(
     }
 
     let path = ir.path_bytes(field.path_off)?;
-    validate_word_guard_scalar_path(path)?;
+    validate_word_guard_scalar_path(path, allow_packed_v3_c2)?;
     if path.first().copied() == Some(PathOp::RootContainer as u8)
         && (kind != TerminalKind::Unsigned || params.integer_width_bytes != Some(32))
     {
@@ -841,13 +1054,16 @@ fn validate_word_guard(
     }
 }
 
-fn validate_word_guard_scalar_path(path: &[u8]) -> Result<(), IrError> {
+fn validate_word_guard_scalar_path(path: &[u8], allow_packed_v3_c2: bool) -> Result<(), IrError> {
     match path
         .first()
         .copied()
         .and_then(|byte| PathOp::try_from(byte).ok())
     {
         Some(PathOp::RootStructured) => {
+            if allow_packed_v3_c2 && is_router02_packed_scalar_path(path) {
+                return Ok(());
+            }
             let mut cursor = 1usize;
             let mut steps = 0usize;
             while cursor < path.len() {
