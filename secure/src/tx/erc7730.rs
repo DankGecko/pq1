@@ -247,10 +247,23 @@ mod known_call_tests {
     }
 
     #[test]
-    fn pinned_filter_quarantines_stale_locked_celo_deployments() {
+    fn pinned_filter_requires_descriptors_for_all_locked_celo_deployments() {
         let deployments = [
-            (42_220, "55e1a0c8f376964bd339167476063bfed7f213d5"),
-            (44_787, "6a4cc5693dc5bfa3799c699f3b941ba2cb00c341"),
+            (
+                "stale mainnet implementation",
+                42_220,
+                "55e1a0c8f376964bd339167476063bfed7f213d5",
+            ),
+            (
+                "canonical mainnet proxy",
+                42_220,
+                "6cc083aed9e3ebe302a6336dbc7c921c9f03349e",
+            ),
+            (
+                "stale Alfajores deployment",
+                44_787,
+                "6a4cc5693dc5bfa3799c699f3b941ba2cb00c341",
+            ),
         ];
         let selectors = [
             [0x58, 0xf8, 0x4a, 0x78], // delegateGovernanceVotes(address,uint256)
@@ -261,7 +274,7 @@ mod known_call_tests {
             [0x2e, 0x1a, 0x7d, 0x4d], // withdraw(uint256)
         ];
 
-        for (chain_id, address) in deployments {
+        for (deployment, chain_id, address) in deployments {
             let decoded = hex::decode(address).expect("valid LockedCelo address");
             let mut contract = [0u8; 20];
             contract.copy_from_slice(&decoded);
@@ -269,7 +282,7 @@ mod known_call_tests {
                 assert_ne!(
                     proof(chain_id, &contract, &selector),
                     crate::fi::OK_SENTINEL,
-                    "stale LockedCelo tuple must never authorize fallback: chain={chain_id} contract=0x{address} selector=0x{}",
+                    "{deployment} LockedCelo tuple must require its descriptor: chain={chain_id} contract=0x{address} selector=0x{}",
                     hex::encode(selector),
                 );
             }

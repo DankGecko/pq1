@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 790181,
-    "sha256": "a169832274bdca61030e1ae1aa1834d6619ca4d0349c9d977092c3322240754e"
+    "bytes": 790958,
+    "sha256": "d2a0382cb51ea1f91af6012374542dd9339fab408a1cb7b64f410f9dab0f8460"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -47,6 +47,36 @@
       "chain_id": 137,
       "contract": "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
       "selector": "0xfb3bdb41"
+    },
+    {
+      "chain_id": 42220,
+      "contract": "0x6cc083aed9e3ebe302a6336dbc7c921c9f03349e",
+      "selector": "0x18629a92"
+    },
+    {
+      "chain_id": 42220,
+      "contract": "0x6cc083aed9e3ebe302a6336dbc7c921c9f03349e",
+      "selector": "0x2e1a7d4d"
+    },
+    {
+      "chain_id": 42220,
+      "contract": "0x6cc083aed9e3ebe302a6336dbc7c921c9f03349e",
+      "selector": "0x58f84a78"
+    },
+    {
+      "chain_id": 42220,
+      "contract": "0x6cc083aed9e3ebe302a6336dbc7c921c9f03349e",
+      "selector": "0x6198e339"
+    },
+    {
+      "chain_id": 42220,
+      "contract": "0x6cc083aed9e3ebe302a6336dbc7c921c9f03349e",
+      "selector": "0xb2fb30cb"
+    },
+    {
+      "chain_id": 42220,
+      "contract": "0x6cc083aed9e3ebe302a6336dbc7c921c9f03349e",
+      "selector": "0xf83d08ba"
     },
     {
       "chain_id": 11155111,
@@ -116,8 +146,8 @@
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 18,
-      "bytes": 1662499,
-      "sha256": "c4a47846808c77e4eb7f869f45794084c042d80fadb8431a03c42a7a65304b64"
+      "bytes": 1668631,
+      "sha256": "1d9074084c7c1dd4dcf9d110249fd0e5047014033104071936bc9aefc6aaa82b"
     },
     {
       "path": "pqsigner-erc7730",
@@ -166,7 +196,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 280708,
-      "sha256": "656e3ba23d77dd090580e0b873f6a39b45a53633e269ffc9a12509ca77ce1c33"
+      "sha256": "5d2f978c1767b4e89b315b8826e7834012185cf8df796dae6e15a3f2300457db"
     }
   ],
   "capability_inputs": [
@@ -208,8 +238,8 @@
       "path": "registry/celo/calldata-locked_celo.json",
       "upstream_bytes": 3838,
       "upstream_sha256": "4066152b05d76b5ecec8024a075659fccbda35fb4e35804ef3bc318d188e2f30",
-      "replacement_bytes": 4377,
-      "replacement_sha256": "ed23cd8f7bfe76efe67ba3ac4d8b8d8a2d941260472060b77263a4513c2d6cb4"
+      "replacement_bytes": 5154,
+      "replacement_sha256": "1e12f68359f189af4e1197d23e5f9ea99cf18da81819487d738ebe42d73d1c3a"
     },
     {
       "path": "registry/flyingtulip/calldata-PftNft.json",

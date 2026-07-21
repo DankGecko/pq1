@@ -539,18 +539,18 @@ fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment(
 
     assert_eq!(
         result.entries.len(),
-        450,
-        "PQ-incompatible permit removal must preserve the 450-leaf catalogue"
+        451,
+        "PQ-incompatible permit removal must preserve the 451-leaf catalogue"
     );
-    assert_eq!(result.known_call_count, 4_546);
+    assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555",
+        "0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9",
         "permit refusal must not change the declared known-call tuple set"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984",
+        "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade",
         "permit refusal must not change the known-call Bloom"
     );
 }
@@ -677,11 +677,11 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
             .contains(&(entry.chain_id, entry.contract, withdraw_selector)));
     }
 
-    assert_eq!(result.entries.len(), 450);
-    assert_eq!(result.known_call_count, 4_546);
+    assert_eq!(result.entries.len(), 451);
+    assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.root),
-        "80bf38e383bfd9b3d22d20045e30c542be69233f70de7c2aeddb68fe666980c6"
+        "41ae7d87893c5bd14f478ef2e0a22a05831283df677f3f581895833bc8eab551"
     );
 }
 
@@ -786,17 +786,17 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
 
     assert_eq!(
         result.entries.len(),
-        450,
+        451,
         "Aave V2 already owned three leaves"
     );
-    assert_eq!(result.known_call_count, 4_546);
+    assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555"
+        "0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984"
+        "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade"
     );
 }
 
@@ -1008,15 +1008,15 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
         );
     }
 
-    assert_eq!(result.entries.len(), 450);
-    assert_eq!(result.known_call_count, 4_546);
+    assert_eq!(result.entries.len(), 451);
+    assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555"
+        "0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984"
+        "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade"
     );
 }
 
@@ -1116,15 +1116,15 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
         );
     }
 
-    assert_eq!(result.entries.len(), 450);
-    assert_eq!(result.known_call_count, 4_546);
+    assert_eq!(result.entries.len(), 451);
+    assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555"
+        "0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984"
+        "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade"
     );
 }
 
@@ -1641,15 +1641,15 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
         "newly clear-signable permit was already registry-known"
     );
 
-    assert_eq!(result.entries.len(), 450);
-    assert_eq!(result.known_call_count, 4_546);
+    assert_eq!(result.entries.len(), 451);
+    assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "7b25b2f0ecb5dbfc02f41187bd69917979830b93ff20c9c6330a7d13aef9f555"
+        "0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "171d816605312be3d70cf55b3e4a4d4020d4fea0ecea2108ad137eb08209b984"
+        "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade"
     );
 }
 

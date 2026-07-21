@@ -41,7 +41,7 @@ const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
 // The upstream fixture bytes remain test-only and outside the catalogue. This
 // root changes only when the separately curated production descriptors do.
-const PROD_ROOT_HEX: &str = "80bf38e383bfd9b3d22d20045e30c542be69233f70de7c2aeddb68fe666980c6";
+const PROD_ROOT_HEX: &str = "41ae7d87893c5bd14f478ef2e0a22a05831283df677f3f581895833bc8eab551";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1796,9 +1796,9 @@ fn upstream_fixture_corpus_is_exact_test_only_and_honestly_inventoried() {
                 .to_path_buf()
         })
         .collect();
-    assert_eq!(accepted.len(), 232);
+    assert_eq!(accepted.len(), 233);
     assert_eq!(accepted.intersection(&tested_descriptors).count(), 148);
-    assert_eq!(accepted.difference(&tested_descriptors).count(), 84);
+    assert_eq!(accepted.difference(&tested_descriptors).count(), 85);
     assert_eq!(tested_descriptors.difference(&accepted).count(), 124);
 }
 

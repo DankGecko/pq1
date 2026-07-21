@@ -1,12 +1,30 @@
 {
   "schema_version": 1,
-  "scope": "Celo LockedCelo descriptor deployment quarantine: mainnet implementation-versus-proxy mismatch and legacy Alfajores non-authority",
+  "scope": "Celo LockedGold/LockedCelo canonical mainnet proxy admission with stale implementation and legacy Alfajores quarantine",
   "captured_at_utc": "2026-07-20T13:07:00Z",
   "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
   "policy": {
-    "outcome": "hard_refusal_quarantine",
-    "mechanism": "The curation preserves each declared deployment in the independent known-call inventory but makes every descriptor format fail PQ1's strict visible-signed-operand compiler gate. No descriptor leaf is admitted for either deployment, so all six registry-known selectors remain hard refusals rather than falling through to blind signing.",
-    "known_call_quarantine": [
+    "outcome": "canonical_proxy_only_admission",
+    "mechanism": "The curation adds the three-provider and source-bound mainnet proxy, makes every signed operand visible, and authenticates a deploymentFormats allowlist that emits all six routes only for that proxy. The upstream implementation and legacy Alfajores deployments remain declared but receive no leaf, so all twelve stale tuples stay exact-known and Bloom-protected hard refusals.",
+    "admitted_deployment": {
+      "chain_id": 42220,
+      "address": "0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E",
+      "descriptor_hash": "0xe570e3b60c310caa32abd6ceca95ac64a61e286659798748be71fd381e23816d",
+      "erc8176_hash": "0x78f6376b8d1e822d3c8282092242fb57c3f29f0715a61c10316fe3c1e11b6922"
+    },
+    "stale_deployments": [
+      {
+        "chain_id": 42220,
+        "address": "0x55E1A0C8f376964bd339167476063bFED7f213d5",
+        "reason": "implementation direct-call target, not the Registry-selected proxy"
+      },
+      {
+        "chain_id": 44787,
+        "address": "0x6a4CC5693DC5BFA3799C699F3B941bA2Cb00c341",
+        "reason": "legacy Alfajores identity without independently reproduced live-state/source authority"
+      }
+    ],
+    "admitted_routes": [
       {
         "canonical_signature": "delegateGovernanceVotes(address,uint256)",
         "selector": "0x58f84a78"
@@ -35,9 +53,13 @@
   },
   "descriptor": {
     "vendored_file": "secure/data/erc7730-registry/registry/celo/calldata-locked_celo.json",
-    "vendored_file_sha256": "ed23cd8f7bfe76efe67ba3ac4d8b8d8a2d941260472060b77263a4513c2d6cb4",
+    "vendored_file_sha256": "1e12f68359f189af4e1197d23e5f9ea99cf18da81819487d738ebe42d73d1c3a",
     "curation_overlay": "secure/data/erc7730/curations/files/registry/celo/calldata-locked_celo.json",
-    "curation_overlay_sha256": "ed23cd8f7bfe76efe67ba3ac4d8b8d8a2d941260472060b77263a4513c2d6cb4",
+    "curation_overlay_sha256": "1e12f68359f189af4e1197d23e5f9ea99cf18da81819487d738ebe42d73d1c3a",
+    "curated_admitted_deployment": {
+      "chain_id": 42220,
+      "address": "0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E"
+    },
     "claimed_deployments": [
       {
         "chain_id": 42220,
@@ -63,7 +85,8 @@
     "resolved_proxy": "0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E",
     "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
     "resolved_implementation": "0x55E1A0C8f376964bd339167476063bFED7f213d5",
-    "descriptor_target": "0x55E1A0C8f376964bd339167476063bFED7f213d5",
+    "upstream_descriptor_target": "0x55E1A0C8f376964bd339167476063bFED7f213d5",
+    "curated_descriptor_target": "0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E",
     "fixed_block": {
       "number": 72649728,
       "number_hex": "0x4548c00",
@@ -289,7 +312,8 @@
   "semantic_hazards": [
     "The mainnet descriptor binds all six formats to the implementation address even though both official deployment records and three fixed-block RPC providers identify the proxy as LockedGold/LockedCelo.",
     "Calling a proxy implementation directly executes against the implementation address's own storage and balance, not the Registry-selected proxy's state; verified ABI equivalence does not repair target identity.",
-    "The implementation is upgradeable behind the proxy. This package is a fixed-block receipt, not live monitoring or future implementation authority.",
+    "The fixed-block evidence observed the proxy's implementation and sources, but the emitted leaf binds only the chain, proxy, descriptor, and selector; it does not bind or monitor the live EIP-1967 implementation, so future upgrades are not detected.",
+    "withdraw(uint256) signs only a pending-withdrawal index. The claimed CELO amount is read from live proxy storage and therefore cannot be displayed as a signed calldata amount.",
     "The legacy Alfajores address lacks the fixed-block, runtime, proxy-state, and source evidence required for admission in this slice."
   ]
 }

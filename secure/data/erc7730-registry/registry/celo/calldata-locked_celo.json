@@ -1,11 +1,28 @@
 {
   "$schema": "https://github.com/LedgerHQ/clear-signing-erc7730-registry/blob/master/specs/erc7730-v2.schema.json",
-  "_curation_note": "PQSigner semantic quarantine: the upstream chain-42220 deployment is the LockedGold implementation, not the Celo Registry-selected proxy, and the shared chain-44787 deployment is legacy and unaudited. Every format deliberately retains at least one hidden signed non-address operand so tolerant compilation refuses both stale deployment leaves while the independent known-call inventory continues to hard-refuse every declared selector. See tests/erc7730-semantic-evidence/celo-lockedcelo-quarantine.",
+  "_curation_note": "PQSigner semantic curation: all six formats are admitted only for the Celo Registry-selected mainnet LockedGold/LockedCelo proxy. The upstream mainnet implementation and legacy Alfajores deployments remain exact known-call refusals through the authenticated deploymentFormats narrowing. Every signed calldata operand is shown; lock shows exact native value, and withdrawal shows the signed pending-withdrawal index because its eventual CELO amount comes from live contract state rather than calldata. Evidence is historical fixed-block authority, not future proxy-upgrade monitoring. See tests/erc7730-semantic-evidence/celo-lockedcelo-quarantine.",
+  "_pqsigner": {
+    "deploymentFormats": [
+      {
+        "chainId": 42220,
+        "address": "0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E",
+        "formats": [
+          "delegateGovernanceVotes(address delegatee, uint256 delegateFraction)",
+          "lock()",
+          "relock(uint256 index, uint256 value)",
+          "revokeDelegatedGovernanceVotes(address delegatee, uint256 revokeFraction)",
+          "unlock(uint256 value)",
+          "withdraw(uint256 index)"
+        ]
+      }
+    ]
+  },
   "context": {
     "$id": "LockedCelo",
     "contract": {
       "deployments": [
         { "chainId": 42220, "address": "0x55E1A0C8f376964bd339167476063bFED7f213d5" },
+        { "chainId": 42220, "address": "0x6cC083Aed9e3ebe302A6336dBC7c921C9f03349E" },
         { "chainId": 44787, "address": "0x6a4CC5693DC5BFA3799C699F3B941bA2Cb00c341" }
       ]
     }
@@ -27,10 +44,10 @@
         "fields": [
           {
             "path": "delegateFraction",
-            "label": "Fraction to Delegate",
+            "label": "Target Share %",
             "format": "unit",
             "params": { "base": "%", "decimals": 22 },
-            "visible": "never"
+            "visible": "always"
           },
           {
             "path": "delegatee",
@@ -45,10 +62,10 @@
         "$id": "lock",
         "intent": "Lock CELO",
         "fields": [
-          { "path": "@.value", "label": "Amount to Lock", "format": "amount", "visible": "never" },
+          { "path": "@.value", "label": "Amount to Lock", "format": "amount", "visible": "always" },
           {
             "path": "@.from",
-            "label": "Beneficiary",
+            "label": "Acting Account",
             "format": "addressName",
             "params": { "types": ["eoa", "contract"] },
             "visible": "always"
@@ -62,12 +79,12 @@
           { "path": "value", "label": "Amount to Relock", "format": "amount", "visible": "always" },
           {
             "path": "@.from",
-            "label": "Beneficiary",
+            "label": "Acting Account",
             "format": "addressName",
             "params": { "types": ["eoa", "contract"] },
             "visible": "always"
           },
-          { "label": "Index", "path": "index", "visible": "never" }
+          { "label": "Withdrawal Index", "path": "index", "format": "raw", "visible": "always" }
         ]
       },
       "revokeDelegatedGovernanceVotes(address delegatee, uint256 revokeFraction)": {
@@ -83,10 +100,10 @@
           },
           {
             "path": "revokeFraction",
-            "label": "Fraction to Revoke",
+            "label": "Revoke Share %",
             "format": "unit",
             "params": { "base": "%", "decimals": 22 },
-            "visible": "never"
+            "visible": "always"
           }
         ]
       },
@@ -94,10 +111,10 @@
         "$id": "unlock",
         "intent": "Unlock",
         "fields": [
-          { "path": "value", "label": "Amount to Unlock", "format": "amount", "visible": "never" },
+          { "path": "value", "label": "Amount to Unlock", "format": "amount", "visible": "always" },
           {
             "path": "@.from",
-            "label": "Beneficiary",
+            "label": "Acting Account",
             "format": "addressName",
             "params": { "types": ["eoa", "contract"] },
             "visible": "always"
@@ -106,16 +123,16 @@
       },
       "withdraw(uint256 index)": {
         "$id": "withdraw",
-        "intent": "Withdraw CELO",
+        "intent": "Claim Withdrawal",
         "fields": [
           {
             "path": "@.from",
-            "label": "Beneficiary",
+            "label": "Acting Account",
             "format": "addressName",
             "params": { "types": ["eoa", "contract"] },
             "visible": "always"
           },
-          { "path": "index", "label": "Withdrawal Index", "format": "raw", "visible": "never" }
+          { "path": "index", "label": "Withdrawal Index", "format": "raw", "visible": "always" }
         ]
       }
     }

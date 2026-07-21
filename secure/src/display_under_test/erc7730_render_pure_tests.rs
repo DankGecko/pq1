@@ -289,6 +289,12 @@ fn u256_from_u64(n: u64) -> U256 {
     U256(out)
 }
 
+fn u256_from_u128(n: u128) -> U256 {
+    let mut out = [0u8; 32];
+    out[16..32].copy_from_slice(&n.to_be_bytes());
+    U256(out)
+}
+
 /// "Approve max" — the value that triggers the unlimited-amount branch
 /// in tokenAmount rendering against the descriptor's threshold param.
 fn u256_max() -> U256 {
@@ -764,6 +770,207 @@ fn positive_registry_celo_from_uses_explicit_device_signer() {
     assert_eq!(&pages.buf[field_page][1], b"0x12121212121212");
     assert_eq!(&pages.buf[field_page][2], b"1212121212121212");
     assert_eq!(&pages.buf[field_page][3][..10], b"1212121212");
+}
+
+#[test]
+fn production_celo_lockedgold_proxy_renders_and_binds_all_six_routes() {
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-locked_celo.json", 42_220);
+    let proxy: [u8; 20] = hex::decode("6cc083aed9e3ebe302a6336dbc7c921c9f03349e")
+        .expect("canonical Celo proxy")
+        .try_into()
+        .expect("address width");
+    assert_eq!(entry.contract, proxy);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("verify Celo leaf");
+    assert_eq!(verified.ir.format_count(), Ok(6));
+
+    let resolver = NameResolver::new();
+    let signer = [0x42u8; 20];
+    let render = |signature: &str, words: &[[u8; 32]], value: U256, from: &[u8; 20]| {
+        let calldata = calldata_static(signature, words);
+        assert_selector_matches(&verified.ir, &calldata, signature);
+        let mut tx = envelope(42_220, entry.contract);
+        tx.value = value;
+        render_erc7730_pages_with_signer(&tx, &calldata, &verified, None, &resolver, from)
+    };
+
+    let lock_value = u256_from_u128(2_500_000_000_000_000_000);
+    let lock = render("lock()", &[], lock_value, &signer).expect("lock renders");
+    let lock_text = dump_pages(&lock);
+    assert!(lock_text.contains("Lock CELO"), "{lock_text}");
+    assert!(lock_text.contains("Amount to Lock"), "{lock_text}");
+    assert!(lock_text.contains("2.5 CELO"), "{lock_text}");
+    assert!(lock_text.contains("Acting Account"), "{lock_text}");
+    let changed_lock = render(
+        "lock()",
+        &[],
+        u256_from_u128(2_600_000_000_000_000_000),
+        &signer,
+    )
+    .expect("changed lock renders");
+    assert_ne!(lock.as_slice(), changed_lock.as_slice());
+    let changed_signer =
+        render("lock()", &[], lock_value, &[0x43u8; 20]).expect("changed acting account renders");
+    assert_ne!(lock.as_slice(), changed_signer.as_slice());
+
+    let unlock_amount = u256_from_u128(3_000_000_000_000_000_000);
+    let unlock = render(
+        "unlock(uint256)",
+        &[unlock_amount.0],
+        U256::default(),
+        &signer,
+    )
+    .expect("unlock renders");
+    let unlock_text = dump_pages(&unlock);
+    assert!(unlock_text.contains("Amount to Unlock"), "{unlock_text}");
+    assert!(unlock_text.contains("3 CELO"), "{unlock_text}");
+    let changed_unlock = render(
+        "unlock(uint256)",
+        &[u256_from_u128(4_000_000_000_000_000_000).0],
+        U256::default(),
+        &signer,
+    )
+    .expect("changed unlock renders");
+    assert_ne!(unlock.as_slice(), changed_unlock.as_slice());
+
+    let relock_index = u256_from_u64(7);
+    let relock_amount = u256_from_u128(1_500_000_000_000_000_000);
+    let relock = render(
+        "relock(uint256,uint256)",
+        &[relock_index.0, relock_amount.0],
+        U256::default(),
+        &signer,
+    )
+    .expect("relock renders");
+    let relock_text = dump_pages(&relock);
+    assert!(relock_text.contains("Amount to Relock"), "{relock_text}");
+    assert!(relock_text.contains("1.5 CELO"), "{relock_text}");
+    assert!(relock_text.contains("Withdrawal Index"), "{relock_text}");
+    let changed_relock_index = render(
+        "relock(uint256,uint256)",
+        &[u256_from_u64(8).0, relock_amount.0],
+        U256::default(),
+        &signer,
+    )
+    .expect("changed relock index renders");
+    let changed_relock_amount = render(
+        "relock(uint256,uint256)",
+        &[relock_index.0, u256_from_u128(1_600_000_000_000_000_000).0],
+        U256::default(),
+        &signer,
+    )
+    .expect("changed relock amount renders");
+    assert_ne!(relock.as_slice(), changed_relock_index.as_slice());
+    assert_ne!(relock.as_slice(), changed_relock_amount.as_slice());
+
+    let withdraw = render(
+        "withdraw(uint256)",
+        &[relock_index.0],
+        U256::default(),
+        &signer,
+    )
+    .expect("withdraw renders");
+    let withdraw_text = dump_pages(&withdraw);
+    assert!(
+        withdraw_text.contains("Claim Withdrawal"),
+        "{withdraw_text}"
+    );
+    assert!(
+        withdraw_text.contains("Withdrawal Index"),
+        "{withdraw_text}"
+    );
+    assert!(
+        !withdraw_text.contains("Amount to"),
+        "live storage amount must not masquerade as signed calldata: {withdraw_text}"
+    );
+    let changed_withdraw = render(
+        "withdraw(uint256)",
+        &[u256_from_u64(8).0],
+        U256::default(),
+        &signer,
+    )
+    .expect("changed withdrawal index renders");
+    assert_ne!(withdraw.as_slice(), changed_withdraw.as_slice());
+
+    let delegatee = [0x11u8; 20];
+    let target_share = u256_from_u128(250_000_000_000_000_000_000_000);
+    let delegate = render(
+        "delegateGovernanceVotes(address,uint256)",
+        &[abi_address_word(delegatee), target_share.0],
+        U256::default(),
+        &signer,
+    )
+    .expect("delegation renders");
+    let delegate_text = dump_pages(&delegate);
+    assert!(delegate_text.contains("Target Share %"), "{delegate_text}");
+    assert!(delegate_text.contains("25 %"), "{delegate_text}");
+    assert!(delegate_text.contains("Delegatee"), "{delegate_text}");
+    let changed_delegatee = render(
+        "delegateGovernanceVotes(address,uint256)",
+        &[abi_address_word([0x12u8; 20]), target_share.0],
+        U256::default(),
+        &signer,
+    )
+    .expect("changed delegatee renders");
+    let changed_target = render(
+        "delegateGovernanceVotes(address,uint256)",
+        &[
+            abi_address_word(delegatee),
+            u256_from_u128(260_000_000_000_000_000_000_000).0,
+        ],
+        U256::default(),
+        &signer,
+    )
+    .expect("changed target share renders");
+    assert_ne!(delegate.as_slice(), changed_delegatee.as_slice());
+    assert_ne!(delegate.as_slice(), changed_target.as_slice());
+
+    let revoke_share = u256_from_u128(100_000_000_000_000_000_000_000);
+    let revoke = render(
+        "revokeDelegatedGovernanceVotes(address,uint256)",
+        &[abi_address_word(delegatee), revoke_share.0],
+        U256::default(),
+        &signer,
+    )
+    .expect("revoke renders");
+    let revoke_text = dump_pages(&revoke);
+    assert!(revoke_text.contains("Revoke Share %"), "{revoke_text}");
+    assert!(revoke_text.contains("10 %"), "{revoke_text}");
+    let changed_revoke = render(
+        "revokeDelegatedGovernanceVotes(address,uint256)",
+        &[
+            abi_address_word(delegatee),
+            u256_from_u128(110_000_000_000_000_000_000_000).0,
+        ],
+        U256::default(),
+        &signer,
+    )
+    .expect("changed revoke share renders");
+    assert_ne!(revoke.as_slice(), changed_revoke.as_slice());
+
+    let inexact = u256_from_u128(250_000_000_000_000_000_000_001);
+    assert!(matches!(
+        render(
+            "delegateGovernanceVotes(address,uint256)",
+            &[abi_address_word(delegatee), inexact.0],
+            U256::default(),
+            &signer,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 inexact scaled value"
+        ))
+    ));
+
+    let mut dirty_delegatee = abi_address_word(delegatee);
+    dirty_delegatee[0] = 1;
+    assert!(render(
+        "delegateGovernanceVotes(address,uint256)",
+        &[dirty_delegatee, target_share.0],
+        U256::default(),
+        &signer,
+    )
+    .is_err());
 }
 
 #[test]

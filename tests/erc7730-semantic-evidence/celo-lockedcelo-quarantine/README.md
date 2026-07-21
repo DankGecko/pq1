@@ -1,9 +1,9 @@
-# Celo LockedCelo deployment quarantine evidence
+# Celo LockedGold/LockedCelo proxy admission evidence
 
-This offline bundle records why PQ1 must not clear-sign the six formats in the
-upstream `calldata-locked_celo.json` descriptor at either declared deployment.
-It supports a hard-refusal quarantine; it does not admit a replacement target
-or enable blind signing.
+This offline bundle binds the six curated `calldata-locked_celo.json` routes to
+the canonical Celo mainnet LockedGold/LockedCelo proxy. It also records why the
+upstream mainnet implementation address and legacy Alfajores address remain
+hard refusals. It never enables blind signing.
 
 ## Mainnet mismatch
 
@@ -18,11 +18,20 @@ At Celo mainnet block 72,649,728 (`0x4548c00`, hash
 - the proxy and implementation runtime identities are byte-for-byte identical
   across Celo Forno, dRPC, and Ankr.
 
-The descriptor instead targets `0x55E1…13d5` directly. An implementation ABI
+The upstream descriptor instead targets `0x55E1…13d5` directly. An implementation ABI
 can match the proxy's delegated interface while still being the wrong execution
 identity: a direct call uses the implementation address's own storage and
 balance, not the Registry-selected proxy's state. PQ1 therefore cannot present
 those calls as canonical Locked CELO actions.
+
+The curated descriptor adds `0x6cC0…349E`, admits all six static routes only at
+that proxy through its authenticated `deploymentFormats` allowlist, and shows
+every signed calldata operand. `lock()` shows the exact outer CELO value;
+`unlock`/`relock` show the exact signed CELO amount; `relock` and `withdraw`
+show the exact pending-withdrawal index; and delegation routes show the literal
+delegatee input plus the exact Celo Fixidity percentage (`1e24 == 100%`).
+`withdraw(uint256)` cannot honestly show an amount because the contract reads
+the amount from live proxy storage at the signed index.
 
 `rpc/fixed-block-receipt.json` records the complete call data, block identity,
 slot, returned words, runtime hashes, and paths to the checked-in request and
@@ -68,10 +77,14 @@ mainnet source or proxy evidence by name.
 
 ## Honest boundary
 
-This is historical fixed-block and source evidence. It does not monitor future
-Registry or implementation changes, prove transaction success, authorize a
-corrected proxy descriptor, establish legacy Alfajores live state, confer
-production or shipment authority, or permit fallback/blind signing.
+This is historical fixed-block and source evidence for the exact curated proxy
+leaf. The device binds the chain, proxy, descriptor, and selector; it does not
+bind or monitor the proxy's live EIP-1967 implementation. It also does not prove
+transaction success or current storage values, establish legacy Alfajores live
+state, confer production or shipment authority, or permit fallback/blind
+signing. Operational policy therefore requires fresh evidence and a new
+reviewed catalogue identity after a proxy upgrade, but the offline leaf cannot
+itself detect that upgrade.
 
 Primary upstream records:
 

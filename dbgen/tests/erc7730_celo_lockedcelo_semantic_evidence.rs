@@ -1,18 +1,18 @@
-//! Offline provenance checks for the quarantined Celo LockedCelo descriptor.
+//! Offline provenance and admission checks for Celo LockedGold/LockedCelo.
 //!
-//! The two upstream deployment bindings are stale: mainnet names the
-//! LockedGold implementation instead of the Registry-selected proxy, while
-//! Alfajores names a legacy deployment for which this evidence package does
-//! not establish current, audited LockedCelo semantics.  The curated
-//! descriptor therefore keeps all six selectors in omission protection but
-//! deliberately makes every format incomplete so no trusted-display leaf can
-//! be emitted for either address.
+//! The upstream mainnet binding names the implementation instead of the
+//! Registry-selected proxy, while Alfajores names a legacy deployment for
+//! which this package has no live-state authority. The curated descriptor adds
+//! the evidence-bound mainnet proxy and admits all six static routes only at
+//! that identity. Authenticated deployment/format narrowing leaves the two
+//! upstream targets in exact omission protection with no trusted leaf.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use dbgen::erc7730::build_db_tolerant_with_erc20_capabilities;
+use pqsigner_erc7730::ir::Erc7730Ir;
 use pqsigner_erc7730::known_calls::may_contain as known_call_may_contain;
 use pqsigner_tx_core::hash::keccak256;
 use serde_json::Map;
@@ -21,8 +21,13 @@ use sha2::{Digest, Sha256};
 
 const DESCRIPTOR_RELATIVE: &str = "registry/celo/calldata-locked_celo.json";
 const MAINNET_PROXY: &str = "6cc083aed9e3ebe302a6336dbc7c921c9f03349e";
-const DEPLOYMENTS: [(u64, &str); 2] = [
+const STALE_DEPLOYMENTS: [(u64, &str); 2] = [
     (42_220, "55e1a0c8f376964bd339167476063bfed7f213d5"),
+    (44_787, "6a4cc5693dc5bfa3799c699f3b941ba2cb00c341"),
+];
+const ALL_DEPLOYMENTS: [(u64, &str); 3] = [
+    (42_220, "55e1a0c8f376964bd339167476063bfed7f213d5"),
+    (42_220, MAINNET_PROXY),
     (44_787, "6a4cc5693dc5bfa3799c699f3b941ba2cb00c341"),
 ];
 const ROUTES: [(&str, &str); 6] = [
@@ -215,7 +220,7 @@ fn python_dict_address(document: &str, dictionary: &str, contract: &str) -> [u8;
 }
 
 #[test]
-fn stale_lockedcelo_bindings_emit_no_leaf_but_keep_every_call_fail_closed() {
+fn canonical_proxy_emits_one_leaf_while_stale_bindings_stay_fail_closed() {
     let root = workspace_root();
     let curated_path = root
         .join("secure/data/erc7730/curations/files")
@@ -267,7 +272,7 @@ fn stale_lockedcelo_bindings_emit_no_leaf_but_keep_every_call_fail_closed() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         descriptor_deployments,
-        DEPLOYMENTS
+        ALL_DEPLOYMENTS
             .iter()
             .map(|(chain_id, contract)| (*chain_id, (*contract).to_owned()))
             .collect()
@@ -289,23 +294,71 @@ fn stale_lockedcelo_bindings_emit_no_leaf_but_keep_every_call_fail_closed() {
             .iter()
             .map(|(signature, _)| (*signature).to_owned())
             .collect(),
-        "the quarantine must cover exactly the six upstream LockedCelo calls"
+        "the curated descriptor must cover exactly the six verified LockedGold calls"
     );
-    for (signature, hidden_path) in ROUTES {
+    let admissions = descriptor["_pqsigner"]["deploymentFormats"]
+        .as_array()
+        .expect("authenticated deployment/format admissions");
+    assert_eq!(admissions.len(), 1, "one exact proxy authority boundary");
+    assert_eq!(admissions[0]["chainId"].as_u64(), Some(42_220));
+    assert_eq!(
+        address(required_str(&admissions[0], "address")),
+        address(MAINNET_PROXY)
+    );
+    let admitted_formats = admissions[0]["formats"]
+        .as_array()
+        .expect("admitted format array")
+        .iter()
+        .map(|format| canonicalize_signature(format.as_str().expect("format signature")))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        admitted_formats,
+        ROUTES
+            .iter()
+            .map(|(signature, _)| (*signature).to_owned())
+            .collect(),
+        "the proxy admission must select all and only the six verified routes"
+    );
+
+    for (signature, required_visible_path) in ROUTES {
         let fields = formats_by_signature[signature]["fields"]
             .as_array()
             .expect("LockedCelo fields");
-        let hidden: Vec<_> = fields
-            .iter()
-            .filter(|field| field["visible"].as_str() == Some("never"))
-            .collect();
-        assert_eq!(
-            hidden.len(),
-            1,
-            "{signature} must retain exactly one deliberate incompleteness guard"
+        assert!(
+            fields
+                .iter()
+                .all(|field| field["visible"].as_str() == Some("always")),
+            "{signature} may not hide any signed operand"
         );
-        assert_eq!(hidden[0]["path"].as_str(), Some(hidden_path));
+        assert!(
+            fields.iter().any(|field| {
+                field["path"].as_str() == Some(required_visible_path)
+                    && field["visible"].as_str() == Some("always")
+            }),
+            "{signature} lost the previously hidden signed path {required_visible_path}"
+        );
     }
+
+    let proxy_additions = curation_manifest["known_call_additions"]
+        .as_array()
+        .expect("known-call additions")
+        .iter()
+        .filter(|addition| {
+            addition["chain_id"].as_u64() == Some(42_220)
+                && address(required_str(addition, "contract")) == address(MAINNET_PROXY)
+        })
+        .map(|addition| required_str(addition, "selector").to_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        proxy_additions,
+        ROUTES
+            .iter()
+            .map(|(signature, _)| {
+                format!("0x{}", hex::encode(&keccak256(signature.as_bytes())[..4]))
+            })
+            .collect(),
+        "the curation manifest must authorize exactly the six new proxy tuples"
+    );
 
     let registry_root = root.join("secure/data/erc7730-registry");
     let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
@@ -323,18 +376,42 @@ fn stale_lockedcelo_bindings_emit_no_leaf_but_keep_every_call_fail_closed() {
         .iter()
         .filter(|entry| entry.source == vendored_path)
         .collect();
-    assert!(
-        locked_entries.is_empty(),
-        "neither stale LockedCelo deployment may produce a trusted leaf"
+    assert_eq!(
+        locked_entries.len(),
+        1,
+        "authenticated narrowing must emit exactly one canonical proxy leaf"
     );
-    assert!(
-        !registry
-            .entries
-            .iter()
-            .any(|entry| entry.chain_id == 42_220 && entry.contract == address(MAINNET_PROXY)),
-        "the current Registry-selected proxy is outside this quarantine-only slice"
+    let proxy_entry = locked_entries[0];
+    assert_eq!(proxy_entry.chain_id, 42_220);
+    assert_eq!(proxy_entry.contract, address(MAINNET_PROXY));
+    assert_eq!(
+        hex::encode(proxy_entry.descriptor_hash),
+        "e570e3b60c310caa32abd6ceca95ac64a61e286659798748be71fd381e23816d",
+        "reviewed JCS descriptor identity drifted"
     );
-    for (chain_id, contract_text) in DEPLOYMENTS {
+    let ir = Erc7730Ir::parse(&proxy_entry.ir_bytes).expect("canonical Celo IR parses");
+    assert_eq!(ir.format_count(), Ok(6));
+    for (signature, _) in ROUTES {
+        let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
+            .try_into()
+            .expect("selector width");
+        assert!(
+            ir.find_format_by_selector(&selector)
+                .expect("format table")
+                .is_some(),
+            "proxy IR lost {signature}"
+        );
+    }
+    for (chain_id, contract_text) in STALE_DEPLOYMENTS {
+        assert!(
+            !locked_entries.iter().any(|entry| {
+                entry.chain_id == chain_id && entry.contract == address(contract_text)
+            }),
+            "stale deployment unexpectedly emitted a trusted leaf"
+        );
+    }
+
+    for (chain_id, contract_text) in ALL_DEPLOYMENTS {
         let contract = address(contract_text);
         for (signature, _) in ROUTES {
             let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
@@ -359,48 +436,64 @@ fn stale_lockedcelo_bindings_emit_no_leaf_but_keep_every_call_fail_closed() {
         .collect();
     assert_eq!(
         locked_skips.len(),
-        1,
-        "the all-format quarantine must produce one descriptor-level receipt"
+        STALE_DEPLOYMENTS.len(),
+        "each stale deployment needs one explicit narrowing receipt"
     );
-    let reason = &locked_skips[0].reason;
-    assert!(reason.contains("no compilable formats in descriptor"));
-    for (signature, hidden_path) in ROUTES {
-        let authored = formats
-            .keys()
-            .find(|authored| canonicalize_signature(authored) == signature)
-            .unwrap_or_else(|| panic!("missing authored signature for {signature}"));
-        let marker = format!("format `{authored}`");
-        let start = reason
-            .find(&marker)
-            .unwrap_or_else(|| panic!("descriptor receipt lost exact route {authored}"));
-        let tail = &reason[start..];
-        let end = tail[marker.len()..]
-            .find("; format `")
-            .map_or(tail.len(), |offset| marker.len() + offset);
-        let route_receipt = &tail[..end];
+    for (chain_id, contract_text) in STALE_DEPLOYMENTS {
+        let needle = format!(
+            "PARTIAL FORMAT DROP: deployment chain_id={chain_id} contract=0x{contract_text} excluded by the authenticated PQSigner deploymentFormats allowlist"
+        );
         assert!(
-            route_receipt.contains(hidden_path),
-            "descriptor-level receipt lost the route-specific {authored} / {hidden_path} witness"
+            locked_skips.iter().any(|skip| skip.reason == needle),
+            "missing exact stale-deployment receipt: {needle}"
         );
     }
 }
 
 #[test]
-fn lockedcelo_evidence_binds_the_stale_addresses_to_runtime_source_and_rpc() {
+fn lockedcelo_evidence_binds_the_canonical_proxy_to_runtime_source_and_rpc() {
     let root = workspace_root();
     let evidence = evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));
     assert_eq!(manifest["schema_version"].as_u64(), Some(1));
     assert_eq!(
         manifest["policy"]["outcome"].as_str(),
-        Some("hard_refusal_quarantine")
+        Some("canonical_proxy_only_admission")
+    );
+    let admitted_deployment = &manifest["policy"]["admitted_deployment"];
+    assert_eq!(admitted_deployment["chain_id"].as_u64(), Some(42_220));
+    assert_eq!(
+        address(required_str(admitted_deployment, "address")),
+        address(MAINNET_PROXY)
+    );
+    assert_eq!(
+        required_str(admitted_deployment, "descriptor_hash"),
+        "0xe570e3b60c310caa32abd6ceca95ac64a61e286659798748be71fd381e23816d"
+    );
+    let stale_manifest_deployments = manifest["policy"]["stale_deployments"]
+        .as_array()
+        .expect("stale deployment array")
+        .iter()
+        .map(|deployment| {
+            (
+                deployment["chain_id"].as_u64().expect("stale chain id"),
+                address(required_str(deployment, "address")),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        stale_manifest_deployments,
+        STALE_DEPLOYMENTS
+            .iter()
+            .map(|(chain_id, contract)| (*chain_id, address(contract)))
+            .collect()
     );
 
-    let quarantined = manifest["policy"]["known_call_quarantine"]
+    let admitted_routes = manifest["policy"]["admitted_routes"]
         .as_array()
-        .expect("known-call quarantine array");
-    assert_eq!(quarantined.len(), ROUTES.len());
-    let manifest_routes = quarantined
+        .expect("admitted route array");
+    assert_eq!(admitted_routes.len(), ROUTES.len());
+    let manifest_routes = admitted_routes
         .iter()
         .map(|route| {
             let signature = required_str(route, "canonical_signature");
@@ -426,7 +519,7 @@ fn lockedcelo_evidence_binds_the_stale_addresses_to_runtime_source_and_rpc() {
     let claimed_mainnet = required_str(&claimed_deployments[0], "address");
     let mainnet = &manifest["celo_mainnet"];
     let actual_mainnet = required_str(mainnet, "resolved_proxy");
-    assert_eq!(address(claimed_mainnet), address(DEPLOYMENTS[0].1));
+    assert_eq!(address(claimed_mainnet), address(STALE_DEPLOYMENTS[0].1));
     assert_eq!(address(actual_mainnet), address(MAINNET_PROXY));
     assert_ne!(address(claimed_mainnet), address(actual_mainnet));
 
@@ -442,7 +535,15 @@ fn lockedcelo_evidence_binds_the_stale_addresses_to_runtime_source_and_rpc() {
     assert_eq!(
         address(required_str(mainnet, "resolved_implementation")),
         address(claimed_mainnet),
-        "the descriptor names the implementation, not the Registry-selected proxy"
+        "the upstream descriptor names the implementation, not the Registry-selected proxy"
+    );
+    assert_eq!(
+        address(required_str(mainnet, "upstream_descriptor_target")),
+        address(claimed_mainnet)
+    );
+    assert_eq!(
+        address(required_str(mainnet, "curated_descriptor_target")),
+        address(actual_mainnet)
     );
     assert_eq!(
         required_str(mainnet, "eip1967_implementation_slot"),
@@ -453,7 +554,7 @@ fn lockedcelo_evidence_binds_the_stale_addresses_to_runtime_source_and_rpc() {
     assert_eq!(residual["chain_id"].as_u64(), Some(44_787));
     assert_eq!(
         address(required_str(residual, "descriptor_address")),
-        address(DEPLOYMENTS[1].1)
+        address(STALE_DEPLOYMENTS[1].1)
     );
 
     let rpc_bytes = assert_manifest_file_hash(&evidence, &manifest, "rpc/fixed-block-receipt.json");
@@ -936,6 +1037,39 @@ fn lockedcelo_evidence_binds_the_stale_addresses_to_runtime_source_and_rpc() {
             "verified LockedGold ABI lost {signature}"
         );
     }
+    let route_mutability = abi
+        .as_array()
+        .expect("LockedGold ABI array")
+        .iter()
+        .filter(|entry| entry["type"].as_str() == Some("function"))
+        .filter_map(|entry| {
+            let signature = format!(
+                "{}({})",
+                required_str(entry, "name"),
+                entry["inputs"]
+                    .as_array()
+                    .expect("ABI inputs")
+                    .iter()
+                    .map(|input| required_str(input, "type"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+            ROUTES
+                .iter()
+                .any(|(route, _)| *route == signature)
+                .then(|| (signature, required_str(entry, "stateMutability").to_owned()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(route_mutability.len(), ROUTES.len());
+    assert_eq!(route_mutability["lock()"], "payable");
+    for (signature, _) in ROUTES {
+        if signature != "lock()" {
+            assert_eq!(
+                route_mutability[signature], "nonpayable",
+                "only lock() may consume native CELO value"
+            );
+        }
+    }
 
     let locked_gold = normalized_whitespace(
         &fs::read_to_string(evidence.join("source/LockedGold.sol"))
@@ -954,6 +1088,32 @@ fn lockedcelo_evidence_binds_the_stale_addresses_to_runtime_source_and_rpc() {
             "official source lost {function} semantics"
         );
     }
+    for source_contract in [
+        "_incrementNonvotingAccountBalance(msg.sender, msg.value)",
+        "account.pendingWithdrawals.push(PendingWithdrawal(value, available))",
+        "PendingWithdrawal storage pendingWithdrawal = account.pendingWithdrawals[index]",
+        "msg.sender.sendValue(value)",
+        "FixidityLib.Fraction memory percentageToDelegate = FixidityLib.wrap(delegateFraction)",
+        "FixidityLib.Fraction memory percentageToRevoke = FixidityLib.wrap(revokeFraction)",
+    ] {
+        assert!(
+            locked_gold.contains(&normalized_whitespace(source_contract)),
+            "source-binding lost route semantics: {source_contract}"
+        );
+    }
+    let fixidity_source = implementation_report["additional_sources"]
+        .as_array()
+        .expect("verified additional sources")
+        .iter()
+        .find(|source| {
+            source["file_path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("FixidityLib.sol"))
+        })
+        .and_then(|source| source["source_code"].as_str())
+        .expect("verified FixidityLib source");
+    assert!(fixidity_source.contains("FIXED1_UINT = 1000000000000000000000000"));
+    assert!(fixidity_source.contains("return 24;"));
 
     let hazards = manifest["semantic_hazards"]
         .as_array()
