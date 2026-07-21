@@ -1,0 +1,1608 @@
+{
+  "schema_version": 1,
+  "scope": "Family-level semantic-honesty accounting for every source descriptor that emits at least one accepted production ERC-7730 leaf.",
+  "claim_limit": "This is not leaf-by-leaf deployment proof. A pinned-evidence record names the exact evidence subset available for that source family; its accepted_leaf_count is accounting only and must not be read as saying every emitted deployment or format is evidenced.",
+  "catalogue_snapshot": {
+    "upstream_commit": "784c87c925e8438e7b4736b2af85a501f8d2a265",
+    "upstream_tree": "8da8dba78c3e581bbd06c15cc681d07e570dcfb1",
+    "curated_corpus_sha256": "e7be69422d229579fcc54feea41196e0371bb10cf9857e746cda6365c9aaaf13",
+    "merkle_root": "01fc3633f39a453684445b87fbfd1b8d3b1063fe9824984508a890f3c949db21",
+    "accepted_leaf_count": 467,
+    "accepted_source_descriptor_count": 240,
+    "compiled_blob_bytes": 404904,
+    "known_call_count": 4580,
+    "category_source_counts": {
+      "pinned-evidence": 24,
+      "shared-standard-implementation": 133,
+      "lower-priority-residual": 83
+    },
+    "category_leaf_counts": {
+      "pinned-evidence": 77,
+      "shared-standard-implementation": 133,
+      "lower-priority-residual": 257
+    }
+  },
+  "classification_contract": {
+    "pinned-evidence": "At least one accepted route/deployment subset in this source family is bound by the named offline evidence package. The evidence scope, not the source leaf count, defines the claim.",
+    "shared-standard-implementation": "Every accepted format in the source is inherited unchanged from the shared ERC-4626 rendering template. This records review reuse only; it does not prove any deployment implements ERC-4626 honestly.",
+    "lower-priority-residual": "No pinned deployed-semantics package is named for an accepted subset and the exact shared ERC-4626 template rule does not apply. The named successor proposal owns future reconciliation."
+  },
+  "evidence_sets": {
+    "1inch-v6-cancellation": {
+      "classification": "pinned-evidence",
+      "reason": "Pins cancelOrder and increaseEpoch semantics for ten V6 deployments.",
+      "scope": "Only the two named routes and deployments in the package; other accepted V6 formats are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/1inch-v6-cancellation/manifest.json"]
+    },
+    "aave-v3-ethereum-pool": {
+      "classification": "pinned-evidence",
+      "reason": "Pins ten admitted Pool routes at the Ethereum mainnet deployment.",
+      "scope": "Ethereum mainnet only; the descriptor's other deployment leaves are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/aave-v3-ethereum-pool/manifest.json"]
+    },
+    "allowance-threshold-honesty": {
+      "classification": "pinned-evidence",
+      "reason": "Pins exact unlimited-allowance threshold semantics for three accepted descriptor families.",
+      "scope": "Only the approval routes and deployments enumerated by the package.",
+      "paths": ["tests/erc7730-semantic-evidence/allowance-threshold-honesty/manifest.json"]
+    },
+    "celo-election-vote": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the reviewed Celo Election routes.",
+      "scope": "Only the routes and deployments enumerated by the package.",
+      "paths": ["tests/erc7730-semantic-evidence/celo-election-vote/manifest.json"]
+    },
+    "celo-governance-voting": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the reviewed Celo Governance voting routes.",
+      "scope": "Only the routes and deployment enumerated by the package.",
+      "paths": ["tests/erc7730-semantic-evidence/celo-governance-voting/manifest.json"]
+    },
+    "celo-lockedcelo-quarantine": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the curated Celo LockedGold/LockedCelo proxy routes and refusal boundary.",
+      "scope": "Only the routes and deployment enumerated by the package.",
+      "paths": ["tests/erc7730-semantic-evidence/celo-lockedcelo-quarantine/manifest.json"]
+    },
+    "celo-validators-first-member": {
+      "classification": "pinned-evidence",
+      "reason": "Pins addFirstMember at the reviewed Celo Validators proxy.",
+      "scope": "Only the named route and deployment.",
+      "paths": ["tests/erc7730-semantic-evidence/celo-validators-first-member/manifest.json"]
+    },
+    "flyingtulip-sessionmanager": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the curated SessionManager routes across the descriptor deployments.",
+      "scope": "Only the routes and deployments enumerated by the package.",
+      "paths": ["tests/erc7730-semantic-evidence/flyingtulip-sessionmanager/manifest.json"]
+    },
+    "lido-staking": {
+      "classification": "pinned-evidence",
+      "reason": "Pins four admitted stETH and referral-staker routes.",
+      "scope": "Only the routes and Ethereum deployments enumerated by the package.",
+      "paths": ["tests/erc7730-semantic-evidence/lido-staking/manifest.json"]
+    },
+    "lido-withdrawal-queue": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the seven admitted WithdrawalQueueERC721 routes.",
+      "scope": "Only the reviewed Ethereum mainnet deployment.",
+      "paths": ["tests/erc7730-semantic-evidence/lido-withdrawal-queue/manifest.json"]
+    },
+    "lido-wsteth-permit": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the eight admitted wstETH calldata routes.",
+      "scope": "Only the reviewed Ethereum mainnet deployment.",
+      "paths": ["tests/erc7730-semantic-evidence/lido-wsteth-permit/manifest.json"]
+    },
+    "midas-mtbill-deposit-vault": {
+      "classification": "pinned-evidence",
+      "reason": "Pins four admitted mTBILL DepositVault routes.",
+      "scope": "Only the reviewed Ethereum proxy and named routes.",
+      "paths": ["tests/erc7730-semantic-evidence/midas-mtbill-deposit-vault/manifest.json"]
+    },
+    "midas-mtbill-redemption-vault": {
+      "classification": "pinned-evidence",
+      "reason": "Pins four admitted mTBILL RedemptionVault token-out routes.",
+      "scope": "Only the reviewed Ethereum proxy and named routes; fiat redemption stays outside scope.",
+      "paths": ["tests/erc7730-semantic-evidence/midas-mtbill-redemption-vault/manifest.json"]
+    },
+    "morpho-blue": {
+      "classification": "pinned-evidence",
+      "reason": "Pins six admitted Morpho Blue routes on Ethereum and Base.",
+      "scope": "Only the routes and deployments enumerated by the package.",
+      "paths": ["tests/erc7730-semantic-evidence/morpho-blue/manifest.json"]
+    },
+    "quickswap-router02-remove-liquidity": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the constrained QuickSwap Router02 route set.",
+      "scope": "Only the reviewed Polygon deployment and admitted routes.",
+      "paths": ["tests/erc7730-semantic-evidence/quickswap-router02-remove-liquidity/manifest.json"]
+    },
+    "stakewise-claim-exited-assets": {
+      "classification": "pinned-evidence",
+      "reason": "Pins three admitted StakeWise EthVault route families.",
+      "scope": "Only the P2P and Serenita deployments and routes enumerated by the package.",
+      "paths": ["tests/erc7730-semantic-evidence/stakewise-claim-exited-assets/manifest.json"]
+    },
+    "uniswap-permit2": {
+      "classification": "pinned-evidence",
+      "reason": "Pins PermitSingle, PermitBatch, and PermitTransferFrom at Ethereum Permit2.",
+      "scope": "Ethereum mainnet and exactly the three named EIP-712 types; other descriptor leaves are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/uniswap-permit2/manifest.json"]
+    },
+    "uniswap-router02-single-hop": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the constrained Ethereum SwapRouter02 route set.",
+      "scope": "Only the reviewed deployment and admitted routes.",
+      "paths": ["tests/erc7730-semantic-evidence/uniswap-router02-single-hop/manifest.json"]
+    },
+    "weth9-deposit": {
+      "classification": "pinned-evidence",
+      "reason": "Pins WETH9 deposit and withdrawal on the two admitted deployments.",
+      "scope": "Only Ethereum mainnet and Sepolia deposit/withdraw.",
+      "paths": ["tests/erc7730-semantic-evidence/weth9-deposit/manifest.json"]
+    },
+    "erc4626-shared-template": {
+      "classification": "shared-standard-implementation",
+      "reason": "Accepted formats are inherited unchanged from the single shared ERC-4626 descriptor template.",
+      "scope": "Rendering-template reuse only; deployed code, token metadata, and ERC-4626 conformance remain unproven leaf by leaf.",
+      "paths": [
+        "secure/data/erc7730-registry/ercs/calldata-erc4626-vaults.json",
+        "secure/data/erc7730-registry/registry/kiln/common-KilnVaults.json"
+      ]
+    }
+  },
+  "successor_issues": {
+    "remaining-calldata-families": {
+      "title": "erc7730-semantic-honesty: Reconcile remaining accepted calldata families",
+      "body": "Use tests/erc7730-semantic-evidence/accepted-family-inventory.json as the exact source-family queue. In bounded protocol slices, pin deployment/proxy/runtime, authoritative source/ABI, intent and field meaning, and metadata; then promote only the evidenced subset. Preserve exact-known hard refusal and do not infer proof for every leaf emitted by a mixed source descriptor."
+    },
+    "remaining-eip712-families": {
+      "title": "erc7730-semantic-honesty: Reconcile remaining accepted EIP-712 families",
+      "body": "Use tests/erc7730-semantic-evidence/accepted-family-inventory.json as the exact EIP-712 source-family queue. Pin domain/deployment/runtime and authoritative type/source semantics in bounded slices, and promote only the explicitly evidenced types and deployments. Do not treat a descriptor-family record or leaf count as universal deployment proof."
+    }
+  },
+  "families": [
+  {
+    "source": "1inch/calldata-AggregationRouterV4-eth.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "1inch/calldata-AggregationRouterV6-zksync.json",
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "1inch-v6-cancellation"
+  },
+  {
+    "source": "1inch/calldata-AggregationRouterV6.json",
+    "accepted_leaf_count": 9,
+    "classification": "pinned-evidence",
+    "evidence": "1inch-v6-cancellation"
+  },
+  {
+    "source": "aave/calldata-WrappedTokenGatewayV3.json",
+    "accepted_leaf_count": 13,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "aave/calldata-lpv2.json",
+    "accepted_leaf_count": 3,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "aave/calldata-lpv3.json",
+    "accepted_leaf_count": 15,
+    "classification": "pinned-evidence",
+    "evidence": "aave-v3-ethereum-pool"
+  },
+  {
+    "source": "avvatar-labs-alia/calldata-AgentIdentityRegistry-base.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "avvatar-labs-alia/calldata-AssetIdentityRegistry-base.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "avvatar-labs-alia/calldata-ScoreEngineV2-base.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "benqi/calldata-sAVAX.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "celo/calldata-celo_accounts.json",
+    "accepted_leaf_count": 2,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "celo/calldata-celo_election.json",
+    "accepted_leaf_count": 2,
+    "classification": "pinned-evidence",
+    "evidence": "celo-election-vote"
+  },
+  {
+    "source": "celo/calldata-celo_governance.json",
+    "accepted_leaf_count": 2,
+    "classification": "pinned-evidence",
+    "evidence": "celo-governance-voting"
+  },
+  {
+    "source": "celo/calldata-celo_validators.json",
+    "accepted_leaf_count": 2,
+    "classification": "pinned-evidence",
+    "evidence": "celo-validators-first-member"
+  },
+  {
+    "source": "celo/calldata-locked_celo.json",
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "celo-lockedcelo-quarantine"
+  },
+  {
+    "source": "corestake/calldata-coreagent.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "corestake/calldata-corestake.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "corestake/calldata-stakehub.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "degate/eip712-degate.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "ethena/calldata-ethena.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "fellow-fund/calldata-fellow-fund.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "flare/calldata-DistributionToDelegators-Flare.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "flare/calldata-PollingFoundation-Flare.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "flare/calldata-PollingFoundation-Songbird.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "flare/calldata-ValidatorRewardManager-Flare.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "flyingtulip/calldata-EpochRewardsVault-dev.json",
+    "accepted_leaf_count": 3,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "flyingtulip/calldata-EpochRewardsVault.json",
+    "accepted_leaf_count": 2,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "flyingtulip/calldata-MintAndRedeem-dev.json",
+    "accepted_leaf_count": 3,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "flyingtulip/calldata-MintAndRedeem.json",
+    "accepted_leaf_count": 2,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "flyingtulip/calldata-PftMarketplace.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "flyingtulip/calldata-PftNft.json",
+    "accepted_leaf_count": 3,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "flyingtulip/calldata-PositionsManager.json",
+    "accepted_leaf_count": 3,
+    "classification": "pinned-evidence",
+    "evidence": "allowance-threshold-honesty"
+  },
+  {
+    "source": "flyingtulip/calldata-PutManager.json",
+    "accepted_leaf_count": 3,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "flyingtulip/calldata-SessionManager.json",
+    "accepted_leaf_count": 7,
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-sessionmanager"
+  },
+  {
+    "source": "flyingtulip/eip712-LeverageRfqEngine.json",
+    "accepted_leaf_count": 3,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "flyingtulip/eip712-SessionManager-FT.json",
+    "accepted_leaf_count": 2,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "flyingtulip/eip712-SessionManager-ftUSD.json",
+    "accepted_leaf_count": 5,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "flyingtulip/eip712-SpotOrderCancel.json",
+    "accepted_leaf_count": 2,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "igra/calldata-KasExitBridge.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "kiln/calldata-Vault-EURC-Morpho-Gauntlet-Core.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-RLUSD-Euler-Yield.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDC-AAVE-Arbitrum.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDC-Aave-v3.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDC-Euler-Yield.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDC-Morpho-Gauntlet-Core-Base.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDC-Morpho-Gauntlet-Core.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDC-Morpho-Gauntlet-Prime.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDC-Morpho-Gauntlet-USDC-Core-Base-multisig.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDC-Morpho-Gauntlet-USDC-Core-multisig.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDC-Morpho-MEV-Capital.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDC-Morpho-Re7-Base.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDC-Morpho-Smokehouse-USDC-multisig.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDC-Morpho-Steakhouse-USDC-multisig.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDT-Aave-v3.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDT-Compound-v3.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDT-Euler-Yield.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDT-Morpho-Gauntlet-Prime.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDT-Morpho-Gauntlet-USDT-Core-multisig.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDT-Morpho-Gauntlet-USDT-Prime.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDT-Morpho-Smokehouse-USDT-multisig.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDT-Morpho-Steakhouse-USDT-multisig.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-USDe-Euler-Yield-USDE.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-WBTC-Morpho-Gauntlet-Core.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-WETH-Aave-v3.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-WETH-Morpho-Gauntlet-Core.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-WETH-Morpho-MEV-Capital.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-Vault-cbBTC-Morpho-Gauntlet-Core.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "kiln/calldata-kiln-fee-splitter-factory.json",
+    "accepted_leaf_count": 2,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "layerswap/calldata-LayerswapDepository.json",
+    "accepted_leaf_count": 56,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "ledgerquest/eip712-ledgerquest.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "lens/eip712-lens-lenshub.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "lens/eip712-lens-token-handle-registry.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "lido/calldata-WithdrawalQueueERC721.json",
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "lido-withdrawal-queue"
+  },
+  {
+    "source": "lido/calldata-stETH.json",
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "lido-staking"
+  },
+  {
+    "source": "lido/calldata-wstETH-referral-staker.json",
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "lido-staking"
+  },
+  {
+    "source": "lido/calldata-wstETH.json",
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "lido-wsteth-permit"
+  },
+  {
+    "source": "lombard/calldata-lbtc-mainnet.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "lombard/calldata-lbtc-sepolia.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "lombard/eip712-network-fee-authorization-mainnet.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "lombard/eip712-network-fee-authorization-sepolia.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "midas/calldata-MinterVault.json",
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "midas-mtbill-deposit-vault"
+  },
+  {
+    "source": "midas/calldata-RedemptionVault.json",
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "midas-mtbill-redemption-vault"
+  },
+  {
+    "source": "morpho/calldata-9summits-9SETHc.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-9summits-9SETHcore.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-9summits-9SUSDC11Core.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-9summits-9SUSDCcore.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-9summits-9SUSR.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-MorphoBlue.json",
+    "accepted_leaf_count": 2,
+    "classification": "pinned-evidence",
+    "evidence": "morpho-blue"
+  },
+  {
+    "source": "morpho/calldata-apostro-aprUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-apostro-aprUSR.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-b_protocol-reETH.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-b_protocol-reGOLD.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-b_protocol-reUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-b_protocol-recbBTC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-block_analitica-bbETH.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-block_analitica-bbUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-block_analitica-bbUSDT.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-block_analitica-mwETH.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-block_analitica-mwEURC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-block_analitica-mwUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-block_analitica-mwcbBTC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-fence-ERY.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-elixirUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtAUSDc.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtDAIcore.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtEURCc.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtLBTCc.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtLRTcore.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtUSDAcore.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtUSDCc.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtUSDCcore.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtUSDCmkr.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtUSDCp.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtUSDT.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtWBTCc.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtWETH.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtWETHc.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtWETHe.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtcbBTCc.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gteUSDc.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtmsETHc.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtmsUSDc.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-gtusdcf.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-ionicUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-ionicWETH.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-mhyETH.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-midasUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-msolvbtcbbn.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-resolvUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-sbMorphoUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-sbMorphotBTC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-smUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-smWETH.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-gauntlet-smcbBTC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-hakutora-hUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-leadblock-USDC-RWA.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-llamarisk-llama-crvUSD.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-mev_capital-MC-USR.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-mev_capital-MC.eUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-mev_capital-MC_USD0.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-mev_capital-MCcbBTC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-mev_capital-MCwBTC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-mev_capital-MCwETH.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-mev_capital-USUALUSDC+.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-mev_capital-pWBTC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-Re7FRAX.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-Re7RWA.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-Re7USDA.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-Re7USDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-Re7USDT.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-Re7WBTC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-Re7WETH.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-Re7cbBTC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-Re7cdxUSD1.1.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-Re7wstETH.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-degenUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-fxUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-mDEGEN.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-mMAI.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-meUSD.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-pythETH.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-pythUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-re7_labs-uUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-sparkdao-spDAI.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-sparkdao-sparkUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-bbqDAI.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-bbqUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-bbqUSDT.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-bbqWSTETH.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-csUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-csUSDL.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakETH.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakEURA.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakEURC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakPAXG.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakPYUSD.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakRUSD.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakSUSDS.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakUSDA.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakUSDC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakUSDCrwa.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakUSDM.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakUSDQ.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakUSDR.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakUSDT.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakUSDTlite.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "morpho/calldata-steakhouse_financial-steakWBTC.json",
+    "accepted_leaf_count": 1,
+    "classification": "shared-standard-implementation",
+    "evidence": "erc4626-shared-template"
+  },
+  {
+    "source": "ondo-finance/calldata-GMTokenLimitOrder.json",
+    "accepted_leaf_count": 2,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "ondo-finance/calldata-OUSGInstantManager.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "ondo-finance/calldata-USDYInstantManager.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "p2p/calldata-EigenPodManager.json",
+    "accepted_leaf_count": 2,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "p2p/calldata-NativeTokenVault.json",
+    "accepted_leaf_count": 2,
+    "classification": "pinned-evidence",
+    "evidence": "stakewise-claim-exited-assets"
+  },
+  {
+    "source": "p2p/calldata-P2pMessageSender.json",
+    "accepted_leaf_count": 3,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "paraswap/eip712-paraswap.json",
+    "accepted_leaf_count": 5,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "quickswap/calldata-QuickSwap.json",
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "quickswap-router02-remove-liquidity"
+  },
+  {
+    "source": "rarible/eip712-rarible-erc-1155.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "rarible/eip712-rarible-erc-721.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "safe/calldata-Safe-1.3.0.json",
+    "accepted_leaf_count": 14,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "safe/calldata-Safe-1.4.1.json",
+    "accepted_leaf_count": 7,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "safe/calldata-Safe-1.5.0.json",
+    "accepted_leaf_count": 2,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "safe/calldata-SafeL2-1.3.0.json",
+    "accepted_leaf_count": 14,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "safe/calldata-SafeL2-1.4.1.json",
+    "accepted_leaf_count": 7,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "safe/calldata-SafeL2-1.5.0.json",
+    "accepted_leaf_count": 2,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "safe/calldata-SafeMigration-1.4.1.json",
+    "accepted_leaf_count": 7,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "safe/calldata-SafeMigration-1.5.0.json",
+    "accepted_leaf_count": 2,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "safe/calldata-SafeToL2Setup-1.4.1.json",
+    "accepted_leaf_count": 7,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "safe/calldata-SafeToL2Setup-1.5.0.json",
+    "accepted_leaf_count": 2,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "sei/calldata-sei-distribution.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "sei/calldata-sei-staking.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "serenita/calldata-EthVault.json",
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "stakewise-claim-exited-assets"
+  },
+  {
+    "source": "smartcredit/eip712-smartcredit.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "starkgate/calldata-StarkGate-STRK.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "swell/calldata-swell.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "swissborg/calldata-ChsbToBorgMigrator.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "swissborg/calldata-NttManager.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "tally/eip712-tally-arbitrum-arb-token.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "tally/eip712-tally-arbitrum-core-governor.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "tally/eip712-tally-arbitrum-treasury-governor.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "tally/eip712-tally-ethereum-bitcoin-governor.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "tally/eip712-tally-ethereum-bravo-governor.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "tally/eip712-tally-ethereum-ens-governor.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "tally/eip712-tally-ethereum-ens-token.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "tally/eip712-tally-ethereum-gtk-token.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "tally/eip712-tally-ethereum-hop-governor.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "tally/eip712-tally-ethereum-hop-token.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "tally/eip712-tally-ethereum-pool-token.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "tally/eip712-tally-ethereum-pooltogether-governor.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "tally/eip712-tally-ethereum-uni-token.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-eip712-families"
+  },
+  {
+    "source": "tether/calldata-usdt.json",
+    "accepted_leaf_count": 2,
+    "classification": "pinned-evidence",
+    "evidence": "allowance-threshold-honesty"
+  },
+  {
+    "source": "threshold/calldata-L2WormholeGateway.json",
+    "accepted_leaf_count": 7,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "threshold/calldata-RebateStaking.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "threshold/calldata-TBTCVault.json",
+    "accepted_leaf_count": 2,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "uniswap/calldata-UniswapV3Router02.json",
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "uniswap-router02-single-hop"
+  },
+  {
+    "source": "uniswap/eip712-uniswap-permit2.json",
+    "accepted_leaf_count": 15,
+    "classification": "pinned-evidence",
+    "evidence": "uniswap-permit2"
+  },
+  {
+    "source": "walletconnect/calldata-stakeweight.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "walletconnect/calldata-wct.json",
+    "accepted_leaf_count": 3,
+    "classification": "pinned-evidence",
+    "evidence": "allowance-threshold-honesty"
+  },
+  {
+    "source": "weth/calldata-weth.json",
+    "accepted_leaf_count": 2,
+    "classification": "pinned-evidence",
+    "evidence": "weth9-deposit"
+  },
+  {
+    "source": "yieldxyz/calldata-yieldxyz-pol-validator.json",
+    "accepted_leaf_count": 17,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  },
+  {
+    "source": "yieldxyz/calldata-yieldxyz-usde-vault.json",
+    "accepted_leaf_count": 1,
+    "classification": "lower-priority-residual",
+    "successor_issue": "remaining-calldata-families"
+  }
+]
+}
+
