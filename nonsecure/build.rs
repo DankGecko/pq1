@@ -58,6 +58,7 @@ fn main() {
         ];
         let nested_parent: [u8; 20] = [0x34; 20];
         let nested_child: [u8; 20] = [0x56; 20];
+        let multi_tail: [u8; 20] = [0x78; 20];
 
         let weth_mainnet_entry = build_erc7730_entry(&blob, 1, &weth_mainnet)
             .expect("build mainnet WETH ERC-7730 E2E entry");
@@ -105,6 +106,15 @@ fn main() {
             .expect("build synthetic nested-calldata ERC-7730 E2E proof set");
         std::fs::write(out_dir.join("erc7730_e2e_nested_calldata.bin"), nested)
             .expect("write synthetic nested-calldata ERC-7730 E2E proof set");
+
+        let multi_tail = build_erc7730_entry(&blob, 31_337, &multi_tail)
+            .expect("build synthetic multi-tail ERC-7730 E2E entry");
+        assert_eq!(multi_tail.context_kind, 0x01);
+        std::fs::write(
+            out_dir.join("erc7730_e2e_multi_tail.bin"),
+            &multi_tail.trailer,
+        )
+        .expect("write synthetic multi-tail ERC-7730 E2E trailer");
     }
 }
 

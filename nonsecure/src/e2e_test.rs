@@ -157,6 +157,29 @@ fn build_nested_calldata_forward() -> [u8; 196] {
     out
 }
 
+/// Canonical ABI for the synthetic E2E
+/// `annotate(string subject, string memo)` call. Both independent dynamic
+/// tails exactly tile the bytes after the two-word static head.
+fn build_multi_tail_two_strings() -> [u8; 196] {
+    const SUBJECT: &[u8] = b"alpha subject";
+    const MEMO: &[u8] = b"exact memo";
+    const FIRST_TAIL: usize = 64;
+    const SECOND_TAIL: usize = 128;
+
+    let mut out = [0u8; 196];
+    out[..4].copy_from_slice(&keccak256(b"annotate(string,string)")[..4]);
+    out[4 + 24..4 + 32].copy_from_slice(&(FIRST_TAIL as u64).to_be_bytes());
+    out[4 + 32 + 24..4 + 64].copy_from_slice(&(SECOND_TAIL as u64).to_be_bytes());
+
+    out[4 + FIRST_TAIL + 24..4 + FIRST_TAIL + 32]
+        .copy_from_slice(&(SUBJECT.len() as u64).to_be_bytes());
+    out[4 + FIRST_TAIL + 32..4 + FIRST_TAIL + 32 + SUBJECT.len()].copy_from_slice(SUBJECT);
+    out[4 + SECOND_TAIL + 24..4 + SECOND_TAIL + 32]
+        .copy_from_slice(&(MEMO.len() as u64).to_be_bytes());
+    out[4 + SECOND_TAIL + 32..4 + SECOND_TAIL + 32 + MEMO.len()].copy_from_slice(MEMO);
+    out
+}
+
 // === Safe-multisig (`safe_v1`) trailer helpers =============================
 
 #[inline]
@@ -611,6 +634,11 @@ const ERC7730_EIP712_DELEGATION_SEPOLIA: &[u8] = include_bytes!(concat!(
 #[cfg(feature = "e2e-test")]
 const ERC7730_PROOF_SET_NESTED_CALLDATA: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/erc7730_e2e_nested_calldata.bin"));
+
+/// Generated legacy bundle for the synthetic rooted two-string descriptor.
+#[cfg(feature = "e2e-test")]
+const ERC7730_TRAILER_MULTI_TAIL: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/erc7730_e2e_multi_tail.bin"));
 
 /// Append zero-length placeholders for every prior trailer slot and
 /// then the supplied ERC-7730 bundle. Sign-input wire ordering is
@@ -1467,6 +1495,42 @@ fn main() -> ! {
         );
         hprintln!(
             "[NS][e2e]   → nested ERC-7730 dispatch accepted, t2_len={}",
+            t2_len
+        );
+    }
+
+    // Scenario 5m-multi-tail: authenticate one legacy bundle for a descriptor
+    // with two top-level dynamic strings, prove the complete tail partition,
+    // render both values, and release a Type-2 signature.
+    hprintln!("[NS][e2e] Scenario 5m-multi-tail: ERC-7730 two-string tails match + signs");
+    #[cfg(feature = "e2e-test")]
+    unsafe {
+        const MULTI_TAIL_CONTRACT: [u8; 20] = [0x78; 20];
+        let calldata = build_multi_tail_two_strings();
+        let header_len = build_sign_payload(
+            &mut PAYLOAD_BUF,
+            &wallet_sender,
+            31_337,
+            1,
+            false,
+            45,
+            &MULTI_TAIL_CONTRACT,
+            0,
+            &calldata,
+        );
+        let new_len =
+            append_erc7730_only_trailers(&mut PAYLOAD_BUF, header_len, ERC7730_TRAILER_MULTI_TAIL)
+                .expect("multi-tail ERC-7730 trailer fits PAYLOAD_BUF");
+        let status = nsc_api::sign_userop(&PAYLOAD_BUF[..new_len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::Ok as u32,
+            "scenario 5m-multi-tail: rooted two-string calldata must render and sign"
+        );
+        let (t1_present, t2_len) = parse_response(&SIG_BUF);
+        assert!(!t1_present, "scenario 5m-multi-tail requests Type 2 only");
+        hprintln!(
+            "[NS][e2e]   → multi-tail ERC-7730 dispatch accepted, t2_len={}",
             t2_len
         );
     }
