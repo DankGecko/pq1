@@ -2402,3 +2402,39 @@ hypertree core). Multi-day, procedure-level relational, not novel. No new axiom.
 IMPACT: the VF branch is proven (hop-6); the VT branch needs the concrete FORS+C game refinement (a soundness-
 relevant faithfulness fix to the capstone's FORS leg, not a false theorem). Scheme correctness is components + the
 open R1b assembly. The finding is exactly the kind of vacuity the honest track exists to catch.
+
+### 2026-07-21 — Wave 10: FORS-leg finding DIAGNOSED (reassuring) — EUFCMA_MFORSC10 is MEANINGFUL; the gap is the hop-5 seam
+
+Discriminating investigation (advisor-prescribed) + adversarial adjudication. VERDICT: verdict_sound=True,
+accept_all_probe_valid=True, fix_path_sound=True. The Wave-9 finding does NOT undermine the proven pieces.
+
+**EUFCMA_MFORSC10 IS A GENUINE MEANINGFUL BOUND (the reassuring result).** The informative test (fverify:=ACCEPT-ALL,
+not false) + a negative control settle it: accept-all is a LEGAL instantiation (no MFORSC10 axiom rejects it — the
+theory declares ZERO axioms on fverify/mkeygen/fsign), EUFCMA_MFORSC10 holds at accept-all, and the bound is a
+GENUINE CONDITIONAL whose content is exactly (ITSRC10 assumption) + the LOAD-BEARING H-TREE-MULTI mtree premise —
+dropping the mtree premise makes the bound unprovable ("cannot close goals"), proving the RHS scales via that
+premise, NOT via any hidden fverify-soundness hypothesis. So the vacuity is NOT in EUFCMA_MFORSC10; the FORS bound
+is real. The earlier "potentially vacuous FORS leg" caveat is corrected in both capstone files (commit 3544003).
+
+**THE VF/HYPERTREE LEG IS CONFIRMED CONCRETE** (XmssmtCC_All.ec:257 verify is a real proc, :8439 discharged via
+concrete WOTS-C + TCR reductions) — hop-6 does NOT share the asterisk. No asterisk on both proven legs.
+
+**THE GAP IS PURELY THE hop-5 SEAM, and it is STRUCTURAL (not cheap-inherit).** LeqPr_VT_C cannot connect p_vt to
+the ABSTRACT game for two independent reasons: (i) fverify unconstrained ⇒ fverify:=false zeroes Pr[RHS]
+(rhs_zero_fverify_false); (ii) D2 — M.mkeygen is a PURE OP deriving the FORS cube from ps (FORS_C10_Multi.ec:129/210)
+while V_C samples skFORS_ele <$ ddgstblock ps-INDEPENDENTLY (rtop_c_soundness_wip.ec:402), so no equality-supported
+coupling. inherit-concrete-fverify ALONE is insufficient (kills only (i); D2 still blocks).
+
+**THE PINNED FIX (structural, > the "1-2 sessions" the investigator estimated — adjudicator flagged over-optimistic):**
+build a CONCRETE PROCEDURAL M-FORS+C game replacing all three abstract ops — (1) procedural sampling keygen a la
+MM45 M_FORS_ES_NPRF.keygen (FORS_ES.ec:1933, skFORS_ele <$ ddgstblock :1829 ps-independently = the IDENTICAL draw
+to V_C:402, reconciling D2 by construction); (2) concrete routed sign (FL_FORS_ES_NPRF.sign, :2055); (3) verify by
+pkFORS_from_sigFORSTW reconstructed-key-equality + predC_fors (:1759). EUFCMA_MFORSC10 INSTANTIATES at it
+automatically (proven with abstract ops ⇒ holds for every legal instantiation). Then port MM45's pool coupling
+(SPHINCS_PLUS.ec:3143-3174 keygen/pubkey + :3307-3327 sign carry-through) to prove LeqPr_VT_C. The +C bite
+(good_eq_good_fors_M / dcond_good_eq) is already proven and orthogonal. NOTE (adjudicator): reachability Pr[VT]>0 is
+a meaningfulness question — mu_split makes Pr[V_C]=Pr[VT]+Pr[VF] exact regardless, and the concrete-game reduction
+makes hop-5 provable either way (Pr[VT] <= FORS_term whether Pr[VT] is 0 or positive).
+
+NET: the finding refined, not fatal. Proven pieces (EUFCMA_MFORSC10 real, VF/hop-6 concrete 0-admit) stand. Next =
+build the concrete procedural FORS+C game + hop-5 over it (the pinned structural fix).
