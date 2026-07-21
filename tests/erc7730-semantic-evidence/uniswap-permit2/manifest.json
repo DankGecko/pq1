@@ -1,7 +1,19 @@
 {
   "schema_version": 1,
-  "scope": "Permit2 EIP-712 source semantics for the three formats admitted by PQ1",
-  "captured_at_utc": "2026-07-20T18:44:34Z",
+  "scope": "Uniswap Permit2 Ethereum deployment and EIP-712 semantics for exactly the three formats admitted by PQ1",
+  "captured_at_utc": "2026-07-21T18:20:55Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
+  "boundary": "Historical fixed-block deployment evidence for Ethereum mainnet plus source-bound semantics for exactly PermitSingle, PermitBatch, and PermitTransferFrom. No authority for other Permit2 EIP-712 types, other chains, future code/state, transaction success, hardware, production, shipment, fallback, or blind signing.",
+  "bundle_files": [
+    {
+      "path": "README.md",
+      "sha256": "bd4d01a95c70b7c5ff53a4f6ffd20d00ba56d0a64ada4a5832775a932c59c064"
+    },
+    {
+      "path": "collect.sh",
+      "sha256": "c91cf8f0ddb5d7faf0ccb0839a2380bdae4645b0e042a6999ab3cb54150c160b"
+    }
+  ],
   "upstream": {
     "repository": "https://github.com/Uniswap/permit2",
     "deployment_tag": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
@@ -10,6 +22,18 @@
     "tree": "0d35aeb758e99510961089df8f7dfd94b256e58f",
     "commit_time": "2022-11-17T18:53:10-05:00",
     "commit_subject": "feat: fix docs link (#152)",
+    "deployment_tag_ref": {
+      "path": "official/github/deployment-tag.ref.json",
+      "sha256": "07956d78cf4dbf151cb3374ecc4c0c6292c786ad5a7d59088b8d08377c8eec6e"
+    },
+    "commit_record": {
+      "path": "official/github/deployment-tag.commit.json",
+      "sha256": "bc93f821b3dd4ce60f6e7b2a0ec34bc3d27a4ea996562a5fccb4cdfef7f22c31"
+    },
+    "readme": {
+      "path": "official/README.md",
+      "sha256": "7f37d1fde3cca0705644c6e4f848845cd978b83520b4a8cb296b8d928aa7d34f"
+    },
     "files": [
       {
         "path": "script/DeployPermit2.s.sol",
@@ -26,6 +50,10 @@
       {
         "path": "src/Permit2.sol",
         "sha256": "a19dd81d4edafe3bba0178abfc9063886c2981b4711a4cbbf3fac19370defc9a"
+      },
+      {
+        "path": "src/PermitErrors.sol",
+        "sha256": "0919679c5bb58466d3a06d9d3297ec4946ba5d135330f10f4fb080067586afad"
       },
       {
         "path": "src/SignatureTransfer.sol",
@@ -148,16 +176,89 @@
     "sha256": "585cda2929c5e88e35d6c98aa6b8edd38e01a03288123d1d6bc60635c2119204",
     "include": "secure/data/erc7730-registry/registry/uniswap/uniswap-common-eip712.json",
     "include_sha256": "42308b598001e669b81aeb2a29d37bb28d7f422aed9ff5c44b443ce963f4b8ab",
-    "deployment_address": "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+    "deployment_address": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+    "descriptor_hash": "0xa3da692fc8a3f698dab11669f428e35c24066f79a779571e50815ba15e55aec7",
+    "erc8176_hash": "0xcbd4ff9da6ba282b97490b0adde8d49b42799c33cb3298c65a855fa27e4836c1",
+    "ir_bytes": 929,
+    "format_count": 3,
+    "field_count": 10,
+    "admitted_types": [
+      "PermitSingle",
+      "PermitBatch",
+      "PermitTransferFrom"
+    ]
+  },
+  "fixed_block": {
+    "chain_id": 1,
+    "number": 25581839,
+    "number_hex": "0x186590f",
+    "hash": "0xaf33a385f3e3ef960596f87691b2447f3256abfda7802466da38067617f94169",
+    "parent_hash": "0xe9b3fe47188ce43c83a216db19f2465dfd95db66140a1b5586561d868a69f75a",
+    "state_root": "0x7f772792002fcfc36abff4cf7d484f416a9b5c30cb9be4166314393cadb9ae05",
+    "timestamp": 1784645807,
+    "timestamp_hex": "0x6a5f88af",
+    "timestamp_utc": "2026-07-21T14:56:47Z"
+  },
+  "rpc": {
+    "request": {
+      "path": "rpc/raw/request-ethereum.json",
+      "sha256": "d81ae1667d7fc927bcea51107e943fa762499cebf16525a452e39ba568031da6"
+    },
+    "providers": [
+      {
+        "name": "dRPC",
+        "url": "https://eth.drpc.org",
+        "response": {
+          "path": "rpc/raw/response-drpc-ethereum.json",
+          "sha256": "93956ef0aaffd106368e41ab61fa0a230a9161998aeb7ce549bb36db99e73083"
+        }
+      },
+      {
+        "name": "Tenderly",
+        "url": "https://mainnet.gateway.tenderly.co",
+        "response": {
+          "path": "rpc/raw/response-tenderly-ethereum.json",
+          "sha256": "93956ef0aaffd106368e41ab61fa0a230a9161998aeb7ce549bb36db99e73083"
+        }
+      }
+    ]
+  },
+  "verifier": {
+    "provider": "Ethereum Blockscout",
+    "url": "https://eth.blockscout.com/api/v2/smart-contracts/0x000000000022D473030F116dDEE9F6B43aC78BA3",
+    "report": {
+      "path": "verifier/ethereum-blockscout.json",
+      "sha256": "3ffb0dbbace8583f7ce2d46032293da51b77f7a737162bfc30dd4a47b9cfdef8"
+    },
+    "abi": {
+      "path": "abi/Permit2.abi.json",
+      "sha256": "505e4270e36c21a50faba7e6874adffdcc733447ca447968cf51d6414e91d2f6"
+    },
+    "contract_name": "Permit2",
+    "blockscout_verification_class": "partially_verified",
+    "compiler_version": "v0.8.17+commit.8df45f5f",
+    "optimization_enabled": true,
+    "optimization_runs": 1000000,
+    "evm_version": "london"
   },
   "deployment_runtime": {
-    "archived": false,
-    "fixed_block_evidence": false,
-    "claim": "none",
-    "reason": "Available latest-state runtime samples had no block-number and block-hash receipts. They were deliberately excluded rather than promoted into immutable deployment evidence."
+    "archived": true,
+    "fixed_block_evidence": true,
+    "claim": "historical-ethereum-mainnet-runtime",
+    "address": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+    "artifact": {
+      "path": "runtime/Permit2.ethereum-mainnet.hex",
+      "sha256": "2842408654645f58686f50b19636bb771d839b4709ab202f34ab371abe764185"
+    },
+    "bytes": 9152,
+    "decoded_sha256": "62f01f46295c143ebea4d1cf12be2085d8b93d53f86d95afba4f016ee2d694ba",
+    "keccak256": "0xc67d1657868aa5146eaf24fb879fb1fdec3d2d493b3683a61c9c2f4fb2851131",
+    "domain_separator_selector": "0x3644e515",
+    "domain_separator": "0x866a5aba21966af95d6c7ab78eb2b2fc913915c28be3b9aa07cc04ff903e3f28"
   },
   "residuals": [
-    "The official deployment-address tag pins source semantics, but this bundle does not prove deployed runtime or state on any descriptor chain.",
+    "The runtime and on-chain domain receipt prove one historical Ethereum-mainnet state only; this package does not monitor future code/state or establish the other descriptor chains.",
+    "Blockscout marks its address-scoped report partially rather than fully verified; the package independently checks its runtime against two fixed-block RPC observations and its semantic source files against the official Uniswap address tag, but does not promote the explorer label.",
     "The descriptor include still declares deprecated Mumbai chain 80001; this evidence does not establish current availability there.",
     "Permit2 execution still depends on live nonce, deadline, allowance, balance, token behavior, contract-wallet code, and transaction ordering.",
     "This evidence grants no production-shipment, fallback, or blind-signing authority."

@@ -1,14 +1,20 @@
-//! Offline source-to-descriptor evidence for Uniswap Permit2 EIP-712 permits.
-//!
-//! This test intentionally makes no RPC request and no deployed-runtime claim.
+//! Offline deployed-runtime, source, and descriptor evidence for Uniswap
+//! Permit2 EIP-712 permits. The tests read only checked-in artifacts.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use dbgen::erc7730::{try_compile_one, Emitted, Policy};
+use dbgen::erc7730::{
+    build_db_tolerant_with_erc20_capabilities, try_compile_one, Emitted, Erc7730BuildResult, Policy,
+};
+use pqsigner_erc7730::binding::cross_check_eip712;
+use pqsigner_erc7730::bundle::verify_erc7730_bundle;
+use pqsigner_erc7730::display::render::nested::{hash_struct, hash_struct_array};
+use pqsigner_erc7730::display::render::render_erc7730_eip712_pages_v3;
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir, Visibility};
 use pqsigner_erc7730::render::params::parse as parse_params;
+use pqsigner_tx::names::NameResolver;
 use pqsigner_tx_core::hash::keccak256;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -20,6 +26,20 @@ const DESCRIPTOR_SHA256: &str = "585cda2929c5e88e35d6c98aa6b8edd38e01a03288123d1
 const INCLUDE_SHA256: &str = "42308b598001e669b81aeb2a29d37bb28d7f422aed9ff5c44b443ce963f4b8ab";
 const UINT160_MAX_WORD: &str = "0x000000000000000000000000ffffffffffffffffffffffffffffffffffffffff";
 const UINT256_MAX_WORD: &str = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+const FIXED_BLOCK: u64 = 25_581_839;
+const FIXED_BLOCK_HEX: &str = "0x186590f";
+const FIXED_BLOCK_HASH: &str = "0xaf33a385f3e3ef960596f87691b2447f3256abfda7802466da38067617f94169";
+const FIXED_PARENT_HASH: &str =
+    "0xe9b3fe47188ce43c83a216db19f2465dfd95db66140a1b5586561d868a69f75a";
+const FIXED_STATE_ROOT: &str = "0x7f772792002fcfc36abff4cf7d484f416a9b5c30cb9be4166314393cadb9ae05";
+const FIXED_TIMESTAMP_HEX: &str = "0x6a5f88af";
+const DOMAIN_SEPARATOR_SELECTOR: &str = "0x3644e515";
+const ETHEREUM_DOMAIN_SEPARATOR: &str =
+    "0x866a5aba21966af95d6c7ab78eb2b2fc913915c28be3b9aa07cc04ff903e3f28";
+const RUNTIME_DECODED_SHA256: &str =
+    "62f01f46295c143ebea4d1cf12be2085d8b93d53f86d95afba4f016ee2d694ba";
+const RUNTIME_KECCAK256: &str =
+    "0xc67d1657868aa5146eaf24fb879fb1fdec3d2d493b3683a61c9c2f4fb2851131";
 
 const DOMAIN_TYPE: &str = "EIP712Domain(string name,uint256 chainId,address verifyingContract)";
 const PERMIT_DETAILS_TYPE: &str =
@@ -57,7 +77,7 @@ const TYPE_RECEIPTS: [(&str, &str, &str); 5] = [
     ),
 ];
 
-const SOURCE_RECEIPTS: [(&str, &str); 11] = [
+const SOURCE_RECEIPTS: [(&str, &str); 12] = [
     (
         "script/DeployPermit2.s.sol",
         "d1085fa275e065bc50af25389a5cc7f6b16b9cd5e947126ef677871bf46fb09f",
@@ -73,6 +93,10 @@ const SOURCE_RECEIPTS: [(&str, &str); 11] = [
     (
         "src/Permit2.sol",
         "a19dd81d4edafe3bba0178abfc9063886c2981b4711a4cbbf3fac19370defc9a",
+    ),
+    (
+        "src/PermitErrors.sol",
+        "0919679c5bb58466d3a06d9d3297ec4946ba5d135330f10f4fb080067586afad",
     ),
     (
         "src/SignatureTransfer.sol",
@@ -141,6 +165,19 @@ fn keccak_hex(bytes: &[u8]) -> String {
     format!("0x{}", hex::encode(keccak256(bytes)))
 }
 
+fn decode_hex(text: &str) -> Vec<u8> {
+    let compact: String = text
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    hex::decode(compact.strip_prefix("0x").unwrap_or(&compact)).expect("valid evidence hex")
+}
+
+fn hex_quantity(value: &Value) -> u64 {
+    let text = value.as_str().expect("hex quantity is a string");
+    u64::from_str_radix(text.strip_prefix("0x").unwrap_or(text), 16).expect("valid hex quantity")
+}
+
 fn normalized_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -170,11 +207,116 @@ fn collect_files(root: &Path, directory: &Path, files: &mut BTreeSet<String>) {
                 .to_str()
                 .expect("evidence path is UTF-8")
                 .replace('\\', "/");
-            if relative != "README.md" && relative != "manifest.json" {
+            if relative != "manifest.json" {
                 assert!(files.insert(relative), "duplicate evidence file");
             }
         }
     }
+}
+
+fn collect_receipts(value: &Value, receipts: &mut BTreeMap<String, String>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_receipts(item, receipts);
+            }
+        }
+        Value::Object(object) => {
+            if let (Some(path), Some(hash)) = (
+                object.get("path").and_then(Value::as_str),
+                object.get("sha256").and_then(Value::as_str),
+            ) {
+                assert_eq!(hash.len(), 64, "receipt hash width: {path}");
+                assert!(
+                    hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                    "receipt hash is hexadecimal: {path}"
+                );
+                assert!(
+                    receipts.insert(path.to_owned(), hash.to_owned()).is_none(),
+                    "duplicate receipt: {path}"
+                );
+            }
+            for child in object.values() {
+                collect_receipts(child, receipts);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn response_results(path: &Path) -> BTreeMap<String, Value> {
+    let response = read_json(path);
+    let mut results = BTreeMap::new();
+    for item in response.as_array().expect("RPC response batch") {
+        assert_eq!(item["jsonrpc"].as_str(), Some("2.0"));
+        assert!(
+            item.get("error").is_none() || item["error"].is_null(),
+            "RPC error in {}",
+            path.display()
+        );
+        let id = required_str(item, "id").to_owned();
+        let result = item
+            .get("result")
+            .unwrap_or_else(|| panic!("missing RPC result {id}"))
+            .clone();
+        assert!(
+            results.insert(id.clone(), result).is_none(),
+            "duplicate {id}"
+        );
+    }
+    results
+}
+
+fn request<'a>(document: &'a Value, id: &str) -> &'a Value {
+    document
+        .as_array()
+        .expect("RPC request batch")
+        .iter()
+        .find(|item| item["id"].as_str() == Some(id))
+        .unwrap_or_else(|| panic!("missing RPC request {id}"))
+}
+
+fn blockscout_source<'a>(report: &'a Value, path: &str) -> &'a str {
+    if report["file_path"].as_str() == Some(path) {
+        return required_str(report, "source_code");
+    }
+    report["additional_sources"]
+        .as_array()
+        .expect("Blockscout additional sources")
+        .iter()
+        .find(|source| source["file_path"].as_str() == Some(path))
+        .map(|source| required_str(source, "source_code"))
+        .unwrap_or_else(|| panic!("Blockscout source missing {path}"))
+}
+
+fn abi_function_by_input<'a>(abi: &'a Value, name: &str, internal_type: &str) -> &'a Value {
+    abi.as_array()
+        .expect("ABI array")
+        .iter()
+        .find(|entry| {
+            entry["type"].as_str() == Some("function")
+                && entry["name"].as_str() == Some(name)
+                && entry["inputs"].as_array().is_some_and(|inputs| {
+                    inputs
+                        .iter()
+                        .any(|input| input["internalType"].as_str() == Some(internal_type))
+                })
+        })
+        .unwrap_or_else(|| panic!("ABI missing {name} with {internal_type}"))
+}
+
+fn component_names_and_types(input: &Value) -> Vec<(&str, &str)> {
+    input["components"]
+        .as_array()
+        .expect("tuple components")
+        .iter()
+        .map(|component| {
+            (
+                required_str(component, "name"),
+                required_str(component, "type"),
+            )
+        })
+        .collect()
 }
 
 fn descriptor_field<'a>(format: &'a Value, path: &str) -> &'a Value {
@@ -224,6 +366,73 @@ fn eip712_domain_separator(chain_id: u64, contract: &[u8; 20]) -> [u8; 32] {
     keccak256(&encoded)
 }
 
+fn production_registry() -> Erc7730BuildResult {
+    let root = workspace_root();
+    let registry_root = root.join("secure/data/erc7730-registry");
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20.json"))
+        .expect("build production ERC20 capability corpus");
+    build_db_tolerant_with_erc20_capabilities(
+        &registry_root.join("registry"),
+        &root.join("secure/data/erc7730/policy.toml"),
+        Some(&registry_root),
+        &erc20.capabilities,
+    )
+    .expect("build production ERC-7730 registry")
+    .0
+}
+
+fn synth_bundle(registry: &Erc7730BuildResult, entry: &Emitted) -> Vec<u8> {
+    let depth = u32::from_le_bytes(registry.blob[24..28].try_into().unwrap()) as usize;
+    let proofs_off = u32::from_le_bytes(registry.blob[28..32].try_into().unwrap()) as usize;
+    let proof_base = proofs_off + entry.leaf_index * depth * 32;
+    let mut bundle = Vec::with_capacity(2 + entry.ir_bytes.len() + 8 + depth * 32);
+    bundle.extend_from_slice(&(entry.ir_bytes.len() as u16).to_be_bytes());
+    bundle.extend_from_slice(&entry.ir_bytes);
+    bundle.extend_from_slice(&(entry.leaf_index as u32).to_be_bytes());
+    bundle.extend_from_slice(&(depth as u32).to_be_bytes());
+    bundle.extend_from_slice(&registry.blob[proof_base..proof_base + depth * 32]);
+    bundle
+}
+
+fn word_address(address: &[u8; 20]) -> [u8; 32] {
+    let mut word = [0u8; 32];
+    word[12..].copy_from_slice(address);
+    word
+}
+
+fn word_u64(value: u64) -> [u8; 32] {
+    let mut word = [0u8; 32];
+    word[24..].copy_from_slice(&value.to_be_bytes());
+    word
+}
+
+fn permit_details(token: &[u8; 20], amount: u64, expiration: u64, nonce: u64) -> Vec<u8> {
+    [
+        word_address(token),
+        word_u64(amount),
+        word_u64(expiration),
+        word_u64(nonce),
+    ]
+    .concat()
+}
+
+fn one_record_blob(record: &[u8]) -> Vec<u8> {
+    let mut blob = Vec::with_capacity(2 + record.len());
+    blob.extend_from_slice(&(record.len() as u16).to_be_bytes());
+    blob.extend_from_slice(record);
+    blob
+}
+
+fn pages_text(pages: &pqsigner_erc7730::display::Pages) -> String {
+    pages
+        .as_slice()
+        .iter()
+        .flat_map(|page| page.iter())
+        .map(|row| String::from_utf8_lossy(row).trim().to_owned())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn official_deployment_tag_source_archive_is_complete_and_hash_pinned() {
     let root = evidence_root();
@@ -244,16 +453,31 @@ fn official_deployment_tag_source_archive_is_complete_and_hash_pinned() {
     );
     assert_eq!(
         manifest["deployment_runtime"]["archived"].as_bool(),
-        Some(false)
+        Some(true)
     );
     assert_eq!(
         manifest["deployment_runtime"]["fixed_block_evidence"].as_bool(),
-        Some(false)
+        Some(true)
     );
     assert_eq!(
         required_str(&manifest["deployment_runtime"], "claim"),
-        "none"
+        "historical-ethereum-mainnet-runtime"
     );
+
+    let tag_ref = read_json(&root.join(required_str(
+        &manifest["upstream"]["deployment_tag_ref"],
+        "path",
+    )));
+    assert_eq!(
+        tag_ref["ref"].as_str(),
+        Some(format!("refs/tags/{DEPLOYMENT_TAG}").as_str())
+    );
+    assert_eq!(tag_ref["object"]["type"].as_str(), Some("commit"));
+    assert_eq!(tag_ref["object"]["sha"].as_str(), Some(UPSTREAM_COMMIT));
+    let commit =
+        read_json(&root.join(required_str(&manifest["upstream"]["commit_record"], "path")));
+    assert_eq!(commit["sha"].as_str(), Some(UPSTREAM_COMMIT));
+    assert_eq!(commit["tree"]["sha"].as_str(), Some(UPSTREAM_TREE));
 
     let receipts: BTreeMap<_, _> = manifest["upstream"]["files"]
         .as_array()
@@ -272,9 +496,6 @@ fn official_deployment_tag_source_archive_is_complete_and_hash_pinned() {
         .collect();
     assert_eq!(receipts, expected_receipts, "source receipts drifted");
 
-    let mut archived = BTreeSet::new();
-    collect_files(&root, &root, &mut archived);
-    assert_eq!(archived, receipts.keys().cloned().collect());
     for (path, expected_hash) in receipts {
         let bytes =
             fs::read(root.join(&path)).unwrap_or_else(|error| panic!("read {path}: {error}"));
@@ -290,6 +511,254 @@ fn official_deployment_tag_source_archive_is_complete_and_hash_pinned() {
     assert!(deploy.contains("permit2 = new Permit2{salt: SALT}();"));
     let permit2 = fs::read_to_string(root.join("src/Permit2.sol")).expect("read Permit2 source");
     assert!(permit2.contains("contract Permit2 is SignatureTransfer, AllowanceTransfer"));
+}
+
+#[test]
+fn every_offline_evidence_artifact_is_hash_receipted() {
+    let root = evidence_root();
+    let manifest = read_json(&root.join("manifest.json"));
+    let mut receipts = BTreeMap::new();
+    collect_receipts(&manifest, &mut receipts);
+    let mut files = BTreeSet::new();
+    collect_files(&root, &root, &mut files);
+    assert_eq!(
+        files,
+        receipts.keys().cloned().collect(),
+        "every non-manifest artifact must have exactly one receipt"
+    );
+    for (path, expected_hash) in receipts {
+        let bytes = fs::read(root.join(&path))
+            .unwrap_or_else(|error| panic!("read evidence {path}: {error}"));
+        assert_eq!(sha256_hex(&bytes), expected_hash, "artifact drift: {path}");
+    }
+
+    let collector = fs::read_to_string(root.join("collect.sh")).expect("read collector");
+    for anchor in [
+        "https://api.github.com/repos/Uniswap/permit2",
+        "https://raw.githubusercontent.com/Uniswap/permit2/$commit",
+        "https://eth.blockscout.com/api/v2/smart-contracts/$tag",
+        "https://eth.drpc.org",
+        "https://mainnet.gateway.tenderly.co",
+    ] {
+        assert!(collector.contains(anchor), "collector lost {anchor}");
+    }
+}
+
+#[test]
+fn two_fixed_block_providers_and_verified_source_bind_runtime_abi_and_domain() {
+    let root = evidence_root();
+    let manifest = read_json(&root.join("manifest.json"));
+    assert_eq!(manifest["fixed_block"]["chain_id"].as_u64(), Some(1));
+    assert_eq!(
+        manifest["fixed_block"]["number"].as_u64(),
+        Some(FIXED_BLOCK)
+    );
+    assert_eq!(
+        manifest["fixed_block"]["number_hex"].as_str(),
+        Some(FIXED_BLOCK_HEX)
+    );
+    assert_eq!(
+        manifest["fixed_block"]["hash"].as_str(),
+        Some(FIXED_BLOCK_HASH)
+    );
+
+    let request_document = read_json(&root.join(required_str(&manifest["rpc"]["request"], "path")));
+    assert_eq!(request_document.as_array().expect("request batch").len(), 3);
+    let header_request = request(&request_document, "ethereum-header");
+    assert_eq!(
+        header_request["method"].as_str(),
+        Some("eth_getBlockByNumber")
+    );
+    assert_eq!(header_request["params"][0].as_str(), Some(FIXED_BLOCK_HEX));
+    assert_eq!(header_request["params"][1].as_bool(), Some(false));
+    for (id, method) in [
+        ("permit2-code", "eth_getCode"),
+        ("permit2-domain-separator", "eth_call"),
+    ] {
+        let item = request(&request_document, id);
+        assert_eq!(item["method"].as_str(), Some(method));
+        let block = item["params"][1].as_object().expect("EIP-1898 selector");
+        assert_eq!(block.len(), 2);
+        assert_eq!(block["blockHash"].as_str(), Some(FIXED_BLOCK_HASH));
+        assert_eq!(block["requireCanonical"].as_bool(), Some(true));
+    }
+    let code_request = request(&request_document, "permit2-code");
+    assert_eq!(
+        code_request["params"][0]
+            .as_str()
+            .map(str::to_ascii_lowercase),
+        Some(DEPLOYMENT_TAG.to_ascii_lowercase())
+    );
+    let domain_request = request(&request_document, "permit2-domain-separator");
+    assert_eq!(
+        domain_request["params"][0]["to"]
+            .as_str()
+            .map(str::to_ascii_lowercase),
+        Some(DEPLOYMENT_TAG.to_ascii_lowercase())
+    );
+    assert_eq!(
+        domain_request["params"][0]["data"].as_str(),
+        Some(DOMAIN_SEPARATOR_SELECTOR)
+    );
+
+    let providers = manifest["rpc"]["providers"]
+        .as_array()
+        .expect("RPC providers");
+    assert_eq!(providers.len(), 2);
+    assert_ne!(providers[0]["name"], providers[1]["name"]);
+    assert_ne!(providers[0]["url"], providers[1]["url"]);
+    let observations = providers
+        .iter()
+        .map(|provider| response_results(&root.join(required_str(&provider["response"], "path"))))
+        .collect::<Vec<_>>();
+    for results in &observations {
+        let header = &results["ethereum-header"];
+        assert_eq!(hex_quantity(&header["number"]), FIXED_BLOCK);
+        assert_eq!(header["hash"].as_str(), Some(FIXED_BLOCK_HASH));
+        assert_eq!(header["parentHash"].as_str(), Some(FIXED_PARENT_HASH));
+        assert_eq!(header["stateRoot"].as_str(), Some(FIXED_STATE_ROOT));
+        assert_eq!(header["timestamp"].as_str(), Some(FIXED_TIMESTAMP_HEX));
+        assert_eq!(
+            results["permit2-domain-separator"].as_str(),
+            Some(ETHEREUM_DOMAIN_SEPARATOR)
+        );
+    }
+    assert_eq!(
+        observations[0], observations[1],
+        "provider observations diverged"
+    );
+
+    let runtime_receipt = &manifest["deployment_runtime"];
+    let runtime_text =
+        fs::read_to_string(root.join(required_str(&runtime_receipt["artifact"], "path")))
+            .expect("read Permit2 runtime");
+    let runtime = decode_hex(&runtime_text);
+    assert_eq!(runtime.len(), 9_152);
+    assert_eq!(
+        runtime_receipt["bytes"].as_u64(),
+        Some(runtime.len() as u64)
+    );
+    assert_eq!(sha256_hex(&runtime), RUNTIME_DECODED_SHA256);
+    assert_eq!(
+        required_str(runtime_receipt, "decoded_sha256"),
+        RUNTIME_DECODED_SHA256
+    );
+    assert_eq!(keccak_hex(&runtime), RUNTIME_KECCAK256);
+    assert_eq!(
+        required_str(runtime_receipt, "keccak256"),
+        RUNTIME_KECCAK256
+    );
+    assert_eq!(
+        decode_hex(observations[0]["permit2-code"].as_str().expect("RPC code")),
+        runtime
+    );
+    let contract: [u8; 20] = decode_hex(DEPLOYMENT_TAG)
+        .try_into()
+        .expect("Permit2 address");
+    assert_eq!(
+        format!("0x{}", hex::encode(eip712_domain_separator(1, &contract))),
+        ETHEREUM_DOMAIN_SEPARATOR
+    );
+
+    let report = read_json(&root.join(required_str(&manifest["verifier"]["report"], "path")));
+    assert_eq!(report["is_verified"].as_bool(), Some(true));
+    assert_eq!(report["is_fully_verified"].as_bool(), Some(false));
+    assert_eq!(report["is_partially_verified"].as_bool(), Some(true));
+    assert_eq!(report["is_changed_bytecode"].as_bool(), Some(false));
+    assert_eq!(report["name"].as_str(), Some("Permit2"));
+    assert_eq!(
+        report["compiler_version"],
+        manifest["verifier"]["compiler_version"]
+    );
+    assert_eq!(
+        report["optimization_enabled"],
+        manifest["verifier"]["optimization_enabled"]
+    );
+    assert_eq!(
+        report["optimization_runs"],
+        manifest["verifier"]["optimization_runs"]
+    );
+    assert_eq!(report["evm_version"], manifest["verifier"]["evm_version"]);
+    assert_eq!(
+        decode_hex(required_str(&report, "deployed_bytecode")),
+        runtime
+    );
+    for (path, _) in SOURCE_RECEIPTS {
+        if path.starts_with("src/") {
+            assert_eq!(
+                blockscout_source(&report, path),
+                fs::read_to_string(root.join(path)).expect("read official source"),
+                "verified source differs from official tag: {path}"
+            );
+        }
+    }
+
+    let abi = read_json(&root.join(required_str(&manifest["verifier"]["abi"], "path")));
+    assert_eq!(
+        abi, report["abi"],
+        "extracted ABI diverged from verifier report"
+    );
+    let domain = abi
+        .as_array()
+        .expect("ABI array")
+        .iter()
+        .find(|entry| {
+            entry["type"].as_str() == Some("function")
+                && entry["name"].as_str() == Some("DOMAIN_SEPARATOR")
+        })
+        .expect("DOMAIN_SEPARATOR ABI");
+    assert!(domain["inputs"]
+        .as_array()
+        .expect("domain inputs")
+        .is_empty());
+    assert_eq!(domain["stateMutability"].as_str(), Some("view"));
+    assert_eq!(domain["outputs"][0]["type"].as_str(), Some("bytes32"));
+
+    let single = abi_function_by_input(&abi, "permit", "struct IAllowanceTransfer.PermitSingle");
+    let single_permit = &single["inputs"][1];
+    assert_eq!(
+        component_names_and_types(single_permit),
+        vec![
+            ("details", "tuple"),
+            ("spender", "address"),
+            ("sigDeadline", "uint256")
+        ]
+    );
+    assert_eq!(
+        component_names_and_types(&single_permit["components"][0]),
+        vec![
+            ("token", "address"),
+            ("amount", "uint160"),
+            ("expiration", "uint48"),
+            ("nonce", "uint48"),
+        ]
+    );
+    let batch = abi_function_by_input(&abi, "permit", "struct IAllowanceTransfer.PermitBatch");
+    assert_eq!(
+        component_names_and_types(&batch["inputs"][1]),
+        vec![
+            ("details", "tuple[]"),
+            ("spender", "address"),
+            ("sigDeadline", "uint256")
+        ]
+    );
+    let transfer = abi_function_by_input(
+        &abi,
+        "permitTransferFrom",
+        "struct ISignatureTransfer.PermitTransferFrom",
+    );
+    assert_eq!(
+        component_names_and_types(&transfer["inputs"][0]),
+        vec![
+            ("permitted", "tuple"),
+            ("nonce", "uint256"),
+            ("deadline", "uint256")
+        ]
+    );
+    assert_eq!(
+        component_names_and_types(&transfer["inputs"][0]["components"][0]),
+        vec![("token", "address"), ("amount", "uint256")]
+    );
 }
 
 #[test]
@@ -680,4 +1149,153 @@ fn both_descriptor_copies_compile_to_identical_domain_and_type_bound_ir() {
             }
         }
     }
+}
+
+#[test]
+fn ethereum_leaf_is_merkle_verified_and_renders_exactly_the_three_evidenced_types() {
+    let manifest = read_json(&evidence_root().join("manifest.json"));
+    let registry = production_registry();
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.chain_id == 1
+                && entry.contract == decode_hex(DEPLOYMENT_TAG).as_slice()
+                && entry.source.file_name().and_then(|name| name.to_str())
+                    == Some("eip712-uniswap-permit2.json")
+        })
+        .expect("production Ethereum Permit2 leaf");
+    assert_eq!(
+        format!("0x{}", hex::encode(entry.descriptor_hash)),
+        required_str(&manifest["descriptors"], "descriptor_hash")
+    );
+    assert_eq!(
+        format!("0x{}", hex::encode(entry.erc8176_hash)),
+        required_str(&manifest["descriptors"], "erc8176_hash")
+    );
+    assert_eq!(
+        entry.ir_bytes.len(),
+        manifest["descriptors"]["ir_bytes"].as_u64().unwrap() as usize
+    );
+
+    let bundle = synth_bundle(&registry, entry);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root)
+        .expect("production Permit2 Merkle proof verifies");
+    let contract = entry.contract;
+    let domain_separator = eip712_domain_separator(1, &contract);
+    cross_check_eip712(&verified.ir, 1, &domain_separator)
+        .expect("Permit2 chain/domain binding verifies");
+    assert_eq!(verified.ir.context_kind, ContextKind::Eip712);
+    assert_eq!(verified.ir.contract, contract);
+    assert_eq!(verified.ir.domain_separator, domain_separator);
+    assert_eq!(verified.ir.format_count(), Ok(3));
+    assert_eq!(
+        verified
+            .ir
+            .format_iter()
+            .map(|format| format.expect("Permit2 format").fields().count())
+            .sum::<usize>(),
+        10
+    );
+
+    let token = decode_hex("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
+        .try_into()
+        .expect("USDC address");
+    let spender = decode_hex("0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad")
+        .try_into()
+        .expect("Universal Router address");
+    let details = permit_details(&token, 1_000_000_000, 1_735_689_600, 7);
+    let details_hash = hash_struct(&keccak256(PERMIT_DETAILS_TYPE.as_bytes()), &details);
+    let single_top = [
+        details_hash,
+        word_address(&spender),
+        word_u64(1_767_225_600),
+    ]
+    .concat();
+    let single_blob = one_record_blob(&details);
+
+    let mut batch_blob = vec![0, 1];
+    batch_blob.extend_from_slice(&(details.len() as u16).to_be_bytes());
+    batch_blob.extend_from_slice(&details);
+    let details_array_hash = hash_struct_array(
+        &keccak256(PERMIT_DETAILS_TYPE.as_bytes()),
+        &[details.as_slice()],
+    );
+    let batch_top = [
+        details_array_hash,
+        word_address(&spender),
+        word_u64(1_767_225_600),
+    ]
+    .concat();
+
+    let permissions = [word_address(&token), word_u64(500_000_000)].concat();
+    let permissions_hash = hash_struct(&keccak256(TOKEN_PERMISSIONS_TYPE.as_bytes()), &permissions);
+    let transfer_top = [
+        permissions_hash,
+        word_address(&spender),
+        word_u64(42),
+        word_u64(1_767_225_600),
+    ]
+    .concat();
+    let transfer_blob = one_record_blob(&permissions);
+
+    let resolver = NameResolver::new();
+    let vectors = [
+        (
+            PERMIT_SINGLE_TYPE,
+            single_top.as_slice(),
+            single_blob.as_slice(),
+            [
+                "Spender",
+                "Allowance",
+                "Expiry (0=now)",
+                "Allowance nonce",
+                "Sig deadline",
+            ]
+            .as_slice(),
+        ),
+        (
+            PERMIT_BATCH_TYPE,
+            batch_top.as_slice(),
+            batch_blob.as_slice(),
+            [
+                "Item 1 of 1",
+                "Spender",
+                "Allowance",
+                "Expiry (0=now)",
+                "Allowance nonce",
+            ]
+            .as_slice(),
+        ),
+        (
+            PERMIT_TRANSFER_FROM_TYPE,
+            transfer_top.as_slice(),
+            transfer_blob.as_slice(),
+            ["Spender", "Maximum transfer", "Nonce", "Deadline"].as_slice(),
+        ),
+    ];
+    let mut rendered = BTreeSet::new();
+    for (type_string, encoded, nested, labels) in vectors {
+        let type_hash = keccak256(type_string.as_bytes());
+        assert!(rendered.insert(type_hash), "duplicate render vector");
+        let pages = render_erc7730_eip712_pages_v3(
+            1, &contract, &type_hash, encoded, nested, &verified, None, &resolver,
+        )
+        .unwrap_or_else(|error| panic!("render {type_string}: {error:?}"));
+        let text = pages_text(&pages);
+        for label in labels {
+            assert!(text.contains(label), "{type_string} lost {label}:\n{text}");
+        }
+    }
+    let expected = [
+        keccak256(PERMIT_SINGLE_TYPE.as_bytes()),
+        keccak256(PERMIT_BATCH_TYPE.as_bytes()),
+        keccak256(PERMIT_TRANSFER_FROM_TYPE.as_bytes()),
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    assert_eq!(
+        rendered, expected,
+        "render context must cover exactly three types"
+    );
 }

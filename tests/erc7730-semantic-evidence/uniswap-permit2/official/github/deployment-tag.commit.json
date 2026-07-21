@@ -1,0 +1,35 @@
+{
+  "sha": "cc306b601f172c51bc04334a109e98340456620b",
+  "node_id": "C_kwDOINXe79oAKGNjMzA2YjYwMWYxNzJjNTFiYzA0MzM0YTEwOWU5ODM0MDQ1NjYyMGI",
+  "url": "https://api.github.com/repos/Uniswap/permit2/git/commits/cc306b601f172c51bc04334a109e98340456620b",
+  "html_url": "https://github.com/Uniswap/permit2/commit/cc306b601f172c51bc04334a109e98340456620b",
+  "author": {
+    "name": "marktoda",
+    "email": "toda.mark@gmail.com",
+    "date": "2022-11-17T23:53:10Z"
+  },
+  "committer": {
+    "name": "GitHub",
+    "email": "noreply@github.com",
+    "date": "2022-11-17T23:53:10Z"
+  },
+  "tree": {
+    "sha": "0d35aeb758e99510961089df8f7dfd94b256e58f",
+    "url": "https://api.github.com/repos/Uniswap/permit2/git/trees/0d35aeb758e99510961089df8f7dfd94b256e58f"
+  },
+  "message": "feat: fix docs link (#152)",
+  "parents": [
+    {
+      "sha": "58a03081cc077cdd455b630dce0fc90023694816",
+      "url": "https://api.github.com/repos/Uniswap/permit2/git/commits/58a03081cc077cdd455b630dce0fc90023694816",
+      "html_url": "https://github.com/Uniswap/permit2/commit/58a03081cc077cdd455b630dce0fc90023694816"
+    }
+  ],
+  "verification": {
+    "verified": true,
+    "reason": "valid",
+    "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsBcBAABCAAQBQJjdslmCRBK7hj4Ov3rIwAAEL8IACX95GMkKSvxSGfPgyYxwgbu\nLi3eCghB++p1/oeC2xXkd3zbLO/DXjx+mChwdb1JT6bDEZt1JP4DFebNOfWc5UPd\nS8wSPGj/Yy9C9BCCmVFVxiytLo0IqT+RJ9kcg0R8c1rh0WydZ6gH+L7TmJTUeQ8f\n7FcxEPmHtdQDENvM0WmvPZs+tHMq/fvLV+Espygyl9hYU+lC4xaN0VglseM2EYGa\nZjFJL4HasdKFOhJop14vFGCneeH/MZQiVnXkQ5ShL71u3JW1DO1lMLuFUGiptcww\nyss7Ql/KRwtk6/yLtTgtnx+owqf40C3TvG/hKMdfYyLzSWNMRq8VTggufz0684E=\n=hEFR\n-----END PGP SIGNATURE-----\n",
+    "payload": "tree 0d35aeb758e99510961089df8f7dfd94b256e58f\nparent 58a03081cc077cdd455b630dce0fc90023694816\nauthor marktoda <toda.mark@gmail.com> 1668729190 -0800\ncommitter GitHub <noreply@github.com> 1668729190 -0500\n\nfeat: fix docs link (#152)\n\n",
+    "verified_at": "2024-11-05T04:22:52Z"
+  }
+}

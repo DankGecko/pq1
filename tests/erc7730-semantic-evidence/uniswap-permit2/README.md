@@ -1,11 +1,32 @@
 # Uniswap Permit2 EIP-712 semantic evidence
 
-This compact offline bundle pins the official Uniswap Permit2 source at the
-lightweight deployment-address tag
+This offline bundle pins the official Uniswap Permit2 source at the lightweight
+deployment-address tag
 `0x000000000022D473030F116dDEE9F6B43aC78BA3`, commit
 `cc306b601f172c51bc04334a109e98340456620b`. It covers only the three EIP-712
 types currently curated for PQ1: `PermitSingle`, `PermitBatch`, and
 `PermitTransferFrom`.
+
+## Fixed Ethereum deployment identity
+
+At Ethereum block 25,581,839 (`0x186590f`, hash
+`0xaf33a385…f94169`), raw dRPC and Tenderly responses agree on the complete
+block header, the 9,152-byte runtime at the tagged address, and the result of
+`DOMAIN_SEPARATOR()` (`0x866a5aba…e3f28`). The code and call requests use the
+same EIP-1898 `blockHash` with `requireCanonical: true`. The checked-in request
+and both complete responses (canonically key- and batch-ordered by the
+collector so provider JSON serialization does not churn receipts) are under
+`rpc/raw/`; the runtime extracted from the dRPC response is under `runtime/`.
+
+The archived Ethereum Blockscout report is independently address-scoped and is
+classified `partially_verified` by Blockscout (the package does not promote
+that label to fully verified). Its deployed bytecode is nevertheless
+byte-identical to both fixed-block RPC observations. Its source fields match
+the semantic source files fetched from the official Uniswap tag, and its ABI
+fixes the exact tuple component names and types for the two `permit` overloads
+and the single-token `permitTransferFrom` overload. The official GitHub tag-ref
+and commit records also bind the address-shaped lightweight tag to the archived
+commit and tree.
 
 The archived source fixes the exact domain and type graphs. Permit2 uses the
 domain name `Permit2`, the current chain ID, and `address(this)`; it does not
@@ -35,14 +56,24 @@ ERC-6492 unwrap path. Counterfactual contract accounts therefore do not gain
 ERC-1271 handling through this implementation, while deployed wallet code and
 state remain live validation inputs.
 
-No runtime is archived here. Latest-state runtime samples were available, but
-they lacked block-number and block-hash receipts. Treating them as immutable
-deployment evidence would overstate what was collected. The official tag pins
-source semantics and the canonical address; it does not prove code or state on
-any chain declared by the descriptor. In particular, this bundle makes no
-availability claim for deprecated Mumbai chain 80001.
+The offline integration test binds these records to both production descriptor
+copies, the three exact primary-type hashes, every generated deployment IR,
+and a Merkle-verified Ethereum leaf. It also drives the production V3 renderer
+once for each of the three admitted types using hash-bound nested data; the
+existing secure renderer suite retains the exhaustive mutation and page-budget
+tests. This evidence does not admit another Permit2 type or another chain.
+
+## Honest boundary
+
+The fixed block proves one historical Ethereum-mainnet runtime and domain
+separator. It is not monitoring for future code or state changes, and it does
+not establish any other chain declared by the descriptor. In particular, this
+bundle makes no availability claim for deprecated Mumbai chain 80001. Permit2
+execution still depends on live nonces, deadlines, allowances, balances, token
+behavior, contract-wallet code, and transaction ordering.
 
 Primary source: <https://github.com/Uniswap/permit2/tree/cc306b601f172c51bc04334a109e98340456620b>
 
-The ordinary integration test is fully offline. This evidence grants no
-production-shipment, fallback, or blind-signing authority.
+Collection is reproducible with `./collect.sh`; ordinary integration tests are
+fully offline. This evidence grants no production-shipment, fallback, or
+blind-signing authority.

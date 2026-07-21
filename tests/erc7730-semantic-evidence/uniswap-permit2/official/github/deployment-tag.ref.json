@@ -1,0 +1,10 @@
+{
+  "ref": "refs/tags/0x000000000022D473030F116dDEE9F6B43aC78BA3",
+  "node_id": "REF_kwDOINXe79oANHJlZnMvdGFncy8weDAwMDAwMDAwMDAyMkQ0NzMwMzBGMTE2ZERFRTlGNkI0M2FDNzhCQTM",
+  "url": "https://api.github.com/repos/Uniswap/permit2/git/refs/tags/0x000000000022D473030F116dDEE9F6B43aC78BA3",
+  "object": {
+    "sha": "cc306b601f172c51bc04334a109e98340456620b",
+    "type": "commit",
+    "url": "https://api.github.com/repos/Uniswap/permit2/git/commits/cc306b601f172c51bc04334a109e98340456620b"
+  }
+}

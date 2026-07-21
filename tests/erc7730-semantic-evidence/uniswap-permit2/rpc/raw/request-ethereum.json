@@ -1,0 +1,38 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "ethereum-header",
+    "method": "eth_getBlockByNumber",
+    "params": [
+      "0x186590f",
+      false
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "permit2-code",
+    "method": "eth_getCode",
+    "params": [
+      "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+      {
+        "blockHash": "0xaf33a385f3e3ef960596f87691b2447f3256abfda7802466da38067617f94169",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "permit2-domain-separator",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+        "data": "0x3644e515"
+      },
+      {
+        "blockHash": "0xaf33a385f3e3ef960596f87691b2447f3256abfda7802466da38067617f94169",
+        "requireCanonical": true
+      }
+    ]
+  }
+]
