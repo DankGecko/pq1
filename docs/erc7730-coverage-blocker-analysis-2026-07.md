@@ -9,10 +9,45 @@
 > Every hidden non-address operand is rejected (including nonces, deadlines,
 > packed payloads, and `sqrtPriceLimitX96`), and registry-declared calls that do
 > not compile are retained in the pinned omission filter and **hard-refuse** if
-> their proof is absent; they do not downgrade to blind-sign. The current
-> generated runtime catalogue has 428 leaves and 4,542 registry-declared contract-call
+> their proof is absent; they do not downgrade to blind-sign. That historical
+> generated runtime catalogue had 428 leaves and 4,542 registry-declared contract-call
 > tuples. See [the current implementation review](./erc7730-implementation-review-2026-07.md)
 > and [the 2026-07-10 findings](./security/adversarial-review/findings/clear-signing-2026-07-10.md).
+
+## Current omission quick index (2026-07-21 snapshot)
+
+> **Reference snapshot, not authority or a TODO.** This index describes baseline
+> `30838a36943cbb9bfb7da4021d0a13b134c8d892`. GitHub Issues own future work;
+> recompute the generated catalogue after changes instead of carrying these counts forward.
+
+At this baseline, **175 descriptor files have omissions** across **328 omission events**.
+An event may be one excluded format or an entirely excluded descriptor, so this does not
+mean “175 features remain to implement.” Practical review buckets are:
+
+- **Intentional compatibility refusals:** classical fixed-signature permit routes
+  (`v/r/s` or equivalent) cannot carry the PQ ERC-1271 signature wrapper.
+- **Native specialized overlap:** generic Safe descriptor routes duplicate the
+  stricter native Safe/SafeTx/MultiSend verifier and are not generic-decoder work.
+- **Evidence-gated static curations:** no new renderer capability, but source,
+  deployment, token metadata, and every signed operand still require verification; see
+  [#378](https://github.com/EthereumPhone/PQ1/issues/378) and the scoped 1inch
+  cancellation candidates in [#491](https://github.com/EthereumPhone/PQ1/issues/491).
+- **Opaque bytes and nested calls:** callbacks and embedded calldata require an
+  exact semantic guard or child proof; see [#492](https://github.com/EthereumPhone/PQ1/issues/492)
+  and [#346](https://github.com/EthereumPhone/PQ1/issues/346).
+- **Multiple dynamic tails:** canonical offsets, non-overlap, exact partitioning,
+  and full consumption remain design-gated in [#347](https://github.com/EthereumPhone/PQ1/issues/347).
+- **Packed/sliced protocol blobs:** aggregator paths, BTC scripts, and similar
+  protocol-specific encodings stay refused without authenticated framing.
+- **EIP-712 capability gaps:** nested structs/arrays and string-preimage display
+  need dedicated treatment; the bounded string work is
+  [#493](https://github.com/EthereumPhone/PQ1/issues/493).
+
+Blind signing is not a coverage substitute; any voluntary forced-blind authority
+is a separate owner decision in [#329](https://github.com/EthereumPhone/PQ1/issues/329).
+For the exact included leaves and every excluded source format/reason, use
+[`secure/data/erc7730.review.txt`](../secure/data/erc7730.review.txt), especially
+its generated `## skips` section.
 
 **Question:** is the on-device ERC-7730 renderer a subpar architecture, and what should we
 build to "support as many protocols as possible per the Ethereum clear-signing registry"?

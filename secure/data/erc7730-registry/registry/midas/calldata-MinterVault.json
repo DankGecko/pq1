@@ -1,13 +1,16 @@
 {
   "$schema": "https://github.com/LedgerHQ/clear-signing-erc7730-registry/blob/master/specs/erc7730-v2.schema.json",
-  "_curation_note": "PQSigner semantic curation: the no-recipient depositInstant route is admitted only for the canonical Ethereum mTBILL DepositVault. The trusted display shows the input token, the contract-normalized 18-decimal input amount, the static mTBILL minimum, the complete referrer ID, and the authenticated signer as beneficiary. The recipient overload and both asynchronous depositRequest routes remain exact known-call refusals, as do all other declared deployments. Evidence is historical fixed-block authority, not live payment-token eligibility, price, fees, caps, access controls, execution success, or future proxy-upgrade monitoring.",
+  "_curation_note": "PQSigner semantic curation: all four user deposit routes are admitted only for the canonical Ethereum mTBILL DepositVault. Every trusted display shows the input token, the contract-normalized 18-decimal input amount, the complete referrer ID, the authenticated signer or signed recipient as beneficiary, and the authenticated payer where those addresses differ; instant routes also show the static mTBILL minimum. Deposit requests transfer payment immediately but leave later administrator approval, output rate, minted amount, timing, and success unresolved. All other declared deployments remain exact known-call refusals. Evidence is historical fixed-block authority, not live payment-token eligibility, price, fees, caps, access controls, execution success, or future proxy-upgrade monitoring.",
   "_pqsigner": {
     "deploymentFormats": [
       {
         "chainId": 1,
         "address": "0x99361435420711723aF805F08187c9E6bF796683",
         "formats": [
-          "depositInstant(address tokenIn, uint256 amountToken, uint256 minReceiveAmount, bytes32 referrerId)"
+          "depositInstant(address tokenIn, uint256 amountToken, uint256 minReceiveAmount, bytes32 referrerId, address recipient)",
+          "depositInstant(address tokenIn, uint256 amountToken, uint256 minReceiveAmount, bytes32 referrerId)",
+          "depositRequest(address tokenIn, uint256 amountToken, bytes32 referrerId)",
+          "depositRequest(address tokenIn, uint256 amountToken, bytes32 referrerId, address recipient)"
         ]
       }
     ]
@@ -98,37 +101,49 @@
   "display": {
     "formats": {
       "depositInstant(address tokenIn, uint256 amountToken, uint256 minReceiveAmount, bytes32 referrerId, address recipient)": {
-        "intent": "instantly buy",
+        "intent": "Issue mTBILL now",
         "fields": [
           {
-            "label": "You pay with",
+            "label": "Payment Token",
             "format": "addressName",
             "params": { "types": ["token"] },
             "path": "#.tokenIn",
             "visible": "always"
           },
           {
-            "label": "Amount",
+            "label": "Payment Amount",
             "format": "unit",
-            "params": { "base": " ", "decimals": 18, "prefix": false },
+            "params": { "base": "token", "decimals": 18, "prefix": false },
             "path": "#.amountToken",
             "visible": "always"
           },
           {
-            "label": "Minimum to Receive",
-            "format": "unit",
-            "params": { "base": " ", "decimals": 18, "prefix": false },
+            "label": "Minimum mTBILL",
+            "format": "tokenAmount",
+            "params": { "token": "0xDD629E5241CbC5919847783e6C96B2De4754e438" },
             "path": "#.minReceiveAmount",
             "visible": "always"
           },
           {
-            "label": "Receiver",
+            "label": "Referral ID",
+            "format": "raw",
+            "path": "#.referrerId",
+            "visible": "always"
+          },
+          {
+            "label": "Beneficiary",
             "format": "addressName",
             "params": { "types": ["eoa", "wallet"] },
             "path": "#.recipient",
             "visible": "always"
           },
-          { "label": "Referrer Id", "path": "#.referrerId", "visible": "never" }
+          {
+            "label": "Payer",
+            "format": "addressName",
+            "params": { "types": ["eoa", "wallet"] },
+            "path": "@.from",
+            "visible": "always"
+          }
         ]
       },
       "depositInstant(address tokenIn, uint256 amountToken, uint256 minReceiveAmount, bytes32 referrerId)": {
@@ -171,50 +186,74 @@
         ]
       },
       "depositRequest(address tokenIn, uint256 amountToken, bytes32 referrerId)": {
-        "intent": "Deposit Request",
+        "intent": "Pay now; request mTBILL",
         "fields": [
           {
-            "label": "You pay with",
+            "label": "Payment Token",
             "format": "addressName",
             "params": { "types": ["token"] },
             "path": "#.tokenIn",
             "visible": "always"
           },
           {
-            "label": "Amount",
+            "label": "Payment Amount",
             "format": "unit",
-            "params": { "base": " ", "decimals": 18, "prefix": false },
+            "params": { "base": "token", "decimals": 18, "prefix": false },
             "path": "#.amountToken",
             "visible": "always"
           },
-          { "label": "Referrer Id", "path": "#.referrerId", "visible": "never" }
+          {
+            "label": "Referral ID",
+            "format": "raw",
+            "path": "#.referrerId",
+            "visible": "always"
+          },
+          {
+            "label": "Beneficiary",
+            "format": "addressName",
+            "params": { "types": ["eoa", "wallet"] },
+            "path": "@.from",
+            "visible": "always"
+          }
         ]
       },
       "depositRequest(address tokenIn, uint256 amountToken, bytes32 referrerId, address recipient)": {
-        "intent": "Deposit Request",
+        "intent": "Pay now; request mTBILL",
         "fields": [
           {
-            "label": "You pay with",
+            "label": "Payment Token",
             "format": "addressName",
             "params": { "types": ["token"] },
             "path": "#.tokenIn",
             "visible": "always"
           },
           {
-            "label": "Amount",
+            "label": "Payment Amount",
             "format": "unit",
-            "params": { "base": " ", "decimals": 18, "prefix": false },
+            "params": { "base": "token", "decimals": 18, "prefix": false },
             "path": "#.amountToken",
             "visible": "always"
           },
           {
-            "label": "Receiver",
+            "label": "Referral ID",
+            "format": "raw",
+            "path": "#.referrerId",
+            "visible": "always"
+          },
+          {
+            "label": "Beneficiary",
             "format": "addressName",
             "params": { "types": ["eoa", "wallet"] },
             "path": "#.recipient",
             "visible": "always"
           },
-          { "label": "Referrer Id", "path": "#.referrerId", "visible": "never" }
+          {
+            "label": "Payer",
+            "format": "addressName",
+            "params": { "types": ["eoa", "wallet"] },
+            "path": "@.from",
+            "visible": "always"
+          }
         ]
       }
     }

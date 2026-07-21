@@ -43,13 +43,13 @@ tuple-set SHA-256, and Bloom bytes. Merkle-root or Bloom equality alone is not
 accepted as a faithfulness proof.
 
 <!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
-Checked-in curated receipt, verified against a fresh build by `--check`: **452 leaves**, **388,690-byte**
+Checked-in curated receipt, verified against a fresh build by `--check`: **453 leaves**, **390,023-byte**
 compiled companion catalogue, root
-`afc205221e2af04cb52e0f9cc32f0b77abb052e96c2324cfe4d1aa1519a99661`,
+`48aac419f76889375e21dd7813b0abefafa02485a5d1f52e510d854d97192e96`,
 **4,552** canonical known-call tuples, tuple-set SHA-256
 `0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9`.
 Curation manifest SHA-256
-`5ec2e43b969d8dd476e30d09b2c058fd352d07276ffbb2a5b8a1cfaf6d3d597b` binds upstream commit
+`b2b73fdb27faa377fbd44aa0739f0fa6396fb620fd77a3830d7a5504f6dea3a2` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
 Manifest v3 authorizes exactly **10** curation-added known-call tuples and no deletions.
@@ -62,7 +62,7 @@ the machine-checked source/overlay identities live in the curation manifest,
 while the generated catalogue authority remains in the artifacts and managed
 receipt above.
 
-Current reviewed full-file replacements (39):
+Current reviewed full-file replacements (40):
 
 - `ercs/calldata-erc20-tokens.json`
 - `registry/aave/calldata-WrappedTokenGatewayV3.json`
@@ -85,6 +85,7 @@ Current reviewed full-file replacements (39):
 - `registry/lombard/calldata-lbtc-mainnet.json`
 - `registry/lombard/calldata-lbtc-sepolia.json`
 - `registry/midas/calldata-MinterVault.json`
+- `registry/midas/calldata-RedemptionVault.json`
 - `registry/morpho/calldata-MorphoBlue.json`
 - `registry/p2p/calldata-NativeTokenVault.json`
 - `registry/p2p/calldata-P2pOrgUnlimitedEthDepositor.json`

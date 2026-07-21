@@ -1512,15 +1512,18 @@ fn production_celo_validators_add_first_member_renders_all_signed_operands_mainn
 }
 
 #[test]
-fn production_midas_mtbill_instant_deposit_is_operand_complete_and_exactly_scoped() {
+fn production_midas_mtbill_deposit_routes_are_operand_complete_and_exactly_scoped() {
     use pqsigner_erc7730::display::MAX_PAGES;
 
     const CHAIN_ID: u64 = 1;
     const SIGNATURE: &str = "depositInstant(address,uint256,uint256,bytes32)";
     const SELECTOR: [u8; 4] = [0xc0, 0x2d, 0xd2, 0x7a];
     const CUSTOM_RECIPIENT: &str = "depositInstant(address,uint256,uint256,bytes32,address)";
+    const CUSTOM_RECIPIENT_SELECTOR: [u8; 4] = [0x42, 0xe8, 0x86, 0x6b];
     const REQUEST: &str = "depositRequest(address,uint256,bytes32)";
+    const REQUEST_SELECTOR: [u8; 4] = [0x6e, 0x26, 0xb9, 0xf8];
     const REQUEST_RECIPIENT: &str = "depositRequest(address,uint256,bytes32,address)";
+    const REQUEST_RECIPIENT_SELECTOR: [u8; 4] = [0xe5, 0x0e, 0x3d, 0xbb];
 
     let registry = build_registry();
     let entry = find_leaf(registry, "calldata-MinterVault.json", CHAIN_ID);
@@ -1542,10 +1545,14 @@ fn production_midas_mtbill_instant_deposit_is_operand_complete_and_exactly_scope
         cross_check_contract(&verified.ir, CHAIN_ID, &[0x55; 20]),
         Err(BindingError::ContractMismatch)
     ));
-    assert_eq!(verified.ir.format_count(), Ok(1));
+    assert_eq!(verified.ir.format_count(), Ok(4));
     assert_eq!(&keccak256(SIGNATURE.as_bytes())[..4], &SELECTOR);
-    for refused in [CUSTOM_RECIPIENT, REQUEST, REQUEST_RECIPIENT] {
-        assert_selector_excluded(&verified.ir, refused);
+    for (signature, selector) in [
+        (CUSTOM_RECIPIENT, CUSTOM_RECIPIENT_SELECTOR),
+        (REQUEST, REQUEST_SELECTOR),
+        (REQUEST_RECIPIENT, REQUEST_RECIPIENT_SELECTOR),
+    ] {
+        assert_eq!(&keccak256(signature.as_bytes())[..4], &selector);
     }
 
     let usdc: [u8; 20] = hex::decode("a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
@@ -1635,6 +1642,30 @@ fn production_midas_mtbill_instant_deposit_is_operand_complete_and_exactly_scope
     assert_raw_word_pages(&baseline.pages, "Referral ID", &referral);
     assert_full_address_field_page(&baseline.pages, "Beneficiary", &signer);
 
+    let payment_token_metadata = Erc20Metadata {
+        chain_id: CHAIN_ID,
+        contract: usdc,
+        decimals: 6,
+        name: b"USD Coin",
+        symbol: b"USDC",
+    };
+    for candidate_metadata in [None, Some(&payment_token_metadata)] {
+        let degraded = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &calldata,
+            &verified,
+            candidate_metadata,
+            &resolver,
+            &signer,
+        )
+        .expect("missing or payment-token metadata degrades without inventing mTBILL scale");
+        assert!(
+            dump_pages(&degraded.pages).contains("! raw, dec=?"),
+            "unbound metadata must keep the static mTBILL minimum exact and unscaled"
+        );
+        assert_full_unverified_token_identity_page(&degraded.pages, &mtbill);
+    }
+
     for (word_index, operand) in [
         (0usize, "payment token"),
         (1, "payment amount"),
@@ -1685,11 +1716,269 @@ fn production_midas_mtbill_instant_deposit_is_operand_complete_and_exactly_scope
         .transcript_receipt
         .exact_match(&changed_beneficiary.transcript_receipt));
 
+    let recipient = [0x77; 20];
+    let custom_words = [
+        abi_address_word(usdc),
+        words[1],
+        words[2],
+        referral,
+        abi_address_word(recipient),
+    ];
+    let custom_calldata = calldata_static(CUSTOM_RECIPIENT, &custom_words);
+    assert_eq!(&custom_calldata[..4], &CUSTOM_RECIPIENT_SELECTOR);
+    assert_selector_matches(&verified.ir, &custom_calldata, CUSTOM_RECIPIENT);
+    let render_custom = |candidate_words: &[[u8; 32]; 5], candidate_signer: &[u8; 20]| {
+        let candidate = calldata_static(CUSTOM_RECIPIENT, candidate_words);
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &candidate,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            candidate_signer,
+        )
+    };
+    let custom_baseline =
+        render_custom(&custom_words, &signer).expect("custom-recipient instant deposit renders");
+    assert_eq!(
+        custom_baseline.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert!(custom_baseline
+        .transcript_receipt
+        .range_matches(&custom_baseline.pages, 0));
+    assert_all_pages_printable(&custom_baseline.pages);
+    assert!(custom_baseline.pages.len <= MAX_PAGES);
+    assert_eq!(
+        page_strs(
+            &custom_baseline.pages,
+            intent_page_index(&custom_baseline.pages)
+        )[0],
+        "Issue mTBILL now"
+    );
+    assert_full_address_field_page(&custom_baseline.pages, "Payment Token", &usdc);
+    assert_raw_word_pages(&custom_baseline.pages, "Referral ID", &referral);
+    assert_full_address_field_page(&custom_baseline.pages, "Beneficiary", &recipient);
+    assert_full_address_field_page(&custom_baseline.pages, "Payer", &signer);
+    let custom_minimum_rows = page_strs(
+        &custom_baseline.pages,
+        find_page_by_label(&custom_baseline.pages, "Minimum mTBILL"),
+    );
+    assert!(
+        custom_minimum_rows
+            .iter()
+            .any(|row| row.contains("1.9 mTBILL")),
+        "custom-recipient minimum must use static mTBILL metadata: {custom_minimum_rows:?}"
+    );
+    for (word_index, operand) in [
+        (0usize, "payment token"),
+        (1, "payment amount"),
+        (2, "minimum mTBILL"),
+        (3, "referral ID"),
+        (4, "beneficiary"),
+    ] {
+        let mut mutated_words = custom_words;
+        mutated_words[word_index] = match word_index {
+            1 => u256_from_u128(3_000_000_000_000_000_000).0,
+            2 => u256_from_u128(1_800_000_000_000_000_000).0,
+            _ => {
+                let mut word = mutated_words[word_index];
+                word[31] ^= 1;
+                word
+            }
+        };
+        let mutated = render_custom(&mutated_words, &signer).unwrap_or_else(|error| {
+            panic!("render independently mutated custom {operand}: {error:?}")
+        });
+        assert_ne!(
+            custom_baseline.pages.as_slice(),
+            mutated.pages.as_slice(),
+            "changing only custom {operand} must change trusted pages"
+        );
+        assert!(!custom_baseline
+            .transcript_receipt
+            .exact_match(&mutated.transcript_receipt));
+    }
+    let changed_custom_payer = render_custom(&custom_words, &changed_signer)
+        .expect("changed authenticated custom payer renders");
+    assert_full_address_field_page(&changed_custom_payer.pages, "Payer", &changed_signer);
+    assert_ne!(
+        custom_baseline.pages.as_slice(),
+        changed_custom_payer.pages.as_slice(),
+        "authenticated payer changes must be visible on the custom route"
+    );
+
+    let request_words = [abi_address_word(usdc), words[1], referral];
+    let request_calldata = calldata_static(REQUEST, &request_words);
+    assert_eq!(&request_calldata[..4], &REQUEST_SELECTOR);
+    assert_selector_matches(&verified.ir, &request_calldata, REQUEST);
+    let render_request = |candidate_words: &[[u8; 32]; 3], candidate_signer: &[u8; 20]| {
+        let candidate = calldata_static(REQUEST, candidate_words);
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &candidate,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            candidate_signer,
+        )
+    };
+    let request_baseline =
+        render_request(&request_words, &signer).expect("implicit-recipient request renders");
+    assert_eq!(
+        request_baseline.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert!(request_baseline
+        .transcript_receipt
+        .range_matches(&request_baseline.pages, 0));
+    assert_all_pages_printable(&request_baseline.pages);
+    assert!(request_baseline.pages.len <= MAX_PAGES);
+    let request_intent = page_strs(
+        &request_baseline.pages,
+        intent_page_index(&request_baseline.pages),
+    );
+    assert_eq!(request_intent[0], "Pay now; request");
+    assert_eq!(request_intent[1], " mTBILL");
+    assert_full_address_field_page(&request_baseline.pages, "Payment Token", &usdc);
+    assert_raw_word_pages(&request_baseline.pages, "Referral ID", &referral);
+    assert_full_address_field_page(&request_baseline.pages, "Beneficiary", &signer);
+    for page in 0..request_baseline.pages.len {
+        assert!(
+            !page_strs(&request_baseline.pages, page)
+                .iter()
+                .any(|row| row == "Minimum mTBILL"),
+            "an asynchronous request must not promise a minimum output"
+        );
+    }
+    for (word_index, operand) in [
+        (0usize, "payment token"),
+        (1, "payment amount"),
+        (2, "referral ID"),
+    ] {
+        let mut mutated_words = request_words;
+        mutated_words[word_index] = if word_index == 1 {
+            u256_from_u128(3_000_000_000_000_000_000).0
+        } else {
+            let mut word = mutated_words[word_index];
+            word[31] ^= 1;
+            word
+        };
+        let mutated = render_request(&mutated_words, &signer).unwrap_or_else(|error| {
+            panic!("render independently mutated request {operand}: {error:?}")
+        });
+        assert_ne!(request_baseline.pages.as_slice(), mutated.pages.as_slice());
+        assert!(!request_baseline
+            .transcript_receipt
+            .exact_match(&mutated.transcript_receipt));
+    }
+    let changed_request_beneficiary = render_request(&request_words, &changed_signer)
+        .expect("changed implicit request beneficiary renders");
+    assert_full_address_field_page(
+        &changed_request_beneficiary.pages,
+        "Beneficiary",
+        &changed_signer,
+    );
+    assert_ne!(
+        request_baseline.pages.as_slice(),
+        changed_request_beneficiary.pages.as_slice()
+    );
+
+    let request_recipient_words = [
+        abi_address_word(usdc),
+        words[1],
+        referral,
+        abi_address_word(recipient),
+    ];
+    let request_recipient_calldata = calldata_static(REQUEST_RECIPIENT, &request_recipient_words);
+    assert_eq!(
+        &request_recipient_calldata[..4],
+        &REQUEST_RECIPIENT_SELECTOR
+    );
+    assert_selector_matches(&verified.ir, &request_recipient_calldata, REQUEST_RECIPIENT);
+    let render_request_recipient =
+        |candidate_words: &[[u8; 32]; 4], candidate_signer: &[u8; 20]| {
+            let candidate = calldata_static(REQUEST_RECIPIENT, candidate_words);
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                &candidate,
+                &verified,
+                Some(&metadata),
+                &resolver,
+                candidate_signer,
+            )
+        };
+    let request_recipient_baseline = render_request_recipient(&request_recipient_words, &signer)
+        .expect("custom-recipient request renders");
+    assert_eq!(
+        request_recipient_baseline.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert!(request_recipient_baseline
+        .transcript_receipt
+        .range_matches(&request_recipient_baseline.pages, 0));
+    assert_all_pages_printable(&request_recipient_baseline.pages);
+    assert!(request_recipient_baseline.pages.len <= MAX_PAGES);
+    assert_full_address_field_page(&request_recipient_baseline.pages, "Beneficiary", &recipient);
+    assert_full_address_field_page(&request_recipient_baseline.pages, "Payer", &signer);
+    for page in 0..request_recipient_baseline.pages.len {
+        assert!(
+            !page_strs(&request_recipient_baseline.pages, page)
+                .iter()
+                .any(|row| row == "Minimum mTBILL"),
+            "a custom asynchronous request must not promise a minimum output"
+        );
+    }
+    for (word_index, operand) in [
+        (0usize, "payment token"),
+        (1, "payment amount"),
+        (2, "referral ID"),
+        (3, "beneficiary"),
+    ] {
+        let mut mutated_words = request_recipient_words;
+        mutated_words[word_index] = if word_index == 1 {
+            u256_from_u128(3_000_000_000_000_000_000).0
+        } else {
+            let mut word = mutated_words[word_index];
+            word[31] ^= 1;
+            word
+        };
+        let mutated = render_request_recipient(&mutated_words, &signer).unwrap_or_else(|error| {
+            panic!("render independently mutated custom request {operand}: {error:?}")
+        });
+        assert_ne!(
+            request_recipient_baseline.pages.as_slice(),
+            mutated.pages.as_slice()
+        );
+        assert!(!request_recipient_baseline
+            .transcript_receipt
+            .exact_match(&mutated.transcript_receipt));
+    }
+    let changed_request_payer = render_request_recipient(&request_recipient_words, &changed_signer)
+        .expect("changed custom request payer renders");
+    assert_full_address_field_page(&changed_request_payer.pages, "Payer", &changed_signer);
+    assert_ne!(
+        request_recipient_baseline.pages.as_slice(),
+        changed_request_payer.pages.as_slice()
+    );
+
     let mut dirty_token = words;
     dirty_token[0][0] = 1;
     assert!(
         render_with(&dirty_token, &signer).is_err(),
         "dirty address padding must refuse"
+    );
+    let mut dirty_custom_recipient = custom_words;
+    dirty_custom_recipient[4][0] = 1;
+    assert!(
+        render_custom(&dirty_custom_recipient, &signer).is_err(),
+        "dirty custom-recipient padding must refuse"
+    );
+    let mut dirty_request_recipient = request_recipient_words;
+    dirty_request_recipient[3][0] = 1;
+    assert!(
+        render_request_recipient(&dirty_request_recipient, &signer).is_err(),
+        "dirty request-recipient padding must refuse"
     );
     assert!(matches!(
         render_erc7730_pages_with_signer_checked(
@@ -1758,36 +2047,18 @@ fn production_midas_mtbill_instant_deposit_is_operand_complete_and_exactly_scope
         "corrupting visible referral bytes must invalidate the dispatcher proof"
     );
 
-    let refused_cases = [
-        (
-            CUSTOM_RECIPIENT,
-            vec![
-                abi_address_word(usdc),
-                words[1],
-                words[2],
-                referral,
-                abi_address_word([0x77; 20]),
-            ],
-        ),
-        (REQUEST, vec![abi_address_word(usdc), words[1], referral]),
-        (
-            REQUEST_RECIPIENT,
-            vec![
-                abi_address_word(usdc),
-                words[1],
-                referral,
-                abi_address_word([0x77; 20]),
-            ],
-        ),
-    ];
-    for (signature, refused_words) in refused_cases {
-        let refused_calldata = calldata_static(signature, &refused_words);
-        let selector: [u8; 4] = refused_calldata[..4]
+    for (signature, admitted_calldata) in [
+        (SIGNATURE, &calldata),
+        (CUSTOM_RECIPIENT, &custom_calldata),
+        (REQUEST, &request_calldata),
+        (REQUEST_RECIPIENT, &request_recipient_calldata),
+    ] {
+        let selector: [u8; 4] = admitted_calldata[..4]
             .try_into()
-            .expect("refused selector width");
+            .expect("Midas selector width");
         assert!(
             registry.known_calls.contains(&(CHAIN_ID, vault, selector)),
-            "out-of-scope Midas route must stay exact-known"
+            "admitted Midas route must stay exact-known"
         );
         assert!(pqsigner_erc7730::known_calls::may_contain(
             &registry.known_calls_bloom,
@@ -1795,56 +2066,77 @@ fn production_midas_mtbill_instant_deposit_is_operand_complete_and_exactly_scope
             &vault,
             &selector,
         ));
-        assert!(matches!(
-            render_erc7730_pages_with_signer_checked(
+        let direct = render_erc7730_pages_with_signer_checked(
+            &tx,
+            admitted_calldata,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        )
+        .unwrap_or_else(|error| panic!("admitted route {signature} renders: {error:?}"));
+        let mut admitted_proofs = DispatchPageProofs::new();
+        admitted_proofs.fail_initialize();
+        let dispatched = pick_sign_pages(
+            &tx,
+            admitted_calldata,
+            &signer,
+            None,
+            None,
+            None,
+            Some(&verified),
+            Some(&metadata),
+            None,
+            &resolver,
+            &mut admitted_proofs,
+        )
+        .unwrap_or_else(|error| panic!("dispatcher selects {signature}: {error:?}"));
+        assert_eq!(dispatched.as_slice(), direct.pages.as_slice());
+
+        let mut missing_proofs = DispatchPageProofs::new();
+        missing_proofs.fail_initialize();
+        assert!(
+            pick_sign_pages(
                 &tx,
-                &refused_calldata,
-                &verified,
-                Some(&metadata),
-                &resolver,
+                admitted_calldata,
                 &signer,
-            ),
-            Err(crate::tx::erc7730_render::RenderErr::NoFormat)
-        ));
-        for descriptor in [Some(&verified), None] {
-            let mut refused_proofs = DispatchPageProofs::new();
-            refused_proofs.fail_initialize();
-            assert!(
-                pick_sign_pages(
-                    &tx,
-                    &refused_calldata,
-                    &signer,
-                    None,
-                    None,
-                    None,
-                    descriptor,
-                    Some(&metadata),
-                    None,
-                    &resolver,
-                    &mut refused_proofs,
-                )
-                .is_err(),
-                "{signature} must not fall back with or without a descriptor"
-            );
-        }
+                None,
+                None,
+                None,
+                None,
+                Some(&metadata),
+                None,
+                &resolver,
+                &mut missing_proofs,
+            )
+            .is_err(),
+            "{signature} must not fall back without its descriptor"
+        );
     }
 
     let excluded_contract: [u8; 20] = hex::decode("a8a5c4ff4c86a459ebbdc39c5be77833b3a15d88")
         .expect("excluded Midas deployment")
         .try_into()
         .expect("address width");
-    assert!(
-        registry
-            .known_calls
-            .contains(&(CHAIN_ID, excluded_contract, SELECTOR)),
-        "other Midas deployments remain exact-known"
-    );
-    assert!(pqsigner_erc7730::known_calls::may_contain(
-        &registry.known_calls_bloom,
-        CHAIN_ID,
-        &excluded_contract,
-        &SELECTOR,
-    ));
+    for selector in [
+        SELECTOR,
+        CUSTOM_RECIPIENT_SELECTOR,
+        REQUEST_SELECTOR,
+        REQUEST_RECIPIENT_SELECTOR,
+    ] {
+        assert!(
+            registry
+                .known_calls
+                .contains(&(CHAIN_ID, excluded_contract, selector)),
+            "every route at other Midas deployments remains exact-known"
+        );
+        assert!(pqsigner_erc7730::known_calls::may_contain(
+            &registry.known_calls_bloom,
+            CHAIN_ID,
+            &excluded_contract,
+            &selector,
+        ));
+    }
     assert!(matches!(
         cross_check_contract(&verified.ir, CHAIN_ID, &excluded_contract),
         Err(BindingError::ContractMismatch)
@@ -1912,6 +2204,465 @@ fn production_midas_mtbill_instant_deposit_is_operand_complete_and_exactly_scope
         .is_err(),
         "an exact known call without its descriptor must hard-refuse"
     );
+}
+
+#[test]
+fn production_midas_mtbill_redemption_routes_are_operand_complete_and_exactly_scoped() {
+    use pqsigner_erc7730::display::MAX_PAGES;
+
+    const CHAIN_ID: u64 = 1;
+    const INSTANT: &str = "redeemInstant(address,uint256,uint256)";
+    const INSTANT_SELECTOR: [u8; 4] = [0x8b, 0x53, 0xf7, 0x5e];
+    const INSTANT_RECIPIENT: &str = "redeemInstant(address,uint256,uint256,address)";
+    const INSTANT_RECIPIENT_SELECTOR: [u8; 4] = [0x85, 0xab, 0x2c, 0x13];
+    const REQUEST: &str = "redeemRequest(address,uint256)";
+    const REQUEST_SELECTOR: [u8; 4] = [0xbf, 0xc2, 0xd4, 0x6a];
+    const REQUEST_RECIPIENT: &str = "redeemRequest(address,uint256,address)";
+    const REQUEST_RECIPIENT_SELECTOR: [u8; 4] = [0x15, 0x57, 0x1a, 0x04];
+    const FIAT: &str = "redeemFiatRequest(uint256)";
+    const FIAT_SELECTOR: [u8; 4] = [0xd5, 0xf7, 0x3f, 0x5c];
+
+    struct RouteCase {
+        signature: &'static str,
+        selector: [u8; 4],
+        words: Vec<[u8; 32]>,
+        instant: bool,
+        explicit_recipient: bool,
+    }
+
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-RedemptionVault.json", CHAIN_ID);
+    let vault: [u8; 20] = hex::decode("f6e51d24f4793ac5e71e0502213a9bbe3a6d4517")
+        .expect("canonical mTBILL RedemptionVault")
+        .try_into()
+        .expect("address width");
+    assert_eq!(entry.contract, vault);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root)
+        .expect("verify production mTBILL RedemptionVault leaf");
+    cross_check_contract(&verified.ir, CHAIN_ID, &vault)
+        .expect("bind production mTBILL RedemptionVault leaf");
+    assert!(matches!(
+        cross_check_contract(&verified.ir, 10, &vault),
+        Err(BindingError::ChainIdMismatch)
+    ));
+    assert!(matches!(
+        cross_check_contract(&verified.ir, CHAIN_ID, &[0x55; 20]),
+        Err(BindingError::ContractMismatch)
+    ));
+    assert_eq!(verified.ir.format_count(), Ok(4));
+    for (signature, selector) in [
+        (INSTANT, INSTANT_SELECTOR),
+        (INSTANT_RECIPIENT, INSTANT_RECIPIENT_SELECTOR),
+        (REQUEST, REQUEST_SELECTOR),
+        (REQUEST_RECIPIENT, REQUEST_RECIPIENT_SELECTOR),
+        (FIAT, FIAT_SELECTOR),
+    ] {
+        assert_eq!(&keccak256(signature.as_bytes())[..4], &selector);
+    }
+    assert_selector_excluded(&verified.ir, FIAT);
+
+    let usdc: [u8; 20] = hex::decode("a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
+        .expect("USDC address")
+        .try_into()
+        .expect("address width");
+    let mtbill: [u8; 20] = hex::decode("dd629e5241cbc5919847783e6c96b2de4754e438")
+        .expect("mTBILL address")
+        .try_into()
+        .expect("address width");
+    let metadata = Erc20Metadata {
+        chain_id: CHAIN_ID,
+        contract: mtbill,
+        decimals: 18,
+        name: b"Midas US Treasury Bill Token",
+        symbol: b"mTBILL",
+    };
+    let signer = [0x42; 20];
+    let mut changed_signer = signer;
+    changed_signer[19] ^= 1;
+    let recipient = [0x77; 20];
+    let resolver = NameResolver::new();
+    let tx = envelope(CHAIN_ID, vault);
+    let amount = u256_from_u128(2_000_000_000_000_000_000).0;
+    let minimum = u256_from_u128(1_900_000_000_000_000_000).0;
+    let cases = [
+        RouteCase {
+            signature: INSTANT,
+            selector: INSTANT_SELECTOR,
+            words: vec![abi_address_word(usdc), amount, minimum],
+            instant: true,
+            explicit_recipient: false,
+        },
+        RouteCase {
+            signature: INSTANT_RECIPIENT,
+            selector: INSTANT_RECIPIENT_SELECTOR,
+            words: vec![
+                abi_address_word(usdc),
+                amount,
+                minimum,
+                abi_address_word(recipient),
+            ],
+            instant: true,
+            explicit_recipient: true,
+        },
+        RouteCase {
+            signature: REQUEST,
+            selector: REQUEST_SELECTOR,
+            words: vec![abi_address_word(usdc), amount],
+            instant: false,
+            explicit_recipient: false,
+        },
+        RouteCase {
+            signature: REQUEST_RECIPIENT,
+            selector: REQUEST_RECIPIENT_SELECTOR,
+            words: vec![abi_address_word(usdc), amount, abi_address_word(recipient)],
+            instant: false,
+            explicit_recipient: true,
+        },
+    ];
+
+    let output_token_metadata = Erc20Metadata {
+        chain_id: CHAIN_ID,
+        contract: usdc,
+        decimals: 6,
+        name: b"USD Coin",
+        symbol: b"USDC",
+    };
+    let standard_calldata = calldata_static(INSTANT, &cases[0].words);
+    for candidate_metadata in [None, Some(&output_token_metadata)] {
+        let degraded = render_erc7730_pages_with_signer_checked(
+            &tx,
+            &standard_calldata,
+            &verified,
+            candidate_metadata,
+            &resolver,
+            &signer,
+        )
+        .expect("missing or output-token metadata degrades without inventing mTBILL scale");
+        assert!(
+            dump_pages(&degraded.pages).contains("! raw, dec=?"),
+            "unbound metadata must keep the static mTBILL input exact and unscaled"
+        );
+        assert_full_unverified_token_identity_page(&degraded.pages, &mtbill);
+    }
+
+    for case in &cases {
+        let calldata = calldata_static(case.signature, &case.words);
+        assert_eq!(&calldata[..4], &case.selector);
+        assert_selector_matches(&verified.ir, &calldata, case.signature);
+        assert!(registry
+            .known_calls
+            .contains(&(CHAIN_ID, vault, case.selector)));
+        assert!(pqsigner_erc7730::known_calls::may_contain(
+            &registry.known_calls_bloom,
+            CHAIN_ID,
+            &vault,
+            &case.selector,
+        ));
+        let render = |candidate_words: &[[u8; 32]], candidate_signer: &[u8; 20]| {
+            let candidate = calldata_static(case.signature, candidate_words);
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                &candidate,
+                &verified,
+                Some(&metadata),
+                &resolver,
+                candidate_signer,
+            )
+        };
+        let baseline = render(&case.words, &signer)
+            .unwrap_or_else(|error| panic!("render {}: {error:?}", case.signature));
+        assert_eq!(
+            baseline.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        assert!(baseline
+            .transcript_receipt
+            .range_matches(&baseline.pages, 0));
+        assert_all_pages_printable(&baseline.pages);
+        assert!(
+            baseline.pages.len <= MAX_PAGES,
+            "{} exceeds the fixed page budget",
+            case.signature
+        );
+        let intent_rows = page_strs(&baseline.pages, intent_page_index(&baseline.pages));
+        let visible_intent = format!("{}{}", intent_rows[0], intent_rows[1]);
+        assert_eq!(
+            visible_intent,
+            if case.instant {
+                "Redeem mTBILL now"
+            } else {
+                "Pay mTBILL now;request"
+            }
+        );
+        let amount_rows = page_strs(
+            &baseline.pages,
+            find_page_by_label(&baseline.pages, "mTBILL Amount"),
+        );
+        assert!(
+            amount_rows.iter().any(|row| row.contains("2 mTBILL")),
+            "mTBILL input must use static 18-decimal metadata: {amount_rows:?}"
+        );
+        assert_full_address_field_page(&baseline.pages, "Output Token", &usdc);
+        assert_full_address_field_page(
+            &baseline.pages,
+            "Beneficiary",
+            if case.explicit_recipient {
+                &recipient
+            } else {
+                &signer
+            },
+        );
+        if case.explicit_recipient {
+            assert_full_address_field_page(&baseline.pages, "Payer", &signer);
+        }
+        if case.instant {
+            let minimum_rows = page_strs(
+                &baseline.pages,
+                find_page_by_label(&baseline.pages, "Minimum Output"),
+            );
+            assert!(
+                minimum_rows.iter().any(|row| row.contains("1.9 token")),
+                "minimum must show contract-normalized base-18 output units: {minimum_rows:?}"
+            );
+        } else {
+            for page in 0..baseline.pages.len {
+                assert!(
+                    !page_strs(&baseline.pages, page)
+                        .iter()
+                        .any(|row| row == "Minimum Output"),
+                    "a redemption request must not invent a signed minimum"
+                );
+            }
+        }
+
+        for word_index in 0..case.words.len() {
+            let mut mutated_words = case.words.clone();
+            mutated_words[word_index] = if word_index == 1 {
+                u256_from_u128(3_000_000_000_000_000_000).0
+            } else if case.instant && word_index == 2 {
+                u256_from_u128(1_800_000_000_000_000_000).0
+            } else {
+                let mut word = mutated_words[word_index];
+                word[31] ^= 1;
+                word
+            };
+            let mutated = render(&mutated_words, &signer).unwrap_or_else(|error| {
+                panic!(
+                    "render independently mutated word {word_index} for {}: {error:?}",
+                    case.signature
+                )
+            });
+            assert_ne!(
+                baseline.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "word {word_index} is not visible for {}",
+                case.signature
+            );
+            assert!(
+                !baseline
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "word {word_index} is not receipt-bound for {}",
+                case.signature
+            );
+        }
+        let changed_identity = render(&case.words, &changed_signer)
+            .unwrap_or_else(|error| panic!("render changed signer {}: {error:?}", case.signature));
+        let identity_label = if case.explicit_recipient {
+            "Payer"
+        } else {
+            "Beneficiary"
+        };
+        assert_full_address_field_page(&changed_identity.pages, identity_label, &changed_signer);
+        assert_ne!(baseline.pages.as_slice(), changed_identity.pages.as_slice());
+        assert!(!baseline
+            .transcript_receipt
+            .exact_match(&changed_identity.transcript_receipt));
+
+        let mut proofs = DispatchPageProofs::new();
+        proofs.fail_initialize();
+        let dispatched = pick_sign_pages(
+            &tx,
+            &calldata,
+            &signer,
+            None,
+            None,
+            None,
+            Some(&verified),
+            Some(&metadata),
+            None,
+            &resolver,
+            &mut proofs,
+        )
+        .unwrap_or_else(|error| panic!("dispatcher selects {}: {error:?}", case.signature));
+        assert_eq!(dispatched.as_slice(), baseline.pages.as_slice());
+
+        let mut missing_proofs = DispatchPageProofs::new();
+        missing_proofs.fail_initialize();
+        assert!(
+            pick_sign_pages(
+                &tx,
+                &calldata,
+                &signer,
+                None,
+                None,
+                None,
+                None,
+                Some(&metadata),
+                None,
+                &resolver,
+                &mut missing_proofs,
+            )
+            .is_err(),
+            "{} must not fall back without its descriptor",
+            case.signature
+        );
+    }
+
+    assert!(matches!(
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &standard_calldata[..standard_calldata.len() - 1],
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 short head"
+        ))
+    ));
+    let mut trailing = standard_calldata.clone();
+    trailing.push(0);
+    assert!(matches!(
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &trailing,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 static calldata trailing"
+        ))
+    ));
+    let mut dirty_token = cases[0].words.clone();
+    dirty_token[0][0] = 1;
+    assert!(render_erc7730_pages_with_signer_checked(
+        &tx,
+        &calldata_static(INSTANT, &dirty_token),
+        &verified,
+        Some(&metadata),
+        &resolver,
+        &signer,
+    )
+    .is_err());
+    let mut dirty_recipient = cases[1].words.clone();
+    dirty_recipient[3][0] = 1;
+    assert!(render_erc7730_pages_with_signer_checked(
+        &tx,
+        &calldata_static(INSTANT_RECIPIENT, &dirty_recipient),
+        &verified,
+        Some(&metadata),
+        &resolver,
+        &signer,
+    )
+    .is_err());
+
+    let fiat_calldata = calldata_static(FIAT, &[amount]);
+    assert_eq!(&fiat_calldata[..4], &FIAT_SELECTOR);
+    assert!(registry
+        .known_calls
+        .contains(&(CHAIN_ID, vault, FIAT_SELECTOR)));
+    assert!(pqsigner_erc7730::known_calls::may_contain(
+        &registry.known_calls_bloom,
+        CHAIN_ID,
+        &vault,
+        &FIAT_SELECTOR,
+    ));
+    assert!(matches!(
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &fiat_calldata,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+    ));
+    for descriptor in [Some(&verified), None] {
+        let mut fiat_proofs = DispatchPageProofs::new();
+        fiat_proofs.fail_initialize();
+        assert!(
+            pick_sign_pages(
+                &tx,
+                &fiat_calldata,
+                &signer,
+                None,
+                None,
+                None,
+                descriptor,
+                Some(&metadata),
+                None,
+                &resolver,
+                &mut fiat_proofs,
+            )
+            .is_err(),
+            "fiat redemption must refuse with or without the token-route descriptor"
+        );
+    }
+
+    let mut tampered_bundle = bundle.clone();
+    *tampered_bundle
+        .last_mut()
+        .expect("RedemptionVault bundle has proof bytes") ^= 1;
+    assert!(verify_erc7730_bundle(&tampered_bundle, &registry.root).is_err());
+
+    let excluded_contract: [u8; 20] = hex::decode("569d7dccbf6923350521ecbc28a555a500c4f0ec")
+        .expect("excluded Midas RedemptionVault")
+        .try_into()
+        .expect("address width");
+    for selector in [
+        INSTANT_SELECTOR,
+        INSTANT_RECIPIENT_SELECTOR,
+        REQUEST_SELECTOR,
+        REQUEST_RECIPIENT_SELECTOR,
+        FIAT_SELECTOR,
+    ] {
+        assert!(registry
+            .known_calls
+            .contains(&(CHAIN_ID, excluded_contract, selector)));
+        assert!(pqsigner_erc7730::known_calls::may_contain(
+            &registry.known_calls_bloom,
+            CHAIN_ID,
+            &excluded_contract,
+            &selector,
+        ));
+    }
+    assert!(matches!(
+        cross_check_contract(&verified.ir, CHAIN_ID, &excluded_contract),
+        Err(BindingError::ContractMismatch)
+    ));
+    let excluded_tx = envelope(CHAIN_ID, excluded_contract);
+    let mut excluded_proofs = DispatchPageProofs::new();
+    excluded_proofs.fail_initialize();
+    assert!(pick_sign_pages(
+        &excluded_tx,
+        &standard_calldata,
+        &signer,
+        None,
+        None,
+        None,
+        None,
+        Some(&metadata),
+        None,
+        &resolver,
+        &mut excluded_proofs,
+    )
+    .is_err());
 }
 
 #[test]

@@ -1,0 +1,47 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "mtbill-name",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0xdd629e5241cbc5919847783e6c96b2de4754e438",
+        "data": "0x06fdde03"
+      },
+      {
+        "blockHash": "0x747c9dfcb1988c490d72011332edaebdea48acba3a29df44a82be5ecdeceb7fb",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "mtbill-symbol",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0xdd629e5241cbc5919847783e6c96b2de4754e438",
+        "data": "0x95d89b41"
+      },
+      {
+        "blockHash": "0x747c9dfcb1988c490d72011332edaebdea48acba3a29df44a82be5ecdeceb7fb",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "mtbill-decimals",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0xdd629e5241cbc5919847783e6c96b2de4754e438",
+        "data": "0x313ce567"
+      },
+      {
+        "blockHash": "0x747c9dfcb1988c490d72011332edaebdea48acba3a29df44a82be5ecdeceb7fb",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

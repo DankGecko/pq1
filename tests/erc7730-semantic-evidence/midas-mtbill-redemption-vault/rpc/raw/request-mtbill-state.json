@@ -1,0 +1,39 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "mtbill-implementation-slot",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0xdd629e5241cbc5919847783e6c96b2de4754e438",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0x747c9dfcb1988c490d72011332edaebdea48acba3a29df44a82be5ecdeceb7fb",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "mtbill-proxy-code",
+    "method": "eth_getCode",
+    "params": [
+      "0xdd629e5241cbc5919847783e6c96b2de4754e438",
+      {
+        "blockHash": "0x747c9dfcb1988c490d72011332edaebdea48acba3a29df44a82be5ecdeceb7fb",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "mtbill-implementation-code",
+    "method": "eth_getCode",
+    "params": [
+      "0xD4998Cc1ba435298C521f250b81856B1F25C8455",
+      {
+        "blockHash": "0x747c9dfcb1988c490d72011332edaebdea48acba3a29df44a82be5ecdeceb7fb",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

@@ -1,0 +1,415 @@
+{
+  "schema_version": 2,
+  "scope": "Ethereum Midas mTBILL RedemptionVault four flat-static token-out routes semantic evidence",
+  "captured_at_utc": "2026-07-21T08:30:00Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
+  "boundary": "Historical fixed-block evidence covers only the four declared token-out redemption routes at chain 1 proxy 0xF6e51d24F4793Ac5e71e0502213a9BBE3A6d4517. redeemFiatRequest remains refused because its payout terms are absent from calldata. Live configuration, access policy, rates, fees, allowances, liquidity, limits, pauses, request disposition, and future upgrades remain mutable. No other deployment, fallback, blind-sign, hardware, production, shipment, refund, timing, output, or success authority is supplied.",
+  "fixed_block": {
+    "chain_id": 1,
+    "number": 25579745,
+    "number_hex": "0x18650e1",
+    "hash": "0x747c9dfcb1988c490d72011332edaebdea48acba3a29df44a82be5ecdeceb7fb",
+    "state_root": "0xf57084a6e4c99a3efd5b27392676b554b73b08333fda9a3f1a6012063077a7de",
+    "timestamp": 1784620631,
+    "timestamp_utc": "2026-07-21T07:57:11Z"
+  },
+  "contracts": {
+    "redemption_vault_proxy": "0xF6e51d24F4793Ac5e71e0502213a9BBE3A6d4517",
+    "redemption_vault_implementation": "0x2F1372244CEDCAf8eE1759D2F02435628f14975f",
+    "mtbill_proxy": "0xdd629e5241cbc5919847783e6c96b2de4754e438",
+    "mtbill_implementation": "0xD4998Cc1ba435298C521f250b81856B1F25C8455",
+    "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+    "mtoken_selector": "0xc3b6f939"
+  },
+  "abi_artifact": "abi/RedemptionVault.redeem-routes.abi.json",
+  "routes": [
+    {
+      "canonical_signature": "redeemInstant(address,uint256,uint256)",
+      "selector": "0x8b53f75e",
+      "state_mutability": "nonpayable",
+      "payer": "msg.sender",
+      "beneficiary": "msg.sender"
+    },
+    {
+      "canonical_signature": "redeemInstant(address,uint256,uint256,address)",
+      "selector": "0x85ab2c13",
+      "state_mutability": "nonpayable",
+      "payer": "msg.sender",
+      "beneficiary": "signed recipient"
+    },
+    {
+      "canonical_signature": "redeemRequest(address,uint256)",
+      "selector": "0xbfc2d46a",
+      "state_mutability": "nonpayable",
+      "payer": "msg.sender",
+      "beneficiary": "msg.sender"
+    },
+    {
+      "canonical_signature": "redeemRequest(address,uint256,address)",
+      "selector": "0x15571a04",
+      "state_mutability": "nonpayable",
+      "payer": "msg.sender",
+      "beneficiary": "signed recipient"
+    }
+  ],
+  "excluded_routes": [
+    {
+      "canonical_signature": "redeemFiatRequest(uint256)",
+      "selector": "0xd5f73f5c",
+      "reason": "Only the mTBILL input is signed; fiat currency, payout amount, bank destination, timing, and fulfillment terms are absent, and the on-chain approval path performs no fiat transfer."
+    }
+  ],
+  "official_source": {
+    "repository": "https://github.com/midas-apps/contracts",
+    "commit": "237c56a85e51560a977d9473ce3f939d877f2a4f",
+    "tree": "1cff2a6fe8ad0f97e312a28624e9b32166f0d942"
+  },
+  "blockscout": {
+    "redemption_vault_proxy": "blockscout/RedemptionVaultProxy.json",
+    "redemption_vault_implementation": "blockscout/RedemptionVault.implementation.json",
+    "mtbill_proxy": "blockscout/MTBillProxy.json",
+    "mtbill_implementation": "blockscout/MTBill.implementation.json",
+    "verified_source_count": 36,
+    "compiler": "v0.8.9+commit.e5eed63a",
+    "optimizer_enabled": true,
+    "optimizer_runs": 200,
+    "external_libraries": 0
+  },
+  "rpc": {
+    "providers": [
+      "dRPC",
+      "Tenderly",
+      "MEV Blocker"
+    ],
+    "historical_query_binding": "Every eth_getCode, eth_getStorageAt, and eth_call request uses EIP-1898 blockHash plus requireCanonical:true."
+  },
+  "semantics": {
+    "mtbill_input": "signed base-18 amountMTokenIn; the fee plus net burn or vault transfer debit exactly that input from msg.sender",
+    "token_out": "signed output-token address; enrollment and configuration remain live state",
+    "minimum_receive": "instant routes sign a base-18 normalized tokenOut minimum enforced against the actual output truncated to native token precision; request routes sign no minimum",
+    "payer": "all four admitted routes debit msg.sender; custom-recipient displays must bind the authenticated payer separately from the signed beneficiary",
+    "beneficiary": "standard routes pass msg.sender as the implicit beneficiary; custom routes pass the signed recipient",
+    "request_lifecycle": "request routes transfer mTBILL immediately, store a pending request, and permit later administrator completion using a later supplied mToken rate or rejection; no output minimum, final output, approval time, refund, or successful completion is signed",
+    "trusted_request_intent": "mTBILL leaves now; no output minimum",
+    "fiat_refusal": "redeemFiatRequest signs no fiat currency, payout amount, bank destination, timing, or fulfillment terms; its zero-address manual-fulfillment approval path performs no on-chain fiat transfer",
+    "success_residual": "access policy, token enrollment/configuration, rates, fees, allowance, liquidity, limits, pause state, sanctions/greenlist/blacklist state, balances, request disposition, and execution success remain live"
+  },
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "7955e0f31a397ed804d980e6c7b5cdbc114b5a6356233a24432a926c289ba245"
+    },
+    {
+      "path": "abi/RedemptionVault.redeem-routes.abi.json",
+      "sha256": "66b430caba6d2cd242c2fd7cb2bf5cb76b9ab6900d85cf79e53e9b7b0157515b"
+    },
+    {
+      "path": "blockscout/MTBill.implementation.json",
+      "sha256": "6ba26ccb00f1cf423b8324089edd6269e269093baf46e3144eb03a82f018f687"
+    },
+    {
+      "path": "blockscout/MTBillProxy.json",
+      "sha256": "f63ba7603e14df54bb4700749da14d877ce62d4525813928fa2da5b7e5cc5aee"
+    },
+    {
+      "path": "blockscout/RedemptionVault.implementation.json",
+      "sha256": "e4f8d420b6172de01acd5a83b0bb76751ac0327befb60461efb050fc89f24957"
+    },
+    {
+      "path": "blockscout/RedemptionVaultProxy.json",
+      "sha256": "fbb24176dc2e5f638101d13e4d80ea59d4e8d7c673d5fda51b19c32ec9f7271b"
+    },
+    {
+      "path": "collect.sh",
+      "sha256": "29e6c1950f61b5a0d3e74a4ad18e92bf163982244bfc051348d819ede4399428"
+    },
+    {
+      "path": "compiler/RedemptionVault.settings.json",
+      "sha256": "2f371d2f3110f8128811eeb5add4a6fca27f873cfd94ed7c9ae6f00e1f776dfe"
+    },
+    {
+      "path": "compiler/RedemptionVault.standard-input.json",
+      "sha256": "34e0189c73675f7568f624f288cc6e8ba27f74179e3e006af1785b2148fddbff"
+    },
+    {
+      "path": "compiler/RedemptionVault.standard-output.json",
+      "sha256": "85791e59c2fca9890f4104a448820758bdf2042a32db0d8cc3b5e6b46c087d15"
+    },
+    {
+      "path": "compiler/solc-0.8.9.version.txt",
+      "sha256": "f524c085027cf8b0495f2beef66b02aa700c9a11b00b9aac14f1b02af9d8576f"
+    },
+    {
+      "path": "official/config/constants/addresses.ts",
+      "sha256": "2b8486635af23496a64d00f72a9dd56085ef318f26c6f6853c8adfdb5fa2f65e"
+    },
+    {
+      "path": "official/contracts/RedemptionVault.sol",
+      "sha256": "9ad598b5f3fe11213f1411a159a870ff20f78ed31523ddd822c19deed913b96f"
+    },
+    {
+      "path": "official/contracts/abstract/ManageableVault.sol",
+      "sha256": "ffc0a4a7982cdb096759a7884c791ef30214a8ffff015bb30f20c7bd9f9f845b"
+    },
+    {
+      "path": "official/contracts/interfaces/IMToken.sol",
+      "sha256": "9e90e0562fd821300b80fcd35512eb1ef936ffc6c41cbded3d2f12d4280015f3"
+    },
+    {
+      "path": "official/contracts/interfaces/IRedemptionVault.sol",
+      "sha256": "7feac5d6a1f607ba6ec342fe267ba64d35129cf0311cae1c77dd31ef968d4907"
+    },
+    {
+      "path": "official/contracts/libraries/DecimalsCorrectionLibrary.sol",
+      "sha256": "b9432d2edbe047ab2f6e95ec73011fe9da8d5601b1d975f0d6d396b76c1d4d92"
+    },
+    {
+      "path": "official/github-git-commit.json",
+      "sha256": "786c2f78d5f6b0dc6608e81073df7e2ab20307e4fbda94e2a9b075ac0385375a"
+    },
+    {
+      "path": "official/scripts/deploy/configs/mTBILL.ts",
+      "sha256": "4d24b7375d200d4384ca7075f11a6a3035d7936951c6188dc4bdab71ee830163"
+    },
+    {
+      "path": "rpc/raw/request-identity.json",
+      "sha256": "c362249f821885f7d62826bfc0f8dd9e09837cc2c05a1889dcf996dfec0cdef4"
+    },
+    {
+      "path": "rpc/raw/request-mtbill-metadata.json",
+      "sha256": "b64aadf0a26bbcc6fe52a6ec4d417edbc79be7441a7c7c8e8547ac81491a0416"
+    },
+    {
+      "path": "rpc/raw/request-mtbill-state.json",
+      "sha256": "564366137192841982d22b2524aa630f7dc36a0cd4cc1a505860c49459a7f1b6"
+    },
+    {
+      "path": "rpc/raw/request-vault-implementation.json",
+      "sha256": "ce92d074bfab788f1a931228a5b1ecb6a13c6ef8c0c70091da2afcb81d714d95"
+    },
+    {
+      "path": "rpc/raw/request-vault.json",
+      "sha256": "c121c40f1eae42f247924f6315ad27d00cbd6102c7674e7d068f9cb2ae996cf5"
+    },
+    {
+      "path": "rpc/raw/response-drpc-identity.json",
+      "sha256": "0fffafa4a32f47cf4c0c0ae4872c7948d0a06952412a005ca011eb10f9c98df4"
+    },
+    {
+      "path": "rpc/raw/response-drpc-mtbill-metadata.json",
+      "sha256": "2c8b7d69cd4a058d7e98f9f387b40662a35e841e77de5d9971b33729418518b3"
+    },
+    {
+      "path": "rpc/raw/response-drpc-mtbill-state.json",
+      "sha256": "d2283714c52c3ad3f4d05cb16fea72c8280d9679d6416c9982b5fe72a4e9f71f"
+    },
+    {
+      "path": "rpc/raw/response-drpc-vault-implementation.json",
+      "sha256": "a8f32389d4b9107a043947cc62e02087e1ecd5e86b4d5ee47385ad180d70b94e"
+    },
+    {
+      "path": "rpc/raw/response-drpc-vault.json",
+      "sha256": "799dd045fff05044841ccb9190c6ebf0fa3bbc2cf3a3fa96e7e63f1a51429876"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-identity.json",
+      "sha256": "0fffafa4a32f47cf4c0c0ae4872c7948d0a06952412a005ca011eb10f9c98df4"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-mtbill-metadata.json",
+      "sha256": "2c8b7d69cd4a058d7e98f9f387b40662a35e841e77de5d9971b33729418518b3"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-mtbill-state.json",
+      "sha256": "d2283714c52c3ad3f4d05cb16fea72c8280d9679d6416c9982b5fe72a4e9f71f"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-vault-implementation.json",
+      "sha256": "a8f32389d4b9107a043947cc62e02087e1ecd5e86b4d5ee47385ad180d70b94e"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-vault.json",
+      "sha256": "799dd045fff05044841ccb9190c6ebf0fa3bbc2cf3a3fa96e7e63f1a51429876"
+    },
+    {
+      "path": "rpc/raw/response-tenderly-identity.json",
+      "sha256": "0fffafa4a32f47cf4c0c0ae4872c7948d0a06952412a005ca011eb10f9c98df4"
+    },
+    {
+      "path": "rpc/raw/response-tenderly-mtbill-metadata.json",
+      "sha256": "2c8b7d69cd4a058d7e98f9f387b40662a35e841e77de5d9971b33729418518b3"
+    },
+    {
+      "path": "rpc/raw/response-tenderly-mtbill-state.json",
+      "sha256": "d2283714c52c3ad3f4d05cb16fea72c8280d9679d6416c9982b5fe72a4e9f71f"
+    },
+    {
+      "path": "rpc/raw/response-tenderly-vault-implementation.json",
+      "sha256": "a8f32389d4b9107a043947cc62e02087e1ecd5e86b4d5ee47385ad180d70b94e"
+    },
+    {
+      "path": "rpc/raw/response-tenderly-vault.json",
+      "sha256": "799dd045fff05044841ccb9190c6ebf0fa3bbc2cf3a3fa96e7e63f1a51429876"
+    },
+    {
+      "path": "runtime/MTBill.implementation.ethereum-mainnet.hex",
+      "sha256": "e4354661a57c6f6db83039088c4676df75db2df2a583c115406399eb8e5a7999"
+    },
+    {
+      "path": "runtime/MTBillProxy.ethereum-mainnet.hex",
+      "sha256": "ea166273c7604c16778282b7a816e9fc176ea91aaf813952c9c6b306d6a2c344"
+    },
+    {
+      "path": "runtime/RedemptionVault.implementation.ethereum-mainnet.hex",
+      "sha256": "ed214170e7c145452408c1cc68b1513664f2194e62af21f08062324e31faf7fe"
+    },
+    {
+      "path": "runtime/RedemptionVaultProxy.ethereum-mainnet.hex",
+      "sha256": "ea166273c7604c16778282b7a816e9fc176ea91aaf813952c9c6b306d6a2c344"
+    },
+    {
+      "path": "source/verified/@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol",
+      "sha256": "ab7e1f18f36b72e9ab184eb33933d4aa1b5de3f1ca359b56fc6cfabccad952d1"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol",
+      "sha256": "36ae01d269ee0cf6622f33e3af4fe1d0ccaccfd372a21c4435cba78fe8f6aa03"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/access/IAccessControlUpgradeable.sol",
+      "sha256": "6d3fbd4566bc123db1ee6ba2a1b79544b572df9b9cc9be360ddb3244dd07c86b"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol",
+      "sha256": "a2c4e5c274a586f145d278293ae33198cd8f412ab7e6d26f2394c8949b32b24b"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol",
+      "sha256": "c05b019a0b3bee8f3fac2da7c929f7d665b97d6d046aa35126615fff11205119"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol",
+      "sha256": "9619cf23b549a5126042a4e20b09a2eb12dc8c2975258e3b8cde79cc593b6926"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol",
+      "sha256": "78a6bc84bbb417f0d8a6b12e181e0f783151774f4f0c054c5d3f920e70d69f8c"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PausableUpgradeable.sol",
+      "sha256": "961e3d4d3140fec89e397e9ea7158978b8e66e9726f01df8e2539dbbd4ad75a9"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/token/ERC20/extensions/IERC20MetadataUpgradeable.sol",
+      "sha256": "68bcca423fc72ec9625e219c9e36306c726a347e43f3711467c579bd3f6500c8"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/token/ERC20/extensions/IERC20PermitUpgradeable.sol",
+      "sha256": "cf0f8a5ee1c560ad1c5b0847a1531c5904cee45d0ec811cd83d0d95cbd5a333b"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol",
+      "sha256": "a83249905cd172b5d9dc8564edbd0057078116cfbfebe0c6d4acf4e1246efe25"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/utils/AddressUpgradeable.sol",
+      "sha256": "db92fc1b515decad3a783b1422190877d2d70b907c6e36fb0998d9465aee42db"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/utils/ContextUpgradeable.sol",
+      "sha256": "5fb301961e45cb482fe4e05646d2f529aa449fe0e90c6671475d6a32356fa2d4"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/utils/StringsUpgradeable.sol",
+      "sha256": "357c8d1a0fb673fa10a884d6e27b383171ecc3eaf8dee8211de75f88ff77843d"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol",
+      "sha256": "fd84e5284eccc479268f0ef36b830019d4f7999ceb7959430d8d8d9e602dd4ef"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/utils/introspection/IERC165Upgradeable.sol",
+      "sha256": "a39bc026ad6214e9ecd526bd4a1ddf9862d80bd4a9d0d031d9bafa4c3c147c0b"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/utils/math/MathUpgradeable.sol",
+      "sha256": "fbf7ebc0f3c2cf5aef908ecce85e69af53db4e2c6652f61c8ac1e3f416c2fa99"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/utils/math/SignedMathUpgradeable.sol",
+      "sha256": "4f06981f993ea4a96e078c2036b5a42e1edade38996e5180171d5fe4be2f18fe"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts-upgradeable/utils/structs/EnumerableSetUpgradeable.sol",
+      "sha256": "36a171d21cc58e86c373fc61087672ee2afb471e183efcb690ab86b2002a0e6d"
+    },
+    {
+      "path": "source/verified/@openzeppelin/contracts/utils/Counters.sol",
+      "sha256": "2fdcb1343e5621385b62e57b5c7775607c272122b6f2dc77da8f84828aa40cd0"
+    },
+    {
+      "path": "source/verified/contracts/RedemptionVault.sol",
+      "sha256": "9ad598b5f3fe11213f1411a159a870ff20f78ed31523ddd822c19deed913b96f"
+    },
+    {
+      "path": "source/verified/contracts/abstract/ManageableVault.sol",
+      "sha256": "ffc0a4a7982cdb096759a7884c791ef30214a8ffff015bb30f20c7bd9f9f845b"
+    },
+    {
+      "path": "source/verified/contracts/abstract/MidasInitializable.sol",
+      "sha256": "51d131255e34f3ce27d93f906494e17b058381a0f2af277a6925dff22579d9e8"
+    },
+    {
+      "path": "source/verified/contracts/abstract/WithSanctionsList.sol",
+      "sha256": "dbedec9c3ab8d6331241f8a162f38242f6853fe43952811b0e18b0ff83e04123"
+    },
+    {
+      "path": "source/verified/contracts/access/Blacklistable.sol",
+      "sha256": "5a20339ba9e111832b41a47d5e2a112aee2a5f0597046ccd140354266b98a2ea"
+    },
+    {
+      "path": "source/verified/contracts/access/Greenlistable.sol",
+      "sha256": "cbed5cbcff3f27e6ebdd0f0d2c7a907baae3d70422f83154fa735a41b88c63ae"
+    },
+    {
+      "path": "source/verified/contracts/access/MidasAccessControl.sol",
+      "sha256": "fbce8f0ec47ae9e041f64cb66fa68d5e5dcee0702a90ccf1a6e1631b32050cd7"
+    },
+    {
+      "path": "source/verified/contracts/access/MidasAccessControlRoles.sol",
+      "sha256": "d3deacf65d59e9559ba74e1b34ae0ec91953e206bd5ccf26f4dcf9a80757b467"
+    },
+    {
+      "path": "source/verified/contracts/access/Pausable.sol",
+      "sha256": "f6ddc56f415339abbaeea9120b1505a2b0fa392e232593f4d58e7c7ebd3a814d"
+    },
+    {
+      "path": "source/verified/contracts/access/WithMidasAccessControl.sol",
+      "sha256": "a22f806aaf69665604e9139e40769f6ba258329e904bb4b6935cae6181d4c682"
+    },
+    {
+      "path": "source/verified/contracts/interfaces/IDataFeed.sol",
+      "sha256": "5779e137193a4e39e81b39aa5f5acf5df4c68382483f0dab139d555acfa19a70"
+    },
+    {
+      "path": "source/verified/contracts/interfaces/IMToken.sol",
+      "sha256": "9e90e0562fd821300b80fcd35512eb1ef936ffc6c41cbded3d2f12d4280015f3"
+    },
+    {
+      "path": "source/verified/contracts/interfaces/IManageableVault.sol",
+      "sha256": "e514dbcde0852dd22af2f6e0d7e9de7136ff647f9aa693bc3242f1fdf274f822"
+    },
+    {
+      "path": "source/verified/contracts/interfaces/IRedemptionVault.sol",
+      "sha256": "7feac5d6a1f607ba6ec342fe267ba64d35129cf0311cae1c77dd31ef968d4907"
+    },
+    {
+      "path": "source/verified/contracts/interfaces/ISanctionsList.sol",
+      "sha256": "598d3fc8d7bf1fe982755c93567d7c742eebe4b6c50cadca009fae796d5a0a93"
+    },
+    {
+      "path": "source/verified/contracts/libraries/DecimalsCorrectionLibrary.sol",
+      "sha256": "b9432d2edbe047ab2f6e95ec73011fe9da8d5601b1d975f0d6d396b76c1d4d92"
+    }
+  ]
+}

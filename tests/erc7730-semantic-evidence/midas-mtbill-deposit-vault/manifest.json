@@ -1,9 +1,9 @@
 {
-  "schema_version": 1,
-  "scope": "Ethereum Midas mTBILL DepositVault four-argument depositInstant semantic evidence",
+  "schema_version": 2,
+  "scope": "Ethereum Midas mTBILL DepositVault four flat-static deposit routes semantic evidence",
   "captured_at_utc": "2026-07-21T08:30:00Z",
   "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
-  "boundary": "Historical fixed-block evidence covers only chain 1 proxy 0x99361435420711723aF805F08187c9E6bF796683 and depositInstant(address,uint256,uint256,bytes32). Live configuration, access policy, rates, fees, limits, caps, pauses, and future upgrades remain mutable. No custom-recipient or asynchronous-request route, other deployment, redemption, fallback, blind-sign, hardware, production, shipment, or success authority is supplied.",
+  "boundary": "Historical fixed-block evidence covers only the four declared deposit routes at chain 1 proxy 0x99361435420711723aF805F08187c9E6bF796683. Live configuration, access policy, rates, fees, limits, caps, pauses, request approval or rejection, and future upgrades remain mutable. No other deployment, redemption, fallback, blind-sign, hardware, production, shipment, refund, timing, output, or success authority is supplied.",
   "fixed_block": {
     "chain_id": 1,
     "number": 25579745,
@@ -21,12 +21,37 @@
     "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
     "mtoken_selector": "0xc3b6f939"
   },
-  "route": {
-    "canonical_signature": "depositInstant(address,uint256,uint256,bytes32)",
-    "selector": "0xc02dd27a",
-    "state_mutability": "nonpayable",
-    "abi_artifact": "abi/DepositVault.deposit-instant.abi.json"
-  },
+  "abi_artifact": "abi/DepositVault.deposit-routes.abi.json",
+  "routes": [
+    {
+      "canonical_signature": "depositInstant(address,uint256,uint256,bytes32)",
+      "selector": "0xc02dd27a",
+      "state_mutability": "nonpayable",
+      "payer": "msg.sender",
+      "beneficiary": "msg.sender"
+    },
+    {
+      "canonical_signature": "depositInstant(address,uint256,uint256,bytes32,address)",
+      "selector": "0x42e8866b",
+      "state_mutability": "nonpayable",
+      "payer": "msg.sender",
+      "beneficiary": "signed recipient"
+    },
+    {
+      "canonical_signature": "depositRequest(address,uint256,bytes32)",
+      "selector": "0x6e26b9f8",
+      "state_mutability": "nonpayable",
+      "payer": "msg.sender",
+      "beneficiary": "msg.sender"
+    },
+    {
+      "canonical_signature": "depositRequest(address,uint256,bytes32,address)",
+      "selector": "0xe50e3dbb",
+      "state_mutability": "nonpayable",
+      "payer": "msg.sender",
+      "beneficiary": "signed recipient"
+    }
+  ],
   "official_source": {
     "repository": "https://github.com/midas-apps/contracts",
     "commit": "237c56a85e51560a977d9473ce3f939d877f2a4f",
@@ -54,19 +79,22 @@
   "semantics": {
     "token_in": "signed payment-token address; enrollment and configuration remain live state",
     "amount_token": "signed base-18 normalized payment-token amount; deployed code converts exactly to native token decimals and rejects rounding",
-    "minimum_receive": "signed base-18 minimum mTBILL mint amount enforced before mint",
-    "referrer_id": "signed bytes32 retained in the DepositInstant event and therefore not safe to hide",
-    "beneficiary": "the standard overload passes msg.sender as recipient and mints mTBILL to that recipient",
-    "success_residual": "access policy, token enrollment/configuration, rates, fees, limits, cap, pause state, sanctions/greenlist/blacklist state, token balances/allowance, and execution success remain live"
+    "minimum_receive": "signed base-18 minimum mTBILL mint amount enforced by both instant routes; request routes sign no minimum or output",
+    "referrer_id": "signed bytes32 retained by every admitted route's event and therefore not safe to hide",
+    "payer": "every route pulls the payment and any fee from msg.sender; custom-recipient displays must bind the authenticated payer separately from the signed beneficiary",
+    "beneficiary": "standard routes pass msg.sender as the implicit beneficiary; custom routes pass the signed recipient",
+    "request_lifecycle": "request routes transfer payment immediately, store a pending request, and permit later administrator approval with a later newOutRate or rejection; no final output, approval time, refund, or successful approval is signed",
+    "trusted_request_intent": "Pay now; request mTBILL",
+    "success_residual": "access policy, token enrollment/configuration, rates, fees, limits, cap, pause state, sanctions/greenlist/blacklist state, token balances/allowance, request disposition, and execution success remain live"
   },
   "artifacts": [
     {
       "path": "README.md",
-      "sha256": "cb440778d467cf9abb5ed8813e8c57c864ea446e63bfbf20f60d52086bfcb215"
+      "sha256": "44ba59e1cc1f74c9e6474ed3a935ec60f8617ea54e97c09ea11f94b806ae3ad8"
     },
     {
-      "path": "abi/DepositVault.deposit-instant.abi.json",
-      "sha256": "b23d166215c427c162ff311dee963d8e6bb2273804b8341553554b87e6f02f40"
+      "path": "abi/DepositVault.deposit-routes.abi.json",
+      "sha256": "08629f05d5ac3b8945cd0d7acb321c864805961cc58038d65da1840d037a4ac7"
     },
     {
       "path": "blockscout/DepositVault.implementation.json",
@@ -86,7 +114,7 @@
     },
     {
       "path": "collect.sh",
-      "sha256": "34b9e8a91e3e4a1c2e01b0febf94954d4cd2bb5bc1a160a7348d72d1c4aa5a01"
+      "sha256": "ae388ce70c5c57f12777cfded3280104e5eaa69c54a9e8a6bbe17cb8d2435960"
     },
     {
       "path": "compiler/DepositVault.settings.json",

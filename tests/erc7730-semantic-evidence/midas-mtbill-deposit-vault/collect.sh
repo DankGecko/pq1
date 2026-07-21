@@ -177,12 +177,27 @@ jq -cS '
     .abi[]
     | select(
         .type == "function"
-        and .name == "depositInstant"
-        and ([.inputs[].type] == ["address", "uint256", "uint256", "bytes32"])
+        and (
+          (
+            .name == "depositInstant"
+            and (
+              [.inputs[].type] == ["address", "uint256", "uint256", "bytes32"]
+              or [.inputs[].type] == ["address", "uint256", "uint256", "bytes32", "address"]
+            )
+          )
+          or (
+            .name == "depositRequest"
+            and (
+              [.inputs[].type] == ["address", "uint256", "bytes32"]
+              or [.inputs[].type] == ["address", "uint256", "bytes32", "address"]
+            )
+          )
+        )
       )
   ]
+  | sort_by(.name, (.inputs | length))
 ' "$blockscout/DepositVault.implementation.json" \
-  >"$abi/DepositVault.deposit-instant.abi.json"
+  >"$abi/DepositVault.deposit-routes.abi.json"
 
 # Refresh every non-manifest SHA-256 receipt after a successful capture.
 receipts="$(mktemp)"

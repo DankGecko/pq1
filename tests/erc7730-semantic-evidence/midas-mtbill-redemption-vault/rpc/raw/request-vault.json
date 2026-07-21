@@ -1,0 +1,42 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "vault-implementation-slot",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0xF6e51d24F4793Ac5e71e0502213a9BBE3A6d4517",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0x747c9dfcb1988c490d72011332edaebdea48acba3a29df44a82be5ecdeceb7fb",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "vault-proxy-code",
+    "method": "eth_getCode",
+    "params": [
+      "0xF6e51d24F4793Ac5e71e0502213a9BBE3A6d4517",
+      {
+        "blockHash": "0x747c9dfcb1988c490d72011332edaebdea48acba3a29df44a82be5ecdeceb7fb",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "vault-mtoken",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0xF6e51d24F4793Ac5e71e0502213a9BBE3A6d4517",
+        "data": "0xc3b6f939"
+      },
+      {
+        "blockHash": "0x747c9dfcb1988c490d72011332edaebdea48acba3a29df44a82be5ecdeceb7fb",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

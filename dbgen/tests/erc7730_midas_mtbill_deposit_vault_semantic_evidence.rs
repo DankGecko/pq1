@@ -1,10 +1,11 @@
-//! Offline evidence checks for the bounded Midas mTBILL DepositVault route.
+//! Offline evidence checks for the bounded Midas mTBILL DepositVault routes.
 //!
 //! Catalogue and rendering behavior are exercised elsewhere. This test keeps
 //! the external authority package honest: every archived byte is receipted,
 //! three fixed-block providers agree, the verified compiler closure rebuilds
-//! the deployed runtime, and the exact source/ABI establish the meaning of all
-//! four signed operands in the admitted overload.
+//! the deployed runtime, and the exact source/ABI establish the signed
+//! operands, implicit/explicit beneficiary, authenticated payer, and
+//! pay-now asynchronous semantics of all four admitted overloads.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -24,8 +25,24 @@ const MTBILL_PROXY: &str = "dd629e5241cbc5919847783e6c96b2de4754e438";
 const MTBILL_IMPLEMENTATION: &str = "d4998cc1ba435298c521f250b81856b1f25c8455";
 const OFFICIAL_COMMIT: &str = "237c56a85e51560a977d9473ce3f939d877f2a4f";
 const OFFICIAL_TREE: &str = "1cff2a6fe8ad0f97e312a28624e9b32166f0d942";
-const ROUTE: &str = "depositInstant(address,uint256,uint256,bytes32)";
-const SELECTOR: [u8; 4] = [0xc0, 0x2d, 0xd2, 0x7a];
+const ROUTES: [(&str, [u8; 4]); 4] = [
+    (
+        "depositInstant(address,uint256,uint256,bytes32)",
+        [0xc0, 0x2d, 0xd2, 0x7a],
+    ),
+    (
+        "depositInstant(address,uint256,uint256,bytes32,address)",
+        [0x42, 0xe8, 0x86, 0x6b],
+    ),
+    (
+        "depositRequest(address,uint256,bytes32)",
+        [0x6e, 0x26, 0xb9, 0xf8],
+    ),
+    (
+        "depositRequest(address,uint256,bytes32,address)",
+        [0xe5, 0x0e, 0x3d, 0xbb],
+    ),
+];
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -184,6 +201,18 @@ fn hex_quantity(value: &Value) -> u64 {
     u64::from_str_radix(text.strip_prefix("0x").unwrap_or(text), 16).expect("hex quantity")
 }
 
+fn abi_signature(function: &Value) -> String {
+    let name = function["name"].as_str().expect("ABI function name");
+    let types = function["inputs"]
+        .as_array()
+        .expect("ABI function inputs")
+        .iter()
+        .map(|input| input["type"].as_str().expect("ABI input type"))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{name}({types})")
+}
+
 fn collect_files(root: &Path, directory: &Path, out: &mut BTreeSet<String>) {
     for entry in fs::read_dir(directory)
         .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
@@ -257,7 +286,7 @@ fn assert_blockscout_runtime(record: &Value, runtime: &[u8]) {
 fn midas_evidence_receipts_cover_every_offline_artifact() {
     let evidence = evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));
-    assert_eq!(manifest["schema_version"].as_u64(), Some(1));
+    assert_eq!(manifest["schema_version"].as_u64(), Some(2));
     assert_eq!(manifest["fixed_block"]["chain_id"].as_u64(), Some(1));
     assert_eq!(
         manifest["fixed_block"]["number"].as_u64(),
@@ -265,10 +294,33 @@ fn midas_evidence_receipts_cover_every_offline_artifact() {
     );
     assert_eq!(manifest["fixed_block"]["hash"].as_str(), Some(BLOCK_HASH));
     assert_eq!(
-        manifest["route"]["canonical_signature"].as_str(),
-        Some(ROUTE)
+        manifest["abi_artifact"].as_str(),
+        Some("abi/DepositVault.deposit-routes.abi.json")
     );
-    assert_eq!(manifest["route"]["selector"].as_str(), Some("0xc02dd27a"));
+    let routes = manifest["routes"].as_array().expect("manifest routes");
+    assert_eq!(routes.len(), ROUTES.len());
+    for (route, (signature, selector)) in routes.iter().zip(ROUTES) {
+        assert_eq!(route["canonical_signature"].as_str(), Some(signature));
+        assert_eq!(
+            route["selector"].as_str(),
+            Some(format!("0x{}", hex::encode(selector)).as_str())
+        );
+        assert_eq!(route["state_mutability"].as_str(), Some("nonpayable"));
+        assert_eq!(route["payer"].as_str(), Some("msg.sender"));
+    }
+    assert_eq!(
+        manifest["semantics"]["trusted_request_intent"].as_str(),
+        Some("Pay now; request mTBILL")
+    );
+    for boundary in ["immediately", "newOutRate", "no final output"] {
+        assert!(
+            manifest["semantics"]["request_lifecycle"]
+                .as_str()
+                .expect("request lifecycle semantics")
+                .contains(boundary),
+            "request authority lost boundary {boundary:?}"
+        );
+    }
 
     let mut declared = BTreeSet::new();
     for artifact in manifest["artifacts"].as_array().expect("artifact receipts") {
@@ -517,12 +569,14 @@ fn verified_source_closure_rebuilds_the_exact_deployed_runtime() {
     assert_eq!(vault_implementation_runtime.len(), 17_677);
     assert_eq!(mtbill_proxy_runtime.len(), 2_227);
     assert_eq!(mtbill_implementation_runtime.len(), 6_271);
-    assert!(
-        vault_implementation_runtime
-            .windows(SELECTOR.len())
-            .any(|window| window == SELECTOR),
-        "deployed runtime lost the admitted selector"
-    );
+    for (signature, selector) in ROUTES {
+        assert!(
+            vault_implementation_runtime
+                .windows(selector.len())
+                .any(|window| window == selector),
+            "deployed runtime lost admitted selector for {signature}"
+        );
+    }
 
     let verified_sources = source_map(&vault_implementation);
     assert_eq!(verified_sources.len(), 36, "verified closure size drifted");
@@ -608,62 +662,115 @@ fn verified_source_closure_rebuilds_the_exact_deployed_runtime() {
 }
 
 #[test]
-fn exact_abi_and_deployed_source_bind_all_four_signed_operands() {
+fn exact_abi_and_deployed_source_bind_all_four_deposit_routes() {
     let evidence = evidence_root();
-    let abi = read_json(&evidence.join("abi/DepositVault.deposit-instant.abi.json"));
+    let abi = read_json(&evidence.join("abi/DepositVault.deposit-routes.abi.json"));
     let functions = abi.as_array().expect("ABI projection array");
     assert_eq!(
         functions.len(),
-        1,
-        "ABI projection must authorize one overload"
+        ROUTES.len(),
+        "ABI projection must authorize exactly four deposit overloads"
     );
-    let function = &functions[0];
-    assert_eq!(function["type"].as_str(), Some("function"));
-    assert_eq!(function["name"].as_str(), Some("depositInstant"));
-    assert_eq!(function["stateMutability"].as_str(), Some("nonpayable"));
-    assert_eq!(function["outputs"], json!([]));
-    let inputs = function["inputs"].as_array().expect("ABI inputs");
-    assert_eq!(inputs.len(), 4);
-    for (input, (name, ty)) in inputs.iter().zip([
-        ("tokenIn", "address"),
-        ("amountToken", "uint256"),
-        ("minReceiveAmount", "uint256"),
-        ("referrerId", "bytes32"),
-    ]) {
-        assert_eq!(input["name"].as_str(), Some(name));
-        assert_eq!(input["type"].as_str(), Some(ty));
+    let functions_by_signature: BTreeMap<_, _> = functions
+        .iter()
+        .map(|function| (abi_signature(function), function))
+        .collect();
+    assert_eq!(functions_by_signature.len(), ROUTES.len());
+
+    for (signature, selector) in ROUTES {
+        let function = functions_by_signature
+            .get(signature)
+            .unwrap_or_else(|| panic!("missing ABI route {signature}"));
+        assert_eq!(function["type"].as_str(), Some("function"));
+        assert_eq!(function["stateMutability"].as_str(), Some("nonpayable"));
+        if signature.starts_with("depositRequest") {
+            assert_eq!(
+                function["outputs"],
+                json!([{"internalType": "uint256", "name": "", "type": "uint256"}])
+            );
+        } else {
+            assert_eq!(function["outputs"], json!([]));
+        }
+        assert_eq!(&keccak256(signature.as_bytes())[..4], &selector);
     }
-    assert_eq!(&keccak256(ROUTE.as_bytes())[..4], &SELECTOR);
+
+    let expected_names = [
+        (
+            ROUTES[0].0,
+            &["tokenIn", "amountToken", "minReceiveAmount", "referrerId"][..],
+        ),
+        (
+            ROUTES[1].0,
+            &[
+                "tokenIn",
+                "amountToken",
+                "minReceiveAmount",
+                "referrerId",
+                "recipient",
+            ][..],
+        ),
+        (ROUTES[2].0, &["tokenIn", "amountToken", "referrerId"][..]),
+        (
+            ROUTES[3].0,
+            &["tokenIn", "amountToken", "referrerId", "recipient"][..],
+        ),
+    ];
+    for (signature, names) in expected_names {
+        let actual = functions_by_signature[signature]["inputs"]
+            .as_array()
+            .expect("ABI inputs")
+            .iter()
+            .map(|input| input["name"].as_str().expect("ABI input name"))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, names, "ABI operand order drifted for {signature}");
+    }
 
     let deposit = fs::read_to_string(evidence.join("source/verified/contracts/DepositVault.sol"))
         .expect("verified DepositVault source");
-    let overloads = solidity_functions(&deposit, "depositInstant");
-    assert_eq!(overloads.len(), 2, "deployed source overload set drifted");
-    let standard = overloads
+    for (signature, _) in ROUTES {
+        assert!(
+            deposit.contains(&format!("keccak256(\"{signature}\")")),
+            "deployed source lost selector declaration for {signature}"
+        );
+    }
+
+    let instant_overloads = solidity_functions(&deposit, "depositInstant");
+    assert_eq!(instant_overloads.len(), 2, "instant overload set drifted");
+    let standard_instant = instant_overloads
         .iter()
-        .find(|function| {
-            let header = normalized(function.header);
-            header.contains("bytes32 referrerId") && !header.contains("address recipient")
-        })
+        .find(|function| !normalized(function.header).contains("address recipient"))
         .expect("standard four-argument depositInstant");
-    assert!(normalized(standard.header).contains("whenFnNotPaused(_DEPOSIT_INSTANT_SELECTOR)"));
+    assert!(
+        normalized(standard_instant.header).contains("whenFnNotPaused(_DEPOSIT_INSTANT_SELECTOR)")
+    );
     assert_fragments_in_order(
-        standard.body,
+        standard_instant.body,
         &[
             "_validateUserAccess(msg.sender);",
             "_depositInstant( tokenIn, amountToken, minReceiveAmount, msg.sender )",
             "emit DepositInstant( msg.sender, tokenIn, result.tokenAmountInUsd, amountToken, result.feeTokenAmount, result.mintAmount, referrerId )",
         ],
-        "four-argument depositInstant",
+        "implicit-beneficiary depositInstant",
+    );
+    let custom_instant = instant_overloads
+        .iter()
+        .find(|function| normalized(function.header).contains("address recipient"))
+        .expect("custom-recipient depositInstant");
+    assert!(normalized(custom_instant.header)
+        .contains("whenFnNotPaused(_DEPOSIT_INSTANT_WITH_CUSTOM_RECIPIENT_SELECTOR)"));
+    assert_fragments_in_order(
+        custom_instant.body,
+        &[
+            "_validateUserAccess(msg.sender);",
+            "if (recipient != msg.sender)",
+            "_validateUserAccess(recipient);",
+            "_depositInstant( tokenIn, amountToken, minReceiveAmount, recipient )",
+            "emit DepositInstantWithCustomRecipient( msg.sender, tokenIn, recipient, result.tokenAmountInUsd, amountToken, result.feeTokenAmount, result.mintAmount, referrerId )",
+        ],
+        "signed-beneficiary depositInstant",
     );
 
-    assert!(
-        deposit.contains("bytes4(keccak256(\"depositInstant(address,uint256,uint256,bytes32)\"))")
-    );
     let instant = solidity_function(&deposit, "_depositInstant");
-    assert!(normalized(instant.header).contains("uint256 amountToken"));
-    assert!(normalized(instant.header).contains("uint256 minReceiveAmount"));
-    assert!(normalized(instant.header).contains("address recipient"));
     assert_fragments_in_order(
         instant.body,
         &[
@@ -673,6 +780,78 @@ fn exact_abi_and_deployed_source_bind_all_four_signed_operands() {
             "mToken.mint(recipient, result.mintAmount);",
         ],
         "instant deposit implementation",
+    );
+
+    let request_overloads = solidity_functions(&deposit, "depositRequest");
+    assert_eq!(request_overloads.len(), 2, "request overload set drifted");
+    let standard_request = request_overloads
+        .iter()
+        .find(|function| !normalized(function.header).contains("address recipient"))
+        .expect("standard three-argument depositRequest");
+    assert!(
+        normalized(standard_request.header).contains("whenFnNotPaused(_DEPOSIT_REQUEST_SELECTOR)")
+    );
+    assert_fragments_in_order(
+        standard_request.body,
+        &[
+            "_validateUserAccess(msg.sender);",
+            "_depositRequest(tokenIn, amountToken, msg.sender)",
+            "emit DepositRequest( requestId, msg.sender, tokenIn, amountToken, calcResult.tokenAmountInUsd, calcResult.feeTokenAmount, calcResult.tokenOutRate, referrerId )",
+        ],
+        "implicit-beneficiary depositRequest",
+    );
+    let custom_request = request_overloads
+        .iter()
+        .find(|function| normalized(function.header).contains("address recipient"))
+        .expect("custom-recipient depositRequest");
+    assert!(normalized(custom_request.header)
+        .contains("whenFnNotPaused(_DEPOSIT_REQUEST_WITH_CUSTOM_RECIPIENT_SELECTOR)"));
+    assert_fragments_in_order(
+        custom_request.body,
+        &[
+            "_validateUserAccess(msg.sender);",
+            "if (recipient != msg.sender)",
+            "_validateUserAccess(recipient);",
+            "_depositRequest(tokenIn, amountToken, recipient)",
+            "emit DepositRequestWithCustomRecipient( requestId, msg.sender, tokenIn, recipient, amountToken, calcResult.tokenAmountInUsd, calcResult.feeTokenAmount, calcResult.tokenOutRate, referrerIdCopy )",
+        ],
+        "signed-beneficiary depositRequest",
+    );
+
+    let request = solidity_function(&deposit, "_depositRequest");
+    assert_fragments_in_order(
+        request.body,
+        &[
+            "address user = msg.sender;",
+            "calcResult = _calcAndValidateDeposit(user, tokenIn, amountToken, false);",
+            "_tokenTransferFromUser( tokenIn, tokensReceiver, calcResult.amountTokenWithoutFee, calcResult.tokenDecimals )",
+            "_tokenTransferFromUser( tokenIn, feeReceiver, calcResult.feeTokenAmount, calcResult.tokenDecimals )",
+            "mintRequests[requestId] = Request({ sender: recipient, tokenIn: tokenIn, status: RequestStatus.Pending",
+            "tokenOutRate: calcResult.tokenOutRate",
+        ],
+        "pay-now pending request implementation",
+    );
+    let approve = solidity_function(&deposit, "_approveRequest");
+    assert_fragments_in_order(
+        approve.body,
+        &[
+            "Request memory request = mintRequests[requestId];",
+            "uint256 amountMToken = (request.usdAmountWithoutFees * (10**18)) / newOutRate;",
+            "mToken.mint(request.sender, amountMToken);",
+            "request.status = RequestStatus.Processed;",
+            "request.tokenOutRate = newOutRate;",
+        ],
+        "later administrator-rate request approval",
+    );
+    let reject = solidity_function(&deposit, "rejectRequest");
+    assert_fragments_in_order(
+        reject.body,
+        &[
+            "Request memory request = mintRequests[requestId];",
+            "request.status == RequestStatus.Pending",
+            "mintRequests[requestId].status = RequestStatus.Canceled;",
+        ],
+        "request rejection without an automatic-refund claim",
     );
 
     let calculation = solidity_function(&deposit, "_calcAndValidateDeposit");
@@ -701,7 +880,7 @@ fn exact_abi_and_deployed_source_bind_all_four_signed_operands() {
             "amount == transferAmount.convertToBase18(tokenDecimals)",
             "IERC20(token).safeTransferFrom(msg.sender, to, transferAmount);",
         ],
-        "base-18 exact payment transfer",
+        "base-18 exact authenticated-payer transfer",
     );
 
     let decimal_library = fs::read_to_string(

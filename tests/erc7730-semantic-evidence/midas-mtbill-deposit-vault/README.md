@@ -1,11 +1,15 @@
 # Midas mTBILL DepositVault semantic evidence
 
-This deterministic offline bundle supports one bounded PQ1 ERC-7730 route:
-Ethereum mainnet Midas mTBILL `DepositVault.depositInstant(address,uint256,
-uint256,bytes32)` at proxy `0x99361435420711723aF805F08187c9E6bF796683`
-(selector `0xc02dd27a`). It supplies no authority for the custom-recipient overload,
-either asynchronous deposit-request overload, another Midas deployment, or a
-redemption vault.
+This deterministic offline bundle supports the four flat-static deposit routes
+of the Ethereum mainnet Midas mTBILL `DepositVault` at proxy
+`0x99361435420711723aF805F08187c9E6bF796683`:
+
+- `depositInstant(address,uint256,uint256,bytes32)` (`0xc02dd27a`);
+- `depositInstant(address,uint256,uint256,bytes32,address)` (`0x42e8866b`);
+- `depositRequest(address,uint256,bytes32)` (`0x6e26b9f8`); and
+- `depositRequest(address,uint256,bytes32,address)` (`0xe50e3dbb`).
+
+It supplies no authority for another Midas deployment or a redemption vault.
 
 ## Fixed deployment identity
 
@@ -50,23 +54,41 @@ deployed implementation runtime byte-for-byte. Raw proxy, implementation,
 mTBILL proxy, and mTBILL implementation Blockscout records are retained as
 independent explorer evidence.
 
-## Signed-operand semantics
+## Signed-operand and payer semantics
 
-The exact one-entry ABI projection establishes four signed operands:
+The exact four-entry ABI projection establishes these signed operands:
 
 - `tokenIn`: the payment-token address;
 - `amountToken`: a base-18 normalized payment amount, regardless of the
   payment token's native decimals;
-- `minReceiveAmount`: the minimum base-18 mTBILL amount accepted by the call;
-- `referrerId`: an application-supplied full 32-byte referral identifier.
+- `minReceiveAmount`, on the two instant routes only: the minimum base-18
+  mTBILL amount accepted by the call;
+- `referrerId`: an application-supplied full 32-byte referral identifier; and
+- `recipient`, on the two custom-recipient routes: the mTBILL beneficiary.
 
 The deployed source validates caller access, calculates the deposit from the
-signed payment token and normalized amount, requires the calculated mint amount
-to meet `minReceiveAmount`, transfers the payment and any fee, and mints mTBILL
-to `msg.sender`. The decimal-correction path rejects a normalized amount that
-cannot be represented exactly in the payment token's native precision. The
-event retains the signed `referrerId`; it is not semantically absent merely
-because the upstream descriptor hid it.
+signed payment token and normalized amount, and always pulls the payment and
+any fee from `msg.sender`. The decimal-correction path rejects a normalized
+amount that cannot be represented exactly in the payment token's native
+precision. Every route's event retains the signed `referrerId`; it is not
+semantically absent merely because the upstream descriptor hid it.
+
+The two instant routes require the calculated mint amount to meet the signed
+`minReceiveAmount` and mint mTBILL immediately. The standard route passes
+`msg.sender` as its implicit beneficiary; the custom route mints to the signed
+`recipient`. A trusted display therefore binds the implicit caller as
+beneficiary on the standard route, and shows both the signed beneficiary and
+the authenticated payer on the custom route.
+
+The two request routes transfer payment immediately and create a pending
+request. The standard route records `msg.sender` as its implicit beneficiary;
+the custom route records the signed `recipient`, while `msg.sender` remains the
+payer. A vault administrator may later approve with a later `newOutRate` and
+mint the resulting amount, or reject the request. No minimum, final mTBILL
+amount, approval time, or successful approval is signed by either request.
+PQ1's trusted intent must therefore remain the explicit warning
+`Pay now; request mTBILL`, and must not display a predicted or guaranteed
+output.
 
 ## Honest residual and authority boundary
 
@@ -74,16 +96,16 @@ Payment-token enrollment and token configuration, user access lists,
 greenlist/blacklist/sanctions state, rates, fees, daily limit, supply cap,
 minimums, pause state, and proxy implementations are mutable live state. This
 bundle neither monitors future upgrades nor proves that any particular call
-will succeed. It does not identify a friendly payment-token name, promise a
-mint quantity beyond the signed minimum, or claim that the referral identifier
-has a user-comprehensible interpretation.
+will succeed. It does not identify a friendly payment-token name, promise an
+instant mint quantity beyond the signed minimum, promise any request-route
+output or timing, or claim that the referral identifier has a
+user-comprehensible interpretation. The archived `rejectRequest` path marks a
+request canceled but supplies no automatic refund guarantee; no refund claim
+belongs on the trusted display.
 
-The standard four-argument route always mints to the caller, but the evidence
-does not authorize hiding that beneficiary in the trusted display. It does not
-authorize the custom-recipient route, whose recipient is separately signed, or
-the request routes, which transfer payment before later administrator approval
-and minting. Nothing here enables fallback or blind signing, changes parser or
-state authority, or grants hardware, production, shipment, or transaction-
+Nothing here authorizes hiding the full referral ID, beneficiary, or payer
+role; enables fallback or blind signing; changes parser or state authority; or
+grants another deployment, hardware, production, shipment, or transaction-
 success authority.
 
 Primary records:

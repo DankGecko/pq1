@@ -40,7 +40,8 @@ use pqsigner_erc7730::ir::{
 };
 use pqsigner_erc7730::known_calls::may_contain as known_call_may_contain;
 use pqsigner_erc7730::render::params::{
-    parse as parse_params, ADDR_TYPE_TOKEN, DYNAMIC_KIND_BYTES, WORD_GUARD_EQ, WORD_GUARD_NE,
+    parse as parse_params, ADDR_TYPE_EOA, ADDR_TYPE_TOKEN, ADDR_TYPE_WALLET, DYNAMIC_KIND_BYTES,
+    WORD_GUARD_EQ, WORD_GUARD_NE,
 };
 use pqsigner_erc7730::render::policy::TerminalKind;
 use pqsigner_tx_core::hash::keccak256;
@@ -1449,12 +1450,41 @@ fn registry_celo_validators_add_first_member_is_mainnet_only_and_alfajores_stays
 }
 
 #[test]
-fn registry_midas_mtbill_admits_only_the_common_instant_deposit_route() {
+fn registry_midas_mtbill_admits_all_four_deposit_vault_routes() {
     const RELATIVE: &str = "registry/midas/calldata-MinterVault.json";
     const CHAIN_ID: u64 = 1;
-    const SIGNATURE: &str =
-        "depositInstant(address tokenIn, uint256 amountToken, uint256 minReceiveAmount, bytes32 referrerId)";
-    const CANONICAL_SIGNATURE: &str = "depositInstant(address,uint256,uint256,bytes32)";
+    const ADMITTED_SIGNATURES: [&str; 4] = [
+        "depositInstant(address tokenIn, uint256 amountToken, uint256 minReceiveAmount, bytes32 referrerId, address recipient)",
+        "depositInstant(address tokenIn, uint256 amountToken, uint256 minReceiveAmount, bytes32 referrerId)",
+        "depositRequest(address tokenIn, uint256 amountToken, bytes32 referrerId)",
+        "depositRequest(address tokenIn, uint256 amountToken, bytes32 referrerId, address recipient)",
+    ];
+
+    #[derive(Clone, Copy)]
+    enum ExpectedPath {
+        Argument(u8),
+        From,
+    }
+
+    #[derive(Clone, Copy)]
+    enum ExpectedParams {
+        PaymentToken,
+        Base18Payment,
+        MtbillMinimum,
+        Referral,
+        Account,
+    }
+
+    #[derive(Clone, Copy)]
+    struct ExpectedFormat {
+        canonical_signature: &'static str,
+        selector: [u8; 4],
+        intent: &'static [u8],
+        static_head_words: u16,
+        minimum_index: Option<u8>,
+        referral_index: u8,
+        recipient_index: Option<u8>,
+    }
 
     let root = workspace_root();
     let curated = std::fs::read(
@@ -1474,7 +1504,14 @@ fn registry_midas_mtbill_admits_only_the_common_instant_deposit_route() {
     let note = descriptor["_curation_note"]
         .as_str()
         .expect("Midas curation note");
-    for boundary in ["18-decimal", "referrer", "live", "future proxy"] {
+    for boundary in [
+        "all four",
+        "18-decimal",
+        "complete referrer",
+        "authenticated payer",
+        "administrator approval",
+        "future proxy",
+    ] {
         assert!(
             note.contains(boundary),
             "Midas curation note lost boundary {boundary:?}"
@@ -1491,10 +1528,16 @@ fn registry_midas_mtbill_admits_only_the_common_instant_deposit_route() {
             .map(str::to_ascii_lowercase),
         Some("0x99361435420711723af805f08187c9e6bf796683".to_string())
     );
+    let admitted_signatures: Vec<_> = admissions[0]["formats"]
+        .as_array()
+        .expect("Midas admitted format list")
+        .iter()
+        .map(|signature| signature.as_str().expect("Midas admitted signature"))
+        .collect();
     assert_eq!(
-        admissions[0]["formats"],
-        serde_json::json!([SIGNATURE]),
-        "only the common four-argument instant route may be admitted"
+        admitted_signatures.as_slice(),
+        ADMITTED_SIGNATURES.as_slice(),
+        "the exact four reviewed DepositVault routes must be admitted"
     );
 
     let deployments = descriptor["context"]["contract"]["deployments"]
@@ -1512,6 +1555,14 @@ fn registry_midas_mtbill_admits_only_the_common_instant_deposit_route() {
         declared_formats.len(),
         4,
         "curation must preserve all upstream known-call signatures"
+    );
+    assert_eq!(
+        declared_formats
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        ADMITTED_SIGNATURES.iter().copied().collect::<BTreeSet<_>>(),
+        "admission must cover exactly the four declared DepositVault routes"
     );
 
     let catalogue = build_registry();
@@ -1546,129 +1597,196 @@ fn registry_midas_mtbill_admits_only_the_common_instant_deposit_route() {
     cross_check_contract(&verified.ir, CHAIN_ID, &contract)
         .expect("Midas deployment binding round-trips");
 
-    let selector: [u8; 4] = keccak256(CANONICAL_SIGNATURE.as_bytes())[..4]
-        .try_into()
-        .expect("Midas selector width");
-    assert_eq!(selector, [0xc0, 0x2d, 0xd2, 0x7a]);
     let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Midas IR parses");
-    assert_eq!(ir.format_count(), Ok(1));
-    let format = ir
-        .find_format_by_selector(&selector)
-        .expect("Midas format table parses")
-        .expect("common instant-deposit route is admitted");
-    assert_eq!(format.intent, b"Issue mTBILL now");
-    assert_eq!(format.static_head_words, 4);
-    let fields: Vec<_> = format
-        .fields()
-        .map(|field| field.expect("Midas field parses"))
-        .collect();
-    assert_eq!(
-        fields.len(),
-        5,
-        "all signed operands plus beneficiary render"
-    );
-    assert_eq!(
-        fields.iter().map(|field| field.label).collect::<Vec<_>>(),
-        [
-            b"Payment Token".as_slice(),
-            b"Payment Amount".as_slice(),
-            b"Minimum mTBILL".as_slice(),
-            b"Referral ID".as_slice(),
-            b"Beneficiary".as_slice(),
-        ]
-    );
-    assert_eq!(
-        fields
-            .iter()
-            .map(|field| FormatOp::try_from(field.format_op).expect("known Midas formatter"))
-            .collect::<Vec<_>>(),
-        [
-            FormatOp::AddressName,
-            FormatOp::Unit,
-            FormatOp::TokenAmount,
-            FormatOp::Raw,
-            FormatOp::AddressName,
-        ]
-    );
-
-    for (index, field) in fields[..4].iter().enumerate() {
-        assert_eq!(
-            ir.path_bytes(field.path_off)
-                .expect("Midas operand path parses"),
-            [
-                PathOp::RootStructured as u8,
-                PathOp::FieldIdx as u8,
-                0,
-                index as u8,
-            ],
-            "Midas field {index} bound the wrong signed word"
-        );
-        assert_eq!(
-            parse_params(&ir, field.param_off)
-                .expect("Midas operand params parse")
-                .visibility,
-            Visibility::Always
-        );
-    }
-    let payment_token = parse_params(&ir, fields[0].param_off).expect("token params parse");
-    assert_eq!(payment_token.terminal_kind, Some(TerminalKind::Address));
-    assert_eq!(payment_token.addr_types, Some(ADDR_TYPE_TOKEN));
-
-    let payment_amount = parse_params(&ir, fields[1].param_off).expect("amount params parse");
-    assert_eq!(payment_amount.terminal_kind, Some(TerminalKind::Unsigned));
-    assert_eq!(payment_amount.decimals, Some(18));
-    assert_eq!(payment_amount.base, Some(b"token".as_slice()));
-    assert_eq!(payment_amount.prefix, Some(0));
-    assert!(
-        payment_amount.token_path.is_none() && payment_amount.token.is_none(),
-        "normalized DepositVault amount must not inherit payment-token decimals"
-    );
-
-    let minimum = parse_params(&ir, fields[2].param_off).expect("minimum params parse");
+    assert_eq!(ir.format_count(), Ok(4));
     let mtbill: [u8; 20] = hex::decode("dd629e5241cbc5919847783e6c96b2de4754e438")
         .expect("valid mTBILL address")
         .try_into()
         .expect("mTBILL address width");
-    assert_eq!(minimum.terminal_kind, Some(TerminalKind::Unsigned));
-    assert_eq!(minimum.token, Some(&mtbill));
-    assert!(minimum.token_path.is_none());
 
-    let referral = parse_params(&ir, fields[3].param_off).expect("referral params parse");
-    assert_eq!(referral.terminal_kind, Some(TerminalKind::FixedBytes));
-    assert_eq!(referral.visibility, Visibility::Always);
+    let expected_formats = [
+        ExpectedFormat {
+            canonical_signature: "depositInstant(address,uint256,uint256,bytes32,address)",
+            selector: [0x42, 0xe8, 0x86, 0x6b],
+            intent: b"Issue mTBILL now",
+            static_head_words: 5,
+            minimum_index: Some(2),
+            referral_index: 3,
+            recipient_index: Some(4),
+        },
+        ExpectedFormat {
+            canonical_signature: "depositInstant(address,uint256,uint256,bytes32)",
+            selector: [0xc0, 0x2d, 0xd2, 0x7a],
+            intent: b"Issue mTBILL now",
+            static_head_words: 4,
+            minimum_index: Some(2),
+            referral_index: 3,
+            recipient_index: None,
+        },
+        ExpectedFormat {
+            canonical_signature: "depositRequest(address,uint256,bytes32)",
+            selector: [0x6e, 0x26, 0xb9, 0xf8],
+            intent: b"Pay now; request mTBILL",
+            static_head_words: 3,
+            minimum_index: None,
+            referral_index: 2,
+            recipient_index: None,
+        },
+        ExpectedFormat {
+            canonical_signature: "depositRequest(address,uint256,bytes32,address)",
+            selector: [0xe5, 0x0e, 0x3d, 0xbb],
+            intent: b"Pay now; request mTBILL",
+            static_head_words: 4,
+            minimum_index: None,
+            referral_index: 2,
+            recipient_index: Some(3),
+        },
+    ];
 
-    let mut sender_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
-    sender_path.extend_from_slice(&container_field::FROM.to_be_bytes());
-    assert_eq!(
-        ir.path_bytes(fields[4].path_off)
-            .expect("beneficiary path parses"),
-        sender_path,
-        "beneficiary must bind the authenticated signer container field"
-    );
-    let beneficiary = parse_params(&ir, fields[4].param_off).expect("beneficiary params parse");
-    assert_eq!(beneficiary.terminal_kind, Some(TerminalKind::Address));
-    assert_eq!(beneficiary.visibility, Visibility::Always);
-
-    let refused = [
-        "depositInstant(address,uint256,uint256,bytes32,address)",
-        "depositRequest(address,uint256,bytes32)",
-        "depositRequest(address,uint256,bytes32,address)",
-    ]
-    .map(|signature| {
-        keccak256(signature.as_bytes())[..4]
+    for expected in &expected_formats {
+        let derived_selector: [u8; 4] = keccak256(expected.canonical_signature.as_bytes())[..4]
             .try_into()
-            .expect("Midas refused selector width")
-    });
-    for refused_selector in refused {
-        assert!(
-            ir.find_format_by_selector(&refused_selector)
-                .expect("Midas format table parses")
-                .is_none(),
-            "out-of-scope Midas route unexpectedly became clear-signable"
+            .expect("Midas selector width");
+        assert_eq!(
+            derived_selector, expected.selector,
+            "Midas selector changed for {}",
+            expected.canonical_signature
         );
+        let format = ir
+            .find_format_by_selector(&expected.selector)
+            .expect("Midas format table parses")
+            .expect("reviewed Midas DepositVault route is admitted");
+        assert_eq!(format.intent, expected.intent);
+        assert_eq!(format.static_head_words, expected.static_head_words);
+
+        let mut expected_fields: Vec<(&[u8], FormatOp, ExpectedPath, ExpectedParams)> = vec![
+            (
+                b"Payment Token",
+                FormatOp::AddressName,
+                ExpectedPath::Argument(0),
+                ExpectedParams::PaymentToken,
+            ),
+            (
+                b"Payment Amount",
+                FormatOp::Unit,
+                ExpectedPath::Argument(1),
+                ExpectedParams::Base18Payment,
+            ),
+        ];
+        if let Some(index) = expected.minimum_index {
+            expected_fields.push((
+                b"Minimum mTBILL",
+                FormatOp::TokenAmount,
+                ExpectedPath::Argument(index),
+                ExpectedParams::MtbillMinimum,
+            ));
+        }
+        expected_fields.push((
+            b"Referral ID",
+            FormatOp::Raw,
+            ExpectedPath::Argument(expected.referral_index),
+            ExpectedParams::Referral,
+        ));
+        if let Some(index) = expected.recipient_index {
+            expected_fields.push((
+                b"Beneficiary",
+                FormatOp::AddressName,
+                ExpectedPath::Argument(index),
+                ExpectedParams::Account,
+            ));
+            expected_fields.push((
+                b"Payer",
+                FormatOp::AddressName,
+                ExpectedPath::From,
+                ExpectedParams::Account,
+            ));
+        } else {
+            expected_fields.push((
+                b"Beneficiary",
+                FormatOp::AddressName,
+                ExpectedPath::From,
+                ExpectedParams::Account,
+            ));
+        }
+
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("Midas field parses"))
+            .collect();
+        assert_eq!(fields.len(), expected_fields.len());
+        assert_eq!(
+            fields
+                .iter()
+                .filter(|field| field.label == b"Minimum mTBILL")
+                .count(),
+            usize::from(expected.minimum_index.is_some()),
+            "only instant deposits may display a static mTBILL minimum"
+        );
+
+        for (field, (label, op, expected_path, expected_params)) in
+            fields.iter().zip(expected_fields.iter().copied())
+        {
+            assert_eq!(field.label, label);
+            assert_eq!(FormatOp::try_from(field.format_op), Ok(op));
+            let path = match expected_path {
+                ExpectedPath::Argument(index) => vec![
+                    PathOp::RootStructured as u8,
+                    PathOp::FieldIdx as u8,
+                    0,
+                    index,
+                ],
+                ExpectedPath::From => {
+                    let mut path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+                    path.extend_from_slice(&container_field::FROM.to_be_bytes());
+                    path
+                }
+            };
+            assert_eq!(
+                ir.path_bytes(field.path_off)
+                    .expect("Midas field path parses"),
+                path,
+                "Midas {} field {:?} bound the wrong authenticated value",
+                expected.canonical_signature,
+                String::from_utf8_lossy(label)
+            );
+
+            let params = parse_params(&ir, field.param_off).expect("Midas field params parse");
+            assert_eq!(params.visibility, Visibility::Always);
+            match expected_params {
+                ExpectedParams::PaymentToken => {
+                    assert_eq!(params.terminal_kind, Some(TerminalKind::Address));
+                    assert_eq!(params.addr_types, Some(ADDR_TYPE_TOKEN));
+                }
+                ExpectedParams::Base18Payment => {
+                    assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+                    assert_eq!(params.integer_width_bytes, Some(32));
+                    assert_eq!(params.decimals, Some(18));
+                    assert_eq!(params.base, Some(b"token".as_slice()));
+                    assert_eq!(params.prefix, Some(0));
+                    assert!(
+                        params.token_path.is_none() && params.token.is_none(),
+                        "normalized DepositVault amount must not inherit payment-token decimals"
+                    );
+                }
+                ExpectedParams::MtbillMinimum => {
+                    assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+                    assert_eq!(params.integer_width_bytes, Some(32));
+                    assert_eq!(params.token, Some(&mtbill));
+                    assert!(params.token_path.is_none());
+                }
+                ExpectedParams::Referral => {
+                    assert_eq!(params.terminal_kind, Some(TerminalKind::FixedBytes));
+                    assert!(params.token.is_none() && params.token_path.is_none());
+                }
+                ExpectedParams::Account => {
+                    assert_eq!(params.terminal_kind, Some(TerminalKind::Address));
+                    assert_eq!(params.addr_types, Some(ADDR_TYPE_EOA | ADDR_TYPE_WALLET));
+                }
+            }
+        }
     }
 
-    let known_selectors: Vec<[u8; 4]> = declared_formats
+    let known_selectors: BTreeSet<[u8; 4]> = declared_formats
         .keys()
         .map(|signature| {
             let canonical = signature.split('(').next().expect("function name");
@@ -1692,6 +1810,14 @@ fn registry_midas_mtbill_admits_only_the_common_instant_deposit_route() {
                 .expect("known Midas selector width")
         })
         .collect();
+    assert_eq!(
+        known_selectors,
+        expected_formats
+            .iter()
+            .map(|expected| expected.selector)
+            .collect(),
+        "declared Midas selectors diverged from the four exact reviewed selectors"
+    );
     for deployment in deployments {
         let chain_id = deployment["chainId"].as_u64().expect("Midas chain id");
         let address: [u8; 20] = hex::decode(
@@ -1717,6 +1843,382 @@ fn registry_midas_mtbill_admits_only_the_common_instant_deposit_route() {
         }
     }
     assert_eq!(catalogue.known_call_count, 4_552);
+}
+
+#[test]
+fn registry_midas_mtbill_redemption_admits_only_four_token_output_routes() {
+    const RELATIVE: &str = "registry/midas/calldata-RedemptionVault.json";
+    const CHAIN_ID: u64 = 1;
+    const ADMITTED_SIGNATURES: [&str; 4] = [
+        "redeemInstant(address tokenOut, uint256 amountMTokenIn, uint256 minReceiveAmount, address recipient)",
+        "redeemInstant(address tokenOut, uint256 amountMTokenIn, uint256 minReceiveAmount)",
+        "redeemRequest(address tokenOut, uint256 amountMTokenIn, address recipient)",
+        "redeemRequest(address tokenOut, uint256 amountMTokenIn)",
+    ];
+    const FIAT_SIGNATURE: &str = "redeemFiatRequest(uint256 amountMTokenIn)";
+
+    #[derive(Clone, Copy)]
+    enum ExpectedPath {
+        Argument(u8),
+        From,
+    }
+
+    #[derive(Clone, Copy)]
+    enum ExpectedParams {
+        MtbillInput,
+        OutputToken,
+        Base18Minimum,
+        Account,
+    }
+
+    #[derive(Clone, Copy)]
+    struct ExpectedFormat {
+        canonical_signature: &'static str,
+        selector: [u8; 4],
+        intent: &'static [u8],
+        static_head_words: u16,
+        minimum_index: Option<u8>,
+        recipient_index: Option<u8>,
+    }
+
+    let root = workspace_root();
+    let curated = std::fs::read(
+        root.join("secure/data/erc7730/curations/files")
+            .join(RELATIVE),
+    )
+    .expect("read curated Midas RedemptionVault descriptor");
+    let installed = std::fs::read(root.join("secure/data/erc7730-registry").join(RELATIVE))
+        .expect("read installed Midas RedemptionVault descriptor");
+    assert_eq!(
+        installed, curated,
+        "installed Midas RedemptionVault diverged from its receipted curation"
+    );
+
+    let descriptor: serde_json::Value =
+        serde_json::from_slice(&installed).expect("parse curated Midas RedemptionVault");
+    let note = descriptor["_curation_note"]
+        .as_str()
+        .expect("Midas RedemptionVault curation note");
+    for boundary in [
+        "four token-output",
+        "18-decimal mTBILL input",
+        "authenticated mTBILL payer",
+        "administrator approval",
+        "redeemFiatRequest remains",
+        "future proxy",
+    ] {
+        assert!(
+            note.contains(boundary),
+            "Midas RedemptionVault note lost boundary {boundary:?}"
+        );
+    }
+
+    let admissions = descriptor["_pqsigner"]["deploymentFormats"]
+        .as_array()
+        .expect("Midas RedemptionVault deploymentFormats array");
+    assert_eq!(admissions.len(), 1);
+    assert_eq!(admissions[0]["chainId"].as_u64(), Some(CHAIN_ID));
+    assert_eq!(
+        admissions[0]["address"]
+            .as_str()
+            .map(str::to_ascii_lowercase),
+        Some("0xf6e51d24f4793ac5e71e0502213a9bbe3a6d4517".to_string())
+    );
+    let admitted_signatures: Vec<_> = admissions[0]["formats"]
+        .as_array()
+        .expect("Midas RedemptionVault admitted formats")
+        .iter()
+        .map(|signature| signature.as_str().expect("Midas redemption signature"))
+        .collect();
+    assert_eq!(
+        admitted_signatures.as_slice(),
+        ADMITTED_SIGNATURES.as_slice(),
+        "only the four reviewed token-output redemption routes may be admitted"
+    );
+
+    let deployments = descriptor["context"]["contract"]["deployments"]
+        .as_array()
+        .expect("Midas RedemptionVault deployments array");
+    assert_eq!(
+        deployments.len(),
+        77,
+        "curation must preserve the complete upstream RedemptionVault inventory"
+    );
+    let declared_formats = descriptor["display"]["formats"]
+        .as_object()
+        .expect("Midas RedemptionVault formats object");
+    let mut declared_signatures = ADMITTED_SIGNATURES.iter().copied().collect::<BTreeSet<_>>();
+    declared_signatures.insert(FIAT_SIGNATURE);
+    assert_eq!(
+        declared_formats
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        declared_signatures,
+        "curation must preserve all five upstream known-call signatures"
+    );
+
+    let catalogue = build_registry();
+    let contract: [u8; 20] = hex::decode("f6e51d24f4793ac5e71e0502213a9bbe3a6d4517")
+        .expect("valid mTBILL RedemptionVault address")
+        .try_into()
+        .expect("mTBILL RedemptionVault address width");
+    let entries: Vec<_> = catalogue
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-RedemptionVault.json")
+        })
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "all four redemption formats must share one exact deployment leaf"
+    );
+    let entry = entries[0];
+    assert_eq!((entry.chain_id, entry.contract), (CHAIN_ID, contract));
+
+    let proof = extract_proof(
+        &catalogue.blob,
+        entry.leaf_index,
+        proof_depth(&catalogue.blob),
+    );
+    let bundle = synth_bundle(&entry.ir_bytes, entry.leaf_index as u32, &proof);
+    let verified = verify_erc7730_bundle(&bundle, &catalogue.root)
+        .expect("production Midas RedemptionVault proof verifies");
+    cross_check_contract(&verified.ir, CHAIN_ID, &contract)
+        .expect("Midas RedemptionVault deployment binding round-trips");
+
+    let expected_formats = [
+        ExpectedFormat {
+            canonical_signature: "redeemInstant(address,uint256,uint256,address)",
+            selector: [0x85, 0xab, 0x2c, 0x13],
+            intent: b"Redeem mTBILL now",
+            static_head_words: 4,
+            minimum_index: Some(2),
+            recipient_index: Some(3),
+        },
+        ExpectedFormat {
+            canonical_signature: "redeemInstant(address,uint256,uint256)",
+            selector: [0x8b, 0x53, 0xf7, 0x5e],
+            intent: b"Redeem mTBILL now",
+            static_head_words: 3,
+            minimum_index: Some(2),
+            recipient_index: None,
+        },
+        ExpectedFormat {
+            canonical_signature: "redeemRequest(address,uint256,address)",
+            selector: [0x15, 0x57, 0x1a, 0x04],
+            intent: b"Pay mTBILL now; request",
+            static_head_words: 3,
+            minimum_index: None,
+            recipient_index: Some(2),
+        },
+        ExpectedFormat {
+            canonical_signature: "redeemRequest(address,uint256)",
+            selector: [0xbf, 0xc2, 0xd4, 0x6a],
+            intent: b"Pay mTBILL now; request",
+            static_head_words: 2,
+            minimum_index: None,
+            recipient_index: None,
+        },
+    ];
+    let mtbill: [u8; 20] = hex::decode("dd629e5241cbc5919847783e6c96b2de4754e438")
+        .expect("valid mTBILL token address")
+        .try_into()
+        .expect("mTBILL token address width");
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Midas RedemptionVault IR parses");
+    assert_eq!(ir.format_count(), Ok(4));
+
+    for expected in &expected_formats {
+        let derived_selector: [u8; 4] = keccak256(expected.canonical_signature.as_bytes())[..4]
+            .try_into()
+            .expect("Midas redemption selector width");
+        assert_eq!(derived_selector, expected.selector);
+        let format = ir
+            .find_format_by_selector(&expected.selector)
+            .expect("Midas RedemptionVault format table parses")
+            .expect("reviewed Midas redemption route is admitted");
+        assert_eq!(format.intent, expected.intent);
+        assert_eq!(format.static_head_words, expected.static_head_words);
+
+        let mut expected_fields: Vec<(&[u8], FormatOp, ExpectedPath, ExpectedParams)> = vec![
+            (
+                b"mTBILL Amount",
+                FormatOp::TokenAmount,
+                ExpectedPath::Argument(1),
+                ExpectedParams::MtbillInput,
+            ),
+            (
+                b"Output Token",
+                FormatOp::AddressName,
+                ExpectedPath::Argument(0),
+                ExpectedParams::OutputToken,
+            ),
+        ];
+        if let Some(index) = expected.minimum_index {
+            expected_fields.push((
+                b"Minimum Output",
+                FormatOp::Unit,
+                ExpectedPath::Argument(index),
+                ExpectedParams::Base18Minimum,
+            ));
+        }
+        if let Some(index) = expected.recipient_index {
+            expected_fields.push((
+                b"Beneficiary",
+                FormatOp::AddressName,
+                ExpectedPath::Argument(index),
+                ExpectedParams::Account,
+            ));
+            expected_fields.push((
+                b"Payer",
+                FormatOp::AddressName,
+                ExpectedPath::From,
+                ExpectedParams::Account,
+            ));
+        } else {
+            expected_fields.push((
+                b"Beneficiary",
+                FormatOp::AddressName,
+                ExpectedPath::From,
+                ExpectedParams::Account,
+            ));
+        }
+
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| field.expect("Midas RedemptionVault field parses"))
+            .collect();
+        assert_eq!(fields.len(), expected_fields.len());
+        assert_eq!(
+            fields
+                .iter()
+                .filter(|field| field.label == b"Minimum Output")
+                .count(),
+            usize::from(expected.minimum_index.is_some()),
+            "only instant redemption may display a normalized minimum"
+        );
+
+        for (field, (label, op, expected_path, expected_params)) in
+            fields.iter().zip(expected_fields.iter().copied())
+        {
+            assert_eq!(field.label, label);
+            assert_eq!(FormatOp::try_from(field.format_op), Ok(op));
+            let path = match expected_path {
+                ExpectedPath::Argument(index) => vec![
+                    PathOp::RootStructured as u8,
+                    PathOp::FieldIdx as u8,
+                    0,
+                    index,
+                ],
+                ExpectedPath::From => {
+                    let mut path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+                    path.extend_from_slice(&container_field::FROM.to_be_bytes());
+                    path
+                }
+            };
+            assert_eq!(
+                ir.path_bytes(field.path_off)
+                    .expect("Midas RedemptionVault path parses"),
+                path,
+                "Midas {} field {:?} bound the wrong authenticated value",
+                expected.canonical_signature,
+                String::from_utf8_lossy(label)
+            );
+
+            let params =
+                parse_params(&ir, field.param_off).expect("Midas RedemptionVault params parse");
+            assert_eq!(params.visibility, Visibility::Always);
+            match expected_params {
+                ExpectedParams::MtbillInput => {
+                    assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+                    assert_eq!(params.integer_width_bytes, Some(32));
+                    assert_eq!(params.token, Some(&mtbill));
+                    assert!(params.token_path.is_none());
+                }
+                ExpectedParams::OutputToken => {
+                    assert_eq!(params.terminal_kind, Some(TerminalKind::Address));
+                    assert_eq!(params.addr_types, Some(ADDR_TYPE_TOKEN));
+                }
+                ExpectedParams::Base18Minimum => {
+                    assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+                    assert_eq!(params.integer_width_bytes, Some(32));
+                    assert_eq!(params.decimals, Some(18));
+                    assert_eq!(params.base, Some(b"token".as_slice()));
+                    assert_eq!(params.prefix, Some(0));
+                    assert!(
+                        params.token.is_none() && params.token_path.is_none(),
+                        "normalized minimum must not inherit output-token decimals"
+                    );
+                }
+                ExpectedParams::Account => {
+                    assert_eq!(params.terminal_kind, Some(TerminalKind::Address));
+                    assert_eq!(params.addr_types, Some(ADDR_TYPE_EOA | ADDR_TYPE_WALLET));
+                }
+            }
+        }
+    }
+
+    let fiat_selector = [0xd5, 0xf7, 0x3f, 0x5c];
+    assert_eq!(
+        &keccak256(b"redeemFiatRequest(uint256)")[..4],
+        fiat_selector
+    );
+    assert!(
+        ir.find_format_by_selector(&fiat_selector)
+            .expect("Midas RedemptionVault format table parses")
+            .is_none(),
+        "fiat redemption cannot be clear-signed from the currently signed operands"
+    );
+
+    let mut all_selectors = expected_formats
+        .iter()
+        .map(|expected| expected.selector)
+        .collect::<BTreeSet<_>>();
+    all_selectors.insert(fiat_selector);
+    assert_eq!(all_selectors.len(), 5);
+    for deployment in deployments {
+        let chain_id = deployment["chainId"]
+            .as_u64()
+            .expect("Midas RedemptionVault chain id");
+        let address: [u8; 20] = hex::decode(
+            deployment["address"]
+                .as_str()
+                .expect("Midas RedemptionVault deployment address")
+                .trim_start_matches("0x"),
+        )
+        .expect("hex Midas RedemptionVault deployment address")
+        .try_into()
+        .expect("Midas RedemptionVault deployment address width");
+        for selector in &all_selectors {
+            assert!(
+                catalogue
+                    .known_calls
+                    .contains(&(chain_id, address, *selector)),
+                "Midas RedemptionVault tuple left exact known-call coverage"
+            );
+            assert!(
+                known_call_may_contain(&catalogue.known_calls_bloom, chain_id, &address, selector,),
+                "Midas RedemptionVault tuple left the fail-closed Bloom"
+            );
+        }
+    }
+    assert_eq!(
+        catalogue.entries.len(),
+        453,
+        "RedemptionVault admission must add exactly one leaf to the 452-leaf baseline"
+    );
+    assert_eq!(catalogue.known_call_count, 4_552);
+    assert_eq!(
+        hex::encode(catalogue.known_call_set_hash),
+        "0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(&catalogue.known_calls_bloom)),
+        "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade"
+    );
 }
 
 #[test]
@@ -1958,8 +2460,8 @@ fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment(
 
     assert_eq!(
         result.entries.len(),
-        452,
-        "PQ-incompatible permit removal must preserve the 452-leaf catalogue"
+        453,
+        "PQ-incompatible permit removal must preserve the 453-leaf catalogue"
     );
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
@@ -2096,11 +2598,11 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
             .contains(&(entry.chain_id, entry.contract, withdraw_selector)));
     }
 
-    assert_eq!(result.entries.len(), 452);
+    assert_eq!(result.entries.len(), 453);
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.root),
-        "afc205221e2af04cb52e0f9cc32f0b77abb052e96c2324cfe4d1aa1519a99661"
+        "48aac419f76889375e21dd7813b0abefafa02485a5d1f52e510d854d97192e96"
     );
 }
 
@@ -2205,7 +2707,7 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
 
     assert_eq!(
         result.entries.len(),
-        452,
+        453,
         "Aave V2 already owned three leaves"
     );
     assert_eq!(result.known_call_count, 4_552);
@@ -2427,7 +2929,7 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
         );
     }
 
-    assert_eq!(result.entries.len(), 452);
+    assert_eq!(result.entries.len(), 453);
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -2535,7 +3037,7 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
         );
     }
 
-    assert_eq!(result.entries.len(), 452);
+    assert_eq!(result.entries.len(), 453);
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -3060,7 +3562,7 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
         "newly clear-signable permit was already registry-known"
     );
 
-    assert_eq!(result.entries.len(), 452);
+    assert_eq!(result.entries.len(), 453);
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
