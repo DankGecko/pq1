@@ -1,0 +1,23 @@
+[
+  {
+    "id": "bsc-header",
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockByNumber",
+    "params": [
+      "0x6a21e3a",
+      false
+    ]
+  },
+  {
+    "id": "bsc-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x111111125421cA6dc452d289314280a0f8842A65",
+      {
+        "blockHash": "0x01f8cb74104ec4d605a3afbc9ba8ce9f7e8d0ac4997af37ba191d2a88d5ed58e",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

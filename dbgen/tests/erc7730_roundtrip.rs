@@ -36,7 +36,7 @@ use pqsigner_erc7730::abi::container_field;
 use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712};
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, MAX_ERC7730_BUNDLE_LEN};
 use pqsigner_erc7730::ir::{
-    ContextKind, Erc7730Ir, FormatOp, PathOp, Visibility, CTX_CONTRACT, CTX_EIP712,
+    ContextKind, Erc7730Ir, FormatHeader, FormatOp, PathOp, Visibility, CTX_CONTRACT, CTX_EIP712,
 };
 use pqsigner_erc7730::known_calls::may_contain as known_call_may_contain;
 use pqsigner_erc7730::render::params::{
@@ -86,6 +86,91 @@ fn build_e2e() -> Erc7730BuildResult {
     let dir = root.join("secure/data/erc7730-e2e");
     let policy = root.join("secure/data/erc7730/policy.toml");
     build_db(&dir, &policy).expect("build E2E corpus")
+}
+
+#[derive(Clone, Copy)]
+enum OneinchExpectedBinding {
+    From,
+    Argument(u8),
+    Constant(&'static [u8]),
+}
+
+#[derive(Clone, Copy)]
+struct OneinchExpectedField {
+    label: &'static [u8],
+    binding: OneinchExpectedBinding,
+    terminal_kind: TerminalKind,
+    integer_width_bytes: Option<u8>,
+}
+
+fn assert_oneinch_raw_fields(
+    ir: &Erc7730Ir<'_>,
+    format: FormatHeader<'_>,
+    expected: &[OneinchExpectedField],
+) {
+    let fields: Vec<_> = format
+        .fields()
+        .map(|field| field.expect("1inch field parses"))
+        .collect();
+    assert_eq!(fields.len(), expected.len(), "1inch field count drifted");
+    for (field, expected) in fields.iter().zip(expected) {
+        assert_eq!(field.label, expected.label);
+        assert_eq!(FormatOp::try_from(field.format_op), Ok(FormatOp::Raw));
+        let params = parse_params(ir, field.param_off).expect("1inch field params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+        assert_eq!(params.terminal_kind, Some(expected.terminal_kind));
+        assert_eq!(
+            params.integer_width_bytes,
+            expected.integer_width_bytes,
+            "1inch integer width drifted for {}",
+            String::from_utf8_lossy(expected.label)
+        );
+        assert!(
+            params.token_path.is_none()
+                && params.token.is_none()
+                && params.threshold.is_none()
+                && params.message.is_none()
+                && params.addr_types.is_none()
+                && params.addr_sources.is_none()
+                && params.enum_ref.is_none()
+                && params.decimals.is_none()
+                && params.base.is_none()
+                && params.prefix.is_none()
+                && params.suffix.is_none(),
+            "raw 1inch field unexpectedly acquired formatter semantics"
+        );
+        match expected.binding {
+            OneinchExpectedBinding::From => {
+                let mut path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+                path.extend_from_slice(&container_field::FROM.to_be_bytes());
+                assert_eq!(
+                    ir.path_bytes(field.path_off)
+                        .expect("1inch signer path parses"),
+                    path,
+                    "order maker must bind the authenticated transaction signer"
+                );
+                assert!(params.const_value.is_none());
+            }
+            OneinchExpectedBinding::Argument(index) => {
+                assert_eq!(
+                    ir.path_bytes(field.path_off)
+                        .expect("1inch calldata path parses"),
+                    [
+                        PathOp::RootStructured as u8,
+                        PathOp::FieldIdx as u8,
+                        0,
+                        index,
+                    ],
+                    "1inch field bound the wrong signed calldata word"
+                );
+                assert!(params.const_value.is_none());
+            }
+            OneinchExpectedBinding::Constant(value) => {
+                assert_eq!(field.path_off, 0);
+                assert_eq!(params.const_value, Some(value));
+            }
+        }
+    }
 }
 
 #[test]
@@ -1450,6 +1535,362 @@ fn registry_celo_validators_add_first_member_is_mainnet_only_and_alfajores_stays
 }
 
 #[test]
+fn registry_oneinch_v6_cancellation_controls_admit_only_verified_deployments() {
+    const NORMAL_RELATIVE: &str = "registry/1inch/calldata-AggregationRouterV6.json";
+    const ZKSYNC_RELATIVE: &str = "registry/1inch/calldata-AggregationRouterV6-zksync.json";
+    const CANCEL_SOURCE: &str = "cancelOrder(uint256 makerTraits, bytes32 orderHash)";
+    const EPOCH_SOURCE: &str = "increaseEpoch(uint96 series)";
+
+    fn address(value: &str) -> [u8; 20] {
+        hex::decode(value.trim_start_matches("0x"))
+            .expect("valid 1inch deployment address")
+            .try_into()
+            .expect("1inch deployment address width")
+    }
+
+    let root = workspace_root();
+    let curated_root = root.join("secure/data/erc7730/curations/files");
+    let installed_root = root.join("secure/data/erc7730-registry");
+    let mut deployment_inventory = BTreeSet::new();
+    let mut admitted_deployments = BTreeSet::new();
+    let mut admission_count = 0usize;
+
+    for relative in [NORMAL_RELATIVE, ZKSYNC_RELATIVE] {
+        let curated = std::fs::read(curated_root.join(relative))
+            .unwrap_or_else(|error| panic!("read curated 1inch descriptor {relative}: {error}"));
+        let installed = std::fs::read(installed_root.join(relative))
+            .unwrap_or_else(|error| panic!("read installed 1inch descriptor {relative}: {error}"));
+        assert_eq!(
+            installed, curated,
+            "installed 1inch descriptor diverged from its receipted curation: {relative}"
+        );
+        let descriptor: serde_json::Value = serde_json::from_slice(&installed)
+            .unwrap_or_else(|error| panic!("parse curated 1inch descriptor {relative}: {error}"));
+        let note = descriptor["_curation_note"]
+            .as_str()
+            .expect("1inch curation note");
+        for boundary in [
+            "only cancelOrder",
+            "authenticated signer",
+            "complete raw makerTraits",
+            "orderHash may be ignored",
+            "cancelOrders",
+            "historical fixed-block",
+            "not live invalidator or epoch state",
+            "future deployment/upgrade monitoring",
+        ] {
+            assert!(
+                note.contains(boundary),
+                "1inch curation note lost boundary {boundary:?}: {relative}"
+            );
+        }
+        if relative == NORMAL_RELATIVE {
+            for excluded_chain in [146u64, 250, 8_217, 43_114] {
+                assert!(
+                    note.contains(&excluded_chain.to_string()),
+                    "normal-wrapper note lost excluded chain {excluded_chain}"
+                );
+            }
+        }
+
+        for deployment in descriptor["context"]["contract"]["deployments"]
+            .as_array()
+            .expect("1inch deployment array")
+        {
+            deployment_inventory.insert((
+                deployment["chainId"].as_u64().expect("1inch chain id"),
+                address(
+                    deployment["address"]
+                        .as_str()
+                        .expect("1inch deployment address"),
+                ),
+            ));
+        }
+
+        for admission in descriptor["_pqsigner"]["deploymentFormats"]
+            .as_array()
+            .expect("1inch deploymentFormats array")
+        {
+            let formats: BTreeSet<_> = admission["formats"]
+                .as_array()
+                .expect("1inch admitted formats")
+                .iter()
+                .map(|format| format.as_str().expect("1inch admitted signature"))
+                .collect();
+            assert_eq!(
+                formats,
+                BTreeSet::from([CANCEL_SOURCE, EPOCH_SOURCE]),
+                "each reviewed deployment must admit exactly the two cancellation controls"
+            );
+            admission_count += formats.len();
+            admitted_deployments.insert((
+                admission["chainId"].as_u64().expect("1inch admitted chain"),
+                address(
+                    admission["address"]
+                        .as_str()
+                        .expect("1inch admitted address"),
+                ),
+            ));
+        }
+    }
+
+    let normal_address = address("0x111111125421cA6dc452d289314280a0f8842A65");
+    let zksync_address = address("0x6fd4383cB451173D5f9304F041C7BCBf27d561fF");
+    let expected_inventory: BTreeSet<_> = [
+        1u64,
+        10,
+        56,
+        100,
+        137,
+        146,
+        250,
+        8_217,
+        8_453,
+        42_161,
+        43_114,
+        59_144,
+        1_313_161_554,
+    ]
+    .into_iter()
+    .map(|chain_id| (chain_id, normal_address))
+    .chain(core::iter::once((324, zksync_address)))
+    .collect();
+    assert_eq!(
+        deployment_inventory, expected_inventory,
+        "curation must retain the complete 14-deployment upstream inventory"
+    );
+
+    let expected_admitted: BTreeSet<_> =
+        [1u64, 10, 56, 100, 137, 8_453, 42_161, 59_144, 1_313_161_554]
+            .into_iter()
+            .map(|chain_id| (chain_id, normal_address))
+            .chain(core::iter::once((324, zksync_address)))
+            .collect();
+    assert_eq!(
+        admitted_deployments, expected_admitted,
+        "only the ten fixed-block-reviewed deployments may emit leaves"
+    );
+    assert_eq!(
+        admission_count, 20,
+        "ten leaves times two formats must yield twenty deployment-format admissions"
+    );
+
+    let cancel_selector: [u8; 4] = keccak256(b"cancelOrder(uint256,bytes32)")[..4]
+        .try_into()
+        .expect("cancelOrder selector width");
+    let epoch_selector: [u8; 4] = keccak256(b"increaseEpoch(uint96)")[..4]
+        .try_into()
+        .expect("increaseEpoch selector width");
+    assert_eq!(cancel_selector, [0xb6, 0x8f, 0xb0, 0x20]);
+    assert_eq!(epoch_selector, [0xc3, 0xcf, 0x80, 0x43]);
+
+    let sibling_selectors = [
+        (
+            "cancelOrders(uint256[],bytes32[])",
+            [0x89, 0xe7, 0xc6, 0x50],
+        ),
+        ("permitAndCall(bytes,bytes)", [0x58, 0x16, 0xd7, 0x23]),
+        (
+            "swap(address,(address,address,address,address,uint256,uint256,uint256),bytes)",
+            [0x07, 0xed, 0x23, 0x79],
+        ),
+    ];
+    for (signature, expected) in sibling_selectors {
+        let actual: [u8; 4] = keccak256(signature.as_bytes())[..4]
+            .try_into()
+            .expect("1inch sibling selector width");
+        assert_eq!(actual, expected, "1inch sibling selector changed");
+    }
+
+    let catalogue = build_registry();
+    let entries: Vec<_> = catalogue
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.source.file_name().and_then(|name| name.to_str()),
+                Some("calldata-AggregationRouterV6.json")
+                    | Some("calldata-AggregationRouterV6-zksync.json")
+            )
+        })
+        .collect();
+    assert_eq!(
+        entries.len(),
+        10,
+        "the curation must emit exactly ten leaves"
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| (entry.chain_id, entry.contract))
+            .collect::<BTreeSet<_>>(),
+        expected_admitted
+    );
+
+    let excluded: BTreeSet<_> = [146u64, 250, 8_217, 43_114]
+        .into_iter()
+        .map(|chain_id| (chain_id, normal_address))
+        .collect();
+    assert!(
+        catalogue
+            .entries
+            .iter()
+            .all(|entry| !excluded.contains(&(entry.chain_id, entry.contract))),
+        "the four unverified normal-wrapper deployments must emit no leaves"
+    );
+
+    let depth = proof_depth(&catalogue.blob);
+    for entry in entries {
+        let proof = extract_proof(&catalogue.blob, entry.leaf_index, depth);
+        let bundle = synth_bundle(&entry.ir_bytes, entry.leaf_index as u32, &proof);
+        let verified = verify_erc7730_bundle(&bundle, &catalogue.root)
+            .expect("production 1inch descriptor proof verifies");
+        cross_check_contract(&verified.ir, entry.chain_id, &entry.contract)
+            .expect("1inch deployment binding round-trips");
+
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("1inch IR parses");
+        assert_eq!(ir.format_count(), Ok(2));
+        assert_eq!(
+            ir.format_iter()
+                .map(|format| format.expect("1inch format parses").selector)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([cancel_selector, epoch_selector])
+        );
+
+        let cancel = ir
+            .find_format_by_selector(&cancel_selector)
+            .expect("1inch format table parses")
+            .expect("cancelOrder is admitted");
+        assert_eq!(cancel.intent, b"Update 1inch order invalidation");
+        assert_eq!(cancel.static_head_words, 2);
+        assert_oneinch_raw_fields(
+            &ir,
+            cancel,
+            &[
+                OneinchExpectedField {
+                    label: b"Order maker",
+                    binding: OneinchExpectedBinding::From,
+                    terminal_kind: TerminalKind::Address,
+                    integer_width_bytes: None,
+                },
+                OneinchExpectedField {
+                    label: b"Maker traits raw",
+                    binding: OneinchExpectedBinding::Argument(0),
+                    terminal_kind: TerminalKind::Unsigned,
+                    integer_width_bytes: Some(32),
+                },
+                OneinchExpectedField {
+                    label: b"Order hash raw",
+                    binding: OneinchExpectedBinding::Argument(1),
+                    terminal_kind: TerminalKind::FixedBytes,
+                    integer_width_bytes: None,
+                },
+                OneinchExpectedField {
+                    label: b"Effect warning",
+                    binding: OneinchExpectedBinding::Constant(
+                        b"Traits choose hash or nonce-bit mode; hash may be ignored",
+                    ),
+                    terminal_kind: TerminalKind::ConstantText,
+                    integer_width_bytes: None,
+                },
+            ],
+        );
+
+        let epoch = ir
+            .find_format_by_selector(&epoch_selector)
+            .expect("1inch format table parses")
+            .expect("increaseEpoch is admitted");
+        assert_eq!(epoch.intent, b"Advance 1inch series epoch");
+        assert_eq!(epoch.static_head_words, 1);
+        assert_oneinch_raw_fields(
+            &ir,
+            epoch,
+            &[
+                OneinchExpectedField {
+                    label: b"Order maker",
+                    binding: OneinchExpectedBinding::From,
+                    terminal_kind: TerminalKind::Address,
+                    integer_width_bytes: None,
+                },
+                OneinchExpectedField {
+                    label: b"Series",
+                    binding: OneinchExpectedBinding::Argument(0),
+                    terminal_kind: TerminalKind::Unsigned,
+                    integer_width_bytes: Some(12),
+                },
+                OneinchExpectedField {
+                    label: b"Effect warning",
+                    binding: OneinchExpectedBinding::Constant(
+                        b"Old epoch off; next epoch may activate",
+                    ),
+                    terminal_kind: TerminalKind::ConstantText,
+                    integer_width_bytes: None,
+                },
+            ],
+        );
+
+        for (_, sibling_selector) in sibling_selectors {
+            assert!(
+                ir.find_format_by_selector(&sibling_selector)
+                    .expect("1inch format table parses")
+                    .is_none(),
+                "unreviewed 1inch sibling became clear-signable"
+            );
+        }
+    }
+
+    let mut target_known_call_tuples = 0usize;
+    for (chain_id, contract) in deployment_inventory {
+        for selector in [cancel_selector, epoch_selector] {
+            assert!(
+                catalogue
+                    .known_calls
+                    .contains(&(chain_id, contract, selector)),
+                "1inch target left the exact known-call inventory"
+            );
+            assert!(
+                known_call_may_contain(
+                    &catalogue.known_calls_bloom,
+                    chain_id,
+                    &contract,
+                    &selector,
+                ),
+                "1inch target left the fail-closed known-call Bloom"
+            );
+            target_known_call_tuples += 1;
+        }
+        for (_, selector) in sibling_selectors {
+            assert!(
+                catalogue
+                    .known_calls
+                    .contains(&(chain_id, contract, selector)),
+                "refused 1inch sibling left the exact known-call inventory"
+            );
+            assert!(
+                known_call_may_contain(
+                    &catalogue.known_calls_bloom,
+                    chain_id,
+                    &contract,
+                    &selector,
+                ),
+                "refused 1inch sibling left the fail-closed known-call Bloom"
+            );
+        }
+    }
+    assert_eq!(target_known_call_tuples, 28);
+    assert_eq!(catalogue.entries.len(), 463);
+    assert_eq!(catalogue.known_call_count, 4_552);
+    assert_eq!(
+        hex::encode(catalogue.known_call_set_hash),
+        "0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(&catalogue.known_calls_bloom)),
+        "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade"
+    );
+}
+
+#[test]
 fn registry_midas_mtbill_admits_all_four_deposit_vault_routes() {
     const RELATIVE: &str = "registry/midas/calldata-MinterVault.json";
     const CHAIN_ID: u64 = 1;
@@ -2207,8 +2648,8 @@ fn registry_midas_mtbill_redemption_admits_only_four_token_output_routes() {
     }
     assert_eq!(
         catalogue.entries.len(),
-        453,
-        "RedemptionVault admission must add exactly one leaf to the 452-leaf baseline"
+        463,
+        "the ten reviewed 1inch leaves must raise the prior 453-leaf catalogue to 463"
     );
     assert_eq!(catalogue.known_call_count, 4_552);
     assert_eq!(
@@ -2460,8 +2901,8 @@ fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment(
 
     assert_eq!(
         result.entries.len(),
-        453,
-        "PQ-incompatible permit removal must preserve the 453-leaf catalogue"
+        463,
+        "PQ-incompatible permit removal must preserve the 463-leaf catalogue"
     );
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
@@ -2598,11 +3039,11 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
             .contains(&(entry.chain_id, entry.contract, withdraw_selector)));
     }
 
-    assert_eq!(result.entries.len(), 453);
+    assert_eq!(result.entries.len(), 463);
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.root),
-        "48aac419f76889375e21dd7813b0abefafa02485a5d1f52e510d854d97192e96"
+        "0430ad054d8781670ef7b90052aca25b1d1f8071fd55daa6583634d56267a290"
     );
 }
 
@@ -2707,7 +3148,7 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
 
     assert_eq!(
         result.entries.len(),
-        453,
+        463,
         "Aave V2 already owned three leaves"
     );
     assert_eq!(result.known_call_count, 4_552);
@@ -2929,7 +3370,7 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
         );
     }
 
-    assert_eq!(result.entries.len(), 453);
+    assert_eq!(result.entries.len(), 463);
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -3037,7 +3478,7 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
         );
     }
 
-    assert_eq!(result.entries.len(), 453);
+    assert_eq!(result.entries.len(), 463);
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
@@ -3562,7 +4003,7 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
         "newly clear-signable permit was already registry-known"
     );
 
-    assert_eq!(result.entries.len(), 453);
+    assert_eq!(result.entries.len(), 463);
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.known_call_set_hash),

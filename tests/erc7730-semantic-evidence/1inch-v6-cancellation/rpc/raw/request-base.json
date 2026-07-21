@@ -1,0 +1,23 @@
+[
+  {
+    "id": "base-header",
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockByNumber",
+    "params": [
+      "0x2ea87b8",
+      false
+    ]
+  },
+  {
+    "id": "base-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x111111125421cA6dc452d289314280a0f8842A65",
+      {
+        "blockHash": "0x30ba8ff8b18bc82346d0618420399c06c2e1cf6d8a57661f481f65ddb9cd1c0c",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

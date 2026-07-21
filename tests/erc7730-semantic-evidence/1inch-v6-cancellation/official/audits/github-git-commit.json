@@ -1,0 +1,35 @@
+{
+  "author": {
+    "date": "2025-10-15T08:35:43Z",
+    "email": "alekseev.gleb@gmail.com",
+    "name": "Gleb Alekseev"
+  },
+  "committer": {
+    "date": "2025-10-15T08:35:43Z",
+    "email": "alekseev.gleb@gmail.com",
+    "name": "Gleb Alekseev"
+  },
+  "html_url": "https://github.com/1inch/1inch-audits/commit/1deaa3bca4d3f0637bd0bfac4430e620956dba22",
+  "message": "solana cross-chain v1.1 update",
+  "node_id": "C_kwDOFLFlW9oAKDFkZWFhM2JjYTRkM2YwNjM3YmQwYmZhYzQ0MzBlNjIwOTU2ZGJhMjI",
+  "parents": [
+    {
+      "html_url": "https://github.com/1inch/1inch-audits/commit/3398e55456118d00c24e9f73b9c4a7fd8e915a10",
+      "sha": "3398e55456118d00c24e9f73b9c4a7fd8e915a10",
+      "url": "https://api.github.com/repos/1inch/1inch-audits/git/commits/3398e55456118d00c24e9f73b9c4a7fd8e915a10"
+    }
+  ],
+  "sha": "1deaa3bca4d3f0637bd0bfac4430e620956dba22",
+  "tree": {
+    "sha": "97daa64aa6dafe40f193d75fa509e78c96c9127a",
+    "url": "https://api.github.com/repos/1inch/1inch-audits/git/trees/97daa64aa6dafe40f193d75fa509e78c96c9127a"
+  },
+  "url": "https://api.github.com/repos/1inch/1inch-audits/git/commits/1deaa3bca4d3f0637bd0bfac4430e620956dba22",
+  "verification": {
+    "payload": null,
+    "reason": "unsigned",
+    "signature": null,
+    "verified": false,
+    "verified_at": null
+  }
+}

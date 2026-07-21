@@ -1,0 +1,512 @@
+{
+  "schema_version": 1,
+  "scope": "1inch AggregationRouterV6 cancelOrder(uint256,bytes32) and increaseEpoch(uint96) historical deployed-semantic evidence",
+  "captured_at_utc": "2026-07-21T13:22:10Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/491",
+  "boundary": "Historical fixed-block source/runtime authority for exactly ten direct deployments and two flat-static cancellation controls. This is not live-state monitoring, future-code authority, selector-only inference, transaction-success authority, or authority for any other selector, deployment, fallback, blind signing, hardware, production, shipment, or irreversible action.",
+  "official_source": {
+    "repository": "https://github.com/1inch/limit-order-protocol",
+    "prerelease_tag": "4.0.0-prerelease-19",
+    "prerelease_commit": "1a32e059f78ddcf1fe6294baed6cafb73a04b685",
+    "final_tag": "4.0.0",
+    "final_commit": "c8be9c67247880bd6ec88cf7ad2e040a16a483f2",
+    "equivalence": "The six archived load-bearing source files are byte-identical at both commits.",
+    "audit_catalogue_repository": "https://github.com/1inch/1inch-audits",
+    "audit_catalogue_commit": "1deaa3bca4d3f0637bd0bfac4430e620956dba22",
+    "audit_catalogue_boundary": "Directory metadata establishes that the official audit repository catalogues the Aggregation Router V6 / Limit Order Protocol V4 family; it is not a claim about report scope, findings, or each deployment wrapper."
+  },
+  "routes": {
+    "admitted": [
+      {
+        "canonical_signature": "cancelOrder(uint256,bytes32)",
+        "selector": "0xb68fb020",
+        "effect": "Maker traits choose nonce-bit invalidation or order-hash invalidation; in nonce-bit mode the orderHash word is ignored and same-nonce orders can share the effect.",
+        "authenticated_actor": "msg.sender"
+      },
+      {
+        "canonical_signature": "increaseEpoch(uint96)",
+        "selector": "0xc3cf8043",
+        "effect": "Increment msg.sender's selected series epoch by exactly one; equality-based epoch checks can invalidate old-epoch orders and activate already-signed next-epoch orders.",
+        "authenticated_actor": "msg.sender"
+      }
+    ],
+    "refused": [
+      {
+        "canonical_signature": "cancelOrders(uint256[],bytes32[])",
+        "selector": "0x89e7c650",
+        "reason": "Two dynamic arrays are outside this flat-static slice."
+      },
+      {
+        "canonical_signature": "bitsInvalidateForOrder(uint256,uint256)",
+        "selector": "0x05b1ea03",
+        "reason": "Not admitted by the bounded descriptor slice."
+      },
+      {
+        "canonical_signature": "advanceEpoch(uint96,uint256)",
+        "selector": "0x0d2c7c16",
+        "reason": "Not admitted by the bounded descriptor slice."
+      }
+    ]
+  },
+  "admitted_deployments": [
+    {
+      "chain_id": 1,
+      "slug": "ethereum",
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "family": "ordinary-v6",
+      "verifier": "verifier/sourcify/1.json",
+      "fixed_block": 25581128
+    },
+    {
+      "chain_id": 10,
+      "slug": "optimism",
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "family": "ordinary-v6",
+      "verifier": "verifier/sourcify/10.json",
+      "fixed_block": 154519885
+    },
+    {
+      "chain_id": 56,
+      "slug": "bsc",
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "family": "ordinary-v6",
+      "verifier": "verifier/sourcify/56.json",
+      "fixed_block": 111287866
+    },
+    {
+      "chain_id": 100,
+      "slug": "gnosis",
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "family": "ordinary-v6",
+      "verifier": "verifier/sourcify/100.json",
+      "fixed_block": 47316637
+    },
+    {
+      "chain_id": 137,
+      "slug": "polygon",
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "family": "ordinary-v6",
+      "verifier": "verifier/sourcify/137.json",
+      "fixed_block": 90622689
+    },
+    {
+      "chain_id": 324,
+      "slug": "zksync",
+      "address": "0x6fd4383cB451173D5f9304F041C7BCBf27d561fF",
+      "family": "zksync-v6",
+      "verifier": "verifier/zksync/source.json",
+      "fixed_block": 71249090
+    },
+    {
+      "chain_id": 8453,
+      "slug": "base",
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "family": "ordinary-v6",
+      "verifier": "verifier/sourcify/8453.json",
+      "fixed_block": 48924600
+    },
+    {
+      "chain_id": 42161,
+      "slug": "arbitrum",
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "family": "ordinary-v6",
+      "verifier": "verifier/sourcify/42161.json",
+      "fixed_block": 486191758
+    },
+    {
+      "chain_id": 59144,
+      "slug": "linea",
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "family": "ordinary-v6",
+      "verifier": "verifier/sourcify/59144.json",
+      "fixed_block": 31467177
+    },
+    {
+      "chain_id": 1313161554,
+      "slug": "aurora",
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "family": "ordinary-v6",
+      "verifier": "verifier/aurora/AggregationRouterV6.json",
+      "fixed_block": 207912504
+    }
+  ],
+  "excluded_deployments": [
+    {
+      "chain_id": 146,
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "status": "exact-known-hard-refusal",
+      "sourcify_record": "verifier/sourcify/excluded-146.json",
+      "sourcify_http_status": 404,
+      "reason": "No complete exact verified-source/runtime binding was established in this phase."
+    },
+    {
+      "chain_id": 250,
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "status": "exact-known-hard-refusal",
+      "sourcify_record": "verifier/sourcify/excluded-250.json",
+      "sourcify_http_status": 404,
+      "reason": "No complete exact verified-source/runtime binding was established in this phase."
+    },
+    {
+      "chain_id": 8217,
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "status": "exact-known-hard-refusal",
+      "sourcify_record": "verifier/sourcify/excluded-8217.json",
+      "sourcify_http_status": 404,
+      "reason": "No complete exact verified-source/runtime binding was established in this phase."
+    },
+    {
+      "chain_id": 43114,
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "status": "exact-known-hard-refusal",
+      "sourcify_record": "verifier/sourcify/excluded-43114.json",
+      "sourcify_http_status": 404,
+      "reason": "No complete exact verified-source/runtime binding was established in this phase."
+    }
+  ],
+  "descriptor_inputs": [
+    {
+      "path": "secure/data/erc7730-registry/registry/1inch/calldata-AggregationRouterV6.json",
+      "sha256_at_evidence_freeze": "46811af0f2bad9ea7ae4deb16ab9087ace7d45fe8d70e98238cce138fa40780f"
+    },
+    {
+      "path": "secure/data/erc7730-registry/registry/1inch/calldata-AggregationRouterV6-zksync.json",
+      "sha256_at_evidence_freeze": "9098d5ae1cf5c8500e8ca5dfd36c1e22904d83979d1351acb6ff3f8dab2c39d3"
+    },
+    {
+      "path": "secure/data/erc7730-registry/registry/1inch/common-AggregationRouterV6.json",
+      "sha256_at_evidence_freeze": "a354ced35cd61ec140e9b40f41dae03efa26f5590c7ef6c84788b2717438c964"
+    }
+  ],
+  "curation_overlay": null,
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "60821ff4eac9cbbb6c96cb86c17a19c216e4bab55be5f5e716c6d9bf05e11db0"
+    },
+    {
+      "path": "abi/AggregationRouterV6.cancellation.abi.json",
+      "sha256": "f3d3c5e8c73071bc1c3ffd94fc73e7e4fd1c881bb68a6f7993b3f6db36824961"
+    },
+    {
+      "path": "collect.sh",
+      "sha256": "7e025d7327302328ca1afc77049ec7e14616a58dc00ac57e353c97b786af9f91"
+    },
+    {
+      "path": "official/audits/AggregationRouterV6-LimitOrderV4.directory.json",
+      "sha256": "c30fbd65270f5ffb3c9f9d5fb30e789dc3c9e67a71d274279ee5d4fe35559eaa"
+    },
+    {
+      "path": "official/audits/github-git-commit.json",
+      "sha256": "e1ad5ebc8c45af082c99c3e99f68ef6408c8d2f9c88c88216b334f7d3333f7ec"
+    },
+    {
+      "path": "official/github/prerelease-19.commit.json",
+      "sha256": "45df76ab4f21d7989d942e743117104b4dfeb9a9cdd9b61323cdd62d0c9997c0"
+    },
+    {
+      "path": "official/github/prerelease-19.ref.json",
+      "sha256": "b6ef3a4543ca35dcb45968cf3afadd30891977c1d69687295c413203ff74d512"
+    },
+    {
+      "path": "official/github/v4.0.0.commit.json",
+      "sha256": "e0639c00f961698edfc42f7987be7f1cbe5abe350ced9612854ffa0ca7fcf7e1"
+    },
+    {
+      "path": "official/github/v4.0.0.ref.json",
+      "sha256": "ef72b7108f481f5eeaac6f892a00b831fce5089e76d80bf925eab470a764c56e"
+    },
+    {
+      "path": "official/prerelease-19/README.md",
+      "sha256": "4a88c1d56bf2c7a3ed8c83e1a89fadb648281a1db90af08e52d227d0c70d150d"
+    },
+    {
+      "path": "official/prerelease-19/contracts/OrderMixin.sol",
+      "sha256": "1181c6b882f190baab054a498ed20ec576f15b8285ad78dd2beb5abf4a53ffb8"
+    },
+    {
+      "path": "official/prerelease-19/contracts/helpers/SeriesEpochManager.sol",
+      "sha256": "2859e04239b182238618ed7ae1266511e368eddde9b2264d9f386c8fff4f3431"
+    },
+    {
+      "path": "official/prerelease-19/contracts/interfaces/IOrderMixin.sol",
+      "sha256": "00dc96b5646035ed3ef1b8a18d95cc745ff8b30cf2aeb2961d76ff2bd2337076"
+    },
+    {
+      "path": "official/prerelease-19/contracts/libraries/BitInvalidatorLib.sol",
+      "sha256": "f0c43bdb2641cdf28e42f9e03603e96484d33075e2f452bff98e0468a8840d80"
+    },
+    {
+      "path": "official/prerelease-19/contracts/libraries/MakerTraitsLib.sol",
+      "sha256": "4c48998857c8bc0ca7252146299dd3ef9df6ed643f50ec31c2312edc4f0329a1"
+    },
+    {
+      "path": "official/prerelease-19/contracts/libraries/RemainingInvalidatorLib.sol",
+      "sha256": "ffd52e684723d3ebba8a1a119581435768df481fd2029c5f5e6969108fd22b78"
+    },
+    {
+      "path": "official/v4.0.0/contracts/OrderMixin.sol",
+      "sha256": "1181c6b882f190baab054a498ed20ec576f15b8285ad78dd2beb5abf4a53ffb8"
+    },
+    {
+      "path": "official/v4.0.0/contracts/helpers/SeriesEpochManager.sol",
+      "sha256": "2859e04239b182238618ed7ae1266511e368eddde9b2264d9f386c8fff4f3431"
+    },
+    {
+      "path": "official/v4.0.0/contracts/interfaces/IOrderMixin.sol",
+      "sha256": "00dc96b5646035ed3ef1b8a18d95cc745ff8b30cf2aeb2961d76ff2bd2337076"
+    },
+    {
+      "path": "official/v4.0.0/contracts/libraries/BitInvalidatorLib.sol",
+      "sha256": "f0c43bdb2641cdf28e42f9e03603e96484d33075e2f452bff98e0468a8840d80"
+    },
+    {
+      "path": "official/v4.0.0/contracts/libraries/MakerTraitsLib.sol",
+      "sha256": "4c48998857c8bc0ca7252146299dd3ef9df6ed643f50ec31c2312edc4f0329a1"
+    },
+    {
+      "path": "official/v4.0.0/contracts/libraries/RemainingInvalidatorLib.sol",
+      "sha256": "ffd52e684723d3ebba8a1a119581435768df481fd2029c5f5e6969108fd22b78"
+    },
+    {
+      "path": "rpc/fixed-block-receipt.json",
+      "sha256": "df606f5be07c8399f0c94906ca288fd8250f54ef720a181a6f94b81b1185bedc"
+    },
+    {
+      "path": "rpc/raw/request-arbitrum.json",
+      "sha256": "948e58862df1430c9d586d6c1d0e29f094d6011d03fb776a483fa74933795931"
+    },
+    {
+      "path": "rpc/raw/request-aurora.json",
+      "sha256": "f4a994235415067b53adb647bb83c58e5c7f59af90f1ff49e1d471fea35006b8"
+    },
+    {
+      "path": "rpc/raw/request-base.json",
+      "sha256": "51f99687e25f2172414fad426c1e847eecce9731a6993f31632b49ad288e25d2"
+    },
+    {
+      "path": "rpc/raw/request-bsc.json",
+      "sha256": "342a8bb2d9d82ac84300a315a24db5cd47be14212796e3a2b091c9312f087375"
+    },
+    {
+      "path": "rpc/raw/request-ethereum.json",
+      "sha256": "c98008db4c8473fa94e01f13aeb0821b096031f112d0aa2fd8e8bc5d1a264133"
+    },
+    {
+      "path": "rpc/raw/request-gnosis.json",
+      "sha256": "eb47502470c923a1c8b040dfb345eb6c0146346886f3d5221dd785a599d7f758"
+    },
+    {
+      "path": "rpc/raw/request-linea.json",
+      "sha256": "10fe851f6c8b9622dd4f79440a3fe548b923ca0b97e250961d049b8ad3b99ec0"
+    },
+    {
+      "path": "rpc/raw/request-optimism.json",
+      "sha256": "976b8333c848e7862ef2461b5c3c6c8fafcf8a36c2c38bc723be065e25277bba"
+    },
+    {
+      "path": "rpc/raw/request-polygon.json",
+      "sha256": "c87c3a630a93331fe6878fcf2185fd3e865f0c8d0409c779b92e207a93457be6"
+    },
+    {
+      "path": "rpc/raw/request-zksync.json",
+      "sha256": "f7360a167b760ae0ba74d23f36f1b9bf0350b6417f47ce83169d3b68ace8be4e"
+    },
+    {
+      "path": "rpc/raw/response-arbitrum-arbitrum.json",
+      "sha256": "e2bf7a69f8bb229bec6872844f4780c358495e863871355bc53193e751d03bd2"
+    },
+    {
+      "path": "rpc/raw/response-arbitrum-publicnode.json",
+      "sha256": "e2bf7a69f8bb229bec6872844f4780c358495e863871355bc53193e751d03bd2"
+    },
+    {
+      "path": "rpc/raw/response-aurora-aurora.json",
+      "sha256": "c9eb59f61e72904e28526be7be27316c01e512fdd6519a445c5b2cdb02f2404b"
+    },
+    {
+      "path": "rpc/raw/response-aurora-one-rpc.json",
+      "sha256": "c9eb59f61e72904e28526be7be27316c01e512fdd6519a445c5b2cdb02f2404b"
+    },
+    {
+      "path": "rpc/raw/response-base-base.json",
+      "sha256": "da475d40b6d85dd3797fb6141d2b9f6abf2114883e331c9c2864a701d16ae197"
+    },
+    {
+      "path": "rpc/raw/response-base-publicnode.json",
+      "sha256": "da475d40b6d85dd3797fb6141d2b9f6abf2114883e331c9c2864a701d16ae197"
+    },
+    {
+      "path": "rpc/raw/response-bsc-pocket.json",
+      "sha256": "ff8498ae13fbc2d552859b8f4d093ed7fae21dcc9913ff80162ac4ec1840b7e0"
+    },
+    {
+      "path": "rpc/raw/response-bsc-publicnode.json",
+      "sha256": "ff8498ae13fbc2d552859b8f4d093ed7fae21dcc9913ff80162ac4ec1840b7e0"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc.json",
+      "sha256": "49034815490f10a8fa1ab423097ff3bc0b9a7d3cc3c22dd03836dbbcdd3d171f"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-mevblocker.json",
+      "sha256": "49034815490f10a8fa1ab423097ff3bc0b9a7d3cc3c22dd03836dbbcdd3d171f"
+    },
+    {
+      "path": "rpc/raw/response-gnosis-drpc.json",
+      "sha256": "e418867e7404bc5a017bc3b396982084b5588dd04c0796a18f100061ac6e2310"
+    },
+    {
+      "path": "rpc/raw/response-gnosis-tenderly.json",
+      "sha256": "e418867e7404bc5a017bc3b396982084b5588dd04c0796a18f100061ac6e2310"
+    },
+    {
+      "path": "rpc/raw/response-linea-linea.json",
+      "sha256": "277a2e885db8cfb5e3e97beab4795628a7a14132768d700ebbfddfb5bb0a4654"
+    },
+    {
+      "path": "rpc/raw/response-linea-one-rpc.json",
+      "sha256": "277a2e885db8cfb5e3e97beab4795628a7a14132768d700ebbfddfb5bb0a4654"
+    },
+    {
+      "path": "rpc/raw/response-optimism-optimism.json",
+      "sha256": "420a15456545b1aaf921aff329dd57ad6daa1d9562230bd76254d79942b4edad"
+    },
+    {
+      "path": "rpc/raw/response-optimism-publicnode.json",
+      "sha256": "420a15456545b1aaf921aff329dd57ad6daa1d9562230bd76254d79942b4edad"
+    },
+    {
+      "path": "rpc/raw/response-polygon-drpc.json",
+      "sha256": "94c6c26ce1e5c8cb8b374fc0d5b486d25c7a3578ad1830ec68e69da99e11a269"
+    },
+    {
+      "path": "rpc/raw/response-polygon-tenderly.json",
+      "sha256": "94c6c26ce1e5c8cb8b374fc0d5b486d25c7a3578ad1830ec68e69da99e11a269"
+    },
+    {
+      "path": "rpc/raw/response-zksync-one-rpc.json",
+      "sha256": "035678538723ee733b7f8adc72c9166eb323752450b9d2877e86d351c82b01a7"
+    },
+    {
+      "path": "rpc/raw/response-zksync-zksync.json",
+      "sha256": "035678538723ee733b7f8adc72c9166eb323752450b9d2877e86d351c82b01a7"
+    },
+    {
+      "path": "runtime/AggregationRouterV6.arbitrum.hex",
+      "sha256": "f3806e96294f308cbfe7ecc13669b516596cc91511de3db0851c1a8e57541a7a"
+    },
+    {
+      "path": "runtime/AggregationRouterV6.aurora.hex",
+      "sha256": "8d4b3ed16997eceb333d2c73780db2a1e15874ff4b884bb33edbb13aa5440969"
+    },
+    {
+      "path": "runtime/AggregationRouterV6.base.hex",
+      "sha256": "bc02585c29f64a50ce3a66054608f383a33dab6d434fd35080aebfa0abf7ce9c"
+    },
+    {
+      "path": "runtime/AggregationRouterV6.bsc.hex",
+      "sha256": "1273e5fa074eb1db17d8f0e1135fde036cc2565dd4d3f3289641e33825dc7479"
+    },
+    {
+      "path": "runtime/AggregationRouterV6.ethereum.hex",
+      "sha256": "36ade3c2f4de55d1e0e9bb7e62ee797ffb044c25cb3f42fe1d6ebcf144793997"
+    },
+    {
+      "path": "runtime/AggregationRouterV6.gnosis.hex",
+      "sha256": "e99a92f298f2910bb2907d6590a31d7deedc612f9d6e6b6746e74297d311e17c"
+    },
+    {
+      "path": "runtime/AggregationRouterV6.linea.hex",
+      "sha256": "47323f80529372babbaefa227a8d7411a93a619b59378207289371639eec5e94"
+    },
+    {
+      "path": "runtime/AggregationRouterV6.optimism.hex",
+      "sha256": "7f888c01a06c56a870af3bd002cd060048b276bec28716c58faa13972557c175"
+    },
+    {
+      "path": "runtime/AggregationRouterV6.polygon.hex",
+      "sha256": "392624a792cbffbf0ffeb07a416d1ebcd287e112658cda8a532ae8f404bffb01"
+    },
+    {
+      "path": "runtime/AggregationRouterV6.zksync.hex",
+      "sha256": "1ac629fc941534b4bea8fca05b8564b76c65e40f233b27731f32b6d36514eb19"
+    },
+    {
+      "path": "verifier/aurora/AggregationRouterV6.json",
+      "sha256": "65b6b7ed5d7c9b1f3c3e2bea0861286fee584f2c63bb632920f0fbed5229d45a"
+    },
+    {
+      "path": "verifier/sourcify/1.json",
+      "sha256": "cb75725946b219fd7d4a77c722c80c988cefdb9f0a3a8fef7d46595751f7735f"
+    },
+    {
+      "path": "verifier/sourcify/10.json",
+      "sha256": "200c55b5829d2ec07fd91cabf5a876495fb8e8dc6a4f3470932ec7439df9eded"
+    },
+    {
+      "path": "verifier/sourcify/100.json",
+      "sha256": "54fcbb0178b01d07ccfdb4504aa8766943bde0bce1027932169ad2a77b19e9a4"
+    },
+    {
+      "path": "verifier/sourcify/137.json",
+      "sha256": "76c86f2e32613f0aeace0669c570ea8f960befc708fcf5c9e47aa88f7c06783a"
+    },
+    {
+      "path": "verifier/sourcify/42161.json",
+      "sha256": "572651333baa274c69e2c1f44b213154cbd966c1a4e65840ffcdf22075706f21"
+    },
+    {
+      "path": "verifier/sourcify/56.json",
+      "sha256": "4dc14b723bdc584e827dc89e086767f8e42006cebae6934f1939aa62b0251280"
+    },
+    {
+      "path": "verifier/sourcify/59144.json",
+      "sha256": "aa17caf9d02d602b45dbafc2378e2b60dd650a31db2d8f35223393bb28216fb8"
+    },
+    {
+      "path": "verifier/sourcify/8453.json",
+      "sha256": "f33d23a575dd2f81ab27124355d4f09c283e9485d907ceaabf98b6f464e37017"
+    },
+    {
+      "path": "verifier/sourcify/excluded-146.http-status.txt",
+      "sha256": "f8bf41177a5f5e808a7ccb648b51080b031f15ca8018d91a576263d6cc626eb6"
+    },
+    {
+      "path": "verifier/sourcify/excluded-146.json",
+      "sha256": "06033c91c5a10e93903117a57fe9fc82e40cfcdb03416774fc476e3e99264329"
+    },
+    {
+      "path": "verifier/sourcify/excluded-250.http-status.txt",
+      "sha256": "f8bf41177a5f5e808a7ccb648b51080b031f15ca8018d91a576263d6cc626eb6"
+    },
+    {
+      "path": "verifier/sourcify/excluded-250.json",
+      "sha256": "65cbd17ddbd1e5777d8b2378065ccca18223496eb9a3a584656d916a5f233cb7"
+    },
+    {
+      "path": "verifier/sourcify/excluded-43114.http-status.txt",
+      "sha256": "f8bf41177a5f5e808a7ccb648b51080b031f15ca8018d91a576263d6cc626eb6"
+    },
+    {
+      "path": "verifier/sourcify/excluded-43114.json",
+      "sha256": "4831db2df74b35880879ed7a38906e96badbce98b2d13499da2d5fc170a35886"
+    },
+    {
+      "path": "verifier/sourcify/excluded-8217.http-status.txt",
+      "sha256": "f8bf41177a5f5e808a7ccb648b51080b031f15ca8018d91a576263d6cc626eb6"
+    },
+    {
+      "path": "verifier/sourcify/excluded-8217.json",
+      "sha256": "3a6a63aa276f9080322a2060d6368494aa706d6557a57e7ac67e27a7f00ae08b"
+    },
+    {
+      "path": "verifier/zksync/address.json",
+      "sha256": "a3a4a15e383b22a23eb7309404223490ef7a7c3dabd75f30eaae0aa6e62a5c9e"
+    },
+    {
+      "path": "verifier/zksync/source.json",
+      "sha256": "c162822e60624062b245156c802494b567889f70be16bcc9eb1e9df69db9c113"
+    }
+  ]
+}

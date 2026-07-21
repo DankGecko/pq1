@@ -6,7 +6,7 @@ The exact commit/tree and curation-manifest identity are machine-owned by the
 managed receipt below; they are not duplicated in hand-maintained prose. The
 checked-in corpus is **not byte-identical to that upstream revision**: the
 firmware-pinned `ERC7730_DESCRIPTORS_ROOT` is derived from the upstream baseline
-plus the 38 reviewed full-file replacements listed below, under
+plus the 42 reviewed full-file replacements listed below, under
 `secure/data/erc7730/policy.toml`. The strict manifest at
 `secure/data/erc7730/curations/manifest.json` binds the upstream repository,
 commit, tree, v2 schema, pristine/excluded/curated corpus receipts, policy,
@@ -43,13 +43,13 @@ tuple-set SHA-256, and Bloom bytes. Merkle-root or Bloom equality alone is not
 accepted as a faithfulness proof.
 
 <!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
-Checked-in curated receipt, verified against a fresh build by `--check`: **453 leaves**, **390,023-byte**
+Checked-in curated receipt, verified against a fresh build by `--check`: **463 leaves**, **398,453-byte**
 compiled companion catalogue, root
-`48aac419f76889375e21dd7813b0abefafa02485a5d1f52e510d854d97192e96`,
+`0430ad054d8781670ef7b90052aca25b1d1f8071fd55daa6583634d56267a290`,
 **4,552** canonical known-call tuples, tuple-set SHA-256
 `0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9`.
 Curation manifest SHA-256
-`b2b73fdb27faa377fbd44aa0739f0fa6396fb620fd77a3830d7a5504f6dea3a2` binds upstream commit
+`169a805153550c123524a0faddd0a58237ab16b535924965822712a08e269d38` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
 Manifest v3 authorizes exactly **10** curation-added known-call tuples and no deletions.
@@ -62,9 +62,11 @@ the machine-checked source/overlay identities live in the curation manifest,
 while the generated catalogue authority remains in the artifacts and managed
 receipt above.
 
-Current reviewed full-file replacements (40):
+Current reviewed full-file replacements (42):
 
 - `ercs/calldata-erc20-tokens.json`
+- `registry/1inch/calldata-AggregationRouterV6-zksync.json`
+- `registry/1inch/calldata-AggregationRouterV6.json`
 - `registry/aave/calldata-WrappedTokenGatewayV3.json`
 - `registry/aave/calldata-lpv2.json`
 - `registry/aave/calldata-lpv3.json`

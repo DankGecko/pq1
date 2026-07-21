@@ -1,0 +1,23 @@
+[
+  {
+    "id": "ethereum-header",
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockByNumber",
+    "params": [
+      "0x1865648",
+      false
+    ]
+  },
+  {
+    "id": "ethereum-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x111111125421cA6dc452d289314280a0f8842A65",
+      {
+        "blockHash": "0x42306eb47dfc15d1318e2a25b1a2bcf4daf7d2467d20b1c6f3957fe4ece83d15",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

@@ -1,0 +1,23 @@
+[
+  {
+    "id": "zksync-header",
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockByNumber",
+    "params": [
+      "0x43f2cc2",
+      false
+    ]
+  },
+  {
+    "id": "zksync-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x6fd4383cB451173D5f9304F041C7BCBf27d561fF",
+      {
+        "blockHash": "0xbf9bd3274f00dc35cb569ff58ceafc11e383a48752399769ed6c540e53a15c81",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

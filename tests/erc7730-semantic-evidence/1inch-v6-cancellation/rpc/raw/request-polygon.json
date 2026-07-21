@@ -1,0 +1,23 @@
+[
+  {
+    "id": "polygon-header",
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockByNumber",
+    "params": [
+      "0x566cae1",
+      false
+    ]
+  },
+  {
+    "id": "polygon-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x111111125421cA6dc452d289314280a0f8842A65",
+      {
+        "blockHash": "0xa69525b407616eb36892a54c5239977db3246b044e6c6ac199cd6238aa557321",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

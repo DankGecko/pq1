@@ -571,6 +571,40 @@ fn assert_raw_word_pages(pages: &Pages, label: &str, word: &[u8; 32]) {
     assert_nth_raw_word_pages(pages, label, 0, word);
 }
 
+/// Assert a descriptor-authenticated constant annotation without relying on a
+/// substring search. Long constants occupy complete three-row chunks; this
+/// reconstructs every byte and also catches a missing or duplicated page.
+fn assert_constant_text_field_pages(pages: &Pages, label: &str, value: &str) {
+    let actual: Vec<usize> = pages
+        .as_slice()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, page)| (row_str(&page[0]) == label).then_some(index))
+        .collect();
+    let expected_chunks: Vec<&[u8]> = value.as_bytes().chunks(3 * DISPLAY_COLS).collect();
+    assert_eq!(
+        actual.len(),
+        expected_chunks.len(),
+        "constant field {label:?} page count; full dump:\n{}",
+        dump_pages(pages)
+    );
+    for (index, chunk) in actual.into_iter().zip(expected_chunks) {
+        let mut expected = [[b' '; DISPLAY_COLS]; 4];
+        expected[0][..label.len()].copy_from_slice(label.as_bytes());
+        for (row, bytes) in chunk.chunks(DISPLAY_COLS).enumerate() {
+            expected[row + 1][..bytes.len()].copy_from_slice(bytes);
+        }
+        assert_eq!(pages.buf[index], expected);
+    }
+}
+
+/// Long intents are split over the first two rows. Reassemble them so tests
+/// pin the complete semantic title instead of accepting a reassuring prefix.
+fn assert_complete_intent(pages: &Pages, expected: &str) {
+    let rows = page_strs(pages, intent_page_index(pages));
+    assert_eq!(format!("{}{}", rows[0], rows[1]), expected);
+}
+
 fn assert_nth_raw_word_pages(pages: &Pages, label: &str, occurrence: usize, word: &[u8; 32]) {
     let first = pages
         .as_slice()
@@ -14440,4 +14474,639 @@ fn v3_production_session_manager_eip712_is_complete_and_mutation_bound() {
         7,
         "every deployment/domain is unique"
     );
+}
+
+const ONEINCH_V6_SOURCE: &str = "calldata-AggregationRouterV6.json";
+const ONEINCH_V6_ZK_SOURCE: &str = "calldata-AggregationRouterV6-zksync.json";
+const ONEINCH_CANCEL: &str = "cancelOrder(uint256,bytes32)";
+const ONEINCH_EPOCH: &str = "increaseEpoch(uint96)";
+const ONEINCH_CANCEL_SELECTOR: [u8; 4] = [0xb6, 0x8f, 0xb0, 0x20];
+const ONEINCH_EPOCH_SELECTOR: [u8; 4] = [0xc3, 0xcf, 0x80, 0x43];
+const ONEINCH_CANCEL_WARNING: &str = "Traits choose hash or nonce-bit mode; hash may be ignored";
+const ONEINCH_EPOCH_WARNING: &str = "Old epoch off; next epoch may activate";
+
+fn oneinch_v6_normal_contract() -> [u8; 20] {
+    hex::decode("111111125421ca6dc452d289314280a0f8842a65")
+        .expect("1inch V6 common deployment address")
+        .try_into()
+        .expect("address width")
+}
+
+fn oneinch_v6_zk_contract() -> [u8; 20] {
+    hex::decode("6fd4383cb451173d5f9304f041c7bcbf27d561ff")
+        .expect("1inch V6 zkSync deployment address")
+        .try_into()
+        .expect("address width")
+}
+
+fn is_oneinch_v6_source(entry: &dbgen::erc7730::Emitted) -> bool {
+    matches!(
+        entry.source.file_name().and_then(|name| name.to_str()),
+        Some(ONEINCH_V6_SOURCE) | Some(ONEINCH_V6_ZK_SOURCE)
+    )
+}
+
+#[test]
+fn production_1inch_v6_cancellation_controls_render_complete_neutral_transcripts() {
+    use std::collections::BTreeSet;
+
+    use pqsigner_erc7730::bundle::MAX_ERC7730_BUNDLE_LEN;
+    use pqsigner_erc7730::display::MAX_PAGES;
+    use pqsigner_erc7730::ir::MAX_IR_LEN;
+    use pqsigner_erc7730::known_calls::BLOOM_BYTES;
+
+    const NORMAL_CHAINS: [u64; 9] = [1, 10, 56, 100, 137, 8_453, 42_161, 59_144, 1_313_161_554];
+    const ZK_CHAIN: u64 = 324;
+
+    assert_eq!(
+        &keccak256(ONEINCH_CANCEL.as_bytes())[..4],
+        &ONEINCH_CANCEL_SELECTOR
+    );
+    assert_eq!(
+        &keccak256(ONEINCH_EPOCH.as_bytes())[..4],
+        &ONEINCH_EPOCH_SELECTOR
+    );
+
+    let registry = build_registry();
+    let normal_contract = oneinch_v6_normal_contract();
+    let zk_contract = oneinch_v6_zk_contract();
+    let entries: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|entry| is_oneinch_v6_source(entry))
+        .collect();
+    let observed: BTreeSet<_> = entries
+        .iter()
+        .map(|entry| {
+            (
+                entry
+                    .source
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("1inch source filename")
+                    .to_string(),
+                entry.chain_id,
+                entry.contract,
+            )
+        })
+        .collect();
+    let mut expected = BTreeSet::new();
+    for chain_id in NORMAL_CHAINS {
+        expected.insert((ONEINCH_V6_SOURCE.to_string(), chain_id, normal_contract));
+    }
+    expected.insert((ONEINCH_V6_ZK_SOURCE.to_string(), ZK_CHAIN, zk_contract));
+    assert_eq!(observed, expected, "exact reviewed 1inch V6 leaf inventory");
+    assert_eq!(entries.len(), 10, "one leaf per reviewed deployment");
+
+    // The catalogue remains a companion artifact. Firmware FLASH growth is
+    // bounded by the unchanged 32-byte root and fixed 16-KiB downgrade Bloom;
+    // each on-wire proof/IR and the trusted page buffer retain their existing
+    // hard limits. This is descriptor-slice evidence, not a whole-firmware
+    // stack high-water claim.
+    assert_eq!(registry.root.len(), 32);
+    assert_eq!(registry.known_calls_bloom.len(), BLOOM_BYTES);
+    assert_eq!(
+        std::mem::size_of::<Pages>(),
+        MAX_PAGES * 4 * DISPLAY_COLS + std::mem::size_of::<usize>(),
+        "descriptor growth must not resize the fixed trusted-page stack object"
+    );
+    for entry in &entries {
+        assert!(entry.ir_bytes.len() <= MAX_IR_LEN);
+        let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+        assert!(bundle.len() <= MAX_ERC7730_BUNDLE_LEN);
+        let verified = verify_erc7730_bundle(&bundle, &registry.root)
+            .expect("reviewed 1inch V6 Merkle leaf verifies");
+        cross_check_contract(&verified.ir, entry.chain_id, &entry.contract)
+            .expect("reviewed 1inch V6 leaf binds its exact deployment");
+        assert!(matches!(verified.ir.context_kind, ContextKind::Contract));
+        assert_eq!(verified.ir.format_count(), Ok(2));
+        let selectors: BTreeSet<_> = verified
+            .ir
+            .format_iter()
+            .map(|format| format.expect("well-formed 1inch format").selector)
+            .collect();
+        assert_eq!(
+            selectors,
+            [ONEINCH_CANCEL_SELECTOR, ONEINCH_EPOCH_SELECTOR]
+                .into_iter()
+                .collect(),
+            "each reviewed deployment admits exactly the two cancellation controls"
+        );
+    }
+
+    let mainnet = find_leaf(registry, ONEINCH_V6_SOURCE, 1);
+    assert_eq!(mainnet.contract, normal_contract);
+    let mainnet_bundle = synth_bundle(&registry.blob, &mainnet.ir_bytes, mainnet.leaf_index);
+    let mainnet_verified = verify_erc7730_bundle(&mainnet_bundle, &registry.root)
+        .expect("verify mainnet 1inch V6 leaf");
+    cross_check_contract(&mainnet_verified.ir, 1, &normal_contract)
+        .expect("bind mainnet 1inch V6 leaf");
+
+    let signer = [0x42; 20];
+    let mut changed_signer = signer;
+    changed_signer[19] ^= 1;
+    let resolver = NameResolver::new();
+    let tx = envelope(1, normal_contract);
+    let order_hash: [u8; 32] = core::array::from_fn(|index| (index as u8).wrapping_mul(7) ^ 0xa5);
+
+    // Nonce 0x1234 at bit offset 120 with bit 254 clear selects the verified
+    // nonce-bit branch. The hash is ignored there but remains fully displayed.
+    let mut bit_mode_traits = [0u8; 32];
+    bit_mode_traits[15] = 0x12;
+    bit_mode_traits[16] = 0x34;
+    let bit_mode_words = [bit_mode_traits, order_hash];
+    let render_cancel = |words: &[[u8; 32]; 2], candidate_signer: &[u8; 20]| {
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &calldata_static(ONEINCH_CANCEL, words),
+            &mainnet_verified,
+            None,
+            &resolver,
+            candidate_signer,
+        )
+    };
+    let bit_mode = render_cancel(&bit_mode_words, &signer)
+        .expect("1inch nonce-bit invalidation control renders");
+    assert_eq!(
+        bit_mode.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert!(bit_mode
+        .transcript_receipt
+        .range_matches(&bit_mode.pages, 0));
+    assert_all_pages_printable(&bit_mode.pages);
+    assert!(bit_mode.pages.len <= MAX_PAGES);
+    assert_complete_intent(&bit_mode.pages, "Update 1inch order invalidation");
+    assert_raw_word_pages(&bit_mode.pages, "Order maker", &abi_address_word(signer));
+    assert_raw_word_pages(&bit_mode.pages, "Maker traits raw", &bit_mode_traits);
+    assert_raw_word_pages(&bit_mode.pages, "Order hash raw", &order_hash);
+    assert_constant_text_field_pages(&bit_mode.pages, "Effect warning", ONEINCH_CANCEL_WARNING);
+
+    // Bit 254 set with bit 255 clear selects remaining/hash invalidation.
+    // The wording remains deliberately neutral in both modes.
+    let mut hash_mode_traits = bit_mode_traits;
+    hash_mode_traits[0] |= 0x40;
+    let hash_mode_words = [hash_mode_traits, order_hash];
+    let hash_mode =
+        render_cancel(&hash_mode_words, &signer).expect("1inch hash invalidation control renders");
+    assert_complete_intent(&hash_mode.pages, "Update 1inch order invalidation");
+    assert_raw_word_pages(&hash_mode.pages, "Maker traits raw", &hash_mode_traits);
+    assert_raw_word_pages(&hash_mode.pages, "Order hash raw", &order_hash);
+    assert_constant_text_field_pages(&hash_mode.pages, "Effect warning", ONEINCH_CANCEL_WARNING);
+    assert_ne!(bit_mode.pages.as_slice(), hash_mode.pages.as_slice());
+    assert!(!bit_mode
+        .transcript_receipt
+        .exact_match(&hash_mode.transcript_receipt));
+
+    for (word_index, operand) in [(0usize, "makerTraits"), (1, "orderHash")] {
+        let mut mutated_words = bit_mode_words;
+        mutated_words[word_index][31] ^= 1;
+        let mutated = render_cancel(&mutated_words, &signer)
+            .unwrap_or_else(|error| panic!("mutated 1inch {operand} renders: {error:?}"));
+        assert_ne!(bit_mode.pages.as_slice(), mutated.pages.as_slice());
+        assert!(
+            !bit_mode
+                .transcript_receipt
+                .exact_match(&mutated.transcript_receipt),
+            "changing only signed {operand} must change the authenticated transcript"
+        );
+    }
+    let changed_cancel_signer =
+        render_cancel(&bit_mode_words, &changed_signer).expect("changed 1inch order maker renders");
+    assert_raw_word_pages(
+        &changed_cancel_signer.pages,
+        "Order maker",
+        &abi_address_word(changed_signer),
+    );
+    assert_ne!(
+        bit_mode.pages.as_slice(),
+        changed_cancel_signer.pages.as_slice()
+    );
+    assert!(!bit_mode
+        .transcript_receipt
+        .exact_match(&changed_cancel_signer.transcript_receipt));
+    let repeat_cancel = render_cancel(&bit_mode_words, &signer)
+        .expect("deterministic 1inch cancellation re-render");
+    assert_eq!(bit_mode.pages.as_slice(), repeat_cancel.pages.as_slice());
+    assert!(bit_mode
+        .transcript_receipt
+        .exact_match(&repeat_cancel.transcript_receipt));
+
+    let mut series = [0u8; 32];
+    series[20..].copy_from_slice(&[
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x10, 0x32, 0x54, 0x76,
+    ]);
+    let epoch_words = [series];
+    let render_epoch = |words: &[[u8; 32]; 1], candidate_signer: &[u8; 20]| {
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &calldata_static(ONEINCH_EPOCH, words),
+            &mainnet_verified,
+            None,
+            &resolver,
+            candidate_signer,
+        )
+    };
+    let epoch = render_epoch(&epoch_words, &signer).expect("1inch series epoch renders");
+    assert_eq!(
+        epoch.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert!(epoch.transcript_receipt.range_matches(&epoch.pages, 0));
+    assert_all_pages_printable(&epoch.pages);
+    assert!(epoch.pages.len <= MAX_PAGES);
+    assert_complete_intent(&epoch.pages, "Advance 1inch series epoch");
+    assert_raw_word_pages(&epoch.pages, "Order maker", &abi_address_word(signer));
+    assert_raw_word_pages(&epoch.pages, "Series", &series);
+    assert_constant_text_field_pages(&epoch.pages, "Effect warning", ONEINCH_EPOCH_WARNING);
+
+    let mut changed_series_words = epoch_words;
+    changed_series_words[0][31] ^= 1;
+    let changed_series = render_epoch(&changed_series_words, &signer)
+        .expect("changed canonical uint96 series renders");
+    assert_ne!(epoch.pages.as_slice(), changed_series.pages.as_slice());
+    assert!(!epoch
+        .transcript_receipt
+        .exact_match(&changed_series.transcript_receipt));
+    let changed_epoch_signer =
+        render_epoch(&epoch_words, &changed_signer).expect("changed epoch maker renders");
+    assert_ne!(
+        epoch.pages.as_slice(),
+        changed_epoch_signer.pages.as_slice()
+    );
+    assert!(!epoch
+        .transcript_receipt
+        .exact_match(&changed_epoch_signer.transcript_receipt));
+    let repeat_epoch =
+        render_epoch(&epoch_words, &signer).expect("deterministic 1inch epoch re-render");
+    assert_eq!(epoch.pages.as_slice(), repeat_epoch.pages.as_slice());
+    assert!(epoch
+        .transcript_receipt
+        .exact_match(&repeat_epoch.transcript_receipt));
+
+    for (calldata, direct) in [
+        (
+            calldata_static(ONEINCH_CANCEL, &bit_mode_words),
+            &bit_mode.pages,
+        ),
+        (calldata_static(ONEINCH_EPOCH, &epoch_words), &epoch.pages),
+    ] {
+        let mut proofs = DispatchPageProofs::new();
+        proofs.fail_initialize();
+        let dispatched = pick_sign_pages(
+            &tx,
+            &calldata,
+            &signer,
+            None,
+            None,
+            None,
+            Some(&mainnet_verified),
+            None,
+            None,
+            &resolver,
+            &mut proofs,
+        )
+        .expect("dispatcher selects exact bound 1inch cancellation control");
+        assert_eq!(dispatched.as_slice(), direct.as_slice());
+    }
+
+    let zk = find_leaf(registry, ONEINCH_V6_ZK_SOURCE, ZK_CHAIN);
+    assert_eq!(zk.contract, zk_contract);
+    let zk_bundle = synth_bundle(&registry.blob, &zk.ir_bytes, zk.leaf_index);
+    let zk_verified =
+        verify_erc7730_bundle(&zk_bundle, &registry.root).expect("verify zkSync 1inch V6 leaf");
+    cross_check_contract(&zk_verified.ir, ZK_CHAIN, &zk_contract)
+        .expect("bind zkSync 1inch V6 leaf");
+    let zk_tx = envelope(ZK_CHAIN, zk_contract);
+    let zk_cancel = render_erc7730_pages_with_signer_checked(
+        &zk_tx,
+        &calldata_static(ONEINCH_CANCEL, &hash_mode_words),
+        &zk_verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("zkSync 1inch cancellation renders");
+    assert_complete_intent(&zk_cancel.pages, "Update 1inch order invalidation");
+    assert_raw_word_pages(&zk_cancel.pages, "Maker traits raw", &hash_mode_traits);
+    assert_raw_word_pages(&zk_cancel.pages, "Order hash raw", &order_hash);
+    assert_constant_text_field_pages(&zk_cancel.pages, "Effect warning", ONEINCH_CANCEL_WARNING);
+    assert!(zk_cancel
+        .transcript_receipt
+        .range_matches(&zk_cancel.pages, 0));
+    let zk_epoch = render_erc7730_pages_with_signer_checked(
+        &zk_tx,
+        &calldata_static(ONEINCH_EPOCH, &epoch_words),
+        &zk_verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("zkSync 1inch epoch renders");
+    assert_complete_intent(&zk_epoch.pages, "Advance 1inch series epoch");
+    assert_raw_word_pages(&zk_epoch.pages, "Series", &series);
+    assert_constant_text_field_pages(&zk_epoch.pages, "Effect warning", ONEINCH_EPOCH_WARNING);
+    assert!(zk_epoch
+        .transcript_receipt
+        .range_matches(&zk_epoch.pages, 0));
+}
+
+#[test]
+fn production_1inch_v6_cancellation_controls_reject_noncanonical_binding_and_framing() {
+    let registry = build_registry();
+    let contract = oneinch_v6_normal_contract();
+    let entry = find_leaf(registry, ONEINCH_V6_SOURCE, 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified =
+        verify_erc7730_bundle(&bundle, &registry.root).expect("verify mainnet 1inch V6 leaf");
+    cross_check_contract(&verified.ir, 1, &contract).expect("bind mainnet 1inch V6 leaf");
+    assert!(matches!(
+        cross_check_contract(&verified.ir, 10, &contract),
+        Err(BindingError::ChainIdMismatch)
+    ));
+    let wrong_target = [0x55; 20];
+    assert!(matches!(
+        cross_check_contract(&verified.ir, 1, &wrong_target),
+        Err(BindingError::ContractMismatch)
+    ));
+
+    for (chain_id, target, label) in [
+        (10u64, contract, "wrong chain"),
+        (1u64, wrong_target, "wrong target"),
+    ] {
+        let mut verdict = crate::fi::FAIL_SENTINEL;
+        let mut cfi = crate::fi::CfiCounter::new();
+        crate::tx::erc7730::prove_contract_binding(
+            &verified.ir,
+            &bundle,
+            &registry.root,
+            chain_id,
+            &target,
+            &mut verdict,
+            &mut cfi,
+        );
+        assert_ne!(verdict, crate::fi::OK_SENTINEL, "{label} must refuse");
+        assert_eq!(
+            cfi.check_into_sentinel(crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED),
+            crate::fi::OK_SENTINEL,
+            "rejecting {label} proof still completes its CFI transcript"
+        );
+    }
+
+    let signer = [0x42; 20];
+    let resolver = NameResolver::new();
+    let tx = envelope(1, contract);
+    let traits = [0x5a; 32];
+    let order_hash = [0xa5; 32];
+    let cancel = calldata_static(ONEINCH_CANCEL, &[traits, order_hash]);
+    assert_selector_matches(&verified.ir, &cancel, ONEINCH_CANCEL);
+    assert!(render_erc7730_pages_with_signer_checked(
+        &tx,
+        &cancel[..cancel.len() - 1],
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .is_err());
+    let mut cancel_trailing = cancel.clone();
+    cancel_trailing.push(0);
+    assert!(render_erc7730_pages_with_signer_checked(
+        &tx,
+        &cancel_trailing,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .is_err());
+
+    let mut series = [0u8; 32];
+    series[20..].copy_from_slice(&[0x11; 12]);
+    let epoch = calldata_static(ONEINCH_EPOCH, &[series]);
+    assert_selector_matches(&verified.ir, &epoch, ONEINCH_EPOCH);
+    render_erc7730_pages_with_signer_checked(&tx, &epoch, &verified, None, &resolver, &signer)
+        .expect("canonical zero-padded uint96 is admitted");
+    assert!(render_erc7730_pages_with_signer_checked(
+        &tx,
+        &epoch[..epoch.len() - 1],
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .is_err());
+    let mut epoch_trailing = epoch.clone();
+    epoch_trailing.push(0);
+    assert!(render_erc7730_pages_with_signer_checked(
+        &tx,
+        &epoch_trailing,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .is_err());
+    let mut dirty_series = series;
+    dirty_series[19] = 1;
+    assert!(
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &calldata_static(ONEINCH_EPOCH, &[dirty_series]),
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        )
+        .is_err(),
+        "nonzero high padding above uint96 must refuse"
+    );
+
+    let mut wrong_selector = cancel.clone();
+    wrong_selector[3] ^= 1;
+    assert!(matches!(
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &wrong_selector,
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+    ));
+    let mut wrong_selector_proofs = DispatchPageProofs::new();
+    wrong_selector_proofs.fail_initialize();
+    assert!(
+        pick_sign_pages(
+            &tx,
+            &wrong_selector,
+            &signer,
+            None,
+            None,
+            None,
+            Some(&verified),
+            None,
+            None,
+            &resolver,
+            &mut wrong_selector_proofs,
+        )
+        .is_err(),
+        "a verified descriptor NoFormat must never fall back to blind signing"
+    );
+
+    let mut wrong_root = registry.root;
+    wrong_root[0] ^= 1;
+    assert!(verify_erc7730_bundle(&bundle, &wrong_root).is_err());
+    let mut tampered_ir = bundle.clone();
+    tampered_ir[2 + entry.ir_bytes.len() / 2] ^= 1;
+    assert!(
+        verify_erc7730_bundle(&tampered_ir, &registry.root).is_err(),
+        "tampered authenticated 1inch IR must fail verification"
+    );
+    let mut tampered_proof = bundle.clone();
+    *tampered_proof
+        .last_mut()
+        .expect("1inch bundle carries a Merkle proof") ^= 1;
+    assert!(
+        verify_erc7730_bundle(&tampered_proof, &registry.root).is_err(),
+        "tampered 1inch Merkle path must fail verification"
+    );
+}
+
+#[test]
+fn production_1inch_v6_omitted_deployments_and_sibling_controls_hard_refuse() {
+    const ALL_UPSTREAM_CHAINS: [u64; 14] = [
+        1,
+        10,
+        56,
+        100,
+        137,
+        146,
+        250,
+        324,
+        8_217,
+        8_453,
+        42_161,
+        43_114,
+        59_144,
+        1_313_161_554,
+    ];
+    const EXCLUDED_CHAINS: [u64; 4] = [146, 250, 8_217, 43_114];
+    const CANCEL_ORDERS: &str = "cancelOrders(uint256[],bytes32[])";
+    const BITS_INVALIDATE: &str = "bitsInvalidateForOrder(uint256,uint256)";
+    const ADVANCE_EPOCH: &str = "advanceEpoch(uint96,uint256)";
+    const CANCEL_ORDERS_SELECTOR: [u8; 4] = [0x89, 0xe7, 0xc6, 0x50];
+    const BITS_INVALIDATE_SELECTOR: [u8; 4] = [0x05, 0xb1, 0xea, 0x03];
+    const ADVANCE_EPOCH_SELECTOR: [u8; 4] = [0x0d, 0x2c, 0x7c, 0x16];
+
+    for (signature, selector) in [
+        (CANCEL_ORDERS, CANCEL_ORDERS_SELECTOR),
+        (BITS_INVALIDATE, BITS_INVALIDATE_SELECTOR),
+        (ADVANCE_EPOCH, ADVANCE_EPOCH_SELECTOR),
+    ] {
+        assert_eq!(&keccak256(signature.as_bytes())[..4], &selector);
+    }
+
+    let registry = build_registry();
+    let normal_contract = oneinch_v6_normal_contract();
+    let zk_contract = oneinch_v6_zk_contract();
+    for chain_id in EXCLUDED_CHAINS {
+        assert!(
+            !registry.entries.iter().any(|entry| {
+                is_oneinch_v6_source(entry)
+                    && entry.chain_id == chain_id
+                    && entry.contract == normal_contract
+            }),
+            "unverified 1inch deployment on chain {chain_id} must emit no leaf"
+        );
+    }
+
+    let mainnet = find_leaf(registry, ONEINCH_V6_SOURCE, 1);
+    let bundle = synth_bundle(&registry.blob, &mainnet.ir_bytes, mainnet.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root)
+        .expect("verify admitted 1inch leaf for NoFormat tests");
+    let tx = envelope(1, normal_contract);
+    let signer = [0x42; 20];
+    let resolver = NameResolver::new();
+    for (signature, selector) in [
+        (CANCEL_ORDERS, CANCEL_ORDERS_SELECTOR),
+        (BITS_INVALIDATE, BITS_INVALIDATE_SELECTOR),
+        (ADVANCE_EPOCH, ADVANCE_EPOCH_SELECTOR),
+    ] {
+        assert_selector_excluded(&verified.ir, signature);
+        assert!(matches!(
+            render_erc7730_pages_with_signer_checked(
+                &tx, &selector, &verified, None, &resolver, &signer,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+        ));
+        let mut proofs = DispatchPageProofs::new();
+        proofs.fail_initialize();
+        assert!(
+            pick_sign_pages(
+                &tx,
+                &selector,
+                &signer,
+                None,
+                None,
+                None,
+                Some(&verified),
+                None,
+                None,
+                &resolver,
+                &mut proofs,
+            )
+            .is_err(),
+            "bound descriptor must hard-refuse omitted {signature} without fallback"
+        );
+    }
+
+    let all_selectors = [
+        ONEINCH_CANCEL_SELECTOR,
+        ONEINCH_EPOCH_SELECTOR,
+        CANCEL_ORDERS_SELECTOR,
+    ];
+    for chain_id in ALL_UPSTREAM_CHAINS {
+        let contract = if chain_id == 324 {
+            zk_contract
+        } else {
+            normal_contract
+        };
+        let deployment_tx = envelope(chain_id, contract);
+        for selector in all_selectors {
+            assert!(
+                registry
+                    .known_calls
+                    .contains(&(chain_id, contract, selector)),
+                "1inch chain {chain_id} selector 0x{} must stay exact-known",
+                hex::encode(selector)
+            );
+            assert!(pqsigner_erc7730::known_calls::may_contain(
+                &registry.known_calls_bloom,
+                chain_id,
+                &contract,
+                &selector,
+            ));
+            let mut proofs = DispatchPageProofs::new();
+            proofs.fail_initialize();
+            assert!(
+                pick_sign_pages(
+                    &deployment_tx,
+                    &selector,
+                    &signer,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    &resolver,
+                    &mut proofs,
+                )
+                .is_err(),
+                "known 1inch call on chain {chain_id} must not blind-fallback without its exact bound descriptor"
+            );
+        }
+    }
 }

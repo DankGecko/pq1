@@ -1,0 +1,325 @@
+{
+  "observations": [
+    {
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "block": {
+        "hash": "0x42306eb47dfc15d1318e2a25b1a2bcf4daf7d2467d20b1c6f3957fe4ece83d15",
+        "number": 25581128,
+        "number_hex": "0x1865648",
+        "parent_hash": "0x93ea45b594d2da9774000fd25183e0663295a641cc7a200ccc626da5d956f21b",
+        "state_root": "0x001d08c6fb300d1d2d76a43d6d0d7475d81369e6ba29f061ccec58950c5d3fd0",
+        "timestamp_hex": "0x6a5f674f"
+      },
+      "chain_id": 1,
+      "providers": [
+        {
+          "name": "drpc",
+          "response_path": "rpc/raw/response-ethereum-drpc.json",
+          "url": "https://eth.drpc.org"
+        },
+        {
+          "name": "mevblocker",
+          "response_path": "rpc/raw/response-ethereum-mevblocker.json",
+          "url": "https://rpc.mevblocker.io"
+        }
+      ],
+      "request_path": "rpc/raw/request-ethereum.json",
+      "runtime": {
+        "bytes": 24294,
+        "decoded_sha256": "25ed432292a03b29a9833444092ed36fca80cf3b9d7a04bd05db9351f5b2bbcf",
+        "file_sha256": "36ade3c2f4de55d1e0e9bb7e62ee797ffb044c25cb3f42fe1d6ebcf144793997",
+        "path": "runtime/AggregationRouterV6.ethereum.hex"
+      },
+      "slug": "ethereum"
+    },
+    {
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "block": {
+        "hash": "0x83663eabf3045cffe28c65f4474d5952fc92fcb42f1d3e75020fc335b05d02f9",
+        "number": 154519885,
+        "number_hex": "0x935c94d",
+        "parent_hash": "0x1beab776b0197013b2d4d810a9edd75ccb1b03aac0a7c253d77558786e7be3f7",
+        "state_root": "0x07641c5af46c8fc0a80fbfa19978e757cd8c306e79a1babc28c56d2a2183fb8d",
+        "timestamp_hex": "0x6a5f6c53"
+      },
+      "chain_id": 10,
+      "providers": [
+        {
+          "name": "optimism",
+          "response_path": "rpc/raw/response-optimism-optimism.json",
+          "url": "https://mainnet.optimism.io"
+        },
+        {
+          "name": "publicnode",
+          "response_path": "rpc/raw/response-optimism-publicnode.json",
+          "url": "https://optimism-rpc.publicnode.com"
+        }
+      ],
+      "request_path": "rpc/raw/request-optimism.json",
+      "runtime": {
+        "bytes": 24151,
+        "decoded_sha256": "2766fc73f47e688b2ad341a35d4191fd776ee84134c36776a9953f6ed582a3e9",
+        "file_sha256": "7f888c01a06c56a870af3bd002cd060048b276bec28716c58faa13972557c175",
+        "path": "runtime/AggregationRouterV6.optimism.hex"
+      },
+      "slug": "optimism"
+    },
+    {
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "block": {
+        "hash": "0x01f8cb74104ec4d605a3afbc9ba8ce9f7e8d0ac4997af37ba191d2a88d5ed58e",
+        "number": 111287866,
+        "number_hex": "0x6a21e3a",
+        "parent_hash": "0x64b7bf6dd51aa0d4cc22dbc8f207293ee33521a896aeb337935e546280ff2807",
+        "state_root": "0x1f88d07c8af7474e24b732a23efede83cf66ebb39990b17a9d3c1de949f967d9",
+        "timestamp_hex": "0x6a5f6e4b"
+      },
+      "chain_id": 56,
+      "providers": [
+        {
+          "name": "publicnode",
+          "response_path": "rpc/raw/response-bsc-publicnode.json",
+          "url": "https://bsc-rpc.publicnode.com"
+        },
+        {
+          "name": "pocket",
+          "response_path": "rpc/raw/response-bsc-pocket.json",
+          "url": "https://bsc.api.pocket.network"
+        }
+      ],
+      "request_path": "rpc/raw/request-bsc.json",
+      "runtime": {
+        "bytes": 24294,
+        "decoded_sha256": "7d9fe1d0bfea94802078f58377b063be9bfad1d84f9b22969725e62a866e795f",
+        "file_sha256": "1273e5fa074eb1db17d8f0e1135fde036cc2565dd4d3f3289641e33825dc7479",
+        "path": "runtime/AggregationRouterV6.bsc.hex"
+      },
+      "slug": "bsc"
+    },
+    {
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "block": {
+        "hash": "0x2061d0987872aacef8df0e7af90926297c287e9adfecfad85d6eefc77ec2fed3",
+        "number": 47316637,
+        "number_hex": "0x2d1fe9d",
+        "parent_hash": "0x243ceb8f5f5e4195507044f2310e94437089a1770cf709f241818eaabbe10b00",
+        "state_root": "0x9944bf5ff4a101d88e69db35e82b3924c39cba2b9ba49988f85c069a1444ae2a",
+        "timestamp_hex": "0x6a5f6ac1"
+      },
+      "chain_id": 100,
+      "providers": [
+        {
+          "name": "drpc",
+          "response_path": "rpc/raw/response-gnosis-drpc.json",
+          "url": "https://gnosis.drpc.org"
+        },
+        {
+          "name": "tenderly",
+          "response_path": "rpc/raw/response-gnosis-tenderly.json",
+          "url": "https://gnosis.gateway.tenderly.co"
+        }
+      ],
+      "request_path": "rpc/raw/request-gnosis.json",
+      "runtime": {
+        "bytes": 24294,
+        "decoded_sha256": "2c9aee0499d88c5b578c1a258a01990112fc36598132e2900a2f0c5ed31db1f6",
+        "file_sha256": "e99a92f298f2910bb2907d6590a31d7deedc612f9d6e6b6746e74297d311e17c",
+        "path": "runtime/AggregationRouterV6.gnosis.hex"
+      },
+      "slug": "gnosis"
+    },
+    {
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "block": {
+        "hash": "0xa69525b407616eb36892a54c5239977db3246b044e6c6ac199cd6238aa557321",
+        "number": 90622689,
+        "number_hex": "0x566cae1",
+        "parent_hash": "0xd5f2d365ab72120c15f19fc0db0ee7c5ee86f79204d58638a3e4e4f472d355b1",
+        "state_root": "0x8128c67d251b4a78f2c20b17247887fcda1b5e9abe285f63e0c90102c3c4ccd6",
+        "timestamp_hex": "0x6a5f6e37"
+      },
+      "chain_id": 137,
+      "providers": [
+        {
+          "name": "drpc",
+          "response_path": "rpc/raw/response-polygon-drpc.json",
+          "url": "https://polygon.drpc.org"
+        },
+        {
+          "name": "tenderly",
+          "response_path": "rpc/raw/response-polygon-tenderly.json",
+          "url": "https://polygon.gateway.tenderly.co"
+        }
+      ],
+      "request_path": "rpc/raw/request-polygon.json",
+      "runtime": {
+        "bytes": 24294,
+        "decoded_sha256": "c9bf750e8752450b684bab70bf80f8a1d28a7a15571c4e7e01abbdf06babe202",
+        "file_sha256": "392624a792cbffbf0ffeb07a416d1ebcd287e112658cda8a532ae8f404bffb01",
+        "path": "runtime/AggregationRouterV6.polygon.hex"
+      },
+      "slug": "polygon"
+    },
+    {
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "block": {
+        "hash": "0x30ba8ff8b18bc82346d0618420399c06c2e1cf6d8a57661f481f65ddb9cd1c0c",
+        "number": 48924600,
+        "number_hex": "0x2ea87b8",
+        "parent_hash": "0x452249d9e59b1e37cb8b434e8fa8eccaa10a300b4b3b70b4f0c8b46c44c53052",
+        "state_root": "0xe0896d8d0c438fe9e562c1c740f10e4a34972f65217e4fb5ec65825fc4350964",
+        "timestamp_hex": "0x6a5f6c53"
+      },
+      "chain_id": 8453,
+      "providers": [
+        {
+          "name": "base",
+          "response_path": "rpc/raw/response-base-base.json",
+          "url": "https://mainnet.base.org"
+        },
+        {
+          "name": "publicnode",
+          "response_path": "rpc/raw/response-base-publicnode.json",
+          "url": "https://base-rpc.publicnode.com"
+        }
+      ],
+      "request_path": "rpc/raw/request-base.json",
+      "runtime": {
+        "bytes": 24151,
+        "decoded_sha256": "63c532e43f02a301a83589f3c55b80b45f5afc9ad71d40c91640e211b309e383",
+        "file_sha256": "bc02585c29f64a50ce3a66054608f383a33dab6d434fd35080aebfa0abf7ce9c",
+        "path": "runtime/AggregationRouterV6.base.hex"
+      },
+      "slug": "base"
+    },
+    {
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "block": {
+        "hash": "0xf0c8d4ee6cad4c2c8c5eaca8748c4af66a8fc5ae40063a20eb47428281adf195",
+        "number": 486191758,
+        "number_hex": "0x1cfab28e",
+        "parent_hash": "0x0e39f397fbbed732825ce0e7ead62f71dc5d7df80eec0ced03c58e189e105993",
+        "state_root": "0x38b1d6c1691a1e2683554eb92f50f865ed0cae2c6a4b110823c5856c5d535c7b",
+        "timestamp_hex": "0x6a5f6e46"
+      },
+      "chain_id": 42161,
+      "providers": [
+        {
+          "name": "arbitrum",
+          "response_path": "rpc/raw/response-arbitrum-arbitrum.json",
+          "url": "https://arb1.arbitrum.io/rpc"
+        },
+        {
+          "name": "publicnode",
+          "response_path": "rpc/raw/response-arbitrum-publicnode.json",
+          "url": "https://arbitrum-one-rpc.publicnode.com"
+        }
+      ],
+      "request_path": "rpc/raw/request-arbitrum.json",
+      "runtime": {
+        "bytes": 24294,
+        "decoded_sha256": "87d953a496ce00ed11c8d9f132323c4701c47f4eed87ef0364110ea8c5b1c93d",
+        "file_sha256": "f3806e96294f308cbfe7ecc13669b516596cc91511de3db0851c1a8e57541a7a",
+        "path": "runtime/AggregationRouterV6.arbitrum.hex"
+      },
+      "slug": "arbitrum"
+    },
+    {
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "block": {
+        "hash": "0xd595e87888fdec6ea6cd1cdeedf4cb917db0d4cbf833c2896ac74d1a35e13da3",
+        "number": 31467177,
+        "number_hex": "0x1e026a9",
+        "parent_hash": "0x7490dc98adb141467a02ff937c75ccae4a98f3b5199bef46e48c3554174cd4b3",
+        "state_root": "0x86e9ca59b628054ead16608e953b7f5a8787a01d244e6dbaea670eaa413382bb",
+        "timestamp_hex": "0x6a5f69e9"
+      },
+      "chain_id": 59144,
+      "providers": [
+        {
+          "name": "linea",
+          "response_path": "rpc/raw/response-linea-linea.json",
+          "url": "https://rpc.linea.build"
+        },
+        {
+          "name": "one-rpc",
+          "response_path": "rpc/raw/response-linea-one-rpc.json",
+          "url": "https://1rpc.io/linea"
+        }
+      ],
+      "request_path": "rpc/raw/request-linea.json",
+      "runtime": {
+        "bytes": 24545,
+        "decoded_sha256": "a449a7d22d384e106ac0f8ed59ccf620f83a8b964f86f23646843ad510315f31",
+        "file_sha256": "47323f80529372babbaefa227a8d7411a93a619b59378207289371639eec5e94",
+        "path": "runtime/AggregationRouterV6.linea.hex"
+      },
+      "slug": "linea"
+    },
+    {
+      "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+      "block": {
+        "hash": "0xa3656a798efcdeabc2e1306f02b4fae034b7596ada37433ce7970303df05751f",
+        "number": 207912504,
+        "number_hex": "0xc647e38",
+        "parent_hash": "0x1b357e43137fadbfc78a09b399354e9f85deab302f4444b0c2776456f5e652d1",
+        "state_root": "0xf5c23bd115a89af5203faa1d18c94fbb86d1868ae02695900fa25ebc85dfdc93",
+        "timestamp_hex": "0x6a5f6cfd"
+      },
+      "chain_id": 1313161554,
+      "providers": [
+        {
+          "name": "aurora",
+          "response_path": "rpc/raw/response-aurora-aurora.json",
+          "url": "https://mainnet.aurora.dev"
+        },
+        {
+          "name": "one-rpc",
+          "response_path": "rpc/raw/response-aurora-one-rpc.json",
+          "url": "https://1rpc.io/aurora"
+        }
+      ],
+      "request_path": "rpc/raw/request-aurora.json",
+      "runtime": {
+        "bytes": 24294,
+        "decoded_sha256": "7132a947e233e5f40296baadaf9a4c9b413390396c6f1cb9a1fe7eaeb62cb3cc",
+        "file_sha256": "8d4b3ed16997eceb333d2c73780db2a1e15874ff4b884bb33edbb13aa5440969",
+        "path": "runtime/AggregationRouterV6.aurora.hex"
+      },
+      "slug": "aurora"
+    },
+    {
+      "address": "0x6fd4383cB451173D5f9304F041C7BCBf27d561fF",
+      "block": {
+        "hash": "0xbf9bd3274f00dc35cb569ff58ceafc11e383a48752399769ed6c540e53a15c81",
+        "number": 71249090,
+        "number_hex": "0x43f2cc2",
+        "parent_hash": "0x76ae8e2176983121aa3db2bc0ad1b60ed78a06aa26b7d4d9a4ca294a9abed12f",
+        "state_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "timestamp_hex": "0x6a5f6b03"
+      },
+      "chain_id": 324,
+      "providers": [
+        {
+          "name": "zksync",
+          "response_path": "rpc/raw/response-zksync-zksync.json",
+          "url": "https://mainnet.era.zksync.io"
+        },
+        {
+          "name": "one-rpc",
+          "response_path": "rpc/raw/response-zksync-one-rpc.json",
+          "url": "https://1rpc.io/zksync2-era"
+        }
+      ],
+      "request_path": "rpc/raw/request-zksync.json",
+      "runtime": {
+        "bytes": 227808,
+        "decoded_sha256": "a5d93f86e1de8f2cdbf788f9d0b68afc71d9e5c48cb12149d68ca250f6dfcb99",
+        "file_sha256": "1ac629fc941534b4bea8fca05b8564b76c65e40f233b27731f32b6d36514eb19",
+        "path": "runtime/AggregationRouterV6.zksync.hex"
+      },
+      "slug": "zksync"
+    }
+  ],
+  "schema_version": 1
+}

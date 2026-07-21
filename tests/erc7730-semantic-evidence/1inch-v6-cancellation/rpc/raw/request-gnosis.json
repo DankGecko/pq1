@@ -1,0 +1,23 @@
+[
+  {
+    "id": "gnosis-header",
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockByNumber",
+    "params": [
+      "0x2d1fe9d",
+      false
+    ]
+  },
+  {
+    "id": "gnosis-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x111111125421cA6dc452d289314280a0f8842A65",
+      {
+        "blockHash": "0x2061d0987872aacef8df0e7af90926297c287e9adfecfad85d6eefc77ec2fed3",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

@@ -1,0 +1,23 @@
+[
+  {
+    "id": "aurora-header",
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockByNumber",
+    "params": [
+      "0xc647e38",
+      false
+    ]
+  },
+  {
+    "id": "aurora-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x111111125421cA6dc452d289314280a0f8842A65",
+      {
+        "blockHash": "0xa3656a798efcdeabc2e1306f02b4fae034b7596ada37433ce7970303df05751f",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

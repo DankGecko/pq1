@@ -1,0 +1,23 @@
+[
+  {
+    "id": "arbitrum-header",
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockByNumber",
+    "params": [
+      "0x1cfab28e",
+      false
+    ]
+  },
+  {
+    "id": "arbitrum-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x111111125421cA6dc452d289314280a0f8842A65",
+      {
+        "blockHash": "0xf0c8d4ee6cad4c2c8c5eaca8748c4af66a8fc5ae40063a20eb47428281adf195",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

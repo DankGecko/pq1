@@ -1,0 +1,23 @@
+[
+  {
+    "id": "linea-header",
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockByNumber",
+    "params": [
+      "0x1e026a9",
+      false
+    ]
+  },
+  {
+    "id": "linea-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x111111125421cA6dc452d289314280a0f8842A65",
+      {
+        "blockHash": "0xd595e87888fdec6ea6cd1cdeedf4cb917db0d4cbf833c2896ac74d1a35e13da3",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

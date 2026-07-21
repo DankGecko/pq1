@@ -1,0 +1,23 @@
+[
+  {
+    "id": "optimism-header",
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockByNumber",
+    "params": [
+      "0x935c94d",
+      false
+    ]
+  },
+  {
+    "id": "optimism-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x111111125421cA6dc452d289314280a0f8842A65",
+      {
+        "blockHash": "0x83663eabf3045cffe28c65f4474d5952fc92fcb42f1d3e75020fc335b05d02f9",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

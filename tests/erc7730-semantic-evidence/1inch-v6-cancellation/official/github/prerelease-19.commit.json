@@ -1,0 +1,35 @@
+{
+  "author": {
+    "date": "2024-01-31T18:09:55Z",
+    "email": "by.zumzoom@gmail.com",
+    "name": "Mikhail Melnik"
+  },
+  "committer": {
+    "date": "2024-01-31T18:09:55Z",
+    "email": "by.zumzoom@gmail.com",
+    "name": "Mikhail Melnik"
+  },
+  "html_url": "https://github.com/1inch/limit-order-protocol/commit/1a32e059f78ddcf1fe6294baed6cafb73a04b685",
+  "message": "bump version",
+  "node_id": "C_kwDODYEcytoAKDFhMzJlMDU5Zjc4ZGRjZjFmZTYyOTRiYWVkNmNhZmI3M2EwNGI2ODU",
+  "parents": [
+    {
+      "html_url": "https://github.com/1inch/limit-order-protocol/commit/380c34c48e1485ae62db04344ed778c6a2f176d1",
+      "sha": "380c34c48e1485ae62db04344ed778c6a2f176d1",
+      "url": "https://api.github.com/repos/1inch/limit-order-protocol/git/commits/380c34c48e1485ae62db04344ed778c6a2f176d1"
+    }
+  ],
+  "sha": "1a32e059f78ddcf1fe6294baed6cafb73a04b685",
+  "tree": {
+    "sha": "b4e359b24ab246b72272be703f64b674de0a21d5",
+    "url": "https://api.github.com/repos/1inch/limit-order-protocol/git/trees/b4e359b24ab246b72272be703f64b674de0a21d5"
+  },
+  "url": "https://api.github.com/repos/1inch/limit-order-protocol/git/commits/1a32e059f78ddcf1fe6294baed6cafb73a04b685",
+  "verification": {
+    "payload": null,
+    "reason": "unsigned",
+    "signature": null,
+    "verified": false,
+    "verified_at": null
+  }
+}
