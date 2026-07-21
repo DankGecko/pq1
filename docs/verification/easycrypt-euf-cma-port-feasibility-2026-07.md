@@ -2365,3 +2365,40 @@ correctness lemma is STATED (comment-only; its per-layer good-counter premise is
 STATE: VF branch DONE (hop-6 0-admit). Remaining item-2/item-5: hop-5 (VT, the ITSR-C10 branch); the FX chain
 (hops 1-4, Orig->V); the root-round-trip assembly; and the uppercase-refactor to wire the proven hops into the
 capstone (discharge its admits). All +C-invariant transcription except VT (crypto-adjacent) + the carried ITSRC10.
+
+### 2026-07-21 — Wave 9: hop-5 (VT) FINDING — abstract MFORSC10 is an unprovable/vacuous reduction target; R1c (FORS round-trip) proved
+
+Both audited HONEST. Track T produced a MACHINE-CHECKED FINDING that refines the capstone's FORS leg.
+
+**TRACK T — hop-5 (VT): the reduction + bridge built (0-admit), but LeqPr_VT_C is UNPROVABLE-OR-VACUOUS against
+the ABSTRACT FORS+C game (drafts/rtop_c_vt_wip.ec, 1 admit by design).** Proved 0-admit: the M-clone of
+FORS_C10_Multi.MFORSC10 onto concrete FTWES; `good_eq_good_fors_M` (the +C bridge, M.F.good = good_fors) +
+`dcond_good_eq` (the mk-rnd coupling — the proven "+C bite" that hop-6 was free of); and `R_fors :
+M.Adv_EUFCMA_MFORSC10`, a genuine MM45-shape reduction (delegates the FORS mk-draw to M.O_CMA_MFORSC10, HT-signs
+locally, extracts the reconstructed-pkFORS forgery — turns the capstone's "no reduction exists" into a typed one).
+ - **THE FINDING (advisor x2 + GPT-5.6 converge, MACHINE-CHECKED): `LeqPr_VT_C : Pr[V_C:res /\ valid_MFORSC10] <=
+   Pr[M.EUF_CMA_MFORSC10(R_fors(F))]` is unprovable-or-vacuous as stated.** FORS_C10_Multi.MFORSC10 is an ABSTRACT
+   theory whose `fverify` (and fsign/mkeygen) are UNCONSTRAINED ops; `fverify := false` is a LEGAL instantiation ⇒
+   Pr[RHS]=0 keygen-independently (proved: `rhs_zero_fverify_false` via a legal Mz clone, CERTIFIED-0-ADMIT). Pr[LHS]
+   never mentions fverify, so the bound holds only if Pr[LHS]=0 in every model — unprovable (VT is reachable, as in
+   MM45) or vacuous. **IMPLICATION for the capstone:** its FORS term, wired via the abstract M.EUFCMA_MFORSC10, is
+   potentially VACUOUS (that theorem's bound is true but says nothing under fverify:=false), and hop-5 cannot connect
+   p_vt to it. The abstract op-level FORS+C game is NOT a sound reduction target.
+ - THE FIX (named residual): a CONCRETE PROCEDURAL FORS+C multi-game — fverify defined as reconstructed-key equality
+   + predC_fors, mkeygen/fsign concrete — then port MM45's keygen+signing coupling (SPHINCS_PLUS.ec:3143-3174/
+   3307-3327; concrete FORS_ES pieces verified in-source). CONSTRAINT (D2): V_C samples the FORS cube
+   `skFORS_ele <$ ddgstblock` INDEPENDENTLY of ps, so the concrete game's mkeygen must sample the cube the same way
+   for the coupling to hold. OPEN SUB-QUESTION: is Pr[LHS]>0 establishable (VT reachable)? If not, it dents the
+   Pr[V_C]=VT+VF decomposition accounting. Non-vacuity: 3 flip/canary gates rejected; good_eq_good_fors_M +
+   dcond_good_eq are genuine (canary-negated -> rejected), used SOUNDLY, not smuggling a false equality.
+
+**TRACK R — root round-trip: R1c (FORS pkFORS round-trip) PROVED; R1b (HT d-layer) OPEN (sphincs_c10_scheme_wip.ec,
+CERTIFIED-0-ADMIT).** Proved `fors_pkFORS_from_sig_gen` (consumer) + `fors_sign_trace` (producer, discharges the
+honest-coupling premise in-file so it is grounded not assumed) + R1a `pkWOTS_sigC_eq_skWOTS`. root_eq NOT closed —
+R1b (the hypertree d-layer round-trip) is the sole blocker, decomposed into 4 genuine sub-lemmas (HT signer trace;
+seed-based leaf bridge; foldedivz index alignment; d-layer running-root induction closing by R1a + the Wave-8
+hypertree core). Multi-day, procedure-level relational, not novel. No new axiom.
+
+IMPACT: the VF branch is proven (hop-6); the VT branch needs the concrete FORS+C game refinement (a soundness-
+relevant faithfulness fix to the capstone's FORS leg, not a false theorem). Scheme correctness is components + the
+open R1b assembly. The finding is exactly the kind of vacuity the honest track exists to catch.
