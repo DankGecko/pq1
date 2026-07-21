@@ -181,6 +181,9 @@ mod pure_tests;
 #[cfg(test)]
 mod erc7730_render_pure_tests;
 
+#[cfg(all(test, feature = "erc7730-nested-calldata-test-fixture"))]
+mod erc7730_nested_dispatch_pure_tests;
+
 #[cfg(test)]
 mod safe_mgmt_render_pure_tests;
 

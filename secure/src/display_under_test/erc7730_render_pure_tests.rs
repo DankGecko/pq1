@@ -81,7 +81,7 @@ fn build_seed() -> dbgen::erc7730::Erc7730BuildResult {
 /// it in a `OnceLock` — built once per test binary, not per test.
 /// Returns a `&'static`, so callers pass it straight to `find_leaf(res, …)`
 /// (NOT `&res`) and read `res.blob` / `res.root` directly.
-fn build_registry() -> &'static dbgen::erc7730::Erc7730BuildResult {
+pub(super) fn build_registry() -> &'static dbgen::erc7730::Erc7730BuildResult {
     static REGISTRY: std::sync::OnceLock<dbgen::erc7730::Erc7730BuildResult> =
         std::sync::OnceLock::new();
     REGISTRY.get_or_init(|| {
@@ -262,7 +262,7 @@ fn production_permit2_leaf(chain_id: u64) -> &'static dbgen::erc7730::Emitted {
 /// verifier. Mirrors `dbgen/tests/erc7730_roundtrip.rs::synth_bundle`
 /// (kept inline here so this module doesn't depend on the dbgen test
 /// helpers).
-fn synth_bundle(blob: &[u8], ir_bytes: &[u8], leaf_index: usize) -> Vec<u8> {
+pub(super) fn synth_bundle(blob: &[u8], ir_bytes: &[u8], leaf_index: usize) -> Vec<u8> {
     let proof_depth = u32::from_le_bytes(blob[24..28].try_into().unwrap()) as usize;
     let proofs_off = u32::from_le_bytes(blob[28..32].try_into().unwrap()) as usize;
     let proof_base = proofs_off + leaf_index * proof_depth * 32;

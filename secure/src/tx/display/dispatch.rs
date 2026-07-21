@@ -283,6 +283,31 @@ impl DispatchPageProofs {
         self.erc7730_transcript.fail_initialize();
     }
 
+    /// Test-only view of the exact receipt and nested commitment retained by
+    /// the production dispatcher. This keeps behavior tests on the real
+    /// dispatcher while adding no firmware-visible inspection surface.
+    #[cfg(all(test, feature = "erc7730-nested-calldata-test-fixture"))]
+    pub(crate) fn erc7730_transcript_for_test(
+        &self,
+    ) -> (
+        pqsigner_erc7730::display::render::ContractTranscriptReceipt,
+        Option<[u8; 32]>,
+    ) {
+        (
+            self.erc7730_transcript.receipt,
+            self.erc7730_transcript.nested_commitment,
+        )
+    }
+
+    /// Simulate a post-render fault in the retained nested commitment. The
+    /// final production proof must turn this into a refusal.
+    #[cfg(all(test, feature = "erc7730-nested-calldata-test-fixture"))]
+    pub(crate) fn corrupt_erc7730_nested_commitment_for_test(&mut self) {
+        if let Some(commitment) = self.erc7730_transcript.nested_commitment.as_mut() {
+            commitment[0] ^= 1;
+        }
+    }
+
     fn is_pristine(&self) -> bool {
         self.native_prior_len == UNSET_PAGE_INDEX
             && self.legacy_fee_prior_len == UNSET_PAGE_INDEX
