@@ -2261,3 +2261,38 @@ admits over the (unbuilt) +C intermediate games, and the LHS an abstract real pe
 module.** This is NOT an unconditional proof of SPHINCS+C security; it is the assembled reduction whose admit list
 IS the exact remaining +C-invariant MM45-transcription work. REMAINING: discharge the 6 hops (VF R6b/R6c and VT are
 the crypto-adjacent ones; the rest are +C-invariant transcription) + build the concrete scheme-module LHS.
+
+### 2026-07-21 — Wave 6: concrete SPHINCS_PLUS_C10 scheme module + EUF_CMA game built; capstone LHS grounded
+
+Audit PASS. The abstract LHS is now backed by a real scheme game.
+ - `drafts/sphincs_c10_scheme_wip.ec` (CERTIFIED-0-ADMIT, 0 new axiom): `module SPHINCS_PLUS_C10 :
+   DSSC.Stateless.Scheme` — a faithful port of MM45 SPHINCS_PLUS.ec:957 keygen/sign/verify at the SAME seed sk, with
+   the 2 Thm-5.2 substitutions: (i) FORS message key `mk <$ dcond dmkey (good_fors m)` + seed-based FTWES FORS,
+   (ii) +C hypertree FL_SL_XMSS_MT_C_ES (seed-based). Output = sigSPHINCSPLUSTWC; verify gates on
+   `good_fors m mk /\ size sigHT = d /\ root'=root /\ allOkC` (mirrors V_C is_valid). `EUFCMA_C10(F) =
+   DSSC.Stateless.EUF_CMA(SPHINCS_PLUS_C10, F, O_CMA_Default)` for F<:Adv_EUFCMA_C TYPECHECKS (the #1 risk — the
+   hand-written +C forger type structurally-subtyping into the DSSC-clone Adv_EUFCMA — empirically resolved).
+   DSSC is a fresh clone of the already-in-closure axiom-free stdlib DigitalSignatures ⇒ 0 new axioms.
+ - `drafts/sphincs_c10_capstone_concrete_wip.ec` (compiles, 6 admits unchanged, 0 axioms): a COPY of the capstone
+   (the committed abstract one is INTACT) with the LHS re-grounded from the abstract real `p_sphincs_c` to
+   `Pr[EUFCMA_C10(F).main() @ &m : res]`. hop1 just re-typed; admit count rose by 0.
+
+HONEST CAVEATS (disclosed, both external reviewers + advisor converged):
+ - IDEALISED-mk LEVEL: the built scheme draws `mk <$ dcond dmkey (good_fors m)` (the repo's standing fresh-draw C10
+   model, rtop_c_soundness_wip.ec:100-125 / FORS_C10_Multi.ec:163-167 "matching production") rather than a
+   deterministic `mkg ms m`. Consequence: `ms` is dead, the MKG-PRF hop is VACUOUS at THIS LHS, and signing is
+   RANDOMISED (same m -> different sig, unlike MM45's deterministic scheme). So `Pr[EUFCMA_C10(F)]` is the advantage
+   of the randomised-mk / real-skg-key IDEALISATION — defensible as the port's +C model, but NOT a byte-identical
+   pre-MKG "Orig" of a deterministic deployed scheme; a deterministic-mkg Orig (making the MKG hop non-vacuous) is
+   the faithfulness refinement if the capstone must be about the byte-identical deployed scheme.
+ - COMPILES != CORRECT: scheme sign/verify CORRECTNESS (an honestly-generated signature verifies) is a separate
+   equiv/phoare obligation, plausible by construction but NOT proven here.
+ - This is the LHS OBJECT ONLY: the 6 MM45 FX byequiv/game hops (the multi-month remainder — build the +C
+   intermediate game chain PRFPRF/NPRFPRF/NPRFNPRF/V + the reductions + the 6 byequivs) remain admits, none proven.
+
+SESSION NET (2026-07-21, Waves 1-6, all adversarially audited): the +C-SPECIFIC intellectual content is COMPLETE
+(item1 impossibility+relabel, item3 conditioned draw, item4 PRF hop CLOSED, the good==good_fors clone 0-NEW-AXIOM,
+hop-6 VF R6a-establish); the SPHINCS+C10 EUF-CMA CAPSTONE STATEMENT compiles (2/6 hops proven vs 0-admit base thms,
+ledger audit-verified complete, ITSRC10 foregrounded); and the concrete SPHINCS_PLUS_C10 scheme+game grounds the
+LHS. REMAINING = the multi-month FX game-chain construction (the 6 hops) + scheme correctness + the
+deterministic-Orig refinement — all +C-INVARIANT transcription, no new +C security content, ledger fixed.
