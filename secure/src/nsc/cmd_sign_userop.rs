@@ -569,8 +569,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     //
     // Wire layout: `[u16 BE len][payload]`. The payload is either one exact
     // legacy bundle or the capability-gated versioned proof-set envelope. A
-    // proof set retains ordered, zero-copy raw handles for the outer and child
-    // legacy bundles; this slice still renders only the outer descriptor.
+    // proof set retains ordered, zero-copy raw handles for the outer and
+    // optional child legacy bundles; the outer remains the top-level
+    // descriptor while an authenticated enrolled child may render in scope.
     //
     // Verified inline against the firmware-pinned
     // `ERC7730_DESCRIPTORS_ROOT` (Phase 2 emits this root from the
