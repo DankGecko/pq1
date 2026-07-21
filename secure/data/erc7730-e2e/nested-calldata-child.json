@@ -1,0 +1,39 @@
+{
+  "$schema": "../../specs/erc7730-v2.schema.json",
+  "context": {
+    "$id": "Nested Calldata Child",
+    "contract": {
+      "deployments": [
+        {
+          "chainId": 31337,
+          "address": "0x5656565656565656565656565656565656565656"
+        }
+      ]
+    }
+  },
+  "metadata": {
+    "owner": "PQSigner",
+    "contractName": "NestedToken"
+  },
+  "display": {
+    "formats": {
+      "transfer(address recipient, uint256 amount)": {
+        "intent": "Transfer",
+        "fields": [
+          {
+            "path": "recipient",
+            "label": "Recipient",
+            "format": "addressName",
+            "visible": "always"
+          },
+          {
+            "path": "amount",
+            "label": "Amount",
+            "format": "raw",
+            "visible": "always"
+          }
+        ]
+      }
+    }
+  }
+}

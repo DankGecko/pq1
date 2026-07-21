@@ -239,11 +239,11 @@
     },
     {
       "path": "dbgen/Cargo.toml",
-      "sha256": "940cc37c55859098ea69554978793f235d8ccf8dff7afb4d0c83a46ecb3613f5"
+      "sha256": "0b79819823aae292d69910e95ceca6051480aea67335638d03bad22a45e00a64"
     },
     {
       "path": "pqsigner-erc7730/Cargo.toml",
-      "sha256": "abcae0c2e3dd0a9ce25a0bd552372a98d2fefedef098dc0948c9f429f6b9a407"
+      "sha256": "4ef4dd0704b2659cb949e8ea91653da1d25411167eea92090ddf5143d5937ddb"
     },
     {
       "path": "pqsigner-fi/Cargo.toml",
@@ -271,7 +271,7 @@
     },
     {
       "path": "xtask/Cargo.toml",
-      "sha256": "fb8853c5969e14000d8c2af8b9a2e1189e3d793e2a5fc9d52bfcea6681b4fd2b"
+      "sha256": "46dc5b60802c32e53718f97fd720c85bacfaea9e8bbac8a087f2aed6abc85970"
     }
   ],
   "tool_input_trees": [
@@ -285,16 +285,16 @@
     {
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
-      "files": 28,
-      "bytes": 2161841,
-      "sha256": "9b96d484a60cd7ae57664b2fab3b88e6602b5dc79d759e4fdbdbdf7fbcb8a8bc"
+      "files": 29,
+      "bytes": 2195537,
+      "sha256": "2ce59a5440fd75a80cf9a60ac44695931a881a85ee3f8bd04b93e0eb87dd0df0"
     },
     {
       "path": "pqsigner-erc7730",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
-      "files": 24,
-      "bytes": 897022,
-      "sha256": "38d06d5898634bf6e92737a777a229294b94b7367bb26c4d757278ad0d96428f"
+      "files": 26,
+      "bytes": 956191,
+      "sha256": "174ac1694d60540425b593c59723292223dccfa8a6f38d8eecb2a92c38559867"
     },
     {
       "path": "pqsigner-fi",
@@ -307,8 +307,8 @@
       "path": "proto",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 9,
-      "bytes": 175074,
-      "sha256": "91f510502c2678e9b898bec7f4d1e3df8fb5058059de2debe320be53ed9c0f24"
+      "bytes": 178385,
+      "sha256": "6ae3f10813aef9617657492967746693126598e9a6156c45f8d5ff445bbec745"
     },
     {
       "path": "shared",
@@ -335,8 +335,8 @@
       "path": "xtask",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
-      "bytes": 282242,
-      "sha256": "61e749dc23679ce125d265ea5abb7cd75dcaf5c1550074c63690248839e0970a"
+      "bytes": 282663,
+      "sha256": "6b525cc03f7992a93d2c5d9a8a42d903a47f67f95e40f98e1917632d79c01895"
     }
   ],
   "capability_inputs": [

@@ -2853,6 +2853,20 @@ fn load_resolved_descriptor_json(
     Ok(json)
 }
 
+/// Compute the internal descriptor identity from the exact include-resolved
+/// source using the same RFC-8785 JCS subset as catalogue compilation.
+///
+/// This is intentionally a dbgen-owned operation: exact nested-calldata
+/// policy rows must bind the hash of the resolved descriptor, rather than a
+/// second test/tool implementation of canonical JSON.
+pub fn resolved_descriptor_sha256(
+    path: &Path,
+    registry_root: Option<&Path>,
+) -> Result<[u8; 32], String> {
+    let json = load_resolved_descriptor_json(path, registry_root)?;
+    Ok(sha256_of(&jcs_canonicalize(&json)?))
+}
+
 fn compile_descriptor(
     path: &Path,
     _policy: &Policy,
@@ -4446,18 +4460,17 @@ fn compile_one_format_with_nested_calldata_enrollments(
         .iter()
         .filter(|field| field.format.as_deref() == Some("calldata"))
         .count();
-    if nested_calldata_enrollment.is_some() != (declared_calldata_fields == 1) {
-        return Err(format!(
-            "format `{sig}` nested calldata requires exactly one matching descriptor/deployment/signature/selector enrollment and one calldata field"
-        ));
-    }
-    if declared_calldata_fields > 1 {
+    if let Some(enrollment) = nested_calldata_enrollment {
+        if declared_calldata_fields != 1 {
+            return Err(format!(
+                "format `{sig}` nested calldata requires exactly one matching descriptor/deployment/signature/selector enrollment and one calldata field"
+            ));
+        }
+        validate_nested_calldata_format_source(sig, fmt, &parsed, enrollment)?;
+    } else if declared_calldata_fields > 1 {
         return Err(format!(
             "format `{sig}` declares {declared_calldata_fields} calldata fields; exactly one is supported"
         ));
-    }
-    if let Some(enrollment) = nested_calldata_enrollment {
-        validate_nested_calldata_format_source(sig, fmt, &parsed, enrollment)?;
     }
     if format_declares_sender_address(fmt) && semantic_enrollment.is_none() {
         return Err(format!(
@@ -5828,6 +5841,11 @@ fn compile_one_field_with_profile(
             Some("bytes") if format_op == FMT_UNISWAP_V3_PATH && allow_packed_v3_path => {}
             Some("bytes") if format_op == FMT_RAW && allow_exact_empty_bytes => {}
             Some("bytes") if format_op == FMT_CALLDATA && allow_nested_calldata => {}
+            Some("bytes") if format_op == FMT_CALLDATA => {
+                return Err(format!(
+                    "format `{sig}` nested calldata requires exactly one matching descriptor/deployment/signature/selector enrollment and one calldata field"
+                ));
+            }
             Some("bytes") => {
                 return Err(format!(
                     "format `{sig}` field[{field_idx}] has opaque dynamic `bytes`; the runtime intentionally has no injective renderer for arbitrary semantic bytes and would hard-refuse every payload, so this unusable format must not be advertised in the authenticated catalogue"

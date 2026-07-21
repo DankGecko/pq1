@@ -579,9 +579,11 @@ fn build_erc7730_catalogues(
         &prod_erc20.capabilities,
     )
     .map_err(|e| format!("prod build failed: {e}"))?;
-    let e2e = dbgen::erc7730::build_db_with_erc20_capabilities(
+    let e2e = dbgen::erc7730::build_e2e_db_with_policy_override_and_erc20_capabilities(
         e2e_input_dir,
         policy,
+        false,
+        None,
         &e2e_erc20.capabilities,
     )
     .map_err(|e| format!("e2e build failed: {e}"))?;

@@ -178,7 +178,7 @@ Three things in the companion bundle:
      exact registry-declared known-call tuples, provenance `dev-unattested`.
      The tuple-set SHA-256 receipt is
      `b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829`.
-   - E2E fixture: 3,993 B, 8 compiled leaves.
+   - E2E fixture: 5,059 B, 10 compiled leaves.
    <!-- END XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->
 
    The blob does **not** embed its Merkle root. Bytes 0..31 are the catalogue
@@ -991,7 +991,7 @@ provenance remains blocked):
 | Variant | Root | Catalog blob bytes | Compiled leaves |
 |---------|------|-------------------:|----------------:|
 | development (non-e2e) | `0xa20940ba4d92b2dba1f80efdbe615196aede1c893eb0a25e68044b75dde9b10d` | 339 036 | 400 |
-| e2e | `0x7de80ae894ebab000cf7a071b8413533d0436951db43c806706712d60704fceb` | 3 993 | 8 |
+| e2e | `0xd3acdc0650107dcca33d662641e879e3281431fd41dcc50a97b70ce148af07c5` | 5 059 | 10 |
 <!-- END XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 
 Source of truth: fresh compiler output checked against `secure/src/db_roots.rs`

@@ -105,6 +105,7 @@ FEATURES ?= mock-se,debug-log,ui-semihosting
 # use `override` so an invocation cannot make this process gate false-green
 # while the generated Rust fence still embeds the dev catalogue.
 override ERC7730_REVIEW := secure/data/erc7730.review.txt
+override ERC7730_E2E_GENERATOR_FEATURE := nested-calldata-test-fixture
 override ERC7730_CATALOGUE_PROVENANCE := $(strip $(shell awk '/^\# Provenance: / { print $$3; exit }' $(ERC7730_REVIEW) 2>/dev/null))
 ifeq ($(ERC7730_CATALOGUE_PROVENANCE),dev-unattested)
 ifeq (,$(findstring mode-production,$(FEATURES)))
@@ -1781,9 +1782,12 @@ test-unit: ## Rust workspace unit tests (host)
 #   make check-codegen
 #
 # Or as part of `make prod-erc7730-provenance-check` (Phase 2 onwards).
-.PHONY: check-codegen check-erc7730-build-input-shadows check-erc7730-descriptors check-solidity-constants check-research-bundles erc8176-coverage erc8176-coverage-test
+.PHONY: check-codegen generate-erc7730-descriptors check-erc7730-build-input-shadows check-erc7730-descriptors check-solidity-constants check-research-bundles erc8176-coverage erc8176-coverage-test
 check-codegen: check-erc7730-descriptors check-solidity-constants check-research-bundles
 	@echo "==> codegen artifacts in sync"
+
+generate-erc7730-descriptors: check-erc7730-build-input-shadows ## Regenerate DBs with the explicit nested-calldata E2E fixture
+	@cargo run --locked -q -p dbgen --features $(ERC7730_E2E_GENERATOR_FEATURE)
 
 check-erc7730-build-input-shadows:
 	@set -eu; \
@@ -1796,7 +1800,9 @@ check-erc7730-build-input-shadows:
 
 check-erc7730-descriptors: check-erc7730-build-input-shadows
 	@echo "==> Checking ERC-7730 descriptor catalog (xtask --check)"
-	@cargo run --locked -q -p pqsigner-xtask -- gen-erc7730-descriptors --check
+	@cargo run --locked -q -p pqsigner-xtask \
+	    --features $(ERC7730_E2E_GENERATOR_FEATURE) -- \
+	    gen-erc7730-descriptors --check
 
 check-research-bundles:
 	@echo "==> Checking generated security research bundles"

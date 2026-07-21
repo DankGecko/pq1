@@ -220,7 +220,12 @@ jobs:
           python3 -m pip install --quiet markdown-it-py==3.0.0
           make check-research-bundles
       - name: ERC-7730 dbgen tests (policy/includes + round-trip)
-        run: cargo test --locked -p dbgen --tests
+        run: |
+          cargo test --locked -p dbgen --tests
+          cargo test --locked -p dbgen \
+            --features nested-calldata-test-fixture \
+            --test erc7730_nested_calldata_fixture \
+            --test erc7730_roundtrip
       # A3.1 independent-source KAT leg (work-todo #7): the EXISTING Rust verifier
       # must accept FRESH output from the clean-room Python C10 signer
       # (contracts/verification/scripts/independent_c10_signer.py) — implementation

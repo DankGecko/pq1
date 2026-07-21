@@ -49,7 +49,7 @@ compiled companion catalogue, root
 **4,580** canonical known-call tuples, tuple-set SHA-256
 `b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829`.
 Curation manifest SHA-256
-`a758495eccdd5fc9583f957cb4eed04cb50681f830666682e591d98a74601268` binds upstream commit
+`2ed75490fb0c793335e4062f7b72ae999743b791c23ebc3ca789652c8aad0a43` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
 Manifest v3 authorizes exactly **38** curation-added known-call tuples and no deletions.

@@ -81,11 +81,21 @@ fn build_registry() -> Erc7730BuildResult {
     res
 }
 
+#[cfg(feature = "nested-calldata-test-fixture")]
 fn build_e2e() -> Erc7730BuildResult {
     let root = workspace_root();
     let dir = root.join("secure/data/erc7730-e2e");
     let policy = root.join("secure/data/erc7730/policy.toml");
-    build_db(&dir, &policy).expect("build E2E corpus")
+    let erc20 = dbgen::erc20::build_db(&root.join("secure/data/erc20-e2e.json"))
+        .expect("build exact E2E ERC20 capability corpus");
+    dbgen::erc7730::build_e2e_db_with_policy_override_and_erc20_capabilities(
+        &dir,
+        &policy,
+        false,
+        None,
+        &erc20.capabilities,
+    )
+    .expect("build E2E corpus with explicit nested-calldata fixture authority")
 }
 
 /// Exact combined catalogue cardinality for the current generated receipt.
@@ -5531,6 +5541,7 @@ fn registry_all_display_material_is_runtime_parseable() {
     assert!(fields_seen > formats_seen);
 }
 
+#[cfg(feature = "nested-calldata-test-fixture")]
 #[test]
 fn e2e_catalogue_contains_a_real_bound_eip712_leaf() {
     let result = build_e2e();

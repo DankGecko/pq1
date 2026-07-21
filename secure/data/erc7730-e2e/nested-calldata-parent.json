@@ -1,0 +1,42 @@
+{
+  "$schema": "../../specs/erc7730-v2.schema.json",
+  "context": {
+    "$id": "Nested Calldata Parent",
+    "contract": {
+      "deployments": [
+        {
+          "chainId": 31337,
+          "address": "0x3434343434343434343434343434343434343434"
+        }
+      ]
+    }
+  },
+  "metadata": {
+    "owner": "PQSigner",
+    "contractName": "NestedForwarder"
+  },
+  "display": {
+    "formats": {
+      "forward(address target, bytes data)": {
+        "intent": "Forward call",
+        "fields": [
+          {
+            "path": "target",
+            "label": "Target",
+            "format": "addressName",
+            "visible": "always"
+          },
+          {
+            "path": "data",
+            "label": "Call",
+            "format": "calldata",
+            "params": {
+              "calleePath": "target"
+            },
+            "visible": "always"
+          }
+        ]
+      }
+    }
+  }
+}
