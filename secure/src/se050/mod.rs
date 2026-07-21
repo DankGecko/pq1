@@ -581,16 +581,20 @@ impl Se050 {
         let (apdu, len) =
             scp03::build_put_key_apdu(&new_enc, &new_mac, &new_dek, &crate::scp03_logic::PLATFORM_DEK);
         let apdu = zeroize::Zeroizing::new(apdu);
-        let mut resp = [0u8; 32];
-        let n = unsafe { apdu::send_apdu(&mut self.t1, &mut self.scp03, &apdu[..len], &mut resp)? };
-        if n < 2 {
+        let mut resp = zeroize::Zeroizing::new([0u8; 32]);
+        // `send_apdu` ALREADY strips + verifies SW==0x9000 (the `?` propagates
+        // any non-9000 status); its return length is the KCV response BODY, not
+        // `body||SW`. Re-parsing the body tail as a "SW" (the pre-#398 pattern
+        // fixed in the first-boot rotation above) false-failed every real
+        // PUT KEY — after the chip had already installed the new keys, i.e. the
+        // exact desync hazard this function's doc warns about. Verify the
+        // echoed KCVs instead (HW-ASSUME-PUTKEY-ATOMIC).
+        let body_len =
+            unsafe { apdu::send_apdu(&mut self.t1, &mut self.scp03, &apdu[..len], &mut resp[..])? };
+        if scp03::verify_put_key_response(&resp[..body_len], &new_enc, &new_mac, &new_dek)
+            != crate::fi::OK_SENTINEL
+        {
             return Err(Se050Error::Scp03);
-        }
-        let sw = ((resp[n - 2] as u16) << 8) | (resp[n - 1] as u16);
-        if sw != 0x9000 {
-            #[cfg(feature = "debug-log")]
-            secure_log!("[SE050/rotate] PUT KEY SW=0x{:04x}", sw);
-            return Err(Se050Error::Status(sw));
         }
         #[cfg(feature = "debug-log")]
         secure_log!("[SE050/rotate] PUT KEY OK — keyset 0x0B replaced with derived keys");
