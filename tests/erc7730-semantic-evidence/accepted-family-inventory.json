@@ -5,21 +5,21 @@
   "catalogue_snapshot": {
     "upstream_commit": "784c87c925e8438e7b4736b2af85a501f8d2a265",
     "upstream_tree": "8da8dba78c3e581bbd06c15cc681d07e570dcfb1",
-    "curated_corpus_sha256": "e7be69422d229579fcc54feea41196e0371bb10cf9857e746cda6365c9aaaf13",
-    "merkle_root": "01fc3633f39a453684445b87fbfd1b8d3b1063fe9824984508a890f3c949db21",
-    "accepted_leaf_count": 467,
+    "curated_corpus_sha256": "bb85311ce345e718391374745fe5b64a3bd366d91018a97d7e9f646bbfaa7afb",
+    "merkle_root": "ffe692b9d69da3511e55540efc0a62700daf99547cf74ea2345e0413a47b0d77",
+    "accepted_leaf_count": 412,
     "accepted_source_descriptor_count": 240,
-    "compiled_blob_bytes": 404904,
+    "compiled_blob_bytes": 351000,
     "known_call_count": 4580,
     "category_source_counts": {
-      "pinned-evidence": 24,
+      "pinned-evidence": 27,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 83
+      "lower-priority-residual": 80
     },
     "category_leaf_counts": {
-      "pinned-evidence": 77,
+      "pinned-evidence": 92,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 257
+      "lower-priority-residual": 187
     }
   },
   "classification_contract": {
@@ -34,11 +34,20 @@
       "scope": "Only the two named routes and deployments in the package; other accepted V6 formats are not implied.",
       "paths": ["tests/erc7730-semantic-evidence/1inch-v6-cancellation/manifest.json"]
     },
+    "aave-v3-ethereum-gateway": {
+      "classification": "pinned-evidence",
+      "reason": "Pins four non-permit WrappedTokenGatewayV3 routes at the Ethereum mainnet deployment, including the ignored ABI address operand.",
+      "scope": "Ethereum mainnet and exactly depositETH, withdrawETH, repayETH, and borrowETH; permit routes and other deployments are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/aave-v3-ethereum-gateway/manifest.json"]
+    },
     "aave-v3-ethereum-pool": {
       "classification": "pinned-evidence",
-      "reason": "Pins ten admitted Pool routes at the Ethereum mainnet deployment.",
-      "scope": "Ethereum mainnet only; the descriptor's other deployment leaves are not implied.",
-      "paths": ["tests/erc7730-semantic-evidence/aave-v3-ethereum-pool/manifest.json"]
+      "reason": "Pins ten admitted Pool routes at the Ethereum mainnet deployment and the same route semantics at four shared-address Pool proxies.",
+      "scope": "Ethereum mainnet plus the reviewed Optimism, Polygon, Arbitrum, and Avalanche proxies; no other descriptor deployment is implied.",
+      "paths": [
+        "tests/erc7730-semantic-evidence/aave-v3-ethereum-pool/manifest.json",
+        "tests/erc7730-semantic-evidence/aave-v3-shared-pools/manifest.json"
+      ]
     },
     "allowance-threshold-honesty": {
       "classification": "pinned-evidence",
@@ -93,6 +102,18 @@
       "reason": "Pins the eight admitted wstETH calldata routes.",
       "scope": "Only the reviewed Ethereum mainnet deployment.",
       "paths": ["tests/erc7730-semantic-evidence/lido-wsteth-permit/manifest.json"]
+    },
+    "layerswap-depository-funding": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the two admitted Layerswap Depository funding routes and their forward-only intent.",
+      "scope": "Only the reviewed Ethereum mainnet deployment and depositNative/depositERC20; administrative routes and every other deployment remain refused.",
+      "paths": ["tests/erc7730-semantic-evidence/layerswap-depository-funding/manifest.json"]
+    },
+    "lombard-lbtc": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the six admitted LBTC calldata routes and distinguishes redemption requests from completed redemption.",
+      "scope": "Only the reviewed Ethereum mainnet LBTC deployment and six static routes; Sepolia and Lombard EIP-712 families are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/lombard-lbtc/manifest.json"]
     },
     "midas-mtbill-deposit-vault": {
       "classification": "pinned-evidence",
@@ -154,10 +175,14 @@
   },
   "successor_issues": {
     "remaining-calldata-families": {
+      "issue_number": 497,
+      "url": "https://github.com/EthereumPhone/PQ1/issues/497",
       "title": "erc7730-semantic-honesty: Reconcile remaining accepted calldata families",
       "body": "Use tests/erc7730-semantic-evidence/accepted-family-inventory.json as the exact source-family queue. In bounded protocol slices, pin deployment/proxy/runtime, authoritative source/ABI, intent and field meaning, and metadata; then promote only the evidenced subset. Preserve exact-known hard refusal and do not infer proof for every leaf emitted by a mixed source descriptor."
     },
     "remaining-eip712-families": {
+      "issue_number": 498,
+      "url": "https://github.com/EthereumPhone/PQ1/issues/498",
       "title": "erc7730-semantic-honesty: Reconcile remaining accepted EIP-712 families",
       "body": "Use tests/erc7730-semantic-evidence/accepted-family-inventory.json as the exact EIP-712 source-family queue. Pin domain/deployment/runtime and authoritative type/source semantics in bounded slices, and promote only the explicitly evidenced types and deployments. Do not treat a descriptor-family record or leaf count as universal deployment proof."
     }
@@ -184,8 +209,8 @@
   {
     "source": "aave/calldata-WrappedTokenGatewayV3.json",
     "accepted_leaf_count": 13,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "aave-v3-ethereum-gateway"
   },
   {
     "source": "aave/calldata-lpv2.json",
@@ -573,9 +598,9 @@
   },
   {
     "source": "layerswap/calldata-LayerswapDepository.json",
-    "accepted_leaf_count": 56,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "layerswap-depository-funding"
   },
   {
     "source": "ledgerquest/eip712-ledgerquest.json",
@@ -622,8 +647,8 @@
   {
     "source": "lombard/calldata-lbtc-mainnet.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "lombard-lbtc"
   },
   {
     "source": "lombard/calldata-lbtc-sepolia.json",
@@ -1605,4 +1630,3 @@
   }
 ]
 }
-

@@ -137,4 +137,3 @@ manifest_temporary="/tmp/pqsigner-layerswap-manifest-$$.json"
 jq --slurpfile artifacts "$receipts" '.artifacts = $artifacts' \
   "$root/manifest.json" >"$manifest_temporary"
 mv "$manifest_temporary" "$root/manifest.json"
-

@@ -68,4 +68,3 @@ Primary records:
 - https://github.com/layerswap/layerswap-depository/tree/a7a4ccd89f0fb5046f8d0053283da6e36c6b638c
 - https://eth.blockscout.com/address/0xE226E4825CB215aBaFAd98fdd400583eAb6a594f
 - https://eth.blockscout.com/block/25582700
-

@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 813862,
-    "sha256": "5c055e06f936f6d6125d2f40b78ef7e5d8d8ac1bc39dc377188e05860b10fd86"
+    "bytes": 813921,
+    "sha256": "bb85311ce345e718391374745fe5b64a3bd366d91018a97d7e9f646bbfaa7afb"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -285,9 +285,9 @@
     {
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
-      "files": 25,
-      "bytes": 2068838,
-      "sha256": "3ac333a8658999367530fb227fd0b041e035067fe861f78a38de937c587f2d87"
+      "files": 28,
+      "bytes": 2160736,
+      "sha256": "246e32740b1e4cc627535ab92c5f6dac5e81a7e10beb9b321d4a8538fb4631fb"
     },
     {
       "path": "pqsigner-erc7730",
@@ -497,8 +497,8 @@
       "path": "registry/lombard/calldata-lbtc-mainnet.json",
       "upstream_bytes": 4595,
       "upstream_sha256": "a11ecf2d6c69a3fdda9bb92b3ee155fdb75785d2d2d2fccf96ac2365e9a870e0",
-      "replacement_bytes": 4649,
-      "replacement_sha256": "5a2e65f557aab3d220d914b2dc8c4f82dd3cfd402a2b7854e88bc971d2a62905"
+      "replacement_bytes": 4664,
+      "replacement_sha256": "c26bb6447b684c26a904f9d3ba0fdd28ef7d37467f600d909e2b10e98e7d0a1b"
     },
     {
       "path": "registry/lombard/calldata-lbtc-sepolia.json",
