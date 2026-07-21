@@ -1091,6 +1091,37 @@ mod kani_harness {
     const LA: u8 = PathOp::ArrayLast as u8;
     const KBODY: usize = 128; // 4 words — enough for offset→len→data with a tail
 
+    /// Acceptance by the geometry-bearing whole-tail reader binds every
+    /// returned position to the exact authenticated ABI interval. This is the
+    /// pure interval kernel used by nested-calldata child binding.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn canonical_dynamic_whole_tail_binds_exact_interval() {
+        const BODY_LEN: usize = 96;
+        let body: [u8; BODY_LEN] = kani::any();
+        let off: usize = kani::any();
+        let expected_off: usize = kani::any();
+
+        if let Ok(geometry) = canonical_dynamic_whole_tail(&body, off, expected_off) {
+            assert!(off == expected_off);
+            assert!(geometry.length_word_start == off);
+            assert!(geometry.data_start == off + 32);
+            assert!(geometry.data_end >= geometry.data_start);
+            assert!(geometry.padded_end == body.len());
+            assert!(geometry.data_end <= geometry.padded_end);
+            assert!(geometry.data.len() == geometry.data_end - geometry.data_start);
+            let k: usize = kani::any();
+            if k < geometry.data.len() {
+                let source = geometry
+                    .data_start
+                    .checked_add(k)
+                    .expect("accepted data index cannot overflow");
+                assert!(source < geometry.data_end);
+                assert!(geometry.data[k] == body[source]);
+            }
+        }
+    }
+
     /// For every 96-byte body and arbitrary offsets, acceptance proves the
     /// exact canonical empty-tail shape: both offsets are the 64-byte head
     /// end, the final word decodes to zero, and no bytes follow it.

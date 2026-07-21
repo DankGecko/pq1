@@ -4593,9 +4593,7 @@ mod kani_harness {
         let params = ParamSet::default();
         let f = mk_field(FormatOp::Raw as u8, 1);
         let mut pages = Pages::with_len(0);
-        let r = dispatch(
-            &f, &mut pages, &ir, &word, &tx, None, &resolver, &params, None,
-        );
+        let r = dispatch(&f, &mut pages, &ir, &word, &tx, None, &resolver, &params);
         assert!(r.is_ok());
         assert!(pages.len == 2);
         let mut k = 0usize;
@@ -4629,9 +4627,7 @@ mod kani_harness {
         let params = ParamSet::default();
         let f = mk_field(FormatOp::Raw as u8, 1);
         let mut pages = Pages::with_len(0);
-        let r = dispatch(
-            &f, &mut pages, &ir, &word, &tx, None, &resolver, &params, None,
-        );
+        let r = dispatch(&f, &mut pages, &ir, &word, &tx, None, &resolver, &params);
         assert!(r.is_ok());
         assert!(pages.len == 2);
         assert!(pages.buf[0][1] == *b"0123456789abcdef");
@@ -4999,7 +4995,6 @@ mod kani_harness {
             None,
             &resolver,
             &params,
-            None,
         );
         assert!(r.is_ok());
         assert!(pages.len == 1);
@@ -5029,7 +5024,6 @@ mod kani_harness {
             None,
             &resolver,
             &params,
-            None,
         );
         assert!(r.is_ok());
         assert!(pages.buf[0][1] == *b"Vault share (ERC");
