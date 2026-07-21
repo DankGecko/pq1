@@ -2202,3 +2202,22 @@ entry STAYS; the fresh-vs-memoized deterministic-PRF faithfulness gap is the def
 ITEM 2 STATE: hop-6 (VF) stated + 2/3 legs proven (1 coupling admit = ~800-line MM45-verbatim port); the clone it
 would need on the VT side is de-risked to 0-new-axiom. REMAINING for item 2: close the hop-6 coupling admit; then
 hop-5 (VT into EUF_CMA_MFORSC10, using the now-proven clone). Then item 5 (top scheme + PRF hops + composition).
+
+### 2026-07-21 — Wave 4: hop-6 (VF) R6a-establish CLOSED; R6b/R6c residual (1 admit) — empirical scope read
+
+Audit PASS, honest, no overclaim (forced recompile + canary-flip; statements byte-identical to pre-wave 0fcb7cd).
+ - CLOSED: the R6a-ESTABLISH leg of the V_C~RV_C coupling inside `LeqPr_VF_C` — the FORS-cube <-> committed-pkFORS
+   invariant (MM45 :3482-3564), now a PROVEN `seq 5 4` block (drafts/rtop_c_soundness_wip.ec:709), near-verbatim +C
+   port (WOTS/HT keygen coupled via new keygenC_eq/keygenC_pkin helpers; full :3482-3503 conjunct set ported
+   verbatim, not trimmed). Non-vacuity: falsifying the invariant's trco relation is REJECTED.
+ - RESIDUAL (1 admit, :966, precisely documented with an in-file ACTIONABLE HANDOFF): R6a-CONSUME (:4176-4277 the
+   nth_flatten/edivz arithmetic); R6b (the +C sigl-table as a ONE-SIDED `while{2}` — the genuinely-hard two-source
+   merge; needs a phoare recast of the deterministic HT.sign closed form, reusable from _assembly_unfold_wip.ec:4816
+   but currently TWO-sided); R6c (:3935-4278 the oracle-call coupling of the single mk `rnd` + the +C is_valid/
+   is_fresh event map). hop-6 stays PARTIAL (2/3 legs + R6a-establish; 1 admit).
+
+EMPIRICAL SCOPE READ: closing hop-6 fully is >1 wave (R6b is the hard leg). The remaining item-2/item-5 work is all
+large +C-INVARIANT MM45 transcription — hop-6 R6b/R6c (~1-2 waves), then hop-5 VT (~1-2 waves), then the top scheme
+module + Orig->V game chain + PRF-hop wiring + mu_split + composition (~2-4 waves). No new +C security content; the
+ledger (ITSRC10 + the 7 others) is fixed. The +C-SPECIFIC intellectual work is COMPLETE; what remains is mechanizing
+the reduction assembly that is already argued.
