@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 793948,
-    "sha256": "fd731c6d52ebf2f2decd14db2f3ed23493a6e281fdbb5ae2fb0975fd03c207b6"
+    "bytes": 796241,
+    "sha256": "c351f65274f271f7ef2f02630271efeeefb55ae93586e3a8d8c78d02335f7747"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -145,9 +145,9 @@
     {
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
-      "files": 19,
-      "bytes": 1709904,
-      "sha256": "9e6e70d2620aa31ef94ab4a8c3cfe30cf95f7afad8dc47f05fbc3ffc1a0912cf"
+      "files": 20,
+      "bytes": 1754636,
+      "sha256": "49048d9952a5d076d2888f91da5778e567679908272b3f1457da820c92876074"
     },
     {
       "path": "pqsigner-erc7730",
@@ -196,7 +196,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 280708,
-      "sha256": "fbf06a73a632ddd7d466ae4ece0365746304fed1f4d1bb3c2aa8faeb84f798fb"
+      "sha256": "df6a5b9a6ca384de2cc8f1c23d1aee7505a0f5d705b135ca3098c00b9816f7ab"
     }
   ],
   "capability_inputs": [
@@ -240,6 +240,13 @@
       "upstream_sha256": "a4adc06d56600e19740174f2d3d05c20906c0226f5ac2c6048f9d4b6ea16bbff",
       "replacement_bytes": 7302,
       "replacement_sha256": "c5256a7aee612c1ee3ccef74ec915400be96d0a3402f37e4d665b03b8d9053ce"
+    },
+    {
+      "path": "registry/celo/calldata-celo_governance.json",
+      "upstream_bytes": 5748,
+      "upstream_sha256": "87eef01b8caf5d1b609457fc72cf571b61fd64b0bdfe997d0fcee8e6d007b692",
+      "replacement_bytes": 8041,
+      "replacement_sha256": "106910a88cfcf8b48b3b0395676a783d45bf69b08bef83564324771618991e31"
     },
     {
       "path": "registry/celo/calldata-locked_celo.json",

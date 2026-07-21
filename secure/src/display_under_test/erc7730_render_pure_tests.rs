@@ -1660,6 +1660,511 @@ fn production_celo_election_revokes_render_every_signed_operand_mainnet_only() {
 }
 
 #[test]
+fn production_celo_governance_voting_routes_render_every_signed_operand_mainnet_only() {
+    use pqsigner_erc7730::ir::FormatOp;
+    use pqsigner_erc7730::render::policy::TerminalKind;
+
+    const MAINNET_CHAIN: u64 = 42_220;
+    const ALFAJORES_CHAIN: u64 = 44_787;
+    const UPVOTE: &str = "upvote(uint256,uint256,uint256)";
+    const REVOKE_UPVOTE: &str = "revokeUpvote(uint256,uint256)";
+    const VOTE: &str = "vote(uint256,uint256,uint8)";
+    const VOTE_PARTIALLY: &str = "votePartially(uint256,uint256,uint256,uint256,uint256)";
+
+    struct GovernanceCase {
+        signature: &'static str,
+        selector: [u8; 4],
+        intent: &'static str,
+        intent_rows: [&'static str; 4],
+        words: Vec<[u8; 32]>,
+        expected_fields: Vec<(&'static str, u8)>,
+        hint_indices: Option<(usize, usize)>,
+        enum_index: Option<usize>,
+    }
+
+    let cases = vec![
+        GovernanceCase {
+            signature: UPVOTE,
+            selector: [0x57, 0x33, 0x39, 0x78],
+            intent: "Upvote",
+            intent_rows: ["Upvote", "Celo", "Celo Governance", "> next"],
+            words: vec![
+                u256_from_u64(42).0,
+                u256_from_u64(41).0,
+                u256_from_u64(43).0,
+            ],
+            expected_fields: vec![
+                ("Proposal ID", FormatOp::Raw as u8),
+                ("Proposal Behind Hint", FormatOp::Raw as u8),
+                ("Proposal Ahead Hint", FormatOp::Raw as u8),
+            ],
+            hint_indices: Some((1, 2)),
+            enum_index: None,
+        },
+        GovernanceCase {
+            signature: REVOKE_UPVOTE,
+            selector: [0xaf, 0x10, 0x8a, 0x0e],
+            intent: "Revoke Current Upvote (No ID)",
+            intent_rows: [
+                "Revoke Current U",
+                "pvote (No ID)",
+                "Celo Governance",
+                "> next",
+            ],
+            words: vec![u256_from_u64(41).0, u256_from_u64(43).0],
+            expected_fields: vec![
+                ("Proposal Behind Hint", FormatOp::Raw as u8),
+                ("Proposal Ahead Hint", FormatOp::Raw as u8),
+            ],
+            hint_indices: Some((0, 1)),
+            enum_index: None,
+        },
+        GovernanceCase {
+            signature: VOTE,
+            selector: [0xbb, 0xb2, 0xea, 0xb9],
+            intent: "Vote",
+            intent_rows: ["Vote", "Celo", "Celo Governance", "> next"],
+            words: vec![u256_from_u64(42).0, u256_from_u64(7).0, u256_from_u64(3).0],
+            expected_fields: vec![
+                ("Proposal ID", FormatOp::Raw as u8),
+                ("Dequeued Index", FormatOp::Raw as u8),
+                ("Vote", FormatOp::Enum as u8),
+            ],
+            hint_indices: None,
+            enum_index: Some(2),
+        },
+        GovernanceCase {
+            signature: VOTE_PARTIALLY,
+            selector: [0x2e, 0xdf, 0xd1, 0x2e],
+            intent: "Partial Vote",
+            intent_rows: ["Partial Vote", "Celo", "Celo Governance", "> next"],
+            words: vec![
+                u256_from_u64(42).0,
+                u256_from_u64(7).0,
+                u256_from_u64(100).0,
+                u256_from_u64(20).0,
+                u256_from_u64(3).0,
+            ],
+            expected_fields: vec![
+                ("Proposal ID", FormatOp::Raw as u8),
+                ("Dequeued Index", FormatOp::Raw as u8),
+                ("Yes Vote Weight", FormatOp::Raw as u8),
+                ("No Vote Weight", FormatOp::Raw as u8),
+                ("Abstain Vote Weight", FormatOp::Raw as u8),
+            ],
+            hint_indices: None,
+            enum_index: None,
+        },
+    ];
+
+    let registry = build_registry();
+    let mainnet = find_leaf(registry, "calldata-celo_governance.json", MAINNET_CHAIN);
+    let mainnet_proxy: [u8; 20] = hex::decode("d533ca259b330c7a88f74e000a3faea2d63b7972")
+        .expect("canonical Governance proxy")
+        .try_into()
+        .expect("address width");
+    assert_eq!(mainnet.contract, mainnet_proxy);
+    let mainnet_bundle = synth_bundle(&registry.blob, &mainnet.ir_bytes, mainnet.leaf_index);
+    let mainnet_verified = verify_erc7730_bundle(&mainnet_bundle, &registry.root)
+        .expect("verify mainnet Governance leaf");
+    cross_check_contract(&mainnet_verified.ir, MAINNET_CHAIN, &mainnet.contract)
+        .expect("bind mainnet Governance leaf");
+    assert!(matches!(
+        cross_check_contract(&mainnet_verified.ir, ALFAJORES_CHAIN, &mainnet.contract),
+        Err(BindingError::ChainIdMismatch)
+    ));
+    assert!(matches!(
+        cross_check_contract(&mainnet_verified.ir, MAINNET_CHAIN, &[0x55; 20]),
+        Err(BindingError::ContractMismatch)
+    ));
+
+    let existing_signatures = [
+        "approve(uint256,uint256)",
+        "dequeueProposalsIfReady()",
+        "prepareHotfix(bytes32)",
+        "revokeVotes()",
+        "withdraw()",
+    ];
+    let admitted: std::collections::BTreeSet<[u8; 4]> = mainnet_verified
+        .ir
+        .format_iter()
+        .map(|format| format.expect("Governance format parses").selector)
+        .collect();
+    let expected: std::collections::BTreeSet<[u8; 4]> = existing_signatures
+        .iter()
+        .copied()
+        .chain([UPVOTE, REVOKE_UPVOTE, VOTE, VOTE_PARTIALLY])
+        .map(|signature| keccak256(signature.as_bytes())[..4].try_into().unwrap())
+        .collect();
+    assert_eq!(mainnet_verified.ir.format_count(), Ok(9));
+    assert_eq!(admitted, expected);
+
+    let proof_start = 2 + mainnet.ir_bytes.len() + 8;
+    assert!(mainnet_bundle.len() > proof_start);
+    let mut corrupted_descriptor = mainnet_bundle.clone();
+    corrupted_descriptor[2 + mainnet.ir_bytes.len() / 2] ^= 1;
+    assert!(
+        verify_erc7730_bundle(&corrupted_descriptor, &registry.root).is_err(),
+        "a modified Governance descriptor must not verify"
+    );
+    let mut corrupted_merkle_proof = mainnet_bundle.clone();
+    *corrupted_merkle_proof
+        .last_mut()
+        .expect("Governance bundle carries a proof") ^= 1;
+    assert!(
+        verify_erc7730_bundle(&corrupted_merkle_proof, &registry.root).is_err(),
+        "a modified Governance Merkle proof must not verify"
+    );
+
+    let tx = envelope(MAINNET_CHAIN, mainnet.contract);
+    let resolver = NameResolver::new();
+    let signer = [0x42; 20];
+    let visible_label = |label: &str| {
+        if label.len() <= DISPLAY_COLS {
+            label.to_string()
+        } else {
+            let mut rendered = label[..DISPLAY_COLS - 1].to_string();
+            rendered.push('~');
+            rendered
+        }
+    };
+
+    for case in &cases {
+        assert_eq!(
+            &keccak256(case.signature.as_bytes())[..4],
+            &case.selector,
+            "selector pin for {}",
+            case.signature
+        );
+        let format = mainnet_verified
+            .ir
+            .find_format_by_selector(&case.selector)
+            .expect("Governance format table parses")
+            .unwrap_or_else(|| panic!("missing mainnet format {}", case.signature));
+        assert_eq!(format.intent, case.intent.as_bytes());
+        assert_eq!(usize::from(format.static_head_words), case.words.len());
+        assert_eq!(usize::from(format.field_count), case.words.len());
+        let actual_fields: Vec<(&str, u8)> = format
+            .fields()
+            .map(|field| {
+                let field = field.expect("Governance field parses");
+                (
+                    core::str::from_utf8(field.label).expect("ASCII field label"),
+                    field.format_op,
+                )
+            })
+            .collect();
+        assert_eq!(actual_fields.as_slice(), case.expected_fields.as_slice());
+
+        let calldata = calldata_static(case.signature, &case.words);
+        assert_eq!(&calldata[..4], &case.selector);
+        assert_selector_matches(&mainnet_verified.ir, &calldata, case.signature);
+        let render = |candidate_words: &[[u8; 32]]| {
+            let candidate = calldata_static(case.signature, candidate_words);
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                &candidate,
+                &mainnet_verified,
+                None,
+                &resolver,
+                &signer,
+            )
+        };
+
+        let baseline = render(&case.words)
+            .unwrap_or_else(|error| panic!("render {}: {error:?}", case.signature));
+        assert_eq!(
+            baseline.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        assert!(baseline
+            .transcript_receipt
+            .range_matches(&baseline.pages, 0));
+        assert_all_pages_printable(&baseline.pages);
+        assert_eq!(
+            page_strs(&baseline.pages, intent_page_index(&baseline.pages)),
+            case.intent_rows.map(str::to_string)
+        );
+        for (word_index, (label, format_op)) in case.expected_fields.iter().enumerate() {
+            if *format_op == FormatOp::Raw as u8 {
+                assert_raw_word_pages(
+                    &baseline.pages,
+                    &visible_label(label),
+                    &case.words[word_index],
+                );
+            }
+        }
+        if case.signature == REVOKE_UPVOTE {
+            assert!(
+                baseline
+                    .pages
+                    .as_slice()
+                    .iter()
+                    .all(|page| row_str(&page[0]) != "Proposal ID"),
+                "revokeUpvote calldata has no proposal ID; live state must not be fabricated"
+            );
+        }
+
+        for word_index in 0..case.words.len() {
+            let mut mutated_words = case.words.clone();
+            if case.enum_index == Some(word_index) {
+                mutated_words[word_index] = u256_from_u64(2).0;
+            } else {
+                mutated_words[word_index][31] ^= 1;
+            }
+            let mutated = render(&mutated_words).unwrap_or_else(|error| {
+                panic!(
+                    "render {} with independently mutated word {word_index}: {error:?}",
+                    case.signature
+                )
+            });
+            assert_ne!(
+                baseline.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "word {word_index} must change trusted pages for {}",
+                case.signature
+            );
+            assert!(
+                !baseline
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "word {word_index} must change the transcript for {}",
+                case.signature
+            );
+        }
+
+        if let Some((behind, ahead)) = case.hint_indices {
+            let mut zero_hint_words = case.words.clone();
+            zero_hint_words[behind] = [0u8; 32];
+            zero_hint_words[ahead] = [0u8; 32];
+            let zero_hints = render(&zero_hint_words).unwrap_or_else(|error| {
+                panic!("render zero hints for {}: {error:?}", case.signature)
+            });
+            assert_raw_word_pages(
+                &zero_hints.pages,
+                &visible_label("Proposal Behind Hint"),
+                &[0u8; 32],
+            );
+            assert_raw_word_pages(
+                &zero_hints.pages,
+                &visible_label("Proposal Ahead Hint"),
+                &[0u8; 32],
+            );
+        }
+
+        if let Some(enum_index) = case.enum_index {
+            let vote_field_page = |pages: &Pages| {
+                pages
+                    .as_slice()
+                    .iter()
+                    .enumerate()
+                    .skip(intent_page_index(pages) + 1)
+                    .find(|(_, page)| row_str(&page[0]) == "Vote")
+                    .map(|(index, _)| index)
+                    .unwrap_or_else(|| {
+                        panic!("missing vote enum field page:\n{}", dump_pages(pages))
+                    })
+            };
+            let enum_field = format
+                .fields()
+                .nth(enum_index)
+                .expect("vote enum field exists")
+                .expect("vote enum field parses");
+            let params =
+                pqsigner_erc7730::render::params::parse(&mainnet_verified.ir, enum_field.param_off)
+                    .expect("vote enum params parse");
+            assert_eq!(params.terminal_kind, Some(TerminalKind::Unsigned));
+            assert_eq!(params.integer_width_bytes, Some(1));
+            let enum_off = params.enum_ref.expect("vote enum table is authenticated");
+            assert_eq!(mainnet_verified.ir.pool[usize::from(enum_off)], 4);
+
+            for (value, label) in [(0, "None"), (1, "Abstain"), (2, "No"), (3, "Yes")] {
+                let word = u256_from_u64(value).0;
+                assert_eq!(
+                    pqsigner_erc7730::render::enums::lookup_enum_label(
+                        mainnet_verified.ir.pool,
+                        enum_off,
+                        &word,
+                    )
+                    .expect("canonical vote enum table"),
+                    Some(label.as_bytes())
+                );
+                let mut enum_words = case.words.clone();
+                enum_words[enum_index] = word;
+                let rendered = render(&enum_words)
+                    .unwrap_or_else(|error| panic!("render canonical vote {value}: {error:?}"));
+                assert_eq!(
+                    page_strs(&rendered.pages, vote_field_page(&rendered.pages)),
+                    [
+                        "Vote".to_string(),
+                        label.to_string(),
+                        String::new(),
+                        String::new(),
+                    ]
+                );
+            }
+
+            let unknown_word = u256_from_u64(4).0;
+            assert_eq!(
+                pqsigner_erc7730::render::enums::lookup_enum_label(
+                    mainnet_verified.ir.pool,
+                    enum_off,
+                    &unknown_word,
+                )
+                .expect("canonical vote enum table"),
+                None
+            );
+            let mut unknown_words = case.words.clone();
+            unknown_words[enum_index] = unknown_word;
+            let unknown = render(&unknown_words).expect("in-width unknown enum renders loudly");
+            assert_eq!(
+                page_strs(&unknown.pages, vote_field_page(&unknown.pages)),
+                [
+                    "Vote".to_string(),
+                    "4".to_string(),
+                    String::new(),
+                    "! enum: unknown".to_string(),
+                ]
+            );
+
+            let mut dirty_uint8 = case.words.clone();
+            dirty_uint8[enum_index][0] = 1;
+            assert!(matches!(
+                render(&dirty_uint8),
+                Err(crate::tx::erc7730_render::RenderErr::Reject(
+                    "7730 noncanonical integer"
+                ))
+            ));
+        }
+
+        assert!(matches!(
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                &calldata[..calldata.len() - 1],
+                &mainnet_verified,
+                None,
+                &resolver,
+                &signer,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 short head"
+            ))
+        ));
+        let mut trailing = calldata.clone();
+        trailing.push(0);
+        assert!(matches!(
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                &trailing,
+                &mainnet_verified,
+                None,
+                &resolver,
+                &signer,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 static calldata trailing"
+            ))
+        ));
+
+        let mut proofs = DispatchPageProofs::new();
+        proofs.fail_initialize();
+        let mut dispatched = pick_sign_pages(
+            &tx,
+            &calldata,
+            &signer,
+            None,
+            None,
+            None,
+            Some(&mainnet_verified),
+            None,
+            None,
+            &resolver,
+            &mut proofs,
+        )
+        .unwrap_or_else(|_| panic!("dispatcher selects {}", case.signature));
+        assert_eq!(dispatched.as_slice(), baseline.pages.as_slice());
+        let mut verdict = crate::fi::FAIL_SENTINEL;
+        proofs.final_set_proof(&dispatched, &tx, false, &mut verdict);
+        assert_eq!(verdict, crate::fi::OK_SENTINEL);
+        let first_field_label = visible_label(case.expected_fields[0].0);
+        dispatched.buf[find_page_by_label(&dispatched, &first_field_label)][1][0] ^= 1;
+        verdict = crate::fi::FAIL_SENTINEL;
+        proofs.final_set_proof(&dispatched, &tx, false, &mut verdict);
+        assert_ne!(
+            verdict,
+            crate::fi::OK_SENTINEL,
+            "visible corruption must invalidate the dispatcher proof for {}",
+            case.signature
+        );
+    }
+
+    let alfajores = find_leaf(registry, "calldata-celo_governance.json", ALFAJORES_CHAIN);
+    let alfajores_proxy: [u8; 20] = hex::decode("aa963fc97281d9632d96700ab62a4d1340f9a28a")
+        .expect("Alfajores Governance proxy")
+        .try_into()
+        .expect("address width");
+    assert_eq!(alfajores.contract, alfajores_proxy);
+    let alfajores_bundle = synth_bundle(&registry.blob, &alfajores.ir_bytes, alfajores.leaf_index);
+    let alfajores_verified = verify_erc7730_bundle(&alfajores_bundle, &registry.root)
+        .expect("verify Alfajores Governance leaf");
+    cross_check_contract(&alfajores_verified.ir, ALFAJORES_CHAIN, &alfajores.contract)
+        .expect("bind Alfajores Governance leaf");
+    assert_eq!(alfajores_verified.ir.format_count(), Ok(5));
+    let alfajores_tx = envelope(ALFAJORES_CHAIN, alfajores.contract);
+    for case in &cases {
+        assert_selector_excluded(&alfajores_verified.ir, case.signature);
+        assert!(
+            registry
+                .known_calls
+                .contains(&(ALFAJORES_CHAIN, alfajores.contract, case.selector)),
+            "Alfajores {} remains exact-known",
+            case.signature
+        );
+        assert!(pqsigner_erc7730::known_calls::may_contain(
+            &registry.known_calls_bloom,
+            ALFAJORES_CHAIN,
+            &alfajores.contract,
+            &case.selector,
+        ));
+        let calldata = calldata_static(case.signature, &case.words);
+        assert!(matches!(
+            render_erc7730_pages_with_signer_checked(
+                &alfajores_tx,
+                &calldata,
+                &alfajores_verified,
+                None,
+                &resolver,
+                &signer,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+        ));
+
+        for descriptor in [Some(&alfajores_verified), None] {
+            let mut proofs = DispatchPageProofs::new();
+            proofs.fail_initialize();
+            assert!(
+                pick_sign_pages(
+                    &alfajores_tx,
+                    &calldata,
+                    &signer,
+                    None,
+                    None,
+                    None,
+                    descriptor,
+                    None,
+                    None,
+                    &resolver,
+                    &mut proofs,
+                )
+                .is_err(),
+                "Alfajores {} must not fall back with or without its descriptor",
+                case.signature
+            );
+        }
+    }
+}
+
+#[test]
 fn positive_usdt_transfer_mainnet_renders_send_intent() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-usdt.json", 1);

@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "scope": "Celo Governance upvote, revokeUpvote, vote, and votePartially routes at the Registry-selected mainnet proxy",
+  "captured_at_utc": "2026-07-21T06:31:22Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
+  "boundary": "Historical fixed-block evidence covers exactly four voting routes on Celo mainnet. It does not monitor future upgrades or authorize Alfajores, execute, propose, executeHotfix, any other Governance route, blind signing, hardware, shipment, or transaction-success claims.",
+  "fixed_block": {
+    "chain_id": 42220,
+    "number": 72649728,
+    "number_hex": "0x4548c00",
+    "hash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+    "parent_hash": "0x98df262766665ba08ac9c3e9fb67c907f0e2ab7e5a9be6721e728a69afd63d24",
+    "state_root": "0x16ef9a83ecb75fd3214684fe2a8c9a2ff91a60a483d1eff5886b9a55b10ae855",
+    "timestamp": 1784550486,
+    "timestamp_utc": "2026-07-20T12:28:06Z"
+  },
+  "contracts": {
+    "registry": "0x000000000000000000000000000000000000ce10",
+    "registry_key": "Governance",
+    "registry_lookup_selector": "0x853db323",
+    "proxy": "0xD533Ca259b330c7A88f74E000a3FaEa2d63B7972",
+    "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+    "implementation": "0x40cac0be7e25b14e39f782d5b7e5c3076aa6c57a"
+  },
+  "rpc": {
+    "requests": [
+      { "batch": "identity", "artifact": "rpc/raw/request-identity.json" },
+      { "batch": "proxy", "artifact": "rpc/raw/request-proxy.json" },
+      { "batch": "implementation", "artifact": "rpc/raw/request-implementation.json" }
+    ],
+    "providers": [
+      {
+        "name": "Celo Forno",
+        "url": "https://forno.celo.org",
+        "responses": [
+          { "batch": "identity", "artifact": "rpc/raw/response-forno-identity.json" },
+          { "batch": "proxy", "artifact": "rpc/raw/response-forno-proxy.json" },
+          { "batch": "implementation", "artifact": "rpc/raw/response-forno-implementation.json" }
+        ]
+      },
+      {
+        "name": "dRPC",
+        "url": "https://celo.drpc.org",
+        "responses": [
+          { "batch": "identity", "artifact": "rpc/raw/response-drpc-identity.json" },
+          { "batch": "proxy", "artifact": "rpc/raw/response-drpc-proxy.json" },
+          { "batch": "implementation", "artifact": "rpc/raw/response-drpc-implementation.json" }
+        ]
+      },
+      {
+        "name": "Ankr",
+        "url": "https://rpc.ankr.com/celo",
+        "responses": [
+          { "batch": "identity", "artifact": "rpc/raw/response-ankr-identity.json" },
+          { "batch": "proxy", "artifact": "rpc/raw/response-ankr-proxy.json" },
+          { "batch": "implementation", "artifact": "rpc/raw/response-ankr-implementation.json" }
+        ]
+      }
+    ]
+  },
+  "runtimes": {
+    "proxy": {
+      "artifact": "runtime/GovernanceProxy.celo-mainnet.hex",
+      "bytes": 2585,
+      "decoded_sha256": "691a298351444cbab34198de0d1fc990135d2b53d840f528eacce6de4bed1440",
+      "keccak256": "0x8623c15b719c0ec191dc980fee6216de5f33303e27dbc300a184d098ef120391"
+    },
+    "implementation": {
+      "artifact": "runtime/Governance.implementation.celo-mainnet.hex",
+      "bytes": 57635,
+      "decoded_sha256": "4a5061df51d187d97345fa41a9454de902c1d4d48e62f750e9171ccad80617bc",
+      "keccak256": "0xb5d8319348d33139bde6c51f5f8026412bd7fba14b6392cccbd8e280c5bd88ae"
+    }
+  },
+  "blockscout": {
+    "proxy": {
+      "artifact": "blockscout/GovernanceProxy.json",
+      "name": "GovernanceProxy",
+      "verification": "full",
+      "proxy_type": "eip1967"
+    },
+    "implementation": {
+      "artifact": "blockscout/Governance.implementation.json",
+      "name": "Governance",
+      "verification": "partial",
+      "compiler": "v0.5.14+commit.01f1aaa4",
+      "evm_version": "istanbul"
+    }
+  },
+  "official_source": {
+    "repository": "https://github.com/celo-org/celo-monorepo",
+    "commit": "045aa0061b7d0e9655ff3673cbd25a1bf2b4b74a",
+    "tree": "7118b9c76adcb7aa9afd844d4c2986f19055afb1",
+    "files": [
+      { "artifact": "source/Governance.sol", "upstream": "packages/protocol/contracts/governance/Governance.sol" },
+      { "artifact": "source/Proposals.sol", "upstream": "packages/protocol/contracts/governance/Proposals.sol" },
+      { "artifact": "source/Accounts.sol", "upstream": "packages/protocol/contracts/common/Accounts.sol" },
+      { "artifact": "source/LockedGold.sol", "upstream": "packages/protocol/contracts/governance/LockedGold.sol" },
+      { "artifact": "source/Registry.sol", "upstream": "packages/protocol/contracts/common/Registry.sol" },
+      { "artifact": "source/UsingRegistry.sol", "upstream": "packages/protocol/contracts/common/UsingRegistry.sol" },
+      { "artifact": "source/IntegerSortedLinkedList.sol", "upstream": "packages/protocol/contracts/common/linkedlists/IntegerSortedLinkedList.sol" },
+      { "artifact": "source/SortedLinkedList.sol", "upstream": "packages/protocol/contracts/common/linkedlists/SortedLinkedList.sol" }
+    ]
+  },
+  "abi": {
+    "artifact": "abi/Governance.voting-routes.abi.json",
+    "route_count": 4,
+    "routes": [
+      { "canonical_signature": "upvote(uint256,uint256,uint256)", "selector": "0x57333978" },
+      { "canonical_signature": "revokeUpvote(uint256,uint256)", "selector": "0xaf108a0e" },
+      { "canonical_signature": "vote(uint256,uint256,uint8)", "selector": "0xbbb2eab9" },
+      { "canonical_signature": "votePartially(uint256,uint256,uint256,uint256,uint256)", "selector": "0x2edfd12e" }
+    ],
+    "state_mutability": "nonpayable",
+    "returns": "bool",
+    "excluded_routes": ["execute", "propose", "executeHotfix"]
+  },
+  "semantics": {
+    "proposal_id": "signed queued-proposal key for upvote and signed dequeued-proposal key for referendum votes",
+    "lesser": "signed post-update proposal-ID hint immediately behind the queue target, or zero at the tail boundary; not a vote weight or recipient",
+    "greater": "signed post-update proposal-ID hint immediately ahead of the queue target, or zero at the head boundary; not a vote weight or recipient",
+    "index": "signed position in the live dequeued array that must contain the same proposalId",
+    "vote_enum": "Proposals.VoteValue is 0=None, 1=Abstain, 2=No, 3=Yes; vote rejects None",
+    "upvote_weight": "live total locked CELO for the effective account; not present in upvote calldata",
+    "revoke_target": "live proposal ID and recorded weight for the effective account; neither is present in revokeUpvote calldata",
+    "whole_vote_weight": "live total governance voting power for the effective account, assigned wholly to the signed enum choice; not present in vote calldata",
+    "partial_vote_weights": "signed yes/no/abstain weights whose sum is bounded by live total governance voting power",
+    "caller": "msg.sender resolves through Accounts.voteSignerToAccount; the live effective account can differ from the immediate caller",
+    "success_residual": "signer authorization, proposal existence/stage, queue/dequeued position, hint validity, live weights, sufficient voting power, and execution success remain live-state preconditions"
+  },
+  "artifacts": [
+    { "path": "README.md", "sha256": "d03b0e61647a51dabb96da8f438f67342cc282d4bde4dbab1eead3b5612257bf" },
+    { "path": "abi/Governance.voting-routes.abi.json", "sha256": "2f451274ad5189d67622ea19195416ebe2acbf0990ed94b37a292ae77649384e" },
+    { "path": "blockscout/Governance.implementation.json", "sha256": "28cb2103d5650ff7202fbfd930ce1c18d5fce0e239c3ab7fa999b6bbb12097f5" },
+    { "path": "blockscout/GovernanceProxy.json", "sha256": "8069a480414907d8f0f18924aa97dadae2a4518e50b002314d91f34c4a24e0e0" },
+    { "path": "collect.sh", "sha256": "48e7322d22152986069df625e9ef577f754354726e6a2af5502e3a8cf06ac39f" },
+    { "path": "rpc/raw/request-identity.json", "sha256": "c735810fc6bd84883477a132cb20939ad09fd7a40b945c1f8ec1b52ee353e674" },
+    { "path": "rpc/raw/request-implementation.json", "sha256": "6fb130486f7684e9d04fb1d495dd9201cd1a94feb392001b0fed7c47f84ef776" },
+    { "path": "rpc/raw/request-proxy.json", "sha256": "d9cf4264ef64091ff6a6d8b1bffddfae060847f163e774282dbb497c3268906c" },
+    { "path": "rpc/raw/response-ankr-identity.json", "sha256": "eeda197155e04fc182aecc38544a7c00feeb9aaad4114d60031dd6774a46ff8a" },
+    { "path": "rpc/raw/response-ankr-implementation.json", "sha256": "6c2fd77509b30c943e363e06ca75f7b6375b558969f7d496ea25ee91154aef79" },
+    { "path": "rpc/raw/response-ankr-proxy.json", "sha256": "95d016ea6a815e134be7c744733268f038f14d96e9a83b73e95227ceeafe356e" },
+    { "path": "rpc/raw/response-drpc-identity.json", "sha256": "eeda197155e04fc182aecc38544a7c00feeb9aaad4114d60031dd6774a46ff8a" },
+    { "path": "rpc/raw/response-drpc-implementation.json", "sha256": "6c2fd77509b30c943e363e06ca75f7b6375b558969f7d496ea25ee91154aef79" },
+    { "path": "rpc/raw/response-drpc-proxy.json", "sha256": "95d016ea6a815e134be7c744733268f038f14d96e9a83b73e95227ceeafe356e" },
+    { "path": "rpc/raw/response-forno-identity.json", "sha256": "99f51212507f2a6c576217c5d7ad349c0fff9870045dd25679f38464d06321e3" },
+    { "path": "rpc/raw/response-forno-implementation.json", "sha256": "89433ca7f1902b08bcdd1bd6dac453682f2317650ded72cdd25df901a9bf0efd" },
+    { "path": "rpc/raw/response-forno-proxy.json", "sha256": "46450fd4ac2bf126f2642ef9aadd67a22b685d84a682bdd43cd00b8bf45cc862" },
+    { "path": "runtime/Governance.implementation.celo-mainnet.hex", "sha256": "cae5666ed6192b09d65a4077b254d15ba3c1f877de705a5ed47befd0a18e42c5" },
+    { "path": "runtime/GovernanceProxy.celo-mainnet.hex", "sha256": "bb4fffba446b44959e420ab2d0fdf037b7a62d2fccc7ca7c896c31bc6642b584" },
+    { "path": "source/Accounts.sol", "sha256": "d7ba92f22a2acf0f1a7d047b204c86c39d14f9e5ed82ec2af4b784bf25bc2bb0" },
+    { "path": "source/Governance.sol", "sha256": "5a5c44ab0c0fcbab6f9b492612e460c78dbd9c9d3d9e73ed751df806a6581e53" },
+    { "path": "source/IntegerSortedLinkedList.sol", "sha256": "cd4d99d07e4e5e89fa52d6d4ad140c788e6d6b31001e09806e08cbd27f30fdbf" },
+    { "path": "source/LockedGold.sol", "sha256": "8644f267f6689a75474520171e485d5220999c44f06d68aa69876981ca7f9d3f" },
+    { "path": "source/Proposals.sol", "sha256": "6e7600697497c79134198ad877921560b9a2b89b3b7cfd94118d9d80bb777b39" },
+    { "path": "source/Registry.sol", "sha256": "523b6c9ea1e3fc3e0fb17604a6821b0b25e7e47727f707826d3ee563e96db483" },
+    { "path": "source/SortedLinkedList.sol", "sha256": "2979db1df67d1b9789d73e71a3319e2ec2469143de30671fba32061ebe6d68d1" },
+    { "path": "source/UsingRegistry.sol", "sha256": "9a8ff541f55690567c0b214bfc8e6da1a519155a1535108fb64e86d25454d7e2" }
+  ]
+}

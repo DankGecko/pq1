@@ -760,6 +760,469 @@ fn registry_celo_election_vote_and_revokes_are_mainnet_only_and_alfajores_stays_
 }
 
 #[test]
+fn registry_celo_governance_voting_is_mainnet_only_and_alfajores_stays_known() {
+    let root = workspace_root();
+    let relative = "registry/celo/calldata-celo_governance.json";
+    let curated = std::fs::read(
+        root.join("secure/data/erc7730/curations/files")
+            .join(relative),
+    )
+    .expect("read curated Celo Governance descriptor");
+    let installed = std::fs::read(root.join("secure/data/erc7730-registry").join(relative))
+        .expect("read installed Celo Governance descriptor");
+    assert_eq!(
+        installed, curated,
+        "installed Celo Governance descriptor diverged from its receipted curation"
+    );
+    let descriptor: serde_json::Value =
+        serde_json::from_slice(&installed).expect("parse curated Celo Governance descriptor");
+    let curation_note = descriptor["_curation_note"]
+        .as_str()
+        .expect("Celo Governance curation note");
+    assert!(curation_note.contains("current upvote target from live voter state"));
+    assert!(curation_note.contains("no target is fabricated"));
+    assert!(curation_note.contains("execute, propose, and executeHotfix remain refused"));
+
+    let catalogue = build_registry();
+    let mainnet_contract: [u8; 20] = hex::decode("d533ca259b330c7a88f74e000a3faea2d63b7972")
+        .expect("valid Celo mainnet Governance address")
+        .try_into()
+        .expect("Celo mainnet Governance address width");
+    let alfajores_contract: [u8; 20] = hex::decode("aa963fc97281d9632d96700ab62a4d1340f9a28a")
+        .expect("valid Alfajores Governance address")
+        .try_into()
+        .expect("Alfajores Governance address width");
+    let governance_entries: Vec<_> = catalogue
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-celo_governance.json")
+        })
+        .collect();
+    assert_eq!(
+        governance_entries
+            .iter()
+            .map(|entry| (entry.chain_id, entry.contract))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            (42_220u64, mainnet_contract),
+            (44_787u64, alfajores_contract),
+        ]),
+        "curation must preserve exactly the two declared Governance deployments"
+    );
+
+    let selector_for = |signature: &str| {
+        let hash = keccak256(signature.as_bytes());
+        <[u8; 4]>::try_from(&hash[..4]).expect("Governance selector width")
+    };
+    let approve_selector = selector_for("approve(uint256,uint256)");
+    let dequeue_selector = selector_for("dequeueProposalsIfReady()");
+    let prepare_hotfix_selector = selector_for("prepareHotfix(bytes32)");
+    let revoke_upvote_selector = selector_for("revokeUpvote(uint256,uint256)");
+    let revoke_votes_selector = selector_for("revokeVotes()");
+    let upvote_selector = selector_for("upvote(uint256,uint256,uint256)");
+    let vote_selector = selector_for("vote(uint256,uint256,uint8)");
+    let partial_vote_selector =
+        selector_for("votePartially(uint256,uint256,uint256,uint256,uint256)");
+    let withdraw_selector = selector_for("withdraw()");
+    let execute_selector = selector_for("execute(uint256,uint256)");
+    let execute_hotfix_selector =
+        selector_for("executeHotfix(uint256[],address[],bytes,uint256[],bytes32)");
+    let propose_selector = selector_for("propose(uint256[],address[],bytes,uint256[],string)");
+    assert_eq!(approve_selector, [0x5d, 0x35, 0xa3, 0xd9]);
+    assert_eq!(dequeue_selector, [0x3b, 0xb0, 0xed, 0x2b]);
+    assert_eq!(prepare_hotfix_selector, [0x9c, 0xb0, 0x2d, 0xfc]);
+    assert_eq!(revoke_upvote_selector, [0xaf, 0x10, 0x8a, 0x0e]);
+    assert_eq!(revoke_votes_selector, [0x93, 0x81, 0xab, 0x25]);
+    assert_eq!(upvote_selector, [0x57, 0x33, 0x39, 0x78]);
+    assert_eq!(vote_selector, [0xbb, 0xb2, 0xea, 0xb9]);
+    assert_eq!(partial_vote_selector, [0x2e, 0xdf, 0xd1, 0x2e]);
+    assert_eq!(withdraw_selector, [0x3c, 0xcf, 0xd6, 0x0b]);
+    assert_eq!(execute_selector, [0x56, 0x01, 0xea, 0xea]);
+    assert_eq!(execute_hotfix_selector, [0xcf, 0x48, 0xeb, 0x94]);
+    assert_eq!(propose_selector, [0x65, 0xbb, 0xda, 0xa0]);
+
+    let find_entry = |chain_id: u64, contract: [u8; 20]| {
+        governance_entries
+            .iter()
+            .copied()
+            .find(|entry| entry.chain_id == chain_id && entry.contract == contract)
+            .unwrap_or_else(|| panic!("missing Governance leaf for chain {chain_id}"))
+    };
+    let mainnet_entry = find_entry(42_220, mainnet_contract);
+    let alfajores_entry = find_entry(44_787, alfajores_contract);
+
+    for entry in [mainnet_entry, alfajores_entry] {
+        let proof = extract_proof(
+            &catalogue.blob,
+            entry.leaf_index,
+            proof_depth(&catalogue.blob),
+        );
+        let bundle = synth_bundle(&entry.ir_bytes, entry.leaf_index as u32, &proof);
+        let verified = verify_erc7730_bundle(&bundle, &catalogue.root)
+            .expect("Governance bundle verifies against the production root");
+        assert_eq!(verified.ir.chain_id, entry.chain_id);
+        assert_eq!(verified.ir.contract, entry.contract);
+        assert_eq!(verified.ir.descriptor_hash, entry.descriptor_hash);
+        cross_check_contract(&verified.ir, entry.chain_id, &entry.contract)
+            .expect("Governance deployment binding round-trips");
+    }
+
+    let mainnet_ir =
+        Erc7730Ir::parse(&mainnet_entry.ir_bytes).expect("mainnet Governance IR parses");
+    let alfajores_ir =
+        Erc7730Ir::parse(&alfajores_entry.ir_bytes).expect("Alfajores Governance IR parses");
+    let preserved_selectors = BTreeSet::from([
+        approve_selector,
+        dequeue_selector,
+        prepare_hotfix_selector,
+        revoke_votes_selector,
+        withdraw_selector,
+    ]);
+    let mainnet_formats: BTreeSet<_> = mainnet_ir
+        .format_iter()
+        .map(|format| format.expect("mainnet Governance format parses").selector)
+        .collect();
+    let mut expected_mainnet = preserved_selectors.clone();
+    expected_mainnet.extend([
+        revoke_upvote_selector,
+        upvote_selector,
+        vote_selector,
+        partial_vote_selector,
+    ]);
+    assert_eq!(
+        mainnet_formats, expected_mainnet,
+        "mainnet must preserve five formats and add exactly four voting routes"
+    );
+    let alfajores_formats: BTreeSet<_> = alfajores_ir
+        .format_iter()
+        .map(|format| format.expect("Alfajores Governance format parses").selector)
+        .collect();
+    assert_eq!(
+        alfajores_formats, preserved_selectors,
+        "Alfajores must preserve exactly the five previously compiled formats"
+    );
+
+    let voting_cases = [
+        (
+            revoke_upvote_selector,
+            "revokeUpvote",
+            b"Revoke Current Upvote (No ID)".as_slice(),
+            2u16,
+            vec![
+                (
+                    b"Proposal Behind Hint".as_slice(),
+                    FormatOp::Raw,
+                    TerminalKind::Unsigned,
+                    0u8,
+                    32u8,
+                ),
+                (
+                    b"Proposal Ahead Hint".as_slice(),
+                    FormatOp::Raw,
+                    TerminalKind::Unsigned,
+                    1u8,
+                    32u8,
+                ),
+            ],
+        ),
+        (
+            upvote_selector,
+            "upvote",
+            b"Upvote".as_slice(),
+            3,
+            vec![
+                (
+                    b"Proposal ID".as_slice(),
+                    FormatOp::Raw,
+                    TerminalKind::Unsigned,
+                    0,
+                    32,
+                ),
+                (
+                    b"Proposal Behind Hint".as_slice(),
+                    FormatOp::Raw,
+                    TerminalKind::Unsigned,
+                    1,
+                    32,
+                ),
+                (
+                    b"Proposal Ahead Hint".as_slice(),
+                    FormatOp::Raw,
+                    TerminalKind::Unsigned,
+                    2,
+                    32,
+                ),
+            ],
+        ),
+        (
+            vote_selector,
+            "vote",
+            b"Vote".as_slice(),
+            3,
+            vec![
+                (
+                    b"Proposal ID".as_slice(),
+                    FormatOp::Raw,
+                    TerminalKind::Unsigned,
+                    0,
+                    32,
+                ),
+                (
+                    b"Dequeued Index".as_slice(),
+                    FormatOp::Raw,
+                    TerminalKind::Unsigned,
+                    1,
+                    32,
+                ),
+                (
+                    b"Vote".as_slice(),
+                    FormatOp::Enum,
+                    TerminalKind::Unsigned,
+                    2,
+                    1,
+                ),
+            ],
+        ),
+        (
+            partial_vote_selector,
+            "votePartially",
+            b"Partial Vote".as_slice(),
+            5,
+            vec![
+                (
+                    b"Proposal ID".as_slice(),
+                    FormatOp::Raw,
+                    TerminalKind::Unsigned,
+                    0,
+                    32,
+                ),
+                (
+                    b"Dequeued Index".as_slice(),
+                    FormatOp::Raw,
+                    TerminalKind::Unsigned,
+                    1,
+                    32,
+                ),
+                (
+                    b"Yes Vote Weight".as_slice(),
+                    FormatOp::Raw,
+                    TerminalKind::Unsigned,
+                    2,
+                    32,
+                ),
+                (
+                    b"No Vote Weight".as_slice(),
+                    FormatOp::Raw,
+                    TerminalKind::Unsigned,
+                    3,
+                    32,
+                ),
+                (
+                    b"Abstain Vote Weight".as_slice(),
+                    FormatOp::Raw,
+                    TerminalKind::Unsigned,
+                    4,
+                    32,
+                ),
+            ],
+        ),
+    ];
+    for (selector, route, intent, head_words, expected_fields) in voting_cases {
+        let format = mainnet_ir
+            .find_format_by_selector(&selector)
+            .expect("mainnet Governance format table parses")
+            .unwrap_or_else(|| panic!("mainnet Governance {route} is admitted"));
+        assert_eq!(format.intent, intent, "{route} intent drifted");
+        assert_eq!(
+            format.static_head_words, head_words,
+            "{route} ABI head drifted"
+        );
+        let fields: Vec<_> = format
+            .fields()
+            .map(|field| {
+                field.unwrap_or_else(|_| panic!("mainnet Governance {route} field parses"))
+            })
+            .collect();
+        assert_eq!(
+            fields.len(),
+            expected_fields.len(),
+            "{route} field count drifted"
+        );
+        for (field, (label, op, terminal, path_index, integer_width)) in
+            fields.iter().zip(expected_fields)
+        {
+            assert_eq!(field.label, label, "{route} field label drifted");
+            assert_eq!(
+                FormatOp::try_from(field.format_op),
+                Ok(op),
+                "{route} field operation drifted"
+            );
+            assert_eq!(
+                mainnet_ir
+                    .path_bytes(field.path_off)
+                    .unwrap_or_else(|_| panic!("Governance {route} field path parses")),
+                [
+                    PathOp::RootStructured as u8,
+                    PathOp::FieldIdx as u8,
+                    0,
+                    path_index,
+                ],
+                "{route} field bound the wrong signed operand"
+            );
+            let params = parse_params(&mainnet_ir, field.param_off)
+                .unwrap_or_else(|_| panic!("Governance {route} field params parse"));
+            assert_eq!(params.visibility, Visibility::Always);
+            assert_eq!(params.terminal_kind, Some(terminal));
+            assert_eq!(params.integer_width_bytes, Some(integer_width));
+            assert!(params.addr_types.is_none());
+            if op == FormatOp::Enum {
+                assert!(
+                    params.enum_ref.is_some(),
+                    "vote must bind its canonical enum"
+                );
+            } else {
+                assert!(params.enum_ref.is_none());
+            }
+        }
+    }
+
+    let revoke_upvote = mainnet_ir
+        .find_format_by_selector(&revoke_upvote_selector)
+        .expect("mainnet Governance format table parses")
+        .expect("revokeUpvote is admitted on mainnet");
+    let revoke_upvote_fields: Vec<_> = revoke_upvote
+        .fields()
+        .map(|field| field.expect("revokeUpvote field parses"))
+        .collect();
+    assert_eq!(revoke_upvote_fields.len(), 2);
+    assert!(
+        revoke_upvote_fields.iter().all(|field| {
+            field.label != b"Proposal ID"
+                && FormatOp::try_from(field.format_op) != Ok(FormatOp::Amount)
+        }),
+        "revokeUpvote must not fabricate a live proposal target or amount absent from calldata"
+    );
+
+    let vote = mainnet_ir
+        .find_format_by_selector(&vote_selector)
+        .expect("mainnet Governance format table parses")
+        .expect("vote is admitted on mainnet");
+    let vote_fields: Vec<_> = vote
+        .fields()
+        .map(|field| field.expect("vote field parses"))
+        .collect();
+    let vote_params =
+        parse_params(&mainnet_ir, vote_fields[2].param_off).expect("vote enum params parse");
+    let enum_off = vote_params.enum_ref.expect("vote enum reference");
+    for (value, label) in [
+        (0u8, b"None".as_slice()),
+        (1, b"Abstain"),
+        (2, b"No"),
+        (3, b"Yes"),
+    ] {
+        let mut word = [0u8; 32];
+        word[31] = value;
+        assert_eq!(
+            pqsigner_erc7730::render::enums::lookup_enum_label(mainnet_ir.pool, enum_off, &word,)
+                .expect("Governance vote enum table is valid"),
+            Some(label),
+            "VoteValue discriminant {value} drifted"
+        );
+    }
+    let mut outside_enum = [0u8; 32];
+    outside_enum[31] = 4;
+    assert_eq!(
+        pqsigner_erc7730::render::enums::lookup_enum_label(
+            mainnet_ir.pool,
+            enum_off,
+            &outside_enum,
+        )
+        .expect("Governance vote enum table is valid"),
+        None,
+        "the authenticated VoteValue enum must contain only its four canonical discriminants"
+    );
+
+    let newly_admitted = [
+        revoke_upvote_selector,
+        upvote_selector,
+        vote_selector,
+        partial_vote_selector,
+    ];
+    for (selector, route) in [
+        (revoke_upvote_selector, "revokeUpvote"),
+        (upvote_selector, "upvote"),
+        (vote_selector, "vote"),
+        (partial_vote_selector, "votePartially"),
+    ] {
+        assert!(
+            alfajores_ir
+                .find_format_by_selector(&selector)
+                .expect("Alfajores Governance format table parses")
+                .is_none(),
+            "Alfajores {route} must remain absent so runtime resolves it as NoFormat"
+        );
+    }
+    let still_refused = [execute_selector, execute_hotfix_selector, propose_selector];
+    for (entry, ir) in [
+        (mainnet_entry, &mainnet_ir),
+        (alfajores_entry, &alfajores_ir),
+    ] {
+        for selector in still_refused {
+            assert!(
+                ir.find_format_by_selector(&selector)
+                    .expect("Governance format table parses")
+                    .is_none(),
+                "execute/propose/executeHotfix must stay refused on chain {}",
+                entry.chain_id
+            );
+        }
+        for selector in [
+            approve_selector,
+            dequeue_selector,
+            prepare_hotfix_selector,
+            revoke_upvote_selector,
+            revoke_votes_selector,
+            upvote_selector,
+            vote_selector,
+            partial_vote_selector,
+            withdraw_selector,
+            execute_selector,
+            execute_hotfix_selector,
+            propose_selector,
+        ] {
+            assert!(
+                catalogue
+                    .known_calls
+                    .contains(&(entry.chain_id, entry.contract, selector)),
+                "Governance selector left the exact known-call inventory on chain {}",
+                entry.chain_id
+            );
+            assert!(
+                known_call_may_contain(
+                    &catalogue.known_calls_bloom,
+                    entry.chain_id,
+                    &entry.contract,
+                    &selector,
+                ),
+                "Governance selector left the fail-closed Bloom on chain {}",
+                entry.chain_id
+            );
+        }
+    }
+    for selector in newly_admitted {
+        assert!(
+            mainnet_ir
+                .find_format_by_selector(&selector)
+                .expect("mainnet Governance format table parses")
+                .is_some(),
+            "new mainnet Governance route is missing"
+        );
+    }
+}
+
+#[test]
 fn registry_morpho_blue_assets_bind_the_signed_market_token_on_both_chains() {
     let root = workspace_root();
     let relative = "registry/morpho/calldata-MorphoBlue.json";
@@ -1140,7 +1603,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.root),
-        "bdba457ac9de655390d0b6403d4851d8081bc158af13958098489603945e4d94"
+        "2d1c2d0c58b82fed7f39dd244c265762af960df6b4208d9f659bc6c856312285"
     );
 }
 
