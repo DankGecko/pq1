@@ -148,9 +148,18 @@ RDP-2 lock (→ RMA).
 
 | Code | Meaning | Class |
 |---|---|---|
-| `E0801` | Option-byte / OTP / journal-page ship-profile mismatch | halt unlocked (reflash/return) |
+| `E0801` | *legacy aggregate — retired; the granular `E0804`–`E080B` replace it (stable value kept for old field photos)* | halt unlocked |
 | `E0802` | RDP=0xCC program / OPTSTRT failed | halt unlocked |
-| `E0811` | OTP master not burned (factory step missing) | RMA |
+| `E0803` | OTP master not burned — caught **pre-lock** (R2.3) | halt unlocked (reflash/return) |
+| `E0804` | Ship-profile: `TZEN` not set | halt unlocked |
+| `E0805` | Ship-profile: `RDP` not the ship byte `0xAA` | halt unlocked |
+| `E0806` | Ship-profile: `SECWM1` not all-bank-1-secure | halt unlocked |
+| `E0807` | Ship-profile: `SECWM2` not all-bank-2-NS | halt unlocked |
+| `E0808` | Ship-profile: `SECBOOTADD0` boot-redirect | halt unlocked |
+| `E0809` | Ship-profile: `WRP1A` does not write-protect the FSBL pages, **OR the WRP1A layout is not yet silicon-pinned** (fail-closed — see `lockdown::WRP1A_MASK_PINNED`) | halt unlocked |
+| `E080A` | Ship-profile: an OEM key-lock bit is set, **OR the OEM-lock mask is not yet silicon-pinned** (fail-closed — see `lockdown::OEM_LOCK_MASK_PINNED`) | halt unlocked |
+| `E080B` | A per-device page (123–127) is not blank at ship | halt unlocked |
+| `E0811` | OTP master not burned — Phase-B belt-and-braces (resume boot / FI skip of `E0803`) | RMA |
 | `E0812` | SAES Tier-1 (DHUK) self-test failed | RMA |
 | `E0821` | BHK provision / load-lock failed | RMA |
 | `E0822` | Page-126 refused programming (silicon program-hostility) | RMA |
@@ -158,15 +167,27 @@ RDP-2 lock (→ RMA).
 | `E0832` | SE050 `PUT KEY` (transport → final) failed | retry / RMA |
 | `E0833` | Re-establish under the FINAL SCP03 keyset did not confirm | RMA |
 | `E0841` | SE050 admin credential re-key failed | RMA |
-| `E0851` | TRNG salt could not be persisted before use | halt |
+| `E0851` | TRNG salt could not be persisted to the **journal** before use (narrowed — the draw itself is now `E0854`) | halt |
 | `E0852` | OPTIGA `SetData(E140)` of the final PBS failed | retry / RMA |
 | `E0853` | Re-shield under the FINAL PBS did not confirm | RMA |
+| `E0854` | 3-source TRNG salt **draw** failed (a platform/OPTIGA/SE050 leg or the all-zero gate) | halt |
+| `E0855` | Pre-salt OPTIGA **transport-PBS handshake** failed (#443; doubles as authenticate-before-rotate) | halt |
 | `E0861` | Journal step-marker write failed | RMA |
 | `E08F0` | SEs not in the expected factory transport state (pre-rotated?) | RMA |
 
 (Source of truth: `secure/src/first_boot/state.rs` `FirstBootError`. The code
 space `0x08xx–0x0Fxx` is disjoint from the factory ceremony's
 `FactoryErrorCode` `0x01xx–0x07xx`.)
+
+> **Operator note (2026-07-21):** two ship-profile checks are **fail-closed
+> until silicon-pinned**, so a genuine first boot halts before the burn until
+> the pins land — intended, since the flow cannot ship before them. `E0809`
+> (WRP1A) fires FIRST (`WRP1A_MASK_PINNED = false`): the load-bearing invariant
+> #10 check must never vacuously pass a removable-WRP unit under a wrong
+> register/bit guess (two of its three sub-fields fail open on a mis-guess).
+> Once WRP1A is pinned, `E080A` (OEM-lock, `OEM_LOCK_MASK_PINNED = false`) is
+> next — it catches a planted OEM2 RDP-regression password. Flip each const in
+> the commit that records its RM0456 citation **and** a positive bench detection.
 
 ## Where it lives in code
 
@@ -206,3 +227,112 @@ S-1/S-2/S-3 burn ceremony). See also the `EthereumPhone/PQ1` production gates (l
 5. **OPTIGA:** the SetData wedge (2–3 ops) timing bracketing the salt+PBS
    rotation; E140 rewrite under the transport shield whether or not the factory
    ratcheted LcsO=Op.
+
+## UPDATE 2026-07-21 — device-side correctness + hardening pass
+
+Landed device-side (host-tested logic + compile-verified against `thumbv8m`
+with the ship feature set; no silicon). Nothing below grants production
+authority — the handoff/receipt, silicon-receipt, and E140-ordering gates
+remain OPEN.
+
+- **#443 deterministic first-boot brick — FIXED.** Phase-B step 5 drew the
+  3-source TRNG salt (`trng_salt` → `rng_strong::fill`) whose OPTIGA leg is
+  mandatory, but the OPTIGA shield was not established at that point
+  (`load_pbs` runs after Phase B; the in-ceremony shield came up later inside
+  `rotate_pbs_to_salted`). Every field unit would have halted at the salt draw
+  on first boot. Fix: `optiga::establish_transport_shield` brings the shield up
+  under the **transport** PBS (E140 untouched) on the fresh path **before** the
+  draw; the state machine calls it in the `salt == None` arm only (a committed
+  salt means the chip may already be rotated, where a transport handshake would
+  fail). Regression: `first_boot::state::tests` now models the shield
+  precondition in `FakeHw` so reverting the ordering fails `clean_run_completes`.
+- **SE050 `PUT KEY` response mis-parse — FIXED.** `send_apdu` already strips and
+  verifies `SW==0x9000` and returns the body only; both PUT KEY callers
+  re-parsed the body tail as a "SW", so a real PUT KEY always false-failed (an
+  empty body → `n<2`; a KCV body → a KCV byte ≠ `0x9000`). This path had never
+  run on silicon. Now the caller trusts `send_apdu`'s `?` for the status and
+  verifies the response KCVs via `scp03_logic::verify_put_key_response`.
+- **Authenticate-before-rotate contract.** `scp03_logic::TransportAuthProof`
+  (fail-initialized FI-sentinel carrier) is recorded on each transport-auth
+  success arm (SCP03 mutual auth / admin `verify_session(tr_pin)` / OPTIGA PRL
+  shield) and consumed immediately before the destructive write (PUT KEY /
+  `delete_object` / `SetData`). A skipped/glitched auth — or a wrong transport
+  credential — leaves the proof pending and the write refused.
+- **R2.4 confirm gate.** The RDP-2 burn now requires a deliberate **both-buttons
+  chord** on a 2-page lock-confirm screen (reusing the FI-hardened
+  `confirm_checked` scroll-to-end + `OK_SENTINEL` gate). Decline/idle stays at
+  RDP-0 and re-prompts next boot (no wipe — no wallet exists yet). Phase A runs
+  before SysTick and the IWDG, so the prompt blocks on the button (busy-wait
+  polling), never idle-wipes, and cannot be watchdog-reset mid-confirm.
+- **Zeroize.** OPTIGA `ApduBuf` now zeroizes on drop (it assembles the plaintext
+  PBS in `set_data_object`); the SCP03 PUT KEY buffer is `Zeroizing`.
+
+### New bench items (fold into the runbook above)
+
+6. **`HW-CONFIRM-PUTKEY-KCV-RESP`** — does the SE050 GP applet echo the per-key
+   KCVs in the `PUT KEY` response body? `verify_put_key_response` accepts body
+   lengths `{9, 10}` (KCV forms, verified) and `0` (no echo → accepted, since
+   `SW==0x9000` already confirmed the write). If the bench shows KCVs ARE
+   returned, make the `0`-length case fail-closed.
+7. **DEK-liveness / `HW-CONFIRM-PUTKEY-REPUT-IDEMPOTENT`** — the resume/confirm
+   re-establishes SCP03 under the FINAL **ENC/MAC only**, so a torn write that
+   left the DEK at transport is invisible until the next re-rotation
+   (`HW-ASSUME-PUTKEY-ATOMIC`, #398/#386). The firmware-side safety net (a
+   self-`PUT KEY` of the identical final keys wrapped under the FINAL DEK, which
+   fails closed if the on-chip DEK is still transport) is **deliberately NOT
+   shipped as live code**: it is a second in-place PUT KEY whose idempotency is
+   unconfirmed on silicon, so shipping it would gamble the whole first-boot flow
+   on an unproven assumption. Bench procedure: on a sacrificial part, crowbar
+   the SE050 Vdd across the PUT KEY commit window (I2C trigger on
+   `CLA=0x84 INS=0xD8 P1=0x0B P2=0x81`), then per part cold-boot and probe
+   {ENC/MAC establish, DEK re-PUT}. A confirmed `ENC/MAC-final + DEK-transport`
+   outcome is a **ship-blocker**; also record whether a re-PUT of identical keys
+   is accepted (validates the safety net) and whether KCVs are echoed (resolves
+   item 6). Only after both confirm does the DEK-liveness step become
+   shippable.
+
+## Design note (candidate, NO production authority) — factory handoff/receipt
+
+The **authenticated per-unit transport handoff/receipt** remains an OPEN owner
+gate: the device must be able to tell a genuine factory-provisioned transport
+state from an attacker-planted one before it welds RDP-2 shut. The device-side
+*interface* can be specified now; the signing authority and primitive are an
+**owner decision** and no crypto is implemented until it is made.
+
+- **Where it plugs in.** A new Phase-A check, after R2.3 (OTP-master present)
+  and before the R2.4 confirm/burn: read a factory-written per-unit record from
+  the **spare OTP region** (`hw/otp.rs` bytes `176..512`, 336 B unallocated),
+  verify it, and halt UNLOCKED on failure (new `E080x` code). Placing it
+  pre-confirm keeps "verify state, then weld" (invariant #10) intact.
+- **What it must bind.** The per-unit transport-keyset identity (so a record
+  from unit A can't authorize unit B) plus a factory attestation the device can
+  check. It corresponds to the F6 `#22` attestation/binding manifest.
+- **The PQ-clean mechanism choice (owner).** No classical signer (invariant #5),
+  so the options are: (a) a symmetric MAC under a factory-station key — but the
+  only secret the device and factory already share is the OTP master, which
+  *roots the transport keyset itself*, so a MAC under it is near-circular and
+  needs care to add real assurance; (b) a **SPHINCS+C10** signature over the
+  record, verified against a firmware-pinned factory public key (PQ-clean, reuses
+  the on-device C10 verifier, heavier); (c) an HSM-/station-mediated record whose
+  form the station owns. Until (a)/(b)/(c) is chosen the device-side
+  `verify_factory_receipt()` is a spec stub, not code.
+
+## Design note (candidate, needs owner sign-off) — a bench-buildable image
+
+Silicon validation of everything above is currently **blocked at build time**: a
+flashable `rdp2-self-lock` image requires `mode-production`, which is
+independently quarantined by `FW_ROLLBACK_PRODUCTION_BLOCKED` (`secure/build.rs`)
+and needs `FSBL_VENDOR_PUBKEY`. So today only the host tests and the negative
+`make build-rdp2-self-lock` check run; no unit can be flashed to exercise the
+RDP burn, the SE rotations, or the confirm gate on real hardware.
+
+Proposal (do **not** carve this out silently — it touches the rollback
+quarantine, so it needs an explicit owner instruction): a narrowly-scoped
+`bench-ship-validation` configuration that satisfies the `nsc/mod.rs` self-lock
+fences and supplies a bench `FSBL_VENDOR_PUBKEY`, WITHOUT claiming shipping
+status — it must remain incompatible with every dev/test feature (as
+`rdp2-self-lock` already is), render a loud non-shippable boot banner, and be
+excluded from any release-packaging target. Its only purpose is to let a
+sacrificial board run the Phase-A/Phase-B flow end-to-end on silicon so the
+runbook items above can actually be executed. This is the prerequisite for
+closing the silicon gates, not a relaxation of them.

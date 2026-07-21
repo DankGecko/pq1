@@ -51,10 +51,36 @@ impl FirstBootStep {
 #[repr(u16)]
 pub enum FirstBootError {
     // Phase A (pre-lock) — halt UNLOCKED, unit stays returnable.
-    /// Option bytes / OTP / journal pages don't match the ship profile.
+    /// Legacy aggregate ship-profile mismatch. Retained (stable value) so old
+    /// field-failure photos stay interpretable, but **no longer emitted** — the
+    /// granular `Ob*` codes below name the exact failing field instead.
     ObProfileMismatch = 0x0801,
     /// The RDP=0xCC program / OPTSTRT sequence reported an error.
     RdpProgramFailed = 0x0802,
+    /// R2.3: the factory OTP master is not burned. Caught PRE-lock so the unit
+    /// halts UNLOCKED/returnable (vs the post-lock `OtpMasterNotBurned` RMA).
+    OtpMasterMissingPreLock = 0x0803,
+    /// Ship-profile: `FLASH_OPTR.TZEN` is not set (`ObField::Tzen`).
+    ObTzenMismatch = 0x0804,
+    /// Ship-profile: `FLASH_OPTR.RDP` is not the ship byte 0xAA (`ObField::Rdp`).
+    ObRdpNotShipLevel = 0x0805,
+    /// Ship-profile: `SECWM1R1` is not all-bank-1-secure (`ObField::Secwm1`).
+    ObSecwm1Mismatch = 0x0806,
+    /// Ship-profile: `SECWM2R1` is not all-bank-2-NS (`ObField::Secwm2`).
+    ObSecwm2Mismatch = 0x0807,
+    /// Ship-profile: `SECBOOTADD0` does not select the FSBL base
+    /// (`ObField::SecBootAdd0`) — a boot redirect.
+    ObSecBootAdd0Mismatch = 0x0808,
+    /// Ship-profile: `WRP1A` does not write-protect the FSBL pages
+    /// (`ObField::Wrp1a`).
+    ObWrp1aMismatch = 0x0809,
+    /// Ship-profile: an OEM key-lock bit is set, OR the OEM-lock mask is not yet
+    /// silicon-pinned so the check fails closed (`ObField::OemLock`; see
+    /// `lockdown::OEM_LOCK_MASK_PINNED`).
+    ObOemLockPresentOrUnpinned = 0x080A,
+    /// A per-device flash page (123..=127) is not blank at ship — a planted
+    /// journal/salt, or a used bench part.
+    PerDevicePageNotBlank = 0x080B,
 
     // Phase B (post-lock) — RMA / retry.
     /// OTP master is blank — the factory must burn it; first boot must not.
@@ -79,6 +105,16 @@ pub enum FirstBootError {
     OptigaSetDataFailed = 0x0852,
     /// Re-shield under the FINAL PBS did not confirm.
     OptigaConfirmFailed = 0x0853,
+    /// The 3-source TRNG salt draw itself failed (a platform/OPTIGA/SE050 leg
+    /// or the all-zero acceptance gate). Distinct from `OptigaSaltPersistFailed`
+    /// (which is now journal-persist only). See #443: the OPTIGA leg is
+    /// mandatory, so the shield must be up (`optiga_establish_transport_shield`)
+    /// before this draw.
+    TrngSaltDrawFailed = 0x0854,
+    /// The pre-salt OPTIGA TRANSPORT-PBS handshake failed (#443). Doubles as
+    /// authenticate-before-rotate: a chip that no longer pairs under the
+    /// factory transport PBS is caught here, before any journal write.
+    OptigaTransportShieldFailed = 0x0855,
     /// A journal step-marker write failed.
     JournalWriteFailed = 0x0861,
     /// The SEs are not in the expected factory transport state (e.g. a transit
@@ -91,6 +127,76 @@ impl FirstBootError {
     pub const fn raw(self) -> u16 {
         self as u16
     }
+}
+
+/// Map a ship-profile [`ObField`](sphincs_tz_shared::lockdown::ObField)
+/// mismatch to its distinct Phase-A fault code. **Exhaustive on purpose**: a
+/// new `ObField` variant breaks this build instead of silently collapsing into
+/// a generic code, so every option-byte discrepancy keeps naming itself on the
+/// fault screen (R5.1 stable-code requirement).
+#[must_use]
+pub const fn ob_field_code(f: sphincs_tz_shared::lockdown::ObField) -> FirstBootError {
+    use sphincs_tz_shared::lockdown::ObField as F;
+    match f {
+        F::Tzen => FirstBootError::ObTzenMismatch,
+        F::Rdp => FirstBootError::ObRdpNotShipLevel,
+        F::Secwm1 => FirstBootError::ObSecwm1Mismatch,
+        F::Secwm2 => FirstBootError::ObSecwm2Mismatch,
+        F::SecBootAdd0 => FirstBootError::ObSecBootAdd0Mismatch,
+        F::Wrp1a => FirstBootError::ObWrp1aMismatch,
+        F::OemLock => FirstBootError::ObOemLockPresentOrUnpinned,
+    }
+}
+
+/// Pad an ASCII byte slice into a 16-column display row (space-filled,
+/// truncated at 16). Pure helper for [`build_lock_confirm_pages`].
+const fn pad16(s: &[u8]) -> [u8; 16] {
+    let mut row = [b' '; 16];
+    let n = if s.len() < 16 { s.len() } else { 16 };
+    let mut i = 0;
+    while i < n {
+        row[i] = s[i];
+        i += 1;
+    }
+    row
+}
+
+/// Build the 2-page "confirm to lock" screen shown before the irreversible
+/// RDP-2 burn (R2.4, owner decision 2026-07-17). Structurally identical to
+/// `[ui::confirm::Page; 2]` (`[[u8; 16]; 4]` per page), so the hardware caller
+/// passes it straight to `confirm_checked`, whose **both-buttons chord**
+/// (synthesized to a long-right confirm) and scroll-to-end `FihBool` gate then
+/// require the user to page to page 2 and press BOTH buttons before the burn.
+/// Footer rows (row 3) are kept ≤ 12 columns so the draw-time ` i/n` page
+/// indicator overlays cleanly. Pure + host-testable (byte-exact).
+#[must_use]
+pub const fn build_lock_confirm_pages() -> [[[u8; 16]; 4]; 2] {
+    [
+        [
+            pad16(b"CONFIRM: LOCK"),
+            pad16(b"DEVICE FOREVER."),
+            pad16(b"SWD verify OFF"),
+            pad16(b"after lock."),
+        ],
+        [
+            pad16(b"Press BOTH keys"),
+            pad16(b"to LOCK forever"),
+            pad16(b"Hold LEFT to"),
+            pad16(b"cancel."),
+        ],
+    ]
+}
+
+/// The single combined authorization for the RDP-2 burn (R2.4). Returns
+/// [`crate::fi::OK_SENTINEL`] iff an affirmative confirm carried the accept
+/// sentinel. The RESULT is itself a Hamming-distant sentinel — produced by the
+/// double-evaluated `check_true_into_sentinel`, NOT a bare bool — so the caller
+/// gates on `== OK_SENTINEL`, matching the sibling `confirm_checked` and
+/// `TransportAuthProof::authorize_write` gates. A bool return would be one
+/// stuck-at-1 fault from burning the single most irreversible option byte.
+#[must_use]
+pub fn rdp_burn_authorized(confirmed: bool, sentinel: u32) -> u32 {
+    crate::fi::check_true_into_sentinel(|| confirmed && sentinel == crate::fi::OK_SENTINEL)
 }
 
 /// A terminal first-boot fault: which step failed + the numbered code.
@@ -135,7 +241,15 @@ pub trait FirstBootHw {
     fn se050_rotate_scp03(&mut self) -> Result<(), FirstBootError>;
     /// Re-key the SE050 admin credential transport → final.
     fn se050_rekey_admin(&mut self) -> Result<(), FirstBootError>;
-    /// Draw a fresh 32-byte TRNG salt.
+    /// #443: bring the OPTIGA shielded session up under the factory TRANSPORT
+    /// PBS (E140 untouched) so the 3-source `trng_salt` draw can reach the
+    /// OPTIGA TRNG. Fresh-path only — with a committed salt the rotation
+    /// self-establishes (FINAL-probe-first) and a transport handshake against
+    /// an already-rotated chip would fail spuriously.
+    fn optiga_establish_transport_shield(&mut self) -> Result<(), FirstBootError>;
+    /// Draw a fresh 32-byte TRNG salt. Requires the OPTIGA shield to be up
+    /// (see `optiga_establish_transport_shield`): the strong-RNG's OPTIGA leg
+    /// is mandatory and sentinel-gated.
     fn trng_salt(&mut self) -> Result<[u8; 32], FirstBootError>;
     /// Rotate the OPTIGA PBS transport → salted-final (two-phase confirm).
     fn optiga_rotate_pbs(&mut self, salt: &[u8; 32]) -> Result<(), FirstBootError>;
@@ -210,6 +324,13 @@ pub fn run(hw: &mut dyn FirstBootHw) -> Result<(), FirstBootFault> {
         let s = match salt {
             Some(s) => s,
             None => {
+                // #443: the salt has never been drawn ⇒ E140 still carries the
+                // transport PBS ⇒ this handshake is safe AND the only way the
+                // OPTIGA TRNG leg of the 3-source draw can answer. On a resume
+                // with a committed salt this whole arm is skipped, so a
+                // transport handshake against an already-rotated chip never runs.
+                hw.optiga_establish_transport_shield()
+                    .map_err(|e| FirstBootFault::new(FirstBootStep::OptigaPbs, e))?;
                 let s = hw
                     .trng_salt()
                     .map_err(|e| FirstBootFault::new(FirstBootStep::OptigaPbs, e))?;
@@ -259,6 +380,12 @@ mod tests {
         saes_ok: bool,
         fail: Option<FirstBootError>,
         fail_on_step: Option<u8>,
+        // #443: the OPTIGA shielded session. VOLATILE — cleared on every
+        // simulated reset (the test harness sets it false after each cut) so a
+        // resume must re-establish it before the salt draw can succeed.
+        optiga_shield_up: bool,
+        establish_calls: usize,
+        fail_establish: bool,
         // Deterministic "TRNG" salt (varies per test, not per call).
         salt_source: [u8; 32],
         // Power-cut injection.
@@ -284,6 +411,9 @@ mod tests {
                 saes_ok: true,
                 fail: None,
                 fail_on_step: None,
+                optiga_shield_up: false,
+                establish_calls: 0,
+                fail_establish: false,
                 salt_source: [0x5Au8; 32],
                 ops: 0,
                 cut_at: None,
@@ -385,7 +515,30 @@ mod tests {
             self.tick();
             Ok(())
         }
+        fn optiga_establish_transport_shield(&mut self) -> Result<(), FirstBootError> {
+            // The real helper only runs on the fresh path; a committed salt
+            // means the chip may already be rotated, where a transport
+            // handshake would fail. Mirror that invariant here.
+            assert_eq!(
+                self.journal().salt,
+                None,
+                "transport establish must not run after a committed salt"
+            );
+            self.establish_calls += 1;
+            self.tick(); // a power cut can land in the transport handshake
+            if self.fail_establish {
+                return Err(FirstBootError::OptigaTransportShieldFailed);
+            }
+            self.optiga_shield_up = true;
+            Ok(())
+        }
         fn trng_salt(&mut self) -> Result<[u8; 32], FirstBootError> {
+            // #443 regression: the 3-source draw's OPTIGA leg is mandatory, so
+            // the shield MUST be up. Without the establish call sequenced first
+            // this returns the deterministic-brick error.
+            if !self.optiga_shield_up {
+                return Err(FirstBootError::TrngSaltDrawFailed);
+            }
             self.tick();
             Ok(self.salt_source)
         }
@@ -433,6 +586,8 @@ mod tests {
         let res = panic::catch_unwind(AssertUnwindSafe(|| run(hw)));
         panic::set_hook(prev);
         assert!(res.is_err(), "configured power cut did not fire");
+        // The OPTIGA shielded session is volatile — a power cut drops it.
+        hw.optiga_shield_up = false;
     }
 
     #[test]
@@ -445,6 +600,9 @@ mod tests {
         assert_eq!(hw.scp03_calls, 1);
         assert_eq!(hw.admin_calls, 1);
         assert_eq!(hw.optiga_calls, 1);
+        // #443: the transport shield is established exactly once, before the
+        // single salt draw.
+        assert_eq!(hw.establish_calls, 1);
     }
 
     #[test]
@@ -488,6 +646,44 @@ mod tests {
         assert!(!hw.journal().has(DONE_SE050_KEYS));
     }
 
+    #[test]
+    fn transport_shield_failure_halts_with_0x0855() {
+        // #443: a chip that no longer answers the transport PBS handshake is
+        // caught at the establish step, BEFORE the salt is drawn or written.
+        let mut hw = FakeHw::new();
+        hw.fail_establish = true;
+        assert_eq!(
+            run(&mut hw),
+            Err(FirstBootFault::new(
+                FirstBootStep::OptigaPbs,
+                FirstBootError::OptigaTransportShieldFailed,
+            ))
+        );
+        // Steps 2-4 completed and are durable; step 5 wrote no salt and never
+        // reached the rotation.
+        assert!(hw.journal().has(DONE_SE050_ADMIN));
+        assert_eq!(hw.journal().salt, None);
+        assert_eq!(hw.optiga_calls, 0);
+    }
+
+    #[test]
+    fn resume_with_committed_salt_never_establishes() {
+        // On a resume where the salt is already committed, the fresh-path
+        // establish MUST be skipped — a transport handshake against an
+        // already-rotated chip would fail. Prime steps 2-4 + a committed salt,
+        // poison the establish, and require a clean completion regardless.
+        let mut hw = FakeHw::new();
+        prime_pre_salt(&mut hw, 3);
+        for r in &journal::encode_salt(&[0x77u8; 32]) {
+            hw.append(r).unwrap();
+        }
+        assert_eq!(hw.journal().salt, Some([0x77u8; 32]));
+        hw.fail_establish = true; // must never be reached
+        assert_eq!(run(&mut hw), Ok(()));
+        assert_eq!(hw.establish_calls, 0, "establish ran despite a committed salt");
+        assert_eq!(hw.optiga_salt_used, Some([0x77u8; 32]));
+    }
+
     /// Drive one cut+resume cycle: run with `cut_at`, swallow the powercut
     /// panic, then resume (no cut) to completion. Returns the fake for asserts.
     fn cut_then_resume(cut_at: usize) -> FakeHw {
@@ -516,8 +712,10 @@ mod tests {
             }
         }
 
-        // Resume: same device (page + SE flags persisted), no more cuts.
+        // Resume: same device (page + SE flags persisted), no more cuts. The
+        // OPTIGA shielded session, being volatile, did NOT persist the reset.
         hw.cut_at = None;
+        hw.optiga_shield_up = false;
         assert_eq!(run(&mut hw), Ok(()), "resume after cut@{cut_at} must complete");
         hw
     }
@@ -564,6 +762,7 @@ mod tests {
             let _ = panic::catch_unwind(AssertUnwindSafe(|| run(&mut h)));
             panic::set_hook(prev);
             h.cut_at = None;
+            h.optiga_shield_up = false; // volatile session dropped by the reset
             assert_eq!(run(&mut h), Ok(()));
             if let Some(s) = h.journal().salt {
                 assert_eq!(s, [0x9Cu8; 32], "cut@{cut}: salt changed across resume");
@@ -577,8 +776,9 @@ mod tests {
             let mut hw = FakeHw::new();
             prime_pre_salt(&mut hw, 3);
             hw.salt_source = [0x11u8; 32];
-            // TRNG is tick 1; each completed salt QW is one further boundary.
-            hw.cut_at = Some(1 + cut_after_qw);
+            // #443: establish is tick 1, TRNG is tick 2; each completed salt QW
+            // is one further boundary.
+            hw.cut_at = Some(2 + cut_after_qw);
             run_expect_powercut(&mut hw);
             assert_eq!(hw.journal().salt, None);
 
@@ -595,7 +795,7 @@ mod tests {
         let mut hw = FakeHw::new();
         prime_pre_salt(&mut hw, 3);
         hw.salt_source = [0x31u8; 32];
-        hw.cut_at = Some(4); // TRNG + QW1 + QW2 + committed header.
+        hw.cut_at = Some(5); // establish + TRNG + QW1 + QW2 + committed header.
         run_expect_powercut(&mut hw);
         assert_eq!(hw.journal().salt, Some([0x31u8; 32]));
 
@@ -632,7 +832,7 @@ mod tests {
         // five-QW completion reserve then refuses another attempt.
         for attempt in 0..4u8 {
             hw.salt_source = [0x50 + attempt; 32];
-            hw.cut_at = Some(hw.ops + 2); // TRNG, then salt QW1.
+            hw.cut_at = Some(hw.ops + 3); // establish, TRNG, then salt QW1.
             run_expect_powercut(&mut hw);
             assert_eq!(hw.journal().salt, None);
         }
@@ -650,5 +850,61 @@ mod tests {
         assert_eq!(hw.page, before, "capacity refusal must not consume another QW");
         assert_eq!(hw.optiga_calls, 0);
         assert!(!hw.journal().all_done());
+    }
+
+    #[test]
+    fn ob_field_code_is_total_and_distinct() {
+        use sphincs_tz_shared::lockdown::ObField;
+        let all = [
+            ObField::Tzen,
+            ObField::Rdp,
+            ObField::Secwm1,
+            ObField::Secwm2,
+            ObField::SecBootAdd0,
+            ObField::Wrp1a,
+            ObField::OemLock,
+        ];
+        let mut codes = Vec::new();
+        for f in all {
+            let c = ob_field_code(f).raw();
+            // Each maps into the distinct pre-lock 0x0804..=0x080A band.
+            assert!((0x0804..=0x080A).contains(&c), "{f:?} -> {c:#06x} out of band");
+            assert!(!codes.contains(&c), "{f:?} -> {c:#06x} collides");
+            codes.push(c);
+        }
+        assert_eq!(codes.len(), 7, "all seven fields mapped");
+    }
+
+    #[test]
+    fn rdp_burn_authorized_requires_both_words_and_returns_sentinel() {
+        let ok = crate::fi::OK_SENTINEL;
+        // Only confirmed + the accept sentinel authorizes, and the RESULT is
+        // itself OK_SENTINEL (not a bare bool) so the caller gates on it.
+        assert_eq!(rdp_burn_authorized(true, ok), ok, "confirmed + sentinel authorizes");
+        // Missing EITHER word must deny (two-independent-words FI idiom).
+        assert_ne!(rdp_burn_authorized(false, ok), ok, "not confirmed");
+        assert_ne!(rdp_burn_authorized(true, 0), ok, "zero sentinel");
+        assert_ne!(rdp_burn_authorized(true, !ok), ok, "wrong sentinel");
+    }
+
+    #[test]
+    fn lock_confirm_pages_are_byte_exact_and_overlay_safe() {
+        let pages = build_lock_confirm_pages();
+        let expect = [
+            ["CONFIRM: LOCK", "DEVICE FOREVER.", "SWD verify OFF", "after lock."],
+            ["Press BOTH keys", "to LOCK forever", "Hold LEFT to", "cancel."],
+        ];
+        for (pi, page) in pages.iter().enumerate() {
+            for (ri, row) in page.iter().enumerate() {
+                assert_eq!(row.len(), 16, "every row is 16 columns");
+                let s = core::str::from_utf8(row).expect("ascii row");
+                assert!(s.is_ascii(), "non-ascii on the trusted lock screen");
+                assert_eq!(s.trim_end(), expect[pi][ri], "page {pi} row {ri}");
+            }
+            // Footer (row 3) must leave room for the draw-time ` i/n` overlay.
+            let footer = &page[3];
+            let used = footer.iter().rposition(|&c| c != b' ').map_or(0, |p| p + 1);
+            assert!(used + 4 <= 16, "page {pi} footer too long for i/n overlay");
+        }
     }
 }

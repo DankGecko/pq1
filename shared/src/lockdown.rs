@@ -102,14 +102,26 @@ pub const BOR_LEV_MASK: u32 = 0x7;
 /// isolated here so the correction is one line.
 ///
 /// Fail direction (playbook SL8): a wrong register/bit guess makes the mask
-/// read constant-0 bits, so `oem_locks_absent` passes VACUOUSLY — fail-open:
-/// a unit with a planted OEM2 regression password sails through the one gate
-/// that exists to catch it. This mask has no wrong-guess mode that fails
-/// closed. Host tests exercise only the comparator on synthetic values, never
-/// the shipped register read, so the #36 bench readback (issue #46) is the
-/// sole pin — the gate is not load-bearing until that lands.
+/// read constant-0 bits, so a naive `oem_status & mask == 0` would pass
+/// VACUOUSLY — fail-open, letting a unit with a planted OEM2 regression
+/// password sail through the one gate that exists to catch it. That is why the
+/// load-bearing gate `oem_locks_absent` is now gated on
+/// [`OEM_LOCK_MASK_PINNED`] and FAILS CLOSED until the register/bits are pinned
+/// on silicon. Host tests exercise only the comparator on synthetic values,
+/// never the shipped register read.
 pub const OEM1LOCK: u32 = 1 << 26;
 pub const OEM2LOCK: u32 = 1 << 27;
+
+/// Silicon-pin status for the BENCH-CONFIRM OEM-lock mask above. While `false`,
+/// [`oem_locks_absent`] FAILS CLOSED (playbook SL8): an unpinned register/bit
+/// guess must never vacuously wave a unit through. Flip to `true` ONLY in the
+/// commit that records BOTH (a) the RM0456 §7 citation for the OEM-lock status
+/// register and the OEM1/OEM2LOCK bit positions, AND (b) a positive bench
+/// detection — provision an OEM1 key on a sacrificial RDP-0 board and confirm
+/// this gate rejects it (issue #46 / #387). Until then every first boot halts
+/// at the OEM-lock check; that is the intended posture (the `rdp2-self-lock`
+/// flow cannot ship before this pin exists anyway).
+pub const OEM_LOCK_MASK_PINNED: bool = false;
 
 /// Which option-byte field failed verification — drives the numbered
 /// first-boot fault screen so a mismatch reports *what* was wrong.
@@ -184,20 +196,54 @@ pub const fn secwm_bank2_all_ns(secwm2r1: u32) -> bool {
 /// — a cleared write-protect goes unreported); `STRT==0` passes vacuously
 /// (fail-open — a span starting past page 0 goes unreported); `END>=3` FAILS
 /// (fail-closed — the false-halt direction bricks every genuine first boot:
-/// a reliability hazard, not a security hole). Host tests cannot see either
-/// direction; the #36 bench readback (issue #46) is the sole pin.
+/// a reliability hazard, not a security hole). Because two of the three
+/// sub-fields fail OPEN, and WRP1A is the load-bearing check of invariant #10
+/// (WRP must be verified-set before RDP-2 makes it permanent), the wrapper
+/// [`wrp1a_covers_fsbl`] gates on [`WRP1A_MASK_PINNED`] and fails CLOSED until
+/// the layout is pinned on silicon.
+///
+/// Silicon-pin status for the BENCH-CONFIRM `WRP1AR` layout. While `false`,
+/// `wrp1a_covers_fsbl` fails closed. Flip to `true` ONLY in the commit that
+/// records the RM0456 `WRP1AR` layout (`STRT[6:0]`, `END[22:16]`, `UNLOCK[31]`)
+/// citation + a bench readback (issue #46).
+pub const WRP1A_MASK_PINNED: bool = false;
+
+/// Raw "WRP1A write-protects FSBL pages 0..=3" compare over the BENCH-CONFIRM
+/// layout (`UNLOCK==0 && STRT==0 && END>=3`), independent of the silicon pin.
 #[must_use]
-pub const fn wrp1a_covers_fsbl(wrp1ar: u32) -> bool {
+pub const fn wrp1a_covers_fsbl_bits(wrp1ar: u32) -> bool {
     let unlock = (wrp1ar >> 31) & 1;
     let strt = wrp1ar & 0x7F;
     let end = (wrp1ar >> 16) & 0x7F;
     unlock == 0 && strt == 0 && end >= 3
 }
 
-/// Are BOTH OEM key-lock bits clear (no OEM key provisioned at ship)?
+/// Does WRP1A confirm-verifiably write-protect the FSBL pages? **Fail-closed**
+/// while the layout is unpinned (`WRP1A_MASK_PINNED == false`): an unpinned
+/// guess whose `UNLOCK`/`STRT` sub-fields misread as constant-0 must never
+/// vacuously wave a removable-WRP unit through the one check invariant #10
+/// hangs on. Once pinned, this is exactly `wrp1a_covers_fsbl_bits`.
+#[must_use]
+pub const fn wrp1a_covers_fsbl(wrp1ar: u32) -> bool {
+    WRP1A_MASK_PINNED && wrp1a_covers_fsbl_bits(wrp1ar)
+}
+
+/// Raw "both OEM lock bits clear" compare, independent of the silicon pin.
+/// Host-testable in both directions: a SET OEM1/OEM2 bit is always "not clear".
+#[must_use]
+pub const fn oem_bits_clear(oem_status: u32) -> bool {
+    oem_status & (OEM1LOCK | OEM2LOCK) == 0
+}
+
+/// Are BOTH OEM key-lock bits confirmed-readably clear (no OEM key provisioned
+/// at ship)? **Fail-closed** while the mask register/bits are unpinned
+/// (`OEM_LOCK_MASK_PINNED == false`): "cannot confirm absent" MUST halt Phase A,
+/// never pass. Once pinned, this is exactly `oem_bits_clear`. A set lock bit is
+/// a fail in either pin state — there is no wrong-guess mode that passes a
+/// planted OEM key.
 #[must_use]
 pub const fn oem_locks_absent(oem_status: u32) -> bool {
-    oem_status & (OEM1LOCK | OEM2LOCK) == 0
+    OEM_LOCK_MASK_PINNED && oem_bits_clear(oem_status)
 }
 
 /// Advisory BOR-level check (BENCH-CONFIRM position). Returns the decoded
@@ -328,34 +374,57 @@ mod tests {
 
     #[test]
     fn wrp1a_must_lock_and_span_fsbl() {
-        assert!(wrp1a_covers_fsbl(GOOD_WRP1A), "STRT=0 END=3 UNLOCK=0 covers pages 0..=3");
-        assert!(wrp1a_covers_fsbl((7 << 16) | 0), "wider span still covers 0..=3");
+        // Raw bit compare is pin-independent.
+        assert!(wrp1a_covers_fsbl_bits(GOOD_WRP1A), "STRT=0 END=3 UNLOCK=0 covers pages 0..=3");
+        assert!(wrp1a_covers_fsbl_bits((7 << 16) | 0), "wider span still covers 0..=3");
         // UNLOCK=1 (bit31 set) → write-protect removable → NOT covered.
-        assert!(!wrp1a_covers_fsbl(GOOD_WRP1A | (1 << 31)), "UNLOCK=1 fails");
+        assert!(!wrp1a_covers_fsbl_bits(GOOD_WRP1A | (1 << 31)), "UNLOCK=1 fails");
         // Span starting at page 1 leaves FSBL page 0 unprotected.
-        assert!(!wrp1a_covers_fsbl((3 << 16) | 1), "STRT=1 leaves page 0 open");
+        assert!(!wrp1a_covers_fsbl_bits((3 << 16) | 1), "STRT=1 leaves page 0 open");
         // Span ending at page 2 leaves page 3 unprotected.
-        assert!(!wrp1a_covers_fsbl((2 << 16) | 0), "END=2 leaves page 3 open");
+        assert!(!wrp1a_covers_fsbl_bits((2 << 16) | 0), "END=2 leaves page 3 open");
+        // The load-bearing gate is fail-closed until pinned: even a good WRP1A
+        // only PASSES once the layout is silicon-pinned (invariant #10).
+        assert_eq!(wrp1a_covers_fsbl(GOOD_WRP1A), WRP1A_MASK_PINNED, "good WRP passes iff pinned");
+        // A removable WRP fails regardless of the pin (never a false pass).
+        assert!(!wrp1a_covers_fsbl(GOOD_WRP1A | (1 << 31)), "UNLOCK=1 fails (pin-independent)");
     }
 
     #[test]
     fn oem_locks_must_be_absent_at_ship() {
-        assert!(oem_locks_absent(0), "no OEM key → ok");
-        assert!(!oem_locks_absent(OEM1LOCK), "OEM1 provisioned → fail");
-        assert!(!oem_locks_absent(OEM2LOCK), "OEM2 provisioned (regression-password risk) → fail");
+        // Raw bit compare is pin-independent: a set OEM lock bit is never clear.
+        assert!(oem_bits_clear(0), "no OEM key → bits clear");
+        assert!(!oem_bits_clear(OEM1LOCK), "OEM1 provisioned → bits not clear");
+        assert!(!oem_bits_clear(OEM2LOCK), "OEM2 provisioned → bits not clear");
+        assert!(!oem_bits_clear(OEM1LOCK | OEM2LOCK), "both → bits not clear");
+        assert!(oem_bits_clear(1 << 3), "unrelated bit ignored");
+        // The load-bearing gate is fail-closed until the mask is pinned: even
+        // the all-clear reading only PASSES once pinned.
+        assert_eq!(oem_locks_absent(0), OEM_LOCK_MASK_PINNED, "all-clear passes iff pinned");
+        // A set lock bit fails regardless of the pin (never a false pass).
+        assert!(!oem_locks_absent(OEM1LOCK), "OEM1 provisioned → fail (pin-independent)");
+        assert!(!oem_locks_absent(OEM2LOCK), "OEM2 provisioned → fail (pin-independent)");
         assert!(!oem_locks_absent(OEM1LOCK | OEM2LOCK), "both → fail");
-        // Unrelated status bits do not trip the check.
-        assert!(oem_locks_absent(1 << 3), "unrelated bit ignored");
     }
 
     #[test]
     fn verify_ship_profile_orders_and_passes_good_state() {
+        // With every load-bearing field good, the remaining gates are the
+        // fail-closed WRP1A and OEM checks (in that order): the good state
+        // passes only once BOTH masks are silicon-pinned; while unpinned the
+        // first fail-closed gate (WRP1A) is the reported field.
         assert_eq!(
             verify_ship_profile(
                 GOOD_OPTR, SECWM1_ALL_SECURE, SECWM2_ALL_NS,
                 FSBL_BASE >> 7, GOOD_WRP1A, 0, &SHIP_PROFILE_U585,
             ),
-            Ok(())
+            if !WRP1A_MASK_PINNED {
+                Err(ObField::Wrp1a)
+            } else if !OEM_LOCK_MASK_PINNED {
+                Err(ObField::OemLock)
+            } else {
+                Ok(())
+            },
         );
         // Each corruption surfaces its own field, in fundamental-first order.
         assert_eq!(
@@ -374,13 +443,16 @@ mod tests {
             verify_ship_profile(GOOD_OPTR, SECWM1_ALL_SECURE, SECWM2_ALL_NS, 0, GOOD_WRP1A, 0, &SHIP_PROFILE_U585),
             Err(ObField::SecBootAdd0)
         );
+        // A removable WRP (UNLOCK=1) fails the WRP1A gate regardless of the pin.
         assert_eq!(
             verify_ship_profile(GOOD_OPTR, SECWM1_ALL_SECURE, SECWM2_ALL_NS, FSBL_BASE >> 7, GOOD_WRP1A | (1 << 31), 0, &SHIP_PROFILE_U585),
             Err(ObField::Wrp1a)
         );
+        // An OEM key present reaches the OEM gate only once WRP1A is pinned;
+        // while WRP1A is unpinned the fail-closed WRP1A gate reports first.
         assert_eq!(
             verify_ship_profile(GOOD_OPTR, SECWM1_ALL_SECURE, SECWM2_ALL_NS, FSBL_BASE >> 7, GOOD_WRP1A, OEM2LOCK, &SHIP_PROFILE_U585),
-            Err(ObField::OemLock)
+            if WRP1A_MASK_PINNED { Err(ObField::OemLock) } else { Err(ObField::Wrp1a) },
         );
     }
 }

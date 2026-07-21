@@ -22,7 +22,9 @@
 // (and `Se050::rotate_scp03_keys`) keep working unchanged.
 pub use crate::scp03_logic::{
     aes128_cbc_decrypt, aes128_cbc_encrypt, aes128_ecb_encrypt, build_put_key_apdu, cmac_aes128,
-    keys_are_factory_default, KEY_VERSION, PLATFORM_DEK, PLATFORM_ENC, PLATFORM_MAC,
+    keys_are_factory_default, verify_put_key_response, TransportAuthProof,
+    AUTH_CTX_ADMIN_TRANSPORT, AUTH_CTX_PBS_TRANSPORT, AUTH_CTX_SCP03_TRANSPORT, KEY_VERSION,
+    PLATFORM_DEK, PLATFORM_ENC, PLATFORM_MAC, PUT_KEY_APDU_LEN,
 };
 use crate::scp03_logic::{
     build_derivation_data, kdf, DD_CARD_CRYPTOGRAM, DD_HOST_CRYPTOGRAM, DD_S_ENC, DD_S_MAC,
