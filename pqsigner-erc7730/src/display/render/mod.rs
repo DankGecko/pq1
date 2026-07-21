@@ -95,6 +95,13 @@ const _: () = {
 /// Domain separator for the exact contract-render transcript commitment.
 /// Changing the framing or display geometry requires a new version.
 const CONTRACT_TRANSCRIPT_DOMAIN: &[u8] = b"pqsigner/erc7730-display-transcript/v1\0";
+/// Domain separator for a contract-render transcript that is additionally
+/// bound to independently derived nested-calldata context. V2 is deliberately
+/// disjoint from the legacy/no-nested V1 framing.
+const CONTRACT_TRANSCRIPT_NESTED_DOMAIN: &[u8] = b"pqsigner/erc7730-display-transcript/v2\0";
+/// Explicit V2 framing byte: the following 32 bytes are a nested-binding
+/// commitment supplied by the caller, not state reported by the receipt.
+const NESTED_BINDING_PRESENT: u8 = 1;
 
 /// Fixed, allocation-free receipt carried from the first full contract render
 /// to the secure confirmation boundary. It binds the renderer state, exact
@@ -145,6 +152,44 @@ impl ContractTranscriptReceipt {
             state,
             page_count,
             digest: contract_transcript_digest(state, pages.as_slice()),
+        })
+    }
+
+    /// Build a receipt over one complete contract-render page set and an
+    /// independently derived nested-calldata binding commitment.
+    ///
+    /// The receipt remains 40 bytes and carries no self-reported nested flag or
+    /// commitment. Verification must therefore use
+    /// [`Self::range_matches_with_nested`] with the expected commitment from
+    /// the authoritative caller. The V2 digest domain and explicit presence
+    /// byte keep this receipt disjoint from the legacy/no-nested V1 receipt,
+    /// including when the supplied commitment is all zeroes.
+    pub fn from_pages_with_nested(
+        state: u32,
+        pages: &Pages,
+        nested_binding_commitment: &[u8; 32],
+    ) -> Result<Self, RenderErr> {
+        if !matches!(
+            state,
+            INTENT_PUBLICATION_STATIC
+                | INTENT_PUBLICATION_INTERPOLATED
+                | INTENT_PUBLICATION_EIP712_STATIC
+        ) {
+            return Err(RenderErr::Reject("7730 invalid transcript state"));
+        }
+        let page_count = u32::try_from(pages.as_slice().len())
+            .map_err(|_| RenderErr::Reject("7730 transcript page count overflow"))?;
+        if page_count == 0 {
+            return Err(RenderErr::Reject("7730 empty transcript"));
+        }
+        Ok(Self {
+            state,
+            page_count,
+            digest: contract_transcript_digest_with_nested(
+                state,
+                pages.as_slice(),
+                nested_binding_commitment,
+            ),
         })
     }
 
@@ -199,6 +244,42 @@ impl ContractTranscriptReceipt {
         let actual = contract_transcript_digest(self.state, range);
         bool::from(actual.ct_eq(&self.digest))
     }
+
+    /// Recompute this receipt over an exact relative page range and the
+    /// caller's independently derived nested-calldata binding commitment.
+    ///
+    /// Supplying the expected commitment is mandatory: the receipt contains no
+    /// nested metadata that could be trusted as authority. Legacy/no-nested
+    /// receipts must continue to use [`Self::range_matches`].
+    #[must_use]
+    pub fn range_matches_with_nested(
+        &self,
+        pages: &Pages,
+        start: usize,
+        nested_binding_commitment: &[u8; 32],
+    ) -> bool {
+        if !matches!(
+            self.state,
+            INTENT_PUBLICATION_STATIC
+                | INTENT_PUBLICATION_INTERPOLATED
+                | INTENT_PUBLICATION_EIP712_STATIC
+        ) || self.page_count == 0
+        {
+            return false;
+        }
+        let Ok(count) = usize::try_from(self.page_count) else {
+            return false;
+        };
+        let Some(end) = start.checked_add(count) else {
+            return false;
+        };
+        let Some(range) = pages.as_slice().get(start..end) else {
+            return false;
+        };
+        let actual =
+            contract_transcript_digest_with_nested(self.state, range, nested_binding_commitment);
+        bool::from(actual.ct_eq(&self.digest))
+    }
 }
 
 #[inline(never)]
@@ -207,6 +288,27 @@ fn contract_transcript_digest(state: u32, pages: &[Page]) -> [u8; 32] {
     hasher.update(CONTRACT_TRANSCRIPT_DOMAIN);
     hasher.update(state.to_be_bytes());
     hasher.update((pages.len() as u32).to_be_bytes());
+    for (relative_index, page) in pages.iter().enumerate() {
+        hasher.update((relative_index as u32).to_be_bytes());
+        for row in page {
+            hasher.update(row);
+        }
+    }
+    hasher.finalize().into()
+}
+
+#[inline(never)]
+fn contract_transcript_digest_with_nested(
+    state: u32,
+    pages: &[Page],
+    nested_binding_commitment: &[u8; 32],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(CONTRACT_TRANSCRIPT_NESTED_DOMAIN);
+    hasher.update(state.to_be_bytes());
+    hasher.update((pages.len() as u32).to_be_bytes());
+    hasher.update([NESTED_BINDING_PRESENT]);
+    hasher.update(nested_binding_commitment);
     for (relative_index, page) in pages.iter().enumerate() {
         hasher.update((relative_index as u32).to_be_bytes());
         for row in page {
@@ -2175,6 +2277,83 @@ mod transcript_receipt_tests {
         let mut bad_digest = receipt;
         bad_digest.digest[31] ^= 1;
         assert!(!bad_digest.range_matches(&pages, 0));
+    }
+
+    #[test]
+    fn nested_receipt_binds_presence_and_every_commitment_bit() {
+        let pages = sample_pages();
+        let commitment = [0u8; 32];
+        let legacy =
+            ContractTranscriptReceipt::from_pages(INTENT_PUBLICATION_STATIC, &pages).unwrap();
+        let nested = ContractTranscriptReceipt::from_pages_with_nested(
+            INTENT_PUBLICATION_STATIC,
+            &pages,
+            &commitment,
+        )
+        .unwrap();
+
+        assert_eq!(core::mem::size_of::<ContractTranscriptReceipt>(), 40);
+        assert_ne!(nested.digest(), legacy.digest());
+        assert_eq!(
+            nested.digest(),
+            &[
+                0x74, 0x30, 0x59, 0xdc, 0x00, 0xd7, 0x4e, 0xec, 0x63, 0x2e, 0xdb, 0x38, 0x21, 0x08,
+                0xfa, 0xe4, 0x03, 0x77, 0x24, 0x49, 0x58, 0x04, 0xfd, 0xc2, 0xd5, 0xa0, 0xf2, 0x39,
+                0xd4, 0xbf, 0xe9, 0x23,
+            ]
+        );
+        assert!(!nested.exact_match(&legacy));
+        assert!(legacy.range_matches(&pages, 0));
+        assert!(!legacy.range_matches_with_nested(&pages, 0, &commitment));
+        assert!(!nested.range_matches(&pages, 0));
+        assert!(nested.range_matches_with_nested(&pages, 0, &commitment));
+
+        for byte_index in 0..commitment.len() {
+            for bit_index in 0..8 {
+                let mut mutated = commitment;
+                mutated[byte_index] ^= 1 << bit_index;
+
+                assert!(!nested.range_matches_with_nested(&pages, 0, &mutated));
+                let mutated_receipt = ContractTranscriptReceipt::from_pages_with_nested(
+                    INTENT_PUBLICATION_STATIC,
+                    &pages,
+                    &mutated,
+                )
+                .unwrap();
+                assert!(!nested.exact_match(&mutated_receipt));
+            }
+        }
+    }
+
+    #[test]
+    fn nested_receipts_exact_match_only_for_the_same_external_binding() {
+        let pages = sample_pages();
+        let commitment = [0x5Au8; 32];
+        let first = ContractTranscriptReceipt::from_pages_with_nested(
+            INTENT_PUBLICATION_INTERPOLATED,
+            &pages,
+            &commitment,
+        )
+        .unwrap();
+        let second = ContractTranscriptReceipt::from_pages_with_nested(
+            INTENT_PUBLICATION_INTERPOLATED,
+            &pages,
+            &commitment,
+        )
+        .unwrap();
+
+        assert!(first.exact_match(&second));
+        assert!(second.range_matches_with_nested(&pages, 0, &commitment));
+
+        let mut different = commitment;
+        different[31] ^= 0x80;
+        let third = ContractTranscriptReceipt::from_pages_with_nested(
+            INTENT_PUBLICATION_INTERPOLATED,
+            &pages,
+            &different,
+        )
+        .unwrap();
+        assert!(!first.exact_match(&third));
     }
 
     #[test]
