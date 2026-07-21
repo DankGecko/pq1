@@ -2296,3 +2296,41 @@ hop-6 VF R6a-establish); the SPHINCS+C10 EUF-CMA CAPSTONE STATEMENT compiles (2/
 ledger audit-verified complete, ITSRC10 foregrounded); and the concrete SPHINCS_PLUS_C10 scheme+game grounds the
 LHS. REMAINING = the multi-month FX game-chain construction (the 6 hops) + scheme correctness + the
 deterministic-Orig refinement — all +C-INVARIANT transcription, no new +C security content, ledger fixed.
+
+### 2026-07-21 — Wave 7: scheme-correctness fragment + a FALSE-IN-PRINCIPLE finding; hop-6 R6b CLOSED (residual = R6c only)
+
+Both tracks audited HONEST (forced recompile + canary-flips; statements byte-identical; no new axiom).
+
+**TRACK A — scheme correctness: maximal unconditional FRAGMENT proved + a genuine modelling FINDING
+(drafts/sphincs_c10_scheme_wip.ec, CERTIFIED-0-ADMIT).**
+ - PROVED `sign_gates` (phoare = 1%r): the 2 of 4 verify-conjuncts DETERMINED BY sign's own output always hold on
+   an honest signature at probability 1 — `good_fors m0 res.1` (via `dcond_supp` on the +C draw
+   `mk <$ dcond dmkey (good_fors m)`) and `size res.3 = d`. Non-vacuity machine-checked (phoare=1%r not hoare;
+   2 negative-control canaries rejected). good_pos exposed as a visible premise (= the carried axiom via
+   good_eq_good_fors), NOT re-cloned, NO new axiom.
+ - **KEY FINDING (source-verified, converged with GPT-5.6 + advisor): full `verify(honest sig) = 1%r` is FALSE IN
+   PRINCIPLE for the abstract +C model.** verify gates on `allOkC`; the total +C grinder returns a FALLBACK counter
+   when no good one exists (Grind.ec:79); and there is NO unconditional counter-existence axiom (predC is bare,
+   `grindP` is DEAD/replaced by the conditional `grind_correct`). So an honest signature can REJECT — correctness
+   holds only under a per-layer `exists c, predC (ThC ps ad m c)` hypothesis, i.e. exactly the p_nu / good-counter-
+   existence event the security already carries (FORS_C.ec:95's "Pr[honest verifies] >= 1 - p_nu"). This is a
+   MODELLING artefact, not a C10 flaw: the scheme's correctness is CONDITIONAL on the SAME good-counter-existence
+   assumption as its security. Residual splits: R1 (`root'=root`, a multi-day proof-ASSEMBLY from existing
+   components eq_valbt_valap/ch_comp/list2tree — not novel) + R2 (`allOkC`, the genuine +C completeness gap =
+   the good-counter-existence hypothesis).
+
+**TRACK B — hop-6 (VF): R6b (the HARD leg) CLOSED; residual narrowed to R6c ONLY (drafts/rtop_c_soundness_wip.ec,
+1 admit).** A prior full wave (Wave 4) reached only R6a-establish; this wave added R6b + a new reusable phoare.
+ - New asset `nprf_sign_cf` (CERTIFIED-0-ADMIT phoare = 1%r): characterizes the REAL `FL_SL_XMSS_MT_C_ES_NPRF.sign`
+   as a pure d-layer closed form (built bottom-up from 3 inner-proc closed forms + closed-form ops; deterministic
+   signer ⇒ unconditional; +C ground counter via encode_msgWOTS_C). Advisor-confirmed soundness anchor: it pins
+   sig_cf_elem/ap_cf_elem to the actual signer, so R6c cannot satisfy them vacuously.
+ - R6b (the +C sigl-table, the flagged hard leg) closed one-sidedly via `seq 1 2 + while{2} + call nprf_sign_cf`.
+   hop-6 `LeqPr_VF_C` residual is now **R6c ONLY** (MM45 :3935-4278): the oracle mk-rnd coupling on the shared
+   `dcond` (no mmap) + R6a-CONSUME (:4176-4277 nth_flatten/edivz arithmetic) + the validity/freshness map. The
+   missing invariant to build = the mmap-free oracle relational invariant carrying the R6b table + the seq-5-4
+   pkFORSnt-trco commitment through A.forge. Statements byte-identical (proof body only); non-vacuity confirmed
+   (phoare-index + table-index perturbations + false-canary all rejected).
+
+ITEM 2 (VF branch) is now one leg from complete: hop-6 = R6c only. Scheme correctness is a proved 2/4-conjunct
+fragment + the precise (R1 assembly, R2 = p_nu-conditional) residual. Both landed with source-verified findings.
