@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 810728,
-    "sha256": "cc02638515121bc82b012a80330886c719cb6d26717c27583693a2a510f0d95d"
+    "bytes": 813048,
+    "sha256": "9fc7e8ab0459d91f24a871d76990909a9d5c5facc3219abfb87942bf68ff427e"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -35,8 +35,58 @@
   "known_call_additions": [
     {
       "chain_id": 1,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x05b1ea03"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x0d2c7c16"
+    },
+    {
+      "chain_id": 1,
       "contract": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
       "selector": "0x2e1a7d4d"
+    },
+    {
+      "chain_id": 10,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x05b1ea03"
+    },
+    {
+      "chain_id": 10,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x0d2c7c16"
+    },
+    {
+      "chain_id": 56,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x05b1ea03"
+    },
+    {
+      "chain_id": 56,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x0d2c7c16"
+    },
+    {
+      "chain_id": 100,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x05b1ea03"
+    },
+    {
+      "chain_id": 100,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x0d2c7c16"
+    },
+    {
+      "chain_id": 137,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x05b1ea03"
+    },
+    {
+      "chain_id": 137,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x0d2c7c16"
     },
     {
       "chain_id": 137,
@@ -47,6 +97,66 @@
       "chain_id": 137,
       "contract": "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
       "selector": "0xfb3bdb41"
+    },
+    {
+      "chain_id": 146,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x05b1ea03"
+    },
+    {
+      "chain_id": 146,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x0d2c7c16"
+    },
+    {
+      "chain_id": 250,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x05b1ea03"
+    },
+    {
+      "chain_id": 250,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x0d2c7c16"
+    },
+    {
+      "chain_id": 324,
+      "contract": "0x6fd4383cb451173d5f9304f041c7bcbf27d561ff",
+      "selector": "0x05b1ea03"
+    },
+    {
+      "chain_id": 324,
+      "contract": "0x6fd4383cb451173d5f9304f041c7bcbf27d561ff",
+      "selector": "0x0d2c7c16"
+    },
+    {
+      "chain_id": 8217,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x05b1ea03"
+    },
+    {
+      "chain_id": 8217,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x0d2c7c16"
+    },
+    {
+      "chain_id": 8453,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x05b1ea03"
+    },
+    {
+      "chain_id": 8453,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x0d2c7c16"
+    },
+    {
+      "chain_id": 42161,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x05b1ea03"
+    },
+    {
+      "chain_id": 42161,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x0d2c7c16"
     },
     {
       "chain_id": 42220,
@@ -79,9 +189,39 @@
       "selector": "0xf83d08ba"
     },
     {
+      "chain_id": 43114,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x05b1ea03"
+    },
+    {
+      "chain_id": 43114,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x0d2c7c16"
+    },
+    {
+      "chain_id": 59144,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x05b1ea03"
+    },
+    {
+      "chain_id": 59144,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x0d2c7c16"
+    },
+    {
       "chain_id": 11155111,
       "contract": "0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
       "selector": "0x2e1a7d4d"
+    },
+    {
+      "chain_id": 1313161554,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x05b1ea03"
+    },
+    {
+      "chain_id": 1313161554,
+      "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
+      "selector": "0x0d2c7c16"
     }
   ],
   "tool_inputs": [
@@ -146,8 +286,8 @@
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 24,
-      "bytes": 1974243,
-      "sha256": "aeed58f1ba06017200f228efd0d68c9845fd4e583be6c695366e65bc7571cc3b"
+      "bytes": 1974425,
+      "sha256": "bf4bcceaf3613b65771aef287ac885ebd6183c78e7dc4962debb1149a1e05e0b"
     },
     {
       "path": "pqsigner-erc7730",
@@ -196,7 +336,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 280708,
-      "sha256": "83c10dd28d94d02b71fce1ca69d10c34dc09ec8fcb74ce7758e9bcf2ce496e97"
+      "sha256": "2a58099876b0ef5428b12f282729af585cc32827562f1382f61935cc238aece0"
     }
   ],
   "capability_inputs": [
@@ -217,15 +357,15 @@
       "path": "registry/1inch/calldata-AggregationRouterV6-zksync.json",
       "upstream_bytes": 327,
       "upstream_sha256": "72d94b4e2640ae6eb60356112f50c09ab9df35c080ad5c4fc1e6b16c8cd38428",
-      "replacement_bytes": 2737,
-      "replacement_sha256": "9098d5ae1cf5c8500e8ca5dfd36c1e22904d83979d1351acb6ff3f8dab2c39d3"
+      "replacement_bytes": 3897,
+      "replacement_sha256": "43e72d300338fde9bb90e11b98e7e57d656c7ed55584d8ca81c3e3da248dfae5"
     },
     {
       "path": "registry/1inch/calldata-AggregationRouterV6.json",
       "upstream_bytes": 3604,
       "upstream_sha256": "0c469dd75542c6abe680812eaa8238b64854dcaca091a59c217f5b52083eaced",
-      "replacement_bytes": 8034,
-      "replacement_sha256": "46811af0f2bad9ea7ae4deb16ab9087ace7d45fe8d70e98238cce138fa40780f"
+      "replacement_bytes": 9194,
+      "replacement_sha256": "9697cacec5f40a928301f46c7e264f4e05bc670d207dc3fbb8b0128c2629568d"
     },
     {
       "path": "registry/aave/calldata-WrappedTokenGatewayV3.json",

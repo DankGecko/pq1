@@ -1,7 +1,7 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
   "includes": "common-AggregationRouterV6.json",
-  "_curation_note": "PQSigner semantic curation: only cancelOrder(uint256,bytes32) and increaseEpoch(uint96) are admitted for the independently reviewed zkSync AggregationRouterV6 deployment. The authenticated signer is the order maker for both calls. cancelOrder shows the complete raw makerTraits and orderHash because makerTraits selects hash-vs-nonce-bit invalidation and the orderHash may be ignored; increaseEpoch shows the complete raw series and warns that advancing disables the old epoch while a next epoch may already have orders. cancelOrders and every swap, permit, fill, packed-route, and other sibling format remain exact known-call refusals. Evidence is historical fixed-block source/runtime authority, not live invalidator or epoch state, order existence, execution success, current bytecode, or future deployment/upgrade monitoring.",
+  "_curation_note": "PQSigner semantic curation: only cancelOrder(uint256,bytes32) and increaseEpoch(uint96) are admitted for the independently reviewed zkSync AggregationRouterV6 deployment. The authenticated signer is the order maker for both calls. cancelOrder shows the complete raw makerTraits and orderHash because makerTraits selects hash-vs-nonce-bit invalidation and the orderHash may be ignored; increaseEpoch shows the complete raw series and warns that advancing disables the old epoch while a next epoch may already have orders. bitsInvalidateForOrder(uint256,uint256) and advanceEpoch(uint96,uint256) are declared only to pin exact known-call refusals and are not admitted by deploymentFormats. cancelOrders and every swap, permit, fill, packed-route, and other sibling format remain exact known-call refusals. Evidence is historical fixed-block source/runtime authority, not live invalidator or epoch state, order existence, execution success, current bytecode, or future deployment/upgrade monitoring.",
   "_pqsigner": {
     "deploymentFormats": [
       {
@@ -47,6 +47,24 @@
             "format": "raw",
             "visible": "always"
           }
+        ]
+      },
+      "bitsInvalidateForOrder(uint256 makerTraits, uint256 additionalMask)": {
+        "$id": "bitsInvalidateForOrder",
+        "intent": "Unsupported 1inch nonce-bit invalidation",
+        "fields": [
+          { "path": "@.from", "label": "Order maker", "format": "raw", "visible": "always" },
+          { "path": "makerTraits", "label": "Maker traits raw", "format": "raw", "visible": "always" },
+          { "path": "additionalMask", "label": "Additional mask raw", "format": "raw", "visible": "always" }
+        ]
+      },
+      "advanceEpoch(uint96 series, uint256 amount)": {
+        "$id": "advanceEpoch",
+        "intent": "Unsupported 1inch multi-epoch advance",
+        "fields": [
+          { "path": "@.from", "label": "Order maker", "format": "raw", "visible": "always" },
+          { "path": "series", "label": "Series", "format": "raw", "visible": "always" },
+          { "path": "amount", "label": "Epoch amount raw", "format": "raw", "visible": "always" }
         ]
       }
     }

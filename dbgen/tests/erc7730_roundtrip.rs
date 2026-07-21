@@ -1686,6 +1686,11 @@ fn registry_oneinch_v6_cancellation_controls_admit_only_verified_deployments() {
 
     let sibling_selectors = [
         (
+            "bitsInvalidateForOrder(uint256,uint256)",
+            [0x05, 0xb1, 0xea, 0x03],
+        ),
+        ("advanceEpoch(uint96,uint256)", [0x0d, 0x2c, 0x7c, 0x16]),
+        (
             "cancelOrders(uint256[],bytes32[])",
             [0x89, 0xe7, 0xc6, 0x50],
         ),
@@ -1879,14 +1884,14 @@ fn registry_oneinch_v6_cancellation_controls_admit_only_verified_deployments() {
     }
     assert_eq!(target_known_call_tuples, 28);
     assert_eq!(catalogue.entries.len(), 463);
-    assert_eq!(catalogue.known_call_count, 4_552);
+    assert_eq!(catalogue.known_call_count, 4_580);
     assert_eq!(
         hex::encode(catalogue.known_call_set_hash),
-        "0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9"
+        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&catalogue.known_calls_bloom)),
-        "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade"
+        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9"
     );
 }
 
@@ -2283,7 +2288,7 @@ fn registry_midas_mtbill_admits_all_four_deposit_vault_routes() {
             );
         }
     }
-    assert_eq!(catalogue.known_call_count, 4_552);
+    assert_eq!(catalogue.known_call_count, 4_580);
 }
 
 #[test]
@@ -2651,14 +2656,14 @@ fn registry_midas_mtbill_redemption_admits_only_four_token_output_routes() {
         463,
         "the ten reviewed 1inch leaves must raise the prior 453-leaf catalogue to 463"
     );
-    assert_eq!(catalogue.known_call_count, 4_552);
+    assert_eq!(catalogue.known_call_count, 4_580);
     assert_eq!(
         hex::encode(catalogue.known_call_set_hash),
-        "0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9"
+        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&catalogue.known_calls_bloom)),
-        "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade"
+        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9"
     );
 }
 
@@ -2904,15 +2909,15 @@ fn registry_aave_v3_lending_refuses_pq_incompatible_permits_on_every_deployment(
         463,
         "PQ-incompatible permit removal must preserve the 463-leaf catalogue"
     );
-    assert_eq!(result.known_call_count, 4_552);
+    assert_eq!(result.known_call_count, 4_580);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9",
+        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829",
         "permit refusal must not change the declared known-call tuple set"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade",
+        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9",
         "permit refusal must not change the known-call Bloom"
     );
 }
@@ -3040,10 +3045,10 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     }
 
     assert_eq!(result.entries.len(), 463);
-    assert_eq!(result.known_call_count, 4_552);
+    assert_eq!(result.known_call_count, 4_580);
     assert_eq!(
         hex::encode(result.root),
-        "0430ad054d8781670ef7b90052aca25b1d1f8071fd55daa6583634d56267a290"
+        "db037c454f90e7c6bfc9fa81015fcb85d88a48987f43f4018556b12ee5fe3a1d"
     );
 }
 
@@ -3151,14 +3156,14 @@ fn registry_aave_v2_basic_lending_admits_only_referral_complete_routes() {
         463,
         "Aave V2 already owned three leaves"
     );
-    assert_eq!(result.known_call_count, 4_552);
+    assert_eq!(result.known_call_count, 4_580);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9"
+        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade"
+        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9"
     );
 }
 
@@ -3371,14 +3376,14 @@ fn registry_serenita_admits_operand_complete_deposit_and_claim_routes() {
     }
 
     assert_eq!(result.entries.len(), 463);
-    assert_eq!(result.known_call_count, 4_552);
+    assert_eq!(result.known_call_count, 4_580);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9"
+        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade"
+        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9"
     );
 }
 
@@ -3479,14 +3484,14 @@ fn registry_p2p_native_vault_admits_claim_on_only_the_pinned_deployments() {
     }
 
     assert_eq!(result.entries.len(), 463);
-    assert_eq!(result.known_call_count, 4_552);
+    assert_eq!(result.known_call_count, 4_580);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9"
+        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade"
+        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9"
     );
 }
 
@@ -4004,14 +4009,14 @@ fn registry_lido_wsteth_admits_operand_complete_permit_on_exact_mainnet_contract
     );
 
     assert_eq!(result.entries.len(), 463);
-    assert_eq!(result.known_call_count, 4_552);
+    assert_eq!(result.known_call_count, 4_580);
     assert_eq!(
         hex::encode(result.known_call_set_hash),
-        "0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9"
+        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&result.known_calls_bloom)),
-        "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade"
+        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9"
     );
 }
 

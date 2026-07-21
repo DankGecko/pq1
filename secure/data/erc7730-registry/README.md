@@ -45,15 +45,15 @@ accepted as a faithfulness proof.
 <!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
 Checked-in curated receipt, verified against a fresh build by `--check`: **463 leaves**, **398,453-byte**
 compiled companion catalogue, root
-`0430ad054d8781670ef7b90052aca25b1d1f8071fd55daa6583634d56267a290`,
-**4,552** canonical known-call tuples, tuple-set SHA-256
-`0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9`.
+`db037c454f90e7c6bfc9fa81015fcb85d88a48987f43f4018556b12ee5fe3a1d`,
+**4,580** canonical known-call tuples, tuple-set SHA-256
+`b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829`.
 Curation manifest SHA-256
-`169a805153550c123524a0faddd0a58237ab16b535924965822712a08e269d38` binds upstream commit
+`2c7e1767fbc677cf48c3fe471ea90ede945ab30f4d6b8305aa1fc7ae6838c0c5` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
-Manifest v3 authorizes exactly **10** curation-added known-call tuples and no deletions.
-The Bloom contains 28,293 / 131,072 set bits, below the generator's 25% cap.
+Manifest v3 authorizes exactly **38** curation-added known-call tuples and no deletions.
+The Bloom contains 28,453 / 131,072 set bits, below the generator's 25% cap.
 <!-- END XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
 
 The `.pqsigner-erc7730-vendor` file is an exact machine-owned directory

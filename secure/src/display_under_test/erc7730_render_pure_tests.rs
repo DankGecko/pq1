@@ -15066,6 +15066,8 @@ fn production_1inch_v6_omitted_deployments_and_sibling_controls_hard_refuse() {
         ONEINCH_CANCEL_SELECTOR,
         ONEINCH_EPOCH_SELECTOR,
         CANCEL_ORDERS_SELECTOR,
+        BITS_INVALIDATE_SELECTOR,
+        ADVANCE_EPOCH_SELECTOR,
     ];
     for chain_id in ALL_UPSTREAM_CHAINS {
         let contract = if chain_id == 324 {
