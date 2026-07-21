@@ -2154,3 +2154,51 @@ and it is a strong one; overstating it as "SPHINCS+C is proven EUF-CMA" would re
 honest-track record. (good_pos gates the 0-NEW-axiom story of the good==good_fors clone, not whether the reduction
 exists: worst case re-types FORS_C10's already-carried g-axioms at the concrete FTWES types — an existing ledger
 entry re-typed, not a new assumption.)
+
+### 2026-07-21 — Wave 3: the good==good_fors clone lands 0-NEW-AXIOM; hop-6 (VF) stated + 2/3 legs proven
+
+Both tracks audited PASS, no overstatement (independent forced-recompile + canary + non-vacuity controls).
+
+**CLONE PROBE — good == good_fors: 0 NEW AXIOMS (drafts/good_clone_probe.ec, CERTIFIED-0-ADMIT).** The scout's
+"single biggest risk" resolves on the cleanest ledger line. `clone FORS_C10.FORSC10 with mco<-FTWES.mco, g<-FTWES.g,
+...` succeeds and:
+ - ALL FIVE g-axioms (size_g/eqiks_g/neqisvs_g/rng_g/uniq_g, FORS_C10.ec:166-192) DISCHARGE as PROVED LEMMAS from
+   FTWES's concrete `g = mkseq(...)` (rng_g the only one needing the BLKAL `size(val m)=k*a` invariant). `print
+   C.size_g` etc. report `lemma`, not axiom. This is STRICTLY BETTER than the advisor's worst case (re-typed
+   carried axioms): they become theorems.
+ - `good_eq_good_fors` PROVED (C.good = good_fors, pure delta-unfold) — the two are the same op both provably and
+   definitionally-by-clone.
+ - SOLE residual: `good_pos` (= the paper's p_nu positive-good-mass, FORS_C10.ec:208) re-typed at the concrete
+   FTWES.mco/dmkey/g instance — `print C.good_pos` reports `axiom`. It is the SAME assumption FORS_C10 already
+   carries, NOT new, and genuinely un-dischargeable (a legal base model can force good-mass to 0).
+ - HONEST METRIC CAVEAT: ec-certify's `axiom-decls=0` is a file-TEXT metric (good_pos is INHERITED, not textually
+   declared) — it does NOT mean "0 assumptions." The ledger line is: 0 NEW axioms, sole entry = re-typed-carried good_pos.
+
+**VF SOUNDNESS (hop-6) — stated with exact MM45 shape, 2/3 legs proven (drafts/rtop_c_soundness_wip.ec, 1 admit).**
+ - STEP-0 CONFIRMED (structural, both external reviewers): hop-6 is CLONE-FREE. `good_fors` enters only (i) the
+   oracle mk-draw `mk <$ dcond dmkey (good_fors m)` — byte-identical on V_C and R_top_C sides, so it couples by a
+   single `rnd` on the shared dcond EXPRESSION (couples even if dcond degrades to dnull => NO good_pos needed here),
+   and (ii) the carried-then-dropped forced-zero is_valid gate. The abstract-`good` clone is isolated to the VT
+   branch (hop-5, out of scope). So hop-6 lands independent of the clone — a clean "VF clone-free / VT gated on the
+   (now-0-new-axiom) clone" story.
+ - Built V_C (`EUF_CMA_SPHINCSPLUSTWC_NPRFNPRF_V`, mirror MM45 :2186-2239: fresh conditioned mk-draw, FORS-sign via
+   FTWES, valid_MFORSC10 <- pkFORS'=pkFORS) and RV_C (the RV intermediate, mirror :2602) — both typecheck.
+ - PROVEN: `Eqv_Orig_RV_C` (NAGCMA(R_top_C(F)) ~ RV_C(F) via sim, non-vacuity canary-verified) + inside hop-6 the
+   RHS-rewrite leg and the opening ad/ps coupling. hop-6 `LeqPr_VF_C` statement byte-matches MM45 :3468-3471.
+ - ADMITTED (1, load-bearing): the core V_C~RV_C coupling, with a precise 3-leg residual — R6a (FORS-cube <->
+   committed-pkFORS invariant, the BULK, +C-invariant, MM45 :3482-3564 establish / :4176-4277 consume; "genuinely
+   large ~800-line near-verbatim port"); R6b (oracle-call equiv via the single coupled rnd + sigl-table invariant);
+   R6c (validity/freshness event mapping, :3935). Its TRUTH is argued (hand + GPT-5.6 + Kimi, ~10 falsifiers tried,
+   none held) but NOT yet machine-checked.
+ - FIDELITY FIX (GPT-5.6, source-verified): V_C's is_valid was missing the C10 forced-zero gate `good_fors m' mk'`
+   (a subtly-wrong hybrid); added it (byequiv stays true — the conjunct only shrinks res{1}).
+
+**LEDGER UPDATE — MKG-PRF RESOLVED (does NOT vanish).** The Wave-2 "MKG N/A at hypertree level" note is now precise:
+the +C fresh conditioned draw makes MM45's hop-3 (memoized-uniform -> random-function) VACUOUS at the V-game/hop-6
+level (no memoization to bite), but an MKG-PRF term PERSISTS at the +C FULL-SCHEME level (mkg_adv) — the fresh draw
+is the OUTPUT of that idealisation (uniform dmkey) plus +C conditioning, not a replacement. So the ledger's MKG-PRF
+entry STAYS; the fresh-vs-memoized deterministic-PRF faithfulness gap is the deferred full-scheme-wave question.
+
+ITEM 2 STATE: hop-6 (VF) stated + 2/3 legs proven (1 coupling admit = ~800-line MM45-verbatim port); the clone it
+would need on the VT side is de-risked to 0-new-axiom. REMAINING for item 2: close the hop-6 coupling admit; then
+hop-5 (VT into EUF_CMA_MFORSC10, using the now-proven clone). Then item 5 (top scheme + PRF hops + composition).
