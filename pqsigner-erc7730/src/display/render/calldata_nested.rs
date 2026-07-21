@@ -567,7 +567,7 @@ pub(super) fn render(
 mod tests {
     use super::*;
     use crate::bundle::VerifiedDescriptor;
-    use crate::ir::{FormatOp, CTX_CONTRACT, HEADER_LEN, SCHEMA_VER};
+    use crate::ir::{ContextKind, FormatOp, Visibility, CTX_CONTRACT, HEADER_LEN, SCHEMA_VER};
     use crate::proof_set::{VerifiedBundleRef, VerifiedProofSet};
     use crate::render::calldata_policy::{
         TEST_NESTED_CALLDATA_CALLEE_PATH, TEST_NESTED_CALLDATA_DESCRIPTOR_HASH,
@@ -575,7 +575,8 @@ mod tests {
         TEST_NESTED_CALLDATA_PARENT_CONTRACT, TEST_NESTED_CALLDATA_PARENT_SELECTOR,
     };
     use crate::render::params::{
-        DYNAMIC_KIND_BYTES, PARAM_DYNAMIC_KIND, PARAM_NESTED_CALLEE, PARAM_TERMINAL_KIND,
+        DYNAMIC_KIND_BYTES, DYNAMIC_KIND_STRING, PARAM_DYNAMIC_KIND, PARAM_NESTED_CALLEE,
+        PARAM_TERMINAL_KIND, PARAM_VISIBILITY, PARAM_WORD_GUARD, WORD_GUARD_NE,
     };
     use crate::render::policy::TerminalKind;
     use pqsigner_tx::names::NameResolver;
@@ -725,10 +726,201 @@ mod tests {
         )
     }
 
+    fn dynamic_child_ir_bytes(hidden: bool) -> std::vec::Vec<u8> {
+        let mut pool = std::vec![0];
+        let path = append_pool_entry(
+            &mut pool,
+            &[
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                0,
+                PathOp::FollowOffset as u8,
+            ],
+        );
+        let mut params = std::vec![PARAM_DYNAMIC_KIND, 1, DYNAMIC_KIND_STRING];
+        if hidden {
+            params.extend_from_slice(&[PARAM_VISIBILITY, 1, Visibility::Never as u8]);
+        }
+        params.extend_from_slice(&[PARAM_TERMINAL_KIND, 1, TerminalKind::DynamicString as u8]);
+        let params = append_pool_entry(&mut pool, &params);
+        let field = encoded_field(FormatOp::Raw, b"Memo", path, params);
+        let format = encoded_format(CHILD_SELECTOR, b"Message", 1, &[field]);
+        contract_ir_bytes(
+            TEST_CHAIN_ID,
+            CHILD_TARGET,
+            CHILD_DESCRIPTOR_HASH,
+            &pool,
+            &[format],
+            b"Child",
+        )
+    }
+
+    fn guarded_child_ir_bytes() -> std::vec::Vec<u8> {
+        let mut pool = std::vec![0];
+        let path = append_pool_entry(
+            &mut pool,
+            &[PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0],
+        );
+        let mut expected = [0u8; 32];
+        expected[12..].copy_from_slice(&[0x78; 20]);
+        let mut params = std::vec![PARAM_WORD_GUARD, 33, WORD_GUARD_NE];
+        params.extend_from_slice(&expected);
+        params.extend_from_slice(&[PARAM_TERMINAL_KIND, 1, TerminalKind::Address as u8]);
+        let params = append_pool_entry(&mut pool, &params);
+        let field = encoded_field(FormatOp::AddressName, b"Recipient", path, params);
+        let format = encoded_format(CHILD_SELECTOR, b"Transfer", 1, &[field]);
+        contract_ir_bytes(
+            TEST_CHAIN_ID,
+            CHILD_TARGET,
+            CHILD_DESCRIPTOR_HASH,
+            &pool,
+            &[format],
+            b"Child",
+        )
+    }
+
+    fn recursive_child_ir_bytes() -> std::vec::Vec<u8> {
+        let mut pool = std::vec![0];
+        let path = append_pool_entry(
+            &mut pool,
+            &[
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                0,
+                PathOp::FollowOffset as u8,
+            ],
+        );
+        let params = append_pool_entry(
+            &mut pool,
+            &[
+                PARAM_DYNAMIC_KIND,
+                1,
+                DYNAMIC_KIND_BYTES,
+                PARAM_NESTED_CALLEE,
+                4,
+                PathOp::RootContainer as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                crate::abi::container_field::TO as u8,
+                PARAM_TERMINAL_KIND,
+                1,
+                TerminalKind::DynamicBytes as u8,
+            ],
+        );
+        let field = encoded_field(FormatOp::Calldata, b"Again", path, params);
+        let format = encoded_format(CHILD_SELECTOR, b"Recurse", 1, &[field]);
+        contract_ir_bytes(
+            TEST_CHAIN_ID,
+            CHILD_TARGET,
+            CHILD_DESCRIPTOR_HASH,
+            &pool,
+            &[format],
+            b"Child",
+        )
+    }
+
+    fn unchecked_contract_ir(bytes: &[u8]) -> Erc7730Ir<'_> {
+        let pool_off = usize::from(u16::from_be_bytes([bytes[126], bytes[127]]));
+        let formats_off = usize::from(u16::from_be_bytes([bytes[128], bytes[129]]));
+        let pool_len = usize::from(u16::from_be_bytes([bytes[130], bytes[131]]));
+        let formats_len = usize::from(u16::from_be_bytes([bytes[132], bytes[133]]));
+        Erc7730Ir {
+            schema_ver: bytes[0],
+            context_kind: ContextKind::Contract,
+            chain_id: u64::from_be_bytes(bytes[2..10].try_into().unwrap()),
+            contract: bytes[10..30].try_into().unwrap(),
+            descriptor_hash: bytes[30..62].try_into().unwrap(),
+            domain_separator: bytes[62..94].try_into().unwrap(),
+            owner: bytes[94..110].split(|byte| *byte == 0).next().unwrap(),
+            contract_name: bytes[110..126].split(|byte| *byte == 0).next().unwrap(),
+            pool: &bytes[pool_off..pool_off + pool_len],
+            formats: &bytes[formats_off..formats_off + formats_len],
+            raw: bytes,
+        }
+    }
+
+    fn many_raw_child_ir_bytes(raw_fields: usize, address_field: bool) -> std::vec::Vec<u8> {
+        let mut pool = std::vec![0];
+        let mut fields = std::vec::Vec::new();
+        for slot in 0..raw_fields {
+            let path = append_pool_entry(
+                &mut pool,
+                &[
+                    PathOp::RootStructured as u8,
+                    PathOp::FieldIdx as u8,
+                    (slot >> 8) as u8,
+                    slot as u8,
+                ],
+            );
+            let params = append_pool_entry(
+                &mut pool,
+                &[PARAM_TERMINAL_KIND, 1, TerminalKind::FixedBytes as u8],
+            );
+            fields.push(encoded_field(FormatOp::Raw, b"Word", path, params));
+        }
+        if address_field {
+            let slot = raw_fields;
+            let path = append_pool_entry(
+                &mut pool,
+                &[
+                    PathOp::RootStructured as u8,
+                    PathOp::FieldIdx as u8,
+                    (slot >> 8) as u8,
+                    slot as u8,
+                ],
+            );
+            let params = append_pool_entry(
+                &mut pool,
+                &[PARAM_TERMINAL_KIND, 1, TerminalKind::Address as u8],
+            );
+            fields.push(encoded_field(
+                FormatOp::AddressName,
+                b"Recipient",
+                path,
+                params,
+            ));
+        }
+        let head_words = u16::try_from(raw_fields + usize::from(address_field)).unwrap();
+        let format = encoded_format(CHILD_SELECTOR, b"Inspect", head_words, &fields);
+        contract_ir_bytes(
+            TEST_CHAIN_ID,
+            CHILD_TARGET,
+            CHILD_DESCRIPTOR_HASH,
+            &pool,
+            &[format],
+            b"Child",
+        )
+    }
+
     fn child_calldata(selector: [u8; 4]) -> std::vec::Vec<u8> {
         let mut data = selector.to_vec();
         data.extend_from_slice(&[0u8; 12]);
         data.extend_from_slice(&[0x78; 20]);
+        data
+    }
+
+    fn dynamic_child_calldata() -> std::vec::Vec<u8> {
+        let mut data = CHILD_SELECTOR.to_vec();
+        data.extend_from_slice(&[0u8; 31]);
+        data.push(32);
+        data.extend_from_slice(&[0u8; 31]);
+        data.push(3);
+        data.extend_from_slice(b"abc");
+        data.resize(data.len() + 29, 0);
+        data
+    }
+
+    fn many_raw_child_calldata(raw_fields: usize, address_field: bool) -> std::vec::Vec<u8> {
+        let mut data = CHILD_SELECTOR.to_vec();
+        for value in 1..=raw_fields {
+            data.extend_from_slice(&[u8::try_from(value).unwrap(); 32]);
+        }
+        if address_field {
+            data.extend_from_slice(&[0u8; 12]);
+            data.extend_from_slice(&[0x78; 20]);
+        }
         data
     }
 
@@ -738,8 +930,8 @@ mod tests {
         data.extend_from_slice(&CHILD_TARGET);
         data.extend_from_slice(&[0u8; 31]);
         data.push(64); // sole canonical dynamic tail begins after the two-word head
-        data.extend_from_slice(&[0u8; 31]);
-        data.push(u8::try_from(child.len()).unwrap());
+        data.extend_from_slice(&[0u8; 24]);
+        data.extend_from_slice(&(child.len() as u64).to_be_bytes());
         data.extend_from_slice(child);
         let padding = (32 - child.len() % 32) % 32;
         data.resize(data.len() + padding, 0);
@@ -1148,5 +1340,356 @@ mod tests {
             TEST_NESTED_CALLDATA_ENROLLMENTS,
         )
         .is_err());
+    }
+
+    #[test]
+    fn canonical_child_preflight_failures_publish_no_boundary_or_pages() {
+        let outer_bytes = outer_ir_bytes();
+        let outer_ir = Erc7730Ir::parse_with_nested_calldata_enrollments(
+            &outer_bytes,
+            TEST_NESTED_CALLDATA_ENROLLMENTS,
+        )
+        .unwrap();
+        let signer = [0xA5; 20];
+
+        let assert_no_publication = |child_ir: Erc7730Ir<'_>, child_data: &[u8], case: &str| {
+            let proof_set = VerifiedProofSet {
+                raw_payload: &[],
+                outer: VerifiedBundleRef {
+                    descriptor: VerifiedDescriptor { ir: outer_ir },
+                    raw_bundle: &[],
+                    leaf_index: 3,
+                },
+                child: Some(VerifiedBundleRef {
+                    descriptor: VerifiedDescriptor { ir: child_ir },
+                    raw_bundle: &[],
+                    leaf_index: 7,
+                }),
+            };
+            let outer_data = outer_calldata(child_data);
+            let mut pages = Pages::with_len(0);
+            let result =
+                super::super::render_erc7730_proof_set_pages_with_signer_into_with_enrollments(
+                    &tx(),
+                    &outer_data,
+                    &proof_set,
+                    None,
+                    &NameResolver::default(),
+                    &signer,
+                    None,
+                    TEST_NESTED_CALLDATA_ENROLLMENTS,
+                    &mut pages,
+                );
+            assert!(result.is_err(), "{case} unexpectedly rendered");
+            assert_eq!(pages.len, 0, "{case} published parent or child pages");
+            assert_eq!(count_row(&pages, b"Transfer"), 0, "{case}");
+            assert!(
+                !pages
+                    .as_slice()
+                    .iter()
+                    .any(|page| trim(&page[0]).starts_with(b"CALL ")),
+                "{case} published a child boundary"
+            );
+        };
+
+        let static_bytes = child_ir_bytes(CHILD_SELECTOR);
+        let static_ir = Erc7730Ir::parse(&static_bytes).unwrap();
+        let mut short_head = child_calldata(CHILD_SELECTOR);
+        short_head.pop();
+        assert_no_publication(static_ir, &short_head, "short child head");
+        let mut static_suffix = child_calldata(CHILD_SELECTOR);
+        static_suffix.extend_from_slice(&[0u8; 32]);
+        assert_no_publication(static_ir, &static_suffix, "static child suffix");
+
+        let dynamic_bytes = dynamic_child_ir_bytes(false);
+        let dynamic_ir = Erc7730Ir::parse(&dynamic_bytes).unwrap();
+        let canonical_dynamic = dynamic_child_calldata();
+        let mut alias = canonical_dynamic.clone();
+        alias[4..36].fill(0);
+        assert_no_publication(dynamic_ir, &alias, "dynamic child head alias");
+        let mut gap = canonical_dynamic.clone();
+        gap.splice(36..36, [0u8; 32]);
+        gap[4..36].fill(0);
+        gap[35] = 64;
+        assert_no_publication(dynamic_ir, &gap, "dynamic child gap");
+        let mut dirty_padding = canonical_dynamic.clone();
+        *dirty_padding.last_mut().unwrap() = 1;
+        assert_no_publication(dynamic_ir, &dirty_padding, "dynamic child dirty padding");
+        let mut trailing = canonical_dynamic.clone();
+        trailing.extend_from_slice(&[0u8; 32]);
+        assert_no_publication(dynamic_ir, &trailing, "dynamic child trailing bytes");
+
+        let hidden_bytes = dynamic_child_ir_bytes(true);
+        let hidden_ir = Erc7730Ir::parse(&hidden_bytes).unwrap();
+        assert_no_publication(hidden_ir, &dirty_padding, "hidden malformed child field");
+
+        let guarded_bytes = guarded_child_ir_bytes();
+        let guarded_ir = Erc7730Ir::parse(&guarded_bytes).unwrap();
+        assert_no_publication(
+            guarded_ir,
+            &child_calldata(CHILD_SELECTOR),
+            "failed child word guard",
+        );
+    }
+
+    #[test]
+    fn child_calldata_recursion_refuses_before_boundary_publication() {
+        let outer_bytes = outer_ir_bytes();
+        let recursive_bytes = recursive_child_ir_bytes();
+        assert!(
+            Erc7730Ir::parse(&recursive_bytes).is_err(),
+            "ordinary authenticated IR parsing must not admit a recursive child"
+        );
+        let proof_set = VerifiedProofSet {
+            raw_payload: &[],
+            outer: VerifiedBundleRef {
+                descriptor: VerifiedDescriptor {
+                    ir: Erc7730Ir::parse_with_nested_calldata_enrollments(
+                        &outer_bytes,
+                        TEST_NESTED_CALLDATA_ENROLLMENTS,
+                    )
+                    .unwrap(),
+                },
+                raw_bundle: &[],
+                leaf_index: 3,
+            },
+            child: Some(VerifiedBundleRef {
+                // Exercise the independent runtime recursion belt even if a
+                // faulted parser view were to survive the normal IR rejection.
+                descriptor: VerifiedDescriptor {
+                    ir: unchecked_contract_ir(&recursive_bytes),
+                },
+                raw_bundle: &[],
+                leaf_index: 7,
+            }),
+        };
+        let outer_data = outer_calldata(&child_calldata(CHILD_SELECTOR));
+        let signer = [0xA5; 20];
+        assert!(matches!(
+            derive_bound_with_enrollments(
+                &tx(),
+                &outer_data,
+                &proof_set,
+                &signer,
+                TEST_NESTED_CALLDATA_ENROLLMENTS,
+            ),
+            Err(RenderErr::Reject("7730 nested recursion"))
+        ));
+        let mut pages = Pages::with_len(0);
+        assert!(
+            super::super::render_erc7730_proof_set_pages_with_signer_into_with_enrollments(
+                &tx(),
+                &outer_data,
+                &proof_set,
+                None,
+                &NameResolver::default(),
+                &signer,
+                None,
+                TEST_NESTED_CALLDATA_ENROLLMENTS,
+                &mut pages,
+            )
+            .is_err()
+        );
+        assert_eq!(pages.len, 0);
+    }
+
+    #[test]
+    fn every_nested_signed_calldata_byte_changes_transcript_or_refuses() {
+        let outer_bytes = outer_ir_bytes();
+        let child_bytes = child_ir_bytes(CHILD_SELECTOR);
+        let proof_set = VerifiedProofSet {
+            raw_payload: &[],
+            outer: VerifiedBundleRef {
+                descriptor: VerifiedDescriptor {
+                    ir: Erc7730Ir::parse_with_nested_calldata_enrollments(
+                        &outer_bytes,
+                        TEST_NESTED_CALLDATA_ENROLLMENTS,
+                    )
+                    .unwrap(),
+                },
+                raw_bundle: &[],
+                leaf_index: 3,
+            },
+            child: Some(VerifiedBundleRef {
+                descriptor: VerifiedDescriptor {
+                    ir: Erc7730Ir::parse(&child_bytes).unwrap(),
+                },
+                raw_bundle: &[],
+                leaf_index: 7,
+            }),
+        };
+        let signer = [0xA5; 20];
+        let baseline_data = outer_calldata(&child_calldata(CHILD_SELECTOR));
+        let baseline_binding = derive_bound_with_enrollments(
+            &tx(),
+            &baseline_data,
+            &proof_set,
+            &signer,
+            TEST_NESTED_CALLDATA_ENROLLMENTS,
+        )
+        .unwrap()
+        .unwrap()
+        .binding;
+        let mut baseline_pages = Pages::with_len(0);
+        let baseline_receipt =
+            super::super::render_erc7730_proof_set_pages_with_signer_into_with_enrollments(
+                &tx(),
+                &baseline_data,
+                &proof_set,
+                None,
+                &NameResolver::default(),
+                &signer,
+                Some(&baseline_binding),
+                TEST_NESTED_CALLDATA_ENROLLMENTS,
+                &mut baseline_pages,
+            )
+            .unwrap();
+
+        let mut changed = 0usize;
+        let mut refused = 0usize;
+        for index in 0..baseline_data.len() {
+            let mut mutated_data = baseline_data.clone();
+            mutated_data[index] ^= 1;
+            let Ok(Some(mutated)) = derive_bound_with_enrollments(
+                &tx(),
+                &mutated_data,
+                &proof_set,
+                &signer,
+                TEST_NESTED_CALLDATA_ENROLLMENTS,
+            ) else {
+                refused += 1;
+                continue;
+            };
+            let mut mutated_pages = Pages::with_len(0);
+            match super::super::render_erc7730_proof_set_pages_with_signer_into_with_enrollments(
+                &tx(),
+                &mutated_data,
+                &proof_set,
+                None,
+                &NameResolver::default(),
+                &signer,
+                Some(&mutated.binding),
+                TEST_NESTED_CALLDATA_ENROLLMENTS,
+                &mut mutated_pages,
+            ) {
+                Ok(mutated_receipt) => {
+                    assert_ne!(
+                        baseline_pages.as_slice(),
+                        mutated_pages.as_slice(),
+                        "signed calldata byte {index} changed silently"
+                    );
+                    assert!(
+                        !baseline_receipt.exact_match(&mutated_receipt),
+                        "signed calldata byte {index} preserved the transcript receipt"
+                    );
+                    changed += 1;
+                }
+                Err(_) => refused += 1,
+            }
+        }
+        assert!(
+            changed > 0,
+            "flip matrix needs a successful changed transcript"
+        );
+        assert!(refused > 0, "flip matrix needs a fail-closed mutation");
+        assert_eq!(changed + refused, baseline_data.len());
+    }
+
+    #[test]
+    fn nested_transcript_page_31_succeeds_and_page_32_refuses_without_confirmation() {
+        let outer_bytes = outer_ir_bytes();
+        let outer_ir = Erc7730Ir::parse_with_nested_calldata_enrollments(
+            &outer_bytes,
+            TEST_NESTED_CALLDATA_ENROLLMENTS,
+        )
+        .unwrap();
+        let signer = [0xA5; 20];
+        let raw_fields = 12 - super::super::intent::INTENT_BANNER_PAGES;
+
+        let render = |child_bytes: &[u8], child_data: &[u8], pages: &mut Pages| {
+            let proof_set = VerifiedProofSet {
+                raw_payload: &[],
+                outer: VerifiedBundleRef {
+                    descriptor: VerifiedDescriptor { ir: outer_ir },
+                    raw_bundle: &[],
+                    leaf_index: 3,
+                },
+                child: Some(VerifiedBundleRef {
+                    descriptor: VerifiedDescriptor {
+                        ir: Erc7730Ir::parse(child_bytes).unwrap(),
+                    },
+                    raw_bundle: &[],
+                    leaf_index: 7,
+                }),
+            };
+            let outer_data = outer_calldata(child_data);
+            let binding = derive_bound_with_enrollments(
+                &tx(),
+                &outer_data,
+                &proof_set,
+                &signer,
+                TEST_NESTED_CALLDATA_ENROLLMENTS,
+            )?
+            .ok_or(RenderErr::Reject("missing nested fixture"))?
+            .binding;
+            super::super::render_erc7730_proof_set_pages_with_signer_into_with_enrollments(
+                &tx(),
+                &outer_data,
+                &proof_set,
+                None,
+                &NameResolver::default(),
+                &signer,
+                Some(&binding),
+                TEST_NESTED_CALLDATA_ENROLLMENTS,
+                pages,
+            )
+        };
+
+        let fits_bytes = many_raw_child_ir_bytes(raw_fields, false);
+        let fits_data = many_raw_child_calldata(raw_fields, false);
+        let mut fits = Pages::with_len(0);
+        let receipt = render(&fits_bytes, &fits_data, &mut fits).unwrap();
+        assert_eq!(fits.len, crate::display::MAX_PAGES);
+        assert_eq!(count_row(&fits, b"R=Confirm"), 1);
+        assert!(receipt.range_matches_with_nested(
+            &fits,
+            0,
+            &nested_binding_commitment(
+                &derive_bound_with_enrollments(
+                    &tx(),
+                    &outer_calldata(&fits_data),
+                    &VerifiedProofSet {
+                        raw_payload: &[],
+                        outer: VerifiedBundleRef {
+                            descriptor: VerifiedDescriptor { ir: outer_ir },
+                            raw_bundle: &[],
+                            leaf_index: 3,
+                        },
+                        child: Some(VerifiedBundleRef {
+                            descriptor: VerifiedDescriptor {
+                                ir: Erc7730Ir::parse(&fits_bytes).unwrap(),
+                            },
+                            raw_bundle: &[],
+                            leaf_index: 7,
+                        }),
+                    },
+                    &signer,
+                    TEST_NESTED_CALLDATA_ENROLLMENTS,
+                )
+                .unwrap()
+                .unwrap()
+                .binding
+            )
+        ));
+
+        let overflow_bytes = many_raw_child_ir_bytes(raw_fields, true);
+        let overflow_data = many_raw_child_calldata(raw_fields, true);
+        let mut overflow = Pages::with_len(0);
+        assert_eq!(
+            render(&overflow_bytes, &overflow_data, &mut overflow),
+            Err(RenderErr::PageBudget)
+        );
+        assert_eq!(overflow.len, crate::display::MAX_PAGES);
+        assert_eq!(count_row(&overflow, b"R=Confirm"), 0);
     }
 }
