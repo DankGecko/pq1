@@ -1,0 +1,26 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "registry-proxy-code",
+    "method": "eth_getCode",
+    "params": [
+      "0x000000000000000000000000000000000000ce10",
+      {
+        "blockHash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "registry-implementation-code",
+    "method": "eth_getCode",
+    "params": [
+      "0x203fdf86A00999107Df531fa00b4bA81d674cb66",
+      {
+        "blockHash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

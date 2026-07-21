@@ -1,0 +1,45 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "validators-registry",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0xaEb865bCa93DdC8F47b8e29F40C5399cE34d0C58",
+        "data": "0x7b103999"
+      },
+      {
+        "blockHash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "registry-implementation-slot",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0x000000000000000000000000000000000000ce10",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "accounts",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x000000000000000000000000000000000000ce10",
+        "data": "0x853db323000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000084163636f756e7473000000000000000000000000000000000000000000000000"
+      },
+      {
+        "blockHash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

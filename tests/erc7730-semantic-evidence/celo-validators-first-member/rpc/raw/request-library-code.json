@@ -1,0 +1,26 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "address-linked-list-code",
+    "method": "eth_getCode",
+    "params": [
+      "0x08a4B5bc1b5aDef0a283C8f0185dEd6169F0Bd29",
+      {
+        "blockHash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "address-sorted-linked-list-code",
+    "method": "eth_getCode",
+    "params": [
+      "0x0E3E96a0D64B59b46872432f47BeD6A1825A1552",
+      {
+        "blockHash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

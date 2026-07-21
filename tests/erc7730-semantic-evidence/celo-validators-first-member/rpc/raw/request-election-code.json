@@ -1,0 +1,26 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "election-proxy-code",
+    "method": "eth_getCode",
+    "params": [
+      "0x8D6677192144292870907E3Fa8A5527fE55A7ff6",
+      {
+        "blockHash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "election-implementation-code",
+    "method": "eth_getCode",
+    "params": [
+      "0x74f9e5ee4071b9b35d127000a20f8e964009cb57",
+      {
+        "blockHash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

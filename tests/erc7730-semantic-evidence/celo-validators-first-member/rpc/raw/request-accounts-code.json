@@ -1,0 +1,26 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "accounts-proxy-code",
+    "method": "eth_getCode",
+    "params": [
+      "0x7d21685C17607338b313a7174bAb6620baD0aaB7",
+      {
+        "blockHash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "accounts-implementation-code",
+    "method": "eth_getCode",
+    "params": [
+      "0x907f5c53c0e31db06af45bc58f076563469c525a",
+      {
+        "blockHash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+        "requireCanonical": true
+      }
+    ]
+  }
+]
