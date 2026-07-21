@@ -1,0 +1,32 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "chain-id",
+    "method": "eth_chainId",
+    "params": []
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "block",
+    "method": "eth_getBlockByHash",
+    "params": [
+      "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+      false
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "validators",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x000000000000000000000000000000000000ce10",
+        "data": "0x853db3230000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000a56616c696461746f727300000000000000000000000000000000000000000000"
+      },
+      {
+        "blockHash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

@@ -1223,6 +1223,232 @@ fn registry_celo_governance_voting_is_mainnet_only_and_alfajores_stays_known() {
 }
 
 #[test]
+fn registry_celo_validators_add_first_member_is_mainnet_only_and_alfajores_stays_known() {
+    let root = workspace_root();
+    let relative = "registry/celo/calldata-celo_validators.json";
+    let curated = std::fs::read(
+        root.join("secure/data/erc7730/curations/files")
+            .join(relative),
+    )
+    .expect("read curated Celo Validators descriptor");
+    let installed = std::fs::read(root.join("secure/data/erc7730-registry").join(relative))
+        .expect("read installed Celo Validators descriptor");
+    assert_eq!(
+        installed, curated,
+        "installed Celo Validators descriptor diverged from its receipted curation"
+    );
+    let descriptor: serde_json::Value =
+        serde_json::from_slice(&installed).expect("parse curated Celo Validators descriptor");
+    let curation_note = descriptor["_curation_note"]
+        .as_str()
+        .expect("Celo Validators curation note");
+    assert!(curation_note.contains("signer mapping"));
+    assert!(curation_note.contains("vote ordering"));
+    assert!(curation_note.contains("future proxy-upgrade monitoring"));
+
+    let catalogue = build_registry();
+    let mainnet_contract: [u8; 20] = hex::decode("aeb865bca93ddc8f47b8e29f40c5399ce34d0c58")
+        .expect("valid Celo mainnet Validators address")
+        .try_into()
+        .expect("Celo mainnet Validators address width");
+    let alfajores_contract: [u8; 20] = hex::decode("9acf2a99914e083ad0d610672e93d14b0736bbcc")
+        .expect("valid Alfajores Validators address")
+        .try_into()
+        .expect("Alfajores Validators address width");
+    let validator_entries: Vec<_> = catalogue
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-celo_validators.json")
+        })
+        .collect();
+    assert_eq!(
+        validator_entries
+            .iter()
+            .map(|entry| (entry.chain_id, entry.contract))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            (42_220u64, mainnet_contract),
+            (44_787u64, alfajores_contract),
+        ]),
+        "curation must preserve exactly the two declared Validators deployments"
+    );
+
+    let selector_for = |signature: &str| {
+        let hash = keccak256(signature.as_bytes());
+        <[u8; 4]>::try_from(&hash[..4]).expect("Validators selector width")
+    };
+    let add_first_selector = selector_for("addFirstMember(address,address,address)");
+    assert_eq!(add_first_selector, [0x31, 0x73, 0xb8, 0xdb]);
+    let preserved_signatures = [
+        "addMember(address)",
+        "affiliate(address)",
+        "deaffiliate()",
+        "deregisterValidator(uint256)",
+        "deregisterValidatorGroup(uint256)",
+        "registerValidatorGroup(uint256)",
+        "removeMember(address)",
+        "reorderMember(address,address,address)",
+        "resetSlashingMultiplier()",
+    ];
+    let preserved_selectors: BTreeSet<_> = preserved_signatures
+        .iter()
+        .map(|signature| selector_for(signature))
+        .collect();
+    let register_selector = selector_for("registerValidator(bytes)");
+    let register_no_bls_selector = selector_for("registerValidatorNoBls(bytes)");
+
+    let find_entry = |chain_id: u64, contract: [u8; 20]| {
+        validator_entries
+            .iter()
+            .copied()
+            .find(|entry| entry.chain_id == chain_id && entry.contract == contract)
+            .unwrap_or_else(|| panic!("missing Validators leaf for chain {chain_id}"))
+    };
+    let mainnet_entry = find_entry(42_220, mainnet_contract);
+    let alfajores_entry = find_entry(44_787, alfajores_contract);
+
+    for entry in [mainnet_entry, alfajores_entry] {
+        let proof = extract_proof(
+            &catalogue.blob,
+            entry.leaf_index,
+            proof_depth(&catalogue.blob),
+        );
+        let bundle = synth_bundle(&entry.ir_bytes, entry.leaf_index as u32, &proof);
+        let verified = verify_erc7730_bundle(&bundle, &catalogue.root)
+            .expect("Validators bundle verifies against the production root");
+        assert_eq!(verified.ir.chain_id, entry.chain_id);
+        assert_eq!(verified.ir.contract, entry.contract);
+        assert_eq!(verified.ir.descriptor_hash, entry.descriptor_hash);
+        cross_check_contract(&verified.ir, entry.chain_id, &entry.contract)
+            .expect("Validators deployment binding round-trips");
+    }
+
+    let mainnet_ir =
+        Erc7730Ir::parse(&mainnet_entry.ir_bytes).expect("mainnet Validators IR parses");
+    let alfajores_ir =
+        Erc7730Ir::parse(&alfajores_entry.ir_bytes).expect("Alfajores Validators IR parses");
+    let mainnet_formats: BTreeSet<_> = mainnet_ir
+        .format_iter()
+        .map(|format| format.expect("mainnet Validators format parses").selector)
+        .collect();
+    let mut expected_mainnet = preserved_selectors.clone();
+    expected_mainnet.insert(add_first_selector);
+    assert_eq!(
+        mainnet_formats, expected_mainnet,
+        "mainnet must preserve nine formats and add only addFirstMember"
+    );
+    let alfajores_formats: BTreeSet<_> = alfajores_ir
+        .format_iter()
+        .map(|format| format.expect("Alfajores Validators format parses").selector)
+        .collect();
+    assert_eq!(
+        alfajores_formats, preserved_selectors,
+        "Alfajores must preserve exactly the nine previously compiled formats"
+    );
+
+    let add_first = mainnet_ir
+        .find_format_by_selector(&add_first_selector)
+        .expect("mainnet Validators format table parses")
+        .expect("addFirstMember is admitted on mainnet");
+    assert_eq!(add_first.intent, b"Add First Member");
+    assert_eq!(add_first.static_head_words, 3);
+    let fields: Vec<_> = add_first
+        .fields()
+        .map(|field| field.expect("addFirstMember field parses"))
+        .collect();
+    assert_eq!(fields.len(), 5);
+    for (field, (label, index)) in fields[..3].iter().zip([
+        (b"First Validator".as_slice(), 0u8),
+        (b"Fewer-Vote Hint".as_slice(), 1u8),
+        (b"More-Vote Hint".as_slice(), 2u8),
+    ]) {
+        assert_eq!(field.label, label);
+        assert_eq!(
+            FormatOp::try_from(field.format_op),
+            Ok(FormatOp::AddressName)
+        );
+        assert_eq!(
+            mainnet_ir
+                .path_bytes(field.path_off)
+                .expect("addFirstMember field path parses"),
+            [
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                index,
+            ],
+            "address field bound the wrong signed word"
+        );
+        let params = parse_params(&mainnet_ir, field.param_off)
+            .expect("addFirstMember address params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+        assert_eq!(params.terminal_kind, Some(TerminalKind::Address));
+        assert_eq!(params.addr_types, Some(0x06));
+        assert!(params.const_value.is_none());
+    }
+    for (field, (label, value)) in fields[3..].iter().zip([
+        (b"Effective Group".as_slice(), b"Signer-Mapped".as_slice()),
+        (b"Effect".as_slice(), b"Marks Eligible".as_slice()),
+    ]) {
+        assert_eq!(field.label, label);
+        assert_eq!(FormatOp::try_from(field.format_op), Ok(FormatOp::Raw));
+        assert_eq!(field.path_off, 0);
+        let params = parse_params(&mainnet_ir, field.param_off)
+            .expect("addFirstMember constant params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+        assert_eq!(params.terminal_kind, Some(TerminalKind::ConstantText));
+        assert_eq!(params.const_value, Some(value));
+    }
+
+    assert!(
+        alfajores_ir
+            .find_format_by_selector(&add_first_selector)
+            .expect("Alfajores Validators format table parses")
+            .is_none(),
+        "Alfajores addFirstMember must remain absent so runtime resolves it as NoFormat"
+    );
+    for (entry, ir) in [
+        (mainnet_entry, &mainnet_ir),
+        (alfajores_entry, &alfajores_ir),
+    ] {
+        for selector in [register_selector, register_no_bls_selector] {
+            assert!(
+                ir.find_format_by_selector(&selector)
+                    .expect("Validators format table parses")
+                    .is_none(),
+                "opaque registration route must stay refused on chain {}",
+                entry.chain_id
+            );
+        }
+        for selector in preserved_selectors.iter().copied().chain([
+            add_first_selector,
+            register_selector,
+            register_no_bls_selector,
+        ]) {
+            assert!(
+                catalogue
+                    .known_calls
+                    .contains(&(entry.chain_id, entry.contract, selector)),
+                "Validators selector left the exact known-call inventory on chain {}",
+                entry.chain_id
+            );
+            assert!(
+                known_call_may_contain(
+                    &catalogue.known_calls_bloom,
+                    entry.chain_id,
+                    &entry.contract,
+                    &selector,
+                ),
+                "Validators selector left the fail-closed Bloom on chain {}",
+                entry.chain_id
+            );
+        }
+    }
+}
+
+#[test]
 fn registry_morpho_blue_assets_bind_the_signed_market_token_on_both_chains() {
     let root = workspace_root();
     let relative = "registry/morpho/calldata-MorphoBlue.json";
@@ -1603,7 +1829,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.root),
-        "2d1c2d0c58b82fed7f39dd244c265762af960df6b4208d9f659bc6c856312285"
+        "f491b2e3e52011ada0ae14660a2c32506b719f369a35b52f5f574ed4dd3c685e"
     );
 }
 

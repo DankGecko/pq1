@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "scope": "Celo Validators addFirstMember route at the Registry-selected mainnet proxy",
+  "captured_at_utc": "2026-07-21T07:33:53Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
+  "boundary": "Historical fixed-block evidence covers exactly addFirstMember on Celo mainnet. It does not monitor future upgrades or authorize legacy Alfajores, any other Validators route, blind signing, hardware, shipment, or transaction-success claims.",
+  "fixed_block": {
+    "chain_id": 42220,
+    "number": 72649728,
+    "number_hex": "0x4548c00",
+    "hash": "0x810df7ac9ef91261a1ed3ef97f2848ec71a4f943c64715908fdeabd985bf4a3c",
+    "parent_hash": "0x98df262766665ba08ac9c3e9fb67c907f0e2ab7e5a9be6721e728a69afd63d24",
+    "state_root": "0x16ef9a83ecb75fd3214684fe2a8c9a2ff91a60a483d1eff5886b9a55b10ae855",
+    "timestamp": 1784550486,
+    "timestamp_utc": "2026-07-20T12:28:06Z"
+  },
+  "contracts": {
+    "registry": "0x000000000000000000000000000000000000ce10",
+    "registry_key": "Validators",
+    "registry_lookup_selector": "0x853db323",
+    "proxy": "0xaEb865bCa93DdC8F47b8e29F40C5399cE34d0C58",
+    "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+    "implementation": "0x13B0B89F3242f815C1FC6C9CF56e1Ab5aEA4dC58"
+  },
+  "rpc": {
+    "requests": [
+      { "batch": "identity", "artifact": "rpc/raw/request-identity.json" },
+      { "batch": "proxy", "artifact": "rpc/raw/request-proxy.json" },
+      { "batch": "implementation", "artifact": "rpc/raw/request-implementation.json" }
+    ],
+    "providers": [
+      {
+        "name": "Celo Forno",
+        "url": "https://forno.celo.org",
+        "responses": [
+          { "batch": "identity", "artifact": "rpc/raw/response-forno-identity.json" },
+          { "batch": "proxy", "artifact": "rpc/raw/response-forno-proxy.json" },
+          { "batch": "implementation", "artifact": "rpc/raw/response-forno-implementation.json" }
+        ]
+      },
+      {
+        "name": "dRPC",
+        "url": "https://celo.drpc.org",
+        "responses": [
+          { "batch": "identity", "artifact": "rpc/raw/response-drpc-identity.json" },
+          { "batch": "proxy", "artifact": "rpc/raw/response-drpc-proxy.json" },
+          { "batch": "implementation", "artifact": "rpc/raw/response-drpc-implementation.json" }
+        ]
+      },
+      {
+        "name": "Ankr",
+        "url": "https://rpc.ankr.com/celo",
+        "responses": [
+          { "batch": "identity", "artifact": "rpc/raw/response-ankr-identity.json" },
+          { "batch": "proxy", "artifact": "rpc/raw/response-ankr-proxy.json" },
+          { "batch": "implementation", "artifact": "rpc/raw/response-ankr-implementation.json" }
+        ]
+      }
+    ]
+  },
+  "runtimes": {
+    "proxy": {
+      "artifact": "runtime/ValidatorsProxy.celo-mainnet.hex",
+      "bytes": 2585,
+      "decoded_sha256": "14540ed8bb2066e59812d29b67e732f173c42438cfcd259e9f2597f7c9f1edea",
+      "keccak256": "0xc22ed3a179e1cb1dba10af012149967df6a97bf668ef6fdc4d5b7864322927c4"
+    },
+    "implementation": {
+      "artifact": "runtime/Validators.implementation.celo-mainnet.hex",
+      "bytes": 33037,
+      "decoded_sha256": "4b9341eeeb679a77a654a8bf03fad6c02edb83361a851ab92bc47f01dce6f131",
+      "keccak256": "0x29b87d5ad1daba9ec6fe341471b41af322000e92a8a69a2f3b0304611d8c603b"
+    }
+  },
+  "blockscout": {
+    "proxy": {
+      "artifact": "blockscout/ValidatorsProxy.json",
+      "name": "ValidatorsProxy",
+      "verification": "full",
+      "proxy_type": "eip1967"
+    },
+    "implementation": {
+      "artifact": "blockscout/Validators.implementation.json",
+      "name": "Validators",
+      "verification": "partial",
+      "compiler": "v0.8.19+commit.7dd6d404",
+      "evm_version": "paris",
+      "optimization_runs": 200
+    }
+  },
+  "official_source": {
+    "repository": "https://github.com/celo-org/celo-monorepo",
+    "commit": "045aa0061b7d0e9655ff3673cbd25a1bf2b4b74a",
+    "tree": "7118b9c76adcb7aa9afd844d4c2986f19055afb1",
+    "files": [
+      { "artifact": "source/Validators.sol", "upstream": "packages/protocol/contracts-0.8/governance/Validators.sol" },
+      { "artifact": "source/Accounts.sol", "upstream": "packages/protocol/contracts/common/Accounts.sol" },
+      { "artifact": "source/Election.sol", "upstream": "packages/protocol/contracts/governance/Election.sol" },
+      { "artifact": "source/Registry.sol", "upstream": "packages/protocol/contracts/common/Registry.sol" },
+      { "artifact": "source/UsingRegistry.sol", "upstream": "packages/protocol/contracts-0.8/common/UsingRegistry.sol" },
+      { "artifact": "source/AddressLinkedList.sol", "upstream": "packages/protocol/contracts-0.8/common/linkedlists/AddressLinkedList.sol" },
+      { "artifact": "source/LinkedList.sol", "upstream": "packages/protocol/contracts-0.8/common/linkedlists/LinkedList.sol" }
+    ]
+  },
+  "abi": {
+    "artifact": "abi/Validators.add-first-member.abi.json",
+    "route_count": 1,
+    "canonical_signature": "addFirstMember(address,address,address)",
+    "selector": "0x3173b8db",
+    "state_mutability": "nonpayable",
+    "returns": "bool"
+  },
+  "semantics": {
+    "validator": "signed registered validator account to add as the effective group's first member; affiliation and membership remain live state",
+    "lesser": "signed address hint for a validator group with fewer live election votes than the effective group; not a member, recipient, or amount",
+    "greater": "signed address hint for a validator group with more live election votes than the effective group; not a member, recipient, or amount",
+    "caller": "msg.sender resolves through Accounts.validatorSignerToAccount; the live effective group can differ from the immediate caller",
+    "effect": "after the first member is appended, Validators calls Election.markGroupEligible with the effective group and both signed hints",
+    "success_residual": "group and validator registration, empty-group status, maximum group size, validator affiliation, duplicate membership, locked-gold requirements, live vote ordering, hint validity, and execution success remain live-state preconditions"
+  },
+  "artifacts": [
+    { "path": "README.md", "sha256": "04ebcb2fbf465e3cd6827d35ff62527e58212cbf828716428bd945a33d7057c6" },
+    { "path": "abi/Validators.add-first-member.abi.json", "sha256": "7ea080fb4a3fa10e4a899cb9634a292677df1afa6b26198b2cde6be76773ab28" },
+    { "path": "blockscout/Validators.implementation.json", "sha256": "c63baf83b37da348b6924d40fd133676f09ead45e46340f29469aebb303f9465" },
+    { "path": "blockscout/ValidatorsProxy.json", "sha256": "2b33083d8dd421532b4c005156f1e5022f1aa9d744b3b2c464d2c66a77e13dc8" },
+    { "path": "collect.sh", "sha256": "a51db73dafdbcc6b800a936d859bc09230bf4f5d9dfeac015a8350907c97a528" },
+    { "path": "rpc/raw/request-identity.json", "sha256": "e93a76e286eb11027951c43030ba9a4403f8f8f442abd80e052e192c0e1b21a6" },
+    { "path": "rpc/raw/request-implementation.json", "sha256": "1982b89e455f0a0d530f10c5898ec8b65d4a58ac173b7f6e00537d4ed36eec69" },
+    { "path": "rpc/raw/request-proxy.json", "sha256": "205f3e6266759c8521f24d4c6b19f4a1c3707f084ed2b37470dbb629871b3546" },
+    { "path": "rpc/raw/response-ankr-identity.json", "sha256": "281e4620690e2066d757b10ecf3fbe6b376893610945ca0cf132df1c60daa824" },
+    { "path": "rpc/raw/response-ankr-implementation.json", "sha256": "f7eed53c615f9589196aa0dce4e99e603d60e91c9833920e2f21f77f746b56dc" },
+    { "path": "rpc/raw/response-ankr-proxy.json", "sha256": "32c03b1cc31f0e502687531b52edb69301ee8d0834951793f65b6abc731b2101" },
+    { "path": "rpc/raw/response-drpc-identity.json", "sha256": "281e4620690e2066d757b10ecf3fbe6b376893610945ca0cf132df1c60daa824" },
+    { "path": "rpc/raw/response-drpc-implementation.json", "sha256": "f7eed53c615f9589196aa0dce4e99e603d60e91c9833920e2f21f77f746b56dc" },
+    { "path": "rpc/raw/response-drpc-proxy.json", "sha256": "32c03b1cc31f0e502687531b52edb69301ee8d0834951793f65b6abc731b2101" },
+    { "path": "rpc/raw/response-forno-identity.json", "sha256": "1cf932d788d88c04ea7676fda2e97cc6d15d46fb91050c9353bc37deaa0154e2" },
+    { "path": "rpc/raw/response-forno-implementation.json", "sha256": "c61e9cfc51e00baea16570c00005c1db94f52c806ac943b30a4e233243d19301" },
+    { "path": "rpc/raw/response-forno-proxy.json", "sha256": "c78e07be12b6e4ecce4409f43ab23a768d3c8767a9d93f6b7358b5dd6707e1dd" },
+    { "path": "runtime/Validators.implementation.celo-mainnet.hex", "sha256": "f6f99d9a1a7e5335f81afb58438f4b04ab0e3f341b58be037bd9129f4aebcc03" },
+    { "path": "runtime/ValidatorsProxy.celo-mainnet.hex", "sha256": "7f022e6f1c9ed4f38b1ea88d6b679ab02e5516c74aac048c5f1699eda6599f84" },
+    { "path": "source/Accounts.sol", "sha256": "d7ba92f22a2acf0f1a7d047b204c86c39d14f9e5ed82ec2af4b784bf25bc2bb0" },
+    { "path": "source/AddressLinkedList.sol", "sha256": "0e2cccd67010d14f842702de555c57f506f3312da95667c7aefef51e30a04157" },
+    { "path": "source/Election.sol", "sha256": "f4f897289538a084161c179ddf61dbd06284f8aec521c794c8c0a0912241d191" },
+    { "path": "source/LinkedList.sol", "sha256": "1542f35fb42c0d9afb19ddab0bd301b6d89d700f2e9151883135176875a452d8" },
+    { "path": "source/Registry.sol", "sha256": "523b6c9ea1e3fc3e0fb17604a6821b0b25e7e47727f707826d3ee563e96db483" },
+    { "path": "source/UsingRegistry.sol", "sha256": "18dcfd162c1eccb1156cfcfbae61bae9aea7a225ad3f38b01d19305fc81de43b" },
+    { "path": "source/Validators.sol", "sha256": "71f446ee0e435710b6661202d4e26e53e9688d161e2339ce1648ff502f5ca664" }
+  ]
+}

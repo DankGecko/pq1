@@ -1247,6 +1247,271 @@ fn production_celo_election_vote_renders_all_signed_operands_mainnet_only() {
 }
 
 #[test]
+fn production_celo_validators_add_first_member_renders_all_signed_operands_mainnet_only() {
+    const SIGNATURE: &str = "addFirstMember(address,address,address)";
+    const MAINNET_CHAIN: u64 = 42_220;
+    const ALFAJORES_CHAIN: u64 = 44_787;
+    const SELECTOR: [u8; 4] = [0x31, 0x73, 0xb8, 0xdb];
+
+    let registry = build_registry();
+    let mainnet = find_leaf(registry, "calldata-celo_validators.json", MAINNET_CHAIN);
+    let mainnet_proxy: [u8; 20] = hex::decode("aeb865bca93ddc8f47b8e29f40c5399ce34d0c58")
+        .expect("canonical Validators proxy")
+        .try_into()
+        .expect("address width");
+    assert_eq!(mainnet.contract, mainnet_proxy);
+    let mainnet_bundle = synth_bundle(&registry.blob, &mainnet.ir_bytes, mainnet.leaf_index);
+    let mainnet_verified = verify_erc7730_bundle(&mainnet_bundle, &registry.root)
+        .expect("verify mainnet Validators leaf");
+    cross_check_contract(&mainnet_verified.ir, MAINNET_CHAIN, &mainnet.contract)
+        .expect("bind mainnet Validators leaf");
+    assert!(matches!(
+        cross_check_contract(&mainnet_verified.ir, ALFAJORES_CHAIN, &mainnet.contract),
+        Err(BindingError::ChainIdMismatch)
+    ));
+    assert!(matches!(
+        cross_check_contract(&mainnet_verified.ir, MAINNET_CHAIN, &[0x55; 20]),
+        Err(BindingError::ContractMismatch)
+    ));
+    assert_eq!(mainnet_verified.ir.format_count(), Ok(10));
+    assert_eq!(&keccak256(SIGNATURE.as_bytes())[..4], &SELECTOR);
+
+    let validator = [0x11; 20];
+    let lesser = [0x22; 20];
+    let greater = [0x33; 20];
+    let words = [
+        abi_address_word(validator),
+        abi_address_word(lesser),
+        abi_address_word(greater),
+    ];
+    let calldata = calldata_static(SIGNATURE, &words);
+    assert_eq!(&calldata[..4], &SELECTOR);
+    assert_selector_matches(&mainnet_verified.ir, &calldata, SIGNATURE);
+
+    let tx = envelope(MAINNET_CHAIN, mainnet.contract);
+    let resolver = NameResolver::new();
+    let signer = [0x42; 20];
+    let render = |candidate_words: &[[u8; 32]; 3]| {
+        let candidate = calldata_static(SIGNATURE, candidate_words);
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &candidate,
+            &mainnet_verified,
+            None,
+            &resolver,
+            &signer,
+        )
+    };
+
+    let baseline = render(&words).expect("mainnet Validators addFirstMember renders");
+    assert_eq!(
+        baseline.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert!(
+        baseline
+            .transcript_receipt
+            .range_matches(&baseline.pages, 0),
+        "the receipt must bind every trusted Validators page"
+    );
+    assert_all_pages_printable(&baseline.pages);
+    assert_eq!(
+        find_page_by_label(&baseline.pages, "Network:")
+            - pqsigner_erc7730::display::render::intent::INTENT_BANNER_PAGES,
+        5,
+        "three signed addresses and two authenticated constants must each get a format-owned page"
+    );
+    assert_eq!(
+        page_strs(&baseline.pages, intent_page_index(&baseline.pages)),
+        [
+            "Add First Member".to_string(),
+            "Celo".to_string(),
+            "Celo Validators".to_string(),
+            "> next".to_string(),
+        ]
+    );
+    assert_full_address_field_page(&baseline.pages, "First Validator", &validator);
+    assert_full_address_field_page(&baseline.pages, "Fewer-Vote Hint", &lesser);
+    assert_full_address_field_page(&baseline.pages, "More-Vote Hint", &greater);
+    assert_eq!(
+        page_strs(
+            &baseline.pages,
+            find_page_by_label(&baseline.pages, "Effective Group")
+        ),
+        [
+            "Effective Group".to_string(),
+            "Signer-Mapped".to_string(),
+            String::new(),
+            String::new(),
+        ]
+    );
+    assert_eq!(
+        page_strs(
+            &baseline.pages,
+            find_page_by_label(&baseline.pages, "Effect")
+        ),
+        [
+            "Effect".to_string(),
+            "Marks Eligible".to_string(),
+            String::new(),
+            String::new(),
+        ]
+    );
+
+    for (word_index, operand) in [(0usize, "validator"), (1, "lesser"), (2, "greater")] {
+        let mut mutated_words = words;
+        mutated_words[word_index][31] ^= 1;
+        let mutated = render(&mutated_words)
+            .unwrap_or_else(|error| panic!("render independently mutated {operand}: {error:?}"));
+        assert_ne!(
+            baseline.pages.as_slice(),
+            mutated.pages.as_slice(),
+            "changing only {operand} must change trusted pages"
+        );
+        assert!(
+            !baseline
+                .transcript_receipt
+                .exact_match(&mutated.transcript_receipt),
+            "changing only {operand} must change the transcript receipt"
+        );
+    }
+
+    let zero_hint_words = [
+        abi_address_word(validator),
+        abi_address_word([0u8; 20]),
+        abi_address_word([0u8; 20]),
+    ];
+    let zero_hints = render(&zero_hint_words).expect("zero list-end hints render literally");
+    assert_full_address_field_page(&zero_hints.pages, "Fewer-Vote Hint", &[0u8; 20]);
+    assert_full_address_field_page(&zero_hints.pages, "More-Vote Hint", &[0u8; 20]);
+
+    for (word_index, operand) in [(0usize, "validator"), (1, "lesser"), (2, "greater")] {
+        let mut dirty_words = words;
+        dirty_words[word_index][0] = 1;
+        assert!(
+            render(&dirty_words).is_err(),
+            "dirty high address padding for {operand} must refuse"
+        );
+    }
+    assert!(matches!(
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &calldata[..calldata.len() - 1],
+            &mainnet_verified,
+            None,
+            &resolver,
+            &signer,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 short head"
+        ))
+    ));
+    let mut trailing = calldata.clone();
+    trailing.push(0);
+    assert!(matches!(
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &trailing,
+            &mainnet_verified,
+            None,
+            &resolver,
+            &signer,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 static calldata trailing"
+        ))
+    ));
+
+    let mut mainnet_proofs = DispatchPageProofs::new();
+    mainnet_proofs.fail_initialize();
+    let mut dispatched = pick_sign_pages(
+        &tx,
+        &calldata,
+        &signer,
+        None,
+        None,
+        None,
+        Some(&mainnet_verified),
+        None,
+        None,
+        &resolver,
+        &mut mainnet_proofs,
+    )
+    .expect("dispatcher selects mainnet Validators addFirstMember");
+    assert_eq!(dispatched.as_slice(), baseline.pages.as_slice());
+    let mut verdict = crate::fi::FAIL_SENTINEL;
+    mainnet_proofs.final_set_proof(&dispatched, &tx, false, &mut verdict);
+    assert_eq!(verdict, crate::fi::OK_SENTINEL);
+    dispatched.buf[find_page_by_label(&dispatched, "First Validator")][1][0] ^= 1;
+    verdict = crate::fi::FAIL_SENTINEL;
+    mainnet_proofs.final_set_proof(&dispatched, &tx, false, &mut verdict);
+    assert_ne!(
+        verdict,
+        crate::fi::OK_SENTINEL,
+        "corrupting one visible validator byte must invalidate the dispatcher proof"
+    );
+
+    let alfajores = find_leaf(registry, "calldata-celo_validators.json", ALFAJORES_CHAIN);
+    let alfajores_proxy: [u8; 20] = hex::decode("9acf2a99914e083ad0d610672e93d14b0736bbcc")
+        .expect("Alfajores Validators proxy")
+        .try_into()
+        .expect("address width");
+    assert_eq!(alfajores.contract, alfajores_proxy);
+    let alfajores_bundle = synth_bundle(&registry.blob, &alfajores.ir_bytes, alfajores.leaf_index);
+    let alfajores_verified = verify_erc7730_bundle(&alfajores_bundle, &registry.root)
+        .expect("verify Alfajores Validators leaf");
+    cross_check_contract(&alfajores_verified.ir, ALFAJORES_CHAIN, &alfajores.contract)
+        .expect("bind Alfajores Validators leaf");
+    assert_eq!(alfajores_verified.ir.format_count(), Ok(9));
+    assert_selector_excluded(&alfajores_verified.ir, SIGNATURE);
+    assert!(
+        registry
+            .known_calls
+            .contains(&(ALFAJORES_CHAIN, alfajores.contract, SELECTOR)),
+        "Alfajores addFirstMember stays exact-known even though its format is refused"
+    );
+    assert!(pqsigner_erc7730::known_calls::may_contain(
+        &registry.known_calls_bloom,
+        ALFAJORES_CHAIN,
+        &alfajores.contract,
+        &SELECTOR,
+    ));
+    let alfajores_tx = envelope(ALFAJORES_CHAIN, alfajores.contract);
+    assert!(matches!(
+        render_erc7730_pages_with_signer_checked(
+            &alfajores_tx,
+            &calldata,
+            &alfajores_verified,
+            None,
+            &resolver,
+            &signer,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+    ));
+    for descriptor in [Some(&alfajores_verified), None] {
+        let mut proofs = DispatchPageProofs::new();
+        proofs.fail_initialize();
+        assert!(
+            pick_sign_pages(
+                &alfajores_tx,
+                &calldata,
+                &signer,
+                None,
+                None,
+                None,
+                descriptor,
+                None,
+                None,
+                &resolver,
+                &mut proofs,
+            )
+            .is_err(),
+            "Alfajores addFirstMember must not fall back with or without its descriptor"
+        );
+    }
+}
+
+#[test]
 fn production_celo_election_revokes_render_every_signed_operand_mainnet_only() {
     use pqsigner_erc7730::ir::FormatOp;
 

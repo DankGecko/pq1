@@ -384,7 +384,7 @@
   },
   "expected_catalogue": {
     "entries": 451,
-    "root": "0x2d1c2d0c58b82fed7f39dd244c265762af960df6b4208d9f659bc6c856312285",
+    "root": "0xf491b2e3e52011ada0ae14660a2c32506b719f369a35b52f5f574ed4dd3c685e",
     "known_calls": 4552,
     "known_call_set_sha256": "0x0bb0187224e44ff489d779af1564fa0c1148f03e9b9f27a82d5d0eebd81f13c9",
     "known_call_bloom_sha256": "efa6ab9408d73888d979e243de78ed558f809ebd6d04a71545df7f118260bade"
