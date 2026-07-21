@@ -1009,12 +1009,15 @@ fn production_celo_election_vote_renders_all_signed_operands_mainnet_only() {
     let expected: std::collections::BTreeSet<[u8; 4]> = [
         "activate(address)",
         "activateForAccount(address,address)",
+        "revokeActive(address,uint256,address,address,uint256)",
+        "revokeAllActive(address,address,address,uint256)",
+        "revokePending(address,uint256,address,address,uint256)",
         SIGNATURE,
     ]
     .iter()
     .map(|signature| keccak256(signature.as_bytes())[..4].try_into().unwrap())
     .collect();
-    assert_eq!(mainnet_verified.ir.format_count(), Ok(3));
+    assert_eq!(mainnet_verified.ir.format_count(), Ok(6));
     assert_eq!(admitted, expected);
     assert_eq!(&keccak256(SIGNATURE.as_bytes())[..4], &VOTE_SELECTOR);
 
@@ -1241,6 +1244,419 @@ fn production_celo_election_vote_renders_all_signed_operands_mainnet_only() {
         .is_err(),
         "a bound Alfajores descriptor must refuse vote without fallback"
     );
+}
+
+#[test]
+fn production_celo_election_revokes_render_every_signed_operand_mainnet_only() {
+    use pqsigner_erc7730::ir::FormatOp;
+
+    const MAINNET_CHAIN: u64 = 42_220;
+    const ALFAJORES_CHAIN: u64 = 44_787;
+    const REVOKE_ACTIVE: &str = "revokeActive(address,uint256,address,address,uint256)";
+    const REVOKE_ALL_ACTIVE: &str = "revokeAllActive(address,address,address,uint256)";
+    const REVOKE_PENDING: &str = "revokePending(address,uint256,address,address,uint256)";
+
+    struct RevokeCase {
+        signature: &'static str,
+        selector: [u8; 4],
+        intent: &'static str,
+        words: Vec<[u8; 32]>,
+        expected_fields: Vec<(&'static str, u8)>,
+        amount: Option<(usize, &'static str, &'static str)>,
+        lesser_index: usize,
+        greater_index: usize,
+        voting_list_index: usize,
+    }
+
+    let group = [0x11; 20];
+    let lesser = [0x22; 20];
+    let greater = [0x33; 20];
+    let active_value = u256_from_u128(1_500_000_000_000_000_000);
+    let pending_value = u256_from_u128(2_500_000_000_000_000_000);
+    let cases = vec![
+        RevokeCase {
+            signature: REVOKE_ACTIVE,
+            selector: [0x6e, 0x19, 0x84, 0x75],
+            intent: "Revoke Active Votes",
+            words: vec![
+                abi_address_word(group),
+                active_value.0,
+                abi_address_word(lesser),
+                abi_address_word(greater),
+                u256_from_u64(7).0,
+            ],
+            expected_fields: vec![
+                ("Validator Group", FormatOp::AddressName as u8),
+                ("Active CELO to Revoke", FormatOp::Amount as u8),
+                ("Fewer-Vote Hint", FormatOp::AddressName as u8),
+                ("More-Vote Hint", FormatOp::AddressName as u8),
+                ("Voting List Index", FormatOp::Raw as u8),
+            ],
+            amount: Some((1, "Active CELO to Revoke", "1.5 CELO")),
+            lesser_index: 2,
+            greater_index: 3,
+            voting_list_index: 4,
+        },
+        RevokeCase {
+            signature: REVOKE_ALL_ACTIVE,
+            selector: [0xe0, 0xa2, 0xab, 0x52],
+            intent: "Revoke All Active Votes",
+            words: vec![
+                abi_address_word(group),
+                abi_address_word(lesser),
+                abi_address_word(greater),
+                u256_from_u64(9).0,
+            ],
+            expected_fields: vec![
+                ("Validator Group", FormatOp::AddressName as u8),
+                ("Fewer-Vote Hint", FormatOp::AddressName as u8),
+                ("More-Vote Hint", FormatOp::AddressName as u8),
+                ("Voting List Index", FormatOp::Raw as u8),
+            ],
+            amount: None,
+            lesser_index: 1,
+            greater_index: 2,
+            voting_list_index: 3,
+        },
+        RevokeCase {
+            signature: REVOKE_PENDING,
+            selector: [0x9d, 0xfb, 0x60, 0x81],
+            intent: "Revoke Pending Votes",
+            words: vec![
+                abi_address_word(group),
+                pending_value.0,
+                abi_address_word(lesser),
+                abi_address_word(greater),
+                u256_from_u64(11).0,
+            ],
+            expected_fields: vec![
+                ("Validator Group", FormatOp::AddressName as u8),
+                ("Pending CELO to Revoke", FormatOp::Amount as u8),
+                ("Fewer-Vote Hint", FormatOp::AddressName as u8),
+                ("More-Vote Hint", FormatOp::AddressName as u8),
+                ("Voting List Index", FormatOp::Raw as u8),
+            ],
+            amount: Some((1, "Pending CELO to Revoke", "2.5 CELO")),
+            lesser_index: 2,
+            greater_index: 3,
+            voting_list_index: 4,
+        },
+    ];
+
+    let registry = build_registry();
+    let mainnet = find_leaf(registry, "calldata-celo_election.json", MAINNET_CHAIN);
+    let mainnet_proxy: [u8; 20] = hex::decode("8d6677192144292870907e3fa8a5527fe55a7ff6")
+        .expect("canonical Election proxy")
+        .try_into()
+        .expect("address width");
+    assert_eq!(mainnet.contract, mainnet_proxy);
+    let mainnet_bundle = synth_bundle(&registry.blob, &mainnet.ir_bytes, mainnet.leaf_index);
+    let mainnet_verified = verify_erc7730_bundle(&mainnet_bundle, &registry.root)
+        .expect("verify mainnet Election leaf");
+    cross_check_contract(&mainnet_verified.ir, MAINNET_CHAIN, &mainnet.contract)
+        .expect("bind mainnet Election leaf");
+    assert!(matches!(
+        cross_check_contract(&mainnet_verified.ir, ALFAJORES_CHAIN, &mainnet.contract),
+        Err(BindingError::ChainIdMismatch)
+    ));
+    assert!(matches!(
+        cross_check_contract(&mainnet_verified.ir, MAINNET_CHAIN, &[0x55; 20]),
+        Err(BindingError::ContractMismatch)
+    ));
+    assert_eq!(mainnet_verified.ir.format_count(), Ok(6));
+
+    let tx = envelope(MAINNET_CHAIN, mainnet.contract);
+    let resolver = NameResolver::new();
+    let signer = [0x42; 20];
+    let visible_label = |label: &str| {
+        if label.len() <= DISPLAY_COLS {
+            label.to_string()
+        } else {
+            let mut rendered = label[..DISPLAY_COLS - 1].to_string();
+            rendered.push('~');
+            rendered
+        }
+    };
+    for case in &cases {
+        assert_eq!(
+            &keccak256(case.signature.as_bytes())[..4],
+            &case.selector,
+            "selector pin for {}",
+            case.signature
+        );
+        let format = mainnet_verified
+            .ir
+            .find_format_by_selector(&case.selector)
+            .expect("Election format table parses")
+            .unwrap_or_else(|| panic!("missing mainnet format {}", case.signature));
+        assert_eq!(format.intent, case.intent.as_bytes());
+        assert_eq!(usize::from(format.static_head_words), case.words.len());
+        assert_eq!(usize::from(format.field_count), case.words.len());
+        let actual_fields: Vec<(&str, u8)> = format
+            .fields()
+            .map(|field| {
+                let field = field.expect("revoke field parses");
+                (
+                    core::str::from_utf8(field.label).expect("ASCII field label"),
+                    field.format_op,
+                )
+            })
+            .collect();
+        assert_eq!(
+            actual_fields.as_slice(),
+            case.expected_fields.as_slice(),
+            "exact authenticated field order for {}",
+            case.signature
+        );
+
+        let calldata = calldata_static(case.signature, &case.words);
+        assert_eq!(&calldata[..4], &case.selector);
+        assert_selector_matches(&mainnet_verified.ir, &calldata, case.signature);
+        let render = |candidate_words: &[[u8; 32]]| {
+            let candidate = calldata_static(case.signature, candidate_words);
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                &candidate,
+                &mainnet_verified,
+                None,
+                &resolver,
+                &signer,
+            )
+        };
+
+        let baseline = render(&case.words)
+            .unwrap_or_else(|error| panic!("render {}: {error:?}", case.signature));
+        assert_eq!(
+            baseline.transcript_receipt.state_code(),
+            INTENT_PUBLICATION_STATIC
+        );
+        assert!(baseline
+            .transcript_receipt
+            .range_matches(&baseline.pages, 0));
+        assert_all_pages_printable(&baseline.pages);
+        let intent_rows = page_strs(&baseline.pages, intent_page_index(&baseline.pages));
+        assert_eq!(intent_rows[0], case.intent[..DISPLAY_COLS]);
+        assert_eq!(intent_rows[1], case.intent[DISPLAY_COLS..]);
+        assert_eq!(intent_rows[2], "Celo Election");
+        assert_eq!(intent_rows[3], "> next");
+        assert_full_address_field_page(&baseline.pages, "Validator Group", &group);
+        assert_full_address_field_page(&baseline.pages, "Fewer-Vote Hint", &lesser);
+        assert_full_address_field_page(&baseline.pages, "More-Vote Hint", &greater);
+        let voting_list_label = visible_label("Voting List Index");
+        assert_raw_word_pages(
+            &baseline.pages,
+            &voting_list_label,
+            &case.words[case.voting_list_index],
+        );
+        match case.amount {
+            Some((_, label, expected)) => {
+                let rendered_label = visible_label(label);
+                assert_eq!(
+                    page_strs(
+                        &baseline.pages,
+                        find_page_by_label(&baseline.pages, &rendered_label)
+                    ),
+                    [
+                        rendered_label,
+                        expected.to_string(),
+                        String::new(),
+                        "> next".to_string(),
+                    ],
+                    "exact signed CELO amount for {}",
+                    case.signature
+                );
+            }
+            None => {
+                for forbidden in ["Active CELO to Revoke", "Pending CELO to Revoke"] {
+                    let forbidden = visible_label(forbidden);
+                    assert!(
+                        baseline
+                            .pages
+                            .as_slice()
+                            .iter()
+                            .all(|page| row_str(&page[0]) != forbidden),
+                        "{} must not fabricate a live-storage amount page",
+                        case.signature
+                    );
+                }
+            }
+        }
+
+        let address_indices = [0usize, case.lesser_index, case.greater_index];
+        for word_index in 0..case.words.len() {
+            let mut mutated_words = case.words.clone();
+            if address_indices.contains(&word_index) {
+                mutated_words[word_index][31] ^= 1;
+            } else if case
+                .amount
+                .is_some_and(|(amount_index, _, _)| amount_index == word_index)
+            {
+                mutated_words[word_index] = u256_from_u128(3_000_000_000_000_000_000).0;
+            } else {
+                mutated_words[word_index][31] ^= 1;
+            }
+            let mutated = render(&mutated_words).unwrap_or_else(|error| {
+                panic!(
+                    "render {} with independently mutated word {word_index}: {error:?}",
+                    case.signature
+                )
+            });
+            assert_ne!(
+                baseline.pages.as_slice(),
+                mutated.pages.as_slice(),
+                "word {word_index} must change trusted pages for {}",
+                case.signature
+            );
+            assert!(
+                !baseline
+                    .transcript_receipt
+                    .exact_match(&mutated.transcript_receipt),
+                "word {word_index} must change the transcript for {}",
+                case.signature
+            );
+        }
+
+        let mut zero_hint_words = case.words.clone();
+        zero_hint_words[case.lesser_index] = abi_address_word([0u8; 20]);
+        zero_hint_words[case.greater_index] = abi_address_word([0u8; 20]);
+        let zero_hints = render(&zero_hint_words)
+            .unwrap_or_else(|error| panic!("render zero hints for {}: {error:?}", case.signature));
+        assert_full_address_field_page(&zero_hints.pages, "Fewer-Vote Hint", &[0u8; 20]);
+        assert_full_address_field_page(&zero_hints.pages, "More-Vote Hint", &[0u8; 20]);
+
+        for word_index in address_indices {
+            let mut dirty_words = case.words.clone();
+            dirty_words[word_index][0] = 1;
+            assert!(
+                render(&dirty_words).is_err(),
+                "dirty address padding in word {word_index} must refuse {}",
+                case.signature
+            );
+        }
+        assert!(matches!(
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                &calldata[..calldata.len() - 1],
+                &mainnet_verified,
+                None,
+                &resolver,
+                &signer,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 short head"
+            ))
+        ));
+        let mut trailing = calldata.clone();
+        trailing.push(0);
+        assert!(matches!(
+            render_erc7730_pages_with_signer_checked(
+                &tx,
+                &trailing,
+                &mainnet_verified,
+                None,
+                &resolver,
+                &signer,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::Reject(
+                "7730 static calldata trailing"
+            ))
+        ));
+
+        let mut proofs = DispatchPageProofs::new();
+        proofs.fail_initialize();
+        let mut dispatched = pick_sign_pages(
+            &tx,
+            &calldata,
+            &signer,
+            None,
+            None,
+            None,
+            Some(&mainnet_verified),
+            None,
+            None,
+            &resolver,
+            &mut proofs,
+        )
+        .unwrap_or_else(|_| panic!("dispatcher selects {}", case.signature));
+        assert_eq!(dispatched.as_slice(), baseline.pages.as_slice());
+        let mut verdict = crate::fi::FAIL_SENTINEL;
+        proofs.final_set_proof(&dispatched, &tx, false, &mut verdict);
+        assert_eq!(verdict, crate::fi::OK_SENTINEL);
+        dispatched.buf[find_page_by_label(&dispatched, "Validator Group")][1][0] ^= 1;
+        verdict = crate::fi::FAIL_SENTINEL;
+        proofs.final_set_proof(&dispatched, &tx, false, &mut verdict);
+        assert_ne!(
+            verdict,
+            crate::fi::OK_SENTINEL,
+            "visible corruption must invalidate the dispatcher proof for {}",
+            case.signature
+        );
+    }
+
+    let alfajores = find_leaf(registry, "calldata-celo_election.json", ALFAJORES_CHAIN);
+    let alfajores_proxy: [u8; 20] = hex::decode("1c3edf937cfc2f6f51784d20deb1af1f9a8655fa")
+        .expect("Alfajores Election proxy")
+        .try_into()
+        .expect("address width");
+    assert_eq!(alfajores.contract, alfajores_proxy);
+    let alfajores_bundle = synth_bundle(&registry.blob, &alfajores.ir_bytes, alfajores.leaf_index);
+    let alfajores_verified = verify_erc7730_bundle(&alfajores_bundle, &registry.root)
+        .expect("verify Alfajores Election leaf");
+    cross_check_contract(&alfajores_verified.ir, ALFAJORES_CHAIN, &alfajores.contract)
+        .expect("bind Alfajores Election leaf");
+    assert_eq!(alfajores_verified.ir.format_count(), Ok(2));
+    let alfajores_tx = envelope(ALFAJORES_CHAIN, alfajores.contract);
+    for case in &cases {
+        assert_selector_excluded(&alfajores_verified.ir, case.signature);
+        assert!(
+            registry
+                .known_calls
+                .contains(&(ALFAJORES_CHAIN, alfajores.contract, case.selector)),
+            "Alfajores {} remains exact-known",
+            case.signature
+        );
+        assert!(pqsigner_erc7730::known_calls::may_contain(
+            &registry.known_calls_bloom,
+            ALFAJORES_CHAIN,
+            &alfajores.contract,
+            &case.selector,
+        ));
+        let calldata = calldata_static(case.signature, &case.words);
+        assert!(matches!(
+            render_erc7730_pages_with_signer_checked(
+                &alfajores_tx,
+                &calldata,
+                &alfajores_verified,
+                None,
+                &resolver,
+                &signer,
+            ),
+            Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+        ));
+
+        for descriptor in [Some(&alfajores_verified), None] {
+            let mut proofs = DispatchPageProofs::new();
+            proofs.fail_initialize();
+            assert!(
+                pick_sign_pages(
+                    &alfajores_tx,
+                    &calldata,
+                    &signer,
+                    None,
+                    None,
+                    None,
+                    descriptor,
+                    None,
+                    None,
+                    &resolver,
+                    &mut proofs,
+                )
+                .is_err(),
+                "Alfajores {} must not fall back with or without its descriptor",
+                case.signature
+            );
+        }
+    }
 }
 
 #[test]

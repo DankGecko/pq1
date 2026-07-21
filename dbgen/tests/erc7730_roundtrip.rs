@@ -301,7 +301,7 @@ fn registry_allowance_threshold_curations_are_structurally_exact() {
 }
 
 #[test]
-fn registry_celo_election_vote_is_mainnet_only_and_alfajores_stays_known() {
+fn registry_celo_election_vote_and_revokes_are_mainnet_only_and_alfajores_stays_known() {
     let root = workspace_root();
     let relative = "registry/celo/calldata-celo_election.json";
     let curated = std::fs::read(
@@ -351,9 +351,18 @@ fn registry_celo_election_vote_is_mainnet_only_and_alfajores_stays_known() {
     };
     let activate_selector = selector_for("activate(address)");
     let activate_for_selector = selector_for("activateForAccount(address,address)");
+    let revoke_active_selector =
+        selector_for("revokeActive(address,uint256,address,address,uint256)");
+    let revoke_all_active_selector =
+        selector_for("revokeAllActive(address,address,address,uint256)");
+    let revoke_pending_selector =
+        selector_for("revokePending(address,uint256,address,address,uint256)");
     let vote_selector = selector_for("vote(address,uint256,address,address)");
     assert_eq!(activate_selector, [0x1c, 0x5a, 0x9d, 0x9c]);
     assert_eq!(activate_for_selector, [0xc1, 0x44, 0x70, 0xc4]);
+    assert_eq!(revoke_active_selector, [0x6e, 0x19, 0x84, 0x75]);
+    assert_eq!(revoke_all_active_selector, [0xe0, 0xa2, 0xab, 0x52]);
+    assert_eq!(revoke_pending_selector, [0x9d, 0xfb, 0x60, 0x81]);
     assert_eq!(vote_selector, [0x58, 0x0d, 0x74, 0x7a]);
 
     let find_entry = |chain_id: u64, contract: [u8; 20]| {
@@ -375,8 +384,15 @@ fn registry_celo_election_vote_is_mainnet_only_and_alfajores_stays_known() {
         .collect();
     assert_eq!(
         mainnet_formats,
-        BTreeSet::from([activate_selector, activate_for_selector, vote_selector]),
-        "mainnet must add only vote beside the two existing activation routes"
+        BTreeSet::from([
+            activate_selector,
+            activate_for_selector,
+            revoke_active_selector,
+            revoke_all_active_selector,
+            revoke_pending_selector,
+            vote_selector,
+        ]),
+        "mainnet must expose exactly two activation, three revoke, and one vote route"
     );
     let alfajores_formats: BTreeSet<_> = alfajores_ir
         .format_iter()
@@ -387,13 +403,103 @@ fn registry_celo_election_vote_is_mainnet_only_and_alfajores_stays_known() {
         BTreeSet::from([activate_selector, activate_for_selector]),
         "Alfajores must preserve exactly its two existing activation routes"
     );
-    assert!(
-        alfajores_ir
-            .find_format_by_selector(&vote_selector)
-            .expect("Alfajores Election format table parses")
-            .is_none(),
-        "Alfajores vote must remain absent so runtime resolves it as NoFormat"
-    );
+    for (selector, route) in [
+        (revoke_active_selector, "revokeActive"),
+        (revoke_all_active_selector, "revokeAllActive"),
+        (revoke_pending_selector, "revokePending"),
+        (vote_selector, "vote"),
+    ] {
+        assert!(
+            alfajores_ir
+                .find_format_by_selector(&selector)
+                .expect("Alfajores Election format table parses")
+                .is_none(),
+            "Alfajores {route} must remain absent so runtime resolves it as NoFormat"
+        );
+    }
+
+    let activate = mainnet_ir
+        .find_format_by_selector(&activate_selector)
+        .expect("mainnet Election format table parses")
+        .expect("mainnet Election activate is admitted");
+    assert_eq!(activate.intent, b"Activate");
+    assert_eq!(activate.static_head_words, 1);
+    let activate_fields: Vec<_> = activate
+        .fields()
+        .map(|field| field.expect("mainnet Election activate field parses"))
+        .collect();
+    let mut sender_path = vec![PathOp::RootContainer as u8, PathOp::FieldIdx as u8];
+    sender_path.extend_from_slice(&container_field::FROM.to_be_bytes());
+    let activate_expected = [
+        (
+            b"Validator Group".as_slice(),
+            vec![PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0],
+            0x04,
+        ),
+        (b"Vote signer".as_slice(), sender_path, 0x02),
+    ];
+    assert_eq!(activate_fields.len(), activate_expected.len());
+    for (field, (label, path, addr_types)) in activate_fields.iter().zip(activate_expected) {
+        assert_eq!(field.label, label);
+        assert_eq!(
+            FormatOp::try_from(field.format_op),
+            Ok(FormatOp::AddressName)
+        );
+        assert_eq!(
+            mainnet_ir
+                .path_bytes(field.path_off)
+                .expect("Election activate field path parses"),
+            path
+        );
+        let params =
+            parse_params(&mainnet_ir, field.param_off).expect("Election activate params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+        assert_eq!(params.terminal_kind, Some(TerminalKind::Address));
+        assert_eq!(params.addr_types, Some(addr_types));
+        assert!(params.integer_width_bytes.is_none());
+    }
+
+    let activate_for = mainnet_ir
+        .find_format_by_selector(&activate_for_selector)
+        .expect("mainnet Election format table parses")
+        .expect("mainnet Election activateForAccount is admitted");
+    assert_eq!(activate_for.intent, b"Activate Votes");
+    assert_eq!(activate_for.static_head_words, 2);
+    let activate_for_fields: Vec<_> = activate_for
+        .fields()
+        .map(|field| field.expect("mainnet Election activateForAccount field parses"))
+        .collect();
+    let activate_for_expected = [
+        (b"Validator Group".as_slice(), 0u8, 0x04),
+        (b"Account".as_slice(), 1u8, 0x06),
+    ];
+    assert_eq!(activate_for_fields.len(), activate_for_expected.len());
+    for (field, (label, path_index, addr_types)) in
+        activate_for_fields.iter().zip(activate_for_expected)
+    {
+        assert_eq!(field.label, label);
+        assert_eq!(
+            FormatOp::try_from(field.format_op),
+            Ok(FormatOp::AddressName)
+        );
+        assert_eq!(
+            mainnet_ir
+                .path_bytes(field.path_off)
+                .expect("Election activateForAccount field path parses"),
+            [
+                PathOp::RootStructured as u8,
+                PathOp::FieldIdx as u8,
+                0,
+                path_index,
+            ]
+        );
+        let params = parse_params(&mainnet_ir, field.param_off)
+            .expect("Election activateForAccount params parse");
+        assert_eq!(params.visibility, Visibility::Always);
+        assert_eq!(params.terminal_kind, Some(TerminalKind::Address));
+        assert_eq!(params.addr_types, Some(addr_types));
+        assert!(params.integer_width_bytes.is_none());
+    }
 
     let vote = mainnet_ir
         .find_format_by_selector(&vote_selector)
@@ -445,12 +551,191 @@ fn registry_celo_election_vote_is_mainnet_only_and_alfajores_stays_known() {
         }
     }
 
+    let revoke_cases = [
+        (
+            revoke_active_selector,
+            "revokeActive",
+            b"Revoke Active Votes".as_slice(),
+            5,
+            vec![
+                (
+                    b"Validator Group".as_slice(),
+                    FormatOp::AddressName,
+                    TerminalKind::Address,
+                ),
+                (
+                    b"Active CELO to Revoke".as_slice(),
+                    FormatOp::Amount,
+                    TerminalKind::Unsigned,
+                ),
+                (
+                    b"Fewer-Vote Hint".as_slice(),
+                    FormatOp::AddressName,
+                    TerminalKind::Address,
+                ),
+                (
+                    b"More-Vote Hint".as_slice(),
+                    FormatOp::AddressName,
+                    TerminalKind::Address,
+                ),
+                (
+                    b"Voting List Index".as_slice(),
+                    FormatOp::Raw,
+                    TerminalKind::Unsigned,
+                ),
+            ],
+        ),
+        (
+            revoke_all_active_selector,
+            "revokeAllActive",
+            b"Revoke All Active Votes".as_slice(),
+            4,
+            vec![
+                (
+                    b"Validator Group".as_slice(),
+                    FormatOp::AddressName,
+                    TerminalKind::Address,
+                ),
+                (
+                    b"Fewer-Vote Hint".as_slice(),
+                    FormatOp::AddressName,
+                    TerminalKind::Address,
+                ),
+                (
+                    b"More-Vote Hint".as_slice(),
+                    FormatOp::AddressName,
+                    TerminalKind::Address,
+                ),
+                (
+                    b"Voting List Index".as_slice(),
+                    FormatOp::Raw,
+                    TerminalKind::Unsigned,
+                ),
+            ],
+        ),
+        (
+            revoke_pending_selector,
+            "revokePending",
+            b"Revoke Pending Votes".as_slice(),
+            5,
+            vec![
+                (
+                    b"Validator Group".as_slice(),
+                    FormatOp::AddressName,
+                    TerminalKind::Address,
+                ),
+                (
+                    b"Pending CELO to Revoke".as_slice(),
+                    FormatOp::Amount,
+                    TerminalKind::Unsigned,
+                ),
+                (
+                    b"Fewer-Vote Hint".as_slice(),
+                    FormatOp::AddressName,
+                    TerminalKind::Address,
+                ),
+                (
+                    b"More-Vote Hint".as_slice(),
+                    FormatOp::AddressName,
+                    TerminalKind::Address,
+                ),
+                (
+                    b"Voting List Index".as_slice(),
+                    FormatOp::Raw,
+                    TerminalKind::Unsigned,
+                ),
+            ],
+        ),
+    ];
+    for (selector, route, intent, head_words, expected_fields) in revoke_cases {
+        let revoke = mainnet_ir
+            .find_format_by_selector(&selector)
+            .expect("mainnet Election format table parses")
+            .unwrap_or_else(|| panic!("mainnet Election {route} is admitted"));
+        assert_eq!(revoke.intent, intent, "{route} intent drifted");
+        assert_eq!(
+            revoke.static_head_words, head_words,
+            "{route} ABI head drifted"
+        );
+        let fields: Vec<_> = revoke
+            .fields()
+            .map(|field| field.unwrap_or_else(|_| panic!("mainnet Election {route} field parses")))
+            .collect();
+        assert_eq!(
+            fields.len(),
+            expected_fields.len(),
+            "{route} field count drifted"
+        );
+        for (index, (field, (label, op, terminal))) in
+            fields.iter().zip(expected_fields).enumerate()
+        {
+            assert_eq!(field.label, label, "{route} field {index} label drifted");
+            assert_eq!(
+                FormatOp::try_from(field.format_op),
+                Ok(op),
+                "{route} field {index} operation drifted"
+            );
+            assert_eq!(
+                mainnet_ir
+                    .path_bytes(field.path_off)
+                    .unwrap_or_else(|_| panic!("Election {route} field {index} path parses")),
+                [
+                    PathOp::RootStructured as u8,
+                    PathOp::FieldIdx as u8,
+                    0,
+                    u8::try_from(index).expect("Election revoke field index fits u8"),
+                ],
+                "{route} field {index} path drifted"
+            );
+            let params = parse_params(&mainnet_ir, field.param_off)
+                .unwrap_or_else(|_| panic!("Election {route} field {index} params parse"));
+            assert_eq!(params.visibility, Visibility::Always);
+            assert_eq!(params.terminal_kind, Some(terminal));
+            if terminal == TerminalKind::Address {
+                assert_eq!(
+                    params.addr_types,
+                    Some(0x06),
+                    "{route} field {index} must render the complete signed address"
+                );
+                assert!(params.integer_width_bytes.is_none());
+            } else {
+                assert!(params.addr_types.is_none());
+                assert_eq!(params.integer_width_bytes, Some(32));
+            }
+        }
+        if route == "revokeAllActive" {
+            assert!(
+                fields
+                    .iter()
+                    .all(|field| FormatOp::try_from(field.format_op) != Ok(FormatOp::Amount)),
+                "revokeAllActive must not fabricate an amount absent from signed calldata"
+            );
+        }
+    }
+
     for (entry, selectors) in [
         (
             mainnet_entry,
-            [activate_selector, activate_for_selector, vote_selector].as_slice(),
+            [
+                activate_selector,
+                activate_for_selector,
+                revoke_active_selector,
+                revoke_all_active_selector,
+                revoke_pending_selector,
+                vote_selector,
+            ]
+            .as_slice(),
         ),
-        (alfajores_entry, [vote_selector].as_slice()),
+        (
+            alfajores_entry,
+            [
+                revoke_active_selector,
+                revoke_all_active_selector,
+                revoke_pending_selector,
+                vote_selector,
+            ]
+            .as_slice(),
+        ),
     ] {
         for selector in selectors {
             assert!(
@@ -855,7 +1140,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_552);
     assert_eq!(
         hex::encode(result.root),
-        "9844ab43597e196adc3ffbe6577f7864a0069150393eee96ee3f0f4d75e8a5ca"
+        "bdba457ac9de655390d0b6403d4851d8081bc158af13958098489603945e4d94"
     );
 }
 

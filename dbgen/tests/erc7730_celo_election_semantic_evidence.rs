@@ -1,10 +1,10 @@
-//! Offline evidence checks for the bounded Celo Election `vote` admission.
+//! Offline evidence checks for bounded Celo Election route admissions.
 //!
 //! The catalogue/rendering behavior is exercised in `erc7730_roundtrip` and
 //! the secure display tests. This file keeps the external authority package
 //! honest: every archived byte is receipted, three fixed-block RPC providers
 //! agree on the proxy/implementation identity, and the verified ABI/source
-//! establish the meaning of all four signed operands.
+//! establish the meaning of every signed vote and revoke operand.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -51,6 +51,129 @@ fn decode_hex(text: &str) -> Vec<u8> {
 
 fn normalized(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn solidity_function<'a>(source: &'a str, name: &str) -> &'a str {
+    let needle = format!("function {name}(");
+    let mut matches = source.match_indices(&needle);
+    let (start, _) = matches
+        .next()
+        .unwrap_or_else(|| panic!("missing Solidity function {name}"));
+    assert!(
+        matches.next().is_none(),
+        "multiple Solidity functions named {name}"
+    );
+    let definition = &source[start..];
+    let opening = definition
+        .find('{')
+        .unwrap_or_else(|| panic!("Solidity function {name} has no body"));
+    assert!(
+        !definition[..opening].contains(';'),
+        "Solidity function {name} is only a declaration"
+    );
+    let mut depth = 0usize;
+    for (offset, byte) in definition[opening..].bytes().enumerate() {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.checked_sub(1).expect("balanced Solidity braces");
+                if depth == 0 {
+                    return &definition[..opening + offset + 1];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("Solidity function {name} has no closing brace")
+}
+
+fn solidity_natspec<'a>(source: &'a str, name: &str) -> &'a str {
+    let function_start = source
+        .find(&format!("function {name}("))
+        .unwrap_or_else(|| panic!("missing Solidity function {name}"));
+    let comment_start = source[..function_start]
+        .rfind("/**")
+        .unwrap_or_else(|| panic!("missing Natspec for {name}"));
+    let comment_end = source[comment_start..function_start]
+        .rfind("*/")
+        .map(|offset| comment_start + offset + 2)
+        .expect("closed Natspec");
+    &source[comment_start..comment_end]
+}
+
+fn abi_function<'a>(abi: &'a Value, name: &str) -> &'a Value {
+    let matches = abi
+        .as_array()
+        .expect("ABI array")
+        .iter()
+        .filter(|item| item["type"].as_str() == Some("function") && item["name"] == name)
+        .collect::<Vec<_>>();
+    assert_eq!(matches.len(), 1, "ABI must contain exactly one {name}");
+    matches[0]
+}
+
+fn assert_route_abi(
+    function: &Value,
+    name: &str,
+    expected_inputs: &[(&str, &str)],
+    expected_selector: &str,
+) {
+    assert_eq!(function["type"], "function");
+    assert_eq!(function["name"], name);
+    assert_eq!(function["stateMutability"], "nonpayable");
+    assert_eq!(function["payable"].as_bool(), Some(false));
+    assert_eq!(function["constant"].as_bool(), Some(false));
+    let inputs = function["inputs"].as_array().expect("function ABI inputs");
+    let actual_inputs = inputs
+        .iter()
+        .map(|input| {
+            (
+                input["name"].as_str().expect("ABI input name"),
+                input["type"].as_str().expect("ABI input type"),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual_inputs, expected_inputs);
+    let outputs = function["outputs"]
+        .as_array()
+        .expect("function ABI outputs");
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0]["name"], "");
+    assert_eq!(outputs[0]["type"], "bool");
+    let signature = format!(
+        "{name}({})",
+        inputs
+            .iter()
+            .map(|input| input["type"].as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    assert_eq!(
+        format!("0x{}", hex::encode(&keccak256(signature.as_bytes())[..4])),
+        expected_selector,
+        "selector derived from Blockscout ABI drifted for {signature}"
+    );
+}
+
+fn assert_revoke_natspec(natspec: &str) {
+    let natspec = natspec
+        .lines()
+        .map(|line| {
+            line.trim()
+                .trim_start_matches("/**")
+                .trim_start_matches('*')
+                .trim_end_matches("*/")
+                .trim()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    for claim in [
+        "The group receiving fewer votes than the group for which the vote was revoked, or 0 if that group has the fewest votes of any validator group.",
+        "The group receiving more votes than the group for which the vote was revoked, or 0 if that group has the most votes of any validator group.",
+        "The index of the group in the account's voting list.",
+    ] {
+        assert!(natspec.contains(claim), "revoke Natspec drifted: {claim}");
+    }
 }
 
 fn response<'a>(document: &'a Value, id: &str) -> &'a Value {
@@ -250,7 +373,7 @@ fn election_evidence_receipts_and_fixed_block_identity_are_exact() {
 }
 
 #[test]
-fn election_verified_source_and_abi_bind_all_vote_operands() {
+fn election_verified_source_and_abi_bind_vote_and_revoke_operands() {
     let evidence = evidence_root();
     let manifest = read_json(&evidence.join("manifest.json"));
     let proxy = read_json(&evidence.join("blockscout/ElectionProxy.json"));
@@ -303,9 +426,91 @@ fn election_verified_source_and_abi_bind_all_vote_operands() {
     ] {
         assert!(source.contains(claim), "Election semantic source claim drifted: {claim}");
     }
-    let accounts = normalized(&fs::read_to_string(evidence.join("source/Accounts.sol")).unwrap());
-    assert!(accounts
-        .contains("function voteSignerToAccount(address signer) external view returns (address)"));
+
+    for name in ["revokePending", "revokeActive", "revokeAllActive"] {
+        assert_revoke_natspec(solidity_natspec(&election_source, name));
+    }
+    let pending = normalized(solidity_function(&election_source, "revokePending"));
+    for claim in [
+        "address account = getAccounts().voteSignerToAccount(msg.sender);",
+        "value <= getPendingVotesForGroupByAccount(group, account)",
+        "decrementPendingVotes(group, account, value);",
+        "decrementTotalVotes(account, group, value, lesser, greater);",
+        "getLockedGold().incrementNonvotingAccountBalance(account, value);",
+        "deleteElement(votes.groupsVotedFor[account], group, index);",
+        "emit ValidatorGroupPendingVoteRevoked(account, group, value);",
+    ] {
+        assert!(
+            pending.contains(claim),
+            "revokePending semantics drifted: {claim}"
+        );
+    }
+    let active_entry = normalized(solidity_function(&election_source, "revokeActive"));
+    assert!(active_entry.contains("return _revokeActive(group, value, lesser, greater, index);"));
+    let active = normalized(solidity_function(&election_source, "_revokeActive"));
+    for claim in [
+        "address account = getAccounts().voteSignerToAccount(msg.sender);",
+        "value <= getActiveVotesForGroupByAccount(group, account)",
+        "uint256 units = decrementActiveVotes(group, account, value);",
+        "decrementTotalVotes(account, group, value, lesser, greater);",
+        "getLockedGold().incrementNonvotingAccountBalance(account, value);",
+        "deleteElement(votes.groupsVotedFor[account], group, index);",
+        "emit ValidatorGroupActiveVoteRevoked(account, group, value, units);",
+    ] {
+        assert!(
+            active.contains(claim),
+            "revokeActive semantics drifted: {claim}"
+        );
+    }
+    let all_active = normalized(solidity_function(&election_source, "revokeAllActive"));
+    for claim in [
+        "address account = getAccounts().voteSignerToAccount(msg.sender);",
+        "uint256 value = getActiveVotesForGroupByAccount(group, account);",
+        "return _revokeActive(group, value, lesser, greater, index);",
+    ] {
+        assert!(
+            all_active.contains(claim),
+            "revokeAllActive semantics drifted: {claim}"
+        );
+    }
+    let decrement_total = normalized(solidity_function(&election_source, "decrementTotalVotes"));
+    assert!(decrement_total
+        .contains("votes.total.eligible.update(group, newVoteTotal, lesser, greater);"));
+    let delete_element = normalized(solidity_function(&election_source, "deleteElement"));
+    assert!(delete_element
+        .contains("require(index < list.length && list[index] == element, \"Bad index\");"));
+
+    let accounts_source =
+        fs::read_to_string(evidence.join("source/Accounts.sol")).expect("Accounts source");
+    let signer_entry = normalized(solidity_function(&accounts_source, "voteSignerToAccount"));
+    assert!(signer_entry.contains("return signerToAccountWithRole(signer, VoteSigner);"));
+    let signer_resolution = normalized(solidity_function(
+        &accounts_source,
+        "signerToAccountWithRole",
+    ));
+    for claim in [
+        "address account = authorizedBy[signer];",
+        "require(isSigner(account, signer, role), \"not active authorized signer for role\");",
+        "return account;",
+        "require(isAccount(signer), \"Must first register address with Account.createAccount\");",
+        "return signer;",
+    ] {
+        assert!(
+            signer_resolution.contains(claim),
+            "vote-signer resolution drifted: {claim}"
+        );
+    }
+    let locked_gold = normalized(
+        &fs::read_to_string(evidence.join("source/LockedGold.sol")).expect("LockedGold source"),
+    );
+    assert!(locked_gold.contains(
+        "The amount of locked CELO that this account has that is not currently participating in"
+    ));
+    assert!(locked_gold.contains("validator elections."));
+    assert!(locked_gold.contains("uint256 nonvoting;"));
+    assert!(locked_gold.contains(
+        "function incrementNonvotingAccountBalance( address account, uint256 value ) external onlyRegisteredContract(ELECTION_REGISTRY_ID) { _incrementNonvotingAccountBalance(account, value); }"
+    ));
     let gold = normalized(&fs::read_to_string(evidence.join("source/GoldToken.sol")).unwrap());
     assert!(gold.contains("string constant SYMBOL = \"CELO\";"));
     assert!(gold.contains("uint8 constant DECIMALS = 18;"));
@@ -314,36 +519,66 @@ fn election_verified_source_and_abi_bind_all_vote_operands() {
     );
     assert!(gold.contains("function decimals() external view returns (uint8) { return DECIMALS; }"));
 
-    let abi = read_json(&evidence.join("abi/Election.vote.abi.json"));
-    let function = &abi.as_array().expect("vote ABI array")[0];
-    assert_eq!(function["name"], "vote");
-    assert_eq!(function["stateMutability"], "nonpayable");
-    let inputs = function["inputs"].as_array().expect("vote ABI inputs");
-    let actual = inputs
-        .iter()
-        .map(|input| {
-            (
-                input["name"].as_str().unwrap(),
-                input["type"].as_str().unwrap(),
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        actual,
-        vec![
-            ("group", "address"),
-            ("value", "uint256"),
-            ("lesser", "address"),
-            ("greater", "address"),
-        ]
-    );
-    assert_eq!(
-        format!(
-            "0x{}",
-            hex::encode(&keccak256(b"vote(address,uint256,address,address)")[..4])
+    let routes_abi = read_json(&evidence.join("abi/Election.routes.abi.json"));
+    let blockscout_abi = &implementation["abi"];
+    let routes = [
+        (
+            "vote",
+            &[
+                ("group", "address"),
+                ("value", "uint256"),
+                ("lesser", "address"),
+                ("greater", "address"),
+            ][..],
+            "0x580d747a",
         ),
-        manifest["abi"]["selector"]
+        (
+            "revokePending",
+            &[
+                ("group", "address"),
+                ("value", "uint256"),
+                ("lesser", "address"),
+                ("greater", "address"),
+                ("index", "uint256"),
+            ][..],
+            "0x9dfb6081",
+        ),
+        (
+            "revokeActive",
+            &[
+                ("group", "address"),
+                ("value", "uint256"),
+                ("lesser", "address"),
+                ("greater", "address"),
+                ("index", "uint256"),
+            ][..],
+            "0x6e198475",
+        ),
+        (
+            "revokeAllActive",
+            &[
+                ("group", "address"),
+                ("lesser", "address"),
+                ("greater", "address"),
+                ("index", "uint256"),
+            ][..],
+            "0xe0a2ab52",
+        ),
+    ];
+    assert_eq!(
+        routes_abi.as_array().expect("curated routes ABI").len(),
+        routes.len()
     );
+    for (name, inputs, selector) in routes {
+        let archived = abi_function(&routes_abi, name);
+        let explorer = abi_function(blockscout_abi, name);
+        assert_eq!(
+            archived, explorer,
+            "curated {name} ABI must be byte-semantically derived from Blockscout"
+        );
+        assert_route_abi(archived, name, inputs, selector);
+    }
+    assert_eq!(manifest["abi"]["selector"], "0x580d747a");
 
     let core_contracts = fs::read_to_string(evidence.join("deployment/core-contracts.md")).unwrap();
     assert!(core_contracts.contains("0x8D6677192144292870907E3Fa8A5527fE55A7ff6"));

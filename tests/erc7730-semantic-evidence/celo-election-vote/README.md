@@ -1,9 +1,9 @@
-# Celo Election `vote` evidence
+# Celo Election route evidence
 
-This offline bundle supports one bounded PQ1 catalogue expansion:
-`vote(address,uint256,address,address)` at the Registry-selected Celo mainnet
-Election proxy. It preserves the two already-admitted activation routes on
-legacy Alfajores but supplies no new Alfajores authority.
+This offline bundle supports bounded PQ1 catalogue expansions at the
+Registry-selected Celo mainnet Election proxy: `vote`, `revokePending`,
+`revokeActive`, and `revokeAllActive`. It preserves the two already-admitted
+activation routes on legacy Alfajores but supplies no new Alfajores authority.
 
 ## Fixed mainnet identity
 
@@ -33,18 +33,25 @@ Celo monorepo file pinned at commit
 
 The pinned source establishes that:
 
-- `group` is the validator-group account receiving the vote;
-- `value` is an amount of locked native CELO moved from the effective
-  account's non-voting balance into pending votes;
+- `group` is the validator-group account receiving or losing the vote;
+- `value` is an amount of locked native CELO moved between the effective
+  account's non-voting balance and pending or active votes;
 - `lesser` and `greater` are sorted-list position hints, with the zero address
   denoting a list boundary; they are not value recipients; and
+- `index` is the validator group's position in the effective account's voting
+  list and is used when that group must be deleted from the list;
 - `msg.sender` is resolved through `Accounts.voteSignerToAccount`. The
   effective account can therefore differ from the immediate caller and is
   live state that the descriptor must not fabricate.
 
+`revokeAllActive` has no signed amount. Its amount is the effective account's
+live active-vote balance for the group, so trusted display names the all-active
+operation but does not fabricate a CELO quantity.
+
 The Celo native token source pins symbol `CELO` and 18 decimals. The curated
-route shows all four signed calldata operands: validator group, exact CELO
-amount, and both complete hint addresses.
+routes show every signed calldata operand: validator group, an exact CELO
+amount when present, both complete hint addresses, and the voting-list index
+on each revoke route.
 
 ## Alfajores boundary
 
@@ -53,7 +60,8 @@ legacy chain-44787 Election address. Current Celo documentation instead names
 Celo Sepolia as the replacement testnet, explicitly describes migration from
 Alfajores, and the current core-contract table contains no Alfajores section.
 This package has no chain-44787 fixed-block Registry, proxy-slot, runtime, or
-verified-source receipt. It therefore cannot add `vote` authority there.
+verified-source receipt. It therefore cannot add vote or revoke authority
+there.
 
 ## Honest residual
 

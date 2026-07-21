@@ -1,6 +1,6 @@
 {
   "$schema": "https://github.com/LedgerHQ/clear-signing-erc7730-registry/blob/master/specs/erc7730-v2.schema.json",
-  "_curation_note": "PQSigner semantic curation: vote(address,uint256,address,address) is admitted only for the Registry-selected Celo mainnet Election proxy, while the legacy Alfajores deployment preserves only its two previously admitted activation routes. Every signed vote operand is shown: validator group, exact CELO amount, and both sorted-list position hints. Evidence is historical fixed-block authority, not live eligibility, ordering, execution-success, or future proxy-upgrade monitoring. See tests/erc7730-semantic-evidence/celo-election-vote.",
+  "_curation_note": "PQSigner semantic curation: vote(address,uint256,address,address) and the three revoke routes are admitted only for the Registry-selected Celo mainnet Election proxy, while the legacy Alfajores deployment preserves only its two previously admitted activation routes. Every signed operand is shown: validator group, exact pending or active CELO amount when calldata carries one, both sorted-list position hints, and voting-list index. revokeAllActive does not fabricate an amount absent from its calldata. Evidence is historical fixed-block authority, not live eligibility, ordering, balance, execution-success, or future proxy-upgrade monitoring. See tests/erc7730-semantic-evidence/celo-election-vote.",
   "_pqsigner": {
     "deploymentFormats": [
       {
@@ -9,6 +9,9 @@
         "formats": [
           "activate(address group)",
           "activateForAccount(address group, address account)",
+          "revokeActive(address group, uint256 value, address lesser, address greater, uint256 index)",
+          "revokeAllActive(address group, address lesser, address greater, uint256 index)",
+          "revokePending(address group, uint256 value, address lesser, address greater, uint256 index)",
           "vote(address group, uint256 value, address lesser, address greater)"
         ]
       },
@@ -70,52 +73,88 @@
       },
       "revokeActive(address group, uint256 value, address lesser, address greater, uint256 index)": {
         "$id": "revokeActive",
-        "intent": "Revoke Votes",
+        "intent": "Revoke Active Votes",
         "fields": [
           {
             "path": "group",
             "label": "Validator Group",
             "format": "addressName",
-            "params": { "types": ["contract"] },
+            "params": { "types": ["eoa", "contract"] },
             "visible": "always"
           },
-          { "path": "value", "label": "Votes to Revoke", "format": "raw", "visible": "always" },
-          { "label": "Lesser", "path": "lesser", "visible": "never" },
-          { "label": "Greater", "path": "greater", "visible": "never" },
-          { "label": "Index", "path": "index", "visible": "never" }
+          { "path": "value", "label": "Active CELO to Revoke", "format": "amount", "visible": "always" },
+          {
+            "path": "lesser",
+            "label": "Fewer-Vote Hint",
+            "format": "addressName",
+            "params": { "types": ["eoa", "contract"] },
+            "visible": "always"
+          },
+          {
+            "path": "greater",
+            "label": "More-Vote Hint",
+            "format": "addressName",
+            "params": { "types": ["eoa", "contract"] },
+            "visible": "always"
+          },
+          { "path": "index", "label": "Voting List Index", "format": "raw", "visible": "always" }
         ]
       },
       "revokeAllActive(address group, address lesser, address greater, uint256 index)": {
         "$id": "revokeAllActive",
-        "intent": "Revoke Votes",
+        "intent": "Revoke All Active Votes",
         "fields": [
           {
             "path": "group",
             "label": "Validator Group",
             "format": "addressName",
-            "params": { "types": ["contract"] },
+            "params": { "types": ["eoa", "contract"] },
             "visible": "always"
           },
-          { "label": "Lesser", "path": "lesser", "visible": "never" },
-          { "label": "Greater", "path": "greater", "visible": "never" },
-          { "label": "Index", "path": "index", "visible": "never" }
+          {
+            "path": "lesser",
+            "label": "Fewer-Vote Hint",
+            "format": "addressName",
+            "params": { "types": ["eoa", "contract"] },
+            "visible": "always"
+          },
+          {
+            "path": "greater",
+            "label": "More-Vote Hint",
+            "format": "addressName",
+            "params": { "types": ["eoa", "contract"] },
+            "visible": "always"
+          },
+          { "path": "index", "label": "Voting List Index", "format": "raw", "visible": "always" }
         ]
       },
       "revokePending(address group, uint256 value, address lesser, address greater, uint256 index)": {
         "$id": "revokePending",
-        "intent": "Revoke Votes",
+        "intent": "Revoke Pending Votes",
         "fields": [
-          { "path": "value", "label": "Votes to Revoke", "format": "raw", "visible": "always" },
           {
             "path": "group",
             "label": "Validator Group",
             "format": "addressName",
-            "params": { "types": ["contract"] },
+            "params": { "types": ["eoa", "contract"] },
             "visible": "always"
           },
-          { "label": "Lesser", "path": "lesser", "visible": "never" },
-          { "label": "Greater", "path": "greater", "visible": "never" },
-          { "label": "Index", "path": "index", "visible": "never" }
+          { "path": "value", "label": "Pending CELO to Revoke", "format": "amount", "visible": "always" },
+          {
+            "path": "lesser",
+            "label": "Fewer-Vote Hint",
+            "format": "addressName",
+            "params": { "types": ["eoa", "contract"] },
+            "visible": "always"
+          },
+          {
+            "path": "greater",
+            "label": "More-Vote Hint",
+            "format": "addressName",
+            "params": { "types": ["eoa", "contract"] },
+            "visible": "always"
+          },
+          { "path": "index", "label": "Voting List Index", "format": "raw", "visible": "always" }
         ]
       },
       "vote(address group, uint256 value, address lesser, address greater)": {

@@ -64,5 +64,5 @@ jq -r '.[] | select(.id == "implementation-code") | .result' \
   "$rpc/response-forno-implementation.json" \
   >"$runtime/Election.implementation.celo-mainnet.hex"
 
-jq '[.abi[] | select(.type == "function" and .name == "vote")]' \
-  "$blockscout/Election.implementation.json" >"$abi/Election.vote.abi.json"
+jq -cS '[.abi[] | select(.type == "function" and (.name == "vote" or .name == "revokePending" or .name == "revokeActive" or .name == "revokeAllActive"))]' \
+  "$blockscout/Election.implementation.json" >"$abi/Election.routes.abi.json"

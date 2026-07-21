@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "scope": "Celo Election vote(address,uint256,address,address) at the Registry-selected mainnet proxy",
+  "scope": "Celo Election vote and three revoke routes at the Registry-selected mainnet proxy",
   "captured_at_utc": "2026-07-21T04:51:19Z",
   "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
-  "boundary": "Historical fixed-block evidence admits vote only for Celo mainnet. It does not monitor future upgrades or authorize vote on legacy Alfajores, blind signing, hardware, shipment, or transaction-success claims.",
+  "boundary": "Historical fixed-block evidence admits vote and the three revoke routes only for Celo mainnet. It does not monitor future upgrades or authorize those routes on legacy Alfajores, blind signing, hardware, shipment, or transaction-success claims.",
   "descriptor": {
     "vendored_file": "secure/data/erc7730-registry/registry/celo/calldata-celo_election.json",
     "curation_overlay": "secure/data/erc7730/curations/files/registry/celo/calldata-celo_election.json",
-    "file_sha256": "5340d986a06e1f20e816fc1c4626f9f15430cfa2e114af0090d6a85ea64e7e88",
+    "file_sha256": "c5256a7aee612c1ee3ccef74ec915400be96d0a3402f37e4d665b03b8d9053ce",
     "upstream_sha256": "a4adc06d56600e19740174f2d3d05c20906c0226f5ac2c6048f9d4b6ea16bbff",
     "deployments": [
       {
@@ -16,13 +16,12 @@
         "admitted_formats": [
           "activate(address)",
           "activateForAccount(address,address)",
-          "vote(address,uint256,address,address)"
-        ],
-        "refused_formats": [
           "revokeActive(address,uint256,address,address,uint256)",
           "revokeAllActive(address,address,address,uint256)",
-          "revokePending(address,uint256,address,address,uint256)"
-        ]
+          "revokePending(address,uint256,address,address,uint256)",
+          "vote(address,uint256,address,address)"
+        ],
+        "refused_formats": []
       },
       {
         "chain_id": 44787,
@@ -144,19 +143,40 @@
     "official_org_mcp_addresses": "deployment/contracts.py"
   },
   "abi": {
-    "artifact": "abi/Election.vote.abi.json",
+    "artifact": "abi/Election.routes.abi.json",
+    "route_count": 4,
     "canonical_signature": "vote(address,uint256,address,address)",
     "selector": "0x580d747a",
     "state_mutability": "nonpayable",
-    "returns": "bool"
+    "returns": "bool",
+    "routes": [
+      {
+        "canonical_signature": "vote(address,uint256,address,address)",
+        "selector": "0x580d747a"
+      },
+      {
+        "canonical_signature": "revokePending(address,uint256,address,address,uint256)",
+        "selector": "0x9dfb6081"
+      },
+      {
+        "canonical_signature": "revokeActive(address,uint256,address,address,uint256)",
+        "selector": "0x6e198475"
+      },
+      {
+        "canonical_signature": "revokeAllActive(address,address,address,uint256)",
+        "selector": "0xe0a2ab52"
+      }
+    ]
   },
   "semantics": {
-    "group": "eligible validator-group account whose pending and total vote values increase",
-    "value": "18-decimal native CELO moved from the effective account's non-voting locked balance into pending votes",
-    "lesser": "sorted-list key for a group with fewer votes, or zero at the boundary; not a recipient",
-    "greater": "sorted-list key for a group with more votes, or zero at the boundary; not a recipient",
+    "group": "validator-group account whose pending, active, or total vote values change",
+    "value": "18-decimal native CELO moved between the effective account's non-voting locked balance and pending or active votes",
+    "revoke_all_value": "revokeAllActive derives its amount from live active votes and carries no signed amount to display",
+    "lesser": "post-change sorted-list key for a group with fewer votes, or zero at the boundary; not a recipient",
+    "greater": "post-change sorted-list key for a group with more votes, or zero at the boundary; not a recipient",
+    "index": "validator-group position in the effective account's voting list, used if the group is removed",
     "caller": "msg.sender resolves through Accounts.voteSignerToAccount; the live effective account can differ from the immediate caller",
-    "success_residual": "eligibility, capacity, signer authorization, group-count policy, balance, and hint validity remain live-state preconditions"
+    "success_residual": "eligibility, signer authorization, active/pending balances, list index, hint validity, and execution success remain live-state preconditions"
   },
   "alfajores_residual": {
     "chain_id": 44787,
@@ -166,14 +186,15 @@
     "fixed_block_rpc_authority": false,
     "runtime_authority": false,
     "source_authority": false,
-    "vote_admitted": false
+    "vote_admitted": false,
+    "revoke_routes_admitted": false
   },
   "artifacts": [
-    { "path": "README.md", "sha256": "34c989160e24b688afb5669f0961acd499cd82d09593578ae11c4dad6ea58496" },
-    { "path": "abi/Election.vote.abi.json", "sha256": "1b5e9932664f17793e5a7bd5fc620149419579339681bd1277f4c274843c64e8" },
+    { "path": "README.md", "sha256": "8f490f91870b46087c6c3720829b012fd607165a88960a0e099e8fc869ec68c1" },
+    { "path": "abi/Election.routes.abi.json", "sha256": "52070fde92d5f8ba7f3d54954ae644b06599a287fa8865d545ab39ff651af73e" },
     { "path": "blockscout/Election.implementation.json", "sha256": "cd1d86575417deb13fe48583e642d6eec33946f94f1318a83eb5109e0d3b4cb6" },
     { "path": "blockscout/ElectionProxy.json", "sha256": "a93a18df727a04f44a673d65ba112ee5e8e99fc65589bbbed1604a06d5456b86" },
-    { "path": "collect.sh", "sha256": "1c8efca807dc6f6e27d6dc95be742e837f85d00aa3d0155639e9ef6f11be4c9f" },
+    { "path": "collect.sh", "sha256": "b53e0581f2f65f2196d8886ce563fc46e7e1364883da96c087aeb2676cef1043" },
     { "path": "deployment/celo-sepolia.md", "sha256": "14429e2b330100f7da8d562d00eb160736e3bc4fecc43883b445b661ab3927b2" },
     { "path": "deployment/contracts.py", "sha256": "70c786dbd11d13c56565a08903ea0273b5e524565736c55262d85e8b3b636e87" },
     { "path": "deployment/core-contracts.md", "sha256": "71e46c0c7e7cea57b7561f89adf12f83567ce77ed04dbc1f7ca4b2f78c1ce399" },
