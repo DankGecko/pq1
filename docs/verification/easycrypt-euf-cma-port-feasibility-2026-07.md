@@ -2334,3 +2334,34 @@ Both tracks audited HONEST (forced recompile + canary-flips; statements byte-ide
 
 ITEM 2 (VF branch) is now one leg from complete: hop-6 = R6c only. Scheme correctness is a proved 2/4-conjunct
 fragment + the precise (R1 assembly, R2 = p_nu-conditional) residual. Both landed with source-verified findings.
+
+### 2026-07-21 — Wave 8: hop-6 (VF soundness) reaches 0-ADMIT; scheme-correctness root cores proved
+
+Both audited PASS (forced recompile; 3 canary-flips each; statements byte-identical; no new axiom).
+
+**TRACK C — hop-6 (VF) is now 0-ADMIT (drafts/rtop_c_soundness_wip.ec, CERTIFIED-0-ADMIT).** R6c closed →
+`LeqPr_VF_C` (Pr[V_C : res /\ !valid_MFORSC10] <= Pr[EUF_NAGCMA_FLSLXMSSMTTWCESNPRF(R_top_C(F), FC.O_THFC_Default)])
+is a fully-proven theorem. The V_C~RV_C coupling is a REAL byequiv (proc/seq/call/sim reusing nprf_sign_cf /
+genpkfors_flatten / keygenC_eq2), NOT smt-forced (the sole smt is the documented sound-weakening conseq entailment).
+7 new proven helpers, headlined by `genpkfors_flatten` (the R6a-CONSUME identity gen_pkFORS(skFORSnt at idx) =
+nth (flatten pkFORSnt) (val idx) via getsettrhf_kpidx + the seq-5-4 trco commitment). Non-vacuity: 3 canaries the
+auditor re-ran, all REJECTED (Eqv ={res}->res<>res; LeqPr is_valid{2}->!is_valid{2}; seq-body sigFORSTW eq->neq).
+The two +C simplifications vs MM45 (no mmap; MM45's HT-sign while collapses to the proven nprf_sign_cf closed form)
+are what made the ~800-line port tractable across Waves 4/7/8. GPT-5.6 supplied exact lemma names + caught the
+size sigl=l gap. **⇒ ONE of the two top-reduction branches (VF: forgery-is-a-hypertree-forgery) is fully
+machine-checked; the sibling VT branch (forgery-is-a-FORS-forgery, via ITSR-C10) remains open.**
+
+**TRACK R — scheme correctness: 2 root-round-trip cores proved (drafts/sphincs_c10_scheme_wip.ec, CERTIFIED-0-
+ADMIT, PARTIAL).** Proved (each canary-verified, assembled from pre-existing components, no new axiom):
+`val_ap_cons_ap_trh_rt` (the hypertree Merkle layer round-trip, from eq_valbt_valap + size/nth_consap + list2tree
+facts, mirroring SPHINCS_PLUS.ec:1965-1983 lifted to a standalone verify-side op-lemma) and `cf_roundtrip` (the
+WOTS+C chain leaf round-trip via ch_comp). HONEST SCOPE (auditor-corrected): this is NOT a proven root_eq theorem
+nor "3 of 4 conjuncts" — conjuncts [1]good_fors + [2]size=d are proved (Wave-7 sign_gates), [3]root_eq = these 2
+cores + an open d-layer procedure-assembly (R1a/R1b/R1c: lift cf_roundtrip through the len-loop; the d-layer index-
+alignment induction; the verify-side FORS pkFORS round-trip — real relational EC work, multi-day, not novel), and
+[4]allOkC stays the R2 hypothesis (unconditionally FALSE per Wave 7; also transported via R1b/R1c). The conditional-
+correctness lemma is STATED (comment-only; its per-layer good-counter premise is a stated hypothesis, not an axiom).
+
+STATE: VF branch DONE (hop-6 0-admit). Remaining item-2/item-5: hop-5 (VT, the ITSR-C10 branch); the FX chain
+(hops 1-4, Orig->V); the root-round-trip assembly; and the uppercase-refactor to wire the proven hops into the
+capstone (discharge its admits). All +C-invariant transcription except VT (crypto-adjacent) + the carried ITSRC10.
