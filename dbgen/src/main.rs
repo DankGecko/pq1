@@ -365,7 +365,7 @@ fn main() {
     // any stub buffer. The matching ERC7730_DESCRIPTORS_ROOT_E2E in
     // db_roots.rs is selected at compile time via the same feature
     // gate.
-    let erc7730_e2e_res = erc7730::build_db_with_policy_override_and_erc20_capabilities(
+    let erc7730_e2e_res = erc7730::build_e2e_db_with_policy_override_and_erc20_capabilities(
         &erc7730_e2e_dir,
         &erc7730_policy,
         force_production,

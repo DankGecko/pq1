@@ -64,6 +64,11 @@ use pqsigner_erc7730::known_calls::{
     insert as insert_known_call, may_contain as known_call_may_contain, BLOOM_BYTES,
 };
 use pqsigner_erc7730::render::{
+    calldata_policy::{
+        calldata_field_slot, callee_location, lookup_parent, NestedCalldataEnrollment,
+        NestedCalldataExecution, NestedCalldataParentKey, NestedCalleeLocation,
+        PRODUCTION_NESTED_CALLDATA_ENROLLMENTS,
+    },
     enums::ENUM_DISPLAY_BYTES,
     params::NFT_COLLECTION_TO_PATH,
     policy::{
@@ -1361,7 +1366,50 @@ pub fn build_db_with_policy_override_and_erc20_capabilities(
         false,
         &mut Vec::new(),
         erc20_capabilities,
+        PRODUCTION_NESTED_CALLDATA_ENROLLMENTS,
     )
+}
+
+/// Explicit E2E/test-catalogue variant of
+/// [`build_db_with_policy_override_and_erc20_capabilities`].
+///
+/// Ordinary and production catalogue entry points always compile against the
+/// empty production nested-calldata table, even when the dbgen crate was built
+/// with `nested-calldata-test-fixture`. Only this deliberately named route can
+/// select the synthetic enrollment, which prevents a process that generates
+/// production and E2E catalogues together from granting test authority to the
+/// production output.
+pub fn build_e2e_db_with_policy_override_and_erc20_capabilities(
+    input_dir: &Path,
+    policy_path: &Path,
+    force_production: bool,
+    registry_root: Option<&Path>,
+    erc20_capabilities: &Erc20Capabilities,
+) -> Result<Erc7730BuildResult, String> {
+    let mut policy = load_policy(policy_path)?;
+    if force_production {
+        policy.allow_unattested_dev_descriptors = false;
+    }
+    build_db_inner(
+        input_dir,
+        &policy,
+        registry_root,
+        false,
+        &mut Vec::new(),
+        erc20_capabilities,
+        e2e_nested_calldata_enrollments(),
+    )
+}
+
+fn e2e_nested_calldata_enrollments() -> &'static [NestedCalldataEnrollment] {
+    #[cfg(feature = "nested-calldata-test-fixture")]
+    {
+        pqsigner_erc7730::render::calldata_policy::TEST_NESTED_CALLDATA_ENROLLMENTS
+    }
+    #[cfg(not(feature = "nested-calldata-test-fixture"))]
+    {
+        PRODUCTION_NESTED_CALLDATA_ENROLLMENTS
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1473,6 +1521,7 @@ pub fn build_db_with_erc20_capabilities(
         false,
         &mut Vec::new(),
         erc20_capabilities,
+        PRODUCTION_NESTED_CALLDATA_ENROLLMENTS,
     )
 }
 
@@ -1568,6 +1617,7 @@ pub fn build_db_tolerant_with_erc20_capabilities(
         true,
         &mut skips,
         erc20_capabilities,
+        PRODUCTION_NESTED_CALLDATA_ENROLLMENTS,
     )?;
     Ok((result, skips))
 }
@@ -1699,6 +1749,7 @@ fn build_db_inner(
     tolerant: bool,
     skips: &mut Vec<SkipReport>,
     erc20_capabilities: &Erc20Capabilities,
+    nested_calldata_enrollments: &[NestedCalldataEnrollment],
 ) -> Result<Erc7730BuildResult, String> {
     // Establish provenance once for the entire leaf set. This deliberately
     // fails before reading any descriptor when production verification is
@@ -1823,7 +1874,7 @@ fn build_db_inner(
     // later files, dropped files, and misnamed-but-concrete tripwire files.
     for src in &sources {
         let mut partial_format_drops = Vec::new();
-        match compile_descriptor(
+        match compile_descriptor_with_nested_calldata_enrollments(
             src,
             policy,
             registry_root,
@@ -1831,6 +1882,7 @@ fn build_db_inner(
             &mut partial_format_drops,
             erc20_capabilities,
             Some(&declared_contract_signatures),
+            nested_calldata_enrollments,
         ) {
             Ok(entries) => {
                 // A descriptor can retain safe formats while other source
@@ -2810,6 +2862,29 @@ fn compile_descriptor(
     erc20_capabilities: &Erc20Capabilities,
     declared_contract_signatures: Option<&DeclaredContractSignatures>,
 ) -> Result<Vec<Emitted>, String> {
+    compile_descriptor_with_nested_calldata_enrollments(
+        path,
+        _policy,
+        registry_root,
+        tolerant,
+        partial_format_drops,
+        erc20_capabilities,
+        declared_contract_signatures,
+        PRODUCTION_NESTED_CALLDATA_ENROLLMENTS,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_descriptor_with_nested_calldata_enrollments(
+    path: &Path,
+    _policy: &Policy,
+    registry_root: Option<&Path>,
+    tolerant: bool,
+    partial_format_drops: &mut Vec<String>,
+    erc20_capabilities: &Erc20Capabilities,
+    declared_contract_signatures: Option<&DeclaredContractSignatures>,
+    nested_calldata_enrollments: &[NestedCalldataEnrollment],
+) -> Result<Vec<Emitted>, String> {
     let json = load_resolved_descriptor_json(path, registry_root)?;
 
     // `Option<T>` normally treats an explicit JSON `null` like an absent
@@ -2925,15 +3000,17 @@ fn compile_descriptor(
         };
         let mut ctx = base_ctx.clone();
         let mut deployment_drops = Vec::new();
-        let (formats_section, pool_initial) = compile_formats_reporting(
-            &descriptor.display,
-            context_kind,
-            &mut ctx,
-            tolerant,
-            &mut deployment_drops,
-            Some(&deployment),
-            allowed_formats,
-        )?;
+        let (formats_section, pool_initial) =
+            compile_formats_reporting_with_nested_calldata_enrollments(
+                &descriptor.display,
+                context_kind,
+                &mut ctx,
+                tolerant,
+                &mut deployment_drops,
+                Some(&deployment),
+                allowed_formats,
+                nested_calldata_enrollments,
+            )?;
         // The same unsupported source format is normally rediscovered for
         // every deployment. Keep one stable review receipt per exact reason.
         for reason in deployment_drops {
@@ -3419,6 +3496,7 @@ fn compile_formats(
     )
 }
 
+#[cfg(test)]
 fn compile_formats_reporting(
     display: &Display,
     context_kind: u8,
@@ -3427,6 +3505,29 @@ fn compile_formats_reporting(
     partial_format_drops: &mut Vec<String>,
     interpolation_deployment: Option<&InterpolationDeployment<'_>>,
     allowed_formats: Option<&BTreeSet<String>>,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    compile_formats_reporting_with_nested_calldata_enrollments(
+        display,
+        context_kind,
+        ctx,
+        tolerant,
+        partial_format_drops,
+        interpolation_deployment,
+        allowed_formats,
+        PRODUCTION_NESTED_CALLDATA_ENROLLMENTS,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_formats_reporting_with_nested_calldata_enrollments(
+    display: &Display,
+    context_kind: u8,
+    ctx: &mut CompileCtx,
+    tolerant: bool,
+    partial_format_drops: &mut Vec<String>,
+    interpolation_deployment: Option<&InterpolationDeployment<'_>>,
+    allowed_formats: Option<&BTreeSet<String>>,
+    nested_calldata_enrollments: &[NestedCalldataEnrollment],
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let n = allowed_formats.map_or(display.formats.len(), BTreeSet::len);
     // An explicit curation admission is an atomic reviewed set. Ordinary
@@ -3582,7 +3683,7 @@ fn compile_formats_reporting(
             continue;
         }
         let mut one: Vec<u8> = Vec::new();
-        match compile_one_format(
+        match compile_one_format_with_nested_calldata_enrollments(
             sig,
             fmt,
             context_kind,
@@ -3591,6 +3692,7 @@ fn compile_formats_reporting(
             &enum_offsets,
             &mut one,
             interpolation_deployment,
+            nested_calldata_enrollments,
         ) {
             Ok(()) => survivors.push(one),
             Err(e) if allow_partial_format_drops => {
@@ -4132,6 +4234,7 @@ fn interpolation_paths_match(field_path: &str, placeholder: &str) -> bool {
         || placeholder.strip_prefix("#.") == Some(field_path)
 }
 
+#[cfg(test)]
 fn compile_one_format(
     sig: &str,
     fmt: &Format,
@@ -4141,6 +4244,31 @@ fn compile_one_format(
     enum_offsets: &BTreeMap<String, u16>,
     out: &mut Vec<u8>,
     interpolation_deployment: Option<&InterpolationDeployment<'_>>,
+) -> Result<(), String> {
+    compile_one_format_with_nested_calldata_enrollments(
+        sig,
+        fmt,
+        context_kind,
+        ctx,
+        pool,
+        enum_offsets,
+        out,
+        interpolation_deployment,
+        PRODUCTION_NESTED_CALLDATA_ENROLLMENTS,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_one_format_with_nested_calldata_enrollments(
+    sig: &str,
+    fmt: &Format,
+    context_kind: u8,
+    ctx: &mut CompileCtx,
+    pool: &mut Pool,
+    enum_offsets: &BTreeMap<String, u16>,
+    out: &mut Vec<u8>,
+    interpolation_deployment: Option<&InterpolationDeployment<'_>>,
+    nested_calldata_enrollments: &[NestedCalldataEnrollment],
 ) -> Result<(), String> {
     let parsed = parse_format_key(sig).map_err(|e| format!("format `{sig}`: {e}"))?;
     let canonical_contract_signature = if context_kind == CTX_CONTRACT {
@@ -4275,6 +4403,25 @@ fn compile_one_format(
     } else {
         None
     };
+    let nested_calldata_enrollment = if context_kind == CTX_CONTRACT {
+        match interpolation_deployment {
+            Some(deployment) => lookup_parent(
+                nested_calldata_enrollments,
+                NestedCalldataParentKey {
+                    descriptor_hash: &ctx.descriptor_hash,
+                    chain_id: deployment.chain_id,
+                    parent_contract: &deployment.contract,
+                    parent_selector: &selector,
+                },
+            )
+            .map_err(|_| {
+                format!("format `{sig}` has ambiguous nested-calldata semantic enrollments")
+            })?,
+            None => None,
+        }
+    } else {
+        None
+    };
     let eip712_string_preimage_enrollment = if context_kind == CTX_EIP712 {
         eip712_string_preimage_enrollment_for(
             ctx.descriptor_hash,
@@ -4293,6 +4440,24 @@ fn compile_one_format(
     };
     if let Some(enrollment) = exact_empty_bytes_enrollment {
         validate_exact_empty_bytes_format_source(sig, fmt, &parsed, enrollment)?;
+    }
+    let declared_calldata_fields = fmt
+        .fields
+        .iter()
+        .filter(|field| field.format.as_deref() == Some("calldata"))
+        .count();
+    if nested_calldata_enrollment.is_some() != (declared_calldata_fields == 1) {
+        return Err(format!(
+            "format `{sig}` nested calldata requires exactly one matching descriptor/deployment/signature/selector enrollment and one calldata field"
+        ));
+    }
+    if declared_calldata_fields > 1 {
+        return Err(format!(
+            "format `{sig}` declares {declared_calldata_fields} calldata fields; exactly one is supported"
+        ));
+    }
+    if let Some(enrollment) = nested_calldata_enrollment {
+        validate_nested_calldata_format_source(sig, fmt, &parsed, enrollment)?;
     }
     if format_declares_sender_address(fmt) && semantic_enrollment.is_none() {
         return Err(format!(
@@ -4392,6 +4557,7 @@ fn compile_one_format(
                     false,
                     None,
                     eip712_string_preimage_enrollment,
+                    None,
                 )?,
                 0,
             ),
@@ -4410,6 +4576,7 @@ fn compile_one_format(
                 packed_v3_path_enrolled,
                 exact_empty_bytes_enrollment.map(|entry| entry.path),
                 eip712_string_preimage_enrollment,
+                nested_calldata_enrollment,
             )?,
             0,
         )
@@ -4743,6 +4910,113 @@ fn validate_exact_empty_bytes_format_source(
             "format `{sig}` exact-empty path `{}` is not a top-level dynamic `bytes` terminal",
             enrollment.path
         ));
+    }
+    Ok(())
+}
+
+/// Re-derive every source fact represented by one nested-calldata enrollment.
+/// The exact identity lookup is necessary but not sufficient: descriptor
+/// source drift must fail before any authority-bearing TLV is emitted.
+fn validate_nested_calldata_format_source(
+    sig: &str,
+    fmt: &Format,
+    parsed: &ParsedFormatKey,
+    enrollment: &NestedCalldataEnrollment,
+) -> Result<(), String> {
+    if enrollment.execution != NestedCalldataExecution::CallZeroValue {
+        return Err(format!(
+            "format `{sig}` nested calldata has unsupported execution semantics"
+        ));
+    }
+    let signature_hash = keccak256(parsed.types_signature.as_bytes());
+    if enrollment.canonical_signature != parsed.types_signature
+        || signature_hash[..4] != enrollment.parent_selector
+    {
+        return Err(format!(
+            "format `{sig}` nested-calldata enrollment signature/selector drift"
+        ));
+    }
+    if enrollment.evidence.repository.is_empty()
+        || enrollment.evidence.revision.is_empty()
+        || enrollment.evidence.deployment.is_empty()
+        || enrollment.evidence.code_identity.is_empty()
+    {
+        return Err(format!(
+            "format `{sig}` nested-calldata enrollment lacks exact source evidence identity"
+        ));
+    }
+
+    let ordinal = enrollment.field_ordinal as usize;
+    let field = fmt.fields.get(ordinal).ok_or_else(|| {
+        format!("format `{sig}` nested-calldata enrollment field ordinal {ordinal} is absent")
+    })?;
+    if field.format.as_deref() != Some("calldata")
+        || !matches!(field.visible.as_deref(), None | Some("always"))
+    {
+        return Err(format!(
+            "format `{sig}` nested field[{ordinal}] must be always-visible calldata"
+        ));
+    }
+    let field_path = field.path.as_deref().ok_or_else(|| {
+        format!("format `{sig}` nested field[{ordinal}] is missing its bytes path")
+    })?;
+    if terminal_semantics_for_path(field_path, CTX_CONTRACT, parsed)?.kind
+        != TerminalKind::DynamicBytes
+    {
+        return Err(format!(
+            "format `{sig}` nested field[{ordinal}] does not terminate at dynamic bytes"
+        ));
+    }
+    let compiled_field_path = compile_path(field_path, CTX_CONTRACT, parsed)?;
+    let compiled_field_path: [u8; 5] = compiled_field_path.try_into().map_err(|_| {
+        format!("format `{sig}` nested field[{ordinal}] is not the exact sole-C1 bytes path")
+    })?;
+    let field_slot = calldata_field_slot(&compiled_field_path).ok_or_else(|| {
+        format!("format `{sig}` nested field[{ordinal}] is not the exact sole-C1 bytes path")
+    })?;
+    if compiled_field_path != enrollment.field_path {
+        return Err(format!(
+            "format `{sig}` nested field[{ordinal}] path differs from its exact enrollment"
+        ));
+    }
+    let static_head_words = format_static_head_words(CTX_CONTRACT, parsed)?;
+    if field_slot >= static_head_words {
+        return Err(format!(
+            "format `{sig}` nested field[{ordinal}] lies outside the static head"
+        ));
+    }
+
+    let params = field
+        .params
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| {
+            format!("format `{sig}` nested field[{ordinal}] requires calldata params")
+        })?;
+    if params.len() != 1 || !params.contains_key("calleePath") {
+        return Err(format!(
+            "format `{sig}` nested field[{ordinal}] permits only mandatory calleePath"
+        ));
+    }
+    let callee_path = params["calleePath"].as_str().ok_or_else(|| {
+        format!("format `{sig}` nested field[{ordinal}] calleePath must be a string")
+    })?;
+    let compiled_callee = compile_callee_address_path(callee_path, CTX_CONTRACT, parsed)?;
+    if compiled_callee != enrollment.callee_path {
+        return Err(format!(
+            "format `{sig}` nested field[{ordinal}] calleePath differs from its exact enrollment"
+        ));
+    }
+    match callee_location(&compiled_callee).ok_or_else(|| {
+        format!("format `{sig}` nested field[{ordinal}] calleePath is not canonical")
+    })? {
+        NestedCalleeLocation::ContainerTo => {}
+        NestedCalleeLocation::StaticWord(slot) if slot < static_head_words => {}
+        NestedCalleeLocation::StaticWord(_) => {
+            return Err(format!(
+                "format `{sig}` nested field[{ordinal}] calleePath lies outside the static head"
+            ))
+        }
     }
     Ok(())
 }
@@ -5394,6 +5668,7 @@ fn compile_one_field(
         false,
         false,
         None,
+        false,
     )
 }
 
@@ -5411,6 +5686,7 @@ fn compile_one_field_with_profile(
     allow_packed_v3_path: bool,
     allow_exact_empty_bytes: bool,
     eip712_string_preimage_ordinal: Option<u8>,
+    allow_nested_calldata: bool,
 ) -> Result<CompiledFieldOut, String> {
     if field.path.is_some() && field.value.is_some() {
         return Err(format!(
@@ -5551,6 +5827,7 @@ fn compile_one_field_with_profile(
             }
             Some("bytes") if format_op == FMT_UNISWAP_V3_PATH && allow_packed_v3_path => {}
             Some("bytes") if format_op == FMT_RAW && allow_exact_empty_bytes => {}
+            Some("bytes") if format_op == FMT_CALLDATA && allow_nested_calldata => {}
             Some("bytes") => {
                 return Err(format!(
                     "format `{sig}` field[{field_idx}] has opaque dynamic `bytes`; the runtime intentionally has no injective renderer for arbitrary semantic bytes and would hard-refuse every payload, so this unusable format must not be advertised in the authenticated catalogue"
@@ -5579,6 +5856,7 @@ fn compile_one_field_with_profile(
         ctx,
         enum_offsets,
         allow_packed_v3_path,
+        allow_nested_calldata,
     )?;
     if let Some(cv) = &const_value {
         push_tlv(&mut param_blob, PARAM_CONST_VALUE, cv.as_bytes())?;
@@ -5594,6 +5872,9 @@ fn compile_one_field_with_profile(
             Some("bytes") if format_op == FMT_RAW && allow_exact_empty_bytes => {
                 push_tlv(&mut param_blob, PARAM_DYNAMIC_KIND, &[DYNAMIC_KIND_BYTES])?;
                 push_tlv(&mut param_blob, PARAM_EXACT_EMPTY_BYTES, &[])?;
+            }
+            Some("bytes") if format_op == FMT_CALLDATA && allow_nested_calldata => {
+                push_tlv(&mut param_blob, PARAM_DYNAMIC_KIND, &[DYNAMIC_KIND_BYTES])?
             }
             _ => {}
         }
@@ -5681,6 +5962,7 @@ fn compile_flat_fields(
     allow_packed_v3_path: bool,
     exact_empty_bytes_path: Option<&str>,
     eip712_string_preimage_enrollment: Option<&Eip712StringPreimageEnrollment>,
+    nested_calldata_enrollment: Option<&NestedCalldataEnrollment>,
 ) -> Result<Vec<CompiledFieldOut>, String> {
     let mut compiled: Vec<CompiledFieldOut> = Vec::with_capacity(fmt.fields.len());
     for (i, field) in fmt.fields.iter().enumerate() {
@@ -5700,6 +5982,8 @@ fn compile_flat_fields(
                 eip712_string_preimage_enrollment,
                 field,
             ),
+            nested_calldata_enrollment
+                .is_some_and(|enrollment| enrollment.field_ordinal as usize == i),
         )?;
         compiled.push(cf);
     }
@@ -5869,6 +6153,7 @@ fn try_compile_eip712_nested(
                         eip712_string_preimage_enrollment,
                         &fmt.fields[*i],
                     ),
+                    false,
                 )?;
                 compiled.push(cf);
             }
@@ -6489,6 +6774,7 @@ fn compile_params(
     ctx: &mut CompileCtx,
     enum_offsets: &BTreeMap<String, u16>,
     allow_packed_v3_path: bool,
+    allow_nested_calldata: bool,
 ) -> Result<Vec<u8>, String> {
     let mut out: Vec<u8> = Vec::new();
 
@@ -6515,6 +6801,11 @@ fn compile_params(
         if format_op == FMT_NFT_NAME {
             return Err(format!(
                 "format `{sig}` field[{field_idx}] nftName requires exactly one of `collection` or `collectionPath`"
+            ));
+        }
+        if format_op == FMT_CALLDATA {
+            return Err(format!(
+                "format `{sig}` field[{field_idx}] enrolled calldata requires a mandatory `calleePath` parameter"
             ));
         }
         return Ok(out);
@@ -6545,7 +6836,7 @@ fn compile_params(
         FMT_DATE => &["encoding"],
         FMT_ENUM => &["$ref", "ref"],
         FMT_UNIT => &["base", "decimals", "prefix"],
-        FMT_CALLDATA => &["selector", "calleePath"],
+        FMT_CALLDATA => &["calleePath"],
         FMT_ENCRYPTED => &["fallbackLabel"],
         FMT_RAW | FMT_AMOUNT | FMT_DURATION | FMT_CHAIN_ID | FMT_TOKEN_TICKER
         | FMT_UNISWAP_V3_PATH => &[],
@@ -6754,21 +7045,22 @@ fn compile_params(
             }
         }
         FMT_CALLDATA => {
-            if let Some(sel) = params.get("selector") {
-                let sel = sel
-                    .as_str()
-                    .ok_or_else(|| "calldata.selector must be a string".to_string())?;
-                let sel = parse_hex_fixed::<4>(sel)?;
-                push_tlv(&mut out, PARAM_NESTED_SELECTOR, &sel)?;
+            if !allow_nested_calldata {
+                return Err(format!(
+                    "format `{sig}` field[{field_idx}] calldata lacks an exact nested-calldata enrollment"
+                ));
             }
-            if let Some(callee) = params.get("calleePath") {
-                let callee = callee
-                    .as_str()
-                    .ok_or_else(|| "calldata.calleePath must be a string".to_string())?;
-                let prog = compile_path(callee, context_kind, parsed)
-                    .map_err(|e| format!("calleePath `{callee}`: {e}"))?;
-                push_tlv(&mut out, PARAM_NESTED_CALLEE, &prog)?;
-            }
+            let callee = params
+                .get("calleePath")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    format!(
+                        "format `{sig}` field[{field_idx}] enrolled calldata requires a string `calleePath`"
+                    )
+                })?;
+            let program = compile_callee_address_path(callee, context_kind, parsed)
+                .map_err(|error| format!("calleePath `{callee}`: {error}"))?;
+            push_tlv(&mut out, PARAM_NESTED_CALLEE, &program)?;
         }
         FMT_ENCRYPTED => {
             let label = params
@@ -8469,6 +8761,39 @@ fn parse_fixed_array_len(suffix: &str) -> Result<Option<u32>, String> {
 /// extraction op, so a slice can never reach a shown value.
 fn compile_path(path: &str, context_kind: u8, parsed: &ParsedFormatKey) -> Result<Vec<u8>, String> {
     compile_path_with_profile(path, context_kind, parsed, false)
+}
+
+/// Compile the first nested-calldata slice's callee authority.
+///
+/// Only exact `@.to` or one direct static `address` argument is accepted. A
+/// generic one-word path is insufficient: uints, bytes32, `@.from`, nonce,
+/// dynamic descent, tuples, arrays, and constants all refuse here.
+fn compile_callee_address_path(
+    path: &str,
+    context_kind: u8,
+    parsed: &ParsedFormatKey,
+) -> Result<[u8; 4], String> {
+    if context_kind != CTX_CONTRACT {
+        return Err("nested calldata calleePath is contract-context only".to_string());
+    }
+    let path = path.trim();
+    if path != "@.to"
+        && rendered_path_terminal_type(path, context_kind, parsed)?.as_deref() != Some("address")
+    {
+        return Err(format!(
+            "calleePath `{path}` must terminate at one direct static address or exact `@.to`"
+        ));
+    }
+    let program = compile_path(path, context_kind, parsed)?;
+    let program: [u8; 4] = program.try_into().map_err(|_| {
+        format!("calleePath `{path}` must compile to one canonical four-byte address path")
+    })?;
+    if callee_location(&program).is_none() {
+        return Err(format!(
+            "calleePath `{path}` is not exact `@.to` or a direct static address word"
+        ));
+    }
+    Ok(program)
 }
 
 fn compile_path_with_profile(
@@ -10259,17 +10584,6 @@ fn parse_hex32(s: &str) -> Result<[u8; 32], String> {
     Ok(out)
 }
 
-fn parse_hex_fixed<const N: usize>(s: &str) -> Result<[u8; N], String> {
-    let s = s.strip_prefix("0x").unwrap_or(s);
-    if s.len() != N * 2 {
-        return Err(format!("expected {} hex chars, got {}", N * 2, s.len()));
-    }
-    let bytes = hex::decode(s).map_err(|e| format!("hex: {e}"))?;
-    let mut out = [0u8; N];
-    out.copy_from_slice(&bytes);
-    Ok(out)
-}
-
 fn resolve_address_or_const(s: &str, ctx: &CompileCtx) -> Result<[u8; 20], String> {
     if let Some(c) = s.strip_prefix("$.metadata.constants.") {
         let v = ctx
@@ -10429,6 +10743,18 @@ fn _silence_unused() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nested_calldata_authority_is_split_by_explicit_catalogue_route() {
+        assert!(PRODUCTION_NESTED_CALLDATA_ENROLLMENTS.is_empty());
+        #[cfg(feature = "nested-calldata-test-fixture")]
+        assert_eq!(
+            e2e_nested_calldata_enrollments(),
+            pqsigner_erc7730::render::calldata_policy::TEST_NESTED_CALLDATA_ENROLLMENTS
+        );
+        #[cfg(not(feature = "nested-calldata-test-fixture"))]
+        assert!(e2e_nested_calldata_enrollments().is_empty());
+    }
 
     #[test]
     fn review_source_stamp_is_exact_and_single_use() {
@@ -10889,6 +11215,7 @@ mod tests {
             false,
             false,
             Some(0),
+            false,
         )
         .expect("enrolled direct string field compiles");
         assert_eq!(compiled.format_op, FMT_RAW);
@@ -13773,6 +14100,232 @@ mod tests {
             owner: String::new(),
             contract_name: String::new(),
         }
+    }
+
+    fn nested_calldata_format() -> Format {
+        serde_json::from_value(serde_json::json!({
+            "intent": "Forward call",
+            "fields": [
+                {
+                    "path": "target",
+                    "label": "Target",
+                    "format": "addressName",
+                    "visible": "always"
+                },
+                {
+                    "path": "data",
+                    "label": "Call",
+                    "format": "calldata",
+                    "params": { "calleePath": "target" },
+                    "visible": "always"
+                }
+            ]
+        }))
+        .expect("synthetic nested-calldata format")
+    }
+
+    fn compile_nested_calldata_fixture(
+        format: &Format,
+        enrollments: &[NestedCalldataEnrollment],
+    ) -> Result<(Pool, Vec<u8>, CompileCtx), String> {
+        use pqsigner_erc7730::render::calldata_policy::{
+            TEST_NESTED_CALLDATA_DESCRIPTOR_HASH, TEST_NESTED_CALLDATA_PARENT_CONTRACT,
+        };
+
+        let capabilities = Erc20Capabilities::default();
+        let deployment = InterpolationDeployment {
+            chain_id: 31_337,
+            contract: TEST_NESTED_CALLDATA_PARENT_CONTRACT,
+            erc20_capabilities: &capabilities,
+        };
+        let mut ctx = test_ctx();
+        ctx.descriptor_hash = TEST_NESTED_CALLDATA_DESCRIPTOR_HASH;
+        let mut pool = Pool::new();
+        let mut formats = vec![1];
+        compile_one_format_with_nested_calldata_enrollments(
+            "forward(address target,bytes data)",
+            format,
+            CTX_CONTRACT,
+            &mut ctx,
+            &mut pool,
+            &BTreeMap::new(),
+            &mut formats,
+            Some(&deployment),
+            enrollments,
+        )?;
+        Ok((pool, formats, ctx))
+    }
+
+    #[test]
+    fn enrolled_nested_calldata_compiles_only_fixed_semantics() {
+        use pqsigner_erc7730::{
+            ir::ContextKind,
+            render::{
+                calldata_policy::{
+                    TEST_NESTED_CALLDATA_CALLEE_PATH, TEST_NESTED_CALLDATA_ENROLLMENTS,
+                    TEST_NESTED_CALLDATA_FIELD_PATH, TEST_NESTED_CALLDATA_PARENT_CONTRACT,
+                },
+                params::{self, DYNAMIC_KIND_BYTES},
+            },
+        };
+
+        let (pool, formats, ctx) = compile_nested_calldata_fixture(
+            &nested_calldata_format(),
+            TEST_NESTED_CALLDATA_ENROLLMENTS,
+        )
+        .expect("exact test-only enrollment compiles");
+        let ir = Erc7730Ir {
+            schema_ver: SCHEMA_VER,
+            context_kind: ContextKind::Contract,
+            chain_id: 31_337,
+            contract: TEST_NESTED_CALLDATA_PARENT_CONTRACT,
+            descriptor_hash: ctx.descriptor_hash,
+            domain_separator: [0; 32],
+            owner: b"",
+            contract_name: b"",
+            pool: &pool.buf,
+            formats: &formats,
+            raw: &[],
+        };
+        let header = ir
+            .format_iter()
+            .next()
+            .expect("one format")
+            .expect("canonical compiled format");
+        assert_eq!(header.selector, [0x6f, 0xad, 0xcf, 0x72]);
+        assert_eq!(header.static_head_words, 2);
+        let fields: Vec<_> = header
+            .fields()
+            .map(|field| field.expect("canonical field"))
+            .collect();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[1].format_op, FMT_CALLDATA);
+        assert_eq!(
+            ir.path_bytes(fields[1].path_off).unwrap(),
+            TEST_NESTED_CALLDATA_FIELD_PATH
+        );
+        let nested = params::parse(&ir, fields[1].param_off).expect("nested params");
+        assert_eq!(
+            nested.nested_callee,
+            Some(&TEST_NESTED_CALLDATA_CALLEE_PATH)
+        );
+        assert_eq!(nested.nested_selector, None);
+        assert_eq!(nested.dynamic_kind, Some(DYNAMIC_KIND_BYTES));
+        assert_eq!(nested.terminal_kind, Some(TerminalKind::DynamicBytes));
+
+        let bytes = build_ir(
+            CTX_CONTRACT,
+            31_337,
+            TEST_NESTED_CALLDATA_PARENT_CONTRACT,
+            &[0; 32],
+            &ctx,
+            &pool.buf,
+            &formats,
+        )
+        .expect("synthetic IR");
+        #[cfg(feature = "nested-calldata-test-fixture")]
+        assert!(Erc7730Ir::parse(&bytes).is_ok());
+        #[cfg(not(feature = "nested-calldata-test-fixture"))]
+        assert!(Erc7730Ir::parse(&bytes).is_err());
+    }
+
+    #[test]
+    fn nested_calldata_compiler_refuses_missing_or_drifted_authority() {
+        use pqsigner_erc7730::render::calldata_policy::{
+            TEST_NESTED_CALLDATA_ENROLLMENT, TEST_NESTED_CALLDATA_ENROLLMENTS,
+        };
+
+        let error = compile_nested_calldata_fixture(&nested_calldata_format(), &[])
+            .err()
+            .expect("production's empty enrollment table must refuse");
+        assert!(error.contains("requires exactly one matching"), "{error}");
+
+        let mut drifted = TEST_NESTED_CALLDATA_ENROLLMENT;
+        drifted.canonical_signature = "forward(uint256,bytes)";
+        let error = compile_nested_calldata_fixture(&nested_calldata_format(), &[drifted])
+            .err()
+            .expect("canonical signature drift must refuse");
+        assert!(error.contains("signature/selector drift"), "{error}");
+
+        let mut missing_callee = nested_calldata_format();
+        missing_callee.fields[1].params = None;
+        let error =
+            compile_nested_calldata_fixture(&missing_callee, TEST_NESTED_CALLDATA_ENROLLMENTS)
+                .err()
+                .expect("calleePath is mandatory");
+        assert!(error.contains("requires calldata params"), "{error}");
+
+        for forbidden in [
+            "selector",
+            "selectorPath",
+            "amountPath",
+            "spenderPath",
+            "chainIdPath",
+            "valuePath",
+            "delegateCall",
+        ] {
+            let mut extra_semantics = nested_calldata_format();
+            let mut params = serde_json::Map::new();
+            params.insert(
+                "calleePath".to_string(),
+                serde_json::Value::String("target".to_string()),
+            );
+            params.insert(
+                forbidden.to_string(),
+                serde_json::Value::String("unsupported".to_string()),
+            );
+            extra_semantics.fields[1].params = Some(serde_json::Value::Object(params));
+            let error = compile_nested_calldata_fixture(
+                &extra_semantics,
+                TEST_NESTED_CALLDATA_ENROLLMENTS,
+            )
+            .err()
+            .unwrap_or_else(|| panic!("nested semantic `{forbidden}` is outside N2"));
+            assert!(error.contains("only mandatory calleePath"), "{error}");
+        }
+
+        let mut optional = nested_calldata_format();
+        optional.fields[1].visible = Some("optional".to_string());
+        let error = compile_nested_calldata_fixture(&optional, TEST_NESTED_CALLDATA_ENROLLMENTS)
+            .err()
+            .expect("calldata must be always visible");
+        assert!(error.contains("always-visible calldata"), "{error}");
+
+        let mut wrong_ordinal = nested_calldata_format();
+        wrong_ordinal.fields.swap(0, 1);
+        let error =
+            compile_nested_calldata_fixture(&wrong_ordinal, TEST_NESTED_CALLDATA_ENROLLMENTS)
+                .err()
+                .expect("field ordinal is policy-bound");
+        assert!(
+            error.contains("field[1]") || error.contains("path differs"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn nested_callee_path_compiler_accepts_only_direct_address_authority() {
+        let parsed = parse_format_key("forward(address target,bytes data)").unwrap();
+        assert_eq!(
+            compile_callee_address_path("target", CTX_CONTRACT, &parsed).unwrap(),
+            [PATHOP_ROOT_STRUCT, PATHOP_FIELD_IDX, 0, 0]
+        );
+        assert_eq!(
+            compile_callee_address_path("@.to", CTX_CONTRACT, &parsed).unwrap(),
+            NFT_COLLECTION_TO_PATH
+        );
+        for rejected in ["data", "@.from", "@.value"] {
+            assert!(
+                compile_callee_address_path(rejected, CTX_CONTRACT, &parsed).is_err(),
+                "accepted non-address callee {rejected}"
+            );
+        }
+
+        let array = parse_format_key("forwardMany(address[] targets,bytes data)").unwrap();
+        assert!(compile_callee_address_path("targets", CTX_CONTRACT, &array).is_err());
+        let tuple = parse_format_key("forwardTuple((address target,uint256 mode) call,bytes data)")
+            .unwrap();
+        assert!(compile_callee_address_path("call.target", CTX_CONTRACT, &tuple).is_err());
     }
 
     fn router02_format(exact_input: bool) -> (&'static str, Format) {

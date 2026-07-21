@@ -239,11 +239,14 @@ pub const fn formatter_accepts_terminal(op: FormatOp, kind: TerminalKind) -> boo
         FormatOp::AddressName | FormatOp::TokenTicker | FormatOp::InteroperableAddressName => {
             matches!(kind, TerminalKind::Address)
         }
-        // Neither has an honest successful renderer in this firmware.  Keep
-        // them explicit so adding a new opcode cannot inherit permissive
-        // behavior through a wildcard arm.
+        // The nested renderer is still gated by an exact parent enrollment and
+        // does not directly display this terminal.  This field-local rule only
+        // permits the authenticated bytes + callee metadata shape; deep IR
+        // validation owns the parent identity, ordinal, and path checks.
         FormatOp::UniswapV3Path => matches!(kind, TerminalKind::DynamicBytes),
-        FormatOp::Calldata | FormatOp::Encrypted => false,
+        FormatOp::Calldata => matches!(kind, TerminalKind::DynamicBytes),
+        // No honest successful renderer exists for encrypted data.
+        FormatOp::Encrypted => false,
     }
 }
 
@@ -257,7 +260,7 @@ pub const fn validate_field(
     params: ParamMask,
 ) -> Result<(), PolicyError> {
     if !formatter_accepts_terminal(op, kind) {
-        return if matches!(op, FormatOp::Calldata | FormatOp::Encrypted) {
+        return if matches!(op, FormatOp::Encrypted) {
             Err(PolicyError::UnsupportedFormatter)
         } else {
             Err(PolicyError::FormatterType)
@@ -312,7 +315,11 @@ pub const fn validate_field(
             (ParamMask::NONE, ParamMask::NONE)
         }
         FormatOp::UniswapV3Path => (ParamMask::DYNAMIC_KIND, ParamMask::DYNAMIC_KIND),
-        FormatOp::Calldata | FormatOp::Encrypted => return Err(PolicyError::UnsupportedFormatter),
+        FormatOp::Calldata => (
+            ParamMask::DYNAMIC_KIND.union(ParamMask::NESTED_CALLEE),
+            ParamMask::DYNAMIC_KIND.union(ParamMask::NESTED_CALLEE),
+        ),
+        FormatOp::Encrypted => return Err(PolicyError::UnsupportedFormatter),
     };
 
     if !params.is_subset_of(allowed) {
@@ -389,6 +396,14 @@ mod tests {
         ));
         assert!(!formatter_accepts_terminal(
             FormatOp::Encrypted,
+            TerminalKind::FixedBytes
+        ));
+        assert!(formatter_accepts_terminal(
+            FormatOp::Calldata,
+            TerminalKind::DynamicBytes
+        ));
+        assert!(!formatter_accepts_terminal(
+            FormatOp::Calldata,
             TerminalKind::FixedBytes
         ));
     }
@@ -605,6 +620,29 @@ mod tests {
                 ParamMask::EIP712_STRING_PREIMAGE
             ),
             Err(PolicyError::FormatterType)
+        );
+        let calldata_params = ParamMask::DYNAMIC_KIND.union(ParamMask::NESTED_CALLEE);
+        assert!(validate_field(
+            FormatOp::Calldata,
+            TerminalKind::DynamicBytes,
+            calldata_params
+        )
+        .is_ok());
+        assert_eq!(
+            validate_field(
+                FormatOp::Calldata,
+                TerminalKind::DynamicBytes,
+                calldata_params.union(ParamMask::NESTED_SELECTOR)
+            ),
+            Err(PolicyError::ParameterApplicability)
+        );
+        assert_eq!(
+            validate_field(
+                FormatOp::Calldata,
+                TerminalKind::DynamicBytes,
+                ParamMask::DYNAMIC_KIND
+            ),
+            Err(PolicyError::ParameterRequirement)
         );
     }
 

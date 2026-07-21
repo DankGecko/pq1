@@ -32,6 +32,11 @@ subtle = { version = "2.6", default-features = false }
 # own `erc7730-dev-unattested` feature to this one; mutually exclusive with
 # `mode-production` (a `compile_error!` in the secure `nsc/mod.rs`).
 erc7730-dev-unattested = []
+# Test/QEMU only: activates the exact synthetic `forward(address,bytes)`
+# nested-calldata policy row. Ordinary and production builds keep an empty
+# admission table; this is compile-time policy, never a host-supplied runtime
+# switch.
+nested-calldata-test-fixture = []
 
 [dev-dependencies]
 hex = { workspace = true }

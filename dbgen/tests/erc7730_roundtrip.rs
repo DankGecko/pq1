@@ -5495,7 +5495,13 @@ fn registry_all_display_material_is_runtime_parseable() {
                 format_fields += 1;
                 fields_seen += 1;
                 assert!(!field.label.is_empty());
-                FormatOp::try_from(field.format_op).unwrap();
+                let op = FormatOp::try_from(field.format_op).unwrap();
+                assert_ne!(
+                    op,
+                    FormatOp::Calldata,
+                    "{}: production catalogue must retain zero nested-calldata fields until a real exact enrollment is admitted",
+                    entry.source.display(),
+                );
                 let params = parse_params(&ir, field.param_off).unwrap();
                 if field.path_off == 0 {
                     match (params.const_value, params.nested_struct) {

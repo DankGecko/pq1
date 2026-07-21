@@ -409,7 +409,7 @@ pub struct ParamSet<'a> {
     pub prefix: Option<u8>,
     pub suffix: Option<&'a [u8]>,
     pub nested_selector: Option<&'a [u8; 4]>,
-    pub nested_callee: Option<&'a [u8]>,
+    pub nested_callee: Option<&'a [u8; 4]>,
     pub fallback_label: Option<&'a [u8]>,
     /// Constant annotation string for a path-less field. When `Some`, the
     /// renderer shows this literal text instead of resolving a path.
@@ -846,10 +846,11 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
                 );
             }
             PARAM_NESTED_CALLEE => {
-                if payload.is_empty() {
-                    return Err(RenderErr::Reject("7730 bad nested callee"));
-                }
-                p.nested_callee = Some(payload);
+                p.nested_callee = Some(
+                    payload
+                        .try_into()
+                        .map_err(|_| RenderErr::Reject("7730 bad nested callee path"))?,
+                );
             }
             PARAM_FALLBACK_LABEL => {
                 if payload.is_empty()
@@ -1535,20 +1536,32 @@ mod tests {
     }
 
     #[test]
-    fn parses_nested_selector_and_callee() {
-        // For the Calldata formatter the descriptor supplies the
-        // expected inner selector + callee address.
+    fn parses_nested_selector_and_fixed_width_callee_path() {
+        // Parsing preserves legacy selector syntax as untrusted input, while
+        // the enrolled N2 callee is exactly one four-byte path program.
         let mut body = std::vec::Vec::new();
         body.extend_from_slice(&[PARAM_NESTED_SELECTOR, 0x04, 0xa9, 0x05, 0x9c, 0xbb]);
-        body.extend_from_slice(&[PARAM_NESTED_CALLEE, 0x14]);
-        body.extend_from_slice(&[0xDD; 20]);
+        body.extend_from_slice(&[PARAM_NESTED_CALLEE, 0x04, 0x10, 0x20, 0x00, 0x00]);
         let mut pool = std::vec![0xFFu8, body.len() as u8];
         pool.extend_from_slice(&body);
         let bytes = ir_with_pool(&pool);
         let ir = Erc7730Ir::parse(&bytes).unwrap();
         let p = parse(&ir, 1).unwrap();
         assert_eq!(p.nested_selector, Some(&[0xa9, 0x05, 0x9c, 0xbb]));
-        assert_eq!(p.nested_callee, Some(&[0xDD; 20][..]));
+        assert_eq!(p.nested_callee, Some(&[0x10, 0x20, 0x00, 0x00]));
+    }
+
+    #[test]
+    fn rejects_raw_address_or_empty_nested_callee() {
+        for payload in [&[][..], &[0xDD; 20][..]] {
+            let mut body = std::vec![PARAM_NESTED_CALLEE, payload.len() as u8];
+            body.extend_from_slice(payload);
+            let mut pool = std::vec![0xFFu8, body.len() as u8];
+            pool.extend_from_slice(&body);
+            let bytes = ir_with_pool(&pool);
+            let ir = Erc7730Ir::parse(&bytes).unwrap();
+            assert!(matches!(parse(&ir, 1), Err(RenderErr::Reject(_))));
+        }
     }
 
     #[test]

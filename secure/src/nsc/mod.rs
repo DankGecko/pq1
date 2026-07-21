@@ -447,6 +447,14 @@ compile_error!(
      every secure-side confirm()/enter_pin() — never a shipping image. Build \
      hardware-test images with `stm32u585,e2e-test` (no mode-production)."
 );
+
+#[cfg(all(
+    feature = "mode-production",
+    feature = "erc7730-nested-calldata-test-fixture"
+))]
+compile_error!(
+    "mode-production cannot activate the synthetic ERC-7730 nested-calldata enrollment"
+);
 #[cfg(all(feature = "mode-production", feature = "dev-testkey"))]
 compile_error!(
     "mode-production and dev-testkey are mutually exclusive (ship gate MED-2). \

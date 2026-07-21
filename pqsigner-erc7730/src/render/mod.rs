@@ -12,6 +12,7 @@
 //! recursor remain under `secure/src/tx/display/erc7730::`.
 
 pub mod array;
+pub mod calldata_policy;
 pub mod enums;
 pub mod nested;
 pub mod params;

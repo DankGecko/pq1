@@ -196,7 +196,11 @@ hw-sha256 = ["sphincs-c10/hw-sha256"]
 # trusted-display provenance warning centrally so every E2E target satisfies
 # the generated root fence; `mode-production` remains mutually exclusive with
 # both `e2e-test` and `erc7730-dev-unattested`.
-e2e-test = ["legacy-fw-rollback-unsafe", "erc7730-dev-unattested"]
+e2e-test = [
+    "legacy-fw-rollback-unsafe",
+    "erc7730-dev-unattested",
+    "erc7730-nested-calldata-test-fixture",
+]
 # Reversible firmware anti-rollback test: drives the real fw_update::
 # verify_manifest chain with dev-key-signed v1/v2/v3 manifests against
 # literal test floors (no OTP burn, no flash, no reboot). Runs early in
@@ -791,6 +795,13 @@ button-test = ["stm32u585", "mock-se", "gpio-buttons"]  # Flash + run GPIO butto
 # secret-leaking debug features, it remains valid on explicitly dev/bring-up
 # hardware because that is where the warning is required.
 erc7730-dev-unattested = ["pqsigner-erc7730/erc7730-dev-unattested"]
+# Compile-time-only synthetic nested-calldata policy row for host/QEMU E2E.
+# Default builds keep zero production admissions; mode-production is fenced in
+# `nsc/mod.rs` even if this feature is selected directly.
+erc7730-nested-calldata-test-fixture = [
+    "pqsigner-erc7730/nested-calldata-test-fixture",
+    "dbgen/nested-calldata-test-fixture",
+]
 
 [build-dependencies]
 # Decodes the vendored `assets/font_5x8.png` (embedded-graphics' FONT_5X8

@@ -40,3 +40,8 @@ tempfile = "3"
 # world parser byte-for-byte. (Dev-only because the lib build does not
 # need this dep; only the test binary does.)
 pqsigner-erc7730 = { workspace = true }
+
+[features]
+# Explicit generation path for the synthetic nested-calldata fixture. Default
+# catalogue builds retain the empty production enrollment table.
+nested-calldata-test-fixture = ["pqsigner-erc7730/nested-calldata-test-fixture"]

@@ -386,6 +386,19 @@ impl<'a> Erc7730Ir<'a> {
     ///   slots (anti-spoof: a hostile descriptor must not sneak
     ///   homoglyphs onto the trusted display)
     pub fn parse(bytes: &'a [u8]) -> Result<Self, IrError> {
+        Self::parse_with_nested_calldata_enrollments(
+            bytes,
+            crate::render::calldata_policy::ACTIVE_NESTED_CALLDATA_ENROLLMENTS,
+        )
+    }
+
+    /// Internal test seam for the exact synthetic nested-calldata policy row.
+    /// Production callers cannot supply host-selected policy: [`parse`](Self::parse)
+    /// always uses the firmware-owned production table above.
+    pub(crate) fn parse_with_nested_calldata_enrollments(
+        bytes: &'a [u8],
+        nested_calldata_enrollments: &[crate::render::calldata_policy::NestedCalldataEnrollment],
+    ) -> Result<Self, IrError> {
         if bytes.len() > MAX_IR_LEN {
             return Err(IrError::TooLarge);
         }
@@ -461,7 +474,7 @@ impl<'a> Erc7730Ir<'a> {
         // cover the entire leaf. A first-match selector must not make a
         // malformed/duplicate suffix unreachable, and the advertised caps must
         // be enforced before any renderer consumes the IR.
-        ir.validate_formats()?;
+        ir.validate_formats(nested_calldata_enrollments)?;
         Ok(ir)
     }
 
@@ -550,7 +563,10 @@ impl<'a> Erc7730Ir<'a> {
 
     /// Deep structural validation of the complete format table. Kept stack-only
     /// and allocation-free for secure-world use.
-    fn validate_formats(&self) -> Result<(), IrError> {
+    fn validate_formats(
+        &self,
+        nested_calldata_enrollments: &[crate::render::calldata_policy::NestedCalldataEnrollment],
+    ) -> Result<(), IrError> {
         let declared = self.format_count()? as usize;
         let mut iter = self.format_iter();
         let mut seen = 0usize;
@@ -573,6 +589,8 @@ impl<'a> Erc7730Ir<'a> {
             let mut packed_v3_path_fields = 0u8;
             let mut exact_empty_bytes_fields = 0u8;
             let mut actual_string_preimages = 0u8;
+            let mut calldata_fields = 0u8;
+            let mut dynamic_value_paths = 0u8;
             let packed_v3_identity = is_uniswap_router02_packed_identity(self, &header);
             while let Some(field) = fields.next() {
                 let field = field?;
@@ -596,6 +614,14 @@ impl<'a> Erc7730Ir<'a> {
                 let params = crate::render::params::parse(self, field.param_off)
                     .map_err(|_| IrError::BadPoolEntry)?;
                 let kind = params.terminal_kind.ok_or(IrError::BadField)?;
+
+                if field.path_off != 0
+                    && self.path_bytes(field.path_off)?.last().copied()
+                        == Some(PathOp::FollowOffset as u8)
+                {
+                    dynamic_value_paths =
+                        dynamic_value_paths.checked_add(1).ok_or(IrError::OverCap)?;
+                }
 
                 if validate_eip712_string_preimage_field(
                     self,
@@ -684,6 +710,19 @@ impl<'a> Erc7730Ir<'a> {
                     validate_terminal_path_shape(self, &field, kind, &params, true)?;
                 }
 
+                if op == FormatOp::Calldata {
+                    validate_nested_calldata_field(
+                        self,
+                        &header,
+                        &field,
+                        field_ordinal,
+                        kind,
+                        &params,
+                        nested_calldata_enrollments,
+                    )?;
+                    calldata_fields = calldata_fields.checked_add(1).ok_or(IrError::OverCap)?;
+                }
+
                 if op == FormatOp::Enum {
                     let enum_off = params.enum_ref.ok_or(IrError::BadField)?;
                     crate::render::enums::validate_enum_table(self.pool, enum_off)
@@ -695,6 +734,23 @@ impl<'a> Erc7730Ir<'a> {
                 return Err(IrError::BadFormat);
             }
             validate_uniswap_v3_format(self, &header, packed_v3_path_fields, packed_v3_identity)?;
+            let parent_key = crate::render::calldata_policy::NestedCalldataParentKey {
+                descriptor_hash: &self.descriptor_hash,
+                chain_id: self.chain_id,
+                parent_contract: &self.contract,
+                parent_selector: &header.selector,
+            };
+            let parent_enrolled = crate::render::calldata_policy::lookup_parent(
+                nested_calldata_enrollments,
+                parent_key,
+            )
+            .map_err(|_| IrError::BadFormat)?
+            .is_some();
+            if (calldata_fields > 0 && (calldata_fields != 1 || dynamic_value_paths != 1))
+                || parent_enrolled != (calldata_fields == 1)
+            {
+                return Err(IrError::BadFormat);
+            }
             if let Some(program) = interpolated_intent {
                 // Belt behind `InterpolatedIntentProgram::parse`: the current
                 // executable subset is exactly one substitution followed by
@@ -882,6 +938,75 @@ fn validate_exact_empty_bytes_field(
         return Err(IrError::BadField);
     }
     Ok(true)
+}
+
+/// Device-side mirror of dbgen's exact nested-calldata admission.
+///
+/// This validates only authenticated IR topology and firmware policy. Runtime
+/// N3 binding still has to resolve the callee word canonically, derive the
+/// child selector from the signed bytes, and prove the child descriptor.
+fn validate_nested_calldata_field(
+    ir: &Erc7730Ir<'_>,
+    format: &FormatHeader<'_>,
+    field: &FieldEntry<'_>,
+    field_ordinal: u8,
+    kind: crate::render::policy::TerminalKind,
+    params: &crate::render::params::ParamSet<'_>,
+    enrollments: &[crate::render::calldata_policy::NestedCalldataEnrollment],
+) -> Result<(), IrError> {
+    use crate::render::{
+        calldata_policy::{
+            calldata_field_slot, callee_location, lookup_field, NestedCalldataExecution,
+            NestedCalldataFieldKey, NestedCalldataParentKey, NestedCalleeLocation,
+        },
+        params::DYNAMIC_KIND_BYTES,
+        policy::TerminalKind,
+    };
+
+    if !matches!(ir.context_kind, ContextKind::Contract)
+        || params.visibility != Visibility::Always
+        || kind != TerminalKind::DynamicBytes
+        || params.dynamic_kind != Some(DYNAMIC_KIND_BYTES)
+        || params.nested_selector.is_some()
+        || params.word_guard.is_some()
+        || params.interpolated_intent.is_some()
+        || field.path_off == 0
+    {
+        return Err(IrError::BadField);
+    }
+    let field_path = ir.path_bytes(field.path_off)?;
+    let field_slot = calldata_field_slot(field_path).ok_or(IrError::BadField)?;
+    let field_path: &[u8; 5] = field_path.try_into().map_err(|_| IrError::BadField)?;
+    if field_slot >= format.static_head_words {
+        return Err(IrError::BadField);
+    }
+    let callee_path = params.nested_callee.ok_or(IrError::BadField)?;
+    match callee_location(callee_path).ok_or(IrError::BadField)? {
+        NestedCalleeLocation::ContainerTo => {}
+        NestedCalleeLocation::StaticWord(slot) if slot < format.static_head_words => {}
+        NestedCalleeLocation::StaticWord(_) => return Err(IrError::BadField),
+    }
+
+    let enrollment = lookup_field(
+        enrollments,
+        NestedCalldataFieldKey {
+            parent: NestedCalldataParentKey {
+                descriptor_hash: &ir.descriptor_hash,
+                chain_id: ir.chain_id,
+                parent_contract: &ir.contract,
+                parent_selector: &format.selector,
+            },
+            field_ordinal,
+            field_path,
+            callee_path,
+        },
+    )
+    .map_err(|_| IrError::BadFormat)?
+    .ok_or(IrError::BadFormat)?;
+    if enrollment.execution != NestedCalldataExecution::CallZeroValue {
+        return Err(IrError::BadFormat);
+    }
+    Ok(())
 }
 
 /// Independently reconcile an authenticated terminal kind with the structural
@@ -1747,6 +1872,127 @@ mod tests {
         format
     }
 
+    fn append_pool_entry(pool: &mut std::vec::Vec<u8>, payload: &[u8]) -> u16 {
+        let offset = pool.len() as u16;
+        pool.push(payload.len() as u8);
+        pool.extend_from_slice(payload);
+        offset
+    }
+
+    fn encoded_field(
+        op: FormatOp,
+        label: &[u8],
+        path_off: u16,
+        param_off: u16,
+    ) -> std::vec::Vec<u8> {
+        let mut field = std::vec![op as u8, label.len() as u8];
+        field.extend_from_slice(label);
+        field.extend_from_slice(&path_off.to_be_bytes());
+        field.extend_from_slice(&param_off.to_be_bytes());
+        field
+    }
+
+    fn nested_calldata_ir(
+        field_path: &[u8],
+        callee_path: &[u8],
+        extra_nested_params: &[u8],
+        calldata_first: bool,
+        add_second_dynamic_path: bool,
+    ) -> std::vec::Vec<u8> {
+        use crate::render::{
+            calldata_policy::{
+                TEST_NESTED_CALLDATA_DESCRIPTOR_HASH, TEST_NESTED_CALLDATA_PARENT_CONTRACT,
+                TEST_NESTED_CALLDATA_PARENT_SELECTOR,
+            },
+            params::{
+                DYNAMIC_KIND_BYTES, DYNAMIC_KIND_STRING, PARAM_DYNAMIC_KIND, PARAM_NESTED_CALLEE,
+                PARAM_TERMINAL_KIND,
+            },
+            policy::TerminalKind,
+        };
+
+        let mut pool = std::vec![0];
+        let target_path_off = append_pool_entry(
+            &mut pool,
+            &[PathOp::RootStructured as u8, PathOp::FieldIdx as u8, 0, 0],
+        );
+        let target_param_off = append_pool_entry(
+            &mut pool,
+            &[PARAM_TERMINAL_KIND, 1, TerminalKind::Address as u8],
+        );
+        let nested_path_off = append_pool_entry(&mut pool, field_path);
+        let mut nested_params = std::vec![
+            PARAM_DYNAMIC_KIND,
+            1,
+            DYNAMIC_KIND_BYTES,
+            PARAM_NESTED_CALLEE,
+            callee_path.len() as u8,
+        ];
+        nested_params.extend_from_slice(callee_path);
+        nested_params.extend_from_slice(extra_nested_params);
+        nested_params.extend_from_slice(&[
+            PARAM_TERMINAL_KIND,
+            1,
+            TerminalKind::DynamicBytes as u8,
+        ]);
+        let nested_param_off = append_pool_entry(&mut pool, &nested_params);
+
+        let target = encoded_field(
+            FormatOp::AddressName,
+            b"Target",
+            target_path_off,
+            target_param_off,
+        );
+        let nested = encoded_field(
+            FormatOp::Calldata,
+            b"Call",
+            nested_path_off,
+            nested_param_off,
+        );
+        let mut fields = if calldata_first {
+            std::vec![nested, target]
+        } else {
+            std::vec![target, nested]
+        };
+        if add_second_dynamic_path {
+            let extra_param_off = append_pool_entry(
+                &mut pool,
+                &[
+                    PARAM_DYNAMIC_KIND,
+                    1,
+                    DYNAMIC_KIND_STRING,
+                    PARAM_TERMINAL_KIND,
+                    1,
+                    TerminalKind::DynamicString as u8,
+                ],
+            );
+            fields.push(encoded_field(
+                FormatOp::Raw,
+                b"Again",
+                nested_path_off,
+                extra_param_off,
+            ));
+        }
+
+        let mut format = std::vec::Vec::new();
+        format.extend_from_slice(&TEST_NESTED_CALLDATA_PARENT_SELECTOR);
+        format.push(fields.len() as u8);
+        format.push(0); // intent len
+        format.extend_from_slice(&2u16.to_be_bytes());
+        format.push(0); // nested descent count
+        format.push(0); // string preimage count
+        for field in fields {
+            format.extend_from_slice(&field);
+        }
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&format);
+        let mut bytes = build_ir(&pool, &formats);
+        bytes[2..10].copy_from_slice(&31_337u64.to_be_bytes());
+        bytes[10..30].copy_from_slice(&TEST_NESTED_CALLDATA_PARENT_CONTRACT);
+        bytes[30..62].copy_from_slice(&TEST_NESTED_CALLDATA_DESCRIPTOR_HASH);
+        bytes
+    }
+
     fn eip712_string_field(
         pool: &mut std::vec::Vec<u8>,
         path: &[u8],
@@ -1974,6 +2220,152 @@ mod tests {
         let mut formats = std::vec![1];
         formats.extend_from_slice(&format);
         assert!(Erc7730Ir::parse(&build_ir(&pool, &formats)).is_ok());
+    }
+
+    #[test]
+    fn nested_calldata_deep_validation_requires_exact_test_only_enrollment() {
+        use crate::render::calldata_policy::{
+            PRODUCTION_NESTED_CALLDATA_ENROLLMENTS, TEST_NESTED_CALLDATA_CALLEE_PATH,
+            TEST_NESTED_CALLDATA_ENROLLMENTS, TEST_NESTED_CALLDATA_FIELD_PATH,
+        };
+
+        let bytes = nested_calldata_ir(
+            &TEST_NESTED_CALLDATA_FIELD_PATH,
+            &TEST_NESTED_CALLDATA_CALLEE_PATH,
+            &[],
+            false,
+            false,
+        );
+        assert!(Erc7730Ir::parse_with_nested_calldata_enrollments(
+            &bytes,
+            TEST_NESTED_CALLDATA_ENROLLMENTS,
+        )
+        .is_ok());
+        assert_eq!(
+            Erc7730Ir::parse_with_nested_calldata_enrollments(
+                &bytes,
+                PRODUCTION_NESTED_CALLDATA_ENROLLMENTS,
+            ),
+            Err(IrError::BadFormat)
+        );
+
+        let duplicates = [
+            TEST_NESTED_CALLDATA_ENROLLMENTS[0],
+            TEST_NESTED_CALLDATA_ENROLLMENTS[0],
+        ];
+        assert_eq!(
+            Erc7730Ir::parse_with_nested_calldata_enrollments(&bytes, &duplicates),
+            Err(IrError::BadFormat)
+        );
+    }
+
+    #[test]
+    fn nested_calldata_deep_validation_rejects_near_semantics() {
+        use crate::render::{
+            calldata_policy::{
+                TEST_NESTED_CALLDATA_CALLEE_PATH, TEST_NESTED_CALLDATA_ENROLLMENTS,
+                TEST_NESTED_CALLDATA_FIELD_PATH,
+            },
+            params::{PARAM_NESTED_SELECTOR, PARAM_VISIBILITY},
+        };
+
+        let rejects = |bytes: &[u8]| {
+            assert!(Erc7730Ir::parse_with_nested_calldata_enrollments(
+                bytes,
+                TEST_NESTED_CALLDATA_ENROLLMENTS,
+            )
+            .is_err());
+        };
+
+        let mut wrong_descriptor = nested_calldata_ir(
+            &TEST_NESTED_CALLDATA_FIELD_PATH,
+            &TEST_NESTED_CALLDATA_CALLEE_PATH,
+            &[],
+            false,
+            false,
+        );
+        wrong_descriptor[30] ^= 1;
+        rejects(&wrong_descriptor);
+
+        let mut wrong_chain = nested_calldata_ir(
+            &TEST_NESTED_CALLDATA_FIELD_PATH,
+            &TEST_NESTED_CALLDATA_CALLEE_PATH,
+            &[],
+            false,
+            false,
+        );
+        wrong_chain[9] ^= 1;
+        rejects(&wrong_chain);
+
+        let mut wrong_contract = nested_calldata_ir(
+            &TEST_NESTED_CALLDATA_FIELD_PATH,
+            &TEST_NESTED_CALLDATA_CALLEE_PATH,
+            &[],
+            false,
+            false,
+        );
+        wrong_contract[10] ^= 1;
+        rejects(&wrong_contract);
+
+        let mut wrong_selector = nested_calldata_ir(
+            &TEST_NESTED_CALLDATA_FIELD_PATH,
+            &TEST_NESTED_CALLDATA_CALLEE_PATH,
+            &[],
+            false,
+            false,
+        );
+        let formats_off = u16::from_be_bytes([wrong_selector[128], wrong_selector[129]]) as usize;
+        wrong_selector[formats_off + 1] ^= 1;
+        rejects(&wrong_selector);
+
+        let mut wrong_field_path = TEST_NESTED_CALLDATA_FIELD_PATH;
+        wrong_field_path[3] = 0;
+        rejects(&nested_calldata_ir(
+            &wrong_field_path,
+            &TEST_NESTED_CALLDATA_CALLEE_PATH,
+            &[],
+            false,
+            false,
+        ));
+
+        let mut wrong_callee = TEST_NESTED_CALLDATA_CALLEE_PATH;
+        wrong_callee[3] = 1;
+        rejects(&nested_calldata_ir(
+            &TEST_NESTED_CALLDATA_FIELD_PATH,
+            &wrong_callee,
+            &[],
+            false,
+            false,
+        ));
+
+        rejects(&nested_calldata_ir(
+            &TEST_NESTED_CALLDATA_FIELD_PATH,
+            &TEST_NESTED_CALLDATA_CALLEE_PATH,
+            &[PARAM_VISIBILITY, 1, Visibility::Optional as u8],
+            false,
+            false,
+        ));
+        rejects(&nested_calldata_ir(
+            &TEST_NESTED_CALLDATA_FIELD_PATH,
+            &TEST_NESTED_CALLDATA_CALLEE_PATH,
+            &[PARAM_NESTED_SELECTOR, 4, 1, 2, 3, 4],
+            false,
+            false,
+        ));
+        rejects(&nested_calldata_ir(
+            &TEST_NESTED_CALLDATA_FIELD_PATH,
+            &TEST_NESTED_CALLDATA_CALLEE_PATH,
+            &[],
+            true,
+            false,
+        ));
+        rejects(&nested_calldata_ir(
+            &TEST_NESTED_CALLDATA_FIELD_PATH,
+            &TEST_NESTED_CALLDATA_CALLEE_PATH,
+            &[],
+            false,
+            true,
+        ));
     }
 
     #[test]
