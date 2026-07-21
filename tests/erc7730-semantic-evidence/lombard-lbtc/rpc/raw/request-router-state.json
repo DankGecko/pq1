@@ -1,0 +1,39 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "router-implementation-slot",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0x9ece5fb1ab62d9075c4ec814b321e24d8ea021ac",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0x6af3d522c4fdc09750a5677af4a4c2c1cf6baae78663ee577f02b2646716f469",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "router-proxy-code",
+    "method": "eth_getCode",
+    "params": [
+      "0x9ece5fb1ab62d9075c4ec814b321e24d8ea021ac",
+      {
+        "blockHash": "0x6af3d522c4fdc09750a5677af4a4c2c1cf6baae78663ee577f02b2646716f469",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "router-implementation-code",
+    "method": "eth_getCode",
+    "params": [
+      "0xb823359367978a28eae71e90f79d95b62348bd80",
+      {
+        "blockHash": "0x6af3d522c4fdc09750a5677af4a4c2c1cf6baae78663ee577f02b2646716f469",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

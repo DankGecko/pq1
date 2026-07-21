@@ -1,0 +1,35 @@
+{
+  "author": {
+    "date": "2026-04-17T08:50:22Z",
+    "email": "145032760+hashxtree@users.noreply.github.com",
+    "name": "hashxtree"
+  },
+  "committer": {
+    "date": "2026-04-17T08:50:22Z",
+    "email": "145032760+hashxtree@users.noreply.github.com",
+    "name": "hashxtree"
+  },
+  "html_url": "https://github.com/lombard-finance/evm-smart-contracts/commit/bfd32248badaa2fb35a453f17f3c181badfb3dd6",
+  "message": "Format pauseMintBurn function in BaseLBTC contract",
+  "node_id": "C_kwDOL-fq1doAKGJmZDMyMjQ4YmFkYWEyZmIzNWE0NTNmMTdmM2MxODFiYWRmYjNkZDY",
+  "parents": [
+    {
+      "html_url": "https://github.com/lombard-finance/evm-smart-contracts/commit/8205cb1ad8147df544947f8098d534d26f706442",
+      "sha": "8205cb1ad8147df544947f8098d534d26f706442",
+      "url": "https://api.github.com/repos/lombard-finance/evm-smart-contracts/git/commits/8205cb1ad8147df544947f8098d534d26f706442"
+    }
+  ],
+  "sha": "bfd32248badaa2fb35a453f17f3c181badfb3dd6",
+  "tree": {
+    "sha": "5278bc4c8f292e58dac2ba21fe016df1e810fc18",
+    "url": "https://api.github.com/repos/lombard-finance/evm-smart-contracts/git/trees/5278bc4c8f292e58dac2ba21fe016df1e810fc18"
+  },
+  "url": "https://api.github.com/repos/lombard-finance/evm-smart-contracts/git/commits/bfd32248badaa2fb35a453f17f3c181badfb3dd6",
+  "verification": {
+    "payload": "tree 5278bc4c8f292e58dac2ba21fe016df1e810fc18\nparent 8205cb1ad8147df544947f8098d534d26f706442\nauthor hashxtree <145032760+hashxtree@users.noreply.github.com> 1776415822 +0300\ncommitter hashxtree <145032760+hashxtree@users.noreply.github.com> 1776415822 +0300\n\nFormat pauseMintBurn function in BaseLBTC contract\n",
+    "reason": "valid",
+    "signature": "-----BEGIN PGP SIGNATURE-----\n\niQGzBAABCAAdFiEEfS1jzklSXrWeFS6585Oq8PuZDygFAmnh9E4ACgkQ85Oq8PuZ\nDyjWBgv+LR4Kg6dCL4gV5dovGynyGzp/AvBDfPjw17NAZE4HjqmDS5C3ZQQUTrNX\nqPdAGwMEdwbNGh8L2pZw/WGfhHlkYGOiOkMZm60wDjmRGgf9+JxVQOA67Q4C1Cpz\nXdDBTkym6S0r2nvZScmmt4umI5Aq+zeG1/SGGe7ng2rRCCieYqVN1AJp8ukc04PT\nb2z3cJ7qSKU45KemZp0yGjhjpUGPKR95RcJUW6oGK6vNi4qF/ZvmUcTwcytVH9+z\nj4l2P4dfAjPq8YwxX9aPBf2b/R5WvUp8QFv/CZLW0MDbyL2NLytjJgZMxE1ywYmW\n3NVfk8VrnMNyXpAtBjjEZl17kmD7XjDMxCFDarCtF7f//c92CMXIUoJiTdDTO9zH\njq9+JR3rvNX6HFMjGv2HLoly6BdtsKwqHELgOzOjtfZjhEbx+3Xk2j9rbnxAR5v2\nc6NopROvb74aq3W/hbkWhUMiyTZuXtAJZ9hKQPgLV6z9sZ0p7cc2vbZSAWXZ+pDW\n8pfnlDNl\n=cMoX\n-----END PGP SIGNATURE-----",
+    "verified": true,
+    "verified_at": "2026-04-20T08:41:58Z"
+  }
+}

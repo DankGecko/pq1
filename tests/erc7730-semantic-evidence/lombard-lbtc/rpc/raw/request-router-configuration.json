@@ -1,0 +1,32 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "router-native-token",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x9ece5fb1ab62d9075c4ec814b321e24d8ea021ac",
+        "data": "0xe1758bd8"
+      },
+      {
+        "blockHash": "0x6af3d522c4fdc09750a5677af4a4c2c1cf6baae78663ee577f02b2646716f469",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "router-lbtc-token-config",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x9ece5fb1ab62d9075c4ec814b321e24d8ea021ac",
+        "data": "0xfe136c4e0000000000000000000000008236a87084f8b84306f72007f36f2618a5634494"
+      },
+      {
+        "blockHash": "0x6af3d522c4fdc09750a5677af4a4c2c1cf6baae78663ee577f02b2646716f469",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

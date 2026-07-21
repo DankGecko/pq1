@@ -4145,6 +4145,26 @@ fn registry_lombard_lbtc_admits_operand_complete_permit_on_exact_deployments() {
             .map(|field| field.expect("generated LBTC permit field parses"))
             .collect();
         assert_eq!(fields.len(), 7);
+        if chain_id == 1 {
+            assert_eq!(
+                permit.intent, b"Submit permit",
+                "the outer transaction submits an existing classical permit"
+            );
+            let redeem_selector: [u8; 4] = keccak256(b"redeem(uint256)")[..4]
+                .try_into()
+                .expect("selector width");
+            let redeem = ir
+                .find_format_by_selector(&redeem_selector)
+                .expect("LBTC format table parses")
+                .expect("mainnet LBTC redeem remains admitted");
+            assert_eq!(redeem.intent, b"Request redemption");
+            let redeem_fields: Vec<_> = redeem
+                .fields()
+                .map(|field| field.expect("generated LBTC redeem field parses"))
+                .collect();
+            assert_eq!(redeem_fields.len(), 1);
+            assert_eq!(redeem_fields[0].label, b"LBTC to Burn");
+        }
 
         let expected_fields = [
             (

@@ -8018,7 +8018,11 @@ fn positive_lombard_lbtc_permit_binds_every_static_word_on_both_deployments() {
         assert_all_pages_printable(&rendered.pages);
         assert_eq!(
             page_strs(&rendered.pages, intent_page_index(&rendered.pages))[0],
-            "Permit"
+            if chain_id == 1 {
+                "Submit permit"
+            } else {
+                "Permit"
+            }
         );
         assert_full_address_field_page(&rendered.pages, "Owner", &owner);
         assert_full_address_field_page(&rendered.pages, "Spender", &spender);
@@ -8107,6 +8111,63 @@ fn positive_lombard_lbtc_permit_binds_every_static_word_on_both_deployments() {
             "uint8 v with dirty high-byte padding must hard-refuse on {source_name}"
         );
     }
+}
+
+#[test]
+fn positive_lombard_lbtc_mainnet_redeem_is_rendered_as_a_burn_request() {
+    const SIGNATURE: &str = "redeem(uint256)";
+    let registry = build_registry();
+    let entry = find_leaf(registry, "calldata-lbtc-mainnet.json", 1);
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root)
+        .expect("verify production mainnet LBTC leaf");
+    let tx = envelope(1, entry.contract);
+    let metadata = Erc20Metadata {
+        chain_id: 1,
+        contract: entry.contract,
+        decimals: 8,
+        name: b"Lombard Staked Bitcoin",
+        symbol: b"LBTC",
+    };
+    let resolver = NameResolver::new();
+    let signer = [0x42; 20];
+    let render = |amount: u64| {
+        let calldata = calldata_static(SIGNATURE, &[u256_from_u64(amount).0]);
+        assert_selector_matches(&verified.ir, &calldata, SIGNATURE);
+        render_erc7730_pages_with_signer_checked(
+            &tx,
+            &calldata,
+            &verified,
+            Some(&metadata),
+            &resolver,
+            &signer,
+        )
+        .expect("render mainnet LBTC redemption request")
+    };
+
+    let rendered = render(123_456_700);
+    assert_all_pages_printable(&rendered.pages);
+    assert!(rendered
+        .transcript_receipt
+        .range_matches(&rendered.pages, 0));
+    let intent_rows = page_strs(&rendered.pages, intent_page_index(&rendered.pages));
+    assert_eq!(
+        format!("{}{}", intent_rows[0], intent_rows[1]),
+        "Request redemption"
+    );
+    let amount_rows = page_strs(
+        &rendered.pages,
+        find_page_by_label(&rendered.pages, "LBTC to Burn"),
+    )
+    .join(" ");
+    assert!(amount_rows.contains("1.234567") && amount_rows.contains("LBTC"));
+    assert_full_contract_identity_page(&rendered.pages, &entry.contract);
+
+    let mutated = render(123_456_800);
+    assert_ne!(rendered.pages.as_slice(), mutated.pages.as_slice());
+    assert!(!rendered
+        .transcript_receipt
+        .exact_match(&mutated.transcript_receipt));
 }
 
 #[test]

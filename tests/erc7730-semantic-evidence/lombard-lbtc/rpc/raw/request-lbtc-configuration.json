@@ -1,0 +1,47 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "lbtc-asset-router",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x8236a87084f8b84306f72007f36f2618a5634494",
+        "data": "0xfe9c6aa6"
+      },
+      {
+        "blockHash": "0x6af3d522c4fdc09750a5677af4a4c2c1cf6baae78663ee577f02b2646716f469",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "lbtc-redeem-fee",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x8236a87084f8b84306f72007f36f2618a5634494",
+        "data": "0xc6d98f1a"
+      },
+      {
+        "blockHash": "0x6af3d522c4fdc09750a5677af4a4c2c1cf6baae78663ee577f02b2646716f469",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "lbtc-redeems-enabled",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x8236a87084f8b84306f72007f36f2618a5634494",
+        "data": "0x70723ae0"
+      },
+      {
+        "blockHash": "0x6af3d522c4fdc09750a5677af4a4c2c1cf6baae78663ee577f02b2646716f469",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

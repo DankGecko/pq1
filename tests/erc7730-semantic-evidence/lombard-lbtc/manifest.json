@@ -1,0 +1,588 @@
+{
+  "schema_version": 2,
+  "scope": "Ethereum Lombard LBTC six flat-static accepted routes semantic evidence",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
+  "captured_at_utc": "2026-07-21T18:30:00Z",
+  "fixed_block": {
+    "chain_id": 1,
+    "number": 25582800,
+    "number_hex": "0x1865cd0",
+    "hash": "0x6af3d522c4fdc09750a5677af4a4c2c1cf6baae78663ee577f02b2646716f469",
+    "state_root": "0x62d6ab3264e16b736903423ccfb4804114554c3808264a8df211a7bfcbcf0505",
+    "timestamp": 1784657375,
+    "timestamp_utc": "2026-07-21T18:09:35Z"
+  },
+  "contracts": {
+    "lbtc_proxy": "0x8236a87084f8b84306f72007f36f2618a5634494",
+    "lbtc_implementation": "0x072072317469ebb6c340a47e41561c9c3b782bd9",
+    "asset_router_proxy": "0x9ece5fb1ab62d9075c4ec814b321e24d8ea021ac",
+    "asset_router_implementation": "0xb823359367978a28eae71e90f79d95b62348bd80",
+    "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+  },
+  "official_source": {
+    "repository": "https://github.com/lombard-finance/evm-smart-contracts",
+    "commit": "bfd32248badaa2fb35a453f17f3c181badfb3dd6",
+    "tree": "5278bc4c8f292e58dac2ba21fe016df1e810fc18"
+  },
+  "blockscout": {
+    "lbtc_proxy": "blockscout/StakedLBTCProxy.json",
+    "lbtc_implementation": "blockscout/StakedLBTC.implementation.json",
+    "asset_router_proxy": "blockscout/AssetRouterProxy.json",
+    "asset_router_implementation": "blockscout/AssetRouter.implementation.json",
+    "compiler": "v0.8.24+commit.e11b9ed9",
+    "optimizer_enabled": true,
+    "optimizer_runs": 200,
+    "evm_version": "paris"
+  },
+  "abi_artifact": "abi/StakedLBTC.accepted-routes.abi.json",
+  "routes": [
+    {
+      "canonical_signature": "approve(address,uint256)",
+      "selector": "0x095ea7b3",
+      "semantics": "ERC-20 allowance"
+    },
+    {
+      "canonical_signature": "burn(uint256)",
+      "selector": "0x42966c68",
+      "semantics": "burn caller LBTC"
+    },
+    {
+      "canonical_signature": "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)",
+      "selector": "0xd505accf",
+      "semantics": "classical ERC-2612 permit submission"
+    },
+    {
+      "canonical_signature": "redeem(uint256)",
+      "selector": "0xdb006a75",
+      "semantics": "burn caller LBTC and request same-chain redemption through mutable router state"
+    },
+    {
+      "canonical_signature": "transfer(address,uint256)",
+      "selector": "0xa9059cbb",
+      "semantics": "ERC-20 transfer"
+    },
+    {
+      "canonical_signature": "transferFrom(address,address,uint256)",
+      "selector": "0x23b872dd",
+      "semantics": "ERC-20 delegated transfer"
+    }
+  ],
+  "semantics": {
+    "redeem_intent": "request redemption; source burns caller LBTC after sending a mailbox request",
+    "redeem_output": "no output amount, completion time, or successful release is signed",
+    "permit": "all owner, spender, allowance, deadline, v, r, and s operands are visible; this is an ECDSA permit submission and not a PQ signature claim",
+    "standards": "approve, transfer, and transferFrom inherit OpenZeppelin ERC-20 behavior; permit inherits OpenZeppelin ERC20Permit",
+    "dynamic_exclusions": "mint(bytes,bytes) and redeemForBtc(bytes,uint256) remain fail-closed because dynamic-tail clear signing is outside this phase"
+  },
+  "rpc": {
+    "providers": [
+      "dRPC",
+      "Tenderly",
+      "MEV Blocker"
+    ],
+    "historical_query_binding": "Every eth_getCode, eth_getStorageAt, and eth_call request uses EIP-1898 blockHash plus requireCanonical:true."
+  },
+  "boundary": "Historical fixed-block evidence covers only six accepted flat-static calls at chain 1 proxy 0x8236a87084f8b84306f72007f36f2618a5634494. Router, fees, routes, pause and access state, token metadata, implementations, mailbox processing, output, timing, and success remain mutable. No dynamic calldata, Bitcoin-output validation, fallback, blind-sign, hardware, production, shipment, or future-upgrade authority is supplied.",
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "f5e3f071d2d28b9ee132cfe4e93f4630c81c5baaab47eab59ce5349c20d53f1b"
+    },
+    {
+      "path": "abi/StakedLBTC.accepted-routes.abi.json",
+      "sha256": "20824f984aef88a6fe730b67518af0585921743d94d31a0711d3750c39478369"
+    },
+    {
+      "path": "blockscout/AssetRouter.implementation.json",
+      "sha256": "44d4cf27f7ee71c9851749691838e23289faed862f934e8e36748653c15aad86"
+    },
+    {
+      "path": "blockscout/AssetRouterProxy.json",
+      "sha256": "10788ca231ddf457ece691616afced0d38235e08c237dd8ae6e0dfec097cee30"
+    },
+    {
+      "path": "blockscout/StakedLBTC.implementation.json",
+      "sha256": "584fac5ed5b73376f9abb261b767798d026cdf50df7c8a11fb742a94daff9cd3"
+    },
+    {
+      "path": "blockscout/StakedLBTCProxy.json",
+      "sha256": "727035d4eb1267254016a8d8a9a9566fb4b062d222aa9dde8baf6dc0162d5c0b"
+    },
+    {
+      "path": "collect.sh",
+      "sha256": "26477a9e3546621f3413d50a252b9382ec7ba14137a34f58abe833b9b0973ad6"
+    },
+    {
+      "path": "compiler/AssetRouter.settings.json",
+      "sha256": "d2aa3e16ab7b721053858c7a90158126b0090cef6d9618bf50a4999202bbe766"
+    },
+    {
+      "path": "compiler/AssetRouter.standard-input.json",
+      "sha256": "1210a08eaabfa2f9279ff07e7091cc5fb0cb6ecab72e461e2ef1d44fba3ebe2c"
+    },
+    {
+      "path": "compiler/AssetRouter.standard-output.json",
+      "sha256": "d8592e30d854b2bc77121ee74d6c0be4c753f726c3bb91f7e7c263330f4d18fb"
+    },
+    {
+      "path": "compiler/StakedLBTC.settings.json",
+      "sha256": "d2aa3e16ab7b721053858c7a90158126b0090cef6d9618bf50a4999202bbe766"
+    },
+    {
+      "path": "compiler/StakedLBTC.standard-input.json",
+      "sha256": "bf69f52168cf6f8f06e1cb3928b26d1a63a5805ddf371df58359074914432813"
+    },
+    {
+      "path": "compiler/StakedLBTC.standard-output.json",
+      "sha256": "5c6f512a48a36629728d6cfeb1ba6e32e5e0b7a29483f8426af943be8fc2aa85"
+    },
+    {
+      "path": "compiler/solc-0.8.24.version.txt",
+      "sha256": "20239c9f32faab0ec9d259042decb951c8a788ce0861c8bdee9729ae472725ef"
+    },
+    {
+      "path": "official/contracts/LBTC/AssetRouter.sol",
+      "sha256": "132e5b20d8865df645903576bdb18d7b6e8f9853ab170704cdd770bbc094ada2"
+    },
+    {
+      "path": "official/contracts/LBTC/BaseLBTC.sol",
+      "sha256": "837142b74f7edc7812c804837d17bef76ab9e03090e70183e61e2a6064b27c86"
+    },
+    {
+      "path": "official/contracts/LBTC/StakedLBTC.sol",
+      "sha256": "0ba3c6a3d3517b6780db51d168b64ccdb3ffb72e264438eaee5940c51284021b"
+    },
+    {
+      "path": "official/contracts/LBTC/interfaces/IAssetRouter.sol",
+      "sha256": "d53456ca544b57a6f8af505bcad55fcc1c7b1be5096321ce5fa50cd6e717be06"
+    },
+    {
+      "path": "official/contracts/LBTC/interfaces/IBaseLBTC.sol",
+      "sha256": "61d93c03c5ea968fd8ce8400d1b17ccea24584a9df021c9a9a13da571e32d2f8"
+    },
+    {
+      "path": "official/contracts/LBTC/interfaces/IStakedLBTC.sol",
+      "sha256": "706c0418723e5b369105818011944920cd77793e2021c8292f91567801b305dd"
+    },
+    {
+      "path": "official/contracts/LBTC/libraries/Assets.sol",
+      "sha256": "44ed0750c1cd14f1adfed19e5db921d9f1628f308a388dbd45efd3281b476613"
+    },
+    {
+      "path": "official/contracts/gmp/libs/GMPUtils.sol",
+      "sha256": "9c4e7e430acb88560f7259a010a0afa5e2e6a3237338b9d90728e39cb027b531"
+    },
+    {
+      "path": "official/contracts/libs/Actions.sol",
+      "sha256": "e3ae9c44ca78ad94cc696ecb4a9b3f32f3d2c9ef421a2d80c5827611cc088b74"
+    },
+    {
+      "path": "official/contracts/libs/LChainId.sol",
+      "sha256": "7922f37243ad5606f0d1cee5c2d980de207a6e792c6f8118b4a4aa53dd90a069"
+    },
+    {
+      "path": "official/github-git-commit.json",
+      "sha256": "aae725832df8ae54eaf9d4eb703af1cf1bf9be4d9c4080781b59fe5fb481487d"
+    },
+    {
+      "path": "rpc/raw/request-identity.json",
+      "sha256": "4bd3d3a97f7666f3ed6731d3ea071274097da7e20966abc3180cbdb91f18bf15"
+    },
+    {
+      "path": "rpc/raw/request-lbtc-configuration.json",
+      "sha256": "cee9656c519ede9dc2efe5c6b1785b5b047bb705dccab76683d64f7c314ef6ae"
+    },
+    {
+      "path": "rpc/raw/request-lbtc-metadata.json",
+      "sha256": "e8dee2c32f278b032d71eeed652f3b9aeb52840caffd1d957e6d6fa9af263528"
+    },
+    {
+      "path": "rpc/raw/request-lbtc-state.json",
+      "sha256": "4b5bea23e3d491442856db585472e898857186a439fa744aa1ec7357ec9af18f"
+    },
+    {
+      "path": "rpc/raw/request-router-configuration.json",
+      "sha256": "1a4114fc372a53c44e0c88affddb01a6b77e0579ecb808c86cfd539feb6ed965"
+    },
+    {
+      "path": "rpc/raw/request-router-state.json",
+      "sha256": "5c85b3f6509a4a6bfe6d721363853a875a45476b1ccd048ba82e5402765c96a1"
+    },
+    {
+      "path": "rpc/raw/response-drpc-identity.json",
+      "sha256": "7e46f767f26149c8230a2134ca60f13cc7da0f61f20085cead287a9c15726c16"
+    },
+    {
+      "path": "rpc/raw/response-drpc-lbtc-configuration.json",
+      "sha256": "db69c238a4335be05d5ab0b0ccf59539054ccc319eb6d7d3a405de84033b024a"
+    },
+    {
+      "path": "rpc/raw/response-drpc-lbtc-metadata.json",
+      "sha256": "9262381b5763adf42632096d528025b90358c3324f384b512d6a3dfb16169a10"
+    },
+    {
+      "path": "rpc/raw/response-drpc-lbtc-state.json",
+      "sha256": "1a2dcc1b0a1440b034b61fb3fb14133cf494a47c806aa17e86184ce59806ce7f"
+    },
+    {
+      "path": "rpc/raw/response-drpc-router-configuration.json",
+      "sha256": "41fb4d1a5fd785739b210292ba1b2f4476f18fad4c621fdeb4b1b32def726f44"
+    },
+    {
+      "path": "rpc/raw/response-drpc-router-state.json",
+      "sha256": "d6804bfb3378b6e2e13e13761b7dd91ba13ac64c00a506d8909e3de0ee695ef4"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-identity.json",
+      "sha256": "7e46f767f26149c8230a2134ca60f13cc7da0f61f20085cead287a9c15726c16"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-lbtc-configuration.json",
+      "sha256": "db69c238a4335be05d5ab0b0ccf59539054ccc319eb6d7d3a405de84033b024a"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-lbtc-metadata.json",
+      "sha256": "9262381b5763adf42632096d528025b90358c3324f384b512d6a3dfb16169a10"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-lbtc-state.json",
+      "sha256": "1a2dcc1b0a1440b034b61fb3fb14133cf494a47c806aa17e86184ce59806ce7f"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-router-configuration.json",
+      "sha256": "41fb4d1a5fd785739b210292ba1b2f4476f18fad4c621fdeb4b1b32def726f44"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-router-state.json",
+      "sha256": "d6804bfb3378b6e2e13e13761b7dd91ba13ac64c00a506d8909e3de0ee695ef4"
+    },
+    {
+      "path": "rpc/raw/response-tenderly-identity.json",
+      "sha256": "7e46f767f26149c8230a2134ca60f13cc7da0f61f20085cead287a9c15726c16"
+    },
+    {
+      "path": "rpc/raw/response-tenderly-lbtc-configuration.json",
+      "sha256": "db69c238a4335be05d5ab0b0ccf59539054ccc319eb6d7d3a405de84033b024a"
+    },
+    {
+      "path": "rpc/raw/response-tenderly-lbtc-metadata.json",
+      "sha256": "9262381b5763adf42632096d528025b90358c3324f384b512d6a3dfb16169a10"
+    },
+    {
+      "path": "rpc/raw/response-tenderly-lbtc-state.json",
+      "sha256": "1a2dcc1b0a1440b034b61fb3fb14133cf494a47c806aa17e86184ce59806ce7f"
+    },
+    {
+      "path": "rpc/raw/response-tenderly-router-configuration.json",
+      "sha256": "41fb4d1a5fd785739b210292ba1b2f4476f18fad4c621fdeb4b1b32def726f44"
+    },
+    {
+      "path": "rpc/raw/response-tenderly-router-state.json",
+      "sha256": "d6804bfb3378b6e2e13e13761b7dd91ba13ac64c00a506d8909e3de0ee695ef4"
+    },
+    {
+      "path": "runtime/AssetRouter.implementation.ethereum-mainnet.hex",
+      "sha256": "b9cd07f2aa8c0358498b69ba842418699b27a77396e1f42cb7140050234eb18c"
+    },
+    {
+      "path": "runtime/AssetRouterProxy.ethereum-mainnet.hex",
+      "sha256": "09ea05bb64ab2454876bde4eed6a67e156bfaac13f64abe20a81ec5fc4ecca81"
+    },
+    {
+      "path": "runtime/StakedLBTC.implementation.ethereum-mainnet.hex",
+      "sha256": "c96bd388890c31457a62a66a59e17b3a54745069d709b753ab6c870018a74b7f"
+    },
+    {
+      "path": "runtime/StakedLBTCProxy.ethereum-mainnet.hex",
+      "sha256": "58acdedf7743284bfa8329ce96dbb92085f000c61dc048774da87f74f3161a47"
+    },
+    {
+      "path": "source/verified/router/@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol",
+      "sha256": "af65f33d5d4ee58be1871f806a6e5f76945ab93acc8579905348c0af9dbd6fdd"
+    },
+    {
+      "path": "source/verified/router/@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol",
+      "sha256": "a0b367f3d905cd9bd7e2400f0ae9e59f614dee51ee089be7fec6363968851cf1"
+    },
+    {
+      "path": "source/verified/router/@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol",
+      "sha256": "a8b7eafa0fdc7cb5a644c8c61a8e4c51e031d5e1e6f268f72dbe18b768ead56e"
+    },
+    {
+      "path": "source/verified/router/@openzeppelin/contracts-upgradeable/utils/ContextUpgradeable.sol",
+      "sha256": "a08e16324da33a9d666dc07a22ae58031c242a3869f6808e55b4b82fc70cb209"
+    },
+    {
+      "path": "source/verified/router/@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol",
+      "sha256": "f29ba5093b0936698c148c9bbe6d0a8b97aaf78d76c5db61741b85104eea28ce"
+    },
+    {
+      "path": "source/verified/router/@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol",
+      "sha256": "bfe65eed46c68099c2ec6e7ec7fd98152b6a5acac8911484c70182ed41981201"
+    },
+    {
+      "path": "source/verified/router/@openzeppelin/contracts/access/IAccessControl.sol",
+      "sha256": "1d6ef09193265172824fa1139e85cba422117ca918961183f080e692489d8c3b"
+    },
+    {
+      "path": "source/verified/router/@openzeppelin/contracts/access/extensions/IAccessControlDefaultAdminRules.sol",
+      "sha256": "40a5073d17cd7439dd882db0d5ea64527e9c8be982109f4fbbc3fafc1a4973c7"
+    },
+    {
+      "path": "source/verified/router/@openzeppelin/contracts/interfaces/IERC1271.sol",
+      "sha256": "c222d6d35af16214627df99796551f94497c74662e94aa1e80ca5e211a751f61"
+    },
+    {
+      "path": "source/verified/router/@openzeppelin/contracts/interfaces/IERC5313.sol",
+      "sha256": "8bc20fb9e53bdb556386519448975a15afa3794230a90b6e3050fe00cbb48d50"
+    },
+    {
+      "path": "source/verified/router/@openzeppelin/contracts/utils/cryptography/ECDSA.sol",
+      "sha256": "37828cb50b47bcc51c7b770bde15d5885d871ef1e67028057a0b788c3568726e"
+    },
+    {
+      "path": "source/verified/router/@openzeppelin/contracts/utils/introspection/IERC165.sol",
+      "sha256": "07ae1ac964ab74dedada999e2dfc642031a6495469cffc0bf715daa4f1e4f904"
+    },
+    {
+      "path": "source/verified/router/@openzeppelin/contracts/utils/math/Math.sol",
+      "sha256": "a6ee779fc42e6bf01b5e6a963065706e882b016affbedfd8be19a71ea48e6e15"
+    },
+    {
+      "path": "source/verified/router/@openzeppelin/contracts/utils/math/SafeCast.sol",
+      "sha256": "089488198de38548e4e8ee7940d307f18396e5b295de5bca7ff7567fd4142cc3"
+    },
+    {
+      "path": "source/verified/router/contracts/LBTC/AssetRouter.sol",
+      "sha256": "132e5b20d8865df645903576bdb18d7b6e8f9853ab170704cdd770bbc094ada2"
+    },
+    {
+      "path": "source/verified/router/contracts/LBTC/interfaces/IAssetOperation.sol",
+      "sha256": "03ff7438acacdef784ec8a6ec21571319280195f2a0290b801874a201fcfd50b"
+    },
+    {
+      "path": "source/verified/router/contracts/LBTC/interfaces/IAssetRouter.sol",
+      "sha256": "d53456ca544b57a6f8af505bcad55fcc1c7b1be5096321ce5fa50cd6e717be06"
+    },
+    {
+      "path": "source/verified/router/contracts/LBTC/interfaces/IBaseLBTC.sol",
+      "sha256": "61d93c03c5ea968fd8ce8400d1b17ccea24584a9df021c9a9a13da571e32d2f8"
+    },
+    {
+      "path": "source/verified/router/contracts/LBTC/interfaces/IOracle.sol",
+      "sha256": "a73635b7592df85a7dc823f8365ebbe2a36e3e830112316fef7d7f647cb3a4bc"
+    },
+    {
+      "path": "source/verified/router/contracts/LBTC/libraries/Assert.sol",
+      "sha256": "e01adabb6c382b6c744631b1690591d89ff6ff7d5664afabaffa411fb1b99205"
+    },
+    {
+      "path": "source/verified/router/contracts/LBTC/libraries/Assets.sol",
+      "sha256": "44ed0750c1cd14f1adfed19e5db921d9f1628f308a388dbd45efd3281b476613"
+    },
+    {
+      "path": "source/verified/router/contracts/LBTC/libraries/Validation.sol",
+      "sha256": "8d53e5f83b6ccd25c60593f57111d9cb659fcf21756fe8bcd16028e48b6943a1"
+    },
+    {
+      "path": "source/verified/router/contracts/bascule/interfaces/IGMPBascule.sol",
+      "sha256": "897cdca2641916574ffe3a0fc20980d0ed3b1d939235a109ed78dbec691de01a"
+    },
+    {
+      "path": "source/verified/router/contracts/gmp/IHandler.sol",
+      "sha256": "86b27091063667510e091fd9c9f14eb6324918fa242cd7975130672c329119ad"
+    },
+    {
+      "path": "source/verified/router/contracts/gmp/IMailbox.sol",
+      "sha256": "7754db917e6d93b120f93ba5e2f3415042c8a9a5c63249a5461722e4ba52127e"
+    },
+    {
+      "path": "source/verified/router/contracts/gmp/libs/GMPUtils.sol",
+      "sha256": "9c4e7e430acb88560f7259a010a0afa5e2e6a3237338b9d90728e39cb027b531"
+    },
+    {
+      "path": "source/verified/router/contracts/gmp/libs/MessagePath.sol",
+      "sha256": "4575c0171ee340821c88de25660fe549f6c40a566bf6bd4e0c674309f93d40db"
+    },
+    {
+      "path": "source/verified/router/contracts/libs/Actions.sol",
+      "sha256": "e3ae9c44ca78ad94cc696ecb4a9b3f32f3d2c9ef421a2d80c5827611cc088b74"
+    },
+    {
+      "path": "source/verified/router/contracts/libs/BitcoinUtils.sol",
+      "sha256": "72ee8ff5429be000d4b82b660de60cf643a5a85f63649ac13fa661c6223aa192"
+    },
+    {
+      "path": "source/verified/router/contracts/libs/EIP1271SignatureUtils.sol",
+      "sha256": "7ebcd02b5d8c9de2b9dc1c33354cea95776c30e6f26840537138d7906a7d7864"
+    },
+    {
+      "path": "source/verified/router/contracts/libs/LChainId.sol",
+      "sha256": "7922f37243ad5606f0d1cee5c2d980de207a6e792c6f8118b4a4aa53dd90a069"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol",
+      "sha256": "af65f33d5d4ee58be1871f806a6e5f76945ab93acc8579905348c0af9dbd6fdd"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts-upgradeable/access/extensions/AccessControlDefaultAdminRulesUpgradeable.sol",
+      "sha256": "a0b367f3d905cd9bd7e2400f0ae9e59f614dee51ee089be7fec6363968851cf1"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol",
+      "sha256": "a8b7eafa0fdc7cb5a644c8c61a8e4c51e031d5e1e6f268f72dbe18b768ead56e"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol",
+      "sha256": "a671661c93ff63f065e4ad077f4d6f41ce41f3cd0c43e30a68d0c1c989bd4765"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PausableUpgradeable.sol",
+      "sha256": "b78d22506dc20f2085460967bda86b3c32a24b454701ab1678bab6e1a956ddde"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol",
+      "sha256": "2961c5480c43d1e4681ae82dbee642e0d942f60d963b9cea3f50b5c303d35f98"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts-upgradeable/utils/ContextUpgradeable.sol",
+      "sha256": "a08e16324da33a9d666dc07a22ae58031c242a3869f6808e55b4b82fc70cb209"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts-upgradeable/utils/NoncesUpgradeable.sol",
+      "sha256": "d63abfbf20ca119bf162ec5bb343df4b189208d1d0a73657555f688536498cd8"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol",
+      "sha256": "de9a20a313d34dd3b454c834606518390c8ead4dcca8137c879401fef62d8583"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol",
+      "sha256": "f29ba5093b0936698c148c9bbe6d0a8b97aaf78d76c5db61741b85104eea28ce"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol",
+      "sha256": "15f71bb751c9a1e8c4650a4b07782f6dfdd96a87af2f109ae6f3002fd4363a00"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol",
+      "sha256": "bfe65eed46c68099c2ec6e7ec7fd98152b6a5acac8911484c70182ed41981201"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/access/IAccessControl.sol",
+      "sha256": "1d6ef09193265172824fa1139e85cba422117ca918961183f080e692489d8c3b"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/access/extensions/IAccessControlDefaultAdminRules.sol",
+      "sha256": "40a5073d17cd7439dd882db0d5ea64527e9c8be982109f4fbbc3fafc1a4973c7"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/interfaces/IERC1271.sol",
+      "sha256": "c222d6d35af16214627df99796551f94497c74662e94aa1e80ca5e211a751f61"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/interfaces/IERC5267.sol",
+      "sha256": "efd1ebd1e04b6ef9c3b8781a097588f83da954323f438d54a71dc06508e6c7b8"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/interfaces/IERC5313.sol",
+      "sha256": "8bc20fb9e53bdb556386519448975a15afa3794230a90b6e3050fe00cbb48d50"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/interfaces/draft-IERC6093.sol",
+      "sha256": "4aea87243e6de38804bf8737bf86f750443d3b5e63dd0fd0b7ad92f77cdbd3e3"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/token/ERC20/IERC20.sol",
+      "sha256": "6f2faae462e286e24e091d7718575179644dc60e79936ef0c92e2d1ab3ca3cee"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol",
+      "sha256": "1d079c20a192a135308e99fa5515c27acfbb071e6cdb0913b13634e630865939"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol",
+      "sha256": "912509e0e9bf74e0f8a8c92d031b5b26d2d35c6d4abf3f56251be1ea9ca946bf"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol",
+      "sha256": "471157c89111d7b9eab456b53ebe9042bc69504a64cb5cc980d38da9103379ae"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/utils/Address.sol",
+      "sha256": "b3710b1712637eb8c0df81912da3450da6ff67b0b3ed18146b033ed15b1aa3b9"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/utils/Strings.sol",
+      "sha256": "0519199dbc635f98ce2e4537986604ee618bca665c65e9a1738702dfacf72010"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/utils/cryptography/ECDSA.sol",
+      "sha256": "37828cb50b47bcc51c7b770bde15d5885d871ef1e67028057a0b788c3568726e"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol",
+      "sha256": "2fd5c641cf452efd15f784827cb2835664970d7fbc166bf80824ed27011cc374"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/utils/introspection/IERC165.sol",
+      "sha256": "07ae1ac964ab74dedada999e2dfc642031a6495469cffc0bf715daa4f1e4f904"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/utils/math/Math.sol",
+      "sha256": "a6ee779fc42e6bf01b5e6a963065706e882b016affbedfd8be19a71ea48e6e15"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/utils/math/SafeCast.sol",
+      "sha256": "089488198de38548e4e8ee7940d307f18396e5b295de5bca7ff7567fd4142cc3"
+    },
+    {
+      "path": "source/verified/staked/@openzeppelin/contracts/utils/math/SignedMath.sol",
+      "sha256": "768c28e3a33c3312e57ae8a1caaec2893bc89ac6e386621de018f85e9a2d6e99"
+    },
+    {
+      "path": "source/verified/staked/contracts/LBTC/BaseLBTC.sol",
+      "sha256": "837142b74f7edc7812c804837d17bef76ab9e03090e70183e61e2a6064b27c86"
+    },
+    {
+      "path": "source/verified/staked/contracts/LBTC/StakedLBTC.sol",
+      "sha256": "0ba3c6a3d3517b6780db51d168b64ccdb3ffb72e264438eaee5940c51284021b"
+    },
+    {
+      "path": "source/verified/staked/contracts/LBTC/interfaces/IAssetRouter.sol",
+      "sha256": "d53456ca544b57a6f8af505bcad55fcc1c7b1be5096321ce5fa50cd6e717be06"
+    },
+    {
+      "path": "source/verified/staked/contracts/LBTC/interfaces/IBaseLBTC.sol",
+      "sha256": "61d93c03c5ea968fd8ce8400d1b17ccea24584a9df021c9a9a13da571e32d2f8"
+    },
+    {
+      "path": "source/verified/staked/contracts/LBTC/interfaces/IOracle.sol",
+      "sha256": "a73635b7592df85a7dc823f8365ebbe2a36e3e830112316fef7d7f647cb3a4bc"
+    },
+    {
+      "path": "source/verified/staked/contracts/LBTC/interfaces/IStakedLBTC.sol",
+      "sha256": "706c0418723e5b369105818011944920cd77793e2021c8292f91567801b305dd"
+    },
+    {
+      "path": "source/verified/staked/contracts/LBTC/libraries/Assert.sol",
+      "sha256": "e01adabb6c382b6c744631b1690591d89ff6ff7d5664afabaffa411fb1b99205"
+    },
+    {
+      "path": "source/verified/staked/contracts/bascule/interfaces/IGMPBascule.sol",
+      "sha256": "897cdca2641916574ffe3a0fc20980d0ed3b1d939235a109ed78dbec691de01a"
+    },
+    {
+      "path": "source/verified/staked/contracts/gmp/IMailbox.sol",
+      "sha256": "7754db917e6d93b120f93ba5e2f3415042c8a9a5c63249a5461722e4ba52127e"
+    },
+    {
+      "path": "source/verified/staked/contracts/libs/Actions.sol",
+      "sha256": "e3ae9c44ca78ad94cc696ecb4a9b3f32f3d2c9ef421a2d80c5827611cc088b74"
+    },
+    {
+      "path": "source/verified/staked/contracts/libs/EIP1271SignatureUtils.sol",
+      "sha256": "7ebcd02b5d8c9de2b9dc1c33354cea95776c30e6f26840537138d7906a7d7864"
+    }
+  ]
+}

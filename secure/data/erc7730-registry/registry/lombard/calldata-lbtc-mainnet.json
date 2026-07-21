@@ -47,7 +47,7 @@
       },
       "permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)": {
         "$id": "permit",
-        "intent": "Permit",
+        "intent": "Submit permit",
         "fields": [
           { "path": "owner", "label": "Owner", "format": "addressName", "params": { "types": ["eoa", "wallet"] }, "visible": "always" },
           {
@@ -66,11 +66,11 @@
       },
       "redeem(uint256 amount)": {
         "$id": "redeem",
-        "intent": "Redeem",
+        "intent": "Request redemption",
         "fields": [
           {
             "path": "amount",
-            "label": "Amount to Redeem",
+            "label": "LBTC to Burn",
             "format": "tokenAmount",
             "params": { "tokenPath": "@.to" },
             "visible": "always"

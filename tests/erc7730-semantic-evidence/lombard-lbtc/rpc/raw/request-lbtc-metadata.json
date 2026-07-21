@@ -1,0 +1,47 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "lbtc-name",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x8236a87084f8b84306f72007f36f2618a5634494",
+        "data": "0x06fdde03"
+      },
+      {
+        "blockHash": "0x6af3d522c4fdc09750a5677af4a4c2c1cf6baae78663ee577f02b2646716f469",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "lbtc-symbol",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x8236a87084f8b84306f72007f36f2618a5634494",
+        "data": "0x95d89b41"
+      },
+      {
+        "blockHash": "0x6af3d522c4fdc09750a5677af4a4c2c1cf6baae78663ee577f02b2646716f469",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "lbtc-decimals",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x8236a87084f8b84306f72007f36f2618a5634494",
+        "data": "0x313ce567"
+      },
+      {
+        "blockHash": "0x6af3d522c4fdc09750a5677af4a4c2c1cf6baae78663ee577f02b2646716f469",
+        "requireCanonical": true
+      }
+    ]
+  }
+]
