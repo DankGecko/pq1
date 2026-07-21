@@ -286,8 +286,8 @@
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 28,
-      "bytes": 2160433,
-      "sha256": "0fd27946cb0836f2087da133a96ba0649b5a130dc9b5dd69768a9f391abefb79"
+      "bytes": 2160416,
+      "sha256": "8cdbb05c7e411b33aae5953f760af50ce94fd27ab0bba1cf097b623a78da9f8d"
     },
     {
       "path": "pqsigner-erc7730",
@@ -336,7 +336,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 282242,
-      "sha256": "0aef1436718c54c7d8a1757ca370f5b485981e920cfa4b267aa0ad4cac65437f"
+      "sha256": "03d96559c50f28c0ada2dce671629c05e205c900c295aa7feca1cca8f17f6caf"
     }
   ],
   "capability_inputs": [

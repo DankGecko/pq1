@@ -898,8 +898,7 @@ fn new_aave_evidence_is_bound_through_merkle_dispatch_and_rendering() {
             .range_matches(&rendered.pages, 0));
         for index in 0..3 {
             let mut mutated = call.clone();
-            mutated[4 + index * 32..4 + (index + 1) * 32]
-                .copy_from_slice(&mutations[index]);
+            mutated[4 + index * 32..4 + (index + 1) * 32].copy_from_slice(&mutations[index]);
             let changed = render_erc7730_pages_with_signer_checked(
                 &tx, &mutated, &verified, None, &resolver, &signer,
             )
