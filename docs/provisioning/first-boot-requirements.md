@@ -148,10 +148,16 @@ journal and MUST be resumable across resets (§4). Order:
 | R3.x state machine | `secure/src/first_boot/state.rs` |
 | R4.x journal codec | `secure/src/first_boot/journal.rs` |
 | R3.2–R3.4 SE rotations | `secure/src/se050/{mod,scp03}.rs`, `secure/src/optiga/mod.rs` |
-| R2.4 confirm gate | **not yet implemented** — current code burns immediately after `ui::init()` |
+| R2.3 OTP-master pre-lock | `run_pre_lock_and_maybe_lock` (`E0803`); Phase-B belt-and-braces keeps `E0811` |
+| R2.4 confirm gate | **implemented 2026-07-21** — `state::build_lock_confirm_pages` + `confirm_checked` both-buttons chord + `rdp_burn_authorized`, gated before the burn in `run_pre_lock_and_maybe_lock` |
 
-Gaps between this document and the code are defects in one or the other;
-R2.4 is the one known intentional gap as of 2026-07-21.
+Gaps between this document and the code are defects in one or the other. As of
+2026-07-21 the known device-side gaps (R2.3 mis-phasing, R2.4 confirm gate, the
+collapsed `ObField` codes) are **closed**; what remains OPEN is not device-side
+logic but the silicon/receipt/handoff/E140-ordering gates tracked in
+[`first-boot-provisioning.md`](first-boot-provisioning.md) (incl. the
+`OEM_LOCK_MASK_PINNED` fail-closed pin, `HW-CONFIRM-PUTKEY-KCV-RESP`, and the
+DEK-liveness `HW-CONFIRM-PUTKEY-REPUT-IDEMPOTENT` bench).
 
 ## 8. Factory input state — exactly what the factory must have done
 

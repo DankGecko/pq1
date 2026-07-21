@@ -130,10 +130,13 @@ pub fn run_pre_lock_and_maybe_lock() {
         return;
     }
 
-    // Verify the published ship option-byte profile (TZEN / SECWM / SECBOOTADD0
-    // / WRP1A / OEM-locks). A mismatch means this is not a genuine RDP-0 ship
-    // unit (or a transit attacker tampered with the option bytes).
-    if lockdown::verify_ship_profile(
+    // R2.1 — verify the published ship option-byte profile (TZEN / RDP / SECWM
+    // / SECBOOTADD0 / WRP1A / OEM-locks). A mismatch means this is not a genuine
+    // RDP-0 ship unit (or a transit attacker tampered with the option bytes).
+    // The granular `ObField` → E08xx map names the exact failing field on the
+    // fault screen (R5.1). Phase A only ever WRITES the RDP byte, never WRP or
+    // any other option byte — this is R2.1 "verify, don't set".
+    if let Err(field) = lockdown::verify_ship_profile(
         flash::optr_raw(),
         flash::secwm1r1_raw(),
         flash::secwm2r1_raw(),
@@ -141,30 +144,66 @@ pub fn run_pre_lock_and_maybe_lock() {
         flash::wrp1ar_raw(),
         flash::oem_lock_status_raw(),
         &lockdown::SHIP_PROFILE_U585,
-    )
-    .is_err()
-    {
-        halt_first_boot(FirstBootError::ObProfileMismatch);
+    ) {
+        halt_first_boot(state::ob_field_code(field));
     }
 
-    // Blank-check the per-device pages 123..=127 BEFORE locking: a pre-planted
-    // page-127 journal salt would otherwise yield a predictable final PBS
-    // (#36 hardening #3), and a planted journal would spoof "already done".
+    // R2.2 — blank-check the per-device pages 123..=127 BEFORE locking: a
+    // pre-planted page-127 journal salt would otherwise yield a predictable
+    // final PBS (#36 hardening #3), and a planted journal would spoof "already
+    // done". Distinct code from the profile mismatch.
     for page in 123..=127u32 {
         if !flash::is_secure_page_blank(page) {
-            halt_first_boot(FirstBootError::ObProfileMismatch);
+            halt_first_boot(FirstBootError::PerDevicePageNotBlank);
         }
     }
 
-    // Trusted-UI warning before the irreversible step. Rendered once, then the
-    // burn runs immediately (no input wait) to keep the pre-lock window tiny.
-    crate::ui::show_status("FIRST BOOT", "DO NOT POWER OFF");
+    // R2.3 — the factory OTP master roots every transport keyset Phase B
+    // authenticates against. Verify it PRE-lock (fail UNLOCKED / returnable,
+    // 0x0803) so a unit the factory left unburned is never welded shut only to
+    // discover the post-lock RMA code 0x0811. (Phase B keeps a belt-and-braces
+    // re-check for resume boots and FI skips.)
+    if !crate::hw::otp::is_device_master_burned() {
+        halt_first_boot(FirstBootError::OtpMasterMissingPreLock);
+    }
+
+    // R2.4 — CONFIRM GATE (owner decision 2026-07-17). The RDP-2 burn is the
+    // single most irreversible action the device ever takes — it permanently
+    // forfeits SWD verification — so it MUST NOT run automatically. Show the
+    // lock-confirm screen and require a deliberate BOTH-buttons chord (the
+    // button driver synthesizes it to a long-right confirm) after the user has
+    // scrolled to the last page. Everything above was a pure read, so until
+    // this confirm the device has touched no SE / USB / journal state (R2.4).
+    //
+    // Timing note (do NOT "fix" by moving `setup_systick`/`iwdg::init` earlier):
+    // Phase A runs before SysTick and before the IWDG start, on purpose. The
+    // button driver polls via a calibrated busy-wait (`buttons::delay_ms`), so
+    // presses are detected without SysTick; `is_idle()` reads the never-ticked
+    // counter as 0 → never idle → the prompt blocks indefinitely for the
+    // deliberate press (exactly R2.4); and with the IWDG not yet started there
+    // is no watchdog reset while the user reads and confirms. Starting either
+    // timer here would trade this correct behaviour for an idle-wipe/watchdog
+    // reset mid-confirm.
+    let pages = state::build_lock_confirm_pages();
+    let (verdict, sentinel) = crate::ui::confirm::confirm_checked(&pages);
+    let confirmed = matches!(verdict, crate::ui::confirm::ConfirmResult::Confirmed);
+    // Two independent words, both required (FI idiom), and the gate itself
+    // returns a Hamming-distant sentinel — so the burn fires only on an exact
+    // `OK_SENTINEL`, never on a stuck-at-1 truthy value. Decline / cancel / idle
+    // all mean "not now" → stay unlocked and re-prompt next boot.
+    if state::rdp_burn_authorized(confirmed, sentinel) != crate::fi::OK_SENTINEL {
+        park_unlocked_reprompt_next_boot();
+    }
+
+    // R2.4 passed → R2.5 burn. "DO NOT POWER OFF" during the OPTSTRT window.
+    crate::ui::show_status("LOCKING", "DO NOT POWER OFF");
     // (BOR/VBUS power-stability check is a silicon-validation refinement — see
     // the #36 runbook; BOR is configured via the shipped option-byte profile.)
 
     // Program RDP=0xCC → OBL_LAUNCH. On success this resets the MCU and never
     // returns; it only returns on a pre-launch error.
-    // SAFETY: the ship profile + blank per-device pages are verified above.
+    // SAFETY: the ship profile + blank per-device pages + OTP master are
+    // verified above and the user confirmed the lock.
     if unsafe { flash::program_rdp_level2_and_launch() }.is_err() {
         halt_first_boot(FirstBootError::RdpProgramFailed);
     }
@@ -172,6 +211,19 @@ pub fn run_pre_lock_and_maybe_lock() {
     // to reset, park rather than continue below RDP-2.
     loop {
         cortex_m::asm::wfe();
+    }
+}
+
+/// R2.4 decline / cancel / idle: the owner did not confirm the lock. Stay at
+/// RDP-0, touch nothing (no SE, no USB, no journal), and park. The next
+/// power-on re-enters Phase A (RDP != L2) and shows the same prompt again. This
+/// is deliberately NOT a fault (no `E08xx`) and NOT a wipe — no wallet exists
+/// on the device yet.
+#[cfg(all(not(test), feature = "rdp2-self-lock"))]
+fn park_unlocked_reprompt_next_boot() -> ! {
+    crate::ui::show_status("NOT LOCKED", "power to retry");
+    loop {
+        cortex_m::asm::wfi();
     }
 }
 
@@ -252,9 +304,25 @@ impl FirstBootHw for FirstBootHwImpl<'_> {
             .map_err(|_| FirstBootError::Se050AdminRekeyFailed)
     }
 
+    fn optiga_establish_transport_shield(&mut self) -> Result<(), FirstBootError> {
+        // #443: bring the shield up under the transport PBS (E140 untouched) so
+        // the 3-source salt draw's mandatory OPTIGA leg can answer. Both the
+        // inconclusive-`Transport` and authoritative-`Shield` verdicts map to
+        // the same halt code — the next boot re-enters the fresh path and
+        // re-tries the handshake with a fresh link.
+        self.se
+            .optiga
+            .establish_transport_shield()
+            .map_err(|_| FirstBootError::OptigaTransportShieldFailed)
+    }
+
     fn trng_salt(&mut self) -> Result<[u8; 32], FirstBootError> {
+        // The OPTIGA shield was established just above (fresh path), so the
+        // strong-RNG's mandatory OPTIGA leg can answer. A failure here is the
+        // draw itself (a TRNG/leg fault or the all-zero gate) — distinct from
+        // the journal-persist failure that keeps `OptigaSaltPersistFailed`.
         let mut salt = [0u8; 32];
-        crate::rng_strong::fill(&mut salt).map_err(|_| FirstBootError::OptigaSaltPersistFailed)?;
+        crate::rng_strong::fill(&mut salt).map_err(|_| FirstBootError::TrngSaltDrawFailed)?;
         Ok(salt)
     }
 

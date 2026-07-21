@@ -283,6 +283,124 @@ pub fn keys_are_factory_default(enc: &[u8; 16], mac: &[u8; 16], dek: &[u8; 16]) 
 }
 
 // ---------------------------------------------------------------------------
+// GP PUT KEY response verification (work-todo #36 / #398 — HW-ASSUME-PUTKEY-ATOMIC)
+// ---------------------------------------------------------------------------
+
+/// Verify the GP `PUT KEY` **response body** against the KCVs of the three keys
+/// we intended to install. `send_apdu` has already stripped and checked the
+/// status word (`SW==0x9000`), so `body` is the KCV echo the applet returns so
+/// the host can confirm the write landed. Catches a garbled / partially-torn
+/// write at write time (`HW-ASSUME-PUTKEY-ATOMIC`, #398/#386).
+///
+/// Observed / spec layouts (GP 2.3.1 §11.8.2.4):
+/// - `10` bytes: `KVN(1) || KCV_enc(3) || KCV_mac(3) || KCV_dek(3)`
+/// - `9`  bytes:          `KCV_enc(3) || KCV_mac(3) || KCV_dek(3)`
+/// - `0`  bytes: the SE05x applet echoes **no** KCV — accepted here because the
+///   `0x9000` already confirmed the chip took the write; the DEK-liveness bench
+///   step (runbook) is the torn-DEK safety net for this case. Whether the SE050
+///   actually echoes KCVs is **`HW-CONFIRM-PUTKEY-KCV-RESP`** (the driver has
+///   never exercised this path on silicon); once pinned, a `0`-length body may
+///   become fail-closed.
+///
+/// Any other length is unexpected → fail closed. Returns
+/// [`crate::fi::OK_SENTINEL`] on success (Hamming-distant FI verdict), never a
+/// bare bool.
+#[must_use]
+pub fn verify_put_key_response(
+    body: &[u8],
+    enc: &[u8; 16],
+    mac: &[u8; 16],
+    dek: &[u8; 16],
+) -> u32 {
+    let off = match body.len() {
+        // No KCV echoed — accepted (SW==0x9000 already confirmed the write; see
+        // HW-CONFIRM above). Routed through the double-evaluated sentinel path,
+        // not a bare `return OK_SENTINEL`, so it matches the {9,10} branches.
+        0 => return crate::fi::check_true_into_sentinel(|| true),
+        10 => 1usize,
+        9 => 0usize,
+        _ => return crate::fi::FAIL_SENTINEL,
+    };
+    let kvn_ok = body.len() != 10 || body[0] == KEY_VERSION;
+    let want = [scp03_kcv(enc), scp03_kcv(mac), scp03_kcv(dek)];
+    crate::fi::check_true_into_sentinel(|| {
+        // OR the byte differences so the compare is data-independent in shape.
+        let mut diff = 0u8;
+        let mut i = 0;
+        while i < 3 {
+            let mut j = 0;
+            while j < 3 {
+                diff |= body[off + i * 3 + j] ^ want[i][j];
+                j += 1;
+            }
+            i += 1;
+        }
+        kvn_ok && diff == 0
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Authenticate-before-rotate proof (work-todo #36 — named production gate)
+// ---------------------------------------------------------------------------
+
+// Context tags binding a proof to ONE credential so an SCP03 proof can't gate
+// an admin delete, etc. Distinct, non-zero, and mutually Hamming-distant.
+pub const AUTH_CTX_SCP03_TRANSPORT: u32 = 0x5343_5033; // "SCP3"
+pub const AUTH_CTX_ADMIN_TRANSPORT: u32 = 0x4144_4D4E; // "ADMN"
+pub const AUTH_CTX_PBS_TRANSPORT: u32 = 0x5042_5321; // "PBS!"
+
+/// A fail-initialized proof that a rotation write was preceded by a **verified
+/// authentication under the factory transport credential** (the named
+/// "authenticate-before-rotate" production gate). Mirrors the codebase's
+/// `DeploymentConfirmReceipt` FI-sentinel-carrier idiom: a freshly constructed
+/// proof authorizes NOTHING, so a single glitch that skips the whole
+/// transport-auth call leaves the write refused. The verdict can only become
+/// `OK_SENTINEL` by running [`record`](Self::record) on the auth success arm.
+///
+/// `!Copy + !Clone` so a proof can't be duplicated past its one write.
+#[must_use]
+pub struct TransportAuthProof {
+    verdict: u32,
+    context: u32,
+}
+
+impl TransportAuthProof {
+    /// Fail-closed constructor: a pending proof authorizes nothing. (The
+    /// struct is already `#[must_use]`, so the result cannot be dropped.)
+    pub const fn pending(context: u32) -> Self {
+        Self {
+            verdict: crate::fi::FAIL_SENTINEL,
+            context,
+        }
+    }
+
+    /// Record success on the transport-auth success arm. `verified` is
+    /// re-evaluated through the double-checked FI sentinel path, so a fault on
+    /// one evaluation fails closed. A context mismatch (or `verified == false`,
+    /// e.g. a wrong transport credential) leaves the proof pending.
+    #[inline(never)]
+    pub fn record<F: FnMut() -> bool>(&mut self, expect_ctx: u32, verified: F) {
+        if self.context != expect_ctx {
+            return; // stays FAIL_SENTINEL
+        }
+        self.verdict = crate::fi::check_true_into_sentinel(verified);
+    }
+
+    /// Consume immediately before a destructive rotation write. Returns
+    /// [`crate::fi::OK_SENTINEL`] iff this proof is for `expect_ctx` AND its
+    /// verdict is OK. Voted volatile reads defeat a single load-glitch; the
+    /// result is a Hamming-distant sentinel, not a bare bool.
+    #[inline(never)]
+    #[must_use]
+    pub fn authorize_write(&self, expect_ctx: u32) -> u32 {
+        let v = crate::fi::read_volatile_voted(core::ptr::addr_of!(self.verdict))
+            .unwrap_or(crate::fi::FAIL_SENTINEL);
+        let c = crate::fi::read_volatile_voted(core::ptr::addr_of!(self.context)).unwrap_or(0);
+        crate::fi::check_true_into_sentinel(|| v == crate::fi::OK_SENTINEL && c == expect_ctx)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests — these now actually run under `cargo test -p sphincs-tz-secure`
 // because `scp03_logic` (unlike `se050::scp03`) is not `not(test)`-gated.
 // ---------------------------------------------------------------------------
@@ -959,5 +1077,87 @@ mod tests {
             a, b,
             "cmac of no inputs must equal cmac of one empty input — both are 'message = empty'"
         );
+    }
+
+    // ----- verify_put_key_response (work-todo #36 / #398) -----
+
+    fn kcv_body_10(enc: &[u8; 16], mac: &[u8; 16], dek: &[u8; 16]) -> [u8; 10] {
+        let mut b = [0u8; 10];
+        b[0] = KEY_VERSION;
+        b[1..4].copy_from_slice(&scp03_kcv(enc));
+        b[4..7].copy_from_slice(&scp03_kcv(mac));
+        b[7..10].copy_from_slice(&scp03_kcv(dek));
+        b
+    }
+
+    #[test]
+    fn put_key_response_accepts_matching_kcvs_and_empty_body() {
+        let (enc, mac, dek) = ([0xA0u8; 16], [0xB1u8; 16], [0xC2u8; 16]);
+        let b10 = kcv_body_10(&enc, &mac, &dek);
+        assert_eq!(verify_put_key_response(&b10, &enc, &mac, &dek), crate::fi::OK_SENTINEL);
+        // 9-byte form: the three KCVs without the leading KVN.
+        assert_eq!(verify_put_key_response(&b10[1..], &enc, &mac, &dek), crate::fi::OK_SENTINEL);
+        // 0-byte form: no KCV echoed → accepted (HW-CONFIRM-PUTKEY-KCV-RESP).
+        assert_eq!(verify_put_key_response(&[], &enc, &mac, &dek), crate::fi::OK_SENTINEL);
+    }
+
+    #[test]
+    fn put_key_response_rejects_torn_wrong_kvn_and_bad_length() {
+        let (enc, mac, dek) = ([0xA0u8; 16], [0xB1u8; 16], [0xC2u8; 16]);
+        let b10 = kcv_body_10(&enc, &mac, &dek);
+        // Torn DEK: flip a DEK-KCV byte — the exact HW-ASSUME-PUTKEY-ATOMIC
+        // scenario the check exists to catch.
+        let mut torn = b10;
+        torn[9] ^= 0xFF;
+        assert_eq!(verify_put_key_response(&torn, &enc, &mac, &dek), crate::fi::FAIL_SENTINEL);
+        // Wrong KVN in the 10-byte form.
+        let mut bad_kvn = b10;
+        bad_kvn[0] ^= 0x01;
+        assert_eq!(verify_put_key_response(&bad_kvn, &enc, &mac, &dek), crate::fi::FAIL_SENTINEL);
+        // Unexpected length → fail closed.
+        assert_eq!(verify_put_key_response(&[0u8; 5], &enc, &mac, &dek), crate::fi::FAIL_SENTINEL);
+        // Right length, all-zero KCVs (chip stored different keys) → reject.
+        assert_eq!(verify_put_key_response(&[0u8; 9], &enc, &mac, &dek), crate::fi::FAIL_SENTINEL);
+    }
+
+    // ----- TransportAuthProof (authenticate-before-rotate) -----
+
+    #[test]
+    fn transport_auth_proof_pending_refuses_write() {
+        let p = TransportAuthProof::pending(AUTH_CTX_SCP03_TRANSPORT);
+        assert_ne!(p.authorize_write(AUTH_CTX_SCP03_TRANSPORT), crate::fi::OK_SENTINEL);
+    }
+
+    #[test]
+    fn transport_auth_proof_records_then_authorizes() {
+        let mut p = TransportAuthProof::pending(AUTH_CTX_SCP03_TRANSPORT);
+        p.record(AUTH_CTX_SCP03_TRANSPORT, || true);
+        assert_eq!(p.authorize_write(AUTH_CTX_SCP03_TRANSPORT), crate::fi::OK_SENTINEL);
+    }
+
+    #[test]
+    fn transport_auth_proof_context_mismatch_refuses() {
+        // A proof recorded for SCP03 cannot gate an ADMIN write, and vice versa.
+        let mut p = TransportAuthProof::pending(AUTH_CTX_SCP03_TRANSPORT);
+        p.record(AUTH_CTX_ADMIN_TRANSPORT, || true); // wrong ctx → no-op
+        assert_ne!(p.authorize_write(AUTH_CTX_SCP03_TRANSPORT), crate::fi::OK_SENTINEL);
+        let mut q = TransportAuthProof::pending(AUTH_CTX_SCP03_TRANSPORT);
+        q.record(AUTH_CTX_SCP03_TRANSPORT, || true);
+        assert_ne!(q.authorize_write(AUTH_CTX_ADMIN_TRANSPORT), crate::fi::OK_SENTINEL);
+    }
+
+    #[test]
+    fn transport_auth_proof_false_predicate_stays_failed() {
+        // A wrong transport credential (verified == false) must NOT authorize.
+        let mut p = TransportAuthProof::pending(AUTH_CTX_PBS_TRANSPORT);
+        p.record(AUTH_CTX_PBS_TRANSPORT, || false);
+        assert_ne!(p.authorize_write(AUTH_CTX_PBS_TRANSPORT), crate::fi::OK_SENTINEL);
+    }
+
+    #[test]
+    fn transport_auth_ctx_tags_are_distinct() {
+        assert_ne!(AUTH_CTX_SCP03_TRANSPORT, AUTH_CTX_ADMIN_TRANSPORT);
+        assert_ne!(AUTH_CTX_SCP03_TRANSPORT, AUTH_CTX_PBS_TRANSPORT);
+        assert_ne!(AUTH_CTX_ADMIN_TRANSPORT, AUTH_CTX_PBS_TRANSPORT);
     }
 }

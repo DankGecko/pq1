@@ -391,27 +391,57 @@ impl Se050 {
                 Err(_) => {}
             }
 
-            // Not final yet: clean link, establish under TRANSPORT.
+            // Not final yet: clean link, establish under TRANSPORT. This mutual
+            // SCP03 auth (card cryptogram FI-verified inside establish_with_keys)
+            // IS the authenticate-before-rotate step — bind it to a proof the
+            // PUT KEY must consume, so a glitch that skips the establish leaves
+            // the write refused (named production gate).
+            let mut proof = scp03::TransportAuthProof::pending(scp03::AUTH_CTX_SCP03_TRANSPORT);
             self.link_bringup()?;
             self.scp03 = Scp03Session::new();
             scp03::establish_with(&mut self.scp03, &mut self.t1, &tr_enc, &tr_mac)
                 .map_err(|_| Se050Error::Scp03)?;
+            proof.record(scp03::AUTH_CTX_SCP03_TRANSPORT, || self.scp03.active);
 
             // Install the FINAL keyset in place (KVN 0x0B), key blocks wrapped
-            // under the CURRENT (transport) DEK.
-            let (apdu_buf, len) =
-                scp03::build_put_key_apdu(&final_enc, &final_mac, &final_dek, &tr_dek);
-            let mut resp = [0u8; 32];
-            let n = apdu::send_apdu(&mut self.t1, &mut self.scp03, &apdu_buf[..len], &mut resp)?;
-            if n < 2 {
+            // under the CURRENT (transport) DEK. The buffer holds the wrapped
+            // key blocks — wipe it on drop (was previously left in the clear).
+            let apdu_buf = zeroize::Zeroizing::new(
+                scp03::build_put_key_apdu(&final_enc, &final_mac, &final_dek, &tr_dek).0,
+            );
+            let mut resp = zeroize::Zeroizing::new([0u8; 32]);
+
+            // CONSUME the authenticate-before-rotate proof immediately before the
+            // destructive PUT KEY. A pending proof (skipped/failed transport
+            // auth) fails closed here — keys are never installed unauthenticated.
+            if proof.authorize_write(scp03::AUTH_CTX_SCP03_TRANSPORT) != crate::fi::OK_SENTINEL {
                 return Err(Se050Error::Scp03);
             }
-            let sw = ((resp[n - 2] as u16) << 8) | (resp[n - 1] as u16);
-            if sw != 0x9000 {
-                return Err(Se050Error::Status(sw));
+
+            // `send_apdu` ALREADY strips + verifies SW==0x9000 (the `?`
+            // propagates any non-9000 status); its return length is the KCV
+            // response BODY, not `body||SW`. The old code re-parsed the body
+            // tail as a "SW", which false-failed every real PUT KEY (an empty
+            // body → n<2 → Err; a KCV body → a KCV byte read as SW ≠ 0x9000) —
+            // i.e. this path never worked on silicon (#398 driver bug). Verify
+            // the response KCVs instead, catching a garbled/torn write at write
+            // time (HW-ASSUME-PUTKEY-ATOMIC).
+            let body_len = apdu::send_apdu(
+                &mut self.t1,
+                &mut self.scp03,
+                &apdu_buf[..scp03::PUT_KEY_APDU_LEN],
+                &mut resp[..],
+            )?;
+            if scp03::verify_put_key_response(&resp[..body_len], &final_enc, &final_mac, &final_dek)
+                != crate::fi::OK_SENTINEL
+            {
+                return Err(Se050Error::Scp03);
             }
 
             // Confirm: re-establish under FINAL. Only now is rotation "done".
+            // (DEK-liveness — proving the FINAL DEK too, not just ENC/MAC — is
+            // the bench-gated torn-DEK safety net for the no-KCV-echo case; see
+            // the #36 runbook / HW-CONFIRM-PUTKEY-REPUT-IDEMPOTENT.)
             self.link_bringup()?;
             self.scp03 = Scp03Session::new();
             scp03::establish_with(&mut self.scp03, &mut self.t1, &final_enc, &final_mac)
@@ -479,8 +509,20 @@ impl Se050 {
             }
 
             // (c) Authenticate under TRANSPORT, delete, recreate with FINAL.
+            // The verify_session under the transport admin PIN IS the
+            // authenticate-before-rotate step; bind it to a proof the delete
+            // must consume, so a skipped/glitched auth (or a wrong transport
+            // credential — captured as `auth_ok == false`) fails closed before
+            // the destructive delete rather than propagating past it.
+            let mut proof = scp03::TransportAuthProof::pending(scp03::AUTH_CTX_ADMIN_TRANSPORT);
             let sid = apdu::create_session(&mut self.t1, &mut self.scp03, ADMIN_WIPE_OBJ)?;
-            apdu::verify_session(&mut self.t1, &mut self.scp03, &sid, &tr_pin)?;
+            let auth_ok =
+                apdu::verify_session(&mut self.t1, &mut self.scp03, &sid, &tr_pin).is_ok();
+            proof.record(scp03::AUTH_CTX_ADMIN_TRANSPORT, || auth_ok);
+            if proof.authorize_write(scp03::AUTH_CTX_ADMIN_TRANSPORT) != crate::fi::OK_SENTINEL {
+                let _ = apdu::close_session(&mut self.t1, &mut self.scp03, &sid);
+                return Err(Se050Error::Scp03);
+            }
             apdu::delete_object_authed(&mut self.t1, &mut self.scp03, &sid, ADMIN_WIPE_OBJ)?;
             let _ = apdu::close_session(&mut self.t1, &mut self.scp03, &sid);
             apdu::write_userid_unlimited(

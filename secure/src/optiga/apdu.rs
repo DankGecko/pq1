@@ -389,6 +389,18 @@ impl ApduBuf {
     }
 }
 
+impl Drop for ApduBuf {
+    fn drop(&mut self) {
+        // The 768-byte InData buffer can hold plaintext secrets — e.g. the E140
+        // Platform Binding Secret assembled by `set_data_object` during the
+        // first-boot PBS rotation. Wipe it on drop so the secret does not
+        // outlive the operation (#419 / the OPTIGA twin of the SE050 `ApduBuf`
+        // Drop). The `zeroize` compiler fences prevent this being optimized out.
+        use zeroize::Zeroize;
+        self.buf.zeroize();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Response parsing
 // ---------------------------------------------------------------------------

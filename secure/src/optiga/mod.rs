@@ -571,6 +571,45 @@ impl OptigaTrustM {
         }
     }
 
+    /// work-todo #36 / #443: establish the shielded session under the factory
+    /// **transport** PBS (`secret_keys::transport_optiga_pbs` — OTP-master-
+    /// rooted, salt-independent, reproducible at RDP-2) **without touching
+    /// E140**. Phase B step 5 calls this on the fresh path BEFORE the 3-source
+    /// TRNG salt draw: `random()` requires a live shield, but `load_pbs()` runs
+    /// only after Phase B completes (`main.rs`), and the in-ceremony shield
+    /// otherwise comes up too late — inside `rotate_pbs_to_salted`, after the
+    /// draw. Without this, the mandatory OPTIGA leg of the draw fails and the
+    /// unit halts at `E0854`/`E0851` on every boot (#443 deterministic brick).
+    ///
+    /// This is a pre-rotation **liveness** check — a chip that no longer pairs
+    /// under the transport PBS is caught here, before the salt is journaled — so
+    /// the salt record is not spent on a chip that can't be rotated. It is NOT
+    /// the E140 authenticate-before-rotate proof: that is the separate
+    /// `TransportAuthProof` consumed immediately before the `SetData` in
+    /// `rotate_pbs_to_salted` (the salt-journal write it precedes is not a
+    /// credential). The D1 error split is preserved (`ensure_shield` maps a
+    /// transport-class handshake failure to `Transport` = inconclusive/retry;
+    /// only a genuine SlaveFinished MAC rejection reaches the caller as
+    /// `Shield`).
+    ///
+    /// **Fresh-path only.** The state machine calls this in the `salt == None`
+    /// arm. After a committed salt the chip may already be rotated, where a
+    /// transport handshake would fail — the rotation self-establishes instead.
+    #[cfg(all(feature = "stm32u585", feature = "rdp2-self-lock"))]
+    pub(crate) fn establish_transport_shield(&mut self) -> Result<(), OptigaError> {
+        use zeroize::Zeroize;
+        // Same transport-establish sequence rotate_pbs_to_salted uses (its
+        // TRANSPORT arm), but E140 is never written. `load_pbs` copies into the
+        // shield state, so the local can be wiped immediately.
+        let mut tr_pbs =
+            crate::hw::secret_keys::transport_optiga_pbs().map_err(|_| OptigaError::Transport)?;
+        self.shield.load_pbs(&tr_pbs);
+        tr_pbs.zeroize();
+        // Fresh chip session (clears any PRL/alert residue), then handshake.
+        self.hard_reset_and_reinit()
+            .and_then(|()| self.ensure_shield())
+    }
+
     /// work-todo #36 first-boot: rotate the E140 Platform Binding Secret from
     /// the factory **transport** PBS to the **salted-final** PBS, two-phase.
     ///
@@ -621,14 +660,29 @@ impl OptigaTrustM {
                 Err(_) => {}
             }
 
-            // Establish under TRANSPORT to authorise the E140 rewrite.
+            // Establish under TRANSPORT to authorise the E140 rewrite. The PRL
+            // SlaveFinished MAC under the transport PBS IS the
+            // authenticate-before-rotate step; bind it to a proof the SetData
+            // must consume, so a skipped/glitched handshake fails closed before
+            // the destructive rewrite (named production gate).
+            let mut proof = crate::scp03_logic::TransportAuthProof::pending(
+                crate::scp03_logic::AUTH_CTX_PBS_TRANSPORT,
+            );
             self.shield.load_pbs(&tr_pbs);
             self.hard_reset_and_reinit()?;
-            self.ensure_shield()?;
+            let shield_res = self.ensure_shield();
+            let shield_ok = shield_res.is_ok();
+            proof.record(crate::scp03_logic::AUTH_CTX_PBS_TRANSPORT, || shield_ok);
+            shield_res?; // propagate the D1-classified transport handshake error
 
             // Write the salted-final PBS to E140.
             // SAFETY: live shielded session under the current (transport) PBS;
             // single-threaded secure world.
+            if proof.authorize_write(crate::scp03_logic::AUTH_CTX_PBS_TRANSPORT)
+                != crate::fi::OK_SENTINEL
+            {
+                return Err(OptigaError::Shield);
+            }
             unsafe {
                 apdu::set_data_object(&mut self.ifx, &mut self.shield, apdu::OID_PBS, &final_pbs)?;
             }
