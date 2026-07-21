@@ -40,6 +40,7 @@
 //! | 0x48 | `integer_width`      | 1 B width in bytes, `1..=32` (integers)    |
 //! | 0x49 | `sender_address`     | 1–2 unique concatenated 20 B sentinels     |
 //! | 0x4A | `word_guard`         | mode (0=EQ, 1=NE) + exact 32 B word        |
+//! | 0x4B | `exact_empty_bytes`  | empty (requires sole canonical empty tail) |
 //!
 //! Wire-stable.
 //!
@@ -143,6 +144,10 @@ pub const PARAM_WORD_GUARD: u8 = 0x4A;
 pub const WORD_GUARD_PAYLOAD_LEN: usize = 33;
 pub const WORD_GUARD_EQ: u8 = 0;
 pub const WORD_GUARD_NE: u8 = 1;
+/// Authenticated assertion that a `raw` dynamic-`bytes` field is the sole
+/// canonical ABI tail and must contain exactly zero data bytes. The parameter
+/// is a zero-payload marker: any payload is non-canonical and rejected.
+pub const PARAM_EXACT_EMPTY_BYTES: u8 = 0x4B;
 pub const DYNAMIC_KIND_STRING: u8 = 0x01;
 pub const DYNAMIC_KIND_BYTES: u8 = 0x02;
 
@@ -450,6 +455,9 @@ pub struct ParamSet<'a> {
     /// It is deliberately excluded from [`ParamSet::policy_mask`] because it
     /// constrains a field without changing its formatter semantics.
     pub word_guard: Option<WordGuard<'a>>,
+    /// Authenticated zero-payload assertion that this dynamic `bytes` field is
+    /// accepted only when its sole canonical ABI tail is exactly empty.
+    pub exact_empty_bytes: bool,
 }
 
 impl<'a> Default for ParamSet<'a> {
@@ -483,6 +491,7 @@ impl<'a> Default for ParamSet<'a> {
             integer_width_bytes: None,
             sender_addresses: None,
             word_guard: None,
+            exact_empty_bytes: false,
         }
     }
 }
@@ -584,6 +593,9 @@ impl ParamSet<'_> {
         if self.sender_addresses.is_some() {
             mask = mask.union(ParamMask::SENDER_ADDRESS);
         }
+        if self.exact_empty_bytes {
+            mask = mask.union(ParamMask::EXACT_EMPTY_BYTES);
+        }
         mask
     }
 }
@@ -634,7 +646,7 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
         .ok_or(RenderErr::Reject("7730 bad param blob"))?;
 
     let mut cursor = 0usize;
-    // Tags 0x30..=0x4A fit in this bitmap. Singleton parameter TLVs are
+    // Tags 0x30..=0x4B fit in this bitmap. Singleton parameter TLVs are
     // canonical: accepting duplicates would make meaning order-dependent and
     // previously let a short visibility duplicate retain the first tag's tail.
     let mut seen_tags = 0u32;
@@ -651,7 +663,7 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
         let payload = &body[cursor..cursor + len];
         cursor += len;
 
-        if !(PARAM_TOKEN_PATH..=PARAM_WORD_GUARD).contains(&tag) {
+        if !(PARAM_TOKEN_PATH..=PARAM_EXACT_EMPTY_BYTES).contains(&tag) {
             return Err(RenderErr::Reject("7730 unknown tlv tag"));
         }
         let bit = 1u32 << (tag - PARAM_TOKEN_PATH);
@@ -733,6 +745,12 @@ pub fn parse<'a>(ir: &Erc7730Ir<'a>, param_off: u16) -> Result<ParamSet<'a>, Ren
                     mode: payload[0],
                     expected,
                 });
+            }
+            PARAM_EXACT_EMPTY_BYTES => {
+                if !payload.is_empty() {
+                    return Err(RenderErr::Reject("7730 bad exact-empty marker"));
+                }
+                p.exact_empty_bytes = true;
             }
             PARAM_THRESHOLD => {
                 p.threshold = Some(
@@ -1560,6 +1578,36 @@ mod tests {
     }
 
     #[test]
+    fn exact_empty_bytes_marker_is_zero_payload_and_singleton() {
+        let body = [PARAM_EXACT_EMPTY_BYTES, 0];
+        let mut pool = std::vec![0xFF, body.len() as u8];
+        pool.extend_from_slice(&body);
+        let bytes = ir_with_pool(&pool);
+        let ir = Erc7730Ir::parse(&bytes).unwrap();
+        let parsed = parse(&ir, 1).unwrap();
+        assert!(parsed.exact_empty_bytes);
+        assert!(parsed
+            .policy_mask()
+            .contains(ParamMask::EXACT_EMPTY_BYTES));
+
+        for bad in [
+            std::vec![PARAM_EXACT_EMPTY_BYTES, 1, 0],
+            std::vec![
+                PARAM_EXACT_EMPTY_BYTES,
+                0,
+                PARAM_EXACT_EMPTY_BYTES,
+                0,
+            ],
+        ] {
+            let mut pool = std::vec![0xFF, bad.len() as u8];
+            pool.extend_from_slice(&bad);
+            let bytes = ir_with_pool(&pool);
+            let ir = Erc7730Ir::parse(&bytes).unwrap();
+            assert!(parse(&ir, 1).is_err());
+        }
+    }
+
+    #[test]
     fn rejects_invalid_or_duplicate_dynamic_kind() {
         for body in [
             std::vec![PARAM_DYNAMIC_KIND, 1, 0xFF],
@@ -1896,15 +1944,37 @@ mod kani_harnesses {
         kani::assume(4 + l <= N);
         let tag = pool[2];
         // "Unknown" = outside the CONTIGUOUS known-tag range
-        // `[0x30, PARAM_WORD_GUARD]`.
+        // `[0x30, PARAM_EXACT_EMPTY_BYTES]`.
         // NB: the top bound is the HIGHEST known tag, not 0x3F — new tags were added
         // above the original 0x30..=0x3F block (`PARAM_CONST_VALUE` 0x40 in b37a052f,
         // `PARAM_NESTED_STRUCT` 0x41 in 2f4cc810), so a stale bound wrongly classifies
         // a known tag as unknown and the harness fails on a tag the parser correctly
         // accepts. Keep this in sync with the highest `PARAM_*` constant.
-        kani::assume(tag < PARAM_TOKEN_PATH || tag > PARAM_WORD_GUARD);
+        kani::assume(tag < PARAM_TOKEN_PATH || tag > PARAM_EXACT_EMPTY_BYTES);
         let ir = mk_ir(&pool);
         assert!(parse(&ir, 1).is_err());
+    }
+
+    /// The exact-empty assertion is a canonical zero-payload singleton. Any
+    /// accepted one-entry marker therefore sets the boolean and has no hidden
+    /// payload bytes whose meaning could be ignored by the renderer.
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn params_exact_empty_bytes_zero_payload_sound() {
+        const N: usize = 8;
+        let pool: [u8; N] = kani::any();
+        let len = pool[3] as usize;
+        kani::assume((pool[1] as usize) == 2 + len);
+        kani::assume(4 + len <= N);
+        kani::assume(pool[2] == PARAM_EXACT_EMPTY_BYTES);
+        let ir = mk_ir(&pool);
+        match parse(&ir, 1) {
+            Ok(params) => {
+                assert!(len == 0);
+                assert!(params.exact_empty_bytes);
+            }
+            Err(_) => assert!(len != 0),
+        }
     }
 
     /// On-point negative: a VISIBILITY TLV whose first byte is out of the

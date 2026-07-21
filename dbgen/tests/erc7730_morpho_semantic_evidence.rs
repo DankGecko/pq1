@@ -5,8 +5,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use dbgen::erc7730::build_db_tolerant_with_erc20_capabilities;
-use pqsigner_erc7730::ir::{Erc7730Ir, FormatOp, PathOp};
-use pqsigner_erc7730::render::params::parse as parse_params;
+use pqsigner_erc7730::ir::{Erc7730Ir, FormatOp, PathOp, Visibility};
+use pqsigner_erc7730::render::params::{parse as parse_params, DYNAMIC_KIND_BYTES};
+use pqsigner_erc7730::render::policy::TerminalKind;
 use pqsigner_tx_core::hash::keccak256;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -183,13 +184,20 @@ fn morpho_blue_deployments_build_and_rendered_semantics_are_exactly_bound() {
 
     let abi = read_json(&evidence.join(required_str(&manifest["abi"], "path")));
     let abi_entries = abi.as_array().expect("Morpho ABI array");
-    assert_eq!(abi_entries.len(), 3);
+    assert_eq!(abi_entries.len(), 6);
     assert_eq!(
         abi_entries
             .iter()
             .map(|entry| entry["name"].as_str().expect("ABI function name"))
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["borrow", "withdraw", "withdrawCollateral"])
+        BTreeSet::from([
+            "borrow",
+            "repay",
+            "supply",
+            "supplyCollateral",
+            "withdraw",
+            "withdrawCollateral",
+        ])
     );
     for entry in abi_entries {
         assert_eq!(entry["stateMutability"].as_str(), Some("nonpayable"));
@@ -387,27 +395,60 @@ fn morpho_blue_deployments_build_and_rendered_semantics_are_exactly_bound() {
     assert!(
         authorized.contains("return msg.sender == onBehalf || isAuthorized[onBehalf][msg.sender];")
     );
-    for (signature, callback) in [
-        (
-            "function supply(",
-            "IMorphoSupplyCallback(msg.sender).onMorphoSupply(assets, data)",
-        ),
-        (
-            "function repay(",
-            "IMorphoRepayCallback(msg.sender).onMorphoRepay(assets, data)",
-        ),
-        (
-            "function supplyCollateral(",
-            "IMorphoSupplyCollateralCallback(msg.sender).onMorphoSupplyCollateral(assets, data)",
-        ),
-    ] {
-        let function = normalized_solidity_function(&morpho, signature);
-        assert!(function.contains("if (data.length > 0)"));
-        assert!(function.contains(callback));
-    }
+    let supply = normalized_solidity_function(&morpho, "function supply(");
+    assert_fragments_in_order(
+        &supply,
+        &[
+            "require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);",
+            "require(onBehalf != address(0), ErrorsLib.ZERO_ADDRESS);",
+            "if (assets > 0) shares = assets.toSharesDown(market[id].totalSupplyAssets, market[id].totalSupplyShares);",
+            "else assets = shares.toAssetsUp(market[id].totalSupplyAssets, market[id].totalSupplyShares);",
+            "position[id][onBehalf].supplyShares += shares;",
+            "if (data.length > 0) IMorphoSupplyCallback(msg.sender).onMorphoSupply(assets, data);",
+            "IERC20(marketParams.loanToken).safeTransferFrom(msg.sender, address(this), assets);",
+        ],
+    );
+    let repay = normalized_solidity_function(&morpho, "function repay(");
+    assert_fragments_in_order(
+        &repay,
+        &[
+            "require(UtilsLib.exactlyOneZero(assets, shares), ErrorsLib.INCONSISTENT_INPUT);",
+            "require(onBehalf != address(0), ErrorsLib.ZERO_ADDRESS);",
+            "if (assets > 0) shares = assets.toSharesDown(market[id].totalBorrowAssets, market[id].totalBorrowShares);",
+            "else assets = shares.toAssetsUp(market[id].totalBorrowAssets, market[id].totalBorrowShares);",
+            "position[id][onBehalf].borrowShares -= shares.toUint128();",
+            "if (data.length > 0) IMorphoRepayCallback(msg.sender).onMorphoRepay(assets, data);",
+            "IERC20(marketParams.loanToken).safeTransferFrom(msg.sender, address(this), assets);",
+        ],
+    );
+    let supply_collateral = normalized_solidity_function(&morpho, "function supplyCollateral(");
+    assert_fragments_in_order(
+        &supply_collateral,
+        &[
+            "require(assets != 0, ErrorsLib.ZERO_ASSETS);",
+            "require(onBehalf != address(0), ErrorsLib.ZERO_ADDRESS);",
+            "position[id][onBehalf].collateral += assets.toUint128();",
+            "if (data.length > 0) IMorphoSupplyCollateralCallback(msg.sender).onMorphoSupplyCollateral(assets, data);",
+            "IERC20(marketParams.collateralToken).safeTransferFrom(msg.sender, address(this), assets);",
+        ],
+    );
 
     let routes = manifest["routes"].as_array().expect("Morpho routes");
-    assert_eq!(routes.len(), 3);
+    assert_eq!(routes.len(), 6);
+    assert_eq!(
+        routes
+            .iter()
+            .map(|route| required_str(route, "name"))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "borrow",
+            "repay",
+            "supply",
+            "supplyCollateral",
+            "withdraw",
+            "withdrawCollateral",
+        ])
+    );
     for route in routes {
         let signature = required_str(route, "canonical_signature");
         assert_eq!(
@@ -415,6 +456,30 @@ fn morpho_blue_deployments_build_and_rendered_semantics_are_exactly_bound() {
             required_str(route, "selector")
         );
     }
+    let callback_policy = &manifest["callback_policy"];
+    assert_eq!(required_str(callback_policy, "display"), "Callback: none");
+    assert!(
+        required_str(callback_policy, "admitted_condition").contains("length word is exactly zero")
+    );
+    assert!(required_str(callback_policy, "admitted_condition")
+        .contains("padded end is exactly calldata EOF"));
+    assert!(required_str(callback_policy, "refusal").contains("non-empty callback payload"));
+    assert!(required_str(callback_policy, "refusal").contains("refuses before signing pages"));
+    let callback_routes = callback_policy["routes"]
+        .as_array()
+        .expect("Morpho exact-empty callback routes");
+    assert_eq!(callback_routes.len(), 3);
+    assert_eq!(
+        callback_routes
+            .iter()
+            .map(|route| (required_str(route, "name"), required_str(route, "selector")))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            ("repay", "0x20b76e81"),
+            ("supply", "0xa99aad89"),
+            ("supplyCollateral", "0x238d6579"),
+        ])
+    );
 
     let registry_root = workspace.join("secure/data/erc7730-registry");
     let erc20 = dbgen::erc20::build_db(&workspace.join("secure/data/erc20.json"))
@@ -438,6 +503,7 @@ fn morpho_blue_deployments_build_and_rendered_semantics_are_exactly_bound() {
     for entry in entries {
         let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("parse generated Morpho IR");
         for route in routes {
+            let route_name = required_str(route, "name");
             let selector: [u8; 4] = decode_hex_text(required_str(route, "selector"))
                 .try_into()
                 .expect("Morpho selector width");
@@ -445,17 +511,50 @@ fn morpho_blue_deployments_build_and_rendered_semantics_are_exactly_bound() {
                 .find_format_by_selector(&selector)
                 .expect("Morpho format table parses")
                 .expect("evidenced Morpho route remains admitted");
-            let assets = format
+            assert_eq!(
+                format.static_head_words,
+                if matches!(route_name, "supplyCollateral" | "withdrawCollateral") {
+                    8
+                } else {
+                    9
+                }
+            );
+            let fields = format
                 .fields()
                 .map(|field| field.expect("Morpho field parses"))
+                .collect::<Vec<_>>();
+            let labels = fields
+                .iter()
+                .map(|field| field.label)
+                .collect::<BTreeSet<_>>();
+            for required_label in [
+                &b"Loan Token"[..],
+                &b"Collateral Token"[..],
+                &b"Oracle"[..],
+                &b"Irm"[..],
+                &b"Lltv"[..],
+                &b"Assets"[..],
+                &b"On Behalf"[..],
+            ] {
+                assert!(
+                    labels.contains(required_label),
+                    "{route_name} omits the signed {required_label:?} field"
+                );
+            }
+            let assets = fields
+                .iter()
                 .find(|field| field.label == b"Assets")
+                .copied()
                 .expect("Morpho Assets field");
             assert_eq!(
                 FormatOp::try_from(assets.format_op),
                 Ok(FormatOp::TokenAmount)
             );
             let params = parse_params(&ir, assets.param_off).expect("Morpho params parse");
-            let member = u8::from(route["name"].as_str() == Some("withdrawCollateral"));
+            let member = u8::from(matches!(
+                route_name,
+                "supplyCollateral" | "withdrawCollateral"
+            ));
             assert_eq!(
                 params.token_path,
                 Some(
@@ -470,18 +569,50 @@ fn morpho_blue_deployments_build_and_rendered_semantics_are_exactly_bound() {
                     ][..]
                 )
             );
-        }
-        for refused in manifest["refused_routes"]
-            .as_array()
-            .expect("Morpho refused routes")
-        {
-            let selector: [u8; 4] = decode_hex_text(required_str(refused, "selector"))
-                .try_into()
-                .expect("Morpho refused selector width");
-            assert!(ir
-                .find_format_by_selector(&selector)
-                .expect("Morpho format table parses")
-                .is_none());
+
+            if matches!(route_name, "borrow" | "repay" | "supply" | "withdraw") {
+                let shares = fields
+                    .iter()
+                    .find(|field| field.label == b"Shares")
+                    .copied()
+                    .expect("Morpho Shares field");
+                assert_eq!(FormatOp::try_from(shares.format_op), Ok(FormatOp::Raw));
+            } else {
+                assert!(!labels.contains(&b"Shares"[..]));
+            }
+
+            let callback = fields
+                .iter()
+                .find(|field| field.label == b"Callback")
+                .copied();
+            if matches!(route_name, "repay" | "supply" | "supplyCollateral") {
+                let callback = callback.expect("exact-empty Morpho Callback field");
+                assert_eq!(FormatOp::try_from(callback.format_op), Ok(FormatOp::Raw));
+                let callback_slot = if route_name == "supplyCollateral" {
+                    7
+                } else {
+                    8
+                };
+                assert_eq!(
+                    ir.path_bytes(callback.path_off)
+                        .expect("Morpho Callback path parses"),
+                    &[
+                        PathOp::RootStructured as u8,
+                        PathOp::FieldIdx as u8,
+                        0,
+                        callback_slot,
+                        PathOp::FollowOffset as u8,
+                    ]
+                );
+                let params =
+                    parse_params(&ir, callback.param_off).expect("Morpho Callback params parse");
+                assert_eq!(params.visibility, Visibility::Always);
+                assert_eq!(params.dynamic_kind, Some(DYNAMIC_KIND_BYTES));
+                assert_eq!(params.terminal_kind, Some(TerminalKind::DynamicBytes));
+                assert!(params.exact_empty_bytes);
+            } else {
+                assert!(callback.is_none());
+            }
         }
     }
 }

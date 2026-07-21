@@ -1,6 +1,6 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
-  "_curation_note": "PQSigner semantic curation: the three callback-free admitted routes render assets with the exact signed market loan/collateral token identity instead of an unscaled raw integer. Shares remain raw because their asset conversion is live-state dependent. Callback-bearing routes remain refused. See tests/erc7730-semantic-evidence/morpho-blue.",
+  "_curation_note": "PQSigner semantic curation: six routes render assets with the exact signed market loan/collateral token identity instead of an unscaled raw integer. Shares remain raw because their asset conversion is live-state dependent. Supply, repay, and supplyCollateral are admitted only for a canonical empty callback payload; non-empty or malformed callback data remains refused. See tests/erc7730-semantic-evidence/morpho-blue.",
   "context": {
     "contract": {
       "deployments": [
@@ -82,7 +82,13 @@
               { "label": "Lltv", "format": "raw", "path": "lltv" }
             ]
           },
-          { "label": "Assets", "format": "raw", "path": "#.assets", "visible": "always" },
+          {
+            "label": "Assets",
+            "format": "tokenAmount",
+            "params": { "tokenPath": "#.marketParams.loanToken" },
+            "path": "#.assets",
+            "visible": "always"
+          },
           { "label": "Shares", "format": "raw", "path": "#.shares", "visible": "always" },
           {
             "label": "On Behalf",
@@ -91,7 +97,7 @@
             "path": "#.onBehalf",
             "visible": "always"
           },
-          { "label": "Data", "format": "raw", "path": "#.data", "visible": "always" }
+          { "label": "Callback", "format": "raw", "path": "#.data", "visible": "always" }
         ]
       },
       "supply((address loanToken, address collateralToken, address oracle, address irm, uint256 lltv) marketParams, uint256 assets, uint256 shares, address onBehalf, bytes data)": {
@@ -117,7 +123,13 @@
               { "label": "Lltv", "format": "raw", "path": "lltv" }
             ]
           },
-          { "label": "Assets", "format": "raw", "path": "#.assets", "visible": "always" },
+          {
+            "label": "Assets",
+            "format": "tokenAmount",
+            "params": { "tokenPath": "#.marketParams.loanToken" },
+            "path": "#.assets",
+            "visible": "always"
+          },
           { "label": "Shares", "format": "raw", "path": "#.shares", "visible": "always" },
           {
             "label": "On Behalf",
@@ -126,7 +138,7 @@
             "path": "#.onBehalf",
             "visible": "always"
           },
-          { "label": "Data", "format": "raw", "path": "#.data", "visible": "always" }
+          { "label": "Callback", "format": "raw", "path": "#.data", "visible": "always" }
         ]
       },
       "supplyCollateral((address loanToken, address collateralToken, address oracle, address irm, uint256 lltv) marketParams, uint256 assets, address onBehalf, bytes data)": {
@@ -152,7 +164,13 @@
               { "label": "Lltv", "format": "raw", "path": "lltv" }
             ]
           },
-          { "label": "Assets", "format": "raw", "path": "#.assets", "visible": "always" },
+          {
+            "label": "Assets",
+            "format": "tokenAmount",
+            "params": { "tokenPath": "#.marketParams.collateralToken" },
+            "path": "#.assets",
+            "visible": "always"
+          },
           {
             "label": "On Behalf",
             "format": "addressName",
@@ -160,7 +178,7 @@
             "path": "#.onBehalf",
             "visible": "always"
           },
-          { "label": "Data", "format": "raw", "path": "#.data", "visible": "always" }
+          { "label": "Callback", "format": "raw", "path": "#.data", "visible": "always" }
         ]
       },
       "withdraw((address loanToken, address collateralToken, address oracle, address irm, uint256 lltv) marketParams, uint256 assets, uint256 shares, address onBehalf, address receiver)": {

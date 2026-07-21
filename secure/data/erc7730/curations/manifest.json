@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 813048,
-    "sha256": "9fc7e8ab0459d91f24a871d76990909a9d5c5facc3219abfb87942bf68ff427e"
+    "bytes": 813544,
+    "sha256": "e7be69422d229579fcc54feea41196e0371bb10cf9857e746cda6365c9aaaf13"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -286,15 +286,15 @@
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 24,
-      "bytes": 1974425,
-      "sha256": "bf4bcceaf3613b65771aef287ac885ebd6183c78e7dc4962debb1149a1e05e0b"
+      "bytes": 1995177,
+      "sha256": "6b961b5ef29f640e9a977c218f3ff1b747cdb18720a9bbfb85d65dc33e56cbbf"
     },
     {
       "path": "pqsigner-erc7730",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 24,
-      "bytes": 836329,
-      "sha256": "ae9aa5732a1779a920c55eddc48628a4d99523a9d531a5a872488e3b7f72b359"
+      "bytes": 852974,
+      "sha256": "95630322518199330cb6412bca47d52742e9204912336deb9f69fd955f1e19ab"
     },
     {
       "path": "pqsigner-fi",
@@ -314,8 +314,8 @@
       "path": "shared",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 12,
-      "bytes": 174534,
-      "sha256": "a342f0b7b4cdbcc73134fbd57bb4660c8a36a718c6cdf3c80f3fc6e60c71e3da"
+      "bytes": 174575,
+      "sha256": "e9df2fe2777c5dfeb6e43f6a9532e4148af6060c194904371aa0b5cfad2316c9"
     },
     {
       "path": "tx-core",
@@ -336,7 +336,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 280708,
-      "sha256": "2a58099876b0ef5428b12f282729af585cc32827562f1382f61935cc238aece0"
+      "sha256": "2e0869831b92c6cc68711626d76e0458e88bc3fbc6ae9421976057bf82f654e0"
     }
   ],
   "capability_inputs": [
@@ -518,8 +518,8 @@
       "path": "registry/morpho/calldata-MorphoBlue.json",
       "upstream_bytes": 10742,
       "upstream_sha256": "3696973c585c4b3ffc8c788be41d97d869339f05f28487f01feadf75d7f34ec9",
-      "replacement_bytes": 11511,
-      "replacement_sha256": "f440730cf7d55ffdbba54010b5e95f791a2d4b85c64e3324c66287d100209ea7"
+      "replacement_bytes": 12007,
+      "replacement_sha256": "1a60c06511308904d000ab7c2a4bbab9fe5d6b4d4d9e9ca55ab83acb7d6cacd8"
     },
     {
       "path": "registry/p2p/calldata-NativeTokenVault.json",

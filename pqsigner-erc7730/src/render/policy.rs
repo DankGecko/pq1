@@ -136,6 +136,7 @@ impl ParamMask {
     pub const NFT_COLLECTION: Self = Self(1 << 20);
     pub const NFT_COLLECTION_PATH: Self = Self(1 << 21);
     pub const SENDER_ADDRESS: Self = Self(1 << 22);
+    pub const EXACT_EMPTY_BYTES: Self = Self(1 << 23);
 
     pub const NONE: Self = Self(0);
 
@@ -213,6 +214,7 @@ pub const fn formatter_accepts_terminal(op: FormatOp, kind: TerminalKind) -> boo
                 | TerminalKind::Bool
                 | TerminalKind::FixedBytes
                 | TerminalKind::DynamicString
+                | TerminalKind::DynamicBytes
                 | TerminalKind::ConstantText
                 | TerminalKind::NestedStruct
         ),
@@ -255,6 +257,10 @@ pub const fn validate_field(
     let (allowed, required) = match op {
         FormatOp::Raw => match kind {
             TerminalKind::DynamicString => (ParamMask::DYNAMIC_KIND, ParamMask::DYNAMIC_KIND),
+            TerminalKind::DynamicBytes => (
+                ParamMask::DYNAMIC_KIND.union(ParamMask::EXACT_EMPTY_BYTES),
+                ParamMask::DYNAMIC_KIND.union(ParamMask::EXACT_EMPTY_BYTES),
+            ),
             TerminalKind::ConstantText => (ParamMask::CONST_VALUE, ParamMask::CONST_VALUE),
             TerminalKind::NestedStruct => (ParamMask::NESTED_STRUCT, ParamMask::NESTED_STRUCT),
             _ => (ParamMask::NONE, ParamMask::NONE),
@@ -523,6 +529,36 @@ mod tests {
                 FormatOp::Raw,
                 TerminalKind::Address,
                 ParamMask::SENDER_ADDRESS
+            ),
+            Err(PolicyError::ParameterApplicability)
+        );
+        assert_eq!(
+            validate_field(
+                FormatOp::Raw,
+                TerminalKind::DynamicBytes,
+                ParamMask::DYNAMIC_KIND
+            ),
+            Err(PolicyError::ParameterRequirement)
+        );
+        assert!(validate_field(
+            FormatOp::Raw,
+            TerminalKind::DynamicBytes,
+            ParamMask::DYNAMIC_KIND.union(ParamMask::EXACT_EMPTY_BYTES)
+        )
+        .is_ok());
+        assert_eq!(
+            validate_field(
+                FormatOp::Raw,
+                TerminalKind::DynamicString,
+                ParamMask::DYNAMIC_KIND.union(ParamMask::EXACT_EMPTY_BYTES)
+            ),
+            Err(PolicyError::ParameterApplicability)
+        );
+        assert_eq!(
+            validate_field(
+                FormatOp::UniswapV3Path,
+                TerminalKind::DynamicBytes,
+                ParamMask::DYNAMIC_KIND.union(ParamMask::EXACT_EMPTY_BYTES)
             ),
             Err(PolicyError::ParameterApplicability)
         );

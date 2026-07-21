@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "scope": "Morpho Blue borrow, withdraw, and withdrawCollateral semantics for the canonical Ethereum and Base deployments admitted by PQ1",
+  "scope": "Six Morpho Blue routes, including the exact-empty callback boundary for supply, repay, and supplyCollateral, on the canonical Ethereum and Base deployments admitted by PQ1",
   "captured_at_utc": "2026-07-20T08:16:17Z",
   "descriptor": {
     "vendored_file": "secure/data/erc7730-registry/registry/morpho/calldata-MorphoBlue.json",
-    "sha256": "f440730cf7d55ffdbba54010b5e95f791a2d4b85c64e3324c66287d100209ea7",
+    "sha256": "1a60c06511308904d000ab7c2a4bbab9fe5d6b4d4d9e9ca55ab83acb7d6cacd8",
     "deployments": [
       { "chain_id": 1, "address": "0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb" },
       { "chain_id": 8453, "address": "0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb" }
@@ -27,8 +27,8 @@
   },
   "abi": {
     "path": "abi/Morpho.routes.abi.json",
-    "sha256": "6f65d5b6fcb9f11e6b798327897dc1eb607d157b017ec26562b88c282622da4b",
-    "source": "Exact borrow, withdraw, and withdrawCollateral entries selected from the v1.0.0 forge artifact ABI"
+    "sha256": "3e17f277808bfdf4533687a9b82d9b760b245215b6823ffe7badf824c7cba8c2",
+    "source": "Exact borrow, withdraw, withdrawCollateral, supply, repay, and supplyCollateral entries selected from the v1.0.0 forge artifact ABI"
   },
   "build": {
     "command": "FOUNDRY_PROFILE=build forge build",
@@ -107,12 +107,41 @@
       "asset_token_path": "#.marketParams.collateralToken",
       "semantics": "The exact nonzero signed assets amount is subtracted from the authorized onBehalf collateral position and the exact collateral-token amount is transferred to receiver after the resulting position passes the health check.",
       "residual": "Authorization state, accrued interest, oracle price, and post-withdraw health are live state. The display does not claim success."
+    },
+    {
+      "name": "supply",
+      "canonical_signature": "supply((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+      "selector": "0xa99aad89",
+      "asset_token_path": "#.marketParams.loanToken",
+      "semantics": "Exactly one of assets and shares must be zero. Asset mode mints supply shares rounded down for the exact signed loan-token assets; share mode derives loan-token assets rounded up from the exact signed shares. The resulting supply shares are credited to onBehalf and the loan-token assets are transferred from the caller.",
+      "residual": "Accrued market totals, allowance, token behavior, and share conversion are live state. The display shows both signed input words and does not predict the derived output. Admission additionally requires the exact-empty callback condition below."
+    },
+    {
+      "name": "repay",
+      "canonical_signature": "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+      "selector": "0x20b76e81",
+      "asset_token_path": "#.marketParams.loanToken",
+      "semantics": "Exactly one of assets and shares must be zero. Asset mode burns borrow shares rounded down for the exact signed loan-token assets; share mode derives loan-token assets rounded up from the exact signed shares. The onBehalf debt position is reduced and the loan-token assets are transferred from the caller.",
+      "residual": "Accrued market totals, allowance, token behavior, outstanding debt, and share conversion are live state. The display shows both signed input words and does not predict the derived output. Admission additionally requires the exact-empty callback condition below."
+    },
+    {
+      "name": "supplyCollateral",
+      "canonical_signature": "supplyCollateral((address,address,address,address,uint256),uint256,address,bytes)",
+      "selector": "0x238d6579",
+      "asset_token_path": "#.marketParams.collateralToken",
+      "semantics": "The exact nonzero signed assets amount is added to the onBehalf collateral position and the exact collateral-token amount is transferred from the caller.",
+      "residual": "Allowance, token behavior, market existence, and transaction success remain live state. Admission additionally requires the exact-empty callback condition below."
     }
   ],
-  "refused_routes": [
-    { "name": "supply", "selector": "0xa99aad89", "reason": "Effect-bearing arbitrary callback bytes are not injectively rendered." },
-    { "name": "repay", "selector": "0x20b76e81", "reason": "Effect-bearing arbitrary callback bytes are not injectively rendered." },
-    { "name": "supplyCollateral", "selector": "0x238d6579", "reason": "Effect-bearing arbitrary callback bytes are not injectively rendered." }
-  ],
+  "callback_policy": {
+    "admitted_condition": "data is the sole canonical dynamic bytes tail, its length word is exactly zero, and its padded end is exactly calldata EOF",
+    "display": "Callback: none",
+    "refusal": "Any non-empty callback payload, aliased or misaligned offset, trailing bytes, or otherwise malformed ABI encoding refuses before signing pages.",
+    "routes": [
+      { "name": "supply", "selector": "0xa99aad89" },
+      { "name": "repay", "selector": "0x20b76e81" },
+      { "name": "supplyCollateral", "selector": "0x238d6579" }
+    ]
+  },
   "boundary": "Historical fixed-block and source evidence only. It grants no live-state, future-code, production, shipment, fallback, or blind-signing authority."
 }

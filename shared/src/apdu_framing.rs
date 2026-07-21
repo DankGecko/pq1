@@ -1267,6 +1267,7 @@ mod kani_harnesses {
         let mut st = ChainState {
             ins: kani::any(),
             pos: kani::any(),
+            elapsed_frames: kani::any(),
         };
         let ins: u8 = kani::any();
         let p1: u8 = kani::any();

@@ -559,6 +559,7 @@ impl<'a> Erc7730Ir<'a> {
             let mut actual_nested_descents = 0u8;
             let mut saw_bare_nested_marker = false;
             let mut packed_v3_path_fields = 0u8;
+            let mut exact_empty_bytes_fields = 0u8;
             let packed_v3_identity = is_uniswap_router02_packed_identity(self, &header);
             while let Some(field) = fields.next() {
                 let field = field?;
@@ -584,6 +585,14 @@ impl<'a> Erc7730Ir<'a> {
                 let kind = params.terminal_kind.ok_or(IrError::BadField)?;
 
                 validate_word_guard(self, &field, kind, &params, packed_v3_identity)?;
+                if validate_exact_empty_bytes_field(self, &header, &field, op, kind, &params)? {
+                    exact_empty_bytes_fields = exact_empty_bytes_fields
+                        .checked_add(1)
+                        .ok_or(IrError::OverCap)?;
+                    if exact_empty_bytes_fields > 1 {
+                        return Err(IrError::BadFormat);
+                    }
+                }
 
                 if params.visibility != Visibility::Never
                     && !crate::render::policy::label_has_visible_glyph(field.label)
@@ -740,6 +749,53 @@ impl<'a> Erc7730Ir<'a> {
         }
         Ok(())
     }
+}
+
+/// Validate the narrow authenticated authority carried by
+/// `PARAM_EXACT_EMPTY_BYTES` before any format can reach the renderer.
+///
+/// The marker belongs only to one always-visible `Callback` field in a
+/// contract-call format. Its path must be the exact top-level C1 program
+/// `RootStructured / FieldIdx(slot) / FollowOffset`, and the named offset word
+/// must lie inside the authenticated static head. Runtime framing separately
+/// binds that offset to the head end and requires an exact zero-length EOF
+/// tail.
+fn validate_exact_empty_bytes_field(
+    ir: &Erc7730Ir<'_>,
+    format: &FormatHeader<'_>,
+    field: &FieldEntry<'_>,
+    op: FormatOp,
+    kind: crate::render::policy::TerminalKind,
+    params: &crate::render::params::ParamSet<'_>,
+) -> Result<bool, IrError> {
+    use crate::render::{params::DYNAMIC_KIND_BYTES, policy::TerminalKind};
+
+    if !params.exact_empty_bytes {
+        return Ok(false);
+    }
+    if !matches!(ir.context_kind, ContextKind::Contract)
+        || params.visibility != Visibility::Always
+        || op != FormatOp::Raw
+        || kind != TerminalKind::DynamicBytes
+        || params.dynamic_kind != Some(DYNAMIC_KIND_BYTES)
+        || field.label != b"Callback"
+        || field.path_off == 0
+    {
+        return Err(IrError::BadField);
+    }
+    let path = ir.path_bytes(field.path_off)?;
+    if path.len() != 5
+        || path[0] != PathOp::RootStructured as u8
+        || path[1] != PathOp::FieldIdx as u8
+        || path[4] != PathOp::FollowOffset as u8
+    {
+        return Err(IrError::BadField);
+    }
+    let slot = u16::from_be_bytes([path[2], path[3]]);
+    if slot >= format.static_head_words {
+        return Err(IrError::BadField);
+    }
+    Ok(true)
 }
 
 /// Independently reconcile an authenticated terminal kind with the structural
@@ -1533,6 +1589,68 @@ mod tests {
         ]
     }
 
+    fn exact_empty_bytes_pool(
+        slot: u16,
+        include_marker: bool,
+        extra_tlvs: &[u8],
+    ) -> (std::vec::Vec<u8>, u16) {
+        use crate::render::params::{
+            DYNAMIC_KIND_BYTES, PARAM_DYNAMIC_KIND, PARAM_EXACT_EMPTY_BYTES,
+            PARAM_TERMINAL_KIND,
+        };
+
+        let mut pool = std::vec![
+            0,
+            5,
+            PathOp::RootStructured as u8,
+            PathOp::FieldIdx as u8,
+            (slot >> 8) as u8,
+            slot as u8,
+            PathOp::FollowOffset as u8,
+        ];
+        let param_off = pool.len() as u16;
+        let mut body = std::vec![
+            PARAM_DYNAMIC_KIND,
+            1,
+            DYNAMIC_KIND_BYTES,
+            PARAM_TERMINAL_KIND,
+            1,
+            crate::render::policy::TerminalKind::DynamicBytes as u8,
+        ];
+        if include_marker {
+            body.extend_from_slice(&[PARAM_EXACT_EMPTY_BYTES, 0]);
+        }
+        body.extend_from_slice(extra_tlvs);
+        pool.push(body.len() as u8);
+        pool.extend_from_slice(&body);
+        (pool, param_off)
+    }
+
+    fn exact_empty_field(label: &[u8], param_off: u16) -> std::vec::Vec<u8> {
+        let mut field = std::vec![FormatOp::Raw as u8, label.len() as u8];
+        field.extend_from_slice(label);
+        field.extend_from_slice(&1u16.to_be_bytes());
+        field.extend_from_slice(&param_off.to_be_bytes());
+        field
+    }
+
+    fn exact_empty_format(
+        selector: [u8; 4],
+        head_words: u16,
+        fields: &[std::vec::Vec<u8>],
+    ) -> std::vec::Vec<u8> {
+        let mut format = std::vec::Vec::new();
+        format.extend_from_slice(&selector);
+        format.push(fields.len() as u8);
+        format.push(0);
+        format.extend_from_slice(&head_words.to_be_bytes());
+        format.push(0);
+        for field in fields {
+            format.extend_from_slice(field);
+        }
+        format
+    }
+
     fn guarded_scalar_pool(
         path: [u8; 4],
         kind: crate::render::policy::TerminalKind,
@@ -1681,6 +1799,80 @@ mod tests {
         let mut formats = std::vec![1];
         formats.extend_from_slice(&one_field_format([5, 6, 7, 8], FormatOp::Amount as u8));
         assert!(Erc7730Ir::parse(&build_ir(&pool, &formats)).is_ok());
+    }
+
+    #[test]
+    fn deep_validation_accepts_one_direct_always_visible_exact_empty_callback() {
+        let (pool, param_off) = exact_empty_bytes_pool(0, true, &[]);
+        let format = exact_empty_format(
+            [1, 2, 3, 4],
+            1,
+            &[exact_empty_field(b"Callback", param_off)],
+        );
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&format);
+        assert!(Erc7730Ir::parse(&build_ir(&pool, &formats)).is_ok());
+    }
+
+    #[test]
+    fn deep_validation_rejects_unmarked_or_misbound_exact_empty_bytes() {
+        use crate::render::params::{PARAM_VISIBILITY, PARAM_WORD_GUARD};
+
+        let cases: &[(u16, bool, &[u8], &[u8], u16)] = &[
+            (0, false, &[], b"Callback", 1),
+            (
+                0,
+                true,
+                &[PARAM_VISIBILITY, 1, Visibility::Never as u8],
+                b"Callback",
+                1,
+            ),
+            (0, true, &[], b"Data", 1),
+            (1, true, &[], b"Callback", 1),
+            // A dynamic field cannot also carry the static-word predicate.
+            (0, true, &[PARAM_WORD_GUARD, 0], b"Callback", 1),
+        ];
+        for &(slot, marker, extra, label, head_words) in cases {
+            let (pool, param_off) = exact_empty_bytes_pool(slot, marker, extra);
+            let format = exact_empty_format(
+                [1, 2, 3, 4],
+                head_words,
+                &[exact_empty_field(label, param_off)],
+            );
+            let mut formats = std::vec![1];
+            formats.extend_from_slice(&format);
+            assert!(
+                Erc7730Ir::parse(&build_ir(&pool, &formats)).is_err(),
+                "accepted invalid exact-empty case slot={slot} marker={marker} label={label:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn deep_validation_rejects_exact_empty_bytes_outside_contract_or_more_than_once() {
+        let selector = [1, 2, 3, 4];
+        let (pool, param_off) = exact_empty_bytes_pool(0, true, &[]);
+        let field = exact_empty_field(b"Callback", param_off);
+
+        let duplicated = exact_empty_format(selector, 1, &[field.clone(), field.clone()]);
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&duplicated);
+        assert_eq!(
+            Erc7730Ir::parse(&build_ir(&pool, &formats)),
+            Err(IrError::BadFormat)
+        );
+
+        let contract_format = exact_empty_format(selector, 1, &[field]);
+        let mut eip712_format = contract_format[..9].to_vec();
+        let mut type_hash = [0u8; 32];
+        type_hash[..4].copy_from_slice(&selector);
+        eip712_format.extend_from_slice(&type_hash);
+        eip712_format.extend_from_slice(&contract_format[9..]);
+        let mut formats = std::vec![1];
+        formats.extend_from_slice(&eip712_format);
+        let mut bytes = build_ir(&pool, &formats);
+        bytes[1] = CTX_EIP712;
+        assert_eq!(Erc7730Ir::parse(&bytes), Err(IrError::BadField));
     }
 
     #[test]

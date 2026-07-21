@@ -223,6 +223,26 @@ pub fn read_dynamic_whole_tail(
         .ok_or(RenderErr::Reject("7730 res data oob"))
 }
 
+/// Extract a dynamic blob only when it is the sole canonical ABI tail and its
+/// declared data is exactly empty.
+///
+/// This is the runtime predicate authenticated by
+/// `PARAM_EXACT_EMPTY_BYTES`. It deliberately composes the existing whole-tail
+/// reader so offset-at-head-end, canonical length-word decoding, padding, and
+/// exact EOF remain one shared framing contract. The additional empty check is
+/// what prevents the marker from becoming an arbitrary opaque-bytes renderer.
+pub fn read_exact_empty_dynamic_whole_tail(
+    body: &[u8],
+    off: usize,
+    expected_off: usize,
+) -> Result<&[u8], RenderErr> {
+    let data = read_dynamic_whole_tail(body, off, expected_off)?;
+    if !data.is_empty() {
+        return Err(RenderErr::Reject("7730 res dynamic not empty"));
+    }
+    Ok(data)
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // tokenPath slice/index resolver (Tier B) — token IDENTIFICATION only.
 //
@@ -656,6 +676,35 @@ mod tests {
     }
 
     #[test]
+    fn exact_empty_whole_tail_accepts_only_zero_length_at_exact_eof() {
+        let mut empty = Vec::new();
+        empty.extend_from_slice(&w(32));
+        empty.extend_from_slice(&w(0));
+        assert_eq!(
+            read_exact_empty_dynamic_whole_tail(&empty, 32, 32).unwrap(),
+            b""
+        );
+
+        let mut nonempty = Vec::new();
+        nonempty.extend_from_slice(&w(32));
+        nonempty.extend_from_slice(&w(1));
+        nonempty.extend_from_slice(&[0u8; 32]);
+        assert_eq!(
+            read_exact_empty_dynamic_whole_tail(&nonempty, 32, 32),
+            Err(RenderErr::Reject("7730 res dynamic not empty"))
+        );
+        assert_eq!(
+            read_exact_empty_dynamic_whole_tail(&empty, 32, 64),
+            Err(RenderErr::Reject("7730 res offset != head end"))
+        );
+        empty.extend_from_slice(&[0u8; 32]);
+        assert_eq!(
+            read_exact_empty_dynamic_whole_tail(&empty, 32, 32),
+            Err(RenderErr::Reject("7730 res not whole tail"))
+        );
+    }
+
+    #[test]
     fn exact_c1_shape_rejects_dynamic_tuple_descent() {
         let mut c1 = field(0).to_vec();
         c1.push(FOLLOW);
@@ -955,6 +1004,35 @@ mod kani_harness {
     const IX: u8 = PathOp::ArrayIdx as u8;
     const LA: u8 = PathOp::ArrayLast as u8;
     const KBODY: usize = 128; // 4 words — enough for offset→len→data with a tail
+
+    /// For every 96-byte body and arbitrary offsets, acceptance proves the
+    /// exact canonical empty-tail shape: both offsets are the 64-byte head
+    /// end, the final word decodes to zero, and no bytes follow it.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn exact_empty_whole_tail_binds_offset_length_and_eof() {
+        const BODY_LEN: usize = 96;
+        let body: [u8; BODY_LEN] = kani::any();
+        let off: usize = kani::any();
+        let expected_off: usize = kani::any();
+        if let Ok(data) = read_exact_empty_dynamic_whole_tail(&body, off, expected_off) {
+            assert!(data.is_empty());
+            assert!(off == expected_off);
+            assert!(off == 64);
+            assert!(read_length_word(&body[64..96]) == Some(0));
+            assert!(off + 32 == body.len());
+        }
+    }
+
+    /// Non-vacuity witness for the exact-empty predicate.
+    #[kani::proof]
+    #[kani::unwind(34)]
+    fn exact_empty_whole_tail_accepts_concrete() {
+        let body = [0u8; 96];
+        let data = read_exact_empty_dynamic_whole_tail(&body, 64, 64)
+            .expect("canonical zero-length tail must be accepted");
+        assert!(data.is_empty());
+    }
 
     /// `params.path.[0:20]` / `[-20:]`: nested dynamic-tuple → dynamic `bytes`
     /// (two FollowOffsets), then a 20-byte slice from start (symbolic) or tail.

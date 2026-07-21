@@ -9083,6 +9083,43 @@ fn morpho_call(
     calldata_static(signature, &words)
 }
 
+/// Canonical ABI calldata for a Morpho route whose sole dynamic argument is
+/// the final `bytes data` callback. The callback offset points exactly to the
+/// end of the static head and its complete tail is the single zero length
+/// word: there is no gap, payload, or trailing byte for the contract to decode.
+fn morpho_empty_callback_call(
+    signature: &str,
+    loan: [u8; 20],
+    collateral: [u8; 20],
+    oracle: [u8; 20],
+    irm: [u8; 20],
+    lltv: [u8; 32],
+    trailing_static_words: &[[u8; 32]],
+) -> Vec<u8> {
+    let head_words = 5 + trailing_static_words.len() + 1;
+    let mut calldata = keccak256(signature.as_bytes())[..4].to_vec();
+    for word in [
+        abi_address_word(loan),
+        abi_address_word(collateral),
+        abi_address_word(oracle),
+        abi_address_word(irm),
+        lltv,
+    ] {
+        calldata.extend_from_slice(&word);
+    }
+    for word in trailing_static_words {
+        calldata.extend_from_slice(word);
+    }
+    calldata.extend_from_slice(&u256_from_u64((head_words * 32) as u64).0);
+    calldata.extend_from_slice(&[0u8; 32]);
+    calldata
+}
+
+fn overwrite_calldata_word(calldata: &mut [u8], word_index: usize, word: [u8; 32]) {
+    let start = 4 + word_index * 32;
+    calldata[start..start + 32].copy_from_slice(&word);
+}
+
 #[test]
 fn morpho_borrow_nested_tuple_group_renders_exact_values() {
     let res = build_registry();
@@ -9354,36 +9391,325 @@ fn morpho_withdraw_collateral_amount_binds_collateral_token_not_loan_token() {
 }
 
 #[test]
-fn morpho_callback_bearing_routes_remain_refused_on_both_deployments() {
+fn morpho_exact_empty_callback_routes_render_every_operand_on_both_deployments() {
     let res = build_registry();
-    for chain_id in [1u64, 8453] {
+    let deployments = [
+        (
+            1u64,
+            hex::decode("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+            hex::decode("C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        ),
+        (
+            8453u64,
+            hex::decode("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+            hex::decode("4200000000000000000000000000000000000006")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        ),
+    ];
+    let oracle = [0x33u8; 20];
+    let irm = [0x44u8; 20];
+    let on_behalf = [0x66u8; 20];
+    let lltv = u256_from_u64(860_000_000_000_000_000).0;
+    let shares = [0u8; 32];
+    let resolver = NameResolver::new();
+
+    for (chain_id, loan, collateral) in deployments {
         let entry = find_leaf(res, "calldata-MorphoBlue.json", chain_id);
-        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("Morpho IR parses");
-        for admitted in [
-            "borrow((address,address,address,address,uint256),uint256,uint256,address,address)",
-            "withdraw((address,address,address,address,uint256),uint256,uint256,address,address)",
-            "withdrawCollateral((address,address,address,address,uint256),uint256,address,address)",
-        ] {
-            let selector: [u8; 4] = keccak256(admitted.as_bytes())[..4].try_into().unwrap();
-            assert!(
-                ir.find_format_by_selector(&selector)
-                    .expect("valid Morpho format table")
-                    .is_some(),
-                "callback-free route must remain admitted on chain {chain_id}: {admitted}"
-            );
-        }
-        for refused in [
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Morpho leaf");
+        let tx = envelope(chain_id, entry.contract);
+        let usdc = Erc20Metadata {
+            chain_id,
+            contract: loan,
+            decimals: 6,
+            name: b"USD Coin",
+            symbol: b"USDC",
+        };
+        let weth = Erc20Metadata {
+            chain_id,
+            contract: collateral,
+            decimals: 18,
+            name: b"Wrapped Ether",
+            symbol: b"WETH",
+        };
+
+        for signature in [
             "supply((address,address,address,address,uint256),uint256,uint256,address,bytes)",
             "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)",
-            "supplyCollateral((address,address,address,address,uint256),uint256,address,bytes)",
         ] {
-            let selector: [u8; 4] = keccak256(refused.as_bytes())[..4].try_into().unwrap();
-            assert!(
-                ir.find_format_by_selector(&selector)
-                    .expect("valid Morpho format table")
-                    .is_none(),
-                "effect-bearing callback bytes must stay refused on chain {chain_id}: {refused}"
+            let calldata = morpho_empty_callback_call(
+                signature,
+                loan,
+                collateral,
+                oracle,
+                irm,
+                lltv,
+                &[
+                    u256_from_u64(2_500_000).0,
+                    shares,
+                    abi_address_word(on_behalf),
+                ],
             );
+            let selector: [u8; 4] = calldata[..4].try_into().unwrap();
+            assert!(
+                verified
+                    .ir
+                    .find_format_by_selector(&selector)
+                    .expect("valid Morpho format table")
+                    .is_some(),
+                "canonical empty-callback route must be admitted on chain {chain_id}: {signature}"
+            );
+            assert_selector_matches(&verified.ir, &calldata, signature);
+            let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&usdc), &resolver)
+                .expect("render exact-empty Morpho loan-token route");
+            assert_all_pages_printable(&pages);
+            let dump = dump_pages(&pages);
+            assert_full_address_field_page(&pages, "Loan Token", &loan);
+            assert_full_address_field_page(&pages, "Collateral Token", &collateral);
+            assert_full_address_field_page(&pages, "Oracle", &oracle);
+            assert_full_address_field_page(&pages, "Irm", &irm);
+            assert_raw_word_pages(&pages, "Lltv", &lltv);
+            assert!(
+                page_strs(&pages, find_page_by_label(&pages, "Assets"))[1..3]
+                    .iter()
+                    .any(|row| row.contains("2.5 USDC")),
+                "assets must bind marketParams.loanToken on chain {chain_id}:\n{dump}"
+            );
+            assert_raw_word_pages(&pages, "Shares", &shares);
+            assert_full_address_field_page(&pages, "On Behalf", &on_behalf);
+            assert_constant_text_field_pages(&pages, "Callback", "none");
+        }
+
+        let signature =
+            "supplyCollateral((address,address,address,address,uint256),uint256,address,bytes)";
+        let calldata = morpho_empty_callback_call(
+            signature,
+            loan,
+            collateral,
+            oracle,
+            irm,
+            lltv,
+            &[
+                u256_from_u64(40_000_000_000_000_000).0,
+                abi_address_word(on_behalf),
+            ],
+        );
+        let selector: [u8; 4] = calldata[..4].try_into().unwrap();
+        assert!(
+            verified
+                .ir
+                .find_format_by_selector(&selector)
+                .expect("valid Morpho format table")
+                .is_some(),
+            "canonical empty-callback collateral route must be admitted on chain {chain_id}"
+        );
+        assert_selector_matches(&verified.ir, &calldata, signature);
+        let pages = render_erc7730_pages(&tx, &calldata, &verified, Some(&weth), &resolver)
+            .expect("render exact-empty Morpho collateral-token route");
+        assert_all_pages_printable(&pages);
+        let dump = dump_pages(&pages);
+        assert_full_address_field_page(&pages, "Loan Token", &loan);
+        assert_full_address_field_page(&pages, "Collateral Token", &collateral);
+        assert_full_address_field_page(&pages, "Oracle", &oracle);
+        assert_full_address_field_page(&pages, "Irm", &irm);
+        assert_raw_word_pages(&pages, "Lltv", &lltv);
+        assert!(
+            page_strs(&pages, find_page_by_label(&pages, "Assets"))[1..3]
+                .iter()
+                .any(|row| row.contains("0.04 WETH")),
+            "collateral assets must bind marketParams.collateralToken on chain {chain_id}:\n{dump}"
+        );
+        assert_full_address_field_page(&pages, "On Behalf", &on_behalf);
+        assert_constant_text_field_pages(&pages, "Callback", "none");
+    }
+}
+
+#[test]
+fn morpho_exact_empty_callback_guard_refuses_malformed_or_nonempty_before_publication() {
+    let res = build_registry();
+    let oracle = [0x33u8; 20];
+    let irm = [0x44u8; 20];
+    let on_behalf = [0x66u8; 20];
+    let signer = [0x42u8; 20];
+    let lltv = u256_from_u64(860_000_000_000_000_000).0;
+    let resolver = NameResolver::new();
+
+    for chain_id in [1u64, 8453] {
+        let entry = find_leaf(res, "calldata-MorphoBlue.json", chain_id);
+        let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+        let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Morpho leaf");
+        let tx = envelope(chain_id, entry.contract);
+
+        for (signature, trailing_static_words) in [
+            (
+                "supply((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+                vec![
+                    u256_from_u64(2_500_000).0,
+                    [0u8; 32],
+                    abi_address_word(on_behalf),
+                ],
+            ),
+            (
+                "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+                vec![
+                    u256_from_u64(2_500_000).0,
+                    [0u8; 32],
+                    abi_address_word(on_behalf),
+                ],
+            ),
+            (
+                "supplyCollateral((address,address,address,address,uint256),uint256,address,bytes)",
+                vec![
+                    u256_from_u64(40_000_000_000_000_000).0,
+                    abi_address_word(on_behalf),
+                ],
+            ),
+        ] {
+            let head_words = 5 + trailing_static_words.len() + 1;
+            let canonical = morpho_empty_callback_call(
+                signature,
+                [0x11u8; 20],
+                [0x22u8; 20],
+                oracle,
+                irm,
+                lltv,
+                &trailing_static_words,
+            );
+            let render =
+                |calldata: &[u8]| render_erc7730_pages(&tx, calldata, &verified, None, &resolver);
+            let empty_accepted = render(&canonical).is_ok();
+            assert!(
+                empty_accepted,
+                "canonical empty callback must render on chain {chain_id}: {signature}"
+            );
+
+            let offset_word = head_words - 1;
+            let length_word = head_words;
+
+            let mut nonempty = canonical.clone();
+            overwrite_calldata_word(&mut nonempty, length_word, u256_from_u64(1).0);
+            let mut payload = [0u8; 32];
+            payload[0] = 0xA5;
+            nonempty.extend_from_slice(&payload);
+            let nonempty_accepted = render(&nonempty).is_ok();
+            assert!(
+                !(empty_accepted && nonempty_accepted),
+                "empty and effect-bearing callbacks must never both be admitted on chain {chain_id}: {signature}"
+            );
+            assert!(
+                !nonempty_accepted,
+                "non-empty callback must refuse before publishing pages on chain {chain_id}: {signature}"
+            );
+
+            let mut nonempty_proofs = DispatchPageProofs::new();
+            nonempty_proofs.fail_initialize();
+            assert!(
+                pick_sign_pages(
+                    &tx,
+                    &nonempty,
+                    &signer,
+                    None,
+                    None,
+                    None,
+                    Some(&verified),
+                    None,
+                    None,
+                    &resolver,
+                    &mut nonempty_proofs,
+                )
+                .is_err(),
+                "bound non-empty Morpho callback must hard-refuse without fallback on chain {chain_id}: {signature}"
+            );
+
+            let selector: [u8; 4] = canonical[..4].try_into().unwrap();
+            assert!(
+                res.known_calls
+                    .contains(&(chain_id, entry.contract, selector)),
+                "admitted Morpho call must remain in the exact known-call inventory on chain {chain_id}: {signature}"
+            );
+            assert!(pqsigner_erc7730::known_calls::may_contain(
+                &res.known_calls_bloom,
+                chain_id,
+                &entry.contract,
+                &selector,
+            ));
+            let mut absent_proofs = DispatchPageProofs::new();
+            absent_proofs.fail_initialize();
+            assert!(
+                pick_sign_pages(
+                    &tx,
+                    &canonical,
+                    &signer,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    &resolver,
+                    &mut absent_proofs,
+                )
+                .is_err(),
+                "known Morpho call must hard-refuse without its bound descriptor on chain {chain_id}: {signature}"
+            );
+
+            let mut wrong_offset_into_head = canonical.clone();
+            overwrite_calldata_word(
+                &mut wrong_offset_into_head,
+                offset_word,
+                u256_from_u64(((head_words - 1) * 32) as u64).0,
+            );
+
+            let mut gapped_tail = canonical.clone();
+            overwrite_calldata_word(
+                &mut gapped_tail,
+                offset_word,
+                u256_from_u64(((head_words + 1) * 32) as u64).0,
+            );
+            gapped_tail.splice(4 + head_words * 32..4 + head_words * 32, [0u8; 32]);
+
+            let mut truncated = canonical.clone();
+            truncated.pop();
+
+            let mut dirty_length = canonical.clone();
+            let mut dirty_word = [0u8; 32];
+            dirty_word[0] = 1;
+            overwrite_calldata_word(&mut dirty_length, length_word, dirty_word);
+
+            let mut oversized_length = canonical.clone();
+            overwrite_calldata_word(
+                &mut oversized_length,
+                length_word,
+                u256_from_u64((1u64 << 20) + 1).0,
+            );
+
+            let mut trailing_bytes = canonical.clone();
+            trailing_bytes.extend_from_slice(&[0u8; 32]);
+
+            for (mutation, reason) in [
+                (wrong_offset_into_head, "offset into the static head"),
+                (gapped_tail, "gap before the dynamic tail"),
+                (truncated, "truncated empty length word"),
+                (dirty_length, "dirty high length bytes"),
+                (oversized_length, "oversized length"),
+                (trailing_bytes, "trailing bytes after the empty tail"),
+            ] {
+                assert!(
+                    render(&mutation).is_err(),
+                    "{reason} must refuse before publishing pages on chain {chain_id}: {signature}"
+                );
+            }
         }
     }
 }

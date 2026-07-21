@@ -2668,7 +2668,7 @@ fn registry_midas_mtbill_redemption_admits_only_four_token_output_routes() {
 }
 
 #[test]
-fn registry_morpho_blue_assets_bind_the_signed_market_token_on_both_chains() {
+fn registry_morpho_blue_assets_and_exact_empty_callbacks_are_bound_on_both_chains() {
     let root = workspace_root();
     let relative = "registry/morpho/calldata-MorphoBlue.json";
     let curated = std::fs::read(
@@ -2715,22 +2715,38 @@ fn registry_morpho_blue_assets_bind_the_signed_market_token_on_both_chains() {
             "borrow((address,address,address,address,uint256),uint256,uint256,address,address)",
             0u16,
             true,
+            false,
         ),
         (
             "withdraw((address,address,address,address,uint256),uint256,uint256,address,address)",
             0u16,
             true,
+            false,
         ),
         (
             "withdrawCollateral((address,address,address,address,uint256),uint256,address,address)",
             1u16,
             false,
+            false,
         ),
-    ];
-    let refused = [
-        "supply((address,address,address,address,uint256),uint256,uint256,address,bytes)",
-        "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)",
-        "supplyCollateral((address,address,address,address,uint256),uint256,address,bytes)",
+        (
+            "supply((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+            0u16,
+            true,
+            true,
+        ),
+        (
+            "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+            0u16,
+            true,
+            true,
+        ),
+        (
+            "supplyCollateral((address,address,address,address,uint256),uint256,address,bytes)",
+            1u16,
+            false,
+            true,
+        ),
     ];
 
     for entry in entries {
@@ -2738,9 +2754,9 @@ fn registry_morpho_blue_assets_bind_the_signed_market_token_on_both_chains() {
         assert_eq!(
             ir.format_iter().count(),
             admitted.len(),
-            "only the callback-free Morpho routes may be advertised"
+            "the three ordinary and three exact-empty Morpho routes must be advertised"
         );
-        for (signature, token_member, has_shares) in admitted {
+        for (signature, token_member, has_shares, has_callback) in admitted {
             let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
                 .try_into()
                 .expect("Morpho selector width");
@@ -2788,23 +2804,39 @@ fn registry_morpho_blue_assets_bind_the_signed_market_token_on_both_chains() {
                     "state-dependent Morpho shares must remain exact raw units"
                 );
             }
-        }
-
-        for signature in refused {
-            let selector: [u8; 4] = keccak256(signature.as_bytes())[..4]
-                .try_into()
-                .expect("Morpho selector width");
-            assert!(
-                ir.find_format_by_selector(&selector)
-                    .expect("Morpho format table parses")
-                    .is_none(),
-                "callback-bearing route became clear-signable: {signature}"
-            );
+            if has_callback {
+                let callback = fields
+                    .iter()
+                    .find(|field| field.label == b"Callback")
+                    .unwrap_or_else(|| panic!("exact-empty callback witness missing: {signature}"));
+                assert_eq!(FormatOp::try_from(callback.format_op), Ok(FormatOp::Raw));
+                assert_eq!(
+                    ir.path_bytes(callback.path_off)
+                        .expect("Morpho callback path parses"),
+                    [
+                        PathOp::RootStructured as u8,
+                        PathOp::FieldIdx as u8,
+                        0,
+                        if has_shares { 8 } else { 7 },
+                        PathOp::FollowOffset as u8,
+                    ],
+                    "callback guard must consume the canonical top-level bytes tail"
+                );
+                let callback_params =
+                    parse_params(&ir, callback.param_off).expect("Morpho callback params parse");
+                assert_eq!(callback_params.visibility, Visibility::Always);
+                assert_eq!(callback_params.terminal_kind, Some(TerminalKind::DynamicBytes));
+                assert_eq!(callback_params.dynamic_kind, Some(DYNAMIC_KIND_BYTES));
+                assert!(
+                    callback_params.exact_empty_bytes,
+                    "callback bytes must carry the authenticated exact-empty predicate"
+                );
+            }
             assert!(
                 result
                     .known_calls
                     .contains(&(entry.chain_id, entry.contract, selector)),
-                "refused Morpho route left the exact known-call inventory: {signature}"
+                "admitting the empty subset must not remove the selector from known-call inventory: {signature}"
             );
         }
     }
@@ -3048,7 +3080,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, 4_580);
     assert_eq!(
         hex::encode(result.root),
-        "db037c454f90e7c6bfc9fa81015fcb85d88a48987f43f4018556b12ee5fe3a1d"
+        "568b7da7092a41dbcd4d229f98fc9e8dd01fe12ed9d45211de5c46b61cad9945"
     );
 }
 
@@ -4949,6 +4981,20 @@ fn registry_runtime_dead_opaque_bytes_are_omitted_but_stay_known() {
     router02.copy_from_slice(
         &hex::decode("68b3465833fb72a70ecdf485e0e4c7bd8665fc45").expect("Router02 address"),
     );
+    let mut morpho_blue = [0u8; 20];
+    morpho_blue.copy_from_slice(
+        &hex::decode("bbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb")
+            .expect("Morpho Blue address"),
+    );
+    let morpho_empty_selectors: BTreeSet<[u8; 4]> = [
+        "supply((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+        "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+        "supplyCollateral((address,address,address,address,uint256),uint256,address,bytes)",
+    ]
+    .map(|signature| keccak256(signature.as_bytes())[..4].try_into().unwrap())
+    .into_iter()
+    .collect();
+    let mut exact_empty_fields = 0usize;
 
     for entry in &catalogue.entries {
         let ir = Erc7730Ir::parse(&entry.ir_bytes).unwrap();
@@ -4958,6 +5004,26 @@ fn registry_runtime_dead_opaque_bytes_are_omitted_but_stay_known() {
                 let field = field.unwrap();
                 let params = parse_params(&ir, field.param_off).unwrap();
                 if params.dynamic_kind == Some(DYNAMIC_KIND_BYTES) {
+                    if params.exact_empty_bytes {
+                        exact_empty_fields += 1;
+                        assert!(
+                            matches!(entry.chain_id, 1 | 8453),
+                            "exact-empty bytes escaped reviewed Morpho chains"
+                        );
+                        assert_eq!(
+                            entry.contract, morpho_blue,
+                            "exact-empty bytes escaped Morpho Blue"
+                        );
+                        assert!(
+                            morpho_empty_selectors.contains(&format.selector),
+                            "exact-empty bytes escaped reviewed Morpho selectors"
+                        );
+                        assert_eq!(FormatOp::try_from(field.format_op), Ok(FormatOp::Raw));
+                        assert_eq!(field.label, b"Callback");
+                        assert_eq!(params.visibility, Visibility::Always);
+                        assert_eq!(params.terminal_kind, Some(TerminalKind::DynamicBytes));
+                        continue;
+                    }
                     assert_eq!(entry.chain_id, 1, "packed bytes escaped reviewed chain");
                     assert_eq!(entry.contract, router02, "packed bytes escaped Router02");
                     assert!(
@@ -4986,6 +5052,10 @@ fn registry_runtime_dead_opaque_bytes_are_omitted_but_stay_known() {
             }
         }
     }
+    assert_eq!(
+        exact_empty_fields, 6,
+        "each of three Morpho routes must carry one exact-empty guard on both deployments"
+    );
 
     let tbtc_skip = skips
         .iter()

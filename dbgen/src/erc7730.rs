@@ -447,6 +447,11 @@ const PARAM_WORD_GUARD: u8 = 0x4A;
 const WORD_GUARD_EQ: u8 = 0x00;
 const WORD_GUARD_NE: u8 = 0x01;
 const WORD_GUARD_PAYLOAD_LEN: usize = 33;
+/// Authenticated singleton-domain predicate for a contract `bytes` leaf.
+/// The zero-length payload is the complete wire meaning: the canonical sole
+/// dynamic tail must contain exactly zero data bytes.  Dbgen emits this only
+/// through an exact descriptor/deployment/signature/path enrollment.
+const PARAM_EXACT_EMPTY_BYTES: u8 = 0x4B;
 const MAX_SENDER_ADDRESSES: usize = 2;
 const DYNAMIC_KIND_STRING: u8 = 0x01;
 const DYNAMIC_KIND_BYTES: u8 = 0x02;
@@ -482,6 +487,14 @@ const LIDO_QUEUE_DESCRIPTOR_HASH: [u8; 32] = [
     0xb5, 0x4d, 0xb1, 0x86, 0x86, 0x48, 0xf9, 0x85, 0x38, 0x47, 0xda, 0xfa, 0xa4, 0x51, 0x9e, 0x1f,
 ];
 
+/// SHA-256(JCS(resolved descriptor JSON)) for the curated Morpho Blue
+/// descriptor.  The three callback-capable routes receive exact-empty
+/// authority only while every descriptor byte and deployment still matches.
+const MORPHO_BLUE_DESCRIPTOR_HASH: [u8; 32] = [
+    0x4b, 0xd6, 0x9e, 0x28, 0x03, 0x0f, 0x0f, 0x5f, 0x36, 0xf4, 0x15, 0xa3, 0xad, 0x3c, 0x96, 0x46,
+    0x42, 0xbf, 0xe5, 0xa0, 0xf2, 0x5d, 0x8a, 0x73, 0x39, 0x1a, 0x51, 0x7c, 0x45, 0x97, 0x74, 0x99,
+];
+
 const ROUTER02_MAINNET: [u8; 20] = [
     0x68, 0xb3, 0x46, 0x58, 0x33, 0xfb, 0x72, 0xa7, 0x0e, 0xcd, 0xf4, 0x85, 0xe0, 0xe4, 0xc7, 0xbd,
     0x86, 0x65, 0xfc, 0x45,
@@ -489,6 +502,10 @@ const ROUTER02_MAINNET: [u8; 20] = [
 const LIDO_QUEUE_MAINNET: [u8; 20] = [
     0x88, 0x9e, 0xdc, 0x2e, 0xda, 0xb5, 0xf4, 0x0e, 0x90, 0x2b, 0x86, 0x4a, 0xd4, 0xd7, 0xad, 0xe8,
     0xe4, 0x12, 0xf9, 0xb1,
+];
+const MORPHO_BLUE: [u8; 20] = [
+    0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0x9c, 0xc5, 0xe9, 0x0e, 0x3b, 0x3a, 0xf6, 0x4b, 0xda, 0xf6, 0x2c,
+    0x37, 0xee, 0xff, 0xcb,
 ];
 const ADDRESS_ZERO: [u8; 20] = [0u8; 20];
 const ADDRESS_ONE: [u8; 20] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
@@ -526,6 +543,16 @@ struct SemanticFormatEnrollment {
     /// Permit the narrowly modeled dynamic `(bytes,address,uint256,uint256)`
     /// Router02 tuple and require exactly one full packed-path formatter.
     packed_v3_path: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ExactEmptyBytesEnrollment {
+    descriptor_hash: [u8; 32],
+    chain_id: u64,
+    contract: [u8; 20],
+    canonical_signature: &'static str,
+    selector: [u8; 4],
+    path: &'static str,
 }
 
 const ROUTER02_EXACT_INPUT_GUARDS: [SemanticWordGuard; 4] = [
@@ -762,6 +789,63 @@ const SEMANTIC_FORMAT_ENROLLMENTS: [SemanticFormatEnrollment; 8] = [
         },
         guards: &[],
         packed_v3_path: false,
+    },
+];
+
+const EXACT_EMPTY_BYTES_ENROLLMENTS: [ExactEmptyBytesEnrollment; 6] = [
+    ExactEmptyBytesEnrollment {
+        descriptor_hash: MORPHO_BLUE_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: MORPHO_BLUE,
+        canonical_signature:
+            "supply((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+        selector: [0xa9, 0x9a, 0xad, 0x89],
+        path: "#.data",
+    },
+    ExactEmptyBytesEnrollment {
+        descriptor_hash: MORPHO_BLUE_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: MORPHO_BLUE,
+        canonical_signature:
+            "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+        selector: [0x20, 0xb7, 0x6e, 0x81],
+        path: "#.data",
+    },
+    ExactEmptyBytesEnrollment {
+        descriptor_hash: MORPHO_BLUE_DESCRIPTOR_HASH,
+        chain_id: 1,
+        contract: MORPHO_BLUE,
+        canonical_signature:
+            "supplyCollateral((address,address,address,address,uint256),uint256,address,bytes)",
+        selector: [0x23, 0x8d, 0x65, 0x79],
+        path: "#.data",
+    },
+    ExactEmptyBytesEnrollment {
+        descriptor_hash: MORPHO_BLUE_DESCRIPTOR_HASH,
+        chain_id: 8_453,
+        contract: MORPHO_BLUE,
+        canonical_signature:
+            "supply((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+        selector: [0xa9, 0x9a, 0xad, 0x89],
+        path: "#.data",
+    },
+    ExactEmptyBytesEnrollment {
+        descriptor_hash: MORPHO_BLUE_DESCRIPTOR_HASH,
+        chain_id: 8_453,
+        contract: MORPHO_BLUE,
+        canonical_signature:
+            "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)",
+        selector: [0x20, 0xb7, 0x6e, 0x81],
+        path: "#.data",
+    },
+    ExactEmptyBytesEnrollment {
+        descriptor_hash: MORPHO_BLUE_DESCRIPTOR_HASH,
+        chain_id: 8_453,
+        contract: MORPHO_BLUE,
+        canonical_signature:
+            "supplyCollateral((address,address,address,address,uint256),uint256,address,bytes)",
+        selector: [0x23, 0x8d, 0x65, 0x79],
+        path: "#.data",
     },
 ];
 
@@ -3997,6 +4081,21 @@ fn compile_one_format(
     } else {
         None
     };
+    let exact_empty_bytes_enrollment = if context_kind == CTX_CONTRACT {
+        exact_empty_bytes_enrollment_for(
+            ctx.descriptor_hash,
+            interpolation_deployment,
+            canonical_contract_signature
+                .as_deref()
+                .expect("contract signature computed above"),
+            selector,
+        )
+    } else {
+        None
+    };
+    if let Some(enrollment) = exact_empty_bytes_enrollment {
+        validate_exact_empty_bytes_format_source(sig, fmt, &parsed, enrollment)?;
+    }
     if format_declares_sender_address(fmt) && semantic_enrollment.is_none() {
         return Err(format!(
             "format `{sig}` declares senderAddress without an exact descriptor/deployment/selector semantic enrollment"
@@ -4085,6 +4184,7 @@ fn compile_one_format(
                     enum_offsets,
                     true,
                     false,
+                    None,
                 )?,
                 0,
             ),
@@ -4101,6 +4201,7 @@ fn compile_one_format(
                 enum_offsets,
                 false,
                 packed_v3_path_enrolled,
+                exact_empty_bytes_enrollment.map(|entry| entry.path),
             )?,
             0,
         )
@@ -4197,6 +4298,22 @@ fn semantic_enrollment_for(
     })
 }
 
+fn exact_empty_bytes_enrollment_for(
+    descriptor_hash: [u8; 32],
+    deployment: Option<&InterpolationDeployment<'_>>,
+    canonical_signature: &str,
+    selector: [u8; 4],
+) -> Option<&'static ExactEmptyBytesEnrollment> {
+    let deployment = deployment?;
+    EXACT_EMPTY_BYTES_ENROLLMENTS.iter().find(|entry| {
+        entry.descriptor_hash == descriptor_hash
+            && entry.chain_id == deployment.chain_id
+            && entry.contract == deployment.contract
+            && entry.canonical_signature == canonical_signature
+            && entry.selector == selector
+    })
+}
+
 fn format_declares_sender_address(fmt: &Format) -> bool {
     fmt.fields.iter().any(|field| {
         field
@@ -4211,6 +4328,77 @@ fn format_declares_packed_v3_path(fmt: &Format) -> bool {
     fmt.fields
         .iter()
         .any(|field| field.format.as_deref() == Some("uniswapV3Path"))
+}
+
+/// Source-level belt for the singleton empty-`bytes` capability.
+///
+/// The exact enrollment key is necessary but not sufficient.  Independently
+/// require one direct top-level `bytes` argument, one visible raw field that
+/// consumes it, no formatter parameters, and the literal callback witness
+/// label.  This prevents a future descriptor-hash update from reusing the tag
+/// for nested topology or a different semantic meaning.
+fn validate_exact_empty_bytes_format_source(
+    sig: &str,
+    fmt: &Format,
+    parsed: &ParsedFormatKey,
+    enrollment: &ExactEmptyBytesEnrollment,
+) -> Result<(), String> {
+    if top_level_dynamic_arg_count(parsed)? != 1 {
+        return Err(format!(
+            "format `{sig}` exact-empty enrollment requires one sole dynamic top-level argument"
+        ));
+    }
+    let matches: Vec<_> = fmt
+        .fields
+        .iter()
+        .filter(|field| field.path.as_deref() == Some(enrollment.path))
+        .collect();
+    if matches.len() != 1 {
+        return Err(format!(
+            "format `{sig}` exact-empty path `{}` must be present exactly once, found {}",
+            enrollment.path,
+            matches.len()
+        ));
+    }
+    let field = matches[0];
+    if field.format.as_deref().unwrap_or("raw") != "raw"
+        || field.visible.as_deref() != Some("always")
+        || field.label.as_deref() != Some("Callback")
+        || field
+            .params
+            .as_ref()
+            .is_some_and(|params| !params.as_object().is_some_and(serde_json::Map::is_empty))
+    {
+        return Err(format!(
+            "format `{sig}` exact-empty path `{}` must be the parameter-free, always-visible raw `Callback` field",
+            enrollment.path
+        ));
+    }
+    let member = enrollment
+        .path
+        .strip_prefix("#.")
+        .ok_or_else(|| format!("format `{sig}` exact-empty path must be direct structured C1"))?;
+    if member.is_empty() || member.bytes().any(|byte| matches!(byte, b'.' | b'[' | b']')) {
+        return Err(format!(
+            "format `{sig}` exact-empty path `{}` is not a direct top-level field",
+            enrollment.path
+        ));
+    }
+    let Some(index) = parsed.top_names.iter().position(|name| name == member) else {
+        return Err(format!(
+            "format `{sig}` exact-empty path `{}` is not declared by the canonical signature",
+            enrollment.path
+        ));
+    };
+    if parsed.top_types.get(index).map(String::as_str) != Some("bytes")
+        || semantic_terminal_type_for_path(enrollment.path, CTX_CONTRACT, parsed)? != "bytes"
+    {
+        return Err(format!(
+            "format `{sig}` exact-empty path `{}` is not a top-level dynamic `bytes` terminal",
+            enrollment.path
+        ));
+    }
+    Ok(())
 }
 
 /// Source-level gate for the only dynamic-tuple shape the trusted IR admits.
@@ -4795,6 +4983,7 @@ fn param_mask_from_compiled_tlvs(body: &[u8]) -> Result<ParamMask, String> {
             PARAM_DYNAMIC_KIND => ParamMask::DYNAMIC_KIND,
             PARAM_NFT_COLLECTION => ParamMask::NFT_COLLECTION,
             PARAM_NFT_COLLECTION_PATH => ParamMask::NFT_COLLECTION_PATH,
+            PARAM_EXACT_EMPTY_BYTES => ParamMask::EXACT_EMPTY_BYTES,
             // Format metadata / mandatory terminal semantics are validated at
             // their own enclosing boundaries, not as formatter parameters.
             PARAM_VISIBILITY
@@ -4855,6 +5044,7 @@ fn compile_one_field(
         enum_offsets,
         emit_nested_marker,
         false,
+        false,
     )
 }
 
@@ -4870,6 +5060,7 @@ fn compile_one_field_with_profile(
     enum_offsets: &BTreeMap<String, u16>,
     emit_nested_marker: bool,
     allow_packed_v3_path: bool,
+    allow_exact_empty_bytes: bool,
 ) -> Result<CompiledFieldOut, String> {
     if field.path.is_some() && field.value.is_some() {
         return Err(format!(
@@ -4995,6 +5186,7 @@ fn compile_one_field_with_profile(
                 ));
             }
             Some("bytes") if format_op == FMT_UNISWAP_V3_PATH && allow_packed_v3_path => {}
+            Some("bytes") if format_op == FMT_RAW && allow_exact_empty_bytes => {}
             Some("bytes") => {
                 return Err(format!(
                     "format `{sig}` field[{field_idx}] has opaque dynamic `bytes`; the runtime intentionally has no injective renderer for arbitrary semantic bytes and would hard-refuse every payload, so this unusable format must not be advertised in the authenticated catalogue"
@@ -5027,6 +5219,10 @@ fn compile_one_field_with_profile(
             }
             Some("bytes") if format_op == FMT_UNISWAP_V3_PATH && allow_packed_v3_path => {
                 push_tlv(&mut param_blob, PARAM_DYNAMIC_KIND, &[DYNAMIC_KIND_BYTES])?
+            }
+            Some("bytes") if format_op == FMT_RAW && allow_exact_empty_bytes => {
+                push_tlv(&mut param_blob, PARAM_DYNAMIC_KIND, &[DYNAMIC_KIND_BYTES])?;
+                push_tlv(&mut param_blob, PARAM_EXACT_EMPTY_BYTES, &[])?;
             }
             _ => {}
         }
@@ -5105,6 +5301,7 @@ fn compile_flat_fields(
     enum_offsets: &BTreeMap<String, u16>,
     emit_bare_marker: bool,
     allow_packed_v3_path: bool,
+    exact_empty_bytes_path: Option<&str>,
 ) -> Result<Vec<CompiledFieldOut>, String> {
     let mut compiled: Vec<CompiledFieldOut> = Vec::with_capacity(fmt.fields.len());
     for (i, field) in fmt.fields.iter().enumerate() {
@@ -5119,6 +5316,7 @@ fn compile_flat_fields(
             enum_offsets,
             emit_bare_marker && i == 0,
             allow_packed_v3_path,
+            exact_empty_bytes_path.is_some_and(|path| field.path.as_deref() == Some(path)),
         )?;
         compiled.push(cf);
     }
@@ -11678,6 +11876,7 @@ mod tests {
         assert_eq!(PARAM_INTEGER_WIDTH, params::PARAM_INTEGER_WIDTH);
         assert_eq!(PARAM_SENDER_ADDRESS, params::PARAM_SENDER_ADDRESS);
         assert_eq!(PARAM_WORD_GUARD, params::PARAM_WORD_GUARD);
+        assert_eq!(PARAM_EXACT_EMPTY_BYTES, params::PARAM_EXACT_EMPTY_BYTES);
         assert_eq!(MAX_SENDER_ADDRESSES, params::MAX_SENDER_ADDRESSES);
         assert_eq!(WORD_GUARD_PAYLOAD_LEN, params::WORD_GUARD_PAYLOAD_LEN);
         assert_eq!(WORD_GUARD_EQ, params::WORD_GUARD_EQ);
@@ -13413,6 +13612,7 @@ mod tests {
     fn semantic_enrollment_selectors_are_independently_recomputed() {
         assert_eq!(PARAM_SENDER_ADDRESS, 0x49);
         assert_eq!(PARAM_WORD_GUARD, 0x4A);
+        assert_eq!(PARAM_EXACT_EMPTY_BYTES, 0x4B);
         let expected = [
             (
                 ROUTER02_MAINNET,
@@ -13465,6 +13665,86 @@ mod tests {
                 "five-argument deadline route must not inherit four-argument Router02 authority"
             );
         }
+
+        for enrollment in EXACT_EMPTY_BYTES_ENROLLMENTS {
+            let digest = keccak256(enrollment.canonical_signature.as_bytes());
+            assert_eq!(enrollment.selector, digest[..4]);
+            assert_eq!(enrollment.contract, MORPHO_BLUE);
+            assert!(matches!(enrollment.chain_id, 1 | 8_453));
+            assert_eq!(enrollment.path, "#.data");
+        }
+        assert_eq!(
+            EXACT_EMPTY_BYTES_ENROLLMENTS
+                .iter()
+                .map(|entry| (entry.chain_id, entry.selector))
+                .collect::<BTreeSet<_>>()
+                .len(),
+            EXACT_EMPTY_BYTES_ENROLLMENTS.len(),
+            "every exact-empty enrollment key must be unique"
+        );
+    }
+
+    #[test]
+    fn exact_empty_bytes_enrollment_requires_the_complete_morpho_key() {
+        let capabilities = Erc20Capabilities::default();
+        let exact = InterpolationDeployment {
+            chain_id: 1,
+            contract: MORPHO_BLUE,
+            erc20_capabilities: &capabilities,
+        };
+        let signature =
+            "repay((address,address,address,address,uint256),uint256,uint256,address,bytes)";
+        let selector: [u8; 4] = keccak256(signature.as_bytes())[..4].try_into().unwrap();
+        assert!(exact_empty_bytes_enrollment_for(
+            MORPHO_BLUE_DESCRIPTOR_HASH,
+            Some(&exact),
+            signature,
+            selector,
+        )
+        .is_some());
+        assert!(exact_empty_bytes_enrollment_for(
+            [0x55; 32],
+            Some(&exact),
+            signature,
+            selector,
+        )
+        .is_none());
+        assert!(exact_empty_bytes_enrollment_for(
+            MORPHO_BLUE_DESCRIPTOR_HASH,
+            Some(&InterpolationDeployment {
+                chain_id: 10,
+                ..exact
+            }),
+            signature,
+            selector,
+        )
+        .is_none());
+        assert!(exact_empty_bytes_enrollment_for(
+            MORPHO_BLUE_DESCRIPTOR_HASH,
+            Some(&InterpolationDeployment {
+                contract: [0x44; 20],
+                ..exact
+            }),
+            signature,
+            selector,
+        )
+        .is_none());
+        assert!(exact_empty_bytes_enrollment_for(
+            MORPHO_BLUE_DESCRIPTOR_HASH,
+            Some(&exact),
+            "other(bytes)",
+            selector,
+        )
+        .is_none());
+        let mut wrong_selector = selector;
+        wrong_selector[0] ^= 1;
+        assert!(exact_empty_bytes_enrollment_for(
+            MORPHO_BLUE_DESCRIPTOR_HASH,
+            Some(&exact),
+            signature,
+            wrong_selector,
+        )
+        .is_none());
     }
 
     #[test]
@@ -13754,6 +14034,30 @@ mod tests {
         assert_eq!(
             hash, LIDO_QUEUE_DESCRIPTOR_HASH,
             "semantic enrollment must remain bound to exact final curation"
+        );
+    }
+
+    /// Owner utility for replacing `MORPHO_BLUE_DESCRIPTOR_HASH` after an
+    /// intentional curation update.
+    #[test]
+    #[ignore = "owner utility: prints SHA-256(JCS(resolved Morpho Blue descriptor))"]
+    fn print_morpho_blue_descriptor_hash_after_curation() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf();
+        let descriptor = root.join(
+            "secure/data/erc7730/curations/files/registry/morpho/calldata-MorphoBlue.json",
+        );
+        let json = load_resolved_descriptor_json(&descriptor, None).expect("load descriptor");
+        let hash = sha256_of(&jcs_canonicalize(&json).expect("JCS descriptor"));
+        eprintln!(
+            "Morpho Blue exact-empty enrollment descriptor hash: 0x{}",
+            hex::encode(hash)
+        );
+        assert_eq!(
+            hash, MORPHO_BLUE_DESCRIPTOR_HASH,
+            "exact-empty enrollment must remain bound to exact final curation"
         );
     }
 

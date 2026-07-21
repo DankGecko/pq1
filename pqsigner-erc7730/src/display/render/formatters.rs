@@ -783,6 +783,7 @@ fn const_params_are_canonical(params: &ParamSet<'_>) -> bool {
         && params.nested_struct.is_none()
         && params.native_currency_addresses.is_none()
         && params.dynamic_kind.is_none()
+        && !params.exact_empty_bytes
         && params.nft_collection.is_none()
         && params.nft_collection_path.is_none()
 }
@@ -811,8 +812,25 @@ fn dynamic_string_params_are_canonical(params: &ParamSet<'_>) -> bool {
         && params.nested_struct.is_none()
         && params.native_currency_addresses.is_none()
         && params.dynamic_kind == Some(DYNAMIC_KIND_STRING)
+        && !params.exact_empty_bytes
         && params.nft_collection.is_none()
         && params.nft_collection_path.is_none()
+}
+
+/// The only admitted raw dynamic-`bytes` meaning is an authenticated exact
+/// empty callback. No unrelated field or format semantics may coexist with
+/// the marker and be silently ignored by this specialized painter.
+fn exact_empty_bytes_params_are_canonical(params: &ParamSet<'_>) -> bool {
+    params.policy_mask()
+        == crate::render::policy::ParamMask::DYNAMIC_KIND
+            .union(crate::render::policy::ParamMask::EXACT_EMPTY_BYTES)
+        && params.dynamic_kind == Some(DYNAMIC_KIND_BYTES)
+        && params.exact_empty_bytes
+        && params.visibility == crate::ir::Visibility::Always
+        && params.interpolated_intent.is_none()
+        && params.integer_width_bytes.is_none()
+        && params.word_guard.is_none()
+        && params.terminal_kind == Some(TerminalKind::DynamicBytes)
 }
 
 /// `nftName` is an exact token-id renderer plus an authenticated collection
@@ -840,6 +858,7 @@ fn nft_params_are_canonical(params: &ParamSet<'_>) -> bool {
         && params.nested_struct.is_none()
         && params.native_currency_addresses.is_none()
         && params.dynamic_kind.is_none()
+        && !params.exact_empty_bytes
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1829,6 +1848,14 @@ fn validate_c1_dynamic_leaf<'a>(
     ) {
         return Err(RenderErr::Reject("7730 dynamic type unbound"));
     }
+    if params.exact_empty_bytes
+        && (field.format_op != FormatOp::Raw as u8
+            || field.label != b"Callback"
+            || params.visibility != crate::ir::Visibility::Always
+            || params.dynamic_kind != Some(DYNAMIC_KIND_BYTES))
+    {
+        return Err(RenderErr::Reject("7730 bad exact-empty field"));
+    }
     let prog = ir
         .path_bytes(field.path_off)
         .map_err(|_| RenderErr::Reject("7730 bad dynamic path"))?;
@@ -1849,7 +1876,11 @@ fn validate_c1_dynamic_leaf<'a>(
             return Err(RenderErr::Reject("7730 dyn leaf is word"))
         }
     };
-    let data = crate::render::resolve::read_dynamic_whole_tail(full_body, off, head_end)?;
+    let data = if params.exact_empty_bytes {
+        crate::render::resolve::read_exact_empty_dynamic_whole_tail(full_body, off, head_end)?
+    } else {
+        crate::render::resolve::read_dynamic_whole_tail(full_body, off, head_end)?
+    };
     Ok((slot, data))
 }
 
@@ -1913,6 +1944,12 @@ pub(crate) fn validate_contract_calldata_framing(
         let params = parse_params(ir, field.param_off)?;
         validate_path_static_head(ir, field.path_off, format.static_head_words)?;
         validate_token_path_static_head(&params, format.static_head_words)?;
+        if params.exact_empty_bytes {
+            let (has_follow, ends_on_follow) = scan_path_ops(ir, field.path_off)?;
+            if !has_follow || !ends_on_follow {
+                return Err(RenderErr::Reject("7730 bad exact-empty path"));
+            }
+        }
 
         if path_ends_with_array_all(ir, field.path_off)? {
             if array_all_is_multi(ir, field.path_off)? {
@@ -2033,6 +2070,7 @@ fn resolve_dynamic<'a>(
     path_off: u16,
     body: &'a [u8],
     static_head_words: u16,
+    exact_empty: bool,
 ) -> Result<&'a [u8], RenderErr> {
     use crate::render::resolve::{resolve_structured, Leaf};
     if path_off == 0 {
@@ -2058,6 +2096,9 @@ fn resolve_dynamic<'a>(
         .checked_mul(32)
         .ok_or(RenderErr::Reject("7730 dynamic head ovf"))?;
     match resolve_structured(&prog[1..], body)? {
+        Leaf::Dynamic(o) if exact_empty => {
+            crate::render::resolve::read_exact_empty_dynamic_whole_tail(body, o, head_end)
+        }
         Leaf::Dynamic(o) => crate::render::resolve::read_dynamic_whole_tail(body, o, head_end),
         Leaf::Word(_) => Err(RenderErr::Reject("7730 dyn leaf is word")),
     }
@@ -2085,15 +2126,32 @@ pub(super) fn render_dynamic_bytes(
     if field.format_op != FormatOp::Raw as u8 {
         return Err(RenderErr::Reject("7730 dynamic formatter mismatch"));
     }
-    match params.dynamic_kind {
-        Some(DYNAMIC_KIND_STRING) => {}
+    let exact_empty = match params.dynamic_kind {
+        Some(DYNAMIC_KIND_STRING) if !params.exact_empty_bytes => false,
+        Some(DYNAMIC_KIND_BYTES) if params.exact_empty_bytes => true,
         Some(DYNAMIC_KIND_BYTES) => return Err(RenderErr::Reject("7730 opaque bytes")),
         _ => return Err(RenderErr::Reject("7730 dynamic type unbound")),
-    }
-    if !dynamic_string_params_are_canonical(params) {
+    };
+    if exact_empty {
+        if field.label != b"Callback" || !exact_empty_bytes_params_are_canonical(params) {
+            return Err(RenderErr::Reject("7730 dynamic formatter mismatch"));
+        }
+    } else if !dynamic_string_params_are_canonical(params) {
         return Err(RenderErr::Reject("7730 dynamic formatter mismatch"));
     }
-    let data = resolve_dynamic(ir, field.path_off, full_body, static_head_words)?;
+    let data = resolve_dynamic(
+        ir,
+        field.path_off,
+        full_body,
+        static_head_words,
+        exact_empty,
+    )?;
+    if exact_empty {
+        let p = pages.push_blank().map_err(|_| RenderErr::PageBudget)?;
+        write_label_row(pages, p, b"Callback");
+        write_line(pages.row_mut(p, 1), "none");
+        return Ok(());
+    }
     if data.len() > DYN_TEXT_MAX || !data.iter().all(|&b| (0x20..0x7f).contains(&b)) {
         return Err(RenderErr::Reject("7730 string not displayable"));
     }
