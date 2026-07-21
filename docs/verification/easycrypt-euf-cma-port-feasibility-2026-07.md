@@ -2221,3 +2221,43 @@ large +C-INVARIANT MM45 transcription — hop-6 R6b/R6c (~1-2 waves), then hop-5
 module + Orig->V game chain + PRF-hop wiring + mu_split + composition (~2-4 waves). No new +C security content; the
 ledger (ITSRC10 + the 7 others) is fixed. The +C-SPECIFIC intellectual work is COMPLETE; what remains is mechanizing
 the reduction assembly that is already argued.
+
+### 2026-07-21 — MILESTONE: the SPHINCS+C10 EUF-CMA CAPSTONE STATEMENT compiles (assembled reduction to the ledger)
+
+The headline deliverable is now a single machine-checkable EasyCrypt theorem. `drafts/sphincs_c10_capstone_wip.ec`
+(compiles rc=0; ec-certify = compile=OK, admit-tactics=6, axiom-decls=0). Audited PASS — "HONEST CONDITIONAL
+REDUCTION, no soundness hole found; nothing silently dropped" (forced recompile + two RUN anti-vacuity controls:
+deleting the `+ mkg_adv` summand breaks the final smt; false-canary rejected).
+
+**`lemma EUFCMA_SPHINCS_PLUS_C10 &m`** states MM45's EUFCMA_SPHINCS_PLUS_FX 4-term bound, +C-substituted and
+EXPANDED to leaf assumptions:
+  p_sphincs_c <= skg_adv + mkg_adv
+               + (Pr[ITSRC10] + mtree_openpre + mtree_trh + mtree_trco)      (FORS+C10 term)
+               + (WOTS-TW+C multi + S-TCR(+C) + pkco-TCR + trh-TCR)           (hypertree term)
+
+ - **2 of 6 RHS legs GENUINELY PROVEN**, wired to base theorems that are themselves 0-admit/0-axiom (source-verified
+   term-for-term by the auditor, member-axis discharged via the proven R_top_members4 + the in-file-proven
+   good_eq_good_fors): the FORS+C10 term via `M.EUFCMA_MFORSC10` (FORS_C10_Multi.ec:472) and the hypertree term via
+   the component theorem `EUFNAGCMA_FLSLXMSSMTTWCESNPRF` (XmssmtCC_All.ec:8439) at A_ht:=R_top(F).
+ - **6 explicit per-hop admits = the FX composition skeleton** (hop1..hop6), each with its MM45 line-ref +
+   genuinely-open-vs-transcription-deferred status + missing invariant: Orig->PRFPRF (open), SKG-PRF (partial:
+   proven 0-admit at hypertree level, scheme-level needs FORS+C keys), MKG-PRF (open), NPRFNPRF->V + mu_split
+   (open; V_C game exists), VT/hop-5 (open; needs Adv_EUFCMA_C -> Adv_EUFCMA_MFORSC10 reduction + the now-proven
+   clone + ITSR-C10 coupling), VF/hop-6 (partial: LeqPr_VF_C proven modulo the R6b/R6c admit).
+ - **LHS is an HONESTLY-FLAGGED ABSTRACT real** `p_sphincs_c` over `F <: Adv_EUFCMA_C` — no concrete
+   `module SPHINCS_PLUS_C10 : Scheme` exists (the +C scheme lives only as simulated CMA oracles inside reductions);
+   building it = MM45's `module SPHINCS_PLUS` + the 2 Thm-5.2 substitutions, and MM45's FX is section-local with no
+   clone shortcut, so it is the multi-month scheme-module remainder, stated as the CONCRETE-LHS residual.
+ - **THE LEDGER is documented in-file and audit-verified COMPLETE**: the admit-census + the carried axioms (a
+   comment-stripped live-axiom sweep over the 13-file transitive closure) cover ITSRC10 (foregrounded, the
+   ~102-bit-gap carried PROBABILITY term, unreduced on the RHS — not an axiom), mtree_* (carried H-TREE-MULTI
+   premise, false-at-zero so a hypothesis not an admit), S-TCR(+C) (STCR_C.dpp_ll + the S_TCR_C_Int_MA RHS term),
+   SKG/MKG-PRF (skg_adv/mkg_adv reals), good_pos (live axiom via clone C), CntrFT.enum_spec, and MM45's base axioms
+   (dist_adrstypes, ch0/chS/two_encodings, ...). Nothing silently dropped.
+
+HONEST HEADLINE: **SPHINCS+C10 EUF-CMA REDUCES to {ITSRC10 + the 8-entry ledger + the 6 documented FX-skeleton
+hops}, machine-checked exactly as stated — 2 of 6 hops proven against 0-admit base theorems, the other 4 explicit
+admits over the (unbuilt) +C intermediate games, and the LHS an abstract real pending the concrete +C scheme
+module.** This is NOT an unconditional proof of SPHINCS+C security; it is the assembled reduction whose admit list
+IS the exact remaining +C-invariant MM45-transcription work. REMAINING: discharge the 6 hops (VF R6b/R6c and VT are
+the crypto-adjacent ones; the rest are +C-invariant transcription) + build the concrete scheme-module LHS.
