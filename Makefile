@@ -394,6 +394,7 @@ e2e: ## Automated unified-sign E2E (QEMU)
 		"\\[NS\\]\\[e2e\\] Scenario 5k: self-attest keccak mismatch dropped" \
 		"\\[NS\\]\\[e2e\\] Scenario 5l: both selector trailers refused" \
 		"\\[NS\\]\\[e2e\\] Scenario 5m: ERC-7730 trailer matches + signs" \
+		"\\[NS\\]\\[e2e\\] Scenario 5m-nested: ERC-7730 nested proof set matches + signs" \
 		"\\[NS\\]\\[e2e\\] Scenario 5p: EIP-712 typed sign + binding differential" \
 		"\\[NS\\]\\[e2e\\] Scenario 5n: known-call mis-bound descriptor is refused" \
 		"\\[NS\\]\\[e2e\\] Scenario 5q: Safe-wrapped CoW presign clear-sign" \
@@ -410,6 +411,9 @@ e2e: ## Automated unified-sign E2E (QEMU)
 			fail=1; \
 		fi; \
 	done; \
+	if ! grep -q "\\[ERC-7730\\] matched: chain=31337 contract=0x34343434..34343434 .* nested=true" $$log; then \
+		echo "  MISS  secure nested ERC-7730 dispatch receipt"; fail=1; \
+	fi; \
 	rt_region=$$(mktemp); \
 	awk '/Scenario 5e-rt-erc20:/{capture=1} capture{print} /RT-ERC20 trusted pages complete/{exit}' $$log > $$rt_region; \
 	for text in \

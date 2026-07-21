@@ -134,6 +134,29 @@ fn build_minimal_safe_exec(to: &[u8; 20]) -> [u8; EXEC_TRANSACTION_MIN_CALLDATA_
     out
 }
 
+/// Canonical ABI for the synthetic E2E
+/// `forward(address target, bytes data)` parent carrying one
+/// `transfer(address,uint256)` child. The dynamic tail owns the complete
+/// parent body, including zero right-padding, exactly as the enrolled policy
+/// requires.
+fn build_nested_calldata_forward() -> [u8; 196] {
+    const PARENT_SELECTOR: [u8; 4] = [0x6f, 0xad, 0xcf, 0x72];
+    const CHILD_SELECTOR: [u8; 4] = [0xa9, 0x05, 0x9c, 0xbb];
+    const CHILD_CONTRACT: [u8; 20] = [0x56; 20];
+
+    let mut out = [0u8; 196];
+    out[..4].copy_from_slice(&PARENT_SELECTOR);
+    out[4 + 12..4 + 32].copy_from_slice(&CHILD_CONTRACT);
+    out[4 + 32 + 24..4 + 64].copy_from_slice(&64u64.to_be_bytes());
+    out[4 + 64 + 24..4 + 96].copy_from_slice(&68u64.to_be_bytes());
+
+    let child = 4 + 96;
+    out[child..child + 4].copy_from_slice(&CHILD_SELECTOR);
+    out[child + 4 + 12..child + 4 + 32].copy_from_slice(&[0x78; 20]);
+    out[child + 4 + 32 + 24..child + 4 + 64].copy_from_slice(&123_456u64.to_be_bytes());
+    out
+}
+
 // === Safe-multisig (`safe_v1`) trailer helpers =============================
 
 #[inline]
@@ -581,6 +604,13 @@ const ERC7730_EIP712_DELEGATION_SEPOLIA: &[u8] = include_bytes!(concat!(
     env!("OUT_DIR"),
     "/erc7730_e2e_delegation_sepolia.bin"
 ));
+
+/// Generated versioned proof set for the synthetic chain-31337
+/// parent/child pair. Both legacy bundles and their Merkle proofs are derived
+/// from the exact checked-in E2E catalogue by `build.rs`.
+#[cfg(feature = "e2e-test")]
+const ERC7730_PROOF_SET_NESTED_CALLDATA: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/erc7730_e2e_nested_calldata.bin"));
 
 /// Append zero-length placeholders for every prior trailer slot and
 /// then the supplied ERC-7730 bundle. Sign-input wire ordering is
@@ -1395,6 +1425,50 @@ fn main() -> ! {
             "scenario 5v registers a fresh slot ⇒ Type 1 present"
         );
         hprintln!("[NS][e2e]   → ERC-20 bundle verified, t2_len={}", t2_len);
+    }
+
+    // Scenario 5m-nested: submit the generated two-bundle proof set through
+    // the real single-sign gateway. Success requires the secure handler to
+    // authenticate both leaves, derive the child interval/target/selector
+    // from these signed bytes, render the nested V2 transcript, confirm, and
+    // release a Type-2 signature.
+    hprintln!("[NS][e2e] Scenario 5m-nested: ERC-7730 nested proof set matches + signs");
+    #[cfg(feature = "e2e-test")]
+    unsafe {
+        const NESTED_PARENT: [u8; 20] = [0x34; 20];
+        let calldata = build_nested_calldata_forward();
+        let header_len = build_sign_payload(
+            &mut PAYLOAD_BUF,
+            &wallet_sender,
+            31_337,
+            1,
+            true,
+            44,
+            &NESTED_PARENT,
+            0,
+            &calldata,
+        );
+        let new_len = append_erc7730_only_trailers(
+            &mut PAYLOAD_BUF,
+            header_len,
+            ERC7730_PROOF_SET_NESTED_CALLDATA,
+        )
+        .expect("nested ERC-7730 proof set fits PAYLOAD_BUF");
+        let status = nsc_api::sign_userop(&PAYLOAD_BUF[..new_len], &mut SIG_BUF);
+        assert_eq!(
+            status,
+            NscStatus::Ok as u32,
+            "scenario 5m-nested: rooted nested calldata must render and sign"
+        );
+        let (t1_present, t2_len) = parse_response(&SIG_BUF);
+        assert!(
+            t1_present,
+            "scenario 5m-nested: chain-31337 slot is registered"
+        );
+        hprintln!(
+            "[NS][e2e]   → nested ERC-7730 dispatch accepted, t2_len={}",
+            t2_len
+        );
     }
 
     // Scenario 5w: companion-supplied address-name trailer.

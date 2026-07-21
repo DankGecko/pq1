@@ -56,6 +56,8 @@ fn main() {
             0xbe, 0x40, 0x50, 0xa7, 0x3a, 0x7f, 0xb3, 0x84, 0xc6, 0x5e, 0x88, 0x5a, 0x15, 0xc3,
             0x34, 0x61, 0xa4, 0xb2, 0x00, 0x55,
         ];
+        let nested_parent: [u8; 20] = [0x34; 20];
+        let nested_child: [u8; 20] = [0x56; 20];
 
         let weth_mainnet_entry = build_erc7730_entry(&blob, 1, &weth_mainnet)
             .expect("build mainnet WETH ERC-7730 E2E entry");
@@ -98,6 +100,11 @@ fn main() {
             &flyingtulip.trailer,
         )
         .expect("write mainnet FlyingTulip PositionsManager ERC-7730 E2E trailer");
+
+        let nested = build_erc7730_proof_set(&blob, 31_337, &nested_parent, &nested_child)
+            .expect("build synthetic nested-calldata ERC-7730 E2E proof set");
+        std::fs::write(out_dir.join("erc7730_e2e_nested_calldata.bin"), nested)
+            .expect("write synthetic nested-calldata ERC-7730 E2E proof set");
     }
 }
 
@@ -214,6 +221,45 @@ fn build_erc7730_entry(
                 .collect::<String>()
         )
     })
+}
+
+/// Build the exact two-bundle proof-set envelope from two independently
+/// generated catalogue entries. The outer/child order is signing authority,
+/// so callers name both roles explicitly rather than passing an unordered
+/// collection.
+fn build_erc7730_proof_set(
+    blob: &[u8],
+    chain_id: u64,
+    outer_contract: &[u8; 20],
+    child_contract: &[u8; 20],
+) -> Result<Vec<u8>, String> {
+    // Mirrored from `pqsigner-proto`; the QEMU scenario is itself an
+    // end-to-end drift check because the secure parser consumes the canonical
+    // constants and rejects this generated envelope if they diverge.
+    const ERC7730_PROOF_SET_MAGIC: u16 = 0xe773;
+    const ERC7730_PROOF_SET_VERSION: u8 = 1;
+    const ERC7730_PROOF_SET_COUNT: usize = 2;
+
+    if ERC7730_PROOF_SET_COUNT != 2 {
+        return Err("nested E2E fixture requires exactly two proof-set bundles".into());
+    }
+    let outer = build_erc7730_entry(blob, chain_id, outer_contract)?;
+    let child = build_erc7730_entry(blob, chain_id, child_contract)?;
+    if outer.context_kind != 0x01 || child.context_kind != 0x01 {
+        return Err("nested E2E proof set requires two contract descriptors".into());
+    }
+
+    let mut proof_set = Vec::with_capacity(8 + outer.trailer.len() + child.trailer.len());
+    proof_set.extend_from_slice(&ERC7730_PROOF_SET_MAGIC.to_be_bytes());
+    proof_set.push(ERC7730_PROOF_SET_VERSION);
+    proof_set.push(ERC7730_PROOF_SET_COUNT as u8);
+    for bundle in [&outer.trailer, &child.trailer] {
+        let len = u16::try_from(bundle.len())
+            .map_err(|_| "nested E2E legacy bundle exceeds u16 envelope")?;
+        proof_set.extend_from_slice(&len.to_be_bytes());
+        proof_set.extend_from_slice(bundle);
+    }
+    Ok(proof_set)
 }
 
 fn check_db_magic(path: &str, expected: &[u8; 4]) {
