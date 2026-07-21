@@ -2438,3 +2438,29 @@ makes hop-5 provable either way (Pr[VT] <= FORS_term whether Pr[VT] is 0 or posi
 
 NET: the finding refined, not fatal. Proven pieces (EUFCMA_MFORSC10 real, VF/hop-6 concrete 0-admit) stand. Next =
 build the concrete procedural FORS+C game + hop-5 over it (the pinned structural fix).
+
+### 2026-07-21 — Wave 11: hop-5 concrete-game attempt — D2 resolved, but op-clone is a dead-end; procedural FORS+C game needed
+
+Audited HONEST (concrete_game_legal=FALSE, eufcma_transfers=FALSE, hop5_genuine=FALSE — all correctly self-labelled;
+no new axiom; no overclaim). Real but PARTIAL progress + an architectural finding.
+ - GENUINE WIN (D2 make-or-break resolved): the "op mkeygen cannot sample" obstruction is NOT absolute. A clone
+   controls the pseed TYPE + dpseed DISTRIBUTION, so a seed-wrapped clone Mc (drafts/RTopCVtMcWrapSeed.ec, 0-admit)
+   makes the game's own `ps <$ dpseed` sample the FORS secret cube ps-INDEPENDENTLY with a distribution matching
+   V_C:~402 DRAW-FOR-DRAW (dskFORS = dmap (dlist (dlist ddgstblock t) k) insubd == V_C's cube). D2 genuinely
+   reconciled (keygen_couples=TRUE, auditor-confirmed not fudged).
+ - BUT NOT A CONCRETE GAME + a SOUNDNESS LANDMINE: Mc binds mkeygen ONLY (pkFORS pool = `witness` placeholder;
+   fsign/fverify LEFT ABSTRACT), so verify is NOT reconstructed-key-eq+predC_fors and the bound sits under the SAME
+   `fverify:=false` vacuity horn (D1 UNTOUCHED — hop-5 not one step closer to provable). Worse, the seed-wrap puts
+   the SECRET cube INSIDE ps (pseed := pseed * skFORS-cube), so Mc.EUFCMA_MFORSC10's forall-A conclusion is
+   MEANINGLESS for a key-reading A — sound ONLY at a tape-projecting reduction (TAPE-IN-PS LANDMINE, documented).
+   LeqPr_VT_C_concrete is a STATED+admit typed shell.
+ - ARCHITECTURAL FINDING: the port's FORS+C multi-game FORS_C10_Multi.MFORSC10 is ABSTRACT-OP-based (mkeygen/fsign/
+   fverify are ops), which structurally cannot serve as the hop-5 reduction target for the SAMPLING-based V_C game
+   without either the tape-in-ps hack (unsound-unless-projected) or a PROCEDURAL re-formulation. CONVERGED SOUND
+   PATH (advisor + Kimi): PROC-IFY keygen/sign/verify (mirror MM45 M_FORS_ES_NPRF + the +C conditioning) — kills D2
+   AND the tape-in-ps landmine in one move, leaving the FORS correctness lemma + the byequiv. This is a real
+   multi-session construction (a procedural FORS+C multi-game + re-deriving its EUF-CMA bound to ITSRC10 + hop-5).
+
+STATE: hop-5 (VT) is BLOCKED on a procedural FORS+C game (multi-session). All proven pieces stand (hop-6/VF 0-admit;
+EUFCMA_MFORSC10 meaningful; capstone statement; concrete scheme LHS; scheme-correctness fragment). The VT branch is
+the deepest remaining item; the FX chain (hops 1-4) + root assembly (R1b) also remain.
