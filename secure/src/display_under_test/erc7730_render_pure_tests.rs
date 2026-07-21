@@ -4579,22 +4579,28 @@ fn positive_aave_withdraw_eth_renders_native_currency() {
         "native render must NOT fall through to the raw-integer unbound path:\n{dump}",
     );
 
-    // Pool page: the curation unlock (was `visible:"never"` → now `raw`/always).
+    // The source ignores ABI word zero. Preserve operand completeness without
+    // claiming it selects the immutable Pool that receives the withdrawal.
+    assert_raw_word_pages(&pages, "Ignored address", &pool_w);
     assert!(
         dump.to_lowercase().contains("5555"),
-        "curated pool address must render as raw hex:\n{dump}",
+        "ignored address must render as raw hex:\n{dump}",
     );
 }
 
 #[test]
-fn positive_defi_catalogue_aave_gateway_referral_codes_are_complete_and_bound() {
+fn positive_defi_catalogue_aave_gateway_non_permit_routes_bind_ignored_operand() {
     let res = build_registry();
     let entry = find_leaf(res, "calldata-WrappedTokenGatewayV3.json", 1);
     let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify Aave gateway leaf");
-    let pool = [0x55u8; 20];
+    // The deployed mainnet source ignores ABI word zero and forwards through
+    // its immutable POOL. Keep the signed word visible and transcript-bound,
+    // but never describe it as the pool that receives the operation.
+    let ignored_address = [0x55u8; 20];
+    let changed_ignored_address = [0x54u8; 20];
     let signer = [0x66u8; 20];
-    let collateral_recipient = [0x77u8; 20];
+    let recipient = [0x77u8; 20];
     let referral_code = 0x1234u16;
     let resolver = NameResolver::new();
 
@@ -4604,41 +4610,43 @@ fn positive_defi_catalogue_aave_gateway_referral_codes_are_complete_and_bound() 
             calldata_static(
                 "depositETH(address,address,uint16)",
                 &[
-                    abi_address_word(pool),
-                    abi_address_word(collateral_recipient),
+                    abi_address_word(ignored_address),
+                    abi_address_word(recipient),
                     abi_u16_word(referral_code),
-                ],
-            ),
-            calldata_static(
-                "depositETH(address,address,uint16)",
-                &[
-                    abi_address_word(pool),
-                    abi_address_word(collateral_recipient),
-                    abi_u16_word(referral_code ^ 1),
                 ],
             ),
             u256_from_u64(1_500_000_000_000_000_000),
             "Supply",
             "Amount to supply",
             "Collateral reci~",
-            collateral_recipient,
+            recipient,
+            Some(2usize),
+        ),
+        (
+            "repayETH(address,uint256,address)",
+            calldata_static(
+                "repayETH(address,uint256,address)",
+                &[
+                    abi_address_word(ignored_address),
+                    u256_from_u64(1_000_000_000_000_000_000).0,
+                    abi_address_word(recipient),
+                ],
+            ),
+            u256_from_u64(2_000_000_000_000_000_000),
+            "Repay loan",
+            "Amount to repay",
+            "For debt holder",
+            recipient,
+            None,
         ),
         (
             "borrowETH(address,uint256,uint16)",
             calldata_static(
                 "borrowETH(address,uint256,uint16)",
                 &[
-                    abi_address_word(pool),
+                    abi_address_word(ignored_address),
                     u256_from_u64(2_000_000_000_000_000_000).0,
                     abi_u16_word(referral_code),
-                ],
-            ),
-            calldata_static(
-                "borrowETH(address,uint256,uint16)",
-                &[
-                    abi_address_word(pool),
-                    u256_from_u64(2_000_000_000_000_000_000).0,
-                    abi_u16_word(referral_code ^ 1),
                 ],
             ),
             U256::zero(),
@@ -4646,18 +4654,36 @@ fn positive_defi_catalogue_aave_gateway_referral_codes_are_complete_and_bound() 
             "Amount to borrow",
             "Debtor",
             signer,
+            Some(2usize),
+        ),
+        (
+            "withdrawETH(address,uint256,address)",
+            calldata_static(
+                "withdrawETH(address,uint256,address)",
+                &[
+                    abi_address_word(ignored_address),
+                    u256_from_u64(1_500_000_000_000_000_000).0,
+                    abi_address_word(recipient),
+                ],
+            ),
+            U256::zero(),
+            "Withdraw",
+            "Amount to withd~",
+            "To recipient",
+            recipient,
+            None,
         ),
     ];
 
     for (
         signature,
         calldata,
-        mutated_calldata,
         tx_value,
         intent,
         amount_label,
         recipient_label,
         recipient,
+        referral_word_index,
     ) in cases
     {
         assert_selector_matches(&verified.ir, &calldata, signature);
@@ -4684,39 +4710,64 @@ fn positive_defi_catalogue_aave_gateway_referral_codes_are_complete_and_bound() 
         );
         let _ = find_page_by_label(&rendered.pages, amount_label);
         assert_full_address_field_page(&rendered.pages, recipient_label, &recipient);
-        assert_raw_word_pages(&rendered.pages, "Pool", &abi_address_word(pool));
+        assert_raw_word_pages(
+            &rendered.pages,
+            "Ignored address",
+            &abi_address_word(ignored_address),
+        );
 
-        let referral_word: [u8; 32] = calldata[4 + 2 * 32..4 + 3 * 32]
-            .try_into()
-            .expect("Aave referralCode ABI word");
-        assert_eq!(referral_word, abi_u16_word(referral_code));
-        assert_raw_word_pages(&rendered.pages, "Referral Code", &referral_word);
-
-        let mutated = render_erc7730_pages_with_signer_checked(
+        let mut ignored_mutation = calldata.clone();
+        ignored_mutation[4..36].copy_from_slice(&abi_address_word(changed_ignored_address));
+        let ignored_changed = render_erc7730_pages_with_signer_checked(
             &tx,
-            &mutated_calldata,
+            &ignored_mutation,
             &verified,
             None,
             &resolver,
             &signer,
         )
-        .unwrap_or_else(|error| panic!("render mutated Aave {signature}: {error:?}"));
-        let mutated_word: [u8; 32] = mutated_calldata[4 + 2 * 32..4 + 3 * 32]
-            .try_into()
-            .expect("mutated Aave referralCode ABI word");
-        assert_eq!(mutated_word, abi_u16_word(referral_code ^ 1));
-        assert_raw_word_pages(&mutated.pages, "Referral Code", &mutated_word);
+        .unwrap_or_else(|error| panic!("render ignored-address-mutated Aave {signature}: {error:?}"));
+        assert_raw_word_pages(
+            &ignored_changed.pages,
+            "Ignored address",
+            &abi_address_word(changed_ignored_address),
+        );
         assert_ne!(
             rendered.pages.as_slice(),
-            mutated.pages.as_slice(),
-            "one referralCode bit must change the Aave trusted pages for {signature}"
+            ignored_changed.pages.as_slice(),
+            "the independently changed ignored operand must change Aave pages for {signature}"
         );
         assert!(
             !rendered
                 .transcript_receipt
-                .exact_match(&mutated.transcript_receipt),
-            "one referralCode bit must change the Aave transcript for {signature}"
+                .exact_match(&ignored_changed.transcript_receipt),
+            "the independently changed ignored operand must change the Aave transcript for {signature}"
         );
+
+        if let Some(word_index) = referral_word_index {
+            let referral_word: [u8; 32] = calldata
+                [4 + word_index * 32..4 + (word_index + 1) * 32]
+                .try_into()
+                .expect("Aave referralCode ABI word");
+            assert_eq!(referral_word, abi_u16_word(referral_code));
+            assert_raw_word_pages(&rendered.pages, "Referral Code", &referral_word);
+            let mut referral_mutation = calldata.clone();
+            referral_mutation[4 + word_index * 32..4 + (word_index + 1) * 32]
+                .copy_from_slice(&abi_u16_word(referral_code ^ 1));
+            let referral_changed = render_erc7730_pages_with_signer_checked(
+                &tx,
+                &referral_mutation,
+                &verified,
+                None,
+                &resolver,
+                &signer,
+            )
+            .unwrap_or_else(|error| panic!("render referral-mutated Aave {signature}: {error:?}"));
+            assert_ne!(rendered.pages.as_slice(), referral_changed.pages.as_slice());
+            assert!(!rendered
+                .transcript_receipt
+                .exact_match(&referral_changed.transcript_receipt));
+        }
     }
 }
 

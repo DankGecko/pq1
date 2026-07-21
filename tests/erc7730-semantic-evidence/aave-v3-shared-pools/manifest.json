@@ -1,0 +1,493 @@
+{
+  "schema_version": 1,
+  "scope": "Aave V3 shared-address Pool: deployed semantics for the ten already-admitted routes on chains 10, 137, 42161, and 43114",
+  "captured_at_utc": "2026-07-21T18:35:00Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
+  "boundary": "Historical fixed-block evidence for four upgradeable Pool proxies. No authority for future upgrades, the other ten unique descriptor deployments, compressed L2 bytes32 routes, reserve/token metadata, transaction success, hardware, production, shipment, fallback, or blind signing.",
+  "contracts": {
+    "pool_proxy": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+    "addresses_provider": "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb",
+    "borrow_logic": "0x52Da0ce88202D1542543598D1e1e27F0d344726A",
+    "supply_logic": "0x584C7d8c4cb05304FE5Ac7fbc97f20A10Fb07564",
+    "pool_revision": 11,
+    "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+  },
+  "deployments": [
+    {
+      "slug": "optimism",
+      "chain_id": 10,
+      "block_number_hex": "0x935ec86",
+      "block_hash": "0xc3f99bbbc76f43852f6ea8ee2e3606f617279ccb565973ff6a3ab4a8348457cf",
+      "parent_hash": "0x49c96815131f210571310bf79187a734990967714c09dc44ecf7b7edded58b00",
+      "state_root": "0x8b418cdb241e1b8636df464facd07df22491c2235246dffe1e70a5d59851b86b",
+      "timestamp_hex": "0x6a5fb2c5",
+      "implementation": "0x66185E53343336d4FaeA5317d1Fcca103Dd4088D",
+      "instance": "L2PoolInstance",
+      "providers": [
+        {
+          "name": "publicnode",
+          "url": "https://optimism-rpc.publicnode.com"
+        },
+        {
+          "name": "drpc",
+          "url": "https://optimism.drpc.org"
+        }
+      ],
+      "verification": "verification/Sourcify.optimism.json"
+    },
+    {
+      "slug": "polygon",
+      "chain_id": 137,
+      "block_number_hex": "0x566f900",
+      "block_hash": "0x2a97804fa59fe15b1ff8fe068997e5a21f15d68d89fb987c38fdd24a46f976d4",
+      "parent_hash": "0xe709a64c01aff1d4d3a1a7dc01885f046f41ea52a498b42374070652a8d64e0e",
+      "state_root": "0x7ed67b4580567664d2dbaef23cee559fb52bf56ecde41088ee33262916310e9c",
+      "timestamp_hex": "0x6a5fb365",
+      "implementation": "0x6030dB989D47cD74FC17bB6F4FcD3A8B29FEe57e",
+      "instance": "PoolInstance",
+      "providers": [
+        {
+          "name": "tenderly",
+          "url": "https://polygon.gateway.tenderly.co"
+        },
+        {
+          "name": "drpc",
+          "url": "https://polygon.drpc.org"
+        }
+      ],
+      "verification": "verification/Sourcify.polygon.json"
+    },
+    {
+      "slug": "arbitrum",
+      "chain_id": 42161,
+      "block_number_hex": "0x1cfbd800",
+      "block_hash": "0x0de0b3675691154bc521ab9b3821763b5309f22d76810c43d26f1ccde2bf25c4",
+      "parent_hash": "0x1f901dc9ef0765bda260f9ade62c6f89f0489f50d601bfcd5e07ccaf1583646c",
+      "state_root": "0x8638b6ecd9709c2fe7f60361df3c4bd4d305b0d104d7fee674acc5c3ec556b08",
+      "timestamp_hex": "0x6a5fb79b",
+      "implementation": "0xF05Fd3cC911b4c5E36e53c00354F645E22922C9A",
+      "instance": "L2PoolInstance",
+      "providers": [
+        {
+          "name": "publicnode",
+          "url": "https://arbitrum-one-rpc.publicnode.com"
+        },
+        {
+          "name": "tenderly",
+          "url": "https://arbitrum.gateway.tenderly.co"
+        }
+      ],
+      "verification": "verification/Sourcify.arbitrum.json"
+    },
+    {
+      "slug": "avalanche",
+      "chain_id": 43114,
+      "block_number_hex": "0x56af2c2",
+      "block_hash": "0x21bfb1f3a7ede20bfa372e278ec6208717f998dbab172b1f3f9644691a751b09",
+      "parent_hash": "0xebdb075343c14eabf3b057d340a2963606412b10957aa67ce5f3e612961fb258",
+      "state_root": "0x7cc66da296163440a0974e76d5374ed20e9ccf870c247250b96edecd4cb77ca8",
+      "timestamp_hex": "0x6a5fb8c7",
+      "implementation": "0x6cddFF90124bA51afac5715314db7C9546b32204",
+      "instance": "PoolInstance",
+      "providers": [
+        {
+          "name": "tenderly",
+          "url": "https://avalanche.gateway.tenderly.co"
+        },
+        {
+          "name": "thirdweb",
+          "url": "https://43114.rpc.thirdweb.com"
+        }
+      ],
+      "verification": "verification/Routescan.avalanche.json"
+    }
+  ],
+  "upstream": {
+    "address_book": {
+      "repository": "https://github.com/aave-dao/aave-address-book",
+      "commit": "7e444a1e73b538fd0b9e093e5156401d6fccca7d"
+    },
+    "origin": {
+      "repository": "https://github.com/aave-dao/aave-v3-origin",
+      "commit": "fd1fbd9150426ca8ace9cee45b4acf912ae84f5b"
+    }
+  },
+  "abi": {
+    "path": "abi/Pool.routes.abi.json",
+    "entries": 10
+  },
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "f9fbd6e01b5972732197dbf761dbe16484440493892ead80a15fdcd5e02ec7e9"
+    },
+    {
+      "path": "abi/Pool.routes.abi.json",
+      "sha256": "073969f3bbc427900dca2127758f029f8ffabad4a609af393c129a1bcd1aaeb6"
+    },
+    {
+      "path": "collect.sh",
+      "sha256": "1bdc0960fc55b55b164c4005d08131f79e519598ed14a4f847ea5088abf42040"
+    },
+    {
+      "path": "rpc/raw/arbitrum/request-admin.json",
+      "sha256": "e73e5b9794c7cad46a8ed54dd228d4883e5e3700a88bbfdef75dedf78071922c"
+    },
+    {
+      "path": "rpc/raw/arbitrum/request-code.json",
+      "sha256": "ea98be8e7297064fa88c89422a201424dc0d2a33a5e58e7e86b25c9e0c437b27"
+    },
+    {
+      "path": "rpc/raw/arbitrum/request-identity.json",
+      "sha256": "a01860c611e05e939ef4c447f0ba9caa9b14b706f3a6994fe56d31f43a356d5e"
+    },
+    {
+      "path": "rpc/raw/arbitrum/request-links.json",
+      "sha256": "31120b3849ff5fc3bd1981ad0b0ceb57d664d6fdb7ff3f5dbf0a9cec6b7dc6f2"
+    },
+    {
+      "path": "rpc/raw/arbitrum/request-proxy.json",
+      "sha256": "f8cb12877b472a183e37f6fba7248b7991308c2c6623fa70bb0dca1e850dbcca"
+    },
+    {
+      "path": "rpc/raw/arbitrum/response-publicnode-admin.json",
+      "sha256": "f92c3bcba95a730f6bfef718a83a7ecd3db12b2c5fafc7943445aaf20f0200ae"
+    },
+    {
+      "path": "rpc/raw/arbitrum/response-publicnode-code.json",
+      "sha256": "d3fecdabeea9a1124fd149d39a1c83bdb6fa988a99bcbaf5ab601243d07533c9"
+    },
+    {
+      "path": "rpc/raw/arbitrum/response-publicnode-identity.json",
+      "sha256": "262167bd8f4947a34896109a423feeb73d1eb5fed10b72680b4025ebfdb70f68"
+    },
+    {
+      "path": "rpc/raw/arbitrum/response-publicnode-links.json",
+      "sha256": "5732ac5c6183b570b17e0fd9210a310f3f96dfd22ec9ed1c4df67d29c5401132"
+    },
+    {
+      "path": "rpc/raw/arbitrum/response-publicnode-proxy.json",
+      "sha256": "bf736c30cef8b36c0f2e6525ebbb38f8dfac60bf1a4cbd9d7710b32fbcee4c04"
+    },
+    {
+      "path": "rpc/raw/arbitrum/response-tenderly-admin.json",
+      "sha256": "332057b413be57f94a4e2f65c866fa99bb82a51104976d148c7263d6a8c7c07e"
+    },
+    {
+      "path": "rpc/raw/arbitrum/response-tenderly-code.json",
+      "sha256": "d1967b880254dc388c5e8d6a309435cc936badeedb8cc1dd38e44de96fccf5d9"
+    },
+    {
+      "path": "rpc/raw/arbitrum/response-tenderly-identity.json",
+      "sha256": "a0ef9c6868e83d8507eb5d8cc974227eac7f5c6ba6bf9f3a113652dfa0e21d89"
+    },
+    {
+      "path": "rpc/raw/arbitrum/response-tenderly-links.json",
+      "sha256": "726dc02baa0660587d15785edef335adbb8b8a83679382dff1a40a9568690030"
+    },
+    {
+      "path": "rpc/raw/arbitrum/response-tenderly-proxy.json",
+      "sha256": "599e515b676bda3ccc44e5ddbc79ef6968801c2b7eeb952f0403c7bec15e340c"
+    },
+    {
+      "path": "rpc/raw/avalanche/request-admin.json",
+      "sha256": "8839f7f76b86762167ae70f4c771be8f574054c08b083acf7923c7fca967198a"
+    },
+    {
+      "path": "rpc/raw/avalanche/request-code.json",
+      "sha256": "5032c20733a1332ab7ed51855c41af0713d09bdfbad1b7c9557bde5f89b95be5"
+    },
+    {
+      "path": "rpc/raw/avalanche/request-identity.json",
+      "sha256": "068aba8c65ce6f5478673e8f86bc141989d7a6be7a1587d2eee0f7a93d7df530"
+    },
+    {
+      "path": "rpc/raw/avalanche/request-links.json",
+      "sha256": "249b4e4d01734ac9cf93fb18dc8e30ebd658e600fec140b866c3cad14fe16353"
+    },
+    {
+      "path": "rpc/raw/avalanche/request-proxy.json",
+      "sha256": "75ea3b74ba5671bf93522387e59037ef811b147398a019d19505ab88fae7e03b"
+    },
+    {
+      "path": "rpc/raw/avalanche/response-tenderly-admin.json",
+      "sha256": "bfe11a710289c13288d25a866b16b8c39c14f12eeb5ca0b3b0ed8630c7fee277"
+    },
+    {
+      "path": "rpc/raw/avalanche/response-tenderly-code.json",
+      "sha256": "6852241ce2076bfdcb549a02ff5e86d47aed29c9461079f29ac8bf975f7d8a83"
+    },
+    {
+      "path": "rpc/raw/avalanche/response-tenderly-identity.json",
+      "sha256": "9736cedbe5d64fb311ca305bb30a8ecc0ec04703b7d91b80bba1728815b77d1a"
+    },
+    {
+      "path": "rpc/raw/avalanche/response-tenderly-links.json",
+      "sha256": "726dc02baa0660587d15785edef335adbb8b8a83679382dff1a40a9568690030"
+    },
+    {
+      "path": "rpc/raw/avalanche/response-tenderly-proxy.json",
+      "sha256": "599e515b676bda3ccc44e5ddbc79ef6968801c2b7eeb952f0403c7bec15e340c"
+    },
+    {
+      "path": "rpc/raw/avalanche/response-thirdweb-admin.json",
+      "sha256": "96964c1b7e0b4c1b6da8511512f1314837dfb122a1ec812f90b1241e7fe1fa9e"
+    },
+    {
+      "path": "rpc/raw/avalanche/response-thirdweb-code.json",
+      "sha256": "bfdad329710bfd65a6ed4deec7771a0a1551ffc099231f489f536208745859aa"
+    },
+    {
+      "path": "rpc/raw/avalanche/response-thirdweb-identity.json",
+      "sha256": "0e0c2305035556f9182c72729b9e69f900aed33e087bfff0f991391431b2a7bd"
+    },
+    {
+      "path": "rpc/raw/avalanche/response-thirdweb-links.json",
+      "sha256": "29cf608676e8f342591d4dbbd2c3b19d46a19946334ee870f51cf92d1f1a5d48"
+    },
+    {
+      "path": "rpc/raw/avalanche/response-thirdweb-proxy.json",
+      "sha256": "6d111d009da646b9af16f0b623130b38577bf1339d5c4b66c3516bb1f0dc9bc1"
+    },
+    {
+      "path": "rpc/raw/optimism/request-admin.json",
+      "sha256": "49b5ef5a0b45f3cecf5c84d28ff30775f5c418ca9e3645081de02896fb1a8ae0"
+    },
+    {
+      "path": "rpc/raw/optimism/request-code.json",
+      "sha256": "8ec86b174aefaee231a648bbe1361e7e3e8526385eede3f8989d4c02cd5b2977"
+    },
+    {
+      "path": "rpc/raw/optimism/request-identity.json",
+      "sha256": "2ce67e12cb5ab3333b06a8831a892f599d71091f886ba90d8b707386399b2c04"
+    },
+    {
+      "path": "rpc/raw/optimism/request-links.json",
+      "sha256": "4433a7533b4ea272419e4d21e2601edef4ea67432ef431bcbe2dbf55f1a2b1ab"
+    },
+    {
+      "path": "rpc/raw/optimism/request-proxy.json",
+      "sha256": "508b3e6a6913f56e306b1d00c8fc2fe39f5df1b5a32fce8717b70246e5907387"
+    },
+    {
+      "path": "rpc/raw/optimism/response-drpc-admin.json",
+      "sha256": "9bf20fe6769bbf64c589fa9c6f4355bfc431f5d616cd2df882498ef966e7caaa"
+    },
+    {
+      "path": "rpc/raw/optimism/response-drpc-code.json",
+      "sha256": "eddb44a2a22e1b1fa933fd4f1f99f5094ec94ee429d4eb579466623fcd9b66f9"
+    },
+    {
+      "path": "rpc/raw/optimism/response-drpc-identity.json",
+      "sha256": "a31a25eca4b280626eefb112b61fe1326d4fa1d349d421b0ba3e6fd467454693"
+    },
+    {
+      "path": "rpc/raw/optimism/response-drpc-links.json",
+      "sha256": "726dc02baa0660587d15785edef335adbb8b8a83679382dff1a40a9568690030"
+    },
+    {
+      "path": "rpc/raw/optimism/response-drpc-proxy.json",
+      "sha256": "599e515b676bda3ccc44e5ddbc79ef6968801c2b7eeb952f0403c7bec15e340c"
+    },
+    {
+      "path": "rpc/raw/optimism/response-publicnode-admin.json",
+      "sha256": "7624875caecb654c9d2f16e8c207f35309ddad990c5604403d45844604e5eed0"
+    },
+    {
+      "path": "rpc/raw/optimism/response-publicnode-code.json",
+      "sha256": "4ea06b7d26b89a77121eff0d7ec426c65b4e225f3ade9f554e715c1c830f539c"
+    },
+    {
+      "path": "rpc/raw/optimism/response-publicnode-identity.json",
+      "sha256": "bf104af4dd11a493a803117b866f8505412e12f5dbcbf8965e090163cdec5cb0"
+    },
+    {
+      "path": "rpc/raw/optimism/response-publicnode-links.json",
+      "sha256": "9587bce773295c1fe00df43fc787841ab07dda6bb4e49b49c3b91ba579e35e67"
+    },
+    {
+      "path": "rpc/raw/optimism/response-publicnode-proxy.json",
+      "sha256": "f038f3f95063517326838e4afb80c50e79248b6e44bd2ffd70c6af6aaba1905e"
+    },
+    {
+      "path": "rpc/raw/polygon/request-admin.json",
+      "sha256": "df84426d48e9ac35ff93158d2c4bde5aa9749d954b761009d47887d842481ff3"
+    },
+    {
+      "path": "rpc/raw/polygon/request-code.json",
+      "sha256": "d8691d997316d2f20f4f9ee709411708cbdb45b0a4928479f8f76c85f4cea844"
+    },
+    {
+      "path": "rpc/raw/polygon/request-identity.json",
+      "sha256": "a2ff3694b1f1c951313c79497cb2cb372398a6b4ccbdf2ddd832187ac14fe79f"
+    },
+    {
+      "path": "rpc/raw/polygon/request-links.json",
+      "sha256": "bd05ac10e63263686927161f07396ae3264fb895af543011d3ae9a063a484c33"
+    },
+    {
+      "path": "rpc/raw/polygon/request-proxy.json",
+      "sha256": "0370ef8f686db71f2adcc9778db59314381ae75d12d9879a7a81fff62a9f76a5"
+    },
+    {
+      "path": "rpc/raw/polygon/response-drpc-admin.json",
+      "sha256": "28828f490017eeab7b9bae24c736425321a4b889065d417832c7bb5e30ab3253"
+    },
+    {
+      "path": "rpc/raw/polygon/response-drpc-code.json",
+      "sha256": "eb6d3484b46b85b050ef4c17d7edb3add720b4d65375f2cfa766a9708cdbfb63"
+    },
+    {
+      "path": "rpc/raw/polygon/response-drpc-identity.json",
+      "sha256": "608e715d66987d948df97b51ec3006854b8eebab37b5ef498f74eba850a0a7c1"
+    },
+    {
+      "path": "rpc/raw/polygon/response-drpc-links.json",
+      "sha256": "726dc02baa0660587d15785edef335adbb8b8a83679382dff1a40a9568690030"
+    },
+    {
+      "path": "rpc/raw/polygon/response-drpc-proxy.json",
+      "sha256": "599e515b676bda3ccc44e5ddbc79ef6968801c2b7eeb952f0403c7bec15e340c"
+    },
+    {
+      "path": "rpc/raw/polygon/response-tenderly-admin.json",
+      "sha256": "28828f490017eeab7b9bae24c736425321a4b889065d417832c7bb5e30ab3253"
+    },
+    {
+      "path": "rpc/raw/polygon/response-tenderly-code.json",
+      "sha256": "eb6d3484b46b85b050ef4c17d7edb3add720b4d65375f2cfa766a9708cdbfb63"
+    },
+    {
+      "path": "rpc/raw/polygon/response-tenderly-identity.json",
+      "sha256": "5a49165917d6650454f015e9d571c6c27e0ea6656a4f01a4f8dcf25df73d3779"
+    },
+    {
+      "path": "rpc/raw/polygon/response-tenderly-links.json",
+      "sha256": "726dc02baa0660587d15785edef335adbb8b8a83679382dff1a40a9568690030"
+    },
+    {
+      "path": "rpc/raw/polygon/response-tenderly-proxy.json",
+      "sha256": "599e515b676bda3ccc44e5ddbc79ef6968801c2b7eeb952f0403c7bec15e340c"
+    },
+    {
+      "path": "runtime/BorrowLogic.arbitrum.hex",
+      "sha256": "5743432a308540a96715c0030df45cc455ed777f008291d3924a81d121be0c5e"
+    },
+    {
+      "path": "runtime/BorrowLogic.avalanche.hex",
+      "sha256": "5743432a308540a96715c0030df45cc455ed777f008291d3924a81d121be0c5e"
+    },
+    {
+      "path": "runtime/BorrowLogic.optimism.hex",
+      "sha256": "5743432a308540a96715c0030df45cc455ed777f008291d3924a81d121be0c5e"
+    },
+    {
+      "path": "runtime/BorrowLogic.polygon.hex",
+      "sha256": "5743432a308540a96715c0030df45cc455ed777f008291d3924a81d121be0c5e"
+    },
+    {
+      "path": "runtime/PoolImplementation.arbitrum.hex",
+      "sha256": "d37ae6badbcf62ca4bbb0ae93b7fa641b13098d731c6524a77a433908bf5f5ee"
+    },
+    {
+      "path": "runtime/PoolImplementation.avalanche.hex",
+      "sha256": "8b762a8fa9088cc940441d25646d92ad00ae5ec82021c00e9ef51f5ab8cb1dbb"
+    },
+    {
+      "path": "runtime/PoolImplementation.optimism.hex",
+      "sha256": "a9c51057c1d67a11654f8e561fa7e3f8907cdb254eb9fb2d4c0564857cecacf1"
+    },
+    {
+      "path": "runtime/PoolImplementation.polygon.hex",
+      "sha256": "e21b0e54f04405d65c22852c0f31d98671753000c5924f0bc6b0c508339ff74b"
+    },
+    {
+      "path": "runtime/PoolProxy.arbitrum.hex",
+      "sha256": "837fbd95d848cb0f7bf039cac2d7124b23ad2c47e09de28182749421abb4a58e"
+    },
+    {
+      "path": "runtime/PoolProxy.avalanche.hex",
+      "sha256": "837fbd95d848cb0f7bf039cac2d7124b23ad2c47e09de28182749421abb4a58e"
+    },
+    {
+      "path": "runtime/PoolProxy.optimism.hex",
+      "sha256": "837fbd95d848cb0f7bf039cac2d7124b23ad2c47e09de28182749421abb4a58e"
+    },
+    {
+      "path": "runtime/PoolProxy.polygon.hex",
+      "sha256": "837fbd95d848cb0f7bf039cac2d7124b23ad2c47e09de28182749421abb4a58e"
+    },
+    {
+      "path": "runtime/SupplyLogic.arbitrum.hex",
+      "sha256": "594ab9a694c1cf494f94824b05c3ac387016fc859b8b4bf252907100bfcfab0a"
+    },
+    {
+      "path": "runtime/SupplyLogic.avalanche.hex",
+      "sha256": "594ab9a694c1cf494f94824b05c3ac387016fc859b8b4bf252907100bfcfab0a"
+    },
+    {
+      "path": "runtime/SupplyLogic.optimism.hex",
+      "sha256": "594ab9a694c1cf494f94824b05c3ac387016fc859b8b4bf252907100bfcfab0a"
+    },
+    {
+      "path": "runtime/SupplyLogic.polygon.hex",
+      "sha256": "594ab9a694c1cf494f94824b05c3ac387016fc859b8b4bf252907100bfcfab0a"
+    },
+    {
+      "path": "source/AaveV3Arbitrum.sol",
+      "sha256": "67353fe8ff68bf166c24d0ef3a110713bbb2128d122d60a045e5ad61d72b6cff"
+    },
+    {
+      "path": "source/AaveV3Avalanche.sol",
+      "sha256": "04eb0307e435920d05e1a20ad74bbcf765dc6a8febc80e4f2d9d309b3b84d1fd"
+    },
+    {
+      "path": "source/AaveV3Optimism.sol",
+      "sha256": "7a352505339412e53d71330354bc8e67a9ee960d0ae958609a61fbc653944995"
+    },
+    {
+      "path": "source/AaveV3Polygon.sol",
+      "sha256": "94879a4ed820c09ca8d76b81782fa245d7866705301e4676c73b5d178b95ae49"
+    },
+    {
+      "path": "source/BorrowLogic.sol",
+      "sha256": "daf57b87b1f9b669b7103c156ac6ae192b31ec74a60d57dc69e63730345d30bc"
+    },
+    {
+      "path": "source/L2Pool.sol",
+      "sha256": "09adc62aab690e04fd7ab260e26a9b13fcd3004a86f4b1b9f8edd1d6a1e77b81"
+    },
+    {
+      "path": "source/L2PoolInstance.sol",
+      "sha256": "29598978c55e5d6a04eb111831361d722be40db81ebac6e1a51c30b4077228a3"
+    },
+    {
+      "path": "source/Pool.sol",
+      "sha256": "ec6dbae72f43777446d8320f94eccbc6ae1dbe5daf1942502264bf0e35ef00fc"
+    },
+    {
+      "path": "source/PoolInstance.sol",
+      "sha256": "0062f84b7d8597fc9d25853a73fff8100e41cc9d6d3bc51b5571d15c1ae4c918"
+    },
+    {
+      "path": "source/SupplyLogic.sol",
+      "sha256": "51a8ed9ed08bbe673809dd09af698f8a3f8de1f4aef9c83a04ae2fcfa62161a6"
+    },
+    {
+      "path": "verification/Routescan.avalanche.json",
+      "sha256": "574ae497cceed8ac0f3c9ee67c74ebbc4e50f64002af4e8d571b837d8cf3f239"
+    },
+    {
+      "path": "verification/Sourcify.arbitrum.json",
+      "sha256": "c118269d020d5143676203faa87097c20e36bbdbb1fd38c0787246f07a5416fb"
+    },
+    {
+      "path": "verification/Sourcify.optimism.json",
+      "sha256": "a2371ff30ae1398558196e892e9b4c56dd742c3f83b211aef7f8db90b65ba9f6"
+    },
+    {
+      "path": "verification/Sourcify.polygon.json",
+      "sha256": "84ed3f1cc4ee08dcb8e7c27a5ba4ba375f59c1724d16fd2621e4a9900d6f0f5c"
+    }
+  ]
+}

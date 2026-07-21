@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "scope": "Aave V3 Ethereum WrappedTokenGatewayV3: deployed semantics and honest rendering for four PQ-compatible routes",
+  "captured_at_utc": "2026-07-21T18:35:00Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
+  "boundary": "Historical fixed-block evidence for one non-proxy mainnet gateway. The first signed address operand is ignored, not forwarded. No permit, transaction-success, reserve-state, future-deployment, hardware, production, shipment, fallback, or blind-signing authority.",
+  "fixed_block": {
+    "number": 25574144,
+    "number_hex": "0x1863b00",
+    "hash": "0xc764a3327787002b64c36ae2776c0f25a9c9e7fa8e94dc1748c04550adba4bfd",
+    "parent_hash": "0xd874b44ee0035a420b0bc099fd9d231a6b57f47c9e9d77d1976db1bd9e2327aa",
+    "state_root": "0x093297f3201225733791d1ea446c4387d94b2fb51f0d49b7311207669c8682b3",
+    "timestamp_hex": "0x6a5e1eab"
+  },
+  "contracts": {
+    "gateway": "0xd01607c3C5eCABa394D8be377a08590149325722",
+    "weth": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+    "pool": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
+    "owner": "0x5300A1a15135EA4dc7aD5A167152C01EFc9b192A"
+  },
+  "providers": [
+    {
+      "name": "drpc",
+      "url": "https://eth.drpc.org"
+    },
+    {
+      "name": "mevblocker",
+      "url": "https://rpc.mevblocker.io"
+    }
+  ],
+  "upstream": {
+    "address_book": {
+      "repository": "https://github.com/aave-dao/aave-address-book",
+      "commit": "7e444a1e73b538fd0b9e093e5156401d6fccca7d",
+      "path": "source/AaveV3Ethereum.sol"
+    },
+    "origin": {
+      "repository": "https://github.com/aave-dao/aave-v3-origin",
+      "commit": "ea556899f770b5a15567eef766f507ad69c42d8e",
+      "path": "source/WrappedTokenGatewayV3.sol"
+    }
+  },
+  "verification": {
+    "sourcify": "verification/Sourcify.json",
+    "blockscout": "verification/Blockscout.json"
+  },
+  "abi": {
+    "path": "abi/WrappedTokenGatewayV3.routes.abi.json",
+    "entries": 5,
+    "admitted": 4,
+    "refused_permit": 1
+  },
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "2cbedf30f4ebe68dfe6f499beb8ab571b78ad5206e9565afd9e7b3eceae01d3f"
+    },
+    {
+      "path": "abi/WrappedTokenGatewayV3.routes.abi.json",
+      "sha256": "c2180b1f3368abad2f722e4f58a1b4fef66da305bd9688c5a97f6a93772794f2"
+    },
+    {
+      "path": "collect.sh",
+      "sha256": "e5567e2ab7321a61ab4fdc46a30039367d768723e1f301e6ded08c38fd21961b"
+    },
+    {
+      "path": "rpc/raw/request-identity.json",
+      "sha256": "e12a6e687a6aee60401d61ceca88f83e716b1fd87d718c880df21e59f97122b5"
+    },
+    {
+      "path": "rpc/raw/request-immutables.json",
+      "sha256": "dde3d9869565e5be809cd6ea2a07845035447d98b0ab0591e72b330e59b733ed"
+    },
+    {
+      "path": "rpc/raw/response-drpc-identity.json",
+      "sha256": "16e79a372111ae9a150827ef801eb4e6fc5f7374864461b7360dc00541296831"
+    },
+    {
+      "path": "rpc/raw/response-drpc-immutables.json",
+      "sha256": "726a5d3170be5cb7f20a5378d6abb0483f01a195dbe2e1829f728b98dbce62c2"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-identity.json",
+      "sha256": "69b7212363586647ab3adb2674cdfff9da780f1bde14d8f8ca38bd5d3dee8f4e"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-immutables.json",
+      "sha256": "b1cfebed8a76b88b051b3c3ea38d500640aff04f44e7d24cae66db2e24bcbf2c"
+    },
+    {
+      "path": "runtime/WrappedTokenGatewayV3.ethereum-mainnet.hex",
+      "sha256": "b343bdf02ac54c302b3ab79a5d817ad24a7f73e482be7f9adbbc1bd7eff574d1"
+    },
+    {
+      "path": "source/AaveV3Ethereum.sol",
+      "sha256": "1a862b7389de3d59ee77680a8edb451a29e630a07813a0c5becdce65d730a22a"
+    },
+    {
+      "path": "source/WrappedTokenGatewayV3.sol",
+      "sha256": "6fef4c7dfe62b211f12f9c70a4ba4ac87f6e1411adcc0e3a3b2c9fc1f4de0a5b"
+    },
+    {
+      "path": "verification/Blockscout.json",
+      "sha256": "5b08fb0f3e981ed8c6a321d7d805a8eaa34cd49cd7d71a84a8321279e13d98e7"
+    },
+    {
+      "path": "verification/Sourcify.json",
+      "sha256": "bc29e61385481de463c8a594f0d6e7c31eab7749c1d5e7312a64f796d89c8a91"
+    }
+  ]
+}

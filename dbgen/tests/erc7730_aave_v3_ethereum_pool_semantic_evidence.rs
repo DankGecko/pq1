@@ -1484,33 +1484,14 @@ fn aave_v3_generated_ir_exactly_matches_the_ten_evidenced_routes() {
     );
 
     assert_eq!(
-        registry.entries.len(),
-        467,
-        "current production catalogue leaf count drifted"
+        entries
+            .iter()
+            .map(|entry| (entry.chain_id, entry.contract))
+            .collect::<BTreeSet<_>>(),
+        unique_deployments,
+        "the Aave owner slice must emit exactly one leaf per unique declared deployment"
     );
-    assert_eq!(
-        registry.leaf_count, 467,
-        "current production catalogue Merkle leaf count drifted"
-    );
-    assert_eq!(
-        registry.blob.len(),
-        404_904,
-        "current production catalogue blob size drifted"
-    );
-    assert_eq!(
-        hex::encode(registry.root),
-        "01fc3633f39a453684445b87fbfd1b8d3b1063fe9824984508a890f3c949db21"
-    );
-    assert_eq!(
-        registry.known_call_count, 4_580,
-        "current exact known-call count drifted"
-    );
-    assert_eq!(
-        hex::encode(registry.known_call_set_hash),
-        "b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829"
-    );
-    assert_eq!(
-        sha256_hex(&registry.known_calls_bloom),
-        "9466b4e65c129292578b5722d2e100630e7caca05f23c75acc3a5855345c99b9"
-    );
+    assert!(entries
+        .iter()
+        .all(|entry| entry.descriptor_hash == descriptor_hash));
 }

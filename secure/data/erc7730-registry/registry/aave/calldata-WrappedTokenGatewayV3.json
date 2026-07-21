@@ -40,7 +40,7 @@
             "visible": "always"
           },
           { "label": "Referral Code", "path": "referralCode", "format": "raw", "visible": "always" },
-          { "label": "Pool", "path": "pool", "format": "raw", "visible": "always" }
+          { "label": "Ignored address", "path": "pool", "format": "raw", "visible": "always" }
         ]
       },
       "repayETH(address pool, uint256 amount, address onBehalfOf)": {
@@ -55,7 +55,7 @@
             "params": { "types": ["eoa"], "sources": ["local", "ens"] },
             "visible": "always"
           },
-          { "label": "Pool", "path": "pool", "format": "raw", "visible": "always" }
+          { "label": "Ignored address", "path": "pool", "format": "raw", "visible": "always" }
         ]
       },
       "withdrawETH(address pool, uint256 amount, address to)": {
@@ -81,7 +81,7 @@
             "params": { "types": ["eoa"], "sources": ["local", "ens"] },
             "visible": "always"
           },
-          { "label": "Pool", "path": "pool", "format": "raw", "visible": "always" }
+          { "label": "Ignored address", "path": "pool", "format": "raw", "visible": "always" }
         ]
       },
       "withdrawETHWithPermit(address pool, uint256 amount, address to, uint256 deadline, uint8 permitV, bytes32 permitR, bytes32 permitS)": {
@@ -120,7 +120,7 @@
           { "path": "amount", "format": "amount", "label": "Amount to borrow", "visible": "always" },
           { "path": "@.from", "format": "addressName", "label": "Debtor", "params": { "types": ["eoa"], "sources": ["local", "ens"] } },
           { "label": "Referral Code", "path": "referralCode", "format": "raw", "visible": "always" },
-          { "label": "Pool", "path": "pool", "format": "raw", "visible": "always" }
+          { "label": "Ignored address", "path": "pool", "format": "raw", "visible": "always" }
         ]
       }
     }
