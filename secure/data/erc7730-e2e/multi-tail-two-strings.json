@@ -1,0 +1,39 @@
+{
+  "$schema": "../../specs/erc7730-v2.schema.json",
+  "context": {
+    "$id": "Multi-tail Two Strings",
+    "contract": {
+      "deployments": [
+        {
+          "chainId": 31337,
+          "address": "0x7878787878787878787878787878787878787878"
+        }
+      ]
+    }
+  },
+  "metadata": {
+    "owner": "PQSigner",
+    "contractName": "MultiTailNotes"
+  },
+  "display": {
+    "formats": {
+      "annotate(string subject, string memo)": {
+        "intent": "Annotate",
+        "fields": [
+          {
+            "path": "subject",
+            "label": "Subject",
+            "format": "raw",
+            "visible": "always"
+          },
+          {
+            "path": "memo",
+            "label": "Memo",
+            "format": "raw",
+            "visible": "always"
+          }
+        ]
+      }
+    }
+  }
+}

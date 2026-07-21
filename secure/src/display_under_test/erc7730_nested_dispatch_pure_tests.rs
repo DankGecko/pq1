@@ -42,6 +42,8 @@ use crate::{
 const CHAIN_ID: u64 = 31_337;
 const CHILD_CONTRACT: [u8; 20] = [0x56; 20];
 const CHILD_SELECTOR: [u8; 4] = [0xa9, 0x05, 0x9c, 0xbb];
+const MULTI_TAIL_CONTRACT: [u8; 20] = [0x78; 20];
+const MULTI_TAIL_SIGNATURE: &[u8] = b"annotate(string,string)";
 const SIGNER: [u8; 20] = [0xa5; 20];
 const SAFE_CONTRACT: [u8; 20] = [
     0x41, 0x67, 0x5c, 0x09, 0x9f, 0x32, 0x34, 0x1b, 0xf8, 0x4b, 0xfc, 0x53, 0x82, 0xaf, 0x53, 0x4d,
@@ -132,6 +134,23 @@ fn outer_calldata(child: &[u8]) -> Vec<u8> {
     data
 }
 
+fn two_string_calldata(first: &[u8], second: &[u8]) -> Vec<u8> {
+    let first_padded = first.len().div_ceil(32) * 32;
+    let first_start = 64usize;
+    let second_start = first_start + 32 + first_padded;
+    let second_padded = second.len().div_ceil(32) * 32;
+    let mut data = keccak256(MULTI_TAIL_SIGNATURE)[..4].to_vec();
+    data.extend_from_slice(&word_from_usize(first_start));
+    data.extend_from_slice(&word_from_usize(second_start));
+    data.extend_from_slice(&word_from_usize(first.len()));
+    data.extend_from_slice(first);
+    data.resize(4 + second_start, 0);
+    data.extend_from_slice(&word_from_usize(second.len()));
+    data.extend_from_slice(second);
+    data.resize(4 + second_start + 32 + second_padded, 0);
+    data
+}
+
 fn tx(chain_id: u64, contract: [u8; 20], data_len: usize) -> Eip1559Tx {
     Eip1559Tx {
         chain_id,
@@ -170,6 +189,79 @@ fn contains_row(pages: &super::Pages, expected: &[u8]) -> bool {
             .map_or(0, |position| position + 1);
         &row[..end] == expected
     })
+}
+
+#[test]
+fn rooted_multi_tail_fixture_renders_both_exact_strings() {
+    use pqsigner_erc7730::{
+        binding::cross_check_contract,
+        bundle::verify_erc7730_bundle,
+        render::{
+            calldata_topology::{TailKind, TailTopologyRecord},
+            params::parse as parse_params,
+        },
+    };
+
+    let result = build_e2e();
+    let entry = entry_for(result, &MULTI_TAIL_CONTRACT);
+    let bundle = synth_bundle(&result.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &result.root)
+        .expect("generated multi-tail bundle verifies against the exact E2E root");
+    cross_check_contract(&verified.ir, CHAIN_ID, &MULTI_TAIL_CONTRACT)
+        .expect("verified leaf binds the synthetic deployment");
+
+    let selector: [u8; 4] = keccak256(MULTI_TAIL_SIGNATURE)[..4]
+        .try_into()
+        .expect("selector width");
+    let format = verified
+        .ir
+        .find_format_by_selector(&selector)
+        .expect("multi-tail format table parses")
+        .expect("annotate format is rooted");
+    let fields: Vec<_> = format
+        .fields()
+        .map(|field| field.expect("multi-tail field parses"))
+        .collect();
+    assert_eq!(fields.len(), 2);
+    let topology = parse_params(&verified.ir, fields[0].param_off)
+        .expect("field-zero parameters parse")
+        .dynamic_tail_topology
+        .expect("field zero authenticates the complete topology");
+    assert_eq!(
+        topology.records(),
+        [
+            TailTopologyRecord {
+                slot: 0,
+                kind: TailKind::Blob,
+            },
+            TailTopologyRecord {
+                slot: 1,
+                kind: TailKind::Blob,
+            },
+        ]
+    );
+    assert!(
+        parse_params(&verified.ir, fields[1].param_off)
+            .expect("field-one parameters parse")
+            .dynamic_tail_topology
+            .is_none(),
+        "the format-level marker is canonical only on field zero"
+    );
+
+    let subject = b"alpha subject";
+    let memo = b"exact memo";
+    let calldata = two_string_calldata(subject, memo);
+    let tx = tx(CHAIN_ID, MULTI_TAIL_CONTRACT, calldata.len());
+    let pages =
+        super::erc7730::render_erc7730_pages(&tx, &calldata, &verified, None, &NameResolver::new())
+            .expect("rooted two-string format renders through the production renderer");
+    for expected in [b"Annotate".as_slice(), b"Subject", subject, b"Memo", memo] {
+        assert!(
+            contains_row(&pages, expected),
+            "missing exact clear-sign row {:?}",
+            String::from_utf8_lossy(expected)
+        );
+    }
 }
 
 #[test]
