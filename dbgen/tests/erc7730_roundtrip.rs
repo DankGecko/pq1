@@ -4354,12 +4354,12 @@ fn registry_scalar_interpolation_enrollment_is_explicit_and_bounded() {
         "only covered deployment-static token identities may retain interpolation"
     );
     assert_eq!(
-        candidate_deployment_count, 78,
+        candidate_deployment_count, 23,
         "reviewed candidate set drift"
     );
     assert_eq!(
         candidate_deployment_count - leaf_format_count,
-        72,
+        17,
         "deployment-dynamic or metadata-uncovered candidates must omit the tag"
     );
 }

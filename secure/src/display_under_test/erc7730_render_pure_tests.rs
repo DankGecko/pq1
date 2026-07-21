@@ -15936,3 +15936,382 @@ fn production_1inch_v6_omitted_deployments_and_sibling_controls_hard_refuse() {
         }
     }
 }
+
+#[test]
+fn production_layerswap_routes_render_only_the_signed_funding_action() {
+    const CHAIN_ID: u64 = 1;
+    const SOURCE: &str = "calldata-LayerswapDepository.json";
+    const NATIVE: &str = "depositNative(bytes32,address)";
+    const ERC20: &str = "depositERC20(bytes32,address,address,uint256)";
+    const ADMIN: &str = "addToWhitelist(address)";
+    const NATIVE_SELECTOR: [u8; 4] = [0x80, 0xa6, 0xde, 0x92];
+    const ERC20_SELECTOR: [u8; 4] = [0xf4, 0x37, 0x1f, 0x63];
+    const ADMIN_SELECTOR: [u8; 4] = [0xe4, 0x32, 0x52, 0xd7];
+
+    assert_eq!(&keccak256(NATIVE.as_bytes())[..4], &NATIVE_SELECTOR);
+    assert_eq!(&keccak256(ERC20.as_bytes())[..4], &ERC20_SELECTOR);
+    assert_eq!(&keccak256(ADMIN.as_bytes())[..4], &ADMIN_SELECTOR);
+
+    let registry = build_registry();
+    let source_entries = registry
+        .entries
+        .iter()
+        .filter(|entry| entry.source.file_name().and_then(|name| name.to_str()) == Some(SOURCE))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        source_entries.len(),
+        1,
+        "only the source-verified Ethereum Layerswap deployment may render"
+    );
+    let entry = find_leaf(registry, SOURCE, CHAIN_ID);
+    assert_eq!(
+        hex::encode(entry.contract),
+        "e226e4825cb215abafad98fdd400583eab6a594f"
+    );
+    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &registry.root)
+        .expect("verify curated Layerswap descriptor");
+    assert_eq!(
+        cross_check_contract(&verified.ir, CHAIN_ID, &entry.contract),
+        Ok(())
+    );
+    assert_eq!(verified.ir.format_count(), Ok(2));
+
+    let signer = [0x77; 20];
+    let resolver = NameResolver::new();
+    let reference_id = [0x11; 32];
+    let receiver = [0x22; 20];
+
+    let native_calldata = calldata_static(
+        NATIVE,
+        &[reference_id, abi_address_word(receiver)],
+    );
+    assert_eq!(&native_calldata[..4], &NATIVE_SELECTOR);
+    let mut native_tx = envelope(CHAIN_ID, entry.contract);
+    native_tx.value = u256_from_u64(1_000_000_000_000_000_000);
+    let native = render_erc7730_pages_with_signer_checked(
+        &native_tx,
+        &native_calldata,
+        &verified,
+        None,
+        &resolver,
+        &signer,
+    )
+    .expect("render Layerswap native funding");
+    assert_eq!(
+        native.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert!(native.transcript_receipt.range_matches(&native.pages, 0));
+    assert_all_pages_printable(&native.pages);
+    let native_intent = page_strs(&native.pages, intent_page_index(&native.pages))[0].clone();
+    assert_eq!(native_intent, "Forward ETH");
+    assert!(!native_intent.to_ascii_lowercase().contains("swap"));
+    assert_raw_word_pages(&native.pages, "Reference ID", &reference_id);
+    assert_full_address_field_page(&native.pages, "Receiver", &receiver);
+    let native_amount = page_strs(
+        &native.pages,
+        find_page_by_label(&native.pages, "ETH amount"),
+    )
+    .concat();
+    assert!(
+        native_amount.contains("1 ETH"),
+        "exact forwarded value missing: {native_amount:?}"
+    );
+
+    let assert_native_mutation = |tx: &Eip1559Tx, calldata: &[u8], operand: &str| {
+        let mutated = render_erc7730_pages_with_signer_checked(
+            tx,
+            calldata,
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        )
+        .unwrap_or_else(|error| panic!("render mutated native {operand}: {error:?}"));
+        assert_ne!(
+            mutated.pages.as_slice(),
+            native.pages.as_slice(),
+            "mutating signed native {operand} must change trusted pages"
+        );
+        assert!(
+            !native
+                .transcript_receipt
+                .exact_match(&mutated.transcript_receipt),
+            "mutating signed native {operand} must change transcript receipt"
+        );
+    };
+
+    let mut mutated_id = reference_id;
+    mutated_id[31] ^= 1;
+    let mutated_id_calldata = calldata_static(NATIVE, &[mutated_id, abi_address_word(receiver)]);
+    assert_native_mutation(&native_tx, &mutated_id_calldata, "reference id");
+
+    let mut mutated_receiver = receiver;
+    mutated_receiver[19] ^= 1;
+    let mutated_receiver_calldata = calldata_static(
+        NATIVE,
+        &[reference_id, abi_address_word(mutated_receiver)],
+    );
+    assert_native_mutation(&native_tx, &mutated_receiver_calldata, "receiver");
+
+    let mut mutated_value_tx = envelope(CHAIN_ID, entry.contract);
+    mutated_value_tx.value = u256_from_u64(2_000_000_000_000_000_000);
+    assert_native_mutation(&mutated_value_tx, &native_calldata, "value");
+
+    let mut trailing_native = native_calldata.clone();
+    trailing_native.push(0);
+    assert!(matches!(
+        render_erc7730_pages_with_signer_checked(
+            &native_tx,
+            &trailing_native,
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 static calldata trailing"
+        ))
+    ));
+
+    let token: [u8; 20] = hex::decode("a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let amount = u256_from_u64(1_000_000);
+    let token_metadata = Erc20Metadata {
+        chain_id: CHAIN_ID,
+        contract: token,
+        decimals: 6,
+        name: b"USD Coin",
+        symbol: b"USDC",
+    };
+    let erc20_calldata = calldata_static(
+        ERC20,
+        &[
+            reference_id,
+            abi_address_word(token),
+            abi_address_word(receiver),
+            amount.0,
+        ],
+    );
+    assert_eq!(&erc20_calldata[..4], &ERC20_SELECTOR);
+    let erc20_tx = envelope(CHAIN_ID, entry.contract);
+    let erc20 = render_erc7730_pages_with_signer_checked(
+        &erc20_tx,
+        &erc20_calldata,
+        &verified,
+        Some(&token_metadata),
+        &resolver,
+        &signer,
+    )
+    .expect("render Layerswap ERC20 funding");
+    assert_eq!(
+        erc20.transcript_receipt.state_code(),
+        INTENT_PUBLICATION_STATIC
+    );
+    assert!(erc20.transcript_receipt.range_matches(&erc20.pages, 0));
+    assert_all_pages_printable(&erc20.pages);
+    let erc20_intent = page_strs(&erc20.pages, intent_page_index(&erc20.pages))[0].clone();
+    assert_eq!(erc20_intent, "Forward token");
+    assert!(!erc20_intent.to_ascii_lowercase().contains("swap"));
+    assert_raw_word_pages(&erc20.pages, "Reference ID", &reference_id);
+    assert_full_address_field_page(&erc20.pages, "Token contract", &token);
+    assert_full_address_field_page(&erc20.pages, "Receiver", &receiver);
+    let requested_amount = page_strs(
+        &erc20.pages,
+        find_page_by_label(&erc20.pages, "Requested amount"),
+    )
+    .concat();
+    assert!(
+        requested_amount.contains("1 USDC"),
+        "signed transferFrom request missing: {requested_amount:?}"
+    );
+
+    let assert_erc20_mutation = |calldata: &[u8], operand: &str| {
+        match render_erc7730_pages_with_signer_checked(
+            &erc20_tx,
+            calldata,
+            &verified,
+            Some(&token_metadata),
+            &resolver,
+            &signer,
+        ) {
+            Ok(mutated) => {
+                assert_ne!(
+                    mutated.pages.as_slice(),
+                    erc20.pages.as_slice(),
+                    "mutating signed ERC20 {operand} must change trusted pages"
+                );
+                assert!(
+                    !erc20
+                        .transcript_receipt
+                        .exact_match(&mutated.transcript_receipt),
+                    "mutating signed ERC20 {operand} must change transcript receipt"
+                );
+            }
+            Err(_) => {}
+        }
+    };
+    let mut mutation_words = [
+        reference_id,
+        abi_address_word(token),
+        abi_address_word(receiver),
+        amount.0,
+    ];
+    for (word, operand) in [
+        (0usize, "reference id"),
+        (1, "token"),
+        (2, "receiver"),
+        (3, "requested amount"),
+    ] {
+        mutation_words[word][31] ^= 1;
+        let mutated = calldata_static(ERC20, &mutation_words);
+        assert_erc20_mutation(&mutated, operand);
+        mutation_words[word][31] ^= 1;
+    }
+
+    let mut trailing_erc20 = erc20_calldata.clone();
+    trailing_erc20.push(0);
+    assert!(matches!(
+        render_erc7730_pages_with_signer_checked(
+            &erc20_tx,
+            &trailing_erc20,
+            &verified,
+            Some(&token_metadata),
+            &resolver,
+            &signer,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::Reject(
+            "7730 static calldata trailing"
+        ))
+    ));
+
+    for (tx, calldata, metadata, route) in [
+        (&native_tx, native_calldata.as_slice(), None, NATIVE),
+        (
+            &erc20_tx,
+            erc20_calldata.as_slice(),
+            Some(&token_metadata),
+            ERC20,
+        ),
+    ] {
+        let mut proofs = DispatchPageProofs::new();
+        proofs.fail_initialize();
+        let pages = pick_sign_pages(
+            tx,
+            calldata,
+            &signer,
+            None,
+            None,
+            None,
+            Some(&verified),
+            metadata,
+            None,
+            &resolver,
+            &mut proofs,
+        )
+        .unwrap_or_else(|error| panic!("dispatcher selects {route}: {error:?}"));
+        let mut verdict = crate::fi::FAIL_SENTINEL;
+        proofs.final_set_proof(&pages, tx, false, &mut verdict);
+        assert_eq!(verdict, crate::fi::OK_SENTINEL);
+
+        let mut absent = DispatchPageProofs::new();
+        absent.fail_initialize();
+        assert!(
+            pick_sign_pages(
+                tx,
+                calldata,
+                &signer,
+                None,
+                None,
+                None,
+                None,
+                metadata,
+                None,
+                &resolver,
+                &mut absent,
+            )
+            .is_err(),
+            "known {route} must hard-refuse when its proof is absent"
+        );
+    }
+
+    assert!(registry
+        .known_calls
+        .contains(&(CHAIN_ID, entry.contract, NATIVE_SELECTOR)));
+    assert!(registry
+        .known_calls
+        .contains(&(CHAIN_ID, entry.contract, ERC20_SELECTOR)));
+    assert!(registry
+        .known_calls
+        .contains(&(CHAIN_ID, entry.contract, ADMIN_SELECTOR)));
+    assert!(pqsigner_erc7730::known_calls::may_contain(
+        &registry.known_calls_bloom,
+        CHAIN_ID,
+        &entry.contract,
+        &ADMIN_SELECTOR
+    ));
+    assert!(matches!(
+        render_erc7730_pages_with_signer_checked(
+            &erc20_tx,
+            &ADMIN_SELECTOR,
+            &verified,
+            None,
+            &resolver,
+            &signer,
+        ),
+        Err(crate::tx::erc7730_render::RenderErr::NoFormat)
+    ));
+    let mut omitted_admin = DispatchPageProofs::new();
+    omitted_admin.fail_initialize();
+    assert!(pick_sign_pages(
+        &erc20_tx,
+        &ADMIN_SELECTOR,
+        &signer,
+        None,
+        None,
+        None,
+        Some(&verified),
+        None,
+        None,
+        &resolver,
+        &mut omitted_admin,
+    )
+    .is_err());
+
+    let optimism_chain = 10;
+    assert!(!registry.entries.iter().any(|candidate| {
+        candidate.source.file_name().and_then(|name| name.to_str()) == Some(SOURCE)
+            && candidate.chain_id == optimism_chain
+    }));
+    assert!(registry
+        .known_calls
+        .contains(&(optimism_chain, entry.contract, NATIVE_SELECTOR)));
+    let optimism_tx = envelope(optimism_chain, entry.contract);
+    let mut excluded = DispatchPageProofs::new();
+    excluded.fail_initialize();
+    assert!(pick_sign_pages(
+        &optimism_tx,
+        &native_calldata,
+        &signer,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        &resolver,
+        &mut excluded,
+    )
+    .is_err());
+
+    assert_eq!(
+        cross_check_contract(&verified.ir, optimism_chain, &entry.contract),
+        Err(BindingError::ChainIdMismatch)
+    );
+    let mut tampered_bundle = bundle;
+    *tampered_bundle.last_mut().expect("proof byte") ^= 1;
+    assert!(verify_erc7730_bundle(&tampered_bundle, &registry.root).is_err());
+}

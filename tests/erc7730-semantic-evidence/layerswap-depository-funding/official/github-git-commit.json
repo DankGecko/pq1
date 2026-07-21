@@ -1,0 +1,35 @@
+{
+  "author": {
+    "date": "2026-03-24T10:44:06Z",
+    "email": "nerses.asaturyan@gmail.com",
+    "name": "nerses-asaturyan"
+  },
+  "committer": {
+    "date": "2026-03-24T10:44:06Z",
+    "email": "nerses.asaturyan@gmail.com",
+    "name": "nerses-asaturyan"
+  },
+  "html_url": "https://github.com/layerswap/layerswap-depository/commit/a7a4ccd89f0fb5046f8d0053283da6e36c6b638c",
+  "message": "fix: handle fee-on-transfer tokens, prevent same-address update, and use Ownable2Step",
+  "node_id": "C_kwDORlNMyNoAKGE3YTRjY2Q4OWYwZmI1MDQ2ZjhkMDA1MzI4M2RhNmUzNmM2YjYzOGM",
+  "parents": [
+    {
+      "html_url": "https://github.com/layerswap/layerswap-depository/commit/e53e0b9b5145a60fbe45fe132b82740c5560f7b7",
+      "sha": "e53e0b9b5145a60fbe45fe132b82740c5560f7b7",
+      "url": "https://api.github.com/repos/layerswap/layerswap-depository/git/commits/e53e0b9b5145a60fbe45fe132b82740c5560f7b7"
+    }
+  ],
+  "sha": "a7a4ccd89f0fb5046f8d0053283da6e36c6b638c",
+  "tree": {
+    "sha": "23e6d14d7a81950582f49dcf93a528abac9223d0",
+    "url": "https://api.github.com/repos/layerswap/layerswap-depository/git/trees/23e6d14d7a81950582f49dcf93a528abac9223d0"
+  },
+  "url": "https://api.github.com/repos/layerswap/layerswap-depository/git/commits/a7a4ccd89f0fb5046f8d0053283da6e36c6b638c",
+  "verification": {
+    "payload": null,
+    "reason": "unsigned",
+    "signature": null,
+    "verified": false,
+    "verified_at": null
+  }
+}

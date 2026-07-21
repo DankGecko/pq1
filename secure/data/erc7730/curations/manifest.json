@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 813544,
-    "sha256": "e7be69422d229579fcc54feea41196e0371bb10cf9857e746cda6365c9aaaf13"
+    "bytes": 813862,
+    "sha256": "5c055e06f936f6d6125d2f40b78ef7e5d8d8ac1bc39dc377188e05860b10fd86"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -285,9 +285,9 @@
     {
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
-      "files": 24,
-      "bytes": 2041998,
-      "sha256": "d58109b8862bd4f160d129a9c5febbf567aa3dd2dd1319aa0c88bc2b577018ae"
+      "files": 25,
+      "bytes": 2068838,
+      "sha256": "3ac333a8658999367530fb227fd0b041e035067fe861f78a38de937c587f2d87"
     },
     {
       "path": "pqsigner-erc7730",
@@ -457,6 +457,13 @@
       "upstream_sha256": "3f9af2a41ced1c6c8de90ae1c1be9a5a42ad5fc99ca77369a3f4c92e315a48a9",
       "replacement_bytes": 3454,
       "replacement_sha256": "bfe3eca47fb53a433547a93069a74647f804148419aa96795512490f13b3d1c9"
+    },
+    {
+      "path": "registry/layerswap/calldata-LayerswapDepository.json",
+      "upstream_bytes": 9526,
+      "upstream_sha256": "b9cc03aebb3c30fc8b189345fb3f1416601d3ee6bc6af8f4fac09fb0ab06f13d",
+      "replacement_bytes": 9844,
+      "replacement_sha256": "ebf6905de06763dd8489bd1d6893214155cc425ed9b13850efdae9439a28976a"
     },
     {
       "path": "registry/lido/calldata-WithdrawalQueueERC721.json",

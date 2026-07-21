@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "scope": "Ethereum LayerswapDepository depositNative and depositERC20 funding semantics",
+  "captured_at_utc": "2026-07-21T18:32:47Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
+  "boundary": "Only the two declared funding routes at Ethereum chain 1 address 0xE226E4825CB215aBaFAd98fdd400583eAb6a594f are admitted. The call forwards signed funds to the signed receiver; it does not sign or guarantee an off-chain swap, destination asset, output, beneficiary, timing, fee, fulfillment, refund, or success. Administrative routes, every other deployment, fallback, blind signing, hardware, production, and shipment remain outside this authority.",
+  "fixed_block": {
+    "chain_id": 1,
+    "number": 25582700,
+    "number_hex": "0x1865c6c",
+    "hash": "0xdb61c00eb37a578f0eae2918a5a0ca4ef276ef3eacd7d0df1d4a7b1bedf38631",
+    "parent_hash": "0xb7f7eedcac4235fc9b69f3e4f19fe27ab5ed628bfeb35c7c9d7e3ce02ffff97d",
+    "state_root": "0x4dfb03c4196b479af7cce62a79339002b002910a420ec52ea44e8b69656e966c",
+    "timestamp": 1784656175,
+    "timestamp_utc": "2026-07-21T17:49:35Z"
+  },
+  "contracts": {
+    "accepted_deployment": "0xE226E4825CB215aBaFAd98fdd400583eAb6a594f",
+    "transcription_typo": "0xE2260D5eF5d71467f0C1AacC3B6e5Ab6f6B8594f",
+    "runtime_bytes": 3876,
+    "runtime_decoded_sha256": "8ebd4663a71c87b52791e9b9951fa63201e8ecb0734b2e97d109404e0ef19089",
+    "direct_not_proxy": true
+  },
+  "routes": [
+    {
+      "canonical_signature": "depositNative(bytes32,address)",
+      "selector": "0x80a6de92",
+      "state_mutability": "payable",
+      "signed_inputs": [
+        "id",
+        "receiver",
+        "transaction value"
+      ]
+    },
+    {
+      "canonical_signature": "depositERC20(bytes32,address,address,uint256)",
+      "selector": "0xf4371f63",
+      "state_mutability": "nonpayable",
+      "signed_inputs": [
+        "id",
+        "token",
+        "receiver",
+        "requested amount"
+      ]
+    }
+  ],
+  "official_source": {
+    "repository": "https://github.com/layerswap/layerswap-depository",
+    "commit": "a7a4ccd89f0fb5046f8d0053283da6e36c6b638c",
+    "tree": "23e6d14d7a81950582f49dcf93a528abac9223d0",
+    "primary_path": "src/LayerswapDepository.sol",
+    "primary_sha256": "cec2f97ae17b70c76eddf12238995ef1bb6c7c791c4c8bedacb71fecad451bcb"
+  },
+  "verified_source": {
+    "provider": "Blockscout Ethereum",
+    "record": "blockscout/LayerswapDepository.json",
+    "fully_verified": true,
+    "changed_bytecode": false,
+    "primary_path": "src/LayerswapDepository.sol",
+    "primary_sha256": "cec2f97ae17b70c76eddf12238995ef1bb6c7c791c4c8bedacb71fecad451bcb",
+    "compiler": "v0.8.29+commit.ab55807c",
+    "evm_version": "prague",
+    "optimizer_enabled": true,
+    "optimizer_runs": 200,
+    "source_files": 20
+  },
+  "rpc": {
+    "providers": [
+      "MEV Blocker",
+      "Tenderly",
+      "Flashbots"
+    ],
+    "historical_query_binding": "Every eth_getCode request uses EIP-1898 blockHash plus requireCanonical:true."
+  },
+  "descriptor": {
+    "relative_path": "registry/layerswap/calldata-LayerswapDepository.json",
+    "admitted_deployments": 1,
+    "admitted_formats": 2,
+    "refusal_policy": "Every other registry-declared deployment and format remains in the exact known-call inventory but emits no authenticated leaf or format."
+  },
+  "semantics": {
+    "native": "The call requires nonzero msg.value and a currently whitelisted signed receiver, emits the signed id/receiver/value, and forwards the complete value to that receiver or reverts.",
+    "erc20": "The call requires nonzero signed token/amount and a currently whitelisted signed receiver, invokes safeTransferFrom(msg.sender, receiver, amount), and reports the receiver balance delta so fee-on-transfer output may be lower than the signed requested amount.",
+    "offchain_boundary": "The signed id only correlates an off-chain order. A backend may later fulfill a destination order, but no destination, output, fee, deadline, beneficiary, completion, or success condition is signed by these calls.",
+    "wording_decision": "Registry Swap wording overpromised an off-chain outcome. The curated display promises only forwarding/funding and names the ERC-20 amount as requested rather than received."
+  },
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "f5d39b8f2c1d2ae5cb5ce7b18d7b3e812abf4746fb8a7cfe87944bedad4f60fe"
+    },
+    {
+      "path": "abi/LayerswapDepository.deposit-routes.abi.json",
+      "sha256": "4d3e23d26c936f2eaffec4717444615e27f4cbd9a145316716a78031eb4a3891"
+    },
+    {
+      "path": "blockscout/LayerswapDepository.json",
+      "sha256": "3b084ebbcb53ce316b3a24efe9c236637e6e70a2b0bdebf483e5df390ffc44c7"
+    },
+    {
+      "path": "collect.sh",
+      "sha256": "e046baed257ef9717288230b672594a1225a574d9dd4eec74e6ac2578bd38ea8"
+    },
+    {
+      "path": "compiler/LayerswapDepository.standard-input.json",
+      "sha256": "d62c8e82e3b0b912fa233355c8df7387968b5deddfbface7b8e0d2a3867f5057"
+    },
+    {
+      "path": "compiler/LayerswapDepository.standard-output.json",
+      "sha256": "9fe42fda28310c109c8c68db2ee7eb5cb808d2343c6aa73bf7c2639f626f6ccb"
+    },
+    {
+      "path": "compiler/solc-0.8.29.version.txt",
+      "sha256": "e0845a65e46f19f886127a88297c7df4ff90ecdb5275453071e9ea600e829de7"
+    },
+    {
+      "path": "official/README.md",
+      "sha256": "ce0c0bd7628a12ad6bec3c0be8b2a26a94c5e1ae42a2b255938f7f1891261779"
+    },
+    {
+      "path": "official/github-git-commit.json",
+      "sha256": "62a94b7c71ea3cda40fe98b082fef92777e52120348ae41c6cc5f428ca5b3822"
+    },
+    {
+      "path": "official/src/LayerswapDepository.sol",
+      "sha256": "cec2f97ae17b70c76eddf12238995ef1bb6c7c791c4c8bedacb71fecad451bcb"
+    },
+    {
+      "path": "rpc/request.json",
+      "sha256": "f682048eeff2e3d0761a5c7f3f714ad5b0a98ce75c9d327936a7304ea49231f5"
+    },
+    {
+      "path": "rpc/response-flashbots.json",
+      "sha256": "5e11b27485d0c91d960b62901559f8b529260fd6266f4f0bf0d1468269c26771"
+    },
+    {
+      "path": "rpc/response-mevblocker.json",
+      "sha256": "5e11b27485d0c91d960b62901559f8b529260fd6266f4f0bf0d1468269c26771"
+    },
+    {
+      "path": "rpc/response-tenderly.json",
+      "sha256": "5e11b27485d0c91d960b62901559f8b529260fd6266f4f0bf0d1468269c26771"
+    },
+    {
+      "path": "runtime/LayerswapDepository.ethereum-mainnet.hex",
+      "sha256": "4a80ee891e2a169e94d0d38c48e7c05dac8ace040f428ce2a5200de48d42cd44"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/access/Ownable.sol",
+      "sha256": "38578bd71c0a909840e67202db527cc6b4e6b437e0f39f0c909da32c1e30cb81"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/access/Ownable2Step.sol",
+      "sha256": "c75345d7b9feef17ae29f2a800ca2f65f8021cf80436a41d6ec00f57f5180f36"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/interfaces/IERC1363.sol",
+      "sha256": "9c3a75a925a6dac9e88b03cddc58d42fe3131b0aaaad84408521f3f7af2f991b"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/interfaces/IERC165.sol",
+      "sha256": "dfb3f56fa928a7c6cae41a7ce2c86b9210fa18d33fa26389099d66a0fa790368"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/interfaces/IERC20.sol",
+      "sha256": "0158e2d3e0e28bedd99eec13dcf1a8aa3a70a5b7e4bb2ad709609c95fcc740d1"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol",
+      "sha256": "01b6f5c4fa45fd38822b286ecef6daf983d27306dd6362496fa71b3e4600b72c"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol",
+      "sha256": "c2394cb2a327f234711da34884947f4aa0f6dd2791d1d6303a0c7acfaf81bca3"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/utils/Arrays.sol",
+      "sha256": "d0a51abdcac27c02821939ed07419b88950bac4117ee75e105010674ef6593c0"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/utils/Comparators.sol",
+      "sha256": "52fb1c8f57967d42a3214bde4a8a414ab25c2e3a844d00e171ca56487024e009"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/utils/Context.sol",
+      "sha256": "847fda5460fee70f56f4200f59b82ae622bb03c79c77e67af010e31b7e2cc5b6"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/utils/Panic.sol",
+      "sha256": "270fc8401c1a13fae6a7a4a2dd6e381b95d658896701e51f0d3e2688acab3dec"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/utils/Pausable.sol",
+      "sha256": "2c26130748f06552c65ca74d89eaf78c9324a3cbac3ba6fdbadaa8beba0cb0b4"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol",
+      "sha256": "94e409e8f6e3184236651a6cc2b1a6a3ea0f0a25eb85b71e524ad5791bb2fbc8"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/utils/SlotDerivation.sol",
+      "sha256": "f8e5f2c672918a21720ce3b5e2637c6366aa0652d085c0478fc0d0d6edb76386"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/utils/StorageSlot.sol",
+      "sha256": "75704538dcb223239280c6726d9a31cf769a7816718517c997fc7d63bdb70778"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/utils/introspection/IERC165.sol",
+      "sha256": "9055c2994b37dea1a41b7b7926dcb510f05dbe2540b0aafc5fbee9558fffd0ca"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/utils/math/Math.sol",
+      "sha256": "bdfdbe133991c0c78042957ff5cd97167926fcaf6d15664f3835a076cb066457"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/utils/math/SafeCast.sol",
+      "sha256": "5779bc848bde39f1ad7bc02b4f708a0040888e0083b1a33f119cd94639350134"
+    },
+    {
+      "path": "source/verified/lib/openzeppelin-contracts/contracts/utils/structs/EnumerableSet.sol",
+      "sha256": "76c7af99039281b3075780b21b4e2f6be0166d09f89c24171b4bed3b1961c810"
+    },
+    {
+      "path": "source/verified/src/LayerswapDepository.sol",
+      "sha256": "cec2f97ae17b70c76eddf12238995ef1bb6c7c791c4c8bedacb71fecad451bcb"
+    }
+  ]
+}
