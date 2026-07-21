@@ -2022,3 +2022,277 @@ the canary's own qed. EasyCrypt halts at the first error, so nothing before 8886
 (including `EUFNAGCMA_FLSLXMSSMTTWCESNPRF_Unfolded`) typechecks and every proof closes. So `CERTIFIED-0-ADMIT`
 on the unfold file is now verified at THREE independent levels (build track → workflow auditor → this session),
 matching the earlier component-theorem verification standard.
+
+### 2026-07-21 — Wave 1: item 1 (S-TCR summand) RESOLVED at the honest level; item 4 (PRF hop) STRUCTURE + composition, 2 legs open
+
+First items on the new fast require-base (XmssmtCC_All; ~2s compiles). Both audited HONEST, neither overstates.
+
+**ITEM 1 — S-TCR summand: DONE at the honest level (drafts/stcr_reduction_wip.ec, CERTIFIED-0-ADMIT,
+canary-verified).** Resolves the "summand 4 is not a standard assumption" caveat correctly:
+ - `summand4_le_std` (in exact component-theorem syntax): bounds summand 4 by the standard single-member
+   SM-DT-TCR(+C) 2nd-preimage advantage on member `thfc dfC`, consuming the PROVEN predicate bridge
+   `S_TCR_C_Int_MA_win_implies_2ndpreimage`. So the +C summand now rests on **the paper's named collection-aware
+   S-TCR(+C) / InSec notion (Def C.1, Thm 5.2)**, and its winning event is a genuine standard TCR collision.
+   `disj_lists_nil` documents the twsMA=[] collapse to verbatim Def C.1. 0 axioms; two modelling hyps
+   (emb_in_len/emb_in_inj) THREADED (not axioms), both negative-control-verified load-bearing.
+ - **HONEST NAMING CAVEAT (audit-flagged):** the RHS is still the paper's Def C.1 INTERACTIVE notion (counter/
+   grind oracle), NOT a plain non-interactive SM-DT-TCR; the `std`/`asStd` naming could momentarily mislead.
+ - **PART 2 — reduction to PLAIN SM-DT-TCR: BLOCKED, and the block is a MACHINE-CHECKED FINDING.** Two
+   obstruction lemmas (`grind_via_OC_breaks_disj`, `readd_tweak_breaks_dist`) prove: the +C challenge oracle
+   grinds a pp-dependent counter and RETURNS it; a reduction can't reproduce that in the standard oracle
+   interface (pp hidden until find) without recording the target tweak into twsO or twsOC, falsifying
+   dist/disj_lists on exactly the winning runs. ⇒ **the +C message-compression layer genuinely needs the
+   counter-oracle S-TCR(+C) assumption, not plain SM-DT-TCR** — a rigorous reason (matching the paper's ROM
+   argument), not a hand-wave. This is the correct, final resolution: summand 4 IS the paper's assumption, and
+   here is why it can be nothing weaker.
+
+**ITEM 4 — PRF hop: STRUCTURE + composition proved, 2 byequiv legs OPEN (drafts/prf_hop_wip.ec, 2 admits).**
+ - Defined `FL_SL_XMSS_MT_C_ES_PRF` (PRF-keyed +C-hypertree keygen), `EUF_NAGCMA_FLSLXMSSMTTWCESPRF` (PRF game),
+   and `R_SKGPRF_FLSLXMSSMTC` (genuine R_SKGPRF-style reduction to the SKG PRF property) — all TYPECHECK.
+ - `SKGPRF_hop` (Pr[PRF-game] <= Pr[NPRF-game] + |SKG-PRF term|) and `SKGPRF_hop_composed` (folds into the
+   component theorem) are ADMIT-FREE proofs — but they CONSUME two admitted byequiv legs, so the composed
+   bound is CONTINGENT.
+ - **The 2 open legs (precise):** `EqPr_PRF_false` (setup seq: `sim` cannot carry the keygen-LOCAL{1} =
+   O_PRF-GLOBAL{2} key equality + the RHS-only `!b{2}` predicate across A.choose + the abstract OC.init) and
+   `EqPr_NPRF_true` (not attempted). A known EC pattern — closeable with an explicit invariant instead of sim.
+ - **Scope honesty (disclosed):** stated at the HYPERTREE level; MKG is N/A here (only SKG applies); does NOT
+   compose to a full-scheme PRF hop (FORS+C keys + MKG term deferred with the FORS+C item).
+
+Net: item 1 resolved honestly (with a bonus impossibility result); item 4 is structurally there with 2 focused
+byequiv legs to close. Remaining: item 3 (FORS+C wiring), item 2 (R_top soundness), item 5 (capstone).
+
+### 2026-07-21 — Wave 2: item 4 (PRF hop) CLOSED; item 3 (FORS+C wiring) milestone met (R_top_C typechecks)
+
+Both tracks audited PASS, no overstatement (independent forced-recompile + canary + negative controls).
+
+**ITEM 4 — PRF hop: CLOSED (drafts/prf_hop_wip.ec, CERTIFIED-0-ADMIT).** The two open byequiv legs are now
+machine-checked admit-free:
+ - `EqPr_PRF_false` (b=false) and `EqPr_NPRF_true` (b=true) closed via the standard early-vs-late sampling swap:
+   swap the RHS O_PRF init block DOWN past the abstract prefix (ad<-adz; ps<$; OC.init; A.choose) so NO one-sided
+   fact crosses the direct abstract OC.init (which rejects `call (: ={glob OC})` — the exact XmssmtCC_All.ec:4683
+   branch-1 precedent), carrying the one-sided b/ad via a 3-arg conseq side-2 hoare (the Reprogramming.ec:312
+   idiom). False leg couples ss{1}=k{2} at the cube (rcondf b=false); true leg ports MM45's lazy/eager
+   map-domain invariant WOTS-only with per-query freshness via HA.eq_adrs_idxsq address-injectivity.
+ - `SKGPRF_hop` + `SKGPRF_hop_composed` are now UNCONDITIONAL (previously consumed the 2 admits). smt() appears
+   only in the top-level hop arithmetic (a<=b+|a-b|), never forcing a byequiv (audit-confirmed). Statements
+   byte-identical to the admit-era versions. 0 admits / 0 axioms / 0 new premises (one stdlib `FMap` import).
+   Two negative controls (flip a freshness index; off-by-one domain range) both FAIL → injectivity + invariant
+   load-bearing. Scope unchanged: hypertree-level SKG hop; full-scheme MKG term still deferred with FORS+C.
+
+**ITEM 3 — FORS+C wiring: milestone met (drafts/rtop_forsc_wip.ec, R_top_C typechecks CERTIFIED-0-ADMIT).**
+`R_top_C : Adv_EUFNAGCMA_FLSLXMSSMTTWCESNPRF` is the C10 FORS+C variant of the base R_top (XmssmtCC_All.ec:9443).
+ - MODEL CHOICE (decisive, not a shortcut): target the DEPLOYED C10 FORS model, not the paper model. The base's
+   top sig type `sigSPHINCSPLUSTWC = mkey * FTWES.sigFORSTW * sigFLSLXMSSMTTWC` (XmssmtCC_All.ec:9419) is ALREADY
+   the C10 shape (mkey*sigFORSTW, no counter). So my 5-delta plan's "3-arg grinding mco" + "mkeygen swap" are
+   PAPER-model deltas that are legitimately N/A here (FTWES.mco is 2-arg; the FORS cube is built via OC.query,
+   no keygen call) — honestly explained, audit-confirmed not faked.
+ - THE ONE REAL +C DELTA, wired concretely: O_CMA.sign replaces R_top's memoized uniform draw
+   (`mk <$ dmkey; mmap`) with the C10 fresh CONDITIONED draw `mk <$ dcond dmkey (good_fors m)` (mmap dropped),
+   where `good_fors m mk = (nth witness (FTWES.g (FTWES.mco mk m)) (k-1)).`3 = 0` is `predC_fors` UNFOLDED onto
+   FTWES's concrete g/mco — so the simulated oracle's grinding-conditioning is tied to the SAME digest the
+   reduction evaluates (faithful; not an abstract stand-in). choose / FTWES.mco / FL_FORS_ES_NPRF.sign /
+   pkFORS_from_sigFORSTW are byte-identical to R_top (all +C-invariant).
+ - HONEST RESIDUAL (deferred to the soundness track, NOT a typecheck barrier): `good_pos` / `p_nu` — the
+   positive-good-mass assumption (for some mk, good_fors holds); `dcond` is well-typed for any predicate (zero
+   good-mass degrades to dnull, a dead signer, rather than failing to compile). good_pos is a NAMED assumption
+   already carried in FORS_C10.ec, needed only for the LOSS term — the FORS-side analogue of Grind.ec's
+   grind_fails/p_nu WOTS carry. Reduction SOUNDNESS (item 2) explicitly deferred, not claimed.
+
+STATUS OF THE 5 ITEMS: item 1 RESOLVED (honest relabel + impossibility finding); item 4 CLOSED; item 3
+milestone (R_top_C typechecks). REMAINING: item 2 (R_top_C soundness — the crux) then item 5 (capstone).
+
+### 2026-07-21 — SCOPING item 2 (R_top_C soundness) + THE ASSUMPTION LEDGER (read this before any capstone claim)
+
+A read-only source scope of the top reduction (cite-checked) plus an advisor pass reset the plan. Two load-bearing
+facts, recorded here so they gate every downstream claim:
+
+**FACT A — item 2's LHS object does not exist yet.** The base (XmssmtCC_All.ec) defines and well-formedness-AUDITS
+R_top but proves NO soundness probability bound; it says so itself twice (C.7 at :9889-9895, R3 at :10622-10624).
+There is no `SPHINCS_PLUS_C` scheme module, no top +C EUF-CMA game, no `NPRFNPRF_V` validity-inlined +C game, no
+`valid_MFORSC10 = (pkFORS' = pkFORS)` split predicate, and no top FORS reduction. The "payoff" lemma
+`leaf_reduction_MEUFGCMAWOTSC_bound_Rtop` (:9695) is the WOTS+C LEAF bound instantiated at A_ht:=R_top(F), NOT top
+soundness. So R_top_C inherits a blank soundness slate. Item 2 therefore DECOMPOSES — it is not a one-shot push.
+The MM45 template is `SPHINCS_PLUS.ec` section `Proof_SPHINCS_PLUS_EUFCMA` (:1631-4609), whose six game-hops
+(Orig->PRFPRF; SKG-PRF; MKG-PRF; NPRFNPRF->V + mu_split on valid; VT->FORS-EUF; VF->NAGCMA via RV) item 2 mirrors.
+Plan (advisor-endorsed): take **hop-6 (VF: R_top_C soundness) as the next milestone** — the RHS NAGCMA game already
+exists (base :278; R_top_C is already typed to it) and the coupling is a single coupled `rnd` on a shared `dcond`
+with NO mmap-memoization invariant (genuinely simpler than MM45). The clone `good == good_fors` (FORSC10-onto-FTWES)
+is expected to bite ONLY the VT branch (hop-5), because hop-6/the V-game use concrete `good_fors` throughout and the
+split predicate never mentions abstract `good` — to be confirmed by grep before building.
+
+**FACT B — THE CAPSTONE IS A REDUCTION TO AN EXPLICIT LEDGER, NOT AN UNCONDITIONAL THEOREM. "Capstone assembled"
+must NEVER be read as "SPHINCS+C EUF-CMA proven."** The genuinely hard PQ crypto is NOT in the scaffolding items —
+it is the *carried, unreduced* leaf assumption below. When the capstone lands, its statement is
+`Pr[EUF_CMA(SPHINCS+C10) : forger wins] <= (sum of the ledger terms)`, and the ledger is:
+
+  1. **ITSRC10 — the load-bearing UNREDUCED assumption (the ~102-bit gap).** `EUFCMA_MFORSC10`
+     (FORS_C10_Multi.ec:472-491) proves, under the H-TREE-MULTI premise,
+       Pr[EUF_CMA_MFORSC10(A, O_CMA_MFORSC10)] <= Pr[ITSRC10(R_ITSRC10_MFORSC10(A), O_ITSRC10_Default)]
+                                                   + mtree_openpre + mtree_trh + mtree_trco.
+     The multi->single legs ARE proved (byequiv). But the leaf `Pr[ITSRC10(...)]` — the FORS+C
+     interleaved-target-subset-resilience tight bound (single-instance game FORS_C10.ec:276) — is a NAMED,
+     NONSTANDARD, UNREDUCED assumption, carried and never numerically bounded (black-box route loses ~102 bits,
+     FORS_C10.ec:86-91; the direct route needs a concentration inequality EC does not have; FORS_C10_Multi.ec:53-62).
+     THIS is where the +C security ultimately rests. Every capstone claim MUST foreground it.
+  2. `mtree_openpre` / `mtree_trh` / `mtree_trco` — FORS Merkle-tree premises (explicit).
+  3. **S-TCR(+C) counter-oracle** — summand 4 (Def C.1 / Thm 5.2), the paper's interactive grind-oracle notion
+     (proven irreducible to plain SM-DT-TCR, this doc's 2026-07-21 Wave-1 entry).
+  4. **SKG-PRF** (proven-admit-free hop, Wave 2) and **MKG-PRF** — but see the OPEN QUESTION below on whether the +C
+     conditioned draw structurally absorbs MM45's MKG-PRF hop-3 (item-4 note: "MKG N/A at hypertree level"); resolve
+     at full-scheme scope before assuming a hop-3 term exists.
+  5. `good_pos` (FORS_C10.ec:208) — FORS mkey positive-mass / well-definedness (consumed via losslessness upstream,
+     NOT an additive loss term for hop-6; a two-sided identical `dcond` couples under `rnd` regardless).
+  6. `CntrFT.enum_spec` (Grind.ec) — WOTS+C counter-type finiteness (a faithful MODELLING axiom; the deployed
+     counter is a bounded machine int) — and `Grind.grind_fails`/p_nu, the WOTS+C counter-grind FAILURE event,
+     carried ADDITIVELY as adversary loss on the hypertree/WOTS side.
+  7. `emb_in_len` / `emb_in_inj` — the S-TCR member modelling hypotheses (Wave-1, load-bearing, negative-control-checked).
+  8. MM45's OWN inherited base axioms (e.g. `dist_adrstypes`) — outside our port's TCB but part of the total trust base.
+
+So: the port's DELIVERABLE is a machine-checked reduction chain assembling the above into a single EUF-CMA bound
+with an explicit, auditable assumption ledger — NOT a from-nothing unconditional proof. That is the honest claim,
+and it is a strong one; overstating it as "SPHINCS+C is proven EUF-CMA" would retroactively undercut the whole
+honest-track record. (good_pos gates the 0-NEW-axiom story of the good==good_fors clone, not whether the reduction
+exists: worst case re-types FORS_C10's already-carried g-axioms at the concrete FTWES types — an existing ledger
+entry re-typed, not a new assumption.)
+
+### 2026-07-21 — Wave 3: the good==good_fors clone lands 0-NEW-AXIOM; hop-6 (VF) stated + 2/3 legs proven
+
+Both tracks audited PASS, no overstatement (independent forced-recompile + canary + non-vacuity controls).
+
+**CLONE PROBE — good == good_fors: 0 NEW AXIOMS (drafts/good_clone_probe.ec, CERTIFIED-0-ADMIT).** The scout's
+"single biggest risk" resolves on the cleanest ledger line. `clone FORS_C10.FORSC10 with mco<-FTWES.mco, g<-FTWES.g,
+...` succeeds and:
+ - ALL FIVE g-axioms (size_g/eqiks_g/neqisvs_g/rng_g/uniq_g, FORS_C10.ec:166-192) DISCHARGE as PROVED LEMMAS from
+   FTWES's concrete `g = mkseq(...)` (rng_g the only one needing the BLKAL `size(val m)=k*a` invariant). `print
+   C.size_g` etc. report `lemma`, not axiom. This is STRICTLY BETTER than the advisor's worst case (re-typed
+   carried axioms): they become theorems.
+ - `good_eq_good_fors` PROVED (C.good = good_fors, pure delta-unfold) — the two are the same op both provably and
+   definitionally-by-clone.
+ - SOLE residual: `good_pos` (= the paper's p_nu positive-good-mass, FORS_C10.ec:208) re-typed at the concrete
+   FTWES.mco/dmkey/g instance — `print C.good_pos` reports `axiom`. It is the SAME assumption FORS_C10 already
+   carries, NOT new, and genuinely un-dischargeable (a legal base model can force good-mass to 0).
+ - HONEST METRIC CAVEAT: ec-certify's `axiom-decls=0` is a file-TEXT metric (good_pos is INHERITED, not textually
+   declared) — it does NOT mean "0 assumptions." The ledger line is: 0 NEW axioms, sole entry = re-typed-carried good_pos.
+
+**VF SOUNDNESS (hop-6) — stated with exact MM45 shape, 2/3 legs proven (drafts/rtop_c_soundness_wip.ec, 1 admit).**
+ - STEP-0 CONFIRMED (structural, both external reviewers): hop-6 is CLONE-FREE. `good_fors` enters only (i) the
+   oracle mk-draw `mk <$ dcond dmkey (good_fors m)` — byte-identical on V_C and R_top_C sides, so it couples by a
+   single `rnd` on the shared dcond EXPRESSION (couples even if dcond degrades to dnull => NO good_pos needed here),
+   and (ii) the carried-then-dropped forced-zero is_valid gate. The abstract-`good` clone is isolated to the VT
+   branch (hop-5, out of scope). So hop-6 lands independent of the clone — a clean "VF clone-free / VT gated on the
+   (now-0-new-axiom) clone" story.
+ - Built V_C (`EUF_CMA_SPHINCSPLUSTWC_NPRFNPRF_V`, mirror MM45 :2186-2239: fresh conditioned mk-draw, FORS-sign via
+   FTWES, valid_MFORSC10 <- pkFORS'=pkFORS) and RV_C (the RV intermediate, mirror :2602) — both typecheck.
+ - PROVEN: `Eqv_Orig_RV_C` (NAGCMA(R_top_C(F)) ~ RV_C(F) via sim, non-vacuity canary-verified) + inside hop-6 the
+   RHS-rewrite leg and the opening ad/ps coupling. hop-6 `LeqPr_VF_C` statement byte-matches MM45 :3468-3471.
+ - ADMITTED (1, load-bearing): the core V_C~RV_C coupling, with a precise 3-leg residual — R6a (FORS-cube <->
+   committed-pkFORS invariant, the BULK, +C-invariant, MM45 :3482-3564 establish / :4176-4277 consume; "genuinely
+   large ~800-line near-verbatim port"); R6b (oracle-call equiv via the single coupled rnd + sigl-table invariant);
+   R6c (validity/freshness event mapping, :3935). Its TRUTH is argued (hand + GPT-5.6 + Kimi, ~10 falsifiers tried,
+   none held) but NOT yet machine-checked.
+ - FIDELITY FIX (GPT-5.6, source-verified): V_C's is_valid was missing the C10 forced-zero gate `good_fors m' mk'`
+   (a subtly-wrong hybrid); added it (byequiv stays true — the conjunct only shrinks res{1}).
+
+**LEDGER UPDATE — MKG-PRF RESOLVED (does NOT vanish).** The Wave-2 "MKG N/A at hypertree level" note is now precise:
+the +C fresh conditioned draw makes MM45's hop-3 (memoized-uniform -> random-function) VACUOUS at the V-game/hop-6
+level (no memoization to bite), but an MKG-PRF term PERSISTS at the +C FULL-SCHEME level (mkg_adv) — the fresh draw
+is the OUTPUT of that idealisation (uniform dmkey) plus +C conditioning, not a replacement. So the ledger's MKG-PRF
+entry STAYS; the fresh-vs-memoized deterministic-PRF faithfulness gap is the deferred full-scheme-wave question.
+
+ITEM 2 STATE: hop-6 (VF) stated + 2/3 legs proven (1 coupling admit = ~800-line MM45-verbatim port); the clone it
+would need on the VT side is de-risked to 0-new-axiom. REMAINING for item 2: close the hop-6 coupling admit; then
+hop-5 (VT into EUF_CMA_MFORSC10, using the now-proven clone). Then item 5 (top scheme + PRF hops + composition).
+
+### 2026-07-21 — Wave 4: hop-6 (VF) R6a-establish CLOSED; R6b/R6c residual (1 admit) — empirical scope read
+
+Audit PASS, honest, no overclaim (forced recompile + canary-flip; statements byte-identical to pre-wave 0fcb7cd).
+ - CLOSED: the R6a-ESTABLISH leg of the V_C~RV_C coupling inside `LeqPr_VF_C` — the FORS-cube <-> committed-pkFORS
+   invariant (MM45 :3482-3564), now a PROVEN `seq 5 4` block (drafts/rtop_c_soundness_wip.ec:709), near-verbatim +C
+   port (WOTS/HT keygen coupled via new keygenC_eq/keygenC_pkin helpers; full :3482-3503 conjunct set ported
+   verbatim, not trimmed). Non-vacuity: falsifying the invariant's trco relation is REJECTED.
+ - RESIDUAL (1 admit, :966, precisely documented with an in-file ACTIONABLE HANDOFF): R6a-CONSUME (:4176-4277 the
+   nth_flatten/edivz arithmetic); R6b (the +C sigl-table as a ONE-SIDED `while{2}` — the genuinely-hard two-source
+   merge; needs a phoare recast of the deterministic HT.sign closed form, reusable from _assembly_unfold_wip.ec:4816
+   but currently TWO-sided); R6c (:3935-4278 the oracle-call coupling of the single mk `rnd` + the +C is_valid/
+   is_fresh event map). hop-6 stays PARTIAL (2/3 legs + R6a-establish; 1 admit).
+
+EMPIRICAL SCOPE READ: closing hop-6 fully is >1 wave (R6b is the hard leg). The remaining item-2/item-5 work is all
+large +C-INVARIANT MM45 transcription — hop-6 R6b/R6c (~1-2 waves), then hop-5 VT (~1-2 waves), then the top scheme
+module + Orig->V game chain + PRF-hop wiring + mu_split + composition (~2-4 waves). No new +C security content; the
+ledger (ITSRC10 + the 7 others) is fixed. The +C-SPECIFIC intellectual work is COMPLETE; what remains is mechanizing
+the reduction assembly that is already argued.
+
+### 2026-07-21 — MILESTONE: the SPHINCS+C10 EUF-CMA CAPSTONE STATEMENT compiles (assembled reduction to the ledger)
+
+The headline deliverable is now a single machine-checkable EasyCrypt theorem. `drafts/sphincs_c10_capstone_wip.ec`
+(compiles rc=0; ec-certify = compile=OK, admit-tactics=6, axiom-decls=0). Audited PASS — "HONEST CONDITIONAL
+REDUCTION, no soundness hole found; nothing silently dropped" (forced recompile + two RUN anti-vacuity controls:
+deleting the `+ mkg_adv` summand breaks the final smt; false-canary rejected).
+
+**`lemma EUFCMA_SPHINCS_PLUS_C10 &m`** states MM45's EUFCMA_SPHINCS_PLUS_FX 4-term bound, +C-substituted and
+EXPANDED to leaf assumptions:
+  p_sphincs_c <= skg_adv + mkg_adv
+               + (Pr[ITSRC10] + mtree_openpre + mtree_trh + mtree_trco)      (FORS+C10 term)
+               + (WOTS-TW+C multi + S-TCR(+C) + pkco-TCR + trh-TCR)           (hypertree term)
+
+ - **2 of 6 RHS legs GENUINELY PROVEN**, wired to base theorems that are themselves 0-admit/0-axiom (source-verified
+   term-for-term by the auditor, member-axis discharged via the proven R_top_members4 + the in-file-proven
+   good_eq_good_fors): the FORS+C10 term via `M.EUFCMA_MFORSC10` (FORS_C10_Multi.ec:472) and the hypertree term via
+   the component theorem `EUFNAGCMA_FLSLXMSSMTTWCESNPRF` (XmssmtCC_All.ec:8439) at A_ht:=R_top(F).
+ - **6 explicit per-hop admits = the FX composition skeleton** (hop1..hop6), each with its MM45 line-ref +
+   genuinely-open-vs-transcription-deferred status + missing invariant: Orig->PRFPRF (open), SKG-PRF (partial:
+   proven 0-admit at hypertree level, scheme-level needs FORS+C keys), MKG-PRF (open), NPRFNPRF->V + mu_split
+   (open; V_C game exists), VT/hop-5 (open; needs Adv_EUFCMA_C -> Adv_EUFCMA_MFORSC10 reduction + the now-proven
+   clone + ITSR-C10 coupling), VF/hop-6 (partial: LeqPr_VF_C proven modulo the R6b/R6c admit).
+ - **LHS is an HONESTLY-FLAGGED ABSTRACT real** `p_sphincs_c` over `F <: Adv_EUFCMA_C` — no concrete
+   `module SPHINCS_PLUS_C10 : Scheme` exists (the +C scheme lives only as simulated CMA oracles inside reductions);
+   building it = MM45's `module SPHINCS_PLUS` + the 2 Thm-5.2 substitutions, and MM45's FX is section-local with no
+   clone shortcut, so it is the multi-month scheme-module remainder, stated as the CONCRETE-LHS residual.
+ - **THE LEDGER is documented in-file and audit-verified COMPLETE**: the admit-census + the carried axioms (a
+   comment-stripped live-axiom sweep over the 13-file transitive closure) cover ITSRC10 (foregrounded, the
+   ~102-bit-gap carried PROBABILITY term, unreduced on the RHS — not an axiom), mtree_* (carried H-TREE-MULTI
+   premise, false-at-zero so a hypothesis not an admit), S-TCR(+C) (STCR_C.dpp_ll + the S_TCR_C_Int_MA RHS term),
+   SKG/MKG-PRF (skg_adv/mkg_adv reals), good_pos (live axiom via clone C), CntrFT.enum_spec, and MM45's base axioms
+   (dist_adrstypes, ch0/chS/two_encodings, ...). Nothing silently dropped.
+
+HONEST HEADLINE: **SPHINCS+C10 EUF-CMA REDUCES to {ITSRC10 + the 8-entry ledger + the 6 documented FX-skeleton
+hops}, machine-checked exactly as stated — 2 of 6 hops proven against 0-admit base theorems, the other 4 explicit
+admits over the (unbuilt) +C intermediate games, and the LHS an abstract real pending the concrete +C scheme
+module.** This is NOT an unconditional proof of SPHINCS+C security; it is the assembled reduction whose admit list
+IS the exact remaining +C-invariant MM45-transcription work. REMAINING: discharge the 6 hops (VF R6b/R6c and VT are
+the crypto-adjacent ones; the rest are +C-invariant transcription) + build the concrete scheme-module LHS.
+
+### 2026-07-21 — Wave 6: concrete SPHINCS_PLUS_C10 scheme module + EUF_CMA game built; capstone LHS grounded
+
+Audit PASS. The abstract LHS is now backed by a real scheme game.
+ - `drafts/sphincs_c10_scheme_wip.ec` (CERTIFIED-0-ADMIT, 0 new axiom): `module SPHINCS_PLUS_C10 :
+   DSSC.Stateless.Scheme` — a faithful port of MM45 SPHINCS_PLUS.ec:957 keygen/sign/verify at the SAME seed sk, with
+   the 2 Thm-5.2 substitutions: (i) FORS message key `mk <$ dcond dmkey (good_fors m)` + seed-based FTWES FORS,
+   (ii) +C hypertree FL_SL_XMSS_MT_C_ES (seed-based). Output = sigSPHINCSPLUSTWC; verify gates on
+   `good_fors m mk /\ size sigHT = d /\ root'=root /\ allOkC` (mirrors V_C is_valid). `EUFCMA_C10(F) =
+   DSSC.Stateless.EUF_CMA(SPHINCS_PLUS_C10, F, O_CMA_Default)` for F<:Adv_EUFCMA_C TYPECHECKS (the #1 risk — the
+   hand-written +C forger type structurally-subtyping into the DSSC-clone Adv_EUFCMA — empirically resolved).
+   DSSC is a fresh clone of the already-in-closure axiom-free stdlib DigitalSignatures ⇒ 0 new axioms.
+ - `drafts/sphincs_c10_capstone_concrete_wip.ec` (compiles, 6 admits unchanged, 0 axioms): a COPY of the capstone
+   (the committed abstract one is INTACT) with the LHS re-grounded from the abstract real `p_sphincs_c` to
+   `Pr[EUFCMA_C10(F).main() @ &m : res]`. hop1 just re-typed; admit count rose by 0.
+
+HONEST CAVEATS (disclosed, both external reviewers + advisor converged):
+ - IDEALISED-mk LEVEL: the built scheme draws `mk <$ dcond dmkey (good_fors m)` (the repo's standing fresh-draw C10
+   model, rtop_c_soundness_wip.ec:100-125 / FORS_C10_Multi.ec:163-167 "matching production") rather than a
+   deterministic `mkg ms m`. Consequence: `ms` is dead, the MKG-PRF hop is VACUOUS at THIS LHS, and signing is
+   RANDOMISED (same m -> different sig, unlike MM45's deterministic scheme). So `Pr[EUFCMA_C10(F)]` is the advantage
+   of the randomised-mk / real-skg-key IDEALISATION — defensible as the port's +C model, but NOT a byte-identical
+   pre-MKG "Orig" of a deterministic deployed scheme; a deterministic-mkg Orig (making the MKG hop non-vacuous) is
+   the faithfulness refinement if the capstone must be about the byte-identical deployed scheme.
+ - COMPILES != CORRECT: scheme sign/verify CORRECTNESS (an honestly-generated signature verifies) is a separate
+   equiv/phoare obligation, plausible by construction but NOT proven here.
+ - This is the LHS OBJECT ONLY: the 6 MM45 FX byequiv/game hops (the multi-month remainder — build the +C
+   intermediate game chain PRFPRF/NPRFPRF/NPRFNPRF/V + the reductions + the 6 byequivs) remain admits, none proven.
+
+SESSION NET (2026-07-21, Waves 1-6, all adversarially audited): the +C-SPECIFIC intellectual content is COMPLETE
+(item1 impossibility+relabel, item3 conditioned draw, item4 PRF hop CLOSED, the good==good_fors clone 0-NEW-AXIOM,
+hop-6 VF R6a-establish); the SPHINCS+C10 EUF-CMA CAPSTONE STATEMENT compiles (2/6 hops proven vs 0-admit base thms,
+ledger audit-verified complete, ITSRC10 foregrounded); and the concrete SPHINCS_PLUS_C10 scheme+game grounds the
+LHS. REMAINING = the multi-month FX game-chain construction (the 6 hops) + scheme correctness + the
+deterministic-Orig refinement — all +C-INVARIANT transcription, no new +C security content, ledger fixed.
