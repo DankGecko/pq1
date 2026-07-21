@@ -91,7 +91,7 @@ fn build_e2e() -> Erc7730BuildResult {
 /// Exact combined catalogue cardinality for the current generated receipt.
 /// Protocol-specific assertions below pin their own deployment/route subsets;
 /// the accepted-family inventory independently accounts for every source.
-const EXPECTED_REGISTRY_LEAVES: usize = 412;
+const EXPECTED_REGISTRY_LEAVES: usize = 400;
 
 /// EIP-712 admission does not add contract selectors to the independent
 /// known-call inventory. Keep its exact cardinality pinned separately from the
@@ -3095,7 +3095,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(
         hex::encode(result.root),
         // Re-derived from the combined semantic-honesty catalogue.
-        "ffe692b9d69da3511e55540efc0a62700daf99547cf74ea2345e0413a47b0d77"
+        "a20940ba4d92b2dba1f80efdbe615196aede1c893eb0a25e68044b75dde9b10d"
     );
 }
 
@@ -3554,29 +3554,16 @@ fn registry_aave_wrapped_gateway_refuses_pq_incompatible_permit_call() {
         })
         .collect();
 
-    let expected_deployments: BTreeSet<(u64, [u8; 20])> = [
-        (1, "d01607c3c5ecaba394d8be377a08590149325722"),
-        (10, "5f2508cae9923b02316254026cd43d7902866725"),
-        (100, "721b9abab6511b46b9ee83a1aba23bdacb004149"),
-        (137, "bc302053db3aa514a3c86b9221082f162b91ad63"),
-        (146, "061d8e131f26512348ee5fa42e2df1ba9d6505e9"),
-        (324, "ae2b00d676130bdf22582781bbba8f4f21e8b0ff"),
-        (1868, "6376d4df995f32f308f2d5049a7a320943023232"),
-        (8453, "a0d9c1e9e48ca30c8d8c3b5d69ff5dc1f6dffc24"),
-        (9745, "54bdcc37c4143f944a3ee51c892a6cbdf305e7a0"),
-        (42161, "5283beced7adf6d003225c13896e536f2d4264ff"),
-        (43114, "2825ce5921538d17cc15ae00a8b24ff759c6cdae"),
-        (59144, "31a239f3e39c5d8ba6b201ba81ed584492ae960f"),
-        (534352, "e79ca44408dae5a57ea2a9594532f1e84d2edaa4"),
-    ]
-    .into_iter()
-    .map(|(chain_id, address)| {
-        let decoded = hex::decode(address).expect("valid deployment address");
-        let mut contract = [0u8; 20];
-        contract.copy_from_slice(&decoded);
-        (chain_id, contract)
-    })
-    .collect();
+    let expected_deployments: BTreeSet<(u64, [u8; 20])> =
+        [(1, "d01607c3c5ecaba394d8be377a08590149325722")]
+            .into_iter()
+            .map(|(chain_id, address)| {
+                let decoded = hex::decode(address).expect("valid deployment address");
+                let mut contract = [0u8; 20];
+                contract.copy_from_slice(&decoded);
+                (chain_id, contract)
+            })
+            .collect();
     let actual_deployments: BTreeSet<_> = entries
         .iter()
         .map(|entry| (entry.chain_id, entry.contract))

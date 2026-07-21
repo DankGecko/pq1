@@ -5,11 +5,11 @@
   "catalogue_snapshot": {
     "upstream_commit": "784c87c925e8438e7b4736b2af85a501f8d2a265",
     "upstream_tree": "8da8dba78c3e581bbd06c15cc681d07e570dcfb1",
-    "curated_corpus_sha256": "bb85311ce345e718391374745fe5b64a3bd366d91018a97d7e9f646bbfaa7afb",
-    "merkle_root": "ffe692b9d69da3511e55540efc0a62700daf99547cf74ea2345e0413a47b0d77",
-    "accepted_leaf_count": 412,
+    "curated_corpus_sha256": "9bdd194fd060c26f4e555f49050dc526015ec853325a803e531c8c8f29eb3079",
+    "merkle_root": "a20940ba4d92b2dba1f80efdbe615196aede1c893eb0a25e68044b75dde9b10d",
+    "accepted_leaf_count": 400,
     "accepted_source_descriptor_count": 240,
-    "compiled_blob_bytes": 351000,
+    "compiled_blob_bytes": 339036,
     "known_call_count": 4580,
     "category_source_counts": {
       "pinned-evidence": 27,
@@ -17,7 +17,7 @@
       "lower-priority-residual": 80
     },
     "category_leaf_counts": {
-      "pinned-evidence": 92,
+      "pinned-evidence": 80,
       "shared-standard-implementation": 133,
       "lower-priority-residual": 187
     }
@@ -208,7 +208,7 @@
   },
   {
     "source": "aave/calldata-WrappedTokenGatewayV3.json",
-    "accepted_leaf_count": 13,
+    "accepted_leaf_count": 1,
     "classification": "pinned-evidence",
     "evidence": "aave-v3-ethereum-gateway"
   },

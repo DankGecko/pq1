@@ -1,5 +1,19 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
+  "_pqsigner": {
+    "deploymentFormats": [
+      {
+        "chainId": 1,
+        "address": "0xd01607c3C5eCABa394D8be377a08590149325722",
+        "formats": [
+          "borrowETH(address pool, uint256 amount, uint16 referralCode)",
+          "depositETH(address pool, address onBehalfOf, uint16 referralCode)",
+          "repayETH(address pool, uint256 amount, address onBehalfOf)",
+          "withdrawETH(address pool, uint256 amount, address to)"
+        ]
+      }
+    ]
+  },
   "context": {
     "$id": "WrappedTokenGatewayV3",
     "contract": {

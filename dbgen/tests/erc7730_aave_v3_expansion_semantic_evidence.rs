@@ -683,6 +683,31 @@ fn gateway_fixed_block_source_and_descriptor_are_semantically_honest() {
     ));
     assert_eq!(fs::read(&installed).unwrap(), fs::read(&curated).unwrap());
     let descriptor = read_json(&installed);
+    let admissions = descriptor["_pqsigner"]["deploymentFormats"]
+        .as_array()
+        .expect("gateway deployment allowlist");
+    assert_eq!(admissions.len(), 1);
+    assert_eq!(admissions[0]["chainId"].as_u64(), Some(1));
+    assert_eq!(
+        address(required_str(&admissions[0], "address")),
+        address(GATEWAY)
+    );
+    assert_eq!(
+        admissions[0]["formats"]
+            .as_array()
+            .expect("gateway admitted formats")
+            .iter()
+            .map(|format| format.as_str().expect("gateway format"))
+            .collect::<BTreeSet<_>>(),
+        [
+            "borrowETH(address pool, uint256 amount, uint16 referralCode)",
+            "depositETH(address pool, address onBehalfOf, uint16 referralCode)",
+            "repayETH(address pool, uint256 amount, address onBehalfOf)",
+            "withdrawETH(address pool, uint256 amount, address to)",
+        ]
+        .into_iter()
+        .collect()
+    );
     for (signature, fields) in descriptor["display"]["formats"]
         .as_object()
         .expect("gateway formats")
@@ -792,7 +817,7 @@ fn new_aave_evidence_is_bound_through_merkle_dispatch_and_rendering() {
             entry.source.file_name().and_then(|name| name.to_str()) == Some(GATEWAY_DESCRIPTOR)
         })
         .collect::<Vec<_>>();
-    assert_eq!(gateway_entries.len(), 13);
+    assert_eq!(gateway_entries.len(), 1);
     let admitted = [
         "depositETH(address,address,uint16)",
         "repayETH(address,uint256,address)",
@@ -839,10 +864,41 @@ fn new_aave_evidence_is_bound_through_merkle_dispatch_and_rendering() {
         ));
     }
 
+    let gateway_descriptor = read_json(&root().join(format!(
+        "secure/data/erc7730-registry/registry/aave/{GATEWAY_DESCRIPTOR}"
+    )));
+    let declared_deployments = gateway_descriptor["context"]["contract"]["deployments"]
+        .as_array()
+        .expect("gateway deployments");
+    assert_eq!(declared_deployments.len(), 13);
+    for deployment in declared_deployments {
+        let chain_id = deployment["chainId"].as_u64().expect("gateway chain");
+        let contract = address(required_str(deployment, "address"));
+        for selector in admitted_selectors
+            .iter()
+            .copied()
+            .chain(core::iter::once(permit))
+        {
+            assert!(
+                registry
+                    .known_calls
+                    .contains(&(chain_id, contract, selector)),
+                "declared gateway call must remain exact-known after deployment narrowing"
+            );
+            assert!(known_call_may_contain(
+                &registry.known_calls_bloom,
+                chain_id,
+                &contract,
+                &selector
+            ));
+        }
+    }
+
     let mainnet = gateway_entries
         .into_iter()
-        .find(|entry| entry.chain_id == 1 && entry.contract == address(GATEWAY))
+        .next()
         .expect("evidenced Ethereum gateway leaf");
+    assert_eq!((mainnet.chain_id, mainnet.contract), (1, address(GATEWAY)));
     let bundle = synth_bundle(&registry.blob, &mainnet.ir_bytes, mainnet.leaf_index);
     let verified = verify_erc7730_bundle(&bundle, &registry.root).unwrap();
     assert_eq!(
