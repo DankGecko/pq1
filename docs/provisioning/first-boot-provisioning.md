@@ -3,6 +3,11 @@
 Status: **candidate implemented (`rdp2-self-lock`); not production-approved;
 silicon and protocol-closure gates pending** (2026-07-15).
 
+> UPDATE 2026-07-21: the device-side flow now has a normative requirements
+> spec at [`first-boot-requirements.md`](first-boot-requirements.md) (what
+> the flow MUST/MUST NOT do, incl. the invariant-#10 "verify WRP, never set
+> it, before RDP-2" ordering). This file remains the operator/field runbook.
+
 > **CANDIDATE RUNBOOK, NOT AN IRREVERSIBLE CEREMONY.** This document describes
 > the current code and its intended factory/device boundary. It does not
 > authorize RDP, OTP, SE-key, or OPTIGA lifecycle changes. The authenticated
