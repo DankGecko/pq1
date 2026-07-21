@@ -1,12 +1,10 @@
 //! Host-side structural regressions for ERC-7730 FI binding gates.
 //!
-//! A descriptor is useful only after its exact bytes are proven under the
-//! firmware root and bound to the exact transaction context. The non-inlined
-//! proof helpers independently re-verify the bundle/root + full cross-check
-//! twice, require both parsed views to equal the caller's IR, publish into a
-//! caller-owned volatile FAIL slot, and bump a caller-owned CFI transcript.
-//! That composition covers a faulted initial Merkle reject, either independent
-//! membership/binding decision, and a skipped whole proof call.
+//! Contract evidence is useful only after its complete proof-set bytes are
+//! proven under the firmware root and bound to the exact transaction/nested
+//! context. The non-inlined proof helper independently reparses the complete
+//! set and re-derives its nested binding twice, exact-matches both against
+//! caller-owned expectations, and publishes through volatile FAIL + CFI gates.
 
 const CMD_SIGN_USEROP: &str = include_str!("nsc/cmd_sign_userop.rs");
 const CMD_SIGN_USEROP_BATCH: &str = include_str!("nsc/cmd_sign_userop_batch.rs");
@@ -84,7 +82,7 @@ fn assert_dual_reject_gates(
 #[test]
 fn proof_helpers_recompute_membership_and_binding_twice() {
     let contract_start = ERC7730_GLUE
-        .find("pub fn prove_contract_binding(")
+        .find("pub fn prove_contract_proof_set_binding(")
         .expect("missing contract proof helper");
     let eip712_start = ERC7730_GLUE
         .find("pub fn prove_eip712_binding(")
@@ -96,45 +94,34 @@ fn proof_helpers_recompute_membership_and_binding_twice() {
     let contract = &ERC7730_GLUE[contract_start..eip712_start];
     let eip712 = &ERC7730_GLUE[eip712_start..known_start];
 
-    for (proof, cross_check) in [
-        (contract, "cross_check_contract("),
-        (eip712, "cross_check_eip712("),
-    ] {
-        assert_eq!(
-            count_substr(proof, "verify_erc7730_bundle("),
-            2,
-            "each proof helper must independently verify membership twice",
-        );
-        assert_eq!(
-            count_substr(proof, "verified.ir == *"),
-            2,
-            "each parse must equal the caller's exact IR view",
-        );
-        assert_eq!(
-            count_substr(proof, cross_check),
-            2,
-            "each independently verified IR must also pass its context check",
-        );
-        assert_ordered(
-            proof,
-            "let ok_a = verify_erc7730_bundle(",
-            cross_check,
-            "crate::fi::wait_random();",
-            "let ok_b = verify_erc7730_bundle(",
-        );
-        assert_ordered(
-            proof,
-            "let ok_b = verify_erc7730_bundle(",
-            cross_check,
-            "core::hint::black_box(ok_a) && core::hint::black_box(ok_b)",
-            "core::ptr::write_volatile(verdict_out, verdict)",
-        );
-    }
+    assert_eq!(count_substr(contract, "verify_erc7730_proof_set("), 2);
+    assert_eq!(count_substr(contract, "derive_nested_call("), 2);
+    assert_eq!(count_substr(contract, "verified == *"), 2);
+    assert_eq!(count_substr(contract, "derived =="), 2);
+    assert!(contract.contains("set.raw_payload"));
+    assert_ordered(
+        contract,
+        "let ok_a = verify_erc7730_proof_set(",
+        "derive_nested_call(",
+        "crate::fi::wait_random();",
+        "let ok_b = verify_erc7730_proof_set(",
+    );
+    assert_ordered(
+        contract,
+        "let ok_b = verify_erc7730_proof_set(",
+        "derive_nested_call(",
+        "core::hint::black_box(ok_a) && core::hint::black_box(ok_b)",
+        "core::ptr::write_volatile(verdict_out, verdict)",
+    );
+
+    assert_eq!(count_substr(eip712, "verify_erc7730_bundle("), 2);
+    assert_eq!(count_substr(eip712, "verified.ir == *"), 2);
+    assert_eq!(count_substr(eip712, "cross_check_eip712("), 2);
 
     assert_eq!(
-        count_substr(ERC7730_GLUE, "verify_erc7730_bundle("),
-        4,
-        "both binding helpers must independently verify membership twice",
+        count_substr(ERC7730_GLUE, "verify_erc7730_proof_set("),
+        2,
+        "contract binding must independently verify the complete set twice",
     );
     assert!(ERC7730_GLUE.contains("pub fn verify_erc7730_bundle<'a>("));
     assert_ordered(
@@ -144,8 +131,8 @@ fn proof_helpers_recompute_membership_and_binding_twice() {
         "root,",
         "crate::db_roots::ERC7730_DESCRIPTOR_COUNT",
     );
-    assert_eq!(count_substr(ERC7730_GLUE, "verified.ir == *"), 4);
-    assert_eq!(count_substr(ERC7730_GLUE, "cross_check_contract("), 2);
+    assert_eq!(count_substr(ERC7730_GLUE, "verified == *"), 2);
+    assert_eq!(count_substr(ERC7730_GLUE, "verified.ir == *"), 2);
     assert_eq!(count_substr(ERC7730_GLUE, "cross_check_eip712("), 2);
     assert!(ERC7730_GLUE.contains("core::ptr::write_volatile(verdict_out, verdict)"));
 }
@@ -155,12 +142,12 @@ fn every_signing_surface_requires_volatile_verdict_and_caller_cfi() {
     for (source, proof, expected) in [
         (
             CMD_SIGN_USEROP,
-            "prove_contract_binding(",
+            "prove_contract_proof_set_binding(",
             "CFI_CONTRACT_BIND_EXPECTED",
         ),
         (
             CMD_SIGN_USEROP_BATCH,
-            "prove_contract_binding(",
+            "prove_contract_proof_set_binding(",
             "CFI_CONTRACT_BIND_EXPECTED",
         ),
         (
@@ -189,10 +176,11 @@ fn proof_set_routes_only_contract_calls_and_retains_ordered_evidence() {
     for source in [CMD_SIGN_USEROP, CMD_SIGN_USEROP_BATCH] {
         assert_eq!(count_substr(source, "verify_erc7730_proof_set("), 1);
         assert!(source.contains("VerifiedProofSet"));
-        assert!(source.contains("let outer = v.outer;"));
-        assert!(source.contains("outer.raw_bundle"));
-        assert!(source.contains("&outer.descriptor.ir"));
-        assert!(source.contains(".map(|set| &set.outer.descriptor)"));
+        assert_eq!(count_substr(source, "derive_nested_call("), 1);
+        assert_eq!(count_substr(source, "prove_contract_proof_set_binding("), 1);
+        assert!(source.contains("expected_nested.as_ref()"));
+        assert!(source.contains("pick_sign_pages_with_erc7730_evidence("));
+        assert!(!source.contains("outer.raw_bundle"));
     }
 
     assert_eq!(count_substr(CMD_SIGN_OFFCHAIN, "verify_erc7730_bundle("), 1);
@@ -210,7 +198,11 @@ fn get_device_info_advertises_shared_capabilities_not_placeholder_version_policy
 
 #[test]
 fn every_permission_surface_has_two_independent_final_reject_gates() {
-    for source in [CMD_SIGN_USEROP, CMD_SIGN_USEROP_BATCH, CMD_SIGN_OFFCHAIN] {
+    for (source, binding_fail_count) in [
+        (CMD_SIGN_USEROP, 3),
+        (CMD_SIGN_USEROP_BATCH, 3),
+        (CMD_SIGN_OFFCHAIN, 2),
+    ] {
         assert_dual_reject_gates(
             source,
             "core::ptr::read_volatile(&bind_verdict_slot)",
@@ -220,8 +212,8 @@ fn every_permission_surface_has_two_independent_final_reject_gates() {
         );
         assert_eq!(
             count_substr(source, "7730 binding fail"),
-            2,
-            "each independent binding reject must terminate visibly",
+            binding_fail_count,
+            "derivation and each independent binding reject must terminate visibly",
         );
     }
 

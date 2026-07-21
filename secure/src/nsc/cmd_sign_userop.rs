@@ -74,7 +74,7 @@ use crate::selectors::{
     parse_self_attest_bundle, verify_selector_bundle, SelectorMeta, MAX_SELECTOR_BUNDLE_LEN,
     MAX_SELF_ATTEST_BUNDLE_LEN,
 };
-use crate::tx::display::pick_sign_pages;
+use crate::tx::display::pick_sign_pages_with_erc7730_evidence;
 use crate::tx::eip1559::{Eip1559Tx, UserOpDisplayFields, U256};
 use crate::ui;
 
@@ -596,14 +596,15 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     };
     cursor = erc7730_trailer.next_cursor;
 
-    // A wrong / malformed / mis-bound trailer is represented as `None` after
-    // the status banner, but that is NOT unconditional permission to blind-
-    // sign. `pick_sign_pages` consults the independently generated firmware-
-    // pinned known-call filter: if `(chain_id, to, selector)` is a registry-declared
-    // ERC-7730 tuple, missing verification hard-refuses. Only tuples absent
-    // from that filter may continue through the generic typed/blind ladder
-    // (Bloom false positives refuse an unknown call, the safe direction).
-    let erc7730_verified: Option<crate::tx::erc7730::VerifiedProofSet<'_>> = if erc7730_trailer
+    // Parse and retain the exact rooted proof set here, but do not grant it
+    // display authority yet. The complete contract context (trusted sender,
+    // display nonce/value, and signed calldata) exists only after section 6.
+    // Section 6a reparses the entire payload twice and re-derives the nested
+    // binding around a randomized gap before the set can reach the renderer.
+    // A present malformed trailer hard-refuses below; only true absence maps
+    // to `None`, where the independently pinned known-call filter still
+    // prevents omission downgrade for every registry-known tuple.
+    let erc7730_candidate: Option<crate::tx::erc7730::VerifiedProofSet<'_>> = if erc7730_trailer
         .len
         > 0
     {
@@ -612,86 +613,10 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             bytes,
             &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
         ) {
-            Ok(v) => {
-                let outer = v.outer;
-                // Caller-owned FI transcript: the non-inlined proof
-                // independently re-verifies the exact outer legacy sub-bundle
-                // and its binding twice, requires both parses to reproduce the
-                // outer IR, volatile-publishes into a FAIL-initialized slot,
-                // and bumps this caller's CFI counter internally. The child is
-                // retained but has no rendering authority in N1.
-                let mut bind_verdict_slot = 0u32;
-                // SAFETY: unique initialized local; volatile so LTO cannot
-                // erase the fail state as dead before the callee overwrite.
-                unsafe {
-                    core::ptr::write_volatile(&mut bind_verdict_slot, crate::fi::FAIL_SENTINEL);
-                }
-                core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-                let mut bind_cfi = crate::fi::CfiCounter::new();
-                crate::tx::erc7730::prove_contract_binding(
-                    &outer.descriptor.ir,
-                    outer.raw_bundle,
-                    &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
-                    chain_id,
-                    &to_address,
-                    &mut bind_verdict_slot,
-                    &mut bind_cfi,
-                );
-                core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-                // Gate A independently materializes both pieces of proof.
-                // A skipped final reject branch therefore still reaches
-                // gate B below, which re-reads and re-checks everything.
-                // SAFETY: local remains live and the callee borrow ended.
-                let bind_verdict_a = unsafe { core::ptr::read_volatile(&bind_verdict_slot) };
-                let bind_cfi_verdict_a =
-                    bind_cfi.check_into_sentinel(crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED);
-                let bind_all_ok_a = bind_verdict_a == crate::fi::OK_SENTINEL
-                    && bind_cfi_verdict_a == crate::fi::OK_SENTINEL;
-                crate::fi::scrub_sentinel_register();
-                let bind_gate_a =
-                    crate::fi::check_true_into_sentinel(|| core::hint::black_box(bind_all_ok_a));
-                crate::fi::scrub_sentinel_register();
-                if bind_gate_a != crate::fi::OK_SENTINEL {
-                    ui::show_status("Sign", "7730 binding fail");
-                    None
-                } else {
-                    crate::fi::wait_random();
-                    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-                    // SAFETY: same live local, independently re-read after
-                    // the randomized gap rather than trusting gate A's
-                    // cached evidence.
-                    let bind_verdict_b = unsafe { core::ptr::read_volatile(&bind_verdict_slot) };
-                    let bind_cfi_verdict_b = bind_cfi
-                        .check_into_sentinel(crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED);
-                    let bind_all_ok_b = bind_verdict_b == crate::fi::OK_SENTINEL
-                        && bind_cfi_verdict_b == crate::fi::OK_SENTINEL;
-                    crate::fi::scrub_sentinel_register();
-                    let bind_gate_b = crate::fi::check_true_into_sentinel(|| {
-                        core::hint::black_box(bind_all_ok_b)
-                    });
-                    crate::fi::scrub_sentinel_register();
-                    if bind_gate_b != crate::fi::OK_SENTINEL {
-                        ui::show_status("Sign", "7730 binding fail");
-                        None
-                    } else {
-                        #[cfg(feature = "debug-log")]
-                        {
-                            let c = &outer.descriptor.ir.contract;
-                            secure_log!(
-                                    "[ERC-7730] matched: chain={} contract=0x{:02x}{:02x}{:02x}{:02x}..{:02x}{:02x}{:02x}{:02x} ir_len={}",
-                                    outer.descriptor.ir.chain_id,
-                                    c[0], c[1], c[2], c[3],
-                                    c[16], c[17], c[18], c[19],
-                                    outer.descriptor.ir.raw.len(),
-                                );
-                        }
-                        Some(v)
-                    }
-                }
-            }
+            Ok(v) => Some(v),
             Err(_e) => {
                 ui::show_status("Sign", "7730 bundle fail");
-                None
+                return NscStatus::InvalidPointer as u32;
             }
         }
     } else {
@@ -849,6 +774,100 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             verification_gas_limit: U256(verification_gas_limit),
             pre_verification_gas: U256(pre_verification_gas),
         }),
+    };
+
+    // ── 6a. FI-bind the complete ERC-7730 proof set and nested call ──
+    //
+    // The initial pure derivation establishes the exact binding the renderer
+    // must reproduce. The non-inlined proof then reparses the complete raw
+    // legacy/wrapper payload twice, requires the exact same verified set, and
+    // independently re-derives that binding around a randomized gap. Both the
+    // caller-owned volatile verdict and CFI transcript are consumed twice
+    // before the set gains display authority. Any present invalid evidence is
+    // a hard refusal; it cannot be erased into a weaker fallback route.
+    let (erc7730_verified, erc7730_nested_binding) = if let Some(set) = erc7730_candidate.as_ref() {
+        let expected_nested = match crate::tx::erc7730::derive_nested_call(
+            &tx_for_display,
+            inner_data,
+            set,
+            &sender,
+        ) {
+            Ok(binding) => binding,
+            Err(_) => {
+                ui::show_status("Sign", "7730 binding fail");
+                return NscStatus::InvalidPointer as u32;
+            }
+        };
+
+        let mut bind_verdict_slot = 0u32;
+        // SAFETY: unique initialized local; volatile so LTO cannot erase the
+        // fail state if the proof call is fault-skipped.
+        unsafe {
+            core::ptr::write_volatile(&mut bind_verdict_slot, crate::fi::FAIL_SENTINEL);
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let mut bind_cfi = crate::fi::CfiCounter::new();
+        crate::tx::erc7730::prove_contract_proof_set_binding(
+            set,
+            &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
+            &tx_for_display,
+            inner_data,
+            &sender,
+            expected_nested.as_ref(),
+            &mut bind_verdict_slot,
+            &mut bind_cfi,
+        );
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+
+        // Gate A consumes independently materialized verdict and CFI proofs.
+        // SAFETY: local remains live and the callee borrow ended.
+        let bind_verdict_a = unsafe { core::ptr::read_volatile(&bind_verdict_slot) };
+        let bind_cfi_verdict_a =
+            bind_cfi.check_into_sentinel(crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED);
+        let bind_all_ok_a = bind_verdict_a == crate::fi::OK_SENTINEL
+            && bind_cfi_verdict_a == crate::fi::OK_SENTINEL;
+        crate::fi::scrub_sentinel_register();
+        let bind_gate_a =
+            crate::fi::check_true_into_sentinel(|| core::hint::black_box(bind_all_ok_a));
+        crate::fi::scrub_sentinel_register();
+        if bind_gate_a != crate::fi::OK_SENTINEL {
+            ui::show_status("Sign", "7730 binding fail");
+            return NscStatus::InternalError as u32;
+        }
+
+        crate::fi::wait_random();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        // SAFETY: same live local, independently re-read after the randomized
+        // gap instead of trusting gate A's cache.
+        let bind_verdict_b = unsafe { core::ptr::read_volatile(&bind_verdict_slot) };
+        let bind_cfi_verdict_b =
+            bind_cfi.check_into_sentinel(crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED);
+        let bind_all_ok_b = bind_verdict_b == crate::fi::OK_SENTINEL
+            && bind_cfi_verdict_b == crate::fi::OK_SENTINEL;
+        crate::fi::scrub_sentinel_register();
+        let bind_gate_b =
+            crate::fi::check_true_into_sentinel(|| core::hint::black_box(bind_all_ok_b));
+        crate::fi::scrub_sentinel_register();
+        if bind_gate_b != crate::fi::OK_SENTINEL {
+            ui::show_status("Sign", "7730 binding fail");
+            return NscStatus::InternalError as u32;
+        }
+
+        #[cfg(feature = "debug-log")]
+        {
+            let c = &set.outer.descriptor.ir.contract;
+            secure_log!(
+                "[ERC-7730] matched: chain={} contract=0x{:02x}{:02x}{:02x}{:02x}..{:02x}{:02x}{:02x}{:02x} ir_len={} nested={}",
+                set.outer.descriptor.ir.chain_id,
+                c[0], c[1], c[2], c[3],
+                c[16], c[17], c[18], c[19],
+                set.outer.descriptor.ir.raw.len(),
+                expected_nested.is_some(),
+            );
+        }
+        (Some(*set), expected_nested)
+    } else {
+        (None, None)
     };
 
     // ── 7. Verify optional trailers ────────────────────────────────
@@ -1424,16 +1443,15 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     );
     let mut dispatch_page_proofs = crate::tx::display::DispatchPageProofs::new();
     dispatch_page_proofs.fail_initialize();
-    let mut pages = match pick_sign_pages(
+    let mut pages = match pick_sign_pages_with_erc7730_evidence(
         &tx_for_display,
         inner_data,
         &sender,
         cow_order_verified.as_ref(),
         safe_v1_verified.as_ref(),
         safe_exec_verified.as_ref(),
-        erc7730_verified
-            .as_ref()
-            .map(|set| &set.outer.descriptor),
+        erc7730_verified.as_ref(),
+        erc7730_nested_binding.as_ref(),
         chain_verified_meta.as_ref(),
         selector_verified.as_ref(),
         &resolver,

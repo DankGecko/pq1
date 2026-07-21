@@ -54,6 +54,7 @@ const _: () = {
 /// render; displayed pages come from a fresh second render into the same buffer.
 struct Erc7730TranscriptProof {
     expected_state: u32,
+    nested_commitment: Option<[u8; 32]>,
     receipt: pqsigner_erc7730::display::render::ContractTranscriptReceipt,
     start_index: usize,
     cfi: crate::fi::CfiCounter,
@@ -63,6 +64,7 @@ impl Erc7730TranscriptProof {
     const fn new() -> Self {
         Self {
             expected_state: pqsigner_erc7730::display::render::INTENT_PUBLICATION_UNPUBLISHED,
+            nested_commitment: None,
             receipt: pqsigner_erc7730::display::render::ContractTranscriptReceipt::unpublished(),
             start_index: UNSET_PAGE_INDEX,
             cfi: crate::fi::CfiCounter::new(),
@@ -79,6 +81,7 @@ impl Erc7730TranscriptProof {
                 &mut self.expected_state,
                 pqsigner_erc7730::display::render::INTENT_PUBLICATION_UNPUBLISHED,
             );
+            core::ptr::write_volatile(&mut self.nested_commitment, None);
             core::ptr::write_volatile(
                 &mut self.receipt,
                 pqsigner_erc7730::display::render::ContractTranscriptReceipt::unpublished(),
@@ -87,6 +90,19 @@ impl Erc7730TranscriptProof {
         }
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         self.cfi.bump(INTENT_CFI_FAIL_INITIALIZED);
+    }
+
+    #[inline]
+    fn range_matches(
+        &self,
+        receipt: &pqsigner_erc7730::display::render::ContractTranscriptReceipt,
+        pages: &super::Pages,
+        start: usize,
+    ) -> bool {
+        match self.nested_commitment.as_ref() {
+            Some(commitment) => receipt.range_matches_with_nested(pages, start, commitment),
+            None => receipt.range_matches(pages, start),
+        }
     }
 
     /// Record the first full render only after independently classified state,
@@ -103,7 +119,7 @@ impl Erc7730TranscriptProof {
                 pqsigner_erc7730::display::render::INTENT_PUBLICATION_STATIC
                     | pqsigner_erc7730::display::render::INTENT_PUBLICATION_INTERPOLATED
             )
-            && receipt.range_matches(pages, 0);
+            && self.range_matches(receipt, pages, 0);
         let verdict = crate::fi::check_true_into_sentinel(|| core::hint::black_box(valid));
         if verdict != crate::fi::OK_SENTINEL {
             return Err(());
@@ -147,7 +163,7 @@ impl Erc7730TranscriptProof {
     ) {
         let comparison = self.receipt.exact_match(second)
             && second.state_code() == self.expected_state
-            && second.range_matches(pages, 0);
+            && self.range_matches(second, pages, 0);
         let comparison_verdict =
             crate::fi::check_true_into_sentinel(|| core::hint::black_box(comparison));
         if comparison_verdict != crate::fi::OK_SENTINEL {
@@ -168,6 +184,7 @@ impl Erc7730TranscriptProof {
             INTENT_REQUIREMENT_NONE => {
                 if self.receipt
                     != pqsigner_erc7730::display::render::ContractTranscriptReceipt::unpublished()
+                    || self.nested_commitment.is_some()
                     || self.start_index != UNSET_PAGE_INDEX
                 {
                     return Err(());
@@ -190,6 +207,7 @@ impl Erc7730TranscriptProof {
         self.expected_state == pqsigner_erc7730::display::render::INTENT_PUBLICATION_UNPUBLISHED
             && self.receipt
                 == pqsigner_erc7730::display::render::ContractTranscriptReceipt::unpublished()
+            && self.nested_commitment.is_none()
             && self.start_index == UNSET_PAGE_INDEX
     }
 
@@ -213,6 +231,7 @@ impl Erc7730TranscriptProof {
         let content_ok = match self.expected_state {
             INTENT_REQUIREMENT_NONE => {
                 self.start_index == UNSET_PAGE_INDEX
+                    && self.nested_commitment.is_none()
                     && self.receipt
                         == pqsigner_erc7730::display::render::ContractTranscriptReceipt::unpublished(
                         )
@@ -221,7 +240,7 @@ impl Erc7730TranscriptProof {
             | pqsigner_erc7730::display::render::INTENT_PUBLICATION_INTERPOLATED => {
                 self.receipt.state_code() == self.expected_state
                     && self.start_index != UNSET_PAGE_INDEX
-                    && self.receipt.range_matches(pages, self.start_index)
+                    && self.range_matches(&self.receipt, pages, self.start_index)
             }
             _ => false,
         };
@@ -358,6 +377,7 @@ fn classify_intent_requirement(
     safe_v1_present: bool,
     safe_exec_present: bool,
     erc7730: Option<&crate::tx::erc7730::VerifiedDescriptor<'_>>,
+    expected_nested: Option<&crate::tx::erc7730::NestedCallBinding>,
     inner_data: &[u8],
     proof: &mut Erc7730TranscriptProof,
 ) -> Result<(), ()> {
@@ -388,16 +408,100 @@ fn classify_intent_requirement(
             pqsigner_erc7730::display::render::INTENT_PUBLICATION_STATIC
         }
     } else {
+        if expected_nested.is_some() {
+            return Err(());
+        }
         INTENT_REQUIREMENT_NONE
     };
 
-    // SAFETY: unique mutable borrow. The classifier publishes into the
-    // caller-owned fail-in state; skipping this call leaves both the state and
-    // its CFI counter non-authoritative.
-    unsafe { core::ptr::write_volatile(&mut proof.expected_state, requirement) };
+    let nested_commitment = if requirement == INTENT_REQUIREMENT_NONE {
+        None
+    } else {
+        expected_nested.map(crate::tx::erc7730::nested_binding_commitment)
+    };
+
+    // SAFETY: unique mutable borrow. The classifier publishes both authority
+    // dimensions into the caller-owned fail-in state; skipping this call
+    // leaves the state, nested commitment, and CFI counter non-authoritative.
+    unsafe {
+        core::ptr::write_volatile(&mut proof.expected_state, requirement);
+        core::ptr::write_volatile(&mut proof.nested_commitment, nested_commitment);
+    }
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     proof.cfi.bump(INTENT_CFI_REQUIREMENT_CLASSIFIED);
     Ok(())
+}
+
+/// Backward-compatible descriptor-only dispatcher retained for the existing
+/// host differential corpus. Production handlers use
+/// [`pick_sign_pages_with_erc7730_evidence`] so nested authority cannot be
+/// reconstructed from a descriptor without its complete rooted proof set.
+#[allow(clippy::too_many_arguments)]
+pub fn pick_sign_pages(
+    tx: &crate::tx::eip1559::Eip1559Tx,
+    inner_data: &[u8],
+    device_signer: &[u8; 20],
+    v3: Option<&crate::tx::eip712::cowswap::VerifiedCowswapV3>,
+    safe_v1: Option<&crate::tx::eip712::safe::VerifiedSafeV1<'_>>,
+    safe_exec: Option<&crate::tx::eip712::safe::VerifiedSafeExec<'_>>,
+    erc7730: Option<&crate::tx::erc7730::VerifiedDescriptor<'_>>,
+    erc20: Option<&crate::erc20::bundle::Erc20Metadata<'_>>,
+    selector: Option<&crate::selectors::SelectorMeta<'_>>,
+    resolver: &crate::names::NameResolver<'_>,
+    proofs: &mut DispatchPageProofs,
+) -> Result<super::Pages, ()> {
+    pick_sign_pages_impl(
+        tx,
+        inner_data,
+        device_signer,
+        v3,
+        safe_v1,
+        safe_exec,
+        erc7730,
+        None,
+        None,
+        erc20,
+        selector,
+        resolver,
+        proofs,
+    )
+}
+
+/// Production proof-set-aware contract dispatcher. `expected_nested` is the
+/// exact binding already derived and FI-proven by the secure handler. The
+/// renderer independently re-derives it on both passes and the transcript
+/// proof selects V1 or nested V2 framing from that expectation.
+#[allow(clippy::too_many_arguments)]
+pub fn pick_sign_pages_with_erc7730_evidence(
+    tx: &crate::tx::eip1559::Eip1559Tx,
+    inner_data: &[u8],
+    device_signer: &[u8; 20],
+    v3: Option<&crate::tx::eip712::cowswap::VerifiedCowswapV3>,
+    safe_v1: Option<&crate::tx::eip712::safe::VerifiedSafeV1<'_>>,
+    safe_exec: Option<&crate::tx::eip712::safe::VerifiedSafeExec<'_>>,
+    erc7730: Option<&crate::tx::erc7730::VerifiedProofSet<'_>>,
+    expected_nested: Option<&crate::tx::erc7730::NestedCallBinding>,
+    erc20: Option<&crate::erc20::bundle::Erc20Metadata<'_>>,
+    selector: Option<&crate::selectors::SelectorMeta<'_>>,
+    resolver: &crate::names::NameResolver<'_>,
+    proofs: &mut DispatchPageProofs,
+) -> Result<super::Pages, ()> {
+    let descriptor = erc7730.map(|set| &set.outer.descriptor);
+    pick_sign_pages_impl(
+        tx,
+        inner_data,
+        device_signer,
+        v3,
+        safe_v1,
+        safe_exec,
+        descriptor,
+        erc7730,
+        expected_nested,
+        erc20,
+        selector,
+        resolver,
+        proofs,
+    )
 }
 
 /// Pick the right renderer for a CMD_SIGN_USEROP trusted-UI confirm.
@@ -445,7 +549,7 @@ fn classify_intent_requirement(
 /// refuse-to-sign — releasing a signature whose native `value` was never
 /// displayed is exactly the C-1 ETH-drain class this gate exists to close.
 #[allow(clippy::too_many_arguments)]
-pub fn pick_sign_pages(
+fn pick_sign_pages_impl(
     tx: &crate::tx::eip1559::Eip1559Tx,
     inner_data: &[u8],
     device_signer: &[u8; 20],
@@ -453,6 +557,8 @@ pub fn pick_sign_pages(
     safe_v1: Option<&crate::tx::eip712::safe::VerifiedSafeV1<'_>>,
     safe_exec: Option<&crate::tx::eip712::safe::VerifiedSafeExec<'_>>,
     erc7730: Option<&crate::tx::erc7730::VerifiedDescriptor<'_>>,
+    erc7730_set: Option<&crate::tx::erc7730::VerifiedProofSet<'_>>,
+    expected_nested: Option<&crate::tx::erc7730::NestedCallBinding>,
     erc20: Option<&crate::erc20::bundle::Erc20Metadata<'_>>,
     selector: Option<&crate::selectors::SelectorMeta<'_>>,
     resolver: &crate::names::NameResolver<'_>,
@@ -461,11 +567,20 @@ pub fn pick_sign_pages(
     if !proofs.is_pristine() {
         return Err(());
     }
+    if expected_nested.is_some() && erc7730_set.is_none() {
+        return Err(());
+    }
+    if let Some(set) = erc7730_set {
+        if erc7730 != Some(&set.outer.descriptor) {
+            return Err(());
+        }
+    }
     classify_intent_requirement(
         v3.is_some(),
         safe_v1.is_some(),
         safe_exec.is_some(),
         erc7730,
+        expected_nested,
         inner_data,
         &mut proofs.erc7730_transcript,
     )?;
@@ -481,6 +596,8 @@ pub fn pick_sign_pages(
         safe_v1,
         safe_exec,
         erc7730,
+        erc7730_set,
+        expected_nested,
         erc20,
         selector,
         resolver,
@@ -584,7 +701,9 @@ pub fn pick_sign_pages(
 fn render_verified_erc7730_two_pass<'ir>(
     tx: &crate::tx::eip1559::Eip1559Tx,
     inner_data: &[u8],
-    descriptor: &'ir crate::tx::erc7730::VerifiedDescriptor<'ir>,
+    descriptor: Option<&crate::tx::erc7730::VerifiedDescriptor<'ir>>,
+    set: Option<&crate::tx::erc7730::VerifiedProofSet<'ir>>,
+    expected_nested: Option<&crate::tx::erc7730::NestedCallBinding>,
     erc20: Option<&crate::erc20::bundle::Erc20Metadata<'_>>,
     resolver: &crate::names::NameResolver<'_>,
     device_signer: &[u8; 20],
@@ -593,15 +712,32 @@ fn render_verified_erc7730_two_pass<'ir>(
     use crate::tx::erc7730_render::RenderErr;
 
     let mut pages = super::Pages::with_len(0);
-    let first = super::erc7730::render_contract_pass_into(
-        tx,
-        inner_data,
-        descriptor,
-        erc20,
-        resolver,
-        device_signer,
-        &mut pages,
-    )?;
+    let first = match (set, descriptor) {
+        (Some(set), Some(descriptor)) if descriptor == &set.outer.descriptor => {
+            super::erc7730::render_contract_proof_set_pass_into(
+                tx,
+                inner_data,
+                set,
+                erc20,
+                resolver,
+                device_signer,
+                expected_nested,
+                &mut pages,
+            )?
+        }
+        (None, Some(descriptor)) if expected_nested.is_none() => {
+            super::erc7730::render_contract_pass_into(
+                tx,
+                inner_data,
+                descriptor,
+                erc20,
+                resolver,
+                device_signer,
+                &mut pages,
+            )?
+        }
+        _ => return Err(RenderErr::Reject("7730 evidence mismatch")),
+    };
     proof
         .record_first_receipt(&first, &pages)
         .map_err(|_| RenderErr::Reject("7730 first transcript proof"))?;
@@ -610,15 +746,32 @@ fn render_verified_erc7730_two_pass<'ir>(
         .map_err(|_| RenderErr::Reject("7730 transcript reset proof"))?;
     crate::fi::wait_random();
 
-    let second = super::erc7730::render_contract_pass_into(
-        tx,
-        inner_data,
-        descriptor,
-        erc20,
-        resolver,
-        device_signer,
-        &mut pages,
-    )?;
+    let second = match (set, descriptor) {
+        (Some(set), Some(descriptor)) if descriptor == &set.outer.descriptor => {
+            super::erc7730::render_contract_proof_set_pass_into(
+                tx,
+                inner_data,
+                set,
+                erc20,
+                resolver,
+                device_signer,
+                expected_nested,
+                &mut pages,
+            )?
+        }
+        (None, Some(descriptor)) if expected_nested.is_none() => {
+            super::erc7730::render_contract_pass_into(
+                tx,
+                inner_data,
+                descriptor,
+                erc20,
+                resolver,
+                device_signer,
+                &mut pages,
+            )?
+        }
+        _ => return Err(RenderErr::Reject("7730 evidence mismatch")),
+    };
 
     let mut immediate_verdict = crate::fi::FAIL_SENTINEL;
     // SAFETY: unique live local. A skipped verification call leaves the
@@ -651,6 +804,8 @@ fn pick_sign_pages_inner(
     safe_v1: Option<&crate::tx::eip712::safe::VerifiedSafeV1<'_>>,
     safe_exec: Option<&crate::tx::eip712::safe::VerifiedSafeExec<'_>>,
     erc7730: Option<&crate::tx::erc7730::VerifiedDescriptor<'_>>,
+    erc7730_set: Option<&crate::tx::erc7730::VerifiedProofSet<'_>>,
+    expected_nested: Option<&crate::tx::erc7730::NestedCallBinding>,
     erc20: Option<&crate::erc20::bundle::Erc20Metadata<'_>>,
     selector: Option<&crate::selectors::SelectorMeta<'_>>,
     resolver: &crate::names::NameResolver<'_>,
@@ -730,11 +885,13 @@ fn pick_sign_pages_inner(
         );
         return super::safe_display::render_safe_exec_pages(exec, None, inner_meta, resolver);
     }
-    if let Some(d) = erc7730 {
+    if erc7730.is_some() {
         match render_verified_erc7730_two_pass(
             tx,
             inner_data,
-            d,
+            erc7730,
+            erc7730_set,
+            expected_nested,
             erc20,
             resolver,
             device_signer,

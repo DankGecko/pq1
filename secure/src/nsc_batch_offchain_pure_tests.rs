@@ -1763,7 +1763,9 @@ fn negative_batch_binds_sender_before_verify_confirm_sign_or_state_write() {
     );
     let downstream_compact = downstream.split_whitespace().collect::<String>();
     assert!(
-        downstream_compact.contains("pick_sign_pages(&tx_for_display,inner_data,&sender,"),
+        downstream_compact.contains(
+            "pick_sign_pages_with_erc7730_evidence(&tx_for_display,inner_data,&sender,"
+        ),
         "each batch member's ERC-7730 @.from must receive the bound sender explicitly"
     );
     let helper_start = WALLET_ADDRESS_SRC

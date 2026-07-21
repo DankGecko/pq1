@@ -119,4 +119,4 @@ pub use pqsigner_erc7730::display::{Pages, MAX_PAGES};
 #[cfg(not(test))]
 pub(crate) use dispatch::{legacy_fee_pages_required, DispatchPageProofs};
 #[cfg(not(test))]
-pub use dispatch::pick_sign_pages;
+pub use dispatch::{pick_sign_pages, pick_sign_pages_with_erc7730_evidence};

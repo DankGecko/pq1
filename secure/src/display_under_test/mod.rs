@@ -139,7 +139,9 @@ pub mod erc7730_secure_shim;
 // Re-export the host renderer and the test-mounted dispatcher's private
 // contract-pass wrapper under the same sibling module shape production uses.
 pub mod erc7730 {
-    pub(super) use super::erc7730_secure_shim::render_contract_pass_into;
+    pub(super) use super::erc7730_secure_shim::{
+        render_contract_pass_into, render_contract_proof_set_pass_into,
+    };
     pub use pqsigner_erc7730::display::render::*;
 }
 

@@ -2176,18 +2176,21 @@ fn production_midas_mtbill_deposit_routes_are_operand_complete_and_exactly_scope
         Err(BindingError::ContractMismatch)
     ));
 
-    // The signing handler turns a mis-bound proof into `None` before entering
-    // the dispatcher. Exercise that production boundary directly: the
-    // FI-hardened binding proof must refuse the borrowed descriptor, then the
-    // independently pinned known-call filter must prevent fallback.
+    // Exercise the production boundary directly: the complete proof-set FI
+    // proof must reject a rooted descriptor against the wrong target before
+    // the dispatcher can gain any fallback authority.
+    let excluded_tx = envelope(CHAIN_ID, excluded_contract);
+    let proof_set = crate::tx::erc7730::verify_erc7730_proof_set(&bundle, &registry.root)
+        .expect("legacy bundle verifies as a one-element proof set");
     let mut bind_verdict = crate::fi::FAIL_SENTINEL;
     let mut bind_cfi = crate::fi::CfiCounter::new();
-    crate::tx::erc7730::prove_contract_binding(
-        &verified.ir,
-        &bundle,
+    crate::tx::erc7730::prove_contract_proof_set_binding(
+        &proof_set,
         &registry.root,
-        CHAIN_ID,
-        &excluded_contract,
+        &excluded_tx,
+        &calldata,
+        &signer,
+        None,
         &mut bind_verdict,
         &mut bind_cfi,
     );
@@ -2197,8 +2200,6 @@ fn production_midas_mtbill_deposit_routes_are_operand_complete_and_exactly_scope
         crate::fi::OK_SENTINEL,
         "the rejecting binding proof must still complete its CFI transcript"
     );
-
-    let excluded_tx = envelope(CHAIN_ID, excluded_contract);
     let mut excluded_proofs = DispatchPageProofs::new();
     excluded_proofs.fail_initialize();
     assert!(
@@ -15704,6 +15705,9 @@ fn production_1inch_v6_cancellation_controls_reject_noncanonical_binding_and_fra
         cross_check_contract(&verified.ir, 1, &wrong_target),
         Err(BindingError::ContractMismatch)
     ));
+    let proof_set = crate::tx::erc7730::verify_erc7730_proof_set(&bundle, &registry.root)
+        .expect("legacy bundle verifies as a one-element proof set");
+    let signer = [0x42; 20];
 
     for (chain_id, target, label) in [
         (10u64, contract, "wrong chain"),
@@ -15711,12 +15715,14 @@ fn production_1inch_v6_cancellation_controls_reject_noncanonical_binding_and_fra
     ] {
         let mut verdict = crate::fi::FAIL_SENTINEL;
         let mut cfi = crate::fi::CfiCounter::new();
-        crate::tx::erc7730::prove_contract_binding(
-            &verified.ir,
-            &bundle,
+        let wrong_tx = envelope(chain_id, target);
+        crate::tx::erc7730::prove_contract_proof_set_binding(
+            &proof_set,
             &registry.root,
-            chain_id,
-            &target,
+            &wrong_tx,
+            &[],
+            &signer,
+            None,
             &mut verdict,
             &mut cfi,
         );
@@ -15728,7 +15734,6 @@ fn production_1inch_v6_cancellation_controls_reject_noncanonical_binding_and_fra
         );
     }
 
-    let signer = [0x42; 20];
     let resolver = NameResolver::new();
     let tx = envelope(1, contract);
     let traits = [0x5a; 32];

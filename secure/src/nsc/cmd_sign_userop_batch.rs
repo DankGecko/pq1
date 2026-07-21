@@ -73,7 +73,7 @@ use crate::erc20::bundle::{verify_erc20_bundle, Erc20Metadata};
 use crate::names::{verify_name_bundle, NameResolver};
 use crate::selectors::{parse_self_attest_bundle, verify_selector_bundle, SelectorMeta};
 use crate::tx::display::batch::{build_final_summary_pages, wrap_pages_with_batch_banner};
-use crate::tx::display::pick_sign_pages;
+use crate::tx::display::pick_sign_pages_with_erc7730_evidence;
 use crate::tx::eip1559::{Eip1559Tx, UserOpDisplayFields, U256};
 use crate::tx::eip712::cowswap::VerifiedCowswapV3;
 use crate::tx::eip712::safe::VerifiedSafeV1;
@@ -561,63 +561,13 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
                     != crate::fi::OK_SENTINEL
                 {
                     ui::show_status("Batch sign", "7730 bundle fail");
-                    continue;
+                    return NscStatus::InvalidPointer as u32;
                 }
                 let v = v_res.unwrap();
-                let outer = v.outer;
-                let ptx = parsed[rec.tx_idx as usize].as_ref().unwrap();
-                let mut bind_verdict_slot = 0u32;
-                // SAFETY: unique local; volatile FAIL state survives LTO if
-                // the non-inlined proof call is fault-skipped.
-                unsafe {
-                    core::ptr::write_volatile(&mut bind_verdict_slot, crate::fi::FAIL_SENTINEL);
-                }
-                core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-                let mut bind_cfi = crate::fi::CfiCounter::new();
-                crate::tx::erc7730::prove_contract_binding(
-                    &outer.descriptor.ir,
-                    outer.raw_bundle,
-                    &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
-                    chain_id,
-                    &ptx.to,
-                    &mut bind_verdict_slot,
-                    &mut bind_cfi,
-                );
-                core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-                // Gate A materializes both proofs independently. Gate B below
-                // repeats the volatile read and CFI check after a randomized
-                // gap, so skipping either reject branch remains fail-closed.
-                // SAFETY: local remains live and the callee borrow ended.
-                let bind_verdict_a = unsafe { core::ptr::read_volatile(&bind_verdict_slot) };
-                let bind_cfi_verdict_a =
-                    bind_cfi.check_into_sentinel(crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED);
-                let bind_all_ok_a = bind_verdict_a == crate::fi::OK_SENTINEL
-                    && bind_cfi_verdict_a == crate::fi::OK_SENTINEL;
-                crate::fi::scrub_sentinel_register();
-                let bind_gate_a =
-                    crate::fi::check_true_into_sentinel(|| core::hint::black_box(bind_all_ok_a));
-                crate::fi::scrub_sentinel_register();
-                if bind_gate_a != crate::fi::OK_SENTINEL {
-                    ui::show_status("Batch sign", "7730 binding fail");
-                    continue;
-                }
-                crate::fi::wait_random();
-                core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-                // SAFETY: same live local, independently re-read after the
-                // randomized gap instead of reusing gate A's cached verdict.
-                let bind_verdict_b = unsafe { core::ptr::read_volatile(&bind_verdict_slot) };
-                let bind_cfi_verdict_b =
-                    bind_cfi.check_into_sentinel(crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED);
-                let bind_all_ok_b = bind_verdict_b == crate::fi::OK_SENTINEL
-                    && bind_cfi_verdict_b == crate::fi::OK_SENTINEL;
-                crate::fi::scrub_sentinel_register();
-                let bind_gate_b =
-                    crate::fi::check_true_into_sentinel(|| core::hint::black_box(bind_all_ok_b));
-                crate::fi::scrub_sentinel_register();
-                if bind_gate_b != crate::fi::OK_SENTINEL {
-                    ui::show_status("Batch sign", "7730 binding fail");
-                    continue;
-                }
+                // Full context/nested binding is deliberately deferred until
+                // this member's trusted `Eip1559Tx` exists in the display
+                // loop. Until then this rooted set is only a candidate in the
+                // secure TOCTOU snapshot, not display authority.
                 routed[rec.tx_idx as usize]
                     .get_or_insert_with(RoutedTrailers::empty)
                     .erc7730 = Some(v);
@@ -1215,6 +1165,85 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             ui::show_status("CoW sign", "bad target (batch)");
             return NscStatus::InvalidPointer as u32;
         }
+
+        // Bind this member's complete proof set only after its exact signed
+        // display context exists. The pure expectation is followed by two
+        // independent whole-payload reparses and nested derivations inside the
+        // non-inlined proof helper. Any present invalid evidence refuses the
+        // complete batch instead of disappearing into a weaker fallback.
+        let (erc7730_verified, erc7730_nested_binding) = if let Some(set) =
+            r.and_then(|r| r.erc7730.as_ref())
+        {
+            let expected_nested = match crate::tx::erc7730::derive_nested_call(
+                &tx_for_display,
+                inner_data,
+                set,
+                &sender,
+            ) {
+                Ok(binding) => binding,
+                Err(_) => {
+                    ui::show_status("Batch sign", "7730 binding fail");
+                    return NscStatus::InvalidPointer as u32;
+                }
+            };
+
+            let mut bind_verdict_slot = 0u32;
+            // SAFETY: unique local; volatile FAIL survives LTO if the proof
+            // call is fault-skipped.
+            unsafe {
+                core::ptr::write_volatile(&mut bind_verdict_slot, crate::fi::FAIL_SENTINEL);
+            }
+            core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+            let mut bind_cfi = crate::fi::CfiCounter::new();
+            crate::tx::erc7730::prove_contract_proof_set_binding(
+                set,
+                &crate::db_roots::ERC7730_DESCRIPTORS_ROOT,
+                &tx_for_display,
+                inner_data,
+                &sender,
+                expected_nested.as_ref(),
+                &mut bind_verdict_slot,
+                &mut bind_cfi,
+            );
+            core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+
+            // SAFETY: local remains live and the callee borrow ended.
+            let bind_verdict_a = unsafe { core::ptr::read_volatile(&bind_verdict_slot) };
+            let bind_cfi_verdict_a =
+                bind_cfi.check_into_sentinel(crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED);
+            let bind_all_ok_a = bind_verdict_a == crate::fi::OK_SENTINEL
+                && bind_cfi_verdict_a == crate::fi::OK_SENTINEL;
+            crate::fi::scrub_sentinel_register();
+            let bind_gate_a =
+                crate::fi::check_true_into_sentinel(|| core::hint::black_box(bind_all_ok_a));
+            crate::fi::scrub_sentinel_register();
+            if bind_gate_a != crate::fi::OK_SENTINEL {
+                ui::show_status("Batch sign", "7730 binding fail");
+                return NscStatus::InternalError as u32;
+            }
+
+            crate::fi::wait_random();
+            core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+            // SAFETY: same live local, independently re-read after the gap.
+            let bind_verdict_b = unsafe { core::ptr::read_volatile(&bind_verdict_slot) };
+            let bind_cfi_verdict_b =
+                bind_cfi.check_into_sentinel(crate::tx::erc7730::CFI_CONTRACT_BIND_EXPECTED);
+            let bind_all_ok_b = bind_verdict_b == crate::fi::OK_SENTINEL
+                && bind_cfi_verdict_b == crate::fi::OK_SENTINEL;
+            crate::fi::scrub_sentinel_register();
+            let bind_gate_b =
+                crate::fi::check_true_into_sentinel(|| core::hint::black_box(bind_all_ok_b));
+            crate::fi::scrub_sentinel_register();
+            if bind_gate_b != crate::fi::OK_SENTINEL {
+                ui::show_status("Batch sign", "7730 binding fail");
+                return NscStatus::InternalError as u32;
+            }
+
+            (Some(set), expected_nested)
+        } else {
+            (None, None)
+        };
+
         let legacy_fee_pages_required = crate::tx::display::legacy_fee_pages_required(
             r.and_then(|r| r.cow_order.as_ref()).is_some(),
             r.and_then(|r| r.safe_v1.as_ref()).is_some(),
@@ -1222,18 +1251,15 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         );
         let mut dispatch_page_proofs = crate::tx::display::DispatchPageProofs::new();
         dispatch_page_proofs.fail_initialize();
-        let inner_pages = match pick_sign_pages(
+        let inner_pages = match pick_sign_pages_with_erc7730_evidence(
             &tx_for_display,
             inner_data,
             &sender,
             r.and_then(|r| r.cow_order.as_ref()),
             r.and_then(|r| r.safe_v1.as_ref()),
             safe_exec_verified.as_ref(),
-            r.and_then(|r| {
-                r.erc7730
-                    .as_ref()
-                    .map(|set| &set.outer.descriptor)
-            }),
+            erc7730_verified,
+            erc7730_nested_binding.as_ref(),
             chain_verified_erc20,
             r.and_then(|r| r.selector.as_ref()),
             &resolver,

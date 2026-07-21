@@ -15,6 +15,7 @@
 use pqsigner_erc7730::display::render::{
     render_erc7730_eip712_pages_into, render_erc7730_eip712_pages_v3_into,
     render_erc7730_pages_with_signer_into as render_contract_pass_into_raw,
+    render_erc7730_proof_set_pages_with_signer_into as render_contract_proof_set_pass_into_raw,
     ContractTranscriptReceipt, INTENT_PUBLICATION_EIP712_STATIC,
 };
 
@@ -46,6 +47,33 @@ pub(super) fn render_contract_pass_into<'ir>(
         erc20,
         resolver,
         device_signer,
+        pages,
+    )
+}
+
+/// Dispatcher-owned proof-set contract pass. The expected nested binding was
+/// independently derived and FI-proven by the secure handler; the renderer
+/// re-derives and exact-matches it before publishing any page.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(super) fn render_contract_proof_set_pass_into<'ir>(
+    tx: &crate::tx::eip1559::Eip1559Tx,
+    inner_data: &[u8],
+    set: &crate::tx::erc7730::VerifiedProofSet<'ir>,
+    erc20: Option<&crate::erc20::bundle::Erc20Metadata<'_>>,
+    resolver: &crate::names::NameResolver<'_>,
+    device_signer: &[u8; 20],
+    expected_nested: Option<&crate::tx::erc7730::NestedCallBinding>,
+    pages: &mut super::Pages,
+) -> Result<ContractTranscriptReceipt, crate::tx::erc7730_render::RenderErr> {
+    render_contract_proof_set_pass_into_raw(
+        tx,
+        inner_data,
+        set,
+        erc20,
+        resolver,
+        device_signer,
+        expected_nested,
         pages,
     )
 }

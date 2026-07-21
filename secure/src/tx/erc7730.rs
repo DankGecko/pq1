@@ -18,6 +18,10 @@ pub use pqsigner_erc7730::bundle::{
     leaf_hash, BundleError, VerifiedDescriptor, MAX_ERC7730_BUNDLE_LEN,
     MAX_PROOF_DEPTH,
 };
+pub use pqsigner_erc7730::display::render::{
+    derive_nested_call, nested_binding_commitment, CanonicalChildInterval, LeafIdentity,
+    NestedCallBinding,
+};
 pub use pqsigner_erc7730::ir::{
     ContextKind, Erc7730Ir, FieldEntry, FieldIter, FormatHeader, FormatIter,
     FormatOp, IrError, PathOp, Visibility, HEADER_LEN, MAX_FIELDS_PER_FORMAT,
@@ -93,44 +97,51 @@ pub(crate) const CFI_EIP712_BIND_EXPECTED: u32 = crate::cfi_expected!(
     CFI_EIP712_BIND_PUBLISH,
 );
 
-/// FI-hardened Merkle-membership + contract-context binding proof.
+/// FI-hardened proof-set membership + complete contract/nested binding proof.
 ///
 /// The caller must volatile-initialize `verdict_out` to `FAIL_SENTINEL` and
 /// later require both its independent readback and the caller-owned CFI
 /// transcript. Keeping the counter caller-owned detects a skipped whole call;
-/// recomputing the exact bundle/root and context around a randomized gap
-/// detects a fault in either Merkle or binding decision. Each independent
-/// parse must reproduce the caller's exact [`Erc7730Ir`] view; this prevents a
-/// faulted initial verifier from laundering an unrooted IR through a later
-/// context-only check.
+/// reparsing the complete proof-set payload and deriving the exact nested
+/// binding around a randomized gap detects a fault in either Merkle, wrapper,
+/// context, interval, target, selector, policy, or child-preflight decision.
+/// Each independent parse must reproduce the caller's exact verified set and
+/// caller-owned expected nested binding (including an authoritative `None`),
+/// preventing an unrooted child from gaining display authority.
 #[inline(never)]
-pub fn prove_contract_binding(
-    ir: &Erc7730Ir<'_>,
-    bundle: &[u8],
+pub fn prove_contract_proof_set_binding(
+    set: &VerifiedProofSet<'_>,
     root: &[u8; 32],
-    chain_id: u64,
-    contract: &[u8; 20],
+    tx: &crate::tx::eip1559::Eip1559Tx,
+    inner_data: &[u8],
+    device_signer: &[u8; 20],
+    expected_nested: Option<&NestedCallBinding>,
     verdict_out: &mut u32,
     cfi: &mut crate::fi::CfiCounter,
 ) {
-    let ok_a = verify_erc7730_bundle(bundle, root).is_ok_and(|verified| {
-        core::hint::black_box(verified.ir == *ir)
-            && cross_check_contract(&verified.ir, chain_id, contract).is_ok()
+    let expected_nested = expected_nested.copied();
+    let ok_a = verify_erc7730_proof_set(set.raw_payload, root).is_ok_and(|verified| {
+        core::hint::black_box(verified == *set)
+            && derive_nested_call(tx, inner_data, &verified, device_signer)
+                .is_ok_and(|derived| core::hint::black_box(derived == expected_nested))
     });
     cfi.bump(CFI_CONTRACT_BIND_A);
     crate::fi::wait_random();
-    let ok_b = verify_erc7730_bundle(
-        core::hint::black_box(bundle),
+    let ok_b = verify_erc7730_proof_set(
+        core::hint::black_box(set.raw_payload),
         core::hint::black_box(root),
     )
     .is_ok_and(|verified| {
-        core::hint::black_box(verified.ir == *core::hint::black_box(ir))
-            && cross_check_contract(
-                &verified.ir,
-                core::hint::black_box(chain_id),
-                core::hint::black_box(contract),
+        core::hint::black_box(verified == *core::hint::black_box(set))
+            && derive_nested_call(
+                core::hint::black_box(tx),
+                core::hint::black_box(inner_data),
+                &verified,
+                core::hint::black_box(device_signer),
             )
-            .is_ok()
+            .is_ok_and(|derived| {
+                core::hint::black_box(derived == core::hint::black_box(expected_nested))
+            })
     });
     cfi.bump(CFI_CONTRACT_BIND_B);
     let verdict = crate::fi::check_true_into_sentinel(|| {
@@ -143,7 +154,7 @@ pub fn prove_contract_binding(
 }
 
 /// FI-hardened Merkle-membership + EIP-712 domain binding proof. Caller
-/// contract is identical to [`prove_contract_binding`].
+/// contract is identical to [`prove_contract_proof_set_binding`].
 #[inline(never)]
 pub fn prove_eip712_binding(
     ir: &Erc7730Ir<'_>,

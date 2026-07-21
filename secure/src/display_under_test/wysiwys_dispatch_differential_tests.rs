@@ -1531,9 +1531,9 @@ fn pin_handler_render_and_digest_glue_matches_replication() {
             "handler dispatcher receipt must start from a materialized fail state",
         ),
         (
-            "let mut pages = match pick_sign_pages( &tx_for_display, inner_data, &sender,
+            "let mut pages = match pick_sign_pages_with_erc7730_evidence( &tx_for_display, inner_data, &sender,
              cow_order_verified.as_ref(), safe_v1_verified.as_ref(), safe_exec_verified.as_ref(),
-             erc7730_verified.as_ref().map(|set| &set.outer.descriptor),
+             erc7730_verified.as_ref(), erc7730_nested_binding.as_ref(),
              chain_verified_meta.as_ref(), selector_verified.as_ref(),
              &resolver, &mut dispatch_page_proofs, )",
             "handler §8 render dispatch drifted",
@@ -1916,8 +1916,11 @@ fn pin_append_only_handler_suffix_order_and_completion_receipts() {
     );
     assert!(DISPATCH_SRC.contains("pages.volatile_poison_and_reset();"));
     assert!(DISPATCH_SRC.contains("self.receipt.exact_match(second)"));
-    assert!(DISPATCH_SRC.contains("second.range_matches(pages, 0)"));
-    assert!(DISPATCH_SRC.contains("self.receipt.range_matches(pages, self.start_index)"));
+    assert!(DISPATCH_SRC.contains("self.range_matches(second, pages, 0)"));
+    assert!(DISPATCH_SRC.contains(
+        "self.range_matches(&self.receipt, pages, self.start_index)"
+    ));
+    assert!(DISPATCH_SRC.contains("receipt.range_matches_with_nested("));
 
     let final_start = BATCH_HANDLER_SRC
         .find("let mut final_pages = build_final_summary_pages(batch_count);")
