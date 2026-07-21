@@ -48,11 +48,11 @@ Current security contract:
   exact signed words and hard-refuses missing, reordered, mismatched, non-ASCII,
   over-128-byte, trailing, or page-overflow display evidence without fallback.
 - The current regenerated development catalogue has **400 leaves**, root
-  `a20940ba4d92b2dba1f80efdbe615196aede1c893eb0a25e68044b75dde9b10d`,
+  `0775c1c31572394e9fe9240a957aa897c0ae984e64f62567032a98fb1cf83d70`,
   and **4,580 exact known-call tuples**. The tuple-set receipt is SHA-256
   `b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829`;
   Bloom occupancy is 28,453 / 131,072 bits under the compiler-enforced generation cap.
-- The current compiler report records **699** omitted descriptor/formats.
+- The current compiler report records **694** omitted descriptor/formats.
 <!-- END XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->
 - These receipts detect input/artifact drift. They do not turn Bloom insertion
   into a proof of parser completeness. The current independent types-only ABI

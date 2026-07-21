@@ -3104,8 +3104,8 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(result.root),
-        // Re-derived from the combined semantic-honesty catalogue.
-        "a20940ba4d92b2dba1f80efdbe615196aede1c893eb0a25e68044b75dde9b10d"
+        // Re-derived after bounded multi-tail formats were admitted.
+        "0775c1c31572394e9fe9240a957aa897c0ae984e64f62567032a98fb1cf83d70"
     );
 }
 
