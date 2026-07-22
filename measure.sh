@@ -5,8 +5,8 @@
 # Determinate Systems installer (works on Linux, macOS, WSL2 — single
 # curl, ships an uninstaller). Then runs the pinned Nix flake, which
 # builds the secure firmware in a hermetic environment and prints 8
-# BIP-39 words. Compare those words to what the device's OLED shows
-# at boot — match means the firmware on the device corresponds to this
+# BIP-39 words. Compare those words to what the device's NV3007 LCD
+# shows at boot — match means the firmware on the device corresponds to this
 # git commit. See docs/firmware/reproducible-builds.md for the threat model.
 #
 # All toolchain pinning lives in flake.nix + flake.lock. This script is
@@ -488,7 +488,7 @@ if ! command -v nix >/dev/null 2>&1; then
 This script uses Nix to build the firmware in a hermetic environment
 pinned by hash, so the measurement words it prints are guaranteed to
 match what the vendor published for this git commit (and what the
-device's OLED shows after flashing).
+device's NV3007 LCD shows after flashing).
 
 Running Determinate Systems' Nix installer (Linux/macOS/WSL2; ships
 with a clean uninstaller):

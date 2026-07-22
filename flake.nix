@@ -28,7 +28,7 @@
   # x86_64-linux builder must be configured separately.
   #
   # Verify reproducibility quickly: `nix build .#measure` on any host
-  # and compare `result/words.txt` to what the device's OLED shows.
+  # and compare `result/words.txt` to what the device's NV3007 LCD shows.
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
@@ -132,7 +132,23 @@
           # build log lives in $out/build.log for transparency.
           ${buildPkgs.gnugrep}/bin/grep -E '^[1-8] [a-z]+' \
             make-measure.out > $out/words.txt
-          cp make-measure.out $out/build.log
+          # Normalize the log so $out is bit-reproducible and passes
+          # `nix build .#measure --rebuild`: cargo's parallel "Compiling"
+          # lines interleave in scheduler order and its "Finished" lines
+          # embed wall-clock timings — the only two nondeterministic
+          # parts of the log. Strip the timings and emit the Compiling
+          # lines as a sorted block instead of dropping them.
+          ${buildPkgs.gnused}/bin/sed -E \
+            's/^([[:space:]]*Finished .*) in [0-9]+\.[0-9]+s$/\1/' \
+            make-measure.out \
+            | ${buildPkgs.gnugrep}/bin/grep -vE '^[[:space:]]*Compiling ' \
+            > $out/build.log
+          {
+            echo
+            echo "# crates compiled (sorted; cargo's live interleaving is nondeterministic):"
+            ${buildPkgs.gnugrep}/bin/grep -E '^[[:space:]]*Compiling ' \
+              make-measure.out | LC_ALL=C ${buildPkgs.coreutils}/bin/sort
+          } >> $out/build.log
 
           runHook postInstall
         '';
