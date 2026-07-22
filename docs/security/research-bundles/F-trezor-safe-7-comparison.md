@@ -799,7 +799,7 @@ Start with this README → `docs/STATUS.md` (the security/verification frontier 
 
 ## License
 
-Copyright (c) 2026 EthereumPhone. All rights reserved.
+Copyright (c) 2026 Freedom Factory Inc.
 
 
 

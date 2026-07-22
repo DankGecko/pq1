@@ -561,7 +561,7 @@ Start with this README → `docs/STATUS.md` (the security/verification frontier 
 
 ## License
 
-Copyright (c) 2026 EthereumPhone.
+Copyright (c) 2026 Freedom Factory Inc.
 
 - **Firmware and everything else in this repository:** [GNU General Public License v3.0](LICENSE) (GPLv3). Note that ported third-party GPLv3 code (e.g. the Trezor-derived TAMP driver) is compatible with and remains under GPLv3.
 - **Smart contracts (`contracts/`):** [MIT License](contracts/LICENSE). Vendored third-party contract dependencies (Solady, Coinbase Smart Wallet reference code, forge-std, etc.) remain under their own licenses.
