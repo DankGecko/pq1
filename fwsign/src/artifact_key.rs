@@ -16,6 +16,7 @@ use std::path::Path;
 
 pub const VENDOR_KEY_SECTION: &str = ".pqsigner.vendor_pubkey";
 pub const ERC7730_STATUS_SECTION: &str = ".pqsigner.erc7730_status";
+pub const ERC7730_FORCED_ELIGIBLE_SECTION: &str = ".pqsigner.erc7730_forced_eligible";
 const DEVELOPMENT_VENDOR_KEY_HEX: &str =
     include_str!("../../config/development-firmware-vendor-pubkey.hex");
 
@@ -26,6 +27,11 @@ pub(crate) struct ArtifactSection<const N: usize> {
 }
 
 type ArtifactVendorKey = ArtifactSection<32>;
+
+pub(crate) struct VariableArtifactSection {
+    raw: Vec<u8>,
+    address: u64,
+}
 
 impl<const N: usize> ArtifactSection<N> {
     #[must_use]
@@ -40,25 +46,46 @@ impl<const N: usize> ArtifactSection<N> {
         image: &crate::elf::FlatImage,
         label: &str,
     ) -> Result<()> {
-        let offset = self.address.checked_sub(image.base).ok_or_else(|| {
-            anyhow::anyhow!(
-                "secure runtime {label} at {:#x} precedes signed image base {:#x}",
-                self.address,
-                image.base
-            )
-        })?;
-        let offset = usize::try_from(offset)
-            .with_context(|| format!("{label} image offset does not fit usize"))?;
-        let end = offset
-            .checked_add(self.raw.len())
-            .with_context(|| format!("{label} image range overflow"))?;
-        if image.bytes.get(offset..end) != Some(self.raw.as_slice()) {
-            bail!(
-                "secure runtime {label} is outside or differs in the exact flat image being signed"
-            );
-        }
-        Ok(())
+        verify_flat_image_range(&self.raw, self.address, image, label)
     }
+}
+
+impl VariableArtifactSection {
+    #[must_use]
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.raw
+    }
+
+    pub(crate) fn verify_flat_image(
+        &self,
+        image: &crate::elf::FlatImage,
+        label: &str,
+    ) -> Result<()> {
+        verify_flat_image_range(&self.raw, self.address, image, label)
+    }
+}
+
+fn verify_flat_image_range(
+    raw: &[u8],
+    address: u64,
+    image: &crate::elf::FlatImage,
+    label: &str,
+) -> Result<()> {
+    let offset = address.checked_sub(image.base).ok_or_else(|| {
+        anyhow::anyhow!(
+            "secure runtime {label} at {address:#x} precedes signed image base {:#x}",
+            image.base
+        )
+    })?;
+    let offset = usize::try_from(offset)
+        .with_context(|| format!("{label} image offset does not fit usize"))?;
+    let end = offset
+        .checked_add(raw.len())
+        .with_context(|| format!("{label} image range overflow"))?;
+    if image.bytes.get(offset..end) != Some(raw) {
+        bail!("secure runtime {label} is outside or differs in the exact flat image being signed");
+    }
+    Ok(())
 }
 
 pub struct VerifiedArtifactKeys {
@@ -99,6 +126,107 @@ pub(crate) fn read_erc7730_status_section(
         },
     )?;
     Ok(section)
+}
+
+/// Read and strictly validate the optional P73K refused-known set retained by
+/// a final secure ELF.
+///
+/// Absence is accepted for images that do not advertise the tier, including
+/// feature-off and pre-P73K images. If the section name is present, every
+/// structural and ELF-placement check is mandatory.
+pub(crate) fn read_optional_erc7730_forced_eligible_section(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<Option<VariableArtifactSection>> {
+    let file =
+        object::File::parse(bytes).with_context(|| format!("parsing ELF {}", path.display()))?;
+
+    validate_elf_identity(path, &file)?;
+
+    let mut matches = file.sections().filter(|section| {
+        section
+            .name()
+            .map(|name| name == ERC7730_FORCED_ELIGIBLE_SECTION)
+            .unwrap_or(false)
+    });
+    let Some(section) = matches.next() else {
+        return Ok(None);
+    };
+    if matches.next().is_some() {
+        bail!(
+            "{}: more than one {} section",
+            path.display(),
+            ERC7730_FORCED_ELIGIBLE_SECTION
+        );
+    }
+    match section.flags() {
+        SectionFlags::Elf { sh_flags }
+            if sh_flags & u64::from(object::elf::SHF_ALLOC) != 0
+                && sh_flags & u64::from(object::elf::SHF_WRITE) == 0 => {}
+        _ => bail!(
+            "{}: {} must be an allocated, read-only ELF section",
+            path.display(),
+            ERC7730_FORCED_ELIGIBLE_SECTION
+        ),
+    }
+    let data = section.data().with_context(|| {
+        format!(
+            "reading {} from {}",
+            ERC7730_FORCED_ELIGIBLE_SECTION,
+            path.display()
+        )
+    })?;
+    crate::forced_eligible::validate(data).with_context(|| {
+        format!(
+            "{}: invalid {}",
+            path.display(),
+            ERC7730_FORCED_ELIGIBLE_SECTION
+        )
+    })?;
+    let Some((_, file_size)) = section.file_range() else {
+        bail!(
+            "{}: {} has no file-backed range",
+            path.display(),
+            ERC7730_FORCED_ELIGIBLE_SECTION
+        );
+    };
+    let data_len = u64::try_from(data.len()).context("P73K section length does not fit u64")?;
+    if file_size != data_len {
+        bail!(
+            "{}: {} file-backed range is {} bytes but section data is {} bytes",
+            path.display(),
+            ERC7730_FORCED_ELIGIBLE_SECTION,
+            file_size,
+            data.len()
+        );
+    }
+
+    let address = section.address();
+    let in_readonly_load = file.segments().any(|segment| {
+        let flags_ok = matches!(
+            segment.flags(),
+            SegmentFlags::Elf { p_flags }
+                if p_flags & object::elf::PF_R != 0 && p_flags & object::elf::PF_W == 0
+        );
+        flags_ok
+            && segment
+                .data_range(address, data_len)
+                .ok()
+                .flatten()
+                .is_some_and(|loaded| loaded == data)
+    });
+    if !in_readonly_load {
+        bail!(
+            "{}: {} is not contained byte-for-byte in a read-only PT_LOAD segment",
+            path.display(),
+            ERC7730_FORCED_ELIGIBLE_SECTION
+        );
+    }
+
+    Ok(Some(VariableArtifactSection {
+        raw: data.to_vec(),
+        address,
+    }))
 }
 
 /// Verify a bundle sidecar against authenticated flat secure-image bytes.
@@ -143,6 +271,136 @@ pub(crate) fn verify_unique_erc7730_status_in_flat_image(
         ),
         None => bail!("authenticated secure.bin contains no valid ERC-7730 catalogue status"),
     }
+}
+
+/// Validate and bind an exact P73K sidecar to authenticated flat image bytes.
+///
+/// The image must contain exactly one structurally valid P73K artifact and it
+/// must byte-equal the sidecar. This rejects an absent, substituted, malformed,
+/// or ambiguous release identity.
+pub(crate) fn verify_unique_erc7730_forced_eligible_in_flat_image(
+    forced_eligible: &[u8],
+    secure_image: &[u8],
+) -> Result<crate::forced_eligible::Summary> {
+    let summary = crate::forced_eligible::validate(forced_eligible)
+        .context("invalid erc7730-forced-eligible.bin")?;
+    let candidates = advertised_forced_eligible_candidates(secure_image);
+    if candidates.len() > 1 {
+        bail!(
+            "authenticated secure.bin contains more than one advertised ERC-7730 forced-eligible set; binding is ambiguous"
+        );
+    }
+    match candidates.first() {
+        Some(Some(candidate)) => {
+            crate::forced_eligible::validate(candidate)
+                .context("authenticated secure.bin advertises a malformed P73K set")?;
+            if *candidate != forced_eligible {
+                bail!(
+                    "erc7730-forced-eligible.bin differs from the unique valid forced-eligible set in authenticated secure.bin"
+                );
+            }
+            Ok(summary)
+        }
+        Some(None) => bail!("authenticated secure.bin advertises a truncated P73K set"),
+        None => bail!("authenticated secure.bin contains no P73K forced-eligible set"),
+    }
+}
+
+/// Prove that the two retained ERC-7730 identities occupy distinct bytes in
+/// the linked ELF. The image signature authenticates both, but overlapping
+/// section ranges would make the claimed two-artifact identity ambiguous.
+pub(crate) fn verify_erc7730_elf_sections_disjoint(
+    status: &ArtifactSection<{ pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN }>,
+    forced_eligible: &VariableArtifactSection,
+) -> Result<()> {
+    verify_disjoint_ranges(
+        status.address,
+        status.raw.len(),
+        forced_eligible.address,
+        forced_eligible.raw.len(),
+        "retained P73S and P73K ELF sections overlap",
+    )
+}
+
+/// Repeat the non-overlap proof using the exact sidecars' unique locations in
+/// authenticated `secure.bin`, independent of ELF section metadata.
+pub(crate) fn verify_erc7730_sidecars_disjoint_in_flat_image(
+    status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
+    forced_eligible: &[u8],
+    secure_image: &[u8],
+) -> Result<()> {
+    let status_offset = secure_image
+        .windows(status.len())
+        .position(|candidate| candidate == status)
+        .context("authenticated secure.bin does not contain the exact P73S sidecar")?;
+    let forced_offset = secure_image
+        .windows(forced_eligible.len())
+        .position(|candidate| candidate == forced_eligible)
+        .context("authenticated secure.bin does not contain the exact P73K sidecar")?;
+    verify_disjoint_ranges(
+        status_offset as u64,
+        status.len(),
+        forced_offset as u64,
+        forced_eligible.len(),
+        "authenticated P73S and P73K sidecars overlap in secure.bin",
+    )
+}
+
+fn verify_disjoint_ranges(
+    first_start: u64,
+    first_len: usize,
+    second_start: u64,
+    second_len: usize,
+    error: &str,
+) -> Result<()> {
+    let first_len = u64::try_from(first_len).context("first artifact length does not fit u64")?;
+    let second_len =
+        u64::try_from(second_len).context("second artifact length does not fit u64")?;
+    let first_end = first_start
+        .checked_add(first_len)
+        .context("first artifact address range overflow")?;
+    let second_end = second_start
+        .checked_add(second_len)
+        .context("second artifact address range overflow")?;
+    if first_start < second_end && second_start < first_end {
+        bail!("{error}");
+    }
+    Ok(())
+}
+
+/// Preserve feature-off/legacy compatibility without permitting an image that
+/// advertises P73K to omit its sidecar.
+pub(crate) fn verify_erc7730_forced_eligible_absent_from_flat_image(
+    secure_image: &[u8],
+) -> Result<()> {
+    if advertised_forced_eligible_candidates(secure_image).is_empty() {
+        Ok(())
+    } else {
+        bail!(
+            "authenticated secure.bin contains an ERC-7730 forced-eligible set but the required erc7730-forced-eligible.bin sidecar is absent"
+        )
+    }
+}
+
+/// Find complete slices whose fixed header advertises P73K v1. Body validity
+/// is deliberately checked by the caller so a malformed retained set cannot
+/// masquerade as a legacy image merely by omitting its sidecar.
+fn advertised_forced_eligible_candidates(image: &[u8]) -> Vec<Option<&[u8]>> {
+    let mut candidates = Vec::new();
+    for (offset, magic) in image
+        .windows(crate::forced_eligible::MAGIC.len())
+        .enumerate()
+    {
+        if magic != crate::forced_eligible::MAGIC {
+            continue;
+        }
+        let remaining = &image[offset..];
+        let Ok(len) = crate::forced_eligible::encoded_len_from_header(remaining) else {
+            continue;
+        };
+        candidates.push(remaining.get(..len));
+    }
+    candidates
 }
 
 pub fn verify_artifacts(
@@ -195,17 +453,7 @@ fn read_fixed_section<const N: usize>(
     let file =
         object::File::parse(bytes).with_context(|| format!("parsing ELF {}", path.display()))?;
 
-    if file.format() != BinaryFormat::Elf
-        || file.architecture() != Architecture::Arm
-        || file.is_64()
-        || !file.is_little_endian()
-        || file.kind() != ObjectKind::Executable
-    {
-        bail!(
-            "{}: expected a little-endian ARM ELF32 executable",
-            path.display()
-        );
-    }
+    validate_elf_identity(path, &file)?;
 
     let mut matches = file.sections().filter(|section| {
         section
@@ -286,6 +534,21 @@ fn read_fixed_section<const N: usize>(
     let mut out = [0u8; N];
     out.copy_from_slice(data);
     Ok(ArtifactSection { raw: out, address })
+}
+
+fn validate_elf_identity(path: &Path, file: &object::File<'_>) -> Result<()> {
+    if file.format() != BinaryFormat::Elf
+        || file.architecture() != Architecture::Arm
+        || file.is_64()
+        || !file.is_little_endian()
+        || file.kind() != ObjectKind::Executable
+    {
+        bail!(
+            "{}: expected a little-endian ARM ELF32 executable",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 pub fn read_policy_fingerprint(path: &Path) -> Result<[u8; 32]> {
@@ -397,6 +660,107 @@ mod tests {
         .to_bytes()
     }
 
+    fn fixture_forced_eligible() -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(crate::forced_eligible::MAGIC);
+        out.extend_from_slice(&crate::forced_eligible::SCHEMA_V1.to_be_bytes());
+        out.extend_from_slice(&(crate::forced_eligible::HEADER_LEN as u16).to_be_bytes());
+        out.extend_from_slice(&1u32.to_be_bytes());
+        out.extend_from_slice(&2u32.to_be_bytes());
+        out.extend_from_slice(&1u64.to_be_bytes());
+        out.extend_from_slice(&[0x11; 20]);
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(&2u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
+        out.extend_from_slice(&[0x01, 0x02, 0x03, 0x05]);
+        out
+    }
+
+    fn arm_elf32_with_forced_sections(payloads: &[Vec<u8>]) -> Vec<u8> {
+        const ELF_HEADER_LEN: usize = 52;
+        const PROGRAM_HEADER_LEN: usize = 32;
+        const SECTION_HEADER_LEN: usize = 40;
+        const PROGRAM_HEADER_OFFSET: usize = ELF_HEADER_LEN;
+        const DATA_OFFSET: usize = 0x100;
+        const LOAD_BASE: u32 = 0x0800_0000;
+        const SHSTRTAB: &[u8] = b"\0.shstrtab\0.pqsigner.erc7730_forced_eligible\0";
+        const SHSTRTAB_NAME: u32 = 1;
+        const FORCED_NAME: u32 = 11;
+
+        fn align4(value: usize) -> usize {
+            (value + 3) & !3
+        }
+        fn put_u16(out: &mut [u8], offset: usize, value: u16) {
+            out[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+        }
+        fn put_u32(out: &mut [u8], offset: usize, value: u32) {
+            out[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+
+        let mut data_offsets = Vec::with_capacity(payloads.len());
+        let mut cursor = DATA_OFFSET;
+        for payload in payloads {
+            cursor = align4(cursor);
+            data_offsets.push(cursor);
+            cursor += payload.len();
+        }
+        let load_end = cursor;
+        let shstrtab_offset = align4(cursor);
+        let section_headers_offset = align4(shstrtab_offset + SHSTRTAB.len());
+        let section_count = 2 + payloads.len();
+        let mut elf = vec![0u8; section_headers_offset + section_count * SECTION_HEADER_LEN];
+
+        elf[..4].copy_from_slice(b"\x7fELF");
+        elf[4] = 1; // ELFCLASS32
+        elf[5] = 1; // ELFDATA2LSB
+        elf[6] = 1; // EV_CURRENT
+        put_u16(&mut elf, 16, object::elf::ET_EXEC);
+        put_u16(&mut elf, 18, object::elf::EM_ARM);
+        put_u32(&mut elf, 20, 1);
+        put_u32(&mut elf, 28, PROGRAM_HEADER_OFFSET as u32);
+        put_u32(&mut elf, 32, section_headers_offset as u32);
+        put_u16(&mut elf, 40, ELF_HEADER_LEN as u16);
+        put_u16(&mut elf, 42, PROGRAM_HEADER_LEN as u16);
+        put_u16(&mut elf, 44, 1);
+        put_u16(&mut elf, 46, SECTION_HEADER_LEN as u16);
+        put_u16(&mut elf, 48, section_count as u16);
+        put_u16(&mut elf, 50, 1); // .shstrtab section index
+
+        // One read-only load segment containing the headers and every P73K
+        // section payload. Section headers themselves need not be loaded.
+        put_u32(&mut elf, PROGRAM_HEADER_OFFSET, object::elf::PT_LOAD);
+        put_u32(&mut elf, PROGRAM_HEADER_OFFSET + 4, 0);
+        put_u32(&mut elf, PROGRAM_HEADER_OFFSET + 8, LOAD_BASE);
+        put_u32(&mut elf, PROGRAM_HEADER_OFFSET + 12, LOAD_BASE);
+        put_u32(&mut elf, PROGRAM_HEADER_OFFSET + 16, load_end as u32);
+        put_u32(&mut elf, PROGRAM_HEADER_OFFSET + 20, load_end as u32);
+        put_u32(&mut elf, PROGRAM_HEADER_OFFSET + 24, object::elf::PF_R);
+        put_u32(&mut elf, PROGRAM_HEADER_OFFSET + 28, 4);
+
+        elf[shstrtab_offset..shstrtab_offset + SHSTRTAB.len()].copy_from_slice(SHSTRTAB);
+        let shstr = section_headers_offset + SECTION_HEADER_LEN;
+        put_u32(&mut elf, shstr, SHSTRTAB_NAME);
+        put_u32(&mut elf, shstr + 4, object::elf::SHT_STRTAB);
+        put_u32(&mut elf, shstr + 16, shstrtab_offset as u32);
+        put_u32(&mut elf, shstr + 20, SHSTRTAB.len() as u32);
+        put_u32(&mut elf, shstr + 32, 1);
+
+        for (index, (payload, data_offset)) in payloads.iter().zip(data_offsets.iter()).enumerate()
+        {
+            elf[*data_offset..*data_offset + payload.len()].copy_from_slice(payload);
+            let section = section_headers_offset + (2 + index) * SECTION_HEADER_LEN;
+            put_u32(&mut elf, section, FORCED_NAME);
+            put_u32(&mut elf, section + 4, object::elf::SHT_PROGBITS);
+            put_u32(&mut elf, section + 8, object::elf::SHF_ALLOC);
+            put_u32(&mut elf, section + 12, LOAD_BASE + *data_offset as u32);
+            put_u32(&mut elf, section + 16, *data_offset as u32);
+            put_u32(&mut elf, section + 20, payload.len() as u32);
+            put_u32(&mut elf, section + 32, 4);
+        }
+        elf
+    }
+
     #[test]
     fn policy_parser_is_strict_and_fail_closed() {
         assert!(parse_policy_fingerprint("UNPROVISIONED").is_err());
@@ -417,6 +781,65 @@ mod tests {
             .to_string();
         assert!(error.contains("missing retained"), "got: {error}");
         assert!(error.contains(ERC7730_STATUS_SECTION), "got: {error}");
+    }
+
+    #[test]
+    fn missing_forced_eligible_section_is_legacy_compatible() {
+        let elf = empty_arm_elf32_executable();
+        assert!(
+            read_optional_erc7730_forced_eligible_section(Path::new("secure.elf"), &elf)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn forced_eligible_elf_section_is_unique_readonly_loadable_and_strict() {
+        let forced = fixture_forced_eligible();
+        let elf = arm_elf32_with_forced_sections(std::slice::from_ref(&forced));
+        let section = read_optional_erc7730_forced_eligible_section(Path::new("secure.elf"), &elf)
+            .unwrap()
+            .expect("fixture carries P73K section");
+        assert_eq!(section.bytes(), forced);
+
+        let duplicate = arm_elf32_with_forced_sections(&[forced.clone(), forced.clone()]);
+        let error =
+            read_optional_erc7730_forced_eligible_section(Path::new("secure.elf"), &duplicate)
+                .err()
+                .expect("duplicate section must fail")
+                .to_string();
+        assert!(error.contains("more than one"), "got: {error}");
+
+        let mut writable = elf.clone();
+        let shoff = u32::from_le_bytes(writable[32..36].try_into().unwrap()) as usize;
+        writable[shoff + 2 * 40 + 8..shoff + 2 * 40 + 12]
+            .copy_from_slice(&(object::elf::SHF_ALLOC | object::elf::SHF_WRITE).to_le_bytes());
+        let error =
+            read_optional_erc7730_forced_eligible_section(Path::new("secure.elf"), &writable)
+                .err()
+                .expect("writable section must fail")
+                .to_string();
+        assert!(error.contains("allocated, read-only"), "got: {error}");
+
+        let mut writable_load = elf;
+        writable_load[52 + 24..52 + 28]
+            .copy_from_slice(&(object::elf::PF_R | object::elf::PF_W).to_le_bytes());
+        let error =
+            read_optional_erc7730_forced_eligible_section(Path::new("secure.elf"), &writable_load)
+                .err()
+                .expect("writable load segment must fail")
+                .to_string();
+        assert!(error.contains("read-only PT_LOAD"), "got: {error}");
+
+        let mut malformed = forced;
+        malformed[0] ^= 1;
+        let malformed = arm_elf32_with_forced_sections(&[malformed]);
+        let error =
+            read_optional_erc7730_forced_eligible_section(Path::new("secure.elf"), &malformed)
+                .err()
+                .expect("malformed P73K section must fail")
+                .to_string();
+        assert!(error.contains("invalid"), "got: {error}");
     }
 
     #[test]
@@ -507,5 +930,96 @@ mod tests {
         let mut malformed_sidecar = status;
         malformed_sidecar[0] ^= 1;
         assert!(verify_unique_erc7730_status_in_flat_image(&malformed_sidecar, &image).is_err());
+    }
+
+    #[test]
+    fn forced_eligible_must_occur_exactly_once_in_authenticated_image() {
+        let forced = fixture_forced_eligible();
+        let mut one = vec![0xa5; 32];
+        one.extend_from_slice(&forced);
+        one.extend_from_slice(&[0x5a; 32]);
+        let summary = verify_unique_erc7730_forced_eligible_in_flat_image(&forced, &one).unwrap();
+        assert_eq!(summary.group_count, 1);
+        assert_eq!(summary.tuple_count, 2);
+        assert_eq!(summary.encoded_len, forced.len());
+
+        let absent = vec![0u8; forced.len() + 64];
+        assert!(verify_unique_erc7730_forced_eligible_in_flat_image(&forced, &absent).is_err());
+        assert!(verify_erc7730_forced_eligible_absent_from_flat_image(&absent).is_ok());
+        assert!(verify_erc7730_forced_eligible_absent_from_flat_image(&one).is_err());
+
+        let mut duplicate = one;
+        duplicate.extend_from_slice(&forced);
+        assert!(verify_unique_erc7730_forced_eligible_in_flat_image(&forced, &duplicate).is_err());
+    }
+
+    #[test]
+    fn forced_eligible_substitution_and_malformed_sidecars_fail_closed() {
+        let forced = fixture_forced_eligible();
+        let mut image = vec![0xa5; 16];
+        image.extend_from_slice(&forced);
+        image.extend_from_slice(&[0x5a; 16]);
+
+        let mut substituted = forced.clone();
+        *substituted.last_mut().unwrap() ^= 2;
+        assert!(crate::forced_eligible::validate(&substituted).is_ok());
+        assert!(verify_unique_erc7730_forced_eligible_in_flat_image(&substituted, &image).is_err());
+
+        let mut malformed = forced;
+        malformed[34 + crate::forced_eligible::HEADER_LEN] = 1;
+        assert!(verify_unique_erc7730_forced_eligible_in_flat_image(&malformed, &image).is_err());
+        let mut malformed_image = vec![0xa5; 16];
+        malformed_image.extend_from_slice(&malformed);
+        assert!(verify_erc7730_forced_eligible_absent_from_flat_image(&malformed_image).is_err());
+
+        let truncated_image = fixture_forced_eligible()[..20].to_vec();
+        assert!(verify_erc7730_forced_eligible_absent_from_flat_image(&truncated_image).is_err());
+    }
+
+    #[test]
+    fn variable_section_must_match_its_exact_flat_image_address() {
+        let raw = fixture_forced_eligible();
+        let mut bytes = vec![0xff; 128];
+        bytes[24..24 + raw.len()].copy_from_slice(&raw);
+        let section = VariableArtifactSection {
+            raw,
+            address: 0x1018,
+        };
+        let image = crate::elf::FlatImage {
+            hash: Sha256::digest(&bytes).into(),
+            bytes,
+            base: 0x1000,
+        };
+        assert!(section
+            .verify_flat_image(&image, "ERC-7730 forced-eligible set")
+            .is_ok());
+
+        let moved = VariableArtifactSection {
+            raw: section.raw.clone(),
+            address: 0x1019,
+        };
+        assert!(moved
+            .verify_flat_image(&image, "ERC-7730 forced-eligible set")
+            .is_err());
+    }
+
+    #[test]
+    fn erc7730_identity_ranges_must_be_disjoint_without_gap_requirement() {
+        assert!(verify_disjoint_ranges(100, 20, 120, 10, "overlap").is_ok());
+        assert!(verify_disjoint_ranges(100, 20, 99, 1, "overlap").is_ok());
+        assert!(verify_disjoint_ranges(100, 20, 119, 10, "overlap").is_err());
+        assert!(verify_disjoint_ranges(u64::MAX, 1, 0, 1, "overlap").is_err());
+
+        let status = ArtifactSection {
+            raw: fixture_erc7730_status(),
+            address: 0x1000,
+        };
+        let mut forced = VariableArtifactSection {
+            raw: fixture_forced_eligible(),
+            address: 0x1100,
+        };
+        assert!(verify_erc7730_elf_sections_disjoint(&status, &forced).is_ok());
+        forced.address = 0x10ff;
+        assert!(verify_erc7730_elf_sections_disjoint(&status, &forced).is_err());
     }
 }

@@ -77,6 +77,11 @@ pub fn run(args: Args) -> Result<()> {
     )?;
     let erc7730_status =
         crate::artifact_key::read_erc7730_status_section(&args.secure_elf, &secure_elf)?;
+    let erc7730_forced_eligible =
+        crate::artifact_key::read_optional_erc7730_forced_eligible_section(
+            &args.secure_elf,
+            &secure_elf,
+        )?;
 
     let secure = flatten_logged_bytes("secure", &args.secure_elf, &secure_elf)?;
     elf::ensure_image_capacity(
@@ -90,6 +95,24 @@ pub fn run(args: Args) -> Result<()> {
         erc7730_status.bytes(),
         &secure.bytes,
     )?;
+    if let Some(forced_eligible) = &erc7730_forced_eligible {
+        crate::artifact_key::verify_erc7730_elf_sections_disjoint(
+            &erc7730_status,
+            forced_eligible,
+        )?;
+        forced_eligible.verify_flat_image(&secure, "ERC-7730 forced-eligible set")?;
+        crate::artifact_key::verify_unique_erc7730_forced_eligible_in_flat_image(
+            forced_eligible.bytes(),
+            &secure.bytes,
+        )?;
+        crate::artifact_key::verify_erc7730_sidecars_disjoint_in_flat_image(
+            erc7730_status.bytes(),
+            forced_eligible.bytes(),
+            &secure.bytes,
+        )?;
+    } else {
+        crate::artifact_key::verify_erc7730_forced_eligible_absent_from_flat_image(&secure.bytes)?;
+    }
     let nonsecure = flatten_logged("nonsecure", &args.nonsecure_elf)?;
     elf::ensure_image_capacity(
         "nonsecure",
@@ -138,6 +161,9 @@ pub fn run(args: Args) -> Result<()> {
         pubkey_bytes,
         release_json,
         erc7730_status_bytes: Some(*erc7730_status.bytes()),
+        erc7730_forced_eligible_bytes: erc7730_forced_eligible
+            .as_ref()
+            .map(|section| section.bytes().to_vec()),
     };
 
     eprintln!("==> Packing {}", args.out_path.display());

@@ -18,8 +18,8 @@
 //! * `pubkey`  — export the vendor public key for FSBL embedding.
 //! * `sign`    — sign a pair of secure + nonsecure ELFs into a `.pqfw`.
 //! * `verify`  — independently verify a `.pqfw` against a pubkey.
-//! * `erc7730-release-metadata` — authenticate and extract the firmware half
-//!   of an ERC-7730 compatibility identity.
+//! * `erc7730-release-metadata` — authenticate and extract the P73S/P73K
+//!   firmware half of an ERC-7730 compatibility identity.
 //! * `inspect` — dump manifest fields from a `.pqfw` (for debugging).
 //!
 //! The same checks FSBL runs at boot are reachable through `verify`, so
@@ -39,6 +39,7 @@ use clap::{Parser, Subcommand};
 mod artifact_key;
 mod bundle;
 mod elf;
+mod forced_eligible;
 mod keystore;
 mod subcommands;
 
@@ -194,10 +195,11 @@ enum Cmd {
     /// compatibility as compact JSON.
     ///
     /// This verifies the complete C10 manifest/image chain, requires the P73S
-    /// sidecar to equal the unique valid receipt in authenticated secure.bin,
-    /// and enforces exact/minimum firmware-version policy. It does not inspect
-    /// a companion P730 catalogue and therefore is not itself a compatibility
-    /// verdict, ERC-8176 attestation, anti-rollback proof, or production grant.
+    /// and, for non-legacy images, P73K sidecars to equal their unique valid
+    /// records in authenticated secure.bin, and enforces exact/minimum
+    /// firmware-version policy. It does not inspect a companion P730 catalogue
+    /// and therefore is not itself a compatibility verdict, ERC-8176
+    /// attestation, anti-rollback proof, or production grant.
     Erc7730ReleaseMetadata {
         /// `.pqfw` bundle path.
         #[arg(long)]
@@ -217,6 +219,10 @@ enum Cmd {
         /// Written only after every authentication and version check passes.
         #[arg(long)]
         status_out: Option<std::path::PathBuf>,
+        /// Optional path for the exact authenticated variable-length P73K
+        /// refused-known set. Requesting it for a legacy image fails closed.
+        #[arg(long)]
+        forced_eligible_out: Option<std::path::PathBuf>,
     },
 
     /// Prove from final linked artifacts that FSBL and secure world use the
@@ -376,12 +382,14 @@ fn main() -> anyhow::Result<()> {
             expected_version,
             minimum_version,
             status_out,
+            forced_eligible_out,
         } => subcommands::erc7730_release_metadata::run(
             &bundle,
             &pubkey,
             expected_version,
             minimum_version,
             status_out.as_deref(),
+            forced_eligible_out.as_deref(),
         ),
         Cmd::VerifyArtifactKeys {
             fsbl,

@@ -11,8 +11,8 @@
 //! 7. `verify_signature` — SPHINCS+C10 verify over the digest.
 //! 8. Re-hash `secure.bin` + `nonsecure.bin` and compare against the
 //!    manifest's stored hashes + lengths.
-//! 9. Only after those authentication checks, parse any ERC-7730 status
-//!    sidecar and require its exact bytes to occur uniquely in `secure.bin`.
+//! 9. Only after those authentication checks, parse the ERC-7730 P73S/P73K
+//!    sidecars and require their exact bytes to occur uniquely in `secure.bin`.
 //!
 //! Does **not** check anti-rollback — that's device-side only, since
 //! this tool doesn't know the OTP floor of any particular device.
@@ -47,10 +47,11 @@ pub(crate) struct AuthenticatedBundle {
     pub(crate) manifest_sha256: [u8; 32],
     pub(crate) erc7730_status:
         Option<[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN]>,
+    pub(crate) erc7730_forced_eligible: Option<Vec<u8>>,
 }
 
 /// Authenticate one complete bundle and return only fields derived from the
-/// authenticated manifest/images/status binding.
+/// authenticated manifest/images/P73S/P73K binding.
 ///
 /// This intentionally ignores `release.json` and `measurement.txt`. They are
 /// presentation sidecars, not authority inputs. ERC-7730 status remains
@@ -142,6 +143,31 @@ pub(crate) fn authenticate_bundle(
         );
     }
 
+    if let Some(forced_eligible) = &unpacked.erc7730_forced_eligible_bytes {
+        let status = unpacked.erc7730_status_bytes.as_ref().ok_or_else(|| {
+            anyhow!(
+                "erc7730-forced-eligible.bin requires the companion erc7730-status.bin identity"
+            )
+        })?;
+        eprintln!("==> ERC-7730 forced-eligible binding");
+        crate::artifact_key::verify_unique_erc7730_forced_eligible_in_flat_image(
+            forced_eligible,
+            &unpacked.secure_bytes,
+        )?;
+        crate::artifact_key::verify_erc7730_sidecars_disjoint_in_flat_image(
+            status,
+            forced_eligible,
+            &unpacked.secure_bytes,
+        )?;
+    } else {
+        crate::artifact_key::verify_erc7730_forced_eligible_absent_from_flat_image(
+            &unpacked.secure_bytes,
+        )?;
+        eprintln!(
+            "==> ERC-7730 forced eligible: ABSENT (legacy/feature-off bundle; forced-blind compatibility unavailable)"
+        );
+    }
+
     Ok(AuthenticatedBundle {
         manifest_version: m.manifest_version(),
         fw_version: m.fw_version(),
@@ -155,6 +181,7 @@ pub(crate) fn authenticate_bundle(
         manifest_digest: *m.manifest_digest(),
         manifest_sha256: Sha256::digest(unpacked.manifest_bytes).into(),
         erc7730_status: unpacked.erc7730_status_bytes,
+        erc7730_forced_eligible: unpacked.erc7730_forced_eligible_bytes,
     })
 }
 
@@ -187,6 +214,14 @@ pub fn run(bundle_path: &Path, pubkey_path: &Path) -> Result<()> {
         "    erc7730   : {}",
         if authenticated.erc7730_status.is_some() {
             "authenticated status bound"
+        } else {
+            "unavailable (legacy/feature-off bundle)"
+        }
+    );
+    eprintln!(
+        "    forced    : {}",
+        if authenticated.erc7730_forced_eligible.is_some() {
+            "authenticated forced-eligible set bound"
         } else {
             "unavailable (legacy bundle)"
         }

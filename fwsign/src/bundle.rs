@@ -10,6 +10,9 @@
 //! * `release.json`    — metadata (version, slot, build_id, timestamps).
 //! * `erc7730-status.bin` — optional for legacy reads; fixed authenticated
 //!   catalogue-compatibility receipt for newly signed project bundles.
+//! * `erc7730-forced-eligible.bin` — optional only for images that genuinely
+//!   predate P73K; exact variable-length refused-known set for images that
+//!   contain the dedicated retained section.
 //!
 //! Tar is used over zip because:
 //! * It's deterministic out-of-the-box (no central directory with
@@ -37,6 +40,8 @@ pub struct BundleInputs {
     /// migration tooling. `fwsign sign` always supplies this sidecar.
     pub erc7730_status_bytes:
         Option<[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN]>,
+    /// Required when the secure image contains the retained P73K section.
+    pub erc7730_forced_eligible_bytes: Option<Vec<u8>>,
 }
 
 /// Pack a release bundle into `out_path`. Existing files are overwritten.
@@ -69,6 +74,14 @@ pub fn pack(inputs: &BundleInputs, out_path: &Path) -> Result<()> {
     )?;
     if let Some(status) = &inputs.erc7730_status_bytes {
         append(&mut builder, "erc7730-status.bin", status, mtime)?;
+    }
+    if let Some(forced_eligible) = &inputs.erc7730_forced_eligible_bytes {
+        append(
+            &mut builder,
+            "erc7730-forced-eligible.bin",
+            forced_eligible,
+            mtime,
+        )?;
     }
 
     builder.finish().context("finalising tar")?;
@@ -116,6 +129,7 @@ pub struct UnpackedBundle {
     pub release_json: String,
     pub erc7730_status_bytes:
         Option<[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN]>,
+    pub erc7730_forced_eligible_bytes: Option<Vec<u8>>,
 }
 
 /// Unpack a `.pqfw`. Missing required entries are an error.
@@ -130,6 +144,7 @@ pub fn unpack(path: &Path) -> Result<UnpackedBundle> {
     let mut measurement: Option<String> = None;
     let mut release: Option<String> = None;
     let mut erc7730_status: Option<Vec<u8>> = None;
+    let mut erc7730_forced_eligible: Option<Vec<u8>> = None;
 
     for entry in archive.entries()? {
         let mut entry = entry?;
@@ -147,6 +162,7 @@ pub fn unpack(path: &Path) -> Result<UnpackedBundle> {
             "measurement.txt" => set_once(&mut measurement, String::from_utf8(buf)?, name)?,
             "release.json" => set_once(&mut release, String::from_utf8(buf)?, name)?,
             "erc7730-status.bin" => set_once(&mut erc7730_status, buf, name)?,
+            "erc7730-forced-eligible.bin" => set_once(&mut erc7730_forced_eligible, buf, name)?,
             // Tolerate unknown entries (future-compatible).
             _ => {}
         }
@@ -177,6 +193,7 @@ pub fn unpack(path: &Path) -> Result<UnpackedBundle> {
         measurement_txt: measurement.unwrap_or_default(),
         release_json: release.unwrap_or_default(),
         erc7730_status_bytes,
+        erc7730_forced_eligible_bytes: erc7730_forced_eligible,
     })
 }
 
@@ -250,6 +267,7 @@ mod tests {
             erc7730_status_bytes: Some(
                 [0x55; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
             ),
+            erc7730_forced_eligible_bytes: Some(b"P73K-fixture".to_vec()),
         }
     }
 
@@ -272,6 +290,10 @@ mod tests {
         assert_eq!(u.measurement_txt, inp.measurement_txt);
         assert_eq!(u.release_json, inp.release_json);
         assert_eq!(u.erc7730_status_bytes, inp.erc7730_status_bytes);
+        assert_eq!(
+            u.erc7730_forced_eligible_bytes,
+            inp.erc7730_forced_eligible_bytes
+        );
     }
 
     #[test]
@@ -327,6 +349,7 @@ mod tests {
         assert!(u.release_json.is_empty());
         assert!(u.measurement_txt.is_empty());
         assert!(u.erc7730_status_bytes.is_none());
+        assert!(u.erc7730_forced_eligible_bytes.is_none());
     }
 
     // ----------------------------------------------------------------
@@ -394,6 +417,7 @@ mod tests {
             "measurement.txt",
             "release.json",
             "erc7730-status.bin",
+            "erc7730-forced-eligible.bin",
         ] {
             let dir = tempdir().unwrap();
             let out = dir.path().join("duplicate.pqfw");
@@ -401,7 +425,8 @@ mod tests {
             let mut tar = tar::Builder::new(file);
             let inputs = fixture_inputs();
             let status = inputs.erc7730_status_bytes.unwrap();
-            let entries: [(&str, &[u8]); 7] = [
+            let forced_eligible = inputs.erc7730_forced_eligible_bytes.unwrap();
+            let entries: [(&str, &[u8]); 8] = [
                 ("manifest.bin", &inputs.manifest_bytes),
                 ("secure.bin", &inputs.secure_bytes),
                 ("nonsecure.bin", &inputs.nonsecure_bytes),
@@ -409,6 +434,7 @@ mod tests {
                 ("measurement.txt", inputs.measurement_txt.as_bytes()),
                 ("release.json", inputs.release_json.as_bytes()),
                 ("erc7730-status.bin", &status),
+                ("erc7730-forced-eligible.bin", &forced_eligible),
             ];
             for (name, data) in entries {
                 append(&mut tar, name, data, 0).unwrap();

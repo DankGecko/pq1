@@ -2,11 +2,11 @@
 //!
 //! This command deliberately stops before inspecting a companion catalogue.
 //! It authenticates the legacy bundle's C10 manifest and exact image bytes,
-//! binds the unique P73S receipt inside the authenticated secure image to the
-//! bundle sidecar, enforces the caller's exact/minimum version policy, and
-//! emits a compact machine-readable receipt.  The companion catalogue helper
-//! consumes the exact extracted P73S bytes and performs the remaining full
-//! P730/Bloom/Merkle preflight.
+//! binds the unique P73S receipt and optional legacy/new P73K boundary inside
+//! the authenticated secure image to their exact bundle sidecars, enforces the
+//! caller's exact/minimum version policy, and emits a compact machine-readable
+//! receipt. The companion catalogue helper consumes the extracted identities
+//! and performs the remaining full P730/Bloom/Merkle preflight.
 
 use anyhow::{bail, Context, Result};
 use pqsigner_erc7730::catalogue_status::{
@@ -24,14 +24,31 @@ pub fn run(
     expected_version: u32,
     minimum_version: u32,
     status_out: Option<&Path>,
+    forced_eligible_out: Option<&Path>,
 ) -> Result<()> {
     validate_policy_configuration(expected_version, minimum_version)?;
+    if status_out.is_some() && status_out == forced_eligible_out {
+        bail!("--status-out and --forced-eligible-out must name distinct files");
+    }
     let authenticated = authenticate_bundle(bundle_path, pubkey_path)?;
-    let (report, status) = build_report(&authenticated, expected_version, minimum_version)?;
+    let (report, status, forced_eligible) =
+        build_report(&authenticated, expected_version, minimum_version)?;
+
+    if forced_eligible_out.is_some() && forced_eligible.is_none() {
+        bail!("authenticated bundle has no ERC-7730 forced-eligible set to extract");
+    }
 
     if let Some(path) = status_out {
         std::fs::write(path, status)
             .with_context(|| format!("writing authenticated ERC-7730 status {}", path.display()))?;
+    }
+    if let (Some(path), Some(bytes)) = (forced_eligible_out, forced_eligible.as_deref()) {
+        std::fs::write(path, bytes).with_context(|| {
+            format!(
+                "writing authenticated ERC-7730 forced-eligible set {}",
+                path.display()
+            )
+        })?;
     }
     println!("{report}");
     Ok(())
@@ -69,7 +86,7 @@ fn build_report(
     authenticated: &AuthenticatedBundle,
     expected_version: u32,
     minimum_version: u32,
-) -> Result<(String, [u8; CATALOGUE_STATUS_V1_LEN])> {
+) -> Result<(String, [u8; CATALOGUE_STATUS_V1_LEN], Option<Vec<u8>>)> {
     enforce_authenticated_version(authenticated.fw_version, expected_version, minimum_version)?;
     let status_bytes = authenticated.erc7730_status.ok_or_else(|| {
         anyhow::anyhow!(
@@ -92,6 +109,29 @@ fn build_report(
     let secure_words = measurement_words_json(&authenticated.secure_hash);
     let nonsecure_words = measurement_words_json(&authenticated.nonsecure_hash);
     let tool_version = json_ascii_string(status.tool_version());
+    let forced_eligible_json = if let Some(bytes) = &authenticated.erc7730_forced_eligible {
+        let summary = crate::forced_eligible::validate(bytes)
+            .context("authenticated ERC-7730 forced-eligible set is invalid")?;
+        format!(
+            concat!(
+                "{{",
+                "\"format\":\"P73K\",",
+                "\"schema\":{},",
+                "\"encoded_length\":{},",
+                "\"group_count\":{},",
+                "\"tuple_count\":{},",
+                "\"set_sha256\":\"{}\"",
+                "}}"
+            ),
+            summary.schema,
+            summary.encoded_len,
+            summary.group_count,
+            summary.tuple_count,
+            hex::encode(Sha256::digest(bytes)),
+        )
+    } else {
+        "null".to_owned()
+    };
 
     // All strings except `tool_version` are fixed literals or lowercase hex.
     // `tool_version` is strictly printable ASCII and is escaped above. Keeping
@@ -144,7 +184,8 @@ fn build_report(
             "\"policy_sha256\":\"{}\",",
             "\"curation_input_sha256\":\"{}\",",
             "\"tool_version\":{}",
-            "}}",
+            "}},",
+            "\"forced_eligible\":{}",
             "}}"
         ),
         expected_version,
@@ -180,10 +221,15 @@ fn build_report(
         hex::encode(status.policy_sha256),
         hex::encode(status.curation_input_sha256),
         tool_version,
+        forced_eligible_json,
     )
     .expect("writing JSON to String cannot fail");
 
-    Ok((out, status_bytes))
+    Ok((
+        out,
+        status_bytes,
+        authenticated.erc7730_forced_eligible.clone(),
+    ))
 }
 
 fn measurement_words_json(hash: &[u8; 32]) -> String {
@@ -236,6 +282,7 @@ mod tests {
         nonsecure: Vec<u8>,
         pubkey: [u8; fw_manifest::VERIFYING_KEY_LEN],
         status: [u8; CATALOGUE_STATUS_V1_LEN],
+        forced_eligible: Option<Vec<u8>>,
     }
 
     struct PackedFixture {
@@ -267,46 +314,72 @@ mod tests {
 
     fn signed_fixture() -> &'static SignedFixture {
         static FIXTURE: OnceLock<SignedFixture> = OnceLock::new();
-        FIXTURE.get_or_init(|| {
-            let status = status_fixture();
-            let mut secure = vec![0xa5; 64];
-            secure.extend_from_slice(&status);
-            secure.extend_from_slice(&[0x5a; 64]);
-            let nonsecure = vec![0x3c; 512];
-            let secure_hash: [u8; 32] = Sha256::digest(&secure).into();
-            let nonsecure_hash: [u8; 32] = Sha256::digest(&nonsecure).into();
+        FIXTURE.get_or_init(|| make_signed_fixture(None))
+    }
 
-            let signing_key = super::super::dev_pubkey::signing_key();
-            let vendor_fingerprint = fw_manifest::vendor_pubkey_fingerprint(
-                signing_key.pk_seed(),
-                signing_key.pk_root(),
-            );
-            let mut builder = ManifestBuilder::new();
-            builder
-                .init(fw_manifest::SLOT_A)
-                .fw_version(VERSION_A)
-                .secure_image(&secure_hash, secure.len() as u32)
-                .nonsecure_image(&nonsecure_hash, nonsecure.len() as u32)
-                .vendor_pubkey_fpr(&vendor_fingerprint)
-                .build_id(&[0x77; 32])
-                .boot_counter_snap(VERSION_A - 1)
-                .try_once(TRY_ONCE_COMMITTED);
-            let digest = builder.finalize_preimage();
-            let signature = signing_key.sign(&digest, None);
-            builder.set_signature(&signature);
+    fn signed_forced_fixture() -> &'static SignedFixture {
+        static FIXTURE: OnceLock<SignedFixture> = OnceLock::new();
+        FIXTURE.get_or_init(|| make_signed_fixture(Some(forced_fixture())))
+    }
 
-            let mut pubkey = [0u8; fw_manifest::VERIFYING_KEY_LEN];
-            pubkey[..sphincs_c10::params::N].copy_from_slice(signing_key.pk_seed());
-            pubkey[sphincs_c10::params::N..].copy_from_slice(signing_key.pk_root());
-            SignedFixture {
-                manifest: builder.finalize(),
-                signature,
-                secure,
-                nonsecure,
-                pubkey,
-                status,
-            }
-        })
+    fn forced_fixture() -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(crate::forced_eligible::MAGIC);
+        out.extend_from_slice(&crate::forced_eligible::SCHEMA_V1.to_be_bytes());
+        out.extend_from_slice(&(crate::forced_eligible::HEADER_LEN as u16).to_be_bytes());
+        out.extend_from_slice(&1u32.to_be_bytes());
+        out.extend_from_slice(&2u32.to_be_bytes());
+        out.extend_from_slice(&1u64.to_be_bytes());
+        out.extend_from_slice(&[0x11; 20]);
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(&2u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
+        out.extend_from_slice(&[0x01, 0x02, 0x03, 0x05]);
+        out
+    }
+
+    fn make_signed_fixture(forced_eligible: Option<Vec<u8>>) -> SignedFixture {
+        let status = status_fixture();
+        let mut secure = vec![0xa5; 64];
+        secure.extend_from_slice(&status);
+        if let Some(bytes) = &forced_eligible {
+            secure.extend_from_slice(bytes);
+        }
+        secure.extend_from_slice(&[0x5a; 64]);
+        let nonsecure = vec![0x3c; 512];
+        let secure_hash: [u8; 32] = Sha256::digest(&secure).into();
+        let nonsecure_hash: [u8; 32] = Sha256::digest(&nonsecure).into();
+
+        let signing_key = super::super::dev_pubkey::signing_key();
+        let vendor_fingerprint =
+            fw_manifest::vendor_pubkey_fingerprint(signing_key.pk_seed(), signing_key.pk_root());
+        let mut builder = ManifestBuilder::new();
+        builder
+            .init(fw_manifest::SLOT_A)
+            .fw_version(VERSION_A)
+            .secure_image(&secure_hash, secure.len() as u32)
+            .nonsecure_image(&nonsecure_hash, nonsecure.len() as u32)
+            .vendor_pubkey_fpr(&vendor_fingerprint)
+            .build_id(&[0x77; 32])
+            .boot_counter_snap(VERSION_A - 1)
+            .try_once(TRY_ONCE_COMMITTED);
+        let digest = builder.finalize_preimage();
+        let signature = signing_key.sign(&digest, None);
+        builder.set_signature(&signature);
+
+        let mut pubkey = [0u8; fw_manifest::VERIFYING_KEY_LEN];
+        pubkey[..sphincs_c10::params::N].copy_from_slice(signing_key.pk_seed());
+        pubkey[sphincs_c10::params::N..].copy_from_slice(signing_key.pk_root());
+        SignedFixture {
+            manifest: builder.finalize(),
+            signature,
+            secure,
+            nonsecure,
+            pubkey,
+            status,
+            forced_eligible,
+        }
     }
 
     fn pack_fixture(
@@ -327,6 +400,26 @@ mod tests {
         release: &str,
     ) -> PackedFixture {
         let fixture = signed_fixture();
+        pack_fixture_for(
+            fixture,
+            manifest,
+            secure,
+            status,
+            None,
+            measurement,
+            release,
+        )
+    }
+
+    fn pack_fixture_for(
+        fixture: &SignedFixture,
+        manifest: [u8; fw_manifest::MANIFEST_SIZE],
+        secure: &[u8],
+        status: Option<[u8; CATALOGUE_STATUS_V1_LEN]>,
+        forced_eligible: Option<Vec<u8>>,
+        measurement: &str,
+        release: &str,
+    ) -> PackedFixture {
         let dir = tempfile::tempdir().expect("temp fixture directory");
         let bundle_path = dir.path().join("release.pqfw");
         let pubkey_path = dir.path().join("vendor.pub");
@@ -338,6 +431,7 @@ mod tests {
             pubkey_bytes: fixture.pubkey,
             release_json: release.to_owned(),
             erc7730_status_bytes: status,
+            erc7730_forced_eligible_bytes: forced_eligible,
         };
         bundle::pack(&inputs, &bundle_path).expect("pack signed fixture");
         std::fs::write(&pubkey_path, fixture.pubkey).expect("write fixture pubkey");
@@ -400,8 +494,8 @@ mod tests {
         );
         let first = authenticate_bundle(&first.bundle, &first.pubkey).unwrap();
         let second = authenticate_bundle(&second.bundle, &second.pubkey).unwrap();
-        let (first_report, _) = build_report(&first, VERSION_A, VERSION_A - 1).unwrap();
-        let (second_report, _) = build_report(&second, VERSION_A, VERSION_A - 1).unwrap();
+        let (first_report, _, _) = build_report(&first, VERSION_A, VERSION_A - 1).unwrap();
+        let (second_report, _, _) = build_report(&second, VERSION_A, VERSION_A - 1).unwrap();
         assert_eq!(first_report, second_report);
         assert!(!first_report.contains("attacker"));
         assert!(first_report.contains("\"report_kind\":\"authenticated-release-metadata\""));
@@ -457,7 +551,7 @@ mod tests {
         assert_ne!(original.build_id, variant.build_id);
         assert_ne!(original.manifest_sha256, variant.manifest_sha256);
         for authenticated in [&original, &variant] {
-            let (report, _) = build_report(authenticated, VERSION_A, VERSION_A - 1).unwrap();
+            let (report, _, _) = build_report(authenticated, VERSION_A, VERSION_A - 1).unwrap();
             assert!(report.contains("\"slot_authenticated_by_legacy_signature\":false"));
             assert!(report.contains("\"build_id_authenticated_by_legacy_signature\":false"));
             assert!(report.contains("\"manifest_sha256_authenticated_by_legacy_signature\":false"));
@@ -494,12 +588,172 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_forced_eligible_is_bound_reported_and_extracted() {
+        let fixture = signed_forced_fixture();
+        let forced = fixture.forced_eligible.clone().unwrap();
+        let packed = pack_fixture_for(
+            fixture,
+            fixture.manifest,
+            &fixture.secure,
+            Some(fixture.status),
+            Some(forced.clone()),
+            "ignored",
+            "{}",
+        );
+        let same_output = tempfile::tempdir().unwrap().path().join("same.bin");
+        let error = run(
+            &packed.bundle,
+            &packed.pubkey,
+            VERSION_A,
+            VERSION_A - 1,
+            Some(&same_output),
+            Some(&same_output),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("must name distinct files"), "got: {error}");
+
+        let authenticated = authenticate_bundle(&packed.bundle, &packed.pubkey).unwrap();
+        let (report, status, reported_forced) =
+            build_report(&authenticated, VERSION_A, VERSION_A - 1).unwrap();
+        assert_eq!(status, fixture.status);
+        assert_eq!(reported_forced.as_deref(), Some(forced.as_slice()));
+        assert!(report.contains("\"forced_eligible\":{\"format\":\"P73K\""));
+        assert!(report.contains("\"schema\":1"));
+        assert!(report.contains("\"group_count\":1"));
+        assert!(report.contains("\"tuple_count\":2"));
+        assert!(report.contains(&hex::encode(Sha256::digest(&forced))));
+        let parsed = std::process::Command::new("python3")
+            .arg("-c")
+            .arg("import json,sys; r=json.loads(sys.argv[1]); assert r['forced_eligible']['format']=='P73K'")
+            .arg(&report)
+            .status()
+            .expect("python3 must parse P73K release report JSON");
+        assert!(parsed.success(), "P73K release report must be valid JSON");
+
+        let output_dir = tempfile::tempdir().unwrap();
+        let status_path = output_dir.path().join("authenticated-status.bin");
+        let forced_path = output_dir.path().join("authenticated-forced.bin");
+        run(
+            &packed.bundle,
+            &packed.pubkey,
+            VERSION_A,
+            VERSION_A - 1,
+            Some(&status_path),
+            Some(&forced_path),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(status_path).unwrap(), fixture.status);
+        assert_eq!(std::fs::read(forced_path).unwrap(), forced);
+    }
+
+    #[test]
+    fn authenticated_forced_image_rejects_absent_malformed_or_substituted_sidecar() {
+        let fixture = signed_forced_fixture();
+        let forced = fixture.forced_eligible.clone().unwrap();
+
+        let absent = pack_fixture_for(
+            fixture,
+            fixture.manifest,
+            &fixture.secure,
+            Some(fixture.status),
+            None,
+            "ignored",
+            "{}",
+        );
+        let error = authenticate_bundle(&absent.bundle, &absent.pubkey)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("sidecar is absent"), "got: {error}");
+
+        let mut malformed = forced.clone();
+        malformed[crate::forced_eligible::HEADER_LEN + 34] = 1;
+        let malformed = pack_fixture_for(
+            fixture,
+            fixture.manifest,
+            &fixture.secure,
+            Some(fixture.status),
+            Some(malformed),
+            "ignored",
+            "{}",
+        );
+        let error = authenticate_bundle(&malformed.bundle, &malformed.pubkey)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("invalid erc7730-forced-eligible.bin"),
+            "got: {error}"
+        );
+
+        let mut substituted = forced;
+        *substituted.last_mut().unwrap() ^= 2;
+        assert!(crate::forced_eligible::validate(&substituted).is_ok());
+        let substituted = pack_fixture_for(
+            fixture,
+            fixture.manifest,
+            &fixture.secure,
+            Some(fixture.status),
+            Some(substituted),
+            "ignored",
+            "{}",
+        );
+        let error = authenticate_bundle(&substituted.bundle, &substituted.pubkey)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("differs from the unique valid"),
+            "got: {error}"
+        );
+    }
+
+    #[test]
+    fn forced_sidecar_requires_p73s_and_legacy_extraction_request_fails_before_write() {
+        let forced_fixture = signed_forced_fixture();
+        let forced = forced_fixture.forced_eligible.clone().unwrap();
+        let no_status = pack_fixture_for(
+            forced_fixture,
+            forced_fixture.manifest,
+            &forced_fixture.secure,
+            None,
+            Some(forced),
+            "ignored",
+            "{}",
+        );
+        let error = authenticate_bundle(&no_status.bundle, &no_status.pubkey)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("requires the companion"), "got: {error}");
+
+        let legacy = signed_fixture();
+        let packed = pack_fixture(&legacy.secure, Some(legacy.status), "ignored", "{}");
+        let output_dir = tempfile::tempdir().unwrap();
+        let status_path = output_dir.path().join("must-not-exist-status.bin");
+        let forced_path = output_dir.path().join("must-not-exist-forced.bin");
+        let error = run(
+            &packed.bundle,
+            &packed.pubkey,
+            VERSION_A,
+            VERSION_A - 1,
+            Some(&status_path),
+            Some(&forced_path),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("bundle has no"), "got: {error}");
+        assert!(!status_path.exists());
+        assert!(!forced_path.exists());
+    }
+
+    #[test]
     fn report_returns_exact_authenticated_status_for_private_extraction() {
         let fixture = signed_fixture();
         let packed = pack_fixture(&fixture.secure, Some(fixture.status), "ignored", "{}");
         let authenticated = authenticate_bundle(&packed.bundle, &packed.pubkey).unwrap();
-        let (report, status) = build_report(&authenticated, VERSION_A, VERSION_A - 1).unwrap();
+        let (report, status, forced_eligible) =
+            build_report(&authenticated, VERSION_A, VERSION_A - 1).unwrap();
         assert_eq!(status, fixture.status);
+        assert!(forced_eligible.is_none());
+        assert!(report.contains("\"forced_eligible\":null"));
         assert!(report.contains(&hex::encode(Sha256::digest(fixture.status))));
         assert!(report.contains("\"erc8176_attestation\":false"));
         assert!(report.contains("\"production_authority\":false"));
@@ -529,6 +783,7 @@ mod tests {
             VERSION_A,
             VERSION_A - 1,
             Some(&status_path),
+            None,
         )
         .unwrap();
         assert_eq!(std::fs::read(status_path).unwrap(), fixture.status);
