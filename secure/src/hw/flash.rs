@@ -1756,6 +1756,102 @@ fn distinct_slot_count_capped() -> usize {
     n
 }
 
+/// Strict, read-only page-123 projection for the optional forced-blind
+/// preflight. Unlike the legacy readers, this path accepts only one canonical
+/// append prefix followed by erased QWs: an unknown record, a nonblank record
+/// after the first blank, or more than the lifetime slot cap is fatal. It
+/// computes the exact compacted live-QW count without erasing or repairing the
+/// page and binds the receipt to every byte read.
+///
+/// # Safety
+///
+/// Reads the secure flash mapping at `OFFCHAIN_PAGE_ADDR`. The caller must
+/// serialize the scan with page-123 mutators.
+#[cfg(feature = "erc7730-forced-blind")]
+#[inline(never)]
+pub unsafe fn forced_capacity_snapshot(
+    requested_slot: &[u8; 8],
+) -> Result<crate::offchain_state::ForcedCapacitySnapshot, crate::offchain_state::ForcedCapacityError>
+{
+    use sha2::{Digest, Sha256};
+
+    const CAP: usize = crate::offchain_state::MAX_DISTINCT_SLOTS;
+    let mut keys = [[0u8; 8]; CAP];
+    let mut type_masks = [0u8; CAP];
+    let mut distinct_live = 0usize;
+    let mut blank_qws = 0usize;
+    let mut saw_blank = false;
+    let mut slot_present = false;
+    let mut state = Sha256::new();
+    state.update(b"PQSigner/offchain-state/page123-capacity/v1");
+
+    for index in 0..OFFCHAIN_CAPACITY {
+        let base = (OFFCHAIN_PAGE_ADDR + index * OFFCHAIN_QW_SIZE) as *const u8;
+        let mut raw = [0u8; OFFCHAIN_QW_SIZE as usize];
+        for (offset, byte) in raw.iter_mut().enumerate() {
+            // SAFETY: index < 512 and offset < 16 stay inside page 123.
+            *byte = unsafe { read_volatile(base.add(offset)) };
+        }
+        state.update(raw);
+
+        if raw.iter().all(|byte| *byte == 0xFF) {
+            saw_blank = true;
+            blank_qws += 1;
+            continue;
+        }
+        if saw_blank {
+            return Err(crate::offchain_state::ForcedCapacityError::InvalidProjection);
+        }
+
+        let type_mask = match raw[8] {
+            OFFCHAIN_TYPE_COUNT => 0b001,
+            OFFCHAIN_TYPE_USEROP => 0b010,
+            OFFCHAIN_TYPE_USEROP_SIGS => 0b100,
+            _ => {
+                return Err(crate::offchain_state::ForcedCapacityError::InvalidProjection);
+            }
+        };
+        let mut slot_key = [0u8; 8];
+        slot_key.copy_from_slice(&raw[..8]);
+        slot_present |= &slot_key == requested_slot;
+
+        let mut existing = None;
+        for (slot_index, key) in keys[..distinct_live].iter().enumerate() {
+            if *key == slot_key {
+                existing = Some(slot_index);
+                break;
+            }
+        }
+        let slot_index = match existing {
+            Some(slot_index) => slot_index,
+            None => {
+                if distinct_live == CAP {
+                    return Err(crate::offchain_state::ForcedCapacityError::InvalidProjection);
+                }
+                let slot_index = distinct_live;
+                keys[slot_index] = slot_key;
+                distinct_live += 1;
+                slot_index
+            }
+        };
+        type_masks[slot_index] |= type_mask;
+    }
+
+    let projected_live_qws = type_masks[..distinct_live]
+        .iter()
+        .map(|mask| mask.count_ones() as usize)
+        .sum();
+    let mut state_sha256 = [0u8; 32];
+    state_sha256.copy_from_slice(&state.finalize());
+    Ok(crate::offchain_state::ForcedCapacitySnapshot {
+        state_sha256,
+        distinct_live,
+        projected_live_qws,
+        blank_qws,
+        slot_present,
+    })
+}
+
 /// Append a journal entry, compacting first if the page is full and
 /// self-healing the page if it inherited unwritable garbage from the
 /// pre-all-C10 per-slot state.

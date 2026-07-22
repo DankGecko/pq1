@@ -13,9 +13,11 @@ use sha3::Keccak256;
 use crate::db_roots::{ERC20_DB_ROOT, NAMES_DB_ROOT, SELECTOR_DB_ROOT};
 
 use super::offchain_state::{
-    clamp_offchain_count, last_userop_count_read, last_userop_count_set, may_create_distinct_slot,
-    offchain_count_bump, offchain_count_is_registered, offchain_count_promote_to,
-    offchain_count_read, offchain_count_register_slot, slot_key_compute, MAX_DISTINCT_SLOTS,
+    clamp_offchain_count, forced_capacity_receipt_from_snapshot, last_userop_count_read,
+    last_userop_count_set, may_create_distinct_slot, offchain_count_bump,
+    offchain_count_is_registered, offchain_count_promote_to, offchain_count_read,
+    offchain_count_register_slot, slot_key_compute, ForcedCapacityError, ForcedCapacitySnapshot,
+    FORCED_CAPACITY_REQUIRED_APPENDS, MAX_DISTINCT_SLOTS, OFFCHAIN_CAPACITY_QWS,
     OFFCHAIN_COUNT_CEILING,
 };
 use sphincs_tz_shared::MAX_SLOT_USES;
@@ -1055,6 +1057,169 @@ fn positive_offchain_may_create_distinct_slot_policy() {
         "the (cap+1)-th distinct slot MUST be refused — this is the brick backstop",
     );
     assert!(!may_create_distinct_slot(MAX_DISTINCT_SLOTS + 1, false));
+}
+
+fn capacity_snapshot(
+    distinct_live: usize,
+    projected_live_qws: usize,
+    blank_qws: usize,
+    slot_present: bool,
+) -> ForcedCapacitySnapshot {
+    ForcedCapacitySnapshot {
+        state_sha256: [0x5a; 32],
+        distinct_live,
+        projected_live_qws,
+        blank_qws,
+        slot_present,
+    }
+}
+
+#[test]
+fn forced_capacity_constants_pin_two_appends_and_page_geometry() {
+    assert_eq!(FORCED_CAPACITY_REQUIRED_APPENDS, 2);
+    assert_eq!(OFFCHAIN_CAPACITY_QWS, 512);
+    assert!(MAX_DISTINCT_SLOTS * 3 + FORCED_CAPACITY_REQUIRED_APPENDS <= OFFCHAIN_CAPACITY_QWS);
+}
+
+#[test]
+fn forced_capacity_distinct_slot_boundary_is_exact() {
+    let key = [0x11; 8];
+    let request = [0x22; 32];
+    let at_127 = capacity_snapshot(MAX_DISTINCT_SLOTS - 1, 384, 128, false);
+    assert!(forced_capacity_receipt_from_snapshot(&key, &request, at_127).is_ok());
+
+    let new_at_128 = capacity_snapshot(MAX_DISTINCT_SLOTS, 384, 128, false);
+    assert_eq!(
+        forced_capacity_receipt_from_snapshot(&key, &request, new_at_128),
+        Err(ForcedCapacityError::DistinctSlotCap)
+    );
+    let present_at_128 = capacity_snapshot(MAX_DISTINCT_SLOTS, 384, 128, true);
+    assert!(forced_capacity_receipt_from_snapshot(&key, &request, present_at_128).is_ok());
+
+    let corrupt_129 = capacity_snapshot(MAX_DISTINCT_SLOTS + 1, 387, 125, true);
+    assert_eq!(
+        forced_capacity_receipt_from_snapshot(&key, &request, corrupt_129),
+        Err(ForcedCapacityError::InvalidProjection)
+    );
+}
+
+#[test]
+fn forced_capacity_projected_qw_boundary_is_exact() {
+    let key = [0x33; 8];
+    let request = [0x44; 32];
+    let full_but_compactable = capacity_snapshot(1, 510, 0, true);
+    let receipt = forced_capacity_receipt_from_snapshot(&key, &request, full_but_compactable)
+        .expect("510 projected QWs leave exactly two commit QWs");
+    assert!(receipt.requires_compaction());
+    assert_eq!(receipt.projected_live_qws(), 510);
+
+    let one_qw_short = capacity_snapshot(1, 511, 1, true);
+    assert_eq!(
+        forced_capacity_receipt_from_snapshot(&key, &request, one_qw_short),
+        Err(ForcedCapacityError::InsufficientCapacity)
+    );
+
+    let direct = capacity_snapshot(1, 3, 2, true);
+    let direct_receipt = forced_capacity_receipt_from_snapshot(&key, &request, direct)
+        .expect("two blank QWs admit the direct path");
+    assert!(!direct_receipt.requires_compaction());
+}
+
+#[test]
+fn forced_capacity_receipt_binds_request_slot_and_state() {
+    let snapshot = capacity_snapshot(7, 18, 494, true);
+    let baseline = forced_capacity_receipt_from_snapshot(&[1; 8], &[2; 32], snapshot).unwrap();
+    let other_request = forced_capacity_receipt_from_snapshot(&[1; 8], &[3; 32], snapshot).unwrap();
+    let other_slot = forced_capacity_receipt_from_snapshot(&[4; 8], &[2; 32], snapshot).unwrap();
+    let other_state = forced_capacity_receipt_from_snapshot(
+        &[1; 8],
+        &[2; 32],
+        ForcedCapacitySnapshot {
+            state_sha256: [9; 32],
+            ..snapshot
+        },
+    )
+    .unwrap();
+    assert_ne!(baseline.receipt_sha256(), other_request.receipt_sha256());
+    assert_ne!(baseline.receipt_sha256(), other_slot.receipt_sha256());
+    assert_ne!(baseline.receipt_sha256(), other_state.receipt_sha256());
+    assert_eq!(baseline.request_digest(), &[2; 32]);
+    assert_eq!(baseline.state_sha256(), &[0x5a; 32]);
+}
+
+#[test]
+fn forced_capacity_mock_snapshot_is_read_only_and_slot_bound() {
+    let key = slot_key_compute(221, 222, 223);
+    let request = [0xa5; 32];
+    let before =
+        unsafe { super::offchain_state::forced_capacity_snapshot(&key) }.expect("mock projection");
+    assert!(!before.slot_present);
+    let receipt = forced_capacity_receipt_from_snapshot(&key, &request, before)
+        .expect("fresh mock has capacity");
+    assert!(!receipt.slot_present());
+
+    unsafe { offchain_count_register_slot(&key).expect("register mock slot") };
+    let after = unsafe { super::offchain_state::forced_capacity_snapshot(&key) }
+        .expect("mock projection after registration");
+    assert!(after.slot_present);
+    assert_eq!(after.distinct_live, before.distinct_live + 1);
+    assert!(unsafe { offchain_count_is_registered(&key) });
+}
+
+#[test]
+fn forced_capacity_flash_path_is_strict_full_scan_and_read_only() {
+    let start = FLASH_SRC
+        .find("pub unsafe fn forced_capacity_snapshot")
+        .expect("hardware capacity helper");
+    let end = FLASH_SRC[start..]
+        .find("/// Append a journal entry")
+        .map(|offset| start + offset)
+        .expect("capacity helper end anchor");
+    let helper = &FLASH_SRC[start..end];
+    assert!(helper.contains("for index in 0..OFFCHAIN_CAPACITY"));
+    assert!(helper.contains("if saw_blank"));
+    assert!(helper.contains("type_masks[slot_index] |= type_mask"));
+    assert!(!helper.contains("erase_offchain_page"));
+    assert!(!helper.contains("write_quadword_verified"));
+    assert!(OFFCHAIN_SRC.contains("SnapshotDisagreement"));
+    assert!(OFFCHAIN_SRC.contains("forced_capacity_receipt_from_snapshot"));
+    let preflight_start = OFFCHAIN_SRC
+        .find("pub unsafe fn forced_capacity_preflight")
+        .expect("forced capacity proof helper");
+    let preflight = &OFFCHAIN_SRC[preflight_start..];
+    assert_eq!(preflight.matches("backend::forced_capacity_snapshot(").count(), 2);
+    assert_eq!(
+        preflight
+            .matches("forced_capacity_receipt_from_snapshot(")
+            .count(),
+        2
+    );
+    assert!(preflight.contains("core::ptr::write_volatile(verdict_out, verdict)"));
+    assert!(OFFCHAIN_SRC.contains("CFI_FORCED_CAPACITY_EXPECTED"));
+}
+
+#[cfg(feature = "erc7730-forced-blind")]
+#[test]
+fn forced_capacity_preflight_publishes_distinct_verdict_and_cfi() {
+    let key = slot_key_compute(222, 223, 224);
+    let request = [0x6c; 32];
+    let mut verdict = crate::fi::FAIL_SENTINEL;
+    let mut cfi = crate::fi::CfiCounter::new();
+    let receipt = unsafe {
+        super::offchain_state::forced_capacity_preflight(
+            &key,
+            &request,
+            &mut verdict,
+            &mut cfi,
+        )
+    }
+    .expect("stable mock projection has capacity");
+    assert_eq!(verdict, crate::fi::OK_SENTINEL);
+    assert_eq!(
+        cfi.check_into_sentinel(super::offchain_state::CFI_FORCED_CAPACITY_EXPECTED),
+        crate::fi::OK_SENTINEL
+    );
+    assert_eq!(receipt.request_digest(), &request);
 }
 
 #[test]

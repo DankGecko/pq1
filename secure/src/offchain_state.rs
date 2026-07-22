@@ -76,6 +76,278 @@ pub fn may_create_distinct_slot(distinct_live: usize, already_present: bool) -> 
     already_present || distinct_live < MAX_DISTINCT_SLOTS
 }
 
+/// Physical page-123 capacity in 16-byte quad-words.
+///
+/// This mirrors `hw::flash::OFFCHAIN_CAPACITY`. Keeping the value public here
+/// lets the host backend and the forced-path preflight apply the same bound
+/// without making the hardware-only flash module part of the host build.
+#[cfg(any(feature = "erc7730-forced-blind", test))]
+pub const OFFCHAIN_CAPACITY_QWS: usize = 512;
+
+/// Maximum number of page-123 appends made by one steady-state forced Type-2
+/// path. Depending on the relative COUNT/USEROP high-water marks the first
+/// append is either a COUNT promotion or a USEROP update; the second is the
+/// durable USEROP_SIGS tally.
+#[cfg(any(feature = "erc7730-forced-blind", test))]
+pub const FORCED_CAPACITY_REQUIRED_APPENDS: usize = 2;
+
+#[cfg(any(feature = "erc7730-forced-blind", test))]
+const FORCED_CAPACITY_DOMAIN: &[u8] = b"PQSigner/forced-blind/page123-capacity/v1";
+
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_CAPACITY_SNAPSHOT_A: u32 = 0x6E25_A94C;
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_CAPACITY_SNAPSHOT_B: u32 = 0xB1DA_56C3;
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_CAPACITY_SNAPSHOT_AGREE: u32 = 0x43F7_C218;
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_CAPACITY_RECEIPT_A: u32 = 0x9C18_75E2;
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_CAPACITY_RECEIPT_B: u32 = 0x27E4_8B5D;
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_CAPACITY_RECEIPT_AGREE: u32 = 0xD85B_34A1;
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_CAPACITY_VERDICT: u32 = 0x51A6_ED97;
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_CAPACITY_PUBLISH: u32 = 0xAE59_1268;
+#[cfg(feature = "erc7730-forced-blind")]
+pub(crate) const CFI_FORCED_CAPACITY_EXPECTED: u32 = crate::cfi_expected!(
+    CFI_CAPACITY_SNAPSHOT_A,
+    CFI_CAPACITY_SNAPSHOT_B,
+    CFI_CAPACITY_SNAPSHOT_AGREE,
+    CFI_CAPACITY_RECEIPT_A,
+    CFI_CAPACITY_RECEIPT_B,
+    CFI_CAPACITY_RECEIPT_AGREE,
+    CFI_CAPACITY_VERDICT,
+    CFI_CAPACITY_PUBLISH,
+);
+
+/// A complete, read-only projection of page 123 used by the forced-flow
+/// capacity gate. The backend must derive this from one full scan; it must not
+/// repair, compact, erase, or append while producing the snapshot.
+#[cfg(any(feature = "erc7730-forced-blind", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ForcedCapacitySnapshot {
+    /// Exact digest of the backend state that produced this projection.
+    pub state_sha256: [u8; 32],
+    /// Number of distinct live slot keys in the complete projection.
+    pub distinct_live: usize,
+    /// Number of QWs a safe compaction would replay.
+    pub projected_live_qws: usize,
+    /// Number of currently erased QWs available without compaction.
+    pub blank_qws: usize,
+    /// Whether the requested slot is already present.
+    pub slot_present: bool,
+}
+
+/// Fail-closed reasons returned by the forced page-123 capacity preflight.
+#[cfg(any(feature = "erc7730-forced-blind", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ForcedCapacityError {
+    /// The hardware journal was non-canonical, corrupt, or could not be fully
+    /// projected without losing state.
+    InvalidProjection,
+    /// Two independently initialized read-only scans disagreed.
+    SnapshotDisagreement,
+    /// A new slot would exceed the lifetime distinct-slot cap.
+    DistinctSlotCap,
+    /// Even a successful safe compaction could not leave room for both writes.
+    InsufficientCapacity,
+}
+
+/// Request-bound evidence that page 123 can accept the complete forced
+/// steady-state commit sequence.
+///
+/// The receipt deliberately contains no self-authorizing boolean. A caller
+/// gets a value only after the full projection and exact capacity relations
+/// pass. Re-running [`forced_capacity_preflight`] immediately before signing
+/// must reproduce this value byte-for-byte for the same request digest.
+#[cfg(any(feature = "erc7730-forced-blind", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ForcedCapacityReceipt {
+    request_digest: [u8; 32],
+    state_sha256: [u8; 32],
+    receipt_sha256: [u8; 32],
+    distinct_live: u16,
+    projected_live_qws: u16,
+    blank_qws: u16,
+    slot_present: u8,
+    requires_compaction: u8,
+}
+
+#[cfg(any(feature = "erc7730-forced-blind", test))]
+impl ForcedCapacityReceipt {
+    #[must_use]
+    pub const fn request_digest(&self) -> &[u8; 32] {
+        &self.request_digest
+    }
+
+    #[must_use]
+    pub const fn state_sha256(&self) -> &[u8; 32] {
+        &self.state_sha256
+    }
+
+    #[must_use]
+    pub const fn receipt_sha256(&self) -> &[u8; 32] {
+        &self.receipt_sha256
+    }
+
+    #[must_use]
+    pub const fn distinct_live(&self) -> u16 {
+        self.distinct_live
+    }
+
+    #[must_use]
+    pub const fn projected_live_qws(&self) -> u16 {
+        self.projected_live_qws
+    }
+
+    #[must_use]
+    pub const fn blank_qws(&self) -> u16 {
+        self.blank_qws
+    }
+
+    #[must_use]
+    pub const fn slot_present(&self) -> bool {
+        self.slot_present == 1
+    }
+
+    #[must_use]
+    pub const fn requires_compaction(&self) -> bool {
+        self.requires_compaction == 1
+    }
+}
+
+/// Validate one complete projection and bind it to one forced request.
+///
+/// This is kept pure so the exact 127/128 distinct-slot and 510/511 projected-
+/// QW boundaries are executable on the host. The production entry point below
+/// first requires two identical backend snapshots.
+#[cfg(any(feature = "erc7730-forced-blind", test))]
+pub fn forced_capacity_receipt_from_snapshot(
+    slot_key: &[u8; 8],
+    request_digest: &[u8; 32],
+    snapshot: ForcedCapacitySnapshot,
+) -> Result<ForcedCapacityReceipt, ForcedCapacityError> {
+    use sha2::{Digest, Sha256};
+
+    if snapshot.distinct_live > MAX_DISTINCT_SLOTS
+        || snapshot.projected_live_qws > OFFCHAIN_CAPACITY_QWS
+        || snapshot.blank_qws > OFFCHAIN_CAPACITY_QWS
+    {
+        return Err(ForcedCapacityError::InvalidProjection);
+    }
+    if !may_create_distinct_slot(snapshot.distinct_live, snapshot.slot_present) {
+        return Err(ForcedCapacityError::DistinctSlotCap);
+    }
+    let projected_after = snapshot
+        .projected_live_qws
+        .checked_add(FORCED_CAPACITY_REQUIRED_APPENDS)
+        .ok_or(ForcedCapacityError::InsufficientCapacity)?;
+    if projected_after > OFFCHAIN_CAPACITY_QWS {
+        return Err(ForcedCapacityError::InsufficientCapacity);
+    }
+
+    let requires_compaction = snapshot.blank_qws < FORCED_CAPACITY_REQUIRED_APPENDS;
+    let distinct_live = u16::try_from(snapshot.distinct_live)
+        .map_err(|_| ForcedCapacityError::InvalidProjection)?;
+    let projected_live_qws = u16::try_from(snapshot.projected_live_qws)
+        .map_err(|_| ForcedCapacityError::InvalidProjection)?;
+    let blank_qws =
+        u16::try_from(snapshot.blank_qws).map_err(|_| ForcedCapacityError::InvalidProjection)?;
+    let slot_present = u8::from(snapshot.slot_present);
+    let requires_compaction_u8 = u8::from(requires_compaction);
+
+    let mut hash = Sha256::new();
+    hash.update(FORCED_CAPACITY_DOMAIN);
+    hash.update(request_digest);
+    hash.update(slot_key);
+    hash.update(snapshot.state_sha256);
+    hash.update(distinct_live.to_be_bytes());
+    hash.update(projected_live_qws.to_be_bytes());
+    hash.update(blank_qws.to_be_bytes());
+    hash.update([slot_present, requires_compaction_u8]);
+    hash.update((FORCED_CAPACITY_REQUIRED_APPENDS as u16).to_be_bytes());
+    let mut receipt_sha256 = [0u8; 32];
+    receipt_sha256.copy_from_slice(&hash.finalize());
+
+    Ok(ForcedCapacityReceipt {
+        request_digest: *request_digest,
+        state_sha256: snapshot.state_sha256,
+        receipt_sha256,
+        distinct_live,
+        projected_live_qws,
+        blank_qws,
+        slot_present,
+        requires_compaction: requires_compaction_u8,
+    })
+}
+
+/// Obtain two independent full read-only page-123 projections and mint the
+/// request-bound forced-capacity receipt only when they agree exactly.
+///
+/// The caller must volatile-initialize `verdict_out` to FAIL and independently
+/// require both an OK verdict and [`CFI_FORCED_CAPACITY_EXPECTED`]. Returning a
+/// receipt is not authority by itself. Snapshot agreement and the final
+/// request-bound receipt are each redundantly checked before volatile
+/// publication.
+///
+/// # Safety
+///
+/// The flash backend performs volatile reads from the secure page-123 mapping.
+/// The mock backend reads its process-global SRAM table. Neither backend writes
+/// state. The caller must serialize this with page-123 mutators, as all current
+/// synchronous NSC handlers already do.
+#[cfg(feature = "erc7730-forced-blind")]
+#[inline(never)]
+pub unsafe fn forced_capacity_preflight(
+    slot_key: &[u8; 8],
+    request_digest: &[u8; 32],
+    verdict_out: &mut u32,
+    cfi: &mut crate::fi::CfiCounter,
+) -> Result<ForcedCapacityReceipt, ForcedCapacityError> {
+    let first = unsafe { backend::forced_capacity_snapshot(slot_key)? };
+    cfi.bump(CFI_CAPACITY_SNAPSHOT_A);
+    crate::fi::wait_random();
+    let second = unsafe { backend::forced_capacity_snapshot(slot_key)? };
+    cfi.bump(CFI_CAPACITY_SNAPSHOT_B);
+    let snapshots_agree = crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(first) == core::hint::black_box(second)
+    });
+    cfi.bump(CFI_CAPACITY_SNAPSHOT_AGREE);
+
+    let receipt_a = forced_capacity_receipt_from_snapshot(slot_key, request_digest, first)?;
+    cfi.bump(CFI_CAPACITY_RECEIPT_A);
+    crate::fi::wait_random();
+    let receipt_b = forced_capacity_receipt_from_snapshot(
+        core::hint::black_box(slot_key),
+        core::hint::black_box(request_digest),
+        core::hint::black_box(second),
+    )?;
+    cfi.bump(CFI_CAPACITY_RECEIPT_B);
+    let receipts_agree = crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(receipt_a) == core::hint::black_box(receipt_b)
+    });
+    cfi.bump(CFI_CAPACITY_RECEIPT_AGREE);
+
+    let verdict = crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(snapshots_agree) == crate::fi::OK_SENTINEL
+            && core::hint::black_box(receipts_agree) == crate::fi::OK_SENTINEL
+    });
+    cfi.bump(CFI_CAPACITY_VERDICT);
+    // SAFETY: `verdict_out` is a unique valid mutable reference supplied by
+    // the caller. Volatile publication keeps the caller readback independent
+    // from this function's local SSA verdict.
+    unsafe { core::ptr::write_volatile(verdict_out, verdict) };
+    cfi.bump(CFI_CAPACITY_PUBLISH);
+
+    if verdict == crate::fi::OK_SENTINEL {
+        Ok(receipt_a)
+    } else {
+        Err(ForcedCapacityError::SnapshotDisagreement)
+    }
+}
+
 /// Hard ceiling on any per-slot off-chain counter a durable write may store.
 ///
 /// **Why this exists (value-inflation → consent-free durable slot brick; see
@@ -151,6 +423,15 @@ mod backend {
     }
     pub unsafe fn userop_sigs_bump(slot_key: &[u8; 8], new_count: u64) -> Result<(), ()> {
         crate::hw::flash::userop_sigs_bump(slot_key, new_count)
+    }
+
+    #[cfg(feature = "erc7730-forced-blind")]
+    pub unsafe fn forced_capacity_snapshot(
+        slot_key: &[u8; 8],
+    ) -> Result<super::ForcedCapacitySnapshot, super::ForcedCapacityError> {
+        // SAFETY: the facade's caller serializes this read-only page scan with
+        // all page-123 writers.
+        unsafe { crate::hw::flash::forced_capacity_snapshot(slot_key) }
     }
 }
 
@@ -327,6 +608,53 @@ mod backend {
         }
         table[idx].userop_sigs = new_count;
         Ok(())
+    }
+
+    #[cfg(any(feature = "erc7730-forced-blind", test))]
+    pub unsafe fn forced_capacity_snapshot(
+        slot_key: &[u8; 8],
+    ) -> Result<super::ForcedCapacitySnapshot, super::ForcedCapacityError> {
+        use sha2::{Digest, Sha256};
+
+        let table = unsafe { &*core::ptr::addr_of!(TABLE) };
+        let mut state = Sha256::new();
+        state.update(b"PQSigner/offchain-state/mock-capacity/v1");
+        let mut distinct_live = 0usize;
+        let mut slot_present = false;
+        for entry in table {
+            state.update([u8::from(entry.used)]);
+            state.update(entry.slot_key);
+            state.update(entry.offchain.to_be_bytes());
+            state.update(entry.last_userop.to_be_bytes());
+            state.update(entry.userop_sigs.to_be_bytes());
+            if entry.used {
+                distinct_live += 1;
+                slot_present |= &entry.slot_key == slot_key;
+            }
+        }
+        if distinct_live > super::MAX_DISTINCT_SLOTS {
+            return Err(super::ForcedCapacityError::InvalidProjection);
+        }
+
+        // The SRAM backend has no append log. Model its safe compacted image
+        // conservatively as all three possible QWs per live slot; this is the
+        // same upper bound used to select MAX_DISTINCT_SLOTS and never grants
+        // more capacity than the hardware projection.
+        let projected_live_qws = distinct_live
+            .checked_mul(3)
+            .ok_or(super::ForcedCapacityError::InvalidProjection)?;
+        let blank_qws = super::OFFCHAIN_CAPACITY_QWS
+            .checked_sub(projected_live_qws)
+            .ok_or(super::ForcedCapacityError::InvalidProjection)?;
+        let mut state_sha256 = [0u8; 32];
+        state_sha256.copy_from_slice(&state.finalize());
+        Ok(super::ForcedCapacitySnapshot {
+            state_sha256,
+            distinct_live,
+            projected_live_qws,
+            blank_qws,
+            slot_present,
+        })
     }
 
     /// Test-only: clear the SRAM mock to simulate a power cycle / seed
