@@ -117,6 +117,14 @@ KNOWN_CALLS_BLOOM_BYTES = 16 * 1024
 KNOWN_CALLS_BLOOM_BITS = KNOWN_CALLS_BLOOM_BYTES * 8
 KNOWN_CALLS_BLOOM_HASHES = 7
 KNOWN_CALL_DOMAIN = b"pqsigner/erc7730-known-call-v1"
+KNOWN_CALL_SET_DOMAIN = b"pqsigner/erc7730-known-call-set-v1"
+
+FORCED_ELIGIBLE_MAGIC = b"P73K"
+FORCED_ELIGIBLE_SCHEMA_VERSION = 1
+FORCED_ELIGIBLE_HEADER_LEN = 16
+FORCED_ELIGIBLE_GROUP_LEN = 36
+FORCED_ELIGIBLE_SELECTOR_LEN = 4
+U32_MAX = (1 << 32) - 1
 
 
 def _sha256(data: bytes) -> bytes:
@@ -677,15 +685,159 @@ def _known_call_may_contain(
     return True
 
 
-def verify_catalogue(status_raw: bytes, blob: bytes, bloom: bytes) -> dict:
+def _known_call_set_hash(tuples: set[tuple[int, bytes, bytes]]) -> bytes:
+    """Hash one exact canonical known-call tuple set like dbgen."""
+    digest = hashlib.sha256()
+    digest.update(KNOWN_CALL_SET_DOMAIN)
+    digest.update(len(tuples).to_bytes(8, "big"))
+    for chain_id, contract, selector in sorted(tuples):
+        digest.update(chain_id.to_bytes(8, "big"))
+        digest.update(contract)
+        digest.update(selector)
+    return digest.digest()
+
+
+def parse_forced_eligible(raw: bytes) -> dict:
+    """Strictly parse one complete canonical big-endian P73K V1 artifact."""
+    if len(raw) < FORCED_ELIGIBLE_HEADER_LEN:
+        raise ValueError(
+            "forced-eligible set is shorter than its fixed header: "
+            f"{len(raw)} < {FORCED_ELIGIBLE_HEADER_LEN}"
+        )
+    if raw[:4] != FORCED_ELIGIBLE_MAGIC:
+        raise ValueError(f"bad forced-eligible magic: {raw[:4]!r}")
+
+    schema_version = int.from_bytes(raw[4:6], "big")
+    header_len = int.from_bytes(raw[6:8], "big")
+    group_count = int.from_bytes(raw[8:12], "big")
+    tuple_count = int.from_bytes(raw[12:16], "big")
+    if schema_version != FORCED_ELIGIBLE_SCHEMA_VERSION:
+        raise ValueError(f"unknown forced-eligible schema: {schema_version}")
+    if header_len != FORCED_ELIGIBLE_HEADER_LEN:
+        raise ValueError(
+            "forced-eligible header length mismatch: "
+            f"{header_len} != {FORCED_ELIGIBLE_HEADER_LEN}"
+        )
+
+    groups_len = group_count * FORCED_ELIGIBLE_GROUP_LEN
+    selectors_len = tuple_count * FORCED_ELIGIBLE_SELECTOR_LEN
+    selector_pool_off = FORCED_ELIGIBLE_HEADER_LEN + groups_len
+    expected_len = selector_pool_off + selectors_len
+    if (
+        groups_len > U32_MAX
+        or selectors_len > U32_MAX
+        or selector_pool_off > U32_MAX
+        or expected_len > U32_MAX
+    ):
+        raise ValueError("forced-eligible count-derived length overflows u32")
+    if len(raw) != expected_len:
+        raise ValueError(
+            "forced-eligible exact length mismatch: "
+            f"{len(raw)} != {expected_len}"
+        )
+
+    groups: list[dict] = []
+    tuples: list[tuple[int, bytes, bytes]] = []
+    previous_group: tuple[int, bytes] | None = None
+    selector_cursor = 0
+    for group_index in range(group_count):
+        base = FORCED_ELIGIBLE_HEADER_LEN + group_index * FORCED_ELIGIBLE_GROUP_LEN
+        chain_id = int.from_bytes(raw[base : base + 8], "big")
+        target = bytes(raw[base + 8 : base + 28])
+        selector_start = int.from_bytes(raw[base + 28 : base + 32], "big")
+        selector_count = int.from_bytes(raw[base + 32 : base + 34], "big")
+        reserved = int.from_bytes(raw[base + 34 : base + 36], "big")
+
+        group_key = (chain_id, target)
+        if previous_group is not None and group_key <= previous_group:
+            relation = "duplicates" if group_key == previous_group else "is out of order with"
+            raise ValueError(
+                f"forced-eligible group {group_index} {relation} group {group_index - 1}"
+            )
+        previous_group = group_key
+        if reserved != 0:
+            raise ValueError(
+                f"forced-eligible group {group_index} has non-zero reserved bytes"
+            )
+        if selector_count == 0:
+            raise ValueError(f"forced-eligible group {group_index} is empty")
+
+        selector_end = selector_start + selector_count
+        if selector_end > U32_MAX:
+            raise ValueError(
+                f"forced-eligible group {group_index} selector range overflows u32"
+            )
+        if selector_start > tuple_count or selector_end > tuple_count:
+            raise ValueError(
+                f"forced-eligible group {group_index} selector range is out of bounds"
+            )
+        if selector_start != selector_cursor:
+            raise ValueError(
+                f"forced-eligible group {group_index} selector range is not contiguous: "
+                f"{selector_start} != {selector_cursor}"
+            )
+
+        selectors: list[bytes] = []
+        previous_selector: bytes | None = None
+        for selector_index in range(selector_start, selector_end):
+            offset = selector_pool_off + selector_index * FORCED_ELIGIBLE_SELECTOR_LEN
+            selector = bytes(raw[offset : offset + FORCED_ELIGIBLE_SELECTOR_LEN])
+            if previous_selector is not None and selector <= previous_selector:
+                relation = (
+                    "duplicates" if selector == previous_selector else "is out of order with"
+                )
+                raise ValueError(
+                    f"forced-eligible selector {selector_index} {relation} "
+                    f"selector {selector_index - 1} in group {group_index}"
+                )
+            previous_selector = selector
+            selectors.append(selector)
+            tuples.append((chain_id, target, selector))
+
+        groups.append(
+            {
+                "chain_id": chain_id,
+                "target": target,
+                "selector_start": selector_start,
+                "selector_count": selector_count,
+                "selectors": tuple(selectors),
+            }
+        )
+        selector_cursor = selector_end
+
+    if selector_cursor != tuple_count:
+        raise ValueError(
+            "forced-eligible group ranges do not cover the selector pool: "
+            f"{selector_cursor} != {tuple_count}"
+        )
+    return {
+        "schema_version": schema_version,
+        "header_len": header_len,
+        "group_count": group_count,
+        "tuple_count": tuple_count,
+        "groups": tuple(groups),
+        "tuples": tuple(tuples),
+    }
+
+
+def verify_catalogue(
+    status_raw: bytes,
+    blob: bytes,
+    bloom: bytes,
+    forced_eligible: bytes | None = None,
+) -> dict:
     """Bind and fully preflight one immutable P730/Bloom byte snapshot.
 
     Relative to the caller-authenticated status, this proves the compiled leaf
     set and every stored proof agree, and that every compiled contract selector
     is present in the bound omission Bloom. It cannot recover the exact
-    registry-declared tuple superset from that non-invertible Bloom;
-    `known_call_set_sha256` is therefore retained as release identity, not
-    falsely re-derived here. This function does not verify a firmware signature.
+    registry-declared tuple superset from that non-invertible Bloom when no
+    P73K is supplied. With `forced_eligible`, it independently parses the exact
+    refused-known set F, recovers C from the already strict P730 contract IRs,
+    and proves their disjoint union reproduces the P73S-bound K identity. This
+    function does not verify a firmware signature or authenticate P73K's image
+    placement; callers of the optional path must supply bytes extracted from
+    the same authenticated secure image as P73S.
     """
     status = parse_catalogue_status(status_raw)
     if status["catalogue_version"] != CATALOGUE_VERSION:
@@ -793,14 +945,16 @@ def verify_catalogue(status_raw: bytes, blob: bytes, bloom: bytes) -> dict:
             "compiled known-call count exceeds authenticated registry tuple count: "
             f"{len(compiled_known_calls)} > {status['known_call_count']}"
         )
-    for chain_id, contract, selector in sorted(compiled_known_calls):
-        if not _known_call_may_contain(bloom, chain_id, contract, selector):
-            raise ValueError(
-                "authenticated known-call Bloom omits compiled tuple "
-                f"chain={chain_id} contract=0x{contract.hex()} "
-                f"selector=0x{selector.hex()}"
-            )
-
+    if forced_eligible is None:
+        # Preserve the original validation path and failure ordering when the
+        # optional exact refused-known set is absent.
+        for chain_id, contract, selector in sorted(compiled_known_calls):
+            if not _known_call_may_contain(bloom, chain_id, contract, selector):
+                raise ValueError(
+                    "authenticated known-call Bloom omits compiled tuple "
+                    f"chain={chain_id} contract=0x{contract.hex()} "
+                    f"selector=0x{selector.hex()}"
+                )
     levels = _merkle_levels(irs)
     root = levels[-1][0]
     if root != status["descriptor_root"]:
@@ -822,12 +976,50 @@ def verify_catalogue(status_raw: bytes, blob: bytes, bloom: bytes) -> dict:
         if stored_proof != expected_proof:
             raise ValueError(f"stored Merkle proof disagrees for leaf {i}")
 
+    parsed_forced = None
+    forced_known_calls: set[tuple[int, bytes, bytes]] | None = None
+    if forced_eligible is not None:
+        parsed_forced = parse_forced_eligible(forced_eligible)
+        forced_known_calls = set(parsed_forced["tuples"])
+        overlap = compiled_known_calls & forced_known_calls
+        if overlap:
+            chain_id, contract, selector = min(overlap)
+            raise ValueError(
+                "clear/refused-known partition overlaps at "
+                f"chain={chain_id} contract=0x{contract.hex()} "
+                f"selector=0x{selector.hex()}"
+            )
+        known_calls = compiled_known_calls | forced_known_calls
+        if len(known_calls) != status["known_call_count"]:
+            raise ValueError(
+                "clear/refused-known union count does not match authenticated status: "
+                f"{len(known_calls)} != {status['known_call_count']}"
+            )
+        if _known_call_set_hash(known_calls) != status["known_call_set_sha256"]:
+            raise ValueError(
+                "clear/refused-known union SHA-256 does not match authenticated status"
+            )
+        for chain_id, contract, selector in sorted(known_calls):
+            if not _known_call_may_contain(bloom, chain_id, contract, selector):
+                raise ValueError(
+                    "authenticated known-call Bloom omits partition tuple "
+                    f"chain={chain_id} contract=0x{contract.hex()} "
+                    f"selector=0x{selector.hex()}"
+                )
+
     return {
         "status": status,
         "header": hdr,
         "entries": tuple(entries),
         "parsed_irs": tuple(parsed_irs),
         "compiled_known_call_count": len(compiled_known_calls),
+        "clear_known_call_count": len(compiled_known_calls),
+        "forced_known_call_count": (
+            len(forced_known_calls) if forced_known_calls is not None else None
+        ),
+        "known_call_count": status["known_call_count"],
+        "forced_eligible_bound": forced_known_calls is not None,
+        "forced_eligible": parsed_forced,
     }
 
 

@@ -77,8 +77,8 @@ def known_call_set_hash(tuples: list[tuple[int, bytes, bytes]]) -> bytes:
     return sha256(bytes(encoded))
 
 
-def make_fixture(variant: int = 0) -> tuple[bytes, bytes, bytes]:
-    tuples = [
+def fixture_clear_tuples(variant: int = 0) -> list[tuple[int, bytes, bytes]]:
+    return [
         (
             1 + variant * 10,
             bytes([0x11 + variant]) * 20,
@@ -90,7 +90,66 @@ def make_fixture(variant: int = 0) -> tuple[bytes, bytes, bytes]:
             bytes([5 + variant, 6, 7, 8]),
         ),
     ]
-    irs = [make_ir(*known_call) for known_call in tuples]
+
+
+def fixture_forced_tuples(variant: int = 0) -> list[tuple[int, bytes, bytes]]:
+    return [
+        (
+            3 + variant * 10,
+            bytes([0x33 + variant]) * 20,
+            bytes([9 + variant, 10, 11, 12]),
+        ),
+        (
+            3 + variant * 10,
+            bytes([0x33 + variant]) * 20,
+            bytes([10 + variant, 11, 12, 13]),
+        ),
+        (
+            4 + variant * 10,
+            bytes([0x44 + variant]) * 20,
+            bytes([13 + variant, 14, 15, 16]),
+        ),
+    ]
+
+
+def make_forced_eligible(tuples: list[tuple[int, bytes, bytes]]) -> bytes:
+    canonical = sorted(tuples)
+    if len(canonical) != len(set(canonical)):
+        raise ValueError("test fixture P73K tuples must be unique")
+
+    groups: list[tuple[int, bytes, list[bytes]]] = []
+    for chain_id, target, selector in canonical:
+        if groups and groups[-1][0:2] == (chain_id, target):
+            groups[-1][2].append(selector)
+        else:
+            groups.append((chain_id, target, [selector]))
+
+    out = bytearray(trailer.FORCED_ELIGIBLE_MAGIC)
+    out += trailer.FORCED_ELIGIBLE_SCHEMA_VERSION.to_bytes(2, "big")
+    out += trailer.FORCED_ELIGIBLE_HEADER_LEN.to_bytes(2, "big")
+    out += len(groups).to_bytes(4, "big")
+    out += len(canonical).to_bytes(4, "big")
+    selector_start = 0
+    selector_pool = bytearray()
+    for chain_id, target, selectors in groups:
+        out += chain_id.to_bytes(8, "big")
+        out += target
+        out += selector_start.to_bytes(4, "big")
+        out += len(selectors).to_bytes(2, "big")
+        out += b"\x00\x00"
+        selector_start += len(selectors)
+        selector_pool += b"".join(selectors)
+    out += selector_pool
+    return bytes(out)
+
+
+def make_fixture(
+    variant: int = 0,
+    forced_tuples: tuple[tuple[int, bytes, bytes], ...] = (),
+) -> tuple[bytes, bytes, bytes]:
+    clear_tuples = fixture_clear_tuples(variant)
+    known_tuples = clear_tuples + list(forced_tuples)
+    irs = [make_ir(*known_call) for known_call in clear_tuples]
     leaves = [leaf_hash(ir) for ir in irs]
     root = node_hash(leaves[0], leaves[1])
 
@@ -109,7 +168,7 @@ def make_fixture(variant: int = 0) -> tuple[bytes, bytes, bytes]:
     blob += proofs_off.to_bytes(4, "little")
 
     ir_off = 0
-    for (chain_id, contract, _selector), ir in zip(tuples, irs):
+    for (chain_id, contract, _selector), ir in zip(clear_tuples, irs):
         blob += chain_id.to_bytes(8, "little")
         blob += contract
         blob += bytes(32)  # Contract-context diagnostic primary-type hash.
@@ -121,7 +180,7 @@ def make_fixture(variant: int = 0) -> tuple[bytes, bytes, bytes]:
     blob += leaves[1] + leaves[0]
 
     bloom = bytearray(trailer.KNOWN_CALLS_BLOOM_BYTES)
-    for known_call in tuples:
+    for known_call in known_tuples:
         add_bloom_tuple(bloom, *known_call)
 
     status = bytearray(trailer.STATUS_LEN)
@@ -133,11 +192,11 @@ def make_fixture(variant: int = 0) -> tuple[bytes, bytes, bytes]:
     status[13] = trailer.PROVENANCE_DEV_UNATTESTED
     status[16:20] = entry_count.to_bytes(4, "big")
     status[20:24] = len(blob).to_bytes(4, "big")
-    status[24:28] = len(tuples).to_bytes(4, "big")
+    status[24:28] = len(known_tuples).to_bytes(4, "big")
     status[28:32] = len(bloom).to_bytes(4, "big")
     status[32:64] = root
     status[64:96] = sha256(bytes(blob))
-    status[96:128] = known_call_set_hash(tuples)
+    status[96:128] = known_call_set_hash(known_tuples)
     status[128:160] = sha256(bytes(bloom))
     status[224:231] = b"test/1\x00"
     return bytes(status), bytes(blob), bytes(bloom)
@@ -252,6 +311,198 @@ class CatalogueVerificationTests(unittest.TestCase):
         status[128:160] = sha256(empty_bloom)
         with self.assertRaisesRegex(ValueError, "omits compiled tuple"):
             trailer.verify_catalogue(bytes(status), blob, empty_bloom)
+
+    def test_forced_eligible_parser_accepts_canonical_empty_and_nonempty_sets(self) -> None:
+        empty = trailer.parse_forced_eligible(make_forced_eligible([]))
+        self.assertEqual(empty["group_count"], 0)
+        self.assertEqual(empty["tuple_count"], 0)
+        self.assertEqual(empty["tuples"], ())
+
+        expected = fixture_forced_tuples()
+        parsed = trailer.parse_forced_eligible(make_forced_eligible(expected))
+        self.assertEqual(parsed["schema_version"], 1)
+        self.assertEqual(parsed["header_len"], 16)
+        self.assertEqual(parsed["group_count"], 2)
+        self.assertEqual(parsed["tuple_count"], 3)
+        self.assertEqual(parsed["tuples"], tuple(expected))
+        self.assertEqual(parsed["groups"][0]["selector_start"], 0)
+        self.assertEqual(parsed["groups"][0]["selector_count"], 2)
+        self.assertEqual(parsed["groups"][1]["selector_start"], 2)
+
+    def test_forced_eligible_parser_rejects_header_length_and_arithmetic_faults(self) -> None:
+        good = make_forced_eligible(fixture_forced_tuples())
+        cases: list[tuple[str, bytes, str]] = []
+
+        malformed = bytearray(good)
+        malformed[0] ^= 1
+        cases.append(("magic", bytes(malformed), "magic"))
+        malformed = bytearray(good)
+        malformed[5] = 2
+        cases.append(("schema", bytes(malformed), "schema"))
+        malformed = bytearray(good)
+        malformed[7] = 15
+        cases.append(("header_len", bytes(malformed), "header length"))
+        cases.append(("short_header", good[:15], "shorter than"))
+        cases.append(("truncated", good[:-1], "exact length"))
+        cases.append(("trailing", good + b"\x00", "exact length"))
+
+        group_overflow = bytearray(16)
+        group_overflow[:4] = trailer.FORCED_ELIGIBLE_MAGIC
+        group_overflow[4:6] = (1).to_bytes(2, "big")
+        group_overflow[6:8] = (16).to_bytes(2, "big")
+        group_overflow[8:12] = (0xFFFF_FFFF).to_bytes(4, "big")
+        cases.append(("group_overflow", bytes(group_overflow), "overflows u32"))
+        tuple_overflow = bytearray(group_overflow)
+        tuple_overflow[8:12] = bytes(4)
+        tuple_overflow[12:16] = (0xFFFF_FFFF).to_bytes(4, "big")
+        cases.append(("tuple_overflow", bytes(tuple_overflow), "overflows u32"))
+
+        for label, raw, expected in cases:
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(ValueError, expected):
+                    trailer.parse_forced_eligible(raw)
+
+    def test_forced_eligible_parser_rejects_group_and_range_faults(self) -> None:
+        good = make_forced_eligible(fixture_forced_tuples())
+        cases: list[tuple[str, bytes, str]] = []
+
+        malformed = bytearray(good)
+        malformed[51] = 1
+        cases.append(("reserved", bytes(malformed), "reserved"))
+        malformed = bytearray(good)
+        malformed[48:50] = bytes(2)
+        cases.append(("empty", bytes(malformed), "is empty"))
+        malformed = bytearray(good)
+        malformed[52:60] = bytes(8)
+        cases.append(("group_order", bytes(malformed), "out of order"))
+        malformed = bytearray(good)
+        malformed[52:80] = malformed[16:44]
+        cases.append(("group_duplicate", bytes(malformed), "duplicates"))
+        malformed = bytearray(good)
+        malformed[44:48] = (0xFFFF_FFFF).to_bytes(4, "big")
+        cases.append(("range_overflow", bytes(malformed), "overflows u32"))
+        malformed = bytearray(good)
+        malformed[44:48] = (3).to_bytes(4, "big")
+        cases.append(("range_bounds", bytes(malformed), "out of bounds"))
+        malformed = bytearray(good)
+        malformed[44:48] = (1).to_bytes(4, "big")
+        cases.append(("initial_gap", bytes(malformed), "not contiguous"))
+        malformed = bytearray(good)
+        malformed[80:84] = (1).to_bytes(4, "big")
+        cases.append(("overlap", bytes(malformed), "not contiguous"))
+
+        for label, raw, expected in cases:
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(ValueError, expected):
+                    trailer.parse_forced_eligible(raw)
+
+        uncovered = bytearray(trailer.FORCED_ELIGIBLE_MAGIC)
+        uncovered += (1).to_bytes(2, "big")
+        uncovered += (16).to_bytes(2, "big")
+        uncovered += bytes(4)
+        uncovered += (1).to_bytes(4, "big")
+        uncovered += b"\x01\x02\x03\x04"
+        with self.assertRaisesRegex(ValueError, "do not cover"):
+            trailer.parse_forced_eligible(bytes(uncovered))
+
+    def test_forced_eligible_parser_rejects_selector_duplicates_and_order(self) -> None:
+        good = make_forced_eligible(fixture_forced_tuples())
+        selector_pool_off = 16 + 2 * 36
+
+        duplicate = bytearray(good)
+        duplicate[selector_pool_off + 4 : selector_pool_off + 8] = duplicate[
+            selector_pool_off : selector_pool_off + 4
+        ]
+        with self.assertRaisesRegex(ValueError, "duplicates"):
+            trailer.parse_forced_eligible(bytes(duplicate))
+
+        out_of_order = bytearray(good)
+        first = bytes(out_of_order[selector_pool_off : selector_pool_off + 4])
+        second = bytes(out_of_order[selector_pool_off + 4 : selector_pool_off + 8])
+        out_of_order[selector_pool_off : selector_pool_off + 4] = second
+        out_of_order[selector_pool_off + 4 : selector_pool_off + 8] = first
+        with self.assertRaisesRegex(ValueError, "out of order"):
+            trailer.parse_forced_eligible(bytes(out_of_order))
+
+    def test_catalogue_partition_preserves_legacy_mode_and_binds_empty_f(self) -> None:
+        status, blob, bloom = make_fixture()
+        legacy = trailer.verify_catalogue(status, blob, bloom)
+        self.assertEqual(legacy["compiled_known_call_count"], 2)
+        self.assertEqual(legacy["clear_known_call_count"], 2)
+        self.assertIsNone(legacy["forced_known_call_count"])
+        self.assertEqual(legacy["known_call_count"], 2)
+        self.assertIs(legacy["forced_eligible_bound"], False)
+        self.assertIsNone(legacy["forced_eligible"])
+
+        bound = trailer.verify_catalogue(
+            status, blob, bloom, make_forced_eligible([])
+        )
+        self.assertEqual(bound["clear_known_call_count"], 2)
+        self.assertEqual(bound["forced_known_call_count"], 0)
+        self.assertEqual(bound["known_call_count"], 2)
+        self.assertIs(bound["forced_eligible_bound"], True)
+
+    def test_catalogue_partition_binds_nonempty_f_and_all_known_bloom(self) -> None:
+        forced = fixture_forced_tuples()
+        status, blob, bloom = make_fixture(forced_tuples=tuple(forced))
+        verified = trailer.verify_catalogue(
+            status, blob, bloom, make_forced_eligible(forced)
+        )
+        self.assertEqual(verified["clear_known_call_count"], 2)
+        self.assertEqual(verified["forced_known_call_count"], 3)
+        self.assertEqual(verified["known_call_count"], 5)
+        self.assertIs(verified["forced_eligible_bound"], True)
+        self.assertEqual(verified["forced_eligible"]["tuples"], tuple(forced))
+
+        clear_only_bloom = bytearray(trailer.KNOWN_CALLS_BLOOM_BYTES)
+        for known_call in fixture_clear_tuples():
+            add_bloom_tuple(clear_only_bloom, *known_call)
+        status_without_forced_bloom = bytearray(status)
+        status_without_forced_bloom[128:160] = sha256(bytes(clear_only_bloom))
+        with self.assertRaisesRegex(ValueError, "Bloom omits partition tuple"):
+            trailer.verify_catalogue(
+                bytes(status_without_forced_bloom),
+                blob,
+                bytes(clear_only_bloom),
+                make_forced_eligible(forced),
+            )
+
+    def test_catalogue_partition_rejects_overlap_omission_and_substitution(self) -> None:
+        forced = fixture_forced_tuples()
+        status, blob, bloom = make_fixture(forced_tuples=tuple(forced))
+
+        overlap = [fixture_clear_tuples()[0], *forced]
+        with self.assertRaisesRegex(ValueError, "partition overlaps"):
+            trailer.verify_catalogue(
+                status, blob, bloom, make_forced_eligible(overlap)
+            )
+
+        with self.assertRaisesRegex(ValueError, "union count"):
+            trailer.verify_catalogue(
+                status, blob, bloom, make_forced_eligible(forced[:-1])
+            )
+
+        substituted = list(forced)
+        substituted[-1] = (
+            substituted[-1][0],
+            substituted[-1][1],
+            b"\xfe\xed\xfa\xce",
+        )
+        with self.assertRaisesRegex(ValueError, "union SHA-256"):
+            trailer.verify_catalogue(
+                status, blob, bloom, make_forced_eligible(substituted)
+            )
+
+    def test_catalogue_partition_rejects_prod_e2e_p73k_mismatch(self) -> None:
+        prod_forced = fixture_forced_tuples(0)
+        e2e_forced = fixture_forced_tuples(1)
+        status, blob, bloom = make_fixture(
+            variant=0, forced_tuples=tuple(prod_forced)
+        )
+        with self.assertRaisesRegex(ValueError, "union SHA-256"):
+            trailer.verify_catalogue(
+                status, blob, bloom, make_forced_eligible(e2e_forced)
+            )
 
     def test_catalogue_transition_matrix_accepts_only_matching_status(self) -> None:
         status_a, blob_a, bloom_a = make_fixture(0)
