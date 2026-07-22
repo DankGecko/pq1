@@ -56,7 +56,7 @@ It consolidates the silicon items scattered across
 
 Two ship-profile checks currently **fail closed until silicon-pinned**, so a
 genuine first boot halts at `E0809` (then `E080A`) before the burn. Pin the
-register layouts against `docs/hardware/STM32U5/rm0456-*.pdf`, then flip each
+register layouts against the STM32U5 reference manual (RM0456, st.com), then flip each
 `const` in the commit that records **both** the RM0456 citation **and** a bench
 readback.
 

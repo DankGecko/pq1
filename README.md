@@ -561,4 +561,9 @@ Start with this README → `docs/STATUS.md` (the security/verification frontier 
 
 ## License
 
-Copyright (c) 2026 EthereumPhone. All rights reserved.
+Copyright (c) 2026 EthereumPhone.
+
+- **Firmware and everything else in this repository:** [GNU General Public License v3.0](LICENSE) (GPLv3). Note that ported third-party GPLv3 code (e.g. the Trezor-derived TAMP driver) is compatible with and remains under GPLv3.
+- **Smart contracts (`contracts/`):** [MIT License](contracts/LICENSE). Vendored third-party contract dependencies (Solady, Coinbase Smart Wallet reference code, forge-std, etc.) remain under their own licenses.
+
+Vendor datasheets, application notes, and the NXP Plug & Trust middleware are **not** distributed in this repository (their licenses do not permit redistribution). Download them from the respective vendors: STMicroelectronics (RM0456, STM32U585 datasheet, UM2839), NXP (SE050 datasheet, AN12413, AN12436, AN12514, AN13539, Plug & Trust middleware), Infineon (OPTIGA Trust M doc pack), and the display-controller vendors (NV3007, SSD1306). The SPHINCS+C parameter-set paper is open access at [eprint.iacr.org/2023/773](https://eprint.iacr.org/2023/773).
