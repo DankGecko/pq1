@@ -66,6 +66,7 @@ extern crate std;
 pub mod abi;
 pub mod binding;
 pub mod bundle;
+pub mod catalogue_status;
 pub mod display;
 pub mod ir;
 pub mod known_calls;

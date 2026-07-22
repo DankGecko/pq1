@@ -18,6 +18,8 @@
 //! * `pubkey`  — export the vendor public key for FSBL embedding.
 //! * `sign`    — sign a pair of secure + nonsecure ELFs into a `.pqfw`.
 //! * `verify`  — independently verify a `.pqfw` against a pubkey.
+//! * `erc7730-release-metadata` — authenticate and extract the firmware half
+//!   of an ERC-7730 compatibility identity.
 //! * `inspect` — dump manifest fields from a `.pqfw` (for debugging).
 //!
 //! The same checks FSBL runs at boot are reachable through `verify`, so
@@ -188,6 +190,35 @@ enum Cmd {
         pubkey: std::path::PathBuf,
     },
 
+    /// Authenticate and extract the firmware-release half of ERC-7730
+    /// compatibility as compact JSON.
+    ///
+    /// This verifies the complete C10 manifest/image chain, requires the P73S
+    /// sidecar to equal the unique valid receipt in authenticated secure.bin,
+    /// and enforces exact/minimum firmware-version policy. It does not inspect
+    /// a companion P730 catalogue and therefore is not itself a compatibility
+    /// verdict, ERC-8176 attestation, anti-rollback proof, or production grant.
+    Erc7730ReleaseMetadata {
+        /// `.pqfw` bundle path.
+        #[arg(long)]
+        bundle: std::path::PathBuf,
+        /// Vendor public key (32 bytes, produced by `fwsign pubkey`).
+        #[arg(long)]
+        pubkey: std::path::PathBuf,
+        /// Exact authenticated firmware version expected by this companion
+        /// release. Version negotiation is deliberately forbidden.
+        #[arg(long)]
+        expected_version: u32,
+        /// Lowest firmware version this companion release permits. This is a
+        /// caller policy check, not proof of the device's OTP rollback floor.
+        #[arg(long)]
+        minimum_version: u32,
+        /// Optional path for the exact authenticated 256-byte P73S receipt.
+        /// Written only after every authentication and version check passes.
+        #[arg(long)]
+        status_out: Option<std::path::PathBuf>,
+    },
+
     /// Prove from final linked artifacts that FSBL and secure world use the
     /// same reviewed, non-development firmware-update key.
     VerifyArtifactKeys {
@@ -339,6 +370,19 @@ fn main() -> anyhow::Result<()> {
             out_path: out,
         }),
         Cmd::Verify { bundle, pubkey } => subcommands::verify::run(&bundle, &pubkey),
+        Cmd::Erc7730ReleaseMetadata {
+            bundle,
+            pubkey,
+            expected_version,
+            minimum_version,
+            status_out,
+        } => subcommands::erc7730_release_metadata::run(
+            &bundle,
+            &pubkey,
+            expected_version,
+            minimum_version,
+            status_out.as_deref(),
+        ),
         Cmd::VerifyArtifactKeys {
             fsbl,
             secure,

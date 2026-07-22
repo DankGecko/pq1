@@ -24,6 +24,8 @@
 //! - `tools/companion-stub/selectors_db_e2e.bin` — Selectors e2e fixture
 //! - `tools/companion-stub/erc7730_db.bin`       — ERC-7730 catalog (host)
 //! - `tools/companion-stub/erc7730_db_e2e.bin`   — ERC-7730 e2e fixture
+//! - `tools/companion-stub/erc7730_status.bin`   — authenticated catalogue receipt
+//! - `tools/companion-stub/erc7730_status_e2e.bin` — e2e receipt
 //! - `secure/src/db_roots.rs`            — compiled-in Merkle roots
 //! - `secure/data/erc7730.review.txt`    — ERC-7730 vendor-signing review
 
@@ -58,9 +60,11 @@ pub fn render_erc7730_security_tail(
     prod_root: &[u8; 32],
     prod_count: usize,
     prod_provenance: erc7730::CatalogueProvenance,
+    prod_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
     e2e_root: &[u8; 32],
     e2e_count: usize,
     e2e_provenance: erc7730::CatalogueProvenance,
+    e2e_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
 ) -> String {
     let mut out = String::with_capacity(4 * 1024);
     out.push_str(ERC7730_SECURITY_TAIL_SENTINEL);
@@ -99,9 +103,40 @@ pub fn render_erc7730_security_tail(
          pub static ERC7730_KNOWN_CALLS_BLOOM: &[u8; pqsigner_erc7730::known_calls::BLOOM_BYTES] =\n\
              self::__pqsigner_erc7730_core::include_bytes!(\"../data/erc7730-known-calls-e2e.bloom\");\n\n",
     );
+    emit_generated_catalogue_status(&mut out, prod_status, false);
+    emit_generated_catalogue_status(&mut out, e2e_status, true);
     emit_generated_erc7730_provenance(&mut out, prod_provenance, false);
     emit_generated_erc7730_provenance(&mut out, e2e_provenance, true);
     out
+}
+
+fn emit_generated_catalogue_status(
+    out: &mut String,
+    bytes: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
+    e2e: bool,
+) {
+    let selected = if e2e {
+        "feature = \"e2e-test\""
+    } else {
+        "not(feature = \"e2e-test\")"
+    };
+    writeln!(out, "#[cfg({selected})]").unwrap();
+    out.push_str("#[used]\n#[no_mangle]\n#[link_section = \".pqsigner.erc7730_status\"]\n");
+    write!(
+        out,
+        "pub static PQSIGNER_ERC7730_CATALOGUE_STATUS: [u8; {}] = [",
+        bytes.len()
+    )
+    .unwrap();
+    for (index, byte) in bytes.iter().enumerate() {
+        if index % 8 == 0 {
+            out.push_str("\n    ");
+        } else {
+            out.push(' ');
+        }
+        write!(out, "0x{byte:02x},").unwrap();
+    }
+    out.push_str("\n];\n\n");
 }
 
 fn emit_generated_root(out: &mut String, name: &str, bytes: &[u8; 32]) {

@@ -75,6 +75,24 @@
 > remains open for that external half; authenticated companion/root pairing is
 > separately [#379](https://github.com/EthereumPhone/PQ1/issues/379).
 
+> **Scoped ERC-7730 companion/release binding update — 2026-07-22.** `dbgen`
+> now emits a canonical 256-byte `P73S` receipt for the exact catalogue root,
+> blob/Bloom identities, schemas/counts, provenance, policy/curation inputs and
+> compiler version. The selected receipt is retained in an allocated read-only
+> final-secure-image section; `fwsign` extracts it from the ELF, proves it lies
+> in the flattened image covered by the signed manifest, packages an exact
+> sidecar, and rejects missing/malformed/ambiguous/mismatched identities before
+> compatibility use. The companion reference authenticates the release and
+> exact/minimum firmware version, then rebuilds the complete P730 Merkle tree
+> and byte-compares every proof and the independently hash-bound known-call
+> Bloom before enabling clear signing. Its report is compatibility-only:
+> `erc8176_attestation=false`, `production_authority=false`. With no
+> authenticated running-device query, automatic readiness is limited to a
+> signed release the companion installed/recorded; unknown or externally
+> changed identity fails closed. [#379](https://github.com/EthereumPhone/PQ1/issues/379)
+> remains open for the production release/rollback/installed-identity boundary,
+> independently of [#377](https://github.com/EthereumPhone/PQ1/issues/377).
+
 > **Scoped PQ1 ERC-7730 implementation update — 2026-07-17; corrected
 > 2026-07-18.** Bounded
 > `nativeCurrencyAddress` lists, injective `nftName` collection identity, and

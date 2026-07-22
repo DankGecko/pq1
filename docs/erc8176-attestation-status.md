@@ -83,6 +83,13 @@ the on-device IR/leaf identifier baked into the firmware-pinned Merkle tree
   catalogue while its calls remain filter-positive hard refusals. Verified
   review receipts bind the draft revision, policy/snapshot hashes, checkpoint,
   evaluation policy, and admitted counts.
+- **Release compatibility is separate from attestation:** the generated `P73S`
+  receipt binds the selected root, blob/Bloom identities, provenance class,
+  policy and curation inputs, and compiler version into the signed secure-image
+  hash. Companion preflight can therefore prove that its catalogue matches one
+  authenticated firmware release. Its report is explicitly compatibility-only:
+  it cannot set `erc8176_attestation=true`, authorize a production root, or
+  compensate for missing auditor evidence.
 - **Deliberate limitations:** snapshot v1 supports offchain EAS-v2 attestations
   by EOAs only. It rejects contract/code-bearing signers (including ERC-1271 and
   EIP-7702), does not fetch data, decide consensus finality, select real
@@ -123,10 +130,11 @@ Concretely, the remaining half requires:
    (currently placeholders), and an owner independently approves a finalized
    checkpoint, snapshot hash, evaluation epoch and freshness policy.
 3. The resulting production policy/snapshot passes the verifier and threshold,
-   then goes through the separately reviewed root/release-binding ceremony. The
-   companion-to-firmware catalogue pairing remains tracked by
-   [#379](https://github.com/EthereumPhone/PQ1/issues/379); this code-half change
-   does not rotate or authorize a root.
+   then goes through the separately reviewed root/release ceremony. The
+   companion-to-firmware code path now authenticates the pairing through the
+   signed-image `P73S` receipt ([#379](https://github.com/EthereumPhone/PQ1/issues/379)),
+   but that compatibility mechanism does not rotate or authorize a root and
+   does not close the independent release/rollback quarantine.
 
 **Until then:** run `make erc8176-coverage` periodically (it's the tripwire); stay
 in dev mode. Flipping now would remove clear-sign coverage for the entire

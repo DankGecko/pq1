@@ -1808,6 +1808,8 @@ check-erc7730-descriptors: check-erc7730-build-input-shadows
 	@cargo run --locked -q -p pqsigner-xtask \
 	    --features $(ERC7730_E2E_GENERATOR_FEATURE) -- \
 	    gen-erc7730-descriptors --check
+	@echo "==> Checking companion ERC-7730 catalogue/status preflight"
+	@PYTHONDONTWRITEBYTECODE=1 python3 tools/companion-stub/test_erc7730_trailer.py
 
 check-research-bundles:
 	@echo "==> Checking generated security research bundles"

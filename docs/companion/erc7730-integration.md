@@ -17,6 +17,14 @@ Current security contract:
   same implementation through thin re-exports.
 - Every supplied bundle is Merkle-verified against the firmware-pinned root and
   bound to the signed chain/deployment/domain before rendering.
+- The companion release pairing is authenticated separately from each
+  sign-time proof. `dbgen` emits a canonical 256-byte `P73S` receipt; the
+  selected bytes live in final secure-ELF section
+  `.pqsigner.erc7730_status`, are covered by the signed secure-image hash, and
+  are packaged as `erc7730-status.bin`. The companion authenticates the release
+  and exact/minimum firmware version first, then hashes the paired P730/Bloom,
+  rebuilds the complete tree, and byte-compares every proof before enabling
+  clear signing. This is compatibility evidence, not ERC-8176 attestation.
 - ERC-20 metadata is consumed only after a second, surface-specific attribution
   check against the signed direct target, exact ERC-7730 `tokenPath`, verified
   Safe target, or verified pinned MultiSend record. Unverified Safe bytes grant
@@ -106,11 +114,13 @@ Provenance is deliberately pre-production:
   compile time and `make prod-erc7730-provenance-check` independently refuses
   it. A future verified root must remove the dev-warning feature coupling in
   the same reviewed rotation.
-- There is no gateway command that reports the current root and no separately
-  authenticated release-metadata channel yet. During bring-up, bind the
-  companion blob to the exact firmware build out of band. Production remains
-  blocked by both the provenance gate and the independent firmware-rollback
-  quarantine.
+- There is deliberately no gateway command that reports the current root. The
+  authenticated signed-image receipt now supplies the release metadata without
+  expanding the USB/CMSE surface. With no authenticated running-device query,
+  automatic readiness is scoped to a signed release the companion installed
+  and recorded; an unknown or externally changed installed identity is
+  incompatible. Production remains blocked by both the provenance gate and the
+  independent firmware-release/rollback quarantine.
 - Wire v2 slot rotation remains quarantined: it may return a Type-1 signature
   without the exact 64-byte public key needed to construct its signed calldata.
   Seedless companions keep `FLAG_REGISTER_SLOT` clear, reject any nonzero
@@ -120,9 +130,11 @@ Provenance is deliberately pre-production:
 Sources of truth:
 
 - `docs/companion/companion-erc7730-implementation-guide.md`
-- `pqsigner-erc7730/src/{ir,bundle,binding,known_calls}.rs`
+- `pqsigner-erc7730/src/{ir,bundle,binding,known_calls,catalogue_status}.rs`
 - `pqsigner-erc7730/src/display/`
 - `dbgen/src/erc7730.rs`
 - `secure/src/tx/erc7730.rs`
 - `secure/src/db_roots.rs`
 - `secure/data/erc7730.review.txt`
+- `fwsign/src/{artifact_key,bundle,subcommands/verify}.rs`
+- `tools/companion-stub/erc7730_trailer.py`

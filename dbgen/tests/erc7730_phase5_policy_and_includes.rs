@@ -783,7 +783,8 @@ fn duplicate_include_keys_are_rejected_before_merge() {
         "duplicate include keys must fail closed",
     );
     assert!(
-        error.contains("parse include")
+        error.contains("load include")
+            && error.contains("parse descriptor source")
             && error.contains("common-duplicate.json")
             && error.contains("duplicate JSON object key `owner`"),
         "unexpected duplicate-key rejection: {error}"
@@ -879,7 +880,8 @@ fn pqsigner_key_is_reserved_to_each_json_document_root() {
         "a misplaced include narrowing block must fail before merge",
     );
     assert!(
-        error.contains("parse include")
+        error.contains("load include")
+            && error.contains("parse descriptor source")
             && error.contains("common-misplaced.json")
             && error.contains("reserved key `_pqsigner` may appear only at a JSON document root"),
         "unexpected include misplaced-key rejection: {error}"
@@ -2038,7 +2040,7 @@ fn malformed_raw_descriptor_fails_tolerant_catalogue_closed() {
     assert!(
         err.contains("calldata-malformed.json")
             && err.contains("known-call omission scan failed closed")
-            && err.contains("parse:"),
+            && err.contains("parse descriptor source"),
         "unexpected fail-closed diagnostic: {err}"
     );
     assert!(
@@ -2091,7 +2093,7 @@ fn child_deployments_with_all_formats_in_broken_include_fail_closed() {
     assert!(
         err.contains("common-all-formats.json")
             && err.contains("known-call omission scan failed closed")
-            && err.contains("parse:"),
+            && err.contains("parse descriptor source"),
         "unexpected fail-closed diagnostic: {err}"
     );
     assert!(

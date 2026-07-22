@@ -11,6 +11,8 @@
 //! 7. `verify_signature` — SPHINCS+C10 verify over the digest.
 //! 8. Re-hash `secure.bin` + `nonsecure.bin` and compare against the
 //!    manifest's stored hashes + lengths.
+//! 9. Only after those authentication checks, parse any ERC-7730 status
+//!    sidecar and require its exact bytes to occur uniquely in `secure.bin`.
 //!
 //! Does **not** check anti-rollback — that's device-side only, since
 //! this tool doesn't know the OTP floor of any particular device.
@@ -23,7 +25,41 @@ use std::path::Path;
 
 use crate::bundle;
 
-pub fn run(bundle_path: &Path, pubkey_path: &Path) -> Result<()> {
+/// Fields retained only after the complete bundle authentication chain passes.
+///
+/// The legacy PQFW_V1 signature commits to `fw_version` and the two image
+/// hashes.  `secure_len`/`nonsecure_len` below also equal the authenticated
+/// image byte lengths because [`authenticate_bundle`] hashes and length-checks
+/// the exact unpacked images.  Slot and build ID are retained for honest
+/// reporting, but callers must not claim that legacy PQFW_V1 signed them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AuthenticatedBundle {
+    pub(crate) manifest_version: u8,
+    pub(crate) fw_version: u32,
+    pub(crate) slot: u8,
+    pub(crate) secure_len: u32,
+    pub(crate) nonsecure_len: u32,
+    pub(crate) secure_hash: [u8; 32],
+    pub(crate) nonsecure_hash: [u8; 32],
+    pub(crate) vendor_pubkey_fingerprint: [u8; 32],
+    pub(crate) build_id: [u8; 32],
+    pub(crate) manifest_digest: [u8; 32],
+    pub(crate) manifest_sha256: [u8; 32],
+    pub(crate) erc7730_status:
+        Option<[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN]>,
+}
+
+/// Authenticate one complete bundle and return only fields derived from the
+/// authenticated manifest/images/status binding.
+///
+/// This intentionally ignores `release.json` and `measurement.txt`. They are
+/// presentation sidecars, not authority inputs. ERC-7730 status remains
+/// optional here so the generic legacy `verify` command can continue to audit
+/// old bundles; clear-signing readiness requires it in the dedicated command.
+pub(crate) fn authenticate_bundle(
+    bundle_path: &Path,
+    pubkey_path: &Path,
+) -> Result<AuthenticatedBundle> {
     let unpacked = bundle::unpack(bundle_path)?;
 
     crate::elf::ensure_image_capacity(
@@ -41,8 +77,8 @@ pub fn run(bundle_path: &Path, pubkey_path: &Path) -> Result<()> {
     // match the vendor pubkey the auditor supplied (otherwise the
     // bundle is claiming a different vendor than the auditor is
     // verifying against — abort loudly).
-    let supplied_pubkey = std::fs::read(pubkey_path)
-        .with_context(|| format!("reading {}", pubkey_path.display()))?;
+    let supplied_pubkey =
+        std::fs::read(pubkey_path).with_context(|| format!("reading {}", pubkey_path.display()))?;
     if supplied_pubkey.len() != VERIFYING_KEY_LEN {
         bail!(
             "supplied pubkey wrong size: got {} bytes, want {VERIFYING_KEY_LEN}",
@@ -78,7 +114,12 @@ pub fn run(bundle_path: &Path, pubkey_path: &Path) -> Result<()> {
     m.verify_signature(&pk_seed, &pk_root).map_err(stage_err)?;
 
     eprintln!("==> Image hashes");
-    check_image("secure", &unpacked.secure_bytes, m.secure_len(), m.secure_hash())?;
+    check_image(
+        "secure",
+        &unpacked.secure_bytes,
+        m.secure_len(),
+        m.secure_hash(),
+    )?;
     check_image(
         "nonsecure",
         &unpacked.nonsecure_bytes,
@@ -86,16 +127,70 @@ pub fn run(bundle_path: &Path, pubkey_path: &Path) -> Result<()> {
         m.nonsecure_hash(),
     )?;
 
+    // The sidecar is optional only for legacy bundles. Never consult it until
+    // the manifest signature and both image hashes above have authenticated
+    // the flat image bytes. New `fwsign sign` bundles always include it.
+    if let Some(status) = &unpacked.erc7730_status_bytes {
+        eprintln!("==> ERC-7730 catalogue status binding");
+        crate::artifact_key::verify_unique_erc7730_status_in_flat_image(
+            status,
+            &unpacked.secure_bytes,
+        )?;
+    } else {
+        eprintln!(
+            "==> ERC-7730 catalogue status: ABSENT (legacy bundle; clear-signing compatibility unavailable)"
+        );
+    }
+
+    Ok(AuthenticatedBundle {
+        manifest_version: m.manifest_version(),
+        fw_version: m.fw_version(),
+        slot: m.slot(),
+        secure_len: m.secure_len(),
+        nonsecure_len: m.nonsecure_len(),
+        secure_hash: *m.secure_hash(),
+        nonsecure_hash: *m.nonsecure_hash(),
+        vendor_pubkey_fingerprint: *m.vendor_pubkey_fpr(),
+        build_id: *m.build_id(),
+        manifest_digest: *m.manifest_digest(),
+        manifest_sha256: Sha256::digest(unpacked.manifest_bytes).into(),
+        erc7730_status: unpacked.erc7730_status_bytes,
+    })
+}
+
+pub fn run(bundle_path: &Path, pubkey_path: &Path) -> Result<()> {
+    let authenticated = authenticate_bundle(bundle_path, pubkey_path)?;
+
     eprintln!();
     eprintln!("==> verify: PASS");
-    eprintln!("    version  : {}", m.fw_version());
+    eprintln!("    version  : {}", authenticated.fw_version);
     eprintln!(
         "    slot     : {}",
-        if m.slot() == fw_manifest::SLOT_A { "A" } else { "B" }
+        if authenticated.slot == fw_manifest::SLOT_A {
+            "A"
+        } else {
+            "B"
+        }
     );
-    eprintln!("    secure   : {} bytes, {}", m.secure_len(), hex::encode(m.secure_hash()));
-    eprintln!("    nonsecure: {} bytes, {}", m.nonsecure_len(), hex::encode(m.nonsecure_hash()));
-    eprintln!("    build_id : {}", hex::encode(m.build_id()));
+    eprintln!(
+        "    secure   : {} bytes, {}",
+        authenticated.secure_len,
+        hex::encode(authenticated.secure_hash)
+    );
+    eprintln!(
+        "    nonsecure: {} bytes, {}",
+        authenticated.nonsecure_len,
+        hex::encode(authenticated.nonsecure_hash)
+    );
+    eprintln!("    build_id : {}", hex::encode(authenticated.build_id));
+    eprintln!(
+        "    erc7730   : {}",
+        if authenticated.erc7730_status.is_some() {
+            "authenticated status bound"
+        } else {
+            "unavailable (legacy bundle)"
+        }
+    );
     Ok(())
 }
 
@@ -103,7 +198,12 @@ fn stage_err(e: VerifyError) -> anyhow::Error {
     anyhow!("verification failed: {e:?}")
 }
 
-fn check_image(label: &str, bytes: &[u8], manifest_len: u32, manifest_hash: &[u8; 32]) -> Result<()> {
+fn check_image(
+    label: &str,
+    bytes: &[u8],
+    manifest_len: u32,
+    manifest_hash: &[u8; 32],
+) -> Result<()> {
     if bytes.len() != manifest_len as usize {
         bail!(
             "{label}.bin length mismatch: bundle {} bytes, manifest {manifest_len}",

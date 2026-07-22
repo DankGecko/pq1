@@ -1,7 +1,8 @@
 # ERC-7730 descriptor-root rotation & update policy (ADR, 2026-07-02)
 
-**Status: accepted architecture, implementation blocked by firmware-release
-quarantine (documents the intended design + a roadmapped lighter channel).**
+**Status: accepted architecture; companion/release binding mechanics
+implemented, production authority still blocked by the firmware-release and
+rollback quarantine (plus ERC-8176 provenance).**
 Consolidates the root-update decision that until now lived only in archived
 handoffs (`docs/archive/handoff-erc7730-phase2.md`, phase3), surfaced by the
 2026-07 implementation review (§2.5). Not a code change.
@@ -33,11 +34,13 @@ user wants rides a full FW release.
 2. **Root updates will ride the reviewed signed FW-update chain after rollback
    closure.** No separate, lower-assurance descriptor-update path ships in v1.
    The current `PQFW_V1` signer/release backend is explicitly quarantined and
-   grants no production authority. Draft 1.1 proposes a manifest-v6 binding for
-   the secure image that embeds the root, but is not implementation-approved;
-   only after that candidate, its backend, its
-   resource gates, and its release ceremony are implemented and approved may a
-   root change inherit the firmware release key's authority.
+   grants no production authority. The implemented `P73S` catalogue-status
+   receipt is retained in the final secure image and therefore transitively
+   covered by the existing manifest's signed secure-image hash and firmware
+   version; no manifest-schema change or second signature is needed for the
+   catalogue pairing. That code-level binding does not cure PQFW_V1's rollback,
+   backend, resource-gate, custody, or release-ceremony quarantine. Only after
+   those owners close may a root change inherit production release authority.
 
 3. **Companion ↔ firmware root-compatibility policy.** The descriptor root and
    generated known-call filter form one versioned catalogue. A proof cut from a
@@ -45,11 +48,17 @@ user wants rides a full FW release.
    filter, the device then hard-refuses instead of blind-signing. Conversely, an
    older companion that omits a tuple in the newer firmware filter is refused.
    Only a tuple genuinely unknown to the installed firmware may use the generic
-   ladder. A root-reporting gateway command does not currently exist. Until one
-   is implemented and reviewed, a companion release must pin its catalogue to
-   an exact firmware release manifest/version and treat any uncertain pairing
-   as incompatible. **No version negotiation; mismatch or unknown pairing =
-   refuse affected known calls, never mis-render.**
+   ladder. `dbgen` binds the root, P730/IR schemas, exact blob and Bloom
+   identities, tuple-set identity, counts, provenance, policy/curation inputs,
+   and compiler version into `P73S`. Release tooling extracts the unique
+   allocated/read-only receipt from the final secure ELF, proves it lies in the
+   flattened signed image, and packages an exact sidecar. A companion must
+   authenticate the release first, enforce exact/minimum firmware-version
+   policy, rebuild the full catalogue tree and every proof against that receipt,
+   and treat any uncertain installed pairing as incompatible. No gateway query
+   is required: non-secure USB data would not improve authentication. **No
+   version negotiation; mismatch or unknown pairing = refuse affected known
+   calls, never mis-render.**
 
 4. **Resync cadence (post-ship): batched, not per-descriptor.** Roll the
    vendored corpus + root on the normal FW-release train (see the resync
@@ -136,10 +145,12 @@ upstream-movement ceremony.
    each admitted set atomically. This extension can only remove authenticated leaves: the
    independent known-call scan deliberately ignores it, so every omitted source
    deployment/format tuple remains a hard refusal.
-5. `cargo run -p dbgen` — regenerate the blob, `db_roots.rs` root, and the
-   drift-gated `erc7730.review.txt`. Its header carries the manifest-derived
-   upstream commit/tree and manifest SHA-256; its body carries the per-field
-   breakdown plus `## skips` roll-up (finding 1.4).
+5. `cargo run -p dbgen --features nested-calldata-test-fixture` — regenerate
+   the blobs, known-call Blooms, production/E2E `erc7730_status*.bin` receipts,
+   `db_roots.rs` roots/retained status arrays, and the drift-gated
+   `erc7730.review.txt`. Its header carries the manifest-derived upstream
+   commit/tree and manifest SHA-256; its body carries the per-field breakdown
+   plus `## skips` roll-up (finding 1.4).
 6. **Review the review-file diff**: leaves gained/lost, any `degraded=` markers
    (finding 1.1), any new skips by category, any `CONFLICT` dedup error
    (finding 2.2). This is the human gate on what the device will trust.

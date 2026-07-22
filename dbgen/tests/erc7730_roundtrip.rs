@@ -5690,12 +5690,17 @@ fn run_companion_stub(
     domain_separator: Option<&str>,
     primary_type_hash: Option<&str>,
 ) -> Output {
+    let root = workspace_root();
     let mut command = std::process::Command::new("python3");
     command
         .arg("-B")
         .arg(stub)
         .arg("--db")
         .arg(db)
+        .arg("--unverified-status-for-test")
+        .arg(root.join("tools/companion-stub/erc7730_status.bin"))
+        .arg("--known-calls-bloom")
+        .arg(root.join("secure/data/erc7730-known-calls.bloom"))
         .arg("--chain")
         .arg(chain_id.to_string())
         .arg("--contract")
@@ -5838,10 +5843,10 @@ fn companion_stub_context_and_full_type_hash_lookup_verify_on_device() {
         .unwrap();
     let mainnet_domain_arg = format!("0x{}", hex::encode(mainnet_domain_separator));
 
-    // The catalog entry's primary_type_hash is explicitly diagnostic: a
-    // multi-format IR may carry other complete hashes. Poison that unauthenticated
-    // index hint while leaving the Merkle-authenticated IR/proof untouched; exact
-    // lookup must still succeed by parsing the IR format table.
+    // The full catalogue is now release-bound by its P73S SHA-256 receipt.
+    // Poisoning even a diagnostic lookup accelerator must therefore refuse
+    // before selection; a signed-but-internally inconsistent accelerator is
+    // covered by the helper's focused Python tests.
     let mut poisoned_blob = std::fs::read(&db_path).expect("read checked-in companion DB");
     let entry_count = u32::from_le_bytes(poisoned_blob[12..16].try_into().unwrap()) as usize;
     let mut poisoned = false;
@@ -5866,7 +5871,7 @@ fn companion_stub_context_and_full_type_hash_lookup_verify_on_device() {
     let poisoned_path = temp_dir.path().join("erc7730-diagnostic-hash-poison.bin");
     std::fs::write(&poisoned_path, &poisoned_blob).expect("write poisoned diagnostic DB");
     let type_hash_arg = format!("0x{type_hash_hex}");
-    let poisoned_trailer = successful_stub_output(run_companion_stub(
+    let poisoned_output = run_companion_stub(
         &stub_path,
         &poisoned_path,
         1,
@@ -5874,14 +5879,13 @@ fn companion_stub_context_and_full_type_hash_lookup_verify_on_device() {
         Some("eip712"),
         Some(&mainnet_domain_arg),
         Some(&type_hash_arg),
-    ));
-    let verified_poisoned = verify_erc7730_bundle(&poisoned_trailer, &result.root)
-        .expect("entry diagnostic hash is not part of the authenticated leaf/proof");
-    assert_eq!(verified_poisoned.ir.context_kind, ContextKind::Eip712);
-    assert!(verified_poisoned
-        .ir
-        .format_iter()
-        .any(|format| format.is_ok_and(|format| format.type_hash == type_hash)));
+    );
+    assert!(!poisoned_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&poisoned_output.stderr).contains("catalogue SHA-256"),
+        "poisoned lookup accelerator must fail the release binding: {}",
+        String::from_utf8_lossy(&poisoned_output.stderr)
+    );
 
     let wrong_hash = format!("0x{}", "55".repeat(32));
     let rejected = run_companion_stub(
@@ -5952,9 +5956,7 @@ fn companion_stub_context_and_full_type_hash_lookup_verify_on_device() {
         String::from_utf8_lossy(&missing_hash.stderr)
     );
 
-    // The reference must validate every traversed entry before trusting its
-    // lookup accelerators. Poison the first entry's reserved padding while
-    // leaving the overall catalogue framing intact; lookup must fail closed.
+    // The release binding also rejects malformed entry bytes before lookup.
     let mut malformed_blob = std::fs::read(&db_path).unwrap();
     malformed_blob[32 + 61] = 1;
     let malformed_path = temp_dir.path().join("erc7730-malformed-entry.bin");
@@ -5970,8 +5972,8 @@ fn companion_stub_context_and_full_type_hash_lookup_verify_on_device() {
     );
     assert!(!malformed.status.success());
     assert!(
-        String::from_utf8_lossy(&malformed.stderr).contains("non-zero reserved padding"),
-        "malformed-entry failure must name the structural error: {}",
+        String::from_utf8_lossy(&malformed.stderr).contains("catalogue SHA-256"),
+        "malformed-entry failure must name the release-binding error: {}",
         String::from_utf8_lossy(&malformed.stderr)
     );
 }

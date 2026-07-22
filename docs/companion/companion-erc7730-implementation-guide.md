@@ -77,12 +77,23 @@ trusts the Merkle root**. Everything else flows from that:
   structural compiler policy. The current catalogue is explicitly
   `dev-unattested`: it has no ERC-8176 semantic/provenance authority and cannot
   enter a production build.
-- During pre-production bring-up, the companion ships the same descriptor set
-  as a `*.bin` blob and pins the expected root out of band to the exact
-  development firmware build (`secure/src/db_roots.rs`). There is no separately
-  authenticated release-metadata channel or root-reporting command today.
-  Signed release metadata is the intended post-quarantine mechanism (§10), not
-  a current security boundary.
+- `dbgen` emits a fixed 256-byte `P73S` catalogue-status receipt containing the
+  root, P730/IR schemas, blob and Bloom identities, leaf/tuple counts, policy
+  and curation receipts, provenance, and compiler version. The selected receipt
+  is retained in the final secure ELF section
+  `.pqsigner.erc7730_status`. `fwsign sign` proves those exact bytes are inside
+  the flattened secure image, whose hash and firmware version are covered by
+  the existing C10-signed manifest, and copies them to
+  `erc7730-status.bin` in the release bundle. This is a compatibility binding,
+  not ERC-8176 attestation or production authority; the current PQFW_V1 release
+  and rollback path remains quarantined.
+- Before enabling clear signing, the companion verifies the signed release
+  manifest and image hashes, requires the bundle sidecar to equal the unique
+  valid receipt inside authenticated `secure.bin`, and then preflights one
+  immutable snapshot of the matching P730 blob and Bloom. Unknown installed
+  firmware identity, missing status, version skew, or any mismatch is
+  incompatible. No gateway/root-reporting command is required or currently
+  defined.
 - For each sign request, the companion picks the matching descriptor,
   produces a Merkle proof against the root, and ships it in the trailer slot.
   The slot is optional in the wire grammar. A firmware-known tuple requires
@@ -165,9 +176,17 @@ an exact `(chain, address)` lookup. Wildcard names never qualify.
 
 ## 2. What the companion must ship
 
-Three things in the companion bundle:
+Five paired inputs in the companion release:
 
-1. **The catalog blob** at `tools/companion-stub/erc7730_db.bin`
+1. **An authenticated firmware release identity.** Verify the `.pqfw` C10
+   manifest, supplied vendor key, and exact secure/nonsecure image hashes before
+   consulting ERC-7730 metadata. Newly produced bundles include
+   `erc7730-status.bin`; legacy bundles without it may still be firmware-valid,
+   but their clear-signing compatibility is unavailable and must remain
+   disabled. The manifest's signed firmware version and secure-image hash plus
+   the embedded receipt form one compatibility identity.
+
+2. **The catalog blob** at `tools/companion-stub/erc7730_db.bin`
    produced by `cargo run -p dbgen` from the vendored registry corpus,
    `secure/data/erc7730/policy.toml`, and the reviewed in-place curations
    recorded by the registry rotation policy. It is not built from the small
@@ -182,23 +201,36 @@ Three things in the companion bundle:
    <!-- END XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->
 
    The blob does **not** embed its Merkle root. Bytes 0..31 are the catalogue
-   header. For the current development line, pin the blob and expected root out
-   of band to the exact firmware build, or independently recompute the tree
-   root. Do not claim signed release-metadata authentication until the
-   post-quarantine release flow in §10 exists, and never interpret the header
-   as a root.
+   header. Its exact SHA-256, byte length, leaf count, schema, and reconstructed
+   root must equal the authenticated `P73S` receipt. The companion must rebuild
+   the complete Merkle tree and byte-compare every stored proof before lookup;
+   never interpret the P730 header as a root.
 
-2. **A descriptor lookup function** keyed on `(chain_id, contract)` for
+3. **The exact known-call Bloom** selected by the same receipt. Production
+   catalogue bytes use `secure/data/erc7730-known-calls.bloom`; E2E uses the
+   `_e2e` variant. Verify its exact size and SHA-256, then require every compiled
+   contract selector derived from authenticated IR to be Bloom-positive. The
+   receipt's exact tuple-set SHA identifies the wider registry-declared set; it
+   cannot be reconstructed from a non-invertible Bloom and must not be claimed
+   as independently recomputed.
+
+4. **A descriptor lookup function** keyed on `(chain_id, contract)` for
    contract calls, and on `(chain_id, verifying_contract,
    domain_separator, full_primary_type_hash)` for EIP-712. See §4.
 
-3. **A bundle assembler** that produces the exact inner byte layout the
+5. **A bundle assembler** that produces the exact inner byte layout the
    firmware's `verify_erc7730_bundle` consumes; the command encoder adds
    exactly one length frame. See §5.
 
 You can copy the executable Python reference at
 `tools/companion-stub/erc7730_trailer.py`, or port its selection and assembly
-rules directly to TypeScript / Rust / Swift. Always pass the expected context:
+rules directly to TypeScript / Rust / Swift. The normal reference CLI starts
+from `--bundle`, `--pubkey`, `--fwsign-bin`,
+`--expected-firmware-version`, and `--minimum-firmware-version`, plus
+`--known-calls-bloom secure/data/erc7730-known-calls.bloom`; it refuses to
+report, list, or emit until the signed release and full catalogue preflight
+succeed. `--unverified-status-for-test` is deliberately limited to local
+generator/unit fixtures and cannot emit a compatibility report. Then
 use `--context contract` for calldata/UserOp lookup. Typed-data lookup requires
 both `--context eip712 --domain-separator 0x<64 hex>` and
 `--primary-type-hash 0x<64 hex>`. The helper parses every candidate's
@@ -246,7 +278,11 @@ companion). The on-the-wire trailer flips to **big-endian** because
 that's what the firmware verifier expects (matches every other
 on-device protocol field in PQSigner OS).
 
-Sanity-check at companion startup:
+After authenticating the release bundle, parse `erc7730-status.bin` as exactly
+256 big-endian bytes: magic `P73S`, status schema 1, encoded length 256,
+reserved bytes zero, known provenance 0/1, and one non-empty printable-ASCII
+tool version followed only by NUL padding. Require its exact bytes to occur once
+inside authenticated `secure.bin`. Then sanity-check the paired catalogue:
 
 - `magic == "P730"`
 - `version == 1`
@@ -260,9 +296,17 @@ Sanity-check at companion startup:
 - Every entry has a supported context kind, three zero reserved bytes, and a
   non-empty in-bounds IR slice; validate the IR header and complete format table
   before using its lookup fields
-- The separately supplied/recomputed expected root is pinned to the exact
-  firmware release. No current gateway command reports the root; such an API is
-  a roadmap item, not an available startup check.
+- `version`, `entry_cnt`, blob size, IR schema, and Bloom size/hash equal the
+  authenticated status; rebuild the complete padded Merkle tree from ordered
+  `SHA256(0x00 || IR)` leaves using `SHA256(0x01 || left || right)` nodes and
+  require its root to equal the status root.
+- Derive every leaf's canonical sibling path and byte-compare the stored proof;
+  require canonical strict entry ordering, unique keys, contiguous gap-free IR
+  slices, and lookup accelerators that agree with authenticated IR.
+- Pair the status with the exact signed manifest firmware version expected by
+  the companion and enforce the owner's minimum-version/rollback policy.
+  Unknown identity or version skew refuses. There is deliberately no companion-
+  asserted value and no unauthenticated gateway query.
 
 If any of these fail, treat the catalogue/firmware pair as incompatible and
 stop known-call signing until the companion data is repaired or updated.
@@ -961,6 +1005,10 @@ companion-side.
 | Scenario                                          | Expected outcome                                                                                                                                                |
 |---------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Descriptor matches, well-formed bundle            | Clear-sign pages + fingerprint + confirm.                                                                                                                       |
+| Signed release is valid but `erc7730-status.bin` is absent | Firmware update may be legacy-valid, but ERC-7730 compatibility is unavailable. Keep clear signing disabled. |
+| Status sidecar differs from embedded secure-image receipt, or a second valid receipt exists | Release verification fails; do not inspect or emit a catalogue trailer. |
+| Catalogue A + status B, Bloom A + status B, or catalogue/Bloom byte mutation | Companion preflight fails on exact size/hash/root/proof binding; no trailer or signature request is emitted. |
+| Firmware version differs from the companion's exact expected version, is below its minimum, or installed identity is unknown | Incompatible/rollback refusal. Do not negotiate or let the companion assert a replacement identity. |
 | Firmware-known call, tampered proof               | Status: `"7730 bundle fail"`, then hard refusal (`"7730 proof needed"`). No signature.                                                                         |
 | Firmware-known call, wrong chain_id in trailer    | Status: `"7730 binding fail"`, then hard refusal.                                                                                                               |
 | Firmware-known call, wrong contract in trailer    | Status: `"7730 binding fail"`, then hard refusal.                                                                                                               |
@@ -969,7 +1017,7 @@ companion-side.
 | No trailer for genuinely unknown contract call    | Generic value/ERC-20/typed/blind ladder remains available (Bloom false positives may conservatively refuse).                                                    |
 | Legacy bundle > 5130 bytes, or contract proof set > 10268 bytes | No generic `"erc7730 too big"` status exists. Single-UserOp positional framing reports `"bad erc7730"`; batch reports `"trailer len>cap"`; off-chain typed framing remains legacy-only and may report a framing or bundle-verification failure. Treat every path as a hard companion error. |
 | Verified descriptor lacks the calldata selector   | `RenderErr::NoFormat` → hard refusal. This is a companion/catalog mismatch, never downgrade permission.                                                         |
-| Blob/expected-root pairing differs from firmware's pinned root | EVERY trailer fails `"7730 bundle fail"`. The blob contains no root; release metadata or independent recomputation must establish the expected pairing. |
+| Blob/status root pairing differs from firmware's pinned root | Companion full-catalogue preflight refuses before signing. If bypassed, every trailer fails `"7730 bundle fail"`; never retry without the trailer. |
 | EIP-712 (kind=2) trailer sent for a **contract-context** descriptor | The descriptor cannot render that typed message and the sign refuses. Use kind=2 ONLY for a matching `eip712` descriptor/deployment.                              |
 | Off-chain header `flags` byte set wrong            | `flags = 1` = deployed output; `flags = 0` = counterfactual ERC-6492 output. Firmware cannot query chain deployment state: the bit selects semantics and response length. Counterfactual slot ≠ 0 deterministically returns `"6492 needs slot 0"`; other lies can return a semantically unusable signature rather than a dedicated error. Derive the bit from `eth_getCode` and surface the device's pre-deploy warning. |
 
@@ -1002,20 +1050,28 @@ well as the generated artifacts.
 **Companion update flow** when the firmware rolls a new root:
 
 1. After the firmware-release quarantine closes, a reviewed firmware release
-   ships with a new `ERC7730_DESCRIPTORS_ROOT`.
+   ships with a new `ERC7730_DESCRIPTORS_ROOT` and generated `P73S` status in
+   the final secure image.
 2. Companion release pipeline regenerates `erc7730_db.bin` via
    `cargo run -p dbgen` from the same vendored registry baseline, reviewed
-   curation set, and policy as the firmware build.
-3. Companion package ships with the new blob plus the expected root in signed
-   release metadata (or enough authenticated material to recompute it).
-4. No current gateway command reports the root. Until a reviewed
-   `GET_ERC7730_ROOT`-style endpoint exists, bind the companion catalogue to an
-   exact firmware release/version. Once such an endpoint exists, compare the
-   reported root to the separately expected/recomputed root and:
-   - **Match:** use clear-sign normally.
-   - **Mismatch:** block affected signing and require a compatible companion /
-     catalogue update. Do not disable trailers and retry: tuples in the
-     firmware's known-call filter hard-refuse without their proof.
+   curation set, and policy as the firmware build; the same pass emits
+   `erc7730_status.bin` and the exact known-call Bloom.
+3. `fwsign sign` extracts the unique allocated/read-only status section from
+   the final secure ELF, proves it is inside the flattened secure image being
+   hashed, and packages its exact bytes. Independent verification authenticates
+   the manifest and images first, then requires the sidecar to equal that unique
+   embedded receipt.
+4. The companion enforces exact expected/minimum firmware version policy and
+   fully preflights the paired catalogue/Bloom against the authenticated status.
+   - **All checks match:** enable clear signing for that immutable pairing.
+   - **Mismatch, rollback, missing status, or unknown installed identity:**
+     disable clear signing and require a compatible firmware/catalogue update.
+     Do not disable trailers and retry: tuples in the firmware's known-call
+     filter hard-refuse without their proof.
+
+No root-reporting gateway command is part of this design. Adding one would
+expand the frozen USB/CMSE surface without improving authentication: non-secure
+USB data cannot replace the C10-signed secure-image binding.
 
 The companion MUST NOT ship trailers that won't verify — every
 mis-rooted trailer is a wasted USB chunk + a status banner the user
@@ -1024,8 +1080,9 @@ sees as noise.
 For development against bring-up firmware built with
 `erc7730-dev-unattested`: the descriptor on every render adds a
 `** DEV BUILD ** Unattested` page so the user can't miss the
-absence of verified provenance. There is no relaxed verifier: no ERC-8176
-verifier exists yet, and production rejects the dev root. The generated
+absence of verified provenance. There is no relaxed verifier: the host-side
+ERC-8176 code exists, but no approved auditor population/snapshot does, and
+production rejects the dev root. The generated
 provenance fences also reject a future verified root if the warning remains;
 that root rotation must remove the temporary debug/mock/e2e feature coupling
 in `secure/Cargo.toml` in the same reviewed change.
@@ -1034,8 +1091,17 @@ in `secure/Cargo.toml` in the same reviewed change.
 
 Companion-side pre-release:
 
-- [ ] Catalogue expected/recomputed root is bound to the exact firmware
-      release. Bytes 0..31 of the blob are the header, not a root.
+- [ ] Verify the C10-signed firmware manifest and both image hashes before
+      consulting status. Require one canonical `P73S` sidecar equal to the
+      unique valid receipt inside authenticated `secure.bin`; absence means
+      clear-signing compatibility is unavailable.
+- [ ] Enforce the exact expected firmware version and the owner's minimum
+      version/rollback floor. Unknown installed identity and version skew fail
+      closed; the companion never supplies an asserted root or version.
+- [ ] Hash the exact immutable catalogue and Bloom snapshots, compare every
+      status field, rebuild the full tree/root and every proof, and validate all
+      entries/IR/accelerators before lookup. Bytes 0..31 of P730 are the header,
+      not a root.
 - [ ] Every entry in the catalog is reachable via the lookup
       function — round-trip every leaf through assemble-and-verify
       against the bundle parser at companion-side test time. Mirror
@@ -1079,6 +1145,11 @@ Firmware-side smoke (run on QEMU before each release):
 - [ ] `cargo run --locked -p pqsigner-xtask --
       gen-erc7730-descriptors --check` — catalog parity
       against checked-in artifacts.
+- [ ] `cargo test --locked --tests -p fwsign -p fwmeasure` — final-ELF status
+      extraction, signed-image/sidecar binding, bundle duplicates, mutations,
+      and legacy-absence behavior.
+- [ ] `python3 -m unittest tools/companion-stub/test_erc7730_trailer.py` —
+      status/P730/Bloom full-preflight failure matrix.
 
 ## 12. Known bugs / blockers
 
@@ -1265,6 +1336,23 @@ displayed value slices or indexes, and more than four tails remain untrusted.
 contradictory rooted IR. For a firmware-known/verified call, any framing or
 render failure is a hard refusal, never a typed- or blind-sign fallback. No
 second permissive runtime walker exists.
+
+### 12.6 Production and running-device identity remain quarantined
+
+The signed-image `P73S` path closes the repository and release-artifact
+catalogue-pairing gap; it does not promote the current legacy PQFW_V1 update
+format, rollback backend, signing-key custody, release ceremony, or
+`dev-unattested` descriptor set. Compatibility reports must keep
+`production_authority=false` and `erc8176_attestation=false` until those
+independent owners close.
+
+There is also no authenticated running-device identity query. The companion may
+automatically enable a pairing only for a signed release it installed and
+recorded (or after an independently verified user boot fingerprint). Firmware
+changed by another updater is an unknown pairing: disable clear signing until
+identity is re-established. The on-device Merkle check still prevents
+mis-rendering, but relying on that late refusal would be a liveness failure, not
+a compatibility protocol.
 
 ## See also
 

@@ -69,6 +69,7 @@ Subcommands:
                           [--e2e-input-dir PATH] [--e2e-out-binary PATH]
                           [--known-calls-out PATH]
                           [--known-calls-e2e-out PATH]
+                          [--status-out PATH] [--status-e2e-out PATH]
       Compile the production ERC-7730 catalogue from
       `secure/data/erc7730-registry/registry` plus
       `secure/data/erc7730-registry/ercs`, and the E2E catalogue from
@@ -76,6 +77,8 @@ Subcommands:
       Build their Merkle trees and emit:
         tools/companion-stub/erc7730_db.bin
         tools/companion-stub/erc7730_db_e2e.bin
+        tools/companion-stub/erc7730_status.bin
+        tools/companion-stub/erc7730_status_e2e.bin
         secure/data/erc7730.review.txt
         secure/data/erc7730-known-calls.bloom
         secure/data/erc7730-known-calls-e2e.bloom
@@ -312,6 +315,8 @@ const ERC20_DEFAULT_OUT: &str = "tools/companion-stub/erc20_db.bin";
 const ERC20_DEFAULT_E2E_OUT: &str = "tools/companion-stub/erc20_db_e2e.bin";
 const ERC7730_DEFAULT_OUT: &str = "tools/companion-stub/erc7730_db.bin";
 const ERC7730_DEFAULT_E2E_OUT: &str = "tools/companion-stub/erc7730_db_e2e.bin";
+const ERC7730_DEFAULT_STATUS_OUT: &str = "tools/companion-stub/erc7730_status.bin";
+const ERC7730_DEFAULT_STATUS_E2E_OUT: &str = "tools/companion-stub/erc7730_status_e2e.bin";
 const ERC7730_DEFAULT_REVIEW: &str = "secure/data/erc7730.review.txt";
 const ERC7730_DEFAULT_KNOWN_CALLS: &str = "secure/data/erc7730-known-calls.bloom";
 const ERC7730_DEFAULT_KNOWN_CALLS_E2E: &str = "secure/data/erc7730-known-calls-e2e.bloom";
@@ -428,6 +433,8 @@ struct Erc7730Args {
     e2e_out_binary: Option<PathBuf>,
     known_calls_out: Option<PathBuf>,
     known_calls_e2e_out: Option<PathBuf>,
+    status_out: Option<PathBuf>,
+    status_e2e_out: Option<PathBuf>,
 }
 
 fn validate_erc7730_probe_output_isolation(args: &Erc7730Args) -> Result<(), String> {
@@ -444,6 +451,8 @@ fn validate_erc7730_probe_output_isolation(args: &Erc7730Args) -> Result<(), Str
         ("--e2e-out-binary", args.e2e_out_binary.is_some()),
         ("--known-calls-out", args.known_calls_out.is_some()),
         ("--known-calls-e2e-out", args.known_calls_e2e_out.is_some()),
+        ("--status-out", args.status_out.is_some()),
+        ("--status-e2e-out", args.status_e2e_out.is_some()),
     ] {
         if !provided {
             missing.push(flag);
@@ -512,6 +521,18 @@ fn parse_erc7730_args(args: &[String]) -> Result<Erc7730Args, String> {
                 out.known_calls_e2e_out = Some(PathBuf::from(
                     args.get(i)
                         .ok_or("--known-calls-e2e-out requires a value")?,
+                ));
+            }
+            "--status-out" => {
+                i += 1;
+                out.status_out = Some(PathBuf::from(
+                    args.get(i).ok_or("--status-out requires a value")?,
+                ));
+            }
+            "--status-e2e-out" => {
+                i += 1;
+                out.status_e2e_out = Some(PathBuf::from(
+                    args.get(i).ok_or("--status-e2e-out requires a value")?,
                 ));
             }
             other => return Err(format!("unknown flag `{other}`")),
@@ -639,6 +660,12 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
     let known_calls_e2e_out = parsed
         .known_calls_e2e_out
         .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_KNOWN_CALLS_E2E));
+    let status_out = parsed
+        .status_out
+        .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_STATUS_OUT));
+    let status_e2e_out = parsed
+        .status_e2e_out
+        .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_STATUS_E2E_OUT));
     let erc20_out = workspace_root.join(ERC20_DEFAULT_OUT);
     let erc20_e2e_out = workspace_root.join(ERC20_DEFAULT_E2E_OUT);
 
@@ -723,6 +750,24 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
         eprintln!("error: e2e round-trip failed: {e}");
         return ExitCode::FAILURE;
     }
+    let prod_curation_sha256 = default_overlay
+        .as_ref()
+        .map(|overlay| overlay.manifest_sha256())
+        .unwrap_or([0; 32]);
+    let prod_status = match dbgen::erc7730::catalogue_status_v1(&prod, prod_curation_sha256) {
+        Ok(status) => status.to_bytes(),
+        Err(error) => {
+            eprintln!("error: prod catalogue status failed: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let e2e_status = match dbgen::erc7730::catalogue_status_v1(&e2e, [0; 32]) {
+        Ok(status) => status.to_bytes(),
+        Err(error) => {
+            eprintln!("error: e2e catalogue status failed: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     if parsed.check {
         // CI mode: diff against checked-in artifacts.
@@ -756,6 +801,14 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
             eprintln!("DRIFT: {e}");
             drift = true;
         }
+        if let Err(e) = diff_bytes("erc7730_status.bin", &status_out, &prod_status) {
+            eprintln!("DRIFT: {e}");
+            drift = true;
+        }
+        if let Err(e) = diff_bytes("erc7730_status_e2e.bin", &status_e2e_out, &e2e_status) {
+            eprintln!("DRIFT: {e}");
+            drift = true;
+        }
         if let Err(e) = diff_bytes(
             "erc7730-known-calls-e2e.bloom",
             &known_calls_e2e_out,
@@ -777,7 +830,9 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
             &e2e.root,
             e2e.leaf_count,
             prod.provenance,
+            &prod_status,
             e2e.provenance,
+            &e2e_status,
         ) {
             eprintln!("DRIFT: {e}");
             drift = true;
@@ -873,6 +928,14 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
         eprintln!("error: write {}: {e}", known_calls_e2e_out.display());
         return ExitCode::FAILURE;
     }
+    if let Err(e) = fs::write(&status_out, prod_status) {
+        eprintln!("error: write {}: {e}", status_out.display());
+        return ExitCode::FAILURE;
+    }
+    if let Err(e) = fs::write(&status_e2e_out, e2e_status) {
+        eprintln!("error: write {}: {e}", status_e2e_out.display());
+        return ExitCode::FAILURE;
+    }
     eprintln!(
         "wrote {} ({} bytes, {} leaves, root = {})",
         out_binary.display(),
@@ -898,6 +961,8 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
         e2e.known_call_count,
     );
     eprintln!("wrote {}", out_review.display());
+    eprintln!("wrote {}", status_out.display());
+    eprintln!("wrote {}", status_e2e_out.display());
     eprintln!(
         "note: secure/src/db_roots.rs is owned by `cargo run -p dbgen` — \
          run that to refresh the ERC7730_DESCRIPTORS_ROOT constant."
@@ -961,7 +1026,9 @@ fn diff_catalogue_roots_in_db_roots(
     e2e_root: &[u8; 32],
     e2e_count: usize,
     prod_provenance: dbgen::erc7730::CatalogueProvenance,
+    prod_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
     e2e_provenance: dbgen::erc7730::CatalogueProvenance,
+    e2e_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
 ) -> Result<(), String> {
     let text = fs::read_to_string(path)
         .map_err(|e| format!("read db_roots.rs at {}: {e}", path.display()))?;
@@ -980,7 +1047,9 @@ fn diff_catalogue_roots_in_db_roots(
         e2e_root,
         e2e_count,
         prod_provenance,
+        prod_status,
         e2e_provenance,
+        e2e_status,
     ) {
         return Ok(());
     }
@@ -1048,15 +1117,19 @@ fn erc7730_security_tail_matches(
     e2e: &[u8; 32],
     e2e_count: usize,
     prod_provenance: dbgen::erc7730::CatalogueProvenance,
+    prod_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
     e2e_provenance: dbgen::erc7730::CatalogueProvenance,
+    e2e_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
 ) -> bool {
     let expected = dbgen::render_erc7730_security_tail(
         prod,
         prod_count,
         prod_provenance,
+        prod_status,
         e2e,
         e2e_count,
         e2e_provenance,
+        e2e_status,
     );
     text.matches(dbgen::ERC7730_SECURITY_TAIL_SENTINEL).count() == 1 && text.ends_with(&expected)
 }
@@ -1842,7 +1915,8 @@ mod tests {
         assert!(!semantics.contains("IR schema v5 (`0x05`)"));
         assert!(semantics
             .contains("exact ABI zero extension for `uintN` and sign extension for `intN`"));
-        assert!(semantics.contains("at most two explicitly enrolled top-level EIP-712 string preimages"));
+        assert!(semantics
+            .contains("at most two explicitly enrolled top-level EIP-712 string preimages"));
         assert!(semantics.contains("typed-to-blind fallback"));
         assert!(
             semantics.contains("full-width `uint256`/`int256` retain every 32-byte word unchanged")
@@ -2075,13 +2149,17 @@ mod tests {
         let e2e = [0x22u8; 32];
         let prod_count = 17;
         let e2e_count = 3;
+        let prod_status = [0x31; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN];
+        let e2e_status = [0x32; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN];
         let tail = dbgen::render_erc7730_security_tail(
             &prod,
             prod_count,
             DevUnattested,
+            &prod_status,
             &e2e,
             e2e_count,
             DevUnattested,
+            &e2e_status,
         );
         assert_eq!(
             tail.matches("extern crate core as __pqsigner_erc7730_core;")
@@ -2111,16 +2189,20 @@ mod tests {
             &e2e,
             e2e_count,
             DevUnattested,
+            &prod_status,
             DevUnattested,
+            &e2e_status,
         ));
 
         let swapped_roots = dbgen::render_erc7730_security_tail(
             &e2e,
             e2e_count,
             DevUnattested,
+            &e2e_status,
             &prod,
             prod_count,
             DevUnattested,
+            &prod_status,
         );
         assert!(!erc7730_security_tail_matches(
             &swapped_roots,
@@ -2129,7 +2211,33 @@ mod tests {
             &e2e,
             e2e_count,
             DevUnattested,
+            &prod_status,
             DevUnattested,
+            &e2e_status,
+        ));
+
+        let mut altered_prod_status = prod_status;
+        altered_prod_status[31] ^= 0x01;
+        let altered_status_tail = dbgen::render_erc7730_security_tail(
+            &prod,
+            prod_count,
+            DevUnattested,
+            &altered_prod_status,
+            &e2e,
+            e2e_count,
+            DevUnattested,
+            &e2e_status,
+        );
+        assert!(!erc7730_security_tail_matches(
+            &altered_status_tail,
+            &prod,
+            prod_count,
+            &e2e,
+            e2e_count,
+            DevUnattested,
+            &prod_status,
+            DevUnattested,
+            &e2e_status,
         ));
 
         let swapped_filters = tail
@@ -2143,7 +2251,9 @@ mod tests {
             &e2e,
             e2e_count,
             DevUnattested,
+            &prod_status,
             DevUnattested,
+            &e2e_status,
         ));
 
         let deleted_fence = tail.replacen(
@@ -2158,7 +2268,9 @@ mod tests {
             &e2e,
             e2e_count,
             DevUnattested,
+            &prod_status,
             DevUnattested,
+            &e2e_status,
         ));
 
         // This is the concrete false-green that defeated the old lexical
@@ -2177,7 +2289,9 @@ mod tests {
             &e2e,
             e2e_count,
             DevUnattested,
+            &prod_status,
             DevUnattested,
+            &e2e_status,
         ));
 
         let block_commented = format!("/*\n{tail}\n*/");
@@ -2191,7 +2305,9 @@ mod tests {
                 &e2e,
                 e2e_count,
                 DevUnattested,
+                &prod_status,
                 DevUnattested,
+                &e2e_status,
             ));
         }
     }
@@ -2251,13 +2367,17 @@ mod generated_suffix {
         let e2e = [0x44u8; 32];
         let prod_count = 23;
         let e2e_count = 5;
+        let prod_status = [0x41; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN];
+        let e2e_status = [0x42; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN];
         let correct = dbgen::render_erc7730_security_tail(
             &prod,
             prod_count,
             Erc8176Verified,
+            &prod_status,
             &e2e,
             e2e_count,
             Erc8176Verified,
+            &e2e_status,
         );
         assert!(erc7730_security_tail_matches(
             &correct,
@@ -2266,7 +2386,9 @@ mod generated_suffix {
             &e2e,
             e2e_count,
             Erc8176Verified,
+            &prod_status,
             Erc8176Verified,
+            &e2e_status,
         ));
         let altered = correct.replacen(
             "feature = \"erc7730-dev-unattested\"",
@@ -2280,7 +2402,9 @@ mod generated_suffix {
             &e2e,
             e2e_count,
             Erc8176Verified,
+            &prod_status,
             Erc8176Verified,
+            &e2e_status,
         ));
     }
 

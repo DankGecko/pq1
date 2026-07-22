@@ -691,6 +691,7 @@ dependencies = [
  "fwmeasure",
  "hex",
  "object",
+ "pqsigner-erc7730",
  "rand_core 0.6.4",
  "rpassword",
  "sha2",

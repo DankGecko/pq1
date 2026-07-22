@@ -869,6 +869,13 @@ fn run_first_boot_wizard() -> (sphincs_tz_bip39::Mnemonic, [u8; 8]) {
 #[cfg(not(test))]
 #[cortex_m_rt::entry]
 fn main() -> ! {
+    // Keep the authenticated ERC-7730 catalogue-status receipt in a loadable
+    // secure-image section even under linker garbage collection. Release
+    // tooling extracts these exact bytes from the final ELF and proves that
+    // they are covered by the signed flattened-image hash; the companion never
+    // supplies or overrides this identity.
+    let _ = core::hint::black_box(&db_roots::PQSIGNER_ERC7730_CATALOGUE_STATUS);
+
     // RDP1 boot bisection: pulse PE13 (Arduino D13) before any other
     // init so we see at least one pulse if the CPU made it into `main`
     // at all. Stage encoding documented in `hw::boot_pulse`.

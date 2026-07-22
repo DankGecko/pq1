@@ -260,6 +260,13 @@ impl RegistryReviewSource {
             manifest_sha256,
         })
     }
+
+    /// Digest of the exact curation manifest used to derive this source
+    /// identity. Release status receipts bind this digest without reopening
+    /// the manifest after the overlay was verified.
+    pub const fn manifest_sha256(&self) -> [u8; 32] {
+        self.manifest_sha256
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1423,8 +1430,9 @@ fn read_policy_bytes(path: &Path) -> Result<Vec<u8>, String> {
 fn load_policy_and_evidence(
     policy_path: &Path,
     force_production: bool,
-) -> Result<(Policy, Option<CatalogueEvidence>), String> {
+) -> Result<(Policy, Option<CatalogueEvidence>, [u8; 32]), String> {
     let policy_bytes = read_policy_bytes(policy_path)?;
+    let policy_sha256 = sha256_of(&policy_bytes);
     let policy_text = std::str::from_utf8(&policy_bytes)
         .map_err(|e| format!("policy {} is not UTF-8: {e}", policy_path.display()))?;
     let mut policy: Policy =
@@ -1441,7 +1449,7 @@ fn load_policy_and_evidence(
     }
 
     if policy.allow_unattested_dev_descriptors {
-        return Ok((policy, None));
+        return Ok((policy, None, policy_sha256));
     }
 
     if policy.min_attesters < 2 {
@@ -1503,8 +1511,9 @@ fn load_policy_and_evidence(
         policy,
         Some(CatalogueEvidence {
             verified,
-            policy_sha256: sha256_of(&policy_bytes),
+            policy_sha256,
         }),
+        policy_sha256,
     ))
 }
 
@@ -1639,11 +1648,13 @@ pub fn build_db_with_policy_override_and_erc20_capabilities(
     registry_root: Option<&Path>,
     erc20_capabilities: &Erc20Capabilities,
 ) -> Result<Erc7730BuildResult, String> {
-    let (policy, evidence) = load_policy_and_evidence(policy_path, force_production)?;
+    let (policy, evidence, policy_sha256) =
+        load_policy_and_evidence(policy_path, force_production)?;
     build_db_inner(
         input_dir,
         &policy,
         evidence.as_ref(),
+        policy_sha256,
         registry_root,
         false,
         &mut Vec::new(),
@@ -1668,11 +1679,13 @@ pub fn build_e2e_db_with_policy_override_and_erc20_capabilities(
     registry_root: Option<&Path>,
     erc20_capabilities: &Erc20Capabilities,
 ) -> Result<Erc7730BuildResult, String> {
-    let (policy, evidence) = load_policy_and_evidence(policy_path, force_production)?;
+    let (policy, evidence, policy_sha256) =
+        load_policy_and_evidence(policy_path, force_production)?;
     build_db_inner(
         input_dir,
         &policy,
         evidence.as_ref(),
+        policy_sha256,
         registry_root,
         false,
         &mut Vec::new(),
@@ -1739,6 +1752,11 @@ pub struct Erc7730BuildResult {
     /// Bloom filter.  Bloom equality alone is not a faithfulness proof because
     /// collisions can hide a dropped tuple during registry vendoring.
     pub known_call_set_hash: [u8; 32],
+    /// SHA-256 of the exact policy bytes read by this build. This is captured
+    /// from the same immutable read used to parse and enforce the policy, so a
+    /// release receipt never re-opens the path and accidentally binds a
+    /// different file.
+    pub policy_sha256: [u8; 32],
 }
 
 /// Machine-readable trust provenance emitted alongside every catalogue root.
@@ -1760,6 +1778,52 @@ impl CatalogueProvenance {
             Self::Erc8176Verified => "erc8176-verified",
         }
     }
+}
+
+/// Construct the canonical release receipt for one completed catalogue build.
+///
+/// `curation_input_sha256` is supplied by the already-verified overlay owner;
+/// callers pass all zeroes for deliberately uncurated fixture/probe builds.
+/// Every other field is derived from the exact in-memory build outputs, so the
+/// receipt cannot accidentally bind files reopened after compilation.
+pub fn catalogue_status_v1(
+    result: &Erc7730BuildResult,
+    curation_input_sha256: [u8; 32],
+) -> Result<pqsigner_erc7730::catalogue_status::CatalogueStatusV1, String> {
+    use pqsigner_erc7730::catalogue_status::{
+        CatalogueProvenance as StatusProvenance, CatalogueStatusV1,
+    };
+
+    let leaf_count = u32::try_from(result.leaf_count)
+        .map_err(|_| "ERC-7730 catalogue leaf count exceeds status-v1 u32".to_string())?;
+    let catalogue_blob_size = u32::try_from(result.blob.len())
+        .map_err(|_| "ERC-7730 catalogue blob exceeds status-v1 u32".to_string())?;
+    let known_call_count = u32::try_from(result.known_call_count)
+        .map_err(|_| "ERC-7730 known-call count exceeds status-v1 u32".to_string())?;
+    let bloom_size = u32::try_from(result.known_calls_bloom.len())
+        .map_err(|_| "ERC-7730 Bloom size exceeds status-v1 u32".to_string())?;
+    let provenance = match result.provenance {
+        CatalogueProvenance::DevUnattested => StatusProvenance::DevUnattested,
+        CatalogueProvenance::Erc8176Verified => StatusProvenance::Erc8176Verified,
+    };
+
+    CatalogueStatusV1::new(
+        ERC7730_DB_VERSION,
+        SCHEMA_VER,
+        provenance,
+        leaf_count,
+        catalogue_blob_size,
+        known_call_count,
+        bloom_size,
+        result.root,
+        sha256_of(&result.blob),
+        result.known_call_set_hash,
+        sha256_of(&result.known_calls_bloom),
+        result.policy_sha256,
+        curation_input_sha256,
+        concat!("dbgen/", env!("CARGO_PKG_VERSION")).as_bytes(),
+    )
+    .map_err(|error| format!("encode ERC-7730 catalogue status v1: {error:?}"))
 }
 
 fn catalogue_provenance(
@@ -1798,11 +1862,12 @@ pub fn build_db_with_erc20_capabilities(
     policy_path: &Path,
     erc20_capabilities: &Erc20Capabilities,
 ) -> Result<Erc7730BuildResult, String> {
-    let (policy, evidence) = load_policy_and_evidence(policy_path, false)?;
+    let (policy, evidence, policy_sha256) = load_policy_and_evidence(policy_path, false)?;
     build_db_inner(
         input_dir,
         &policy,
         evidence.as_ref(),
+        policy_sha256,
         None,
         false,
         &mut Vec::new(),
@@ -1897,12 +1962,13 @@ pub fn build_db_tolerant_with_erc20_capabilities(
     registry_root: Option<&Path>,
     erc20_capabilities: &Erc20Capabilities,
 ) -> Result<(Erc7730BuildResult, Vec<SkipReport>), String> {
-    let (policy, evidence) = load_policy_and_evidence(policy_path, false)?;
+    let (policy, evidence, policy_sha256) = load_policy_and_evidence(policy_path, false)?;
     let mut skips: Vec<SkipReport> = Vec::new();
     let result = build_db_inner(
         input_dir,
         &policy,
         evidence.as_ref(),
+        policy_sha256,
         registry_root,
         true,
         &mut skips,
@@ -2036,6 +2102,7 @@ fn build_db_inner(
     input_dir: &Path,
     policy: &Policy,
     evidence: Option<&CatalogueEvidence>,
+    policy_sha256: [u8; 32],
     registry_root: Option<&Path>,
     tolerant: bool,
     skips: &mut Vec<SkipReport>,
@@ -2441,6 +2508,7 @@ fn build_db_inner(
         known_call_count,
         known_calls,
         known_call_set_hash,
+        policy_sha256,
     })
 }
 
@@ -11354,6 +11422,44 @@ fn _silence_unused() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalogue_status_is_derived_from_exact_in_memory_build_outputs() {
+        let result = Erc7730BuildResult {
+            blob: vec![0x11, 0x22, 0x33],
+            root: [0x44; 32],
+            entries: Vec::new(),
+            review_text: String::new(),
+            leaf_count: 7,
+            provenance: CatalogueProvenance::DevUnattested,
+            known_calls_bloom: [0x55; BLOOM_BYTES],
+            known_call_count: 9,
+            known_calls: Vec::new(),
+            known_call_set_hash: [0x66; 32],
+            policy_sha256: [0x77; 32],
+        };
+        let curation = [0x88; 32];
+
+        let status = catalogue_status_v1(&result, curation).unwrap();
+        assert_eq!(status.catalogue_format_version, ERC7730_DB_VERSION);
+        assert_eq!(status.ir_schema_version, SCHEMA_VER);
+        assert_eq!(status.leaf_count, 7);
+        assert_eq!(status.catalogue_blob_size, 3);
+        assert_eq!(status.known_call_count, 9);
+        assert_eq!(status.bloom_size as usize, BLOOM_BYTES);
+        assert_eq!(status.descriptor_root, result.root);
+        assert_eq!(status.catalogue_sha256, sha256_of(&result.blob));
+        assert_eq!(status.known_call_set_sha256, result.known_call_set_hash);
+        assert_eq!(status.bloom_sha256, sha256_of(&result.known_calls_bloom));
+        assert_eq!(status.policy_sha256, result.policy_sha256);
+        assert_eq!(status.curation_input_sha256, curation);
+        assert_eq!(status.tool_version(), b"dbgen/0.1.0");
+        assert_eq!(
+            pqsigner_erc7730::catalogue_status::CatalogueStatusV1::from_bytes(&status.to_bytes())
+                .unwrap(),
+            status
+        );
+    }
 
     #[test]
     fn erc8176_policy_attester_identities_are_exact_and_unique() {

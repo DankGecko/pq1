@@ -151,8 +151,8 @@ fn main() {
 
     // The full DB blobs live on the HOST (companion app), never in
     // the firmware image — exactly like the selectors / ERC-7730
-    // blobs below. The firmware embeds only the 32-byte Merkle root
-    // (via the generated `db_roots.rs`) and Merkle-verifies every
+    // blobs below. The firmware embeds the Merkle root plus the fixed release
+    // status receipt (via the generated `db_roots.rs`) and Merkle-verifies every
     // companion-supplied bundle against it. The `tools/companion-stub/`
     // copies double as the QEMU e2e companion stub (see the
     // `e2e-test`-gated `nonsecure/src/{erc20,names}_db.rs`).
@@ -180,6 +180,8 @@ fn main() {
     let selectors_e2e_out = root.join("tools/companion-stub/selectors_db_e2e.bin");
     let erc7730_out = root.join("tools/companion-stub/erc7730_db.bin");
     let erc7730_e2e_out = root.join("tools/companion-stub/erc7730_db_e2e.bin");
+    let erc7730_status_out = root.join("tools/companion-stub/erc7730_status.bin");
+    let erc7730_status_e2e_out = root.join("tools/companion-stub/erc7730_status_e2e.bin");
     let erc7730_review_out = root.join("secure/data/erc7730.review.txt");
     let erc7730_known_calls_out = root.join("secure/data/erc7730-known-calls.bloom");
     let erc7730_known_calls_e2e_out = root.join("secure/data/erc7730-known-calls-e2e.bloom");
@@ -336,10 +338,15 @@ fn main() {
         );
     }
     erc7730::round_trip_check(&erc7730_res).expect("erc7730 round-trip failed");
+    let erc7730_status =
+        erc7730::catalogue_status_v1(&erc7730_res, erc7730_review_source.manifest_sha256())
+            .expect("encode erc7730 catalogue status");
+    let erc7730_status_bytes = erc7730_status.to_bytes();
     if let Some(parent) = erc7730_out.parent() {
         fs::create_dir_all(parent).expect("create tools/companion-stub");
     }
     fs::write(&erc7730_out, &erc7730_res.blob).expect("write erc7730_db.bin");
+    fs::write(&erc7730_status_out, erc7730_status_bytes).expect("write erc7730_status.bin");
     fs::write(&erc7730_known_calls_out, erc7730_res.known_calls_bloom)
         .expect("write erc7730-known-calls.bloom");
     fs::write(&erc7730_review_out, &erc7730_res.review_text).expect("write erc7730.review.txt");
@@ -351,6 +358,7 @@ fn main() {
         hex::encode(erc7730_res.root),
     );
     println!("dbgen: wrote {}", erc7730_review_out.display());
+    println!("dbgen: wrote {}", erc7730_status_out.display());
     println!(
         "dbgen: wrote {} ({} known calls)",
         erc7730_known_calls_out.display(),
@@ -377,7 +385,12 @@ fn main() {
         std::process::exit(1);
     });
     erc7730::round_trip_check(&erc7730_e2e_res).expect("erc7730 e2e round-trip failed");
+    let erc7730_status_e2e = erc7730::catalogue_status_v1(&erc7730_e2e_res, [0; 32])
+        .expect("encode erc7730 e2e catalogue status");
+    let erc7730_status_e2e_bytes = erc7730_status_e2e.to_bytes();
     fs::write(&erc7730_e2e_out, &erc7730_e2e_res.blob).expect("write erc7730_db_e2e.bin");
+    fs::write(&erc7730_status_e2e_out, erc7730_status_e2e_bytes)
+        .expect("write erc7730_status_e2e.bin");
     fs::write(
         &erc7730_known_calls_e2e_out,
         erc7730_e2e_res.known_calls_bloom,
@@ -395,11 +408,13 @@ fn main() {
         erc7730_known_calls_e2e_out.display(),
         erc7730_e2e_res.known_call_count,
     );
+    println!("dbgen: wrote {}", erc7730_status_e2e_out.display());
 
     // ----- secure/src/db_roots.rs -----
     //
     // This is the only file the secure-world build sees from the DBs.
-    // The 32-byte Merkle roots baked into the secure image: the
+    // It bakes the Merkle roots and selected ERC-7730 status receipt into the
+    // secure image: the
     // SHA-256 ERC-20 + Names + Selectors roots (for the transfer
     // display / address-name lookup / selector text-sig paths) and the
     // ERC-7730 descriptor root (for the Phase-3 trailer parser).
@@ -413,9 +428,11 @@ fn main() {
         &erc7730_res.root,
         erc7730_res.leaf_count,
         erc7730_res.provenance,
+        &erc7730_status_bytes,
         &erc7730_e2e_res.root,
         erc7730_e2e_res.leaf_count,
         erc7730_e2e_res.provenance,
+        &erc7730_status_e2e_bytes,
     );
     fs::write(&roots_out, &roots_rs).expect("write db_roots.rs");
     println!("dbgen: wrote {}", roots_out.display());
@@ -489,9 +506,11 @@ fn render_db_roots(
     erc7730_root: &[u8; 32],
     erc7730_count: usize,
     erc7730_provenance: erc7730::CatalogueProvenance,
+    erc7730_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
     erc7730_e2e_root: &[u8; 32],
     erc7730_e2e_count: usize,
     erc7730_e2e_provenance: erc7730::CatalogueProvenance,
+    erc7730_e2e_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
 ) -> String {
     use std::fmt::Write;
 
@@ -519,9 +538,11 @@ fn render_db_roots(
         erc7730_root,
         erc7730_count,
         erc7730_provenance,
+        erc7730_status,
         erc7730_e2e_root,
         erc7730_e2e_count,
         erc7730_e2e_provenance,
+        erc7730_e2e_status,
     ));
     s
 }

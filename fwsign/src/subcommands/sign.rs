@@ -75,6 +75,8 @@ pub fn run(args: Args) -> Result<()> {
         &args.trusted_fingerprint,
         Some(&vendor_fpr),
     )?;
+    let erc7730_status =
+        crate::artifact_key::read_erc7730_status_section(&args.secure_elf, &secure_elf)?;
 
     let secure = flatten_logged_bytes("secure", &args.secure_elf, &secure_elf)?;
     elf::ensure_image_capacity(
@@ -83,6 +85,11 @@ pub fn run(args: Args) -> Result<()> {
         fw_manifest::SLOT_SECURE_CAPACITY,
     )?;
     verified_keys.verify_secure_flat_image(&secure)?;
+    erc7730_status.verify_flat_image(&secure, "ERC-7730 catalogue status")?;
+    crate::artifact_key::verify_unique_erc7730_status_in_flat_image(
+        erc7730_status.bytes(),
+        &secure.bytes,
+    )?;
     let nonsecure = flatten_logged("nonsecure", &args.nonsecure_elf)?;
     elf::ensure_image_capacity(
         "nonsecure",
@@ -130,6 +137,7 @@ pub fn run(args: Args) -> Result<()> {
         measurement_txt,
         pubkey_bytes,
         release_json,
+        erc7730_status_bytes: Some(*erc7730_status.bytes()),
     };
 
     eprintln!("==> Packing {}", args.out_path.display());

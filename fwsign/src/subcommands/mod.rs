@@ -2,6 +2,7 @@
 //! `run(..)` function called from `main.rs`.
 
 pub mod dev_pubkey;
+pub mod erc7730_release_metadata;
 pub mod extract_sig;
 pub mod gen_test_fixture;
 pub mod inspect;

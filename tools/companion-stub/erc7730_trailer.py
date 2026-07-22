@@ -6,6 +6,10 @@ Usage:
 
     python3 tools/companion-stub/erc7730_trailer.py \\
         --db tools/companion-stub/erc7730_db.bin \\
+        --known-calls-bloom secure/data/erc7730-known-calls.bloom \\
+        --bundle release.pqfw --pubkey vendor.pub \\
+        --fwsign-bin target/release/fwsign \\
+        --expected-firmware-version 42 --minimum-firmware-version 42 \\
         --chain 1 \\
         --contract 0xdAC17F958D2ee523a2206206994597C13D831ec7 \\
         --out /tmp/usdt_mainnet_trailer.bin
@@ -17,6 +21,10 @@ table and compares all 32 bytes:
 
     python3 tools/companion-stub/erc7730_trailer.py \\
         --db tools/companion-stub/erc7730_db.bin \\
+        --known-calls-bloom secure/data/erc7730-known-calls.bloom \\
+        --bundle release.pqfw --pubkey vendor.pub \\
+        --fwsign-bin target/release/fwsign \\
+        --expected-firmware-version 42 --minimum-firmware-version 42 \\
         --chain 1 \\
         --contract 0x8236a87084f8b84306f72007f36f2618a5634494 \\
         --context eip712 \\
@@ -61,13 +69,30 @@ verification.
 
 Pure Python 3, no third-party deps — runs on any host the dev test
 loop can already reach.
+
+The normal command-line path never emits, lists, or reports from an unverified
+release/catalogue pair. It invokes `fwsign erc7730-release-metadata` to verify
+the C10 manifest, exact image hashes, version policy, and embedded/sidecar P73S
+binding in a private temporary directory. It then binds the exact P730 and
+known-call Bloom bytes to that P73S V1 status, reconstructs the complete Merkle
+tree, and byte-compares every stored proof. A deliberately loud
+`--unverified-status-for-test` escape exists only for deterministic dbgen/unit
+fixtures and cannot emit a compatibility report.
+The tuple-set SHA in P73S remains a release-identity receipt: the Bloom
+deliberately includes registry-declared calls whose unsupported formats are
+absent from P730, and a Bloom is not invertible, so this helper does not pretend
+it can reconstruct that exact superset from compiled IR.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import struct
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -81,6 +106,249 @@ IR_MAX_FORMATS = 32
 IR_MAX_FIELDS = 24
 CTX_CONTRACT = 1
 CTX_EIP712 = 2
+
+STATUS_MAGIC = b"P73S"
+STATUS_SCHEMA_VERSION = 1
+STATUS_LEN = 256
+CATALOGUE_VERSION = 1
+PROVENANCE_DEV_UNATTESTED = 0
+PROVENANCE_ERC8176_VERIFIED = 1
+KNOWN_CALLS_BLOOM_BYTES = 16 * 1024
+KNOWN_CALLS_BLOOM_BITS = KNOWN_CALLS_BLOOM_BYTES * 8
+KNOWN_CALLS_BLOOM_HASHES = 7
+KNOWN_CALL_DOMAIN = b"pqsigner/erc7730-known-call-v1"
+
+
+def _sha256(data: bytes) -> bytes:
+    return hashlib.sha256(data).digest()
+
+
+def _canonical_nul_padded_ascii(raw: bytes, label: str) -> str:
+    """Decode one fixed-width, canonically NUL-padded ASCII field."""
+    try:
+        end = raw.index(0)
+    except ValueError as exc:
+        raise ValueError(f"{label} is not NUL terminated") from exc
+    if any(raw[end:]):
+        raise ValueError(f"{label} has non-zero bytes after its first NUL")
+    body = raw[:end]
+    if any(byte < 0x20 or byte >= 0x7F for byte in body):
+        raise ValueError(f"{label} is not printable ASCII")
+    return body.decode("ascii")
+
+
+def parse_catalogue_status(raw: bytes) -> dict:
+    """Strictly parse the fixed 256-byte, big-endian P73S V1 receipt."""
+    if len(raw) != STATUS_LEN:
+        raise ValueError(f"catalogue status length mismatch: {len(raw)} != {STATUS_LEN}")
+    if raw[:4] != STATUS_MAGIC:
+        raise ValueError(f"bad catalogue status magic: {raw[:4]!r}")
+
+    schema_version = int.from_bytes(raw[4:6], "big")
+    encoded_len = int.from_bytes(raw[6:8], "big")
+    if schema_version != STATUS_SCHEMA_VERSION:
+        raise ValueError(f"unknown catalogue status schema: {schema_version}")
+    if encoded_len != STATUS_LEN:
+        raise ValueError(f"catalogue status encoded length mismatch: {encoded_len}")
+
+    provenance = raw[13]
+    if provenance not in (
+        PROVENANCE_DEV_UNATTESTED,
+        PROVENANCE_ERC8176_VERIFIED,
+    ):
+        raise ValueError(f"unknown catalogue provenance: {provenance}")
+    if raw[14:16] != b"\x00\x00":
+        raise ValueError("catalogue status reserved bytes are non-zero")
+
+    tool_version = _canonical_nul_padded_ascii(
+        bytes(raw[224:256]), "catalogue status tool version"
+    )
+    if not tool_version:
+        raise ValueError("catalogue status tool version is empty")
+
+    return {
+        "schema_version": schema_version,
+        "encoded_len": encoded_len,
+        "catalogue_version": int.from_bytes(raw[8:12], "big"),
+        "ir_schema_version": raw[12],
+        "provenance": provenance,
+        "leaf_count": int.from_bytes(raw[16:20], "big"),
+        "catalogue_size": int.from_bytes(raw[20:24], "big"),
+        "known_call_count": int.from_bytes(raw[24:28], "big"),
+        "bloom_size": int.from_bytes(raw[28:32], "big"),
+        "descriptor_root": bytes(raw[32:64]),
+        "catalogue_sha256": bytes(raw[64:96]),
+        "known_call_set_sha256": bytes(raw[96:128]),
+        "bloom_sha256": bytes(raw[128:160]),
+        "policy_sha256": bytes(raw[160:192]),
+        "curation_sha256": bytes(raw[192:224]),
+        "tool_version": tool_version,
+    }
+
+
+def _catalogue_status_report(status: dict, status_raw: bytes) -> dict:
+    provenance = {
+        PROVENANCE_DEV_UNATTESTED: "dev-unattested",
+        PROVENANCE_ERC8176_VERIFIED: "erc8176-verified",
+    }[status["provenance"]]
+    return {
+        "status_schema": status["schema_version"],
+        "encoded_length": status["encoded_len"],
+        "status_sha256": _sha256(status_raw).hex(),
+        "catalogue_format_version": status["catalogue_version"],
+        "ir_schema_version": status["ir_schema_version"],
+        "provenance": provenance,
+        "provenance_code": status["provenance"],
+        "leaf_count": status["leaf_count"],
+        "catalogue_blob_size": status["catalogue_size"],
+        "known_call_count": status["known_call_count"],
+        "bloom_size": status["bloom_size"],
+        "descriptor_root": status["descriptor_root"].hex(),
+        "catalogue_sha256": status["catalogue_sha256"].hex(),
+        "known_call_set_sha256": status["known_call_set_sha256"].hex(),
+        "bloom_sha256": status["bloom_sha256"].hex(),
+        "policy_sha256": status["policy_sha256"].hex(),
+        "curation_input_sha256": status["curation_sha256"].hex(),
+        "tool_version": status["tool_version"],
+    }
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict:
+    result: dict = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate key in release-metadata JSON: {key!r}")
+        result[key] = value
+    return result
+
+
+def _validate_release_metadata(
+    report: object,
+    status_raw: bytes,
+    expected_version: int,
+    minimum_version: int,
+) -> dict:
+    """Cross-check fwsign's report against the exact extracted P73S bytes."""
+    if not isinstance(report, dict):
+        raise ValueError("release-metadata output is not a JSON object")
+    if report.get("report_kind") != "authenticated-release-metadata":
+        raise ValueError("unexpected release-metadata report kind")
+    if report.get("erc8176_attestation") is not False:
+        raise ValueError("release metadata must not claim ERC-8176 attestation")
+    if report.get("production_authority") is not False:
+        raise ValueError("release metadata must not claim production authority")
+    if report.get("device_rollback_verified") is not False:
+        raise ValueError("release metadata must not claim device rollback verification")
+
+    version_policy = report.get("version_policy")
+    if not isinstance(version_policy, dict) or version_policy != {
+        "expected": expected_version,
+        "minimum": minimum_version,
+    }:
+        raise ValueError("release-metadata version policy does not match the request")
+    firmware = report.get("firmware")
+    if not isinstance(firmware, dict):
+        raise ValueError("release metadata has no firmware object")
+    if firmware.get("firmware_version") != expected_version:
+        raise ValueError("release metadata did not authenticate the expected firmware version")
+    for field in (
+        "slot_authenticated_by_legacy_signature",
+        "build_id_authenticated_by_legacy_signature",
+        "manifest_sha256_authenticated_by_legacy_signature",
+    ):
+        if firmware.get(field) is not False:
+            raise ValueError(f"legacy release metadata must mark {field} false")
+    for field in ("secure_hash", "nonsecure_hash", "build_id", "manifest_sha256"):
+        value = firmware.get(field)
+        if not isinstance(value, str) or len(value) != 64:
+            raise ValueError(f"release metadata has malformed firmware {field}")
+
+    parsed_status = parse_catalogue_status(status_raw)
+    expected_status = _catalogue_status_report(parsed_status, status_raw)
+    if report.get("catalogue_status") != expected_status:
+        raise ValueError(
+            "release-metadata catalogue status does not equal the exact extracted P73S"
+        )
+    return report
+
+
+def _authenticated_release_status(
+    *,
+    fwsign_bin: str,
+    bundle: str,
+    pubkey: str,
+    expected_version: int,
+    minimum_version: int,
+) -> tuple[bytes, dict]:
+    """Run fwsign in a private directory and consume its exact status output."""
+    with tempfile.TemporaryDirectory(prefix="pqsigner-erc7730-status-") as temp_dir:
+        status_path = Path(temp_dir) / "authenticated-status.bin"
+        command = [
+            fwsign_bin,
+            "erc7730-release-metadata",
+            "--bundle",
+            bundle,
+            "--pubkey",
+            pubkey,
+            "--expected-version",
+            str(expected_version),
+            "--minimum-version",
+            str(minimum_version),
+            "--status-out",
+            str(status_path),
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                text=True,
+            )
+        except OSError as exc:
+            raise ValueError(f"cannot execute fwsign release authentication: {exc}") from exc
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or "no diagnostic"
+            raise ValueError(f"authenticated firmware release rejected: {detail}")
+        try:
+            report = json.loads(
+                completed.stdout,
+                object_pairs_hook=_reject_duplicate_json_keys,
+            )
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ValueError(f"invalid fwsign release-metadata JSON: {exc}") from exc
+        try:
+            status_raw = status_path.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"fwsign did not emit authenticated P73S status: {exc}") from exc
+        return status_raw, _validate_release_metadata(
+            report,
+            status_raw,
+            expected_version,
+            minimum_version,
+        )
+
+
+def _compatibility_report(release: dict, verified: dict, status_raw: bytes) -> str:
+    status = verified["status"]
+    catalogue = _catalogue_status_report(status, status_raw)
+    catalogue.update(
+        {
+            "proof_depth": verified["header"]["proof_depth"],
+            "proofs_verified": verified["header"]["entry_cnt"],
+            "compiled_known_call_count": verified["compiled_known_call_count"],
+        }
+    )
+    report = {
+        "report_kind": "compatibility",
+        "ready": True,
+        "erc8176_attestation": False,
+        "production_authority": False,
+        "device_rollback_verified": False,
+        "authenticated_release": release,
+        "catalogue": catalogue,
+    }
+    return json.dumps(report, sort_keys=True, separators=(",", ":"))
 
 
 def _parse_address(s: str) -> bytes:
@@ -133,7 +401,7 @@ def _read_header(blob: bytes) -> dict:
     (ir_pool_size,) = struct.unpack_from("<I", blob, 20)
     (proof_depth,) = struct.unpack_from("<I", blob, 24)
     (proofs_off,) = struct.unpack_from("<I", blob, 28)
-    if version != 1:
+    if version != CATALOGUE_VERSION:
         raise ValueError(f"unknown catalog version: {version}")
     if flags != 0:
         raise ValueError(f"unsupported catalog flags: 0x{flags:08x}")
@@ -219,6 +487,8 @@ def _parse_ir(ir: bytes) -> dict:
     domain_separator = bytes(ir[62:94])
     if context_kind == CTX_CONTRACT and any(domain_separator):
         raise ValueError("contract-context IR carries a non-zero domain separator")
+    _canonical_nul_padded_ascii(bytes(ir[94:110]), "IR owner")
+    _canonical_nul_padded_ascii(bytes(ir[110:126]), "IR contract name")
 
     metadata_off = int.from_bytes(ir[126:128], "big")
     formats_off = int.from_bytes(ir[128:130], "big")
@@ -238,6 +508,7 @@ def _parse_ir(ir: bytes) -> dict:
             "chain_id": chain_id,
             "contract": contract,
             "domain_separator": domain_separator,
+            "selectors": (),
             "type_hashes": (),
         }
 
@@ -246,6 +517,7 @@ def _parse_ir(ir: bytes) -> dict:
         raise ValueError(f"IR format count exceeds cap: {count}")
     cursor = 1
     selectors: set[bytes] = set()
+    selector_order: list[bytes] = []
     type_hashes: list[bytes] = []
     for format_index in range(count):
         if cursor + 10 > len(formats):
@@ -253,6 +525,7 @@ def _parse_ir(ir: bytes) -> dict:
         selector = bytes(formats[cursor : cursor + 4])
         field_count = formats[cursor + 4]
         intent_len = formats[cursor + 5]
+        nested_descent_count = formats[cursor + 8]
         string_preimage_count = formats[cursor + 9]
         if field_count > IR_MAX_FIELDS:
             raise ValueError(f"IR format {format_index} field count exceeds cap")
@@ -263,6 +536,10 @@ def _parse_ir(ir: bytes) -> dict:
         if context_kind == CTX_CONTRACT and string_preimage_count:
             raise ValueError(
                 f"IR contract format {format_index} carries string-preimage evidence"
+            )
+        if context_kind == CTX_CONTRACT and nested_descent_count:
+            raise ValueError(
+                f"IR contract format {format_index} carries nested-descent evidence"
             )
         cursor += 10  # selector, counts, static-head words, nested/string counts
         if cursor + intent_len > len(formats):
@@ -275,6 +552,7 @@ def _parse_ir(ir: bytes) -> dict:
         if selector in selectors:
             raise ValueError(f"IR format {format_index} duplicates selector 0x{selector.hex()}")
         selectors.add(selector)
+        selector_order.append(selector)
         if context_kind == CTX_EIP712:
             if cursor + 32 > len(formats):
                 raise ValueError(f"IR format {format_index} type hash is truncated")
@@ -309,6 +587,10 @@ def _parse_ir(ir: bytes) -> dict:
             path_off = int.from_bytes(formats[cursor : cursor + 2], "big")
             param_off = int.from_bytes(formats[cursor + 2 : cursor + 4], "big")
             cursor += 4
+            if param_off == 0:
+                raise ValueError(
+                    f"IR format {format_index} field {field_index} has no parameter block"
+                )
             for offset, label_name in ((path_off, "path"), (param_off, "parameter")):
                 if offset:
                     if offset >= len(pool):
@@ -324,6 +606,7 @@ def _parse_ir(ir: bytes) -> dict:
         "chain_id": chain_id,
         "contract": contract,
         "domain_separator": domain_separator,
+        "selectors": tuple(selector_order),
         "type_hashes": tuple(type_hashes),
     }
 
@@ -342,6 +625,210 @@ def _parsed_entry(blob: bytes, hdr: dict, i: int) -> tuple[dict, bytes, dict]:
     ):
         raise ValueError(f"entry {i}: catalog index disagrees with authenticated IR")
     return entry, ir, parsed
+
+
+def _entry_sort_key(entry: dict) -> tuple[int, bytes, bytes, int]:
+    return (
+        entry["chain_id"],
+        entry["contract"],
+        entry["primary_type_hash"],
+        entry["ctx_kind"],
+    )
+
+
+def _leaf_hash(ir: bytes) -> bytes:
+    return _sha256(b"\x00" + ir)
+
+
+def _node_hash(left: bytes, right: bytes) -> bytes:
+    return _sha256(b"\x01" + left + right)
+
+
+def _merkle_levels(irs: list[bytes]) -> list[list[bytes]]:
+    if not irs:
+        raise ValueError("cannot build a Merkle tree without catalogue leaves")
+    leaves = [_leaf_hash(ir) for ir in irs]
+    padded_count = 1 << (len(leaves) - 1).bit_length()
+    leaves.extend([leaves[-1]] * (padded_count - len(leaves)))
+    levels = [leaves]
+    while len(levels[-1]) > 1:
+        current = levels[-1]
+        levels.append(
+            [_node_hash(current[i], current[i + 1]) for i in range(0, len(current), 2)]
+        )
+    return levels
+
+
+def _known_call_may_contain(
+    bloom: bytes, chain_id: int, contract: bytes, selector: bytes
+) -> bool:
+    digest = _sha256(
+        KNOWN_CALL_DOMAIN
+        + chain_id.to_bytes(8, "big")
+        + contract
+        + selector
+    )
+    h1 = int.from_bytes(digest[0:8], "big")
+    h2 = int.from_bytes(digest[8:16], "big") | 1
+    for probe in range(KNOWN_CALLS_BLOOM_HASHES):
+        bit = (h1 + probe * h2) % KNOWN_CALLS_BLOOM_BITS
+        if bloom[bit // 8] & (1 << (bit & 7)) == 0:
+            return False
+    return True
+
+
+def verify_catalogue(status_raw: bytes, blob: bytes, bloom: bytes) -> dict:
+    """Bind and fully preflight one immutable P730/Bloom byte snapshot.
+
+    Relative to the caller-authenticated status, this proves the compiled leaf
+    set and every stored proof agree, and that every compiled contract selector
+    is present in the bound omission Bloom. It cannot recover the exact
+    registry-declared tuple superset from that non-invertible Bloom;
+    `known_call_set_sha256` is therefore retained as release identity, not
+    falsely re-derived here. This function does not verify a firmware signature.
+    """
+    status = parse_catalogue_status(status_raw)
+    if status["catalogue_version"] != CATALOGUE_VERSION:
+        raise ValueError(
+            f"unsupported P730 catalogue version in status: {status['catalogue_version']}"
+        )
+    if status["ir_schema_version"] != IR_SCHEMA_VERSION:
+        raise ValueError(
+            f"unsupported ERC-7730 IR schema in status: {status['ir_schema_version']}"
+        )
+    if status["leaf_count"] == 0:
+        raise ValueError("catalogue status declares zero leaves")
+    if status["catalogue_size"] != len(blob):
+        raise ValueError(
+            "catalogue byte-size mismatch: "
+            f"{len(blob)} != {status['catalogue_size']}"
+        )
+    if status["bloom_size"] != KNOWN_CALLS_BLOOM_BYTES:
+        raise ValueError(
+            "unsupported known-call Bloom size in status: "
+            f"{status['bloom_size']} != {KNOWN_CALLS_BLOOM_BYTES}"
+        )
+    if len(bloom) != status["bloom_size"]:
+        raise ValueError(
+            f"known-call Bloom byte-size mismatch: {len(bloom)} != {status['bloom_size']}"
+        )
+    if _sha256(blob) != status["catalogue_sha256"]:
+        raise ValueError("catalogue SHA-256 does not match authenticated status")
+    if _sha256(bloom) != status["bloom_sha256"]:
+        raise ValueError("known-call Bloom SHA-256 does not match authenticated status")
+
+    hdr = _read_header(blob)
+    if hdr["version"] != status["catalogue_version"]:
+        raise ValueError(
+            "P730 header/status version mismatch: "
+            f"{hdr['version']} != {status['catalogue_version']}"
+        )
+    if hdr["entry_cnt"] != status["leaf_count"]:
+        raise ValueError(
+            "P730 entry/status leaf-count mismatch: "
+            f"{hdr['entry_cnt']} != {status['leaf_count']}"
+        )
+    expected_depth = (status["leaf_count"] - 1).bit_length()
+    if hdr["proof_depth"] != expected_depth:
+        raise ValueError(
+            "non-canonical P730 proof depth: "
+            f"{hdr['proof_depth']} != {expected_depth}"
+        )
+
+    entries: list[dict] = []
+    parsed_irs: list[dict] = []
+    irs: list[bytes] = []
+    compiled_known_calls: set[tuple[int, bytes, bytes]] = set()
+    previous_key: tuple[int, bytes, bytes, int] | None = None
+    next_ir_off = 0
+    for i in range(hdr["entry_cnt"]):
+        entry, ir, parsed = _parsed_entry(blob, hdr, i)
+        if ir[0] != status["ir_schema_version"]:
+            raise ValueError(
+                f"entry {i}: IR/status schema mismatch: "
+                f"{ir[0]} != {status['ir_schema_version']}"
+            )
+
+        if entry["ctx_kind"] == CTX_CONTRACT:
+            expected_primary_type_hash = bytes(32)
+        else:
+            if not parsed["type_hashes"]:
+                raise ValueError(f"entry {i}: EIP-712 IR has no authenticated formats")
+            expected_primary_type_hash = parsed["type_hashes"][0]
+        if entry["primary_type_hash"] != expected_primary_type_hash:
+            raise ValueError(
+                f"entry {i}: primary-type-hash index disagrees with authenticated IR"
+            )
+
+        key = _entry_sort_key(entry)
+        if previous_key is not None and key <= previous_key:
+            relation = "duplicates" if key == previous_key else "is out of order with"
+            raise ValueError(f"entry {i}: catalogue sort key {relation} entry {i - 1}")
+        previous_key = key
+
+        if entry["ir_off"] != next_ir_off:
+            raise ValueError(
+                f"entry {i}: non-contiguous IR offset "
+                f"{entry['ir_off']} != {next_ir_off}"
+            )
+        next_ir_off += entry["ir_len"]
+
+        if entry["ctx_kind"] == CTX_CONTRACT:
+            for selector in parsed["selectors"]:
+                compiled_known_calls.add(
+                    (entry["chain_id"], entry["contract"], selector)
+                )
+
+        entries.append(entry)
+        parsed_irs.append(parsed)
+        irs.append(ir)
+
+    if next_ir_off != hdr["ir_pool_size"]:
+        raise ValueError(
+            "IR slices do not consume the complete pool: "
+            f"{next_ir_off} != {hdr['ir_pool_size']}"
+        )
+    if len(compiled_known_calls) > status["known_call_count"]:
+        raise ValueError(
+            "compiled known-call count exceeds authenticated registry tuple count: "
+            f"{len(compiled_known_calls)} > {status['known_call_count']}"
+        )
+    for chain_id, contract, selector in sorted(compiled_known_calls):
+        if not _known_call_may_contain(bloom, chain_id, contract, selector):
+            raise ValueError(
+                "authenticated known-call Bloom omits compiled tuple "
+                f"chain={chain_id} contract=0x{contract.hex()} "
+                f"selector=0x{selector.hex()}"
+            )
+
+    levels = _merkle_levels(irs)
+    root = levels[-1][0]
+    if root != status["descriptor_root"]:
+        raise ValueError("reconstructed descriptor root does not match authenticated status")
+    for i in range(hdr["entry_cnt"]):
+        proof = []
+        index = i
+        for level in levels[:-1]:
+            proof.append(level[index ^ 1])
+            index >>= 1
+        expected_proof = b"".join(proof)
+        proof_base = hdr["proofs_off"] + i * hdr["proof_depth"] * 32
+        stored_proof = _slice(
+            blob,
+            proof_base,
+            hdr["proof_depth"] * 32,
+            f"proof for leaf {i}",
+        )
+        if stored_proof != expected_proof:
+            raise ValueError(f"stored Merkle proof disagrees for leaf {i}")
+
+    return {
+        "status": status,
+        "header": hdr,
+        "entries": tuple(entries),
+        "parsed_irs": tuple(parsed_irs),
+        "compiled_known_call_count": len(compiled_known_calls),
+    }
 
 
 def _select_entry(
@@ -403,7 +890,12 @@ def build_trailer(
     domain_separator: bytes | None = None,
     primary_type_hash: bytes | None = None,
 ) -> bytes:
-    """Produce one exact contract- or EIP-712-context trailer payload."""
+    """Produce one exact contract- or EIP-712-context trailer payload.
+
+    Callers must first pass the same immutable `blob` to `verify_catalogue`.
+    The command-line path enforces that ordering before it calls this pure
+    assembler.
+    """
     hdr = _read_header(blob)
     if context not in ("contract", "eip712"):
         raise ValueError(f"unknown lookup context: {context!r}")
@@ -441,6 +933,41 @@ def main() -> int:
         default="tools/companion-stub/erc7730_db.bin",
         help="path to the ERC-7730 catalog blob",
     )
+    identity = ap.add_mutually_exclusive_group(required=True)
+    identity.add_argument(
+        "--bundle",
+        help="signed .pqfw whose authenticated P73S must bind this catalogue",
+    )
+    identity.add_argument(
+        "--unverified-status-for-test",
+        help=(
+            "TEST ONLY: loose P73S path for deterministic dbgen/unit fixtures; "
+            "never enables a compatibility report"
+        ),
+    )
+    ap.add_argument(
+        "--pubkey",
+        help="vendor public key required with --bundle",
+    )
+    ap.add_argument(
+        "--fwsign-bin",
+        help="path to the reviewed fwsign binary required with --bundle",
+    )
+    ap.add_argument(
+        "--expected-firmware-version",
+        type=int,
+        help="exact signed firmware version required with --bundle",
+    )
+    ap.add_argument(
+        "--minimum-firmware-version",
+        type=int,
+        help="minimum accepted firmware version required with --bundle",
+    )
+    ap.add_argument(
+        "--known-calls-bloom",
+        required=True,
+        help="path to the exact firmware-pinned known-call Bloom bytes",
+    )
     ap.add_argument("--chain", type=int, help="EIP-155 chain id")
     ap.add_argument("--contract", help="0x-prefixed contract address")
     ap.add_argument(
@@ -468,12 +995,78 @@ def main() -> int:
         action="store_true",
         help="instead of emitting, print the (chain, contract) pairs in the catalog",
     )
+    ap.add_argument(
+        "--compatibility-report",
+        action="store_true",
+        help=(
+            "after signed-release and full-catalogue verification, emit compact "
+            "compatibility JSON instead of listing or building a trailer"
+        ),
+    )
     args = ap.parse_args()
 
-    blob = Path(args.db).read_bytes()
+    release_args = {
+        "--pubkey": args.pubkey,
+        "--fwsign-bin": args.fwsign_bin,
+        "--expected-firmware-version": args.expected_firmware_version,
+        "--minimum-firmware-version": args.minimum_firmware_version,
+    }
+    if args.bundle:
+        missing = [name for name, value in release_args.items() if value is None]
+        if missing:
+            ap.error(f"{', '.join(missing)} required with --bundle")
+        if args.expected_firmware_version < 0 or args.minimum_firmware_version < 0:
+            ap.error("firmware versions must be non-negative u32 values")
+        if args.expected_firmware_version > 0xFFFF_FFFF:
+            ap.error("--expected-firmware-version exceeds u32")
+        if args.minimum_firmware_version > 0xFFFF_FFFF:
+            ap.error("--minimum-firmware-version exceeds u32")
+    else:
+        supplied_release_args = [
+            name for name, value in release_args.items() if value is not None
+        ]
+        if supplied_release_args:
+            ap.error(
+                f"{', '.join(supplied_release_args)} may only be used with --bundle"
+            )
+        if args.compatibility_report:
+            ap.error(
+                "--compatibility-report requires authenticated --bundle mode; "
+                "test-only loose status has no release authority"
+            )
+    if args.compatibility_report and args.list:
+        ap.error("--compatibility-report and --list are mutually exclusive")
+
+    try:
+        if args.bundle:
+            status_raw, release = _authenticated_release_status(
+                fwsign_bin=args.fwsign_bin,
+                bundle=args.bundle,
+                pubkey=args.pubkey,
+                expected_version=args.expected_firmware_version,
+                minimum_version=args.minimum_firmware_version,
+            )
+        else:
+            # Explicitly test-only: production/list/trailer callers must start
+            # from the signed bundle path above.
+            status_raw = Path(args.unverified_status_for_test).read_bytes()
+            release = None
+
+        # Each catalogue file is read exactly once. All selection, listing,
+        # reporting, and bundle assembly use these immutable byte snapshots.
+        blob = Path(args.db).read_bytes()
+        bloom = Path(args.known_calls_bloom).read_bytes()
+        verified = verify_catalogue(status_raw, blob, bloom)
+    except (OSError, ValueError) as exc:
+        ap.error(str(exc))
+
+    if args.compatibility_report:
+        # Test-only mode was rejected above, so release cannot be None here.
+        print(_compatibility_report(release, verified, status_raw))
+        return 0
 
     if args.list:
-        hdr = _read_header(blob)
+        hdr = verified["header"]
         print(
             f"# {hdr['entry_cnt']} entries, "
             f"proof_depth={hdr['proof_depth']}, "

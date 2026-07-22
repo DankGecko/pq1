@@ -8,6 +8,8 @@
 //! * `measurement.txt` — human-readable 8-word fingerprint + hashes.
 //! * `pubkey.bin`      — 32-byte vendor pubkey for independent verify.
 //! * `release.json`    — metadata (version, slot, build_id, timestamps).
+//! * `erc7730-status.bin` — optional for legacy reads; fixed authenticated
+//!   catalogue-compatibility receipt for newly signed project bundles.
 //!
 //! Tar is used over zip because:
 //! * It's deterministic out-of-the-box (no central directory with
@@ -31,6 +33,10 @@ pub struct BundleInputs {
     pub measurement_txt: String,
     pub pubkey_bytes: [u8; fw_manifest::VERIFYING_KEY_LEN],
     pub release_json: String,
+    /// Optional only so old bundles can still be represented in tests and
+    /// migration tooling. `fwsign sign` always supplies this sidecar.
+    pub erc7730_status_bytes:
+        Option<[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN]>,
 }
 
 /// Pack a release bundle into `out_path`. Existing files are overwritten.
@@ -42,7 +48,12 @@ pub fn pack(inputs: &BundleInputs, out_path: &Path) -> Result<()> {
     let mtime = source_date_epoch();
     append(&mut builder, "manifest.bin", &inputs.manifest_bytes, mtime)?;
     append(&mut builder, "secure.bin", &inputs.secure_bytes, mtime)?;
-    append(&mut builder, "nonsecure.bin", &inputs.nonsecure_bytes, mtime)?;
+    append(
+        &mut builder,
+        "nonsecure.bin",
+        &inputs.nonsecure_bytes,
+        mtime,
+    )?;
     append(
         &mut builder,
         "measurement.txt",
@@ -56,6 +67,9 @@ pub fn pack(inputs: &BundleInputs, out_path: &Path) -> Result<()> {
         inputs.release_json.as_bytes(),
         mtime,
     )?;
+    if let Some(status) = &inputs.erc7730_status_bytes {
+        append(&mut builder, "erc7730-status.bin", status, mtime)?;
+    }
 
     builder.finish().context("finalising tar")?;
     Ok(())
@@ -100,12 +114,13 @@ pub struct UnpackedBundle {
     pub pubkey_bytes: [u8; fw_manifest::VERIFYING_KEY_LEN],
     pub measurement_txt: String,
     pub release_json: String,
+    pub erc7730_status_bytes:
+        Option<[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN]>,
 }
 
 /// Unpack a `.pqfw`. Missing required entries are an error.
 pub fn unpack(path: &Path) -> Result<UnpackedBundle> {
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mut archive = tar::Archive::new(file);
 
     let mut manifest: Option<Vec<u8>> = None;
@@ -114,6 +129,7 @@ pub fn unpack(path: &Path) -> Result<UnpackedBundle> {
     let mut pubkey: Option<Vec<u8>> = None;
     let mut measurement: Option<String> = None;
     let mut release: Option<String> = None;
+    let mut erc7730_status: Option<Vec<u8>> = None;
 
     for entry in archive.entries()? {
         let mut entry = entry?;
@@ -124,12 +140,13 @@ pub fn unpack(path: &Path) -> Result<UnpackedBundle> {
         let mut buf = Vec::new();
         entry.read_to_end(&mut buf)?;
         match name {
-            "manifest.bin" => manifest = Some(buf),
-            "secure.bin" => secure = Some(buf),
-            "nonsecure.bin" => nonsecure = Some(buf),
-            "pubkey.bin" => pubkey = Some(buf),
-            "measurement.txt" => measurement = Some(String::from_utf8(buf)?),
-            "release.json" => release = Some(String::from_utf8(buf)?),
+            "manifest.bin" => set_once(&mut manifest, buf, name)?,
+            "secure.bin" => set_once(&mut secure, buf, name)?,
+            "nonsecure.bin" => set_once(&mut nonsecure, buf, name)?,
+            "pubkey.bin" => set_once(&mut pubkey, buf, name)?,
+            "measurement.txt" => set_once(&mut measurement, String::from_utf8(buf)?, name)?,
+            "release.json" => set_once(&mut release, String::from_utf8(buf)?, name)?,
+            "erc7730-status.bin" => set_once(&mut erc7730_status, buf, name)?,
             // Tolerate unknown entries (future-compatible).
             _ => {}
         }
@@ -141,8 +158,16 @@ pub fn unpack(path: &Path) -> Result<UnpackedBundle> {
     let pubkey = require(pubkey, "pubkey.bin")?;
 
     let manifest_bytes = into_fixed::<{ fw_manifest::MANIFEST_SIZE }>(&manifest, "manifest.bin")?;
-    let pubkey_bytes =
-        into_fixed::<{ fw_manifest::VERIFYING_KEY_LEN }>(&pubkey, "pubkey.bin")?;
+    let pubkey_bytes = into_fixed::<{ fw_manifest::VERIFYING_KEY_LEN }>(&pubkey, "pubkey.bin")?;
+    let erc7730_status_bytes = erc7730_status
+        .as_deref()
+        .map(|bytes| {
+            into_fixed::<{ pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN }>(
+                bytes,
+                "erc7730-status.bin",
+            )
+        })
+        .transpose()?;
 
     Ok(UnpackedBundle {
         manifest_bytes,
@@ -151,7 +176,16 @@ pub fn unpack(path: &Path) -> Result<UnpackedBundle> {
         pubkey_bytes,
         measurement_txt: measurement.unwrap_or_default(),
         release_json: release.unwrap_or_default(),
+        erc7730_status_bytes,
     })
+}
+
+fn set_once<T>(slot: &mut Option<T>, value: T, name: &str) -> Result<()> {
+    if slot.is_some() {
+        bail!("bundle contains duplicate {name}");
+    }
+    *slot = Some(value);
+    Ok(())
 }
 
 fn require<T>(entry: Option<T>, name: &str) -> Result<T> {
@@ -213,6 +247,9 @@ mod tests {
             measurement_txt: "measurement contents\n".to_string(),
             pubkey_bytes: [0x44; fw_manifest::VERIFYING_KEY_LEN],
             release_json: "{\"version\":1}\n".to_string(),
+            erc7730_status_bytes: Some(
+                [0x55; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
+            ),
         }
     }
 
@@ -234,6 +271,7 @@ mod tests {
         assert_eq!(u.pubkey_bytes, inp.pubkey_bytes);
         assert_eq!(u.measurement_txt, inp.measurement_txt);
         assert_eq!(u.release_json, inp.release_json);
+        assert_eq!(u.erc7730_status_bytes, inp.erc7730_status_bytes);
     }
 
     #[test]
@@ -288,6 +326,7 @@ mod tests {
         // Optional entries are empty if missing.
         assert!(u.release_json.is_empty());
         assert!(u.measurement_txt.is_empty());
+        assert!(u.erc7730_status_bytes.is_none());
     }
 
     // ----------------------------------------------------------------
@@ -345,6 +384,51 @@ mod tests {
         assert!(err.contains("pubkey.bin"), "got: {err}");
     }
 
+    #[test]
+    fn negative_every_duplicate_recognized_entry_is_rejected() {
+        for duplicate in [
+            "manifest.bin",
+            "secure.bin",
+            "nonsecure.bin",
+            "pubkey.bin",
+            "measurement.txt",
+            "release.json",
+            "erc7730-status.bin",
+        ] {
+            let dir = tempdir().unwrap();
+            let out = dir.path().join("duplicate.pqfw");
+            let file = std::fs::File::create(&out).unwrap();
+            let mut tar = tar::Builder::new(file);
+            let inputs = fixture_inputs();
+            let status = inputs.erc7730_status_bytes.unwrap();
+            let entries: [(&str, &[u8]); 7] = [
+                ("manifest.bin", &inputs.manifest_bytes),
+                ("secure.bin", &inputs.secure_bytes),
+                ("nonsecure.bin", &inputs.nonsecure_bytes),
+                ("pubkey.bin", &inputs.pubkey_bytes),
+                ("measurement.txt", inputs.measurement_txt.as_bytes()),
+                ("release.json", inputs.release_json.as_bytes()),
+                ("erc7730-status.bin", &status),
+            ];
+            for (name, data) in entries {
+                append(&mut tar, name, data, 0).unwrap();
+                if name == duplicate {
+                    append(&mut tar, name, data, 0).unwrap();
+                }
+            }
+            tar.finish().unwrap();
+
+            let error = unpack(&out)
+                .err()
+                .expect("duplicate recognized entry must fail")
+                .to_string();
+            assert!(
+                error.contains("duplicate") && error.contains(duplicate),
+                "unexpected error for {duplicate}: {error}"
+            );
+        }
+    }
+
     // ----------------------------------------------------------------
     // Negative: wrong-size required entries
     // ----------------------------------------------------------------
@@ -376,13 +460,21 @@ mod tests {
         // manifest, hoping the consumer falls back to a parser that
         // doesn't bounds-check. The strict length gate must fire.
         let p = pack_with_override("manifest.bin", &[0u8; fw_manifest::MANIFEST_SIZE - 1]);
-        assert!(unpack(&p).err().expect("expected Err").to_string().contains("manifest.bin"));
+        assert!(unpack(&p)
+            .err()
+            .expect("expected Err")
+            .to_string()
+            .contains("manifest.bin"));
     }
 
     #[test]
     fn negative_manifest_too_large_rejected() {
         let p = pack_with_override("manifest.bin", &[0u8; fw_manifest::MANIFEST_SIZE + 1]);
-        assert!(unpack(&p).err().expect("expected Err").to_string().contains("manifest.bin"));
+        assert!(unpack(&p)
+            .err()
+            .expect("expected Err")
+            .to_string()
+            .contains("manifest.bin"));
     }
 
     #[test]
@@ -390,19 +482,54 @@ mod tests {
         // Assumption attacked: an attacker swaps a 31-byte / 33-byte
         // pubkey hoping the rest of the bundle still parses.
         let p = pack_with_override("pubkey.bin", &[0u8; fw_manifest::VERIFYING_KEY_LEN - 1]);
-        assert!(unpack(&p).err().expect("expected Err").to_string().contains("pubkey.bin"));
+        assert!(unpack(&p)
+            .err()
+            .expect("expected Err")
+            .to_string()
+            .contains("pubkey.bin"));
     }
 
     #[test]
     fn negative_pubkey_too_large_rejected() {
         let p = pack_with_override("pubkey.bin", &[0u8; fw_manifest::VERIFYING_KEY_LEN + 1]);
-        assert!(unpack(&p).err().expect("expected Err").to_string().contains("pubkey.bin"));
+        assert!(unpack(&p)
+            .err()
+            .expect("expected Err")
+            .to_string()
+            .contains("pubkey.bin"));
     }
 
     #[test]
     fn negative_empty_pubkey_rejected() {
         let p = pack_with_override("pubkey.bin", &[]);
         assert!(unpack(&p).is_err());
+    }
+
+    #[test]
+    fn negative_erc7730_status_wrong_size_rejected() {
+        let dir = tempdir().unwrap();
+        let out = dir.path().join("bad-status.pqfw");
+        let file = std::fs::File::create(&out).unwrap();
+        let mut tar = tar::Builder::new(file);
+        let inputs = fixture_inputs();
+        append(&mut tar, "manifest.bin", &inputs.manifest_bytes, 0).unwrap();
+        append(&mut tar, "secure.bin", &inputs.secure_bytes, 0).unwrap();
+        append(&mut tar, "nonsecure.bin", &inputs.nonsecure_bytes, 0).unwrap();
+        append(&mut tar, "pubkey.bin", &inputs.pubkey_bytes, 0).unwrap();
+        append(
+            &mut tar,
+            "erc7730-status.bin",
+            &[0u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN - 1],
+            0,
+        )
+        .unwrap();
+        tar.finish().unwrap();
+
+        let error = unpack(&out)
+            .err()
+            .expect("short status sidecar must fail")
+            .to_string();
+        assert!(error.contains("erc7730-status.bin"), "got: {error}");
     }
 
     #[test]
