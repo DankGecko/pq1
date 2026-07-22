@@ -64,6 +64,17 @@
 > ERC-8176 provenance remains an independent production ship blocker; its
 > advisory checker cannot authorize a production flip.
 
+> **Scoped ERC-8176 code-half update — 2026-07-22.** `dbgen` now has a
+> bounded, network-free verifier for the pinned open-draft EAS-v2 snapshot
+> format. It authenticates the checkpoint, EAS account/code, EOA signer and
+> revocation proofs, then applies the distinct-attester threshold to the exact
+> resolved-JCS descriptor hash after known-call inventory. This is plumbing,
+> not production authority: the canonical policy has no approved snapshot or
+> real auditor population, remains `dev-unattested`, and the production gate
+> must still fail. [#377](https://github.com/EthereumPhone/PQ1/issues/377)
+> remains open for that external half; authenticated companion/root pairing is
+> separately [#379](https://github.com/EthereumPhone/PQ1/issues/379).
+
 > **Scoped PQ1 ERC-7730 implementation update — 2026-07-17; corrected
 > 2026-07-18.** Bounded
 > `nativeCurrencyAddress` lists, injective `nftName` collection identity, and
@@ -350,7 +361,7 @@ Compact ledger of security/verification items confirmed complete against the rep
 
 | Area | Item | Evidence | Depth |
 |------|------|----------|-------|
-| Supply-chain | cargo-deny `advisories+bans+sources` in CI + `make invariant-gates` | `deny.toml`; `ci.yml:68-71`; `Makefile:3515` (`ca28eda7`) | re-read configs |
+| Supply-chain | cargo-deny `advisories+bans+sources` in CI + `make invariant-gates`; exact host-only ERC-8176 `dbgen -> k256 -> ecdsa` boundary | `deny.toml`; `scripts/check_classical_crypto_boundary.py`; `ci.yml` invariant job; `Makefile` `classical-crypto-boundary` | live gates pass 2026-07-22 |
 | Fuzzing | cargo-fuzz campaign, 12 targets, 0 artifacts, `make fuzz-all` | `fuzz/fuzz_targets/` (12); four tracked selector-gate seeds plus ignored local/generated corpora; `fuzz/README.md` | fail-closed campaign re-run 2026-07-13 |
 | Supply-chain | `make sbom` (CycloneDX sidecar) | `Makefile:3528-3532`; cargo-cyclonedx installed | target exists |
 | Firmware FV | Kani (≈70 harnesses — exhaustive decoder-DECISION fence over the extracted clear-sign + FW-update crates) + Miri (0-UB incl. secure-crate NS-ptr + tree-borrows) + `revm`/MultiSendCallOnly bytecode differential | `make kani`/`make miri`; `#[kani::proof]` across `pqsigner-tx`(multiSend/CoW/typed-call/SafeTx/Safe-mgmt/erc20), `pqsigner-erc7730`, `sphincs-tz-shared`(NS-ptr), `fw-manifest`(rollback+preimage), `pqsigner-domain`/`aa`/`tx-core`; work-todo §34 Completion Log (slices 1-10 + fw-manifest, 2026-06-30→07-01) | **CI-gated** (2026-06-18): Miri per-push (`ci.yml` `miri` job), Kani nightly (`nightly.yml`). Kani was not rerun on the ERC-7730 merged snapshot; 58/60 is inherited pre-transplant evidence (zero counterexamples; two 900 s no-verdict timeouts). See `docs/work-todo.md` `[erc7730-kani-tractability]`. Coverage frame + honest residuals: `FV_VALUE_AND_GAPS.md` UPDATE 2026-07-01 |

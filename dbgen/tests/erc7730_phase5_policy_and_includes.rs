@@ -2,8 +2,8 @@
 //!
 //! Item 1 (production policy gate): exercises `build_db_with_policy_override`.
 //!   - Default (force_production = false): existing seed corpus builds clean.
-//!   - Override (force_production = true): fails closed because real ERC-8176
-//!     EAS verification is not implemented; embedded attester names never count.
+//!   - Override (force_production = true): fails closed without an independently
+//!     pinned authenticated ERC-8176 snapshot; embedded attester names never count.
 //!
 //! Item 2 (`includes` resolution): exercises the local-filesystem resolver
 //! `dbgen::erc7730::compile_descriptor`'s new `registry_root` parameter.
@@ -63,10 +63,11 @@ fn production_policy_rejects_unattested_seed_corpus() {
     let policy = dir.join("policy.toml");
     let err = expect_err(
         build_db_with_policy_override(&dir, &policy, true, None),
-        "production policy MUST reject while real ERC-8176 verification is unavailable",
+        "production policy MUST reject without pinned ERC-8176 evidence",
     );
     assert!(
-        err.contains("attestation") && err.contains("not implemented"),
+        err.contains("missing an independently pinned [erc8176_snapshot]")
+            && err.contains("obsolete descriptor-embedded `attestations`"),
         "unexpected production-rejection message: {err}"
     );
 }
@@ -85,9 +86,8 @@ fn dbgen_cli_rejects_production_before_generation_starts() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("--policy production is not yet supported")
-            && stderr.contains("ERC-8176 attestation enforcement is not wired")
-            && stderr.contains("Refusing rather than silently building"),
+        stderr.contains("canonical ERC-7730 policy has no independently pinned ERC-8176 snapshot")
+            && stderr.contains("Refusing before writing any generated artifact"),
         "unexpected production refusal: {stderr}"
     );
 }
@@ -105,12 +105,31 @@ fn build_db_default_matches_dev_override() {
         build_db_with_policy_override(&dir, &policy, false, None).expect("override(false) build");
     assert_eq!(a.blob, b.blob, "blob diverged");
     assert_eq!(a.root, b.root, "root diverged");
+    assert_eq!(a.review_text, b.review_text, "review receipt diverged");
+    assert_eq!(a.known_calls_bloom, b.known_calls_bloom, "Bloom diverged");
+    assert_eq!(a.known_calls, b.known_calls, "known-call set diverged");
+    assert_eq!(
+        a.known_call_set_hash, b.known_call_set_hash,
+        "known-call set digest diverged"
+    );
+    assert_eq!(a.provenance, b.provenance, "provenance diverged");
 }
 
 #[test]
 fn production_policy_never_accepts_legacy_embedded_attesters() {
     let dir = make_tempdir("legacy_attesters_not_production");
-    fs::write(dir.join("policy.toml"), POLICY_DEV).unwrap();
+    fs::write(
+        dir.join("policy.toml"),
+        concat!(
+            "allow_unattested_dev_descriptors = true\n",
+            "min_attesters = 2\n",
+            "trusted_attesters = [\n",
+            "  \"eip155:1:0x0000000000000000000000000000000000000001\",\n",
+            "  \"eip155:1:0x0000000000000000000000000000000000000002\",\n",
+            "]\n",
+        ),
+    )
+    .unwrap();
     let mut descriptor: serde_json::Value =
         serde_json::from_str(&transfer_descriptor("To", "Amount")).unwrap();
     descriptor["attestations"] = serde_json::json!([
@@ -127,9 +146,9 @@ fn production_policy_never_accepts_legacy_embedded_attesters() {
         build_db_with_policy_override(&dir, &dir.join("policy.toml"), true, None),
         "legacy embedded attesters must never manufacture production provenance",
     );
-    assert!(err.contains("not implemented"), "unexpected error: {err}");
     assert!(
-        err.contains("obsolete descriptor-embedded `attestations`"),
+        err.contains("missing an independently pinned [erc8176_snapshot]")
+            && err.contains("obsolete descriptor-embedded `attestations`"),
         "rejection must name the obsolete evidence model: {err}"
     );
 }

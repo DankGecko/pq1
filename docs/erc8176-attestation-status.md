@@ -3,18 +3,24 @@
 **Question this answers:** can we flip the ERC-7730 descriptor corpus from
 "trusted content" (dev mode) to "trusted **and attested**" — `allow_unattested_dev_descriptors = false`?
 
-**Short answer: not yet — blocked on both our missing production verifier and
-the attestation ecosystem.** The ERC-8176 standard is live but adoption is ~zero
+**Short answer: not yet — the host verifier code half now exists, but the
+attestation ecosystem and production release inputs do not.** ERC-8176 is still
+an **open draft** at
+[`ethereum/ERCs#1576`](https://github.com/ethereum/ERCs/pull/1576), not a final
+standard. The implementation work below pins draft revision
+`502c96345b630b66e1dc7d8c790831c7cc2478eb`; that pin is plumbing authority,
+not permission to claim final-standard or production provenance. Adoption is ~zero
 (3 total attestations on the canonical EAS schema, all from a single test
-address; **0** of our descriptors attested). We have the hash binding and an
-advisory coverage tripwire, but no authenticated offline EAS snapshot verifier
-or production ingestion path. Neither code nor ecosystem gate is complete.
+address; **0** of our descriptors attested). We have the hash binding, advisory
+coverage tripwire, and a bounded authenticated offline verifier, but no real
+trusted-auditor evidence or approved production snapshot. The canonical
+catalogue therefore remains `dev-unattested`.
 
 ## What ERC-8176 actually is (verified against the spec, 2026-07)
 
-Part of the Ethereum Foundation's May-2026 Clear Signing standard (ERC-7730
-descriptors + neutral registry + **ERC-8176 auditor attestations** + ERC-8213
-fingerprints). Mechanism — from the draft ([ethereum/ERCs PR #1576](https://github.com/ethereum/ERCs/pull/1576)):
+Proposed as part of the Ethereum clear-signing suite (ERC-7730 descriptors +
+neutral registry + **ERC-8176 auditor attestations** + ERC-8213 fingerprints).
+Mechanism — from the pinned open draft above:
 
 - Attestations live on the **Ethereum Attestation Service (EAS)** — mainnet
   schema UID **`0xe023eef113c1670774801c34b377fdf612dd8a4d2fa92fe382e15bd91fafb5c2`**
@@ -35,7 +41,7 @@ the on-device IR/leaf identifier baked into the firmware-pinned Merkle tree
 (SHA-256 per the PQ-stack convention). The ERC-8176 hash is **keccak-256** of the
 *same* JCS bytes — EVM-mandated, host-only, never computed on the device.
 
-## What we built (pre-production foundations)
+## What we built (host code half; still pre-production)
 
 - **`erc8176_hash` in `dbgen`** = `keccak256(jcs_canonicalize(resolved descriptor))`,
   reusing the existing RFC-8785 canonicalizer. Emitted into every row of
@@ -53,18 +59,45 @@ the on-device IR/leaf identifier baked into the firmware-pinned Merkle tree
   are not the required authenticated, reproducible offline policy input. curl +
   stdlib only; read-only. The deterministic offline regression target is
   `make erc8176-coverage-test` and is enrolled in CI.
-- The legacy `enforce_policy` gate (embedded-`attestations`-array, identity-only)
-  is documented as an **outdated model** that predates the finalized EAS-based
-  spec; it stays behind `allow_unattested_dev_descriptors`. It is not the real
-  enforcement path — the checker + a future EAS snapshot are.
+- **Offline verifier** `dbgen::erc8176`: accepts only the bounded, versioned
+  `pqsigner-erc8176-eas-snapshot-v1` format and performs no network access. A
+  production policy independently pins the exact snapshot SHA-256, Ethereum
+  block hash/number/timestamp, reproducible evaluation time, freshness and
+  remaining-validity bounds, and canonical mainnet CAIP-10 trust set. Against
+  that anchor it verifies the Pectra block header, EAS account/runtime-code
+  identity, EIP-1186 account/storage proofs, canonical EAS-v2 UID and EIP-712
+  signature, low-s EOA signer, schema, descriptor hash, time, expiry, and zero
+  offchain-revocation state. Parsers and proof material are explicitly bounded
+  and reject duplicate/unknown fields and unused witnesses.
+- **Classical-crypto boundary:** EAS requires secp256k1 recovery, but that is
+  external-signature verification rather than wallet signing authority.
+  `make classical-crypto-boundary` pins the exact `dbgen -> k256 -> ecdsa`
+  packages/features/edges, rejects them from every other normal/build graph,
+  and rejects signing or secret-key APIs from the verifier's production
+  regions. Cargo-deny retains its global bans for all other classical
+  implementations; firmware, FW-update, and wallet contracts remain C10-only.
+- **Catalogue admission:** `dbgen` counts distinct trusted signers for the exact
+  include-resolved RFC-8785 JCS descriptor hash and retains all deployments only
+  when the configured threshold is met. This runs after the complete known-call
+  inventory, so a below-threshold descriptor is omitted from the Merkle
+  catalogue while its calls remain filter-positive hard refusals. Verified
+  review receipts bind the draft revision, policy/snapshot hashes, checkpoint,
+  evaluation policy, and admitted counts.
+- **Deliberate limitations:** snapshot v1 supports offchain EAS-v2 attestations
+  by EOAs only. It rejects contract/code-bearing signers (including ERC-1271 and
+  EIP-7702), does not fetch data, decide consensus finality, select real
+  auditors, or rotate a production root. Descriptor-embedded `attestations`
+  never count as evidence. The checked-in dev policy's older explanatory
+  comments are curation-manifest-bound bytes; update that file only atomically
+  with an approved production policy, manifest, artifacts, and root ceremony.
 
-## Current coverage (420-leaf catalogue snapshot, measured 2026-07)
+## Current coverage (400-leaf catalogue snapshot, measured 2026-07)
 
 `make erc8176-coverage` (the live result distinguishes all returned records
 from the eligible, unrevoked, unexpired subset used for threshold arithmetic):
 
 ```
-our descriptors (unique descriptorHashes): 224   (→ 420 firmware leaves)
+our descriptors (unique descriptorHashes): 240   (→ 400 firmware leaves)
 total attestations returned by EAS:        3
 eligible (unrevoked and unexpired):        2
 OUR descriptors with ANY attestation:      0
@@ -78,27 +111,26 @@ ecosystem has not populated (~2 months post-launch).
 
 ## Flip-readiness: the precise unblock condition
 
-Flip `allow_unattested_dev_descriptors = false` only after both the missing code
-and external evidence exist. To assess a candidate advisory trust set, run
+Flip `allow_unattested_dev_descriptors = false` only after the external evidence
+and release-owned inputs exist. To assess a candidate advisory trust set, run
 `python3 tools/erc8176_eas_coverage.py --trusted <0xADDR> [<0xADDR> ...]`;
 that live report is an ecosystem tripwire, not authorization.
-Concretely, the external half requires:
+Concretely, the remaining half requires:
 
 1. Auditors we trust (Ledger / Fireblocks / Sourcify / Cyfrin) actually publish
    EAS attestations under schema #377 for the descriptors we ship.
 2. Their real attester addresses populate `policy.toml`'s `trusted_attesters`
-   (currently placeholders).
-
-The code half must authenticate and snapshot those trusted attestations so the
-build stays reproducible/offline, require `≥ min_attesters` distinct trusted
-attestations per shipped descriptorHash, and bind the resulting policy and
-provenance into the release artifact. Below-threshold descriptors are excluded;
-corresponding filter-positive calls retain the current hard refusal rather than
-silently falling to ordinary blind signing.
+   (currently placeholders), and an owner independently approves a finalized
+   checkpoint, snapshot hash, evaluation epoch and freshness policy.
+3. The resulting production policy/snapshot passes the verifier and threshold,
+   then goes through the separately reviewed root/release-binding ceremony. The
+   companion-to-firmware catalogue pairing remains tracked by
+   [#379](https://github.com/EthereumPhone/PQ1/issues/379); this code-half change
+   does not rotate or authorize a root.
 
 **Until then:** run `make erc8176-coverage` periodically (it's the tripwire); stay
 in dev mode. Flipping now would remove clear-sign coverage for the entire
-420-leaf corpus, while filter-positive calls would hard-refuse, for zero
+400-leaf corpus, while filter-positive calls would hard-refuse, for zero
 security gain because there is nothing to verify against.
 
 ## Why this is the honest posture
@@ -109,6 +141,7 @@ attacker (a descriptor that lies about what a function does), attestation by a
 party who checked the descriptor against the real contract is the defense — and
 that is exactly ERC-8176. We cannot manufacture that trust unilaterally; a
 self-signed curation key in the repo would be a no-op (an attacker who owns CI
-owns the key). So we make our binding provably-correct, instrument coverage, and
-implement the authenticated verifier before any future flip when the ecosystem
-provides real attestations to enforce.
+owns the key). So the verifier and binding can land fail-closed now, while the
+canonical production flip waits for independent evidence it can actually
+enforce. The live owner item is
+[#377](https://github.com/EthereumPhone/PQ1/issues/377).

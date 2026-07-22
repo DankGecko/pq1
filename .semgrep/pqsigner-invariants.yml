@@ -2,7 +2,8 @@
 #
 # These rules turn the prose invariants in CLAUDE.md ("Non-Negotiable
 # Invariants" / "What NOT to do") into a CI gate. Run via `make invariant-gates`
-# (which also runs `cargo deny check bans` for the dependency-level invariant #5).
+# (which also runs cargo-deny and the scoped host-verifier dependency gate for
+# dependency-level invariant #5).
 #
 # Calibration: rules with ZERO findings on the current tree are ERROR (hard
 # gate); rules with pre-existing legitimate-but-discouraged sites are WARNING
@@ -25,6 +26,7 @@ rules:
       breaking invariant #5 — stop.
     paths:
       include: ['*.rs']
+      exclude: ['dbgen/src/erc8176.rs']
     patterns:
       - pattern-regex: '(?m)^\s*(use|extern\s+crate)\s+(secp256k1|libsecp256k1|k256|p256|ecdsa|ed25519|ed25519_dalek|ed25519_compact|schnorrkel)\b'
 
@@ -57,7 +59,7 @@ rules:
   # ── Unsafe taxonomy: pure-logic crates are 100% safe Rust ──────────────────
   # Operationalises CLAUDE.md's unsafe taxonomy boundary. The five structurally
   # required `unsafe` categories (CMSE veneers, NS-ptr deref, SHA-256 hooks, FI
-  # volatile helpers, static-mut driver state) live in secure/ — with TWO
+  # volatile helpers, static-mut driver state) live in secure/ — with THREE
   # deliberately host-placed exceptions that are `exclude:`d below. These are NOT
   # a regression: they are the SAME structurally-required categories, relocated
   # into a host-runnable crate PRECISELY so they can be formally verified there,
@@ -78,7 +80,11 @@ rules:
   #     guarantee, so the overrun check could compile to a no-op (silent FI
   #     weakening), and it contradicts taxonomy category (4) ("must be
   #     read_volatile/write_volatile to defeat compiler folding").
-  # The `exclude:` list must stay EXACTLY these two files; `make invariant-gates`
+  #   * pqsigner-erc7730/src/display/mod.rs — category (4) FI transcript-buffer
+  #     poison/reset volatiles. The double-render dispatcher checks this poison
+  #     between independent renders; ordinary stores could be removed before
+  #     the second render. Each pointer comes from a unique live mutable borrow.
+  # The `exclude:` list must stay EXACTLY these three files; `make invariant-gates`
   # asserts that so a future over-broad exclude cannot silently silence a real
   # unsafe. (We deliberately do NOT add a raw-MMIO `*_volatile` rule here: ~50
   # legit sites in secure/ — the documented hw::mmio migration queue + the
@@ -93,8 +99,9 @@ rules:
       tx-core, aa, domain, tx, pqsigner-erc7730, hal, shared) are host-runnable,
       no_std, stack-only, and MUST stay 100% safe Rust — every structurally
       required `unsafe` lives in the secure HAL / NSC veneers / FI helpers, or in
-      the two documented host-verified exceptions excluded by this rule
-      (shared/src/ns_ptr_validate.rs, pqsigner-erc7730/src/display/render/mod.rs).
+      the three documented host-verified exceptions excluded by this rule
+      (shared/src/ns_ptr_validate.rs, pqsigner-erc7730/src/display/render/mod.rs,
+      pqsigner-erc7730/src/display/mod.rs).
       If a parser/derivation seems to need NEW `unsafe`, that is a design smell —
       find the safe formulation.
     paths:
@@ -109,11 +116,12 @@ rules:
         - 'hal/src/'
         - 'shared/src/'
       # Host-relocated structurally-required unsafe — see the header comment
-      # above for the Kani/Miri proof pointers. KEEP EXACTLY THESE TWO ENTRIES
+      # above for the Kani/Miri/test proof pointers. KEEP EXACTLY THESE THREE ENTRIES
       # (asserted by `make invariant-gates`).
       exclude:
         - 'shared/src/ns_ptr_validate.rs'
         - 'pqsigner-erc7730/src/display/render/mod.rs'
+        - 'pqsigner-erc7730/src/display/mod.rs'
     patterns:
       - pattern-regex: '\bunsafe\s*(\{|fn\b|impl\b|trait\b|extern\b)'
 

@@ -3895,20 +3895,26 @@ fwup-transport-hw-iwdg: dev-pubkey-fixture fwup-transport-fixture
 
 # ── Invariant gates: machine-enforce CLAUDE.md non-negotiable invariants ──
 # #5 one PQ signer · #6 immutable bootstrap keys · #7 monotonic unresettable caps.
-# Deps gated by cargo-deny [bans]; source gated by .semgrep/pqsigner-invariants.yml.
-.PHONY: invariant-gates
+# Deps gated by cargo-deny [bans] plus the exact host-only ERC-8176 verifier
+# boundary; source gated by .semgrep/pqsigner-invariants.yml.
+.PHONY: classical-crypto-boundary invariant-gates
+classical-crypto-boundary: ## Pin host-only ERC-8176 ECDSA verification outside signing graphs
+	python3 scripts/check_classical_crypto_boundary.py
+
 SEMGREP ?= $(shell command -v semgrep 2>/dev/null || echo $(HOME)/.venvs/semgrep/bin/semgrep)
 invariant-gates: ## Local invariant gates (cargo-deny + semgrep + transcription)
-	@echo "==> [1/3] supply-chain (deps): cargo deny check advisories bans sources"
+	@echo "==> [1/4] supply-chain (deps): cargo deny check advisories bans sources"
 	@echo "    bans=invariant #5 (no classical signer); advisories=real CVEs"
 	@echo "    (unmaintained is workspace-scoped); sources=registry/remote guard."
 	cargo deny check advisories bans sources
+	@echo "==> [2/4] exact host-only ERC-8176 verifier boundary:"
+	$(MAKE) classical-crypto-boundary
 	@command -v "$(SEMGREP)" >/dev/null 2>&1 || { echo "ERROR: semgrep not found ($(SEMGREP)). Install: python3 -m venv ~/.venvs/semgrep && ~/.venvs/semgrep/bin/pip install semgrep"; exit 1; }
-	@echo "==> [2/3] invariants #5/#6/#7 (source, ERROR-level fails the build):"
+	@echo "==> [3/4] invariants #5/#6/#7 (source, ERROR-level fails the build):"
 	"$(SEMGREP)" --config .semgrep/pqsigner-invariants.yml --severity ERROR --error --metrics off --quiet
-	@echo "    guard: unsafe-ban exclude allowlist is exactly the 2 documented files:"
+	@echo "    guard: unsafe-ban exclude allowlist is exactly the 3 documented files:"
 	@python3 .semgrep/check_unsafe_exclude_allowlist.py
-	@echo "==> [3/3] advisory warnings (non-blocking):"
+	@echo "==> [4/4] advisory warnings (non-blocking):"
 	-@"$(SEMGREP)" --config .semgrep/pqsigner-invariants.yml --severity WARNING --metrics off --quiet
 	@echo "==> invariant-gates: PASS"
 

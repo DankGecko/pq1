@@ -33,8 +33,10 @@ use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 
+pub mod eip1186;
 pub mod erc20;
 pub mod erc7730;
+pub mod erc8176;
 pub mod merkle;
 pub mod names;
 pub mod selectors;
@@ -78,9 +80,17 @@ pub fn render_erc7730_security_tail(
     out.push_str("#[cfg(feature = \"e2e-test\")]\n");
     emit_generated_root(&mut out, "ERC7730_DESCRIPTORS_ROOT", e2e_root);
     writeln!(out, "#[cfg(not(feature = \"e2e-test\"))]").unwrap();
-    writeln!(out, "pub const ERC7730_DESCRIPTOR_COUNT: usize = {prod_count};\n").unwrap();
+    writeln!(
+        out,
+        "pub const ERC7730_DESCRIPTOR_COUNT: usize = {prod_count};\n"
+    )
+    .unwrap();
     writeln!(out, "#[cfg(feature = \"e2e-test\")]").unwrap();
-    writeln!(out, "pub const ERC7730_DESCRIPTOR_COUNT: usize = {e2e_count};\n").unwrap();
+    writeln!(
+        out,
+        "pub const ERC7730_DESCRIPTOR_COUNT: usize = {e2e_count};\n"
+    )
+    .unwrap();
     out.push_str(
         "#[cfg(not(feature = \"e2e-test\"))]\n\
          pub static ERC7730_KNOWN_CALLS_BLOOM: &[u8; pqsigner_erc7730::known_calls::BLOOM_BYTES] =\n\

@@ -49,7 +49,7 @@ compiled companion catalogue, root
 **4,580** canonical known-call tuples, tuple-set SHA-256
 `b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829`.
 Curation manifest SHA-256
-`cce5e6b8903f4765b2e4989866774ce7cc70be5356405e330a1cce632c7d4f2b` binds upstream commit
+`6d5e27c1905f5c94326820adeb95811abc6536403f641644026302a2e3467837` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
 Manifest v3 authorizes exactly **38** curation-added known-call tuples and no deletions.
@@ -126,9 +126,10 @@ Notes:
   `689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f`**
   under domain `pqsigner/erc7730-excluded-fixture-corpus-v1`. Fixture naming is
   never permission to hide a live binding.
-- This corpus is currently `dev-unattested`. There is no implemented ERC-8176
-  host verifier; production fails closed until one emits reviewed
-  `erc8176-verified` provenance.
+- This corpus is currently `dev-unattested`. A bounded pinned-draft ERC-8176
+  host verifier exists, but the canonical policy has no approved snapshot or
+  real trusted-auditor evidence; production remains fail-closed until those
+  external inputs reproduce reviewed `erc8176-verified` provenance.
 - A registry-declared contract call that the renderer cannot decode is kept in
   the known-call filter and hard-refuses without a safe compiled proof. Only a
   genuinely absent tuple may reach the generic display ladder (subject to safe

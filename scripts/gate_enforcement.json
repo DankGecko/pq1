@@ -3,6 +3,22 @@
   "workflows_dir": ".github/workflows",
   "gates": [
     {
+      "id": "classical-crypto-boundary",
+      "make": "make classical-crypto-boundary",
+      "polices_paths": [
+        "Cargo.toml",
+        "Cargo.lock",
+        "**/Cargo.toml",
+        "dbgen/src/erc8176.rs",
+        "deny.toml",
+        ".semgrep/pqsigner-invariants.yml",
+        "scripts/check_classical_crypto_boundary.py"
+      ],
+      "runs_in": "ci.yml",
+      "enforcement": "per_pr_blocking",
+      "note": "Invariant #5 scoped exception: external ERC-8176 EAS signatures are verified only by host dbgen; exact packages/features/edges and verify-only production source are pinned."
+    },
+    {
       "id": "verify-ledger-consistency",
       "make": "make -C contracts/verification verify-ledger-consistency",
       "polices_paths": [

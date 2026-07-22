@@ -1756,6 +1756,59 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_nonzero_revocation_state_is_rejected() {
+        let fixture = synthetic_snapshot_fixture([0x77; 32]);
+        let mut value: Value = serde_json::from_slice(&fixture.raw).unwrap();
+        let attester = decode_hex_exact::<20>(
+            "fixture attester",
+            value["attestations"][0]["attester"].as_str().unwrap(),
+        )
+        .unwrap();
+        let uid = decode_hex_exact::<32>(
+            "fixture uid",
+            value["attestations"][0]["uid"].as_str().unwrap(),
+        )
+        .unwrap();
+
+        let revocation_slot = eas_offchain_revocation_slot(attester, uid);
+        let storage_key = fixture_key_nibbles(keccak256(&revocation_slot));
+        let storage_leaf = fixture_trie_leaf(&storage_key, &[1]);
+        let storage_root = keccak256(&storage_leaf);
+
+        let state_key = fixture_key_nibbles(keccak256(&EAS_CONTRACT));
+        let account = fixture_rlp_list(&[
+            fixture_rlp_bytes(&[1]),
+            fixture_rlp_bytes(&[]),
+            fixture_rlp_bytes(&storage_root),
+            fixture_rlp_bytes(&EAS_RUNTIME_CODE_HASH),
+        ]);
+        let state_leaf = fixture_trie_leaf(&state_key, &account);
+        let state_root = keccak256(&state_leaf);
+        let header = fixture_block_header(
+            state_root,
+            fixture.anchor.checkpoint_block_number,
+            fixture.checkpoint_timestamp,
+        );
+
+        value["block_header_rlp"] = Value::String(fixture_hex(&header));
+        value["eas_account_proof"] = serde_json::json!([fixture_hex(&state_leaf)]);
+        for witness in value["signer_accounts"].as_array_mut().unwrap() {
+            witness["account_proof"] = serde_json::json!([fixture_hex(&state_leaf)]);
+        }
+        for record in value["attestations"].as_array_mut().unwrap() {
+            record["revocation_proof"] = serde_json::json!([fixture_hex(&storage_leaf)]);
+        }
+
+        let raw = serde_json::to_vec(&value).unwrap();
+        let mut anchor = fixture.anchor.clone();
+        anchor.snapshot_sha256 = sha256(&raw);
+        anchor.checkpoint_block_hash = keccak256(&header);
+        let error = verify_snapshot_bytes(&raw, &anchor, &fixture.trusted_attesters)
+            .expect_err("authenticated nonzero revocation state must fail closed");
+        assert!(error.contains("is revoked at checkpoint"), "{error}");
+    }
+
+    #[test]
     fn attestation_and_witness_record_order_does_not_change_verified_set() {
         let descriptor_hash = [0x77; 32];
         let fixture = synthetic_snapshot_fixture(descriptor_hash);

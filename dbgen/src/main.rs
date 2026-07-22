@@ -102,15 +102,14 @@ fn main() {
         }
     }
 
-    // Production attestation enforcement is not implemented for the registry
-    // corpus yet. Refuse before resolving paths or writing any of the other DB
-    // artifacts so a failed production request cannot leave a partial refresh.
+    // The checked-in policy intentionally has no authenticated snapshot or
+    // real auditor population yet. Refuse before resolving paths or writing
+    // any DB artifact so this code-half cannot masquerade as a root rotation.
     if force_production {
         eprintln!(
-            "dbgen: --policy production is not yet supported for the ERC-7730 registry \
-             corpus (ERC-8176 attestation enforcement is not wired; the corpus builds in \
-             dev policy). Refusing rather than silently building the shipping catalogue \
-             unattested under a production flag."
+            "dbgen: canonical ERC-7730 policy has no independently pinned ERC-8176 snapshot \
+             or real trusted-auditor evidence. Refusing before writing any generated artifact; \
+             the checked-in catalogue remains dev-unattested until the external gate closes."
         );
         std::process::exit(1);
     }
@@ -307,7 +306,8 @@ fn main() {
     // ships the matching IR + Merkle proof in the new sign-input
     // trailer slot (Phase 3 wires that path).
     // Tolerant DEV build over the vendored registry. The early CLI fence above
-    // rejects `--policy production` until real ERC-8176 verification lands.
+    // rejects the canonical `--policy production` request until independently
+    // pinned evidence and real auditors exist.
     let (mut erc7730_res, skips) = erc7730::build_db_tolerant_with_erc20_capabilities(
         &erc7730_registry_input,
         &erc7730_policy,

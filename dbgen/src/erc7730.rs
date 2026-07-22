@@ -45,13 +45,17 @@
 //! Read from `secure/data/erc7730/policy.toml`. In dev mode
 //! (`allow_unattested_dev_descriptors = true`) every descriptor is
 //! accepted regardless of attestations and is marked `dev-unattested`
-//! in every generated artifact. Production mode is deliberately
-//! unavailable until the finalized ERC-8176 EAS records are fetched,
-//! signature-verified, and bound to each descriptor hash. In
-//! particular, an obsolete embedded `attestations` array is never
-//! treated as production verification.
+//! in every generated artifact. Production-mode plumbing accepts only a
+//! hash-pinned offline snapshot whose EAS signatures, checkpoint header,
+//! account/storage proofs, revocation state, and trusted-attester threshold
+//! verify against the explicitly pinned ERC-8176 draft. The checked-in policy
+//! deliberately has no such evidence yet, so canonical production generation
+//! still refuses. An obsolete embedded `attestations` array is never evidence.
 
 use crate::erc20::Erc20Capabilities;
+use crate::erc8176::{
+    load_and_verify_snapshot, SnapshotAnchor, VerifiedAttestationSet, ERC8176_DRAFT_COMMIT,
+};
 use crate::merkle::{node_hash, verify_proof, MerkleTree};
 use pqsigner_erc7730::bundle::{leaf_hash, verify_erc7730_bundle_with_leaf_count};
 use pqsigner_erc7730::display::primitives::known_native_ticker;
@@ -84,8 +88,9 @@ use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::fs::{self, File};
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 
 /// Recursive JSON syntax preflight that rejects duplicate object keys before
 /// `serde_json::Value` can collapse them with last-write-wins semantics.
@@ -1313,6 +1318,7 @@ struct FieldDef {
 // ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Policy {
     #[serde(default)]
     pub min_attesters: usize,
@@ -1320,19 +1326,292 @@ pub struct Policy {
     pub trusted_attesters: Vec<String>,
     #[serde(default)]
     pub allow_unattested_dev_descriptors: bool,
+    /// Independently pinned input for the host-only ERC-8176 verifier.
+    ///
+    /// This table is deliberately absent from the checked-in dev policy. A
+    /// production policy must bind both the snapshot bytes and the finalized
+    /// Ethereum block hash used to authenticate its EIP-1186 proofs.
+    #[serde(default)]
+    pub erc8176_snapshot: Option<Erc8176SnapshotPolicy>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Erc8176SnapshotPolicy {
+    /// Regular file relative to the policy file; absolute/parent paths refuse.
+    pub path: PathBuf,
+    /// SHA-256 of the exact snapshot bytes (lowercase `0x` hex).
+    pub sha256: String,
+    /// Independently reviewed finalized Ethereum block hash (lowercase `0x`).
+    pub block_hash: String,
+    pub block_number: u64,
+    pub block_timestamp: u64,
+    /// Explicit reproducible release-evaluation epoch; never the host clock.
+    pub evaluation_time: u64,
+    pub max_checkpoint_age_secs: u64,
+    pub min_remaining_validity_secs: u64,
+}
+
+const MAX_ERC8176_POLICY_BYTES: u64 = 64 * 1024;
+
+struct CatalogueEvidence {
+    verified: VerifiedAttestationSet,
+    policy_sha256: [u8; 32],
 }
 
 pub fn load_policy(path: &Path) -> Result<Policy, String> {
-    let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))
+    let bytes = read_policy_bytes(path)?;
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|e| format!("policy {} is not UTF-8: {e}", path.display()))?;
+    toml::from_str(text).map_err(|e| format!("parse {}: {e}", path.display()))
+}
+
+fn read_policy_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    let before = fs::symlink_metadata(path)
+        .map_err(|e| format!("inspect policy {}: {e}", path.display()))?;
+    if before.file_type().is_symlink() || !before.file_type().is_file() {
+        return Err(format!(
+            "ERC-8176 policy {} must be a non-symlink regular file",
+            path.display()
+        ));
+    }
+    if before.len() > MAX_ERC8176_POLICY_BYTES {
+        return Err(format!(
+            "ERC-8176 policy {} is {} bytes; cap is {MAX_ERC8176_POLICY_BYTES}",
+            path.display(),
+            before.len()
+        ));
+    }
+
+    let file = File::open(path).map_err(|e| format!("open policy {}: {e}", path.display()))?;
+    let after = file
+        .metadata()
+        .map_err(|e| format!("fstat policy {}: {e}", path.display()))?;
+    if !after.file_type().is_file() {
+        return Err(format!(
+            "ERC-8176 policy {} changed to a non-regular file",
+            path.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if before.dev() != after.dev() || before.ino() != after.ino() {
+            return Err(format!(
+                "ERC-8176 policy {} changed between stat and open",
+                path.display()
+            ));
+        }
+    }
+
+    let initial_capacity = usize::try_from(after.len())
+        .unwrap_or(usize::MAX)
+        .min(MAX_ERC8176_POLICY_BYTES as usize);
+    let mut bytes = Vec::with_capacity(initial_capacity);
+    file.take(MAX_ERC8176_POLICY_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("read policy {}: {e}", path.display()))?;
+    if bytes.len() as u64 > MAX_ERC8176_POLICY_BYTES {
+        return Err(format!(
+            "ERC-8176 policy {} grew beyond {MAX_ERC8176_POLICY_BYTES} bytes",
+            path.display()
+        ));
+    }
+    Ok(bytes)
+}
+
+fn load_policy_and_evidence(
+    policy_path: &Path,
+    force_production: bool,
+) -> Result<(Policy, Option<CatalogueEvidence>), String> {
+    let policy_bytes = read_policy_bytes(policy_path)?;
+    let policy_text = std::str::from_utf8(&policy_bytes)
+        .map_err(|e| format!("policy {} is not UTF-8: {e}", policy_path.display()))?;
+    let mut policy: Policy =
+        toml::from_str(policy_text).map_err(|e| format!("parse {}: {e}", policy_path.display()))?;
+    let configured_for_dev = policy.allow_unattested_dev_descriptors;
+    if configured_for_dev && policy.erc8176_snapshot.is_some() {
+        return Err(
+            "dev-unattested ERC-7730 policy must not carry an ERC-8176 snapshot; use a distinct production policy and set allow_unattested_dev_descriptors = false"
+                .to_string(),
+        );
+    }
+    if force_production {
+        policy.allow_unattested_dev_descriptors = false;
+    }
+
+    if policy.allow_unattested_dev_descriptors {
+        return Ok((policy, None));
+    }
+
+    if policy.min_attesters < 2 {
+        return Err(format!(
+            "production ERC-8176 policy requires min_attesters >= 2, got {}",
+            policy.min_attesters
+        ));
+    }
+    let trusted_attesters = parse_trusted_attesters(&policy.trusted_attesters)?;
+    if policy.min_attesters > trusted_attesters.len() {
+        return Err(format!(
+            "production ERC-8176 policy requires {} attesters but configures only {} distinct trusted identities",
+            policy.min_attesters,
+            trusted_attesters.len()
+        ));
+    }
+
+    let snapshot_policy = policy.erc8176_snapshot.as_ref().ok_or_else(|| {
+        "production ERC-8176 policy is missing an independently pinned [erc8176_snapshot] input; obsolete descriptor-embedded `attestations` are not production evidence"
+            .to_string()
+    })?;
+    if snapshot_policy.block_number == 0 || snapshot_policy.block_timestamp == 0 {
+        return Err(
+            "production ERC-8176 checkpoint block_number and block_timestamp must be nonzero"
+                .to_string(),
+        );
+    }
+    let snapshot_sha256 =
+        parse_canonical_hex::<32>("erc8176_snapshot.sha256", &snapshot_policy.sha256)?;
+    let checkpoint_block_hash =
+        parse_canonical_hex::<32>("erc8176_snapshot.block_hash", &snapshot_policy.block_hash)?;
+    let snapshot_path = resolve_policy_relative_snapshot(policy_path, &snapshot_policy.path)?;
+    let anchor = SnapshotAnchor {
+        snapshot_sha256,
+        checkpoint_block_hash,
+        checkpoint_block_number: snapshot_policy.block_number,
+        evaluation_timestamp: snapshot_policy.evaluation_time,
+        max_checkpoint_age_seconds: snapshot_policy.max_checkpoint_age_secs,
+        min_remaining_validity_seconds: snapshot_policy.min_remaining_validity_secs,
+    };
+    let verified = load_and_verify_snapshot(&snapshot_path, &anchor, &trusted_attesters)
+        .map_err(|e| format!("verify ERC-8176 snapshot {}: {e}", snapshot_path.display()))?;
+    if verified.trusted_attesters() != &trusted_attesters {
+        return Err("internal: verified ERC-8176 trust set differs from policy".to_string());
+    }
+    if verified.checkpoint_block_number() != snapshot_policy.block_number
+        || verified.checkpoint_timestamp() != snapshot_policy.block_timestamp
+    {
+        return Err(format!(
+            "ERC-8176 checkpoint identity mismatch: policy says block {} at {}, authenticated header says block {} at {}",
+            snapshot_policy.block_number,
+            snapshot_policy.block_timestamp,
+            verified.checkpoint_block_number(),
+            verified.checkpoint_timestamp(),
+        ));
+    }
+
+    Ok((
+        policy,
+        Some(CatalogueEvidence {
+            verified,
+            policy_sha256: sha256_of(&policy_bytes),
+        }),
+    ))
+}
+
+fn parse_trusted_attesters(values: &[String]) -> Result<BTreeSet<[u8; 20]>, String> {
+    const PREFIX: &str = "eip155:1:0x";
+    let mut out = BTreeSet::new();
+    for (index, identity) in values.iter().enumerate() {
+        let body = identity.strip_prefix(PREFIX).ok_or_else(|| {
+            format!(
+                "trusted_attesters[{index}] must be canonical mainnet CAIP-10 `{PREFIX}<40 lowercase hex>`"
+            )
+        })?;
+        let address = parse_canonical_hex_body::<20>(&format!("trusted_attesters[{index}]"), body)?;
+        if address == [0; 20] {
+            return Err(format!("trusted_attesters[{index}] is the zero address"));
+        }
+        if !out.insert(address) {
+            return Err(format!(
+                "trusted_attesters[{index}] duplicates 0x{}",
+                hex::encode(address)
+            ));
+        }
+    }
+    if out.is_empty() {
+        return Err("production ERC-8176 trusted_attesters is empty".to_string());
+    }
+    Ok(out)
+}
+
+fn parse_canonical_hex<const N: usize>(label: &str, value: &str) -> Result<[u8; N], String> {
+    let body = value
+        .strip_prefix("0x")
+        .ok_or_else(|| format!("{label} must use a lowercase 0x prefix"))?;
+    parse_canonical_hex_body(label, body)
+}
+
+fn parse_canonical_hex_body<const N: usize>(label: &str, body: &str) -> Result<[u8; N], String> {
+    if body.len() != N * 2
+        || !body
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        return Err(format!(
+            "{label} must contain exactly {} canonical lowercase hex digits",
+            N * 2
+        ));
+    }
+    let decoded = hex::decode(body).map_err(|e| format!("decode {label}: {e}"))?;
+    let mut out = [0; N];
+    out.copy_from_slice(&decoded);
+    Ok(out)
+}
+
+fn resolve_policy_relative_snapshot(
+    policy_path: &Path,
+    relative: &Path,
+) -> Result<PathBuf, String> {
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(
+            "erc8176_snapshot.path must be a non-empty normal relative path without `.` or `..`"
+                .to_string(),
+        );
+    }
+    let policy_dir = policy_path
+        .parent()
+        .ok_or_else(|| "ERC-8176 policy path has no parent directory".to_string())?;
+    let canonical_policy_dir = policy_dir.canonicalize().map_err(|e| {
+        format!(
+            "canonicalize policy directory {}: {e}",
+            policy_dir.display()
+        )
+    })?;
+    let candidate = policy_dir.join(relative);
+    let metadata = fs::symlink_metadata(&candidate)
+        .map_err(|e| format!("inspect ERC-8176 snapshot {}: {e}", candidate.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(format!(
+            "ERC-8176 snapshot {} must be a non-symlink regular file",
+            candidate.display()
+        ));
+    }
+    let canonical = candidate.canonicalize().map_err(|e| {
+        format!(
+            "canonicalize ERC-8176 snapshot {}: {e}",
+            candidate.display()
+        )
+    })?;
+    if !canonical.starts_with(&canonical_policy_dir) {
+        return Err(format!(
+            "ERC-8176 snapshot {} resolves outside its policy directory",
+            candidate.display()
+        ));
+    }
+    Ok(canonical)
 }
 
 /// Compile every `*.json` under `input_dir` with the policy at
 /// `policy_path` BUT override `allow_unattested_dev_descriptors` per
 /// `force_production`. `false` keeps the TOML value (currently the
-/// explicitly labelled dev-unattested mode). `true` fails closed until a real
-/// ERC-8176 EAS verifier is implemented; it never falls back to the obsolete
-/// descriptor-embedded `attestations` shape.
+/// explicitly labelled dev-unattested mode). `true` requires independently
+/// pinned authenticated ERC-8176 snapshot evidence; it never falls back to the
+/// obsolete descriptor-embedded `attestations` shape.
 pub fn build_db_with_policy_override(
     input_dir: &Path,
     policy_path: &Path,
@@ -1360,13 +1639,11 @@ pub fn build_db_with_policy_override_and_erc20_capabilities(
     registry_root: Option<&Path>,
     erc20_capabilities: &Erc20Capabilities,
 ) -> Result<Erc7730BuildResult, String> {
-    let mut policy = load_policy(policy_path)?;
-    if force_production {
-        policy.allow_unattested_dev_descriptors = false;
-    }
+    let (policy, evidence) = load_policy_and_evidence(policy_path, force_production)?;
     build_db_inner(
         input_dir,
         &policy,
+        evidence.as_ref(),
         registry_root,
         false,
         &mut Vec::new(),
@@ -1391,13 +1668,11 @@ pub fn build_e2e_db_with_policy_override_and_erc20_capabilities(
     registry_root: Option<&Path>,
     erc20_capabilities: &Erc20Capabilities,
 ) -> Result<Erc7730BuildResult, String> {
-    let mut policy = load_policy(policy_path)?;
-    if force_production {
-        policy.allow_unattested_dev_descriptors = false;
-    }
+    let (policy, evidence) = load_policy_and_evidence(policy_path, force_production)?;
     build_db_inner(
         input_dir,
         &policy,
+        evidence.as_ref(),
         registry_root,
         false,
         &mut Vec::new(),
@@ -1468,10 +1743,10 @@ pub struct Erc7730BuildResult {
 
 /// Machine-readable trust provenance emitted alongside every catalogue root.
 ///
-/// `Erc8176Verified` is intentionally not produced yet: adding that transition
-/// requires a real EAS record fetch + signature/identity verifier. Keeping the
-/// variant here fixes the generated-artifact vocabulary without allowing the
-/// obsolete embedded-attester model to manufacture a production root.
+/// `Erc8176Verified` is produced only from a pinned, authenticated offline
+/// snapshot. The checked-in catalogue deliberately remains `DevUnattested`
+/// until independent auditors populate that evidence and an owner rotates the
+/// production root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CatalogueProvenance {
     DevUnattested,
@@ -1487,17 +1762,22 @@ impl CatalogueProvenance {
     }
 }
 
-fn catalogue_provenance(policy: &Policy) -> Result<CatalogueProvenance, String> {
-    if policy.allow_unattested_dev_descriptors {
-        return Ok(CatalogueProvenance::DevUnattested);
+fn catalogue_provenance(
+    policy: &Policy,
+    evidence: Option<&CatalogueEvidence>,
+) -> Result<CatalogueProvenance, String> {
+    match (policy.allow_unattested_dev_descriptors, evidence) {
+        (true, None) => Ok(CatalogueProvenance::DevUnattested),
+        (false, Some(_)) => Ok(CatalogueProvenance::Erc8176Verified),
+        (true, Some(_)) => Err(
+            "internal: dev-unattested catalogue received ERC-8176 production evidence"
+                .to_string(),
+        ),
+        (false, None) => Err(
+            "production ERC-8176 catalogue is missing independently pinned, authenticated snapshot evidence; obsolete descriptor-embedded `attestations` are not accepted as production evidence"
+                .to_string(),
+        ),
     }
-    Err(
-        "production ERC-8176 attestation verification is not implemented: refusing to build a \
-         production catalogue. Real EAS records must be fetched, signature/identity-verified, \
-         and bound to every erc8176_hash; obsolete descriptor-embedded `attestations` are not \
-         accepted as production evidence"
-            .to_string(),
-    )
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1518,10 +1798,11 @@ pub fn build_db_with_erc20_capabilities(
     policy_path: &Path,
     erc20_capabilities: &Erc20Capabilities,
 ) -> Result<Erc7730BuildResult, String> {
-    let policy = load_policy(policy_path)?;
+    let (policy, evidence) = load_policy_and_evidence(policy_path, false)?;
     build_db_inner(
         input_dir,
         &policy,
+        evidence.as_ref(),
         None,
         false,
         &mut Vec::new(),
@@ -1613,11 +1894,12 @@ pub fn build_db_tolerant_with_erc20_capabilities(
     registry_root: Option<&Path>,
     erc20_capabilities: &Erc20Capabilities,
 ) -> Result<(Erc7730BuildResult, Vec<SkipReport>), String> {
-    let policy = load_policy(policy_path)?;
+    let (policy, evidence) = load_policy_and_evidence(policy_path, false)?;
     let mut skips: Vec<SkipReport> = Vec::new();
     let result = build_db_inner(
         input_dir,
         &policy,
+        evidence.as_ref(),
         registry_root,
         true,
         &mut skips,
@@ -1750,6 +2032,7 @@ fn utf8_regular_file_name(path: &Path) -> Result<&str, String> {
 fn build_db_inner(
     input_dir: &Path,
     policy: &Policy,
+    evidence: Option<&CatalogueEvidence>,
     registry_root: Option<&Path>,
     tolerant: bool,
     skips: &mut Vec<SkipReport>,
@@ -1757,10 +2040,9 @@ fn build_db_inner(
     nested_calldata_enrollments: &[NestedCalldataEnrollment],
 ) -> Result<Erc7730BuildResult, String> {
     // Establish provenance once for the entire leaf set. This deliberately
-    // fails before reading any descriptor when production verification is
-    // requested but unavailable, so no legacy embedded-attester shape can be
-    // mistaken for a verified ERC-8176 catalogue.
-    let provenance = catalogue_provenance(policy)?;
+    // fails before reading any descriptor when production evidence is absent,
+    // so no legacy embedded-attester shape can be mistaken for verification.
+    let provenance = catalogue_provenance(policy, evidence)?;
 
     // The strict path keeps its flat, name-agnostic read (our hand-authored
     // corpus is a flat dir of `*.json`); the tolerant path walks the
@@ -1911,6 +2193,19 @@ fn build_db_inner(
                 return Err(format!("{source}: {reason}"));
             }
         }
+    }
+
+    // ERC-8176 authorizes the exact include-resolved JCS object, not an
+    // individual deployment row. Perform this only after the independent
+    // known-call scan has inventoried the complete vendored corpus: excluded
+    // contract calls must remain Bloom-positive hard refusals.
+    if let Some(evidence) = evidence {
+        retain_erc8176_threshold_entries(
+            &mut emitted,
+            policy.min_attesters,
+            &evidence.verified,
+            skips,
+        );
     }
 
     if emitted.is_empty() {
@@ -2108,6 +2403,7 @@ fn build_db_inner(
         skips,
         policy,
         provenance,
+        evidence,
         &root,
         known_call_count,
         &known_call_set_hash,
@@ -2127,6 +2423,45 @@ fn build_db_inner(
         known_calls,
         known_call_set_hash,
     })
+}
+
+fn retain_erc8176_threshold_entries(
+    emitted: &mut Vec<Emitted>,
+    min_attesters: usize,
+    verified: &VerifiedAttestationSet,
+    skips: &mut Vec<SkipReport>,
+) {
+    retain_erc8176_threshold_entries_with(
+        emitted,
+        min_attesters,
+        |hash| verified.attester_count(hash),
+        skips,
+    );
+}
+
+fn retain_erc8176_threshold_entries_with(
+    emitted: &mut Vec<Emitted>,
+    min_attesters: usize,
+    mut attester_count: impl FnMut([u8; 32]) -> usize,
+    skips: &mut Vec<SkipReport>,
+) {
+    let mut reported = BTreeSet::<(PathBuf, [u8; 32])>::new();
+    emitted.retain(|entry| {
+        let count = attester_count(entry.erc8176_hash);
+        if count >= min_attesters {
+            return true;
+        }
+        if reported.insert((entry.source.clone(), entry.erc8176_hash)) {
+            skips.push(SkipReport {
+                source: entry.source.clone(),
+                reason: format!(
+                    "ERC-8176 attestation threshold: exact resolved descriptor hash 0x{} has {count} distinct eligible trusted attester(s); policy requires {min_attesters} — all leaves from this descriptor were excluded",
+                    hex::encode(entry.erc8176_hash),
+                ),
+            });
+        }
+        false
+    });
 }
 
 /// Stabilize fail-closed omission-scan diagnostics for both strict and tolerant
@@ -10472,6 +10807,7 @@ fn render_review(
     skips: &[SkipReport],
     policy: &Policy,
     provenance: CatalogueProvenance,
+    evidence: Option<&CatalogueEvidence>,
     root: &[u8; 32],
     known_call_count: usize,
     known_call_set_hash: &[u8; 32],
@@ -10514,6 +10850,45 @@ fn render_review(
     ));
     for t in &policy.trusted_attesters {
         s.push_str(&format!("#   - {t}\n"));
+    }
+    if let Some(evidence) = evidence {
+        let accepted_hashes: BTreeSet<[u8; 32]> =
+            entries.iter().map(|entry| entry.erc8176_hash).collect();
+        let accepted_attestations: usize = accepted_hashes
+            .iter()
+            .map(|hash| evidence.verified.attester_count(*hash))
+            .sum();
+        s.push_str(&format!(
+            "# ERC-8176 draft revision: {ERC8176_DRAFT_COMMIT}\n"
+        ));
+        s.push_str(&format!(
+            "# ERC-8176 policy SHA-256: 0x{}\n",
+            hex::encode(evidence.policy_sha256)
+        ));
+        s.push_str(&format!(
+            "# ERC-8176 snapshot SHA-256: 0x{}\n",
+            hex::encode(evidence.verified.snapshot_sha256())
+        ));
+        s.push_str(&format!(
+            "# ERC-8176 checkpoint: block={} hash=0x{} timestamp={}\n",
+            evidence.verified.checkpoint_block_number(),
+            hex::encode(evidence.verified.checkpoint_block_hash()),
+            evidence.verified.checkpoint_timestamp(),
+        ));
+        s.push_str(&format!(
+            "# ERC-8176 evaluation: timestamp={} max_checkpoint_age_seconds={} min_remaining_validity_seconds={}\n",
+            evidence.verified.evaluation_timestamp(),
+            evidence.verified.max_checkpoint_age_seconds(),
+            evidence.verified.min_remaining_validity_seconds(),
+        ));
+        s.push_str(&format!(
+            "# ERC-8176 verified snapshot: {} attestation record(s), {} descriptor hash(es); accepted catalogue: {} hash(es), {} leaf/leaves, {} distinct hash/attester authorization(s)\n",
+            evidence.verified.attestation_count(),
+            evidence.verified.descriptor_count(),
+            accepted_hashes.len(),
+            entries.len(),
+            accepted_attestations,
+        ));
     }
     if provenance == CatalogueProvenance::DevUnattested {
         s.push_str("#\n");
@@ -10816,6 +11191,99 @@ fn _silence_unused() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn erc8176_policy_attester_identities_are_exact_and_unique() {
+        let first = "eip155:1:0x1111111111111111111111111111111111111111".to_string();
+        let second = "eip155:1:0x2222222222222222222222222222222222222222".to_string();
+        let parsed = parse_trusted_attesters(&[first.clone(), second]).unwrap();
+        assert_eq!(parsed.len(), 2);
+
+        for bad in [
+            Vec::<String>::new(),
+            vec![first.clone(), first.clone()],
+            vec!["eip155:1:0x0000000000000000000000000000000000000000".to_string()],
+            vec!["eip155:10:0x1111111111111111111111111111111111111111".to_string()],
+            vec!["eip155:1:0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string()],
+            vec!["eip155:1:1111111111111111111111111111111111111111".to_string()],
+        ] {
+            assert!(parse_trusted_attesters(&bad).is_err(), "accepted {bad:?}");
+        }
+    }
+
+    #[test]
+    fn erc8176_policy_and_snapshot_paths_are_bounded_and_non_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let policy_path = temp.path().join("policy.toml");
+        let snapshot_path = temp.path().join("snapshot.json");
+        fs::write(&policy_path, "allow_unattested_dev_descriptors = true\n").unwrap();
+        fs::write(&snapshot_path, b"{}").unwrap();
+
+        assert_eq!(
+            resolve_policy_relative_snapshot(&policy_path, Path::new("snapshot.json")).unwrap(),
+            snapshot_path.canonicalize().unwrap()
+        );
+        for bad in ["", ".", "./snapshot.json", "../snapshot.json"] {
+            assert!(
+                resolve_policy_relative_snapshot(&policy_path, Path::new(bad)).is_err(),
+                "accepted snapshot path {bad:?}"
+            );
+        }
+        assert!(resolve_policy_relative_snapshot(&policy_path, &snapshot_path).is_err());
+
+        fs::write(
+            temp.path().join("unknown.toml"),
+            "unknown_authority = true\n",
+        )
+        .unwrap();
+        assert!(load_policy(&temp.path().join("unknown.toml")).is_err());
+
+        let ambiguous_path = temp.path().join("ambiguous.toml");
+        fs::write(
+            &ambiguous_path,
+            concat!(
+                "min_attesters = 2\n",
+                "trusted_attesters = [\n",
+                "  \"eip155:1:0x1111111111111111111111111111111111111111\",\n",
+                "  \"eip155:1:0x2222222222222222222222222222222222222222\",\n",
+                "]\n",
+                "allow_unattested_dev_descriptors = true\n",
+                "[erc8176_snapshot]\n",
+                "path = \"snapshot.json\"\n",
+                "sha256 = \"0x0000000000000000000000000000000000000000000000000000000000000000\"\n",
+                "block_hash = \"0x0000000000000000000000000000000000000000000000000000000000000000\"\n",
+                "block_number = 1\n",
+                "block_timestamp = 1\n",
+                "evaluation_time = 1\n",
+                "max_checkpoint_age_secs = 1\n",
+                "min_remaining_validity_secs = 1\n",
+            ),
+        )
+        .unwrap();
+        let error = load_policy_and_evidence(&ambiguous_path, true)
+            .err()
+            .expect("a dev policy cannot carry production evidence behind an override");
+        assert!(
+            error.contains("use a distinct production policy"),
+            "{error}"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let snapshot_link = temp.path().join("snapshot-link.json");
+            symlink(&snapshot_path, &snapshot_link).unwrap();
+            assert!(resolve_policy_relative_snapshot(
+                &policy_path,
+                Path::new("snapshot-link.json")
+            )
+            .is_err());
+
+            let policy_link = temp.path().join("policy-link.toml");
+            symlink(&policy_path, &policy_link).unwrap();
+            assert!(read_policy_bytes(&policy_link).is_err());
+        }
+    }
 
     #[test]
     fn nested_calldata_authority_is_split_by_explicit_catalogue_route() {
@@ -15797,6 +16265,191 @@ mod tests {
             ir_bytes,
             leaf_index: 0,
         }
+    }
+
+    #[test]
+    fn erc8176_threshold_filters_all_deployments_once_per_resolved_source() {
+        let make_entry = |source: &str, hash_byte: u8, contract_byte: u8| Emitted {
+            source: PathBuf::from(source),
+            descriptor_id: source.to_string(),
+            descriptor_hash: [hash_byte; 32],
+            erc8176_hash: [hash_byte; 32],
+            chain_id: 1,
+            contract: [contract_byte; 20],
+            context_kind: CTX_CONTRACT,
+            primary_type_hash: [0; 32],
+            ir_bytes: vec![contract_byte],
+            leaf_index: 0,
+        };
+        let mut entries = vec![
+            make_entry("accepted.json", 0x11, 1),
+            make_entry("excluded.json", 0x22, 2),
+            make_entry("excluded.json", 0x22, 3),
+        ];
+        let mut skips = Vec::new();
+
+        retain_erc8176_threshold_entries_with(
+            &mut entries,
+            2,
+            |hash| usize::from(hash == [0x11; 32]) * 2 + usize::from(hash == [0x22; 32]),
+            &mut skips,
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source, Path::new("accepted.json"));
+        assert_eq!(
+            skips.len(),
+            1,
+            "two deployments share one exclusion receipt"
+        );
+        assert_eq!(skips[0].source, Path::new("excluded.json"));
+        assert!(skips[0].reason.contains("attestation threshold"));
+        assert!(skips[0].reason.contains("has 1 distinct"));
+        assert!(skips[0].reason.contains("requires 2"));
+    }
+
+    #[test]
+    fn authenticated_snapshot_filters_catalogue_but_preserves_known_call_refusal() {
+        let temp = tempfile::tempdir().expect("temporary catalogue");
+        let dir = temp.path();
+        let accepted_path = dir.join("calldata-accepted.json");
+        let excluded_path = dir.join("calldata-excluded.json");
+        let snapshot_path = dir.join("erc8176.snapshot");
+        let policy_path = dir.join("policy.toml");
+        let accepted_descriptor = r#"{
+  "context":{"contract":{"deployments":[
+    {"chainId":1,"address":"0x0000000000000000000000000000000000000001"},
+    {"chainId":10,"address":"0x0000000000000000000000000000000000000002"}
+  ]}},
+  "metadata":{"owner":"Threshold","contractName":"Accepted"},
+  "display":{"formats":{"transfer(address to,uint256 amount)":{"intent":"Send","fields":[
+    {"path":"to","format":"addressName","label":"To","visible":"always"},
+    {"path":"amount","format":"raw","label":"Amount","visible":"always"}
+  ]}}}
+}"#;
+        let excluded_descriptor = r#"{
+  "context":{"contract":{"deployments":[
+    {"chainId":1,"address":"0x0000000000000000000000000000000000000003"}
+  ]}},
+  "metadata":{"owner":"Threshold","contractName":"Excluded"},
+  "display":{"formats":{"transfer(address to,uint256 amount)":{"intent":"Send","fields":[
+    {"path":"to","format":"addressName","label":"To","visible":"always"},
+    {"path":"amount","format":"raw","label":"Amount","visible":"always"}
+  ]}}}
+}"#;
+        fs::write(&accepted_path, accepted_descriptor).unwrap();
+        fs::write(&excluded_path, excluded_descriptor).unwrap();
+
+        let accepted_json = load_resolved_descriptor_json(&accepted_path, None).unwrap();
+        let accepted_hash = keccak256(&jcs_canonicalize(&accepted_json).unwrap());
+        let fixture = crate::erc8176::synthetic_snapshot_fixture(accepted_hash);
+        let attesters: Vec<[u8; 20]> = fixture.trusted_attesters.iter().copied().collect();
+        assert_eq!(attesters.len(), 2);
+
+        let write_policy = |snapshot_bytes: &[u8]| {
+            fs::write(&snapshot_path, snapshot_bytes).unwrap();
+            fs::write(
+                &policy_path,
+                format!(
+                    concat!(
+                        "min_attesters = 2\n",
+                        "trusted_attesters = [\n",
+                        "  \"eip155:1:0x{}\",\n",
+                        "  \"eip155:1:0x{}\",\n",
+                        "]\n",
+                        "allow_unattested_dev_descriptors = false\n\n",
+                        "[erc8176_snapshot]\n",
+                        "path = \"erc8176.snapshot\"\n",
+                        "sha256 = \"0x{}\"\n",
+                        "block_hash = \"0x{}\"\n",
+                        "block_number = {}\n",
+                        "block_timestamp = {}\n",
+                        "evaluation_time = {}\n",
+                        "max_checkpoint_age_secs = {}\n",
+                        "min_remaining_validity_secs = {}\n"
+                    ),
+                    hex::encode(attesters[0]),
+                    hex::encode(attesters[1]),
+                    hex::encode(sha256_of(snapshot_bytes)),
+                    hex::encode(fixture.anchor.checkpoint_block_hash),
+                    fixture.anchor.checkpoint_block_number,
+                    fixture.checkpoint_timestamp,
+                    fixture.anchor.evaluation_timestamp,
+                    fixture.anchor.max_checkpoint_age_seconds,
+                    fixture.anchor.min_remaining_validity_seconds,
+                ),
+            )
+            .unwrap();
+        };
+
+        write_policy(&fixture.raw);
+        let (result, skips) = build_db_tolerant(dir, &policy_path, None)
+            .expect("two-attester snapshot must authorize exact descriptor");
+        assert_eq!(result.provenance, CatalogueProvenance::Erc8176Verified);
+        assert_eq!(result.leaf_count, 2, "both attested deployments survive");
+        assert!(result
+            .entries
+            .iter()
+            .all(|entry| entry.erc8176_hash == accepted_hash));
+        let selector = {
+            let hash = keccak256(b"transfer(address,uint256)");
+            [hash[0], hash[1], hash[2], hash[3]]
+        };
+        let mut excluded_contract = [0u8; 20];
+        excluded_contract[19] = 3;
+        assert!(result
+            .known_calls
+            .contains(&(1, excluded_contract, selector)));
+        assert!(known_call_may_contain(
+            &result.known_calls_bloom,
+            1,
+            &excluded_contract,
+            &selector
+        ));
+        let threshold_skips: Vec<&SkipReport> = skips
+            .iter()
+            .filter(|skip| skip.reason.contains("ERC-8176 attestation threshold"))
+            .collect();
+        assert_eq!(threshold_skips.len(), 1);
+        assert_eq!(threshold_skips[0].source, excluded_path);
+        assert!(result
+            .review_text
+            .contains("# Provenance: erc8176-verified\n"));
+        assert!(result.review_text.contains(ERC8176_DRAFT_COMMIT));
+        assert!(result
+            .review_text
+            .contains("accepted catalogue: 1 hash(es), 2 leaf/leaves"));
+        round_trip_check(&result).unwrap();
+
+        let mut one_attester: serde_json::Value =
+            serde_json::from_slice(&fixture.raw).expect("fixture JSON");
+        one_attester["attestations"]
+            .as_array_mut()
+            .unwrap()
+            .truncate(1);
+        one_attester["signer_accounts"]
+            .as_array_mut()
+            .unwrap()
+            .truncate(1);
+        let one_attester_raw = serde_json::to_vec(&one_attester).unwrap();
+        write_policy(&one_attester_raw);
+        let error = match build_db_tolerant(dir, &policy_path, None) {
+            Ok(_) => panic!("one signer must not satisfy a threshold of two"),
+            Err(error) => error,
+        };
+        assert!(error.contains("no IR entries emitted"), "{error}");
+
+        write_policy(&fixture.raw);
+        let mutated = accepted_descriptor.replace(
+            "0x0000000000000000000000000000000000000002",
+            "0x0000000000000000000000000000000000000004",
+        );
+        fs::write(&accepted_path, mutated).unwrap();
+        let error = match build_db_tolerant(dir, &policy_path, None) {
+            Ok(_) => panic!("deployment mutation changes the attested JCS hash"),
+            Err(error) => error,
+        };
+        assert!(error.contains("no IR entries emitted"), "{error}");
     }
 
     #[test]

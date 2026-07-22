@@ -57,6 +57,11 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2
         with:
           command: check advisories bans sources
+      # Cargo-deny has no parent-scoped exceptions. Pin the sole host-only
+      # dbgen -> k256 -> ecdsa verification edge and prove it is absent from
+      # every non-host normal/build graph before running source rules.
+      - name: Host-only ERC-8176 classical-verifier boundary
+        run: make classical-crypto-boundary
       # Invariants #5/#6/#7 (source level): the hard ERROR rules must be clean.
       - name: semgrep invariant rules (ERROR-level)
         run: |

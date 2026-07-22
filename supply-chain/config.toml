@@ -72,6 +72,10 @@ criteria = "safe-to-deploy"
 version = "0.2.5"
 criteria = "safe-to-deploy"
 
+[[exemptions.base16ct]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.base64ct]]
 version = "1.8.3"
 criteria = "safe-to-deploy"
@@ -152,6 +156,10 @@ criteria = "safe-to-deploy"
 version = "1.0.5"
 criteria = "safe-to-deploy"
 
+[[exemptions.const-oid]]
+version = "0.9.6"
+criteria = "safe-to-deploy"
+
 [[exemptions.convert_case]]
 version = "0.10.0"
 criteria = "safe-to-deploy"
@@ -208,6 +216,10 @@ criteria = "safe-to-run"
 version = "0.2.4"
 criteria = "safe-to-run"
 
+[[exemptions.crypto-bigint]]
+version = "0.5.5"
+criteria = "safe-to-deploy"
+
 [[exemptions.crypto-common]]
 version = "0.1.7"
 criteria = "safe-to-deploy"
@@ -234,6 +246,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.dbl]]
 version = "0.3.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.der]]
+version = "0.7.10"
 criteria = "safe-to-deploy"
 
 [[exemptions.derive_more]]
@@ -270,6 +286,14 @@ criteria = "safe-to-deploy"
 
 [[exemptions.dummy-pin]]
 version = "1.0.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.ecdsa]]
+version = "0.16.9"
+criteria = "safe-to-deploy"
+
+[[exemptions.elliptic-curve]]
+version = "0.13.8"
 criteria = "safe-to-deploy"
 
 [[exemptions.embedded-graphics]]
@@ -407,6 +431,10 @@ criteria = "safe-to-deploy"
 [[exemptions.js-sys]]
 version = "0.3.95"
 criteria = "safe-to-run"
+
+[[exemptions.k256]]
+version = "0.13.4"
+criteria = "safe-to-deploy"
 
 [[exemptions.keccak]]
 version = "0.1.6"
@@ -588,6 +616,10 @@ criteria = "safe-to-run"
 version = "0.8.10"
 criteria = "safe-to-run"
 
+[[exemptions.rfc6979]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.rpassword]]
 version = "7.5.2"
 criteria = "safe-to-deploy"
@@ -627,6 +659,10 @@ criteria = "safe-to-deploy"
 [[exemptions.ryu]]
 version = "1.0.23"
 criteria = "safe-to-run"
+
+[[exemptions.sec1]]
+version = "0.7.3"
+criteria = "safe-to-deploy"
 
 [[exemptions.semver]]
 version = "0.9.0"
@@ -678,6 +714,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.sha3]]
 version = "0.11.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.signature]]
+version = "2.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.simd-adler32]]

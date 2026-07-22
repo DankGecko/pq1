@@ -97,8 +97,10 @@ Current security contract:
 
 Provenance is deliberately pre-production:
 
-- No ERC-8176/EAS attestation verifier is implemented today. The generated
-  catalogue provenance is `dev-unattested`.
+- The host build has a pinned-draft, bounded offline ERC-8176/EAS-v2 verifier,
+  but the canonical policy has no approved snapshot or real trusted-auditor
+  population. The generated catalogue provenance therefore remains
+  `dev-unattested`; see `docs/erc8176-attestation-status.md`.
 - Non-test development firmware that embeds that root must show the
   `DEV UNATTESTED` warning page. Production-shaped builds reject the root at
   compile time and `make prod-erc7730-provenance-check` independently refuses

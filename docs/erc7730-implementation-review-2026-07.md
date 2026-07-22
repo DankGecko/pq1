@@ -233,9 +233,10 @@ byte-identical; keep silent-drop only for byte-identical dups. Effort S.
   `docs/erc7730-root-rotation-and-update-policy.md`**; the command runs before
   manifest replacement, followed by reviewed collision resolution, vendoring,
   overlays, dbgen, review diff and commit.
-- `--policy production`: **hard-refused until the ERC-8176 flip.** The CLI
-  refusal now occurs before any generator output is written; the library policy
-  rejection remains independently tested.
+- `--policy production`: **hard-refused for the canonical catalogue until the
+  ERC-8176 flip.** The CLI refusal occurs before any generator output is
+  written. The library can verify a separately pinned offline snapshot and
+  production policy, but no such canonical evidence/root rotation exists.
 - Filename-convention tripwire: **implemented.** Every unselected JSON is
   conservatively parsed/include-resolved for omission protection, and concrete
   misnamed descriptors receive a drift-gated `UNSCANNED` skip receipt.
@@ -379,9 +380,10 @@ leverage order:
   string/bytes/primitive-array/tokenPath whole tail; C2 dynamic-tuple descent and C3
   multiple-tail layouts are intentionally excluded. The **attestation flip** (dev-mode
   `allow_unattested` → enforced
-  ERC-8176) remains the orthogonal lever, blocked on both the EAS ecosystem
-  (~0 real attestations) and PQSigner's missing authenticated offline snapshot
-  verifier/production ingestion path (`docs/erc8176-attestation-status.md`).
+  ERC-8176) remains the orthogonal lever. Its bounded authenticated offline
+  verifier code half exists, but the EAS ecosystem still has ~0 usable real
+  attestations and no approved canonical production snapshot/root rotation
+  (`docs/erc8176-attestation-status.md`).
 
 Documented-deviation candidates (write down, don't change): date blockheight shows
 `block #N` not approximate time (no block-time oracle); duration `Xd Yh Zm` vs spec HH:MM:ss;
