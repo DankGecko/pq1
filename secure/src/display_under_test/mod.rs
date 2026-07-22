@@ -84,6 +84,13 @@ pub mod blind_sign;
 #[path = "../tx/display/eip1271.rs"]
 pub mod eip1271;
 
+// Optional forced-blind raw transcript and its two request-bound receipts.
+// Mount the exact production source so its 29-page golden, byte-flip, bounds,
+// ordering, deadline and single-consumption tests run on the host even though
+// production reachability remains feature-gated and no handler route exists.
+#[path = "../tx/display/forced_blind.rs"]
+pub mod forced_blind;
+
 // UserOperation deployment/initCode consent page and receipt. Mount the real
 // production source so its exact-page and fail-initialized receipt tests run
 // in the host test binary.

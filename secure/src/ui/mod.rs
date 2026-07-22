@@ -36,6 +36,7 @@ pub use lcd::{Display, Input};
 pub mod capture;
 
 pub mod confirm;
+mod confirm_core;
 // Render-only golden-screenshot harness (#21 — fast ui-golden).
 #[cfg(feature = "ui-golden-render")]
 pub mod golden;

@@ -288,19 +288,33 @@ fn track_hold(
 
         if held_ms >= LONG_PRESS_MS {
             // Long press detected — wait for release, then return
-            wait_release(is_pressed);
+            if !wait_release(is_pressed, idle_check) {
+                return None;
+            }
             return Some((button, Press::Long));
         }
     }
 }
 
 /// Busy-wait until the pin reads released (HIGH), with debounce.
-fn wait_release(is_pressed: fn() -> bool) {
+///
+/// The same abort predicate used by `wait_event` is polled throughout the
+/// release hold. Ordinary confirmation supplies the inactivity predicate;
+/// forced confirmation supplies inactivity OR its absolute deadline. A held
+/// GPIO button therefore cannot suspend either timeout after the long-press
+/// threshold has fired.
+fn wait_release(is_pressed: fn() -> bool, idle_check: &mut dyn FnMut() -> bool) -> bool {
     loop {
+        if idle_check() {
+            return false;
+        }
         if !is_pressed() {
             delay_ms(DEBOUNCE_MS);
+            if idle_check() {
+                return false;
+            }
             if !is_pressed() {
-                return;
+                return true;
             }
         }
         delay_ms(POLL_MS);

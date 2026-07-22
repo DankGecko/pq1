@@ -8,6 +8,8 @@
 //!   * long right   → confirm
 //!   * long left    → cancel
 
+#[cfg(not(feature = "e2e-test"))]
+use super::confirm_core::{NavigationCore, NavigationDecision, NavigationInput};
 use super::{display, DISPLAY_COLS, DISPLAY_ROWS};
 // The interactive event loop below is compiled out in `e2e-test` builds,
 // so its imports are gated the same way to avoid unused-import warnings.
@@ -21,6 +23,26 @@ pub enum ConfirmResult {
     Confirmed,
     Cancelled,
     IdleWipe,
+}
+
+/// Result of the forced confirmation variant.  Deadline expiry is distinct
+/// from the existing inactivity wipe: real button activity resets only the
+/// latter and never extends the forced absolute deadline.
+#[cfg(feature = "erc7730-forced-blind")]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) enum ForcedConfirmResult {
+    Confirmed,
+    Cancelled,
+    IdleWipe,
+    DeadlineExpired,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum ConfirmLoopResult {
+    Confirmed,
+    Cancelled,
+    IdleWipe,
+    DeadlineExpired,
 }
 
 /// A single page of the confirm dialog: 4 lines, 16 cols each.
@@ -45,8 +67,49 @@ pub fn confirm(pages: &[Page]) -> ConfirmResult {
 /// `FAIL_SENTINEL` — forging a signature past the confirm gate needs two
 /// consistent faults. (Closes trusted-UI finding UI1 / work-todo #12c.)
 pub fn confirm_checked(pages: &[Page]) -> (ConfirmResult, u32) {
+    let mut deadline_never_expires = || false;
+    let (result, sentinel) = confirm_checked_inner(pages, &mut deadline_never_expires);
+    let ordinary = match result {
+        ConfirmLoopResult::Confirmed => ConfirmResult::Confirmed,
+        ConfirmLoopResult::Cancelled | ConfirmLoopResult::DeadlineExpired => {
+            ConfirmResult::Cancelled
+        }
+        ConfirmLoopResult::IdleWipe => ConfirmResult::IdleWipe,
+    };
+    (ordinary, sentinel)
+}
+
+/// Forced-flow confirmation with one absolute, caller-supplied deadline.
+///
+/// The predicate is sampled at every navigation iteration, inside the
+/// `wait_button` predicate (which the GPIO backend carries through release
+/// waits), and immediately before returning an affirmative receipt input.
+/// It is never reset by button activity.  The ordinary S-world inactivity
+/// timer remains a separate predicate and still wipes an idle session first.
+#[cfg(feature = "erc7730-forced-blind")]
+pub(crate) fn confirm_forced_checked(
+    pages: &[Page],
+    deadline_expired: &mut dyn FnMut() -> bool,
+) -> (ForcedConfirmResult, u32) {
+    let (result, sentinel) = confirm_checked_inner(pages, deadline_expired);
+    let forced = match result {
+        ConfirmLoopResult::Confirmed => ForcedConfirmResult::Confirmed,
+        ConfirmLoopResult::Cancelled => ForcedConfirmResult::Cancelled,
+        ConfirmLoopResult::IdleWipe => ForcedConfirmResult::IdleWipe,
+        ConfirmLoopResult::DeadlineExpired => ForcedConfirmResult::DeadlineExpired,
+    };
+    (forced, sentinel)
+}
+
+fn confirm_checked_inner(
+    pages: &[Page],
+    deadline_expired: &mut dyn FnMut() -> bool,
+) -> (ConfirmLoopResult, u32) {
     if pages.is_empty() {
-        return (ConfirmResult::Cancelled, crate::fi::FAIL_SENTINEL);
+        return (ConfirmLoopResult::Cancelled, crate::fi::FAIL_SENTINEL);
+    }
+    if deadline_expired() {
+        return (ConfirmLoopResult::DeadlineExpired, crate::fi::FAIL_SENTINEL);
     }
 
     // ---- e2e-test fast-path ----
@@ -59,14 +122,22 @@ pub fn confirm_checked(pages: &[Page]) -> (ConfirmResult, u32) {
     #[cfg(feature = "e2e-test")]
     {
         for (idx, page) in pages.iter().enumerate() {
+            if deadline_expired() {
+                return (ConfirmLoopResult::DeadlineExpired, crate::fi::FAIL_SENTINEL);
+            }
             render_page(page, idx, pages.len());
         }
-        return (ConfirmResult::Confirmed, crate::fi::OK_SENTINEL);
+        if deadline_expired() {
+            return (ConfirmLoopResult::DeadlineExpired, crate::fi::FAIL_SENTINEL);
+        }
+        return (ConfirmLoopResult::Confirmed, crate::fi::OK_SENTINEL);
     }
 
     #[cfg(not(feature = "e2e-test"))]
     {
-        let mut idx: usize = 0;
+        let Some(mut navigation) = NavigationCore::new(pages.len()) else {
+            return (ConfirmLoopResult::Cancelled, crate::fi::FAIL_SENTINEL);
+        };
         // WYSIWYS scroll-to-end gate (2026-06-26): a long-press-right only
         // CONFIRMS once the user has paged to the last page at least once;
         // before that it is demoted to "advance one page". Without this a
@@ -83,7 +154,9 @@ pub fn confirm_checked(pages: &[Page]) -> (ConfirmResult, u32) {
         // stuck-at/bit-flip on a plain `seen_last: bool` made every read
         // (the gate AND the sentinel closure) read `true`, authorising
         // signing without ever reaching the final page.
-        let mut seen_last = crate::fih::FihBool::new_false();
+        // `NavigationCore` owns the FI-hardened `seen_last` state. Both the
+        // ordinary and forced variants therefore execute the same ordering and
+        // affirmative-sentinel logic.
         // HIGH-13 fix: do NOT reset the inactivity timer on entry.
         // NS can spam SIGN_USEROP / request-unlock calls; each call
         // lands us here and the old code reset the timer before the
@@ -94,17 +167,23 @@ pub fn confirm_checked(pages: &[Page]) -> (ConfirmResult, u32) {
         // confirm dialogs count as activity.").
 
         loop {
+            if deadline_expired() {
+                return (ConfirmLoopResult::DeadlineExpired, crate::fi::FAIL_SENTINEL);
+            }
+            let idx = navigation.page_index();
             render_page(&pages[idx], idx, pages.len());
             // Sticky: once the final page has been displayed, confirm is
             // unlocked from any page. Reaching the last page requires
             // short-right past every intermediate page (short-right advances
             // one page at a time and is capped at the end), so the whole set
             // has been shown before this flips true.
-            if idx + 1 >= pages.len() {
-                seen_last.set_true();
+            navigation.mark_current_page_rendered();
+
+            if deadline_expired() {
+                return (ConfirmLoopResult::DeadlineExpired, crate::fi::FAIL_SENTINEL);
             }
 
-            let mut idle = || timeout::is_idle();
+            let mut wait_abort = || timeout::is_idle() || deadline_expired();
             // Tell the watchdog exactly when this live handler is waiting on
             // trusted physical input. The guard is deliberately scoped to
             // `wait_button`: display rendering and all work after the event
@@ -113,53 +192,43 @@ pub fn confirm_checked(pages: &[Page]) -> (ConfirmResult, u32) {
             // companion-triggered prompt still returns IdleWipe after 120 s.
             let event = match {
                 let _trusted_ui_wait = timeout::TrustedUiWaitGuard::enter();
-                input().wait_button(&mut idle)
+                input().wait_button(&mut wait_abort)
             } {
                 Some(ev) => ev,
-                None => return (ConfirmResult::IdleWipe, crate::fi::FAIL_SENTINEL),
+                None => {
+                    if deadline_expired() {
+                        return (ConfirmLoopResult::DeadlineExpired, crate::fi::FAIL_SENTINEL);
+                    }
+                    return (ConfirmLoopResult::IdleWipe, crate::fi::FAIL_SENTINEL);
+                }
             };
+
+            if deadline_expired() {
+                return (ConfirmLoopResult::DeadlineExpired, crate::fi::FAIL_SENTINEL);
+            }
 
             // A button event IS real user activity — reset the timer
             // here and only here. This is the trusted-display contract.
             timeout::reset_activity();
 
-            match event {
-                (Button::Right, Press::Short) => {
-                    if idx + 1 < pages.len() {
-                        idx += 1;
-                    }
+            let nav_input = match event {
+                (Button::Left, Press::Short) => NavigationInput::LeftShort,
+                (Button::Right, Press::Short) => NavigationInput::RightShort,
+                (Button::Left, Press::Long) => NavigationInput::LeftLong,
+                (Button::Right, Press::Long) => NavigationInput::RightLong,
+            };
+            match navigation.handle(nav_input) {
+                NavigationDecision::Continue => {}
+                NavigationDecision::Cancelled => {
+                    return (ConfirmLoopResult::Cancelled, crate::fi::FAIL_SENTINEL);
                 }
-                (Button::Left, Press::Short) => {
-                    if idx > 0 {
-                        idx -= 1;
+                NavigationDecision::Confirmed(gate) => {
+                    // A final fresh deadline sample immediately precedes the
+                    // affirmative result consumed by the receipt publisher.
+                    if deadline_expired() {
+                        return (ConfirmLoopResult::DeadlineExpired, crate::fi::FAIL_SENTINEL);
                     }
-                }
-                (Button::Right, Press::Long) => {
-                    // F14/SCAFI-2: the gate compares the Hamming-distant
-                    // sentinel born from the FihBool (`check_sentinel` =
-                    // `check_true_into_sentinel(is_true_fi)`), never a bare
-                    // bool branch. A garbage/stuck register reads ≠
-                    // OK_SENTINEL and falls through to "advance one page"
-                    // (fail-closed).
-                    let gate = seen_last.check_sentinel();
-                    if gate == crate::fi::OK_SENTINEL {
-                        // Affirmative accept. Born the sentinel HERE, at the
-                        // decision point, from `seen_last` (the scroll-to-end
-                        // gate) — NOT recomputed from the returned enum, which a
-                        // value-fault could forge. The `Confirmed` verdict and
-                        // the sign-gate sentinel are two independent words set
-                        // at the same instruction.
-                        return (ConfirmResult::Confirmed, gate);
-                    }
-                    // Not yet scrolled to the end — treat the long-press as
-                    // "next page" so the user is guided through the remaining
-                    // (possibly drain-bearing) pages before they can sign.
-                    if idx + 1 < pages.len() {
-                        idx += 1;
-                    }
-                }
-                (Button::Left, Press::Long) => {
-                    return (ConfirmResult::Cancelled, crate::fi::FAIL_SENTINEL)
+                    return (ConfirmLoopResult::Confirmed, gate);
                 }
             }
         }

@@ -448,6 +448,21 @@ fn positive_buttons_idle_check_returns_none() {
 }
 
 #[test]
+fn positive_button_release_hold_carries_the_wait_abort_predicate() {
+    assert!(BUTTONS_SRC.contains("wait_release(is_pressed, idle_check)"));
+    let release = BUTTONS_SRC
+        .find("fn wait_release(is_pressed: fn() -> bool, idle_check: &mut dyn FnMut() -> bool)")
+        .expect("deadline-aware GPIO release loop must exist");
+    let release_body = &BUTTONS_SRC[release..];
+    assert!(release_body.contains("if idle_check() {\n            return false;\n        }"));
+    assert!(release_body.contains("return true;"));
+    assert!(
+        release_body.find("if idle_check()").unwrap()
+            < release_body.find("delay_ms(POLL_MS)").unwrap()
+    );
+}
+
+#[test]
 fn positive_buttons_gpio_clocks_a_and_c() {
     // AHB2ENR1 bit 0 = GPIOAEN, bit 2 = GPIOCEN.
     assert!(BUTTONS_SRC.contains("REG.rcc_ahb2enr1.set_bits((1 << 0) | (1 << 2));"));
