@@ -823,23 +823,26 @@ the prompt-abuse policy, Partner A's incomplete independent reproduction of the
 handler-gas differential gap, and the stage-impact disagreement for the
 two-receipt mechanism. None may be converted into approval by reviewer count.
 
-## PQ1 forced-blind material redline candidate v2 — FROZEN CORRECTED RE-REVIEW
+## PQ1 forced-blind material redline candidate v2 — FROZEN HARDWARE-BOUNDARY RE-REVIEW
 
 **Status:** corrected material replacement candidate. The owner selected the
 remaining prompt-abuse semantics on 2026-07-22, including the fail-closed host
-denial-of-service residual. The latest short architecture wave returned GPT-5.6
-SOL **FIX**, Claude Opus 4.8 **FIX**, and Kimi K3 **GO**. The coordinator
-reproduced the two concrete blocker classes in source: descriptor omission
-could downgrade a clear-capable call, and a frozen-but-valid `TICKS` pair could
-still be accompanied by watchdog refresh. This correction narrows forced
-eligibility to the refused-known set `F = K \ C`, makes verified tick advance a
-watchdog-kick prerequisite, and pins capacity, display, idle, and output-release
-bounds. This candidate changes authority, failure response, state transitions,
-trusted UI, and the page/resource envelope, so no prior review transfers. Do
-not implement the forced tier until this exact remediation receives one final
-workflow-required short simultaneous GPT-5.6 SOL / Opus 4.8 / Kimi K3
-architecture re-review and a recorded favorable owner stage decision. Current
-hard refusal remains the default and rollback.
+denial-of-service residual. Review of commit `76c01227` returned GPT-5.6 SOL
+**FIX** and Claude Opus 4.8 **GO**; Kimi K3 hit the 15-minute hard limit without
+a report, which remains an honest gap rather than a retry. The coordinator
+reproduced GPT's two concrete hardware-boundary traces: the current
+non-secure-addressable IWDG can be reloaded without tick progress, and a
+non-secure DMA bus master can observe response writes before post-write scrub.
+This correction requires Secure-only IWDG ownership, defines the reserved
+pre-write check as the irreversible release point, limits eligibility to the
+refused-known set `F = K \ C`, and closes the PIN-arm, complete-grid,
+combined-cap, and rate-preflight ambiguities from the same wave. This candidate
+changes authority, failure response, state transitions, trusted UI, and the
+page/resource envelope, so no prior review transfers. Do not implement the
+forced tier until this exact remediation receives one final workflow-required
+short simultaneous GPT-5.6 SOL / Opus 4.8 / Kimi K3 architecture re-review and
+a recorded favorable owner stage decision. Current hard refusal remains the
+default and rollback.
 
 ### 1. Product decision and conservative closures
 
@@ -867,11 +870,17 @@ This v2 candidate closes the reviewed ambiguities conservatively:
 | Other commands | Batch (including one element), off-chain, EIP-712, and rotation/deployment are fatal |
 | Semantic exclusions | Safe, CoW, MultiSend, delegatecall, `approveHash`, `setPreSignature`, contract creation, and malformed/short protected selectors are fatal |
 | Friendly formatting | None in the first forced tier; raw representation is authoritative |
-| Feature activation | Candidate is production-disabled pending favorable architecture/implementation review and independent release gates |
+| Feature activation | New positive `erc7730-forced-blind` secure-firmware feature, default off; no dev/test alias or missing flag enables it. The production bundle omits it pending favorable architecture/implementation review and independent release gates |
 
 The native ERC-20 shortcut mentioned by the old candidate is not part of
 forced blind and is deferred to a separate design. It cannot broaden this
 eligible set.
+
+`secure/src/nsc/mod.rs` owns a compile-time feature fence. A production build
+with `erc7730-forced-blind` is rejected unless the production IWDG, Secure IWDG
+attribution, physical-button trusted UI, and fixed catalogue artifacts are all
+selected. Turning the feature off restores today's refusal without changing
+persistent state or wire interpretation.
 
 ### 2. Closed handler-owned state and routing
 
@@ -999,8 +1008,13 @@ check, including:
 - double-read page-123 counters, an FI-protected read-only storage-capacity
   receipt, exact `newOffchainCount`, reconstructed steady-state Type-2
   calldata, the complete transcript, numeric widths and final digest;
+- the existing independently repeated combined few-time-key gate
+  `userop_cap_ok(max(local_offchain, last_userop), userop_sigs)`, with every
+  input frozen for the final recheck;
 - `sign_rate::signs_this_session() < sign_rate::MAX_SIGNS_PER_SESSION`
-  (`250`), with the observed count frozen for an independent pre-sign recheck;
+  (`250`), with the observed count frozen for an independent pre-sign recheck,
+  and completion of the current minimum-sign-interval wait before the attempt
+  is charged;
 - exactly-one handler-owned canonical gas page and complete two-page ERC-8213
   digest;
 - stack/page/resource preflight and all CFI stage initialization.
@@ -1023,7 +1037,12 @@ corrupt page shapes. The handler freezes and independently rechecks that
 receipt and the rate-count receipt immediately before
 `c10_sign_verified_with_progress` calls `sign_rate::pre_sign()`. Hardware write
 failures remain fail closed, but a predictable cap or compaction-capacity miss
-cannot occur after warning.
+cannot occur after warning. A bounded `sign_rate` preflight helper performs the
+existing minimum-interval wait and returns without charging the sign counter;
+the later `pre_sign()` remains the sole counter charge and rechecks both the
+frozen count and elapsed interval. Thus the severe warning is not followed by
+a predictable rate wait or cap refusal. Any tick disagreement in either helper
+is fatal and, in production, stops the now-Secure IWDG refresh.
 
 A non-inlined preflight helper owns the 4,352-byte reconstructed
 `ExecuteCallData`, returns only its digest and the fixed transcript inputs, and
@@ -1057,7 +1076,7 @@ digits, split without truncation. The exact final order is:
 | 1 | Account index, slot owner index, and full device-derived signer |
 | 2 | Exact `newOffchainCount` encoded as all 16 lowercase hexadecimal digits |
 | 3 | Full raw target |
-| 4 | Exact numeric chain ID |
+| 4 | Exact chain ID as all 16 lowercase hexadecimal digits |
 | 5 | One canonical exact gas-triple page, produced only by the handler |
 | 6 | Full pinned EntryPoint v0.6 address |
 | 7 | `Single Type-2`, `initCode = EMPTY`, raw selector, and exact calldata length |
@@ -1077,15 +1096,21 @@ The previously ambiguous compact pages have these exact 16-column by four-row
 layouts; every unused cell is an ASCII space and any width failure is a fatal
 pre-warning preflight result:
 
+- page 0 is exactly `! FORCED BLIND`, `UNVERIFIED CALL`, `RAW DATA ONLY`, and
+  `> inspect` on rows 0..3.
 - page 1 row 0 is `A{account_index} O{owner_index}` in decimal. The wire bounds
   are account `0..=255` and owner `1..=4,194,304`, so the maximum row occupies
   13 cells. Rows 1, 2, and 3 contain respectively the first 7, next 8, and last
   5 signer bytes as 14, 16, and 10 lowercase hexadecimal characters; row 1 is
   prefixed `S:`. This displays all 20 device-derived signer bytes without
   truncation.
+- page 2 is `OFFCHAIN COUNT` on row 0 and all 16 big-endian lowercase
+  hexadecimal count digits on row 1.
 - pages 3 and 6 use row 0 labels `TARGET` and `ENTRYPOINT`; rows 1, 2, and 3
   contain the first 8, next 8, and last 4 address bytes as 16, 16, and 8
   lowercase hexadecimal characters.
+- page 4 is `CHAIN ID HEX` on row 0 and all 16 big-endian lowercase
+  hexadecimal chain-ID digits on row 1.
 - page 5 is exactly the existing canonical handler gas page: `Call:{decimal}`,
   `Verify:{decimal}`, `PreVer:{decimal}`, and `Total:{decimal}` on rows 0..3.
   The canonical gas helper returns failure if any exact decimal does not fit;
@@ -1094,6 +1119,21 @@ pre-warning preflight result:
   `Sel: 0x????????`, and `Data: {decimal} B` on rows 0..3. The selector uses
   eight lowercase hexadecimal characters and the decimal data length is at
   most `MAX_TX_LEN = 4,096`.
+- each pair 8–9, 10–11, 12–13, 14–15, 16–17, 18–19, and 20–21 uses labels
+  `VALUE`, `NONCE`, `MAX FEE`, `MAX PRIORITY`, `CALL GAS`, `VERIFY GAS`, and
+  `PREVER GAS` respectively. The first page row 0 is `{LABEL} 1/2`, rows 1 and
+  2 contain bytes 0..8 and 8..16 as 16 lowercase hexadecimal characters, and
+  row 3 is `> next`. The second page uses `{LABEL} 2/2`, bytes 16..24 and
+  24..32 on rows 1 and 2, and `> next` on row 3.
+- page 22 uses `PAYMASTER EMPTY` on row 0 and bytes 0..16 of
+  `SHA256_EMPTY_paymaster` on rows 1 and 2. Page 23 uses `PAY HASH 2/2`, the
+  remaining bytes on rows 1 and 2, and `> next` on row 3. The empty-state
+  sentinel and all 32 digest bytes are independently proved.
+- pairs 24–25 and 26–27 use the same exact four-chunk scheme with labels
+  `ERC8213` and `FINAL DIGEST` for the complete ERC-8213 and final Type-2
+  digests.
+- page 28 is exactly `FORCED BLIND`, `UNVERIFIED`, `L=Cancel`, and
+  `R=Hold to Sign` on rows 0..3.
 
 The 29-page fixed set leaves two pages of the 31-page bound unused. There are
 no friendly decimal or semantic summary pages in PQ1. If any exact value,
@@ -1102,12 +1142,12 @@ warning. Every page participates in scroll-to-end; the final page repeats the
 weaker trust tier.
 
 The forced flow does not also insert the ordinary conditional nonce-lane page:
-pages 10–11 display and bind the complete 256-bit nonce and are strictly stronger
-than the compact high-192-only lane page. The handler must independently prove
-those two exact pages from the signed nonce. If that proof cannot replace the
-existing compact-lane proof without weakening its FI structure, the page schema
-must be re-budgeted and reviewed before implementation; silent duplication or a
-skipped nonce proof is not permitted.
+pages 10–11 display and bind the complete 256-bit nonce and are strictly
+stronger than the compact high-192-only lane page. The handler independently
+proves those two exact pages from the signed nonce with a forced-flow-specific
+completion/final-set proof. Failure to preserve that FI structure is fatal;
+silent duplication, compact-lane substitution, re-budgeting, or a skipped
+nonce proof is not permitted by this frozen schema.
 
 Only one `Pages` value may exist at a time. The warning uses a fixed read-only
 `&'static [Page]` in flash, while the complete final transcript is already
@@ -1164,8 +1204,13 @@ The owner selected the following exact volatile policy on 2026-07-22:
    coded; all three codewords have pairwise 64-bit Hamming distance 32. The
    all-zero BSS value is the explicitly enumerated fail-closed `Disarmed`
    exception. Every other pair, including either single word stuck at zero,
-   is fatal. Zeroize selects `Disarmed`, and `mark_unlocked` is the sole
-   `Armed` writer.
+   is fatal. Zeroize selects `Disarmed`. Generic `mark_unlocked` does not arm
+   forced blind because it is also used by the physically attended first-boot
+   auto-unlock path, which has not completed a PIN unlock. A separate private
+   `arm_forced_attempt_after_pin` transition is called only after successful
+   PIN verification and is the sole `Armed` writer. First boot, provisioning,
+   test helpers, and every non-PIN unlock remain `Disarmed`; source-call-graph
+   tests pin that exclusivity.
 2. The handler charges the attempt only after every deterministic preflight,
    transcript construction, resource check, and CFI initialization succeeds,
    immediately before it displays the first severe-warning page. Charging is
@@ -1194,6 +1239,22 @@ The owner selected the following exact volatile policy on 2026-07-22:
    the independent LSI-clocked production IWDG resets and disarms the attempt.
    Tick faults are sticky, not self-healed. Builds without production IWDG must
    refuse forced authority on bad tick health and remain test evidence only.
+
+   Forced authority additionally requires **Secure-only watchdog ownership**.
+   Before non-secure boot, the production register image adds IWDG to
+   `GTZC1_TZSC_SECCFGR1` bit 7, verifies the write, locks the TZSC image, and
+   accesses the peripheral only through its Secure alias. A compile-time fence
+   rejects any production forced-blind build without `iwdg` and that exact
+   Secure attribution. Silicon evidence must show that both non-secure CPU
+   writes and a preconfigured non-secure GPDMA channel cannot reload IWDG.
+   After `hw::iwdg::init`, every `KEY_RELOAD` site routes through the verified
+   tick-advance gate; the one initialization reload occurs before NS boot and
+   before any forced attempt can exist. This makes the existing
+   [#79](https://github.com/EthereumPhone/PQ1/issues/79) IWDG-attribution
+   closure a forced-blind prerequisite rather than a deferrable production
+   nicety. Missing attribution, lock, alias, or call-site census keeps forced
+   authority compile-disabled; missing silicon denial evidence keeps it
+   production-release-disabled.
 
    Thread-mode forced snapshots read and validate both words with an
    interrupt-free or equivalently retry-safe primitive so a legitimate SysTick
@@ -1229,15 +1290,21 @@ The owner selected the following exact volatile policy on 2026-07-22:
    the durable tally, but before the first non-secure write, retain the full
    `MAX_SIGN_RESPONSE_LEN` pointer validation and independently bind the exact
    4,148-byte forced extent, tick pair/health, deadline/CFI, and require elapsed
-   `< 299,000`. The fixed publication loop must have a
+   `< 299,000`. That final pre-write gate is the explicit **irreversible release
+   authorization point**: the design assumes a hostile non-secure bus master
+   may observe each byte as it is written and makes no synchronous-CMSE or
+   post-write-revocation claim. The fixed publication loop must have a
    release-shaped post-LTO disassembly, cycle measurement, and hardware bound
-   below 1,000 ms. Check the deadline again after the final write and before
-   returning. Because the CMSE call is synchronous, non-secure CPU code cannot
-   observe the buffer until return; if the post-write check unexpectedly
-   expires, scrub exactly the extent written and return an error. Expiry after
-   key use still retains the durable tally and releases no bytes. If the fixed
-   publication cannot be bounded below the reserve, the feature stays disabled
-   and the reserve/schema must be re-reviewed.
+   below 1,000 ms from that gate through the final byte, proving the complete
+   usable response appears before 300,000 ms.
+
+   Expiry at any check before this irreversible gate withholds output while
+   retaining the durable tally after key use. A post-write deadline check is a
+   diagnostic only. On an unexpected overrun the handler scrubs the exact
+   current buffer extent, records a fatal error, and resets, but documentation
+   and tests must not claim that scrub revokes bytes already copied by DMA. If
+   the fixed publication cannot be bounded below the reserve, the feature stays
+   disabled and the reserve/schema must be re-reviewed.
 6. Cancel, decline, idle wipe, lock, reset, exception, parse or
    resource failure, CFI/FI disagreement, or any other return path destroys the
    request permit and both consent receipts. The attempt remains spent for that
@@ -1346,21 +1413,29 @@ owner amendments. A later implementation/merge packet must include:
 - transcript/full final-digest differential and exact 29-page golden grids;
 - gas zero/one/two/near-match/full-buffer/permutation tests in the complete
   handler glue;
-- frozen/rechecked session-rate and page-123 capacity receipts, including the
-  249/250 boundary, present/new slots, full but safely compactable pages,
-  corrupt/over-cap projections, and proof of room for both required appends;
+- frozen/rechecked session-rate, minimum-interval, combined few-time-key, and
+  page-123 capacity receipts, including the 249/250 boundary, present/new
+  slots, full but safely compactable pages, corrupt/over-cap projections, and
+  proof of room for both required appends;
 - warning/final cancel, idle, replay, out-of-order, stale-receipt, exception
   and reset cleanup, plus explicit evidence that USB disconnect is not an
   authority signal;
+- call-graph evidence that only successful PIN verification can arm the
+  attempt; first-boot auto-unlock, provisioning and test helpers stay Disarmed;
 - a scripted non-auto-confirm UI configuration;
 - selected prompt-policy exhaustion, deadline and reset tests, including
   complement-pair wraparound, stuck primary/check bits, skipped/frozen tick
   advance, no watchdog kick on bad health, SysTick-stall-to-IWDG reset, the
   independent idle/forced timers, and measured interrupt-masked undercount
   windows below the production watchdog minimum;
+- exact production GTZC IWDG bit-7 attribution, Secure-alias access, locked
+  readback, complete post-init `KEY_RELOAD` census, compile fences, and silicon
+  denial receipts for both non-secure CPU and preconfigured GPDMA reloads;
 - the exact 4,148-byte forced response, pre-release `< 299,000` gate,
-  post-write deadline check and scrub-on-expiry behavior, plus a release-shaped
-  fixed-publication hardware bound below `FORCED_RELEASE_RESERVE_MS = 1,000`;
+  explicit irreversible-release semantics under hostile DMA observation,
+  diagnostic post-write check and non-revoking scrub behavior, plus a
+  release-shaped fixed-publication hardware bound below
+  `FORCED_RELEASE_RESERVE_MS = 1,000`;
 - release-shaped Thumb link/map, post-LTO disassembly, MSPLIM/exception
   headroom and hardware stack high-water;
 - FI skip/stuck-at campaigns over classifier, exact-membership receipt,

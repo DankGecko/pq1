@@ -54,16 +54,20 @@
 > deadline and accepted the fail-closed host-denial residual on 2026-07-22.
 > Earlier waves replaced Bloom authority and identified the full authenticated
 > inventory, gas-proof ordering, state-codeword, and SysTick-bound precision.
-> The latest short wave returned GPT-5.6 SOL **FIX**, Opus 4.8 **FIX**, and Kimi
-> K3 **GO**; the coordinator reproduced the descriptor-omission downgrade and
-> frozen-tick/watchdog findings. The corrected freeze now limits eligibility to
-> the derived refused-known set `F = K \ C` (3,214 tuples / 546 groups /
-> 32,528 bytes), so withholding metadata for any of the 1,366 clear-capable
-> tuples remains hard refusal. It also gates every IWDG kick on verified
-> complement-pair tick advance, pins rate/page-123 preflight capacity, exact
-> page rows, the idle/deadline interaction, and a 1,000 ms reserve around the
-> fixed 4,148-byte output. One final short architecture wave is pending; the
-> P73K artifact and forced flow remain unimplemented, and no forced-blind
+> A subsequent frozen identity returned GPT-5.6 SOL **FIX** and Opus 4.8
+> **GO**; Kimi K3 reached the 15-minute hard limit without a report, recorded as
+> an honest gap rather than retried. The coordinator reproduced GPT's two
+> hardware-boundary traces: non-secure IWDG reload could defeat a frozen tick,
+> and a non-secure DMA master can observe output writes before a post-write
+> scrub. The current correction limits eligibility to the derived refused-known
+> set `F = K \ C` (3,214 tuples / 546 groups / 32,528 bytes), preserves hard
+> refusal for all 1,366 clear-capable tuples on metadata omission, requires
+> Secure-only IWDG ownership under [#79](https://github.com/EthereumPhone/PQ1/issues/79),
+> and makes the `<299,000` pre-write check the irreversible release point backed
+> by a measured sub-1,000 ms fixed 4,148-byte publication. It also pins
+> PIN-only arming, rate/combined-cap/page-123 preflight, every 29-page grid, and
+> tick/deadline behavior. A final short re-review of that corrected identity is
+> pending; P73K and the forced flow remain unimplemented, and no forced-blind
 > authority exists before that gate. The materially remediated current tree is
 > host, codegen and QEMU green; optimized
 > development inspection is favorable but is
