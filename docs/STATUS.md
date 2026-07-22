@@ -49,14 +49,16 @@
 > refusal remains unchanged. The first forced-blind architecture identity and
 > the first current-refusal implementation identity both completed as
 > **NO-GO**; the conservative v2 forced-blind candidate is unimplemented,
-> unreviewed and blocked on the owner's exact prompt-abuse budget/cooldown/
-> deadline/reset decision. The materially remediated current tree is host,
+> unreviewed, and frozen for a fresh architecture gate after the owner selected
+> exactly one attempt per PIN unlock plus a 300-second absolute deadline and
+> accepted the fail-closed host-denial residual on 2026-07-22. The materially
+> remediated current tree is host,
 > codegen and QEMU green; optimized development inspection is favorable but is
 > not executable FI, a production profile, or a hardware stack/high-water
 > bound. The remediated current-refusal phase completed its exact three-reviewer
 > wave and landed; this does not authorize the separate forced-blind design.
-> Follow the live campaign
-> ledger in [`work-todo.md`](work-todo.md#pq1-erc-7730-productization-campaign--owner-direction-2026-07-16),
+> Follow the live campaign in GitHub issue
+> [`#329`](https://github.com/EthereumPhone/PQ1/issues/329),
 > the architecture record in
 > [`clear-signing-pq1-forced-blind-architecture-2026-07-16.md`](security/adversarial-review/findings/clear-signing-pq1-forced-blind-architecture-2026-07-16.md),
 > and the implementation assessment in

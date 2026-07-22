@@ -823,14 +823,16 @@ the prompt-abuse policy, Partner A's incomplete independent reproduction of the
 handler-gas differential gap, and the stage-impact disagreement for the
 two-receipt mechanism. None may be converted into approval by reviewer count.
 
-## PQ1 forced-blind material redline candidate v2 — NOT REVIEWED
+## PQ1 forced-blind material redline candidate v2 — FROZEN FOR REVIEW
 
-**Status:** material replacement candidate only. It changes authority,
-failure response, state transitions, trusted UI, and the page/resource
-envelope, so the prior review cannot transfer. Do not implement the forced
-tier until this exact candidate is completed, frozen, and receives fresh
-mutually withheld first passes, symmetric cross-adjudication, and a recorded
-owner stage decision. Current hard refusal remains the default and rollback.
+**Status:** completed material replacement candidate. The owner selected the
+remaining prompt-abuse semantics on 2026-07-22, including the fail-closed host
+denial-of-service residual. This candidate changes authority, failure response,
+state transitions, trusted UI, and the page/resource envelope, so no prior
+review transfers. Do not implement the forced tier until this exact candidate
+receives the workflow-required short simultaneous GPT-5.6 SOL / Opus 4.8 /
+Kimi K3 architecture review and a recorded favorable owner stage decision.
+Current hard refusal remains the default and rollback.
 
 ### 1. Product decision and conservative closures
 
@@ -1013,22 +1015,35 @@ implementation must prove this across `SecureState`, handler guards, reset,
 panic/zeroize and interleaving paths; a stack-local claim by itself is not
 evidence.
 
-### 6. Unresolved owner decision — prompt abuse
+### 6. Owner-selected prompt-abuse policy
 
-The exact secure-side abuse policy remains intentionally open because the
-reviewers disagreed and each choice has a material consequence:
+The owner selected the following exact volatile policy on 2026-07-22:
 
-- a volatile per-unlock attempt budget/cooldown bounds habituation and activity
-  extension but lets a hostile host deny the option until re-unlock;
-- an absolute forced-flow deadline bounds button-driven lifetime extension but
-  needs FI-safe monotonic tick and wraparound semantics;
-- accepting unlimited per-request prompts leaves a documented habituation and
-  unlocked-window residual that Partner B treats as architecture-blocking.
+1. Each successful PIN unlock arms exactly one forced-blind attempt. This is
+   SRAM-only session state, not a saved preference or reusable permission.
+2. The handler charges the attempt only after every deterministic preflight,
+   transcript construction, resource check, and CFI initialization succeeds,
+   immediately before it displays the first severe-warning page.
+3. There is no separate cooldown. Once charged, no second forced warning may
+   be displayed during that unlock session, regardless of whether the first
+   flow signs, is cancelled, or fails.
+4. A 300,000 ms absolute deadline starts when the attempt is charged and covers
+   the warning, raw transcript, both receipts, all final rechecks, and signature
+   release. Physical-button activity does not extend it. The implementation
+   uses FI-voted reads of the secure SysTick counter and a wrapping subtraction;
+   disagreement or an elapsed value greater than the bound is fatal.
+5. Cancel, decline, idle wipe, lock, reset, disconnect, exception, parse or
+   resource failure, CFI/FI disagreement, or any other return path destroys the
+   request permit and both consent receipts. The attempt remains spent for that
+   unlock session. Ordinary clear signing may continue after a cancellation.
+6. Lock, idle wipe, reset, and power loss preserve no grant. Only a new
+   successful PIN unlock re-arms one attempt.
 
-Before the v2 digest can be frozen for favorable review, the owner must select
-exact budget/cooldown/deadline/reset semantics and explicitly accept the
-fail-closed DoS or habituation consequence. No implementation should guess a
-numeric budget.
+The accepted residual is fail-closed host denial of service: a hostile or
+faulty companion can consume the sole warning opportunity and force the user
+to lock and enter the PIN again before another forced-blind request. It cannot
+obtain a signature, bypass either consent, create persistent authority, or
+train the user with repeated forced warnings in one unlock session.
 
 ### 7. Gas ownership and independent hardenings
 
