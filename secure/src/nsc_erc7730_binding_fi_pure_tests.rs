@@ -138,6 +138,42 @@ fn proof_helpers_recompute_membership_and_binding_twice() {
 }
 
 #[test]
+fn forced_eligibility_is_a_distinct_affirmative_two_pass_proof() {
+    let start = ERC7730_GLUE
+        .find("pub fn prove_forced_eligible_contract_call(")
+        .expect("missing forced-eligible proof helper");
+    let end = ERC7730_GLUE[start..]
+        .find("#[cfg(test)]\nmod known_call_tests")
+        .map(|offset| start + offset)
+        .expect("missing forced-eligible helper end anchor");
+    let helper = &ERC7730_GLUE[start..end];
+
+    assert_eq!(
+        count_substr(helper, "ForcedEligibleSet::from_bytes("),
+        2,
+        "each pass must strictly parse the complete P73K artifact"
+    );
+    assert_eq!(
+        count_substr(helper, ".contains("),
+        2,
+        "each pass must independently prove exact tuple membership"
+    );
+    assert_eq!(
+        count_substr(helper, "known_calls::may_contain("),
+        2,
+        "each pass must independently require all-known Bloom positivity"
+    );
+    assert!(helper.contains("core::hint::black_box(member_a == member_b)"));
+    assert!(helper.contains("core::hint::black_box(bloom_a == bloom_b)"));
+    assert!(helper.contains("core::ptr::write_volatile(verdict_out, eligible_verdict)"));
+    assert!(!helper.contains("prove_unknown_contract_call("));
+    assert!(!helper.contains("!pqsigner_erc7730::known_calls::may_contain"));
+
+    assert!(ERC7730_GLUE.contains("pub(crate) const CFI_FORCED_ELIGIBLE_EXPECTED"));
+    assert!(ERC7730_GLUE.contains("const CFI_KNOWN_QUERY_A"));
+}
+
+#[test]
 fn every_signing_surface_requires_volatile_verdict_and_caller_cfi() {
     for (source, proof, expected) in [
         (

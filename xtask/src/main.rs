@@ -12,6 +12,7 @@
 //!
 //! The `gen-*` commands take `--check` (rebuild-in-memory + drift-diff) for CI.
 
+use std::collections::BTreeSet;
 use std::env;
 use std::fmt::Write as _;
 use std::fs;
@@ -69,6 +70,8 @@ Subcommands:
                           [--e2e-input-dir PATH] [--e2e-out-binary PATH]
                           [--known-calls-out PATH]
                           [--known-calls-e2e-out PATH]
+                          [--forced-eligible-out PATH]
+                          [--forced-eligible-e2e-out PATH]
                           [--status-out PATH] [--status-e2e-out PATH]
       Compile the production ERC-7730 catalogue from
       `secure/data/erc7730-registry/registry` plus
@@ -82,6 +85,8 @@ Subcommands:
         secure/data/erc7730.review.txt
         secure/data/erc7730-known-calls.bloom
         secure/data/erc7730-known-calls-e2e.bloom
+        secure/data/erc7730-forced-eligible.set
+        secure/data/erc7730-forced-eligible-e2e.set
       With --check: rebuild in-memory and compare against the checked-in
       artifacts, including the capability-defining production/E2E ERC-20
       companion blobs and their exact root sections; exit non-zero on drift.
@@ -320,6 +325,8 @@ const ERC7730_DEFAULT_STATUS_E2E_OUT: &str = "tools/companion-stub/erc7730_statu
 const ERC7730_DEFAULT_REVIEW: &str = "secure/data/erc7730.review.txt";
 const ERC7730_DEFAULT_KNOWN_CALLS: &str = "secure/data/erc7730-known-calls.bloom";
 const ERC7730_DEFAULT_KNOWN_CALLS_E2E: &str = "secure/data/erc7730-known-calls-e2e.bloom";
+const ERC7730_DEFAULT_FORCED_ELIGIBLE: &str = "secure/data/erc7730-forced-eligible.set";
+const ERC7730_DEFAULT_FORCED_ELIGIBLE_E2E: &str = "secure/data/erc7730-forced-eligible-e2e.set";
 const ERC7730_COMPANION_GUIDE: &str = "docs/companion/companion-erc7730-implementation-guide.md";
 const ERC7730_COMPANION_INTEGRATION: &str = "docs/companion/erc7730-integration.md";
 const ERC7730_REGISTRY_README: &str = "secure/data/erc7730-registry/README.md";
@@ -337,6 +344,15 @@ const ERC7730_INTEGRATION_FACTS_END: &str = "<!-- END XTASK-VERIFIED ERC7730 INT
 const ERC7730_REGISTRY_RECEIPT_BEGIN: &str =
     "<!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->";
 const ERC7730_REGISTRY_RECEIPT_END: &str = "<!-- END XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->";
+
+type Erc7730CallKey = (u64, [u8; 20], [u8; 4]);
+
+const XTASK_P730_HEADER_LEN: usize = 32;
+const XTASK_P730_ENTRY_LEN: usize = 72;
+const XTASK_P73K_MAGIC: &[u8; 4] = b"P73K";
+const XTASK_P73K_SCHEMA: u16 = 1;
+const XTASK_P73K_HEADER_LEN: usize = 16;
+const XTASK_P73K_GROUP_LEN: usize = 36;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Erc20CapabilityReceipt {
@@ -433,6 +449,8 @@ struct Erc7730Args {
     e2e_out_binary: Option<PathBuf>,
     known_calls_out: Option<PathBuf>,
     known_calls_e2e_out: Option<PathBuf>,
+    forced_eligible_out: Option<PathBuf>,
+    forced_eligible_e2e_out: Option<PathBuf>,
     status_out: Option<PathBuf>,
     status_e2e_out: Option<PathBuf>,
 }
@@ -451,6 +469,11 @@ fn validate_erc7730_probe_output_isolation(args: &Erc7730Args) -> Result<(), Str
         ("--e2e-out-binary", args.e2e_out_binary.is_some()),
         ("--known-calls-out", args.known_calls_out.is_some()),
         ("--known-calls-e2e-out", args.known_calls_e2e_out.is_some()),
+        ("--forced-eligible-out", args.forced_eligible_out.is_some()),
+        (
+            "--forced-eligible-e2e-out",
+            args.forced_eligible_e2e_out.is_some(),
+        ),
         ("--status-out", args.status_out.is_some()),
         ("--status-e2e-out", args.status_e2e_out.is_some()),
     ] {
@@ -521,6 +544,20 @@ fn parse_erc7730_args(args: &[String]) -> Result<Erc7730Args, String> {
                 out.known_calls_e2e_out = Some(PathBuf::from(
                     args.get(i)
                         .ok_or("--known-calls-e2e-out requires a value")?,
+                ));
+            }
+            "--forced-eligible-out" => {
+                i += 1;
+                out.forced_eligible_out = Some(PathBuf::from(
+                    args.get(i)
+                        .ok_or("--forced-eligible-out requires a value")?,
+                ));
+            }
+            "--forced-eligible-e2e-out" => {
+                i += 1;
+                out.forced_eligible_e2e_out = Some(PathBuf::from(
+                    args.get(i)
+                        .ok_or("--forced-eligible-e2e-out requires a value")?,
                 ));
             }
             "--status-out" => {
@@ -660,6 +697,12 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
     let known_calls_e2e_out = parsed
         .known_calls_e2e_out
         .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_KNOWN_CALLS_E2E));
+    let forced_eligible_out = parsed
+        .forced_eligible_out
+        .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_FORCED_ELIGIBLE));
+    let forced_eligible_e2e_out = parsed
+        .forced_eligible_e2e_out
+        .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_FORCED_ELIGIBLE_E2E));
     let status_out = parsed
         .status_out
         .unwrap_or_else(|| workspace_root.join(ERC7730_DEFAULT_STATUS_OUT));
@@ -768,6 +811,14 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if let Err(error) = xtask_reconcile_forced_partition("production", &prod, &prod_status) {
+        eprintln!("error: {error}");
+        return ExitCode::FAILURE;
+    }
+    if let Err(error) = xtask_reconcile_forced_partition("e2e", &e2e, &e2e_status) {
+        eprintln!("error: {error}");
+        return ExitCode::FAILURE;
+    }
 
     if parsed.check {
         // CI mode: diff against checked-in artifacts.
@@ -817,6 +868,22 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
             eprintln!("DRIFT: {e}");
             drift = true;
         }
+        if let Err(e) = diff_bytes(
+            "erc7730-forced-eligible.set",
+            &forced_eligible_out,
+            &prod.forced_eligible_set,
+        ) {
+            eprintln!("DRIFT: {e}");
+            drift = true;
+        }
+        if let Err(e) = diff_bytes(
+            "erc7730-forced-eligible-e2e.set",
+            &forced_eligible_e2e_out,
+            &e2e.forced_eligible_set,
+        ) {
+            eprintln!("DRIFT: {e}");
+            drift = true;
+        }
         // db_roots.rs is owned by `cargo run -p dbgen` (it bakes other roots
         // besides this composed surface). Validate the exact production/E2E
         // ERC-20 sections and the exact ERC-7730 security suffix together.
@@ -831,8 +898,14 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
             e2e.leaf_count,
             prod.provenance,
             &prod_status,
+            prod.forced_eligible_set.len(),
+            prod.forced_eligible_group_count,
+            prod.forced_eligible_count,
             e2e.provenance,
             &e2e_status,
+            e2e.forced_eligible_set.len(),
+            e2e.forced_eligible_group_count,
+            e2e.forced_eligible_count,
         ) {
             eprintln!("DRIFT: {e}");
             drift = true;
@@ -928,6 +1001,14 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
         eprintln!("error: write {}: {e}", known_calls_e2e_out.display());
         return ExitCode::FAILURE;
     }
+    if let Err(e) = fs::write(&forced_eligible_out, &prod.forced_eligible_set) {
+        eprintln!("error: write {}: {e}", forced_eligible_out.display());
+        return ExitCode::FAILURE;
+    }
+    if let Err(e) = fs::write(&forced_eligible_e2e_out, &e2e.forced_eligible_set) {
+        eprintln!("error: write {}: {e}", forced_eligible_e2e_out.display());
+        return ExitCode::FAILURE;
+    }
     if let Err(e) = fs::write(&status_out, prod_status) {
         eprintln!("error: write {}: {e}", status_out.display());
         return ExitCode::FAILURE;
@@ -959,6 +1040,16 @@ fn cmd_gen_erc7730_descriptors(args: &[String]) -> ExitCode {
         "wrote {} ({} known calls)",
         known_calls_e2e_out.display(),
         e2e.known_call_count,
+    );
+    eprintln!(
+        "wrote {} ({} refused-known tuples)",
+        forced_eligible_out.display(),
+        prod.forced_eligible_count,
+    );
+    eprintln!(
+        "wrote {} ({} refused-known tuples)",
+        forced_eligible_e2e_out.display(),
+        e2e.forced_eligible_count,
     );
     eprintln!("wrote {}", out_review.display());
     eprintln!("wrote {}", status_out.display());
@@ -1016,6 +1107,426 @@ fn diff_text(label: &str, path: &Path, fresh: &str) -> Result<(), String> {
     ))
 }
 
+/// Independently reconcile the generated clear-capable and refused-known
+/// partitions against the exact P730/P73K/P73S/Bloom bytes. This deliberately
+/// does not call dbgen's partition checker: the drift gate is a second parser
+/// and a second derivation of the release relation.
+fn xtask_reconcile_forced_partition(
+    label: &str,
+    result: &dbgen::erc7730::Erc7730BuildResult,
+    status_bytes: &[u8],
+) -> Result<(), String> {
+    let status = pqsigner_erc7730::catalogue_status::CatalogueStatusV1::from_bytes(status_bytes)
+        .map_err(|error| format!("{label}: strict P73S parse failed: {error:?}"))?;
+    let clear = xtask_recover_clear_calls_from_p730(&result.blob)
+        .map_err(|error| format!("{label}: independent P730 parse failed: {error}"))?;
+    let forced = xtask_decode_p73k(&result.forced_eligible_set)
+        .map_err(|error| format!("{label}: independent P73K parse failed: {error}"))?;
+
+    let known = result
+        .known_calls
+        .iter()
+        .copied()
+        .collect::<BTreeSet<Erc7730CallKey>>();
+    if known.len() != result.known_calls.len()
+        || !result.known_calls.iter().copied().eq(known.iter().copied())
+    {
+        return Err(format!(
+            "{label}: dbgen exact known-call vector is not canonical sorted/unique"
+        ));
+    }
+    if !clear.is_subset(&known) {
+        return Err(format!(
+            "{label}: P730 clear-capable set is not a subset of exact K"
+        ));
+    }
+    if !clear.is_disjoint(&forced) {
+        return Err(format!("{label}: P730 C intersects decoded P73K F"));
+    }
+    let expected_forced = known.difference(&clear).copied().collect::<BTreeSet<_>>();
+    if forced != expected_forced {
+        return Err(format!(
+            "{label}: decoded P73K does not equal exact K \\ C (decoded={}, expected={})",
+            forced.len(),
+            expected_forced.len()
+        ));
+    }
+    let reconstructed = clear.union(&forced).copied().collect::<BTreeSet<_>>();
+    if reconstructed != known {
+        return Err(format!("{label}: C union F does not reconstruct exact K"));
+    }
+
+    let known_hash = xtask_known_call_set_hash(&reconstructed)?;
+    if known_hash != result.known_call_set_hash
+        || known_hash != status.known_call_set_sha256
+        || usize::try_from(status.known_call_count).ok() != Some(reconstructed.len())
+        || result.known_call_count != reconstructed.len()
+    {
+        return Err(format!(
+            "{label}: reconstructed K count/hash disagrees with dbgen or P73S"
+        ));
+    }
+    let catalogue_sha256: [u8; 32] = Sha256::digest(&result.blob).into();
+    if usize::try_from(status.catalogue_blob_size).ok() != Some(result.blob.len())
+        || status.catalogue_sha256 != catalogue_sha256
+    {
+        return Err(format!("{label}: P73S does not bind the exact P730 bytes"));
+    }
+    let bloom_sha256: [u8; 32] = Sha256::digest(result.known_calls_bloom).into();
+    if usize::try_from(status.bloom_size).ok() != Some(result.known_calls_bloom.len())
+        || status.bloom_sha256 != bloom_sha256
+    {
+        return Err(format!(
+            "{label}: P73S does not bind the exact all-known Bloom"
+        ));
+    }
+    for (chain_id, contract, selector) in &reconstructed {
+        if !pqsigner_erc7730::known_calls::may_contain(
+            &result.known_calls_bloom,
+            *chain_id,
+            contract,
+            selector,
+        ) {
+            return Err(format!(
+                "{label}: all-known Bloom has a false negative for reconstructed K tuple chain={chain_id} contract=0x{} selector=0x{}",
+                hex::encode(contract),
+                hex::encode(selector),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn xtask_recover_clear_calls_from_p730(blob: &[u8]) -> Result<BTreeSet<Erc7730CallKey>, String> {
+    use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir, CTX_CONTRACT, CTX_EIP712};
+
+    if blob.len() < XTASK_P730_HEADER_LEN || blob.get(..4) != Some(&b"P730"[..]) {
+        return Err("missing P730 header".to_string());
+    }
+    let version = xtask_read_u32_le(blob, 4, "P730 version")?;
+    let flags = xtask_read_u32_le(blob, 8, "P730 flags")?;
+    let entry_count = usize::try_from(xtask_read_u32_le(blob, 12, "P730 entry count")?)
+        .map_err(|_| "P730 entry count does not fit usize".to_string())?;
+    let ir_pool_off = usize::try_from(xtask_read_u32_le(blob, 16, "P730 IR pool offset")?)
+        .map_err(|_| "P730 IR pool offset does not fit usize".to_string())?;
+    let ir_pool_size = usize::try_from(xtask_read_u32_le(blob, 20, "P730 IR pool size")?)
+        .map_err(|_| "P730 IR pool size does not fit usize".to_string())?;
+    let proof_depth = usize::try_from(xtask_read_u32_le(blob, 24, "P730 proof depth")?)
+        .map_err(|_| "P730 proof depth does not fit usize".to_string())?;
+    let proofs_off = usize::try_from(xtask_read_u32_le(blob, 28, "P730 proofs offset")?)
+        .map_err(|_| "P730 proofs offset does not fit usize".to_string())?;
+    if version != dbgen::erc7730::ERC7730_DB_VERSION || flags != 0 || entry_count == 0 {
+        return Err("unsupported P730 header fields".to_string());
+    }
+    let entries_len = entry_count
+        .checked_mul(XTASK_P730_ENTRY_LEN)
+        .ok_or_else(|| "P730 entry table length overflow".to_string())?;
+    let entries_end = XTASK_P730_HEADER_LEN
+        .checked_add(entries_len)
+        .ok_or_else(|| "P730 entry table end overflow".to_string())?;
+    let ir_pool_end = ir_pool_off
+        .checked_add(ir_pool_size)
+        .ok_or_else(|| "P730 IR pool end overflow".to_string())?;
+    let proofs_len = entry_count
+        .checked_mul(proof_depth)
+        .and_then(|value| value.checked_mul(32))
+        .ok_or_else(|| "P730 proof region length overflow".to_string())?;
+    let expected_end = proofs_off
+        .checked_add(proofs_len)
+        .ok_or_else(|| "P730 proof region end overflow".to_string())?;
+    let expected_depth = if entry_count <= 1 {
+        0
+    } else {
+        usize::BITS as usize - (entry_count - 1).leading_zeros() as usize
+    };
+    if ir_pool_off != entries_end
+        || proofs_off != ir_pool_end
+        || expected_end != blob.len()
+        || proof_depth != expected_depth
+        || proof_depth > pqsigner_erc7730::bundle::MAX_PROOF_DEPTH
+    {
+        return Err("non-canonical P730 regions or proof depth".to_string());
+    }
+
+    let mut clear = BTreeSet::new();
+    let mut next_ir_off = 0usize;
+    let mut previous_key: Option<(u64, [u8; 20], [u8; 32], u8)> = None;
+    for index in 0..entry_count {
+        let base = XTASK_P730_HEADER_LEN
+            .checked_add(
+                index
+                    .checked_mul(XTASK_P730_ENTRY_LEN)
+                    .ok_or_else(|| "P730 entry offset overflow".to_string())?,
+            )
+            .ok_or_else(|| "P730 entry offset overflow".to_string())?;
+        let entry = blob
+            .get(base..base + XTASK_P730_ENTRY_LEN)
+            .ok_or_else(|| format!("P730 entry {index} is truncated"))?;
+        let chain_id = u64::from_le_bytes(
+            entry[0..8]
+                .try_into()
+                .map_err(|_| "P730 chain slice".to_string())?,
+        );
+        let mut contract = [0u8; 20];
+        contract.copy_from_slice(&entry[8..28]);
+        let mut primary_type_hash = [0u8; 32];
+        primary_type_hash.copy_from_slice(&entry[28..60]);
+        let context_kind = entry[60];
+        if !matches!(context_kind, CTX_CONTRACT | CTX_EIP712) || entry[61..64] != [0; 3] {
+            return Err(format!(
+                "P730 entry {index} has invalid context/reserved bytes"
+            ));
+        }
+        let ir_off = usize::try_from(u32::from_le_bytes(
+            entry[64..68]
+                .try_into()
+                .map_err(|_| "P730 IR offset slice".to_string())?,
+        ))
+        .map_err(|_| "P730 IR offset does not fit usize".to_string())?;
+        let ir_len = usize::try_from(u32::from_le_bytes(
+            entry[68..72]
+                .try_into()
+                .map_err(|_| "P730 IR length slice".to_string())?,
+        ))
+        .map_err(|_| "P730 IR length does not fit usize".to_string())?;
+        if ir_off != next_ir_off || ir_len == 0 || ir_len > pqsigner_erc7730::ir::MAX_IR_LEN {
+            return Err(format!("P730 entry {index} has a non-canonical IR range"));
+        }
+        let ir_start = ir_pool_off
+            .checked_add(ir_off)
+            .ok_or_else(|| "P730 IR start overflow".to_string())?;
+        let ir_end = ir_start
+            .checked_add(ir_len)
+            .ok_or_else(|| "P730 IR end overflow".to_string())?;
+        if ir_end > proofs_off {
+            return Err(format!("P730 entry {index} IR exceeds its pool"));
+        }
+        let ir = Erc7730Ir::parse(
+            blob.get(ir_start..ir_end)
+                .ok_or_else(|| format!("P730 entry {index} IR is truncated"))?,
+        )
+        .map_err(|error| format!("P730 entry {index} IR parse failed: {error:?}"))?;
+        let expected_context = if context_kind == CTX_CONTRACT {
+            ContextKind::Contract
+        } else {
+            ContextKind::Eip712
+        };
+        if ir.chain_id != chain_id
+            || ir.contract != contract
+            || ir.context_kind != expected_context
+            || ir.schema_ver != pqsigner_erc7730::ir::SCHEMA_VER
+        {
+            return Err(format!("P730 entry {index} index/IR binding mismatch"));
+        }
+
+        let key = (chain_id, contract, primary_type_hash, context_kind);
+        if previous_key.is_some_and(|previous| key <= previous) {
+            return Err(format!(
+                "P730 entry {index} sort key is not strictly increasing"
+            ));
+        }
+        previous_key = Some(key);
+
+        let mut format_count = 0usize;
+        let mut first_type_hash = None;
+        for format in ir.format_iter() {
+            let format = format
+                .map_err(|error| format!("P730 entry {index} format parse failed: {error:?}"))?;
+            format_count += 1;
+            first_type_hash.get_or_insert(format.type_hash);
+            if context_kind == CTX_CONTRACT && !clear.insert((chain_id, contract, format.selector))
+            {
+                return Err(format!(
+                    "P730 duplicates a clear-capable tuple at entry {index} selector 0x{}",
+                    hex::encode(format.selector)
+                ));
+            }
+        }
+        if format_count == 0 {
+            return Err(format!("P730 entry {index} contains no accepted format"));
+        }
+        let expected_primary = if context_kind == CTX_CONTRACT {
+            [0u8; 32]
+        } else {
+            first_type_hash.ok_or_else(|| "missing EIP-712 format".to_string())?
+        };
+        if primary_type_hash != expected_primary {
+            return Err(format!("P730 entry {index} primary-type index mismatch"));
+        }
+        next_ir_off = ir_off
+            .checked_add(ir_len)
+            .ok_or_else(|| "P730 IR cursor overflow".to_string())?;
+    }
+    if next_ir_off != ir_pool_size {
+        return Err("P730 IR entries do not consume the exact pool".to_string());
+    }
+    Ok(clear)
+}
+
+fn xtask_decode_p73k(bytes: &[u8]) -> Result<BTreeSet<Erc7730CallKey>, String> {
+    if bytes.len() < XTASK_P73K_HEADER_LEN || bytes.get(..4) != Some(&XTASK_P73K_MAGIC[..]) {
+        return Err("missing P73K header".to_string());
+    }
+    let schema = xtask_read_u16_be(bytes, 4, "P73K schema")?;
+    let header_len = usize::from(xtask_read_u16_be(bytes, 6, "P73K header length")?);
+    let group_count = usize::try_from(xtask_read_u32_be(bytes, 8, "P73K group count")?)
+        .map_err(|_| "P73K group count does not fit usize".to_string())?;
+    let tuple_count = usize::try_from(xtask_read_u32_be(bytes, 12, "P73K tuple count")?)
+        .map_err(|_| "P73K tuple count does not fit usize".to_string())?;
+    if schema != XTASK_P73K_SCHEMA || header_len != XTASK_P73K_HEADER_LEN {
+        return Err("unsupported P73K schema/header length".to_string());
+    }
+    let groups_len = group_count
+        .checked_mul(XTASK_P73K_GROUP_LEN)
+        .ok_or_else(|| "P73K group table length overflow".to_string())?;
+    let selector_pool_len = tuple_count
+        .checked_mul(4)
+        .ok_or_else(|| "P73K selector pool length overflow".to_string())?;
+    let pool_off = XTASK_P73K_HEADER_LEN
+        .checked_add(groups_len)
+        .ok_or_else(|| "P73K pool offset overflow".to_string())?;
+    let expected_len = pool_off
+        .checked_add(selector_pool_len)
+        .ok_or_else(|| "P73K total length overflow".to_string())?;
+    if expected_len != bytes.len() {
+        return Err(format!(
+            "P73K exact length mismatch: {} != {expected_len}",
+            bytes.len()
+        ));
+    }
+
+    let mut out = BTreeSet::new();
+    let mut expected_selector_start = 0usize;
+    let mut previous_group: Option<(u64, [u8; 20])> = None;
+    for group_index in 0..group_count {
+        let base = XTASK_P73K_HEADER_LEN
+            .checked_add(
+                group_index
+                    .checked_mul(XTASK_P73K_GROUP_LEN)
+                    .ok_or_else(|| "P73K group offset overflow".to_string())?,
+            )
+            .ok_or_else(|| "P73K group offset overflow".to_string())?;
+        let group = bytes
+            .get(base..base + XTASK_P73K_GROUP_LEN)
+            .ok_or_else(|| format!("P73K group {group_index} is truncated"))?;
+        let chain_id = u64::from_be_bytes(
+            group[0..8]
+                .try_into()
+                .map_err(|_| "P73K chain slice".to_string())?,
+        );
+        let mut contract = [0u8; 20];
+        contract.copy_from_slice(&group[8..28]);
+        let selector_start = usize::try_from(u32::from_be_bytes(
+            group[28..32]
+                .try_into()
+                .map_err(|_| "P73K selector start slice".to_string())?,
+        ))
+        .map_err(|_| "P73K selector start does not fit usize".to_string())?;
+        let selector_count = usize::from(u16::from_be_bytes(
+            group[32..34]
+                .try_into()
+                .map_err(|_| "P73K selector count slice".to_string())?,
+        ));
+        if group[34..36] != [0; 2] || selector_count == 0 {
+            return Err(format!(
+                "P73K group {group_index} has invalid count/reserved bytes"
+            ));
+        }
+        let group_key = (chain_id, contract);
+        if previous_group.is_some_and(|previous| group_key <= previous) {
+            return Err(format!("P73K group {group_index} is not strictly sorted"));
+        }
+        if selector_start != expected_selector_start {
+            return Err(format!(
+                "P73K group {group_index} selector range has a gap/overlap"
+            ));
+        }
+        let selector_end = selector_start
+            .checked_add(selector_count)
+            .ok_or_else(|| "P73K selector range overflow".to_string())?;
+        if selector_end > tuple_count {
+            return Err(format!(
+                "P73K group {group_index} selector range exceeds pool"
+            ));
+        }
+        let mut previous_selector: Option<[u8; 4]> = None;
+        for selector_index in selector_start..selector_end {
+            let selector_off = pool_off
+                .checked_add(
+                    selector_index
+                        .checked_mul(4)
+                        .ok_or_else(|| "P73K selector offset overflow".to_string())?,
+                )
+                .ok_or_else(|| "P73K selector offset overflow".to_string())?;
+            let mut selector = [0u8; 4];
+            selector.copy_from_slice(
+                bytes
+                    .get(selector_off..selector_off + 4)
+                    .ok_or_else(|| "P73K selector is truncated".to_string())?,
+            );
+            if previous_selector.is_some_and(|previous| selector <= previous) {
+                return Err(format!(
+                    "P73K group {group_index} selectors are not strictly sorted"
+                ));
+            }
+            if !out.insert((chain_id, contract, selector)) {
+                return Err("P73K contains a duplicate tuple".to_string());
+            }
+            previous_selector = Some(selector);
+        }
+        previous_group = Some(group_key);
+        expected_selector_start = selector_end;
+    }
+    if expected_selector_start != tuple_count
+        || (group_count == 0) != (tuple_count == 0)
+        || out.len() != tuple_count
+    {
+        return Err("P73K group ranges do not exactly cover the selector pool".to_string());
+    }
+    Ok(out)
+}
+
+fn xtask_known_call_set_hash(tuples: &BTreeSet<Erc7730CallKey>) -> Result<[u8; 32], String> {
+    let count = u64::try_from(tuples.len())
+        .map_err(|_| "known-call tuple count does not fit u64".to_string())?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"pqsigner/erc7730-known-call-set-v1");
+    hasher.update(count.to_be_bytes());
+    for (chain_id, contract, selector) in tuples {
+        hasher.update(chain_id.to_be_bytes());
+        hasher.update(contract);
+        hasher.update(selector);
+    }
+    Ok(hasher.finalize().into())
+}
+
+fn xtask_read_u16_be(bytes: &[u8], offset: usize, label: &str) -> Result<u16, String> {
+    let raw = bytes
+        .get(offset..offset + 2)
+        .ok_or_else(|| format!("{label} is truncated"))?;
+    Ok(u16::from_be_bytes(
+        raw.try_into().map_err(|_| format!("{label} width"))?,
+    ))
+}
+
+fn xtask_read_u32_be(bytes: &[u8], offset: usize, label: &str) -> Result<u32, String> {
+    let raw = bytes
+        .get(offset..offset + 4)
+        .ok_or_else(|| format!("{label} is truncated"))?;
+    Ok(u32::from_be_bytes(
+        raw.try_into().map_err(|_| format!("{label} width"))?,
+    ))
+}
+
+fn xtask_read_u32_le(bytes: &[u8], offset: usize, label: &str) -> Result<u32, String> {
+    let raw = bytes
+        .get(offset..offset + 4)
+        .ok_or_else(|| format!("{label} is truncated"))?;
+    Ok(u32::from_le_bytes(
+        raw.try_into().map_err(|_| format!("{label} width"))?,
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn diff_catalogue_roots_in_db_roots(
     path: &Path,
@@ -1027,8 +1538,14 @@ fn diff_catalogue_roots_in_db_roots(
     e2e_count: usize,
     prod_provenance: dbgen::erc7730::CatalogueProvenance,
     prod_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
+    prod_forced_len: usize,
+    prod_forced_group_count: usize,
+    prod_forced_count: usize,
     e2e_provenance: dbgen::erc7730::CatalogueProvenance,
     e2e_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
+    e2e_forced_len: usize,
+    e2e_forced_group_count: usize,
+    e2e_forced_count: usize,
 ) -> Result<(), String> {
     let text = fs::read_to_string(path)
         .map_err(|e| format!("read db_roots.rs at {}: {e}", path.display()))?;
@@ -1048,8 +1565,14 @@ fn diff_catalogue_roots_in_db_roots(
         e2e_count,
         prod_provenance,
         prod_status,
+        prod_forced_len,
+        prod_forced_group_count,
+        prod_forced_count,
         e2e_provenance,
         e2e_status,
+        e2e_forced_len,
+        e2e_forced_group_count,
+        e2e_forced_count,
     ) {
         return Ok(());
     }
@@ -1118,18 +1641,34 @@ fn erc7730_security_tail_matches(
     e2e_count: usize,
     prod_provenance: dbgen::erc7730::CatalogueProvenance,
     prod_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
+    prod_forced_len: usize,
+    prod_forced_group_count: usize,
+    prod_forced_count: usize,
     e2e_provenance: dbgen::erc7730::CatalogueProvenance,
     e2e_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
+    e2e_forced_len: usize,
+    e2e_forced_group_count: usize,
+    e2e_forced_count: usize,
 ) -> bool {
     let expected = dbgen::render_erc7730_security_tail(
-        prod,
-        prod_count,
-        prod_provenance,
-        prod_status,
-        e2e,
-        e2e_count,
-        e2e_provenance,
-        e2e_status,
+        dbgen::Erc7730SecurityTailInput {
+            root: prod,
+            descriptor_count: prod_count,
+            provenance: prod_provenance,
+            status: prod_status,
+            forced_eligible_len: prod_forced_len,
+            forced_eligible_group_count: prod_forced_group_count,
+            forced_eligible_count: prod_forced_count,
+        },
+        dbgen::Erc7730SecurityTailInput {
+            root: e2e,
+            descriptor_count: e2e_count,
+            provenance: e2e_provenance,
+            status: e2e_status,
+            forced_eligible_len: e2e_forced_len,
+            forced_eligible_group_count: e2e_forced_group_count,
+            forced_eligible_count: e2e_forced_count,
+        },
     );
     text.matches(dbgen::ERC7730_SECURITY_TAIL_SENTINEL).count() == 1 && text.ends_with(&expected)
 }
@@ -1521,6 +2060,70 @@ fn exact_document_block_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_test_erc7730_security_tail(
+        prod_root: &[u8; 32],
+        prod_count: usize,
+        prod_provenance: dbgen::erc7730::CatalogueProvenance,
+        prod_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
+        e2e_root: &[u8; 32],
+        e2e_count: usize,
+        e2e_provenance: dbgen::erc7730::CatalogueProvenance,
+        e2e_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
+    ) -> String {
+        dbgen::render_erc7730_security_tail(
+            dbgen::Erc7730SecurityTailInput {
+                root: prod_root,
+                descriptor_count: prod_count,
+                provenance: prod_provenance,
+                status: prod_status,
+                forced_eligible_len: 16,
+                forced_eligible_group_count: 0,
+                forced_eligible_count: 0,
+            },
+            dbgen::Erc7730SecurityTailInput {
+                root: e2e_root,
+                descriptor_count: e2e_count,
+                provenance: e2e_provenance,
+                status: e2e_status,
+                forced_eligible_len: 16,
+                forced_eligible_group_count: 0,
+                forced_eligible_count: 0,
+            },
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn test_erc7730_security_tail_matches(
+        text: &str,
+        prod_root: &[u8; 32],
+        prod_count: usize,
+        e2e_root: &[u8; 32],
+        e2e_count: usize,
+        prod_provenance: dbgen::erc7730::CatalogueProvenance,
+        prod_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
+        e2e_provenance: dbgen::erc7730::CatalogueProvenance,
+        e2e_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
+    ) -> bool {
+        erc7730_security_tail_matches(
+            text,
+            prod_root,
+            prod_count,
+            e2e_root,
+            e2e_count,
+            prod_provenance,
+            prod_status,
+            16,
+            0,
+            0,
+            e2e_provenance,
+            e2e_status,
+            16,
+            0,
+            0,
+        )
+    }
 
     #[test]
     fn padded_to_32_rounds_up_to_word_boundary() {
@@ -2151,7 +2754,7 @@ mod tests {
         let e2e_count = 3;
         let prod_status = [0x31; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN];
         let e2e_status = [0x32; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN];
-        let tail = dbgen::render_erc7730_security_tail(
+        let tail = render_test_erc7730_security_tail(
             &prod,
             prod_count,
             DevUnattested,
@@ -2169,7 +2772,7 @@ mod tests {
         assert_eq!(
             tail.matches("self::__pqsigner_erc7730_core::include_bytes!")
                 .count(),
-            2
+            4
         );
         assert_eq!(
             tail.matches("self::__pqsigner_erc7730_core::compile_error!")
@@ -2182,7 +2785,7 @@ mod tests {
             "generated security macros must resolve through the collision-sensitive core alias"
         );
         let correct = format!("pub static SELECTOR_DB_ROOT: [u8; 32] = [0; 32];\n\n{tail}");
-        assert!(erc7730_security_tail_matches(
+        assert!(test_erc7730_security_tail_matches(
             &correct,
             &prod,
             prod_count,
@@ -2194,7 +2797,7 @@ mod tests {
             &e2e_status,
         ));
 
-        let swapped_roots = dbgen::render_erc7730_security_tail(
+        let swapped_roots = render_test_erc7730_security_tail(
             &e2e,
             e2e_count,
             DevUnattested,
@@ -2204,7 +2807,7 @@ mod tests {
             DevUnattested,
             &prod_status,
         );
-        assert!(!erc7730_security_tail_matches(
+        assert!(!test_erc7730_security_tail_matches(
             &swapped_roots,
             &prod,
             prod_count,
@@ -2218,7 +2821,7 @@ mod tests {
 
         let mut altered_prod_status = prod_status;
         altered_prod_status[31] ^= 0x01;
-        let altered_status_tail = dbgen::render_erc7730_security_tail(
+        let altered_status_tail = render_test_erc7730_security_tail(
             &prod,
             prod_count,
             DevUnattested,
@@ -2228,7 +2831,7 @@ mod tests {
             DevUnattested,
             &e2e_status,
         );
-        assert!(!erc7730_security_tail_matches(
+        assert!(!test_erc7730_security_tail_matches(
             &altered_status_tail,
             &prod,
             prod_count,
@@ -2244,7 +2847,7 @@ mod tests {
             .replace("erc7730-known-calls-e2e.bloom", "TEMP_FILTER")
             .replace("erc7730-known-calls.bloom", "erc7730-known-calls-e2e.bloom")
             .replace("TEMP_FILTER", "erc7730-known-calls.bloom");
-        assert!(!erc7730_security_tail_matches(
+        assert!(!test_erc7730_security_tail_matches(
             &swapped_filters,
             &prod,
             prod_count,
@@ -2261,7 +2864,7 @@ mod tests {
             "compile_error!(\"disabled: mode-production cannot embed the dev-unattested ERC-7730 catalogue.",
             1,
         );
-        assert!(!erc7730_security_tail_matches(
+        assert!(!test_erc7730_security_tail_matches(
             &deleted_fence,
             &prod,
             prod_count,
@@ -2282,7 +2885,7 @@ mod tests {
             "#[cfg(any())]\n#[cfg(not(feature = \"e2e-test\"))]\npub static ERC7730_DESCRIPTORS_ROOT",
             1,
         );
-        assert!(!erc7730_security_tail_matches(
+        assert!(!test_erc7730_security_tail_matches(
             &cfg_disabled_root,
             &prod,
             prod_count,
@@ -2298,7 +2901,7 @@ mod tests {
         let raw_string = format!("const _: &str = r###\"{tail}\"###;");
         let enclosed = format!("#[cfg(any())]\nmod disabled {{\n{tail}}}\n");
         for forged in [&block_commented, &raw_string, &enclosed] {
-            assert!(!erc7730_security_tail_matches(
+            assert!(!test_erc7730_security_tail_matches(
                 forged,
                 &prod,
                 prod_count,
@@ -2369,7 +2972,7 @@ mod generated_suffix {
         let e2e_count = 5;
         let prod_status = [0x41; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN];
         let e2e_status = [0x42; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN];
-        let correct = dbgen::render_erc7730_security_tail(
+        let correct = render_test_erc7730_security_tail(
             &prod,
             prod_count,
             Erc8176Verified,
@@ -2379,7 +2982,7 @@ mod generated_suffix {
             Erc8176Verified,
             &e2e_status,
         );
-        assert!(erc7730_security_tail_matches(
+        assert!(test_erc7730_security_tail_matches(
             &correct,
             &prod,
             prod_count,
@@ -2395,7 +2998,7 @@ mod generated_suffix {
             "not(feature = \"erc7730-dev-unattested\")",
             1,
         );
-        assert!(!erc7730_security_tail_matches(
+        assert!(!test_erc7730_security_tail_matches(
             &altered,
             &prod,
             prod_count,

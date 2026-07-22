@@ -256,6 +256,108 @@ pub fn prove_unknown_contract_call(
     cfi.bump(CFI_KNOWN_PUBLISH);
 }
 
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_FORCED_PARSE_A: u32 = 0x7C41_A9D3;
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_FORCED_LOOKUP_A: u32 = 0x91E6_2B5C;
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_FORCED_BLOOM_A: u32 = 0x2AF7_D184;
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_FORCED_PARSE_B: u32 = 0xD538_6E21;
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_FORCED_LOOKUP_B: u32 = 0x4B9D_F706;
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_FORCED_BLOOM_B: u32 = 0xE267_3CB8;
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_FORCED_VERDICT: u32 = 0x36AC_85F1;
+#[cfg(feature = "erc7730-forced-blind")]
+const CFI_FORCED_PUBLISH: u32 = 0xA874_1D6B;
+#[cfg(feature = "erc7730-forced-blind")]
+pub(crate) const CFI_FORCED_ELIGIBLE_EXPECTED: u32 = crate::cfi_expected!(
+    CFI_FORCED_PARSE_A,
+    CFI_FORCED_LOOKUP_A,
+    CFI_FORCED_BLOOM_A,
+    CFI_FORCED_PARSE_B,
+    CFI_FORCED_LOOKUP_B,
+    CFI_FORCED_BLOOM_B,
+    CFI_FORCED_VERDICT,
+    CFI_FORCED_PUBLISH,
+);
+
+/// Prove affirmative exact membership in the authenticated refused-known set.
+///
+/// This primitive is intentionally separate from
+/// [`prove_unknown_contract_call`]. It performs two complete strict P73K
+/// parses and exact lookups, plus two independent positive checks against the
+/// all-known Bloom. Only agreement on the positive result publishes
+/// [`crate::fi::OK_SENTINEL`]. The caller must volatile-initialize
+/// `verdict_out` to FAIL and independently require this function's private CFI
+/// transcript before minting any forced candidate.
+#[cfg(feature = "erc7730-forced-blind")]
+#[inline(never)]
+pub fn prove_forced_eligible_contract_call(
+    chain_id: u64,
+    contract: &[u8; 20],
+    selector: &[u8; 4],
+    verdict_out: &mut u32,
+    cfi: &mut crate::fi::CfiCounter,
+) {
+    let parsed_a = pqsigner_erc7730::forced_eligible::ForcedEligibleSet::from_bytes(
+        &crate::db_roots::PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET,
+    );
+    cfi.bump(CFI_FORCED_PARSE_A);
+    let member_a = parsed_a
+        .as_ref()
+        .is_ok_and(|set| set.contains(chain_id, contract, selector));
+    cfi.bump(CFI_FORCED_LOOKUP_A);
+    let bloom_a = pqsigner_erc7730::known_calls::may_contain(
+        crate::db_roots::ERC7730_KNOWN_CALLS_BLOOM,
+        chain_id,
+        contract,
+        selector,
+    );
+    cfi.bump(CFI_FORCED_BLOOM_A);
+
+    crate::fi::wait_random();
+
+    let parsed_b = pqsigner_erc7730::forced_eligible::ForcedEligibleSet::from_bytes(
+        core::hint::black_box(&crate::db_roots::PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET),
+    );
+    cfi.bump(CFI_FORCED_PARSE_B);
+    let member_b = parsed_b.as_ref().is_ok_and(|set| {
+        set.contains(
+            core::hint::black_box(chain_id),
+            core::hint::black_box(contract),
+            core::hint::black_box(selector),
+        )
+    });
+    cfi.bump(CFI_FORCED_LOOKUP_B);
+    let bloom_b = pqsigner_erc7730::known_calls::may_contain(
+        crate::db_roots::ERC7730_KNOWN_CALLS_BLOOM,
+        core::hint::black_box(chain_id),
+        core::hint::black_box(contract),
+        core::hint::black_box(selector),
+    );
+    cfi.bump(CFI_FORCED_BLOOM_B);
+
+    let eligible_verdict = crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(parsed_a.is_ok())
+            && core::hint::black_box(parsed_b.is_ok())
+            && core::hint::black_box(member_a)
+            && core::hint::black_box(member_b)
+            && core::hint::black_box(member_a == member_b)
+            && core::hint::black_box(bloom_a)
+            && core::hint::black_box(bloom_b)
+            && core::hint::black_box(bloom_a == bloom_b)
+    });
+    cfi.bump(CFI_FORCED_VERDICT);
+    // SAFETY: `verdict_out` is a unique valid mutable reference supplied by
+    // the caller. Volatile publication keeps the caller's readback independent
+    // from this function's local SSA verdict.
+    unsafe { core::ptr::write_volatile(verdict_out, eligible_verdict) };
+    cfi.bump(CFI_FORCED_PUBLISH);
+}
+
 #[cfg(test)]
 mod known_call_tests {
     use super::{prove_unknown_contract_call, CFI_KNOWN_EXPECTED};
@@ -331,6 +433,108 @@ mod known_call_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "erc7730-forced-blind"))]
+mod forced_eligible_tests {
+    use super::{
+        prove_forced_eligible_contract_call, CFI_FORCED_ELIGIBLE_EXPECTED, CFI_KNOWN_EXPECTED,
+    };
+
+    fn proof(chain_id: u64, contract: &[u8; 20], selector: &[u8; 4]) -> u32 {
+        let mut verdict = 0u32;
+        // SAFETY: unique live local. Mirror the production caller contract so
+        // a skipped proof call cannot inherit a permissive stack value.
+        unsafe { core::ptr::write_volatile(&mut verdict, crate::fi::FAIL_SENTINEL) };
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let mut cfi = crate::fi::CfiCounter::new();
+        prove_forced_eligible_contract_call(chain_id, contract, selector, &mut verdict, &mut cfi);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            cfi.check_into_sentinel(CFI_FORCED_ELIGIBLE_EXPECTED),
+            crate::fi::OK_SENTINEL
+        );
+        // SAFETY: the proof's unique mutable borrow has ended and the local
+        // remains initialized/live.
+        unsafe { core::ptr::read_volatile(&verdict) }
+    }
+
+    #[test]
+    fn forced_membership_has_a_distinct_cfi_transcript_and_positive_proof() {
+        assert_ne!(CFI_FORCED_ELIGIBLE_EXPECTED, CFI_KNOWN_EXPECTED);
+        let set = pqsigner_erc7730::forced_eligible::ForcedEligibleSet::from_bytes(
+            &crate::db_roots::PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET,
+        )
+        .expect("generated production P73K must parse");
+        let tuple = set
+            .iter()
+            .next()
+            .expect("production refused-known set must be non-empty");
+        assert!(pqsigner_erc7730::known_calls::may_contain(
+            crate::db_roots::ERC7730_KNOWN_CALLS_BLOOM,
+            tuple.0,
+            &tuple.1,
+            &tuple.2,
+        ));
+        assert_eq!(proof(tuple.0, &tuple.1, &tuple.2), crate::fi::OK_SENTINEL);
+    }
+
+    #[test]
+    fn clear_capable_and_unknown_tuples_never_gain_forced_authority() {
+        let mut weth = [0u8; 20];
+        weth.copy_from_slice(
+            &hex::decode("c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2").expect("valid WETH address"),
+        );
+        let clear_selector = [0xd0, 0xe3, 0x0d, 0xb0]; // deposit()
+        let set = pqsigner_erc7730::forced_eligible::ForcedEligibleSet::from_bytes(
+            &crate::db_roots::PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET,
+        )
+        .expect("generated production P73K must parse");
+        assert!(!set.contains(1, &weth, &clear_selector));
+        assert!(pqsigner_erc7730::known_calls::may_contain(
+            crate::db_roots::ERC7730_KNOWN_CALLS_BLOOM,
+            1,
+            &weth,
+            &clear_selector,
+        ));
+        assert_ne!(proof(1, &weth, &clear_selector), crate::fi::OK_SENTINEL);
+
+        let unknown_contract = [0x5au8; 20];
+        let unknown_selector = [0xffu8; 4];
+        assert!(!set.contains(1, &unknown_contract, &unknown_selector));
+        assert_ne!(
+            proof(1, &unknown_contract, &unknown_selector),
+            crate::fi::OK_SENTINEL
+        );
+
+        // Deterministic false positive in the pinned production Bloom. This
+        // is the regression witness that Bloom positivity alone is never
+        // forced authority: exact P73K non-membership must still refuse.
+        let bloom_collision_contract = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x07, 0x4a,
+        ];
+        let bloom_collision_selector = [0xba, 0x0e, 0x04, 0x2a];
+        assert!(pqsigner_erc7730::known_calls::may_contain(
+            crate::db_roots::ERC7730_KNOWN_CALLS_BLOOM,
+            1,
+            &bloom_collision_contract,
+            &bloom_collision_selector,
+        ));
+        assert!(!set.contains(
+            1,
+            &bloom_collision_contract,
+            &bloom_collision_selector,
+        ));
+        assert_ne!(
+            proof(
+                1,
+                &bloom_collision_contract,
+                &bloom_collision_selector,
+            ),
+            crate::fi::OK_SENTINEL
+        );
     }
 }
 // The live render path walks path programs through `render::resolve`.

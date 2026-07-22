@@ -207,8 +207,24 @@ def rebind_catalogue_hash(status: bytearray, blob: bytes) -> None:
     status[64:96] = sha256(blob)
 
 
-def make_release_report(status_raw: bytes, version: int, minimum: int) -> dict:
+def make_release_report(
+    status_raw: bytes,
+    version: int,
+    minimum: int,
+    forced_eligible: bytes | None = None,
+) -> dict:
     status = trailer.parse_catalogue_status(status_raw)
+    forced_metadata = None
+    if forced_eligible is not None:
+        parsed = trailer.parse_forced_eligible(forced_eligible)
+        forced_metadata = {
+            "format": "P73K",
+            "schema": parsed["schema_version"],
+            "encoded_length": len(forced_eligible),
+            "group_count": parsed["group_count"],
+            "tuple_count": parsed["tuple_count"],
+            "set_sha256": sha256(forced_eligible).hex(),
+        }
     return {
         "report_kind": "authenticated-release-metadata",
         "erc8176_attestation": False,
@@ -230,6 +246,7 @@ def make_release_report(status_raw: bytes, version: int, minimum: int) -> dict:
             "manifest_sha256_authenticated_by_legacy_signature": False,
         },
         "catalogue_status": trailer._catalogue_status_report(status, status_raw),
+        "forced_eligible": forced_metadata,
     }
 
 
@@ -537,6 +554,25 @@ class CatalogueVerificationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "report kind"):
             trailer._validate_release_metadata({}, status_a, 17, 16)
 
+        missing_boundary = dict(release_a)
+        del missing_boundary["forced_eligible"]
+        with self.assertRaisesRegex(ValueError, "omits the forced_eligible"):
+            trailer._validate_release_metadata(missing_boundary, status_a, 17, 16)
+
+        malformed_boundary = dict(release_a)
+        malformed_boundary["forced_eligible"] = {
+            "format": "P73K",
+            "schema": 1,
+            "encoded_length": 17,
+            "group_count": 0,
+            "tuple_count": 0,
+            "set_sha256": "00" * 32,
+        }
+        with self.assertRaisesRegex(ValueError, "inconsistent forced-eligible length"):
+            trailer._validate_release_metadata(
+                malformed_boundary, status_a, 17, 16
+            )
+
     def test_compact_compatibility_report_is_explicitly_non_authoritative(self) -> None:
         status, blob, bloom = make_fixture()
         verified = trailer.verify_catalogue(status, blob, bloom)
@@ -548,6 +584,8 @@ class CatalogueVerificationTests(unittest.TestCase):
         self.assertIs(report["production_authority"], False)
         self.assertIs(report["device_rollback_verified"], False)
         self.assertEqual(report["catalogue"]["proofs_verified"], 2)
+        self.assertIs(report["catalogue"]["forced_eligible_bound"], False)
+        self.assertIsNone(report["catalogue"]["forced_known_call_count"])
         self.assertEqual(
             report["catalogue"]["status_sha256"], sha256(status).hex()
         )
@@ -611,6 +649,76 @@ class CatalogueVerificationTests(unittest.TestCase):
         self.assertEqual(
             combined["authenticated_release"]["firmware"]["firmware_version"],
             17,
+        )
+
+    def test_cli_authenticated_release_extracts_and_proves_p73k_partition(self) -> None:
+        forced_tuples = fixture_forced_tuples()
+        forced = make_forced_eligible(forced_tuples)
+        status, blob, bloom = make_fixture(forced_tuples=tuple(forced_tuples))
+        release = make_release_report(status, 17, 16, forced)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            status_source = root / "source-status.bin"
+            forced_source = root / "source-forced.bin"
+            db = root / "catalogue.bin"
+            bloom_path = root / "known-calls.bloom"
+            fake_bundle = root / "release.pqfw"
+            fake_pubkey = root / "vendor.pub"
+            fake_fwsign = root / "fake-fwsign"
+            status_source.write_bytes(status)
+            forced_source.write_bytes(forced)
+            db.write_bytes(blob)
+            bloom_path.write_bytes(bloom)
+            fake_bundle.write_bytes(b"fixture")
+            fake_pubkey.write_bytes(bytes(32))
+            fake_fwsign.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, pathlib, sys\n"
+                f"status = pathlib.Path({str(status_source)!r}).read_bytes()\n"
+                f"forced = pathlib.Path({str(forced_source)!r}).read_bytes()\n"
+                "if '--status-out' in sys.argv:\n"
+                "    pathlib.Path(sys.argv[sys.argv.index('--status-out') + 1]).write_bytes(status)\n"
+                "if '--forced-eligible-out' in sys.argv:\n"
+                "    pathlib.Path(sys.argv[sys.argv.index('--forced-eligible-out') + 1]).write_bytes(forced)\n"
+                f"print(json.dumps({release!r}, sort_keys=True, separators=(',', ':')))\n",
+                encoding="utf-8",
+            )
+            fake_fwsign.chmod(0o755)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE_PATH),
+                    "--db",
+                    str(db),
+                    "--known-calls-bloom",
+                    str(bloom_path),
+                    "--bundle",
+                    str(fake_bundle),
+                    "--pubkey",
+                    str(fake_pubkey),
+                    "--fwsign-bin",
+                    str(fake_fwsign),
+                    "--expected-firmware-version",
+                    "17",
+                    "--minimum-firmware-version",
+                    "16",
+                    "--compatibility-report",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                text=True,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        combined = json.loads(result.stdout)
+        self.assertIs(combined["catalogue"]["forced_eligible_bound"], True)
+        self.assertEqual(
+            combined["catalogue"]["forced_known_call_count"], len(forced_tuples)
+        )
+        self.assertEqual(
+            combined["authenticated_release"]["forced_eligible"]["set_sha256"],
+            sha256(forced).hex(),
         )
 
     def test_cli_requires_release_identity_and_bloom_even_for_list(self) -> None:

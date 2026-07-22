@@ -72,16 +72,16 @@ loop can already reach.
 
 The normal command-line path never emits, lists, or reports from an unverified
 release/catalogue pair. It invokes `fwsign erc7730-release-metadata` to verify
-the C10 manifest, exact image hashes, version policy, and embedded/sidecar P73S
-binding in a private temporary directory. It then binds the exact P730 and
-known-call Bloom bytes to that P73S V1 status, reconstructs the complete Merkle
-tree, and byte-compares every stored proof. A deliberately loud
+the C10 manifest, exact image hashes, version policy, and embedded/sidecar
+P73S/P73K binding in a private temporary directory. It then binds the exact
+P730 and known-call Bloom bytes to that P73S V1 status, reconstructs the
+complete Merkle tree, byte-compares every stored proof, and, when authenticated
+P73K is present, proves the exact `K = C ⊎ F` partition. A deliberately loud
 `--unverified-status-for-test` escape exists only for deterministic dbgen/unit
 fixtures and cannot emit a compatibility report.
-The tuple-set SHA in P73S remains a release-identity receipt: the Bloom
-deliberately includes registry-declared calls whose unsupported formats are
-absent from P730, and a Bloom is not invertible, so this helper does not pretend
-it can reconstruct that exact superset from compiled IR.
+For legacy/feature-off releases without P73K, the tuple-set SHA in P73S remains
+a release-identity receipt: the Bloom is not invertible, so this helper does not
+pretend it can reconstruct the exact registry-known superset.
 """
 
 from __future__ import annotations
@@ -277,7 +277,69 @@ def _validate_release_metadata(
         raise ValueError(
             "release-metadata catalogue status does not equal the exact extracted P73S"
         )
+    if "forced_eligible" not in report:
+        raise ValueError("release metadata omits the forced_eligible boundary")
+    _validate_forced_release_metadata(report.get("forced_eligible"))
     return report
+
+
+def _validate_forced_release_metadata(value: object) -> dict | None:
+    """Validate fwsign's optional P73K summary before trusting extraction."""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "format",
+        "schema",
+        "encoded_length",
+        "group_count",
+        "tuple_count",
+        "set_sha256",
+    }:
+        raise ValueError("release metadata has malformed forced_eligible object")
+    if value.get("format") != "P73K" or value.get("schema") != 1:
+        raise ValueError("release metadata has unsupported forced-eligible format")
+    encoded_length = value.get("encoded_length")
+    group_count = value.get("group_count")
+    tuple_count = value.get("tuple_count")
+    if any(
+        not isinstance(field, int) or isinstance(field, bool) or not 0 <= field <= U32_MAX
+        for field in (encoded_length, group_count, tuple_count)
+    ):
+        raise ValueError("release metadata has invalid forced-eligible counts")
+    expected_length = (
+        FORCED_ELIGIBLE_HEADER_LEN
+        + group_count * FORCED_ELIGIBLE_GROUP_LEN
+        + tuple_count * FORCED_ELIGIBLE_SELECTOR_LEN
+    )
+    if encoded_length != expected_length:
+        raise ValueError("release metadata has inconsistent forced-eligible length")
+    if (group_count == 0) != (tuple_count == 0) or group_count > tuple_count:
+        raise ValueError("release metadata has inconsistent forced-eligible cardinality")
+    set_sha256 = value.get("set_sha256")
+    if (
+        not isinstance(set_sha256, str)
+        or len(set_sha256) != 64
+        or set_sha256 != set_sha256.lower()
+    ):
+        raise ValueError("release metadata has malformed forced-eligible SHA-256")
+    try:
+        bytes.fromhex(set_sha256)
+    except ValueError as exc:
+        raise ValueError("release metadata has malformed forced-eligible SHA-256") from exc
+    return value
+
+
+def _validate_extracted_forced_eligible(raw: bytes, metadata: dict) -> None:
+    parsed = parse_forced_eligible(raw)
+    if (
+        len(raw) != metadata["encoded_length"]
+        or parsed["group_count"] != metadata["group_count"]
+        or parsed["tuple_count"] != metadata["tuple_count"]
+        or _sha256(raw).hex() != metadata["set_sha256"]
+    ):
+        raise ValueError(
+            "extracted P73K does not equal the authenticated release-metadata identity"
+        )
 
 
 def _authenticated_release_status(
@@ -287,11 +349,11 @@ def _authenticated_release_status(
     pubkey: str,
     expected_version: int,
     minimum_version: int,
-) -> tuple[bytes, dict]:
-    """Run fwsign in a private directory and consume its exact status output."""
+) -> tuple[bytes, bytes | None, dict]:
+    """Run fwsign privately and consume its exact authenticated P73S/P73K."""
     with tempfile.TemporaryDirectory(prefix="pqsigner-erc7730-status-") as temp_dir:
         status_path = Path(temp_dir) / "authenticated-status.bin"
-        command = [
+        base_command = [
             fwsign_bin,
             "erc7730-release-metadata",
             "--bundle",
@@ -302,39 +364,75 @@ def _authenticated_release_status(
             str(expected_version),
             "--minimum-version",
             str(minimum_version),
-            "--status-out",
-            str(status_path),
         ]
-        try:
-            completed = subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-                text=True,
-            )
-        except OSError as exc:
-            raise ValueError(f"cannot execute fwsign release authentication: {exc}") from exc
-        if completed.returncode != 0:
-            detail = completed.stderr.strip() or "no diagnostic"
-            raise ValueError(f"authenticated firmware release rejected: {detail}")
-        try:
-            report = json.loads(
-                completed.stdout,
-                object_pairs_hook=_reject_duplicate_json_keys,
-            )
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise ValueError(f"invalid fwsign release-metadata JSON: {exc}") from exc
+
+        def invoke(extra_args: list[str]) -> dict:
+            try:
+                completed = subprocess.run(
+                    base_command + extra_args,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    text=True,
+                )
+            except OSError as exc:
+                raise ValueError(
+                    f"cannot execute fwsign release authentication: {exc}"
+                ) from exc
+            if completed.returncode != 0:
+                detail = completed.stderr.strip() or "no diagnostic"
+                raise ValueError(f"authenticated firmware release rejected: {detail}")
+            try:
+                parsed = json.loads(
+                    completed.stdout,
+                    object_pairs_hook=_reject_duplicate_json_keys,
+                )
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise ValueError(
+                    f"invalid fwsign release-metadata JSON: {exc}"
+                ) from exc
+            if not isinstance(parsed, dict):
+                raise ValueError("fwsign release-metadata JSON is not an object")
+            return parsed
+
+        report = invoke(["--status-out", str(status_path)])
         try:
             status_raw = status_path.read_bytes()
         except OSError as exc:
             raise ValueError(f"fwsign did not emit authenticated P73S status: {exc}") from exc
-        return status_raw, _validate_release_metadata(
+        validated = _validate_release_metadata(
             report,
             status_raw,
             expected_version,
             minimum_version,
         )
+        forced_metadata = _validate_forced_release_metadata(
+            validated.get("forced_eligible")
+        )
+        forced_raw = None
+        if forced_metadata is not None:
+            forced_path = Path(temp_dir) / "authenticated-forced-eligible.bin"
+            extraction_report = invoke(
+                ["--forced-eligible-out", str(forced_path)]
+            )
+            _validate_release_metadata(
+                extraction_report,
+                status_raw,
+                expected_version,
+                minimum_version,
+            )
+            if extraction_report != validated:
+                raise ValueError(
+                    "fwsign release identity changed between status and P73K extraction"
+                )
+            try:
+                forced_raw = forced_path.read_bytes()
+            except OSError as exc:
+                raise ValueError(
+                    f"fwsign did not emit authenticated P73K set: {exc}"
+                ) from exc
+            _validate_extracted_forced_eligible(forced_raw, forced_metadata)
+        return status_raw, forced_raw, validated
 
 
 def _compatibility_report(release: dict, verified: dict, status_raw: bytes) -> str:
@@ -345,6 +443,9 @@ def _compatibility_report(release: dict, verified: dict, status_raw: bytes) -> s
             "proof_depth": verified["header"]["proof_depth"],
             "proofs_verified": verified["header"]["entry_cnt"],
             "compiled_known_call_count": verified["compiled_known_call_count"],
+            "clear_known_call_count": verified["clear_known_call_count"],
+            "forced_known_call_count": verified["forced_known_call_count"],
+            "forced_eligible_bound": verified["forced_eligible_bound"],
         }
     )
     report = {
@@ -1231,7 +1332,7 @@ def main() -> int:
 
     try:
         if args.bundle:
-            status_raw, release = _authenticated_release_status(
+            status_raw, forced_eligible, release = _authenticated_release_status(
                 fwsign_bin=args.fwsign_bin,
                 bundle=args.bundle,
                 pubkey=args.pubkey,
@@ -1242,13 +1343,14 @@ def main() -> int:
             # Explicitly test-only: production/list/trailer callers must start
             # from the signed bundle path above.
             status_raw = Path(args.unverified_status_for_test).read_bytes()
+            forced_eligible = None
             release = None
 
         # Each catalogue file is read exactly once. All selection, listing,
         # reporting, and bundle assembly use these immutable byte snapshots.
         blob = Path(args.db).read_bytes()
         bloom = Path(args.known_calls_bloom).read_bytes()
-        verified = verify_catalogue(status_raw, blob, bloom)
+        verified = verify_catalogue(status_raw, blob, bloom, forced_eligible)
     except (OSError, ValueError) as exc:
         ap.error(str(exc))
 

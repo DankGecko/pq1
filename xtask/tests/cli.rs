@@ -34,6 +34,8 @@ fn checked_in_erc7730_outputs() -> Vec<(PathBuf, Vec<u8>)> {
         "secure/data/erc7730.review.txt",
         "secure/data/erc7730-known-calls.bloom",
         "secure/data/erc7730-known-calls-e2e.bloom",
+        "secure/data/erc7730-forced-eligible.set",
+        "secure/data/erc7730-forced-eligible-e2e.set",
     ]
     .into_iter()
     .map(|relative| {
@@ -105,7 +107,9 @@ fn positive_help_alias_prints_subcommand_list_and_exits_success() {
                 && stdout.contains("erc7730_status.bin")
                 && stdout.contains("erc7730_status_e2e.bin")
                 && stdout.contains("erc7730-known-calls.bloom")
-                && stdout.contains("erc7730-known-calls-e2e.bloom"),
+                && stdout.contains("erc7730-known-calls-e2e.bloom")
+                && stdout.contains("erc7730-forced-eligible.set")
+                && stdout.contains("erc7730-forced-eligible-e2e.set"),
             "help alias `{arg}` must describe the actual catalogue inputs and outputs, got: {stdout}",
         );
         assert!(
@@ -162,6 +166,8 @@ fn positive_custom_erc7730_probe_with_all_explicit_outputs_is_isolated() {
     let e2e_blob = output_dir.join("e2e.bin");
     let known_calls = output_dir.join("known-calls.bloom");
     let known_calls_e2e = output_dir.join("known-calls-e2e.bloom");
+    let forced_eligible = output_dir.join("forced-eligible.set");
+    let forced_eligible_e2e = output_dir.join("forced-eligible-e2e.set");
     let status = output_dir.join("status.bin");
     let status_e2e = output_dir.join("status-e2e.bin");
     let protected = checked_in_erc7730_outputs();
@@ -182,6 +188,10 @@ fn positive_custom_erc7730_probe_with_all_explicit_outputs_is_isolated() {
         .arg(&known_calls)
         .arg("--known-calls-e2e-out")
         .arg(&known_calls_e2e)
+        .arg("--forced-eligible-out")
+        .arg(&forced_eligible)
+        .arg("--forced-eligible-e2e-out")
+        .arg(&forced_eligible_e2e)
         .arg("--status-out")
         .arg(&status)
         .arg("--status-e2e-out")
@@ -200,6 +210,8 @@ fn positive_custom_erc7730_probe_with_all_explicit_outputs_is_isolated() {
         &e2e_blob,
         &known_calls,
         &known_calls_e2e,
+        &forced_eligible,
+        &forced_eligible_e2e,
         &status,
         &status_e2e,
     ] {
@@ -279,6 +291,8 @@ fn negative_custom_erc7730_probe_refuses_before_any_implicit_output_write() {
                 && stderr.contains("--e2e-out-binary")
                 && stderr.contains("--known-calls-out")
                 && stderr.contains("--known-calls-e2e-out")
+                && stderr.contains("--forced-eligible-out")
+                && stderr.contains("--forced-eligible-e2e-out")
                 && stderr.contains("--status-out")
                 && stderr.contains("--status-e2e-out")
                 && !stderr.contains("prod build failed"),

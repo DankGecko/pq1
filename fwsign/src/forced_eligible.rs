@@ -198,6 +198,14 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
 mod tests {
     use super::*;
 
+    fn assert_shared_parser_agrees(bytes: &[u8]) {
+        assert_eq!(
+            validate(bytes).is_ok(),
+            pqsigner_erc7730::forced_eligible::ForcedEligibleSet::from_bytes(bytes).is_ok(),
+            "release and firmware P73K parsers disagree"
+        );
+    }
+
     fn fixture() -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(MAGIC);
@@ -236,6 +244,7 @@ mod tests {
                 encoded_len: bytes.len(),
             }
         );
+        assert_shared_parser_agrees(&bytes);
     }
 
     #[test]
@@ -244,13 +253,16 @@ mod tests {
             let mut bytes = fixture();
             bytes[mutation] ^= 1;
             assert!(validate(&bytes).is_err(), "mutation at {mutation} escaped");
+            assert_shared_parser_agrees(&bytes);
         }
         let mut trailing = fixture();
         trailing.push(0);
         assert!(validate(&trailing).is_err());
+        assert_shared_parser_agrees(&trailing);
         let mut truncated = fixture();
         truncated.pop();
         assert!(validate(&truncated).is_err());
+        assert_shared_parser_agrees(&truncated);
     }
 
     #[test]
@@ -266,6 +278,7 @@ mod tests {
             let mut bytes = fixture();
             bytes[*offset] ^= xor;
             assert!(validate(&bytes).is_err(), "mutation at {offset} escaped");
+            assert_shared_parser_agrees(&bytes);
         }
     }
 
@@ -278,10 +291,12 @@ mod tests {
         empty.extend_from_slice(&0u32.to_be_bytes());
         empty.extend_from_slice(&0u32.to_be_bytes());
         assert!(validate(&empty).is_ok());
+        assert_shared_parser_agrees(&empty);
 
         let mut selectors_without_groups = empty;
         selectors_without_groups[12..16].copy_from_slice(&1u32.to_be_bytes());
         selectors_without_groups.extend_from_slice(&[0u8; 4]);
         assert!(validate(&selectors_without_groups).is_err());
+        assert_shared_parser_agrees(&selectors_without_groups);
     }
 }

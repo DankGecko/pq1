@@ -802,6 +802,12 @@ erc7730-nested-calldata-test-fixture = [
     "pqsigner-erc7730/nested-calldata-test-fixture",
     "dbgen/nested-calldata-test-fixture",
 ]
+# Positive, default-off authority for the separately reviewed forced-blind
+# ceremony. This flag never aliases from a dev/test mode. The production
+# configuration fence and runtime path are added by the bounded C2/C3 slices;
+# declaring it here lets C1 bind the exact P73K artifact without enabling any
+# signing behavior.
+erc7730-forced-blind = []
 
 [build-dependencies]
 # Decodes the vendored `assets/font_5x8.png` (embedded-graphics' FONT_5X8
