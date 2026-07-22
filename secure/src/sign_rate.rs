@@ -51,6 +51,156 @@ pub const MAX_SIGNS_PER_SESSION: u32 = 250;
 static LAST_SIGN_MS: AtomicU32 = AtomicU32::new(0);
 static SIGNS_THIS_SESSION: AtomicU32 = AtomicU32::new(0);
 
+/// Maximum number of wakeups the forced preflight will tolerate while
+/// completing the current minimum-sign interval.  On production hardware
+/// `wfi` wakes on the 1 ms SysTick; the small allowance covers unrelated
+/// interrupts without turning a corrupt/frozen clock into an unbounded wait.
+#[cfg(all(
+    feature = "erc7730-forced-blind",
+    feature = "stm32u585",
+    not(feature = "e2e-test"),
+    not(test),
+))]
+const FORCED_RATE_MAX_WAKEUPS: u32 = MIN_SIGN_INTERVAL_MS * 16;
+
+/// Request-bound, read-only evidence that the forced request reached the
+/// session-cap boundary before the severe warning and that the current
+/// minimum-sign interval had already elapsed.
+///
+/// The fields are private so callers cannot mint or rewrite the observation.
+/// C3 retains one receipt across both confirmations, independently rechecks it
+/// immediately before signing, and passes it to the sole charging operation.
+#[cfg(any(feature = "erc7730-forced-blind", test))]
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ForcedRateReceipt {
+    request_digest: [u8; 32],
+    signs_this_session: u32,
+    last_sign_ms: u32,
+}
+
+/// Fail-closed forced-rate preflight outcomes.  The handler maps every variant
+/// to the existing refusal path; these names exist for focused evidence only.
+#[cfg(any(feature = "erc7730-forced-blind", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ForcedRateError {
+    SessionCap,
+    IntervalNotReady,
+    StateDisagreement,
+    TickFault,
+    WaitBudgetExceeded,
+    RequestMismatch,
+}
+
+/// Pure constructor shared by production and exact 249/250 boundary tests.
+/// It performs no counter or timestamp write.
+#[cfg(any(feature = "erc7730-forced-blind", test))]
+fn forced_rate_receipt_from_observation(
+    request_digest: &[u8; 32],
+    count: u32,
+    last_sign_ms: u32,
+    now_ms: u32,
+) -> Result<ForcedRateReceipt, ForcedRateError> {
+    if count >= MAX_SIGNS_PER_SESSION {
+        return Err(ForcedRateError::SessionCap);
+    }
+    // Reset publishes both words as zero; every charged sign advances the
+    // count and, on production hardware, records a non-zero tick. A mixed
+    // zero/non-zero pair is not a first-sign sentinel and must not skip the
+    // interval. (The exact tick-wrap-to-zero instant remains fail-closed.)
+    if (count == 0) != (last_sign_ms == 0) {
+        return Err(ForcedRateError::StateDisagreement);
+    }
+    if last_sign_ms != 0 && now_ms.wrapping_sub(last_sign_ms) < MIN_SIGN_INTERVAL_MS {
+        return Err(ForcedRateError::IntervalNotReady);
+    }
+    Ok(ForcedRateReceipt {
+        request_digest: *request_digest,
+        signs_this_session: count,
+        last_sign_ms,
+    })
+}
+
+/// Complete the existing minimum-sign-interval wait without charging a sign,
+/// then freeze the current session count and rate timestamp into a receipt
+/// bound to one forced request.
+///
+/// This helper is deliberately unavailable to host unit builds, whose secure
+/// crate omits the production `timeout` module.  The pure observation kernel
+/// above carries its boundary tests; Cortex-M feature-on links exercise this
+/// exact wrapper.
+#[cfg(all(feature = "erc7730-forced-blind", not(test)))]
+#[inline(never)]
+pub(crate) fn forced_rate_preflight(
+    request_digest: &[u8; 32],
+) -> Result<ForcedRateReceipt, ForcedRateError> {
+    let count_addr = SIGNS_THIS_SESSION.as_ptr() as *const u32;
+    let last_addr = LAST_SIGN_MS.as_ptr() as *const u32;
+    let count_a = crate::fi::read_volatile_voted(count_addr)
+        .map_err(|()| ForcedRateError::StateDisagreement)?;
+    let last_a = crate::fi::read_volatile_voted(last_addr)
+        .map_err(|()| ForcedRateError::StateDisagreement)?;
+    if count_a >= MAX_SIGNS_PER_SESSION {
+        return Err(ForcedRateError::SessionCap);
+    }
+
+    #[cfg(all(feature = "stm32u585", not(feature = "e2e-test")))]
+    let now_ms = {
+        let mut wakeups = 0u32;
+        loop {
+            let now =
+                crate::timeout::snapshot_verified().map_err(|_| ForcedRateError::TickFault)?;
+            if last_a == 0 || now.wrapping_sub(last_a) >= MIN_SIGN_INTERVAL_MS {
+                break now;
+            }
+            if wakeups >= FORCED_RATE_MAX_WAKEUPS {
+                return Err(ForcedRateError::WaitBudgetExceeded);
+            }
+            wakeups = wakeups.wrapping_add(1);
+            cortex_m::asm::wfi();
+        }
+    };
+
+    // QEMU/e2e configurations preserve the existing no-wait behavior but
+    // still require a valid tick/complement snapshot and the 250-sign cap.
+    #[cfg(any(not(feature = "stm32u585"), feature = "e2e-test"))]
+    let now_ms = crate::timeout::snapshot_verified().map_err(|_| ForcedRateError::TickFault)?;
+
+    crate::fi::wait_random();
+    let count_b = crate::fi::read_volatile_voted(count_addr)
+        .map_err(|()| ForcedRateError::StateDisagreement)?;
+    let last_b = crate::fi::read_volatile_voted(last_addr)
+        .map_err(|()| ForcedRateError::StateDisagreement)?;
+    if count_a != count_b || last_a != last_b {
+        return Err(ForcedRateError::StateDisagreement);
+    }
+    forced_rate_receipt_from_observation(request_digest, count_b, last_b, now_ms)
+}
+
+/// Non-blocking independent receipt recheck for the post-consent boundary.
+/// Any changed counter/timestamp, request mismatch, unelapsed interval, or bad
+/// tick pair is fatal; this helper never introduces a predictable wait after
+/// the warning and never charges the counter.
+#[cfg(all(feature = "erc7730-forced-blind", not(test)))]
+#[inline(never)]
+pub(crate) fn forced_rate_recheck(
+    receipt: &ForcedRateReceipt,
+    request_digest: &[u8; 32],
+) -> Result<(), ForcedRateError> {
+    if receipt.request_digest != *request_digest {
+        return Err(ForcedRateError::RequestMismatch);
+    }
+    let count = crate::fi::read_volatile_voted(SIGNS_THIS_SESSION.as_ptr() as *const u32)
+        .map_err(|()| ForcedRateError::StateDisagreement)?;
+    let last = crate::fi::read_volatile_voted(LAST_SIGN_MS.as_ptr() as *const u32)
+        .map_err(|()| ForcedRateError::StateDisagreement)?;
+    let now = crate::timeout::snapshot_verified().map_err(|_| ForcedRateError::TickFault)?;
+    let current = forced_rate_receipt_from_observation(request_digest, count, last, now)?;
+    if current != *receipt {
+        return Err(ForcedRateError::StateDisagreement);
+    }
+    Ok(())
+}
+
 /// Reset the rate-limit counters. Called from
 /// `SecureState::mark_unlocked` (fresh session, full burst budget)
 /// AND from `SecureState::zeroize_sensitive` (lock / idle-wipe —
@@ -207,5 +357,60 @@ mod tests {
         assert!(pre_sign().is_err());
         reset_counters();
         assert!(pre_sign().is_ok(), "post-reset sign should pass");
+    }
+
+    #[test]
+    fn forced_preflight_boundary_is_exactly_249_250_and_read_only() {
+        let request = [0x42; 32];
+        let receipt =
+            forced_rate_receipt_from_observation(&request, MAX_SIGNS_PER_SESSION - 1, 1_000, 2_000)
+                .expect("count 249 with an elapsed interval must pass");
+        assert_eq!(receipt.request_digest, request);
+        assert_eq!(receipt.signs_this_session, 249);
+        assert_eq!(receipt.last_sign_ms, 1_000);
+        assert_eq!(
+            forced_rate_receipt_from_observation(&request, MAX_SIGNS_PER_SESSION, 1_000, 2_000,),
+            Err(ForcedRateError::SessionCap),
+        );
+    }
+
+    #[test]
+    fn forced_preflight_interval_boundary_is_exact_and_wrapping_safe() {
+        let request = [0x24; 32];
+        let start = u32::MAX - 400;
+        assert_eq!(
+            forced_rate_receipt_from_observation(
+                &request,
+                1,
+                start,
+                start.wrapping_add(MIN_SIGN_INTERVAL_MS - 1),
+            ),
+            Err(ForcedRateError::IntervalNotReady),
+        );
+        assert!(forced_rate_receipt_from_observation(
+            &request,
+            1,
+            start,
+            start.wrapping_add(MIN_SIGN_INTERVAL_MS),
+        )
+        .is_ok());
+        assert!(forced_rate_receipt_from_observation(&request, 0, 0, 0).is_ok());
+        assert_eq!(
+            forced_rate_receipt_from_observation(&request, 1, 0, 2_000),
+            Err(ForcedRateError::StateDisagreement),
+        );
+        assert_eq!(
+            forced_rate_receipt_from_observation(&request, 0, 1, 2_000),
+            Err(ForcedRateError::StateDisagreement),
+        );
+    }
+
+    #[test]
+    fn forced_receipts_are_request_and_observation_bound() {
+        let a = forced_rate_receipt_from_observation(&[0x11; 32], 7, 500, 1_500).unwrap();
+        let b = forced_rate_receipt_from_observation(&[0x22; 32], 7, 500, 1_500).unwrap();
+        let c = forced_rate_receipt_from_observation(&[0x11; 32], 8, 500, 1_500).unwrap();
+        assert_ne!(a, b);
+        assert_ne!(a, c);
     }
 }

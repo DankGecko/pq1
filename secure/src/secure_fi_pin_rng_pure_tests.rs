@@ -1446,6 +1446,31 @@ mod sign_rate_source_text {
             "reset_counters must zero SIGNS_THIS_SESSION"
         );
     }
+
+    #[test]
+    fn forced_rate_preflight_and_recheck_are_read_only() {
+        let preflight_start = SIGN_RATE_SRC
+            .find("pub(crate) fn forced_rate_preflight(")
+            .expect("forced rate preflight missing");
+        let recheck_start = SIGN_RATE_SRC
+            .find("pub(crate) fn forced_rate_recheck(")
+            .expect("forced rate recheck missing");
+        let reset_start = SIGN_RATE_SRC[recheck_start..]
+            .find("pub fn reset_counters()")
+            .map(|offset| recheck_start + offset)
+            .expect("counter reset must follow forced helpers");
+        let helpers = &SIGN_RATE_SRC[preflight_start..reset_start];
+        assert!(helpers.contains("SIGNS_THIS_SESSION.as_ptr()"));
+        assert!(helpers.contains("LAST_SIGN_MS.as_ptr()"));
+        assert!(helpers.contains("crate::timeout::snapshot_verified()"));
+        assert!(helpers.contains("cortex_m::asm::wfi();"));
+        assert!(
+            !helpers.contains("SIGNS_THIS_SESSION.store(")
+                && !helpers.contains("LAST_SIGN_MS.store(")
+                && !helpers.contains("pre_sign()"),
+            "forced pre-warning helpers must neither charge nor update the rate timestamp",
+        );
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -1471,6 +1496,7 @@ mod timeout_tests {
 
     #[test]
     fn positive_tick_increments_monotonically() {
+        let _guard = t::test_lock();
         let before = t::now();
         tick_once();
         let after = t::now();
@@ -1480,6 +1506,7 @@ mod timeout_tests {
 
     #[test]
     fn positive_reset_activity_drops_idle_for() {
+        let _guard = t::test_lock();
         // Pile on some ticks so idle_for would be nonzero…
         for _ in 0..100 {
             tick_once();
@@ -1626,7 +1653,7 @@ mod timeout_source_text {
             .expect("trusted-UI input scope must close before result matching");
         let block = &CONFIRM_SRC[block_start..block_end];
         assert!(block.contains("timeout::TrustedUiWaitGuard::enter()"));
-        assert!(block.contains("input().wait_button(&mut idle)"));
+        assert!(block.contains("input().wait_button(&mut wait_abort)"));
         assert!(
             !block.contains("timeout::reset_activity()"),
             "entering a trusted-UI wait must never refresh inactivity; only a real button event may do so"

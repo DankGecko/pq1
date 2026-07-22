@@ -30,6 +30,19 @@ static TICKS: AtomicU32 = AtomicU32::new(0);
 static TICKS_INV: AtomicU32 = AtomicU32::new(!0);
 static LAST_ACTIVITY: AtomicU32 = AtomicU32::new(0);
 
+// Host tests share this remounted module's globals across parallel test
+// threads, while production has one non-reentrant SysTick writer. Keep tests
+// that exercise the live pair serialized without adding production state.
+#[cfg(test)]
+static TIMEOUT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    TIMEOUT_TEST_LOCK
+        .lock()
+        .expect("timeout test lock poisoned")
+}
+
 /// Exact forced-flow limit selected by the owner. Physical activity never
 /// extends this deadline.
 pub const FORCED_FLOW_DEADLINE_MS: u32 = 300_000;
@@ -445,6 +458,7 @@ mod tests {
 
     #[test]
     fn forced_deadline_public_api_starts_verified_and_is_initially_open() {
+        let _guard = test_lock();
         let deadline = ForcedDeadline::start_verified().unwrap();
         assert!(deadline.elapsed_verified().unwrap() < FORCED_FLOW_DEADLINE_MS);
         assert!(!deadline.expired_verified().unwrap());

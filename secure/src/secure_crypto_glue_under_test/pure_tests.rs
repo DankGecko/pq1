@@ -21,6 +21,19 @@ use super::offchain_state::{
     OFFCHAIN_COUNT_CEILING,
 };
 use sphincs_tz_shared::MAX_SLOT_USES;
+use std::sync::{Mutex, MutexGuard};
+
+// The SRAM backend models firmware's single-threaded dispatcher with a
+// `static mut` table. Host tests run in parallel, so every test that touches
+// that table must serialize just as production does; otherwise a concurrent
+// write can legitimately make the capacity helper's two snapshots disagree.
+static OFFCHAIN_MOCK_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_offchain_mock() -> MutexGuard<'static, ()> {
+    OFFCHAIN_MOCK_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // 0. Slice source-text fixtures.
@@ -674,6 +687,7 @@ fn positive_slot_key_compute_first_8_bytes_of_sha256() {
 
 #[test]
 fn positive_offchain_mock_initial_state_is_unregistered_and_zero() {
+    let _guard = lock_offchain_mock();
     let key = slot_key_compute(10, 11, 12);
     unsafe {
         assert!(!offchain_count_is_registered(&key));
@@ -684,6 +698,7 @@ fn positive_offchain_mock_initial_state_is_unregistered_and_zero() {
 
 #[test]
 fn positive_offchain_mock_register_then_is_registered_true() {
+    let _guard = lock_offchain_mock();
     let key = slot_key_compute(20, 21, 22);
     unsafe {
         offchain_count_register_slot(&key).expect("register ok");
@@ -693,6 +708,7 @@ fn positive_offchain_mock_register_then_is_registered_true() {
 
 #[test]
 fn positive_offchain_mock_bump_increases_count() {
+    let _guard = lock_offchain_mock();
     let key = slot_key_compute(30, 31, 32);
     unsafe {
         offchain_count_bump(&key, 1).expect("first bump ok");
@@ -704,6 +720,7 @@ fn positive_offchain_mock_bump_increases_count() {
 
 #[test]
 fn positive_offchain_mock_last_userop_set_is_monotonic() {
+    let _guard = lock_offchain_mock();
     let key = slot_key_compute(40, 41, 42);
     unsafe {
         last_userop_count_set(&key, 10).expect("set ok");
@@ -715,6 +732,7 @@ fn positive_offchain_mock_last_userop_set_is_monotonic() {
 
 #[test]
 fn positive_offchain_mock_promote_to_is_idempotent() {
+    let _guard = lock_offchain_mock();
     let key = slot_key_compute(50, 51, 52);
     unsafe {
         offchain_count_promote_to(&key, 50).expect("first promote ok");
@@ -736,6 +754,7 @@ fn positive_offchain_mock_promote_to_is_idempotent() {
 
 #[test]
 fn negative_offchain_mock_bump_regression_rejected() {
+    let _guard = lock_offchain_mock();
     let key = slot_key_compute(60, 61, 62);
     unsafe {
         offchain_count_bump(&key, 5).expect("first bump ok");
@@ -752,6 +771,7 @@ fn negative_offchain_mock_bump_regression_rejected() {
 
 #[test]
 fn negative_offchain_mock_bump_equal_value_rejected() {
+    let _guard = lock_offchain_mock();
     // The bump semantics are `new_count > current` (strict). A
     // replay attacker re-issuing the same `new_count` must NOT be
     // tolerated as a no-op.
@@ -767,6 +787,7 @@ fn negative_offchain_mock_bump_equal_value_rejected() {
 
 #[test]
 fn negative_offchain_mock_bump_from_zero_to_zero_rejected() {
+    let _guard = lock_offchain_mock();
     // Even a fresh slot rejects bump(0): a 0 → 0 bump is the
     // pathological "no-op replay" attack and equally must fail.
     let key = slot_key_compute(80, 81, 82);
@@ -780,6 +801,7 @@ fn negative_offchain_mock_bump_from_zero_to_zero_rejected() {
 
 #[test]
 fn positive_offchain_mock_last_userop_set_tolerates_regression_as_noop() {
+    let _guard = lock_offchain_mock();
     // Mirror of the in-file comment "Tolerant of `count <
     // last_userop`: no-op rather than error, mirroring the flash-
     // backed semantics so a stale caller cannot brick the slot."
@@ -851,6 +873,7 @@ fn positive_clamped_counter_never_trips_combined_cap_gate() {
 
 #[test]
 fn negative_offchain_mock_sync_inflation_cannot_brick_slot() {
+    let _guard = lock_offchain_mock();
     // End-to-end reproduction of the vuln against the mock backend: an untrusted
     // sync sets `last_userop` to the exact attack value MAX_SLOT_USES; a
     // subsequent sign promotes it into `offchain`. Pre-fix, `offchain` would land
@@ -882,6 +905,7 @@ fn negative_offchain_mock_sync_inflation_cannot_brick_slot() {
 
 #[test]
 fn negative_sync_high_floor_with_prior_userop_refuses_before_promotion() {
+    let _guard = lock_offchain_mock();
     use crate::aa::offchain_gate::{userop_cap_ok_with_floor, SlotLedger};
 
     // Regression for the sync→Type-2 ordering bug: a high synced floor plus
@@ -916,6 +940,7 @@ fn negative_sync_high_floor_with_prior_userop_refuses_before_promotion() {
 
 #[test]
 fn negative_offchain_mock_promote_to_over_cap_is_clamped() {
+    let _guard = lock_offchain_mock();
     // Direct guard on the sign-path promote chokepoint: even a promote target of
     // u64::MAX (a glitched/hostile last_userop snapshot) must clamp, never store
     // a value that trips the cap.
@@ -1149,6 +1174,7 @@ fn forced_capacity_receipt_binds_request_slot_and_state() {
 
 #[test]
 fn forced_capacity_mock_snapshot_is_read_only_and_slot_bound() {
+    let _guard = lock_offchain_mock();
     let key = slot_key_compute(221, 222, 223);
     let request = [0xa5; 32];
     let before =
@@ -1201,6 +1227,7 @@ fn forced_capacity_flash_path_is_strict_full_scan_and_read_only() {
 #[cfg(feature = "erc7730-forced-blind")]
 #[test]
 fn forced_capacity_preflight_publishes_distinct_verdict_and_cfi() {
+    let _guard = lock_offchain_mock();
     let key = slot_key_compute(222, 223, 224);
     let request = [0x6c; 32];
     let mut verdict = crate::fi::FAIL_SENTINEL;
@@ -2167,6 +2194,7 @@ fn negative_crypto_glue_does_not_introduce_forbidden_admin_paths() {
 //  promote — the two reach the same `new_count`.
 #[test]
 fn positive_offchain_gate_model_matches_mock_backend() {
+    let _guard = lock_offchain_mock();
     use crate::aa::offchain_gate::{self as gate, check_offchain_gate, GateOutcome, SlotLedger};
 
     // (a) shared policy constants + pure helpers identical to the shipped backend.
