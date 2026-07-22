@@ -36,6 +36,10 @@ use sphincs_tz_shared::{
     PQ_SMART_WALLET_FACTORY, SET_PRE_SIGNATURE_SELECTOR, SIGN_USEROP_HEADER_LEN,
     SIG_WRAPPER_LEN, SLOT_INDEX_MASK,
 };
+#[cfg(feature = "erc7730-forced-blind")]
+use sphincs_tz_shared::{
+    EXEC_TRANSACTION_SELECTOR, MULTISEND_CALL_ONLY_ADDRESSES, MULTI_SEND_SELECTOR,
+};
 
 use crate::nsc_sig_wrapper_under_test::encode_signature_wrapper;
 use crate::nsc_trailer_under_test::{read_optional_u16_prefixed, Trailer};
@@ -1874,6 +1878,52 @@ fn forced_route_passes_every_frozen_exclusion_to_closed_classification() {
 }
 
 #[test]
+fn forced_exact_membership_exclusions_are_fatal_before_candidate_proof() {
+    let membership = CMD_SIGN_USEROP_FORCED_SRC
+        .find("if !parsed.contains(chain_id, target, &selector)")
+        .expect("exact-F membership gate");
+    let proof = CMD_SIGN_USEROP_FORCED_SRC[membership..]
+        .find("let mut verdict = crate::fi::FAIL_SENTINEL;")
+        .map(|offset| membership + offset)
+        .expect("forced eligibility proof boundary");
+    let exclusion_block = &CMD_SIGN_USEROP_FORCED_SRC[membership..proof];
+    assert!(exclusion_block.contains("return ForcedRoute::Fatal;"));
+    assert_eq!(
+        exclusion_block
+            .matches("return ForcedRoute::ContinueOrdinary;")
+            .count(),
+        1,
+        "only a negative exact-F lookup may resume ordinary signing"
+    );
+}
+
+#[test]
+#[cfg(feature = "erc7730-forced-blind")]
+fn production_exact_f_contains_reachable_protected_intersections() {
+    let set = pqsigner_erc7730::forced_eligible::ForcedEligibleSet::from_bytes(
+        &crate::db_roots::PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET,
+    )
+    .expect("embedded exact-F set");
+    let protected_hits = set
+        .iter()
+        .filter(|(_, target, selector)| {
+            *selector == APPROVE_HASH_SELECTOR
+                || *selector == EXEC_TRANSACTION_SELECTOR
+                || *selector == SET_PRE_SIGNATURE_SELECTOR
+                || *selector == MULTI_SEND_SELECTOR
+                || *target == GPV2_SETTLEMENT_ADDRESS
+                || MULTISEND_CALL_ONLY_ADDRESSES
+                    .iter()
+                    .any(|address| address == target)
+        })
+        .count();
+    assert!(
+        protected_hits > 0,
+        "production exact-F must exercise the fatal protected branch"
+    );
+}
+
+#[test]
 fn forced_candidate_and_fatal_routes_return_terminally_before_ordinary_render() {
     let route = CMD_SIGN_USEROP_SRC
         .find("match super::cmd_sign_userop_forced::classify(")
@@ -1928,7 +1978,7 @@ fn forced_consent_charges_once_only_after_complete_preflight() {
 }
 
 #[test]
-fn forced_terminal_flow_rechecks_before_sign_and_tallies_before_release() {
+fn forced_terminal_flow_rechecks_and_reserves_tally_before_key_use() {
     let start = CMD_SIGN_USEROP_FORCED_SRC
         .find("pub(super) unsafe fn run(")
         .expect("terminal forced handler");
@@ -1953,8 +2003,9 @@ fn forced_terminal_flow_rechecks_before_sign_and_tallies_before_release() {
         "consume_forced_receipts_once(",
         "candidate.consume(",
         "CFI_PRESIGN_EXPECTED",
-        "c10_sign_verified_forced_with_progress(",
         "commit_durable_tally(",
+        "CFI_PREKEY_EXPECTED",
+        "c10_sign_verified_forced_with_progress(",
         "publish_forced_response(",
     ] {
         let offset = body[cursor..]
@@ -1963,18 +2014,39 @@ fn forced_terminal_flow_rechecks_before_sign_and_tallies_before_release() {
         cursor += offset + stage.len();
     }
 
+    assert_eq!(
+        body.matches("commit_durable_tally(").count(),
+        1,
+        "the forced flow must reserve exactly one durable use"
+    );
+    let tally = body
+        .find("if unsafe { commit_durable_tally(")
+        .expect("pre-key durable tally");
     let signer = body
         .find("c10_sign_verified_forced_with_progress(")
         .expect("forced signer call");
+    assert!(tally < signer, "durable use must precede every possible key use");
+    let tally_arm = &body[tally..signer];
+    assert!(tally_arm.contains("zeroize_sensitive_state();"));
+    assert!(tally_arm.contains("CFI_PREKEY_EXPECTED"));
+    assert!(tally_arm.matches("deadline_expired()").count() >= 1);
+
     let outer_verify = body[signer..]
         .find("let outer_verified =")
         .map(|offset| signer + offset)
         .expect("outer verify boundary");
     let signer_arm = &body[signer..outer_verify];
     assert!(signer_arm.contains("Err(_) =>"));
-    assert!(signer_arm.contains("commit_durable_tally("));
+    assert!(!signer_arm.contains("commit_durable_tally("));
     assert!(signer_arm.contains("zeroize_sensitive_state();"));
     assert!(signer_arm.contains("return NscStatus::CryptoError as u32;"));
+
+    let first_outer_verify = body[outer_verify..]
+        .find("let first = sphincs_c10::verify(")
+        .map(|offset| outer_verify + offset)
+        .expect("outer verification call");
+    let outer_cache_gate = &body[outer_verify..first_outer_verify];
+    assert!(outer_cache_gate.contains("zeroize_sensitive_state();"));
 }
 
 #[test]

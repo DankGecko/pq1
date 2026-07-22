@@ -86,6 +86,26 @@ const CFI_PRESIGN_EXPECTED: u32 = crate::cfi_expected!(
     CFI_RECEIPTS_CONSUMED,
     CFI_CANDIDATE_CONSUMED,
 );
+const CFI_PREKEY_EXPECTED: u32 = crate::cfi_expected!(
+    CFI_PREFLIGHT_ELIGIBILITY,
+    CFI_PREFLIGHT_COUNTERS,
+    CFI_PREFLIGHT_DIGEST,
+    CFI_PREFLIGHT_CAPACITY,
+    CFI_PREFLIGHT_KEY,
+    CFI_PREFLIGHT_RATE,
+    CFI_PREFLIGHT_TRANSCRIPT,
+    CFI_ATTEMPT_CHARGED,
+    CFI_WARNING_RECEIPT,
+    CFI_FINAL_RECEIPT,
+    CFI_RECHECK_ELIGIBILITY,
+    CFI_RECHECK_COUNTERS,
+    CFI_RECHECK_DIGEST,
+    CFI_RECHECK_CAPACITY,
+    CFI_RECHECK_RATE,
+    CFI_RECEIPTS_CONSUMED,
+    CFI_CANDIDATE_CONSUMED,
+    CFI_TALLY_DURABLE,
+);
 const CFI_PRERELEASE_EXPECTED: u32 = crate::cfi_expected!(
     CFI_PREFLIGHT_ELIGIBILITY,
     CFI_PREFLIGHT_COUNTERS,
@@ -131,9 +151,9 @@ const CFI_RELEASE_EXPECTED: u32 = crate::cfi_expected!(
 );
 
 /// Closed result of forced classification.  `ContinueOrdinary` preserves the
-/// pre-existing renderer for calls outside F or excluded semantic surfaces;
-/// `Fatal` is reserved for a malformed embedded artifact or proof
-/// disagreement.  Only `Candidate` enters this module's terminal signer.
+/// pre-existing renderer only for calls outside F.  Once exact-F membership is
+/// established, every mode or semantic exclusion is fatal and cannot fall back
+/// to ordinary signing.  Only `Candidate` enters this module's terminal signer.
 pub(super) enum ForcedRoute {
     ContinueOrdinary,
     Candidate(ForcedEligibility),
@@ -197,8 +217,9 @@ pub(super) fn classify(
         return ForcedRoute::ContinueOrdinary;
     }
 
-    // These surfaces may still use their existing richer ordinary renderer,
-    // but exact-F membership must never turn them into forced blind.
+    // Once exact-F membership is established, these exclusions are terminal.
+    // Falling through to the ordinary renderer here would let a request escape
+    // the forced branch after acquiring its affirmative refused-known type.
     let protected_selector = selector == APPROVE_HASH_SELECTOR
         || selector == EXEC_TRANSACTION_SELECTOR
         || selector == SET_PRE_SIGNATURE_SELECTOR
@@ -213,7 +234,7 @@ pub(super) fn classify(
         || protected_selector
         || protected_target
     {
-        return ForcedRoute::ContinueOrdinary;
+        return ForcedRoute::Fatal;
     }
 
     let mut verdict = crate::fi::FAIL_SENTINEL;
@@ -721,11 +742,13 @@ fn collect_consent(
     })
 }
 
-/// Persist the signature-use tally before any output release.  The tally is
-/// written first, so a later high-water repair failure cannot erase evidence
-/// that the key was used.  The second write is either COUNT promotion or
-/// USEROP publication; never both, keeping the frozen two-append capacity
-/// projection exact as an upper bound.
+/// Conservatively reserve one signature use after final consent and before any
+/// key use.  A later signer failure may consume a phantom use, but no power,
+/// flash, verification, or cache-fault path can produce an unjournaled key use.
+/// The tally is written first, so a later high-water repair failure cannot erase
+/// that reservation.  The second write is either COUNT promotion or USEROP
+/// publication; never both, keeping the frozen two-append capacity projection
+/// exact as an upper bound.
 #[inline(never)]
 unsafe fn commit_durable_tally(
     slot_key: &[u8; 8],
@@ -1019,6 +1042,22 @@ pub(super) unsafe fn run(
         return NscStatus::InternalError as u32;
     }
 
+    // Reserve the frozen +1 durably before entering any function that can use
+    // the few-time key.  This intentionally prefers a phantom tally on a later
+    // failure over an unaccounted key use.  A second deadline/CFI gate below
+    // prevents signing after a slow or faulted journal operation.
+    if unsafe { commit_durable_tally(&prepared.slot_key, prepared.counters) }.is_err() {
+        super::zeroize_sensitive_state();
+        return NscStatus::InternalError as u32;
+    }
+    flow_cfi.bump(CFI_TALLY_DURABLE);
+    if flow_cfi.check_into_sentinel(CFI_PREKEY_EXPECTED) != crate::fi::OK_SENTINEL
+        || deadline_expired()
+    {
+        super::zeroize_sensitive_state();
+        return NscStatus::InternalError as u32;
+    }
+
     let signature = {
         let cached = unsafe { &*core::ptr::addr_of!(super::state::SLOT_CACHE) };
         let slot = match cached {
@@ -1040,15 +1079,8 @@ pub(super) unsafe fn run(
         ) {
             Ok(signature) => signature,
             Err(_) => {
-                // The shared signer can reject before its first key use
-                // (rate/RNG preparation) or after one or both fault-hardened
-                // signing passes.  Its intentionally narrow error type does
-                // not expose that distinction.  Conservatively consume the
-                // frozen durable use here: a preparation failure may
-                // over-count one user-visible, twice-confirmed attempt, but
-                // an actual few-time-key use can never escape the journal.
-                // No response bytes are reachable from this arm.
-                let _ = unsafe { commit_durable_tally(&prepared.slot_key, prepared.counters) };
+                // The frozen use was already reserved durably. No response
+                // bytes are reachable from this arm.
                 super::zeroize_sensitive_state();
                 return NscStatus::CryptoError as u32;
             }
@@ -1065,7 +1097,12 @@ pub(super) unsafe fn run(
             {
                 &cached.key
             }
-            _ => return NscStatus::InternalError as u32,
+            _ => {
+                // Key use is already durably reserved; wipe the session and
+                // withhold output on a post-sign cache-identity fault.
+                super::zeroize_sensitive_state();
+                return NscStatus::InternalError as u32;
+            }
         };
         let first = sphincs_c10::verify(slot.pk_seed(), slot.pk_root(), &digest_check, &signature);
         crate::fi::wait_random();
@@ -1075,11 +1112,9 @@ pub(super) unsafe fn run(
         }) == crate::fi::OK_SENTINEL
     };
 
-    // Once the shared verified signer returns Ok, key use is established.
-    // Persist the frozen +1 tally even if the outer defence-in-depth verify
-    // detects a later fault; output remains withheld on every failure.
+    // The frozen +1 was durable before key use. A failed outer verification
+    // therefore withholds output without creating an unjournaled signature.
     if !outer_verified {
-        let _ = unsafe { commit_durable_tally(&prepared.slot_key, prepared.counters) };
         super::zeroize_sensitive_state();
         return NscStatus::CryptoError as u32;
     }
@@ -1091,12 +1126,7 @@ pub(super) unsafe fn run(
         u64::from(request.slot_index) + 1,
         &signature,
     );
-    if unsafe { commit_durable_tally(&prepared.slot_key, prepared.counters) }.is_err() {
-        return NscStatus::InternalError as u32;
-    }
-    flow_cfi.bump(CFI_TALLY_DURABLE);
-
-    // Expiry during the expensive signature still preserves the durable key-
+    // Expiry during the expensive signature preserves the precharged durable
     // use tally but withholds every response byte.
     if deadline_expired() {
         return NscStatus::InternalError as u32;

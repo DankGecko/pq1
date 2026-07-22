@@ -1188,7 +1188,15 @@ The sequence is:
    fail-initialized slot and CFI stage;
 9. independently recompute/recheck the request digest, eligible reason, both
    receipts, exact order and CFI transcript;
-10. consume the private permit and sign exactly once.
+10. consume the private permit, durably reserve the frozen `useropSigs + 1`,
+    verify that reservation, and recheck deadline/CFI; and
+11. sign exactly once.
+
+The durable use reservation deliberately precedes every possible key-use call.
+A later rate, RNG, signing, cache, verification, or deadline failure may consume
+one phantom use, but cannot leave a generated signature unjournaled. This
+fail-closed availability tradeoff is permitted only after both physical receipts
+have been consumed; no persistent write may occur earlier.
 
 Cancel, decline, idle wipe, lock, reset, exception, parse/resource
 error, CFI/FI disagreement, or any return path invalidates the permit and both
@@ -1200,8 +1208,8 @@ evidence.
 The current synchronous CMSE command has no authenticated secure-world USB
 disconnect signal, so this architecture makes no false promise that unplugging
 aborts an already-running ceremony. Disconnect grants no authority: both
-physical confirmations remain mandatory, and any signature generated after an
-unplug is still durably tallied before it could be released. Adding a
+physical confirmations remain mandatory, and every possible signature use after
+an unplug is already durably reserved before key use. Adding a
 disconnect-sensitive abort would be a separate trust-boundary change.
 
 ### 6. Owner-selected prompt-abuse policy
@@ -1291,19 +1299,20 @@ The owner selected the following exact volatile policy on 2026-07-22:
    the deadline predicate through both `wait_button` and the GPIO
    `wait_release` loop, so holding a button cannot suspend expiry. The device
    checks it in every warning/transcript wait iteration, before each receipt
-   publication, immediately before signing, and after verified signature
-   generation and durable signature tally but before output release. The
+   publication, immediately before the durable use reservation, again after that
+   reservation and before signing, and after verified signature generation but
+   before output release. The
    existing inactivity policy also remains active: its current comparator
    expires just after 120,000 inactive ticks. Real physical input resets only
    that idle timer, never the charged forced deadline. Consequently an active
    user can use at most 300,000 ms, while an idle user is wiped earlier.
 5. Forced steady-state output has one fixed length: `8 + 4 + 0 + 4 + 0 + 4 +
    SIG_WRAPPER_LEN(4,128) = 4,148` bytes. Define
-   `FORCED_RELEASE_RESERVE_MS = 1,000`. After verified signature generation and
-   the durable tally, but before the first non-secure write, retain the full
-   `MAX_SIGN_RESPONSE_LEN` pointer validation and independently bind the exact
-   4,148-byte forced extent, tick pair/health, deadline/CFI, and require elapsed
-   `< 299,000`. That final pre-write gate is the explicit **irreversible release
+   `FORCED_RELEASE_RESERVE_MS = 1,000`. After the durable pre-key reservation
+   and verified signature generation, but before the first non-secure write,
+   retain the full `MAX_SIGN_RESPONSE_LEN` pointer validation and independently
+   bind the exact 4,148-byte forced extent, tick pair/health, deadline/CFI, and
+   require elapsed `< 299,000`. That final pre-write gate is the explicit **irreversible release
    authorization point**: the design assumes a hostile non-secure bus master
    may observe each byte as it is written and makes no synchronous-CMSE or
    post-write-revocation claim. The fixed publication loop must have a
@@ -1312,7 +1321,7 @@ The owner selected the following exact volatile policy on 2026-07-22:
    usable response appears before 300,000 ms.
 
    Expiry at any check before this irreversible gate withholds output while
-   retaining the durable tally after key use. A post-write deadline check is a
+   retaining the durable pre-key reservation. A post-write deadline check is a
    diagnostic only. On an unexpected overrun the handler scrubs the exact
    current buffer extent, records a fatal error, and resets, but documentation
    and tests must not claim that scrub revokes bytes already copied by DMA. If
