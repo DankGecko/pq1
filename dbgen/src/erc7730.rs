@@ -1841,21 +1841,24 @@ pub fn try_compile_one_with_erc20_capabilities(
     // used by the full catalogue build.
     let mut declared_known_calls = BTreeSet::new();
     let mut declared_contract_signatures = DeclaredContractSignatures::new();
-    collect_declared_contract_calls(
+    let mut snapshot = DescriptorSourceSnapshot::default();
+    let resolved = collect_declared_contract_calls(
         path,
         registry_root,
         &mut declared_known_calls,
         &mut declared_contract_signatures,
+        &mut snapshot,
     )?;
     // The coverage scan reports whole-descriptor compilability (strict).
-    compile_descriptor(
+    compile_resolved_descriptor_with_nested_calldata_enrollments(
         path,
+        &resolved,
         policy,
-        registry_root,
         false,
         &mut Vec::new(),
         erc20_capabilities,
         Some(&declared_contract_signatures),
+        PRODUCTION_NESTED_CALLDATA_ENROLLMENTS,
     )
 }
 
@@ -2128,12 +2131,15 @@ fn build_db_inner(
     // blind-sign path merely because the safer compiler dropped it.
     let mut declared_known_calls = BTreeSet::<ContractCallKey>::new();
     let mut declared_contract_signatures = DeclaredContractSignatures::new();
+    let mut source_snapshot = DescriptorSourceSnapshot::default();
+    let mut resolved_sources = BTreeMap::<PathBuf, serde_json::Value>::new();
     for src in &unscanned_declared_sources {
         let resolved = collect_declared_contract_calls(
             src,
             registry_root,
             &mut declared_known_calls,
             &mut declared_contract_signatures,
+            &mut source_snapshot,
         )
         .map_err(|e| omission_scan_error(src, input_dir, registry_root, &e))?;
         if has_concrete_descriptor_shape(&resolved) {
@@ -2148,23 +2154,36 @@ fn build_db_inner(
         }
     }
     for src in &sources {
-        let _resolved = collect_declared_contract_calls(
+        let resolved = collect_declared_contract_calls(
             src,
             registry_root,
             &mut declared_known_calls,
             &mut declared_contract_signatures,
+            &mut source_snapshot,
         )
         .map_err(|e| omission_scan_error(src, input_dir, registry_root, &e))?;
+        if resolved_sources.insert(src.clone(), resolved).is_some() {
+            return Err(format!(
+                "duplicate descriptor source path in catalogue scan: {}",
+                review_relative_path(src, input_dir)
+            ));
+        }
     }
     // Compile only after the omission preflight has inventoried every source.
     // A scoped descriptor must therefore see selector collisions declared by
     // later files, dropped files, and misnamed-but-concrete tripwire files.
     for src in &sources {
         let mut partial_format_drops = Vec::new();
-        match compile_descriptor_with_nested_calldata_enrollments(
+        let resolved = resolved_sources.get(src).ok_or_else(|| {
+            format!(
+                "internal: no frozen descriptor source for {}",
+                src.display()
+            )
+        })?;
+        match compile_resolved_descriptor_with_nested_calldata_enrollments(
             src,
+            resolved,
             policy,
-            registry_root,
             tolerant,
             &mut partial_format_drops,
             erc20_capabilities,
@@ -2536,11 +2555,112 @@ fn reject_duplicate_eip712_format_bindings(emitted: &[Emitted]) -> Result<(), St
 type ContractCallKey = (u64, [u8; 20], [u8; 4]);
 type DeclaredContractSignatures = BTreeMap<ContractCallKey, BTreeSet<String>>;
 
+const MAX_DESCRIPTOR_SOURCE_BYTES: u64 = 1024 * 1024;
+const MAX_DESCRIPTOR_SNAPSHOT_BYTES: usize = 32 * 1024 * 1024;
+const MAX_DESCRIPTOR_SNAPSHOT_FILES: usize = 4096;
+
+/// Immutable, bounded view of every descriptor/include file consumed by one
+/// catalogue build.
+///
+/// Omission inventory and compilation must never reopen the source tree
+/// independently: otherwise a concurrent replacement can make the compiled
+/// descriptor differ from the calls entered into the hard-refusal Bloom. The
+/// first successful regular-file read wins for the whole build; every later
+/// consumer receives a clone of the same parsed bytes.
+#[derive(Default)]
+struct DescriptorSourceSnapshot {
+    json_by_path: BTreeMap<PathBuf, serde_json::Value>,
+    total_bytes: usize,
+}
+
+impl DescriptorSourceSnapshot {
+    fn load_json(&mut self, path: &Path) -> Result<serde_json::Value, String> {
+        let before = fs::symlink_metadata(path)
+            .map_err(|e| format!("inspect descriptor source {}: {e}", path.display()))?;
+        if before.file_type().is_symlink() || !before.file_type().is_file() {
+            return Err(format!(
+                "descriptor source {} must be a non-symlink regular file",
+                path.display()
+            ));
+        }
+        if before.len() > MAX_DESCRIPTOR_SOURCE_BYTES {
+            return Err(format!(
+                "descriptor source {} is {} bytes; per-file cap is {MAX_DESCRIPTOR_SOURCE_BYTES}",
+                path.display(),
+                before.len()
+            ));
+        }
+
+        let canonical = path
+            .canonicalize()
+            .map_err(|e| format!("canonicalize descriptor source {}: {e}", path.display()))?;
+        if let Some(json) = self.json_by_path.get(&canonical) {
+            return Ok(json.clone());
+        }
+        if self.json_by_path.len() >= MAX_DESCRIPTOR_SNAPSHOT_FILES {
+            return Err(format!(
+                "descriptor source snapshot exceeds {MAX_DESCRIPTOR_SNAPSHOT_FILES} distinct files"
+            ));
+        }
+
+        let file = File::open(path)
+            .map_err(|e| format!("open descriptor source {}: {e}", path.display()))?;
+        let after = file
+            .metadata()
+            .map_err(|e| format!("fstat descriptor source {}: {e}", path.display()))?;
+        if !after.file_type().is_file() {
+            return Err(format!(
+                "descriptor source {} changed to a non-regular file",
+                path.display()
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if before.dev() != after.dev() || before.ino() != after.ino() {
+                return Err(format!(
+                    "descriptor source {} changed between stat and open",
+                    path.display()
+                ));
+            }
+        }
+
+        let initial_capacity = usize::try_from(after.len())
+            .unwrap_or(usize::MAX)
+            .min(MAX_DESCRIPTOR_SOURCE_BYTES as usize);
+        let mut raw = Vec::with_capacity(initial_capacity);
+        file.take(MAX_DESCRIPTOR_SOURCE_BYTES + 1)
+            .read_to_end(&mut raw)
+            .map_err(|e| format!("read descriptor source {}: {e}", path.display()))?;
+        if raw.len() as u64 > MAX_DESCRIPTOR_SOURCE_BYTES {
+            return Err(format!(
+                "descriptor source {} grew beyond {MAX_DESCRIPTOR_SOURCE_BYTES} bytes",
+                path.display()
+            ));
+        }
+        let total_bytes = self
+            .total_bytes
+            .checked_add(raw.len())
+            .ok_or_else(|| "descriptor source snapshot byte count overflow".to_string())?;
+        if total_bytes > MAX_DESCRIPTOR_SNAPSHOT_BYTES {
+            return Err(format!(
+                "descriptor source snapshot is {total_bytes} bytes; aggregate cap is {MAX_DESCRIPTOR_SNAPSHOT_BYTES}"
+            ));
+        }
+        let json = parse_json_value_rejecting_duplicate_keys(&raw)
+            .map_err(|e| format!("parse descriptor source {}: {e}", path.display()))?;
+        self.total_bytes = total_bytes;
+        self.json_by_path.insert(canonical, json.clone());
+        Ok(json)
+    }
+}
+
 fn collect_declared_contract_calls(
     path: &Path,
     registry_root: Option<&Path>,
     out: &mut BTreeSet<ContractCallKey>,
     signatures: &mut DeclaredContractSignatures,
+    snapshot: &mut DescriptorSourceSnapshot,
 ) -> Result<serde_json::Value, String> {
     // Scan the raw descriptor first so local declarations remain visible even
     // when an include contributes a different half of the tuple. The resolved
@@ -2550,12 +2670,10 @@ fn collect_declared_contract_calls(
     // Unioning both successful views is conservative; surplus tuples are safe
     // Bloom false positives, whereas dropping either view could be a false
     // negative.
-    let raw = fs::read(path).map_err(|e| format!("read: {e}"))?;
-    let raw_json =
-        parse_json_value_rejecting_duplicate_keys(&raw).map_err(|e| format!("parse: {e}"))?;
+    let raw_json = snapshot.load_json(path)?;
     collect_contract_calls_from_json(&raw_json, out, signatures)?;
 
-    let json = load_resolved_descriptor_json(path, registry_root)?;
+    let json = load_resolved_descriptor_json_from_snapshot(path, registry_root, snapshot)?;
     collect_contract_calls_from_json(&json, out, signatures)?;
     Ok(json)
 }
@@ -3149,9 +3267,16 @@ fn load_resolved_descriptor_json(
     path: &Path,
     registry_root: Option<&Path>,
 ) -> Result<serde_json::Value, String> {
-    let raw = fs::read(path).map_err(|e| format!("read: {e}"))?;
-    let mut json =
-        parse_json_value_rejecting_duplicate_keys(&raw).map_err(|e| format!("parse: {e}"))?;
+    let mut snapshot = DescriptorSourceSnapshot::default();
+    load_resolved_descriptor_json_from_snapshot(path, registry_root, &mut snapshot)
+}
+
+fn load_resolved_descriptor_json_from_snapshot(
+    path: &Path,
+    registry_root: Option<&Path>,
+    snapshot: &mut DescriptorSourceSnapshot,
+) -> Result<serde_json::Value, String> {
+    let mut json = snapshot.load_json(path)?;
 
     // Resolve top-level includes before either compilation or the independent
     // registry-known-call scan. Keeping one loader prevents a skipped format
@@ -3180,10 +3305,9 @@ fn load_resolved_descriptor_json(
             )
         })?;
         let inc_path = resolve_include_path(root, &including_path, &inc)?;
-        let inc_raw =
-            fs::read(&inc_path).map_err(|e| format!("read include {}: {e}", inc_path.display()))?;
-        let inc_json = parse_json_value_rejecting_duplicate_keys(&inc_raw)
-            .map_err(|e| format!("parse include {}: {e}", inc_path.display()))?;
+        let inc_json = snapshot
+            .load_json(&inc_path)
+            .map_err(|e| format!("load include {}: {e}", inc_path.display()))?;
         if let Some(obj) = json.as_object_mut() {
             obj.remove("includes");
         }
@@ -3207,6 +3331,7 @@ pub fn resolved_descriptor_sha256(
     Ok(sha256_of(&jcs_canonicalize(&json)?))
 }
 
+#[cfg(test)]
 fn compile_descriptor(
     path: &Path,
     _policy: &Policy,
@@ -3228,6 +3353,7 @@ fn compile_descriptor(
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn compile_descriptor_with_nested_calldata_enrollments(
     path: &Path,
@@ -3240,7 +3366,29 @@ fn compile_descriptor_with_nested_calldata_enrollments(
     nested_calldata_enrollments: &[NestedCalldataEnrollment],
 ) -> Result<Vec<Emitted>, String> {
     let json = load_resolved_descriptor_json(path, registry_root)?;
+    compile_resolved_descriptor_with_nested_calldata_enrollments(
+        path,
+        &json,
+        _policy,
+        tolerant,
+        partial_format_drops,
+        erc20_capabilities,
+        declared_contract_signatures,
+        nested_calldata_enrollments,
+    )
+}
 
+#[allow(clippy::too_many_arguments)]
+fn compile_resolved_descriptor_with_nested_calldata_enrollments(
+    path: &Path,
+    json: &serde_json::Value,
+    _policy: &Policy,
+    tolerant: bool,
+    partial_format_drops: &mut Vec<String>,
+    erc20_capabilities: &Erc20Capabilities,
+    declared_contract_signatures: Option<&DeclaredContractSignatures>,
+    nested_calldata_enrollments: &[NestedCalldataEnrollment],
+) -> Result<Vec<Emitted>, String> {
     // `Option<T>` normally treats an explicit JSON `null` like an absent
     // field. That is unsafe for a narrowing extension: a reviewer could see
     // `_pqsigner` in a curated descriptor while the compiler silently emits
@@ -3274,7 +3422,7 @@ fn compile_descriptor_with_nested_calldata_enrollments(
     //     0xe023ee…, `bytes32 descriptorHash`). EVM/keccak, HOST-ONLY (the device
     //     never computes it); surfaced in the review file so an auditor can look
     //     each descriptor up on EAS. See `docs/erc8176-attestation-status.md`.
-    let jcs = jcs_canonicalize(&json)?;
+    let jcs = jcs_canonicalize(json)?;
     let descriptor_hash = sha256_of(&jcs);
     let erc8176_hash = pqsigner_tx_core::hash::keccak256(&jcs);
 
@@ -10191,6 +10339,8 @@ fn compute_domain_separator(d: &Eip712Domain) -> Result<[u8; 32], String> {
 // JCS canonicalization (RFC 8785 subset — integers / strings only).
 // ─────────────────────────────────────────────────────────────────────
 
+const MAX_JCS_SAFE_INTEGER: u64 = (1u64 << 53) - 1;
+
 fn jcs_canonicalize(v: &serde_json::Value) -> Result<Vec<u8>, String> {
     let mut out = String::with_capacity(256);
     jcs_render(v, &mut out)?;
@@ -10209,11 +10359,24 @@ fn jcs_render(v: &serde_json::Value, out: &mut String) -> Result<(), String> {
         }
         serde_json::Value::Number(n) => {
             // JCS requires shortest IEEE-754 form for floats. Real
-            // ERC-7730 descriptors use only integers and ASCII-coded
-            // string values; allow integers + reject finite floats.
+            // ERC-7730 descriptors use only integers and string values. Keep
+            // this intentionally smaller subset interoperable with the
+            // ECMAScript parser used by external ERC-8176 auditors: integers
+            // outside the exact safe range would otherwise be rounded before
+            // their JCS hash while serde_json preserves their wider spelling.
             if let Some(u) = n.as_u64() {
+                if u > MAX_JCS_SAFE_INTEGER {
+                    return Err(format!(
+                        "JCS: integer {u} exceeds the exact IEEE-754 safe range (+/-{MAX_JCS_SAFE_INTEGER})"
+                    ));
+                }
                 out.push_str(&u.to_string());
             } else if let Some(i) = n.as_i64() {
+                if i < -(MAX_JCS_SAFE_INTEGER as i64) {
+                    return Err(format!(
+                        "JCS: integer {i} exceeds the exact IEEE-754 safe range (+/-{MAX_JCS_SAFE_INTEGER})"
+                    ));
+                }
                 out.push_str(&i.to_string());
             } else {
                 return Err(format!(
@@ -11283,6 +11446,32 @@ mod tests {
             symlink(&policy_path, &policy_link).unwrap();
             assert!(read_policy_bytes(&policy_link).is_err());
         }
+    }
+
+    #[test]
+    fn descriptor_source_snapshot_is_bounded_and_immutable_for_the_build() {
+        let temp = tempfile::tempdir().unwrap();
+        let descriptor = temp.path().join("calldata-race.json");
+        fs::write(&descriptor, br#"{"version":1}"#).unwrap();
+
+        let mut snapshot = DescriptorSourceSnapshot::default();
+        let first = snapshot.load_json(&descriptor).unwrap();
+        fs::write(&descriptor, br#"{"version":2}"#).unwrap();
+        let second = snapshot.load_json(&descriptor).unwrap();
+        assert_eq!(first, second, "later consumers must see the first read");
+        assert_eq!(second["version"].as_u64(), Some(1));
+        assert_eq!(snapshot.json_by_path.len(), 1);
+
+        let oversized = temp.path().join("calldata-oversized.json");
+        fs::write(
+            &oversized,
+            vec![b' '; MAX_DESCRIPTOR_SOURCE_BYTES as usize + 1],
+        )
+        .unwrap();
+        let error = snapshot
+            .load_json(&oversized)
+            .expect_err("oversized descriptor source must fail before parsing");
+        assert!(error.contains("per-file cap"), "{error}");
     }
 
     #[test]
@@ -13269,6 +13458,28 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(r#"[3,1,2]"#).unwrap();
         let out = jcs_canonicalize(&v).unwrap();
         assert_eq!(out, br#"[3,1,2]"#);
+    }
+
+    #[test]
+    fn jcs_rejects_integers_outside_the_exact_ieee754_safe_range() {
+        let positive_edge: serde_json::Value = serde_json::from_str(r#"9007199254740991"#).unwrap();
+        assert_eq!(
+            jcs_canonicalize(&positive_edge).unwrap(),
+            b"9007199254740991"
+        );
+        let negative_edge: serde_json::Value =
+            serde_json::from_str(r#"-9007199254740991"#).unwrap();
+        assert_eq!(
+            jcs_canonicalize(&negative_edge).unwrap(),
+            b"-9007199254740991"
+        );
+
+        for ambiguous in [r#"9007199254740993"#, r#"-9007199254740993"#] {
+            let value: serde_json::Value = serde_json::from_str(ambiguous).unwrap();
+            let error = jcs_canonicalize(&value)
+                .expect_err("JCS subset must not hash an integer ECMAScript would round");
+            assert!(error.contains("exact IEEE-754 safe range"), "{error}");
+        }
     }
 
     /// ERC-8176 `descriptorHash` = keccak256(RFC-8785 JCS(descriptor)). Golden
