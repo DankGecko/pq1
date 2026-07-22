@@ -196,8 +196,8 @@ impl ForcedAttemptState {
     /// Charge the sole warning opportunity with one voted, CFI-checked
     /// `Armed -> Spent` transition and an independent voted readback.
     ///
-    /// C2 intentionally does not call this yet; C3 will invoke it only after
-    /// deterministic preflight, immediately before the first severe warning.
+    /// The terminal forced handler invokes this only after deterministic
+    /// preflight, immediately before the first severe warning.
     /// Returning a Hamming-distant sentinel lets that handler fail closed
     /// without trusting a `bool` or `Result` discriminant.
     #[allow(dead_code)]

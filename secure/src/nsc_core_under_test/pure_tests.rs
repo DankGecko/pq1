@@ -343,9 +343,12 @@ fn positive_forced_attempt_has_one_armed_writer_and_one_production_caller() {
             std::iter::repeat_n(path, count)
         })
         .collect();
-    assert!(
-        charge_callers.is_empty(),
-        "C2 must not wire the charge into a handler; C3 owns that route: {charge_callers:?}",
+    assert_eq!(
+        charge_callers,
+        vec![std::path::PathBuf::from(
+            "src/nsc/cmd_sign_userop_forced.rs",
+        )],
+        "only the terminal forced-userop route may consume the PIN-scoped attempt",
     );
 }
 

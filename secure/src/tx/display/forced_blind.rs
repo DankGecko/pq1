@@ -655,6 +655,25 @@ impl RawForcedReceipt {
     }
 }
 
+impl Drop for RawForcedReceipt {
+    fn drop(&mut self) {
+        // Receipt authority is stack-local and exact-once, but cancellation
+        // and every early return must still actively destroy it.  Volatile
+        // invalidation prevents an optimized handler epilogue from leaving a
+        // live published codeword in its reusable stack frame.
+        unsafe {
+            core::ptr::write_volatile(&mut self.state, 0);
+            core::ptr::write_volatile(&mut self.state_inv, 0);
+            core::ptr::write_volatile(&mut self.domain, 0);
+            for byte in &mut self.request_digest {
+                core::ptr::write_volatile(byte, 0);
+            }
+            core::ptr::write_volatile(&mut self.cfi, crate::fi::CfiCounter::new());
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// First physical-confirmation receipt.  It cannot be substituted for the
 /// final receipt because the type, domain, and CFI constants are distinct.
 pub(crate) struct WarningReceipt(RawForcedReceipt);
