@@ -823,20 +823,23 @@ the prompt-abuse policy, Partner A's incomplete independent reproduction of the
 handler-gas differential gap, and the stage-impact disagreement for the
 two-receipt mechanism. None may be converted into approval by reviewer count.
 
-## PQ1 forced-blind material redline candidate v2 — FROZEN FINAL RE-REVIEW
+## PQ1 forced-blind material redline candidate v2 — FROZEN CORRECTED RE-REVIEW
 
-**Status:** completed material replacement candidate. The owner selected the
+**Status:** corrected material replacement candidate. The owner selected the
 remaining prompt-abuse semantics on 2026-07-22, including the fail-closed host
-denial-of-service residual. The first fresh architecture wave returned three
-FIX verdicts; this revision replaces Bloom-positive authority with exact
-authenticated membership and closes the state, deadline, transcript,
-disconnect, gas, and preflight ambiguities those reports exposed. This
-candidate changes authority, failure response, state transitions, trusted UI,
-and the page/resource envelope, so no prior review transfers. Do not implement
-the forced tier until this exact remediation receives the workflow-required
-short simultaneous GPT-5.6 SOL / Opus 4.8 / Kimi K3 architecture re-review and
-a recorded favorable owner stage decision. Current hard refusal remains the
-default and rollback.
+denial-of-service residual. The latest short architecture wave returned GPT-5.6
+SOL **FIX**, Claude Opus 4.8 **FIX**, and Kimi K3 **GO**. The coordinator
+reproduced the two concrete blocker classes in source: descriptor omission
+could downgrade a clear-capable call, and a frozen-but-valid `TICKS` pair could
+still be accompanied by watchdog refresh. This correction narrows forced
+eligibility to the refused-known set `F = K \ C`, makes verified tick advance a
+watchdog-kick prerequisite, and pins capacity, display, idle, and output-release
+bounds. This candidate changes authority, failure response, state transitions,
+trusted UI, and the page/resource envelope, so no prior review transfers. Do
+not implement the forced tier until this exact remediation receives one final
+workflow-required short simultaneous GPT-5.6 SOL / Opus 4.8 / Kimi K3
+architecture re-review and a recorded favorable owner stage decision. Current
+hard refusal remains the default and rollback.
 
 ### 1. Product decision and conservative closures
 
@@ -853,8 +856,8 @@ This v2 candidate closes the reviewed ambiguities conservatively:
 |---|---|
 | Trust tier | Separate forced blind; explicitly **not clear signing** |
 | Default / rollback | Existing hard refusal |
-| Host authority | None: no flag, trailer bit, preference, cached grant, or automatic fallback |
-| Membership authority | Exact membership in a firmware-embedded, authenticated canonical tuple set; the public Bloom is only a fail-closed prefilter and never authorizes forced blind |
+| Host influence | The companion can omit the trailer and thereby request the ceremony only for an independently firmware-eligible refused-known tuple. It cannot make a tuple eligible, downgrade a clear-capable tuple, or authorize signing; there is no flag, preference, cached grant, or automatic fallback |
+| Membership authority | Exact membership in the firmware-embedded refused-known set `F = K \ C`; the all-known Bloom is only a fail-closed consistency prefilter and never authorizes forced blind |
 | Sole eligible metadata cause | Structurally clean absence of the complete ERC-7730 trailer |
 | Invalid/bad/root-mismatched/chain- or target-misbound evidence | Fatal |
 | Verified render failure | Every current `RenderErr`, including `NoFormat`, `Reject`, and `PageBudget`, is fatal |
@@ -890,7 +893,7 @@ MetadataEvidence =
 DispatchOutcome =
     Clear(pages)
   | GenericUnknown(pages)
-  | ForcedCandidate(ExactKnownDescriptorAbsent)
+  | ForcedCandidate(RefusedKnownDescriptorAbsent)
   | Fatal(reason)
 ```
 
@@ -904,11 +907,21 @@ The handler mints `ForcedCandidate` only after two independent positive checks:
 1. strict parsing proves the trailer is structurally cleanly absent (not
    malformed, truncated, nonempty, bad, root-mismatched, or misbound); and
 2. independent FI-protected evaluation proves the exact
-   `(chain, target, selector)` tuple is present in the canonical exact set
-   embedded in the signed secure image.
+   `(chain, target, selector)` tuple is present in the canonical refused-known
+   set `F` embedded in the signed secure image.
 
-`dbgen` emits `secure/data/erc7730-known-calls.set` (and the e2e counterpart)
-as a canonical compact exact set. Its 16-byte big-endian header is
+The generated catalogue defines three exact tuple sets:
+
+- `K` is every registry-known call after the current authenticated inventory
+  policy, including every clear-capable tuple;
+- `C` is every tuple recovered by strict parsing of the final accepted
+  `CTX_CONTRACT` IR in the exact `P730` catalogue; and
+- `F = K \ C` is the refused-known set: registry-known tuples for which this
+  firmware has no accepted clear-signing format.
+
+`dbgen` emits `secure/data/erc7730-forced-eligible.set` (and the e2e
+counterpart) as a canonical compact encoding of `F`. Its 16-byte big-endian
+header is
 `"P73K" || schema_u16(1) || header_len_u16(16) || group_count_u32 ||
 tuple_count_u32`. Each strictly sorted, unique `(chain, target)` group is a
 36-byte record
@@ -920,25 +933,35 @@ exactly `16 + 36 * group_count + 4 * tuple_count`; malformed arithmetic,
 reserved fields, ordering, duplicates, gaps, trailing bytes, or out-of-range
 indices are fatal.
 
-`xtask` expands that representation back into strictly sorted fixed-width
-tuples `chain_id_be64 || target_20 || selector_4`, proves byte-for-byte equality
-with the exact build vector, and proves the tuple count and recomputed existing
-domain-separated canonical tuple-set digest equal `known_call_count` and
-`known_call_set_sha256` in the authenticated `P73S` release receipt before
-generating `db_roots.rs`. The production vector currently contains 4,580
-tuples in 777 groups: the compact artifact is exactly 46,308 bytes rather than
-the infeasible 146,560-byte flat form. The final linked QEMU and U585 images
-must still measure the actual delta and remain inside their respective FLASH
-envelopes. The device performs one bounded binary search over groups and one
-bounded binary search over the selected group's selector slice. The existing
-Bloom must also be positive for every exact-known tuple, as a generated-
-artifact consistency check, but it is never positive authority: an exact-
-negative Bloom collision retains today's hard refusal and cannot enter forced
-blind.
+No `P73S` schema change is required. The authenticated receipt already binds
+the exact `P730` bytes/root/leaf count and the count and canonical hash of `K`.
+Before generating `db_roots.rs`, `dbgen` and `xtask` independently and strictly
+recover `C` from that final `P730`, decode `P73K` as `F`, prove
+`C intersect F = empty`, canonically merge `C union F`, and require that union
+to equal the in-memory `K` vector byte-for-byte and to reproduce the existing
+`known_call_count` and `known_call_set_sha256` in `P73S`. They additionally
+prove every union tuple is positive in the all-known Bloom and bind that
+Bloom's size and digest to `P73S`. The signed secure image authenticates the
+co-embedded `P73K` and `P73S`; the release proof prevents substitution,
+overlap, omission, or a mismatched prod/e2e pair.
 
-The positive path uses a new `prove_exact_known_contract_call` primitive with
-its own CFI constants and fail-preinitialized caller verdict. Reusing,
-negating, or interpreting failure from `prove_unknown_contract_call` is fatal.
+The current production shapes are `K = 4,580 tuples / 777 groups / 46,308
+bytes`, `C = 1,366 / 346 / 17,936 bytes`, and `F = 3,214 / 546 / 32,528 bytes`
+under this compact encoding. Only the final `F` artifact is linked for forced
+eligibility. The final linked QEMU and U585 images must still measure the actual
+delta and remain inside their respective FLASH envelopes.
+
+At runtime the device strictly validates the complete `P73K` magic, schema,
+header length, exact total length, range arithmetic, contiguity, coverage,
+ordering, uniqueness, reserved fields, and absence of gaps/trailing bytes
+before lookup. A non-inlined parser/prover publishes its own fail-initialized
+verdict and CFI sentinel. The positive proof performs two independently
+initialized complete parse-and-lookup passes, requiring agreement, then uses
+one bounded binary search over groups and one over the selected selector
+slice. The all-known Bloom must independently be positive. The positive path
+uses a new `prove_forced_eligible_contract_call` primitive with its own CFI
+constants and fail-preinitialized caller verdict. Reusing, negating, or
+interpreting failure from `prove_unknown_contract_call` is fatal.
 
 Failure of either check, disagreement between redundant checks, or failure to
 produce the expected positive sentinel is fatal. Eligibility is never inferred
@@ -947,9 +970,15 @@ failure, or a generic `None`.
 
 The direct single handler consumes the candidate immediately. It must not
 return to the ordinary ERC-20, typed-call, selector-name, Safe/CoW, or generic
-blind ladder. An exact-unknown/Bloom-negative call continues to use today's
-ordinary routing and gains no forced option; exact-unknown/Bloom-positive and
-all lookup/artifact disagreements retain hard refusal.
+blind ladder. A tuple in `C` whose descriptor was omitted is absent from `F`
+but positive in the all-known Bloom, so it hard-refuses: the companion cannot
+downgrade a clear-capable call. A genuinely unknown/Bloom-negative call
+continues through today's ordinary routing and gains no forced option.
+`F`-negative/Bloom-positive calls, including Bloom collisions, and every
+lookup/artifact disagreement retain hard refusal. Any present verified
+descriptor that later fails to render is fatal and never falls through to `F`.
+Catalogue drift treats every `C -> F` movement as an authority expansion that
+must be reported and owner-gated.
 
 ### 3. Exhaustive fatal preflight
 
@@ -966,10 +995,12 @@ check, including:
 - no Safe/CoW/MultiSend/delegatecall/protected-selector claim, including
   selector-only and short malformed `execTransaction`;
 - empty `paymasterAndData`;
-- clean absence plus the affirmative exact-known receipt;
-- double-read page-123 counters, signing-capacity availability, exact
-  `newOffchainCount`, reconstructed steady-state Type-2 calldata, the complete
-  transcript, numeric widths and final digest;
+- clean absence plus the affirmative exact forced-eligible receipt;
+- double-read page-123 counters, an FI-protected read-only storage-capacity
+  receipt, exact `newOffchainCount`, reconstructed steady-state Type-2
+  calldata, the complete transcript, numeric widths and final digest;
+- `sign_rate::signs_this_session() < sign_rate::MAX_SIGNS_PER_SESSION`
+  (`250`), with the observed count frozen for an independent pre-sign recheck;
 - exactly-one handler-owned canonical gas page and complete two-page ERC-8213
   digest;
 - stack/page/resource preflight and all CFI stage initialization.
@@ -980,10 +1011,24 @@ that predictably ends in a later resource or routing refusal.
 
 No flash repair, counter promotion, or other persistent write occurs during
 preflight. The handler freezes those counter values and re-reads them after the
-second consent; any disagreement is fatal. A non-inlined preflight helper owns
-the 4,352-byte reconstructed `ExecuteCallData`, returns only its digest and the
-fixed transcript inputs, and ends before the 1,988-byte `Pages` value is built.
-After consent, a separate reconstruction must reproduce the frozen digest.
+second consent; any disagreement is fatal. The new read-only page-123 capacity
+API has hardware and mock implementations and returns a request-bound receipt
+only after a cap-conforming full parse/projection proves the slot is admitted
+under `offchain_state::MAX_DISTINCT_SLOTS = 128` and that either the current
+blank extent or a safe compaction has room for the forced steady-state path's
+at most two required journal appends. In particular it proves
+`projected_live_qws + 2 <= OFFCHAIN_CAPACITY`; merely checking
+`already_present || distinct_live < 128` is insufficient for inherited or
+corrupt page shapes. The handler freezes and independently rechecks that
+receipt and the rate-count receipt immediately before
+`c10_sign_verified_with_progress` calls `sign_rate::pre_sign()`. Hardware write
+failures remain fail closed, but a predictable cap or compaction-capacity miss
+cannot occur after warning.
+
+A non-inlined preflight helper owns the 4,352-byte reconstructed
+`ExecuteCallData`, returns only its digest and the fixed transcript inputs, and
+ends before the 1,988-byte `Pages` value is built. After consent, a separate
+reconstruction must reproduce the frozen digest.
 
 The forced request digest is the SHA-256 of the fixed domain
 `PQSigner/forced-blind/request/v1` followed by this exact concatenation:
@@ -1027,6 +1072,28 @@ digits, split without truncation. The exact final order is:
 | 24–25 | Complete ERC-8213 inner-calldata digest |
 | 26–27 | Complete final Type-2 SPHINCS signing digest |
 | 28 | `FORCED BLIND / UNVERIFIED`, cancel/sign instructions, final consent |
+
+The previously ambiguous compact pages have these exact 16-column by four-row
+layouts; every unused cell is an ASCII space and any width failure is a fatal
+pre-warning preflight result:
+
+- page 1 row 0 is `A{account_index} O{owner_index}` in decimal. The wire bounds
+  are account `0..=255` and owner `1..=4,194,304`, so the maximum row occupies
+  13 cells. Rows 1, 2, and 3 contain respectively the first 7, next 8, and last
+  5 signer bytes as 14, 16, and 10 lowercase hexadecimal characters; row 1 is
+  prefixed `S:`. This displays all 20 device-derived signer bytes without
+  truncation.
+- pages 3 and 6 use row 0 labels `TARGET` and `ENTRYPOINT`; rows 1, 2, and 3
+  contain the first 8, next 8, and last 4 address bytes as 16, 16, and 8
+  lowercase hexadecimal characters.
+- page 5 is exactly the existing canonical handler gas page: `Call:{decimal}`,
+  `Verify:{decimal}`, `PreVer:{decimal}`, and `Total:{decimal}` on rows 0..3.
+  The canonical gas helper returns failure if any exact decimal does not fit;
+  preflight turns that into refusal before warning.
+- page 7 is exactly `SINGLE TYPE-2`, `INITCODE: EMPTY`,
+  `Sel: 0x????????`, and `Data: {decimal} B` on rows 0..3. The selector uses
+  eight lowercase hexadecimal characters and the decimal data length is at
+  most `MAX_TX_LEN = 4,096`.
 
 The 29-page fixed set leaves two pages of the 31-page bound unused. There are
 no friendly decimal or semantic summary pages in PQ1. If any exact value,
@@ -1110,37 +1177,72 @@ The owner selected the following exact volatile policy on 2026-07-22:
 4. A 300,000 ms forced-flow deadline starts when the attempt is charged and
    covers the warning, raw transcript, both receipts, all final rechecks, and
    signature release. Physical-button activity does not extend it. The source
-   is the secure software millisecond counter `timeout::TICKS`, not the
-   hardware `SYST_CVR` down-counter. Each of at most three bounded snapshot
-   attempts accepts three monotone samples only when each wrapping delta is at
-   most one tick; exhausted retries, disagreement, or backward movement is
-   fatal. Elapsed time uses wrapping subtraction against the charged start and
-   expires at `elapsed >= 300_000`.
+   is the secure software millisecond counter, not the hardware `SYST_CVR`
+   down-counter. `timeout` replaces the single word with the exact complement
+   pair `TICKS` and `TICKS_INV`, initialized to `(0, !0)`. The SysTick ISR is
+   reordered to call a non-inlined `timeout::tick_verified()` first. That
+   helper rejects an invalid old pair without repairing it, computes exactly
+   `(old + 1, !(old + 1))`, publishes and independently reads back both words,
+   and only then publishes success into caller-owned tick-health and CFI slots
+   that the ISR fail-initialized before the call.
+
+   The tick-health verdict becomes a mandatory argument to both feature
+   variants of `hw::iwdg::systick_watch_and_kick`. A non-OK verdict or CFI
+   mismatch returns before every `kick()`, including the boot-grace kick. Thus
+   a stuck primary/check bit, skipped update, frozen valid pair, or skipped
+   helper call cannot be refreshed indefinitely by a still-running SysTick;
+   the independent LSI-clocked production IWDG resets and disarms the attempt.
+   Tick faults are sticky, not self-healed. Builds without production IWDG must
+   refuse forced authority on bad tick health and remain test evidence only.
+
+   Thread-mode forced snapshots read and validate both words with an
+   interrupt-free or equivalently retry-safe primitive so a legitimate SysTick
+   update between loads cannot create a false mismatch. Each of at most three
+   bounded snapshot attempts accepts three monotone pair-valid samples only
+   when each wrapping delta is at most one tick; exhausted retries,
+   disagreement, or backward movement is fatal. Elapsed time uses wrapping
+   subtraction against the charged start and expires at `elapsed >= 300_000`.
+   Tests cover primary/check stuck bits, skipped updates, invalid-old-pair
+   stickiness, wraparound, and the rule that watchdog refresh never precedes a
+   verified advance.
 
    This is precisely a **SysTick-elapsed** bound, not a claim of perfect wall-
-   clock accounting while interrupts are masked. Successive checks may
-   legitimately observe the same tick, so zero delta is not itself liveness
-   evidence. Production already requires the independent LSI-clocked IWDG: if
-   SysTick stops, its secure handler stops kicking the IWDG and reset disarms
-   the volatile attempt. Short interrupt-masked flash/critical sections may
-   under-count wall time; each such window must be measured below the minimum
-   production IWDG bite interval and is an explicitly accepted bounded
-   residual. Signing and release checks occur outside those windows. Builds
-   without the production IWDG provide test evidence only and cannot authorize
-   this feature for release.
+   clock accounting while interrupts are masked. Short interrupt-masked
+   flash/critical sections may under-count wall time; each such window must be
+   measured below the minimum production IWDG bite interval and is an
+   explicitly accepted bounded residual. Signing and release checks occur
+   outside those windows.
+
    A forced-confirm variant factors the existing navigation core and carries
    the deadline predicate through both `wait_button` and the GPIO
    `wait_release` loop, so holding a button cannot suspend expiry. The device
    checks it in every warning/transcript wait iteration, before each receipt
    publication, immediately before signing, and after verified signature
-   generation and durable signature
-   tally but before output release. Expiry after key use withholds the output
-   but still counts that generated signature.
-5. Cancel, decline, idle wipe, lock, reset, exception, parse or
+   generation and durable signature tally but before output release. The
+   existing inactivity policy also remains active: its current comparator
+   expires just after 120,000 inactive ticks. Real physical input resets only
+   that idle timer, never the charged forced deadline. Consequently an active
+   user can use at most 300,000 ms, while an idle user is wiped earlier.
+5. Forced steady-state output has one fixed length: `8 + 4 + 0 + 4 + 0 + 4 +
+   SIG_WRAPPER_LEN(4,128) = 4,148` bytes. Define
+   `FORCED_RELEASE_RESERVE_MS = 1,000`. After verified signature generation and
+   the durable tally, but before the first non-secure write, retain the full
+   `MAX_SIGN_RESPONSE_LEN` pointer validation and independently bind the exact
+   4,148-byte forced extent, tick pair/health, deadline/CFI, and require elapsed
+   `< 299,000`. The fixed publication loop must have a
+   release-shaped post-LTO disassembly, cycle measurement, and hardware bound
+   below 1,000 ms. Check the deadline again after the final write and before
+   returning. Because the CMSE call is synchronous, non-secure CPU code cannot
+   observe the buffer until return; if the post-write check unexpectedly
+   expires, scrub exactly the extent written and return an error. Expiry after
+   key use still retains the durable tally and releases no bytes. If the fixed
+   publication cannot be bounded below the reserve, the feature stays disabled
+   and the reserve/schema must be re-reviewed.
+6. Cancel, decline, idle wipe, lock, reset, exception, parse or
    resource failure, CFI/FI disagreement, or any other return path destroys the
    request permit and both consent receipts. The attempt remains spent for that
    unlock session. Ordinary clear signing may continue after a cancellation.
-6. Lock, idle wipe, reset, and power loss preserve no grant. Only a new
+7. Lock, idle wipe, reset, and power loss preserve no grant. Only a new
    successful PIN unlock re-arms one attempt.
 
 The accepted residual is fail-closed host denial of service: a hostile or
@@ -1226,10 +1328,15 @@ owner amendments. A later implementation/merge packet must include:
 
 - exhaustive tables for every metadata, render, mode, exclusion and fatal enum
   variant, including a future-variant-fatal mutation control;
-- canonical compact exact-set header/range/length/order controls, expansion
-  equality, the pinned 4,580-tuple/777-group/46,308-byte production shape,
-  exact-positive, exact-negative/Bloom-negative, and adversarial Bloom-
-  positive/exact-negative cases, with the last retaining hard refusal;
+- canonical compact exact-set magic/schema/header/range/length/order/reserved/
+  gap/trailing-byte controls; independently recovered and pinned shapes
+  `K = 4,580/777/46,308`, `C = 1,366/346/17,936`, and
+  `F = 3,214/546/32,528`; `C intersect F = empty`; `C union F = K`; P73S
+  count/hash and Bloom reconstruction; prod/e2e substitution failures; and two
+  independently initialized full runtime parse-and-lookup passes;
+- `F` positive, clear-capable `C` negative, genuinely unknown/Bloom-negative,
+  and adversarial `F`-negative/Bloom-positive cases, with descriptor omission
+  for `C` and every Bloom collision retaining hard refusal;
 - absent versus malformed/nonempty/bad/root/misbound/FI-fault separation;
 - selector-only/short Safe, Safe/CoW/MultiSend/delegatecall, one-element batch,
   off-chain, deployment and rotation rejection;
@@ -1239,13 +1346,21 @@ owner amendments. A later implementation/merge packet must include:
 - transcript/full final-digest differential and exact 29-page golden grids;
 - gas zero/one/two/near-match/full-buffer/permutation tests in the complete
   handler glue;
+- frozen/rechecked session-rate and page-123 capacity receipts, including the
+  249/250 boundary, present/new slots, full but safely compactable pages,
+  corrupt/over-cap projections, and proof of room for both required appends;
 - warning/final cancel, idle, replay, out-of-order, stale-receipt, exception
   and reset cleanup, plus explicit evidence that USB disconnect is not an
   authority signal;
 - a scripted non-auto-confirm UI configuration;
 - selected prompt-policy exhaustion, deadline and reset tests, including
-  SysTick-stall-to-IWDG-reset evidence and measured interrupt-masked undercount
+  complement-pair wraparound, stuck primary/check bits, skipped/frozen tick
+  advance, no watchdog kick on bad health, SysTick-stall-to-IWDG reset, the
+  independent idle/forced timers, and measured interrupt-masked undercount
   windows below the production watchdog minimum;
+- the exact 4,148-byte forced response, pre-release `< 299,000` gate,
+  post-write deadline check and scrub-on-expiry behavior, plus a release-shaped
+  fixed-publication hardware bound below `FORCED_RELEASE_RESERVE_MS = 1,000`;
 - release-shaped Thumb link/map, post-LTO disassembly, MSPLIM/exception
   headroom and hardware stack high-water;
 - FI skip/stuck-at campaigns over classifier, exact-membership receipt,
@@ -1268,10 +1383,12 @@ integration contract, root-rotation policy where relevant, `docs/STATUS.md`,
 production feature/configuration documentation, and the ERC-8176 status owner.
 Required language:
 
-> Forced blind is not clear signing. An exact firmware-known call never silently
+> Forced blind is not clear signing. A registry-known call never silently
 > reaches the ordinary ERC-20, typed-call, selector-name, or generic blind
-> ladder. It either clear-signs, fatal-refuses, or—only for the explicitly
-> enumerated clean-absence, single steady-state Type-2 case—enters a separate
+> ladder. A tuple in the firmware's accepted clear set either clear-signs or
+> fatal-refuses; descriptor omission cannot downgrade it. Only an exact member
+> of the separately authenticated refused-known set, with cleanly absent
+> metadata in the enumerated single steady-state Type-2 case, may enter the
 > on-device forced-blind ceremony. Default and rollback remain refusal.
 
 This plan authorizes no flashing, hardware fault injection, release,

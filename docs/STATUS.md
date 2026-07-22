@@ -52,12 +52,20 @@
 > and undergoing final architecture re-review after the owner
 > selected exactly one attempt per PIN unlock plus a 300-second forced-flow
 > deadline and accepted the fail-closed host-denial residual on 2026-07-22.
-> Its first fresh three-reviewer wave returned FIX. The first re-review then
-> identified the full authenticated inventory (4,580 tuples, not 1,366), gas-
-> proof ordering, state-codeword, and SysTick-bound precision. The final frozen
-> candidate encodes the full set in 46,308 bytes and is pending one last short
-> architecture wave; no forced-blind authority exists before that gate. The
-> materially remediated current tree is host, codegen and QEMU green; optimized
+> Earlier waves replaced Bloom authority and identified the full authenticated
+> inventory, gas-proof ordering, state-codeword, and SysTick-bound precision.
+> The latest short wave returned GPT-5.6 SOL **FIX**, Opus 4.8 **FIX**, and Kimi
+> K3 **GO**; the coordinator reproduced the descriptor-omission downgrade and
+> frozen-tick/watchdog findings. The corrected freeze now limits eligibility to
+> the derived refused-known set `F = K \ C` (3,214 tuples / 546 groups /
+> 32,528 bytes), so withholding metadata for any of the 1,366 clear-capable
+> tuples remains hard refusal. It also gates every IWDG kick on verified
+> complement-pair tick advance, pins rate/page-123 preflight capacity, exact
+> page rows, the idle/deadline interaction, and a 1,000 ms reserve around the
+> fixed 4,148-byte output. One final short architecture wave is pending; the
+> P73K artifact and forced flow remain unimplemented, and no forced-blind
+> authority exists before that gate. The materially remediated current tree is
+> host, codegen and QEMU green; optimized
 > development inspection is favorable but is
 > not executable FI, a production profile, or a hardware stack/high-water
 > bound. The remediated current-refusal phase completed its exact three-reviewer
