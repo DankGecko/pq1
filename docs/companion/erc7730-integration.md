@@ -46,6 +46,23 @@ Current security contract:
   direct call or MultiSend record. Without either, signing hard-refuses and
   never downgrades to typed or blind signing. Only a genuinely absent tuple may
   use the generic display ladder; Bloom false positives conservatively refuse.
+- The owner-selected, default-off forced-blind extension partitions exact
+  contract-call tuples into `K` (the complete registry-known inventory), `C`
+  (tuples recovered from accepted contract-context formats in the final
+  `P730`), and `F = K \ C` (refused-known tuples). Its canonical `P73K` artifact
+  encodes only `F`. The signed secure image must co-authenticate `P73K` and
+  `P73S`; generation and companion preflight recover `C`, strictly decode `F`,
+  prove `C ∩ F = ∅` and `C ∪ F = K`, and reproduce the P73S `K`
+  count/hash plus Bloom relation. A companion-selected, missing, malformed, or
+  mismatched artifact grants no authority.
+- Forced blind is separate from clear signing and remains unimplemented at
+  this owner-amendment snapshot. Once its implementation and merge gates land,
+  only an exact `F` member with a structurally cleanly absent complete trailer
+  may enter its on-device ceremony, and only in a build that explicitly enables
+  `erc7730-forced-blind`. A `C` tuple with an omitted descriptor remains fatal;
+  malformed/nonempty/bad/misbound evidence and every verified render failure
+  remain fatal. All other existing refusal and generic-unknown routing stays
+  unchanged. Default and rollback behavior is refusal.
 <!-- BEGIN XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->
 - The host compiler and device require **IR schema v6 (`0x06`)**; this value is
   generated from `pqsigner_erc7730::ir::SCHEMA_VER`, and older schemas hard-refuse.
@@ -74,6 +91,9 @@ Current security contract:
 - Known/verified render errors—including no matching format, non-canonical ABI
   framing, unsupported dynamics, or page-budget exhaustion—hard-refuse.
   `MAX_PAGES` is currently 31; code constants, not old prose, are authoritative.
+- Catalogue drift must report every `C -> F` movement as a signing-authority
+  expansion and obtain an explicit owner decision before the paired root/set
+  rotation is accepted.
 - `tokenAmount.nativeCurrencyAddress` is an authenticated one-or-two-address
   list under IR tag `0x42` (legacy scalar bytes unchanged). Exact membership
   alone selects the chain-native ticker/scale; malformed, duplicate, oversized,
@@ -114,6 +134,11 @@ Provenance is deliberately pre-production:
   compile time and `make prod-erc7730-provenance-check` independently refuses
   it. A future verified root must remove the dev-warning feature coupling in
   the same reviewed rotation.
+- Production configurations omit `erc7730-forced-blind` until its implementation
+  review and the independent watchdog-attribution, physical trusted-UI/FI,
+  resource, ERC-8176, rollback, provenance, and release gates close. The
+  feature is positive and default-off; no dev/test alias or missing flag may
+  enable it.
 - There is deliberately no gateway command that reports the current root. The
   authenticated signed-image receipt now supplies the release metadata without
   expanding the USB/CMSE surface. With no authenticated running-device query,

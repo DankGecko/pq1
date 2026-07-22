@@ -823,9 +823,9 @@ the prompt-abuse policy, Partner A's incomplete independent reproduction of the
 handler-gas differential gap, and the stage-impact disagreement for the
 two-receipt mechanism. None may be converted into approval by reviewer count.
 
-## PQ1 forced-blind material redline candidate v2 — FROZEN HARDWARE-BOUNDARY RE-REVIEW
+## PQ1 forced-blind material redline candidate v2 — ARCHITECTURE GO / PHASE C AUTHORIZED
 
-**Status:** corrected material replacement candidate. The owner selected the
+**Status:** selected Phase-C architecture. The owner selected the
 remaining prompt-abuse semantics on 2026-07-22, including the fail-closed host
 denial-of-service residual. Review of commit `76c01227` returned GPT-5.6 SOL
 **FIX** and Claude Opus 4.8 **GO**; Kimi K3 hit the 15-minute hard limit without
@@ -836,13 +836,26 @@ non-secure DMA bus master can observe response writes before post-write scrub.
 This correction requires Secure-only IWDG ownership, defines the reserved
 pre-write check as the irreversible release point, limits eligibility to the
 refused-known set `F = K \ C`, and closes the PIN-arm, complete-grid,
-combined-cap, and rate-preflight ambiguities from the same wave. This candidate
-changes authority, failure response, state transitions, trusted UI, and the
-page/resource envelope, so no prior review transfers. Do not implement the
-forced tier until this exact remediation receives one final workflow-required
-short simultaneous GPT-5.6 SOL / Opus 4.8 / Kimi K3 architecture re-review and
-a recorded favorable owner stage decision. Current hard refusal remains the
-default and rollback.
+combined-cap, and rate-preflight ambiguities from the same wave. The exact
+corrected identity `6bda0faef0a75d312eefb4999adc6a2c536a0004` / tree
+`2135ad340a81c32117e0f6a4d6e027292f30f622` then received **GO with no
+blockers from GPT-5.6 SOL, Claude Opus 4.8, and Kimi K3** in one simultaneous
+bounded wave. Their remaining items are implementation/release evidence gaps,
+not unresolved architecture questions.
+
+The owner/maintainer stage decision recorded on 2026-07-22 authorizes the
+bounded Phase-C implementation campaign defined here: (C1) P73K/catalogue
+binding and exact runtime proof; (C2) PIN-only volatile attempt state,
+tick/IWDG, deadline-aware UI, receipts, and deterministic capacity preflight;
+and (C3) terminal handler/transcript/sign/release integration. The cumulative
+envelope is the default-off `erc7730-forced-blind` feature, 32,528-byte
+production `F` artifact, fixed 29-page transcript, no persistent grant or wire
+schema migration, and preserved hard refusal whenever the feature or any gate
+is absent. The next boundary is one combined Phase-D implementation review.
+This decision authorizes implementation and testing only—not merge,
+production, shipment, flashing, or irreversible action. Current hard refusal
+remains the default and rollback until the implementation phase lands through
+its own gates.
 
 ### 1. Product decision and conservative closures
 
@@ -1452,11 +1465,13 @@ not replace byte-binding, parser, routing, provenance or configuration gates.
 
 ### 9. Authority, owner amendments and convergence
 
-After a favorable fresh architecture review, an owner/maintainer decision must
-amend, at minimum, `CLAUDE.md`, clear-signing CS2/CS9, the companion guide and
-integration contract, root-rotation policy where relevant, `docs/STATUS.md`,
-production feature/configuration documentation, and the ERC-8176 status owner.
-Required language:
+The favorable fresh architecture review and 2026-07-22 owner/maintainer Phase-C
+decision are accompanied by the minimum controlling amendments to `CLAUDE.md`,
+clear-signing CS2/CS9, the companion guide and integration contract,
+root-rotation policy, `docs/STATUS.md`, production feature/configuration
+documentation, and the ERC-8176 status owner. Those amendments select this
+candidate for implementation but do not claim that its currently absent code
+or evidence exists. Controlling language:
 
 > Forced blind is not clear signing. A registry-known call never silently
 > reaches the ordinary ERC-20, typed-call, selector-name, or generic blind

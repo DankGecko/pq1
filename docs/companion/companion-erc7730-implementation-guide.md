@@ -116,6 +116,20 @@ absent from the pinned membership filter may use the generic display ladder.
 Bloom false positives can refuse an otherwise-unknown call, which is the safe
 failure direction.
 
+The owner-selected forced-blind extension does not weaken that default. It
+defines three exact sets: `K` is the complete registry-known contract-call
+inventory, `C` is the subset recovered from accepted contract-context formats
+in the final `P730`, and `F = K \ C` is the refused-known subset. A tuple in
+`C` whose descriptor is omitted still fatal-refuses; omission cannot downgrade
+a clear-capable call. Once the separately reviewed implementation exists, only
+an exact member of `F` with a structurally cleanly absent complete trailer may,
+under the explicit default-off `erc7730-forced-blind` firmware feature, enter a
+separate on-device forced-blind ceremony. Malformed, nonempty, bad,
+root-mismatched, misbound, or verified-but-unrenderable evidence remains fatal,
+as do every other previously refused route. Forced blind is not clear signing.
+At this owner-amendment snapshot the feature and flow are not implemented, so
+the operative behavior remains hard refusal.
+
 ERC-20 metadata is a scoped capability, not a global fact. Handler verification
 establishes only Merkle membership plus chain binding; final use must also match
 the signed surface: the direct ERC-20 target, the exact ERC-7730 `tokenPath`, a
@@ -176,7 +190,8 @@ an exact `(chain, address)` lookup. Wildcard names never qualify.
 
 ## 2. What the companion must ship
 
-Five paired inputs in the companion release:
+Five paired inputs remain sufficient for clear signing. A sixth exact artifact
+is mandatory before a companion may request the selected forced-blind flow:
 
 1. **An authenticated firmware release identity.** Verify the `.pqfw` C10
    manifest, supplied vendor key, and exact secure/nonsecure image hashes before
@@ -214,11 +229,23 @@ Five paired inputs in the companion release:
    cannot be reconstructed from a non-invertible Bloom and must not be claimed
    as independently recomputed.
 
-4. **A descriptor lookup function** keyed on `(chain_id, contract)` for
+4. **The exact release-paired refused-known set**, when forced blind is
+   advertised. `dbgen` emits it as
+   `secure/data/erc7730-forced-eligible.set` (`P73K`; with a separate E2E
+   counterpart). A standalone or companion-selected file grants no authority:
+   its exact bytes must be authenticated as part of the same signed secure
+   image as `P73S`. Strictly recover `C` from the paired final `P730`, decode
+   `F` from `P73K`, prove `C ∩ F = ∅` and `C ∪ F = K`, and require the
+   union's count and canonical SHA-256 to reproduce the `K` receipt already in
+   `P73S`. The P73S schema does not change. Any parse, relation, Bloom, image,
+   variant, or release-pair mismatch disables forced blind and preserves hard
+   refusal; it is never repaired by substituting a host file.
+
+5. **A descriptor lookup function** keyed on `(chain_id, contract)` for
    contract calls, and on `(chain_id, verifying_contract,
    domain_separator, full_primary_type_hash)` for EIP-712. See §4.
 
-5. **A bundle assembler** that produces the exact inner byte layout the
+6. **A bundle assembler** that produces the exact inner byte layout the
    firmware's `verify_erc7730_bundle` consumes; the command encoder adds
    exactly one length frame. See §5.
 
@@ -307,6 +334,13 @@ inside authenticated `secure.bin`. Then sanity-check the paired catalogue:
   the companion and enforce the owner's minimum-version/rollback policy.
   Unknown identity or version skew refuses. There is deliberately no companion-
   asserted value and no unauthenticated gateway query.
+- If the signed release advertises `erc7730-forced-blind`, authenticate its
+  exact `P73K` bytes from the same secure image, strictly parse the complete
+  artifact, recover `C` from this exact validated `P730`, and prove
+  `C ∩ F = ∅`, `C ∪ F = K`, the P73S `K` count/hash, and all-known Bloom
+  consistency before classifying any forced-eligible tuple. A missing or
+  mismatched `P73K` disables only the optional forced path; it never relaxes
+  clear-signing verification or the known-call refusal policy.
 
 If any of these fail, treat the catalogue/firmware pair as incompatible and
 stop known-call signing until the companion data is repaired or updated.
@@ -373,9 +407,11 @@ Notes:
   multi-format descriptor.
 - On a compiled-catalogue miss, do not infer that the firmware considers the
   call unknown. Its pinned known-call Bloom filter includes raw declarations
-  that were rejected or omitted from the compiled catalogue. Pair/version that
-  filter with the companion release, or surface the firmware's fail-closed
-  refusal; never retry a refused call without a proof as a downgrade.
+  that were rejected or omitted from the compiled catalogue. If the optional
+  forced feature is unavailable, surface the firmware's fail-closed refusal.
+  If it is available, only exact release-paired `P73K` membership may identify
+  `F`; a Bloom result or catalogue miss is not eligibility. Never omit a proof
+  for a `C` tuple or retry a refused call as a downgrade.
 
 ## 5. Bundle assembly
 
@@ -519,9 +555,12 @@ shorthand: emit all seven preceding trailer slots explicitly as `[u16 BE 0]`,
 then the non-zero names count and its bundles. Otherwise the first names bytes
 are consumed as an earlier positional trailer.
 
-That zero-trailer form is signable only for tuples absent from the
-firmware-paired known-call filter. It is not a way to opt out of clear-signing
-for a compiled descriptor.
+By default, that zero-trailer form is signable only for tuples absent from the
+firmware-paired known-call filter. Once the selected feature is implemented and
+explicitly enabled, it may additionally request the separate forced ceremony
+for an exact `F` member, but only when the complete trailer is structurally
+cleanly absent. It is never a way to opt out of clear signing for a `C` tuple;
+malformed or bad evidence remains fatal.
 
 **Important:** a non-empty `names_section` after the last trailer is
 `[u8 count][bundle_0 ... bundle_{count-1}]`, `1 ≤ count ≤ 4`, each bundle
@@ -1013,7 +1052,11 @@ companion-side.
 | Firmware-known call, wrong chain_id in trailer    | Status: `"7730 binding fail"`, then hard refusal.                                                                                                               |
 | Firmware-known call, wrong contract in trailer    | Status: `"7730 binding fail"`, then hard refusal.                                                                                                               |
 | EIP-712 sign with mismatched domain_separator     | Status: `"7730 binding fail"`. NO blind-sign fallback for kind=2 — error returned to dapp.                                                                      |
-| No descriptor for firmware-known contract call    | Hard refusal: `"7730 proof needed"`, unless this is the explicitly supported Safe native ERC-20 path with exact chain/contract-bound Merkle metadata and strict ABI decode. Direct known calls require the descriptor. |
+| No descriptor for a clear-capable `C` contract call | Hard refusal: `"7730 proof needed"`, even when `erc7730-forced-blind` is enabled. Descriptor omission never downgrades a clear-capable call. The pre-existing exact Safe native ERC-20 capability remains separate. |
+| Exact `F` member, complete trailer cleanly absent, forced feature disabled or unavailable | Hard refusal. Default and rollback behavior do not change. |
+| Exact release-paired `F` member, complete trailer cleanly absent, forced feature enabled | After the implementation and its merge gates land: enter only the separate on-device forced-blind warning/transcript/final-confirm ceremony. This is never reported as clear signing. |
+| `F` member with malformed, nonempty, bad, root-mismatched, misbound, or unrenderable supplied evidence | Hard refusal. Supplied evidence never falls through to forced blind. |
+| Missing, malformed, substituted, or release-mismatched `P73K` | Forced blind unavailable; preserve every existing hard refusal. A Bloom positive or compiled-catalogue miss is not a substitute. |
 | No trailer for genuinely unknown contract call    | Generic value/ERC-20/typed/blind ladder remains available (Bloom false positives may conservatively refuse).                                                    |
 | Legacy bundle > 5130 bytes, or contract proof set > 10268 bytes | No generic `"erc7730 too big"` status exists. Single-UserOp positional framing reports `"bad erc7730"`; batch reports `"trailer len>cap"`; off-chain typed framing remains legacy-only and may report a framing or bundle-verification failure. Treat every path as a hard companion error. |
 | Verified descriptor lacks the calldata selector   | `RenderErr::NoFormat` → hard refusal. This is a companion/catalog mismatch, never downgrade permission.                                                         |
@@ -1055,7 +1098,8 @@ well as the generated artifacts.
 2. Companion release pipeline regenerates `erc7730_db.bin` via
    `cargo run -p dbgen` from the same vendored registry baseline, reviewed
    curation set, and policy as the firmware build; the same pass emits
-   `erc7730_status.bin` and the exact known-call Bloom.
+   `erc7730_status.bin`, the exact known-call Bloom, and the canonical `P73K`
+   refused-known set for builds that can enable forced blind.
 3. `fwsign sign` extracts the unique allocated/read-only status section from
    the final secure ELF, proves it is inside the flattened secure image being
    hashed, and packages its exact bytes. Independent verification authenticates
@@ -1063,11 +1107,19 @@ well as the generated artifacts.
    embedded receipt.
 4. The companion enforces exact expected/minimum firmware version policy and
    fully preflights the paired catalogue/Bloom against the authenticated status.
+   Before enabling forced blind it also authenticates the co-embedded `P73K`
+   from that same secure image and proves `C ∩ F = ∅`, `C ∪ F = K`, and
+   the existing P73S count/hash and Bloom relations.
    - **All checks match:** enable clear signing for that immutable pairing.
    - **Mismatch, rollback, missing status, or unknown installed identity:**
      disable clear signing and require a compatible firmware/catalogue update.
      Do not disable trailers and retry: tuples in the firmware's known-call
      filter hard-refuse without their proof.
+
+Every `C -> F` movement changes signing authority when the optional feature is
+enabled. Root-rotation review must report each such movement and obtain an
+explicit owner decision; ordinary catalogue churn cannot silently convert a
+clear-capable tuple into a forced-blind candidate.
 
 No root-reporting gateway command is part of this design. Adding one would
 expand the frozen USB/CMSE surface without improving authentication: non-secure
@@ -1102,6 +1154,10 @@ Companion-side pre-release:
       status field, rebuild the full tree/root and every proof, and validate all
       entries/IR/accelerators before lookup. Bytes 0..31 of P730 are the header,
       not a root.
+- [ ] If the release advertises `erc7730-forced-blind`, authenticate the exact
+      in-image `P73K`, strictly parse it, recover `C` from the paired P730, and
+      prove `C ∩ F = ∅`, `C ∪ F = K`, the P73S `K` count/hash, and Bloom
+      consistency. Missing or mismatched evidence leaves forced blind disabled.
 - [ ] Every entry in the catalog is reachable via the lookup
       function — round-trip every leaf through assemble-and-verify
       against the bundle parser at companion-side test time. Mirror
@@ -1121,6 +1177,10 @@ Companion-side pre-release:
       direct/non-exempt firmware-known call without the trailer. The only
       exception is the explicitly supported Safe native-ERC20 route with
       exact chain/contract-bound Merkle metadata and strict ABI decoding.
+- [ ] Never request forced blind for a `C` tuple. Require exact authenticated
+      `F` membership plus clean absence, and treat every supplied-invalid or
+      render-failure path as fatal. Surface the ceremony as forced blind, never
+      as successful clear signing.
 - [ ] A compiled-catalogue miss is not proof of absence from the firmware
       known-call Bloom filter. Use a version-paired filter/manifest or accept a
       fail-closed refusal; don't retry without a trailer as a downgrade.

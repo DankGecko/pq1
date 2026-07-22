@@ -117,6 +117,25 @@ Hardware test images opt in via `e2e-test` (or `dev-testkey`) — both are unamb
 
 There's also a dedicated dual-feature `compile_error!` for `otp-hardcoded-master-key + optiga-lock-operational` (publishes the Shielded-Connection secret across every dev board), and one in `secret_keys.rs` for `bhk + otp-hardcoded-master-key` (the BHK boot wiring is `not(otp-hardcoded-master-key)`-gated, so this combo would compile and fail at runtime with `KeyInvalid`).
 
+### Selected ERC-7730 forced-blind feature (not yet implemented)
+
+`erc7730-forced-blind` is the owner-selected positive feature for the separate
+forced-blind ceremony. It is default-off, is not implied by any mode, dev/test
+alias, platform, or missing flag, and is omitted from the current production
+bundle. With it off, every registry-known call that cannot clear-sign retains
+today's hard refusal; no wire or persistent-state interpretation changes.
+
+Implementation must add a compile-time production fence: a production build
+that enables `erc7730-forced-blind` is rejected unless the production IWDG,
+Secure-only IWDG attribution, physical-button trusted UI, and fixed paired
+catalogue artifacts (`P73S`, all-known Bloom, and exact `P73K` refused-known
+set) are selected. The production bundle must continue to omit the feature
+until the implementation review and the independent watchdog-attribution,
+trusted-UI/FI, resource, ERC-8176 provenance, rollback, release, and signing-key
+custody gates close. This amendment selects the configuration contract for
+Phase C; it does not claim that the feature, fence, or forced flow already
+exists, and it weakens none of the production prohibitions above.
+
 ---
 
 ## 5. Common Makefile recipes → feature sets

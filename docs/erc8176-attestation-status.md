@@ -41,6 +41,18 @@ the on-device IR/leaf identifier baked into the firmware-pinned Merkle tree
 (SHA-256 per the PQ-stack convention). The ERC-8176 hash is **keccak-256** of the
 *same* JCS bytes — EVM-mandated, host-only, never computed on the device.
 
+**Forced-blind authority boundary.** ERC-8176 evidence may support admitting a
+descriptor into the firmware's accepted clear set `C`; it does not authorize a
+runtime signing path or give raw forced-blind pages semantic trust. Forced blind
+is not clear signing. Under the default-off candidate, only cleanly absent
+metadata for an exact member of the separately authenticated refused-known set
+`F = K \ C`, in the enumerated single steady-state Type-2 case, may enter the
+separate on-device ceremony. Omission for a tuple in `C` and every present
+descriptor validation, binding, or render failure remain fatal. Feature-off and
+rollback behavior remain hard refusal, and ERC-8176 production admission plus
+the independent configuration, UI/FI, resource, provenance, rollback, and
+release gates remain unchanged.
+
 ## What we built (host code half; still pre-production)
 
 - **`erc8176_hash` in `dbgen`** = `keccak256(jcs_canonicalize(resolved descriptor))`,

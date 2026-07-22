@@ -48,10 +48,9 @@
 > **Scoped PQ1 clear-signing correction — 2026-07-16.** The normative hard
 > refusal remains unchanged. The first forced-blind architecture identity and
 > the first current-refusal implementation identity both completed as
-> **NO-GO**; the conservative v2 forced-blind candidate is unimplemented,
-> and undergoing final architecture re-review after the owner
-> selected exactly one attempt per PIN unlock plus a 300-second forced-flow
-> deadline and accepted the fail-closed host-denial residual on 2026-07-22.
+> **NO-GO**. The owner then selected exactly one attempt per successful PIN
+> unlock, a 300-second forced-flow deadline, and the fail-closed host-denial
+> residual on 2026-07-22.
 > Earlier waves replaced Bloom authority and identified the full authenticated
 > inventory, gas-proof ordering, state-codeword, and SysTick-bound precision.
 > A subsequent frozen identity returned GPT-5.6 SOL **FIX** and Opus 4.8
@@ -64,12 +63,16 @@
 > refusal for all 1,366 clear-capable tuples on metadata omission, requires
 > Secure-only IWDG ownership under [#79](https://github.com/EthereumPhone/PQ1/issues/79),
 > and makes the `<299,000` pre-write check the irreversible release point backed
-> by a measured sub-1,000 ms fixed 4,148-byte publication. It also pins
+> by a mandatory measured sub-1,000 ms fixed 4,148-byte publication. It also pins
 > PIN-only arming, rate/combined-cap/page-123 preflight, every 29-page grid, and
-> tick/deadline behavior. A final short re-review of that corrected identity is
-> pending; P73K and the forced flow remain unimplemented, and no forced-blind
-> authority exists before that gate. The materially remediated current tree is
-> host, codegen and QEMU green; optimized
+> tick/deadline behavior. The exact corrected architecture identity
+> `6bda0fae` / tree `2135ad34` then received **GO with no blockers from GPT-5.6
+> SOL, Opus 4.8, and Kimi K3**. The 2026-07-22 owner/maintainer decision
+> authorizes its bounded Phase-C implementation only; P73K and the forced flow
+> remain unimplemented, current hard refusal still controls, and no merge,
+> production, shipment, flashing, or irreversible authority follows. The next
+> boundary is the combined Phase-D implementation review. The materially
+> remediated current tree is host, codegen and QEMU green; optimized
 > development inspection is favorable but is
 > not executable FI, a production profile, or a hardware stack/high-water
 > bound. The remediated current-refusal phase completed its exact three-reviewer
