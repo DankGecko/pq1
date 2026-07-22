@@ -89,6 +89,7 @@ pub(crate) enum ForcedRateError {
     TickFault,
     WaitBudgetExceeded,
     RequestMismatch,
+    ChargeDisagreement,
 }
 
 /// Pure constructor shared by production and exact 249/250 boundary tests.
@@ -256,6 +257,107 @@ pub fn pre_sign() -> Result<(), ()> {
     Ok(())
 }
 
+/// Check the production forced-charge timestamp against verified tick samples
+/// taken immediately before and after [`pre_sign`].
+///
+/// The forced preflight has already completed the one-second interval, so the
+/// charging call must not spend another interval in the generic wait.  The
+/// charged timestamp must be a non-zero tick inside this short verified window;
+/// zero at the exact 32-bit wrap instant is deliberately refused rather than
+/// recreating the first-sign sentinel with a non-zero count.
+#[cfg(any(feature = "erc7730-forced-blind", test))]
+#[inline]
+fn forced_charge_postcondition(
+    count_before: u32,
+    tick_before: u32,
+    count_after: u32,
+    charged_ms: u32,
+    tick_after: u32,
+) -> bool {
+    let Some(expected_count) = count_before.checked_add(1) else {
+        return false;
+    };
+    let tick_span = tick_after.wrapping_sub(tick_before);
+    let charge_offset = charged_ms.wrapping_sub(tick_before);
+    expected_count <= MAX_SIGNS_PER_SESSION
+        && count_after == expected_count
+        && charged_ms != 0
+        && tick_span < MIN_SIGN_INTERVAL_MS
+        && charge_offset <= tick_span
+}
+
+/// Forced-flow rate charge.
+///
+/// This is deliberately a wrapper around the existing [`pre_sign`] primitive,
+/// not a second counter writer.  It first reproduces the frozen request-bound
+/// observation without waiting, invokes `pre_sign` exactly once as the sole
+/// charge, and independently proves the counter advanced by exactly one.  On
+/// production silicon it additionally brackets the stored timestamp with two
+/// verified value/complement tick snapshots.  The caller must still bind this
+/// verified step into the crypto CFI transcript before any key use.
+#[cfg(all(feature = "erc7730-forced-blind", not(test)))]
+#[inline(never)]
+pub(crate) fn pre_sign_forced(
+    receipt: &ForcedRateReceipt,
+    request_digest: &[u8; 32],
+) -> Result<(), ForcedRateError> {
+    forced_rate_recheck(receipt, request_digest)?;
+
+    let count_addr = SIGNS_THIS_SESSION.as_ptr() as *const u32;
+    let last_addr = LAST_SIGN_MS.as_ptr() as *const u32;
+    let count_before = crate::fi::read_volatile_voted(count_addr)
+        .map_err(|()| ForcedRateError::StateDisagreement)?;
+    let last_before = crate::fi::read_volatile_voted(last_addr)
+        .map_err(|()| ForcedRateError::StateDisagreement)?;
+    if count_before != receipt.signs_this_session || last_before != receipt.last_sign_ms {
+        return Err(ForcedRateError::StateDisagreement);
+    }
+
+    #[cfg(all(feature = "stm32u585", not(feature = "e2e-test")))]
+    let tick_before =
+        crate::timeout::snapshot_verified().map_err(|_| ForcedRateError::TickFault)?;
+
+    // Sole counter/timestamp charge.  The immediately preceding receipt recheck
+    // proved the minimum interval elapsed, so the generic production wait exits
+    // on its first observation and introduces no post-warning rate delay.
+    pre_sign().map_err(|()| ForcedRateError::SessionCap)?;
+
+    let count_after = crate::fi::read_volatile_voted(count_addr)
+        .map_err(|()| ForcedRateError::ChargeDisagreement)?;
+    let expected_count = count_before
+        .checked_add(1)
+        .ok_or(ForcedRateError::ChargeDisagreement)?;
+    let count_charged = crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(count_after) == core::hint::black_box(expected_count)
+            && core::hint::black_box(expected_count) <= MAX_SIGNS_PER_SESSION
+    });
+    if count_charged != crate::fi::OK_SENTINEL {
+        return Err(ForcedRateError::ChargeDisagreement);
+    }
+
+    #[cfg(all(feature = "stm32u585", not(feature = "e2e-test")))]
+    {
+        let charged_ms = crate::fi::read_volatile_voted(last_addr)
+            .map_err(|()| ForcedRateError::ChargeDisagreement)?;
+        let tick_after =
+            crate::timeout::snapshot_verified().map_err(|_| ForcedRateError::TickFault)?;
+        let timestamp_charged = crate::fi::check_true_into_sentinel(|| {
+            forced_charge_postcondition(
+                core::hint::black_box(count_before),
+                core::hint::black_box(tick_before),
+                core::hint::black_box(count_after),
+                core::hint::black_box(charged_ms),
+                core::hint::black_box(tick_after),
+            )
+        });
+        if timestamp_charged != crate::fi::OK_SENTINEL {
+            return Err(ForcedRateError::ChargeDisagreement);
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(all(feature = "stm32u585", not(feature = "e2e-test"), not(test)))]
 fn wait_for_min_interval() {
     // F-19: redundant volatile reads on the rate-limit reference
@@ -412,5 +514,35 @@ mod tests {
         let c = forced_rate_receipt_from_observation(&[0x11; 32], 8, 500, 1_500).unwrap();
         assert_ne!(a, b);
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn forced_charge_postcondition_binds_count_timestamp_and_short_tick_window() {
+        assert!(forced_charge_postcondition(
+            249, 10_000, 250, 10_001, 10_002
+        ));
+        assert!(!forced_charge_postcondition(
+            249, 10_000, 249, 10_001, 10_002
+        ));
+        assert!(!forced_charge_postcondition(
+            249, 10_000, 250, 9_000, 10_002
+        ));
+        assert!(!forced_charge_postcondition(
+            249, 10_000, 250, 10_003, 10_002
+        ));
+        assert!(!forced_charge_postcondition(249, 10_000, 250, 0, 10_002));
+        assert!(!forced_charge_postcondition(
+            249, 10_000, 250, 11_000, 11_000,
+        ));
+
+        let before = u32::MAX - 2;
+        assert!(forced_charge_postcondition(
+            0,
+            before,
+            1,
+            u32::MAX,
+            before.wrapping_add(3),
+        ));
+        assert!(!forced_charge_postcondition(0, u32::MAX, 1, 0, 0,));
     }
 }

@@ -1471,6 +1471,44 @@ mod sign_rate_source_text {
             "forced pre-warning helpers must neither charge nor update the rate timestamp",
         );
     }
+
+    #[test]
+    fn forced_rate_charge_rechecks_then_uses_the_sole_pre_sign_writer_once() {
+        let start = SIGN_RATE_SRC
+            .find("pub(crate) fn pre_sign_forced(")
+            .expect("forced rate charge wrapper missing");
+        let end = SIGN_RATE_SRC[start..]
+            .find("fn wait_for_min_interval()")
+            .map(|offset| start + offset)
+            .expect("forced rate charge wrapper end anchor missing");
+        let body = &SIGN_RATE_SRC[start..end];
+
+        let recheck = body
+            .find("forced_rate_recheck(receipt, request_digest)?")
+            .expect("frozen request-bound receipt must be rechecked");
+        let sole_charge = body
+            .find("pre_sign().map_err(|()| ForcedRateError::SessionCap)?")
+            .expect("existing pre_sign must remain the sole writer");
+        let count_readback = body
+            .find("let count_after = crate::fi::read_volatile_voted(count_addr)")
+            .expect("forced charge must independently read back the counter");
+        let timestamp_proof = body
+            .find("forced_charge_postcondition(")
+            .expect("production timestamp must be bracketed by verified ticks");
+
+        assert!(recheck < sole_charge);
+        assert!(sole_charge < count_readback);
+        assert!(count_readback < timestamp_proof);
+        assert_eq!(
+            body.matches("pre_sign().map_err(|()| ForcedRateError::SessionCap)?")
+                .count(),
+            1,
+            "forced charge must invoke the existing writer exactly once",
+        );
+        assert!(!body.contains("SIGNS_THIS_SESSION.store("));
+        assert!(!body.contains("LAST_SIGN_MS.store("));
+        assert!(body.matches("crate::timeout::snapshot_verified()").count() >= 2);
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════

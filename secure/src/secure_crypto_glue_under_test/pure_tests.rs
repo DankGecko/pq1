@@ -1569,6 +1569,68 @@ fn positive_crypto_sign_rate_limit_gates_call() {
 }
 
 #[test]
+fn forced_crypto_entrypoint_uses_request_bound_charge_before_the_shared_rate_cfi_step() {
+    let ordinary_start = CRYPTO_SRC
+        .find("pub fn c10_sign_verified_with_progress(")
+        .expect("ordinary verified-sign entrypoint missing");
+    let forced_start = CRYPTO_SRC
+        .find("pub(crate) fn c10_sign_verified_forced_with_progress(")
+        .expect("forced verified-sign entrypoint missing");
+    let inner_start = CRYPTO_SRC
+        .find("fn c10_sign_verified_with_progress_inner(")
+        .expect("shared verified-sign body missing");
+    let ordinary_wrapper = &CRYPTO_SRC[ordinary_start..forced_start];
+    let forced_wrapper = &CRYPTO_SRC[forced_start..inner_start];
+
+    let ordinary_charge = ordinary_wrapper
+        .find("crate::sign_rate::pre_sign()?")
+        .expect("ordinary entrypoint must retain the ordinary charge");
+    let ordinary_readback = ordinary_wrapper
+        .find("crate::sign_rate::signs_this_session() != signs_before.wrapping_add(1)")
+        .expect("ordinary charge must prove the counter advanced by one");
+    let ordinary_token = ordinary_wrapper
+        .find("VerifiedRateCharge(crate::fi::OK_SENTINEL)")
+        .expect("ordinary charge must mint the private verified token");
+    assert!(ordinary_charge < ordinary_readback && ordinary_readback < ordinary_token);
+
+    assert!(forced_wrapper.contains("rate_receipt: &crate::sign_rate::ForcedRateReceipt"));
+    assert!(forced_wrapper.contains("request_digest: &[u8; 32]"));
+    let forced_charge = forced_wrapper
+        .find("crate::sign_rate::pre_sign_forced(rate_receipt, request_digest)")
+        .expect("forced entrypoint must use the request-bound charge");
+    let forced_readback = forced_wrapper
+        .find("crate::sign_rate::signs_this_session() != signs_before.wrapping_add(1)")
+        .expect("forced charge must independently prove the counter advanced by one");
+    let forced_token = forced_wrapper
+        .find("VerifiedRateCharge(crate::fi::OK_SENTINEL)")
+        .expect("forced charge must mint the private verified token");
+    assert!(forced_charge < forced_readback && forced_readback < forced_token);
+    assert!(!forced_wrapper.contains("crate::sign_rate::pre_sign()?"));
+    assert!(
+        !CRYPTO_SRC.contains("SignRateMode"),
+        "a runtime mode discriminator could fault forced signing into the ordinary path",
+    );
+
+    let first_key_use = CRYPTO_SRC[inner_start..]
+        .find("let sig_a = sk.sign_with_shuffle")
+        .map(|offset| inner_start + offset)
+        .expect("first signing operation missing");
+    let rate_region = &CRYPTO_SRC[inner_start..first_key_use];
+    let verified_token = rate_region
+        .find("core::hint::black_box(verified_rate_charge.0) == crate::fi::OK_SENTINEL")
+        .expect("shared body must verify the private rate-charge token");
+    let rate_cfi = rate_region
+        .find("cfi.bump(CFI_STEP_RATE_LIMIT)")
+        .expect("shared rate CFI step missing");
+    assert!(verified_token < rate_cfi);
+    assert_eq!(
+        CRYPTO_SRC.matches("cfi.bump(CFI_STEP_RATE_LIMIT)").count(),
+        1,
+        "ordinary and forced entrypoints must converge on one rate CFI step",
+    );
+}
+
+#[test]
 fn positive_crypto_cfi_bumps_gated_on_verified_step_success() {
     // X17-FI2 (playbook FI11): the three fallible steps gate their
     // `cfi.bump` on the step's VERIFIED success — a glitch that skips
