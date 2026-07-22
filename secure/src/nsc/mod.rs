@@ -45,6 +45,8 @@ mod cmd_offchain_sync;
 mod cmd_request_unlock;
 mod cmd_sign_offchain;
 mod cmd_sign_userop;
+#[cfg(feature = "erc7730-forced-blind")]
+mod cmd_sign_userop_forced;
 mod cmd_sign_userop_batch;
 #[cfg(feature = "e2e-test")]
 mod cmd_test_pin_lockout;

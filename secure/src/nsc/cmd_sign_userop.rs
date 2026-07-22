@@ -585,6 +585,11 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
     //
     // NOT mutually exclusive with the selector / self-attest trailers
     // — Phase 4's renderer picks the best one per priority ladder.
+    #[cfg(feature = "erc7730-forced-blind")]
+    let erc7730_explicit_header = cursor
+        .checked_add(2)
+        .filter(|end| *end <= total_len)
+        .map(|_| u16::from_be_bytes([snap[cursor], snap[cursor + 1]]));
     let erc7730_trailer = match super::trailer::read_optional_u16_prefixed(
         snap,
         cursor,
@@ -596,6 +601,9 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
         Err(s) => return s,
     };
     cursor = erc7730_trailer.next_cursor;
+    #[cfg(feature = "erc7730-forced-blind")]
+    let erc7730_clean_absence =
+        erc7730_explicit_header == Some(0) && erc7730_trailer.len == 0;
 
     // Parse and retain the exact rooted proof set here, but do not grant it
     // display authority yet. The complete contract context (trusted sender,
@@ -1252,6 +1260,61 @@ pub(super) unsafe fn run(args: &GatewayArgs) -> u32 {
             }
             crate::tx::display::MultisendGate::NotMultiSend
             | crate::tx::display::MultisendGate::Ok => {}
+        }
+    }
+
+    // 7d-bis. The opt-in forced-blind branch is terminal and exists only for
+    // an exact steady-state Type-2 request with a clean, explicit empty
+    // ERC-7730 slot. Classification runs only after every existing
+    // Safe/CoW/protected-call gate above has completed. A non-candidate resumes
+    // the ordinary renderer below unchanged; no terminal failure may downgrade
+    // into that path.
+    #[cfg(feature = "erc7730-forced-blind")]
+    {
+        let single_steady_type2 = !include_init_code && !register_slot;
+        let paymaster_empty = paymaster_and_data_hash == SHA256_EMPTY;
+        let safe_or_cow_present = cow_order.len > 0
+            || safe_v1.len > 0
+            || safe_v1_verified.is_some()
+            || safe_exec_verified.is_some()
+            || safe_exec_verified_check.is_some()
+            || cow_order_verified.is_some()
+            || cow_bind.via_safe;
+        match super::cmd_sign_userop_forced::classify(
+            erc7730_clean_absence,
+            single_steady_type2,
+            paymaster_empty,
+            safe_or_cow_present,
+            chain_id,
+            &to_address,
+            inner_data,
+        ) {
+            super::cmd_sign_userop_forced::ForcedRoute::ContinueOrdinary => {}
+            super::cmd_sign_userop_forced::ForcedRoute::Candidate(eligibility) => {
+                let request = super::cmd_sign_userop_forced::ForcedRequest {
+                    account_index,
+                    slot_index,
+                    sender,
+                    chain_id,
+                    nonce: type2_nonce,
+                    call_gas_limit,
+                    verification_gas_limit,
+                    pre_verification_gas,
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
+                    target: to_address,
+                    value,
+                    tx: &tx_for_display,
+                    calldata: inner_data,
+                };
+                return unsafe {
+                    super::cmd_sign_userop_forced::run(args, eligibility, request)
+                };
+            }
+            super::cmd_sign_userop_forced::ForcedRoute::Fatal => {
+                ui::show_status("Sign refused", "forced classify");
+                return NscStatus::InternalError as u32;
+            }
         }
     }
 

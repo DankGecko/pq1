@@ -892,6 +892,10 @@ fn negative_u128_sat_msb_high_byte_saturates_not_truncates() {
 
 const CMD_SIGN_USEROP_SRC: &str =
     include_str!("nsc/cmd_sign_userop.rs");
+const CMD_SIGN_USEROP_FORCED_SRC: &str = include_str!("nsc/cmd_sign_userop_forced.rs");
+const CMD_SIGN_USEROP_BATCH_SRC: &str = include_str!("nsc/cmd_sign_userop_batch.rs");
+const CMD_SIGN_OFFCHAIN_SRC: &str = include_str!("nsc/cmd_sign_offchain.rs");
+const NSC_MOD_SRC: &str = include_str!("nsc/mod.rs");
 const SAFE_EXEC_DECODE_SRC: &str = include_str!("tx/eip712/safe/exec_decode.rs");
 const WALLET_ADDRESS_SRC: &str = include_str!("nsc/cmd_get_wallet_address.rs");
 const VALUE_PAGE_SRC: &str = include_str!("tx/display/value_page.rs");
@@ -1800,4 +1804,91 @@ fn negative_sig_wrapper_src_only_imports_sphincs_tz_shared() {
             "sig_wrapper.rs has an unexpected import: '{line}' — must stay pure logic"
         );
     }
+}
+
+#[test]
+fn forced_route_is_feature_gated_and_owned_only_by_direct_userop() {
+    let compact_mod = NSC_MOD_SRC.split_whitespace().collect::<String>();
+    assert!(compact_mod.contains(
+        "#[cfg(feature=\"erc7730-forced-blind\")]modcmd_sign_userop_forced;"
+    ));
+    assert!(CMD_SIGN_USEROP_SRC.contains("super::cmd_sign_userop_forced::classify("));
+    assert!(CMD_SIGN_USEROP_SRC.contains("super::cmd_sign_userop_forced::run("));
+    for (name, source) in [
+        ("batch", CMD_SIGN_USEROP_BATCH_SRC),
+        ("offchain", CMD_SIGN_OFFCHAIN_SRC),
+    ] {
+        assert!(
+            !source.contains("cmd_sign_userop_forced"),
+            "{name} handler must not acquire forced-blind authority"
+        );
+    }
+}
+
+#[test]
+fn forced_route_requires_an_explicit_zero_length_erc7730_header() {
+    let parse = CMD_SIGN_USEROP_SRC
+        .find("let erc7730_explicit_header =")
+        .expect("typed forced absence capture");
+    let route = CMD_SIGN_USEROP_SRC[parse..]
+        .find("super::cmd_sign_userop_forced::classify(")
+        .map(|offset| parse + offset)
+        .expect("forced classifier call");
+    let evidence = &CMD_SIGN_USEROP_SRC[parse..route];
+    assert!(evidence.contains("checked_add(2)"));
+    assert!(evidence.contains("*end <= total_len"));
+    assert!(evidence.contains("erc7730_explicit_header == Some(0)"));
+    assert!(evidence.contains("erc7730_trailer.len == 0"));
+    assert!(
+        CMD_SIGN_USEROP_FORCED_SRC.contains("if !clean_metadata_absence || calldata.len() < 4"),
+        "legacy missing headers and selector-short calls must stay ordinary"
+    );
+}
+
+#[test]
+fn forced_route_passes_every_frozen_exclusion_to_closed_classification() {
+    let start = CMD_SIGN_USEROP_SRC
+        .find("let single_steady_type2 =")
+        .expect("forced exclusion block");
+    let end = CMD_SIGN_USEROP_SRC[start..]
+        .find("// 7e. Address-name bundles.")
+        .map(|offset| start + offset)
+        .expect("ordinary metadata resolver boundary");
+    let block = &CMD_SIGN_USEROP_SRC[start..end];
+    for required in [
+        "!include_init_code && !register_slot",
+        "paymaster_and_data_hash == SHA256_EMPTY",
+        "cow_order.len > 0",
+        "safe_v1.len > 0",
+        "safe_v1_verified.is_some()",
+        "safe_exec_verified.is_some()",
+        "safe_exec_verified_check.is_some()",
+        "cow_order_verified.is_some()",
+        "cow_bind.via_safe",
+    ] {
+        assert!(block.contains(required), "missing forced exclusion: {required}");
+    }
+    assert!(CMD_SIGN_USEROP_FORCED_SRC.contains("protected_selector"));
+    assert!(CMD_SIGN_USEROP_FORCED_SRC.contains("protected_target"));
+}
+
+#[test]
+fn forced_candidate_and_fatal_routes_return_terminally_before_ordinary_render() {
+    let route = CMD_SIGN_USEROP_SRC
+        .find("match super::cmd_sign_userop_forced::classify(")
+        .expect("forced route match");
+    let ordinary = CMD_SIGN_USEROP_SRC[route..]
+        .find("// 7e. Address-name bundles.")
+        .map(|offset| route + offset)
+        .expect("ordinary metadata resolver boundary");
+    let block = &CMD_SIGN_USEROP_SRC[route..ordinary];
+    let compact = block.split_whitespace().collect::<String>();
+    assert!(compact.contains("ForcedRoute::ContinueOrdinary=>{}"));
+    assert!(compact.contains(
+        "returnunsafe{super::cmd_sign_userop_forced::run(args,eligibility,request)};"
+    ));
+    assert!(compact.contains(
+        "ForcedRoute::Fatal=>{ui::show_status(\"Signrefused\",\"forcedclassify\");returnNscStatus::InternalErrorasu32;}"
+    ));
+    assert!(!block.contains("pick_sign_pages_with_erc7730_evidence("));
 }
