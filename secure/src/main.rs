@@ -3747,10 +3747,14 @@ fn main() -> ! {
 
                 match result {
                     Ok(master) => {
-                        nsc::unlock_with_master(master);
-                        ui::show_status("PQSigner OS", "Ready");
-                        secure_log!("[S] PIN verified — unlocked");
-                        break;
+                        let unlocked = nsc::unlock_after_verified_pin(master);
+                        if unlocked == crate::fi::OK_SENTINEL {
+                            ui::show_status("PQSigner OS", "Ready");
+                            secure_log!("[S] PIN verified — unlocked");
+                            break;
+                        }
+                        ui::show_status("Unlock error", "try again");
+                        secure_log!("[S] PIN verified but forced-attempt arm failed closed");
                     }
                     Err(secure_element::UnlockError::PinLocked) => {
                         ui::show_status("PIN locked", "factory reset");
@@ -4017,11 +4021,15 @@ fn PendSV() {
 
             match result {
                 Ok(master) => {
-                    nsc::unlock_with_master(master);
-                    timeout::reset_activity();
-                    ui::show_status("PQSigner OS", "Ready");
-                    secure_log!("[S] Re-unlocked after idle wipe");
-                    break;
+                    let unlocked = nsc::unlock_after_verified_pin(master);
+                    if unlocked == crate::fi::OK_SENTINEL {
+                        timeout::reset_activity();
+                        ui::show_status("PQSigner OS", "Ready");
+                        secure_log!("[S] Re-unlocked after idle wipe");
+                        break;
+                    }
+                    ui::show_status("Unlock error", "try again");
+                    secure_log!("[S] PIN verified but forced-attempt arm failed closed");
                 }
                 Err(secure_element::UnlockError::PinLocked) => {
                     ui::show_status("PIN locked", "factory reset");

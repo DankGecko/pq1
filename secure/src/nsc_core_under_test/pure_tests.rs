@@ -76,6 +76,9 @@ const NSC_MOD_SRC: &str = include_str!("../nsc/mod.rs");
 const NSC_STATE_SRC: &str = include_str!("../nsc/state.rs");
 const NSC_NS_PTR_SRC: &str = include_str!("../nsc/ns_ptr.rs");
 const NSC_PTR_VALIDATE_SRC: &str = include_str!("../nsc/ptr_validate.rs");
+const REQUEST_UNLOCK_SRC: &str = include_str!("../nsc/cmd_request_unlock.rs");
+const TEST_PIN_LOCKOUT_SRC: &str = include_str!("../nsc/cmd_test_pin_lockout.rs");
+const MAIN_SRC: &str = include_str!("../main.rs");
 
 const ALL_SLICE_FILES: &[(&str, &str)] = &[
     ("nsc/mod.rs", NSC_MOD_SRC),
@@ -83,6 +86,40 @@ const ALL_SLICE_FILES: &[(&str, &str)] = &[
     ("nsc/ns_ptr.rs", NSC_NS_PTR_SRC),
     ("nsc/ptr_validate.rs", NSC_PTR_VALIDATE_SRC),
 ];
+
+/// Load production-shaped Rust sources for call-graph exclusivity pins.
+/// Files whose path contains `test` are excluded so inline host tests can call
+/// private state transitions without looking like firmware callers.
+fn production_secure_rust_sources() -> Vec<(std::path::PathBuf, String)> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<(std::path::PathBuf, String)>) {
+        for entry in std::fs::read_dir(dir).expect("read secure/src") {
+            let entry = entry.expect("read secure/src entry");
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+                continue;
+            }
+            if path.extension().and_then(|s| s.to_str()) != Some("rs") {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                .expect("source below secure manifest");
+            if relative.to_string_lossy().contains("test") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).expect("read Rust source");
+            out.push((relative.to_path_buf(), src));
+        }
+    }
+
+    let mut out = Vec::new();
+    walk(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut out,
+    );
+    out
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // 1. Wire-frozen constants — positive coverage.
@@ -266,6 +303,141 @@ fn positive_pin_verified_is_fih_hardened_storage() {
         "mark_unlocked must use the FihBool API, not raw assignment");
     assert!(NSC_STATE_SRC.contains("pin_verified.set_false()"),
         "zeroize_sensitive must use the FihBool API, not raw assignment");
+}
+
+#[test]
+fn positive_forced_attempt_has_one_armed_writer_and_one_production_caller() {
+    assert_eq!(
+        NSC_STATE_SRC
+            .matches("self.write_words(FORCED_ATTEMPT_ARMED_WORDS);")
+            .count(),
+        1,
+        "arm_forced_attempt_after_pin must be the sole Armed codeword writer",
+    );
+    assert!(
+        NSC_STATE_SRC.contains("pub(super) fn arm_forced_attempt_after_pin"),
+        "the PIN-only arm transition must remain confined to the nsc module",
+    );
+
+    let callers: Vec<_> = production_secure_rust_sources()
+        .into_iter()
+        .filter(|(path, _)| path != std::path::Path::new("src/nsc/state.rs"))
+        .flat_map(|(path, src)| {
+            let count = src.matches(".arm_forced_attempt_after_pin()").count();
+            std::iter::repeat_n(path, count)
+        })
+        .collect();
+    assert_eq!(
+        callers,
+        vec![std::path::PathBuf::from("src/nsc/mod.rs")],
+        "only nsc::unlock_after_verified_pin may call the Armed writer",
+    );
+
+    let charge_callers: Vec<_> = production_secure_rust_sources()
+        .into_iter()
+        .filter(|(path, _)| path != std::path::Path::new("src/nsc/state.rs"))
+        .flat_map(|(path, src)| {
+            let count = src
+                .matches(".charge_forced_attempt_for_warning()")
+                .count();
+            std::iter::repeat_n(path, count)
+        })
+        .collect();
+    assert!(
+        charge_callers.is_empty(),
+        "C2 must not wire the charge into a handler; C3 owns that route: {charge_callers:?}",
+    );
+}
+
+#[test]
+fn positive_forced_attempt_pin_wrapper_has_exact_three_real_pin_call_sites() {
+    let callers: Vec<_> = production_secure_rust_sources()
+        .into_iter()
+        .flat_map(|(path, src)| {
+            let count = src.matches("unlock_after_verified_pin(master)").count();
+            std::iter::repeat_n(path, count)
+        })
+        .collect();
+
+    let mut expected = vec![
+        std::path::PathBuf::from("src/main.rs"),
+        std::path::PathBuf::from("src/main.rs"),
+        std::path::PathBuf::from("src/nsc/cmd_request_unlock.rs"),
+    ];
+    expected.sort();
+    let mut callers = callers;
+    callers.sort();
+    assert_eq!(
+        callers, expected,
+        "only boot PIN, idle re-PIN, and CMD_REQUEST_UNLOCK may arm",
+    );
+
+    assert!(
+        REQUEST_UNLOCK_SRC.contains("super::gated_unlock(se, pin)")
+            && REQUEST_UNLOCK_SRC.contains("super::unlock_after_verified_pin(master)"),
+        "CMD_REQUEST_UNLOCK must arm only inside gated_unlock success",
+    );
+    assert!(
+        MAIN_SRC.matches("nsc::gated_unlock(").count() >= 2,
+        "boot and PendSV must retain real gated PIN verification",
+    );
+}
+
+#[test]
+fn positive_forced_attempt_non_pin_unlocks_remain_generic_and_disarmed() {
+    assert!(
+        NSC_STATE_SRC.contains("self.forced_attempt.disarm();"),
+        "generic mark_unlocked and zeroize must explicitly select Disarmed",
+    );
+    assert_eq!(
+        MAIN_SRC.matches("nsc::unlock_with_master(master);").count(),
+        1,
+        "first-boot auto-unlock must remain the sole main.rs generic unlock",
+    );
+    assert!(
+        NSC_MOD_SRC.contains("pub fn set_e2e_unlocked(master: [u8; 32])")
+            && NSC_MOD_SRC.contains("state::with_state(|s| s.mark_unlocked(master));"),
+        "e2e helper must use generic mark_unlocked and stay Disarmed",
+    );
+    assert!(
+        TEST_PIN_LOCKOUT_SRC.contains("super::unlock_with_master(master_final);"),
+        "the PIN-lockout test helper must remain generic/Disarmed",
+    );
+    assert!(
+        !TEST_PIN_LOCKOUT_SRC.contains("unlock_after_verified_pin")
+            && !TEST_PIN_LOCKOUT_SRC.contains("arm_forced_attempt_after_pin"),
+        "test helpers must never arm a forced attempt",
+    );
+}
+
+#[test]
+fn positive_forced_attempt_charge_keeps_voted_cfi_readback_shape() {
+    let start = NSC_STATE_SRC
+        .find("pub(super) fn charge_forced_attempt_for_warning")
+        .expect("forced-attempt charge primitive must exist");
+    let body = &NSC_STATE_SRC[start..];
+    let read_armed = body
+        .find("let initial = self.phase();")
+        .expect("charge must begin with a voted phase read");
+    let write_spent = body
+        .find("self.write_words(FORCED_ATTEMPT_SPENT_WORDS);")
+        .expect("charge must publish the exact Spent codeword");
+    let readback = body
+        .find("let readback = self.phase();")
+        .expect("charge must independently read back after publication");
+    let cfi_check = body
+        .find("cfi.check_into_sentinel(FORCED_CHARGE_CFI_EXPECTED)")
+        .expect("charge must completion-check all CFI steps");
+    assert!(
+        read_armed < write_spent && write_spent < readback && readback < cfi_check,
+        "charge order must remain voted Armed -> Spent -> voted readback -> CFI check",
+    );
+    assert!(
+        body.contains("cfi.bump(FORCED_CHARGE_CFI_READ_ARMED);")
+            && body.contains("cfi.bump(FORCED_CHARGE_CFI_WRITE_SPENT);")
+            && body.contains("cfi.bump(FORCED_CHARGE_CFI_READBACK);"),
+        "all three transition steps must remain in the CFI transcript",
+    );
 }
 
 #[test]
