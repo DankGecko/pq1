@@ -49,11 +49,14 @@
 > refusal remains unchanged. The first forced-blind architecture identity and
 > the first current-refusal implementation identity both completed as
 > **NO-GO**; the conservative v2 forced-blind candidate is unimplemented,
-> unreviewed, and frozen for a fresh architecture gate after the owner selected
-> exactly one attempt per PIN unlock plus a 300-second absolute deadline and
-> accepted the fail-closed host-denial residual on 2026-07-22. The materially
-> remediated current tree is host,
-> codegen and QEMU green; optimized development inspection is favorable but is
+> and undergoing architecture remediation after the owner
+> selected exactly one attempt per PIN unlock plus a 300-second absolute
+> deadline and accepted the fail-closed host-denial residual on 2026-07-22.
+> Its first fresh three-reviewer wave returned FIX; no forced-blind authority
+> exists until the exact-set replacement for Bloom-positive authority and the
+> remaining state/deadline/preflight corrections pass re-review. The materially
+> remediated current tree is host, codegen and QEMU green; optimized
+> development inspection is favorable but is
 > not executable FI, a production profile, or a hardware stack/high-water
 > bound. The remediated current-refusal phase completed its exact three-reviewer
 > wave and landed; this does not authorize the separate forced-blind design.

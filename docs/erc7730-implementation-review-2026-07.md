@@ -823,16 +823,20 @@ the prompt-abuse policy, Partner A's incomplete independent reproduction of the
 handler-gas differential gap, and the stage-impact disagreement for the
 two-receipt mechanism. None may be converted into approval by reviewer count.
 
-## PQ1 forced-blind material redline candidate v2 — FROZEN FOR REVIEW
+## PQ1 forced-blind material redline candidate v2 — FROZEN RE-REVIEW
 
 **Status:** completed material replacement candidate. The owner selected the
 remaining prompt-abuse semantics on 2026-07-22, including the fail-closed host
-denial-of-service residual. This candidate changes authority, failure response,
-state transitions, trusted UI, and the page/resource envelope, so no prior
-review transfers. Do not implement the forced tier until this exact candidate
-receives the workflow-required short simultaneous GPT-5.6 SOL / Opus 4.8 /
-Kimi K3 architecture review and a recorded favorable owner stage decision.
-Current hard refusal remains the default and rollback.
+denial-of-service residual. The first fresh architecture wave returned three
+FIX verdicts; this revision replaces Bloom-positive authority with exact
+authenticated membership and closes the state, deadline, transcript,
+disconnect, gas, and preflight ambiguities those reports exposed. This
+candidate changes authority, failure response, state transitions, trusted UI,
+and the page/resource envelope, so no prior review transfers. Do not implement
+the forced tier until this exact remediation receives the workflow-required
+short simultaneous GPT-5.6 SOL / Opus 4.8 / Kimi K3 architecture re-review and
+a recorded favorable owner stage decision. Current hard refusal remains the
+default and rollback.
 
 ### 1. Product decision and conservative closures
 
@@ -850,7 +854,7 @@ This v2 candidate closes the reviewed ambiguities conservatively:
 | Trust tier | Separate forced blind; explicitly **not clear signing** |
 | Default / rollback | Existing hard refusal |
 | Host authority | None: no flag, trailer bit, preference, cached grant, or automatic fallback |
-| Membership language | `filter-positive`, acknowledging Bloom false positives; never exact/known membership |
+| Membership authority | Exact membership in a firmware-embedded, authenticated canonical tuple set; the public Bloom is only a fail-closed prefilter and never authorizes forced blind |
 | Sole eligible metadata cause | Structurally clean absence of the complete ERC-7730 trailer |
 | Invalid/bad/root-mismatched/chain- or target-misbound evidence | Fatal |
 | Verified render failure | Every current `RenderErr`, including `NoFormat`, `Reject`, and `PageBudget`, is fatal |
@@ -886,7 +890,7 @@ MetadataEvidence =
 DispatchOutcome =
     Clear(pages)
   | GenericUnknown(pages)
-  | ForcedCandidate(FilterPositiveDescriptorAbsent)
+  | ForcedCandidate(ExactKnownDescriptorAbsent)
   | Fatal(reason)
 ```
 
@@ -900,7 +904,25 @@ The handler mints `ForcedCandidate` only after two independent positive checks:
 1. strict parsing proves the trailer is structurally cleanly absent (not
    malformed, truncated, nonempty, bad, root-mismatched, or misbound); and
 2. independent FI-protected evaluation proves the exact
-   `(chain, target, selector)` tuple is Bloom `filter-positive`.
+   `(chain, target, selector)` tuple is present in the canonical exact set
+   embedded in the signed secure image.
+
+`dbgen` emits `secure/data/erc7730-known-calls.set` (and the e2e counterpart)
+as strictly sorted fixed-width 32-byte records
+`chain_id_be64 || target_20 || selector_4`. `xtask` proves its count and
+recomputed domain-separated canonical tuple-set digest equal the exact build
+vector and the `known_call_set_sha256` carried by the authenticated `P73S`
+release receipt before generating `db_roots.rs`. The production set currently
+contains 1,366 records, so the bounded flash envelope is 43,712 bytes plus
+alignment; the final linked image must measure the actual delta. The device
+performs a bounded binary search over the embedded bytes. The existing Bloom
+must also be positive for an exact-known tuple, as a generated-artifact
+consistency check, but it is never positive authority: an exact-negative Bloom
+collision retains today's hard refusal and cannot enter forced blind.
+
+The positive path uses a new `prove_exact_known_contract_call` primitive with
+its own CFI constants and fail-preinitialized caller verdict. Reusing,
+negating, or interpreting failure from `prove_unknown_contract_call` is fatal.
 
 Failure of either check, disagreement between redundant checks, or failure to
 produce the expected positive sentinel is fatal. Eligibility is never inferred
@@ -909,8 +931,9 @@ failure, or a generic `None`.
 
 The direct single handler consumes the candidate immediately. It must not
 return to the ordinary ERC-20, typed-call, selector-name, Safe/CoW, or generic
-blind ladder. A filter-negative call continues to use today's ordinary routing
-and gains no forced option.
+blind ladder. An exact-unknown/Bloom-negative call continues to use today's
+ordinary routing and gains no forced option; exact-unknown/Bloom-positive and
+all lookup/artifact disagreements retain hard refusal.
 
 ### 3. Exhaustive fatal preflight
 
@@ -927,8 +950,10 @@ check, including:
 - no Safe/CoW/MultiSend/delegatecall/protected-selector claim, including
   selector-only and short malformed `execTransaction`;
 - empty `paymasterAndData`;
-- clean absence plus positive filter receipt;
-- full transcript/page construction, numeric widths and final digest;
+- clean absence plus the affirmative exact-known receipt;
+- double-read page-123 counters, signing-capacity availability, exact
+  `newOffchainCount`, reconstructed steady-state Type-2 calldata, the complete
+  transcript, numeric widths and final digest;
 - exactly-one handler-owned canonical gas page and complete two-page ERC-8213
   digest;
 - stack/page/resource preflight and all CFI stage initialization.
@@ -937,43 +962,64 @@ Any failure returns the existing refusal/error path without showing the severe
 warning. This prevents a hostile companion from training the user on a warning
 that predictably ends in a later resource or routing refusal.
 
+No flash repair, counter promotion, or other persistent write occurs during
+preflight. The handler freezes those counter values and re-reads them after the
+second consent; any disagreement is fatal. A non-inlined preflight helper owns
+the 4,352-byte reconstructed `ExecuteCallData`, returns only its digest and the
+fixed transcript inputs, and ends before the 1,988-byte `Pages` value is built.
+After consent, a separate reconstruction must reproduce the frozen digest.
+
+The forced request digest is the SHA-256 of the fixed domain
+`PQSigner/forced-blind/request/v1` followed by this exact concatenation:
+`account_index_be32 || slot_index_be32 || owner_index_be64 || signer_20 ||
+target_20 || chain_id_be64 || ENTRY_POINT_V06_20 || selector_4 ||
+calldata_len_be32 || new_offchain_count_be64 || value_32 || nonce_32 ||
+max_fee_32 || max_priority_fee_32 || call_gas_32 || verification_gas_32 ||
+pre_verification_gas_32 || SHA256_EMPTY_initcode_32 ||
+SHA256_EMPTY_paymaster_32 || erc8213_calldata_digest_32 ||
+final_type2_digest_32`. Both receipts bind this exact digest. The handler
+recomputes it independently before signing.
+
 ### 4. Fixed forced transcript and page budget
 
 The transcript accepts one canonical raw `ForcedTranscriptInput` already used
 to compute the final Type-2 signing digest. It performs no ABI, descriptor,
-resolver, token, selector-name, or host-string parsing. Each 32-byte word uses
-64 lowercase hexadecimal digits, split without truncation. The exact final
-order is:
+resolver, token, selector-name, or host-string parsing. Every fixed-size signed
+field is displayed injectively. Variable-length calldata is bound by its exact
+length plus the collision-resistant ERC-8213 digest rather than misdescribed as
+a raw injective display. Each 32-byte word uses 64 lowercase hexadecimal
+digits, split without truncation. The exact final order is:
 
 | Final page(s) | Content and owner |
 |---:|---|
 | 0 | Persistent `! FORCED BLIND` / `UNVERIFIED CALL` banner |
 | 1 | Account index, slot owner index, and full device-derived signer |
-| 2 | Full raw target |
-| 3 | Exact numeric chain ID |
-| 4 | One canonical exact gas-triple page, produced only by the handler |
-| 5 | Full pinned EntryPoint v0.6 address |
-| 6 | `Single Type-2`, raw selector, and exact calldata length |
-| 7–8 | Full raw `value` word |
-| 9–10 | Full raw nonce word; forced-flow replacement for the compact conditional nonce-lane page, independently handler-proven |
-| 11–12 | Full raw `maxFeePerGas` word |
-| 13–14 | Full raw `maxPriorityFeePerGas` word |
-| 15–16 | Full raw `callGasLimit` word |
-| 17–18 | Full raw `verificationGasLimit` word |
-| 19–20 | Full raw `preVerificationGas` word |
-| 21–22 | `paymasterAndData = EMPTY` plus full SHA-256 of the empty value |
-| 23–24 | Complete ERC-8213 inner-calldata digest |
-| 25–26 | Complete final Type-2 SPHINCS signing digest |
-| 27 | `FORCED BLIND / UNVERIFIED`, cancel/sign instructions, final consent |
+| 2 | Exact `newOffchainCount` encoded as all 16 lowercase hexadecimal digits |
+| 3 | Full raw target |
+| 4 | Exact numeric chain ID |
+| 5 | One canonical exact gas-triple page, produced only by the handler |
+| 6 | Full pinned EntryPoint v0.6 address |
+| 7 | `Single Type-2`, `initCode = EMPTY`, raw selector, and exact calldata length |
+| 8–9 | Full raw `value` word |
+| 10–11 | Full raw nonce word; forced-flow replacement for the compact conditional nonce-lane page, independently handler-proven |
+| 12–13 | Full raw `maxFeePerGas` word |
+| 14–15 | Full raw `maxPriorityFeePerGas` word |
+| 16–17 | Full raw `callGasLimit` word |
+| 18–19 | Full raw `verificationGasLimit` word |
+| 20–21 | Full raw `preVerificationGas` word |
+| 22–23 | `paymasterAndData = EMPTY` plus full SHA-256 of the empty value |
+| 24–25 | Complete ERC-8213 inner-calldata digest |
+| 26–27 | Complete final Type-2 SPHINCS signing digest |
+| 28 | `FORCED BLIND / UNVERIFIED`, cancel/sign instructions, final consent |
 
-The 28-page fixed set leaves three pages of the 31-page bound unused. There are
+The 29-page fixed set leaves two pages of the 31-page bound unused. There are
 no friendly decimal or semantic summary pages in PQ1. If any exact value,
 label, digest, or final page cannot fit exactly, the request is fatal before
 warning. Every page participates in scroll-to-end; the final page repeats the
 weaker trust tier.
 
 The forced flow does not also insert the ordinary conditional nonce-lane page:
-pages 9–10 display and bind the complete 256-bit nonce and are strictly stronger
+pages 10–11 display and bind the complete 256-bit nonce and are strictly stronger
 than the compact high-192-only lane page. The handler must independently prove
 those two exact pages from the signed nonce. If that proof cannot replace the
 existing compact-lane proof without weakening its FI structure, the page schema
@@ -991,7 +1037,7 @@ use explicit non-inlined page-owning phases and re-review the data lifetime.
 The sequence is:
 
 1. freeze and strictly parse the request;
-2. complete the fatal preflight and build/prove the 28-page transcript;
+2. complete the fatal preflight and build/prove the 29-page transcript;
 3. check/charge the owner-selected prompt-abuse control;
 4. display at least two fixed severe-warning pages from flash, including
    `CLEAR SIGNING UNAVAILABLE` and `BLIND SIGN CAN DRAIN WALLET`;
@@ -1008,31 +1054,56 @@ The sequence is:
    receipts, exact order and CFI transcript;
 10. consume the private permit and sign exactly once.
 
-Cancel, decline, idle wipe, lock, reset, disconnect, exception, parse/resource
+Cancel, decline, idle wipe, lock, reset, exception, parse/resource
 error, CFI/FI disagreement, or any return path invalidates the permit and both
 receipts. Neither receipt is stored in flash or exposed on the wire. The
 implementation must prove this across `SecureState`, handler guards, reset,
 panic/zeroize and interleaving paths; a stack-local claim by itself is not
 evidence.
 
+The current synchronous CMSE command has no authenticated secure-world USB
+disconnect signal, so this architecture makes no false promise that unplugging
+aborts an already-running ceremony. Disconnect grants no authority: both
+physical confirmations remain mandatory, and any signature generated after an
+unplug is still durably tallied before it could be released. Adding a
+disconnect-sensitive abort would be a separate trust-boundary change.
+
 ### 6. Owner-selected prompt-abuse policy
 
 The owner selected the following exact volatile policy on 2026-07-22:
 
 1. Each successful PIN unlock arms exactly one forced-blind attempt. This is
-   SRAM-only session state, not a saved preference or reusable permission.
+   SRAM-only session state, not a saved preference or reusable permission. A
+   dedicated complement-coded `ForcedAttemptState` has only valid
+   `Disarmed`, `Armed`, and `Spent` encodings; every corrupt/unknown encoding
+   is fatal. BSS initialization and zeroize select `Disarmed`, and
+   `mark_unlocked` is the sole `Armed` writer.
 2. The handler charges the attempt only after every deterministic preflight,
    transcript construction, resource check, and CFI initialization succeeds,
-   immediately before it displays the first severe-warning page.
+   immediately before it displays the first severe-warning page. Charging is
+   one voted, CFI-checked `Armed -> Spent` transition followed by an
+   independent readback; a skipped or forged transition refuses.
 3. There is no separate cooldown. Once charged, no second forced warning may
    be displayed during that unlock session, regardless of whether the first
    flow signs, is cancelled, or fails.
 4. A 300,000 ms absolute deadline starts when the attempt is charged and covers
    the warning, raw transcript, both receipts, all final rechecks, and signature
-   release. Physical-button activity does not extend it. The implementation
-   uses FI-voted reads of the secure SysTick counter and a wrapping subtraction;
-   disagreement or an elapsed value greater than the bound is fatal.
-5. Cancel, decline, idle wipe, lock, reset, disconnect, exception, parse or
+   release. Physical-button activity does not extend it. The source is the
+   secure software millisecond counter `timeout::TICKS`, not the hardware
+   `SYST_CVR` down-counter. Each of at most three bounded snapshot attempts
+   accepts three monotone samples only when each wrapping delta is at most one
+   tick; exhausted retries, disagreement, or backward movement is fatal.
+   Elapsed time uses wrapping subtraction against the charged start and expires
+   at `elapsed >= 300_000`.
+   A forced-confirm variant factors the existing navigation core and carries
+   the deadline predicate through both `wait_button` and the GPIO
+   `wait_release` loop, so holding a button cannot suspend expiry. The device
+   checks it in every warning/transcript wait iteration, before each receipt
+   publication, immediately before signing, and after verified signature
+   generation and durable signature
+   tally but before output release. Expiry after key use withholds the output
+   but still counts that generated signature.
+5. Cancel, decline, idle wipe, lock, reset, exception, parse or
    resource failure, CFI/FI disagreement, or any other return path destroys the
    request permit and both consent receipts. The attempt remains spent for that
    unlock session. Ordinary clear signing may continue after a cancellation.
@@ -1053,8 +1124,10 @@ handlers are the only producers for all existing confirmation sets:
 1. independently recompute the canonical page from the signed gas words;
 2. A/B scan the entire pre-append set and require zero exact copies and no
    near-shaped conflict;
-3. append once at the prior-length boundary, before the handler-owned
-   fingerprint, without shifting or rewriting an existing semantic page;
+3. for forced blind, build pages 0–4, require `len == 5`, append the canonical
+   gas page as page 5, then append the remaining transcript without shifting or
+   rewriting an existing semantic page; raw gas-word pages must not use the
+   canonical `Call:`, `Verify:`, `PreVer:`, or `Total:` row prefixes;
 4. independently recompute and A/B scan the entire final set;
 5. require exactly one exact match, the append-only index and correct total
    length;
@@ -1104,12 +1177,12 @@ digest gates, fingerprint proofs and 0/1 sentinel-call composition. That
 artifact is E3 development evidence only: no honest production ELF is currently
 linkable, its 47,952-byte batch frame is not a whole-call/on-target stack bound,
 and executable FI remains open. The tree still needs a new six-component frozen
-identity and fresh exact dual review. No prior favorable subfinding transfers
-merge, release or shipment authority to this new identity.
+identity and the current workflow review. No prior favorable subfinding
+transfers merge, release or shipment authority to this new identity.
 
-Forced-blind v2 remains unimplemented and **NOT REVIEWED**. None of these
-independent fail-closed hardenings grants forced-blind eligibility or changes
-the current default refusal.
+Forced-blind v2 remains unimplemented and has not passed its architecture
+gate. None of these independent fail-closed hardenings grants forced-blind
+eligibility or changes the current default refusal.
 
 ### 8. Falsifiable acceptance evidence
 
@@ -1118,24 +1191,28 @@ owner amendments. A later implementation/merge packet must include:
 
 - exhaustive tables for every metadata, render, mode, exclusion and fatal enum
   variant, including a future-variant-fatal mutation control;
-- filter-positive collision, filter-negative and exact-source controls;
+- canonical exact-set generation/hash/count/order controls; exact-positive,
+  exact-negative/Bloom-negative, and adversarial Bloom-positive/exact-negative
+  cases, with the last retaining hard refusal;
 - absent versus malformed/nonempty/bad/root/misbound/FI-fault separation;
 - selector-only/short Safe, Safe/CoW/MultiSend/delegatecall, one-element batch,
   off-chain, deployment and rotation rejection;
 - nonempty paymaster and noncanonical EntryPoint rejection;
 - every-signed-field byte flips over signer, EntryPoint, chain, nonce, target,
   value, calldata, fees, all gas words and paymaster state;
-- transcript/full final-digest differential and exact 28-page golden grids;
+- transcript/full final-digest differential and exact 29-page golden grids;
 - gas zero/one/two/near-match/full-buffer/permutation tests in the complete
   handler glue;
-- warning/final cancel, idle, replay, out-of-order, stale-receipt, disconnect,
-  exception and reset cleanup;
+- warning/final cancel, idle, replay, out-of-order, stale-receipt, exception
+  and reset cleanup, plus explicit evidence that USB disconnect is not an
+  authority signal;
 - a scripted non-auto-confirm UI configuration;
 - selected prompt-policy exhaustion, deadline and reset tests;
 - release-shaped Thumb link/map, post-LTO disassembly, MSPLIM/exception
   headroom and hardware stack high-water;
-- FI skip/stuck-at campaigns over classifier, filter receipt, both consent
-  receipts, gas proof and final release;
+- FI skip/stuck-at campaigns over classifier, exact-membership receipt,
+  attempt-state transition, both consent receipts, deadline, gas proof and
+  final release;
 - production-like NV3007 clipping/stale-row/scroll-to-end and two-real-button
   captures;
 - production configuration/prodtest parity, authenticated ERC-8176 offline
@@ -1153,7 +1230,7 @@ integration contract, root-rotation policy where relevant, `docs/STATUS.md`,
 production feature/configuration documentation, and the ERC-8176 status owner.
 Required language:
 
-> Forced blind is not clear signing. A filter-positive call never silently
+> Forced blind is not clear signing. An exact firmware-known call never silently
 > reaches the ordinary ERC-20, typed-call, selector-name, or generic blind
 > ladder. It either clear-signs, fatal-refuses, or—only for the explicitly
 > enumerated clean-absence, single steady-state Type-2 case—enters a separate
