@@ -823,7 +823,7 @@ the prompt-abuse policy, Partner A's incomplete independent reproduction of the
 handler-gas differential gap, and the stage-impact disagreement for the
 two-receipt mechanism. None may be converted into approval by reviewer count.
 
-## PQ1 forced-blind material redline candidate v2 — FROZEN RE-REVIEW
+## PQ1 forced-blind material redline candidate v2 — FROZEN FINAL RE-REVIEW
 
 **Status:** completed material replacement candidate. The owner selected the
 remaining prompt-abuse semantics on 2026-07-22, including the fail-closed host
@@ -908,17 +908,33 @@ The handler mints `ForcedCandidate` only after two independent positive checks:
    embedded in the signed secure image.
 
 `dbgen` emits `secure/data/erc7730-known-calls.set` (and the e2e counterpart)
-as strictly sorted fixed-width 32-byte records
-`chain_id_be64 || target_20 || selector_4`. `xtask` proves its count and
-recomputed domain-separated canonical tuple-set digest equal the exact build
-vector and the `known_call_set_sha256` carried by the authenticated `P73S`
-release receipt before generating `db_roots.rs`. The production set currently
-contains 1,366 records, so the bounded flash envelope is 43,712 bytes plus
-alignment; the final linked image must measure the actual delta. The device
-performs a bounded binary search over the embedded bytes. The existing Bloom
-must also be positive for an exact-known tuple, as a generated-artifact
-consistency check, but it is never positive authority: an exact-negative Bloom
-collision retains today's hard refusal and cannot enter forced blind.
+as a canonical compact exact set. Its 16-byte big-endian header is
+`"P73K" || schema_u16(1) || header_len_u16(16) || group_count_u32 ||
+tuple_count_u32`. Each strictly sorted, unique `(chain, target)` group is a
+36-byte record
+`chain_id_be64 || target_20 || selector_start_be32 || selector_count_be16 ||
+reserved_be16(0)`, followed by one pool containing every four-byte selector,
+strictly sorted and unique within its group. Group ranges must be contiguous,
+non-overlapping, cover the pool exactly, and make the total artifact length
+exactly `16 + 36 * group_count + 4 * tuple_count`; malformed arithmetic,
+reserved fields, ordering, duplicates, gaps, trailing bytes, or out-of-range
+indices are fatal.
+
+`xtask` expands that representation back into strictly sorted fixed-width
+tuples `chain_id_be64 || target_20 || selector_4`, proves byte-for-byte equality
+with the exact build vector, and proves the tuple count and recomputed existing
+domain-separated canonical tuple-set digest equal `known_call_count` and
+`known_call_set_sha256` in the authenticated `P73S` release receipt before
+generating `db_roots.rs`. The production vector currently contains 4,580
+tuples in 777 groups: the compact artifact is exactly 46,308 bytes rather than
+the infeasible 146,560-byte flat form. The final linked QEMU and U585 images
+must still measure the actual delta and remain inside their respective FLASH
+envelopes. The device performs one bounded binary search over groups and one
+bounded binary search over the selected group's selector slice. The existing
+Bloom must also be positive for every exact-known tuple, as a generated-
+artifact consistency check, but it is never positive authority: an exact-
+negative Bloom collision retains today's hard refusal and cannot enter forced
+blind.
 
 The positive path uses a new `prove_exact_known_contract_call` primitive with
 its own CFI constants and fail-preinitialized caller verdict. Reusing,
@@ -1074,10 +1090,15 @@ The owner selected the following exact volatile policy on 2026-07-22:
 
 1. Each successful PIN unlock arms exactly one forced-blind attempt. This is
    SRAM-only session state, not a saved preference or reusable permission. A
-   dedicated complement-coded `ForcedAttemptState` has only valid
-   `Disarmed`, `Armed`, and `Spent` encodings; every corrupt/unknown encoding
-   is fatal. BSS initialization and zeroize select `Disarmed`, and
-   `mark_unlocked` is the sole `Armed` writer.
+   dedicated two-word `ForcedAttemptState` has exactly these valid encodings:
+   `Disarmed = (0x0000_0000, 0x0000_0000)`,
+   `Armed = (0xA55A_A55A, 0x5AA5_5AA5)`, and
+   `Spent = (0x3CC3_3CC3, 0xC33C_C33C)`. `Armed` and `Spent` are complement-
+   coded; all three codewords have pairwise 64-bit Hamming distance 32. The
+   all-zero BSS value is the explicitly enumerated fail-closed `Disarmed`
+   exception. Every other pair, including either single word stuck at zero,
+   is fatal. Zeroize selects `Disarmed`, and `mark_unlocked` is the sole
+   `Armed` writer.
 2. The handler charges the attempt only after every deterministic preflight,
    transcript construction, resource check, and CFI initialization succeeds,
    immediately before it displays the first severe-warning page. Charging is
@@ -1086,15 +1107,27 @@ The owner selected the following exact volatile policy on 2026-07-22:
 3. There is no separate cooldown. Once charged, no second forced warning may
    be displayed during that unlock session, regardless of whether the first
    flow signs, is cancelled, or fails.
-4. A 300,000 ms absolute deadline starts when the attempt is charged and covers
-   the warning, raw transcript, both receipts, all final rechecks, and signature
-   release. Physical-button activity does not extend it. The source is the
-   secure software millisecond counter `timeout::TICKS`, not the hardware
-   `SYST_CVR` down-counter. Each of at most three bounded snapshot attempts
-   accepts three monotone samples only when each wrapping delta is at most one
-   tick; exhausted retries, disagreement, or backward movement is fatal.
-   Elapsed time uses wrapping subtraction against the charged start and expires
-   at `elapsed >= 300_000`.
+4. A 300,000 ms forced-flow deadline starts when the attempt is charged and
+   covers the warning, raw transcript, both receipts, all final rechecks, and
+   signature release. Physical-button activity does not extend it. The source
+   is the secure software millisecond counter `timeout::TICKS`, not the
+   hardware `SYST_CVR` down-counter. Each of at most three bounded snapshot
+   attempts accepts three monotone samples only when each wrapping delta is at
+   most one tick; exhausted retries, disagreement, or backward movement is
+   fatal. Elapsed time uses wrapping subtraction against the charged start and
+   expires at `elapsed >= 300_000`.
+
+   This is precisely a **SysTick-elapsed** bound, not a claim of perfect wall-
+   clock accounting while interrupts are masked. Successive checks may
+   legitimately observe the same tick, so zero delta is not itself liveness
+   evidence. Production already requires the independent LSI-clocked IWDG: if
+   SysTick stops, its secure handler stops kicking the IWDG and reset disarms
+   the volatile attempt. Short interrupt-masked flash/critical sections may
+   under-count wall time; each such window must be measured below the minimum
+   production IWDG bite interval and is an explicitly accepted bounded
+   residual. Signing and release checks occur outside those windows. Builds
+   without the production IWDG provide test evidence only and cannot authorize
+   this feature for release.
    A forced-confirm variant factors the existing navigation core and carries
    the deadline predicate through both `wait_button` and the GPIO
    `wait_release` loop, so holding a button cannot suspend expiry. The device
@@ -1125,12 +1158,14 @@ handlers are the only producers for all existing confirmation sets:
 2. A/B scan the entire pre-append set and require zero exact copies and no
    near-shaped conflict;
 3. for forced blind, build pages 0–4, require `len == 5`, append the canonical
-   gas page as page 5, then append the remaining transcript without shifting or
-   rewriting an existing semantic page; raw gas-word pages must not use the
-   canonical `Call:`, `Verify:`, `PreVer:`, or `Total:` row prefixes;
-4. independently recompute and A/B scan the entire final set;
-5. require exactly one exact match, the append-only index and correct total
-   length;
+   gas page as page 5, immediately run
+   `userop_gas_page_proof(prior_len = 5)` while `len == 6`, and only then append
+   pages 6–28 without shifting or rewriting an existing semantic page; raw
+   gas-word pages must not use the canonical `Call:`, `Verify:`, `PreVer:`, or
+   `Total:` row prefixes;
+4. on the completed 29-page set, independently recompute and A/B scan the
+   entire set with `userop_gas_final_set_proof(expected_index = 5)`;
+5. require exactly one exact match, index 5, and total length 29;
 6. bind completion to caller-owned CFI after append and again immediately
    before confirmation.
 
@@ -1191,9 +1226,10 @@ owner amendments. A later implementation/merge packet must include:
 
 - exhaustive tables for every metadata, render, mode, exclusion and fatal enum
   variant, including a future-variant-fatal mutation control;
-- canonical exact-set generation/hash/count/order controls; exact-positive,
-  exact-negative/Bloom-negative, and adversarial Bloom-positive/exact-negative
-  cases, with the last retaining hard refusal;
+- canonical compact exact-set header/range/length/order controls, expansion
+  equality, the pinned 4,580-tuple/777-group/46,308-byte production shape,
+  exact-positive, exact-negative/Bloom-negative, and adversarial Bloom-
+  positive/exact-negative cases, with the last retaining hard refusal;
 - absent versus malformed/nonempty/bad/root/misbound/FI-fault separation;
 - selector-only/short Safe, Safe/CoW/MultiSend/delegatecall, one-element batch,
   off-chain, deployment and rotation rejection;
@@ -1207,7 +1243,9 @@ owner amendments. A later implementation/merge packet must include:
   and reset cleanup, plus explicit evidence that USB disconnect is not an
   authority signal;
 - a scripted non-auto-confirm UI configuration;
-- selected prompt-policy exhaustion, deadline and reset tests;
+- selected prompt-policy exhaustion, deadline and reset tests, including
+  SysTick-stall-to-IWDG-reset evidence and measured interrupt-masked undercount
+  windows below the production watchdog minimum;
 - release-shaped Thumb link/map, post-LTO disassembly, MSPLIM/exception
   headroom and hardware stack high-water;
 - FI skip/stuck-at campaigns over classifier, exact-membership receipt,
