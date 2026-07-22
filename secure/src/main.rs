@@ -3823,6 +3823,18 @@ fn main() -> ! {
 #[cfg(not(test))]
 #[cortex_m_rt::exception]
 fn SysTick() {
+    // Advance the secure millisecond pair before any other ISR work. Both
+    // caller-owned slots start fail-closed: skipping the non-inlined helper,
+    // rejecting an invalid old pair, or skipping either completion publish
+    // prevents every watchdog reload in this tick (including boot grace).
+    let mut tick_health = crate::fi::FAIL_SENTINEL;
+    let mut tick_cfi = crate::fi::FAIL_SENTINEL;
+    timeout::tick_verified(&mut tick_health, &mut tick_cfi);
+    // SAFETY: these are valid stack locals. Independent volatile reads keep
+    // the watchdog decision tied to what the helper actually published.
+    let tick_health = unsafe { core::ptr::read_volatile(&tick_health) };
+    let tick_cfi = unsafe { core::ptr::read_volatile(&tick_cfi) };
+
     // USB-path hang watchdog. Feeds the IWDG while the NS heartbeat is
     // advancing, a gateway handler is within its bounded compute window, or
     // trusted UI is physically waiting before the independent idle timeout.
@@ -3831,12 +3843,12 @@ fn SysTick() {
     // later line in this ISR is what hangs.
     #[cfg(feature = "stm32u585")]
     hw::iwdg::systick_watch_and_kick(
+        tick_health,
+        tick_cfi,
         nsc::handler_is_busy(),
         timeout::trusted_ui_is_waiting(),
         timeout::is_idle(),
     );
-
-    timeout::tick();
 
     // Drain TAMP_SR flags. Cheap fast path (1 MMIO read when no flag
     // set); on a trigger, log the reason and clear. NEVER halts and

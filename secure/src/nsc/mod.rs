@@ -236,6 +236,31 @@ compile_error!(
      enables the matching NS heartbeat feature."
 );
 
+// Forced blind adds signing authority and therefore has a narrower production
+// configuration than ordinary clear signing. `iwdg` implies the exact
+// STM32U585 Secure-alias implementation and the compile-time-pinned
+// GTZC1_TZSC_SECCFGR1 bit-7 image in `sau.rs`; `ui-lcd` implies the physical
+// GPIO buttons. P73S/Bloom are unconditional generated roots and the positive
+// feature itself co-embeds P73K, so there is no permissive runtime artifact
+// selector to fence here. The canonical production bundle separately keeps
+// this feature forbidden until implementation review and #79 silicon closure.
+#[cfg(all(
+    feature = "mode-production",
+    feature = "erc7730-forced-blind",
+    any(
+        not(feature = "stm32u585"),
+        not(feature = "iwdg"),
+        not(feature = "ui-lcd"),
+    ),
+))]
+compile_error!(
+    "ERC7730_FORCED_BLIND_PRODUCTION_PREREQUISITES: mode-production + \
+     erc7730-forced-blind requires stm32u585, iwdg with Secure-only \
+     GTZC1 bit-7 attribution/Secure alias, and the physical ui-lcd/button \
+     backend. P73S/Bloom/P73K remain fixed generated artifacts. This source \
+     fence is not #79 CPU/GPDMA silicon-denial evidence."
+);
+
 // Dedicated guard: `otp-hardcoded-master-key` + `optiga-lock-operational` is
 // a specifically catastrophic combination. The lock feature irreversibly
 // ratchets protected user-object metadata while the hardcoded-master-key

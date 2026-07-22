@@ -254,12 +254,17 @@ mod stm32 {
         unsafe { Reg32::new(base + MPCBB_SECCFGR0 + i * 4) }
     }
 
-    // ---- SECCFGR1 (APB1) — I2C1 + I2C2 SECURE ----
+    // ---- SECCFGR1 (APB1) — IWDG + I2C1 + I2C2 SECURE ----
     // Bit positions per `GTZC_CFGR1_*_Pos` in CMSIS `stm32u585xx.h`.
     //
+    // - IWDG (bit 7): Secure-owned watchdog. Selected only with the `iwdg`
+    //   feature, which is mandatory for production and for any production
+    //   forced-blind build. Runtime register access uses only 0x5000_3000.
     // - I2C1 (bit 13): OPTIGA Trust M + SE050 driver bus.
     // - I2C2 (bit 14): STSAFE-A110 on-board probe bus.
-    // Both are secure-world-only; NS has no business touching either.
+    // All selected entries are secure-world-only; NS has no writer.
+    #[cfg(feature = "iwdg")]
+    const SECCFGR1_IWDG_BIT: u32 = 1 << 7;
     const SECCFGR1_I2C1_BIT: u32 = 1 << 13;
     const SECCFGR1_I2C2_BIT: u32 = 1 << 14;
 
@@ -364,7 +369,7 @@ mod stm32 {
         //
         // Locked-down peripherals (NS reads/writes will trip the GTZC
         // illegal-access IRQ once the post-write check below validates):
-        //   - SECCFGR1: I2C1, I2C2 (SE driver buses; STSAFE probe)
+        //   - SECCFGR1: IWDG when selected; I2C1, I2C2 (SE buses)
         //   - SECCFGR2: SPI1 (the trusted-display LCD bus, under ui-lcd — F1)
         //   - SECCFGR3: AES, HASH, RNG, PKA, SAES (the crypto block)
         //
@@ -399,7 +404,18 @@ mod stm32 {
         // is cited as evidence for it. Recorded as HW-ASSUME-CMSE-SAU's note
         // and work-todo C3; closing it needs the test rebuilt on the shipping
         // combo, which these pins make reviewable in the meantime.
+        #[cfg(feature = "iwdg")]
+        const SECCFGR1_IMAGE: u32 =
+            SECCFGR1_IWDG_BIT | SECCFGR1_I2C1_BIT | SECCFGR1_I2C2_BIT;
+        #[cfg(not(feature = "iwdg"))]
         const SECCFGR1_IMAGE: u32 = SECCFGR1_I2C1_BIT | SECCFGR1_I2C2_BIT;
+        #[cfg(feature = "iwdg")]
+        const _: () = assert!(
+            SECCFGR1_IMAGE == (1 << 7) | (1 << 13) | (1 << 14),
+            "TZSC_SECCFGR1 IWDG image drifted — IWDG must be Secure alongside the SE buses. \
+             Source closure is not #79 silicon denial evidence."
+        );
+        #[cfg(not(feature = "iwdg"))]
         const _: () = assert!(
             SECCFGR1_IMAGE == (1 << 13) | (1 << 14),
             "TZSC_SECCFGR1 image drifted — I2C1+I2C2 are the SE buses (invariant #3). \

@@ -804,12 +804,37 @@ fn negative_stm32_gtzc_seccfgr1_protects_se_buses() {
     // 2026-07-17) rather than an inline expression — a strictly stronger form:
     // the `const _: () = assert!(SECCFGR1_IMAGE == ...)` below fails the BUILD,
     // not just this test, if the composition drifts. Pin both.
-    assert!(SAU_SRC.contains("const SECCFGR1_IMAGE: u32 = SECCFGR1_I2C1_BIT | SECCFGR1_I2C2_BIT;"));
+    assert!(SAU_SRC.contains("SECCFGR1_I2C1_BIT | SECCFGR1_I2C2_BIT;"));
     assert!(SAU_SRC.contains("let seccfgr1 = SECCFGR1_IMAGE;"));
     assert!(
         SAU_SRC.contains("SECCFGR1_IMAGE == (1 << 13) | (1 << 14)"),
         "the SECCFGR1 image must stay compile-time-pinned to the two SE buses"
     );
+}
+
+#[test]
+fn negative_iwdg_is_secure_attributed_and_uses_only_secure_alias() {
+    // Forced-blind architecture makes #79's source half mandatory: IWDG is
+    // bit 7 in GTZC1 SECCFGR1, included whenever `iwdg` is selected, verified
+    // with the rest of the register image, and reached only via its S alias.
+    // The separate CPU/GPDMA denial receipt remains silicon work.
+    assert!(SAU_SRC.contains("const SECCFGR1_IWDG_BIT: u32 = 1 << 7;"));
+    assert!(SAU_SRC.contains(
+        "SECCFGR1_IWDG_BIT | SECCFGR1_I2C1_BIT | SECCFGR1_I2C2_BIT;"
+    ));
+    assert!(SAU_SRC.contains(
+        "SECCFGR1_IMAGE == (1 << 7) | (1 << 13) | (1 << 14)"
+    ));
+    assert!(IWDG_SRC.contains("const IWDG_SECURE_ALIAS: u32 = 0x5000_3000;"));
+    assert!(!IWDG_SRC.contains("const IWDG: u32 = 0x4000_3000;"));
+
+    let init = MAIN_SRC
+        .rfind("hw::iwdg::init();")
+        .expect("secure IWDG initialization missing");
+    let ns_boot = MAIN_SRC
+        .rfind("unsafe { boot_ns::boot(NS_FLASH_BASE) }")
+        .expect("non-secure boot handoff missing");
+    assert!(init < ns_boot, "IWDG must start before non-secure execution");
 }
 
 #[test]
@@ -1251,6 +1276,8 @@ fn negative_systick_passes_idle_bounded_trusted_ui_state_to_iwdg() {
     let body = &systick[..systick_end];
     for landmark in [
         "hw::iwdg::systick_watch_and_kick(",
+        "tick_health",
+        "tick_cfi",
         "nsc::handler_is_busy()",
         "timeout::trusted_ui_is_waiting()",
         "timeout::is_idle()",
@@ -1260,6 +1287,81 @@ fn negative_systick_passes_idle_bounded_trusted_ui_state_to_iwdg() {
             "SysTick lost watchdog input `{landmark}`"
         );
     }
+}
+
+#[test]
+fn negative_systick_verifies_tick_before_every_other_isr_action() {
+    let systick_start = MAIN_SRC.find("fn SysTick()").expect("SysTick must exist");
+    let systick = &MAIN_SRC[systick_start..];
+    let systick_end = systick
+        .find("\n/// Catch-all device-IRQ handler.")
+        .expect("SysTick must close before DefaultHandler doc");
+    let body = &systick[..systick_end];
+
+    let tick_pos = body
+        .find("timeout::tick_verified(&mut tick_health, &mut tick_cfi);")
+        .expect("SysTick must call non-inlined verified tick helper");
+    let watchdog_pos = body
+        .find("hw::iwdg::systick_watch_and_kick(")
+        .expect("SysTick watchdog call missing");
+    assert!(tick_pos < watchdog_pos, "verified tick must precede watchdog");
+    assert!(body.contains("let mut tick_health = crate::fi::FAIL_SENTINEL;"));
+    assert!(body.contains("let mut tick_cfi = crate::fi::FAIL_SENTINEL;"));
+    assert!(!body.contains("timeout::tick();"));
+}
+
+#[test]
+fn negative_iwdg_tick_health_gate_dominates_all_runtime_reloads() {
+    // There are exactly two hardware reload writes: the one initialization
+    // reload and the private runtime `kick`. Every call to the latter is
+    // dominated by the health/CFI return at the top of the SysTick watcher.
+    assert_eq!(IWDG_SRC.matches("REG.kr.write(KEY_RELOAD);").count(), 2);
+    assert!(IWDG_SRC.contains("fn kick() {"));
+    assert!(!IWDG_SRC.contains("pub fn kick() {"));
+
+    let watcher_start = IWDG_SRC
+        .find("pub fn systick_watch_and_kick(")
+        .expect("IWDG watcher missing");
+    let watcher = &IWDG_SRC[watcher_start..];
+    let guard = watcher
+        .find("if tick_health != crate::fi::OK_SENTINEL")
+        .expect("tick-health gate missing");
+    let first_kick = watcher.find("kick();").expect("runtime kick missing");
+    assert!(guard < first_kick, "health/CFI gate must dominate boot grace too");
+    assert!(watcher[..first_kick].contains(
+        "tick_cfi != crate::timeout::TICK_CFI_COMPLETE"
+    ));
+
+    // The no-IWDG feature variant keeps the same mandatory signature and
+    // health check, even though it cannot provide production authority.
+    assert_eq!(
+        IWDG_SRC
+            .matches("if tick_health != crate::fi::OK_SENTINEL")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn negative_forced_blind_production_fence_and_bundle_quarantine_are_present() {
+    const NSC_SRC: &str = include_str!("nsc/mod.rs");
+    const MAKE_SRC: &str = include_str!("../../Makefile");
+    assert!(NSC_SRC.contains("ERC7730_FORCED_BLIND_PRODUCTION_PREREQUISITES"));
+    for required in [
+        "not(feature = \"stm32u585\")",
+        "not(feature = \"iwdg\")",
+        "not(feature = \"ui-lcd\")",
+    ] {
+        assert!(NSC_SRC.contains(required), "forced fence lost `{required}`");
+    }
+    let forbidden = MAKE_SRC
+        .split_once("override PROD_FORBIDDEN :=")
+        .expect("PROD_FORBIDDEN definition missing")
+        .1
+        .split_once("\n\n")
+        .expect("PROD_FORBIDDEN definition must remain a separate block")
+        .0;
+    assert!(forbidden.contains("erc7730-forced-blind"));
 }
 
 #[test]

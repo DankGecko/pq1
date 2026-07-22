@@ -225,7 +225,8 @@ fwup-transport-e2e = ["e2e-test"]
 usb = []  # Enable USB OTG hardware init (clock, GPIO, GTZC) for host communication
 # Independent watchdog (IWDG) USB-path hang detection. Implies
 # `stm32u585` (IWDG register layout + 1 ms SysTick cadence are
-# hardware-specific). Secure-owned IWDG kicked from SysTick while the
+# hardware-specific). Secure-owned IWDG is attributed by GTZC1 bit 7,
+# accessed through its Secure alias, and kicked from SysTick while the
 # NS heartbeat advances OR a gateway handler is busy; a sustained
 # stall (~4 s) stops the kicks and the ~2 s IWDG resets the chip. MUST
 # stay OFF for mode-bringup / mode-e2e — a live watchdog resets the
@@ -804,9 +805,9 @@ erc7730-nested-calldata-test-fixture = [
 ]
 # Positive, default-off authority for the separately reviewed forced-blind
 # ceremony. This flag never aliases from a dev/test mode. The production
-# configuration fence and runtime path are added by the bounded C2/C3 slices;
-# declaring it here lets C1 bind the exact P73K artifact without enabling any
-# signing behavior.
+# C1 binds the exact P73K artifact; C2 adds the production configuration,
+# verified tick/deadline, and trusted-UI/state substrates; C3 alone wires the
+# signing handler. Declaring it here does not itself enable signing behavior.
 erc7730-forced-blind = []
 
 [build-dependencies]

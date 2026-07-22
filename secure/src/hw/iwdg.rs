@@ -46,15 +46,15 @@
 //! deadline only while it is actually waiting for secure physical input and
 //! the independent inactivity timer remains live.
 //!
-//! # Register access alias
+//! # Secure-only register ownership
 //!
-//! IWDG is reached via its **NS alias** (`0x4000_3000`). It defaults
-//! to non-secure in the GTZC TZSC, and secure code can write NS
-//! peripherals. The IWDG's hardware "cannot be stopped once started"
-//! property makes NS-accessibility harmless: NS can at most *kick* it
-//! (which only delays a reset), never disable it. Marking it
-//! GTZC-secure is an optional follow-up (it touches the invariant-#4
-//! TZSC allowlist in `sau.rs`, so it's deliberately out of scope here).
+//! IWDG is reached only through its **Secure alias** (`0x5000_3000`).
+//! `sau::configure_gtzc` marks `GTZC1_TZSC_SECCFGR1` bit 7 Secure whenever
+//! the `iwdg` feature is selected, verifies that register image, and locks
+//! TZSC before non-secure boot. This source-level ownership is required by
+//! forced-blind architecture, but it is not silicon evidence: issue #79 still
+//! owns denial receipts for non-secure CPU and preconfigured non-secure GPDMA
+//! reload attempts.
 //!
 //! # Feature gating
 //!
@@ -69,9 +69,9 @@
 #[cfg(feature = "iwdg")]
 use crate::hw::mmio::Reg32;
 
-// IWDG NS alias — see module doc on the alias choice.
+// IWDG Secure alias — see module doc on the attribution contract.
 #[cfg(feature = "iwdg")]
-const IWDG: u32 = 0x4000_3000;
+const IWDG_SECURE_ALIAS: u32 = 0x5000_3000;
 
 #[cfg(feature = "iwdg")]
 struct IwdgRegs {
@@ -91,10 +91,10 @@ struct IwdgRegs {
 #[cfg(feature = "iwdg")]
 const REG: IwdgRegs = unsafe {
     IwdgRegs {
-        kr: Reg32::new(IWDG + 0x00),
-        pr: Reg32::new(IWDG + 0x04),
-        rlr: Reg32::new(IWDG + 0x08),
-        sr: Reg32::new(IWDG + 0x0C),
+        kr: Reg32::new(IWDG_SECURE_ALIAS + 0x00),
+        pr: Reg32::new(IWDG_SECURE_ALIAS + 0x04),
+        rlr: Reg32::new(IWDG_SECURE_ALIAS + 0x08),
+        sr: Reg32::new(IWDG_SECURE_ALIAS + 0x0C),
     }
 };
 
@@ -203,10 +203,12 @@ pub fn init() {
     REG.kr.write(KEY_RELOAD);
 }
 
-/// Refresh the watchdog counter. Safe to call any time after [`init`].
+/// Refresh the watchdog counter. This is deliberately private: after the one
+/// direct initialization reload, every runtime call site is dominated by the
+/// verified tick-health/CFI gate in [`systick_watch_and_kick`].
 #[cfg(feature = "iwdg")]
 #[inline]
-pub fn kick() {
+fn kick() {
     REG.kr.write(KEY_RELOAD);
 }
 
@@ -235,7 +237,20 @@ pub fn register_ns_heartbeat(addr: u32) -> bool {
 /// progress only while `idle_timed_out == false`; it therefore cannot turn a
 /// leaked UI guard into an unbounded watchdog feed.
 #[cfg(feature = "iwdg")]
-pub fn systick_watch_and_kick(handler_busy: bool, trusted_ui_waiting: bool, idle_timed_out: bool) {
+pub fn systick_watch_and_kick(
+    tick_health: u32,
+    tick_cfi: u32,
+    handler_busy: bool,
+    trusted_ui_waiting: bool,
+    idle_timed_out: bool,
+) {
+    // This guard dominates every runtime reload, including boot grace. A
+    // skipped tick helper, invalid/frozen pair, skipped completion publish, or
+    // mismatched CFI word therefore cannot feed the independent watchdog.
+    if tick_health != crate::fi::OK_SENTINEL || tick_cfi != crate::timeout::TICK_CFI_COMPLETE {
+        return;
+    }
+
     // SAFETY: SysTick is the sole runtime writer of these statics and
     // does not re-enter itself; the boot registration of
     // `NS_HEARTBEAT_ADDR` has completed by the time NS is running.
@@ -276,8 +291,7 @@ pub fn systick_watch_and_kick(handler_busy: bool, trusted_ui_waiting: bool, idle
             // feeds the watchdog forever. `handler_busy` is NOT an NS stall,
             // so reset STALL_TICKS; count busy ticks separately.
             core::ptr::write_volatile(core::ptr::addr_of_mut!(STALL_TICKS), 0);
-            let b = core::ptr::read_volatile(core::ptr::addr_of!(BUSY_TICKS))
-                .saturating_add(1);
+            let b = core::ptr::read_volatile(core::ptr::addr_of!(BUSY_TICKS)).saturating_add(1);
             core::ptr::write_volatile(core::ptr::addr_of_mut!(BUSY_TICKS), b);
             if b < MAX_BUSY_TICKS {
                 kick();
@@ -291,8 +305,7 @@ pub fn systick_watch_and_kick(handler_busy: bool, trusted_ui_waiting: bool, idle
         } else {
             // No NS progress and no busy handler → NS-loop stall.
             core::ptr::write_volatile(core::ptr::addr_of_mut!(BUSY_TICKS), 0);
-            let s = core::ptr::read_volatile(core::ptr::addr_of!(STALL_TICKS))
-                .saturating_add(1);
+            let s = core::ptr::read_volatile(core::ptr::addr_of!(STALL_TICKS)).saturating_add(1);
             core::ptr::write_volatile(core::ptr::addr_of_mut!(STALL_TICKS), s);
             if s < NS_STALL_LIMIT_TICKS {
                 // Still within the grace window — keep feeding.
@@ -321,16 +334,21 @@ pub fn systick_watch_and_kick(handler_busy: bool, trusted_ui_waiting: bool, idle
 #[cfg(not(feature = "iwdg"))]
 pub fn init() {}
 #[cfg(not(feature = "iwdg"))]
-#[inline]
-pub fn kick() {}
-#[cfg(not(feature = "iwdg"))]
 pub fn register_ns_heartbeat(_addr: u32) -> bool {
     false
 }
 #[cfg(not(feature = "iwdg"))]
 pub fn systick_watch_and_kick(
+    tick_health: u32,
+    tick_cfi: u32,
     _handler_busy: bool,
     _trusted_ui_waiting: bool,
     _idle_timed_out: bool,
 ) {
+    // Keep the same mandatory API and fail-closed health gate in test/QEMU
+    // variants. These builds have no independent watchdog and therefore do
+    // not constitute forced-blind production authority.
+    if tick_health != crate::fi::OK_SENTINEL || tick_cfi != crate::timeout::TICK_CFI_COMPLETE {
+        return;
+    }
 }

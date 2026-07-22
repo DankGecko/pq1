@@ -113,7 +113,7 @@ const NSC_MOD_SRC: &str = include_str!("nsc/mod.rs");
 // 1. Re-mount `timeout.rs` under a host-test scaffold.
 //
 // Production `mod timeout` is `#[cfg(not(test))]`-excluded because
-// `crate::timeout::tick()` is called from a SysTick ISR that doesn't
+// `crate::timeout::tick_verified()` is called from a SysTick ISR that doesn't
 // exist on host. The module body itself is pure `core::sync::atomic`,
 // so re-mounting it under `cfg(test)` is sound — and gives us a real
 // instance to exercise `tick`/`reset_activity`/`is_idle` against.
@@ -1455,6 +1455,14 @@ mod sign_rate_source_text {
 mod timeout_tests {
     use super::timeout_under_test as t;
 
+    fn tick_once() {
+        let mut health = crate::fi::FAIL_SENTINEL;
+        let mut cfi = crate::fi::FAIL_SENTINEL;
+        t::tick_verified(&mut health, &mut cfi);
+        assert_eq!(health, crate::fi::OK_SENTINEL);
+        assert_eq!(cfi, t::TICK_CFI_COMPLETE);
+    }
+
     #[test]
     fn positive_constants_are_documented_values() {
         // 2 minutes at ~1 ms tick.
@@ -1464,7 +1472,7 @@ mod timeout_tests {
     #[test]
     fn positive_tick_increments_monotonically() {
         let before = t::now();
-        t::tick();
+        tick_once();
         let after = t::now();
         // wrapping math: `after - before` is 1 in the common case.
         assert_eq!(after.wrapping_sub(before), 1);
@@ -1474,7 +1482,7 @@ mod timeout_tests {
     fn positive_reset_activity_drops_idle_for() {
         // Pile on some ticks so idle_for would be nonzero…
         for _ in 0..100 {
-            t::tick();
+            tick_once();
         }
         t::reset_activity();
         let idle = t::idle_for();
