@@ -1339,6 +1339,216 @@ fn reject_duplicate_json_keys(raw: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k256::ecdsa::SigningKey;
+    use serde_json::Value;
+
+    #[derive(Clone, Copy, Debug)]
+    enum SnapshotMutation {
+        WrongSchema,
+        WrongData,
+        WrongUid,
+        WrongSignature,
+        UntrustedAttester,
+        DuplicateDescriptorAttester,
+        TamperedRevocationProof,
+        StaleCheckpoint,
+        FutureCheckpoint,
+        ExpiredAttestation,
+        TamperedBlockHeader,
+        TamperedEasAccountProof,
+        TamperedSignerAccountProof,
+        SwappedSignerWitness,
+        WrongEasCodeHash,
+        WrongDomainName,
+        WrongDomainVersion,
+        WrongOffchainVersion,
+        WrongDraft,
+    }
+
+    fn mutated_snapshot_error(
+        fixture: &SyntheticSnapshotFixture,
+        mutation: SnapshotMutation,
+    ) -> String {
+        let mut value: Value =
+            serde_json::from_slice(&fixture.raw).expect("fixture snapshot is JSON");
+        let mut anchor = fixture.anchor.clone();
+        let mut trusted = fixture.trusted_attesters.clone();
+
+        match mutation {
+            SnapshotMutation::WrongSchema => {
+                value["attestations"][0]["schema"] = Value::String(fixture_hex(&[0x10; 32]));
+            }
+            SnapshotMutation::WrongData => {
+                value["attestations"][0]["data"] = Value::String(fixture_hex(&[0x11; 32]));
+            }
+            SnapshotMutation::WrongUid => {
+                value["attestations"][0]["uid"] = Value::String(fixture_hex(&[0x12; 32]));
+            }
+            SnapshotMutation::WrongSignature => {
+                flip_last_hex_byte(&mut value["attestations"][0]["signature"]["r"]);
+            }
+            SnapshotMutation::UntrustedAttester => {
+                let attester = decode_hex_exact::<20>(
+                    "fixture attester",
+                    value["attestations"][0]["attester"]
+                        .as_str()
+                        .expect("attester string"),
+                )
+                .expect("fixture attester decodes");
+                assert!(trusted.remove(&attester));
+            }
+            SnapshotMutation::DuplicateDescriptorAttester => {
+                let duplicate = value["attestations"][0].clone();
+                value["attestations"]
+                    .as_array_mut()
+                    .expect("attestations array")
+                    .push(duplicate);
+            }
+            SnapshotMutation::TamperedRevocationProof => {
+                value["attestations"][0]["revocation_proof"] = serde_json::json!(["0x80"]);
+            }
+            SnapshotMutation::StaleCheckpoint => {
+                anchor.evaluation_timestamp = fixture
+                    .checkpoint_timestamp
+                    .checked_add(anchor.max_checkpoint_age_seconds + 1)
+                    .expect("fixture timestamp does not overflow");
+            }
+            SnapshotMutation::FutureCheckpoint => {
+                anchor.evaluation_timestamp = fixture.checkpoint_timestamp - 1;
+            }
+            SnapshotMutation::ExpiredAttestation => {
+                value["attestations"][0]["expiration_time"] =
+                    Value::from(anchor.evaluation_timestamp);
+            }
+            SnapshotMutation::TamperedBlockHeader => {
+                flip_last_hex_byte(&mut value["block_header_rlp"]);
+            }
+            SnapshotMutation::TamperedEasAccountProof => {
+                flip_last_hex_byte(&mut value["eas_account_proof"][0]);
+            }
+            SnapshotMutation::TamperedSignerAccountProof => {
+                flip_last_hex_byte(&mut value["signer_accounts"][0]["account_proof"][0]);
+            }
+            SnapshotMutation::SwappedSignerWitness => {
+                // The base fixture proves both signers absent with the same trie
+                // leaf, so byte-for-byte swapping would correctly remain valid.
+                // Move the sole witness to the other address instead: the first
+                // signer is then deliberately paired with an incomplete proof.
+                let accounts = value["signer_accounts"]
+                    .as_array_mut()
+                    .expect("signer account array");
+                let moved = accounts[0]["account_proof"].clone();
+                accounts[0]["account_proof"] = serde_json::json!([]);
+                accounts[1]["account_proof"] = moved;
+            }
+            SnapshotMutation::WrongEasCodeHash => {
+                value["eas_runtime_code_hash"] = Value::String(fixture_hex(&[0x13; 32]));
+            }
+            SnapshotMutation::WrongDomainName | SnapshotMutation::WrongDomainVersion => {
+                let record = &mut value["attestations"][0];
+                let message = message_from_json(record);
+                let (name, version) = match mutation {
+                    SnapshotMutation::WrongDomainName => ("EAS", EAS_DOMAIN_VERSION),
+                    SnapshotMutation::WrongDomainVersion => (EAS_DOMAIN_NAME, "0.27"),
+                    _ => unreachable!(),
+                };
+                let digest = typed_data_digest_for_domain(&message, name, version);
+                sign_json_record(record, &fixture_signing_key(1), digest);
+            }
+            SnapshotMutation::WrongOffchainVersion => {
+                value["attestations"][0]["version"] = Value::from(1);
+            }
+            SnapshotMutation::WrongDraft => {
+                value["draft_commit"] = Value::String("deadbeef".to_string());
+            }
+        }
+
+        let raw = serde_json::to_vec(&value).expect("serialize mutated fixture");
+        anchor.snapshot_sha256 = sha256(&raw);
+        verify_snapshot_bytes(&raw, &anchor, &trusted)
+            .expect_err("mutated security input must fail closed")
+    }
+
+    fn flip_last_hex_byte(value: &mut Value) {
+        let mut bytes = hex::decode(
+            value
+                .as_str()
+                .expect("hex JSON string")
+                .strip_prefix("0x")
+                .expect("canonical fixture prefix"),
+        )
+        .expect("canonical fixture hex");
+        *bytes.last_mut().expect("non-empty fixture hex") ^= 1;
+        *value = Value::String(fixture_hex(&bytes));
+    }
+
+    fn message_from_json(record: &Value) -> EasV2Message {
+        EasV2Message {
+            schema: decode_hex_exact("fixture schema", record["schema"].as_str().unwrap()).unwrap(),
+            recipient: decode_hex_exact("fixture recipient", record["recipient"].as_str().unwrap())
+                .unwrap(),
+            time: record["time"].as_u64().unwrap(),
+            expiration_time: record["expiration_time"].as_u64().unwrap(),
+            revocable: record["revocable"].as_bool().unwrap(),
+            ref_uid: decode_hex_exact("fixture ref uid", record["ref_uid"].as_str().unwrap())
+                .unwrap(),
+            data: decode_hex_exact("fixture data", record["data"].as_str().unwrap()).unwrap(),
+            salt: decode_hex_exact("fixture salt", record["salt"].as_str().unwrap()).unwrap(),
+        }
+    }
+
+    fn fixture_signing_key(byte: u8) -> SigningKey {
+        SigningKey::from_bytes((&[byte; 32]).into()).expect("valid fixture key")
+    }
+
+    fn sign_json_record(record: &mut Value, key: &SigningKey, digest: [u8; 32]) {
+        let (signature, recovery_id) = key
+            .sign_prehash_recoverable(&digest)
+            .expect("fixture signing succeeds");
+        let bytes = signature.to_bytes();
+        record["signature"] = serde_json::json!({
+            "r": fixture_hex(&bytes[..32]),
+            "s": fixture_hex(&bytes[32..]),
+            "v": recovery_id.to_byte() + 27,
+        });
+    }
+
+    fn typed_data_digest_for_domain(
+        fields: &EasV2Message,
+        domain_name: &str,
+        domain_version: &str,
+    ) -> [u8; 32] {
+        let mut domain = Vec::with_capacity(32 * 5);
+        domain.extend_from_slice(&keccak256(
+            b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
+        ));
+        domain.extend_from_slice(&keccak256(domain_name.as_bytes()));
+        domain.extend_from_slice(&keccak256(domain_version.as_bytes()));
+        domain.extend_from_slice(&u256_word(EAS_CHAIN_ID));
+        domain.extend_from_slice(&address_word(EAS_CONTRACT));
+        let domain_separator = keccak256(&domain);
+
+        let mut message = Vec::with_capacity(32 * 10);
+        message.extend_from_slice(&keccak256(
+            b"Attest(uint16 version,bytes32 schema,address recipient,uint64 time,uint64 expirationTime,bool revocable,bytes32 refUID,bytes data,bytes32 salt)",
+        ));
+        message.extend_from_slice(&u256_word(u64::from(EAS_OFFCHAIN_VERSION)));
+        message.extend_from_slice(&fields.schema);
+        message.extend_from_slice(&address_word(fields.recipient));
+        message.extend_from_slice(&u256_word(fields.time));
+        message.extend_from_slice(&u256_word(fields.expiration_time));
+        message.extend_from_slice(&u256_word(u64::from(fields.revocable)));
+        message.extend_from_slice(&fields.ref_uid);
+        message.extend_from_slice(&keccak256(&fields.data));
+        message.extend_from_slice(&fields.salt);
+        let struct_hash = keccak256(&message);
+
+        let mut encoded = [0u8; 66];
+        encoded[..2].copy_from_slice(&[0x19, 0x01]);
+        encoded[2..34].copy_from_slice(&domain_separator);
+        encoded[34..].copy_from_slice(&struct_hash);
+        keccak256(&encoded)
+    }
 
     #[test]
     fn rejects_recursive_duplicate_json_keys() {
@@ -1476,6 +1686,102 @@ mod tests {
         assert_eq!(
             verified.min_remaining_validity_seconds(),
             fixture.anchor.min_remaining_validity_seconds
+        );
+    }
+
+    #[test]
+    fn synthetic_snapshot_security_mutations_fail_closed() {
+        let fixture = synthetic_snapshot_fixture([0x77; 32]);
+        let value: Value = serde_json::from_slice(&fixture.raw).unwrap();
+        let message = message_from_json(&value["attestations"][0]);
+        assert_eq!(
+            typed_data_digest_for_domain(&message, EAS_DOMAIN_NAME, EAS_DOMAIN_VERSION),
+            eas_v2_typed_data_digest(&message),
+            "the test mutation helper must reproduce the canonical domain first"
+        );
+
+        let cases = [
+            (SnapshotMutation::WrongSchema, "pinned ERC-8176 schema"),
+            (SnapshotMutation::WrongData, ".uid mismatch"),
+            (SnapshotMutation::WrongUid, ".uid mismatch"),
+            (SnapshotMutation::WrongSignature, "attester mismatch"),
+            (
+                SnapshotMutation::UntrustedAttester,
+                "not in the independently supplied trust set",
+            ),
+            (
+                SnapshotMutation::DuplicateDescriptorAttester,
+                "uid duplicates an earlier attestation",
+            ),
+            (
+                SnapshotMutation::TamperedRevocationProof,
+                "revocation proof",
+            ),
+            (SnapshotMutation::StaleCheckpoint, "freshness cap"),
+            (SnapshotMutation::FutureCheckpoint, "after evaluation"),
+            (SnapshotMutation::ExpiredAttestation, ".expiration_time"),
+            (
+                SnapshotMutation::TamperedBlockHeader,
+                "checkpoint block hash mismatch",
+            ),
+            (
+                SnapshotMutation::TamperedEasAccountProof,
+                "verify EAS account proof",
+            ),
+            (
+                SnapshotMutation::TamperedSignerAccountProof,
+                "signer account proof",
+            ),
+            (
+                SnapshotMutation::SwappedSignerWitness,
+                "signer account proof",
+            ),
+            (
+                SnapshotMutation::WrongEasCodeHash,
+                "eas_runtime_code_hash mismatch",
+            ),
+            (SnapshotMutation::WrongDomainName, "attester mismatch"),
+            (SnapshotMutation::WrongDomainVersion, "attester mismatch"),
+            (SnapshotMutation::WrongOffchainVersion, ".version must be 2"),
+            (SnapshotMutation::WrongDraft, "draft commit mismatch"),
+        ];
+
+        for (mutation, expected) in cases {
+            let error = mutated_snapshot_error(&fixture, mutation);
+            assert!(
+                error.contains(expected),
+                "{mutation:?} rejected for an unexpected reason: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn attestation_and_witness_record_order_does_not_change_verified_set() {
+        let descriptor_hash = [0x77; 32];
+        let fixture = synthetic_snapshot_fixture(descriptor_hash);
+        let baseline =
+            verify_snapshot_bytes(&fixture.raw, &fixture.anchor, &fixture.trusted_attesters)
+                .expect("baseline verifies");
+
+        let mut value: Value = serde_json::from_slice(&fixture.raw).unwrap();
+        value["attestations"].as_array_mut().unwrap().reverse();
+        value["signer_accounts"].as_array_mut().unwrap().reverse();
+        let reordered_raw = serde_json::to_vec(&value).unwrap();
+        let mut reordered_anchor = fixture.anchor.clone();
+        reordered_anchor.snapshot_sha256 = sha256(&reordered_raw);
+        let reordered = verify_snapshot_bytes(
+            &reordered_raw,
+            &reordered_anchor,
+            &fixture.trusted_attesters,
+        )
+        .expect("record order is not authority");
+
+        assert_eq!(baseline.by_descriptor, reordered.by_descriptor);
+        assert_eq!(baseline.attestation_count(), reordered.attestation_count());
+        assert_eq!(baseline.descriptor_count(), reordered.descriptor_count());
+        assert_eq!(
+            baseline.attesters(descriptor_hash),
+            reordered.attesters(descriptor_hash)
         );
     }
 }
