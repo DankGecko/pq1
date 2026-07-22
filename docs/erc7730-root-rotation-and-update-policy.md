@@ -43,11 +43,22 @@ user wants rides a full FW release.
    those owners close may a root change inherit production release authority.
 
 3. **Companion ↔ firmware root-compatibility policy.** The descriptor root and
-   generated known-call filter form one versioned catalogue. A proof cut from a
-   newer root fails on an older device; if that tuple is already in the older
-   filter, the device then hard-refuses instead of blind-signing. Conversely, an
-   older companion that omits a tuple in the newer firmware filter is refused.
-   Only a tuple genuinely unknown to the installed firmware may use the generic
+   generated known-call artifacts form one versioned catalogue. Define `K` as
+   the complete exact registry-known contract-call inventory, `C` as the tuples
+   recovered from accepted contract-context formats in the final `P730`, and
+   `F = K \ C` as the refused-known subset. The canonical `P73K` artifact
+   encodes only `F`; it is co-embedded with `P73S` in the signed secure image.
+   No P73S schema change is needed: `P73S` already binds the exact P730 and the
+   count/hash of `K`. Generation and companion preflight strictly recover `C`
+   and decode `F`, prove `C ∩ F = ∅` and `C ∪ F = K`, reproduce that
+   P73S count/hash, and check the P73S-bound all-known Bloom. A proof cut from a
+   newer root fails on an older device; a `C` tuple whose descriptor is omitted
+   still hard-refuses and cannot be downgraded. Only an exact `F` member with a
+   structurally cleanly absent complete trailer may enter the separately
+   reviewed, default-off forced-blind ceremony; when that feature is absent,
+   the same tuple hard-refuses. Malformed, supplied-invalid, misbound, or
+   unrenderable evidence and every other existing refusal remain fatal. Only a
+   tuple genuinely unknown to the installed firmware may use the generic
    ladder. `dbgen` binds the root, P730/IR schemas, exact blob and Bloom
    identities, tuple-set identity, counts, provenance, policy/curation inputs,
    and compiler version into `P73S`. Release tooling extracts the unique
@@ -55,8 +66,9 @@ user wants rides a full FW release.
    flattened signed image, and packages an exact sidecar. A companion must
    authenticate the release first, enforce exact/minimum firmware-version
    policy, rebuild the full catalogue tree and every proof against that receipt,
-   and treat any uncertain installed pairing as incompatible. No gateway query
-   is required: non-secure USB data would not improve authentication. **No
+   and authenticate the paired in-image P73K relation before requesting forced
+   blind. Any uncertain installed pairing is incompatible. No gateway query is
+   required: non-secure USB data would not improve authentication. **No
    version negotiation; mismatch or unknown pairing = refuse affected known
    calls, never mis-render.**
 
@@ -147,13 +159,18 @@ upstream-movement ceremony.
    deployment/format tuple remains a hard refusal.
 5. `cargo run -p dbgen --features nested-calldata-test-fixture` — regenerate
    the blobs, known-call Blooms, production/E2E `erc7730_status*.bin` receipts,
-   `db_roots.rs` roots/retained status arrays, and the drift-gated
-   `erc7730.review.txt`. Its header carries the manifest-derived upstream
+   canonical production/E2E `P73K` refused-known sets, `db_roots.rs`
+   roots/retained status arrays, and the drift-gated `erc7730.review.txt`.
+   Generation must prove `C ∩ F = ∅`, `C ∪ F = K`, and reproduce the
+   P73S `K` count/hash and Bloom relation. Its header carries the manifest-derived upstream
    commit/tree and manifest SHA-256; its body carries the per-field breakdown
    plus `## skips` roll-up (finding 1.4).
 6. **Review the review-file diff**: leaves gained/lost, any `degraded=` markers
    (finding 1.1), any new skips by category, any `CONFLICT` dedup error
-   (finding 2.2). This is the human gate on what the device will trust.
+   (finding 2.2), and every `C -> F` movement. Each such movement expands
+   signing authority when `erc7730-forced-blind` is enabled and therefore needs
+   an explicit owner decision; catalogue churn cannot silently approve it.
+   This is the human gate on what the device will trust.
 7. Commit; after the firmware-release quarantine closes, the root rides the
    next reviewed and signed firmware release. Before closure this step produces
    development artifacts only.

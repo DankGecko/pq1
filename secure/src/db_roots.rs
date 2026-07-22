@@ -7,7 +7,7 @@
 //! secure/data/erc7730-e2e/*.json, and secure/data/erc7730/policy.toml.
 //! DO NOT EDIT BY HAND.
 //!
-//! NONE of the DB blobs ship in the firmware image. The ERC20 /
+//! None of the host-side Merkle DB blobs ship in the firmware image. The ERC20 /
 //! Names / Selectors / ERC-7730 blobs all live on the host (companion
 //! app) under `tools/companion-stub/` and are forwarded over USB as
 //! per-tx `(entry, merkle_proof, leaf_index)` bundles. The secure
@@ -22,7 +22,11 @@
 //! with exact chain/contract-bound Merkle metadata, re-attributed per direct
 //! call or MultiSend record. Without either capability, signing refuses. Only
 //! calls absent from the authenticated known-call set may use the generic or
-//! blind-sign fallback.
+//! ordinary blind-sign fallback.
+//! When the default-off `erc7730-forced-blind` feature is selected, the exact
+//! refused-known `P73K` set is a separate, co-embedded used array for its
+//! distinct forced ceremony. It is not a host database and cannot be supplied
+//! or substituted by the companion.
 //!
 //! `NAMES_DB_ROOT` anchors the address-name DB. Every trusted-UI
 //! address render consults this root before a human-readable
@@ -136,6 +140,28 @@ self::__pqsigner_erc7730_core::include_bytes!("../data/erc7730-known-calls.bloom
 pub static ERC7730_KNOWN_CALLS_BLOOM: &[u8; pqsigner_erc7730::known_calls::BLOOM_BYTES] =
 self::__pqsigner_erc7730_core::include_bytes!("../data/erc7730-known-calls-e2e.bloom");
 
+#[cfg(all(not(feature = "e2e-test"), feature = "erc7730-forced-blind"))]
+pub const ERC7730_FORCED_ELIGIBLE_GROUP_COUNT: usize = 546;
+#[cfg(all(not(feature = "e2e-test"), feature = "erc7730-forced-blind"))]
+pub const ERC7730_FORCED_ELIGIBLE_TUPLE_COUNT: usize = 3214;
+#[cfg(all(not(feature = "e2e-test"), feature = "erc7730-forced-blind"))]
+#[used]
+#[no_mangle]
+#[link_section = ".pqsigner.erc7730_forced_eligible"]
+pub static PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET: [u8; 32528] =
+    *self::__pqsigner_erc7730_core::include_bytes!("../data/erc7730-forced-eligible.set");
+
+#[cfg(all(feature = "e2e-test", feature = "erc7730-forced-blind"))]
+pub const ERC7730_FORCED_ELIGIBLE_GROUP_COUNT: usize = 0;
+#[cfg(all(feature = "e2e-test", feature = "erc7730-forced-blind"))]
+pub const ERC7730_FORCED_ELIGIBLE_TUPLE_COUNT: usize = 0;
+#[cfg(all(feature = "e2e-test", feature = "erc7730-forced-blind"))]
+#[used]
+#[no_mangle]
+#[link_section = ".pqsigner.erc7730_forced_eligible"]
+pub static PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET: [u8; 16] =
+    *self::__pqsigner_erc7730_core::include_bytes!("../data/erc7730-forced-eligible-e2e.set");
+
 #[cfg(not(feature = "e2e-test"))]
 #[used]
 #[no_mangle]
@@ -165,10 +191,10 @@ pub static PQSIGNER_ERC7730_CATALOGUE_STATUS: [u8; 256] = [
     0xc6, 0xd0, 0x0f, 0xf3, 0x49, 0x54, 0xa3, 0x31,
     0x2b, 0xb3, 0xc5, 0xb9, 0x81, 0xa1, 0x01, 0xfe,
     0x71, 0xe3, 0x73, 0x3e, 0x07, 0x49, 0x08, 0x77,
-    0x17, 0xd3, 0xb7, 0x5e, 0x84, 0x39, 0xe9, 0xec,
-    0xd8, 0x82, 0x42, 0x07, 0x48, 0x49, 0xa9, 0x72,
-    0x89, 0xd2, 0x24, 0xb6, 0xc2, 0x14, 0xec, 0x57,
-    0xc1, 0x8d, 0x46, 0x75, 0x1d, 0x9b, 0x23, 0x3b,
+    0x04, 0x9f, 0x57, 0xf4, 0x9f, 0x21, 0xf4, 0xe5,
+    0xc8, 0xad, 0x73, 0x9b, 0xbd, 0x1b, 0x34, 0xc2,
+    0x86, 0xef, 0xcb, 0x90, 0x07, 0x4a, 0x30, 0x00,
+    0x94, 0xf5, 0xaf, 0x65, 0x95, 0x95, 0xf8, 0x25,
     0x64, 0x62, 0x67, 0x65, 0x6e, 0x2f, 0x30, 0x2e,
     0x31, 0x2e, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,

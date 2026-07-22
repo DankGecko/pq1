@@ -72,16 +72,16 @@ loop can already reach.
 
 The normal command-line path never emits, lists, or reports from an unverified
 release/catalogue pair. It invokes `fwsign erc7730-release-metadata` to verify
-the C10 manifest, exact image hashes, version policy, and embedded/sidecar P73S
-binding in a private temporary directory. It then binds the exact P730 and
-known-call Bloom bytes to that P73S V1 status, reconstructs the complete Merkle
-tree, and byte-compares every stored proof. A deliberately loud
+the C10 manifest, exact image hashes, version policy, and embedded/sidecar
+P73S/P73K binding in a private temporary directory. It then binds the exact
+P730 and known-call Bloom bytes to that P73S V1 status, reconstructs the
+complete Merkle tree, byte-compares every stored proof, and, when authenticated
+P73K is present, proves the exact `K = C ⊎ F` partition. A deliberately loud
 `--unverified-status-for-test` escape exists only for deterministic dbgen/unit
 fixtures and cannot emit a compatibility report.
-The tuple-set SHA in P73S remains a release-identity receipt: the Bloom
-deliberately includes registry-declared calls whose unsupported formats are
-absent from P730, and a Bloom is not invertible, so this helper does not pretend
-it can reconstruct that exact superset from compiled IR.
+For legacy/feature-off releases without P73K, the tuple-set SHA in P73S remains
+a release-identity receipt: the Bloom is not invertible, so this helper does not
+pretend it can reconstruct the exact registry-known superset.
 """
 
 from __future__ import annotations
@@ -117,6 +117,14 @@ KNOWN_CALLS_BLOOM_BYTES = 16 * 1024
 KNOWN_CALLS_BLOOM_BITS = KNOWN_CALLS_BLOOM_BYTES * 8
 KNOWN_CALLS_BLOOM_HASHES = 7
 KNOWN_CALL_DOMAIN = b"pqsigner/erc7730-known-call-v1"
+KNOWN_CALL_SET_DOMAIN = b"pqsigner/erc7730-known-call-set-v1"
+
+FORCED_ELIGIBLE_MAGIC = b"P73K"
+FORCED_ELIGIBLE_SCHEMA_VERSION = 1
+FORCED_ELIGIBLE_HEADER_LEN = 16
+FORCED_ELIGIBLE_GROUP_LEN = 36
+FORCED_ELIGIBLE_SELECTOR_LEN = 4
+U32_MAX = (1 << 32) - 1
 
 
 def _sha256(data: bytes) -> bytes:
@@ -269,7 +277,69 @@ def _validate_release_metadata(
         raise ValueError(
             "release-metadata catalogue status does not equal the exact extracted P73S"
         )
+    if "forced_eligible" not in report:
+        raise ValueError("release metadata omits the forced_eligible boundary")
+    _validate_forced_release_metadata(report.get("forced_eligible"))
     return report
+
+
+def _validate_forced_release_metadata(value: object) -> dict | None:
+    """Validate fwsign's optional P73K summary before trusting extraction."""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "format",
+        "schema",
+        "encoded_length",
+        "group_count",
+        "tuple_count",
+        "set_sha256",
+    }:
+        raise ValueError("release metadata has malformed forced_eligible object")
+    if value.get("format") != "P73K" or value.get("schema") != 1:
+        raise ValueError("release metadata has unsupported forced-eligible format")
+    encoded_length = value.get("encoded_length")
+    group_count = value.get("group_count")
+    tuple_count = value.get("tuple_count")
+    if any(
+        not isinstance(field, int) or isinstance(field, bool) or not 0 <= field <= U32_MAX
+        for field in (encoded_length, group_count, tuple_count)
+    ):
+        raise ValueError("release metadata has invalid forced-eligible counts")
+    expected_length = (
+        FORCED_ELIGIBLE_HEADER_LEN
+        + group_count * FORCED_ELIGIBLE_GROUP_LEN
+        + tuple_count * FORCED_ELIGIBLE_SELECTOR_LEN
+    )
+    if encoded_length != expected_length:
+        raise ValueError("release metadata has inconsistent forced-eligible length")
+    if (group_count == 0) != (tuple_count == 0) or group_count > tuple_count:
+        raise ValueError("release metadata has inconsistent forced-eligible cardinality")
+    set_sha256 = value.get("set_sha256")
+    if (
+        not isinstance(set_sha256, str)
+        or len(set_sha256) != 64
+        or set_sha256 != set_sha256.lower()
+    ):
+        raise ValueError("release metadata has malformed forced-eligible SHA-256")
+    try:
+        bytes.fromhex(set_sha256)
+    except ValueError as exc:
+        raise ValueError("release metadata has malformed forced-eligible SHA-256") from exc
+    return value
+
+
+def _validate_extracted_forced_eligible(raw: bytes, metadata: dict) -> None:
+    parsed = parse_forced_eligible(raw)
+    if (
+        len(raw) != metadata["encoded_length"]
+        or parsed["group_count"] != metadata["group_count"]
+        or parsed["tuple_count"] != metadata["tuple_count"]
+        or _sha256(raw).hex() != metadata["set_sha256"]
+    ):
+        raise ValueError(
+            "extracted P73K does not equal the authenticated release-metadata identity"
+        )
 
 
 def _authenticated_release_status(
@@ -279,11 +349,11 @@ def _authenticated_release_status(
     pubkey: str,
     expected_version: int,
     minimum_version: int,
-) -> tuple[bytes, dict]:
-    """Run fwsign in a private directory and consume its exact status output."""
+) -> tuple[bytes, bytes | None, dict]:
+    """Run fwsign privately and consume its exact authenticated P73S/P73K."""
     with tempfile.TemporaryDirectory(prefix="pqsigner-erc7730-status-") as temp_dir:
         status_path = Path(temp_dir) / "authenticated-status.bin"
-        command = [
+        base_command = [
             fwsign_bin,
             "erc7730-release-metadata",
             "--bundle",
@@ -294,39 +364,75 @@ def _authenticated_release_status(
             str(expected_version),
             "--minimum-version",
             str(minimum_version),
-            "--status-out",
-            str(status_path),
         ]
-        try:
-            completed = subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-                text=True,
-            )
-        except OSError as exc:
-            raise ValueError(f"cannot execute fwsign release authentication: {exc}") from exc
-        if completed.returncode != 0:
-            detail = completed.stderr.strip() or "no diagnostic"
-            raise ValueError(f"authenticated firmware release rejected: {detail}")
-        try:
-            report = json.loads(
-                completed.stdout,
-                object_pairs_hook=_reject_duplicate_json_keys,
-            )
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise ValueError(f"invalid fwsign release-metadata JSON: {exc}") from exc
+
+        def invoke(extra_args: list[str]) -> dict:
+            try:
+                completed = subprocess.run(
+                    base_command + extra_args,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    text=True,
+                )
+            except OSError as exc:
+                raise ValueError(
+                    f"cannot execute fwsign release authentication: {exc}"
+                ) from exc
+            if completed.returncode != 0:
+                detail = completed.stderr.strip() or "no diagnostic"
+                raise ValueError(f"authenticated firmware release rejected: {detail}")
+            try:
+                parsed = json.loads(
+                    completed.stdout,
+                    object_pairs_hook=_reject_duplicate_json_keys,
+                )
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise ValueError(
+                    f"invalid fwsign release-metadata JSON: {exc}"
+                ) from exc
+            if not isinstance(parsed, dict):
+                raise ValueError("fwsign release-metadata JSON is not an object")
+            return parsed
+
+        report = invoke(["--status-out", str(status_path)])
         try:
             status_raw = status_path.read_bytes()
         except OSError as exc:
             raise ValueError(f"fwsign did not emit authenticated P73S status: {exc}") from exc
-        return status_raw, _validate_release_metadata(
+        validated = _validate_release_metadata(
             report,
             status_raw,
             expected_version,
             minimum_version,
         )
+        forced_metadata = _validate_forced_release_metadata(
+            validated.get("forced_eligible")
+        )
+        forced_raw = None
+        if forced_metadata is not None:
+            forced_path = Path(temp_dir) / "authenticated-forced-eligible.bin"
+            extraction_report = invoke(
+                ["--forced-eligible-out", str(forced_path)]
+            )
+            _validate_release_metadata(
+                extraction_report,
+                status_raw,
+                expected_version,
+                minimum_version,
+            )
+            if extraction_report != validated:
+                raise ValueError(
+                    "fwsign release identity changed between status and P73K extraction"
+                )
+            try:
+                forced_raw = forced_path.read_bytes()
+            except OSError as exc:
+                raise ValueError(
+                    f"fwsign did not emit authenticated P73K set: {exc}"
+                ) from exc
+            _validate_extracted_forced_eligible(forced_raw, forced_metadata)
+        return status_raw, forced_raw, validated
 
 
 def _compatibility_report(release: dict, verified: dict, status_raw: bytes) -> str:
@@ -337,6 +443,9 @@ def _compatibility_report(release: dict, verified: dict, status_raw: bytes) -> s
             "proof_depth": verified["header"]["proof_depth"],
             "proofs_verified": verified["header"]["entry_cnt"],
             "compiled_known_call_count": verified["compiled_known_call_count"],
+            "clear_known_call_count": verified["clear_known_call_count"],
+            "forced_known_call_count": verified["forced_known_call_count"],
+            "forced_eligible_bound": verified["forced_eligible_bound"],
         }
     )
     report = {
@@ -677,15 +786,159 @@ def _known_call_may_contain(
     return True
 
 
-def verify_catalogue(status_raw: bytes, blob: bytes, bloom: bytes) -> dict:
+def _known_call_set_hash(tuples: set[tuple[int, bytes, bytes]]) -> bytes:
+    """Hash one exact canonical known-call tuple set like dbgen."""
+    digest = hashlib.sha256()
+    digest.update(KNOWN_CALL_SET_DOMAIN)
+    digest.update(len(tuples).to_bytes(8, "big"))
+    for chain_id, contract, selector in sorted(tuples):
+        digest.update(chain_id.to_bytes(8, "big"))
+        digest.update(contract)
+        digest.update(selector)
+    return digest.digest()
+
+
+def parse_forced_eligible(raw: bytes) -> dict:
+    """Strictly parse one complete canonical big-endian P73K V1 artifact."""
+    if len(raw) < FORCED_ELIGIBLE_HEADER_LEN:
+        raise ValueError(
+            "forced-eligible set is shorter than its fixed header: "
+            f"{len(raw)} < {FORCED_ELIGIBLE_HEADER_LEN}"
+        )
+    if raw[:4] != FORCED_ELIGIBLE_MAGIC:
+        raise ValueError(f"bad forced-eligible magic: {raw[:4]!r}")
+
+    schema_version = int.from_bytes(raw[4:6], "big")
+    header_len = int.from_bytes(raw[6:8], "big")
+    group_count = int.from_bytes(raw[8:12], "big")
+    tuple_count = int.from_bytes(raw[12:16], "big")
+    if schema_version != FORCED_ELIGIBLE_SCHEMA_VERSION:
+        raise ValueError(f"unknown forced-eligible schema: {schema_version}")
+    if header_len != FORCED_ELIGIBLE_HEADER_LEN:
+        raise ValueError(
+            "forced-eligible header length mismatch: "
+            f"{header_len} != {FORCED_ELIGIBLE_HEADER_LEN}"
+        )
+
+    groups_len = group_count * FORCED_ELIGIBLE_GROUP_LEN
+    selectors_len = tuple_count * FORCED_ELIGIBLE_SELECTOR_LEN
+    selector_pool_off = FORCED_ELIGIBLE_HEADER_LEN + groups_len
+    expected_len = selector_pool_off + selectors_len
+    if (
+        groups_len > U32_MAX
+        or selectors_len > U32_MAX
+        or selector_pool_off > U32_MAX
+        or expected_len > U32_MAX
+    ):
+        raise ValueError("forced-eligible count-derived length overflows u32")
+    if len(raw) != expected_len:
+        raise ValueError(
+            "forced-eligible exact length mismatch: "
+            f"{len(raw)} != {expected_len}"
+        )
+
+    groups: list[dict] = []
+    tuples: list[tuple[int, bytes, bytes]] = []
+    previous_group: tuple[int, bytes] | None = None
+    selector_cursor = 0
+    for group_index in range(group_count):
+        base = FORCED_ELIGIBLE_HEADER_LEN + group_index * FORCED_ELIGIBLE_GROUP_LEN
+        chain_id = int.from_bytes(raw[base : base + 8], "big")
+        target = bytes(raw[base + 8 : base + 28])
+        selector_start = int.from_bytes(raw[base + 28 : base + 32], "big")
+        selector_count = int.from_bytes(raw[base + 32 : base + 34], "big")
+        reserved = int.from_bytes(raw[base + 34 : base + 36], "big")
+
+        group_key = (chain_id, target)
+        if previous_group is not None and group_key <= previous_group:
+            relation = "duplicates" if group_key == previous_group else "is out of order with"
+            raise ValueError(
+                f"forced-eligible group {group_index} {relation} group {group_index - 1}"
+            )
+        previous_group = group_key
+        if reserved != 0:
+            raise ValueError(
+                f"forced-eligible group {group_index} has non-zero reserved bytes"
+            )
+        if selector_count == 0:
+            raise ValueError(f"forced-eligible group {group_index} is empty")
+
+        selector_end = selector_start + selector_count
+        if selector_end > U32_MAX:
+            raise ValueError(
+                f"forced-eligible group {group_index} selector range overflows u32"
+            )
+        if selector_start > tuple_count or selector_end > tuple_count:
+            raise ValueError(
+                f"forced-eligible group {group_index} selector range is out of bounds"
+            )
+        if selector_start != selector_cursor:
+            raise ValueError(
+                f"forced-eligible group {group_index} selector range is not contiguous: "
+                f"{selector_start} != {selector_cursor}"
+            )
+
+        selectors: list[bytes] = []
+        previous_selector: bytes | None = None
+        for selector_index in range(selector_start, selector_end):
+            offset = selector_pool_off + selector_index * FORCED_ELIGIBLE_SELECTOR_LEN
+            selector = bytes(raw[offset : offset + FORCED_ELIGIBLE_SELECTOR_LEN])
+            if previous_selector is not None and selector <= previous_selector:
+                relation = (
+                    "duplicates" if selector == previous_selector else "is out of order with"
+                )
+                raise ValueError(
+                    f"forced-eligible selector {selector_index} {relation} "
+                    f"selector {selector_index - 1} in group {group_index}"
+                )
+            previous_selector = selector
+            selectors.append(selector)
+            tuples.append((chain_id, target, selector))
+
+        groups.append(
+            {
+                "chain_id": chain_id,
+                "target": target,
+                "selector_start": selector_start,
+                "selector_count": selector_count,
+                "selectors": tuple(selectors),
+            }
+        )
+        selector_cursor = selector_end
+
+    if selector_cursor != tuple_count:
+        raise ValueError(
+            "forced-eligible group ranges do not cover the selector pool: "
+            f"{selector_cursor} != {tuple_count}"
+        )
+    return {
+        "schema_version": schema_version,
+        "header_len": header_len,
+        "group_count": group_count,
+        "tuple_count": tuple_count,
+        "groups": tuple(groups),
+        "tuples": tuple(tuples),
+    }
+
+
+def verify_catalogue(
+    status_raw: bytes,
+    blob: bytes,
+    bloom: bytes,
+    forced_eligible: bytes | None = None,
+) -> dict:
     """Bind and fully preflight one immutable P730/Bloom byte snapshot.
 
     Relative to the caller-authenticated status, this proves the compiled leaf
     set and every stored proof agree, and that every compiled contract selector
     is present in the bound omission Bloom. It cannot recover the exact
-    registry-declared tuple superset from that non-invertible Bloom;
-    `known_call_set_sha256` is therefore retained as release identity, not
-    falsely re-derived here. This function does not verify a firmware signature.
+    registry-declared tuple superset from that non-invertible Bloom when no
+    P73K is supplied. With `forced_eligible`, it independently parses the exact
+    refused-known set F, recovers C from the already strict P730 contract IRs,
+    and proves their disjoint union reproduces the P73S-bound K identity. This
+    function does not verify a firmware signature or authenticate P73K's image
+    placement; callers of the optional path must supply bytes extracted from
+    the same authenticated secure image as P73S.
     """
     status = parse_catalogue_status(status_raw)
     if status["catalogue_version"] != CATALOGUE_VERSION:
@@ -793,14 +1046,16 @@ def verify_catalogue(status_raw: bytes, blob: bytes, bloom: bytes) -> dict:
             "compiled known-call count exceeds authenticated registry tuple count: "
             f"{len(compiled_known_calls)} > {status['known_call_count']}"
         )
-    for chain_id, contract, selector in sorted(compiled_known_calls):
-        if not _known_call_may_contain(bloom, chain_id, contract, selector):
-            raise ValueError(
-                "authenticated known-call Bloom omits compiled tuple "
-                f"chain={chain_id} contract=0x{contract.hex()} "
-                f"selector=0x{selector.hex()}"
-            )
-
+    if forced_eligible is None:
+        # Preserve the original validation path and failure ordering when the
+        # optional exact refused-known set is absent.
+        for chain_id, contract, selector in sorted(compiled_known_calls):
+            if not _known_call_may_contain(bloom, chain_id, contract, selector):
+                raise ValueError(
+                    "authenticated known-call Bloom omits compiled tuple "
+                    f"chain={chain_id} contract=0x{contract.hex()} "
+                    f"selector=0x{selector.hex()}"
+                )
     levels = _merkle_levels(irs)
     root = levels[-1][0]
     if root != status["descriptor_root"]:
@@ -822,12 +1077,50 @@ def verify_catalogue(status_raw: bytes, blob: bytes, bloom: bytes) -> dict:
         if stored_proof != expected_proof:
             raise ValueError(f"stored Merkle proof disagrees for leaf {i}")
 
+    parsed_forced = None
+    forced_known_calls: set[tuple[int, bytes, bytes]] | None = None
+    if forced_eligible is not None:
+        parsed_forced = parse_forced_eligible(forced_eligible)
+        forced_known_calls = set(parsed_forced["tuples"])
+        overlap = compiled_known_calls & forced_known_calls
+        if overlap:
+            chain_id, contract, selector = min(overlap)
+            raise ValueError(
+                "clear/refused-known partition overlaps at "
+                f"chain={chain_id} contract=0x{contract.hex()} "
+                f"selector=0x{selector.hex()}"
+            )
+        known_calls = compiled_known_calls | forced_known_calls
+        if len(known_calls) != status["known_call_count"]:
+            raise ValueError(
+                "clear/refused-known union count does not match authenticated status: "
+                f"{len(known_calls)} != {status['known_call_count']}"
+            )
+        if _known_call_set_hash(known_calls) != status["known_call_set_sha256"]:
+            raise ValueError(
+                "clear/refused-known union SHA-256 does not match authenticated status"
+            )
+        for chain_id, contract, selector in sorted(known_calls):
+            if not _known_call_may_contain(bloom, chain_id, contract, selector):
+                raise ValueError(
+                    "authenticated known-call Bloom omits partition tuple "
+                    f"chain={chain_id} contract=0x{contract.hex()} "
+                    f"selector=0x{selector.hex()}"
+                )
+
     return {
         "status": status,
         "header": hdr,
         "entries": tuple(entries),
         "parsed_irs": tuple(parsed_irs),
         "compiled_known_call_count": len(compiled_known_calls),
+        "clear_known_call_count": len(compiled_known_calls),
+        "forced_known_call_count": (
+            len(forced_known_calls) if forced_known_calls is not None else None
+        ),
+        "known_call_count": status["known_call_count"],
+        "forced_eligible_bound": forced_known_calls is not None,
+        "forced_eligible": parsed_forced,
     }
 
 
@@ -1039,7 +1332,7 @@ def main() -> int:
 
     try:
         if args.bundle:
-            status_raw, release = _authenticated_release_status(
+            status_raw, forced_eligible, release = _authenticated_release_status(
                 fwsign_bin=args.fwsign_bin,
                 bundle=args.bundle,
                 pubkey=args.pubkey,
@@ -1050,13 +1343,14 @@ def main() -> int:
             # Explicitly test-only: production/list/trailer callers must start
             # from the signed bundle path above.
             status_raw = Path(args.unverified_status_for_test).read_bytes()
+            forced_eligible = None
             release = None
 
         # Each catalogue file is read exactly once. All selection, listing,
         # reporting, and bundle assembly use these immutable byte snapshots.
         blob = Path(args.db).read_bytes()
         bloom = Path(args.known_calls_bloom).read_bytes()
-        verified = verify_catalogue(status_raw, blob, bloom)
+        verified = verify_catalogue(status_raw, blob, bloom, forced_eligible)
     except (OSError, ValueError) as exc:
         ap.error(str(exc))
 

@@ -68,6 +68,7 @@ pub mod binding;
 pub mod bundle;
 pub mod catalogue_status;
 pub mod display;
+pub mod forced_eligible;
 pub mod ir;
 pub mod known_calls;
 pub mod proof_set;

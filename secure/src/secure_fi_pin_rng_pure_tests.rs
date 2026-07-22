@@ -113,7 +113,7 @@ const NSC_MOD_SRC: &str = include_str!("nsc/mod.rs");
 // 1. Re-mount `timeout.rs` under a host-test scaffold.
 //
 // Production `mod timeout` is `#[cfg(not(test))]`-excluded because
-// `crate::timeout::tick()` is called from a SysTick ISR that doesn't
+// `crate::timeout::tick_verified()` is called from a SysTick ISR that doesn't
 // exist on host. The module body itself is pure `core::sync::atomic`,
 // so re-mounting it under `cfg(test)` is sound — and gives us a real
 // instance to exercise `tick`/`reset_activity`/`is_idle` against.
@@ -1446,6 +1446,69 @@ mod sign_rate_source_text {
             "reset_counters must zero SIGNS_THIS_SESSION"
         );
     }
+
+    #[test]
+    fn forced_rate_preflight_and_recheck_are_read_only() {
+        let preflight_start = SIGN_RATE_SRC
+            .find("pub(crate) fn forced_rate_preflight(")
+            .expect("forced rate preflight missing");
+        let recheck_start = SIGN_RATE_SRC
+            .find("pub(crate) fn forced_rate_recheck(")
+            .expect("forced rate recheck missing");
+        let reset_start = SIGN_RATE_SRC[recheck_start..]
+            .find("pub fn reset_counters()")
+            .map(|offset| recheck_start + offset)
+            .expect("counter reset must follow forced helpers");
+        let helpers = &SIGN_RATE_SRC[preflight_start..reset_start];
+        assert!(helpers.contains("SIGNS_THIS_SESSION.as_ptr()"));
+        assert!(helpers.contains("LAST_SIGN_MS.as_ptr()"));
+        assert!(helpers.contains("crate::timeout::snapshot_verified()"));
+        assert!(helpers.contains("cortex_m::asm::wfi();"));
+        assert!(
+            !helpers.contains("SIGNS_THIS_SESSION.store(")
+                && !helpers.contains("LAST_SIGN_MS.store(")
+                && !helpers.contains("pre_sign()"),
+            "forced pre-warning helpers must neither charge nor update the rate timestamp",
+        );
+    }
+
+    #[test]
+    fn forced_rate_charge_rechecks_then_uses_the_sole_pre_sign_writer_once() {
+        let start = SIGN_RATE_SRC
+            .find("pub(crate) fn pre_sign_forced(")
+            .expect("forced rate charge wrapper missing");
+        let end = SIGN_RATE_SRC[start..]
+            .find("fn wait_for_min_interval()")
+            .map(|offset| start + offset)
+            .expect("forced rate charge wrapper end anchor missing");
+        let body = &SIGN_RATE_SRC[start..end];
+
+        let recheck = body
+            .find("forced_rate_recheck(receipt, request_digest)?")
+            .expect("frozen request-bound receipt must be rechecked");
+        let sole_charge = body
+            .find("pre_sign().map_err(|()| ForcedRateError::SessionCap)?")
+            .expect("existing pre_sign must remain the sole writer");
+        let count_readback = body
+            .find("let count_after = crate::fi::read_volatile_voted(count_addr)")
+            .expect("forced charge must independently read back the counter");
+        let timestamp_proof = body
+            .find("forced_charge_postcondition(")
+            .expect("production timestamp must be bracketed by verified ticks");
+
+        assert!(recheck < sole_charge);
+        assert!(sole_charge < count_readback);
+        assert!(count_readback < timestamp_proof);
+        assert_eq!(
+            body.matches("pre_sign().map_err(|()| ForcedRateError::SessionCap)?")
+                .count(),
+            1,
+            "forced charge must invoke the existing writer exactly once",
+        );
+        assert!(!body.contains("SIGNS_THIS_SESSION.store("));
+        assert!(!body.contains("LAST_SIGN_MS.store("));
+        assert!(body.matches("crate::timeout::snapshot_verified()").count() >= 2);
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -1455,6 +1518,14 @@ mod sign_rate_source_text {
 mod timeout_tests {
     use super::timeout_under_test as t;
 
+    fn tick_once() {
+        let mut health = crate::fi::FAIL_SENTINEL;
+        let mut cfi = crate::fi::FAIL_SENTINEL;
+        t::tick_verified(&mut health, &mut cfi);
+        assert_eq!(health, crate::fi::OK_SENTINEL);
+        assert_eq!(cfi, t::TICK_CFI_COMPLETE);
+    }
+
     #[test]
     fn positive_constants_are_documented_values() {
         // 2 minutes at ~1 ms tick.
@@ -1463,8 +1534,9 @@ mod timeout_tests {
 
     #[test]
     fn positive_tick_increments_monotonically() {
+        let _guard = t::test_lock();
         let before = t::now();
-        t::tick();
+        tick_once();
         let after = t::now();
         // wrapping math: `after - before` is 1 in the common case.
         assert_eq!(after.wrapping_sub(before), 1);
@@ -1472,9 +1544,10 @@ mod timeout_tests {
 
     #[test]
     fn positive_reset_activity_drops_idle_for() {
+        let _guard = t::test_lock();
         // Pile on some ticks so idle_for would be nonzero…
         for _ in 0..100 {
-            t::tick();
+            tick_once();
         }
         t::reset_activity();
         let idle = t::idle_for();
@@ -1618,7 +1691,7 @@ mod timeout_source_text {
             .expect("trusted-UI input scope must close before result matching");
         let block = &CONFIRM_SRC[block_start..block_end];
         assert!(block.contains("timeout::TrustedUiWaitGuard::enter()"));
-        assert!(block.contains("input().wait_button(&mut idle)"));
+        assert!(block.contains("input().wait_button(&mut wait_abort)"));
         assert!(
             !block.contains("timeout::reset_activity()"),
             "entering a trusted-UI wait must never refresh inactivity; only a real button event may do so"

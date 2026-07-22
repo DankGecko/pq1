@@ -82,13 +82,16 @@ unsafe fn verify_pin_with_chip(pin: &[u8; 8]) -> u32 {
     // gating rationale.
     match super::gated_unlock(se, pin) {
         Ok(master) => {
-            state::with_state(|s| {
-                s.mark_unlocked(master);
-                s.remaining_attempts = MAX_ATTEMPTS;
-            });
-            timeout::reset_activity();
-            ui::show_status("Unlocked", "");
-            NscStatus::Ok as u32
+            let unlocked = super::unlock_after_verified_pin(master);
+            // Permission-bearing success is the explicit exact-sentinel arm;
+            // a failed forced-attempt arm already zeroized the session.
+            if unlocked == crate::fi::OK_SENTINEL {
+                state::with_state(|s| s.remaining_attempts = MAX_ATTEMPTS);
+                timeout::reset_activity();
+                ui::show_status("Unlocked", "");
+                return NscStatus::Ok as u32;
+            }
+            NscStatus::InternalError as u32
         }
         Err(UnlockError::PinIncorrect) => {
             // F-15 hardening: double-read the post-bump counter to

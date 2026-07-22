@@ -36,8 +36,13 @@ impl Input {
 
     pub fn init(&mut self) {}
 
-    /// Always returns Right+Short immediately (auto-confirm).
-    pub fn wait_button(&mut self, _idle_check: &mut dyn FnMut() -> bool) -> Option<(Button, Press)> {
-        Some((Button::Right, Press::Short))
+    /// Returns `None` when the caller's abort predicate fires; otherwise
+    /// returns Right+Short immediately (auto-confirm).
+    pub fn wait_button(&mut self, idle_check: &mut dyn FnMut() -> bool) -> Option<(Button, Press)> {
+        if idle_check() {
+            None
+        } else {
+            Some((Button::Right, Press::Short))
+        }
     }
 }

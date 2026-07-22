@@ -1787,7 +1787,7 @@ test-unit: ## Rust workspace unit tests (host)
 #   make check-codegen
 #
 # Or as part of `make prod-erc7730-provenance-check` (Phase 2 onwards).
-.PHONY: check-codegen generate-erc7730-descriptors check-erc7730-build-input-shadows check-erc7730-descriptors check-solidity-constants check-research-bundles erc8176-coverage erc8176-coverage-test
+.PHONY: check-codegen generate-erc7730-descriptors check-erc7730-build-input-shadows check-erc7730-descriptors check-erc7730-forced-eligible-binding check-solidity-constants check-research-bundles erc8176-coverage erc8176-coverage-test
 check-codegen: check-erc7730-descriptors check-solidity-constants check-research-bundles
 	@echo "==> codegen artifacts in sync"
 
@@ -1810,6 +1810,13 @@ check-erc7730-descriptors: check-erc7730-build-input-shadows
 	    gen-erc7730-descriptors --check
 	@echo "==> Checking companion ERC-7730 catalogue/status preflight"
 	@PYTHONDONTWRITEBYTECODE=1 python3 tools/companion-stub/test_erc7730_trailer.py
+
+check-erc7730-forced-eligible-binding: ## Verify P73K parser, release, and secure exact-membership binding
+	@echo "==> Checking ERC-7730 forced-eligible parser and release binding"
+	@cargo test --locked -q -p pqsigner-erc7730 forced_eligible
+	@cargo test --locked -q -p fwsign
+	@cargo test --locked -q -p sphincs-tz-secure --no-default-features \
+	    --features mock-se,debug-log,ui-semihosting,erc7730-forced-blind forced_eligible
 
 check-research-bundles:
 	@echo "==> Checking generated security research bundles"
@@ -2222,6 +2229,7 @@ RELEASE_FEATURES ?= stm32u585,se050,optiga-trust-m,dual-se,ui-lcd,usb,iwdg,saes-
 override PROD_FORBIDDEN := e2e-test dev-testkey mock-se debug-log otp-hardcoded-master-key \
                  ui-capture bhk-hardcoded-master-key uart-console \
                  boot-pulse sca-trigger erc7730-dev-unattested optiga-reset-oids \
+                 erc7730-forced-blind \
                  fw-rollback-e2e fwup-transport-e2e se050-scp03-allow-factory-fallback \
                  legacy-fw-rollback-unsafe prodtest factory-provisioning \
                  factory-provisioning-rehearsal factory-production-irreversible-im-sure \
@@ -2271,10 +2279,10 @@ override PROD_ERC7730_PROVENANCE := erc8176-verified
 
 .PHONY: prod-erc7730-provenance-check
 ifeq ($(ERC7730_CATALOGUE_PROVENANCE),$(PROD_ERC7730_PROVENANCE))
-prod-erc7730-provenance-check: check-erc7730-descriptors ## Validate production ERC-7730 catalogue provenance
+prod-erc7730-provenance-check: check-erc7730-descriptors check-erc7730-forced-eligible-binding ## Validate production ERC-7730 catalogue provenance
 	@echo "==> prod-erc7730-provenance-check: PASS — production catalogue provenance verified"
 else
-prod-erc7730-provenance-check: check-erc7730-descriptors ## Validate production ERC-7730 catalogue provenance
+prod-erc7730-provenance-check: check-erc7730-descriptors check-erc7730-forced-eligible-binding ## Validate production ERC-7730 catalogue provenance
 	@$(error prod-erc7730-provenance-check: FAIL — ERC-7730 catalogue provenance is '$(ERC7730_CATALOGUE_PROVENANCE)'; required '$(PROD_ERC7730_PROVENANCE)'; Draft catalogue has no production authority)
 endif
 

@@ -21,6 +21,222 @@ use zeroize::Zeroize;
 
 use crate::fih::FihBool;
 
+// ---------------------------------------------------------------------------
+// Forced-blind attempt state (default-off feature).
+//
+// This is deliberately a dedicated two-word state rather than a bool or an
+// enum discriminant.  The only valid codewords are the three owner-selected
+// pairs below.  All other pairs are invalid and must be treated as a fatal
+// forced-flow fault by callers; in particular, no invalid value is coerced to
+// Armed.  The all-zero BSS image is the explicitly enumerated, fail-closed
+// Disarmed state.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "erc7730-forced-blind")]
+const FORCED_ATTEMPT_DISARMED_WORDS: (u32, u32) = (0x0000_0000, 0x0000_0000);
+#[cfg(feature = "erc7730-forced-blind")]
+const FORCED_ATTEMPT_ARMED_WORDS: (u32, u32) = (0xA55A_A55A, 0x5AA5_5AA5);
+#[cfg(feature = "erc7730-forced-blind")]
+const FORCED_ATTEMPT_SPENT_WORDS: (u32, u32) = (0x3CC3_3CC3, 0xC33C_C33C);
+
+#[cfg(feature = "erc7730-forced-blind")]
+const FORCED_ARM_CFI_READ_DISARMED: u32 = 0x4A91_73C5;
+#[cfg(feature = "erc7730-forced-blind")]
+const FORCED_ARM_CFI_WRITE_ARMED: u32 = 0xB626_8C3A;
+#[cfg(feature = "erc7730-forced-blind")]
+const FORCED_ARM_CFI_READBACK: u32 = 0x79D4_15E2;
+#[cfg(feature = "erc7730-forced-blind")]
+const FORCED_ARM_CFI_EXPECTED: u32 = crate::cfi_expected!(
+    FORCED_ARM_CFI_READ_DISARMED,
+    FORCED_ARM_CFI_WRITE_ARMED,
+    FORCED_ARM_CFI_READBACK,
+);
+
+#[cfg(feature = "erc7730-forced-blind")]
+const FORCED_CHARGE_CFI_READ_ARMED: u32 = 0x5D38_A671;
+#[cfg(feature = "erc7730-forced-blind")]
+const FORCED_CHARGE_CFI_WRITE_SPENT: u32 = 0xA2C7_598E;
+#[cfg(feature = "erc7730-forced-blind")]
+const FORCED_CHARGE_CFI_READBACK: u32 = 0x36EB_C914;
+#[cfg(feature = "erc7730-forced-blind")]
+const FORCED_CHARGE_CFI_EXPECTED: u32 = crate::cfi_expected!(
+    FORCED_CHARGE_CFI_READ_ARMED,
+    FORCED_CHARGE_CFI_WRITE_SPENT,
+    FORCED_CHARGE_CFI_READBACK,
+);
+
+/// The only three valid interpretations of [`ForcedAttemptState`].
+#[cfg(feature = "erc7730-forced-blind")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ForcedAttemptPhase {
+    Disarmed,
+    Armed,
+    Spent,
+}
+
+/// A voted read did not produce one of the three exact owner codewords.
+///
+/// This is intentionally a single fatal class.  A caller must not recover an
+/// invalid pair as Disarmed/Armed/Spent or infer eligibility from the failure.
+#[cfg(feature = "erc7730-forced-blind")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct InvalidForcedAttemptState;
+
+/// SRAM-only one-attempt state for the default-off forced-blind flow.
+///
+/// `#[repr(C)]` plus the size assertion in the host tests pins this to exactly
+/// two adjacent `u32` words.  The type is deliberately not `Copy` or `Clone`:
+/// there must be one authoritative state inside [`SecureState`].
+#[cfg(feature = "erc7730-forced-blind")]
+#[repr(C)]
+pub(super) struct ForcedAttemptState {
+    primary: u32,
+    check: u32,
+}
+
+#[cfg(feature = "erc7730-forced-blind")]
+impl ForcedAttemptState {
+    /// Const BSS initializer.  All-zero is explicitly Disarmed, never Armed.
+    const fn new_disarmed() -> Self {
+        Self {
+            primary: FORCED_ATTEMPT_DISARMED_WORDS.0,
+            check: FORCED_ATTEMPT_DISARMED_WORDS.1,
+        }
+    }
+
+    #[inline(never)]
+    fn decode_words(
+        primary: u32,
+        check: u32,
+    ) -> Result<ForcedAttemptPhase, InvalidForcedAttemptState> {
+        match (primary, check) {
+            FORCED_ATTEMPT_DISARMED_WORDS => Ok(ForcedAttemptPhase::Disarmed),
+            FORCED_ATTEMPT_ARMED_WORDS => Ok(ForcedAttemptPhase::Armed),
+            FORCED_ATTEMPT_SPENT_WORDS => Ok(ForcedAttemptPhase::Spent),
+            _ => Err(InvalidForcedAttemptState),
+        }
+    }
+
+    /// Triple-vote each word independently before interpreting the pair.
+    #[inline(never)]
+    pub(super) fn phase(
+        &self,
+    ) -> Result<ForcedAttemptPhase, InvalidForcedAttemptState> {
+        let primary = crate::fi::read_volatile_voted(core::ptr::addr_of!(self.primary))
+            .map_err(|()| InvalidForcedAttemptState)?;
+        crate::fi::wait_random();
+        let check = crate::fi::read_volatile_voted(core::ptr::addr_of!(self.check))
+            .map_err(|()| InvalidForcedAttemptState)?;
+        Self::decode_words(primary, check)
+    }
+
+    /// Publish one exact codeword.  Any interruption between the two writes
+    /// leaves an invalid pair, which every authority read rejects.
+    #[inline(never)]
+    fn write_words(&mut self, words: (u32, u32)) {
+        // SAFETY: `self` is exclusively borrowed.  Volatile publication keeps
+        // both SRAM writes materialized and ordered around the FI readbacks.
+        unsafe {
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(self.primary), words.0);
+            core::sync::atomic::compiler_fence(
+                core::sync::atomic::Ordering::SeqCst,
+            );
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(self.check), words.1);
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Select the fail-closed state.  This is the only transition generic
+    /// unlock helpers and zeroization may perform.
+    #[inline(never)]
+    fn disarm(&mut self) {
+        self.write_words(FORCED_ATTEMPT_DISARMED_WORDS);
+    }
+
+    /// PIN-only `Disarmed -> Armed` transition.
+    ///
+    /// This method is private to the state module and is the sole Armed
+    /// codeword writer.  `nsc::unlock_after_verified_pin` is its sole caller;
+    /// source-call-graph tests pin that wrapper to the three genuine PIN entry
+    /// paths.  Re-arming Armed/Spent or repairing an invalid pair is refused.
+    #[inline(never)]
+    pub(super) fn arm_forced_attempt_after_pin(&mut self) -> u32 {
+        let mut cfi = crate::fi::CfiCounter::new();
+        let initial = self.phase();
+        let disarmed = crate::fi::check_true_into_sentinel(|| {
+            initial == Ok(ForcedAttemptPhase::Disarmed)
+        });
+
+        // Fail-in shape: only the explicit OK-sentinel arm may publish Armed.
+        // A skipped conditional falls through to FAIL_SENTINEL below.
+        if disarmed == crate::fi::OK_SENTINEL {
+            cfi.bump(FORCED_ARM_CFI_READ_DISARMED);
+            self.write_words(FORCED_ATTEMPT_ARMED_WORDS);
+            cfi.bump(FORCED_ARM_CFI_WRITE_ARMED);
+
+            // Independent voted readback after the write.  A skipped/partial
+            // writer or a faulted load cannot manufacture a successful arm.
+            let readback = self.phase();
+            let armed = crate::fi::check_true_into_sentinel(|| {
+                readback == Ok(ForcedAttemptPhase::Armed)
+            });
+            if armed == crate::fi::OK_SENTINEL {
+                cfi.bump(FORCED_ARM_CFI_READBACK);
+                if cfi.check_into_sentinel(FORCED_ARM_CFI_EXPECTED)
+                    == crate::fi::OK_SENTINEL
+                {
+                    return crate::fi::OK_SENTINEL;
+                }
+            }
+        }
+
+        crate::fi::FAIL_SENTINEL
+    }
+
+    /// Charge the sole warning opportunity with one voted, CFI-checked
+    /// `Armed -> Spent` transition and an independent voted readback.
+    ///
+    /// The terminal forced handler invokes this only after deterministic
+    /// preflight, immediately before the first severe warning.
+    /// Returning a Hamming-distant sentinel lets that handler fail closed
+    /// without trusting a `bool` or `Result` discriminant.
+    #[allow(dead_code)]
+    #[inline(never)]
+    pub(super) fn charge_forced_attempt_for_warning(&mut self) -> u32 {
+        let mut cfi = crate::fi::CfiCounter::new();
+        let initial = self.phase();
+        let armed = crate::fi::check_true_into_sentinel(|| {
+            initial == Ok(ForcedAttemptPhase::Armed)
+        });
+
+        // The permission-bearing path is the explicit OK arm.  Disarmed,
+        // Spent, invalid, or a voted-load disagreement all fall through to
+        // FAIL_SENTINEL without showing a warning.
+        if armed == crate::fi::OK_SENTINEL {
+            cfi.bump(FORCED_CHARGE_CFI_READ_ARMED);
+            self.write_words(FORCED_ATTEMPT_SPENT_WORDS);
+            cfi.bump(FORCED_CHARGE_CFI_WRITE_SPENT);
+
+            // Independent readback makes a skipped or partial transition
+            // visible even if the write-step CFI bump itself executed.
+            let readback = self.phase();
+            let spent = crate::fi::check_true_into_sentinel(|| {
+                readback == Ok(ForcedAttemptPhase::Spent)
+            });
+            if spent == crate::fi::OK_SENTINEL {
+                cfi.bump(FORCED_CHARGE_CFI_READBACK);
+                if cfi.check_into_sentinel(FORCED_CHARGE_CFI_EXPECTED)
+                    == crate::fi::OK_SENTINEL
+                {
+                    return crate::fi::OK_SENTINEL;
+                }
+            }
+        }
+
+        crate::fi::FAIL_SENTINEL
+    }
+}
+
 /// Mutable state the gateway owns across command dispatches.
 pub(super) struct SecureState {
     /// How many PIN attempts the current lockout window still permits.
@@ -105,6 +321,11 @@ pub(super) struct SecureState {
     /// Monotonic tick stamped onto each cache entry on insert / lookup.
     /// Wraps after 2^64 events — effectively never.
     pub(super) bootstrap_cache_tick: u64,
+
+    /// One forced-blind warning opportunity per genuine PIN unlock.  This is
+    /// SRAM-only and absent from feature-off builds.
+    #[cfg(feature = "erc7730-forced-blind")]
+    pub(super) forced_attempt: ForcedAttemptState,
 }
 
 /// Number of simultaneously-cached account bootstrap pubkey pairs.
@@ -143,6 +364,8 @@ impl SecureState {
             slot_master_derived: FihBool::new_false(),
             bootstrap_cache: [NONE_ENTRY; BOOTSTRAP_CACHE_LEN],
             bootstrap_cache_tick: 0,
+            #[cfg(feature = "erc7730-forced-blind")]
+            forced_attempt: ForcedAttemptState::new_disarmed(),
         }
     }
 
@@ -151,6 +374,11 @@ impl SecureState {
     /// where we don't want the next signing request to succeed without
     /// a fresh PIN.
     pub(super) fn zeroize_sensitive(&mut self) {
+        // Forced authority is destroyed first.  A torn two-word publication
+        // is an invalid pair and therefore still fail-closed; a complete one
+        // is the exact all-zero Disarmed codeword.
+        #[cfg(feature = "erc7730-forced-blind")]
+        self.forced_attempt.disarm();
         self.master_secret.zeroize();
         crate::fi::zeroize_barrier();
         // F-17: clear the rate-limit counters on lock / idle-wipe.
@@ -284,6 +512,11 @@ impl SecureState {
     /// before overwriting, so a re-unlock can never leave the
     /// prior session's secret on the stack or in BSS.
     pub(super) fn mark_unlocked(&mut self, mut master: [u8; 32]) {
+        // Generic/non-PIN unlock is never forced-blind authority.  The PIN-only
+        // wrapper performs a separate, private arm transition after this
+        // function returns successfully.
+        #[cfg(feature = "erc7730-forced-blind")]
+        self.forced_attempt.disarm();
         self.master_secret.zeroize();
         crate::fi::zeroize_barrier();
         // Trezor-parity: random delay before installing the new
@@ -404,6 +637,16 @@ pub(super) mod tests {
         });
     }
 
+    #[cfg(feature = "erc7730-forced-blind")]
+    fn set_forced_words(words: (u32, u32)) {
+        with_state(|s| s.forced_attempt.write_words(words));
+    }
+
+    #[cfg(feature = "erc7730-forced-blind")]
+    fn forced_phase() -> Result<ForcedAttemptPhase, InvalidForcedAttemptState> {
+        peek_state(|s| s.forced_attempt.phase())
+    }
+
     // -- positive coverage -----------------------------------------------
 
     #[test]
@@ -411,6 +654,218 @@ pub(super) mod tests {
         let _g = state_test_lock();
         reset_state();
         assert!(!peek_state(|s| s.pin_verified.is_true_fi()));
+    }
+
+    #[cfg(feature = "erc7730-forced-blind")]
+    #[test]
+    fn positive_forced_attempt_is_exactly_two_words_and_bss_disarmed() {
+        let _g = state_test_lock();
+        reset_state();
+        assert_eq!(core::mem::size_of::<ForcedAttemptState>(), 8);
+        assert_eq!(forced_phase(), Ok(ForcedAttemptPhase::Disarmed));
+        let words = peek_state(|s| (s.forced_attempt.primary, s.forced_attempt.check));
+        assert_eq!(words, FORCED_ATTEMPT_DISARMED_WORDS);
+    }
+
+    #[cfg(feature = "erc7730-forced-blind")]
+    #[test]
+    fn positive_forced_attempt_codewords_match_owner_contract() {
+        assert_eq!(FORCED_ATTEMPT_DISARMED_WORDS, (0x0000_0000, 0x0000_0000));
+        assert_eq!(FORCED_ATTEMPT_ARMED_WORDS, (0xA55A_A55A, 0x5AA5_5AA5));
+        assert_eq!(FORCED_ATTEMPT_SPENT_WORDS, (0x3CC3_3CC3, 0xC33C_C33C));
+        assert_eq!(
+            FORCED_ATTEMPT_ARMED_WORDS.0 ^ FORCED_ATTEMPT_ARMED_WORDS.1,
+            u32::MAX,
+            "Armed must be complement-coded",
+        );
+        assert_eq!(
+            FORCED_ATTEMPT_SPENT_WORDS.0 ^ FORCED_ATTEMPT_SPENT_WORDS.1,
+            u32::MAX,
+            "Spent must be complement-coded",
+        );
+    }
+
+    #[cfg(feature = "erc7730-forced-blind")]
+    #[test]
+    fn positive_forced_attempt_codewords_have_pairwise_distance_32() {
+        fn distance(a: (u32, u32), b: (u32, u32)) -> u32 {
+            (a.0 ^ b.0).count_ones() + (a.1 ^ b.1).count_ones()
+        }
+
+        let words = [
+            FORCED_ATTEMPT_DISARMED_WORDS,
+            FORCED_ATTEMPT_ARMED_WORDS,
+            FORCED_ATTEMPT_SPENT_WORDS,
+        ];
+        for i in 0..words.len() {
+            for j in (i + 1)..words.len() {
+                assert_eq!(distance(words[i], words[j]), 32, "pair {i}/{j}");
+            }
+        }
+    }
+
+    #[cfg(feature = "erc7730-forced-blind")]
+    #[test]
+    fn negative_every_single_bit_mutation_of_every_codeword_is_invalid() {
+        for valid in [
+            FORCED_ATTEMPT_DISARMED_WORDS,
+            FORCED_ATTEMPT_ARMED_WORDS,
+            FORCED_ATTEMPT_SPENT_WORDS,
+        ] {
+            for bit in 0..64u32 {
+                let mutated = if bit < 32 {
+                    (valid.0 ^ (1u32 << bit), valid.1)
+                } else {
+                    (valid.0, valid.1 ^ (1u32 << (bit - 32)))
+                };
+                assert_eq!(
+                    ForcedAttemptState::decode_words(mutated.0, mutated.1),
+                    Err(InvalidForcedAttemptState),
+                    "bit {bit} unexpectedly decoded from {valid:08x?}",
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "erc7730-forced-blind")]
+    #[test]
+    fn negative_mixed_valid_halves_and_single_zero_words_are_invalid() {
+        let words = [
+            FORCED_ATTEMPT_DISARMED_WORDS,
+            FORCED_ATTEMPT_ARMED_WORDS,
+            FORCED_ATTEMPT_SPENT_WORDS,
+        ];
+        for (i, left) in words.iter().enumerate() {
+            for (j, right) in words.iter().enumerate() {
+                let mixed = (left.0, right.1);
+                if i == j {
+                    assert!(ForcedAttemptState::decode_words(mixed.0, mixed.1).is_ok());
+                } else {
+                    assert_eq!(
+                        ForcedAttemptState::decode_words(mixed.0, mixed.1),
+                        Err(InvalidForcedAttemptState),
+                        "mixed pair {i}/{j} must be fatal",
+                    );
+                }
+            }
+        }
+
+        for valid in [FORCED_ATTEMPT_ARMED_WORDS, FORCED_ATTEMPT_SPENT_WORDS] {
+            assert_eq!(
+                ForcedAttemptState::decode_words(0, valid.1),
+                Err(InvalidForcedAttemptState),
+            );
+            assert_eq!(
+                ForcedAttemptState::decode_words(valid.0, 0),
+                Err(InvalidForcedAttemptState),
+            );
+        }
+    }
+
+    #[cfg(feature = "erc7730-forced-blind")]
+    #[test]
+    fn positive_pin_arm_is_disarmed_to_armed_only_and_cannot_rearm() {
+        let _g = state_test_lock();
+        reset_state();
+        let first = with_state(|s| s.forced_attempt.arm_forced_attempt_after_pin());
+        assert_eq!(first, crate::fi::OK_SENTINEL);
+        assert_eq!(forced_phase(), Ok(ForcedAttemptPhase::Armed));
+
+        let second = with_state(|s| s.forced_attempt.arm_forced_attempt_after_pin());
+        assert_eq!(second, crate::fi::FAIL_SENTINEL);
+        assert_eq!(forced_phase(), Ok(ForcedAttemptPhase::Armed));
+    }
+
+    #[cfg(feature = "erc7730-forced-blind")]
+    #[test]
+    fn negative_pin_arm_refuses_spent_and_invalid_without_repair() {
+        let _g = state_test_lock();
+
+        for words in [
+            FORCED_ATTEMPT_SPENT_WORDS,
+            (FORCED_ATTEMPT_ARMED_WORDS.0, 0),
+        ] {
+            set_forced_words(words);
+            assert_eq!(
+                with_state(|s| s.forced_attempt.arm_forced_attempt_after_pin()),
+                crate::fi::FAIL_SENTINEL,
+                "non-Disarmed pair {words:08x?} must refuse arming",
+            );
+            let after = peek_state(|s| (s.forced_attempt.primary, s.forced_attempt.check));
+            assert_eq!(after, words, "refusal must not repair/re-arm the pair");
+        }
+    }
+
+    #[cfg(feature = "erc7730-forced-blind")]
+    #[test]
+    fn positive_charge_is_one_voted_armed_to_spent_transition() {
+        let _g = state_test_lock();
+        reset_state();
+        assert_eq!(
+            with_state(|s| s.forced_attempt.arm_forced_attempt_after_pin()),
+            crate::fi::OK_SENTINEL,
+        );
+        assert_eq!(
+            with_state(|s| s.forced_attempt.charge_forced_attempt_for_warning()),
+            crate::fi::OK_SENTINEL,
+        );
+        assert_eq!(forced_phase(), Ok(ForcedAttemptPhase::Spent));
+
+        assert_eq!(
+            with_state(|s| s.forced_attempt.charge_forced_attempt_for_warning()),
+            crate::fi::FAIL_SENTINEL,
+            "Spent must not admit a second warning",
+        );
+        assert_eq!(forced_phase(), Ok(ForcedAttemptPhase::Spent));
+    }
+
+    #[cfg(feature = "erc7730-forced-blind")]
+    #[test]
+    fn negative_charge_refuses_disarmed_spent_and_invalid_without_repair() {
+        let _g = state_test_lock();
+
+        for words in [
+            FORCED_ATTEMPT_DISARMED_WORDS,
+            FORCED_ATTEMPT_SPENT_WORDS,
+            (FORCED_ATTEMPT_ARMED_WORDS.0, 0),
+        ] {
+            set_forced_words(words);
+            assert_eq!(
+                with_state(|s| s.forced_attempt.charge_forced_attempt_for_warning()),
+                crate::fi::FAIL_SENTINEL,
+                "non-Armed pair {words:08x?} must refuse",
+            );
+            let after = peek_state(|s| (s.forced_attempt.primary, s.forced_attempt.check));
+            assert_eq!(after, words, "refusal must not repair/re-arm the pair");
+        }
+    }
+
+    #[cfg(feature = "erc7730-forced-blind")]
+    #[test]
+    fn positive_generic_unlock_and_zeroize_always_select_disarmed() {
+        let _g = state_test_lock();
+
+        for words in [
+            FORCED_ATTEMPT_ARMED_WORDS,
+            FORCED_ATTEMPT_SPENT_WORDS,
+            (FORCED_ATTEMPT_ARMED_WORDS.0, 0),
+        ] {
+            set_forced_words(words);
+            with_state(|s| s.mark_unlocked([0x91; 32]));
+            assert_eq!(
+                forced_phase(),
+                Ok(ForcedAttemptPhase::Disarmed),
+                "generic mark_unlocked must never preserve authority",
+            );
+
+            set_forced_words(words);
+            with_state(SecureState::zeroize_sensitive);
+            assert_eq!(
+                forced_phase(),
+                Ok(ForcedAttemptPhase::Disarmed),
+                "zeroize must select Disarmed even from an invalid pair",
+            );
+        }
     }
 
     #[test]

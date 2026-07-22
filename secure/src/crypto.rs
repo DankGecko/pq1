@@ -46,10 +46,69 @@ const CFI_STEP_SIGN_B:      u32 = 0xE5_5E_579B;
 const CFI_STEP_CT_EQ:       u32 = 0xF6_5F_68AC;
 const CFI_STEP_VERIFY_GATE: u32 = 0x17_60_79BD;
 
+/// Private hand-off proving one caller-side rate charge completed before the
+/// shared signing body.  The mode choice stays in the two separate entrypoints;
+/// no runtime enum can fault a forced request into the ordinary charge path.
+struct VerifiedRateCharge(u32);
+
 pub fn c10_sign_verified_with_progress(
     sk: &sphincs_c10::SigningKey,
     msg_hash: &[u8; 32],
     progress: fn(u8),
+) -> Result<[u8; sphincs_c10::params::SIGNATURE_LEN], ()> {
+    #[cfg(not(test))]
+    {
+        let signs_before = crate::sign_rate::signs_this_session();
+        crate::sign_rate::pre_sign()?;
+        if crate::sign_rate::signs_this_session() != signs_before.wrapping_add(1) {
+            return Err(());
+        }
+    }
+    c10_sign_verified_with_progress_inner(
+        sk,
+        msg_hash,
+        progress,
+        VerifiedRateCharge(crate::fi::OK_SENTINEL),
+    )
+}
+
+/// Forced-flow counterpart to [`c10_sign_verified_with_progress`].
+///
+/// The cryptographic computation and seven-step CFI transcript are identical;
+/// only the rate step differs.  Before any key use, the forced step rechecks
+/// and consumes exactly one charge against the frozen request-bound receipt.
+#[cfg(feature = "erc7730-forced-blind")]
+pub(crate) fn c10_sign_verified_forced_with_progress(
+    sk: &sphincs_c10::SigningKey,
+    msg_hash: &[u8; 32],
+    progress: fn(u8),
+    rate_receipt: &crate::sign_rate::ForcedRateReceipt,
+    request_digest: &[u8; 32],
+) -> Result<[u8; sphincs_c10::params::SIGNATURE_LEN], ()> {
+    #[cfg(test)]
+    let _ = (rate_receipt, request_digest);
+    #[cfg(not(test))]
+    {
+        let signs_before = crate::sign_rate::signs_this_session();
+        crate::sign_rate::pre_sign_forced(rate_receipt, request_digest).map_err(|_| ())?;
+        if crate::sign_rate::signs_this_session() != signs_before.wrapping_add(1) {
+            return Err(());
+        }
+    }
+    c10_sign_verified_with_progress_inner(
+        sk,
+        msg_hash,
+        progress,
+        VerifiedRateCharge(crate::fi::OK_SENTINEL),
+    )
+}
+
+#[inline(never)]
+fn c10_sign_verified_with_progress_inner(
+    sk: &sphincs_c10::SigningKey,
+    msg_hash: &[u8; 32],
+    progress: fn(u8),
+    verified_rate_charge: VerifiedRateCharge,
 ) -> Result<[u8; sphincs_c10::params::SIGNATURE_LEN], ()> {
     use subtle::ConstantTimeEq;
 
@@ -89,13 +148,11 @@ pub fn c10_sign_verified_with_progress(
     // commits by advancing the session counter by exactly one; require
     // that postcondition before bumping (a skip now needs a second,
     // coordinated fault on this read-back).
-    #[cfg(not(test))]
+    if crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(verified_rate_charge.0) == crate::fi::OK_SENTINEL
+    }) != crate::fi::OK_SENTINEL
     {
-        let signs_before = crate::sign_rate::signs_this_session();
-        crate::sign_rate::pre_sign()?;
-        if crate::sign_rate::signs_this_session() != signs_before.wrapping_add(1) {
-            return Err(());
-        }
+        return Err(());
     }
     cfi.bump(CFI_STEP_RATE_LIMIT);
 

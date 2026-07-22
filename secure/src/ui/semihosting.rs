@@ -144,8 +144,10 @@ impl Input {
 
         #[cfg(not(feature = "gpio-buttons"))]
         {
-            let _ = idle_check;
             loop {
+                if idle_check() {
+                    return None;
+                }
                 let c = unsafe { syscall!(READC) } as u8;
                 match c {
                     b'h' | b'a' => return Some((Button::Left, Press::Short)),

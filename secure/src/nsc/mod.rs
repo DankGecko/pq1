@@ -45,6 +45,8 @@ mod cmd_offchain_sync;
 mod cmd_request_unlock;
 mod cmd_sign_offchain;
 mod cmd_sign_userop;
+#[cfg(feature = "erc7730-forced-blind")]
+mod cmd_sign_userop_forced;
 mod cmd_sign_userop_batch;
 #[cfg(feature = "e2e-test")]
 mod cmd_test_pin_lockout;
@@ -234,6 +236,31 @@ compile_error!(
      bounds NS/secure hangs; trusted-UI waits remain limited by the 120 s \
      secure inactivity timer. Build both worlds through `make release`, which \
      enables the matching NS heartbeat feature."
+);
+
+// Forced blind adds signing authority and therefore has a narrower production
+// configuration than ordinary clear signing. `iwdg` implies the exact
+// STM32U585 Secure-alias implementation and the compile-time-pinned
+// GTZC1_TZSC_SECCFGR1 bit-7 image in `sau.rs`; `ui-lcd` implies the physical
+// GPIO buttons. P73S/Bloom are unconditional generated roots and the positive
+// feature itself co-embeds P73K, so there is no permissive runtime artifact
+// selector to fence here. The canonical production bundle separately keeps
+// this feature forbidden until implementation review and #79 silicon closure.
+#[cfg(all(
+    feature = "mode-production",
+    feature = "erc7730-forced-blind",
+    any(
+        not(feature = "stm32u585"),
+        not(feature = "iwdg"),
+        not(feature = "ui-lcd"),
+    ),
+))]
+compile_error!(
+    "ERC7730_FORCED_BLIND_PRODUCTION_PREREQUISITES: mode-production + \
+     erc7730-forced-blind requires stm32u585, iwdg with Secure-only \
+     GTZC1 bit-7 attribution/Secure alias, and the physical ui-lcd/button \
+     backend. P73S/Bloom/P73K remain fixed generated artifacts. This source \
+     fence is not #79 CPU/GPDMA silicon-denial evidence."
 );
 
 // Dedicated guard: `otp-hardcoded-master-key` + `optiga-lock-operational` is
@@ -997,6 +1024,41 @@ pub fn set_e2e_unlocked(master: [u8; 32]) {
 /// Used by the first-boot wizard to auto-unlock after provisioning.
 pub fn unlock_with_master(master: [u8; 32]) {
     state::with_state(|s| s.mark_unlocked(master));
+}
+
+/// Install a master secret after a genuine successful PIN verification and,
+/// when the default-off forced-blind feature is selected, arm exactly one
+/// volatile forced attempt.
+///
+/// This is deliberately separate from [`unlock_with_master`] and
+/// [`set_e2e_unlocked`].  First-boot auto-unlock, provisioning/test helpers,
+/// and every other non-PIN unlock must remain Disarmed.  The three current
+/// callers sit immediately inside successful `gated_unlock` result arms;
+/// host source-call-graph tests pin that exclusivity.
+#[inline(never)]
+pub(crate) fn unlock_after_verified_pin(master: [u8; 32]) -> u32 {
+    state::with_state(|s| {
+        s.mark_unlocked(master);
+
+        #[cfg(feature = "erc7730-forced-blind")]
+        {
+            let armed = s.forced_attempt.arm_forced_attempt_after_pin();
+            // Fail-in: only the exact OK sentinel preserves the newly
+            // unlocked session.  A bad/invalid/readback-faulted arm destroys
+            // the secret and returns the Hamming-distant failure sentinel.
+            if armed == crate::fi::OK_SENTINEL {
+                return crate::fi::OK_SENTINEL;
+            }
+            s.zeroize_sensitive();
+            crate::fi::FAIL_SENTINEL
+        }
+
+        #[cfg(not(feature = "erc7730-forced-blind"))]
+        {
+            // Feature-off semantics are the pre-existing generic unlock.
+            crate::fi::OK_SENTINEL
+        }
+    })
 }
 
 /// Gated unlock — every PIN verify MUST go through this.

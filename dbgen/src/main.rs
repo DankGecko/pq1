@@ -18,6 +18,8 @@
 //!   tools/companion-stub/selectors_db_e2e.bin
 //!   tools/companion-stub/erc7730_db.bin
 //!   tools/companion-stub/erc7730_db_e2e.bin
+//!   secure/data/erc7730-forced-eligible.set
+//!   secure/data/erc7730-forced-eligible-e2e.set
 //!   secure/src/db_roots.rs
 //!   secure/data/erc7730.review.txt
 //!
@@ -185,6 +187,8 @@ fn main() {
     let erc7730_review_out = root.join("secure/data/erc7730.review.txt");
     let erc7730_known_calls_out = root.join("secure/data/erc7730-known-calls.bloom");
     let erc7730_known_calls_e2e_out = root.join("secure/data/erc7730-known-calls-e2e.bloom");
+    let erc7730_forced_eligible_out = root.join("secure/data/erc7730-forced-eligible.set");
+    let erc7730_forced_eligible_e2e_out = root.join("secure/data/erc7730-forced-eligible-e2e.set");
     let roots_out = root.join("secure/src/db_roots.rs");
 
     // ----- ERC20 metadata DB -----
@@ -349,6 +353,11 @@ fn main() {
     fs::write(&erc7730_status_out, erc7730_status_bytes).expect("write erc7730_status.bin");
     fs::write(&erc7730_known_calls_out, erc7730_res.known_calls_bloom)
         .expect("write erc7730-known-calls.bloom");
+    fs::write(
+        &erc7730_forced_eligible_out,
+        &erc7730_res.forced_eligible_set,
+    )
+    .expect("write erc7730-forced-eligible.set");
     fs::write(&erc7730_review_out, &erc7730_res.review_text).expect("write erc7730.review.txt");
     println!(
         "dbgen: wrote {} ({} bytes, {} leaves, root = {})",
@@ -363,6 +372,14 @@ fn main() {
         "dbgen: wrote {} ({} known calls)",
         erc7730_known_calls_out.display(),
         erc7730_res.known_call_count,
+    );
+    println!(
+        "dbgen: wrote {} ({} bytes, {} groups, {} forced-eligible tuples; {} clear-capable)",
+        erc7730_forced_eligible_out.display(),
+        erc7730_res.forced_eligible_set.len(),
+        erc7730_res.forced_eligible_group_count,
+        erc7730_res.forced_eligible_count,
+        erc7730_res.clear_contract_call_count,
     );
 
     // ----- ERC-7730 descriptor catalog (e2e fixture) -----
@@ -396,6 +413,11 @@ fn main() {
         erc7730_e2e_res.known_calls_bloom,
     )
     .expect("write erc7730-known-calls-e2e.bloom");
+    fs::write(
+        &erc7730_forced_eligible_e2e_out,
+        &erc7730_e2e_res.forced_eligible_set,
+    )
+    .expect("write erc7730-forced-eligible-e2e.set");
     println!(
         "dbgen: wrote {} ({} bytes, {} leaves, e2e root = {})",
         erc7730_e2e_out.display(),
@@ -407,6 +429,14 @@ fn main() {
         "dbgen: wrote {} ({} known calls)",
         erc7730_known_calls_e2e_out.display(),
         erc7730_e2e_res.known_call_count,
+    );
+    println!(
+        "dbgen: wrote {} ({} bytes, {} groups, {} forced-eligible tuples; {} clear-capable)",
+        erc7730_forced_eligible_e2e_out.display(),
+        erc7730_e2e_res.forced_eligible_set.len(),
+        erc7730_e2e_res.forced_eligible_group_count,
+        erc7730_e2e_res.forced_eligible_count,
+        erc7730_e2e_res.clear_contract_call_count,
     );
     println!("dbgen: wrote {}", erc7730_status_e2e_out.display());
 
@@ -429,10 +459,16 @@ fn main() {
         erc7730_res.leaf_count,
         erc7730_res.provenance,
         &erc7730_status_bytes,
+        erc7730_res.forced_eligible_set.len(),
+        erc7730_res.forced_eligible_group_count,
+        erc7730_res.forced_eligible_count,
         &erc7730_e2e_res.root,
         erc7730_e2e_res.leaf_count,
         erc7730_e2e_res.provenance,
         &erc7730_status_e2e_bytes,
+        erc7730_e2e_res.forced_eligible_set.len(),
+        erc7730_e2e_res.forced_eligible_group_count,
+        erc7730_e2e_res.forced_eligible_count,
     );
     fs::write(&roots_out, &roots_rs).expect("write db_roots.rs");
     println!("dbgen: wrote {}", roots_out.display());
@@ -450,7 +486,7 @@ const DB_ROOTS_HEADER: &str = "\
 //! secure/data/erc7730-e2e/*.json, and secure/data/erc7730/policy.toml.
 //! DO NOT EDIT BY HAND.
 //!
-//! NONE of the DB blobs ship in the firmware image. The ERC20 /
+//! None of the host-side Merkle DB blobs ship in the firmware image. The ERC20 /
 //! Names / Selectors / ERC-7730 blobs all live on the host (companion
 //! app) under `tools/companion-stub/` and are forwarded over USB as
 //! per-tx `(entry, merkle_proof, leaf_index)` bundles. The secure
@@ -465,7 +501,11 @@ const DB_ROOTS_HEADER: &str = "\
 //! with exact chain/contract-bound Merkle metadata, re-attributed per direct
 //! call or MultiSend record. Without either capability, signing refuses. Only
 //! calls absent from the authenticated known-call set may use the generic or
-//! blind-sign fallback.
+//! ordinary blind-sign fallback.
+//! When the default-off `erc7730-forced-blind` feature is selected, the exact
+//! refused-known `P73K` set is a separate, co-embedded used array for its
+//! distinct forced ceremony. It is not a host database and cannot be supplied
+//! or substituted by the companion.
 //!
 //! `NAMES_DB_ROOT` anchors the address-name DB. Every trusted-UI
 //! address render consults this root before a human-readable
@@ -507,10 +547,16 @@ fn render_db_roots(
     erc7730_count: usize,
     erc7730_provenance: erc7730::CatalogueProvenance,
     erc7730_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
+    erc7730_forced_eligible_len: usize,
+    erc7730_forced_eligible_group_count: usize,
+    erc7730_forced_eligible_count: usize,
     erc7730_e2e_root: &[u8; 32],
     erc7730_e2e_count: usize,
     erc7730_e2e_provenance: erc7730::CatalogueProvenance,
     erc7730_e2e_status: &[u8; pqsigner_erc7730::catalogue_status::CATALOGUE_STATUS_V1_LEN],
+    erc7730_forced_eligible_e2e_len: usize,
+    erc7730_forced_eligible_e2e_group_count: usize,
+    erc7730_forced_eligible_e2e_count: usize,
 ) -> String {
     use std::fmt::Write;
 
@@ -535,14 +581,24 @@ fn render_db_roots(
     writeln!(s, "#[cfg(feature = \"e2e-test\")]").unwrap();
     emit_root(&mut s, "SELECTOR_DB_ROOT", selectors_e2e_root);
     s.push_str(&dbgen::render_erc7730_security_tail(
-        erc7730_root,
-        erc7730_count,
-        erc7730_provenance,
-        erc7730_status,
-        erc7730_e2e_root,
-        erc7730_e2e_count,
-        erc7730_e2e_provenance,
-        erc7730_e2e_status,
+        dbgen::Erc7730SecurityTailInput {
+            root: erc7730_root,
+            descriptor_count: erc7730_count,
+            provenance: erc7730_provenance,
+            status: erc7730_status,
+            forced_eligible_len: erc7730_forced_eligible_len,
+            forced_eligible_group_count: erc7730_forced_eligible_group_count,
+            forced_eligible_count: erc7730_forced_eligible_count,
+        },
+        dbgen::Erc7730SecurityTailInput {
+            root: erc7730_e2e_root,
+            descriptor_count: erc7730_e2e_count,
+            provenance: erc7730_e2e_provenance,
+            status: erc7730_e2e_status,
+            forced_eligible_len: erc7730_forced_eligible_e2e_len,
+            forced_eligible_group_count: erc7730_forced_eligible_e2e_group_count,
+            forced_eligible_count: erc7730_forced_eligible_e2e_count,
+        },
     ));
     s
 }

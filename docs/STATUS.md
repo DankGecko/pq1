@@ -48,15 +48,37 @@
 > **Scoped PQ1 clear-signing correction — 2026-07-16.** The normative hard
 > refusal remains unchanged. The first forced-blind architecture identity and
 > the first current-refusal implementation identity both completed as
-> **NO-GO**; the conservative v2 forced-blind candidate is unimplemented,
-> unreviewed and blocked on the owner's exact prompt-abuse budget/cooldown/
-> deadline/reset decision. The materially remediated current tree is host,
-> codegen and QEMU green; optimized development inspection is favorable but is
+> **NO-GO**. The owner then selected exactly one attempt per successful PIN
+> unlock, a 300-second forced-flow deadline, and the fail-closed host-denial
+> residual on 2026-07-22.
+> Earlier waves replaced Bloom authority and identified the full authenticated
+> inventory, gas-proof ordering, state-codeword, and SysTick-bound precision.
+> A subsequent frozen identity returned GPT-5.6 SOL **FIX** and Opus 4.8
+> **GO**; Kimi K3 reached the 15-minute hard limit without a report, recorded as
+> an honest gap rather than retried. The coordinator reproduced GPT's two
+> hardware-boundary traces: non-secure IWDG reload could defeat a frozen tick,
+> and a non-secure DMA master can observe output writes before a post-write
+> scrub. The current correction limits eligibility to the derived refused-known
+> set `F = K \ C` (3,214 tuples / 546 groups / 32,528 bytes), preserves hard
+> refusal for all 1,366 clear-capable tuples on metadata omission, requires
+> Secure-only IWDG ownership under [#79](https://github.com/EthereumPhone/PQ1/issues/79),
+> and makes the `<299,000` pre-write check the irreversible release point backed
+> by a mandatory measured sub-1,000 ms fixed 4,148-byte publication. It also pins
+> PIN-only arming, rate/combined-cap/page-123 preflight, every 29-page grid, and
+> tick/deadline behavior. The exact corrected architecture identity
+> `6bda0fae` / tree `2135ad34` then received **GO with no blockers from GPT-5.6
+> SOL, Opus 4.8, and Kimi K3**. The 2026-07-22 owner/maintainer decision
+> authorizes its bounded Phase-C implementation only; P73K and the forced flow
+> remain unimplemented, current hard refusal still controls, and no merge,
+> production, shipment, flashing, or irreversible authority follows. The next
+> boundary is the combined Phase-D implementation review. The materially
+> remediated current tree is host, codegen and QEMU green; optimized
+> development inspection is favorable but is
 > not executable FI, a production profile, or a hardware stack/high-water
 > bound. The remediated current-refusal phase completed its exact three-reviewer
 > wave and landed; this does not authorize the separate forced-blind design.
-> Follow the live campaign
-> ledger in [`work-todo.md`](work-todo.md#pq1-erc-7730-productization-campaign--owner-direction-2026-07-16),
+> Follow the live campaign in GitHub issue
+> [`#329`](https://github.com/EthereumPhone/PQ1/issues/329),
 > the architecture record in
 > [`clear-signing-pq1-forced-blind-architecture-2026-07-16.md`](security/adversarial-review/findings/clear-signing-pq1-forced-blind-architecture-2026-07-16.md),
 > and the implementation assessment in

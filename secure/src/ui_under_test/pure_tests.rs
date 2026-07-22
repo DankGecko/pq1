@@ -29,6 +29,7 @@ use sphincs_tz_shared::PIN_LEN;
 
 const MOD_SRC: &str = include_str!("../ui/mod.rs");
 const CONFIRM_SRC: &str = include_str!("../ui/confirm.rs");
+const CONFIRM_CORE_SRC: &str = include_str!("../ui/confirm_core.rs");
 const PIN_SRC: &str = include_str!("../ui/pin_entry.rs");
 const WIZARD_SRC: &str = include_str!("../ui/seed_wizard.rs");
 const CAPTURE_SRC: &str = include_str!("../ui/capture.rs");
@@ -435,7 +436,7 @@ fn positive_confirm_empty_pages_returns_cancelled() {
     assert!(CONFIRM_SRC.contains("if pages.is_empty() {"));
     // Empty-pages bails as a non-affirmative (Cancelled, FAIL_SENTINEL) so the
     // caller's FI belt also refuses to sign (UI1 / work-todo #12c).
-    assert!(CONFIRM_SRC.contains("return (ConfirmResult::Cancelled, crate::fi::FAIL_SENTINEL);"));
+    assert!(CONFIRM_SRC.contains("return (ConfirmLoopResult::Cancelled, crate::fi::FAIL_SENTINEL);"));
 }
 
 #[test]
@@ -451,33 +452,36 @@ fn positive_confirm_long_button_semantics() {
     // Hamming-distant `check_sentinel`, not a bare stack bool feeding a
     // plain `if`. A single stuck-at/bit-flip on a plain bool made all
     // reads return `true` and self-authorised the confirm.
-    assert!(CONFIRM_SRC.contains("let mut seen_last = crate::fih::FihBool::new_false();"));
-    assert!(CONFIRM_SRC.contains("seen_last.set_true();"));
-    assert!(CONFIRM_SRC.contains("seen_last.check_sentinel()"));
-    assert!(CONFIRM_SRC.contains("gate == crate::fi::OK_SENTINEL"));
+    assert!(CONFIRM_CORE_SRC.contains("seen_last: crate::fih::FihBool"));
+    assert!(CONFIRM_CORE_SRC.contains("seen_last: crate::fih::FihBool::new_false()"));
+    assert!(CONFIRM_CORE_SRC.contains("self.seen_last.set_true();"));
+    assert!(CONFIRM_CORE_SRC.contains("self.seen_last.check_sentinel()"));
+    assert!(CONFIRM_CORE_SRC.contains("gate == crate::fi::OK_SENTINEL"));
     assert!(
-        !CONFIRM_SRC.contains("let mut seen_last = false;"),
+        !CONFIRM_CORE_SRC.contains("seen_last: bool"),
         "F14/SCAFI-2: the scroll-to-end gate must not regress to a bare stack bool"
     );
     // FI-hardened accept (UI1 / work-todo #12c): the affirmative branch borns
     // the sign-gate sentinel HERE, from `seen_last`, alongside the `Confirmed`
     // verdict — so the enum and the sentinel are two words set at the same
     // decision point. Dropping this un-hardens the confirm gate.
-    assert!(CONFIRM_SRC.contains("return (ConfirmResult::Confirmed, gate);"));
+    assert!(CONFIRM_CORE_SRC.contains("NavigationDecision::Confirmed(gate)"));
+    assert!(CONFIRM_SRC.contains("return (ConfirmLoopResult::Confirmed, gate);"));
     // A long-right before the end must NOT confirm — it advances instead.
     assert!(!CONFIRM_SRC
         .contains("(Button::Right, Press::Long) => return ConfirmResult::Confirmed,"));
     // Cancel returns a non-affirmative sentinel (FAIL_SENTINEL) so the caller's
     // FI belt refuses to sign even if the reject-arm return is fault-skipped.
-    assert!(CONFIRM_SRC.contains("(ConfirmResult::Cancelled, crate::fi::FAIL_SENTINEL)"));
+    assert!(CONFIRM_CORE_SRC.contains("NavigationInput::LeftLong => NavigationDecision::Cancelled"));
+    assert!(CONFIRM_SRC.contains("(ConfirmLoopResult::Cancelled, crate::fi::FAIL_SENTINEL)"));
 }
 
 #[test]
 fn positive_confirm_short_press_page_navigation() {
-    assert!(CONFIRM_SRC.contains("if idx + 1 < pages.len() {"));
-    assert!(CONFIRM_SRC.contains("idx += 1;"));
-    assert!(CONFIRM_SRC.contains("if idx > 0 {"));
-    assert!(CONFIRM_SRC.contains("idx -= 1;"));
+    assert!(CONFIRM_CORE_SRC.contains("if self.page_index + 1 < self.page_count {"));
+    assert!(CONFIRM_CORE_SRC.contains("self.page_index += 1;"));
+    assert!(CONFIRM_CORE_SRC.contains("if self.page_index > 0 {"));
+    assert!(CONFIRM_CORE_SRC.contains("self.page_index -= 1;"));
 }
 
 #[test]
@@ -490,7 +494,7 @@ fn positive_confirm_e2e_test_fastpath_renders_all_pages_first() {
     assert!(CONFIRM_SRC.contains("for (idx, page) in pages.iter().enumerate() {"));
     assert!(CONFIRM_SRC.contains("render_page(page, idx, pages.len());"));
     // e2e fast-path returns the affirmative sentinel so hardened callers accept.
-    assert!(CONFIRM_SRC.contains("return (ConfirmResult::Confirmed, crate::fi::OK_SENTINEL);"));
+    assert!(CONFIRM_SRC.contains("return (ConfirmLoopResult::Confirmed, crate::fi::OK_SENTINEL);"));
 }
 
 #[test]
@@ -498,7 +502,31 @@ fn positive_confirm_idle_wipe_propagates_to_caller() {
     // When `input().wait_button` returns None (idle timeout fired),
     // the dialog must propagate the wipe — not silently retry, not
     // confirm.
-    assert!(CONFIRM_SRC.contains("None => return (ConfirmResult::IdleWipe, crate::fi::FAIL_SENTINEL),"));
+    assert!(CONFIRM_SRC.contains("return (ConfirmLoopResult::IdleWipe, crate::fi::FAIL_SENTINEL);"));
+}
+
+#[test]
+fn positive_forced_confirm_keeps_deadline_distinct_and_inside_wait() {
+    assert!(CONFIRM_SRC.contains("pub(crate) enum ForcedConfirmResult"));
+    assert!(CONFIRM_SRC.contains("DeadlineExpired,"));
+    assert!(CONFIRM_SRC.contains(
+        "let mut wait_abort = || timeout::is_idle() || deadline_expired();"
+    ));
+    assert!(CONFIRM_SRC.contains("input().wait_button(&mut wait_abort)"));
+    assert!(CONFIRM_SRC.contains("ForcedConfirmResult::DeadlineExpired"));
+    assert!(CONFIRM_SRC.contains("A final fresh deadline sample immediately precedes"));
+}
+
+#[test]
+fn negative_forced_deadline_is_never_reset_by_button_activity() {
+    let forced_start = CONFIRM_SRC
+        .find("pub(crate) fn confirm_forced_checked(")
+        .expect("forced confirm variant must exist");
+    let forced_and_inner = &CONFIRM_SRC[forced_start..];
+    assert!(!forced_and_inner.contains("reset_deadline"));
+    assert!(!forced_and_inner.contains("deadline_start ="));
+    assert!(forced_and_inner.contains("timeout::reset_activity();"));
+    assert!(forced_and_inner.contains("deadline_expired()"));
 }
 
 #[test]
@@ -558,6 +586,13 @@ fn positive_semihosting_keymap_matches_documented_table() {
     assert!(SEMI_SRC.contains("b'l' | b'd' => return Some((Button::Right, Press::Short)),"));
     assert!(SEMI_SRC.contains("b'H' | b'A' => return Some((Button::Left, Press::Long)),"));
     assert!(SEMI_SRC.contains("b'L' | b'D' => return Some((Button::Right, Press::Long)),"));
+}
+
+#[test]
+fn positive_all_input_backends_sample_the_supplied_wait_predicate() {
+    assert!(SEMI_SRC.contains("if idle_check() {\n                    return None;\n                }"));
+    assert!(NOOP_SRC.contains("if idle_check() {"));
+    assert!(LCD_SRC.contains("return crate::hw::buttons::wait_event(idle_check);"));
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -989,7 +1024,8 @@ fn negative_noop_input_auto_confirms_short_right() {
     // user — every confirm dialog would auto-accept. Pin the
     // auto-confirm shape AND the comment that names the trade-off,
     // so future readers can't accidentally promote it to production.
-    assert!(NOOP_SRC.contains("/// Always returns Right+Short immediately (auto-confirm)."));
+    assert!(NOOP_SRC.contains("returns Right+Short immediately (auto-confirm)."));
+    assert!(NOOP_SRC.contains("if idle_check()"));
     assert!(NOOP_SRC.contains("Some((Button::Right, Press::Short))"));
     // And the file's header docstring names "headless USB HID mode".
     assert!(NOOP_SRC.contains("Used when the device\n//! runs headless (USB HID mode"));

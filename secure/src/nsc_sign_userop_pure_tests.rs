@@ -36,6 +36,10 @@ use sphincs_tz_shared::{
     PQ_SMART_WALLET_FACTORY, SET_PRE_SIGNATURE_SELECTOR, SIGN_USEROP_HEADER_LEN,
     SIG_WRAPPER_LEN, SLOT_INDEX_MASK,
 };
+#[cfg(feature = "erc7730-forced-blind")]
+use sphincs_tz_shared::{
+    EXEC_TRANSACTION_SELECTOR, MULTISEND_CALL_ONLY_ADDRESSES, MULTI_SEND_SELECTOR,
+};
 
 use crate::nsc_sig_wrapper_under_test::encode_signature_wrapper;
 use crate::nsc_trailer_under_test::{read_optional_u16_prefixed, Trailer};
@@ -892,6 +896,11 @@ fn negative_u128_sat_msb_high_byte_saturates_not_truncates() {
 
 const CMD_SIGN_USEROP_SRC: &str =
     include_str!("nsc/cmd_sign_userop.rs");
+const CMD_SIGN_USEROP_FORCED_SRC: &str = include_str!("nsc/cmd_sign_userop_forced.rs");
+const CMD_SIGN_USEROP_BATCH_SRC: &str = include_str!("nsc/cmd_sign_userop_batch.rs");
+const CMD_SIGN_OFFCHAIN_SRC: &str = include_str!("nsc/cmd_sign_offchain.rs");
+const NSC_MOD_SRC: &str = include_str!("nsc/mod.rs");
+const FORCED_BLIND_DISPLAY_SRC: &str = include_str!("tx/display/forced_blind.rs");
 const SAFE_EXEC_DECODE_SRC: &str = include_str!("tx/eip712/safe/exec_decode.rs");
 const WALLET_ADDRESS_SRC: &str = include_str!("nsc/cmd_get_wallet_address.rs");
 const VALUE_PAGE_SRC: &str = include_str!("tx/display/value_page.rs");
@@ -1800,4 +1809,294 @@ fn negative_sig_wrapper_src_only_imports_sphincs_tz_shared() {
             "sig_wrapper.rs has an unexpected import: '{line}' — must stay pure logic"
         );
     }
+}
+
+#[test]
+fn forced_route_is_feature_gated_and_owned_only_by_direct_userop() {
+    let compact_mod = NSC_MOD_SRC.split_whitespace().collect::<String>();
+    assert!(compact_mod.contains(
+        "#[cfg(feature=\"erc7730-forced-blind\")]modcmd_sign_userop_forced;"
+    ));
+    assert!(CMD_SIGN_USEROP_SRC.contains("super::cmd_sign_userop_forced::classify("));
+    assert!(CMD_SIGN_USEROP_SRC.contains("super::cmd_sign_userop_forced::run("));
+    for (name, source) in [
+        ("batch", CMD_SIGN_USEROP_BATCH_SRC),
+        ("offchain", CMD_SIGN_OFFCHAIN_SRC),
+    ] {
+        assert!(
+            !source.contains("cmd_sign_userop_forced"),
+            "{name} handler must not acquire forced-blind authority"
+        );
+    }
+}
+
+#[test]
+fn forced_route_requires_an_explicit_zero_length_erc7730_header() {
+    let parse = CMD_SIGN_USEROP_SRC
+        .find("let erc7730_explicit_header =")
+        .expect("typed forced absence capture");
+    let route = CMD_SIGN_USEROP_SRC[parse..]
+        .find("super::cmd_sign_userop_forced::classify(")
+        .map(|offset| parse + offset)
+        .expect("forced classifier call");
+    let evidence = &CMD_SIGN_USEROP_SRC[parse..route];
+    assert!(evidence.contains("checked_add(2)"));
+    assert!(evidence.contains("*end <= total_len"));
+    assert!(evidence.contains("erc7730_explicit_header == Some(0)"));
+    assert!(evidence.contains("erc7730_trailer.len == 0"));
+    assert!(
+        CMD_SIGN_USEROP_FORCED_SRC.contains("if !clean_metadata_absence || calldata.len() < 4"),
+        "legacy missing headers and selector-short calls must stay ordinary"
+    );
+}
+
+#[test]
+fn forced_route_passes_every_frozen_exclusion_to_closed_classification() {
+    let start = CMD_SIGN_USEROP_SRC
+        .find("let single_steady_type2 =")
+        .expect("forced exclusion block");
+    let end = CMD_SIGN_USEROP_SRC[start..]
+        .find("// 7e. Address-name bundles.")
+        .map(|offset| start + offset)
+        .expect("ordinary metadata resolver boundary");
+    let block = &CMD_SIGN_USEROP_SRC[start..end];
+    for required in [
+        "!include_init_code && !register_slot",
+        "paymaster_and_data_hash == SHA256_EMPTY",
+        "cow_order.len > 0",
+        "safe_v1.len > 0",
+        "safe_v1_verified.is_some()",
+        "safe_exec_verified.is_some()",
+        "safe_exec_verified_check.is_some()",
+        "cow_order_verified.is_some()",
+        "cow_bind.via_safe",
+    ] {
+        assert!(block.contains(required), "missing forced exclusion: {required}");
+    }
+    assert!(CMD_SIGN_USEROP_FORCED_SRC.contains("protected_selector"));
+    assert!(CMD_SIGN_USEROP_FORCED_SRC.contains("protected_target"));
+}
+
+#[test]
+fn forced_exact_membership_exclusions_are_fatal_before_candidate_proof() {
+    let membership = CMD_SIGN_USEROP_FORCED_SRC
+        .find("if !parsed.contains(chain_id, target, &selector)")
+        .expect("exact-F membership gate");
+    let proof = CMD_SIGN_USEROP_FORCED_SRC[membership..]
+        .find("let mut verdict = crate::fi::FAIL_SENTINEL;")
+        .map(|offset| membership + offset)
+        .expect("forced eligibility proof boundary");
+    let exclusion_block = &CMD_SIGN_USEROP_FORCED_SRC[membership..proof];
+    assert!(exclusion_block.contains("return ForcedRoute::Fatal;"));
+    assert_eq!(
+        exclusion_block
+            .matches("return ForcedRoute::ContinueOrdinary;")
+            .count(),
+        1,
+        "only a negative exact-F lookup may resume ordinary signing"
+    );
+}
+
+#[test]
+#[cfg(feature = "erc7730-forced-blind")]
+fn production_exact_f_contains_reachable_protected_intersections() {
+    let set = pqsigner_erc7730::forced_eligible::ForcedEligibleSet::from_bytes(
+        &crate::db_roots::PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET,
+    )
+    .expect("embedded exact-F set");
+    let protected_hits = set
+        .iter()
+        .filter(|(_, target, selector)| {
+            *selector == APPROVE_HASH_SELECTOR
+                || *selector == EXEC_TRANSACTION_SELECTOR
+                || *selector == SET_PRE_SIGNATURE_SELECTOR
+                || *selector == MULTI_SEND_SELECTOR
+                || *target == GPV2_SETTLEMENT_ADDRESS
+                || MULTISEND_CALL_ONLY_ADDRESSES
+                    .iter()
+                    .any(|address| address == target)
+        })
+        .count();
+    assert!(
+        protected_hits > 0,
+        "production exact-F must exercise the fatal protected branch"
+    );
+}
+
+#[test]
+fn forced_candidate_and_fatal_routes_return_terminally_before_ordinary_render() {
+    let route = CMD_SIGN_USEROP_SRC
+        .find("match super::cmd_sign_userop_forced::classify(")
+        .expect("forced route match");
+    let ordinary = CMD_SIGN_USEROP_SRC[route..]
+        .find("// 7e. Address-name bundles.")
+        .map(|offset| route + offset)
+        .expect("ordinary metadata resolver boundary");
+    let block = &CMD_SIGN_USEROP_SRC[route..ordinary];
+    let compact = block.split_whitespace().collect::<String>();
+    assert!(compact.contains("ForcedRoute::ContinueOrdinary=>{}"));
+    assert!(compact.contains(
+        "returnunsafe{super::cmd_sign_userop_forced::run(args,eligibility,request)};"
+    ));
+    assert!(compact.contains(
+        "ForcedRoute::Fatal=>{ui::show_status(\"Signrefused\",\"forcedclassify\");returnNscStatus::InternalErrorasu32;}"
+    ));
+    assert!(!block.contains("pick_sign_pages_with_erc7730_evidence("));
+}
+
+#[test]
+fn forced_consent_charges_once_only_after_complete_preflight() {
+    let start = CMD_SIGN_USEROP_FORCED_SRC
+        .find("fn collect_consent(")
+        .expect("forced consent helper");
+    let end = CMD_SIGN_USEROP_FORCED_SRC[start..]
+        .find("unsafe fn commit_durable_tally(")
+        .map(|offset| start + offset)
+        .expect("consent helper boundary");
+    let body = &CMD_SIGN_USEROP_FORCED_SRC[start..end];
+    let mut cursor = 0;
+    for stage in [
+        "render_forced_transcript(",
+        "forced_transcript_proof(",
+        "flow_cfi.check_into_sentinel(CFI_PREWARNING_EXPECTED)",
+        "warning.fail_initialize();",
+        "final_receipt.fail_initialize();",
+        "ForcedDeadline::start_verified()",
+        ".charge_forced_attempt_for_warning()",
+        "confirm_forced_checked(&FORCED_WARNING_PAGES",
+        ".record_confirmed(",
+        "confirm_forced_checked(pages.0.as_slice()",
+        ".record_confirmed(",
+        "pages.0.volatile_poison_and_reset();",
+    ] {
+        let offset = body[cursor..]
+            .find(stage)
+            .unwrap_or_else(|| panic!("missing or out-of-order forced consent stage: {stage}"));
+        cursor += offset + stage.len();
+    }
+    assert_eq!(body.matches(".charge_forced_attempt_for_warning()").count(), 1);
+}
+
+#[test]
+fn forced_terminal_flow_rechecks_and_reserves_tally_before_key_use() {
+    let start = CMD_SIGN_USEROP_FORCED_SRC
+        .find("pub(super) unsafe fn run(")
+        .expect("terminal forced handler");
+    let body = &CMD_SIGN_USEROP_FORCED_SRC[start..];
+    let mut cursor = 0;
+    for stage in [
+        "prove_eligibility(",
+        "ForcedAttemptPhase::Armed",
+        "read_counter_snapshot(",
+        "compute_type2_digest(",
+        ".request_digest()",
+        "capacity_receipt(",
+        "ensure_slot_key(",
+        "forced_rate_preflight(",
+        "ForcedCandidate::new(",
+        "collect_consent(",
+        "prove_candidate_eligibility(",
+        "read_counter_snapshot(",
+        "compute_type2_digest(",
+        "capacity_receipt(",
+        "forced_rate_recheck(",
+        "consume_forced_receipts_once(",
+        "candidate.consume(",
+        "CFI_PRESIGN_EXPECTED",
+        "commit_durable_tally(",
+        "CFI_PREKEY_EXPECTED",
+        "c10_sign_verified_forced_with_progress(",
+        "publish_forced_response(",
+    ] {
+        let offset = body[cursor..]
+            .find(stage)
+            .unwrap_or_else(|| panic!("missing or out-of-order forced terminal stage: {stage}"));
+        cursor += offset + stage.len();
+    }
+
+    assert_eq!(
+        body.matches("commit_durable_tally(").count(),
+        1,
+        "the forced flow must reserve exactly one durable use"
+    );
+    let tally = body
+        .find("if unsafe { commit_durable_tally(")
+        .expect("pre-key durable tally");
+    let signer = body
+        .find("c10_sign_verified_forced_with_progress(")
+        .expect("forced signer call");
+    assert!(tally < signer, "durable use must precede every possible key use");
+    let tally_arm = &body[tally..signer];
+    assert!(tally_arm.contains("zeroize_sensitive_state();"));
+    assert!(tally_arm.contains("CFI_PREKEY_EXPECTED"));
+    assert!(tally_arm.matches("deadline_expired()").count() >= 1);
+
+    let outer_verify = body[signer..]
+        .find("let outer_verified =")
+        .map(|offset| signer + offset)
+        .expect("outer verify boundary");
+    let signer_arm = &body[signer..outer_verify];
+    assert!(signer_arm.contains("Err(_) =>"));
+    assert!(!signer_arm.contains("commit_durable_tally("));
+    assert!(signer_arm.contains("zeroize_sensitive_state();"));
+    assert!(signer_arm.contains("return NscStatus::CryptoError as u32;"));
+
+    let first_outer_verify = body[outer_verify..]
+        .find("let first = sphincs_c10::verify(")
+        .map(|offset| outer_verify + offset)
+        .expect("outer verification call");
+    let outer_cache_gate = &body[outer_verify..first_outer_verify];
+    assert!(outer_cache_gate.contains("zeroize_sensitive_state();"));
+}
+
+#[test]
+fn forced_release_is_one_fixed_extent_after_the_final_gate() {
+    let start = CMD_SIGN_USEROP_FORCED_SRC
+        .find("unsafe fn publish_forced_response(")
+        .expect("forced publisher");
+    let end = CMD_SIGN_USEROP_FORCED_SRC[start..]
+        .find("fn forced_sign_progress(")
+        .map(|offset| start + offset)
+        .expect("publisher boundary");
+    let body = &CMD_SIGN_USEROP_FORCED_SRC[start..end];
+    assert!(CMD_SIGN_USEROP_FORCED_SRC.contains(
+        "const _: () = assert!(FORCED_SIGN_RESPONSE_LEN == 4_148);"
+    ));
+    assert_eq!(body.matches("validate_ns_write_ptr(args.arg1, MAX_SIGN_RESPONSE_LEN)").count(), 2);
+    assert_eq!(body.matches("validate_ns_write_ptr(args.arg1, FORCED_SIGN_RESPONSE_LEN)").count(), 2);
+    assert_eq!(body.matches("release_window_open_verified()").count(), 2);
+
+    let release = body
+        .find("flow_cfi.bump(CFI_RELEASE_GATE);")
+        .expect("release CFI bump");
+    let final_cfi = body[release..]
+        .find("CFI_RELEASE_EXPECTED")
+        .map(|offset| release + offset)
+        .expect("final release CFI gate");
+    let write_loop = body[final_cfi..]
+        .find("for position in 0..FORCED_SIGN_RESPONSE_LEN")
+        .map(|offset| final_cfi + offset)
+        .expect("fixed publication loop");
+    assert!(release < final_cfi && final_cfi < write_loop);
+    assert_eq!(body.matches("write_volatile(out.add(position), byte)").count(), 1);
+    assert!(body[write_loop..].contains("for index in 0..FORCED_SIGN_RESPONSE_LEN"));
+    assert!(body[write_loop..].contains("SCB::sys_reset();"));
+}
+
+#[test]
+fn forced_authority_is_volatile_invalidated_on_every_terminal_return() {
+    for required in [
+        "impl Drop for ForcedCandidate",
+        "write_volatile(&mut self.state, 0)",
+        "impl Drop for ForcedCleanup",
+        "addr_of_mut!(SIGN_SNAP_BUF)",
+    ] {
+        assert!(
+            CMD_SIGN_USEROP_FORCED_SRC.contains(required),
+            "missing forced terminal cleanup pin: {required}"
+        );
+    }
+    assert!(FORCED_BLIND_DISPLAY_SRC.contains("impl Drop for RawForcedReceipt"));
+    assert!(FORCED_BLIND_DISPLAY_SRC.contains("write_volatile(&mut self.domain, 0)"));
+    assert!(FORCED_BLIND_DISPLAY_SRC.contains("for byte in &mut self.request_digest"));
 }

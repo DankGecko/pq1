@@ -43,4 +43,8 @@
 //! `reports/tests/secure-ui.md` under "Coverage gaps".
 
 #[cfg(test)]
+#[path = "../ui/confirm_core.rs"]
+mod confirm_core;
+
+#[cfg(test)]
 mod pure_tests;

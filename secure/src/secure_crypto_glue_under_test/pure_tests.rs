@@ -13,12 +13,27 @@ use sha3::Keccak256;
 use crate::db_roots::{ERC20_DB_ROOT, NAMES_DB_ROOT, SELECTOR_DB_ROOT};
 
 use super::offchain_state::{
-    clamp_offchain_count, last_userop_count_read, last_userop_count_set, may_create_distinct_slot,
-    offchain_count_bump, offchain_count_is_registered, offchain_count_promote_to,
-    offchain_count_read, offchain_count_register_slot, slot_key_compute, MAX_DISTINCT_SLOTS,
+    clamp_offchain_count, forced_capacity_receipt_from_snapshot, last_userop_count_read,
+    last_userop_count_set, may_create_distinct_slot, offchain_count_bump,
+    offchain_count_is_registered, offchain_count_promote_to, offchain_count_read,
+    offchain_count_register_slot, slot_key_compute, ForcedCapacityError, ForcedCapacitySnapshot,
+    FORCED_CAPACITY_REQUIRED_APPENDS, MAX_DISTINCT_SLOTS, OFFCHAIN_CAPACITY_QWS,
     OFFCHAIN_COUNT_CEILING,
 };
 use sphincs_tz_shared::MAX_SLOT_USES;
+use std::sync::{Mutex, MutexGuard};
+
+// The SRAM backend models firmware's single-threaded dispatcher with a
+// `static mut` table. Host tests run in parallel, so every test that touches
+// that table must serialize just as production does; otherwise a concurrent
+// write can legitimately make the capacity helper's two snapshots disagree.
+static OFFCHAIN_MOCK_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_offchain_mock() -> MutexGuard<'static, ()> {
+    OFFCHAIN_MOCK_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // 0. Slice source-text fixtures.
@@ -672,6 +687,7 @@ fn positive_slot_key_compute_first_8_bytes_of_sha256() {
 
 #[test]
 fn positive_offchain_mock_initial_state_is_unregistered_and_zero() {
+    let _guard = lock_offchain_mock();
     let key = slot_key_compute(10, 11, 12);
     unsafe {
         assert!(!offchain_count_is_registered(&key));
@@ -682,6 +698,7 @@ fn positive_offchain_mock_initial_state_is_unregistered_and_zero() {
 
 #[test]
 fn positive_offchain_mock_register_then_is_registered_true() {
+    let _guard = lock_offchain_mock();
     let key = slot_key_compute(20, 21, 22);
     unsafe {
         offchain_count_register_slot(&key).expect("register ok");
@@ -691,6 +708,7 @@ fn positive_offchain_mock_register_then_is_registered_true() {
 
 #[test]
 fn positive_offchain_mock_bump_increases_count() {
+    let _guard = lock_offchain_mock();
     let key = slot_key_compute(30, 31, 32);
     unsafe {
         offchain_count_bump(&key, 1).expect("first bump ok");
@@ -702,6 +720,7 @@ fn positive_offchain_mock_bump_increases_count() {
 
 #[test]
 fn positive_offchain_mock_last_userop_set_is_monotonic() {
+    let _guard = lock_offchain_mock();
     let key = slot_key_compute(40, 41, 42);
     unsafe {
         last_userop_count_set(&key, 10).expect("set ok");
@@ -713,6 +732,7 @@ fn positive_offchain_mock_last_userop_set_is_monotonic() {
 
 #[test]
 fn positive_offchain_mock_promote_to_is_idempotent() {
+    let _guard = lock_offchain_mock();
     let key = slot_key_compute(50, 51, 52);
     unsafe {
         offchain_count_promote_to(&key, 50).expect("first promote ok");
@@ -734,6 +754,7 @@ fn positive_offchain_mock_promote_to_is_idempotent() {
 
 #[test]
 fn negative_offchain_mock_bump_regression_rejected() {
+    let _guard = lock_offchain_mock();
     let key = slot_key_compute(60, 61, 62);
     unsafe {
         offchain_count_bump(&key, 5).expect("first bump ok");
@@ -750,6 +771,7 @@ fn negative_offchain_mock_bump_regression_rejected() {
 
 #[test]
 fn negative_offchain_mock_bump_equal_value_rejected() {
+    let _guard = lock_offchain_mock();
     // The bump semantics are `new_count > current` (strict). A
     // replay attacker re-issuing the same `new_count` must NOT be
     // tolerated as a no-op.
@@ -765,6 +787,7 @@ fn negative_offchain_mock_bump_equal_value_rejected() {
 
 #[test]
 fn negative_offchain_mock_bump_from_zero_to_zero_rejected() {
+    let _guard = lock_offchain_mock();
     // Even a fresh slot rejects bump(0): a 0 → 0 bump is the
     // pathological "no-op replay" attack and equally must fail.
     let key = slot_key_compute(80, 81, 82);
@@ -778,6 +801,7 @@ fn negative_offchain_mock_bump_from_zero_to_zero_rejected() {
 
 #[test]
 fn positive_offchain_mock_last_userop_set_tolerates_regression_as_noop() {
+    let _guard = lock_offchain_mock();
     // Mirror of the in-file comment "Tolerant of `count <
     // last_userop`: no-op rather than error, mirroring the flash-
     // backed semantics so a stale caller cannot brick the slot."
@@ -849,6 +873,7 @@ fn positive_clamped_counter_never_trips_combined_cap_gate() {
 
 #[test]
 fn negative_offchain_mock_sync_inflation_cannot_brick_slot() {
+    let _guard = lock_offchain_mock();
     // End-to-end reproduction of the vuln against the mock backend: an untrusted
     // sync sets `last_userop` to the exact attack value MAX_SLOT_USES; a
     // subsequent sign promotes it into `offchain`. Pre-fix, `offchain` would land
@@ -880,6 +905,7 @@ fn negative_offchain_mock_sync_inflation_cannot_brick_slot() {
 
 #[test]
 fn negative_sync_high_floor_with_prior_userop_refuses_before_promotion() {
+    let _guard = lock_offchain_mock();
     use crate::aa::offchain_gate::{userop_cap_ok_with_floor, SlotLedger};
 
     // Regression for the sync→Type-2 ordering bug: a high synced floor plus
@@ -914,6 +940,7 @@ fn negative_sync_high_floor_with_prior_userop_refuses_before_promotion() {
 
 #[test]
 fn negative_offchain_mock_promote_to_over_cap_is_clamped() {
+    let _guard = lock_offchain_mock();
     // Direct guard on the sign-path promote chokepoint: even a promote target of
     // u64::MAX (a glitched/hostile last_userop snapshot) must clamp, never store
     // a value that trips the cap.
@@ -1055,6 +1082,171 @@ fn positive_offchain_may_create_distinct_slot_policy() {
         "the (cap+1)-th distinct slot MUST be refused — this is the brick backstop",
     );
     assert!(!may_create_distinct_slot(MAX_DISTINCT_SLOTS + 1, false));
+}
+
+fn capacity_snapshot(
+    distinct_live: usize,
+    projected_live_qws: usize,
+    blank_qws: usize,
+    slot_present: bool,
+) -> ForcedCapacitySnapshot {
+    ForcedCapacitySnapshot {
+        state_sha256: [0x5a; 32],
+        distinct_live,
+        projected_live_qws,
+        blank_qws,
+        slot_present,
+    }
+}
+
+#[test]
+fn forced_capacity_constants_pin_two_appends_and_page_geometry() {
+    assert_eq!(FORCED_CAPACITY_REQUIRED_APPENDS, 2);
+    assert_eq!(OFFCHAIN_CAPACITY_QWS, 512);
+    assert!(MAX_DISTINCT_SLOTS * 3 + FORCED_CAPACITY_REQUIRED_APPENDS <= OFFCHAIN_CAPACITY_QWS);
+}
+
+#[test]
+fn forced_capacity_distinct_slot_boundary_is_exact() {
+    let key = [0x11; 8];
+    let request = [0x22; 32];
+    let at_127 = capacity_snapshot(MAX_DISTINCT_SLOTS - 1, 384, 128, false);
+    assert!(forced_capacity_receipt_from_snapshot(&key, &request, at_127).is_ok());
+
+    let new_at_128 = capacity_snapshot(MAX_DISTINCT_SLOTS, 384, 128, false);
+    assert_eq!(
+        forced_capacity_receipt_from_snapshot(&key, &request, new_at_128),
+        Err(ForcedCapacityError::DistinctSlotCap)
+    );
+    let present_at_128 = capacity_snapshot(MAX_DISTINCT_SLOTS, 384, 128, true);
+    assert!(forced_capacity_receipt_from_snapshot(&key, &request, present_at_128).is_ok());
+
+    let corrupt_129 = capacity_snapshot(MAX_DISTINCT_SLOTS + 1, 387, 125, true);
+    assert_eq!(
+        forced_capacity_receipt_from_snapshot(&key, &request, corrupt_129),
+        Err(ForcedCapacityError::InvalidProjection)
+    );
+}
+
+#[test]
+fn forced_capacity_projected_qw_boundary_is_exact() {
+    let key = [0x33; 8];
+    let request = [0x44; 32];
+    let full_but_compactable = capacity_snapshot(1, 510, 0, true);
+    let receipt = forced_capacity_receipt_from_snapshot(&key, &request, full_but_compactable)
+        .expect("510 projected QWs leave exactly two commit QWs");
+    assert!(receipt.requires_compaction());
+    assert_eq!(receipt.projected_live_qws(), 510);
+
+    let one_qw_short = capacity_snapshot(1, 511, 1, true);
+    assert_eq!(
+        forced_capacity_receipt_from_snapshot(&key, &request, one_qw_short),
+        Err(ForcedCapacityError::InsufficientCapacity)
+    );
+
+    let direct = capacity_snapshot(1, 3, 2, true);
+    let direct_receipt = forced_capacity_receipt_from_snapshot(&key, &request, direct)
+        .expect("two blank QWs admit the direct path");
+    assert!(!direct_receipt.requires_compaction());
+}
+
+#[test]
+fn forced_capacity_receipt_binds_request_slot_and_state() {
+    let snapshot = capacity_snapshot(7, 18, 494, true);
+    let baseline = forced_capacity_receipt_from_snapshot(&[1; 8], &[2; 32], snapshot).unwrap();
+    let other_request = forced_capacity_receipt_from_snapshot(&[1; 8], &[3; 32], snapshot).unwrap();
+    let other_slot = forced_capacity_receipt_from_snapshot(&[4; 8], &[2; 32], snapshot).unwrap();
+    let other_state = forced_capacity_receipt_from_snapshot(
+        &[1; 8],
+        &[2; 32],
+        ForcedCapacitySnapshot {
+            state_sha256: [9; 32],
+            ..snapshot
+        },
+    )
+    .unwrap();
+    assert_ne!(baseline.receipt_sha256(), other_request.receipt_sha256());
+    assert_ne!(baseline.receipt_sha256(), other_slot.receipt_sha256());
+    assert_ne!(baseline.receipt_sha256(), other_state.receipt_sha256());
+    assert_eq!(baseline.request_digest(), &[2; 32]);
+    assert_eq!(baseline.state_sha256(), &[0x5a; 32]);
+}
+
+#[test]
+fn forced_capacity_mock_snapshot_is_read_only_and_slot_bound() {
+    let _guard = lock_offchain_mock();
+    let key = slot_key_compute(221, 222, 223);
+    let request = [0xa5; 32];
+    let before =
+        unsafe { super::offchain_state::forced_capacity_snapshot(&key) }.expect("mock projection");
+    assert!(!before.slot_present);
+    let receipt = forced_capacity_receipt_from_snapshot(&key, &request, before)
+        .expect("fresh mock has capacity");
+    assert!(!receipt.slot_present());
+
+    unsafe { offchain_count_register_slot(&key).expect("register mock slot") };
+    let after = unsafe { super::offchain_state::forced_capacity_snapshot(&key) }
+        .expect("mock projection after registration");
+    assert!(after.slot_present);
+    assert_eq!(after.distinct_live, before.distinct_live + 1);
+    assert!(unsafe { offchain_count_is_registered(&key) });
+}
+
+#[test]
+fn forced_capacity_flash_path_is_strict_full_scan_and_read_only() {
+    let start = FLASH_SRC
+        .find("pub unsafe fn forced_capacity_snapshot")
+        .expect("hardware capacity helper");
+    let end = FLASH_SRC[start..]
+        .find("/// Append a journal entry")
+        .map(|offset| start + offset)
+        .expect("capacity helper end anchor");
+    let helper = &FLASH_SRC[start..end];
+    assert!(helper.contains("for index in 0..OFFCHAIN_CAPACITY"));
+    assert!(helper.contains("if saw_blank"));
+    assert!(helper.contains("type_masks[slot_index] |= type_mask"));
+    assert!(!helper.contains("erase_offchain_page"));
+    assert!(!helper.contains("write_quadword_verified"));
+    assert!(OFFCHAIN_SRC.contains("SnapshotDisagreement"));
+    assert!(OFFCHAIN_SRC.contains("forced_capacity_receipt_from_snapshot"));
+    let preflight_start = OFFCHAIN_SRC
+        .find("pub unsafe fn forced_capacity_preflight")
+        .expect("forced capacity proof helper");
+    let preflight = &OFFCHAIN_SRC[preflight_start..];
+    assert_eq!(preflight.matches("backend::forced_capacity_snapshot(").count(), 2);
+    assert_eq!(
+        preflight
+            .matches("forced_capacity_receipt_from_snapshot(")
+            .count(),
+        2
+    );
+    assert!(preflight.contains("core::ptr::write_volatile(verdict_out, verdict)"));
+    assert!(OFFCHAIN_SRC.contains("CFI_FORCED_CAPACITY_EXPECTED"));
+}
+
+#[cfg(feature = "erc7730-forced-blind")]
+#[test]
+fn forced_capacity_preflight_publishes_distinct_verdict_and_cfi() {
+    let _guard = lock_offchain_mock();
+    let key = slot_key_compute(222, 223, 224);
+    let request = [0x6c; 32];
+    let mut verdict = crate::fi::FAIL_SENTINEL;
+    let mut cfi = crate::fi::CfiCounter::new();
+    let receipt = unsafe {
+        super::offchain_state::forced_capacity_preflight(
+            &key,
+            &request,
+            &mut verdict,
+            &mut cfi,
+        )
+    }
+    .expect("stable mock projection has capacity");
+    assert_eq!(verdict, crate::fi::OK_SENTINEL);
+    assert_eq!(
+        cfi.check_into_sentinel(super::offchain_state::CFI_FORCED_CAPACITY_EXPECTED),
+        crate::fi::OK_SENTINEL
+    );
+    assert_eq!(receipt.request_digest(), &request);
 }
 
 #[test]
@@ -1373,6 +1565,68 @@ fn positive_crypto_sign_rate_limit_gates_call() {
     assert!(
         CRYPTO_SRC.contains("crate::sign_rate::pre_sign()"),
         "crypto.rs must gate sign on sign_rate::pre_sign() (F-17 SCA defence)",
+    );
+}
+
+#[test]
+fn forced_crypto_entrypoint_uses_request_bound_charge_before_the_shared_rate_cfi_step() {
+    let ordinary_start = CRYPTO_SRC
+        .find("pub fn c10_sign_verified_with_progress(")
+        .expect("ordinary verified-sign entrypoint missing");
+    let forced_start = CRYPTO_SRC
+        .find("pub(crate) fn c10_sign_verified_forced_with_progress(")
+        .expect("forced verified-sign entrypoint missing");
+    let inner_start = CRYPTO_SRC
+        .find("fn c10_sign_verified_with_progress_inner(")
+        .expect("shared verified-sign body missing");
+    let ordinary_wrapper = &CRYPTO_SRC[ordinary_start..forced_start];
+    let forced_wrapper = &CRYPTO_SRC[forced_start..inner_start];
+
+    let ordinary_charge = ordinary_wrapper
+        .find("crate::sign_rate::pre_sign()?")
+        .expect("ordinary entrypoint must retain the ordinary charge");
+    let ordinary_readback = ordinary_wrapper
+        .find("crate::sign_rate::signs_this_session() != signs_before.wrapping_add(1)")
+        .expect("ordinary charge must prove the counter advanced by one");
+    let ordinary_token = ordinary_wrapper
+        .find("VerifiedRateCharge(crate::fi::OK_SENTINEL)")
+        .expect("ordinary charge must mint the private verified token");
+    assert!(ordinary_charge < ordinary_readback && ordinary_readback < ordinary_token);
+
+    assert!(forced_wrapper.contains("rate_receipt: &crate::sign_rate::ForcedRateReceipt"));
+    assert!(forced_wrapper.contains("request_digest: &[u8; 32]"));
+    let forced_charge = forced_wrapper
+        .find("crate::sign_rate::pre_sign_forced(rate_receipt, request_digest)")
+        .expect("forced entrypoint must use the request-bound charge");
+    let forced_readback = forced_wrapper
+        .find("crate::sign_rate::signs_this_session() != signs_before.wrapping_add(1)")
+        .expect("forced charge must independently prove the counter advanced by one");
+    let forced_token = forced_wrapper
+        .find("VerifiedRateCharge(crate::fi::OK_SENTINEL)")
+        .expect("forced charge must mint the private verified token");
+    assert!(forced_charge < forced_readback && forced_readback < forced_token);
+    assert!(!forced_wrapper.contains("crate::sign_rate::pre_sign()?"));
+    assert!(
+        !CRYPTO_SRC.contains("SignRateMode"),
+        "a runtime mode discriminator could fault forced signing into the ordinary path",
+    );
+
+    let first_key_use = CRYPTO_SRC[inner_start..]
+        .find("let sig_a = sk.sign_with_shuffle")
+        .map(|offset| inner_start + offset)
+        .expect("first signing operation missing");
+    let rate_region = &CRYPTO_SRC[inner_start..first_key_use];
+    let verified_token = rate_region
+        .find("core::hint::black_box(verified_rate_charge.0) == crate::fi::OK_SENTINEL")
+        .expect("shared body must verify the private rate-charge token");
+    let rate_cfi = rate_region
+        .find("cfi.bump(CFI_STEP_RATE_LIMIT)")
+        .expect("shared rate CFI step missing");
+    assert!(verified_token < rate_cfi);
+    assert_eq!(
+        CRYPTO_SRC.matches("cfi.bump(CFI_STEP_RATE_LIMIT)").count(),
+        1,
+        "ordinary and forced entrypoints must converge on one rate CFI step",
     );
 }
 
@@ -2002,6 +2256,7 @@ fn negative_crypto_glue_does_not_introduce_forbidden_admin_paths() {
 //  promote — the two reach the same `new_count`.
 #[test]
 fn positive_offchain_gate_model_matches_mock_backend() {
+    let _guard = lock_offchain_mock();
     use crate::aa::offchain_gate::{self as gate, check_offchain_gate, GateOutcome, SlotLedger};
 
     // (a) shared policy constants + pure helpers identical to the shipped backend.

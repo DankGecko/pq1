@@ -33,6 +33,8 @@ mod dispatch;
 mod eip1271;
 mod erc20_known;
 mod erc20_unknown;
+#[cfg(feature = "erc7730-forced-blind")]
+pub(crate) mod forced_blind;
 mod nonce_lane;
 pub mod erc7730;
 pub mod erc8213;
