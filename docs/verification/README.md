@@ -42,6 +42,13 @@ answer "where is FV going and why," not "what is proven right now."
   [`spec-assurance-research-2026-06.md`](./spec-assurance-research-2026-06.md),
   [`how_to_math_proof_secureness.md`](./how_to_math_proof_secureness.md),
   [`verification-targets-2026-06.md`](./verification-targets-2026-06.md).
+- **SOTA re-check + newly-possible verifications (2026-07-19):**
+  [`fv-sota-newly-possible-2026-07-19.md`](./fv-sota-newly-possible-2026-07-19.md)
+  — fact-checks this directory's "impossible/closed" list against the 2025→2026
+  literature (verified concrete keccak for Lean, hax→ProVerif extraction, MM45
+  completeness + ITSRC10 counting routes, BINSEC Thumb decoder, CT-PROVER on
+  LLVM IR, nanoda_lib axiom allowlists, mathlib concentration tooling, two-project
+  probability split), with a ranked adoption list and a disproven-claims ledger.
 - **Spec conformance:** [`sphincs-c10-spec-conformance-checklist.md`](./sphincs-c10-spec-conformance-checklist.md),
   [`c10-fips205-delta-audit.md`](./c10-fips205-delta-audit.md).
 - **Extraction handoff:** [`handoff-pinstate-extraction.md`](./handoff-pinstate-extraction.md)

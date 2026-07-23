@@ -1,0 +1,344 @@
+# Halmos session — PQSmartWallet/Factory/MultiOwnable/Verifier/EIP-1271 bytecode discharge
+# Date: 2026-07-19 (fv-deep-review-2026-07-19 F9 remediation: first receipt covering
+#   all 42 wired rules incl. the HalmosIsValidSignature G8/EIP-1271 harness; the
+#   runner now enforces the EXPECTED_RULES=42 identity/count floor live — see the
+#   'floor OK' lines below; prior receipts recorded 38 and predate the G8 harness)
+# halmos version: halmos 0.3.4.dev0+gba94bdc23.d20260613  (+ PQ1 sha256 sort + empty-input patches)
+# z3 version: Z3 version 4.16.0 - 64 bit
+# git HEAD: 549deabe99756bc34b898eb27f1d72b0bf4dcaf5
+# Profiles run: default (runs=200) AND deploy (runs=999999, production) — FULL scope,
+#   no PQ1_HALMOS_SKIP_DEPLOY_SYMBOLIC
+# Certification (run first, BOTH profiles): PinnedCodehashes +
+#   PinnedBytecodeImmutableLemma + DeployedBytecodeReproCheck PASS
+#   (codehashes == PINNED_CODEHASHES.md; CREATE2 replay of the Base Mainnet
+#   impl/factory/verifier; see the OK lines in the log below)
+# Result: 42/42 rules PASS on EACH profile (84 rule-executions); floor
+#   'all 8 harnesses executed; 42 [PASS] lines >= 42 pinned' met on both.
+# EIP-1271 / G8 (assurance-case node G8, Lean eip1271_forbids_bootstrap analogue):
+#   check_isValidSignature_forbids_bootstrap(bytes32)  — PASS on both profiles
+#   check_isValidSignature_nonbypass_slot1(bytes32)    — PASS on both profiles
+#   check_isValidSignature_no_counter_bump(bytes32)    — PASS on both profiles
+#
+# Reproduce: make -C contracts/verification verify-bytecode   (exit 0)
+# Raw tee'd per-profile outputs: /tmp/pq1-halmos-run-{default,deploy}.txt
+#   (re-check any archived output: run_halmos.sh --check-output <file>)
+#
+# ============================ full run log ============================
+==> [1/2] Certifying compiled bytecode == pinned codehashes (Foundry, both profiles)
+    [default] codehash freeze + immutable-window lemma + deployed-bytecode repro
+    [deploy] codehash freeze + immutable-window lemma + deployed-bytecode repro
+    OK: wallet / factory / verifier codehashes match PINNED_CODEHASHES.md
+    OK: runtime differs from the pinned instance only at the certified immutables
+    OK: CREATE2 replay reproduces the deployed Base Mainnet impl/factory/verifier (addr+codehash)
+==> [2/2] Halmos symbolic execution of the deployed bytecode [profile=default]
+warning[divide-before-multiply]: multiplication should occur before division to avoid loss of precision
+    ╭▸ src/PQSmartWallet.sol:406:31
+    │
+406 │         uint256 paddedInner = ((C10_SIG_LEN + 31) / 32) * 32;
+    │                               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#divide-before-multiply
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+   ╭▸ test/DeployedBytecodeReproCheck.t.sol:81:21
+   │
+81 │         a = address(bytes20(ret));
+   │                     ━━━━━━━━━━━━
+   │
+   ├ note: consider disabling this lint if you're certain the cast is safe
+   │
+   │       // casting to 'bytes20' is safe because [explain why]
+   │       // forge-lint: disable-next-line(unsafe-typecast)
+   │
+   │
+   ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+    ╭▸ test/C10PrimitiveKat.t.sol:157:30
+    │
+157 │             assertEq(bytes32(bytes16(cur)), bytes32(_b16(_bytes("chain_hash", i, "out"))), _label("chain_hash", i));
+    │                              ━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'bytes16' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[divide-before-multiply]: multiplication should occur before division to avoid loss of precision
+    ╭▸ src/PQSmartWallet.sol:606:31
+    │
+606 │         uint256 paddedInner = ((C10_SIG_LEN + 31) / 32) * 32;
+    │                               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#divide-before-multiply
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+    ╭▸ test/halmos/HalmosValidateUserOp.t.sol:144:27
+    │
+144 │         bytes4 selector = bytes4(wrongCalldata);
+    │                           ━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'bytes4' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+    ╭▸ test/halmos/HalmosValidateUserOp.t.sol:158:27
+    │
+158 │         bytes4 selector = bytes4(wrongCalldata);
+    │                           ━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'bytes4' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[divide-before-multiply]: multiplication should occur before division to avoid loss of precision
+   ╭▸ test/halmos/LeanValidateUserOpModel.sol:47:48
+   │
+47 │     uint256 public constant PADDED_INNER_LEN = ((SIGNATURE_LEN + 31) / 32) * 32; // 4032
+   │                                                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   │
+   ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#divide-before-multiply
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+    ╭▸ test/halmos/HalmosValidateUserOp.t.sol:174:38
+    │
+174 │         sig[sig.length - 1] = bytes1(uint8(padByte));
+    │                                      ━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'uint8' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+Running 6 tests for test/halmos/HalmosExecute.t.sol:HalmosExecute
+[PASS] check_executeBatch_rejects_any_self_target(uint256) (paths: 3, time: 0.11s, bounds: [])
+[PASS] check_execute_no_replay() (paths: 1, time: 0.03s, bounds: [])
+[PASS] check_execute_rejects_non_entrypoint_caller(address) (paths: 2, time: 0.01s, bounds: [])
+[PASS] check_execute_rejects_owner_index_mismatch(uint256) (paths: 1, time: 0.04s, bounds: [])
+[PASS] check_execute_rejects_self_target() (paths: 1, time: 0.03s, bounds: [])
+[PASS] check_execute_without_validate_reverts() (paths: 1, time: 0.01s, bounds: [])
+Symbolic test result: 6 passed; 0 failed; time: 0.32s
+Running 6 tests for test/halmos/HalmosExecuteEquiv.t.sol:HalmosExecuteEquiv
+[PASS] check_executeBatch_pointwise_equals_lean_model(uint256,uint256,uint256) (paths: 83, time: 9.43s, bounds: [])
+[PASS] check_execute_inner_revert_is_atomic(uint256) (paths: 12, time: 0.52s, bounds: [])
+[PASS] check_execute_no_credit_reverts_for_all_indices(uint256) (paths: 1, time: 0.01s, bounds: [])
+[PASS] check_execute_pointwise_equals_lean_model(uint256,uint256,uint256) (paths: 57, time: 6.34s, bounds: [])
+[PASS] check_two_stamps_fund_exactly_two_executes() (paths: 5, time: 0.20s, bounds: [])
+[PASS] check_validate_remove_selector_stamps_no_credit(uint256) (paths: 1, time: 0.02s, bounds: [])
+Symbolic test result: 6 passed; 0 failed; time: 16.59s
+Running 5 tests for test/halmos/HalmosFactory.t.sol:HalmosFactory
+[PASS] check_createAccount_already_deployed_returns_existing(uint64,bytes32,bytes32,bool) (paths: 4, time: 0.29s, bounds: [])
+[PASS] check_createAccount_iff_lean_precondition(uint64,bool) (paths: 10, time: 0.30s, bounds: [])
+[PASS] check_createAccount_rejects_duplicate_slot0() (paths: 1, time: 0.02s, bounds: [])
+[PASS] check_createAccount_rejects_non_nmasked_master(bytes32,bytes32) (paths: 1, time: 0.02s, bounds: [])
+[PASS] check_createAccount_rejects_non_nmasked_slot0() (paths: 1, time: 0.02s, bounds: [])
+Symbolic test result: 5 passed; 0 failed; time: 0.68s
+Running 3 tests for test/halmos/HalmosIsValidSignature.t.sol:HalmosIsValidSignature
+[PASS] check_isValidSignature_forbids_bootstrap(bytes32) (paths: 4, time: 0.05s, bounds: [])
+[PASS] check_isValidSignature_no_counter_bump(bytes32) (paths: 5, time: 0.08s, bounds: [])
+[PASS] check_isValidSignature_nonbypass_slot1(bytes32) (paths: 4, time: 0.06s, bounds: [])
+Symbolic test result: 3 passed; 0 failed; time: 0.24s
+Running 7 tests for test/halmos/HalmosMultiOwnable.t.sol:HalmosMultiOwnable
+[PASS] check_addOwnerBytes_pointwise_equals_lean_model(uint256) (paths: 7, time: 0.52s, bounds: [])
+[PASS] check_initialize_fresh_pointwise() (paths: 10, time: 0.45s, bounds: [])
+[PASS] check_initialize_one_shot(uint256,uint256) (paths: 25, time: 0.45s, bounds: [])
+[PASS] check_owner_mutators_reject_non_entrypoint(address,bool) (paths: 4, time: 0.03s, bounds: [])
+[PASS] check_removeOwner_bootstrap_unremovable(bool) (paths: 3, time: 0.03s, bounds: [])
+[PASS] check_removeOwner_installed_pointwise(uint256) (paths: 7, time: 0.41s, bounds: [])
+[PASS] check_removeOwner_unset_index_rejects(uint256) (paths: 2, time: 0.02s, bounds: [])
+Symbolic test result: 7 passed; 0 failed; time: 1.96s
+Running 8 tests for test/halmos/HalmosValidateUserOp.t.sol:HalmosValidateUserOp
+[PASS] check_bootstrap_bumps_cap_at_validation() (paths: 3, time: 0.04s, bounds: [])
+[PASS] check_nonbypass_bootstrap() (paths: 3, time: 0.03s, bounds: [])
+[PASS] check_nonbypass_slot() (paths: 3, time: 0.03s, bounds: [])
+[PASS] check_rejects_non_entrypoint_caller(address) (paths: 2, time: 0.01s, bounds: [])
+[PASS] check_rejects_nonzero_tail_pad(uint256) (paths: 3, time: 0.04s, bounds: [])
+[PASS] check_rejects_wrong_selector_for_bootstrap() (paths: 1, time: 0.02s, bounds: [])
+[PASS] check_rejects_wrong_selector_for_slot() (paths: 1, time: 0.02s, bounds: [])
+[PASS] check_slot_bumps_cap_at_validation() (paths: 3, time: 0.04s, bounds: [])
+Symbolic test result: 8 passed; 0 failed; time: 0.27s
+Running 4 tests for test/halmos/HalmosValidateUserOpEquiv.t.sol:HalmosValidateUserOpEquiv
+[PASS] check_validateUserOp_equiv_wrong_sig_lengths(uint256,uint256) (paths: 14, time: 3.26s, bounds: [])
+[PASS] check_validateUserOp_pointwise_equals_lean_model(uint256,uint256,bool,bool,uint256) (paths: 2265, time: 573.52s, bounds: [])
+[PASS] check_validateUserOp_pointwise_installed_indices(uint256,uint256,bool,bool,uint256) (paths: 1383, time: 344.11s, bounds: [])
+[PASS] check_validateUserOp_reverting_verifier_is_false_interp(uint256,uint256) (paths: 92, time: 8.72s, bounds: [])
+Symbolic test result: 4 passed; 0 failed; time: 929.90s
+Running 3 tests for test/halmos/HalmosVerifier.t.sol:HalmosVerifier
+[PASS] check_verify_rejects_non_nmasked_pkRoot(bytes32,bytes32,bytes32) (paths: 1, time: 0.01s, bounds: [])
+[PASS] check_verify_rejects_non_nmasked_pkSeed(bytes32,bytes32,bytes32) (paths: 1, time: 0.01s, bounds: [])
+[PASS] check_verify_reverts_on_wrong_length(uint256,bytes32,bytes32,bytes32) (paths: 6, time: 0.02s, bounds: [])
+Symbolic test result: 3 passed; 0 failed; time: 0.07s
+    floor OK [default]: all 8 harnesses executed; 42 [PASS] lines >= 42 pinned
+==> PASS: 42 bytecode rules verified [profile=default]
+    (A3.1 verifier gates / A3.2 validate equiv / A3.2-exec execute equiv / A3.3 factory iff / A3.4 owner table / EIP-1271 isValidSignature G8)
+==> [2/2] Halmos symbolic execution of the deployed bytecode [profile=deploy]
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+   ╭▸ test/DeployedBytecodeReproCheck.t.sol:81:21
+   │
+81 │         a = address(bytes20(ret));
+   │                     ━━━━━━━━━━━━
+   │
+   ├ note: consider disabling this lint if you're certain the cast is safe
+   │
+   │       // casting to 'bytes20' is safe because [explain why]
+   │       // forge-lint: disable-next-line(unsafe-typecast)
+   │
+   │
+   ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[divide-before-multiply]: multiplication should occur before division to avoid loss of precision
+    ╭▸ src/PQSmartWallet.sol:406:31
+    │
+406 │         uint256 paddedInner = ((C10_SIG_LEN + 31) / 32) * 32;
+    │                               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#divide-before-multiply
+
+warning[divide-before-multiply]: multiplication should occur before division to avoid loss of precision
+    ╭▸ src/PQSmartWallet.sol:606:31
+    │
+606 │         uint256 paddedInner = ((C10_SIG_LEN + 31) / 32) * 32;
+    │                               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#divide-before-multiply
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+    ╭▸ test/halmos/HalmosValidateUserOp.t.sol:144:27
+    │
+144 │         bytes4 selector = bytes4(wrongCalldata);
+    │                           ━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'bytes4' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+    ╭▸ test/C10PrimitiveKat.t.sol:157:30
+    │
+157 │             assertEq(bytes32(bytes16(cur)), bytes32(_b16(_bytes("chain_hash", i, "out"))), _label("chain_hash", i));
+    │                              ━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'bytes16' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+    ╭▸ test/halmos/HalmosValidateUserOp.t.sol:158:27
+    │
+158 │         bytes4 selector = bytes4(wrongCalldata);
+    │                           ━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'bytes4' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+    ╭▸ test/halmos/HalmosValidateUserOp.t.sol:174:38
+    │
+174 │         sig[sig.length - 1] = bytes1(uint8(padByte));
+    │                                      ━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'uint8' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[divide-before-multiply]: multiplication should occur before division to avoid loss of precision
+   ╭▸ test/halmos/LeanValidateUserOpModel.sol:47:48
+   │
+47 │     uint256 public constant PADDED_INNER_LEN = ((SIGNATURE_LEN + 31) / 32) * 32; // 4032
+   │                                                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   │
+   ╰ help: https://book.getfoundry.sh/reference/forge/forge-lint#divide-before-multiply
+
+Running 6 tests for test/halmos/HalmosExecute.t.sol:HalmosExecute
+[PASS] check_executeBatch_rejects_any_self_target(uint256) (paths: 3, time: 0.10s, bounds: [])
+[PASS] check_execute_no_replay() (paths: 1, time: 0.03s, bounds: [])
+[PASS] check_execute_rejects_non_entrypoint_caller(address) (paths: 2, time: 0.01s, bounds: [])
+[PASS] check_execute_rejects_owner_index_mismatch(uint256) (paths: 1, time: 0.03s, bounds: [])
+[PASS] check_execute_rejects_self_target() (paths: 1, time: 0.02s, bounds: [])
+[PASS] check_execute_without_validate_reverts() (paths: 1, time: 0.00s, bounds: [])
+Symbolic test result: 6 passed; 0 failed; time: 0.27s
+Running 6 tests for test/halmos/HalmosExecuteEquiv.t.sol:HalmosExecuteEquiv
+[PASS] check_executeBatch_pointwise_equals_lean_model(uint256,uint256,uint256) (paths: 84, time: 9.25s, bounds: [])
+[PASS] check_execute_inner_revert_is_atomic(uint256) (paths: 12, time: 0.30s, bounds: [])
+[PASS] check_execute_no_credit_reverts_for_all_indices(uint256) (paths: 1, time: 0.01s, bounds: [])
+[PASS] check_execute_pointwise_equals_lean_model(uint256,uint256,uint256) (paths: 59, time: 7.07s, bounds: [])
+[PASS] check_two_stamps_fund_exactly_two_executes() (paths: 5, time: 0.50s, bounds: [])
+[PASS] check_validate_remove_selector_stamps_no_credit(uint256) (paths: 1, time: 0.03s, bounds: [])
+Symbolic test result: 6 passed; 0 failed; time: 17.21s
+Running 5 tests for test/halmos/HalmosFactory.t.sol:HalmosFactory
+[PASS] check_createAccount_already_deployed_returns_existing(uint64,bytes32,bytes32,bool) (paths: 4, time: 0.12s, bounds: [])
+[PASS] check_createAccount_iff_lean_precondition(uint64,bool) (paths: 10, time: 0.41s, bounds: [])
+[PASS] check_createAccount_rejects_duplicate_slot0() (paths: 1, time: 0.05s, bounds: [])
+[PASS] check_createAccount_rejects_non_nmasked_master(bytes32,bytes32) (paths: 1, time: 0.03s, bounds: [])
+[PASS] check_createAccount_rejects_non_nmasked_slot0() (paths: 1, time: 0.03s, bounds: [])
+Symbolic test result: 5 passed; 0 failed; time: 0.70s
+Running 3 tests for test/halmos/HalmosIsValidSignature.t.sol:HalmosIsValidSignature
+[PASS] check_isValidSignature_forbids_bootstrap(bytes32) (paths: 4, time: 0.05s, bounds: [])
+[PASS] check_isValidSignature_no_counter_bump(bytes32) (paths: 5, time: 0.10s, bounds: [])
+[PASS] check_isValidSignature_nonbypass_slot1(bytes32) (paths: 5, time: 0.12s, bounds: [])
+Symbolic test result: 3 passed; 0 failed; time: 0.33s
+Running 7 tests for test/halmos/HalmosMultiOwnable.t.sol:HalmosMultiOwnable
+[PASS] check_addOwnerBytes_pointwise_equals_lean_model(uint256) (paths: 7, time: 0.74s, bounds: [])
+[PASS] check_initialize_fresh_pointwise() (paths: 12, time: 0.64s, bounds: [])
+[PASS] check_initialize_one_shot(uint256,uint256) (paths: 25, time: 0.56s, bounds: [])
+[PASS] check_owner_mutators_reject_non_entrypoint(address,bool) (paths: 4, time: 0.04s, bounds: [])
+[PASS] check_removeOwner_bootstrap_unremovable(bool) (paths: 3, time: 0.06s, bounds: [])
+[PASS] check_removeOwner_installed_pointwise(uint256) (paths: 9, time: 0.72s, bounds: [])
+[PASS] check_removeOwner_unset_index_rejects(uint256) (paths: 2, time: 0.03s, bounds: [])
+Symbolic test result: 7 passed; 0 failed; time: 2.88s
+Running 8 tests for test/halmos/HalmosValidateUserOp.t.sol:HalmosValidateUserOp
+[PASS] check_bootstrap_bumps_cap_at_validation() (paths: 3, time: 0.04s, bounds: [])
+[PASS] check_nonbypass_bootstrap() (paths: 3, time: 0.03s, bounds: [])
+[PASS] check_nonbypass_slot() (paths: 3, time: 0.04s, bounds: [])
+[PASS] check_rejects_non_entrypoint_caller(address) (paths: 2, time: 0.01s, bounds: [])
+[PASS] check_rejects_nonzero_tail_pad(uint256) (paths: 3, time: 0.04s, bounds: [])
+[PASS] check_rejects_wrong_selector_for_bootstrap() (paths: 1, time: 0.02s, bounds: [])
+[PASS] check_rejects_wrong_selector_for_slot() (paths: 1, time: 0.03s, bounds: [])
+[PASS] check_slot_bumps_cap_at_validation() (paths: 3, time: 0.09s, bounds: [])
+Symbolic test result: 8 passed; 0 failed; time: 0.36s
+Running 4 tests for test/halmos/HalmosValidateUserOpEquiv.t.sol:HalmosValidateUserOpEquiv
+[PASS] check_validateUserOp_equiv_wrong_sig_lengths(uint256,uint256) (paths: 14, time: 4.74s, bounds: [])
+[PASS] check_validateUserOp_pointwise_equals_lean_model(uint256,uint256,bool,bool,uint256) (paths: 2265, time: 557.58s, bounds: [])
+[PASS] check_validateUserOp_pointwise_installed_indices(uint256,uint256,bool,bool,uint256) (paths: 1387, time: 339.08s, bounds: [])
+[PASS] check_validateUserOp_reverting_verifier_is_false_interp(uint256,uint256) (paths: 92, time: 8.96s, bounds: [])
+Symbolic test result: 4 passed; 0 failed; time: 910.98s
+Running 3 tests for test/halmos/HalmosVerifier.t.sol:HalmosVerifier
+[PASS] check_verify_rejects_non_nmasked_pkRoot(bytes32,bytes32,bytes32) (paths: 1, time: 0.01s, bounds: [])
+[PASS] check_verify_rejects_non_nmasked_pkSeed(bytes32,bytes32,bytes32) (paths: 1, time: 0.01s, bounds: [])
+[PASS] check_verify_reverts_on_wrong_length(uint256,bytes32,bytes32,bytes32) (paths: 6, time: 0.02s, bounds: [])
+Symbolic test result: 3 passed; 0 failed; time: 0.07s
+    floor OK [deploy]: all 8 harnesses executed; 42 [PASS] lines >= 42 pinned
+==> PASS: 42 bytecode rules verified [profile=deploy]
+    (A3.1 verifier gates / A3.2 validate equiv / A3.2-exec execute equiv / A3.3 factory iff / A3.4 owner table / EIP-1271 isValidSignature G8)

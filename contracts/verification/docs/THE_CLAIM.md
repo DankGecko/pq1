@@ -42,6 +42,20 @@ section below, do not ship it.
 > has **no false / vacuous / inconsistent axioms** — only honest cited
 > assumptions (`BreaksHash` shared in `Assumptions.lean`). The dangling+latent-false
 > `entrypoint_no_replay` was deleted.
+>
+> **What the `∨ BreaksHash` shape means (read this before quoting the binding
+> theorems — added 2026-07-19, FV deep review F7).** `sha256_collision_resistance`
+> ranges over the **concrete** kernel `sha256`. Distinct same-length colliding
+> inputs exist in every model (pigeonhole: 2^264 33-byte inputs → 2^256 outputs),
+> so the axiom set classically **entails `BreaksHash`** in the standard model —
+> every theorem concluding `X ∨ BreaksHash` (this axiom's binding theorems,
+> `offchain_nested_disjoint_from_userop_digest`, EUF-CMA conjunct 2) is
+> true-for-free *as an unconditional standard-model proposition*. The theorems'
+> operative content is the **constructive reduction**: in every
+> `BreaksHash`-free model `X` holds, and any violation witness yields a
+> collision witness. Nothing detonates (a collision must be exhibited, and the
+> tree is mathlib-free), but never cite an `∨ BreaksHash` theorem as
+> unconditional assurance — cite it as "`X`, or an exhibited hash break."
 
 ---
 
@@ -71,11 +85,16 @@ Specifically and defensibly:
    11-axiom closure now **consistent** (the restated `EUF_CMA_SPHINCSplusC`
    concludes the opaque `BreaksHash` reduction, not `False`). The 11-axiom base
    is reported by `#print axioms`, which is known to **under-report** in the
-   pinned Lean v4.22.0; the completeness backstop is `make verify-lean4checker`
-   (external-kernel re-check) — run to completion 2026-07-02: **kernel re-check
-   ACCEPTED every declaration across all 58 modules**, so the closure is not a
-   `#print`-only artifact (previously this backstop was manual-only and unrun —
-   the caveat now carries its discharge). What `theft_free`
+   pinned Lean v4.22.0; the independent check is `make verify-lean4checker`
+   (kernel/environment **replay** — not an axiom-closure recomputation; its
+   Replay re-adds referenced `.axiomInfo` as legal axioms, so the #8840
+   omission shape survives it — FV review F5 2026-07-19) — run to completion
+   2026-07-02: **kernel re-check ACCEPTED every declaration across all 58
+   modules** (the tree now has 59 — an exact-HEAD replay is pending), so the
+   environment is not a `#print`-only artifact (previously this replay was
+   manual-only and unrun — the caveat now carries its discharge). The
+   allowlist backstop for the under-report class (external `permitted_axioms`
+   checker, e.g. nanoda_lib) is tracked as a follow-up. What `theft_free`
    actually says: it is a **conjunction** — conjunct 1 (the safety guarantee:
    no wallet balance decrease without the deployed verifier accepting an
    installed-owner C10 signature over the op's `sphincsDigest`) is **EUF-CMA-free**,

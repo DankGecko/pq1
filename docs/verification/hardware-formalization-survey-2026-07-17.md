@@ -13,6 +13,22 @@ author-verified**. The exceptions are marked **`[tool]`** (a binary was run on t
 §5.6 records one such case, where the author's own BINSEC probe **withdrew** a survey correction.
 The tier convention is the boundary doc's; this doc adopts it rather than minting a second one.
 
+> **UPDATE 2026-07-19 — external re-check.** A fresh four-lane SOTA sweep
+> ([`fv-sota-newly-possible-2026-07-19.md`](./fv-sota-newly-possible-2026-07-19.md))
+> re-adjudicated this survey's closures against primary sources. Verdicts:
+> (a) the "no Thumb decoder" inference behind the BINSEC row is **externally
+> false** — BINSEC ships an ARMv7-Thumb decoder since 0.4.0 and `checkct`
+> leakage-feature flags since 0.10.0; the on-box uniform failure (§5.6,
+> `[tool]`) stands, but its likely causes are loader/decoder selection and
+> v8-M-only encodings, so a scoped re-probe on 0.11.x with v8-M-free functions
+> is open; (b) CT verification has a live LLVM-IR route (CT-PROVER, FSE 2024)
+> directly applicable to Rust bitcode; (c) design-level TrustZone-M formal work
+> exists (Umbra, mCRL2, DATE 2026) — the ISA-level closure stands; (d) the
+> OPTIGA cert lineage is current (BSI-DSZ-CC-0961 V7-2024, valid to 2027-03),
+> not expired; (e) NIST ESV Certificate #11 covers the STM32U5x TRNG (SP
+> 800-90B, full entropy) and is citable scoped evidence. The headline verdicts
+> (no public ARMv8-M ISA spec, no SE RTL, no TRNG proof) are unchanged.
+
 Companion — **read it, this doc does not repeat it**:
 [`hardware-assumption-boundary-2026-07-17.md`](./hardware-assumption-boundary-2026-07-17.md)
 carries the epistemology in full: the falsifiability criterion that separates a hardware model

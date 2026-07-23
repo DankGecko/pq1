@@ -20,7 +20,7 @@
     "shared/src/apdu_framing.rs": 4,
     "shared/src/ns_ptr_validate.rs": 8,
     "shared/src/t1_frame.rs": 5,
-    "tx-core/src/eip1559.rs": 1,
+    "tx-core/src/eip1559.rs": 2,
     "tx-core/src/rlp.rs": 2,
     "tx/src/cowswap_order.rs": 8,
     "tx/src/erc20/calldata.rs": 5,
@@ -168,7 +168,8 @@
       "build_frame_checked_is_total"
     ],
     "tx-core/src/eip1559.rs": [
-      "format_decimal_panic_free_over_format_shapes"
+      "format_decimal_panic_free_over_format_shapes",
+      "format_decimal_exact_on_boundaries"
     ],
     "tx-core/src/rlp.rs": [
       "decode_item_panic_free_and_used_in_bounds",
@@ -247,25 +248,24 @@
   },
   "totals": {
     "total_files": 26,
-    "total_harnesses": 162,
-    "mutation_enrolled_files": 20,
-    "harnesses_in_enrolled_files": 154,
-    "files_outside_mutation": 6,
-    "harnesses_outside_mutation": 8,
-    "mutation_groups_total": 40,
+    "total_harnesses": 163,
+    "mutation_enrolled_files": 21,
+    "harnesses_in_enrolled_files": 156,
+    "files_outside_mutation": 5,
+    "harnesses_outside_mutation": 7,
+    "mutation_groups_total": 43,
     "mutation_groups_by_tier": {
       "quick": 10,
-      "default": 27,
+      "default": 30,
       "full": 3
     },
-    "distinct_enrolled_harnesses": 38
+    "distinct_enrolled_harnesses": 39
   },
   "files_outside_mutation": [
     "domain/src/lib.rs",
     "pqsigner-erc7730/src/display/primitives.rs",
     "pqsigner-erc7730/src/ir.rs",
     "pqsigner-erc7730/src/render/nested.rs",
-    "pqsigner-erc7730/src/render/visibility.rs",
-    "tx-core/src/eip1559.rs"
+    "pqsigner-erc7730/src/render/visibility.rs"
   ]
 }

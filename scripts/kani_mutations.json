@@ -440,6 +440,39 @@
       "replace": "buf[2] = (len & 0xFF) as u8;\n    buf[3] = (len >> 8) as u8;",
       "expect": "kani_fails",
       "note": "byte-swapping the 2-byte GP-1.0 LEN field breaks build/validate agreement for any inf_len whose two length bytes differ -> the round-trip MUST break. Unlike the CRC-poly case this IS caught, because only the builder changes."
+    },
+    {
+      "id": "format_decimal_round_ge5_to_gt5",
+      "tier": "default",
+      "crate": "pqsigner-tx-core",
+      "harness": "format_decimal_exact_on_boundaries",
+      "file": "tx-core/src/eip1559.rs",
+      "find": "if drop_digit >= 5 {",
+      "replace": "if drop_digit > 5 {",
+      "expect": "kani_fails",
+      "note": "F10 (fv-deep-review 2026-07-19) executed PoC: the round-half-up boundary — a drop_digit of exactly 5 must round up (1.5 at frac=0 renders \"2\"); `> 5` truncates it to \"1\", a WYSIWYS understatement on the trusted display. Killed by the (15,1,0)->\"2\" exact case. The charset-only shape harness stays green on this swap (wrong digits are still digits) — that vacuity is what format_decimal_exact_on_boundaries exists to close."
+    },
+    {
+      "id": "format_decimal_drop_digit_index_div",
+      "tier": "default",
+      "crate": "pqsigner-tx-core",
+      "harness": "format_decimal_exact_on_boundaries",
+      "file": "tx-core/src/eip1559.rs",
+      "find": "let drop_digit = if round_idx - 1 < n {",
+      "replace": "let drop_digit = if round_idx / 1 < n {",
+      "expect": "kani_fails",
+      "note": "cargo-mutants 2026-06-26 survivor (mutants.out/missed.txt 177:43): round_idx/1 == round_idx makes the guard false exactly when the dropped digit is the value's ONLY significant digit, so 0.05 at frac=1 reads drop_digit=0, skips rounding, and renders \"0.0\" instead of \"0.1\" — the smallest-magnitude amount displayed as zero. Killed by the (5,2,1)->\"0.1\" exact case (the (15,1,0) case cannot catch it: there n_digits != round_idx so the mutant guard still passes — see the host KAT format_decimal_round_drop_is_only_significant_digit)."
+    },
+    {
+      "id": "format_decimal_carry_and_or",
+      "tier": "default",
+      "crate": "pqsigner-tx-core",
+      "harness": "format_decimal_exact_on_boundaries",
+      "file": "tx-core/src/eip1559.rs",
+      "find": "while carry > 0 && i < digits.len() {",
+      "replace": "while carry > 0 || i < digits.len() {",
+      "expect": "kani_fails",
+      "note": "cargo-mutants 2026-06-26 survivor (missed.txt 187:33). HONEST SCOPE: this mutant is OUTPUT-EQUIVALENT — a 19.4M-tuple differential (values x decimals 0..=20 x frac 0..=20 x trim) shows zero output drift, because once carry=0 the extra iterations are the identity on 0..=9 digits and positions >= n_digits are always 0. NO byte-exact assertion can kill it. What it destroys is the carry loop's EARLY EXIT: every rounding then spins to the 80-element digit-array bound, which trips format_decimal_exact_on_boundaries' unwinding assertion (its unwind(48) covers the legit deepest loop — div10_inplace's 32 — but stays below 80 on purpose). This pins the loop's termination STRUCTURE; the arithmetic it guards is pinned by format_decimal_round_ge5_to_gt5 / format_decimal_drop_digit_index_div and by the extracted FormatDecimalSpec.lean theorem."
     }
   ]
 }

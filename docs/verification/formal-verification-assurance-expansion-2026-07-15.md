@@ -4,6 +4,17 @@
 > mutually withheld dual review and symmetric cross-adjudication. This is
 > research and planning, not authority to implement, merge, ship, mutate
 > hardware, or contact external parties.
+>
+> **UPDATE 2026-07-19.** A four-lane SOTA re-check and a new executing
+> adversarial review landed:
+> [`fv-sota-newly-possible-2026-07-19.md`](./fv-sota-newly-possible-2026-07-19.md)
+> (what the 2025→2026 literature makes newly feasible — incl. concrete-Lean
+> keccak, hax→ProVerif extraction, ITSRC10 counting routes, nanoda_lib axiom
+> allowlists, mathlib probability split) and
+> [`../security/adversarial-review/findings/fv-deep-review-2026-07-19-coordinator.md`](../security/adversarial-review/findings/fv-deep-review-2026-07-19-coordinator.md)
+> (the assurance-system state: dead CI, a red freshness gate merged over, and
+> the registry/bridge residuals). Read both before quoting this roadmap's
+> stop/go criteria.
 
 ## Executive decision
 

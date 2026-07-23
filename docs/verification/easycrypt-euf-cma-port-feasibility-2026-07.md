@@ -2464,3 +2464,38 @@ no new axiom; no overclaim). Real but PARTIAL progress + an architectural findin
 STATE: hop-5 (VT) is BLOCKED on a procedural FORS+C game (multi-session). All proven pieces stand (hop-6/VF 0-admit;
 EUFCMA_MFORSC10 meaningful; capstone statement; concrete scheme LHS; scheme-correctness fragment). The VT branch is
 the deepest remaining item; the FX chain (hops 1-4) + root assembly (R1b) also remain.
+
+### 2026-07-22 — FX-chain Wave 1: hop-1 (Orig→PRFPRF materialization) PROVEN 0-admit, audited HONEST
+
+First hop of the FX-chain discharge program (user directive: FX chain first, then the VT rabbit hole).
+`drafts/fx_chain_wip.ec` (2224 lines, CERTIFIED-0-ADMIT, committed 5fbb820 in c10-eufcma-port).
+
+**BUILT (the shared +C FX-chain game surface, MM45 :1726-2186 ported +C-substituted):** `SPHINCS_PLUS_C10_FS.
+{keygen_prf_c (skg-derived FORS cube at trhftype/set_thtbidx u*t+v + skg WOTS cube at chtype, port :1727),
+keygen_nprf_c (uniform ddgstblock cubes, port :1800; differs from prf ONLY by skg→sample)}`, `O_CMA_SPHINCSPLUSTWC_FS`
+(: SOracle_CMA_C with init/fresh/nr_queries; fresh `mk <$ dcond dmkey (good_fors m)` per query — the +C idealisation,
+NO mkg/mmap — cube FORS-sign via FL_FORS_ES_NPRF, cube HT-sign via FL_SL_XMSS_MT_C_ES_NPRF), and the two monolithic
+games `EUF_CMA_SPHINCSPLUSTWC_FS_PRFPRF` / `_NPRFPRF` with the faithful +C verify (good_fors ∧ size-d ∧ root ∧ allOkC).
+SPHINCS_PLUS_C10 + EUFCMA_C10 inlined VERBATIM from sphincs_c10_scheme_wip.ec (diffed; established lowercase-inline
+pattern).
+
+**hop-1 PROVEN 0-admit:** `Eqv_EUFCMA_C10_FSPRFPRFC` + `Pr_EUFCMA_C10_FSPRFPRFC` —
+  Pr[EUFCMA_C10(F) : res] = Pr[FS_PRFPRF(F) : res]
+(port of MM45 Eqv_..._Orig_FSPRFPRF :2243-2571). The heavy lifting: a +C seed↔cube closed-form infrastructure
+(fors_sign_seed_cf / fors_sign_cube_cf / htsign_seed_cf / nprf_sign_cf / leaves_*_cf, all phoare-1%r with concrete
+mkseq/cf functional postconditions), the sign-body equiv Eqv_C10_sign_FSbody, and the game-level keygen cube-coupling
+nested-whiles. Delta 1 (fresh dcond mk on BOTH sides) makes hop-1 a pure materialization fold — no mkg/RF leg exists.
+
+**AUDIT (adversarial, PASS/HONEST):** 3 canaries REJECTED by the gate (postcondition res-flip; Pr `=`→`<`;
+htsign_seed_cf size d→d+1); statements diffed verbatim vs MM45 modulo the documented +C deltas; adversary
+restrictions confirmed minimal (MM45's local-module locality ↔ explicit `-` here); no new axioms. keygen_nprf_c's
+(root, WOTS cube) shape verified to coincide with FL_SL_XMSS_MT_C_ES_NPRF.keygen — the hop-4 landing pad on V_C is
+structurally aligned; the FS oracle sign body is line-identical to V_C.O_CMA_C.sign.
+
+**hop-2/hop-3 setup (auditor-confirmed):** the PRF surface is CONFINED TO KEYGEN (the FS oracle never reads ss/ms —
+only cubes + ps), so hop-2's SKG reduction invariant is plain cube equality over exactly two skg address families
+(FORS trhftype u*t+v + WOTS chtype), and MM45's MKG hop has NO +C analog at all (delta 1 eliminated it) — hop-3 will
+be an honest vacuous discharge (same game both sides, 0 ≤ mkg_adv), disclosed as a conservative over-count.
+
+STATE: FX chain 1/4 hops machine-checked. Remaining: hop-2 (SKG scheme-level), hop-3 (vacuous, honest), hop-4
+(NPRFPRF→V_C + mu_split), then capstone wiring; hop-5/VT (procedural FORS+C game) afterwards per the directive.

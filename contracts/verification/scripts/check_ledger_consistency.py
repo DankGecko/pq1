@@ -42,14 +42,20 @@ Eight independent checks (all run; every failure is reported):
 
 ================================  SCOPE / CAVEAT  =============================
 The LIVE-closure source is `#print axioms` (dump_axioms.lean). In Lean v4.22.0
-(this tree) `collectAxioms` is in the pre-#8842 UNDER-REPORT window — it can
-omit axioms. `make verify-lean4checker` recomputes the TRUE closure and is the
-COMPLETENESS backstop. THIS gate checks advertised-vs-#print-axioms CONSISTENCY
-and the ledger's internal coherence; it deliberately does NOT try to close the
-under-report gap — the SEPARATE `make verify-lean4checker` target recomputes
-the true closure and is the backstop. (NB: --dump expects `#print axioms`
-format, i.e. dump_axioms.lean output; it does NOT parse lean4checker's report
-format. Use a pre-captured dump_axioms output for offline/CI runs.)
+(this tree) `collectAxioms` was believed to be in the pre-#8842 UNDER-REPORT
+window (the #8842 fix merged 2025-07; whether this pin carries it is
+unverified — check before relying on either reading). `make verify-lean4checker`
+is an INDEPENDENT kernel/environment REPLAY: it catches declarations that fail
+to kernel-check, but it does NOT recompute the axiom closure and cannot reveal
+a `collectAxioms` omission (its Replay re-adds referenced `.axiomInfo`
+declarations as legal axioms; the #8840 shape survives it — FV deep review F5,
+2026-07-19). THIS gate checks advertised-vs-#print-axioms CONSISTENCY and the
+ledger's internal coherence; it deliberately does NOT try to close the
+under-report gap — the allowlist backstop for that class (an external checker
+with a `permitted_axioms` list, e.g. nanoda_lib) is tracked as a follow-up.
+(NB: --dump expects `#print axioms` format, i.e. dump_axioms.lean output; it
+does NOT parse lean4checker's report format. Use a pre-captured dump_axioms
+output for offline/CI runs.)
 
 This gate closes V5 (advertised != actual) and V4-adjacent surfaces. It does
 NOT catch V7 (latent-FALSE axiom — non-detonatable while lean/ is mathlib-free)

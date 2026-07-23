@@ -23,11 +23,15 @@ name: Lean FV (extracted §33 Aeneas)
 # proves-about merges without ever re-triggering this gate, and the theorems keep
 # proving the OLD function (extracted-F1, 2026-07-02). The extract-* regen-diff sweep
 # (make extract-*) + the executed differential catch the resulting drift.
+# extraction_registry.json (the verify-extraction-freshness pin registry) MUST also be
+# here: a registry-ONLY edit (re-pin, deletion, waiver change) must re-trigger its own
+# gate — F3d (2026-07-19), the deletion-tolerance/self-reference finding.
 on:
   push:
     branches: [master]
     paths: &extracted_paths
       - 'contracts/verification/extracted/**'
+      - 'contracts/verification/extraction_registry.json'
       - 'contracts/verification/Makefile'
       - '.github/workflows/lean-extracted.yml'
       - 'sphincs-c10/src/**'

@@ -299,12 +299,15 @@ verify-proof-mutation: verify-build ## Proof-side cargo-mutants: delete axiom/we
 # EXTERNAL kernel re-check gate (deep-research rec #1). lean/ is Lean v4.22.0,
 # inside the pre-#8842 collectAxioms under-report window, so `#print axioms`
 # (verify-audit) can under-report the trust base. lean4checker independently
-# replays the whole SphincsCVerify environment back through the Lean kernel and
-# computes the TRUE closure — non-zero exit on any rejected declaration. Needs a
-# version-matched lean4checker at ~/lean4checker (see scripts/run_lean4checker.sh
+# replays the whole SphincsCVerify environment back through the Lean kernel —
+# non-zero exit on any rejected declaration. SCOPE (2026-07-19, FV review F5):
+# this is an independent kernel/environment REPLAY, NOT an axiom-closure
+# recomputation — its Replay re-adds referenced .axiomInfo as legal axioms, so
+# the #8840 omission shape survives it (see scripts/run_lean4checker.sh header).
+# Needs a version-matched lean4checker at ~/lean4checker (see scripts/run_lean4checker.sh
 # header for the one-time build: git clone + checkout v4.22.0 + lake build);
 # override the location with LEAN4CHECKER_DIR=...
-verify-lean4checker: ## External kernel re-check (true axiom closure; SLOW)
+verify-lean4checker: ## Independent kernel/environment replay (SLOW, manual pre-release)
 	@bash scripts/run_lean4checker.sh
 
 # Model-to-bytecode (D): Kontrol/KEVM symbolic-execution proofs DIRECTLY against
@@ -520,7 +523,7 @@ EXTRACTED_DIR := extracted
 PQLEAN        := $(HOME)/.local/share/pqsigner-lean
 REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
-.PHONY: verify-extracted verify-extract-differential verify-extraction-freshness verify-extraction-regen extract-sphincs-adrs extract-aa-userop extract-fors-index extract-format-decimal
+.PHONY: verify-extracted verify-extract-differential verify-extraction-freshness verify-extraction-regen extract-sphincs-adrs extract-aa-userop extract-fors-index extract-format-decimal extract-pinstate extract-slotkdf
 
 # F1 (2026-07-16) — TOOLCHAIN-FREE extraction freshness tripwire. The extract-*
 # regen-diff targets below are the REAL freshness check but need the §33
@@ -540,15 +543,15 @@ verify-extraction-freshness: ## F1 toolchain-free extraction freshness tripwire 
 # every extract-* target and diff against the committed extraction. A `fresh:true`
 # registry entry that drifts is a FAILURE; the `fresh:false` waived entry
 # (tx-merkle — Aeneas can no longer translate it) is EXPECTED to fail and only
-# flags if it unexpectedly re-extracts (bump it to fresh + `--update` then).
+# flags if it unexpectedly re-extracts (bump it to fresh + `--update <target>` then).
 verify-extraction-regen: ## F1 REAL regen: re-run every extract-* + diff (needs charon/aeneas toolchain)
 	@echo "=== F1 extraction regen: re-running charon->aeneas + diff for every registry target ==="
 	@fail=0; \
 	for t in $$(python3 -c "import json;print(' '.join(e['target'] for e in json.load(open('extraction_registry.json'))['entries'] if e.get('fresh',True)))"); do \
-	  if $(MAKE) $$t >/dev/null 2>&1; then echo "  fresh: $$t"; else echo "  DRIFT: $$t (re-extract/re-prove/re-pin via --update)"; fail=1; fi; \
+	  if $(MAKE) $$t >/dev/null 2>&1; then echo "  fresh: $$t"; else echo "  DRIFT: $$t (re-extract/re-prove/re-pin via --update $$t)"; fail=1; fi; \
 	done; \
 	for t in $$(python3 -c "import json;print(' '.join(e['target'] for e in json.load(open('extraction_registry.json'))['entries'] if not e.get('fresh',True)))"); do \
-	  if $(MAKE) $$t >/dev/null 2>&1; then echo "  UNEXPECTED-FRESH (waived entry re-extracts! promote to fresh + --update): $$t"; else echo "  waived-stale (expected): $$t"; fi; \
+	  if $(MAKE) $$t >/dev/null 2>&1; then echo "  UNEXPECTED-FRESH (waived entry re-extracts! promote to fresh + --update $$t): $$t"; else echo "  waived-stale (expected): $$t"; fi; \
 	done; \
 	if [ $$fail != 0 ]; then echo "FAIL: a fresh extraction drifted from its committed Lean"; exit 1; fi; \
 	echo "OK: all fresh extractions re-extract cleanly; waived entries unchanged"
@@ -907,3 +910,65 @@ extract-hash-fns:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Hash/Funs.lean /tmp/pqsigner-extract/hout/Funs.fixed.lean \
 	  && echo "OK: committed hash-fns extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/hash.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+
+# F4 (2026-07-19, fv-deep-review) — domain::{,de}serialize_pin_state (the
+# PIN-counter parser; the NON-PRODUCTION mock-SE path). No --opaque flags and
+# no RUSTFLAGS override: domain/src has no #[cfg(lean_extract)] gate, and the
+# extraction reaches only core items (hand-filled DEFs in
+# PinState/{Funs,Types}External.lean) + the cross-crate const
+# pqsigner_proto::MAX_ATTEMPTS. TWO committed hand-completions are reproduced
+# by the sed below: (i) the "import paths localised" header note; (ii) the
+# Chunks Iterator trait-impl record — the aeneas binary emits only the
+# OVERRIDDEN fields {next, enumerate}, but the pinned Aeneas.Std
+# core.iter.traits.iterator.Iterator structure REQUIRES {next, step_by,
+# enumerate, take} (no defaults — an unedited regen does not even build), so
+# the step_by/take fields (whose DEFs live in PinState/FunsExternal.lean) are
+# re-inserted. TypesExternal/FunsExternal are hand-filled: re-fill them from
+# the regenerated *_Template.lean when re-committing (only Funs.lean is
+# regen-diffed, mirroring every other rank).
+extract-pinstate:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/domain && \
+	  $(PQLEAN)/charon cargo --preset=aeneas \
+	  --start-from 'pqsigner_domain::serialize_pin_state' \
+	  --start-from 'pqsigner_domain::deserialize_pin_state' \
+	  --dest-file /tmp/pqsigner-extract/pinstate.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/psout && mkdir -p /tmp/pqsigner-extract/psout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/psout -split-files /tmp/pqsigner-extract/pinstate.llbc
+	@sed -e '1s|^-- THIS FILE WAS AUTOMATICALLY GENERATED BY AENEAS|-- THIS FILE WAS AUTOMATICALLY GENERATED BY AENEAS (import paths localised:\n-- `Pinstate.*` -> `Extracted.PinState.*` to fit this project'"'"'s module layout).|' \
+	     -e 's/import Pinstate\./import Extracted.PinState./' \
+	     -e '/^    core\.slice\.iter\.Chunks\.Insts\.CoreIterTraitsIteratorIteratorSharedASlice\.next$$/a\  step_by :=\n    core.slice.iter.Chunks.Insts.CoreIterTraitsIteratorIteratorSharedASlice.step_by' \
+	     -e '/^    core\.slice\.iter\.Chunks\.Insts\.CoreIterTraitsIteratorIteratorSharedASlice\.enumerate$$/a\  take :=\n    core.slice.iter.Chunks.Insts.CoreIterTraitsIteratorIteratorSharedASlice.take' \
+	     /tmp/pqsigner-extract/psout/Funs.lean > /tmp/pqsigner-extract/psout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/PinState/Funs.lean /tmp/pqsigner-extract/psout/Funs.fixed.lean \
+	  && echo "OK: committed pinstate extraction matches the current Rust" \
+	  || { echo "DRIFT: domain/src/lib.rs pin-state path changed — re-extract, re-prove, re-commit"; exit 1; }
+
+# F4 (2026-07-19, fv-deep-review) — domain slot-KDF (slot_master_entropy_from_bip39,
+# derive_c10_master_from_bip39_seed, slot_entropy, derive_c10_slot_seeds). The
+# two single-shot hash boundaries are opaqued (sha256_bytes -> sha256_pure_bytes,
+# hmac_sha512_bytes -> hmac_sha512_pure_bytes — the disclosed axioms in
+# SlotKdf/FunsExternal.lean); zeroize is NOT opaqued (its trait impls are
+# extracted; the zeroize METHODS are hand-filled identity DEFs in FunsExternal
+# — the byte-layout theorems only need the call to succeed). sk.llbc -> Sk.*
+# prefix (the .llbc filename sets the aeneas module prefix). No RUSTFLAGS
+# override: domain/src has no #[cfg(lean_extract)] gate. SlotKdf/Types.lean's
+# docstrings are hand-polished — only Funs.lean is regen-diffed (mirrors every
+# other rank).
+extract-slotkdf:
+	@mkdir -p /tmp/pqsigner-extract
+	@cd $(REPO_ROOT)/domain && \
+	  $(PQLEAN)/charon cargo --preset=aeneas \
+	  --opaque 'pqsigner_domain::sha256_bytes' \
+	  --opaque 'pqsigner_domain::hmac_sha512_bytes' \
+	  --start-from 'pqsigner_domain::slot_master_entropy_from_bip39' \
+	  --start-from 'pqsigner_domain::derive_c10_master_from_bip39_seed' \
+	  --start-from 'pqsigner_domain::slot_entropy' \
+	  --start-from 'pqsigner_domain::derive_c10_slot_seeds' \
+	  --dest-file /tmp/pqsigner-extract/sk.llbc 2>&1 | tail -1
+	@rm -rf /tmp/pqsigner-extract/skout && mkdir -p /tmp/pqsigner-extract/skout
+	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/skout -split-files /tmp/pqsigner-extract/sk.llbc
+	@sed 's/import Sk\./import Extracted.SlotKdf./' /tmp/pqsigner-extract/skout/Funs.lean > /tmp/pqsigner-extract/skout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/SlotKdf/Funs.lean /tmp/pqsigner-extract/skout/Funs.fixed.lean \
+	  && echo "OK: committed slot-kdf extraction matches the current Rust" \
+	  || { echo "DRIFT: domain/src/lib.rs slot-KDF path changed — re-extract, re-prove, re-commit"; exit 1; }

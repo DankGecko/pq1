@@ -1,31 +1,39 @@
 #!/usr/bin/env python3
-"""verify-sphincs-digest-field-order — SOURCE-level Rust<->Solidity field-order
-pin for the digest the firmware actually signs (FV surface
-`actual-signed-digest-correspondence`, roadmap P1.7; the F2 fix).
+"""verify-sphincs-digest-field-order — SOURCE-level Rust<->Solidity<->Lean
+field-order pin for the digest the firmware actually signs (FV surface
+`actual-signed-digest-correspondence`, roadmap P1.7; the F2 fix; the Lean leg
+was added 2026-07-19 for FV deep review F6).
 
 WHY. The firmware signs `aa::userop::compute_sphincs_digest_v06` — a single
 SHA-256 over a 360-byte preimage of 12 fields. The on-chain
 `PQSmartWallet.sol::sphincsDigest` recomputes the SAME digest with SHA-256 over
-`abi.encodePacked(...)` of the SAME 12 fields. Their agreement on a Rust-
+`abi.encodePacked(...)` of the SAME 12 fields, and the Lean model the
+`theft_free` family quantifies over hand-mirrors them in
+`ValidateUserOp.lean::sphincsDigestPreimage`. Their agreement on a Rust-
 generated vector is checked in Forge (`PQSmartWalletRealSig.t.sol`), and the
 on-chain digest's sensitivity to every field is checked in
 `SphincsDigestFieldBinding.t.sol`. But a vector KAT cannot see a *source*
 divergence that a fresh vector regeneration would also carry (e.g. someone swaps
 two gas fields in the Rust `chain_update` chain AND regenerates the vectors) —
-the Solidity and Rust would then disagree structurally while every committed
-vector still matched. This gate pins the two field ORDERS against each other at
-the source, so a one-sided reorder/insert/delete fails CI before any vector.
+the sources would then disagree structurally while every committed
+vector still matched. This gate pins the three field ORDERS against each other
+at the source, so a one-sided reorder/insert/delete in ANY of the three fails
+CI before any vector. The Lean leg exists because nothing else machine-pinned
+the model's preimage: an equal-width swap in `sphincsDigestPreimage` used to
+pass `lake build`, the ledger gate, the closure pins, and this lint.
 
 Same tier as the repo's other transcription gates (`check_c10_transcription.py`):
 a regression pin, not a proof. Pure source parse, no toolchain.
 
-SCOPE (F9). This pins the field SEQUENCE and the field->preimage mapping; it does
-NOT prove `chain_update`/`abi.encodePacked` produce byte-identical preimages
-(that rests on the sha2 streaming==concat + abi.encodePacked packing rules, named
-assumptions — the Forge differential vector is the byte-level cross-check). And
-it is NOT the (stronger, blocked) Aeneas ∀-over-layout extraction of the digest.
+SCOPE (F9). This pins the field SEQUENCE and the field->preimage mapping across
+the Rust, Solidity, and Lean sources; it does NOT prove
+`chain_update`/`abi.encodePacked`/the Lean `ByteVec` concatenation produce
+byte-identical preimages (that rests on the sha2 streaming==concat +
+abi.encodePacked packing rules + the Lean ByteVec defs, named assumptions — the
+Forge differential vector is the byte-level cross-check). And it is NOT the
+(stronger, blocked) Aeneas ∀-over-layout extraction of the digest.
 
-Exit 0 = the two field orders match; 1 = drift; 2 = parse/usage error.
+Exit 0 = the three field orders match; 1 = drift; 2 = parse/usage error.
 `--self-test` reorders a copy of each side and asserts the check fires.
 """
 from __future__ import annotations
@@ -38,6 +46,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[2]
 RUST = REPO_ROOT / "aa" / "src" / "userop.rs"
 SOL = REPO_ROOT / "contracts" / "smart-wallet" / "src" / "PQSmartWallet.sol"
+LEAN = (REPO_ROOT / "contracts" / "verification" / "lean" /
+        "SphincsCVerify" / "Wallet" / "ValidateUserOp.lean")
 
 # The canonical 12-field preimage order (firmware compute_sphincs_digest_v06).
 CANON_ORDER = [
@@ -131,18 +141,41 @@ def extract_sol_order(src: str) -> list[str]:
     return [canon(a) for a in args]
 
 
-def compare(rust: list[str], sol: list[str]) -> list[str]:
+def extract_lean_order(src: str) -> list[str]:
+    """Parse `sphincsDigestPreimage`'s `++`-concatenated operand sequence into
+    canonical field names. The body starts after the `ByteVec.cast (by decide)
+    <|` prefix and each operand is one of: `op.sender`, `ByteVec.natToB32 op.x`,
+    `sha256OfArr op.x`, `entryPoint`, `ByteVec.natToB32 chainId` — after
+    stripping the wrappers, `canon` resolves the same names as the other legs."""
+    m = re.search(r"def sphincsDigestPreimage\b", src)
+    if not m:
+        raise ValueError("sphincsDigestPreimage not found in Lean source")
+    nxt = src.find("\n/--", m.end())
+    body = src[m.end(): nxt if nxt > 0 else m.end() + 2000]
+    cast = body.find("<|")
+    if cast < 0:
+        raise ValueError("sphincsDigestPreimage body not found (`<|` prefix missing)")
+    fields = []
+    for part in body[cast + 2:].split("++"):
+        operand = (part.replace("ByteVec.natToB32", "")
+                       .replace("sha256OfArr", "")
+                       .replace("op.", "").strip())
+        if operand:
+            fields.append(operand)
+    return [canon(f) for f in fields]
+
+
+def compare(rust: list[str], sol: list[str], lean: list[str]) -> list[str]:
     fails = []
-    if None in rust:
-        fails.append(f"Rust: an unrecognised chain_update field (mapped to None): {rust}")
-    if None in sol:
-        fails.append(f"Solidity: an unrecognised abi.encodePacked element (mapped to None): {sol}")
-    if rust != CANON_ORDER:
-        fails.append(f"Rust field order != canonical.\n  rust  = {rust}\n  canon = {CANON_ORDER}")
-    if sol != CANON_ORDER:
-        fails.append(f"Solidity field order != canonical.\n  sol   = {sol}\n  canon = {CANON_ORDER}")
-    if rust != sol:
-        fails.append(f"Rust vs Solidity field order DRIFT.\n  rust = {rust}\n  sol  = {sol}")
+    for label, side in (("Rust", rust), ("Solidity", sol), ("Lean", lean)):
+        if None in side:
+            fails.append(f"{label}: an unrecognised field (mapped to None): {side}")
+        if side != CANON_ORDER:
+            fails.append(f"{label} field order != canonical.\n  {label.lower():8s} = {side}\n"
+                         f"  canon    = {CANON_ORDER}")
+    if rust != sol or rust != lean:
+        fails.append(f"Rust vs Solidity vs Lean field order DRIFT.\n  rust = {rust}\n"
+                     f"  sol  = {sol}\n  lean = {lean}")
     return fails
 
 
@@ -150,25 +183,34 @@ def self_test() -> int:
     print("=== check_sphincs_digest_field_order --self-test (negative control) ===")
     rust = extract_rust_order(RUST.read_text())
     sol = extract_sol_order(SOL.read_text())
+    lean = extract_lean_order(LEAN.read_text())
     ok = True
     # control: the real sources must match
-    if compare(rust, sol):
+    if compare(rust, sol, lean):
         print("  FAIL: clean sources do NOT match — the pin is stale, reconcile first"); ok = False
     else:
-        print("  ok: clean Rust/Solidity field orders match the canonical 12-field sequence")
+        print("  ok: clean Rust/Solidity/Lean field orders match the canonical 12-field sequence")
     # negative: swap two adjacent gas fields on the Solidity side -> must fire
     sol_swapped = sol[:]
     i = CANON_ORDER.index("max_fee_per_gas"); j = CANON_ORDER.index("max_priority_fee_per_gas")
     sol_swapped[i], sol_swapped[j] = sol_swapped[j], sol_swapped[i]
-    if compare(rust, sol_swapped):
+    if compare(rust, sol_swapped, lean):
         print("  ok: a max_fee/max_priority swap on the Solidity side is CAUGHT")
     else:
         print("  FAIL: a field-order swap was NOT caught — the pin is vacuous!"); ok = False
     # negative: drop a field on the Rust side -> must fire
-    if compare(rust[:-1], sol):
+    if compare(rust[:-1], sol, lean):
         print("  ok: a dropped field (length mismatch) is CAUGHT")
     else:
         print("  FAIL: a dropped field was NOT caught!"); ok = False
+    # negative: swap two gas fields on the Lean side -> must fire (the F6 gap)
+    lean_swapped = lean[:]
+    i = CANON_ORDER.index("call_gas_limit"); j = CANON_ORDER.index("verification_gas_limit")
+    lean_swapped[i], lean_swapped[j] = lean_swapped[j], lean_swapped[i]
+    if compare(rust, sol, lean_swapped):
+        print("  ok: a call_gas/verification_gas swap on the Lean side is CAUGHT")
+    else:
+        print("  FAIL: a Lean field-order swap was NOT caught — the F6 gap persists!"); ok = False
     print("=== self-test PASS ===" if ok else "=== self-test FAILED ===")
     return 0 if ok else 1
 
@@ -179,23 +221,28 @@ def main() -> int:
     try:
         rust = extract_rust_order(RUST.read_text(encoding="utf-8"))
         sol = extract_sol_order(SOL.read_text(encoding="utf-8"))
+        lean = extract_lean_order(LEAN.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
-    fails = compare(rust, sol)
-    print("=== verify-sphincs-digest-field-order (Rust compute_sphincs_digest_v06 <-> Solidity sphincsDigest) ===")
+    fails = compare(rust, sol, lean)
+    print("=== verify-sphincs-digest-field-order (Rust compute_sphincs_digest_v06 <-> "
+          "Solidity sphincsDigest <-> Lean sphincsDigestPreimage) ===")
     print(f"  Rust order:     {rust}")
     print(f"  Solidity order: {sol}")
+    print(f"  Lean order:     {lean}")
     if fails:
         print(f"\nFAIL: {len(fails)} field-order divergence(s):", file=sys.stderr)
         for f in fails:
             print(f"  - {f}", file=sys.stderr)
-        print("\nThe digest the firmware signs and the digest the wallet recomputes on-chain "
-              "no longer list the same fields in the same order. A regenerated vector would "
-              "hide this. Reconcile aa/src/userop.rs and PQSmartWallet.sol::sphincsDigest.", file=sys.stderr)
+        print("\nThe digest the firmware signs, the digest the wallet recomputes on-chain, "
+              "and the digest the Lean model quantifies over no longer list the same fields "
+              "in the same order. A regenerated vector would hide this. Reconcile "
+              "aa/src/userop.rs, PQSmartWallet.sol::sphincsDigest, and "
+              "ValidateUserOp.lean::sphincsDigestPreimage.", file=sys.stderr)
         return 1
-    print("\nOK: the firmware-signed and on-chain-recomputed digests share the exact "
-          "12-field preimage order (source-level pin).")
+    print("\nOK: the firmware-signed, on-chain-recomputed, and Lean-model digests share "
+          "the exact 12-field preimage order (source-level pin).")
     return 0
 
 

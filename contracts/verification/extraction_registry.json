@@ -23,6 +23,25 @@
       "extract-wots-digits"
     ]
   },
+  "required_targets": [
+    "extract-sphincs-adrs",
+    "extract-aa-userop",
+    "extract-fors-index",
+    "extract-tx-merkle",
+    "extract-merkle-verify",
+    "extract-wots-pkfromsig",
+    "extract-hash-fns",
+    "extract-bip39-roundtrip",
+    "extract-decode-item",
+    "extract-u256-mul",
+    "extract-format-decimal",
+    "extract-fwmanifest-preimage",
+    "extract-wots-digits",
+    "extract-aa-eip1271",
+    "extract-txcore-rlp",
+    "extract-pinstate",
+    "extract-slotkdf"
+  ],
   "entries": [
     {
       "target": "extract-sphincs-adrs",
@@ -52,13 +71,17 @@
         "aa/src/userop.rs"
       ],
       "rust_files_sha256": [
-        "e239c5666400ead165203dcbf63bd967830cdd2c8e50a9883b9c0bfec6eeafd9"
+        "00378a291d0c711a60b03a484eeedfbd49ea240d729b134fdb511af2ca0b3372"
       ],
       "generated_lean": [
-        "contracts/verification/extracted/Extracted/UserOp/Funs.lean"
+        "contracts/verification/extracted/Extracted/UserOp/Funs.lean",
+        "contracts/verification/extracted/Extracted/UserOp/Types.lean",
+        "contracts/verification/extracted/Extracted/UserOp/FunsExternal.lean"
       ],
       "generated_lean_sha256": [
-        "a4e878619bac298d9aaddf2bc7363cbbc9d18bfa47ae7af98aeb3afa8262189d"
+        "768abd3508547f271abe6bac6202aff17d5294bff055959b51ad3b45b7abdb90",
+        "5288438b3011f467d074e726f1c6228f31c56eaffa24745afbf073439d9f40af",
+        "03c0c8f5a3c94285348b83fd826206cdc35153011934b78f75f69349250f80dd"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/UserOpEquiv.lean",
       "headline_theorem": "compute_user_op_hash_terminates",
@@ -75,10 +98,12 @@
         "3b64e07bc9c3a6c0e1db1d63da90c32ad34b26857dfe5767997df360b7713ed2"
       ],
       "generated_lean": [
-        "contracts/verification/extracted/Extracted/Fors/Funs.lean"
+        "contracts/verification/extracted/Extracted/Fors/Funs.lean",
+        "contracts/verification/extracted/Extracted/Fors/Types.lean"
       ],
       "generated_lean_sha256": [
-        "1e81e635541eddcd507784dd39e1a04b2e3e91c6529a0090036573d2938f2ef3"
+        "1e81e635541eddcd507784dd39e1a04b2e3e91c6529a0090036573d2938f2ef3",
+        "1a8a61e6baf8695010c94fd0e65d21551f6fbf74a31bb5d3f7a48f150d84ab66"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/ForsExtract.lean",
       "headline_theorem": "extract_ht_index_terminates",
@@ -95,10 +120,14 @@
         "9ed22297f4343cc033efc0c8af552cf8f31667c3e33267fae263951d8e3ce708"
       ],
       "generated_lean": [
-        "contracts/verification/extracted/Extracted/TxMerkle/Funs.lean"
+        "contracts/verification/extracted/Extracted/TxMerkle/Funs.lean",
+        "contracts/verification/extracted/Extracted/TxMerkle/Types.lean",
+        "contracts/verification/extracted/Extracted/TxMerkle/FunsExternal.lean"
       ],
       "generated_lean_sha256": [
-        "dfe15a2e42485135860f4aff2a839fe182b3e0f8e744cbbf8dbe0a86f1546397"
+        "dfe15a2e42485135860f4aff2a839fe182b3e0f8e744cbbf8dbe0a86f1546397",
+        "7e3afcdd54c7f057f9b604c768f9c9e16086ea6a1ef7a914f30092ddbf83b6b4",
+        "714d3f4834e9371a2d5cc74a025eaa507040febc8b82ecbe1bc6fd251e35f5b0"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/TxMerkleSpec.lean",
       "headline_theorem": "verify_proof_spec",
@@ -116,10 +145,14 @@
         "f787428b15cea6fb353eb3e1830f9f737067ce70a74e4d6b79113b83a1f3aed0"
       ],
       "generated_lean": [
-        "contracts/verification/extracted/Extracted/Merkle/Funs.lean"
+        "contracts/verification/extracted/Extracted/Merkle/Funs.lean",
+        "contracts/verification/extracted/Extracted/Merkle/Types.lean",
+        "contracts/verification/extracted/Extracted/Merkle/FunsExternal.lean"
       ],
       "generated_lean_sha256": [
-        "cbae9768b79734e64b217aece2f4b9cb1e62f1c283ae307a01660ff862c6397d"
+        "cbae9768b79734e64b217aece2f4b9cb1e62f1c283ae307a01660ff862c6397d",
+        "1a8a61e6baf8695010c94fd0e65d21551f6fbf74a31bb5d3f7a48f150d84ab66",
+        "8c437e7c07ec58a81e03dc3be0e6feed532cdf48f3af945bcbe1022bc32fccad"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/MerkleVerifySpec.lean",
       "headline_theorem": "verify_auth_path_loop_value",
@@ -136,10 +169,14 @@
         "e7ebe1d71591e68f6045383b041905ff17ad5822def35e77e11244ffdf49c56b"
       ],
       "generated_lean": [
-        "contracts/verification/extracted/Extracted/PkFromSig/Funs.lean"
+        "contracts/verification/extracted/Extracted/PkFromSig/Funs.lean",
+        "contracts/verification/extracted/Extracted/PkFromSig/Types.lean",
+        "contracts/verification/extracted/Extracted/PkFromSig/FunsExternal.lean"
       ],
       "generated_lean_sha256": [
-        "9528945c6bacb43b4dd1fb1902de6ac887dd1a002f73ff7ada1c4b0835de1f84"
+        "9528945c6bacb43b4dd1fb1902de6ac887dd1a002f73ff7ada1c4b0835de1f84",
+        "1a8a61e6baf8695010c94fd0e65d21551f6fbf74a31bb5d3f7a48f150d84ab66",
+        "60562c2c0eef84e5ea156cedf835de8e95230cb18bcc0364e90647a090b638d5"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/PkFromSigSpec.lean",
       "headline_theorem": "pk_loop0_value",
@@ -156,10 +193,14 @@
         "049a689c96ef9e14ce34030e71269292f3f6951b522cad88d56daa4466ade2c4"
       ],
       "generated_lean": [
-        "contracts/verification/extracted/Extracted/Hash/Funs.lean"
+        "contracts/verification/extracted/Extracted/Hash/Funs.lean",
+        "contracts/verification/extracted/Extracted/Hash/Types.lean",
+        "contracts/verification/extracted/Extracted/Hash/FunsExternal.lean"
       ],
       "generated_lean_sha256": [
-        "c999332342e216196e0f744e354c4d96c0cc708bb4e258cb5b630fae51aab8a0"
+        "c999332342e216196e0f744e354c4d96c0cc708bb4e258cb5b630fae51aab8a0",
+        "1a8a61e6baf8695010c94fd0e65d21551f6fbf74a31bb5d3f7a48f150d84ab66",
+        "8968274b785d536340924fc7f1344fdecfaee2c170cbdb87c3db4164a36e0bfe"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/HashSpecs.lean",
       "headline_theorem": "th_spec",
@@ -176,10 +217,12 @@
         "db35d8bda5b3ac603a83114c3d1a4735497e037bff87d1706cefc6941d924fbf"
       ],
       "generated_lean": [
-        "contracts/verification/extracted/Extracted/Bip39/Funs.lean"
+        "contracts/verification/extracted/Extracted/Bip39/Funs.lean",
+        "contracts/verification/extracted/Extracted/Bip39/Types.lean"
       ],
       "generated_lean_sha256": [
-        "81dc719ab8a11f89247f4e4a7ac8876c1ac7a7d4edf058399e8db5a3d915d17d"
+        "81dc719ab8a11f89247f4e4a7ac8876c1ac7a7d4edf058399e8db5a3d915d17d",
+        "d7f2fa6d87d92e49eb4ecab746e92eaaf1b79702972e7f438e2058db2b7e517a"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/Bip39RoundtripSpec.lean",
       "headline_theorem": "roundtrip_11_id",
@@ -196,10 +239,14 @@
         "d2a1a211f22ab20241ee5923924273ce33de363939fc49fd5f94b39b1f1b40a6"
       ],
       "generated_lean": [
-        "contracts/verification/extracted/Extracted/Decode/Funs.lean"
+        "contracts/verification/extracted/Extracted/Decode/Funs.lean",
+        "contracts/verification/extracted/Extracted/Decode/Types.lean",
+        "contracts/verification/extracted/Extracted/Decode/FunsExternal.lean"
       ],
       "generated_lean_sha256": [
-        "b160442fe7dab4df18079b387e8660ffe67d2f7e9a7aba14e207da8613bd5f27"
+        "b160442fe7dab4df18079b387e8660ffe67d2f7e9a7aba14e207da8613bd5f27",
+        "f004dc3ed3c4ac755ed35e6fc8dcb973c7c3710adb5eb0ecc39f13081751a298",
+        "5f7100dc15c9f5ed33a0123f86623ec586fd7734842b35ed0c85145a4bbf22c7"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/DecodeItemSpec.lean",
       "headline_theorem": "decode_item_spec",
@@ -213,13 +260,15 @@
         "tx-core/src/eip1559.rs"
       ],
       "rust_files_sha256": [
-        "56c8fcef42560ef77f53ca8192b37b54929b83760531fdfc6f81b2ddf0bebec4"
+        "bb0fc41c0322eb60847876ce32917248be88f9314db63b533361a88a5fc43c13"
       ],
       "generated_lean": [
-        "contracts/verification/extracted/Extracted/U256Mul/Funs.lean"
+        "contracts/verification/extracted/Extracted/U256Mul/Funs.lean",
+        "contracts/verification/extracted/Extracted/U256Mul/Types.lean"
       ],
       "generated_lean_sha256": [
-        "6166465d10f732afe1a4faca8ceeeeaf94a010bce641a0f8d2773de026f691b3"
+        "6166465d10f732afe1a4faca8ceeeeaf94a010bce641a0f8d2773de026f691b3",
+        "05bb6fbfd86c3e038b8429d00c2969e7c28347e77412933f826babeb007ef333"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/U256MulSpec.lean",
       "headline_theorem": "saturating_mul_u64_spec",
@@ -233,7 +282,7 @@
         "tx-core/src/eip1559.rs"
       ],
       "rust_files_sha256": [
-        "56c8fcef42560ef77f53ca8192b37b54929b83760531fdfc6f81b2ddf0bebec4"
+        "bb0fc41c0322eb60847876ce32917248be88f9314db63b533361a88a5fc43c13"
       ],
       "generated_lean": [
         "contracts/verification/extracted/Extracted/FormatDecimal/Funs.lean"
@@ -256,10 +305,12 @@
         "ffd1881497439903dee425d817903a837179dc848b44be0eb9d98f7a9edc9d4f"
       ],
       "generated_lean": [
-        "contracts/verification/extracted/Extracted/FwManifest/Funs.lean"
+        "contracts/verification/extracted/Extracted/FwManifest/Funs.lean",
+        "contracts/verification/extracted/Extracted/FwManifest/Types.lean"
       ],
       "generated_lean_sha256": [
-        "d651b316a3b2e31d9f067fc4df406a86b5bcf826f3f4a359deac027e71d1f674"
+        "d651b316a3b2e31d9f067fc4df406a86b5bcf826f3f4a359deac027e71d1f674",
+        "5be8d8fe02446befa79f1396d035dadf755d7e53f1260dec496c55a9e44ee565"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/FwManifestSpec.lean",
       "headline_theorem": "signed_preimage_spec",
@@ -276,10 +327,12 @@
         "e7ebe1d71591e68f6045383b041905ff17ad5822def35e77e11244ffdf49c56b"
       ],
       "generated_lean": [
-        "contracts/verification/extracted/Extracted/Wots/Funs.lean"
+        "contracts/verification/extracted/Extracted/Wots/Funs.lean",
+        "contracts/verification/extracted/Extracted/Wots/Types.lean"
       ],
       "generated_lean_sha256": [
-        "ebbea10da2757c68aabca02ded757713f08a11204ca8e62e18ada66c548a2992"
+        "ebbea10da2757c68aabca02ded757713f08a11204ca8e62e18ada66c548a2992",
+        "1a8a61e6baf8695010c94fd0e65d21551f6fbf74a31bb5d3f7a48f150d84ab66"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/WotsDigits.lean",
       "headline_theorem": "extract_digits_spec",
@@ -296,10 +349,14 @@
         "fe9650ce44d882943a8e431390ce0a8a9e83c62165221a083e178d6a1593944f"
       ],
       "generated_lean": [
-        "contracts/verification/extracted/Extracted/Eip1271/Funs.lean"
+        "contracts/verification/extracted/Extracted/Eip1271/Funs.lean",
+        "contracts/verification/extracted/Extracted/Eip1271/Types.lean",
+        "contracts/verification/extracted/Extracted/Eip1271/FunsExternal.lean"
       ],
       "generated_lean_sha256": [
-        "c8fa4a3039580c71f08afcd60c73e8eee42859b53f631c2b21420417e414e687"
+        "c8fa4a3039580c71f08afcd60c73e8eee42859b53f631c2b21420417e414e687",
+        "34d9310a806286f394b818865c7028dec73ea8b3b9e458e7620d152cdfde43f8",
+        "5f67bcedee9481ff7c6b3d11bfc082e6c0e0b7562f3702d3072f30205de6a3a2"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/Eip1271Equiv.lean",
       "headline_theorem": "domain_separator_spec",
@@ -316,13 +373,67 @@
         "d2a1a211f22ab20241ee5923924273ce33de363939fc49fd5f94b39b1f1b40a6"
       ],
       "generated_lean": [
-        "contracts/verification/extracted/Extracted/Rlp/Funs.lean"
+        "contracts/verification/extracted/Extracted/Rlp/Funs.lean",
+        "contracts/verification/extracted/Extracted/Rlp/Types.lean",
+        "contracts/verification/extracted/Extracted/Rlp/FunsExternal.lean"
       ],
       "generated_lean_sha256": [
-        "854f673c4745998a9ae498b1ca0ceef82097412410afc269863baa4f06a99c0f"
+        "854f673c4745998a9ae498b1ca0ceef82097412410afc269863baa4f06a99c0f",
+        "ca495eeaaa37f0ae427ebc260e3dbfbb8a7d7c745941725202cefc164982fcc1",
+        "6d73a90a480ca6ed1d9bc2de8d44378d28d92880c9c3004b14cffc58989635e5"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/RlpIntSpec.lean",
       "headline_theorem": "bytes_to_u64_loop1_value",
+      "fresh": true
+    },
+    {
+      "target": "extract-pinstate",
+      "make_dir": "contracts/verification",
+      "crate": "domain",
+      "rust_files": [
+        "domain/src/lib.rs"
+      ],
+      "rust_files_sha256": [
+        "616208507c024d49a3fcb0a3b91219a23f3ecc4b284e6c6c49bb41f26da6b083"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/PinState/Funs.lean",
+        "contracts/verification/extracted/Extracted/PinState/Types.lean",
+        "contracts/verification/extracted/Extracted/PinState/FunsExternal.lean"
+      ],
+      "generated_lean_sha256": [
+        "87736e7843d4897e4e3f7d18a2250d373447b959671106364324b8b5a5c447b5",
+        "05b2a2a04d2c741a09baee2189060694bb58d70228f29ffb3d193f8402d2d1b2",
+        "498dc1a7de717ced241f10c3afd79cb4f4e0834bdc086c55548d21d4530cb73c"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/PinState/PinStateSpec.lean",
+      "headline_theorem": "deserialize_pin_state_rejects_bad_len",
+      "note": "enrolled 2026-07-19 (FV review F4); freshness ESTABLISHED 2026-07-19: re-extracted from the current domain/src/lib.rs (the 06-26 committed extraction's Source docstring lines had drifted after a6617c7a; function bodies byte-identical; the Chunks Iterator record hand-completion is reproduced by the extract-pinstate sed), lake build + PinStateSpec green",
+      "fresh": true
+    },
+    {
+      "target": "extract-slotkdf",
+      "make_dir": "contracts/verification",
+      "crate": "domain",
+      "rust_files": [
+        "domain/src/lib.rs"
+      ],
+      "rust_files_sha256": [
+        "616208507c024d49a3fcb0a3b91219a23f3ecc4b284e6c6c49bb41f26da6b083"
+      ],
+      "generated_lean": [
+        "contracts/verification/extracted/Extracted/SlotKdf/Funs.lean",
+        "contracts/verification/extracted/Extracted/SlotKdf/Types.lean",
+        "contracts/verification/extracted/Extracted/SlotKdf/FunsExternal.lean"
+      ],
+      "generated_lean_sha256": [
+        "23dda5134a793a54b2162b4fea01366751670454ca16ec8338bd26cd30418a96",
+        "9750546e6832fd492377a053c3360066662c050cdb84a8959c9062db0cb260fc",
+        "928d4bc1f4394becea9a8ee4064518c41715061fd9e41c0d4ba595f731f72049"
+      ],
+      "theorem_file": "contracts/verification/extracted/Extracted/SlotKdf/SlotKdfSpec.lean",
+      "headline_theorem": "derive_c10_slot_seeds_byte_layout",
+      "note": "enrolled 2026-07-19 (FV review F4); freshness ESTABLISHED 2026-07-19: make extract-slotkdf regen is byte-identical against the committed extraction (deterministic across runs)",
       "fresh": true
     }
   ]

@@ -2,7 +2,18 @@
 
 **Status: A3.2 + A3.3 + A3.4 FULLY DISCHARGED ON BYTECODE (2026-06-15; 33/33
 KEVM proofs as of 2026-07-17) — only A3.1 (verifier ∀-signature) remains, and is
-intractable under symbolic SHA-256 (out of scope).** The four control-flow bridge axioms are now
+intractable under symbolic SHA-256 (out of scope).** **UPDATE 2026-07-19
+(fv-deep-review-2026-07-19 F9): the wired count was re-measured against the
+tree — 33 `prove_*` functions across 5 harnesses (KontrolValidateUserOp 7,
+KontrolExecute 8, KontrolOwnerTable 9, KontrolFactory 6,
+KontrolBootstrapUnremovable 3), so the 33/33 discharge matches the tree
+exactly; the 2026-07-18 sweep's "38 `prove_` functions" was a miscount.
+`run_kontrol.sh` now carries a pinned proof-identity baseline
+(`EXPECTED_PROOFS`, all 33 `<Contract>.<function>` ids) and fails after
+`kontrol prove` unless every expected id appears PASSED and non-admitted in
+`kontrol list` (count floor + per-id grep; `--self-test` exercises the
+parser's positive/negative controls without the K backend, `--check-output
+<file>` re-checks an archived list).** The four control-flow bridge axioms are now
 proven directly on the deployed PQSmartWallet/Factory bytecode by an engine
 independent of Halmos with no hand-written `LeanModel.sol` mirror — so the
 hand-transcription TCB element of A3.3/A3.4/A3.2-exec-single is retired (Halmos stays the

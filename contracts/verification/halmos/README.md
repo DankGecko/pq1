@@ -8,7 +8,7 @@ bytecode**, so each passing `check_*` rule is a proof for *all* inputs in its
 envelope (not the 10 concrete KAT vectors), modulo the SMT solver and the
 SHA-256-as-uninterpreted-function abstraction (= axiom A1).
 
-## What is proved (38 rules, all PASS — on BOTH compiler profiles)
+## What is proved (42 rules, all PASS — on BOTH compiler profiles)
 
 > **Scope note.** These rules discharge the wallet/factory/owner-table
 > **control flow** on bytecode, with the verifier modeled as an
@@ -20,11 +20,20 @@ SHA-256-as-uninterpreted-function abstraction (= axiom A1).
 |---|---|---|
 | `HalmosValidateUserOpEquiv.t.sol` | A3.2 — **pointwise equivalence** of `validateUserOp` to the Lean model (+ symbolic-index sweep over installed slots) | 4 |
 | `HalmosValidateUserOp.t.sol` | A3.2 — `validateUserOp` per-property rules | 8 |
-| `HalmosExecuteEquiv.t.sol` | A3.2-exec — **pointwise equivalence** of `execute{,Batch}WithOffchainCount` to the Lean `Execute` model, **symbolic ∀ `ownerIndex`** | 5 |
+| `HalmosExecuteEquiv.t.sol` | A3.2-exec — **pointwise equivalence** of `execute{,Batch}WithOffchainCount` to the Lean `Execute` model, **symbolic ∀ `ownerIndex`** | 6 |
 | `HalmosExecute.t.sol` | A3.2-exec — `execute*WithOffchainCount` per-property rules | 6 |
 | `HalmosMultiOwnable.t.sol` | A3.4 — `addOwnerBytes`/`removeOwnerAtIndex`/`initialize` pointwise + `ownerAtIndex` read parity (replaces stale Certora) | 7 |
 | `HalmosVerifier.t.sol` | A3.1 — `SPHINCsC10Asm.verify` **input gates** | 3 |
 | `HalmosFactory.t.sol` | A3.3 — `createAccount` ⟺ `createAccountPrecondition` | 5 |
+| `HalmosIsValidSignature.t.sol` | G8 / EIP-1271 — `isValidSignature` forbids-bootstrap (∀ hash + verifier answer), non-bypass installed slot, no counter bump | 3 |
+
+Count corrected 2026-07-19 (fv-deep-review-2026-07-19 F9): the wired set is
+**42 rules across 8 harnesses** — this table previously said 38, trailed the
+tree (ExecuteEquiv's 6th rule `check_two_stamps_fund_exactly_two_executes` and
+the whole 3-rule `HalmosIsValidSignature` G8 harness were wired but not
+receipted here). `run_halmos.sh` now pins `EXPECTED_RULES=42` + the 8-harness
+identity set and fails unless every harness runs and the PASS count meets the
+floor. Latest receipt: [`sessions/halmos-session-2026-07-19.txt`](sessions/halmos-session-2026-07-19.txt).
 
 The full suite is executed against **both** the `default` (runs=200) and
 `deploy` (runs=999999, production) profile bytecode — the production codehash
@@ -118,6 +127,18 @@ conjuncts (non-N-masked master, non-N-masked slot-0, duplicate slot-0). Keys
 are concrete in the iff (a symbolic owner half would make Halmos havoc the
 proxy's owner storage on the phantom already-deployed CREATE2 fork).
 
+### G8 / EIP-1271 — `isValidSignature` on bytecode
+
+`HalmosIsValidSignature.t.sol` proves the off-chain EIP-1271 entry point's
+headline rule on the deployed bytecode — the bytecode analogue of the Lean
+`Wallet/Invariants.lean::eip1271_forbids_bootstrap` (assurance-case node G8):
+the bootstrap key (`ownerIndex == 0`) is NEVER accepted off-chain, for **any**
+message hash and any symbolic verifier answer (rejected before the
+`ownerAtIndex` read and before the keccak `replaySafeHash`, so a clean ∀);
+plus the installed-slot non-bypass rule (concrete rep, same engine ceiling as
+A3.2's unset partition) and the no-counter-bump rule. keccak stays
+uninterpreted; SHA-256 is never on this path.
+
 ## Reachable-state hypothesis (A3.2)
 
 The A3.2 axiom and `theft_free_bytecode` carry the hypothesis
@@ -180,7 +201,7 @@ stop a crash. (The true digest is one admissible interpretation.)
 ```bash
 cd contracts/verification
 make verify-bytecode-setup   # clone + patch + install the patched halmos (once)
-make verify-bytecode         # certify codehashes (both profiles) + immutable lemma, then run all 38 rules on BOTH profiles
+make verify-bytecode         # certify codehashes (both profiles) + immutable lemma, then run all 42 rules on BOTH profiles
 ```
 
 `run_halmos.sh` first runs `PinnedCodehashes.t.sol` **and**
@@ -191,6 +212,14 @@ differs from its pinned instance only inside the certified immutable windows —
 i.e. the bytecode Halmos executes is the bytecode the Lean `theft_free`
 closure names, on both the dev and production builds — then runs the full
 symbolic suite against **each** profile's bytecode and fails if any rule does
-not pass. Session output is archived under `sessions/`. Set
+not pass. It also enforces a **rule-identity floor** (fv-deep-review-2026-07-19
+F9): the wired `check_*` inventory must equal the pinned `EXPECTED_RULES=42`
+before the run, and afterwards each of the 8 harnesses must have executed
+(its `Running N tests` line present with N equal to its wired rule count) and
+the total `[PASS]` count must be ≥ 42 — a silently unmatched harness or a
+zero-rule green is a hard failure. `run_halmos.sh --self-test` exercises the
+floor's positive/negative controls without the solver; `--check-output <file>`
+re-checks an archived session against the floor. Session output is archived
+under `sessions/`. Set
 `PQ1_HALMOS_SKIP_DEPLOY_SYMBOLIC=1` to skip the (slow) deploy-profile symbolic
 re-run during fast local iteration.

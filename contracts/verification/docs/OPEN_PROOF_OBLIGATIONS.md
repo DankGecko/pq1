@@ -185,9 +185,11 @@ predicate — close it as the headline composes.
 
 * `Spec/Theorems.lean::theft_free` (new) — the composite. Statement:
   for any reachable wallet state `s` and any UserOp `op` such that
-  `(EntryPoint.handleOp s op).balance(adversary) > s.balance(adversary)`,
-  either (a) `op.signature` is a SPHINCS+C10 forgery against an
-  installed owner key (contradicting A5), or (b) one of A1–A4 fails.
+  `(EntryPoint.handleOp s op).balance(s.walletAddress) < s.balance(s.walletAddress)`
+  (the wallet's own balance decreased), either (a) `op.signature` is a
+  SPHINCS+C10 forgery against an installed owner key over the wallet's
+  `sphincsDigest` (the SHA-256 12-field preimage; contradicting A5), or
+  (b) one of A1–A4 fails.
 
   Proof: A2 gives `validateUserOp` returned success → I-1 gives the
   signature verified → `verify_signs` + I-2/I-5 (counter discipline) +
@@ -230,7 +232,8 @@ A1–A6 as its only non-Lean-kernel dependencies.
 > state transition `σ → σ'` triggered by a UserOp accepted by
 > EntryPoint v0.6, if `balance(σ', W) < balance(σ, W)`, then the
 > UserOp's `signature` field carries a SPHINCS+C10 signature, valid
-> under an installed owner key of `W`, over the canonical
+> under an installed owner key of `W`, over `W`'s `sphincsDigest`
+> (the SHA-256 12-field preimage), not the supplied canonical
 > `userOpHash`.
 
 **Does not prove**:

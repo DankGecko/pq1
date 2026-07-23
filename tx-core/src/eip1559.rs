@@ -622,6 +622,98 @@ mod kani_harness {
             }
         }
     }
+
+    /// Byte-EXACT boundary companion to `format_decimal_panic_free_over_format_shapes`
+    /// (finding F10, fv-deep-review 2026-07-19). The shape harness proves
+    /// panic/OOB-freedom + digit-or-'.' charset over EVERY (decimals, frac, trim)
+    /// shape for one concrete value — but a charset assertion cannot redden on a
+    /// wrong-DIGIT bug: a rounding `>= 5` -> `> 5` swap, the `round_idx - 1` ->
+    /// `round_idx / 1` slip, or a broken trim still emits digits. This harness pins
+    /// the exact emitted bytes on a small set of boundary inputs chosen against
+    /// the 2026-06-26 cargo-mutants survivors (mutants.out/missed.txt, all 7 in
+    /// this function) and F10's executed `drop_digit >= 5` -> `> 5` PoC:
+    ///
+    ///   (15,1,0) -> "2", (14,1,0) -> "1"   — drop_digit == 5 EXACTLY: pins `>= 5`
+    ///     (a `> 5` mutant renders 1.5 as "1", understating the amount).
+    ///   (5,2,1) -> "0.1", (4,2,1) -> "0.0" — the dropped digit is the value's ONLY
+    ///     significant digit: pins the `round_idx - 1 < n` guard (missed mutant
+    ///     177:43 `round_idx / 1` makes the guard false here and reads drop_digit=0
+    ///     — the display silently understates 0.05 as 0.0).
+    ///   (95,1,0) -> "10", (9995,2,1) -> "100.0" — the round carry ripples into and
+    ///     GROWS the integer part (exercises every carry-loop iteration).
+    ///   (1500,3,3,trim) -> "1.5", (1000,3,3,trim) -> "1", (1500,3,3,!trim) ->
+    ///     "1.500" — trailing-zero trim incl. full fraction + decimal-point collapse.
+    ///   (0,18,6) -> "0.000000" / "0" (trim) — zero in both trim modes.
+    ///   (u64::MAX,0,0) -> "18446744073709551615" — 20-digit extraction ceiling.
+    ///
+    /// Why concrete + exact, and why this is still a proof (not a test): a symbolic
+    /// VALUE makes CBMC unwind the byte-wise long division symbolically and does not
+    /// converge (see the shape harness's docstring), so exactness is pinned on
+    /// concrete boundary inputs — but here the model checker re-proves them on every
+    /// mutation-gate run, which is the instrument the cargo-mutants survivors
+    /// escaped. The three instruments partition the gap: THIS harness = Kani-level
+    /// decision coverage + the mutation pin; the shape harness = panic-freedom and
+    /// charset over ALL format shapes; contracts/verification/extracted/Extracted/
+    /// FormatDecimal/FormatDecimalSpec.lean = the universal for-all-values exact
+    /// theorem. This harness COMPLEMENTS FormatDecimalSpec.lean rather than
+    /// duplicating it: the Lean theorem is not executable by check_kani_mutations.py.
+    ///
+    /// unwind(48): the deepest legitimate loop on these inputs is div10_inplace's
+    /// fixed 32 (u64::MAX extraction = 20 outer iterations; carry/trim/emit <= 21;
+    /// the case loop = 12). 48 leaves 50% margin and — deliberately — stays BELOW
+    /// the 80-element digit-array bound: the missed `carry > 0 && i < digits.len()`
+    /// -> `||` mutant (missed.txt 187:33) is output-EQUIVALENT (a 19.4M-tuple
+    /// differential against the original shows zero output drift: once carry=0 the
+    /// extra iterations are the identity on 0..=9 digits), so no byte assertion can
+    /// kill it — but it destroys the carry loop's early exit, forcing EVERY
+    /// rounding to spin to the 80 bound, which trips THIS harness's unwinding
+    /// assertion. That structural pin is enrolled as format_decimal_carry_and_or;
+    /// its manifest note records the equivalence honestly.
+    #[kani::proof]
+    #[kani::unwind(48)]
+    fn format_decimal_exact_on_boundaries() {
+        // (value, decimals, frac, trim, expected bytes). Every expected string is
+        // cross-verified by the host suite (boundary KATs / zero / MAX tests) and a
+        // standalone differential run of this formatter, so a mismatch here is a
+        // formatter bug to fix, never an expectation to weaken.
+        let cases: [(u64, u32, u32, bool, &[u8]); 12] = [
+            (15, 1, 0, false, b"2"),
+            (14, 1, 0, false, b"1"),
+            (5, 2, 1, false, b"0.1"),
+            (4, 2, 1, false, b"0.0"),
+            (95, 1, 0, false, b"10"),
+            (9995, 2, 1, false, b"100.0"),
+            (1500, 3, 3, true, b"1.5"),
+            (1500, 3, 3, false, b"1.500"),
+            (1000, 3, 3, true, b"1"),
+            (0, 18, 6, false, b"0.000000"),
+            (0, 18, 6, true, b"0"),
+            (u64::MAX, 0, 0, false, b"18446744073709551615"),
+        ];
+        let mut i = 0usize;
+        while i < cases.len() {
+            let (val, decimals, frac, trim, expected) = cases[i];
+            let v = {
+                let mut b = [0u8; 32];
+                b[24..32].copy_from_slice(&val.to_be_bytes());
+                U256(b)
+            };
+            let mut out = [0u8; 32];
+            // None (output would not fit) is IMPOSSIBLE for these cases (max 20
+            // digits + point + 6 frac < 32 bytes) and would be a formatter bug —
+            // .expect turns it into a hard verification failure, not a silent skip.
+            let n = v
+                .format_decimal(decimals, frac, trim, &mut out)
+                .expect("boundary output must fit in 32 bytes");
+            assert!(n == expected.len());
+            let mut j = 0usize;
+            while j < n {
+                assert!(out[j] == expected[j]);
+                j += 1;
+            }
+            i += 1;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

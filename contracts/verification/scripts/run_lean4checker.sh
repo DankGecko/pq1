@@ -14,11 +14,23 @@
 #
 # `lean4checker` closes that gap: it replays the entire compiled environment
 # (every `.olean` reachable from the named module) back through the actual
-# Lean KERNEL and recomputes the true closure. If any declaration does not
-# kernel-check (a bogus `False` proof, a type mismatch, a forged axiom), it
-# prints "lean4checker found a problem in ..." and exits non-zero. This is
-# the independent re-check that makes "no sorryAx / no false axiom" a kernel
-# fact rather than a grep.
+# Lean KERNEL. If any declaration does not kernel-check (a bogus `False`
+# proof, a type mismatch, a forged axiom), it prints "lean4checker found a
+# problem in ..." and exits non-zero. This is the independent re-check that
+# makes "no sorryAx / no false axiom" a kernel fact rather than a grep.
+#
+# SCOPE CAVEAT (2026-07-19, FV deep review F5)
+# ---------------------------------------------
+# This gate is an INDEPENDENT KERNEL/ENVIRONMENT REPLAY. It is NOT an
+# axiom-closure recomputation and does NOT authorize any "true closure"
+# claim: it checks each declaration's kernel acceptance (exit status), and
+# lean4checker's Replay re-adds referenced `.axiomInfo` declarations as
+# legal axioms — so the exact #8840 omission shape (an axiom referenced
+# only from another axiom's TYPE, invisible to `collectAxioms`) can replay
+# green without ever being reported. The "recomputes the TRUE closure"
+# wording in older docs/comments was wrong. The allowlist backstop for the
+# under-report class is an external checker with a `permitted_axioms` list
+# (e.g. nanoda_lib) — tracked as a follow-up.
 #
 # WHAT IT DOES
 # ------------

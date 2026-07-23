@@ -270,8 +270,11 @@ def sphincsDigestPreimage
 
 /-- The SHA-256 digest the firmware signs. Concrete 12-field
     `abi.encodePacked` + outer `sha256`, exact mirror of
-    `PQSmartWallet.sphincsDigest` (Solidity lines 326-343). The
-    binding properties (preimage-injectivity, per-field commitment)
+    `PQSmartWallet.sphincsDigest`. The field ORDER of the preimage above is
+    machine-pinned against the Rust and Solidity sources by
+    `contracts/verification/scripts/check_sphincs_digest_field_order.py`
+    (CI — a one-sided reorder fails the gate; added 2026-07-19, FV review F6).
+    The binding properties (preimage-injectivity, per-field commitment)
     are proven in `Wallet/SphincsDigestSpec.lean`. -/
 def sphincsDigest
     (op : UserOperation) (entryPoint : ByteVec 20) (chainId : Nat) :
