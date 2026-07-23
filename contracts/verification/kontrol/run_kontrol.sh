@@ -373,12 +373,6 @@ case "${1:-}" in
     assert_kontrol_list "$2"
     exit $?
     ;;
-  --check-artifacts)
-    [ $# -eq 1 ] || { echo "usage: $0 --check-artifacts" >&2; exit 2; }
-    check_proof_inventory
-    check_compiled_proof_inventory
-    exit $?
-    ;;
 esac
 
 # This is the authoritative all-proof gate. A caller-controlled matcher could
