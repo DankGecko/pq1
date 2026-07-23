@@ -20,47 +20,48 @@ SRC_DIR="$HERE/test"                     # all Kontrol harnesses live here
 DEST_DIR="$SW/test/kontrol"
 
 # --- Proof-identity baseline (fv-deep-review-2026-07-19 F9 / sweep-F52) ------
-# Every `prove_*` function wired under kontrol/test/, as
-# <Contract>.<function>. Verified 2026-07-19 against the tree: 33 proofs
+# Every `prove_*` function wired under kontrol/test/, as the compiler-canonical
+# <Contract>.<function>(<ABI types>) identity used by both fresh Foundry
+# artifacts and `kontrol list`. Verified 2026-07-19 against the tree: 33 proofs
 # across 5 harnesses — KontrolValidateUserOp 7, KontrolExecute 8,
 # KontrolOwnerTable 9, KontrolFactory 6, KontrolBootstrapUnremovable 3 —
 # matching the 33/33 discharge recorded in ../docs/KONTROL_SCOPING.md
 # (2026-06-15; the 2026-07-18 sweep's "38 prove_ functions" was a miscount).
 # Bump this list when adding/removing a proof; fv-deep-review-2026-07-19 F9.
 EXPECTED_PROOFS=(
-  KontrolBootstrapUnremovable.prove_bootstrap_unremovable_from_entrypoint
-  KontrolBootstrapUnremovable.prove_bootstrap_unremovable_exact_bytes
-  KontrolBootstrapUnremovable.prove_bootstrap_remove_rejected_non_entrypoint
-  KontrolExecute.prove_execute_requires_entrypoint
-  KontrolExecute.prove_execute_no_credit_reverts
-  KontrolExecute.prove_execute_rejects_self_target
-  KontrolExecute.prove_execute_pointwise
-  KontrolExecute.prove_execute_credit_one_shot
-  KontrolExecute.prove_execute_atomic_on_reverting_target
-  KontrolExecute.prove_executeBatch_rejects_self_target
-  KontrolExecute.prove_executeBatch_pointwise
-  KontrolFactory.prove_createAccount_iff
-  KontrolFactory.prove_createAccount_rejects_non_nmasked_slot0
-  KontrolFactory.prove_createAccount_rejects_non_nmasked_master
-  KontrolFactory.prove_createAccount_rejects_duplicate_slot0
-  KontrolFactory.prove_createAccount_rejects_wrong_chain
-  KontrolFactory.prove_createAccount_already_deployed_returns_existing
-  KontrolOwnerTable.prove_addOwner_len64_pointwise
-  KontrolOwnerTable.prove_addOwner_rejects_len63
-  KontrolOwnerTable.prove_addOwner_rejects_len65
-  KontrolOwnerTable.prove_removeOwner_installed_pointwise
-  KontrolOwnerTable.prove_removeOwner_unset_rejects
-  KontrolOwnerTable.prove_initialize_one_shot
-  KontrolOwnerTable.prove_initialize_fresh_pointwise
-  KontrolOwnerTable.prove_addOwner_rejects_non_entrypoint
-  KontrolOwnerTable.prove_removeOwner_rejects_non_entrypoint
-  KontrolValidateUserOp.prove_validate_slot_nonbypass
-  KontrolValidateUserOp.prove_validate_bootstrap_nonbypass
-  KontrolValidateUserOp.prove_validate_rejects_unset_owner
-  KontrolValidateUserOp.prove_validate_rejects_non_entrypoint
-  KontrolValidateUserOp.prove_validate_rejects_bad_offset
-  KontrolValidateUserOp.prove_validate_rejects_bad_innerlen
-  KontrolValidateUserOp.prove_validate_rejects_bad_tailpad
+  "KontrolBootstrapUnremovable.prove_bootstrap_unremovable_from_entrypoint(bytes)"
+  "KontrolBootstrapUnremovable.prove_bootstrap_unremovable_exact_bytes()"
+  "KontrolBootstrapUnremovable.prove_bootstrap_remove_rejected_non_entrypoint(address,bytes)"
+  "KontrolExecute.prove_execute_requires_entrypoint(address,uint256,uint256,uint256,bytes)"
+  "KontrolExecute.prove_execute_no_credit_reverts(uint256,uint256,uint256,bytes)"
+  "KontrolExecute.prove_execute_rejects_self_target(uint256,uint256,bytes)"
+  "KontrolExecute.prove_execute_pointwise(uint256,uint256,uint256,uint256,bytes)"
+  "KontrolExecute.prove_execute_credit_one_shot(uint256,bytes)"
+  "KontrolExecute.prove_execute_atomic_on_reverting_target(uint256,bytes)"
+  "KontrolExecute.prove_executeBatch_rejects_self_target(uint256,bytes)"
+  "KontrolExecute.prove_executeBatch_pointwise()"
+  "KontrolFactory.prove_createAccount_iff(uint64,bool)"
+  "KontrolFactory.prove_createAccount_rejects_non_nmasked_slot0()"
+  "KontrolFactory.prove_createAccount_rejects_non_nmasked_master()"
+  "KontrolFactory.prove_createAccount_rejects_duplicate_slot0()"
+  "KontrolFactory.prove_createAccount_rejects_wrong_chain(uint64)"
+  "KontrolFactory.prove_createAccount_already_deployed_returns_existing(uint64,bytes32,bytes32,bool)"
+  "KontrolOwnerTable.prove_addOwner_len64_pointwise(bytes)"
+  "KontrolOwnerTable.prove_addOwner_rejects_len63(bytes)"
+  "KontrolOwnerTable.prove_addOwner_rejects_len65(bytes)"
+  "KontrolOwnerTable.prove_removeOwner_installed_pointwise(bytes)"
+  "KontrolOwnerTable.prove_removeOwner_unset_rejects(uint256,bytes)"
+  "KontrolOwnerTable.prove_initialize_one_shot(bytes,bytes)"
+  "KontrolOwnerTable.prove_initialize_fresh_pointwise(bytes,bytes)"
+  "KontrolOwnerTable.prove_addOwner_rejects_non_entrypoint(address,bytes)"
+  "KontrolOwnerTable.prove_removeOwner_rejects_non_entrypoint(address,bytes)"
+  "KontrolValidateUserOp.prove_validate_slot_nonbypass(uint256,uint256,bool)"
+  "KontrolValidateUserOp.prove_validate_bootstrap_nonbypass(uint256,bool)"
+  "KontrolValidateUserOp.prove_validate_rejects_unset_owner(bool)"
+  "KontrolValidateUserOp.prove_validate_rejects_non_entrypoint(address)"
+  "KontrolValidateUserOp.prove_validate_rejects_bad_offset(uint256)"
+  "KontrolValidateUserOp.prove_validate_rejects_bad_innerlen(uint256)"
+  "KontrolValidateUserOp.prove_validate_rejects_bad_tailpad(bytes32)"
 )
 
 # Emit the exact contract-qualified proof identities wired in the source tree.
@@ -107,9 +108,56 @@ _assert_expected_identity_text() {
   fi
 }
 
-# check_proof_inventory: the pinned baseline must match the exact wired tree.
+# The early source parser intentionally records names only. The load-bearing
+# signature check uses fresh compiler artifacts after `kontrol build`; this
+# preflight still catches a missing, renamed, or unexpected source proof before
+# staging/backend work begins.
+_assert_expected_source_names_text() {
+  local actual_text="$1"
+  local expected_text
+  expected_text=$(printf '%s\n' "${EXPECTED_PROOFS[@]}" | sed 's/(.*$//' | sort)
+  if [ "$actual_text" != "$expected_text" ]; then
+    echo "==> FAIL: wired Kontrol proof names differ from EXPECTED_PROOFS" >&2
+    echo "    missing:" >&2
+    comm -23 <(printf '%s\n' "$expected_text") <(printf '%s\n' "$actual_text") |
+      sed 's/^/      - /' >&2
+    echo "    unexpected:" >&2
+    comm -13 <(printf '%s\n' "$expected_text") <(printf '%s\n' "$actual_text") |
+      sed 's/^/      - /' >&2
+    return 1
+  fi
+}
+
+# check_proof_inventory: the pinned baseline must match the wired source names.
 check_proof_inventory() {
-  _assert_expected_identity_text "$(_wired_proof_inventory)"
+  _assert_expected_source_names_text "$(_wired_proof_inventory)"
+}
+
+# Emit compiler-canonical identities from every fresh Kontrol*.json artifact.
+# `forge clean` runs immediately before `kontrol build`, so this cannot accept a
+# deleted harness through stale artifacts. Scanning all matching artifacts also
+# makes a newly added KontrolEvil.prove_* identity fail as unexpected.
+_compiled_proof_inventory() {
+  python3 - "$SW/out" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+out_dir = Path(sys.argv[1])
+for artifact in sorted(out_dir.glob("*.t.sol/Kontrol*.json")):
+    contract = artifact.stem
+    data = json.loads(artifact.read_text(encoding="utf-8"))
+    methods = data.get("methodIdentifiers")
+    if not isinstance(methods, dict):
+        raise SystemExit(f"malformed Foundry artifact (no methodIdentifiers): {artifact}")
+    for signature in sorted(methods):
+        if signature.startswith("prove_"):
+            print(f"{contract}.{signature}")
+PY
+}
+
+check_compiled_proof_inventory() {
+  _assert_expected_identity_text "$(_compiled_proof_inventory | sort)"
 }
 
 _is_expected_proof() {
@@ -128,7 +176,7 @@ _is_expected_proof() {
 #       nodes / pending / failing / ...
 #   Subproofs: 0
 # _kontrol_list_records prints one tab-separated row per proof:
-#   <Contract>.<function>  <version>  <status>  <admitted>
+#   <Contract>.<function>(<ABI types>)  <version>  <status>  <admitted>
 # Missing or ambiguous fields are emitted explicitly and therefore fail closed
 # in assert_kontrol_list. Line-based (no multiline-record regexes) so it
 # behaves identically under gawk and mawk.
@@ -160,7 +208,6 @@ _kontrol_list_records() {
         version = suffix
       }
       sub(/^.*%/, "", raw)
-      sub(/\(.*/, "", raw)
       proof_id = raw
     }
     BEGIN                                          { reset() }
@@ -224,7 +271,7 @@ self_test() {
   local d; d="$(mktemp -d /tmp/pq1-kontrol-baseline-selftest.XXXXXX)"
   local mk_block
   mk_block() {  # <id> <version> <status> <admitted|OMIT>
-    printf 'APRProof: test%%kontrol%%%s():%s\n    status: %s\n' "$1" "$2" "$3"
+    printf 'APRProof: test%%kontrol%%%s:%s\n    status: %s\n' "$1" "$2" "$3"
     if [ "$4" != "OMIT" ]; then
       printf '    admitted: %s\n' "$4"
     fi
@@ -236,63 +283,75 @@ self_test() {
   # affect the authoritative result.
   : > "$d/complete.txt"
   for id in "${EXPECTED_PROOFS[@]}"; do mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/complete.txt"; done
-  mk_block "KontrolSetup.setUp" "7" "ProofStatus.FAILED" "OMIT" >> "$d/complete.txt"
+  mk_block "KontrolSetup.setUp()" "7" "ProofStatus.FAILED" "OMIT" >> "$d/complete.txt"
   # missing-one: drop the last expected proof
   : > "$d/missing.txt"
   for id in "${EXPECTED_PROOFS[@]:0:$((${#EXPECTED_PROOFS[@]}-1))}"; do mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/missing.txt"; done
   # failed-one: one proof FAILED
   : > "$d/failed.txt"
   for id in "${EXPECTED_PROOFS[@]}"; do
-    if [ "$id" = "KontrolExecute.prove_execute_pointwise" ]; then mk_block "$id" "0" "ProofStatus.FAILED" "False" >> "$d/failed.txt"; else mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/failed.txt"; fi
+    if [ "$id" = "KontrolExecute.prove_execute_pointwise(uint256,uint256,uint256,uint256,bytes)" ]; then mk_block "$id" "0" "ProofStatus.FAILED" "False" >> "$d/failed.txt"; else mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/failed.txt"; fi
   done
   # admitted-one: one proof PASSED but admitted (not a real proof)
   : > "$d/admitted.txt"
   for id in "${EXPECTED_PROOFS[@]}"; do
-    if [ "$id" = "KontrolFactory.prove_createAccount_iff" ]; then mk_block "$id" "0" "ProofStatus.PASSED" "True" >> "$d/admitted.txt"; else mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/admitted.txt"; fi
+    if [ "$id" = "KontrolFactory.prove_createAccount_iff(uint64,bool)" ]; then mk_block "$id" "0" "ProofStatus.PASSED" "True" >> "$d/admitted.txt"; else mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/admitted.txt"; fi
   done
   # missing-admission: omission must not be interpreted as False
   : > "$d/missing-admission.txt"
   for id in "${EXPECTED_PROOFS[@]}"; do
-    if [ "$id" = "KontrolOwnerTable.prove_initialize_one_shot" ]; then mk_block "$id" "0" "ProofStatus.PASSED" "OMIT" >> "$d/missing-admission.txt"; else mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/missing-admission.txt"; fi
+    if [ "$id" = "KontrolOwnerTable.prove_initialize_one_shot(bytes,bytes)" ]; then mk_block "$id" "0" "ProofStatus.PASSED" "OMIT" >> "$d/missing-admission.txt"; else mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/missing-admission.txt"; fi
   done
   # duplicate-version: a stale v0 pass plus a newer v1 failure is ambiguous,
   # not a valid proof receipt.
   cp "$d/complete.txt" "$d/duplicate-version.txt"
-  mk_block "KontrolExecute.prove_execute_pointwise" "1" "ProofStatus.FAILED" "False" >> "$d/duplicate-version.txt"
+  mk_block "KontrolExecute.prove_execute_pointwise(uint256,uint256,uint256,uint256,bytes)" "1" "ProofStatus.FAILED" "False" >> "$d/duplicate-version.txt"
   # wrong-version: one passing record at a nonzero version is not fresh v0.
   : > "$d/wrong-version.txt"
   for id in "${EXPECTED_PROOFS[@]}"; do
-    if [ "$id" = "KontrolValidateUserOp.prove_validate_slot_nonbypass" ]; then mk_block "$id" "1" "ProofStatus.PASSED" "False" >> "$d/wrong-version.txt"; else mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/wrong-version.txt"; fi
+    if [ "$id" = "KontrolValidateUserOp.prove_validate_slot_nonbypass(uint256,uint256,bool)" ]; then mk_block "$id" "1" "ProofStatus.PASSED" "False" >> "$d/wrong-version.txt"; else mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/wrong-version.txt"; fi
   done
   # unexpected selected prove_* record: all expected records plus a same-scope
   # proof must fail (non-prove setup records above remain allowed).
   cp "$d/complete.txt" "$d/unexpected-proof.txt"
-  mk_block "KontrolEvil.prove_bypass" "0" "ProofStatus.PASSED" "False" >> "$d/unexpected-proof.txt"
+  mk_block "KontrolEvil.prove_bypass()" "0" "ProofStatus.PASSED" "False" >> "$d/unexpected-proof.txt"
+  # Same proof name and count, but a narrowed ABI type: this used to pass after
+  # the parser erased the `(types)` suffix.
+  sed 's/prove_createAccount_iff(uint64,bool)/prove_createAccount_iff(uint8,bool)/' \
+    "$d/complete.txt" > "$d/signature-drift.txt"
   # empty fixture
   : > "$d/empty.txt"
 
-  echo "-- self-test 1/10: complete fixture (${#EXPECTED_PROOFS[@]} PASSED v0 + unrelated setup record) — must be ACCEPTED"
+  echo "-- self-test 1/12: complete fixture (${#EXPECTED_PROOFS[@]} PASSED v0 + unrelated setup record) — must be ACCEPTED"
   if assert_kontrol_list "$d/complete.txt" >/dev/null 2>&1; then echo "   OK: accepted"; else echo "   CONTROL FAILURE: rejected a complete list" >&2; rc=1; fi
-  echo "-- self-test 2/10: missing-one fixture ($((${#EXPECTED_PROOFS[@]}-1)) PASSED) — must be REJECTED"
+  echo "-- self-test 2/12: missing-one fixture ($((${#EXPECTED_PROOFS[@]}-1)) PASSED) — must be REJECTED"
   if assert_kontrol_list "$d/missing.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: missing proof accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 3/10: failed-status fixture — must be REJECTED"
+  echo "-- self-test 3/12: failed-status fixture — must be REJECTED"
   if assert_kontrol_list "$d/failed.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: FAILED proof accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 4/10: admitted-proof fixture — must be REJECTED"
+  echo "-- self-test 4/12: admitted-proof fixture — must be REJECTED"
   if assert_kontrol_list "$d/admitted.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: admitted proof accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 5/10: missing-admission fixture — must be REJECTED"
+  echo "-- self-test 5/12: missing-admission fixture — must be REJECTED"
   if assert_kontrol_list "$d/missing-admission.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: proof without explicit admission state accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 6/10: duplicate v0-PASSED + v1-FAILED fixture — must be REJECTED"
+  echo "-- self-test 6/12: duplicate v0-PASSED + v1-FAILED fixture — must be REJECTED"
   if assert_kontrol_list "$d/duplicate-version.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: duplicate proof versions accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 7/10: single nonzero-version fixture — must be REJECTED"
+  echo "-- self-test 7/12: single nonzero-version fixture — must be REJECTED"
   if assert_kontrol_list "$d/wrong-version.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: nonzero proof version accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 8/10: unexpected Kontrol*.prove_* record — must be REJECTED"
+  echo "-- self-test 8/12: unexpected Kontrol*.prove_* record — must be REJECTED"
   if assert_kontrol_list "$d/unexpected-proof.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: unexpected selected proof accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 9/10: same-count identity swap — must be REJECTED"
+  echo "-- self-test 9/12: same-name result signature drift — must be REJECTED"
+  if assert_kontrol_list "$d/signature-drift.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: narrowed proof signature accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
+  echo "-- self-test 10/12: same-count source-name swap — must be REJECTED"
   local wired swapped
   wired="$(_wired_proof_inventory)"
   swapped=$(printf '%s\n' "$wired" | sed '1cKontrolEvil.prove_bypass' | sort)
-  if _assert_expected_identity_text "$swapped" >/dev/null 2>&1; then echo "   CONTROL FAILURE: same-count identity swap accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 10/10: empty fixture — must be REJECTED"
+  if _assert_expected_source_names_text "$swapped" >/dev/null 2>&1; then echo "   CONTROL FAILURE: same-count source-name swap accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
+  echo "-- self-test 11/12: same-name compiled signature drift — must be REJECTED"
+  local compiled_drift
+  compiled_drift=$(printf '%s\n' "${EXPECTED_PROOFS[@]}" |
+    sed 's/prove_createAccount_iff(uint64,bool)/prove_createAccount_iff(uint8,bool)/' |
+    sort)
+  if _assert_expected_identity_text "$compiled_drift" >/dev/null 2>&1; then echo "   CONTROL FAILURE: narrowed compiled signature accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
+  echo "-- self-test 12/12: empty fixture — must be REJECTED"
   if assert_kontrol_list "$d/empty.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: green-at-zero accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
   rm -rf "$d"
   if [ "$rc" -eq 0 ]; then
@@ -312,6 +371,12 @@ case "${1:-}" in
     [ $# -eq 2 ] || { echo "usage: $0 --check-output <kontrol-list-output-file>" >&2; exit 2; }
     check_proof_inventory
     assert_kontrol_list "$2"
+    exit $?
+    ;;
+  --check-artifacts)
+    [ $# -eq 1 ] || { echo "usage: $0 --check-artifacts" >&2; exit 2; }
+    check_proof_inventory
+    check_compiled_proof_inventory
     exit $?
     ;;
 esac
@@ -405,6 +470,7 @@ forge clean
 # is the tripwire, not run_kontrol.sh.
 echo "=== kontrol build ==="
 kontrol build --verbose
+check_compiled_proof_inventory
 
 # Prove every `prove_*` test in the Kontrol* harnesses. Delete persistent proof
 # state first and force every selected proof to restart at fresh version 0.

@@ -523,7 +523,12 @@ EXTRACTED_DIR := extracted
 PQLEAN        := $(HOME)/.local/share/pqsigner-lean
 REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
-.PHONY: verify-extracted verify-extract-differential verify-extraction-freshness verify-extraction-regen extract-sphincs-adrs extract-aa-userop extract-fors-index extract-format-decimal extract-pinstate extract-slotkdf
+.PHONY: verify-extracted verify-extract-differential verify-extraction-freshness verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop extract-sphincs-adrs extract-aa-userop extract-fors-index extract-format-decimal extract-pinstate extract-slotkdf
+
+# Test seam for the toolchain-backed replay loop. The production value is this
+# Make instance; the self-test substitutes /bin/true to prove that a waived
+# extraction which unexpectedly succeeds makes the aggregate target fail.
+EXTRACTION_REPLAY ?= $(MAKE)
 
 # F1 (2026-07-16) — TOOLCHAIN-FREE extraction freshness tripwire. The extract-*
 # regen-diff targets below are the REAL freshness check but need the §33
@@ -549,16 +554,32 @@ verify-extraction-freshness: ## F1 toolchain-free extraction freshness tripwire 
 # registry entry that drifts is a FAILURE; the `fresh:false` waived entry
 # (tx-merkle — Aeneas can no longer translate it) is EXPECTED to fail and only
 # flags if it unexpectedly re-extracts (bump it to fresh + `--update <target>` then).
-verify-extraction-regen: ## F1 REAL regen: re-run every extract-* + diff (needs charon/aeneas toolchain)
+verify-extraction-regen: verify-extraction-regen-self-test ## F1 REAL regen: re-run every extract-* + diff (needs charon/aeneas toolchain)
+	@$(MAKE) --no-print-directory _verify-extraction-regen-loop
+
+verify-extraction-regen-self-test: ## Negative controls for signature/value parity + recovered-waiver failure
+	@python3 scripts/check_extraction_regen_output.py --self-test-lean
+	@out=$$(mktemp /tmp/pq-extraction-waiver-selftest.XXXXXX); \
+	if $(MAKE) --no-print-directory _verify-extraction-regen-loop EXTRACTION_REPLAY=/bin/true >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: waived extraction unexpectedly re-extracted but aggregate replay exited zero" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -q 'UNEXPECTED-FRESH' $$out; then \
+	  echo "CONTROL FAILURE: recovered-waiver negative control failed for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: unexpectedly fresh waived extraction is CAUGHT"
+
+_verify-extraction-regen-loop:
 	@echo "=== F1 extraction regen: re-running charon->aeneas + diff for every registry target ==="
 	@fail=0; \
 	for t in $$(python3 -c "import json;print(' '.join(e['target'] for e in json.load(open('extraction_registry.json'))['entries'] if e.get('fresh',True)))"); do \
-	  if $(MAKE) $$t >/dev/null 2>&1; then echo "  fresh: $$t"; else echo "  DRIFT: $$t (re-extract/re-prove/re-pin via --update $$t)"; fail=1; fi; \
+	  if $(EXTRACTION_REPLAY) $$t >/dev/null 2>&1; then echo "  fresh: $$t"; else echo "  DRIFT: $$t (re-extract/re-prove/re-pin via --update $$t)"; fail=1; fi; \
 	done; \
 	for t in $$(python3 -c "import json;print(' '.join(e['target'] for e in json.load(open('extraction_registry.json'))['entries'] if not e.get('fresh',True)))"); do \
-	  if $(MAKE) $$t >/dev/null 2>&1; then echo "  UNEXPECTED-FRESH (waived entry re-extracts! promote to fresh + --update $$t): $$t"; else echo "  waived-stale (expected): $$t"; fi; \
+	  if $(EXTRACTION_REPLAY) $$t >/dev/null 2>&1; then echo "  UNEXPECTED-FRESH (waived entry re-extracts! promote to fresh + --update $$t): $$t"; fail=1; else echo "  waived-stale (expected): $$t"; fi; \
 	done; \
-	if [ $$fail != 0 ]; then echo "FAIL: a fresh extraction drifted from its committed Lean"; exit 1; fi; \
+	if [ $$fail != 0 ]; then echo "FAIL: a fresh extraction drifted or a waived extraction unexpectedly recovered"; exit 1; fi; \
 	echo "OK: all fresh extractions re-extract cleanly; waived entries unchanged"
 
 # roadmap T1.3 (ii) — extracted-Lean vs shipped-Rust DIFFERENTIAL gate.

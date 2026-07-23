@@ -9,9 +9,9 @@ fresh, clean Aeneas output directory and enforces:
 * the exact expected raw `*.lean` filename set (no omitted/unexpected module);
 * byte-for-byte equality for generated Funs/Types after the target's existing
   deterministic Funs transform;
-* exact `rust_fun`/`rust_const`/`rust_type` interface equality between generated
-  `*External_Template.lean` files and their deliberately hand-completed
-  committed `*External.lean` counterparts.
+* attribute-to-declaration binding and Lean-elaborated type equality between
+  generated `*External_Template.lean` files and their deliberately
+  hand-completed committed `*External.lean` counterparts.
 
 FormatDecimal's generated `Types.lean` is intentionally deduplicated into the
 canonical U256Mul Types module, so that one raw file is compared there.
@@ -22,9 +22,12 @@ import collections
 import hashlib
 import json
 import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+from check_extraction_freshness import max_attempts_consistency_errors
 
 VERIF_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -39,6 +42,46 @@ DECL_RE = re.compile(
     r"(?:noncomputable[ \t]+)?def)"
     r"[ \t\r\n]+([A-Za-z0-9_'.]+)"
 )
+DECL_AFTER_ATTR_RE = re.compile(
+    r"^(?:(?:[ \t\r\n]+)|(?:--[^\r\n]*(?:\r?\n|$))|(?:/-.*?-/))*"
+    r"(?:axiom|structure|inductive|opaque|abbrev|"
+    r"(?:noncomputable[ \t]+)?def)"
+    r"[ \t\r\n]+([A-Za-z0-9_'.]+)",
+    re.DOTALL,
+)
+AXIOM_NAME_RE = re.compile(
+    r"(?m)^([ \t]*axiom[ \t\r\n]+)([A-Za-z0-9_'.]+)"
+)
+IMPORT_LINE_RE = re.compile(r"(?m)^[ \t]*import[^\r\n]*(?:\r?\n|$)")
+
+# Opaque functions are emitted as un-attributed template axioms by Aeneas, but
+# these committed implementations deliberately carry rust_fun bindings. Keep
+# that asymmetry explicit and checker-owned; every other local extra is drift.
+ALLOWED_EXTRA_LOCAL_BINDINGS = {
+    ("extract-hash-fns", "FunsExternal.lean"): collections.Counter(
+        {
+            (
+                "rust_fun",
+                "sphincs_c10::hash::sha256_bytes",
+                "hash.sha256_bytes",
+            ): 1
+        }
+    ),
+    ("extract-tx-merkle", "FunsExternal.lean"): collections.Counter(
+        {
+            (
+                "rust_fun",
+                "pqsigner_tx::erc20::merkle::leaf_hash",
+                "erc20.merkle.leaf_hash",
+            ): 1,
+            (
+                "rust_fun",
+                "pqsigner_tx::erc20::merkle::node_hash",
+                "erc20.merkle.node_hash",
+            ): 1,
+        }
+    ),
+}
 
 
 def external_attributes(text: str) -> collections.Counter[tuple[str, str]]:
@@ -47,6 +90,25 @@ def external_attributes(text: str) -> collections.Counter[tuple[str, str]]:
 
 def declaration_names(text: str) -> collections.Counter[str]:
     return collections.Counter(DECL_RE.findall(text))
+
+
+def attributed_declarations(
+    text: str,
+) -> tuple[collections.Counter[tuple[str, str, str]], list[str]]:
+    """Bind each rust_* attribute to the declaration immediately following it."""
+    records: collections.Counter[tuple[str, str, str]] = collections.Counter()
+    errors: list[str] = []
+    for attr in ATTR_RE.finditer(text):
+        declaration = DECL_AFTER_ATTR_RE.match(text[attr.end():])
+        kind, rust_name = attr.groups()
+        if declaration is None:
+            errors.append(
+                f'attribute {kind} "{rust_name}" is not immediately attached '
+                "to a supported declaration"
+            )
+            continue
+        records[(kind, rust_name, declaration.group(1))] += 1
+    return records, errors
 
 
 def extracted_import_path(module: str) -> Path:
@@ -89,6 +151,75 @@ def compare_exact(label: str, committed: Path, regenerated: Path) -> list[str]:
     return []
 
 
+def run_lean_source(source: str) -> subprocess.CompletedProcess[str]:
+    """Elaborate an ephemeral conformance module in the extracted Lean project."""
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        suffix=".lean",
+        prefix="pq-extraction-interface-",
+    ) as module:
+        module.write(source)
+        module.flush()
+        return subprocess.run(
+            ["lake", "env", "lean", module.name],
+            cwd=VERIF_DIR / "extracted",
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+
+
+def lean_signature_errors(
+    label: str, committed: Path, template_text: str
+) -> list[str]:
+    """Require generated axiom types to equal committed declaration types.
+
+    The regenerated declarations are renamed under a private prefix so the
+    committed module and exact template signatures can be elaborated together.
+    A homogeneous equality axiom is then declared for each pair: Lean accepts
+    that proposition only when both terms have definitionally equal types.
+    """
+    declaration_names_in_order = AXIOM_NAME_RE.findall(template_text)
+    names = [name for _, name in declaration_names_in_order]
+    if not names:
+        return []
+    try:
+        relative = committed.relative_to(VERIF_DIR / "extracted").with_suffix("")
+    except ValueError:
+        return [f"{label}: committed external module is outside extracted project"]
+    module_name = ".".join(relative.parts)
+
+    transformed = IMPORT_LINE_RE.sub("", template_text)
+    transformed = ATTR_RE.sub("", transformed)
+    transformed = AXIOM_NAME_RE.sub(
+        lambda match: (
+            f"{match.group(1)}ExtractionRegenExpected.{match.group(2)}"
+        ),
+        transformed,
+    )
+    checks = "\n".join(
+        "axiom ExtractionRegenSignature"
+        f"{index} : (@ExtractionRegenExpected.{name}) = (@{name})"
+        for index, name in enumerate(names)
+    )
+    source = f"import {module_name}\n{transformed}\n{checks}\n"
+    try:
+        result = run_lean_source(source)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [f"{label}: Lean signature conformance check could not run: {exc}"]
+    if result.returncode == 0:
+        return []
+    output = (result.stdout + "\n" + result.stderr).strip().splitlines()
+    detail = "\n".join(output[-12:])
+    return [
+        f"{label}: regenerated external declaration type differs from committed "
+        f"interface (Lean exit {result.returncode})"
+        + (f":\n{detail}" if detail else "")
+    ]
+
+
 def raw_output_errors(
     output_dir: Path, pins: dict[str, str], ignored: set[str]
 ) -> list[str]:
@@ -114,7 +245,14 @@ def raw_output_errors(
 
 
 def compare_external_interface(
-    label: str, committed: Path, template: Path
+    label: str,
+    committed: Path,
+    template: Path,
+    *,
+    check_lean_types: bool = True,
+    allowed_extra_local_bindings: (
+        collections.Counter[tuple[str, str, str]] | None
+    ) = None,
 ) -> list[str]:
     if not committed.is_file() or not template.is_file():
         return [
@@ -123,22 +261,80 @@ def compare_external_interface(
         ]
     template_text = template.read_text(encoding="utf-8")
     closure = imported_text_closure(committed)
-    expected_attrs = external_attributes(template_text)
-    actual_attrs: collections.Counter[tuple[str, str]] = collections.Counter()
+    expected_bindings, expected_binding_errors = attributed_declarations(
+        template_text
+    )
+    actual_bindings: collections.Counter[tuple[str, str, str]] = (
+        collections.Counter()
+    )
     actual_decls: collections.Counter[str] = collections.Counter()
     for text in closure:
-        actual_attrs.update(external_attributes(text))
+        records, _ = attributed_declarations(text)
+        actual_bindings.update(records)
         actual_decls.update(declaration_names(text))
+    local_bindings, local_binding_errors = attributed_declarations(closure[0])
+    allowed_extra_local_bindings = (
+        allowed_extra_local_bindings or collections.Counter()
+    )
     expected_decls = declaration_names(template_text)
-    missing_attrs = sorted((expected_attrs - actual_attrs).elements())
+    missing_bindings = sorted((expected_bindings - actual_bindings).elements())
+    duplicate_bindings = sorted(
+        record
+        for record, expected_count in expected_bindings.items()
+        if actual_bindings[record] != expected_count
+        and actual_bindings[record] > expected_count
+    )
+    unexpected_local_bindings = sorted(
+        (
+            local_bindings
+            - expected_bindings
+            - allowed_extra_local_bindings
+        ).elements()
+    )
+    missing_allowed_local_bindings = sorted(
+        (allowed_extra_local_bindings - local_bindings).elements()
+    )
     missing_decls = sorted((expected_decls - actual_decls).elements())
-    if missing_attrs or missing_decls:
-        return [
-            f"{label}: hand-completed/imported external interface does not cover "
-            f"the regenerated template; missing_attributes={missing_attrs}, "
+    errors = [
+        f"{label}: regenerated template {message}"
+        for message in expected_binding_errors
+    ]
+    errors.extend(
+        f"{label}: committed external module {message}"
+        for message in local_binding_errors
+    )
+    if (
+        missing_bindings
+        or duplicate_bindings
+        or unexpected_local_bindings
+        or missing_allowed_local_bindings
+        or missing_decls
+    ):
+        errors.append(
+            f"{label}: hand-completed/imported external interface does not "
+            "match the regenerated template; "
+            f"missing_bindings={missing_bindings}, "
+            f"duplicate_bindings={duplicate_bindings}, "
+            f"unexpected_local_bindings={unexpected_local_bindings}, "
+            f"missing_checker_owned_local_bindings="
+            f"{missing_allowed_local_bindings}, "
             f"missing_declarations={missing_decls}"
-        ]
-    return []
+        )
+    if check_lean_types:
+        errors.extend(lean_signature_errors(label, committed, template_text))
+    return errors
+
+
+def target_specific_errors(
+    target: str,
+    *,
+    proto_text: str | None = None,
+    pinstate_lean_text: str | None = None,
+) -> list[str]:
+    """Checks required by a hand-completed target beyond generator signatures."""
+    if target != "extract-pinstate":
+        return []
+    return max_attempts_consistency_errors(proto_text, pinstate_lean_text)
 
 
 def check_target(target: str, output_dir: Path, transformed_funs: Path | None) -> list[str]:
@@ -160,6 +356,11 @@ def check_target(target: str, output_dir: Path, transformed_funs: Path | None) -
                     f"{target} FunsExternal",
                     committed,
                     output_dir / raw_name,
+                    allowed_extra_local_bindings=(
+                        ALLOWED_EXTRA_LOCAL_BINDINGS.get(
+                            (target, name), collections.Counter()
+                        )
+                    ),
                 )
             )
         elif name == "TypesExternal.lean":
@@ -169,6 +370,11 @@ def check_target(target: str, output_dir: Path, transformed_funs: Path | None) -
                     f"{target} TypesExternal",
                     committed,
                     output_dir / raw_name,
+                    allowed_extra_local_bindings=(
+                        ALLOWED_EXTRA_LOCAL_BINDINGS.get(
+                            (target, name), collections.Counter()
+                        )
+                    ),
                 )
             )
         elif name == "Funs.lean":
@@ -191,6 +397,8 @@ def check_target(target: str, output_dir: Path, transformed_funs: Path | None) -
                 output_dir / "Types.lean",
             )
         )
+
+    errors.extend(target_specific_errors(target))
 
     ignored = {
         path.name for path in output_dir.glob("*.fixed.lean")
@@ -234,14 +442,55 @@ def self_test() -> int:
             '@[rust_const "crate::LIMIT"]\ndef crate.LIMIT : Nat := 10\n',
             encoding="utf-8",
         )
-        if compare_external_interface("clean external", external, template):
+        if compare_external_interface(
+            "clean external", external, template, check_lean_types=False
+        ):
             print("FAIL: matching hand-completed external interface was rejected")
             ok = False
         external.write_text("def crate.LIMIT : Nat := 10\n", encoding="utf-8")
-        if compare_external_interface("mutant external", external, template):
+        if compare_external_interface(
+            "mutant external", external, template, check_lean_types=False
+        ):
             print("  ok: dropped generated external-template identity is CAUGHT")
         else:
             print("FAIL: dropped external-template identity escaped")
+            ok = False
+
+        template.write_text(
+            '@[rust_const "crate::LIMIT"]\naxiom crate.LIMIT : Nat\n'
+            '@[rust_fun "crate::read_limit"]\n'
+            "axiom crate.read_limit : Nat → Nat\n",
+            encoding="utf-8",
+        )
+        external.write_text(
+            '@[rust_const "crate::LIMIT"]\n'
+            "def crate.read_limit : Nat → Nat := fun value => value\n"
+            '@[rust_fun "crate::read_limit"]\n'
+            "def crate.LIMIT : Nat := 10\n",
+            encoding="utf-8",
+        )
+        if compare_external_interface(
+            "swapped binding", external, template, check_lean_types=False
+        ):
+            print("  ok: attribute-to-declaration swap is CAUGHT")
+        else:
+            print("FAIL: swapped external attribute bindings escaped")
+            ok = False
+
+        external.write_text(
+            '@[rust_const "crate::LIMIT"]\ndef crate.LIMIT : Nat := 10\n'
+            '@[rust_fun "crate::read_limit"]\n'
+            "def crate.read_limit : Nat → Nat := fun value => value\n"
+            '@[rust_const "crate::UNEXPECTED"]\n'
+            "def crate.UNEXPECTED : Nat := 0\n",
+            encoding="utf-8",
+        )
+        if compare_external_interface(
+            "extra binding", external, template, check_lean_types=False
+        ):
+            print("  ok: unexpected local external binding is CAUGHT")
+        else:
+            print("FAIL: unexpected local external binding escaped")
             ok = False
 
         raw = root / "raw"
@@ -279,10 +528,68 @@ def self_test() -> int:
     return 0 if ok else 1
 
 
+def self_test_lean() -> int:
+    """Toolchain-backed controls used only by the real regeneration gate."""
+    ok = True
+    matching = run_lean_source(
+        "axiom Expected.limit : Nat\n"
+        "def Actual.limit : Nat := 10\n"
+        "axiom Signature : Expected.limit = Actual.limit\n"
+    )
+    if matching.returncode == 0:
+        print("  ok: matching external declaration signature is ACCEPTED")
+    else:
+        print("FAIL: matching external declaration signature was rejected")
+        ok = False
+
+    mismatched = run_lean_source(
+        "axiom Expected.limit : Nat\n"
+        "def Actual.limit : Bool := true\n"
+        "axiom Signature : Expected.limit = Actual.limit\n"
+    )
+    if mismatched.returncode != 0:
+        print("  ok: same-name external declaration type drift is CAUGHT")
+    else:
+        print("FAIL: wrong external declaration type escaped Lean conformance")
+        ok = False
+
+    matching_pin = target_specific_errors(
+        "extract-pinstate",
+        proto_text="pub const MAX_ATTEMPTS: u8 = 10;\n",
+        pinstate_lean_text=(
+            "def pqsigner_proto.MAX_ATTEMPTS : Result Std.U8 := ok 10#u8\n"
+        ),
+    )
+    if not matching_pin:
+        print("  ok: matching PinState MAX_ATTEMPTS is ACCEPTED")
+    else:
+        print(f"FAIL: matching PinState MAX_ATTEMPTS rejected: {matching_pin}")
+        ok = False
+
+    stale_pin = target_specific_errors(
+        "extract-pinstate",
+        proto_text="pub const MAX_ATTEMPTS: u8 = 10;\n",
+        pinstate_lean_text=(
+            "def pqsigner_proto.MAX_ATTEMPTS : Result Std.U8 := ok 11#u8\n"
+        ),
+    )
+    if stale_pin:
+        print("  ok: stale hand-completed PinState MAX_ATTEMPTS is CAUGHT")
+    else:
+        print("FAIL: stale hand-completed PinState MAX_ATTEMPTS escaped regen")
+        ok = False
+
+    print("check_extraction_regen_output --self-test-lean PASS" if ok else
+          "check_extraction_regen_output --self-test-lean FAILED")
+    return 0 if ok else 1
+
+
 def main() -> int:
     args = sys.argv[1:]
     if args == ["--self-test"]:
         return self_test()
+    if args == ["--self-test-lean"]:
+        return self_test_lean()
     if len(args) not in (2, 3):
         print(
             "usage: check_extraction_regen_output.py "
