@@ -391,19 +391,23 @@
       "make_dir": "contracts/verification",
       "crate": "domain",
       "rust_files": [
-        "domain/src/lib.rs"
+        "domain/src/lib.rs",
+        "proto/src/lib.rs"
       ],
       "rust_files_sha256": [
-        "616208507c024d49a3fcb0a3b91219a23f3ecc4b284e6c6c49bb41f26da6b083"
+        "616208507c024d49a3fcb0a3b91219a23f3ecc4b284e6c6c49bb41f26da6b083",
+        "e4f31f96e1008cbba1bb34ec5e4a57acec27391e52dbdee8ea5c07f225d6b5f6"
       ],
       "generated_lean": [
         "contracts/verification/extracted/Extracted/PinState/Funs.lean",
         "contracts/verification/extracted/Extracted/PinState/Types.lean",
+        "contracts/verification/extracted/Extracted/PinState/TypesExternal.lean",
         "contracts/verification/extracted/Extracted/PinState/FunsExternal.lean"
       ],
       "generated_lean_sha256": [
         "87736e7843d4897e4e3f7d18a2250d373447b959671106364324b8b5a5c447b5",
         "05b2a2a04d2c741a09baee2189060694bb58d70228f29ffb3d193f8402d2d1b2",
+        "9644edb552d15adedb08b5f470e08457d26be2981d71bde8b98d362c9c2cb29b",
         "498dc1a7de717ced241f10c3afd79cb4f4e0834bdc086c55548d21d4530cb73c"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/PinState/PinStateSpec.lean",

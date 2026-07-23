@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """verify-extraction-freshness — the TOOLCHAIN-FREE half of the F1 fix (2026-07-16).
 
-THE GAP (FV review finding F1). The 15 `extract-*` Make targets regenerate the
+THE GAP (FV review finding F1). The 17 `extract-*` Make targets regenerate the
 Aeneas extraction and `diff` it against the committed `Extracted/<Mod>/Funs.lean`
 — a real freshness gate, but it needs the §33 charon/aeneas toolchain in
 `~/.local/share/pqsigner-lean`, so it is NOT runnable on a stock CI runner.
@@ -33,17 +33,18 @@ registry that only ever gets CHECKED is a registry that can be EDITED to green:
 deleting a drifted entry, emptying a paired file+pin list, marking an entry
 `fresh:false`, or rewriting the registry's own required-target list all used to
 evade the tripwire. The gate therefore owns the exact target identities and the
-only permitted waived-stale identity in code. It hard-fails on: (a) target
-identity/order drift, per-target Rust/generated-Lean path drift, duplicates, or
-mutable `required_targets` metadata that does not exactly mirror the
-checker-owned list; (b) EMPTY file/pin lists or LIST-LENGTH MISMATCH ("registry
-MALFORMED"); (c) any waiver other than the checker-owned `extract-tx-merkle`
-waiver; (d) any recursively discovered
-`extracted/Extracted/**/Funs.lean` module not registered in an entry. A pin
-referencing a file that does not exist still fails via the ordinary drift path.
-HONEST SCOPE, updated: the floors police REGISTRY integrity (malformation,
-shrinkage, waiver identity, unenrolled modules); they say nothing about whether
-a pinned extraction is semantically correct — that remains
+only permitted waived-stale identity in code. A checker-owned digest also binds
+the entire registry, including every pin and the waiver reason. It hard-fails
+on: (a) target identity/order drift, per-target Rust/generated-Lean path drift,
+duplicates, mutable `required_targets`, or any registry-binding drift; (b)
+EMPTY, malformed/all-zero, or length-mismatched pins; (c) any waiver other than
+the checker-owned `extract-tx-merkle` record, or any change from that waiver's
+expected live-drift state; (d) any recursively discovered `**/Funs.lean` or
+Aeneas-marker generated module not registered in an entry. A pin referencing a
+file that does not exist still fails via the ordinary drift path. HONEST SCOPE,
+updated: the floors police REGISTRY integrity (malformation, shrinkage, waiver
+identity, unenrolled modules); they say nothing about whether a pinned
+extraction is semantically correct — that remains
 `make verify-extraction-regen`.
 
 Usage:
@@ -59,12 +60,15 @@ Usage:
                                                 --update refuses (exit 2). Re-pinning a
                                                 WAIVED-STALE (fresh:false) entry with live
                                                 drift also refuses unless --waived-ok.
+                                                Any accepted re-pin also requires a reviewed
+                                                REGISTRY_BINDING_SHA256 update.
 """
 from __future__ import annotations
 
 import copy
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -159,9 +163,10 @@ REQUIRED_ENTRY_PATHS = {
          "contracts/verification/extracted/Extracted/Rlp/FunsExternal.lean"),
     ),
     "extract-pinstate": (
-        ("domain/src/lib.rs",),
+        ("domain/src/lib.rs", "proto/src/lib.rs"),
         ("contracts/verification/extracted/Extracted/PinState/Funs.lean",
          "contracts/verification/extracted/Extracted/PinState/Types.lean",
+         "contracts/verification/extracted/Extracted/PinState/TypesExternal.lean",
          "contracts/verification/extracted/Extracted/PinState/FunsExternal.lean"),
     ),
     "extract-slotkdf": (
@@ -173,6 +178,9 @@ REQUIRED_ENTRY_PATHS = {
 }
 REQUIRED_TARGETS = tuple(REQUIRED_ENTRY_PATHS)
 ALLOWED_WAIVED_TARGETS = frozenset({"extract-tx-merkle"})
+REGISTRY_BINDING_SHA256 = "8baf893c83b074cf5fd2959841c11abd2b2f41e1c35b864539f7e614e23fb312"
+EXPECTED_WAIVED_DRIFT = {"extract-tx-merkle": ()}
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 def sha256_file(path: Path) -> str:
@@ -185,6 +193,34 @@ def sha256_bytes(b: bytes) -> str:
 
 def load_registry() -> dict:
     return json.loads(REGISTRY.read_text(encoding="utf-8"))
+
+
+def registry_binding(reg: dict) -> str:
+    """Stable integrity binding for all mutable registry metadata and pins."""
+    canonical = json.dumps(
+        reg, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def discover_generated_modules() -> list[Path]:
+    """Recursively find committed Aeneas output.
+
+    Split extractions use Funs.lean; single-file output (for example Adrs.lean)
+    and generated Types.lean carry Aeneas's first-line marker. The union catches
+    both shapes while excluding the many hand-written proof/spec modules.
+    """
+    root = VERIF_DIR / "extracted" / "Extracted"
+    found = set(root.rglob("Funs.lean"))
+    for path in root.rglob("*.lean"):
+        try:
+            with path.open(encoding="utf-8", errors="replace") as source:
+                first_line = source.readline()
+        except OSError:
+            continue
+        if "THIS FILE WAS AUTOMATICALLY GENERATED BY AENEAS" in first_line:
+            found.add(path)
+    return sorted(found)
 
 
 def entry_drift(e: dict) -> list[str]:
@@ -214,6 +250,13 @@ def evaluate(reg: dict) -> tuple[list[str], list[str], list[str], int, int]:
     floor_fails: list[str] = []
     waived: list[str] = []
     fresh_ok = 0
+
+    live_binding = registry_binding(reg)
+    if live_binding != REGISTRY_BINDING_SHA256:
+        floor_fails.append(
+            "registry integrity binding mismatch — pins/waivers/metadata changed; "
+            f"expected {REGISTRY_BINDING_SHA256}, got {live_binding}"
+        )
 
     entries = reg.get("entries")
     if not isinstance(entries, list):
@@ -262,6 +305,14 @@ def evaluate(reg: dict) -> tuple[list[str], list[str], list[str], int, int]:
             floor_fails.append(f"entry {tgt}: registry MALFORMED (list length mismatch — "
                                f"possible dropped pin)")
             continue
+        pins = e["rust_files_sha256"] + e["generated_lean_sha256"]
+        if any(not isinstance(pin, str) or SHA256_RE.fullmatch(pin) is None
+               or pin == "0" * 64 for pin in pins):
+            floor_fails.append(
+                f"entry {tgt}: registry MALFORMED (every pin must be a nonzero "
+                "lowercase 64-hex sha256)"
+            )
+            continue
         expected_paths = REQUIRED_ENTRY_PATHS.get(tgt)
         if expected_paths is None:
             floor_fails.append(f"entry {tgt}: unexpected target has no checker-owned path identity")
@@ -294,6 +345,16 @@ def evaluate(reg: dict) -> tuple[list[str], list[str], list[str], int, int]:
 
         drift = entry_drift(e)
         if is_waived:
+            if not isinstance(e.get("waiver"), str) or not e["waiver"].strip():
+                floor_fails.append(
+                    f"entry {tgt}: checker-owned waiver requires a nonempty reason"
+                )
+            expected_drift = EXPECTED_WAIVED_DRIFT[tgt]
+            if tuple(drift) != expected_drift:
+                floor_fails.append(
+                    f"entry {tgt}: waived live drift changed — expected "
+                    f"{list(expected_drift)}, got {drift}; re-review the waiver"
+                )
             waived.append(f"{tgt}: WAIVED-STALE — {e.get('waiver', '(no reason given)')}"
                           + (f"  [+ live drift since pin: {'; '.join(drift)}]" if drift else ""))
             continue
@@ -312,7 +373,7 @@ def evaluate(reg: dict) -> tuple[list[str], list[str], list[str], int, int]:
         if isinstance(e, dict) and isinstance(e.get("generated_lean"), list)
         for g in e["generated_lean"]
     }
-    disk_modules = sorted((VERIF_DIR / "extracted" / "Extracted").rglob("Funs.lean"))
+    disk_modules = discover_generated_modules()
     for f in disk_modules:
         rel = f.relative_to(REPO_ROOT).as_posix()
         if rel not in registered:
@@ -328,7 +389,7 @@ def check() -> int:
     print(f"=== verify-extraction-freshness ({len(reg['entries'])} extractions) ===")
     print("    sha256 tripwire: committed generated Lean + mirrored Rust file. Toolchain-free.")
     floor_note = (f"registry floors OK ({n_modules} on-disk extracted module(s) all pinned, "
-                  f"checker-owned targets/waiver exact, non-empty pin lists matched)" if not floor_fails else
+                  f"registry digest + target/file/waiver identities exact, pins well-formed)" if not floor_fails else
                   f"registry floors VIOLATED ({len(floor_fails)} — see FAIL below)")
     print(f"    fresh & pinned-OK: {fresh_ok} | waived-stale: {len(waived)} | "
           f"drifted: {len(drift_fails)} | {floor_note}")
@@ -388,7 +449,8 @@ def update(args: list[str]) -> int:
     entry["generated_lean_sha256"] = [sha256_file(REPO_ROOT / g) for g in entry["generated_lean"]]
     REGISTRY.write_text(json.dumps(reg, indent=2) + "\n", encoding="utf-8")
     print(f"re-pinned {target} in {REGISTRY}. "
-          f"REMINDER: only valid if `make verify-extraction-regen` was green first.")
+          f"REMINDER: only valid if `make verify-extraction-regen` was green first; "
+          f"review and update REGISTRY_BINDING_SHA256 before the gate can pass.")
     return 0
 
 
@@ -400,13 +462,26 @@ def self_test() -> int:
     (F3/F13) the fail-closed registry floors must each fire on an IN-MEMORY
     mutated copy of the registry (the real extraction_registry.json is never
     touched): deleted entry, dropped pin, paired-empty file+pin lists, paired
-    path+pin deletion/replacement, rewritten required_targets metadata,
-    unauthorised fresh:false, and an unregistered on-disk module."""
+    path+pin deletion/replacement, blank/all-zero pins, waiver reason/drift
+    tampering, rewritten required_targets metadata, unauthorised fresh:false,
+    and an unregistered on-disk generated module."""
     print("=== check_extraction_freshness --self-test "
           "(FW-tag flip + fail-closed registry negative controls) ===")
     reg = load_registry()
     fw = next(e for e in reg["entries"] if e["target"] == "extract-fwmanifest-preimage")
     ok = True
+
+    if registry_binding(reg) == REGISTRY_BINDING_SHA256:
+        print("  ok: clean registry matches its checker-owned integrity binding")
+    else:
+        print("  FAIL: clean registry does not match REGISTRY_BINDING_SHA256")
+        ok = False
+    adrs = REPO_ROOT / "contracts/verification/extracted/Extracted/Adrs.lean"
+    if adrs in discover_generated_modules():
+        print("  ok: recursive generated-module census includes single-file Adrs.lean")
+    else:
+        print("  FAIL: generated-module census missed single-file Aeneas output Adrs.lean")
+        ok = False
 
     # Clean control: the real files must MATCH their pins (fresh entry).
     rust = REPO_ROOT / fw["rust_files"][0]
@@ -540,7 +615,47 @@ def self_test() -> int:
         print(f"  FAIL: fresh:false on '{victim['target']}' bypassed drift checking!")
         ok = False
 
-    # (h) recursive completeness floor: a copy missing one REAL on-disk module
+    # (h) blank/all-zero pins and a missing waiver reason on the sole authorized
+    #     stale entry must fail before waiver handling can hide them.
+    for label, replacement in (("blank", ""), ("all-zero", "0" * 64)):
+        bad_pin = copy.deepcopy(reg)
+        victim = next(e for e in bad_pin["entries"]
+                      if e["target"] == "extract-tx-merkle")
+        victim["rust_files_sha256"][0] = replacement
+        fh = evaluate(bad_pin)[1]
+        if any("nonzero lowercase 64-hex sha256" in m and victim["target"] in m for m in fh):
+            print(f"  ok: {label} pin on authorized waiver fails (pin-shape floor fires)")
+        else:
+            print(f"  FAIL: {label} pin on authorized waiver passed!")
+            ok = False
+
+    no_reason = copy.deepcopy(reg)
+    victim = next(e for e in no_reason["entries"]
+                  if e["target"] == "extract-tx-merkle")
+    victim.pop("waiver")
+    fi = evaluate(no_reason)[1]
+    if any("requires a nonempty reason" in m and victim["target"] in m for m in fi):
+        print("  ok: missing authorized-waiver reason fails")
+    else:
+        print("  FAIL: missing authorized-waiver reason passed!")
+        ok = False
+
+    # (i) the waiver is bound to its current zero-live-drift state. Replacing
+    #     its valid pin with another valid sha256 must force re-review.
+    drifted_waiver = copy.deepcopy(reg)
+    victim = next(e for e in drifted_waiver["entries"]
+                  if e["target"] == "extract-tx-merkle")
+    donor = next(e for e in drifted_waiver["entries"]
+                 if e["target"] == "extract-aa-userop")
+    victim["rust_files_sha256"][0] = donor["rust_files_sha256"][0]
+    fj = evaluate(drifted_waiver)[1]
+    if any("waived live drift changed" in m and victim["target"] in m for m in fj):
+        print("  ok: changed live drift on authorized waiver fails")
+    else:
+        print("  FAIL: changed live drift on authorized waiver passed!")
+        ok = False
+
+    # (j) recursive completeness floor: a copy missing one REAL on-disk module
     #     must still report the unpinned module even though the mutable
     #     required_targets metadata is edited in tandem.
     comp = copy.deepcopy(reg)
@@ -548,8 +663,8 @@ def self_test() -> int:
                   if any(g.endswith("/Funs.lean") for g in e["generated_lean"]))
     comp["entries"] = [e for e in comp["entries"] if e["target"] != victim["target"]]
     comp["required_targets"] = [t for t in comp.get("required_targets", []) if t != victim["target"]]
-    fh = evaluate(comp)[1]
-    if any("unpinned extracted module" in m for m in fh):
+    fk = evaluate(comp)[1]
+    if any("unpinned extracted module" in m for m in fk):
         print(f"  ok: in-memory copy missing the on-disk module of '{victim['target']}' fails "
               f"(recursive completeness floor fires)")
     else:

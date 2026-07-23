@@ -19,9 +19,10 @@ the sources would then disagree structurally while every committed
 vector still matched. This gate pins the three field ORDERS and exact source
 expressions against each other, so a one-sided reorder/insert/delete or an
 expression that merely contains a familiar field name fails CI before any
-vector. The parsers consume the complete Rust/Solidity function bodies, anchor
-the fields to the returned digest expression, and never truncate after 12
-fields. The Lean leg exists because nothing else
+vector. The parsers require one exact function signature and the complete
+Rust/Solidity body to equal the canonical returned digest expression; alternate
+update APIs, wrappers, overload decoys, early returns, and after-12 truncation
+therefore fail. The Lean leg exists because nothing else
 machine-pinned the model's preimage: an equal-width swap in
 `sphincsDigestPreimage` used to pass `lake build`, the ledger gate, the closure
 pins, and this lint.
@@ -39,7 +40,7 @@ Forge differential vector is the byte-level cross-check). And it is NOT the
 
 Exit 0 = the three field orders match; 1 = drift; 2 = parse/usage error.
 `--self-test` exercises reorder/drop controls plus parser-level 13th-field,
-compound-expression, decoy, and early-return controls.
+compound-expression, decoy/overload, alternate-update, and early-return controls.
 """
 from __future__ import annotations
 
@@ -166,10 +167,20 @@ def _balanced_body(s: str, open_at: int) -> str:
 
 
 def extract_rust_order(src: str) -> list[str]:
-    m = re.search(r"pub fn compute_sphincs_digest_v06\b", src)
-    if not m:
-        raise ValueError("compute_sphincs_digest_v06 not found in Rust source")
-    body = _balanced_body(src, src.find("{", m.end()))
+    named = list(re.finditer(r"\bpub\s+fn\s+compute_sphincs_digest_v06\b", src))
+    exact = list(re.finditer(
+        r"\bpub\s+fn\s+compute_sphincs_digest_v06\s*"
+        r"\(\s*params\s*:\s*&AaUserOpParamsV06Sha256\s*,\s*"
+        r"call_data_digest\s*:\s*&\[u8\s*;\s*32\]\s*,?\s*\)\s*"
+        r"->\s*\[u8\s*;\s*32\]\s*\{",
+        src,
+    ))
+    if len(named) != 1 or len(exact) != 1 or named[0].start() != exact[0].start():
+        raise ValueError(
+            "expected exactly one canonical Rust digest declaration/signature; "
+            f"found {len(named)} named and {len(exact)} exact"
+        )
+    body = _balanced_body(src, exact[0].end() - 1)
     if re.search(r"\breturn\b", body):
         raise ValueError(
             "compute_sphincs_digest_v06 must use its single implicit tail return; "
@@ -193,14 +204,34 @@ def extract_rust_order(src: str) -> list[str]:
         if len(args) != 1:
             raise ValueError(f"Rust chain_update expected one argument, got {args}")
         fields.append(RUST_FIELDS.get(_normalise_expr(args[0])))
+    body_without_line_comments = re.sub(r"//[^\n]*", "", body)
+    expected_expr = (
+        "Sha256::new()"
+        + "".join(f".chain_update({expr})" for expr in RUST_FIELDS)
+        + ".finalize().into()"
+    )
+    if _normalise_expr(body_without_line_comments) != _normalise_expr(expected_expr):
+        raise ValueError(
+            "Rust digest body contains an unparsed statement/update/wrapper or "
+            "does not exactly equal the canonical returned hash chain"
+        )
     return fields
 
 
 def extract_sol_order(src: str) -> list[str]:
-    m = re.search(r"function sphincsDigest\b", src)
-    if not m:
-        raise ValueError("sphincsDigest not found in Solidity source")
-    body = _balanced_body(src, src.find("{", m.end()))
+    named = list(re.finditer(r"\bfunction\s+sphincsDigest\b", src))
+    exact = list(re.finditer(
+        r"\bfunction\s+sphincsDigest\s*"
+        r"\(\s*UserOperation06\s+calldata\s+userOp\s*\)\s*"
+        r"public\s+view\s+returns\s*\(\s*bytes32\s*\)\s*\{",
+        src,
+    ))
+    if len(named) != 1 or len(exact) != 1 or named[0].start() != exact[0].start():
+        raise ValueError(
+            "expected exactly one canonical Solidity digest declaration/signature; "
+            f"found {len(named)} named and {len(exact)} exact"
+        )
+    body = _balanced_body(src, exact[0].end() - 1)
     all_returns = list(re.finditer(r"\breturn\b", body))
     returns = list(re.finditer(r"\breturn\s+sha256\s*\(", body))
     if len(all_returns) != 1 or len(returns) != 1 or all_returns[0].start() != returns[0].start():
@@ -219,6 +250,16 @@ def extract_sol_order(src: str) -> list[str]:
     args, packed_end = _balanced_args(packed, ep_match.end() - 1)
     if packed[packed_end:].strip():
         raise ValueError("unexpected expression around returned abi.encodePacked(...)")
+    expected_body = (
+        "return sha256(abi.encodePacked("
+        + ",".join(SOL_FIELDS)
+        + "));"
+    )
+    if _normalise_expr(body) != _normalise_expr(expected_body):
+        raise ValueError(
+            "Solidity digest body contains an unparsed statement/expression or "
+            "does not exactly equal the canonical returned sha256(abi.encodePacked(...))"
+        )
     return [SOL_FIELDS.get(_normalise_expr(a)) for a in args]
 
 
@@ -304,12 +345,16 @@ def self_test() -> int:
             "        .finalize()",
             1,
         )
-        rust_extra = extract_rust_order(rust_extra_src)
-        if len(rust_extra) == 13 and compare(rust_extra, sol, lean):
+        try:
+            rust_extra = extract_rust_order(rust_extra_src)
+        except ValueError:
             print("  ok: a 13th Rust chain_update is CAUGHT (parser does not truncate)")
         else:
-            print("  FAIL: a 13th Rust chain_update escaped the complete-body parser!")
-            ok = False
+            if len(rust_extra) == 13 and compare(rust_extra, sol, lean):
+                print("  ok: a 13th Rust chain_update is CAUGHT (parser does not truncate)")
+            else:
+                print("  FAIL: a 13th Rust chain_update escaped the complete-body parser!")
+                ok = False
     # parser negative: an expression containing a recognised field is not the
     # exact field expression and must map to None rather than substring-alias.
     exact = ".chain_update(params.call_gas_limit.0)"
@@ -318,13 +363,18 @@ def self_test() -> int:
         print("  FAIL: could not uniquely locate call_gas_limit for expression control")
         ok = False
     else:
-        rust_compound = extract_rust_order(rust_src.replace(exact, compound, 1))
-        if None in rust_compound and compare(rust_compound, sol, lean):
+        try:
+            rust_compound = extract_rust_order(rust_src.replace(exact, compound, 1))
+        except ValueError:
             print("  ok: a compound Rust expression is CAUGHT "
                   "(exact mapping, no substring alias)")
         else:
-            print("  FAIL: a compound Rust expression aliased to a canonical field!")
-            ok = False
+            if None in rust_compound and compare(rust_compound, sol, lean):
+                print("  ok: a compound Rust expression is CAUGHT "
+                      "(exact mapping, no substring alias)")
+            else:
+                print("  FAIL: a compound Rust expression aliased to a canonical field!")
+                ok = False
     # parser negatives: alternate early returns must not bypass the canonical
     # tail expression on either implementation side.
     rust_fn = re.search(r"pub fn compute_sphincs_digest_v06\b", rust_src)
@@ -379,12 +429,16 @@ def self_test() -> int:
             + "userOp.callGasLimit + userOp.nonce"
             + sol_decoy[actual_field + len("userOp.callGasLimit"):]
         )
-        sol_actual = extract_sol_order(sol_decoy)
-        if None in sol_actual and compare(rust, sol_actual, lean):
+        try:
+            sol_actual = extract_sol_order(sol_decoy)
+        except ValueError:
             print("  ok: canonical unused Solidity decoy cannot hide drift in returned digest")
         else:
-            print("  FAIL: a canonical Solidity decoy hid drift in the returned digest!")
-            ok = False
+            if None in sol_actual and compare(rust, sol_actual, lean):
+                print("  ok: canonical unused Solidity decoy cannot hide drift in returned digest")
+            else:
+                print("  FAIL: a canonical Solidity decoy hid drift in the returned digest!")
+                ok = False
     # parser negative: likewise, a canonical Rust decoy hash chain plus a
     # drifted tail expression must be rejected rather than parsed as the return.
     actual_start = rust_src.find("Sha256::new()", rust_open)
@@ -413,6 +467,53 @@ def self_test() -> int:
         else:
             print("  FAIL: a canonical Rust decoy chain was accepted as the returned digest!")
             ok = False
+    # Review reproducer: wrapping the returned builder can mutate that same
+    # hasher through a different Digest API before the visible chain_updates.
+    hidden_wrapper = (
+        "({ let mut h = Sha256::new(); "
+        "sha2::Digest::update(&mut h, params.sender); h })"
+    )
+    hidden_update = (
+        rust_src[:actual_start]
+        + hidden_wrapper
+        + rust_src[actual_start + len("Sha256::new()"):]
+    )
+    try:
+        extract_rust_order(hidden_update)
+    except ValueError:
+        print("  ok: hidden Digest::update wrapper on returned Rust hasher is CAUGHT")
+    else:
+        print("  FAIL: hidden Digest::update changed the returned digest but passed!")
+        ok = False
+
+    # Review reproducer: a canonical same-name overloaded Solidity decoy before
+    # a drifted one-argument implementation must not be selected by name alone.
+    sol_body = _balanced_body(sol_src, sol_open)
+    sol_close = sol_open + 1 + len(sol_body)
+    original_decl = sol_src[sol_fn.start():sol_close + 1]
+    overloaded_decoy = original_decl.replace(
+        "UserOperation06 calldata userOp)",
+        "UserOperation06 calldata userOp, bool ignored)",
+        1,
+    )
+    drifted_actual = sol_src.replace(
+        "userOp.callGasLimit,",
+        "userOp.callGasLimit + userOp.nonce,",
+        1,
+    )
+    overload_mutant = (
+        drifted_actual[:sol_fn.start()]
+        + overloaded_decoy
+        + "\n    "
+        + drifted_actual[sol_fn.start():]
+    )
+    try:
+        extract_sol_order(overload_mutant)
+    except ValueError:
+        print("  ok: canonical same-name Solidity overload decoy is CAUGHT")
+    else:
+        print("  FAIL: same-name Solidity overload hid drift in called implementation!")
+        ok = False
     print("=== self-test PASS ===" if ok else "=== self-test FAILED ===")
     return 0 if ok else 1
 

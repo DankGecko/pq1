@@ -27,8 +27,10 @@ HARD FAIL (unwired); the invocation check inspects STEP-level `if:`/`continue-on
 (not just job-level), so a workflow_dispatch-gated or non-blocking STEP is caught; a
 final COMPLETENESS pass asserts that every soundness `make verify-*` target invoked by
 any workflow is enrolled in this manifest (so a CI-wired gate cannot silently escape
-the manifest — the G1META-1 class). Ships a `--self-test` negative control (inject a
-broken expectation, expect RED). Read-only — never mutates.
+the manifest — the G1META-1 class). Reverse checks derive the full `make kani`
+crate surface and every source file in `kani_mutations.json`, so their declared
+path inventories cannot silently lag the executable gates. Ships `--self-test`
+negative controls for each reverse check. Read-only — never mutates.
 KNOWN OUT-OF-SCOPE evasions (fail-closed / documented, not modelled): a gate invoked via
 `uses:` a reusable workflow (no inline `run` text) reads as UNWIRED (a false FAIL, safe
 direction); matrix-`exclude` on the invoking job is not modelled.
@@ -51,6 +53,7 @@ except ImportError:
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = Path(__file__).resolve().parent / "gate_enforcement.json"
+KANI_MUTATIONS = Path(__file__).resolve().parent / "kani_mutations.json"
 
 
 def _norm_prefix(glob: str) -> str:
@@ -310,6 +313,39 @@ def kani_makefile_coverage(policed: list[str], kani_crates: list[str], crate_dir
     return fails
 
 
+def kani_mutation_manifest_coverage(policed: list[str], mutation_files: list[str]) -> list[str]:
+    """Reverse-check every source file named by the Kani mutation manifest.
+
+    The gate manifest's forward workflow check cannot prove that its declared
+    `polices_paths` still covers a growing mutation manifest. Deriving this
+    inventory closes the same false-green class for verify-kani-mutation.
+    """
+    fails = []
+    required = set(mutation_files)
+    required.add("scripts/kani_mutations.json")
+    for source in sorted(required):
+        if not _covers(policed, source):
+            fails.append(
+                "kani-mutation-reverse: scripts/kani_mutations.json mutates "
+                f"`{source}` but verify-kani-mutation polices_paths does not cover it"
+            )
+    return fails
+
+
+def _kani_mutation_files() -> list[str]:
+    try:
+        manifest = json.loads(KANI_MUTATIONS.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise SystemExit(f"HARNESS ERROR: cannot read {KANI_MUTATIONS}: {e}")
+    mutations = manifest.get("mutations")
+    if not isinstance(mutations, list) or any(
+        not isinstance(m, dict) or not isinstance(m.get("file"), str)
+        for m in mutations
+    ):
+        raise SystemExit("HARNESS ERROR: kani_mutations.json needs a mutations[] file string per entry")
+    return [m["file"] for m in mutations]
+
+
 def main() -> int:
     self_test = "--self-test" in sys.argv[1:]
     try:
@@ -348,8 +384,17 @@ def main() -> int:
         if not rc:
             print("  SELF-TEST FAILED: uncovered kani-Makefile crate NOT caught — harness void.", file=sys.stderr)
             return 2
+        rm = kani_mutation_manifest_coverage(
+            ["tx/src/multisend.rs"],
+            ["tx/src/multisend.rs", "aa/src/userop.rs"],
+        )
+        if not rm:
+            print("  SELF-TEST FAILED: uncovered Kani mutation file NOT caught — harness void.",
+                  file=sys.stderr)
+            return 2
         print(f"  self-test OK: allowlist gap caught ({len(fa)}), paths-ignore denylist logic verified "
-              f"(directly), kani-reverse gap caught ({len(rc)}).")
+              f"(directly), kani-reverse gap caught ({len(rc)}), "
+              f"kani-mutation-reverse gap caught ({len(rm)}).")
         return 0
 
     print(f"=== verify-gate-enforcement ({len(gates)} gates) ===")
@@ -362,6 +407,14 @@ def main() -> int:
     if kani_gate:
         all_fails += kani_makefile_coverage(kani_gate.get("polices_paths", []),
                                             _makefile_kani_crates(), _workspace_crate_dirs())
+    kani_mutation_gate = next(
+        (g for g in gates if g["id"] == "verify-kani-mutation"), None
+    )
+    if kani_mutation_gate:
+        all_fails += kani_mutation_manifest_coverage(
+            kani_mutation_gate.get("polices_paths", []),
+            _kani_mutation_files(),
+        )
 
     print()
     if all_fails:
