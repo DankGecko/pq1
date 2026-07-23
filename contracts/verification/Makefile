@@ -525,6 +525,14 @@ REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
 .PHONY: verify-extracted verify-extract-differential verify-extraction-freshness verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test extract-sphincs-adrs extract-aa-userop extract-fors-index extract-format-decimal extract-pinstate extract-slotkdf
 
+# MAKECMDGOALS is the trust root for both guard sets below, but GNU Make lets a
+# caller override even this built-in variable.  Reject any non-default origin
+# before consulting it; otherwise spoofed goals can suppress the executor guard
+# and the private-workspace allocation simultaneously.
+ifneq ($(origin MAKECMDGOALS),default)
+$(error refusing caller-overridden MAKECMDGOALS (origin $(origin MAKECMDGOALS)) for extraction assurance)
+endif
+
 # The authoritative replay must recurse through GNU Make itself.  Both MAKE and
 # MAKE_COMMAND are caller-overridable; without this guard a dispatcher can forge
 # the self-test marker and return success for the production loop without
@@ -596,6 +604,26 @@ verify-extraction-regen: verify-extraction-regen-self-test ## F1 REAL regen: re-
 
 verify-extraction-regen-self-test: ## Negative controls for signature/value parity + recovered-waiver failure
 	@python3 scripts/check_extraction_regen_output.py --self-test-lean
+	@out=$$(mktemp /tmp/pq-extraction-goal-executor-selftest.XXXXXX); \
+	if $(MAKE) --no-print-directory MAKECMDGOALS=not-guarded MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: spoofed MAKECMDGOALS suppressed the recursive-executor guard" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing caller-overridden MAKECMDGOALS ' $$out; then \
+	  echo "CONTROL FAILURE: executor-side MAKECMDGOALS spoof was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: executor-side MAKECMDGOALS spoof is CAUGHT"
+	@out=$$(mktemp /tmp/pq-extraction-goal-workspace-selftest.XXXXXX); \
+	if $(MAKE) --no-print-directory -n MAKECMDGOALS=not-guarded EXTRACTION_TMP_ROOT=/tmp/pq-caller-controlled extract-sphincs-adrs >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: spoofed MAKECMDGOALS enabled a caller-selected extraction workspace" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing caller-overridden MAKECMDGOALS ' $$out; then \
+	  echo "CONTROL FAILURE: workspace-side MAKECMDGOALS spoof was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: workspace-side MAKECMDGOALS spoof is CAUGHT"
 	@out=$$(mktemp /tmp/pq-extraction-make-override-selftest.XXXXXX); \
 	if $(MAKE) --no-print-directory MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: caller-overridden MAKE bypassed authoritative extraction replay" >&2; \
