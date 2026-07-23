@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import atexit
 import collections
+import hashlib
 import json
 import os
 import re
@@ -60,6 +61,13 @@ DUMP_SCRIPT = "scripts/dump_axioms.lean"
 KERNEL = {"propext", "Classical.choice", "Quot.sound"}
 
 TIER_ORDER = {"quick": 0, "default": 1, "full": 2}
+# Checker-owned exact identity pin.  The source-order-independent digest is over
+# the sorted fully-qualified names, one UTF-8 name per line with a final newline.
+# A legitimate headline change must consciously update both pins.
+EXPECTED_DUMP_HEADLINE_COUNT = 102
+EXPECTED_DUMP_HEADLINE_SET_SHA256 = (
+    "99b6c0bc2c53a4a25bca59d6de1bcabd414bc6a6ac7e4e502c04997e3a736acc"
+)
 
 # Global so the signal/atexit handler can restore a half-applied mutation.
 _ACTIVE: tuple[Path, str] | None = None
@@ -108,6 +116,19 @@ def expected_dump_headlines(script_text: str | None = None) -> list[str]:
     if not headlines or len(headlines) != len(set(headlines)):
         raise HarnessError(
             "dump_axioms.lean must request a nonempty, duplicate-free headline set"
+        )
+    identity = hashlib.sha256(
+        ("\n".join(sorted(headlines)) + "\n").encode("utf-8")
+    ).hexdigest()
+    if (
+        len(headlines) != EXPECTED_DUMP_HEADLINE_COUNT
+        or identity != EXPECTED_DUMP_HEADLINE_SET_SHA256
+    ):
+        raise HarnessError(
+            "dump_axioms.lean headline inventory drift: "
+            f"count={len(headlines)} sha256={identity}; expected "
+            f"count={EXPECTED_DUMP_HEADLINE_COUNT} "
+            f"sha256={EXPECTED_DUMP_HEADLINE_SET_SHA256}"
         )
     return headlines
 
@@ -167,8 +188,29 @@ class HarnessError(Exception):
 
 
 def dump_validation_self_test() -> bool:
-    """Pure controls: a valid-looking partial record must never be accepted."""
-    expected = expected_dump_headlines()
+    """Pure controls: headline drift and partial receipts must be rejected."""
+    source = (LEAN_DIR / DUMP_SCRIPT).read_text(encoding="utf-8")
+    expected = expected_dump_headlines(source)
+    delete_line = f"#print axioms {expected[-1]}"
+    try:
+        expected_dump_headlines(source.replace(delete_line, "", 1))
+    except HarnessError:
+        pass
+    else:
+        return False
+    substitute_line = f"#print axioms {expected[0]}"
+    try:
+        expected_dump_headlines(
+            source.replace(
+                substitute_line,
+                "#print axioms SphincsCVerify.SelfTest.ForgedHeadline",
+                1,
+            )
+        )
+    except HarnessError:
+        pass
+    else:
+        return False
     one = expected[0]
     partial = f"'{one}' does not depend on any axioms\n"
     for returncode in (1, 0):
@@ -253,9 +295,14 @@ def apply_and_test(mut: dict) -> tuple[bool, str]:
 
 def main() -> int:
     args = sys.argv[1:]
-    if not dump_validation_self_test():
+    try:
+        dump_control_ok = dump_validation_self_test()
+    except HarnessError as exc:
+        print(f"ERROR: closure-dump inventory check failed: {exc}", file=sys.stderr)
+        return 2
+    if not dump_control_ok:
         print(
-            "ERROR: closure-dump completion negative control failed; "
+            "ERROR: closure-dump negative control failed; headline drift or "
             "partial output could be accepted",
             file=sys.stderr,
         )
@@ -263,7 +310,8 @@ def main() -> int:
     if args == ["--self-test"]:
         print(
             "check_proof_mutations --self-test PASS "
-            "(nonzero and exit-0 partial dumps rejected; complete dump accepted)"
+            "(headline deletion/substitution and partial dumps rejected; "
+            "complete pinned dump accepted)"
         )
         return 0
     tier = os.environ.get("MUTATIONS", "default")

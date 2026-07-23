@@ -525,10 +525,33 @@ REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
 .PHONY: verify-extracted verify-extract-differential verify-extraction-freshness verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test extract-sphincs-adrs extract-aa-userop extract-fors-index extract-format-decimal extract-pinstate extract-slotkdf
 
-# Every public extract-* invocation gets an unpredictable mode-0700 workspace.
+# The authoritative replay must recurse through GNU Make itself.  Both MAKE and
+# MAKE_COMMAND are caller-overridable; without this guard a dispatcher can forge
+# the self-test marker and return success for the production loop without
+# running any extraction.  Internal helper goals are guarded too.
+override _EXTRACTION_REGEN_GUARDED_GOALS := verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test
+ifneq ($(strip $(filter $(_EXTRACTION_REGEN_GUARDED_GOALS),$(MAKECMDGOALS))),)
+ifneq ($(origin MAKE),default)
+$(error refusing caller-overridden MAKE (origin $(origin MAKE)) for authoritative extraction replay)
+endif
+ifneq ($(origin MAKE_COMMAND),default)
+$(error refusing caller-overridden MAKE_COMMAND (origin $(origin MAKE_COMMAND)) for authoritative extraction replay)
+endif
+endif
+
+# Every public extract-* invocation gets one unpredictable mode-0700 workspace.
+# Multiple extract goals in one Make process would share that root: the first
+# target cleans it, then the next target recreates the now-disclosed path with
+# ordinary mkdir.  Reject that unsafe mode; the aggregate replay already forks
+# one recursive Make process per registry target.
+override _EXTRACTION_REQUESTED_GOALS := $(filter extract-%,$(MAKECMDGOALS))
+ifneq ($(strip $(word 2,$(_EXTRACTION_REQUESTED_GOALS))),)
+$(error refusing multiple extract-* targets in one Make invocation; invoke one target per process)
+endif
+
 # `override` prevents an environment or command-line value from redirecting the
 # generator/diff/checker chain back into a shared, attacker-preparable path.
-ifneq ($(filter extract-%,$(MAKECMDGOALS)),)
+ifneq ($(strip $(_EXTRACTION_REQUESTED_GOALS)),)
 override EXTRACTION_TMP_ROOT := $(shell umask 077 && /usr/bin/mktemp -d /tmp/pqsigner-extract.XXXXXXXX)
 ifeq ($(strip $(EXTRACTION_TMP_ROOT)),)
 $(error failed to allocate a private extraction workspace)
@@ -573,6 +596,36 @@ verify-extraction-regen: verify-extraction-regen-self-test ## F1 REAL regen: re-
 
 verify-extraction-regen-self-test: ## Negative controls for signature/value parity + recovered-waiver failure
 	@python3 scripts/check_extraction_regen_output.py --self-test-lean
+	@out=$$(mktemp /tmp/pq-extraction-make-override-selftest.XXXXXX); \
+	if $(MAKE) --no-print-directory MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: caller-overridden MAKE bypassed authoritative extraction replay" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing caller-overridden MAKE ' $$out; then \
+	  echo "CONTROL FAILURE: MAKE override was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: caller-overridden MAKE is CAUGHT"
+	@out=$$(mktemp /tmp/pq-extraction-make-command-override-selftest.XXXXXX); \
+	if $(MAKE) --no-print-directory MAKE_COMMAND=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: caller-overridden MAKE_COMMAND bypassed authoritative extraction replay" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing caller-overridden MAKE_COMMAND ' $$out; then \
+	  echo "CONTROL FAILURE: MAKE_COMMAND override was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: caller-overridden MAKE_COMMAND is CAUGHT"
+	@out=$$(mktemp /tmp/pq-extraction-multigoal-selftest.XXXXXX); \
+	if $(MAKE) --no-print-directory extract-sphincs-adrs extract-aa-userop >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: multiple extract targets shared one Make invocation" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing multiple extract-* targets' $$out; then \
+	  echo "CONTROL FAILURE: multi-goal extraction was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: multi-goal extraction workspace reuse is CAUGHT"
 	@out=$$(mktemp /tmp/pq-extraction-waiver-selftest.XXXXXX); \
 	if $(MAKE) --no-print-directory _verify-extraction-regen-loop-self-test >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: waived extraction unexpectedly re-extracted but aggregate replay exited zero" >&2; \
