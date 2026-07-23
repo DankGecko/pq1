@@ -81,35 +81,83 @@ check_proof_inventory() {
 #       admitted: False
 #       nodes / pending / failing / ...
 #   Subproofs: 0
-# _kontrol_list_passed_ids prints the PASSED, non-admitted proof ids in a
-# kontrol-list file, normalized to <Contract>.<function>. Line-based (no
-# multiline-record regexes) so it behaves identically under gawk and mawk.
-_kontrol_list_passed_ids() {
+# _kontrol_list_records prints one tab-separated row per proof:
+#   <Contract>.<function>  <version>  <status>  <admitted>
+# Missing or ambiguous fields are emitted explicitly and therefore fail closed
+# in assert_kontrol_list. Line-based (no multiline-record regexes) so it
+# behaves identically under gawk and mawk.
+_kontrol_list_records() {
   awk '
-    function flush() { if (hdr != "" && pass && !admit) print norm(hdr); hdr=""; pass=0; admit=0 }
-    function norm(pid) { sub(/\(.*/, "", pid); sub(/.*%/, "", pid); return pid }
-    /^APRProof: |^Proof: /                        { flush(); hdr=$2 }
-    /^    status: (ProofStatus\.)?PASSED[[:space:]]*$/ { pass=1 }
-    /^    admitted: True[[:space:]]*$/            { admit=1 }
-    NF==0                                         { flush() }
-    END                                           { flush() }
+    function reset() {
+      proof_id = ""
+      version = "<missing>"
+      status = "<missing>"
+      admitted = "<missing>"
+      status_fields = 0
+      admitted_fields = 0
+    }
+    function flush() {
+      if (proof_id == "") return
+      if (status_fields != 1) status = "<ambiguous>"
+      if (admitted_fields != 1) admitted = "<ambiguous>"
+      printf "%s\t%s\t%s\t%s\n", proof_id, version, status, admitted
+      reset()
+    }
+    function parse_header(line, raw, suffix) {
+      raw = line
+      sub(/^(APRProof|Proof):[[:space:]]*/, "", raw)
+      sub(/[[:space:]]+$/, "", raw)
+      version = "<missing>"
+      if (match(raw, /:[0-9]+$/)) {
+        suffix = substr(raw, RSTART + 1)
+        raw = substr(raw, 1, RSTART - 1)
+        version = suffix
+      }
+      sub(/^.*%/, "", raw)
+      sub(/\(.*/, "", raw)
+      proof_id = raw
+    }
+    BEGIN                                          { reset() }
+    /^(APRProof|Proof):[[:space:]]/                { flush(); parse_header($0); next }
+    /^[[:space:]]+status:[[:space:]]*/ {
+      status_fields++
+      status = $0
+      sub(/^[[:space:]]+status:[[:space:]]*/, "", status)
+      sub(/[[:space:]]+$/, "", status)
+      sub(/^ProofStatus\./, "", status)
+      next
+    }
+    /^[[:space:]]+admitted:[[:space:]]*/ {
+      admitted_fields++
+      admitted = $0
+      sub(/^[[:space:]]+admitted:[[:space:]]*/, "", admitted)
+      sub(/[[:space:]]+$/, "", admitted)
+      next
+    }
+    NF==0                                          { flush() }
+    END                                            { flush() }
   ' "$1"
 }
 
-# assert_kontrol_list <kontrol-list-output-file>: count floor (>= baseline
-# size) PLUS a per-id grep for every expected proof — both, by design (F9).
+# assert_kontrol_list <kontrol-list-output-file>: every expected identity must
+# have exactly one record, and that record must be fresh version 0, PASSED, and
+# explicitly `admitted: False`. Extra unrelated setup proofs are ignored.
 assert_kontrol_list() {
   local listfile="$1"
-  local passed_ids npassed id rc=0
-  passed_ids=$(_kontrol_list_passed_ids "$listfile" | sort -u)
-  npassed=$(printf '%s\n' "$passed_ids" | grep -c . || true)
-  if [ "$npassed" -lt "${#EXPECTED_PROOFS[@]}" ]; then
-    echo "==> FAIL: 'kontrol list' shows $npassed PASSED proofs; the identity baseline is ${#EXPECTED_PROOFS[@]} (count floor, fv-deep-review-2026-07-19 F9)" >&2
-    rc=1
-  fi
+  local records matches nrecords id got_id version status admitted rc=0
+  records=$(_kontrol_list_records "$listfile")
   for id in "${EXPECTED_PROOFS[@]}"; do
-    if ! printf '%s\n' "$passed_ids" | grep -qxF "$id"; then
-      echo "==> FAIL: expected proof is not PASSED in 'kontrol list': $id" >&2
+    matches=$(printf '%s\n' "$records" | awk -F '\t' -v expected="$id" '$1 == expected')
+    nrecords=$(printf '%s\n' "$matches" | awk 'NF { count++ } END { print count + 0 }')
+    if [ "$nrecords" -ne 1 ]; then
+      echo "==> FAIL: expected exactly one 'kontrol list' record for $id; found $nrecords" >&2
+      rc=1
+      continue
+    fi
+    IFS=$'\t' read -r got_id version status admitted <<< "$matches"
+    if [ "$got_id" != "$id" ] || [ "$version" != "0" ] ||
+       [ "$status" != "PASSED" ] || [ "$admitted" != "False" ]; then
+      echo "==> FAIL: invalid proof record for $id: version=$version status=$status admitted=$admitted (require version=0 status=PASSED admitted=False)" >&2
       rc=1
     fi
   done
@@ -121,38 +169,65 @@ assert_kontrol_list() {
 self_test() {
   local d; d="$(mktemp -d /tmp/pq1-kontrol-baseline-selftest.XXXXXX)"
   local mk_block
-  mk_block() {  # <id> <status> <admitted>
-    printf 'APRProof: test%%kontrol%%%s():0\n    status: %s\n    admitted: %s\n    nodes: 7\n    pending: 0\n    failing: 0\n    vacuous: 0\n    stuck: 0\n    terminal: 3\n    refuted: 0\n    bounded: 0\n    execution time: 0m1s\nSubproofs: 0\n\n' "$1" "$2" "$3"
+  mk_block() {  # <id> <version> <status> <admitted|OMIT>
+    printf 'APRProof: test%%kontrol%%%s():%s\n    status: %s\n' "$1" "$2" "$3"
+    if [ "$4" != "OMIT" ]; then
+      printf '    admitted: %s\n' "$4"
+    fi
+    printf '    nodes: 7\n    pending: 0\n    failing: 0\n    vacuous: 0\n    stuck: 0\n    terminal: 3\n    refuted: 0\n    bounded: 0\n    execution time: 0m1s\nSubproofs: 0\n\n'
   }
   local id rc=0
-  # complete fixture: all expected proofs PASSED, none admitted
+  # Complete fixture: all expected proofs PASSED, none admitted. An unrelated
+  # setup proof demonstrates that records outside the identity baseline do not
+  # affect the authoritative result.
   : > "$d/complete.txt"
-  for id in "${EXPECTED_PROOFS[@]}"; do mk_block "$id" "ProofStatus.PASSED" "False" >> "$d/complete.txt"; done
+  for id in "${EXPECTED_PROOFS[@]}"; do mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/complete.txt"; done
+  mk_block "KontrolSetup.setUp" "7" "ProofStatus.FAILED" "OMIT" >> "$d/complete.txt"
   # missing-one: drop the last expected proof
   : > "$d/missing.txt"
-  for id in "${EXPECTED_PROOFS[@]:0:$((${#EXPECTED_PROOFS[@]}-1))}"; do mk_block "$id" "ProofStatus.PASSED" "False" >> "$d/missing.txt"; done
+  for id in "${EXPECTED_PROOFS[@]:0:$((${#EXPECTED_PROOFS[@]}-1))}"; do mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/missing.txt"; done
   # failed-one: one proof FAILED
   : > "$d/failed.txt"
   for id in "${EXPECTED_PROOFS[@]}"; do
-    if [ "$id" = "KontrolExecute.prove_execute_pointwise" ]; then mk_block "$id" "ProofStatus.FAILED" "False" >> "$d/failed.txt"; else mk_block "$id" "ProofStatus.PASSED" "False" >> "$d/failed.txt"; fi
+    if [ "$id" = "KontrolExecute.prove_execute_pointwise" ]; then mk_block "$id" "0" "ProofStatus.FAILED" "False" >> "$d/failed.txt"; else mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/failed.txt"; fi
   done
   # admitted-one: one proof PASSED but admitted (not a real proof)
   : > "$d/admitted.txt"
   for id in "${EXPECTED_PROOFS[@]}"; do
-    if [ "$id" = "KontrolFactory.prove_createAccount_iff" ]; then mk_block "$id" "ProofStatus.PASSED" "True" >> "$d/admitted.txt"; else mk_block "$id" "ProofStatus.PASSED" "False" >> "$d/admitted.txt"; fi
+    if [ "$id" = "KontrolFactory.prove_createAccount_iff" ]; then mk_block "$id" "0" "ProofStatus.PASSED" "True" >> "$d/admitted.txt"; else mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/admitted.txt"; fi
+  done
+  # missing-admission: omission must not be interpreted as False
+  : > "$d/missing-admission.txt"
+  for id in "${EXPECTED_PROOFS[@]}"; do
+    if [ "$id" = "KontrolOwnerTable.prove_initialize_one_shot" ]; then mk_block "$id" "0" "ProofStatus.PASSED" "OMIT" >> "$d/missing-admission.txt"; else mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/missing-admission.txt"; fi
+  done
+  # duplicate-version: a stale v0 pass plus a newer v1 failure is ambiguous,
+  # not a valid proof receipt.
+  cp "$d/complete.txt" "$d/duplicate-version.txt"
+  mk_block "KontrolExecute.prove_execute_pointwise" "1" "ProofStatus.FAILED" "False" >> "$d/duplicate-version.txt"
+  # wrong-version: one passing record at a nonzero version is not fresh v0.
+  : > "$d/wrong-version.txt"
+  for id in "${EXPECTED_PROOFS[@]}"; do
+    if [ "$id" = "KontrolValidateUserOp.prove_validate_slot_nonbypass" ]; then mk_block "$id" "1" "ProofStatus.PASSED" "False" >> "$d/wrong-version.txt"; else mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/wrong-version.txt"; fi
   done
   # empty fixture
   : > "$d/empty.txt"
 
-  echo "-- self-test 1/5: complete fixture (${#EXPECTED_PROOFS[@]} PASSED) — must be ACCEPTED"
+  echo "-- self-test 1/8: complete fixture (${#EXPECTED_PROOFS[@]} PASSED v0 + unrelated setup record) — must be ACCEPTED"
   if assert_kontrol_list "$d/complete.txt" >/dev/null 2>&1; then echo "   OK: accepted"; else echo "   CONTROL FAILURE: rejected a complete list" >&2; rc=1; fi
-  echo "-- self-test 2/5: missing-one fixture ($((${#EXPECTED_PROOFS[@]}-1)) PASSED) — must be REJECTED"
+  echo "-- self-test 2/8: missing-one fixture ($((${#EXPECTED_PROOFS[@]}-1)) PASSED) — must be REJECTED"
   if assert_kontrol_list "$d/missing.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: missing proof accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 3/5: failed-status fixture — must be REJECTED"
+  echo "-- self-test 3/8: failed-status fixture — must be REJECTED"
   if assert_kontrol_list "$d/failed.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: FAILED proof accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 4/5: admitted-proof fixture — must be REJECTED"
+  echo "-- self-test 4/8: admitted-proof fixture — must be REJECTED"
   if assert_kontrol_list "$d/admitted.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: admitted proof accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 5/5: empty fixture — must be REJECTED"
+  echo "-- self-test 5/8: missing-admission fixture — must be REJECTED"
+  if assert_kontrol_list "$d/missing-admission.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: proof without explicit admission state accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
+  echo "-- self-test 6/8: duplicate v0-PASSED + v1-FAILED fixture — must be REJECTED"
+  if assert_kontrol_list "$d/duplicate-version.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: duplicate proof versions accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
+  echo "-- self-test 7/8: single nonzero-version fixture — must be REJECTED"
+  if assert_kontrol_list "$d/wrong-version.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: nonzero proof version accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
+  echo "-- self-test 8/8: empty fixture — must be REJECTED"
   if assert_kontrol_list "$d/empty.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: green-at-zero accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
   rm -rf "$d"
   if [ "$rc" -eq 0 ]; then
@@ -175,6 +250,14 @@ case "${1:-}" in
     exit $?
     ;;
 esac
+
+# This is the authoritative all-proof gate. A caller-controlled matcher could
+# silently run only a subset while the persistent proof store supplied stale
+# records for the rest, so partial MATCH overrides are not supported here.
+if [ -v MATCH ]; then
+  echo "ERROR: MATCH overrides are forbidden by the authoritative Kontrol gate; run the exact Kontrol.*\\.prove_ proof set." >&2
+  exit 2
+fi
 
 # NOTE: `kompile` / `kore-rpc-booster` are NOT expected on the outer PATH when
 # Kontrol is installed via `kup install kontrol` (Nix) — the `kontrol` wrapper
@@ -249,12 +332,17 @@ for h in "$DEST_DIR"/*.t.sol; do rm -rf "out/$(basename "$h")"; done
 echo "=== kontrol build ==="
 kontrol build --verbose
 
-# Prove every `prove_*` test in the Kontrol* harnesses. `--match-test` is a
-# regex over the full `Contract.func(sig)` name (override with MATCH=..., or the
-# worker count with KONTROL_WORKERS=...).
+# Prove every `prove_*` test in the Kontrol* harnesses. Delete persistent proof
+# state first and force every selected proof to restart at fresh version 0.
+# `--match-test` is a regex over the full `Contract.func(sig)` name; this gate
+# deliberately rejects MATCH overrides. KONTROL_WORKERS remains tunable.
+echo "=== kontrol clean (discard persistent proof store) ==="
+kontrol clean --proofs
+
 echo "=== kontrol prove (all Kontrol*.prove_* tests) ==="
 kontrol prove \
-  --match-test "${MATCH:-Kontrol.*\.prove_}" \
+  --reinit \
+  --match-test 'Kontrol.*\.prove_' \
   --use-booster --workers "${KONTROL_WORKERS:-4}" --verbose
 
 echo "=== kontrol list (proof status) ==="
@@ -262,11 +350,12 @@ KONTROL_LIST_OUT="${TMPDIR:-/tmp}/pq1-kontrol-list-$(date +%Y%m%d-%H%M%S).txt"
 kontrol list | tee "${KONTROL_LIST_OUT}"
 
 # Identity baseline (fv-deep-review-2026-07-19 F9 / sweep-F52): fail unless
-# every pinned EXPECTED_PROOFS entry appears PASSED (non-admitted) in
-# `kontrol list` — a silent skip ("Test identifiers not found", a dropped
-# harness, an empty proof set) must not go green.
+# every pinned EXPECTED_PROOFS entry has exactly one fresh version-0 record
+# that is PASSED with explicit `admitted: False` in `kontrol list` — a silent
+# skip, stale/duplicate proof version, omitted admission state, dropped harness,
+# or empty proof set must not go green.
 assert_kontrol_list "${KONTROL_LIST_OUT}" || {
   echo "==> FAIL: Kontrol proof-identity baseline not met (see ${KONTROL_LIST_OUT})" >&2
   exit 1
 }
-echo "==> PASS: all ${#EXPECTED_PROOFS[@]} expected proofs PASSED in 'kontrol list' (identity baseline, F9)"
+echo "==> PASS: all ${#EXPECTED_PROOFS[@]} expected proofs have exactly one PASSED, admitted=False version-0 record (identity baseline, F9)"

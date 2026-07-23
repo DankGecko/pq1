@@ -10,10 +10,14 @@ KontrolBootstrapUnremovable 3), so the 33/33 discharge matches the tree
 exactly; the 2026-07-18 sweep's "38 `prove_` functions" was a miscount.
 `run_kontrol.sh` now carries a pinned proof-identity baseline
 (`EXPECTED_PROOFS`, all 33 `<Contract>.<function>` ids) and fails after
-`kontrol prove` unless every expected id appears PASSED and non-admitted in
-`kontrol list` (count floor + per-id grep; `--self-test` exercises the
-parser's positive/negative controls without the K backend, `--check-output
-<file>` re-checks an archived list).** The four control-flow bridge axioms are now
+`kontrol prove` unless every expected id has exactly one version-0 record that
+is PASSED with an explicit `admitted: False` in `kontrol list`. The
+authoritative runner rejects a caller-supplied `MATCH`, deletes the persistent
+proof store with `kontrol clean --proofs`, and proves the exact
+`Kontrol.*\.prove_` set with `--reinit`; stale or duplicate versions therefore
+cannot satisfy a partial run. `--self-test` exercises eight positive/negative
+parser controls without the K backend, and `--check-output <file>` re-checks
+an archived list under the same exact-record rule.** The four control-flow bridge axioms are now
 proven directly on the deployed PQSmartWallet/Factory bytecode by an engine
 independent of Halmos with no hand-written `LeanModel.sol` mirror — so the
 hand-transcription TCB element of A3.3/A3.4/A3.2-exec-single is retired (Halmos stays the
@@ -94,9 +98,12 @@ Lean theorems.
 >    now `rm`s the staged harness artifacts before `kontrol build` so they
 >    recompile under kontrol's `--extra-output storageLayout`. (Don't plain
 >    `forge build` before a kontrol run.)
-> 3. **prove matcher** — `kontrol prove` has no `--match-contract`; use
->    `--match-test '<regex over Contract.func(sig)>'` (the runner uses
->    `Kontrol.*\.prove_`).
+> 3. **prove matcher and proof-store freshness** — `kontrol prove` has no
+>    `--match-contract`; the authoritative runner uses the exact
+>    `--match-test 'Kontrol.*\.prove_'` selector and rejects `MATCH`
+>    overrides. It first runs `kontrol clean --proofs`, then proves with
+>    `--reinit`; the receipt checker requires exactly one version-0, PASSED,
+>    explicitly non-admitted record for every pinned proof identity.
 > 4. **checked-add overflow** — a fully-symbolic scalar (e.g. `newOffchainCount`)
 >    lets a Solidity 0.8 checked add (`slotUsesNow + newCount`) overflow 2²⁵⁶ on
 >    some path, which reverts via a panic rather than the intended gate (and the

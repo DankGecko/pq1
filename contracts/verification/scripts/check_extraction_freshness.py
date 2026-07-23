@@ -28,20 +28,23 @@ pre-existing, tracked drift, e.g. tx-merkle which Aeneas can no longer translate
 This is the honest middle ground F1 asks for: the drift is VISIBLE and TRACKED,
 never silently green.
 
-DELETION-TOLERANCE FLOORS (F3/F13, 2026-07-19). A registry that only ever gets
-CHECKED is a registry that can be EDITED to green: deleting the drifted entry,
-emptying a pin list, or shrinking the registry to zero entries all used to PASS
-(zip() silently truncates; an empty registry has nothing to fail). This gate now
-hard-fails on: (a) LIST-LENGTH MISMATCH between a files list and its pins list
-("registry MALFORMED — possible dropped pin"); (b) an EMPTY registry or one
-missing any target named in its top-level "required_targets" list ("registry
-shrank — deletion-tolerance guard"); (c) any on-disk
-extracted/Extracted/*/Funs.lean module NOT registered in any entry ("unpinned
-extracted module" — the completeness floor; also what enrolls new extractions).
-A pin referencing a file that does not exist still fails via the ordinary drift
-path. HONEST SCOPE, updated: the floors police REGISTRY integrity (malformation,
-shrinkage, unenrolled modules); they say nothing about whether a pinned
-extraction is semantically correct — that remains `make verify-extraction-regen`.
+DELETION-TOLERANCE FLOORS (F3/F13, 2026-07-19; fail-closed 2026-07-23). A
+registry that only ever gets CHECKED is a registry that can be EDITED to green:
+deleting a drifted entry, emptying a paired file+pin list, marking an entry
+`fresh:false`, or rewriting the registry's own required-target list all used to
+evade the tripwire. The gate therefore owns the exact target identities and the
+only permitted waived-stale identity in code. It hard-fails on: (a) target
+identity/order drift, per-target Rust/generated-Lean path drift, duplicates, or
+mutable `required_targets` metadata that does not exactly mirror the
+checker-owned list; (b) EMPTY file/pin lists or LIST-LENGTH MISMATCH ("registry
+MALFORMED"); (c) any waiver other than the checker-owned `extract-tx-merkle`
+waiver; (d) any recursively discovered
+`extracted/Extracted/**/Funs.lean` module not registered in an entry. A pin
+referencing a file that does not exist still fails via the ordinary drift path.
+HONEST SCOPE, updated: the floors police REGISTRY integrity (malformation,
+shrinkage, waiver identity, unenrolled modules); they say nothing about whether
+a pinned extraction is semantically correct — that remains
+`make verify-extraction-regen`.
 
 Usage:
   check_extraction_freshness.py                 verify pins + floors (CI; exit 1 on
@@ -68,6 +71,108 @@ from pathlib import Path
 VERIF_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REGISTRY = VERIF_DIR / "extraction_registry.json"
+
+# Checker-owned deletion/waiver floor. Keeping target and target→file identities
+# outside the mutable registry makes deleting/replacing an entry or one of its
+# paired paths, rewriting required_targets, or flipping fresh:false a gate
+# failure rather than a way to redefine what the gate is meant to cover.
+REQUIRED_ENTRY_PATHS = {
+    "extract-sphincs-adrs": (
+        ("sphincs-c10/src/address.rs",),
+        ("contracts/verification/extracted/Extracted/Adrs.lean",),
+    ),
+    "extract-aa-userop": (
+        ("aa/src/userop.rs",),
+        ("contracts/verification/extracted/Extracted/UserOp/Funs.lean",
+         "contracts/verification/extracted/Extracted/UserOp/Types.lean",
+         "contracts/verification/extracted/Extracted/UserOp/FunsExternal.lean"),
+    ),
+    "extract-fors-index": (
+        ("sphincs-c10/src/fors.rs",),
+        ("contracts/verification/extracted/Extracted/Fors/Funs.lean",
+         "contracts/verification/extracted/Extracted/Fors/Types.lean"),
+    ),
+    "extract-tx-merkle": (
+        ("tx/src/erc20/merkle.rs",),
+        ("contracts/verification/extracted/Extracted/TxMerkle/Funs.lean",
+         "contracts/verification/extracted/Extracted/TxMerkle/Types.lean",
+         "contracts/verification/extracted/Extracted/TxMerkle/FunsExternal.lean"),
+    ),
+    "extract-merkle-verify": (
+        ("sphincs-c10/src/merkle.rs",),
+        ("contracts/verification/extracted/Extracted/Merkle/Funs.lean",
+         "contracts/verification/extracted/Extracted/Merkle/Types.lean",
+         "contracts/verification/extracted/Extracted/Merkle/FunsExternal.lean"),
+    ),
+    "extract-wots-pkfromsig": (
+        ("sphincs-c10/src/wots.rs",),
+        ("contracts/verification/extracted/Extracted/PkFromSig/Funs.lean",
+         "contracts/verification/extracted/Extracted/PkFromSig/Types.lean",
+         "contracts/verification/extracted/Extracted/PkFromSig/FunsExternal.lean"),
+    ),
+    "extract-hash-fns": (
+        ("sphincs-c10/src/hash.rs",),
+        ("contracts/verification/extracted/Extracted/Hash/Funs.lean",
+         "contracts/verification/extracted/Extracted/Hash/Types.lean",
+         "contracts/verification/extracted/Extracted/Hash/FunsExternal.lean"),
+    ),
+    "extract-bip39-roundtrip": (
+        ("bip39/src/lib.rs",),
+        ("contracts/verification/extracted/Extracted/Bip39/Funs.lean",
+         "contracts/verification/extracted/Extracted/Bip39/Types.lean"),
+    ),
+    "extract-decode-item": (
+        ("tx-core/src/rlp.rs",),
+        ("contracts/verification/extracted/Extracted/Decode/Funs.lean",
+         "contracts/verification/extracted/Extracted/Decode/Types.lean",
+         "contracts/verification/extracted/Extracted/Decode/FunsExternal.lean"),
+    ),
+    "extract-u256-mul": (
+        ("tx-core/src/eip1559.rs",),
+        ("contracts/verification/extracted/Extracted/U256Mul/Funs.lean",
+         "contracts/verification/extracted/Extracted/U256Mul/Types.lean"),
+    ),
+    "extract-format-decimal": (
+        ("tx-core/src/eip1559.rs",),
+        ("contracts/verification/extracted/Extracted/FormatDecimal/Funs.lean",),
+    ),
+    "extract-fwmanifest-preimage": (
+        ("fw-manifest/src/lib.rs",),
+        ("contracts/verification/extracted/Extracted/FwManifest/Funs.lean",
+         "contracts/verification/extracted/Extracted/FwManifest/Types.lean"),
+    ),
+    "extract-wots-digits": (
+        ("sphincs-c10/src/wots.rs",),
+        ("contracts/verification/extracted/Extracted/Wots/Funs.lean",
+         "contracts/verification/extracted/Extracted/Wots/Types.lean"),
+    ),
+    "extract-aa-eip1271": (
+        ("aa/src/eip1271.rs",),
+        ("contracts/verification/extracted/Extracted/Eip1271/Funs.lean",
+         "contracts/verification/extracted/Extracted/Eip1271/Types.lean",
+         "contracts/verification/extracted/Extracted/Eip1271/FunsExternal.lean"),
+    ),
+    "extract-txcore-rlp": (
+        ("tx-core/src/rlp.rs",),
+        ("contracts/verification/extracted/Extracted/Rlp/Funs.lean",
+         "contracts/verification/extracted/Extracted/Rlp/Types.lean",
+         "contracts/verification/extracted/Extracted/Rlp/FunsExternal.lean"),
+    ),
+    "extract-pinstate": (
+        ("domain/src/lib.rs",),
+        ("contracts/verification/extracted/Extracted/PinState/Funs.lean",
+         "contracts/verification/extracted/Extracted/PinState/Types.lean",
+         "contracts/verification/extracted/Extracted/PinState/FunsExternal.lean"),
+    ),
+    "extract-slotkdf": (
+        ("domain/src/lib.rs",),
+        ("contracts/verification/extracted/Extracted/SlotKdf/Funs.lean",
+         "contracts/verification/extracted/Extracted/SlotKdf/Types.lean",
+         "contracts/verification/extracted/Extracted/SlotKdf/FunsExternal.lean"),
+    ),
+}
+REQUIRED_TARGETS = tuple(REQUIRED_ENTRY_PATHS)
+ALLOWED_WAIVED_TARGETS = frozenset({"extract-tx-merkle"})
 
 
 def sha256_file(path: Path) -> str:
@@ -109,16 +214,86 @@ def evaluate(reg: dict) -> tuple[list[str], list[str], list[str], int, int]:
     floor_fails: list[str] = []
     waived: list[str] = []
     fresh_ok = 0
-    for e in reg["entries"]:
+
+    entries = reg.get("entries")
+    if not isinstance(entries, list):
+        return [], ["registry MALFORMED: entries must be a list"], [], 0, 0
+
+    targets = [e.get("target") if isinstance(e, dict) else None for e in entries]
+    if targets != list(REQUIRED_TARGETS):
+        floor_fails.append(
+            "checker-owned target identity/order mismatch — expected "
+            f"{list(REQUIRED_TARGETS)}, got {targets}"
+        )
+    duplicates = sorted({t for t in targets if t is not None and targets.count(t) > 1})
+    if duplicates:
+        floor_fails.append(f"duplicate registry target(s): {duplicates}")
+    if reg.get("required_targets") != list(REQUIRED_TARGETS):
+        floor_fails.append(
+            "mutable required_targets metadata does not exactly mirror the "
+            "checker-owned target identity list"
+        )
+
+    for e in entries:
+        if not isinstance(e, dict) or not isinstance(e.get("target"), str):
+            floor_fails.append("registry MALFORMED: every entry needs a string target")
+            continue
         tgt = e["target"]
-        # FLOOR (a): length-match — zip() silently truncates a dropped pin.
+        list_keys = (
+            "rust_files",
+            "rust_files_sha256",
+            "generated_lean",
+            "generated_lean_sha256",
+        )
+        if any(not isinstance(e.get(k), list) for k in list_keys):
+            floor_fails.append(
+                f"entry {tgt}: registry MALFORMED (file and pin fields must be lists)"
+            )
+            continue
+        if any(len(e[k]) == 0 for k in list_keys):
+            floor_fails.append(
+                f"entry {tgt}: registry MALFORMED (empty file/pin list — paired-empty "
+                "lists used to pass vacuously)"
+            )
+            continue
+        # Length matching prevents zip() from silently truncating a dropped pin.
         if (len(e["rust_files"]) != len(e["rust_files_sha256"])
                 or len(e["generated_lean"]) != len(e["generated_lean_sha256"])):
             floor_fails.append(f"entry {tgt}: registry MALFORMED (list length mismatch — "
                                f"possible dropped pin)")
             continue
+        expected_paths = REQUIRED_ENTRY_PATHS.get(tgt)
+        if expected_paths is None:
+            floor_fails.append(f"entry {tgt}: unexpected target has no checker-owned path identity")
+            continue
+        if (tuple(e["rust_files"]) != expected_paths[0]
+                or tuple(e["generated_lean"]) != expected_paths[1]):
+            floor_fails.append(
+                f"entry {tgt}: checker-owned file identity mismatch — expected "
+                f"rust={list(expected_paths[0])}, lean={list(expected_paths[1])}; got "
+                f"rust={e['rust_files']}, lean={e['generated_lean']}"
+            )
+            continue
+        if not isinstance(e.get("fresh"), bool):
+            floor_fails.append(f"entry {tgt}: registry MALFORMED (fresh must be explicit bool)")
+            continue
+
+        is_waived = not e["fresh"]
+        if is_waived and tgt not in ALLOWED_WAIVED_TARGETS:
+            floor_fails.append(
+                f"entry {tgt}: unauthorised waived-stale target — fresh:false cannot "
+                "redefine checker coverage"
+            )
+            continue
+        if not is_waived and tgt in ALLOWED_WAIVED_TARGETS:
+            floor_fails.append(
+                f"entry {tgt}: checker-owned waiver identity changed without updating "
+                "the gate"
+            )
+            continue
+
         drift = entry_drift(e)
-        if not e.get("fresh", True):
+        if is_waived:
             waived.append(f"{tgt}: WAIVED-STALE — {e.get('waiver', '(no reason given)')}"
                           + (f"  [+ live drift since pin: {'; '.join(drift)}]" if drift else ""))
             continue
@@ -130,19 +305,14 @@ def evaluate(reg: dict) -> tuple[list[str], list[str], list[str], int, int]:
         else:
             fresh_ok += 1
 
-    # FLOOR (b): required-ID / deletion-tolerance guard — the registry must not SHRINK.
-    if not reg["entries"]:
-        floor_fails.append("registry shrank — deletion-tolerance guard: ZERO entries "
-                           "(an empty registry used to pass vacuously)")
-    present = {e["target"] for e in reg["entries"]}
-    for tgt in reg.get("required_targets", []):
-        if tgt not in present:
-            floor_fails.append(f"registry shrank — deletion-tolerance guard: required target "
-                               f"{tgt} is ABSENT from the registry")
-
-    # FLOOR (c): completeness — every on-disk extracted module MUST be pinned somewhere.
-    registered = {g for e in reg["entries"] for g in e["generated_lean"]}
-    disk_modules = sorted((VERIF_DIR / "extracted" / "Extracted").glob("*/Funs.lean"))
+    # Completeness is recursive: nested generated modules must not evade enrollment.
+    registered = {
+        g
+        for e in entries
+        if isinstance(e, dict) and isinstance(e.get("generated_lean"), list)
+        for g in e["generated_lean"]
+    }
+    disk_modules = sorted((VERIF_DIR / "extracted" / "Extracted").rglob("Funs.lean"))
     for f in disk_modules:
         rel = f.relative_to(REPO_ROOT).as_posix()
         if rel not in registered:
@@ -158,7 +328,7 @@ def check() -> int:
     print(f"=== verify-extraction-freshness ({len(reg['entries'])} extractions) ===")
     print("    sha256 tripwire: committed generated Lean + mirrored Rust file. Toolchain-free.")
     floor_note = (f"registry floors OK ({n_modules} on-disk extracted module(s) all pinned, "
-                  f"required-targets present, pin lists length-matched)" if not floor_fails else
+                  f"checker-owned targets/waiver exact, non-empty pin lists matched)" if not floor_fails else
                   f"registry floors VIOLATED ({len(floor_fails)} — see FAIL below)")
     print(f"    fresh & pinned-OK: {fresh_ok} | waived-stale: {len(waived)} | "
           f"drifted: {len(drift_fails)} | {floor_note}")
@@ -227,13 +397,13 @@ def self_test() -> int:
     (F1) the FW-manifest domain-tag `PQFW_V1`->`PQFW_V2` single-byte flip must move BOTH
     tripwire halves. `verify-build`/`verify-extracted` would stay GREEN on the stale
     committed Lean; the freshness tripwire must go RED.
-    (F3/F13) the three registry floors must each fire on an IN-MEMORY mutated copy of
-    the registry (the real extraction_registry.json is never touched): (a) one entry
-    DELETED -> required-ID floor; (b) one pin DROPPED from an entry -> length-match
-    floor (the old zip() silently truncated this to a pass); (c) one real on-disk
-    module removed from the registry (and from required_targets, isolating the floor)
-    -> completeness floor."""
-    print("=== check_extraction_freshness --self-test (FW-tag flip + registry-floor negative controls) ===")
+    (F3/F13) the fail-closed registry floors must each fire on an IN-MEMORY
+    mutated copy of the registry (the real extraction_registry.json is never
+    touched): deleted entry, dropped pin, paired-empty file+pin lists, paired
+    path+pin deletion/replacement, rewritten required_targets metadata,
+    unauthorised fresh:false, and an unregistered on-disk module."""
+    print("=== check_extraction_freshness --self-test "
+          "(FW-tag flip + fail-closed registry negative controls) ===")
     reg = load_registry()
     fw = next(e for e in reg["entries"] if e["target"] == "extract-fwmanifest-preimage")
     ok = True
@@ -277,15 +447,16 @@ def self_test() -> int:
 
     # FLOOR NEGATIVES (F3/F13): run the checker core against IN-MEMORY mutated copies
     # of the registry — the real extraction_registry.json is never touched.
-    # (a) required-ID floor: a copy with one entry DELETED must fail the deletion guard.
+    # (a) checker-owned identity floor: a copy with one entry DELETED must fail.
     shrunk = copy.deepcopy(reg)
     dropped = shrunk["entries"].pop()
     fa = evaluate(shrunk)[1]
-    if any("deletion-tolerance guard" in m and dropped["target"] in m for m in fa):
+    if any("checker-owned target identity/order mismatch" in m for m in fa):
         print(f"  ok: in-memory copy with entry '{dropped['target']}' DELETED fails "
-              f"(required-ID floor fires)")
+              f"(checker-owned identity floor fires)")
     else:
-        print(f"  FAIL: deleting entry '{dropped['target']}' did NOT fire the required-ID floor!")
+        print(f"  FAIL: deleting entry '{dropped['target']}' did NOT fire the "
+              f"checker-owned identity floor!")
         ok = False
 
     # (b) length-match floor: a copy with one pin DROPPED from an entry must fail MALFORMED
@@ -301,18 +472,86 @@ def self_test() -> int:
         print(f"  FAIL: a dropped pin in '{victim['target']}' did NOT fire the length-match floor!")
         ok = False
 
-    # (c) completeness floor: a copy missing one REAL on-disk module must fail unpinned.
-    #     The entry is removed from required_targets too, so ONLY the completeness floor
-    #     can catch it (isolation).
+    # (c) paired-empty floor: deleting BOTH a file and its matching pin must not
+    #     turn zip() into a vacuous pass.
+    empty = copy.deepcopy(reg)
+    victim = empty["entries"][0]
+    victim["rust_files"] = []
+    victim["rust_files_sha256"] = []
+    fc = evaluate(empty)[1]
+    if any("empty file/pin list" in m and victim["target"] in m for m in fc):
+        print(f"  ok: paired-empty file+pin lists in '{victim['target']}' fail "
+              f"(non-empty floor fires)")
+    else:
+        print(f"  FAIL: paired-empty file+pin lists in '{victim['target']}' passed vacuously!")
+        ok = False
+
+    # (d) deleting a non-Funs generated path AND its matching pin used to evade
+    #     both the length and Funs-only completeness floors.
+    paired_drop = copy.deepcopy(reg)
+    victim = next(e for e in paired_drop["entries"] if len(e["generated_lean"]) > 1)
+    victim["generated_lean"].pop()
+    victim["generated_lean_sha256"].pop()
+    fd = evaluate(paired_drop)[1]
+    if any("checker-owned file identity mismatch" in m and victim["target"] in m for m in fd):
+        print(f"  ok: paired generated-path+pin deletion in '{victim['target']}' fails "
+              f"(checker-owned file identity fires)")
+    else:
+        print(f"  FAIL: paired generated-path+pin deletion in '{victim['target']}' escaped!")
+        ok = False
+
+    # (e) replacing a mirrored Rust path and its pin with another real pair must
+    #     not silently retarget the tripwire.
+    retarget = copy.deepcopy(reg)
+    victim = next(e for e in retarget["entries"]
+                  if e["target"] == "extract-fwmanifest-preimage")
+    donor = next(e for e in retarget["entries"] if e["target"] == "extract-aa-userop")
+    victim["rust_files"] = donor["rust_files"][:]
+    victim["rust_files_sha256"] = donor["rust_files_sha256"][:]
+    fe = evaluate(retarget)[1]
+    if any("checker-owned file identity mismatch" in m and victim["target"] in m for m in fe):
+        print(f"  ok: paired Rust-path+pin replacement in '{victim['target']}' fails "
+              f"(checker-owned file identity fires)")
+    else:
+        print(f"  FAIL: paired Rust-path+pin replacement in '{victim['target']}' retargeted "
+              f"the tripwire!")
+        ok = False
+
+    # (f) mutable metadata cannot redefine the checker-owned target floor.
+    metadata = copy.deepcopy(reg)
+    metadata["required_targets"] = []
+    ff = evaluate(metadata)[1]
+    if any("mutable required_targets metadata" in m for m in ff):
+        print("  ok: rewriting required_targets to [] fails (checker owns target identities)")
+    else:
+        print("  FAIL: rewriting required_targets to [] redefined the coverage floor!")
+        ok = False
+
+    # (g) an ordinary fresh entry cannot be waived by flipping fresh:false.
+    waiver = copy.deepcopy(reg)
+    victim = next(e for e in waiver["entries"]
+                  if e["target"] not in ALLOWED_WAIVED_TARGETS)
+    victim["fresh"] = False
+    fg = evaluate(waiver)[1]
+    if any("unauthorised waived-stale target" in m and victim["target"] in m for m in fg):
+        print(f"  ok: fresh:false on '{victim['target']}' fails "
+              f"(checker-owned waiver identity fires)")
+    else:
+        print(f"  FAIL: fresh:false on '{victim['target']}' bypassed drift checking!")
+        ok = False
+
+    # (h) recursive completeness floor: a copy missing one REAL on-disk module
+    #     must still report the unpinned module even though the mutable
+    #     required_targets metadata is edited in tandem.
     comp = copy.deepcopy(reg)
     victim = next(e for e in comp["entries"]
                   if any(g.endswith("/Funs.lean") for g in e["generated_lean"]))
     comp["entries"] = [e for e in comp["entries"] if e["target"] != victim["target"]]
     comp["required_targets"] = [t for t in comp.get("required_targets", []) if t != victim["target"]]
-    fc = evaluate(comp)[1]
-    if any("unpinned extracted module" in m for m in fc):
+    fh = evaluate(comp)[1]
+    if any("unpinned extracted module" in m for m in fh):
         print(f"  ok: in-memory copy missing the on-disk module of '{victim['target']}' fails "
-              f"(completeness floor fires)")
+              f"(recursive completeness floor fires)")
     else:
         print(f"  FAIL: removing '{victim['target']}' (module still on disk) did NOT fire the "
               f"completeness floor!")

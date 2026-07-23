@@ -4029,7 +4029,7 @@ verify-kani-mutation: ## anti-vacuity: break a decoder, expect a Kani harness to
 	python3 scripts/check_kani_mutations.py
 
 # F11 (2026-07-16) — SOURCE-GENERATED Kani harness census. The published counts
-# (161 harnesses / 26 files; 8 harnesses in 6 files with no mutation coverage)
+# (173 harnesses / 27 files; 11 harnesses in 6 files with no mutation coverage)
 # were hand-maintained prose that drifted (gate_enforcement.json said 93/17).
 # kani_mutations.json is only the load-bearing MUTATION manifest — it can't encode
 # the full census. This regenerates exact file/function identities from active,

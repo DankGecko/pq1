@@ -381,10 +381,10 @@
       "crate": "pqsigner-erc7730",
       "harness": "params_native_currency_list_canonicality",
       "file": "pqsigner-erc7730/src/render/params.rs",
-      "find": "|| count > MAX_NATIVE_CURRENCY_ADDRESSES",
-      "replace": "|| count >= MAX_NATIVE_CURRENCY_ADDRESSES",
+      "find": "address_list_is_canonical(payload, MAX_NATIVE_CURRENCY_ADDRESSES)",
+      "replace": "address_list_is_canonical(payload, MAX_NATIVE_CURRENCY_ADDRESSES - 1)",
       "expect": "kani_fails",
-      "note": "Turn the inclusive two-address native-currency-list cap into an off-by-one rejection. The exhaustive canonicality harness requires every distinct 40-byte pair to remain accepted and therefore MUST redden. The unmutated harness verified successfully with cargo-kani 0.67.0 on 2026-07-18 and the unique material mutation is statically enrolled; a targeted mutated execution receipt is still pending."
+      "note": "Turn the inclusive two-address native-currency-list cap into an off-by-one rejection at the native-only wrapper (after address-list validation was shared with senderAddress). With MAX_NATIVE_CURRENCY_ADDRESSES=2, passing max-1 is exactly the prior count>=2 mutant without perturbing senderAddress. The exhaustive canonicality harness requires every distinct 40-byte pair to remain accepted and therefore MUST redden. The unmutated harness verified successfully with cargo-kani 0.67.0 on 2026-07-18 and the unique material mutation is statically enrolled; a targeted mutated execution receipt is still pending."
     },
     {
       "id": "interpolated_intent_single_substitution",
