@@ -200,8 +200,8 @@ mod tests {
     //!
     //! Vectors reproduced verbatim from the NIST examples document
     //! (<https://csrc.nist.gov/publications/detail/sp/800-38b/final>
-    //! referencing <https://csrc.nist.gov/CSRC/media/Publications/sp/800-38b/final/documents/sp_800-38b_updated-examples.pdf>,
-    //! Appendix D.3 "CMAC-AES256"). Exercising the four message lengths
+    //! referencing <https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Standards-and-Guidelines/documents/examples/AES_CMAC.pdf>,
+    //! section "CMAC-AES256"). Exercising the four message lengths
     //! (empty / 16 / 40 / 64 bytes) covers every code path in
     //! `cmac_generic`:
     //! - empty → synthetic last block with K2 XOR (0x80 || 0^127)

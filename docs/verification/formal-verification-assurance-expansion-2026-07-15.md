@@ -430,7 +430,7 @@ assurance, not a stronger substantive `theft_free` safety conjunct.
 - Rust verification pilots: [Verus](https://github.com/verus-lang/verus),
   [Verus guide](https://verus-lang.github.io/verus/guide/overview.html),
   [RefinedRust](https://plv.mpi-sws.org/refinedrust/),
-  [Crux](https://crux.galois.com/), [SAW](https://tools.galois.com/saw).
+  [Crux](https://github.com/GaloisInc/crux), [SAW](https://tools.galois.com/saw).
 - Parser-generation pilot: [Vest, USENIX Security 2025](https://www.usenix.org/conference/usenixsecurity25/presentation/cai-yi).
 - EasyCrypt and C10 foundations: [EasyCrypt](https://easycrypt.gitlab.io/easycrypt-web/),
   [formal SPHINCS+ proof, ePrint 2024/910](https://eprint.iacr.org/2024/910.pdf),

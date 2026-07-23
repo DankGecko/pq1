@@ -84,7 +84,7 @@ Today, allowed are
 > 
 > Instead:
 > - Use the `EIP7702Proxy` pattern: [base/eip-7702-proxy](https://github.com/base/eip-7702-proxy)
-> - See Coinbase Developer Platform docs for further guidance and an example of performing a safe EIP-7702 upgrade: [EIP-7702 FAQs – safe upgrade](https://docs.cdp.coinbase.com/paymaster/need-to-knows/eip-7702-faqs#how-do-i-upgrade-my-wallet-to-7702)
+> - See Coinbase Developer Platform docs for further guidance on EIP-7702 upgrades: [EIP-7702](https://docs.cdp.coinbase.com/wallets/using-wallets/eip-7702)
 
 ## Deployments
 Factory and implementation are deployed via [Safe Singleton Factory](https://github.com/safe-global/safe-singleton-factory), which today will give the same address across 248 chains. See "Deploying" below for instructions on how to deploy to new chains. 
@@ -110,7 +110,7 @@ RPC_URL=
 # Optional Etherscan API key for contract verification
 ETHERSCAN_API_KEY=
 ```
-See [here](https://book.getfoundry.sh/reference/cast/cast-wallet-import) for more details on `cast wallet`.
+See [here](https://getfoundry.sh/reference/cast/wallet/import) for more details on `cast wallet`.
 
 Then run 
 ```
@@ -118,4 +118,4 @@ make deploy
 ```
 
 ## Influences
-Much of the code in this repository started from Solady's [ERC4337](https://github.com/Vectorized/solady/blob/main/src/accounts/ERC4337.sol) implementation. We were also influenced by [DaimoAccount](https://github.com/daimo-eth/daimo/blob/master/packages/contract/src/DaimoAccount.sol), which pioneered using passkey signers on ERC-4337 accounts, and [LightAccount](https://github.com/alchemyplatform/light-account).
+Much of the code in this repository started from Solady's [ERC4337](https://github.com/Vectorized/solady/blob/main/src/accounts/ERC4337.sol) implementation. We were also influenced by [DaimoAccount](https://github.com/daimo-eth/daimo/blob/3236a41558bc39629d9466bcf3a7bc840ca54584/packages/contract/src/DaimoAccount.sol), which pioneered using passkey signers on ERC-4337 accounts, and [LightAccount](https://github.com/alchemyplatform/light-account).

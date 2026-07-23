@@ -101,7 +101,7 @@ model + a differential test that runs and can fail.
 | **(b) Flash atomicity / torn write / ECC / brownout** | **Partially.** PoWER/Verus ([OSDI'25](https://people.csail.mit.edu/nickolai/papers/leblanc-power.pdf)) is the framework match; TLA+/TLC installed + piloted; Kani installed | Crash consistency vs a chunked model. PoWER's chunk param = 16 B QW; **1→0-only, page erase, ECC-lock must be ADDED** — and ECC-lock is not additive (see below) | PoWER: no (x86 PM) | **`K`/`C` logic; `M` + `silicon-E2E` contract** | mo (Verus) / wks (TLC+Kani) | Chunk atomicity itself; ECC on a torn QW; marginal-cell read stability after brownout |
 | **(c) ARMv8-M ISA / CMSE / SAU-IDAU-GTZC** | **No. Structurally, permanently.** See §5.1 | Nothing. The config **logic** is bit-packing (Flux/TickTock shape, `C`-tier); enforcement is `make gtzc-enforcement-hw` | — | **`C` config + `silicon-E2E`. `K` unreachable** | n/a | CMSE instruction semantics; SAU/IDAU as ST wired it; **the entire GTZC block**; unpublished errata |
 | **(d) I2C + IFX-I2C / T=1′ framing, retry, guard time** | **Nothing to reuse** — literature is empty (§5.3). Build with installed TLA+/TLC + Kani | Framing/CRC purity (`C`, today, no seam). FSM: no lost/dup apply, progress (`M`) | Kani yes (pure fns); TLC n/a | **`C` + `M`** | 3–5 d (Kani) / 3–4 wk (TLC) | Bus electricals; SE-side timing; that a 50 µs guard-time violation is benign-or-detected |
-| **(e) OPTIGA / SE050 black box + LcsO** | **No, and none will appear.** Every technique that could ([HIVE](https://arxiv.org/html/2309.08002v2), [OpenTitan FPV](https://opentitan.org/book/doc/contributing/dv/sec_cm_dv_framework.html), [Silveroak](https://github.com/project-oak/silveroak), Termite) needs RTL | Nothing. Certificates attest **bounded expert effort**, and their scope excludes what we rely on (§4.5) | — | **`silicon-E2E` + scoped `T`. Nothing above, ever** | per-property days | Everything inside the die |
+| **(e) OPTIGA / SE050 black box + LcsO** | **No, and none will appear.** Every technique that could ([HIVE](https://arxiv.org/html/2309.08002v2), [OpenTitan FPV](https://opentitan.org/book/doc/contributing/dv/sec_cm_dv_framework/index.html), [Silveroak](https://github.com/project-oak/silveroak), Termite) needs RTL | Nothing. Certificates attest **bounded expert effort**, and their scope excludes what we rely on (§4.5) | — | **`silicon-E2E` + scoped `T`. Nothing above, ever** | per-property days | Everything inside the die |
 | **(f) SAES/DHUK/BHK, TAMP, TRNG, HASH, RCC** | **Partially, and non-uniformly.** [NIST EA suite](https://github.com/usnistgov/SP800-90B_EntropyAssessment) (statistical, not proof); [stm32-rs SVD](https://stm32-rs.github.io/stm32-rs/) (layout only); KAT self-tests | TRNG min-entropy *estimate*; transcription conformance; DHUK per-die distinctness (n=2) | SVD yes; EA n/a | **`silicon-E2E` + `C` gates** | days each | DHUK unextractability; TRNG entropy; SAES leakage; every unpublished erratum |
 
 Three points the table cannot carry:
@@ -362,7 +362,7 @@ language (the I2C formal work is **RTL** verification, requiring design source).
 
 ### 5.4 No embedded flash/OTP litmus suite exists.
 The tradition exists in two **disconnected** halves and nobody joined them: the
-model-validated-by-generated-tests **method** ([Ferrite, ASPLOS'16](https://homes.cs.washington.edu/~mernst/pubs/crash-consistency-asplos2016.pdf);
+model-validated-by-generated-tests **method** ([Ferrite, ASPLOS'16](https://homes.cs.washington.edu/~bornholt/papers/ferrite-asplos16.pdf);
 herd7/litmus7), and the power-cut **rig on real flash** (Tseng, DAC'11). Joining them for STM32U5
 appears **unprecedented** — which makes it a genuine research contribution and a bad first project.
 Ferrite is **not** a hardware-contract validator: §5.1 says it "abstracts the behavior of storage
@@ -708,11 +708,11 @@ All URLs below were fetched and verified during the survey. Grouped by bucket.
 - PoWER + CapybaraKV (OSDI'25; chunked crash model in Verus): https://people.csail.mit.edu/nickolai/papers/leblanc-power.pdf · artifact: https://github.com/microsoft/verified-storage
 - FSCQ / Crash Hoare Logic (SOSP'15; atomic sector writes **assumed**): https://people.csail.mit.edu/nickolai/papers/chen-fscq.pdf
 - Flashix (MTD = the hardware contract, written down): https://www.uni-augsburg.de/en/fakultaet/fai/isse/projects/flashix/
-- Ferrite (ASPLOS'16; validates software vs an **assumed** disk model): https://homes.cs.washington.edu/~mernst/pubs/crash-consistency-asplos2016.pdf
+- Ferrite (ASPLOS'16; validates software vs an **assumed** disk model): https://homes.cs.washington.edu/~bornholt/papers/ferrite-asplos16.pdf
 - Tseng et al., DAC'11 power-cut rig (**MLC/NAND-scoped** — do not over-transfer): https://cseweb.ucsd.edu/~swanson/papers/DAC2011PowerCut.pdf
 - Ariadne mechanized in F* (crash-nondeterministic `incr` + ghost recovery FSM): https://arxiv.org/pdf/1707.02466
 - OpenTitan lc_ctrl (A/B ECC-preserving incremental OTP — **needs the tapeout**): https://opentitan.org/book/hw/ip/lc_ctrl/doc/theory_of_operation.html
-- OpenTitan FPV / sec_cm framework: https://opentitan.org/book/doc/contributing/dv/sec_cm_dv_framework.html
+- OpenTitan FPV / sec_cm framework: https://opentitan.org/book/doc/contributing/dv/sec_cm_dv_framework/index.html
 - ST community thread, U5 OTP half-QW (**tool bug, fixed in CubeProgrammer 2.19.0; no root cause**): https://community.st.com/t5/stm32-mcus-products/stm32u5-otp-programming-issue/td-p/682384
 
 **Secure elements (surface e)**
@@ -726,7 +726,7 @@ All URLs below were fetched and verified during the survey. Grouped by bucket.
 - Djoudi/Hána/Kosmatov, JCVM in Frama-C (**Thales**, not NXP; ~3 person-years, 52k VCs, EAL6+): https://nikolai-kosmatov.eu/publications/djoudi_hk_fm_2021.pdf
 - Infineon I2C Protocol v2.03 (**public, wire-complete**): https://raw.githubusercontent.com/Infineon/optiga-trust-m-overview/main/docs/pdf/Infineon_I2C_Protocol_v2.03.pdf
 - OPTIGA Shielded Connection wiki (**no proof, no threat model**): https://github.com/Infineon/optiga-trust-m/wiki/Shielded-Connection-101
-- Ledger Donjon, Trezor Safe 3 (**MCU glitched; OPTIGA untouched; attestation intact**): https://www.ledger.com/blog/ledger-donjons-trezor-safe-3-evaluation
+- Ledger Donjon, Trezor Safe 3 (**MCU glitched; OPTIGA untouched; attestation intact**): https://www.ledger.com/why-secure-elements-make-a-crucial-difference-to-hardware-wallet-security
 
 **STM32 certification + FI (surfaces c, f) — the new bucket**
 - TrustCB SESIP certificates index: https://www.trustcb.com/iot/sesip/sesip-certificates/
@@ -738,7 +738,7 @@ All URLs below were fetched and verified during the survey. Grouped by bucket.
 - PSA Level 3 methodology (35-day white-box evaluation): https://www.psacertified.org/getting-certified/silicon-vendor/overview/level-3/
 - NIST SP 800-90B ESV certificates (**none names the U585**; E11 = "STM32U5x TRNG"): https://csrc.nist.gov/projects/cryptographic-module-validation-program/entropy-validations/certificate/11
 - NIST EA suite v1.1.8: https://github.com/usnistgov/SP800-90B_EntropyAssessment
-- SySS, STM32L051 RDP glitch (**Cortex-M0+**, 2025-06): https://blog.syss.com/posts/glitching-the-stm32l051/
+- SySS, STM32L051 RDP glitch (**Cortex-M0+**, 2025-06): https://blog.syss.com/posts/voltage-glitching-the-stm32l05-microcontroller/
 - µ-Glitch, USENIX Sec'23 (**TrustZone-M disabled on the STM32L5 — a Cortex-M33**): https://www.usenix.org/system/files/usenixsecurity23-sass.pdf
 - Šimoník, MU thesis 2025 (**76% voltage-glitch PIN bypass on the STM32U5A9**): https://is.muni.cz/th/nysvv/thesis.pdf
 - cargo-checkct (BINSEC/RelSE; **dormant**, last commit 2025-05-07): https://github.com/Ledger-Donjon/cargo-checkct

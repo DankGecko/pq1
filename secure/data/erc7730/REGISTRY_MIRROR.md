@@ -39,7 +39,7 @@ cargo run -p dbgen -- \
 
 | Form | Example | Resolution |
 |------|---------|------------|
-| GitHub blob URL | `https://github.com/ethereum/clear-signing-erc7730-registry/blob/main/templates/erc2612-permit.json` | strip `https://github.com/<owner>/<repo>/blob/<ref>/`, treat the rest as a registry-relative path |
+| GitHub blob URL | `https://github.com/ethereum/clear-signing-erc7730-registry/blob/master/ercs/eip712-erc2612-permit.json` | strip `https://github.com/<owner>/<repo>/blob/<ref>/`, treat the rest as a registry-relative path |
 | Relative path | `./templates/permit.json` | resolve relative to the **descriptor file's** directory |
 | Registry-relative | `templates/permit.json` | resolve relative to `--registry-root <dir>` |
 

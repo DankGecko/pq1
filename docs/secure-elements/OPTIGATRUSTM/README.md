@@ -112,4 +112,4 @@ Reference documentation for the **OPTIGA Trust M V3** (SLS32AIA) secure element 
 - Data and Key Store Overview: https://github.com/Infineon/optiga-trust-m/wiki/Data-and-Key-Store-Overview
 
 **API documentation (Doxygen):**
-- https://infineon.github.io/optiga-trust-m/
+- https://github.com/Infineon/optiga-trust-m-overview

@@ -167,7 +167,7 @@ This achieves hardware-backed PIN gating, but through crypto operations rather t
 ### References for Implementation
 
 1. **Protocol spec:** `Infineon_I2C_Protocol_v2.03.pdf` (in `optiga-trust-m-overview/docs/pdf/`)
-2. **C source code:** https://github.com/Infineon/optiga-trust-m/tree/master/optiga/comms/ifx_i2c/
+2. **C source code:** https://github.com/Infineon/optiga-trust-m/tree/main/src/comms/ifx_i2c
 3. **Solution Reference Manual:** https://github.com/Infineon/optiga-trust-m-overview/blob/main/docs/OPTIGA%E2%84%A2%20Trust%20M%20Solution%20Reference%20Manual.md
 4. **Existing SE050 driver in this repo:** `secure/src/se050/` (similar pattern to follow)
 5. **Existing Tropic01 driver:** `secure/src/tropic01_se.rs` (similar pattern)
