@@ -53,12 +53,14 @@ noncomputable def hmac_sha512_bytes (key msg : Slice Std.U8) :
     buffer AFTER the output is computed), so the wipe semantics are irrelevant
     to the output layout and intentionally not modeled here (secret-hygiene is a
     separate concern). -/
+@[rust_fun "zeroize::{zeroize::Zeroize<[@Z; @N]>}::zeroize"]
 def Array.Insts.ZeroizeZeroize.zeroize {Z : Type} {N : Std.Usize}
     (_inst : zeroize.Zeroize Z) (a : Array Z N) : Result (Array Z N) :=
   ok a
 
 /-- `zeroize` blanket impl: modeled TOTAL (identity); result discarded — see
     `Array.Insts.ZeroizeZeroize.zeroize`. -/
+@[rust_fun "zeroize::{zeroize::Zeroize<@Z>}::zeroize"]
 def zeroize.Zeroize.Blanket.zeroize {Z : Type}
     (_inst : zeroize.DefaultIsZeroes Z) (z : Z) : Result Z :=
   ok z

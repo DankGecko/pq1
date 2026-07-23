@@ -54,6 +54,9 @@ except ImportError:
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = Path(__file__).resolve().parent / "gate_enforcement.json"
 KANI_MUTATIONS = Path(__file__).resolve().parent / "kani_mutations.json"
+EXTRACTION_REGISTRY = (
+    REPO_ROOT / "contracts" / "verification" / "extraction_registry.json"
+)
 
 
 def _norm_prefix(glob: str) -> str:
@@ -346,6 +349,51 @@ def _kani_mutation_files() -> list[str]:
     return [m["file"] for m in mutations]
 
 
+def extraction_freshness_coverage(
+    policed: list[str], rust_files: list[str]
+) -> list[str]:
+    """Reverse-check the registry-derived extraction source/control surface.
+
+    `check_gate` proves workflow paths cover declared `polices_paths`; this
+    proves the declaration itself covers every live registry source plus the
+    files that define/update the fail-closed gate.
+    """
+    required = set(rust_files)
+    required.update(
+        {
+            "contracts/verification/extraction_registry.json",
+            "contracts/verification/Makefile",
+            "contracts/verification/scripts/check_extraction_freshness.py",
+            "contracts/verification/scripts/check_extraction_regen_output.py",
+        }
+    )
+    return [
+        "extraction-freshness-reverse: registry/control path "
+        f"`{path}` is not covered by verify-extraction-freshness polices_paths"
+        for path in sorted(required)
+        if not _covers(policed, path)
+    ]
+
+
+def _extraction_rust_files() -> list[str]:
+    try:
+        registry = json.loads(EXTRACTION_REGISTRY.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise SystemExit(f"HARNESS ERROR: cannot read {EXTRACTION_REGISTRY}: {e}")
+    entries = registry.get("entries")
+    if not isinstance(entries, list):
+        raise SystemExit("HARNESS ERROR: extraction registry needs entries[]")
+    rust_files: list[str] = []
+    for entry in entries:
+        files = entry.get("rust_files") if isinstance(entry, dict) else None
+        if not isinstance(files, list) or any(not isinstance(f, str) for f in files):
+            raise SystemExit(
+                "HARNESS ERROR: extraction registry entries need rust_files[] strings"
+            )
+        rust_files.extend(files)
+    return rust_files
+
+
 def main() -> int:
     self_test = "--self-test" in sys.argv[1:]
     try:
@@ -392,9 +440,27 @@ def main() -> int:
             print("  SELF-TEST FAILED: uncovered Kani mutation file NOT caught — harness void.",
                   file=sys.stderr)
             return 2
+        rext = extraction_freshness_coverage(
+            [
+                "domain/src/**",
+                "contracts/verification/extraction_registry.json",
+                "contracts/verification/Makefile",
+                "contracts/verification/scripts/check_extraction_freshness.py",
+                "contracts/verification/scripts/check_extraction_regen_output.py",
+            ],
+            ["domain/src/lib.rs", "proto/src/lib.rs"],
+        )
+        if not rext:
+            print(
+                "  SELF-TEST FAILED: uncovered extraction-registry source NOT caught "
+                "— harness void.",
+                file=sys.stderr,
+            )
+            return 2
         print(f"  self-test OK: allowlist gap caught ({len(fa)}), paths-ignore denylist logic verified "
               f"(directly), kani-reverse gap caught ({len(rc)}), "
-              f"kani-mutation-reverse gap caught ({len(rm)}).")
+              f"kani-mutation-reverse gap caught ({len(rm)}), "
+              f"extraction-reverse gap caught ({len(rext)}).")
         return 0
 
     print(f"=== verify-gate-enforcement ({len(gates)} gates) ===")
@@ -414,6 +480,14 @@ def main() -> int:
         all_fails += kani_mutation_manifest_coverage(
             kani_mutation_gate.get("polices_paths", []),
             _kani_mutation_files(),
+        )
+    extraction_gate = next(
+        (g for g in gates if g["id"] == "verify-extraction-freshness"), None
+    )
+    if extraction_gate:
+        all_fails += extraction_freshness_coverage(
+            extraction_gate.get("polices_paths", []),
+            _extraction_rust_files(),
         )
 
     print()

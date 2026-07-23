@@ -70,7 +70,7 @@ import hashlib
 import json
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 VERIF_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -86,13 +86,13 @@ REQUIRED_ENTRY_PATHS = {
         ("contracts/verification/extracted/Extracted/Adrs.lean",),
     ),
     "extract-aa-userop": (
-        ("aa/src/userop.rs",),
+        ("aa/src/userop.rs", "tx-core/src/eip1559.rs", "tx-core/src/hash.rs"),
         ("contracts/verification/extracted/Extracted/UserOp/Funs.lean",
          "contracts/verification/extracted/Extracted/UserOp/Types.lean",
          "contracts/verification/extracted/Extracted/UserOp/FunsExternal.lean"),
     ),
     "extract-fors-index": (
-        ("sphincs-c10/src/fors.rs",),
+        ("sphincs-c10/src/fors.rs", "sphincs-c10/src/params.rs"),
         ("contracts/verification/extracted/Extracted/Fors/Funs.lean",
          "contracts/verification/extracted/Extracted/Fors/Types.lean"),
     ),
@@ -103,25 +103,25 @@ REQUIRED_ENTRY_PATHS = {
          "contracts/verification/extracted/Extracted/TxMerkle/FunsExternal.lean"),
     ),
     "extract-merkle-verify": (
-        ("sphincs-c10/src/merkle.rs",),
+        ("sphincs-c10/src/merkle.rs", "sphincs-c10/src/params.rs"),
         ("contracts/verification/extracted/Extracted/Merkle/Funs.lean",
          "contracts/verification/extracted/Extracted/Merkle/Types.lean",
          "contracts/verification/extracted/Extracted/Merkle/FunsExternal.lean"),
     ),
     "extract-wots-pkfromsig": (
-        ("sphincs-c10/src/wots.rs",),
+        ("sphincs-c10/src/wots.rs", "sphincs-c10/src/params.rs"),
         ("contracts/verification/extracted/Extracted/PkFromSig/Funs.lean",
          "contracts/verification/extracted/Extracted/PkFromSig/Types.lean",
          "contracts/verification/extracted/Extracted/PkFromSig/FunsExternal.lean"),
     ),
     "extract-hash-fns": (
-        ("sphincs-c10/src/hash.rs",),
+        ("sphincs-c10/src/hash.rs", "sphincs-c10/src/params.rs"),
         ("contracts/verification/extracted/Extracted/Hash/Funs.lean",
          "contracts/verification/extracted/Extracted/Hash/Types.lean",
          "contracts/verification/extracted/Extracted/Hash/FunsExternal.lean"),
     ),
     "extract-bip39-roundtrip": (
-        ("bip39/src/lib.rs",),
+        ("bip39/src/lib.rs", "bip39/src/full.rs"),
         ("contracts/verification/extracted/Extracted/Bip39/Funs.lean",
          "contracts/verification/extracted/Extracted/Bip39/Types.lean"),
     ),
@@ -146,7 +146,7 @@ REQUIRED_ENTRY_PATHS = {
          "contracts/verification/extracted/Extracted/FwManifest/Types.lean"),
     ),
     "extract-wots-digits": (
-        ("sphincs-c10/src/wots.rs",),
+        ("sphincs-c10/src/wots.rs", "sphincs-c10/src/params.rs"),
         ("contracts/verification/extracted/Extracted/Wots/Funs.lean",
          "contracts/verification/extracted/Extracted/Wots/Types.lean"),
     ),
@@ -178,9 +178,11 @@ REQUIRED_ENTRY_PATHS = {
 }
 REQUIRED_TARGETS = tuple(REQUIRED_ENTRY_PATHS)
 ALLOWED_WAIVED_TARGETS = frozenset({"extract-tx-merkle"})
-REGISTRY_BINDING_SHA256 = "8baf893c83b074cf5fd2959841c11abd2b2f41e1c35b864539f7e614e23fb312"
+REGISTRY_BINDING_SHA256 = "a2c1e3e6dbdc03f2275298c78865bee7ee6f57353dbe486a69eb62e36329057d"
 EXPECTED_WAIVED_DRIFT = {"extract-tx-merkle": ()}
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
+SOURCE_RE = re.compile(r"Source:\s*'([^']+)'")
+ALLOWED_EXTERNAL_SOURCE_PREFIXES = ("/rustc/", "/cargo/registry/")
 
 
 def sha256_file(path: Path) -> str:
@@ -201,6 +203,23 @@ def registry_binding(reg: dict) -> str:
         reg, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
+
+
+def expected_raw_output_names(target: str) -> tuple[str, ...]:
+    """Derive the immutable raw Aeneas module inventory from checker-owned
+    committed paths. External hand-completions originate as `_Template` files;
+    FormatDecimal also emits the deduplicated canonical U256 Types module."""
+    names = []
+    for path in REQUIRED_ENTRY_PATHS[target][1]:
+        name = PurePosixPath(path).name
+        if name == "FunsExternal.lean":
+            name = "FunsExternal_Template.lean"
+        elif name == "TypesExternal.lean":
+            name = "TypesExternal_Template.lean"
+        names.append(name)
+    if target == "extract-format-decimal":
+        names.append("Types.lean")
+    return tuple(names)
 
 
 def discover_generated_modules() -> list[Path]:
@@ -242,6 +261,92 @@ def entry_drift(e: dict) -> list[str]:
     return drift
 
 
+def entry_provenance_errors(e: dict) -> list[str]:
+    """Require every repo-local Aeneas `Source:` annotation to be pinned by the
+    same registry entry, and reject ambiguous/non-canonical source paths.
+
+    `/rustc/` and `/cargo/registry/` annotations name toolchain/dependency
+    sources outside this repository. Every other annotation is a repo-local
+    extraction dependency and must be a normalized, existing relative path in
+    `rust_files`. Checker-owned `REQUIRED_ENTRY_PATHS` separately prevents
+    unrelated/decoy pins; this check is deliberately one-way because a
+    hand-completed external dependency need not carry an Aeneas provenance
+    annotation.
+    """
+    errors: list[str] = []
+    local_sources: set[str] = set()
+    for rel in e["generated_lean"]:
+        path = REPO_ROOT / rel
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"cannot read generated Lean provenance from {rel}: {exc}")
+            continue
+        for source in SOURCE_RE.findall(text):
+            if source.startswith(ALLOWED_EXTERNAL_SOURCE_PREFIXES):
+                continue
+            posix = PurePosixPath(source)
+            if (posix.is_absolute() or "\\" in source or not source
+                    or any(part in ("", ".", "..") for part in posix.parts)
+                    or posix.as_posix() != source):
+                errors.append(
+                    f"generated Lean {rel} has unsupported/non-canonical Source path "
+                    f"{source!r}"
+                )
+                continue
+            if not (REPO_ROOT / posix).is_file():
+                errors.append(
+                    f"generated Lean {rel} names missing repo-local Source {source!r}"
+                )
+            local_sources.add(source)
+
+    pinned = set(e["rust_files"])
+    missing = sorted(local_sources - pinned)
+    if missing:
+        errors.append(
+            "generated Lean provenance is not pinned in rust_files: "
+            + ", ".join(missing)
+        )
+    return errors
+
+
+def max_attempts_consistency_errors(
+    proto_text: str | None = None, lean_text: str | None = None
+) -> list[str]:
+    """Cross-check the hand-completed PinState constant against production Rust."""
+    if proto_text is None:
+        proto_text = (REPO_ROOT / "proto/src/lib.rs").read_text(encoding="utf-8")
+    if lean_text is None:
+        lean_text = (
+            VERIF_DIR / "extracted/Extracted/PinState/FunsExternal.lean"
+        ).read_text(encoding="utf-8")
+    rust_values = re.findall(
+        r"(?m)^[ \t]*pub[ \t]+const[ \t]+MAX_ATTEMPTS[ \t]*:[ \t]*u8"
+        r"[ \t]*=[ \t]*(\d+)[ \t]*;[ \t]*$",
+        proto_text,
+    )
+    lean_values = re.findall(
+        r'(?m)^[ \t]*def[ \t]+pqsigner_proto\.MAX_ATTEMPTS'
+        r"[ \t]*:[ \t]*Result[ \t]+Std\.U8[ \t]*:=[ \t]*ok[ \t]+(\d+)#u8[ \t]*$",
+        lean_text,
+    )
+    if len(rust_values) != 1 or len(lean_values) != 1:
+        return [
+            "PinState MAX_ATTEMPTS cross-check requires exactly one canonical "
+            f"Rust constant and one canonical Lean definition; found "
+            f"rust={len(rust_values)} lean={len(lean_values)}"
+        ]
+    if any(int(value) > 255 for value in rust_values + lean_values):
+        return ["PinState MAX_ATTEMPTS must be an in-range u8 literal"]
+    if rust_values[0] != lean_values[0]:
+        return [
+            "PinState MAX_ATTEMPTS drift: "
+            f"proto/src/lib.rs={rust_values[0]}, "
+            f"PinState/FunsExternal.lean={lean_values[0]}"
+        ]
+    return []
+
+
 def evaluate(reg: dict) -> tuple[list[str], list[str], list[str], int, int]:
     """The check core, against an in-memory registry dict (self_test passes mutated
     copies here — the real extraction_registry.json is never touched).
@@ -250,6 +355,11 @@ def evaluate(reg: dict) -> tuple[list[str], list[str], list[str], int, int]:
     floor_fails: list[str] = []
     waived: list[str] = []
     fresh_ok = 0
+
+    try:
+        floor_fails.extend(max_attempts_consistency_errors())
+    except OSError as exc:
+        floor_fails.append(f"PinState MAX_ATTEMPTS cross-check unreadable: {exc}")
 
     live_binding = registry_binding(reg)
     if live_binding != REGISTRY_BINDING_SHA256:
@@ -276,6 +386,26 @@ def evaluate(reg: dict) -> tuple[list[str], list[str], list[str], int, int]:
             "mutable required_targets metadata does not exactly mirror the "
             "checker-owned target identity list"
         )
+    rust_consumers: dict[str, list[str]] = {}
+    for entry in entries:
+        if (
+            isinstance(entry, dict)
+            and isinstance(entry.get("target"), str)
+            and isinstance(entry.get("rust_files"), list)
+        ):
+            for rust_file in entry["rust_files"]:
+                if isinstance(rust_file, str):
+                    rust_consumers.setdefault(rust_file, []).append(entry["target"])
+    derived_shared = {
+        rust_file: consumers
+        for rust_file, consumers in rust_consumers.items()
+        if len(consumers) > 1
+    }
+    if reg.get("shared_rust_files") != derived_shared:
+        floor_fails.append(
+            "shared_rust_files metadata does not exactly match the registry-derived "
+            f"multi-entry source map; expected {derived_shared}"
+        )
 
     for e in entries:
         if not isinstance(e, dict) or not isinstance(e.get("target"), str):
@@ -291,6 +421,13 @@ def evaluate(reg: dict) -> tuple[list[str], list[str], list[str], int, int]:
         if any(not isinstance(e.get(k), list) for k in list_keys):
             floor_fails.append(
                 f"entry {tgt}: registry MALFORMED (file and pin fields must be lists)"
+            )
+            continue
+        raw_pins = e.get("raw_generated_sha256")
+        if not isinstance(raw_pins, dict):
+            floor_fails.append(
+                f"entry {tgt}: registry MALFORMED "
+                "(raw_generated_sha256 must be an object)"
             )
             continue
         if any(len(e[k]) == 0 for k in list_keys):
@@ -325,9 +462,31 @@ def evaluate(reg: dict) -> tuple[list[str], list[str], list[str], int, int]:
                 f"rust={e['rust_files']}, lean={e['generated_lean']}"
             )
             continue
+        expected_raw = expected_raw_output_names(tgt)
+        if tuple(raw_pins) != expected_raw:
+            floor_fails.append(
+                f"entry {tgt}: checker-owned raw generated module identity mismatch — "
+                f"expected {list(expected_raw)}, got {list(raw_pins)}"
+            )
+            continue
+        if any(
+            not isinstance(pin, str)
+            or SHA256_RE.fullmatch(pin) is None
+            or pin == "0" * 64
+            for pin in raw_pins.values()
+        ):
+            floor_fails.append(
+                f"entry {tgt}: registry MALFORMED "
+                "(every raw generated pin must be a nonzero lowercase 64-hex sha256)"
+            )
+            continue
         if not isinstance(e.get("fresh"), bool):
             floor_fails.append(f"entry {tgt}: registry MALFORMED (fresh must be explicit bool)")
             continue
+
+        floor_fails.extend(
+            f"entry {tgt}: {message}" for message in entry_provenance_errors(e)
+        )
 
         is_waived = not e["fresh"]
         if is_waived and tgt not in ALLOWED_WAIVED_TARGETS:
@@ -436,6 +595,16 @@ def update(args: list[str]) -> int:
         print(f"ERROR: no registry entry with target {target!r}. Known targets: {known}",
               file=sys.stderr)
         return 2
+    if target == "extract-pinstate":
+        constant_errors = max_attempts_consistency_errors()
+        if constant_errors:
+            print(
+                "REFUSED: extract-pinstate cannot be re-pinned while the "
+                "hand-completed MAX_ATTEMPTS model disagrees with production Rust:\n"
+                + "\n".join(f"  - {message}" for message in constant_errors),
+                file=sys.stderr,
+            )
+            return 2
     drift = entry_drift(entry)
     if drift and not entry.get("fresh", True) and not waived_ok:
         print(f"REFUSED: {target} is WAIVED-STALE (fresh:false) and its files drift from the pins:\n"
@@ -464,7 +633,8 @@ def self_test() -> int:
     touched): deleted entry, dropped pin, paired-empty file+pin lists, paired
     path+pin deletion/replacement, blank/all-zero pins, waiver reason/drift
     tampering, rewritten required_targets metadata, unauthorised fresh:false,
-    and an unregistered on-disk generated module."""
+    an unregistered on-disk generated module, unpinned Aeneas `Source:`
+    provenance, and PinState's hand-completed MAX_ATTEMPTS constant."""
     print("=== check_extraction_freshness --self-test "
           "(FW-tag flip + fail-closed registry negative controls) ===")
     reg = load_registry()
@@ -481,6 +651,59 @@ def self_test() -> int:
         print("  ok: recursive generated-module census includes single-file Adrs.lean")
     else:
         print("  FAIL: generated-module census missed single-file Aeneas output Adrs.lean")
+        ok = False
+
+    provenance_failures = [
+        f
+        for entry in reg["entries"]
+        for f in entry_provenance_errors(entry)
+    ]
+    if not provenance_failures:
+        print("  ok: every repo-local generated-Lean Source provenance is pinned")
+    else:
+        print(f"  FAIL: clean provenance floor failed: {provenance_failures}")
+        ok = False
+
+    provenance_mutant = copy.deepcopy(
+        next(e for e in reg["entries"] if e["target"] == "extract-hash-fns")
+    )
+    provenance_mutant["rust_files"].remove("sphincs-c10/src/params.rs")
+    provenance_mutant["rust_files_sha256"].pop()
+    provenance_errors = entry_provenance_errors(provenance_mutant)
+    if any("sphincs-c10/src/params.rs" in message for message in provenance_errors):
+        print("  ok: dropping params.rs from Hash provenance is CAUGHT")
+    else:
+        print("  FAIL: unpinned generated Source sphincs-c10/src/params.rs escaped!")
+        ok = False
+
+    proto_text = (REPO_ROOT / "proto/src/lib.rs").read_text(encoding="utf-8")
+    pinstate_external = (
+        VERIF_DIR / "extracted/Extracted/PinState/FunsExternal.lean"
+    ).read_text(encoding="utf-8")
+    if not max_attempts_consistency_errors(proto_text, pinstate_external):
+        print("  ok: PinState MAX_ATTEMPTS matches proto/src/lib.rs")
+    else:
+        print("  FAIL: clean PinState MAX_ATTEMPTS cross-check failed")
+        ok = False
+    lean_constant = re.search(
+        r'(?m)^(?P<prefix>[ \t]*def[ \t]+pqsigner_proto\.MAX_ATTEMPTS'
+        r"[ \t]*:[ \t]*Result[ \t]+Std\.U8[ \t]*:=[ \t]*ok[ \t]+)"
+        r"(?P<value>\d+)(?P<suffix>#u8[ \t]*)$",
+        pinstate_external,
+    )
+    max_attempts_mutant = pinstate_external
+    if lean_constant is not None:
+        replacement_value = (int(lean_constant.group("value")) + 1) % 256
+        max_attempts_mutant = (
+            pinstate_external[:lean_constant.start("value")]
+            + str(replacement_value)
+            + pinstate_external[lean_constant.end("value"):]
+        )
+    if (max_attempts_mutant != pinstate_external
+            and max_attempts_consistency_errors(proto_text, max_attempts_mutant)):
+        print("  ok: stale hand-completed PinState MAX_ATTEMPTS is CAUGHT")
+    else:
+        print("  FAIL: stale hand-completed PinState MAX_ATTEMPTS escaped!")
         ok = False
 
     # Clean control: the real files must MATCH their pins (fresh entry).
@@ -592,6 +815,31 @@ def self_test() -> int:
               f"the tripwire!")
         ok = False
 
+    # (e2) raw Aeneas output identities are checker-owned: dropping a generated
+    # Types/template hash cannot redefine the supposedly complete regen surface.
+    raw_drop = copy.deepcopy(reg)
+    victim = next(
+        e for e in raw_drop["entries"] if len(e["raw_generated_sha256"]) > 1
+    )
+    removed_raw = next(reversed(victim["raw_generated_sha256"]))
+    victim["raw_generated_sha256"].pop(removed_raw)
+    raw_failures = evaluate(raw_drop)[1]
+    if any(
+        "raw generated module identity mismatch" in message
+        and victim["target"] in message
+        for message in raw_failures
+    ):
+        print(
+            f"  ok: dropping raw output pin {removed_raw!r} from "
+            f"'{victim['target']}' fails"
+        )
+    else:
+        print(
+            f"  FAIL: dropping raw output pin {removed_raw!r} from "
+            f"'{victim['target']}' escaped!"
+        )
+        ok = False
+
     # (f) mutable metadata cannot redefine the checker-owned target floor.
     metadata = copy.deepcopy(reg)
     metadata["required_targets"] = []
@@ -600,6 +848,16 @@ def self_test() -> int:
         print("  ok: rewriting required_targets to [] fails (checker owns target identities)")
     else:
         print("  FAIL: rewriting required_targets to [] redefined the coverage floor!")
+        ok = False
+
+    shared_metadata = copy.deepcopy(reg)
+    shared_file = next(iter(shared_metadata["shared_rust_files"]))
+    shared_metadata["shared_rust_files"][shared_file].pop()
+    shared_failures = evaluate(shared_metadata)[1]
+    if any("shared_rust_files metadata" in message for message in shared_failures):
+        print("  ok: shrinking shared_rust_files metadata fails")
+    else:
+        print("  FAIL: shrinking shared_rust_files metadata escaped!")
         ok = False
 
     # (g) an ordinary fresh entry cannot be waived by flipping fresh:false.

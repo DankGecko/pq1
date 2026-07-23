@@ -531,16 +531,21 @@ REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 # stock CI runner — and without them current Rust can drift from the committed
 # extraction while verify-build/verify-extracted stay green on the stale .lean
 # (4 of 15 extractions were already stale when this gate was written). This pins
-# sha256(committed generated Lean) + sha256(mirrored Rust file) per extraction
-# (extraction_registry.json) and FAILS on drift, forcing a re-extraction. Ships a
+# sha256(committed generated Lean) + sha256(mirrored Rust file) per extraction,
+# plus checker-bound raw-generator output hashes used by the local complete-output
+# regen check (extraction_registry.json). It FAILS on drift, forcing a
+# re-extraction. Ships a
 # wired-in negative control (the PQFW_V1->PQFW_V2 domain-tag flip must fire both
 # tripwire halves). CI-runnable (pure Python). See scripts/check_extraction_freshness.py.
 verify-extraction-freshness: ## F1 toolchain-free extraction freshness tripwire (sha256 pins) + negative control
+	@python3 scripts/check_extraction_regen_output.py --self-test
 	@python3 scripts/check_extraction_freshness.py --self-test
 	@python3 scripts/check_extraction_freshness.py
 
 # F1 — the REAL regen check (LOCAL, needs the charon/aeneas toolchain): re-run
-# every extract-* target and diff against the committed extraction. A `fresh:true`
+# every extract-* target and compare the exact raw Aeneas module inventory/hashes
+# plus deterministically normalized Funs/Types against the committed extraction.
+# A `fresh:true`
 # registry entry that drifts is a FAILURE; the `fresh:false` waived entry
 # (tx-merkle — Aeneas can no longer translate it) is EXPECTED to fail and only
 # flags if it unexpectedly re-extracts (bump it to fresh + `--update <target>` then).
@@ -636,6 +641,7 @@ extract-sphincs-adrs:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Adrs.lean /tmp/pqsigner-extract/out/Adrs.lean \
 	  && echo "OK: committed extraction matches the current Rust" \
 	  || { echo "DRIFT: address.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-sphincs-adrs /tmp/pqsigner-extract/out
 
 extract-aa-userop:
 	@mkdir -p /tmp/pqsigner-extract
@@ -650,6 +656,7 @@ extract-aa-userop:
 	@diff -u $(EXTRACTED_DIR)/Extracted/UserOp/Funs.lean /tmp/pqsigner-extract/uout/Funs.fixed.lean \
 	  && echo "OK: committed userop extraction matches the current Rust" \
 	  || { echo "DRIFT: aa/userop.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-aa-userop /tmp/pqsigner-extract/uout /tmp/pqsigner-extract/uout/Funs.fixed.lean
 
 extract-fors-index:
 	@mkdir -p /tmp/pqsigner-extract
@@ -664,6 +671,7 @@ extract-fors-index:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Fors/Funs.lean /tmp/pqsigner-extract/fout/Funs.fixed.lean \
 	  && echo "OK: committed FORS extraction matches the current Rust" \
 	  || { echo "DRIFT: fors.rs index path changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-fors-index /tmp/pqsigner-extract/fout /tmp/pqsigner-extract/fout/Funs.fixed.lean
 
 # §33 P1 — guard that the vendored copies in extracted/Extracted/ stay
 # faithful to the SphincsCVerify sources they vendor (the version bridge's
@@ -698,6 +706,7 @@ extract-aa-eip1271:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Eip1271/Funs.lean /tmp/pqsigner-extract/eout/Funs.fixed.lean \
 	  && echo "OK: committed eip1271 extraction matches the current Rust" \
 	  || { echo "DRIFT: aa/eip1271.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-aa-eip1271 /tmp/pqsigner-extract/eout /tmp/pqsigner-extract/eout/Funs.fixed.lean
 
 # §33 rank 4 — wots::extract_digits (independent bit-extractor; proven = same
 # closed-form window as read_bits_le). opaque sha2/zeroize like fors.
@@ -714,6 +723,7 @@ extract-wots-digits:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Wots/Funs.lean /tmp/pqsigner-extract/wout/Funs.fixed.lean \
 	  && echo "OK: committed wots extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/wots.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-wots-digits /tmp/pqsigner-extract/wout /tmp/pqsigner-extract/wout/Funs.fixed.lean
 
 # §33 rank 7 — tx-core RLP bytes_to_u64 + bytes_to_u256 (canonical BE-int decode).
 # into_iter is given a DEF (not axiom) in Extracted/Rlp/FunsExternal.lean.
@@ -731,6 +741,7 @@ extract-txcore-rlp:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Rlp/Funs.lean /tmp/pqsigner-extract/rout/Funs.fixed.lean \
 	  && echo "OK: committed RLP extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/rlp.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-txcore-rlp /tmp/pqsigner-extract/rout /tmp/pqsigner-extract/rout/Funs.fixed.lean
 
 # §33 rank 12 — fw-manifest signed_preimage (75-byte frozen FW-signing layout).
 .PHONY: extract-fwmanifest-preimage
@@ -746,6 +757,7 @@ extract-fwmanifest-preimage:
 	@diff -u $(EXTRACTED_DIR)/Extracted/FwManifest/Funs.lean /tmp/pqsigner-extract/fmout/Funs.fixed.lean \
 	  && echo "OK: committed fw-manifest extraction matches the current Rust" \
 	  || { echo "DRIFT: fw-manifest/src/lib.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-fwmanifest-preimage /tmp/pqsigner-extract/fmout /tmp/pqsigner-extract/fmout/Funs.fixed.lean
 
 # §33 rank 10 — U256::saturating_mul_u64 (via the u256_saturating_mul_u64 wrapper;
 # --start-from cannot target inherent-impl methods).
@@ -762,13 +774,15 @@ extract-u256-mul:
 	@diff -u $(EXTRACTED_DIR)/Extracted/U256Mul/Funs.lean /tmp/pqsigner-extract/mout/Funs.fixed.lean \
 	  && echo "OK: committed u256-mul extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/eip1559.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-u256-mul /tmp/pqsigner-extract/mout /tmp/pqsigner-extract/mout/Funs.fixed.lean
 
 # §33 — U256::format_decimal (via the u256_format_decimal wrapper; the four
 # fmt_* phase helpers exist BECAUSE the fused body hits an aeneas
 # `Unimplemented` — see the note inside format_decimal). The Types.lean dedup:
 # this extraction re-defines eip1559.U256, whose canonical home is
-# Extracted/U256Mul/Types.lean, so only Funs.lean is committed and its Types
-# import is rewritten to the canonical module (a duplicate def fails the lake
+# Extracted/U256Mul/Types.lean, so only Funs.lean is committed; the freshly
+# generated Types is byte-compared with that canonical module and the Funs
+# import is rewritten to it (a duplicate def fails the lake
 # build LOUDLY — 'environment already contains ...' — so the dedup cannot
 # silently drift).
 .PHONY: extract-format-decimal
@@ -786,6 +800,7 @@ extract-format-decimal:
 	@diff -u $(EXTRACTED_DIR)/Extracted/FormatDecimal/Funs.lean /tmp/pqsigner-extract/fdout/Funs.fixed.lean \
 	  && echo "OK: committed format-decimal extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/eip1559.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-format-decimal /tmp/pqsigner-extract/fdout /tmp/pqsigner-extract/fdout/Funs.fixed.lean
 
 # §33 rank 6 — merkle::verify_auth_path (XMSS auth-path walk; th_pair opaque →
 # th_pair_pure axiom in Merkle/FunsExternal.lean). The dedup filter drops the
@@ -809,6 +824,7 @@ extract-merkle-verify:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Merkle/Funs.lean /tmp/pqsigner-extract/mkout/Funs.fixed.lean \
 	  && echo "OK: committed merkle extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/merkle.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-merkle-verify /tmp/pqsigner-extract/mkout /tmp/pqsigner-extract/mkout/Funs.fixed.lean
 
 # §33 rank 5 — wots::pk_from_sig (verifier-side WOTS+C; wots_digest/chain_hash/
 # th_multi opaque → _pure axioms in PkFromSig/FunsExternal.lean; dedup drops
@@ -835,6 +851,7 @@ extract-wots-pkfromsig:
 	@diff -u $(EXTRACTED_DIR)/Extracted/PkFromSig/Funs.lean /tmp/pqsigner-extract/pout/Funs.fixed.lean \
 	  && echo "OK: committed pk_from_sig extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/wots.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-wots-pkfromsig /tmp/pqsigner-extract/pout /tmp/pqsigner-extract/pout/Funs.fixed.lean
 
 # §33 rank 11 — tx::erc20::merkle::verify_proof (trust-bundle merkle walk;
 # leaf_hash/node_hash opaque → _pure axioms in TxMerkle/FunsExternal.lean).
@@ -853,6 +870,7 @@ extract-tx-merkle:
 	@diff -u $(EXTRACTED_DIR)/Extracted/TxMerkle/Funs.lean /tmp/pqsigner-extract/tout/Funs.fixed.lean \
 	  && echo "OK: committed tx-merkle extraction matches the current Rust" \
 	  || { echo "DRIFT: tx/src/erc20/merkle.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-tx-merkle /tmp/pqsigner-extract/tout /tmp/pqsigner-extract/tout/Funs.fixed.lean
 
 # §33 rank 9 — bip39 11-bit pack/unpack round-trip (via the roundtrip_11 pub
 # wrapper; private write_11_bits/read_11_bits can't be --start-from'd).
@@ -869,10 +887,12 @@ extract-bip39-roundtrip:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Bip39/Funs.lean /tmp/pqsigner-extract/bout/Funs.fixed.lean \
 	  && echo "OK: committed bip39 extraction matches the current Rust" \
 	  || { echo "DRIFT: bip39/src changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-bip39-roundtrip /tmp/pqsigner-extract/bout /tmp/pqsigner-extract/bout/Funs.fixed.lean
 
 # §33 rank 8 — rlp::decode_item (canonical-RLP grammar). Types/FunsExternal are
-# hand-deduped against Rlp.* (shared RlpError + into_iter) — re-do that dedup if
-# re-extracting; only Funs is drift-guarded here.
+# hand-deduped against Rlp.* (shared RlpError + into_iter). The recipe now
+# reproduces the Types dedup and compares it exactly; the raw external template
+# is hash-pinned and its interface must be covered by the committed import closure.
 .PHONY: extract-decode-item
 extract-decode-item:
 	@mkdir -p /tmp/pqsigner-extract
@@ -883,9 +903,12 @@ extract-decode-item:
 	@rm -rf /tmp/pqsigner-extract/dout && mkdir -p /tmp/pqsigner-extract/dout
 	@$(PQLEAN)/aeneas -backend lean -dest /tmp/pqsigner-extract/dout -split-files /tmp/pqsigner-extract/decode.llbc
 	@sed 's/import Decode\./import Extracted.Decode./' /tmp/pqsigner-extract/dout/Funs.lean > /tmp/pqsigner-extract/dout/Funs.fixed.lean
+	@python3 scripts/dedup_extraction.py /tmp/pqsigner-extract/dout/Types.lean /tmp/pqsigner-extract/dout/Types.fixed.lean \
+	  --kill 'pqsigner_tx_core::rlp::RlpError' --add-import Extracted.Rlp.Types
 	@diff -u $(EXTRACTED_DIR)/Extracted/Decode/Funs.lean /tmp/pqsigner-extract/dout/Funs.fixed.lean \
 	  && echo "OK: committed decode_item extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/rlp.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-decode-item /tmp/pqsigner-extract/dout /tmp/pqsigner-extract/dout/Funs.fixed.lean
 
 # §33 axiom-collapse — the five sphincs-c10 tweakable-hash primitives with
 # sha256_bytes as the SINGLE opaque boundary (FunsExternal wires it to the
@@ -910,6 +933,7 @@ extract-hash-fns:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Hash/Funs.lean /tmp/pqsigner-extract/hout/Funs.fixed.lean \
 	  && echo "OK: committed hash-fns extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/hash.rs changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-hash-fns /tmp/pqsigner-extract/hout /tmp/pqsigner-extract/hout/Funs.fixed.lean
 
 # F4 (2026-07-19, fv-deep-review) — domain::{,de}serialize_pin_state (the
 # PIN-counter parser; the NON-PRODUCTION mock-SE path). No --opaque flags and
@@ -923,9 +947,9 @@ extract-hash-fns:
 # core.iter.traits.iterator.Iterator structure REQUIRES {next, step_by,
 # enumerate, take} (no defaults — an unedited regen does not even build), so
 # the step_by/take fields (whose DEFs live in PinState/FunsExternal.lean) are
-# re-inserted. TypesExternal/FunsExternal are hand-filled: re-fill them from
-# the regenerated *_Template.lean when re-committing (only Funs.lean is
-# regen-diffed, mirroring every other rank).
+# re-inserted. TypesExternal/FunsExternal are hand-filled: their raw templates
+# are hash-pinned and their interfaces checked against the committed import
+# closure. Both normalized Funs.lean and Types.lean are compared exactly.
 extract-pinstate:
 	@mkdir -p /tmp/pqsigner-extract
 	@cd $(REPO_ROOT)/domain && \
@@ -940,9 +964,13 @@ extract-pinstate:
 	     -e '/^    core\.slice\.iter\.Chunks\.Insts\.CoreIterTraitsIteratorIteratorSharedASlice\.next$$/a\  step_by :=\n    core.slice.iter.Chunks.Insts.CoreIterTraitsIteratorIteratorSharedASlice.step_by' \
 	     -e '/^    core\.slice\.iter\.Chunks\.Insts\.CoreIterTraitsIteratorIteratorSharedASlice\.enumerate$$/a\  take :=\n    core.slice.iter.Chunks.Insts.CoreIterTraitsIteratorIteratorSharedASlice.take' \
 	     /tmp/pqsigner-extract/psout/Funs.lean > /tmp/pqsigner-extract/psout/Funs.fixed.lean
+	@sed -e '1s|^-- THIS FILE WAS AUTOMATICALLY GENERATED BY AENEAS|-- THIS FILE WAS AUTOMATICALLY GENERATED BY AENEAS (import paths localised:\n-- `Pinstate.*` -> `Extracted.PinState.*` to fit this project'"'"'s module layout).|' \
+	     -e 's/import Pinstate\./import Extracted.PinState./' \
+	     /tmp/pqsigner-extract/psout/Types.lean > /tmp/pqsigner-extract/psout/Types.fixed.lean
 	@diff -u $(EXTRACTED_DIR)/Extracted/PinState/Funs.lean /tmp/pqsigner-extract/psout/Funs.fixed.lean \
 	  && echo "OK: committed pinstate extraction matches the current Rust" \
 	  || { echo "DRIFT: domain/src/lib.rs pin-state path changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-pinstate /tmp/pqsigner-extract/psout /tmp/pqsigner-extract/psout/Funs.fixed.lean
 
 # F4 (2026-07-19, fv-deep-review) — domain slot-KDF (slot_master_entropy_from_bip39,
 # derive_c10_master_from_bip39_seed, slot_entropy, derive_c10_slot_seeds). The
@@ -952,9 +980,8 @@ extract-pinstate:
 # extracted; the zeroize METHODS are hand-filled identity DEFs in FunsExternal
 # — the byte-layout theorems only need the call to succeed). sk.llbc -> Sk.*
 # prefix (the .llbc filename sets the aeneas module prefix). No RUSTFLAGS
-# override: domain/src has no #[cfg(lean_extract)] gate. SlotKdf/Types.lean's
-# docstrings are hand-polished — only Funs.lean is regen-diffed (mirrors every
-# other rank).
+# override: domain/src has no #[cfg(lean_extract)] gate. Generated Funs/Types
+# are compared exactly and the raw external-template inventory is hash-pinned.
 extract-slotkdf:
 	@mkdir -p /tmp/pqsigner-extract
 	@cd $(REPO_ROOT)/domain && \
@@ -972,3 +999,4 @@ extract-slotkdf:
 	@diff -u $(EXTRACTED_DIR)/Extracted/SlotKdf/Funs.lean /tmp/pqsigner-extract/skout/Funs.fixed.lean \
 	  && echo "OK: committed slot-kdf extraction matches the current Rust" \
 	  || { echo "DRIFT: domain/src/lib.rs slot-KDF path changed — re-extract, re-prove, re-commit"; exit 1; }
+	@python3 scripts/check_extraction_regen_output.py extract-slotkdf /tmp/pqsigner-extract/skout /tmp/pqsigner-extract/skout/Funs.fixed.lean

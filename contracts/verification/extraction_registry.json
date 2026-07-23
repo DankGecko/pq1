@@ -1,13 +1,13 @@
 {
   "schema": "fv-extraction-freshness-registry/v1",
-  "note": "F1 (2026-07-16). sha256(committed generated Lean) = robust primary tripwire (literal charon->aeneas output; moves on any semantic drift incl. inlined callees); sha256(mirrored Rust file) = coarse toolchain-free secondary (whole-file; over-fires on unrelated shared-file edits, never under-fires). Drift in EITHER, for a fresh:true entry, FAILS check_extraction_freshness.py -> forces re-run of the named extract-* target (needs the charon/aeneas toolchain) before the green FV gates are trusted. fresh:false entries are WAIVED-STALE (loud, tracked in work-todo), not silently green. The CI hash-pin is a 'Rust-unchanged-since-last-extraction' tripwire, NOT a correspondence proof; the toolchain-gated `make verify-extraction-regen` is the real regen check.",
+  "note": "F1 (2026-07-16; fail-closed complete-output update 2026-07-23). sha256(committed generated Lean) = robust CI tripwire; sha256(every repo-local Source dependency) = coarse toolchain-free secondary. Drift in EITHER, for a fresh:true entry, FAILS check_extraction_freshness.py and forces re-extraction. raw_generated_sha256 binds the exact complete Aeneas output inventory (including Types and external templates) consumed by the local toolchain-gated regen helper; normalized proof-consumed Funs/Types are compared exactly. fresh:false entries are WAIVED-STALE (loud, tracked), not silently green. The CI source/hash pins establish unchanged-since-extraction, not semantic correspondence; `make verify-extraction-regen` is the real generator replay.",
   "toolchain_receipt": {
-    "note": "The generator+toolchain half of the roadmap P0.1 'one receipt'. These are the versions the committed generated_lean_sha256 pins were produced under (2026-07-16 regen); a bump invalidates the pins and requires a fresh `make verify-extraction-regen` + `check_extraction_freshness.py --update`. The pinned digests are the input-source + generated-file half. A per-RUN receipt (exact command line + timestamp + host) is emitted by verify-extraction-regen; it is not committed (Date.now-style volatility).",
+    "note": "The generator+toolchain half of the roadmap P0.1 'one receipt'. These are the versions the committed generated_lean_sha256 and raw_generated_sha256 pins were produced under; a bump invalidates the pins and requires a fresh complete-output `make verify-extraction-regen`, reviewed raw-pin update, and `check_extraction_freshness.py --update` for committed/source pins. A per-run command/timestamp/host receipt is intentionally not committed.",
     "toolchain_root": "~/.local/share/pqsigner-lean",
     "charon": "nightly-2026.06.08",
     "aeneas": "nightly-2026.06.10",
     "rustc": "nightly-2026-06-01",
-    "extract_command_pattern": "cd <crate> && RUSTFLAGS=--cfg lean_extract $PQLEAN/charon cargo --preset=aeneas --opaque <deps> --start-from <symbol> --dest-file <llbc>; $PQLEAN/aeneas -backend lean -dest <out> [-split-files] <llbc>; diff -u <committed Funs.lean> <regenerated>"
+    "extract_command_pattern": "cd <crate> && RUSTFLAGS=--cfg lean_extract $PQLEAN/charon cargo --preset=aeneas --opaque <deps> --start-from <symbol> --dest-file <llbc>; $PQLEAN/aeneas -backend lean -dest <out> [-split-files] <llbc>; check_extraction_regen_output.py <target> <out> [normalized Funs]"
   },
   "shared_rust_files": {
     "tx-core/src/rlp.rs": [
@@ -15,12 +15,24 @@
       "extract-txcore-rlp"
     ],
     "tx-core/src/eip1559.rs": [
+      "extract-aa-userop",
       "extract-u256-mul",
       "extract-format-decimal"
+    ],
+    "sphincs-c10/src/params.rs": [
+      "extract-fors-index",
+      "extract-merkle-verify",
+      "extract-wots-pkfromsig",
+      "extract-hash-fns",
+      "extract-wots-digits"
     ],
     "sphincs-c10/src/wots.rs": [
       "extract-wots-pkfromsig",
       "extract-wots-digits"
+    ],
+    "domain/src/lib.rs": [
+      "extract-pinstate",
+      "extract-slotkdf"
     ]
   },
   "required_targets": [
@@ -53,6 +65,9 @@
       "rust_files_sha256": [
         "84f5708f1dee711f9cf0dd11c14b8770618e3353f839329b24da6cca6e34ce00"
       ],
+      "raw_generated_sha256": {
+        "Adrs.lean": "30e278280f0daf667568f721180ef121e246b39f78cb32bb947ded7bb6362062"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/Adrs.lean"
       ],
@@ -68,11 +83,20 @@
       "make_dir": "contracts/verification",
       "crate": "aa",
       "rust_files": [
-        "aa/src/userop.rs"
+        "aa/src/userop.rs",
+        "tx-core/src/eip1559.rs",
+        "tx-core/src/hash.rs"
       ],
       "rust_files_sha256": [
-        "00378a291d0c711a60b03a484eeedfbd49ea240d729b134fdb511af2ca0b3372"
+        "00378a291d0c711a60b03a484eeedfbd49ea240d729b134fdb511af2ca0b3372",
+        "bb0fc41c0322eb60847876ce32917248be88f9314db63b533361a88a5fc43c13",
+        "0fae281bfb4cb3f29b22433a8a95f4c2acfee9994f1aa932f3388627a6638211"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "cab2066378bfe9832840d15fcef6775307ba059d7f16ba717c57ecba23589ed1",
+        "Types.lean": "5288438b3011f467d074e726f1c6228f31c56eaffa24745afbf073439d9f40af",
+        "FunsExternal_Template.lean": "11ff70fc1606e7d8ba19f615c84b5cd6ea25445b251da35f18299f279eb60124"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/UserOp/Funs.lean",
         "contracts/verification/extracted/Extracted/UserOp/Types.lean",
@@ -92,11 +116,17 @@
       "make_dir": "contracts/verification",
       "crate": "sphincs-c10",
       "rust_files": [
-        "sphincs-c10/src/fors.rs"
+        "sphincs-c10/src/fors.rs",
+        "sphincs-c10/src/params.rs"
       ],
       "rust_files_sha256": [
-        "3b64e07bc9c3a6c0e1db1d63da90c32ad34b26857dfe5767997df360b7713ed2"
+        "3b64e07bc9c3a6c0e1db1d63da90c32ad34b26857dfe5767997df360b7713ed2",
+        "827bc33e6665125484d354f57f2aea1fbf4f1e7a64aa330801cdb72f311eb911"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "d78b097d426d69532270ed9ea3891f96a16d1dd3ebfb72b5e710018606ff2c3a",
+        "Types.lean": "1a8a61e6baf8695010c94fd0e65d21551f6fbf74a31bb5d3f7a48f150d84ab66"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/Fors/Funs.lean",
         "contracts/verification/extracted/Extracted/Fors/Types.lean"
@@ -119,6 +149,11 @@
       "rust_files_sha256": [
         "9ed22297f4343cc033efc0c8af552cf8f31667c3e33267fae263951d8e3ce708"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "2d0f23bb3375edfcf0d1dfdb060a762eb51106a27d5fff0ef2915b824d5755e9",
+        "Types.lean": "7e3afcdd54c7f057f9b604c768f9c9e16086ea6a1ef7a914f30092ddbf83b6b4",
+        "FunsExternal_Template.lean": "2930a99a8da63c6f8ae3da2c8ca7473593a9c085d6e422e7a7d0c95d48900e2b"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/TxMerkle/Funs.lean",
         "contracts/verification/extracted/Extracted/TxMerkle/Types.lean",
@@ -139,11 +174,18 @@
       "make_dir": "contracts/verification",
       "crate": "sphincs-c10",
       "rust_files": [
-        "sphincs-c10/src/merkle.rs"
+        "sphincs-c10/src/merkle.rs",
+        "sphincs-c10/src/params.rs"
       ],
       "rust_files_sha256": [
-        "f787428b15cea6fb353eb3e1830f9f737067ce70a74e4d6b79113b83a1f3aed0"
+        "f787428b15cea6fb353eb3e1830f9f737067ce70a74e4d6b79113b83a1f3aed0",
+        "827bc33e6665125484d354f57f2aea1fbf4f1e7a64aa330801cdb72f311eb911"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "45758fe58a5e746feb8ea42aba30ce54666200ae7877b6d56dcb4407d7475530",
+        "Types.lean": "1a8a61e6baf8695010c94fd0e65d21551f6fbf74a31bb5d3f7a48f150d84ab66",
+        "FunsExternal_Template.lean": "5a4e8ae3f1020c614c73602740a10da63d00998488a2960225cdb667c6addb5a"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/Merkle/Funs.lean",
         "contracts/verification/extracted/Extracted/Merkle/Types.lean",
@@ -163,11 +205,18 @@
       "make_dir": "contracts/verification",
       "crate": "sphincs-c10",
       "rust_files": [
-        "sphincs-c10/src/wots.rs"
+        "sphincs-c10/src/wots.rs",
+        "sphincs-c10/src/params.rs"
       ],
       "rust_files_sha256": [
-        "e7ebe1d71591e68f6045383b041905ff17ad5822def35e77e11244ffdf49c56b"
+        "e7ebe1d71591e68f6045383b041905ff17ad5822def35e77e11244ffdf49c56b",
+        "827bc33e6665125484d354f57f2aea1fbf4f1e7a64aa330801cdb72f311eb911"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "c2e9d7e2b461a7b1edaeeb06e1c1777296a5a989c8790baf468fc7f853704b9f",
+        "Types.lean": "1a8a61e6baf8695010c94fd0e65d21551f6fbf74a31bb5d3f7a48f150d84ab66",
+        "FunsExternal_Template.lean": "ad87eacdb10e13a27eae74b50ea2bdfbf54904ffeb6f49ded89de99fde4f45ca"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/PkFromSig/Funs.lean",
         "contracts/verification/extracted/Extracted/PkFromSig/Types.lean",
@@ -187,11 +236,18 @@
       "make_dir": "contracts/verification",
       "crate": "sphincs-c10",
       "rust_files": [
-        "sphincs-c10/src/hash.rs"
+        "sphincs-c10/src/hash.rs",
+        "sphincs-c10/src/params.rs"
       ],
       "rust_files_sha256": [
-        "049a689c96ef9e14ce34030e71269292f3f6951b522cad88d56daa4466ade2c4"
+        "049a689c96ef9e14ce34030e71269292f3f6951b522cad88d56daa4466ade2c4",
+        "827bc33e6665125484d354f57f2aea1fbf4f1e7a64aa330801cdb72f311eb911"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "9e6486dcf1e2c250077c10fc4143742adcf6f7e8e7c77c7a952b69ee051250d7",
+        "Types.lean": "1a8a61e6baf8695010c94fd0e65d21551f6fbf74a31bb5d3f7a48f150d84ab66",
+        "FunsExternal_Template.lean": "90f8d3d048e37588350438e36739a2453d751af84e94a8a0a08e283151c3e2d4"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/Hash/Funs.lean",
         "contracts/verification/extracted/Extracted/Hash/Types.lean",
@@ -211,11 +267,17 @@
       "make_dir": "contracts/verification",
       "crate": "bip39",
       "rust_files": [
-        "bip39/src/lib.rs"
+        "bip39/src/lib.rs",
+        "bip39/src/full.rs"
       ],
       "rust_files_sha256": [
-        "db35d8bda5b3ac603a83114c3d1a4735497e037bff87d1706cefc6941d924fbf"
+        "db35d8bda5b3ac603a83114c3d1a4735497e037bff87d1706cefc6941d924fbf",
+        "c2203201fe954c75c4b9ff360cc87fcb2ac08c8cc6399abd6c3b39f3d4a1060b"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "492f7625225720d31cdc65b3fb96511680d5f3de90961a9d6a39eac2b0f96e03",
+        "Types.lean": "d7f2fa6d87d92e49eb4ecab746e92eaaf1b79702972e7f438e2058db2b7e517a"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/Bip39/Funs.lean",
         "contracts/verification/extracted/Extracted/Bip39/Types.lean"
@@ -238,6 +300,11 @@
       "rust_files_sha256": [
         "d2a1a211f22ab20241ee5923924273ce33de363939fc49fd5f94b39b1f1b40a6"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "5e56a9807bb422b498577a7fdb0fe6bad2b23b852a7a3daff4e26d9cf2888fe0",
+        "Types.lean": "5704568bca6e854d3cf9c80b59da6459f1c0dfa94bf0e943f56e5ba85932efb2",
+        "FunsExternal_Template.lean": "5660179883c0e26d8692537ff02554de18a5309427aeaa664f649a2461a4d604"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/Decode/Funs.lean",
         "contracts/verification/extracted/Extracted/Decode/Types.lean",
@@ -262,6 +329,10 @@
       "rust_files_sha256": [
         "bb0fc41c0322eb60847876ce32917248be88f9314db63b533361a88a5fc43c13"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "3e933c0680ff78081303e7c1e444a3ed0a18a8f7b3675950c60478a5614cf88b",
+        "Types.lean": "05bb6fbfd86c3e038b8429d00c2969e7c28347e77412933f826babeb007ef333"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/U256Mul/Funs.lean",
         "contracts/verification/extracted/Extracted/U256Mul/Types.lean"
@@ -284,6 +355,10 @@
       "rust_files_sha256": [
         "bb0fc41c0322eb60847876ce32917248be88f9314db63b533361a88a5fc43c13"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "bce6e6fbc181963c3032159a8437f5568b4807c9cb7c3ebded945a4791d0ebbd",
+        "Types.lean": "05bb6fbfd86c3e038b8429d00c2969e7c28347e77412933f826babeb007ef333"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/FormatDecimal/Funs.lean"
       ],
@@ -304,6 +379,10 @@
       "rust_files_sha256": [
         "ffd1881497439903dee425d817903a837179dc848b44be0eb9d98f7a9edc9d4f"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "e5dc40e4dd35b776555942583fbd6dc444729fde22aebad9457a0fe3460123f4",
+        "Types.lean": "5be8d8fe02446befa79f1396d035dadf755d7e53f1260dec496c55a9e44ee565"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/FwManifest/Funs.lean",
         "contracts/verification/extracted/Extracted/FwManifest/Types.lean"
@@ -321,11 +400,17 @@
       "make_dir": "contracts/verification",
       "crate": "sphincs-c10",
       "rust_files": [
-        "sphincs-c10/src/wots.rs"
+        "sphincs-c10/src/wots.rs",
+        "sphincs-c10/src/params.rs"
       ],
       "rust_files_sha256": [
-        "e7ebe1d71591e68f6045383b041905ff17ad5822def35e77e11244ffdf49c56b"
+        "e7ebe1d71591e68f6045383b041905ff17ad5822def35e77e11244ffdf49c56b",
+        "827bc33e6665125484d354f57f2aea1fbf4f1e7a64aa330801cdb72f311eb911"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "b1994c1a41f4ad22b213cb4eb97c054e5aa3d5a346fdff96578dcf673cf31766",
+        "Types.lean": "1a8a61e6baf8695010c94fd0e65d21551f6fbf74a31bb5d3f7a48f150d84ab66"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/Wots/Funs.lean",
         "contracts/verification/extracted/Extracted/Wots/Types.lean"
@@ -348,6 +433,11 @@
       "rust_files_sha256": [
         "fe9650ce44d882943a8e431390ce0a8a9e83c62165221a083e178d6a1593944f"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "ba66c38560e1f120268e8ee59ebe9a120b4eb3a8373b80c8cf70f3d6e0a4a0ad",
+        "Types.lean": "34d9310a806286f394b818865c7028dec73ea8b3b9e458e7620d152cdfde43f8",
+        "FunsExternal_Template.lean": "4a98c1446379d24308d054f8c353258dcee883ef286627c2d359812f2cb50d65"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/Eip1271/Funs.lean",
         "contracts/verification/extracted/Extracted/Eip1271/Types.lean",
@@ -372,6 +462,11 @@
       "rust_files_sha256": [
         "d2a1a211f22ab20241ee5923924273ce33de363939fc49fd5f94b39b1f1b40a6"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "26153d74b2012b020329ece9fd65d116b02af296d1c5f30bb9ef1b3483f4221c",
+        "Types.lean": "ca495eeaaa37f0ae427ebc260e3dbfbb8a7d7c745941725202cefc164982fcc1",
+        "FunsExternal_Template.lean": "fd1061a52bd656f79d7d7f10b91455b67075ca7dc448ab1e6a8994f847fd47e1"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/Rlp/Funs.lean",
         "contracts/verification/extracted/Extracted/Rlp/Types.lean",
@@ -398,6 +493,12 @@
         "616208507c024d49a3fcb0a3b91219a23f3ecc4b284e6c6c49bb41f26da6b083",
         "e4f31f96e1008cbba1bb34ec5e4a57acec27391e52dbdee8ea5c07f225d6b5f6"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "e352b8b2075afed3fce2142ce68c38267a8af55357667f4318b0ef2b86d4a1e1",
+        "Types.lean": "23b8a1e86d46b3ad61e08a510a30440ecc0b7e42c5ec3f1dea04442444d43005",
+        "TypesExternal_Template.lean": "2fdb6a376d5d10e7ae34785435a82084152b5b5274569add810e60693c670cae",
+        "FunsExternal_Template.lean": "31f4ae2f0d28665e50b49cba15004413819443a47bb82cd196c4f5712d911e2a"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/PinState/Funs.lean",
         "contracts/verification/extracted/Extracted/PinState/Types.lean",
@@ -408,7 +509,7 @@
         "87736e7843d4897e4e3f7d18a2250d373447b959671106364324b8b5a5c447b5",
         "05b2a2a04d2c741a09baee2189060694bb58d70228f29ffb3d193f8402d2d1b2",
         "9644edb552d15adedb08b5f470e08457d26be2981d71bde8b98d362c9c2cb29b",
-        "498dc1a7de717ced241f10c3afd79cb4f4e0834bdc086c55548d21d4530cb73c"
+        "6fc451e06019763fec178ce00aaea040a62b7b35249bf37d3cf548170ca7cdfa"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/PinState/PinStateSpec.lean",
       "headline_theorem": "deserialize_pin_state_rejects_bad_len",
@@ -425,6 +526,11 @@
       "rust_files_sha256": [
         "616208507c024d49a3fcb0a3b91219a23f3ecc4b284e6c6c49bb41f26da6b083"
       ],
+      "raw_generated_sha256": {
+        "Funs.lean": "3646bbcfd8e866cbe92ecfed200f28d9bcf98646d53f2cee2d644c4b93943fb7",
+        "Types.lean": "d738637e527565e68a180c4151637baaa2d65c7bd57e7027296375a3d6f76a15",
+        "FunsExternal_Template.lean": "ec3bf8cb39dcb2fcbc97f49092f24edec476e95d08efe47d3b49f2c9551fc851"
+      },
       "generated_lean": [
         "contracts/verification/extracted/Extracted/SlotKdf/Funs.lean",
         "contracts/verification/extracted/Extracted/SlotKdf/Types.lean",
@@ -432,8 +538,8 @@
       ],
       "generated_lean_sha256": [
         "23dda5134a793a54b2162b4fea01366751670454ca16ec8338bd26cd30418a96",
-        "9750546e6832fd492377a053c3360066662c050cdb84a8959c9062db0cb260fc",
-        "928d4bc1f4394becea9a8ee4064518c41715061fd9e41c0d4ba595f731f72049"
+        "d738637e527565e68a180c4151637baaa2d65c7bd57e7027296375a3d6f76a15",
+        "4b9ac21ca5aa0b88ccb0539d84aa754407ef6ce6e7884a3f1231b6e5b075492f"
       ],
       "theorem_file": "contracts/verification/extracted/Extracted/SlotKdf/SlotKdfSpec.lean",
       "headline_theorem": "derive_c10_slot_seeds_byte_layout",

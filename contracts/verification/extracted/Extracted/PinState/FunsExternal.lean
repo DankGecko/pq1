@@ -53,6 +53,16 @@ def core.slice.iter.Chunks.Insts.CoreIterTraitsIteratorIteratorSharedASlice.next
         by have := self.remaining.property; simp only [List.length_take]; omega ⟩
     ok (some chunk, ⟨ self.remaining.drop self.chunkSize, self.chunkSize ⟩)
 
+/-- The generic `Iterator::enumerate` adapter requested by the fresh Aeneas
+    external template. It preserves the supplied iterator and starts at zero. -/
+@[rust_fun "core::iter::traits::iterator::Iterator::enumerate"]
+def core.iter.traits.iterator.Iterator.enumerate.default
+    {Self : Type} {Clause0_Item : Type}
+    (_inst : core.iter.traits.iterator.Iterator Self Clause0_Item)
+    (self : Self) :
+    Result (core.iter.adapters.enumerate.Enumerate Self) :=
+  ok { iter := self, count := 0#usize }
+
 /-- `Chunks::enumerate` — wrap in `Enumerate` at count 0. -/
 @[rust_fun
   "core::slice::iter::{core::iter::traits::iterator::Iterator<core::slice::iter::Chunks<'a, @T>, &'a [@T]>}::enumerate"]

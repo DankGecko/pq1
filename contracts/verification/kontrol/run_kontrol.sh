@@ -63,15 +63,61 @@ EXPECTED_PROOFS=(
   KontrolValidateUserOp.prove_validate_rejects_bad_tailpad
 )
 
-# check_proof_inventory: the pinned baseline must match the wired tree — a
-# prove_* landing without a baseline bump must not silently go green.
-check_proof_inventory() {
-  local wired
-  wired=$(grep -hoE "function prove_[A-Za-z0-9_]+" "$SRC_DIR"/*.t.sol | sort -u | wc -l)
-  if [ "$wired" -ne "${#EXPECTED_PROOFS[@]}" ]; then
-    echo "==> FAIL: $SRC_DIR wires $wired prove_* functions but the baseline lists ${#EXPECTED_PROOFS[@]} — bump EXPECTED_PROOFS (fv-deep-review-2026-07-19 F9)" >&2
+# Emit the exact contract-qualified proof identities wired in the source tree.
+# The parser tracks the current Solidity contract, so a one-for-one rename or a
+# same-count replacement cannot satisfy the baseline by count alone.
+_wired_proof_inventory() {
+  local harness
+  for harness in "$SRC_DIR"/*.t.sol; do
+    awk '
+      /^[[:space:]]*(abstract[[:space:]]+)?contract[[:space:]]+/ {
+        line = $0
+        sub(/^[[:space:]]*(abstract[[:space:]]+)?contract[[:space:]]+/, "", line)
+        sub(/[^A-Za-z0-9_].*$/, "", line)
+        contract_name = line
+        next
+      }
+      /^[[:space:]]*function[[:space:]]+prove_[A-Za-z0-9_]+/ {
+        line = $0
+        sub(/^[[:space:]]*function[[:space:]]+/, "", line)
+        sub(/[^A-Za-z0-9_].*$/, "", line)
+        if (contract_name == "") {
+          print "<missing-contract>." line
+        } else {
+          print contract_name "." line
+        }
+      }
+    ' "$harness"
+  done | sort
+}
+
+_assert_expected_identity_text() {
+  local actual_text="$1"
+  local expected_text
+  expected_text=$(printf '%s\n' "${EXPECTED_PROOFS[@]}" | sort)
+  if [ "$actual_text" != "$expected_text" ]; then
+    echo "==> FAIL: wired Kontrol proof identities differ from EXPECTED_PROOFS" >&2
+    echo "    missing:" >&2
+    comm -23 <(printf '%s\n' "$expected_text") <(printf '%s\n' "$actual_text") |
+      sed 's/^/      - /' >&2
+    echo "    unexpected:" >&2
+    comm -13 <(printf '%s\n' "$expected_text") <(printf '%s\n' "$actual_text") |
+      sed 's/^/      - /' >&2
     return 1
   fi
+}
+
+# check_proof_inventory: the pinned baseline must match the exact wired tree.
+check_proof_inventory() {
+  _assert_expected_identity_text "$(_wired_proof_inventory)"
+}
+
+_is_expected_proof() {
+  local candidate="$1" expected
+  for expected in "${EXPECTED_PROOFS[@]}"; do
+    [ "$candidate" = "$expected" ] && return 0
+  done
+  return 1
 }
 
 # `kontrol list` prints one blank-line-separated block per proof (pyk
@@ -141,11 +187,19 @@ _kontrol_list_records() {
 
 # assert_kontrol_list <kontrol-list-output-file>: every expected identity must
 # have exactly one record, and that record must be fresh version 0, PASSED, and
-# explicitly `admitted: False`. Extra unrelated setup proofs are ignored.
+# explicitly `admitted: False`. Non-prove setup records are ignored, but every
+# selected `Kontrol*.prove_*` record must belong to the baseline.
 assert_kontrol_list() {
   local listfile="$1"
   local records matches nrecords id got_id version status admitted rc=0
   records=$(_kontrol_list_records "$listfile")
+  while IFS=$'\t' read -r got_id version status admitted; do
+    [ -n "$got_id" ] || continue
+    if [[ "$got_id" =~ ^Kontrol.*\.prove_ ]] && ! _is_expected_proof "$got_id"; then
+      echo "==> FAIL: unexpected selected Kontrol proof record: $got_id" >&2
+      rc=1
+    fi
+  done <<< "$records"
   for id in "${EXPECTED_PROOFS[@]}"; do
     matches=$(printf '%s\n' "$records" | awk -F '\t' -v expected="$id" '$1 == expected')
     nrecords=$(printf '%s\n' "$matches" | awk 'NF { count++ } END { print count + 0 }')
@@ -210,24 +264,35 @@ self_test() {
   for id in "${EXPECTED_PROOFS[@]}"; do
     if [ "$id" = "KontrolValidateUserOp.prove_validate_slot_nonbypass" ]; then mk_block "$id" "1" "ProofStatus.PASSED" "False" >> "$d/wrong-version.txt"; else mk_block "$id" "0" "ProofStatus.PASSED" "False" >> "$d/wrong-version.txt"; fi
   done
+  # unexpected selected prove_* record: all expected records plus a same-scope
+  # proof must fail (non-prove setup records above remain allowed).
+  cp "$d/complete.txt" "$d/unexpected-proof.txt"
+  mk_block "KontrolEvil.prove_bypass" "0" "ProofStatus.PASSED" "False" >> "$d/unexpected-proof.txt"
   # empty fixture
   : > "$d/empty.txt"
 
-  echo "-- self-test 1/8: complete fixture (${#EXPECTED_PROOFS[@]} PASSED v0 + unrelated setup record) — must be ACCEPTED"
+  echo "-- self-test 1/10: complete fixture (${#EXPECTED_PROOFS[@]} PASSED v0 + unrelated setup record) — must be ACCEPTED"
   if assert_kontrol_list "$d/complete.txt" >/dev/null 2>&1; then echo "   OK: accepted"; else echo "   CONTROL FAILURE: rejected a complete list" >&2; rc=1; fi
-  echo "-- self-test 2/8: missing-one fixture ($((${#EXPECTED_PROOFS[@]}-1)) PASSED) — must be REJECTED"
+  echo "-- self-test 2/10: missing-one fixture ($((${#EXPECTED_PROOFS[@]}-1)) PASSED) — must be REJECTED"
   if assert_kontrol_list "$d/missing.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: missing proof accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 3/8: failed-status fixture — must be REJECTED"
+  echo "-- self-test 3/10: failed-status fixture — must be REJECTED"
   if assert_kontrol_list "$d/failed.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: FAILED proof accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 4/8: admitted-proof fixture — must be REJECTED"
+  echo "-- self-test 4/10: admitted-proof fixture — must be REJECTED"
   if assert_kontrol_list "$d/admitted.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: admitted proof accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 5/8: missing-admission fixture — must be REJECTED"
+  echo "-- self-test 5/10: missing-admission fixture — must be REJECTED"
   if assert_kontrol_list "$d/missing-admission.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: proof without explicit admission state accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 6/8: duplicate v0-PASSED + v1-FAILED fixture — must be REJECTED"
+  echo "-- self-test 6/10: duplicate v0-PASSED + v1-FAILED fixture — must be REJECTED"
   if assert_kontrol_list "$d/duplicate-version.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: duplicate proof versions accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 7/8: single nonzero-version fixture — must be REJECTED"
+  echo "-- self-test 7/10: single nonzero-version fixture — must be REJECTED"
   if assert_kontrol_list "$d/wrong-version.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: nonzero proof version accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 8/8: empty fixture — must be REJECTED"
+  echo "-- self-test 8/10: unexpected Kontrol*.prove_* record — must be REJECTED"
+  if assert_kontrol_list "$d/unexpected-proof.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: unexpected selected proof accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
+  echo "-- self-test 9/10: same-count identity swap — must be REJECTED"
+  local wired swapped
+  wired="$(_wired_proof_inventory)"
+  swapped=$(printf '%s\n' "$wired" | sed '1cKontrolEvil.prove_bypass' | sort)
+  if _assert_expected_identity_text "$swapped" >/dev/null 2>&1; then echo "   CONTROL FAILURE: same-count identity swap accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
+  echo "-- self-test 10/10: empty fixture — must be REJECTED"
   if assert_kontrol_list "$d/empty.txt" >/dev/null 2>&1; then echo "   CONTROL FAILURE: green-at-zero accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
   rm -rf "$d"
   if [ "$rc" -eq 0 ]; then
@@ -283,6 +348,10 @@ command -v kontrol >/dev/null 2>&1 || {
 # foundry.lock lib set. See work-todo §34 + docs/KONTROL_SCOPING.md.
 KCC_DIR="$SW/lib/kontrol-cheatcodes"
 cleanup() {
+  if [ -d "$DEST_DIR" ]; then
+    rm -rf "$DEST_DIR"
+    echo "Removed isolated staged Kontrol harness directory."
+  fi
   if [ -d "$KCC_DIR" ]; then
     rm -rf "$KCC_DIR"
     echo "Removed transient kontrol-cheatcodes from lib/ (keeps codehash pins canonical)."
@@ -292,6 +361,9 @@ trap cleanup EXIT
 
 check_proof_inventory
 
+# The stage directory is owned by this runner and gitignored. Recreate it from
+# empty so a deleted/renamed source harness cannot survive from an older run.
+rm -rf "$DEST_DIR"
 mkdir -p "$DEST_DIR"
 # Stage every Kontrol harness, rewriting the repo-relative imports to the
 # in-project location.
@@ -313,13 +385,15 @@ if grep -rqlE "kontrol-cheatcodes|KontrolCheats|KEVMCheats" "$DEST_DIR"/*.t.sol 
 fi
 
 cd "$SW"
+# Remove all compiler artifacts before Kontrol discovers tests. Deleting only
+# the current harness basenames leaves artifacts for a previously staged,
+# now-deleted Kontrol contract available to the proof selector.
+forge clean
 # Force the staged harnesses to recompile under kontrol's own
 # `forge build --extra-output storageLayout ...`. A prior plain `forge build`
 # can leave a harness artifact WITHOUT storageLayout, which `kontrol build`'s
 # incremental forge step won't refresh, and kontrol then SILENTLY SKIPS the
 # contract as "non-compatible JSON" (→ "Test identifiers not found" at prove).
-for h in "$DEST_DIR"/*.t.sol; do rm -rf "out/$(basename "$h")"; done
-
 # NOTE (2026-07-02, finding kontrol-gate-not-codehash-anchored): unlike run_halmos.sh
 # — which runs PinnedCodehashes / PinnedBytecodeImmutableLemma / DeployedBytecodeReproCheck
 # BEFORE its symbolic pass — this gate proves against whatever `kontrol build` emits from

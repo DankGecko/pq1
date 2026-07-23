@@ -265,18 +265,72 @@ def extract_sol_order(src: str) -> list[str]:
 
 def extract_lean_order(src: str) -> list[str]:
     """Parse `sphincsDigestPreimage`'s `++`-concatenated operand sequence into
-    canonical field names. The body starts after the `ByteVec.cast (by decide)
-    <|` prefix. Each whitespace-normalised operand must exactly match the
-    checker-owned expression for that field."""
-    m = re.search(r"def sphincsDigestPreimage\b", src)
-    if not m:
-        raise ValueError("sphincsDigestPreimage not found in Lean source")
-    nxt = src.find("\n/--", m.end())
-    body = src[m.end(): nxt if nxt > 0 else m.end() + 2000]
-    cast = body.find("<|")
-    if cast < 0:
-        raise ValueError("sphincsDigestPreimage body not found (`<|` prefix missing)")
-    operands = [part for part in body[cast + 2:].split("++") if part.strip()]
+    canonical field names. Require one exact declaration/signature, its entire
+    normalized body, and the one exact `sphincsDigest` caller. This mirrors the
+    Rust/Solidity anti-decoy checks: a same-name namespace decoy, alternate
+    caller, or hidden statement must fail rather than select the first match."""
+    named = list(re.finditer(
+        r"(?m)^[ \t]*def[ \t]+sphincsDigestPreimage\b", src
+    ))
+    exact = list(re.finditer(
+        r"(?m)^[ \t]*def[ \t]+sphincsDigestPreimage[ \t\r\n]*"
+        r"\([ \t]*op[ \t]*:[ \t]*UserOperation[ \t]*\)"
+        r"[ \t\r\n]*\([ \t]*entryPoint[ \t]*:[ \t]*ByteVec[ \t]+20[ \t]*\)"
+        r"[ \t\r\n]*\([ \t]*chainId[ \t]*:[ \t]*Nat[ \t]*\)"
+        r"[ \t]*:[ \t\r\n]*ByteVec[ \t]+360[ \t]*:=[ \t\r\n]*"
+        r"ByteVec\.cast[ \t]*\([ \t]*by[ \t]+decide[ \t]*\)[ \t]*<\|",
+        src,
+    ))
+    if len(named) != 1 or len(exact) != 1 or named[0].start() != exact[0].start():
+        raise ValueError(
+            "expected exactly one canonical Lean sphincsDigestPreimage "
+            f"declaration/signature; found {len(named)} named and {len(exact)} exact"
+        )
+    body_end = src.find("\n/--", exact[0].end())
+    if body_end < 0:
+        raise ValueError(
+            "sphincsDigestPreimage declaration has no closing documentation boundary"
+        )
+    body = src[exact[0].end():body_end]
+    expected_body = "++".join(LEAN_FIELDS)
+    if _normalise_expr(body) != _normalise_expr(expected_body):
+        raise ValueError(
+            "Lean sphincsDigestPreimage body contains an unparsed "
+            "statement/expression or is not the exact canonical concatenation"
+        )
+
+    caller_named = list(re.finditer(
+        r"(?m)^[ \t]*def[ \t]+sphincsDigest\b", src
+    ))
+    caller_exact = list(re.finditer(
+        r"(?m)^[ \t]*def[ \t]+sphincsDigest[ \t\r\n]*"
+        r"\([ \t]*op[ \t]*:[ \t]*UserOperation[ \t]*\)"
+        r"[ \t\r\n]*\([ \t]*entryPoint[ \t]*:[ \t]*ByteVec[ \t]+20[ \t]*\)"
+        r"[ \t\r\n]*\([ \t]*chainId[ \t]*:[ \t]*Nat[ \t]*\)"
+        r"[ \t]*:[ \t\r\n]*ByteVec[ \t]+32[ \t]*:=",
+        src,
+    ))
+    if (
+        len(caller_named) != 1
+        or len(caller_exact) != 1
+        or caller_named[0].start() != caller_exact[0].start()
+    ):
+        raise ValueError(
+            "expected exactly one canonical Lean sphincsDigest "
+            f"declaration/signature; found {len(caller_named)} named and "
+            f"{len(caller_exact)} exact"
+        )
+    caller_end = src.find("\n/--", caller_exact[0].end())
+    if caller_end < 0:
+        raise ValueError("sphincsDigest declaration has no closing documentation boundary")
+    caller_body = src[caller_exact[0].end():caller_end]
+    expected_caller = "sha256_concat (sphincsDigestPreimage op entryPoint chainId)"
+    if _normalise_expr(caller_body) != _normalise_expr(expected_caller):
+        raise ValueError(
+            "Lean sphincsDigest body must exactly hash sphincsDigestPreimage"
+        )
+
+    operands = [part for part in body.split("++") if part.strip()]
     return [LEAN_FIELDS.get(_normalise_expr(part)) for part in operands]
 
 
@@ -514,6 +568,54 @@ def self_test() -> int:
     else:
         print("  FAIL: same-name Solidity overload hid drift in called implementation!")
         ok = False
+
+    # Review reproducer: a canonical same-name Lean definition in a namespace
+    # must not hide equal-width drift in the real model definition.
+    lean_preimage = re.search(
+        r"(?m)^[ \t]*def[ \t]+sphincsDigestPreimage\b", lean_src
+    )
+    assert lean_preimage is not None
+    lean_preimage_end = lean_src.find("\n/--", lean_preimage.end())
+    canonical_decl = lean_src[lean_preimage.start():lean_preimage_end]
+    actual_operand = "++ ByteVec.natToB32 op.callGasLimit"
+    drifted_operand = "++ ByteVec.natToB32 op.nonce"
+    if lean_src.count(actual_operand) != 1:
+        print("  FAIL: could not uniquely locate Lean callGasLimit operand for decoy control")
+        ok = False
+    else:
+        drifted_lean = lean_src.replace(actual_operand, drifted_operand, 1)
+        decoy_lean = (
+            drifted_lean[:lean_preimage.start()]
+            + "namespace DigestPinDecoy\n"
+            + canonical_decl
+            + "\nend DigestPinDecoy\n\n"
+            + drifted_lean[lean_preimage.start():]
+        )
+        try:
+            extract_lean_order(decoy_lean)
+        except ValueError:
+            print("  ok: canonical namespaced Lean decoy cannot hide real preimage drift")
+        else:
+            print("  FAIL: namespaced Lean decoy hid drift in the real preimage!")
+            ok = False
+
+    # The field-order declaration is not sufficient unless the modeled digest
+    # actually hashes it.
+    canonical_caller = "sha256_concat (sphincsDigestPreimage op entryPoint chainId)"
+    if lean_src.count(canonical_caller) != 1:
+        print("  FAIL: could not uniquely locate canonical Lean digest caller")
+        ok = False
+    else:
+        caller_mutant = lean_src.replace(
+            canonical_caller, "sha256_concat (ByteVec.zero 360)", 1
+        )
+        try:
+            extract_lean_order(caller_mutant)
+        except ValueError:
+            print("  ok: drifted Lean sphincsDigest caller is CAUGHT")
+        else:
+            print("  FAIL: Lean sphincsDigest stopped hashing the pinned preimage!")
+            ok = False
     print("=== self-test PASS ===" if ok else "=== self-test FAILED ===")
     return 0 if ok else 1
 

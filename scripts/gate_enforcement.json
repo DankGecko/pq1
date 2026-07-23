@@ -198,9 +198,14 @@
       "polices_paths": [
         "contracts/verification/extracted/**",
         "contracts/verification/extraction_registry.json",
+        "contracts/verification/Makefile",
+        "contracts/verification/scripts/check_extraction_freshness.py",
+        "contracts/verification/scripts/check_extraction_regen_output.py",
         "sphincs-c10/src/**",
         "aa/src/**",
         "tx-core/src/**",
+        "tx/src/**",
+        "proto/src/**",
         "fw-manifest/src/**",
         "bip39/src/**",
         "domain/src/**"

@@ -42,6 +42,7 @@ Exit: 0 = every mutation behaved as expected; 1 = a vacuity/broken-claim found;
 from __future__ import annotations
 
 import atexit
+import collections
 import json
 import os
 import re
@@ -97,6 +98,46 @@ def parse_dump(text: str) -> dict[str, set[str]]:
     return out
 
 
+def expected_dump_headlines(script_text: str | None = None) -> list[str]:
+    if script_text is None:
+        script_text = (LEAN_DIR / DUMP_SCRIPT).read_text(encoding="utf-8")
+    headlines = re.findall(
+        r"(?m)^[ \t]*#print[ \t]+axioms[ \t]+([A-Za-z0-9_'.]+)[ \t]*$",
+        script_text,
+    )
+    if not headlines or len(headlines) != len(set(headlines)):
+        raise HarnessError(
+            "dump_axioms.lean must request a nonempty, duplicate-free headline set"
+        )
+    return headlines
+
+
+def validate_dump_output(returncode: int, stdout: str, stderr: str) -> dict[str, set[str]]:
+    combined = stdout + stderr
+    if returncode != 0:
+        raise HarnessError(
+            "axiom dump command failed before a complete receipt "
+            f"(exit {returncode}); tail: {combined[-500:].strip()}"
+        )
+    expected = expected_dump_headlines()
+    flat = re.sub(r"\s+", " ", combined)
+    record_names = re.findall(
+        r"'([^']+)' (?:depends on axioms: \[[^\]]*\]|does not depend on any axioms)",
+        flat,
+    )
+    counts = collections.Counter(record_names)
+    missing = sorted(name for name in expected if counts[name] == 0)
+    duplicate = sorted(name for name in expected if counts[name] != 1 and counts[name] > 0)
+    parsed = parse_dump(combined)
+    unexpected = sorted(set(parsed) - set(expected))
+    if missing or duplicate or unexpected:
+        raise HarnessError(
+            "axiom dump is incomplete/ambiguous: "
+            f"missing={missing}, duplicate={duplicate}, unexpected={unexpected}"
+        )
+    return parsed
+
+
 def run_build() -> tuple[bool, str]:
     """lake build SphincsCVerify — full transitive rebuild. (ok, tail-output)."""
     cp = subprocess.run(["lake", "build", "SphincsCVerify"], cwd=str(LEAN_DIR),
@@ -106,13 +147,44 @@ def run_build() -> tuple[bool, str]:
 
 
 def run_dump() -> dict[str, set[str]]:
-    cp = subprocess.run(["lake", "env", "lean", DUMP_SCRIPT], cwd=str(LEAN_DIR),
-                        capture_output=True, text=True, timeout=900)
-    return parse_dump(cp.stdout + cp.stderr)
+    try:
+        cp = subprocess.run(
+            ["lake", "env", "lean", DUMP_SCRIPT],
+            cwd=str(LEAN_DIR),
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HarnessError(
+            f"axiom dump timed out after {exc.timeout}s; no partial output is accepted"
+        ) from exc
+    return validate_dump_output(cp.returncode, cp.stdout, cp.stderr)
 
 
 class HarnessError(Exception):
     pass
+
+
+def dump_validation_self_test() -> bool:
+    """Pure controls: a valid-looking partial record must never be accepted."""
+    expected = expected_dump_headlines()
+    one = expected[0]
+    partial = f"'{one}' does not depend on any axioms\n"
+    for returncode in (1, 0):
+        try:
+            validate_dump_output(returncode, partial, "fatal: truncated dump\n")
+        except HarnessError:
+            continue
+        return False
+    complete = "".join(
+        f"'{headline}' does not depend on any axioms\n" for headline in expected
+    )
+    try:
+        parsed = validate_dump_output(0, complete, "")
+    except HarnessError:
+        return False
+    return set(parsed) == set(expected)
 
 
 def apply_and_test(mut: dict) -> tuple[bool, str]:
@@ -181,6 +253,19 @@ def apply_and_test(mut: dict) -> tuple[bool, str]:
 
 def main() -> int:
     args = sys.argv[1:]
+    if not dump_validation_self_test():
+        print(
+            "ERROR: closure-dump completion negative control failed; "
+            "partial output could be accepted",
+            file=sys.stderr,
+        )
+        return 2
+    if args == ["--self-test"]:
+        print(
+            "check_proof_mutations --self-test PASS "
+            "(nonzero and exit-0 partial dumps rejected; complete dump accepted)"
+        )
+        return 0
     tier = os.environ.get("MUTATIONS", "default")
     if "--tier" in args:
         tier = args[args.index("--tier") + 1]
