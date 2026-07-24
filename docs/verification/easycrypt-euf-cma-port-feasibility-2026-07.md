@@ -2750,3 +2750,51 @@ This realizes the feasibility thesis exactly: NOT a from-scratch proof of SPHINC
 REDUCTION of C10 EUF-CMA to {the MM45 standard-SPHINCS+ base + the +C hardness assumption (ITSRC10 / S-TCR(+C))} --
 the +C DELTA is fully mechanized, 0-admit, with the abstract-game vacuity risks all closed by construction. "Months
 not years" is now empirically settled: the port is machine-checked end-to-end modulo the named carried assumptions.
+
+### 2026-07-25 — FULL-CHAIN VERIFIED: trusted base -> VERIFIED base, and the definitive TCB
+
+The known trap of this project is that EasyCrypt `require` does NOT re-verify (a required theory full of `admit`
+loads with EXIT 0), so every prior CERTIFIED-0-ADMIT was "0-admit ON a trusted base". That is now CLOSED.
+
+**THE GATE (run: scratchpad/fullchain.sh, ~35 min wall).** Computed the capstone's transitive require closure over
+PROJECT files = **24 files** (10 MM45 base + 14 ours, ~2.4 MB), **DELETED all 22 existing .eco**, then compiled
+**every file AS A TARGET** in topological order, then admit-swept and axiom-censused the WHOLE chain.
+  RESULT: **24/24 compiled from source, 0 compile failures, 0 ADMIT TACTICS CHAIN-WIDE.**
+  (Timings incl. FORS_ES 336s, FL_SL_XMSS_MT_ES 441s, SPHINCS_PLUS 144s, XmssmtCC_All 864s, FxChain 81s.)
+So the whole reduction -- MM45 base + the +C stack + the capstone -- is machine-checked from source, admit-free.
+
+**THE DEFINITIVE TCB (the axiom census, refined).** The raw sweep found 18 textual `axiom` declarations, but a
+textual sweep is BOTH over- and under-inclusive. Refined by checking every `realize` site:
+ - **REALIZED (13) -- these are PROVED, not assumptions:** ours -- dmkey_ll, size_g, eqiks_g, neqisvs_g, rng_g,
+   uniq_g (all realized at the capstone clone, GprocFORSC10.ec:139-146), dpp_ll (WOTS_C_Real.ec:199),
+   in_collection (STCR_C.ec:101); MM45's -- dist_adrstypes (x3), valid_fidxvals_idxvals, valid_widxvals_idxvals,
+   valid_xidxvals_idxvals (realized at their instantiation sites in SPHINCS_PLUS.ec / FL_SL_XMSS_MT_ES.ec).
+ - **CARRIED (5) = THE TRUE AXIOM-TCB:**
+     MM45 base (3, inherited from the third-party standard-SPHINCS+ proof):
+       * `ch0`, `chS` (WOTS_TW_ES) -- the defining equations of the WOTS chaining function (definitional).
+       * `two_encodings` (WOTS_TW_ES:572) -- the standard-encoding property.
+     Our port (2, both modelling facts, both previously disclosed):
+       * `good_pos` (FORS_C10.ec:208) -- p_nu positive good-counter mass; genuinely undischargeable from abstract
+         mco/dmkey (a legal model can zero the good-mass), hence correctly an axiom.
+       * `CntrFT.enum_spec` (Grind.ec:62, clone-inherited from FinType) -- the +C counter type is FINITE (true of
+         the deployed 32-bit counter). **This one is INVISIBLE to a textual axiom sweep** -- it is a clone-inherited
+         obligation with no `axiom` keyword. Recorded so no future census misses it.
+ - **SOUNDNESS CHECK ON `two_encodings` (verified, not assumed -- it matters):** the constant-sum +C map is known to
+   BREAK two_encodings, so if our chain had instantiated MM45's WOTS_TW_ES at the +C encoding, that axiom would be
+   FALSE in the intended model and the whole chain unsound. VERIFIED IT DOES NOT: the +C encoding is a SEPARATE op
+   `encode_msgWOTS_C : pseed -> adrs -> msgWOTS -> cntr -> emsgWOTS` (WOTS_C_Real.ec:220, different arity);
+   `encode_msgWOTS` is NEVER substituted (`<-`) anywhere in drafts/; and WOTS_TW_ES is never cloned with a replaced
+   encoding. So two_encodings constrains only MM45's own standard encoding -- exactly the intended black-box use of
+   the WOTS-TW term (paper Thm 5.2 shape: WOTS+C <= S-TCR(+C) + WOTS-TW-at-the-standard-encoding).
+
+**METHODOLOGICAL LESSON (for the gate discipline).** `ec-certify.sh` counts textual `axiom` declarations in ONE
+file. That is not the TCB: it OVERCOUNTS axioms realized at clone sites (13 of our 18) and UNDERCOUNTS
+clone-inherited obligations that carry no `axiom` keyword (CntrFT.enum_spec). The sound TCB procedure is the one
+run here: full-closure compile-as-target + admit sweep + axiom census + a per-axiom `realize`-site check.
+
+**THE CLAIM WE ARE NOW ENTITLED TO MAKE** (unchanged in kind, strictly stronger in evidence):
+  SPHINCS+C10 EUF-CMA is reduced, by a machine-checked admit-free EasyCrypt proof compiled from source end-to-end,
+  to: {the carried ITSR(+C)/C10 hardness assumption (unreduced, the ~102-bit-gap headline) + the mtree_* FORS-Merkle
+  premises + the S-TCR(+C)/WOTS/TCR/PRF advantage terms + 5 carried axioms (3 MM45 base + good_pos + counter
+  finiteness)}. It is NOT a from-scratch unconditional proof of SPHINCS+C10, and the modelled scheme sits at the
+  idealised-mk level (the deployed firmware keys the grind on sk_seed -- the disclosed pre-hop-1 boundary).
