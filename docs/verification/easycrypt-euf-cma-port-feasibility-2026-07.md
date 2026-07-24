@@ -2798,3 +2798,67 @@ run here: full-closure compile-as-target + admit sweep + axiom census + a per-ax
   premises + the S-TCR(+C)/WOTS/TCR/PRF advantage terms + 5 carried axioms (3 MM45 base + good_pos + counter
   finiteness)}. It is NOT a from-scratch unconditional proof of SPHINCS+C10, and the modelled scheme sits at the
   idealised-mk level (the deployed firmware keys the grind on sk_seed -- the disclosed pre-hop-1 boundary).
+
+### 2026-07-25 — ⚠ RETRACTION: THE CAPSTONE AS STATED IS **VACUOUS** (contradictory premises). What survives, precisely.
+
+**THIS SUPERSEDES THE "CLAIM WE ARE NOW ENTITLED TO MAKE" IN THE PRECEDING ENTRY. That sentence is WITHDRAWN.**
+An adversarial statement-level audit found, and I independently re-derived and machine-verified, that two premises of
+`EUFCMA_SPHINCS_PLUS_C10` are JOINTLY CONTRADICTORY. A theorem with an unsatisfiable hypothesis set is vacuously
+true and establishes NOTHING about its conclusion.
+
+**THE DEFECT (verify it yourself in four lines).** The two premises (SphincsC10CapstoneWired.ec:447-449, textually
+identical to the component theorem's at XmssmtCC_All.ec:8451-8453):
+  hembdisj : forall a b, valid_wadrs a => get_wgpidxs a <> get_wgpidxs (emb_tw b)
+  hembinj  : forall a b, get_wgpidxs (emb_tw a) = get_wgpidxs (emb_tw b) => get_wgpidxs a = get_wgpidxs b
+`emb_tw ad = insubd (put (put (put (val ad) 0 0) 1 0) 3 pkcotype)` (WOTS_C_Real.ec:80) writes only val-indices 0,1
+-- which `get_wgpidxs = drop 2 (val ad)` (WOTS_TW_ES.ec:389) DISCARDS -- and index 3, to the CONSTANT pkcotype.
+So emb_tw is IDEMPOTENT on the get_wgpidxs projection. Instantiating hembinj at (a, emb_tw a) therefore yields
+`get_wgpidxs a = get_wgpidxs (emb_tw a)`, which hembdisj forbids for any valid_wadrs a -- and such an a exists by
+the PROVEN `nonvac_guard` (WOTS_C_Real.ec:140). Contradiction.
+MACHINE EVIDENCE (re-verified by me): `scratch/synth_exact_prefix_vacuity.ec` -- compiled under the capstone's
+VERBATIM import prefix so every symbol resolves identically -- proves `CAPSTONE_PREMISES_CONTRADICTORY : hembdisj =>
+hembinj => false`, CERTIFIED-0-ADMIT; its negative control `scratch/synth_negctl.ec` correctly FAILS.
+
+**A FALSE DISCLOSURE MADE THIS SURVIVE.** SphincsC10CapstoneWired.ec:190-194 affirmatively states these premises are
+"base-provable via emb_disj_wgpidxs_holds, WOTS_C_Bridge.ec:200". That lemma proves ONLY the disjointness half (its
+body is `exact: emb_disj_concrete`); NO injectivity counterpart (`emb_gp_inj_holds`) exists anywhere in drafts/.
+Claiming base-provability for a REFUTABLE premise is worse than leaving it undisclosed, and it is why this survived
+multiple audits.
+
+**EXACT BLAST RADIUS -- what is and is NOT affected (do not over- or under-state):**
+ - NOT AFFECTED: the 2026-07-25 FULL-CHAIN VERIFICATION (24/24 compiled from source, 0 admits chain-wide, the TCB
+   census). That result is about compilation and admit-freeness, which are orthogonal to premise satisfiability --
+   and this defect is precisely the class such a gate CANNOT see.
+ - NOT AFFECTED: the individual hop lemmas. hop1 (Orig->PRFPRF), hop2 (SKG-PRF), hop4 (mu_split), hop5
+   (LeqPr_VT_C_proc + EUFCMA_Gproc), hop6a (LeqPr_VF_C) are proven WITHOUT these premises -- demonstrated by the
+   salvage below, which chains them unconditionally.
+ - AFFECTED: (a) the capstone's top-level statement, and (b) the XMSS-MT+C COMPONENT THEOREM
+   (EUFNAGCMA_FLSLXMSSMTTWCESNPRF, XmssmtCC_All.ec:8439) itself, since it carries the same premise pair -- so the
+   EXPANSION of the hypertree term into {WOTS-TW+C multi + S-TCR(+C) + pkco-TCR + trh-TCR} is vacuous. The route TO
+   the hypertree game is fine; only its leaf expansion is lost.
+
+**WHAT ACTUALLY SURVIVES -- an UNCONDITIONAL, admit-free bound (re-verified CERTIFIED-0-ADMIT by me):**
+`scratch/synth_recoverable_unconditional.ec`, lemma RECOVERABLE_UNCONDITIONAL, with **NO premises and NO free
+reals** (strictly more honest than the retracted statement, which had four free reals):
+    Pr[EUFCMA_C10(F) : res]  <=  |SKG-PRF adv of R_SKGPRF_EUFCMA_C(F)|
+                               + Pr[ITSRC10(R_ITSRC10_Gproc(R_fors_p F))]
+                               + Pr[EUF_CMA_Gproc_I(R_fors_p F) : res /\ !covered]
+                               + Pr[EUF_NAGCMA_FLSLXMSSMTTWCESNPRF(R_top_C F, FC.O_THFC_Default) : res]
+Every adversary on the RHS is F-DERIVED; every term is a real game probability. This IS a genuine theorem about the
+modelled scheme. Its remaining honest caveats: the hypertree term is UNEXPANDED (see blast radius); `predC`
+(WOTS_C_Real.ec:180) is an unconstrained op, so a legal instantiation `predC := fun _ => false` makes verify always
+reject and zeroes the LHS -- LHS non-vacuity is NOT established (this is MM45's abstract-primitive methodology, but
+it is owed a disclosure); the model is the paper's idealised-mk, VIRTUAL k-full-tree FORS+C, whereas the deployed
+crate drops the last FORS auth path (sphincs-c10/src/params.rs:66-73) -- the virtual->wire bridge is cited paper
+prose (2022/778 §4.1.1), unmechanized, and was missing from every ledger.
+
+**THE REPAIR (real, but not one line).** The guarded fact IS a theorem (`scratch/refuter_repair.ec`,
+`hembinj_repaired : valid_wadrs a => valid_wadrs b => ...` compiles), so the mathematics is sound and the premise is
+repairable by adding validity guards. But the premise is eliminated inside `emb_dist` (WOTS_C_Interactive.ec:703-720)
+over an ARBITRARY `adrs list` under only `uniq_wgpidxs`, whose live consumer is `interactive_success_transfer_MA`
+(:2194-2219) -- so the guards must be threaded through those, not merely added at the capstone.
+
+**LESSON (the important one).** Compile-cleanliness, admit-freeness, and a full-chain from-source rebuild are all
+necessary and NONE of them detects an unsatisfiable premise set. A 0-admit theorem can say nothing at all. Premise
+JOINT-SATISFIABILITY must be a standing gate item, with a witness obligation: for every carried premise set, either
+exhibit a model satisfying all of them simultaneously, or state that non-vacuity is unestablished.
