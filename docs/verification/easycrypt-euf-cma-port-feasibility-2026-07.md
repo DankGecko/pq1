@@ -2679,3 +2679,32 @@ EUF-CMA bound to ITSRC10 is machine-checked 0-admit. hop5 is now a PURELY-TRANSC
 session concur: grind, not a wall). The capstone's hop5 admit is UNCHANGED (still against the abstract M); Step 4
 (rewire the capstone FORS leg from abstract-M to concrete-Gproc) awaits the hop5 coupling. No new axiom; `good_pos`
 carried as before; ITSRC10 stays the sole carried hardness.
+
+### 2026-07-24 — hop5 STEPS 1+2 DONE: procedural FORS+C game Gproc + its ITSRC10 bound (0-admit); the 3 obstructions DISSOLVED
+
+Audit PASS on the structural work (build agent committed 4 commits then died to an API stall; audit ran on the
+committed state). drafts/GprocFORSC10.ec (672 lines, 1 admit = only LeqPr_VT_C_proc, 0 axioms).
+ - STEP 1 -- Gproc GENUINELY PROCEDURAL + CONCRETE (the pinned fix, now built): GprocKg.keygen (:186) is a PROC that
+   samples the FORS cube skFORS_ele <$ ddgstblock ps-INDEPENDENTLY in nested whiles, BYTE-IDENTICAL to V_C
+   (RtopCSoundness:394-410) -> D2 (keygen mismatch) DISSOLVED by construction. EUF_CMA_Gproc (:280) verify is a
+   HARDCODED concrete conjunction: reconstructed-pkFORS-eq (pkFORS_from_sigFORSTW = pool entry) AND predC_fors ->
+   D1 DISSOLVED: fverify:=false is NOT a legal instantiation (the Wave-9 vacuity horn is genuinely closed; non-
+   trivially satisfiable). No tape-in-ps. So all 3 diagnosed obstructions (D1/D2/tape-in-ps) are resolved; NO new
+   (4th) obstruction appeared.
+ - STEP 2 -- EUF-CMA(Gproc) <= ITSRC10: the BRIDGE to MFORSC10-at-concrete-ops was correctly REJECTED (op-keygen
+   deterministic-in-ps cannot couple to Gproc's proc-sampling), so RE-DERIVED over Gproc: eufcma_gproc_I_eq (:444)
+   + ITSRC10_hop_Gproc (:514) + EUFCMA_Gproc (:549), all CERTIFIED-0-ADMIT. Adversarial canary (flip covered->!covered
+   in ITSRC10_hop_Gproc) FAILS -> the coverage coupling is load-bearing, not smt-forced. RHS = the carried M.F.ITSRC10
+   assumption + the carried false-at-zero mtree premise. No new axiom.
+ - STEP 3 -- LeqPr_VT_C_proc (:635, Pr[V_C:VT] <= Pr[Gproc EUF via R_fors_p]) is STATED + ADMITTED. Its residual is
+   a PRECISE TRANSCRIPTION (the MM45 VT-coupling :3129-3467 to +C), 4 legs all reusing PROVEN assets: (i) keygen+pool
+   coupling (cube byte-identical sim/while; pool one-sided establishing trcoINV via genpkfors_cf -- SIMPLER than
+   R_top_C's inlined tree-hash); (ii) HT keygen via keygenC_eq (proven); (iii) oracle coupling (gen_pkFORS on-the-fly
+   = pool entry via trcoINV + genpkfors_flatten, proven); (iv) forge/event map (good_fors = predC_fors via
+   good_eq_good_fors_M; valid_MFORSC10 => pool-eq via trcoINV; freshness coincides; mk-rnd via dcond_good_eq). It is a
+   TRANSCRIPTION residual, NOT a modelling seam (contrast the abstract-M rtop_c_vt_wip.LeqPr_VT_C which is
+   unprovable-or-vacuous). STEP 4 (capstone discharge) not done; wired capstone still at 1 admit.
+
+hop5 DE-RISKED from a multi-session rabbit hole to a BOUNDED transcription: the sound FORS+C EUF game exists,
+ITSRC10-bounded 0-admit; only the VT-coupling byequiv remains (reuses proven assets, no new obstruction). NEXT:
+mechanize LeqPr_VT_C_proc + discharge the capstone hop5 -> capstone to 0 admit (modulo carried ITSRC10 + trusted base).
