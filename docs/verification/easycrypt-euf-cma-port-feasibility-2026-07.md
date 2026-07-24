@@ -2525,3 +2525,28 @@ proof (compile=FAIL). Handoff continued by Claude.
 
 REMAINING FX: hop-3 (NPRFPRF->NPRFNPRF + MKG-PRF), hop-4 (NPRFNPRF->V_C + mu_split into VT/VF), then wire hops 1-4
 into the capstone (replace the hop1-hop4 admits, re-certify). VT/hop-5 remains the procedural-FORS-game construction.
+
+### 2026-07-24 — FX hop-3 (MKG-PRF): FINDING = the in-chain hop is the IDENTITY at +C (not a paid hop)
+
+Audit PASS (finding is SOUND + HONEST, not evasive; 3-review-converged: agent + GPT-5.6 + Kimi + advisor). Committed
+as a sourced 0-admit FINDING comment block (fx_chain_wip.ec 4531211); fx_chain_wip.ec stays CERTIFIED-0-ADMIT.
+ - RESOLUTION: the MM45-shaped MKG-PRF hop (NPRFPRF->NPRFNPRF, SPHINCS_PLUS.ec:3055) does NOT port to +C as a paid
+   hop -- it is the IDENTITY. C10 models the message key as a fresh, non-memoized, +C-conditioned draw
+   `mk <$ dcond dmkey (good_fors m)` on EVERY game of the chain (real scheme :193, the FS CMA oracle shared by
+   PRFPRF and NPRFPRF :460, downstream V_C :347); `mkg` is NEVER applied in-chain (grep-verified: only in "NOT mkg"
+   comments). So a faithful NPRFNPRF is DEFINITIONALLY NPRFPRF (p_nprfprf = p_nprfnprf by sim); there is no keyed
+   mkg to reduce, hence no R_MKGPRF / EqPr legs / paid |MKG-PRF| triangle. Correctly declined to fabricate
+   reflexivity-theatre (advisor + GPT-5.6). conditioning_sound=TRUE (good_fors threaded through ONE shared oracle
+   -> structurally cannot double-count or drop).
+ - The genuine MKG idealisation is REAL but lives at a SEPARATE pre-hop-1 boundary: the deployed scheme keys the
+   grind on sk_seed (sphincs-c10 fors.rs nonce loop); idealising that keyed salted-grinder to the dcond model is an
+   RO step needing a primitive with salt+nonce in_t and multi-query-per-signature -- which MM45's message-only
+   MKG_PRF clone (in_t=msg, 1 query/msg) cannot express. A separate, larger item, not this seam.
+ - H1 ACCOUNTING FIX APPLIED (git 1dc746c): both capstone files' hop3 relabelled. Since the in-chain hop is the
+   identity, `mkg_adv` is a PHANTOM in-chain summand (SOUND but silently-zeroable over-estimate). The capstone bounds
+   the IDEALISED-mk model; mkg_adv now correctly reads as the pre-hop-1 boundary term (deployed keyed-grind ->
+   idealised model, a documented open refinement), NOT a discharged in-chain hop. Bound left structurally unchanged
+   (mkg_adv >= 0 is a valid over-estimate); tightening option (hop3 := identity, drop mkg_adv) documented in-file.
+
+FX STATUS: hop-1 (0-admit), hop-2 (0-admit), hop-3 (IDENTITY finding, no paid hop). REMAINING: hop-4 (NPRFNPRF->V_C
++ mu_split into VT/VF), then wire hops 1-4 into the capstone. VT/hop-5 = the procedural-FORS-game construction.
