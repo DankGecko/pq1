@@ -2602,3 +2602,37 @@ This is the strongest honest form yet: a machine-checked SPHINCS+C10 EUF-CMA red
 (hops 1,2,4,6a + the hop-3 identity) is discharged over real games, with only the FORS-forgery branch (hop5, a
 known construction) + the hop6b reduction-reconciliation + the carried ITSRC10 assumption open. Cosmetic doc-drift
 to clean: FxChain.ec:2851 stale "INLINED VERBATIM" comment (superseded by the :2876 delete-note).
+
+### 2026-07-24 — hop6b CLOSED: the wired SPHINCS+C10 EUF-CMA capstone is at 1 ADMIT (hop5/VT) + carried ITSRC10
+
+Audit PASS, NO DEFECTS FOUND. capstone admit 2->1 confirmed on forced recompile (compile reached qed, admit-tactics=1).
+ - R_top_C_members4 + R_top_C_allnchads/_allnpkcoads/_allntrhads + R_top_C_A_wf_ht: PROVEN verbatim ports
+   (RtopCSoundness.ec:1681-1997). Sound because R_top_C.choose (:174-247) and R_top.choose (XmssmtCC_All:9495-9574)
+   are BYTE-IDENTICAL (normalized diff = 0); the O_CMA.sign delta (conditioned dcond mk vs memoized mmap) is never
+   touched by the choose audit. Non-vacuity RUN: the validated XmssmtCC_All Control A (trco mem4 site perturbation)
+   FAILS on the port. CERTIFIED-0-ADMIT.
+ - oracle_clone_hop_C (FC.O <-> TRHC.O): PROVEN reconciliation. FC (WOTS_TW_ES:450) and FSSLXMTWES.TRHC
+   (FL_SL_XMSS_MT_ES:445) are DISTINCT Collection clones both binding op fc<-thfc, chain-verified (GPT-5.6-confirmed)
+   to the SAME SPHINCS_PLUS.thfc, so O_THFC_Default.query is operationally identical. A genuine byequiv coupling the
+   two DISTINCT-glob oracle states (NOT sim, NOT trivial). Non-vacuous (drop-pp fails; qeq is a witness not a
+   dependency, RUN-confirmed).
+ - hop6b DISCHARGED via the CLEAN closure: the +C component theorem EUFNAGCMA_FLSLXMSSMTTWCESNPRF (forall A_ht) is
+   applied DIRECTLY at A_ht := R_top_C(F) -> gap (a) [R_top_C->R_top mk-distribution] DISSOLVES; only gap (b) [oracle
+   clone] remained, closed by oracle_clone_hop_C. Net -3 premises: the 3 carried member hypotheses were REMOVED from
+   the capstone statement and discharged in-proof (a strengthening). No new axiom; RtopCSoundness + FxChain
+   re-certified 0-admit/0-axiom; false-canary rejected.
+ - HONEST FRAMING (GPT-5.6, folded into the ledger): the RHS is now the R_top_C(F)-INSTANTIATED bound -- a genuine
+   NEW proven upper bound on the UNCHANGED LHS Pr[EUFCMA_C10(F)], NOT claimed numerically equal to a hypothetical
+   R_top(F) RHS (which was itself never proven). R_top_C samples the conditioned mk from the ideal dcond = the
+   pre-existing mk modelling boundary, not a new gap.
+
+**STATE: the wired capstone SphincsC10CapstoneWired.ec has exactly ONE admit -- hop5 (the VT / FORS-forgery leg).**
+The bound: Pr[EUFCMA_C10(F)] <= skg_adv + mkg_adv + hF(FORS+C10 term = M.EUFCMA_MFORSC10 -> ITSRC10 + mtree_*) +
+(component theorem at R_top_C(F) = WOTS-TW+C + S-TCR(+C) + pkco-TCR + trh-TCR). Everything EXCEPT hop5 (V_C:VT <=
+the FORS term) is machine-checked over real games on the MM45 base:
+  hop1 EUFCMA_C10=PRFPRF (proven) . hop2 SKG-PRF (proven, skg_adv grounded) . hop3 =NPRFNPRF (+C identity) .
+  hop4 =V_C:VT+V_C:VF (proven) . hop6 V_C:VF<=hypertree (PROVEN: hop6a LeqPr_VF_C + hop6b + member ports) .
+  hop5 V_C:VT<=FORS term (ADMITTED -- the procedural-FORS+C game reduction, the Wave-9/10/11 multi-session item).
+So SPHINCS+C10 EUF-CMA now REDUCES, machine-checked, to {ITSRC10 (carried ~102-bit-gap hardness) + hop5 (the FORS-
+forgery-branch reduction, a known procedural-game construction)}. This is the strongest honest form of the port to
+date. hop5 remains the sole open reduction step; ITSRC10 the sole carried cryptographic hardness assumption.
