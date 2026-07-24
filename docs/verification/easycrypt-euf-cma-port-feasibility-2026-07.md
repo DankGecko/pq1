@@ -2571,3 +2571,34 @@ on the MM45 base. Combined with hop-6 (VF, LeqPr_VF_C 0-admit), the ONLY open re
 is hop-5 (VT, the procedural-FORS-game construction). REMAINING: wire hops 1-4 (+ hop-6) into the capstone (rename
 WIP files uppercase + require, discharge the hop1/hop2/hop4/hop6 admits, re-certify) -> the capstone drops from 6
 admits toward {hop-5 VT + the carried ITSRC10 + the pre-hop-1 mkg boundary}. Then hop-5's procedural FORS game.
+
+### 2026-07-24 — CAPSTONE WIRED: 6 admits -> 2 (FX chain machine-linked into the top bound)
+
+Audit PASS (files compile, seams closed, discharges genuine, bound unchanged/tighter, no new axiom, concurrent
+untouched). The FX chain is now machine-wired into the capstone.
+ - RENAMES (git mv): rtop_c_soundness_wip.ec -> RtopCSoundness.ec, fx_chain_wip.ec -> FxChain.ec (uppercase =
+   require-able). New wired capstone drafts/SphincsC10CapstoneWired.ec (the old 6-admit capstones kept intact).
+ - SEAMS CLOSED (machine-checked, not byte-copy): FxChain now `require import RtopCSoundness` and DELETES its inline
+   good_fors + 131-line V_C copies, so hop4 (FxChain) and hop6a (RtopCSoundness) name the SAME V_C module -- the
+   hop-4 byte-identity seam is now a MACHINE-CHECKED require link (module identity, compile-enforced; distinct
+   modules would fail the final smt, as two canaries confirmed). (7 further helper-name collisions shadow harmlessly
+   -- proof-internal.)
+ - HOPS DISCHARGED (admit 6->2, over REAL game probabilities, from CERTIFIED-0-ADMIT lemmas, not smt-forced):
+   hop1 = Pr_EUFCMA_C10_FSPRFPRFC (EUFCMA_C10 = FS_PRFPRF, byequiv -- materialization is inside this 0-admit
+   byequiv); hop2 = SKGPRF_C_hop (skg_adv GROUNDED to the concrete |Pr[SKG_PRF false]-Pr[SKG_PRF true]| -- a
+   STRENGTHENING of the bound); hop4 = hop4_musplit (FS_NPRFPRF = V_C:VT + V_C:VF); hop6a = LeqPr_VF_C
+   (V_C:VF <= NAGCMA(R_top_C(F), TRHC.O)). hop3 = the +C in-chain identity, machine-true via a `0 <= mkg_adv`
+   premise (mkg_adv stays the nonneg phantom MKG boundary summand). hF = M.EUFCMA_MFORSC10 (proven); ITSRC10 stays
+   a carried UNREDUCED probability term on the RHS (foregrounded headline hardness).
+ - THE 2 REMAINING ADMITS (precise): (1) hop5 [VT] -- the procedural-FORS+C game reduction Adv_EUFCMA_C -> M + the
+   ITSR-C10 coupling (A_fors a FREE forger; the multi-session construction; good_eq_good_fors sub-fact proven).
+   (2) hop6b -- `Pr[NAGCMA(R_top_C(F), TRHC.O)] <= Pr[NAGCMA(R_top(F), FC.O)]`, bundling (a) the R_top_C[conditioned
+   mk] -> R_top[uniform memoized mk] reduction and (b) the FC.O<->TRHC.O cross-clone oracle hop (XmssmtCC_All:5340
+   has the in-proof coupling). hop6b is TRACTABLE: applying the component theorem directly at A_ht:=R_top_C(F)
+   dissolves gap (a), leaving R_top_C_members4 (a near-verbatim port of the proven R_top_members4 -- choose is
+   identical between R_top and R_top_C) + the oracle-clone sim (b). ~1 wave -> capstone to 1 admit (hop5) + ITSRC10.
+
+This is the strongest honest form yet: a machine-checked SPHINCS+C10 EUF-CMA reduction whose Orig->leaf chain
+(hops 1,2,4,6a + the hop-3 identity) is discharged over real games, with only the FORS-forgery branch (hop5, a
+known construction) + the hop6b reduction-reconciliation + the carried ITSRC10 assumption open. Cosmetic doc-drift
+to clean: FxChain.ec:2851 stale "INLINED VERBATIM" comment (superseded by the :2876 delete-note).
