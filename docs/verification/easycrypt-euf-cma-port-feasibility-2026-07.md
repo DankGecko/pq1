@@ -2708,3 +2708,45 @@ committed state). drafts/GprocFORSC10.ec (672 lines, 1 admit = only LeqPr_VT_C_p
 hop5 DE-RISKED from a multi-session rabbit hole to a BOUNDED transcription: the sound FORS+C EUF game exists,
 ITSRC10-bounded 0-admit; only the VT-coupling byequiv remains (reuses proven assets, no new obstruction). NEXT:
 mechanize LeqPr_VT_C_proc + discharge the capstone hop5 -> capstone to 0 admit (modulo carried ITSRC10 + trusted base).
+
+### 2026-07-24 — hop5 CLOSED: the wired SPHINCS+C10 EUF-CMA capstone is CERTIFIED-0-ADMIT (reduces to ITSRC10 + the MM45 base)
+
+Audit PASS + INDEPENDENTLY re-verified (I re-ran ec-certify on forced recompile of both files). This is the
+culmination of the port.
+ - LeqPr_VT_C_proc (GprocFORSC10.ec:693-948) MECHANIZED CERTIFIED-0-ADMIT: the VT coupling byequiv
+   V_C(F) ~ EUF_CMA_Gproc(R_fors_p(F)) : (res /\ valid_MFORSC10){1} => res{2}. PURE transcription (no hidden
+   invariant mismatch, no finding, nothing smt-forced): (i) keygen cube byte-identical nested-while + pool one-sided
+   while{2} building the trcoINV invariant via call{2} genpkfors_cf; (ii) HT keygen keygenC_eq2; (iii) oracle couple
+   (forsnprf_sign_eq + htsign_eq + genpkfors_cf, R delegates FORS-sign to O.sign); (iv) event map (good_fors =
+   predC_fors via good_eq_good_fors_M; valid_MFORSC10 => pool-eq via genpkfors_cf; +C mk-rnd via dcond_good_eq).
+   FOUR non-vacuity canaries all REJECTED (auditor RAN them): the VT-EVENT FLIP (negate valid_MFORSC10 -> cannot
+   prove goal, so NOT vacuous -- the Wave-9 failure mode does not recur), the predC_fors ACCEPT-ALL probe (cannot
+   prove -> the +C forced-zero gate is genuinely non-degenerate, CLOSING the Wave-9/10 accept-all vacuity mode for
+   the CONCRETE Gproc M clone), trailing-false, and capstone hF-removal (hop5 load-bearing).
+ - CAPSTONE DISCHARGED 1 -> 0 (SphincsC10CapstoneWired.ec, CERTIFIED-0-ADMIT, independently re-verified). Rewired
+   the FORS leg from the abstract M.EUFCMA_MFORSC10 onto the CONCRETE Gproc: FORS leg =
+   Pr[V_C:VT] <=(LeqPr_VT_C_proc) Pr[Gproc EUF] <=(EUFCMA_Gproc) ITSRC10 + mtree_*. The free A_fors forger was
+   REMOVED (F-derived via R_fors_p(F)); the local abstract clone M deleted. **The abstract-M vacuity caveat is
+   ELIMINATED** -- GprocFORSC10.M clones FORS_C10_Multi.MFORSC10 with concrete FTWES types and REALIZES all 8
+   structural/distribution axioms (g-axioms + good_pos etc.), so the transitive axiom closure SHRANK (no new axiom;
+   fewer). The mtree premise was RESTATED over the concrete F-derived Gproc game (a strengthening: scoped to
+   R_fors_p(F), the actual adversary, not all A_fors).
+
+**THE RESULT (precise + honest): the entire +C-specific EUF-CMA reduction for SPHINCS+C10 is now MACHINE-CHECKED
+with ZERO admits.** SphincsC10CapstoneWired.ec proves
+  Pr[EUFCMA_C10(F)] <= (SKG-PRF advantage) + (nonneg mkg phantom) + (ITSRC10 + mtree_* via the concrete Gproc FORS
+                        game) + (WOTS-TW+C + S-TCR(+C) + pkco-TCR + trh-TCR via the component theorem at R_top_C)
+with all six FX hops + the FORS + hypertree legs discharged by applying single-sourced 0-admit lemmas. The chain:
+hop1 materialization (proven) . hop2 SKG-PRF (proven, skg grounded) . hop3 +C identity . hop4 mu_split (proven) .
+hop5 VT->concrete-Gproc->ITSRC10 (PROVEN, this entry) . hop6 VF->hypertree (proven). CONDITIONALITY (the honest
+ledger, all foregrounded in the capstone header): (1) the carried ITSR(+C)/C10 hardness assumption -- the ~102-bit
+FORS+C interleaved-target-subset-resilience, UNREDUCED on the RHS (the paper carries it too); (2) the three
+false-at-zero mtree_* FORS-Merkle premises; (3) the TRUSTED MM45 base .eco (XmssmtCC_All / FxChain / RtopCSoundness
++ FV-SPHINCSPLUS-EC and their SPHINCS+ base axioms) loaded require-only, NOT re-verified in this compile (the
+single-file gate) -- each base file is itself independently CERTIFIED-0-ADMIT, so a full-chain from-scratch
+recompile would upgrade "trusted" to "verified" (the definitive next verification).
+
+This realizes the feasibility thesis exactly: NOT a from-scratch proof of SPHINCS+C10, but a machine-checked
+REDUCTION of C10 EUF-CMA to {the MM45 standard-SPHINCS+ base + the +C hardness assumption (ITSRC10 / S-TCR(+C))} --
+the +C DELTA is fully mechanized, 0-admit, with the abstract-game vacuity risks all closed by construction. "Months
+not years" is now empirically settled: the port is machine-checked end-to-end modulo the named carried assumptions.
