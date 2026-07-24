@@ -2550,3 +2550,24 @@ as a sourced 0-admit FINDING comment block (fx_chain_wip.ec 4531211); fx_chain_w
 
 FX STATUS: hop-1 (0-admit), hop-2 (0-admit), hop-3 (IDENTITY finding, no paid hop). REMAINING: hop-4 (NPRFNPRF->V_C
 + mu_split into VT/VF), then wire hops 1-4 into the capstone. VT/hop-5 = the procedural-FORS-game construction.
+
+### 2026-07-24 — FX hop-4 (NPRFPRF->V_C + mu_split) CERTIFIED-0-ADMIT: the ENTIRE FX CHAIN is machine-checked
+
+Audit PASS. drafts/fx_chain_wip.ec (now 3162 lines) is CERTIFIED-0-ADMIT with all four FX hops.
+ - Inlined V_C (EUF_CMA_SPHINCSPLUSTWC_NPRFNPRF_V) BYTE-IDENTICAL to rtop_c_soundness_wip.ec:326-456 (empty diff,
+   verified twice; good_fors dep byte-identical fx:124==rtop:135; V_C references 0 other fx defs -> no silent shadow).
+ - Eqv_NPRFPRF_V_C : Pr[FS_NPRFPRF(A)] = Pr[V_C(A)] by byequiv (full two-sided ==> ={res}); V_C only inlines the +C
+   verify + records the spectator valid_MFORSC10 flag (absent from res). Genuine inlining (6 proven proc;sim
+   structural helpers; the FORS module-var/local mismatch defeated whole-program sim -> explicit rnd-aligned nested
+   whiles), NOT smt-forced. hop4_musplit : Pr[FS_NPRFPRF] = Pr[V_C:res/\valid_MFORSC10] + Pr[V_C:res/\!valid_MFORSC10]
+   = p_vt + p_vf, EXACT via Pr[mu_split] (not an inequality; RHS order (valid,!valid) matches hop-5/hop-6).
+ - No new axiom; false-canary + a drop-VT non-vacuity canary both rejected.
+ - HONEST SEAM (to be closed by the wiring step): "fx's V_C == rtop's V_C == the game hop-5/hop-6 bind" is a
+   byte-identity + identical-import-base argument, NOT a machine-checked cross-file fact (lowercase files cannot
+   require each other). The wiring refactor (uppercase + require, not inline) turns this into a machine-checked link.
+
+**FX CHAIN COMPLETE:** the whole Orig -> PRFPRF -> NPRFPRF -> V_C -> (VT + VF) reduction is machine-checked 0-admit
+on the MM45 base. Combined with hop-6 (VF, LeqPr_VF_C 0-admit), the ONLY open reduction step in the Orig->leaf chain
+is hop-5 (VT, the procedural-FORS-game construction). REMAINING: wire hops 1-4 (+ hop-6) into the capstone (rename
+WIP files uppercase + require, discharge the hop1/hop2/hop4/hop6 admits, re-certify) -> the capstone drops from 6
+admits toward {hop-5 VT + the carried ITSRC10 + the pre-hop-1 mkg boundary}. Then hop-5's procedural FORS game.
