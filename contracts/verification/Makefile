@@ -27,11 +27,23 @@ SHELL        := /usr/bin/bash
 
 # Preserve the pre-override origins so security-sensitive targets can reject a
 # caller that tried to replace the recipe interpreter or its execution flags.
-# Then hard-bind every recipe to the reviewed Bash + pipefail configuration.
+# Capture Bash startup-option hooks before removing them from every recipe
+# environment, then hard-bind every recipe to the reviewed Bash + pipefail
+# configuration.  The replay uses one reviewed GNU Make binary rather than the
+# caller-derived MAKE/MAKE_COMMAND values (including a forged argv[0]).
 override _FV_RECIPE_SHELL_ORIGIN := $(origin SHELL)
 override _FV_RECIPE_SHELLFLAGS_ORIGIN := $(origin .SHELLFLAGS)
+override _FV_INHERITED_SHELLOPTS := $(value SHELLOPTS)
+override _FV_INHERITED_BASHOPTS := $(value BASHOPTS)
+override _FV_INHERITED_BASH_ENV := $(value BASH_ENV)
+override _FV_INHERITED_ENV := $(value ENV)
+override _FV_MAKEFLAGS_ORIGIN := $(origin MAKEFLAGS)
+override _FV_MAKE_SHORT_FLAGS := $(if $(filter -%,$(firstword $(MAKEFLAGS))),,$(firstword $(MAKEFLAGS)))
+override _FV_MAKE_EVAL_FLAGS := $(value -*-eval-flags-*-)
+unexport SHELLOPTS BASHOPTS BASH_ENV ENV
 override SHELL := /usr/bin/bash
 override .SHELLFLAGS := -o pipefail -c
+override _FV_GNU_MAKE := /usr/bin/make
 
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
@@ -531,21 +543,20 @@ EXTRACTED_DIR := extracted
 PQLEAN        := $(HOME)/.local/share/pqsigner-lean
 REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
-.PHONY: verify-extracted verify-extract-differential verify-extraction-freshness verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test _verify-extraction-regen-wrong-waiver-self-test extract-sphincs-adrs extract-aa-userop extract-fors-index extract-format-decimal extract-pinstate extract-slotkdf
+.PHONY: verify-extracted verify-extract-differential verify-extraction-freshness verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test _verify-extraction-regen-wrong-waiver-self-test _verify-extraction-make-path-self-test extract-sphincs-adrs extract-aa-userop extract-fors-index extract-format-decimal extract-pinstate extract-slotkdf
 
-# MAKECMDGOALS is the trust root for both guard sets below, but GNU Make lets a
-# caller override even this built-in variable.  Reject any non-default origin
-# before consulting it; otherwise spoofed goals can suppress the executor guard
-# and the private-workspace allocation simultaneously.
+# MAKECMDGOALS selects the replay-only rejection checks below, but GNU Make lets
+# a caller override even this built-in variable.  Reject any non-default origin
+# before consulting it.  Extraction workspace allocation itself is target-bound
+# below and does not depend on the requested top-level goal text.
 ifeq ($(filter default undefined,$(origin MAKECMDGOALS)),)
 $(error refusing caller-overridden MAKECMDGOALS (origin $(origin MAKECMDGOALS)) for extraction assurance)
 endif
 
-# The authoritative replay must recurse through GNU Make itself.  Both MAKE and
-# MAKE_COMMAND are caller-overridable; without this guard a dispatcher can forge
-# the self-test marker and return success for the production loop without
-# running any extraction.  Internal helper goals are guarded too.
-override _EXTRACTION_REGEN_GUARDED_GOALS := verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test _verify-extraction-regen-wrong-waiver-self-test
+# The authoritative replay must recurse through the reviewed GNU Make binary.
+# Reject ambient executor and Bash-startup overrides as an additional fail-loud
+# receipt.  Internal helper goals are guarded too.
+override _EXTRACTION_REGEN_GUARDED_GOALS := verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test _verify-extraction-regen-wrong-waiver-self-test _verify-extraction-make-path-self-test
 ifneq ($(strip $(filter $(_EXTRACTION_REGEN_GUARDED_GOALS),$(MAKECMDGOALS))),)
 ifneq ($(_FV_RECIPE_SHELL_ORIGIN),file)
 $(error refusing caller-overridden SHELL (origin $(_FV_RECIPE_SHELL_ORIGIN)) for authoritative extraction replay)
@@ -559,34 +570,55 @@ endif
 ifneq ($(origin MAKE_COMMAND),default)
 $(error refusing caller-overridden MAKE_COMMAND (origin $(origin MAKE_COMMAND)) for authoritative extraction replay)
 endif
+ifneq ($(strip $(_FV_INHERITED_SHELLOPTS)),)
+$(error refusing inherited SHELLOPTS for authoritative extraction replay)
+endif
+ifneq ($(strip $(_FV_INHERITED_BASHOPTS)),)
+$(error refusing inherited BASHOPTS for authoritative extraction replay)
+endif
+ifneq ($(strip $(_FV_INHERITED_BASH_ENV)),)
+$(error refusing inherited BASH_ENV for authoritative extraction replay)
+endif
+ifneq ($(strip $(_FV_INHERITED_ENV)),)
+$(error refusing inherited ENV for authoritative extraction replay)
+endif
+ifneq ($(_FV_MAKEFLAGS_ORIGIN),file)
+$(error refusing caller-overridden MAKEFLAGS (origin $(_FV_MAKEFLAGS_ORIGIN)) for authoritative extraction replay)
+endif
+ifneq ($(findstring i,$(_FV_MAKE_SHORT_FLAGS)),)
+$(error refusing Make ignore-errors mode for authoritative extraction replay)
+endif
+ifneq ($(strip $(_FV_MAKE_EVAL_FLAGS)),)
+$(error refusing Make --eval for authoritative extraction replay)
+endif
 endif
 
-# Every public extract-* invocation gets one unpredictable mode-0700 workspace.
-# Multiple extract goals in one Make process would share that root: the first
-# target cleans it, then the next target recreates the now-disclosed path with
-# ordinary mkdir.  Reject that unsafe mode; the aggregate replay already forks
-# one recursive Make process per registry target.
+# Keep direct multi-goal requests fail-loud: the aggregate replay deliberately
+# forks one Make process per registry target.  This is a policy check, not the
+# workspace trust root; an indirect alias still receives a private root when the
+# concrete extract-* target executes.
 override _EXTRACTION_REQUESTED_GOALS := $(filter extract-%,$(MAKECMDGOALS))
 ifneq ($(strip $(word 2,$(_EXTRACTION_REQUESTED_GOALS))),)
 $(error refusing multiple extract-* targets in one Make invocation; invoke one target per process)
 endif
 
-# `override` prevents an environment or command-line value from redirecting the
-# generator/diff/checker chain back into a shared, attacker-preparable path.
-ifneq ($(strip $(_EXTRACTION_REQUESTED_GOALS)),)
-override EXTRACTION_TMP_ROOT := $(shell umask 077 && /usr/bin/mktemp -d /tmp/pqsigner-extract.XXXXXXXX)
-ifeq ($(strip $(EXTRACTION_TMP_ROOT)),)
-$(error failed to allocate a private extraction workspace)
-endif
-endif
+# Allocate lazily when each concrete extract-* recipe is expanded, independent
+# of MAKECMDGOALS.  The dynamic cache is accepted only after this file has
+# assigned it with `override`, so environment/command-line attempts to seed
+# either the public root or the internal per-target cache are ignored.
+override _extraction_tmp_var = _FV_EXTRACTION_TMP_ROOT_$(subst -,_,$(1))
+override _private_extraction_tmp = $(if $(filter override,$(origin $(call _extraction_tmp_var,$(1)))),$($(call _extraction_tmp_var,$(1))),$(eval override $(call _extraction_tmp_var,$(1)) := $(shell umask 077 && /usr/bin/mktemp -d /tmp/pqsigner-extract.XXXXXXXX))$(if $($(call _extraction_tmp_var,$(1))),$($(call _extraction_tmp_var,$(1))),$(error failed to allocate a private extraction workspace for $(1))))
+extract-%: private override EXTRACTION_TMP_ROOT = $(call _private_extraction_tmp,$@)
 
 # Successful extraction targets remove only the private root allocated above.
 # A failed target retains its inaccessible workspace for local diagnosis.
 override define _cleanup_extraction_tmp
-case "$(EXTRACTION_TMP_ROOT)" in \
-  /tmp/pqsigner-extract.[A-Za-z0-9]*) rm -rf -- "$(EXTRACTION_TMP_ROOT)" ;; \
-  *) echo "refusing to remove invalid extraction workspace: $(EXTRACTION_TMP_ROOT)" >&2; exit 1 ;; \
-esac
+root="$(EXTRACTION_TMP_ROOT)"; \
+if [[ "$$root" =~ ^/tmp/pqsigner-extract\.[A-Za-z0-9]{8}$$ ]]; then \
+  rm -rf -- "$$root"; \
+else \
+  echo "refusing to remove invalid extraction workspace: $$root" >&2; exit 1; \
+fi
 endef
 
 # The sole stale waiver is for one exact Aeneas translator defect.  The marker
@@ -620,12 +652,12 @@ verify-extraction-freshness: ## F1 toolchain-free extraction freshness tripwire 
 # (tx-merkle — Aeneas can no longer translate it) is EXPECTED to fail and only
 # flags if it unexpectedly re-extracts (bump it to fresh + `--update <target>` then).
 verify-extraction-regen: verify-extraction-regen-self-test ## F1 REAL regen: re-run every extract-* + diff (needs charon/aeneas toolchain)
-	@$(MAKE) --no-print-directory _verify-extraction-regen-loop
+	+@$(_FV_GNU_MAKE) --no-print-directory _verify-extraction-regen-loop
 
 verify-extraction-regen-self-test: ## Negative controls for signature/value parity + recovered-waiver failure
 	@python3 scripts/check_extraction_regen_output.py --self-test-lean
-	@out=$$(mktemp /tmp/pq-extraction-shell-override-selftest.XXXXXX); \
-	if $(MAKE) --no-print-directory SHELL=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
+	+@out=$$(mktemp /tmp/pq-extraction-shell-override-selftest.XXXXXX); \
+	if $(_FV_GNU_MAKE) --no-print-directory SHELL=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: caller-overridden SHELL suppressed authoritative extraction replay" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif ! grep -Fq 'refusing caller-overridden SHELL ' $$out; then \
@@ -634,8 +666,8 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -f $$out; \
 	echo "  ok: caller-overridden recipe SHELL is CAUGHT"
-	@out=$$(mktemp /tmp/pq-extraction-shellflags-override-selftest.XXXXXX); \
-	if $(MAKE) --no-print-directory '.SHELLFLAGS=-n -c' _verify-extraction-regen-loop >$$out 2>&1; then \
+	+@out=$$(mktemp /tmp/pq-extraction-shellflags-override-selftest.XXXXXX); \
+	if $(_FV_GNU_MAKE) --no-print-directory '.SHELLFLAGS=-n -c' _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: caller-overridden .SHELLFLAGS suppressed authoritative extraction replay" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif ! grep -Fq 'refusing caller-overridden .SHELLFLAGS ' $$out; then \
@@ -644,8 +676,49 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -f $$out; \
 	echo "  ok: caller-overridden recipe .SHELLFLAGS are CAUGHT"
-	@out=$$(mktemp /tmp/pq-extraction-goal-executor-selftest.XXXXXX); \
-	if $(MAKE) --no-print-directory MAKECMDGOALS=not-guarded MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
+	+@out=$$(mktemp /tmp/pq-extraction-bash-hook-selftest.XXXXXX); \
+	for hook in SHELLOPTS BASHOPTS BASH_ENV ENV; do \
+	  case "$$hook" in \
+	    SHELLOPTS) value=noexec ;; \
+	    BASHOPTS) value=sourcepath ;; \
+	    BASH_ENV|ENV) value=/dev/null ;; \
+	  esac; \
+	  if /usr/bin/env "$$hook=$$value" $(_FV_GNU_MAKE) --no-print-directory _verify-extraction-regen-loop >$$out 2>&1; then \
+	    echo "CONTROL FAILURE: inherited $$hook bypassed authoritative extraction replay" >&2; \
+	    sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	  elif ! grep -Fq "refusing inherited $$hook " $$out; then \
+	    echo "CONTROL FAILURE: inherited $$hook was rejected for the wrong reason" >&2; \
+	    sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	  fi; \
+	done; \
+	rm -f $$out; \
+	echo "  ok: inherited SHELLOPTS/BASHOPTS/BASH_ENV/ENV hooks are CAUGHT"
+	+@out=$$(mktemp /tmp/pq-extraction-make-mode-selftest.XXXXXX); \
+	if $(_FV_GNU_MAKE) --no-print-directory -i _verify-extraction-regen-loop >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: Make ignore-errors mode bypassed authoritative extraction replay" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing Make ignore-errors mode ' $$out; then \
+	  echo "CONTROL FAILURE: Make ignore-errors mode was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	if $(_FV_GNU_MAKE) --no-print-directory --eval='.IGNORE:' _verify-extraction-regen-loop >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: Make --eval installed a global ignore-errors bypass" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing Make --eval ' $$out; then \
+	  echo "CONTROL FAILURE: Make --eval was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	if $(_FV_GNU_MAKE) --no-print-directory MAKEFLAGS= _verify-extraction-regen-loop >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: caller-overridden MAKEFLAGS bypassed authoritative extraction replay" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing caller-overridden MAKEFLAGS ' $$out; then \
+	  echo "CONTROL FAILURE: MAKEFLAGS override was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: Make ignore-errors/eval/MAKEFLAGS bypasses are CAUGHT"
+	+@out=$$(mktemp /tmp/pq-extraction-goal-executor-selftest.XXXXXX); \
+	if $(_FV_GNU_MAKE) --no-print-directory MAKECMDGOALS=not-guarded MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: spoofed MAKECMDGOALS suppressed the recursive-executor guard" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif ! grep -Fq 'refusing caller-overridden MAKECMDGOALS ' $$out; then \
@@ -654,8 +727,8 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -f $$out; \
 	echo "  ok: executor-side MAKECMDGOALS spoof is CAUGHT"
-	@out=$$(mktemp /tmp/pq-extraction-goal-workspace-selftest.XXXXXX); \
-	if $(MAKE) --no-print-directory -n MAKECMDGOALS=not-guarded EXTRACTION_TMP_ROOT=/tmp/pq-caller-controlled extract-sphincs-adrs >$$out 2>&1; then \
+	+@out=$$(mktemp /tmp/pq-extraction-goal-workspace-selftest.XXXXXX); \
+	if $(_FV_GNU_MAKE) --no-print-directory -n MAKECMDGOALS=not-guarded EXTRACTION_TMP_ROOT=/tmp/pq-caller-controlled extract-sphincs-adrs >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: spoofed MAKECMDGOALS enabled a caller-selected extraction workspace" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif ! grep -Fq 'refusing caller-overridden MAKECMDGOALS ' $$out; then \
@@ -664,8 +737,26 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -f $$out; \
 	echo "  ok: workspace-side MAKECMDGOALS spoof is CAUGHT"
-	@out=$$(mktemp /tmp/pq-extraction-make-override-selftest.XXXXXX); \
-	if $(MAKE) --no-print-directory MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
+	+@out=$$(mktemp /tmp/pq-extraction-indirect-workspace-selftest.XXXXXX); \
+	if ! $(_FV_GNU_MAKE) --no-print-directory -n \
+	    --eval='extraction-alias-self-test: extract-sphincs-adrs' \
+	    EXTRACTION_TMP_ROOT=/tmp/pqsigner-extract.AttackerChosen \
+	    extraction-alias-self-test >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: indirect extraction alias did not expand safely" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif grep -Fq '/tmp/pqsigner-extract.AttackerChosen' $$out; then \
+	  echo "CONTROL FAILURE: indirect extraction alias retained a caller-selected workspace" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	root=$$(grep -Eom1 '/tmp/pqsigner-extract\.[A-Za-z0-9]{8}' $$out || true); \
+	if [[ ! "$$root" =~ ^/tmp/pqsigner-extract\.[A-Za-z0-9]{8}$$ ]] || [ ! -d "$$root" ]; then \
+	  echo "CONTROL FAILURE: indirect extraction alias did not allocate a private workspace" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rmdir -- "$$root"; rm -f $$out; \
+	echo "  ok: indirect extraction alias receives a private execution-time workspace"
+	+@out=$$(mktemp /tmp/pq-extraction-make-override-selftest.XXXXXX); \
+	if $(_FV_GNU_MAKE) --no-print-directory MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: caller-overridden MAKE bypassed authoritative extraction replay" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif ! grep -Fq 'refusing caller-overridden MAKE ' $$out; then \
@@ -674,8 +765,8 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -f $$out; \
 	echo "  ok: caller-overridden MAKE is CAUGHT"
-	@out=$$(mktemp /tmp/pq-extraction-make-command-override-selftest.XXXXXX); \
-	if $(MAKE) --no-print-directory MAKE_COMMAND=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
+	+@out=$$(mktemp /tmp/pq-extraction-make-command-override-selftest.XXXXXX); \
+	if $(_FV_GNU_MAKE) --no-print-directory MAKE_COMMAND=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: caller-overridden MAKE_COMMAND bypassed authoritative extraction replay" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif ! grep -Fq 'refusing caller-overridden MAKE_COMMAND ' $$out; then \
@@ -684,8 +775,18 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -f $$out; \
 	echo "  ok: caller-overridden MAKE_COMMAND is CAUGHT"
-	@out=$$(mktemp /tmp/pq-extraction-multigoal-selftest.XXXXXX); \
-	if $(MAKE) --no-print-directory extract-sphincs-adrs extract-aa-userop >$$out 2>&1; then \
+	+@out=$$(mktemp /tmp/pq-extraction-make-argv0-selftest.XXXXXX); \
+	if ! /usr/bin/bash -c 'exec -a /tmp/pq-caller-picked-make /usr/bin/make --no-print-directory _verify-extraction-make-path-self-test' >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: forged Make argv[0] control did not run" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fxq 'trusted=/usr/bin/make' $$out || ! grep -Fxq 'ambient=/tmp/pq-caller-picked-make' $$out; then \
+	  echo "CONTROL FAILURE: authoritative executor is not independent of caller-controlled Make argv[0]" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: forged Make argv[0] cannot redirect the authoritative executor"
+	+@out=$$(mktemp /tmp/pq-extraction-multigoal-selftest.XXXXXX); \
+	if $(_FV_GNU_MAKE) --no-print-directory extract-sphincs-adrs extract-aa-userop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: multiple extract targets shared one Make invocation" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif ! grep -Fq 'refusing multiple extract-* targets' $$out; then \
@@ -694,8 +795,8 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -f $$out; \
 	echo "  ok: multi-goal extraction workspace reuse is CAUGHT"
-	@out=$$(mktemp /tmp/pq-extraction-waiver-selftest.XXXXXX); \
-	if $(MAKE) --no-print-directory _verify-extraction-regen-loop-self-test >$$out 2>&1; then \
+	+@out=$$(mktemp /tmp/pq-extraction-waiver-selftest.XXXXXX); \
+	if $(_FV_GNU_MAKE) --no-print-directory _verify-extraction-regen-loop-self-test >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: waived extraction unexpectedly re-extracted but aggregate replay exited zero" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif ! grep -q 'UNEXPECTED-FRESH' $$out; then \
@@ -704,8 +805,8 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -f $$out; \
 	echo "  ok: unexpectedly fresh waived extraction is CAUGHT"
-	@out=$$(mktemp /tmp/pq-extraction-wrong-waiver-selftest.XXXXXX); \
-	if $(MAKE) --no-print-directory _verify-extraction-regen-wrong-waiver-self-test >$$out 2>&1; then \
+	+@out=$$(mktemp /tmp/pq-extraction-wrong-waiver-selftest.XXXXXX); \
+	if $(_FV_GNU_MAKE) --no-print-directory _verify-extraction-regen-wrong-waiver-self-test >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: wrong-stage waived extraction failure was accepted" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif ! grep -Fq 'WRONG-WAIVER-FAILURE' $$out; then \
@@ -717,7 +818,7 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 
 override define _run_extraction_regen_loop
 	@echo "=== F1 extraction regen: re-running charon->aeneas + diff for every registry target ==="
-	@fail=0; \
+	+@fail=0; \
 	for t in $$(python3 -c "import json;print(' '.join(e['target'] for e in json.load(open('extraction_registry.json'))['entries'] if e.get('fresh',True)))"); do \
 	  if $(1) $$t >/dev/null 2>&1; then echo "  fresh: $$t"; else echo "  DRIFT: $$t (re-extract/re-prove/re-pin via --update $$t)"; fail=1; fi; \
 	done; \
@@ -740,7 +841,7 @@ endef
 # The authoritative target has no caller-selectable executor. The only mock is
 # isolated in the self-test-only helper, while both paths share the same loop.
 _verify-extraction-regen-loop:
-	$(call _run_extraction_regen_loop,$(MAKE))
+	$(call _run_extraction_regen_loop,$(_FV_GNU_MAKE))
 
 _verify-extraction-regen-loop-self-test:
 	$(call _run_extraction_regen_loop,/bin/true)
@@ -749,6 +850,9 @@ _verify-extraction-regen-loop-self-test:
 # the required generator-stage marker.  The aggregate loop must reject it.
 _verify-extraction-regen-wrong-waiver-self-test:
 	$(call _run_extraction_regen_loop,/usr/bin/test extract-tx-merkle !=)
+
+_verify-extraction-make-path-self-test:
+	@printf '%s\n' 'trusted=$(_FV_GNU_MAKE)' 'ambient=$(MAKE_COMMAND)'
 
 # roadmap T1.3 (ii) — extracted-Lean vs shipped-Rust DIFFERENTIAL gate.
 # The `extract-*` regen-diff targets catch a Rust change that was not re-extracted;

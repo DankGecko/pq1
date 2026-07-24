@@ -178,10 +178,13 @@ def lean_signature_errors(
 
     The regenerated declarations are renamed under a private prefix so the
     committed module and exact template signatures can be elaborated together.
-    Each declaration is then instantiated with fresh universe metavariables and
-    its inferred type compared with `Lean.Meta.isDefEq`.  Do not encode this as
-    a homogeneous term equality: the elaborator may insert a coercion into one
-    side and accept declarations whose types are not definitionally equal.
+    Each pair must expose the same universe-parameter arity, then both types are
+    instantiated with the same rigid universe parameters before
+    `Lean.Meta.isDefEq`.  Independent universe metavariables are unsound here:
+    Lean can solve the polymorphic side to a monomorphic universe.  Do not encode
+    this as a homogeneous term equality either: the elaborator may insert a
+    coercion into one side and accept declarations whose types are not
+    definitionally equal.
     """
     declaration_names_in_order = AXIOM_NAME_RE.findall(template_text)
     names = [name for _, name in declaration_names_in_order]
@@ -203,11 +206,15 @@ def lean_signature_errors(
     )
     checks = "\n\n".join(
         "run_meta do\n"
-        "  let expectedType ← Lean.Meta.inferType\n"
-        "    (← Lean.Meta.mkConstWithFreshMVarLevels "
-        f"``ExtractionRegenExpected.{name})\n"
-        "  let actualType ← Lean.Meta.inferType\n"
-        f"    (← Lean.Meta.mkConstWithFreshMVarLevels ``{name})\n"
+        "  let expectedInfo ← Lean.getConstInfo "
+        f"``ExtractionRegenExpected.{name}\n"
+        f"  let actualInfo ← Lean.getConstInfo ``{name}\n"
+        "  unless expectedInfo.levelParams.length == "
+        "actualInfo.levelParams.length do\n"
+        f'    throwError "extraction signature universe-parameter mismatch: {name}"\n'
+        "  let levels := expectedInfo.levelParams.map Lean.mkLevelParam\n"
+        "  let expectedType := expectedInfo.instantiateTypeLevelParams levels\n"
+        "  let actualType := actualInfo.instantiateTypeLevelParams levels\n"
         "  unless ← Lean.Meta.isDefEq expectedType actualType do\n"
         f'    throwError "extraction signature type mismatch: {name}"'
         for name in names
@@ -560,6 +567,31 @@ def self_test_lean() -> int:
             "FAIL: matching external declaration signature was rejected: "
             f"{matching}"
         )
+        ok = False
+
+    alpha_equivalent = lean_signature_errors(
+        "universe alpha-equivalence control",
+        committed_pinstate,
+        "axiom id : {α : Sort uFresh} → α → α\n",
+    )
+    if not alpha_equivalent:
+        print("  ok: alpha-equivalent polymorphic signature is ACCEPTED")
+    else:
+        print(
+            "FAIL: alpha-equivalent polymorphic signature was rejected: "
+            f"{alpha_equivalent}"
+        )
+        ok = False
+
+    monomorphic_drift = lean_signature_errors(
+        "universe specialization control",
+        committed_pinstate,
+        "axiom id : {α : Type} → α → α\n",
+    )
+    if monomorphic_drift:
+        print("  ok: polymorphic-to-monomorphic universe drift is CAUGHT")
+    else:
+        print("FAIL: universe-specialized external declaration escaped")
         ok = False
 
     mismatched = lean_signature_errors(

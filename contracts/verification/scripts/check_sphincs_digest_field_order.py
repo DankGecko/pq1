@@ -22,7 +22,11 @@ expression that merely contains a familiar field name fails CI before any
 vector. The parsers require one exact function signature and the complete
 Rust/Solidity body to equal the canonical returned digest expression; alternate
 update APIs, wrappers, overload decoys, early returns, and after-12 truncation
-therefore fail. The Lean leg exists because nothing else
+therefore fail. The gate also pins the load-bearing Solidity and Lean consumers:
+`_validateSignature` must pass that digest to C10, and both the executable Lean
+model and its success predicate must pass that digest to `verify_fn`. This keeps
+the canonical digest definitions from becoming unused decoys. The Lean leg
+exists because nothing else
 machine-pinned the model's preimage: an equal-width swap in
 `sphincsDigestPreimage` used to pass `lake build`, the ledger gate, the closure
 pins, and this lint.
@@ -38,7 +42,8 @@ abi.encodePacked packing rules + the Lean ByteVec defs, named assumptions — th
 Forge differential vector is the byte-level cross-check). And it is NOT the
 (stronger, blocked) Aeneas ∀-over-layout extraction of the digest.
 
-Exit 0 = the three field orders match; 1 = drift; 2 = parse/usage error.
+Exit 0 = the three field orders and their verifier consumers match; 1 = drift;
+2 = parse/usage error.
 `--self-test` exercises reorder/drop controls plus parser-level 13th-field,
 compound-expression, decoy/overload, alternate-update, and early-return controls.
 """
@@ -46,6 +51,7 @@ from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -164,6 +170,98 @@ def _balanced_body(s: str, open_at: int) -> str:
             if depth == 0:
                 return s[open_at + 1:i]
     raise ValueError("unbalanced function braces")
+
+
+def _strip_c_comments(src: str) -> str:
+    """Blank Solidity comments and string literals before source matching."""
+    out: list[str] = []
+    i = 0
+
+    def blank(c: str) -> str:
+        return "\n" if c == "\n" else " "
+
+    while i < len(src):
+        if src.startswith("//", i):
+            while i < len(src) and src[i] != "\n":
+                out.append(" ")
+                i += 1
+            continue
+        if src.startswith("/*", i):
+            out.extend((" ", " "))
+            i += 2
+            while i < len(src) and not src.startswith("*/", i):
+                out.append(blank(src[i]))
+                i += 1
+            if i < len(src):
+                out.extend((" ", " "))
+                i += 2
+            continue
+        if src[i] in {'"', "'"}:
+            quote = src[i]
+            out.append(" ")
+            i += 1
+            while i < len(src):
+                c = src[i]
+                out.append(blank(c))
+                i += 1
+                if c == "\\" and i < len(src):
+                    out.append(blank(src[i]))
+                    i += 1
+                elif c == quote:
+                    break
+            continue
+        out.append(src[i])
+        i += 1
+    return "".join(out)
+
+
+def _strip_lean_noncode(src: str) -> str:
+    """Blank Lean line/nested-block comments and strings."""
+    out: list[str] = []
+    i = 0
+
+    def blank(c: str) -> str:
+        return "\n" if c == "\n" else " "
+
+    while i < len(src):
+        if src.startswith("--", i):
+            while i < len(src) and src[i] != "\n":
+                out.append(" ")
+                i += 1
+            continue
+        if src.startswith("/-", i):
+            depth = 1
+            out.extend((" ", " "))
+            i += 2
+            while i < len(src) and depth:
+                if src.startswith("/-", i):
+                    depth += 1
+                    out.extend((" ", " "))
+                    i += 2
+                elif src.startswith("-/", i):
+                    depth -= 1
+                    out.extend((" ", " "))
+                    i += 2
+                else:
+                    out.append(blank(src[i]))
+                    i += 1
+            continue
+        if src[i] == '"':
+            out.append(" ")
+            i += 1
+            while i < len(src):
+                c = src[i]
+                out.append(blank(c))
+                i += 1
+                if c == "\\" and i < len(src):
+                    out.append(blank(src[i]))
+                    i += 1
+                elif c == '"':
+                    break
+            continue
+        out.append(src[i])
+        i += 1
+    return "".join(out)
 
 
 def extract_rust_order(src: str) -> list[str]:
@@ -334,6 +432,153 @@ def extract_lean_order(src: str) -> list[str]:
     return [LEAN_FIELDS.get(_normalise_expr(part)) for part in operands]
 
 
+def check_sol_consumer(src: str) -> None:
+    """Pin `_validateSignature`'s canonical digest-to-C10 dataflow."""
+    clean = _strip_c_comments(src)
+    named = list(re.finditer(r"\bfunction\s+_validateSignature\b", clean))
+    exact = list(re.finditer(
+        r"\bfunction\s+_validateSignature\s*\(\s*"
+        r"UserOperation06\s+calldata\s+userOp\s*,\s*bytes32\s*\)\s*"
+        r"internal\s+returns\s*\(\s*uint256\s*\)\s*\{",
+        clean,
+    ))
+    if len(named) != 1 or len(exact) != 1 or named[0].start() != exact[0].start():
+        raise ValueError(
+            "expected exactly one canonical Solidity _validateSignature "
+            f"declaration/signature; found {len(named)} named and {len(exact)} exact"
+        )
+    body = _balanced_body(clean, exact[0].end() - 1)
+
+    digest_binding = re.compile(
+        r"\bbytes32\s+digest\s*=\s*sphincsDigest\s*\(\s*userOp\s*\)\s*;"
+    )
+    if len(digest_binding.findall(body)) != 1:
+        raise ValueError(
+            "_validateSignature must bind exactly one "
+            "`bytes32 digest = sphincsDigest(userOp);`"
+        )
+    if len(re.findall(r"\bsphincsDigest\s*\(", body)) != 1:
+        raise ValueError(
+            "_validateSignature must contain exactly one sphincsDigest call"
+        )
+    if len(re.findall(r"\b(?:bytes32\s+)?digest\s*=", body)) != 1:
+        raise ValueError(
+            "_validateSignature must assign the verifier digest exactly once"
+        )
+
+    verify_calls = list(re.finditer(r"\bc10Verifier\.verify\s*\(", body))
+    if len(verify_calls) != 1:
+        raise ValueError(
+            "_validateSignature must contain exactly one c10Verifier.verify call"
+        )
+    args, _ = _balanced_args(body, verify_calls[0].end() - 1)
+    expected = ["pkSeed", "pkRoot", "digest", "innerSig"]
+    if [_normalise_expr(arg) for arg in args] != expected:
+        raise ValueError(
+            "_validateSignature must call "
+            "c10Verifier.verify(pkSeed, pkRoot, digest, innerSig)"
+        )
+    if len(re.findall(r"\bdigest\b", body)) != 2:
+        raise ValueError(
+            "_validateSignature digest binding must feed only the canonical C10 call"
+        )
+
+
+def _lean_consumer_body(src: str, name: str, signature: str) -> str:
+    named = list(re.finditer(
+        rf"(?m)^[ \t]*def[ \t]+{re.escape(name)}\b", src
+    ))
+    exact = list(re.finditer(signature, src))
+    if len(named) != 1 or len(exact) != 1 or named[0].start() != exact[0].start():
+        raise ValueError(
+            f"expected exactly one canonical Lean {name} declaration/signature; "
+            f"found {len(named)} named and {len(exact)} exact"
+        )
+    body_end = src.find("\n/--", exact[0].end())
+    if body_end < 0:
+        raise ValueError(f"{name} declaration has no closing documentation boundary")
+    return src[exact[0].end():body_end]
+
+
+def check_lean_consumers(src: str) -> None:
+    """Pin the executable/model digest arguments passed to `verify_fn`."""
+    ok_body = _strip_lean_noncode(
+        _lean_consumer_body(
+            src,
+            "validateSignatureOk",
+            r"(?m)^[ \t]*def[ \t]+validateSignatureOk[ \t\r\n]*"
+            r"\([ \t]*s[ \t]*:[ \t]*Storage[ \t]*\)[ \t\r\n]*"
+            r"\([ \t]*op[ \t]*:[ \t]*UserOperation[ \t]*\)[ \t\r\n]*"
+            r"\([ \t]*entryPoint[ \t]*:[ \t]*ByteVec[ \t]+20[ \t]*\)[ \t\r\n]*"
+            r"\([ \t]*chainId[ \t]*:[ \t]*Nat[ \t]*\)[ \t\r\n]*"
+            r"\([ \t]*verify_fn[ \t]*:[ \t]*ByteVec[ \t]+32[ \t]*→[ \t]*"
+            r"ByteVec[ \t]+32[ \t]*→[ \t]*ByteVec[ \t]+32[ \t]*→[ \t]*"
+            r"ByteVec[ \t]+SignatureLen[ \t]*→[ \t]*Bool[ \t]*\)[ \t\r\n]*"
+            r"\([ \t]*d[ \t]*:[ \t]*DecodedSig[ \t]*\)[ \t]*"
+            r"\([ \t]*owner[ \t]*:[ \t]*OwnerBytes[ \t]*\)[ \t]*"
+            r":[ \t]*Prop[ \t]*:=",
+        )
+    )
+    expected_ok = (
+        "verify_fn (owner.raw.take 32 (by decide)) "
+        "(owner.raw.drop 32 (by decide)) "
+        "(sphincsDigest op entryPoint chainId) d.innerSig = true"
+    )
+    if _normalise_expr(expected_ok) not in _normalise_expr(ok_body):
+        raise ValueError(
+            "validateSignatureOk must pass sphincsDigest directly to verify_fn"
+        )
+    if len(re.findall(r"\bsphincsDigest\b", ok_body)) != 1:
+        raise ValueError(
+            "validateSignatureOk must contain exactly one sphincsDigest use"
+        )
+    if len(re.findall(r"\bverify_fn\b", ok_body)) != 1:
+        raise ValueError(
+            "validateSignatureOk must contain exactly one verify_fn use"
+        )
+
+    executable_body = _strip_lean_noncode(
+        _lean_consumer_body(
+            src,
+            "validateSignature",
+            r"(?m)^[ \t]*def[ \t]+validateSignature[ \t\r\n]*"
+            r"\([ \t]*s[ \t]*:[ \t]*Storage[ \t]*\)[ \t\r\n]*"
+            r"\([ \t]*op[ \t]*:[ \t]*UserOperation[ \t]*\)[ \t\r\n]*"
+            r"\([ \t]*entryPoint[ \t]*:[ \t]*ByteVec[ \t]+20[ \t]*\)[ \t\r\n]*"
+            r"\([ \t]*chainId[ \t]*:[ \t]*Nat[ \t]*\)[ \t\r\n]*"
+            r"\([ \t]*verify_fn[ \t]*:[ \t]*ByteVec[ \t]+32[ \t]*→[ \t]*"
+            r"ByteVec[ \t]+32[ \t]*→[ \t]*ByteVec[ \t]+32[ \t]*→[ \t]*"
+            r"ByteVec[ \t]+SignatureLen[ \t]*→[ \t]*Bool[ \t]*\)[ \t]*"
+            r":[ \t\r\n]*Result[ \t]*×[ \t]*Storage[ \t]*:=",
+        )
+    )
+    expected_flow = re.compile(
+        r"\blet\s+digest\s*:=\s*sphincsDigest\s+op\s+entryPoint\s+chainId\s*"
+        r"\bif\s+verify_fn\s+pkSeed\s+pkRoot\s+digest\s+innerSig\s*=\s*false\s+then"
+    )
+    if expected_flow.search(executable_body) is None:
+        raise ValueError(
+            "validateSignature must bind sphincsDigest and immediately pass it "
+            "to verify_fn(pkSeed, pkRoot, digest, innerSig)"
+        )
+    if len(re.findall(r"\bsphincsDigest\b", executable_body)) != 1:
+        raise ValueError(
+            "validateSignature must contain exactly one sphincsDigest use"
+        )
+    if len(re.findall(r"\bverify_fn\b", executable_body)) != 1:
+        raise ValueError(
+            "validateSignature must contain exactly one verify_fn use"
+        )
+    if len(re.findall(r"\blet\s+digest\s*:=", executable_body)) != 1:
+        raise ValueError(
+            "validateSignature must bind the verifier digest exactly once"
+        )
+    if len(re.findall(r"\bdigest\b", executable_body)) != 2:
+        raise ValueError(
+            "validateSignature digest binding must feed only the canonical verifier call"
+        )
+
+
 def compare(rust: list[str], sol: list[str], lean: list[str]) -> list[str]:
     fails = []
     for label, side in (("Rust", rust), ("Solidity", sol), ("Lean", lean)):
@@ -358,6 +603,28 @@ def self_test() -> int:
     sol = extract_sol_order(sol_src)
     lean = extract_lean_order(lean_src)
     ok = True
+
+    def expect_consumer_rejection(
+        label: str, checker: Callable[[str], None], mutant: str
+    ) -> None:
+        nonlocal ok
+        try:
+            checker(mutant)
+        except ValueError:
+            print(f"  ok: {label} is CAUGHT")
+        else:
+            print(f"  FAIL: {label} escaped the consumer binding pin!")
+            ok = False
+
+    try:
+        check_sol_consumer(sol_src)
+        check_lean_consumers(lean_src)
+    except ValueError as e:
+        print(f"  FAIL: clean verifier-consumer binding is stale: {e}")
+        ok = False
+    else:
+        print("  ok: clean Solidity/Lean verifier consumers use the pinned digest")
+
     # control: the real sources must match
     if compare(rust, sol, lean):
         print("  FAIL: clean sources do NOT match — the pin is stale, reconcile first"); ok = False
@@ -616,6 +883,96 @@ def self_test() -> int:
         else:
             print("  FAIL: Lean sphincsDigest stopped hashing the pinned preimage!")
             ok = False
+
+    # Load-bearing consumer controls: canonical digest definitions or calls may
+    # not survive as unused decoys while the actual verifier receives zero.
+    sol_binding = "bytes32 digest = sphincsDigest(userOp);"
+    sol_verify = "c10Verifier.verify(pkSeed, pkRoot, digest, innerSig)"
+    if sol_src.count(sol_binding) != 1 or sol_src.count(sol_verify) != 1:
+        print("  FAIL: could not uniquely locate canonical Solidity consumer flow")
+        ok = False
+    else:
+        expect_consumer_rejection(
+            "a zeroed Solidity digest binding",
+            check_sol_consumer,
+            sol_src.replace(sol_binding, "bytes32 digest = bytes32(0);", 1),
+        )
+        expect_consumer_rejection(
+            "an unused canonical Solidity digest decoy",
+            check_sol_consumer,
+            sol_src.replace(
+                sol_binding,
+                "bytes32 digestDecoy = sphincsDigest(userOp);\n"
+                "        bytes32 digest = bytes32(0);",
+                1,
+            ),
+        )
+        expect_consumer_rejection(
+            "a redirected Solidity verifier argument",
+            check_sol_consumer,
+            sol_src.replace(
+                sol_verify,
+                "c10Verifier.verify(pkSeed, pkRoot, bytes32(0), innerSig)",
+                1,
+            ),
+        )
+        sol_comment_decoy = sol_src.replace(
+            sol_verify,
+            "verifier.verify(pkSeed, pkRoot, verifierInput, innerSig)",
+            1,
+        ).replace(
+            sol_binding,
+            "/* bytes32 digest = sphincsDigest(userOp);\n"
+            "        c10Verifier.verify(pkSeed, pkRoot, digest, innerSig); */\n"
+            "        ISPHINCSVerifier verifier = c10Verifier;\n"
+            "        bytes32 verifierInput = bytes32(0);",
+            1,
+        )
+        expect_consumer_rejection(
+            "a canonical Solidity consumer hidden in a comment",
+            check_sol_consumer,
+            sol_comment_decoy,
+        )
+
+    lean_binding = "let digest := sphincsDigest op entryPoint chainId"
+    lean_verify = "if verify_fn pkSeed pkRoot digest innerSig = false then"
+    if lean_src.count(lean_binding) != 1 or lean_src.count(lean_verify) != 1:
+        print("  FAIL: could not uniquely locate canonical Lean consumer flow")
+        ok = False
+    else:
+        expect_consumer_rejection(
+            "a zeroed Lean executable digest binding",
+            check_lean_consumers,
+            lean_src.replace(
+                lean_binding, "let digest := ByteVec.zero 32", 1
+            ),
+        )
+        expect_consumer_rejection(
+            "a coherent Lean model/spec digest redirection",
+            check_lean_consumers,
+            lean_src.replace(
+                "sphincsDigest op entryPoint chainId", "ByteVec.zero 32"
+            ),
+        )
+        expect_consumer_rejection(
+            "an unused canonical Lean digest decoy",
+            check_lean_consumers,
+            lean_src.replace(
+                lean_verify,
+                "if verify_fn pkSeed pkRoot (ByteVec.zero 32) innerSig = false then",
+                1,
+            ),
+        )
+        lean_flow = f"{lean_binding}\n        {lean_verify}"
+        expect_consumer_rejection(
+            "a canonical Lean consumer hidden in a comment",
+            check_lean_consumers,
+            lean_src.replace(
+                lean_flow,
+                f"/-\n        {lean_flow}\n        -/\n        if false then",
+                1,
+            ),
+        )
     print("=== self-test PASS ===" if ok else "=== self-test FAILED ===")
     return 0 if ok else 1
 
@@ -624,9 +981,14 @@ def main() -> int:
     if "--self-test" in sys.argv[1:]:
         return self_test()
     try:
-        rust = extract_rust_order(RUST.read_text(encoding="utf-8"))
-        sol = extract_sol_order(SOL.read_text(encoding="utf-8"))
-        lean = extract_lean_order(LEAN.read_text(encoding="utf-8"))
+        rust_src = RUST.read_text(encoding="utf-8")
+        sol_src = SOL.read_text(encoding="utf-8")
+        lean_src = LEAN.read_text(encoding="utf-8")
+        rust = extract_rust_order(rust_src)
+        sol = extract_sol_order(sol_src)
+        lean = extract_lean_order(lean_src)
+        check_sol_consumer(sol_src)
+        check_lean_consumers(lean_src)
     except (OSError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
@@ -647,7 +1009,8 @@ def main() -> int:
               "ValidateUserOp.lean::sphincsDigestPreimage.", file=sys.stderr)
         return 1
     print("\nOK: the firmware-signed, on-chain-recomputed, and Lean-model digests share "
-          "the exact 12-field preimage order (source-level pin).")
+          "the exact 12-field preimage order, and the Solidity/Lean verifiers "
+          "consume that pinned digest (source-level pin).")
     return 0
 
 
