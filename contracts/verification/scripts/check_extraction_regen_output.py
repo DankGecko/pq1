@@ -178,8 +178,10 @@ def lean_signature_errors(
 
     The regenerated declarations are renamed under a private prefix so the
     committed module and exact template signatures can be elaborated together.
-    A homogeneous equality axiom is then declared for each pair: Lean accepts
-    that proposition only when both terms have definitionally equal types.
+    Each declaration is then instantiated with fresh universe metavariables and
+    its inferred type compared with `Lean.Meta.isDefEq`.  Do not encode this as
+    a homogeneous term equality: the elaborator may insert a coercion into one
+    side and accept declarations whose types are not definitionally equal.
     """
     declaration_names_in_order = AXIOM_NAME_RE.findall(template_text)
     names = [name for _, name in declaration_names_in_order]
@@ -199,12 +201,22 @@ def lean_signature_errors(
         ),
         transformed,
     )
-    checks = "\n".join(
-        "axiom ExtractionRegenSignature"
-        f"{index} : (@ExtractionRegenExpected.{name}) = (@{name})"
-        for index, name in enumerate(names)
+    checks = "\n\n".join(
+        "run_meta do\n"
+        "  let expectedType ← Lean.Meta.inferType\n"
+        "    (← Lean.Meta.mkConstWithFreshMVarLevels "
+        f"``ExtractionRegenExpected.{name})\n"
+        "  let actualType ← Lean.Meta.inferType\n"
+        f"    (← Lean.Meta.mkConstWithFreshMVarLevels ``{name})\n"
+        "  unless ← Lean.Meta.isDefEq expectedType actualType do\n"
+        f'    throwError "extraction signature type mismatch: {name}"'
+        for name in names
     )
-    source = f"import {module_name}\n{transformed}\n{checks}\n"
+    source = (
+        f"import {module_name}\n"
+        "import Lean.Meta.Basic\n"
+        f"{transformed}\n{checks}\n"
+    )
     try:
         result = run_lean_source(source)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -531,26 +543,52 @@ def self_test() -> int:
 def self_test_lean() -> int:
     """Toolchain-backed controls used only by the real regeneration gate."""
     ok = True
-    matching = run_lean_source(
-        "axiom Expected.limit : Nat\n"
-        "def Actual.limit : Nat := 10\n"
-        "axiom Signature : Expected.limit = Actual.limit\n"
+    committed_pinstate = (
+        VERIF_DIR / "extracted/Extracted/PinState/Funs.lean"
     )
-    if matching.returncode == 0:
+    matching = lean_signature_errors(
+        "matching type control",
+        committed_pinstate,
+        "import Aeneas\n"
+        "open Aeneas Aeneas.Std Result\n"
+        "axiom pqsigner_domain.PER_SLOT_CT_LEN : Result Std.Usize\n",
+    )
+    if not matching:
         print("  ok: matching external declaration signature is ACCEPTED")
     else:
-        print("FAIL: matching external declaration signature was rejected")
+        print(
+            "FAIL: matching external declaration signature was rejected: "
+            f"{matching}"
+        )
         ok = False
 
-    mismatched = run_lean_source(
-        "axiom Expected.limit : Nat\n"
-        "def Actual.limit : Bool := true\n"
-        "axiom Signature : Expected.limit = Actual.limit\n"
+    mismatched = lean_signature_errors(
+        "plain type-drift control",
+        committed_pinstate,
+        "import Aeneas\n"
+        "open Aeneas Aeneas.Std Result\n"
+        "axiom pqsigner_domain.PER_SLOT_CT_LEN : Result Bool\n",
     )
-    if mismatched.returncode != 0:
+    if mismatched:
         print("  ok: same-name external declaration type drift is CAUGHT")
     else:
         print("FAIL: wrong external declaration type escaped Lean conformance")
+        ok = False
+
+    # A homogeneous equality silently coerces the committed `Result Std.Usize`
+    # into `Result Nat` in this pinned Lean/Aeneas environment.  The production
+    # Meta-level type comparison must reject that exact formerly-green shape.
+    coercible_mismatch = lean_signature_errors(
+        "coercible type-drift control",
+        committed_pinstate,
+        "import Aeneas\n"
+        "open Aeneas Aeneas.Std Result\n"
+        "axiom pqsigner_domain.PER_SLOT_CT_LEN : Result Nat\n",
+    )
+    if coercible_mismatch:
+        print("  ok: coercible external declaration type drift is CAUGHT")
+    else:
+        print("FAIL: coercible external declaration type drift escaped")
         ok = False
 
     matching_pin = target_specific_errors(

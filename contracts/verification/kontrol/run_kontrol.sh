@@ -362,18 +362,14 @@ self_test() {
   return "$rc"
 }
 
-case "${1:-}" in
-  --self-test)
+if [ "$#" -ne 0 ]; then
+  if [ "$#" -eq 1 ] && [ "$1" = "--self-test" ]; then
     self_test
     exit $?
-    ;;
-  --check-output)
-    [ $# -eq 2 ] || { echo "usage: $0 --check-output <kontrol-list-output-file>" >&2; exit 2; }
-    check_proof_inventory
-    assert_kontrol_list "$2"
-    exit $?
-    ;;
-esac
+  fi
+  echo "usage: $0 [--self-test]" >&2
+  exit 2
+fi
 
 # This is the authoritative all-proof gate. A caller-controlled matcher could
 # silently run only a subset while the persistent proof store supplied stale

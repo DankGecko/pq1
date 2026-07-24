@@ -15,9 +15,10 @@ is PASSED with an explicit `admitted: False` in `kontrol list`. The
 authoritative runner rejects a caller-supplied `MATCH`, deletes the persistent
 proof store with `kontrol clean --proofs`, and proves the exact
 `Kontrol.*\.prove_` set with `--reinit`; stale or duplicate versions therefore
-cannot satisfy a partial run. `--self-test` exercises eight positive/negative
-parser controls without the K backend, and `--check-output <file>` re-checks
-an archived list under the same exact-record rule.** The four control-flow bridge axioms are now
+cannot satisfy a partial run. `--self-test` exercises twelve positive/negative
+parser controls without the K backend. Archived `kontrol list` text is not an
+independent proof receipt and has no public validation mode; only the
+authoritative clean/build/prove/live-list path establishes freshness.** The four control-flow bridge axioms are now
 proven directly on the deployed PQSmartWallet/Factory bytecode by an engine
 independent of Halmos with no hand-written `LeanModel.sol` mirror — so the
 hand-transcription TCB element of A3.3/A3.4/A3.2-exec-single is retired (Halmos stays the

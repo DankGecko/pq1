@@ -22,8 +22,16 @@
 # make aborts the recipe before the stale .llbc is consumed. (Also un-masks the
 # `lake env lean ... | tee` axiom-check gates below.) bash is required because
 # POSIX sh does not guarantee `pipefail`.
-SHELL        := bash
+SHELL        := /usr/bin/bash
 .SHELLFLAGS  := -o pipefail -c
+
+# Preserve the pre-override origins so security-sensitive targets can reject a
+# caller that tried to replace the recipe interpreter or its execution flags.
+# Then hard-bind every recipe to the reviewed Bash + pipefail configuration.
+override _FV_RECIPE_SHELL_ORIGIN := $(origin SHELL)
+override _FV_RECIPE_SHELLFLAGS_ORIGIN := $(origin .SHELLFLAGS)
+override SHELL := /usr/bin/bash
+override .SHELLFLAGS := -o pipefail -c
 
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
@@ -523,13 +531,13 @@ EXTRACTED_DIR := extracted
 PQLEAN        := $(HOME)/.local/share/pqsigner-lean
 REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
-.PHONY: verify-extracted verify-extract-differential verify-extraction-freshness verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test extract-sphincs-adrs extract-aa-userop extract-fors-index extract-format-decimal extract-pinstate extract-slotkdf
+.PHONY: verify-extracted verify-extract-differential verify-extraction-freshness verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test _verify-extraction-regen-wrong-waiver-self-test extract-sphincs-adrs extract-aa-userop extract-fors-index extract-format-decimal extract-pinstate extract-slotkdf
 
 # MAKECMDGOALS is the trust root for both guard sets below, but GNU Make lets a
 # caller override even this built-in variable.  Reject any non-default origin
 # before consulting it; otherwise spoofed goals can suppress the executor guard
 # and the private-workspace allocation simultaneously.
-ifneq ($(origin MAKECMDGOALS),default)
+ifeq ($(filter default undefined,$(origin MAKECMDGOALS)),)
 $(error refusing caller-overridden MAKECMDGOALS (origin $(origin MAKECMDGOALS)) for extraction assurance)
 endif
 
@@ -537,8 +545,14 @@ endif
 # MAKE_COMMAND are caller-overridable; without this guard a dispatcher can forge
 # the self-test marker and return success for the production loop without
 # running any extraction.  Internal helper goals are guarded too.
-override _EXTRACTION_REGEN_GUARDED_GOALS := verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test
+override _EXTRACTION_REGEN_GUARDED_GOALS := verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test _verify-extraction-regen-wrong-waiver-self-test
 ifneq ($(strip $(filter $(_EXTRACTION_REGEN_GUARDED_GOALS),$(MAKECMDGOALS))),)
+ifneq ($(_FV_RECIPE_SHELL_ORIGIN),file)
+$(error refusing caller-overridden SHELL (origin $(_FV_RECIPE_SHELL_ORIGIN)) for authoritative extraction replay)
+endif
+ifneq ($(_FV_RECIPE_SHELLFLAGS_ORIGIN),file)
+$(error refusing caller-overridden .SHELLFLAGS (origin $(_FV_RECIPE_SHELLFLAGS_ORIGIN)) for authoritative extraction replay)
+endif
 ifneq ($(origin MAKE),default)
 $(error refusing caller-overridden MAKE (origin $(origin MAKE)) for authoritative extraction replay)
 endif
@@ -575,6 +589,12 @@ case "$(EXTRACTION_TMP_ROOT)" in \
 esac
 endef
 
+# The sole stale waiver is for one exact Aeneas translator defect.  The marker
+# is emitted only when that stage reproduces its pinned Unreachable diagnostic;
+# a missing tool, Charon failure, recovered generator, diff drift, or checker
+# failure is a different outcome and must fail the aggregate replay.
+override _TX_MERKLE_WAIVER_MARKER := PQ1_EXPECTED_WAIVER_STAGE: extract-tx-merkle Aeneas Unreachable at merkle.rs:53:4-72:1
+
 # F1 (2026-07-16) — TOOLCHAIN-FREE extraction freshness tripwire. The extract-*
 # regen-diff targets below are the REAL freshness check but need the §33
 # charon/aeneas toolchain (~/.local/share/pqsigner-lean), so they cannot run on a
@@ -604,6 +624,26 @@ verify-extraction-regen: verify-extraction-regen-self-test ## F1 REAL regen: re-
 
 verify-extraction-regen-self-test: ## Negative controls for signature/value parity + recovered-waiver failure
 	@python3 scripts/check_extraction_regen_output.py --self-test-lean
+	@out=$$(mktemp /tmp/pq-extraction-shell-override-selftest.XXXXXX); \
+	if $(MAKE) --no-print-directory SHELL=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: caller-overridden SHELL suppressed authoritative extraction replay" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing caller-overridden SHELL ' $$out; then \
+	  echo "CONTROL FAILURE: SHELL override was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: caller-overridden recipe SHELL is CAUGHT"
+	@out=$$(mktemp /tmp/pq-extraction-shellflags-override-selftest.XXXXXX); \
+	if $(MAKE) --no-print-directory '.SHELLFLAGS=-n -c' _verify-extraction-regen-loop >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: caller-overridden .SHELLFLAGS suppressed authoritative extraction replay" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing caller-overridden .SHELLFLAGS ' $$out; then \
+	  echo "CONTROL FAILURE: .SHELLFLAGS override was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: caller-overridden recipe .SHELLFLAGS are CAUGHT"
 	@out=$$(mktemp /tmp/pq-extraction-goal-executor-selftest.XXXXXX); \
 	if $(MAKE) --no-print-directory MAKECMDGOALS=not-guarded MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: spoofed MAKECMDGOALS suppressed the recursive-executor guard" >&2; \
@@ -664,6 +704,16 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -f $$out; \
 	echo "  ok: unexpectedly fresh waived extraction is CAUGHT"
+	@out=$$(mktemp /tmp/pq-extraction-wrong-waiver-selftest.XXXXXX); \
+	if $(MAKE) --no-print-directory _verify-extraction-regen-wrong-waiver-self-test >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: wrong-stage waived extraction failure was accepted" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'WRONG-WAIVER-FAILURE' $$out; then \
+	  echo "CONTROL FAILURE: wrong-stage waiver control failed for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: wrong-stage waived extraction failure is CAUGHT"
 
 override define _run_extraction_regen_loop
 	@echo "=== F1 extraction regen: re-running charon->aeneas + diff for every registry target ==="
@@ -672,7 +722,16 @@ override define _run_extraction_regen_loop
 	  if $(1) $$t >/dev/null 2>&1; then echo "  fresh: $$t"; else echo "  DRIFT: $$t (re-extract/re-prove/re-pin via --update $$t)"; fail=1; fi; \
 	done; \
 	for t in $$(python3 -c "import json;print(' '.join(e['target'] for e in json.load(open('extraction_registry.json'))['entries'] if not e.get('fresh',True)))"); do \
-	  if $(1) $$t >/dev/null 2>&1; then echo "  UNEXPECTED-FRESH (waived entry re-extracts! promote to fresh + --update $$t): $$t"; fail=1; else echo "  waived-stale (expected): $$t"; fi; \
+	  waiver_out=$$(mktemp /tmp/pq-extraction-waiver-stage.XXXXXX); \
+	  if $(1) $$t >$$waiver_out 2>&1; then \
+	    echo "  UNEXPECTED-FRESH (waived entry re-extracts! promote to fresh + --update $$t): $$t"; fail=1; \
+	  elif [ "$$t" = "extract-tx-merkle" ] && grep -Fq '$(_TX_MERKLE_WAIVER_MARKER)' $$waiver_out; then \
+	    echo "  waived-stale (expected Aeneas stage): $$t"; \
+	  else \
+	    echo "  WRONG-WAIVER-FAILURE: $$t failed outside its specifically waived generator stage"; \
+	    sed -n '1,80p' $$waiver_out; fail=1; \
+	  fi; \
+	  rm -f $$waiver_out; \
 	done; \
 	if [ $$fail != 0 ]; then echo "FAIL: a fresh extraction drifted or a waived extraction unexpectedly recovered"; exit 1; fi; \
 	echo "OK: all fresh extractions re-extract cleanly; waived entries unchanged"
@@ -685,6 +744,11 @@ _verify-extraction-regen-loop:
 
 _verify-extraction-regen-loop-self-test:
 	$(call _run_extraction_regen_loop,/bin/true)
+
+# Succeeds for every fresh target and fails only for the waived target, without
+# the required generator-stage marker.  The aggregate loop must reject it.
+_verify-extraction-regen-wrong-waiver-self-test:
+	$(call _run_extraction_regen_loop,/usr/bin/test extract-tx-merkle !=)
 
 # roadmap T1.3 (ii) — extracted-Lean vs shipped-Rust DIFFERENTIAL gate.
 # The `extract-*` regen-diff targets catch a Rust change that was not re-extracted;
@@ -1001,7 +1065,21 @@ extract-tx-merkle:
 	  --start-from 'pqsigner_tx::erc20::merkle::verify_proof' \
 	  --dest-file $(EXTRACTION_TMP_ROOT)/txmk.llbc 2>&1 | tail -1
 	@rm -rf $(EXTRACTION_TMP_ROOT)/tout && mkdir -p $(EXTRACTION_TMP_ROOT)/tout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/tout -split-files $(EXTRACTION_TMP_ROOT)/txmk.llbc
+	@aeneas_log="$(EXTRACTION_TMP_ROOT)/tx-merkle-aeneas.log"; \
+	if $(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/tout -split-files $(EXTRACTION_TMP_ROOT)/txmk.llbc 2>&1 | tee "$$aeneas_log"; then \
+	  :; \
+	else \
+	  rc=$$?; \
+	  if grep -Fq 'Unreachable' "$$aeneas_log" \
+	     && grep -Fq "Source: 'tx/src/erc20/merkle.rs', lines 53:4-72:1" "$$aeneas_log" \
+	     && grep -Fq "Name pattern: 'pqsigner_tx::erc20::merkle::verify_proof'" "$$aeneas_log" \
+	     && grep -Fq 'Compiler source: interp/Interp.ml, line 550' "$$aeneas_log"; then \
+	    echo '$(_TX_MERKLE_WAIVER_MARKER)' >&2; \
+	  else \
+	    echo "UNEXPECTED tx-merkle Aeneas failure; stale waiver does not apply" >&2; \
+	  fi; \
+	  exit $$rc; \
+	fi
 	@sed 's/import Txmk\./import Extracted.TxMerkle./' $(EXTRACTION_TMP_ROOT)/tout/Funs.lean > $(EXTRACTION_TMP_ROOT)/tout/Funs.fixed.lean
 	@diff -u $(EXTRACTED_DIR)/Extracted/TxMerkle/Funs.lean $(EXTRACTION_TMP_ROOT)/tout/Funs.fixed.lean \
 	  && echo "OK: committed tx-merkle extraction matches the current Rust" \
