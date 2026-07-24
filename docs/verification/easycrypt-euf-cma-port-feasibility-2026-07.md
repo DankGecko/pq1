@@ -2636,3 +2636,46 @@ the FORS term) is machine-checked over real games on the MM45 base:
 So SPHINCS+C10 EUF-CMA now REDUCES, machine-checked, to {ITSRC10 (carried ~102-bit-gap hardness) + hop5 (the FORS-
 forgery-branch reduction, a known procedural-game construction)}. This is the strongest honest form of the port to
 date. hop5 remains the sole open reduction step; ITSRC10 the sole carried cryptographic hardness assumption.
+
+### 2026-07-24 — hop5 Wave 12: the SOUND procedural FORS+C game Gproc is BUILT + its EUF-CMA bound to ITSRC10 is CERTIFIED-0-ADMIT
+
+The pinned fix from Waves 9-11 (a CONCRETE PROCEDURAL FORS+C multi-game replacing the abstract MFORSC10 that D1/D2
+make an unsound hop5 target) is now built and machine-checked for its first two steps. New file
+`drafts/GprocFORSC10.ec` (CERTIFIED: compile=OK, admit-tactics=1 [hop5 only], axiom-decls=0; false-canary REJECTED).
+
+**STEP 1 — Gproc BUILT + typechecks (closes D1 + D2 by construction).** `GprocKg.keygen` is a PROC that SAMPLES the
+nested FORS cube `skFORS_ele <$ ddgstblock` ps-INDEPENDENTLY, byte-mirroring `V_C.main` (RtopCSoundness :394-410) —
+reconciles D2 by construction — then precomputes the pkFORS pool via `gen_pkFORS`. `O_CMA_Gproc.sign` draws the fresh
+CONDITIONED `mk <$ dcond dmkey (good_fors m)` NON-memoized, edivz-routed `FL_FORS_ES_NPRF.sign` (byte-identical to
+`V_C.O_CMA_C.sign` minus the HT-sign). `EUF_CMA_Gproc`'s verify is CONCRETE: `predC_fors (mco mk' m') /\
+pkFORS_from_sigFORSTW = pool entry` — the EXACT `V_C.valid_MFORSC10` gate, NOT a zeroable abstract op (closes D1;
+contrast `rhs_zero_fverify_false`).
+
+**STEP 2 — the bridge is REJECTED; the EUF-CMA bound is RE-DERIVED, CERTIFIED-0-ADMIT.** The bridge (prove
+`Pr[Gproc EUF] = Pr[MFORSC10 EUF at concrete ops]` then instantiate the abstract `EUFCMA_MFORSC10`) is self-defeating:
+the abstract keygen `(pks,sks) <- mkeygen ps ad` is a DETERMINISTIC op of `ps`, Gproc SAMPLES the cube; no concrete op
+reproduces a sampling distribution under the honest `dpseed` (the only escape — cube-in-ps — is the tape-in-ps landmine
+Gproc kills). So we RE-DERIVE the three FORS_C10_Multi lemmas over Gproc: `eufcma_gproc_I_eq` (instrumented ghost-`ts`
+game, res-preserving), `R_ITSRC10_Gproc` (multi->single reduction, procedural nested cube), `ITSRC10_hop_Gproc`
+(covered-part <= `Pr[M.F.ITSRC10(R_ITSRC10_Gproc)]`), and `EUFCMA_Gproc`: `Pr[Gproc EUF] <= Pr[M.F.ITSRC10(...)] +
+mtree_*` — the SAME carried ITSRC10 assumption + mtree premise, now over the SOUND concrete game. Each byequiv is the
+FORS_C10_Multi proof + a `sim`/`call` keygen prefix (`keygen_eq`, `forsnprf_sign_eq`, `pkfromsig_eq`) — the concrete
+procs replace the abstract op-folds.
+
+**STEP 3 — hop5 STATED over the concrete Gproc; the coupling is the honest residual (NO 4th obstruction).**
+`R_fors_p` (the VT reduction, nested-routing analogue of `rtop_c_vt_wip.R_fors` retyped to Gproc's concrete oracle) is
+constructible; `LeqPr_VT_C_proc : Pr[V_C : res /\ valid_MFORSC10] <= Pr[EUF_CMA_Gproc(R_fors_p(F))]` is stated in its
+exact required form and ADMITTED with a PRECISE in-file residual. This admit is a TRANSCRIPTION residual (the MM45
+:3129-3467 VT-coupling ported to +C: keygen/pool coupling + HT keygen via `keygenC_eq` + oracle coupling via
+`trcoINV`/`genpkfors_flatten` + forge extraction via `good_eq_good_fors_M`/`dcond_good_eq`), NOT a modelling seam — all
+three diagnosed obstructions (D1/D2/tape-in-ps) are RESOLVED by Gproc. The keygen/pool-derivation sub-lemma
+(`GprocKg_pool_inv`: the pool = `gen_pkFORS` closed form = `cfPk`, simpler than R_top_C's inlined tree-hash because
+Gproc CALLS `gen_pkFORS`) was constructed and compiled in isolation, but its list-bookkeeping closers are
+SMT-nondeterministic (identical code passed then failed across runs), so it is kept OUT of the certified file pending a
+deterministic hardening — a reproducibility issue, not a soundness one.
+
+NET: the 3-wave diagnosis's CORE blocker is resolved — the SOUND procedural reduction target now EXISTS and its
+EUF-CMA bound to ITSRC10 is machine-checked 0-admit. hop5 is now a PURELY-TRANSCRIPTION coupling (advisor + this
+session concur: grind, not a wall). The capstone's hop5 admit is UNCHANGED (still against the abstract M); Step 4
+(rewire the capstone FORS leg from abstract-M to concrete-Gproc) awaits the hop5 coupling. No new axiom; `good_pos`
+carried as before; ITSRC10 stays the sole carried hardness.
