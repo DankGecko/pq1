@@ -2499,3 +2499,29 @@ be an honest vacuous discharge (same game both sides, 0 ≤ mkg_adv), disclosed 
 
 STATE: FX chain 1/4 hops machine-checked. Remaining: hop-2 (SKG scheme-level), hop-3 (vacuous, honest), hop-4
 (NPRFPRF→V_C + mu_split), then capstone wiring; hop-5/VT (procedural FORS+C game) afterwards per the directive.
+
+### 2026-07-24 — FX chain handoff (Kimi -> Claude): hop-1 + hop-2 both CERTIFIED-0-ADMIT
+
+During a Claude usage cap, Kimi K3 took over and built the FX chain (the Orig->V game hops that discharge the
+capstone's hop1-hop4 admits) in drafts/fx_chain_wip.ec. On resume, hop-1 was committed 0-admit and hop-2 was mid-
+proof (compile=FAIL). Handoff continued by Claude.
+ - **hop-1 (Orig->PRFPRF materialization byequiv): CERTIFIED-0-ADMIT (Kimi, git 5fbb820).** The +C analog of MM45
+   Eqv_EUF_CMA_SPHINCSPLUSTW_Orig_FSPRFPRF (SPHINCS_PLUS.ec:2243-2571): the function-secret games
+   (SPHINCS_PLUS_C10_FS, O_CMA_SPHINCSPLUSTWC_FS, EUF_CMA_SPHINCSPLUSTWC_FS_PRFPRF/_NPRFPRF) + Eqv_EUFCMA_C10_FSPRFPRFC
+   + the Pr corollary. Shorter than MM45 because every signer is factored into closed-form support equivs
+   (Eqv_C10_sign_FSbody, the +C analog of Eqv_SPHINCS_PLUS_S_sign). Audit PASS.
+ - **hop-2 (scheme-level SKG-PRF, PRFPRF->NPRFPRF, INCLUDING FORS+C keys): CERTIFIED-0-ADMIT (Claude, git e5fcfe1).**
+   EqPr_SKGPRF_C_false / EqPr_SKGPRF_C_true / SKGPRF_C_hop, the scheme-level port of prf_hop_wip.ec's hypertree SKG
+   hop, extended to the FORS cube. The compile break was NOT the FORS-cube freshness (Kimi had closed it via
+   HA.eq_adrs_idxsq + valid_tbfidx/nr_nodesf address-injectivity) but a poisoned `/\ #post` on the skFORSnt
+   while-invariant (it asserted "ALL nr_trees complete" -- false mid-loop). Fixed by matching MM45's minimal-FORS-
+   invariant (SPHINCS_PLUS.ec:2901-3040): drop #post, bare L1-reestablish, MM45 entry+exit boundary. Statements
+   byte-verbatim, no new axiom, SKGPRF_C_hop triangle unconditional; audit PASS (false-canary rejected; 2
+   freshness/index perturbations break -> injectivity load-bearing on both coordinates).
+ - HONEST SCOPE (agent-stated): CERTIFIED-0-ADMIT is the SINGLE-FILE gate -- it loads the MM45 base
+   (SPHINCS_PLUS.ec / XmssmtCC_All) as trusted un-re-verified .eco, so it is "0-admit ON the MM45 base," not
+   "verified down to the axioms." hop-1+hop-2 are 2 of the 4 FX hops; NOT SPHINCS+C proven -- the capstone still
+   rests on ITSRC10 + hops 3/4 + hop-5 (VT, the procedural-FORS-game construction) + the other admits.
+
+REMAINING FX: hop-3 (NPRFPRF->NPRFNPRF + MKG-PRF), hop-4 (NPRFNPRF->V_C + mu_split into VT/VF), then wire hops 1-4
+into the capstone (replace the hop1-hop4 admits, re-certify). VT/hop-5 remains the procedural-FORS-game construction.
