@@ -3633,3 +3633,62 @@ wrapper and `FV-SPHINCSPLUS-EC/` is gitignored (.gitignore:3) — so a plain `gr
 the entire vendored base. The first consumer census came back empty and was WRONG because of it. **Use
 `command grep` for every search over the vendored trees.** (Also recorded: the track self-caught and corrected its
 own measurement error about the pb_* probe files, using the wrong instrument then re-measuring exactly.)
+
+### 2026-07-25f — PRIMARY-SOURCE ANALYSIS: the deployed-parameter blocker is a MODELLING ARTIFACT, and the repair surface is TWO LEMMAS
+
+Read from the paper itself (paper-nist-pqc2022.txt, ePrint 2022/778) rather than from the formalization. Result:
+**the injectivity requirement that blocks the deployed geometry is NOT something the SPHINCS+C security argument
+needs.** It is an artifact of how MM45 models the encoding, and the fix is small and principled.
+
+**WHAT THE PAPER ACTUALLY PROVES (App. B, :1830ff).** "To prove the security of WOTS+C we give a reduction from
+multi-target extended target collision resistance (m-eTCR) [HRS16]." The reduction is
+   WOTS+C EU-CMA  <-  (WOTS+ / WOTS-TW security)  +  m-eTCR of H
+by a GAME HOP: GAME.1 is GAME.0 "but we consider the game lost if the forgery together with a signature query
+response presents a collision under H". The intuition (:430ff) is explicit: the forgery message m* "either is
+colliding with the message m used in the signature query, or it is not. If it is not, the forgery is a valid WOTS
+forgery as it is on a FRESH message (H(m) <> H(m*)). If the two messages collide, m* clearly is a colliding message
+for m." **So encoding collisions are CHARGED to m-eTCR, not forbidden.** The paper even pre-empts our exact concern:
+"an adversary does not gain anything from knowing that it will have to find a collision for a message that hashes
+into a given SUBSET of the image ... putting a restriction on the messages which are considered valid targets rather
+CONSTRAINS the [adversary]" (citing [BHRV20]). The 2^114 constant-sum layer is precisely such a subset.
+
+**THE MISMATCH, PRECISELY.** MM45's `two_encodings` is stated on DISTINCT MESSAGES:
+   `m <> m' => exists i, val (enc m)[i] < val (enc m')[i]`
+Applied in both argument orders this yields TWO facts: (A) the image is an ANTICHAIN, and (B) enc is INJECTIVE.
+(A) is what the security argument needs — it is what stops a forger walking chains forward, and constant-sum gives
+it for free. (B) is an artifact of quantifying over distinct MESSAGES rather than distinct ENCODINGS: it is how the
+CHECKSUM encoding happens to behave, and it is the sole source of the counting obstruction (2^128 messages must fit
+an antichain of size 2^123.76 at deployed geometry).
+
+**THE REPAIR (weaken the axiom to exactly (A)):**
+   `enc m <> enc m' => exists i, val (enc m)[i] < val (enc m')[i]`
+This is SATISFIABLE AT ANY GEOMETRY by a constant-sum encoding (equal sums + domination => equality), so the counting
+obstruction DISSOLVES — we no longer need 2^128 distinct codewords, only that the image be an antichain.
+
+**THE REPAIR SURFACE IS TWO LEMMAS.** `two_encodings` has exactly TWO consumers in the whole vendored base
+(`command grep`, mind the gitignore trap):
+ 1. `exenc_neq0` (WOTS_TW_ES.ec:580) "each encoding has a nonzero digit" — a NON-DEGENERACY use that invokes the
+    axiom on a hand-constructed different message. Under a constant-sum encoding this lemma is TRIVIAL (sum =
+    target_sum > 0 => some digit nonzero), so it is re-proved directly rather than from the axiom.
+ 2. `nhchwcoll_hchwpre` (WOTS_TW_ES.ec:1300) — THE security use: "no chain collision for two different messages =>
+    a chain preimage exists". Its hypothesis is `m <> m'`, but its CONCLUSION mentions only `enc m` and `enc m'`.
+    So the natural restatement is hypothesis `enc m <> enc m'`, after which the weakened axiom applies verbatim.
+Then at its CALL SITE in the EUF proof, case-split: either `enc m* <> enc m` (use the lemma unchanged) or
+`enc m* = enc m` with `m* <> m` — a COLLISION, charged to a new m-eTCR term. **That case split IS the paper's App-B
+game hop.** So the formalization would end up proving the paper's actual theorem shape rather than a stronger one
+that happens to exclude the deployed parameters.
+
+**TWO ROUTES, WITH THE HONEST TRADE-OFF:**
+ (R1) Weaken the axiom IN the vendored base + add the m-eTCR term. Small (2 lemmas + 1 case split + 1 bound term),
+   principled (it CORRECTS a modelling artifact rather than relaxing a constraint to make numbers fit — materially
+   different from the F1 trap). COST: edits the third-party artifact, forfeiting "we reused the published proof
+   unmodified"; every MM45 proof must be re-verified as explicit targets afterwards.
+ (R2) Build a STANDALONE WOTS+C development following App. B directly (WOTS+C <- m-eTCR + chain security), not as a
+   clone of MM45's WOTS-TW. Preserves the published-artifact property for everything that still uses it. Larger, but
+   it is the shape the paper actually has, and it would be instantiable at w=8/len=43 by construction.
+NOTE both routes still need the m-eTCR assumption added to the ledger — it is a NEW carried assumption, and it is
+the one the paper itself carries. Neither route is the F1 relaxation; the F1 DO-NOT still stands.
+
+STATUS: this is a primary-source analysis, not yet mechanized. The counting obstruction and the two-consumer surface
+are verified at source; the claim that the weakened axiom suffices for MM45's proof is ARGUED from the paper's
+structure and must be MACHINE-CHECKED before it is banked as fact.
