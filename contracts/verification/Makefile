@@ -61,6 +61,15 @@ endif
 ifneq ($(strip $(_FV_MAKE_EVAL_FLAGS)),)
 $(error refusing Make --eval for verification Makefile)
 endif
+ifneq ($(findstring i,$(_FV_MAKE_SHORT_FLAGS)),)
+$(error refusing Make ignore-errors mode for verification Makefile)
+endif
+ifneq ($(findstring t,$(_FV_MAKE_SHORT_FLAGS)),)
+$(error refusing Make touch mode for verification Makefile)
+endif
+ifneq ($(_FV_MAKEFLAGS_ORIGIN),file)
+$(error refusing caller-overridden MAKEFLAGS (origin $(_FV_MAKEFLAGS_ORIGIN)) for verification Makefile)
+endif
 
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
@@ -74,7 +83,22 @@ LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 help: ## Show the runnable FV targets (those with a description)
 	@grep -hE '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F':.*## ' '!seen[$$1]++ {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: verify verify-hw-assumptions verify-tla verify-linker-map verify-verus verify-crux-ns-ptr verify-build verify-audit verify-three-claims verify-exec-gate verify-clean verify-bytecode verify-bytecode-setup verify-cavp verify-bulk verify-interp verify-transcription verify-parse-transcription verify-independent-signer verify-primitive-kat verify-storage-mutators verify-lean-proto-domain verify-fv-lints verify-lean4checker verify-kontrol verify-halmos verify-ledger-consistency verify-proof-mutation verify-forsc-margin verify-easycrypt verify-easycrypt-pins
+override _FV_EVIDENCE_TARGETS := \
+	verify verify-storage-mutators verify-lean-proto-domain verify-fv-lints \
+	verify-ledger-consistency verify-hw-assumptions verify-tla verify-linker-map \
+	verify-verus verify-crux-ns-ptr verify-easycrypt verify-easycrypt-full \
+	verify-easycrypt-pins verify-easycrypt-docker verify-forsc-margin \
+	verify-proof-mutation verify-lean4checker verify-kontrol verify-halmos \
+	verify-bulk verify-interp verify-transcription verify-parse-transcription \
+	verify-independent-signer verify-primitive-kat verify-cavp verify-build \
+	verify-audit verify-three-claims verify-exec-gate verify-bytecode-setup \
+	verify-bytecode verify-clean verify-extraction-freshness \
+	verify-extraction-regen verify-extraction-regen-self-test \
+	verify-extract-differential verify-extracted verify-extracted-heavy \
+	verify-spec-vendored-fidelity
+# This is also the exact parser-guard inventory below.  Its self-test compares
+# it bidirectionally with every concrete `verify*:` definition in this file.
+.PHONY: $(_FV_EVIDENCE_TARGETS)
 
 # NOTE: verify-build (the `lake build` this bundle depends on) now also
 # kernel-checks the A3.1 in-kernel parse theorem + elision bridge (the root
@@ -578,14 +602,15 @@ endif
 override _EXTRACTION_REGEN_GUARDED_GOALS := verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test _verify-extraction-regen-wrong-waiver-self-test _verify-extraction-make-path-self-test _verify-extraction-workspace-inner-self-test
 override _EXTRACTION_CONTEXT_GOALS := $(_EXTRACTION_REGEN_GUARDED_GOALS) $(_EXTRACTION_TARGETS)
 override _EXTRACTION_ALL_GUARDED_TARGETS := $(_EXTRACTION_CONTEXT_GOALS) $(_EXTRACTION_IMPL_TARGETS)
+override _FV_ALL_PARSER_GUARDED_TARGETS := $(_FV_EVIDENCE_TARGETS) $(_EXTRACTION_ALL_GUARDED_TARGETS)
 
 # The immediate MAKEFILE_LIST check above catches startup files and any `-f`
 # parsed before this Makefile.  Secondary expansion runs only after GNU Make
 # has parsed the complete input list, so it also catches a trailing `-f` file
-# before any extraction/replay recipe can execute.  Parser expansion errors
-# cannot be suppressed by an injected `.IGNORE`.
+# before any verification or extraction/replay recipe can execute.  Parser
+# expansion errors cannot be suppressed by an injected `.IGNORE`.
 .SECONDEXPANSION:
-$(_EXTRACTION_ALL_GUARDED_TARGETS): $$(if $$(filter 1,$$(words $$(MAKEFILE_LIST))),,$$(error refusing additional parsed makefiles [$$(MAKEFILE_LIST)]))
+$(_FV_ALL_PARSER_GUARDED_TARGETS): $$(if $$(filter 1,$$(words $$(MAKEFILE_LIST))),,$$(error refusing additional parsed makefiles [$$(MAKEFILE_LIST)]))
 
 ifneq ($(strip $(filter $(_EXTRACTION_CONTEXT_GOALS),$(MAKECMDGOALS))),)
 ifneq ($(_FV_RECIPE_SHELL_ORIGIN),file)
@@ -611,12 +636,6 @@ $(error refusing inherited BASH_ENV for authoritative extraction replay)
 endif
 ifneq ($(strip $(_FV_INHERITED_ENV)),)
 $(error refusing inherited ENV for authoritative extraction replay)
-endif
-ifneq ($(_FV_MAKEFLAGS_ORIGIN),file)
-$(error refusing caller-overridden MAKEFLAGS (origin $(_FV_MAKEFLAGS_ORIGIN)) for authoritative extraction replay)
-endif
-ifneq ($(findstring i,$(_FV_MAKE_SHORT_FLAGS)),)
-$(error refusing Make ignore-errors mode for authoritative extraction replay)
 endif
 endif
 
@@ -710,11 +729,19 @@ verify-extraction-freshness: ## F1 toolchain-free extraction freshness tripwire 
 # registry entry that drifts is a FAILURE; the `fresh:false` waived entry
 # (tx-merkle — Aeneas can no longer translate it) is EXPECTED to fail and only
 # flags if it unexpectedly re-extracts (bump it to fresh + `--update <target>` then).
-verify-extraction-regen: verify-extraction-regen-self-test ## F1 REAL regen: re-run every extract-* + diff (needs charon/aeneas toolchain)
+verify-extraction-regen: verify-extraction-freshness verify-extraction-regen-self-test ## F1 REAL regen: re-run every extract-* + diff (needs charon/aeneas toolchain)
 	+@$(_FV_GNU_MAKE) --no-print-directory _verify-extraction-regen-loop
 
 verify-extraction-regen-self-test: ## Negative controls for signature/value parity + recovered-waiver failure
 	@python3 scripts/check_extraction_regen_output.py --self-test-lean
+	@actual=$$(sed -nE 's/^(verify[-A-Za-z0-9_.]*):.*/\1/p' Makefile | LC_ALL=C sort -u); \
+	expected=$$(printf '%s\n' $(_FV_EVIDENCE_TARGETS) | LC_ALL=C sort -u); \
+	if [ "$$actual" != "$$expected" ]; then \
+	  echo "CONTROL FAILURE: _FV_EVIDENCE_TARGETS does not exactly cover every verify* target" >&2; \
+	  diff -u <(printf '%s\n' "$$expected") <(printf '%s\n' "$$actual") >&2 || true; \
+	  exit 1; \
+	fi; \
+	echo "  ok: every verify* target is in the complete parser-guard inventory"
 	+@out=$$(mktemp /tmp/pq-extraction-shell-override-selftest.XXXXXX); \
 	if $(_FV_GNU_MAKE) --no-print-directory SHELL=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: caller-overridden SHELL suppressed authoritative extraction replay" >&2; \
@@ -760,6 +787,21 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	  echo "CONTROL FAILURE: Make ignore-errors mode was rejected for the wrong reason" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	fi; \
+	if $(_FV_GNU_MAKE) --no-print-directory -t verify-extracted >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: Make touch mode suppressed the extracted-closure gate" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing Make touch mode ' $$out; then \
+	  echo "CONTROL FAILURE: Make touch mode was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	if /usr/bin/env MAKEFLAGS=-t $(_FV_GNU_MAKE) --no-print-directory \
+	    verify-ledger-consistency >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: ambient Make touch mode suppressed the ledger gate" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing Make touch mode ' $$out; then \
+	  echo "CONTROL FAILURE: ambient Make touch mode was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
 	if $(_FV_GNU_MAKE) --no-print-directory --eval='.IGNORE:' _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: Make --eval installed a global ignore-errors bypass" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
@@ -775,7 +817,7 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	fi; \
 	rm -f $$out; \
-	echo "  ok: Make ignore-errors/eval/MAKEFLAGS bypasses are CAUGHT"
+	echo "  ok: Make ignore-errors/touch/eval/MAKEFLAGS bypasses are CAUGHT"
 	+@out=$$(mktemp /tmp/pq-extraction-goal-executor-selftest.XXXXXX); \
 	if $(_FV_GNU_MAKE) --no-print-directory MAKECMDGOALS=not-guarded MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: spoofed MAKECMDGOALS suppressed the recursive-executor guard" >&2; \
@@ -866,8 +908,16 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	  echo "CONTROL FAILURE: a trailing -f makefile was rejected for the wrong reason" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
 	fi; \
+	if $(_FV_GNU_MAKE) --no-print-directory -f Makefile -f /dev/null -n \
+	    verify-extracted >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: a trailing -f makefile escaped the verification-gate guard" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
+	elif ! grep -Fq 'refusing additional parsed makefiles [Makefile /dev/null]' $$out; then \
+	  echo "CONTROL FAILURE: a trailing -f verification makefile was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
+	fi; \
 	rm -f $$out $$startup; \
-	echo "  ok: MAKEFILES/eval/trailing--f parser channels cannot suppress or preseed extraction"
+	echo "  ok: MAKEFILES/eval/trailing--f parser channels cannot suppress verification or extraction"
 	+@out=$$(mktemp /tmp/pq-extraction-make-override-selftest.XXXXXX); \
 	if $(_FV_GNU_MAKE) --no-print-directory MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: caller-overridden MAKE bypassed authoritative extraction replay" >&2; \

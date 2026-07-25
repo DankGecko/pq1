@@ -517,6 +517,14 @@ def check_sol_consumer(src: str) -> None:
             "_validateSignature must call "
             "c10Verifier.verify(pkSeed, pkRoot, digest, innerSig)"
         )
+    for return_stmt in re.finditer(
+        r"\breturn\b\s*([^;]*);", body[:verify_calls[0].start()]
+    ):
+        if _normalise_expr(return_stmt.group(1)) != "SIG_VALIDATION_FAILED":
+            raise ValueError(
+                "_validateSignature must not return success before the "
+                "canonical C10 verifier call"
+            )
     canonical_result_flow = re.compile(
         r"\s*returns\s*\(\s*bool\s+ok\s*\)\s*\{\s*"
         r"if\s*\(\s*!\s*ok\s*\)\s*return\s+SIG_VALIDATION_FAILED\s*;\s*"
@@ -966,6 +974,16 @@ def self_test() -> int:
             sol_src.replace(
                 sol_verify,
                 "c10Verifier.verify(pkSeed, pkRoot, bytes32(0), innerSig)",
+                1,
+            ),
+        )
+        expect_consumer_rejection(
+            "a Solidity success return before the canonical verifier",
+            check_sol_consumer,
+            sol_src.replace(
+                sol_binding,
+                "return SIG_VALIDATION_SUCCESS;\n"
+                "        bytes32 digest = sphincsDigest(userOp);",
                 1,
             ),
         )

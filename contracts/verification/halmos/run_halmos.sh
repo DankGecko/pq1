@@ -76,8 +76,22 @@ expected_rule_identities() {
 # declarations, or a harness/rule landing without a conscious pin bump stays
 # red.
 check_rule_inventory() {
-  local wired digest duplicate
+  local wired digest duplicate source actual_contracts expected_contracts
   local -a identities
+  local -a contract_files
+  mapfile -t contract_files < <(
+    for source in "${HALMOS_SRC_DIR}"/*.t.sol; do
+      basename "${source}" .t.sol
+    done | LC_ALL=C sort
+  )
+  actual_contracts=$(printf '%s\n' "${contract_files[@]}")
+  expected_contracts=$(
+    printf '%s\n' "${EXPECTED_HALMOS_CONTRACTS[@]}" | LC_ALL=C sort
+  )
+  if [ "${actual_contracts}" != "${expected_contracts}" ]; then
+    echo "==> FAIL: Halmos harness-file inventory drift — every *.t.sol must be present exactly once in EXPECTED_HALMOS_CONTRACTS" >&2
+    return 1
+  fi
   mapfile -t identities < <(expected_rule_identities)
   wired="${#identities[@]}"
   if [ "${wired}" -ne "${EXPECTED_RULES}" ]; then
@@ -195,8 +209,26 @@ self_test() {
   local d; d="$(mktemp -d /tmp/pq1-halmos-floor-selftest.XXXXXX)"
   local complete="${d}/complete.txt" zero="${d}/zero.txt"
   local missing="${d}/missing.txt" substituted="${d}/substituted.txt"
+  local original_src_dir="${HALMOS_SRC_DIR}" fixture_src="${d}/src"
   : > "${complete}"; : > "${zero}"; : > "${missing}"; : > "${substituted}"
   local contract want name rc=0
+  echo "-- self-test 1/5: exact harness-file inventory — extra file must be REJECTED"
+  if ! check_rule_inventory >/dev/null 2>&1; then
+    echo "   CONTROL FAILURE: rejected the current exact harness inventory" >&2
+    rc=1
+  else
+    mkdir -p "${fixture_src}"
+    cp "${HALMOS_SRC_DIR}"/*.t.sol "${fixture_src}/"
+    : > "${fixture_src}/HalmosUnpinned.t.sol"
+    HALMOS_SRC_DIR="${fixture_src}"
+    if check_rule_inventory >/dev/null 2>&1; then
+      echo "   CONTROL FAILURE: accepted an unpinned Halmos harness file" >&2
+      rc=1
+    else
+      echo "   OK: rejected"
+    fi
+    HALMOS_SRC_DIR="${original_src_dir}"
+  fi
   for contract in "${EXPECTED_HALMOS_CONTRACTS[@]}"; do
     want=$(grep -cE "function check_[A-Za-z0-9_]+" "${HALMOS_SRC_DIR}/${contract}.t.sol" || true)
     echo "Running ${want} tests for test/halmos/${contract}.t.sol:${contract}" >> "${complete}"
@@ -221,13 +253,13 @@ self_test() {
       echo "[PASS] check_totally_unrelated() (paths: 1, time: 0.01s, bounds: [])" >> "${substituted}"
     done
   done
-  echo "-- self-test 1/4: complete exact-identity fixture — must be ACCEPTED"
+  echo "-- self-test 2/5: complete exact-identity fixture — must be ACCEPTED"
   if assert_pass_floor "${complete}" selftest >/dev/null 2>&1; then echo "   OK: accepted"; else echo "   CONTROL FAILURE: rejected a complete run" >&2; rc=1; fi
-  echo "-- self-test 2/4: zero-PASS fixture — must be REJECTED"
+  echo "-- self-test 3/5: zero-PASS fixture — must be REJECTED"
   if assert_pass_floor "${zero}" selftest >/dev/null 2>&1; then echo "   CONTROL FAILURE: green-at-zero accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 3/4: missing-one-harness fixture — must be REJECTED"
+  echo "-- self-test 4/5: missing-one-harness fixture — must be REJECTED"
   if assert_pass_floor "${missing}" selftest >/dev/null 2>&1; then echo "   CONTROL FAILURE: missing-harness accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
-  echo "-- self-test 4/4: same-count arbitrary PASS identities — must be REJECTED"
+  echo "-- self-test 5/5: same-count arbitrary PASS identities — must be REJECTED"
   if assert_pass_floor "${substituted}" selftest >/dev/null 2>&1; then echo "   CONTROL FAILURE: arbitrary PASS identities accepted!" >&2; rc=1; else echo "   OK: rejected"; fi
   rm -rf "${d}"
   if [ "${rc}" -eq 0 ]; then
