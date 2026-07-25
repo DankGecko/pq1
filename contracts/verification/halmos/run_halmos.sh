@@ -22,8 +22,7 @@
 # profile: it transports each profile's pinned instance to every other
 # instance of the same artifact, i.e. across differing constructor
 # immutables — the harness verifier/EntryPoint addresses vs a real
-# deployment.) Set PQ1_HALMOS_SKIP_DEPLOY_SYMBOLIC=1 to skip the (slow)
-# deploy-profile symbolic re-run when iterating locally.
+# deployment.) Both profiles are mandatory for an authoritative green result.
 #
 # Exit non-zero if any rule fails or errors, if any expected harness did not
 # run, or if the PASS count drops below the pinned rule floor (green-at-zero
@@ -333,8 +332,4 @@ run_symbolic() {
 }
 
 run_symbolic default
-if [ "${PQ1_HALMOS_SKIP_DEPLOY_SYMBOLIC:-0}" = "1" ]; then
-  echo "==> NOTE: skipping deploy-profile symbolic re-run (PQ1_HALMOS_SKIP_DEPLOY_SYMBOLIC=1)"
-else
-  run_symbolic deploy
-fi
+run_symbolic deploy

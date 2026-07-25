@@ -26,8 +26,6 @@ import SphincsCVerify
 -- verified_validates — were retired when the GAP-11 credits refactor's model
 -- replaced the single `validatedOwnerPlusOne` transient with a per-index
 -- `credits` map; the per-index require/consume lemmas live in Execute.lean.)
-#print axioms SphincsCVerify.Wallet.TxFlow.execute_step_requires_prior_credit
-#print axioms SphincsCVerify.Wallet.TxFlow.applyStep_credit_lift_only_by_validate_success
 #print axioms SphincsCVerify.Wallet.Execute.execute_consumes_credit
 #print axioms SphincsCVerify.Wallet.Execute.execute_preserves_other_credits
 #print axioms SphincsCVerify.Spec.Theorems.every_call_consumes_its_own_validated_credit

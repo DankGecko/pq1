@@ -1,0 +1,7 @@
+# Exact high-memory FormatDecimal theorem inventory.
+#
+# The kernel triple {propext, Classical.choice, Quot.sound} is implicit for
+# every entry. No FormatDecimal theorem is allowed an additional content axiom.
+FormatDecimalSpec.round_post_facts
+FormatDecimalSpec.format_decimal_spec
+FormatDecimalSpec.u256_format_decimal_spec

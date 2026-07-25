@@ -119,10 +119,10 @@ PQMultiOwnable        (embedded in PQSmartWallet; no independent deploy)
 Both profile sets live in `contracts/smart-wallet/test/PinnedCodehashSelector.sol`
 (picked by `$FOUNDRY_PROFILE`) and are certified by `PinnedCodehashes.t.sol`
 under each profile. **The symbolic suite is executed against BOTH profiles'
-bytecode** (`run_halmos.sh` runs `default` then `deploy`; set
-`PQ1_HALMOS_SKIP_DEPLOY_SYMBOLIC=1` only for fast local iteration) — so the
-production `runs=999999` bytecode is symbolically discharged directly, not by
-a "control flow is identical across profiles" argument.
+bytecode** (`run_halmos.sh` runs `default` then `deploy`, with no authoritative
+skip mode) — so the production `runs=999999` bytecode is symbolically
+discharged directly, not by a "control flow is identical across profiles"
+argument.
 
 Within a single profile, an **immutable-window lemma**
 (`PinnedBytecodeImmutableLemma.t.sol`) additionally proves, exhaustively over

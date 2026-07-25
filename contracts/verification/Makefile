@@ -39,9 +39,11 @@ override _FV_INHERITED_BASH_ENV := $(value BASH_ENV)
 override _FV_INHERITED_ENV := $(value ENV)
 override _FV_INHERITED_MAKEFILES := $(value MAKEFILES)
 override _FV_MAKEFILE_LIST_AT_ENTRY := $(value MAKEFILE_LIST)
+override _FV_MAIN_MAKEFILE := $(abspath $(lastword $(_FV_MAKEFILE_LIST_AT_ENTRY)))
 override _FV_MAKEFLAGS_ORIGIN := $(origin MAKEFLAGS)
 override _FV_MAKE_SHORT_FLAGS := $(if $(filter -%,$(firstword $(MAKEFLAGS))),,$(firstword $(MAKEFLAGS)))
 override _FV_MAKE_EVAL_FLAGS := $(value -*-eval-flags-*-)
+override _FV_LAKE_ORIGIN := $(origin LAKE)
 unexport SHELLOPTS BASHOPTS BASH_ENV ENV MAKEFILES
 override SHELL := /usr/bin/bash
 override .SHELLFLAGS := -o pipefail -c
@@ -54,6 +56,18 @@ override _FV_GNU_MAKE := /usr/bin/make
 # recursive Make invocations start clean as well.
 ifneq ($(strip $(_FV_INHERITED_MAKEFILES)),)
 $(error refusing inherited MAKEFILES startup files for verification Makefile)
+endif
+ifneq ($(strip $(_FV_INHERITED_SHELLOPTS)),)
+$(error refusing inherited SHELLOPTS for verification Makefile)
+endif
+ifneq ($(strip $(_FV_INHERITED_BASHOPTS)),)
+$(error refusing inherited BASHOPTS for verification Makefile)
+endif
+ifneq ($(strip $(_FV_INHERITED_BASH_ENV)),)
+$(error refusing inherited BASH_ENV for verification Makefile)
+endif
+ifneq ($(strip $(_FV_INHERITED_ENV)),)
+$(error refusing inherited ENV for verification Makefile)
 endif
 ifneq ($(words $(_FV_MAKEFILE_LIST_AT_ENTRY)),1)
 $(error refusing additional parsed makefiles: $(_FV_MAKEFILE_LIST_AT_ENTRY))
@@ -70,9 +84,12 @@ endif
 ifneq ($(_FV_MAKEFLAGS_ORIGIN),file)
 $(error refusing caller-overridden MAKEFLAGS (origin $(_FV_MAKEFLAGS_ORIGIN)) for verification Makefile)
 endif
+ifneq ($(_FV_LAKE_ORIGIN),undefined)
+$(error refusing caller-overridden LAKE (origin $(_FV_LAKE_ORIGIN)) for verification Makefile)
+endif
 
 LEAN_DIR := lean
-LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
+override LAKE := $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
 # `make` / `make help` lists every runnable target that carries a `## ` blurb
 # (the self-documenting convention — it can't drift from reality the way a
@@ -544,7 +561,7 @@ verify-exec-gate: ## Claim-4 trace gate closure (kernel-only)
 	@# trace gate were ever pinned to the deployed verifier (which would pull in
 	@# A1/A3.1/A4 and is the P13 over-claim this gate now catches). The python
 	@# helper flattens `#print axioms`'s wrapped output before parsing.
-	@python3 scripts/check_axiom_closure.py /tmp/pq_claim4_axioms.out
+	@python3 scripts/check_axiom_closure.py --manifest $(LEAN_DIR)/scripts/axiom_closure_claim4_manifest.txt /tmp/pq_claim4_axioms.out
 
 verify-bytecode-setup: ## One-time Halmos setup
 	@bash halmos/setup_halmos.sh
@@ -605,10 +622,10 @@ override _EXTRACTION_ALL_GUARDED_TARGETS := $(_EXTRACTION_CONTEXT_GOALS) $(_EXTR
 override _FV_ALL_PARSER_GUARDED_TARGETS := $(_FV_EVIDENCE_TARGETS) $(_EXTRACTION_ALL_GUARDED_TARGETS)
 
 # The immediate MAKEFILE_LIST check above catches startup files and any `-f`
-# parsed before this Makefile.  Secondary expansion runs only after GNU Make
-# has parsed the complete input list, so it also catches a trailing `-f` file
-# before any verification or extraction/replay recipe can execute.  Parser
-# expansion errors cannot be suppressed by an injected `.IGNORE`.
+# parsed before this Makefile. The procfs argv guard catches multiple explicit
+# makefiles before a trailing file can mutate MAKEFILE_LIST. Secondary expansion
+# remains defense in depth after GNU Make has parsed the complete input list.
+# Parser expansion errors cannot be suppressed by an injected `.IGNORE`.
 .SECONDEXPANSION:
 $(_FV_ALL_PARSER_GUARDED_TARGETS): $$(if $$(filter 1,$$(words $$(MAKEFILE_LIST))),,$$(error refusing additional parsed makefiles [$$(MAKEFILE_LIST)]))
 
@@ -625,18 +642,15 @@ endif
 ifneq ($(origin MAKE_COMMAND),default)
 $(error refusing caller-overridden MAKE_COMMAND (origin $(origin MAKE_COMMAND)) for authoritative extraction replay)
 endif
-ifneq ($(strip $(_FV_INHERITED_SHELLOPTS)),)
-$(error refusing inherited SHELLOPTS for authoritative extraction replay)
 endif
-ifneq ($(strip $(_FV_INHERITED_BASHOPTS)),)
-$(error refusing inherited BASHOPTS for authoritative extraction replay)
-endif
-ifneq ($(strip $(_FV_INHERITED_BASH_ENV)),)
-$(error refusing inherited BASH_ENV for authoritative extraction replay)
-endif
-ifneq ($(strip $(_FV_INHERITED_ENV)),)
-$(error refusing inherited ENV for authoritative extraction replay)
-endif
+
+# The global startup-hook rejections above ensure Bash cannot suppress or forge
+# this parser process. This is still evaluated while the main Makefile is being
+# parsed, before GNU Make opens any later explicit makefile. Python isolated
+# mode also removes ambient module/startup injection from this trust decision.
+override _FV_MAKE_ARGV_GUARD := $(shell /usr/bin/python3 -I '$(dir $(_FV_MAIN_MAKEFILE))scripts/check_make_argv.py' /proc/$$PPID/cmdline)
+ifneq ($(_FV_MAKE_ARGV_GUARD),ok)
+$(error refusing multiple -f/--file makefiles for verification Makefile ($(_FV_MAKE_ARGV_GUARD)))
 endif
 
 # Keep direct multi-goal requests fail-loud: the aggregate replay deliberately
@@ -734,6 +748,7 @@ verify-extraction-regen: verify-extraction-freshness verify-extraction-regen-sel
 
 verify-extraction-regen-self-test: ## Negative controls for signature/value parity + recovered-waiver failure
 	@python3 scripts/check_extraction_regen_output.py --self-test-lean
+	@python3 scripts/check_make_argv.py --self-test
 	@actual=$$(sed -nE 's/^(verify[-A-Za-z0-9_.]*):.*/\1/p' Makefile | LC_ALL=C sort -u); \
 	expected=$$(printf '%s\n' $(_FV_EVIDENCE_TARGETS) | LC_ALL=C sort -u); \
 	if [ "$$actual" != "$$expected" ]; then \
@@ -818,6 +833,25 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -f $$out; \
 	echo "  ok: Make ignore-errors/touch/eval/MAKEFLAGS bypasses are CAUGHT"
+	+@out=$$(mktemp /tmp/pq-extraction-lake-override-selftest.XXXXXX); \
+	if /usr/bin/env LAKE=/bin/true $(_FV_GNU_MAKE) --no-print-directory \
+	    verify-build >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: inherited LAKE suppressed the Lean build gate" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing caller-overridden LAKE (origin environment)' $$out; then \
+	  echo "CONTROL FAILURE: inherited LAKE was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	if $(_FV_GNU_MAKE) --no-print-directory LAKE=/bin/true \
+	    verify-build >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: command-line LAKE suppressed the Lean build gate" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing caller-overridden LAKE (origin command line)' $$out; then \
+	  echo "CONTROL FAILURE: command-line LAKE was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: inherited and command-line LAKE overrides are CAUGHT"
 	+@out=$$(mktemp /tmp/pq-extraction-goal-executor-selftest.XXXXXX); \
 	if $(_FV_GNU_MAKE) --no-print-directory MAKECMDGOALS=not-guarded MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: spoofed MAKECMDGOALS suppressed the recursive-executor guard" >&2; \
@@ -904,7 +938,7 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	    extract-sphincs-adrs >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: a trailing -f makefile escaped the complete-list guard" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
-	elif ! grep -Fq 'refusing additional parsed makefiles [Makefile /dev/null]' $$out; then \
+	elif ! grep -Fq 'refusing multiple -f/--file makefiles ' $$out; then \
 	  echo "CONTROL FAILURE: a trailing -f makefile was rejected for the wrong reason" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
 	fi; \
@@ -912,8 +946,18 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	    verify-extracted >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: a trailing -f makefile escaped the verification-gate guard" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
-	elif ! grep -Fq 'refusing additional parsed makefiles [Makefile /dev/null]' $$out; then \
+	elif ! grep -Fq 'refusing multiple -f/--file makefiles ' $$out; then \
 	  echo "CONTROL FAILURE: a trailing -f verification makefile was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
+	fi; \
+	printf 'override MAKEFILE_LIST := Makefile\nverify-extracted:\n\t@echo SPOOFED\n' >$$startup; \
+	if $(_FV_GNU_MAKE) --no-print-directory -f Makefile -f $$startup \
+	    verify-extracted >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: a trailing makefile rewrote MAKEFILE_LIST and replaced a gate" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
+	elif grep -Fq 'SPOOFED' $$out \
+	    || ! grep -Fq 'refusing multiple -f/--file makefiles ' $$out; then \
+	  echo "CONTROL FAILURE: mutable MAKEFILE_LIST attack was not rejected before parsing" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
 	fi; \
 	rm -f $$out $$startup; \
@@ -1082,9 +1126,9 @@ verify-extracted-heavy: ## S33 FormatDecimalSpec M7 (~42 GB kernel-TC) — carve
 	@echo "=== Axiom closure of the M7 WYSIWYS theorems (expect propext, Classical.choice, Quot.sound) ==="
 	@cd $(EXTRACTED_DIR) && $(LAKE) env lean Extracted/AxiomCheckFormatDecimal.lean 2>&1 | tee /tmp/pq_axiomcheck_fd.out
 	@# F3 (2026-07-16): the 3 M7 WYSIWYS theorems close over EXACTLY the kernel
-	@# triple (no hash axiom). Enforce that exact set + the declaration inventory
-	@# (exactly 3 records) rather than only grepping for sorryAx.
-	@python3 scripts/check_axiom_closure.py /tmp/pq_axiomcheck_fd.out --expect-records 3
+	@# triple (no hash axiom). Enforce the exact three theorem identities and
+	@# their exact per-theorem closures rather than only counting records.
+	@python3 scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_format_decimal_manifest.txt /tmp/pq_axiomcheck_fd.out
 	@echo "OK: format_decimal M7 axiom-discipline gate passed — kernel-only closure over exactly 3 headlines"
 
 _extract-sphincs-adrs-impl:

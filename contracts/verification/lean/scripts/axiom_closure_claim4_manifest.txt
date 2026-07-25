@@ -1,0 +1,19 @@
+# Exact Claim-4 execution-gate theorem inventory.
+#
+# The kernel triple {propext, Classical.choice, Quot.sound} is implicit for
+# every entry. No Claim-4 theorem is allowed an additional content axiom.
+SphincsCVerify.Wallet.TxFlow.applyStep_credit_lift_only_by_validate_success
+SphincsCVerify.Wallet.TxFlow.validate_step_preserves_callstack
+SphincsCVerify.Wallet.TxFlow.execute_step_requires_prior_credit
+SphincsCVerify.Wallet.TxFlow.executeBatch_step_requires_prior_credit
+SphincsCVerify.Wallet.TxFlow.callstack_grew_implies_some_verify_true
+SphincsCVerify.Wallet.TxFlow.any_call_implies_some_verify_true
+SphincsCVerify.Spec.Theorems.every_call_gated_by_verifier
+SphincsCVerify.Spec.Theorems.no_call_without_prior_verifier_acceptance
+SphincsCVerify.Wallet.Execute.execute_consumes_credit
+SphincsCVerify.Wallet.Execute.execute_preserves_other_credits
+SphincsCVerify.Spec.Theorems.every_call_consumes_its_own_validated_credit
+SphincsCVerify.Spec.Theorems.credit_lift_implies_verified_validate
+SphincsCVerify.Wallet.CreditLedger.creditConservation
+SphincsCVerify.Wallet.CreditLedger.exec_count_le_validate_count
+SphincsCVerify.Spec.Theorems.exec_count_le_validate_count

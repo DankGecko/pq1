@@ -220,6 +220,5 @@ the total `[PASS]` count must be ≥ 42 — a silently unmatched harness or a
 zero-rule green is a hard failure. `run_halmos.sh --self-test` exercises the
 floor's positive/negative controls without the solver; `--check-output <file>`
 re-checks an archived session against the floor. Session output is archived
-under `sessions/`. Set
-`PQ1_HALMOS_SKIP_DEPLOY_SYMBOLIC=1` to skip the (slow) deploy-profile symbolic
-re-run during fast local iteration.
+under `sessions/`. Both compiler profiles are mandatory for an authoritative
+green result.
