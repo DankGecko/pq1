@@ -1,5 +1,14 @@
 # Mechanizing C10 EUF-CMA in EasyCrypt — a sourced feasibility verdict (2026-07)
 
+> ### ⚠ READ FIRST — PARAMETER QUALIFIER (2026-07-25)
+> **Every EUF-CMA / capstone claim in this document holds at MM45-admissible WOTS parameters
+> (`w ∈ {4,16,256}`) — NOT at the deployed C10 configuration (`W=8, L=43, TARGET_SUM=205`).**
+> There is **no instantiation of any part of this development at deployed C10**. The honest headline is
+> *"the SPHINCS+C **mechanism** is machine-checked at MM45-admissible WOTS parameters"*.
+> This does **not** mean C10 is broken — the non-injectivity MM45's axiom forbids is C10's deliberate design,
+> paid for by the S-TCR(Th+C) summand. Full adjudication, the exact CAN/CANNOT claim boundary, and the
+> DO-NOT list: **[UPDATE 2026-07-25d at the end of this file](#update-2026-07-25d--deployed-parameter-finding-adjudicated-claim-boundary-fixed)**.
+
 > **UPDATE — 2026-07-17 (supersedes the "10/21, skip 11" CAPSTONE status below).**
 > The C10-CONCRETE capstone is now machine-verified in MM45's confirmed toolchain,
 > container-gated. `easycrypt/drafts/SPHINCS_C_c10.ec` — `EUFCMA_SPHINCS_PLUS_C` with its
@@ -18,6 +27,12 @@
 > C10-representability stop/go the correction demanded is answered concretely: the C10-faithful
 > `FORS_C10` model compiles and is load-bearing — a weakened-axiom control (`<` → `<=`) shows
 > `good_pos`'s **strict** positivity is required for `query_ll`'s oracle-losslessness.
+> — **⚠ CORRECTED 2026-07-25: "C10-representability … is answered" is FALSE and is the most
+> misleading sentence in this document.** What compiles is a C10-*faithful FORS model*, not an
+> instantiation at deployed C10 parameters. `val_log2w` is ambient in every theory that requires
+> `SPHINCS_PLUS` — including the FORS wiring (`GprocFORSC10.ec:53`) — so **nothing here is proven at
+> deployed C10**, and in particular the FORS leg is **not** "proven at deployed FORS geometry".
+> See UPDATE 2026-07-25d.
 >
 > **HONEST SCOPE — do not over-read.** This is NOT an end-to-end EUF-CMA proof. It stays a
 > **conditional composition**: `hfx` (FX skeleton), `hbridge` (XMSS-MT), `htree` (FORS tree
@@ -36,6 +51,13 @@
 > checksum WOTS, while shipped C10 uses `log2_w=3`, 43 checksum-free target-sum
 > chains. Continue only as staged research after a fail-closed build and a C10
 > representability stop/go gate; do not resume the abstract capstone first.
+> — **⚠ MECHANISM CORRECTED 2026-07-25: "standard checksum WOTS" is a MISREADING.**
+> `FV-SPHINCSPLUS-EC` contains **no concrete checksum at all**: `encode_msgWOTS` is an *abstract* op
+> (`WOTS_TW_ES.ec:569`) constrained only by the `two_encodings` axiom (`:572-576`); the concrete
+> checksum lives in the sibling `FV-XMSS-EC` (`WOTS_TW_Checksum.ec:140`), which this repo never
+> requires. What `1 <= len2` forces is **WIDTH** (`len > len1` always, vs deployed `L = 43 = len1`),
+> not checksum semantics. The `log2_w∈{2,4,8}` half of this note is correct as written — but it is
+> **not the hard part**, and it is **not independent** of the other two grounds. See UPDATE 2026-07-25d.
 > See the [full review](../security/adversarial-review/findings/fv-full-stack-2026-07-15-coordinator.md)
 > and [research roadmap](formal-verification-assurance-expansion-2026-07-15.md).
 
@@ -3331,3 +3353,226 @@ The open questions are all FAITHFULNESS, and they now dominate: the model cannot
 WOTS parameters (F1/F2/F3); the wire-format FORS gap is characterised but not bridged probabilistically; and the
 statement still admits degenerate readings (`predC`/`emb_in`/`thfc`), with the best available witness itself
 degenerate and its RHS >= 1.
+
+## UPDATE 2026-07-25d — deployed-parameter finding ADJUDICATED (claim boundary fixed)
+
+**The conclusion STANDS. Two of the three stated MECHANISMS were WRONG and are corrected here. "Three
+INDEPENDENT grounds" is RETRACTED. The exact CAN/CANNOT claim boundary is fixed below.**
+
+The 2026-07-25 finding immediately above ("the port CANNOT be instantiated at C10's DEPLOYED WOTS
+parameters") was re-probed at source, one lens per sub-finding, each with machine-checked receipts and two
+external adversarial reviewers. **The headline conclusion is unchanged and was strengthened.** But F2's and
+F3's stated *mechanisms* were both wrong, and the "three independent grounds" framing is now retracted. This
+section supersedes the mechanism wording of the section above; it does not soften its verdict.
+
+### F1 — stands exactly as written, and is NOT the hard part
+
+`const log2_w : { int | log2_w = 2 \/ log2_w = 4 \/ log2_w = 8 } as val_log2w`
+(`FV-SPHINCSPLUS-EC/proofs/WOTS_TW_ES.ec:31`, re-read verbatim this session) ⇒ `w ∈ {4,16,256}`; deployed C10
+is `LOG_W = 3` (`sphincs-c10/src/params.rs:46`).
+
+**The "it's only the black-box standard-WOTS leg" exoneration is unavailable**, because `w` is *single-sourced*:
+`FL_SL_XMSS_MT_ES.ec:542` (`op log2_w <- log2_w`) + `:578` (`realize val_log2w by exact: val_log2w.`), and
+`SPHINCS_PLUS.ec:549` + `:614` identically. There is exactly **one** `w` in the development and `WOTS_C_Real.ec`
+sits on that instance. Machine-checked *in the +C scope*: `w = 4 \/ w = 16 \/ w = 256` GREEN and `w <> 8` GREEN,
+with `w = 8` REJECTED as the vacuity control (`scratch/f1probe/f1_singlesource.ec`, `_negctl.ec`). The capstone's
+RHS carries the black-box term at that same `w` — `SphincsC10CapstoneWired.ec:585` names
+`M_EUF_GCMA_WOTSTWESNPRF`, defined at `WOTS_TW_ES.ec:2323`, the very theory declaring `val_log2w`. *"Black box"
+marks where the proof stops; it confers no parameter independence.*
+
+**NEW, and it is what makes the F1-only repair a trap rather than progress: F1 alone is cheaply and soundly
+repairable.** Relaxing to `{ int | 1 <= log2_w }` and deleting the only two statements false at `log2_w = 3` —
+`val_w` (`:61`) and `val_len1` (`:96`), with the 88 `val_w` citations redirected to a positivity fact — compiles
+**all three vendored levels at 0 admits**, with an anti-false-green shadow check confirming the relaxed level was
+actually loaded. At deployed `(n = 16, log2_w = 3)` it then yields **`len1 = 43` EXACTLY**
+(`scratch/f1probe/len_at_c10.ec`). So `{2,4,8}` is a spec-conformance declaration, not a mathematical necessity.
+See **DO-NOT #1** below before acting on that.
+
+*Flagged as not independently re-verified:* the reviewer citation that EasyCrypt's `ax_ovrd` builds
+`Papply (ExactType axd, None)` (`ecThCloning.ml:347-353`), i.e. that no clone can *weaken* an inherited axiom. It
+is consistent with the rejection goal we actually observed, and is accepted, but the compiler source was not
+opened.
+
+### F2 — BLOCKING as to representability, but the recorded MECHANISM was a MISREADING. Amend, do not retract
+
+The section above says the model "keeps the checksum WOTS+C exists to delete". **There is no concrete checksum
+anywhere in `FV-SPHINCSPLUS-EC`.** `encode_msgWOTS` is an *abstract* op (`WOTS_TW_ES.ec:569`) whose only
+constraint is the `two_encodings` axiom (`:572-576`); the word "checksum" appears solely as a comment on the
+`len2` *formula* (`:39`). The real checksum lives in the sibling `FV-XMSS-EC/proofs/WOTS_TW_Checksum.ec:140`,
+which this repo never requires. **MM45 replaced the concrete checksum with the abstract antichain axiom.** The
+same misreading is in the head blockquote's "standard checksum WOTS" (2026-07-15) — corrected here.
+
+**What survives is stronger: `1 <= len2` forces WIDTH, not checksum semantics.** With `len1 = ceil(8n / log2 w)`,
+`len2 = floor(log2(len1·(w-1)) / log2 w) + 1`, `len = len1 + len2` (`:37,40,43`), the model's chain count is
+*always* `len > len1`, whereas deployed C10 signs exactly `L = 43 = len1` chains (`params.rs:49`;
+`sphincs-c10/src/wots.rs:1-5` — *"Instead of a checksum (WOTS+ len2 chains)…"*). Machine-checked in the
+**abstract** theory, hence at every instantiation: `len1 < len`, `len <> len1` (`scratch/f2_probe.ec`, 0-admit),
+with the canary `len = len1` REJECTED on the identical dependency set (`scratch/f2_canary.ec`) — ruling out both
+a stale-`.eco` false green (T2) and a contradictory-environment false green (T3).
+
+**Structurally critical:** `len2` is a **definition** (`:40`), not a declared constant, so `ge1_len2` (`:133`) is
+**derivable, not axiomatic** — it cannot be relaxed by admitting anything, and no `clone … with op len2 <- 0`
+exists. Its only consumer is `:138` (`ge2_len`), which is what the ~160 downstream sites actually cite.
+
+**Whose leg: BOTH.** The +C scheme object is itself `len`-wide — `WOTS_C_Scheme.ec:60` and `:94`
+(`while (size sig < len)` / `while (size pkWOTS_l < len)`), `XMSSMT_C_Scheme.ec:151`, and pk/sk/sig are DBLL lists
+of length `len` (`WOTS_TW_ES.ec:200-228`). This is content dependence in the capstone's own **LHS**, not merely
+inherited scope. It is also **independent of F1**: even granting `log2_w = 3`, `len1 = 43` but `len2 = 3`, so
+`len = 46`; and no admissible `(n = 16, log2_w ∈ {2,4,8})` yields 43 (`len ∈ {68, 35, 18}`).
+
+### F3 — BLOCKING and the STRONGEST, but F3-as-written is half wrong. RESTATED as a COUNTING obstruction
+
+The section above says `two_encodings` is *false at C10's actual encoding*. **The truth is stronger: at C10's
+deployed WOTS geometry the axiom is UNSATISFIABLE — no function whatsoever satisfies it.**
+
+Applied in both argument orders, `two_encodings` forces `encode_msgWOTS` to be **injective** with an **antichain**
+image in the pointwise order (machine-checked 0-admit, `scratch/f3_two_enc_structure.ec`, both negative controls
+REJECTED). Hence `|msgWOTS| = 2^(8n) = 2^128` must fit inside the maximum antichain of `{0..w-1}^len`. Exact
+big-integer DP over the rank-layer coefficients, with de Bruijn–Tengbergen–Kruyswijk **cited, not formalised**,
+for "max antichain = max rank layer":
+
+| w | len | | max antichain | vs 2^128 | |
+|---|-----|---|---------------|----------|---|
+| 8 | **43** | **DEPLOYED C10** | 2^123.76 | `<` 2^128 | **NO MODEL** |
+| 8 | 45 | injectivity threshold | 2^129.73 | `>=` 2^128 | ok |
+| 8 | 46 | MM45 shape at log2_w=3 | 2^132.71 | `>=` 2^128 | ok |
+| 16 | 35 | SPHINCS+ | 2^133.90 | `>=` 2^128 | ok |
+
+Cross-checked three ways: exact DP, two independent reviewer DPs, and a Gaussian approximation
+(`8^43 / (sd·sqrt(2π))` with `sd = sqrt(43·63/12) = 15.02` gives 2^123.77 vs the DP's 2^123.76).
+
+The two mechanisms previously stated are subsumed or reclassified: **(a) "all-zero domination" is correct but a
+special case** of the antichain bound, not an independent ground; **(b) "`extract_digits` discards 127 of 256
+bits ⇒ non-injective" is RECLASSIFIED** — a real model-vs-implementation width mismatch, but not the defect F3
+alleged.
+
+### RETRACTION — "three INDEPENDENT grounds" is WRONG
+
+**F3 SUPERSEDES F1 and F2**: it is precisely the claim that relaxing them is *insufficient*. No encoding exists at
+43 base-8 chains, so no relaxation of `val_log2w` or of `len` makes the deployed shape representable under the
+unconditional axiom. These are **one coupled obstruction**, not three additive ones.
+
+### TWO ANTI-MISREADS — both load-bearing, do not quote the above without them
+
+1. **C10 is NOT broken, and this is NOT a defect in the signer.** C10's encoding is *deliberately* non-injective:
+   same-encoding pairs are *meant* to exist and merely to be hard to *find*, which is exactly what an
+   S-TCR-on-Th+C term pays for. The unsatisfiability is a fact about MM45's **bundled** axiom at that geometry,
+   not about the deployed scheme. Deployed `L = 43` sits two chains below the injective-antichain threshold of 45
+   at `w = 8` — i.e. C10 is operating *precisely in the regime WOTS+C was designed for*, which MM45's WOTS-TW
+   interface structurally cannot express.
+2. **The shipped development is NOT vacuous and NOT wrong.** `two_encodings` is satisfiable at every admissible
+   instantiation — `FV-XMSS-EC/proofs/WOTS_TW_Checksum.ec:312` realizes it for the concrete checksum encoding —
+   and `w = 8` is unsubstitutable, so the unsatisfiable regime is **unreachable from here**. Every theorem in the
+   development remains a valid theorem about SPHINCS+C at MM45-admissible WOTS parameters.
+
+### NEW NEGATIVE RESULT — the repo's own proposed repair does not work
+
+`drafts/SphincsC10Content.ec:107-110` pointed at `constsum_encoding_is_two_encodings` (`:192`) as the
+constructive half of the repair. Its hypotheses are **global** over all of `msgWOTS` — `injective E` **and**
+`forall m, digitsum (E m) = T` — and at deployed geometry they are **jointly unsatisfiable**: the
+`TARGET_SUM = 205` layer holds 2^114.09 points, and even the largest layer holds 2^123.76, both below 2^128.
+**PART B is VACUOUS at deployed parameters.** It remains a correct and useful result about the antichain half; it
+is *not* a deployed-parameter repair, and the header claiming it was has been corrected in place.
+
+### THE EXACT CLAIM BOUNDARY (this is the operative output — use it verbatim)
+
+**CAN be claimed — unchanged by this investigation; the artifact is sound:**
+- The **+C delta is machine-checked**. The SPHINCS+C EUF-CMA reduction is a valid, CERTIFIED-0-ADMIT theorem
+  reducing SPHINCS+C EUF-CMA to {ITSRC10 hardness + the mtree premises + the trusted MM45 base} — **at
+  MM45-admissible WOTS parameters, i.e. `w ∈ {4,16,256}`**.
+- It is **not vacuous and not wrong** (anti-misread 2 above).
+- The obstruction is **localized to the WOTS layer**: FORS_ES's constraints (`ge1_n`/`ge1_k`/`ge1_a` at
+  `FORS_ES.ec:22,25,28`) and the tree constraints (`ge1_hp`/`ge1_d` at `SPHINCS_PLUS.ec:58,64`) do **not** exclude
+  deployed `n=16 / k=13 / a=11 / h'=9 / d=2`; only `log2_w` is restricted.
+
+**CANNOT be claimed:**
+- **"SPHINCS+C10 EUF-CMA is machine-checked", unqualified.** There is **no instantiation of ANY part of this
+  development at deployed C10** — `val_log2w` is ambient in every theory that requires `SPHINCS_PLUS`, including
+  the FORS wiring (`GprocFORSC10.ec:53`). Every claim must carry the parameter qualifier.
+- **In particular, do NOT claim the FORS+C10 leg is "proven at deployed FORS geometry".** The localization result
+  says *where future repair work would live*; it is not a statement about what is currently proven. **Nothing is
+  proven AT deployed C10.**
+- Nothing about the deployed signer's WOTS layer (`W=8, L=43, TARGET_SUM=205`) has a machine-checked EUF-CMA
+  statement — and **none can exist under MM45's unconditional axiom**, since that axiom has no model at 43 base-8
+  chains.
+- The capstone leaves `TARGET_SUM = 205` unbound; the WOTS-TW summand is carried as an **unreduced game
+  probability**, not grounded in hash assumptions.
+- **Do NOT write "the +C proofs do not depend on `two_encodings`".** Grep is not `#print axioms` and EasyCrypt has
+  no equivalent; the axiom is in the transitive TCB via `SPHINCS_PLUS` regardless of citation. The supportable
+  wording is: the +C proofs do not **cite** it (re-run census over `drafts/` — comments only); its two consumers
+  (`WOTS_TW_ES.ec:582`, `:1305`) feed `MEUFGCMA_WOTSTWESNPRF`, applied only inside
+  `EUFNAGCMA_FLSLXMSSMTTWCESNPRF_Unfolded` (`XmssmtCC_All.ec:8768`), which has **zero application sites**; and at
+  admissible parameters it is a satisfiable ambient assumption.
+- **No escape via "it's only the standard scheme":** the capstone *carries* the encode bridge
+  `forall p a x cc, encode_msgWOTS_C p a x cc = encode_msgWOTS (ThC p a x cc)`
+  (`SphincsC10CapstoneWired.ec:541-542`), pinning `encode_msgWOTS` to the encoding the +C scheme actually uses.
+
+**NET — the honest headline, and it always was this:** *the SPHINCS+C **mechanism** is machine-checked at
+MM45-admissible WOTS parameters.* This investigation does not overturn the artifact's value; it converts a vague
+caveat into an exact, defensible boundary and corrects two wrong mechanisms in the prior disclosure. And it does
+**not** mean C10 is broken — the non-injectivity that MM45's axiom forbids is C10's deliberate design, paid for by
+the S-TCR(Th+C) summand of the paper's Thm 5.2.
+
+### ⚠ THE UNQUALIFIED PHRASING SURVIVES IN IMMUTABLE COMMIT MESSAGES
+
+`c10-eufcma-port` commit messages (e.g. `16255808`: *"reducing SPHINCS+C10 EUF-CMA to {ITSRC10 hardness + mtree
+premises + the trusted MM45 base}"*, and the "CAPSTONE CERTIFIED-0-ADMIT" milestones) state the result **without
+the `w ∈ {4,16,256}` qualifier**. Those messages are history and are **not** being rewritten. This document and
+`c10-eufcma-port/PROVENANCE.md` carry the correction; where the two disagree, **the docs govern**. Do not attempt
+to reconcile git history.
+
+### DO-NOT — the specific wrong moves this investigation identified
+
+1. **DO NOT do the F1-only repair.** It is the single highest-risk wrong move available *precisely because* it has
+   been proven cheap, behaviour-preserving and 0-admit across all three vendored levels — a future session will
+   find those receipts and read them as a green light. It buys **zero** claimable ground: `len1` lands exactly on
+   43, but `len = 46 <> 43`, so F2 still blocks and F3 still blocks. Net effect: forfeit the published-artifact
+   property, gain nothing.
+2. **DO NOT do F1+F2 without F3.** Relaxing `len` to `len1 = 43` leaves the *unconditional* `two_encodings` with
+   **no model** — every downstream lemma becomes **vacuously true** at C10. A compiling-but-vacuous artifact is
+   strictly worse than an honest gap and is the worst outcome in this project's failure taxonomy (trap T3). If
+   ever attempted, it must be gated by an explicit satisfiability canary on both sides, **never by compilation**.
+3. **DO NOT edit or fork the vendored MM45 proof** absent an explicit, dated owner decision recorded in
+   `PROVENANCE.md`. No EasyCrypt clone can weaken an inherited axiom (an axiom override is an `exact` proof
+   obligation for the same substituted formula), so *every* route to a deployed-parameter claim patches or forks
+   `WOTS_TW_ES.ec`. **Forking is not the cheap escape** — it changes the TCB identically while creating a silently
+   divergent copy of an upstream artifact, i.e. strictly worse provenance. It forfeits *"we reused the published,
+   independently-reviewed artifact; only the +C delta is ours"*, which is a large part of why this port is
+   credible, and that is not recoverable by careful commit messages.
+4. **DO NOT "fix" the width by padding C10's encoding with 3 constant-zero digits to reach `len = 46`.** The
+   padded scheme's public key is `th_multi` over 46 chain-ends vs the deployed 43 — a different pk, a different
+   scheme. Security does not transfer without a fresh reduction.
+5. **DO NOT lean on PART B** (`constsum_encoding_is_two_encodings`) as the repair — jointly unsatisfiable
+   hypotheses at deployed geometry (above).
+
+### IF a deployed-parameter claim is ever wanted: the exact shape of that project
+
+This is the most valuable forward-looking output of the investigation. MM45's `two_encodings` **bundles two
+properties: antichain image AND global injectivity.** WOTS+C supplies the first via the constant-sum gate and
+**provably cannot supply the second** — an injective antichain encoding of 2^128 messages needs `len >= 45` at
+`w = 8`, so deployed `L = 43` is two chains short *by counting alone*. **Injectivity is not inconvenient here; it
+is impossible.** Any sound deployed-parameter development must therefore **drop the injectivity half and charge
+same-encoding pairs to a computational term** — precisely the S-TCR-on-Th+C summand of ePrint 2022/778 Thm 5.2.
+
+Concretely: a **parametric WOTS+C layer** with free `(n, w, len)`, `len2 = 0` admissible, and a
+**gate-restricted** antichain hypothesis proven on the `predC`-valid set — *derived from* MM45 rather than editing
+it, so the vendored artifact stays pristine. This is **a separate project phase**, not a patch (no numeric
+estimate offered; this project's estimates run high).
+
+### RECEIPTS AND GATES FOR THIS UPDATE
+
+- In-repo faithfulness header amended in place: `c10-eufcma-port/drafts/SphincsC10Content.ec:90-197`
+  (commit `f3675aa`). Gate: `bash scratch-ecc.sh drafts/SphincsC10Content.ec` RC=0; file remains 0-admit (all
+  `admit` hits are prose).
+- **No mid-chain file was edited**, so the whole-chain vacuity gate was not required — receipt:
+  `SphincsC10Content.ec` is a **leaf** (it `require`s the capstone; nothing in `drafts/` requires *it* — only
+  `scratch/` canaries do), and it does not appear in `scratch/vacuity_repair_gate.sh`'s dependency-ordered chain
+  list. Trap T2 therefore has no purchase.
+- **The vendored MM45 base was NOT touched.** `WOTS_TW_ES.ec:31` still reads
+  `const log2_w : { int | log2_w = 2 \/ log2_w = 4 \/ log2_w = 8 } as val_log2w.` verbatim, and no `.ec` under
+  `FV-SPHINCSPLUS-EC/proofs` has an mtime in this session. (`git status` can never show it — the vendored trees
+  are gitignored, which is also why plain `grep` silently returns nothing from them; use `command grep`.)
+- F1 relaxation receipts are kept under `c10-eufcma-port/scratch/f1probe/` **as evidence that F1 is not the hard
+  part**, to foreclose re-litigation. The *derived* relaxed copies of the vendored base (`base3/`, `WTW3.ec`,
+  `head50.ec`, `pb_*`-style bodies) are now **gitignored** so no `git add -A` can commit a divergent MM45 copy;
+  only the generators and hand-written probes are tracked.
