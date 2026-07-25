@@ -3135,3 +3135,140 @@ adversary at that tweak. It is a bookkeeping problem for the multi-target reduct
 obstruction; the composed-scheme WOTS binding; the keygen distributional hop (the crate's last wire value is a
 `th_pair` output — it equals the model's `R_{k-1}`, but the model's NPRF keygen samples cube elements uniformly);
 and the address/bit-order correspondence, which is assumed throughout this port and is not mechanized here.
+
+## UPDATE 2026-07-25c — INDEPENDENT ADVERSARIAL AUDIT of TRACK V + TRACK B: **non-degeneracy is NOT established**
+
+Third-party audit wave (no chain file edited; the two track deliverables left byte-identical). Every gate below was
+re-run by the auditor from scratch, not inherited.
+
+**GATES (all three, run in dependency order; T2-safe because `scratch-ecc.sh` deletes the target's own `.eco`).**
+- `scratch/vacuity_repair_gate.sh` → **GATE PASS**. WOTS_C_Interactive / XMSSMT_C_Reduction / XmssmtCC_All /
+  SphincsC10CapstoneWired CERTIFIED-0-ADMIT; RtopCSoundness / FxChain / GprocFORSC10 GREEN; 4 positive receipts;
+  5 canaries REJECTED.
+- `scratch/trackV_gate.sh` → **TRACK-V GATE PASS**. SphincsC10Content CERTIFIED-0-ADMIT, posctl GREEN,
+  canaries 1-8 REJECTED, the disclosed non-canary GREEN.
+- `scratch/wire_bridge_gate.sh` → **GATE PASS**. FORSC10_Wire CERTIFIED-0-ADMIT, 2 positive controls GREEN,
+  8 canaries REJECTED.
+
+**THE KEY FINDING — THE PART G WITNESS IS STILL DEGENERATE, ON THE AXIS V2 NAMED.** New machine-checked probe
+`scratch/audit_partG_degenerate.ec` (CERTIFIED-0-ADMIT), whose hypotheses are `MODEL_JOINT_on_actual_globals`'s
+(i)-(iv) copied VERBATIM, proves that in that very model
+
+  `ThC ps tw m c  =  if c = c0 then d0 else d1`
+
+— i.e. **Th+C is a two-valued function of the COUNTER ALONE**, independent of the public seed, the tweak *and the
+message*. Consequences, all in the probe: the image of Th+C is `{d0,d1}`; Th+C is message-constant at **every**
+counter; and therefore the S-TCR(+C) win condition (`STCR_C.ec:215-220`) is met by *reusing the counter the
+challenge oracle just returned* — one query, any `m' <> m`, no grinding, no knowledge of `c0`. `InSec^{S-TCR(+C)}`
+is **1** in the exhibited model.
+
+Precision (both external reviewers, upheld): this does **not** prove the capstone's *displayed* S-TCR term equals 1
+for every `F` — that term is a specific `F`-derived reduction adversary, not a supremum. The correct statement is
+that the model makes the S-TCR(+C) **assumption maximally false**, so the capstone bound cannot be read as a
+security statement there.
+
+**THE "UNAVOIDABLE" DEFENCE (SphincsC10Content.ec:474-505) OVERREACHES.** Its pigeonhole argument proves a
+gate-passing collision **exists** whenever the gate is a strict subset. It does not prove that every model makes
+that collision **trivially computable** — which is what this witness does. A model with `thfc` injective at index
+`dfC` is non-collapsing and consistent with N1-N4; it is simply not *forced* by them. So "NOT achievable by ANY
+model-theoretic premise" is too strong as written; what is true is that a *small* S-TCR term is a hardness
+assumption and cannot be established model-theoretically. Related precision defect: the header's
+"NON-DEGENERACY ACHIEVED … `ThC` not constant" (`:83-84`, repeated in UPDATE 2026-07-25b) is the *counter*-axis
+only — the proven conclusion is `exists ps tw mm j j', ThC ps tw mm j <> ThC ps tw mm j'` (`:440-441`), while
+message-constancy holds at every counter.
+
+**"ALL CAPSTONE PREMISES" IS NOT ESTABLISHED — two independent holes.**
+1. `MODEL_JOINT` concludes `dfC = 8*n+r` but does **not** discharge the four `dfC <> …` separations; the only
+   receipt (`MODEL_dfC_separations_at_port_params`, `:368`) is on the **literal** integers 16/35/13. Worse, PART G's
+   own soundness argument (`:388-397`, "f/trh/pkco/trco remain entirely free") *assumes* those separations — the
+   file's own `MODEL_dfC_8np32_unsafe_at_n4` (`:375`) shows the guard is not automatic. The audit discharges the
+   **arithmetic obligation only**: `scratch/audit_separations_achievable.ec` (CERTIFIED-0-ADMIT) exhibits an `r`
+   with `0 <= r`, `CntrFT.card <= 2^r` and `8*n+r` missing all four widths, for the theory's abstract `n`, `len`,
+   `k` — so "a suitable `r` exists" is no longer a literal-parameter remark. **SCOPE, stated precisely (do not
+   overstate this — it is the auditor's own result):** it does NOT add the separations to `MODEL_JOINT`'s
+   conclusion (nobody has stated the combined lemma), and it does NOT touch Q1 — `dfC` is fixed by whatever
+   `emb_in` actually *is*, so the existential only tells a model-*builder* that an admissible width exists. The
+   meta-satisfiability step is unchanged.
+2. The **only** exhibited witness for the H-TREE-MULTI premise is
+   `capstone_real_premises_satisfiable` (`SphincsC10CapstoneWired.ec:740`) at
+   `(mkg_adv, mtree_openpre, mtree_trh, mtree_trco) = (0,1,0,0)` — which alone puts the capstone RHS at ≥ 1. It is
+   disclosed there as a satisfiability witness, but it means the composite "a model satisfying ALL capstone
+   premises **in which the bound has content**" fails on a second, independent axis. (`c <= p_tgts` and
+   `0%r <= mkg_adv` are likewise untouched by `MODEL_JOINT`.)
+
+**ATTACK ON THE ENLARGED PREMISE SET: no contradiction found.** New canary
+`scratch/audit_canary_partG_absurd.ec` — capstone premises + N1-N4 + PART G (i)-(iv) + the four separations ⊢ false
+— is **REJECTED**, with `audit_separations_achievable.ec` GREEN in the same batch and
+`audit_partG_degenerate.ec` GREEN on re-run as live-environment positive controls over the same premise set.
+Epistemic limit restated: a rejected canary means the selected tactics failed, not that no proof exists.
+
+**WHY THE DEGENERACY FINDING SURVIVES THE OBVIOUS REBUTTAL.** One could answer PROBE 1 with "your probe's own
+hypotheses may be contradictory, so its conclusions are vacuous". They cannot escape that way: PROBE 1's
+hypotheses are `MODEL_JOINT_on_actual_globals`'s (i)-(iv) **verbatim**. So *either* those hypotheses are
+satisfiable — in which case the exhibited witness is degenerate exactly as proven — *or* they are not, in which
+case `MODEL_JOINT` is itself vacuous and TRACK V's non-degeneracy claim establishes nothing. The finding holds on
+both branches.
+
+**Q1's stated impossibility is slightly overstated.** `SphincsC10Content.ec:63-67` says a machine-checked
+`clone … realize` model "cannot be one: EasyCrypt cannot re-interpret an already-declared op from inside the
+theory". True *from inside*; but EasyCrypt can clone `SPHINCS_PLUS` with a substituted `thfc` — the real blocker is
+**architectural**: the chain `require import`s the base (`WOTS_C_Real.ec:28`) instead of taking it as a clone
+parameter, so a substituted clone would live in a fresh namespace and would not be a model of the capstone as
+stated. The honest wording is "impossible without re-parameterising the WOTS+C seam", not "impossible in EasyCrypt".
+
+**TRACK B — the honesty holds; two defects found.**
+- The residual is accurate: `bridge_verify_sufficient` is conditional on the non-derivable, non-refutable
+  `clim_id`; "NO PROBABILITY TRANSFER IS PROVEN HERE"; the earlier over-claims are explicitly retracted; the
+  obstruction list (i)-(iv) is precise. Anchoring is genuine and was re-verified: `pkfromsig_cf` matches
+  `FORS_ES.ec:1629-1663` line by line, and the chain does call that procedure (`FxChain.ec:242`,
+  `GprocFORSC10.ec:307`, `RtopCSoundness.ec:272/432`); SECTION 8 is at the concrete `FTWES.g`, which
+  `GprocFORSC10.ec:127` substitutes for the abstract `F.g`. FINDING 1 and FINDING 2 were both re-verified against
+  the crate independently (`fors.rs:151` at `tree_idx=K-1, j=0` produces the same seven `make_adrs` arguments as
+  `hypertree.rs:226-227`/`:412`; `address.rs:22-41` is a deterministic serialiser, so the 32 bytes are identical).
+- **NEW, UNDISCLOSED CORRESPONDENCE DEFECT — the authentication-path list order is REVERSED.** Found independently
+  by both external reviewers, then verified at source: the crate's `auth_path[h]` is indexed from `h = 0` = the
+  **leaf-level** sibling (`fors.rs` `sign_fors_tree` writes `auth_path[node_h]` bottom-up;
+  `hypertree.rs:490-508` consumes `auth_path[0]` against the leaf), whereas EasyCrypt's `val_ap`
+  (`MerkleTrees.ec:24-36`) consumes the **head** of the list at the outermost `trh`, i.e. the **root** combination,
+  and `cons_ap` (`:12-22`) emits the top-level sibling first. `val_ap_trh` (`FORS_ES.ec:720-721`) adds no internal
+  reversal (`rev (int2bs a idx)` makes the *bits* MSB-first, matching root-first, so index significance lines up —
+  it is purely a list reversal: model `ap[j]` ↔ crate `auth_path[a-1-j]`). **Impact:** no proven lemma is
+  invalidated (every lemma is ∀-quantified over `apFORSTW`, and reversal is a bijection), but `wire_root`
+  (`:252-264`) is a transcription of `hypertree.rs` only *up to reversing each per-tree auth path*, and
+  "`psi` … is exactly what the crate's signer emits" (`:529-531`) is inexact. The header's meticulous
+  ADDRESS/BYTE-CORRESPONDENCE disclosure (`:125-133`) covers address packing and the message→index bit order but
+  **not** the auth-path element order. Given the file's stated purpose ("make that relation EXACT … instead of
+  prose", `:31-32`), this is the material Track-B finding.
+- **Internal contradiction:** SECTION 6's banner (`:487`) still reads "(the ITSR leg is UNCHANGED)" and `:499` still
+  says "the re-derivation … does not touch ITSRC10", both of which the file's own residual (`:112-119`) records as
+  **corrected/withdrawn** wording. The proven content is only `g_widx` / `predC_widx` — same op, not equal terms.
+- Minor: the file cites "GprocFORSC10.ec:140-146 realize clauses" for the `g` substitution; the substitution itself
+  is `op F.g <- FTWES.g` at `GprocFORSC10.ec:127` (140-146 are the `realize`s of the *other* `F.*` axioms).
+- Minor: "(i) SINGLE-INSTANCE: no obstruction" names the burned-setup-message freshness cost but never bounds it;
+  the formal message type carries no cardinality floor.
+
+**AXIOM CENSUS — no new axiom, and a broadened count.** Comment-stripped sweep over the two changed files for
+`axiom` / `declare axiom` / `hypothesis` / refined `const … as` / `op [ … ]` / `admit`: **all zero**, and every op
+they introduce is *defined* (no new abstract constants). New `scratch/audit_axcensus_broad.sh` reproduces the
+headline **18 plain `axiom`** declarations across the closure and additionally surfaces **8 `declare axiom`**,
+45 refined-type consts and 61 `op [ … ]` in the inherited base — so "18 axiom declarations" understates the
+inherited assumption surface (pre-existing, not introduced here). It also re-confirms that `predC` / `emb_in` /
+`thfc` appear in **no** axiom-like declaration anywhere in the closure.
+**Tooling defect found:** the committed `scratch/axclosure.sh` is not a sound census — its `require` regex misses
+`require (*--*) FORS_ES FL_SL_XMSS_MT_ES.` (`SPHINCS_PLUS.ec:12`), so it never visits the three biggest axiom
+sources in the base, and it does not strip comments (it reports comment prose as axioms). Use
+`audit_axcensus_broad.sh` instead.
+
+**CONCLUSION UNWEAKENED — verified.** `git` shows no chain file (including the capstone) was touched during either
+track wave; `EUFCMA_SPHINCS_PLUS_C10_CONTENTFUL`'s conclusion 1 is obtained by `exact hcap` from the unchanged
+capstone, so the RHS provably did not drift. The contentful theorem *adds* premises (N1-N4); it does not replace or
+weaken the capstone.
+
+**AUDIT VERDICT.** Both gates pass and both tracks are 0-admit with no new axiom; Track B's residual is honest and
+its rung is correctly reported. **But `nondegeneracy_established = FALSE`:** the exhibited witness is degenerate on
+the S-TCR(+C) axis (Th+C collapses to a function of the counter alone), and "all capstone premises" was not
+established (one hole reduced to its arithmetic core by `audit_separations_achievable.ec` but still absent from
+`MODEL_JOINT`'s conclusion, the other — the `mtree_openpre := 1` witness — untouched; Q1 unchanged in both
+cases). What the wave *did* establish, and it is real, is that the **specific mechanism** by which
+the LHS was proven identically zero is excluded at the actual globals, plus the genuinely new mathematics of
+`constsum_encoding_is_two_encodings`.
