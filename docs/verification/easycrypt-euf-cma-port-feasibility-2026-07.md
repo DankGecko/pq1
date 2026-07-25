@@ -4151,3 +4151,66 @@ different halves, and the resolution is the reduction-side framing above.
 
 **NEXT.** The WOTS swap is the larger, separate piece. Its two hard prerequisites are now written down rather
 than assumed: the game-hop-before-case-split ordering, and the `x* ∈ C` invariant that licenses M1.
+
+### 2026-07-26 — (i) GATE DEFECT FOUND+FIXED, (ii) C10 parameter triage = MONITOR + a NEW finding, (iii) IncEnc layer LANDED
+
+**(i) ⚠ THE GATE THAT UNDERPINS EVERY 0-ADMIT CLAIM IN THIS REPO HAD A HOLE — found, reproduced, FIXED.**
+`ec-certify.sh` reported **CERTIFIED-0-ADMIT for a proof of `false`**. The admit sweep matched `admit\b`, which does
+NOT match EasyCrypt's proof terminator **`admitted.`** (the trailing `t` is a word character). I reproduced it
+end-to-end: `lemma proof_of_false : false. proof. admitted.` compiled rc=0 and certified clean.
+ - **FIXED** (commit f75fead): match `admit(ted)?\b`. Verified BOTH directions — the canary is now REJECTED
+   (admit-tactics=1) and real proofs still certify unchanged.
+ - **NOT EXPLOITED — no prior result is invalidated.** A full comment-stripped scan of every file in drafts/ AND the
+   vendored FV-SPHINCSPLUS-EC proofs found **ZERO** uses of `admitted`. Every previous CERTIFIED-0-ADMIT claim, and
+   the 24/24 full-chain verification, stand.
+ - Canary kept as a PERMANENT regression test: `scratch/CANARY_gate_admitted.ec` MUST report NOT-CERTIFIED.
+ - LESSON (fourth of its kind this week, same family as T1/T2/T3): the gate is itself an artifact that must be
+   adversarially tested. A gate is only as good as its last canary.
+
+**(ii) C10 PARAMETER-MARGIN TRIAGE = MONITOR (the CiC question itself is NO-ACTION).**
+ - **THE CATEGORY QUESTION IS RESOLVED, and my "~105-bit randomness gap" was indeed a CATEGORY ERROR.** C10's WOTS
+   grind counter is a **DETERMINISTIC PUBLIC SEARCH INDEX**, not randomness: `for count in 0..10_000_000u32` returns
+   the FIRST hit (wots.rs:62), keyed on the PUBLIC pk_seed, transmitted in the signature (params.rs:76 "+4"), and
+   the verifier RE-CHECKS rather than re-searches (wots.rs:150-160; SPHINCsC10Asm.sol:165-170). Entropy ~0 bits, not
+   2^23.25. (Nuance kept: syntactically CiC's rho IS this count; what makes their eq(14) non-binding is the absent
+   chosen-message premise — WOTS signs signer-generated internal nodes — and that exemption needs its own proof.)
+ - **DECISIVE CALIBRATION:** NIST's own **SLH-DSA-SHA2-128s misses the same CiC requirements by MORE than C10 does**
+   (Req 1: short 3.32/9.64 vs C10's 2.32/8.64; Req 3: short 78.45 vs C10's 31.75). A NIST-standardized Cat-1
+   parameter set missing these by tens of bits means failing them is NOT evidence of a C10-specific deficit.
+ - **NO ATTACK IMPLIED.** Forgery needs EXACT equality of the 43-digit vector (constant sum + domination => equality;
+   both verifiers enforce sum==205). Free choice of count* gives unlimited trials, but each is an independent 2^-129
+   shot at an ADRS-bound target, so multi-target amplification is STRUCTURALLY ABSENT. Both reviewers hunted a
+   shortcut and found none. C10's parameters are BESPOKE (not from the paper's Table 2) and trace to an upstream
+   Fluhrer-Dang sweep; T=205 buys verifier work 150->96 steps, a deliberate on-chain gas trade.
+ - **⚠ THE NEW FINDING (surfaced while verifying, and NOT covered by the existing accepted residual).** The
+   **bootstrap/master key is CHAIN-INDEPENDENT** (`master = HMAC-SHA512("sphincs-c6-v1", bip39_seed)`, no chain_id —
+   domain/src/lib.rs:537,556-566) while **`bootstrapUses` is PER-CHAIN** (per contract instance,
+   PQMultiOwnable.sol:22). So C chains permit **C x 65,536 signatures on ONE key**. Its FORS+C few-time term:
+   130.57 bits at 2^16, **128.00 at q~99,376 (~1.5 chains)**, 126.16 at 2 chains, 121.02 at 4 chains.
+   CLAUDE.md's margin claim — "MAX_BOOTSTRAP_USES = 65,536 (~2^32 txns/chain, well inside the C10 birthday margin)"
+   — is stated PER CHAIN and does not account for cross-chain key reuse, while cross-chain address stability is a
+   CORE design goal (invariant #6). I verified this is NOT covered by the accepted residual
+   (docs/VULN-getinitcode-bootstrap-fewtime-oracle.md): that doc concerns UNBOUNDED UNCOUNTED signatures via
+   GET_INIT_CODE and is accepted because the harvest is infeasible ("measured in centuries"); a grep for
+   cross-chain/per-key/multi-chain returns NOTHING. **PROPORTIONATE READING: bootstrap signatures are rare in
+   practice (slot rotations), so realistic exposure sits far below the cap — this is a CLAIM-ACCURACY and
+   cap-structure issue, not a demonstrated weakness. But the documented margin rationale should be corrected, and
+   whether a chain-bound bootstrap key or a global cap is wanted is an OWNER decision.** Slot keys are unaffected
+   (they ARE chain-bound, so their 2^16 cap is a true per-key cap: 130.57 bits).
+ - Also corrected in passing: a reviewer's claimed "2^122 multi-target on top-layer WOTS keys" was REFUTED at source
+   (layer-1 WOTS always signs the FIXED root of its layer-0 subtree, so reuse reproduces an identical signature —
+   zero new targets); GPT-5.6 independently concurred.
+
+**(iii) THE INCOMPARABLE-ENCODINGS LAYER IS MECHANIZED** — `drafts/IncEnc.ec`, CERTIFIED-0-ADMIT (auditor's own
+forced recompile; .eco mtime moved; leaf status independently verified). Def 9 transcribed PARAMETRICALLY in v, w
+and the code C with NO admissibility restriction; Construction 6's target-sum code; and **Lemma 7's incomparability
+half GENUINELY PROVEN for ARBITRARY (v,w,T)** via a real list induction (`dominated_eqsum_eq`), not smt-forced.
+**DEPLOYED C10 GEOMETRY IS ADMISSIBLE AND NON-VACUOUS**: instantiated at v=43, w=3, T=205 with `c10_code_nonempty`
+and `c10_code_two_distinct` (two explicit 43-digit witnesses summing to 205) — closing the vacuity trap that this
+project has hit repeatedly. The w-notation trap is pinned in machine-checked code (`c10_base : 2^c10_w = 8`), and
+`c10_def9_vs_mm45_nondeg` mechanizes the quantification gap (MM45's shape forces injectivity; Def 9 does not).
+Def 11 (T-COLL-RES) is STATED as an executable game with 7 modelling obligations itemised, and the ordering
+requirement recorded (T-COLL-RES must be discharged in a game hop BEFORE any case split).
+HONEST SCOPE: this is the ENCODING LAYER ONLY. The entire computational leg is absent — T-COLL-RES advantage at C10
+unproven, Lemma 8 not ported, Lemma 7's error/delta half not ported (that is where eps-uniformity and the grind
+budget enter). It is NOT a claim that C10 is secure, and NOT the WOTS swap.
