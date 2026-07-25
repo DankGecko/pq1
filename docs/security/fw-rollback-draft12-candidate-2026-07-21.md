@@ -235,17 +235,17 @@ After this draft was written, Markus Haas pushed 9 commits to
 **What landed.**
 
 - **CLAUDE.md invariant #10 — "verify-once-physically trust chain"
-  (commit `8a93aaa5`, citing owner decision 2026-07-21):** RDP-0 ship →
+  (commit `825b26ec`, citing owner decision 2026-07-21):** RDP-0 ship →
   user verifies over SWD before first power → WRP'd FSBL fingerprint →
   RDP-2 self-lock freezes option bytes → the measuring code is physically
   immutable → boot-time 8-word fingerprint proves installed firmware
   forever. Binds: no runtime writes to the FSBL range, WRP-set strictly
   before RDP-2, FSBL owns the display in its fingerprint window,
   monolithic images bench-only. *This is §1's invariant, formalized.*
-- **`docs/provisioning/first-boot-requirements.md`** (commits `51388ce0`,
-  `afaa4c36`, amended by `38f6bedb`): normative RFC-2119 device-side spec
+- **`docs/provisioning/first-boot-requirements.md`** (commits `d872395b`,
+  `650af535`, amended by `44941ccf`): normative RFC-2119 device-side spec
   for the `rdp2-self-lock` flow, plus the exact factory input state F1–F8.
-- **Implementation `38f6bedb`**: closes #443 (ship-blocker); wires
+- **Implementation `44941ccf`**: closes #443 (ship-blocker); wires
   R2.1–R2.4 in `secure/src/first_boot/` with FI-sentinel gating
   (`rdp_burn_authorized` requires both the confirm verdict AND the
   sentinel word), per-`ObField` distinct error codes, rotation hardening,
@@ -310,3 +310,45 @@ satisfied on every condition.
    2026-07-21". CLAUDE.md is the project contract: confirm that entry is
    the owner ratifying Markus's formalization (it matches this
    conversation, so this is a check-the-box item, not a re-litigation).
+
+---
+
+## UPDATE 2026-07-23 — the five deltas, resolved (colleague-agent pass, verified)
+
+Markus's agent resolved all five deltas (output reviewed and
+fact-checked here: the replacement SHAs below resolve and match subjects;
+`cmd_fw_commit.rs:307` is the post-rewrite `otp::bump_to` anchor; the
+2026-07-22 history rewrite invalidated the four pre-rewrite SHAs, now
+repaired in this section — `8a93aaa5→825b26ec`, `51388ce0→d872395b`,
+`afaa4c36→650af535`, `38f6bedb→44941ccf`).
+
+1. **tz-1 — KEEP, decided now** (supersedes this draft's "defer to
+   freeze review"). FSBL-resident fail-only tripwire: read
+   OPTR/WRP/SECWM, compare against compiled-in constants, halt-no-entropy
+   on mismatch, **never write** (~200 B of the 38,912 B budget). The
+   asymmetry settles it: including costs 200 B; excluding is
+   irreversible once the FSBL freezes — and the FSBL is the only code
+   that survives updates, so the check must live there. #366's tz-1 row
+   is re-scoped to "post-lock FI tripwire, FSBL-resident,
+   verify-never-heal". *Coordinator refinement:* halt only on
+   **persistent** mismatch (double-read with a gap, house FI idiom) — a
+   transient read fault must not brick a good device.
+2. **Floor — separate track, as this draft recommended.** Owner declines
+   `RecoverySameEpoch` and `FloorBoundAccepted` (availability, not
+   safety; RMA is cheaper than two state-machine subtrees pre-scale);
+   freeze the 1.1+1.2 digest and run the dual exact-digest review (the
+   blocker since 2026-07-14 — note the review lineup changed on master:
+   `589fb771` replaces Claude Opus 4.8 with Claude Opus 5); §13
+   sacrificial-silicon only after the review lands. The nonconforming
+   runtime bump stays in place with its note (now `cmd_fw_commit.rs:307`).
+3. **OPEN gates — one tracker.** Every gate in
+   `first-boot-provisioning.md` gets a GitHub issue (doc-resident lists
+   are the retired pattern); the two bench items fold into #398–#402;
+   BENCH-4-before-freeze stands.
+4. **Companion copy — just write it** (ceremony one-way wording, RDP-0
+   SWD-verification how-to, "post-lock genuineness = attestation #249
+   when it lands"). Half a day; no design question left.
+5. **Attribution — RATIFIED** (owner-side confirmation via the recorded
+   2026-07-21 conversation). Durable fix adopted as habit: owner-decision
+   citations point at a written record (spec or decision issue), never a
+   chat log.
