@@ -3049,3 +3049,74 @@ with the **predC-restricted** version — for which `constsum_encoding_is_two_en
 realizing it). Pre-existing base TCB, not introduced here; the existential form is free of it. **No new axiom is
 declared anywhere in this wave**; the four added premises are explicit, inspectable hypotheses of a *new* theorem,
 and the capstone's own premise list is unchanged.
+
+### 2026-07-25 — TRACK B: the VIRTUAL→WIRE FORS+C bridge is MECHANIZED (partial), and TWO findings
+
+`c10-eufcma-port/drafts/FORSC10_Wire.ec` — CERTIFIED-0-ADMIT, **leaf file** (it `require`s the chain and nothing
+requires it, so hazard T2 does not apply; the whole-chain gate was re-run anyway → **GATE PASS**). 7 canaries
+REJECTED + a two-sided GREEN positive control over all five headline lemmas.
+
+**THE ANCHOR.** `pkfromsig_cf` gives a closed form (`phoare … = 1%r`) for `FTWES.FL_FORS_ES.pkFORS_from_sigFORSTW`
+(FORS_ES.ec:1629) — the procedure FxChain.ec:242 / GprocFORSC10.ec:307 / RtopCSoundness.ec:272 actually verify
+against. Without it every statement below would be about ops we invented rather than about the modelled object.
+
+**THE GAP, NOW EXACT INSTEAD OF PROSE.** The model climbs an `a`-level auth path for all k trees; the crate
+(`sphincs-c10/src/params.rs:63-73`, signer `hypertree.rs:223-228`, verifier `:410-414`) sends k secrets + (k−1)
+auth paths and computes the K-th root as ONE leaf-hash of the wire value. Proven:
+ - `wire_virt_prefix` — trees 0..k−2 reconstruct **pointwise identically** (the gap is not there);
+ - `wire_virt_last` — the model's k-th root is the a-level **climb** of the wire's k-th root, i.e. **the wire's
+   k-th root IS the model's k-th LEAF**. That single equation is the whole delta;
+ - `bridge_{pkFORS,verify}_sufficient` — the CONDITIONAL bridge (mechanized form of 2022/778 §4.1.1 prose). Its
+   hypothesis `clim_id` is **not derivable**: `thfc` (SPHINCS_PLUS.ec:434) is declared with zero axioms. It is also
+   **not refutable** (`thfc := const` validates it) — the honest claim is non-derivability, not falsity;
+ - `psi_wire_{root,pkFORS}` — unconditional model→wire: `pkFORS_W = trco(R_0‖…‖R_{k-2}‖f R_{k-1})` versus
+   `pkFORS_V = trco(R_0‖…‖R_{k-1})`.
+
+**WHAT CHANGED AFTER EXTERNAL REVIEW (GPT-5.6 + Kimi K3, both run, both convergent).** The first version claimed
+"no black-box reduction wire ≤ model exists in the obvious shapes, because a reduction holding only pkFORS_V cannot
+compute pkFORS_W". **That was WRONG and is retracted.** A model signature reveals ALL k roots (each tree carries
+secret + auth path), so a reduction can burn ONE signing query, reconstruct every `R_i`, present `pkFORS_W`,
+simulate wire signatures exactly via `psi`, and convert a wire forgery. Two new sections mechanize its core:
+ - **SECTION 7** `splice_root_last_portable` — the saved last-tree opening is **message-independent** across any
+   two +C-forced-zero messages (this is what makes ONE setup query enough; it is the mechanized form of "in the
+   last tree we always open the same leaf"). `splice_pkFORS_transfer` — prefix agreement ⇒ the spliced model
+   signature reconstructs the honest MODEL pkFORS, i.e. is a valid model forgery. `trco_case` names the collision
+   branch so it cannot be silently dropped.
+ - **SECTION 8** `prefix_locator` — at the concrete `FTWES.g`, **every non-coverage forgery has an uncovered tree
+   among 0..k−2** (k ≥ 2). So ITSR hardness is never charged to the last tree — the only tree where the two schemes
+   differ. (Stated concretely on purpose: the abstract FORS_C10 axioms do not pin the i-th tuple's tree label, which
+   Kimi independently identified as the step that would break an abstract version.)
+
+**WHERE THE OBSTRUCTION ACTUALLY IS** (revised, both reviewers): *not* the pk mismatch. (i) single-instance — no
+obstruction; (ii) **Gproc multi-instance** — the public key is a POOL of *compressed* pkFORS values and routing
+(`edivz (Index.val idx) l'`, `mk` sampled inside the oracle) is unsteerable, so the reduction cannot even *present*
+the wire public key without a coupon-collector blow-up or an instance guess; (iii) **composed scheme** — the
+hypertree WOTS-signs the pkFORS VALUE, so a model signature on `trco(..,R_{k-1})` cannot be repointed to
+`trco(..,f R_{k-1})`. Also: extraction is **not** pure EUF ≤ EUF (model-forgery ∨ trco collision ∨ last-climb f/trh
+collision). Withdrawn as well: "the ITSR obligation is UNCHANGED" → the ITSRC10 **game schema** is reusable, the
+concrete probability terms are not identified; and "the last-tree hash leg is strictly easier" → it is an *absence
+of a subcase*, not a proved assumption ordering.
+
+**FINDING 1 — the crate does NOT implement the paper's construction (spec divergence + performance).** Paper
+(`paper-nist-pqc2022.txt:518-546`): the signer *need not compute the last tree at all*, and the last compressed
+value is the leaf-0 hash. Crate: computes the FULL last tree (`fors.rs:136-182`, 2048 PRF + 2048 `th` + 2047
+`th_pair` ≈ 6.1k SHA-256 per signature — precisely the saving the paper claims) and then hashes that root at a leaf
+address. Signer and verifier agree with each other, so this is **not** a security defect and **not** an interop
+break; it is a spec divergence plus a self-inflicted ~6.1k-hash cost. It is also an assurance gap: neither the paper
+argument nor the current virtual EasyCrypt theorem directly covers this third shape. (Silver lining: because the
+wire value IS the model's `R_{k-1}`, `psi` is faithful — a cheaper choice would make `pkFORS_W` a *third* function
+of the secret key and change the bridge's shape again.)
+
+**FINDING 2 — the wrap tweak is NOT domain-separated** (flagged independently by BOTH reviewers, then verified
+directly against the crate). `hypertree.rs:226-227` / `:412` build the wrap address
+`make_adrs(0, ht_idx, ADRS_FORS_TREE, K-1, 0, 0, 0)`; `fors.rs:151` builds the last tree's leaf-0 address as
+`make_adrs(0, ht_idx, ADRS_FORS_TREE, tree_idx=K-1, 0, 0, j=0)` — the **same 32 bytes**. So `th` is evaluated at one
+`(seed, ADRS)` on two different inputs: the last tree's leaf-0 SECRET and its ROOT. Classification (both reviewers,
+concurred): a **proof** red flag, not a demonstrated attack — but the multi-target tweakable-hash reductions
+(SM-DT-TCR / OpenPRE) index targets **by tweak**, so a wire-shape re-derivation carries two targets at one tweak and
+cannot reuse the address-uniqueness discipline unmodified. A cleaner design wraps at the root address (h = a).
+
+**RESIDUAL (precise).** No probability transfer is proven. Blocking, in order: the Gproc multi-instance pool/routing
+obstruction; the composed-scheme WOTS binding; the keygen distributional hop (the crate's last wire value is a
+`th_pair` output — it equals the model's `R_{k-1}`, but the model's NPRF keygen samples cube elements uniformly);
+and the address/bit-order correspondence, which is assumed throughout this port and is not mechanized here.
