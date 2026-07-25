@@ -39,7 +39,6 @@ override _FV_INHERITED_BASH_ENV := $(value BASH_ENV)
 override _FV_INHERITED_ENV := $(value ENV)
 override _FV_INHERITED_MAKEFILES := $(value MAKEFILES)
 override _FV_MAKEFILE_LIST_AT_ENTRY := $(value MAKEFILE_LIST)
-override _FV_MAIN_MAKEFILE := $(abspath $(lastword $(_FV_MAKEFILE_LIST_AT_ENTRY)))
 override _FV_MAKEFLAGS_ORIGIN := $(origin MAKEFLAGS)
 override _FV_MAKE_SHORT_FLAGS := $(if $(filter -%,$(firstword $(MAKEFLAGS))),,$(firstword $(MAKEFLAGS)))
 override _FV_MAKE_EVAL_FLAGS := $(value -*-eval-flags-*-)
@@ -68,6 +67,19 @@ $(error refusing inherited BASH_ENV for verification Makefile)
 endif
 ifneq ($(strip $(_FV_INHERITED_ENV)),)
 $(error refusing inherited ENV for verification Makefile)
+endif
+# GNU Make appends each parsed makefile to MAKEFILE_LIST itself (origin
+# `file`).  An `override MAKEFILE_LIST := ...` in an earlier `-f` file (origin
+# `override`) or a command-line `MAKEFILE_LIST=...` assignment (origin
+# `command line`) outranks that append and freezes the list: the word-count
+# check below then sees one word while the caller fully controls every
+# MAKEFILE_LIST-derived fact.  Reject a noncanonical origin before the value
+# is trusted.  An environment-seeded MAKEFILE_LIST self-heals to origin `file`
+# with the correct value on the first internal append, so documented
+# invocations (`make`, `make -C contracts/verification <target>`) are
+# unaffected.
+ifneq ($(origin MAKEFILE_LIST),file)
+$(error refusing caller-mutated MAKEFILE_LIST (origin $(origin MAKEFILE_LIST)) for verification Makefile)
 endif
 ifneq ($(words $(_FV_MAKEFILE_LIST_AT_ENTRY)),1)
 $(error refusing additional parsed makefiles: $(_FV_MAKEFILE_LIST_AT_ENTRY))
@@ -648,7 +660,14 @@ endif
 # this parser process. This is still evaluated while the main Makefile is being
 # parsed, before GNU Make opens any later explicit makefile. Python isolated
 # mode also removes ambient module/startup injection from this trust decision.
-override _FV_MAKE_ARGV_GUARD := $(shell /usr/bin/python3 -I '$(dir $(_FV_MAIN_MAKEFILE))scripts/check_make_argv.py' /proc/$$PPID/cmdline)
+# The checker path is a literal repository-relative path resolved against this
+# Make process's real working directory: it is deliberately NOT derived from
+# MAKEFILE_LIST (caller-mutable until the origin and word-count guards above
+# have passed) or from $(CURDIR) (a command-line-assignable Make variable, so a
+# caller could relocate the anchor without changing the process cwd).  If the
+# working directory is not the reviewed directory the open fails, the result is
+# not `ok`, and this fails closed.
+override _FV_MAKE_ARGV_GUARD := $(shell /usr/bin/python3 -I 'scripts/check_make_argv.py' /proc/$$PPID/cmdline)
 ifneq ($(_FV_MAKE_ARGV_GUARD),ok)
 $(error refusing multiple -f/--file makefiles for verification Makefile ($(_FV_MAKE_ARGV_GUARD)))
 endif
@@ -962,6 +981,29 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -f $$out $$startup; \
 	echo "  ok: MAKEFILES/eval/trailing--f parser channels cannot suppress verification or extraction"
+	+@out=$$(mktemp /tmp/pq-extraction-mflist-selftest.XXXXXX); \
+	evildir=$$(mktemp -d /tmp/pq-extraction-evil-first.XXXXXX); \
+	mkdir -p $$evildir/scripts; \
+	printf 'print("ok")\n' >$$evildir/scripts/check_make_argv.py; \
+	printf 'override MAKEFILE_LIST := %s/Makefile\n.IGNORE:\n' "$$evildir" >$$evildir/first.mk; \
+	if $(_FV_GNU_MAKE) --no-print-directory -f $$evildir/first.mk -f Makefile -n \
+	    verify-extracted >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: an earlier -f makefile froze MAKEFILE_LIST and bypassed the parser guards" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
+	elif ! grep -Fq 'refusing caller-mutated MAKEFILE_LIST ' $$out; then \
+	  echo "CONTROL FAILURE: earlier--f MAKEFILE_LIST override was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
+	fi; \
+	if $(_FV_GNU_MAKE) --no-print-directory MAKEFILE_LIST=$$evildir/Makefile -f Makefile -n \
+	    verify-extracted >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: a command-line MAKEFILE_LIST assignment bypassed the parser guards" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
+	elif ! grep -Fq 'refusing caller-mutated MAKEFILE_LIST ' $$out; then \
+	  echo "CONTROL FAILURE: command-line MAKEFILE_LIST manipulation was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
+	fi; \
+	rm -rf $$out $$evildir; \
+	echo "  ok: earlier--f override and command-line MAKEFILE_LIST manipulation are CAUGHT"
 	+@out=$$(mktemp /tmp/pq-extraction-make-override-selftest.XXXXXX); \
 	if $(_FV_GNU_MAKE) --no-print-directory MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: caller-overridden MAKE bypassed authoritative extraction replay" >&2; \
@@ -1104,6 +1146,16 @@ verify-extracted: ## S33 Aeneas-extracted build + axiom-discipline
 	@if python3 scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_manifest.txt /tmp/pq_axiomcheck_neg.out >/dev/null 2>&1; then \
 	  echo "FAIL: the Evil:False negative control PASSED the closure gate — the gate is VACUOUS"; exit 1; \
 	else echo "OK: closure gate correctly REJECTS the Evil:False canary (per-headline allowlist enforcement is live)"; fi
+	@# WIRED-IN NEGATIVE CONTROL 2: a SHRUNK closure (a pinned axiom silently
+	@# dropped from one headline while every name stays listed) MUST be rejected
+	@# — the manifest pins the exact non-kernel closure, not a superset of it.
+	@echo "=== NEGATIVE CONTROL: an under-reported (shrunk) headline closure MUST be rejected by the closure gate ==="
+	@python3 -c "import re; t=open('/tmp/pq_axiomcheck.out').read(); ax='sha256_pure_bytes'; i=t.find(ax); assert i>=0, 'control setup: expected a pinned axiom in the live dump'; t2=t[:i]+t[i:].replace(ax,'',1); t2=re.sub(r',\s*,',',',t2); t2=re.sub(r'\[\s*,','[',t2); t2=re.sub(r',\s*\]',']',t2); open('/tmp/pq_axiomcheck_shrunk.out','w').write(t2)"
+	@if python3 scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_manifest.txt /tmp/pq_axiomcheck_shrunk.out >/tmp/pq_axiomcheck_shrunk.msg 2>&1; then \
+	  echo "FAIL: the shrunk-closure negative control PASSED the closure gate — the pin is superset-only"; exit 1; \
+	elif ! grep -Fq 'no longer carries pinned axiom' /tmp/pq_axiomcheck_shrunk.msg; then \
+	  echo "FAIL: shrunk closure was rejected for the WRONG reason"; cat /tmp/pq_axiomcheck_shrunk.msg; exit 1; \
+	else echo "OK: closure gate correctly REJECTS an under-reported (shrunk) headline closure"; fi
 	@echo "OK: extracted/ axiom-discipline gate passed — per-headline closure verified, no sorryAx, negative control has teeth"
 	@echo "NB: FormatDecimalSpec (M7 WYSIWYS, ~42 GB kernel-TC) is CARVED OUT of this"
 	@echo "    16 GB-safe gate — verify it with 'make verify-extracted-heavy' on ≥48 GB RAM."

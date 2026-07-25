@@ -22,7 +22,9 @@ ignored). This is BIDIRECTIONAL and fails closed:
     someone added without disclosing its closure — fails); AND
   * every manifest entry MUST appear in the dump (a DROPPED headline, or a dump
     truncated by an elaboration error, fails); AND
-  * each headline's live closure ⊆ {kernel} ∪ its listed extras.
+  * each headline's live non-kernel closure == its listed extras (EXACT pin:
+    an undisclosed axiom fails, and a pinned axiom silently dropped from the
+    live closure — a shrunk receipt — also fails).
 This gives the permanent `Evil:False` negative control its teeth: the canary
 headline is not in the manifest, so the gate is RED for a reason the old
 `grep sorryAx` could never see.
@@ -93,6 +95,12 @@ def run_manifest_mode(manifest_path: str, dump_path: str) -> int:
         if extra:
             fails.append(f"headline `{name}` closure carries disallowed axiom(s) {sorted(extra)} "
                          f"(manifest allows only {sorted(manifest[name])} beyond the kernel triple).")
+        dropped = manifest[name] - axset
+        if dropped:
+            fails.append(f"headline `{name}` closure no longer carries pinned axiom(s) {sorted(dropped)} "
+                         f"— the manifest pins the EXACT non-kernel closure: a shrunk closure means the "
+                         f"theorem or its model changed (same-name substitution?) and the receipt must "
+                         f"be consciously re-pinned.")
     for name in manifest:
         if name not in live:
             fails.append(f"MISSING headline `{name}` — listed in the manifest but absent from the "

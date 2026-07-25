@@ -129,6 +129,37 @@ MANDATORY_COROLLARIES = {
     "SphincsCVerify.Wallet.Invariants.factory_requires_bootstrap_sig",
     "SphincsCVerify.Wallet.Invariants.eip1271_forbids_bootstrap",
 }
+# C11 — EXACT `closures` identity pin (2026-07-25, closure-review residual):
+# the mandatory floors above require only that the load-bearing subset be
+# present, and C1 iterates only ledger-declared entries — so a ledger edit that
+# DELETED a non-mandatory tracked identity (shrinking the pinned receipt from
+# 18 theorems to 17) sailed through C0/C1/C5 with zero failures (reproduced:
+# dropping `SphincsCVerify.Crypto.honest_sig_not_forgery`).  Pin the exact key
+# set: adding, renaming, or deleting a tracked closure identity must
+# consciously update this second authoritative copy — the same discipline as
+# the proof-mutation corpus digest.  (The reverse direction — live dump records
+# beyond these keys — is deliberately NOT pinned: dump_axioms.lean prints ~79
+# further audit-context theorems on purpose.)
+EXPECTED_CLOSURES_KEYS = {
+    "SphincsCVerify.Crypto.honest_sig_not_forgery",
+    "SphincsCVerify.Crypto.keyHistory_empty_signs_nothing",
+    "SphincsCVerify.Spec.Theorems.deployed_executeBatch_requires_prior_token",
+    "SphincsCVerify.Spec.Theorems.deployed_execute_requires_prior_token",
+    "SphincsCVerify.Spec.Theorems.executeBatch_faithful",
+    "SphincsCVerify.Spec.Theorems.factory_squat_defence_bytecode",
+    "SphincsCVerify.Spec.Theorems.theft_free",
+    "SphincsCVerify.Spec.Theorems.theft_free_bytecode",
+    "SphincsCVerify.Spec.Theorems.theft_free_bytecode_reachable",
+    "SphincsCVerify.Spec.Theorems.theft_free_with_calldata_binding",
+    "SphincsCVerify.Wallet.Invariants.cannot_remove_bootstrap",
+    "SphincsCVerify.Wallet.Invariants.create2_address_chain_independent",
+    "SphincsCVerify.Wallet.Invariants.eip1271_forbids_bootstrap",
+    "SphincsCVerify.Wallet.Invariants.factory_requires_bootstrap_sig",
+    "SphincsCVerify.Wallet.Invariants.initialize_called_exactly_once",
+    "SphincsCVerify.Wallet.Invariants.owner_set_nonempty_after_init",
+    "SphincsCVerify.Wallet.Invariants.reachable_implies_combinedCap",
+    "SphincsCVerify.Wallet.OffchainBinding.offchain_nested_disjoint_from_userop_digest",
+}
 # The flagship `theft_free` trust base (A1..A5, non-kernel). Deleting any of
 # these from `axioms[]` silently shrinks the advertised assumption set.
 MANDATORY_AXIOM_NAMES = {
@@ -469,6 +500,26 @@ def check_mandatory_registry(ledger: dict) -> list[str]:
     return fails
 
 
+def check_closures_identity_pin(ledger: dict) -> list[str]:
+    """C11 — the exact `closures` key set MUST equal EXPECTED_CLOSURES_KEYS.
+    C0's floors only police a mandatory subset and C1 only iterates declared
+    entries, so without this pin a quiet deletion of any other tracked identity
+    shrinks the pinned evidence receipt while the gate stays green."""
+    keys = set(ledger.get("closures", {}))
+    if keys == EXPECTED_CLOSURES_KEYS:
+        return []
+    missing = sorted(EXPECTED_CLOSURES_KEYS - keys)
+    extra = sorted(keys - EXPECTED_CLOSURES_KEYS)
+    parts = []
+    if missing:
+        parts.append("DELETED " + ", ".join(missing))
+    if extra:
+        parts.append("UNPINNED-NEW " + ", ".join(extra))
+    return [f"C11 closures identity drift ({len(keys)} keys, expected "
+            f"{len(EXPECTED_CLOSURES_KEYS)}) — {'; '.join(parts)}. Adding, renaming, or "
+            f"deleting a tracked closure identity must consciously update EXPECTED_CLOSURES_KEYS."]
+
+
 # --------------------------------------------------------------------------- #
 # source-ident harvest (for C4)
 # --------------------------------------------------------------------------- #
@@ -585,8 +636,17 @@ def self_test() -> int:
     ax_no_a5 = [a for a in mand["axioms"] if a["name"] != "SphincsCVerify.Crypto.EUF_CMA_SPHINCSplusC"]
     cases.append(("C0 flagship axiom pruned", check_mandatory_registry({**mand, "axioms": ax_no_a5})))
 
+    # C11 EXACT-IDENTITY NEGATIVES — deleting a NON-mandatory tracked closure
+    # (the reproduced 18->17 shrink) or adding an unpinned one must both fire.
+    full_closures = {k: [] for k in EXPECTED_CLOSURES_KEYS}
+    shrunk_closures = {k: v for k, v in full_closures.items()
+                       if k != "SphincsCVerify.Crypto.honest_sig_not_forgery"}
+    cases.append(("C11 non-mandatory closure deleted", check_closures_identity_pin({"closures": shrunk_closures})))
+    cases.append(("C11 unpinned closure added", check_closures_identity_pin({"closures": {**full_closures, "X.evil": []}})))
+
     # control: a CLEAN input must NOT fire (guards against always-fire vacuity)
-    clean = check_closures(ledger, live_ok) + check_mandatory_registry(mand)
+    clean = check_closures(ledger, live_ok) + check_mandatory_registry(mand) \
+        + check_closures_identity_pin({"closures": full_closures})
 
     ok = True
     for label, result in cases:
@@ -679,6 +739,7 @@ def main() -> int:
 
     fails: list[str] = []
     fails += check_mandatory_registry(ledger)
+    fails += check_closures_identity_pin(ledger)
     fails += check_closures(ledger, live)
     fails += check_lint_fv_crosscheck(ledger, lint_text) if lint_text else \
         ["C2 lint_fv_invariants.sh not found — cannot cross-check the closure pin."]
