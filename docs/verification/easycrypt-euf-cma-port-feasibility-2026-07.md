@@ -3743,6 +3743,11 @@ own criterion. **That is worth an independent investigation on the ENGINEERING s
 especially the randomness gap, which is large and concerns how the counter is drawn rather than how many chains
 there are. FLAGGED, NOT CONCLUDED.
 
+**⇒ CONCLUDED 2026-07-25h.** The "FLAGGED, NOT CONCLUDED" parameter-margin question below was triaged on the
+security-engineering side and closed **NO-ACTION** — see [UPDATE 2026-07-25h](#update-2026-07-25h--track-a-security-engineering-triage-of-the-cic-parameter-margin-question-verdict-no-action-with-a-disclosed-thin-margin-and-one-pointer)
+at the end of this file. Headline: the CiC Parameter Requirements are missed by **more** by NIST's own
+SLH-DSA-SHA2-128s on every comparable axis, and the "~105-bit randomness gap" is a layer/category error.
+
 **TWO NOTATION TRAPS recorded so nobody re-derives them wrong:**
  1. In this literature `w` is BITS PER CHUNK. C10's base-8 Winternitz is their **w = 3**, not w = 8. Reading their
     "w=8" rows as C10 is a category error (their w=8 is base-256).
@@ -3756,3 +3761,198 @@ CITED, PEER-REVIEWED FRAMEWORK rather than a bespoke weakening: re-base the WOTS
 a T-COLL-RES assumption (a new, named, inspectable ledger entry). The open question it surfaces -- C10's v*w = 129
 vs the framework's 131.32/137.64, and the 2^23.25 grind randomness -- is a QUESTION ABOUT THE DEPLOYED PARAMETERS
 and should be triaged separately from the verification work.
+
+---
+
+## UPDATE 2026-07-25h — TRACK A: security-engineering triage of the CiC parameter-margin question. **VERDICT: NO-ACTION** (with a disclosed thin margin and one pointer)
+
+This closes the item 25g raised and explicitly left open ("FLAGGED, NOT CONCLUDED"). It is a triage of the
+**shipped signer**, not of the proof. Primary sources read directly: the CiC paper PDF (fetched from
+`https://cic.iacr.org/p/2/1/13/pdf`, §6 pp. 28-30), the SPHINCS+C paper (`paper-nist-pqc2022.txt`), and the
+deployed Rust/Yul code. All arithmetic recomputed here from scratch.
+
+**HEADLINE.** The CiC Parameter Requirements are a *sufficient condition for that framework's proof to deliver
+its stated bound*, and they bundle reduction-tightness/union-bound losses that **no deployed Category-1
+hash-based signature satisfies — including NIST's own SLH-DSA-SHA2-128s.** On both requirements that can be
+evaluated for a Winternitz layer, **C10 misses by strictly less than SLH-DSA-SHA2-128s does.** No attack is
+implied, no deployed number falls below the Cat-1 floor, and the headline "~105-bit randomness gap" is a
+**layer/category error**. No parameter change is warranted.
+
+### Q1 — What C10 actually claims
+
+`n = 16` ⇒ **128-bit / NIST Category 1** for the signature scheme. Sources:
+- `sphincs-c10/src/params.rs:19` (`pub const N: usize = 16;` — "Security parameter: n = 128 bits").
+- `contracts/verification/lean/SphincsCVerify/Spec/Params.lean:30-32` — "n = 16 means 128-bit collision
+  resistance, i.e. SPHINCS+-128s class."
+- `docs/archive/work-todo-retired-2026-07-19.md:1634` — the recorded decision: "`SIGNATURE_LEN = 4008`,
+  `N = 16` ⇒ **128-bit security**, NIST Category 1", with Cat-3 rejected because it re-bases every CREATE2
+  address (launch invariant #6).
+- `README.md:218`, `docs/security/threat-model.md:174` — the **separate** SE-bus residual (Grover-2⁶⁴ on
+  AES-128 session keys, physical tap required) is described as sitting at "the identical floor SPHINCS+C10's
+  n=16 parameters sit at". **These are two different claims about two different subsystems** that happen to
+  share the Cat-1 floor; the bus residual says nothing about the signature scheme and vice versa.
+
+### Q2 — Where the parameters came from: **bespoke, for a stated reason**
+
+Not from the SPHINCS+C paper's tables. `paper-nist-pqc2022.txt:1015` Table 2 lists six sets, all with
+`h ∈ {63,64,66}` and `d ∈ {11,16,21}`; **none has `h=18, d=2`**, and none has C10's `(a=11, k=13, w=8, l=43)`.
+The paper states `bitsec` 128/192/256 **for its own sets only**. `Spec/Params.lean:20-23` already records this:
+"The instance encoded here is **non-standard** (not one of the table-2 parameter sets in the PQC2022 paper)".
+
+Provenance (`docs/verification/c10-fips205-delta-audit.md:513-521`): C10 originated in the upstream reference
+repo `github.com/nconsigny/SPHINCS-`, commit `0516a11` (2026-04-09), from a **Fluhrer-Dang sweep**
+(`legacy/script/sweep_d2_fluhrer_dang.py`) that produced the security curve **sec_14=128, sec_16=128,
+sec_18=118.3, sec_20=104.5 bits**. Upstream has since retired C10; PQSigner is its only active user.
+
+Design rationale for `T = 205` (recomputed here): the expected digit sum is `E = v(2^w−1)/2 = 43·7/2 = 150.5`,
+so C10 runs at **δ = T/E = 1.362** — well outside the δ ∈ {1, 1.1} the CiC paper studies (`cic.txt:2085`).
+The payoff is verifier work: chain steps on verify are `v(2^w−1) − T = 301 − 205 = 96`, against `150` at δ=1.
+That is a **deliberate on-chain gas trade** (the Yul verifier runs per `validateUserOp`). It is also why C10's
+grind budget (`log K ≈ 14.9` expected, `23.25` cap) is larger than the framework's assumed `K ≤ 4096`.
+
+### Q3 — What the counter is: **a deterministic, public search index — not the framework's randomness R**
+
+This is the discriminating question for the "~105-bit randomness gap", and the answer is that the comparison is
+a **category error on two independent axes**.
+
+**Axis 1 — it is not randomness.** `sphincs-c10/src/wots.rs:62` grinds `for count in 0..10_000_000u32`,
+returning the **first** `count` whose digest satisfies the sum constraint. It is a deterministic minimal search
+index, seeded by nothing: the digest is `wots_digest(pk_seed, ADRS, node, count)` (`wots.rs:63`) and `pk_seed`
+is **public**. The count is then **transmitted** in the signature (`params.rs:76`,
+`SIG_HT_LAYER = L*N + 4 + SUBTREE_H*N` — the `+4` is the count; written at `hypertree.rs:304-305`, parsed at
+`hypertree.rs:433-437`) and the verifier **re-checks, never re-searches**: `wots.rs:150` recomputes the digest
+at the given count and `wots.rs:160` rejects unless `sum == TARGET_SUM` (the on-chain verifier does the same —
+`SPHINCsC10Asm.sol:165-170`, `if iszero(eq(digitSum, 205)) { revert(0,0) }`). CiC's `ρ` is by definition
+**sampled uniformly from `R` on every attempt** (Def. 11 step 2(b)(i), Construction 6). C10's count has
+**≈0 bits of entropy**, not 23.25 — quoting `2^23.25` as its "randomness" already overstates it.
+
+**Axis 2 — wrong layer.** CiC's generalized XMSS is **single-layer**: `ρ` randomizes the encoding of the
+**user's message**, which is why `log|R|` must be large (the adversary chooses the message). In C10 the
+user message is encoded at the **h_msg/FORS layer**, and *that* layer's randomizer is
+**`R`, 16 bytes = 128 bits**, ground at `fors.rs:98-124` from `SHA256(sk_seed ‖ "R_grind" ‖ [opt_rand] ‖ M ‖ nonce)`
+— **secret-keyed and message-bound**, precisely so the message↦ht_idx map is not attacker-computable
+(the "Avenue B" hardening, `fors.rs:70-95`). C10's WOTS layer signs **internal Merkle nodes**, not
+attacker-chosen messages. So the correct mapping is *CiC ρ ↔ C10's 128-bit FORS R*, which **meets** the
+128-bit order of magnitude; the WOTS count is an inner liveness device.
+
+**What the 10^7 cap actually has to satisfy is a liveness bound, and it does so with enormous room.**
+Computed exactly: `|C| = |{x ∈ {0..7}^43 : Σx = 205}| = 2^114.0941`, so `Pr[sum = T] = 2^-14.906`,
+`E[iterations] = 30,698`. Failure probability after the 10^7 cap is `e^{-325.7} ≈ 2^-470`. The `panic!` at
+`wots.rs:74` is unreachable in practice by ~2^470. (Sanity check on the same computation: the **maximum**
+antichain layer is at `T=150`, size `2^123.759` — reproducing the two constants 25d/25g used.)
+
+### Q4 — Is the v·w shortfall meaningful? **It is proof slack, and the framework's own requirements disqualify NIST's standard by more**
+
+**Why Requirement 2 exists.** `cic.txt:1697-1727`. Eq. (13) `vw ≥ max{kC+log5+1, 2(kQ+log5+1)+3}` comes from
+eq. (10), the `SM-rTCR` requirement on the message hash `Thmsg`, via Table 1's generic bounds
+(`cic.txt:624-652`): classical first term `(q'+1)/|H|` with `|H| = 2^{vw}`, quantum first term
+`8(q'+1)²/|H|`. The framework demands `Adv/T(A) ≤ 2^{-(k+log 5+1)}` — the `log 5` is a **union bound over the
+five terms** of Theorem 1/Corollary 2 and the `+1` splits a two-term bound. So:
+- **Classical:** the real property is "target-collision on a 129-bit encoding space" = **2^129 work**. That is
+  *above* the Cat-1 classical floor of 2^128. The 2.32-bit "shortfall" is `log2(5)+1` — **entirely
+  union-bound bookkeeping**, not attack cost.
+- **Quantum:** the real property is Grover second-preimage on 129 bits = **2^64.5 sequential**, above Cat-1's
+  2^64 (and the CiC paper itself justifies `kQ=64` on the grounds that "Grover's algorithm does not parallelize
+  well", `cic.txt:2082-2084`). The 8.64-bit shortfall is the framework's `Adv/T` normalization, which for a
+  Grover-shaped advantage costs a factor 2 in the exponent plus the same union-bound slack.
+
+**The decisive cross-check — apply the same requirements to NIST's own Cat-1 set.** SLH-DSA-SHA2-128s
+(FIPS 205): `n=16`, `lg_w=4`, `len1 = 8n/lg_w = 32`, `len2 = 3`, `h=63`. In CiC's notation its message-encoding
+space is `n0·w = 32·4 = **128 bits**.
+
+| | C10 | SLH-DSA-SHA2-128s | who is better |
+|---|---|---|---|
+| Req 2/1 eq(13)/(11), classical (need 131.32) | `vw = 129` → short **2.32** | `n0w = 128` → short **3.32** | **C10 by 1 bit** |
+| Req 2/1 eq(13)/(11), quantum (need 137.64) | short **8.64** | short **9.64** | **C10 by 1 bit** |
+| Req 3 eq(15), classical | `log|H| = 128`, need `kC+log5+2w+log L+log v` = **159.75** → short **31.75** | need **206.45** (`w=4`, `L=2^63`, `v=35`) → short **78.45** | **C10 by 46.7 bits** |
+| Req 3 eq(15), quantum | need **198.67** → short **70.67** | need **292.07** → short **164.07** | **C10 by 93.4 bits** |
+| Req 3 eq(16) `log|P|` (need 141.64) | `|P| = pk_seed = 128` → short **13.64** | 128 → short **13.64** | tie |
+| Req 2/1 eq(14) `log|R|` | message-layer `R` = 128; need `128+log5+log qs+log K+1` = **158.32** at `qs=2^16, K=2^11` → short **30.3** | `R` = 128; need **195.32** at `qs=2^64, K=1` → short **67.3** | **C10 by 37 bits** |
+
+(`2w` in eq. (15) is literal `2·w`, derived from Corollary 2's multiplier `L·v·2^w·2^w` on the SM-UD term,
+`cic.txt:1650`; `L` taken as the number of one-time-key instances — `2^18` for C10's hypertree, `2^63` for
+SLH-DSA-128s. Recomputation script inputs and outputs are reproduced above; `log5 = 2.3219`, `log12 = 3.585`.)
+
+**Conclusion for Q4:** these requirements are missed by **tens of bits** by a NIST-standardized Cat-1 parameter
+set that nobody considers broken. They therefore cannot, on their own, be read as evidence of a security
+deficit — they measure *reduction tightness in one framework's accounting*, which for hash-based signatures is
+dominated by multi-target factors (`L·v·2^{2w}`) that SPHINCS+'s own analysis handles by construction
+(tweakable hashes / ADRS domain separation, BHRvV19) rather than by inflating `n`. **C10 is closer to
+satisfying them than SLH-DSA-128s is on every axis that can be compared.** The 2.32-bit figure that prompted
+this triage is, on inspection, the *smallest* of the shortfalls and the one where C10 leads NIST's standard.
+
+**Does C10's own argument (2022/778) impose an analogous requirement, and does C10 meet it?** No analogous
+`vw` requirement. The SPHINCS+C paper's WOTS+C argument (App. B) reduces to **m-eTCR of H** and *charges
+encoding collisions to that term* rather than forbidding them (see 25f); its FORS+C argument is "the security
+analysis is the same as FORS" (`paper-nist-pqc2022.txt:~537`) with the explicit remark that forcing the last
+index **improves** the per-tree bound. The paper's own bounding work (§6.2, `:920-1010`) is about **signing-time
+variance from the grind**, i.e. the liveness property — which C10 satisfies at `2^-470` as computed above.
+
+### Q5 — Relation to Fluhrer-Dang `sec_18 = 118.3`: **different term, same union bound, and it is still the binding one**
+
+Different phenomenon. Fluhrer-Dang bounds the **FORS few-time / leaf-saturation** term as a function of the
+number of signatures γ per key; CiC Req 2 bounds the **WOTS message-encoding target-collision** term. They are
+two distinct summands of the same union bound, so they "compound" only in the trivial sense that the total is
+their sum — a ≤1-bit effect when both sit near the floor.
+
+The engineering conclusion is **one margin story, not two, and CiC does not move the bottleneck**: the FORS
+term is the one with **zero** margin (`sec_16 = 128` exactly at the deployed cap; `sec_18 = 118.3` if the cap
+were the full hypertree height), whereas the CiC-flagged WOTS term sits at 2^129 / 2^64.5, i.e. **above** the
+floor. This is already recorded in-repo and already treated as load-bearing:
+`sphincs-c10/src/params.rs:5-13` ("the on-chain `bootstrapUses` and `slotUses` counters cap actual usage at
+65,536 per chain … to leave a conservative security margin"), CLAUDE.md invariant #7, `docs/STATUS.md:422`
+("Quantitative log-domain floor (96-bit @ 2^16 cap, **cap load-bearing**)"),
+`contracts/verification/lean/SphincsCVerify/Crypto/Quantitative.lean` (kernel-checked `≤2^-112` EUF-CMA query
+term and `≤2^-95` generic multi-target term at `q = 2^16`), and `make -C contracts/verification
+verify-forsc-margin`. **The 2^16 cap is a security control, not a policy choice** — that is the sentence the
+CiC exercise reinforces, and it needs no new flag because STATUS.md already carries it.
+
+### Q6 — Is any attack implied? **No. Concretely, no.**
+
+To forge at the WOTS+C layer an adversary must produce `(node*, count*) ≠ (node, count)` whose 43 base-8 digits
+**equal** the honest signature's digit vector. Domination is not enough and equality is forced: constant sum
+plus componentwise ≤ implies equality (CiC Lemma 7's one-line argument, `cic.txt:1570-1580`), and **both**
+verifiers enforce `Σ = 205` (`wots.rs:160`; `SPHINCsC10Asm.sol:170`). Free choice of `count*` gives the
+adversary unlimited independent trials, but each is an independent `2^-129` shot at a **fixed** target — so the
+work is `2^129` classical, `2^64.5` sequential-Grover, unchanged by the counter's predictability. A small or
+deterministic `|R|` at this layer costs the *signer* (liveness, `2^-470`) and buys the *attacker* nothing:
+`log|R|` enters the CiC bound through the **adaptive-reprogramming** step of the SM-rTCR proof
+(`cic.txt:3161-3191`, the `Repro` game), which is a proof technique, not an attack. The place where a
+predictable grind *would* matter — the layer where the adversary chooses the message — is the FORS R-grind,
+and C10 already keys that on `sk_seed` and binds it to the message for exactly this reason (`fors.rs:70-95`).
+
+**Nothing in the deployed configuration falls below the Cat-1 floor.** WOTS encoding term: 2^129 / 2^64.5
+(above). FORS few-time at the deployed `2^16` cap: 128 (at the floor, zero margin). Requirement-3 gaps:
+reduction slack, not attack cost.
+
+### Disclosed thin margins (true statements about the shipped signer; they do not imply action)
+
+Stating these explicitly so the cross-check above is not a whitewash:
+1. The WOTS+C message-encoding term has **1 bit** of classical margin (2^129 vs 2^128) and **0.5 bit** of
+   sequential-quantum margin (2^64.5 vs 2^64). C10 is 1 bit better than SLH-DSA-128s here, but "better than the
+   standard" and "comfortable" are different things — this term has no slack to give.
+2. The FORS few-time term sits at **exactly 128 bits with zero margin at the 2^16 cap** (sec_16=128,
+   sec_18=118.3). The cap is what holds it there.
+3. C10 runs at δ=1.362 and `E[grind] = 30,698`, outside the δ ≤ 1.1 / `K ≤ 4096` regime the CiC paper studies.
+   That is a *liveness/timing* difference (and a deliberate gas trade), not a security one, but it does mean
+   CiC's published efficiency/parameter tables cannot be read across to C10 without redoing the arithmetic.
+
+### VERDICT: **NO-ACTION**
+
+- No attack follows; a sufficient-condition failure is not a vulnerability.
+- The requirements failed are missed by more by NIST's own Cat-1 standard on every comparable axis.
+- The "~105-bit randomness gap" is a category error (deterministic public search index at the wrong layer);
+  C10's actual message-layer randomizer is 128-bit, secret-keyed and message-bound.
+- The one number with zero margin (FORS at the 2^16 cap) is already documented, gated, and enforced on-chain.
+- A parameter change would be launch-breaking (invariant #6) and would buy nothing that is currently at risk.
+
+**No new STATUS.md row is opened** (the verdict is NO-ACTION and the binding constraint — the 2^16 cap as a
+security control — already has one at `docs/STATUS.md:422`). What this triage does add is a **pointer**: 25g's
+"FLAGGED, NOT CONCLUDED" is hereby concluded.
+
+**What would change this verdict** (monitor conditions, not open work): (a) a published cryptanalytic result
+that lowers Winternitz/target-sum encoding second-preimage below the generic `2^{vw}`; (b) any change that
+raises the per-key signature budget above `2^16` — that would move the FORS term off 128 and **would** be a
+parameter question; (c) a version of the CiC framework whose requirements *are* met by SLH-DSA-128s but not by
+C10, which would make the comparison discriminating rather than uniform.
+
