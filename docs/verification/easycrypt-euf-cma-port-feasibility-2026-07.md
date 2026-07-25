@@ -3272,3 +3272,62 @@ established (one hole reduced to its arithmetic core by `audit_separations_achie
 cases). What the wave *did* establish, and it is real, is that the **specific mechanism** by which
 the LHS was proven identically zero is excluded at the actual globals, plus the genuinely new mathematics of
 `constsum_encoding_is_two_encodings`.
+
+### 2026-07-25 — ⚠ MAJOR FINDING: the port CANNOT be instantiated at C10's DEPLOYED WOTS parameters. Plus: content (V) not achieved; wire bridge (B) partial.
+
+**THE HEADLINE FINDING (I verified all three at source myself; both external reviewers concur).** Independently of
+every vacuity/content question, the formal development is a proof about a WOTS+C whose parameters **cannot be set to
+the ones the firmware ships**:
+ - **F1 — w is excluded outright.** The model axiomatizes `const log2_w : { int | log2_w = 2 \/ log2_w = 4 \/
+   log2_w = 8 } as val_log2w` (WOTS_TW_ES.ec:31), so `w in {4,16,256}`. **Deployed C10 is `W=8`, `LOG_W=3`**
+   (sphincs-c10/src/params.rs:43,46). **3 is not in {2,4,8}** — the deployed parameter set is not an admissible
+   instantiation of the model at all.
+ - **F2 — the model keeps the checksum WOTS+C exists to delete.** `len = len1 + len2` with `lemma ge1_len2 : 1 <= len2`
+   (WOTS_TW_ES.ec:133) forces at least one checksum chain. Deployed C10 has `L = 43` = len1 only (no checksum chains):
+   removing the checksum is the entire point of the constant-sum construction.
+ - **F3 — `two_encodings` is false at C10's actual encoding** (all-zero domination; and `extract_digits` consumes only
+   bits 0..128 of a 256-bit digest, discarding 127 bits, so it is massively non-injective).
+**CONSEQUENCE (state this whenever the result is cited):** the machine-checked bound is a theorem about the abstract
++C scheme at *admissible* parameters; it is **not instantiable at the deployed C10 configuration**. This sits ON TOP
+of the already-recorded virtual-vs-wire FORS gap. Neither is a soundness error in the proof; both are faithfulness
+gaps between the modelled object and the shipped one, and F1 is the sharpest of them.
+
+**TRACK V (make the statement provably have CONTENT): rung (b) reached, but NON-DEGENERACY IS *NOT* ESTABLISHED.**
+The auditor machine-checked that the exhibited witness is STILL degenerate: `scratch/audit_partG_degenerate.ec`
+(CERTIFIED-0-ADMIT), taking Track V's own model equations verbatim, proves `ThC ps tw m c = if c = c0 then d0 else d1`
+-- i.e. **Th+C collapses to a two-valued function of the counter alone**. So the trap this track existed to escape
+was not escaped. Two further holes the audit found, both recorded rather than argued away: the four
+`dfC <> {8n, 8n*len, 8n*2, 8n*k}` separations are discharged only at LITERAL integers, not in general; and the only
+exhibited witness for the H-TREE-MULTI premise is `(mkg_adv, mtree_*) = (0,1,0,0)`, which alone puts the capstone
+**RHS >= 1** — so in that model the bound is trivially true. HONESTY CORRECTION to the track's own write-up: it lists
+"ThC not constant" under NON-DEGENERACY ACHIEVED; what was proven is only `exists ... ThC .. j <> ThC .. j'`, which
+the degeneracy receipt shows is compatible with the two-valued collapse. That item should not be read as achieved.
+ - GENUINE MATH THAT DID LAND (worth keeping, independent of the above): `constsum_antichain` /
+   `constsum_encoding_is_two_encodings` — a CONSTANT-SUM encoding satisfies MM45's `two_encodings` antichain condition
+   **without a checksum**, quantified over an arbitrary encoding. That is exactly what the +C gate buys, proved. Also
+   `gate_passes_on_ground_counter`: at the very procedure where the V1 vector shows the gate can always reject, it
+   ACCEPTS on the honestly-ground counter (two-sided refutation of the V1 mechanism). New premises N1-N4 are
+   inspectable premises on a NEW theorem, not axioms; the capstone file is BYTE-IDENTICAL and its RHS provably did
+   not drift (conclusion re-derived by `exact`).
+
+**TRACK B (virtual->wire FORS bridge): honest PARTIAL, and the delta is now exactly one equation.**
+`drafts/FORSC10_Wire.ec` (CERTIFIED-0-ADMIT) mechanizes the wire object from the CRATE (k secrets + (k-1) auth paths,
+last root = one leaf-hash, forced-zero enforced; matching hypertree.rs:412-414/:373-376/:223-228), and proves:
+`wire_virt_prefix` (trees 0..k-2 reconstruct POINTWISE IDENTICALLY -- the gap is not there); **`wire_virt_last` -- THE
+GAP EXACTLY: the model's k-th root is the a-level CLIMB of the wire's k-th root**; and `bridge_verify_sufficient`,
+the conditional bridge (the mechanized form of the paper's §4.1.1 prose). **NO PROBABILITY TRANSFER IS PROVEN** --
+Pr[wire break] is still not bounded by Pr[model break]. The track RETRACTED its own initial "no black-box reduction
+exists" claim after both reviewers refuted it (the single-instance FORS leg has no obstruction; a reduction can burn
+one signing query and convert). Two secondary findings recorded: a crate-vs-paper divergence and a tweak-reuse issue.
+
+**GATES.** All three whole-chain gates pass under the auditor's own from-scratch re-run (7 chain files + 4 positive
+receipts + 5 canaries rejected; plus 8-canary Track-V and 8-canary wire-bridge gates). No new axiom anywhere
+(comment-stripped sweep incl. `declare axiom`, refined `const .. as`, clone side-conditions). Conclusion unweakened;
+capstone and every mid-chain file byte-identical through both waves. A NEW instance of trap T2 was found and closed:
+stale `.eco` applies to CANARY DEPENDENTS too.
+
+**NET.** The proof engineering is in good order (0-admit chain-wide, gates green, no new axioms, capstone untouched).
+The open questions are all FAITHFULNESS, and they now dominate: the model cannot be instantiated at the deployed
+WOTS parameters (F1/F2/F3); the wire-format FORS gap is characterised but not bridged probabilistically; and the
+statement still admits degenerate readings (`predC`/`emb_in`/`thfc`), with the best available witness itself
+degenerate and its RHS >= 1.
