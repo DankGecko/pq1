@@ -3895,11 +3895,21 @@ space is `n0·w = 32·4 = **128 bits**.
 | Req 3 eq(15), classical | `log|H| = 128`, need `kC+log5+2w+log L+log v` = **159.75** → short **31.75** | need **206.45** (`w=4`, `L=2^63`, `v=35`) → short **78.45** | **C10 by 46.7 bits** |
 | Req 3 eq(15), quantum | need **198.67** → short **70.67** | need **292.07** → short **164.07** | **C10 by 93.4 bits** |
 | Req 3 eq(16) `log|P|` (need 141.64) | `|P| = pk_seed = 128` → short **13.64** | 128 → short **13.64** | tie |
-| Req 2/1 eq(14) `log|R|` | message-layer `R` = 128; need `128+log5+log qs+log K+1` = **158.32** at `qs=2^16, K=2^11` → short **30.3** | `R` = 128; need **195.32** at `qs=2^64, K=1` → short **67.3** | **C10 by 37 bits** |
+| Req 2/1 eq(14) `log|R|` — ⚠ *role*-analogue only, see Q3 | message-layer `R` = 128; need `128+log5+log qs+log K+1` = **158.32** at `qs=2^16, K=2^11` → short **30.3** | `R` = 128; need **195.32** at `qs=2^64, K=1` → short **67.3** | **C10 by 37 bits** |
 
 (`2w` in eq. (15) is literal `2·w`, derived from Corollary 2's multiplier `L·v·2^w·2^w` on the SM-UD term,
-`cic.txt:1650`; `L` taken as the number of one-time-key instances — `2^18` for C10's hypertree, `2^63` for
-SLH-DSA-128s. Recomputation script inputs and outputs are reproduced above; `log5 = 2.3219`, `log12 = 3.585`.)
+`cic.txt:1650`; `log5 = 2.3219`, `log12 = 3.585`.
+
+⚠ **Two caveats on this table, both from external review, both material:**
+(i) **`L`-sensitivity.** I take `L` = the number of one-time-key instances an adversary can multi-target
+(`2^18.0028` for C10's hypertree, `2^63.0028` for SLH-DSA-128s), which is the right generalization of CiC's
+single-tree `L` to a hypertree. GPT-5.6 correctly notes CiC's *literal* `L` is one XMSS tree's leaf count, and
+**both** schemes use `h' = 9` subtrees — under that literal reading the Req-3 shortfalls become C10 22.75/52.67
+vs SLH-DSA 24.45/56.07, so **the direction survives but the headline 46.7/93.4-bit gap collapses to ~1.7/3.4**.
+Do not quote the 46.7 figure without the reading it depends on.
+(ii) **The `log|R|` row is not an instantiation.** Substituting C10's *message-layer* `R` into eq. (14) is a
+role analogy for reading intent. The syntactic instantiation at the WOTS layer maps `ρ → count`, where C10 does
+not satisfy eq. (14) at all. See Q3, and do not cite this row as compliance.)
 
 **Conclusion for Q4:** these requirements are missed by **tens of bits** by a NIST-standardized Cat-1 parameter
 set that nobody considers broken. They therefore cannot, on their own, be read as evidence of a security
