@@ -2928,3 +2928,16 @@ certify.** (My own third-party re-run of that gate was in flight at time of writ
 than patching, with a machine-checked satisfying model and an unweakened conclusion. What is NOT yet established is
 that the abstract primitives (`predC`, `emb_in`) admit only interpretations under which the statement has content --
 that is the next honest frontier, and it is MM45's own abstract-primitive methodology, not a defect introduced here.
+
+**POST-REPAIR FULL-CHAIN RE-VERIFICATION (independent, run by me — CONFIRMED).** After the repair edits to four
+mid-chain files, I re-ran the full-closure gate from scratch (delete every closure .eco; compile all 24 files as
+explicit targets; admit sweep; axiom census):
+  **24/24 compiled from source, 0 compile failures, 0 ADMIT TACTICS CHAIN-WIDE, 18 axiom declarations —
+  the census is UNCHANGED from pre-repair, confirming the repair introduced no new axiom.**
+Provenance note (honest): two instances of the runner ended up executing concurrently (an earlier nohup'd run
+survived a harness stop and overlapped my relaunch), so the report contains two interleaved verdict blocks. This
+does NOT weaken the result — the timings prove both did REAL work rather than cache-hitting: XmssmtCC_All 840s/841s,
+FL_SL_XMSS_MT_ES 425s/429s, FORS_ES 313s/320s, SPHINCS_PLUS 141s/142s, WOTS_TW_ES 119s/120s, FxChain 80s/82s. Every
+file has at least one genuine from-source compile, including all four REPAIRED files. So the repair holds up under
+the strongest gate available — one that is structurally immune to BOTH known traps (it deletes every .eco, so
+neither `require`-does-not-re-verify nor stale-dependent-.eco can produce a false green).
