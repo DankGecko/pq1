@@ -37,13 +37,30 @@ override _FV_INHERITED_SHELLOPTS := $(value SHELLOPTS)
 override _FV_INHERITED_BASHOPTS := $(value BASHOPTS)
 override _FV_INHERITED_BASH_ENV := $(value BASH_ENV)
 override _FV_INHERITED_ENV := $(value ENV)
+override _FV_INHERITED_MAKEFILES := $(value MAKEFILES)
+override _FV_MAKEFILE_LIST_AT_ENTRY := $(value MAKEFILE_LIST)
 override _FV_MAKEFLAGS_ORIGIN := $(origin MAKEFLAGS)
 override _FV_MAKE_SHORT_FLAGS := $(if $(filter -%,$(firstword $(MAKEFLAGS))),,$(firstword $(MAKEFLAGS)))
 override _FV_MAKE_EVAL_FLAGS := $(value -*-eval-flags-*-)
-unexport SHELLOPTS BASHOPTS BASH_ENV ENV
+unexport SHELLOPTS BASHOPTS BASH_ENV ENV MAKEFILES
 override SHELL := /usr/bin/bash
 override .SHELLFLAGS := -o pipefail -c
 override _FV_GNU_MAKE := /usr/bin/make
+
+# This verification Makefile has no legitimate startup/include or --eval
+# extension surface.  Reject those parser-level code-injection channels before
+# any recipe can inherit `.IGNORE`, replace a target, or preseed an internal
+# receipt variable.  MAKEFILES is captured before being unexported so the fixed
+# recursive Make invocations start clean as well.
+ifneq ($(strip $(_FV_INHERITED_MAKEFILES)),)
+$(error refusing inherited MAKEFILES startup files for verification Makefile)
+endif
+ifneq ($(words $(_FV_MAKEFILE_LIST_AT_ENTRY)),1)
+$(error refusing additional parsed makefiles: $(_FV_MAKEFILE_LIST_AT_ENTRY))
+endif
+ifneq ($(strip $(_FV_MAKE_EVAL_FLAGS)),)
+$(error refusing Make --eval for verification Makefile)
+endif
 
 LEAN_DIR := lean
 LAKE     ?= $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
@@ -543,7 +560,9 @@ EXTRACTED_DIR := extracted
 PQLEAN        := $(HOME)/.local/share/pqsigner-lean
 REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
-.PHONY: verify-extracted verify-extract-differential verify-extraction-freshness verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test _verify-extraction-regen-wrong-waiver-self-test _verify-extraction-make-path-self-test extract-sphincs-adrs extract-aa-userop extract-fors-index extract-format-decimal extract-pinstate extract-slotkdf
+override _EXTRACTION_TARGETS := extract-sphincs-adrs extract-aa-userop extract-fors-index extract-merkle-verify extract-wots-pkfromsig extract-hash-fns extract-bip39-roundtrip extract-decode-item extract-u256-mul extract-format-decimal extract-fwmanifest-preimage extract-wots-digits extract-aa-eip1271 extract-txcore-rlp extract-pinstate extract-slotkdf extract-tx-merkle
+override _EXTRACTION_IMPL_TARGETS := $(addprefix _,$(addsuffix -impl,$(_EXTRACTION_TARGETS)))
+.PHONY: verify-extracted verify-extract-differential verify-extraction-freshness verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test _verify-extraction-regen-wrong-waiver-self-test _verify-extraction-make-path-self-test _verify-extraction-workspace-inner-self-test _verify-extraction-alias-dryrun-self-test $(_EXTRACTION_TARGETS) $(_EXTRACTION_IMPL_TARGETS)
 
 # MAKECMDGOALS selects the replay-only rejection checks below, but GNU Make lets
 # a caller override even this built-in variable.  Reject any non-default origin
@@ -556,8 +575,19 @@ endif
 # The authoritative replay must recurse through the reviewed GNU Make binary.
 # Reject ambient executor and Bash-startup overrides as an additional fail-loud
 # receipt.  Internal helper goals are guarded too.
-override _EXTRACTION_REGEN_GUARDED_GOALS := verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test _verify-extraction-regen-wrong-waiver-self-test _verify-extraction-make-path-self-test
-ifneq ($(strip $(filter $(_EXTRACTION_REGEN_GUARDED_GOALS),$(MAKECMDGOALS))),)
+override _EXTRACTION_REGEN_GUARDED_GOALS := verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test _verify-extraction-regen-wrong-waiver-self-test _verify-extraction-make-path-self-test _verify-extraction-workspace-inner-self-test
+override _EXTRACTION_CONTEXT_GOALS := $(_EXTRACTION_REGEN_GUARDED_GOALS) $(_EXTRACTION_TARGETS)
+override _EXTRACTION_ALL_GUARDED_TARGETS := $(_EXTRACTION_CONTEXT_GOALS) $(_EXTRACTION_IMPL_TARGETS)
+
+# The immediate MAKEFILE_LIST check above catches startup files and any `-f`
+# parsed before this Makefile.  Secondary expansion runs only after GNU Make
+# has parsed the complete input list, so it also catches a trailing `-f` file
+# before any extraction/replay recipe can execute.  Parser expansion errors
+# cannot be suppressed by an injected `.IGNORE`.
+.SECONDEXPANSION:
+$(_EXTRACTION_ALL_GUARDED_TARGETS): $$(if $$(filter 1,$$(words $$(MAKEFILE_LIST))),,$$(error refusing additional parsed makefiles [$$(MAKEFILE_LIST)]))
+
+ifneq ($(strip $(filter $(_EXTRACTION_CONTEXT_GOALS),$(MAKECMDGOALS))),)
 ifneq ($(_FV_RECIPE_SHELL_ORIGIN),file)
 $(error refusing caller-overridden SHELL (origin $(_FV_RECIPE_SHELL_ORIGIN)) for authoritative extraction replay)
 endif
@@ -588,9 +618,6 @@ endif
 ifneq ($(findstring i,$(_FV_MAKE_SHORT_FLAGS)),)
 $(error refusing Make ignore-errors mode for authoritative extraction replay)
 endif
-ifneq ($(strip $(_FV_MAKE_EVAL_FLAGS)),)
-$(error refusing Make --eval for authoritative extraction replay)
-endif
 endif
 
 # Keep direct multi-goal requests fail-loud: the aggregate replay deliberately
@@ -602,24 +629,56 @@ ifneq ($(strip $(word 2,$(_EXTRACTION_REQUESTED_GOALS))),)
 $(error refusing multiple extract-* targets in one Make invocation; invoke one target per process)
 endif
 
-# Allocate lazily when each concrete extract-* recipe is expanded, independent
-# of MAKECMDGOALS.  The dynamic cache is accepted only after this file has
-# assigned it with `override`, so environment/command-line attempts to seed
-# either the public root or the internal per-target cache are ignored.
-override _extraction_tmp_var = _FV_EXTRACTION_TMP_ROOT_$(subst -,_,$(1))
-override _private_extraction_tmp = $(if $(filter override,$(origin $(call _extraction_tmp_var,$(1)))),$($(call _extraction_tmp_var,$(1))),$(eval override $(call _extraction_tmp_var,$(1)) := $(shell umask 077 && /usr/bin/mktemp -d /tmp/pqsigner-extract.XXXXXXXX))$(if $($(call _extraction_tmp_var,$(1))),$($(call _extraction_tmp_var,$(1))),$(error failed to allocate a private extraction workspace for $(1))))
-extract-%: private override EXTRACTION_TMP_ROOT = $(call _private_extraction_tmp,$@)
+# Public extract-* targets enter one fixed, environment-scrubbed inner Make
+# process.  The inner recipe uses .ONESHELL so its workspace exists only as a
+# readonly shell variable; no Make variable origin is trusted for allocation or
+# cleanup.  A caller can neither preseed the path nor make separate recipe
+# shells disagree about it.
+$(_EXTRACTION_TARGETS):
+	@/usr/bin/env -u SHELLOPTS -u BASHOPTS -u BASH_ENV -u ENV \
+	  -u MAKE -u MAKE_COMMAND -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS -u MAKEFILES \
+	  $(_FV_GNU_MAKE) --no-print-directory "_$@-impl" _FV_EXTRACTION_INNER=1
 
-# Successful extraction targets remove only the private root allocated above.
-# A failed target retains its inaccessible workspace for local diagnosis.
-override define _cleanup_extraction_tmp
-root="$(EXTRACTION_TMP_ROOT)"; \
-if [[ "$$root" =~ ^/tmp/pqsigner-extract\.[A-Za-z0-9]{8}$$ ]]; then \
-  rm -rf -- "$$root"; \
-else \
-  echo "refusing to remove invalid extraction workspace: $$root" >&2; exit 1; \
+ifeq ($(_FV_EXTRACTION_INNER),1)
+.ONESHELL:
+override .SHELLFLAGS := -e -o pipefail -c
+endif
+
+override define _begin_private_extraction
+umask 077
+EXTRACTION_TMP_ROOT=$$(/usr/bin/mktemp -d /tmp/pqsigner-extract.XXXXXXXX)
+readonly EXTRACTION_TMP_ROOT
+_fv_cleanup_extraction_tmp() {
+  rc=$$?
+  trap - EXIT
+  if [[ "$${EXTRACTION_TMP_ROOT}" =~ ^/tmp/pqsigner-extract\.[A-Za-z0-9]{8}$$ ]] \
+      && [ -O "$${EXTRACTION_TMP_ROOT}" ]; then
+    if [ "$$rc" -eq 0 ]; then
+      /usr/bin/rm -rf -- "$${EXTRACTION_TMP_ROOT}"
+    else
+      echo "retaining failed private extraction workspace: $${EXTRACTION_TMP_ROOT}" >&2
+    fi
+  else
+    echo "refusing to clean invalid extraction workspace: $${EXTRACTION_TMP_ROOT}" >&2
+    rc=1
+  fi
+  exit "$$rc"
+}
+trap _fv_cleanup_extraction_tmp EXIT
+if [ ! -d "$${EXTRACTION_TMP_ROOT}" ] \
+    || [ ! -O "$${EXTRACTION_TMP_ROOT}" ] \
+    || [ "$$(/usr/bin/stat -c '%a' -- "$${EXTRACTION_TMP_ROOT}")" != 700 ]; then
+  echo "private extraction workspace is not an owner-only mode-0700 directory" >&2
+  exit 1
 fi
 endef
+
+_verify-extraction-workspace-inner-self-test:
+	@$(_begin_private_extraction)
+	@printf 'private=%s mode=%s\n' "$${EXTRACTION_TMP_ROOT}" \
+	  "$$(/usr/bin/stat -c '%a' -- "$${EXTRACTION_TMP_ROOT}")"
+
+_verify-extraction-alias-dryrun-self-test: extract-sphincs-adrs
 
 # The sole stale waiver is for one exact Aeneas translator defect.  The marker
 # is emitted only when that stage reproduces its pinned Unreachable diagnostic;
@@ -739,22 +798,76 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	echo "  ok: workspace-side MAKECMDGOALS spoof is CAUGHT"
 	+@out=$$(mktemp /tmp/pq-extraction-indirect-workspace-selftest.XXXXXX); \
 	if ! $(_FV_GNU_MAKE) --no-print-directory -n \
-	    --eval='extraction-alias-self-test: extract-sphincs-adrs' \
 	    EXTRACTION_TMP_ROOT=/tmp/pqsigner-extract.AttackerChosen \
-	    extraction-alias-self-test >$$out 2>&1; then \
+	    _verify-extraction-alias-dryrun-self-test >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: indirect extraction alias did not expand safely" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif grep -Fq '/tmp/pqsigner-extract.AttackerChosen' $$out; then \
 	  echo "CONTROL FAILURE: indirect extraction alias retained a caller-selected workspace" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
-	fi; \
-	root=$$(grep -Eom1 '/tmp/pqsigner-extract\.[A-Za-z0-9]{8}' $$out || true); \
-	if [[ ! "$$root" =~ ^/tmp/pqsigner-extract\.[A-Za-z0-9]{8}$$ ]] || [ ! -d "$$root" ]; then \
-	  echo "CONTROL FAILURE: indirect extraction alias did not allocate a private workspace" >&2; \
+	elif ! grep -Fq '_extract-sphincs-adrs-impl' $$out; then \
+	  echo "CONTROL FAILURE: indirect extraction alias bypassed the fixed private delegator" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	fi; \
-	rmdir -- "$$root"; rm -f $$out; \
-	echo "  ok: indirect extraction alias receives a private execution-time workspace"
+	rm -f $$out; \
+	echo "  ok: indirect extraction alias reaches the fixed private delegator"
+	+@out=$$(mktemp /tmp/pq-extraction-shell-workspace-selftest.XXXXXX); \
+	if ! /usr/bin/env -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS -u MAKEFILES \
+	    $(_FV_GNU_MAKE) --no-print-directory \
+	    _verify-extraction-workspace-inner-self-test _FV_EXTRACTION_INNER=1 \
+	    >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: shell-owned workspace allocator did not run" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	root=$$(sed -n 's/^private=\([^ ]*\) mode=700$$/\1/p' $$out); \
+	if [[ ! "$$root" =~ ^/tmp/pqsigner-extract\.[A-Za-z0-9]{8}$$ ]] \
+	    || [ -e "$$root" ]; then \
+	  echo "CONTROL FAILURE: private workspace was not mode 0700 or was not cleaned" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: shell owns a fresh mode-0700 workspace and cleans that exact root"
+	+@out=$$(mktemp /tmp/pq-extraction-makefiles-selftest.XXXXXX); \
+	startup=$$(mktemp /tmp/pq-extraction-startup.XXXXXX.mk); \
+	printf '.IGNORE:\n' >$$startup; \
+	if /usr/bin/env MAKEFILES=$$startup $(_FV_GNU_MAKE) --no-print-directory \
+	    _verify-extraction-regen-wrong-waiver-self-test >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: MAKEFILES injected .IGNORE into authoritative replay" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
+	elif ! grep -Fq 'refusing inherited MAKEFILES startup files ' $$out; then \
+	  echo "CONTROL FAILURE: MAKEFILES startup injection was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
+	fi; \
+	printf 'override _FV_EXTRACTION_TMP_ROOT_extract_sphincs_adrs := /tmp/pqsigner-extract.CCCCCCCC\n' >$$startup; \
+	if /usr/bin/env MAKEFILES=$$startup $(_FV_GNU_MAKE) --no-print-directory -n \
+	    extract-sphincs-adrs >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: MAKEFILES preseeded an extraction workspace" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
+	elif grep -Fq '/tmp/pqsigner-extract.CCCCCCCC' $$out \
+	    || ! grep -Fq 'refusing inherited MAKEFILES startup files ' $$out; then \
+	  echo "CONTROL FAILURE: MAKEFILES workspace injection was not fail-closed" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
+	fi; \
+	if $(_FV_GNU_MAKE) --no-print-directory -n \
+	    --eval='override _FV_EXTRACTION_TMP_ROOT_extract_sphincs_adrs := /tmp/pqsigner-extract.AAAAAAAA' \
+	    extract-sphincs-adrs >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: --eval preseeded an extraction workspace" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
+	elif grep -Fq '/tmp/pqsigner-extract.AAAAAAAA' $$out \
+	    || ! grep -Fq 'refusing Make --eval for verification Makefile' $$out; then \
+	  echo "CONTROL FAILURE: --eval workspace injection was not fail-closed" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
+	fi; \
+	if $(_FV_GNU_MAKE) --no-print-directory -f Makefile -f /dev/null -n \
+	    extract-sphincs-adrs >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: a trailing -f makefile escaped the complete-list guard" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
+	elif ! grep -Fq 'refusing additional parsed makefiles [Makefile /dev/null]' $$out; then \
+	  echo "CONTROL FAILURE: a trailing -f makefile was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
+	fi; \
+	rm -f $$out $$startup; \
+	echo "  ok: MAKEFILES/eval/trailing--f parser channels cannot suppress or preseed extraction"
 	+@out=$$(mktemp /tmp/pq-extraction-make-override-selftest.XXXXXX); \
 	if $(_FV_GNU_MAKE) --no-print-directory MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: caller-overridden MAKE bypassed authoritative extraction replay" >&2; \
@@ -924,50 +1037,50 @@ verify-extracted-heavy: ## S33 FormatDecimalSpec M7 (~42 GB kernel-TC) — carve
 	@python3 scripts/check_axiom_closure.py /tmp/pq_axiomcheck_fd.out --expect-records 3
 	@echo "OK: format_decimal M7 axiom-discipline gate passed — kernel-only closure over exactly 3 headlines"
 
-extract-sphincs-adrs:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
+_extract-sphincs-adrs-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
 	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque zeroize \
-	  --start-from 'sphincs_c10::address' --dest-file $(EXTRACTION_TMP_ROOT)/adrs.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/out && mkdir -p $(EXTRACTION_TMP_ROOT)/out
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/out $(EXTRACTION_TMP_ROOT)/adrs.llbc
-	@diff -u $(EXTRACTED_DIR)/Extracted/Adrs.lean $(EXTRACTION_TMP_ROOT)/out/Adrs.lean \
+	  --start-from 'sphincs_c10::address' --dest-file $${EXTRACTION_TMP_ROOT}/adrs.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/out && mkdir -p $${EXTRACTION_TMP_ROOT}/out
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/out $${EXTRACTION_TMP_ROOT}/adrs.llbc
+	@diff -u $(EXTRACTED_DIR)/Extracted/Adrs.lean $${EXTRACTION_TMP_ROOT}/out/Adrs.lean \
 	  && echo "OK: committed extraction matches the current Rust" \
 	  || { echo "DRIFT: address.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-sphincs-adrs $(EXTRACTION_TMP_ROOT)/out
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-sphincs-adrs $${EXTRACTION_TMP_ROOT}/out
 
-extract-aa-userop:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/aa && RUSTFLAGS="--cfg lean_extract" \
+_extract-aa-userop-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/aa && RUSTFLAGS="--cfg lean_extract" \
 	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque sha3 \
 	  --opaque 'pqsigner_tx_core::hash' \
 	  --start-from 'pqsigner_aa::userop::compute_user_op_hash' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/userop.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/uout && mkdir -p $(EXTRACTION_TMP_ROOT)/uout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/uout -split-files $(EXTRACTION_TMP_ROOT)/userop.llbc
-	@sed 's/import Userop\./import Extracted.UserOp./' $(EXTRACTION_TMP_ROOT)/uout/Funs.lean > $(EXTRACTION_TMP_ROOT)/uout/Funs.fixed.lean
-	@diff -u $(EXTRACTED_DIR)/Extracted/UserOp/Funs.lean $(EXTRACTION_TMP_ROOT)/uout/Funs.fixed.lean \
+	  --dest-file $${EXTRACTION_TMP_ROOT}/userop.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/uout && mkdir -p $${EXTRACTION_TMP_ROOT}/uout
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/uout -split-files $${EXTRACTION_TMP_ROOT}/userop.llbc
+	@sed 's/import Userop\./import Extracted.UserOp./' $${EXTRACTION_TMP_ROOT}/uout/Funs.lean > $${EXTRACTION_TMP_ROOT}/uout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/UserOp/Funs.lean $${EXTRACTION_TMP_ROOT}/uout/Funs.fixed.lean \
 	  && echo "OK: committed userop extraction matches the current Rust" \
 	  || { echo "DRIFT: aa/userop.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-aa-userop $(EXTRACTION_TMP_ROOT)/uout $(EXTRACTION_TMP_ROOT)/uout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-aa-userop $${EXTRACTION_TMP_ROOT}/uout $${EXTRACTION_TMP_ROOT}/uout/Funs.fixed.lean
 
-extract-fors-index:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
+_extract-fors-index-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
 	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque zeroize \
 	  --start-from 'sphincs_c10::fors::extract_ht_index' \
 	  --start-from 'sphincs_c10::fors::extract_fors_indices' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/fors.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/fout && mkdir -p $(EXTRACTION_TMP_ROOT)/fout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/fout -split-files $(EXTRACTION_TMP_ROOT)/fors.llbc
-	@sed 's/import Fors\./import Extracted.Fors./' $(EXTRACTION_TMP_ROOT)/fout/Funs.lean > $(EXTRACTION_TMP_ROOT)/fout/Funs.fixed.lean
-	@diff -u $(EXTRACTED_DIR)/Extracted/Fors/Funs.lean $(EXTRACTION_TMP_ROOT)/fout/Funs.fixed.lean \
+	  --dest-file $${EXTRACTION_TMP_ROOT}/fors.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/fout && mkdir -p $${EXTRACTION_TMP_ROOT}/fout
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/fout -split-files $${EXTRACTION_TMP_ROOT}/fors.llbc
+	@sed 's/import Fors\./import Extracted.Fors./' $${EXTRACTION_TMP_ROOT}/fout/Funs.lean > $${EXTRACTION_TMP_ROOT}/fout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/Fors/Funs.lean $${EXTRACTION_TMP_ROOT}/fout/Funs.fixed.lean \
 	  && echo "OK: committed FORS extraction matches the current Rust" \
 	  || { echo "DRIFT: fors.rs index path changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-fors-index $(EXTRACTION_TMP_ROOT)/fout $(EXTRACTION_TMP_ROOT)/fout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-fors-index $${EXTRACTION_TMP_ROOT}/fout $${EXTRACTION_TMP_ROOT}/fout/Funs.fixed.lean
 
 # §33 P1 — guard that the vendored copies in extracted/Extracted/ stay
 # faithful to the SphincsCVerify sources they vendor (the version bridge's
@@ -989,93 +1102,93 @@ ai-prove:
 # §33 rank 3 — eip1271 byte-layout extraction (domain_separator + replay_safe_hash).
 # keccak is opaque (the single keccak256_pure axiom); reuses UserOp/FunsExternal.
 .PHONY: extract-aa-eip1271
-extract-aa-eip1271:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/aa && RUSTFLAGS="--cfg lean_extract" \
+_extract-aa-eip1271-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/aa && RUSTFLAGS="--cfg lean_extract" \
 	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque sha3 \
 	  --opaque 'pqsigner_tx_core::hash' \
 	  --start-from 'pqsigner_aa::eip1271::replay_safe_hash' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/eip1271.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/eout && mkdir -p $(EXTRACTION_TMP_ROOT)/eout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/eout -split-files $(EXTRACTION_TMP_ROOT)/eip1271.llbc
-	@sed 's/import Eip1271\./import Extracted.Eip1271./' $(EXTRACTION_TMP_ROOT)/eout/Funs.lean > $(EXTRACTION_TMP_ROOT)/eout/Funs.fixed.lean
-	@diff -u $(EXTRACTED_DIR)/Extracted/Eip1271/Funs.lean $(EXTRACTION_TMP_ROOT)/eout/Funs.fixed.lean \
+	  --dest-file $${EXTRACTION_TMP_ROOT}/eip1271.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/eout && mkdir -p $${EXTRACTION_TMP_ROOT}/eout
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/eout -split-files $${EXTRACTION_TMP_ROOT}/eip1271.llbc
+	@sed 's/import Eip1271\./import Extracted.Eip1271./' $${EXTRACTION_TMP_ROOT}/eout/Funs.lean > $${EXTRACTION_TMP_ROOT}/eout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/Eip1271/Funs.lean $${EXTRACTION_TMP_ROOT}/eout/Funs.fixed.lean \
 	  && echo "OK: committed eip1271 extraction matches the current Rust" \
 	  || { echo "DRIFT: aa/eip1271.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-aa-eip1271 $(EXTRACTION_TMP_ROOT)/eout $(EXTRACTION_TMP_ROOT)/eout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-aa-eip1271 $${EXTRACTION_TMP_ROOT}/eout $${EXTRACTION_TMP_ROOT}/eout/Funs.fixed.lean
 
 # §33 rank 4 — wots::extract_digits (independent bit-extractor; proven = same
 # closed-form window as read_bits_le). opaque sha2/zeroize like fors.
 .PHONY: extract-wots-digits
-extract-wots-digits:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
+_extract-wots-digits-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
 	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque zeroize \
 	  --start-from 'sphincs_c10::wots::extract_digits' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/wots.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/wout && mkdir -p $(EXTRACTION_TMP_ROOT)/wout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/wout -split-files $(EXTRACTION_TMP_ROOT)/wots.llbc
-	@sed 's/import Wots\./import Extracted.Wots./' $(EXTRACTION_TMP_ROOT)/wout/Funs.lean > $(EXTRACTION_TMP_ROOT)/wout/Funs.fixed.lean
-	@diff -u $(EXTRACTED_DIR)/Extracted/Wots/Funs.lean $(EXTRACTION_TMP_ROOT)/wout/Funs.fixed.lean \
+	  --dest-file $${EXTRACTION_TMP_ROOT}/wots.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/wout && mkdir -p $${EXTRACTION_TMP_ROOT}/wout
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/wout -split-files $${EXTRACTION_TMP_ROOT}/wots.llbc
+	@sed 's/import Wots\./import Extracted.Wots./' $${EXTRACTION_TMP_ROOT}/wout/Funs.lean > $${EXTRACTION_TMP_ROOT}/wout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/Wots/Funs.lean $${EXTRACTION_TMP_ROOT}/wout/Funs.fixed.lean \
 	  && echo "OK: committed wots extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/wots.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-wots-digits $(EXTRACTION_TMP_ROOT)/wout $(EXTRACTION_TMP_ROOT)/wout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-wots-digits $${EXTRACTION_TMP_ROOT}/wout $${EXTRACTION_TMP_ROOT}/wout/Funs.fixed.lean
 
 # §33 rank 7 — tx-core RLP bytes_to_u64 + bytes_to_u256 (canonical BE-int decode).
 # into_iter is given a DEF (not axiom) in Extracted/Rlp/FunsExternal.lean.
 .PHONY: extract-txcore-rlp
-extract-txcore-rlp:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/tx-core && RUSTFLAGS="--cfg lean_extract" \
+_extract-txcore-rlp-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/tx-core && RUSTFLAGS="--cfg lean_extract" \
 	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque sha3 \
 	  --start-from 'pqsigner_tx_core::rlp::bytes_to_u64' \
 	  --start-from 'pqsigner_tx_core::rlp::bytes_to_u256' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/rlp.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/rout && mkdir -p $(EXTRACTION_TMP_ROOT)/rout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/rout -split-files $(EXTRACTION_TMP_ROOT)/rlp.llbc
-	@sed 's/import Rlp\./import Extracted.Rlp./' $(EXTRACTION_TMP_ROOT)/rout/Funs.lean > $(EXTRACTION_TMP_ROOT)/rout/Funs.fixed.lean
-	@diff -u $(EXTRACTED_DIR)/Extracted/Rlp/Funs.lean $(EXTRACTION_TMP_ROOT)/rout/Funs.fixed.lean \
+	  --dest-file $${EXTRACTION_TMP_ROOT}/rlp.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/rout && mkdir -p $${EXTRACTION_TMP_ROOT}/rout
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/rout -split-files $${EXTRACTION_TMP_ROOT}/rlp.llbc
+	@sed 's/import Rlp\./import Extracted.Rlp./' $${EXTRACTION_TMP_ROOT}/rout/Funs.lean > $${EXTRACTION_TMP_ROOT}/rout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/Rlp/Funs.lean $${EXTRACTION_TMP_ROOT}/rout/Funs.fixed.lean \
 	  && echo "OK: committed RLP extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/rlp.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-txcore-rlp $(EXTRACTION_TMP_ROOT)/rout $(EXTRACTION_TMP_ROOT)/rout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-txcore-rlp $${EXTRACTION_TMP_ROOT}/rout $${EXTRACTION_TMP_ROOT}/rout/Funs.fixed.lean
 
 # §33 rank 12 — fw-manifest signed_preimage (75-byte frozen FW-signing layout).
 .PHONY: extract-fwmanifest-preimage
-extract-fwmanifest-preimage:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/fw-manifest && RUSTFLAGS="--cfg lean_extract" \
+_extract-fwmanifest-preimage-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/fw-manifest && RUSTFLAGS="--cfg lean_extract" \
 	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque sphincs_c10 --opaque subtle \
 	  --start-from 'fw_manifest::signed_preimage' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/fwman.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/fmout && mkdir -p $(EXTRACTION_TMP_ROOT)/fmout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/fmout -split-files $(EXTRACTION_TMP_ROOT)/fwman.llbc
-	@sed 's/import Fwman\./import Extracted.FwManifest./' $(EXTRACTION_TMP_ROOT)/fmout/Funs.lean > $(EXTRACTION_TMP_ROOT)/fmout/Funs.fixed.lean
-	@diff -u $(EXTRACTED_DIR)/Extracted/FwManifest/Funs.lean $(EXTRACTION_TMP_ROOT)/fmout/Funs.fixed.lean \
+	  --dest-file $${EXTRACTION_TMP_ROOT}/fwman.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/fmout && mkdir -p $${EXTRACTION_TMP_ROOT}/fmout
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/fmout -split-files $${EXTRACTION_TMP_ROOT}/fwman.llbc
+	@sed 's/import Fwman\./import Extracted.FwManifest./' $${EXTRACTION_TMP_ROOT}/fmout/Funs.lean > $${EXTRACTION_TMP_ROOT}/fmout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/FwManifest/Funs.lean $${EXTRACTION_TMP_ROOT}/fmout/Funs.fixed.lean \
 	  && echo "OK: committed fw-manifest extraction matches the current Rust" \
 	  || { echo "DRIFT: fw-manifest/src/lib.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-fwmanifest-preimage $(EXTRACTION_TMP_ROOT)/fmout $(EXTRACTION_TMP_ROOT)/fmout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-fwmanifest-preimage $${EXTRACTION_TMP_ROOT}/fmout $${EXTRACTION_TMP_ROOT}/fmout/Funs.fixed.lean
 
 # §33 rank 10 — U256::saturating_mul_u64 (via the u256_saturating_mul_u64 wrapper;
 # --start-from cannot target inherent-impl methods).
 .PHONY: extract-u256-mul
-extract-u256-mul:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/tx-core && RUSTFLAGS="--cfg lean_extract" \
+_extract-u256-mul-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/tx-core && RUSTFLAGS="--cfg lean_extract" \
 	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque sha3 \
 	  --start-from 'pqsigner_tx_core::eip1559::u256_saturating_mul_u64' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/u256mul.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/mout && mkdir -p $(EXTRACTION_TMP_ROOT)/mout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/mout -split-files $(EXTRACTION_TMP_ROOT)/u256mul.llbc
-	@sed 's/import U256mul\./import Extracted.U256Mul./' $(EXTRACTION_TMP_ROOT)/mout/Funs.lean > $(EXTRACTION_TMP_ROOT)/mout/Funs.fixed.lean
-	@diff -u $(EXTRACTED_DIR)/Extracted/U256Mul/Funs.lean $(EXTRACTION_TMP_ROOT)/mout/Funs.fixed.lean \
+	  --dest-file $${EXTRACTION_TMP_ROOT}/u256mul.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/mout && mkdir -p $${EXTRACTION_TMP_ROOT}/mout
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/mout -split-files $${EXTRACTION_TMP_ROOT}/u256mul.llbc
+	@sed 's/import U256mul\./import Extracted.U256Mul./' $${EXTRACTION_TMP_ROOT}/mout/Funs.lean > $${EXTRACTION_TMP_ROOT}/mout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/U256Mul/Funs.lean $${EXTRACTION_TMP_ROOT}/mout/Funs.fixed.lean \
 	  && echo "OK: committed u256-mul extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/eip1559.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-u256-mul $(EXTRACTION_TMP_ROOT)/mout $(EXTRACTION_TMP_ROOT)/mout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-u256-mul $${EXTRACTION_TMP_ROOT}/mout $${EXTRACTION_TMP_ROOT}/mout/Funs.fixed.lean
 
 # §33 — U256::format_decimal (via the u256_format_decimal wrapper; the four
 # fmt_* phase helpers exist BECAUSE the fused body hits an aeneas
@@ -1087,63 +1200,64 @@ extract-u256-mul:
 # build LOUDLY — 'environment already contains ...' — so the dedup cannot
 # silently drift).
 .PHONY: extract-format-decimal
-extract-format-decimal:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/tx-core && RUSTFLAGS="--cfg lean_extract" \
+_extract-format-decimal-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/tx-core && RUSTFLAGS="--cfg lean_extract" \
 	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque sha3 \
 	  --start-from 'pqsigner_tx_core::eip1559::u256_format_decimal' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/fmtdec.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/fdout && mkdir -p $(EXTRACTION_TMP_ROOT)/fdout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/fdout -split-files $(EXTRACTION_TMP_ROOT)/fmtdec.llbc
+	  --dest-file $${EXTRACTION_TMP_ROOT}/fmtdec.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/fdout && mkdir -p $${EXTRACTION_TMP_ROOT}/fdout
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/fdout -split-files $${EXTRACTION_TMP_ROOT}/fmtdec.llbc
 	@sed -e 's/^import Fmtdec.Types$$/import Extracted.U256Mul.Types -- canonical eip1559.U256 home (dedup: both extractions define it)/' \
 	     -e 's/import Fmtdec\./import Extracted.FormatDecimal./' \
-	     $(EXTRACTION_TMP_ROOT)/fdout/Funs.lean > $(EXTRACTION_TMP_ROOT)/fdout/Funs.fixed.lean
-	@diff -u $(EXTRACTED_DIR)/Extracted/FormatDecimal/Funs.lean $(EXTRACTION_TMP_ROOT)/fdout/Funs.fixed.lean \
+	     $${EXTRACTION_TMP_ROOT}/fdout/Funs.lean > $${EXTRACTION_TMP_ROOT}/fdout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/FormatDecimal/Funs.lean $${EXTRACTION_TMP_ROOT}/fdout/Funs.fixed.lean \
 	  && echo "OK: committed format-decimal extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/eip1559.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-format-decimal $(EXTRACTION_TMP_ROOT)/fdout $(EXTRACTION_TMP_ROOT)/fdout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-format-decimal $${EXTRACTION_TMP_ROOT}/fdout $${EXTRACTION_TMP_ROOT}/fdout/Funs.fixed.lean
 
 # §33 rank 6 — merkle::verify_auth_path (XMSS auth-path walk; th_pair opaque →
 # th_pair_pure axiom in Merkle/FunsExternal.lean). The dedup filter drops the
 # re-extracted make_adrs / params.H duplicates and imports their canonical homes.
 .PHONY: extract-merkle-verify
-extract-merkle-verify:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
+_extract-merkle-verify-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
 	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque zeroize \
 	  --opaque 'sphincs_c10::hash::th_pair' \
 	  --start-from 'sphincs_c10::merkle::verify_auth_path' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/merkle.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/mkout && mkdir -p $(EXTRACTION_TMP_ROOT)/mkout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/mkout -split-files $(EXTRACTION_TMP_ROOT)/merkle.llbc
-	@python3 scripts/dedup_extraction.py $(EXTRACTION_TMP_ROOT)/mkout/Funs.lean $(EXTRACTION_TMP_ROOT)/mkout/Funs.fixed.lean \
+	  --dest-file $${EXTRACTION_TMP_ROOT}/merkle.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/mkout && mkdir -p $${EXTRACTION_TMP_ROOT}/mkout
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/mkout -split-files $${EXTRACTION_TMP_ROOT}/merkle.llbc
+	@python3 scripts/dedup_extraction.py $${EXTRACTION_TMP_ROOT}/mkout/Funs.lean $${EXTRACTION_TMP_ROOT}/mkout/Funs.fixed.lean \
 	  --sed-import 'Merkle.=Extracted.Merkle.' \
 	  --kill 'sphincs_c10::address::make_adrs' --kill 'sphincs_c10::params::H' \
 	  --kill 'sphincs_c10::hash::pad16' --kill 'sphincs_c10::params::N' \
 	  --add-import Extracted.Adrs --add-import Extracted.Fors.Funs \
 	  --add-import Extracted.Hash.Funs
-	@diff -u $(EXTRACTED_DIR)/Extracted/Merkle/Funs.lean $(EXTRACTION_TMP_ROOT)/mkout/Funs.fixed.lean \
+	@diff -u $(EXTRACTED_DIR)/Extracted/Merkle/Funs.lean $${EXTRACTION_TMP_ROOT}/mkout/Funs.fixed.lean \
 	  && echo "OK: committed merkle extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/merkle.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-merkle-verify $(EXTRACTION_TMP_ROOT)/mkout $(EXTRACTION_TMP_ROOT)/mkout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-merkle-verify $${EXTRACTION_TMP_ROOT}/mkout $${EXTRACTION_TMP_ROOT}/mkout/Funs.fixed.lean
 
 # §33 rank 5 — wots::pk_from_sig (verifier-side WOTS+C; wots_digest/chain_hash/
 # th_multi opaque → _pure axioms in PkFromSig/FunsExternal.lean; dedup drops
 # the re-extracted make_adrs/set_chain_index/extract_digits/params/pad16).
 .PHONY: extract-wots-pkfromsig
-extract-wots-pkfromsig:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
+_extract-wots-pkfromsig-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
 	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque zeroize \
 	  --opaque 'sphincs_c10::hash::chain_hash' --opaque 'sphincs_c10::hash::th_multi' \
 	  --opaque 'sphincs_c10::hash::wots_digest' \
 	  --start-from 'sphincs_c10::wots::pk_from_sig' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/pkfs.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/pout && mkdir -p $(EXTRACTION_TMP_ROOT)/pout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/pout -split-files $(EXTRACTION_TMP_ROOT)/pkfs.llbc
-	@python3 scripts/dedup_extraction.py $(EXTRACTION_TMP_ROOT)/pout/Funs.lean $(EXTRACTION_TMP_ROOT)/pout/Funs.fixed.lean \
+	  --dest-file $${EXTRACTION_TMP_ROOT}/pkfs.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/pout && mkdir -p $${EXTRACTION_TMP_ROOT}/pout
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/pout -split-files $${EXTRACTION_TMP_ROOT}/pkfs.llbc
+	@python3 scripts/dedup_extraction.py $${EXTRACTION_TMP_ROOT}/pout/Funs.lean $${EXTRACTION_TMP_ROOT}/pout/Funs.fixed.lean \
 	  --sed-import 'Pkfs.=Extracted.PkFromSig.' \
 	  --kill 'sphincs_c10::address::make_adrs' --kill 'sphincs_c10::address::set_chain_index' \
 	  --kill 'sphincs_c10::wots::extract_digits' \
@@ -1151,26 +1265,26 @@ extract-wots-pkfromsig:
 	  --kill 'sphincs_c10::params::L' --kill 'sphincs_c10::params::W_MASK' \
 	  --kill 'sphincs_c10::hash::pad16' --kill 'sphincs_c10::params::N' \
 	  --add-import Extracted.Adrs --add-import Extracted.Wots.Funs --add-import Extracted.Merkle.Funs
-	@diff -u $(EXTRACTED_DIR)/Extracted/PkFromSig/Funs.lean $(EXTRACTION_TMP_ROOT)/pout/Funs.fixed.lean \
+	@diff -u $(EXTRACTED_DIR)/Extracted/PkFromSig/Funs.lean $${EXTRACTION_TMP_ROOT}/pout/Funs.fixed.lean \
 	  && echo "OK: committed pk_from_sig extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/wots.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-wots-pkfromsig $(EXTRACTION_TMP_ROOT)/pout $(EXTRACTION_TMP_ROOT)/pout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-wots-pkfromsig $${EXTRACTION_TMP_ROOT}/pout $${EXTRACTION_TMP_ROOT}/pout/Funs.fixed.lean
 
 # §33 rank 11 — tx::erc20::merkle::verify_proof (trust-bundle merkle walk;
 # leaf_hash/node_hash opaque → _pure axioms in TxMerkle/FunsExternal.lean).
 .PHONY: extract-tx-merkle
-extract-tx-merkle:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/tx && RUSTFLAGS="--cfg lean_extract" \
+_extract-tx-merkle-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/tx && RUSTFLAGS="--cfg lean_extract" \
 	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 \
 	  --opaque 'pqsigner_tx::erc20::merkle::leaf_hash' \
 	  --opaque 'pqsigner_tx::erc20::merkle::node_hash' \
 	  --start-from 'pqsigner_tx::erc20::merkle::verify_proof' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/txmk.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/tout && mkdir -p $(EXTRACTION_TMP_ROOT)/tout
-	@aeneas_log="$(EXTRACTION_TMP_ROOT)/tx-merkle-aeneas.log"; \
-	if $(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/tout -split-files $(EXTRACTION_TMP_ROOT)/txmk.llbc 2>&1 | tee "$$aeneas_log"; then \
+	  --dest-file $${EXTRACTION_TMP_ROOT}/txmk.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/tout && mkdir -p $${EXTRACTION_TMP_ROOT}/tout
+	@aeneas_log="$${EXTRACTION_TMP_ROOT}/tx-merkle-aeneas.log"; \
+	if $(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/tout -split-files $${EXTRACTION_TMP_ROOT}/txmk.llbc 2>&1 | tee "$$aeneas_log"; then \
 	  :; \
 	else \
 	  rc=$$?; \
@@ -1184,61 +1298,61 @@ extract-tx-merkle:
 	  fi; \
 	  exit $$rc; \
 	fi
-	@sed 's/import Txmk\./import Extracted.TxMerkle./' $(EXTRACTION_TMP_ROOT)/tout/Funs.lean > $(EXTRACTION_TMP_ROOT)/tout/Funs.fixed.lean
-	@diff -u $(EXTRACTED_DIR)/Extracted/TxMerkle/Funs.lean $(EXTRACTION_TMP_ROOT)/tout/Funs.fixed.lean \
+	@sed 's/import Txmk\./import Extracted.TxMerkle./' $${EXTRACTION_TMP_ROOT}/tout/Funs.lean > $${EXTRACTION_TMP_ROOT}/tout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/TxMerkle/Funs.lean $${EXTRACTION_TMP_ROOT}/tout/Funs.fixed.lean \
 	  && echo "OK: committed tx-merkle extraction matches the current Rust" \
 	  || { echo "DRIFT: tx/src/erc20/merkle.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-tx-merkle $(EXTRACTION_TMP_ROOT)/tout $(EXTRACTION_TMP_ROOT)/tout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-tx-merkle $${EXTRACTION_TMP_ROOT}/tout $${EXTRACTION_TMP_ROOT}/tout/Funs.fixed.lean
 
 # §33 rank 9 — bip39 11-bit pack/unpack round-trip (via the roundtrip_11 pub
 # wrapper; private write_11_bits/read_11_bits can't be --start-from'd).
 .PHONY: extract-bip39-roundtrip
-extract-bip39-roundtrip:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/bip39 && RUSTFLAGS="--cfg lean_extract" \
+_extract-bip39-roundtrip-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/bip39 && RUSTFLAGS="--cfg lean_extract" \
 	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque zeroize --opaque subtle \
 	  --start-from 'sphincs_tz_bip39::full::roundtrip_11' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/bip39.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/bout && mkdir -p $(EXTRACTION_TMP_ROOT)/bout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/bout -split-files $(EXTRACTION_TMP_ROOT)/bip39.llbc
-	@sed 's/import Bip39\./import Extracted.Bip39./' $(EXTRACTION_TMP_ROOT)/bout/Funs.lean > $(EXTRACTION_TMP_ROOT)/bout/Funs.fixed.lean
-	@diff -u $(EXTRACTED_DIR)/Extracted/Bip39/Funs.lean $(EXTRACTION_TMP_ROOT)/bout/Funs.fixed.lean \
+	  --dest-file $${EXTRACTION_TMP_ROOT}/bip39.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/bout && mkdir -p $${EXTRACTION_TMP_ROOT}/bout
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/bout -split-files $${EXTRACTION_TMP_ROOT}/bip39.llbc
+	@sed 's/import Bip39\./import Extracted.Bip39./' $${EXTRACTION_TMP_ROOT}/bout/Funs.lean > $${EXTRACTION_TMP_ROOT}/bout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/Bip39/Funs.lean $${EXTRACTION_TMP_ROOT}/bout/Funs.fixed.lean \
 	  && echo "OK: committed bip39 extraction matches the current Rust" \
 	  || { echo "DRIFT: bip39/src changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-bip39-roundtrip $(EXTRACTION_TMP_ROOT)/bout $(EXTRACTION_TMP_ROOT)/bout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-bip39-roundtrip $${EXTRACTION_TMP_ROOT}/bout $${EXTRACTION_TMP_ROOT}/bout/Funs.fixed.lean
 
 # §33 rank 8 — rlp::decode_item (canonical-RLP grammar). Types/FunsExternal are
 # hand-deduped against Rlp.* (shared RlpError + into_iter). The recipe now
 # reproduces the Types dedup and compares it exactly; the raw external template
 # is hash-pinned and its interface must be covered by the committed import closure.
 .PHONY: extract-decode-item
-extract-decode-item:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/tx-core && RUSTFLAGS="--cfg lean_extract" \
+_extract-decode-item-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/tx-core && RUSTFLAGS="--cfg lean_extract" \
 	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque sha3 \
 	  --start-from 'pqsigner_tx_core::rlp::decode_item' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/decode.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/dout && mkdir -p $(EXTRACTION_TMP_ROOT)/dout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/dout -split-files $(EXTRACTION_TMP_ROOT)/decode.llbc
-	@sed 's/import Decode\./import Extracted.Decode./' $(EXTRACTION_TMP_ROOT)/dout/Funs.lean > $(EXTRACTION_TMP_ROOT)/dout/Funs.fixed.lean
-	@python3 scripts/dedup_extraction.py $(EXTRACTION_TMP_ROOT)/dout/Types.lean $(EXTRACTION_TMP_ROOT)/dout/Types.fixed.lean \
+	  --dest-file $${EXTRACTION_TMP_ROOT}/decode.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/dout && mkdir -p $${EXTRACTION_TMP_ROOT}/dout
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/dout -split-files $${EXTRACTION_TMP_ROOT}/decode.llbc
+	@sed 's/import Decode\./import Extracted.Decode./' $${EXTRACTION_TMP_ROOT}/dout/Funs.lean > $${EXTRACTION_TMP_ROOT}/dout/Funs.fixed.lean
+	@python3 scripts/dedup_extraction.py $${EXTRACTION_TMP_ROOT}/dout/Types.lean $${EXTRACTION_TMP_ROOT}/dout/Types.fixed.lean \
 	  --kill 'pqsigner_tx_core::rlp::RlpError' --add-import Extracted.Rlp.Types
-	@diff -u $(EXTRACTED_DIR)/Extracted/Decode/Funs.lean $(EXTRACTION_TMP_ROOT)/dout/Funs.fixed.lean \
+	@diff -u $(EXTRACTED_DIR)/Extracted/Decode/Funs.lean $${EXTRACTION_TMP_ROOT}/dout/Funs.fixed.lean \
 	  && echo "OK: committed decode_item extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/rlp.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-decode-item $(EXTRACTION_TMP_ROOT)/dout $(EXTRACTION_TMP_ROOT)/dout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-decode-item $${EXTRACTION_TMP_ROOT}/dout $${EXTRACTION_TMP_ROOT}/dout/Funs.fixed.lean
 
 # §33 axiom-collapse — the five sphincs-c10 tweakable-hash primitives with
 # sha256_bytes as the SINGLE opaque boundary (FunsExternal wires it to the
 # vendored FIPS 180-4 sha256_pure). chain_hash extracts its real loop (calls
 # th); th/th_pair/th_multi/wots_digest expose their exact preimage assembly.
 .PHONY: extract-hash-fns
-extract-hash-fns:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
+_extract-hash-fns-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/sphincs-c10 && RUSTFLAGS="--cfg lean_extract" \
 	  $(PQLEAN)/charon cargo --preset=aeneas --opaque sha2 --opaque zeroize \
 	  --opaque 'sphincs_c10::hash::sha256_bytes' \
 	  --start-from 'sphincs_c10::hash::th' \
@@ -1246,16 +1360,15 @@ extract-hash-fns:
 	  --start-from 'sphincs_c10::hash::th_multi' \
 	  --start-from 'sphincs_c10::hash::chain_hash' \
 	  --start-from 'sphincs_c10::hash::wots_digest' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/hashfns.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/hout && mkdir -p $(EXTRACTION_TMP_ROOT)/hout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/hout -split-files $(EXTRACTION_TMP_ROOT)/hashfns.llbc
-	@python3 scripts/dedup_extraction.py $(EXTRACTION_TMP_ROOT)/hout/Funs.lean $(EXTRACTION_TMP_ROOT)/hout/Funs.fixed.lean \
+	  --dest-file $${EXTRACTION_TMP_ROOT}/hashfns.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/hout && mkdir -p $${EXTRACTION_TMP_ROOT}/hout
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/hout -split-files $${EXTRACTION_TMP_ROOT}/hashfns.llbc
+	@python3 scripts/dedup_extraction.py $${EXTRACTION_TMP_ROOT}/hout/Funs.lean $${EXTRACTION_TMP_ROOT}/hout/Funs.fixed.lean \
 	  --sed-import 'Hashfns.=Extracted.Hash.'
-	@diff -u $(EXTRACTED_DIR)/Extracted/Hash/Funs.lean $(EXTRACTION_TMP_ROOT)/hout/Funs.fixed.lean \
+	@diff -u $(EXTRACTED_DIR)/Extracted/Hash/Funs.lean $${EXTRACTION_TMP_ROOT}/hout/Funs.fixed.lean \
 	  && echo "OK: committed hash-fns extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/hash.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-hash-fns $(EXTRACTION_TMP_ROOT)/hout $(EXTRACTION_TMP_ROOT)/hout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-hash-fns $${EXTRACTION_TMP_ROOT}/hout $${EXTRACTION_TMP_ROOT}/hout/Funs.fixed.lean
 
 # F4 (2026-07-19, fv-deep-review) — domain::{,de}serialize_pin_state (the
 # PIN-counter parser; the NON-PRODUCTION mock-SE path). No --opaque flags and
@@ -1272,28 +1385,28 @@ extract-hash-fns:
 # re-inserted. TypesExternal/FunsExternal are hand-filled: their raw templates
 # are hash-pinned and their interfaces checked against the committed import
 # closure. Both normalized Funs.lean and Types.lean are compared exactly.
-extract-pinstate:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/domain && \
+_extract-pinstate-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/domain && \
 	  $(PQLEAN)/charon cargo --preset=aeneas \
 	  --start-from 'pqsigner_domain::serialize_pin_state' \
 	  --start-from 'pqsigner_domain::deserialize_pin_state' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/pinstate.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/psout && mkdir -p $(EXTRACTION_TMP_ROOT)/psout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/psout -split-files $(EXTRACTION_TMP_ROOT)/pinstate.llbc
+	  --dest-file $${EXTRACTION_TMP_ROOT}/pinstate.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/psout && mkdir -p $${EXTRACTION_TMP_ROOT}/psout
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/psout -split-files $${EXTRACTION_TMP_ROOT}/pinstate.llbc
 	@sed -e '1s|^-- THIS FILE WAS AUTOMATICALLY GENERATED BY AENEAS|-- THIS FILE WAS AUTOMATICALLY GENERATED BY AENEAS (import paths localised:\n-- `Pinstate.*` -> `Extracted.PinState.*` to fit this project'"'"'s module layout).|' \
 	     -e 's/import Pinstate\./import Extracted.PinState./' \
 	     -e '/^    core\.slice\.iter\.Chunks\.Insts\.CoreIterTraitsIteratorIteratorSharedASlice\.next$$/a\  step_by :=\n    core.slice.iter.Chunks.Insts.CoreIterTraitsIteratorIteratorSharedASlice.step_by' \
 	     -e '/^    core\.slice\.iter\.Chunks\.Insts\.CoreIterTraitsIteratorIteratorSharedASlice\.enumerate$$/a\  take :=\n    core.slice.iter.Chunks.Insts.CoreIterTraitsIteratorIteratorSharedASlice.take' \
-	     $(EXTRACTION_TMP_ROOT)/psout/Funs.lean > $(EXTRACTION_TMP_ROOT)/psout/Funs.fixed.lean
+	     $${EXTRACTION_TMP_ROOT}/psout/Funs.lean > $${EXTRACTION_TMP_ROOT}/psout/Funs.fixed.lean
 	@sed -e '1s|^-- THIS FILE WAS AUTOMATICALLY GENERATED BY AENEAS|-- THIS FILE WAS AUTOMATICALLY GENERATED BY AENEAS (import paths localised:\n-- `Pinstate.*` -> `Extracted.PinState.*` to fit this project'"'"'s module layout).|' \
 	     -e 's/import Pinstate\./import Extracted.PinState./' \
-	     $(EXTRACTION_TMP_ROOT)/psout/Types.lean > $(EXTRACTION_TMP_ROOT)/psout/Types.fixed.lean
-	@diff -u $(EXTRACTED_DIR)/Extracted/PinState/Funs.lean $(EXTRACTION_TMP_ROOT)/psout/Funs.fixed.lean \
+	     $${EXTRACTION_TMP_ROOT}/psout/Types.lean > $${EXTRACTION_TMP_ROOT}/psout/Types.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/PinState/Funs.lean $${EXTRACTION_TMP_ROOT}/psout/Funs.fixed.lean \
 	  && echo "OK: committed pinstate extraction matches the current Rust" \
 	  || { echo "DRIFT: domain/src/lib.rs pin-state path changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-pinstate $(EXTRACTION_TMP_ROOT)/psout $(EXTRACTION_TMP_ROOT)/psout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-pinstate $${EXTRACTION_TMP_ROOT}/psout $${EXTRACTION_TMP_ROOT}/psout/Funs.fixed.lean
 
 # F4 (2026-07-19, fv-deep-review) — domain slot-KDF (slot_master_entropy_from_bip39,
 # derive_c10_master_from_bip39_seed, slot_entropy, derive_c10_slot_seeds). The
@@ -1305,9 +1418,10 @@ extract-pinstate:
 # prefix (the .llbc filename sets the aeneas module prefix). No RUSTFLAGS
 # override: domain/src has no #[cfg(lean_extract)] gate. Generated Funs/Types
 # are compared exactly and the raw external-template inventory is hash-pinned.
-extract-slotkdf:
-	@mkdir -p $(EXTRACTION_TMP_ROOT)
-	@cd $(REPO_ROOT)/domain && \
+_extract-slotkdf-impl:
+	@$(_begin_private_extraction)
+	@mkdir -p $${EXTRACTION_TMP_ROOT}
+	@( cd $(REPO_ROOT)/domain && \
 	  $(PQLEAN)/charon cargo --preset=aeneas \
 	  --opaque 'pqsigner_domain::sha256_bytes' \
 	  --opaque 'pqsigner_domain::hmac_sha512_bytes' \
@@ -1315,12 +1429,11 @@ extract-slotkdf:
 	  --start-from 'pqsigner_domain::derive_c10_master_from_bip39_seed' \
 	  --start-from 'pqsigner_domain::slot_entropy' \
 	  --start-from 'pqsigner_domain::derive_c10_slot_seeds' \
-	  --dest-file $(EXTRACTION_TMP_ROOT)/sk.llbc 2>&1 | tail -1
-	@rm -rf $(EXTRACTION_TMP_ROOT)/skout && mkdir -p $(EXTRACTION_TMP_ROOT)/skout
-	@$(PQLEAN)/aeneas -backend lean -dest $(EXTRACTION_TMP_ROOT)/skout -split-files $(EXTRACTION_TMP_ROOT)/sk.llbc
-	@sed 's/import Sk\./import Extracted.SlotKdf./' $(EXTRACTION_TMP_ROOT)/skout/Funs.lean > $(EXTRACTION_TMP_ROOT)/skout/Funs.fixed.lean
-	@diff -u $(EXTRACTED_DIR)/Extracted/SlotKdf/Funs.lean $(EXTRACTION_TMP_ROOT)/skout/Funs.fixed.lean \
+	  --dest-file $${EXTRACTION_TMP_ROOT}/sk.llbc 2>&1 | tail -1 )
+	@rm -rf $${EXTRACTION_TMP_ROOT}/skout && mkdir -p $${EXTRACTION_TMP_ROOT}/skout
+	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/skout -split-files $${EXTRACTION_TMP_ROOT}/sk.llbc
+	@sed 's/import Sk\./import Extracted.SlotKdf./' $${EXTRACTION_TMP_ROOT}/skout/Funs.lean > $${EXTRACTION_TMP_ROOT}/skout/Funs.fixed.lean
+	@diff -u $(EXTRACTED_DIR)/Extracted/SlotKdf/Funs.lean $${EXTRACTION_TMP_ROOT}/skout/Funs.fixed.lean \
 	  && echo "OK: committed slot-kdf extraction matches the current Rust" \
 	  || { echo "DRIFT: domain/src/lib.rs slot-KDF path changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-slotkdf $(EXTRACTION_TMP_ROOT)/skout $(EXTRACTION_TMP_ROOT)/skout/Funs.fixed.lean
-	@$(_cleanup_extraction_tmp)
+	@python3 scripts/check_extraction_regen_output.py extract-slotkdf $${EXTRACTION_TMP_ROOT}/skout $${EXTRACTION_TMP_ROOT}/skout/Funs.fixed.lean

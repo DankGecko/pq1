@@ -68,6 +68,18 @@ EXPECTED_DUMP_HEADLINE_COUNT = 102
 EXPECTED_DUMP_HEADLINE_SET_SHA256 = (
     "99b6c0bc2c53a4a25bca59d6de1bcabd414bc6a6ac7e4e502c04997e3a736acc"
 )
+# Checker-owned corpus identity.  The definition digest is over the complete
+# mutation objects sorted by id and serialized as canonical JSON.  Pinning the
+# definitions (not only their count/ids) keeps a weakened replacement, tier
+# demotion, or changed expected outcome from silently shrinking the campaign.
+EXPECTED_MUTATION_COUNT = 13
+EXPECTED_MUTATION_ID_SET_SHA256 = (
+    "bf901ee7432f4d73f4f567117e96d13b40205b30361e89e735dd3edc70e2965e"
+)
+EXPECTED_MUTATION_DEFINITIONS_SHA256 = (
+    "170dad9e5c5f42322fde80aca28986df13cf221f6dc7b24cd6b88553fbc68e15"
+)
+EXPECTED_TIER_COUNTS = {"quick": 2, "default": 8, "full": 13}
 
 # Global so the signal/atexit handler can restore a half-applied mutation.
 _ACTIVE: tuple[Path, str] | None = None
@@ -187,6 +199,75 @@ class HarnessError(Exception):
     pass
 
 
+def validate_mutation_manifest(manifest: object) -> list[dict]:
+    """Return the exact pinned mutation corpus or fail closed."""
+    if not isinstance(manifest, dict):
+        raise HarnessError("proof_mutations.json must contain a JSON object")
+    muts = manifest.get("mutations")
+    if not isinstance(muts, list) or not muts:
+        raise HarnessError("proof_mutations.json mutations must be a nonempty list")
+    if any(not isinstance(mut, dict) for mut in muts):
+        raise HarnessError("every proof mutation must be a JSON object")
+
+    ids = [mut.get("id") for mut in muts]
+    if any(not isinstance(mut_id, str) or not mut_id for mut_id in ids):
+        raise HarnessError("every proof mutation must have a nonempty string id")
+    duplicate_ids = sorted(
+        mut_id for mut_id, count in collections.Counter(ids).items() if count != 1
+    )
+    if duplicate_ids:
+        raise HarnessError(f"duplicate proof-mutation ids: {duplicate_ids}")
+    if ids.count("canary") != 1:
+        raise HarnessError("proof-mutation corpus must contain exactly one canary")
+
+    sorted_ids = sorted(ids)
+    id_digest = hashlib.sha256(
+        ("\n".join(sorted_ids) + "\n").encode("utf-8")
+    ).hexdigest()
+    canonical_mutations = sorted(muts, key=lambda mut: mut["id"])
+    definition_digest = hashlib.sha256(
+        json.dumps(
+            canonical_mutations,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    if (
+        len(muts) != EXPECTED_MUTATION_COUNT
+        or id_digest != EXPECTED_MUTATION_ID_SET_SHA256
+        or definition_digest != EXPECTED_MUTATION_DEFINITIONS_SHA256
+    ):
+        raise HarnessError(
+            "proof-mutation corpus identity drift: "
+            f"count={len(muts)} id_sha256={id_digest} "
+            f"definition_sha256={definition_digest}; expected "
+            f"count={EXPECTED_MUTATION_COUNT} "
+            f"id_sha256={EXPECTED_MUTATION_ID_SET_SHA256} "
+            f"definition_sha256={EXPECTED_MUTATION_DEFINITIONS_SHA256}"
+        )
+
+    for tier, expected_count in EXPECTED_TIER_COUNTS.items():
+        selected = [
+            mut for mut in muts
+            if TIER_ORDER.get(mut.get("tier", "default"), 99) <= TIER_ORDER[tier]
+        ]
+        if len(selected) != expected_count:
+            raise HarnessError(
+                f"proof-mutation {tier} tier selects {len(selected)} definitions; "
+                f"expected exactly {expected_count}"
+            )
+    return muts
+
+
+def load_mutation_manifest() -> list[dict]:
+    try:
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HarnessError(f"cannot parse {MANIFEST}: {exc}") from exc
+    return validate_mutation_manifest(manifest)
+
+
 def dump_validation_self_test() -> bool:
     """Pure controls: headline drift and partial receipts must be rejected."""
     source = (LEAN_DIR / DUMP_SCRIPT).read_text(encoding="utf-8")
@@ -297,8 +378,9 @@ def main() -> int:
     args = sys.argv[1:]
     try:
         dump_control_ok = dump_validation_self_test()
+        muts = load_mutation_manifest()
     except HarnessError as exc:
-        print(f"ERROR: closure-dump inventory check failed: {exc}", file=sys.stderr)
+        print(f"ERROR: proof-mutation receipt/corpus check failed: {exc}", file=sys.stderr)
         return 2
     if not dump_control_ok:
         print(
@@ -308,10 +390,20 @@ def main() -> int:
         )
         return 2
     if args == ["--self-test"]:
+        try:
+            validate_mutation_manifest({"mutations": []})
+        except HarnessError:
+            pass
+        else:
+            print(
+                "ERROR: empty proof-mutation corpus negative control was accepted",
+                file=sys.stderr,
+            )
+            return 2
         print(
             "check_proof_mutations --self-test PASS "
             "(headline deletion/substitution and partial dumps rejected; "
-            "complete pinned dump accepted)"
+            "complete pinned dump and exact nonempty mutation corpus accepted)"
         )
         return 0
     tier = os.environ.get("MUTATIONS", "default")
@@ -321,12 +413,18 @@ def main() -> int:
         print(f"ERROR: unknown tier {tier!r} (quick|default|full)", file=sys.stderr)
         return 2
 
-    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    muts = manifest["mutations"]
     sel = [m for m in muts if TIER_ORDER[m.get("tier", "default")] <= TIER_ORDER[tier]]
     # Canary is ALWAYS included regardless of tier.
     if not any(m["id"] == "canary" for m in sel):
         sel = [m for m in muts if m["id"] == "canary"] + sel
+    expected_selected = EXPECTED_TIER_COUNTS[tier]
+    if len(sel) != expected_selected:
+        print(
+            f"ERROR: tier {tier} selected {len(sel)} mutations; "
+            f"expected exactly {expected_selected}",
+            file=sys.stderr,
+        )
+        return 2
 
     if "--list" in args:
         for m in sel:
@@ -362,7 +460,7 @@ def main() -> int:
             canary_ok = matched
 
     # Canary gate: if the canary did not behave (build_fails), the harness is void.
-    if canary_ok is False:
+    if canary_ok is not True:
         print("\n=== HARNESS BROKEN: the canary mutation did NOT break the build. "
               "The mutation harness cannot detect a fault — ALL results are void. ===", file=sys.stderr)
         return 2

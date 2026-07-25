@@ -172,6 +172,19 @@ def _balanced_body(s: str, open_at: int) -> str:
     raise ValueError("unbalanced function braces")
 
 
+def _brace_depth_at(s: str, pos: int) -> int:
+    """Brace nesting immediately before pos in comment/string-stripped text."""
+    depth = 0
+    for c in s[:pos]:
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth < 0:
+                raise ValueError("unexpected closing brace")
+    return depth
+
+
 def _strip_c_comments(src: str) -> str:
     """Blank Solidity comments and string literals before source matching."""
     out: list[str] = []
@@ -452,10 +465,16 @@ def check_sol_consumer(src: str) -> None:
     digest_binding = re.compile(
         r"\bbytes32\s+digest\s*=\s*sphincsDigest\s*\(\s*userOp\s*\)\s*;"
     )
-    if len(digest_binding.findall(body)) != 1:
+    digest_bindings = list(digest_binding.finditer(body))
+    if len(digest_bindings) != 1:
         raise ValueError(
             "_validateSignature must bind exactly one "
             "`bytes32 digest = sphincsDigest(userOp);`"
+        )
+    if _brace_depth_at(body, digest_bindings[0].start()) != 0:
+        raise ValueError(
+            "_validateSignature canonical digest binding must execute at "
+            "top-level, not inside conditional/dead control flow"
         )
     if len(re.findall(r"\bsphincsDigest\s*\(", body)) != 1:
         raise ValueError(
@@ -466,17 +485,51 @@ def check_sol_consumer(src: str) -> None:
             "_validateSignature must assign the verifier digest exactly once"
         )
 
-    verify_calls = list(re.finditer(r"\bc10Verifier\.verify\s*\(", body))
+    verify_calls = list(re.finditer(
+        r"\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*verify\s*\(", body
+    ))
     if len(verify_calls) != 1:
         raise ValueError(
-            "_validateSignature must contain exactly one c10Verifier.verify call"
+            "_validateSignature must contain exactly one verifier `.verify` call"
         )
-    args, _ = _balanced_args(body, verify_calls[0].end() - 1)
+    if verify_calls[0].group(1) != "c10Verifier":
+        raise ValueError(
+            "_validateSignature's sole verifier call must use c10Verifier directly"
+        )
+    if _brace_depth_at(body, verify_calls[0].start()) != 0:
+        raise ValueError(
+            "_validateSignature canonical verifier call must execute at "
+            "top-level, not inside conditional/dead control flow"
+        )
+    try_prefix = re.search(r"\btry\s*$", body[:verify_calls[0].start()])
+    if (
+        try_prefix is None
+        or _brace_depth_at(body, try_prefix.start()) != 0
+    ):
+        raise ValueError(
+            "_validateSignature must execute the canonical verifier call "
+            "directly as a top-level try expression"
+        )
+    args, verify_end = _balanced_args(body, verify_calls[0].end() - 1)
     expected = ["pkSeed", "pkRoot", "digest", "innerSig"]
     if [_normalise_expr(arg) for arg in args] != expected:
         raise ValueError(
             "_validateSignature must call "
             "c10Verifier.verify(pkSeed, pkRoot, digest, innerSig)"
+        )
+    canonical_result_flow = re.compile(
+        r"\s*returns\s*\(\s*bool\s+ok\s*\)\s*\{\s*"
+        r"if\s*\(\s*!\s*ok\s*\)\s*return\s+SIG_VALIDATION_FAILED\s*;\s*"
+        r"\}\s*catch\s*\{\s*return\s+SIG_VALIDATION_FAILED\s*;\s*\}"
+    )
+    if canonical_result_flow.match(body, verify_end) is None:
+        raise ValueError(
+            "_validateSignature canonical C10 call must retain the reviewed "
+            "top-level try/false-return/catch-return control flow"
+        )
+    if len(re.findall(r"\bc10Verifier\b", body)) != 1:
+        raise ValueError(
+            "_validateSignature must not alias or otherwise reuse c10Verifier"
         )
     if len(re.findall(r"\bdigest\b", body)) != 2:
         raise ValueError(
@@ -916,6 +969,51 @@ def self_test() -> int:
                 1,
             ),
         )
+        canonical_flow = (
+            "        bytes32 digest = sphincsDigest(userOp);\n"
+            "        try c10Verifier.verify(pkSeed, pkRoot, digest, innerSig) "
+            "returns (bool ok) {\n"
+            "            if (!ok) return SIG_VALIDATION_FAILED;\n"
+            "        } catch {\n"
+            "            return SIG_VALIDATION_FAILED;\n"
+            "        }\n"
+        )
+        if sol_src.count(canonical_flow) != 1:
+            print("  FAIL: could not uniquely locate canonical Solidity try/catch flow")
+            ok = False
+        else:
+            dead_only = (
+                "        if (false) {\n"
+                "            bytes32 digest = sphincsDigest(userOp);\n"
+                "            try c10Verifier.verify(pkSeed, pkRoot, digest, innerSig) "
+                "returns (bool ok) {\n"
+                "                if (!ok) return SIG_VALIDATION_FAILED;\n"
+                "            } catch {\n"
+                "                return SIG_VALIDATION_FAILED;\n"
+                "            }\n"
+                "        }\n"
+            )
+            expect_consumer_rejection(
+                "a canonical Solidity verifier flow hidden under if(false)",
+                check_sol_consumer,
+                sol_src.replace(canonical_flow, dead_only, 1),
+            )
+            dead_with_live_alias = (
+                dead_only
+                + "        ISPHINCSVerifier liveVerifier = c10Verifier;\n"
+                + "        try liveVerifier.verify("
+                "pkSeed, pkRoot, bytes32(0), innerSig"
+                ") returns (bool liveOk) {\n"
+                + "            if (!liveOk) return SIG_VALIDATION_FAILED;\n"
+                + "        } catch {\n"
+                + "            return SIG_VALIDATION_FAILED;\n"
+                + "        }\n"
+            )
+            expect_consumer_rejection(
+                "a dead canonical Solidity decoy plus live zero-digest alias",
+                check_sol_consumer,
+                sol_src.replace(canonical_flow, dead_with_live_alias, 1),
+            )
         sol_comment_decoy = sol_src.replace(
             sol_verify,
             "verifier.verify(pkSeed, pkRoot, verifierInput, innerSig)",
