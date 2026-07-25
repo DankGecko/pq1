@@ -2862,3 +2862,69 @@ over an ARBITRARY `adrs list` under only `uniq_wgpidxs`, whose live consumer is 
 necessary and NONE of them detects an unsatisfiable premise set. A 0-admit theorem can say nothing at all. Premise
 JOINT-SATISFIABILITY must be a standing gate item, with a witness obligation: for every carried premise set, either
 exhibit a model satisfying all of them simultaneously, or state that non-vacuity is unestablished.
+
+### 2026-07-25 — VACUITY REPAIRED: the contradictory premise is ELIMINATED (not guarded); capstone premise-free on the emb_tw axis
+
+Follow-up to the retraction above. The repair took the STRONGER of the two routes: the refutable premise is **deleted
+outright**, not replaced by a guarded version that would owe its own satisfiability argument.
+
+**WHY ELIMINATION WORKS (design, adversarially reviewed by GPT-5.6 + Kimi K3, then source-verified):**
+ - `get_wgpidxs (emb_tw a) = put (get_wgpidxs a) 1 pkcotype` (`wgp_embv`), and `nth3_valid` (WOTS_C_Real.ec:132)
+   gives every VALID WOTS address `chtype` at that very position. So writing a CONSTANT there cannot merge two
+   distinct group prefixes: for valid a,b the injectivity conclusion follows with NO injectivity premise. Proven as
+   `emb_dist_valid (l) : all valid_wadrs l => uniq_wgpidxs l => uniq (map emb_tw l)` (CERTIFIED-0-ADMIT).
+   Its negative control (same script, guard removed) correctly FAILS -- the guard is load-bearing, not decoration.
+ - THE INVARIANT IS TRUE BY **INTERFACE TYPING**, not a runtime check: the signing oracle's type is
+   `proc query(wad : wadrs, m)` (WOTS_C_Scheme.ec:132) with `wadrs = WAddress.sT`, a Subtype at `P <- valid_wadrs`
+   (WOTS_TW_ES.ec:867). The adversary CANNOT EXPRESS an invalid address on that interface; `WAddress.valP` gives
+   validity by construction. `O_STCRC_Default.ts` has exactly two writers, both internal (STCR_C.ec:124/134), and
+   the reduction's only `O.query` call goes through that typed wrapper (WOTS_C_Interactive.ec:559-570).
+   Machine evidence: `R_ts_allvalid` is a proven hoare invariant, not a premise.
+ - CORRECTLY **NOT** CLAIMED: `all valid_wadrs tws_ma` is FALSE (the collection oracle `O_THFC_MA.query` takes a RAW
+   adrs, so the adversary CAN inject there) -- and the member-aware design never needs it (`member_sep_disj` needs
+   only `p.1 <> dfC`). LATENT TRAP RECORDED: `R_STCRC_WOTSC.pick` (WOTS_C_Reduction.ec:77) calls `O.query(witness,..)`
+   with an arbitrary address -- the all-valid invariant must NEVER be stated for that instance.
+
+**RESULT (I independently verified the premise binder myself):** the capstone `EUFCMA_SPHINCS_PLUS_C10` now carries
+NEITHER half -- `hembinj` deleted chain-wide, `hembdisj` DISCHARGED in-proof by the already-proven `emb_disj_concrete`.
+Its full premise list is now exactly: `c <= p_tgts`, `0 <= mkg_adv`, encode-compat, four `dfC <> ...` width facts,
+and the H-TREE-MULTI Pr bound. Four files re-certified 0-admit/0-axiom (WOTS_C_Interactive, XMSSMT_C_Reduction,
+XmssmtCC_All, SphincsC10CapstoneWired). The conclusion is UNWEAKENED (RHS unchanged); no new axiom; the repair is a
+net STRENGTHENING (11 component-theorem premises -> 10, and the capstone loses both).
+
+**THE SATISFIABILITY GATE (the new standing requirement) -- PASSED WITH A MODEL, not with "no contradiction found".**
+`scratch/audit_model_receipt.ec` (CERTIFIED-0-ADMIT, capstone-verbatim prefix) exhibits an actual satisfying
+interpretation: `emb_in := fun x => val x.1 ++ [false]` (well-typed, image size 8n+1), `p_tgts := max 0 c`,
+`encode_msgWOTS_C := encode_msgWOTS o ThC`, `mkg_adv := 0`, `(mtree_*) := (1,0,0)`. The elegant part:
+**8n+1 is ODD while all four forbidden widths (8n, 8n*len, 8n*2, 8n*k) are EVEN**, so the four `dfC <> ...` premises
+hold simultaneously for every admissible n,k,len. The old attack re-run against the repaired premises is REJECTED;
+the control with the deleted premise restored is GREEN.
+
+**⚠ NEW METHODOLOGICAL TRAP FOUND (same class as the `require` trap, worth as much as the repair).** EasyCrypt does
+NOT invalidate a DEPENDENT's `.eco` when a required `.ec` changes. After XmssmtCC_All.ec was rebuilt, the downstream
+files kept their OLD `.eco` and the capstone "compiled" in 3.6 SECONDS against a STALE environment -- a green that
+means nothing. `scratch/vacuity_repair_gate.sh` therefore recompiles the ENTIRE chain as EXPLICIT TARGETS and checks
+.eco mtimes actually moved. **Any future edit to a mid-chain file MUST be gated this way, not by a single-file
+certify.** (My own third-party re-run of that gate was in flight at time of writing.)
+
+**HONEST RESIDUAL VACUITY VECTORS (this repair fixed ONE of them; these remain, and the theorem is not yet
+"meaningful" in the strongest sense):**
+ - **V1 `predC` is completely unconstrained** (WOTS_C_Real.ec:180; no axiom in the closure mentions it). Under the
+   admissible interpretation `predC := fun _ => false` the capstone's LHS is IDENTICALLY ZERO -- the bound is true
+   but content-free. This is the biggest live vector.
+ - **V2 `emb_in` is unconstrained** and the capstone carries neither `emb_in_len` nor `emb_in_inj`, so a CONSTANT
+   `emb_in` is admissible, under which the S-TCR(+C) RHS term is ~1 and the bound is content-free from the other
+   side. **NOTE HONESTLY: the satisfying model exhibited above is itself of this degenerate family** -- so what is
+   established is "the premise set is SATISFIABLE", NOT "satisfiable by a model in which the theorem has content".
+   Those are different claims and only the first is proven.
+ - V3 `p_tgts` is abstract with only `0 <= p_tgts`, so `c <= p_tgts` is a genuine side condition (refuted by
+   `p_tgts := 0`). V4 inherited axioms (CntrFT.enum_spec, good_pos, MM45 base). V5 FLAGGED-NOT-INVESTIGATED: whether
+   `EUF_CMA_Gproc_I.covered` can be identically true (would hollow the FORS leg's content, not the capstone's truth).
+ - Minor defects the audit raised: a stale claim-vs-code comment in the new non-vacuity justification
+   (WOTS_C_Interactive.ec:2195-2199) and two committed canaries weaker than their billing (bare `smt` with few
+   lemmas). Both cosmetic/hygiene, neither affects the result.
+
+**NET.** The specific defect that made the capstone vacuous is genuinely and structurally fixed, by deletion rather
+than patching, with a machine-checked satisfying model and an unweakened conclusion. What is NOT yet established is
+that the abstract primitives (`predC`, `emb_in`) admit only interpretations under which the statement has content --
+that is the next honest frontier, and it is MM45's own abstract-primitive methodology, not a defect introduced here.
