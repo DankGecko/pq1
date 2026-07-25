@@ -3692,3 +3692,67 @@ the one the paper itself carries. Neither route is the F1 relaxation; the F1 DO-
 STATUS: this is a primary-source analysis, not yet mechanized. The counting obstruction and the two-consumer surface
 are verified at source; the claim that the weakened axiom suffices for MM45's proof is ARGUED from the paper's
 structure and must be MACHINE-CHECKED before it is banked as fact.
+
+### 2026-07-25g — DEEP RESEARCH: the right framework EXISTS and is published. Plus a NEW parameter-margin question about C10.
+
+A 100-agent literature sweep (fan-out search -> source fetch -> 3-vote adversarial verification) answered the
+"what can be done" question, and CONVERGED with the independent primary-source analysis in 25f while correcting one
+step of it. All headline findings are high-confidence, 3-0 unanimous, with verifiers reading the primary PDFs.
+
+**THE ANSWER (RQ2/RQ5): an encoding-parametric WOTS model that does NOT demand injectivity is PUBLISHED and
+PEER-REVIEWED.** Drake-Khovratovich-Kudinov-Wagner, IACR CiC 2/1/13 (= ePrint 2025/055), Definition 9
+"Incomparable Encoding Scheme":
+    IncEnc : P x {0,1}^lmsg x R x [L] -> C u {bot},  such that for every distinct CODEWORDS x, x' in C,
+    (exists i, x_i < x'_i) and (exists i', x'_i' < x_i')
+**The antichain condition is quantified over distinct CODEWORDS IN THE CODE C, not over encodings of distinct
+messages.** The prose is explicit: "It may still be possible that two messages map to the same codeword, but it
+should be computationally hard to find such messages. To model this, we introduce a target collision resistance
+notion" (Def. 11, T-COLL-RES). A verifier grepped all 59 pages: injectivity of the message encoding appears NOWHERE.
+Corroborated by Khovratovich-Kudinov-Wagner, CRYPTO 2025 (ePrint 2025/889), Remark 4: "we will not restrict
+ourselves to injective encoding functions. Instead ... the scheme is eps-secure if f is incomparable and
+eps'-secure with respect to target collision resistance"; its abstract advertises being "the first to directly apply
+to general encodings including randomized, non-uniform, and non-injective ones".
+**This is EXACTLY the property 25f derived independently from the SPHINCS+C paper** -- antichain on encodings +
+collisions charged to a TCR-style game. The literature has already formalized it.
+
+**RQ4 (blueprint): C10's encoding IS a construction in that framework.** Construction 6 "Target Sum Winternitz"
+opens "Let v, w, T in N be integers" -- NO admissibility restriction -- and defines
+C := {x in {0..2^w-1}^v : sum x_i = T}, checksum chains omitted, signer regenerates until the sum holds. That is
+C10's constant-sum counter-grind verbatim. **Lemma 7 proves incomparability in one line for ARBITRARY v, w, T.**
+=> Porting to this framework DISSOLVES the F3 counting obstruction: |C| never enters the security bound (only the
+correctness error and the grind budget), so the 2^114.09 / 2^123.76 antichain counts stop mattering.
+
+**⚠ CORRECTION TO MY OWN 25f REPAIR PLAN (the research caught this, and it matters).** I proposed "case-split at the
+call site: either enc m* <> enc m, or a collision charged to m-eTCR". That is NOT sufficient as stated: the licensing
+ingredient for many-to-one is a SEPARATE COMPUTATIONAL ASSUMPTION (Def. 11 T-COLL-RES) discharged in a GAME HOP
+**BEFORE** the case split exists. **A port that builds only the case split is UNSOUND.** The 25f two-lemma surface
+analysis stands; the proof architecture around it must be game-hop-first, assumption-then-case-split.
+
+**⚠⚠ NEW FINDING -- A PARAMETER-MARGIN QUESTION ABOUT DEPLOYED C10 (not a formalization issue).** The replacement
+framework carries its own Parameter Requirement 2. I verified the arithmetic myself:
+    C10 geometry: v = 43 chains, w = 3 BITS per chunk (base 8)  =>  v*w = 129 bits
+    classical:  v*w >= kC + log2(5) + 1        = 131.32   -> C10 = 129, SHORT by 2.32 bits
+    quantum:    v*w >= 2(kQ + log2(5) + 1) + 3 = 137.64   -> C10 = 129, SHORT by 8.64 bits
+    grind randomness: C10 uses a 4-byte counter capped at 10^7 = 2^23.25, vs the framework's log|R| >~ 128
+                      -> short by ~104.7 bits
+**HOW TO READ THIS, CAREFULLY.** This is a SUFFICIENT condition for THAT framework's proof to deliver its stated
+bound -- failing it is NOT a demonstration that C10 is insecure, and NO attack is implied. C10's own security
+argument (ePrint 2022/778) is a different reduction with different requirements. But it does mean: the most modern
+published analysis of exactly C10's encoding does not, at C10's parameters, certify the target security level by its
+own criterion. **That is worth an independent investigation on the ENGINEERING side, not just the FV side** --
+especially the randomness gap, which is large and concerns how the counter is drawn rather than how many chains
+there are. FLAGGED, NOT CONCLUDED.
+
+**TWO NOTATION TRAPS recorded so nobody re-derives them wrong:**
+ 1. In this literature `w` is BITS PER CHUNK. C10's base-8 Winternitz is their **w = 3**, not w = 8. Reading their
+    "w=8" rows as C10 is a category error (their w=8 is base-256).
+ 2. Their "TSW w=8" table row shows signature size 4008.53 -- a NUMERICAL COINCIDENCE with C10's 4008-byte
+    signature. It is NOT an instantiation of C10.
+
+**NET ANSWER TO "WHAT CAN BE DONE YET":** the deployed-parameter blocker is dissolvable, and the route is now a
+CITED, PEER-REVIEWED FRAMEWORK rather than a bespoke weakening: re-base the WOTS layer on incomparable encodings
+(CiC 2/1/13 Def. 9 + Def. 11 + Construction 6 / Lemma 7) instead of MM45's `two_encodings`. That is route R2 from
+25f, now with a published specification to port rather than one to invent. It replaces the injectivity artifact with
+a T-COLL-RES assumption (a new, named, inspectable ledger entry). The open question it surfaces -- C10's v*w = 129
+vs the framework's 131.32/137.64, and the 2^23.25 grind randomness -- is a QUESTION ABOUT THE DEPLOYED PARAMETERS
+and should be triaged separately from the verification work.
