@@ -4098,3 +4098,56 @@ layer."** Adopted above. (4) My Claim-3 headline was overclaimed. Adopted above.
 - *Provenance caveat (Kimi).* The Fluhrer-Dang security curve is **upstream's own sweep script**, not a
   peer-reviewed computation, and upstream has retired C10 with PQSigner as sole user. The repo's independent
   FORS+C model reproduces it (table in Q5), which is corroboration but not independent peer review.
+
+### 2026-07-25h — TRACK B STARTED AND FIRST MILESTONE LANDED: the incomparable-encoding layer is MECHANIZED, 0-admit, and DEPLOYED C10 geometry is ADMISSIBLE in it
+
+`c10-eufcma-port/drafts/IncEnc.ec` (commits `b2ebfe5` + `6d3ee02`), **CERTIFIED-0-ADMIT** (compile OK, 0 admit
+tactics, 0 axiom declarations), a **LEAF** (nothing in `drafts/` or the vendored base requires it; the only
+requirers are four scratch canaries that exist to be rejected). Primary source read directly, not via the 25g
+summary: the CiC journal mirror `https://cic.iacr.org/p/2/1/13/pdf` works (eprint.iacr.org is Cloudflare-403
+from this host); local copies `c10-eufcma-port/paper-cic-2-1-13.{pdf,txt}` (gitignored, like the other
+`paper-*.*`), sha256 in the file header.
+
+**PROVEN.** Def 9 as a predicate parametric in `v`, `w` and the code `C`, quantified over **distinct codewords
+in C**. Construction 6's target-sum code, parametric in `v, w, T`. **Lemma 7's incomparability half for
+ARBITRARY `v, w, T`** (`tsw_incomparable`), from a real list induction (`dominated_eqsum_eq`: equal length +
+pointwise domination + equal sum ⇒ equal). Construction 6's encoder has codomain closure. **The deployed C10
+instance `v = 43`, `w = 3 bits` (base 8), `T = 205` satisfies Def 9** — with NON-VACUITY receipts: the code is
+non-empty, has ≥2 distinct members, and the Def-9 property is witnessed at explicit indices 29/30 in both
+directions. The **quantification gap is mechanized**: `mm45_forces_injectivity` (message-quantified ⇒ injective)
+plus `c10_def9_vs_mm45` (at C10 there is a many-to-one encoder into the incomparable C10 code, refuting the
+MM45 shape). Load-bearingness: dropping the sum constraint kills incomparability (`cube3_not_incomparable`); a
+length-43, sum-205 vector containing the digit 8 is rejected (`c10_baddigit_notin`) — the machine-visible guard
+against the w=3-bits vs w=8 notation trap.
+
+**STATED, NOT PROVEN.** Def 11 T-COLL-RES as a game module (a *game*, not an axiom). It must be carried as
+**"Def 11 VARIANT M1"**, not "Def 11" — see below. The file header records the **ordering requirement** with
+verified citations: the T-COLL-RES hop is the paper's Game.2 (`:1134-:1156`) and the Def-9 case split only
+happens after Game.3 (`:1196-:1199`); a port that builds only the case split is UNSOUND.
+
+**NOT ATTEMPTED (and the honest boundary).** Lemma 7 is TWO claims; only the incomparability half is proven. The
+error/δ half, Lemma 8, and the whole computational leg are absent — which is exactly where the open C10
+parameter-margin question (`v·w = 129` vs 131.32 / 137.64, and the 2^23.25 grind randomness) lives. **"C10 is
+admissible" must be read narrowly**: the C10 *code* is a non-degenerate Def-9 antichain. It does **not** mean
+C10 is secure in the DKKW framework, and it does **not** re-base anything — the C10 EUF-CMA chain is untouched
+and still rests on `two_encodings`. Note also that 43/3/205 are the *deployed* values; the paper's TSW tables
+use `w ∈ {1,2,4,8}` and the string "205" does not occur in it.
+
+**EXTERNAL ADVERSARIAL REVIEW (both models, adopted).** GPT-5.6 and Kimi K3 both independently confirmed Def 9 /
+Construction 6 faithful, `tsw_incomparable` a genuine parametric proof, the C10 witness arithmetic correct by
+hand, and leaf/0-axiom/0-admit. Corrections adopted into the file: (1) **the M1 conservatism direction was
+stated backwards** — `Adv_M1 ≤ Adv_paper` makes the *assumption* weaker, which is precisely why the risk sits on
+the **reduction** side; the paper's own B2 survives only because verification forces `x* ∈ C`, an invariant NOT
+proven here; (2) "**both constraints are load-bearing**" was false for incomparability (the digit bound is never
+used by the proof); (3) **new M6** — an EasyCrypt adversary may *write* the oracle's globals unless restricted,
+the restriction cannot go on the game functor's parameter (parse error, run receipts recorded) and must go on
+the consumer's lemma quantifier as `(A <: TCollAdvT{-TCollOracle})`, now carried as a compiled shape receipt;
+(4) **new M7** — `thmsg` is unconstrained where the paper's `Th_msg` is typed into the cube; (5) M2 expanded to
+the full deferred-side-condition list (naturals, epoch domain `[L]`, uniform/lossless sampling, code premise);
+(6) `is_IE` renamed `is_IE_code` (it is the *code* half of Def 9, not the scheme); (7) three paper citations
+were off by one, corrected after verifying at source. **The one disagreement** was M1: GPT-5.6 said the
+conservatism claim was backwards, Kimi said it was correct. Adjudicated in-file — both are right about
+different halves, and the resolution is the reduction-side framing above.
+
+**NEXT.** The WOTS swap is the larger, separate piece. Its two hard prerequisites are now written down rather
+than assumed: the game-hop-before-case-split ordering, and the `x* ∈ C` invariant that licenses M1.
