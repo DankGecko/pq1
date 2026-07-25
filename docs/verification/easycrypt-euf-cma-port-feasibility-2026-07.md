@@ -3116,6 +3116,21 @@ concurred): a **proof** red flag, not a demonstrated attack — but the multi-ta
 (SM-DT-TCR / OpenPRE) index targets **by tweak**, so a wire-shape re-derivation carries two targets at one tweak and
 cannot reuse the address-uniqueness discipline unmodified. A cleaner design wraps at the root address (h = a).
 
+**GATE (and a NEW instance of the T2 trap, worth as much as the result).** The canaries `require import
+FORSC10_Wire`, i.e. they are **dependents** of the file under test — so T2 applies to them exactly as to mid-chain
+files, and `scratch-ecc.sh` deletes only the *target's own* `.eco`. Because RC=1 is the *expected* canary result, a
+stale-environment failure is **indistinguishable from a genuine rejection by exit code**. `scratch/wire_bridge_gate.sh`
+therefore rebuilds `FORSC10_Wire.eco` as a target first, runs the **positive controls before the canaries** (the only
+discriminator between a live and a stale environment), and only then trusts the RC=1s. After a forced rebuild
+(`.eco` mtime verified moved): **2/2 positive controls GREEN, 8/8 canaries REJECTED.** Two of those (canary8 +
+posctl2) exist purely to bracket the single bare `smt()` in `covered_pins_instance` — the step Kimi independently
+identified as the one that fails abstractly: posctl2 shows it does read the tuple's second projection, canary8 shows
+it does not prove an unrelated goodness fact.
+
+**Why Finding 2 is not exploitable today** (the line that keeps it correctly classified): the leaf-0 hash
+`th(adr0, sk_{K-1,0})` is *never published* — only the tree root is — so there is no second target visible to an
+adversary at that tweak. It is a bookkeeping problem for the multi-target reduction, not a live collision surface.
+
 **RESIDUAL (precise).** No probability transfer is proven. Blocking, in order: the Gproc multi-instance pool/routing
 obstruction; the composed-scheme WOTS binding; the keygen distributional hop (the crate's last wire value is a
 `th_pair` output — it equals the model's `R_{k-1}`, but the model's NPRF keygen samples cube elements uniformly);
