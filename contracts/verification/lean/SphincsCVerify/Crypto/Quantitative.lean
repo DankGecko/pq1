@@ -188,13 +188,34 @@ theorem advantage_floor_within_bootstrap_cap {q : Nat} (hq : q ≤ MaxBootstrapU
 
 /-- **Cross-chain bootstrap-key floor (P14).** A bootstrap key signing across
     `C` chains has total query budget `q ≤ C · MaxBootstrapUses`. For any
-    deployment spanning `C ≤ 2^16` chains the (weaker, generic-multi-target)
-    floor stays ≥ 96 bits: `q · 2^96 ≤ 2^SecurityBits = 2^128`. This is an
-    explicit CONDITIONAL honest bound — there is no on-chain cap on the number
-    of chains, so this does not assert `C ≤ 2^16` is enforced anywhere; it shows
-    that even a 65536-chain deployment keeps the bootstrap floor at the same
-    96-bit level as the operative per-slot generic term, so the per-key
-    cross-chain aggregation never becomes the binding floor in practice. -/
+    deployment spanning `C ≤ 2^16` chains the **linear EUF-CMA query term**
+    stays ≥ 96 bits: `q · 2^96 ≤ 2^SecurityBits = 2^128`. This is an explicit
+    CONDITIONAL honest bound — there is no on-chain cap on the number of chains,
+    so this does not assert `C ≤ 2^16` is enforced anywhere.
+
+    **CORRECTION 2026-07-26 (external adversarial review; arithmetic verified).**
+    This docstring previously called the bound above "the (weaker,
+    generic-multi-target) floor" and concluded that cross-chain aggregation
+    "never becomes the binding floor in practice". BOTH were wrong, and in the
+    same way: the theorem bounds the LINEAR term `q·2⁻¹²⁸`, but the generic
+    multi-target term is `(q + q²)·2⁻¹²⁸`, which is the modality this file
+    itself shows is BINDING at the cap (`c10_security_floor_at_slot_cap`,
+    `min(143,112,96) = 96`). At `q = C · 2^16` that quadratic term is
+    `96 − 2·log₂ C` bits, i.e. it drops below 96 as soon as `C > 1`:
+
+        C =    1  →  linear 112 b,  generic  96 b
+        C =    2  →  linear 111 b,  generic  94 b
+        C =    4  →  linear 110 b,  generic  92 b
+        C =   16  →  linear 108 b,  generic  88 b
+        C = 2^16  →  linear  96 b,  generic  64 b
+
+    So cross-chain aggregation DOES move the binding floor (94 bits at two
+    chains, not 96), and the ≥96-bit claim holds only for the non-binding
+    linear term. The THEOREM below is unaffected and remains true as stated —
+    only this prose was wrong. Practical impact is small (the floor degrades
+    2 bits per doubling of `C`, and realistic bootstrap usage is tens of
+    signatures, not `C · 2^16`), but the honest statement is "the generic floor
+    degrades as `96 − 2·log₂ C`", NOT "it never binds". -/
 theorem advantage_floor_within_bootstrap_cap_crosschain
     {q C : Nat} (hq : q ≤ C * MaxBootstrapUses) (hC : C ≤ 2 ^ 16) :
     q * 2 ^ 96 ≤ 2 ^ SecurityBits :=
