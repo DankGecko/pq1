@@ -3803,6 +3803,15 @@ is warranted.
   n=16 parameters sit at". **These are two different claims about two different subsystems** that happen to
   share the Cat-1 floor; the bus residual says nothing about the signature scheme and vice versa.
 
+⚠ **Scope qualifier on that claim, established in Q5/Q6 below — read it before quoting Q1.** The Cat-1 claim
+holds **per key, at that key's realised signature count**. For **slot keys** it holds as deployed: they are
+chain-bound (`domain/src/lib.rs:705-712`), so the 2^16 cap really is a per-key cap and the FORS+C term sits at
+130.57 bits. For the **bootstrap/master key** it does **not** hold unconditionally, because that key is
+chain-*independent* while its cap is per-*chain* — its FORS+C term crosses 128 bits at ~99,376 signatures
+(~1.5 chains). That **global** count is what the MONITOR verdict tracks. Note also that `2^128` classical /
+`2^64` sequential-Grover **is** the Cat-1 floor: a term sitting *at* 2^128 (as the WOTS node-second-preimage
+route does, for C10 and SLH-DSA-128s alike) is **compliant**, not a second thin-margin worry.
+
 ### Q2 — Where the parameters came from: **bespoke, for a stated reason**
 
 Not from the SPHINCS+C paper's tables. `paper-nist-pqc2022.txt:1015` Table 2 lists six sets, all with
