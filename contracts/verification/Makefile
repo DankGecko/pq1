@@ -43,6 +43,10 @@ override _FV_MAKEFLAGS_ORIGIN := $(origin MAKEFLAGS)
 override _FV_MAKE_SHORT_FLAGS := $(if $(filter -%,$(firstword $(MAKEFLAGS))),,$(firstword $(MAKEFLAGS)))
 override _FV_MAKE_EVAL_FLAGS := $(value -*-eval-flags-*-)
 override _FV_LAKE_ORIGIN := $(origin LAKE)
+override _FV_PQLEAN_ORIGIN := $(origin PQLEAN)
+override _FV_EXTRACTED_DIR_ORIGIN := $(origin EXTRACTED_DIR)
+override _FV_REPO_ROOT_ORIGIN := $(origin REPO_ROOT)
+override _FV_LEAN_DIR_ORIGIN := $(origin LEAN_DIR)
 unexport SHELLOPTS BASHOPTS BASH_ENV ENV MAKEFILES
 override SHELL := /usr/bin/bash
 override .SHELLFLAGS := -o pipefail -c
@@ -84,6 +88,38 @@ endif
 ifneq ($(words $(_FV_MAKEFILE_LIST_AT_ENTRY)),1)
 $(error refusing additional parsed makefiles: $(_FV_MAKEFILE_LIST_AT_ENTRY))
 endif
+# Every evidence path below (the argv-guard checker, the extracted Lean
+# project, the closure manifests, the extraction regen counterpart) is
+# repository-relative, so the trusted directory is this Make process's
+# PHYSICAL working directory.  A foreign cwd — `cd /attacker && make -f
+# /reviewed/Makefile [-f evil.mk]` — would let a planted
+# scripts/check_make_argv.py print `ok` for the guard and put attacker files
+# behind every relative recipe path.  MAKEFILE_LIST has passed the origin and
+# word-count guards, so its sole entry is this file; require the physical cwd
+# to be this file's directory (satisfied by `make`, `make -f Makefile`, and
+# `make -C <dir>`; a symlinked invocation dir resolves consistently).
+override _FV_PHYSICAL_CWD := $(shell /usr/bin/pwd -P)
+ifneq ($(_FV_PHYSICAL_CWD),$(realpath $(dir $(_FV_MAKEFILE_LIST_AT_ENTRY))))
+$(error refusing foreign working directory ($(_FV_PHYSICAL_CWD)) for verification Makefile; run from the Makefile directory or via make -C)
+endif
+# The toolchain and evidence roots are assigned below with `override`, but a
+# caller preseeding one (command line, environment, or an earlier makefile)
+# must be rejected loudly rather than silently overridden: PQLEAN is the
+# charon/aeneas toolchain path, EXTRACTED_DIR roots the diff counterpart and
+# the closure manifests, REPO_ROOT roots the Rust sources being replayed, and
+# LEAN_DIR roots the ledger's live axiom dump.
+ifneq ($(_FV_PQLEAN_ORIGIN),undefined)
+$(error refusing caller-overridden PQLEAN (origin $(_FV_PQLEAN_ORIGIN)) for verification Makefile)
+endif
+ifneq ($(_FV_EXTRACTED_DIR_ORIGIN),undefined)
+$(error refusing caller-overridden EXTRACTED_DIR (origin $(_FV_EXTRACTED_DIR_ORIGIN)) for verification Makefile)
+endif
+ifneq ($(_FV_REPO_ROOT_ORIGIN),undefined)
+$(error refusing caller-overridden REPO_ROOT (origin $(_FV_REPO_ROOT_ORIGIN)) for verification Makefile)
+endif
+ifneq ($(_FV_LEAN_DIR_ORIGIN),undefined)
+$(error refusing caller-overridden LEAN_DIR (origin $(_FV_LEAN_DIR_ORIGIN)) for verification Makefile)
+endif
 ifneq ($(strip $(_FV_MAKE_EVAL_FLAGS)),)
 $(error refusing Make --eval for verification Makefile)
 endif
@@ -100,7 +136,7 @@ ifneq ($(_FV_LAKE_ORIGIN),undefined)
 $(error refusing caller-overridden LAKE (origin $(_FV_LAKE_ORIGIN)) for verification Makefile)
 endif
 
-LEAN_DIR := lean
+override LEAN_DIR := lean
 override LAKE := $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
 
 # `make` / `make help` lists every runnable target that carries a `## ` blurb
@@ -609,9 +645,9 @@ verify-clean: ## rm -rf .lake build
 #                                  nightly-2026-06-01).
 # ---------------------------------------------------------------------------
 
-EXTRACTED_DIR := extracted
-PQLEAN        := $(HOME)/.local/share/pqsigner-lean
-REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
+override EXTRACTED_DIR := extracted
+override PQLEAN        := $(HOME)/.local/share/pqsigner-lean
+override REPO_ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
 override _EXTRACTION_TARGETS := extract-sphincs-adrs extract-aa-userop extract-fors-index extract-merkle-verify extract-wots-pkfromsig extract-hash-fns extract-bip39-roundtrip extract-decode-item extract-u256-mul extract-format-decimal extract-fwmanifest-preimage extract-wots-digits extract-aa-eip1271 extract-txcore-rlp extract-pinstate extract-slotkdf extract-tx-merkle
 override _EXTRACTION_IMPL_TARGETS := $(addprefix _,$(addsuffix -impl,$(_EXTRACTION_TARGETS)))
@@ -660,14 +696,15 @@ endif
 # this parser process. This is still evaluated while the main Makefile is being
 # parsed, before GNU Make opens any later explicit makefile. Python isolated
 # mode also removes ambient module/startup injection from this trust decision.
-# The checker path is a literal repository-relative path resolved against this
-# Make process's real working directory: it is deliberately NOT derived from
-# MAKEFILE_LIST (caller-mutable until the origin and word-count guards above
-# have passed) or from $(CURDIR) (a command-line-assignable Make variable, so a
-# caller could relocate the anchor without changing the process cwd).  If the
-# working directory is not the reviewed directory the open fails, the result is
-# not `ok`, and this fails closed.
-override _FV_MAKE_ARGV_GUARD := $(shell /usr/bin/python3 -I 'scripts/check_make_argv.py' /proc/$$PPID/cmdline)
+# The checker path is resolved from the VALIDATED sole makefile entry:
+# MAKEFILE_LIST has passed the origin and word-count guards, so its single
+# entry is this file, and `realpath` anchors the checker under this file's
+# physical directory — independent of the process cwd, of MAKEFILE_LIST (no
+# longer caller-mutable), and of $(CURDIR) (a command-line-assignable Make
+# variable).  The foreign-working-directory guard above additionally pins the
+# process cwd to that same directory, so a planted foreign
+# scripts/check_make_argv.py is never on either path.
+override _FV_MAKE_ARGV_GUARD := $(shell /usr/bin/python3 -I '$(dir $(realpath $(_FV_MAKEFILE_LIST_AT_ENTRY)))scripts/check_make_argv.py' /proc/$$PPID/cmdline)
 ifneq ($(_FV_MAKE_ARGV_GUARD),ok)
 $(error refusing multiple -f/--file makefiles for verification Makefile ($(_FV_MAKE_ARGV_GUARD)))
 endif
@@ -1004,6 +1041,62 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -rf $$out $$evildir; \
 	echo "  ok: earlier--f override and command-line MAKEFILE_LIST manipulation are CAUGHT"
+	+@out=$$(mktemp /tmp/pq-extraction-foreign-cwd-selftest.XXXXXX); \
+	evildir=$$(mktemp -d /tmp/pq-extraction-foreign-cwd.XXXXXX); \
+	realmake=$$(pwd)/Makefile; \
+	mkdir -p $$evildir/scripts; \
+	printf 'print("ok")\n' >$$evildir/scripts/check_make_argv.py; \
+	printf 'override MAKEFILE_LIST := %s/Makefile\nverify-extracted:\n\t@echo SPOOFED-GATE\n' "$$evildir" >$$evildir/evil.mk; \
+	if ( cd $$evildir && $(_FV_GNU_MAKE) --no-print-directory \
+	    -f $$realmake -f $$evildir/evil.mk -n verify-extracted ) >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: foreign-cwd planted checker + trailing override spoofed a gate" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
+	elif grep -Fq 'SPOOFED-GATE' $$out \
+	    || ! grep -Fq 'refusing foreign working directory ' $$out; then \
+	  echo "CONTROL FAILURE: foreign-cwd checker-spoof attack was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
+	fi; \
+	if ( cd $$evildir && $(_FV_GNU_MAKE) --no-print-directory \
+	    -f $$realmake -n verify-extracted ) >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: a foreign working directory reached the evidence recipes" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
+	elif ! grep -Fq 'refusing foreign working directory ' $$out; then \
+	  echo "CONTROL FAILURE: foreign cwd was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
+	fi; \
+	rm -rf $$out $$evildir; \
+	echo "  ok: foreign-cwd checker spoofing and foreign working directories are CAUGHT"
+	+@out=$$(mktemp /tmp/pq-extraction-root-override-selftest.XXXXXX); \
+	if $(_FV_GNU_MAKE) --no-print-directory PQLEAN=/tmp/fake -n verify-extraction-regen >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: caller-overridden PQLEAN reached the authoritative extraction replay" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing caller-overridden PQLEAN ' $$out; then \
+	  echo "CONTROL FAILURE: PQLEAN override was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	if $(_FV_GNU_MAKE) --no-print-directory EXTRACTED_DIR=/tmp/fake -n verify-extracted >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: caller-overridden EXTRACTED_DIR relocated the closure evidence root" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing caller-overridden EXTRACTED_DIR ' $$out; then \
+	  echo "CONTROL FAILURE: EXTRACTED_DIR override was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	if $(_FV_GNU_MAKE) --no-print-directory REPO_ROOT=/tmp/fake -n verify-extraction-freshness >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: caller-overridden REPO_ROOT relocated the replayed Rust sources" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing caller-overridden REPO_ROOT ' $$out; then \
+	  echo "CONTROL FAILURE: REPO_ROOT override was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	if $(_FV_GNU_MAKE) --no-print-directory LEAN_DIR=/tmp/fake -n verify-ledger-consistency >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: caller-overridden LEAN_DIR relocated the ledger live dump" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing caller-overridden LEAN_DIR ' $$out; then \
+	  echo "CONTROL FAILURE: LEAN_DIR override was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: caller-overridden PQLEAN/EXTRACTED_DIR/REPO_ROOT/LEAN_DIR are CAUGHT"
 	+@out=$$(mktemp /tmp/pq-extraction-make-override-selftest.XXXXXX); \
 	if $(_FV_GNU_MAKE) --no-print-directory MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: caller-overridden MAKE bypassed authoritative extraction replay" >&2; \
@@ -1156,6 +1249,16 @@ verify-extracted: ## S33 Aeneas-extracted build + axiom-discipline
 	elif ! grep -Fq 'no longer carries pinned axiom' /tmp/pq_axiomcheck_shrunk.msg; then \
 	  echo "FAIL: shrunk closure was rejected for the WRONG reason"; cat /tmp/pq_axiomcheck_shrunk.msg; exit 1; \
 	else echo "OK: closure gate correctly REJECTS an under-reported (shrunk) headline closure"; fi
+	@# WIRED-IN NEGATIVE CONTROL 3: a DUPLICATED dump record (a rogue first
+	@# record hidden beneath a benign same-name record) MUST be rejected —
+	@# last-wins parsing would launder it.
+	@echo "=== NEGATIVE CONTROL: a duplicated dump record MUST be rejected by the closure gate ==="
+	@python3 -c "import re; t=open('/tmp/pq_axiomcheck.out').read(); m=re.search(r\"\x27([^\x27]+)\x27 depends on axioms\", t); assert m, 'control setup: no depends-record in the live dump'; open('/tmp/pq_axiomcheck_dup.out','w').write(\"'%s' depends on axioms: [Evil]\n\" % m.group(1) + t)"
+	@if python3 scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_manifest.txt /tmp/pq_axiomcheck_dup.out >/tmp/pq_axiomcheck_dup.msg 2>&1; then \
+	  echo "FAIL: the duplicate-record negative control PASSED the closure gate — last-wins overwrite is live"; exit 1; \
+	elif ! grep -Fq 'duplicate dump record' /tmp/pq_axiomcheck_dup.msg; then \
+	  echo "FAIL: duplicate record was rejected for the WRONG reason"; cat /tmp/pq_axiomcheck_dup.msg; exit 1; \
+	else echo "OK: closure gate correctly REJECTS a duplicated dump record"; fi
 	@echo "OK: extracted/ axiom-discipline gate passed — per-headline closure verified, no sorryAx, negative control has teeth"
 	@echo "NB: FormatDecimalSpec (M7 WYSIWYS, ~42 GB kernel-TC) is CARVED OUT of this"
 	@echo "    16 GB-safe gate — verify it with 'make verify-extracted-heavy' on ≥48 GB RAM."

@@ -51,24 +51,46 @@ KERNEL = {"propext", "Classical.choice", "Quot.sound"}
 
 def parse_dump_records(text: str) -> dict[str, set[str]]:
     """{headline name: axiom set} from a `#print axioms` dump (both the
-    `depends on axioms: [...]` and `does not depend on any axioms` forms)."""
+    `depends on axioms: [...]` and `does not depend on any axioms` forms).
+    A headline MUST record exactly once: the dict is last-wins by
+    construction, so a same-name second record (either form) could launder a
+    rogue first closure beneath a benign one — reject the dump outright."""
     flat = re.sub(r"\s+", " ", text)
     out: dict[str, set[str]] = {}
+    seen: set[str] = set()
+
+    def note(name: str) -> None:
+        if name in seen:
+            raise SystemExit(
+                f"FAIL: duplicate dump record for headline `{name}` — a dump with a "
+                f"repeated identity is not a well-formed evidence record (last-wins "
+                f"overwrite would let a benign second record hide a rogue first one).")
+        seen.add(name)
+
     for m in re.finditer(r"'([^']+)' depends on axioms: \[([^\]]*)\]", flat):
+        note(m.group(1))
         out[m.group(1)] = {a.strip() for a in m.group(2).split(",") if a.strip()}
     for m in re.finditer(r"'([^']+)' does not depend on any axioms", flat):
+        note(m.group(1))
         out.setdefault(m.group(1), set())
     return out
 
 
 def parse_manifest(text: str) -> dict[str, set[str]]:
-    """{headline name: extra-axiom set} from the per-headline allowlist file."""
+    """{headline name: extra-axiom set} from the per-headline allowlist file.
+    A manifest identity MUST appear exactly once (the same last-wins hazard
+    as the dump parser)."""
     out: dict[str, set[str]] = {}
     for line in text.splitlines():
         line = line.split("#", 1)[0].strip()
         if not line:
             continue
         toks = line.split()
+        if toks[0] in out:
+            raise SystemExit(
+                f"FAIL: duplicate manifest identity `{toks[0]}` — the per-headline "
+                f"allowlist is not a well-formed evidence record (last-wins overwrite "
+                f"would let a benign second record hide a rogue first one).")
         out[toks[0]] = set(toks[1:])
     return out
 

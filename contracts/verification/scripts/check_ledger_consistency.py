@@ -188,15 +188,30 @@ DUMP_SCRIPT = "scripts/dump_axioms.lean"
 def parse_dump(text: str) -> dict[str, set[str]]:
     """Parse `#print axioms` output into {theorem_fqn: {axiom_fqn, ...}}.
 
-    `#print axioms` wraps long lists across lines; flatten first.
+    `#print axioms` wraps long lists across lines; flatten first.  A theorem
+    MUST record exactly once: the dict is last-wins by construction, so a
+    same-name second record (either form) could launder a rogue first closure
+    beneath a benign one — reject the dump outright.
     """
     flat = re.sub(r"\s+", " ", text)
     closures: dict[str, set[str]] = {}
+    seen: set[str] = set()
+
+    def note(name: str) -> None:
+        if name in seen:
+            raise SystemExit(
+                f"FAIL: duplicate dump record for headline `{name}` — a dump with a "
+                f"repeated identity is not a well-formed evidence record (last-wins "
+                f"overwrite would let a benign second record hide a rogue first one).")
+        seen.add(name)
+
     for m in re.finditer(r"'([^']+)' depends on axioms: \[([^\]]*)\]", flat):
         name = m.group(1)
+        note(name)
         axset = {a.strip() for a in m.group(2).split(",") if a.strip()}
         closures[name] = axset
     for m in re.finditer(r"'([^']+)' does not depend on any axioms", flat):
+        note(m.group(1))
         closures.setdefault(m.group(1), set())
     return closures
 
@@ -643,6 +658,15 @@ def self_test() -> int:
                        if k != "SphincsCVerify.Crypto.honest_sig_not_forgery"}
     cases.append(("C11 non-mandatory closure deleted", check_closures_identity_pin({"closures": shrunk_closures})))
     cases.append(("C11 unpinned closure added", check_closures_identity_pin({"closures": {**full_closures, "X.evil": []}})))
+
+    # C13 DUPLICATE-RECORD NEGATIVE — a same-name second dump record must be
+    # rejected outright (last-wins overwrite would launder a rogue closure).
+    try:
+        parse_dump("'Dup.thm' depends on axioms: [Evil]\n'Dup.thm' depends on axioms: []\n")
+        dup_fails: list[str] = []
+    except SystemExit:
+        dup_fails = ["duplicate dump record rejected"]
+    cases.append(("C13 duplicate dump record", dup_fails))
 
     # control: a CLEAN input must NOT fire (guards against always-fire vacuity)
     clean = check_closures(ledger, live_ok) + check_mandatory_registry(mand) \
