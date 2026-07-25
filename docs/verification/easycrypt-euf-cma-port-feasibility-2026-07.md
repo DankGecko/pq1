@@ -2941,3 +2941,93 @@ FL_SL_XMSS_MT_ES 425s/429s, FORS_ES 313s/320s, SPHINCS_PLUS 141s/142s, WOTS_TW_E
 file has at least one genuine from-source compile, including all four REPAIRED files. So the repair holds up under
 the strongest gate available — one that is structurally immune to BOTH known traps (it deletes every .eco, so
 neither `require`-does-not-re-verify nor stale-dependent-.eco can produce a false green).
+
+## UPDATE 2026-07-25b — TRACK V: the capstone made PROVABLY CONTENTFUL (V1/V2 attacked), and a NEW faithfulness finding that outranks both
+
+The previous update closed the *satisfiability* gap and honestly left two **content** vectors open (V1 unconstrained
+`predC`, V2 unconstrained `emb_in`). This wave attacked them. Deliverable: **`drafts/SphincsC10Content.ec`,
+CERTIFIED-0-ADMIT, 0 axiom declarations**, plus `scratch/trackV_gate.sh` (**TRACK-V GATE PASS**: 6 canaries all
+REJECTED, positive control GREEN, 1 disclosed non-canary). The **whole-chain gate was re-run and PASSES**; note that
+**no mid-chain file was edited** — the new file is a leaf that `require`s the capstone, so the T2 stale-`.eco` hazard
+does not arise for the chain.
+
+**RUNG REACHED: (b), and only in a qualified form.** Not (c). Full (c) — "define `predC`/`emb_in` at their C10
+meanings and discharge non-degeneracy as THEOREMS" — is **not derivable from this closure**: non-degeneracy bottoms
+out in the unconstrained image of `encode_msgWOTS`, a free target constant, and `thfc`. Defining `predC` in place
+would **relocate** the dependency, not remove it (and would put bigop arithmetic under every `smt()` in 24 files);
+that is why the in-place edit was deliberately **not** made.
+
+**What landed, all 0-admit.**
+- **The mathematical heart of WOTS+C, PROVED** (`constsum_antichain`, `constsum_encoding_is_two_encodings`): a
+  **constant-sum digit encoding satisfies MM45's `two_encodings` antichain condition WITHOUT a checksum**. This is
+  exactly what the +C gate buys, and here it is a theorem quantified over an *arbitrary* encoding.
+- **The V1 mechanism refuted at its own procedure** (`gate_passes_on_ground_counter`): the same
+  `pkWOTS_from_sigWOTS_C` at which the V1 audit proved the gate *always rejects* is proved to *accept* on the
+  honestly-ground counter.
+- **`EUFCMA_SPHINCS_PLUS_C10_CONTENTFUL`**: the capstone bound **re-derived verbatim by `exact`-applying the
+  unchanged capstone** (so the RHS provably did not drift and nothing is weakened), conjoined with 6 content
+  conclusions. The capstone itself is left **byte-identical**.
+- **PART G — the joint model on the ACTUAL globals.** Pins `emb_in`, `predC`, `encode_msgWOTS_C`, and `thfc`
+  *at the single index `dfC`* by definitional equations, and proves all four added premises **plus the capstone's own
+  bridge premise** hold at those globals, non-degenerately. **The insight that makes this coherent:** `f = thfc(8n)`,
+  `trh = thfc(8n·2)`, `pkco = thfc(8n·len)`, `trco = thfc(8n·k)` are the *same* `thfc` (SPHINCS_PLUS.ec:440-449), so
+  pinning `thfc` everywhere would collapse the whole scheme — pinning it at `dfC` alone is sound **precisely because
+  the capstone's four `dfC <> …` separation premises make `dfC` distinct from all four**. That is what those premises
+  are for; `f`/`trh`/`pkco`/`trco` stay completely free.
+
+**Non-degeneracy — ACHIEVED vs PROVABLY NOT ACHIEVABLE (the honest core).**
+- ACHIEVED: `predC` **not identically false**; `emb_in` **not constant** (injective, constant-width, faithful
+  `M‖counter`); `ThC` **not constant**; the exact hypothesis under which the LHS was proven identically zero is
+  **refuted**.
+- **NOT achievable by any model-theoretic premise**, and now understood as to *why*: "the S-TCR(+C) RHS term is not
+  ≈1". **Pigeonhole:** `msgWOTS` *is* `dgstblock`, and premise N2 makes `m ↦ ThC ps tw m (grindC ps tw m)` map the
+  whole message space into the gate set (PART F conclusion 4). If the gate ever *rejects*, that map cannot be
+  injective, so a **gate-passing same-tweak collision always exists — at the oracle's own recorded counters**
+  (`STCR_C.ec:127-137`), i.e. a winning S-TCR pair always exists. S-TCR is a **hardness-of-finding** assumption; only
+  the degeneracy that is *ours* — a collapsing serialisation — is excludable, and N3/N4 exclude it. (Stated, not
+  mechanized.)
+
+**⚠ NEW FINDING, arguably bigger than V1/V2 — the port cannot be instantiated at C10's deployed WOTS parameters.**
+Three *independent* grounds, each verified at source by me and by both external reviewers:
+1. **`w` is out of range.** `const log2_w : { int | log2_w = 2 \/ log2_w = 4 \/ log2_w = 8 } as val_log2w`
+   (WOTS_TW_ES.ec:31) ⇒ `w ∈ {4,16,256}`. C10 uses **W=8** (`sphincs-c10/src/params.rs:43`), i.e. `log2_w = 3`.
+   Not substitutable — `len1`/`len2`/`len` are carried unchanged through both clone levels
+   (FL_SL_XMSS_MT_ES.ec:544-545, SPHINCS_PLUS.ec:551-552).
+2. **The checksum chains are still there.** `len = len1 + len2` with `1 <= len2` (WOTS_TW_ES.ec:43,133), and the +C
+   sign/verify loops run to `len`. WOTS+C's entire purpose is to *eliminate* the `len2` checksum chains
+   (`sphincs-c10/src/wots.rs:3-5`; C10 has `L = 43 = len1` only).
+3. **`two_encodings` is FALSE at C10's actual encoding**, for two reasons: (a) with pure base-w and no checksum, the
+   all-zero digest's encoding is pointwise dominated by every other, so no index `i` with `enc(m)[i] < enc(0)[i]`
+   exists; (b) **`extract_digits` consumes only bits 0..128 of a 256-bit `wots_digest`** (`sphincs-c10/src/wots.rs:27-45`,
+   `src/hash.rs:350-365` — verified independently), discarding 127 bits, so the deployed encoding is massively
+   non-injective and distinct messages share an encoding.
+   A further structural mismatch: formal `ThC` outputs `8n` bits (128 at n=16) while C10's WOTS message digest is
+   **256** bits with **128**-bit chain elements — the formal model ties both widths to the single parameter `n`.
+
+   **Consequence, stated plainly:** what is mechanized is *an abstract WOTS+C-style construction over MM45-supported
+   WOTS parameters*, **not** deployed C10's WOTS layer. This is a faithfulness gap in the *interpretation* of the
+   result, not a logical defect in it, and it is inherited from the MM45 base rather than introduced by the port.
+   The constructive half: `constsum_encoding_is_two_encodings` shows the *right* repair — replace MM45's
+   unconditional `two_encodings` axiom with the **predC-restricted** version, which a checksum-free constant-sum
+   encoding provably satisfies.
+
+**External adversarial review (both used, both acted on).** GPT-5.6 found the decisive hole — PARTS D/E witness with
+*fresh existential* functions, so they could hold while the *actual* `predC` is false and `emb_in` constant. That is
+what PART G was built to close. Kimi K3 found two further precise gaps: the joint model initially left the capstone's
+own `encode_msgWOTS_C` bridge premise dangling (fixed: hypothesis (iv) — verified `encode_msgWOTS_C` is a free op,
+WOTS_C_Real.ec:220), and the pigeonhole argument used an arbitrary Skolem counter that does not reach the game's win
+condition (fixed: tightened to `grindC`, which is exactly what the challenge oracle records). Both reviewers
+independently confirmed the axiom census (`predC`/`emb_in`/`thfc` carry **no** axiom anywhere in the closure, also
+checking `declare axiom`, refined `const … as`, `op [lossless full uniform]`-generated facts, and clone
+side-conditions) and confirmed findings 1-3 above. Neither modified any file.
+
+**Self-found honesty item.** Conclusion 6 of the contentful theorem is **not** premise-dependent — the control
+`scratch/trackV_probe_C6_without_N1.ec` **COMPILES**, because MM45's unconditional `two_encodings` already gives it.
+Recorded at the conclusion itself and run in the gate as a *disclosed non-canary*. The informative statement is the
+PART B version, quantified over an arbitrary encoding.
+
+**Disclosure.** The positive-mass conclusion (`0 < mu ddgstblock predC`, the FORS `good_pos` shape) uses
+`FTWES.ddgstblock_fu` — an **inherited, unrealized** MM45 clone axiom (SPHINCS_PLUS.ec clones FORS_ES without
+realizing it). Pre-existing base TCB, not introduced here; the existential form is free of it. **No new axiom is
+declared anywhere in this wave**; the four added premises are explicit, inspectable hypotheses of a *new* theorem,
+and the capstone's own premise list is unchanged.
