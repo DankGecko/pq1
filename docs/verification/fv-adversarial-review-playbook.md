@@ -17,10 +17,13 @@ Findings go only to the global
 catalogue.
 
 Security-sensitive FV review follows
-[`planning-and-review-workflow.md`](../planning-and-review-workflow.md): exact
-mutually withheld Opus 4.8 and GPT-5.6 SOL first passes at the prescribed
-effort, then symmetric cross-adjudication. Extra swarms are supplemental and
-cannot replace that pair or vote away a blocker.
+[`planning-and-review-workflow.md`](../planning-and-review-workflow.md): ONE
+simultaneous, mutually blind three-reviewer wave — GPT-5.6 SOL at `ultra`,
+Claude Opus 5 (`opus`) at `xhigh`, and Kimi K3 at its highest supported
+thinking effort — after which the coordinator reproduces and reconciles every
+concrete blocker claim against source or executable evidence. There is no
+model-to-model cross-adjudication and no extra review rounds. Extra swarms are
+supplemental and cannot replace that wave or vote away a blocker.
 
 The [2026-07-15 full-stack review](../security/adversarial-review/findings/fv-full-stack-2026-07-15-coordinator.md)
 reproduced classes this older narrative described as globally gated. Mechanical
@@ -126,17 +129,20 @@ not continue the abstract capstone as though it retired A5.
 The mechanical gates make the *vacuity* class non-recurring. They do **nothing** for "wrong quantifier," "model ≠ artifact," or "wrong spec." Those need an adversary. The recipe (validated: the 62-agent verify+adversarial pass this engagement ran *converged* with an independent 11-agent sweep):
 
 - **Adversarial framing** — agents tasked to **refute** ("find where the proof says less than the marketing; where the gate is green but the claim is hollow"); default-to-guilty.
-- **Required partner diversity** — use the exact Opus 4.8 and GPT-5.6 SOL pair,
-  mutually withheld first, then symmetric cross-adjudication, as owned by the
-  planning workflow. Additional independent models are supplemental signal.
+- **Required reviewer diversity** — use the planning workflow's exact
+  simultaneous, mutually blind three-reviewer wave (GPT-5.6 SOL at `ultra`,
+  Claude Opus 5 (`opus`) at `xhigh`, Kimi K3 at its highest supported thinking
+  effort), as owned by the planning workflow. Additional independent models are
+  supplemental signal.
 - **PoC-required** — every finding carries a *runnable* artifact: a Lean snippet proving a hypothesis unsatisfiable, a "delete this conjunct and the theorem still holds," a `#print axioms` showing an advertised premise absent, a Rust test showing a fail-open. **No PoC ⇒ filtered.**
 - **Adversarial discovery corroboration** — additional agents independently try
   to reproduce or falsify each candidate (this is what caught the two dangerous
   "fixes" — the F8 plaintext-downgrade and the P1 prove-a-false-statement
   traps). Swarm quorum only prioritizes discovery; it never assigns a finding
-  disposition. The exact dual-review pair in
-  [`../planning-and-review-workflow.md`](../planning-and-review-workflow.md)
-  must receive every candidate/variant and personally cross-adjudicate it.
+  disposition. The coordinator reproduces every stage-impacting candidate
+  against source or executable evidence and reconciles the results under the
+  planning workflow's coordinator-triage rules; there is no model-to-model
+  cross-adjudication.
 - **Claims-inventory anchor** — attack the *specific* claims in `ASSURANCE_CASE.md` / `AXIOM_STATUS.json` / `THE_CLAIM.md`, walking the V1–V11 catalog against each.
 - **Honest residual output** — the run MUST end with *"what we could not break"* AND *"what we did NOT look at"* (modalities not run, claims unverified, artifacts unread). The latter becomes the next round's targets. A pass that only reports findings and implies "the rest is fine" is itself overconfidence.
 
@@ -215,10 +221,11 @@ RULES:
 OUTPUT — return an external candidate packet to the coordinator. Do not modify
 the repository, write a canonical findings report, or update
 `REVIEW_PROVENANCE.md`/status fields. Include every candidate and the honest
-residual. The coordinator freezes the raw packet and gives the complete union
-to the exact Partner-A/Partner-B pair; only their symmetric cross-adjudication
-may assign dispositions. An authorized maintainer records the adjudicated
-result afterward.
+residual. The coordinator freezes the raw packet, reproduces every
+stage-impacting candidate against source or executable evidence, and assigns
+dispositions under the planning workflow's coordinator-triage rules — no
+model-to-model cross-adjudication. An authorized maintainer records the
+adjudicated result afterward.
 
 MANDATORY HONEST RESIDUAL (the run is INVALID without it):
   1. "What I tried to break and COULDN'T" — the claims that survived, and the
@@ -246,16 +253,16 @@ passes is **corroborated discovery**; every other candidate remains
 kit retains all variants and deterministic origin IDs. For model diversity,
 run it twice across **two** backends (`--backend claude` then `--backend codex`)
 so a single model's blind spot does not become yours, union every candidate and
-honest residual, and submit that complete union to the exact Partner-A/Partner-B
-pair required by
+honest residual, and hand that complete union to the coordinator, who
+reproduces the stage-impacting candidates and triages them under
 [`../planning-and-review-workflow.md`](../planning-and-review-workflow.md).
 Create that envelope with `run_review.py --union-raw <claude-raw.json>
 <codex-raw.json> --out <external-dir>`: it preserves both complete raw receipts
 and their hashes deterministically, rejects duplicate namespaces and clobbering,
 and deliberately performs no cross-run grouping or voting.
-Only their symmetric cross-adjudication may assign
-`CONFIRMED`/`REFUTED`/`NARROWED`/`UNRESOLVED`; disagreement is preserved, never
-majority-voted away. (If you prefer to drive discovery from inside Claude Code
+Dispositions are assigned by the coordinator's reproduction and reconciliation
+— never by model-to-model cross-adjudication — and disagreement is preserved,
+never majority-voted away. (If you prefer to drive discovery from inside Claude Code
 instead of the CLI, the `Workflow` tool's `parallel()` shape is equivalent;
 rate-limit-gentle batching ≤2 concurrent avoids the throttle.)
 

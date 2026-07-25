@@ -200,8 +200,8 @@ are the evidence that RDP-2 actually kills the downgrade paths.
 
 ## 6. Review gate state (honest)
 
-Draft 1.1's approval rule (dual exact-digest review: Claude Opus 4.8
-`ultracode` + GPT-5.6 SOL `ultra`, then owner approval) applies to this
+Draft 1.1's approval rule (dual exact-digest review: Claude Opus 5
+(`opus`) `xhigh` + GPT-5.6 SOL `ultra`, then owner approval) applies to this
 draft. Current state: **coordinator draft only (Kimi); no external
 reviews obtained** — Codex MCP unavailable in-session (two timeouts),
 Claude not invocable from this environment. The §18-style review questions

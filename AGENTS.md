@@ -53,7 +53,7 @@ blockers and shortest compliant path before starting more work.
 
 Phase D uses one short, simultaneous three-reviewer wave under the workflow's
 hard wall-clock and output bounds. The reviewers are GPT-5.6 SOL, Claude Opus
-4.8, and Kimi K3. Give all three the same small, clear-context prompt. Do not
+5, and Kimi K3. Give all three the same small, clear-context prompt. Do not
 build a packet dossier, run pairwise/cross-adjudication, or add reviewers. A
 missing mandatory answer remains an honest gap, not permission to keep browsing
 indefinitely.

@@ -6,7 +6,7 @@ records** produced under the playbooks in the parent directory and the
 the **current** workflow
 ([`docs/planning-and-review-workflow.md`](../../../planning-and-review-workflow.md)
 §7/§7b), review evidence comes from ONE simultaneous three-reviewer wave
-(gpt-5.6-sol `ultra` / Opus 4.8 `xhigh` / Kimi K3) plus coordinator triage —
+(gpt-5.6-sol `ultra` / Claude Opus 5 `xhigh` / Kimi K3) plus coordinator triage —
 there is **no** Partner-A/Partner-B cross-adjudication step — and kept
 findings are filed as GitHub issues on `EthereumPhone/PQ1`. The older
 canonical-post-cross-adjudication lifecycle (raw first passes and cross

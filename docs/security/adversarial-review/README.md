@@ -98,8 +98,8 @@ content-addressed envelope retains both complete raw payloads and diagnostics;
 it performs no cross-run grouping, re-voting, disposition, or authority grant.
 
 For the ordinary Phase-D merge review, do not paste Part-C catalogs. Use the
-planning workflow's shared short prompt with GPT-5.6 SOL, Opus 4.8, and Kimi K3
-simultaneously.
+planning workflow's shared short prompt with GPT-5.6 SOL, Claude Opus 5, and
+Kimi K3 simultaneously.
 
 ## Cadence summary
 

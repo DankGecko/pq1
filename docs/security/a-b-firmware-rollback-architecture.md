@@ -4067,8 +4067,8 @@ floor codec, or durable-intent route may be selected on logical safety first
 and measured only afterward. Before an option can be final:
 
 1. the Section-13 silicon test completes on a named sacrificial board;
-2. both exact independent reviews—Claude Opus 4.8 with the 1M context in
-   `ultracode` effort mode and
+2. both exact independent reviews—Claude Opus 5 (`opus`) at `xhigh`
+   effort and
    GPT-5.6 SOL at `ultra` effort—adjudicate the security evidence;
 3. every still-viable `(journal, floor codec, durable-intent route)`
    combination receives its own isolated, nonshipping, production-equivalent
@@ -4298,7 +4298,7 @@ must not infer authorization from the existence of this specification.
 No production-shared rollback implementation code starts until:
 
 - a candidate-final document is frozen under one full SHA-256 digest;
-- Claude Opus 4.8 with the 1M context in `ultracode` effort mode,
+- Claude Opus 5 (`opus`) at `xhigh` effort,
   and GPT-5.6 SOL with `ultra` reasoning effort, independently inspect that
   same frozen digest and approve it or issue explicit red lines;
 - the owner resolves every required red line, then the resulting changed text
@@ -4400,8 +4400,8 @@ every required Section-13 receipt and both exact adversarial implementation
 reviews defined below.
 
 Every binding implementation-review gate in this section uses the same exact
-independent pair as Section 19: Claude Opus 4.8 with the 1M context in
-`ultracode` effort mode and GPT-5.6 SOL with `ultra` effort. Both receive the
+independent pair as Section 19: Claude Opus 5 (`opus`) at `xhigh`
+effort and GPT-5.6 SOL with `ultra` effort. Both receive the
 same frozen implementation-diff digest and neither receives the other's report
 before issuing its own digest-bound verdict. The initial pair may approve only
 the nonshipping abstract software core while physical gates remain open; a
@@ -5656,7 +5656,7 @@ Draft 1.1 incorporates those red-lines through `FROZEN-MAN-4`,
 `FROZEN-OTP-PROGRAM-1`, `FROZEN-HLT-1`, `FROZEN-HLT-2`, and
 `FROZEN-TIME-1`. It inherits no approval. Once editing and internal consistency
 checks finish, two fresh independent reviewers must inspect the same exact
-digest: Claude Opus 4.8 with the 1M context at `ultracode`, and GPT-5.6 SOL at
+digest: Claude Opus 5 (`opus`) at `xhigh`, and GPT-5.6 SOL at
 `ultra`. Each is told only that the other model/effort is independently
 reviewing the same digest; findings and verdict are withheld until both report.
 Their digest-bound reports live in a separate approval receipt so recording
@@ -5668,7 +5668,7 @@ them cannot change the reviewed spec bytes.
 | Independent reviewer B | Draft 0.9 `f38b9030...a947336` | APPROVE WITH NORMATIVE RED-LINES; no implementation/shipment approval | historical only |
 | GPT-5.6 SOL, `ultra` effort | Draft 1.0 `59bb14f8...68291efb` | architecture approved; no shipment approval | superseded by Opus NO-GO and Draft 1.1 |
 | Claude Opus 4.8, 1M context, `ultracode` effort | Draft 1.0 `59bb14f8...68291efb` | normative NO-GO | red-lines incorporated into Draft 1.1 candidate |
-| Claude Opus 4.8, 1M context, `ultracode` effort | Draft 1.1 exact final digest | pending | no inherited approval |
+| Claude Opus 5, `opus`, `xhigh` effort | Draft 1.1 exact final digest | pending | no inherited approval |
 | GPT-5.6 SOL, `ultra` effort | Draft 1.1 exact final digest | pending | no inherited approval |
 | Owner | Draft 1.1 exact final digest and external approval receipt | pending | pending |
 

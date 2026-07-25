@@ -217,7 +217,7 @@ rotation, compatible authenticated-IR extensions, additional fail-closed
 
 - Stop all writers and freeze one exact candidate identity.
 - Run the same required gates from a clean or isolated environment.
-- Launch GPT-5.6 SOL, Opus 4.8, and Kimi K3 simultaneously with the same short,
+- Launch GPT-5.6 SOL, Claude Opus 5, and Kimi K3 simultaneously with the same short,
   clear-context prompt.
 - Resolve findings, re-freeze, and apply the material/non-material re-review
   rule in Section 10.
@@ -346,7 +346,7 @@ For security-sensitive architecture and implementation, launch exactly these
 three reviewers **simultaneously in fresh contexts**:
 
 - literal **`gpt-5.6-sol`** with `model_reasoning_effort="ultra"`;
-- Claude Code **Opus 4.8** (`opus[1m]`) with `xhigh` effort; and
+- Claude Code **Opus 5** (`opus`) with `xhigh` effort; and
 - Kimi Code **Kimi K3** (`kimi-code/k3`) with the highest supported thinking
   effort.
 

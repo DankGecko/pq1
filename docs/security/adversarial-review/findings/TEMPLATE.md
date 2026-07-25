@@ -11,7 +11,7 @@ status: in-review   # post-cross items start REVIEWED; see findings/README.md
 > **NOTE (2026-07-20):** This canonical-post-cross-adjudication template is
 > **historical / specially-authorized-only** under the current workflow.
 > `docs/planning-and-review-workflow.md` §7/§7b now prescribes ONE
-> simultaneous three-reviewer wave (gpt-5.6-sol `ultra` / Opus 4.8 `xhigh` /
+> simultaneous three-reviewer wave (gpt-5.6-sol `ultra` / Claude Opus 5 `xhigh` /
 > Kimi K3) with coordinator triage and **no** Partner-A/Partner-B
 > cross-adjudication step; triaged findings are tracked as GitHub issues.
 > Use this template only when a task-specific owner gate explicitly requires
