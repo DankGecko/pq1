@@ -3026,6 +3026,24 @@ side-conditions) and confirmed findings 1-3 above. Neither modified any file.
 Recorded at the conclusion itself and run in the gate as a *disclosed non-canary*. The informative statement is the
 PART B version, quantified over an arbitrary encoding.
 
+**RESIDUAL QUALIFICATIONS ON THE WITNESS (Kimi K3, all four upheld and recorded, not argued away).**
+(Q1) Satisfiability of PART G's defining equations is a **meta-argument** (axiom census + non-circularity), not a
+machine-checked `clone … realize` — and it cannot be one, since EasyCrypt cannot re-interpret an already-declared op
+from inside the theory. (Q2) N1 is witnessed **existentially over the target**, at
+`target_sum := digitsum(encode_msgWOTS d0)` — **not** at C10's deployed `TARGET_SUM = 205`; whether 205 lies in the
+image of `digitsum ∘ encode_msgWOTS` is undecided by the closure. (Q3) The `thfc` pin is **parameter-conditional**:
+it is scheme-preserving only while `8n+r` misses the four member indices, which the capstone's separation premises
+guarantee but the model itself does not (`MODEL_dfC_8np32_unsafe_at_n4` shows the guard is not automatic).
+(Q4) What is established is `predC` **somewhere-true**, not `predC` a **proper** subset — in the exhibited model the
+gate may never reject; excluding that needs a constraint on `encode_msgWOTS`'s image that the closure does not have.
+
+**PROSE DISCIPLINE THAT FOLLOWS FROM THE FAITHFULNESS FINDING.** Given finding 1-3 above, statements of the form
+"C10 EUF-CMA is mechanized" should read "**the SPHINCS+C mechanism is mechanized at MM45-admissible WOTS parameters
+(e.g. w=16, len=len1+len2=35)**". No rung of the content ladder reaches C10-as-deployed, because the ambient theory
+cannot be instantiated there at all. Closing that is a separate, larger work item than V1/V2: it requires a
+`log2_w = 3` admissible base, a checksum-free `len = len1`, and replacing MM45's unconditional `two_encodings` axiom
+with the **predC-restricted** version — for which `constsum_encoding_is_two_encodings` is already the proof.
+
 **Disclosure.** The positive-mass conclusion (`0 < mu ddgstblock predC`, the FORS `good_pos` shape) uses
 `FTWES.ddgstblock_fu` — an **inherited, unrealized** MM45 clone axiom (SPHINCS_PLUS.ec clones FORS_ES without
 realizing it). Pre-existing base TCB, not introduced here; the existential form is free of it. **No new axiom is
