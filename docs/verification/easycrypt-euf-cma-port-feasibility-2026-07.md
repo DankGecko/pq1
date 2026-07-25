@@ -3744,9 +3744,14 @@ especially the randomness gap, which is large and concerns how the counter is dr
 there are. FLAGGED, NOT CONCLUDED.
 
 **⇒ CONCLUDED 2026-07-25h.** The "FLAGGED, NOT CONCLUDED" parameter-margin question below was triaged on the
-security-engineering side and closed **NO-ACTION** — see [UPDATE 2026-07-25h](#update-2026-07-25h--track-a-security-engineering-triage-of-the-cic-parameter-margin-question-verdict-no-action-with-a-disclosed-thin-margin-and-one-pointer)
-at the end of this file. Headline: the CiC Parameter Requirements are missed by **more** by NIST's own
-SLH-DSA-SHA2-128s on every comparable axis, and the "~105-bit randomness gap" is a layer/category error.
+security-engineering side: **NO-ACTION on the CiC question, MONITOR overall** — see UPDATE 2026-07-25h at the
+end of this file. Headline: the CiC Parameter Requirements are missed by **more** by NIST's own
+SLH-DSA-SHA2-128s on every comparable axis and no attack is implied; but the triage's own "≤2^16 sigs/key"
+premise was falsified (chain-independent bootstrap key vs per-chain cap), so the monitored quantity is the
+**global bootstrap-key signature count**, not any CiC requirement. ⚠ Two claims in the paragraph below are
+**corrected** there: the "grind randomness → SHORT by ~105 bits" line is not a meaningful comparison (the WOTS
+count is a deterministic public index with ≈0 bits of entropy, and it — not the FORS `R` — is the syntactic
+`ρ`), and the deployed-parameter shortfalls are reduction slack, not attack cost.
 
 **TWO NOTATION TRAPS recorded so nobody re-derives them wrong:**
  1. In this literature `w` is BITS PER CHUNK. C10's base-8 Winternitz is their **w = 3**, not w = 8. Reading their
@@ -3764,19 +3769,25 @@ and should be triaged separately from the verification work.
 
 ---
 
-## UPDATE 2026-07-25h — TRACK A: security-engineering triage of the CiC parameter-margin question. **VERDICT: NO-ACTION** (with a disclosed thin margin and one pointer)
+## UPDATE 2026-07-25h — TRACK A: security-engineering triage of the CiC parameter-margin question. **CiC verdict: NO-ACTION. Overall deployed-margin verdict: MONITOR** (one corrected premise)
 
 This closes the item 25g raised and explicitly left open ("FLAGGED, NOT CONCLUDED"). It is a triage of the
 **shipped signer**, not of the proof. Primary sources read directly: the CiC paper PDF (fetched from
 `https://cic.iacr.org/p/2/1/13/pdf`, §6 pp. 28-30), the SPHINCS+C paper (`paper-nist-pqc2022.txt`), and the
-deployed Rust/Yul code. All arithmetic recomputed here from scratch.
+deployed Rust/Yul code. All arithmetic recomputed here from scratch, then adversarially reviewed by GPT-5.6 and
+Kimi K3 — **both found real defects in the first draft, which is corrected in place below** (see the
+external-review section at the end for what changed and where the two reviewers disagreed).
 
 **HEADLINE.** The CiC Parameter Requirements are a *sufficient condition for that framework's proof to deliver
 its stated bound*, and they bundle reduction-tightness/union-bound losses that **no deployed Category-1
-hash-based signature satisfies — including NIST's own SLH-DSA-SHA2-128s.** On both requirements that can be
-evaluated for a Winternitz layer, **C10 misses by strictly less than SLH-DSA-SHA2-128s does.** No attack is
-implied, no deployed number falls below the Cat-1 floor, and the headline "~105-bit randomness gap" is a
-**layer/category error**. No parameter change is warranted.
+hash-based signature satisfies — including NIST's own SLH-DSA-SHA2-128s**, which misses them by more on every
+comparable axis. No attack is implied by anything in the paper, and the "~105-bit randomness gap" does not
+survive contact with the source. **However**, the triage's own premise "≤2^16 signatures per key, enforced
+on-chain" was **wrong**: the bootstrap key is chain-*independent* while its cap is per-*chain*, so its FORS+C
+few-time term falls below 128 bits once it is used on ≥2 chains (126.16 at 2^17). That is a *pre-existing,
+documented, owner-accepted* residual — not a CiC finding — but it moves the overall verdict from NO-ACTION to
+**MONITOR**, with the monitored quantity being the **global bootstrap-key signature count**. No parameter change
+is warranted.
 
 ### Q1 — What C10 actually claims
 
@@ -3826,14 +3837,31 @@ at the given count and `wots.rs:160` rejects unless `sum == TARGET_SUM` (the on-
 **sampled uniformly from `R` on every attempt** (Def. 11 step 2(b)(i), Construction 6). C10's count has
 **≈0 bits of entropy**, not 23.25 — quoting `2^23.25` as its "randomness" already overstates it.
 
-**Axis 2 — wrong layer.** CiC's generalized XMSS is **single-layer**: `ρ` randomizes the encoding of the
-**user's message**, which is why `log|R|` must be large (the adversary chooses the message). In C10 the
-user message is encoded at the **h_msg/FORS layer**, and *that* layer's randomizer is
-**`R`, 16 bytes = 128 bits**, ground at `fors.rs:98-124` from `SHA256(sk_seed ‖ "R_grind" ‖ [opt_rand] ‖ M ‖ nonce)`
-— **secret-keyed and message-bound**, precisely so the message↦ht_idx map is not attacker-computable
-(the "Avenue B" hardening, `fors.rs:70-95`). C10's WOTS layer signs **internal Merkle nodes**, not
-attacker-chosen messages. So the correct mapping is *CiC ρ ↔ C10's 128-bit FORS R*, which **meets** the
-128-bit order of magnitude; the WOTS count is an inner liveness device.
+**Axis 2 — wrong layer for the requirement's *premise*.** ⚠ **CORRECTED after external review — read this
+carefully, the first draft of this section got the mapping wrong and GPT-5.6 caught it.**
+*Syntactically*, instantiating CiC Construction 6 at C10's WOTS layer maps
+`(P, T, m, ρ, Thmsg, Prop) = (pk_seed, WOTS ADRS, current_node, count, wots_digest, Σdigits=205)`.
+**So `ρ` IS the count, and C10's 128-bit FORS `R` cannot be substituted into eq. (14).** At that layer C10
+genuinely does not satisfy eq. (14), and saying "C10's ρ is the FORS R" as an *instantiation* is wrong.
+
+What is true — and is the actual reason eq. (14) is not binding — is that **CiC's theorem is a
+chosen-message theorem for a single-layer scheme**. Their `ρ` randomizes the encoding of the *user's* message,
+which is why `log|R|` must be large: the adversary picks the message, so with a small/predictable randomizer it
+can search **before** requesting a signature for two messages sharing a codeword, then transfer. C10's WOTS
+layer signs **signer-generated internal Merkle nodes** whose values are key-dependent and not known to the
+adversary before it sees the signature — so the collision-first strategy has no purchase and the adversary is
+left with post-hoc second-preimage search. That is the same structural distinction the tight standard-SPHINCS+
+proof (Hülsing-Kudinov) exploits. **This defence needs its own proof and does not come free from CiC** — the
+verifier reconstructs `current_node` entirely from adversary-supplied signature material
+(`hypertree.rs:416-460`) before WOTS verification, so an exemption must be argued compositionally, not by
+gesturing at "WOTS signs internal nodes". The repo already tracks this as open, not closed
+(`docs/STATUS.md:415`: no part of the EasyCrypt development is instantiated at deployed C10 WOTS parameters).
+
+The *role*-analogue of CiC's `ρ` — "the randomizer at the layer where the adversary chooses the message" — is
+C10's FORS `R`: 16 bytes = 128 bits, ground at `fors.rs:98-124` from
+`SHA256(sk_seed ‖ "R_grind" ‖ [opt_rand] ‖ M ‖ nonce)`, **secret-keyed and message-bound** precisely so the
+message↦ht_idx map is not attacker-computable (the "Avenue B" hardening, `fors.rs:70-95`). That is a role
+analogy for reading the requirement's *intent*, **not** an instantiation of eq. (14).
 
 **What the 10^7 cap actually has to satisfy is a liveness bound, and it does so with enormous room.**
 Computed exactly: `|C| = |{x ∈ {0..7}^43 : Σx = 205}| = 2^114.0941`, so `Pr[sum = T] = 2^-14.906`,
@@ -3895,64 +3923,159 @@ number of signatures γ per key; CiC Req 2 bounds the **WOTS message-encoding ta
 two distinct summands of the same union bound, so they "compound" only in the trivial sense that the total is
 their sum — a ≤1-bit effect when both sit near the floor.
 
-The engineering conclusion is **one margin story, not two, and CiC does not move the bottleneck**: the FORS
-term is the one with **zero** margin (`sec_16 = 128` exactly at the deployed cap; `sec_18 = 118.3` if the cap
-were the full hypertree height), whereas the CiC-flagged WOTS term sits at 2^129 / 2^64.5, i.e. **above** the
-floor. This is already recorded in-repo and already treated as load-bearing:
-`sphincs-c10/src/params.rs:5-13` ("the on-chain `bootstrapUses` and `slotUses` counters cap actual usage at
-65,536 per chain … to leave a conservative security margin"), CLAUDE.md invariant #7, `docs/STATUS.md:422`
-("Quantitative log-domain floor (96-bit @ 2^16 cap, **cap load-bearing**)"),
-`contracts/verification/lean/SphincsCVerify/Crypto/Quantitative.lean` (kernel-checked `≤2^-112` EUF-CMA query
-term and `≤2^-95` generic multi-target term at `q = 2^16`), and `make -C contracts/verification
-verify-forsc-margin`. **The 2^16 cap is a security control, not a policy choice** — that is the sentence the
-CiC exercise reinforces, and it needs no new flag because STATUS.md already carries it.
+**One margin story, not two, and CiC does not move the bottleneck.** The FORS few-time term is the binding one
+and it is a *function of the per-key signature count*, not a constant. Recomputed here with the repo's own
+FORS+C model (`contracts/verification/scripts/forsc_grinding_margin.py`, run directly; its plain-FORS column
+reproduces the upstream Fluhrer-Dang sweep exactly, which validates the model):
 
-### Q6 — Is any attack implied? **No. Concretely, no.**
+| signatures on one key `q` | plain FORS bits | **FORS+C bits (what C10 is)** |
+|---|---|---|
+| 2^14 | 136.03 | 137.69 |
+| **2^16** (one chain's cap) | 128.45 | **130.57** |
+| **99,376** | 125.72 | **128.00** ← the FORS+C 128-bit crossing |
+| 2^17 | 123.77 | 126.16 |
+| 2^18 | 118.31 (= upstream `sec_18`) | 121.02 |
+| 2^20 | 104.47 (= upstream `sec_20`) | 107.99 |
 
-To forge at the WOTS+C layer an adversary must produce `(node*, count*) ≠ (node, count)` whose 43 base-8 digits
-**equal** the honest signature's digit vector. Domination is not enough and equality is forced: constant sum
-plus componentwise ≤ implies equality (CiC Lemma 7's one-line argument, `cic.txt:1570-1580`), and **both**
-verifiers enforce `Σ = 205` (`wots.rs:160`; `SPHINCsC10Asm.sol:170`). Free choice of `count*` gives the
-adversary unlimited independent trials, but each is an independent `2^-129` shot at a **fixed** target — so the
-work is `2^129` classical, `2^64.5` sequential-Grover, unchanged by the counter's predictability. A small or
-deterministic `|R|` at this layer costs the *signer* (liveness, `2^-470`) and buys the *attacker* nothing:
-`log|R|` enters the CiC bound through the **adaptive-reprogramming** step of the SM-rTCR proof
-(`cic.txt:3161-3191`, the `Repro` game), which is a proof technique, not an attack. The place where a
-predictable grind *would* matter — the layer where the adversary chooses the message — is the FORS R-grind,
-and C10 already keys that on `sk_seed` and binds it to the message for exactly this reason (`fors.rs:70-95`).
+So at **one chain's cap** the FORS term is **130.57 bits — above the floor, ~2.6 bits of margin**, not "exactly
+128 with zero margin" as the first draft of this section said (that used the *plain*-FORS column; C10 is the
+FORS+C column, ~2 bits better, and the repo already gates that: `make -C contracts/verification
+verify-forsc-margin`). Supporting in-repo material: `sphincs-c10/src/params.rs:5-13`, CLAUDE.md invariant #7,
+`docs/STATUS.md:422`, `contracts/verification/lean/SphincsCVerify/Crypto/Quantitative.lean`.
 
-**Nothing in the deployed configuration falls below the Cat-1 floor.** WOTS encoding term: 2^129 / 2^64.5
-(above). FORS few-time at the deployed `2^16` cap: 128 (at the floor, zero margin). Requirement-3 gaps:
-reduction slack, not attack cost.
+⚠ **Terminology hazard, flagged by Kimi K3.** `Quantitative.lean` and `STATUS.md:422` speak of a "96-bit floor
+at the 2^16 cap". That is an **advantage bound** — the generic multi-target summand `(q+q²)·2^-128` is `≤2^-95`
+at `q=2^16` — *not* a work factor. It does not say C10 is a 95-bit scheme, and it must not be compared
+like-for-like against the `2^128`/`2^64` work-factor numbers used elsewhere in this section. Kimi read it as a
+contradiction; it is a units mismatch. Recorded so nobody re-derives the confusion.
 
-### Disclosed thin margins (true statements about the shipped signer; they do not imply action)
+### Q6 — Is any attack implied? **No attack is implied by CiC. But the "≤2^16 per key" premise is FALSE and must be corrected.**
 
-Stating these explicitly so the cross-check above is not a whitewash:
-1. The WOTS+C message-encoding term has **1 bit** of classical margin (2^129 vs 2^128) and **0.5 bit** of
-   sequential-quantum margin (2^64.5 vs 2^64). C10 is 1 bit better than SLH-DSA-128s here, but "better than the
-   standard" and "comfortable" are different things — this term has no slack to give.
-2. The FORS few-time term sits at **exactly 128 bits with zero margin at the 2^16 cap** (sec_16=128,
-   sec_18=118.3). The cap is what holds it there.
-3. C10 runs at δ=1.362 and `E[grind] = 30,698`, outside the δ ≤ 1.1 / `K ≤ 4096` regime the CiC paper studies.
-   That is a *liveness/timing* difference (and a deliberate gas trade), not a security one, but it does mean
-   CiC's published efficiency/parameter tables cannot be read across to C10 without redoing the arithmetic.
+**The forgery arithmetic (no attack).** To forge at the WOTS+C layer an adversary must produce
+`(node*, count*) ≠ (node, count)` whose 43 base-8 digits **equal** the honest signature's digit vector.
+Domination is not enough and equality is forced: constant sum plus componentwise ≤ implies equality (CiC
+Lemma 7, `cic.txt:1570-1580`), and **both** verifiers enforce `Σ = 205` (`wots.rs:160`;
+`SPHINCsC10Asm.sol:170`). Free choice of `count*` gives unlimited trials but each is an independent `2^-129`
+shot at a fixed, ADRS-bound target: `wots_digest` binds `(pk_seed, layer, tree, kp)` (`hash.rs`, via
+`make_adrs`), so a trial computed under one address can only ever hit that address's vector — **multi-target
+amplification is structurally absent**, which is also why eq. (13) carries no `log qs` / `log K` term. Both
+reviewers searched for a shortcut and found none; the composite `(node, count)` domain is ~160 bits with ~2^31
+solutions per target, giving Grover `2^(160-31)/2 = 2^64.5`, consistent.
 
-### VERDICT: **NO-ACTION**
+*Adjudicating a reviewer disagreement:* Kimi proposed that top-layer WOTS keys are reused ~2^7 times at the cap,
+dropping the term to 2^122. **Rejected, and I verified it at source.** The layer-1 WOTS key at position
+`(layer=1, tree=0, kp=idx_leaf)` always signs `current_node` = the root of layer-0 subtree `idx_leaf`
+(`hypertree.rs:270-295`), a fixed deterministic function of the key. Reuse therefore reproduces the **identical**
+`count` and the **identical** `wots_sigma` — it creates **zero** new targets. GPT-5.6 independently reached the
+same conclusion. Kimi's 2^122 is wrong.
 
+**The binding term inside the WOTS layer is not the one CiC flags.** Forging at a WOTS position by the
+*encoding* route costs 2^129. But there is a second, cheaper route present in *every* SPHINCS+-family scheme:
+find a second preimage of the 128-bit `current_node` itself (i.e. a forged subtree hashing to the same root),
+costing **2^128 / 2^64**. SLH-DSA-128s has *only* that route (FIPS 205 Alg. 7 encodes the node injectively with
+`base_2b(M,4,32)` + checksum — no hash, no counter, hence no encoding-collision surface at all; GPT-5.6's
+point, verified). C10 adds the 2^129 encoding route *on top of* the shared 2^128 route. **So C10's extra route
+is weaker than the route both schemes already have, and the WOTS-layer bottleneck for both is 2^128 — exactly
+the Cat-1 floor.** The "1 bit of margin" the first draft celebrated was measuring a non-binding term.
+
+**⚠ CORRECTION — the deployed usage premise. GPT-5.6 falsified the sentence "≤2^16 signatures per key,
+enforced on-chain", and it is right.** Verified at source:
+- The **bootstrap/master key is chain-INDEPENDENT**: `master = HMAC-SHA512("sphincs-c6-v1", bip39_seed)`
+  (`domain/src/lib.rs:537,556-566`) — no `chain_id` in the preimage. (Slot keys *are* chain-bound —
+  `slot_entropy(… ‖ chain_id_be8 ‖ slot_index_be4)`, `domain/src/lib.rs:705-712` — so their 2^16 cap really is
+  per-key.)
+- `bootstrapUses` is **per-contract-instance = per-chain** storage (`PQMultiOwnable.sol:22`;
+  `PQSmartWallet.sol:31` "per-chain usage counters"). So `C` chains permit `C · 2^16` signatures under **one**
+  bootstrap key. From the table above, the FORS+C 128-bit crossing is at **q ≈ 99,376 ≈ 1.5 chains' worth**;
+  two chains (2^17) gives **126.16 bits**, four chains (2^18) gives **121.02**.
+- Additionally `CMD_GET_INIT_CODE` emits fresh randomized bootstrap signatures with **no counter and no user
+  confirmation** (`secure/src/nsc/cmd_get_init_code.rs`). This is a **known, HIGH-severity, owner-ACCEPTED
+  WON'T-FIX** (`docs/VULN-getinitcode-bootstrap-fewtime-oracle.md`, owner decision 2026-06-30, "do not
+  re-raise"), accepted because the practical forgery threshold there is ~2^28–2^32 distinct bootstrap
+  signatures against a keygen-bound ~80 sigs/unlock-window.
+
+**None of this is a CiC finding** — it is the *same* FORS few-time term, evaluated at the *correct* `q`. It is
+recorded here because the triage's own premise was wrong and a wrong premise in a security verdict is exactly
+the error this exercise was meant to avoid.
+
+### Corrected margin table for the shipped signer
+
+| term | deployed value | vs Cat-1 floor |
+|---|---|---|
+| WOTS node second-preimage (shared with SLH-DSA-128s) | 2^128 / 2^64 | **at the floor** |
+| WOTS+C *encoding* second-preimage (the CiC-flagged term) | 2^129 / 2^64.5 | above |
+| FORS+C few-time, **slot key** (chain-bound, cap 2^16) | 130.57 bits | above, ~2.6 bits |
+| FORS+C few-time, **bootstrap key**, 1 chain | 130.57 bits | above |
+| FORS+C few-time, **bootstrap key**, ≥2 chains (2^17) | **126.16 bits** | **below** |
+| FORS+C few-time, bootstrap key, 4 chains (2^18) | **121.02 bits** | **below** |
+| grind liveness (10^7 cap) | P(fail) = 2^-470 | non-issue |
+| CiC Req 2/3 shortfalls | 2.32 / 8.64 / 31.75 / 70.67 bits | reduction slack, not attack cost |
+
+### VERDICT
+
+**On the CiC parameter-margin question specifically: NO-ACTION.** Unanimous with both external reviewers.
 - No attack follows; a sufficient-condition failure is not a vulnerability.
-- The requirements failed are missed by more by NIST's own Cat-1 standard on every comparable axis.
-- The "~105-bit randomness gap" is a category error (deterministic public search index at the wrong layer);
-  C10's actual message-layer randomizer is 128-bit, secret-keyed and message-bound.
-- The one number with zero margin (FORS at the 2^16 cap) is already documented, gated, and enforced on-chain.
-- A parameter change would be launch-breaking (invariant #6) and would buy nothing that is currently at risk.
+- The requirements failed are missed by **more** by NIST's own Cat-1 standard on every comparable axis, and
+  Req 1 arguably does not even apply to SLH-DSA's injective WOTS encoder while Req 2 *does* apply to C10's
+  hashed one — so the fair reading is "C10 has a surface SLH-DSA lacks, and that surface costs 2^129, which is
+  above the 2^128 route both schemes already have".
+- The "~105-bit randomness gap" does not survive contact with the source: the WOTS count is a deterministic,
+  publicly recomputable, transmitted-and-re-checked search index with ≈0 bits of entropy, and no reviewer could
+  name an attack it enables. The requirement it fails (eq. 14) exists to stop a **collision-before-signing**
+  strategy that requires adversary-chosen messages — a premise C10's WOTS layer does not satisfy.
+- A parameter change would be launch-breaking (invariant #6) and would buy nothing currently at risk.
 
-**No new STATUS.md row is opened** (the verdict is NO-ACTION and the binding constraint — the 2^16 cap as a
-security control — already has one at `docs/STATUS.md:422`). What this triage does add is a **pointer**: 25g's
-"FLAGGED, NOT CONCLUDED" is hereby concluded.
+**Overall triage verdict for the deployed C10 margin: MONITOR** — because the corrected accounting above shows
+the FORS+C term does go **below 128 bits for the bootstrap key once it is used on ≥2 chains** (126.16 at 2^17).
+That is not a CiC finding and not new: it is the pre-existing, documented, owner-accepted residual class
+(`docs/VULN-getinitcode-bootstrap-fewtime-oracle.md`). This triage does not re-open an owner WON'T-FIX; it
+corrects the arithmetic in the record and names the monitored quantity precisely. **The monitored quantity is
+the GLOBAL (cross-chain, all-paths) bootstrap-key signature count — not any CiC requirement.**
 
-**What would change this verdict** (monitor conditions, not open work): (a) a published cryptanalytic result
-that lowers Winternitz/target-sum encoding second-preimage below the generic `2^{vw}`; (b) any change that
-raises the per-key signature budget above `2^16` — that would move the FORS term off 128 and **would** be a
-parameter question; (c) a version of the CiC framework whose requirements *are* met by SLH-DSA-128s but not by
-C10, which would make the comparison discriminating rather than uniform.
+*Reviewer disagreement on this point, reported as required:* GPT-5.6 recommended **INVESTIGATE-FURTHER** on the
+strength of the usage premise; Kimi K3 recommended **NO-ACTION on the CiC question + MONITOR on the floor
+accounting**. I adopt Kimi's split because the usage item is pre-existing, quantified, and explicitly
+owner-dispositioned, and because GPT-5.6's own report concedes it is "not a new finding" and "a pre-launch
+configuration issue, not an extant-wallet emergency" (no devices shipped, no funds on chain).
 
+**What would change the verdict** (monitor conditions): (a) a published cryptanalytic result lowering
+Winternitz/target-sum encoding second-preimage below the generic `2^{vw}`; (b) any increase in the **global**
+per-key signature budget — cross-chain bootstrap use, or a new uncounted signing path — which moves the FORS
+term directly and *is* a parameter/lifecycle question; (c) a version of the CiC framework whose requirements
+*are* met by SLH-DSA-128s but not by C10, making the comparison discriminating rather than uniform; (d) any
+change weakening `wots_digest`'s `(pk_seed, layer, tree, kp)` ADRS binding — that binding is what makes
+multi-target amplification structurally absent, and losing it would drop the encoding term by ~log(#targets);
+(e) any new off-chain signing path that bypasses the firmware-side page-123 count reconciliation
+(`secure/src/offchain_state.rs`), since EIP-1271 issuance does not bump `slotUses` on-chain
+(`PQSmartWallet.sol` `isValidSignature` is `view`).
+
+### External adversarial review (both models, per playbook)
+
+Both were given file:line citations, the paper section numbers, three named claims to attack, and "do not
+modify any file"; `git status` confirms neither touched the tree.
+
+**Converged (strong evidence):** (1) the CiC arithmetic is correct and `2w` in eq. (15) is literal `2·w`
+(derived from Corollary 2's `L·v·2^w·2^w` multiplier); the direction of the SLH-DSA comparison survives the
+`2^w` misreading too. (2) NO-ACTION on the CiC question; no attack; no search shortcut below the encoding
+bound. (3) My phrase "proof-technique artifact, not an attack surface" for the `log|R|` term is **too strong** —
+the adaptive-reprogramming bound is *tight* (GHHM21, "Tight adaptive reprogramming in the QROM"), so it names a
+real attack class; the correct statement is **"a real attack class whose premise C10 does not satisfy at either
+layer."** Adopted above. (4) My Claim-3 headline was overclaimed. Adopted above.
+
+**Diverged (the informative part):**
+- *Layer mapping.* GPT-5.6: the syntactic instantiation maps `ρ → count`, so calling FORS `R` the ρ-analogue is
+  "formally wrong". Kimi: "a genuine category error", agreeing with my original framing. **I adjudicated for
+  GPT-5.6 on the syntax and for Kimi on the conclusion** — Q3 above now states both separately, which is the
+  only formulation that survives either reviewer.
+- *Multi-target on top-layer WOTS keys.* Kimi claimed 2^122; GPT-5.6 said reuse creates no new targets. **I
+  verified GPT-5.6 is right** (`hypertree.rs:270-295`) and rejected Kimi's figure.
+- *Overall verdict.* INVESTIGATE-FURTHER (GPT-5.6) vs NO-ACTION+MONITOR (Kimi); adjudicated above.
+- *Req 3's `L`.* GPT-5.6 noted CiC's literal `L` is one XMSS tree's leaf count; at the literal `L = 2^9`
+  (both schemes use `h' = 9`) the shortfalls become C10 22.75/52.67 vs SLH-DSA 24.45/56.07 — the direction
+  holds but the dramatic 46.7/93.4-bit gap collapses to ~1.7/3.4. Recomputed and confirmed here. The
+  total-instance reading (`L = 2^h`: C10 `2^18.0028`, SLH-DSA `2^63.0028`) is the right generalization of the
+  multi-target count for a hypertree, but **both readings are recorded** because the headline magnitude is
+  sensitive to the choice.
+- *Provenance caveat (Kimi).* The Fluhrer-Dang security curve is **upstream's own sweep script**, not a
+  peer-reviewed computation, and upstream has retired C10 with PQSigner as sole user. The repo's independent
+  FORS+C model reproduces it (table in Q5), which is corroboration but not independent peer review.
