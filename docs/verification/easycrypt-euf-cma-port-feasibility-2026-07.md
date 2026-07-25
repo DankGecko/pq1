@@ -3576,3 +3576,60 @@ estimate offered; this project's estimates run high).
   part**, to foreclose re-litigation. The *derived* relaxed copies of the vendored base (`base3/`, `WTW3.ec`,
   `head50.ec`, `pb_*`-style bodies) are now **gitignored** so no `git add -A` can commit a divergent MM45 copy;
   only the generators and hand-written probes are tracked.
+
+### 2026-07-25e — F1/F2/F3 ADJUDICATED: the CORRECTED claim boundary (supersedes the CAN/CANNOT list in 25d)
+
+The 25d entry's operative sentences were audited and found inaccurate in BOTH directions. This is the corrected,
+verified statement. I independently reproduced the decisive computation (exact DP, below) and confirmed
+`git status FV-SPHINCSPLUS-EC/` is EMPTY — **the vendored MM45 base was NOT modified.**
+
+**F3 IS THE REAL OBSTRUCTION, AND IT IS EXACT AND UNFIXABLE BY PARAMETER RELAXATION.** `two_encodings`
+(WOTS_TW_ES.ec:572), applied in both argument orders, forces `encode_msgWOTS` to be INJECTIVE with an ANTICHAIN
+image in the pointwise order. So the 2^(8n)=2^128 messages must fit inside the largest antichain of {0..w-1}^len.
+MY OWN EXACT DP (reproduces the track's table):
+    deployed C10 (w=8, len=43)      max antichain = 2^123.76   < 2^128  -> NO ENCODING EXISTS
+    C10 constant-sum layer (sum=205)               = 2^114.09   < 2^128  -> likewise
+    w=4 (len=86) / w=16 (len=46) / w=256 (len=35)  = 2^167.3 / 2^177.7 / 2^269.9  -> all fit comfortably
+So at the deployed geometry `two_encodings` is **UNSATISFIABLE** — not "false for C10's particular encoding", but
+unsatisfiable by ANY encoding. This SUBSUMES F1 and F2: relaxing log2_w cannot help.
+
+**⚠ THE ONE MISREADING TO PREVENT: THIS IS NOT AN ATTACK ON THE DEPLOYED SIGNER.** C10's encoding is DELIBERATELY
+many-to-one (2^128 digests -> a 2^114 codeword layer; the counter-grind is what makes it so). MM45's `two_encodings`
+demands INJECTIVITY because it models standard WOTS's checksum encoding, which is injective. The two are simply
+incompatible — that is a MODELLING mismatch, not a weakness. Concretely: forging still requires hitting one SPECIFIC
+codeword, i.e. matching all 43 base-8 digits ~ 2^129 work; the many-to-one-ness is exactly what the S-TCR(+C)
+assumption exists to absorb. Do NOT read 2^114 as a security level.
+
+**F1 STANDS but is a TRAP, not an opportunity.** It is real (machine-checked: `clone ... op log2_w <- 3` is REJECTED
+with goal `3 = 2 \/ 3 = 4 \/ 3 = 8`; positive control at 8 is GREEN; `val_log2w` is the SOLE failing obligation) and
+the constraint is NOT mathematically load-bearing — the track PROVED a relaxation to `{int | 1 <= log2_w}` (deleting
+only `val_w`/`val_len1`, redirecting 88 citations) leaves all three vendored MM45 levels compiling 0-admit. **That
+receipt is precisely why it is dangerous**: a future session will find it and read it as a green light. It buys ZERO
+claimable ground — len = len1+len2 = 46 <> 43 (F2), and F3 blocks regardless. DO NOT DO THE F1-ONLY REPAIR.
+
+**F2's MECHANISM WAS MY MISREADING — corrected, not retracted.** There is NO concrete checksum anywhere in
+FV-SPHINCSPLUS-EC: `encode_msgWOTS` is an ABSTRACT op whose only constraint is `two_encodings`; MM45 REPLACED the
+concrete checksum with that antichain axiom (the concrete one lives in a sibling file this repo never requires). So
+"the model keeps the checksum WOTS+C exists to remove" was wrong. What survives: `1 <= len2` over a DEFINED constant
+forces WIDTH len >= 44 > 43, so it is unrelaxable — a representability blocker, by a different mechanism than stated.
+
+**THE CORRECTED CLAIM BOUNDARY.**
+ CAN be claimed: the +C delta is machine-checked — SPHINCS+C EUF-CMA reduces, by an admit-free EasyCrypt proof
+   compiled from source end-to-end (24/24 files, 0 admits chain-wide), to {ITSRC10 + the mtree premises + the 5-axiom
+   TCB} — **at MM45-admissible WOTS parameters (w in {4,16,256})**. It is neither vacuous nor wrong: `two_encodings`
+   IS satisfiable at every admissible instantiation, and w=8 is unsubstitutable, so the unsatisfiable regime is
+   unreachable from inside the development.
+ CAN also be claimed (25d OVERSTATED THE DAMAGE here — corrected): the obstruction is LOCALIZED TO THE WOTS LAYER.
+   The FORS constraints (ge1_n/ge1_k/ge1_a, FORS_ES.ec:22,25,28) and tree constraints (ge1_hp/ge1_d,
+   SPHINCS_PLUS.ec:58,64) do NOT exclude deployed n=16/k=13/a=11/h'=9/d=2. Parts of the development that do not sit
+   on the WOTS layer — e.g. drafts/FORS_C10.ec, which requires only AllCore/List/Distr — ARE instantiable at
+   deployed FORS geometry. The 25d bullet "there is no instantiation of ANY part at deployed C10" is FALSE; withdrawn.
+ CANNOT be claimed: "SPHINCS+C10 EUF-CMA is machine-checked", unqualified; nor the full-scheme capstone at deployed
+   parameters (its chain single-sources w through SPHINCS_PLUS, so the LHS and the RHS WOTS-TW term are at the same
+   inadmissible w). "We proved the thing the firmware runs" is NOT supported.
+
+**METHODOLOGICAL TRAP FOUND (worth as much as the finding).** In this shell `grep` is a gitignore-respecting
+wrapper and `FV-SPHINCSPLUS-EC/` is gitignored (.gitignore:3) — so a plain `grep -r` SILENTLY RETURNS NOTHING from
+the entire vendored base. The first consumer census came back empty and was WRONG because of it. **Use
+`command grep` for every search over the vendored trees.** (Also recorded: the track self-caught and corrected its
+own measurement error about the pb_* probe files, using the wrong instrument then re-measuring exactly.)
