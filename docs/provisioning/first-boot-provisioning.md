@@ -59,15 +59,46 @@ mirrored verbatim in `docs/provisioning/factory-provisioning.md` and
     keyset (GP `PUT KEY` under `PLATFORM_DEK`); transport lock if applicable.
   - **OPTIGA:** write the **transport PBS** to E140 (metadata keeps the
     `Conf(E140)` arm so the PBS stays shield-rotatable); F1D0
-    `Change=Auto(F1D0)` (S-1); PQ1-HSM trust-anchor cert at 0xE0E3 + neutralize
-    the TA-pool 0xE0E4..0xE0E8 (S-2); provision the E120 LUC + bind F1D0
-    `Execute=LUC`, freeze the F1E1 soft counter (S-3); **LcsO=Op ratchet** on
-    the locked OIDs — the SE point-of-no-return.
+    `Change=Auto(F1D0)` (S-1); close the real type-`0x11` Protected-Update
+    anchor pool `{0xE0E8, 0xE0E9, 0xE0EF}`, and preserve/ratchet the
+    device-certificate surfaces `{0xE0E0, 0xE0E1, 0xE0E2, 0xE0E3}` **without
+    retyping them** (S-2 — *no ceremony is authorized*; see the correction
+    below); provision the E120 LUC + bind F1D0 `Execute=LUC`, freeze the F1E1
+    soft counter (S-3); **LcsO=Op ratchet** on the locked OIDs — the SE
+    point-of-no-return.
   - The #22 attestation/binding manifest burn (when it lands).
 - Read-back QA over SWD (connect-under-reset) against the reproducible build —
   encouraged, deliberately **not** load-bearing.
 - Ship at **RDP-0** with SWD + NRST pads accessible. The only SE pairing
   material in existence is the public transport values.
+
+> **CORRECTION 2026-07-26 — the OPTIGA S-2 step above named the wrong objects,
+> and the error was not a harmless no-op.** It previously read "PQ1-HSM
+> trust-anchor cert at 0xE0E3 + neutralize the TA-pool 0xE0E4..0xE0E8". Both
+> halves are wrong against the 2026-04-22 bench dump and SRM Table 68:
+> `0xE0E3` is a **device certificate** (`DataType=0x12`), already full — the
+> chip refuses to *retype* it, so it never becomes an anchor;
+> `0xE0E4..0xE0E7` hold **no objects at all** (GetDataObject errors); and the
+> stale range's only real member, `0xE0E8`, is **one of three** type-`0x11`
+> anchors. Following the old text is therefore not a harmless no-op but
+> **destructive and false-closing**, as the F8 finding independently established
+> (`../security/adversarial-review/findings/full-project-sweep-2026-07-14.md:292-320`):
+> a fill-and-lock pass over that range junk-overwrites the `0xE0E3` **device
+> certificate**, then aborts at the absent `0xE0E4` — never reaching `0xE0E9`
+> or `0xE0EF` — leaving the real anchors open while the step reports done. On
+> irreversible `LcsO` transitions, against parts that cost money. The real pool
+> is exactly `{0xE0E8, 0xE0E9, 0xE0EF}`
+> (`secure/src/optiga/mod.rs:1996`, pinned by the source-scanning test
+> `optiga_under_test::pure_tests::negative_ta_pool_lockdown_is_exact_and_emits_no_apdu`).
+>
+> Whether those three slots are **filled-and-locked** with a PQ1-HSM anchor or
+> **irreversibly neutralized** is an unapproved policy choice, not a settled
+> step: `lockdown_ta_pool` deliberately emits **no APDU** and returns
+> `Err(Status(0xEC))` (`secure/src/optiga/mod.rs:1971-2003`), and
+> `OPTIGA_S2_PRODUCTION_BLOCKED` rejects every `mode-production +
+> optiga-trust-m` build. **S-2 remains an OPEN ship-blocker** — see
+> [`../STATUS.md`](../STATUS.md) §A and
+> [`provisioning-reference.md`](provisioning-reference.md) O-3/O-4/O-5.
 
 ### Done AT THE USER'S HOME on the first field boot (this flow; before PIN entry, before wallet creation)
 

@@ -73,7 +73,47 @@ CI / `make ship-checklist` MUST hard-fail until: (a) a
 verification of post-ratchet F1D0 immutability passes, (d) the
 tearing/glitch test on the LUC failed-auth increment passes.
 
-### C-5. OPTIGA trust-anchor at `0xE0E3` is the Infineon public sample cert (SHIP BLOCKER S-2)
+### C-5. OPTIGA trust-anchor at `0xE0E3` is the Infineon public sample cert (SHIP BLOCKER S-2) — ⚠️ PREMISE SUPERSEDED 2026-07-14
+
+> **CORRECTION (premise disproven 2026-07-14; banner added 2026-07-26). The
+> finding below is preserved verbatim as the historical record — do NOT execute
+> its numbered "Required fix" list.** Steps 1 and 2 target objects that do not
+> hold what this review assumed, and following them would be actively harmful on
+> irreversible `LcsO` transitions:
+>
+> - **`0xE0E3` is not a trust anchor.** The 2026-04-22 bench dump reads
+>   `e8 01 12` = `DataType 0x12` — a **device certificate**, already full. The
+>   chip refuses to *retype* it, so neither the historical
+>   `reset::provision_trust_anchor` write nor step 1's "replace the cert" ever
+>   produces an anchor. `0xE0E1`/`0xE0E2`/`0xE0E3` must be *preserved and
+>   ratcheted* as device-cert surfaces, never retyped.
+> - **Step 2's range `0xE0E4..0xE0E8` is wrong in both directions, and
+>   executing it is destructive.** `0xE0E4..0xE0E7` hold **no objects at all**
+>   (GetDataObject errors, SRM Table 68), while the range's only real member
+>   `0xE0E8` is **one of three** type-`0x11` anchors. As the F8 finding
+>   independently established
+>   (`adversarial-review/findings/full-project-sweep-2026-07-14.md:292-320`), a
+>   fill-and-lock pass over that range junk-overwrites the `0xE0E3` **device
+>   certificate**, then aborts at the absent `0xE0E4` — never reaching `0xE0E9`
+>   or `0xE0EF` — leaving the real anchors open while the step reports done.
+>   Destructive *and* false-closing.
+> - **The real type-`0x11` Protected-Update pool is exactly
+>   `{0xE0E8, 0xE0E9, 0xE0EF}`** (`secure/src/optiga/mod.rs:1996`, pinned by
+>   `optiga_under_test::pure_tests::negative_ta_pool_lockdown_is_exact_and_emits_no_apdu`).
+>   Whether to fill-and-lock or irreversibly neutralize it is an **unapproved
+>   policy choice**: `lockdown_ta_pool` emits no APDU and returns
+>   `Err(Status(0xEC))`.
+>
+> What is **unchanged** is the finding's core security argument: an
+> attacker-controlled type-`0x11` anchor authorizes `SetObjectProtected`
+> manifests that bypass the target OID's `Change` AC, which is why every other
+> OPTIGA hardening (including S-1) is subordinate to the anchor surface.
+> **S-2 therefore remains an OPEN ship-blocker**, now correctly scoped. Steps 3,
+> 4 and 5 remain valid as written; step 4 is **done**
+> (`OPTIGA_RESET_OIDS_RETIRED` + `OPTIGA_S2_PRODUCTION_BLOCKED` in
+> `secure/src/nsc/mod.rs`). Current authority: [`../STATUS.md`](../STATUS.md) §A
+> and [`../provisioning/provisioning-reference.md`](../provisioning/provisioning-reference.md)
+> O-3/O-4/O-5.
 
 `secure/src/optiga/reset.rs:26-49` provisions `TRUST_ANCHOR_OID =
 0xE0E3` with the DER X.509 cert from Infineon's
@@ -95,11 +135,17 @@ F1E1, every spare OID (F1D7 is explicitly "left spare" per
 Update with the sample key).
 
 **Required fix (see production-todo.md "SHIP BLOCKER S-2"):**
-1. Replace `0xE0E3` cert with a PQ1-factory-HSM-controlled cert
+⚠️ **Steps 1 and 2 below are SUPERSEDED — do not execute them.** They target
+`0xE0E3` and `0xE0E4..0xE0E8`, which the correction banner at the top of C-5
+shows to be a device certificate and a mostly-empty range; running them is
+destructive and leaves the real anchors open. Steps 3–5 remain valid.
+1. ~~Replace `0xE0E3` cert with a PQ1-factory-HSM-controlled cert
    whose private key never leaves the HSM (or remove the trust
-   anchor entirely + lose field-recoverable OID reset).
-2. Enumerate and lock `0xE0E4..0xE0E8` (the rest of the trust-anchor
-   pool).
+   anchor entirely + lose field-recoverable OID reset).~~ **SUPERSEDED**
+2. ~~Enumerate and lock `0xE0E4..0xE0E8` (the rest of the trust-anchor
+   pool).~~ **SUPERSEDED** → the real pool is `{0xE0E8, 0xE0E9, 0xE0EF}`;
+   fill-and-lock vs. irreversible neutralization remains an unapproved policy
+   choice, and `lockdown_ta_pool` emits no APDU.
 3. Fill/lock `0xF1D7` and any other spare OIDs.
 4. `compile_error!` gate `optiga-reset-oids` and
    `reset::provision_trust_anchor` in the production-build fence.
