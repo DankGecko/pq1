@@ -193,8 +193,9 @@ QA, before any secret exists on the MCU:
   transport lock if applicable.
 - **F5 OPTIGA** — write the **transport PBS** to E140 with metadata keeping
   the `Conf(E140)` arm so the PBS stays shield-rotatable (this is what
-  makes R3.4 possible); F1D0 `Change=Auto(F1D0)` (S-1); close the real
-  type-`0x11` Protected-Update anchor pool `{0xE0E8, 0xE0E9, 0xE0EF}` and
+  makes R3.4 possible); F1D0 `Change=Auto(F1D0)` (S-1); close the candidate
+  type-`0x11` Protected-Update anchor pool `{0xE0E8, 0xE0E9, 0xE0EF}`
+  (SKU/revision inventory still to be pinned on silicon) and
   preserve/ratchet the device-certificate surfaces
   `{0xE0E0, 0xE0E1, 0xE0E2, 0xE0E3}` **without retyping them** (S-2 — *no
   ceremony is authorized*; this line previously named `0xE0E3` and
