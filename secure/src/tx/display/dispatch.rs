@@ -393,6 +393,22 @@ pub(crate) const fn legacy_fee_pages_required(
     cow_present || safe_v1_present || safe_exec_present
 }
 
+/// Whether the winning route paints fees with the compact legacy rows.
+///
+/// Native CoW/Safe routes win over ERC-7730 and receive the dispatcher-owned
+/// legacy suffix. With no higher-priority route, an authenticated ERC-7730
+/// descriptor owns its exact fee envelope and must be judged by that renderer,
+/// not by the narrower legacy layout.
+#[must_use]
+const fn legacy_fee_preflight_required(
+    cow_present: bool,
+    safe_v1_present: bool,
+    safe_exec_present: bool,
+    erc7730_present: bool,
+) -> bool {
+    legacy_fee_pages_required(cow_present, safe_v1_present, safe_exec_present) || !erc7730_present
+}
+
 /// Independently determine what the winning dispatch route requires from the
 /// renderer. This deliberately reparses the selected authenticated format's
 /// parameter TLVs and never consults a renderer transcript receipt.
@@ -600,20 +616,26 @@ fn pick_sign_pages_impl(
             return Err(());
         }
     }
-    // Every route below publishes the same signed EIP-1559 fee prices, either
-    // inline or through the dispatcher-owned legacy pair. Prove that all
-    // three rows have an exact representation before any route can publish
-    // pages. The FI helper evaluates the pure formatter predicate twice with
-    // a randomized gap and returns a fail-initialized sentinel; a lossy or
-    // overwide fee therefore refuses rather than becoming an authorization
-    // banner shared by distinct signed values.
+    // Gate the representation that the winning route actually publishes.
+    // ERC-7730 renders its own wider exact envelope and returns a hard error
+    // before any Pages value escapes. Every other winning route uses the
+    // compact legacy painter. Keep route ownership and exactness in one
+    // unconditional, double-evaluated FI gate: a skipped outer branch must
+    // never become a way around the compact painter's preflight.
     let legacy_fee_exact = crate::fi::check_true_into_sentinel(|| {
-        core::hint::black_box(super::primitives::legacy_fee_rows_are_exactly_renderable(
-            &tx.max_fee_per_gas,
-            &tx.max_priority_fee_per_gas,
-            tx.gas_limit,
-            tx.chain_id,
-        ))
+        core::hint::black_box(
+            !legacy_fee_preflight_required(
+                v3.is_some(),
+                safe_v1.is_some(),
+                safe_exec.is_some(),
+                erc7730.is_some(),
+            ) || super::primitives::legacy_fee_rows_are_exactly_renderable(
+                &tx.max_fee_per_gas,
+                &tx.max_priority_fee_per_gas,
+                tx.gas_limit,
+                tx.chain_id,
+            ),
+        )
     });
     crate::fi::scrub_sentinel_register();
     if legacy_fee_exact != crate::fi::OK_SENTINEL {
@@ -1189,7 +1211,7 @@ fn refuse_verified_erc7730(
 
 #[cfg(test)]
 mod semantic_guard_tests {
-    use super::refuse_verified_erc7730;
+    use super::{legacy_fee_preflight_required, refuse_verified_erc7730};
     use crate::tx::erc7730_render::RenderErr;
 
     #[test]
@@ -1204,6 +1226,21 @@ mod semantic_guard_tests {
                 "verified descriptor errors must never enter a weaker renderer"
             );
         }
+    }
+
+    #[test]
+    fn fee_preflight_follows_the_winning_route() {
+        assert!(
+            !legacy_fee_preflight_required(false, false, false, true),
+            "a direct authenticated ERC-7730 route owns its exact fee envelope"
+        );
+        assert!(legacy_fee_preflight_required(false, false, false, false));
+        assert!(
+            legacy_fee_preflight_required(true, false, false, true),
+            "native CoW outranks ERC-7730 and uses the legacy suffix"
+        );
+        assert!(legacy_fee_preflight_required(false, true, false, true));
+        assert!(legacy_fee_preflight_required(false, false, true, true));
     }
 }
 

@@ -28,7 +28,9 @@ use std::path::PathBuf;
 
 use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712, BindingError};
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, VerifiedDescriptor};
-use pqsigner_erc7730::display::primitives::write_addr_full;
+use pqsigner_erc7730::display::primitives::{
+    legacy_fee_rows_are_exactly_renderable, write_addr_full,
+};
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir};
 use pqsigner_tx_core::hash::keccak256;
 
@@ -3686,6 +3688,68 @@ fn positive_usdt_transfer_mainnet_renders_send_intent() {
     assert!(
         to_rows.iter().any(|r| r.contains(recipient_hex_head)),
         "recipient hex prefix missing: rows={to_rows:?}",
+    );
+}
+
+#[test]
+fn direct_erc7730_dispatch_uses_its_exact_fee_renderer() {
+    let res = build_registry();
+    let entry = find_leaf(res, "calldata-usdt.json", 1);
+    let bundle = synth_bundle(&res.blob, &entry.ir_bytes, entry.leaf_index);
+    let verified = verify_erc7730_bundle(&bundle, &res.root).expect("verify USDT leaf");
+    let amount = u256_from_u64(100_000_000);
+    let calldata = calldata_transfer([0x33u8; 20], amount);
+    let mut tx = envelope(1, entry.contract);
+    tx.max_fee_per_gas = u256_from_u128(123_456_789_012u128 * 1_000_000_000);
+    tx.max_priority_fee_per_gas = U256::default();
+    tx.gas_limit = 21_000;
+    assert!(
+        !legacy_fee_rows_are_exactly_renderable(
+            &tx.max_fee_per_gas,
+            &tx.max_priority_fee_per_gas,
+            tx.gas_limit,
+            tx.chain_id,
+        ),
+        "fixture must remain wider than the compact legacy fee painter"
+    );
+
+    let usdt_meta = Erc20Metadata {
+        chain_id: 1,
+        contract: entry.contract,
+        decimals: 6,
+        name: b"Tether USD",
+        symbol: b"USDT",
+    };
+    let resolver = NameResolver::new();
+    let mut proofs = DispatchPageProofs::new();
+    proofs.fail_initialize();
+    let pages = pick_sign_pages(
+        &tx,
+        &calldata,
+        &[0u8; 20],
+        None,
+        None,
+        None,
+        Some(&verified),
+        Some(&usdt_meta),
+        None,
+        &resolver,
+        &mut proofs,
+    )
+    .expect("direct ERC-7730 dispatch must use its selected exact fee renderer");
+
+    let mut verdict = crate::fi::FAIL_SENTINEL;
+    proofs.final_set_proof(&pages, &tx, false, &mut verdict);
+    assert_eq!(verdict, crate::fi::OK_SENTINEL);
+    assert!(
+        pages
+            .buf
+            .iter()
+            .take(pages.len)
+            .flatten()
+            .map(|row| String::from_utf8_lossy(row).trim().to_owned())
+            .any(|row| row == "123456789012"),
+        "the selected ERC-7730 painter must publish the exact max-fee value"
     );
 }
 

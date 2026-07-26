@@ -142,19 +142,19 @@ pub fn render_blind_sign_pages(
     // ── Max fee + tip ───────────────────────────────────────────────
     write_line(&mut pages.buf[next_page][0], "Fees: max / tip");
     let _ = write_gwei(&mut pages.buf[next_page][1], &tx.max_fee_per_gas);
-    write_tip_row(&mut pages.buf[next_page][2], &tx.max_priority_fee_per_gas);
+    let _ = write_tip_row(&mut pages.buf[next_page][2], &tx.max_priority_fee_per_gas);
     write_line(&mut pages.buf[next_page][3], "> next");
     next_page += 1;
 
     // ── Worst-case fee budget + gas ─────────────────────────────────
     write_line(&mut pages.buf[next_page][0], "Worst-case:");
-    write_native_fee_budget_row(
+    let _ = write_native_fee_budget_row(
         &mut pages.buf[next_page][1],
         &tx.max_fee_per_gas,
         tx.gas_limit,
         tx.chain_id,
     );
-    write_gas(&mut pages.buf[next_page][2], tx.gas_limit);
+    let _ = write_gas(&mut pages.buf[next_page][2], tx.gas_limit);
     write_line(&mut pages.buf[next_page][3], "> next");
     next_page += 1;
 

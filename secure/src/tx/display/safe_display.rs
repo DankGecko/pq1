@@ -303,15 +303,23 @@ fn erc20_call_amount_is_exactly_renderable(call: &Erc20Call, meta: &Erc20Metadat
         || super::primitives::token_amount_is_exactly_renderable(amount, meta)
 }
 
-/// Pre-publication exactness proof for every metadata-scaled legacy amount on
-/// a Safe surface. It walks the same strict ERC-20 and MultiSend decoders used
-/// by classification, and executes the real painter into scratch rows. Unknown
-/// tokens remain on the raw-integer path; authenticated decimals may never
-/// authorize a rounded amount.
-fn legacy_token_amounts_are_exactly_renderable(
+/// Pre-publication exactness proof for every metadata-scaled legacy amount and
+/// the signed SafeTx gas limit. It walks the same strict ERC-20 and MultiSend
+/// decoders used by classification and executes the real painters into scratch
+/// rows. Unknown tokens remain on the raw-integer path; authenticated decimals
+/// and gas limits may never authorize a lossy marker.
+fn legacy_values_are_exactly_renderable(
     input: &SafeRenderInput<'_>,
     erc20: Option<&Erc20Metadata<'_>>,
 ) -> bool {
+    if !all_zero(&input.safe_tx_gas) {
+        let (units, overflow) = u64_be_tail(&input.safe_tx_gas);
+        let mut gas_row = [b' '; DISPLAY_COLS];
+        if overflow || !write_gas(&mut gas_row, units) {
+            return false;
+        }
+    }
+
     // Safe gas refund amount, when the supplied metadata is for gasToken.
     if refund_is_active(&input.gas_price, &input.gas_token, &input.refund_receiver) {
         if let Some(meta) = erc20.filter(|meta| meta.contract == input.gas_token) {
@@ -586,7 +594,7 @@ fn render_safe_pages_inner(
     };
 
     let legacy_amounts_exact = crate::fi::check_true_into_sentinel(|| {
-        core::hint::black_box(legacy_token_amounts_are_exactly_renderable(input, erc20))
+        core::hint::black_box(legacy_values_are_exactly_renderable(input, erc20))
     });
     crate::fi::scrub_sentinel_register();
     if legacy_amounts_exact != crate::fi::OK_SENTINEL {
@@ -992,7 +1000,7 @@ fn render_safe_pages_inner(
                 // > u64 gas is absurd; never misrepresent it as a small value.
                 write_line(r1, "!HUGE (>u64)");
             } else {
-                write_gas(r1, units);
+                let _ = write_gas(r1, units);
             }
             // Why it matters: a non-zero safeTxGas can let the inner call
             // silently fail while the outer Safe tx still succeeds.
@@ -1281,6 +1289,25 @@ mod inner_kind_hint_tests {
         let unknown_data = [0xde, 0xad, 0xbe, 0xef];
         let unknown = render_input(WETH, 0, &unknown_data);
         assert!(render_safe_pages_inner(&unknown, None, None, &resolver).is_ok());
+    }
+
+    #[test]
+    fn safe_tx_gas_must_fit_the_exact_painter_before_pages_escape() {
+        let resolver = NameResolver::new();
+        let unknown_data = [0xde, 0xad, 0xbe, 0xef];
+
+        let mut exact = render_input(WETH, 0, &unknown_data);
+        exact.safe_tx_gas[24..].copy_from_slice(&999_999_999u64.to_be_bytes());
+        assert!(legacy_values_are_exactly_renderable(&exact, None));
+        assert!(render_safe_pages_inner(&exact, None, None, &resolver).is_ok());
+
+        let mut lossy = render_input(WETH, 0, &unknown_data);
+        lossy.safe_tx_gas[24..].copy_from_slice(&1_000_000_000u64.to_be_bytes());
+        assert!(!legacy_values_are_exactly_renderable(&lossy, None));
+        assert!(
+            render_safe_pages_inner(&lossy, None, None, &resolver).is_err(),
+            "distinct signed SafeTx gas values must not collapse to the same !OVF page"
+        );
     }
 
     #[test]

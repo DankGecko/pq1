@@ -127,19 +127,19 @@ pub fn render_erc20_known_pages(
     // ── Max fee + tip ──────────────────────────────────────────────
     write_line(&mut pages.buf[p][0], "Fees: max / tip");
     let _ = write_gwei(&mut pages.buf[p][1], &tx.max_fee_per_gas);
-    write_tip_row(&mut pages.buf[p][2], &tx.max_priority_fee_per_gas);
+    let _ = write_tip_row(&mut pages.buf[p][2], &tx.max_priority_fee_per_gas);
     write_line(&mut pages.buf[p][3], "> next");
     p += 1;
 
     // ── Worst-case fee budget + gas ────────────────────────────────
     write_line(&mut pages.buf[p][0], "Worst-case:");
-    write_native_fee_budget_row(
+    let _ = write_native_fee_budget_row(
         &mut pages.buf[p][1],
         &tx.max_fee_per_gas,
         tx.gas_limit,
         tx.chain_id,
     );
-    write_gas(&mut pages.buf[p][2], tx.gas_limit);
+    let _ = write_gas(&mut pages.buf[p][2], tx.gas_limit);
     write_line(&mut pages.buf[p][3], "> next");
     p += 1;
 

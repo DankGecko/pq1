@@ -416,16 +416,16 @@ fn build_legacy_fee_pages(tx: &Eip1559Tx) -> [LegacyFeePage; LEGACY_FEE_PAGES] {
     let mut pages = [[[b' '; DISPLAY_COLS]; DISPLAY_ROWS]; LEGACY_FEE_PAGES];
     primitives::write_line(&mut pages[0][0], "Fees: max / tip");
     let _ = primitives::write_gwei(&mut pages[0][1], &tx.max_fee_per_gas);
-    primitives::write_tip_row(&mut pages[0][2], &tx.max_priority_fee_per_gas);
+    let _ = primitives::write_tip_row(&mut pages[0][2], &tx.max_priority_fee_per_gas);
     primitives::write_line(&mut pages[0][3], "> next");
     primitives::write_line(&mut pages[1][0], "Worst-case:");
-    primitives::write_native_fee_budget_row(
+    let _ = primitives::write_native_fee_budget_row(
         &mut pages[1][1],
         &tx.max_fee_per_gas,
         tx.gas_limit,
         tx.chain_id,
     );
-    primitives::write_gas(&mut pages[1][2], tx.gas_limit);
+    let _ = primitives::write_gas(&mut pages[1][2], tx.gas_limit);
     primitives::write_line(&mut pages[1][3], "> next");
     pages
 }

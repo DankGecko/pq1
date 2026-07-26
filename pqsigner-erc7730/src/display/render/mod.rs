@@ -2736,6 +2736,47 @@ mod unknown_chain_fee_tests {
     }
 
     #[test]
+    fn known_chain_large_exact_fee_is_not_narrowed_to_the_legacy_layout() {
+        let raw = 123_456_789_012u128 * 1_000_000_000;
+        let mut tx = unknown_fee_tx(raw, 0, 21_000);
+        tx.chain_id = 1;
+        assert!(
+            !crate::display::primitives::legacy_fee_rows_are_exactly_renderable(
+                &tx.max_fee_per_gas,
+                &tx.max_priority_fee_per_gas,
+                tx.gas_limit,
+                tx.chain_id,
+            ),
+            "fixture must exceed the compact legacy max-fee row"
+        );
+
+        let mut pages = Pages::with_len(0);
+        append_envelope_pages(&mut pages, &tx)
+            .expect("the selected ERC-7730 painter has an exact full-row representation");
+        assert_eq!(trimmed(&pages.buf[1][1]), b"123456789012");
+    }
+
+    #[test]
+    fn known_chain_large_exact_gas_is_not_narrowed_to_the_legacy_layout() {
+        let mut tx = unknown_fee_tx(0, 0, 1_000_000_000);
+        tx.chain_id = 1;
+        assert!(
+            !crate::display::primitives::legacy_fee_rows_are_exactly_renderable(
+                &tx.max_fee_per_gas,
+                &tx.max_priority_fee_per_gas,
+                tx.gas_limit,
+                tx.chain_id,
+            ),
+            "fixture must exceed the compact legacy gas row"
+        );
+
+        let mut pages = Pages::with_len(0);
+        append_envelope_pages(&mut pages, &tx)
+            .expect("the selected ERC-7730 painter has an exact full-row representation");
+        assert_eq!(trimmed(&pages.buf[2][3]), b"Gas:1000000000");
+    }
+
+    #[test]
     fn distinct_known_chain_fee_words_do_not_round_to_same_page() {
         let mut one_tx = unknown_fee_tx(1, 0, 21_000);
         one_tx.chain_id = 1;

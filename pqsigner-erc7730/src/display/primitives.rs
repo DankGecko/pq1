@@ -738,6 +738,7 @@ pub fn write_native_amount_two_rows(
 /// all nine gwei decimals when needed to preserve signed wei. If no exact gwei
 /// form fits, it falls back to an exact raw-wei integer. Returns `false` only
 /// when neither exact representation fits.
+#[must_use]
 pub fn write_gwei(row: &mut [u8; DISPLAY_COLS], value: &U256) -> bool {
     // Prefer the historical width and shorter exact forms first so large
     // integer portions retain their previous layout.
@@ -765,37 +766,43 @@ pub fn write_gwei(row: &mut [u8; DISPLAY_COLS], value: &U256) -> bool {
     false
 }
 
-/// "(gas: N)" limited to a single row. For gas limits that don't fit
-/// in decimal on 16 cols (> 10^15-ish) we emit "(gas: !OVF)" — the
-/// attacker-control path that would trip this is already a fee-bomb.
-pub fn write_gas(row: &mut [u8; DISPLAY_COLS], gas: u64) {
+/// Paint `"(gas: N)"` on one row. Returns `false` and paints
+/// `"(gas: !OVF)"` when the exact decimal value cannot fit.
+#[must_use]
+pub fn write_gas(row: &mut [u8; DISPLAY_COLS], gas: u64) -> bool {
     *row = [b' '; DISPLAY_COLS];
     let mut pos = append(row, 0, b"(gas: ");
     let mut tmp = [0u8; 20];
-    match format_u64(gas, &mut tmp) {
+    let exact = match format_u64(gas, &mut tmp) {
         Some(n) if pos + n + 1 <= DISPLAY_COLS => {
             row[pos..pos + n].copy_from_slice(&tmp[..n]);
             pos += n;
+            true
         }
         _ => {
             pos = append(row, pos, b"!OVF");
+            false
         }
-    }
+    };
     if pos < DISPLAY_COLS {
         row[pos] = b')';
     }
+    exact
 }
 
 /// Paint the priority-fee value on the full row. Legacy fee pages label row 1
 /// and row 2 together as `max / tip`, so neither value sacrifices exact
 /// numeric width to a repeated inline label.
+#[must_use]
 pub fn write_tip_row(row: &mut [u8; DISPLAY_COLS], tip: &U256) -> bool {
     write_gwei(row, tip)
 }
 
-/// "Max: X ETH" worst-case fee budget on a single row. Computed as
-/// `max_fee_per_gas * gas_limit`. Returns `false` if multiplication overflows
-/// or no exact native/wei representation fits.
+/// Paint the exact worst-case fee budget on the full row beneath the caller's
+/// `Worst-case:` header. Computed as `max_fee_per_gas * gas_limit`. Returns
+/// `false` if multiplication overflows or no exact native/wei representation
+/// fits.
+#[must_use]
 pub fn write_fee_budget_row(
     row: &mut [u8; DISPLAY_COLS],
     max_fee_per_gas: &U256,
@@ -805,15 +812,21 @@ pub fn write_fee_budget_row(
 }
 
 /// Chain-aware variant of [`write_fee_budget_row`]. The fee budget is paid in
-/// the chain's native asset, so the suffix must be selected from the signed
-/// chain id. Unknown chains are labelled `NATIVE` rather than ETH.
+/// the chain's native asset, so both the suffix and 18-decimal scale must be
+/// selected from audited metadata for the signed chain id. Unknown chains
+/// refuse rather than assigning an unauthenticated magnitude.
+#[must_use]
 pub fn write_native_fee_budget_row(
     row: &mut [u8; DISPLAY_COLS],
     max_fee_per_gas: &U256,
     gas_limit: u64,
     chain_id: u64,
 ) -> bool {
-    write_fee_budget_row_with_unit(row, max_fee_per_gas, gas_limit, native_ticker(chain_id))
+    let Some(unit) = known_native_ticker(chain_id) else {
+        write_line(row, "!NO SCALE");
+        return false;
+    };
+    write_fee_budget_row_with_unit(row, max_fee_per_gas, gas_limit, unit)
 }
 
 fn write_fee_budget_row_with_unit(
@@ -823,19 +836,18 @@ fn write_fee_budget_row_with_unit(
     unit: &[u8],
 ) -> bool {
     *row = [b' '; DISPLAY_COLS];
-    let mut pos = append(row, 0, b"Max: ");
     let (budget, overflow) = max_fee_per_gas.saturating_mul_u64(gas_limit);
     if overflow {
-        let _ = append(row, 5, b"!OVF");
+        write_line(row, "!OVF");
         return false;
     }
     let mut tmp = [0u8; 96];
     for &frac in &[4u32, 3, 2, 1, 0] {
         if amount_is_exact_at_fraction_digits(&budget, 18, frac) {
             if let Some(n) = budget.format_decimal(18, frac, true, &mut tmp) {
-                if pos + n + 1 + unit.len() <= DISPLAY_COLS {
-                    row[pos..pos + n].copy_from_slice(&tmp[..n]);
-                    pos += n;
+                if n + 1 + unit.len() <= DISPLAY_COLS {
+                    row[..n].copy_from_slice(&tmp[..n]);
+                    let mut pos = n;
                     pos = append(row, pos, b" ");
                     let _ = append(row, pos, unit);
                     return true;
@@ -846,9 +858,9 @@ fn write_fee_budget_row_with_unit(
     for frac in 5u32..=18 {
         if amount_is_exact_at_fraction_digits(&budget, 18, frac) {
             if let Some(n) = budget.format_decimal(18, frac, true, &mut tmp) {
-                if pos + n + 1 + unit.len() <= DISPLAY_COLS {
-                    row[pos..pos + n].copy_from_slice(&tmp[..n]);
-                    pos += n;
+                if n + 1 + unit.len() <= DISPLAY_COLS {
+                    row[..n].copy_from_slice(&tmp[..n]);
+                    let mut pos = n;
                     pos = append(row, pos, b" ");
                     let _ = append(row, pos, unit);
                     return true;
@@ -857,21 +869,21 @@ fn write_fee_budget_row_with_unit(
         }
     }
     if let Some(n) = budget.format_decimal(0, 0, true, &mut tmp) {
-        if pos + n + 4 <= DISPLAY_COLS {
-            row[pos..pos + n].copy_from_slice(&tmp[..n]);
-            pos += n;
+        if n + 4 <= DISPLAY_COLS {
+            row[..n].copy_from_slice(&tmp[..n]);
+            let pos = n;
             let _ = append(row, pos, b" wei");
             return true;
         }
     }
-    let _ = append(row, 5, b"!OVF");
+    write_line(row, "!OVF");
     false
 }
 
 /// Render all three legacy fee rows into scratch buffers and report whether
-/// every signed/derived value is represented exactly. Dispatch runs this
-/// before publishing any route-specific pages, so a renderer cannot turn a
-/// formatting failure into an authorization banner.
+/// every signed/derived value is represented exactly. Dispatch runs this for
+/// routes that use the legacy fee painter before publishing their pages, so a
+/// formatting failure cannot become an authorization banner.
 #[must_use]
 pub fn legacy_fee_rows_are_exactly_renderable(
     max_fee_per_gas: &U256,
@@ -879,12 +891,20 @@ pub fn legacy_fee_rows_are_exactly_renderable(
     gas_limit: u64,
     chain_id: u64,
 ) -> bool {
+    // The compact max/tip rows use gwei and the budget uses 18-decimal native
+    // units. Both claims require pinned chain metadata; an unknown chain must
+    // use a future raw-base-unit layout rather than silently inheriting them.
+    if known_native_ticker(chain_id).is_none() {
+        return false;
+    }
     let mut max_fee = [b' '; DISPLAY_COLS];
     let mut tip = [b' '; DISPLAY_COLS];
     let mut budget = [b' '; DISPLAY_COLS];
+    let mut gas = [b' '; DISPLAY_COLS];
     write_gwei(&mut max_fee, max_fee_per_gas)
         && write_tip_row(&mut tip, max_priority_fee_per_gas)
         && write_native_fee_budget_row(&mut budget, max_fee_per_gas, gas_limit, chain_id)
+        && write_gas(&mut gas, gas_limit)
 }
 
 /// "Item X of Y" divider row for a nested array-of-struct (`T[]`) render (v2) —

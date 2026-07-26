@@ -267,7 +267,7 @@ fn positive_write_chain_losslessly_splits_large_u64_ids() {
 #[test]
 fn positive_write_gas_renders_parens() {
     let mut row = [b' '; DISPLAY_COLS];
-    write_gas(&mut row, 21_000);
+    assert!(write_gas(&mut row, 21_000));
     let s = row_str(&row);
     assert_eq!(s, "(gas: 21000)");
 }
@@ -1119,13 +1119,37 @@ fn negative_write_gas_overflow_paints_marker_not_wrong_digits() {
     let mut row = [b' '; DISPLAY_COLS];
     // (gas: ) = 6 + ")" = 7. We have 16-7 = 9 cols for the number,
     // so 10^9-ish triggers the overflow marker.
-    write_gas(&mut row, u64::MAX); // 20 digits, can't fit
+    assert!(!write_gas(&mut row, u64::MAX)); // 20 digits, can't fit
     let s = row_str(&row);
     assert!(
         s.contains("!OVF"),
         "u64::MAX gas must surface !OVF, got {:?}",
         s
     );
+}
+
+#[test]
+fn legacy_fee_gate_refuses_a_lossy_gas_marker_even_when_fees_are_zero() {
+    let zero = u256_from_u64(0);
+    let mut row = [b' '; DISPLAY_COLS];
+
+    assert!(write_gas(&mut row, 999_999_999));
+    assert_eq!(row_str(&row), "(gas: 999999999)");
+    assert!(legacy_fee_rows_are_exactly_renderable(
+        &zero,
+        &zero,
+        999_999_999,
+        1,
+    ));
+
+    assert!(!write_gas(&mut row, 1_000_000_000));
+    assert_eq!(row_str(&row), "(gas: !OVF)");
+    assert!(!legacy_fee_rows_are_exactly_renderable(
+        &zero,
+        &zero,
+        1_000_000_000,
+        1,
+    ));
 }
 
 #[test]
@@ -2174,13 +2198,23 @@ fn positive_write_tip_and_fee_budget_render() {
     assert!(s.contains("gwei"), "expected 'gwei' unit, got {:?}", s);
 
     let mut fee_row = [b' '; DISPLAY_COLS];
-    write_fee_budget_row(&mut fee_row, &u256_from_u64(30_000_000_000), 21_000);
+    assert!(write_fee_budget_row(
+        &mut fee_row,
+        &u256_from_u64(30_000_000_000),
+        21_000
+    ));
     let s = row_str(&fee_row);
-    assert!(s.starts_with("Max:"), "expected Max: prefix, got {:?}", s);
+    assert_eq!(s, "0.00063 ETH");
     assert!(s.contains("ETH"), "expected ETH unit, got {:?}", s);
 
-    write_native_fee_budget_row(&mut fee_row, &u256_from_u64(30_000_000_000), 21_000, 56);
+    assert!(write_native_fee_budget_row(
+        &mut fee_row,
+        &u256_from_u64(30_000_000_000),
+        21_000,
+        56
+    ));
     let s = row_str(&fee_row);
+    assert_eq!(s, "0.00063 BNB");
     assert!(s.contains("BNB"), "expected BNB unit, got {s:?}");
     assert!(
         !s.contains("ETH"),
@@ -2203,18 +2237,69 @@ fn legacy_tip_uses_full_row_for_common_exact_values() {
 #[test]
 fn legacy_fee_budget_exact_fit_boundary_refuses_rounding() {
     let one_wei = u256_from_u64(1);
+    let exact_fee = u256_from_u64(1_000);
+    let too_wide_fee = u256_from_u64(1_001);
+    let exact_gas = 999_999_999;
     let mut row = [b' '; DISPLAY_COLS];
 
-    assert!(write_fee_budget_row(&mut row, &one_wei, 9_999_999));
-    assert_eq!(row_str(&row), "Max: 9999999 wei");
+    assert!(write_fee_budget_row(&mut row, &exact_fee, exact_gas));
+    assert_eq!(row_str(&row), "999999999000 wei");
     assert!(legacy_fee_rows_are_exactly_renderable(
-        &one_wei, &one_wei, 9_999_999, 1,
+        &exact_fee,
+        &one_wei,
+        exact_gas,
+        1,
     ));
 
-    assert!(!write_fee_budget_row(&mut row, &one_wei, 10_000_000));
-    assert_eq!(row_str(&row), "Max: !OVF");
+    assert!(!write_fee_budget_row(
+        &mut row,
+        &too_wide_fee,
+        exact_gas
+    ));
+    assert_eq!(row_str(&row), "!OVF");
     assert!(!legacy_fee_rows_are_exactly_renderable(
-        &one_wei, &one_wei, 10_000_000, 1,
+        &too_wide_fee,
+        &one_wei,
+        exact_gas,
+        1,
+    ));
+}
+
+#[test]
+fn legacy_fee_budget_common_low_fee_values_remain_available() {
+    let one_gwei = u256_from_u64(1_000_000_000);
+    let mut row = [b' '; DISPLAY_COLS];
+
+    assert!(write_fee_budget_row(&mut row, &one_gwei, 21_000));
+    assert_eq!(row_str(&row), "0.000021 ETH");
+    assert!(legacy_fee_rows_are_exactly_renderable(
+        &one_gwei,
+        &u256_from_u64(0),
+        21_000,
+        1,
+    ));
+
+    assert!(write_native_fee_budget_row(&mut row, &one_gwei, 21_000, 56,));
+    assert_eq!(row_str(&row), "0.000021 BNB");
+}
+
+#[test]
+fn legacy_fee_budget_unknown_chain_refuses_an_assumed_scale() {
+    let one_gwei = u256_from_u64(1_000_000_000);
+    let mut row = [b' '; DISPLAY_COLS];
+
+    assert!(!write_native_fee_budget_row(
+        &mut row,
+        &one_gwei,
+        21_000,
+        4_242_424,
+    ));
+    assert_eq!(row_str(&row), "!NO SCALE");
+    assert!(!legacy_fee_rows_are_exactly_renderable(
+        &one_gwei,
+        &u256_from_u64(0),
+        21_000,
+        4_242_424,
     ));
 }
 
@@ -2226,7 +2311,7 @@ fn negative_write_fee_budget_refuses_on_multiplication_overflow() {
     let mut row = [b' '; DISPLAY_COLS];
     let pathological = U256([0xFFu8; 32]);
     assert!(!write_fee_budget_row(&mut row, &pathological, u64::MAX));
-    assert_eq!(row_str(&row), "Max: !OVF");
+    assert_eq!(row_str(&row), "!OVF");
 }
 
 #[test]

@@ -95,9 +95,9 @@ fuzz_target!(|data: &[u8]| {
     );
     let _ = prim::write_eth_two_rows(&mut r1, &mut r2, &value);
     let _ = prim::write_gwei(&mut r1, &value);
-    prim::write_tip_row(&mut r1, &value);
-    prim::write_gas(&mut r1, scalar);
-    prim::write_fee_budget_row(&mut r1, &value, scalar);
+    let _ = prim::write_tip_row(&mut r1, &value);
+    let _ = prim::write_gas(&mut r1, scalar);
+    let _ = prim::write_fee_budget_row(&mut r1, &value, scalar);
 
     // ── Chain / ticker naming (index / lookup surface) ──
     prim::write_chain(&mut r1, &mut r2, scalar);

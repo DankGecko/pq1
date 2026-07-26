@@ -1084,7 +1084,7 @@ fn wysiwys_legacy_fee_unrenderable_budget_refuses_before_pages_escape() {
     let mut req = WireSignRequest::base();
     req.max_fee_per_gas = be_u256_from_u64(1);
     req.max_priority_fee_per_gas = be_u256_from_u64(1);
-    req.call_gas_limit = be_u256_from_u64(10_000_000);
+    req.call_gas_limit = be_u256_from_u64(1_000_000_000_001);
     req.verification_gas_limit = [0u8; 32];
     req.pre_verification_gas = [0u8; 32];
 
@@ -1097,7 +1097,7 @@ fn wysiwys_legacy_fee_unrenderable_budget_refuses_before_pages_escape() {
             tx.gas_limit,
             tx.chain_id,
         ),
-        "fixture must cross the exact one-row fee-budget boundary"
+        "fixture must cross the exact full-row fee-budget boundary"
     );
 
     let resolver = NameResolver::new();
@@ -1119,6 +1119,49 @@ fn wysiwys_legacy_fee_unrenderable_budget_refuses_before_pages_escape() {
         )
         .is_err(),
         "an inexact legacy fee envelope must refuse before a Pages value escapes dispatch"
+    );
+}
+
+#[test]
+fn wysiwys_legacy_fee_unrenderable_gas_refuses_before_pages_escape() {
+    let mut req = WireSignRequest::base();
+    req.max_fee_per_gas = [0u8; 32];
+    req.max_priority_fee_per_gas = [0u8; 32];
+    req.call_gas_limit = be_u256_from_u64(1_000_000_000);
+    req.verification_gas_limit = [0u8; 32];
+    req.pre_verification_gas = [0u8; 32];
+
+    let parsed = mirror_parse(&req.encode());
+    let tx = tx_for_display(&parsed);
+    assert!(
+        !super::primitives::legacy_fee_rows_are_exactly_renderable(
+            &tx.max_fee_per_gas,
+            &tx.max_priority_fee_per_gas,
+            tx.gas_limit,
+            tx.chain_id,
+        ),
+        "zero fee prices must not hide a lossy signed gas-limit marker"
+    );
+
+    let resolver = NameResolver::new();
+    let mut dispatch_proofs = DispatchPageProofs::new();
+    dispatch_proofs.fail_initialize();
+    assert!(
+        pick_sign_pages(
+            &tx,
+            &parsed.inner,
+            &parsed.sender,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &resolver,
+            &mut dispatch_proofs,
+        )
+        .is_err(),
+        "an inexact signed gas limit must refuse before a Pages value escapes dispatch"
     );
 }
 
