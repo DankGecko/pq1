@@ -5,11 +5,17 @@ No production implementation, option-byte, OTP, or hardware authority.
 No approval by inheritance: this draft requires its own exact-digest dual
 review + owner approval before anything it selects is implemented.
 
-**Base:** Draft 1.1 review candidate, `docs/security/a-b-firmware-rollback-architecture.md`
-(commit `93da75679a06b0bd289d49bdb511a7d3cd1acac7`, SHA-256
-`743bc156417ff84b5ac201996b07c97db1e53526e2f9a2f59e44a6681ce3d7ad`).
-Except where a section below explicitly amends a named Draft 1.1 row,
-**Draft 1.1 is inherited unchanged** — geometry (§5), manifest/journal (§6),
+**Base:** Draft 1.1 review candidate, `docs/security/a-b-firmware-rollback-architecture.md`,
+file SHA-256 `57b7e359ca1f8f0367e83ba355f61de35a8b6f25c6050435870227e4a5488293`
+(post-errata-3, 2026-07-26: the owner-decision errata striking
+`RecoverySameEpoch`/`FloorBoundAccepted` and all degraded boot authority,
+the §11 burn-window rows + R5-2 phase-profile precision, and the
+`FirstBootLockWriter` owner entry — see its ERRATA section. Lineage back
+to the original pin commit `93da7567` / `743bc156…3d7ad` = +
+reviewer-lineup `589fb771` + the errata passes, each hop verified by
+diff). Except where a section below explicitly amends
+a named Draft 1.1 row, **Draft 1.1 is inherited unchanged** — geometry (§5),
+manifest/journal (§6),
 boot state machine (§7), milestones 1–2 health boundary (§8–9), floor
 establishment (§10), power-cut matrix (§11), OTP constraints (§12),
 sacrificial-silicon plan (§13), milestones (§14), evidence matrix (§15),
@@ -56,7 +62,11 @@ before. §2 is the whole decision.
 
 - C1. The secure world / slots must never grow an option-byte write path.
   `ob-configurator` stays a bench-only tool; add a compile fence and an
-  audit row. (New; no Draft 1.1 conflict.)
+  audit row. (New; no Draft 1.1 conflict.) **Clarified 2026-07-26** (review
+  finding C2): the heal branch analyzed in §2 is DEAD — rejected by the
+  adopted design (see Reconciliation). C1 is absolute: the only on-device
+  option-byte write ever permitted is the confirm-gated RDP path of the
+  lock ceremony itself.
 - C2. Post-freeze, the FSBL-rendered 8 words are the only factory-frozen
   ground truth the user ever sees. The companion and docs must never claim
   parity they cannot prove — and at RDP-0 they can prove nothing (§2.2).
@@ -106,12 +116,17 @@ lock RDP-2 on the attacker's terms. Therefore:
   preferred; if resident: RDP-state hard gate + compile fence + bench
   receipt), **idempotent and crash-consistent** across power cuts
   (factory-provisioning power-cut class, issue #445), RDP-2 strictly last.
-- **Nothing trust-bearing runs before the lock**: no key derivation, no
-  seed ceremony, no SE provisioning. Otherwise devices linger at RDP-0 as
+- **Nothing trust-bearing runs before the lock**: no wallet secrets (no
+  seed, no wallet-key derivation) and no final SE pairing credentials.
+  Otherwise devices linger at RDP-0 as
   *usable wallets* — the worst end-state (debug open, WRP clearable; and
   note: pre-RDP-2, even signed-malicious firmware could clear WRP and
   rewrite the FSBL, so the window also bounds vendor-key-compromise blast
   radius — see `docs/security/vendor-signing-key-compromise.md` (#486)).
+  Factory-staged transport structure (F3–F5: OTP master, SE object
+  structure, transport keysets) is public-by-assumption, contains no
+  wallet secret, and is explicitly OUT of scope of this invariant (review
+  finding C3).
 - After the lock, the companion's only genuine-device signal is
   **attestation** (#249) — Option B makes it more load-bearing, not less.
 
@@ -149,13 +164,25 @@ tomorrow, with the colleague — this draft decides neither.**
    Factory sets the full Draft 1.1 byte set *except RDP*: WRP1A/2A
    (PSTRT=0, PEND=4, UNLOCK=0) + symmetric SECWM1/2 + HDP1/2 + TZEN +
    BOOT_LOCK + SECBOOTADD0 + SWAP_BANK=0, read-back after OBL_LAUNCH. The
-   first-boot ceremony heals drift against compiled-in expected values,
-   physically confirms, then sets RDP-2 and re-verifies. Under A:
-   unchanged.
+   first-boot ceremony **verifies** the staged profile and **hard-fails
+   on any mismatch — verify-never-heal** (a unit that reaches the field
+   unstaged is not a genuine ship unit; factory escapes become RMA, not
+   field repairs), physically confirms, then sets RDP-2 and re-verifies.
+   Under A: unchanged. *(Heal semantics removed 2026-07-26 per the
+   Reconciliation and review finding R4-1; the only on-device option-byte
+   write anywhere is the confirm-gated RDP path — §1 C1, §3 row 8.)*
 2. **tz-1 (issue #366 row)** — promoted from candidate to required:
    FSBL reads back OPTR/WRP/SECWM/TZEN/BOOT_LOCK/RDP **before every slot
-   branch**, FI-hardened (double-check + sentinel). Pre-lock mismatch →
-   heal path (once); post-lock mismatch → halt, no entropy release, RMA.
+   branch**, FI-hardened (double-check + sentinel, halt only on
+   persistent mismatch). The comparison is against the **phase-appropriate**
+   expected profile: pre-ceremony = the staged ship profile with
+   RDP≠0xCC; post-ceremony = the staged profile with RDP=0xCC. Any other
+   persistent value in either phase (partial, torn, or alien) → hard fail
+   unlocked pre-ceremony, halt + no entropy release post-ceremony — never
+   heal, never re-attempt. *(Phase-awareness added 2026-07-26 per finding
+   R5-2: a mid-burn cut that boots showing exactly the pre-ceremony
+   staged profile is NOT a mismatch — that is "burn did not take", and
+   the ceremony simply re-enters per Draft 1.1 §11's burn-window row.)*
 3. **boot-1 note (issue #366 row)** — recorded, unchanged: the current
    runtime bump at `cmd_fw_commit.rs:268` is **nonconforming** under Draft
    1.1's FSBL-establishment rule ("runtime firmware MUST NOT advance the
@@ -168,21 +195,57 @@ tomorrow, with the colleague — this draft decides neither.**
 5. **Invariant register (§16)** — add: "The fingerprint generator and the
    FSBL verification path are factory/ceremony-frozen; updates change only
    their outputs." And the C1 no-field-OB-write-path invariant.
+6. **§7.4 factory-genesis exception (lines 2813–2827)** — added 2026-07-26
+   (review findings A38/B4, both confirmed): §7.4's receipt binds
+   "dual-bank WRP/SECWM/HDP/BOOT_LOCK/SWAP_BANK state" and requires that
+   "final lifecycle locks independently prevent the underlying writes
+   after the factory lifecycle closes". Under the adopted lock flow the
+   factory lifecycle does NOT close the locks: the receipt binds the
+   *staged* profile (F2, everything except RDP), and the final lock closes
+   at the first-boot ceremony. Amended accordingly in the 2026-07-26
+   errata; without this amendment the composite text holds the same RDP-0
+   unit simultaneously factory-closed and not finally locked.
+7. **§11 power-cut matrix** — added 2026-07-26 (review finding B3,
+   confirmed); **executed in Draft 1.1's text 2026-07-26** (round-2
+   remediation): three burn-window rows now exist in §11 — cut during the
+   RDP program (torn-latch wedge = RMA; bootable = idempotent re-entry);
+   cut after a clean program before `OBL_LAUNCH` (the next power-on
+   completes the launch — POR ≡ option-byte reload; classify by
+   read-back, never remembered intent; never reissue the RDP write once
+   read-back shows `0xCC`); launch issued but no reset (park; classify at
+   next power-on). R2.6's "halts unlocked" carries exactly one exception:
+   a cut inside the burn window completes the lock by reset — the
+   intended terminal state, not a fault violation. The first-boot
+   ceremony spec mirrors these rows on its next edit (owner: Markus).
+8. **§6.3 writer ownership — `FirstBootLockWriter`** — added 2026-07-26
+   (round-2 finding A38-new): Draft 1.1's frozen exhaustive mutation map
+   contained no first-boot RDP writer, making the required lock
+   unimplementable without a boundary bypass. The new owner entry grants
+   exactly one operation — the confirm-gated `RDP=0xCC` program +
+   `OBL_LAUNCH`, reachable only after the R2.1–R2.4 verify+confirm chain,
+   pre-Phase-B, production-compile-fenced, classification by read-back
+   only, failure = park — cross-referenced from FROZEN-FLASH-MUT-1.
 
 ## 4. OPEN register deltas
 
 All Draft 1.1 `OPEN-*` items carry unchanged (PIN-HW-1, JRN-HW-1,
 JRN-DUR-1, ECC-1, FLASH-HW-1, RAM-1, OTP-1..3, REL-1, C10-1). New:
 
-- **OPEN-LOCK-1 — one-shot heal path.** Prove the heal/lock code is
-  unreachable after RDP-2 (separate image or hard gate + fence), idempotent
-  and crash-consistent across power cuts at every step (incl. mid-OBL),
-  with RDP-2 strictly last. Closes only with bench evidence; same evidence
-  class as #445/#454.
+- **OPEN-LOCK-1 — lock-path one-shotness + crash-consistency.** *(Re-scoped
+  2026-07-26: the heal branch is dead — verify-never-heal — so there is no
+  heal path to contain.)* What remains: prove the confirm-gated RDP burn
+  (`FirstBootLockWriter`, Draft 1.1 §6.3) is unreachable after the lock,
+  and that the Phase-B journal/rotation steps are idempotent and
+  crash-consistent across power cuts at every step (incl. mid-OBL),
+  classification always by read-back. Closes only with bench evidence;
+  same evidence class as #445/#454.
 - **OPEN-LOCK-2 — ceremony UX + honesty copy.** Companion + docs text:
-  ceremony = factory-escape corrector + lock trigger, *not* genuineness
-  proof; RDP-0 genuineness requires external probe verification (publish
-  the how-to); post-lock genuineness = attestation (#249). Includes the
+  ceremony = staged-profile verifier + lock trigger, *not* genuineness
+  proof and *not* a field repair — a wrong staged profile hard-fails to
+  RMA (verify-never-heal); RDP-0 genuineness requires external probe
+  verification (publish the how-to — connect-under-reset, never energize
+  first; canonical comparison ranges/normalization per review findings
+  C4/C5); post-lock genuineness = attestation (#249). Includes the
   physical-confirmation step and "this is one-way" wording.
 
 **Ordering constraint:** BENCH-4 (issue #398, RDP-2 offensive downgrade
@@ -211,8 +274,9 @@ for both reviewers, when run:
    *would* bind an interdiction attacker?
 2. Is the B factory byte-set (everything except RDP at factory) sufficient
    against software (non-probe) attackers pre-lock?
-3. Does the heal-then-lock ceremony introduce any transition not covered
-   by Draft 1.1 §11's power-cut matrix?
+3. Does the lock ceremony (verify-never-heal, confirm-gated RDP burn)
+   introduce any transition not covered by Draft 1.1 §11's power-cut
+   matrix — including mid-burn interruption classification?
 4. Does anything in §3 silently contradict a Draft 1.1 frozen row?
 
 ## 7. What this draft does NOT touch
@@ -352,3 +416,90 @@ repaired in this section — `8a93aaa5→825b26ec`, `51388ce0→d872395b`,
    2026-07-21 conversation). Durable fix adopted as habit: owner-decision
    citations point at a written record (spec or decision issue), never a
    chat log.
+
+---
+
+## REVIEW RECEIPT + ERRATA 2026-07-26 — first gate run and its remediation
+
+**Gate run 1 (2026-07-26).** GPT-5.6 SOL (`ultra`) reviewed Draft 1.1
+(`4237ae1d…e180`) + this draft (`f256e909…85d3`): **NO-GO**. Coordinator
+reproduction confirmed its two load-bearing claims (§7.4 inheritance
+contradiction; missing RDP-burn cut transitions) and showed its
+"no unique composite artifact" finding was exactly the `589fb771`
+reviewer-lineup drift (benign). Its remaining GAPs restate Draft 1.1's
+own OPEN register — no new architectural attack.
+
+**Owner decision (2026-07-26, ratified):** `RecoverySameEpoch` and
+`FloorBoundAccepted` DECLINED (availability, not safety; service/RMA
+accepted). Executed as a bounded errata inside Draft 1.1 itself (its
+`ERRATA 2026-07-26` section): both features and all degraded
+boot/admission authority struck from the normative text; `Aborted` =
+robust exact-`F` or service; terminal-quorum loss = service;
+`SurvivingTerminalSet` survives only as repair-target classification;
+floor-bound binding only as evidentiary record; `PeerRepair` +
+`DegradedArtifactRepair` kept. Post-errata Draft 1.1 file SHA-256:
+`077e4357b6e709e9e6ac2e621066ef608d627cb9d44afe1e9182a93ab5c617d2`.
+**Line anchors cited in this draft's §3 refer to pre-errata Draft 1.1
+numbering; the digest above is the re-freeze base.**
+
+**This draft's own remediation (same date, answering the review):**
+base re-pinned to `4237ae1d…e180` with lineage (finding C1); C1 clarified
+absolute — heal branch dead, only the confirm-gated RDP write exists
+(C2); pre-lock invariant rescoped to wallet secrets + final pairing
+credentials, factory transport structure explicitly out (C3); §3
+amendments extended to §7.4 factory-genesis rows (A38/B4) and the §11
+burn-window cut transitions (B3); the SWD-verify how-to requirements
+(connect-under-reset, canonical comparison ranges) fold into OPEN-LOCK-2
+(C4/C5). OPEN-LOCK-2's companion copy and the first-boot spec's own
+burn-window rows are owed by their owners.
+
+**Next gate run:** both legs (GPT-5.6 SOL `ultra` + Claude Opus 5
+`xhigh`, per the on-master review policy `589fb771`) over the post-errata
+digests, then implementation planning (Draft 1.1 §14 Foundation A).
+
+**Gate run 2 (2026-07-26, GPT-5.6 SOL `ultra`).** All ten run-1 findings
+confirmed REMEDIATED; 26 of 40 §18 questions RESOLVED (the 13 GAPs are
+Draft 1.1's own OPEN register — expected). NO-GO on exactly two
+blockers: B3 carried (the burn-window transitions were admitted-owed
+here but absent as normative text) and **A38-new** (the RDP burn had no
+typed owner in Draft 1.1's frozen mutation map — an implementation must
+bypass the boundary or cannot lock). Both remediated same-day: the three
+§11 burn-window rows + R2.6 carve-out, and the `FirstBootLockWriter`
+owner entry (see §3 rows 7–8). The first-boot spec's own mirror of the
+burn-window rows remains owed by its owner.
+
+**Gate run 3 (2026-07-26, GPT-5.6 SOL `ultra`).** Both run-2 blockers
+confirmed REMEDIATED; §18 at 28 RESOLVED / 12 GAP (all OPEN register).
+NO-GO on one administrative finding, **D1**: this file's Base and receipt
+still named the superseded digests (`4237ae1d…`, `077e4357…`) rather
+than the reviewed pair. Remediated here: the Base block now pins Draft
+1.1 at `ee982785fa65f9534ed95638aaeb2b672f231a26250d8a65edcdbde8554c9c16`,
+and the composite freeze identity is recorded in
+`docs/security/fw-rollback-freeze-receipt-2026-07-26.md` (a file cannot
+embed its own digest; the receipt names the final pair).
+
+**Next gate run 4:** both legs (GPT-5.6 SOL `ultra` + Claude Opus 5
+`xhigh`, per the on-master review policy `589fb771`) over the final
+freeze pair in the receipt above, then implementation planning (Draft
+1.1 §14 Foundation A).
+
+**Gate run 4 (2026-07-26, GPT-5.6 SOL `ultra`).** D1 REMEDIATED; §18 at
+28 RESOLVED / 12 GAP (OPEN register). Sole finding **R4-1**: this file's
+own §3 rows 1–2 and OPEN-LOCK-1 still carried heal semantics
+("heals drift", "one-shot heal path") contradicting the adopted
+verify-never-heal — a leftover from the A-vs-B analysis era. Remediated
+here: rows 1–2 now hard-fail on mismatch (never heal), and OPEN-LOCK-1 is
+re-scoped to burn-path one-shotness + Phase-B crash-consistency.
+
+**Gate run 5 (2026-07-26, GPT-5.6 SOL `ultra`).** R4-1 named edits
+REMEDIATED; two new findings. **R5-1**: OPEN-LOCK-2's "factory-escape
+corrector" wording and §6 Q3's "heal-then-lock" phrasing still implied
+field repair — reworded here (verifier + lock trigger; wrong profile =
+RMA). **R5-2**: Draft 1.1 §11's burn-window row ("re-enter on RDP≠0xCC")
+contradicted tz-1's hard-fail — resolved by phase-appropriate profiles on
+both sides: re-attempt only on read-back of *exactly* the pre-ceremony
+staged profile; any other persistent value = halt/RMA, no re-attempt, no
+heal (Draft 1.1 §11 row + carve-out now say so verbatim; tz-1 row 2
+above carries the same rule). Note: this run's report honestly could not
+attest its serving-model identity beyond "GPT-5 family"; runs 1–4
+attested GPT-5.6 SOL.
