@@ -4300,3 +4300,40 @@ a container-uid filesystem permission on the new `experiments/` dir (`ec-grind` 
 to be 777, a new host dir is 775) — every proof checked, only the `.eco` write failed, which is indistinguishable
 from a mystery proof failure unless you check max-progress + the raw log; and the **admit-sweep regex counts
 "admitted" inside COMMENTS** (fail-CLOSED, so no prior certification is affected, but `ec-certify.sh` shares it).
+
+### 2026-07-26d — TRACK B UNIT 2: the localization holds across the ENTIRE PQ1 CAPSTONE CHAIN
+
+**Result.** **19 files, each compiled as an EXPLICIT target** against the Def-9 codeword-incomparability axiom:
+the 5 MM45 base files (`WOTS_TW_ES`, `FL_SL_XMSS_MT_ES`, `FORS_ES`, `SPHINCS_PLUS`, + canary) and the **14-file PQ1
+draft closure** including `SphincsC10CapstoneWired`. `GATE_FAILURES=0`. Timings evidence real re-verification, not
+cache hits: `XmssmtCC_All` **724 s**, `FxChain` 70 s, `RtopCSoundness` 32 s, `WOTS_C_Interactive` 27 s.
+
+**Census over all 19: exactly ONE real admit chain-wide** — the T-COLL-RES gap at `WOTS_TW_ES.ec:1359`. **Zero in
+all 14 PQ1 draft files.** Zero injectivity axioms. All 14 drafts byte-identical to `drafts/` (`WOTS_TW_ES.ec` is the
+sole variable); vendored tree pristine (md5 `e6165a3b…` unchanged).
+
+**So PQ1's entire capstone chain holds under Def-9 incomparability, and the deployed-parameter blocker reduces to
+ONE open obligation chain-wide.** C10 ships `w=8`; MM45's `two_encodings` forces injectivity, which the `2^123.76`
+max antichain of `{0..7}^43` makes unsatisfiable at that geometry. That requirement is now machine-checked to be an
+artifact confined to a single proof step — the forgery site, exactly where T-COLL-RES belongs.
+
+**FOUR false passes were caught in this unit; none survived.** Each produced a green result indistinguishable from
+success: (1) **include-path shadowing does NOT work** — `require WOTS_TW_ES` resolved to the PRISTINE file, so
+`FL_SL_XMSS_MT_ES` would have compiled against the UNMODIFIED axiom and passed trivially; caught by a canary
+referencing a symbol that exists only in the modified copy, then fixed by a complete shadow tree with the vendored
+dir off the include path. (2) **`.eco` caching** made a re-run look instant; a negative control (break the shadow)
+shows the capstone FAILS with the full resolution trace. (3) **Trap T1 — `require` does NOT re-verify**: the
+capstone "compiled" in 3 s with no dependency `.eco`, which is why the sound gate compiles EVERY file as an explicit
+target. (4) **`while read` silently dropped the last closure entry** (no trailing newline), so the capstone was
+initially not gated at all; fixed, then gated with its own negative control (injecting `lemma : false` makes it
+fail, proving its proofs are checked).
+
+**Census-regex finding, both directions.** The admit sweep first reported 3 (two were the word "admitted" in COMMENT
+prose, in the project's own `XMSSMT_C_Scheme.ec` and `WOTS_C_Interactive.ec`), then 0 after tightening to
+`^\s*admit\.$` — which MISSES a real admit carrying a trailing comment. Correct count is 1. The over-count is
+fail-closed; **the under-count would have falsely reported the chain as fully proven.** `ec-certify.sh` shares the
+over-counting form; the under-counting form must never be adopted.
+
+**Scope unchanged.** This does NOT prove C10 secure at deployed parameters. The single remaining obligation is real
+and is the computational leg (T-COLL-RES advantage at C10, discharged in a game hop BEFORE the case split) —
+deliberately not started, per two independent external reviewers.
