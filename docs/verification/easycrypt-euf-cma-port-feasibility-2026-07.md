@@ -3743,6 +3743,16 @@ own criterion. **That is worth an independent investigation on the ENGINEERING s
 especially the randomness gap, which is large and concerns how the counter is drawn rather than how many chains
 there are. FLAGGED, NOT CONCLUDED.
 
+**⇒ CONCLUDED 2026-07-25h.** The "FLAGGED, NOT CONCLUDED" parameter-margin question below was triaged on the
+security-engineering side: **NO-ACTION on the CiC question, MONITOR overall** — see UPDATE 2026-07-25h at the
+end of this file. Headline: the CiC Parameter Requirements are missed by **more** by NIST's own
+SLH-DSA-SHA2-128s on every comparable axis and no attack is implied; but the triage's own "≤2^16 sigs/key"
+premise was falsified (chain-independent bootstrap key vs per-chain cap), so the monitored quantity is the
+**global bootstrap-key signature count**, not any CiC requirement. ⚠ Two claims in the paragraph below are
+**corrected** there: the "grind randomness → SHORT by ~105 bits" line is not a meaningful comparison (the WOTS
+count is a deterministic public index with ≈0 bits of entropy, and it — not the FORS `R` — is the syntactic
+`ρ`), and the deployed-parameter shortfalls are reduction slack, not attack cost.
+
 **TWO NOTATION TRAPS recorded so nobody re-derives them wrong:**
  1. In this literature `w` is BITS PER CHUNK. C10's base-8 Winternitz is their **w = 3**, not w = 8. Reading their
     "w=8" rows as C10 is a category error (their w=8 is base-256).
@@ -3756,3 +3766,492 @@ CITED, PEER-REVIEWED FRAMEWORK rather than a bespoke weakening: re-base the WOTS
 a T-COLL-RES assumption (a new, named, inspectable ledger entry). The open question it surfaces -- C10's v*w = 129
 vs the framework's 131.32/137.64, and the 2^23.25 grind randomness -- is a QUESTION ABOUT THE DEPLOYED PARAMETERS
 and should be triaged separately from the verification work.
+
+---
+
+## UPDATE 2026-07-25h — TRACK A: security-engineering triage of the CiC parameter-margin question. **CiC verdict: NO-ACTION. Overall deployed-margin verdict: MONITOR** (one corrected premise)
+
+This closes the item 25g raised and explicitly left open ("FLAGGED, NOT CONCLUDED"). It is a triage of the
+**shipped signer**, not of the proof. Primary sources read directly: the CiC paper PDF (fetched from
+`https://cic.iacr.org/p/2/1/13/pdf`, §6 pp. 28-30), the SPHINCS+C paper (`paper-nist-pqc2022.txt`), and the
+deployed Rust/Yul code. All arithmetic recomputed here from scratch, then adversarially reviewed by GPT-5.6 and
+Kimi K3 — **both found real defects in the first draft, which is corrected in place below** (see the
+external-review section at the end for what changed and where the two reviewers disagreed).
+
+**HEADLINE.** The CiC Parameter Requirements are a *sufficient condition for that framework's proof to deliver
+its stated bound*, and they bundle reduction-tightness/union-bound losses that **no deployed Category-1
+hash-based signature satisfies — including NIST's own SLH-DSA-SHA2-128s**, which misses them by more on every
+comparable axis. No attack is implied by anything in the paper, and the "~105-bit randomness gap" does not
+survive contact with the source. **However**, the triage's own premise "≤2^16 signatures per key, enforced
+on-chain" was **wrong**: the bootstrap key is chain-*independent* while its cap is per-*chain*, so its FORS+C
+few-time term falls below 128 bits once it is used on ≥2 chains (126.16 at 2^17). That is a *pre-existing,
+documented, owner-accepted* residual — not a CiC finding — but it moves the overall verdict from NO-ACTION to
+**MONITOR**, with the monitored quantity being the **global bootstrap-key signature count**. No parameter change
+is warranted.
+
+### Q1 — What C10 actually claims
+
+`n = 16` ⇒ **128-bit / NIST Category 1** for the signature scheme. Sources:
+- `sphincs-c10/src/params.rs:19` (`pub const N: usize = 16;` — "Security parameter: n = 128 bits").
+- `contracts/verification/lean/SphincsCVerify/Spec/Params.lean:30-32` — "n = 16 means 128-bit collision
+  resistance, i.e. SPHINCS+-128s class."
+- `docs/archive/work-todo-retired-2026-07-19.md:1634` — the recorded decision: "`SIGNATURE_LEN = 4008`,
+  `N = 16` ⇒ **128-bit security**, NIST Category 1", with Cat-3 rejected because it re-bases every CREATE2
+  address (launch invariant #6).
+- `README.md:218`, `docs/security/threat-model.md:174` — the **separate** SE-bus residual (Grover-2⁶⁴ on
+  AES-128 session keys, physical tap required) is described as sitting at "the identical floor SPHINCS+C10's
+  n=16 parameters sit at". **These are two different claims about two different subsystems** that happen to
+  share the Cat-1 floor; the bus residual says nothing about the signature scheme and vice versa.
+
+⚠ **Scope qualifier on that claim, established in Q5/Q6 below — read it before quoting Q1.** The Cat-1 claim
+holds **per key, at that key's realised signature count**. For **slot keys** it holds as deployed: they are
+chain-bound (`domain/src/lib.rs:705-712`), so the 2^16 cap really is a per-key cap and the FORS+C term sits at
+130.57 bits. For the **bootstrap/master key** it does **not** hold unconditionally, because that key is
+chain-*independent* while its cap is per-*chain* — its FORS+C term crosses 128 bits at ~99,376 signatures
+(~1.5 chains). That **global** count is what the MONITOR verdict tracks. Note also that `2^128` classical /
+`2^64` sequential-Grover **is** the Cat-1 floor: a term sitting *at* 2^128 (as the WOTS node-second-preimage
+route does, for C10 and SLH-DSA-128s alike) is **compliant**, not a second thin-margin worry.
+
+### Q2 — Where the parameters came from: **bespoke, for a stated reason**
+
+Not from the SPHINCS+C paper's tables. `paper-nist-pqc2022.txt:1015` Table 2 lists six sets, all with
+`h ∈ {63,64,66}` and `d ∈ {11,16,21}`; **none has `h=18, d=2`**, and none has C10's `(a=11, k=13, w=8, l=43)`.
+The paper states `bitsec` 128/192/256 **for its own sets only**. `Spec/Params.lean:20-23` already records this:
+"The instance encoded here is **non-standard** (not one of the table-2 parameter sets in the PQC2022 paper)".
+
+Provenance (`docs/verification/c10-fips205-delta-audit.md:513-521`): C10 originated in the upstream reference
+repo `github.com/nconsigny/SPHINCS-`, commit `0516a11` (2026-04-09), from a **Fluhrer-Dang sweep**
+(`legacy/script/sweep_d2_fluhrer_dang.py`) that produced the security curve **sec_14=128, sec_16=128,
+sec_18=118.3, sec_20=104.5 bits**. Upstream has since retired C10; PQSigner is its only active user.
+
+Design rationale for `T = 205` (recomputed here): the expected digit sum is `E = v(2^w−1)/2 = 43·7/2 = 150.5`,
+so C10 runs at **δ = T/E = 1.362** — well outside the δ ∈ {1, 1.1} the CiC paper studies (`cic.txt:2085`).
+The payoff is verifier work: chain steps on verify are `v(2^w−1) − T = 301 − 205 = 96`, against `150` at δ=1.
+That is a **deliberate on-chain gas trade** (the Yul verifier runs per `validateUserOp`). It is also why C10's
+grind budget (`log K ≈ 14.9` expected, `23.25` cap) is larger than the framework's assumed `K ≤ 4096`.
+
+### Q3 — What the counter is: **a deterministic, public search index — not the framework's randomness R**
+
+This is the discriminating question for the "~105-bit randomness gap", and the answer is that the comparison is
+a **category error on two independent axes**.
+
+**Axis 1 — it is not randomness.** `sphincs-c10/src/wots.rs:62` grinds `for count in 0..10_000_000u32`,
+returning the **first** `count` whose digest satisfies the sum constraint. It is a deterministic minimal search
+index, seeded by nothing: the digest is `wots_digest(pk_seed, ADRS, node, count)` (`wots.rs:63`) and `pk_seed`
+is **public**. The count is then **transmitted** in the signature (`params.rs:76`,
+`SIG_HT_LAYER = L*N + 4 + SUBTREE_H*N` — the `+4` is the count; written at `hypertree.rs:304-305`, parsed at
+`hypertree.rs:433-437`) and the verifier **re-checks, never re-searches**: `wots.rs:150` recomputes the digest
+at the given count and `wots.rs:160` rejects unless `sum == TARGET_SUM` (the on-chain verifier does the same —
+`SPHINCsC10Asm.sol:165-170`, `if iszero(eq(digitSum, 205)) { revert(0,0) }`). CiC's `ρ` is by definition
+**sampled uniformly from `R` on every attempt** (Def. 11 step 2(b)(i), Construction 6). C10's count has
+**≈0 bits of entropy**, not 23.25 — quoting `2^23.25` as its "randomness" already overstates it.
+
+**Axis 2 — wrong layer for the requirement's *premise*.** ⚠ **CORRECTED after external review — read this
+carefully, the first draft of this section got the mapping wrong and GPT-5.6 caught it.**
+*Syntactically*, instantiating CiC Construction 6 at C10's WOTS layer maps
+`(P, T, m, ρ, Thmsg, Prop) = (pk_seed, WOTS ADRS, current_node, count, wots_digest, Σdigits=205)`.
+**So `ρ` IS the count, and C10's 128-bit FORS `R` cannot be substituted into eq. (14).** At that layer C10
+genuinely does not satisfy eq. (14), and saying "C10's ρ is the FORS R" as an *instantiation* is wrong.
+
+What is true — and is the actual reason eq. (14) is not binding — is that **CiC's theorem is a
+chosen-message theorem for a single-layer scheme**. Their `ρ` randomizes the encoding of the *user's* message,
+which is why `log|R|` must be large: the adversary picks the message, so with a small/predictable randomizer it
+can search **before** requesting a signature for two messages sharing a codeword, then transfer. C10's WOTS
+layer signs **signer-generated internal Merkle nodes** whose values are key-dependent and not known to the
+adversary before it sees the signature — so the collision-first strategy has no purchase and the adversary is
+left with post-hoc second-preimage search. That is the same structural distinction the tight standard-SPHINCS+
+proof (Hülsing-Kudinov) exploits. **This defence needs its own proof and does not come free from CiC** — the
+verifier reconstructs `current_node` entirely from adversary-supplied signature material
+(`hypertree.rs:416-460`) before WOTS verification, so an exemption must be argued compositionally, not by
+gesturing at "WOTS signs internal nodes". The repo already tracks this as open, not closed
+(`docs/STATUS.md:415`: no part of the EasyCrypt development is instantiated at deployed C10 WOTS parameters).
+
+The *role*-analogue of CiC's `ρ` — "the randomizer at the layer where the adversary chooses the message" — is
+C10's FORS `R`: 16 bytes = 128 bits, ground at `fors.rs:98-124` from
+`SHA256(sk_seed ‖ "R_grind" ‖ [opt_rand] ‖ M ‖ nonce)`, **secret-keyed and message-bound** precisely so the
+message↦ht_idx map is not attacker-computable (the "Avenue B" hardening, `fors.rs:70-95`). That is a role
+analogy for reading the requirement's *intent*, **not** an instantiation of eq. (14).
+
+**What the 10^7 cap actually has to satisfy is a liveness bound, and it does so with enormous room.**
+Computed exactly: `|C| = |{x ∈ {0..7}^43 : Σx = 205}| = 2^114.0941`, so `Pr[sum = T] = 2^-14.906`,
+`E[iterations] = 30,698`. Failure probability after the 10^7 cap is `e^{-325.7} ≈ 2^-470`. The `panic!` at
+`wots.rs:74` is unreachable in practice by ~2^470. (Sanity check on the same computation: the **maximum**
+antichain layer is at `T=150`, size `2^123.759` — reproducing the two constants 25d/25g used.)
+
+### Q4 — Is the v·w shortfall meaningful? **It is proof slack, and the framework's own requirements disqualify NIST's standard by more**
+
+**Why Requirement 2 exists.** `cic.txt:1697-1727`. Eq. (13) `vw ≥ max{kC+log5+1, 2(kQ+log5+1)+3}` comes from
+eq. (10), the `SM-rTCR` requirement on the message hash `Thmsg`, via Table 1's generic bounds
+(`cic.txt:624-652`): classical first term `(q'+1)/|H|` with `|H| = 2^{vw}`, quantum first term
+`8(q'+1)²/|H|`. The framework demands `Adv/T(A) ≤ 2^{-(k+log 5+1)}` — the `log 5` is a **union bound over the
+five terms** of Theorem 1/Corollary 2 and the `+1` splits a two-term bound. So:
+- **Classical:** the real property is "target-collision on a 129-bit encoding space" = **2^129 work**. That is
+  *above* the Cat-1 classical floor of 2^128. The 2.32-bit "shortfall" is `log2(5)+1` — **entirely
+  union-bound bookkeeping**, not attack cost.
+- **Quantum:** the real property is Grover second-preimage on 129 bits = **2^64.5 sequential**, above Cat-1's
+  2^64 (and the CiC paper itself justifies `kQ=64` on the grounds that "Grover's algorithm does not parallelize
+  well", `cic.txt:2082-2084`). The 8.64-bit shortfall is the framework's `Adv/T` normalization, which for a
+  Grover-shaped advantage costs a factor 2 in the exponent plus the same union-bound slack.
+
+**The decisive cross-check — apply the same requirements to NIST's own Cat-1 set.** SLH-DSA-SHA2-128s
+(FIPS 205): `n=16`, `lg_w=4`, `len1 = 8n/lg_w = 32`, `len2 = 3`, `h=63`. In CiC's notation its message-encoding
+space is `n0·w = 32·4 = **128 bits**.
+
+| | C10 | SLH-DSA-SHA2-128s | who is better |
+|---|---|---|---|
+| Req 2/1 eq(13)/(11), classical (need 131.32) | `vw = 129` → short **2.32** | `n0w = 128` → short **3.32** | **C10 by 1 bit** |
+| Req 2/1 eq(13)/(11), quantum (need 137.64) | short **8.64** | short **9.64** | **C10 by 1 bit** |
+| Req 3 eq(15), classical | `log|H| = 128`, need `kC+log5+2w+log L+log v` = **159.75** → short **31.75** | need **206.45** (`w=4`, `L=2^63`, `v=35`) → short **78.45** | **C10 by 46.7 bits** |
+| Req 3 eq(15), quantum | need **198.67** → short **70.67** | need **292.07** → short **164.07** | **C10 by 93.4 bits** |
+| Req 3 eq(16) `log|P|` (need 141.64) | `|P| = pk_seed = 128` → short **13.64** | 128 → short **13.64** | tie |
+| Req 2/1 eq(14) `log|R|` — ⚠ *role*-analogue only, see Q3 | message-layer `R` = 128; need `128+log5+log qs+log K+1` = **158.32** at `qs=2^16, K=2^11` → short **30.3** | `R` = 128; need **195.32** at `qs=2^64, K=1` → short **67.3** | **C10 by 37 bits** |
+
+(`2w` in eq. (15) is literal `2·w`, derived from Corollary 2's multiplier `L·v·2^w·2^w` on the SM-UD term,
+`cic.txt:1650`; `log5 = 2.3219`, `log12 = 3.585`.
+
+⚠ **Two caveats on this table, both from external review, both material:**
+(i) **`L`-sensitivity.** I take `L` = the number of one-time-key instances an adversary can multi-target
+(`2^18.0028` for C10's hypertree, `2^63.0028` for SLH-DSA-128s), which is the right generalization of CiC's
+single-tree `L` to a hypertree. GPT-5.6 correctly notes CiC's *literal* `L` is one XMSS tree's leaf count, and
+**both** schemes use `h' = 9` subtrees — under that literal reading the Req-3 shortfalls become C10 22.75/52.67
+vs SLH-DSA 24.45/56.07, so **the direction survives but the headline 46.7/93.4-bit gap collapses to ~1.7/3.4**.
+Do not quote the 46.7 figure without the reading it depends on.
+(ii) **The `log|R|` row is not an instantiation.** Substituting C10's *message-layer* `R` into eq. (14) is a
+role analogy for reading intent. The syntactic instantiation at the WOTS layer maps `ρ → count`, where C10 does
+not satisfy eq. (14) at all. See Q3, and do not cite this row as compliance.)
+
+**Conclusion for Q4:** these requirements are missed by **tens of bits** by a NIST-standardized Cat-1 parameter
+set that nobody considers broken. They therefore cannot, on their own, be read as evidence of a security
+deficit — they measure *reduction tightness in one framework's accounting*, which for hash-based signatures is
+dominated by multi-target factors (`L·v·2^{2w}`) that SPHINCS+'s own analysis handles by construction
+(tweakable hashes / ADRS domain separation, BHRvV19) rather than by inflating `n`. **C10 is closer to
+satisfying them than SLH-DSA-128s is on every axis that can be compared.** The 2.32-bit figure that prompted
+this triage is, on inspection, the *smallest* of the shortfalls and the one where C10 leads NIST's standard.
+
+**Does C10's own argument (2022/778) impose an analogous requirement, and does C10 meet it?** No analogous
+`vw` requirement. The SPHINCS+C paper's WOTS+C argument (App. B) reduces to **m-eTCR of H** and *charges
+encoding collisions to that term* rather than forbidding them (see 25f); its FORS+C argument is "the security
+analysis is the same as FORS" (`paper-nist-pqc2022.txt:~537`) with the explicit remark that forcing the last
+index **improves** the per-tree bound. The paper's own bounding work (§6.2, `:920-1010`) is about **signing-time
+variance from the grind**, i.e. the liveness property — which C10 satisfies at `2^-470` as computed above.
+
+### Q5 — Relation to Fluhrer-Dang `sec_18 = 118.3`: **different term, same union bound, and it is still the binding one**
+
+Different phenomenon. Fluhrer-Dang bounds the **FORS few-time / leaf-saturation** term as a function of the
+number of signatures γ per key; CiC Req 2 bounds the **WOTS message-encoding target-collision** term. They are
+two distinct summands of the same union bound, so they "compound" only in the trivial sense that the total is
+their sum — a ≤1-bit effect when both sit near the floor.
+
+**One margin story, not two, and CiC does not move the bottleneck.** The FORS few-time term is the binding one
+and it is a *function of the per-key signature count*, not a constant. Recomputed here with the repo's own
+FORS+C model (`contracts/verification/scripts/forsc_grinding_margin.py`, run directly; its plain-FORS column
+reproduces the upstream Fluhrer-Dang sweep exactly, which validates the model):
+
+| signatures on one key `q` | plain FORS bits | **FORS+C bits (what C10 is)** |
+|---|---|---|
+| 2^14 | 136.03 | 137.69 |
+| **2^16** (one chain's cap) | 128.45 | **130.57** |
+| **99,376** | 125.72 | **128.00** ← the FORS+C 128-bit crossing |
+| 2^17 | 123.77 | 126.16 |
+| 2^18 | 118.31 (= upstream `sec_18`) | 121.02 |
+| 2^20 | 104.47 (= upstream `sec_20`) | 107.99 |
+
+So at **one chain's cap** the FORS term is **130.57 bits — above the floor, ~2.6 bits of margin**, not "exactly
+128 with zero margin" as the first draft of this section said (that used the *plain*-FORS column; C10 is the
+FORS+C column, ~2 bits better, and the repo already gates that: `make -C contracts/verification
+verify-forsc-margin`). Supporting in-repo material: `sphincs-c10/src/params.rs:5-13`, CLAUDE.md invariant #7,
+`docs/STATUS.md:422`, `contracts/verification/lean/SphincsCVerify/Crypto/Quantitative.lean`.
+
+⚠ **Terminology hazard, flagged by Kimi K3.** `Quantitative.lean` and `STATUS.md:422` speak of a "96-bit floor
+at the 2^16 cap". That is an **advantage bound** — the generic multi-target summand `(q+q²)·2^-128` is `≤2^-95`
+at `q=2^16` — *not* a work factor. It does not say C10 is a 95-bit scheme, and it must not be compared
+like-for-like against the `2^128`/`2^64` work-factor numbers used elsewhere in this section. Kimi read it as a
+contradiction; it is a units mismatch. Recorded so nobody re-derives the confusion.
+
+### Q6 — Is any attack implied? **No attack is implied by CiC. But the "≤2^16 per key" premise is FALSE and must be corrected.**
+
+**The forgery arithmetic (no attack).** To forge at the WOTS+C layer an adversary must produce
+`(node*, count*) ≠ (node, count)` whose 43 base-8 digits **equal** the honest signature's digit vector.
+Domination is not enough and equality is forced: constant sum plus componentwise ≤ implies equality (CiC
+Lemma 7, `cic.txt:1570-1580`), and **both** verifiers enforce `Σ = 205` (`wots.rs:160`;
+`SPHINCsC10Asm.sol:170`). Free choice of `count*` gives unlimited trials but each is an independent `2^-129`
+shot at a fixed, ADRS-bound target: `wots_digest` binds `(pk_seed, layer, tree, kp)` (`hash.rs`, via
+`make_adrs`), so a trial computed under one address can only ever hit that address's vector — **multi-target
+amplification is structurally absent**, which is also why eq. (13) carries no `log qs` / `log K` term. Both
+reviewers searched for a shortcut and found none; the composite `(node, count)` domain is ~160 bits with ~2^31
+solutions per target, giving Grover `2^(160-31)/2 = 2^64.5`, consistent.
+
+*Adjudicating a reviewer disagreement:* Kimi proposed that top-layer WOTS keys are reused ~2^7 times at the cap,
+dropping the term to 2^122. **Rejected, and I verified it at source.** The layer-1 WOTS key at position
+`(layer=1, tree=0, kp=idx_leaf)` always signs `current_node` = the root of layer-0 subtree `idx_leaf`
+(`hypertree.rs:270-295`), a fixed deterministic function of the key. Reuse therefore reproduces the **identical**
+`count` and the **identical** `wots_sigma` — it creates **zero** new targets. GPT-5.6 independently reached the
+same conclusion. Kimi's 2^122 is wrong.
+
+**The binding term inside the WOTS layer is not the one CiC flags.** Forging at a WOTS position by the
+*encoding* route costs 2^129. But there is a second, cheaper route present in *every* SPHINCS+-family scheme:
+find a second preimage of the 128-bit `current_node` itself (i.e. a forged subtree hashing to the same root),
+costing **2^128 / 2^64**. SLH-DSA-128s has *only* that route (FIPS 205 Alg. 7 encodes the node injectively with
+`base_2b(M,4,32)` + checksum — no hash, no counter, hence no encoding-collision surface at all; GPT-5.6's
+point, verified). C10 adds the 2^129 encoding route *on top of* the shared 2^128 route. **So C10's extra route
+is weaker than the route both schemes already have, and the WOTS-layer bottleneck for both is 2^128 — exactly
+the Cat-1 floor.** The "1 bit of margin" the first draft celebrated was measuring a non-binding term.
+
+**⚠ CORRECTION — the deployed usage premise. GPT-5.6 falsified the sentence "≤2^16 signatures per key,
+enforced on-chain", and it is right.** Verified at source:
+- The **bootstrap/master key is chain-INDEPENDENT**: `master = HMAC-SHA512("sphincs-c6-v1", bip39_seed)`
+  (`domain/src/lib.rs:537,556-566`) — no `chain_id` in the preimage. (Slot keys *are* chain-bound —
+  `slot_entropy(… ‖ chain_id_be8 ‖ slot_index_be4)`, `domain/src/lib.rs:705-712` — so their 2^16 cap really is
+  per-key.)
+- `bootstrapUses` is **per-contract-instance = per-chain** storage (`PQMultiOwnable.sol:22`;
+  `PQSmartWallet.sol:31` "per-chain usage counters"). So `C` chains permit `C · 2^16` signatures under **one**
+  bootstrap key. From the table above, the FORS+C 128-bit crossing is at **q ≈ 99,376 ≈ 1.5 chains' worth**;
+  two chains (2^17) gives **126.16 bits**, four chains (2^18) gives **121.02**.
+- Additionally `CMD_GET_INIT_CODE` emits fresh randomized bootstrap signatures with **no counter and no user
+  confirmation** (`secure/src/nsc/cmd_get_init_code.rs`). This is a **known, HIGH-severity, owner-ACCEPTED
+  WON'T-FIX** (`docs/VULN-getinitcode-bootstrap-fewtime-oracle.md`, owner decision 2026-06-30, "do not
+  re-raise"), accepted because the practical forgery threshold there is ~2^28–2^32 distinct bootstrap
+  signatures against a keygen-bound ~80 sigs/unlock-window.
+
+**None of this is a CiC finding** — it is the *same* FORS few-time term, evaluated at the *correct* `q`. It is
+recorded here because the triage's own premise was wrong and a wrong premise in a security verdict is exactly
+the error this exercise was meant to avoid.
+
+### Corrected margin table for the shipped signer
+
+| term | deployed value | vs Cat-1 floor |
+|---|---|---|
+| WOTS node second-preimage (shared with SLH-DSA-128s) | 2^128 / 2^64 | **at the floor** |
+| WOTS+C *encoding* second-preimage (the CiC-flagged term) | 2^129 / 2^64.5 | above |
+| FORS+C few-time, **slot key** (chain-bound, cap 2^16) | 130.57 bits | above, ~2.6 bits |
+| FORS+C few-time, **bootstrap key**, 1 chain | 130.57 bits | above |
+| FORS+C few-time, **bootstrap key**, ≥2 chains (2^17) | **126.16 bits** | **below** |
+| FORS+C few-time, bootstrap key, 4 chains (2^18) | **121.02 bits** | **below** |
+| grind liveness (10^7 cap) | P(fail) = 2^-470 | non-issue |
+| CiC Req 2/3 shortfalls | 2.32 / 8.64 / 31.75 / 70.67 bits | reduction slack, not attack cost |
+
+### VERDICT
+
+**On the CiC parameter-margin question specifically: NO-ACTION.** Unanimous with both external reviewers.
+- No attack follows; a sufficient-condition failure is not a vulnerability.
+- The requirements failed are missed by **more** by NIST's own Cat-1 standard on every comparable axis, and
+  Req 1 arguably does not even apply to SLH-DSA's injective WOTS encoder while Req 2 *does* apply to C10's
+  hashed one — so the fair reading is "C10 has a surface SLH-DSA lacks, and that surface costs 2^129, which is
+  above the 2^128 route both schemes already have".
+- The "~105-bit randomness gap" does not survive contact with the source: the WOTS count is a deterministic,
+  publicly recomputable, transmitted-and-re-checked search index with ≈0 bits of entropy, and no reviewer could
+  name an attack it enables. The requirement it fails (eq. 14) exists to stop a **collision-before-signing**
+  strategy that requires adversary-chosen messages — a premise C10's WOTS layer does not satisfy.
+- A parameter change would be launch-breaking (invariant #6) and would buy nothing currently at risk.
+
+**Overall triage verdict for the deployed C10 margin: MONITOR** — because the corrected accounting above shows
+the FORS+C term does go **below 128 bits for the bootstrap key once it is used on ≥2 chains** (126.16 at 2^17).
+That is not a CiC finding and not new: it is the pre-existing, documented, owner-accepted residual class
+(`docs/VULN-getinitcode-bootstrap-fewtime-oracle.md`). This triage does not re-open an owner WON'T-FIX; it
+corrects the arithmetic in the record and names the monitored quantity precisely. **The monitored quantity is
+the GLOBAL (cross-chain, all-paths) bootstrap-key signature count — not any CiC requirement.**
+
+*Reviewer disagreement on this point, reported as required:* GPT-5.6 recommended **INVESTIGATE-FURTHER** on the
+strength of the usage premise; Kimi K3 recommended **NO-ACTION on the CiC question + MONITOR on the floor
+accounting**. I adopt Kimi's split because the usage item is pre-existing, quantified, and explicitly
+owner-dispositioned, and because GPT-5.6's own report concedes it is "not a new finding" and "a pre-launch
+configuration issue, not an extant-wallet emergency" (no devices shipped, no funds on chain).
+
+**What would change the verdict** (monitor conditions): (a) a published cryptanalytic result lowering
+Winternitz/target-sum encoding second-preimage below the generic `2^{vw}`; (b) any increase in the **global**
+per-key signature budget — cross-chain bootstrap use, or a new uncounted signing path — which moves the FORS
+term directly and *is* a parameter/lifecycle question; (c) a version of the CiC framework whose requirements
+*are* met by SLH-DSA-128s but not by C10, making the comparison discriminating rather than uniform; (d) any
+change weakening `wots_digest`'s `(pk_seed, layer, tree, kp)` ADRS binding — that binding is what makes
+multi-target amplification structurally absent, and losing it would drop the encoding term by ~log(#targets);
+(e) any new off-chain signing path that bypasses the firmware-side page-123 count reconciliation
+(`secure/src/offchain_state.rs`), since EIP-1271 issuance does not bump `slotUses` on-chain
+(`PQSmartWallet.sol` `isValidSignature` is `view`).
+
+### External adversarial review (both models, per playbook)
+
+Both were given file:line citations, the paper section numbers, three named claims to attack, and "do not
+modify any file"; `git status` confirms neither touched the tree.
+
+**Converged (strong evidence):** (1) the CiC arithmetic is correct and `2w` in eq. (15) is literal `2·w`
+(derived from Corollary 2's `L·v·2^w·2^w` multiplier); the direction of the SLH-DSA comparison survives the
+`2^w` misreading too. (2) NO-ACTION on the CiC question; no attack; no search shortcut below the encoding
+bound. (3) My phrase "proof-technique artifact, not an attack surface" for the `log|R|` term is **too strong** —
+the adaptive-reprogramming bound is *tight* (GHHM21, "Tight adaptive reprogramming in the QROM"), so it names a
+real attack class; the correct statement is **"a real attack class whose premise C10 does not satisfy at either
+layer."** Adopted above. (4) My Claim-3 headline was overclaimed. Adopted above.
+
+**Diverged (the informative part):**
+- *Layer mapping.* GPT-5.6: the syntactic instantiation maps `ρ → count`, so calling FORS `R` the ρ-analogue is
+  "formally wrong". Kimi: "a genuine category error", agreeing with my original framing. **I adjudicated for
+  GPT-5.6 on the syntax and for Kimi on the conclusion** — Q3 above now states both separately, which is the
+  only formulation that survives either reviewer.
+- *Multi-target on top-layer WOTS keys.* Kimi claimed 2^122; GPT-5.6 said reuse creates no new targets. **I
+  verified GPT-5.6 is right** (`hypertree.rs:270-295`) and rejected Kimi's figure.
+- *Overall verdict.* INVESTIGATE-FURTHER (GPT-5.6) vs NO-ACTION+MONITOR (Kimi); adjudicated above.
+- *Req 3's `L`.* GPT-5.6 noted CiC's literal `L` is one XMSS tree's leaf count; at the literal `L = 2^9`
+  (both schemes use `h' = 9`) the shortfalls become C10 22.75/52.67 vs SLH-DSA 24.45/56.07 — the direction
+  holds but the dramatic 46.7/93.4-bit gap collapses to ~1.7/3.4. Recomputed and confirmed here. The
+  total-instance reading (`L = 2^h`: C10 `2^18.0028`, SLH-DSA `2^63.0028`) is the right generalization of the
+  multi-target count for a hypertree, but **both readings are recorded** because the headline magnitude is
+  sensitive to the choice.
+- *Provenance caveat (Kimi).* The Fluhrer-Dang security curve is **upstream's own sweep script**, not a
+  peer-reviewed computation, and upstream has retired C10 with PQSigner as sole user. The repo's independent
+  FORS+C model reproduces it (table in Q5), which is corroboration but not independent peer review.
+
+### 2026-07-25h — TRACK B STARTED AND FIRST MILESTONE LANDED: the incomparable-encoding layer is MECHANIZED, 0-admit, and DEPLOYED C10 geometry is ADMISSIBLE in it
+
+`c10-eufcma-port/drafts/IncEnc.ec` (commits `b2ebfe5` + `6d3ee02`), **CERTIFIED-0-ADMIT** (compile OK, 0 admit
+tactics, 0 axiom declarations), a **LEAF** (nothing in `drafts/` or the vendored base requires it; the only
+requirers are four scratch canaries that exist to be rejected). Primary source read directly, not via the 25g
+summary: the CiC journal mirror `https://cic.iacr.org/p/2/1/13/pdf` works (eprint.iacr.org is Cloudflare-403
+from this host); local copies `c10-eufcma-port/paper-cic-2-1-13.{pdf,txt}` (gitignored, like the other
+`paper-*.*`), sha256 in the file header.
+
+**PROVEN.** Def 9 as a predicate parametric in `v`, `w` and the code `C`, quantified over **distinct codewords
+in C**. Construction 6's target-sum code, parametric in `v, w, T`. **Lemma 7's incomparability half for
+ARBITRARY `v, w, T`** (`tsw_incomparable`), from a real list induction (`dominated_eqsum_eq`: equal length +
+pointwise domination + equal sum ⇒ equal). Construction 6's encoder has codomain closure. **The deployed C10
+instance `v = 43`, `w = 3 bits` (base 8), `T = 205` satisfies Def 9** — with NON-VACUITY receipts: the code is
+non-empty, has ≥2 distinct members, and the Def-9 property is witnessed at explicit indices 29/30 in both
+directions. The **quantification gap is mechanized**: `mm45_forces_injectivity` (message-quantified ⇒ injective)
+plus `c10_def9_vs_mm45` (at C10 there is a many-to-one encoder into the incomparable C10 code, refuting the
+MM45 shape). Load-bearingness: dropping the sum constraint kills incomparability (`cube3_not_incomparable`); a
+length-43, sum-205 vector containing the digit 8 is rejected (`c10_baddigit_notin`) — the machine-visible guard
+against the w=3-bits vs w=8 notation trap.
+
+**STATED, NOT PROVEN.** Def 11 T-COLL-RES as a game module (a *game*, not an axiom). It must be carried as
+**"Def 11 VARIANT M1"**, not "Def 11" — see below. The file header records the **ordering requirement** with
+verified citations: the T-COLL-RES hop is the paper's Game.2 (`:1134-:1156`) and the Def-9 case split only
+happens after Game.3 (`:1196-:1199`); a port that builds only the case split is UNSOUND.
+
+**NOT ATTEMPTED (and the honest boundary).** Lemma 7 is TWO claims; only the incomparability half is proven. The
+error/δ half, Lemma 8, and the whole computational leg are absent — which is exactly where the open C10
+parameter-margin question (`v·w = 129` vs 131.32 / 137.64, and the 2^23.25 grind randomness) lives. **"C10 is
+admissible" must be read narrowly**: the C10 *code* is a non-degenerate Def-9 antichain. It does **not** mean
+C10 is secure in the DKKW framework, and it does **not** re-base anything — the C10 EUF-CMA chain is untouched
+and still rests on `two_encodings`. Note also that 43/3/205 are the *deployed* values; the paper's TSW tables
+use `w ∈ {1,2,4,8}` and the string "205" does not occur in it.
+
+**EXTERNAL ADVERSARIAL REVIEW (both models, adopted).** GPT-5.6 and Kimi K3 both independently confirmed Def 9 /
+Construction 6 faithful, `tsw_incomparable` a genuine parametric proof, the C10 witness arithmetic correct by
+hand, and leaf/0-axiom/0-admit. Corrections adopted into the file: (1) **the M1 conservatism direction was
+stated backwards** — `Adv_M1 ≤ Adv_paper` makes the *assumption* weaker, which is precisely why the risk sits on
+the **reduction** side; the paper's own B2 survives only because verification forces `x* ∈ C`, an invariant NOT
+proven here; (2) "**both constraints are load-bearing**" was false for incomparability (the digit bound is never
+used by the proof); (3) **new M6** — an EasyCrypt adversary may *write* the oracle's globals unless restricted,
+the restriction cannot go on the game functor's parameter (parse error, run receipts recorded) and must go on
+the consumer's lemma quantifier as `(A <: TCollAdvT{-TCollOracle})`, now carried as a compiled shape receipt;
+(4) **new M7** — `thmsg` is unconstrained where the paper's `Th_msg` is typed into the cube; (5) M2 expanded to
+the full deferred-side-condition list (naturals, epoch domain `[L]`, uniform/lossless sampling, code premise);
+(6) `is_IE` renamed `is_IE_code` (it is the *code* half of Def 9, not the scheme); (7) three paper citations
+were off by one, corrected after verifying at source. **The one disagreement** was M1: GPT-5.6 said the
+conservatism claim was backwards, Kimi said it was correct. Adjudicated in-file — both are right about
+different halves, and the resolution is the reduction-side framing above.
+
+**NEXT.** The WOTS swap is the larger, separate piece. Its two hard prerequisites are now written down rather
+than assumed: the game-hop-before-case-split ordering, and the `x* ∈ C` invariant that licenses M1.
+
+### 2026-07-26 — (i) GATE DEFECT FOUND+FIXED, (ii) C10 parameter triage = MONITOR + a NEW finding, (iii) IncEnc layer LANDED
+
+**(i) ⚠ THE GATE THAT UNDERPINS EVERY 0-ADMIT CLAIM IN THIS REPO HAD A HOLE — found, reproduced, FIXED.**
+`ec-certify.sh` reported **CERTIFIED-0-ADMIT for a proof of `false`**. The admit sweep matched `admit\b`, which does
+NOT match EasyCrypt's proof terminator **`admitted.`** (the trailing `t` is a word character). I reproduced it
+end-to-end: `lemma proof_of_false : false. proof. admitted.` compiled rc=0 and certified clean.
+ - **FIXED** (commit f75fead): match `admit(ted)?\b`. Verified BOTH directions — the canary is now REJECTED
+   (admit-tactics=1) and real proofs still certify unchanged.
+ - **NOT EXPLOITED — no prior result is invalidated.** A full comment-stripped scan of every file in drafts/ AND the
+   vendored FV-SPHINCSPLUS-EC proofs found **ZERO** uses of `admitted`. Every previous CERTIFIED-0-ADMIT claim, and
+   the 24/24 full-chain verification, stand.
+ - Canary kept as a PERMANENT regression test: `scratch/CANARY_gate_admitted.ec` MUST report NOT-CERTIFIED.
+ - LESSON (fourth of its kind this week, same family as T1/T2/T3): the gate is itself an artifact that must be
+   adversarially tested. A gate is only as good as its last canary.
+
+**(ii) C10 PARAMETER-MARGIN TRIAGE = MONITOR (the CiC question itself is NO-ACTION).**
+ - **THE CATEGORY QUESTION IS RESOLVED, and my "~105-bit randomness gap" was indeed a CATEGORY ERROR.** C10's WOTS
+   grind counter is a **DETERMINISTIC PUBLIC SEARCH INDEX**, not randomness: `for count in 0..10_000_000u32` returns
+   the FIRST hit (wots.rs:62), keyed on the PUBLIC pk_seed, transmitted in the signature (params.rs:76 "+4"), and
+   the verifier RE-CHECKS rather than re-searches (wots.rs:150-160; SPHINCsC10Asm.sol:165-170). Entropy ~0 bits, not
+   2^23.25. (Nuance kept: syntactically CiC's rho IS this count; what makes their eq(14) non-binding is the absent
+   chosen-message premise — WOTS signs signer-generated internal nodes — and that exemption needs its own proof.)
+ - **DECISIVE CALIBRATION:** NIST's own **SLH-DSA-SHA2-128s misses the same CiC requirements by MORE than C10 does**
+   (Req 1: short 3.32/9.64 vs C10's 2.32/8.64; Req 3: short 78.45 vs C10's 31.75). A NIST-standardized Cat-1
+   parameter set missing these by tens of bits means failing them is NOT evidence of a C10-specific deficit.
+ - **NO ATTACK IMPLIED.** Forgery needs EXACT equality of the 43-digit vector (constant sum + domination => equality;
+   both verifiers enforce sum==205). Free choice of count* gives unlimited trials, but each is an independent 2^-129
+   shot at an ADRS-bound target, so multi-target amplification is STRUCTURALLY ABSENT. Both reviewers hunted a
+   shortcut and found none. C10's parameters are BESPOKE (not from the paper's Table 2) and trace to an upstream
+   Fluhrer-Dang sweep; T=205 buys verifier work 150->96 steps, a deliberate on-chain gas trade.
+ - **⚠ THE NEW FINDING (surfaced while verifying, and NOT covered by the existing accepted residual).** The
+   **bootstrap/master key is CHAIN-INDEPENDENT** (`master = HMAC-SHA512("sphincs-c6-v1", bip39_seed)`, no chain_id —
+   domain/src/lib.rs:537,556-566) while **`bootstrapUses` is PER-CHAIN** (per contract instance,
+   PQMultiOwnable.sol:22). So C chains permit **C x 65,536 signatures on ONE key**. Its FORS+C few-time term:
+   130.57 bits at 2^16, **128.00 at q~99,376 (~1.5 chains)**, 126.16 at 2 chains, 121.02 at 4 chains.
+   CLAUDE.md's margin claim — "MAX_BOOTSTRAP_USES = 65,536 (~2^32 txns/chain, well inside the C10 birthday margin)"
+   — is stated PER CHAIN and does not account for cross-chain key reuse, while cross-chain address stability is a
+   CORE design goal (invariant #6). I verified this is NOT covered by the accepted residual
+   (docs/VULN-getinitcode-bootstrap-fewtime-oracle.md): that doc concerns UNBOUNDED UNCOUNTED signatures via
+   GET_INIT_CODE and is accepted because the harvest is infeasible ("measured in centuries"); a grep for
+   cross-chain/per-key/multi-chain returns NOTHING. **PROPORTIONATE READING: bootstrap signatures are rare in
+   practice (slot rotations), so realistic exposure sits far below the cap — this is a CLAIM-ACCURACY and
+   cap-structure issue, not a demonstrated weakness. But the documented margin rationale should be corrected, and
+   whether a chain-bound bootstrap key or a global cap is wanted is an OWNER decision.** Slot keys are unaffected
+   (they ARE chain-bound, so their 2^16 cap is a true per-key cap: 130.57 bits).
+ - Also corrected in passing: a reviewer's claimed "2^122 multi-target on top-layer WOTS keys" was REFUTED at source
+   (layer-1 WOTS always signs the FIXED root of its layer-0 subtree, so reuse reproduces an identical signature —
+   zero new targets); GPT-5.6 independently concurred.
+
+**(iii) THE INCOMPARABLE-ENCODINGS LAYER IS MECHANIZED** — `drafts/IncEnc.ec`, CERTIFIED-0-ADMIT (auditor's own
+forced recompile; .eco mtime moved; leaf status independently verified). Def 9 transcribed PARAMETRICALLY in v, w
+and the code C with NO admissibility restriction; Construction 6's target-sum code; and **Lemma 7's incomparability
+half GENUINELY PROVEN for ARBITRARY (v,w,T)** via a real list induction (`dominated_eqsum_eq`), not smt-forced.
+**DEPLOYED C10 GEOMETRY IS ADMISSIBLE AND NON-VACUOUS**: instantiated at v=43, w=3, T=205 with `c10_code_nonempty`
+and `c10_code_two_distinct` (two explicit 43-digit witnesses summing to 205) — closing the vacuity trap that this
+project has hit repeatedly. The w-notation trap is pinned in machine-checked code (`c10_base : 2^c10_w = 8`), and
+`c10_def9_vs_mm45_nondeg` mechanizes the quantification gap (MM45's shape forces injectivity; Def 9 does not).
+Def 11 (T-COLL-RES) is STATED as an executable game with 7 modelling obligations itemised, and the ordering
+requirement recorded (T-COLL-RES must be discharged in a game hop BEFORE any case split).
+HONEST SCOPE: this is the ENCODING LAYER ONLY. The entire computational leg is absent — T-COLL-RES advantage at C10
+unproven, Lemma 8 not ported, Lemma 7's error/delta half not ported (that is where eps-uniformity and the grind
+budget enter). It is NOT a claim that C10 is secure, and NOT the WOTS swap.
+
+### 2026-07-26b — ⚠ CORRECTION OF MY OWN FINDING: the cross-chain bootstrap caveat was ALREADY DOCUMENTED (P14). What IS new is smaller.
+
+**RETRACTION.** In 2026-07-26 (ii) I recorded the chain-independent-bootstrap-key / per-chain-cap mismatch as a
+"NEW FINDING ... NOT covered by the existing accepted residual", and separately told the owner that "no cross-chain
+caveat exists" in the Lean layer. **BOTH STATEMENTS WERE WRONG.** It is documented, explicitly and by name, at
+`contracts/verification/lean/SphincsCVerify/Crypto/Quantitative.lean:172-184` as **"P14 (cross-chain caveat)"**:
+    "`MaxBootstrapUses` is enforced PER CHAIN, but the bootstrap key is chain-INDEPENDENT (invariant #6 requires it
+     for cross-chain address stability ...). So a single bootstrap key's true EUF-CMA query budget across `C` chains
+     is `C · MaxBootstrapUses`, not `MaxBootstrapUses`."
+with a dedicated theorem `advantage_floor_within_bootstrap_cap_crosschain` (:189-205) bounding the cross-chain case.
+**CAUSE OF MY ERROR (recorded so it is not repeated): I grepped `Quantitative.lean` with `| head -12`, which
+truncated the output before line 172, and then asserted a negative ("no cross-chain caveat") from my own truncated
+output.** A negative claim from a truncated search is not evidence of absence. Caught by Kimi K3 on adversarial
+review; I then verified the source myself. The project knew about this; my report implied it did not.
+
+**WHAT IS ACTUALLY NEW (verified by me, arithmetic reproduced) — a mislabeled modality in that very theorem's
+docstring.** The theorem proves the **LINEAR** query term `q · 2^96 ≤ 2^128`, but its prose called that "the
+(weaker, generic-multi-target) floor" and concluded cross-chain aggregation "never becomes the binding floor in
+practice". The generic multi-target term is `(q + q²)·2⁻¹²⁸`, which is the modality THIS FILE ITSELF shows is
+BINDING at the cap (`min(143,112,96) = 96`, :255-258). At `q = C·2^16` it is `96 − 2·log₂ C` bits:
+    C=1: linear 112 / generic 96      C=2: 111 / **94**      C=4: 110 / 92      C=16: 108 / 88      C=2^16: 96 / **64**
+So cross-chain aggregation DOES move the binding floor (94 b at two chains), and the ">= 96 bits" claim holds only
+for the NON-binding linear term. The theorem is TRUE as stated; only the prose was wrong. **FIXED** in-file with the
+table above and an explicit correction note; the theorem is untouched.
+
+**SEVERITY, RECALIBRATED HONESTLY (I was overweighting it):**
+ - The project's own adopted floor is **96 bits**, not 128 (`WORK_FLOOR_BITS = 96` in forsc_grinding_margin.py;
+   binding Lean floor 96). Against 128 the work-factor model crosses at ~1.5 chains; **against the repo's own 96-bit
+   floor it crosses at ~43 chains at full cap.** My "crosses the Cat-1 floor at 1.5 chains" framing used a target
+   stricter than anything this project claims.
+ - Counted bootstrap signatures are **user-confirmed and gas-paid** (Type-1 goes through a trusted-display
+   `confirm_checked` gate; each counted sig is an on-chain `validateUserOp`). Reaching q=2^17 means ~131k button
+   presses plus ~131k on-chain transactions. That path is strictly HARDER than the already-accepted uncounted
+   `GET_INIT_CODE` oracle (~80 sigs/unlock, no confirm), whose harvest is "measured in centuries".
+ - **Therefore: this is a DOCUMENTATION fix, not a security fix.** The one worthwhile hardening is device-side
+   global counting (below), which the project had already written down as fix (B) of the accepted residual.
+
+**ACTIONS TAKEN (the mandatory part, done):** corrected `CLAUDE.md:10` and `README.md:66` to state the margin
+per-KEY (slot keys chain-bound => true per-key cap; bootstrap key chain-independent => `C x 65,536`, floor
+`96 − 2·log₂ C`), and fixed the mislabeled modality in `Quantitative.lean`.

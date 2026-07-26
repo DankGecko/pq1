@@ -320,6 +320,22 @@ sacrificial-part matrix, and the F10 `make e2e` budget check are tracked in
   Compile-validated under the double factory gate. **S-2 stays open**: the
   irreversible on-silicon burn + sacrificial-part validation matrix remain
   deferred-by-design → work-todo. (2026-07-14, branch `fix/sweep-2026-07-14-findings`)
+- **⚠️ Resolution amended 2026-07-26 — the code it describes did not survive the
+  merge.** This entry's analysis of the defect stands unchanged and was the
+  source used to correct four provisioning docs (see the CORRECTION 2026-07-26
+  block in `docs/provisioning/first-boot-provisioning.md`). But the *fix* it
+  describes was superseded at merge by the concurrent first-boot work, whose
+  fail-closed placeholder won: **there is no `apdu::ta_pool` manifest and no
+  compile-time exact-policy pin.** What exists today is
+  `OptigaTrustM::lockdown_ta_pool` (`secure/src/optiga/mod.rs:1971-2003`), which
+  holds the candidate inventory `{0xE0E8, 0xE0E9, 0xE0EF}` in a `const`, emits
+  **no APDU**, and returns `Err(Status(0xEC))` — and which
+  `OPTIGA_TA_POOL_LOCKDOWN_BLOCKED` (`secure/src/nsc/mod.rs:301-311`) prevents
+  from existing in any compilable image at all. The device-cert split
+  (`{E0E1,E0E2,E0E3}` ratchet-lock-only) is documented in the driver docstring
+  and `docs/provisioning/provisioning-reference.md` O-4, not implemented. Net
+  effect on the security posture is unchanged — S-2 is open either way — but do
+  not cite this Resolution as evidence that a ceremony implementation exists.
 
 ### F9 — Reset hardening erases SRAM2 while secure secrets and stack live in SRAM1
 

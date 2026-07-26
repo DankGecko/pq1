@@ -3907,24 +3907,29 @@ fwup-transport-hw-iwdg: dev-pubkey-fixture fwup-transport-fixture
 # #5 one PQ signer · #6 immutable bootstrap keys · #7 monotonic unresettable caps.
 # Deps gated by cargo-deny [bans] plus the exact host-only ERC-8176 verifier
 # boundary; source gated by .semgrep/pqsigner-invariants.yml.
-.PHONY: classical-crypto-boundary invariant-gates
+.PHONY: classical-crypto-boundary optiga-oid-ceremony invariant-gates
 classical-crypto-boundary: ## Pin host-only ERC-8176 ECDSA verification outside signing graphs
 	python3 scripts/check_classical_crypto_boundary.py
 
+optiga-oid-ceremony: ## Fail closed if a live doc carries a stale (destructive) OPTIGA S-2 ceremony instruction
+	python3 scripts/check_optiga_oid_ceremony.py
+
 SEMGREP ?= $(shell command -v semgrep 2>/dev/null || echo $(HOME)/.venvs/semgrep/bin/semgrep)
 invariant-gates: ## Local invariant gates (cargo-deny + semgrep + transcription)
-	@echo "==> [1/4] supply-chain (deps): cargo deny check advisories bans sources"
+	@echo "==> [1/5] supply-chain (deps): cargo deny check advisories bans sources"
 	@echo "    bans=invariant #5 (no classical signer); advisories=real CVEs"
 	@echo "    (unmaintained is workspace-scoped); sources=registry/remote guard."
 	cargo deny check advisories bans sources
-	@echo "==> [2/4] exact host-only ERC-8176 verifier boundary:"
+	@echo "==> [2/5] exact host-only ERC-8176 verifier boundary:"
 	$(MAKE) classical-crypto-boundary
+	@echo "==> [3/5] OPTIGA S-2 doc<->code anchor inventory (IRREVERSIBLE LcsO):"
+	$(MAKE) optiga-oid-ceremony
 	@command -v "$(SEMGREP)" >/dev/null 2>&1 || { echo "ERROR: semgrep not found ($(SEMGREP)). Install: python3 -m venv ~/.venvs/semgrep && ~/.venvs/semgrep/bin/pip install semgrep"; exit 1; }
-	@echo "==> [3/4] invariants #5/#6/#7 (source, ERROR-level fails the build):"
+	@echo "==> [4/5] invariants #5/#6/#7 (source, ERROR-level fails the build):"
 	"$(SEMGREP)" --config .semgrep/pqsigner-invariants.yml --severity ERROR --error --metrics off --quiet
 	@echo "    guard: unsafe-ban exclude allowlist is exactly the 3 documented files:"
 	@python3 .semgrep/check_unsafe_exclude_allowlist.py
-	@echo "==> [4/4] advisory warnings (non-blocking):"
+	@echo "==> [5/5] advisory warnings (non-blocking):"
 	-@"$(SEMGREP)" --config .semgrep/pqsigner-invariants.yml --severity WARNING --metrics off --quiet
 	@echo "==> invariant-gates: PASS"
 

@@ -4,10 +4,25 @@ Drive the Infineon `protected_update_data_set` tool to generate signed CBOR
 reset manifests for a set of target OIDs and bundle them into a single binary
 blob consumed by the firmware.
 
-The chip, after we provision our TA cert at OID 0xE0E3, will accept each of
-these manifests via SetObjectProtected (CMD 0x83). Each manifest applies
-`reset_metadata.txt` to its target OID and zeroes the data content —
-rolling burned AUTHREF OIDs back to a writable state.
+RETIRED 2026-07-26 — THE PREMISE BELOW IS DISPROVEN. Kept for source-level
+provenance only; do not run this to "fix" an OPTIGA.
+
+It assumed the chip would accept a trust-anchor cert at OID 0xE0E3. On the
+observed part 0xE0E3 is a full `DataType=0x12` device certificate: the chip
+refuses to retype it, so that write is a silent no-op and no manifest here is
+ever authorized. The candidate type-0x11 pool is {0xE0E8, 0xE0E9, 0xE0EF}
+(documentarily confirmed, silicon-unconfirmed for the shipping SKU/revision)
+and is NOT closed by this tool — S-2 remains an OPEN ship-blocker. The
+consuming feature `optiga-reset-oids` is rejected unconditionally by
+OPTIGA_RESET_OIDS_RETIRED (secure/src/nsc/mod.rs:527-534), so no buildable
+image can use this blob. See the CORRECTION 2026-07-26 block in
+docs/provisioning/first-boot-provisioning.md.
+
+Historical description: the chip, after we provision our TA cert at OID
+0xE0E3, will accept each of these manifests via SetObjectProtected
+(CMD 0x83). Each manifest applies `reset_metadata.txt` to its target OID and
+zeroes the data content — rolling burned AUTHREF OIDs back to a writable
+state.
 
 Output blob layout (big-endian):
     u16 num_entries
