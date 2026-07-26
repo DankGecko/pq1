@@ -4303,17 +4303,22 @@ from a mystery proof failure unless you check max-progress + the raw log; and th
 
 ### 2026-07-26d — TRACK B UNIT 2: the localization holds across the ENTIRE PQ1 CAPSTONE CHAIN
 
-**Result.** **19 files, each compiled as an EXPLICIT target** against the Def-9 codeword-incomparability axiom:
-the 5 MM45 base files (`WOTS_TW_ES`, `FL_SL_XMSS_MT_ES`, `FORS_ES`, `SPHINCS_PLUS`, + canary) and the **14-file PQ1
-draft closure** including `SphincsC10CapstoneWired`. `GATE_FAILURES=0`. Timings evidence real re-verification, not
+**Result (headline tightened — see the correction note at the end of this entry).** **26 files, each compiled as an
+EXPLICIT target** against the Def-9 codeword-incomparability axiom: all 11 MM45 base files (7 `.ec` + 4 `.eca`)
+plus the canary, and the **14-file PQ1 draft closure** including `SphincsC10CapstoneWired`. `GATE_FAILURES=0`. Timings evidence real re-verification, not
 cache hits: `XmssmtCC_All` **724 s**, `FxChain` 70 s, `RtopCSoundness` 32 s, `WOTS_C_Interactive` 27 s.
 
-**Census over all 19: exactly ONE real admit chain-wide** — the T-COLL-RES gap at `WOTS_TW_ES.ec:1359`. **Zero in
-all 14 PQ1 draft files.** Zero injectivity axioms. All 14 drafts byte-identical to `drafts/` (`WOTS_TW_ES.ec` is the
+**Census over all 26: exactly ONE real admit chain-wide** — the T-COLL-RES gap at `WOTS_TW_ES.ec:1359`. **Zero in
+all 14 PQ1 draft files.** Zero injectivity axioms, but **+1 carried axiom `enc_nonzero`** — the set now carries a
+positivity axiom the pristine base did not (an honest narrowing: the development is no longer parametric in the
+encoding; C10 satisfies it because `target_sum = 205 > 0`). All 14 drafts byte-identical to `drafts/` (`WOTS_TW_ES.ec` is the
 sole variable); vendored tree pristine (md5 `e6165a3b…` unchanged).
 
-**So PQ1's entire capstone chain holds under Def-9 incomparability, and the deployed-parameter blocker reduces to
-ONE open obligation chain-wide.** C10 ships `w=8`; MM45's `two_encodings` forces injectivity, which the `2^123.76`
+**Stated conditionally, which is the honest form: conditional on that single obligation, all 26 files re-verify, and
+NO other part of the chain — MM45 base or PQ1 capstone — needs injectivity anywhere.** The capstone theorem does
+**not** "hold": the admit sits INSIDE `WOTS_TW_ES`, upstream of everything, so the theorem is CONDITIONAL on an
+unproven obligation. (An earlier draft of this entry said the chain "holds"; that overreached and is corrected here,
+the same shape as the unit-1 "exactly" -> "candidate" walk-back.) C10 ships `w=8`; MM45's `two_encodings` forces injectivity, which the `2^123.76`
 max antichain of `{0..7}^43` makes unsatisfiable at that geometry. That requirement is now machine-checked to be an
 artifact confined to a single proof step — the forgery site, exactly where T-COLL-RES belongs.
 
