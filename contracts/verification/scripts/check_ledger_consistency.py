@@ -278,23 +278,47 @@ def sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
+def _pinned_lake() -> str:
+    """The elan shim under the password-database home — never via PATH."""
+    lake = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".elan" / "bin" / "lake"
+    if not lake.is_file():
+        raise SystemExit(f"ERROR: lake not found at the pinned elan location ({lake}).")
+    return str(lake)
+
+
+def _pinned_tool_env() -> dict:
+    """Environment for evidence-tool subprocesses.  The elan dispatcher
+    re-roots toolchain resolution from ELAN_HOME (falling back to HOME) at
+    exec time, and ELAN_TOOLCHAIN overrides the lean-toolchain file's
+    selection — all caller-mutable.  Force the password-database root and
+    drop the selection override (wave-3 Opus 5 / Kimi K3 HIGH,
+    coordinator-reproduced with a planted $ELAN_HOME toolchain)."""
+    home = pwd.getpwuid(os.getuid()).pw_dir
+    env = dict(os.environ)
+    env["HOME"] = home
+    env["ELAN_HOME"] = str(Path(home) / ".elan")
+    env.pop("ELAN_TOOLCHAIN", None)
+    return env
+
+
 def run_live_dump() -> str:
     """Run dump_axioms.lean and return combined output. Non-fatal exit (the
     script ends on a missing `main`); we gate on emitted content, like lint_fv.
 
     The Lean toolchain is part of the evidence trust root: resolve it exactly
-    like the Makefile does — the elan shim under the password-database home —
-    never through the caller's PATH.  A planted bare `lake` was shown to
-    answer this call with forged `#print axioms` output (wave-2 SOL HIGH,
+    like the Makefile does — the elan shim under the password-database home,
+    with ELAN_HOME/HOME forced to that same root — never through the caller's
+    PATH or elan environment.  A planted bare `lake` and a planted
+    `$ELAN_HOME` toolchain were both shown to answer this call with forged
+    `#print axioms` output (wave-2 SOL / wave-3 Opus 5 + Kimi K3 HIGH,
     coordinator-reproduced), which would make every closure comparison below
     run against attacker-authored "live truth"."""
-    lake = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".elan" / "bin" / "lake"
-    if not lake.is_file():
-        raise SystemExit(f"ERROR: lake not found at the pinned elan location ({lake}).")
+    lake = _pinned_lake()
     try:
         cp = subprocess.run(
-            [str(lake), "env", "lean", DUMP_SCRIPT],
+            [lake, "env", "lean", DUMP_SCRIPT],
             cwd=str(LEAN_DIR), capture_output=True, text=True, timeout=900,
+            env=_pinned_tool_env(),
         )
     except FileNotFoundError:
         raise SystemExit(f"ERROR: `{lake}` not executable (need elan-installed Lean 4).")

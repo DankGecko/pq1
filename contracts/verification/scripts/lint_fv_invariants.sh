@@ -59,8 +59,17 @@ VERIF_DIR="${REPO_ROOT}/contracts/verification"
 LEAN_DIR="${VERIF_DIR}/lean"
 EXTRACTED_DIR="${VERIF_DIR}/extracted"
 
-# Ensure elan-installed lake is on PATH for CI environments.
-export PATH="${HOME}/.elan/bin:${PATH}"
+# The Lean toolchain is part of the evidence trust root: resolve the elan
+# shim under the password-database home and force the elan/home root, so a
+# caller-planted PATH/ELAN_HOME/HOME cannot reroot the closure tripwire's
+# `lake env lean --run dump_axioms.lean` to an attacker-authored dump (same
+# class as the wave-2/wave-3 Makefile/ledger findings; those layers are
+# pinned, this script must not re-open the channel below them).
+FV_HOME="$(/usr/bin/python3 -I -c 'import os,pwd;print(pwd.getpwuid(os.getuid()).pw_dir)')"
+export HOME="${FV_HOME}"
+export ELAN_HOME="${FV_HOME}/.elan"
+unset ELAN_TOOLCHAIN
+LAKE="${FV_HOME}/.elan/bin/lake"
 
 err() { printf 'lint_fv_invariants.sh: %s\n' "$*" >&2; }
 
@@ -71,7 +80,7 @@ require() {
   fi
 }
 
-require lake
+require "${LAKE}"
 require python3
 
 for d in "${LEAN_DIR}" "${EXTRACTED_DIR}"; do
@@ -256,7 +265,7 @@ printf '==> [lint_fv] (c) Gap-3 + theft_free axiom-closure tripwire\n'
 # we DO NOT gate on it — we gate on the emitted #print-axioms CONTENT, which
 # is complete before the error. We require the keccak axiom line + theft_free
 # closure to be present (a failed elaboration would omit them, which we catch).
-DUMP_OUT="$(cd "${LEAN_DIR}" && lake env lean --run scripts/dump_axioms.lean 2>&1)" || true
+DUMP_OUT="$(cd "${LEAN_DIR}" && "${LAKE}" env lean --run scripts/dump_axioms.lean 2>&1)" || true
 
 # Surface a hard internal error if the project clearly is not built / the
 # import failed (no #print-axioms lines emitted at all).
@@ -450,7 +459,7 @@ LEANEOF
 
 # A clean compile (exit 0) means `trivial` proved it → opaque guard BROKEN.
 # A non-zero exit (type mismatch) is the healthy state.
-if (cd "${LEAN_DIR}" && lake env lean "${GUARD_TMP}") >/tmp/lint_fv_guard.out 2>&1; then
+if (cd "${LEAN_DIR}" && "${LAKE}" env lean "${GUARD_TMP}") >/tmp/lint_fv_guard.out 2>&1; then
   err ""
   err "(d) FAIL: \`trivial\` inhabited Bridge.evmDeliversCall default — A4's"
   err "    \`evmDeliversCall\` is no longer opaque (regressed to a True def?)."

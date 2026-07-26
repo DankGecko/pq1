@@ -31,14 +31,14 @@ warn()  { printf '  \033[33m!\033[0m %s\n' "$*"; }
 fail()  { printf '  \033[31m✗\033[0m %s\n' "$*" >&2; }
 
 bold "[1/8] Lean kernel type-check (lake build)"
-(cd "${VERIFICATION_DIR}" && make verify-build) >/dev/null
+(cd "${VERIFICATION_DIR}" && /usr/bin/make verify-build) >/dev/null
 ok "lake build passed — every theorem closed, zero sorries"
 
 bold "[2/8] Axiom dependency audit"
 # NB: `awk 'NR<=20'` not `head -20` — head closes the pipe after 20 lines, and under
 # `set -o pipefail` that SIGPIPEs the upstream `make`/`grep` (exit 141). The dump now
 # has >20 closure lines, so head deterministically killed the script here (fixed 2026-07-02).
-(cd "${VERIFICATION_DIR}" && make verify-audit) 2>&1 | grep -E "depends on axioms|does not depend" | awk 'NR<=20'
+(cd "${VERIFICATION_DIR}" && /usr/bin/make verify-audit) 2>&1 | grep -E "depends on axioms|does not depend" | awk 'NR<=20'
 ok "axiom dependency closure printed"
 
 bold "[3/8] Lint axioms (no new True-typed)"

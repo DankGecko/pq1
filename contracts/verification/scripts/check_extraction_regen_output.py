@@ -21,6 +21,8 @@ from __future__ import annotations
 import collections
 import hashlib
 import json
+import os
+import pwd
 import re
 import subprocess
 import sys
@@ -151,8 +153,33 @@ def compare_exact(label: str, committed: Path, regenerated: Path) -> list[str]:
     return []
 
 
+def _pinned_lake() -> str:
+    """The elan shim under the password-database home — never via PATH."""
+    lake = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".elan" / "bin" / "lake"
+    if not lake.is_file():
+        raise SystemExit(f"ERROR: lake not found at the pinned elan location ({lake}).")
+    return str(lake)
+
+
+def _pinned_tool_env() -> dict:
+    """Environment for evidence-tool subprocesses: force the elan/home root
+    to the password-database home and drop ELAN_TOOLCHAIN, so the dispatcher
+    cannot be re-rooted or re-selected by caller-mutable environment."""
+    home = pwd.getpwuid(os.getuid()).pw_dir
+    env = dict(os.environ)
+    env["HOME"] = home
+    env["ELAN_HOME"] = str(Path(home) / ".elan")
+    env.pop("ELAN_TOOLCHAIN", None)
+    return env
+
+
 def run_lean_source(source: str) -> subprocess.CompletedProcess[str]:
-    """Elaborate an ephemeral conformance module in the extracted Lean project."""
+    """Elaborate an ephemeral conformance module in the extracted Lean project.
+
+    Resolves lake through the pinned elan shim with a forced elan/home root —
+    a PATH- or ELAN_HOME-planted `lake` must not author the "regenerated"
+    interface this checker compares against the committed one (same class as
+    the closed wave-2/wave-3 ledger-dump findings)."""
     with tempfile.NamedTemporaryFile(
         mode="w",
         encoding="utf-8",
@@ -162,12 +189,13 @@ def run_lean_source(source: str) -> subprocess.CompletedProcess[str]:
         module.write(source)
         module.flush()
         return subprocess.run(
-            ["lake", "env", "lean", module.name],
+            [_pinned_lake(), "env", "lean", module.name],
             cwd=VERIF_DIR / "extracted",
             capture_output=True,
             text=True,
             timeout=120,
             check=False,
+            env=_pinned_tool_env(),
         )
 
 

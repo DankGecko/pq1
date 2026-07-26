@@ -53,12 +53,38 @@ import sys
 import time
 from pathlib import Path
 
+import pwd
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 VERIF_DIR = SCRIPT_DIR.parent
 LEAN_DIR = VERIF_DIR / "lean"
 MANIFEST = LEAN_DIR / "scripts" / "proof_mutations.json"
 DUMP_SCRIPT = "scripts/dump_axioms.lean"
 KERNEL = {"propext", "Classical.choice", "Quot.sound"}
+
+
+def _pinned_lake() -> str:
+    """The elan shim under the password-database home — never via PATH (a
+    planted `lake` exiting 0 on the baseline build and non-zero on every
+    mutant rebuild would read all mutations as "correctly broke" with no
+    Lean ever run — wave-3 Opus 5 MEDIUM, same class as the closed wave-2
+    ledger-dump finding)."""
+    lake = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".elan" / "bin" / "lake"
+    if not lake.is_file():
+        raise HarnessError(f"lake not found at the pinned elan location ({lake})")
+    return str(lake)
+
+
+def _pinned_tool_env() -> dict:
+    """Environment for evidence-tool subprocesses: force the elan/home root
+    to the password-database home and drop ELAN_TOOLCHAIN, so the dispatcher
+    cannot be re-rooted or re-selected by caller-mutable environment."""
+    home = pwd.getpwuid(os.getuid()).pw_dir
+    env = dict(os.environ)
+    env["HOME"] = home
+    env["ELAN_HOME"] = str(Path(home) / ".elan")
+    env.pop("ELAN_TOOLCHAIN", None)
+    return env
 
 TIER_ORDER = {"quick": 0, "default": 1, "full": 2}
 # Checker-owned exact identity pin.  The source-order-independent digest is over
@@ -173,8 +199,9 @@ def validate_dump_output(returncode: int, stdout: str, stderr: str) -> dict[str,
 
 def run_build() -> tuple[bool, str]:
     """lake build SphincsCVerify — full transitive rebuild. (ok, tail-output)."""
-    cp = subprocess.run(["lake", "build", "SphincsCVerify"], cwd=str(LEAN_DIR),
-                        capture_output=True, text=True, timeout=1800)
+    cp = subprocess.run([_pinned_lake(), "build", "SphincsCVerify"], cwd=str(LEAN_DIR),
+                        capture_output=True, text=True, timeout=1800,
+                        env=_pinned_tool_env())
     out = (cp.stdout + cp.stderr)
     return cp.returncode == 0, out[-1500:]
 
@@ -182,11 +209,12 @@ def run_build() -> tuple[bool, str]:
 def run_dump() -> dict[str, set[str]]:
     try:
         cp = subprocess.run(
-            ["lake", "env", "lean", DUMP_SCRIPT],
+            [_pinned_lake(), "env", "lean", DUMP_SCRIPT],
             cwd=str(LEAN_DIR),
             capture_output=True,
             text=True,
             timeout=900,
+            env=_pinned_tool_env(),
         )
     except subprocess.TimeoutExpired as exc:
         raise HarnessError(
@@ -437,7 +465,8 @@ def main() -> int:
 
     # Verify shell tooling up front.
     try:
-        subprocess.run(["lake", "--version"], cwd=str(LEAN_DIR), capture_output=True, timeout=60)
+        subprocess.run([_pinned_lake(), "--version"], cwd=str(LEAN_DIR), capture_output=True, timeout=60,
+                        env=_pinned_tool_env())
     except (FileNotFoundError, subprocess.TimeoutExpired):
         print("ERROR: `lake` not runnable (need elan-installed Lean 4).", file=sys.stderr)
         return 2

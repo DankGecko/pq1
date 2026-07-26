@@ -225,6 +225,22 @@ override LAKE := $(_FV_USER_HOME)/.elan/bin/lake
 ifeq ($(wildcard $(LAKE)),)
 $(error LAKE not found at $(LAKE); install the elan Lean 4 toolchain for verification Makefile)
 endif
+# Pinning the shim's PATH is not enough: the elan dispatcher re-roots its
+# toolchain resolution from caller-mutable ELAN_HOME (and falls back to
+# HOME) at exec time, so a planted $ELAN_HOME/toolchains/<name>/bin/lake
+# still answered the kernel gate with a forged stub (wave-3 Opus 5 + Kimi
+# K3 HIGH, coordinator-reproduced).  Force both variables to the
+# password-database home for every recipe, and reject an explicit
+# toolchain-selection override — each project pins its toolchain via its
+# own lean-toolchain file, so a caller-set ELAN_TOOLCHAIN can only be a
+# selection attack on the pinned evidence toolchain.
+override ELAN_HOME := $(_FV_USER_HOME)/.elan
+override HOME := $(_FV_USER_HOME)
+export ELAN_HOME HOME
+ifneq ($(filter environment environment override command line,$(origin ELAN_TOOLCHAIN)),)
+$(error refusing caller-set ELAN_TOOLCHAIN for verification Makefile)
+endif
+unexport ELAN_TOOLCHAIN
 # Pin the evidence interpreter.  A bare `python3` re-resolves through the
 # caller's PATH on every recipe line (and, before the BASH_FUNC_* rejection
 # above, through exported Bash functions); `-E -S` additionally isolates it
@@ -346,6 +362,24 @@ verify-ledger-consistency: verify-build ## AXIOM_STATUS.json falsifiable vs live
 	fi; \
 	rm -rf $$out $$evilbin; \
 	echo "  ok: the live axiom dump ignores a PATH-planted lake"
+	@evilroot=$$(mktemp -d /tmp/pq-ledger-planted-elan.XXXXXX); \
+	tc=leanprover--lean4---v4.22.0; \
+	mkdir -p $$evilroot/toolchains/$$tc/bin; \
+	printf '#!/bin/sh\necho FORGED-ELAN-DUMP\n' >$$evilroot/toolchains/$$tc/bin/lake; \
+	chmod +x $$evilroot/toolchains/$$tc/bin/lake; \
+	out=$$(mktemp /tmp/pq-ledger-planted-elan-out.XXXXXX); \
+	if ! ELAN_HOME=$$evilroot HOME=$$evilroot $(_FV_PYTHON3) scripts/check_ledger_consistency.py >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: ledger gate did not run under a planted ELAN_HOME toolchain" >&2; \
+	  sed -n '1,60p' $$out >&2; rm -rf $$out $$evilroot; exit 1; \
+	elif grep -Fq 'FORGED-ELAN-DUMP' $$out; then \
+	  echo "CONTROL FAILURE: the live axiom dump re-rooted through caller ELAN_HOME" >&2; \
+	  sed -n '1,60p' $$out >&2; rm -rf $$out $$evilroot; exit 1; \
+	elif ! grep -Fq 'OK: every advertised closure' $$out; then \
+	  echo "CONTROL FAILURE: ledger gate did not complete its real checks" >&2; \
+	  sed -n '1,60p' $$out >&2; rm -rf $$out $$evilroot; exit 1; \
+	fi; \
+	rm -rf $$out $$evilroot; \
+	echo "  ok: the live axiom dump ignores a planted ELAN_HOME toolchain"
 	@$(_FV_PYTHON3) scripts/check_ledger_consistency.py
 
 # HARDWARE-ASSUMPTION ledger hygiene. The firmware-side counterpart to
@@ -1190,6 +1224,30 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -rf $$out $$evilbin; \
 	echo "  ok: LAKE ignores a PATH-planted lake and stays on the pinned elan shim"
+	+@out=$$(mktemp /tmp/pq-extraction-elan-root-selftest.XXXXXX); \
+	evilroot=$$(mktemp -d /tmp/pq-elan-root-planted.XXXXXX); \
+	if ! ELAN_HOME="$$evilroot" HOME="$$evilroot" $(_FV_GNU_MAKE) --no-print-directory \
+	    _verify-lake-path-self-test >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: lake-path print target did not run" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evilroot; exit 1; \
+	elif ! elan_home_line=$$(sed -n 's/^elan_home=//p' $$out) \
+	    || ! home_line=$$(sed -n 's/^home=//p' $$out) \
+	    || ! pw_line=$$(sed -n 's/^pw_home=//p' $$out) \
+	    || [ -z "$$pw_line" ] || [ "$$elan_home_line" != "$$pw_line/.elan" ] \
+	    || [ "$$home_line" != "$$pw_line" ]; then \
+	  echo "CONTROL FAILURE: ELAN_HOME/HOME stayed caller-mutable for evidence recipes" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evilroot; exit 1; \
+	fi; \
+	if /usr/bin/env ELAN_TOOLCHAIN=anything $(_FV_GNU_MAKE) --no-print-directory \
+	    _verify-lake-path-self-test >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: a caller-set ELAN_TOOLCHAIN selected the evidence toolchain" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evilroot; exit 1; \
+	elif ! grep -Fq 'refusing caller-set ELAN_TOOLCHAIN ' $$out; then \
+	  echo "CONTROL FAILURE: ELAN_TOOLCHAIN was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evilroot; exit 1; \
+	fi; \
+	rm -rf $$out $$evilroot; \
+	echo "  ok: ELAN_HOME/HOME are force-pinned for recipes and ELAN_TOOLCHAIN is CAUGHT"
 	+@out=$$(mktemp /tmp/pq-extraction-goal-executor-selftest.XXXXXX); \
 	if $(_FV_GNU_MAKE) --no-print-directory MAKECMDGOALS=not-guarded MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: spoofed MAKECMDGOALS suppressed the recursive-executor guard" >&2; \
@@ -1479,7 +1537,7 @@ _verify-extraction-make-path-self-test:
 	@printf '%s\n' 'trusted=$(_FV_GNU_MAKE)' 'ambient=$(MAKE_COMMAND)'
 
 _verify-lake-path-self-test:
-	@printf '%s\n' 'lake=$(LAKE)' 'elan=$(_FV_USER_HOME)/.elan/bin/lake'
+	@printf '%s\n' 'lake=$(LAKE)' 'elan=$(_FV_USER_HOME)/.elan/bin/lake' 'elan_home=$(ELAN_HOME)' 'home=$(HOME)' 'pw_home=$(_FV_USER_HOME)'
 
 # roadmap T1.3 (ii) — extracted-Lean vs shipped-Rust DIFFERENTIAL gate.
 # The `extract-*` regen-diff targets catch a Rust change that was not re-extracted;
