@@ -100,6 +100,24 @@ ifneq ($(filter environment environment override command line,$(origin PYTHONINS
 $(error refusing caller-set PYTHONINSPECT for verification Makefile)
 endif
 unexport PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONINSPECT
+# The dynamic-loader members of the same startup-injection class map a
+# caller-chosen library into EVERY pinned trust-root binary (make, pwd,
+# stat, python3, bash) before any guard runs — strictly stronger than the
+# exported-Bash-function channel and a direct defeat of the pinned
+# binaries' own behavior (wave-7 Opus 5 BLOCKER, coordinator-verified:
+# `LD_PRELOAD=/nonexistent.so /usr/bin/python3 -I …` reaches the loader
+# regardless of Python-level isolation).  Reject and scrub them at parse
+# time alongside the interpreter hooks.
+ifneq ($(filter environment environment override command line,$(origin LD_PRELOAD)),)
+$(error refusing caller-set LD_PRELOAD for verification Makefile)
+endif
+ifneq ($(filter environment environment override command line,$(origin LD_AUDIT)),)
+$(error refusing caller-set LD_AUDIT for verification Makefile)
+endif
+ifneq ($(filter environment environment override command line,$(origin LD_LIBRARY_PATH)),)
+$(error refusing caller-set LD_LIBRARY_PATH for verification Makefile)
+endif
+unexport LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH
 # GNU Make appends each parsed makefile to MAKEFILE_LIST itself (origin
 # `file`).  An `override MAKEFILE_LIST := ...` in an earlier `-f` file (origin
 # `override`) or a command-line `MAKEFILE_LIST=...` assignment (origin
@@ -1177,8 +1195,18 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	  echo "CONTROL FAILURE: inherited PYTHONPATH was rejected for the wrong reason" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	fi; \
+	for ldvar in LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH; do \
+	  if /usr/bin/env "$$ldvar=/nonexistent-pq-check.so" $(_FV_GNU_MAKE) --no-print-directory \
+	      verify-hw-assumptions >$$out 2>&1; then \
+	    echo "CONTROL FAILURE: caller-set $$ldvar injected the loader into the trust-root binaries" >&2; \
+	    sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	  elif ! grep -Fq "refusing caller-set $$ldvar " $$out; then \
+	    echo "CONTROL FAILURE: caller-set $$ldvar was rejected for the wrong reason" >&2; \
+	    sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	  fi; \
+	done; \
 	rm -f $$out; \
-	echo "  ok: exported Bash functions and Python startup hooks are CAUGHT"
+	echo "  ok: exported Bash functions, Python startup hooks, and dynamic-loader preloads are CAUGHT"
 	+@out=$$(mktemp /tmp/pq-extraction-symlinked-makefile-selftest.XXXXXX); \
 	evildir=$$(mktemp -d /tmp/pq-extraction-symlinked-makefile.XXXXXX); \
 	mkdir -p $$evildir/scripts; \
@@ -1335,8 +1363,13 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	  echo "CONTROL FAILURE: indirect extraction alias bypassed the fixed private delegator" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	fi; \
+	if ! sed -n '/^$$(_EXTRACTION_TARGETS):$$/{n;p;}' Makefile \
+	    | grep -Fqx '	@$$(call _fv_extraction_delegate,$$@)'; then \
+	  echo "CONTROL FAILURE: the public extract-* recipe no longer delegates through the scrubbed define" >&2; \
+	  sed -n '/^$$(_EXTRACTION_TARGETS):$$/,+2p' Makefile >&2; rm -f $$out; exit 1; \
+	fi; \
 	rm -f $$out; \
-	echo "  ok: indirect extraction alias reaches the fixed private delegator"
+	echo "  ok: indirect extraction alias reaches the fixed private delegator and its recipe stays bound to it"
 	+@out=$$(mktemp /tmp/pq-extraction-shell-workspace-selftest.XXXXXX); \
 	if ! /usr/bin/env -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS -u MAKEFILES \
 	    $(_FV_GNU_MAKE) --no-print-directory \

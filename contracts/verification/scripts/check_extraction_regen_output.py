@@ -170,6 +170,10 @@ def _pinned_tool_env() -> dict:
     env["HOME"] = home
     env["ELAN_HOME"] = str(Path(home) / ".elan")
     env.pop("ELAN_TOOLCHAIN", None)
+    # Dynamic-loader injection is the same startup class at the binary level:
+    # never propagate a caller preload/audit/library path into evidence tools.
+    for ld_var in ("LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH"):
+        env.pop(ld_var, None)
     return env
 
 

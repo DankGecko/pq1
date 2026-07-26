@@ -298,6 +298,10 @@ def _pinned_tool_env() -> dict:
     env["HOME"] = home
     env["ELAN_HOME"] = str(Path(home) / ".elan")
     env.pop("ELAN_TOOLCHAIN", None)
+    # Dynamic-loader injection is the same startup class at the binary level:
+    # never propagate a caller preload/audit/library path into evidence tools.
+    for ld_var in ("LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH"):
+        env.pop(ld_var, None)
     return env
 
 
@@ -631,6 +635,11 @@ def check_unique_list_identities(ledger: dict) -> list[str]:
     if repeated:
         fails.append(f"C14 duplicate `axioms[].id` {repeated} — each documented axiom must "
                      f"record exactly once.")
+    repeated = dups([a["name"] for a in ledger.get("axioms", []) if a.get("name") is not None])
+    if repeated:
+        fails.append(f"C14 duplicate `axioms[].name` {repeated} — the same logical axiom under "
+                     f"two ids is still a duplicate identity (first-vs-last ambiguous for every "
+                     f"name-keyed consumer).")
     repeated = dups([e["witness"] for e in ledger.get("witness_coverage", []) if e.get("witness") is not None])
     if repeated:
         fails.append(f"C14 duplicate `witness_coverage[].witness` {repeated} — each "
@@ -781,6 +790,8 @@ def self_test() -> int:
         {"closures": {tf: base_closure + [base_closure[0]]}})))
     cases.append(("C14 duplicate axioms[].id", check_unique_list_identities(
         {"axioms": [{"id": "A5"}, {"id": "A5"}]})))
+    cases.append(("C14 duplicate axioms[].name", check_unique_list_identities(
+        {"axioms": [{"id": "A5a", "name": "X.dup"}, {"id": "A5b", "name": "X.dup"}]})))
     cases.append(("C14 duplicate witness", check_unique_list_identities(
         {"witness_coverage": [{"witness": "W.one"}, {"witness": "W.one"}]})))
     cases.append(("C14 duplicate claim_corollaries", check_unique_list_identities(

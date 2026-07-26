@@ -33,6 +33,7 @@ FV_HOME="$(/usr/bin/python3 -I -c 'import os,pwd;print(pwd.getpwuid(os.getuid())
 export HOME="${FV_HOME}"
 export ELAN_HOME="${FV_HOME}/.elan"
 unset ELAN_TOOLCHAIN
+unset LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH
 LAKE="${FV_HOME}/.elan/bin/lake"
 FV_PYTHON3="/usr/bin/python3 -E -S"
 

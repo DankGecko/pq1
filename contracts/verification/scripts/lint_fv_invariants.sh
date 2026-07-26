@@ -69,6 +69,7 @@ FV_HOME="$(/usr/bin/python3 -I -c 'import os,pwd;print(pwd.getpwuid(os.getuid())
 export HOME="${FV_HOME}"
 export ELAN_HOME="${FV_HOME}/.elan"
 unset ELAN_TOOLCHAIN
+unset LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH
 LAKE="${FV_HOME}/.elan/bin/lake"
 
 err() { printf 'lint_fv_invariants.sh: %s\n' "$*" >&2; }
