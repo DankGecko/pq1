@@ -7,9 +7,10 @@ was supplied.  The verification Makefile invokes this helper while that main
 file is still being parsed and passes the parent Make process's procfs
 cmdline.  Recipe-suppression options travel the same route — and they can
 also arrive through the environment: an environment-injected ``MAKEFLAGS``
-(e.g. ``o <target>``) is consumed and stripped before the in-Make MAKEFLAGS
-value is rebuilt, so only the at-exec environment still shows it.  That is
-why the parent's procfs environ is inspected alongside its argv.
+or ``GNUMAKEFLAGS`` (e.g. ``o <target>``) is consumed and stripped before
+the in-Make MAKEFLAGS value is rebuilt, so only the at-exec environment
+still shows it.  That is why the parent's procfs environ is inspected
+alongside its argv, and why both flag variables are scanned.
 
 Two option families are rejected:
 
@@ -148,6 +149,11 @@ def scan_makeflags_value(value: str) -> list[str]:
             for option in bundle:
                 if option in _SUPPRESSION_SHORT:
                     hits.append(f"-{option}")
+                if option in _SHORT_OPTIONS_WITH_OPTIONAL_ARGUMENT:
+                    # jlO take an ATTACHED optional argument: the rest of the
+                    # word is that argument (e.g. `-Otarget` is --output-sync,
+                    # not the letters t/a/r/g/e/t), not more options.
+                    break
             if bundle and bundle[0] in _SHORT_OPTIONS_WITH_REQUIRED_ARGUMENT:
                 i += 1  # the option's argument is the following word
         i += 1
@@ -228,6 +234,10 @@ def self_test() -> int:
         ("w --no-print-directory -- FOO=production", []),
         ("n -- FOO=production", ["-n"]),
         ("-- _FV_EXTRACTION_INNER=1", []),
+        ("-Otarget", []),
+        ("-Oline", []),
+        ("nOtarget", ["-n"]),
+        ("-j4", []),
     )
     for value, expected in makeflags_cases:
         hits = scan_makeflags_value(value)
@@ -255,10 +265,16 @@ def main() -> int:
             raise ValueError("unparseable procfs argv")
         count, hits = scanned
         if len(sys.argv) == 3:
+            # BOTH flag variables: GNU Make >= 4.4 additionally decodes
+            # GNUMAKEFLAGS into switches (filename-argument forms like
+            # `o <target>` included), so scanning MAKEFLAGS alone leaves a
+            # silent exit-0 suppression channel on the documented bare-`make`
+            # invocation wherever the caller's make binary is 4.4+.
             for entry in _read_procfs_list(sys.argv[2]):
-                if entry.startswith("MAKEFLAGS="):
-                    hits += scan_makeflags_value(entry[len("MAKEFLAGS="):])
-                    break
+                for var in ("MAKEFLAGS=", "GNUMAKEFLAGS="):
+                    if entry.startswith(var):
+                        hits += scan_makeflags_value(entry[len(var):])
+                        break
     except (OSError, ValueError):
         print("invalid-argv")
         return 0

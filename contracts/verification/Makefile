@@ -207,6 +207,16 @@ endif
 ifneq ($(_FV_MAKEFLAGS_ORIGIN),file)
 $(error refusing caller-overridden MAKEFLAGS (origin $(_FV_MAKEFLAGS_ORIGIN)) for verification Makefile)
 endif
+# GNU Make >= 4.4 additionally decodes GNUMAKEFLAGS into switches — on that
+# documented bare-`make` path (e.g. nix-profile make 4.4.1) an environment
+# `GNUMAKEFLAGS='o <target>'` retires an evidence target with exit 0 and no
+# recipe execution, invisible to the in-Make MAKEFLAGS value (wave-5 Opus 5
+# BLOCKER, coordinator-reproduced on both make binaries here).  The
+# argv/environ checker below therefore scans BOTH flag variables; a
+# command-line GNUMAKEFLAGS assignment is rejected symmetrically here.
+ifneq ($(filter command line,$(origin GNUMAKEFLAGS)),)
+$(error refusing caller-overridden GNUMAKEFLAGS (origin $(origin GNUMAKEFLAGS)) for verification Makefile)
+endif
 ifneq ($(_FV_LAKE_ORIGIN),undefined)
 $(error refusing caller-overridden LAKE (origin $(_FV_LAKE_ORIGIN)) for verification Makefile)
 endif
@@ -1123,8 +1133,25 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	  echo "CONTROL FAILURE: ambient Make assume-old mode was rejected for the wrong reason" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	fi; \
+	if /usr/bin/env GNUMAKEFLAGS=n $(_FV_GNU_MAKE) --no-print-directory \
+	    verify-hw-assumptions >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: ambient GNUMAKEFLAGS dry-run mode suppressed an evidence gate" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing Make no-execute/assume mode ' $$out \
+	    && ! grep -Fq 'no-execute-mode' $$out; then \
+	  echo "CONTROL FAILURE: ambient GNUMAKEFLAGS dry-run mode was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	if /usr/bin/env 'GNUMAKEFLAGS=o verify-hw-assumptions' $(_FV_GNU_MAKE) --no-print-directory \
+	    verify-hw-assumptions >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: ambient GNUMAKEFLAGS assume-old mode retired an evidence gate" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'no-execute-mode' $$out; then \
+	  echo "CONTROL FAILURE: ambient GNUMAKEFLAGS assume-old mode was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
 	rm -f $$out; \
-	echo "  ok: Make dry-run/question/assume-old/what-if modes (argv and ambient MAKEFLAGS) are CAUGHT"
+	echo "  ok: Make dry-run/question/assume-old/what-if modes (argv and ambient MAKEFLAGS/GNUMAKEFLAGS) are CAUGHT"
 	+@out=$$(mktemp /tmp/pq-extraction-bashfunc-selftest.XXXXXX); \
 	if /usr/bin/env 'BASH_FUNC_lake%%=() { :; }' 'BASH_FUNC_python3%%=() { :; }' \
 	    $(_FV_GNU_MAKE) --no-print-directory verify-hw-assumptions >$$out 2>&1; then \

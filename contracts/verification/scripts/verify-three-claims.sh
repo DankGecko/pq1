@@ -42,11 +42,11 @@ bold "[2/8] Axiom dependency audit"
 ok "axiom dependency closure printed"
 
 bold "[3/8] Lint axioms (no new True-typed)"
-bash "${SCRIPT_DIR}/lint_axioms.sh" 2>&1 | tail -5
+/usr/bin/bash "${SCRIPT_DIR}/lint_axioms.sh" 2>&1 | tail -5
 ok "lint_axioms passed"
 
 bold "[3b/8] I-3 closed-world gate (Storage mutator allow-list)"
-bash "${SCRIPT_DIR}/check_storage_mutators.sh" 2>&1 | tail -6
+/usr/bin/bash "${SCRIPT_DIR}/check_storage_mutators.sh" 2>&1 | tail -6
 ok "check_storage_mutators passed"
 
 bold "[4/8] Foundry build + test (parity + unit)"

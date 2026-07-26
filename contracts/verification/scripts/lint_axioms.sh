@@ -23,8 +23,18 @@ LEAN_DIR="${REPO_ROOT}/contracts/verification/lean"
 KNOWN_AXIOMS="${SCRIPT_DIR}/known_true_axioms.txt"
 KNOWN_THEOREMS="${SCRIPT_DIR}/known_trivial_theorems.txt"
 
-# Ensure elan-installed lake is on PATH for CI environments.
-export PATH="${HOME}/.elan/bin:${PATH}"
+# The Lean toolchain and interpreter are part of the evidence trust root:
+# resolve the elan shim and python3 under fixed absolute paths and force the
+# elan/home root, so a caller-planted PATH/ELAN_HOME/HOME cannot reroot the
+# axiom-type dump or the placeholder scan (same class as the wave-2..4
+# Makefile/ledger/lint_fv findings; those layers are pinned, this script
+# must not re-open the channel below them).
+FV_HOME="$(/usr/bin/python3 -I -c 'import os,pwd;print(pwd.getpwuid(os.getuid()).pw_dir)')"
+export HOME="${FV_HOME}"
+export ELAN_HOME="${FV_HOME}/.elan"
+unset ELAN_TOOLCHAIN
+LAKE="${FV_HOME}/.elan/bin/lake"
+FV_PYTHON3="/usr/bin/python3 -E -S"
 
 err() {
   printf 'lint_axioms.sh: %s\n' "$*" >&2
@@ -37,8 +47,8 @@ require() {
   fi
 }
 
-require lake
-require python3
+require "${LAKE}"
+require /usr/bin/python3
 require comm
 require sort
 require awk
@@ -63,7 +73,7 @@ read_allowlist() {
 ###############################################################################
 
 printf '==> [lint_axioms] dumping axiom types from elaborated SphincsCVerify\n'
-DUMP_OUT="$(cd "${LEAN_DIR}" && lake env lean scripts/dump_axiom_types.lean 2>&1)" || {
+DUMP_OUT="$(cd "${LEAN_DIR}" && "${LAKE}" env lean scripts/dump_axiom_types.lean 2>&1)" || {
   err "lake env lean dump_axiom_types.lean failed:"
   printf '%s\n' "${DUMP_OUT}" >&2
   exit 2
@@ -139,7 +149,7 @@ TRUE_AXIOMS_FROM_LEAN="$( { printf '%s\n' "${DIRECT_TRUE_AXIOMS}"; printf '%s\n'
 ###############################################################################
 
 printf '==> [lint_axioms] scanning source for True-typed theorem + axiom placeholders\n'
-PLACEHOLDERS_RAW="$(python3 "${SCRIPT_DIR}/lint_placeholders.py")" || {
+PLACEHOLDERS_RAW="$(${FV_PYTHON3} "${SCRIPT_DIR}/lint_placeholders.py")" || {
   err "lint_placeholders.py failed"
   exit 2
 }
