@@ -43,10 +43,6 @@ pub(crate) const LEGACY_FEE_PAGES: usize = 2;
 /// One conditional warning page when the UserOp carries a paymaster.
 pub(crate) const PAYMASTER_PAGES: usize = 1;
 
-// Every entry in `known_native_ticker` is pinned to an 18-decimal native
-// currency, while the compact value page paints six fractional digits.
-const KNOWN_NATIVE_DECIMALS: u32 = 18;
-
 const SIGNER_PAGE_CFI_STEP: u32 = 0xA4D1_73C9;
 pub(crate) const SIGNER_PAGE_CFI_EXPECTED: u32 = crate::cfi_expected!(SIGNER_PAGE_CFI_STEP);
 const TARGET_PAGE_CFI_STEP: u32 = 0x6B2E_91F5;
@@ -281,13 +277,7 @@ pub(super) fn enforce_native_value_page(
 }
 
 fn build_native_value_page(value: &U256, chain_id: u64) -> Option<NativeValuePage> {
-    if primitives::known_native_ticker(chain_id).is_some()
-        && !primitives::amount_is_exact_at_fraction_digits(
-            value,
-            KNOWN_NATIVE_DECIMALS,
-            primitives::NATIVE_DISPLAY_FRACTION_DIGITS,
-        )
-    {
+    if !primitives::native_amount_is_exactly_renderable(value, chain_id) {
         return None;
     }
     let mut page = [[b' '; DISPLAY_COLS]; DISPLAY_ROWS];
@@ -1123,7 +1113,7 @@ mod tests {
         let overwide_exact = power_of_ten(60);
         assert!(primitives::amount_is_exact_at_fraction_digits(
             &overwide_exact,
-            KNOWN_NATIVE_DECIMALS,
+            18,
             primitives::NATIVE_DISPLAY_FRACTION_DIGITS,
         ));
         let mut pages = marker_pages(2);

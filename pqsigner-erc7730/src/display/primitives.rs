@@ -733,6 +733,70 @@ pub fn write_native_amount_two_rows(
     )
 }
 
+/// Return `true` iff the real compact native-currency painter represents the
+/// signed value exactly.
+///
+/// Known chains have firmware-pinned 18-decimal native metadata, so the fixed
+/// six-decimal display is authorized only when every discarded base unit is
+/// zero. Unknown chains use the painter's exact raw-integer path and therefore
+/// need only pass its two-row width check.
+#[must_use]
+pub fn native_amount_is_exactly_renderable(value: &U256, chain_id: u64) -> bool {
+    if known_native_ticker(chain_id).is_some()
+        && !amount_is_exact_at_fraction_digits(value, 18, NATIVE_DISPLAY_FRACTION_DIGITS)
+    {
+        return false;
+    }
+
+    let mut row1 = [b' '; DISPLAY_COLS];
+    let mut row2 = [b' '; DISPLAY_COLS];
+    write_native_amount_two_rows(&mut row1, &mut row2, value, chain_id) == AmountFit::Full
+}
+
+/// Paint an exact derived native-currency bound across up to two rows.
+///
+/// Signed transfer values deliberately stay on the stable six-decimal
+/// [`write_native_amount_two_rows`] policy and must pass
+/// [`native_amount_is_exactly_renderable`]. A derived upper bound, such as a
+/// Safe gas refund estimate, is not itself a signed amount and commonly has
+/// finer-than-six-decimal dust after multiplication. Refusing every such bound
+/// would make ordinary refunds unavailable, so this sink widens only as far as
+/// required to preserve every base unit, then falls back to an exact raw-wei
+/// integer when the scaled form does not fit. Unknown-chain amounts retain the
+/// exact unscaled `raw` policy because their decimal scale is not pinned.
+///
+/// Every successful path is injective over `value`: scaled paths are admitted
+/// only when no base unit is discarded, and the fallback is the full integer.
+#[must_use]
+pub fn write_native_derived_amount_two_rows(
+    row1: &mut [u8; DISPLAY_COLS],
+    row2: &mut [u8; DISPLAY_COLS],
+    value: &U256,
+    chain_id: u64,
+) -> AmountFit {
+    let Some(unit) = known_native_ticker(chain_id) else {
+        return write_native_amount_two_rows(row1, row2, value, chain_id);
+    };
+
+    // At 18 fractional digits every U256 is exact, so this search always
+    // succeeds. Keep the Option handling fail-closed if that invariant changes.
+    if let Some(frac) = exact_fraction_digits(value, 18, NATIVE_DISPLAY_FRACTION_DIGITS, 18) {
+        if single_row_amount_fixed(row1, value, 18, frac, unit) {
+            *row2 = [b' '; DISPLAY_COLS];
+            return AmountFit::Full;
+        }
+        if write_amount_two_rows_bytes(row1, row2, value, 18, frac, false, unit) == AmountFit::Full
+        {
+            return AmountFit::Full;
+        }
+    }
+
+    // A long fractional tail can exceed row 2 even when the exact integer base
+    // units comfortably fit across both rows. The explicit `wei` suffix keeps
+    // this representation distinguishable from every ticker-scaled form.
+    write_amount_two_rows(row1, row2, value, 0, 0, false, true, "wei")
+}
+
 /// Paint a gas-price value exactly on a single row. Three fractional gwei
 /// digits remain the preferred stable width, but the renderer may use up to
 /// all nine gwei decimals when needed to preserve signed wei. If no exact gwei
@@ -1312,8 +1376,9 @@ mod eip55_tests {
 #[cfg(test)]
 mod native_amount_tests {
     use super::{
-        amount_is_exact_at_fraction_digits, known_native_ticker, write_native_amount_two_rows,
-        AmountFit, DISPLAY_COLS,
+        amount_is_exact_at_fraction_digits, known_native_ticker,
+        native_amount_is_exactly_renderable, write_native_amount_two_rows,
+        write_native_derived_amount_two_rows, AmountFit, DISPLAY_COLS,
     };
     use pqsigner_tx_core::eip1559::U256;
 
@@ -1386,6 +1451,7 @@ mod native_amount_tests {
         for chain_id in [1, 56] {
             assert!(known_native_ticker(chain_id).is_some());
             assert!(!amount_is_exact_at_fraction_digits(&value, 18, 6));
+            assert!(!native_amount_is_exactly_renderable(&value, chain_id));
             let mut row1 = [b' '; DISPLAY_COLS];
             let mut row2 = [b' '; DISPLAY_COLS];
             assert_eq!(
@@ -1408,10 +1474,12 @@ mod native_amount_tests {
             write_native_amount_two_rows(exact_row1, exact_row2, &exact, 1),
             AmountFit::Full
         );
+        assert!(native_amount_is_exactly_renderable(&exact, 1));
         assert_eq!(
             write_native_amount_two_rows(next_row1, next_row2, &next, 1),
             AmountFit::Full
         );
+        assert!(native_amount_is_exactly_renderable(&next, 1));
         assert_ne!(exact_rows, next_rows);
         assert_eq!(trimmed(&next_rows[0]), b"1.000001 ETH");
     }
@@ -1424,11 +1492,56 @@ mod native_amount_tests {
             write_native_amount_two_rows(&mut row1, &mut row2, &u256_from_u128(1), 4_242_424_242,),
             AmountFit::Full
         );
+        assert!(native_amount_is_exactly_renderable(
+            &u256_from_u128(1),
+            4_242_424_242
+        ));
         assert_eq!(trimmed(&row1), b"1");
         assert_eq!(trimmed(&row2), b"raw");
 
         assert_eq!(
             write_native_amount_two_rows(&mut row1, &mut row2, &U256([0xff; 32]), 4_242_424_242,),
+            AmountFit::Overflow
+        );
+        assert!(!native_amount_is_exactly_renderable(
+            &U256([0xff; 32]),
+            4_242_424_242
+        ));
+    }
+
+    #[test]
+    fn derived_native_bound_widens_then_falls_back_to_exact_wei() {
+        // Safe refund upper bound for baseGas=43_776 and gasPrice=1 gwei.
+        let ordinary = u256_from_u128(30_043_776_000_000_000);
+        let mut ordinary_rows = [[b' '; DISPLAY_COLS]; 2];
+        let [ordinary_row1, ordinary_row2] = &mut ordinary_rows;
+        assert_eq!(
+            write_native_derived_amount_two_rows(ordinary_row1, ordinary_row2, &ordinary, 1),
+            AmountFit::Full
+        );
+        assert_eq!(trimmed(&ordinary_rows[0]), b"0.030043776 ETH");
+        assert!(trimmed(&ordinary_rows[1]).is_empty());
+
+        // One extra wei per gas needs all 18 decimals; that scaled tail does
+        // not fit, but the exact 17-digit base-unit integer does.
+        let dusty = u256_from_u128(30_043_776_030_043_776);
+        let mut dusty_rows = [[b' '; DISPLAY_COLS]; 2];
+        let [dusty_row1, dusty_row2] = &mut dusty_rows;
+        assert_eq!(
+            write_native_derived_amount_two_rows(dusty_row1, dusty_row2, &dusty, 1),
+            AmountFit::Full
+        );
+        assert_eq!(trimmed(&dusty_rows[0]), b"3004377603004377");
+        assert_eq!(trimmed(&dusty_rows[1]), b"6 wei");
+        assert_ne!(ordinary_rows, dusty_rows);
+
+        assert_eq!(
+            write_native_derived_amount_two_rows(
+                &mut [b' '; DISPLAY_COLS],
+                &mut [b' '; DISPLAY_COLS],
+                &U256([0xff; 32]),
+                1,
+            ),
             AmountFit::Overflow
         );
     }

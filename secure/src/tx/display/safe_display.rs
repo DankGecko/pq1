@@ -78,8 +78,8 @@
 use super::primitives::{
     format_u64, write_addr_full_or_name, write_calldata_hash_rows, write_chain, write_data_len_row,
     write_erc20_header, write_gas, write_line, write_native_amount_two_rows,
-    write_native_currency_row, write_selector_row, write_token_amount_two_rows, write_token_name,
-    AmountFit,
+    write_native_currency_row, write_native_derived_amount_two_rows, write_selector_row,
+    write_token_amount_two_rows, write_token_name, AmountFit,
 };
 use super::safe_mgmt::{
     classify_safe_mgmt, page_count as safe_mgmt_page_count, render_safe_mgmt_pages, SafeMgmtOp,
@@ -303,11 +303,12 @@ fn erc20_call_amount_is_exactly_renderable(call: &Erc20Call, meta: &Erc20Metadat
         || super::primitives::token_amount_is_exactly_renderable(amount, meta)
 }
 
-/// Pre-publication exactness proof for every metadata-scaled legacy amount and
-/// the signed SafeTx gas limit. It walks the same strict ERC-20 and MultiSend
-/// decoders used by classification and executes the real painters into scratch
-/// rows. Unknown tokens remain on the raw-integer path; authenticated decimals
-/// and gas limits may never authorize a lossy marker.
+/// Pre-publication exactness proof for every native or metadata-scaled legacy
+/// amount and the signed SafeTx gas limit. It walks the same strict ERC-20 and
+/// MultiSend decoders used by classification and executes the real painters
+/// into scratch rows. Unknown tokens remain on the raw-integer path;
+/// authenticated decimals, native values, and gas limits may never authorize
+/// a lossy marker.
 fn legacy_values_are_exactly_renderable(
     input: &SafeRenderInput<'_>,
     erc20: Option<&Erc20Metadata<'_>>,
@@ -320,19 +321,47 @@ fn legacy_values_are_exactly_renderable(
         }
     }
 
-    // Safe gas refund amount, when the supplied metadata is for gasToken.
+    let inner_value = U256(input.value);
+    if !inner_value.is_zero()
+        && !super::primitives::native_amount_is_exactly_renderable(
+            &inner_value,
+            input.chain_id,
+        )
+    {
+        return false;
+    }
+
+    // Safe gas refund amount. Native refunds use the signed chain's pinned
+    // native policy; token refunds use address-matched authenticated metadata.
     if refund_is_active(&input.gas_price, &input.gas_token, &input.refund_receiver) {
-        if let Some(meta) = erc20.filter(|meta| meta.contract == input.gas_token) {
+        let native_refund = all_zero(&input.gas_token);
+        let token_meta = erc20.filter(|meta| meta.contract == input.gas_token);
+        if native_refund || token_meta.is_some() {
             let (base_gas, base_overflow) = u64_be_tail(&input.base_gas);
             let Some(gas_units) = base_gas.checked_add(GAS_USED_CEILING) else {
                 return false;
             };
             let (worst, mul_overflow) = U256(input.gas_price).saturating_mul_u64(gas_units);
-            if base_overflow
-                || mul_overflow
-                || !super::primitives::token_amount_is_exactly_renderable(&worst, meta)
-            {
+            if base_overflow || mul_overflow {
                 return false;
+            }
+
+            if native_refund {
+                let mut row1 = [b' '; DISPLAY_COLS];
+                let mut row2 = [b' '; DISPLAY_COLS];
+                if write_native_derived_amount_two_rows(
+                    &mut row1,
+                    &mut row2,
+                    &worst,
+                    input.chain_id,
+                ) != AmountFit::Full
+                {
+                    return false;
+                }
+            } else if let Some(meta) = token_meta {
+                if !super::primitives::token_amount_is_exactly_renderable(&worst, meta) {
+                    return false;
+                }
             }
         }
     }
@@ -345,6 +374,15 @@ fn legacy_values_are_exactly_renderable(
             let Ok(record) = record else {
                 return false;
             };
+            let value = U256(record.value);
+            if !value.is_zero()
+                && !super::primitives::native_amount_is_exactly_renderable(
+                    &value,
+                    input.chain_id,
+                )
+            {
+                return false;
+            }
             let Some(meta) = erc20.filter(|meta| meta.contract == record.to) else {
                 continue;
             };
@@ -924,7 +962,7 @@ fn render_safe_pages_inner(
                 // Otherwise the raw integer in base units. Overflow paints a
                 // loud banner rather than dropping the high-order digits.
                 let fit = if input.gas_token.iter().all(|&b| b == 0) {
-                    write_native_amount_two_rows(r1, r2, &worst, tx.chain_id)
+                    write_native_derived_amount_two_rows(r1, r2, &worst, tx.chain_id)
                 } else if let Some(m) = erc20.filter(|m| m.contract == input.gas_token) {
                     write_token_amount_two_rows(r1, r2, &worst, m)
                 } else {
@@ -1263,6 +1301,12 @@ mod inner_kind_hint_tests {
         }
     }
 
+    fn be_u128(value: u128) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[16..].copy_from_slice(&value.to_be_bytes());
+        out
+    }
+
     #[test]
     fn plain_native_hint_uses_signed_chain_ticker() {
         let mut bsc = [b' '; DISPLAY_COLS];
@@ -1307,6 +1351,172 @@ mod inner_kind_hint_tests {
         assert!(
             render_safe_pages_inner(&lossy, None, None, &resolver).is_err(),
             "distinct signed SafeTx gas values must not collapse to the same !OVF page"
+        );
+    }
+
+    #[test]
+    fn direct_safe_native_value_is_exact_or_refused_before_pages_escape() {
+        let resolver = NameResolver::new();
+        let unknown_data = [0xde, 0xad, 0xbe, 0xef];
+
+        for raw_data in [&[][..], &unknown_data[..]] {
+            let mut exact = render_input([0x44; 20], 0, raw_data);
+            exact.value = be_u128(1_000_000_000_000_000_000);
+            assert!(legacy_values_are_exactly_renderable(&exact, None));
+            let exact_pages =
+                render_safe_pages_inner(&exact, None, None, &resolver).expect("1 ETH is exact");
+
+            let mut adjacent = render_input([0x44; 20], 0, raw_data);
+            adjacent.value = be_u128(1_000_000_000_000_000_001);
+            assert!(!legacy_values_are_exactly_renderable(&adjacent, None));
+            assert!(
+                render_safe_pages_inner(&adjacent, None, None, &resolver).is_err(),
+                "1 ETH + 1 wei must not reuse the 1.000000 ETH page"
+            );
+
+            let mut next_exact = render_input([0x44; 20], 0, raw_data);
+            next_exact.value = be_u128(1_000_001_000_000_000_000);
+            assert!(legacy_values_are_exactly_renderable(&next_exact, None));
+            let next_pages = render_safe_pages_inner(&next_exact, None, None, &resolver)
+                .expect("the next exact six-decimal step remains available");
+            assert_ne!(exact_pages.buf, next_pages.buf);
+        }
+    }
+
+    #[test]
+    fn native_refund_bound_widens_exactly_or_refuses_before_pages_escape() {
+        let resolver = NameResolver::new();
+        let unknown_data = [0xde, 0xad, 0xbe, 0xef];
+
+        let mut exact = render_input([0x44; 20], 0, &unknown_data);
+        exact.gas_price = be_u128(100_000);
+        assert!(legacy_values_are_exactly_renderable(&exact, None));
+        let exact_pages =
+            render_safe_pages_inner(&exact, None, None, &resolver).expect("3e12 wei is exact");
+
+        let mut adjacent = render_input([0x44; 20], 0, &unknown_data);
+        adjacent.gas_price = be_u128(100_001);
+        assert!(legacy_values_are_exactly_renderable(&adjacent, None));
+        let adjacent_pages = render_safe_pages_inner(&adjacent, None, None, &resolver)
+            .expect("the derived bound may widen to remain exact");
+        assert_ne!(exact_pages.buf, adjacent_pages.buf);
+
+        let mut next_exact = render_input([0x44; 20], 0, &unknown_data);
+        next_exact.gas_price = be_u128(200_000);
+        assert!(legacy_values_are_exactly_renderable(&next_exact, None));
+        let next_pages = render_safe_pages_inner(&next_exact, None, None, &resolver)
+            .expect("the next exact native refund bound remains available");
+        assert_ne!(exact_pages.buf, next_pages.buf);
+
+        // Realistic Safe settings: a 1-gwei refund with nonzero baseGas must
+        // not be rejected merely because the derived upper bound needs nine
+        // fractional digits. A one-wei gas-price delta must also remain exact
+        // and visibly distinct (the painter may use its raw-wei fallback).
+        let mut ordinary = render_input([0x44; 20], 0, &unknown_data);
+        ordinary.base_gas = be_u128(43_776);
+        ordinary.gas_price = be_u128(1_000_000_000);
+        assert!(legacy_values_are_exactly_renderable(&ordinary, None));
+        let ordinary_pages = render_safe_pages_inner(&ordinary, None, None, &resolver)
+            .expect("ordinary nonzero-baseGas refund remains available");
+
+        let mut dusty = render_input([0x44; 20], 0, &unknown_data);
+        dusty.base_gas = be_u128(43_776);
+        dusty.gas_price = be_u128(1_000_000_001);
+        assert!(legacy_values_are_exactly_renderable(&dusty, None));
+        let dusty_pages = render_safe_pages_inner(&dusty, None, None, &resolver)
+            .expect("raw-wei fallback keeps an adjacent refund bound exact");
+        assert_ne!(ordinary_pages.buf, dusty_pages.buf);
+
+        let mut raw_fit = render_input([0x44; 20], 0, &unknown_data);
+        raw_fit.chain_id = 4_242_424_242;
+        raw_fit.gas_price = be_u128(100_000_000_000_000_000_000);
+        assert!(legacy_values_are_exactly_renderable(&raw_fit, None));
+        assert!(
+            render_safe_pages_inner(&raw_fit, None, None, &resolver).is_ok(),
+            "a 28-digit unknown-chain raw refund bound must fit"
+        );
+
+        let mut raw_wide = render_input([0x44; 20], 0, &unknown_data);
+        raw_wide.chain_id = 4_242_424_242;
+        raw_wide.gas_price = be_u128(1_000_000_000_000_000_000_000);
+        assert!(!legacy_values_are_exactly_renderable(&raw_wide, None));
+        assert!(
+            render_safe_pages_inner(&raw_wide, None, None, &resolver).is_err(),
+            "a 29-digit unknown-chain raw refund bound must refuse"
+        );
+    }
+
+    #[test]
+    fn multisend_native_values_are_exact_on_inline_and_dedicated_pages() {
+        use crate::tx::eip712::safe::multi_send::test_util::{encode_multisend, pack_record};
+
+        let resolver = NameResolver::new();
+        let multisend = sphincs_tz_shared::MULTISEND_CALL_ONLY_ADDRESSES[0];
+        let exact_value = be_u128(1_000_000_000_000_000_000);
+        let adjacent_value = be_u128(1_000_000_000_000_000_001);
+
+        for record_data in [&[][..], &[0xde, 0xad, 0xbe, 0xef][..]] {
+            let exact_packed = pack_record(0, &[0x44; 20], &exact_value, record_data);
+            let exact_calldata = encode_multisend(&exact_packed);
+            let exact = render_input(multisend, 1, &exact_calldata);
+            assert!(legacy_values_are_exactly_renderable(&exact, None));
+            assert!(
+                render_safe_pages_inner(&exact, None, None, &resolver).is_ok(),
+                "exact record values remain available"
+            );
+
+            let adjacent_packed = pack_record(0, &[0x44; 20], &adjacent_value, record_data);
+            let adjacent_calldata = encode_multisend(&adjacent_packed);
+            let adjacent = render_input(multisend, 1, &adjacent_calldata);
+            assert!(!legacy_values_are_exactly_renderable(&adjacent, None));
+            assert!(
+                render_safe_pages_inner(&adjacent, None, None, &resolver).is_err(),
+                "inline and dedicated record-value painters need the same exactness gate"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_chain_multisend_native_values_use_exact_raw_width() {
+        use crate::tx::eip712::safe::multi_send::test_util::{encode_multisend, pack_record};
+
+        let resolver = NameResolver::new();
+        let multisend = sphincs_tz_shared::MULTISEND_CALL_ONLY_ADDRESSES[0];
+
+        let one_packed = pack_record(0, &[0x44; 20], &be_u128(1), &[]);
+        let one_calldata = encode_multisend(&one_packed);
+        let mut one = render_input(multisend, 1, &one_calldata);
+        one.chain_id = 4_242_424_242;
+        assert!(legacy_values_are_exactly_renderable(&one, None));
+        let one_pages =
+            render_safe_pages_inner(&one, None, None, &resolver).expect("raw one must fit");
+
+        let two_packed = pack_record(0, &[0x44; 20], &be_u128(2), &[]);
+        let two_calldata = encode_multisend(&two_packed);
+        let mut two = render_input(multisend, 1, &two_calldata);
+        two.chain_id = 4_242_424_242;
+        assert!(legacy_values_are_exactly_renderable(&two, None));
+        let two_pages =
+            render_safe_pages_inner(&two, None, None, &resolver).expect("raw two must fit");
+        assert_ne!(one_pages.buf, two_pages.buf);
+
+        let fit_value = be_u128(10u128.pow(28) - 1);
+        let fit_packed = pack_record(0, &[0x44; 20], &fit_value, &[]);
+        let fit_calldata = encode_multisend(&fit_packed);
+        let mut fit = render_input(multisend, 1, &fit_calldata);
+        fit.chain_id = 4_242_424_242;
+        assert!(legacy_values_are_exactly_renderable(&fit, None));
+        assert!(render_safe_pages_inner(&fit, None, None, &resolver).is_ok());
+
+        let wide_value = be_u128(10u128.pow(28));
+        let wide_packed = pack_record(0, &[0x44; 20], &wide_value, &[]);
+        let wide_calldata = encode_multisend(&wide_packed);
+        let mut wide = render_input(multisend, 1, &wide_calldata);
+        wide.chain_id = 4_242_424_242;
+        assert!(!legacy_values_are_exactly_renderable(&wide, None));
+        assert!(
+            render_safe_pages_inner(&wide, None, None, &resolver).is_err(),
+            "a raw value wider than the real two-row painter must refuse"
         );
     }
 
