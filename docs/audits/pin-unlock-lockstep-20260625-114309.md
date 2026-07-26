@@ -7,7 +7,11 @@
 > E0E8/E0E9/E0EF. Current `lockdown_ta_pool` emits no APDU, and
 > `OPTIGA_S2_PRODUCTION_BLOCKED` keeps every production OPTIGA image blocked.
 > Treat the original section below as as-found audit history; current authority
-> is `docs/STATUS.md` §A and `docs/production-todo.md`.
+> is `docs/STATUS.md` §A and the `label:ship-blocker` GitHub issues.
+> (`docs/production-todo.md` was retired 2026-07-19 — archived at
+> `docs/archive/production-todo-retired-2026-07-19.md`. Pointer corrected
+> 2026-07-26; see the CORRECTION block in
+> `docs/provisioning/first-boot-provisioning.md` for the full S-2 inventory.)
 
 ## Scope & threat model
 

@@ -193,9 +193,16 @@ QA, before any secret exists on the MCU:
   transport lock if applicable.
 - **F5 OPTIGA** — write the **transport PBS** to E140 with metadata keeping
   the `Conf(E140)` arm so the PBS stays shield-rotatable (this is what
-  makes R3.4 possible); F1D0 `Change=Auto(F1D0)` (S-1); PQ1-HSM
-  trust-anchor cert at 0xE0E3 + neutralize the TA pool 0xE0E4..0xE0E8
-  (S-2); provision the E120 LUC, bind F1D0 `Execute=LUC`, freeze the F1E1
+  makes R3.4 possible); F1D0 `Change=Auto(F1D0)` (S-1); close the candidate
+  type-`0x11` Protected-Update anchor pool `{0xE0E8, 0xE0E9, 0xE0EF}`
+  (SKU/revision inventory still to be pinned on silicon) and
+  preserve/ratchet the device-certificate surfaces
+  `{0xE0E0, 0xE0E1, 0xE0E2, 0xE0E3}` **without retyping them** (S-2 — *no
+  ceremony is authorized*; this line previously named `0xE0E3` and
+  `0xE0E4..0xE0E8`, which is wrong and not a harmless no-op — see the
+  CORRECTION 2026-07-26 block in
+  [`first-boot-provisioning.md`](first-boot-provisioning.md#authoritative-factory--first-boot-responsibility-split));
+  provision the E120 LUC, bind F1D0 `Execute=LUC`, freeze the F1E1
   soft counter (S-3); **LcsO=Op ratchet** on the locked OIDs — the
   SE-internal point of no return stays on the factory line, never
   on-device.

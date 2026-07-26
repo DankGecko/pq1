@@ -22,7 +22,10 @@
 > reproducible image; set the option-byte profile (TZEN/SECWM/SECBOOTADD0/WRP1A/
 > BOR/BOOT_LOCK/OEM — **everything EXCEPT RDP**, which stays 0); burn the OTP
 > master; provision the SE-internal structure + irreversible locks
-> (LcsO=Op ratchet, S-1/S-2/S-3, admin UserID, E120 LUC, trust-anchor cert,
+> (LcsO=Op ratchet, S-1/S-2/S-3, admin UserID, E120 LUC, the real type-`0x11`
+> anchor pool `{0xE0E8, 0xE0E9, 0xE0EF}` — **S-2, policy still unapproved, and
+> NOT `0xE0E3`/`0xE0E4..0xE0E8`; see the CORRECTION 2026-07-26 block in
+> [`first-boot-provisioning.md`](first-boot-provisioning.md)** —
 > #22 manifest) onto per-device **transport** keysets (SCP03 under
 > `PLATFORM_DEK`; transport PBS at E140 kept `Conf(E140)`-rotatable); read-back
 > QA; box + ship at RDP-0. The device (not the factory) programs RDP=0xCC and

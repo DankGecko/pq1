@@ -931,11 +931,33 @@ pub const SIG_TYPE2_HEADER_LEN: usize = 32 + 32 + 32;
 /// Per-chain bootstrap-key (Type 1) sig cap, mirroring the on-chain
 /// `PQSmartWallet.MAX_BOOTSTRAP_USES`. Bounds slot-registration
 /// frequency. Combined with `MAX_SLOT_USES`, each chain can service up
-/// to ~2³² user transactions before becoming permanently frozen — well
-/// inside the SPHINCS+C10 birthday-style safety margin for `h=18`.
+/// to ~2³² user transactions before becoming permanently frozen.
 ///
-/// Sourced from this crate by both the firmware (pre-emptive refusal in
-/// `cmd_sign_userop`) and the Solidity wallet (post-bump enforcement in
+/// **CORRECTED 2026-07-26 (two claims here were false — external review,
+/// verified at source):**
+///
+/// 1. **It is NOT enforced by the firmware.** This doc previously said the
+///    constant was "Sourced from this crate by ... the firmware (pre-emptive
+///    refusal in `cmd_sign_userop`)". There is no such refusal: every
+///    occurrence of `MAX_BOOTSTRAP_USES` under `secure/` is a COMMENT, and
+///    `cmd_sign_userop` maintains no bootstrap counter. Enforcement is
+///    **on-chain only** (post-bump, `PQSmartWallet.validateUserOp` /
+///    `PQMultiOwnable._bumpBootstrapUses`).
+/// 2. **"Well inside the birthday margin" was a PER-CHAIN statement applied to
+///    a PER-KEY question.** Slot keys are chain-bound, so 65,536 is a true
+///    per-key cap. The **bootstrap key is chain-INDEPENDENT** (invariant #6,
+///    for cross-chain address stability), so across `C` chains its per-key
+///    budget is `C · 65,536` and its generic multi-target floor degrades as
+///    `96 − 2·log₂ C` bits (94 at C=2, 88 at C=16). See the P14 caveat in
+///    `contracts/verification/lean/.../Quantitative.lean`.
+///
+/// Note also that this cap bounds ACCEPTED ON-CHAIN SUBMISSIONS, not signatures
+/// PRODUCED: the factory deploy signature, `CMD_GET_INIT_CODE`, and ERC-6492
+/// counterfactual signatures all release bootstrap-key signatures that this
+/// counter never sees. It was never a lifetime per-key signature bound.
+/// Realistic bootstrap usage is tens of signatures (slot rotations only).
+///
+/// Sourced from this crate by the Solidity wallet (post-bump enforcement in
 /// `validateUserOp`). Phase 4 codegens this into `PqsignerProto.sol`.
 pub const MAX_BOOTSTRAP_USES: u64 = 65_536;
 

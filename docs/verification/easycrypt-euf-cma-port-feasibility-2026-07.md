@@ -4214,3 +4214,44 @@ requirement recorded (T-COLL-RES must be discharged in a game hop BEFORE any cas
 HONEST SCOPE: this is the ENCODING LAYER ONLY. The entire computational leg is absent — T-COLL-RES advantage at C10
 unproven, Lemma 8 not ported, Lemma 7's error/delta half not ported (that is where eps-uniformity and the grind
 budget enter). It is NOT a claim that C10 is secure, and NOT the WOTS swap.
+
+### 2026-07-26b — ⚠ CORRECTION OF MY OWN FINDING: the cross-chain bootstrap caveat was ALREADY DOCUMENTED (P14). What IS new is smaller.
+
+**RETRACTION.** In 2026-07-26 (ii) I recorded the chain-independent-bootstrap-key / per-chain-cap mismatch as a
+"NEW FINDING ... NOT covered by the existing accepted residual", and separately told the owner that "no cross-chain
+caveat exists" in the Lean layer. **BOTH STATEMENTS WERE WRONG.** It is documented, explicitly and by name, at
+`contracts/verification/lean/SphincsCVerify/Crypto/Quantitative.lean:172-184` as **"P14 (cross-chain caveat)"**:
+    "`MaxBootstrapUses` is enforced PER CHAIN, but the bootstrap key is chain-INDEPENDENT (invariant #6 requires it
+     for cross-chain address stability ...). So a single bootstrap key's true EUF-CMA query budget across `C` chains
+     is `C · MaxBootstrapUses`, not `MaxBootstrapUses`."
+with a dedicated theorem `advantage_floor_within_bootstrap_cap_crosschain` (:189-205) bounding the cross-chain case.
+**CAUSE OF MY ERROR (recorded so it is not repeated): I grepped `Quantitative.lean` with `| head -12`, which
+truncated the output before line 172, and then asserted a negative ("no cross-chain caveat") from my own truncated
+output.** A negative claim from a truncated search is not evidence of absence. Caught by Kimi K3 on adversarial
+review; I then verified the source myself. The project knew about this; my report implied it did not.
+
+**WHAT IS ACTUALLY NEW (verified by me, arithmetic reproduced) — a mislabeled modality in that very theorem's
+docstring.** The theorem proves the **LINEAR** query term `q · 2^96 ≤ 2^128`, but its prose called that "the
+(weaker, generic-multi-target) floor" and concluded cross-chain aggregation "never becomes the binding floor in
+practice". The generic multi-target term is `(q + q²)·2⁻¹²⁸`, which is the modality THIS FILE ITSELF shows is
+BINDING at the cap (`min(143,112,96) = 96`, :255-258). At `q = C·2^16` it is `96 − 2·log₂ C` bits:
+    C=1: linear 112 / generic 96      C=2: 111 / **94**      C=4: 110 / 92      C=16: 108 / 88      C=2^16: 96 / **64**
+So cross-chain aggregation DOES move the binding floor (94 b at two chains), and the ">= 96 bits" claim holds only
+for the NON-binding linear term. The theorem is TRUE as stated; only the prose was wrong. **FIXED** in-file with the
+table above and an explicit correction note; the theorem is untouched.
+
+**SEVERITY, RECALIBRATED HONESTLY (I was overweighting it):**
+ - The project's own adopted floor is **96 bits**, not 128 (`WORK_FLOOR_BITS = 96` in forsc_grinding_margin.py;
+   binding Lean floor 96). Against 128 the work-factor model crosses at ~1.5 chains; **against the repo's own 96-bit
+   floor it crosses at ~43 chains at full cap.** My "crosses the Cat-1 floor at 1.5 chains" framing used a target
+   stricter than anything this project claims.
+ - Counted bootstrap signatures are **user-confirmed and gas-paid** (Type-1 goes through a trusted-display
+   `confirm_checked` gate; each counted sig is an on-chain `validateUserOp`). Reaching q=2^17 means ~131k button
+   presses plus ~131k on-chain transactions. That path is strictly HARDER than the already-accepted uncounted
+   `GET_INIT_CODE` oracle (~80 sigs/unlock, no confirm), whose harvest is "measured in centuries".
+ - **Therefore: this is a DOCUMENTATION fix, not a security fix.** The one worthwhile hardening is device-side
+   global counting (below), which the project had already written down as fix (B) of the accepted residual.
+
+**ACTIONS TAKEN (the mandatory part, done):** corrected `CLAUDE.md:10` and `README.md:66` to state the margin
+per-KEY (slot keys chain-bound => true per-key cap; bootstrap key chain-independent => `C x 65,536`, floor
+`96 − 2·log₂ C`), and fixed the mislabeled modality in `Quantitative.lean`.
