@@ -1,5 +1,5 @@
 # PQSigner OS A/B Rollback Architecture Specification
-Status: **DRAFT 1.1 REVIEW CANDIDATE — DRAFT-1.0 OPUS RED-LINES INCORPORATED; PHYSICAL JOURNAL DURABILITY, OTP CODEC, ECC, AND SILICON GATES OPEN; NO PRODUCTION IMPLEMENTATION OR HARDWARE AUTHORITY**<br>
+Status: **DRAFT 1.1 REVIEW CANDIDATE — DRAFT-1.0 OPUS RED-LINES INCORPORATED; PHYSICAL JOURNAL DURABILITY, OTP CODEC, ECC, AND SILICON GATES OPEN; NO PRODUCTION IMPLEMENTATION OR HARDWARE AUTHORITY — ERRATA 2026-07-26 APPLIED (RecoverySameEpoch + FloorBoundAccepted struck)**<br>
 Draft: 1.1 review candidate<br>
 Date: 2026-07-14<br>
 Target silicon: STM32U585AI, including the B-U585I-IOT02A development kit<br>
@@ -29,6 +29,47 @@ descriptive, example-only, or non-normative, declarative requirements in every
 `FROZEN-*`/`OPEN-*` decision, transition table, acceptance gate, test/formal
 obligation, and security invariant are binding even when written in lowercase
 for readability.
+
+---
+
+## ERRATA 2026-07-26 (owner decision)
+
+Owner decision, 2026-07-26, ratified: the two availability features
+`RecoverySameEpoch` and `FloorBoundAccepted` are DECLINED. The 2026-07-14
+bounded-deletion receipt
+(`docs/security/fw-rollback-draft11-deletion-gate-2026-07.md`) showed both are
+availability benefits, not safety requirements; the owner chose service/RMA
+instead. A GPT-5.6 SOL review (2026-07-26, NO-GO) found that declining them in
+a side note leaves stale mandatory constructors in the text; this errata
+removes them from the normative text itself and answers that review's findings
+A14/A16/A18/A28/A35.
+
+Struck features and replacement semantics:
+
+- `RecoverySameEpoch` is struck. It was "the sole permitted epoch decrease"
+  and the only new-release path from the `Aborted` state. `Aborted` now has NO
+  new-release path: the device boots only the previously accepted robust
+  exact-`F` artifact via the existing exact-`F` selector
+  (`boot_accepted_from_aborted`), or halts to service/RMA. Epoch never
+  decreases, no exceptions. `RecoverySameEpoch` is removed from every
+  enumeration of permitted paths/classes.
+- `FloorBoundAccepted` is struck. It was the degraded-acceptance path when
+  terminal CONFIRMED replicas are lost. Loss of terminal-set quorum now means
+  service/RMA, with no degraded acceptance. The `FullTerminalSet` (two clean
+  replicas) rule stays; the `SurvivingTerminalSet=1` -> `DegradedAcceptedBoot`
+  and floor-bound recovery paths are removed.
+- `PeerRepair` is NOT declined; every `PeerRepair` reference remains intact.
+
+Blanket note: every remaining mention of `RecoverySameEpoch`/
+`FloorBoundAccepted` outside §18/§19 is struck by this errata; §18 (review
+questions) and §19 (approval record) are historical and are not edited.
+Likewise, floor-bound evidence/authority and `DegradedAcceptedBoot`
+boot/admission authority are struck wherever they appear outside §18/§19;
+`SurvivingTerminalSet` survives only as a repair-target classification, and
+floor-bound accepted-manifest binding only as an evidentiary record.
+
+Amendment (round-2 review): burn-window §11 rows + `FirstBootLockWriter`
+owner added; answers findings B3 and A38-new.
 
 ---
 
@@ -69,11 +110,11 @@ epoch capacity, and this residual
 separately.
 
 An exact `Aborted` floor does not permanently freeze ordinary firmware repair.
-It may admit a new, explicitly classified `RecoverySameEpoch` release through
-the complete probation/health protocol when `E = F + 1` and therefore `T = F`.
-It may also restore an independently signed A/B peer through the same complete
-probation protocol. Both paths leave the floor and dead-plan quarantine
-unchanged and perform zero rollback-stage or OTP writes. `Aborted` is terminal
+It may restore an independently signed A/B peer through the complete
+probation protocol. That path leaves the floor and dead-plan quarantine
+unchanged and performs zero rollback-stage or OTP writes. `Aborted` admits no
+new-release path: the device boots only the previously accepted robust
+exact-`F` artifact or halts to service. `Aborted` is terminal
 only for another autonomous epoch-floor advance; regaining that ability
 requires service or a separately reviewed future architecture.
 
@@ -89,10 +130,8 @@ sentinels:
   normal, ledger-consistent states it orders epoch-admissible releases. The
   anomalous two-`CONFIRMED` recovery order is instead the explicit
   `(E, R, slot-A-first)` order in Section 7.2.
-- `E = security_epoch`: normally a nondecreasing rollback-equivalence class.
-  The sole exception is an externally approved `RecoverySameEpoch` release for
-  an exact `Aborted(F)`, which carries `E = F + 1` without lowering the
-  protected signing ledger's separate `epoch_high_water`. Every
+- `E = security_epoch`: a nondecreasing rollback-equivalence class; the epoch
+  never decreases, with no exceptions. Every
   vendor-signed release in the current epoch remains epoch-floor-admissible
   until a later epoch is committed; signature, hashes, journal, and bounds must
   still pass independently.
@@ -127,15 +166,9 @@ protection.
 
 The protected release ledger maintains
 `epoch_high_water = max(E of every reserved release record)`, including
-abandoned ceremonies and recovery records. Ordinary and epoch-bumping releases
-MUST use `E_new >= epoch_high_water`. `RecoverySameEpoch` is the sole permitted
-entry-by-entry epoch decrease: it requires a globally fresh `R`, exact
-`E_new = F_recovery + 1`, explicit owner/security emergency approval, and a
-binding to the dead-stage incident and targeted floor. It never lowers
-`epoch_high_water`; every later ordinary release catches back up to it. A
-recovery release does not revoke older artifacts in epoch `F + 1` and MUST NOT
-be described as closing a security issue that requires irreversible
-revocation.
+abandoned ceremonies. Ordinary and epoch-bumping releases
+MUST use `E_new >= epoch_high_water`. No release class permits an
+entry-by-entry epoch decrease; `epoch_high_water` never lowers.
 
 "Same epoch" is always device-relative. A release that repeats the preceding
 ledger entry's `E` can still require a commitment on a lagging device whose
@@ -144,12 +177,11 @@ promise a global no-write path; the device derives it only from signed `E` and
 its independently validated local `F`.
 
 Floor admissibility is not a user-facing version picker. After filtering every
-artifact through `E > F`, the selector always prefers a `RobustAccepted`
-artifact over a `DegradedAcceptedBoot`; only within the best available evidence
-quality does it apply the frozen tuple order. This permits an older robust
+artifact through `E > F`, the selector accepts only `RobustAccepted` authority
+and applies the frozen tuple order. This permits an older robust
 fallback to repair a higher-`R` degraded artifact instead of stranding the only
-writer-capable peer. If only degraded authority remains, FSBL permits a
-boot-only/service-required handoff with no updater, probation, floor, fallback,
+writer-capable peer. If no robust authority remains, FSBL halts to
+service with no updater, probation, floor, fallback,
 or repair capability. This design provides no
 user demotion, reinstall-to-downgrade, boot chord, or lower-`R` selection while
 a newer valid release remains preferred.
@@ -180,12 +212,12 @@ The following decisions are settled for this design:
   at-most-once claim is made for an unsanitized marginal backup-power state.
 - `CONFIRMED` is final acceptance of the release. It is not an early "booted
   once" marker. It authorizes retirement of older epochs only when `E`
-  increases. Two independently programmed terminal replicas convert any one
-  localized terminal-QW loss into degraded accepted authority. After terminal-
+  increases. Accepted authority requires two independently programmed terminal
+  replicas; loss of terminal-set quorum removes that artifact's boot authority.
+  After terminal-
   set validation, lifetime confirmation authority
-  no longer depends on re-reading `QW_PENDING`; the validated terminal set and,
-  after epoch establishment, the floor-bound accepted-manifest binding are the
-  authoritative recovery sources defined below.
+  no longer depends on re-reading `QW_PENDING`; the validated terminal set is
+  the authoritative recovery source defined below.
 - For field updates, `CONFIRMED` MUST be written only after the full Milestone-2
   health boundary and an explicit trusted-display finalization gesture. The
   sole exception is the offline pre-lifecycle factory genesis in Section 7.4.
@@ -222,8 +254,8 @@ The following decisions are settled for this design:
   therefore remains a typed terminal condition so the exact-`F` fallback and
   no-floor-write repair remain available instead of halting or forgetting the
   quarantine. No `T > F` field entry is constructible from `Aborted`.
-- `RecoverySameEpoch` and `PeerRepair` are protected release/update classes,
-  not new manifest lifecycle states or unsigned manifest flags. Both use a
+- `PeerRepair` is a protected release/update class,
+  not a new manifest lifecycle state or unsigned manifest flag. It uses a
   fresh installation identity and the complete
   `PENDING -> ATTEMPTED -> health -> CONFIRMED` lifecycle. A peer is never
   directly confirmed and never borrows its source's confirmation authority.
@@ -247,11 +279,10 @@ The following decisions are settled for this design:
 - Every ordinarily selected robust `CONFIRMED(R,E)` slot, including factory genesis
   and a lone confirmed slot, MUST idempotently establish `F == E - 1` before
   handoff. A degraded accepted artifact never establishes a floor. Post-abort
-  exact-`F` fallback and `RecoverySameEpoch` handoff leave the floor unchanged;
+  exact-`F` fallback leaves the floor unchanged;
   the failed candidate is never handed off.
 - `R` is strictly increasing across logical release-sets within its namespace.
-  `E` is nondecreasing as `R` increases except for the sole protected-ledger
-  `RecoverySameEpoch` classification above; the independent
+  `E` is nondecreasing as `R` increases; the independent
   `epoch_high_water` never decreases. Slot-A and slot-B artifacts for one release
   share the same `(R,E)` and logical source/policy identity. Any slot-specific
   linked bytes and hashes are explicitly paired by the release-set record.
@@ -520,26 +551,24 @@ never raw byte comparison. `OPEN-JRN-DUR-1` must define how a boot after a
 possible marker launch distinguishes a completed durable write from an
 interrupted exact-looking outcome. Draft 1.1 freezes the software authority
 rule: `FullTerminalSet` needs two independently launched and attributed clean
-replicas; `SurvivingTerminalSet` needs one and grants only
-`DegradedAcceptedBoot`; after a successful epoch commitment the authenticated
-floor group may reconstruct `FloorBoundAccepted` for that exact artifact.
+replicas; `SurvivingTerminalSet` needs one and is repair-target evidence only,
+never boot or floor authority.
 EOP observed only before reset is not durable evidence.
 
-A single lost terminal or install-identity QW therefore does not immediately
-brick an otherwise accepted same-floor artifact. The surviving clean evidence
-may reconstruct the exact installation identity and degraded terminal
+A single lost terminal or install-identity QW therefore does not brick the
+device while an independently robust peer remains, but it removes that
+artifact's own boot authority. The surviving clean evidence
+may reconstruct the exact installation identity as repair-target
 authority under Section 6.2. It never creates floor-establishment, updater,
-probation, fallback, or repair-writer authority. A robust peer or exact
-floor-bound binding can restore a robust path; if only degraded authority
-remains, FSBL boots it in service-required mode. Loss of all applicable
-terminal, peer, and accepted-binding authority halts.
+probation, fallback, boot, or repair-writer authority. Only a robust peer
+preserves a bootable path; if no robust accepted authority
+remains, FSBL halts to service.
 
 A committed floor group for an epoch bump MUST bind the full accepted manifest
 identity: physical slot, `R`, `E`, `T`, freshly recomputed signed-manifest
 digest, both signed image hashes, exact `install_id`, group identity, and
-codec/domain. After `Steady(T)`, that binding is an alternate robust admission
-source only for the exact same independently signature-verified manifest and
-image bytes when its terminal set later becomes unavailable. It cannot
+codec/domain. That binding is evidentiary only; it grants no admission
+authority when the artifact's terminal set later becomes unavailable. It cannot
 authorize a different artifact, lower `F`, revive a retired epoch, replace
 initial confirmation, or bypass image/vector/handoff revalidation. The
 physical representation and recovery copies remain
@@ -563,8 +592,7 @@ status attributable only to an old PENDING write does not demote an
 independently robust terminal set; ambiguous attribution fails closed.
 
 Initial floor establishment, ordinary probation fallback, factory genesis, and
-every repair/update writer require `RobustAccepted`. Floor-bound recovery
-exists only after the accepted binding is authoritative. Factory genesis
+every repair/update writer require `RobustAccepted`. Factory genesis
 requires both terminal replicas in both slots. While the floor decoder remains
 `Recovering` and before `Steady(T)`, loss of robust candidate authority does
 not expose the prior floor. `CheckedRecoveryIntent` instead yields
@@ -591,8 +619,8 @@ operation attributed to a manifest page/QW makes that exact location
 authorize floor establishment, or be reprogrammed. The mandated page-erase/new-
 generation corrective action is permitted only when the slot is independently
 safe to treat as inactive and the confirmed fallback remains valid. Otherwise
-FSBL globally inhibits further flash mutation and halts or follows the later
-approved floor-bound journal recovery. Status is not cleared or overwritten
+FSBL globally inhibits further flash mutation and halts.
+Status is not cleared or overwritten
 before this decision.
 
 One immutable flash-evidence owner controls all common `FLASH_OPSR` and
@@ -700,7 +728,9 @@ ICACHE invalidation alone nor repeated volatile loads is a freshness proof.
 Every operation that can make bank 1 or the FLASH/OTP controller busy uses one
 private SRAM execution capsule: inactive secure-image page erase/program,
 manifest erase/program, Route-1 journal erase/program/compaction, install-ID,
-PENDING, both CONFIRMED replicas, and OTP programming. Masking interrupts while
+PENDING, both CONFIRMED replicas, OTP programming, and the confirm-gated
+first-boot RDP option-byte program with `OBL_LAUNCH` (Section 6.3
+`FirstBootLockWriter`). Masking interrupts while
 executing ordinary bank-1 `.text` is nonconforming.
 
 ```rust
@@ -915,8 +945,6 @@ arm_probation_from_steady(CheckedSteadyProbationIntent)
 start_from_steady(CheckedSteadyIntent)
 resume_from_recovery(CheckedRecoveryIntent)
 boot_accepted_from_aborted(CheckedAbortedAcceptedIntent)
-boot_degraded_service(CheckedDegradedBootIntent)
-arm_recovery_same_epoch(CheckedRecoverySameEpochIntent)
 arm_peer_repair(CheckedPeerRepairIntent)
 arm_degraded_artifact_repair(CheckedDegradedRepairIntent)
 ```
@@ -927,12 +955,6 @@ artifact evidence required for that action. Constructors consume every input,
 join all floor evidence to one boot/snapshot, and separately require byte-equal
 `ArtifactEvidenceKey` only between each physical artifact and its own
 lifecycle evidence. Distinct artifacts retain distinct keys.
-
-`CheckedDegradedBootIntent` owns exactly one surviving exact-`F` terminal-set
-proof plus either fresh `Steady(F)` or exact `Aborted(F)`. It can construct
-only a service-required handoff context with every updater, probation, floor,
-fallback, repair, and wallet-authority capability absent. It emits no
-`AbortedUpdateContext` and performs no persistent mutation.
 
 `CheckedSteadyProbationIntent` owns `SteadyProof`, an independently verified
 `RobustAccepted` exact-`F` fallback, and the qualified
@@ -947,7 +969,7 @@ rollback writer.
 `CheckedRecoveryIntent` owns fresh `RecoveryProof` and a freshly verified
 proof-bound `RobustAccepted` candidate. It requires matching candidate,
 target, floor/stage/journal snapshot, boot epoch, and artifact key.
-`FloorBoundAccepted` is ineligible until fresh `Steady(T)`. Missing robust
+Missing robust
 terminal authority returns nonwritable
 `RecoveryBlocked(MissingRobustTerminalAuthority)`, consumes every input, and
 exposes no prior floor, fallback, handoff, or writer authority.
@@ -986,27 +1008,15 @@ fresh `DeadStageProof` plus the best independently reverified
 `RobustAccepted` artifact with exact `T == F`, performs no persistent
 mutation, then repeats the complete decode and artifact verification
 immediately before handoff. This may be the original fallback or a later
-fully probated RecoverySameEpoch/peer-repair artifact; `Aborted` persists. It
+fully probated peer-repair artifact; `Aborted` persists. It
 may emit only stable comparison data in a non-authorizing
 `AbortedUpdateContext`; no floor proof or writer capability crosses handoff.
 
-`RecoverySameEpoch` is the only new-release path from `Aborted`. Its protected
-off-device release-ledger record binds the dead-stage incident and exact recovery floor,
-uses a globally fresh `R` above every release high-water, carries exact
-`E = F + 1` and `T = F`, and never lowers `epoch_high_water`. The runtime
-validator consumes `AbortedUpdateContext`, freshly reconstructs the same
-`Aborted` state and robust exact-`F` source, validates on device only the
-signed tuple, effective dead+live release high-water, exact `E=F+1/T=F`,
-package/slot/artifact binding, failed-release exclusion, and complete
-inactive-range restage plan, then creates a
-staging-only linear receipt. After full restage, a second fresh validator may
-create one activation receipt for install identity, TAMP, and PENDING only.
-The candidate then executes the complete
-`PENDING -> ATTEMPTED -> Milestone 1 -> Milestone 2 -> both CONFIRMED replicas`
-protocol. It performs zero rollback-journal, floor-stage, compaction, or OTP
-writes. Crash, rejection, or reset returns to the same `Aborted` fallback;
-re-arm requires a fresh PIN-gated install. It cannot close a security issue
-whose policy requires revoking another same-epoch signed artifact.
+`Aborted` has no new-release path. The device boots only the previously
+accepted robust exact-`F` artifact through `boot_accepted_from_aborted`, or
+halts to service. No on-device or off-device classification can admit a new
+release from `Aborted`, and no path from `Aborted` performs rollback-journal,
+floor-stage, compaction, or OTP writes.
 
 `PeerRepair` restores A/B redundancy without pretending an unexecuted twin is
 healthy. It requires a `RobustAccepted` source, the opposite-slot artifact from
@@ -1027,7 +1037,7 @@ eligible for only the ordinary one-plan establishment after it is robust; the
 repair itself grants no floor authority.
 The degraded artifact counts in release and epoch high-water calculations.
 There is no in-place replica patch. If only degraded accepted authority remains,
-FSBL provides boot-only/service-required handoff and exposes no updater,
+FSBL halts to service and exposes no updater,
 probation, floor, fallback, or repair capability.
 
 The durable establishment flow is:
@@ -1381,7 +1391,7 @@ On each boot the decoder returns exactly one result from
 `FROZEN-OTP-API-3`: `Steady`, fully validated completable `Recovering`,
 fully validated terminal `Aborted`, or `Unknown`. Recovery must reach fresh
 `Steady(T)` before ordinary candidate admission. `Aborted` permits the robust
-exact-`F` fallback plus the zero-floor-write `RecoverySameEpoch`/repair paths
+exact-`F` fallback plus the zero-floor-write repair paths
 and never enters ordinary epoch-bump admission. No slot boots from
 `Recovering` or `Unknown`.
 
@@ -1554,10 +1564,10 @@ The mechanism must safely handle:
   resumes them, and every retry fully erases/restages the affected slot ranges;
 - retention/aging degradation of previously accepted manifest-marker or OTP
   cells, including later `ECCC`, `ECCD`, or unreadable observations. A degraded
-  terminal set may remain `DegradedAcceptedBoot` from one permitted surviving
-  replica or regain `RobustAccepted` only through exact floor-bound accepted-
-  manifest authority; a degraded floor group is usable only at its approved
-  redundant clean threshold. Otherwise loss of all terminal and floor-bound
+  terminal set leaves the artifact as a repair-target classification only; it
+  grants no boot, admission, or floor authority;
+  a degraded floor group is usable only at its approved
+  redundant clean threshold. Otherwise loss of all terminal
   authority makes only that slot ineligible (an independently eligible slot
   may still boot), while
   loss of authoritative floor state yields `Unknown` and halt. Neither case
@@ -2104,8 +2114,8 @@ Any later read, mutation, or verification attempt requires a new pass ID and
 new aggregate receipt set; proofs from the two passes cannot join. Such a
 recheck compares the stable `ArtifactIdentity` fields and then constructs a
 new current-pass key—it never claims equality with the old ephemeral key.
-`VerifiedArtifact`, PENDING/ATTEMPTED evidence, `TerminalSet`, and a freshly
-reconstituted `FloorBoundAccepted` for one artifact in one pass each carry the
+`VerifiedArtifact`, PENDING/ATTEMPTED evidence, and `TerminalSet`
+for one artifact in one pass each carry the
 exact same key. A wrapper containing a candidate and fallback carries two
 distinct artifact keys, one per physical artifact. Proof
 constructors are private, boot-scoped, neither `Copy` nor `Clone`, and cannot
@@ -2117,12 +2127,10 @@ Accepted authority is typed:
 ```rust
 enum AcceptedArtifact {
     RobustAccepted(RobustConfirmedEvidence),
-    DegradedAcceptedBoot(SurvivingTerminalSet),
 }
 
 enum RobustConfirmedEvidence {
     RobustTerminalSet(FullTerminalSet),
-    FloorBoundAccepted(AcceptedManifestProof),
 }
 ```
 
@@ -2133,15 +2141,7 @@ the other has zero authority and MUST NOT be a conflicting exact codeword. A
 writer-order state and rejects the artifact; a later unavailable or rejected
 replica is different from proven-never-launched virgin state. Each terminal
 proof comes only from terminal-first fresh probes and carries the exact
-`ArtifactEvidenceKey`. `FloorBoundAccepted` may be derived only from the
-authoritative accepted-manifest binding in either `Steady(F)` or the exact
-authoritative predecessor group carried by `Aborted(DeadStageProof)`, and only
-when that group binds the exact slot, `(R,E,T)`, `install_id`, signed-manifest
-digest, and image hashes with `T == F`. It freshly reverifies the current artifact/page and
-constructs the current matching join key; a stale key is never reused. It is
-not available before initial floor completion, for `BASE0` without a selected
-accepted-binding scheme, for a different same-floor manifest, for the aborted
-candidate or any later epoch candidate, or to begin another floor commitment.
+`ArtifactEvidenceKey`.
 
 The decoder accepts exactly:
 
@@ -2151,9 +2151,8 @@ The decoder accepts exactly:
 | `PENDING(R,E)` | both `BlankVirgin` | PENDING exact; token exact `ARM_READY` | `E > F` |
 | `ATTEMPTED(R,E)` | both `BlankVirgin` | PENDING exact; token exact `ATTEMPTED` | `E > F` |
 | robust `CONFIRMED(R,E)` | exact `FullTerminalSet` | not read; non-authoritative | `F <= T` |
-| degraded `CONFIRMED(R,E)` | exact `SurvivingTerminalSet` | not read; non-authoritative | `F == T`; boot/service only |
+| degraded `CONFIRMED(R,E)` | exact `SurvivingTerminalSet` | not read; non-authoritative | `F == T`; repair target only, never boot/floor |
 | degraded epoch candidate | exact `SurvivingTerminalSet` | not read; non-authoritative | `F < T`; repair target only, never boot/floor |
-| floor-bound recovery of accepted `CONFIRMED(R,E)` | terminal set unavailable plus exact `FloorBoundAccepted` | not read; non-authoritative | `F == T` |
 
 Every artifact-bearing row requires state-appropriate nontrivial
 `InstallGenerationEvidence` for the same reconstructed identity used by its
@@ -2168,13 +2167,13 @@ The terminal-first decoder fresh-probes both terminal QWs before considering
 PENDING/TAMP. For probation it reads PENDING/TAMP only after both terminal QWs
 are proven `BlankVirgin`. A torn, corrected, may-have-launched, conflicting,
 or impossible-order terminal observation never falls through to PENDING. A
-surviving terminal replica is accepted only as `DegradedAcceptedBoot`, unless
-the exact floor-bound authority independently reconstructs
-`RobustAccepted`; absent/conflicting binding never exposes an older floor.
+surviving terminal replica is accepted only as degraded repair-target
+evidence; it never constructs boot or floor authority and never exposes an
+older floor.
 
 Every other combination—including a missing/malformed/binding-mismatched token
-on the probation branch, out-of-order marker, out-of-range `R/E`, `F > T`, or
-different manifest under floor-bound evidence—is `MALFORMED` and ineligible.
+on the probation branch, out-of-order marker, out-of-range `R/E`, or
+`F > T`—is `MALFORMED` and ineligible.
 Before terminal authority, token loss is a safe false negative. After terminal
 authority, the token and historical PENDING marker confer no authority. Raw
 exact bytes never construct these types; TAMP retention is not a security
@@ -2240,6 +2239,17 @@ one of these owners:
   123/124/125/126 allowlists and cannot construct any rollback mutation.
 - `FactoryGenesisWriter` is an offline, build-gated exception limited to the
   exact Section-7.4 ceremony; it is absent from field images.
+- `FirstBootLockWriter` owns exactly one operation: the confirm-gated
+  `RDP = 0xCC` option-byte program plus `OBL_LAUNCH` of the first-boot lock
+  ceremony (`docs/provisioning/first-boot-requirements.md` R2.1--R2.6). It
+  performs no flash/OTP/journal write and programs no option byte other than
+  RDP, runs only pre-Phase-B, and is fenced to production builds at compile
+  time against debug-log, e2e-test, and mock-SE profiles. It is reachable only
+  after the R2.1--R2.4 verify + physical-confirm chain; classification after
+  any interruption is by option-byte read-back only, never by remembered
+  intent; failure parks the device. With this entry the lock ceremony needs no
+  bypass of the frozen mutation boundary; every other option-byte writer
+  remains bench/factory-host-only tooling, never device firmware.
 
 Each map is generated from the one geometry registry and checked twice with
 address/complement and range/owner equality immediately before entering SRAM.
@@ -2270,7 +2280,7 @@ attempting to overwrite locked `BKP0..7`.
 Field COMMIT ordering is:
 
 An ordinary update reaches this ordering only through its authenticated staging
-session. `RecoverySameEpoch`, `PeerRepair`, and
+session. `PeerRepair` and
 `DegradedArtifactRepair` each use their separately typed staging-only receipt
 from Section 3. After complete inactive-range restage, a private validator
 consumes the completed session, freshly reconstructs the required floor/source/
@@ -2314,7 +2324,7 @@ and cannot join old lifecycle or accepted-manifest evidence.
 FSBL arming ordering is:
 
 1. construct and consume exactly one of `CheckedSteadyProbationIntent`,
-   `CheckedRecoverySameEpochIntent`, `CheckedPeerRepairIntent`, or
+   `CheckedPeerRepairIntent`, or
    `CheckedDegradedRepairIntent`, requiring exact PENDING plus bound
    `ARM_READY`, `CLEAN10`, and the independently verified `RobustAccepted`
    exact-`F` fallback/source. Ordinary same-epoch and every repair path carry
@@ -2418,10 +2428,8 @@ stale, or inconsistent. It MUST enforce:
 - `R` is strictly increasing over reservations within the namespace, not
   merely published releases; an abandoned signed/reserved number is never
   reused;
-- `E` is nondecreasing as `R` increases except the owner/security-approved
-  off-device `RecoverySameEpoch` record described in Section 1.1; the separate
-  `epoch_high_water` never decreases and every later ordinary release catches
-  up to it;
+- `E` is nondecreasing as `R` increases; the separate
+  `epoch_high_water` never decreases;
 - an epoch bump is normally exactly `E_previous + 1`; a numeric skip needs
   explicit migration approval but still performs only one logical
   `commit_target(T)`; its physical cost is the selected codec's declared cost,
@@ -2512,7 +2520,7 @@ floor/stage result from the approved decoder:
   no-completion-launch proof in `FROZEN-OTP-API-3`. FSBL bypasses ordinary
   epoch-bump admission and invokes Section 7.2's exact-`F` selector. The failed
   candidate and its A/B twin are excluded. The proof may authorize the best
-  robust exact-`F` accepted artifact, `RecoverySameEpoch`, `PeerRepair`, or a
+  robust exact-`F` accepted artifact, `PeerRepair`, or a
   same-floor degraded-artifact repair; it can never construct `T > F`.
 - `Unknown`: the decoder cannot prove either a steady highest committed floor
   or one unambiguous recoverable/aborted stage. FSBL halts before either slot is
@@ -2567,14 +2575,12 @@ state both hold **and carry a byte-for-byte equal `key`**:
   TAMP token is exact `ARM_READY`;
 - `ATTEMPTED`: both CONFIRMED replicas are proven `BlankVirgin`, PENDING is exact, and the
   bound TAMP token is exact `ATTEMPTED`;
-- `CONFIRMED`: typed authority is `RobustAccepted` from both terminal replicas
-  or exact floor-bound accepted evidence, or `DegradedAcceptedBoot` from one
-  surviving terminal replica only when `T == F`. A lone epoch-bump replica is
+- `CONFIRMED`: typed authority is `RobustAccepted` from both terminal replicas.
+  A lone surviving replica is
   repair-target evidence, not boot or floor authority.
 
 `UNINSTALLED` is not an eligible state. PENDING and ATTEMPTED never need or
-receive confirmation evidence, while floor-bound accepted evidence can never
-classify either of them. This separation is normative even if an implementation
+receive confirmation evidence. This separation is normative even if an implementation
 stores the artifact and lifecycle proofs in one compact handle. A proof from
 the other slot, another image with the same tuple, a prior page generation, or
 another boot/ECC snapshot cannot satisfy the join.
@@ -2592,7 +2598,7 @@ classification. If only degraded authority remains, no update class is
 constructible.
 
 Common admission scans both slots before erase and counts every independently
-verified robust, degraded-boot, and degraded-repair-target artifact in the live
+verified robust and degraded-repair-target artifact in the live
 release/epoch high-water. The package and source are rebound after restage and
 again before activation. The classes are:
 
@@ -2603,22 +2609,13 @@ again before activation. The classes are:
    establishment plan, including clean replicas, completion/accepted binding,
    interrupted-write replacements, quarantine retention, and Route-1 journal
    cost. Capacity shortfall rejects before erase.
-2. **`RecoverySameEpoch` from exact `Aborted(F)`.** On-device checks only the
-   signed package and immutable state: `R_new` above the maximum of the dead
-   proof's cumulative release high-water and every live artifact other than
-   the proposed target, exact `E_new=F+1`/`T=F`, failed-release/twin exclusion,
-   inactive slot, and exact abort/source/package binding. The protected
-   off-device ledger supplies the owner/security classification and preserves
-   `epoch_high_water`; there is no unsigned device flag. This class performs
-   zero rollback-journal, floor-stage, compaction, SAU-OTP-window, or OTP
-   operations.
-3. **`PeerRepair` from `Steady(F)` or `Aborted(F)`.** Require the protected
+2. **`PeerRepair` from `Steady(F)` or `Aborted(F)`.** Require the protected
    archived opposite-slot artifact of the robust source's exact logical A/B
    release set, identical `(R,E)` and policy/source identity, independent
    slot-bound signature/images, and `T=F`. This is the sole equal-`R` PENDING
    exception. It performs zero rollback-backend operations and cannot directly
    copy confirmation.
-4. **`DegradedArtifactRepair`.** Require a robust source and the exact archived
+3. **`DegradedArtifactRepair`.** Require a robust source and the exact archived
    package matching the degraded target slot/artifact; count the degraded
    artifact in all high-water calculations and perform no in-place marker
    repair. Under `Aborted` it requires `T=F` and zero backend operations. Under
@@ -2657,11 +2654,10 @@ authority.
 ### 7.2 Selection rules
 
 Selection first filters every artifact through signature/image/slot checks,
-`E > F`, lifecycle evidence, and the current floor class. It then applies
-evidence quality before version order: any `RobustAccepted` artifact outranks
-every `DegradedAcceptedBoot` artifact. Within one quality class the total order
-is `(E, R, slot-A-first)`. A degraded epoch candidate with `T>F` is never
-bootable.
+`E > F`, lifecycle evidence, and the current floor class. Only
+`RobustAccepted` artifacts are bootable; the total order among them
+is `(E, R, slot-A-first)`. A degraded artifact is repair-target evidence and
+is never bootable.
 
 For `Steady(F)` the ordinary decisions are:
 
@@ -2673,7 +2669,7 @@ For `Steady(F)` the ordinary decisions are:
 | robust source plus exact `PeerRepair` equal-`R` PENDING | consume `arm_peer_repair`; no rollback write |
 | robust source plus exact degraded-target repair PENDING | consume `arm_degraded_artifact_repair`; no repair-time rollback write |
 | robust source plus any nonqualifying PENDING or any ATTEMPTED | ignore candidate and boot robust winner |
-| no robust artifact, one or more degraded accepted exact-`F` artifacts | choose degraded total-order winner through `boot_degraded_service`; expose no updater/probation/floor/fallback/repair authority |
+| no robust artifact remains | halt to service; expose no updater/probation/floor/fallback/repair authority |
 | PENDING with no robust fallback/source | halt |
 
 When two robust artifacts exist, higher `E`, then higher `R`, then slot A wins.
@@ -2692,15 +2688,13 @@ construction. It accepts only:
 
 - the best robust exact-`F` accepted artifact through
   `boot_accepted_from_aborted`, including a later fully probated
-  RecoverySameEpoch or peer-repair artifact;
-- a qualified `RecoverySameEpoch` PENDING through
-  `arm_recovery_same_epoch`;
+  peer-repair artifact;
 - a qualified equal-`R` `PeerRepair` PENDING through `arm_peer_repair`;
 - a qualified exact-`F` degraded-target repair PENDING through
-  `arm_degraded_artifact_repair`;
-- an exact-`F` degraded accepted artifact through `boot_degraded_service` only
-  when no robust artifact remains, with no `AbortedUpdateContext` or writer
-  authority.
+  `arm_degraded_artifact_repair`.
+
+With no robust exact-`F` artifact remaining, `Aborted` admits no new-release
+path and FSBL halts to service.
 
 An ATTEMPTED repair/recovery candidate is never handed off again; FSBL boots
 the robust exact-`F` source when one exists. After a repair earns both terminal
@@ -2846,8 +2840,7 @@ required redundant key receipt.
 
 Every later FSBL handoff of a selected `RobustAccepted` confirmed slot still
 idempotently establishes `F == security_epoch - 1`; it does not rely
-indefinitely on the factory receipt. A `DegradedAcceptedBoot` service handoff
-requires `T == F` and receives no floor operation or capability.
+indefinitely on the factory receipt.
 
 Seed restoration, wallet/admin reset, secure-element replacement, ordinary
 main-flash mass erase, and factory rework MUST NOT lower or reinterpret `F`.
@@ -3034,24 +3027,18 @@ MUST remain false. NS-side filtering is defense in depth only.
 The FSBL-created secure-only `ProbationHandoffBinding` binds only stable
 handoff facts:
 
-- one exact entry kind: `OrdinaryFromSteady`, `RecoverySameEpoch`,
+- one exact entry kind: `OrdinaryFromSteady`,
   `PeerRepair`, or `DegradedArtifactRepair`;
 - the candidate's complete stable `ArtifactIdentity` (including physical slot,
   install ID, signed manifest digest, image hashes, `R`, `E`, and `T`);
 - the distinct `RobustAccepted` source/fallback's complete stable
   `ArtifactIdentity`, checked target `T_source == F_snapshot`, and exact
-  confirmation-authority identity (`FullTerminalSet` or floor-bound committed-
-  group/binding identity); degraded evidence can never fill this field;
+  confirmation-authority identity (`FullTerminalSet`); degraded evidence can never fill this field;
 - the arming floor-authority identity: for `OrdinaryFromSteady`, exact
   `Steady(F)` group/`BASE0`, allocation generation/cursor, ownership digest,
   and physical snapshot digest; for any repair from `Aborted`, the exact
   predecessor, dead-plan/quarantine digest, effective dead-plus-live release
   high-water, allocation generation/cursor, and physical snapshot digest;
-- for `RecoverySameEpoch`, on-device proof of fresh `R` above the effective high-water,
-  `E == F + 1`, `T == F`, failed-release/twin exclusion, and the exact signed
-  package/slot/artifact binding. The external protected-ledger classification
-  is a pre-sign HSM/release-policy condition and is not represented or
-  authenticated by manifest v6;
 - for `PeerRepair`, the archived paired-release identity, opposite-slot rule,
   equal `(R,E,T)`, independent slot-bound signature/images, and exact source-
   twin relationship;
@@ -3067,7 +3054,7 @@ handoff facts:
   classification;
 - only for an ordinary `Steady` epoch bump, the preflighted single finite-plan
   replica/stage/replacement/recovery-margin result and its exact receipt
-  digest; all three repair kinds bind an explicit zero-rollback-backend-write
+  digest; both repair kinds bind an explicit zero-rollback-backend-write
   receipt and no capacity, reservation, stage, claim, or OTP authority;
 - secure image digest;
 - nonsecure image digest;
@@ -3164,7 +3151,7 @@ RuntimeArtifactEvidenceKey =
 `runtime_pass_id` is fresh and nonserializable for one bounded finalization
 verification transaction. Candidate artifact plus exact ATTEMPTED evidence
 must carry one byte-equal runtime key; fallback artifact plus its exact
-terminal or floor-bound confirmation evidence must carry a separate byte-equal
+terminal confirmation evidence must carry a separate byte-equal
 runtime key. Candidate and fallback keys cannot be interchanged, joined across
 passes, or equated merely because they share `(R,E,T)` or a floor snapshot.
 The keys are private, non-`Copy`, non-`Clone`, runtime-only values; they are
@@ -3409,8 +3396,8 @@ Any difference from the probation-bound snapshot fails closed rather than
 changing classification. It MUST freshly reverify the probation-bound
 candidate and `RobustAccepted` source/fallback stable `ArtifactIdentity` values
 under separate current-pass evidence joins. The source's checked target must
-equal the current authoritative `F`, and its current `FullTerminalSet` or exact
-floor-bound confirmation authority must pass. It then rederives exactly the
+equal the current authoritative `F`, and its current `FullTerminalSet`
+confirmation authority must pass. It then rederives exactly the
 entry kind bound at handoff:
 
 1. `OrdinaryFromSteady` requires a fresh complete decoder result of the same
@@ -3418,20 +3405,16 @@ entry kind bound at handoff:
    complete **single finite-plan** capacity/recovery-margin preflight. If
    `T == F`, it proves that no Route-1 reservation/stage/claim/compaction or OTP
    operation is requested.
-2. `RecoverySameEpoch` requires the same exact `Aborted(F)` proof, dead-plan
-   quarantine, effective release high-water, failed-release/twin exclusion,
-   signed package binding, `R` above the bound
-   high-water, `E == F + 1`, and `T == F`.
-3. `PeerRepair` requires the same floor class (`Steady` or `Aborted`), exact
+2. `PeerRepair` requires the same floor class (`Steady` or `Aborted`), exact
    archived opposite-slot A/B twin, equal `(R,E,T)`, independent slot-bound
    signature/images, fresh install identity, and `T == F`.
-4. `DegradedArtifactRepair` requires the same archived degraded target,
+3. `DegradedArtifactRepair` requires the same archived degraded target,
    `RobustAccepted` source, full erase/restage identity, and floor class. Under
    `Aborted`, `T == F` is mandatory. Under `Steady`, a target with `T > F`
    earns only robust terminal evidence here; any later floor establishment is
    the ordinary one-plan `start_from_steady` path after reset.
 
-All three repair kinds prove zero rollback-journal and OTP writes during
+Both repair kinds prove zero rollback-journal and OTP writes during
 finalization. None may change entry kind, borrow ordinary epoch-bump authority,
 allocate capacity, or construct `T > F` from `Aborted`. Loss or mismatch of the
 applicable floor class, source artifact, archived package evidence, terminal
@@ -3521,10 +3504,10 @@ for separate downgrade-policy review.
 
 ## 10. Confirmation and epoch-floor establishment
 
-Section 10 has exactly the eight disjoint typed entries frozen in Section 3:
+Section 10 has exactly the six disjoint typed entries frozen in Section 3:
 `arm_probation_from_steady`, `start_from_steady`,
 `resume_from_recovery`, `boot_accepted_from_aborted`,
-`boot_degraded_service`, `arm_recovery_same_epoch`, `arm_peer_repair`, and
+`arm_peer_repair`, and
 `arm_degraded_artifact_repair`. There is one unparameterized
 `Aborted(DeadStageProof)`: it carries no follow-on epoch allowance, cannot construct
 `T > F`, and persists across every exact-`F` boot or repair. Recovery is bound
@@ -3534,8 +3517,8 @@ preflight, and fallback path. FSBL MUST:
 1. independently re-read the rollback floor and durable stage through the
    fresh-array, per-QW ECC-aware decoder required by
    `OPEN-ECC-1`/`OPEN-OTP-3`; dispatch `Steady(F)` only to
-   `arm_probation_from_steady`, `start_from_steady`, an eligible peer/degraded
-   repair arm, or `boot_degraded_service` according to the independently
+   `arm_probation_from_steady`, `start_from_steady`, or an eligible peer/degraded
+   repair arm according to the independently
    decoded slot lifecycle and evidence quality. For exact bound `Recovering`, first
    construct `CheckedRecoveryIntent` by joining the fresh proof to the exact
    bound candidate's independently verified artifact and `RobustAccepted`
@@ -3544,7 +3527,6 @@ preflight, and fallback path. FSBL MUST:
    `RecoveryBlocked(MissingRobustTerminalAuthority)` and halts without
    changing the floor-only `Recovering` classification. Dispatch exact
    `Aborted` only to `boot_accepted_from_aborted`,
-   `boot_degraded_service`, `arm_recovery_same_epoch`,
    `arm_peer_repair`, or `arm_degraded_artifact_repair`; reject every
    `T > F` request before erase, activation, capability construction, or
    rollback-backend access. Halt on `Unknown`, type/entry mismatch, or
@@ -3556,9 +3538,7 @@ preflight, and fallback path. FSBL MUST:
    recovery entry and exact-`F` accepted boot requires typed robust terminal
    evidence. Initial establishment requires `FullTerminalSet`. Recovery obtains
    that same authority only through the
-   `CheckedRecoveryIntent` constructor; floor-bound evidence is accepted only for the exact
-   artifact already bound by the authoritative committed group or the exact
-   authoritative predecessor group carried by `DeadStageProof`. Within each
+   `CheckedRecoveryIntent` constructor. Within each
    physical artifact, its artifact proof and state-appropriate lifecycle or
    confirmation proof must carry the same `ArtifactEvidenceKey`; candidate and
    fallback keys remain distinct while sharing the entry's boot/floor snapshot;
@@ -3595,50 +3575,36 @@ preflight, and fallback path. FSBL MUST:
    and repeat the complete decode and artifact verification immediately before
    handoff. This artifact may be the original fallback or a later fully
    probated repair; the same `Aborted` proof remains authoritative;
-9. on `boot_degraded_service`, require exactly one surviving nonconflicting
-   terminal replica with `T == F` plus fresh `Steady(F)` or `Aborted(F)`, then
-   hand off only a service-required context with wallet, updater, probation,
-   fallback, repair, and floor capabilities absent. A degraded artifact never
-   starts establishment and never outranks any robust artifact;
-10. on `arm_recovery_same_epoch`, consume the fresh exact `Aborted(F)` proof,
-    a `RobustAccepted` exact-`F` source, and the class-specific staged/activated
-    PENDING candidate. Require `R_new` above the effective dead-plus-live
-    release high-water, `E == F + 1`,
-    `T == F`, failed-release/twin exclusion, fresh install identity, exact
-    `ARM_READY`, and complete package/slot/artifact binding. Then change only
-    TAMP to `ATTEMPTED`, freshly rederive the same `Aborted`, reverify source and
-    candidate, and hand off. No Route-1 or OTP operation is reachable;
-11. on `arm_peer_repair`, consume fresh `Steady(F)` or `Aborted(F)`, the
+9. on `arm_peer_repair`, consume fresh `Steady(F)` or `Aborted(F)`, the
     `RobustAccepted` source, and the independently restaged opposite-slot
     archived A/B twin. Require exact equal `(R,E,T)`, `T == F`, independent
     slot-bound signature/images, fresh install identity, exact `ARM_READY`, and
     evidence that no direct-confirm shortcut occurred. Then perform only the
     TAMP transition, fresh decode/reverification, and probation handoff;
-12. on `arm_degraded_artifact_repair`, consume fresh `Steady(F)` or
+10. on `arm_degraded_artifact_repair`, consume fresh `Steady(F)` or
     `Aborted(F)`, a `RobustAccepted` source, the exact archived package for the
     previously degraded target, full erase/restage evidence, fresh install
     identity, and exact `ARM_READY`. Under `Aborted`, require `T == F` and no
     rollback-backend authority. Under `Steady`, a repaired `T > F` candidate
     may earn robust terminal evidence through probation, but floor establishment
     remains a later ordinary `start_from_steady` action after reset;
-13. for each physical replica independently, invalidate the documented flash
-   cache/data-buffer state, clear stale ECC flags, force one attributed array
-   read, and snapshot/consume ECC status before the next flash access;
-14. after any floor writer, recovery, or role consumption, perform a fresh full
-   decode and recompute the complete
-   authenticated finite plan. Exact `Steady(T)` permits candidate revalidation;
-   exact `Aborted` is returned only when every `DeadStageProof` predicate,
-   including no possible completion-authority launch, holds and redispatches to
-   the constrained top-level path; `Recovering` is returned only while at least
-   one legal completion sequence remains; every other threshold, role,
-   ownership, or completion ambiguity is `Unknown` and halts. No floor writer
-   returns handoff authority directly; and
-15. perform handoff only for (a) an ordinary exact `ATTEMPTED` candidate after
+11. for each physical replica independently, invalidate the documented flash
+    cache/data-buffer state, clear stale ECC flags, force one attributed array
+    read, and snapshot/consume ECC status before the next flash access;
+12. after any floor writer, recovery, or role consumption, perform a fresh full
+    decode and recompute the complete
+    authenticated finite plan. Exact `Steady(T)` permits candidate revalidation;
+    exact `Aborted` is returned only when every `DeadStageProof` predicate,
+    including no possible completion-authority launch, holds and redispatches to
+    the constrained top-level path; `Recovering` is returned only while at least
+    one legal completion sequence remains; every other threshold, role,
+    ownership, or completion ambiguity is `Unknown` and halts. No floor writer
+    returns handoff authority directly; and
+13. perform handoff only for (a) an ordinary exact `ATTEMPTED` candidate after
     consuming the probation entry and fresh `Steady(F)` plus exact-`F`
     source revalidation, (b) a repair candidate in exact `ATTEMPTED` after the
     applicable fresh floor/source/class recheck, (c) a robust exact-`F`
-    accepted artifact through `boot_accepted_from_aborted`, (d) a degraded
-    exact-`F` artifact through `boot_degraded_service`, or (e) a confirmed
+    accepted artifact through `boot_accepted_from_aborted`, or (d) a confirmed
     candidate after fresh `Steady(T)`, and only after the applicable final
     recheck. A repair that has earned both terminal replicas may boot after
     reset through the corresponding no-write accepted-artifact path; it never
@@ -3760,11 +3726,11 @@ declares, independent of the number of skipped epoch values.
 |---|---|---|---|
 | Factory cut during either generation-zero Route-1 `BASE0` page | incomplete offline genesis; lifecycle not locked; external boot-hold remains asserted | permit no normal boot; completely erase and restart both Route-1 base pages under the factory interlock | no field slot is eligible |
 | Factory cut before both slots reach CONFIRMED, including during either slot's image/body/marker writes | incomplete offline genesis; lifecycle not locked; external boot-hold remains asserted | permit no normal boot or field lifecycle; retain the external interlock until both slots are durably confirmed and read back, or fully restart the affected release-set/slot under factory recovery after complete manifest + full secure/nonsecure capacity erase/restage | one confirmed artifact is factory recovery evidence, not supported product genesis |
-| Completed dual-slot factory genesis, then one confirmation replica in either slot degrades | both slots retain at least `SurvivingTerminalSet`; an independently robust peer remains unless it also degraded | prefer any `RobustAccepted` peer; use a surviving set only as degraded service evidence unless exact floor-bound authority reconstructs robustness | bootable while robust or permitted degraded evidence remains |
+| Completed dual-slot factory genesis, then one confirmation replica in either slot degrades | both slots retain at least `SurvivingTerminalSet`; an independently robust peer remains unless it also degraded | prefer any `RobustAccepted` peer; use a surviving set only as repair-target evidence, never boot or floor authority | bootable while robust evidence remains |
 | Image/manifest staging before token/PENDING activation, including exact-looking post-cut bytes | incomplete/non-PENDING volatile attempt | candidate ignored; no resume. Next authenticated BEGIN erases/verifies the complete inactive manifest and full secure/nonsecure capacity ranges and fully restages | eligible |
 | Field COMMIT cuts after exact TAMP invalidation and before any install-ID program may have launched | inactive generation has no valid install identity and token is exact INVALID or later lost | ignore candidate; a rebooted update starts a new full-range erase/restage attempt and new RNG value | eligible fallback preserved when independently valid |
 | Install-ID value/complement write torn, corrected, repeated, complete-before-reset, or may have launched | no valid resumable `ArtifactEvidenceKey`; never `UNINSTALLED`/PENDING | reject generation; no same-QW or exact-pair resume; later authorized reinstall starts with complete inactive-range erase/restage and fresh RNG value | eligible fallback preserved when independently valid |
-| Byte-identical artifact is erased/reinstalled with a fresh install ID | new physical generation and key | old terminal/TAMP/floor-bound proof cannot join; candidate must follow ordinary activation/probation unless it has new exact authority | prior accepted artifact identity does not bless new generation |
+| Byte-identical artifact is erased/reinstalled with a fresh install ID | new physical generation and key | old terminal/TAMP proof cannot join; candidate must follow ordinary activation/probation unless it has new exact authority | prior accepted artifact identity does not bless new generation |
 | System reset reports interrupted inactive-slot manifest/image operation in `FLASH_OPSR` | exact address/QW is `UnknownMayHaveLaunched` regardless of bytes | immutable entry snapshots/attributes status before any later mutation; no confirm/floor advance/rewrite; only a later authenticated complete inactive-range erase/restage when independently inactive may replace it, otherwise inhibit flash and halt/recover | eligible fallback preserved when independently valid |
 | TAMP token body/ARM_READY torn, PENDING absent | no valid candidate activation | stale/malformed token ignored | eligible |
 | Exact ARM_READY token, PENDING absent | no valid candidate activation | stale token ignored | eligible |
@@ -3772,7 +3738,7 @@ declares, independent of the number of skipped epoch values.
 | PENDING activation interrupted, then reads exact/ECCC-clear without approved durability proof | `UnknownMayHaveLaunched`, not PENDING | candidate rejected; follow only the approved durability/reinstall rule | eligible |
 | Exact PENDING + exact bound ARM_READY | PENDING | FSBL may arm once | eligible |
 | Valid CONFIRMED + equal/crossed/otherwise non-qualifying PENDING | confirmed fallback plus ignored candidate | establish confirmed target and boot fallback | selected; pending cannot brick it |
-| Two accepted CONFIRMED artifacts with robust/degraded, crossed, or equal tuples | normal post-update state or recovery anomaly | select `RobustAccepted` before `DegradedAcceptedBoot`, then higher `E`, `R`, and fixed slot A, subject to Section 10 | selected only after required target establishment |
+| Two accepted CONFIRMED artifacts with robust/degraded, crossed, or equal tuples | normal post-update state or recovery anomaly | select among `RobustAccepted` artifacts by higher `E`, `R`, and fixed slot A, subject to Section 10 | selected only after required target establishment |
 | Cut before Ready→Attempted TAMP transition | PENDING | retry arming; candidate has not run | eligible |
 | Cut before Ready→Attempted transition, then ARM_READY is lost by VBAT drain, tamper, or backup-domain reset | malformed PENDING composite | reject candidate and boot eligible confirmed fallback; fresh retry requires PIN-gated reinstall/re-arm | eligible; retry benefit was lost, not security |
 | VDD/VBAT marginal power cycle covered by ES0499 before the cold-boot workaround is proven | TAMP/BKP content is unpredictable, not an authoritative retained token | do not decode for retry authority; apply the selected reviewed Section-3 protected-`MONEN`, unconditional forced-`BDRST`, or separately re-frozen conditional forced-`BDRST` policy; only a probationary slot with CONFIRMED `BlankVirgin` is rejected for token loss, and fallback still requires `Steady` or exact constrained `Aborted`; terminal CONFIRMED ignores token and `Recovering`/`Unknown` forbid handoff | eligible only under the applicable floor class; TAMP backend remains production NO-GO until silicon receipt |
@@ -3787,9 +3753,9 @@ declares, independent of the number of skipped epoch values.
 | First or second wrong canonical challenge | ATTEMPTED plus same live volatile session and reduced attempt budget | retain the same challenge/deadline and return the fixed retry status | eligible if probation later fails |
 | Third wrong/replayed challenge or attempt-budget exhaustion | ATTEMPTED | reset/fallback | eligible |
 | Final UI cancelled or timed out | ATTEMPTED | reset/fallback | eligible |
-| Inactive peer is staged/PENDING/ATTEMPTED and the sole retained source loses all robust confirmation authority, with no exact floor-bound accepted authority | no robust source remains | reject candidate and halt; never promote probation state | safety preserved; availability lost |
+| Inactive peer is staged/PENDING/ATTEMPTED and the sole retained source loses all robust confirmation authority | no robust source remains | reject candidate and halt; never promote probation state | safety preserved; availability lost |
 | `QW_CONFIRMED_0` write torn or apparently erased after launch | no robust terminal set | never retry the QW; reject or classify only a permitted surviving degraded set after fresh terminal-first decode | eligible source preserved |
-| Replica 0 is durably clean, then replica 1 write is torn, corrected, or ambiguous | exactly one possible surviving terminal replica | never retry either QW; accept at most `DegradedAcceptedBoot` when `T == F`, otherwise repair target only | robust source outranks it |
+| Replica 0 is durably clean, then replica 1 write is torn, corrected, or ambiguous | exactly one possible surviving terminal replica | never retry either QW; classify as repair target only, never boot | robust source outranks it |
 | Both confirmation replicas are durable, then TAMP token is lost | exact `FullTerminalSet` | ignore token; classify from signed `E`, current `F`, and accepted authority | same-epoch old slot remains eligible; lower epoch remains eligible until floor completion |
 | At least one permitted terminal replica is exact, historical PENDING is torn/ECCC/ECCD | terminal-first accepted/degraded evidence; PENDING not read | normalize the complete CRC journal window as specified; do not demote terminal state merely because PENDING is unreadable | selection follows evidence quality then tuple |
 | Same-epoch CONFIRMED, `T == F` | steady without floor write | issue zero OTP/stage commands; select by evidence quality, then `E`, `R`, slot A | older release is floor-admissible and may outrank a newer degraded artifact, but not a newer `RobustAccepted` artifact |
@@ -3802,9 +3768,7 @@ declares, independent of the number of skipped epoch values.
 | The one frozen replica plan becomes mathematically impossible before any `COMPLETE` authority may have launched | exact `Aborted`; every failed-plan role, including unused planned roles, remains permanently owned/quarantined | exclude failed release/twin; boot the best independently verified robust target-`F` artifact or admit only an exact no-floor-write repair class | prior floor unchanged; robust exact-`F` source may boot |
 | Missing/all-FF, torn, exact-looking, or conflicting `COMPLETE` for which launch cannot be disproved | `Recovering` only if exact completion recovery exists; otherwise `Unknown` | never classify `Aborted`, never expose prior floor, never retry the same completion role | no handoff |
 | Stable reboot after exact `Aborted` | same authenticated dead-stage proof, floor, release high-water, ownership, and quarantine | deterministically rederive the same class; never create capacity, another plan, or `T > F` authority | robust exact-`F` accepted boot remains available |
-| `RecoverySameEpoch` staging, activation, PENDING, or arming is cut before exact ATTEMPTED | unchanged `Aborted`; no rollback-backend mutation | boot robust source; retry requires fresh class-specific staging/activation and PIN gate | preserved |
-| `RecoverySameEpoch` remains ATTEMPTED after crash, health failure, cancel, or reset | unchanged `Aborted` plus excluded candidate | reject candidate, boot robust source; retry requires complete reinstall/re-arm | preserved |
-| `RecoverySameEpoch` obtains both terminal replicas | robust exact-`F` candidate plus persistent `Aborted` | boot only through `boot_accepted_from_aborted`; issue zero Route-1/OTP operations | preserved and still exact-`F` |
+| Power cut, crash, health failure, cancel, or reset while floor class is `Aborted` | unchanged `Aborted`; no rollback-backend mutation | boot only the previously accepted robust exact-`F` artifact through `boot_accepted_from_aborted`; if no robust exact-`F` artifact remains, halt to service/RMA | preserved and still exact-`F` |
 | Peer or degraded-artifact repair is cut at any pre-terminal step | original `Steady` or `Aborted` class remains authoritative | reject attempted repair, boot robust source, and require full reinstall/re-arm | preserved |
 | Any `T > F` request is presented while floor class is `Aborted` | unchanged `Aborted`; no capability or mutation | reject before erase, activation, Route-1, or OTP access | preserved |
 | Epoch-bump OTP replica write interrupted by system reset | clean-looking, corrected, malformed, exact-looking, or ambiguous replica outcome with the attempted role consumed at zero quorum weight | consume `FLASH_OPSR`, fresh-read, never reprogram the QW, and recompute the complete authenticated finite plan: `Recovering` only if a legal completion sequence remains; exact `Aborted` only if every dead-stage/no-completion-launch predicate holds; otherwise `Unknown`/halt | lower epoch retires only if a later clean full group and exact `COMPLETE` establish it; otherwise not handed off |
@@ -3814,11 +3778,25 @@ declares, independent of the number of skipped epoch values.
 | Full clean target replicas exist, but `COMPLETE` body/activation is torn or may have launched | exact valid pre-complete stage => `Recovering`; ambiguous/replayed completion => `Unknown` | never accept a degraded initial group or retry an ambiguous same record; use only the approved bound replacement/completion recovery or halt | lower epoch remains unselected; no handoff |
 | Exact `COMPLETE` durable, then optional stage close/compaction is cut | old authoritative completion copy and group remain `Steady(T)` until a disjoint replacement is durable; loss/alias/ambiguity of all authoritative copies => `Unknown` | never overload epoch-advance `Recovering`; continue from `Steady(T)` or halt, never return prior `F` | handoff only from `Steady(T)` |
 | Epoch-bump replicated commitment durable and complete | fresh decoder returns `Steady(T)` from clean target group and resolved authoritative completion evidence | restart ordinary admission, then select the confirmed candidate | lower epoch intentionally retired |
-| Previously accepted epoch-bump CONFIRMED marker later degrades | `Steady(F)` carries exact floor-bound accepted-manifest binding | independently reverify signature/images and boot only that exact bound artifact; absent/conflicting binding halts; never lower `F` | old lower epoch remains intentionally retired |
+| Previously accepted epoch-bump CONFIRMED marker later degrades | `Steady(F)` retains the floor-bound accepted-manifest binding as an evidentiary record only | the degraded artifact has no boot authority; independently reverify signature/images of any surviving robust artifact and boot only that, otherwise halt; never lower `F` | old lower epoch remains intentionally retired |
 | Floor capacity exhausted before ordinary same-epoch update | fresh `Steady(F)` and checked `T == F` | ordinary `SameEpoch` update remains permitted; zero OTP/stage writes and no plan allocation | remains eligible |
 | Floor capacity/key/backend unavailable for epoch bump, proven before any reservation/stage/claim/compaction or OTP launch | exact `Steady(F)`; higher candidate remains CONFIRMED | boot an independently verified confirmed fallback only when its target is exactly `F`; otherwise halt | fallback selected without establishment write; higher candidate remains unselected |
 | MAC root/key unreadable with fully blank, ECC-clean record bank, synchronized active factory `BASE0` Route-1 pair, and durable-intent proof that no writer state/launch is missing | canonical `Steady(0)`, future commitment unavailable | boot an otherwise-valid `E=1` confirmed slot; for a higher-epoch candidate use the proven-no-establishment-launch fallback rule or halt | runtime recovery only; factory ship gate still requires valid key receipt |
 | OTP record root/key unreadable with any nonblank or ambiguous record bank | floor fail-closed | fail closed | not used to bypass floor |
+| First-boot lock ceremony: cut DURING the `RDP = 0xCC` option-byte program | possibly torn option-byte latches; the next power-on runs the option-byte loader from whatever latched | if the device boots and Phase-A read-back shows exactly the pre-ceremony staged ship profile with `RDP != 0xCC` (the burn did not take), the ceremony re-enters (re-verify, re-confirm, re-attempt; idempotent under R1.3); any other persistent value—partial, torn, alien, or `RDP = 0xCC` paired with any wrong staged word—halts to RMA with no re-attempt and no heal, since a re-attempt cannot repair a locked-but-wrong profile, and tz-1's phase-appropriate profile check enforces the same classification at every later boot; if the device does not boot, the torn wedge is RMA: an accepted factory-class residual, mitigated by stable powered-line execution and the `DO NOT POWER OFF` UI | classification by read-back of actual OB state, never by remembered intent |
+| First-boot lock ceremony: cut AFTER a clean `RDP = 0xCC` program and BEFORE `OBL_LAUNCH` | the next power-on reset itself reloads option bytes (POR ≡ option-byte reload); the device comes up LOCKED | Phase A reads `RDP = 0xCC`, classifies the burn as complete, and proceeds to Phase B; after any cut in the burn window the next power-on completes the launch; the flow MUST classify by read-back, never by remembered intent, and MUST NOT reissue the RDP write once read-back shows `RDP = 0xCC` | lock completes at next power-on |
+| First-boot lock ceremony: `OBL_LAUNCH` issued but no reset occurs | launch pending; actual OB state decides at the next power-on | park (never continue executing below RDP-2); on the following power-on classify by read-back as above | lock completes at next power-on |
+
+The first-boot lock rows above define the exact burn-window semantics of the
+R2.1--R2.6 ceremony: option-byte programming takes effect only when the
+option-byte loader runs, at `OBL_LAUNCH` or at any power-on reset, so a power
+cut between a clean RDP program and `OBL_LAUNCH` completes the lock at the
+next power-on. The `every Phase-A fault halts unlocked` rule (R2.6) has
+exactly one exception: a cut inside the burn window completes the lock by
+reset; that is the intended terminal state, not a fault violation. The
+burn-window classification above is identical to tz-1's phase-appropriate
+expected-profile rule (Draft 1.2 §3 row 2), so the two documents issue one
+order, not two.
 
 All ordinary state-machine pre-confirmation failures preserve the previous
 confirmed slot; independent loss of all robust authority for that slot is
@@ -4008,7 +3986,7 @@ ordinary_new_stage_records = codec.stage_commit_records(T)
 repair_new_physical_qws = 0
 repair_new_stage_records = 0
     when floor_class in {Steady(F), Aborted(F)} and T == F
-    and entry in {RecoverySameEpoch, PeerRepair, DegradedArtifactRepair}
+    and entry in {PeerRepair, DegradedArtifactRepair}
 ```
 
 `target_commit_qws` includes every OTP replica normally required for one
@@ -4080,7 +4058,7 @@ and measured only afterward. Before an option can be final:
    fresh-array per-QW ECCC attribution, complete floor/group/stage decoder,
    completion/replacement and selected durable-intent path (including
    pre-claim machinery only when that route requires it), floor writer,
-   dead-stage/no-floor repair logic, orphan scan, floor-bound manifest recovery,
+   dead-stage/no-floor repair logic, orphan scan,
    handoff, measured-boot decoder/table actually proposed, the selected
    master-closure/stale-DMA-abort logic, ES0499 TAMP/BDRST sanitation and IWDG
    restart, and every load-bearing trust-root FI check;
@@ -4310,7 +4288,7 @@ No production-shared rollback implementation code starts until:
   edited after review to create a digest cycle;
 - `FROZEN-MAN-4` has exact approved schema/domain/offset/CRC bytes;
 - `FROZEN-JRN-IFACE-3` and `FROZEN-OTP-API-3` have exact typed authority,
-  terminal-first, floor-bound recovery, dead-stage, and no-floor repair semantics,
+  terminal-first, dead-stage, and no-floor repair semantics,
   while
   `OPEN-JRN-HW-1` and `OPEN-JRN-DUR-1` must close before the TAMP/marker
   backend is production-eligible;
@@ -4349,9 +4327,9 @@ Scope:
   domain, with legacy formats rejected;
 - implement the reviewed pure `FROZEN-JRN-IFACE-3` decoder and
   `FROZEN-OTP-API-3` state machine against fake/scripted storage first;
-- composite terminal-first journal decoder, floor-bound accepted-manifest
-  authority, five-QW lifecycle, full/surviving install and terminal evidence,
-  robust-before-degraded selector, dead-stage quarantine, and exact no-floor
+- composite terminal-first journal decoder,
+  five-QW lifecycle, full/surviving install and terminal evidence,
+  robust-only boot selector, dead-stage quarantine, and exact no-floor
   repair entries;
 - PENDING/ATTEMPTED transition intents and writers only against abstract or
   explicitly nonshipping fake/QEMU backends until `OPEN-JRN-HW-1` and
@@ -4550,7 +4528,7 @@ text. Required coverage includes:
 - one-plan death yields the single stable `Aborted` class only with complete
   permanent failed-plan ownership/quarantine and no possible completion launch;
   reboot, reinstall, higher `R`, compaction, or fresh preflight cannot construct
-  `T > F` authority from it, while exact-`F` accepted/service boot and the three
+  `T > F` authority from it, while exact-`F` accepted boot and the two
   named no-floor repair classes remain available;
 - mutation tests reject every stale prior-group digest, allocation generation/
   cursor, active-group/candidate identity, and cell-role-map replay; duplicate
@@ -4566,8 +4544,7 @@ text. Required coverage includes:
   exists;
 - equal-`R` and both crossed `R/E` PENDING tuples are ignored when a valid
   confirmed fallback exists, including the same release's other-slot artifact;
-- selection first chooses `RobustAccepted` over every
-  `DegradedAcceptedBoot`, then within one evidence tier chooses higher `E`,
+- selection chooses among `RobustAccepted` artifacts by higher `E`,
   higher `R`, then physical slot A for exact `(R,E)` equality;
 - manifest-v6 golden vectors shared by signer, inspector, firmware, FSBL, and
   formal extraction; mutation of slot, `R`, `E`, either signed length, either
@@ -4591,7 +4568,7 @@ text. Required coverage includes:
   physical key to its one global C10 budget;
 - state-appropriate verification tests prove a valid PENDING/ATTEMPTED slot
   needs its exact journal/TAMP evidence but no confirmation evidence, while a
-  CONFIRMED slot needs typed terminal or exact floor-bound authority and cannot
+  CONFIRMED slot needs typed terminal authority and cannot
   borrow PENDING/ATTEMPTED evidence;
 - ordinary probation tests prove the only PENDING handoff from `Steady(F)`
   consumes `CheckedSteadyProbationIntent`, first has an independently verified
@@ -4660,7 +4637,7 @@ text. Required coverage includes:
 - the ordered `CandidateFinalizationWriter` rejects a wrong running slot, non-`ATTEMPTED`
   or binding-mismatched token, changed `(R,E,F)`/classification, loss or
   mismatch of the probation-bound exact-`F` fallback's artifact or current
-  terminal/floor-bound confirmation authority, failed bump-capacity recheck,
+  terminal confirmation authority, failed bump-capacity recheck,
   absent/forged/incomplete local-health, transport, transcript, deadline, or
   long-confirmation typestate, user cancel, and any nonblank/ambiguous
   destination. No direct status/boolean path can construct
@@ -4718,14 +4695,14 @@ text. Required coverage includes:
   and prove an interrupted manifest QW cannot be rewritten or masked by an
   exact-looking read; complete-power-loss tests separately omit OPSR evidence;
 - after an epoch floor binds an accepted manifest, loss/degradation of one
-  confirmation witness exercises the selected redundant/floor-bound recovery
-  and can authorize only the exact bound slot/install-id/tuple/digest/images, never a
-  different same-floor artifact or lower `F`;
+  confirmation witness removes that artifact's boot authority; the
+  accepted-manifest binding is an evidentiary record only and can never
+  authorize a different same-floor artifact or lower `F`;
 - completed dual-robust factory/same-epoch states lose either one terminal
-  replica and classify that artifact through `SurvivingTerminalSet` unless
-  exact floor-bound evidence restores `RobustAccepted`; any robust peer
-  outranks degraded evidence. Degraded-only state exposes service boot, not
-  updater/wallet authority. `Recovering` candidate loss of robust authority
+  replica and classify that artifact through `SurvivingTerminalSet` as
+  repair-target evidence only; any robust peer
+  outranks degraded evidence. Degraded-only state exposes no boot, updater, or
+  wallet authority. `Recovering` candidate loss of robust authority
   before `Steady(T)` leaves the floor view `Recovering` but makes the checked
   join yield `RecoveryBlocked(MissingRobustTerminalAuthority)`/halt with no
   write, fallback, or handoff;
@@ -4755,14 +4732,10 @@ text. Required coverage includes:
   preflight and zero `begin`, fresh epoch-bump entry invokes `begin` at most
   once, and `resume_from_recovery` invokes neither ordinary preflight nor
   `begin` across any number of resets;
-- `RecoverySameEpoch` tests prove `boot_accepted_from_aborted` emits only
-  non-authorizing stable comparison data after a final fresh `Aborted` decode.
-  Staging and activation require fresh class-specific receipts, complete
-  inactive erase/restage, a globally fresh `R` above dead-plus-live high-water,
-  exact `E=F+1/T=F`, failed-release/twin exclusion, and fresh install identity.
-  PENDING -> ATTEMPTED -> both health milestones -> both terminal replicas is
-  mandatory; every trace counts zero Route-1/OTP/floor operations, and
-  successful repair leaves the same `Aborted` quarantine;
+- `Aborted` boot tests prove `boot_accepted_from_aborted` emits only
+  non-authorizing stable comparison data after a final fresh `Aborted` decode,
+  and that `Aborted` admits no new-release path: every attempted new-release
+  admission from `Aborted` rejects before mutation;
 - `PeerRepair` tests require the protected archived opposite-slot A/B twin,
   equal `(R,E,T)`, exact `T=F`, independent slot-bound signature/images, full
   erase/restage, fresh identity, and complete probation. No source marker or
@@ -4779,7 +4752,8 @@ text. Required coverage includes:
   logical target is durable;
 - same-epoch tests cover preferred-slot absence, corruption, independent
   invalidity, and an older `RobustAccepted` artifact beside a newer
-  `DegradedAcceptedBoot`; selection follows evidence quality then tuple. No
+  degraded repair-target artifact; selection follows the frozen tuple order
+  among robust artifacts. No
   user input, reinstall, boot chord, or lower-`R` request alters that order;
 - updater high-water tests boot an exact-`F` fallback beside a still-valid
   higher CONFIRMED peer after a proven-no-establishment-launch capacity
@@ -4928,8 +4902,8 @@ tests.
   and proves no size optimization removed or weakened signature, digest,
   rollback, ECC, or final-handoff validation.
 - The measured FSBL includes the actual master-closure/stale-DMA abort path,
-  ES0499 sanitation, IWDG restart/readback, orphan scan, floor-bound manifest
-  recovery, one-plan `Aborted`, and exact-`F` repair logic; none may be a zero-byte placeholder
+  ES0499 sanitation, IWDG restart/readback, orphan scan,
+  one-plan `Aborted`, and exact-`F` repair logic; none may be a zero-byte placeholder
   in the final gate.
 - No untracked source file is omitted from the owner diff.
 
@@ -4967,8 +4941,8 @@ tests.
   erasing that peer;
 - same-epoch preferred-slot absence/corruption/independent invalidity -> older
   same-epoch confirmed fallback; older `RobustAccepted` plus newer
-  `DegradedAcceptedBoot` -> older robust slot; demotion/reinstall requests never
-  override the frozen evidence-quality/tuple order;
+  degraded repair-target artifact -> older robust slot; demotion/reinstall requests never
+  override the frozen tuple order;
 - `CONFIRMED(A,R5,E2) + PENDING(B,R5,E2)` and crossed pending tuples -> ignore
   pending and boot the confirmed slot rather than halt;
 - crossed two-confirmed tuples -> boot higher `E`; equal `(R,E)` -> fixed slot
@@ -4997,7 +4971,7 @@ tests.
   have launched never takes that fallback and resumes only through the approved
   zero-weight/replacement/full-threshold/fresh-`COMPLETE` recovery protocol,
   reaches exact `Aborted` and only then boots a robust target-`F` artifact, or
-  halts. QEMU separately cuts every `RecoverySameEpoch`, `PeerRepair`, and
+  halts. QEMU separately cuts every `PeerRepair` and
   `DegradedArtifactRepair` staging, activation, ATTEMPTED, health, and both-
   terminal-replica transition; each failed trace preserves the source and
   floor class, every successful `Aborted` repair retains `Aborted` and records
@@ -5010,9 +4984,9 @@ tests.
   PIN/unlock gate, while an exact pre-handoff `ARM_READY` retry is separately
   tested as the no-handoff case;
 - old runtime reports a failed probation clearly;
-- after floor establishment, terminal-marker degradation boots only the exact
-  floor-bound accepted artifact; mutation to another same-floor manifest or
-  image halts without lowering the floor.
+- after floor establishment, loss of the accepted artifact's terminal-set
+  quorum leaves no boot authority and halts to service; mutation to another
+  same-floor manifest or image halts without lowering the floor.
 
 ### 15.4 Real STM32U585AI evidence
 
@@ -5037,14 +5011,10 @@ tests.
   durable confirmation and complete readback; loss, premature deassertion, or
   unverifiable interlock state never permits boot of a one-slot intermediate
   and invalidates the factory receipt;
-- completed dual-slot genesis loses either one terminal replica and classifies
-  that artifact as degraded unless an exact
-  `FloorBoundAccepted` authority exists (for example after an `E > 1` genesis
-  floor was established), the deterministic bound artifact may recover through
-  that authority; otherwise the independently verified robust peer outranks it,
-  and degraded-only state is service-required. Loss of every applicable
-  terminal-set and floor-bound accepted
-  authority halts;
+- completed dual-slot genesis loses either one terminal replica: the
+  independently verified robust peer outranks the degraded artifact, and
+  degraded-only state halts to service with no degraded acceptance. Loss of
+  every applicable terminal-set authority halts;
 - USB enumeration and defined health round-trip;
 - physical cancel and timeout;
 - controlled reset/power interruption at each safe test point;
@@ -5114,7 +5084,7 @@ exclusive and complete boundary classes: a frontier is never committed,
 death of the one finite plan, complete permanent quarantine, and proof that no
 completion authority may have launched. `Aborted` preserves unchanged `F` but
 cannot construct `T>F` or any rollback-backend writer authority. The model
-separately proves `RecoverySameEpoch`, `PeerRepair`, and
+separately proves `PeerRepair` and
 `DegradedArtifactRepair`: each requires its exact source/package/high-water
 bindings, full probation and both terminal replicas, and zero rollback-backend
 writes when entered from `Aborted`. No repair copies confirmation authority or
@@ -5178,19 +5148,17 @@ An implementation conforming to this specification maintains:
 1. Runtime firmware never advances, lowers, resets, or reinterprets `F`.
 2. FSBL establishes only checked `T = E - 1` for a release with exact typed
    `RobustAccepted` confirmation authority. Initial establishment requires
-   `FullTerminalSet`; floor-bound evidence only recovers the exact artifact
-   already committed. It
+   `FullTerminalSet`. It
    never establishes for `PENDING`, `ATTEMPTED`, malformed, or merely
    Milestone-1-ready firmware.
 3. Ordinary admission occurs only from `Steady(F)` and requires `E > F`.
    `Recovering` bypasses the selector; exact `Aborted` permits only robust
-   exact-`F` accepted boot, degraded exact-`F` service boot, and the three typed
+   exact-`F` accepted boot and the two typed
    no-backend repair paths. It cannot construct `T > F`; `Unknown` halts. `R`
    cannot override a rejected epoch.
 4. In normal ledger-consistent states, `R` determines preference among epoch-
-   admissible releases only inside the best available evidence-quality tier.
-   Every `RobustAccepted` artifact outranks every `DegradedAcceptedBoot`; within
-   a tier FSBL chooses higher `E`, then `R`, then slot A.
+   admissible releases. Only `RobustAccepted` artifacts are bootable;
+   among them FSBL chooses higher `E`, then `R`, then slot A.
 5. After `OPEN-JRN-HW-1` closes, a candidate receives at most one probation
    boot before its terminal-replica sequence. No at-most-once claim is made for an
    unsanitized ES0499 marginal backup-power state.
@@ -5202,11 +5170,11 @@ An implementation conforming to this specification maintains:
    exact constrained `Aborted`; other floor classes retain their no-handoff
    semantics.
 7. The previous robust confirmed source remains eligible through probation and
-   the confirmation writes only while its own full-terminal or exact floor-bound
+   the confirmation writes only while its own full-terminal
    confirmation authority remains valid. This is not a continuous redundant-
    witness guarantee; loss of robust source authority halts probation rather
-   than promoting the candidate, although a separately valid degraded service
-   boot may remain. After same-epoch finalization it remains floor-eligible;
+   than promoting the candidate, and no degraded service
+   boot remains. After same-epoch finalization it remains floor-eligible;
    it is not user-selectable while a newer valid release is preferred;
    after durable higher-epoch establishment every slot with `E <= F` is
    ineligible.
@@ -5300,7 +5268,7 @@ loss of authoritative state returns `Unknown`. None lowers `F`. A launched-all-`
     the missing, inactive, or older page first. After offline factory `BASE0`
     provisioning, no Route-1 write occurs for a field `T == F` path.
 18. The availability claim is phase-scoped by `OPEN-JRN-DUR-1`: it does not
-    promise survival when every robust/degraded/floor-bound accepted authority
+    promise survival when every robust accepted authority
     is lost during staging/probation, and
     it ends at the defined probation boundary rather than
     promise recovery from a bug unique to the first ordinary post-establishment
@@ -5321,9 +5289,10 @@ loss of authoritative state returns `Unknown`. None lowers `F`. A launched-all-`
     `Aborted(DeadStageProof)`, which carries that unchanged floor and excludes
     the failed candidate/twin.
 21. A committed epoch group's accepted-manifest binding, whether exposed by
-    `Steady` or carried as the authoritative predecessor of exact `Aborted`, authorizes at most one
-    exact slot/install-id/tuple/digest/image set after terminal-set degradation. It cannot
-    initialize a commitment, authorize another same-floor artifact, or revive
+    `Steady` or carried as the authoritative predecessor of exact `Aborted`, binds at most one
+    exact slot/install-id/tuple/digest/image set as an evidentiary record only. It cannot
+    initialize a commitment, grant boot or admission authority after terminal-set
+    degradation, authorize another same-floor artifact, or revive
     an epoch at or below `F`.
 22. The updater mutates only the inactive manifest/secure/NS ranges in the
     exhaustive map. Under the external boot hold, factory genesis first
@@ -5335,7 +5304,7 @@ loss of authoritative state returns `Unknown`. None lowers `F`. A launched-all-`
     readback. A one-confirmed-slot intermediate cannot boot or ship, and no
     uncertain marker QW is retried in place.
 23. `Aborted` is terminal for epoch advancement but not for exact-`F`
-    availability. `RecoverySameEpoch`, `PeerRepair`, and
+    availability. `PeerRepair` and
     `DegradedArtifactRepair` may restore a robust accepted artifact only
     through complete restage, one-shot probation, full health, and both
     terminal replicas, with zero rollback-backend writes. No such path can
