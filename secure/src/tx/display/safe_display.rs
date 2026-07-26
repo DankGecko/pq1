@@ -293,6 +293,70 @@ fn refund_is_active(
     )
 }
 
+fn erc20_call_amount_is_exactly_renderable(call: &Erc20Call, meta: &Erc20Metadata<'_>) -> bool {
+    let amount = match call {
+        Erc20Call::Transfer { amount, .. }
+        | Erc20Call::TransferFrom { amount, .. }
+        | Erc20Call::Approve { amount, .. } => amount,
+    };
+    (matches!(call, Erc20Call::Approve { .. }) && is_unlimited_amount(amount))
+        || super::primitives::token_amount_is_exactly_renderable(amount, meta)
+}
+
+/// Pre-publication exactness proof for every metadata-scaled legacy amount on
+/// a Safe surface. It walks the same strict ERC-20 and MultiSend decoders used
+/// by classification, and executes the real painter into scratch rows. Unknown
+/// tokens remain on the raw-integer path; authenticated decimals may never
+/// authorize a rounded amount.
+fn legacy_token_amounts_are_exactly_renderable(
+    input: &SafeRenderInput<'_>,
+    erc20: Option<&Erc20Metadata<'_>>,
+) -> bool {
+    // Safe gas refund amount, when the supplied metadata is for gasToken.
+    if refund_is_active(&input.gas_price, &input.gas_token, &input.refund_receiver) {
+        if let Some(meta) = erc20.filter(|meta| meta.contract == input.gas_token) {
+            let (base_gas, base_overflow) = u64_be_tail(&input.base_gas);
+            let Some(gas_units) = base_gas.checked_add(GAS_USED_CEILING) else {
+                return false;
+            };
+            let (worst, mul_overflow) = U256(input.gas_price).saturating_mul_u64(gas_units);
+            if base_overflow
+                || mul_overflow
+                || !super::primitives::token_amount_is_exactly_renderable(&worst, meta)
+            {
+                return false;
+            }
+        }
+    }
+
+    if multi_send::is_multisend_claim(input.operation, &input.to, input.raw_data) {
+        let Ok(packed) = multi_send::decode_multisend(input.raw_data) else {
+            return false;
+        };
+        for record in MsRecordIter::new(packed) {
+            let Ok(record) = record else {
+                return false;
+            };
+            let Some(meta) = erc20.filter(|meta| meta.contract == record.to) else {
+                continue;
+            };
+            if let Some(call) = parse_erc20_calldata(record.data) {
+                if !erc20_call_amount_is_exactly_renderable(&call, meta) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    let Some(meta) = erc20.filter(|meta| meta.contract == input.to) else {
+        return true;
+    };
+    parse_erc20_calldata(input.raw_data)
+        .map(|call| erc20_call_amount_is_exactly_renderable(&call, meta))
+        .unwrap_or(true)
+}
+
 /// Fixed (non-inner-tx, non-inner-ETH) Safe overhead page count:
 /// header(3) + refund(0|3) + safeTxGas(0|1) + trailing confirm(1).
 ///
@@ -520,6 +584,14 @@ fn render_safe_pages_inner(
     let safe = SafeRawData {
         raw_data: input.raw_data,
     };
+
+    let legacy_amounts_exact = crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(legacy_token_amounts_are_exactly_renderable(input, erc20))
+    });
+    crate::fi::scrub_sentinel_register();
+    if legacy_amounts_exact != crate::fi::OK_SENTINEL {
+        return Err(());
+    }
 
     // Safe cannot consume an ERC-7730 proof for its inner call yet. Before
     // classification, prove that the exact direct tuple OR every exact

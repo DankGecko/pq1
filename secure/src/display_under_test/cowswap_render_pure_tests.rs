@@ -18,7 +18,9 @@
 //! assertion tracks them.
 
 use crate::tx::eip712::cowswap::CowLeg;
-use crate::tx::eip712::cowswap_display::{order_kind_label, render_cowswap_pages};
+use crate::tx::eip712::cowswap_display::{
+    amounts_are_exactly_renderable, order_kind_label, render_cowswap_pages,
+};
 use crate::ui::DISPLAY_COLS;
 
 // Canonical field offsets (mirror cowswap_display.rs / cowswap/mod.rs §7-23).
@@ -92,6 +94,48 @@ fn sell_canonical(sell_token: [u8; 20], sell_amount: u128) -> [u8; 204] {
     put_amount(&mut c, OFF_SELL_AMOUNT, sell_amount);
     c[OFF_KIND] = 0; // SELL
     c
+}
+
+#[test]
+fn exact_preflight_accepts_decoded_dust_via_base_units() {
+    let c = sell_canonical([0x33; 20], 1);
+    let sell = leg(b"DUST", 18);
+
+    assert!(
+        amounts_are_exactly_renderable(&c, &sell, &CowLeg::AddrHex),
+        "one signed base unit must remain available without rounding"
+    );
+
+    let pages = render_cowswap_pages(&c, &sell, &CowLeg::AddrHex);
+    assert!(
+        page_concat(&pages, 1).contains("base DUST"),
+        "the accepted value must use the exact base-unit fallback"
+    );
+}
+
+#[test]
+fn exact_preflight_refuses_value_too_wide_for_scaled_or_base_units() {
+    // 10^21 + 1 has a 22-digit raw representation. With 18 decimals and a
+    // four-byte symbol, its exact fractional form cannot fit row 2 and its
+    // raw base-unit form cannot fit row 1.
+    let c = sell_canonical([0x33; 20], 1_000_000_000_000_000_000_001);
+    let sell = leg(b"DUST", 18);
+
+    assert!(
+        !amounts_are_exactly_renderable(&c, &sell, &CowLeg::AddrHex),
+        "the preflight must refuse when neither exact representation fits"
+    );
+}
+
+#[test]
+fn exact_preflight_accepts_addrhex_high_byte_sell() {
+    let mut c = sell_canonical([0x33; 20], 0);
+    c[OFF_SELL_AMOUNT] = 1; // 2^248, exact in the fallback leg's full-U256 hex.
+
+    assert!(
+        amounts_are_exactly_renderable(&c, &CowLeg::AddrHex, &CowLeg::AddrHex),
+        "AddrHex legs use an exact hex painter and must not inherit decimal-width refusal"
+    );
 }
 
 #[test]

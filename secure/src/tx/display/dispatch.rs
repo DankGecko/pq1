@@ -600,6 +600,40 @@ fn pick_sign_pages_impl(
             return Err(());
         }
     }
+    // Every route below publishes the same signed EIP-1559 fee prices, either
+    // inline or through the dispatcher-owned legacy pair. Prove that all
+    // three rows have an exact representation before any route can publish
+    // pages. The FI helper evaluates the pure formatter predicate twice with
+    // a randomized gap and returns a fail-initialized sentinel; a lossy or
+    // overwide fee therefore refuses rather than becoming an authorization
+    // banner shared by distinct signed values.
+    let legacy_fee_exact = crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(super::primitives::legacy_fee_rows_are_exactly_renderable(
+            &tx.max_fee_per_gas,
+            &tx.max_priority_fee_per_gas,
+            tx.gas_limit,
+            tx.chain_id,
+        ))
+    });
+    crate::fi::scrub_sentinel_register();
+    if legacy_fee_exact != crate::fi::OK_SENTINEL {
+        return Err(());
+    }
+    if let Some(order) = v3 {
+        let cow_amounts_exact = crate::fi::check_true_into_sentinel(|| {
+            core::hint::black_box(
+                crate::tx::eip712::cowswap_display::amounts_are_exactly_renderable(
+                    &order.canonical,
+                    &order.sell,
+                    &order.buy,
+                ),
+            )
+        });
+        crate::fi::scrub_sentinel_register();
+        if cow_amounts_exact != crate::fi::OK_SENTINEL {
+            return Err(());
+        }
+    }
     classify_intent_requirement(
         v3.is_some(),
         safe_v1.is_some(),
@@ -1071,6 +1105,19 @@ fn pick_sign_pages_inner(
             });
             Ok(match matched {
                 Some(meta) => {
+                    let amount = match &call {
+                        crate::erc20::calldata::Erc20Call::Transfer { amount, .. }
+                        | crate::erc20::calldata::Erc20Call::TransferFrom { amount, .. }
+                        | crate::erc20::calldata::Erc20Call::Approve { amount, .. } => amount,
+                    };
+                    let unlimited_approve =
+                        matches!(&call, crate::erc20::calldata::Erc20Call::Approve { .. })
+                            && crate::erc20::calldata::is_unlimited_amount(amount);
+                    if !unlimited_approve
+                        && !super::primitives::token_amount_is_exactly_renderable(amount, meta)
+                    {
+                        return Err(());
+                    }
                     super::erc20_known::render_erc20_known_pages(tx, &call, meta, resolver)
                 }
                 None => super::erc20_unknown::render_erc20_unknown_pages(tx, &call, resolver),

@@ -978,6 +978,150 @@ fn wysiwys_erc20_known_metadata_binds_amount_and_recipient() {
     assert_addr_shown(&out.pages, &signed_recipient, "signed ERC-20 recipient");
 }
 
+#[test]
+fn wysiwys_erc20_known_unrenderable_amount_refuses_before_pages_escape() {
+    let token = [0xAA; 20];
+    let recipient = [0xB7; 20];
+    let amount_word = be_u256_from_u64(10_000_000_000_000_001);
+    let meta = Erc20Metadata {
+        chain_id: 8453,
+        contract: token,
+        decimals: 18,
+        name: b"Token",
+        symbol: b"TOK",
+    };
+    assert!(
+        !super::primitives::token_amount_is_exactly_renderable(&U256(amount_word), &meta),
+        "fixture must exceed both the exact scaled and labelled base-unit widths"
+    );
+
+    let mut req = WireSignRequest::base();
+    req.to = token;
+    let mut data = vec![0u8; 4 + 64];
+    data[..4].copy_from_slice(&selector_of("transfer(address,uint256)"));
+    data[4 + 12..4 + 32].copy_from_slice(&recipient);
+    data[4 + 32..4 + 64].copy_from_slice(&amount_word);
+    req.data = data;
+    let parsed = mirror_parse(&req.encode());
+    let tx = tx_for_display(&parsed);
+    let resolver = NameResolver::new();
+    let mut dispatch_proofs = DispatchPageProofs::new();
+    dispatch_proofs.fail_initialize();
+
+    assert!(
+        pick_sign_pages(
+            &tx,
+            &parsed.inner,
+            &parsed.sender,
+            None,
+            None,
+            None,
+            None,
+            Some(&meta),
+            None,
+            &resolver,
+            &mut dispatch_proofs,
+        )
+        .is_err(),
+        "known-token rounding risk must refuse before a Pages value escapes dispatch"
+    );
+}
+
+#[test]
+fn wysiwys_erc20_known_unlimited_approve_remains_allowed() {
+    let token = [0xAA; 20];
+    let spender = [0xB7; 20];
+    let amount_word = [0xFF; 32];
+    let meta = Erc20Metadata {
+        chain_id: 8453,
+        contract: token,
+        decimals: 18,
+        name: b"Token",
+        symbol: b"TOK",
+    };
+    assert!(crate::erc20::calldata::is_unlimited_amount(&U256(
+        amount_word
+    )));
+    assert!(
+        !super::primitives::token_amount_is_exactly_renderable(&U256(amount_word), &meta),
+        "the test must exercise the explicit unlimited-approve semantic path"
+    );
+
+    let mut req = WireSignRequest::base();
+    req.to = token;
+    let mut data = vec![0u8; 4 + 64];
+    data[..4].copy_from_slice(&selector_of("approve(address,uint256)"));
+    data[4 + 12..4 + 32].copy_from_slice(&spender);
+    data[4 + 32..4 + 64].copy_from_slice(&amount_word);
+    req.data = data;
+    let parsed = mirror_parse(&req.encode());
+    let tx = tx_for_display(&parsed);
+    let resolver = NameResolver::new();
+    let mut dispatch_proofs = DispatchPageProofs::new();
+    dispatch_proofs.fail_initialize();
+
+    let pages = pick_sign_pages(
+        &tx,
+        &parsed.inner,
+        &parsed.sender,
+        None,
+        None,
+        None,
+        None,
+        Some(&meta),
+        None,
+        &resolver,
+        &mut dispatch_proofs,
+    )
+    .expect("unlimited approve has an explicit, exact semantic rendering");
+    let rows = all_rows(&pages);
+    assert!(rows_contain(&rows, "unlimited"));
+    assert!(!rows_contain(&rows, "!AMOUNT OVERFLOW"));
+}
+
+#[test]
+fn wysiwys_legacy_fee_unrenderable_budget_refuses_before_pages_escape() {
+    let mut req = WireSignRequest::base();
+    req.max_fee_per_gas = be_u256_from_u64(1);
+    req.max_priority_fee_per_gas = be_u256_from_u64(1);
+    req.call_gas_limit = be_u256_from_u64(10_000_000);
+    req.verification_gas_limit = [0u8; 32];
+    req.pre_verification_gas = [0u8; 32];
+
+    let parsed = mirror_parse(&req.encode());
+    let tx = tx_for_display(&parsed);
+    assert!(
+        !super::primitives::legacy_fee_rows_are_exactly_renderable(
+            &tx.max_fee_per_gas,
+            &tx.max_priority_fee_per_gas,
+            tx.gas_limit,
+            tx.chain_id,
+        ),
+        "fixture must cross the exact one-row fee-budget boundary"
+    );
+
+    let resolver = NameResolver::new();
+    let mut dispatch_proofs = DispatchPageProofs::new();
+    dispatch_proofs.fail_initialize();
+    assert!(
+        pick_sign_pages(
+            &tx,
+            &parsed.inner,
+            &parsed.sender,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &resolver,
+            &mut dispatch_proofs,
+        )
+        .is_err(),
+        "an inexact legacy fee envelope must refuse before a Pages value escapes dispatch"
+    );
+}
+
 /// The dispatcher's direct-path metadata gate: metadata for token T must
 /// NOT label a transfer whose signed target is token Y (glue-level
 /// mis-attribution — audit 2026-06-28).

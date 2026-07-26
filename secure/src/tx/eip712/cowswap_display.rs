@@ -85,6 +85,72 @@ pub fn order_body_page_count(sell: &CowLeg, buy: &CowLeg) -> usize {
     leg_page_count(sell.is_decoded()) + leg_page_count(buy.is_decoded()) + 4
 }
 
+/// Execute the real three CoW amount painters into scratch rows before any
+/// order page is published. Sell, buy and fee are all signed canonical words;
+/// every one must have an exact representation under its selected token
+/// metadata.
+#[must_use]
+pub fn amounts_are_exactly_renderable(canonical: &[u8; 204], sell: &CowLeg, buy: &CowLeg) -> bool {
+    fn leg_fits(amount: &[u8; 32], leg: &CowLeg) -> bool {
+        let mut row1 = [b' '; DISPLAY_COLS];
+        let mut row2 = [b' '; DISPLAY_COLS];
+        match leg {
+            CowLeg::Decoded {
+                decimals,
+                symbol,
+                symbol_len,
+                ..
+            } => crate::tx::display::primitives::write_cow_leg_amount(
+                &mut row1,
+                &mut row2,
+                amount,
+                *decimals,
+                &symbol[..*symbol_len as usize],
+            ),
+            // The actual fallback leg renderer publishes the complete uint256
+            // as hex on its own page, so every value is exact by construction.
+            CowLeg::AddrHex => true,
+        }
+    }
+
+    fn fee_fits(amount: &[u8; 32], sell: &CowLeg) -> bool {
+        let mut row1 = [b' '; DISPLAY_COLS];
+        let mut row2 = [b' '; DISPLAY_COLS];
+        match sell {
+            CowLeg::Decoded {
+                decimals,
+                symbol,
+                symbol_len,
+                ..
+            } => crate::tx::display::primitives::write_cow_leg_amount(
+                &mut row1,
+                &mut row2,
+                amount,
+                *decimals,
+                &symbol[..*symbol_len as usize],
+            ),
+            CowLeg::AddrHex => crate::tx::display::primitives::write_cow_leg_amount(
+                &mut row1,
+                &mut row2,
+                amount,
+                0,
+                &[],
+            ),
+        }
+    }
+
+    let sell_amount: &[u8; 32] = canonical[OFF_SELL_AMOUNT..OFF_SELL_AMOUNT + 32]
+        .try_into()
+        .expect("32-byte slice");
+    let buy_amount: &[u8; 32] = canonical[OFF_BUY_AMOUNT..OFF_BUY_AMOUNT + 32]
+        .try_into()
+        .expect("32-byte slice");
+    let fee_amount: &[u8; 32] = canonical[OFF_FEE_AMOUNT..OFF_FEE_AMOUNT + 32]
+        .try_into()
+        .expect("32-byte slice");
+    leg_fits(sell_amount, sell) && leg_fits(buy_amount, buy) && fee_fits(fee_amount, sell)
+}
+
 /// Produce the full confirmation flow for a verified CowSwap order.
 ///
 /// Page layout: header (chain + kind) → order body → confirm. Each leg
