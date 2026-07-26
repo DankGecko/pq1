@@ -326,6 +326,25 @@ verify-lean-proto-domain: ## Lean factory domain tag == proto (P7)
 # documented in the script header).
 verify-fv-lints: verify-build ## FV anti-vacuity sub-lints (escape-hatch/closures/opaque-guard)
 	@/usr/bin/bash scripts/lint_fv_invariants.sh
+	@evilbin=$$(mktemp -d /tmp/pq-fvlint-planted-python3.XXXXXX); \
+	sentinel=$$(mktemp -u /tmp/pq-fvlint-planted-sentinel.XXXXXX); \
+	printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$$sentinel" >$$evilbin/python3; \
+	chmod +x $$evilbin/python3; \
+	out=$$(mktemp /tmp/pq-fvlint-planted-out.XXXXXX); \
+	PATH="$$evilbin:/usr/bin:/bin" /usr/bin/bash scripts/lint_fv_invariants.sh >$$out 2>&1; \
+	rc=$$?; \
+	if [ $$rc -ne 0 ]; then \
+	  echo "CONTROL FAILURE: verify-fv-lints failed under a planted-PATH python3" >&2; \
+	  sed -n '1,60p' $$out >&2; rm -rf $$out $$evilbin $$sentinel; exit 1; \
+	elif [ -e "$$sentinel" ]; then \
+	  echo "CONTROL FAILURE: the lint comment-stripper resolved python3 through the caller PATH" >&2; \
+	  sed -n '1,60p' $$out >&2; rm -rf $$out $$evilbin $$sentinel; exit 1; \
+	elif ! grep -Fq 'lint_fv] PASS — all four FV-invariant sub-lints green' $$out; then \
+	  echo "CONTROL FAILURE: verify-fv-lints did not complete its real sub-lints" >&2; \
+	  sed -n '1,60p' $$out >&2; rm -rf $$out $$evilbin $$sentinel; exit 1; \
+	fi; \
+	rm -rf $$out $$evilbin $$sentinel; \
+	echo "  ok: the lint comment-stripper ignores a PATH-planted python3"
 
 # LEDGER-CONSISTENCY gate (anti-vacuity class V5: "advertised != actual"). Makes
 # the human-facing assurance ledger (docs/AXIOM_STATUS.json) FALSIFIABLE against

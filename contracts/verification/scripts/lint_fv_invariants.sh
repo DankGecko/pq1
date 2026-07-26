@@ -81,7 +81,12 @@ require() {
 }
 
 require "${LAKE}"
-require python3
+require /usr/bin/python3
+# The comment-stripper below IS the (a)/(b) sub-lints' evidence interpreter:
+# a PATH-planted `python3` exiting 0 with no output would leave the stripped
+# corpus empty and every escape-hatch/closure grep would pass vacuously
+# (wave-4 Opus 5 HIGH, reviewer-reproduced).  Pin it like the Makefile does.
+FV_PYTHON3="/usr/bin/python3 -E -S"
 
 for d in "${LEAN_DIR}" "${EXTRACTED_DIR}"; do
   if [ ! -d "$d" ]; then
@@ -105,7 +110,7 @@ done
 # mains (Main/CavpMain/BulkMain) and everything under lean/scripts/ are
 # allowed to use `partial def`, IO, etc.
 strip_comments_py() {
-  python3 - "$@" <<'PYEOF'
+  ${FV_PYTHON3} - "$@" <<'PYEOF'
 import sys, os
 
 def strip_comments(text):
@@ -185,11 +190,20 @@ if [ -z "${SRC_FILES//[[:space:]]/}" ]; then
   exit 2
 fi
 
-# Comment-stripped corpus with path:line: prefixes.
+# Comment-stripped corpus with path:line: prefixes.  An EMPTY or tiny strip
+# of a NON-empty source list is not a clean tree — it is the stripper failing
+# open (a planted/no-output interpreter, a broken heredoc), which would let
+# every grep below pass vacuously.  Fail closed on it.  (Length check, not a
+# pattern-replace — `${STRIPPED//[[:space:]]/}` is quadratic over a
+# multi-megabyte corpus in pure bash.)
 STRIPPED="$(strip_comments_py ${SRC_FILES})" || {
   err "(a) comment-stripper failed"
   exit 2
 }
+if [ "${#STRIPPED}" -lt 64 ]; then
+  err "(a) comment-stripper produced a suspiciously tiny corpus (${#STRIPPED} bytes) over a non-empty source list — refusing to lint vacuously"
+  exit 2
+fi
 
 # Escape-hatch patterns. Anchored where it matters:
 #   - native_decide / reduceBool / ofReduceBool : bare token
