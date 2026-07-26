@@ -145,6 +145,15 @@ endif
 # mechanism (e.g. `cp -al` workspaces) is NOT a supported invocation for the
 # evidence gates; use a real checkout (git checkouts/worktrees and plain
 # copies carry link count 1).
+# The link-count stat below and the argv-guard checker path further down
+# shell-interpolate the resolved makefile path.  Inside single quotes the
+# ONLY breakout character is a single quote — a metacharacter path component
+# such as `x'>/dev/null;echo${IFS}1;#` makes the stat return `1` without
+# ever statting the file (wave-2 SOL HIGH, coordinator-reproduced) — so
+# reject that path class outright instead of trying to quote around it.
+ifneq ($(findstring ',$(realpath $(_FV_MAKEFILE_LIST_AT_ENTRY))),)
+$(error refusing verification Makefile path containing a single quote)
+endif
 ifneq ($(shell /usr/bin/stat -c %h '$(realpath $(_FV_MAKEFILE_LIST_AT_ENTRY))'),1)
 $(error refusing multiply-linked verification Makefile (hard-link count is not 1))
 endif
@@ -321,6 +330,22 @@ verify-fv-lints: verify-build ## FV anti-vacuity sub-lints (escape-hatch/closure
 # docs/verification/fv-adversarial-review-playbook.md §B.
 verify-ledger-consistency: verify-build ## AXIOM_STATUS.json falsifiable vs live dump (closures/pins/witnesses)
 	@$(_FV_PYTHON3) scripts/check_ledger_consistency.py --self-test
+	@evilbin=$$(mktemp -d /tmp/pq-ledger-planted-lake.XXXXXX); \
+	printf '#!/bin/sh\necho FORGED-DUMP\n' >$$evilbin/lake; \
+	chmod +x $$evilbin/lake; \
+	out=$$(mktemp /tmp/pq-ledger-planted-lake-out.XXXXXX); \
+	if ! PATH="$$evilbin:/usr/bin:/bin" $(_FV_PYTHON3) scripts/check_ledger_consistency.py >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: ledger gate did not run under a planted-PATH lake" >&2; \
+	  sed -n '1,60p' $$out >&2; rm -rf $$out $$evilbin; exit 1; \
+	elif grep -Fq 'FORGED-DUMP' $$out; then \
+	  echo "CONTROL FAILURE: the live axiom dump resolved lake through the caller PATH" >&2; \
+	  sed -n '1,60p' $$out >&2; rm -rf $$out $$evilbin; exit 1; \
+	elif ! grep -Fq 'OK: every advertised closure' $$out; then \
+	  echo "CONTROL FAILURE: ledger gate did not complete its real checks" >&2; \
+	  sed -n '1,60p' $$out >&2; rm -rf $$out $$evilbin; exit 1; \
+	fi; \
+	rm -rf $$out $$evilbin; \
+	echo "  ok: the live axiom dump ignores a PATH-planted lake"
 	@$(_FV_PYTHON3) scripts/check_ledger_consistency.py
 
 # HARDWARE-ASSUMPTION ledger hygiene. The firmware-side counterpart to
@@ -1107,6 +1132,26 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -rf $$out $$evildir; \
 	echo "  ok: a hard-linked Makefile in a foreign cwd is CAUGHT"
+	+@out=$$(mktemp /tmp/pq-extraction-metachar-selftest.XXXXXX); \
+	evilbase=$$(mktemp -d /tmp/pq-extraction-metachar.XXXXXX); \
+	evildir="$$evilbase/q'x"; \
+	mkdir -p "$$evildir/scripts"; \
+	printf 'print("ok")\n' >"$$evildir/scripts/check_make_argv.py"; \
+	printf 'print("SPOOFED-CWD")\n' >"$$evildir/scripts/check_hw_assumptions.py"; \
+	if ! ln "$$(pwd)/Makefile" "$$evildir/Makefile"; then \
+	  echo "CONTROL FAILURE: could not create the metachar-path Makefile fixture" >&2; \
+	  rm -rf $$out $$evilbase; exit 1; \
+	fi; \
+	if ( cd "$$evildir" && $(_FV_GNU_MAKE) --no-print-directory verify-hw-assumptions ) >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: a single-quote path component defeated the trust-root guards" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evilbase; exit 1; \
+	elif grep -Fq 'SPOOFED-CWD' $$out \
+	    || ! grep -Fq 'refusing verification Makefile path containing a single quote' $$out; then \
+	  echo "CONTROL FAILURE: metachar-path attack was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evilbase; exit 1; \
+	fi; \
+	rm -rf $$out $$evilbase; \
+	echo "  ok: a single-quote path component is rejected before any shell interpolation"
 	+@out=$$(mktemp /tmp/pq-extraction-lake-override-selftest.XXXXXX); \
 	if /usr/bin/env LAKE=/bin/true $(_FV_GNU_MAKE) --no-print-directory \
 	    verify-build >$$out 2>&1; then \

@@ -85,6 +85,8 @@ Exit: 0 = consistent; 1 = at least one divergence; 2 = internal error.
 from __future__ import annotations
 
 import json
+import os
+import pwd
 import re
 import subprocess
 import sys
@@ -278,14 +280,24 @@ def sha256_hex(s: str) -> str:
 
 def run_live_dump() -> str:
     """Run dump_axioms.lean and return combined output. Non-fatal exit (the
-    script ends on a missing `main`); we gate on emitted content, like lint_fv."""
+    script ends on a missing `main`); we gate on emitted content, like lint_fv.
+
+    The Lean toolchain is part of the evidence trust root: resolve it exactly
+    like the Makefile does — the elan shim under the password-database home —
+    never through the caller's PATH.  A planted bare `lake` was shown to
+    answer this call with forged `#print axioms` output (wave-2 SOL HIGH,
+    coordinator-reproduced), which would make every closure comparison below
+    run against attacker-authored "live truth"."""
+    lake = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".elan" / "bin" / "lake"
+    if not lake.is_file():
+        raise SystemExit(f"ERROR: lake not found at the pinned elan location ({lake}).")
     try:
         cp = subprocess.run(
-            ["lake", "env", "lean", DUMP_SCRIPT],
+            [str(lake), "env", "lean", DUMP_SCRIPT],
             cwd=str(LEAN_DIR), capture_output=True, text=True, timeout=900,
         )
     except FileNotFoundError:
-        raise SystemExit("ERROR: `lake` not found on PATH (need elan-installed Lean 4).")
+        raise SystemExit(f"ERROR: `{lake}` not executable (need elan-installed Lean 4).")
     except subprocess.TimeoutExpired:
         raise SystemExit("ERROR: dump_axioms.lean timed out (>900s).")
     return cp.stdout + cp.stderr

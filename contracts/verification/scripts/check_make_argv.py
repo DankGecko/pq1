@@ -122,15 +122,19 @@ def scan_makeflags_value(value: str) -> list[str]:
 
     MAKEFLAGS grammar: a first word without dashes is a bundle of
     single-letter options (``n``, ``nw``); an argument-taking option
-    consumes the following word (``o <target>``, ``C <dir>``).  GNU Make
-    strips the argument-taking options from the value it propagates, so
-    only the at-exec environ shows them.
+    consumes the following word (``o <target>``, ``C <dir>``); everything
+    after a bare ``--`` word is a command-line variable assignment passed
+    through for sub-makes (``-- FOO=bar``), not an option.  GNU Make strips
+    the argument-taking options from the value it propagates, so only the
+    at-exec environ shows them.
     """
     hits: list[str] = []
     words = value.split()
     i = 0
     while i < len(words):
         word = words[i]
+        if word == "--":
+            break
         if word.startswith("--") and len(word) > 2:
             option, separator, _ = word[2:].partition("=")
             if _prefix_match(option, _SUPPRESSION_LONG_NOARG):
@@ -221,6 +225,9 @@ def self_test() -> int:
         ("j4", []),
         ("C sub", []),
         ("", []),
+        ("w --no-print-directory -- FOO=production", []),
+        ("n -- FOO=production", ["-n"]),
+        ("-- _FV_EXTRACTION_INNER=1", []),
     )
     for value, expected in makeflags_cases:
         hits = scan_makeflags_value(value)
