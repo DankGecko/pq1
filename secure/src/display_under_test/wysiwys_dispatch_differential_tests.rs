@@ -1307,7 +1307,7 @@ fn wysiwys_safe_exec_renders_safe_surface_with_spliced_gas_pages() {
     // The dispatcher's gas splice must fire for the Safe surface (the
     // renderer itself is gas-less; hiding fees is the 2026-06-19 fee-bomb).
     assert!(
-        rows_contain(&rows, "Max fee:"),
+        rows_contain(&rows, "Fees: max / tip"),
         "gas pages spliced for Safe"
     );
     assert!(
@@ -1418,7 +1418,7 @@ fn append_only_combined_transcripts_have_exact_mandatory_suffix_order() {
     );
     assert_eq!(
         row_str(&safe_out.pages.as_slice()[safe_out.dispatch_pages_len - 2][0]),
-        "Max fee:"
+        "Fees: max / tip"
     );
     assert_eq!(
         row_str(&safe_out.pages.as_slice()[safe_out.dispatch_pages_len - 1][0]),

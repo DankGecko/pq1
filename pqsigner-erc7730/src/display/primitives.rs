@@ -786,46 +786,11 @@ pub fn write_gas(row: &mut [u8; DISPLAY_COLS], gas: u64) {
     }
 }
 
-/// "Tip: N gwei" on a single row. Uses the same exactness policy and raw-wei
-/// fallback as [`write_gwei`].
+/// Paint the priority-fee value on the full row. Legacy fee pages label row 1
+/// and row 2 together as `max / tip`, so neither value sacrifices exact
+/// numeric width to a repeated inline label.
 pub fn write_tip_row(row: &mut [u8; DISPLAY_COLS], tip: &U256) -> bool {
-    *row = [b' '; DISPLAY_COLS];
-    let mut pos = append(row, 0, b"Tip: ");
-    let mut tmp = [0u8; 96];
-    for &frac in &[3u32, 2, 1, 0] {
-        if amount_is_exact_at_fraction_digits(tip, 9, frac) {
-            if let Some(n) = tip.format_decimal(9, frac, true, &mut tmp) {
-                if pos + n + 5 <= DISPLAY_COLS {
-                    row[pos..pos + n].copy_from_slice(&tmp[..n]);
-                    pos += n;
-                    let _ = append(row, pos, b" gwei");
-                    return true;
-                }
-            }
-        }
-    }
-    for frac in 4u32..=9 {
-        if amount_is_exact_at_fraction_digits(tip, 9, frac) {
-            if let Some(n) = tip.format_decimal(9, frac, true, &mut tmp) {
-                if pos + n + 5 <= DISPLAY_COLS {
-                    row[pos..pos + n].copy_from_slice(&tmp[..n]);
-                    pos += n;
-                    let _ = append(row, pos, b" gwei");
-                    return true;
-                }
-            }
-        }
-    }
-    if let Some(n) = tip.format_decimal(0, 0, true, &mut tmp) {
-        if pos + n + 4 <= DISPLAY_COLS {
-            row[pos..pos + n].copy_from_slice(&tmp[..n]);
-            pos += n;
-            let _ = append(row, pos, b" wei");
-            return true;
-        }
-    }
-    let _ = append(row, 5, b"!OVF");
-    false
+    write_gwei(row, tip)
 }
 
 /// "Max: X ETH" worst-case fee budget on a single row. Computed as

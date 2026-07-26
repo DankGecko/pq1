@@ -162,7 +162,7 @@ pub(super) fn try_render_typed_call(
     page_idx += 1;
 
     // ── Page (next): Max fee + tip ──────────────────────────────────
-    write_line(&mut pages.buf[page_idx][0], "Max fee:");
+    write_line(&mut pages.buf[page_idx][0], "Fees: max / tip");
     let _ = write_gwei(&mut pages.buf[page_idx][1], &tx.max_fee_per_gas);
     write_tip_row(&mut pages.buf[page_idx][2], &tx.max_priority_fee_per_gas);
     write_line(&mut pages.buf[page_idx][3], "> next");

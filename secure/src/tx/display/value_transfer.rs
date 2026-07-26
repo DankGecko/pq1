@@ -8,9 +8,9 @@
 //!     <chain name>          1234567890abcdef       56789 ETH
 //!     > next                0123456789             > next
 //!
-//!  3: "Max fee:"         4: "Worst-case:"       5: "Nonce: <n>"
-//!     <gwei> gwei           <max_fee*gas> ETH      Data: <n> B
-//!     Tip: <gwei>           (gas: <limit>)         L=Cancel
+//!  3: "Fees: max / tip"  4: "Worst-case:"       5: "Nonce: <n>"
+//!     <max gwei>             <max_fee*gas> ETH      Data: <n> B
+//!     <tip gwei>             (gas: <limit>)         L=Cancel
 //!     > next                > next                 R=Confirm
 //! ```
 //!
@@ -66,7 +66,7 @@ pub fn render_pages(tx: &Eip1559Tx, resolver: &NameResolver<'_>) -> Pages {
     }
 
     // ── Page 3: Max fee + tip ───────────────────────────────────────
-    write_line(&mut pages.buf[3][0], "Max fee:");
+    write_line(&mut pages.buf[3][0], "Fees: max / tip");
     let _ = write_gwei(&mut pages.buf[3][1], &tx.max_fee_per_gas);
     write_tip_row(&mut pages.buf[3][2], &tx.max_priority_fee_per_gas);
     write_line(&mut pages.buf[3][3], "> next");

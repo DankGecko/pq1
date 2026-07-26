@@ -2168,9 +2168,9 @@ fn negative_no_non_ascii_anywhere_in_renderer_outputs() {
 fn positive_write_tip_and_fee_budget_render() {
     let mut tip_row = [b' '; DISPLAY_COLS];
     let tip = u256_from_u64(1_500_000_000); // 1.5 gwei
-    write_tip_row(&mut tip_row, &tip);
+    assert!(write_tip_row(&mut tip_row, &tip));
     let s = row_str(&tip_row);
-    assert!(s.starts_with("Tip:"), "expected Tip: prefix, got {:?}", s);
+    assert_eq!(s, "1.5 gwei");
     assert!(s.contains("gwei"), "expected 'gwei' unit, got {:?}", s);
 
     let mut fee_row = [b' '; DISPLAY_COLS];
@@ -2186,6 +2186,18 @@ fn positive_write_tip_and_fee_budget_render() {
         !s.contains("ETH"),
         "BSC fee must not be labelled ETH: {s:?}"
     );
+}
+
+#[test]
+fn legacy_tip_uses_full_row_for_common_exact_values() {
+    for (raw, expected) in [
+        (123_456_000_000, "123.456 gwei"),
+        (12_345_678, "0.012345678 gwei"),
+    ] {
+        let mut row = [b' '; DISPLAY_COLS];
+        assert!(write_tip_row(&mut row, &u256_from_u64(raw)));
+        assert_eq!(row_str(&row), expected);
+    }
 }
 
 #[test]

@@ -414,7 +414,7 @@ pub(super) fn enforce_gas_pages(
 
 fn build_legacy_fee_pages(tx: &Eip1559Tx) -> [LegacyFeePage; LEGACY_FEE_PAGES] {
     let mut pages = [[[b' '; DISPLAY_COLS]; DISPLAY_ROWS]; LEGACY_FEE_PAGES];
-    primitives::write_line(&mut pages[0][0], "Max fee:");
+    primitives::write_line(&mut pages[0][0], "Fees: max / tip");
     let _ = primitives::write_gwei(&mut pages[0][1], &tx.max_fee_per_gas);
     primitives::write_tip_row(&mut pages[0][2], &tx.max_priority_fee_per_gas);
     primitives::write_line(&mut pages[0][3], "> next");
@@ -1198,7 +1198,7 @@ mod tests {
         // Original prefix is unchanged; fee pages form the new suffix.
         assert_eq!(&pages.buf[0][0][..13], b"Sign CowSwap?");
         assert_eq!(&pages.buf[2][2][..8], b"L=Cancel");
-        assert_eq!(&pages.buf[3][0][..8], b"Max fee:");
+        assert_eq!(&pages.buf[3][0][..15], b"Fees: max / tip");
         assert_eq!(&pages.buf[4][0][..11], b"Worst-case:");
     }
 
