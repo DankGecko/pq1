@@ -4255,3 +4255,48 @@ table above and an explicit correction note; the theorem is untouched.
 **ACTIONS TAKEN (the mandatory part, done):** corrected `CLAUDE.md:10` and `README.md:66` to state the margin
 per-KEY (slot keys chain-bound => true per-key cap; bootstrap key chain-independent => `C x 65,536`, floor
 `96 − 2·log₂ C`), and fixed the mislabeled modality in `Quantitative.lean`.
+
+### 2026-07-26c — TRACK B MILESTONE 2a: the deployed-parameter blocker is MEASURED to be ONE proof step
+
+**The gap this addresses.** The capstone chain is CERTIFIED-0-ADMIT but instantiable only at MM45-admissible
+`w ∈ {4,16,256}`. **C10 ships `w = 8`** (`log2_w=3`, `len=43`). So the machine-checked theorem does not apply to the
+parameters in the firmware — the single largest honesty gap in this whole track. Cause: `two_encodings`
+(`WOTS_TW_ES.ec:572`), applied in BOTH argument orders to `m <> m'`, forces `encode_msgWOTS` INJECTIVE with an
+antichain image; the largest antichain of `{0..7}^43` is `2^123.76 < 2^128`, so it is UNSATISFIABLE at deployed
+geometry by ANY encoding — C10's encoding is deliberately MANY-TO-ONE (counter grind to a fixed digit sum).
+
+**Measured repair surface (verified at source).** The ENTIRE injectivity dependency of the 6314-line WOTS-TW
+development is **5 lines in ONE file**: the axiom (`:572`), two lemmas consuming it (`:582` in `exenc_neq0`, `:1305`
+in `nhchwcoll_hchwpre`), and one downstream use each (`:1492`, `:6233`).
+
+**Experiment (`~/repos/c10-eufcma-port/experiments/wots-tw-incenc/`), prediction written BEFORE the compile.**
+Three edits on a COPY — vendored tree byte-identical, md5 `e6165a3b…` before and after, `git status` empty:
+(1) weaken `two_encodings` to CODEWORD-inequality — this IS Def 9 incomparability
+(Drake-Khovratovich-Kudinov-Wagner, IACR CiC 2/1/13), which `drafts/IncEnc.ec` proves target-sum satisfies for
+ARBITRARY `(v,w,T)` with C10's `(43,3,205)` admissible and non-vacuous; (2) promote `exenc_neq0` to an EXPLICIT
+axiom `enc_nonzero` (its old proof fed a constructed `pm <> m`, which many-to-one does not lift) — an honest
+NARROWING, deliberately visible in the census; (3) weaken `nhchwcoll_hchwpre`'s hypothesis (its CONCLUSION already
+mentioned only encodings).
+
+**RESULT — prediction confirmed in both halves.** Exactly one failure, at the predicted line:
+`[critical] WOTS_TW_ES.ec: line 6261 cannot apply view` — the forgery site, where M-EUF-GCMA supplies `m <> m'` and
+says nothing about codewords. **That gap IS the T-COLL-RES event**, which the published framework requires be
+discharged in a game hop BEFORE the case split. **No fourth site**, proven not inferred: EasyCrypt aborts on first
+error, so a probe bridging that single gap (name-only call-site substitution, tactic byte-identical) was compiled —
+`RC=0`, `.eco` written. A permission-fixed CONTROL reproduces `:6261` byte-identically.
+
+**Census.** 0 admits from the 3 edits (pristine also 0); axioms **+1** (`enc_nonzero`); `two_encodings` WEAKENED,
+not added to. Net: one axiom moves from **unsatisfiable at deployed geometry** to **satisfiable at any geometry**.
+
+**HONEST SCOPE — what this is NOT.** It does **not** prove C10 secure at deployed parameters. The gap is **LOCATED,
+not closed**: closing it needs the T-COLL-RES game hop — the computational leg two independent external reviewers
+advised stopping — deliberately not started. Only `WOTS_TW_ES.ec` was recompiled; `FL_SL_XMSS_MT_ES.ec` and the
+chain to the capstone were NOT, so a downstream site could still depend on injectivity. The probe's `PROBE_enc_inj`
+IS injectivity and makes that file vacuous at C10 — a 4th-site detector, never citable as a result.
+
+**Three method gotchas recorded** (each nearly caused a misreport): probe v1 was MALFORMED — its `:6267`
+`nothing to introduce` was the patch, not a fourth site; a **silent `RC=1` at 100% progress with no diagnostic** was
+a container-uid filesystem permission on the new `experiments/` dir (`ec-grind` runs as uid 1001; `drafts/` happens
+to be 777, a new host dir is 775) — every proof checked, only the `.eco` write failed, which is indistinguishable
+from a mystery proof failure unless you check max-progress + the raw log; and the **admit-sweep regex counts
+"admitted" inside COMMENTS** (fail-CLOSED, so no prior certification is affected, but `ec-certify.sh` shares it).
