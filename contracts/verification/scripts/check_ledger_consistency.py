@@ -10,7 +10,7 @@ machine truth: it cross-checks the advertised closures, axiom inventory, status
 counts, and headline-theorem statement shapes against the LIVE Lean dump and
 the Lean source — and fails on any divergence.
 
-Eight independent checks (all run; every failure is reported):
+Independent checks (all run; every failure is reported), headed by:
 
   C1  CLOSURE EXACT-SET — every theorem in the ledger's `closures` block has a
       `#print axioms` closure EXACTLY equal to the advertised set (no missing,
@@ -39,6 +39,13 @@ Eight independent checks (all run; every failure is reported):
       substrings. Catches a re-introduced RAW HYPOTHESIS (e.g. reverting the P1
       fix to a bald-`hInv` conditional) that the axiom-closure checks cannot see.
   C8  NO sorryAx — belt-and-braces (verify-audit is the authoritative sorry gate).
+
+  Further registry checks documented at their functions: C0 (mandatory floors),
+  C9 (witness coverage), C10 (bridge-axiom RHS shape), C11 (exact closure key
+  set), C13 (duplicate dump records), C14 (duplicate list identities), and the
+  load itself rejects duplicate JSON object keys (C15) — plain `json.loads` is
+  silently last-wins, which would let a benign second record hide a rogue
+  first one (the advertised-vs-checked divergence this gate exists to close).
 
 ================================  SCOPE / CAVEAT  =============================
 The LIVE-closure source is `#print axioms` (dump_axioms.lean). In Lean v4.22.0
@@ -222,6 +229,29 @@ def parse_bash_array(text: str, var: str) -> list[str]:
     if not m:
         return []
     return re.findall(r'"([^"]+)"', m.group(1))
+
+
+def _reject_duplicate_keys(pairs: list) -> dict:
+    """`object_pairs_hook` that REJECTS duplicate JSON object keys.  Plain
+    `json.loads` is silently last-wins: a duplicated ledger key would let a
+    benign SECOND record govern every check while a rogue FIRST record is
+    what a top-down human reader sees — the advertised-vs-checked (V5)
+    divergence this gate exists to close.  Symmetric with the duplicate
+    dump-record rejection in `parse_dump` (C13)."""
+    obj = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError(
+                f"duplicate key {key!r} in the ledger JSON — a last-wins overwrite "
+                f"would let a benign second record hide a rogue first one")
+        obj[key] = value
+    return obj
+
+
+def load_ledger() -> dict:
+    """Load AXIOM_STATUS.json rejecting duplicate object keys."""
+    return json.loads(LEDGER_PATH.read_text(encoding="utf-8"),
+                      object_pairs_hook=_reject_duplicate_keys)
 
 
 def axiom_ident(name: str) -> str:
@@ -535,6 +565,47 @@ def check_closures_identity_pin(ledger: dict) -> list[str]:
             f"deleting a tracked closure identity must consciously update EXPECTED_CLOSURES_KEYS."]
 
 
+def check_unique_list_identities(ledger: dict) -> list[str]:
+    """C14 — duplicate IDENTITIES inside ledger lists.  The per-entry checks
+    consume these lists via `set(...)` (C1 closures, C9 witnesses, C0
+    corollaries), which silently dedupes: a duplicated identity inflates the
+    C5 tallies and creates first-vs-last ambiguity for every other consumer
+    of the same file, even though it cannot hide a rogue entry (C5/C6
+    iterate every element).  Reject duplicates so list records carry exact
+    identities, symmetric with the duplicate dump-record rejection (C13),
+    the manifest parser, and the duplicate-key-rejecting ledger load."""
+    fails = []
+
+    def dups(items: list) -> list:
+        seen, repeated = set(), set()
+        for item in items:
+            if item in seen:
+                repeated.add(item)
+            seen.add(item)
+        return sorted(repeated)
+
+    for thm, lst in ledger.get("closures", {}).items():
+        repeated = dups(list(lst))
+        if repeated:
+            fails.append(f"C14 {thm}: duplicate axiom identit{'ies' if len(repeated) > 1 else 'y'} "
+                         f"{repeated} in the `closures` list — a list record must carry exact "
+                         f"identities (silently deduped by set() today, first-vs-last ambiguous "
+                         f"for every other ledger consumer).")
+    repeated = dups([a["id"] for a in ledger.get("axioms", []) if a.get("id") is not None])
+    if repeated:
+        fails.append(f"C14 duplicate `axioms[].id` {repeated} — each documented axiom must "
+                     f"record exactly once.")
+    repeated = dups([e["witness"] for e in ledger.get("witness_coverage", []) if e.get("witness") is not None])
+    if repeated:
+        fails.append(f"C14 duplicate `witness_coverage[].witness` {repeated} — each "
+                     f"non-vacuity witness must record exactly once.")
+    repeated = dups(list(ledger.get("claim_corollaries", [])))
+    if repeated:
+        fails.append(f"C14 duplicate `claim_corollaries` {repeated} — each claim corollary "
+                     f"must record exactly once.")
+    return fails
+
+
 # --------------------------------------------------------------------------- #
 # source-ident harvest (for C4)
 # --------------------------------------------------------------------------- #
@@ -668,9 +739,31 @@ def self_test() -> int:
         dup_fails = ["duplicate dump record rejected"]
     cases.append(("C13 duplicate dump record", dup_fails))
 
+    # C14 DUPLICATE LIST-IDENTITY NEGATIVES — duplicates inside ledger lists
+    # must fire even though the per-entry checks dedupe via set().
+    cases.append(("C14 duplicate closures-list axiom", check_unique_list_identities(
+        {"closures": {tf: base_closure + [base_closure[0]]}})))
+    cases.append(("C14 duplicate axioms[].id", check_unique_list_identities(
+        {"axioms": [{"id": "A5"}, {"id": "A5"}]})))
+    cases.append(("C14 duplicate witness", check_unique_list_identities(
+        {"witness_coverage": [{"witness": "W.one"}, {"witness": "W.one"}]})))
+    cases.append(("C14 duplicate claim_corollaries", check_unique_list_identities(
+        {"claim_corollaries": ["X.one", "X.one"]})))
+
+    # C15 DUPLICATE LEDGER OBJECT KEY NEGATIVE — the load itself must reject
+    # last-wins JSON (a benign second record hiding a rogue first one).
+    try:
+        json.loads('{"closures": {"t": ["Evil"], "t": []}}',
+                   object_pairs_hook=_reject_duplicate_keys)
+        dup_key_fails: list[str] = []
+    except ValueError:
+        dup_key_fails = ["duplicate ledger object key rejected"]
+    cases.append(("C15 duplicate ledger object key", dup_key_fails))
+
     # control: a CLEAN input must NOT fire (guards against always-fire vacuity)
     clean = check_closures(ledger, live_ok) + check_mandatory_registry(mand) \
-        + check_closures_identity_pin({"closures": full_closures})
+        + check_closures_identity_pin({"closures": full_closures}) \
+        + check_unique_list_identities(ledger) + check_unique_list_identities(mand)
 
     ok = True
     for label, result in cases:
@@ -739,8 +832,8 @@ def main() -> int:
             return 2
 
     try:
-        ledger = json.loads(LEDGER_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        ledger = load_ledger()
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         print(f"ERROR: cannot load ledger {LEDGER_PATH}: {exc}", file=sys.stderr)
         return 2
 
@@ -764,6 +857,7 @@ def main() -> int:
     fails: list[str] = []
     fails += check_mandatory_registry(ledger)
     fails += check_closures_identity_pin(ledger)
+    fails += check_unique_list_identities(ledger)
     fails += check_closures(ledger, live)
     fails += check_lint_fv_crosscheck(ledger, lint_text) if lint_text else \
         ["C2 lint_fv_invariants.sh not found — cannot cross-check the closure pin."]

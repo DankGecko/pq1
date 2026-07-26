@@ -72,6 +72,34 @@ endif
 ifneq ($(strip $(_FV_INHERITED_ENV)),)
 $(error refusing inherited ENV for verification Makefile)
 endif
+# Exported Bash functions are an interpreter-startup code-injection channel
+# into every recipe shell: SHELL is /usr/bin/bash, which imports BASH_FUNC_*
+# variables from the environment, and `$(shell command -v …)` resolves to an
+# exported function too.  A caller-exported no-op `lake`/`python3` function
+# made evidence gates exit 0 while producing no evidence (reproduced by all
+# three 2026-07-25 reviewers).  GNU Make imports every environment variable,
+# so detect them purely: any environment-origin BASH_FUNC_* variable rejects
+# the parse before `command -v` or any recipe can inherit it.  The same
+# startup-hook class for the evidence interpreter — PYTHONPATH/PYTHONHOME/
+# PYTHONSTARTUP/PYTHONINSPECT steer python3 startup/module resolution — is
+# rejected alongside (recipes additionally invoke the interpreter with -E -S).
+override _FV_INHERITED_BASH_FUNCS := $(foreach v,$(.VARIABLES),$(if $(filter environment,$(origin $v)),$(filter BASH_FUNC_%,$v)))
+ifneq ($(strip $(_FV_INHERITED_BASH_FUNCS)),)
+$(error refusing inherited exported Bash functions ($(strip $(_FV_INHERITED_BASH_FUNCS))) for verification Makefile)
+endif
+ifneq ($(filter environment environment override command line,$(origin PYTHONPATH)),)
+$(error refusing caller-set PYTHONPATH for verification Makefile)
+endif
+ifneq ($(filter environment environment override command line,$(origin PYTHONHOME)),)
+$(error refusing caller-set PYTHONHOME for verification Makefile)
+endif
+ifneq ($(filter environment environment override command line,$(origin PYTHONSTARTUP)),)
+$(error refusing caller-set PYTHONSTARTUP for verification Makefile)
+endif
+ifneq ($(filter environment environment override command line,$(origin PYTHONINSPECT)),)
+$(error refusing caller-set PYTHONINSPECT for verification Makefile)
+endif
+unexport PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONINSPECT
 # GNU Make appends each parsed makefile to MAKEFILE_LIST itself (origin
 # `file`).  An `override MAKEFILE_LIST := ...` in an earlier `-f` file (origin
 # `override`) or a command-line `MAKEFILE_LIST=...` assignment (origin
@@ -95,11 +123,17 @@ endif
 # /reviewed/Makefile [-f evil.mk]` — would let a planted
 # scripts/check_make_argv.py print `ok` for the guard and put attacker files
 # behind every relative recipe path.  MAKEFILE_LIST has passed the origin and
-# word-count guards, so its sole entry is this file; require the physical cwd
-# to be this file's directory (satisfied by `make`, `make -f Makefile`, and
-# `make -C <dir>`; a symlinked invocation dir resolves consistently).
+# word-count guards, so its sole entry is this file.  Resolving only the
+# entry's DIRECTORY is not enough: a symlink named `Makefile` planted in the
+# attacker cwd makes the entry's spelling `./Makefile`, whose directory's
+# realpath is the attacker cwd itself, so a dir-only comparison passes while
+# every relative recipe path rebinds to the foreign tree (reproduced by all
+# three 2026-07-25 reviewers).  Resolve the makefile FILE first (following
+# the symlink to the real file), then require the physical cwd to be that
+# file's physical directory (satisfied by `make`, `make -f Makefile`, and
+# `make -C <dir>`; a symlinked invocation dir still resolves consistently).
 override _FV_PHYSICAL_CWD := $(shell /usr/bin/pwd -P)
-ifneq ($(_FV_PHYSICAL_CWD),$(realpath $(dir $(_FV_MAKEFILE_LIST_AT_ENTRY))))
+ifneq ($(_FV_PHYSICAL_CWD),$(realpath $(dir $(realpath $(_FV_MAKEFILE_LIST_AT_ENTRY)))))
 $(error refusing foreign working directory ($(_FV_PHYSICAL_CWD)) for verification Makefile; run from the Makefile directory or via make -C)
 endif
 # The toolchain and evidence roots are assigned below with `override`, but a
@@ -129,6 +163,26 @@ endif
 ifneq ($(findstring t,$(_FV_MAKE_SHORT_FLAGS)),)
 $(error refusing Make touch mode for verification Makefile)
 endif
+# Recipe-suppression / no-execute modes are the same fail-open class as -i/-t:
+# `make -n <evidence-target>` prints the recipes and exits 0 without producing
+# evidence, `-q` only reports status, and `-o`/`-W` mark targets assumed
+# old/new.  GNU Make normalizes every no-argument spelling (including
+# unambiguous long-option prefixes like --jus) into the first-word short-flag
+# bundle, and environment-injected MAKEFLAGS land there too (their origin
+# stays `file`, so the origin guard below cannot see them — scan the VALUE
+# unconditionally).  The argument-taking forms (-o/--assume-old, -W) are
+# consumed before MAKEFLAGS is reconstructed and never appear here; those are
+# rejected by the argv/environ guard below.  `w` (print-directory, implied by
+# -C) is not a suppression flag and stays accepted.
+ifneq ($(findstring n,$(_FV_MAKE_SHORT_FLAGS))$(findstring o,$(_FV_MAKE_SHORT_FLAGS))$(findstring q,$(_FV_MAKE_SHORT_FLAGS))$(findstring W,$(_FV_MAKE_SHORT_FLAGS)),)
+$(error refusing Make no-execute/assume mode (dry-run/question/assume-old/what-if) for verification Makefile)
+endif
+# Defense in depth for long-option spellings if a Make version ever keeps
+# them verbatim in MAKEFLAGS instead of normalizing into the bundle.
+override _FV_MAKEFLAGS_BAD_LONG := $(filter --just-print% --dry-run% --recon% --question% --touch% --ignore-errors% --old-file% --assume-old% --new-file% --assume-new% --what-if%,$(MAKEFLAGS))
+ifneq ($(strip $(_FV_MAKEFLAGS_BAD_LONG)),)
+$(error refusing Make no-execute/assume long option ($(_FV_MAKEFLAGS_BAD_LONG)) for verification Makefile)
+endif
 ifneq ($(_FV_MAKEFLAGS_ORIGIN),file)
 $(error refusing caller-overridden MAKEFLAGS (origin $(_FV_MAKEFLAGS_ORIGIN)) for verification Makefile)
 endif
@@ -137,7 +191,33 @@ $(error refusing caller-overridden LAKE (origin $(_FV_LAKE_ORIGIN)) for verifica
 endif
 
 override LEAN_DIR := lean
-override LAKE := $(shell command -v lake 2>/dev/null || echo $$HOME/.elan/bin/lake)
+# The Lean toolchain path is part of the evidence trust root.  HOME is
+# caller-mutable ambient state (`HOME=/tmp/evil make …` would rebind the elan
+# fallback), so derive the fallback home from the password database through
+# the pinned interpreter.  Exported Bash functions are rejected above, so
+# `command -v` can no longer resolve to a function; still require an
+# absolute, existing path so a bare-name or empty result fails closed at
+# parse time instead of rebinding at recipe time.
+override _FV_USER_HOME := $(shell /usr/bin/python3 -I -c 'import os,pwd;print(pwd.getpwuid(os.getuid()).pw_dir)')
+override LAKE := $(shell command -v lake 2>/dev/null || printf '%s/.elan/bin/lake' '$(_FV_USER_HOME)')
+ifeq ($(filter /%,$(LAKE)),)
+$(error LAKE did not resolve to an absolute path ($(LAKE)) for verification Makefile)
+endif
+ifeq ($(wildcard $(LAKE)),)
+$(error LAKE not found at $(LAKE); install the elan Lean 4 toolchain for verification Makefile)
+endif
+# Pin the evidence interpreter.  A bare `python3` re-resolves through the
+# caller's PATH on every recipe line (and, before the BASH_FUNC_* rejection
+# above, through exported Bash functions); `-E -S` additionally isolates it
+# from PYTHONPATH/PYTHONHOME/PYTHONSTARTUP interpreter-startup injection and
+# from sitecustomize/usercustomize/.pth hooks, while still allowing the
+# checker scripts' sibling imports (plain `-I` would strip the script's own
+# directory from sys.path).  The argv guard below already hard-requires this
+# exact binary.
+ifeq ($(wildcard /usr/bin/python3),)
+$(error /usr/bin/python3 is required as the pinned verification interpreter)
+endif
+override _FV_PYTHON3 := /usr/bin/python3 -E -S
 
 # `make` / `make help` lists every runnable target that carries a `## ` blurb
 # (the self-documenting convention — it can't drift from reality the way a
@@ -170,11 +250,11 @@ override _FV_EVIDENCE_TARGETS := \
 # module imports Interpreter/{YulParse,C10Source,C10Parse}); the byte-pin
 # below keeps the embedded c10Source literal honest against the .sol.
 verify: verify-build ## Default FV bundle: build + transcription + KAT + mutant-corpus
-	@python3 scripts/check_c10_transcription.py
-	@python3 scripts/check_c10_transcription_ast.py
-	@python3 scripts/test_c10_transcription_ast_negative.py
-	@python3 scripts/check_c10_source_pin.py
-	@python3 scripts/check_lean_proto_domain.py
+	@$(_FV_PYTHON3) scripts/check_c10_transcription.py
+	@$(_FV_PYTHON3) scripts/check_c10_transcription_ast.py
+	@$(_FV_PYTHON3) scripts/test_c10_transcription_ast_negative.py
+	@$(_FV_PYTHON3) scripts/check_c10_source_pin.py
+	@$(_FV_PYTHON3) scripts/check_lean_proto_domain.py
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-test-vectors
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-mutant-corpus
 
@@ -187,14 +267,14 @@ verify: verify-build ## Default FV bundle: build + transcription + KAT + mutant-
 # source lint (no lake build); positive=current tree PASS, negative=fake
 # resetter FAIL. See scripts/check_storage_mutators.sh.
 verify-storage-mutators: ## I-3 closed-world Storage-mutator allowlist gate
-	@bash scripts/check_storage_mutators.sh
+	@/usr/bin/bash scripts/check_storage_mutators.sh
 
 # P7 source lint (no lake build): the Lean factory add-slot domain tag must be
 # byte-identical to proto::FACTORY_ADD_SLOT_DOMAIN, so the squat-defence proof
 # (invariant #6) stays bound to the digest the device actually signs. Closes
 # the "Lean-only domain drift undetected by the bytecode harnesses" residual.
 verify-lean-proto-domain: ## Lean factory domain tag == proto (P7)
-	@python3 scripts/check_lean_proto_domain.py
+	@$(_FV_PYTHON3) scripts/check_lean_proto_domain.py
 
 # FV-invariant escape-hatch gate: fails CI on the audit anti-patterns over the
 # lean/ + extracted/ Lean SOURCE (comment-stripped). Four sub-lints:
@@ -210,7 +290,7 @@ verify-lean-proto-domain: ## Lean factory domain tag == proto (P7)
 # See scripts/lint_fv_invariants.sh (positive=clean tree PASS; negative trips
 # documented in the script header).
 verify-fv-lints: verify-build ## FV anti-vacuity sub-lints (escape-hatch/closures/opaque-guard)
-	@bash scripts/lint_fv_invariants.sh
+	@/usr/bin/bash scripts/lint_fv_invariants.sh
 
 # LEDGER-CONSISTENCY gate (anti-vacuity class V5: "advertised != actual"). Makes
 # the human-facing assurance ledger (docs/AXIOM_STATUS.json) FALSIFIABLE against
@@ -230,8 +310,8 @@ verify-fv-lints: verify-build ## FV anti-vacuity sub-lints (escape-hatch/closure
 # verify-lean4checker is the completeness backstop. See the script header and
 # docs/verification/fv-adversarial-review-playbook.md §B.
 verify-ledger-consistency: verify-build ## AXIOM_STATUS.json falsifiable vs live dump (closures/pins/witnesses)
-	@python3 scripts/check_ledger_consistency.py --self-test
-	@python3 scripts/check_ledger_consistency.py
+	@$(_FV_PYTHON3) scripts/check_ledger_consistency.py --self-test
+	@$(_FV_PYTHON3) scripts/check_ledger_consistency.py
 
 # HARDWARE-ASSUMPTION ledger hygiene. The firmware-side counterpart to
 # verify-ledger-consistency, for the premises that have NO machine truth to be
@@ -244,8 +324,8 @@ verify-ledger-consistency: verify-build ## AXIOM_STATUS.json falsifiable vs live
 # Needs no build — pure ledger/source inspection.
 .PHONY: verify-hw-assumptions
 verify-hw-assumptions: ## HW-ASSUME ledger falsifiable: anchors resolve, tests real, ids bidirectional
-	@python3 scripts/check_hw_assumptions.py --self-test
-	@python3 scripts/check_hw_assumptions.py
+	@$(_FV_PYTHON3) scripts/check_hw_assumptions.py --self-test
+	@$(_FV_PYTHON3) scripts/check_hw_assumptions.py
 
 # TLA+/TLC models. Until now these had NO make target and the only tla2tools.jar
 # on the box lived in a scratch directory belonging to a session that no longer
@@ -305,8 +385,8 @@ verify-tla: ## TLA+/TLC models (page-123 crash-atomicity, combined budget, PIN r
 # overlap MUST be caught. Pure source parse, no build.
 .PHONY: verify-linker-map
 verify-linker-map: ## TrustZone memory-map drift gate: .x == proto == sau.rs == Lean (P1.9)
-	@python3 scripts/check_linker_memory_map.py --self-test
-	@python3 scripts/check_linker_memory_map.py
+	@$(_FV_PYTHON3) scripts/check_linker_memory_map.py --self-test
+	@$(_FV_PYTHON3) scripts/check_linker_memory_map.py
 
 # Verus (verified Rust) flash-journal crash-safety pilot — an ALL-LENGTH proof of the
 # page-123 SIGS-first compaction-local no-rollback property (INV_SIGS_COMPACTION_LOCAL),
@@ -353,21 +433,21 @@ verify-crux-ns-ptr: ## crux-mir diversity check of ns_ptr_validate vs an indepen
 # `make verify-easycrypt-pins` checks the ledger with no toolchain at all.
 .PHONY: verify-easycrypt verify-easycrypt-full verify-easycrypt-pins
 verify-easycrypt: ## EasyCrypt PARTIAL compile (stdlib +C chain; MM45-chain SKIPPED loudly) + pins
-	@bash scripts/check_easycrypt.sh
+	@/usr/bin/bash scripts/check_easycrypt.sh
 
 # F5 (2026-07-16): "full" is now DISTINCT from partial and HONEST — it requires
 # all 21 .ec compiled with ZERO skips (implies FORCE_MM45=1) and FAILS if the
 # MM45 reference proofs / toolchain are absent, instead of the old behaviour
 # where a skipped-11-of-21 run could still print a success banner.
 verify-easycrypt-full: ## EasyCrypt FULL verification — 21/21, zero skips (needs MM45 toolchain)
-	@bash scripts/check_easycrypt.sh --full
+	@/usr/bin/bash scripts/check_easycrypt.sh --full
 
 # F5: ledger (admit/axiom COUNT + SEMANTIC name->statement pin) with NO toolchain,
 # preceded by the wired-in negative control (a `dmkey_ll : false` weakening and a
 # delete-one-add-one, both count-preserving, MUST fire the semantic pin).
 verify-easycrypt-pins: ## EasyCrypt admit/axiom + semantic pin ledger (no toolchain) + negative control
-	@bash scripts/check_easycrypt.sh --self-test
-	@bash scripts/check_easycrypt.sh --dry-run
+	@/usr/bin/bash scripts/check_easycrypt.sh --self-test
+	@/usr/bin/bash scripts/check_easycrypt.sh --dry-run
 
 # 2026-07-17: the C10-CONCRETE capstone (easycrypt/drafts/SPHINCS_C_c10.ec — the FORS leg
 # routed through the concrete FORS_C10_Multi, not the abstract FORS_C_Multi) is VERIFIED only
@@ -400,8 +480,8 @@ verify-easycrypt-docker: ## EasyCrypt C10-capstone gate in MM45's r2026.02 docke
 # No Lean build needed — pure arithmetic over params.rs constants.
 .PHONY: verify-forsc-margin
 verify-forsc-margin: ## FORS+C never weaker than plain FORS at C10 params (guardrails t_last>=t, ratio<=1)
-	@python3 scripts/forsc_grinding_margin.py --self-test
-	@python3 scripts/forsc_grinding_margin.py
+	@$(_FV_PYTHON3) scripts/forsc_grinding_margin.py --self-test
+	@$(_FV_PYTHON3) scripts/forsc_grinding_margin.py
 
 # PROOF-MUTATION gate (anti-vacuity class V4: "dead conjunct / vacuous lemma").
 # The proof-side analogue of cargo-mutants: for each entry in
@@ -420,7 +500,7 @@ verify-forsc-margin: ## FORS+C never weaker than plain FORS at C10 params (guard
 # Does NOT catch V7 (latent-FALSE axiom — still type-checks) or V11 (wrong spec).
 # See scripts/check_proof_mutations.py + docs/verification/fv-adversarial-review-playbook.md §B.
 verify-proof-mutation: verify-build ## Proof-side cargo-mutants: delete axiom/weaken lemma, expect break (SLOW)
-	@python3 scripts/check_proof_mutations.py
+	@$(_FV_PYTHON3) scripts/check_proof_mutations.py
 
 # EXTERNAL kernel re-check gate (deep-research rec #1). lean/ is Lean v4.22.0,
 # inside the pre-#8842 collectAxioms under-report window, so `#print axioms`
@@ -434,7 +514,7 @@ verify-proof-mutation: verify-build ## Proof-side cargo-mutants: delete axiom/we
 # header for the one-time build: git clone + checkout v4.22.0 + lake build);
 # override the location with LEAN4CHECKER_DIR=...
 verify-lean4checker: ## Independent kernel/environment replay (SLOW, manual pre-release)
-	@bash scripts/run_lean4checker.sh
+	@/usr/bin/bash scripts/run_lean4checker.sh
 
 # Model-to-bytecode (D): Kontrol/KEVM symbolic-execution proofs DIRECTLY against
 # the deployed contract bytecode — an engine independent of Halmos, with no
@@ -443,14 +523,14 @@ verify-lean4checker: ## Independent kernel/environment replay (SLOW, manual pre-
 # backend (`kup install kontrol` via Nix, or the RV Docker image); ~5 min
 # build+prove. See kontrol/run_kontrol.sh + docs/KONTROL_SCOPING.md.
 verify-kontrol: ## Kontrol/KEVM symbolic proofs on deployed bytecode (heavy)
-	@bash kontrol/run_kontrol.sh
+	@/usr/bin/bash kontrol/run_kontrol.sh
 
 # Halmos bytecode-level discharge of the A3.* bridge axioms: certifies the
 # compiled runtime codehashes match the pins, then symbolically executes the
 # deployed wallet/factory/verifier bytecode over the full check_* rule suite
 # (both compiler profiles). Source of truth: halmos/run_halmos.sh.
 verify-halmos: ## Halmos symbolic discharge of A3.* bridge axioms (heavy)
-	@bash halmos/run_halmos.sh
+	@/usr/bin/bash halmos/run_halmos.sh
 
 # Bulk executable-spec differential (A3.1 follow-up): regenerate the random
 # corpus from the Rust signer (slow; gated behind GEN=1), embed it, and run
@@ -461,7 +541,7 @@ verify-halmos: ## Halmos symbolic discharge of A3.* bridge axioms (heavy)
 verify-bulk: ## Bulk executable-spec differential (Lean vs Rust oracle)
 ifeq ($(GEN),1)
 	@cd $(REPO_ROOT) && cargo test -p sphincs-c10 --test gen_bulk_vectors --release -- --nocapture
-	@cd $(LEAN_DIR) && python3 scripts/gen_bulk_lean.py
+	@cd $(LEAN_DIR) && $(_FV_PYTHON3) scripts/gen_bulk_lean.py
 endif
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-bulk
 
@@ -496,17 +576,17 @@ verify-interp: ## A3.1 interpreter<->bytecode KAT+bulk replay
 # (error-string mstore elision; return-var init) are themselves the TCB. See
 # docs/findings/A3_1_ADVERSARIAL_REVIEW_2026-06-18.md + docs/A3_1_CLOSURE_PATH.md §8.
 verify-transcription: ## A3.1 c10Program <-> .sol transcription checks (positional + structural + source byte-pin) + P1.7 digest field-order pin
-	@python3 scripts/check_c10_transcription.py
-	@python3 scripts/check_c10_transcription_ast.py
-	@python3 scripts/test_c10_transcription_ast_negative.py
-	@python3 scripts/check_c10_source_pin.py
+	@$(_FV_PYTHON3) scripts/check_c10_transcription.py
+	@$(_FV_PYTHON3) scripts/check_c10_transcription_ast.py
+	@$(_FV_PYTHON3) scripts/test_c10_transcription_ast_negative.py
+	@$(_FV_PYTHON3) scripts/check_c10_source_pin.py
 	@# P1.7 (2026-07-16): the digest the FIRMWARE signs (compute_sphincs_digest_v06)
 	@# and the digest the wallet RECOMPUTES on-chain (sphincsDigest) must list the
 	@# same 12 preimage fields in the same order — a source-level pin a regenerated
 	@# vector can't see (self-test asserts a reorder/drop fires). See
 	@# docs/verification/fv-pilot-signed-digest-correspondence-2026-07-16.md.
-	@python3 scripts/check_sphincs_digest_field_order.py --self-test
-	@python3 scripts/check_sphincs_digest_field_order.py
+	@$(_FV_PYTHON3) scripts/check_sphincs_digest_field_order.py --self-test
+	@$(_FV_PYTHON3) scripts/check_sphincs_digest_field_order.py
 
 # A3.1 R1a IN-KERNEL parser leg (2026-07-04). Lake-builds the Lean Yul-subset
 # parser (Interpreter/YulParse.lean), the pinned byte-exact source + faithful
@@ -525,7 +605,7 @@ verify-transcription: ## A3.1 c10Program <-> .sol transcription checks (position
 # CI via verify-transcription / a31-transcription.yml; the LAKE proof itself is
 # a LOCAL gate (CI has no Lean toolchain).
 verify-parse-transcription: ## A3.1 in-kernel Yul parse: parseYul c10Source = some c10ProgramFull (kernel rfl) + elision bridge
-	@python3 scripts/check_c10_source_pin.py
+	@$(_FV_PYTHON3) scripts/check_c10_source_pin.py
 	@cd $(LEAN_DIR) && $(LAKE) build SphincsCVerify.Interpreter.YulParse SphincsCVerify.Interpreter.C10Source SphincsCVerify.Interpreter.C10Parse
 	@echo "PASS: parse_c10 + elision bridge + execC10Asm_eq_parsed_source kernel-checked"
 	@echo "      (SphincsCVerify/Interpreter/C10Parse.lean; axiom closure: parse_c10 NONE,"
@@ -542,7 +622,7 @@ verify-parse-transcription: ## A3.1 in-kernel Yul parse: parseYul c10Source = so
 #      output (the genuine independence guard vs a shared Python sign+verify bug).
 # Honest scope: diversity over the shared C10 spec, not a second spec. Needs python3.
 verify-independent-signer: ## Clean-room C10 signer cross-check
-	@python3 scripts/independent_c10_signer.py
+	@$(_FV_PYTHON3) scripts/independent_c10_signer.py
 	@cd $(REPO_ROOT) && cargo test -p sphincs-c10 --test independent_signer_xcheck --release -- --nocapture
 
 # Per-primitive component KAT (ETHFALCON-port R1). Golden intermediate-value
@@ -559,7 +639,7 @@ verify-independent-signer: ## Clean-room C10 signer cross-check
 # See docs/verification/external-kat-provenance-and-ethfalcon-port-2026-07.md.
 verify-primitive-kat: ## Per-primitive tweakable-hash KAT (Rust<->Python<->Yul)
 	@cd $(REPO_ROOT) && cargo test -p sphincs-c10 --features sim-internals --test primitive_kat --release
-	@python3 scripts/independent_c10_signer.py --check-primitives $(REPO_ROOT)/contracts/smart-wallet/test/c10_primitive_kat_vectors.json
+	@$(_FV_PYTHON3) scripts/independent_c10_signer.py --check-primitives $(REPO_ROOT)/contracts/smart-wallet/test/c10_primitive_kat_vectors.json
 	@cd $(REPO_ROOT)/contracts/smart-wallet && forge test --match-contract C10PrimitiveKat
 
 # NIST CAVP SHA-256 conformance: regenerate the embedded vector module from
@@ -568,7 +648,7 @@ verify-primitive-kat: ## Per-primitive tweakable-hash KAT (Rust<->Python<->Yul)
 # through the executable FIPS 180-4 spec (Spec/Sha256Impl.lean). Compiled
 # IO-level comparison; non-zero exit on any mismatch so CI can gate.
 verify-cavp: ## NIST CAVP SHA-256 conformance over the FIPS spec
-	@python3 scripts/gen_cavp_vectors.py
+	@$(_FV_PYTHON3) scripts/gen_cavp_vectors.py
 	@cd $(LEAN_DIR) && $(LAKE) exe verify-cavp
 
 verify-build: ## lake build SphincsCVerify (the kernel gate)
@@ -592,7 +672,7 @@ verify-audit: ## no-sorryAx + #print-axioms closure dump
 	@echo "OK: build emitted no 'uses sorry' warning and no headline/corollary closure contains sorryAx."
 
 verify-three-claims: ## The three security-claim summary
-	@bash scripts/verify-three-claims.sh
+	@/usr/bin/bash scripts/verify-three-claims.sh
 
 verify-exec-gate: ## Claim-4 trace gate closure (kernel-only)
 	@echo "=== Building TxFlow + Spec.Theorems (Claim 4 dep closure) ==="
@@ -609,10 +689,10 @@ verify-exec-gate: ## Claim-4 trace gate closure (kernel-only)
 	@# trace gate were ever pinned to the deployed verifier (which would pull in
 	@# A1/A3.1/A4 and is the P13 over-claim this gate now catches). The python
 	@# helper flattens `#print axioms`'s wrapped output before parsing.
-	@python3 scripts/check_axiom_closure.py --manifest $(LEAN_DIR)/scripts/axiom_closure_claim4_manifest.txt /tmp/pq_claim4_axioms.out
+	@$(_FV_PYTHON3) scripts/check_axiom_closure.py --manifest $(LEAN_DIR)/scripts/axiom_closure_claim4_manifest.txt /tmp/pq_claim4_axioms.out
 
 verify-bytecode-setup: ## One-time Halmos setup
-	@bash halmos/setup_halmos.sh
+	@/usr/bin/bash halmos/setup_halmos.sh
 
 # Bytecode-level discharge of the A3.* bridge axioms: certifies the
 # compiled runtime codehashes match PINNED_CODEHASHES.md (BOTH the default
@@ -623,7 +703,7 @@ verify-bytecode-setup: ## One-time Halmos setup
 # Set PQ1_HALMOS_BOTH_PROFILES=1 to also re-run the symbolic suite under the
 # deploy profile.
 verify-bytecode: ## Halmos bytecode-level A3.* discharge (heavy)
-	@bash halmos/run_halmos.sh
+	@/usr/bin/bash halmos/run_halmos.sh
 
 verify-clean: ## rm -rf .lake build
 	@cd $(LEAN_DIR) && rm -rf .lake build
@@ -664,7 +744,7 @@ endif
 # The authoritative replay must recurse through the reviewed GNU Make binary.
 # Reject ambient executor and Bash-startup overrides as an additional fail-loud
 # receipt.  Internal helper goals are guarded too.
-override _EXTRACTION_REGEN_GUARDED_GOALS := verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test _verify-extraction-regen-wrong-waiver-self-test _verify-extraction-make-path-self-test _verify-extraction-workspace-inner-self-test
+override _EXTRACTION_REGEN_GUARDED_GOALS := verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test _verify-extraction-regen-wrong-waiver-self-test _verify-extraction-make-path-self-test _verify-extraction-workspace-inner-self-test _verify-extraction-alias-delegation-self-test
 override _EXTRACTION_CONTEXT_GOALS := $(_EXTRACTION_REGEN_GUARDED_GOALS) $(_EXTRACTION_TARGETS)
 override _EXTRACTION_ALL_GUARDED_TARGETS := $(_EXTRACTION_CONTEXT_GOALS) $(_EXTRACTION_IMPL_TARGETS)
 override _FV_ALL_PARSER_GUARDED_TARGETS := $(_FV_EVIDENCE_TARGETS) $(_EXTRACTION_ALL_GUARDED_TARGETS)
@@ -703,10 +783,15 @@ endif
 # longer caller-mutable), and of $(CURDIR) (a command-line-assignable Make
 # variable).  The foreign-working-directory guard above additionally pins the
 # process cwd to that same directory, so a planted foreign
-# scripts/check_make_argv.py is never on either path.
-override _FV_MAKE_ARGV_GUARD := $(shell /usr/bin/python3 -I '$(dir $(realpath $(_FV_MAKEFILE_LIST_AT_ENTRY)))scripts/check_make_argv.py' /proc/$$PPID/cmdline)
+# scripts/check_make_argv.py is never on either path.  The checker inspects
+# BOTH channels that carry Make execution flags: the process argv (explicit
+# -f count and no-execute/assume options) and the at-exec environment via
+# /proc/<pid>/environ (an environment-injected MAKEFLAGS, e.g. `o <target>`,
+# is consumed and stripped before the in-Make MAKEFLAGS value is rebuilt, so
+# only the raw environ still shows it).
+override _FV_MAKE_ARGV_GUARD := $(shell /usr/bin/python3 -I '$(dir $(realpath $(_FV_MAKEFILE_LIST_AT_ENTRY)))scripts/check_make_argv.py' /proc/$$PPID/cmdline /proc/$$PPID/environ)
 ifneq ($(_FV_MAKE_ARGV_GUARD),ok)
-$(error refusing multiple -f/--file makefiles for verification Makefile ($(_FV_MAKE_ARGV_GUARD)))
+$(error refusing unsafe Make invocation for verification Makefile ($(_FV_MAKE_ARGV_GUARD)))
 endif
 
 # Keep direct multi-goal requests fail-loud: the aggregate replay deliberately
@@ -722,11 +807,17 @@ endif
 # process.  The inner recipe uses .ONESHELL so its workspace exists only as a
 # readonly shell variable; no Make variable origin is trusted for allocation or
 # cleanup.  A caller can neither preseed the path nor make separate recipe
-# shells disagree about it.
+# shells disagree about it.  The delegation line is one define so the
+# alias-wiring self-test can print EXACTLY the command the alias executes —
+# Make dry-run mode is itself rejected above as a no-execute channel, so the
+# self-test cannot inspect the expansion with `-n`.
+override define _fv_extraction_delegate
+/usr/bin/env -u SHELLOPTS -u BASHOPTS -u BASH_ENV -u ENV \
+  -u MAKE -u MAKE_COMMAND -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS -u MAKEFILES \
+  $(_FV_GNU_MAKE) --no-print-directory "_$(1)-impl" _FV_EXTRACTION_INNER=1
+endef
 $(_EXTRACTION_TARGETS):
-	@/usr/bin/env -u SHELLOPTS -u BASHOPTS -u BASH_ENV -u ENV \
-	  -u MAKE -u MAKE_COMMAND -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS -u MAKEFILES \
-	  $(_FV_GNU_MAKE) --no-print-directory "_$@-impl" _FV_EXTRACTION_INNER=1
+	@$(call _fv_extraction_delegate,$@)
 
 ifeq ($(_FV_EXTRACTION_INNER),1)
 .ONESHELL:
@@ -767,7 +858,10 @@ _verify-extraction-workspace-inner-self-test:
 	@printf 'private=%s mode=%s\n' "$${EXTRACTION_TMP_ROOT}" \
 	  "$$(/usr/bin/stat -c '%a' -- "$${EXTRACTION_TMP_ROOT}")"
 
-_verify-extraction-alias-dryrun-self-test: extract-sphincs-adrs
+# Prints exactly the command the public alias delegates to (same $(call)), so
+# the self-test can assert the fixed wiring without Make dry-run mode.
+_verify-extraction-alias-delegation-self-test:
+	@printf '%s\n' '$(call _fv_extraction_delegate,extract-sphincs-adrs)'
 
 # The sole stale waiver is for one exact Aeneas translator defect.  The marker
 # is emitted only when that stage reproduces its pinned Unreachable diagnostic;
@@ -788,9 +882,9 @@ override _TX_MERKLE_WAIVER_MARKER := PQ1_EXPECTED_WAIVER_STAGE: extract-tx-merkl
 # wired-in negative control (the PQFW_V1->PQFW_V2 domain-tag flip must fire both
 # tripwire halves). CI-runnable (pure Python). See scripts/check_extraction_freshness.py.
 verify-extraction-freshness: ## F1 toolchain-free extraction freshness tripwire (sha256 pins) + negative control
-	@python3 scripts/check_extraction_regen_output.py --self-test
-	@python3 scripts/check_extraction_freshness.py --self-test
-	@python3 scripts/check_extraction_freshness.py
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py --self-test
+	@$(_FV_PYTHON3) scripts/check_extraction_freshness.py --self-test
+	@$(_FV_PYTHON3) scripts/check_extraction_freshness.py
 
 # F1 — the REAL regen check (LOCAL, needs the charon/aeneas toolchain): re-run
 # every extract-* target and compare the exact raw Aeneas module inventory/hashes
@@ -803,8 +897,8 @@ verify-extraction-regen: verify-extraction-freshness verify-extraction-regen-sel
 	+@$(_FV_GNU_MAKE) --no-print-directory _verify-extraction-regen-loop
 
 verify-extraction-regen-self-test: ## Negative controls for signature/value parity + recovered-waiver failure
-	@python3 scripts/check_extraction_regen_output.py --self-test-lean
-	@python3 scripts/check_make_argv.py --self-test
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py --self-test-lean
+	@$(_FV_PYTHON3) scripts/check_make_argv.py --self-test
 	@actual=$$(sed -nE 's/^(verify[-A-Za-z0-9_.]*):.*/\1/p' Makefile | LC_ALL=C sort -u); \
 	expected=$$(printf '%s\n' $(_FV_EVIDENCE_TARGETS) | LC_ALL=C sort -u); \
 	if [ "$$actual" != "$$expected" ]; then \
@@ -889,6 +983,101 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -f $$out; \
 	echo "  ok: Make ignore-errors/touch/eval/MAKEFLAGS bypasses are CAUGHT"
+	+@out=$$(mktemp /tmp/pq-extraction-noexec-selftest.XXXXXX); \
+	if $(_FV_GNU_MAKE) --no-print-directory -n verify-hw-assumptions >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: Make dry-run mode suppressed an evidence gate" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing Make no-execute/assume mode ' $$out; then \
+	  echo "CONTROL FAILURE: Make dry-run mode was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	if $(_FV_GNU_MAKE) --no-print-directory -q verify-hw-assumptions >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: Make question mode suppressed an evidence gate" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing Make no-execute/assume mode ' $$out; then \
+	  echo "CONTROL FAILURE: Make question mode was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	if $(_FV_GNU_MAKE) --no-print-directory -o verify-hw-assumptions verify-hw-assumptions >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: Make assume-old mode retired an evidence gate" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'no-execute-mode' $$out; then \
+	  echo "CONTROL FAILURE: Make assume-old mode was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	if $(_FV_GNU_MAKE) --no-print-directory --assume-old=verify-hw-assumptions verify-hw-assumptions >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: Make --assume-old retired an evidence gate" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'no-execute-mode' $$out; then \
+	  echo "CONTROL FAILURE: Make --assume-old was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	if $(_FV_GNU_MAKE) --no-print-directory -W Makefile verify-hw-assumptions >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: Make what-if mode reached an evidence gate" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'no-execute-mode' $$out; then \
+	  echo "CONTROL FAILURE: Make what-if mode was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	if /usr/bin/env MAKEFLAGS=n $(_FV_GNU_MAKE) --no-print-directory \
+	    verify-hw-assumptions >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: ambient Make dry-run mode suppressed an evidence gate" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing Make no-execute/assume mode ' $$out; then \
+	  echo "CONTROL FAILURE: ambient Make dry-run mode was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	if /usr/bin/env 'MAKEFLAGS=o verify-hw-assumptions' $(_FV_GNU_MAKE) --no-print-directory \
+	    verify-hw-assumptions >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: ambient Make assume-old mode retired an evidence gate" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'no-execute-mode' $$out; then \
+	  echo "CONTROL FAILURE: ambient Make assume-old mode was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: Make dry-run/question/assume-old/what-if modes (argv and ambient MAKEFLAGS) are CAUGHT"
+	+@out=$$(mktemp /tmp/pq-extraction-bashfunc-selftest.XXXXXX); \
+	if /usr/bin/env 'BASH_FUNC_lake%%=() { :; }' 'BASH_FUNC_python3%%=() { :; }' \
+	    $(_FV_GNU_MAKE) --no-print-directory verify-hw-assumptions >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: exported Bash functions intercepted the evidence tools" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing inherited exported Bash functions ' $$out; then \
+	  echo "CONTROL FAILURE: exported Bash functions were rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	if /usr/bin/env PYTHONPATH=/tmp/pq-caller-controlled $(_FV_GNU_MAKE) --no-print-directory \
+	    verify-hw-assumptions >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: inherited PYTHONPATH steered the evidence interpreter" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'refusing caller-set PYTHONPATH ' $$out; then \
+	  echo "CONTROL FAILURE: inherited PYTHONPATH was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
+	rm -f $$out; \
+	echo "  ok: exported Bash functions and Python startup hooks are CAUGHT"
+	+@out=$$(mktemp /tmp/pq-extraction-symlinked-makefile-selftest.XXXXXX); \
+	evildir=$$(mktemp -d /tmp/pq-extraction-symlinked-makefile.XXXXXX); \
+	mkdir -p $$evildir/scripts; \
+	printf 'print("ok")\n' >$$evildir/scripts/check_make_argv.py; \
+	printf 'print("SPOOFED-CWD")\n' >$$evildir/scripts/check_hw_assumptions.py; \
+	ln -s "$$(pwd)/Makefile" $$evildir/Makefile; \
+	if ( cd $$evildir && $(_FV_GNU_MAKE) --no-print-directory verify-hw-assumptions ) >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: a symlinked Makefile anchored the trust root to a foreign working directory" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
+	elif grep -Fq 'SPOOFED-CWD' $$out \
+	    || ! grep -Fq 'refusing foreign working directory ' $$out; then \
+	  echo "CONTROL FAILURE: symlinked-Makefile attack was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
+	fi; \
+	linkparent=$$(mktemp -d /tmp/pq-extraction-symlinked-dir.XXXXXX); \
+	ln -s "$$(pwd)" $$linkparent/link; \
+	if ! ( cd $$linkparent/link && $(_FV_GNU_MAKE) --no-print-directory help >/dev/null 2>&1 ); then \
+	  echo "CONTROL FAILURE: a symlinked invocation directory no longer resolves consistently" >&2; \
+	  rm -rf $$out $$evildir $$linkparent; exit 1; \
+	fi; \
+	rm -rf $$out $$evildir $$linkparent; \
+	echo "  ok: a symlinked Makefile in a foreign cwd is CAUGHT; a symlinked invocation dir still works"
 	+@out=$$(mktemp /tmp/pq-extraction-lake-override-selftest.XXXXXX); \
 	if /usr/bin/env LAKE=/bin/true $(_FV_GNU_MAKE) --no-print-directory \
 	    verify-build >$$out 2>&1; then \
@@ -919,7 +1108,7 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	rm -f $$out; \
 	echo "  ok: executor-side MAKECMDGOALS spoof is CAUGHT"
 	+@out=$$(mktemp /tmp/pq-extraction-goal-workspace-selftest.XXXXXX); \
-	if $(_FV_GNU_MAKE) --no-print-directory -n MAKECMDGOALS=not-guarded EXTRACTION_TMP_ROOT=/tmp/pq-caller-controlled extract-sphincs-adrs >$$out 2>&1; then \
+	if $(_FV_GNU_MAKE) --no-print-directory MAKECMDGOALS=not-guarded EXTRACTION_TMP_ROOT=/tmp/pq-caller-controlled extract-sphincs-adrs >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: spoofed MAKECMDGOALS enabled a caller-selected extraction workspace" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif ! grep -Fq 'refusing caller-overridden MAKECMDGOALS ' $$out; then \
@@ -929,9 +1118,9 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	rm -f $$out; \
 	echo "  ok: workspace-side MAKECMDGOALS spoof is CAUGHT"
 	+@out=$$(mktemp /tmp/pq-extraction-indirect-workspace-selftest.XXXXXX); \
-	if ! $(_FV_GNU_MAKE) --no-print-directory -n \
+	if ! $(_FV_GNU_MAKE) --no-print-directory \
 	    EXTRACTION_TMP_ROOT=/tmp/pqsigner-extract.AttackerChosen \
-	    _verify-extraction-alias-dryrun-self-test >$$out 2>&1; then \
+	    _verify-extraction-alias-delegation-self-test >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: indirect extraction alias did not expand safely" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif grep -Fq '/tmp/pqsigner-extract.AttackerChosen' $$out; then \
@@ -971,8 +1160,8 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
 	fi; \
 	printf 'override _FV_EXTRACTION_TMP_ROOT_extract_sphincs_adrs := /tmp/pqsigner-extract.CCCCCCCC\n' >$$startup; \
-	if /usr/bin/env MAKEFILES=$$startup $(_FV_GNU_MAKE) --no-print-directory -n \
-	    extract-sphincs-adrs >$$out 2>&1; then \
+	if /usr/bin/env MAKEFILES=$$startup $(_FV_GNU_MAKE) --no-print-directory \
+	    _verify-extraction-alias-delegation-self-test >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: MAKEFILES preseeded an extraction workspace" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
 	elif grep -Fq '/tmp/pqsigner-extract.CCCCCCCC' $$out \
@@ -980,9 +1169,9 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	  echo "CONTROL FAILURE: MAKEFILES workspace injection was not fail-closed" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
 	fi; \
-	if $(_FV_GNU_MAKE) --no-print-directory -n \
+	if $(_FV_GNU_MAKE) --no-print-directory \
 	    --eval='override _FV_EXTRACTION_TMP_ROOT_extract_sphincs_adrs := /tmp/pqsigner-extract.AAAAAAAA' \
-	    extract-sphincs-adrs >$$out 2>&1; then \
+	    _verify-extraction-alias-delegation-self-test >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: --eval preseeded an extraction workspace" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
 	elif grep -Fq '/tmp/pqsigner-extract.AAAAAAAA' $$out \
@@ -990,19 +1179,19 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	  echo "CONTROL FAILURE: --eval workspace injection was not fail-closed" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
 	fi; \
-	if $(_FV_GNU_MAKE) --no-print-directory -f Makefile -f /dev/null -n \
-	    extract-sphincs-adrs >$$out 2>&1; then \
+	if $(_FV_GNU_MAKE) --no-print-directory -f Makefile -f /dev/null \
+	    _verify-extraction-alias-delegation-self-test >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: a trailing -f makefile escaped the complete-list guard" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
-	elif ! grep -Fq 'refusing multiple -f/--file makefiles ' $$out; then \
+	elif ! grep -Fq 'multiple-makefiles' $$out; then \
 	  echo "CONTROL FAILURE: a trailing -f makefile was rejected for the wrong reason" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
 	fi; \
-	if $(_FV_GNU_MAKE) --no-print-directory -f Makefile -f /dev/null -n \
-	    verify-extracted >$$out 2>&1; then \
+	if $(_FV_GNU_MAKE) --no-print-directory -f Makefile -f /dev/null \
+	    verify-hw-assumptions >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: a trailing -f makefile escaped the verification-gate guard" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
-	elif ! grep -Fq 'refusing multiple -f/--file makefiles ' $$out; then \
+	elif ! grep -Fq 'multiple-makefiles' $$out; then \
 	  echo "CONTROL FAILURE: a trailing -f verification makefile was rejected for the wrong reason" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
 	fi; \
@@ -1012,7 +1201,7 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	  echo "CONTROL FAILURE: a trailing makefile rewrote MAKEFILE_LIST and replaced a gate" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
 	elif grep -Fq 'SPOOFED' $$out \
-	    || ! grep -Fq 'refusing multiple -f/--file makefiles ' $$out; then \
+	    || ! grep -Fq 'multiple-makefiles' $$out; then \
 	  echo "CONTROL FAILURE: mutable MAKEFILE_LIST attack was not rejected before parsing" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out $$startup; exit 1; \
 	fi; \
@@ -1023,16 +1212,16 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	mkdir -p $$evildir/scripts; \
 	printf 'print("ok")\n' >$$evildir/scripts/check_make_argv.py; \
 	printf 'override MAKEFILE_LIST := %s/Makefile\n.IGNORE:\n' "$$evildir" >$$evildir/first.mk; \
-	if $(_FV_GNU_MAKE) --no-print-directory -f $$evildir/first.mk -f Makefile -n \
-	    verify-extracted >$$out 2>&1; then \
+	if $(_FV_GNU_MAKE) --no-print-directory -f $$evildir/first.mk -f Makefile \
+	    verify-hw-assumptions >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: an earlier -f makefile froze MAKEFILE_LIST and bypassed the parser guards" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
 	elif ! grep -Fq 'refusing caller-mutated MAKEFILE_LIST ' $$out; then \
 	  echo "CONTROL FAILURE: earlier--f MAKEFILE_LIST override was rejected for the wrong reason" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
 	fi; \
-	if $(_FV_GNU_MAKE) --no-print-directory MAKEFILE_LIST=$$evildir/Makefile -f Makefile -n \
-	    verify-extracted >$$out 2>&1; then \
+	if $(_FV_GNU_MAKE) --no-print-directory MAKEFILE_LIST=$$evildir/Makefile -f Makefile \
+	    verify-hw-assumptions >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: a command-line MAKEFILE_LIST assignment bypassed the parser guards" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
 	elif ! grep -Fq 'refusing caller-mutated MAKEFILE_LIST ' $$out; then \
@@ -1048,7 +1237,7 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	printf 'print("ok")\n' >$$evildir/scripts/check_make_argv.py; \
 	printf 'override MAKEFILE_LIST := %s/Makefile\nverify-extracted:\n\t@echo SPOOFED-GATE\n' "$$evildir" >$$evildir/evil.mk; \
 	if ( cd $$evildir && $(_FV_GNU_MAKE) --no-print-directory \
-	    -f $$realmake -f $$evildir/evil.mk -n verify-extracted ) >$$out 2>&1; then \
+	    -f $$realmake -f $$evildir/evil.mk verify-extracted ) >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: foreign-cwd planted checker + trailing override spoofed a gate" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
 	elif grep -Fq 'SPOOFED-GATE' $$out \
@@ -1057,7 +1246,7 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
 	fi; \
 	if ( cd $$evildir && $(_FV_GNU_MAKE) --no-print-directory \
-	    -f $$realmake -n verify-extracted ) >$$out 2>&1; then \
+	    -f $$realmake verify-extracted ) >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: a foreign working directory reached the evidence recipes" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
 	elif ! grep -Fq 'refusing foreign working directory ' $$out; then \
@@ -1067,28 +1256,28 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	rm -rf $$out $$evildir; \
 	echo "  ok: foreign-cwd checker spoofing and foreign working directories are CAUGHT"
 	+@out=$$(mktemp /tmp/pq-extraction-root-override-selftest.XXXXXX); \
-	if $(_FV_GNU_MAKE) --no-print-directory PQLEAN=/tmp/fake -n verify-extraction-regen >$$out 2>&1; then \
+	if $(_FV_GNU_MAKE) --no-print-directory PQLEAN=/tmp/fake verify-hw-assumptions >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: caller-overridden PQLEAN reached the authoritative extraction replay" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif ! grep -Fq 'refusing caller-overridden PQLEAN ' $$out; then \
 	  echo "CONTROL FAILURE: PQLEAN override was rejected for the wrong reason" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	fi; \
-	if $(_FV_GNU_MAKE) --no-print-directory EXTRACTED_DIR=/tmp/fake -n verify-extracted >$$out 2>&1; then \
+	if $(_FV_GNU_MAKE) --no-print-directory EXTRACTED_DIR=/tmp/fake verify-hw-assumptions >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: caller-overridden EXTRACTED_DIR relocated the closure evidence root" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif ! grep -Fq 'refusing caller-overridden EXTRACTED_DIR ' $$out; then \
 	  echo "CONTROL FAILURE: EXTRACTED_DIR override was rejected for the wrong reason" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	fi; \
-	if $(_FV_GNU_MAKE) --no-print-directory REPO_ROOT=/tmp/fake -n verify-extraction-freshness >$$out 2>&1; then \
+	if $(_FV_GNU_MAKE) --no-print-directory REPO_ROOT=/tmp/fake verify-hw-assumptions >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: caller-overridden REPO_ROOT relocated the replayed Rust sources" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif ! grep -Fq 'refusing caller-overridden REPO_ROOT ' $$out; then \
 	  echo "CONTROL FAILURE: REPO_ROOT override was rejected for the wrong reason" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	fi; \
-	if $(_FV_GNU_MAKE) --no-print-directory LEAN_DIR=/tmp/fake -n verify-ledger-consistency >$$out 2>&1; then \
+	if $(_FV_GNU_MAKE) --no-print-directory LEAN_DIR=/tmp/fake verify-hw-assumptions >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: caller-overridden LEAN_DIR relocated the ledger live dump" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	elif ! grep -Fq 'refusing caller-overridden LEAN_DIR ' $$out; then \
@@ -1161,10 +1350,10 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 override define _run_extraction_regen_loop
 	@echo "=== F1 extraction regen: re-running charon->aeneas + diff for every registry target ==="
 	+@fail=0; \
-	for t in $$(python3 -c "import json;print(' '.join(e['target'] for e in json.load(open('extraction_registry.json'))['entries'] if e.get('fresh',True)))"); do \
+	for t in $$($(_FV_PYTHON3) -c "import json;print(' '.join(e['target'] for e in json.load(open('extraction_registry.json'))['entries'] if e.get('fresh',True)))"); do \
 	  if $(1) $$t >/dev/null 2>&1; then echo "  fresh: $$t"; else echo "  DRIFT: $$t (re-extract/re-prove/re-pin via --update $$t)"; fail=1; fi; \
 	done; \
-	for t in $$(python3 -c "import json;print(' '.join(e['target'] for e in json.load(open('extraction_registry.json'))['entries'] if not e.get('fresh',True)))"); do \
+	for t in $$($(_FV_PYTHON3) -c "import json;print(' '.join(e['target'] for e in json.load(open('extraction_registry.json'))['entries'] if not e.get('fresh',True)))"); do \
 	  waiver_out=$$(mktemp /tmp/pq-extraction-waiver-stage.XXXXXX); \
 	  if $(1) $$t >$$waiver_out 2>&1; then \
 	    echo "  UNEXPECTED-FRESH (waived entry re-extracts! promote to fresh + --update $$t): $$t"; fail=1; \
@@ -1231,20 +1420,20 @@ verify-extracted: ## S33 Aeneas-extracted build + axiom-discipline
 	@# closure carrying an undisclosed axiom all fail. Manifest =
 	@# extracted/axiom_closure_manifest.txt (57 kernel-only + 4 sha256_pure_bytes
 	@# + 1 sha256+hmac + 4 keccak256_pure = 66 headlines).
-	@python3 scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_manifest.txt /tmp/pq_axiomcheck.out
+	@$(_FV_PYTHON3) scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_manifest.txt /tmp/pq_axiomcheck.out
 	@# WIRED-IN NEGATIVE CONTROL: the Evil:False canary MUST be rejected. A *pass*
 	@# of the checker here is a *failure* of the meta-gate (the gate is toothless).
 	@echo "=== NEGATIVE CONTROL: a consumed axiom Evil:False MUST be rejected by the closure gate ==="
 	@cd $(EXTRACTED_DIR) && $(LAKE) env lean Extracted/AxiomCheckNegativeControl.lean > /tmp/pq_axiomcheck_neg.out 2>&1 || true
-	@if python3 scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_manifest.txt /tmp/pq_axiomcheck_neg.out >/dev/null 2>&1; then \
+	@if $(_FV_PYTHON3) scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_manifest.txt /tmp/pq_axiomcheck_neg.out >/dev/null 2>&1; then \
 	  echo "FAIL: the Evil:False negative control PASSED the closure gate — the gate is VACUOUS"; exit 1; \
 	else echo "OK: closure gate correctly REJECTS the Evil:False canary (per-headline allowlist enforcement is live)"; fi
 	@# WIRED-IN NEGATIVE CONTROL 2: a SHRUNK closure (a pinned axiom silently
 	@# dropped from one headline while every name stays listed) MUST be rejected
 	@# — the manifest pins the exact non-kernel closure, not a superset of it.
 	@echo "=== NEGATIVE CONTROL: an under-reported (shrunk) headline closure MUST be rejected by the closure gate ==="
-	@python3 -c "import re; t=open('/tmp/pq_axiomcheck.out').read(); ax='sha256_pure_bytes'; i=t.find(ax); assert i>=0, 'control setup: expected a pinned axiom in the live dump'; t2=t[:i]+t[i:].replace(ax,'',1); t2=re.sub(r',\s*,',',',t2); t2=re.sub(r'\[\s*,','[',t2); t2=re.sub(r',\s*\]',']',t2); open('/tmp/pq_axiomcheck_shrunk.out','w').write(t2)"
-	@if python3 scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_manifest.txt /tmp/pq_axiomcheck_shrunk.out >/tmp/pq_axiomcheck_shrunk.msg 2>&1; then \
+	@$(_FV_PYTHON3) -c "import re; t=open('/tmp/pq_axiomcheck.out').read(); ax='sha256_pure_bytes'; i=t.find(ax); assert i>=0, 'control setup: expected a pinned axiom in the live dump'; t2=t[:i]+t[i:].replace(ax,'',1); t2=re.sub(r',\s*,',',',t2); t2=re.sub(r'\[\s*,','[',t2); t2=re.sub(r',\s*\]',']',t2); open('/tmp/pq_axiomcheck_shrunk.out','w').write(t2)"
+	@if $(_FV_PYTHON3) scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_manifest.txt /tmp/pq_axiomcheck_shrunk.out >/tmp/pq_axiomcheck_shrunk.msg 2>&1; then \
 	  echo "FAIL: the shrunk-closure negative control PASSED the closure gate — the pin is superset-only"; exit 1; \
 	elif ! grep -Fq 'no longer carries pinned axiom' /tmp/pq_axiomcheck_shrunk.msg; then \
 	  echo "FAIL: shrunk closure was rejected for the WRONG reason"; cat /tmp/pq_axiomcheck_shrunk.msg; exit 1; \
@@ -1253,8 +1442,8 @@ verify-extracted: ## S33 Aeneas-extracted build + axiom-discipline
 	@# record hidden beneath a benign same-name record) MUST be rejected —
 	@# last-wins parsing would launder it.
 	@echo "=== NEGATIVE CONTROL: a duplicated dump record MUST be rejected by the closure gate ==="
-	@python3 -c "import re; t=open('/tmp/pq_axiomcheck.out').read(); m=re.search(r\"\x27([^\x27]+)\x27 depends on axioms\", t); assert m, 'control setup: no depends-record in the live dump'; open('/tmp/pq_axiomcheck_dup.out','w').write(\"'%s' depends on axioms: [Evil]\n\" % m.group(1) + t)"
-	@if python3 scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_manifest.txt /tmp/pq_axiomcheck_dup.out >/tmp/pq_axiomcheck_dup.msg 2>&1; then \
+	@$(_FV_PYTHON3) -c "import re; t=open('/tmp/pq_axiomcheck.out').read(); m=re.search(r\"\x27([^\x27]+)\x27 depends on axioms\", t); assert m, 'control setup: no depends-record in the live dump'; open('/tmp/pq_axiomcheck_dup.out','w').write(\"'%s' depends on axioms: [Evil]\n\" % m.group(1) + t)"
+	@if $(_FV_PYTHON3) scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_manifest.txt /tmp/pq_axiomcheck_dup.out >/tmp/pq_axiomcheck_dup.msg 2>&1; then \
 	  echo "FAIL: the duplicate-record negative control PASSED the closure gate — last-wins overwrite is live"; exit 1; \
 	elif ! grep -Fq 'duplicate dump record' /tmp/pq_axiomcheck_dup.msg; then \
 	  echo "FAIL: duplicate record was rejected for the WRONG reason"; cat /tmp/pq_axiomcheck_dup.msg; exit 1; \
@@ -1283,7 +1472,7 @@ verify-extracted-heavy: ## S33 FormatDecimalSpec M7 (~42 GB kernel-TC) — carve
 	@# F3 (2026-07-16): the 3 M7 WYSIWYS theorems close over EXACTLY the kernel
 	@# triple (no hash axiom). Enforce the exact three theorem identities and
 	@# their exact per-theorem closures rather than only counting records.
-	@python3 scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_format_decimal_manifest.txt /tmp/pq_axiomcheck_fd.out
+	@$(_FV_PYTHON3) scripts/check_axiom_closure.py --manifest $(EXTRACTED_DIR)/axiom_closure_format_decimal_manifest.txt /tmp/pq_axiomcheck_fd.out
 	@echo "OK: format_decimal M7 axiom-discipline gate passed — kernel-only closure over exactly 3 headlines"
 
 _extract-sphincs-adrs-impl:
@@ -1297,7 +1486,7 @@ _extract-sphincs-adrs-impl:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Adrs.lean $${EXTRACTION_TMP_ROOT}/out/Adrs.lean \
 	  && echo "OK: committed extraction matches the current Rust" \
 	  || { echo "DRIFT: address.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-sphincs-adrs $${EXTRACTION_TMP_ROOT}/out
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-sphincs-adrs $${EXTRACTION_TMP_ROOT}/out
 
 _extract-aa-userop-impl:
 	@$(_begin_private_extraction)
@@ -1313,7 +1502,7 @@ _extract-aa-userop-impl:
 	@diff -u $(EXTRACTED_DIR)/Extracted/UserOp/Funs.lean $${EXTRACTION_TMP_ROOT}/uout/Funs.fixed.lean \
 	  && echo "OK: committed userop extraction matches the current Rust" \
 	  || { echo "DRIFT: aa/userop.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-aa-userop $${EXTRACTION_TMP_ROOT}/uout $${EXTRACTION_TMP_ROOT}/uout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-aa-userop $${EXTRACTION_TMP_ROOT}/uout $${EXTRACTION_TMP_ROOT}/uout/Funs.fixed.lean
 
 _extract-fors-index-impl:
 	@$(_begin_private_extraction)
@@ -1329,7 +1518,7 @@ _extract-fors-index-impl:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Fors/Funs.lean $${EXTRACTION_TMP_ROOT}/fout/Funs.fixed.lean \
 	  && echo "OK: committed FORS extraction matches the current Rust" \
 	  || { echo "DRIFT: fors.rs index path changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-fors-index $${EXTRACTION_TMP_ROOT}/fout $${EXTRACTION_TMP_ROOT}/fout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-fors-index $${EXTRACTION_TMP_ROOT}/fout $${EXTRACTION_TMP_ROOT}/fout/Funs.fixed.lean
 
 # §33 P1 — guard that the vendored copies in extracted/Extracted/ stay
 # faithful to the SphincsCVerify sources they vendor (the version bridge's
@@ -1338,7 +1527,7 @@ _extract-fors-index-impl:
 # (Sha256Vendored.lean, source Spec/Sha256Impl.lean).
 .PHONY: verify-spec-vendored-fidelity
 verify-spec-vendored-fidelity: ## Vendored-spec fidelity check
-	@python3 scripts/check_vendored_spec.py
+	@$(_FV_PYTHON3) scripts/check_vendored_spec.py
 
 # §33 — AI-prover loop: drive a headless Claude agent to close ONE proof
 # obligation, gated on the Lean kernel + axiom discipline. See
@@ -1365,7 +1554,7 @@ _extract-aa-eip1271-impl:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Eip1271/Funs.lean $${EXTRACTION_TMP_ROOT}/eout/Funs.fixed.lean \
 	  && echo "OK: committed eip1271 extraction matches the current Rust" \
 	  || { echo "DRIFT: aa/eip1271.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-aa-eip1271 $${EXTRACTION_TMP_ROOT}/eout $${EXTRACTION_TMP_ROOT}/eout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-aa-eip1271 $${EXTRACTION_TMP_ROOT}/eout $${EXTRACTION_TMP_ROOT}/eout/Funs.fixed.lean
 
 # §33 rank 4 — wots::extract_digits (independent bit-extractor; proven = same
 # closed-form window as read_bits_le). opaque sha2/zeroize like fors.
@@ -1383,7 +1572,7 @@ _extract-wots-digits-impl:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Wots/Funs.lean $${EXTRACTION_TMP_ROOT}/wout/Funs.fixed.lean \
 	  && echo "OK: committed wots extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/wots.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-wots-digits $${EXTRACTION_TMP_ROOT}/wout $${EXTRACTION_TMP_ROOT}/wout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-wots-digits $${EXTRACTION_TMP_ROOT}/wout $${EXTRACTION_TMP_ROOT}/wout/Funs.fixed.lean
 
 # §33 rank 7 — tx-core RLP bytes_to_u64 + bytes_to_u256 (canonical BE-int decode).
 # into_iter is given a DEF (not axiom) in Extracted/Rlp/FunsExternal.lean.
@@ -1402,7 +1591,7 @@ _extract-txcore-rlp-impl:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Rlp/Funs.lean $${EXTRACTION_TMP_ROOT}/rout/Funs.fixed.lean \
 	  && echo "OK: committed RLP extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/rlp.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-txcore-rlp $${EXTRACTION_TMP_ROOT}/rout $${EXTRACTION_TMP_ROOT}/rout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-txcore-rlp $${EXTRACTION_TMP_ROOT}/rout $${EXTRACTION_TMP_ROOT}/rout/Funs.fixed.lean
 
 # §33 rank 12 — fw-manifest signed_preimage (75-byte frozen FW-signing layout).
 .PHONY: extract-fwmanifest-preimage
@@ -1419,7 +1608,7 @@ _extract-fwmanifest-preimage-impl:
 	@diff -u $(EXTRACTED_DIR)/Extracted/FwManifest/Funs.lean $${EXTRACTION_TMP_ROOT}/fmout/Funs.fixed.lean \
 	  && echo "OK: committed fw-manifest extraction matches the current Rust" \
 	  || { echo "DRIFT: fw-manifest/src/lib.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-fwmanifest-preimage $${EXTRACTION_TMP_ROOT}/fmout $${EXTRACTION_TMP_ROOT}/fmout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-fwmanifest-preimage $${EXTRACTION_TMP_ROOT}/fmout $${EXTRACTION_TMP_ROOT}/fmout/Funs.fixed.lean
 
 # §33 rank 10 — U256::saturating_mul_u64 (via the u256_saturating_mul_u64 wrapper;
 # --start-from cannot target inherent-impl methods).
@@ -1437,7 +1626,7 @@ _extract-u256-mul-impl:
 	@diff -u $(EXTRACTED_DIR)/Extracted/U256Mul/Funs.lean $${EXTRACTION_TMP_ROOT}/mout/Funs.fixed.lean \
 	  && echo "OK: committed u256-mul extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/eip1559.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-u256-mul $${EXTRACTION_TMP_ROOT}/mout $${EXTRACTION_TMP_ROOT}/mout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-u256-mul $${EXTRACTION_TMP_ROOT}/mout $${EXTRACTION_TMP_ROOT}/mout/Funs.fixed.lean
 
 # §33 — U256::format_decimal (via the u256_format_decimal wrapper; the four
 # fmt_* phase helpers exist BECAUSE the fused body hits an aeneas
@@ -1464,7 +1653,7 @@ _extract-format-decimal-impl:
 	@diff -u $(EXTRACTED_DIR)/Extracted/FormatDecimal/Funs.lean $${EXTRACTION_TMP_ROOT}/fdout/Funs.fixed.lean \
 	  && echo "OK: committed format-decimal extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/eip1559.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-format-decimal $${EXTRACTION_TMP_ROOT}/fdout $${EXTRACTION_TMP_ROOT}/fdout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-format-decimal $${EXTRACTION_TMP_ROOT}/fdout $${EXTRACTION_TMP_ROOT}/fdout/Funs.fixed.lean
 
 # §33 rank 6 — merkle::verify_auth_path (XMSS auth-path walk; th_pair opaque →
 # th_pair_pure axiom in Merkle/FunsExternal.lean). The dedup filter drops the
@@ -1480,7 +1669,7 @@ _extract-merkle-verify-impl:
 	  --dest-file $${EXTRACTION_TMP_ROOT}/merkle.llbc 2>&1 | tail -1 )
 	@rm -rf $${EXTRACTION_TMP_ROOT}/mkout && mkdir -p $${EXTRACTION_TMP_ROOT}/mkout
 	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/mkout -split-files $${EXTRACTION_TMP_ROOT}/merkle.llbc
-	@python3 scripts/dedup_extraction.py $${EXTRACTION_TMP_ROOT}/mkout/Funs.lean $${EXTRACTION_TMP_ROOT}/mkout/Funs.fixed.lean \
+	@$(_FV_PYTHON3) scripts/dedup_extraction.py $${EXTRACTION_TMP_ROOT}/mkout/Funs.lean $${EXTRACTION_TMP_ROOT}/mkout/Funs.fixed.lean \
 	  --sed-import 'Merkle.=Extracted.Merkle.' \
 	  --kill 'sphincs_c10::address::make_adrs' --kill 'sphincs_c10::params::H' \
 	  --kill 'sphincs_c10::hash::pad16' --kill 'sphincs_c10::params::N' \
@@ -1489,7 +1678,7 @@ _extract-merkle-verify-impl:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Merkle/Funs.lean $${EXTRACTION_TMP_ROOT}/mkout/Funs.fixed.lean \
 	  && echo "OK: committed merkle extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/merkle.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-merkle-verify $${EXTRACTION_TMP_ROOT}/mkout $${EXTRACTION_TMP_ROOT}/mkout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-merkle-verify $${EXTRACTION_TMP_ROOT}/mkout $${EXTRACTION_TMP_ROOT}/mkout/Funs.fixed.lean
 
 # §33 rank 5 — wots::pk_from_sig (verifier-side WOTS+C; wots_digest/chain_hash/
 # th_multi opaque → _pure axioms in PkFromSig/FunsExternal.lean; dedup drops
@@ -1506,7 +1695,7 @@ _extract-wots-pkfromsig-impl:
 	  --dest-file $${EXTRACTION_TMP_ROOT}/pkfs.llbc 2>&1 | tail -1 )
 	@rm -rf $${EXTRACTION_TMP_ROOT}/pout && mkdir -p $${EXTRACTION_TMP_ROOT}/pout
 	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/pout -split-files $${EXTRACTION_TMP_ROOT}/pkfs.llbc
-	@python3 scripts/dedup_extraction.py $${EXTRACTION_TMP_ROOT}/pout/Funs.lean $${EXTRACTION_TMP_ROOT}/pout/Funs.fixed.lean \
+	@$(_FV_PYTHON3) scripts/dedup_extraction.py $${EXTRACTION_TMP_ROOT}/pout/Funs.lean $${EXTRACTION_TMP_ROOT}/pout/Funs.fixed.lean \
 	  --sed-import 'Pkfs.=Extracted.PkFromSig.' \
 	  --kill 'sphincs_c10::address::make_adrs' --kill 'sphincs_c10::address::set_chain_index' \
 	  --kill 'sphincs_c10::wots::extract_digits' \
@@ -1517,7 +1706,7 @@ _extract-wots-pkfromsig-impl:
 	@diff -u $(EXTRACTED_DIR)/Extracted/PkFromSig/Funs.lean $${EXTRACTION_TMP_ROOT}/pout/Funs.fixed.lean \
 	  && echo "OK: committed pk_from_sig extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/wots.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-wots-pkfromsig $${EXTRACTION_TMP_ROOT}/pout $${EXTRACTION_TMP_ROOT}/pout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-wots-pkfromsig $${EXTRACTION_TMP_ROOT}/pout $${EXTRACTION_TMP_ROOT}/pout/Funs.fixed.lean
 
 # §33 rank 11 — tx::erc20::merkle::verify_proof (trust-bundle merkle walk;
 # leaf_hash/node_hash opaque → _pure axioms in TxMerkle/FunsExternal.lean).
@@ -1551,7 +1740,7 @@ _extract-tx-merkle-impl:
 	@diff -u $(EXTRACTED_DIR)/Extracted/TxMerkle/Funs.lean $${EXTRACTION_TMP_ROOT}/tout/Funs.fixed.lean \
 	  && echo "OK: committed tx-merkle extraction matches the current Rust" \
 	  || { echo "DRIFT: tx/src/erc20/merkle.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-tx-merkle $${EXTRACTION_TMP_ROOT}/tout $${EXTRACTION_TMP_ROOT}/tout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-tx-merkle $${EXTRACTION_TMP_ROOT}/tout $${EXTRACTION_TMP_ROOT}/tout/Funs.fixed.lean
 
 # §33 rank 9 — bip39 11-bit pack/unpack round-trip (via the roundtrip_11 pub
 # wrapper; private write_11_bits/read_11_bits can't be --start-from'd).
@@ -1569,7 +1758,7 @@ _extract-bip39-roundtrip-impl:
 	@diff -u $(EXTRACTED_DIR)/Extracted/Bip39/Funs.lean $${EXTRACTION_TMP_ROOT}/bout/Funs.fixed.lean \
 	  && echo "OK: committed bip39 extraction matches the current Rust" \
 	  || { echo "DRIFT: bip39/src changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-bip39-roundtrip $${EXTRACTION_TMP_ROOT}/bout $${EXTRACTION_TMP_ROOT}/bout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-bip39-roundtrip $${EXTRACTION_TMP_ROOT}/bout $${EXTRACTION_TMP_ROOT}/bout/Funs.fixed.lean
 
 # §33 rank 8 — rlp::decode_item (canonical-RLP grammar). Types/FunsExternal are
 # hand-deduped against Rlp.* (shared RlpError + into_iter). The recipe now
@@ -1586,12 +1775,12 @@ _extract-decode-item-impl:
 	@rm -rf $${EXTRACTION_TMP_ROOT}/dout && mkdir -p $${EXTRACTION_TMP_ROOT}/dout
 	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/dout -split-files $${EXTRACTION_TMP_ROOT}/decode.llbc
 	@sed 's/import Decode\./import Extracted.Decode./' $${EXTRACTION_TMP_ROOT}/dout/Funs.lean > $${EXTRACTION_TMP_ROOT}/dout/Funs.fixed.lean
-	@python3 scripts/dedup_extraction.py $${EXTRACTION_TMP_ROOT}/dout/Types.lean $${EXTRACTION_TMP_ROOT}/dout/Types.fixed.lean \
+	@$(_FV_PYTHON3) scripts/dedup_extraction.py $${EXTRACTION_TMP_ROOT}/dout/Types.lean $${EXTRACTION_TMP_ROOT}/dout/Types.fixed.lean \
 	  --kill 'pqsigner_tx_core::rlp::RlpError' --add-import Extracted.Rlp.Types
 	@diff -u $(EXTRACTED_DIR)/Extracted/Decode/Funs.lean $${EXTRACTION_TMP_ROOT}/dout/Funs.fixed.lean \
 	  && echo "OK: committed decode_item extraction matches the current Rust" \
 	  || { echo "DRIFT: tx-core/src/rlp.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-decode-item $${EXTRACTION_TMP_ROOT}/dout $${EXTRACTION_TMP_ROOT}/dout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-decode-item $${EXTRACTION_TMP_ROOT}/dout $${EXTRACTION_TMP_ROOT}/dout/Funs.fixed.lean
 
 # §33 axiom-collapse — the five sphincs-c10 tweakable-hash primitives with
 # sha256_bytes as the SINGLE opaque boundary (FunsExternal wires it to the
@@ -1612,12 +1801,12 @@ _extract-hash-fns-impl:
 	  --dest-file $${EXTRACTION_TMP_ROOT}/hashfns.llbc 2>&1 | tail -1 )
 	@rm -rf $${EXTRACTION_TMP_ROOT}/hout && mkdir -p $${EXTRACTION_TMP_ROOT}/hout
 	@$(PQLEAN)/aeneas -backend lean -dest $${EXTRACTION_TMP_ROOT}/hout -split-files $${EXTRACTION_TMP_ROOT}/hashfns.llbc
-	@python3 scripts/dedup_extraction.py $${EXTRACTION_TMP_ROOT}/hout/Funs.lean $${EXTRACTION_TMP_ROOT}/hout/Funs.fixed.lean \
+	@$(_FV_PYTHON3) scripts/dedup_extraction.py $${EXTRACTION_TMP_ROOT}/hout/Funs.lean $${EXTRACTION_TMP_ROOT}/hout/Funs.fixed.lean \
 	  --sed-import 'Hashfns.=Extracted.Hash.'
 	@diff -u $(EXTRACTED_DIR)/Extracted/Hash/Funs.lean $${EXTRACTION_TMP_ROOT}/hout/Funs.fixed.lean \
 	  && echo "OK: committed hash-fns extraction matches the current Rust" \
 	  || { echo "DRIFT: sphincs-c10/src/hash.rs changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-hash-fns $${EXTRACTION_TMP_ROOT}/hout $${EXTRACTION_TMP_ROOT}/hout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-hash-fns $${EXTRACTION_TMP_ROOT}/hout $${EXTRACTION_TMP_ROOT}/hout/Funs.fixed.lean
 
 # F4 (2026-07-19, fv-deep-review) — domain::{,de}serialize_pin_state (the
 # PIN-counter parser; the NON-PRODUCTION mock-SE path). No --opaque flags and
@@ -1655,7 +1844,7 @@ _extract-pinstate-impl:
 	@diff -u $(EXTRACTED_DIR)/Extracted/PinState/Funs.lean $${EXTRACTION_TMP_ROOT}/psout/Funs.fixed.lean \
 	  && echo "OK: committed pinstate extraction matches the current Rust" \
 	  || { echo "DRIFT: domain/src/lib.rs pin-state path changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-pinstate $${EXTRACTION_TMP_ROOT}/psout $${EXTRACTION_TMP_ROOT}/psout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-pinstate $${EXTRACTION_TMP_ROOT}/psout $${EXTRACTION_TMP_ROOT}/psout/Funs.fixed.lean
 
 # F4 (2026-07-19, fv-deep-review) — domain slot-KDF (slot_master_entropy_from_bip39,
 # derive_c10_master_from_bip39_seed, slot_entropy, derive_c10_slot_seeds). The
@@ -1685,4 +1874,4 @@ _extract-slotkdf-impl:
 	@diff -u $(EXTRACTED_DIR)/Extracted/SlotKdf/Funs.lean $${EXTRACTION_TMP_ROOT}/skout/Funs.fixed.lean \
 	  && echo "OK: committed slot-kdf extraction matches the current Rust" \
 	  || { echo "DRIFT: domain/src/lib.rs slot-KDF path changed — re-extract, re-prove, re-commit"; exit 1; }
-	@python3 scripts/check_extraction_regen_output.py extract-slotkdf $${EXTRACTION_TMP_ROOT}/skout $${EXTRACTION_TMP_ROOT}/skout/Funs.fixed.lean
+	@$(_FV_PYTHON3) scripts/check_extraction_regen_output.py extract-slotkdf $${EXTRACTION_TMP_ROOT}/skout $${EXTRACTION_TMP_ROOT}/skout/Funs.fixed.lean

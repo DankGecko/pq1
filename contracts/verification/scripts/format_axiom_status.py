@@ -68,8 +68,24 @@ def find_status_file() -> Path:
     return candidate
 
 
+def _reject_duplicate_keys(pairs: list) -> dict:
+    """`object_pairs_hook` rejecting duplicate JSON object keys.  Plain
+    `json.loads` is silently last-wins: the human-facing table must reflect
+    the SAME record the consistency gate enforces, not a hidden first one."""
+    obj = {}
+    for key, value in pairs:
+        if key in obj:
+            sys.stderr.write(
+                f"ERROR: duplicate key {key!r} in AXIOM_STATUS.json — refusing to "
+                f"format a last-wins overwrite (reconcile the ledger)\n")
+            sys.exit(2)
+        obj[key] = value
+    return obj
+
+
 def main() -> int:
-    data = json.loads(find_status_file().read_text(encoding="utf-8"))
+    data = json.loads(find_status_file().read_text(encoding="utf-8"),
+                      object_pairs_hook=_reject_duplicate_keys)
 
     bar = "=" * 76
     print(bar)
