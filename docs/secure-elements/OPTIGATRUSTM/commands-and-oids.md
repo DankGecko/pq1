@@ -294,7 +294,30 @@ Response:
 | OID | Description |
 |-----|-------------|
 | `0xE0E8` | Trust Anchor 1 (root CA for verification) |
-| `0xE0EF` | Trust Anchor 2 |
+| `0xE0E9` | Trust Anchor 2 (added 2026-07-26 — was missing from this table) |
+| `0xE0EF` | Trust Anchor 3 (platform integrity; SRM metadata-update example) |
+
+> **Inventory note 2026-07-26 — this table was short by one, and it is not the
+> S-2 authority.** It previously listed only `0xE0E8` and `0xE0EF`. The
+> candidate type-`0x11` Protected-Update pool pinned in code is
+> `{0xE0E8, 0xE0E9, 0xE0EF}` (`secure/src/optiga/mod.rs:1996`, asserted by
+> `optiga_under_test::pure_tests::negative_ta_pool_lockdown_is_exact_and_emits_no_apdu`).
+> **Do not size any closure pass from this table** — sizing the pool at two
+> slots closes 2 of 3 and reads as done, which is precisely the destructive
+> partial-closure failure mode recorded in F8
+> (`../../security/adversarial-review/findings/full-project-sweep-2026-07-14.md`).
+>
+> The certificate rows above are a *separate axis*: `0xE0E0..0xE0E3` are
+> `DataType=0x12` device-certificate surfaces — preserve and ratchet them,
+> **never retype one as an anchor** — and `0xE0E4..0xE0E7` hold no objects at
+> all (GetDataObject errors). **Nothing here authorizes an operation.** The
+> three-slot pool is documentarily confirmed (SRM Table 68) but
+> **silicon-unconfirmed for the shipping SKU/revision**; `lockdown_ta_pool`
+> emits no APDU, `OPTIGA_S2_PRODUCTION_BLOCKED` rejects every
+> `mode-production + optiga-trust-m` build, and **S-2 remains an OPEN
+> ship-blocker** — see [`../../STATUS.md`](../../STATUS.md) §A and the
+> CORRECTION 2026-07-26 block in
+> [`../../provisioning/first-boot-provisioning.md`](../../provisioning/first-boot-provisioning.md).
 
 ### ECC Private Key Objects
 
