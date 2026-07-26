@@ -86,19 +86,32 @@ mirrored verbatim in `docs/provisioning/factory-provisioning.md` and
 > a fill-and-lock pass over that range junk-overwrites the `0xE0E3` **device
 > certificate**, then aborts at the absent `0xE0E4` — never reaching `0xE0E9`
 > or `0xE0EF` — leaving the real anchors open while the step reports done. On
-> irreversible `LcsO` transitions, against parts that cost money. The real pool
-> is exactly `{0xE0E8, 0xE0E9, 0xE0EF}`
-> (`secure/src/optiga/mod.rs:1996`, pinned by the source-scanning test
+> irreversible `LcsO` transitions, against parts that cost money. The candidate
+> pool is `{0xE0E8, 0xE0E9, 0xE0EF}` (`secure/src/optiga/mod.rs:1996`, pinned by
+> the source-scanning test
 > `optiga_under_test::pure_tests::negative_ta_pool_lockdown_is_exact_and_emits_no_apdu`).
 >
-> Whether those three slots are **filled-and-locked** with a PQ1-HSM anchor or
-> **irreversibly neutralized** is an unapproved policy choice, not a settled
-> step: `lockdown_ta_pool` deliberately emits **no APDU** and returns
-> `Err(Status(0xEC))` (`secure/src/optiga/mod.rs:1971-2003`), and
-> `OPTIGA_S2_PRODUCTION_BLOCKED` rejects every `mode-production +
-> optiga-trust-m` build. **S-2 remains an OPEN ship-blocker** — see
-> [`../STATUS.md`](../STATUS.md) §A and
-> [`provisioning-reference.md`](provisioning-reference.md) O-3/O-4/O-5.
+> **Do not read this correction as a new instruction.** It replaces a wrong
+> target list with a *candidate* one, at a weaker evidence tier than the word
+> "exactly" suggests: `{0xE0E8, 0xE0E9, 0xE0EF}` is **documentarily** confirmed
+> (SRM Table 68 + deep-research cross-check) but **silicon-unconfirmed for the
+> shipping SKU/revision** — which is why both the code docstring and
+> [`../STATUS.md`](../STATUS.md) §A still say "pin the SKU/revision inventory".
+> Whether those three slots are then **filled-and-locked** with a PQ1-HSM anchor
+> or **irreversibly neutralized** is a further unapproved policy choice. The
+> `0xE0E0` reading carries its own open confirm: our bench evidence came from a
+> TRUSTMV3SHIELDTOBO1 **eval shield**, which may hold the engineering-sample
+> Test cert rather than a production chip-unique cert.
+>
+> Nothing here is runnable: `lockdown_ta_pool` is `cfg`'d on the feature pair
+> `optiga-lock-operational + factory-production-irreversible-im-sure`, which
+> `OPTIGA_TA_POOL_LOCKDOWN_BLOCKED` (`secure/src/nsc/mod.rs:301-311`) rejects
+> outright — so the function **does not exist in any compilable image** — and
+> even its body emits **no APDU**, returning `Err(Status(0xEC))`
+> (`secure/src/optiga/mod.rs:1971-2003`). `OPTIGA_S2_PRODUCTION_BLOCKED`
+> separately rejects every `mode-production + optiga-trust-m` build.
+> **S-2 remains an OPEN ship-blocker** — see [`../STATUS.md`](../STATUS.md) §A
+> and [`provisioning-reference.md`](provisioning-reference.md) O-3/O-4/O-5.
 
 ### Done AT THE USER'S HOME on the first field boot (this flow; before PIN entry, before wallet creation)
 

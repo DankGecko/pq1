@@ -97,12 +97,19 @@ tearing/glitch test on the LUC failed-auth increment passes.
 >   certificate**, then aborts at the absent `0xE0E4` — never reaching `0xE0E9`
 >   or `0xE0EF` — leaving the real anchors open while the step reports done.
 >   Destructive *and* false-closing.
-> - **The real type-`0x11` Protected-Update pool is exactly
+> - **The candidate type-`0x11` Protected-Update pool is
 >   `{0xE0E8, 0xE0E9, 0xE0EF}`** (`secure/src/optiga/mod.rs:1996`, pinned by
->   `optiga_under_test::pure_tests::negative_ta_pool_lockdown_is_exact_and_emits_no_apdu`).
->   Whether to fill-and-lock or irreversibly neutralize it is an **unapproved
->   policy choice**: `lockdown_ta_pool` emits no APDU and returns
->   `Err(Status(0xEC))`.
+>   `optiga_under_test::pure_tests::negative_ta_pool_lockdown_is_exact_and_emits_no_apdu`)
+>   — *documentarily* confirmed (SRM Table 68 + deep-research cross-check) but
+>   **silicon-unconfirmed for the shipping SKU/revision**, which is why the code
+>   docstring and `../STATUS.md` §A both still say "pin the SKU/revision
+>   inventory". Treat it as a corrected *target list*, not a new instruction.
+>   Whether to fill-and-lock or irreversibly neutralize is a further
+>   **unapproved policy choice**. Nothing is runnable:
+>   `OPTIGA_TA_POOL_LOCKDOWN_BLOCKED` (`secure/src/nsc/mod.rs:301-311`) rejects
+>   the exact feature pair `lockdown_ta_pool` is `cfg`'d on, so the helper does
+>   not exist in any compilable image; its body emits no APDU and returns
+>   `Err(Status(0xEC))` regardless.
 >
 > What is **unchanged** is the finding's core security argument: an
 > attacker-controlled type-`0x11` anchor authorizes `SetObjectProtected`
