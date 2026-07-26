@@ -146,16 +146,27 @@ def scan_makeflags_value(value: str) -> list[str]:
                     i += 1
         else:
             bundle = word.lstrip("-")
-            for option in bundle:
+            pos = 0
+            while pos < len(bundle):
+                option = bundle[pos]
                 if option in _SUPPRESSION_SHORT:
                     hits.append(f"-{option}")
+                if option in _SHORT_OPTIONS_WITH_REQUIRED_ARGUMENT:
+                    # CIfWo: the argument is the REST of this word when
+                    # attached (`-I.`, `-otarget`), the following word only
+                    # when the letter is last (`-I dir`, `o <target>`).
+                    # Skipping the next word for an attached argument would
+                    # blind the scan to a real switch that follows it
+                    # (wave-6 Opus 5 BLOCKER, coordinator-reproduced).
+                    if pos + 1 == len(bundle):
+                        i += 1
+                    break
                 if option in _SHORT_OPTIONS_WITH_OPTIONAL_ARGUMENT:
                     # jlO take an ATTACHED optional argument: the rest of the
                     # word is that argument (e.g. `-Otarget` is --output-sync,
                     # not the letters t/a/r/g/e/t), not more options.
                     break
-            if bundle and bundle[0] in _SHORT_OPTIONS_WITH_REQUIRED_ARGUMENT:
-                i += 1  # the option's argument is the following word
+                pos += 1
         i += 1
     return hits
 
@@ -238,6 +249,14 @@ def self_test() -> int:
         ("-Oline", []),
         ("nOtarget", ["-n"]),
         ("-j4", []),
+        ("-I. --assume-old=verify", ["--assume-old"]),
+        ("-C. --assume-old=verify", ["--assume-old"]),
+        ("C. --assume-old=verify", ["--assume-old"]),
+        ("-I. --what-if=Makefile", ["--what-if"]),
+        ("-I/usr/include -n", ["-n"]),
+        ("-C sub", []),
+        ("-otarget", ["-o"]),
+        ("-WMakefile", ["-W"]),
     )
     for value, expected in makeflags_cases:
         hits = scan_makeflags_value(value)

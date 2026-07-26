@@ -1150,6 +1150,14 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	  echo "CONTROL FAILURE: ambient GNUMAKEFLAGS assume-old mode was rejected for the wrong reason" >&2; \
 	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
 	fi; \
+	if /usr/bin/env 'MAKEFLAGS=-I. --assume-old=verify-hw-assumptions' $(_FV_GNU_MAKE) --no-print-directory \
+	    verify-hw-assumptions >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: an attached-argument word blinded the MAKEFLAGS suppression scan" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	elif ! grep -Fq 'no-execute-mode' $$out; then \
+	  echo "CONTROL FAILURE: attached-argument MAKEFLAGS suppression was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -f $$out; exit 1; \
+	fi; \
 	rm -f $$out; \
 	echo "  ok: Make dry-run/question/assume-old/what-if modes (argv and ambient MAKEFLAGS/GNUMAKEFLAGS) are CAUGHT"
 	+@out=$$(mktemp /tmp/pq-extraction-bashfunc-selftest.XXXXXX); \
