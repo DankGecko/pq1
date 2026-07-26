@@ -136,6 +136,18 @@ override _FV_PHYSICAL_CWD := $(shell /usr/bin/pwd -P)
 ifneq ($(_FV_PHYSICAL_CWD),$(realpath $(dir $(realpath $(_FV_MAKEFILE_LIST_AT_ENTRY)))))
 $(error refusing foreign working directory ($(_FV_PHYSICAL_CWD)) for verification Makefile; run from the Makefile directory or via make -C)
 endif
+# `realpath` resolves symlinks, not hard links: a hard-linked copy of this
+# file planted in an attacker directory satisfies the comparison above (the
+# "resolved" file's directory IS the attacker cwd) while every relative
+# evidence path — the argv checker, scripts/*.py, lean/, the manifests —
+# rebinds to that tree (wave-1 Opus 5 MEDIUM, same rebinding class as the
+# symlink case).  Reject a multiply-linked makefile.  A hard-linking checkout
+# mechanism (e.g. `cp -al` workspaces) is NOT a supported invocation for the
+# evidence gates; use a real checkout (git checkouts/worktrees and plain
+# copies carry link count 1).
+ifneq ($(shell /usr/bin/stat -c %h '$(realpath $(_FV_MAKEFILE_LIST_AT_ENTRY))'),1)
+$(error refusing multiply-linked verification Makefile (hard-link count is not 1))
+endif
 # The toolchain and evidence roots are assigned below with `override`, but a
 # caller preseeding one (command line, environment, or an earlier makefile)
 # must be rejected loudly rather than silently overridden: PQLEAN is the
@@ -191,18 +203,16 @@ $(error refusing caller-overridden LAKE (origin $(_FV_LAKE_ORIGIN)) for verifica
 endif
 
 override LEAN_DIR := lean
-# The Lean toolchain path is part of the evidence trust root.  HOME is
-# caller-mutable ambient state (`HOME=/tmp/evil make …` would rebind the elan
-# fallback), so derive the fallback home from the password database through
-# the pinned interpreter.  Exported Bash functions are rejected above, so
-# `command -v` can no longer resolve to a function; still require an
-# absolute, existing path so a bare-name or empty result fails closed at
-# parse time instead of rebinding at recipe time.
+# The Lean toolchain path is part of the evidence trust root and must NOT
+# resolve through caller-mutable state.  `command -v lake` accepts any
+# absolute existing file, so a PATH-planted no-op `lake` exited 0 in place of
+# the kernel gate (wave-1 Opus 5 HIGH, coordinator-reproduced); HOME is
+# equally caller-mutable (`HOME=/tmp/evil make …` rebinds a $HOME-derived
+# fallback).  Pin LAKE to the elan shim under the password-database home
+# (derived through the pinned interpreter) and require it to exist, so the
+# resolution fails closed at parse time.
 override _FV_USER_HOME := $(shell /usr/bin/python3 -I -c 'import os,pwd;print(pwd.getpwuid(os.getuid()).pw_dir)')
-override LAKE := $(shell command -v lake 2>/dev/null || printf '%s/.elan/bin/lake' '$(_FV_USER_HOME)')
-ifeq ($(filter /%,$(LAKE)),)
-$(error LAKE did not resolve to an absolute path ($(LAKE)) for verification Makefile)
-endif
+override LAKE := $(_FV_USER_HOME)/.elan/bin/lake
 ifeq ($(wildcard $(LAKE)),)
 $(error LAKE not found at $(LAKE); install the elan Lean 4 toolchain for verification Makefile)
 endif
@@ -744,7 +754,7 @@ endif
 # The authoritative replay must recurse through the reviewed GNU Make binary.
 # Reject ambient executor and Bash-startup overrides as an additional fail-loud
 # receipt.  Internal helper goals are guarded too.
-override _EXTRACTION_REGEN_GUARDED_GOALS := verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test _verify-extraction-regen-wrong-waiver-self-test _verify-extraction-make-path-self-test _verify-extraction-workspace-inner-self-test _verify-extraction-alias-delegation-self-test
+override _EXTRACTION_REGEN_GUARDED_GOALS := verify-extraction-regen verify-extraction-regen-self-test _verify-extraction-regen-loop _verify-extraction-regen-loop-self-test _verify-extraction-regen-wrong-waiver-self-test _verify-extraction-make-path-self-test _verify-extraction-workspace-inner-self-test _verify-extraction-alias-delegation-self-test _verify-lake-path-self-test
 override _EXTRACTION_CONTEXT_GOALS := $(_EXTRACTION_REGEN_GUARDED_GOALS) $(_EXTRACTION_TARGETS)
 override _EXTRACTION_ALL_GUARDED_TARGETS := $(_EXTRACTION_CONTEXT_GOALS) $(_EXTRACTION_IMPL_TARGETS)
 override _FV_ALL_PARSER_GUARDED_TARGETS := $(_FV_EVIDENCE_TARGETS) $(_EXTRACTION_ALL_GUARDED_TARGETS)
@@ -1078,6 +1088,25 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -rf $$out $$evildir $$linkparent; \
 	echo "  ok: a symlinked Makefile in a foreign cwd is CAUGHT; a symlinked invocation dir still works"
+	+@out=$$(mktemp /tmp/pq-extraction-hardlinked-makefile-selftest.XXXXXX); \
+	evildir=$$(mktemp -d /tmp/pq-extraction-hardlinked-makefile.XXXXXX); \
+	mkdir -p $$evildir/scripts; \
+	printf 'print("ok")\n' >$$evildir/scripts/check_make_argv.py; \
+	printf 'print("SPOOFED-CWD")\n' >$$evildir/scripts/check_hw_assumptions.py; \
+	if ! ln "$$(pwd)/Makefile" $$evildir/Makefile; then \
+	  echo "CONTROL FAILURE: could not create the hard-linked Makefile fixture" >&2; \
+	  rm -rf $$out $$evildir; exit 1; \
+	fi; \
+	if ( cd $$evildir && $(_FV_GNU_MAKE) --no-print-directory verify-hw-assumptions ) >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: a hard-linked Makefile anchored the trust root to a foreign working directory" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
+	elif grep -Fq 'SPOOFED-CWD' $$out \
+	    || ! grep -Fq 'refusing multiply-linked verification Makefile ' $$out; then \
+	  echo "CONTROL FAILURE: hard-linked-Makefile attack was rejected for the wrong reason" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evildir; exit 1; \
+	fi; \
+	rm -rf $$out $$evildir; \
+	echo "  ok: a hard-linked Makefile in a foreign cwd is CAUGHT"
 	+@out=$$(mktemp /tmp/pq-extraction-lake-override-selftest.XXXXXX); \
 	if /usr/bin/env LAKE=/bin/true $(_FV_GNU_MAKE) --no-print-directory \
 	    verify-build >$$out 2>&1; then \
@@ -1097,6 +1126,25 @@ verify-extraction-regen-self-test: ## Negative controls for signature/value pari
 	fi; \
 	rm -f $$out; \
 	echo "  ok: inherited and command-line LAKE overrides are CAUGHT"
+	+@out=$$(mktemp /tmp/pq-extraction-lake-path-selftest.XXXXXX); \
+	evilbin=$$(mktemp -d /tmp/pq-lake-path-planted.XXXXXX); \
+	printf '#!/bin/sh\necho SPOOFED-LAKE\n' >$$evilbin/lake; \
+	chmod +x $$evilbin/lake; \
+	if ! PATH="$$evilbin:/usr/bin:/bin" $(_FV_GNU_MAKE) --no-print-directory \
+	    _verify-lake-path-self-test >$$out 2>&1; then \
+	  echo "CONTROL FAILURE: lake-path print target did not run" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evilbin; exit 1; \
+	elif grep -Fq 'SPOOFED-LAKE' $$out; then \
+	  echo "CONTROL FAILURE: LAKE resolved through the caller PATH to a planted tool" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evilbin; exit 1; \
+	elif ! lake_line=$$(sed -n 's/^lake=//p' $$out) \
+	    || ! elan_line=$$(sed -n 's/^elan=//p' $$out) \
+	    || [ -z "$$lake_line" ] || [ "$$lake_line" != "$$elan_line" ]; then \
+	  echo "CONTROL FAILURE: LAKE is not pinned to the password-database elan shim" >&2; \
+	  sed -n '1,120p' $$out >&2; rm -rf $$out $$evilbin; exit 1; \
+	fi; \
+	rm -rf $$out $$evilbin; \
+	echo "  ok: LAKE ignores a PATH-planted lake and stays on the pinned elan shim"
 	+@out=$$(mktemp /tmp/pq-extraction-goal-executor-selftest.XXXXXX); \
 	if $(_FV_GNU_MAKE) --no-print-directory MAKECMDGOALS=not-guarded MAKE=/bin/true _verify-extraction-regen-loop >$$out 2>&1; then \
 	  echo "CONTROL FAILURE: spoofed MAKECMDGOALS suppressed the recursive-executor guard" >&2; \
@@ -1384,6 +1432,9 @@ _verify-extraction-regen-wrong-waiver-self-test:
 
 _verify-extraction-make-path-self-test:
 	@printf '%s\n' 'trusted=$(_FV_GNU_MAKE)' 'ambient=$(MAKE_COMMAND)'
+
+_verify-lake-path-self-test:
+	@printf '%s\n' 'lake=$(LAKE)' 'elan=$(_FV_USER_HOME)/.elan/bin/lake'
 
 # roadmap T1.3 (ii) — extracted-Lean vs shipped-Rust DIFFERENTIAL gate.
 # The `extract-*` regen-diff targets catch a Rust change that was not re-extracted;
