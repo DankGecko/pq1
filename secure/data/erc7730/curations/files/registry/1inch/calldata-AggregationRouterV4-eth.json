@@ -3,6 +3,9 @@
   "includes": "common-AggregationRouterV4.json",
   "_curation_note": "PQSigner semantic curation: only the two static Clipper swaps are admitted for the independently verified Ethereum AggregationRouterV4 deployment. Its deployed ClipperRouter treats address zero, and not the shared 0xEeee sentinel, as native currency; both amount fields therefore authenticate only address zero for these routes. clipperSwap binds the recipient to msg.sender and clipperSwapTo displays the explicit recipient. clipperSwapToWithPermit remains declared only to preserve an exact known-call refusal because hidden permit bytes can change token authority. The inherited aggregation executor, packed pool lists, permit siblings, RFQ orders, owner controls, and every other ambiguous or dynamic route remain excluded by deploymentFormats and fail closed as exact known calls. Evidence is historical fixed-block source/runtime authority, not quote quality, execution success, current bytecode, future deployment monitoring, fallback, or blind signing.",
   "_pqsigner": {
+    "refusalOnlyFormats": [
+      "clipperSwapToWithPermit(address recipient, address srcToken, address dstToken, uint256 amount, uint256 minReturn, bytes permit)"
+    ],
     "deploymentFormats": [
       {
         "chainId": 1,

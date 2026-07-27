@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 828848,
-    "sha256": "79af687e8f2432cef5fe661afb933d1c35214d2894ca2c12233ddd74cf7053a8"
+    "bytes": 830654,
+    "sha256": "216ef3d8649874abdc1ca980502eeeb64ab9c2dd50c4e9ce25cd5e08b39b8445"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -286,8 +286,8 @@
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 36,
-      "bytes": 2493378,
-      "sha256": "ebd3e6a5645397a76be8daf1b9d20996502f34348b8eea7cc83f2e4486884c71"
+      "bytes": 2494694,
+      "sha256": "4e778fb74b9764de0d57bd0482a1a4a30e4f2fe6762d5e40e46f607f10382986"
     },
     {
       "path": "pqsigner-erc7730",
@@ -336,7 +336,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 313678,
-      "sha256": "401c92cba18895608404f5d160b161418d17209640bb311ef178d33082036beb"
+      "sha256": "ea294ed5854ba7d8704a7489a4f019eeafd4f8e4d441c648b2035ffb598b6e3b"
     }
   ],
   "capability_inputs": [
@@ -357,8 +357,8 @@
       "path": "registry/1inch/calldata-AggregationRouterV4-eth.json",
       "upstream_bytes": 2399,
       "upstream_sha256": "69a85920ba106f81d895c07a7683505c439d65d6f10fff13f1c665d38a3bb95f",
-      "replacement_bytes": 4415,
-      "replacement_sha256": "1d00aca3ef14dc9ee68410608b7f699ee862e997c6c82037c4ccf183d8ddafec"
+      "replacement_bytes": 4586,
+      "replacement_sha256": "85b745f1483ab077e79f9cdbf8552f1c7e28f99878f112c59330c8ed7c6e900b"
     },
     {
       "path": "registry/1inch/calldata-AggregationRouterV6-zksync.json",
@@ -567,22 +567,22 @@
       "path": "registry/safe/calldata-Safe-1.3.0.json",
       "upstream_bytes": 1421,
       "upstream_sha256": "a41c181f2003aa3446068b25464cef45553f0c7df543b1f4a4c07a9704203aa7",
-      "replacement_bytes": 6481,
-      "replacement_sha256": "7daf7e9b229a59f0dfd0f5ff0fb7f0540fe73562b5b49013f7edc45a24dd8a34"
+      "replacement_bytes": 7026,
+      "replacement_sha256": "4e34a49a3b6f97b624e0c0891483ef175213d7e39403eeafeca5c22efd50ef22"
     },
     {
       "path": "registry/safe/calldata-Safe-1.4.1.json",
       "upstream_bytes": 822,
       "upstream_sha256": "39cb7b692f99603a09803f4b3a0a2b88ad0ee350320a9beeadffe43068585775",
-      "replacement_bytes": 3754,
-      "replacement_sha256": "b1d52eb4619b5b76f1d9abd2d6f517cce26f33dc1ee81536c3ca15d8ec315716"
+      "replacement_bytes": 4299,
+      "replacement_sha256": "947a756b2cf4445b84b888a3c8058f581494b6b7b2a60a0aacc76e8d2d7cc9dd"
     },
     {
       "path": "registry/safe/calldata-Safe-1.5.0.json",
       "upstream_bytes": 396,
       "upstream_sha256": "d4b2964d8655688277b124bf17e7a5055b7797ed2a38c84f6d7f868ac3db7fd4",
-      "replacement_bytes": 1810,
-      "replacement_sha256": "ea81ee900d36360bc854c0c6fc00e0cfe3cdadd79ec4c7bc72bd9434501bd4ec"
+      "replacement_bytes": 2355,
+      "replacement_sha256": "e7c0ba9cacc43d2fba0c90ed92551fbc6c67f5783662df529371077c3fce0827"
     },
     {
       "path": "registry/serenita/calldata-EthVault.json",

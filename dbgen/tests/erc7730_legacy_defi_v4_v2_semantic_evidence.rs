@@ -33,6 +33,8 @@ const ONEINCH_CANONICAL_ROUTES: [&str; 2] = [
 ];
 const ONEINCH_PERMIT: &str =
     "clipperSwapToWithPermit(address,address,address,uint256,uint256,bytes)";
+const ONEINCH_PERMIT_NAMED: &str =
+    "clipperSwapToWithPermit(address recipient, address srcToken, address dstToken, uint256 amount, uint256 minReturn, bytes permit)";
 const ONEINCH_AGGREGATION: &str =
     "swap(address,(address,address,address,address,uint256,uint256,uint256,bytes),bytes)";
 
@@ -572,11 +574,15 @@ fn legacy_defi_curations_admit_only_evidenced_routes_and_keep_siblings_known() {
         oneinch_descriptor["_pqsigner"]["deploymentFormats"][0]["formats"],
         json!(ONEINCH_NAMED_ROUTES)
     );
+    assert_eq!(
+        oneinch_descriptor["_pqsigner"]["refusalOnlyFormats"],
+        json!([ONEINCH_PERMIT_NAMED]),
+        "the authority-changing Clipper permit route must require explicit marker removal before any future admission"
+    );
     let oneinch_note = required_str(&oneinch_descriptor, "_curation_note");
     assert!(oneinch_note.contains("not the shared 0xEeee sentinel"));
     assert!(oneinch_note.contains("exact known-call refusal"));
-    let permit = &oneinch_descriptor["display"]["formats"]
-        ["clipperSwapToWithPermit(address recipient, address srcToken, address dstToken, uint256 amount, uint256 minReturn, bytes permit)"];
+    let permit = &oneinch_descriptor["display"]["formats"][ONEINCH_PERMIT_NAMED];
     assert_eq!(permit["intent"], "Unsupported Clipper permit swap");
     assert!(
         permit["fields"]

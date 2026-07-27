@@ -5,8 +5,8 @@
   "catalogue_snapshot": {
     "upstream_commit": "784c87c925e8438e7b4736b2af85a501f8d2a265",
     "upstream_tree": "8da8dba78c3e581bbd06c15cc681d07e570dcfb1",
-    "curated_corpus_sha256": "79af687e8f2432cef5fe661afb933d1c35214d2894ca2c12233ddd74cf7053a8",
-    "merkle_root": "6afa8b4d6ad6fb7dd752d4efffa2aa6c2fbd73ea8312c4221dac73c8d62cb6b8",
+    "curated_corpus_sha256": "216ef3d8649874abdc1ca980502eeeb64ab9c2dd50c4e9ce25cd5e08b39b8445",
+    "merkle_root": "73bcc49e3c1c3bb466cd4ead5660292767158f191a83e485522d3fc2ee1ff4a1",
     "accepted_leaf_count": 400,
     "accepted_source_descriptor_count": 240,
     "compiled_blob_bytes": 339112,

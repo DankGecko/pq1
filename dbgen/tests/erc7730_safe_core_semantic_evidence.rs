@@ -39,6 +39,12 @@ const ADMITTED_CANONICAL_SIGNATURES: [&str; 3] = [
     "changeThreshold(uint256)",
     "approveHash(bytes32)",
 ];
+const REFUSED_SOURCE_SIGNATURES: [&str; 4] = [
+    "setup(address[] _owners, uint256 _threshold, address to, bytes data, address fallbackHandler, address paymentToken, uint256 payment, address paymentReceiver)",
+    "execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures)",
+    "removeOwner(address prevOwner, address owner, uint256 _threshold)",
+    "swapOwner(address prevOwner, address oldOwner, address newOwner)",
+];
 const REFUSED_CANONICAL_SIGNATURES: [&str; 4] = [
     "setup(address[],uint256,address,bytes,address,address,uint256,address)",
     "execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)",
@@ -501,6 +507,16 @@ fn safe_core_descriptors_pin_official_deployments_and_refusal_boundary() {
         let admissions = descriptor["_pqsigner"]["deploymentFormats"]
             .as_array()
             .expect("Safe deploymentFormats");
+        assert_eq!(
+            descriptor["_pqsigner"]["refusalOnlyFormats"]
+                .as_array()
+                .expect("Safe refusalOnlyFormats")
+                .iter()
+                .map(|format| format.as_str().expect("refusal-only format"))
+                .collect::<BTreeSet<_>>(),
+            REFUSED_SOURCE_SIGNATURES.into_iter().collect(),
+            "{descriptor_name} must structurally fence every permanently refused Safe format"
+        );
         assert_eq!(admissions.len(), expected_count);
         let admitted_deployments = admissions
             .iter()

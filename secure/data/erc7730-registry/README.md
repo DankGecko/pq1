@@ -45,11 +45,11 @@ accepted as a faithfulness proof.
 <!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
 Checked-in curated receipt, verified against a fresh build by `--check`: **400 leaves**, **339,112-byte**
 compiled companion catalogue, root
-`6afa8b4d6ad6fb7dd752d4efffa2aa6c2fbd73ea8312c4221dac73c8d62cb6b8`,
+`73bcc49e3c1c3bb466cd4ead5660292767158f191a83e485522d3fc2ee1ff4a1`,
 **4,580** canonical known-call tuples, tuple-set SHA-256
 `b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829`.
 Curation manifest SHA-256
-`dc53f61fc558e23d017376dae970b188e04b6b6046f1cf9d1ed9ec9a753e19c4` binds upstream commit
+`1db33805216469f34e4e0c66402f83cb9724125955e203869126aa08e3a33a3f` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
 Manifest v3 authorizes exactly **38** curation-added known-call tuples and no deletions.
