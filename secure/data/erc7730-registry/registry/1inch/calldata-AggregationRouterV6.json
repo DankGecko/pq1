@@ -76,6 +76,10 @@
           "increaseEpoch(uint96 series)"
         ]
       }
+    ],
+    "refusalOnlyFormats": [
+      "advanceEpoch(uint96 series, uint256 amount)",
+      "bitsInvalidateForOrder(uint256 makerTraits, uint256 additionalMask)"
     ]
   },
   "context": {

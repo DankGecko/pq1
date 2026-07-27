@@ -152,11 +152,17 @@ upstream-movement ceremony.
    before its checked install. There is no manual patch-reapplication step.
    A replacement may use the PQSigner-local `_pqsigner.deploymentFormats`
    constraint to select exact format keys for exact already-declared contract
-   deployments. The compiler rejects null, empty, duplicate, unknown, malformed,
-   out-of-context, or catalogue-wide selector-colliding entries, and compiles
-   each admitted set atomically. This extension can only remove authenticated leaves: the
-   independent known-call scan deliberately ignores it, so every omitted source
-   deployment/format tuple remains a hard refusal.
+   deployments, and `_pqsigner.refusalOnlyFormats` to mark exact source format
+   keys that may contribute only to the known-call refusal set. The compiler
+   rejects null, empty, duplicate, unknown, malformed, out-of-context,
+   overlapping, or catalogue-wide selector-colliding entries, and compiles each
+   admitted set atomically. These extensions can only remove authenticated
+   leaves: the independent known-call scan deliberately ignores them, so every
+   omitted source deployment/format tuple remains a hard refusal. For an
+   allowlist-excluded format, the review receipt also records an independently
+   isolated underlying compiler rejection when one is safely derivable; that
+   diagnostics-only probe has a fresh pool, cloned context, and throw-away
+   output and therefore cannot emit a leaf or grant fallback authority.
 5. `cargo run -p dbgen --features nested-calldata-test-fixture` — regenerate
    the blobs, known-call Blooms, production/E2E `erc7730_status*.bin` receipts,
    canonical production/E2E `P73K` refused-known sets, `db_roots.rs`

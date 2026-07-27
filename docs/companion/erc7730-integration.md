@@ -73,7 +73,7 @@ Current security contract:
   exact signed words and hard-refuses missing, reordered, mismatched, non-ASCII,
   over-128-byte, trailing, or page-overflow display evidence without fallback.
 - The current regenerated development catalogue has **400 leaves**, root
-  `0775c1c31572394e9fe9240a957aa897c0ae984e64f62567032a98fb1cf83d70`,
+  `1a1dbbb97c6260b2fc07dc6adfdc6b9ff635a077f1e84af8840d2bb13b9b979f`,
   and **4,580 exact known-call tuples**. The tuple-set receipt is SHA-256
   `b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829`;
   Bloom occupancy is 28,453 / 131,072 bits under the compiler-enforced generation cap.

@@ -1131,8 +1131,14 @@ struct PqsignerCuration {
     /// deployment/format pairs may emit authenticated leaves. Unlisted source
     /// declarations remain in the independently generated known-call set and
     /// therefore continue to hard-refuse rather than becoming blind-signable.
-    #[serde(rename = "deploymentFormats")]
+    #[serde(rename = "deploymentFormats", default)]
     deployment_formats: Vec<DeploymentFormatAdmission>,
+    /// Exact source formats that are intentionally retained only so their
+    /// deployment/selector tuples enter the authenticated known-call refusal
+    /// set. A refusal-only format can never emit an IR format, including
+    /// through a later deployment allowlist edit.
+    #[serde(rename = "refusalOnlyFormats", default)]
+    refusal_only_formats: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4067,6 +4073,11 @@ fn compile_resolved_descriptor_with_nested_calldata_enrollments(
         &descriptor.display,
         declared_contract_signatures,
     )?;
+    let refusal_only_formats = validate_refusal_only_formats(
+        descriptor.pqsigner.as_ref(),
+        context_kind,
+        &descriptor.display,
+    )?;
 
     // Resolve constants and enums into the IR pool (lazily, only
     // entries actually referenced get emitted).
@@ -4116,6 +4127,7 @@ fn compile_resolved_descriptor_with_nested_calldata_enrollments(
                 &mut deployment_drops,
                 Some(&deployment),
                 allowed_formats,
+                &refusal_only_formats,
                 nested_calldata_enrollments,
             )?;
         // The same unsupported source format is normally rediscovered for
@@ -4261,11 +4273,17 @@ fn validate_deployment_format_admissions(
     let Some(pqsigner) = pqsigner else {
         return Ok(None);
     };
-    if context_kind != CTX_CONTRACT {
-        return Err("_pqsigner.deploymentFormats is contract-context only".to_string());
+    if pqsigner.deployment_formats.is_empty() && pqsigner.refusal_only_formats.is_empty() {
+        return Err(
+            "_pqsigner.deploymentFormats must not be empty unless refusalOnlyFormats is non-empty"
+                .to_string(),
+        );
     }
     if pqsigner.deployment_formats.is_empty() {
-        return Err("_pqsigner.deploymentFormats must not be empty".to_string());
+        return Ok(None);
+    }
+    if context_kind != CTX_CONTRACT {
+        return Err("_pqsigner.deploymentFormats is contract-context only".to_string());
     }
 
     let mut declared_deployments = BTreeSet::new();
@@ -4377,6 +4395,58 @@ fn validate_deployment_format_admissions(
     }
 
     Ok(Some(admissions))
+}
+
+/// Validate exact source formats that are structurally refusal-only.
+///
+/// The marker is authenticated as part of the descriptor JCS hash. It only
+/// narrows authority: the independent source inventory still contributes
+/// every declared deployment/selector tuple to the exact known-call set, while
+/// this set is removed before IR compilation. An overlap with
+/// `deploymentFormats` is rejected so no later reader has to resolve
+/// contradictory local policy.
+fn validate_refusal_only_formats(
+    pqsigner: Option<&PqsignerCuration>,
+    context_kind: u8,
+    display: &Display,
+) -> Result<BTreeSet<String>, String> {
+    let Some(pqsigner) = pqsigner else {
+        return Ok(BTreeSet::new());
+    };
+    if pqsigner.refusal_only_formats.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    if context_kind != CTX_CONTRACT {
+        return Err("_pqsigner.refusalOnlyFormats is contract-context only".to_string());
+    }
+
+    let admitted = pqsigner
+        .deployment_formats
+        .iter()
+        .flat_map(|admission| admission.formats.iter())
+        .collect::<BTreeSet<_>>();
+    let mut refusal_only = BTreeSet::new();
+    for (index, signature) in pqsigner.refusal_only_formats.iter().enumerate() {
+        if !display.formats.contains_key(signature) {
+            return Err(format!(
+                "_pqsigner.refusalOnlyFormats[{index}] names unknown format `{signature}`"
+            ));
+        }
+        contract_selector_signature(signature).map_err(|error| {
+            format!("_pqsigner.refusalOnlyFormats[{index}] cannot be selector-bound: {error}")
+        })?;
+        if admitted.contains(signature) {
+            return Err(format!(
+                "_pqsigner.refusalOnlyFormats[{index}] overlaps deploymentFormats at `{signature}`"
+            ));
+        }
+        if !refusal_only.insert(signature.clone()) {
+            return Err(format!(
+                "_pqsigner.refusalOnlyFormats duplicates `{signature}`"
+            ));
+        }
+    }
+    Ok(refusal_only)
 }
 
 fn reject_unsupported_context_semantics(ctx: &Context) -> Result<(), String> {
@@ -4621,8 +4691,107 @@ fn compile_formats_reporting(
         partial_format_drops,
         interpolation_deployment,
         allowed_formats,
+        &BTreeSet::new(),
         PRODUCTION_NESTED_CALLDATA_ENROLLMENTS,
     )
+}
+
+/// Best-effort, diagnostics-only compilation of a format excluded by an
+/// authenticated deployment allowlist.
+///
+/// Every mutable compiler input is isolated from the authoritative build:
+/// this probe gets a cloned context, a fresh IR pool, fresh enum offsets, and
+/// a throw-away output buffer. A successful probe emits no diagnostic and
+/// grants no authority. A rejected probe lets the review receipt preserve the
+/// deeper compiler reason that the policy exclusion would otherwise mask.
+#[allow(clippy::too_many_arguments)]
+fn diagnose_allowlist_excluded_format(
+    sig: &str,
+    fmt: &Format,
+    display: &Display,
+    context_kind: u8,
+    ctx: &CompileCtx,
+    interpolation_deployment: Option<&InterpolationDeployment<'_>>,
+    nested_calldata_enrollments: &[NestedCalldataEnrollment],
+) -> Option<String> {
+    if let Some(key) = fmt
+        .unknown
+        .keys()
+        .next()
+        .cloned()
+        .or_else(|| first_unmodeled_field_key(&fmt.fields))
+    {
+        return Some(format!(
+            "format `{sig}`: unmodeled descriptor key `{key}` — dbgen does not act on it and \
+             would silently drop it; refusing (finding 1.3)"
+        ));
+    }
+
+    let resolved = match resolve_display_refs(&fmt.fields, display.definitions.as_ref()) {
+        Ok(resolved) => resolved,
+        Err(error) => return Some(format!("format `{sig}`: {error}")),
+    };
+    let fields = match flatten_field_groups(&resolved) {
+        Ok(fields) => fields,
+        Err(error) => return Some(format!("format `{sig}`: {error}")),
+    };
+    let flat = Format {
+        _id: fmt._id.clone(),
+        intent: fmt.intent.clone(),
+        fields,
+        interpolated_intent: fmt.interpolated_intent.clone(),
+        unknown: BTreeMap::new(),
+    };
+
+    let mut scratch_ctx = ctx.clone();
+    let mut scratch_pool = Pool::new();
+    let mut enum_offsets: BTreeMap<String, u16> = BTreeMap::new();
+    for field in &flat.fields {
+        let Some(params) = &field.params else {
+            continue;
+        };
+        let Some(refstr) = params
+            .get("$ref")
+            .and_then(|value| value.as_str())
+            .or_else(|| params.get("ref").and_then(|value| value.as_str()))
+        else {
+            continue;
+        };
+        let Some(name) = refstr.strip_prefix("$.metadata.enums.") else {
+            continue;
+        };
+        if enum_offsets.contains_key(name) {
+            continue;
+        }
+        let offset = scratch_ctx
+            .enums
+            .get(name)
+            .ok_or_else(|| format!("enum `{name}` referenced but not defined"))
+            .and_then(|table| {
+                encode_enum_table(table).map_err(|error| format!("enum `{name}` encoding: {error}"))
+            })
+            .and_then(|encoded| scratch_pool.push_raw(&encoded));
+        match offset {
+            Ok(offset) => {
+                enum_offsets.insert(name.to_string(), offset);
+            }
+            Err(error) => return Some(error),
+        }
+    }
+
+    let mut scratch_output = Vec::new();
+    compile_one_format_with_nested_calldata_enrollments(
+        sig,
+        &flat,
+        context_kind,
+        &mut scratch_ctx,
+        &mut scratch_pool,
+        &enum_offsets,
+        &mut scratch_output,
+        interpolation_deployment,
+        nested_calldata_enrollments,
+    )
+    .err()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4634,9 +4803,17 @@ fn compile_formats_reporting_with_nested_calldata_enrollments(
     partial_format_drops: &mut Vec<String>,
     interpolation_deployment: Option<&InterpolationDeployment<'_>>,
     allowed_formats: Option<&BTreeSet<String>>,
+    refusal_only_formats: &BTreeSet<String>,
     nested_calldata_enrollments: &[NestedCalldataEnrollment],
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let n = allowed_formats.map_or(display.formats.len(), BTreeSet::len);
+    let n = display
+        .formats
+        .keys()
+        .filter(|signature| {
+            !refusal_only_formats.contains(*signature)
+                && allowed_formats.is_none_or(|allowed| allowed.contains(*signature))
+        })
+        .count();
     // An explicit curation admission is an atomic reviewed set. Ordinary
     // unscoped descriptors retain the historical tolerant behavior, but an
     // admitted format may never disappear while sibling admissions still
@@ -4667,7 +4844,7 @@ fn compile_formats_reporting_with_nested_calldata_enrollments(
     let mut format_errs: Vec<String> = Vec::new();
     let mut flat: Vec<(&str, Format)> = Vec::with_capacity(n);
     for (sig, fmt) in display.formats.iter() {
-        if allowed_formats.is_some_and(|allowed| !allowed.contains(sig)) {
+        if refusal_only_formats.contains(sig) {
             let deployment = interpolation_deployment
                 .map(|deployment| {
                     format!(
@@ -4678,8 +4855,36 @@ fn compile_formats_reporting_with_nested_calldata_enrollments(
                 })
                 .unwrap_or_default();
             format_errs.push(format!(
-                "format `{sig}` excluded{deployment} by the authenticated PQSigner deploymentFormats allowlist"
+                "format `{sig}` excluded{deployment} by the authenticated PQSigner refusalOnlyFormats marker"
             ));
+            continue;
+        }
+        if allowed_formats.is_some_and(|allowed| !allowed.contains(sig)) {
+            let deployment = interpolation_deployment
+                .map(|deployment| {
+                    format!(
+                        " for chain_id={} contract=0x{}",
+                        deployment.chain_id,
+                        hex::encode(deployment.contract)
+                    )
+                })
+                .unwrap_or_default();
+            let mut reason = format!(
+                "format `{sig}` excluded{deployment} by the authenticated PQSigner deploymentFormats allowlist"
+            );
+            if let Some(error) = diagnose_allowlist_excluded_format(
+                sig,
+                fmt,
+                display,
+                context_kind,
+                ctx,
+                interpolation_deployment,
+                nested_calldata_enrollments,
+            ) {
+                reason.push_str("; underlying compiler rejection: ");
+                reason.push_str(&error);
+            }
+            format_errs.push(reason);
             continue;
         }
         // 1.3: an unmodelled top-level format/field key would be silently

@@ -439,12 +439,14 @@ fn pqsigner_deployment_formats_only_narrows_leaves_not_known_calls() {
                 .contains("approve(address spender,uint256 amount)")
             && skip.reason.contains("chain_id=1")
             && skip.reason.contains("deploymentFormats allowlist")
+            && !skip.reason.contains("underlying compiler rejection")
     }));
     assert!(skips.iter().any(|skip| {
         skip.reason.contains("PARTIAL FORMAT DROP")
             && skip.reason.contains("transfer(address to,uint256 amount)")
             && skip.reason.contains("chain_id=56")
             && skip.reason.contains("deploymentFormats allowlist")
+            && !skip.reason.contains("underlying compiler rejection")
     }));
     assert!(skips.iter().any(|skip| {
         skip.reason.contains("chain_id=137") && skip.reason.contains("deploymentFormats allowlist")
@@ -480,6 +482,259 @@ fn pqsigner_deployment_formats_only_narrows_leaves_not_known_calls() {
     assert!(unscoped_entries
         .iter()
         .all(|entry| entry.erc8176_hash != result.entries[0].erc8176_hash));
+}
+
+#[test]
+fn pqsigner_deployment_formats_preserves_isolated_underlying_rejection_diagnostic() {
+    let dir = make_tempdir("deployment_format_underlying_rejection");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(
+        dir.join("calldata-scoped.json"),
+        r#"{
+  "_pqsigner": { "deploymentFormats": [{
+    "chainId": 1,
+    "address": "0x0000000000000000000000000000000000000001",
+    "formats": ["transfer(address to,uint256 amount)"]
+  }] },
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000001" }
+  ] } },
+  "metadata": { "owner": "Diagnostic Test", "contractName": "DiagnosticTest" },
+  "display": { "formats": {
+    "transfer(address to,uint256 amount)": {
+      "intent": "Send",
+      "fields": [
+        { "path": "to", "format": "addressName", "label": "To" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    },
+    "withdraw(address pool,uint256 amount)": {
+      "intent": "Withdraw",
+      "fields": [
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+
+    let (result, skips) = build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir))
+        .expect("the admitted safe sibling must compile");
+    assert_eq!(result.leaf_count, 1);
+    assert_eq!(
+        result.known_call_count, 2,
+        "the excluded selector remains exact-known"
+    );
+    let mut contract = [0u8; 20];
+    contract[19] = 1;
+    let withdraw_selector = {
+        let hash = pqsigner_tx_core::hash::keccak256(b"withdraw(address,uint256)");
+        [hash[0], hash[1], hash[2], hash[3]]
+    };
+    assert!(result
+        .known_calls
+        .contains(&(1, contract, withdraw_selector)));
+    assert!(known_call_may_contain(
+        &result.known_calls_bloom,
+        1,
+        &contract,
+        &withdraw_selector
+    ));
+    assert!(skips.iter().any(|skip| {
+        skip.reason
+            .contains("withdraw(address pool,uint256 amount)")
+            && skip.reason.contains("deploymentFormats allowlist")
+            && skip.reason.contains("underlying compiler rejection")
+            && skip.reason.contains("parameter #0 (`pool`)")
+            && skip.reason.contains("audit H-3")
+    }));
+
+    let ir = Erc7730Ir::parse(&result.entries[0].ir_bytes).expect("admitted IR parses");
+    let formats = ir
+        .format_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("admitted formats parse");
+    assert_eq!(formats.len(), 1);
+    assert_eq!(
+        formats[0].selector,
+        [0xa9, 0x05, 0x9c, 0xbb],
+        "diagnostic compilation must never add a survivor"
+    );
+}
+
+#[test]
+fn pqsigner_refusal_only_formats_are_hash_bound_and_stay_exact_known() {
+    let dir = make_tempdir("refusal_only_formats");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(
+        dir.join("calldata-refusal-only.json"),
+        r#"{
+  "_pqsigner": {
+    "refusalOnlyFormats": ["approve(address spender,uint256 amount)"]
+  },
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000001" }
+  ] } },
+  "metadata": { "owner": "Refusal Test", "contractName": "RefusalTest" },
+  "display": { "formats": {
+    "transfer(address to,uint256 amount)": {
+      "intent": "Send",
+      "fields": [
+        { "path": "to", "format": "addressName", "label": "To", "visible": "always" },
+        { "path": "amount", "format": "raw", "label": "Amount", "visible": "always" }
+      ]
+    },
+    "approve(address spender,uint256 amount)": {
+      "intent": "Approve",
+      "fields": [
+        { "path": "spender", "format": "addressName", "label": "Spender", "visible": "always" },
+        { "path": "amount", "format": "raw", "label": "Amount", "visible": "always" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+
+    let (result, skips) = build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir))
+        .expect("refusal-only marker must narrow the descriptor");
+    assert_eq!(result.leaf_count, 1);
+    let ir = Erc7730Ir::parse(&result.entries[0].ir_bytes).expect("narrowed IR parses");
+    let formats = ir
+        .format_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("narrowed formats parse");
+    assert_eq!(formats.len(), 1);
+    assert_eq!(formats[0].selector, [0xa9, 0x05, 0x9c, 0xbb]);
+
+    let mut contract = [0u8; 20];
+    contract[19] = 1;
+    assert_eq!(result.known_call_count, 2);
+    for selector in [[0xa9, 0x05, 0x9c, 0xbb], [0x09, 0x5e, 0xa7, 0xb3]] {
+        assert!(result.known_calls.contains(&(1, contract, selector)));
+        assert!(known_call_may_contain(
+            &result.known_calls_bloom,
+            1,
+            &contract,
+            &selector
+        ));
+    }
+    assert!(skips.iter().any(|skip| {
+        skip.reason.contains("PARTIAL FORMAT DROP")
+            && skip
+                .reason
+                .contains("approve(address spender,uint256 amount)")
+            && skip.reason.contains("refusalOnlyFormats marker")
+    }));
+
+    let mut unmarked: serde_json::Value = serde_json::from_slice(
+        &fs::read(dir.join("calldata-refusal-only.json")).expect("read marked descriptor"),
+    )
+    .expect("parse marked descriptor");
+    unmarked
+        .as_object_mut()
+        .expect("descriptor object")
+        .remove("_pqsigner");
+    let unmarked_dir = make_tempdir("refusal_only_hash_binding");
+    fs::write(unmarked_dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    let unmarked_path = unmarked_dir.join("calldata-unmarked.json");
+    fs::write(
+        &unmarked_path,
+        serde_json::to_vec_pretty(&unmarked).unwrap(),
+    )
+    .unwrap();
+    let policy = load_policy(&unmarked_dir.join("policy.toml")).unwrap();
+    let unmarked_entries = try_compile_one(&unmarked_path, &policy, Some(&unmarked_dir))
+        .expect("ordinary descriptor compiles");
+    assert_eq!(unmarked_entries.len(), 1);
+    assert_ne!(
+        result.entries[0].descriptor_hash,
+        unmarked_entries[0].descriptor_hash
+    );
+    assert_ne!(
+        result.entries[0].erc8176_hash,
+        unmarked_entries[0].erc8176_hash
+    );
+}
+
+#[test]
+fn pqsigner_refusal_only_formats_reject_unknown_duplicate_overlap_and_typed_data() {
+    let base: serde_json::Value = serde_json::from_str(
+        r#"{
+  "_pqsigner": {
+    "refusalOnlyFormats": ["approve(address spender,uint256 amount)"]
+  },
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000001" }
+  ] } },
+  "metadata": { "owner": "Refusal Test", "contractName": "RefusalTest" },
+  "display": { "formats": {
+    "transfer(address to,uint256 amount)": {
+      "intent": "Send",
+      "fields": [
+        { "path": "to", "format": "addressName", "label": "To" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    },
+    "approve(address spender,uint256 amount)": {
+      "intent": "Approve",
+      "fields": [
+        { "path": "spender", "format": "addressName", "label": "Spender" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+
+    let mut cases = Vec::new();
+    let mut unknown = base.clone();
+    unknown["_pqsigner"]["refusalOnlyFormats"] = serde_json::json!(["burn(uint256 amount)"]);
+    cases.push(("unknown", unknown, "names unknown format"));
+
+    let mut duplicate = base.clone();
+    duplicate["_pqsigner"]["refusalOnlyFormats"] = serde_json::json!([
+        "approve(address spender,uint256 amount)",
+        "approve(address spender,uint256 amount)"
+    ]);
+    cases.push(("duplicate", duplicate, "refusalOnlyFormats duplicates"));
+
+    let mut overlap = base.clone();
+    overlap["_pqsigner"]["deploymentFormats"] = serde_json::json!([{
+        "chainId": 1,
+        "address": "0x0000000000000000000000000000000000000001",
+        "formats": ["approve(address spender,uint256 amount)"]
+    }]);
+    cases.push(("overlap", overlap, "overlaps deploymentFormats"));
+
+    let mut typed_data = base;
+    typed_data["context"] = serde_json::json!({
+        "eip712": {
+            "deployments": [{
+                "chainId": 1,
+                "address": "0x0000000000000000000000000000000000000001"
+            }]
+        }
+    });
+    cases.push(("typed_data", typed_data, "contract-context only"));
+
+    for (name, descriptor, expected) in cases {
+        let dir = make_tempdir(name);
+        fs::write(dir.join("policy.toml"), POLICY_DEV).unwrap();
+        let path = dir.join("calldata-refusal.json");
+        fs::write(&path, serde_json::to_vec_pretty(&descriptor).unwrap()).unwrap();
+        let policy = load_policy(&dir.join("policy.toml")).unwrap();
+        let error = expect_err(
+            try_compile_one(&path, &policy, Some(&dir)),
+            "invalid refusalOnlyFormats shape must fail closed",
+        );
+        assert!(
+            error.contains(expected),
+            "{name}: expected `{expected}` in `{error}`"
+        );
+    }
 }
 
 #[test]
@@ -519,7 +774,7 @@ fn pqsigner_deployment_formats_rejects_every_nonrestrictive_or_ambiguous_shape()
     cases.push((
         "missing_admissions",
         missing_admissions,
-        "missing field `deploymentFormats`",
+        "deploymentFormats must not be empty unless refusalOnlyFormats is non-empty",
     ));
 
     let mut null_extension = base.clone();
