@@ -221,6 +221,22 @@ impl ForcedCapacityReceipt {
     }
 }
 
+/// FI-hardened equality proof for the two independent final USEROP_SIGS
+/// reads performed after every page-123 mutation in the forced path.
+///
+/// Kept beside the host-testable counter policy so rollback, disagreement,
+/// inflation, and corrupt-read sentinels exercise the exact production
+/// predicate rather than a test-only mirror.
+#[cfg(any(feature = "erc7730-forced-blind", test))]
+#[inline(never)]
+pub fn forced_final_tally_pair_proof(expected: u64, tally_a: u64, tally_b: u64) -> u32 {
+    crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(tally_a) == core::hint::black_box(expected)
+            && core::hint::black_box(tally_b) == core::hint::black_box(expected)
+            && core::hint::black_box(tally_a) != u64::MAX
+    })
+}
+
 /// Validate one complete projection and bind it to one forced request.
 ///
 /// This is kept pure so the exact 127/128 distinct-slot and 510/511 projected-

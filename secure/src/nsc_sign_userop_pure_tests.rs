@@ -2046,7 +2046,7 @@ fn forced_terminal_flow_rechecks_and_reserves_tally_before_key_use() {
         "the forced flow must reserve exactly one durable use"
     );
     let tally = body
-        .find("if unsafe { commit_durable_tally(")
+        .find("let mut tally_verdict = crate::fi::FAIL_SENTINEL;")
         .expect("pre-key durable tally");
     let signer = body
         .find("c10_sign_verified_forced_with_progress(")
@@ -2055,6 +2055,9 @@ fn forced_terminal_flow_rechecks_and_reserves_tally_before_key_use() {
     let tally_arm = &body[tally..signer];
     assert!(tally_arm.contains("zeroize_sensitive_state();"));
     assert!(tally_arm.contains("CFI_PREKEY_EXPECTED"));
+    assert!(tally_arm.contains("capacity_check,"));
+    assert!(tally_arm.contains("&request_digest_check,"));
+    assert!(tally_arm.contains("CFI_TALLY_COMMIT_EXPECTED"));
     assert!(tally_arm.matches("deadline_expired()").count() >= 1);
 
     let outer_verify = body[signer..]
@@ -2073,6 +2076,134 @@ fn forced_terminal_flow_rechecks_and_reserves_tally_before_key_use() {
         .expect("outer verification call");
     let outer_cache_gate = &body[outer_verify..first_outer_verify];
     assert!(outer_cache_gate.contains("zeroize_sensitive_state();"));
+}
+
+#[test]
+fn forced_tally_final_proof_follows_every_page123_mutation() {
+    let start = CMD_SIGN_USEROP_FORCED_SRC
+        .find("unsafe fn commit_durable_tally(")
+        .expect("durable tally helper");
+    let end = CMD_SIGN_USEROP_FORCED_SRC[start..]
+        .find("unsafe fn publish_forced_response(")
+        .map(|offset| start + offset)
+        .expect("durable tally helper boundary");
+    let body = &CMD_SIGN_USEROP_FORCED_SRC[start..end];
+
+    let reserve = body
+        .find("userop_sigs_bump(slot_key, next_tally)")
+        .expect("USEROP_SIGS reservation");
+    let promote = body
+        .find("offchain_count_promote_to(slot_key, counters.new_offchain_count)")
+        .expect("COUNT promotion");
+    let userop = body
+        .find("last_userop_count_set(slot_key, counters.new_offchain_count)")
+        .expect("USEROP publication");
+    let effective = body
+        .find("effective_offchain_count(local, last)")
+        .expect("effective count recheck");
+    let final_a = body
+        .find("let tally_a = unsafe { crate::offchain_state::userop_sigs_read(slot_key) };")
+        .expect("final tally read A");
+    let final_b = body
+        .find("let tally_b = unsafe { crate::offchain_state::userop_sigs_read(slot_key) };")
+        .expect("final tally read B");
+    let proof = body
+        .find("forced_final_tally_pair_proof(next_tally, tally_a, tally_b)")
+        .expect("final tally equality proof");
+    let publish = body
+        .find("core::ptr::write_volatile(verdict_out, crate::fi::OK_SENTINEL)")
+        .expect("fail-in verdict publication");
+
+    assert!(reserve < final_a);
+    assert!(promote < final_a);
+    assert!(userop < final_a);
+    assert!(effective < final_a);
+    assert!(final_a < final_b && final_b < proof && proof < publish);
+    assert_eq!(
+        body.matches("crate::offchain_state::userop_sigs_read(slot_key)")
+            .count(),
+        2,
+        "the authoritative post-mutation proof must contain exactly two tally reads"
+    );
+    assert!(body[final_a..].contains("CFI_TALLY_FINAL_READ_A"));
+    assert!(body[final_b..].contains("CFI_TALLY_FINAL_READ_B"));
+    assert!(body[proof..].contains("CFI_TALLY_PREPUBLISH_EXPECTED"));
+    assert!(!body[final_a..].contains("userop_sigs_bump("));
+    assert!(!body[final_a..].contains("offchain_count_promote_to("));
+    assert!(!body[final_a..].contains("last_userop_count_set("));
+
+    let bind = body
+        .find("*capacity.request_digest()")
+        .expect("fresh capacity receipt request binding");
+    assert!(bind < reserve);
+}
+
+#[test]
+fn forced_tally_commit_cfi_rejects_every_omitted_stage_subset() {
+    fn source_u32_const(name: &str) -> u32 {
+        let prefix = format!("const {name}: u32 = 0x");
+        let start = CMD_SIGN_USEROP_FORCED_SRC
+            .find(&prefix)
+            .unwrap_or_else(|| panic!("missing forced tally CFI constant {name}"))
+            + prefix.len();
+        let end = CMD_SIGN_USEROP_FORCED_SRC[start..]
+            .find(';')
+            .map(|offset| start + offset)
+            .expect("CFI constant terminator");
+        let hex = CMD_SIGN_USEROP_FORCED_SRC[start..end].replace('_', "");
+        u32::from_str_radix(&hex, 16).expect("hex CFI constant")
+    }
+
+    let names = [
+        "CFI_TALLY_CAPACITY_BOUND",
+        "CFI_TALLY_FINAL_READ_A",
+        "CFI_TALLY_FINAL_READ_B",
+        "CFI_TALLY_FINAL_MATCH",
+        "CFI_TALLY_VERDICT_PUBLISHED",
+    ];
+    let stages = names.map(source_u32_const);
+    let expected = stages.iter().fold(
+        crate::fi::CfiCounter::INIT_VALUE,
+        |accum, stage| accum.wrapping_add(*stage),
+    );
+
+    let expected_start = CMD_SIGN_USEROP_FORCED_SRC
+        .find("const CFI_TALLY_COMMIT_EXPECTED")
+        .expect("tally commit expected constant");
+    let expected_end = CMD_SIGN_USEROP_FORCED_SRC[expected_start..]
+        .find(");")
+        .map(|offset| expected_start + offset)
+        .expect("tally commit expected boundary");
+    let expected_source = &CMD_SIGN_USEROP_FORCED_SRC[expected_start..expected_end];
+    for name in names {
+        assert!(
+            expected_source.contains(name),
+            "production tally CFI expected value omitted {name}"
+        );
+    }
+
+    let mut complete = crate::fi::CfiCounter::new();
+    for stage in stages {
+        complete.bump(stage);
+    }
+    assert_eq!(
+        complete.check_into_sentinel(expected),
+        crate::fi::OK_SENTINEL
+    );
+
+    for omitted in 1usize..(1usize << stages.len()) {
+        let mut cfi = crate::fi::CfiCounter::new();
+        for (index, stage) in stages.iter().enumerate() {
+            if omitted & (1usize << index) == 0 {
+                cfi.bump(*stage);
+            }
+        }
+        assert_eq!(
+            cfi.check_into_sentinel(expected),
+            crate::fi::FAIL_SENTINEL,
+            "omitted tally-CFI subset {omitted:#07b} collided with the complete transcript"
+        );
+    }
 }
 
 #[test]

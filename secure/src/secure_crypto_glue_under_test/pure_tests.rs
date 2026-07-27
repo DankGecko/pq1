@@ -13,10 +13,11 @@ use sha3::Keccak256;
 use crate::db_roots::{ERC20_DB_ROOT, NAMES_DB_ROOT, SELECTOR_DB_ROOT};
 
 use super::offchain_state::{
-    clamp_offchain_count, forced_capacity_receipt_from_snapshot, last_userop_count_read,
-    last_userop_count_set, may_create_distinct_slot, offchain_count_bump,
-    offchain_count_is_registered, offchain_count_promote_to, offchain_count_read,
-    offchain_count_register_slot, slot_key_compute, ForcedCapacityError, ForcedCapacitySnapshot,
+    clamp_offchain_count, forced_capacity_receipt_from_snapshot,
+    forced_final_tally_pair_proof, last_userop_count_read, last_userop_count_set,
+    may_create_distinct_slot, offchain_count_bump, offchain_count_is_registered,
+    offchain_count_promote_to, offchain_count_read, offchain_count_register_slot,
+    slot_key_compute, ForcedCapacityError, ForcedCapacitySnapshot,
     FORCED_CAPACITY_REQUIRED_APPENDS, MAX_DISTINCT_SLOTS, OFFCHAIN_CAPACITY_QWS,
     OFFCHAIN_COUNT_CEILING,
 };
@@ -1104,6 +1105,30 @@ fn forced_capacity_constants_pin_two_appends_and_page_geometry() {
     assert_eq!(FORCED_CAPACITY_REQUIRED_APPENDS, 2);
     assert_eq!(OFFCHAIN_CAPACITY_QWS, 512);
     assert!(MAX_DISTINCT_SLOTS * 3 + FORCED_CAPACITY_REQUIRED_APPENDS <= OFFCHAIN_CAPACITY_QWS);
+}
+
+#[test]
+fn forced_tally_pair_proof_accepts_only_two_exact_final_reads() {
+    let expected = 41u64;
+    assert_eq!(
+        forced_final_tally_pair_proof(expected, expected, expected),
+        crate::fi::OK_SENTINEL
+    );
+
+    for (first, second) in [
+        (expected - 1, expected - 1),
+        (0, 0),
+        (expected, expected - 1),
+        (expected - 1, expected),
+        (expected + 1, expected + 1),
+        (u64::MAX, u64::MAX),
+    ] {
+        assert_eq!(
+            forced_final_tally_pair_proof(expected, first, second),
+            crate::fi::FAIL_SENTINEL,
+            "accepted non-authoritative final tally pair ({first}, {second})"
+        );
+    }
 }
 
 #[test]

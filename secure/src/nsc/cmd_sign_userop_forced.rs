@@ -61,6 +61,25 @@ const CFI_SIGN_VERIFIED: u32 = 0xB07D_2C56;
 const CFI_TALLY_DURABLE: u32 = 0x25E9_87C3;
 const CFI_RELEASE_GATE: u32 = 0xDA16_783C;
 
+const CFI_TALLY_CAPACITY_BOUND: u32 = 0x61B4_2D9E;
+const CFI_TALLY_FINAL_READ_A: u32 = 0x9E4B_D261;
+const CFI_TALLY_FINAL_READ_B: u32 = 0x37C8_A54D;
+const CFI_TALLY_FINAL_MATCH: u32 = 0xC837_5AB2;
+const CFI_TALLY_VERDICT_PUBLISHED: u32 = 0x54E1_8F3B;
+const CFI_TALLY_PREPUBLISH_EXPECTED: u32 = crate::cfi_expected!(
+    CFI_TALLY_CAPACITY_BOUND,
+    CFI_TALLY_FINAL_READ_A,
+    CFI_TALLY_FINAL_READ_B,
+    CFI_TALLY_FINAL_MATCH,
+);
+const CFI_TALLY_COMMIT_EXPECTED: u32 = crate::cfi_expected!(
+    CFI_TALLY_CAPACITY_BOUND,
+    CFI_TALLY_FINAL_READ_A,
+    CFI_TALLY_FINAL_READ_B,
+    CFI_TALLY_FINAL_MATCH,
+    CFI_TALLY_VERDICT_PUBLISHED,
+);
+
 const CFI_PREWARNING_EXPECTED: u32 = crate::cfi_expected!(
     CFI_PREFLIGHT_ELIGIBILITY,
     CFI_PREFLIGHT_COUNTERS,
@@ -954,23 +973,37 @@ fn collect_consent(
 /// that reservation.  The second write is either COUNT promotion or USEROP
 /// publication; never both, keeping the frozen two-append capacity projection
 /// exact as an upper bound.
+///
+/// `capacity` is the fresh, post-consent receipt minted for
+/// `request_digest`. `verdict_out` must be fail-initialized by the caller. The
+/// function publishes OK only after independently re-reading the durable tally
+/// twice after every possible page-123 mutation and completing the local CFI
+/// transcript.
 #[inline(never)]
 unsafe fn commit_durable_tally(
     slot_key: &[u8; 8],
     counters: CounterSnapshot,
+    capacity: crate::offchain_state::ForcedCapacityReceipt,
+    request_digest: &[u8; 32],
+    verdict_out: &mut u32,
+    cfi: &mut crate::fi::CfiCounter,
 ) -> Result<(), NscStatus> {
+    let initial_verdict = unsafe { core::ptr::read_volatile(verdict_out) };
+    let capacity_bound = crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(*capacity.request_digest()) == core::hint::black_box(*request_digest)
+            && core::hint::black_box(initial_verdict) == crate::fi::FAIL_SENTINEL
+    });
+    if capacity_bound != crate::fi::OK_SENTINEL {
+        return Err(NscStatus::InternalError);
+    }
+    cfi.bump(CFI_TALLY_CAPACITY_BOUND);
+
     let next_tally = counters
         .userop_sigs
         .checked_add(1)
         .ok_or(NscStatus::InternalError)?;
     unsafe { crate::offchain_state::userop_sigs_bump(slot_key, next_tally) }
         .map_err(|_| NscStatus::InternalError)?;
-    let tally_a = unsafe { crate::offchain_state::userop_sigs_read(slot_key) };
-    crate::fi::wait_random();
-    let tally_b = unsafe { crate::offchain_state::userop_sigs_read(slot_key) };
-    if tally_a != next_tally || tally_b != next_tally {
-        return Err(NscStatus::InternalError);
-    }
 
     if counters.new_offchain_count > counters.local_offchain {
         unsafe {
@@ -991,6 +1024,30 @@ unsafe fn commit_durable_tally(
     {
         return Err(NscStatus::InternalError);
     }
+
+    // This must remain the final page-123 operation before key use. The
+    // optional COUNT/USEROP append above can itself compact the page, so the
+    // earlier USEROP_SIGS write is not authoritative until these two
+    // independent post-mutation reads agree under the local CFI transcript.
+    let tally_a = unsafe { crate::offchain_state::userop_sigs_read(slot_key) };
+    cfi.bump(CFI_TALLY_FINAL_READ_A);
+    crate::fi::wait_random();
+    let tally_b = unsafe { crate::offchain_state::userop_sigs_read(slot_key) };
+    cfi.bump(CFI_TALLY_FINAL_READ_B);
+    if crate::offchain_state::forced_final_tally_pair_proof(next_tally, tally_a, tally_b)
+        != crate::fi::OK_SENTINEL
+    {
+        return Err(NscStatus::InternalError);
+    }
+    cfi.bump(CFI_TALLY_FINAL_MATCH);
+    if cfi.check_into_sentinel(CFI_TALLY_PREPUBLISH_EXPECTED) != crate::fi::OK_SENTINEL {
+        return Err(NscStatus::InternalError);
+    }
+
+    // SAFETY: the caller supplied a unique valid mutable reference and
+    // fail-initialized it immediately before this call.
+    unsafe { core::ptr::write_volatile(verdict_out, crate::fi::OK_SENTINEL) };
+    cfi.bump(CFI_TALLY_VERDICT_PUBLISHED);
     Ok(())
 }
 
@@ -1258,7 +1315,27 @@ pub(super) unsafe fn run(
     // the few-time key.  This intentionally prefers a phantom tally on a later
     // failure over an unaccounted key use.  A second deadline/CFI gate below
     // prevents signing after a slow or faulted journal operation.
-    if unsafe { commit_durable_tally(&prepared.slot_key, prepared.counters) }.is_err() {
+    let mut tally_verdict = crate::fi::FAIL_SENTINEL;
+    unsafe {
+        core::ptr::write_volatile(&mut tally_verdict, crate::fi::FAIL_SENTINEL);
+    }
+    let mut tally_cfi = crate::fi::CfiCounter::new();
+    let tally_commit = unsafe {
+        commit_durable_tally(
+            &prepared.slot_key,
+            prepared.counters,
+            capacity_check,
+            &request_digest_check,
+            &mut tally_verdict,
+            &mut tally_cfi,
+        )
+    };
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let tally_published = unsafe { core::ptr::read_volatile(&tally_verdict) };
+    if tally_commit.is_err()
+        || tally_published != crate::fi::OK_SENTINEL
+        || tally_cfi.check_into_sentinel(CFI_TALLY_COMMIT_EXPECTED) != crate::fi::OK_SENTINEL
+    {
         super::zeroize_sensitive_state();
         return NscStatus::InternalError as u32;
     }
