@@ -1,4 +1,4 @@
-![PQ1](docs/pq1_banner_image.jpg)
+[![PQ1](docs/pq1_banner_image.jpg)](https://freedomfactory.io)
 
 # PQ1
 
