@@ -992,6 +992,9 @@ unsafe fn commit_durable_tally(
     let capacity_bound = crate::fi::check_true_into_sentinel(|| {
         core::hint::black_box(*capacity.request_digest()) == core::hint::black_box(*request_digest)
             && core::hint::black_box(initial_verdict) == crate::fi::FAIL_SENTINEL
+            && !core::hint::black_box(capacity.requires_compaction())
+            && core::hint::black_box(capacity.blank_qws())
+                >= crate::offchain_state::FORCED_CAPACITY_REQUIRED_APPENDS as u16
     });
     if capacity_bound != crate::fi::OK_SENTINEL {
         return Err(NscStatus::InternalError);
@@ -1025,10 +1028,10 @@ unsafe fn commit_durable_tally(
         return Err(NscStatus::InternalError);
     }
 
-    // This must remain the final page-123 operation before key use. The
-    // optional COUNT/USEROP append above can itself compact the page, so the
-    // earlier USEROP_SIGS write is not authoritative until these two
-    // independent post-mutation reads agree under the local CFI transcript.
+    // This must remain the final page-123 operation before key use. The fresh
+    // capacity receipt above proves both appends were direct (no compaction);
+    // these independent post-mutation reads then prove the earlier
+    // USEROP_SIGS reservation survived the complete commit.
     let tally_a = unsafe { crate::offchain_state::userop_sigs_read(slot_key) };
     cfi.bump(CFI_TALLY_FINAL_READ_A);
     crate::fi::wait_random();

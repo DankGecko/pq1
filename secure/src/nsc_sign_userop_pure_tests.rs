@@ -2136,6 +2136,9 @@ fn forced_tally_final_proof_follows_every_page123_mutation() {
         .find("*capacity.request_digest()")
         .expect("fresh capacity receipt request binding");
     assert!(bind < reserve);
+    assert!(body[bind..reserve].contains("!core::hint::black_box(capacity.requires_compaction())"));
+    assert!(body[bind..reserve].contains("capacity.blank_qws()"));
+    assert!(body[bind..reserve].contains("FORCED_CAPACITY_REQUIRED_APPENDS"));
 }
 
 #[test]
