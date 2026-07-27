@@ -151,7 +151,10 @@ pub enum ForcedCapacityError {
     SnapshotDisagreement,
     /// A new slot would exceed the lifetime distinct-slot cap.
     DistinctSlotCap,
-    /// Even a successful safe compaction could not leave room for both writes.
+    /// The forced commit would need page-123 compaction. Forced signing
+    /// refuses this until the journal has crash-atomic compaction.
+    CompactionRequired,
+    /// The projected live set plus both reserved writes exceeds page geometry.
     InsufficientCapacity,
 }
 
@@ -249,6 +252,9 @@ pub fn forced_capacity_receipt_from_snapshot(
     }
 
     let requires_compaction = snapshot.blank_qws < FORCED_CAPACITY_REQUIRED_APPENDS;
+    if requires_compaction {
+        return Err(ForcedCapacityError::CompactionRequired);
+    }
     let distinct_live = u16::try_from(snapshot.distinct_live)
         .map_err(|_| ForcedCapacityError::InvalidProjection)?;
     let projected_live_qws = u16::try_from(snapshot.projected_live_qws)

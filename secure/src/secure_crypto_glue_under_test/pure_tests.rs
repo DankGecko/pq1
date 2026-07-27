@@ -1133,10 +1133,11 @@ fn forced_capacity_projected_qw_boundary_is_exact() {
     let key = [0x33; 8];
     let request = [0x44; 32];
     let full_but_compactable = capacity_snapshot(1, 510, 0, true);
-    let receipt = forced_capacity_receipt_from_snapshot(&key, &request, full_but_compactable)
-        .expect("510 projected QWs leave exactly two commit QWs");
-    assert!(receipt.requires_compaction());
-    assert_eq!(receipt.projected_live_qws(), 510);
+    assert_eq!(
+        forced_capacity_receipt_from_snapshot(&key, &request, full_but_compactable),
+        Err(ForcedCapacityError::CompactionRequired),
+        "forced signing must not enter the single-page erase/replay compactor"
+    );
 
     let one_qw_short = capacity_snapshot(1, 511, 1, true);
     assert_eq!(
@@ -1144,10 +1145,18 @@ fn forced_capacity_projected_qw_boundary_is_exact() {
         Err(ForcedCapacityError::InsufficientCapacity)
     );
 
+    let one_blank_but_compactable = capacity_snapshot(1, 3, 1, true);
+    assert_eq!(
+        forced_capacity_receipt_from_snapshot(&key, &request, one_blank_but_compactable),
+        Err(ForcedCapacityError::CompactionRequired),
+        "the fixed two-append reservation requires two already-erased QWs"
+    );
+
     let direct = capacity_snapshot(1, 3, 2, true);
     let direct_receipt = forced_capacity_receipt_from_snapshot(&key, &request, direct)
         .expect("two blank QWs admit the direct path");
     assert!(!direct_receipt.requires_compaction());
+    assert_eq!(direct_receipt.blank_qws(), 2);
 }
 
 #[test]

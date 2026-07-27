@@ -1041,10 +1041,13 @@ preflight. The handler freezes those counter values and re-reads them after the
 second consent; any disagreement is fatal. The new read-only page-123 capacity
 API has hardware and mock implementations and returns a request-bound receipt
 only after a cap-conforming full parse/projection proves the slot is admitted
-under `offchain_state::MAX_DISTINCT_SLOTS = 128` and that either the current
-blank extent or a safe compaction has room for the forced steady-state path's
-at most two required journal appends. In particular it proves
-`projected_live_qws + 2 <= OFFCHAIN_CAPACITY`; merely checking
+under `offchain_state::MAX_DISTINCT_SLOTS = 128` and that the current blank
+extent already has room for the forced steady-state path's at most two
+required journal appends. A receipt is not minted when either append would
+require the current single-page erase/replay compactor; that remains refused
+until page-123 compaction is crash-atomic. The projection still proves
+`projected_live_qws + 2 <= OFFCHAIN_CAPACITY`, but that relation alone grants
+no compaction authority. Merely checking
 `already_present || distinct_live < 128` is insufficient for inherited or
 corrupt page shapes. The handler freezes and independently rechecks that
 receipt and the rate-count receipt immediately before
@@ -1437,8 +1440,9 @@ owner amendments. A later implementation/merge packet must include:
   handler glue;
 - frozen/rechecked session-rate, minimum-interval, combined few-time-key, and
   page-123 capacity receipts, including the 249/250 boundary, present/new
-  slots, full but safely compactable pages, corrupt/over-cap projections, and
-  proof of room for both required appends;
+  slots, zero/one-blank refusal even when the page is safely compactable,
+  exact two-blank admission, corrupt/over-cap projections, and proof of room
+  for both required appends without compaction;
 - warning/final cancel, idle, replay, out-of-order, stale-receipt, exception
   and reset cleanup, plus explicit evidence that USB disconnect is not an
   authority signal;
