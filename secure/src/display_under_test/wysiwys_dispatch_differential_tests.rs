@@ -1165,6 +1165,117 @@ fn wysiwys_legacy_fee_unrenderable_gas_refuses_before_pages_escape() {
     );
 }
 
+#[test]
+fn wysiwys_unknown_chain_legacy_fees_render_exact_raw_base_units() {
+    let mut req = WireSignRequest::base();
+    req.chain_id = 4_242_424_242;
+    req.max_fee_per_gas = be_u256_from_u64(30_000_000_001);
+    req.max_priority_fee_per_gas = be_u256_from_u64(1_234_567_890);
+    req.call_gas_limit = be_u256_from_u64(30_000_000);
+    req.verification_gas_limit = [0u8; 32];
+    req.pre_verification_gas = [0u8; 32];
+
+    let parsed = mirror_parse(&req.encode());
+    let tx = tx_for_display(&parsed);
+    let resolver = NameResolver::new();
+    let mut proofs = DispatchPageProofs::new();
+    proofs.fail_initialize();
+    let pages = pick_sign_pages(
+        &tx,
+        &parsed.inner,
+        &parsed.sender,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        &resolver,
+        &mut proofs,
+    )
+    .expect("a realistic unknown-chain raw fee envelope must render exactly");
+
+    let fee_index = pages
+        .as_slice()
+        .iter()
+        .position(|page| &page[0][..15] == b"Base: max / tip")
+        .expect("legacy raw fee page");
+    assert_eq!(&pages.buf[fee_index][1][..11], b"30000000001");
+    assert_eq!(&pages.buf[fee_index][2][..10], b"1234567890");
+    assert_eq!(&pages.buf[fee_index + 1][0], b"Worst-case/base:");
+    let rows = all_rows(&pages);
+    assert!(!rows_contain(&rows, "gwei"));
+    assert!(!rows_contain(&rows, " ETH"));
+
+    req.max_fee_per_gas = be_u256_from_u64(30_000_000_002);
+    let adjacent = mirror_parse(&req.encode());
+    let adjacent_tx = tx_for_display(&adjacent);
+    let mut adjacent_proofs = DispatchPageProofs::new();
+    adjacent_proofs.fail_initialize();
+    let adjacent_pages = pick_sign_pages(
+        &adjacent_tx,
+        &adjacent.inner,
+        &adjacent.sender,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        &resolver,
+        &mut adjacent_proofs,
+    )
+    .expect("the adjacent exact raw fee must also render");
+    assert_ne!(
+        pages.as_slice(),
+        adjacent_pages.as_slice(),
+        "adjacent signed fee operands must have distinct trusted-display transcripts"
+    );
+}
+
+#[test]
+fn wysiwys_unknown_chain_inexact_legacy_fees_refuse_before_pages_escape() {
+    for max_fee in [be_u256_from_u64(10_000_000_000_000_000), [0xff; 32]] {
+        let mut req = WireSignRequest::base();
+        req.chain_id = 4_242_424_242;
+        req.max_fee_per_gas = max_fee;
+        req.max_priority_fee_per_gas = be_u256_from_u64(1);
+        req.call_gas_limit = be_u256_from_u64(2);
+        req.verification_gas_limit = [0u8; 32];
+        req.pre_verification_gas = [0u8; 32];
+
+        let parsed = mirror_parse(&req.encode());
+        let tx = tx_for_display(&parsed);
+        assert!(!super::primitives::legacy_fee_rows_are_exactly_renderable(
+            &tx.max_fee_per_gas,
+            &tx.max_priority_fee_per_gas,
+            tx.gas_limit,
+            tx.chain_id,
+        ));
+
+        let resolver = NameResolver::new();
+        let mut proofs = DispatchPageProofs::new();
+        proofs.fail_initialize();
+        assert!(
+            pick_sign_pages(
+                &tx,
+                &parsed.inner,
+                &parsed.sender,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &resolver,
+                &mut proofs,
+            )
+            .is_err(),
+            "an overwide or overflowing raw envelope must refuse before Pages escapes"
+        );
+    }
+}
+
 /// The dispatcher's direct-path metadata gate: metadata for token T must
 /// NOT label a transfer whose signed target is token Y (glue-level
 /// mis-attribution — audit 2026-06-28).

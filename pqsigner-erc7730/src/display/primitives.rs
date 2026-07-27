@@ -15,7 +15,7 @@
 //!   `&mut [u8; DISPLAY_COLS]` and writes exactly one row's worth of
 //!   ASCII. Rows are pre-cleared to `b' '` before any data is written.
 
-use super::DISPLAY_COLS;
+use super::{Page, DISPLAY_COLS, DISPLAY_ROWS};
 use pqsigner_tx::erc20::bundle::Erc20Metadata;
 use pqsigner_tx::erc20::calldata::Erc20Call;
 use pqsigner_tx_core::eip1559::U256;
@@ -944,10 +944,123 @@ fn write_fee_budget_row_with_unit(
     false
 }
 
-/// Render all three legacy fee rows into scratch buffers and report whether
-/// every signed/derived value is represented exactly. Dispatch runs this for
-/// routes that use the legacy fee painter before publishing their pages, so a
-/// formatting failure cannot become an authorization banner.
+/// Number of pages in the compact legacy EIP-1559 fee envelope.
+pub const LEGACY_FEE_PAGE_COUNT: usize = 2;
+
+/// A complete legacy EIP-1559 fee render and its exactness verdict.
+///
+/// Every legacy route copies these pages verbatim, while dispatch independently
+/// consumes `exact` before allowing any page set to escape. Keeping both outputs
+/// in one builder prevents preflight and the trusted-display bytes from
+/// acquiring separate numeric policies.
+pub struct LegacyFeeRender {
+    pub pages: [Page; LEGACY_FEE_PAGE_COUNT],
+    pub exact: bool,
+}
+
+/// Build the two legacy EIP-1559 fee pages.
+///
+/// Known chains retain the historical gwei/native-asset layout byte-for-byte.
+/// An unknown chain has no authenticated decimal scale, so its signed fee
+/// operands and derived upper bound are displayed as unscaled base-unit
+/// integers under explicit `/base` labels. Every accepted integer is complete:
+/// max fee and tip fit one row each, while the worst-case total may span two
+/// rows with an explicit continuation marker.
+#[must_use]
+pub fn build_legacy_fee_pages(
+    max_fee_per_gas: &U256,
+    max_priority_fee_per_gas: &U256,
+    gas_limit: u64,
+    chain_id: u64,
+) -> LegacyFeeRender {
+    let mut pages = [[[b' '; DISPLAY_COLS]; DISPLAY_ROWS]; LEGACY_FEE_PAGE_COUNT];
+
+    if known_native_ticker(chain_id).is_some() {
+        write_line(&mut pages[0][0], "Fees: max / tip");
+        let max_exact = write_gwei(&mut pages[0][1], max_fee_per_gas);
+        let tip_exact = write_tip_row(&mut pages[0][2], max_priority_fee_per_gas);
+        write_line(&mut pages[0][3], "> next");
+
+        write_line(&mut pages[1][0], "Worst-case:");
+        let budget_exact =
+            write_native_fee_budget_row(&mut pages[1][1], max_fee_per_gas, gas_limit, chain_id);
+        let gas_exact = write_gas(&mut pages[1][2], gas_limit);
+        write_line(&mut pages[1][3], "> next");
+
+        return LegacyFeeRender {
+            pages,
+            exact: max_exact & tip_exact & budget_exact & gas_exact,
+        };
+    }
+
+    write_line(&mut pages[0][0], "Base: max / tip");
+    let max_exact = write_raw_base_unit_row(&mut pages[0][1], max_fee_per_gas);
+    let tip_exact = write_raw_base_unit_row(&mut pages[0][2], max_priority_fee_per_gas);
+    write_line(&mut pages[0][3], "> next");
+
+    write_line(&mut pages[1][0], "Worst-case/base:");
+    let (budget, overflow) = max_fee_per_gas.saturating_mul_u64(gas_limit);
+    let budget_exact = if overflow {
+        write_line(&mut pages[1][1], "!OVERFLOW");
+        false
+    } else {
+        let [_, total_hi, total_lo, _] = &mut pages[1];
+        write_raw_base_unit_two_rows(total_hi, total_lo, &budget)
+    };
+    let gas_exact = write_gas(&mut pages[1][3], gas_limit);
+
+    LegacyFeeRender {
+        pages,
+        exact: max_exact & tip_exact & !overflow & budget_exact & gas_exact,
+    }
+}
+
+fn write_raw_base_unit_row(row: &mut [u8; DISPLAY_COLS], value: &U256) -> bool {
+    *row = [b' '; DISPLAY_COLS];
+    let mut digits = [0u8; 80];
+    let Some(n) = value
+        .format_decimal(0, 0, false, &mut digits)
+        .filter(|&n| n <= DISPLAY_COLS)
+    else {
+        write_line(row, "!OVERFLOW");
+        return false;
+    };
+    row[..n].copy_from_slice(&digits[..n]);
+    true
+}
+
+fn write_raw_base_unit_two_rows(
+    row1: &mut [u8; DISPLAY_COLS],
+    row2: &mut [u8; DISPLAY_COLS],
+    value: &U256,
+) -> bool {
+    *row1 = [b' '; DISPLAY_COLS];
+    *row2 = [b' '; DISPLAY_COLS];
+    let mut digits = [0u8; 80];
+    let Some(n) = value
+        .format_decimal(0, 0, false, &mut digits)
+        .filter(|&n| n <= 2 * DISPLAY_COLS - 1)
+    else {
+        write_line(row1, "!OVERFLOW");
+        return false;
+    };
+    if n <= DISPLAY_COLS {
+        row1[..n].copy_from_slice(&digits[..n]);
+        return true;
+    }
+
+    let first = DISPLAY_COLS - 1;
+    row1[..first].copy_from_slice(&digits[..first]);
+    row1[first] = b'>';
+    let rest = n - first;
+    row2[..rest].copy_from_slice(&digits[first..n]);
+    true
+}
+
+/// Build the complete legacy fee envelope in scratch storage and report
+/// whether every signed/derived value is represented exactly. Dispatch runs
+/// this for routes that use the legacy fee painter before publishing their
+/// pages, so a formatting failure cannot become an authorization banner.
 #[must_use]
 pub fn legacy_fee_rows_are_exactly_renderable(
     max_fee_per_gas: &U256,
@@ -955,20 +1068,13 @@ pub fn legacy_fee_rows_are_exactly_renderable(
     gas_limit: u64,
     chain_id: u64,
 ) -> bool {
-    // The compact max/tip rows use gwei and the budget uses 18-decimal native
-    // units. Both claims require pinned chain metadata; an unknown chain must
-    // use a future raw-base-unit layout rather than silently inheriting them.
-    if known_native_ticker(chain_id).is_none() {
-        return false;
-    }
-    let mut max_fee = [b' '; DISPLAY_COLS];
-    let mut tip = [b' '; DISPLAY_COLS];
-    let mut budget = [b' '; DISPLAY_COLS];
-    let mut gas = [b' '; DISPLAY_COLS];
-    write_gwei(&mut max_fee, max_fee_per_gas)
-        && write_tip_row(&mut tip, max_priority_fee_per_gas)
-        && write_native_fee_budget_row(&mut budget, max_fee_per_gas, gas_limit, chain_id)
-        && write_gas(&mut gas, gas_limit)
+    build_legacy_fee_pages(
+        max_fee_per_gas,
+        max_priority_fee_per_gas,
+        gas_limit,
+        chain_id,
+    )
+    .exact
 }
 
 /// "Item X of Y" divider row for a nested array-of-struct (`T[]`) render (v2) —
@@ -1544,6 +1650,166 @@ mod native_amount_tests {
             ),
             AmountFit::Overflow
         );
+    }
+}
+
+#[cfg(test)]
+mod legacy_fee_page_tests {
+    use super::{
+        build_legacy_fee_pages, legacy_fee_rows_are_exactly_renderable,
+        write_raw_base_unit_two_rows, DISPLAY_COLS,
+    };
+    use pqsigner_tx_core::eip1559::U256;
+
+    const UNKNOWN_CHAIN: u64 = 4_242_424_242;
+
+    fn u256_from_u128(value: u128) -> U256 {
+        let mut bytes = [0u8; 32];
+        bytes[16..].copy_from_slice(&value.to_be_bytes());
+        U256(bytes)
+    }
+
+    fn trimmed(row: &[u8; DISPLAY_COLS]) -> &[u8] {
+        let end = row
+            .iter()
+            .rposition(|&b| b != b' ')
+            .map_or(0, |idx| idx + 1);
+        &row[..end]
+    }
+
+    #[test]
+    fn known_chain_fee_pages_keep_the_historical_bytes() {
+        let rendered = build_legacy_fee_pages(
+            &u256_from_u128(50_000_000_000),
+            &u256_from_u128(2_000_000_000),
+            21_000,
+            1,
+        );
+        assert!(rendered.exact);
+        assert_eq!(
+            rendered.pages,
+            [
+                [
+                    *b"Fees: max / tip ",
+                    *b"50 gwei         ",
+                    *b"2 gwei          ",
+                    *b"> next          ",
+                ],
+                [
+                    *b"Worst-case:     ",
+                    *b"0.00105 ETH     ",
+                    *b"(gas: 21000)    ",
+                    *b"> next          ",
+                ],
+            ],
+            "known-chain fee pages must remain byte-identical, including padding"
+        );
+    }
+
+    #[test]
+    fn unknown_chain_fee_pages_are_exact_raw_base_units() {
+        let max_fee = u256_from_u128(30_000_000_001);
+        let tip = u256_from_u128(1_234_567_890);
+        let rendered = build_legacy_fee_pages(&max_fee, &tip, 30_000_000, UNKNOWN_CHAIN);
+
+        assert!(rendered.exact);
+        assert!(legacy_fee_rows_are_exactly_renderable(
+            &max_fee,
+            &tip,
+            30_000_000,
+            UNKNOWN_CHAIN,
+        ));
+        assert_eq!(trimmed(&rendered.pages[0][0]), b"Base: max / tip");
+        assert_eq!(trimmed(&rendered.pages[0][1]), b"30000000001");
+        assert_eq!(trimmed(&rendered.pages[0][2]), b"1234567890");
+        assert_eq!(trimmed(&rendered.pages[0][3]), b"> next");
+        assert_eq!(trimmed(&rendered.pages[1][0]), b"Worst-case/base:");
+        assert_eq!(rendered.pages[1][1][DISPLAY_COLS - 1], b'>');
+        assert_eq!(trimmed(&rendered.pages[1][3]), b"(gas: 30000000)");
+
+        let mut total = [0u8; 32];
+        let mut total_len = 0usize;
+        for &cell in rendered.pages[1][1]
+            .iter()
+            .chain(rendered.pages[1][2].iter())
+        {
+            if cell.is_ascii_digit() {
+                total[total_len] = cell;
+                total_len += 1;
+            }
+        }
+        assert_eq!(&total[..total_len], b"900000000030000000");
+        assert!(rendered.pages.iter().flatten().all(|row| {
+            !row.windows(4).any(|w| w == b"gwei") && !row.windows(3).any(|w| w == b"ETH")
+        }));
+    }
+
+    #[test]
+    fn adjacent_unknown_fee_operands_have_distinct_transcripts() {
+        let one = build_legacy_fee_pages(
+            &u256_from_u128(1),
+            &u256_from_u128(1),
+            21_000,
+            UNKNOWN_CHAIN,
+        );
+        let two = build_legacy_fee_pages(
+            &u256_from_u128(2),
+            &u256_from_u128(1),
+            21_000,
+            UNKNOWN_CHAIN,
+        );
+        assert!(one.exact && two.exact);
+        assert_ne!(one.pages, two.pages);
+        assert_eq!(trimmed(&one.pages[0][1]), b"1");
+        assert_eq!(trimmed(&two.pages[0][1]), b"2");
+        assert_eq!(trimmed(&one.pages[1][1]), b"21000");
+        assert_eq!(trimmed(&two.pages[1][1]), b"42000");
+    }
+
+    #[test]
+    fn unknown_fee_width_gas_and_multiplication_boundaries_refuse() {
+        let max_rate = u256_from_u128(9_999_999_999_999_999);
+        assert!(build_legacy_fee_pages(&max_rate, &max_rate, 999_999_999, UNKNOWN_CHAIN,).exact);
+
+        let wide_rate = u256_from_u128(10_000_000_000_000_000);
+        assert!(
+            !build_legacy_fee_pages(&wide_rate, &u256_from_u128(1), 21_000, UNKNOWN_CHAIN,).exact
+        );
+        assert!(
+            !build_legacy_fee_pages(
+                &u256_from_u128(1),
+                &u256_from_u128(1),
+                1_000_000_000,
+                UNKNOWN_CHAIN,
+            )
+            .exact
+        );
+
+        let overflow =
+            build_legacy_fee_pages(&U256([0xff; 32]), &u256_from_u128(1), 2, UNKNOWN_CHAIN);
+        assert!(!overflow.exact);
+        assert_eq!(trimmed(&overflow.pages[1][1]), b"!OVERFLOW");
+    }
+
+    #[test]
+    fn raw_total_helper_accepts_31_digits_and_rejects_32() {
+        let mut rows = [[b' '; DISPLAY_COLS]; 2];
+        let [hi, lo] = &mut rows;
+        assert!(write_raw_base_unit_two_rows(
+            hi,
+            lo,
+            &u256_from_u128(9_999_999_999_999_999_999_999_999_999_999),
+        ));
+        assert_eq!(rows[0][DISPLAY_COLS - 1], b'>');
+
+        let [hi, lo] = &mut rows;
+        assert!(!write_raw_base_unit_two_rows(
+            hi,
+            lo,
+            &u256_from_u128(10_000_000_000_000_000_000_000_000_000_000),
+        ));
+        assert_eq!(trimmed(&rows[0]), b"!OVERFLOW");
+        assert!(trimmed(&rows[1]).is_empty());
     }
 }
 

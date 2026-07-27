@@ -39,7 +39,7 @@ pub(crate) const TARGET_IDENTITY_PAGES: usize = 1;
 /// One conditional native-value page when the signed value is non-zero.
 pub(crate) const NATIVE_VALUE_PAGES: usize = 1;
 /// The legacy friendly fee envelope is an atomic two-page suffix.
-pub(crate) const LEGACY_FEE_PAGES: usize = 2;
+pub(crate) const LEGACY_FEE_PAGES: usize = primitives::LEGACY_FEE_PAGE_COUNT;
 /// One conditional warning page when the UserOp carries a paymaster.
 pub(crate) const PAYMASTER_PAGES: usize = 1;
 
@@ -57,7 +57,6 @@ pub(crate) const PAYMASTER_PAGE_CFI_EXPECTED: u32 = crate::cfi_expected!(PAYMAST
 type SignerIdentityPage = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 type TargetIdentityPage = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 type NativeValuePage = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
-type LegacyFeePage = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 type PaymasterPage = [[u8; DISPLAY_COLS]; DISPLAY_ROWS];
 
 /// Append the mandatory UserOp signer page after all already-rendered pages.
@@ -381,7 +380,11 @@ pub(super) fn enforce_gas_pages(
     if expected_len > super::MAX_PAGES {
         return Err(());
     }
-    let [first, second] = build_legacy_fee_pages(tx);
+    let rendered = build_legacy_fee_pages(tx);
+    if !rendered.exact {
+        return Err(());
+    }
+    let [first, second] = rendered.pages;
     let first_idx = pages.push_blank()?;
     if first_idx != prior_len {
         pages.len = prior_len;
@@ -402,22 +405,13 @@ pub(super) fn enforce_gas_pages(
     Ok(())
 }
 
-fn build_legacy_fee_pages(tx: &Eip1559Tx) -> [LegacyFeePage; LEGACY_FEE_PAGES] {
-    let mut pages = [[[b' '; DISPLAY_COLS]; DISPLAY_ROWS]; LEGACY_FEE_PAGES];
-    primitives::write_line(&mut pages[0][0], "Fees: max / tip");
-    let _ = primitives::write_gwei(&mut pages[0][1], &tx.max_fee_per_gas);
-    let _ = primitives::write_tip_row(&mut pages[0][2], &tx.max_priority_fee_per_gas);
-    primitives::write_line(&mut pages[0][3], "> next");
-    primitives::write_line(&mut pages[1][0], "Worst-case:");
-    let _ = primitives::write_native_fee_budget_row(
-        &mut pages[1][1],
+fn build_legacy_fee_pages(tx: &Eip1559Tx) -> primitives::LegacyFeeRender {
+    primitives::build_legacy_fee_pages(
         &tx.max_fee_per_gas,
+        &tx.max_priority_fee_per_gas,
         tx.gas_limit,
         tx.chain_id,
-    );
-    let _ = primitives::write_gas(&mut pages[1][2], tx.gas_limit);
-    primitives::write_line(&mut pages[1][3], "> next");
-    pages
+    )
 }
 
 /// Exact two-page length/content/adjacency/uniqueness completion proof.
@@ -426,7 +420,11 @@ pub(super) fn legacy_fee_pages_proof(pages: &Pages, prior_len: usize, tx: &Eip15
     let Some(expected_len) = prior_len.checked_add(LEGACY_FEE_PAGES) else {
         return crate::fi::FAIL_SENTINEL;
     };
-    let [first, second] = build_legacy_fee_pages(tx);
+    let rendered = build_legacy_fee_pages(tx);
+    if !rendered.exact {
+        return crate::fi::FAIL_SENTINEL;
+    }
+    let [first, second] = rendered.pages;
     crate::fi::check_true_into_sentinel(|| {
         core::hint::black_box(pages.len == expected_len)
             && page_at_matches(pages, prior_len, &first)
@@ -446,7 +444,11 @@ pub(super) fn legacy_fee_pages_final_set_proof(
     let Some(minimum_len) = prior_len.checked_add(LEGACY_FEE_PAGES) else {
         return crate::fi::FAIL_SENTINEL;
     };
-    let [first, second] = build_legacy_fee_pages(tx);
+    let rendered = build_legacy_fee_pages(tx);
+    if !rendered.exact {
+        return crate::fi::FAIL_SENTINEL;
+    }
+    let [first, second] = rendered.pages;
     crate::fi::check_true_into_sentinel(|| {
         core::hint::black_box(pages.len >= minimum_len)
             && page_at_matches(pages, prior_len, &first)
@@ -1190,6 +1192,68 @@ mod tests {
         assert_eq!(&pages.buf[2][2][..8], b"L=Cancel");
         assert_eq!(&pages.buf[3][0][..15], b"Fees: max / tip");
         assert_eq!(&pages.buf[4][0][..11], b"Worst-case:");
+    }
+
+    #[test]
+    fn unknown_chain_gas_pages_are_raw_exact_and_proven() {
+        let mut tx = fee_tx();
+        tx.chain_id = 4_242_424_242;
+        tx.max_fee_per_gas = u256_from_u128(30_000_000_001);
+        tx.max_priority_fee_per_gas = u256_from_u128(1_234_567_890);
+        tx.gas_limit = 30_000_000;
+
+        let mut pages = marker_pages(3);
+        let prior_len = pages.len;
+        append_legacy_fees(&mut pages, &tx);
+        assert_eq!(pages.len, prior_len + LEGACY_FEE_PAGES);
+        assert_eq!(&pages.buf[prior_len][0][..15], b"Base: max / tip");
+        assert_eq!(&pages.buf[prior_len][1][..11], b"30000000001");
+        assert_eq!(&pages.buf[prior_len][2][..10], b"1234567890");
+        assert_eq!(&pages.buf[prior_len + 1][0], b"Worst-case/base:");
+        assert_eq!(
+            legacy_fee_pages_proof(&pages, prior_len, &tx),
+            crate::fi::OK_SENTINEL
+        );
+
+        pages.push_blank().unwrap();
+        assert_eq!(
+            legacy_fee_pages_final_set_proof(&pages, prior_len, &tx),
+            crate::fi::OK_SENTINEL
+        );
+        pages.buf[prior_len][1][0] ^= 1;
+        assert_ne!(
+            legacy_fee_pages_final_set_proof(&pages, prior_len, &tx),
+            crate::fi::OK_SENTINEL
+        );
+    }
+
+    #[test]
+    fn unknown_chain_inexact_fee_suffix_refuses_atomically() {
+        let mut tx = fee_tx();
+        tx.chain_id = 4_242_424_242;
+        tx.max_fee_per_gas = u256_from_u128(10_000_000_000_000_000);
+        tx.max_priority_fee_per_gas = u256_from_u128(1);
+        tx.gas_limit = 21_000;
+
+        let mut pages = marker_pages(3);
+        let before_len = pages.len;
+        let before_buf = pages.buf;
+        let mut cfi = crate::fi::CfiCounter::new();
+        assert!(enforce_gas_pages(&mut pages, &tx, &mut cfi).is_err());
+        assert_eq!(pages.len, before_len);
+        assert_eq!(pages.buf, before_buf);
+        assert_ne!(
+            cfi.check_into_sentinel(LEGACY_FEE_CFI_EXPECTED),
+            crate::fi::OK_SENTINEL
+        );
+        assert_ne!(
+            legacy_fee_pages_proof(&pages, before_len, &tx),
+            crate::fi::OK_SENTINEL
+        );
+        assert_ne!(
+            legacy_fee_pages_final_set_proof(&pages, before_len, &tx),
+            crate::fi::OK_SENTINEL
+        );
     }
 
     /// FAIL CLOSED + ATOMIC. With fewer than two free slots the gas splice

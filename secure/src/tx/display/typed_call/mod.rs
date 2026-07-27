@@ -20,9 +20,8 @@
 //! the Phase 1 BLIND SIGN flow with the FUNCTION page intact.
 
 use super::primitives::{
-    hex_nibble, write_addr_full_or_name, write_chain, write_gas, write_gwei, write_line,
-    write_native_amount_two_rows, write_native_fee_budget_row, write_nonce_row, write_tip_row,
-    AmountFit,
+    build_legacy_fee_pages, hex_nibble, write_addr_full_or_name, write_chain, write_line,
+    write_native_amount_two_rows, write_nonce_row, AmountFit,
 };
 use super::Pages;
 use crate::names::NameResolver;
@@ -161,24 +160,17 @@ pub(super) fn try_render_typed_call(
     write_line(&mut pages.buf[page_idx][3], "> next");
     page_idx += 1;
 
-    // ── Page (next): Max fee + tip ──────────────────────────────────
-    write_line(&mut pages.buf[page_idx][0], "Fees: max / tip");
-    let _ = write_gwei(&mut pages.buf[page_idx][1], &tx.max_fee_per_gas);
-    let _ = write_tip_row(&mut pages.buf[page_idx][2], &tx.max_priority_fee_per_gas);
-    write_line(&mut pages.buf[page_idx][3], "> next");
-    page_idx += 1;
-
-    // ── Page (next): Worst-case fee budget + gas ────────────────────
-    write_line(&mut pages.buf[page_idx][0], "Worst-case:");
-    let _ = write_native_fee_budget_row(
-        &mut pages.buf[page_idx][1],
+    // ── Pages (next): exact max/tip and worst-case fee envelope ─────
+    let fee_pages = build_legacy_fee_pages(
         &tx.max_fee_per_gas,
+        &tx.max_priority_fee_per_gas,
         tx.gas_limit,
         tx.chain_id,
-    );
-    let _ = write_gas(&mut pages.buf[page_idx][2], tx.gas_limit);
-    write_line(&mut pages.buf[page_idx][3], "> next");
-    page_idx += 1;
+    )
+    .pages;
+    pages.buf[page_idx] = fee_pages[0];
+    pages.buf[page_idx + 1] = fee_pages[1];
+    page_idx += 2;
 
     // ── Page (last): Nonce + buttons ────────────────────────────────
     write_nonce_row(&mut pages.buf[page_idx][0], tx.nonce);

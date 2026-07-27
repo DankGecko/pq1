@@ -16,13 +16,14 @@
 use core::cmp::min;
 
 use super::primitives::{
-    chain_name, format_u64, hex_nibble, legacy_fee_rows_are_exactly_renderable, native_ticker,
-    token_amount_is_exactly_renderable, try_write_amount_single_row, write_addr_full,
-    write_addr_full_or_name, write_amount_two_rows, write_calldata_hash_rows, write_chain,
-    write_data_len_row, write_erc20_header, write_eth_two_rows, write_fee_budget_row, write_gas,
-    write_gwei, write_line, write_native_amount_two_rows, write_native_currency_row,
-    write_native_fee_budget_row, write_nonce_row, write_selector_row, write_tip_row,
-    write_token_amount_two_rows, write_token_name, AmountFit,
+    build_legacy_fee_pages, chain_name, format_u64, hex_nibble,
+    legacy_fee_rows_are_exactly_renderable, native_ticker, token_amount_is_exactly_renderable,
+    try_write_amount_single_row, write_addr_full, write_addr_full_or_name, write_amount_two_rows,
+    write_calldata_hash_rows, write_chain, write_data_len_row, write_erc20_header,
+    write_eth_two_rows, write_fee_budget_row, write_gas, write_gwei, write_line,
+    write_native_amount_two_rows, write_native_currency_row, write_native_fee_budget_row,
+    write_nonce_row, write_selector_row, write_tip_row, write_token_amount_two_rows,
+    write_token_name, AmountFit,
 };
 use super::{Pages, MAX_PAGES};
 
@@ -2284,23 +2285,26 @@ fn legacy_fee_budget_common_low_fee_values_remain_available() {
 }
 
 #[test]
-fn legacy_fee_budget_unknown_chain_refuses_an_assumed_scale() {
+fn legacy_fee_budget_unknown_chain_refuses_scale_but_accepts_raw_envelope() {
     let one_gwei = u256_from_u64(1_000_000_000);
     let mut row = [b' '; DISPLAY_COLS];
 
     assert!(!write_native_fee_budget_row(
-        &mut row,
-        &one_gwei,
-        21_000,
-        4_242_424,
+        &mut row, &one_gwei, 21_000, 4_242_424,
     ));
     assert_eq!(row_str(&row), "!NO SCALE");
-    assert!(!legacy_fee_rows_are_exactly_renderable(
+    assert!(legacy_fee_rows_are_exactly_renderable(
         &one_gwei,
         &u256_from_u64(0),
         21_000,
         4_242_424,
     ));
+    let rendered = build_legacy_fee_pages(&one_gwei, &u256_from_u64(0), 21_000, 4_242_424);
+    assert!(rendered.exact);
+    assert_eq!(row_str(&rendered.pages[0][0]), "Base: max / tip");
+    assert_eq!(row_str(&rendered.pages[0][1]), "1000000000");
+    assert_eq!(row_str(&rendered.pages[1][0]), "Worst-case/base:");
+    assert_eq!(row_str(&rendered.pages[1][1]), "21000000000000");
 }
 
 #[test]
