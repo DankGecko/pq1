@@ -37,6 +37,8 @@ contracts/verification/easycrypt/**/*.eco
 # Local copies live outside the repo in ~/Documents/PQ1/vendor-docs/.
 # (Purged from git history 2026-07-22 before open-sourcing.)
 *.pdf
+# ...except our own board artwork, which is Freedom Factory IP and ships open.
+!docs/hardware/pcb/*.pdf
 docs/secure-elements/SE050/SE-PLUG-TRUST-MW_04.07.01/
 docs/SE050C2HQ1_Z01SDZ/
 docs/SLS32AIA010MKUSON10XTMA2/
