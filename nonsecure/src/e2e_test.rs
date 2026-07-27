@@ -1559,7 +1559,9 @@ fn main() -> ! {
             true, // register
             7,    // base nonce
             &router,
-            1_000u128,
+            // Keep the transfer nonzero while remaining exactly representable
+            // by the trusted six-decimal native-value display.
+            1_000_000_000_000u128,
             &[],
         );
         len = append_names_only_trailer(&mut PAYLOAD_BUF, len, chain_id, &router)

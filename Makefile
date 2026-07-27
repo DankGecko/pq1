@@ -412,6 +412,19 @@ e2e: ## Automated unified-sign E2E (QEMU)
 			fail=1; \
 		fi; \
 	done; \
+	names_region=$$(mktemp); \
+	awk '/Scenario 5w:/{capture=1} capture{print} /names bundle verified/{exit}' $$log > $$names_region; \
+	for text in \
+		"+ Uniswap V3 Rou" \
+		" ter" \
+		"0xE59242..861564" \
+		"0.000001 ETH"; do \
+		if ! grep -Fq "$$text" $$names_region; then \
+			echo "  MISS  names trailer trusted row: $$text"; \
+			fail=1; \
+		fi; \
+	done; \
+	rm -f $$names_region; \
 	if ! grep -q "\\[ERC-7730\\] matched: chain=31337 contract=0x34343434..34343434 .* nested=true" $$log; then \
 		echo "  MISS  secure nested ERC-7730 dispatch receipt"; fail=1; \
 	fi; \
