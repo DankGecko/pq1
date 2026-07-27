@@ -1,0 +1,38 @@
+[
+  {
+    "id": "ousg-token-implementation-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x1ceb44b6e515abf009e0ccb6ddafd723886cf3ff",
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "usdy-token-implementation-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0xea0f7eebdc2ae40edfe33bf03d332f8a7f617528",
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "rusdy-token-implementation-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x58910371d0b52dcf9d2e0a1af4e0078c58436908",
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

@@ -1,0 +1,47 @@
+[
+  {
+    "id": "usdy-token-name",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x06fdde03",
+        "to": "0x96f6ef951840721adbf46ac996b59e0235cb985c"
+      },
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "usdy-token-symbol",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x95d89b41",
+        "to": "0x96f6ef951840721adbf46ac996b59e0235cb985c"
+      },
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "usdy-token-decimals",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x313ce567",
+        "to": "0x96f6ef951840721adbf46ac996b59e0235cb985c"
+      },
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

@@ -1,0 +1,47 @@
+[
+  {
+    "id": "ousg-token-name",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x06fdde03",
+        "to": "0x1b19c19393e2d034d8ff31ff34c81252fcbbee92"
+      },
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "ousg-token-symbol",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x95d89b41",
+        "to": "0x1b19c19393e2d034d8ff31ff34c81252fcbbee92"
+      },
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "ousg-token-decimals",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x313ce567",
+        "to": "0x1b19c19393e2d034d8ff31ff34c81252fcbbee92"
+      },
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

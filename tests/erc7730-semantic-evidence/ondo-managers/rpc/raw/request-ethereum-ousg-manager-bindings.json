@@ -1,0 +1,32 @@
+[
+  {
+    "id": "ousg-manager-rwa-token",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x0c5bf351",
+        "to": "0x93358db73b6cd4b98d89c8f5f230e81a95c2643a"
+      },
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "ousg-manager-rousg",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x2404e971",
+        "to": "0x93358db73b6cd4b98d89c8f5f230e81a95c2643a"
+      },
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

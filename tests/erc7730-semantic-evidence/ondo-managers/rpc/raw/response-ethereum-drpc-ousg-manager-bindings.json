@@ -1,0 +1,12 @@
+[
+  {
+    "id": "ousg-manager-rousg",
+    "jsonrpc": "2.0",
+    "result": "0x00000000000000000000000054043c656f0fad0652d9ae2603cdf347c5578d00"
+  },
+  {
+    "id": "ousg-manager-rwa-token",
+    "jsonrpc": "2.0",
+    "result": "0x0000000000000000000000001b19c19393e2d034d8ff31ff34c81252fcbbee92"
+  }
+]

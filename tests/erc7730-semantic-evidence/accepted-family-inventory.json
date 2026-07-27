@@ -12,14 +12,14 @@
     "compiled_blob_bytes": 339990,
     "known_call_count": 4580,
     "category_source_counts": {
-      "pinned-evidence": 27,
+      "pinned-evidence": 30,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 80
+      "lower-priority-residual": 77
     },
     "category_leaf_counts": {
-      "pinned-evidence": 80,
+      "pinned-evidence": 84,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 187
+      "lower-priority-residual": 183
     }
   },
   "classification_contract": {
@@ -132,6 +132,12 @@
       "reason": "Pins six admitted Morpho Blue routes on Ethereum and Base.",
       "scope": "Only the routes and deployments enumerated by the package.",
       "paths": ["tests/erc7730-semantic-evidence/morpho-blue/manifest.json"]
+    },
+    "ondo-managers": {
+      "classification": "pinned-evidence",
+      "reason": "Pins all accepted GM Token Limit Order, OUSG Instant Manager, and USDY Instant Manager routes to four exact direct deployments, verified source/ABI, and fixed-block token bindings.",
+      "scope": "Only the four deployment leaves and sixteen deployment-format instances enumerated by the package; mutable token state, future token implementations, other routes, and future deployments are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/ondo-managers/manifest.json"]
     },
     "quickswap-router02-remove-liquidity": {
       "classification": "pinned-evidence",
@@ -1319,20 +1325,20 @@
   {
     "source": "ondo-finance/calldata-GMTokenLimitOrder.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "ondo-managers"
   },
   {
     "source": "ondo-finance/calldata-OUSGInstantManager.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "ondo-managers"
   },
   {
     "source": "ondo-finance/calldata-USDYInstantManager.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "ondo-managers"
   },
   {
     "source": "p2p/calldata-EigenPodManager.json",

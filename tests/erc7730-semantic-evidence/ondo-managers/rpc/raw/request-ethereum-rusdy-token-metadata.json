@@ -1,0 +1,47 @@
+[
+  {
+    "id": "rusdy-token-name",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x06fdde03",
+        "to": "0xaf37c1167910ebc994e266949387d2c7c326b879"
+      },
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "rusdy-token-symbol",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x95d89b41",
+        "to": "0xaf37c1167910ebc994e266949387d2c7c326b879"
+      },
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "rusdy-token-decimals",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x313ce567",
+        "to": "0xaf37c1167910ebc994e266949387d2c7c326b879"
+      },
+      {
+        "blockHash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

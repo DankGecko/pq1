@@ -1,0 +1,426 @@
+{
+  "schema_version": 1,
+  "scope": "Four accepted Ondo manager deployment leaves and sixteen deployment-format instances",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/497",
+  "captured_at_utc": "2026-07-27T15:30:00Z",
+  "fixed_blocks": {
+    "ethereum": {
+      "chain_id": 1,
+      "number": 25624832,
+      "number_hex": "0x1870100",
+      "hash": "0xd4f3efc66ddcf9d4804e2bee00128fdfc02a54c95a74fd4ba5c79e96729d9944",
+      "state_root": "0xc0d11f7af5afc3ccf3cc3ba0485adf191b4f617ff89c4a3b3a3a552ca7ed89ae",
+      "timestamp_hex": "0x6a676f4b"
+    },
+    "bsc": {
+      "chain_id": 56,
+      "number": 112456960,
+      "number_hex": "0x6b3f500",
+      "hash": "0x298e6b16ec7c93069a4d7048ab44e41f2fae718b7014c1574a606fa7c58816cd",
+      "state_root": "0xc9ebfc2b7405fee6251dbd22002b480f4a2b2826d0f14f860db6dc3ba9147673",
+      "timestamp_hex": "0x6a677711"
+    }
+  },
+  "sourcify_api": {
+    "base": "https://sourcify.dev/server/v2/contract",
+    "fields": "abi,sources,compilation,runtimeBytecode.onchainBytecode,deployment,proxyResolution",
+    "manager_match_boundary": "All four managers are verified match/runtimeMatch=match records, not exact_match claims. Fixed-block RPC bytes equal each record's complete onchain runtime.",
+    "token_boundary": "Token proxy and implementation records bind the fixed-block implementation and metadata only; future upgrades are outside scope."
+  },
+  "deployments": [
+    {
+      "family": "GMTokenLimitOrder",
+      "chain_id": 1,
+      "address": "0xf0bc39fc911f6437c84d16188dd8294f7110f451",
+      "is_proxy": false,
+      "sourcify": "verifier/sourcify/gm-token-limit-order.ethereum.json",
+      "runtime": "runtime/GMTokenLimitOrder.ethereum.hex",
+      "accepted_routes": 5
+    },
+    {
+      "family": "GMTokenLimitOrder",
+      "chain_id": 56,
+      "address": "0x96b525b1a93f31e65f4aaf18c53842ed28525d48",
+      "is_proxy": false,
+      "sourcify": "verifier/sourcify/gm-token-limit-order.bsc.json",
+      "runtime": "runtime/GMTokenLimitOrder.bsc.hex",
+      "accepted_routes": 5
+    },
+    {
+      "family": "OUSGInstantManager",
+      "chain_id": 1,
+      "address": "0x93358db73b6cd4b98d89c8f5f230e81a95c2643a",
+      "is_proxy": false,
+      "sourcify": "verifier/sourcify/ousg-instant-manager.ethereum.json",
+      "runtime": "runtime/OUSGInstantManager.ethereum.hex",
+      "accepted_routes": 2
+    },
+    {
+      "family": "USDYInstantManager",
+      "chain_id": 1,
+      "address": "0xa42613c243b67bf6194ac327795b926b4b491f15",
+      "is_proxy": false,
+      "sourcify": "verifier/sourcify/usdy-instant-manager.ethereum.json",
+      "runtime": "runtime/USDYInstantManager.ethereum.hex",
+      "accepted_routes": 4
+    }
+  ],
+  "routes": {
+    "GMTokenLimitOrder": [
+      {
+        "signature": "cancelOrder(uint256)",
+        "selector": "0x514fcac7",
+        "meaning": "Cancel msg.sender's active order with the signed order ID"
+      },
+      {
+        "signature": "createBuyOrderExactIn(address,address,uint256,uint256,uint256)",
+        "selector": "0xcda491a1",
+        "meaning": "BUY, exact quote amount, maximum 18-decimal USD price, expiry"
+      },
+      {
+        "signature": "createBuyOrderExactOut(address,address,uint256,uint256,uint256)",
+        "selector": "0x51fc884c",
+        "meaning": "BUY, exact GM amount, maximum 18-decimal USD price, expiry"
+      },
+      {
+        "signature": "createSellOrderExactIn(address,address,uint256,uint256,uint256)",
+        "selector": "0xdab2b778",
+        "meaning": "SELL, exact GM amount, minimum 18-decimal USD price, expiry"
+      },
+      {
+        "signature": "createSellOrderExactOut(address,address,uint256,uint256,uint256)",
+        "selector": "0x6468f918",
+        "meaning": "SELL, exact quote amount, minimum 18-decimal USD price, expiry"
+      }
+    ],
+    "OUSGInstantManager": [
+      {
+        "signature": "redeem(uint256,address,uint256)",
+        "selector": "0xd8780161",
+        "meaning": "Burn signed OUSG input and enforce signed minimum receiving-token output"
+      },
+      {
+        "signature": "subscribe(address,uint256,uint256)",
+        "selector": "0x22d4a175",
+        "meaning": "Transfer signed deposit-token input and enforce signed minimum OUSG output"
+      }
+    ],
+    "USDYInstantManager": [
+      {
+        "signature": "redeem(uint256,address,uint256)",
+        "selector": "0xd8780161",
+        "meaning": "Burn signed USDY input and enforce signed minimum receiving-token output"
+      },
+      {
+        "signature": "redeemRebasingUSDY(uint256,address,uint256)",
+        "selector": "0x16762d7a",
+        "meaning": "Unwrap signed rUSDY input and enforce signed minimum receiving-token output"
+      },
+      {
+        "signature": "subscribe(address,uint256,uint256)",
+        "selector": "0x22d4a175",
+        "meaning": "Transfer signed deposit-token input and enforce signed minimum USDY output"
+      },
+      {
+        "signature": "subscribeRebasingUSDY(address,uint256,uint256)",
+        "selector": "0x8133067e",
+        "meaning": "Transfer signed deposit-token input, wrap USDY, and enforce signed minimum rUSDY output"
+      }
+    ]
+  },
+  "tokens": [
+    {
+      "symbol": "OUSG",
+      "address": "0x1b19c19393e2d034d8ff31ff34c81252fcbbee92",
+      "implementation": "0x1ceb44b6e515abf009e0ccb6ddafd723886cf3ff",
+      "name": "Ondo Short-Term U.S. Government Bond Fund",
+      "decimals": 18,
+      "production_metadata_at_freeze": true
+    },
+    {
+      "symbol": "USDY",
+      "address": "0x96f6ef951840721adbf46ac996b59e0235cb985c",
+      "implementation": "0xea0f7eebdc2ae40edfe33bf03d332f8a7f617528",
+      "name": "Ondo U.S. Dollar Yield",
+      "decimals": 18,
+      "production_metadata_at_freeze": true
+    },
+    {
+      "symbol": "rUSDY",
+      "address": "0xaf37c1167910ebc994e266949387d2c7c326b879",
+      "implementation": "0x58910371d0b52dcf9d2e0a1af4e0078c58436908",
+      "name": "Ondo U.S. Dollar Yield (Rebasing)",
+      "decimals": 18,
+      "production_metadata_at_freeze": false
+    }
+  ],
+  "descriptor_inputs": [
+    {
+      "path": "secure/data/erc7730-registry/registry/ondo-finance/calldata-GMTokenLimitOrder.json",
+      "sha256_at_evidence_freeze": "1530987cdba7b955f4aaa6502de6c01f3543cfbb65dc46154ace16e1d92a2a5d"
+    },
+    {
+      "path": "secure/data/erc7730-registry/registry/ondo-finance/calldata-OUSGInstantManager.json",
+      "sha256_at_evidence_freeze": "44790ff58edbc9e4d58224f83af37bb5de0c6198d6c69c0ca3be278c3b8fe29f"
+    },
+    {
+      "path": "secure/data/erc7730-registry/registry/ondo-finance/calldata-USDYInstantManager.json",
+      "sha256_at_evidence_freeze": "090a9903c660755487f50ec7e4d55a6ffee83e2c40d36ceff37e2fa891979772"
+    }
+  ],
+  "boundary": "Historical source/runtime/ABI and signed-meaning evidence for four exact direct deployments and sixteen accepted deployment-format instances. No live-state, future token implementation/metadata, transaction-success, compliance, whitelist, oracle, fee, pause, allowance, balance, order-execution, other-selector, fallback, forced-blind, hardware, production, or shipment authority.",
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "d9c2a425bcacbc21d35d39d1d08d359f298f7b961aa449298f1f6ecb9bf37d0c"
+    },
+    {
+      "path": "abi/GMTokenLimitOrder.accepted-routes.abi.json",
+      "sha256": "c8a5e865b7f5698f40b04b147d9a90184c6bea2cd11ed85d38dc702bf97f88c8"
+    },
+    {
+      "path": "abi/OUSGInstantManager.accepted-routes.abi.json",
+      "sha256": "2f5c14d514cfb94a303a292fc3743390bd6c9e06d5ca55b9fe279ad854e36449"
+    },
+    {
+      "path": "abi/USDYInstantManager.accepted-routes.abi.json",
+      "sha256": "f69ddd05f4b14bad98774aa8201cfff3ca226a5a3eba5e9d4ef16c15af25da1c"
+    },
+    {
+      "path": "collect.sh",
+      "sha256": "468e98314c2783a2e644cd27ce08deaeaa023ef8c470ca6652001c9ec54f9d12"
+    },
+    {
+      "path": "rpc/fixed-block-receipt.json",
+      "sha256": "b761e07af3c862e07d608c4c59fc703f9712cd05b037b0e8cf9f445e705807eb"
+    },
+    {
+      "path": "rpc/raw/request-bsc-bootstrap.json",
+      "sha256": "50420f55155b7a00d79caa33f51bd090a9647b6ab6887776d258f13bd622096f"
+    },
+    {
+      "path": "rpc/raw/request-bsc-identity-runtime.json",
+      "sha256": "b876c2512a22e9bbb53e87025b0fc47fd1e5602dbb05cadb77534bd1534b1f62"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-bootstrap.json",
+      "sha256": "d6ba9117e36d7723963f0504361483914fb2677396965aa2f1a2a81337e00aa2"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-identity.json",
+      "sha256": "1e4ab7bff9a3b4d73bf100e9ec7e1ca068d4933ea70c59cb7ead3b8c483c940e"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-managers-runtime.json",
+      "sha256": "460045acc265529650658555e6de300c2ea628bb56834b6af73118d1fa717968"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-ousg-manager-bindings.json",
+      "sha256": "3ba27554920020aa8e4a73d210329826381d6715e7f985ffec3ac7b5c77001ac"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-ousg-token-metadata.json",
+      "sha256": "f921ba4dfd5f30b14f0856adc1ef8f12fd8af90eff701f36d95dc88d7f818ed0"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-rusdy-token-metadata.json",
+      "sha256": "0b455ba76ef779d5a8485b19d62086d9dcc8431843eaf6667a5a76a54fec36a8"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-token-implementation-slots.json",
+      "sha256": "826307457543cacc3b9de3654d3c580b9c7e4e28c7feda8fe8384c38394a373f"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-token-implementations-runtime.json",
+      "sha256": "66d5c8bc4de31f263500d2dadebadda60fadb7ad0676114058aad48f85c16027"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-token-proxies-runtime.json",
+      "sha256": "d473d8c00ebc0586c4aebe1c41f93e224c0340ba3e371c9bda5bb715601ae5a9"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-usdy-manager-bindings.json",
+      "sha256": "4fc549764a4e53a87607d3304063a5bfd21070f9f2cbd7f46b1bce82fd1918d4"
+    },
+    {
+      "path": "rpc/raw/request-ethereum-usdy-token-metadata.json",
+      "sha256": "a83e68b30f95a03cf2b2211a9cf33ce2172706035fa56b4d2a03e22f564b607a"
+    },
+    {
+      "path": "rpc/raw/response-bsc-meowrpc-identity-runtime.json",
+      "sha256": "8de117441fd1869d26905025ae5cd7b68aef40ac87d0c477e44d5a20db5505e7"
+    },
+    {
+      "path": "rpc/raw/response-bsc-nodereal-bootstrap.json",
+      "sha256": "116c9e723fe0723560e8a3f44c56de85bbd8ef36e7dd6563833259fa639f4857"
+    },
+    {
+      "path": "rpc/raw/response-bsc-nodereal-identity-runtime.json",
+      "sha256": "c3ff40cace3021110a88c271b459091bf60ade61e11e2ed8fa2fb0823e969181"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-bootstrap.json",
+      "sha256": "fc6ad17e7ac20bda19ba753d65b8b4ee4adc15bd4f0a10d58d811f2a14ba9e5f"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-identity.json",
+      "sha256": "850c57ea2f5000698d36209948cf12e2cf526c38331a2b8932db013225f0092f"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-managers-runtime.json",
+      "sha256": "ca68da8a3440a6d1c9bbaa1f9499fe9b2e055c26ceb5fea8df091bbacc963f87"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-ousg-manager-bindings.json",
+      "sha256": "c7e2f49e9e6829842ec7f00558644a99c7f9b16f16a369f172cff4bd5759e612"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-ousg-token-metadata.json",
+      "sha256": "c40729c0c327b2c3f96505d93db53049b8eabd14403ab1c21e68e4f9b23ef9cd"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-rusdy-token-metadata.json",
+      "sha256": "3c90061fd41dba9dd72c0ed2b36b0d096f8d18ad8863ecaa4c5cb77563ca3ba3"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-token-implementation-slots.json",
+      "sha256": "a38a7672a0de16e3d8c4b767c15e6ed2b7e03dd06b56d3d827b4a616dd6a4a97"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-token-implementations-runtime.json",
+      "sha256": "359e942e9dce061c171181e58fa6cf86fb531e7941f02fe04797e3d314ca5622"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-token-proxies-runtime.json",
+      "sha256": "86910eefeb89e411f3cdbd351014abd758dc5fb6ed8b198f8be8e6527284eca3"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-usdy-manager-bindings.json",
+      "sha256": "9df13dc5ceb4f419deddd6ad5cb1c3791ca02397b33c53d4da2a3ae124d10d7f"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-drpc-usdy-token-metadata.json",
+      "sha256": "52a03bd9432d689ff1dd76f97bbaabf700e3138d57b5741794889c73c484e5e0"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-tenderly-identity.json",
+      "sha256": "850c57ea2f5000698d36209948cf12e2cf526c38331a2b8932db013225f0092f"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-tenderly-managers-runtime.json",
+      "sha256": "ca68da8a3440a6d1c9bbaa1f9499fe9b2e055c26ceb5fea8df091bbacc963f87"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-tenderly-ousg-manager-bindings.json",
+      "sha256": "c7e2f49e9e6829842ec7f00558644a99c7f9b16f16a369f172cff4bd5759e612"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-tenderly-ousg-token-metadata.json",
+      "sha256": "c40729c0c327b2c3f96505d93db53049b8eabd14403ab1c21e68e4f9b23ef9cd"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-tenderly-rusdy-token-metadata.json",
+      "sha256": "3c90061fd41dba9dd72c0ed2b36b0d096f8d18ad8863ecaa4c5cb77563ca3ba3"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-tenderly-token-implementation-slots.json",
+      "sha256": "a38a7672a0de16e3d8c4b767c15e6ed2b7e03dd06b56d3d827b4a616dd6a4a97"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-tenderly-token-implementations-runtime.json",
+      "sha256": "359e942e9dce061c171181e58fa6cf86fb531e7941f02fe04797e3d314ca5622"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-tenderly-token-proxies-runtime.json",
+      "sha256": "86910eefeb89e411f3cdbd351014abd758dc5fb6ed8b198f8be8e6527284eca3"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-tenderly-usdy-manager-bindings.json",
+      "sha256": "9df13dc5ceb4f419deddd6ad5cb1c3791ca02397b33c53d4da2a3ae124d10d7f"
+    },
+    {
+      "path": "rpc/raw/response-ethereum-tenderly-usdy-token-metadata.json",
+      "sha256": "52a03bd9432d689ff1dd76f97bbaabf700e3138d57b5741794889c73c484e5e0"
+    },
+    {
+      "path": "runtime/GMTokenLimitOrder.bsc.hex",
+      "sha256": "066ec42dddc105047a4a4a688ed0379ddf6b9fac10cf81f88b945e4b38069143"
+    },
+    {
+      "path": "runtime/GMTokenLimitOrder.ethereum.hex",
+      "sha256": "066ec42dddc105047a4a4a688ed0379ddf6b9fac10cf81f88b945e4b38069143"
+    },
+    {
+      "path": "runtime/OUSGInstantManager.ethereum.hex",
+      "sha256": "f6a50ab00576dc37c1d79807f899107b10adcef78795c02b6aa585d3e9121e08"
+    },
+    {
+      "path": "runtime/OUSGTokenImplementation.ethereum.hex",
+      "sha256": "fd85589165a1da18604a855dd15ff1dd18632f734109ffeacd51b9d7a15d5bf4"
+    },
+    {
+      "path": "runtime/OUSGTokenProxy.ethereum.hex",
+      "sha256": "41aab2a1425980012fd49704be1c64c21379f004a1aa61dfefc38a38f9c27754"
+    },
+    {
+      "path": "runtime/RUSDYTokenImplementation.ethereum.hex",
+      "sha256": "86be03822ca237f1c0eed832c190eee927498357e0f4b6418cb8581d5327b45d"
+    },
+    {
+      "path": "runtime/RUSDYTokenProxy.ethereum.hex",
+      "sha256": "41aab2a1425980012fd49704be1c64c21379f004a1aa61dfefc38a38f9c27754"
+    },
+    {
+      "path": "runtime/USDYInstantManager.ethereum.hex",
+      "sha256": "a8e521be5b1a4674db1e057f983e602287c9f69a8ed600fb161238cb6012d61d"
+    },
+    {
+      "path": "runtime/USDYTokenImplementation.ethereum.hex",
+      "sha256": "610bd58665b7da82e1347b501022e1b02ec3557365fdeba2b5f035b16f655c71"
+    },
+    {
+      "path": "runtime/USDYTokenProxy.ethereum.hex",
+      "sha256": "41aab2a1425980012fd49704be1c64c21379f004a1aa61dfefc38a38f9c27754"
+    },
+    {
+      "path": "verifier/sourcify/gm-token-limit-order.bsc.json",
+      "sha256": "4ea5ef05e595f3f7a18bed0b7f3241945b62a9415babffc96ee4d6d33f0e736e"
+    },
+    {
+      "path": "verifier/sourcify/gm-token-limit-order.ethereum.json",
+      "sha256": "81fd08dee920fc9f512b48cace450a7e1326c27434ef3cbee77865d560a37232"
+    },
+    {
+      "path": "verifier/sourcify/ousg-instant-manager.ethereum.json",
+      "sha256": "d0ff728b47ef601747bb9f6718ac276ef5a997b5c477f8187a01e3368f91bc5f"
+    },
+    {
+      "path": "verifier/sourcify/ousg-token-implementation.ethereum.json",
+      "sha256": "9c961d00b19a688b1e20c7c42b4b42d8919d783a95961623a166bf20d8bdb3a3"
+    },
+    {
+      "path": "verifier/sourcify/ousg-token-proxy.ethereum.json",
+      "sha256": "25b84dc32d653807a8bd9823942ab2aa2ebd738783afac3c2bbb535babde8121"
+    },
+    {
+      "path": "verifier/sourcify/rusdy-token-implementation.ethereum.json",
+      "sha256": "79454184b726adffed23e45fedfa9e9760d5b1bb0c2cce939535d5fc7143db7e"
+    },
+    {
+      "path": "verifier/sourcify/rusdy-token-proxy.ethereum.json",
+      "sha256": "2e5028110efb7bcdb64cce6e669124e0ba085b83b637f0ac5d251f938c38f1b7"
+    },
+    {
+      "path": "verifier/sourcify/usdy-instant-manager.ethereum.json",
+      "sha256": "6eacb5037448aeb92e57d98a28ce5e50526e18298caf8dc9fabae8c9bad928b7"
+    },
+    {
+      "path": "verifier/sourcify/usdy-token-implementation.ethereum.json",
+      "sha256": "aae9d2edabc54f987446a58baae8f7d5f44a3eae6d02439d54086652c5f1efd4"
+    },
+    {
+      "path": "verifier/sourcify/usdy-token-proxy.ethereum.json",
+      "sha256": "575430954d235d40a727bce231183312d31a4f7c9624b90b183792bb576fb75a"
+    }
+  ]
+}
