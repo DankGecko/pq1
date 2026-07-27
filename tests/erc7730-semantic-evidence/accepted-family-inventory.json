@@ -12,14 +12,14 @@
     "compiled_blob_bytes": 339990,
     "known_call_count": 4580,
     "category_source_counts": {
-      "pinned-evidence": 30,
+      "pinned-evidence": 33,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 77
+      "lower-priority-residual": 74
     },
     "category_leaf_counts": {
-      "pinned-evidence": 84,
+      "pinned-evidence": 107,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 183
+      "lower-priority-residual": 160
     }
   },
   "classification_contract": {
@@ -144,6 +144,12 @@
       "reason": "Pins the constrained QuickSwap Router02 route set.",
       "scope": "Only the reviewed Polygon deployment and admitted routes.",
       "paths": ["tests/erc7730-semantic-evidence/quickswap-router02-remove-liquidity/manifest.json"]
+    },
+    "safe-core": {
+      "classification": "pinned-evidence",
+      "reason": "Pins three operand-complete Safe singleton routes across the descriptor deployments for Safe 1.3.0, 1.4.1, and 1.5.0.",
+      "scope": "Only addOwnerWithThreshold, changeThreshold, and approveHash in the three Safe singleton descriptors. SafeL2, migrations, setup, execTransaction, owner removal/swap, modules, guards, and fallback authority are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/safe-core/manifest.json"]
     },
     "stakewise-claim-exited-assets": {
       "classification": "pinned-evidence",
@@ -1385,20 +1391,20 @@
   {
     "source": "safe/calldata-Safe-1.3.0.json",
     "accepted_leaf_count": 14,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-core"
   },
   {
     "source": "safe/calldata-Safe-1.4.1.json",
     "accepted_leaf_count": 7,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-core"
   },
   {
     "source": "safe/calldata-Safe-1.5.0.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-core"
   },
   {
     "source": "safe/calldata-SafeL2-1.3.0.json",
