@@ -1832,55 +1832,81 @@ fn forced_route_is_feature_gated_and_owned_only_by_direct_userop() {
 
 #[test]
 fn forced_route_requires_an_explicit_zero_length_erc7730_header() {
-    let parse = CMD_SIGN_USEROP_SRC
-        .find("let erc7730_explicit_header =")
-        .expect("typed forced absence capture");
-    let route = CMD_SIGN_USEROP_SRC[parse..]
-        .find("super::cmd_sign_userop_forced::classify(")
-        .map(|offset| parse + offset)
-        .expect("forced classifier call");
-    let evidence = &CMD_SIGN_USEROP_SRC[parse..route];
-    assert!(evidence.contains("checked_add(2)"));
-    assert!(evidence.contains("*end <= total_len"));
-    assert!(evidence.contains("erc7730_explicit_header == Some(0)"));
-    assert!(evidence.contains("erc7730_trailer.len == 0"));
+    let derive = CMD_SIGN_USEROP_FORCED_SRC
+        .find("fn derive_wire_facts(")
+        .expect("request-derived forced wire parser");
+    let exclusions = CMD_SIGN_USEROP_FORCED_SRC[derive..]
+        .find("fn exclusions_hold(")
+        .map(|offset| derive + offset)
+        .expect("forced exclusion proof");
+    let parser = &CMD_SIGN_USEROP_FORCED_SRC[derive..exclusions];
+    let compact_parser = parser.split_whitespace().collect::<String>();
+    assert!(parser.contains("let erc7730_header_offset = cursor;"));
+    assert!(compact_parser.contains("cursor.checked_add(2)"));
+    assert!(parser.contains("*end <= total_len"));
+    assert!(parser.contains("[wire[cursor], wire[cursor + 1]]"));
+
+    let classify = CMD_SIGN_USEROP_FORCED_SRC
+        .find("pub(super) fn classify(request: &ForcedRequest<'_>)")
+        .expect("forced classifier");
+    let exclusion_body = &CMD_SIGN_USEROP_FORCED_SRC[exclusions..classify];
+    assert!(exclusion_body.contains("facts.erc7730_header == Some([0, 0])"));
+    assert!(exclusion_body.contains("facts.erc7730_len == 0"));
     assert!(
-        CMD_SIGN_USEROP_FORCED_SRC.contains("if !clean_metadata_absence || calldata.len() < 4"),
-        "legacy missing headers and selector-short calls must stay ordinary"
+        !CMD_SIGN_USEROP_SRC.contains("erc7730_clean_absence")
+            && !CMD_SIGN_USEROP_FORCED_SRC.contains("clean_metadata_absence"),
+        "forced authority must reparse raw framing, not accept an absence boolean"
     );
 }
 
 #[test]
 fn forced_route_passes_every_frozen_exclusion_to_closed_classification() {
-    let start = CMD_SIGN_USEROP_SRC
-        .find("let single_steady_type2 =")
-        .expect("forced exclusion block");
-    let end = CMD_SIGN_USEROP_SRC[start..]
-        .find("// 7e. Address-name bundles.")
+    let start = CMD_SIGN_USEROP_FORCED_SRC
+        .find("fn exclusions_hold(")
+        .expect("request-derived forced exclusion block");
+    let end = CMD_SIGN_USEROP_FORCED_SRC[start..]
+        .find("/// Determine whether an absent-descriptor request")
         .map(|offset| start + offset)
-        .expect("ordinary metadata resolver boundary");
-    let block = &CMD_SIGN_USEROP_SRC[start..end];
+        .expect("forced classifier boundary");
+    let block = &CMD_SIGN_USEROP_FORCED_SRC[start..end];
     for required in [
-        "!include_init_code && !register_slot",
-        "paymaster_and_data_hash == SHA256_EMPTY",
-        "cow_order.len > 0",
-        "safe_v1.len > 0",
-        "safe_v1_verified.is_some()",
-        "safe_exec_verified.is_some()",
-        "safe_exec_verified_check.is_some()",
-        "cow_order_verified.is_some()",
-        "cow_bind.via_safe",
+        "decode_flags(facts.flags)",
+        "facts.data_len == request.calldata.len()",
+        "facts.chain_id == request.chain_id",
+        "facts.target == request.target",
+        "facts.selector == request.calldata[..4]",
+        "!include_init_code",
+        "!register_slot",
+        "account_index == request.account_index",
+        "slot_index == request.slot_index",
+        "facts.paymaster_and_data_hash == SHA256_EMPTY",
+        "facts.cow_order_len == 0",
+        "facts.safe_v1_len == 0",
+        "facts.erc7730_header == Some([0, 0])",
+        "facts.erc7730_len == 0",
+        "!protected_selector",
+        "!protected_target",
     ] {
         assert!(block.contains(required), "missing forced exclusion: {required}");
     }
-    assert!(CMD_SIGN_USEROP_FORCED_SRC.contains("protected_selector"));
-    assert!(CMD_SIGN_USEROP_FORCED_SRC.contains("protected_target"));
+    assert!(CMD_SIGN_USEROP_SRC.contains("wire: &snap[..total_len]"));
+    assert!(CMD_SIGN_USEROP_SRC.contains("cmd_sign_userop_forced::classify(&request)"));
+    for collapsed in [
+        "single_steady_type2",
+        "paymaster_empty",
+        "safe_or_cow_present",
+    ] {
+        assert!(
+            !CMD_SIGN_USEROP_SRC.contains(collapsed),
+            "caller must not collapse forced exclusion into {collapsed}"
+        );
+    }
 }
 
 #[test]
 fn forced_exact_membership_exclusions_are_fatal_before_candidate_proof() {
     let membership = CMD_SIGN_USEROP_FORCED_SRC
-        .find("if !parsed.contains(chain_id, target, &selector)")
+        .find("if !parsed.contains(facts.chain_id, &facts.target, &facts.selector)")
         .expect("exact-F membership gate");
     let proof = CMD_SIGN_USEROP_FORCED_SRC[membership..]
         .find("let mut verdict = crate::fi::FAIL_SENTINEL;")
@@ -1893,7 +1919,7 @@ fn forced_exact_membership_exclusions_are_fatal_before_candidate_proof() {
             .matches("return ForcedRoute::ContinueOrdinary;")
             .count(),
         1,
-        "only a negative exact-F lookup may resume ordinary signing"
+        "only a wire-derived negative exact-F lookup may resume ordinary signing"
     );
 }
 
@@ -1985,7 +2011,7 @@ fn forced_terminal_flow_rechecks_and_reserves_tally_before_key_use() {
     let body = &CMD_SIGN_USEROP_FORCED_SRC[start..];
     let mut cursor = 0;
     for stage in [
-        "prove_eligibility(",
+        "prove_flow_eligibility(",
         "ForcedAttemptPhase::Armed",
         "read_counter_snapshot(",
         "compute_type2_digest(",
@@ -1993,7 +2019,7 @@ fn forced_terminal_flow_rechecks_and_reserves_tally_before_key_use() {
         "capacity_receipt(",
         "ensure_slot_key(",
         "forced_rate_preflight(",
-        "ForcedCandidate::new(",
+        "ForcedCandidate::bind(",
         "collect_consent(",
         "prove_candidate_eligibility(",
         "read_counter_snapshot(",

@@ -11,9 +11,10 @@
 //! renderer or a weaker signing route.
 
 use sphincs_tz_shared::{
-    NscStatus, APPROVE_HASH_SELECTOR, EXEC_TRANSACTION_SELECTOR, GPV2_SETTLEMENT_ADDRESS,
-    MAX_SIGN_RESPONSE_LEN, MULTISEND_CALL_ONLY_ADDRESSES, MULTI_SEND_SELECTOR,
-    SET_PRE_SIGNATURE_SELECTOR, SIG_WRAPPER_LEN,
+    NscStatus, APPROVE_HASH_SELECTOR, COW_ORDER_TRAILER_MAX_LEN, ERC7730_MAX_TRAILER_LEN,
+    EXEC_TRANSACTION_SELECTOR, GPV2_SETTLEMENT_ADDRESS, MAX_SIGN_RESPONSE_LEN,
+    MULTISEND_CALL_ONLY_ADDRESSES, MULTI_SEND_SELECTOR, SAFE_V1_PAYLOAD_MAX,
+    SET_PRE_SIGNATURE_SELECTOR, SIGN_USEROP_HEADER_LEN, SIG_WRAPPER_LEN,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -24,6 +25,8 @@ use crate::aa::userop::{
     compute_sphincs_digest_v06, reconstruct_execute_calldata, sha256_bytes,
     AaUserOpParamsV06Sha256, ENTRY_POINT_V06, SHA256_EMPTY,
 };
+use crate::erc20::bundle::MAX_ERC20_BUNDLE_LEN;
+use crate::selectors::{MAX_SELECTOR_BUNDLE_LEN, MAX_SELF_ATTEST_BUNDLE_LEN};
 use crate::tx::display::forced_blind::{
     consume_forced_receipts_once, forced_transcript_proof, render_forced_transcript, FinalReceipt,
     ForcedTranscriptInput, WarningReceipt, FORCED_TRANSCRIPT_PAGES, FORCED_WARNING_PAGES,
@@ -160,16 +163,44 @@ pub(super) enum ForcedRoute {
     Fatal,
 }
 
-/// Positive exact-F evidence.  It is intentionally private and non-Copy.
-pub(super) struct ForcedEligibility {
+/// Raw request-derived facts that decide every forced-flow exclusion.
+///
+/// This deliberately stores source values, not collapsed eligibility booleans.
+/// The terminal handler reparses the secure snapshot and compares the complete
+/// facts before and after consent, so a skipped classifier rejection cannot
+/// leave an exact-F-only token that still authorizes signing.
+#[derive(Eq, PartialEq)]
+struct ForcedWireFacts {
+    total_len: usize,
+    data_len: usize,
+    flags: u32,
     chain_id: u64,
     target: [u8; 20],
     selector: [u8; 4],
+    paymaster_and_data_hash: [u8; 32],
+    cow_order_len: usize,
+    safe_v1_len: usize,
+    erc7730_header_offset: usize,
+    erc7730_header: Option<[u8; 2]>,
+    erc7730_len: usize,
+}
+
+enum ForcedWireFactsError {
+    ShortSelector,
+    Invalid,
+}
+
+/// Positive exact-F evidence.  It is intentionally private and non-Copy.
+pub(super) struct ForcedEligibility {
+    facts: ForcedWireFacts,
 }
 
 /// Values already frozen by the direct handler.  There is no host text,
 /// descriptor, resolver, selector name, or alternate response mode here.
 pub(super) struct ForcedRequest<'a> {
+    /// Complete immutable S-world TOCTOU snapshot. Eligibility reparses this
+    /// rather than trusting caller-computed booleans or trailer offsets.
+    pub(super) wire: &'a [u8],
     pub(super) account_index: u32,
     pub(super) slot_index: u32,
     pub(super) sender: [u8; 20],
@@ -186,54 +217,184 @@ pub(super) struct ForcedRequest<'a> {
     pub(super) calldata: &'a [u8],
 }
 
-/// Determine whether an absent-descriptor request may enter the terminal
-/// forced branch.  The caller supplies `clean_metadata_absence` only for an
-/// explicit, in-bounds zero-length ERC-7730 field; a missing/truncated field is
-/// not authority even though the legacy optional parser continues to accept it
-/// for ordinary signing.
-#[allow(clippy::too_many_arguments)]
 #[inline(never)]
-pub(super) fn classify(
-    clean_metadata_absence: bool,
-    single_steady_type2: bool,
-    paymaster_empty: bool,
-    safe_or_cow_evidence_present: bool,
-    chain_id: u64,
-    target: &[u8; 20],
-    calldata: &[u8],
-) -> ForcedRoute {
-    if !clean_metadata_absence || calldata.len() < 4 {
-        return ForcedRoute::ContinueOrdinary;
+fn derive_wire_facts(wire: &[u8]) -> Result<ForcedWireFacts, ForcedWireFactsError> {
+    let total_len = wire.len();
+    if total_len < SIGN_USEROP_HEADER_LEN {
+        return Err(ForcedWireFactsError::Invalid);
+    }
+    let data_len = crate::aa::userop::validate_data_len(
+        total_len,
+        u16::from_be_bytes([wire[328], wire[329]]),
+    )
+    .ok_or(ForcedWireFactsError::Invalid)?;
+    if data_len < 4 {
+        return Err(ForcedWireFactsError::ShortSelector);
     }
 
-    let selector = [calldata[0], calldata[1], calldata[2], calldata[3]];
+    let chain_id = u64::from_be_bytes([
+        wire[0], wire[1], wire[2], wire[3], wire[4], wire[5], wire[6], wire[7],
+    ]);
+    let flags = u32::from_be_bytes([wire[8], wire[9], wire[10], wire[11]]);
+    let mut paymaster_and_data_hash = [0u8; 32];
+    paymaster_and_data_hash.copy_from_slice(&wire[244..276]);
+    let mut target = [0u8; 20];
+    target.copy_from_slice(&wire[276..296]);
+    let selector_offset = SIGN_USEROP_HEADER_LEN;
+    let selector = [
+        wire[selector_offset],
+        wire[selector_offset + 1],
+        wire[selector_offset + 2],
+        wire[selector_offset + 3],
+    ];
+
+    // Re-walk every preceding length field. In particular, never trust a
+    // caller-provided ERC-7730 offset: pointing at an unrelated zero word
+    // would otherwise forge "clean absence".
+    let mut cursor = SIGN_USEROP_HEADER_LEN
+        .checked_add(data_len)
+        .ok_or(ForcedWireFactsError::Invalid)?;
+    let erc20 = super::trailer::read_optional_u16_prefixed(
+        wire,
+        cursor,
+        total_len,
+        MAX_ERC20_BUNDLE_LEN,
+        "forced erc20 frame",
+    )
+    .map_err(|_| ForcedWireFactsError::Invalid)?;
+    cursor = erc20.next_cursor;
+    let reserved = super::trailer::read_optional_u16_prefixed(
+        wire,
+        cursor,
+        total_len,
+        0,
+        "forced reserved frame",
+    )
+    .map_err(|_| ForcedWireFactsError::Invalid)?;
+    cursor = reserved.next_cursor;
+    let cow_order = super::trailer::read_optional_u16_prefixed(
+        wire,
+        cursor,
+        total_len,
+        COW_ORDER_TRAILER_MAX_LEN,
+        "forced cow frame",
+    )
+    .map_err(|_| ForcedWireFactsError::Invalid)?;
+    cursor = cow_order.next_cursor;
+    let safe_v1 = super::trailer::read_optional_u16_prefixed(
+        wire,
+        cursor,
+        total_len,
+        SAFE_V1_PAYLOAD_MAX,
+        "forced safe frame",
+    )
+    .map_err(|_| ForcedWireFactsError::Invalid)?;
+    cursor = safe_v1.next_cursor;
+    let selector_trailer = super::trailer::read_optional_u16_prefixed(
+        wire,
+        cursor,
+        total_len,
+        MAX_SELECTOR_BUNDLE_LEN,
+        "forced selector frame",
+    )
+    .map_err(|_| ForcedWireFactsError::Invalid)?;
+    cursor = selector_trailer.next_cursor;
+    let self_attest = super::trailer::read_optional_u16_prefixed(
+        wire,
+        cursor,
+        total_len,
+        MAX_SELF_ATTEST_BUNDLE_LEN,
+        "forced self frame",
+    )
+    .map_err(|_| ForcedWireFactsError::Invalid)?;
+    cursor = self_attest.next_cursor;
+
+    let erc7730_header_offset = cursor;
+    let erc7730_header = cursor
+        .checked_add(2)
+        .filter(|end| *end <= total_len)
+        .map(|_| [wire[cursor], wire[cursor + 1]]);
+    let erc7730 = super::trailer::read_optional_u16_prefixed(
+        wire,
+        cursor,
+        total_len,
+        ERC7730_MAX_TRAILER_LEN,
+        "forced 7730 frame",
+    )
+    .map_err(|_| ForcedWireFactsError::Invalid)?;
+
+    Ok(ForcedWireFacts {
+        total_len,
+        data_len,
+        flags,
+        chain_id,
+        target,
+        selector,
+        paymaster_and_data_hash,
+        cow_order_len: cow_order.len,
+        safe_v1_len: safe_v1.len,
+        erc7730_header_offset,
+        erc7730_header,
+        erc7730_len: erc7730.len,
+    })
+}
+
+#[inline(never)]
+fn exclusions_hold(facts: &ForcedWireFacts, request: &ForcedRequest<'_>) -> bool {
+    let (include_init_code, register_slot, account_index, slot_index) =
+        crate::aa::userop::decode_flags(facts.flags);
+    let protected_selector = facts.selector == APPROVE_HASH_SELECTOR
+        || facts.selector == EXEC_TRANSACTION_SELECTOR
+        || facts.selector == SET_PRE_SIGNATURE_SELECTOR
+        || facts.selector == MULTI_SEND_SELECTOR;
+    let protected_target = facts.target == GPV2_SETTLEMENT_ADDRESS
+        || MULTISEND_CALL_ONLY_ADDRESSES
+            .iter()
+            .any(|address| address == &facts.target);
+
+    facts.total_len == request.wire.len()
+        && facts.data_len == request.calldata.len()
+        && facts.chain_id == request.chain_id
+        && facts.target == request.target
+        && request.calldata.len() >= 4
+        && facts.selector == request.calldata[..4]
+        && !include_init_code
+        && !register_slot
+        && account_index == request.account_index
+        && slot_index == request.slot_index
+        && facts.paymaster_and_data_hash == SHA256_EMPTY
+        && facts.cow_order_len == 0
+        && facts.safe_v1_len == 0
+        && facts.erc7730_header == Some([0, 0])
+        && facts.erc7730_len == 0
+        && !protected_selector
+        && !protected_target
+}
+
+/// Determine whether an absent-descriptor request may enter the terminal
+/// forced branch. Exact-F membership is resolved before exclusions: an exact-F
+/// request with missing/nonempty metadata or another excluded shape is fatal,
+/// while only an exact-F-negative tuple may resume ordinary dispatch.
+#[inline(never)]
+pub(super) fn classify(request: &ForcedRequest<'_>) -> ForcedRoute {
+    let facts = match derive_wire_facts(request.wire) {
+        Ok(facts) => facts,
+        Err(ForcedWireFactsError::ShortSelector) => return ForcedRoute::ContinueOrdinary,
+        Err(ForcedWireFactsError::Invalid) => return ForcedRoute::Fatal,
+    };
     let parsed = match pqsigner_erc7730::forced_eligible::ForcedEligibleSet::from_bytes(
         &crate::db_roots::PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET,
     ) {
         Ok(set) => set,
         Err(_) => return ForcedRoute::Fatal,
     };
-    if !parsed.contains(chain_id, target, &selector) {
+    if !parsed.contains(facts.chain_id, &facts.target, &facts.selector) {
         return ForcedRoute::ContinueOrdinary;
     }
 
-    // Once exact-F membership is established, these exclusions are terminal.
-    // Falling through to the ordinary renderer here would let a request escape
-    // the forced branch after acquiring its affirmative refused-known type.
-    let protected_selector = selector == APPROVE_HASH_SELECTOR
-        || selector == EXEC_TRANSACTION_SELECTOR
-        || selector == SET_PRE_SIGNATURE_SELECTOR
-        || selector == MULTI_SEND_SELECTOR;
-    let protected_target = *target == GPV2_SETTLEMENT_ADDRESS
-        || MULTISEND_CALL_ONLY_ADDRESSES
-            .iter()
-            .any(|address| address == target);
-    if !single_steady_type2
-        || !paymaster_empty
-        || safe_or_cow_evidence_present
-        || protected_selector
-        || protected_target
-    {
+    // Once exact-F membership is established, every exclusion is terminal.
+    // The decision consumes raw request facts, never caller-collapsed booleans.
+    if !exclusions_hold(&facts, request) {
         return ForcedRoute::Fatal;
     }
 
@@ -243,9 +404,9 @@ pub(super) fn classify(
     unsafe { core::ptr::write_volatile(&mut verdict, crate::fi::FAIL_SENTINEL) };
     let mut cfi = crate::fi::CfiCounter::new();
     crate::tx::erc7730::prove_forced_eligible_contract_call(
-        chain_id,
-        target,
-        &selector,
+        facts.chain_id,
+        &facts.target,
+        &facts.selector,
         &mut verdict,
         &mut cfi,
     );
@@ -259,11 +420,7 @@ pub(super) fn classify(
         return ForcedRoute::Fatal;
     }
 
-    ForcedRoute::Candidate(ForcedEligibility {
-        chain_id,
-        target: *target,
-        selector,
-    })
+    ForcedRoute::Candidate(ForcedEligibility { facts })
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -296,13 +453,21 @@ struct ForcedCandidate {
 }
 
 impl ForcedCandidate {
-    fn new(eligibility: ForcedEligibility, request_digest: [u8; 32]) -> Self {
-        Self {
+    #[inline(never)]
+    fn bind(
+        eligibility: ForcedEligibility,
+        request_digest: [u8; 32],
+        request: &ForcedRequest<'_>,
+    ) -> Result<Self, ()> {
+        if !full_eligibility_holds(&eligibility, request) {
+            return Err(());
+        }
+        Ok(Self {
             state: CANDIDATE_LIVE,
             state_inv: !CANDIDATE_LIVE,
             eligibility,
             request_digest,
-        }
+        })
     }
 
     fn digest(&self) -> &[u8; 32] {
@@ -310,7 +475,15 @@ impl ForcedCandidate {
     }
 
     #[inline(never)]
-    fn consume(&mut self, request_digest: &[u8; 32]) -> u32 {
+    fn consume(
+        &mut self,
+        request_digest: &[u8; 32],
+        request: &ForcedRequest<'_>,
+        flow_cfi: &mut crate::fi::CfiCounter,
+    ) -> u32 {
+        if !full_eligibility_holds(&self.eligibility, request) {
+            return crate::fi::FAIL_SENTINEL;
+        }
         let state = unsafe { core::ptr::read_volatile(&self.state) };
         let state_inv = unsafe { core::ptr::read_volatile(&self.state_inv) };
         let mut diff = 0u8;
@@ -329,9 +502,15 @@ impl ForcedCandidate {
         }
         let state = unsafe { core::ptr::read_volatile(&self.state) };
         let state_inv = unsafe { core::ptr::read_volatile(&self.state_inv) };
-        crate::fi::check_true_into_sentinel(|| {
+        let consumed = crate::fi::check_true_into_sentinel(|| {
             state == CANDIDATE_CONSUMED && state_inv == !CANDIDATE_CONSUMED
-        })
+        });
+        if consumed == crate::fi::OK_SENTINEL {
+            // The terminal CFI stage is born inside the successful state
+            // transition. A skipped outer reject cannot synthesize it.
+            flow_cfi.bump(CFI_CANDIDATE_CONSUMED);
+        }
+        consumed
     }
 }
 
@@ -367,20 +546,23 @@ impl Drop for ForcedCleanup {
 }
 
 #[inline(never)]
-fn prove_eligibility(eligibility: &ForcedEligibility, request: &ForcedRequest<'_>) -> bool {
-    if eligibility.chain_id != request.chain_id
-        || eligibility.target != request.target
-        || request.calldata.len() < 4
-        || eligibility.selector != request.calldata[..4]
-    {
+fn full_eligibility_holds(
+    eligibility: &ForcedEligibility,
+    request: &ForcedRequest<'_>,
+) -> bool {
+    let Ok(facts) = derive_wire_facts(request.wire) else {
+        return false;
+    };
+    if facts != eligibility.facts || !exclusions_hold(&facts, request) {
         return false;
     }
+
     let Ok(set) = pqsigner_erc7730::forced_eligible::ForcedEligibleSet::from_bytes(
         &crate::db_roots::PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET,
     ) else {
         return false;
     };
-    if !set.contains(request.chain_id, &request.target, &eligibility.selector) {
+    if !set.contains(facts.chain_id, &facts.target, &facts.selector) {
         return false;
     }
 
@@ -388,9 +570,9 @@ fn prove_eligibility(eligibility: &ForcedEligibility, request: &ForcedRequest<'_
     unsafe { core::ptr::write_volatile(&mut verdict, crate::fi::FAIL_SENTINEL) };
     let mut cfi = crate::fi::CfiCounter::new();
     crate::tx::erc7730::prove_forced_eligible_contract_call(
-        request.chain_id,
-        &request.target,
-        &eligibility.selector,
+        facts.chain_id,
+        &facts.target,
+        &facts.selector,
         &mut verdict,
         &mut cfi,
     );
@@ -402,8 +584,31 @@ fn prove_eligibility(eligibility: &ForcedEligibility, request: &ForcedRequest<'_
 }
 
 #[inline(never)]
-fn prove_candidate_eligibility(candidate: &ForcedCandidate, request: &ForcedRequest<'_>) -> bool {
-    prove_eligibility(&candidate.eligibility, request)
+fn prove_flow_eligibility(
+    eligibility: &ForcedEligibility,
+    request: &ForcedRequest<'_>,
+    flow_cfi: &mut crate::fi::CfiCounter,
+    stage: u32,
+) -> bool {
+    if !full_eligibility_holds(eligibility, request) {
+        return false;
+    }
+    flow_cfi.bump(stage);
+    true
+}
+
+#[inline(never)]
+fn prove_candidate_eligibility(
+    candidate: &ForcedCandidate,
+    request: &ForcedRequest<'_>,
+    flow_cfi: &mut crate::fi::CfiCounter,
+) -> bool {
+    prove_flow_eligibility(
+        &candidate.eligibility,
+        request,
+        flow_cfi,
+        CFI_RECHECK_ELIGIBILITY,
+    )
 }
 
 /// Read-only, independently repeated few-time-key projection.  This function
@@ -889,11 +1094,15 @@ pub(super) unsafe fn run(
     let _cleanup = ForcedCleanup;
     let mut flow_cfi = crate::fi::CfiCounter::new();
 
-    if !prove_eligibility(&eligibility, &request) {
+    if !prove_flow_eligibility(
+        &eligibility,
+        &request,
+        &mut flow_cfi,
+        CFI_PREFLIGHT_ELIGIBILITY,
+    ) {
         crate::ui::show_status("Forced refused", "eligibility fault");
         return NscStatus::InternalError as u32;
     }
-    flow_cfi.bump(CFI_PREFLIGHT_ELIGIBILITY);
 
     let armed = super::state::peek_state(|state| state.forced_attempt.phase());
     if armed != Ok(ForcedAttemptPhase::Armed) {
@@ -951,7 +1160,11 @@ pub(super) unsafe fn run(
         capacity,
         rate,
     };
-    let mut candidate = ForcedCandidate::new(eligibility, prepared.request_digest);
+    let mut candidate =
+        match ForcedCandidate::bind(eligibility, prepared.request_digest, &request) {
+            Ok(candidate) => candidate,
+            Err(_) => return NscStatus::InternalError as u32,
+        };
     let mut consent = match collect_consent(&prepared.transcript, candidate.digest(), &mut flow_cfi)
     {
         Ok(consent) => consent,
@@ -960,10 +1173,9 @@ pub(super) unsafe fn run(
 
     // Everything below is nonblocking and independently re-derived from the
     // frozen S-world snapshot before the sole key-use call.
-    if !prove_candidate_eligibility(&candidate, &request) {
+    if !prove_candidate_eligibility(&candidate, &request, &mut flow_cfi) {
         return NscStatus::InternalError as u32;
     }
-    flow_cfi.bump(CFI_RECHECK_ELIGIBILITY);
 
     let counters_check = match unsafe { read_counter_snapshot(&prepared.slot_key) } {
         Ok(snapshot) => snapshot,
@@ -1030,12 +1242,12 @@ pub(super) unsafe fn run(
 
     if super::state::peek_state(|state| state.forced_attempt.phase())
         != Ok(ForcedAttemptPhase::Spent)
-        || candidate.consume(&request_digest_check) != crate::fi::OK_SENTINEL
+        || candidate.consume(&request_digest_check, &request, &mut flow_cfi)
+            != crate::fi::OK_SENTINEL
     {
         super::zeroize_sensitive_state();
         return NscStatus::InternalError as u32;
     }
-    flow_cfi.bump(CFI_CANDIDATE_CONSUMED);
     if flow_cfi.check_into_sentinel(CFI_PRESIGN_EXPECTED) != crate::fi::OK_SENTINEL
         || deadline_expired()
     {
