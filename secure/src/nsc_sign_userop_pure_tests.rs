@@ -899,6 +899,7 @@ const CMD_SIGN_USEROP_SRC: &str =
 const CMD_SIGN_USEROP_FORCED_SRC: &str = include_str!("nsc/cmd_sign_userop_forced.rs");
 const CMD_SIGN_USEROP_BATCH_SRC: &str = include_str!("nsc/cmd_sign_userop_batch.rs");
 const CMD_SIGN_OFFCHAIN_SRC: &str = include_str!("nsc/cmd_sign_offchain.rs");
+const OFFCHAIN_STATE_SRC: &str = include_str!("offchain_state.rs");
 const NSC_MOD_SRC: &str = include_str!("nsc/mod.rs");
 const FORCED_BLIND_DISPLAY_SRC: &str = include_str!("tx/display/forced_blind.rs");
 const SAFE_EXEC_DECODE_SRC: &str = include_str!("tx/eip712/safe/exec_decode.rs");
@@ -2132,13 +2133,35 @@ fn forced_tally_final_proof_follows_every_page123_mutation() {
     assert!(!body[final_a..].contains("offchain_count_promote_to("));
     assert!(!body[final_a..].contains("last_userop_count_set("));
 
-    let bind = body
-        .find("*capacity.request_digest()")
-        .expect("fresh capacity receipt request binding");
-    assert!(bind < reserve);
-    assert!(body[bind..reserve].contains("!core::hint::black_box(capacity.requires_compaction())"));
-    assert!(body[bind..reserve].contains("capacity.blank_qws()"));
-    assert!(body[bind..reserve].contains("FORCED_CAPACITY_REQUIRED_APPENDS"));
+    let consume = body
+        .find("consume_capacity_receipt_once(")
+        .expect("fresh capacity receipt consumption");
+    assert!(consume < reserve);
+
+    let consume_start = CMD_SIGN_USEROP_FORCED_SRC
+        .find("fn consume_capacity_receipt_once(")
+        .expect("capacity consumption helper");
+    let consume_end = CMD_SIGN_USEROP_FORCED_SRC[consume_start..]
+        .find("unsafe fn commit_durable_tally(")
+        .map(|offset| consume_start + offset)
+        .expect("capacity consumption helper boundary");
+    let consume_body = &CMD_SIGN_USEROP_FORCED_SRC[consume_start..consume_end];
+    assert!(consume_body.contains("*capacity.request_digest()"));
+    assert!(consume_body.contains("capacity.slot_present()"));
+    assert!(consume_body.contains("!core::hint::black_box(capacity.requires_compaction())"));
+    assert!(consume_body.contains("capacity.blank_qws()"));
+    assert!(consume_body.contains("FORCED_CAPACITY_REQUIRED_APPENDS"));
+    assert!(consume_body.contains("cfi.bump(CFI_TALLY_CAPACITY_CONSUMED)"));
+
+    let receipt = OFFCHAIN_STATE_SRC
+        .find("pub struct ForcedCapacityReceipt")
+        .expect("forced capacity receipt");
+    let derive_start = OFFCHAIN_STATE_SRC[..receipt]
+        .rfind("#[derive(")
+        .expect("forced capacity receipt derive");
+    let derive = &OFFCHAIN_STATE_SRC[derive_start..receipt];
+    assert!(!derive.contains("Clone"));
+    assert!(!derive.contains("Copy"));
 }
 
 #[test]
@@ -2158,7 +2181,7 @@ fn forced_tally_commit_cfi_rejects_every_omitted_stage_subset() {
     }
 
     let names = [
-        "CFI_TALLY_CAPACITY_BOUND",
+        "CFI_TALLY_CAPACITY_CONSUMED",
         "CFI_TALLY_FINAL_READ_A",
         "CFI_TALLY_FINAL_READ_B",
         "CFI_TALLY_FINAL_MATCH",

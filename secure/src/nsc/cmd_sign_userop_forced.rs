@@ -61,19 +61,19 @@ const CFI_SIGN_VERIFIED: u32 = 0xB07D_2C56;
 const CFI_TALLY_DURABLE: u32 = 0x25E9_87C3;
 const CFI_RELEASE_GATE: u32 = 0xDA16_783C;
 
-const CFI_TALLY_CAPACITY_BOUND: u32 = 0x61B4_2D9E;
+const CFI_TALLY_CAPACITY_CONSUMED: u32 = 0x61B4_2D9E;
 const CFI_TALLY_FINAL_READ_A: u32 = 0x9E4B_D261;
 const CFI_TALLY_FINAL_READ_B: u32 = 0x37C8_A54D;
 const CFI_TALLY_FINAL_MATCH: u32 = 0xC837_5AB2;
 const CFI_TALLY_VERDICT_PUBLISHED: u32 = 0x54E1_8F3B;
 const CFI_TALLY_PREPUBLISH_EXPECTED: u32 = crate::cfi_expected!(
-    CFI_TALLY_CAPACITY_BOUND,
+    CFI_TALLY_CAPACITY_CONSUMED,
     CFI_TALLY_FINAL_READ_A,
     CFI_TALLY_FINAL_READ_B,
     CFI_TALLY_FINAL_MATCH,
 );
 const CFI_TALLY_COMMIT_EXPECTED: u32 = crate::cfi_expected!(
-    CFI_TALLY_CAPACITY_BOUND,
+    CFI_TALLY_CAPACITY_CONSUMED,
     CFI_TALLY_FINAL_READ_A,
     CFI_TALLY_FINAL_READ_B,
     CFI_TALLY_FINAL_MATCH,
@@ -974,11 +974,35 @@ fn collect_consent(
 /// publication; never both, keeping the frozen two-append capacity projection
 /// exact as an upper bound.
 ///
-/// `capacity` is the fresh, post-consent receipt minted for
-/// `request_digest`. `verdict_out` must be fail-initialized by the caller. The
+/// `capacity` is the fresh, non-`Copy` post-consent receipt minted for
+/// `request_digest`. It is consumed exactly once by the helper below before
+/// the first append. `verdict_out` must be fail-initialized by the caller. The
 /// function publishes OK only after independently re-reading the durable tally
 /// twice after every possible page-123 mutation and completing the local CFI
 /// transcript.
+#[inline(never)]
+fn consume_capacity_receipt_once(
+    capacity: crate::offchain_state::ForcedCapacityReceipt,
+    request_digest: &[u8; 32],
+    initial_verdict: u32,
+    cfi: &mut crate::fi::CfiCounter,
+) -> u32 {
+    let capacity_bound = crate::fi::check_true_into_sentinel(|| {
+        core::hint::black_box(*capacity.request_digest()) == core::hint::black_box(*request_digest)
+            && core::hint::black_box(initial_verdict) == crate::fi::FAIL_SENTINEL
+            && core::hint::black_box(capacity.slot_present())
+            && !core::hint::black_box(capacity.requires_compaction())
+            && core::hint::black_box(capacity.blank_qws())
+                >= crate::offchain_state::FORCED_CAPACITY_REQUIRED_APPENDS as u16
+    });
+    if capacity_bound == crate::fi::OK_SENTINEL {
+        // The tally CFI stage is born inside the successful by-value
+        // consumption. Safe Rust cannot retain or replay this receipt.
+        cfi.bump(CFI_TALLY_CAPACITY_CONSUMED);
+    }
+    capacity_bound
+}
+
 #[inline(never)]
 unsafe fn commit_durable_tally(
     slot_key: &[u8; 8],
@@ -989,17 +1013,15 @@ unsafe fn commit_durable_tally(
     cfi: &mut crate::fi::CfiCounter,
 ) -> Result<(), NscStatus> {
     let initial_verdict = unsafe { core::ptr::read_volatile(verdict_out) };
-    let capacity_bound = crate::fi::check_true_into_sentinel(|| {
-        core::hint::black_box(*capacity.request_digest()) == core::hint::black_box(*request_digest)
-            && core::hint::black_box(initial_verdict) == crate::fi::FAIL_SENTINEL
-            && !core::hint::black_box(capacity.requires_compaction())
-            && core::hint::black_box(capacity.blank_qws())
-                >= crate::offchain_state::FORCED_CAPACITY_REQUIRED_APPENDS as u16
-    });
-    if capacity_bound != crate::fi::OK_SENTINEL {
+    if consume_capacity_receipt_once(
+        capacity,
+        request_digest,
+        initial_verdict,
+        cfi,
+    ) != crate::fi::OK_SENTINEL
+    {
         return Err(NscStatus::InternalError);
     }
-    cfi.bump(CFI_TALLY_CAPACITY_BOUND);
 
     let next_tally = counters
         .userop_sigs

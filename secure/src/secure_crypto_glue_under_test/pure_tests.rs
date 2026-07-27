@@ -1132,16 +1132,19 @@ fn forced_tally_pair_proof_accepts_only_two_exact_final_reads() {
 }
 
 #[test]
-fn forced_capacity_distinct_slot_boundary_is_exact() {
+fn forced_capacity_requires_registered_slot_and_valid_distinct_projection() {
     let key = [0x11; 8];
     let request = [0x22; 32];
     let at_127 = capacity_snapshot(MAX_DISTINCT_SLOTS - 1, 384, 128, false);
-    assert!(forced_capacity_receipt_from_snapshot(&key, &request, at_127).is_ok());
+    assert_eq!(
+        forced_capacity_receipt_from_snapshot(&key, &request, at_127),
+        Err(ForcedCapacityError::SlotUnregistered)
+    );
 
     let new_at_128 = capacity_snapshot(MAX_DISTINCT_SLOTS, 384, 128, false);
     assert_eq!(
         forced_capacity_receipt_from_snapshot(&key, &request, new_at_128),
-        Err(ForcedCapacityError::DistinctSlotCap)
+        Err(ForcedCapacityError::SlotUnregistered)
     );
     let present_at_128 = capacity_snapshot(MAX_DISTINCT_SLOTS, 384, 128, true);
     assert!(forced_capacity_receipt_from_snapshot(&key, &request, present_at_128).is_ok());
@@ -1214,9 +1217,12 @@ fn forced_capacity_mock_snapshot_is_read_only_and_slot_bound() {
     let before =
         unsafe { super::offchain_state::forced_capacity_snapshot(&key) }.expect("mock projection");
     assert!(!before.slot_present);
-    let receipt = forced_capacity_receipt_from_snapshot(&key, &request, before)
-        .expect("fresh mock has capacity");
-    assert!(!receipt.slot_present());
+    assert_eq!(
+        forced_capacity_receipt_from_snapshot(&key, &request, before),
+        Err(ForcedCapacityError::SlotUnregistered),
+        "forced Type-2 must not create slot registration"
+    );
+    assert!(!unsafe { offchain_count_is_registered(&key) });
 
     unsafe { offchain_count_register_slot(&key).expect("register mock slot") };
     let after = unsafe { super::offchain_state::forced_capacity_snapshot(&key) }
@@ -1224,6 +1230,9 @@ fn forced_capacity_mock_snapshot_is_read_only_and_slot_bound() {
     assert!(after.slot_present);
     assert_eq!(after.distinct_live, before.distinct_live + 1);
     assert!(unsafe { offchain_count_is_registered(&key) });
+    let receipt = forced_capacity_receipt_from_snapshot(&key, &request, after)
+        .expect("registered mock slot has capacity");
+    assert!(receipt.slot_present());
 }
 
 #[test]
@@ -1264,6 +1273,7 @@ fn forced_capacity_preflight_publishes_distinct_verdict_and_cfi() {
     let _guard = lock_offchain_mock();
     let key = slot_key_compute(222, 223, 224);
     let request = [0x6c; 32];
+    unsafe { offchain_count_register_slot(&key).expect("register forced Type-2 slot") };
     let mut verdict = crate::fi::FAIL_SENTINEL;
     let mut cfi = crate::fi::CfiCounter::new();
     let receipt = unsafe {
@@ -1281,6 +1291,7 @@ fn forced_capacity_preflight_publishes_distinct_verdict_and_cfi() {
         crate::fi::OK_SENTINEL
     );
     assert_eq!(receipt.request_digest(), &request);
+    assert!(receipt.slot_present());
 }
 
 #[test]

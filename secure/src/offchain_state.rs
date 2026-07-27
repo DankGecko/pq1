@@ -149,8 +149,9 @@ pub enum ForcedCapacityError {
     InvalidProjection,
     /// Two independently initialized read-only scans disagreed.
     SnapshotDisagreement,
-    /// A new slot would exceed the lifetime distinct-slot cap.
-    DistinctSlotCap,
+    /// Forced steady-state Type-2 signing cannot create slot registration.
+    /// The normal Type-1 rotation path must have registered the slot first.
+    SlotUnregistered,
     /// The forced commit would need page-123 compaction. Forced signing
     /// refuses this until the journal has crash-atomic compaction.
     CompactionRequired,
@@ -166,7 +167,7 @@ pub enum ForcedCapacityError {
 /// pass. Re-running [`forced_capacity_preflight`] immediately before signing
 /// must reproduce this value byte-for-byte for the same request digest.
 #[cfg(any(feature = "erc7730-forced-blind", test))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct ForcedCapacityReceipt {
     request_digest: [u8; 32],
     state_sha256: [u8; 32],
@@ -256,8 +257,8 @@ pub fn forced_capacity_receipt_from_snapshot(
     {
         return Err(ForcedCapacityError::InvalidProjection);
     }
-    if !may_create_distinct_slot(snapshot.distinct_live, snapshot.slot_present) {
-        return Err(ForcedCapacityError::DistinctSlotCap);
+    if !snapshot.slot_present {
+        return Err(ForcedCapacityError::SlotUnregistered);
     }
     let projected_after = snapshot
         .projected_live_qws
@@ -348,7 +349,7 @@ pub unsafe fn forced_capacity_preflight(
     )?;
     cfi.bump(CFI_CAPACITY_RECEIPT_B);
     let receipts_agree = crate::fi::check_true_into_sentinel(|| {
-        core::hint::black_box(receipt_a) == core::hint::black_box(receipt_b)
+        core::hint::black_box(&receipt_a) == core::hint::black_box(&receipt_b)
     });
     cfi.bump(CFI_CAPACITY_RECEIPT_AGREE);
 

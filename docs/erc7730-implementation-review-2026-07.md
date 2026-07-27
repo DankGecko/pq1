@@ -1009,8 +1009,9 @@ check, including:
 
 - fixed header, pointers, lengths, version, cursor, padding and trailing bytes;
 - direct target, selector-width calldata, and non-creation semantics;
-- `include_init_code == false`, `register_slot == false`, and exactly one
-  steady-state Type-2 output artifact, using the FI-re-read flags;
+- `include_init_code == false`, `register_slot == false`, an already-registered
+  slot, and exactly one steady-state Type-2 output artifact, using the FI-re-read
+  flags;
 - single command only: no batch, off-chain, EIP-712, lifecycle, or other
   signing mode;
 - exact `ENTRY_POINT_V06` equality;
@@ -1040,12 +1041,15 @@ No flash repair, counter promotion, or other persistent write occurs during
 preflight. The handler freezes those counter values and re-reads them after the
 second consent; any disagreement is fatal. The new read-only page-123 capacity
 API has hardware and mock implementations and returns a request-bound receipt
-only after a cap-conforming full parse/projection proves the slot is admitted
-under `offchain_state::MAX_DISTINCT_SLOTS = 128` and that the current blank
-extent already has room for the forced steady-state path's at most two
-required journal appends. A receipt is not minted when either append would
-require the current single-page erase/replay compactor; that remains refused
-until page-123 compaction is crash-atomic. The projection still proves
+only after a cap-conforming full parse/projection proves the slot is already
+registered under the normal Type-1 path, is admitted under
+`offchain_state::MAX_DISTINCT_SLOTS = 128`, and the current blank extent
+already has room for the forced steady-state path's at most two required
+journal appends. An absent slot is fatal before warning: forced
+`USEROP_SIGS` accounting cannot create registration and thereby bypass the
+post-restore Type-1 rotation gate. A receipt is not minted when either append
+would require the current single-page erase/replay compactor; that remains
+refused until page-123 compaction is crash-atomic. The projection still proves
 `projected_live_qws + 2 <= OFFCHAIN_CAPACITY`, but that relation alone grants
 no compaction authority. Merely checking
 `already_present || distinct_live < 128` is insufficient for inherited or
@@ -1439,10 +1443,10 @@ owner amendments. A later implementation/merge packet must include:
 - gas zero/one/two/near-match/full-buffer/permutation tests in the complete
   handler glue;
 - frozen/rechecked session-rate, minimum-interval, combined few-time-key, and
-  page-123 capacity receipts, including the 249/250 boundary, present/new
-  slots, zero/one-blank refusal even when the page is safely compactable,
-  exact two-blank admission, corrupt/over-cap projections, and proof of room
-  for both required appends without compaction;
+  page-123 capacity receipts, including the 249/250 boundary, registered-slot
+  admission and absent-slot refusal, zero/one-blank refusal even when the page
+  is safely compactable, exact two-blank admission, corrupt/over-cap
+  projections, and proof of room for both required appends without compaction;
 - warning/final cancel, idle, replay, out-of-order, stale-receipt, exception
   and reset cleanup, plus explicit evidence that USB disconnect is not an
   authority signal;
