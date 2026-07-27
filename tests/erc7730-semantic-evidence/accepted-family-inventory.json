@@ -5,21 +5,21 @@
   "catalogue_snapshot": {
     "upstream_commit": "784c87c925e8438e7b4736b2af85a501f8d2a265",
     "upstream_tree": "8da8dba78c3e581bbd06c15cc681d07e570dcfb1",
-    "curated_corpus_sha256": "ff0d2926d0901a4c7047b6c4d0b0346db2abbcf41066f6acce038706c387c5a1",
-    "merkle_root": "1a1dbbb97c6260b2fc07dc6adfdc6b9ff635a077f1e84af8840d2bb13b9b979f",
+    "curated_corpus_sha256": "79af687e8f2432cef5fe661afb933d1c35214d2894ca2c12233ddd74cf7053a8",
+    "merkle_root": "6afa8b4d6ad6fb7dd752d4efffa2aa6c2fbd73ea8312c4221dac73c8d62cb6b8",
     "accepted_leaf_count": 400,
     "accepted_source_descriptor_count": 240,
-    "compiled_blob_bytes": 339990,
+    "compiled_blob_bytes": 339112,
     "known_call_count": 4580,
     "category_source_counts": {
-      "pinned-evidence": 33,
+      "pinned-evidence": 35,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 74
+      "lower-priority-residual": 72
     },
     "category_leaf_counts": {
-      "pinned-evidence": 107,
+      "pinned-evidence": 111,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 160
+      "lower-priority-residual": 156
     }
   },
   "classification_contract": {
@@ -114,6 +114,12 @@
       "reason": "Pins the six admitted LBTC calldata routes and distinguishes redemption requests from completed redemption.",
       "scope": "Only the reviewed Ethereum mainnet LBTC deployment and six static routes; Sepolia and Lombard EIP-712 families are not implied.",
       "paths": ["tests/erc7730-semantic-evidence/lombard-lbtc/manifest.json"]
+    },
+    "legacy-defi-v4-v2": {
+      "classification": "pinned-evidence",
+      "reason": "Pins two operand-complete 1inch V4 Clipper routes and six Aave V2 LendingPool routes across four exact deployments.",
+      "scope": "Only the Ethereum 1inch V4 deployment and the Ethereum, Polygon, and Avalanche Aave V2 deployments enumerated by the package; permit, packed/dynamic aggregation, flash-loan, liquidation, authority, and other sibling routes are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/legacy-defi-v4-v2/manifest.json"]
     },
     "midas-mtbill-deposit-vault": {
       "classification": "pinned-evidence",

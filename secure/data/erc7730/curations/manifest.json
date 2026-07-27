@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 824135,
-    "sha256": "90f1553a0d820cf6063e0e3ab0f69a583c065c1cf1d5e58cfc18daffb84fa2ef"
+    "bytes": 828848,
+    "sha256": "79af687e8f2432cef5fe661afb933d1c35214d2894ca2c12233ddd74cf7053a8"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -285,9 +285,9 @@
     {
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
-      "files": 35,
-      "bytes": 2465004,
-      "sha256": "03d9068ca9b1ec63af2ad01b5e3f3a231f7502fcd1724fc3ffaacae3129d3d9b"
+      "files": 36,
+      "bytes": 2493378,
+      "sha256": "ebd3e6a5645397a76be8daf1b9d20996502f34348b8eea7cc83f2e4486884c71"
     },
     {
       "path": "pqsigner-erc7730",
@@ -336,7 +336,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 313678,
-      "sha256": "4f7a4564a34b30913048e577ef313e566b6a1e7ad3ed70f3fef6e8555d6bb454"
+      "sha256": "401c92cba18895608404f5d160b161418d17209640bb311ef178d33082036beb"
     }
   ],
   "capability_inputs": [

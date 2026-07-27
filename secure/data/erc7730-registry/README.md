@@ -43,13 +43,13 @@ tuple-set SHA-256, and Bloom bytes. Merkle-root or Bloom equality alone is not
 accepted as a faithfulness proof.
 
 <!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
-Checked-in curated receipt, verified against a fresh build by `--check`: **400 leaves**, **339,990-byte**
+Checked-in curated receipt, verified against a fresh build by `--check`: **400 leaves**, **339,112-byte**
 compiled companion catalogue, root
-`1a1dbbb97c6260b2fc07dc6adfdc6b9ff635a077f1e84af8840d2bb13b9b979f`,
+`6afa8b4d6ad6fb7dd752d4efffa2aa6c2fbd73ea8312c4221dac73c8d62cb6b8`,
 **4,580** canonical known-call tuples, tuple-set SHA-256
 `b67b0f2548231a5d4c9b54625c52854c7bb4da0e2ce84bedff24630682ccb829`.
 Curation manifest SHA-256
-`f59190906c598f651c61e9bdf38ac9d29fdddd072bb35f8ef879be05c16e68bc` binds upstream commit
+`dc53f61fc558e23d017376dae970b188e04b6b6046f1cf9d1ed9ec9a753e19c4` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
 Manifest v3 authorizes exactly **38** curation-added known-call tuples and no deletions.
@@ -62,9 +62,10 @@ the machine-checked source/overlay identities live in the curation manifest,
 while the generated catalogue authority remains in the artifacts and managed
 receipt above.
 
-Current reviewed full-file replacements (43):
+Current reviewed full-file replacements (47):
 
 - `ercs/calldata-erc20-tokens.json`
+- `registry/1inch/calldata-AggregationRouterV4-eth.json`
 - `registry/1inch/calldata-AggregationRouterV6-zksync.json`
 - `registry/1inch/calldata-AggregationRouterV6.json`
 - `registry/aave/calldata-WrappedTokenGatewayV3.json`
@@ -94,6 +95,9 @@ Current reviewed full-file replacements (43):
 - `registry/p2p/calldata-P2pOrgUnlimitedEthDepositor.json`
 - `registry/p2p/calldata-P2pSsvProxyFactory.json`
 - `registry/quickswap/calldata-QuickSwap.json`
+- `registry/safe/calldata-Safe-1.3.0.json`
+- `registry/safe/calldata-Safe-1.4.1.json`
+- `registry/safe/calldata-Safe-1.5.0.json`
 - `registry/serenita/calldata-EthVault.json`
 - `registry/tether/calldata-usdt.json`
 - `registry/threshold/calldata-L1BitcoinDepositor-address.json`
