@@ -659,6 +659,168 @@ fn pqsigner_refusal_only_formats_are_hash_bound_and_stay_exact_known() {
 }
 
 #[test]
+fn pqsigner_refusal_only_format_cannot_hide_selector_collision() {
+    let dir = make_tempdir("refusal_only_selector_collision");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(
+        dir.join("calldata-safe.json"),
+        transfer_descriptor("To", "Amount"),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("calldata-selector-collision.json"),
+        r#"{
+  "_pqsigner": {
+    "refusalOnlyFormats": ["approve(address spender,uint256 amount)"]
+  },
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000003" }
+  ] } },
+  "metadata": { "owner": "Collision", "contractName": "Collision" },
+  "display": { "formats": {
+    "approve(address spender,uint256 amount)": {
+      "intent": "Approve",
+      "fields": [
+        { "path": "spender", "format": "addressName", "label": "Spender" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    },
+    "watch_tg_invmru_2f69f1b(address first,address second)": {
+      "intent": "Collision",
+      "fields": [
+        { "path": "first", "format": "addressName", "label": "First" },
+        { "path": "second", "format": "addressName", "label": "Second" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+
+    let (result, skips) = build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir))
+        .expect("selector-colliding refusal marker must remain a known hard refusal");
+    assert_eq!(result.leaf_count, 1, "only the independent safe descriptor");
+    let collision_skip = skips
+        .iter()
+        .find(|skip| {
+            skip.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-selector-collision.json")
+        })
+        .expect("colliding refusal marker must carry a skip receipt");
+    assert!(
+        collision_skip.reason.contains("selector 0x095ea7b3")
+            && collision_skip
+                .reason
+                .contains("collides with source formats")
+            && collision_skip
+                .reason
+                .contains("selector-only runtime dispatch cannot authenticate"),
+        "unexpected collision refusal: {}",
+        collision_skip.reason
+    );
+
+    let mut contract = [0u8; 20];
+    contract[19] = 3;
+    let selector = [0x09, 0x5e, 0xa7, 0xb3];
+    assert!(result.known_calls.contains(&(1, contract, selector)));
+    assert!(known_call_may_contain(
+        &result.known_calls_bloom,
+        1,
+        &contract,
+        &selector
+    ));
+}
+
+#[test]
+fn pqsigner_refusal_only_format_cannot_collide_across_descriptors() {
+    let dir = make_tempdir("refusal_only_cross_descriptor_collision");
+    fs::write(dir.join("policy.toml"), POLICY_DEV_2).unwrap();
+    fs::write(
+        dir.join("calldata-safe.json"),
+        transfer_descriptor("To", "Amount"),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("calldata-refusal.json"),
+        r#"{
+  "_pqsigner": {
+    "refusalOnlyFormats": ["approve(address spender,uint256 amount)"]
+  },
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000003" }
+  ] } },
+  "metadata": { "owner": "Refusal", "contractName": "Refusal" },
+  "display": { "formats": {
+    "approve(address spender,uint256 amount)": {
+      "intent": "Approve",
+      "fields": [
+        { "path": "spender", "format": "addressName", "label": "Spender" },
+        { "path": "amount", "format": "raw", "label": "Amount" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("calldata-collision.json"),
+        r#"{
+  "context": { "contract": { "deployments": [
+    { "chainId": 1, "address": "0x0000000000000000000000000000000000000003" }
+  ] } },
+  "metadata": { "owner": "Collision", "contractName": "Collision" },
+  "display": { "formats": {
+    "watch_tg_invmru_2f69f1b(address first,address second)": {
+      "intent": "Collision",
+      "fields": [
+        { "path": "first", "format": "addressName", "label": "First" },
+        { "path": "second", "format": "addressName", "label": "Second" }
+      ]
+    }
+  } }
+}"#,
+    )
+    .unwrap();
+
+    let (result, skips) = build_db_tolerant(&dir, &dir.join("policy.toml"), Some(&dir))
+        .expect("catalogue-wide collision with a refusal marker must fail closed");
+    assert_eq!(result.leaf_count, 1, "only the independent safe descriptor");
+    let collision_skip = skips
+        .iter()
+        .find(|skip| {
+            skip.source.file_name().and_then(|name| name.to_str())
+                == Some("calldata-collision.json")
+                && skip
+                    .reason
+                    .contains("authenticated refusalOnlyFormats boundary")
+        })
+        .expect("clear-capable side of the collision must be skipped");
+    assert!(
+        collision_skip.reason.contains("collides catalogue-wide")
+            && collision_skip.reason.contains("approve(address,uint256)")
+            && collision_skip
+                .reason
+                .contains("selector-only runtime dispatch cannot authenticate"),
+        "unexpected catalogue-wide collision refusal: {}",
+        collision_skip.reason
+    );
+    assert!(skips.iter().any(|skip| {
+        skip.source.file_name().and_then(|name| name.to_str()) == Some("calldata-refusal.json")
+    }));
+
+    let mut contract = [0u8; 20];
+    contract[19] = 3;
+    let selector = [0x09, 0x5e, 0xa7, 0xb3];
+    assert!(result.known_calls.contains(&(1, contract, selector)));
+    assert!(known_call_may_contain(
+        &result.known_calls_bloom,
+        1,
+        &contract,
+        &selector
+    ));
+}
+
+#[test]
 fn pqsigner_refusal_only_formats_reject_unknown_duplicate_overlap_and_typed_data() {
     let base: serde_json::Value = serde_json::from_str(
         r#"{

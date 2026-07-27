@@ -480,12 +480,22 @@ fn evidence_receipts_inventory_and_all_five_selectors_are_exact() {
         "secure/data/erc7730-registry/registry/1inch/calldata-AggregationRouterV6-zksync.json",
     ] {
         let descriptor = read_json(&workspace.join(relative));
-        assert_eq!(
-            descriptor["_pqsigner"]["refusalOnlyFormats"],
+        let expected_refusal_only = if relative.ends_with("AggregationRouterV6-zksync.json") {
             serde_json::json!([
                 "advanceEpoch(uint96 series, uint256 amount)",
                 "bitsInvalidateForOrder(uint256 makerTraits, uint256 additionalMask)"
             ])
+        } else {
+            serde_json::json!([
+                "advanceEpoch(uint96 series, uint256 amount)",
+                "bitsInvalidateForOrder(uint256 makerTraits, uint256 additionalMask)",
+                "clipperSwap(address clipperExchange, uint256 srcToken, address dstToken, uint256 inputAmount, uint256 outputAmount, uint256 goodUntil, bytes32 r, bytes32 vs)",
+                "clipperSwapTo(address clipperExchange, address recipient, uint256 srcToken, address dstToken, uint256 inputAmount, uint256 outputAmount, uint256 goodUntil, bytes32 r, bytes32 vs)"
+            ])
+        };
+        assert_eq!(
+            descriptor["_pqsigner"]["refusalOnlyFormats"],
+            expected_refusal_only
         );
         let refusal_only = descriptor["_pqsigner"]["refusalOnlyFormats"]
             .as_array()

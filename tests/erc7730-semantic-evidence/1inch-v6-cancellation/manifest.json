@@ -167,7 +167,7 @@
   "descriptor_inputs": [
     {
       "path": "secure/data/erc7730-registry/registry/1inch/calldata-AggregationRouterV6.json",
-      "sha256_at_evidence_freeze": "a1ec1cb49885658fcec591b861cdcbcec8d413c93c262074adbcf84c84a6e26b"
+      "sha256_at_evidence_freeze": "b001aa4f0729e78394cae5ea6bcf464484932bc12757b9836e2bfafffdefee2d"
     },
     {
       "path": "secure/data/erc7730-registry/registry/1inch/calldata-AggregationRouterV6-zksync.json",

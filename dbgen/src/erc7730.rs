@@ -2234,6 +2234,7 @@ fn build_db_inner(
     // blind-sign path merely because the safer compiler dropped it.
     let mut declared_known_calls = BTreeSet::<ContractCallKey>::new();
     let mut declared_contract_signatures = DeclaredContractSignatures::new();
+    let mut declared_refusal_only_calls = DeclaredRefusalOnlyCalls::new();
     let mut source_snapshot = DescriptorSourceSnapshot::default();
     let mut resolved_sources = BTreeMap::<PathBuf, serde_json::Value>::new();
     for src in &unscanned_declared_sources {
@@ -2245,6 +2246,8 @@ fn build_db_inner(
             &mut source_snapshot,
         )
         .map_err(|e| omission_scan_error(src, input_dir, registry_root, &e))?;
+        collect_declared_refusal_only_calls(&resolved, &mut declared_refusal_only_calls)
+            .map_err(|e| omission_scan_error(src, input_dir, registry_root, &e))?;
         if has_concrete_descriptor_shape(&resolved) {
             skips.push(SkipReport {
                 source: src.clone(),
@@ -2265,6 +2268,8 @@ fn build_db_inner(
             &mut source_snapshot,
         )
         .map_err(|e| omission_scan_error(src, input_dir, registry_root, &e))?;
+        collect_declared_refusal_only_calls(&resolved, &mut declared_refusal_only_calls)
+            .map_err(|e| omission_scan_error(src, input_dir, registry_root, &e))?;
         if resolved_sources.insert(src.clone(), resolved).is_some() {
             return Err(format!(
                 "duplicate descriptor source path in catalogue scan: {}",
@@ -2303,7 +2308,29 @@ fn build_db_inner(
                         reason: format!("PARTIAL FORMAT DROP: {reason}"),
                     });
                 }
-                emitted.extend(entries);
+                for entry in entries {
+                    if let Some((selector, markers)) =
+                        emitted_refusal_only_collision(&entry, &declared_refusal_only_calls)?
+                    {
+                        let reason = format!(
+                            "authenticated refusalOnlyFormats boundary: emitted selector 0x{} for chain_id={} contract=0x{} collides catalogue-wide with refusal marker(s) {:?}; selector-only runtime dispatch cannot authenticate the competing display",
+                            hex::encode(selector),
+                            entry.chain_id,
+                            hex::encode(entry.contract),
+                            markers,
+                        );
+                        if tolerant {
+                            skips.push(SkipReport {
+                                source: src.clone(),
+                                reason,
+                            });
+                            continue;
+                        }
+                        let source = review_relative_path(src, input_dir);
+                        return Err(format!("{source}: {reason}"));
+                    }
+                    emitted.push(entry);
+                }
             }
             Err(e) if tolerant => skips.push(SkipReport {
                 source: src.clone(),
@@ -2689,6 +2716,7 @@ fn reject_duplicate_eip712_format_bindings(emitted: &[Emitted]) -> Result<(), St
 
 type ContractCallKey = ContractCallTuple;
 type DeclaredContractSignatures = BTreeMap<ContractCallKey, BTreeSet<String>>;
+type DeclaredRefusalOnlyCalls = BTreeMap<ContractCallKey, BTreeSet<String>>;
 
 const MAX_DESCRIPTOR_SOURCE_BYTES: u64 = 1024 * 1024;
 const MAX_DESCRIPTOR_SNAPSHOT_BYTES: usize = 32 * 1024 * 1024;
@@ -2866,6 +2894,121 @@ fn collect_contract_calls_from_json(
         }
     }
     Ok(())
+}
+
+/// Inventory every structurally declared refusal marker before compilation.
+///
+/// `refusalOnlyFormats` is authored as a source-signature list, but the EVM
+/// and device both dispatch contract calls by four-byte selector. Keeping this
+/// catalogue-wide selector inventory prevents a colliding signature in a
+/// sibling descriptor from restoring clear-signing authority that another
+/// authenticated descriptor explicitly removed.
+fn collect_declared_refusal_only_calls(
+    json: &serde_json::Value,
+    out: &mut DeclaredRefusalOnlyCalls,
+) -> Result<(), String> {
+    let Some(markers_value) = json.pointer("/_pqsigner/refusalOnlyFormats") else {
+        return Ok(());
+    };
+    let markers = markers_value
+        .as_array()
+        .ok_or_else(|| "_pqsigner.refusalOnlyFormats is not an array".to_string())?;
+    if markers.is_empty() {
+        return Ok(());
+    }
+
+    let deployments = json
+        .pointer("/context/contract/deployments")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            "_pqsigner.refusalOnlyFormats is contract-context only and requires contract deployments"
+                .to_string()
+        })?;
+    let formats = json
+        .pointer("/display/formats")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| {
+            "_pqsigner.refusalOnlyFormats requires a concrete display.formats object".to_string()
+        })?;
+
+    let mut selectors = Vec::with_capacity(markers.len());
+    for (index, marker) in markers.iter().enumerate() {
+        let signature = marker
+            .as_str()
+            .ok_or_else(|| format!("_pqsigner.refusalOnlyFormats[{index}] is not a string"))?;
+        if !formats.contains_key(signature) {
+            return Err(format!(
+                "_pqsigner.refusalOnlyFormats[{index}] names unknown format `{signature}`"
+            ));
+        }
+        let canonical = contract_selector_signature(signature).map_err(|error| {
+            format!("_pqsigner.refusalOnlyFormats[{index}] cannot be selector-bound: {error}")
+        })?;
+        let digest = keccak256(canonical.as_bytes());
+        selectors.push(([digest[0], digest[1], digest[2], digest[3]], canonical));
+    }
+
+    for (index, deployment) in deployments.iter().enumerate() {
+        let chain_id = deployment
+            .get("chainId")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                format!(
+                    "context.contract.deployments[{index}].chainId is missing or not a u64 while inventorying refusalOnlyFormats"
+                )
+            })?;
+        let address_text = deployment
+            .get("address")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                format!(
+                    "context.contract.deployments[{index}].address is missing or not a string while inventorying refusalOnlyFormats"
+                )
+            })?;
+        let address = parse_address(address_text).map_err(|error| {
+            format!(
+                "context.contract.deployments[{index}].address is invalid while inventorying refusalOnlyFormats: {error}"
+            )
+        })?;
+        for (selector, canonical) in &selectors {
+            out.entry((chain_id, address, *selector))
+                .or_default()
+                .insert(canonical.clone());
+        }
+    }
+    Ok(())
+}
+
+fn emitted_refusal_only_collision(
+    entry: &Emitted,
+    refusal_only_calls: &DeclaredRefusalOnlyCalls,
+) -> Result<Option<([u8; 4], Vec<String>)>, String> {
+    if entry.context_kind != CTX_CONTRACT {
+        return Ok(None);
+    }
+    let ir = Erc7730Ir::parse(&entry.ir_bytes).map_err(|error| {
+        format!(
+            "internal: inspect emitted refusal boundary for {}: {error:?}",
+            entry.source.display()
+        )
+    })?;
+    for format in ir.format_iter() {
+        let format = format.map_err(|error| {
+            format!(
+                "internal: inspect emitted refusal format for {}: {error:?}",
+                entry.source.display()
+            )
+        })?;
+        if let Some(markers) =
+            refusal_only_calls.get(&(entry.chain_id, entry.contract, format.selector))
+        {
+            return Ok(Some((
+                format.selector,
+                markers.iter().cloned().collect::<Vec<_>>(),
+            )));
+        }
+    }
+    Ok(None)
 }
 
 /// Whether an unselected, include-resolved JSON file is a concrete descriptor
@@ -4425,6 +4568,20 @@ fn validate_refusal_only_formats(
         .iter()
         .flat_map(|admission| admission.formats.iter())
         .collect::<BTreeSet<_>>();
+    let mut source_formats_by_selector = BTreeMap::<[u8; 4], Vec<String>>::new();
+    for signature in display.formats.keys() {
+        let canonical = contract_selector_signature(signature).map_err(|error| {
+            format!(
+                "format `{signature}` cannot be selector-bound while validating _pqsigner.refusalOnlyFormats: {error}"
+            )
+        })?;
+        let digest = keccak256(canonical.as_bytes());
+        source_formats_by_selector
+            .entry([digest[0], digest[1], digest[2], digest[3]])
+            .or_default()
+            .push(signature.clone());
+    }
+
     let mut refusal_only = BTreeSet::new();
     for (index, signature) in pqsigner.refusal_only_formats.iter().enumerate() {
         if !display.formats.contains_key(signature) {
@@ -4432,9 +4589,21 @@ fn validate_refusal_only_formats(
                 "_pqsigner.refusalOnlyFormats[{index}] names unknown format `{signature}`"
             ));
         }
-        contract_selector_signature(signature).map_err(|error| {
+        let canonical = contract_selector_signature(signature).map_err(|error| {
             format!("_pqsigner.refusalOnlyFormats[{index}] cannot be selector-bound: {error}")
         })?;
+        let digest = keccak256(canonical.as_bytes());
+        let selector = [digest[0], digest[1], digest[2], digest[3]];
+        let colliders = source_formats_by_selector
+            .get(&selector)
+            .expect("refusal-only source format was inventoried above");
+        if colliders.len() != 1 {
+            return Err(format!(
+                "_pqsigner.refusalOnlyFormats[{index}] selects `{signature}` with selector 0x{}, which collides with source formats {:?}; selector-only runtime dispatch cannot authenticate this refusal boundary",
+                hex::encode(selector),
+                colliders
+            ));
+        }
         if admitted.contains(signature) {
             return Err(format!(
                 "_pqsigner.refusalOnlyFormats[{index}] overlaps deploymentFormats at `{signature}`"
