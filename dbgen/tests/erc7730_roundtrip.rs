@@ -4670,7 +4670,7 @@ fn registry_declared_but_uncompiled_call_is_still_known() {
 }
 
 #[test]
-fn registry_1inch_native_currency_list_is_authenticated_in_order() {
+fn registry_1inch_clipper_authenticates_only_its_zero_native_sentinel() {
     let catalogue = build_registry();
     let entry = catalogue
         .entries
@@ -4690,11 +4690,7 @@ fn registry_1inch_native_currency_list_is_authenticated_in_order() {
         .find(|format| format.selector == selector)
         .expect("clipperSwap format survives");
 
-    let expected = {
-        let mut addresses = [0u8; 40];
-        addresses[..20].fill(0xEE);
-        addresses
-    };
+    let expected = [0u8; 20];
     let token_amounts: Vec<_> = format
         .fields()
         .map(Result::unwrap)
@@ -4706,7 +4702,7 @@ fn registry_1inch_native_currency_list_is_authenticated_in_order() {
         assert_eq!(
             params.native_currency_addresses,
             Some(&expected[..]),
-            "{} must authenticate [0xEeee…, 0x0] in descriptor order",
+            "{} must authenticate only address zero for deployed ClipperRouter semantics",
             String::from_utf8_lossy(field.label),
         );
     }

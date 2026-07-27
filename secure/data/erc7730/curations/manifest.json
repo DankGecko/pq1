@@ -354,6 +354,13 @@
       "replacement_sha256": "fb81b5d7cdb61ee9bc43aa054434aaede83451fdf52eb5c0913c886558793e19"
     },
     {
+      "path": "registry/1inch/calldata-AggregationRouterV4-eth.json",
+      "upstream_bytes": 2399,
+      "upstream_sha256": "69a85920ba106f81d895c07a7683505c439d65d6f10fff13f1c665d38a3bb95f",
+      "replacement_bytes": 4415,
+      "replacement_sha256": "1d00aca3ef14dc9ee68410608b7f699ee862e997c6c82037c4ccf183d8ddafec"
+    },
+    {
       "path": "registry/1inch/calldata-AggregationRouterV6-zksync.json",
       "upstream_bytes": 327,
       "upstream_sha256": "72d94b4e2640ae6eb60356112f50c09ab9df35c080ad5c4fc1e6b16c8cd38428",
@@ -378,8 +385,8 @@
       "path": "registry/aave/calldata-lpv2.json",
       "upstream_bytes": 4967,
       "upstream_sha256": "f0f15002c5b5749a51ddc1641e40ec67afd51c93238c2901312100e59369c385",
-      "replacement_bytes": 5171,
-      "replacement_sha256": "1367b18f927cb31748de242e80db75ef2beccb4839df0b513390e7985258a55e"
+      "replacement_bytes": 7868,
+      "replacement_sha256": "bbdfda34c6b018d5db72b833b07bc1da3ce3625151317b7fa4b66c7dd23d2039"
     },
     {
       "path": "registry/aave/calldata-lpv3.json",

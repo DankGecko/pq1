@@ -4928,9 +4928,10 @@ fn defi_catalogue_aave_multicall_remains_excluded() {
 }
 
 #[test]
-fn positive_1inch_native_currency_list_renders_both_members_and_rejects_a_miss() {
-    // Real upstream list witness: the 1inch V4 definition authenticates
-    // [0xEeee…, 0x0] for BOTH tokenAmount fields. `clipperSwap` is all-static,
+fn positive_1inch_clipper_renders_zero_as_native_and_eeee_as_unverified_token() {
+    // The deployed V4 ClipperRouter treats only address zero as native. The
+    // shared 0xEeee sentinel is valid for other router paths but must not be
+    // inherited by these Clipper amounts. `clipperSwap` is all-static,
     // complete, and binds its beneficiary to the device-derived signer.
     let res = build_registry();
     let entry = find_leaf(res, "calldata-AggregationRouterV4-eth.json", 1);
@@ -4954,8 +4955,7 @@ fn positive_1inch_native_currency_list_renders_both_members_and_rejects_a_miss()
         out
     };
 
-    let eth_sentinel = [0xEEu8; 20];
-    let native_calldata = calldata(eth_sentinel);
+    let native_calldata = calldata([0u8; 20]);
     assert_selector_matches(
         &verified.ir,
         &native_calldata,
@@ -4969,7 +4969,7 @@ fn positive_1inch_native_currency_list_renders_both_members_and_rejects_a_miss()
         &resolver,
         &signer,
     )
-    .expect("both list members render as native ETH");
+    .expect("the deployed Clipper native sentinel renders as ETH");
     let dump = dump_pages(&pages);
     assert_eq!(page_strs(&pages, intent_page_index(&pages))[0], "Swap");
     let send = page_strs(&pages, find_page_by_label(&pages, "Amount to Send")).join("\n");
@@ -4981,16 +4981,15 @@ fn positive_1inch_native_currency_list_renders_both_members_and_rejects_a_miss()
     );
     assert!(
         !dump.contains("Token (UNVERIFI~") && !dump.contains("! raw, dec=?"),
-        "both authenticated sentinels must stay on the native path:\n{dump}"
+        "address zero must stay on the native path for both amounts:\n{dump}"
     );
     let beneficiary = page_strs(&pages, find_page_by_label(&pages, "Beneficiary"));
     assert_eq!(beneficiary[1], "0x12121212121212");
 
-    // Flip one byte of the first sentinel. It is no longer a member, while the
-    // zero-address receive token still is. With no ERC-20 metadata, the send
-    // amount must become raw and expose the full unverified token identity.
-    let mut miss = eth_sentinel;
-    miss[19] ^= 1;
+    // The shared 0xEeee sentinel is deliberately not a Clipper native member,
+    // while the zero-address receive token still is. With no ERC-20 metadata,
+    // the send amount must become raw and expose the unverified token identity.
+    let miss = [0xEEu8; 20];
     let miss_pages =
         render_erc7730_pages_with_signer(&tx, &calldata(miss), &verified, None, &resolver, &signer)
             .expect("one-byte list miss remains safely renderable as unverified raw");
@@ -5004,7 +5003,7 @@ fn positive_1inch_native_currency_list_renders_both_members_and_rejects_a_miss()
     .join("\n");
     assert!(
         miss_receive.contains("2.25") && miss_receive.contains("ETH"),
-        "the second list member must remain native after a first-member miss:\n{miss_dump}"
+        "the zero destination sentinel must remain native when 0xEeee is rejected:\n{miss_dump}"
     );
 }
 

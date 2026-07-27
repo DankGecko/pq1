@@ -203,8 +203,8 @@
   {
     "source": "1inch/calldata-AggregationRouterV4-eth.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "legacy-defi-v4-v2"
   },
   {
     "source": "1inch/calldata-AggregationRouterV6-zksync.json",
@@ -227,8 +227,8 @@
   {
     "source": "aave/calldata-lpv2.json",
     "accepted_leaf_count": 3,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "legacy-defi-v4-v2"
   },
   {
     "source": "aave/calldata-lpv3.json",

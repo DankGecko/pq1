@@ -1,5 +1,46 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
+  "_curation_note": "PQSigner semantic curation: the six static LendingPool V2 routes are admitted only for the three independently verified historical proxy/implementation pairs below. Every route displays all signed effect-bearing operands, including borrow/deposit referralCode. swapBorrowRateMode receives the current debt mode and mints the opposite mode, so its intent is direction-neutral. deploymentFormats is an explicit evidence fence against future descriptor growth. Evidence is historical fixed-block source/runtime authority for upgradeable proxies, not live reserve or token metadata, transaction success, current implementations, future-upgrade monitoring, fallback, or blind signing.",
+  "_pqsigner": {
+    "deploymentFormats": [
+      {
+        "chainId": 1,
+        "address": "0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9",
+        "formats": [
+          "repay(address asset, uint256 amount, uint256 rateMode, address onBehalfOf)",
+          "setUserUseReserveAsCollateral(address asset, bool useAsCollateral)",
+          "withdraw(address asset, uint256 amount, address to)",
+          "swapBorrowRateMode(address asset, uint256 rateMode)",
+          "borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)",
+          "deposit(address asset, uint256 amount, address onBehalfOf, uint16 referralCode)"
+        ]
+      },
+      {
+        "chainId": 137,
+        "address": "0x8dFf5E27EA6b7AC08EbFdf9eB090F32ee9a30fcf",
+        "formats": [
+          "repay(address asset, uint256 amount, uint256 rateMode, address onBehalfOf)",
+          "setUserUseReserveAsCollateral(address asset, bool useAsCollateral)",
+          "withdraw(address asset, uint256 amount, address to)",
+          "swapBorrowRateMode(address asset, uint256 rateMode)",
+          "borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)",
+          "deposit(address asset, uint256 amount, address onBehalfOf, uint16 referralCode)"
+        ]
+      },
+      {
+        "chainId": 43114,
+        "address": "0x4F01AeD16D97E3aB5ab2B501154DC9bb0F1A5A2C",
+        "formats": [
+          "repay(address asset, uint256 amount, uint256 rateMode, address onBehalfOf)",
+          "setUserUseReserveAsCollateral(address asset, bool useAsCollateral)",
+          "withdraw(address asset, uint256 amount, address to)",
+          "swapBorrowRateMode(address asset, uint256 rateMode)",
+          "borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)",
+          "deposit(address asset, uint256 amount, address onBehalfOf, uint16 referralCode)"
+        ]
+      }
+    ]
+  },
   "context": {
     "$id": "Lending Pool v2",
     "contract": {
@@ -79,7 +120,7 @@
         ]
       },
       "swapBorrowRateMode(address asset, uint256 rateMode)": {
-        "intent": "Swap to variable",
+        "intent": "Swap borrow rate mode",
         "fields": [
           {
             "path": "asset",
