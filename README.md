@@ -2,6 +2,28 @@
 
 # PQ1
 
+> ### ⚠️ Early access — work in progress
+>
+> **PQ1 is unfinished, unaudited, and not ready to hold value.** We are
+> open-sourcing it early, while it is still being built, rather than presenting
+> it as finished after the fact — the design and the code should be reviewable
+> in the open. Expect breaking changes.
+>
+> - **No devices have shipped** and no on-chain wallet holds funds. Do not use
+>   this to protect real value.
+> - **External security audits are in progress and not yet finalized.** Treat
+>   security claims here as unconfirmed until they land — the reviews under
+>   `docs/audits/` are our own.
+> - **Ship-blocking work is still open**, including irreversible secure-element
+>   provisioning steps. [`docs/STATUS.md`](docs/STATUS.md) tracks the state of
+>   each subsystem — what is done, what is open, and why.
+> - Values described below as "frozen" — domain-separation tags, the C10
+>   parameter set, the CREATE2 salt, the EntryPoint version — are what we intend
+>   to commit to *at launch*, and can still change cleanly before first shipment.
+>
+> Review, reproduction, and bug reports are welcome — see
+> [`SECURITY.md`](SECURITY.md).
+
 A **post-quantum ERC-4337 hardware wallet** (the **PQ1**) where every primitive that protects the seed — at rest, in transit between chips, in firmware updates, in transaction signing — is a NIST PQC standard or a Grover-resistant symmetric primitive. The secure elements' channel layers (which we cannot replace) are symmetric-rooted — no public-key handshake ever crosses a bus — so even against a future CRQC the strongest attack on recorded traffic is depth-limited Grover key search (NIST Category 1, the same floor as the SPHINCS+C10 signatures themselves).
 
 **Target hardware:** STM32U585 (Cortex-M33, TrustZone) + Infineon OPTIGA Trust M V3 + NXP EdgeLock SE050. No single die, no single vendor, and no future cryptographically-relevant quantum computer (CRQC) should recover the seed from harvested traffic or extracted ciphertext.
@@ -502,7 +524,7 @@ Nothing here is optional. Run through the entire list **per device class**, not 
 - [ ] Field-tested on staging hardware before public rollout; documented recovery path for a bricked fleet (RDP-2 cannot be unlocked)
 
 **H. External validation**
-- [ ] External audit by an embedded + TrustZone + SE firm (NCC, Trail of Bits, Quarkslab, Kudelski, Riscure) of the *signed production image* — budget $30K–$150K
+- [ ] External audit by an embedded + TrustZone + SE firm of the *signed production image*
 - [ ] All findings fixed or risk-accepted with external sign-off; public bug bounty (≥ $25K for seed extraction) + VDP published before any device ships
 - [ ] Independent FI report from a lab; independent attestation that the build is reproducible
 
