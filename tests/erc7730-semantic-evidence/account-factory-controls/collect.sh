@@ -131,15 +131,15 @@ fetch "https://sourcify.dev/server/v2/contract/10/$wallet_proxy?fields=$sourcify
 fetch "https://sourcify.dev/server/v2/contract/10/$wallet_implementation?fields=$sourcify_fields" \
   >"$verification/Sourcify.stakeweight-implementation-optimism.json"
 
-jq -r '.sources["src/Factory.sol"].content' \
+jq -j '.sources["src/Factory.sol"].content' \
   "$verification/Sourcify.kiln-ethereum.json" >"$source_dir/Factory.ethereum.sol"
-jq -r '.sources["src/Factory.sol"].content' \
+jq -j '.sources["src/Factory.sol"].content' \
   "$verification/Sourcify.kiln-hoodi.json" >"$source_dir/Factory.hoodi.sol"
-jq -r '.sources["src/Operator.sol"].content' \
+jq -j '.sources["src/Operator.sol"].content' \
   "$verification/Sourcify.kiln-ethereum.json" >"$source_dir/Operator.ethereum.sol"
-jq -r '.sources["src/StakeWeight.sol"].content' \
+jq -j '.sources["src/StakeWeight.sol"].content' \
   "$verification/Sourcify.stakeweight-implementation-optimism.json" >"$source_dir/StakeWeight.sol"
-jq -r '.sources["src/WalletConnectConfig.sol"].content' \
+jq -j '.sources["src/WalletConnectConfig.sol"].content' \
   "$verification/Sourcify.stakeweight-implementation-optimism.json" \
   >"$source_dir/WalletConnectConfig.sol"
 
