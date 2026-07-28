@@ -615,159 +615,10 @@ struct Eip712StringPreimageEnrollment {
     fields: &'static [Eip712StringPreimageFieldEnrollment],
 }
 
-const FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH: [u8; 32] = [
-    0x97, 0x90, 0x95, 0xa6, 0xbb, 0x8f, 0x99, 0x21, 0xe8, 0x6c, 0x3f, 0x72, 0x7c, 0x4a, 0xba, 0x59,
-    0x77, 0xc6, 0x19, 0x64, 0xaf, 0x52, 0xaa, 0xbd, 0x0b, 0xfe, 0xfd, 0xbb, 0x6e, 0x7a, 0x8d, 0x8a,
-];
-const LENS_HUB_DESCRIPTOR_HASH: [u8; 32] = [
-    0xdc, 0x60, 0x57, 0x80, 0x60, 0x1c, 0x05, 0x75, 0xba, 0x5a, 0xac, 0xf0, 0x58, 0xbe, 0x0f, 0xd1,
-    0x98, 0x08, 0xff, 0x7b, 0x22, 0x9f, 0xee, 0xca, 0x95, 0xa5, 0x2b, 0xa1, 0xfe, 0x67, 0x52, 0x6d,
-];
-const RARIBLE_ERC721_DESCRIPTOR_HASH: [u8; 32] = [
-    0xfb, 0x4d, 0x50, 0x8b, 0xe1, 0xc9, 0xfe, 0x88, 0x29, 0xd3, 0x41, 0x65, 0xc0, 0x99, 0xc0, 0xfc,
-    0x66, 0xfe, 0x36, 0x52, 0x98, 0x36, 0x72, 0x0a, 0xda, 0xc5, 0xb3, 0x85, 0x4c, 0x35, 0xee, 0xcb,
-];
-const RARIBLE_ERC1155_DESCRIPTOR_HASH: [u8; 32] = [
-    0x4c, 0xdf, 0x6b, 0x62, 0x45, 0xa5, 0xb4, 0x65, 0x32, 0x0e, 0x66, 0x8c, 0xfc, 0xa0, 0x25, 0x9d,
-    0xa1, 0x3a, 0xf8, 0xdc, 0xf1, 0x10, 0x47, 0xc1, 0x07, 0x5e, 0xe6, 0xbb, 0x0f, 0x2b, 0xf9, 0x87,
-];
-
-const FLYING_TULIP_MAINNET: [u8; 20] = [
-    0xf9, 0xf3, 0xdd, 0xf2, 0xe9, 0x6c, 0xab, 0xef, 0x94, 0xe2, 0x63, 0x4c, 0x32, 0x6d, 0xc6, 0xdd,
-    0xe9, 0x93, 0x60, 0xf8,
-];
-const FLYING_TULIP_SONIC: [u8; 20] = [
-    0x10, 0x9a, 0xe7, 0x27, 0x78, 0xa0, 0x26, 0x05, 0x71, 0xb9, 0x76, 0x74, 0x77, 0x20, 0x4f, 0x1c,
-    0xe4, 0x1f, 0xbd, 0xff,
-];
-const LENS_HUB_POLYGON: [u8; 20] = [
-    0xdb, 0x46, 0xd1, 0xdc, 0x15, 0x56, 0x34, 0xfb, 0xc7, 0x32, 0xf9, 0x2e, 0x85, 0x3b, 0x10, 0xb2,
-    0x88, 0xad, 0x5a, 0x1d,
-];
-const RARIBLE_ERC721_MAINNET: [u8; 20] = [
-    0xc9, 0x15, 0x44, 0x24, 0xb8, 0x23, 0xb1, 0x05, 0x79, 0x89, 0x5c, 0xcb, 0xe4, 0x42, 0xd4, 0x1b,
-    0x9a, 0xbd, 0x96, 0xed,
-];
-const RARIBLE_ERC1155_MAINNET: [u8; 20] = [
-    0xb6, 0x6a, 0x60, 0x3f, 0x4c, 0xfe, 0x17, 0xe3, 0xd2, 0x7b, 0x87, 0xa8, 0xbf, 0xca, 0xd3, 0x19,
-    0x85, 0x65, 0x18, 0xb8,
-];
-
-const CANCEL_ORDER_TYPE_HASH: [u8; 32] = [
-    0x5f, 0xf6, 0x3c, 0xb9, 0xae, 0x8d, 0x80, 0x0a, 0xf4, 0xf8, 0xce, 0x6d, 0x88, 0x29, 0x46, 0x91,
-    0xa5, 0xb8, 0x22, 0x8b, 0x88, 0xd8, 0x1f, 0xbb, 0x70, 0x93, 0x2c, 0xa1, 0x8f, 0x28, 0x2c, 0xaf,
-];
-const TPSL_GROUP_CANCEL_TYPE_HASH: [u8; 32] = [
-    0x97, 0xc3, 0x00, 0x4f, 0x02, 0x2e, 0xea, 0xd1, 0xb9, 0x56, 0x5d, 0xf4, 0x52, 0x67, 0x75, 0xd1,
-    0x0c, 0x55, 0xd9, 0x27, 0xdb, 0xc6, 0xc6, 0x2c, 0x9b, 0x8a, 0x97, 0xc6, 0x8f, 0xb0, 0xd8, 0x89,
-];
-const LENS_QUOTE_TYPE_HASH: [u8; 32] = [
-    0x01, 0xe4, 0x59, 0x78, 0x60, 0xed, 0x5c, 0xb6, 0x94, 0xb6, 0x27, 0x51, 0x25, 0xe9, 0x2f, 0x89,
-    0x7d, 0xeb, 0xa4, 0xcb, 0x25, 0xb3, 0x87, 0x89, 0x47, 0x0e, 0x98, 0x2a, 0xc0, 0xf0, 0xbb, 0xa8,
-];
-const RARIBLE_MINT721_TYPE_HASH: [u8; 32] = [
-    0xf6, 0x43, 0x26, 0x04, 0x5a, 0xf5, 0xfd, 0x7e, 0x15, 0x29, 0x7b, 0xa9, 0x39, 0xf8, 0x5b, 0x55,
-    0x04, 0x74, 0xd3, 0x89, 0x9d, 0xaa, 0x47, 0xd2, 0xbc, 0x1f, 0xfb, 0xdb, 0x9c, 0xed, 0x34, 0x4e,
-];
-const RARIBLE_MINT1155_TYPE_HASH: [u8; 32] = [
-    0xfb, 0x98, 0x87, 0x07, 0xeb, 0xb3, 0x38, 0x69, 0x4f, 0x31, 0x87, 0x60, 0xb0, 0xfd, 0x5c, 0xfe,
-    0x75, 0x6d, 0x00, 0xa2, 0xad, 0xe2, 0x51, 0xfd, 0xa1, 0x10, 0xb8, 0x0c, 0x33, 0x6a, 0x3c, 0x7f,
-];
-
-const CANCEL_ORDER_STRING_FIELDS: [Eip712StringPreimageFieldEnrollment; 1] =
-    [Eip712StringPreimageFieldEnrollment {
-        path: "orderId",
-        ordinal: 0,
-    }];
-const TPSL_GROUP_CANCEL_STRING_FIELDS: [Eip712StringPreimageFieldEnrollment; 2] = [
-    Eip712StringPreimageFieldEnrollment {
-        path: "positionId",
-        ordinal: 0,
-    },
-    Eip712StringPreimageFieldEnrollment {
-        path: "tpslGroupId",
-        ordinal: 1,
-    },
-];
-const LENS_QUOTE_STRING_FIELDS: [Eip712StringPreimageFieldEnrollment; 1] =
-    [Eip712StringPreimageFieldEnrollment {
-        path: "contentURI",
-        ordinal: 0,
-    }];
-const RARIBLE_TOKEN_URI_STRING_FIELDS: [Eip712StringPreimageFieldEnrollment; 1] =
-    [Eip712StringPreimageFieldEnrollment {
-        path: "tokenURI",
-        ordinal: 0,
-    }];
-
-const CANCEL_ORDER_SIGNATURE: &str = "CancelOrder(string orderId)";
-const TPSL_GROUP_CANCEL_SIGNATURE: &str =
-    "TpslGroupCancel(address user,string positionId,string tpslGroupId,uint256 deadline)";
-const LENS_QUOTE_SIGNATURE: &str =
-    "Quote(uint256 profileId,string contentURI,uint256 pointedProfileId,uint256 pointedPubId,uint256 nonce,uint256 deadline)";
-const RARIBLE_MINT721_SIGNATURE: &str =
-    "Mint721(uint256 tokenId,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)";
-const RARIBLE_MINT1155_SIGNATURE: &str =
-    "Mint1155(uint256 tokenId,uint256 supply,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)";
-
-const EIP712_STRING_PREIMAGE_ENROLLMENTS: [Eip712StringPreimageEnrollment; 7] = [
-    Eip712StringPreimageEnrollment {
-        descriptor_hash: FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
-        chain_id: 1,
-        contract: FLYING_TULIP_MAINNET,
-        canonical_signature: CANCEL_ORDER_SIGNATURE,
-        type_hash: CANCEL_ORDER_TYPE_HASH,
-        fields: &CANCEL_ORDER_STRING_FIELDS,
-    },
-    Eip712StringPreimageEnrollment {
-        descriptor_hash: FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
-        chain_id: 146,
-        contract: FLYING_TULIP_SONIC,
-        canonical_signature: CANCEL_ORDER_SIGNATURE,
-        type_hash: CANCEL_ORDER_TYPE_HASH,
-        fields: &CANCEL_ORDER_STRING_FIELDS,
-    },
-    Eip712StringPreimageEnrollment {
-        descriptor_hash: FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
-        chain_id: 1,
-        contract: FLYING_TULIP_MAINNET,
-        canonical_signature: TPSL_GROUP_CANCEL_SIGNATURE,
-        type_hash: TPSL_GROUP_CANCEL_TYPE_HASH,
-        fields: &TPSL_GROUP_CANCEL_STRING_FIELDS,
-    },
-    Eip712StringPreimageEnrollment {
-        descriptor_hash: FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
-        chain_id: 146,
-        contract: FLYING_TULIP_SONIC,
-        canonical_signature: TPSL_GROUP_CANCEL_SIGNATURE,
-        type_hash: TPSL_GROUP_CANCEL_TYPE_HASH,
-        fields: &TPSL_GROUP_CANCEL_STRING_FIELDS,
-    },
-    Eip712StringPreimageEnrollment {
-        descriptor_hash: LENS_HUB_DESCRIPTOR_HASH,
-        chain_id: 137,
-        contract: LENS_HUB_POLYGON,
-        canonical_signature: LENS_QUOTE_SIGNATURE,
-        type_hash: LENS_QUOTE_TYPE_HASH,
-        fields: &LENS_QUOTE_STRING_FIELDS,
-    },
-    Eip712StringPreimageEnrollment {
-        descriptor_hash: RARIBLE_ERC721_DESCRIPTOR_HASH,
-        chain_id: 1,
-        contract: RARIBLE_ERC721_MAINNET,
-        canonical_signature: RARIBLE_MINT721_SIGNATURE,
-        type_hash: RARIBLE_MINT721_TYPE_HASH,
-        fields: &RARIBLE_TOKEN_URI_STRING_FIELDS,
-    },
-    Eip712StringPreimageEnrollment {
-        descriptor_hash: RARIBLE_ERC1155_DESCRIPTOR_HASH,
-        chain_id: 1,
-        contract: RARIBLE_ERC1155_MAINNET,
-        canonical_signature: RARIBLE_MINT1155_SIGNATURE,
-        type_hash: RARIBLE_MINT1155_TYPE_HASH,
-        fields: &RARIBLE_TOKEN_URI_STRING_FIELDS,
-    },
-];
+/// Production string-preimage authority is intentionally empty. Dynamic EIP-712
+/// strings remain opaque hash words unless a future evidence-backed catalogue
+/// reconciliation adds an exact descriptor/deployment/type/source enrollment.
+const EIP712_STRING_PREIMAGE_ENROLLMENTS: [Eip712StringPreimageEnrollment; 0] = [];
 
 const ROUTER02_EXACT_INPUT_GUARDS: [SemanticWordGuard; 4] = [
     SemanticWordGuard {
@@ -6299,8 +6150,24 @@ fn eip712_string_preimage_enrollment_for(
     canonical_signature: &str,
     type_hash: [u8; 32],
 ) -> Option<&'static Eip712StringPreimageEnrollment> {
+    eip712_string_preimage_enrollment_for_in(
+        &EIP712_STRING_PREIMAGE_ENROLLMENTS,
+        descriptor_hash,
+        deployment,
+        canonical_signature,
+        type_hash,
+    )
+}
+
+fn eip712_string_preimage_enrollment_for_in<'a>(
+    enrollments: &'a [Eip712StringPreimageEnrollment],
+    descriptor_hash: [u8; 32],
+    deployment: Option<&InterpolationDeployment<'_>>,
+    canonical_signature: &str,
+    type_hash: [u8; 32],
+) -> Option<&'a Eip712StringPreimageEnrollment> {
     let deployment = deployment?;
-    EIP712_STRING_PREIMAGE_ENROLLMENTS.iter().find(|entry| {
+    enrollments.iter().find(|entry| {
         entry.descriptor_hash == descriptor_hash
             && entry.chain_id == deployment.chain_id
             && entry.contract == deployment.contract
@@ -13114,28 +12981,56 @@ mod tests {
         }
     }
 
+    const SYNTHETIC_EIP712_STRING_DESCRIPTOR_HASH: [u8; 32] = [0x42; 32];
+    const SYNTHETIC_EIP712_STRING_CONTRACT: [u8; 20] = [0x24; 20];
+    const SYNTHETIC_EIP712_STRING_SIGNATURE: &str = "Message(string contents)";
+    const SYNTHETIC_EIP712_STRING_FIELDS: [Eip712StringPreimageFieldEnrollment; 1] =
+        [Eip712StringPreimageFieldEnrollment {
+            path: "contents",
+            ordinal: 0,
+        }];
+
+    fn synthetic_eip712_string_enrollment() -> Eip712StringPreimageEnrollment {
+        Eip712StringPreimageEnrollment {
+            descriptor_hash: SYNTHETIC_EIP712_STRING_DESCRIPTOR_HASH,
+            chain_id: 31_337,
+            contract: SYNTHETIC_EIP712_STRING_CONTRACT,
+            canonical_signature: SYNTHETIC_EIP712_STRING_SIGNATURE,
+            type_hash: keccak256(SYNTHETIC_EIP712_STRING_SIGNATURE.as_bytes()),
+            fields: &SYNTHETIC_EIP712_STRING_FIELDS,
+        }
+    }
+
+    fn synthetic_eip712_string_deployment(
+        capabilities: &Erc20Capabilities,
+    ) -> InterpolationDeployment<'_> {
+        InterpolationDeployment {
+            chain_id: 31_337,
+            contract: SYNTHETIC_EIP712_STRING_CONTRACT,
+            erc20_capabilities: capabilities,
+        }
+    }
+
     #[test]
-    fn enrolled_eip712_string_preimage_emits_exact_static_word_marker() {
-        let sig = CANCEL_ORDER_SIGNATURE;
+    fn synthetic_eip712_string_preimage_emits_exact_static_word_marker() {
+        let sig = SYNTHETIC_EIP712_STRING_SIGNATURE;
         let parsed = parse_format_key(sig).unwrap();
         let fmt = fmt_from_fields(
             r#"[
-                {"path":"orderId","label":"Order ID","format":"raw","visible":"always"}
+                {"path":"contents","label":"Contents","format":"raw","visible":"always"}
             ]"#,
         );
         let capabilities = Erc20Capabilities::default();
-        let deployment = InterpolationDeployment {
-            chain_id: 1,
-            contract: FLYING_TULIP_MAINNET,
-            erc20_capabilities: &capabilities,
-        };
-        let enrollment = eip712_string_preimage_enrollment_for(
-            FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
+        let deployment = synthetic_eip712_string_deployment(&capabilities);
+        let enrollments = [synthetic_eip712_string_enrollment()];
+        let enrollment = eip712_string_preimage_enrollment_for_in(
+            &enrollments,
+            SYNTHETIC_EIP712_STRING_DESCRIPTOR_HASH,
             Some(&deployment),
             sig,
-            CANCEL_ORDER_TYPE_HASH,
+            keccak256(sig.as_bytes()),
         )
-        .expect("exact descriptor/deployment/encodeType enrollment");
+        .expect("synthetic exact descriptor/deployment/encodeType enrollment");
         assert_eq!(
             validate_eip712_string_preimage_format_source(sig, &fmt, &parsed, enrollment),
             Ok(1)
@@ -13177,75 +13072,78 @@ mod tests {
     }
 
     #[test]
-    fn eip712_string_preimage_enrollment_identity_and_source_drift_fail_closed() {
+    fn synthetic_eip712_string_enrollment_identity_and_source_drift_fail_closed() {
         let capabilities = Erc20Capabilities::default();
-        let exact = InterpolationDeployment {
-            chain_id: 1,
-            contract: FLYING_TULIP_MAINNET,
-            erc20_capabilities: &capabilities,
-        };
-        assert!(eip712_string_preimage_enrollment_for(
+        let exact = synthetic_eip712_string_deployment(&capabilities);
+        let enrollments = [synthetic_eip712_string_enrollment()];
+        let exact_type_hash = keccak256(SYNTHETIC_EIP712_STRING_SIGNATURE.as_bytes());
+        assert!(eip712_string_preimage_enrollment_for_in(
+            &enrollments,
             [0x55; 32],
             Some(&exact),
-            CANCEL_ORDER_SIGNATURE,
-            CANCEL_ORDER_TYPE_HASH,
+            SYNTHETIC_EIP712_STRING_SIGNATURE,
+            exact_type_hash,
         )
         .is_none());
-        assert!(eip712_string_preimage_enrollment_for(
-            FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
+        assert!(eip712_string_preimage_enrollment_for_in(
+            &enrollments,
+            SYNTHETIC_EIP712_STRING_DESCRIPTOR_HASH,
             Some(&InterpolationDeployment {
-                chain_id: 146,
+                chain_id: exact.chain_id + 1,
                 ..exact
             }),
-            CANCEL_ORDER_SIGNATURE,
-            CANCEL_ORDER_TYPE_HASH,
+            SYNTHETIC_EIP712_STRING_SIGNATURE,
+            exact_type_hash,
         )
         .is_none());
-        assert!(eip712_string_preimage_enrollment_for(
-            FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
+        assert!(eip712_string_preimage_enrollment_for_in(
+            &enrollments,
+            SYNTHETIC_EIP712_STRING_DESCRIPTOR_HASH,
             Some(&exact),
-            "CancelOrder(string other)",
-            CANCEL_ORDER_TYPE_HASH,
+            "Message(string other)",
+            exact_type_hash,
         )
         .is_none());
-        let mut wrong_type_hash = CANCEL_ORDER_TYPE_HASH;
+        let mut wrong_type_hash = exact_type_hash;
         wrong_type_hash[31] ^= 1;
-        assert!(eip712_string_preimage_enrollment_for(
-            FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
+        assert!(eip712_string_preimage_enrollment_for_in(
+            &enrollments,
+            SYNTHETIC_EIP712_STRING_DESCRIPTOR_HASH,
             Some(&exact),
-            CANCEL_ORDER_SIGNATURE,
+            SYNTHETIC_EIP712_STRING_SIGNATURE,
             wrong_type_hash,
         )
         .is_none());
 
-        let enrollment = eip712_string_preimage_enrollment_for(
-            FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
+        let enrollment = eip712_string_preimage_enrollment_for_in(
+            &enrollments,
+            SYNTHETIC_EIP712_STRING_DESCRIPTOR_HASH,
             Some(&exact),
-            CANCEL_ORDER_SIGNATURE,
-            CANCEL_ORDER_TYPE_HASH,
+            SYNTHETIC_EIP712_STRING_SIGNATURE,
+            exact_type_hash,
         )
         .unwrap();
-        let parsed = parse_format_key(CANCEL_ORDER_SIGNATURE).unwrap();
+        let parsed = parse_format_key(SYNTHETIC_EIP712_STRING_SIGNATURE).unwrap();
         for (field_json, needle) in [
             (
-                r#"[{"path":"orderId","label":"Order ID","format":"amount","visible":"always"}]"#,
+                r#"[{"path":"contents","label":"Contents","format":"amount","visible":"always"}]"#,
                 "explicitly use raw",
             ),
             (
-                r#"[{"path":"orderId","label":"Order ID","format":"raw","visible":"optional"}]"#,
+                r#"[{"path":"contents","label":"Contents","format":"raw","visible":"optional"}]"#,
                 "visible always",
             ),
             (
                 r#"[
-                    {"path":"orderId","label":"Order ID","format":"raw","visible":"always"},
-                    {"path":"orderId","label":"Duplicate","format":"raw","visible":"always"}
+                    {"path":"contents","label":"Contents","format":"raw","visible":"always"},
+                    {"path":"contents","label":"Duplicate","format":"raw","visible":"always"}
                 ]"#,
                 "field set/order drift",
             ),
         ] {
             let fmt = fmt_from_fields(field_json);
             let error = validate_eip712_string_preimage_format_source(
-                CANCEL_ORDER_SIGNATURE,
+                SYNTHETIC_EIP712_STRING_SIGNATURE,
                 &fmt,
                 &parsed,
                 enrollment,
@@ -13254,34 +13152,46 @@ mod tests {
             assert!(error.contains(needle), "unexpected refusal: {error}");
         }
 
-        let tpsl_enrollment = EIP712_STRING_PREIMAGE_ENROLLMENTS
-            .iter()
-            .find(|entry| {
-                entry.chain_id == 1 && entry.canonical_signature == TPSL_GROUP_CANCEL_SIGNATURE
-            })
-            .unwrap();
-        let tpsl_parsed = parse_format_key(TPSL_GROUP_CANCEL_SIGNATURE).unwrap();
+        const MULTI_STRING_SIGNATURE: &str =
+            "Envelope(address recipient,string title,string body,uint256 nonce)";
+        const MULTI_STRING_FIELDS: [Eip712StringPreimageFieldEnrollment; 2] = [
+            Eip712StringPreimageFieldEnrollment {
+                path: "title",
+                ordinal: 0,
+            },
+            Eip712StringPreimageFieldEnrollment {
+                path: "body",
+                ordinal: 1,
+            },
+        ];
+        let multi_enrollment = Eip712StringPreimageEnrollment {
+            canonical_signature: MULTI_STRING_SIGNATURE,
+            type_hash: keccak256(MULTI_STRING_SIGNATURE.as_bytes()),
+            fields: &MULTI_STRING_FIELDS,
+            ..*enrollment
+        };
+        let multi_parsed = parse_format_key(MULTI_STRING_SIGNATURE).unwrap();
         let mut reordered = fmt_from_fields(
             r#"[
-                {"path":"user","label":"User","format":"addressName","visible":"always"},
-                {"path":"positionId","label":"Position","format":"raw","visible":"always"},
-                {"path":"tpslGroupId","label":"Group","format":"raw","visible":"always"},
-                {"path":"deadline","label":"Deadline","format":"date","visible":"always"}
+                {"path":"recipient","label":"Recipient","format":"addressName","visible":"always"},
+                {"path":"title","label":"Title","format":"raw","visible":"always"},
+                {"path":"body","label":"Body","format":"raw","visible":"always"},
+                {"path":"nonce","label":"Nonce","format":"raw","visible":"always"}
             ]"#,
         );
         reordered.fields.swap(1, 2);
         assert!(validate_eip712_string_preimage_format_source(
-            TPSL_GROUP_CANCEL_SIGNATURE,
+            MULTI_STRING_SIGNATURE,
             &reordered,
-            &tpsl_parsed,
-            tpsl_enrollment,
+            &multi_parsed,
+            &multi_enrollment,
         )
         .expect_err("string evidence traversal reorder must be refused")
         .contains("field set/order drift"));
 
         const BAD_FIELDS: [Eip712StringPreimageFieldEnrollment; 1] =
             [Eip712StringPreimageFieldEnrollment {
-                path: "orderId",
+                path: "contents",
                 ordinal: 1,
             }];
         let bad_ordinal_enrollment = Eip712StringPreimageEnrollment {
@@ -13289,9 +13199,9 @@ mod tests {
             ..*enrollment
         };
         assert!(validate_eip712_string_preimage_format_source(
-            CANCEL_ORDER_SIGNATURE,
+            SYNTHETIC_EIP712_STRING_SIGNATURE,
             &fmt_from_fields(
-                r#"[{"path":"orderId","label":"Order ID","format":"raw","visible":"always"}]"#
+                r#"[{"path":"contents","label":"Contents","format":"raw","visible":"always"}]"#
             ),
             &parsed,
             &bad_ordinal_enrollment,
@@ -13301,10 +13211,10 @@ mod tests {
 
         const NESTED_FIELDS: [Eip712StringPreimageFieldEnrollment; 1] =
             [Eip712StringPreimageFieldEnrollment {
-                path: "meta.orderId",
+                path: "meta.contents",
                 ordinal: 0,
             }];
-        let nested_sig = "Envelope(Meta meta)Meta(string orderId)";
+        let nested_sig = "Envelope(Meta meta)Meta(string contents)";
         let nested_enrollment = Eip712StringPreimageEnrollment {
             canonical_signature: nested_sig,
             type_hash: keccak256(nested_sig.as_bytes()),
@@ -13314,7 +13224,7 @@ mod tests {
         assert!(validate_eip712_string_preimage_format_source(
             nested_sig,
             &fmt_from_fields(
-                r#"[{"path":"meta.orderId","label":"Order ID","format":"raw","visible":"always"}]"#
+                r#"[{"path":"meta.contents","label":"Contents","format":"raw","visible":"always"}]"#
             ),
             &parse_format_key(nested_sig).unwrap(),
             &nested_enrollment,
@@ -13326,26 +13236,20 @@ mod tests {
     #[test]
     fn neighbouring_unenrolled_eip712_strings_remain_opaque() {
         let mut ctx = test_ctx();
-        ctx.descriptor_hash = LENS_HUB_DESCRIPTOR_HASH;
+        ctx.descriptor_hash = SYNTHETIC_EIP712_STRING_DESCRIPTOR_HASH;
         let capabilities = Erc20Capabilities::default();
-        let deployment = InterpolationDeployment {
-            chain_id: 137,
-            contract: LENS_HUB_POLYGON,
-            erc20_capabilities: &capabilities,
-        };
+        let deployment = synthetic_eip712_string_deployment(&capabilities);
         let error = {
             let fmt = fmt_from_fields(
                 r#"[
-                    {"path":"profileId","label":"Profile","format":"raw"},
-                    {"path":"metadataURI","label":"Metadata URI","format":"raw"},
-                    {"path":"nonce","label":"Nonce","format":"raw"},
-                    {"path":"deadline","label":"Deadline","format":"raw"}
+                    {"path":"contents","label":"Contents","format":"raw"},
+                    {"path":"nonce","label":"Nonce","format":"raw"}
                 ]"#,
             );
             let mut pool = Pool::new();
             let mut out = Vec::new();
             compile_one_format(
-                "SetProfileMetadataURI(uint256 profileId,string metadataURI,uint256 nonce,uint256 deadline)",
+                "Update(string contents,uint256 nonce)",
                 &fmt,
                 CTX_EIP712,
                 &mut ctx,
@@ -13358,7 +13262,7 @@ mod tests {
         };
         assert!(
             error.contains("opaque hash word"),
-            "unenrolled Lens string must preserve the legacy refusal: {error}"
+            "unenrolled synthetic string must preserve the refusal: {error}"
         );
     }
 
@@ -17047,140 +16951,55 @@ mod tests {
     }
 
     #[test]
-    fn eip712_string_enrollment_hashes_match_exact_registry_sources() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("workspace root")
-            .to_path_buf();
-        for (relative, expected) in [
-            (
-                "secure/data/erc7730-registry/registry/flyingtulip/eip712-SpotOrderCancel.json",
-                FLYING_TULIP_SPOT_CANCEL_DESCRIPTOR_HASH,
-            ),
-            (
-                "secure/data/erc7730-registry/registry/lens/eip712-lens-lenshub.json",
-                LENS_HUB_DESCRIPTOR_HASH,
-            ),
-            (
-                "secure/data/erc7730-registry/registry/rarible/eip712-rarible-erc-721.json",
-                RARIBLE_ERC721_DESCRIPTOR_HASH,
-            ),
-            (
-                "secure/data/erc7730-registry/registry/rarible/eip712-rarible-erc-1155.json",
-                RARIBLE_ERC1155_DESCRIPTOR_HASH,
-            ),
-        ] {
-            let json = load_resolved_descriptor_json(&root.join(relative), None)
-                .unwrap_or_else(|error| panic!("load {relative}: {error}"));
-            assert_eq!(
-                sha256_of(&jcs_canonicalize(&json).expect("JCS descriptor")),
-                expected,
-                "string-preimage authority must stay bound to exact {relative} bytes"
-            );
-        }
+    fn production_eip712_string_enrollment_table_is_empty() {
+        assert!(
+            EIP712_STRING_PREIMAGE_ENROLLMENTS.is_empty(),
+            "production string-preimage authority requires a new evidence-backed admission"
+        );
+
+        let capabilities = Erc20Capabilities::default();
+        let deployment = synthetic_eip712_string_deployment(&capabilities);
+        assert!(eip712_string_preimage_enrollment_for(
+            SYNTHETIC_EIP712_STRING_DESCRIPTOR_HASH,
+            Some(&deployment),
+            SYNTHETIC_EIP712_STRING_SIGNATURE,
+            keccak256(SYNTHETIC_EIP712_STRING_SIGNATURE.as_bytes()),
+        )
+        .is_none());
     }
 
     #[test]
-    fn production_eip712_string_enrollments_emit_only_exact_marked_words() {
-        fn assert_marked_format(
-            entry: &Emitted,
-            type_hash: [u8; 32],
-            expected_word_ordinals: &[u16],
-        ) {
-            let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("device accepts emitted IR");
-            let format = ir
-                .format_iter()
-                .map(|format| format.expect("canonical format"))
-                .find(|format| format.type_hash == type_hash)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "missing enrolled typehash 0x{} for chain {} contract 0x{}",
-                        hex::encode(type_hash),
-                        entry.chain_id,
-                        hex::encode(entry.contract)
-                    )
-                });
-            assert_eq!(
-                usize::from(format.string_preimage_count),
-                expected_word_ordinals.len()
-            );
-
-            let mut marked = Vec::new();
-            for field in format.fields() {
-                let field = field.expect("canonical field");
-                let params = pqsigner_erc7730::render::params::parse(&ir, field.param_off)
-                    .expect("canonical params");
-                let Some(evidence_ordinal) = params.eip712_string_preimage_ordinal else {
-                    continue;
-                };
-                assert_eq!(
-                    params.terminal_kind,
-                    Some(TerminalKind::Eip712StringHashWord)
-                );
-                let path = ir.path_bytes(field.path_off).expect("canonical path");
-                assert_eq!(path.len(), 4, "preimage marker must stay top-level");
-                assert_eq!(path[0], PATHOP_ROOT_STRUCT);
-                assert_eq!(path[1], PATHOP_FIELD_IDX);
-                assert!(!path.contains(&PATHOP_FOLLOW_OFFSET));
-                marked.push((evidence_ordinal, u16::from_be_bytes([path[2], path[3]])));
-            }
-            assert_eq!(
-                marked,
-                expected_word_ordinals
-                    .iter()
-                    .enumerate()
-                    .map(|(evidence_ordinal, word_ordinal)| {
-                        (evidence_ordinal as u8, *word_ordinal)
-                    })
-                    .collect::<Vec<_>>()
-            );
-        }
-
+    fn production_catalogue_emits_no_eip712_string_preimage_authority() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("workspace root")
             .to_path_buf();
-        let cases: [(&str, usize, &[([u8; 32], &[u16])]); 4] = [
-            (
-                "secure/data/erc7730-registry/registry/flyingtulip/eip712-SpotOrderCancel.json",
-                2,
-                &[
-                    (CANCEL_ORDER_TYPE_HASH, &[0]),
-                    (TPSL_GROUP_CANCEL_TYPE_HASH, &[1, 2]),
-                ],
-            ),
-            (
-                "secure/data/erc7730-registry/registry/lens/eip712-lens-lenshub.json",
-                1,
-                &[(LENS_QUOTE_TYPE_HASH, &[1])],
-            ),
-            (
-                "secure/data/erc7730-registry/registry/rarible/eip712-rarible-erc-721.json",
-                1,
-                &[(RARIBLE_MINT721_TYPE_HASH, &[1])],
-            ),
-            (
-                "secure/data/erc7730-registry/registry/rarible/eip712-rarible-erc-1155.json",
-                1,
-                &[(RARIBLE_MINT1155_TYPE_HASH, &[2])],
-            ),
-        ];
-        for (relative, deployment_count, formats) in cases {
-            let mut drops = Vec::new();
-            let entries = compile_descriptor(
-                &root.join(relative),
-                &Policy::default(),
-                None,
-                true,
-                &mut drops,
-                &Erc20Capabilities::default(),
-                None,
-            )
-            .unwrap_or_else(|error| panic!("compile {relative}: {error}"));
-            assert_eq!(entries.len(), deployment_count, "{relative}");
-            for entry in &entries {
-                for (type_hash, word_ordinals) in formats {
-                    assert_marked_format(entry, *type_hash, word_ordinals);
+        let registry_parent = root.join("secure/data/erc7730-registry");
+        let registry_root = registry_parent.join("registry");
+        let policy = root.join("secure/data/erc7730/policy.toml");
+        let (catalogue, _) = build_db_tolerant(&registry_root, &policy, Some(&registry_parent))
+            .expect("build production catalogue");
+
+        for entry in &catalogue.entries {
+            let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("device accepts emitted IR");
+            for format in ir.format_iter() {
+                let format = format.expect("canonical production format");
+                assert_eq!(
+                    format.string_preimage_count,
+                    0,
+                    "stale string-preimage header authority in {}",
+                    entry.source.display()
+                );
+                for field in format.fields() {
+                    let field = field.expect("canonical production field");
+                    let params = pqsigner_erc7730::render::params::parse(&ir, field.param_off)
+                        .expect("canonical production params");
+                    assert_eq!(
+                        params.eip712_string_preimage_ordinal,
+                        None,
+                        "stale string-preimage field authority in {}",
+                        entry.source.display()
+                    );
                 }
             }
         }

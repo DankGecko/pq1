@@ -4369,63 +4369,28 @@ fn registry_scalar_interpolation_enrollment_is_explicit_and_bounded() {
 }
 
 #[test]
-fn eip712_string_preimages_admit_only_the_five_exact_formats() {
-    #[derive(Clone, Copy)]
-    struct EnrolledStringFormat {
-        source: &'static str,
-        signature: &'static str,
-        deployments: &'static [(u64, &'static str)],
-        signed_word_ordinals: &'static [u16],
-    }
-
-    const FLYING_TULIP_DEPLOYMENTS: &[(u64, &str)] = &[
-        (1, "f9f3ddf2e96cabef94e2634c326dc6dde99360f8"),
-        (146, "109ae72778a0260571b9767477204f1ce41fbdff"),
-    ];
-    const LENS_DEPLOYMENT: &[(u64, &str)] =
-        &[(137, "db46d1dc155634fbc732f92e853b10b288ad5a1d")];
-    const RARIBLE_721_DEPLOYMENT: &[(u64, &str)] =
-        &[(1, "c9154424b823b10579895ccbe442d41b9abd96ed")];
-    const RARIBLE_1155_DEPLOYMENT: &[(u64, &str)] =
-        &[(1, "b66a603f4cfe17e3d27b87a8bfcad319856518b8")];
-
-    let enrolled = [
-        EnrolledStringFormat {
-            source: "flyingtulip/eip712-SpotOrderCancel.json",
-            signature: "CancelOrder(string orderId)",
-            deployments: FLYING_TULIP_DEPLOYMENTS,
-            signed_word_ordinals: &[0],
-        },
-        EnrolledStringFormat {
-            source: "flyingtulip/eip712-SpotOrderCancel.json",
-            signature:
-                "TpslGroupCancel(address user,string positionId,string tpslGroupId,uint256 deadline)",
-            deployments: FLYING_TULIP_DEPLOYMENTS,
-            signed_word_ordinals: &[1, 2],
-        },
-        EnrolledStringFormat {
-            source: "lens/eip712-lens-lenshub.json",
-            signature:
-                "Quote(uint256 profileId,string contentURI,uint256 pointedProfileId,uint256 pointedPubId,uint256 nonce,uint256 deadline)",
-            deployments: LENS_DEPLOYMENT,
-            signed_word_ordinals: &[1],
-        },
-        EnrolledStringFormat {
-            source: "rarible/eip712-rarible-erc-721.json",
-            signature:
-                "Mint721(uint256 tokenId,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)",
-            deployments: RARIBLE_721_DEPLOYMENT,
-            signed_word_ordinals: &[1],
-        },
-        EnrolledStringFormat {
-            source: "rarible/eip712-rarible-erc-1155.json",
-            signature:
-                "Mint1155(uint256 tokenId,uint256 supply,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)",
-            deployments: RARIBLE_1155_DEPLOYMENT,
-            signed_word_ordinals: &[2],
-        },
-    ];
+fn production_catalogue_has_no_eip712_string_preimage_authority() {
     let refused = [
+        (
+            "flyingtulip/eip712-SpotOrderCancel.json",
+            "CancelOrder(string orderId)",
+        ),
+        (
+            "flyingtulip/eip712-SpotOrderCancel.json",
+            "TpslGroupCancel(address user,string positionId,string tpslGroupId,uint256 deadline)",
+        ),
+        (
+            "lens/eip712-lens-lenshub.json",
+            "Quote(uint256 profileId,string contentURI,uint256 pointedProfileId,uint256 pointedPubId,uint256 nonce,uint256 deadline)",
+        ),
+        (
+            "rarible/eip712-rarible-erc-721.json",
+            "Mint721(uint256 tokenId,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)",
+        ),
+        (
+            "rarible/eip712-rarible-erc-1155.json",
+            "Mint1155(uint256 tokenId,uint256 supply,string tokenURI,Part[] creators,Part[] royalties)Part(address account,uint96 value)",
+        ),
         (
             "hyperliquid/eip712-withdraw.json",
             "HyperliquidTransaction:Withdraw(string hyperliquidChain,string destination,string amount,uint64 time)",
@@ -4473,10 +4438,9 @@ fn eip712_string_preimages_admit_only_the_five_exact_formats() {
             if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
                 continue;
             }
-            let descriptor: serde_json::Value = serde_json::from_slice(
-                &std::fs::read(&path).expect("read registry descriptor"),
-            )
-            .expect("parse registry descriptor");
+            let descriptor: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).expect("read registry descriptor"))
+                    .expect("parse registry descriptor");
             if !descriptor["context"]["eip712"].is_object() {
                 continue;
             }
@@ -4494,139 +4458,44 @@ fn eip712_string_preimages_admit_only_the_five_exact_formats() {
         }
     }
 
-    fn parse_address(address: &str) -> [u8; 20] {
-        hex::decode(address)
-            .expect("hex enrolled address")
-            .try_into()
-            .expect("enrolled address width")
-    }
-
-    fn assert_exact_string_markers(
-        ir: &Erc7730Ir<'_>,
-        format: FormatHeader<'_>,
-        signed_word_ordinals: &[u16],
-    ) {
-        assert_eq!(
-            usize::from(format.string_preimage_count),
-            signed_word_ordinals.len()
-        );
-        let mut marked = Vec::new();
+    fn assert_no_string_preimage_markers(ir: &Erc7730Ir<'_>, format: FormatHeader<'_>) {
+        assert_eq!(format.string_preimage_count, 0);
         for field in format.fields() {
-            let field = field.expect("enrolled string field parses");
-            let params = parse_params(ir, field.param_off).expect("enrolled string params parse");
-            let Some(evidence_ordinal) = params.eip712_string_preimage_ordinal else {
-                continue;
-            };
-            assert_eq!(FormatOp::try_from(field.format_op), Ok(FormatOp::Raw));
+            let field = field.expect("production field parses");
+            let params = parse_params(ir, field.param_off).expect("production params parse");
             assert_eq!(
-                params.terminal_kind,
-                Some(TerminalKind::Eip712StringHashWord)
+                params.eip712_string_preimage_ordinal, None,
+                "production field retained stale string-preimage authority"
             );
-            assert_eq!(params.visibility, Visibility::Always);
-            let path = ir
-                .path_bytes(field.path_off)
-                .expect("enrolled string path parses");
-            assert_eq!(
-                path.len(),
-                4,
-                "string preimage must bind one direct EIP-712 word"
-            );
-            assert_eq!(path[0], PathOp::RootStructured as u8);
-            assert_eq!(path[1], PathOp::FieldIdx as u8);
-            assert!(!path.contains(&(PathOp::FollowOffset as u8)));
-            marked.push((
-                evidence_ordinal,
-                u16::from_be_bytes([path[2], path[3]]),
-            ));
         }
-        let expected: Vec<_> = signed_word_ordinals
-            .iter()
-            .enumerate()
-            .map(|(evidence_ordinal, signed_word_ordinal)| {
-                (evidence_ordinal as u8, *signed_word_ordinal)
-            })
-            .collect();
-        assert_eq!(marked, expected);
     }
 
     let root = workspace_root();
     let registry_root = root.join("secure/data/erc7730-registry/registry");
     let policy = root.join("secure/data/erc7730/policy.toml");
     let registry_parent = root.join("secure/data/erc7730-registry");
-    let (catalogue, skips) =
-        build_db_tolerant(&registry_root, &policy, Some(&registry_parent))
-            .expect("build registry corpus");
+    let (catalogue, skips) = build_db_tolerant(&registry_root, &policy, Some(&registry_parent))
+        .expect("build registry corpus");
 
     // Pin the complete source inventory so a newly vendored EIP-712 string
-    // cannot silently escape both the enrolled and explicitly refused sets.
-    let expected_inventory: BTreeSet<_> = enrolled
+    // cannot silently escape the explicit refusal set.
+    let expected_inventory: BTreeSet<_> = refused
         .iter()
-        .map(|format| (format.source.to_string(), format.signature.to_string()))
-        .chain(
-            refused
-                .iter()
-                .map(|(source, signature)| (source.to_string(), signature.to_string())),
-        )
+        .map(|(source, signature)| (source.to_string(), signature.to_string()))
         .collect();
     let mut declared_inventory = BTreeSet::new();
-    collect_declared_eip712_strings(
-        &registry_root,
-        &registry_root,
-        &mut declared_inventory,
-    );
+    collect_declared_eip712_strings(&registry_root, &registry_root, &mut declared_inventory);
     assert_eq!(
         declared_inventory, expected_inventory,
-        "every vendored EIP-712 string format must be exactly enrolled or explicitly refused"
+        "every vendored EIP-712 string format must be explicitly refused"
     );
 
-    let enrolled_identities: BTreeSet<_> = enrolled
-        .iter()
-        .map(|format| (format.source, keccak256(format.signature.as_bytes())))
-        .collect();
-    let mut expected_instances = BTreeSet::new();
-    for format in &enrolled {
-        let type_hash = keccak256(format.signature.as_bytes());
-        for &(chain_id, address) in format.deployments {
-            expected_instances.insert((
-                format.source.to_string(),
-                chain_id,
-                parse_address(address),
-                type_hash,
-            ));
-        }
-    }
-
-    let mut actual_instances = BTreeSet::new();
     for entry in &catalogue.entries {
-        let source = entry
-            .source
-            .strip_prefix(&registry_root)
-            .expect("emitted descriptor remains below registry root")
-            .to_string_lossy()
-            .replace('\\', "/");
-        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("enrolled EIP-712 leaf parses");
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("production leaf parses");
         for format in ir.format_iter().map(Result::unwrap) {
-            if !enrolled_identities.contains(&(source.as_str(), format.type_hash)) {
-                continue;
-            }
-            let enrollment = enrolled
-                .iter()
-                .find(|candidate| {
-                    candidate.source == source
-                        && keccak256(candidate.signature.as_bytes()) == format.type_hash
-                })
-                .expect("emitted string format has exact enrollment");
-            assert_exact_string_markers(&ir, format, enrollment.signed_word_ordinals);
-            actual_instances.insert((
-                source.clone(),
-                entry.chain_id,
-                entry.contract,
-                format.type_hash,
-            ));
+            assert_no_string_preimage_markers(&ir, format);
         }
     }
-    assert_eq!(actual_instances, expected_instances);
-    assert_eq!(actual_instances.len(), 7, "five formats span seven exact deployments");
 
     for (source, signature) in refused {
         let type_hash = keccak256(signature.as_bytes());
@@ -4634,9 +4503,8 @@ fn eip712_string_preimages_admit_only_the_five_exact_formats() {
             !catalogue.entries.iter().any(|entry| {
                 entry.source.ends_with(source)
                     && Erc7730Ir::parse(&entry.ir_bytes).is_ok_and(|ir| {
-                        ir.format_iter().any(|format| {
-                            format.is_ok_and(|format| format.type_hash == type_hash)
-                        })
+                        ir.format_iter()
+                            .any(|format| format.is_ok_and(|format| format.type_hash == type_hash))
                     })
             }),
             "unenrolled EIP-712 string format became clear-signable: {source} :: {signature}"
