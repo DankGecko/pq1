@@ -411,6 +411,14 @@ fn threshold_curations_admit_only_operand_complete_routes_and_preserve_refusals(
         1,
         "sendTbtc must compile exactly one destination enum"
     );
+    assert_eq!(
+        gateway_ir
+            .pool
+            .get(enum_offsets[0] as usize)
+            .copied(),
+        Some(64),
+        "compiled Wormhole enum entry-count byte must bind all 64 pinned chains"
+    );
     for (chain_id, label) in &wormhole_chains {
         let mut word = [0u8; 32];
         word[24..].copy_from_slice(&chain_id.to_be_bytes());
