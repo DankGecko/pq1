@@ -1857,6 +1857,6 @@ mod tests {
             .expect("checked-in curated corpus");
         assert_eq!(receipt.file_count, 387);
         assert_eq!(receipt.byte_count, 842_284);
-        assert_eq!(overlay.replacement_count(), 50);
+        assert_eq!(overlay.replacement_count(), 57);
     }
 }

@@ -1,0 +1,464 @@
+{
+  "released": true,
+  "contractName": "CompatibilityFallbackHandler",
+  "version": "1.5.0",
+  "deployments": {
+    "canonical": {
+      "address": "0x3EfCBb83A4A7AfcB4F68D501E2c2203a38be77f4",
+      "codeHash": "0x3c6a85bcf7b563daa624b884b4e9a1b9fa5371edde7be945d998071a48f28bbc"
+    }
+  },
+  "networkAddresses": {
+    "1": "canonical",
+    "31": "canonical",
+    "63": "canonical",
+    "81": "canonical",
+    "338": "canonical",
+    "545": "canonical",
+    "677": "canonical",
+    "756": "canonical",
+    "757": "canonical",
+    "919": "canonical",
+    "1001": "canonical",
+    "1112": "canonical",
+    "1285": "canonical",
+    "1287": "canonical",
+    "1329": "canonical",
+    "1480": "canonical",
+    "1672": "canonical",
+    "1874": "canonical",
+    "1924": "canonical",
+    "1995": "canonical",
+    "2201": "canonical",
+    "2221": "canonical",
+    "2222": "canonical",
+    "2391": "canonical",
+    "4153": "canonical",
+    "4202": "canonical",
+    "4217": "canonical",
+    "4326": "canonical",
+    "4663": "canonical",
+    "5003": "canonical",
+    "5042": "canonical",
+    "5115": "canonical",
+    "5424": "canonical",
+    "5887": "canonical",
+    "6497": "canonical",
+    "7001": "canonical",
+    "7979": "canonical",
+    "8150": "canonical",
+    "8217": "canonical",
+    "8453": "canonical",
+    "9302": "canonical",
+    "9746": "canonical",
+    "10081": "canonical",
+    "11011": "canonical",
+    "13441": "canonical",
+    "13473": "canonical",
+    "13505": "canonical",
+    "14800": "canonical",
+    "20994": "canonical",
+    "23294": "canonical",
+    "23295": "canonical",
+    "25363": "canonical",
+    "28882": "canonical",
+    "32380": "canonical",
+    "36900": "canonical",
+    "38833": "canonical",
+    "42431": "canonical",
+    "46630": "canonical",
+    "48898": "canonical",
+    "49088": "canonical",
+    "59141": "canonical",
+    "80069": "canonical",
+    "88811": "canonical",
+    "88817": "canonical",
+    "102030": "canonical",
+    "127823": "canonical",
+    "167013": "canonical",
+    "181228": "canonical",
+    "190415": "canonical",
+    "222888": "canonical",
+    "369369": "canonical",
+    "560048": "canonical",
+    "613419": "canonical",
+    "656476": "canonical",
+    "747474": "canonical",
+    "763373": "canonical",
+    "808813": "canonical",
+    "843843": "canonical",
+    "1440000": "canonical",
+    "1449000": "canonical",
+    "6281971": "canonical",
+    "11142220": "canonical",
+    "11155111": "canonical",
+    "11155931": "canonical",
+    "999999999": "canonical",
+    "1666600000": "canonical",
+    "1666700000": "canonical",
+    "37714555429": "canonical"
+  },
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "contract ISafe",
+          "name": "safe",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes",
+          "name": "message",
+          "type": "bytes"
+        }
+      ],
+      "name": "encodeMessageDataForSafe",
+      "outputs": [
+        {
+          "internalType": "bytes",
+          "name": "",
+          "type": "bytes"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "to",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "value",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bytes",
+          "name": "data",
+          "type": "bytes"
+        },
+        {
+          "internalType": "enum Enum.Operation",
+          "name": "operation",
+          "type": "uint8"
+        },
+        {
+          "internalType": "uint256",
+          "name": "safeTxGas",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "baseGas",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "gasPrice",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "gasToken",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "refundReceiver",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "nonce",
+          "type": "uint256"
+        }
+      ],
+      "name": "encodeTransactionData",
+      "outputs": [
+        {
+          "internalType": "bytes",
+          "name": "",
+          "type": "bytes"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes",
+          "name": "message",
+          "type": "bytes"
+        }
+      ],
+      "name": "getMessageHash",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "contract ISafe",
+          "name": "safe",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes",
+          "name": "message",
+          "type": "bytes"
+        }
+      ],
+      "name": "getMessageHashForSafe",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getModules",
+      "outputs": [
+        {
+          "internalType": "address[]",
+          "name": "",
+          "type": "address[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "_dataHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes",
+          "name": "_signature",
+          "type": "bytes"
+        }
+      ],
+      "name": "isValidSignature",
+      "outputs": [
+        {
+          "internalType": "bytes4",
+          "name": "",
+          "type": "bytes4"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256[]",
+          "name": "",
+          "type": "uint256[]"
+        },
+        {
+          "internalType": "uint256[]",
+          "name": "",
+          "type": "uint256[]"
+        },
+        {
+          "internalType": "bytes",
+          "name": "",
+          "type": "bytes"
+        }
+      ],
+      "name": "onERC1155BatchReceived",
+      "outputs": [
+        {
+          "internalType": "bytes4",
+          "name": "",
+          "type": "bytes4"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bytes",
+          "name": "",
+          "type": "bytes"
+        }
+      ],
+      "name": "onERC1155Received",
+      "outputs": [
+        {
+          "internalType": "bytes4",
+          "name": "",
+          "type": "bytes4"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bytes",
+          "name": "",
+          "type": "bytes"
+        }
+      ],
+      "name": "onERC721Received",
+      "outputs": [
+        {
+          "internalType": "bytes4",
+          "name": "",
+          "type": "bytes4"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "targetContract",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes",
+          "name": "calldataPayload",
+          "type": "bytes"
+        }
+      ],
+      "name": "simulate",
+      "outputs": [
+        {
+          "internalType": "bytes",
+          "name": "response",
+          "type": "bytes"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes4",
+          "name": "interfaceId",
+          "type": "bytes4"
+        }
+      ],
+      "name": "supportsInterface",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bytes",
+          "name": "",
+          "type": "bytes"
+        },
+        {
+          "internalType": "bytes",
+          "name": "",
+          "type": "bytes"
+        }
+      ],
+      "name": "tokensReceived",
+      "outputs": [],
+      "stateMutability": "pure",
+      "type": "function"
+    }
+  ]
+}

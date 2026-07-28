@@ -7,19 +7,19 @@
     "upstream_tree": "8da8dba78c3e581bbd06c15cc681d07e570dcfb1",
     "curated_corpus_sha256": "1ab96d95b9bcd77dc7cd8a249c975befe8e9dc434738af3b844ced4ab89ba98a",
     "merkle_root": "3f4762a7bbbfab386de9c8b8bd0815b0ca4213b5133d9d3bbe8cc281790a8473",
-    "accepted_leaf_count": 400,
+    "accepted_leaf_count": 399,
     "accepted_source_descriptor_count": 240,
     "compiled_blob_bytes": 338284,
     "known_call_count": 4580,
     "category_source_counts": {
-      "pinned-evidence": 38,
+      "pinned-evidence": 45,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 69
+      "lower-priority-residual": 62
     },
     "category_leaf_counts": {
-      "pinned-evidence": 134,
+      "pinned-evidence": 156,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 133
+      "lower-priority-residual": 110
     }
   },
   "classification_contract": {
@@ -171,6 +171,12 @@
       "reason": "Pins the same three operand-complete inherited routes across the exact SafeL2 1.3.0, 1.4.1, and 1.5.0 singleton deployments named by the descriptors.",
       "scope": "Only addOwnerWithThreshold, changeThreshold, and approveHash in the three SafeL2 singleton descriptors. Proxy instances, migrations, setup, execTransaction, owner removal/swap, modules, guards, fallback authority, and L2 event-derived meaning are not implied.",
       "paths": ["tests/erc7730-semantic-evidence/safe-l2/manifest.json"]
+    },
+    "safe-migrations": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the two operand-complete Safe singleton migration routes and the L2 setup route across the Safe 1.4.1 and 1.5.0 migration/setup deployments.",
+      "scope": "Only migrateSingleton, migrateL2Singleton, and setupToL2 at the exact deployments enumerated by the package. Both migration-with-fallback-handler routes remain structural refusal-only because the fallback authority is not displayed; Safe core, SafeL2, and every other route are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/safe-migrations/manifest.json"]
     },
     "stakewise-claim-exited-assets": {
       "classification": "pinned-evidence",
@@ -1448,26 +1454,26 @@
   {
     "source": "safe/calldata-SafeMigration-1.4.1.json",
     "accepted_leaf_count": 7,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-migrations"
   },
   {
     "source": "safe/calldata-SafeMigration-1.5.0.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-migrations"
   },
   {
     "source": "safe/calldata-SafeToL2Setup-1.4.1.json",
     "accepted_leaf_count": 7,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-migrations"
   },
   {
     "source": "safe/calldata-SafeToL2Setup-1.5.0.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-migrations"
   },
   {
     "source": "sei/calldata-sei-distribution.json",

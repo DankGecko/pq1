@@ -1,0 +1,280 @@
+{
+  "schema_version": 1,
+  "scope": "Safe migration and Safe-to-L2 setup calldata semantics for official Safe 1.4.1 and 1.5.0 deployments",
+  "captured_at_utc": "2026-07-27T17:18:13Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/497",
+  "boundary": "Historical official-source, deployment-manifest, ABI, fixed-block runtime-identity, and immutable-getter evidence for the deployments already named by the four descriptors. It does not prove a Safe proxy instance, its current nonce or singleton, a delegatecall wrapper, transaction success, live code at a user-supplied L2 singleton, future deployments, future code, fallback authority, blind signing, hardware, production, or shipment.",
+  "fixed_block": {
+    "chain_id": 1,
+    "number": 25624960,
+    "number_hex": "0x1870180",
+    "hash": "0x5ceb4e40574ba2b93faf07aaa23587804ac417d25aa6a57174c318438c22c64d",
+    "parent_hash": "0x8769fdf35dd709cc52d7ab7598fb04365cc540a8f63e2d4d00118a35a2616df8",
+    "state_root": "0x6e43c0236e18ae6ed7204d7ab91b21b6f5735f73ba531acad04594fdf93bc349",
+    "timestamp": 1785165131,
+    "timestamp_hex": "0x6a67754b",
+    "timestamp_utc": "2026-07-27T15:12:11Z",
+    "providers": [
+      "https://eth.drpc.org",
+      "https://rpc.mevblocker.io"
+    ]
+  },
+  "upstream_sources": [
+    {
+      "repository": "https://github.com/safe-fndn/safe-smart-account",
+      "tag": "v1.4.1-2",
+      "commit": "aa14911666deb13cdbbe37c37253a55918525437",
+      "files": [
+        "source/v1.4.1-2/SafeMigration.sol",
+        "source/v1.4.1-2/SafeToL2Setup.sol"
+      ]
+    },
+    {
+      "repository": "https://github.com/safe-fndn/safe-smart-account",
+      "tag": "v1.5.0",
+      "commit": "dc437e8fba8b4805d76bcbd1c668c9fd3d1e83be",
+      "files": [
+        "source/v1.5.0/SafeMigration.sol",
+        "source/v1.5.0/SafeToL2Setup.sol"
+      ]
+    }
+  ],
+  "safe_deployments": {
+    "repository": "https://github.com/safe-global/safe-deployments",
+    "commit": "06021f40739266f21a9ec083cf19827ab48b5dc7",
+    "assets": [
+      "deployments/v1.4.1/compatibility_fallback_handler.json",
+      "deployments/v1.4.1/safe.json",
+      "deployments/v1.4.1/safe_l2.json",
+      "deployments/v1.4.1/safe_migration.json",
+      "deployments/v1.4.1/safe_to_l2_setup.json",
+      "deployments/v1.5.0/compatibility_fallback_handler.json",
+      "deployments/v1.5.0/safe.json",
+      "deployments/v1.5.0/safe_l2.json",
+      "deployments/v1.5.0/safe_migration.json",
+      "deployments/v1.5.0/safe_to_l2_setup.json"
+    ]
+  },
+  "descriptor_inputs": [
+    {
+      "path": "secure/data/erc7730-registry/registry/safe/common-SafeMigration.json",
+      "sha256": "ac83dd4931b1f0d67058f0e25519613d1179ed044179ebc6abc7b649dc4fc4d7"
+    },
+    {
+      "path": "secure/data/erc7730-registry/registry/safe/common-SafeToL2Setup.json",
+      "sha256": "45ef74c60ace880372968e7e72c7132b03126e3ced6629b2d59f1f61626e2ab4"
+    },
+    {
+      "path": "secure/data/erc7730-registry/registry/safe/calldata-SafeMigration-1.4.1.json",
+      "sha256": "a6f0ad4be6d6b7e381be7d67be90dad836b76056c448e3fbb98d8f31753cb922"
+    },
+    {
+      "path": "secure/data/erc7730-registry/registry/safe/calldata-SafeMigration-1.5.0.json",
+      "sha256": "b70f527c35705a25a3492055a5280fa60c50c16d72f7f66d8efc134012eead1e"
+    },
+    {
+      "path": "secure/data/erc7730-registry/registry/safe/calldata-SafeToL2Setup-1.4.1.json",
+      "sha256": "6af611347e2e7aa77ad49ca98eb8a3b1b6707c4eb3896db50bff6f63a847ad14"
+    },
+    {
+      "path": "secure/data/erc7730-registry/registry/safe/calldata-SafeToL2Setup-1.5.0.json",
+      "sha256": "8f53ed30c53c42b9b7d087486ce1f54c7cef70f4d0810f4e5a4292a181d6381b"
+    }
+  ],
+  "versions": [
+    {
+      "version": "1.4.1",
+      "migration_contract": "0x526643F69b81B008F46d95CD5ced5eC0edFFDaC6",
+      "setup_contract": "0xBD89A1CE4DDe368FFAB0eC35506eEcE0b1fFdc54",
+      "safe_singleton": "0x41675C099F32341bf84BFc5382aF534df5C7461a",
+      "safe_l2_singleton": "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762",
+      "fallback_handler": "0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99"
+    },
+    {
+      "version": "1.5.0",
+      "migration_contract": "0x6439e7ABD8Bb915A5263094784C5CF561c4172AC",
+      "setup_contract": "0x900C7589200010D6C6eCaaE5B06EBe653bc2D82a",
+      "safe_singleton": "0xFf51A5898e281Db6DfC7855790607438dF2ca44b",
+      "safe_l2_singleton": "0xEdd160fEBBD92E350D4D398fb636302fccd67C7e",
+      "fallback_handler": "0x3EfCBb83A4A7AfcB4F68D501E2c2203a38be77f4"
+    }
+  ],
+  "admitted_routes": [
+    {
+      "canonical_signature": "migrateSingleton()",
+      "successful_effect": "Via delegatecall, replaces slot-zero singleton with the exact versioned SAFE_SINGLETON immutable."
+    },
+    {
+      "canonical_signature": "migrateL2Singleton()",
+      "successful_effect": "Via delegatecall, replaces slot-zero singleton with the exact versioned SAFE_L2_SINGLETON immutable."
+    },
+    {
+      "canonical_signature": "setupToL2(address)",
+      "successful_effect": "After delegatecall, nonce-zero, and code checks, replaces slot-zero singleton with the complete signed l2Singleton only when chain ID is not 1."
+    }
+  ],
+  "refused_routes": [
+    {
+      "canonical_signature": "migrateWithFallbackHandler()",
+      "reason": "Also installs an immutable fallback handler whose exact identity is absent from the upstream display."
+    },
+    {
+      "canonical_signature": "migrateL2WithFallbackHandler()",
+      "reason": "Also installs an immutable fallback handler whose exact identity is absent from the upstream display."
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "5d658ab1f211b8224eaad7da84cecbb80bf023d7e8e30d55a70f7b657bad93c7"
+    },
+    {
+      "path": "collect.sh",
+      "sha256": "326b4f61cdcdf6624558574dbb7686ff90af2a5bdeb43867b3023bd30157d3f5"
+    },
+    {
+      "path": "deployments/v1.4.1/compatibility_fallback_handler.json",
+      "sha256": "7c1df2313516343723c7208e6396bfd6ba88d31ce634124b10ff803fb81239a4"
+    },
+    {
+      "path": "deployments/v1.4.1/safe.json",
+      "sha256": "6f752d2056d33d2f4df2036acdf4ceff3ede3a8f5b2a1b23f014c15d369887dd"
+    },
+    {
+      "path": "deployments/v1.4.1/safe_l2.json",
+      "sha256": "4a6973cefcd3db1043c9f3bb0eff54d89dc3b2971ba2cef01bf59ef2ea31199d"
+    },
+    {
+      "path": "deployments/v1.4.1/safe_migration.json",
+      "sha256": "45534358b18c64f61035da1f666b51df5459e1d9aa2a20b24f775470dab56c58"
+    },
+    {
+      "path": "deployments/v1.4.1/safe_to_l2_setup.json",
+      "sha256": "7b40c1b7ed39ae7fc7ceb7ba50a05fad2417b42d089fbba229a2eb4986b75371"
+    },
+    {
+      "path": "deployments/v1.5.0/compatibility_fallback_handler.json",
+      "sha256": "926755002c18db937e85a6b9a6aab6834c65ba9f5895dc2bc9c677ec7976d075"
+    },
+    {
+      "path": "deployments/v1.5.0/safe.json",
+      "sha256": "d66b76c342e03c2a81d283507ba565f663a1fb7b6990b97c159f51e38a993efc"
+    },
+    {
+      "path": "deployments/v1.5.0/safe_l2.json",
+      "sha256": "5657ff493e26be70db3fe1013d9b583ec2c9f14769eb95679de337d2b2d58249"
+    },
+    {
+      "path": "deployments/v1.5.0/safe_migration.json",
+      "sha256": "c103b01b0105d77a1a51314c3914b4be17b23bfd18cd0f7255d121e0dd7c1da9"
+    },
+    {
+      "path": "deployments/v1.5.0/safe_to_l2_setup.json",
+      "sha256": "e728443b63f1cda32671c7246e0d8088d5592e52699d2b0765000244e099e91c"
+    },
+    {
+      "path": "rpc/raw/request-getters-a.json",
+      "sha256": "dc173326ccd0912c3a11ef213b74cafa6da0a3564fd455754209a44da21f220d"
+    },
+    {
+      "path": "rpc/raw/request-getters-b.json",
+      "sha256": "5d14d4b8cefb37e6596859ad0b45e3a90bbbdbe5892f23b9d98615b3d3d6020c"
+    },
+    {
+      "path": "rpc/raw/request-getters-c.json",
+      "sha256": "bbcb9f3e39938267dd647772ef8ca7307462345f4076f137aaaafc6896998942"
+    },
+    {
+      "path": "rpc/raw/request-identity.json",
+      "sha256": "30b50e9c15432201f73fac1d45a52061d51fea6c8107caa595a41d8482b67d36"
+    },
+    {
+      "path": "rpc/raw/request-runtime-v1.4.1.json",
+      "sha256": "467ebeb5f513135e9ddf4202dd70264066b257d4f946d9572716a373b6d46a94"
+    },
+    {
+      "path": "rpc/raw/request-runtime-v1.5.0.json",
+      "sha256": "041503148d942ec17dbc8677ab3b9bbb92af6338bfd1a65faf548e267763b9b5"
+    },
+    {
+      "path": "rpc/raw/response-drpc-getters-a.json",
+      "sha256": "15ac9a2eef69972a667dcaeaea71a0861fa1fb1303a2ba98fafc0fe683e6c186"
+    },
+    {
+      "path": "rpc/raw/response-drpc-getters-b.json",
+      "sha256": "3800f5d0df75792a718f336d0c7271bde2965a69ab344d64d4cbc0fcee2dd487"
+    },
+    {
+      "path": "rpc/raw/response-drpc-getters-c.json",
+      "sha256": "d8b38421022b017f8f183f15929130deab0bf1c89ede89037d26ce1250472fa3"
+    },
+    {
+      "path": "rpc/raw/response-drpc-identity.json",
+      "sha256": "30155408cc7c5d47097eafd416b1ebd0dbbf340cb1bf797f0554fb399990c17c"
+    },
+    {
+      "path": "rpc/raw/response-drpc-runtime-v1.4.1.json",
+      "sha256": "c04b46a37164b7229c317575b3dae9d406bf1357975c85bb66b377dff2274bfe"
+    },
+    {
+      "path": "rpc/raw/response-drpc-runtime-v1.5.0.json",
+      "sha256": "3d9f8589931c868f60bea50eb8798dd06be4a632af222bdcc7784f75ba1fef73"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-getters-a.json",
+      "sha256": "9088aefe4ad0233503668f9ff02018d7d9f68a20a3b6a4de876fd27877364fdb"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-getters-b.json",
+      "sha256": "4712d6681ac87aeaedcc0b6824c2297d9c0ba75388109401b05873ee0ccada77"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-getters-c.json",
+      "sha256": "03521e4026825842269a55978fbd5eae9caca5a588dd34b0aac5350a957a8cec"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-identity.json",
+      "sha256": "e7c237714faa11d9901327b48eca5e5fe96a9a92f70408cce5cc1c24d889e7c2"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-runtime-v1.4.1.json",
+      "sha256": "20e97a266d5d9fe4b6177e2bcfcef2feda28544d822208193237467933ee8e07"
+    },
+    {
+      "path": "rpc/raw/response-mevblocker-runtime-v1.5.0.json",
+      "sha256": "67d471a3846eac26c7a969b48cb6dbe639fbcca88748088f324b5a271c5a88f2"
+    },
+    {
+      "path": "runtime/SafeMigration-1.4.1.ethereum.hex",
+      "sha256": "6008c29eed113d47273eb2a39401843190b87d00aa053f62b3aafd248136fa2a"
+    },
+    {
+      "path": "runtime/SafeMigration-1.5.0.ethereum.hex",
+      "sha256": "49a355c5fb5139c98b85518590e849491f782b8d8d7ac3d9aa0038a495ec3e1a"
+    },
+    {
+      "path": "runtime/SafeToL2Setup-1.4.1.ethereum.hex",
+      "sha256": "08b17e267ed49c30df0890ee209b90b96248f4e1f0cc234c6e5baf6d12ee7cd8"
+    },
+    {
+      "path": "runtime/SafeToL2Setup-1.5.0.ethereum.hex",
+      "sha256": "a9e2b3414f21a4cad900a3f4e1c9084b0279deaa9e8476b23cf8d836d7b82622"
+    },
+    {
+      "path": "source/v1.4.1-2/SafeMigration.sol",
+      "sha256": "f9fef7fded072a66aa845b66f059b49dcb5c3520abac61ceecb54d34ac307c3f"
+    },
+    {
+      "path": "source/v1.4.1-2/SafeToL2Setup.sol",
+      "sha256": "fbf383785aafef5d479378fba433cd7ba87e99c7c5d7b137eec9b4025f326225"
+    },
+    {
+      "path": "source/v1.5.0/SafeMigration.sol",
+      "sha256": "d9a15de12bc4cce04d6cf459963bebfabb35a65d3e0a7deb2e6d296b606b1edf"
+    },
+    {
+      "path": "source/v1.5.0/SafeToL2Setup.sol",
+      "sha256": "fbf383785aafef5d479378fba433cd7ba87e99c7c5d7b137eec9b4025f326225"
+    }
+  ]
+}

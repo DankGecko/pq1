@@ -620,6 +620,34 @@
       "replacement_sha256": "7b35a9aaec838b7fb4283e109eef5504caf4396cb93e922d78632309ea0f956c"
     },
     {
+      "path": "registry/safe/calldata-SafeMigration-1.4.1.json",
+      "upstream_bytes": 849,
+      "upstream_sha256": "d95ff8cba2164722492b05dda507fca3a32441517561408207a296c8b9c07988",
+      "replacement_bytes": 4331,
+      "replacement_sha256": "a6f0ad4be6d6b7e381be7d67be90dad836b76056c448e3fbb98d8f31753cb922"
+    },
+    {
+      "path": "registry/safe/calldata-SafeMigration-1.5.0.json",
+      "upstream_bytes": 423,
+      "upstream_sha256": "f4417b28f6fbd246656ce086e58ff4a7cdafbdf4641cb6ce41e5fa0e5bc83399",
+      "replacement_bytes": 2752,
+      "replacement_sha256": "b70f527c35705a25a3492055a5280fa60c50c16d72f7f66d8efc134012eead1e"
+    },
+    {
+      "path": "registry/safe/calldata-SafeToL2Setup-1.4.1.json",
+      "upstream_bytes": 849,
+      "upstream_sha256": "7fd9874afb86c826631fd7612def21cb6a5e2e7da1393fa3556f2daccc0510fc",
+      "replacement_bytes": 3532,
+      "replacement_sha256": "6af611347e2e7aa77ad49ca98eb8a3b1b6707c4eb3896db50bff6f63a847ad14"
+    },
+    {
+      "path": "registry/safe/calldata-SafeToL2Setup-1.5.0.json",
+      "upstream_bytes": 423,
+      "upstream_sha256": "86a078a726e7612747b7ce4bca9a02a89be85422873f7c80c9a9f5367e06ccf8",
+      "replacement_bytes": 2063,
+      "replacement_sha256": "8f53ed30c53c42b9b7d087486ce1f54c7cef70f4d0810f4e5a4292a181d6381b"
+    },
+    {
       "path": "registry/serenita/calldata-EthVault.json",
       "upstream_bytes": 3782,
       "upstream_sha256": "8058769e34b7bf4d9bb48ba2040a416f99a0c41b27827b57df26cc4d6cfe19b3",
