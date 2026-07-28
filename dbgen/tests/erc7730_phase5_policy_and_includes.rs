@@ -821,7 +821,7 @@ fn pqsigner_refusal_only_format_cannot_collide_across_descriptors() {
 }
 
 #[test]
-fn pqsigner_refusal_only_formats_reject_unknown_duplicate_overlap_and_typed_data() {
+fn pqsigner_refusal_only_formats_reject_unknown_duplicate_and_overlap() {
     let base: serde_json::Value = serde_json::from_str(
         r#"{
   "_pqsigner": {
@@ -870,17 +870,6 @@ fn pqsigner_refusal_only_formats_reject_unknown_duplicate_overlap_and_typed_data
         "formats": ["approve(address spender,uint256 amount)"]
     }]);
     cases.push(("overlap", overlap, "overlaps deploymentFormats"));
-
-    let mut typed_data = base;
-    typed_data["context"] = serde_json::json!({
-        "eip712": {
-            "deployments": [{
-                "chainId": 1,
-                "address": "0x0000000000000000000000000000000000000001"
-            }]
-        }
-    });
-    cases.push(("typed_data", typed_data, "contract-context only"));
 
     for (name, descriptor, expected) in cases {
         let dir = make_tempdir(name);
@@ -1018,17 +1007,6 @@ fn pqsigner_deployment_formats_rejects_every_nonrestrictive_or_ambiguous_shape()
         unknown_admission_key,
         "unknown field `note`",
     ));
-
-    let mut eip712_context = base.clone();
-    eip712_context["context"] = serde_json::json!({
-        "eip712": {
-            "deployments": [{
-                "chainId": 1,
-                "address": "0x0000000000000000000000000000000000000001"
-            }]
-        }
-    });
-    cases.push(("eip712_context", eip712_context, "contract-context only"));
 
     for (name, descriptor, expected) in cases {
         let dir = make_tempdir(name);

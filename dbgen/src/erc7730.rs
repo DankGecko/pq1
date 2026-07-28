@@ -1128,15 +1128,18 @@ struct Descriptor {
 #[serde(deny_unknown_fields)]
 struct PqsignerCuration {
     /// Exact per-deployment format allowlists. When present, only listed
-    /// deployment/format pairs may emit authenticated leaves. Unlisted source
-    /// declarations remain in the independently generated known-call set and
-    /// therefore continue to hard-refuse rather than becoming blind-signable.
+    /// deployment/format pairs may emit authenticated leaves. For contract
+    /// contexts, unlisted source declarations remain in the independently
+    /// generated known-call set and therefore continue to hard-refuse rather
+    /// than becoming blind-signable. For EIP-712, an omitted deployment/type
+    /// pair has no authenticated proof and cannot be selected for clear-signing.
     #[serde(rename = "deploymentFormats", default)]
     deployment_formats: Vec<DeploymentFormatAdmission>,
     /// Exact source formats that are intentionally retained only so their
     /// deployment/selector tuples enter the authenticated known-call refusal
-    /// set. A refusal-only format can never emit an IR format, including
-    /// through a later deployment allowlist edit.
+    /// set for contract contexts, or so their full typed-data signatures stay
+    /// explicitly quarantined for EIP-712. A refusal-only format can never emit
+    /// an IR format, including through a later deployment allowlist edit.
     #[serde(rename = "refusalOnlyFormats", default)]
     refusal_only_formats: Vec<String>,
 }
@@ -2898,11 +2901,12 @@ fn collect_contract_calls_from_json(
 
 /// Inventory every structurally declared refusal marker before compilation.
 ///
-/// `refusalOnlyFormats` is authored as a source-signature list, but the EVM
-/// and device both dispatch contract calls by four-byte selector. Keeping this
-/// catalogue-wide selector inventory prevents a colliding signature in a
-/// sibling descriptor from restoring clear-signing authority that another
-/// authenticated descriptor explicitly removed.
+/// For contract contexts, `refusalOnlyFormats` is authored as a
+/// source-signature list while the EVM and device dispatch by four-byte
+/// selector. Keeping this catalogue-wide selector inventory prevents a
+/// colliding sibling signature from restoring clear-signing authority that
+/// another authenticated descriptor explicitly removed. EIP-712 markers skip
+/// this inventory and are validated later against exact full type signatures.
 fn collect_declared_refusal_only_calls(
     json: &serde_json::Value,
     out: &mut DeclaredRefusalOnlyCalls,
@@ -2917,13 +2921,31 @@ fn collect_declared_refusal_only_calls(
         return Ok(());
     }
 
-    let deployments = json
-        .pointer("/context/contract/deployments")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| {
+    let deployments = match json.pointer("/context/contract/deployments") {
+        Some(value) => value.as_array().ok_or_else(|| {
             "_pqsigner.refusalOnlyFormats is contract-context only and requires contract deployments"
                 .to_string()
-        })?;
+        })?,
+        None if json.pointer("/context/contract").is_some() => {
+            return Err(
+                "_pqsigner.refusalOnlyFormats is contract-context only and requires contract deployments"
+                    .to_string(),
+            );
+        }
+        None if json.pointer("/context/eip712").is_some() => {
+            // Typed-data dispatch authenticates the full 32-byte type hash.
+            // There is no four-byte known-call selector inventory to augment
+            // or collision boundary to enforce here; compile-time validation
+            // below checks the exact displayed type-signature strings.
+            return Ok(());
+        }
+        None => {
+            return Err(
+                "_pqsigner.refusalOnlyFormats is contract-context only and requires contract deployments"
+                    .to_string(),
+            );
+        }
+    };
     let formats = json
         .pointer("/display/formats")
         .and_then(serde_json::Value::as_object)
@@ -4254,6 +4276,19 @@ fn compile_resolved_descriptor_with_nested_calldata_enrollments(
                 }
             },
         };
+        if context_kind == CTX_EIP712
+            && (deployment_formats.is_some() || !refusal_only_formats.is_empty())
+            && !descriptor.display.formats.keys().any(|signature| {
+                !refusal_only_formats.contains(signature)
+                    && allowed_formats.is_none_or(|allowed| allowed.contains(signature))
+            })
+        {
+            partial_format_drops.push(format!(
+                "deployment chain_id={chain_id} contract=0x{} has zero EIP-712 formats after authenticated PQSigner deploymentFormats/refusalOnlyFormats curation; deployment skipped",
+                hex::encode(contract_addr)
+            ));
+            continue;
+        }
         let deployment = InterpolationDeployment {
             chain_id,
             contract: contract_addr,
@@ -4399,13 +4434,14 @@ fn resolve_deployments(ctx: &Context) -> Result<(u8, Vec<Deployment>), String> {
 type DeploymentFormatAdmissions = BTreeMap<(u64, [u8; 20]), BTreeSet<String>>;
 
 /// Validate the PQSigner-local deployment/format allowlist and lower its
-/// checksummed/string declarations into exact binary catalogue bindings.
+/// address/string declarations into exact binary catalogue bindings.
 ///
 /// The extension is deliberately monotone: every admitted tuple and format
 /// must already exist in the ordinary descriptor. Omitting a deployment or
-/// format can only remove a leaf/selector from clear-signing; the independent
-/// known-call scan ignores this extension and retains all original tuples as
-/// hard refusals.
+/// format can only remove clear-signing authority. Contract contexts retain
+/// every original tuple in the independent known-call hard-refusal inventory;
+/// EIP-712 dispatch remains authenticated by its full type hash and never uses
+/// the contract selector/collision path below.
 fn validate_deployment_format_admissions(
     pqsigner: Option<&PqsignerCuration>,
     context_kind: u8,
@@ -4424,6 +4460,60 @@ fn validate_deployment_format_admissions(
     }
     if pqsigner.deployment_formats.is_empty() {
         return Ok(None);
+    }
+    if context_kind == CTX_EIP712 {
+        let mut declared_deployments = BTreeSet::new();
+        for (index, deployment) in deployments.iter().enumerate() {
+            let address = parse_address(&deployment.address).map_err(|error| {
+                format!(
+                    "resolved context.eip712 deployment[{index}] address is invalid while validating _pqsigner.deploymentFormats: {error}"
+                )
+            })?;
+            declared_deployments.insert((deployment.chain_id, address));
+        }
+
+        let mut admissions = BTreeMap::new();
+        for (index, admission) in pqsigner.deployment_formats.iter().enumerate() {
+            let address = parse_address(&admission.address).map_err(|error| {
+                format!("_pqsigner.deploymentFormats[{index}].address is invalid: {error}")
+            })?;
+            let binding = (admission.chain_id, address);
+            if !declared_deployments.contains(&binding) {
+                return Err(format!(
+                    "_pqsigner.deploymentFormats[{index}] chain_id={} contract=0x{} is not a declared EIP-712 deployment",
+                    admission.chain_id,
+                    hex::encode(address)
+                ));
+            }
+            if admission.formats.is_empty() {
+                return Err(format!(
+                    "_pqsigner.deploymentFormats[{index}].formats must not be empty"
+                ));
+            }
+
+            let mut formats = BTreeSet::new();
+            for (format_index, signature) in admission.formats.iter().enumerate() {
+                if !display.formats.contains_key(signature) {
+                    return Err(format!(
+                        "_pqsigner.deploymentFormats[{index}].formats[{format_index}] names unknown format `{signature}`"
+                    ));
+                }
+                if !formats.insert(signature.clone()) {
+                    return Err(format!(
+                        "_pqsigner.deploymentFormats[{index}].formats duplicates `{signature}`"
+                    ));
+                }
+            }
+            if admissions.insert(binding, formats).is_some() {
+                return Err(format!(
+                    "_pqsigner.deploymentFormats duplicates chain_id={} contract=0x{}",
+                    admission.chain_id,
+                    hex::encode(address)
+                ));
+            }
+        }
+
+        return Ok(Some(admissions));
     }
     if context_kind != CTX_CONTRACT {
         return Err("_pqsigner.deploymentFormats is contract-context only".to_string());
@@ -4558,6 +4648,32 @@ fn validate_refusal_only_formats(
     };
     if pqsigner.refusal_only_formats.is_empty() {
         return Ok(BTreeSet::new());
+    }
+    if context_kind == CTX_EIP712 {
+        let admitted = pqsigner
+            .deployment_formats
+            .iter()
+            .flat_map(|admission| admission.formats.iter())
+            .collect::<BTreeSet<_>>();
+        let mut refusal_only = BTreeSet::new();
+        for (index, signature) in pqsigner.refusal_only_formats.iter().enumerate() {
+            if !display.formats.contains_key(signature) {
+                return Err(format!(
+                    "_pqsigner.refusalOnlyFormats[{index}] names unknown format `{signature}`"
+                ));
+            }
+            if admitted.contains(signature) {
+                return Err(format!(
+                    "_pqsigner.refusalOnlyFormats[{index}] overlaps deploymentFormats at `{signature}`"
+                ));
+            }
+            if !refusal_only.insert(signature.clone()) {
+                return Err(format!(
+                    "_pqsigner.refusalOnlyFormats duplicates `{signature}`"
+                ));
+            }
+        }
+        return Ok(refusal_only);
     }
     if context_kind != CTX_CONTRACT {
         return Err("_pqsigner.refusalOnlyFormats is contract-context only".to_string());
