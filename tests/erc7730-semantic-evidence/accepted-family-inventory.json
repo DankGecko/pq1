@@ -172,6 +172,12 @@
       "scope": "Only the four deployment leaves and sixteen deployment-format instances enumerated by the package; mutable token state, future token implementations, other routes, and future deployments are not implied.",
       "paths": ["tests/erc7730-semantic-evidence/ondo-managers/manifest.json"]
     },
+    "p2p-pod-message": {
+      "classification": "pinned-evidence",
+      "reason": "Pins caller-bound EigenPod creation and generic exact-text P2P message publication across all five accepted deployments.",
+      "scope": "Exactly createPod at the two fixed-block EigenPodManager proxies and send(string) at the three direct P2pMessageSender deployments. Other EigenPodManager state-changing ABI routes remain exact-known refusals; live state, future upgrades/deployments, off-chain message interpretation, transaction success, fallback, and blind signing are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/p2p-pod-message/manifest.json"]
+    },
     "quickswap-router02-remove-liquidity": {
       "classification": "pinned-evidence",
       "reason": "Pins the constrained QuickSwap Router02 route set.",
@@ -1406,8 +1412,8 @@
   {
     "source": "p2p/calldata-EigenPodManager.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "p2p-pod-message"
   },
   {
     "source": "p2p/calldata-NativeTokenVault.json",
@@ -1418,8 +1424,8 @@
   {
     "source": "p2p/calldata-P2pMessageSender.json",
     "accepted_leaf_count": 3,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "p2p-pod-message"
   },
   {
     "source": "paraswap/eip712-paraswap.json",

@@ -1,0 +1,29 @@
+{
+  "language": "Solidity",
+  "settings": {
+    "evmVersion": "shanghai",
+    "metadata": {
+      "bytecodeHash": "ipfs"
+    },
+    "optimizer": {
+      "enabled": true,
+      "runs": 200
+    },
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "evm.deployedBytecode.object",
+          "metadata"
+        ]
+      }
+    },
+    "remappings": [],
+    "viaIR": true
+  },
+  "sources": {
+    "src/P2pMessageSender.sol": {
+      "content": "// SPDX-License-Identifier: MIT\npragma solidity 0.8.24;\n\ncontract P2pMessageSender {\n    event Message(address indexed sender, string indexed hash, string text);\n\n    function send(string calldata text) external {\n        emit Message(msg.sender, text, text);\n    }\n}"
+    }
+  }
+}
