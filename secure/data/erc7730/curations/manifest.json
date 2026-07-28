@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 868034,
-    "sha256": "dff2ee5b878a39d9ba7a3fc96509051ca3286ecadbb9f42071f4a7692549e388"
+    "bytes": 868633,
+    "sha256": "d305496d6bdf69ecb81abbef2e5c8e3a56f30cc7844aab3f989dea3be440894b"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -286,8 +286,8 @@
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 40,
-      "bytes": 2621892,
-      "sha256": "257a35adbd6ee1a4147b2e0805b99fd2a26d7d4d70410c5aa515466129f81e1d"
+      "bytes": 2624173,
+      "sha256": "031e84660fcc0998aae68e56ed8146d09b3883378434061ba1dc7994d63eb30b"
     },
     {
       "path": "pqsigner-erc7730",
@@ -336,7 +336,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 313678,
-      "sha256": "6db3c1a8c801de3635e912233d819f2adb2c06bffc18a55d84e10122c7173f63"
+      "sha256": "4a80f766b2bf2bf92c40828c688d1b316475a03bde7c1ad78c2bb9e7cfb3e3de"
     }
   ],
   "capability_inputs": [
@@ -749,8 +749,8 @@
       "path": "registry/walletconnect/calldata-stakeweight.json",
       "upstream_bytes": 2842,
       "upstream_sha256": "c904f53118c650b0a14db5e2eccc17c7bebc2e3e19f05e4de85134fdede280ef",
-      "replacement_bytes": 3924,
-      "replacement_sha256": "af2ecdfe3b6917d8f50e950210dcbcfab6da8f765a56fb15dca52c514180366b"
+      "replacement_bytes": 4523,
+      "replacement_sha256": "080d57756134a8dbbd303a7243143bdf134f9ea60d30eeb21ee963a96a8ed35c"
     },
     {
       "path": "registry/walletconnect/calldata-wct.json",

@@ -1,6 +1,6 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
-  "_curation_note": "PQSigner semantic curation: the six operand-complete StakeWeight routes are admitted only at the fixed-block EIP-1967 proxy/implementation and configuration-selected L2 WCT binding archived by the evidence package. The configured token address equals the descriptor token literal and reports symbol WCT with 18 decimals at that block. Evidence is historical source/runtime/state authority for an upgradeable system, not future-upgrade monitoring, balances, allowances, current lock state, execution success, hardware, shipment, fallback, or blind-signing authority.",
+  "_curation_note": "PQSigner semantic curation: the six operand-complete StakeWeight routes are admitted only at the fixed-block EIP-1967 proxy/implementation and configuration-selected L2 WCT binding archived by the evidence package. The configured token address equals the descriptor token literal and reports symbol WCT with 18 decimals at that block. createLock, increaseUnlockTime, and updateLock identify their signed timestamp as requested and explicitly disclose the verified implementation's whole-week floor before approval. Evidence is historical source/runtime/state authority for an upgradeable system, not future-upgrade monitoring, balances, allowances, current lock state, execution success, hardware, shipment, fallback, or blind-signing authority.",
   "_pqsigner": {
     "deploymentFormats": [
       {
@@ -38,7 +38,8 @@
             "params": { "token": "0xeF4461891DfB3AC8572cCf7C794664A8DD927945" },
             "visible": "always"
           },
-          { "path": "unlockTime", "label": "Unlock Time", "format": "date", "params": { "encoding": "timestamp" }, "visible": "always" }
+          { "path": "unlockTime", "label": "Requested unlock", "format": "date", "params": { "encoding": "timestamp" }, "visible": "always" },
+          { "value": "Requested time rounded down to whole weeks", "label": "Effective unlock", "format": "raw", "visible": "always" }
         ]
       },
       "depositFor(address for_, uint256 amount)": {
@@ -77,11 +78,12 @@
         "fields": [
           {
             "path": "newUnlockTime",
-            "label": "New Unlock Time",
+            "label": "Requested unlock",
             "format": "date",
             "params": { "encoding": "timestamp" },
             "visible": "always"
-          }
+          },
+          { "value": "Requested time rounded down to whole weeks", "label": "Effective unlock", "format": "raw", "visible": "always" }
         ]
       },
       "updateLock(uint256 amount, uint256 unlockTime)": {
@@ -94,7 +96,8 @@
             "params": { "token": "0xeF4461891DfB3AC8572cCf7C794664A8DD927945" },
             "visible": "always"
           },
-          { "path": "unlockTime", "label": "Unlock Time", "format": "date", "params": { "encoding": "timestamp" }, "visible": "always" }
+          { "path": "unlockTime", "label": "Requested unlock", "format": "date", "params": { "encoding": "timestamp" }, "visible": "always" },
+          { "value": "Requested time rounded down to whole weeks", "label": "Effective unlock", "format": "raw", "visible": "always" }
         ]
       },
       "withdrawAll()": { "intent": "Withdraw All", "fields": [] }

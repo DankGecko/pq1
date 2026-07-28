@@ -27,9 +27,9 @@ use pqsigner_erc7730::{
 use sha2::{Digest, Sha256};
 
 const PRODUCTION_ROOT_HEX: &str =
-    "11e0017ab0cbf350ae83d27402f1d1ea95e76e9cdb2a8a3778c76271f8041920";
+    "692c602c43d804a12c2f18c9cf4fffade5f0f6868d1f216c2afff00f9f8ad986";
 const PRODUCTION_BLOB_SHA256_HEX: &str =
-    "8a1199da251fa6ffe197b4e4ac11d600ce9eb7576d3431df4488efff3eb8da4b";
+    "0e91e64a0bbcff43d25fa7f7fb3eec79f0a4936bc236a2341c8c446c811fb26b";
 const PRODUCTION_BLOOM_SHA256_HEX: &str =
     "ba5144e11685998e71ae98b54618ca67addc094a1e5bcedd8368976c7f2e26b4";
 const PRODUCTION_LEAF_COUNT: usize = 399;

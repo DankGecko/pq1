@@ -13,6 +13,7 @@ use pqsigner_erc7730::binding::cross_check_contract;
 use pqsigner_erc7730::ir::{Erc7730Ir, FormatOp};
 use pqsigner_erc7730::known_calls::may_contain as known_call_may_contain;
 use pqsigner_erc7730::render::params::parse as parse_params;
+use pqsigner_erc7730::render::policy::TerminalKind;
 use pqsigner_tx_core::hash::keccak256;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -602,6 +603,9 @@ fn account_factory_evidence_is_complete_and_cross_provider_bound() {
         "function increaseUnlockTime(uint256 newUnlockTime) external nonReentrant",
         "function updateLock(uint256 amount, uint256 unlockTime) external nonReentrant",
         "function withdrawAll() external nonReentrant",
+        "unlockTime = _timestampToFloorWeek(unlockTime);",
+        "newUnlockTime = _timestampToFloorWeek(newUnlockTime);",
+        "return (timestamp / 1 weeks) * 1 weeks;",
         "IERC20(s.config.getL2wct()).safeTransferFrom(msg.sender, address(this), amount);",
     ] {
         assert!(
@@ -708,6 +712,28 @@ fn account_factory_curations_admit_only_evidenced_routes_and_keep_refusals_known
         wallet["_pqsigner"]["deploymentFormats"][0]["formats"],
         json!(WALLET_NAMED_ROUTES)
     );
+    const FLOOR_WARNING: &str = "Requested time rounded down to whole weeks";
+    for signature in [
+        "createLock(uint256 amount, uint256 unlockTime)",
+        "increaseUnlockTime(uint256 newUnlockTime)",
+        "updateLock(uint256 amount, uint256 unlockTime)",
+    ] {
+        let fields = wallet["display"]["formats"][signature]["fields"]
+            .as_array()
+            .expect("WalletConnect time fields");
+        assert!(fields.iter().any(|field| {
+            field["label"] == "Requested unlock"
+                && field["format"] == "date"
+                && field["visible"] == "always"
+        }));
+        assert!(fields.iter().any(|field| {
+            field.get("path").is_none()
+                && field["label"] == "Effective unlock"
+                && field["value"] == FLOOR_WARNING
+                && field["format"] == "raw"
+                && field["visible"] == "always"
+        }));
+    }
     for signature in [
         "createLock(uint256 amount, uint256 unlockTime)",
         "depositFor(address for_, uint256 amount)",
@@ -871,5 +897,33 @@ fn account_factory_curations_admit_only_evidenced_routes_and_keep_refusals_known
                 assert_eq!(params.token, Some(&token));
             }
         }
+    }
+    for route in [
+        "createLock(uint256,uint256)",
+        "increaseUnlockTime(uint256)",
+        "updateLock(uint256,uint256)",
+    ] {
+        let format = wallet_ir
+            .find_format_by_selector(&selector(route))
+            .expect("format table")
+            .expect("WalletConnect time route");
+        let fields = format
+            .fields()
+            .map(|field| field.expect("WalletConnect time field"))
+            .collect::<Vec<_>>();
+        assert!(fields.iter().any(|field| field.label == b"Requested unlock"));
+        let warning = fields
+            .iter()
+            .find(|field| field.label == b"Effective unlock")
+            .expect("compiled whole-week warning");
+        assert_eq!(warning.path_off, 0);
+        assert_eq!(
+            FormatOp::try_from(warning.format_op),
+            Ok(FormatOp::Raw)
+        );
+        let params =
+            parse_params(&wallet_ir, warning.param_off).expect("whole-week warning params");
+        assert_eq!(params.terminal_kind, Some(TerminalKind::ConstantText));
+        assert_eq!(params.const_value, Some(FLOOR_WARNING.as_bytes()));
     }
 }
