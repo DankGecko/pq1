@@ -2012,18 +2012,10 @@ fn flyingtulip_session_eip712_nested_boundaries_and_binding_mutations_fail_close
 
     let mut wrong_deployment = contract;
     wrong_deployment[0] ^= 1;
+    let wrong_deployment_domain =
+        eip712_domain_separator("FT SessionManager", "1", 1, &wrong_deployment);
     assert!(
-        render_erc7730_eip712_pages_v3(
-            1,
-            &wrong_deployment,
-            &type_hash,
-            &encoded,
-            &nested,
-            &verified,
-            None,
-            &resolver,
-        )
-        .is_err(),
+        cross_check_eip712(&verified.ir, 1, &wrong_deployment_domain).is_err(),
         "wrong verifying deployment must refuse"
     );
 }
