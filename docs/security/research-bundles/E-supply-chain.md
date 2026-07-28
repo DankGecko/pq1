@@ -838,7 +838,7 @@ Firmware update is its own project, outside the scope of this document, but note
 
 ### 12.1 Before Touching Real Funds
 
-- **External security audit** from a firm with embedded/TrustZone/secure-element specialization (NCC Group, Trail of Bits, Quarkslab, Kudelski, etc.). Budget $30K–$150K. Yes, really.
+- **External security audit** from a firm with embedded/TrustZone/secure-element specialization (NCC Group, Trail of Bits, Quarkslab, Kudelski, etc.).
 - Fault injection testing on real hardware (lab time).
 - Public bug bounty with meaningful rewards.
 - Gradual rollout: start with small amounts, wait months, scale up only if nothing surfaces.
