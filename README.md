@@ -11,12 +11,12 @@
 >
 > - **No devices have shipped** and no on-chain wallet holds funds. Do not use
 >   this to protect real value.
-> - **No external security audit has happened yet.** It is planned, not done —
->   the reviews under `docs/audits/` are our own.
+> - **External security audits are in progress and not yet finalized.** Treat
+>   security claims here as unconfirmed until they land — the reviews under
+>   `docs/audits/` are our own.
 > - **Ship-blocking work is still open**, including irreversible secure-element
->   provisioning steps. See [`docs/STATUS.md`](docs/STATUS.md) and
->   "Pre-Production Caveats" in [`CLAUDE.md`](CLAUDE.md) for the honest state of
->   each subsystem.
+>   provisioning steps. [`docs/STATUS.md`](docs/STATUS.md) tracks the state of
+>   each subsystem — what is done, what is open, and why.
 > - Values described below as "frozen" — domain-separation tags, the C10
 >   parameter set, the CREATE2 salt, the EntryPoint version — are what we intend
 >   to commit to *at launch*, and can still change cleanly before first shipment.
@@ -524,7 +524,7 @@ Nothing here is optional. Run through the entire list **per device class**, not 
 - [ ] Field-tested on staging hardware before public rollout; documented recovery path for a bricked fleet (RDP-2 cannot be unlocked)
 
 **H. External validation**
-- [ ] External audit by an embedded + TrustZone + SE firm (NCC, Trail of Bits, Quarkslab, Kudelski, Riscure) of the *signed production image* — budget $30K–$150K
+- [ ] External audit by an embedded + TrustZone + SE firm (NCC, Trail of Bits, Quarkslab, Kudelski, Riscure) of the *signed production image*
 - [ ] All findings fixed or risk-accepted with external sign-off; public bug bounty (≥ $25K for seed extraction) + VDP published before any device ships
 - [ ] Independent FI report from a lab; independent attestation that the build is reproducible
 
