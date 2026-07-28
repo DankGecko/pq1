@@ -1,5 +1,45 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
+  "_curation_note": "PQSigner semantic curation: the Session typed-data format is admitted only for the five fixed-block direct SessionManager deployments listed by deploymentFormats. Verified Solidity source and decoded runtimes bind the ftUSD SessionManager v1 domain, the exact Session/AssetLimit type graph, signature hashing, and the stored owner, delegate, validity, call-cap, fee-cap, token-limit, and salt semantics. PQ1 renders every limit for arrays of one through six entries and hard-refuses empty or longer arrays; the source permits those shapes, so this is an intentional fail-closed narrowing. Evidence is historical fixed-block source/runtime authority, not live session, allowlist, token-metadata, signature-acceptance, execution-success, future-code, fallback, or blind-signing authority. See tests/erc7730-semantic-evidence/flyingtulip-sessionmanager.",
+  "_pqsigner": {
+    "deploymentFormats": [
+      {
+        "chainId": 1,
+        "address": "0x2DaF4B445E7d659100b22a15c3EeB10e64ac5dC9",
+        "formats": [
+          "Session(address owner,address delegate,uint48 validAfter,uint48 validUntil,uint32 maxCalls,uint16 maxFeeBps,AssetLimit[] limits,bytes32 salt)AssetLimit(address token,uint256 limit)"
+        ]
+      },
+      {
+        "chainId": 56,
+        "address": "0xC85CB743f72B3a9Bb594Faa7d46EE1EFC61b7A42",
+        "formats": [
+          "Session(address owner,address delegate,uint48 validAfter,uint48 validUntil,uint32 maxCalls,uint16 maxFeeBps,AssetLimit[] limits,bytes32 salt)AssetLimit(address token,uint256 limit)"
+        ]
+      },
+      {
+        "chainId": 146,
+        "address": "0x2DaF4B445E7d659100b22a15c3EeB10e64ac5dC9",
+        "formats": [
+          "Session(address owner,address delegate,uint48 validAfter,uint48 validUntil,uint32 maxCalls,uint16 maxFeeBps,AssetLimit[] limits,bytes32 salt)AssetLimit(address token,uint256 limit)"
+        ]
+      },
+      {
+        "chainId": 146,
+        "address": "0x52Ef449D44cC4205fa44bF644dEE15611FC30734",
+        "formats": [
+          "Session(address owner,address delegate,uint48 validAfter,uint48 validUntil,uint32 maxCalls,uint16 maxFeeBps,AssetLimit[] limits,bytes32 salt)AssetLimit(address token,uint256 limit)"
+        ]
+      },
+      {
+        "chainId": 43114,
+        "address": "0x176592C8Ed3F2D94cE4c3F1a4cfF7d068176AC54",
+        "formats": [
+          "Session(address owner,address delegate,uint48 validAfter,uint48 validUntil,uint32 maxCalls,uint16 maxFeeBps,AssetLimit[] limits,bytes32 salt)AssetLimit(address token,uint256 limit)"
+        ]
+      }
+    ]
+  },
   "context": {
     "eip712": {
       "domain": {

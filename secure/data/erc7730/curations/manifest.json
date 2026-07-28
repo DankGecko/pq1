@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 944675,
-    "sha256": "706ebd0d31223a27a1cdf5fc5b97999cd90fed4407f7d008a17146c0f049c18e"
+    "bytes": 950327,
+    "sha256": "fccec7b2a2c1790393703bbf1718b39036426a1c3130c5962fbd4d7165ab3744"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -461,8 +461,8 @@
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 48,
-      "bytes": 2831790,
-      "sha256": "d5ddab41da07ce62af4216adc8a68989f829a8b8a0553b40f6fe7b19fbf30ce8"
+      "bytes": 2847908,
+      "sha256": "d1c574c251effbd40198964400605dc851b7ecfaa5ba541d0b5d5b525df90f4e"
     },
     {
       "path": "pqsigner-erc7730",
@@ -511,7 +511,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 313678,
-      "sha256": "414c7cbc79935a2953a6bc50290c3855985cf69ac80d55d38a69b5d915570200"
+      "sha256": "1db4e7fac08f8c2d665ca31ad03e018a8d5df45d80ec5dc0df601c5f98d167d4"
     }
   ],
   "capability_inputs": [
@@ -760,6 +760,13 @@
       "replacement_sha256": "dcb847584d82d692f196a1ea9acdc1534cd868c36aaa35bcb58afedbb3ca20b2"
     },
     {
+      "path": "registry/flyingtulip/eip712-LeverageRfqEngine.json",
+      "upstream_bytes": 2688,
+      "upstream_sha256": "1ff0f2ff12b41f7f433b3d0137517115b0a0032b8e4a76954b59137ca6455186",
+      "replacement_bytes": 3364,
+      "replacement_sha256": "a06e3ca66c3fbebbfee869cf45da8f8fe7ffd46ad9e7e6709b641acdd602b99e"
+    },
+    {
       "path": "registry/flyingtulip/eip712-PftMarketplace-BuyOffer.json",
       "upstream_bytes": 2157,
       "upstream_sha256": "9f6c51f398c96f886970f2339ba7c05a4774af2d8db532d40533b7fa10e7feb2",
@@ -770,15 +777,22 @@
       "path": "registry/flyingtulip/eip712-SessionManager-FT.json",
       "upstream_bytes": 3069,
       "upstream_sha256": "1c62a2c51aeb265e38d30c65ccc812bea3f6e35d381247541b17f0542bf5c7c2",
-      "replacement_bytes": 3099,
-      "replacement_sha256": "331aae6b33c1fa6998acb17d4cb7861c5aecd2f67252c6e9b8953e69e62ad57e"
+      "replacement_bytes": 4681,
+      "replacement_sha256": "b3925f79a8e80653ccce99fe2432b03a1d007872c4ee498f6ca6dbc6223c9884"
     },
     {
       "path": "registry/flyingtulip/eip712-SessionManager-ftUSD.json",
       "upstream_bytes": 3424,
       "upstream_sha256": "3f9af2a41ced1c6c8de90ae1c1be9a5a42ad5fc99ca77369a3f4c92e315a48a9",
-      "replacement_bytes": 3454,
-      "replacement_sha256": "bfe3eca47fb53a433547a93069a74647f804148419aa96795512490f13b3d1c9"
+      "replacement_bytes": 6031,
+      "replacement_sha256": "4356b716033abad99a6d2b3000fd6c5263bbdfa4d273006a430098bd9e9baae1"
+    },
+    {
+      "path": "registry/flyingtulip/eip712-SpotOrderCancel.json",
+      "upstream_bytes": 2103,
+      "upstream_sha256": "5449f9269973da4edbe9bc405f1a158824e55448fcafd6639fd3d31f64d8a676",
+      "replacement_bytes": 2920,
+      "replacement_sha256": "1e301247088f82d56116d92a9601ebb63ead7fc4c32c46e1084fc39120db5432"
     },
     {
       "path": "registry/igra/calldata-KasExitBridge.json",

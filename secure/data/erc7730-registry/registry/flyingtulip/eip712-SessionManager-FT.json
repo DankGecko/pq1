@@ -1,5 +1,24 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
+  "_curation_note": "PQSigner semantic curation: the Session typed-data format is admitted only for the two fixed-block direct SessionManager deployments listed by deploymentFormats. Verified Solidity source and decoded runtimes bind the FT SessionManager v1 domain, the exact Session/AssetLimit type graph, signature hashing, and the stored owner, delegate, validity, call-cap, fee-cap, token-limit, and salt semantics. PQ1 renders every limit for arrays of one through six entries and hard-refuses empty or longer arrays; the source permits those shapes, so this is an intentional fail-closed narrowing. Evidence is historical fixed-block source/runtime authority, not live session, allowlist, token-metadata, signature-acceptance, execution-success, future-code, fallback, or blind-signing authority. See tests/erc7730-semantic-evidence/flyingtulip-sessionmanager.",
+  "_pqsigner": {
+    "deploymentFormats": [
+      {
+        "chainId": 1,
+        "address": "0xF9f3ddF2E96Cabef94e2634c326DC6dde99360f8",
+        "formats": [
+          "Session(address owner,address delegate,uint48 validAfter,uint48 validUntil,uint32 maxCalls,uint16 maxFeeBps,AssetLimit[] limits,bytes32 salt)AssetLimit(address token,uint256 limit)"
+        ]
+      },
+      {
+        "chainId": 146,
+        "address": "0x109AE72778a0260571b9767477204F1ce41FBdff",
+        "formats": [
+          "Session(address owner,address delegate,uint48 validAfter,uint48 validUntil,uint32 maxCalls,uint16 maxFeeBps,AssetLimit[] limits,bytes32 salt)AssetLimit(address token,uint256 limit)"
+        ]
+      }
+    ]
+  },
   "context": {
     "eip712": {
       "domain": {
