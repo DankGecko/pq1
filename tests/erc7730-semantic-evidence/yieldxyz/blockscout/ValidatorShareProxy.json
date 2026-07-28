@@ -1,0 +1,209 @@
+{
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_registry",
+          "type": "address"
+        }
+      ],
+      "payable": false,
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "_new",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "_old",
+          "type": "address"
+        }
+      ],
+      "name": "OwnerUpdate",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "_new",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "_old",
+          "type": "address"
+        }
+      ],
+      "name": "ProxyUpdated",
+      "type": "event"
+    },
+    {
+      "payable": true,
+      "stateMutability": "payable",
+      "type": "fallback"
+    },
+    {
+      "constant": true,
+      "inputs": [],
+      "name": "implementation",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [],
+      "name": "owner",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "payable": false,
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [],
+      "name": "proxyType",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "proxyTypeId",
+          "type": "uint256"
+        }
+      ],
+      "payable": false,
+      "stateMutability": "pure",
+      "type": "function"
+    },
+    {
+      "constant": false,
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "transferOwnership",
+      "outputs": [],
+      "payable": false,
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "constant": false,
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_newProxyTo",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes",
+          "name": "data",
+          "type": "bytes"
+        }
+      ],
+      "name": "updateAndCall",
+      "outputs": [],
+      "payable": true,
+      "stateMutability": "payable",
+      "type": "function"
+    },
+    {
+      "constant": false,
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_newProxyTo",
+          "type": "address"
+        }
+      ],
+      "name": "updateImplementation",
+      "outputs": [],
+      "payable": false,
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "additional_sources": [],
+  "can_be_visualized_via_sol2uml": true,
+  "certified": false,
+  "compiler_settings": {
+    "evmVersion": "istanbul",
+    "libraries": {},
+    "optimizer": {
+      "enabled": true,
+      "runs": 200
+    },
+    "remappings": []
+  },
+  "compiler_version": "0.5.17+commit.d19bba13",
+  "conflicting_implementations": null,
+  "constructor_args": "6d617469632e6e6574776f726b2e70726f78792e696d706c656d656e746174696f6e00000000000000000000000033a02e6cc863d393d6bf231b697b82f6e499ca71",
+  "creation_bytecode": "0x608060405234801561001057600080fd5b506040516108d63803806108d68339818101604052602081101561003357600080fd5b505180610048336001600160e01b0361006116565b61005a816001600160e01b0361009616565b50506100b8565b604080517f6d617469632e6e6574776f726b2e70726f78792e6f776e6572000000000000008152905190819003601901902055565b600060405180806108b460229139604051908190036022019020929092555050565b6107ed806100c76000396000f3fe6080604052600436106100555760003560e01c8063025b22bc1461009f5780634555d5c9146100d25780635c60da1b146100f95780638da5cb5b1461012a578063d88ca2c81461013f578063f2fde38b146101f5575b61009d610060610228565b6000368080601f01602080910402602001604051908101604052809392919081815260200183838082843760009201919091525061029b92505050565b005b3480156100ab57600080fd5b5061009d600480360360208110156100c257600080fd5b50356001600160a01b03166102c3565b3480156100de57600080fd5b506100e76103fd565b60408051918252519081900360200190f35b34801561010557600080fd5b5061010e610402565b604080516001600160a01b039092168252519081900360200190f35b34801561013657600080fd5b5061010e610411565b61009d6004803603604081101561015557600080fd5b6001600160a01b03823516919081019060408101602082013564010000000081111561018057600080fd5b82018360208201111561019257600080fd5b803590602001918460018302840111640100000000831117156101b457600080fd5b91908080601f01602080910402602001604051908101604052809392919081815260200183838082843760009201919091525092955061041b945050505050565b34801561020157600080fd5b5061009d6004803603602081101561021857600080fd5b50356001600160a01b03166105b1565b60006102326106a3565b6001600160a01b0316631c9486ef6040518163ffffffff1660e01b815260040160206040518083038186803b15801561026a57600080fd5b505afa15801561027e573d6000803e3d6000fd5b505050506040513d602081101561029457600080fd5b5051905090565b600080825160208401856127105a03f43d604051816000823e8280156102bf578282f35b8282fd5b336102cc6106c9565b6001600160a01b031614610313576040805162461bcd60e51b81526020600482015260096024820152682727aa2fa7aba722a960b91b604482015290519081900360640190fd5b6001600160a01b038116610366576040805162461bcd60e51b8152602060048201526015602482015274494e56414c49445f50524f58595f4144445245535360581b604482015290519081900360640190fd5b61036f816106fb565b6103aa5760405162461bcd60e51b81526004018080602001828103825260258152602001806107726025913960400191505060405180910390fd5b6103b2610228565b6001600160a01b0316816001600160a01b03167fd32d24edea94f55e932d9a008afc425a8561462d1b1f57bc6e508e9a6b9509e160405160405180910390a36103fa8161071e565b50565b600290565b600061040c610228565b905090565b600061040c6106c9565b336104246106c9565b6001600160a01b03161461046b576040805162461bcd60e51b81526020600482015260096024820152682727aa2fa7aba722a960b91b604482015290519081900360640190fd5b610474826102c3565b60006060306001600160a01b031634846040518082805190602001908083835b602083106104b35780518252601f199092019160209182019101610494565b6001836020036101000a03801982511681845116808217855250505050505090500191505060006040518083038185875af1925050503d8060008114610515576040519150601f19603f3d011682016040523d82523d6000602084013e61051a565b606091505b50915091508181906105aa5760405162461bcd60e51b81526004018080602001828103825283818151815260200191508051906020019080838360005b8381101561056f578181015183820152602001610557565b50505050905090810190601f16801561059c5780820380516001836020036101000a031916815260200191505b509250505060405180910390fd5b5050505050565b336105ba6106c9565b6001600160a01b031614610601576040805162461bcd60e51b81526020600482015260096024820152682727aa2fa7aba722a960b91b604482015290519081900360640190fd5b6001600160a01b03811661064b576040805162461bcd60e51b815260206004820152600c60248201526b5a45524f5f4144445245535360a01b604482015290519081900360640190fd5b7f343765429aea5a34b3ff6a3785a98a5abb2597aca87bfbb58632c173d585373a816106756106c9565b604080516001600160a01b03938416815291909216602082015281519081900390910190a16103fa81610740565b600080600060405180806107976022913960405190819003602201902054935050505090565b604080517836b0ba34b1973732ba3bb7b93597383937bc3c9737bbb732b960391b815290519081900360190190205490565b60006001600160a01b03821661071357506000610719565b50803b15155b919050565b6000604051808061079760229139604051908190036022019020929092555050565b604080517836b0ba34b1973732ba3bb7b93597383937bc3c9737bbb732b960391b815290519081900360190190205556fe44455354494e4154494f4e5f414444524553535f49535f4e4f545f415f434f4e54524143546d617469632e6e6574776f726b2e70726f78792e696d706c656d656e746174696f6ea265627a7a723158204e58170e48279b1cb90d113d92d52be59f280dddbca7b51d796c43ef066a09b064736f6c634300051100326d617469632e6e6574776f726b2e70726f78792e696d706c656d656e746174696f6e00000000000000000000000033a02e6cc863d393d6bf231b697b82f6e499ca71",
+  "creation_status": "success",
+  "decoded_constructor_args": [
+    [
+      "0x6B2e70726f78792E696d706C656d656E74617469",
+      {
+        "internalType": "address",
+        "name": "_registry",
+        "type": "address"
+      }
+    ]
+  ],
+  "deployed_bytecode": "0x6080604052600436106100555760003560e01c8063025b22bc1461009f5780634555d5c9146100d25780635c60da1b146100f95780638da5cb5b1461012a578063d88ca2c81461013f578063f2fde38b146101f5575b61009d610060610228565b6000368080601f01602080910402602001604051908101604052809392919081815260200183838082843760009201919091525061029b92505050565b005b3480156100ab57600080fd5b5061009d600480360360208110156100c257600080fd5b50356001600160a01b03166102c3565b3480156100de57600080fd5b506100e76103fd565b60408051918252519081900360200190f35b34801561010557600080fd5b5061010e610402565b604080516001600160a01b039092168252519081900360200190f35b34801561013657600080fd5b5061010e610411565b61009d6004803603604081101561015557600080fd5b6001600160a01b03823516919081019060408101602082013564010000000081111561018057600080fd5b82018360208201111561019257600080fd5b803590602001918460018302840111640100000000831117156101b457600080fd5b91908080601f01602080910402602001604051908101604052809392919081815260200183838082843760009201919091525092955061041b945050505050565b34801561020157600080fd5b5061009d6004803603602081101561021857600080fd5b50356001600160a01b03166105b1565b60006102326106a3565b6001600160a01b0316631c9486ef6040518163ffffffff1660e01b815260040160206040518083038186803b15801561026a57600080fd5b505afa15801561027e573d6000803e3d6000fd5b505050506040513d602081101561029457600080fd5b5051905090565b600080825160208401856127105a03f43d604051816000823e8280156102bf578282f35b8282fd5b336102cc6106c9565b6001600160a01b031614610313576040805162461bcd60e51b81526020600482015260096024820152682727aa2fa7aba722a960b91b604482015290519081900360640190fd5b6001600160a01b038116610366576040805162461bcd60e51b8152602060048201526015602482015274494e56414c49445f50524f58595f4144445245535360581b604482015290519081900360640190fd5b61036f816106fb565b6103aa5760405162461bcd60e51b81526004018080602001828103825260258152602001806107726025913960400191505060405180910390fd5b6103b2610228565b6001600160a01b0316816001600160a01b03167fd32d24edea94f55e932d9a008afc425a8561462d1b1f57bc6e508e9a6b9509e160405160405180910390a36103fa8161071e565b50565b600290565b600061040c610228565b905090565b600061040c6106c9565b336104246106c9565b6001600160a01b03161461046b576040805162461bcd60e51b81526020600482015260096024820152682727aa2fa7aba722a960b91b604482015290519081900360640190fd5b610474826102c3565b60006060306001600160a01b031634846040518082805190602001908083835b602083106104b35780518252601f199092019160209182019101610494565b6001836020036101000a03801982511681845116808217855250505050505090500191505060006040518083038185875af1925050503d8060008114610515576040519150601f19603f3d011682016040523d82523d6000602084013e61051a565b606091505b50915091508181906105aa5760405162461bcd60e51b81526004018080602001828103825283818151815260200191508051906020019080838360005b8381101561056f578181015183820152602001610557565b50505050905090810190601f16801561059c5780820380516001836020036101000a031916815260200191505b509250505060405180910390fd5b5050505050565b336105ba6106c9565b6001600160a01b031614610601576040805162461bcd60e51b81526020600482015260096024820152682727aa2fa7aba722a960b91b604482015290519081900360640190fd5b6001600160a01b03811661064b576040805162461bcd60e51b815260206004820152600c60248201526b5a45524f5f4144445245535360a01b604482015290519081900360640190fd5b7f343765429aea5a34b3ff6a3785a98a5abb2597aca87bfbb58632c173d585373a816106756106c9565b604080516001600160a01b03938416815291909216602082015281519081900390910190a16103fa81610740565b600080600060405180806107976022913960405190819003602201902054935050505090565b604080517836b0ba34b1973732ba3bb7b93597383937bc3c9737bbb732b960391b815290519081900360190190205490565b60006001600160a01b03821661071357506000610719565b50803b15155b919050565b6000604051808061079760229139604051908190036022019020929092555050565b604080517836b0ba34b1973732ba3bb7b93597383937bc3c9737bbb732b960391b815290519081900360190190205556fe44455354494e4154494f4e5f414444524553535f49535f4e4f545f415f434f4e54524143546d617469632e6e6574776f726b2e70726f78792e696d706c656d656e746174696f6ea265627a7a723158204e58170e48279b1cb90d113d92d52be59f280dddbca7b51d796c43ef066a09b064736f6c63430005110032",
+  "evm_version": "istanbul",
+  "external_libraries": [],
+  "file_path": "ValidatorShareProxy.sol",
+  "implementations": [
+    {
+      "address_hash": "0xBe63B977ABBAA99fC0243e208340c530Dd4ee9E8",
+      "name": "ValidatorShare"
+    }
+  ],
+  "is_blueprint": false,
+  "is_changed_bytecode": false,
+  "is_fully_verified": false,
+  "is_partially_verified": true,
+  "is_verified": true,
+  "is_verified_via_eth_bytecode_db": true,
+  "is_verified_via_sourcify": true,
+  "is_verified_via_verifier_alliance": false,
+  "language": "solidity",
+  "license_type": "none",
+  "name": "ValidatorShareProxy",
+  "optimization_enabled": true,
+  "optimization_runs": 200,
+  "proxy_type": "basic_implementation",
+  "source_code": "// File: openzeppelin-solidity/contracts/ownership/Ownable.sol\r\n\r\npragma solidity ^0.5.2;\r\n\r\n/**\r\n * @title Ownable\r\n * @dev The Ownable contract has an owner address, and provides basic authorization control\r\n * functions, this simplifies the implementation of \"user permissions\".\r\n */\r\ncontract Ownable {\r\n    address private _owner;\r\n\r\n    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);\r\n\r\n    /**\r\n     * @dev The Ownable constructor sets the original `owner` of the contract to the sender\r\n     * account.\r\n     */\r\n    constructor () internal {\r\n        _owner = msg.sender;\r\n        emit OwnershipTransferred(address(0), _owner);\r\n    }\r\n\r\n    /**\r\n     * @return the address of the owner.\r\n     */\r\n    function owner() public view returns (address) {\r\n        return _owner;\r\n    }\r\n\r\n    /**\r\n     * @dev Throws if called by any account other than the owner.\r\n     */\r\n    modifier onlyOwner() {\r\n        require(isOwner());\r\n        _;\r\n    }\r\n\r\n    /**\r\n     * @return true if `msg.sender` is the owner of the contract.\r\n     */\r\n    function isOwner() public view returns (bool) {\r\n        return msg.sender == _owner;\r\n    }\r\n\r\n    /**\r\n     * @dev Allows the current owner to relinquish control of the contract.\r\n     * It will not be possible to call the functions with the `onlyOwner`\r\n     * modifier anymore.\r\n     * @notice Renouncing ownership will leave the contract without an owner,\r\n     * thereby removing any functionality that is only available to the owner.\r\n     */\r\n    function renounceOwnership() public onlyOwner {\r\n        emit OwnershipTransferred(_owner, address(0));\r\n        _owner = address(0);\r\n    }\r\n\r\n    /**\r\n     * @dev Allows the current owner to transfer control of the contract to a newOwner.\r\n     * @param newOwner The address to transfer ownership to.\r\n     */\r\n    function transferOwnership(address newOwner) public onlyOwner {\r\n        _transferOwnership(newOwner);\r\n    }\r\n\r\n    /**\r\n     * @dev Transfers control of the contract to a newOwner.\r\n     * @param newOwner The address to transfer ownership to.\r\n     */\r\n    function _transferOwnership(address newOwner) internal {\r\n        require(newOwner != address(0));\r\n        emit OwnershipTransferred(_owner, newOwner);\r\n        _owner = newOwner;\r\n    }\r\n}\r\n\r\n// File: contracts/common/misc/ProxyStorage.sol\r\n\r\npragma solidity ^0.5.2;\r\n\r\n\r\ncontract ProxyStorage is Ownable {\r\n    address internal proxyTo;\r\n}\r\n\r\n// File: contracts/common/misc/ERCProxy.sol\r\n\r\n/*\r\n * SPDX-License-Identitifer:    MIT\r\n */\r\n\r\npragma solidity ^0.5.2;\r\n\r\n// See https://github.com/ethereum/EIPs/blob/master/EIPS/eip-897.md\r\n\r\ninterface ERCProxy {\r\n    function proxyType() external pure returns (uint256 proxyTypeId);\r\n    function implementation() external view returns (address codeAddr);\r\n}\r\n\r\n// File: contracts/common/misc/DelegateProxy.sol\r\n\r\npragma solidity ^0.5.2;\r\n\r\n\r\n\r\ncontract DelegateProxy is ERCProxy {\r\n    function proxyType() external pure returns (uint256 proxyTypeId) {\r\n        // Upgradeable proxy\r\n        proxyTypeId = 2;\r\n    }\r\n\r\n    function implementation() external view returns (address);\r\n\r\n    function delegatedFwd(address _dst, bytes memory _calldata) internal {\r\n        // solium-disable-next-line security/no-inline-assembly\r\n        assembly {\r\n            let result := delegatecall(\r\n                sub(gas, 10000),\r\n                _dst,\r\n                add(_calldata, 0x20),\r\n                mload(_calldata),\r\n                0,\r\n                0\r\n            )\r\n            let size := returndatasize\r\n\r\n            let ptr := mload(0x40)\r\n            returndatacopy(ptr, 0, size)\r\n\r\n            // revert instead of invalid() bc if the underlying call failed with invalid() it already wasted gas.\r\n            // if the call returned error data, forward it\r\n            switch result\r\n                case 0 {\r\n                    revert(ptr, size)\r\n                }\r\n                default {\r\n                    return(ptr, size)\r\n                }\r\n        }\r\n    }\r\n}\r\n\r\n// File: contracts/common/misc/UpgradableProxy.sol\r\n\r\npragma solidity ^0.5.2;\r\n\r\n\r\ncontract UpgradableProxy is DelegateProxy {\r\n    event ProxyUpdated(address indexed _new, address indexed _old);\r\n    event OwnerUpdate(address _new, address _old);\r\n\r\n    bytes32 constant IMPLEMENTATION_SLOT = keccak256(\"matic.network.proxy.implementation\");\r\n    bytes32 constant OWNER_SLOT = keccak256(\"matic.network.proxy.owner\");\r\n\r\n    constructor(address _proxyTo) public {\r\n        setOwner(msg.sender);\r\n        setImplementation(_proxyTo);\r\n    }\r\n\r\n    function() external payable {\r\n        // require(currentContract != 0, \"If app code has not been set yet, do not call\");\r\n        // Todo: filter out some calls or handle in the end fallback\r\n        delegatedFwd(loadImplementation(), msg.data);\r\n    }\r\n\r\n    modifier onlyProxyOwner() {\r\n        require(loadOwner() == msg.sender, \"NOT_OWNER\");\r\n        _;\r\n    }\r\n\r\n    function owner() external view returns(address) {\r\n        return loadOwner();\r\n    }\r\n\r\n    function loadOwner() internal view returns(address) {\r\n        address _owner;\r\n        bytes32 position = OWNER_SLOT;\r\n        assembly {\r\n            _owner := sload(position)\r\n        }\r\n        return _owner;\r\n    }\r\n\r\n    function implementation() external view returns (address) {\r\n        return loadImplementation();\r\n    }\r\n\r\n    function loadImplementation() internal view returns(address) {\r\n        address _impl;\r\n        bytes32 position = IMPLEMENTATION_SLOT;\r\n        assembly {\r\n            _impl := sload(position)\r\n        }\r\n        return _impl;\r\n    }\r\n\r\n    function transferOwnership(address newOwner) public onlyProxyOwner {\r\n        require(newOwner != address(0), \"ZERO_ADDRESS\");\r\n        emit OwnerUpdate(newOwner, loadOwner());\r\n        setOwner(newOwner);\r\n    }\r\n\r\n    function setOwner(address newOwner) private {\r\n        bytes32 position = OWNER_SLOT;\r\n        assembly {\r\n            sstore(position, newOwner)\r\n        }\r\n    }\r\n\r\n    function updateImplementation(address _newProxyTo) public onlyProxyOwner {\r\n        require(_newProxyTo != address(0x0), \"INVALID_PROXY_ADDRESS\");\r\n        require(isContract(_newProxyTo), \"DESTINATION_ADDRESS_IS_NOT_A_CONTRACT\");\r\n\r\n        emit ProxyUpdated(_newProxyTo, loadImplementation());\r\n        \r\n        setImplementation(_newProxyTo);\r\n    }\r\n\r\n    function updateAndCall(address _newProxyTo, bytes memory data) payable public onlyProxyOwner {\r\n        updateImplementation(_newProxyTo);\r\n\r\n        (bool success, bytes memory returnData) = address(this).call.value(msg.value)(data);\r\n        require(success, string(returnData));\r\n    }\r\n\r\n    function setImplementation(address _newProxyTo) private {\r\n        bytes32 position = IMPLEMENTATION_SLOT;\r\n        assembly {\r\n            sstore(position, _newProxyTo)\r\n        }\r\n    }\r\n    \r\n    function isContract(address _target) internal view returns (bool) {\r\n        if (_target == address(0)) {\r\n            return false;\r\n        }\r\n\r\n        uint256 size;\r\n        assembly {\r\n            size := extcodesize(_target)\r\n        }\r\n        return size > 0;\r\n    }\r\n}\r\n\r\n// File: contracts/common/governance/IGovernance.sol\r\n\r\npragma solidity ^0.5.2;\r\n\r\ninterface IGovernance {\r\n    function update(address target, bytes calldata data) external;\r\n}\r\n\r\n// File: contracts/common/governance/Governable.sol\r\n\r\npragma solidity ^0.5.2;\r\n\r\n\r\ncontract Governable {\r\n    IGovernance public governance;\r\n\r\n    constructor(address _governance) public {\r\n        governance = IGovernance(_governance);\r\n    }\r\n\r\n    modifier onlyGovernance() {\r\n        require(\r\n            msg.sender == address(governance),\r\n            \"Only governance contract is authorized\"\r\n        );\r\n        _;\r\n    }\r\n}\r\n\r\n// File: contracts/root/withdrawManager/IWithdrawManager.sol\r\n\r\npragma solidity ^0.5.2;\r\n\r\ncontract IWithdrawManager {\r\n    function createExitQueue(address token) external;\r\n\r\n    function verifyInclusion(\r\n        bytes calldata data,\r\n        uint8 offset,\r\n        bool verifyTxInclusion\r\n    ) external view returns (uint256 age);\r\n\r\n    function addExitToQueue(\r\n        address exitor,\r\n        address childToken,\r\n        address rootToken,\r\n        uint256 exitAmountOrTokenId,\r\n        bytes32 txHash,\r\n        bool isRegularExit,\r\n        uint256 priority\r\n    ) external;\r\n\r\n    function addInput(\r\n        uint256 exitId,\r\n        uint256 age,\r\n        address utxoOwner,\r\n        address token\r\n    ) external;\r\n\r\n    function challengeExit(\r\n        uint256 exitId,\r\n        uint256 inputId,\r\n        bytes calldata challengeData,\r\n        address adjudicatorPredicate\r\n    ) external;\r\n}\r\n\r\n// File: contracts/common/Registry.sol\r\n\r\npragma solidity ^0.5.2;\r\n\r\n\r\n\r\n\r\ncontract Registry is Governable {\r\n    // @todo hardcode constants\r\n    bytes32 private constant WETH_TOKEN = keccak256(\"wethToken\");\r\n    bytes32 private constant DEPOSIT_MANAGER = keccak256(\"depositManager\");\r\n    bytes32 private constant STAKE_MANAGER = keccak256(\"stakeManager\");\r\n    bytes32 private constant VALIDATOR_SHARE = keccak256(\"validatorShare\");\r\n    bytes32 private constant WITHDRAW_MANAGER = keccak256(\"withdrawManager\");\r\n    bytes32 private constant CHILD_CHAIN = keccak256(\"childChain\");\r\n    bytes32 private constant STATE_SENDER = keccak256(\"stateSender\");\r\n    bytes32 private constant SLASHING_MANAGER = keccak256(\"slashingManager\");\r\n\r\n    address public erc20Predicate;\r\n    address public erc721Predicate;\r\n\r\n    mapping(bytes32 => address) public contractMap;\r\n    mapping(address => address) public rootToChildToken;\r\n    mapping(address => address) public childToRootToken;\r\n    mapping(address => bool) public proofValidatorContracts;\r\n    mapping(address => bool) public isERC721;\r\n\r\n    enum Type {Invalid, ERC20, ERC721, Custom}\r\n    struct Predicate {\r\n        Type _type;\r\n    }\r\n    mapping(address => Predicate) public predicates;\r\n\r\n    event TokenMapped(address indexed rootToken, address indexed childToken);\r\n    event ProofValidatorAdded(address indexed validator, address indexed from);\r\n    event ProofValidatorRemoved(address indexed validator, address indexed from);\r\n    event PredicateAdded(address indexed predicate, address indexed from);\r\n    event PredicateRemoved(address indexed predicate, address indexed from);\r\n    event ContractMapUpdated(bytes32 indexed key, address indexed previousContract, address indexed newContract);\r\n\r\n    constructor(address _governance) public Governable(_governance) {}\r\n\r\n    function updateContractMap(bytes32 _key, address _address) external onlyGovernance {\r\n        emit ContractMapUpdated(_key, contractMap[_key], _address);\r\n        contractMap[_key] = _address;\r\n    }\r\n\r\n    /**\r\n     * @dev Map root token to child token\r\n     * @param _rootToken Token address on the root chain\r\n     * @param _childToken Token address on the child chain\r\n     * @param _isERC721 Is the token being mapped ERC721\r\n     */\r\n    function mapToken(\r\n        address _rootToken,\r\n        address _childToken,\r\n        bool _isERC721\r\n    ) external onlyGovernance {\r\n        require(_rootToken != address(0x0) && _childToken != address(0x0), \"INVALID_TOKEN_ADDRESS\");\r\n        rootToChildToken[_rootToken] = _childToken;\r\n        childToRootToken[_childToken] = _rootToken;\r\n        isERC721[_rootToken] = _isERC721;\r\n        IWithdrawManager(contractMap[WITHDRAW_MANAGER]).createExitQueue(_rootToken);\r\n        emit TokenMapped(_rootToken, _childToken);\r\n    }\r\n\r\n    function addErc20Predicate(address predicate) public onlyGovernance {\r\n        require(predicate != address(0x0), \"Can not add null address as predicate\");\r\n        erc20Predicate = predicate;\r\n        addPredicate(predicate, Type.ERC20);\r\n    }\r\n\r\n    function addErc721Predicate(address predicate) public onlyGovernance {\r\n        erc721Predicate = predicate;\r\n        addPredicate(predicate, Type.ERC721);\r\n    }\r\n\r\n    function addPredicate(address predicate, Type _type) public onlyGovernance {\r\n        require(predicates[predicate]._type == Type.Invalid, \"Predicate already added\");\r\n        predicates[predicate]._type = _type;\r\n        emit PredicateAdded(predicate, msg.sender);\r\n    }\r\n\r\n    function removePredicate(address predicate) public onlyGovernance {\r\n        require(predicates[predicate]._type != Type.Invalid, \"Predicate does not exist\");\r\n        delete predicates[predicate];\r\n        emit PredicateRemoved(predicate, msg.sender);\r\n    }\r\n\r\n    function getValidatorShareAddress() public view returns (address) {\r\n        return contractMap[VALIDATOR_SHARE];\r\n    }\r\n\r\n    function getWethTokenAddress() public view returns (address) {\r\n        return contractMap[WETH_TOKEN];\r\n    }\r\n\r\n    function getDepositManagerAddress() public view returns (address) {\r\n        return contractMap[DEPOSIT_MANAGER];\r\n    }\r\n\r\n    function getStakeManagerAddress() public view returns (address) {\r\n        return contractMap[STAKE_MANAGER];\r\n    }\r\n\r\n    function getSlashingManagerAddress() public view returns (address) {\r\n        return contractMap[SLASHING_MANAGER];\r\n    }\r\n\r\n    function getWithdrawManagerAddress() public view returns (address) {\r\n        return contractMap[WITHDRAW_MANAGER];\r\n    }\r\n\r\n    function getChildChainAndStateSender() public view returns (address, address) {\r\n        return (contractMap[CHILD_CHAIN], contractMap[STATE_SENDER]);\r\n    }\r\n\r\n    function isTokenMapped(address _token) public view returns (bool) {\r\n        return rootToChildToken[_token] != address(0x0);\r\n    }\r\n\r\n    function isTokenMappedAndIsErc721(address _token) public view returns (bool) {\r\n        require(isTokenMapped(_token), \"TOKEN_NOT_MAPPED\");\r\n        return isERC721[_token];\r\n    }\r\n\r\n    function isTokenMappedAndGetPredicate(address _token) public view returns (address) {\r\n        if (isTokenMappedAndIsErc721(_token)) {\r\n            return erc721Predicate;\r\n        }\r\n        return erc20Predicate;\r\n    }\r\n\r\n    function isChildTokenErc721(address childToken) public view returns (bool) {\r\n        address rootToken = childToRootToken[childToken];\r\n        require(rootToken != address(0x0), \"Child token is not mapped\");\r\n        return isERC721[rootToken];\r\n    }\r\n}\r\n\r\n// File: contracts/staking/validatorShare/ValidatorShareProxy.sol\r\n\r\npragma solidity ^0.5.2;\r\n\r\n\r\n\r\ncontract ValidatorShareProxy is UpgradableProxy {\r\n    constructor(address _registry) public UpgradableProxy(_registry) {}\r\n\r\n    function loadImplementation() internal view returns (address) {\r\n        return Registry(super.loadImplementation()).getValidatorShareAddress();\r\n    }\r\n}",
+  "sourcify_repo_url": "https://repo.sourcify.dev/contracts/partial_match/1/0xb929B89153fC2eEd442e81E5A1add4e2fa39028f/",
+  "verified_at": "2024-05-14T07:53:26.601437Z",
+  "verified_twin_address_hash": null
+}

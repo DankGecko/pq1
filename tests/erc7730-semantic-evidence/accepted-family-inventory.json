@@ -214,6 +214,12 @@
       "scope": "Only Ethereum mainnet and Sepolia deposit/withdraw.",
       "paths": ["tests/erc7730-semantic-evidence/weth9-deposit/manifest.json"]
     },
+    "yieldxyz": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the four operand-complete POL validator-share routes across seventeen proxies and the exact-spend USDe allocator-vault deposit route to fixed-block proxy/runtime, source/ABI, token, strategy, and configuration evidence.",
+      "scope": "Exactly the two Yield.xyz source families and deployments/routes enumerated by the package. USDe mint, withdraw, and redeem remain structural exact-known refusals; live state, future upgrades/configuration, and transaction success are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/yieldxyz/manifest.json"]
+    },
     "erc4626-shared-template": {
       "classification": "shared-standard-implementation",
       "reason": "Accepted formats are inherited unchanged from the single shared ERC-4626 descriptor template.",
@@ -1670,14 +1676,14 @@
   {
     "source": "yieldxyz/calldata-yieldxyz-pol-validator.json",
     "accepted_leaf_count": 17,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "yieldxyz"
   },
   {
     "source": "yieldxyz/calldata-yieldxyz-usde-vault.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "yieldxyz"
   }
 ]
 }

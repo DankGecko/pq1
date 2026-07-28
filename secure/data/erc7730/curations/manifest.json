@@ -786,6 +786,20 @@
       "upstream_sha256": "ac899b0b8b09ea9b3d19ea068124288fabcb74ab08681eaa491bcf109cd0464d",
       "replacement_bytes": 876,
       "replacement_sha256": "ff21a25056339b58747d4b00d963705548de2853d67562a4af642c0976b633e2"
+    },
+    {
+      "path": "registry/yieldxyz/calldata-yieldxyz-pol-validator.json",
+      "upstream_bytes": 3106,
+      "upstream_sha256": "97650028e1dd83e4c2584f4320c88fcfb362b1a451ab052958af4904da0c109f",
+      "replacement_bytes": 5189,
+      "replacement_sha256": "228c94c88a052eb44b8f96a33238247fe1f2d26734f897e7f1c91eaa1eb419eb"
+    },
+    {
+      "path": "registry/yieldxyz/calldata-yieldxyz-usde-vault.json",
+      "upstream_bytes": 3361,
+      "upstream_sha256": "41a8b443293132d8a64525f7947b500053311d872ce02980b111004280b39f31",
+      "replacement_bytes": 4888,
+      "replacement_sha256": "75efc68f4c2dcc96699c2d04b9c7519249e8900f6e2d162ec74e7f345dd7770b"
     }
   ]
 }
