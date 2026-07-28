@@ -301,6 +301,25 @@ fn curated_descriptors_emit_no_clear_leaf_but_preserve_every_exact_known_call() 
     assert!(!accepted_sources.contains("fellow-fund/calldata-fellow-fund.json"));
     assert!(!accepted_sources.contains("swissborg/calldata-ChsbToBorgMigrator.json"));
 
+    let put_manager =
+        read_json(&registry_root.join("registry/flyingtulip/calldata-PutManager.json"));
+    for signature in [
+        "divest(uint256 id, uint256 amount_ft)",
+        "withdrawFT(uint256 id, uint256 amount)",
+    ] {
+        let token = put_manager["display"]["formats"][signature]["fields"]
+            .as_array()
+            .expect("PutManager fields")
+            .iter()
+            .find(|field| field["format"].as_str() == Some("tokenAmount"))
+            .and_then(|field| field["params"]["token"].as_str())
+            .expect("PutManager static FT identity");
+        assert!(
+            token.eq_ignore_ascii_case(&format!("0x{SONIC_FT}")),
+            "PutManager amount no longer binds the evidenced FT identity"
+        );
+    }
+
     let token_db = read_json(&root.join("secure/data/erc20.json"));
     let sonic_ft = token_db
         .as_array()
