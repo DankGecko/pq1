@@ -1,0 +1,164 @@
+{
+  "address": "0x40fa0a360818b04b9975680746dC0B7092105A0c",
+  "chainId": "8453",
+  "match": "exact_match",
+  "runtimeMatch": "exact_match",
+  "creationMatch": "exact_match",
+  "verifiedAt": "2025-11-23T23:42:18Z",
+  "compilation": {
+    "language": "Solidity",
+    "compiler": "solc",
+    "compilerVersion": "0.8.17+commit.8df45f5f",
+    "compilerSettings": {
+      "metadata": {
+        "useLiteralContent": true
+      },
+      "optimizer": {
+        "runs": 1000,
+        "enabled": true
+      }
+    },
+    "name": "BaseWormholeGatewayUpgraded",
+    "fullyQualifiedName": "contracts/wormhole/BaseWormholeGatewayUpgraded.sol:BaseWormholeGatewayUpgraded"
+  },
+  "routeAbi": [
+    {
+      "name": "bridge",
+      "type": "function",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "contract IWormholeTokenBridge"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "name": "bridgeToken",
+      "type": "function",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "contract IERC20Upgradeable"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "name": "receiveTbtc",
+      "type": "function",
+      "inputs": [
+        {
+          "name": "encodedVm",
+          "type": "bytes",
+          "internalType": "bytes"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "name": "sendTbtc",
+      "type": "function",
+      "inputs": [
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "recipientChain",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "recipient",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "arbiterFee",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "nonce",
+          "type": "uint32",
+          "internalType": "uint32"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "stateMutability": "payable"
+    },
+    {
+      "name": "sendTbtcWithPayloadToNativeChain",
+      "type": "function",
+      "inputs": [
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "recipientNativeChain",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "recipient",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "nonce",
+          "type": "uint32",
+          "internalType": "uint32"
+        },
+        {
+          "name": "payload",
+          "type": "bytes",
+          "internalType": "bytes"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "stateMutability": "payable"
+    },
+    {
+      "name": "tbtc",
+      "type": "function",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "contract L2TBTC"
+        }
+      ],
+      "stateMutability": "view"
+    }
+  ],
+  "sources": {
+    "contracts/wormhole/BaseWormholeGatewayUpgraded.sol": {
+      "content": "// SPDX-License-Identifier: GPL-3.0-only\r\n\r\npragma solidity ^0.8.17;\r\n\r\nimport \"./L2WormholeGateway.sol\";\r\nimport \"@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol\";\r\n\r\n/// @notice Wormhole gateway for L2 Base - upgraded version.\r\n/// @dev This contract is intended solely for testing purposes. As it currently\r\n///      stands in the implementation of L2WormholeGateway.sol, there are no\r\n///      reserved storage gap slots available, thereby limiting the upgradability\r\n///      to a child contract only.\r\ncontract BaseWormholeGatewayUpgraded is L2WormholeGateway {\r\n    using SafeERC20Upgradeable for IERC20Upgradeable;\r\n\r\n    /// @custom:oz-upgrades-unsafe-allow constructor\r\n    constructor() {\r\n        _disableInitializers();\r\n    }\r\n\r\n    /// @notice This function is called when the user sends their token from L2.\r\n    ///         The contract burns the canonical tBTC from the user and sends\r\n    ///         wormhole tBTC representation over the bridge.\r\n    ///         Keep in mind that when multiple bridges receive a minting\r\n    ///         authority on the canonical tBTC, this function may not be able\r\n    ///         to send all amounts of tBTC through the Wormhole bridge. The\r\n    ///         capability of Wormhole Bridge to send tBTC from the chain is\r\n    ///         limited to the amount of tBTC bridged through Wormhole to that\r\n    ///         chain.\r\n    /// @dev Requirements:\r\n    ///      - The native chain doesn't have a Wormhole tBTC gateway, so the token\r\n    ///        minted by Wormhole should be considered canonical.\r\n    ///      - The sender must have at least `amount` of the canonical tBTC and\r\n    ///        it has to be approved for L2WormholeGateway.\r\n    ///      - The L2WormholeGateway must have at least `amount` of the wormhole\r\n    ///        tBTC.\r\n    ///      - The recipient must not be 0x0.\r\n    ///      - The amount to transfer must not be 0,\r\n    ///      - The amount to transfer must be >= 10^10 (1e18 precision).\r\n    ///      This function uses `transferTokensWithPayload` to send tBTC directly\r\n    ///      to the `recipient` contract address on the recipient chain. The `arbiterFee` is\r\n    ///      not applicable and implicitly 0.\r\n    /// @param amount The amount of tBTC to be sent.\r\n    /// @param recipientNativeChain The Wormhole chain ID of the recipient chain.\r\n    /// @param recipient The Wormhole-formatted address of the target contract on the recipient chain\r\n    ///                  that will receive the tokens and process the payload.\r\n    /// @param nonce The Wormhole nonce used to batch messages together.\r\n    /// @param payload The arbitrary data to be passed to and processed by the `recipient`\r\n    ///                contract on the recipient chain.\r\n    /// @return The Wormhole sequence number.\r\n    function sendTbtcWithPayloadToNativeChain(\r\n        uint256 amount,\r\n        uint16 recipientNativeChain,\r\n        bytes32 recipient,\r\n        uint32 nonce,\r\n        bytes calldata payload\r\n    ) external payable nonReentrant returns (uint64) {\r\n        require(\r\n            gateways[recipientNativeChain] == bytes32(0),\r\n            \"No Wormhole tBTC gateway on the native chain\"\r\n        );\r\n        require(recipient != bytes32(0), \"0x0 recipient not allowed\");\r\n        require(amount != 0, \"Amount must not be 0\");\r\n\r\n        // Normalize the amount to bridge. The dust can not be bridged due to\r\n        // the decimal shift in the Wormhole Bridge contract.\r\n        amount = normalize(amount);\r\n\r\n        // Check again after dropping the dust.\r\n        require(amount != 0, \"Amount too low to bridge\");\r\n\r\n        require(\r\n            bridgeToken.balanceOf(address(this)) >= amount,\r\n            \"Not enough wormhole tBTC in the gateway to bridge\"\r\n        );\r\n\r\n        emit WormholeTbtcSent(\r\n            amount,\r\n            recipientNativeChain,\r\n            bytes32(0), // No specific tBTC gateway from 'gateways' mapping is used; 'recipient' is the direct target contract.\r\n            recipient,\r\n            0, // arbiterFee is 0 as this function sends with payload\r\n            nonce\r\n        );\r\n\r\n        require(\r\n            mintedAmount >= amount,\r\n            \"L2WormholeGateway: amount to send exceeds minted amount\"\r\n        );\r\n        mintedAmount -= amount;\r\n        tbtc.burnFrom(msg.sender, amount);\r\n        bridgeToken.safeApprove(address(bridge), amount);\r\n\r\n        return\r\n            bridge.transferTokensWithPayload{value: msg.value}(\r\n                address(bridgeToken),\r\n                amount,\r\n                recipientNativeChain,\r\n                recipient,\r\n                nonce,\r\n                payload\r\n            );\r\n    }\r\n}\r\n"
+    },
+    "contracts/wormhole/L2WormholeGateway.sol": {
+      "content": "// SPDX-License-Identifier: GPL-3.0-only\r\n\r\n// ██████████████     ▐████▌     ██████████████\r\n// ██████████████     ▐████▌     ██████████████\r\n//               ▐████▌    ▐████▌\r\n//               ▐████▌    ▐████▌\r\n// ██████████████     ▐████▌     ██████████████\r\n// ██████████████     ▐████▌     ██████████████\r\n//               ▐████▌    ▐████▌\r\n//               ▐████▌    ▐████▌\r\n//               ▐████▌    ▐████▌\r\n//               ▐████▌    ▐████▌\r\n//               ▐████▌    ▐████▌\r\n//               ▐████▌    ▐████▌\r\n\r\npragma solidity ^0.8.17;\r\n\r\nimport \"@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol\";\r\nimport \"@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol\";\r\nimport \"@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol\";\r\nimport \"@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol\";\r\n\r\nimport \"@keep-network/tbtc-v2/contracts/l2/L2TBTC.sol\";\r\n\r\n/// @title IWormholeTokenBridge\r\n/// @notice Wormhole Token Bridge interface. Contains only selected functions\r\n///         used by L2WormholeGateway.\r\ninterface IWormholeTokenBridge {\r\n    function completeTransferWithPayload(bytes memory encodedVm)\r\n        external\r\n        returns (bytes memory);\r\n\r\n    function parseTransferWithPayload(bytes memory encoded)\r\n        external\r\n        pure\r\n        returns (TransferWithPayload memory transfer);\r\n\r\n    function transferTokens(\r\n        address token,\r\n        uint256 amount,\r\n        uint16 recipientChain,\r\n        bytes32 recipient,\r\n        uint256 arbiterFee,\r\n        uint32 nonce\r\n    ) external payable returns (uint64 sequence);\r\n\r\n    function transferTokensWithPayload(\r\n        address token,\r\n        uint256 amount,\r\n        uint16 recipientChain,\r\n        bytes32 recipient,\r\n        uint32 nonce,\r\n        bytes memory payload\r\n    ) external payable returns (uint64 sequence);\r\n\r\n    struct TransferWithPayload {\r\n        uint8 payloadID;\r\n        uint256 amount;\r\n        bytes32 tokenAddress;\r\n        uint16 tokenChain;\r\n        bytes32 to;\r\n        uint16 toChain;\r\n        bytes32 fromAddress;\r\n        bytes payload;\r\n    }\r\n}\r\n\r\n/// @title L2WormholeGateway\r\n/// @notice Selected cross-ecosystem bridges are given the minting authority for\r\n///         tBTC token on L2 and sidechains. This contract gives a minting\r\n///         authority to the Wormhole Bridge.\r\n///\r\n///         The process of bridging from L1 to L2 (or sidechain) looks as\r\n///         follows:\r\n///         1. There is a tBTC holder on L1. The holder goes to the Wormhole\r\n///            Portal and selects the chain they want to bridge to.\r\n///         2. The holder submits one transaction to L1 locking their tBTC\r\n///            tokens in the bridge’s smart contract. After the transaction is\r\n///            mined, they wait about 15 minutes for the Ethereum block\r\n///            finality.\r\n///         3. The holder submits one transaction to L2 that is minting tokens.\r\n///            After that transaction is mined, they have their tBTC on L2.\r\n///\r\n///         The process of bridging from L2 (or sidechain) to L1 looks as\r\n///         follows:\r\n///         1. There is a tBTC holder on L2. That holder goes to the Wormhole\r\n///            Portal and selects one of the L2 chains they want to bridge from.\r\n///         2. The holder submits one transaction to L2 that is burning the\r\n///            token. After the transaction is mined, they wait about 15 minutes\r\n///            for the L2 block finality.\r\n///         3. The holder submits one transaction to L1 unlocking their tBTC\r\n///            tokens from the bridge’s smart contract. After that transaction\r\n///            is mined, they have their tBTC on L1.\r\n///\r\n///         This smart contract is integrated with step 3 of L1->L2 bridging and\r\n///         step 1 of L2->L1 or L2->L2 bridging. When the user redeems token on\r\n///         L2, this contract receives the Wormhole tBTC representation and\r\n///         mints the canonical tBTC in an equal amount. When user sends their\r\n///         token from L1, this contract burns the canonical tBTC and sends\r\n///         Wormhole tBTC representation through the bridge in an equal amount.\r\n/// @dev This contract is supposed to be deployed behind a transparent\r\n///      upgradeable proxy.\r\ncontract L2WormholeGateway is\r\n    Initializable,\r\n    OwnableUpgradeable,\r\n    ReentrancyGuardUpgradeable\r\n{\r\n    using SafeERC20Upgradeable for IERC20Upgradeable;\r\n\r\n    /// @notice Reference to the Wormhole Token Bridge contract.\r\n    IWormholeTokenBridge public bridge;\r\n\r\n    /// @notice Wormhole tBTC token representation.\r\n    IERC20Upgradeable public bridgeToken;\r\n\r\n    /// @notice Canonical tBTC token.\r\n    L2TBTC public tbtc;\r\n\r\n    /// @notice Maps Wormhole chain ID to the Wormhole tBTC gateway address on\r\n    ///         that chain. For example, this chain's ID should be mapped to\r\n    ///         this contract's address. If there is no Wormhole tBTC gateway\r\n    ///         address on the given chain, there is no entry in this mapping.\r\n    ///         The mapping holds addresses in a Wormhole-specific format, where\r\n    ///         Ethereum address is left-padded with zeros.\r\n    mapping(uint16 => bytes32) public gateways;\r\n\r\n    /// @notice Minting limit for this gateway. Useful for early days of testing\r\n    ///         the system. The gateway can not mint more canonical tBTC than\r\n    ///         this limit.\r\n    uint256 public mintingLimit;\r\n\r\n    /// @notice The amount of tBTC minted by this contract. tBTC burned by this\r\n    ///         contract decreases this amount.\r\n    uint256 public mintedAmount;\r\n\r\n    event WormholeTbtcReceived(address receiver, uint256 amount);\r\n\r\n    event WormholeTbtcSent(\r\n        uint256 amount,\r\n        uint16 recipientChain,\r\n        bytes32 gateway,\r\n        bytes32 recipient,\r\n        uint256 arbiterFee,\r\n        uint32 nonce\r\n    );\r\n\r\n    event WormholeTbtcDeposited(address depositor, uint256 amount);\r\n\r\n    event GatewayAddressUpdated(uint16 chainId, bytes32 gateway);\r\n\r\n    event MintingLimitUpdated(uint256 mintingLimit);\r\n\r\n    function initialize(\r\n        IWormholeTokenBridge _bridge,\r\n        IERC20Upgradeable _bridgeToken,\r\n        L2TBTC _tbtc\r\n    ) external initializer {\r\n        __Ownable_init();\r\n        __ReentrancyGuard_init();\r\n\r\n        require(\r\n            address(_bridge) != address(0),\r\n            \"Wormhole bridge address must not be 0x0\"\r\n        );\r\n        require(\r\n            address(_bridgeToken) != address(0),\r\n            \"Bridge token address must not be 0x0\"\r\n        );\r\n        require(\r\n            address(_tbtc) != address(0),\r\n            \"L2TBTC token address must not be 0x0\"\r\n        );\r\n\r\n        bridge = _bridge;\r\n        bridgeToken = _bridgeToken;\r\n        tbtc = _tbtc;\r\n        mintingLimit = type(uint256).max;\r\n    }\r\n\r\n    /// @notice This function is called when the user sends their token from L2.\r\n    ///         The contract burns the canonical tBTC from the user and sends\r\n    ///         wormhole tBTC representation over the bridge.\r\n    ///         Keep in mind that when multiple bridges receive a minting\r\n    ///         authority on the canonical tBTC, this function may not be able\r\n    ///         to send all amounts of tBTC through the Wormhole bridge. The\r\n    ///         capability of Wormhole Bridge to send tBTC from the chain is\r\n    ///         limited to the amount of tBTC bridged through Wormhole to that\r\n    ///         chain.\r\n    /// @dev Requirements:\r\n    ///      - The sender must have at least `amount` of the canonical tBTC and\r\n    ///        it has to be approved for L2WormholeGateway.\r\n    ///      - The L2WormholeGateway must have at least `amount` of the wormhole\r\n    ///        tBTC.\r\n    ///      - The recipient must not be 0x0.\r\n    ///      - The amount to transfer must not be 0,\r\n    ///      - The amount to transfer must be >= 10^10 (1e18 precision).\r\n    ///      Depending if Wormhole tBTC gateway is registered on the target\r\n    ///      chain, this function uses transfer or transfer with payload over\r\n    ///      the Wormhole bridge.\r\n    /// @param amount The amount of tBTC to be sent.\r\n    /// @param recipientChain The Wormhole recipient chain ID.\r\n    /// @param recipient The address of the recipient in the Wormhole format.\r\n    /// @param arbiterFee The Wormhole arbiter fee. Ignored if sending\r\n    ///                   tBTC to chain with Wormhole tBTC gateway.\r\n    /// @param nonce The Wormhole nonce used to batch messages together.\r\n    /// @return The Wormhole sequence number.\r\n    function sendTbtc(\r\n        uint256 amount,\r\n        uint16 recipientChain,\r\n        bytes32 recipient,\r\n        uint256 arbiterFee,\r\n        uint32 nonce\r\n    ) external payable nonReentrant returns (uint64) {\r\n        require(recipient != bytes32(0), \"0x0 recipient not allowed\");\r\n        require(amount != 0, \"Amount must not be 0\");\r\n\r\n        // Normalize the amount to bridge. The dust can not be bridged due to\r\n        // the decimal shift in the Wormhole Bridge contract.\r\n        amount = normalize(amount);\r\n\r\n        // Check again after dropping the dust.\r\n        require(amount != 0, \"Amount too low to bridge\");\r\n\r\n        require(\r\n            bridgeToken.balanceOf(address(this)) >= amount,\r\n            \"Not enough wormhole tBTC in the gateway to bridge\"\r\n        );\r\n\r\n        bytes32 gateway = gateways[recipientChain];\r\n\r\n        emit WormholeTbtcSent(\r\n            amount,\r\n            recipientChain,\r\n            gateway,\r\n            recipient,\r\n            arbiterFee,\r\n            nonce\r\n        );\r\n\r\n        mintedAmount -= amount;\r\n        tbtc.burnFrom(msg.sender, amount);\r\n        bridgeToken.safeApprove(address(bridge), amount);\r\n\r\n        if (gateway == bytes32(0)) {\r\n            // No Wormhole tBTC gateway on the target chain. The token minted\r\n            // by Wormhole should be considered canonical.\r\n            return\r\n                bridge.transferTokens{value: msg.value}(\r\n                    address(bridgeToken),\r\n                    amount,\r\n                    recipientChain,\r\n                    recipient,\r\n                    arbiterFee,\r\n                    nonce\r\n                );\r\n        } else {\r\n            // There is a Wormhole tBTC gateway on the target chain.\r\n            // The gateway needs to mint canonical tBTC for the recipient\r\n            // encoded in the payload.\r\n            return\r\n                bridge.transferTokensWithPayload{value: msg.value}(\r\n                    address(bridgeToken),\r\n                    amount,\r\n                    recipientChain,\r\n                    gateway,\r\n                    nonce,\r\n                    abi.encode(recipient)\r\n                );\r\n        }\r\n    }\r\n\r\n    /// @notice This function is called when the user redeems their token on L2.\r\n    ///         The contract receives Wormhole tBTC representation and mints the\r\n    ///         canonical tBTC for the user.\r\n    ///         If the tBTC minting limit has been reached by this contract,\r\n    ///         instead of minting tBTC the receiver address receives Wormhole\r\n    ///         tBTC representation.\r\n    /// @dev Requirements:\r\n    ///      - The receiver of Wormhole tBTC should be the L2WormholeGateway\r\n    ///        contract.\r\n    ///      - The receiver of the canonical tBTC should be abi-encoded in the\r\n    ///        payload.\r\n    ///      - The receiver of the canonical tBTC must not be the zero address.\r\n    ///\r\n    ///      The Wormhole Token Bridge contract has protection against redeeming\r\n    ///      the same VAA again. When a Token Bridge VAA is redeemed, its\r\n    ///      message body hash is stored in a map. This map is used to check\r\n    ///      whether the hash has already been set in this map. For this reason,\r\n    ///      this function does not have to be nonReentrant in theory. However,\r\n    ///      to make this function non-dependent on Wormhole Bridge implementation,\r\n    ///      we are making it nonReentrant anyway.\r\n    /// @param encodedVm A byte array containing a Wormhole VAA signed by the\r\n    ///        guardians.\r\n    function receiveTbtc(bytes calldata encodedVm) external nonReentrant {\r\n        // ITokenBridge.completeTransferWithPayload completes a contract-controlled\r\n        // transfer of an ERC20 token. Calling this function is not enough to\r\n        // ensure L2WormholeGateway received Wormhole tBTC representation.\r\n        // Instead of going too deep into the ITokenBridge implementation,\r\n        // asserting who is the receiver of the token, and which token it is,\r\n        // we check the balance before the ITokenBridge call and the balance\r\n        // after ITokenBridge call. This way, we are sure this contract received\r\n        // Wormhole tBTC token in the given amount. This is transparent to\r\n        // all potential upgrades of ITokenBridge implementation and no other\r\n        // validations are needed.\r\n        uint256 balanceBefore = bridgeToken.balanceOf(address(this));\r\n        bytes memory encoded = bridge.completeTransferWithPayload(encodedVm);\r\n        uint256 balanceAfter = bridgeToken.balanceOf(address(this));\r\n\r\n        uint256 amount = balanceAfter - balanceBefore;\r\n        // Protect against the custody of irrelevant tokens.\r\n        require(amount > 0, \"No tBTC transferred\");\r\n\r\n        address receiver = fromWormholeAddress(\r\n            bytes32(bridge.parseTransferWithPayload(encoded).payload)\r\n        );\r\n        require(receiver != address(0), \"0x0 receiver not allowed\");\r\n\r\n        // We send wormhole tBTC OR mint canonical tBTC. We do not want to send\r\n        // dust. Sending wormhole tBTC is an exceptional situation and we want\r\n        // to keep it simple.\r\n        if (mintedAmount + amount > mintingLimit) {\r\n            bridgeToken.safeTransfer(receiver, amount);\r\n        } else {\r\n            // The function is non-reentrant.\r\n            // slither-disable-next-line reentrancy-benign\r\n            mintedAmount += amount;\r\n            tbtc.mint(receiver, amount);\r\n        }\r\n\r\n        // The function is non-reentrant.\r\n        // slither-disable-next-line reentrancy-events\r\n        emit WormholeTbtcReceived(receiver, amount);\r\n    }\r\n\r\n    /// @notice Lets the governance to update the tBTC gateway address on the\r\n    ///         chain with the given Wormhole ID.\r\n    /// @dev Use toWormholeAddress function to convert between Ethereum and\r\n    ///      Wormhole address formats.\r\n    /// @param chainId Wormhole ID of the chain.\r\n    /// @param gateway Address of tBTC gateway on the given chain in a Wormhole\r\n    ///                format.\r\n    function updateGatewayAddress(uint16 chainId, bytes32 gateway)\r\n        external\r\n        onlyOwner\r\n    {\r\n        gateways[chainId] = gateway;\r\n        emit GatewayAddressUpdated(chainId, gateway);\r\n    }\r\n\r\n    /// @notice Lets the governance to update the tBTC minting limit for this\r\n    ///         contract.\r\n    /// @param _mintingLimit The new minting limit.\r\n    function updateMintingLimit(uint256 _mintingLimit) external onlyOwner {\r\n        mintingLimit = _mintingLimit;\r\n        emit MintingLimitUpdated(_mintingLimit);\r\n    }\r\n\r\n    /// @notice Converts Ethereum address into Wormhole format.\r\n    /// @param _address The address to convert.\r\n    function toWormholeAddress(address _address)\r\n        external\r\n        pure\r\n        returns (bytes32)\r\n    {\r\n        return bytes32(uint256(uint160(_address)));\r\n    }\r\n\r\n    /// @notice Converts Wormhole address into Ethereum format.\r\n    /// @param _address The address to convert.\r\n    function fromWormholeAddress(bytes32 _address)\r\n        public\r\n        pure\r\n        returns (address)\r\n    {\r\n        return address(uint160(uint256(_address)));\r\n    }\r\n\r\n    /// @dev Eliminates the dust that cannot be bridged with Wormhole\r\n    ///      due to the decimal shift in the Wormhole Bridge contract.\r\n    ///      See https://github.com/wormhole-foundation/wormhole/blob/96682bdbeb7c87bfa110eade0554b3d8cbf788d2/ethereum/contracts/bridge/Bridge.sol#L276-L288\r\n    function normalize(uint256 amount) internal pure returns (uint256) {\r\n        // slither-disable-next-line divide-before-multiply\r\n        amount /= 10**10;\r\n        amount *= 10**10;\r\n        return amount;\r\n    }\r\n}\r\n"
+    }
+  }
+}

@@ -683,6 +683,27 @@
       "replacement_sha256": "e3157a468d0de22734eb77b5c7a8a83a6b74f02ebe5bb23213dcea638300afae"
     },
     {
+      "path": "registry/threshold/calldata-L2WormholeGateway.json",
+      "upstream_bytes": 3034,
+      "upstream_sha256": "c6d8f5d249d87262b4e7b773f2704284bcbccf16add98805c559e6850ea8db55",
+      "replacement_bytes": 7939,
+      "replacement_sha256": "26ca3683d41c55895cd191d68d61b4e69b858ab1ea6dc78c4a170ab1c1e00a38"
+    },
+    {
+      "path": "registry/threshold/calldata-RebateStaking.json",
+      "upstream_bytes": 2681,
+      "upstream_sha256": "faf0d5dd2af84932fc9b28f9377342ffa97c00908b73d4df54dd42ab433687fa",
+      "replacement_bytes": 4287,
+      "replacement_sha256": "196252af4198d2a70353c67d83c3456affc9d6ac1fd0935281624c5bfc0533a2"
+    },
+    {
+      "path": "registry/threshold/calldata-TBTCVault.json",
+      "upstream_bytes": 1648,
+      "upstream_sha256": "d400b13feb9325866be7d25ec9f042f435bcae53cebeedd56a97f90673ebfa05",
+      "replacement_bytes": 3851,
+      "replacement_sha256": "42c8a2ed1a672d3282472bdc6665eba93543b9fad7501f241247684bd91b8981"
+    },
+    {
       "path": "registry/uniswap/calldata-UniswapV3Router02.json",
       "upstream_bytes": 6039,
       "upstream_sha256": "f2ced0c2ed44a7132a987365bb4f0aedd4d21091decc4aad3d327b7cb400193d",

@@ -1,0 +1,137 @@
+{
+  "address": "0x25aAF04229f77A9AE80430b3C89E3455Ab2ec22F",
+  "chainId": "1",
+  "match": "match",
+  "runtimeMatch": "match",
+  "creationMatch": "match",
+  "verifiedAt": "2026-04-13T01:33:29Z",
+  "compilation": {
+    "language": "Solidity",
+    "compiler": "solc",
+    "compilerVersion": "0.8.17+commit.8df45f5f",
+    "compilerSettings": {
+      "viaIR": false,
+      "metadata": {
+        "bytecodeHash": "ipfs",
+        "useLiteralContent": false
+      },
+      "optimizer": {
+        "runs": 1000,
+        "enabled": true
+      },
+      "evmVersion": "london",
+      "remappings": [
+        "@ensdomains/=node_modules/@ensdomains/",
+        "@keep-network/=node_modules/@keep-network/",
+        "@openzeppelin/=node_modules/@openzeppelin/",
+        "@summa-tx/=node_modules/@summa-tx/",
+        "@thesis/=node_modules/@thesis/",
+        "@threshold-network/=node_modules/@threshold-network/",
+        "eth-gas-reporter/=node_modules/eth-gas-reporter/",
+        "hardhat-deploy/=node_modules/hardhat-deploy/",
+        "hardhat/=node_modules/hardhat/",
+        "openzeppelin-solidity/=node_modules/openzeppelin-solidity/"
+      ]
+    },
+    "name": "RebateStaking",
+    "fullyQualifiedName": "contracts/bridge/RebateStaking.sol:RebateStaking"
+  },
+  "routeAbi": [
+    {
+      "name": "bridge",
+      "type": "function",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "name": "finalizeUnstaking",
+      "type": "function",
+      "inputs": [
+        {
+          "name": "receiver",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "name": "setDelegatee",
+      "type": "function",
+      "inputs": [
+        {
+          "name": "_delegatee",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "name": "setRebateTreasuryFeeMode",
+      "type": "function",
+      "inputs": [
+        {
+          "name": "_rebateTreasuryFeeMode",
+          "type": "uint8",
+          "internalType": "enum RebateStaking.RebateTreasuryFeeMode"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "name": "stake",
+      "type": "function",
+      "inputs": [
+        {
+          "name": "amount",
+          "type": "uint96",
+          "internalType": "uint96"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "name": "startUnstaking",
+      "type": "function",
+      "inputs": [
+        {
+          "name": "amount",
+          "type": "uint96",
+          "internalType": "uint96"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "name": "token",
+      "type": "function",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "contract IERC20Upgradeable"
+        }
+      ],
+      "stateMutability": "view"
+    }
+  ],
+  "sources": {
+    "contracts/bridge/RebateStaking.sol": {
+      "content": "// SPDX-License-Identifier: GPL-3.0-only\n\n// ██████████████     ▐████▌     ██████████████\n// ██████████████     ▐████▌     ██████████████\n//               ▐████▌    ▐████▌\n//               ▐████▌    ▐████▌\n// ██████████████     ▐████▌     ██████████████\n// ██████████████     ▐████▌     ██████████████\n//               ▐████▌    ▐████▌\n//               ▐████▌    ▐████▌\n//               ▐████▌    ▐████▌\n//               ▐████▌    ▐████▌\n//               ▐████▌    ▐████▌\n//               ▐████▌    ▐████▌\n\npragma solidity 0.8.17;\n\nimport \"@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol\";\nimport \"@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol\";\nimport \"@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol\";\nimport \"@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol\";\nimport \"@openzeppelin/contracts-upgradeable/utils/math/SafeCastUpgradeable.sol\";\n\n/// @title Contract for staking T token to get rebate on minting/redemption fees\ncontract RebateStaking is Initializable, OwnableUpgradeable {\n    using SafeERC20Upgradeable for IERC20Upgradeable;\n\n    error CallerNotBridge();\n    error ParametersCannotBeZero();\n    error RollingWindowCannotBeZero();\n    error AmountCannotBeZero();\n    error UnstakingAlreadyStarted();\n    error AmountTooBig();\n    error NoUnstakingProcess();\n    error UnstakingNotFinished();\n    error ZeroAddress();\n    error NotAStaker();\n    error WrongDelegatee();\n    error AddressAlreadyTaken();\n\n    enum RebateTreasuryFeeMode {\n        Both,\n        DepositOnly,\n        RedemptionOnly\n    }\n\n    enum TreasuryFeeType {\n        Deposit,\n        Redemption\n    }\n\n    struct Rebate {\n        uint32 timestamp;\n        uint64 feeRebate;\n        // Reserved storage space in case we need to add more variables.\n        // The convention from OpenZeppelin suggests the storage space should\n        // add up to 50 slots. Here we want to have more slots as there are\n        // planned upgrades of the Bridge contract. If more entires are added to\n        // the struct in the upcoming versions we need to reduce the array size.\n        // See https://docs.openzeppelin.com/contracts/4.x/upgradeable#storage_gaps\n        // slither-disable-next-line unused-state\n        uint256[50] __gap;\n    }\n\n    struct Stake {\n        uint96 stakedAmount;\n        uint96 unstakingAmount;\n        uint32 unstakingTimestamp;\n        uint256 rollingWindowStartIndex;\n        Rebate[] rebates;\n        RebateTreasuryFeeMode rebateTreasuryFeeMode;\n        address delegatee;\n    }\n\n    IERC20Upgradeable public token;\n    address public bridge;\n\n    uint256 public rollingWindow;\n    uint256 public unstakingPeriod;\n    uint256 public rebatePerToken;\n\n    mapping(address => Stake) public stakes;\n    mapping(address => address) public delegates;\n\n    // Reserved storage space in case we need to add more variables.\n    // The convention from OpenZeppelin suggests the storage space should\n    // add up to 50 slots. Here we want to have more slots as there are\n    // planned upgrades of the Bridge contract. If more entires are added to\n    // the struct in the upcoming versions we need to reduce the array size.\n    // See https://docs.openzeppelin.com/contracts/4.x/upgradeable#storage_gaps\n    // slither-disable-next-line unused-state\n    uint256[49] private __gap;\n\n    event RollingWindowUpdated(uint256 rollingWindow);\n    event UnstakingPeriodUpdated(uint256 unstakingPeriod);\n    event RebatePerTokenUpdated(uint256 rebatePerToken);\n    event RebateReceived(address staker, uint64 rebate);\n    event RebateCanceled(address staker, uint256 requestedAt);\n    event RebateTreasuryFeeModeUpdated(\n        address indexed staker,\n        RebateTreasuryFeeMode rebateTreasuryFeeMode\n    );\n    event Staked(address staker, uint256 amount);\n    event UnstakeStarted(address staker, uint256 amount);\n    event UnstakeFinished(address staker, uint256 amount);\n    event DelegateeSet(address staker, address delegatee);\n    event TransferFinished(address oldStaker, address newStaker);\n\n    /// @custom:oz-upgrades-unsafe-allow constructor\n    constructor() {\n        _disableInitializers();\n    }\n\n    modifier onlyBridge() {\n        if (msg.sender != address(bridge)) revert CallerNotBridge();\n        _;\n    }\n\n    /// @dev Initializes upgradable contract on deployment.\n    function initialize(\n        address _bridge,\n        address _token,\n        uint256 _rollingWindow,\n        uint256 _unstakingPeriod,\n        uint256 _rebatePerToken\n    ) external initializer {\n        if (\n            _bridge == address(0) || _token == address(0) || _rollingWindow == 0\n        ) {\n            revert ParametersCannotBeZero();\n        }\n        bridge = _bridge;\n        token = IERC20Upgradeable(_token);\n        rollingWindow = _rollingWindow;\n        unstakingPeriod = _unstakingPeriod;\n        rebatePerToken = _rebatePerToken;\n\n        __Ownable_init();\n    }\n\n    /// @notice Updates the rolling window.\n    /// @param _newRollingWindow Duration of the rolling window.\n    /// @dev Requirements:\n    ///      - The caller must be the contract owner,\n    ///      - The new rolling window cannot be zero\n    function updateRollingWindow(uint256 _newRollingWindow) external onlyOwner {\n        if (_newRollingWindow == 0) revert RollingWindowCannotBeZero();\n        rollingWindow = _newRollingWindow;\n        emit RollingWindowUpdated(rollingWindow);\n    }\n\n    /// @notice Updates the unstaking period.\n    /// @param _newUnstakingPeriod Duration of the unstaking period.\n    /// @dev Requirements:\n    ///      - The caller must be the contract owner\n    function updateUnstakingPeriod(uint256 _newUnstakingPeriod)\n        external\n        onlyOwner\n    {\n        unstakingPeriod = _newUnstakingPeriod;\n        emit UnstakingPeriodUpdated(unstakingPeriod);\n    }\n\n    /// @notice Updates the rebate per token.\n    /// @param _newRebatePerToken Rebate coefficient.\n    /// @dev Requirements:\n    ///      - The caller must be the contract owner\n    function updateRebatePerToken(uint256 _newRebatePerToken)\n        external\n        onlyOwner\n    {\n        rebatePerToken = _newRebatePerToken;\n        emit RebatePerTokenUpdated(rebatePerToken);\n    }\n\n    /// @notice Sets the rebate treasury fee mode for caller.\n    /// @param _rebateTreasuryFeeMode New rebate treasury fee mode:\n    ///        - 0: rebates for both deposits and redemptions,\n    ///        - 1: rebates for deposits only,\n    ///        - 2: rebates for redemptions only.\n    function setRebateTreasuryFeeMode(\n        RebateTreasuryFeeMode _rebateTreasuryFeeMode\n    ) external {\n        stakes[msg.sender].rebateTreasuryFeeMode = _rebateTreasuryFeeMode;\n        emit RebateTreasuryFeeModeUpdated(msg.sender, _rebateTreasuryFeeMode);\n    }\n\n    /// @notice Sets a delegatee for a rebate.\n    /// @param _delegatee Delegatee address.\n    function setDelegatee(address _delegatee) external {\n        Stake storage stakeInfo = stakes[msg.sender];\n        if (stakeInfo.stakedAmount == 0) {\n            revert NotAStaker();\n        }\n        if (stakeInfo.delegatee != address(0)) {\n            delegates[stakeInfo.delegatee] = address(0);\n        }\n        if (_delegatee == address(0) || _delegatee == msg.sender) {\n            stakeInfo.delegatee = address(0);\n            emit DelegateeSet(msg.sender, msg.sender);\n            return;\n        }\n\n        if (\n            delegates[_delegatee] != address(0) ||\n            stakes[_delegatee].stakedAmount != 0\n        ) {\n            revert WrongDelegatee();\n        }\n        stakeInfo.delegatee = _delegatee;\n        delegates[_delegatee] = msg.sender;\n        emit DelegateeSet(msg.sender, _delegatee);\n    }\n\n    /// @notice Calculates cap for rebate for the specified user.\n    /// @param user Address of depositor or redeemer\n    function getRebateCap(address user) external view returns (uint64) {\n        Stake storage stakeInfo = stakes[user];\n        return getRebateCap(stakeInfo);\n    }\n\n    /// @notice Calculates cap for rebate for the specified user.\n    /// @param stakeInfo Staker struct\n    function getRebateCap(Stake storage stakeInfo)\n        internal\n        view\n        returns (uint64)\n    {\n        if (rebatePerToken == 0) {\n            return 0;\n        }\n        return\n            SafeCastUpgradeable.toUint64(\n                (stakeInfo.stakedAmount - stakeInfo.unstakingAmount) /\n                    rebatePerToken\n            );\n    }\n\n    /// @notice Calculates available rebate for the specified user.\n    /// @param user Address of depositor or redeemer\n    function getAvailableRebate(address user)\n        external\n        view\n        returns (uint64 rebateInWindow)\n    {\n        Stake storage stakeInfo = stakes[user];\n        uint64 rebateCap = getRebateCap(stakeInfo);\n        if (rebateCap == 0) {\n            return 0;\n        }\n\n        if (stakeInfo.rebates.length == 0) {\n            return rebateCap;\n        }\n\n        /* solhint-disable-next-line not-rely-on-time */\n        uint256 windowStart = block.timestamp - rollingWindow;\n        for (\n            uint256 i = stakeInfo.rollingWindowStartIndex;\n            i < stakeInfo.rebates.length;\n            i++\n        ) {\n            Rebate storage rebate = stakeInfo.rebates[i];\n            if (rebate.timestamp >= windowStart) {\n                rebateInWindow += rebate.feeRebate;\n            }\n        }\n\n        return rebateCap - rebateInWindow;\n    }\n\n    /// @notice Calculates used rebate in the rolling window.\n    /// @param stakeInfo Staker struct\n    /// @return rebateInWindow Used rebate in the rolling window\n    function getRebateInRollingWindow(Stake storage stakeInfo)\n        internal\n        returns (uint64 rebateInWindow)\n    {\n        if (stakeInfo.rebates.length == 0) {\n            return 0;\n        }\n\n        /* solhint-disable-next-line not-rely-on-time */\n        uint256 windowStart = block.timestamp - rollingWindow;\n        uint256 rebatesLength = stakeInfo.rebates.length;\n        for (\n            uint256 i = stakeInfo.rollingWindowStartIndex;\n            i < rebatesLength;\n            i++\n        ) {\n            Rebate storage rebate = stakeInfo.rebates[i];\n            if (rebate.timestamp < windowStart) {\n                stakeInfo.rollingWindowStartIndex++;\n            } else {\n                rebateInWindow += rebate.feeRebate;\n            }\n        }\n\n        return rebateInWindow;\n    }\n\n    /// @notice Checks if user is eligible for rebate\n    /// @param user Address of depositor or redeemer\n    /// @param treasuryFee Original fees\n    /// @param treasuryFeeType Type of treasury fee:\n    ///        - 0: deposit treasury fee,\n    ///        - 1: redemption treasury fee.\n    /// @return Updated fees considering rebate if applicable\n    /// @dev Requirements:\n    ///      - The caller must be the bridge contract\n    function applyForRebate(\n        address user,\n        uint64 treasuryFee,\n        TreasuryFeeType treasuryFeeType\n    ) external onlyBridge returns (uint64) {\n        user = getStaker(user);\n        Stake storage stakeInfo = stakes[user];\n\n        if (!isRebateEnabled(user, treasuryFeeType)) {\n            return treasuryFee;\n        }\n\n        uint64 rebateCap = getRebateCap(stakeInfo);\n        if (rebateCap == 0) {\n            return treasuryFee;\n        }\n\n        uint64 currentRebate = getRebateInRollingWindow(stakeInfo);\n        if (rebateCap <= currentRebate) {\n            return treasuryFee;\n        }\n        uint64 rebate = rebateCap - currentRebate;\n        if (rebate > treasuryFee) {\n            rebate = treasuryFee;\n        }\n\n        Rebate storage value = stakeInfo.rebates.push();\n        /* solhint-disable-next-line not-rely-on-time */\n        value.timestamp = uint32(block.timestamp);\n        value.feeRebate = rebate;\n        emit RebateReceived(user, rebate);\n        return treasuryFee - rebate;\n    }\n\n    /// @notice Returns true if rebate is enabled for given user and fee type.\n    function isRebateEnabled(address user, TreasuryFeeType treasuryFeeType)\n        internal\n        view\n        returns (bool)\n    {\n        RebateTreasuryFeeMode mode = stakes[user].rebateTreasuryFeeMode;\n\n        // slither-disable-next-line incorrect-equality\n        return\n            mode == RebateTreasuryFeeMode.Both ||\n            (mode == RebateTreasuryFeeMode.DepositOnly &&\n                treasuryFeeType == TreasuryFeeType.Deposit) ||\n            (mode == RebateTreasuryFeeMode.RedemptionOnly &&\n                treasuryFeeType == TreasuryFeeType.Redemption);\n    }\n\n    /// @notice Returns address of delegating staker or user itself if there is no delegating staker.\n    function getStaker(address user) internal view returns (address) {\n        address staker = delegates[user];\n        // slither-disable-next-line incorrect-equality\n        if (stakes[user].stakedAmount == 0 && staker != address(0)) {\n            return staker;\n        }\n        return user;\n    }\n\n    /// @notice Cancels rebate in case of reedem request was timed out\n    /// @param user Address of depositor or redeemer\n    /// @param requestedAt Timestamp when redeem was requested\n    /// @dev Requirements:\n    ///      - The caller must be the bridge contract\n    function cancelRebate(address user, uint256 requestedAt)\n        external\n        onlyBridge\n    {\n        user = getStaker(user);\n        Stake storage stakeInfo = stakes[user];\n        if (stakeInfo.stakedAmount == 0) {\n            return;\n        }\n\n        /* solhint-disable-next-line not-rely-on-time */\n        uint256 windowStart = block.timestamp - rollingWindow;\n        uint256 rebatesLength = stakeInfo.rebates.length;\n        for (\n            uint256 i = stakeInfo.rollingWindowStartIndex;\n            i < rebatesLength;\n            i++\n        ) {\n            Rebate storage rebate = stakeInfo.rebates[i];\n            if (rebate.timestamp > requestedAt) {\n                break;\n            } else if (rebate.timestamp < windowStart) {\n                stakeInfo.rollingWindowStartIndex++;\n            } else if (requestedAt == rebate.timestamp) {\n                rebate.feeRebate = 0;\n                emit RebateCanceled(user, requestedAt);\n                break;\n            }\n        }\n    }\n\n    /// @notice Stake T token to be eligible for rebate\n    /// @param amount Amount of tokens to stake\n    function stake(uint96 amount) external {\n        if (amount == 0) revert AmountCannotBeZero();\n\n        address otherStaker = delegates[msg.sender];\n        if (otherStaker != address(0)) {\n            stakes[otherStaker].delegatee = address(0);\n            delegates[msg.sender] = address(0);\n            emit DelegateeSet(otherStaker, otherStaker);\n        }\n\n        Stake storage stakeInfo = stakes[msg.sender];\n        stakeInfo.stakedAmount += amount;\n        emit Staked(msg.sender, amount);\n        token.safeTransferFrom(msg.sender, address(this), amount);\n    }\n\n    /// @notice Start unstaking process\n    /// @param amount Amount of tokens to unstake\n    function startUnstaking(uint96 amount) external {\n        if (amount == 0) revert AmountCannotBeZero();\n        Stake storage stakeInfo = stakes[msg.sender];\n        if (stakeInfo.unstakingTimestamp != 0) revert UnstakingAlreadyStarted();\n        if (amount > stakeInfo.stakedAmount) revert AmountTooBig();\n        /* solhint-disable-next-line not-rely-on-time */\n        stakeInfo.unstakingTimestamp = uint32(block.timestamp);\n        stakeInfo.unstakingAmount = amount;\n        emit UnstakeStarted(msg.sender, amount);\n    }\n\n    /// @notice Finalize unstaking and withdraw tokens\n    /// @param receiver Address of stake receiver\n    function finalizeUnstaking(address receiver) external {\n        if (receiver == address(0)) revert ZeroAddress();\n\n        Stake storage stakeInfo = stakes[msg.sender];\n        if (stakeInfo.unstakingTimestamp == 0) revert NoUnstakingProcess();\n        if (\n            /* solhint-disable-next-line not-rely-on-time */\n            stakeInfo.unstakingTimestamp + unstakingPeriod > block.timestamp\n        ) revert UnstakingNotFinished();\n\n        stakeInfo.stakedAmount -= stakeInfo.unstakingAmount;\n        uint96 amount = stakeInfo.unstakingAmount;\n        stakeInfo.unstakingTimestamp = 0;\n        stakeInfo.unstakingAmount = 0;\n        if (stakeInfo.stakedAmount == 0 && stakeInfo.delegatee != address(0)) {\n            delegates[stakeInfo.delegatee] = address(0);\n            stakeInfo.delegatee = address(0);\n        }\n\n        emit UnstakeFinished(msg.sender, amount);\n        token.safeTransfer(receiver, amount);\n    }\n\n    /// @notice Returns size of rebate array\n    /// @param user Address of depositor or redeemer\n    function getRebateLength(address user) external view returns (uint256) {\n        return stakes[user].rebates.length;\n    }\n\n    /// @notice Returns timestamp and amount of rebate\n    /// @param user Address of depositor or redeemer\n    /// @param index Index of the element in the array\n    /// @return timestamp Timestamp of rebate\n    /// @return feeRebate Amount of rebate\n    function getRebate(address user, uint256 index)\n        external\n        view\n        returns (uint32 timestamp, uint64 feeRebate)\n    {\n        Rebate storage rebateInfo = stakes[user].rebates[index];\n        timestamp = rebateInfo.timestamp;\n        feeRebate = rebateInfo.feeRebate;\n    }\n\n    /// @notice Returns information about stake\n    /// @param user Address of depositor or redeemer\n    /// @return stakedAmount Amount of stake\n    function getStake(address user)\n        external\n        view\n        returns (uint96 stakedAmount)\n    {\n        Stake storage stakeInfo = stakes[user];\n        stakedAmount = stakeInfo.stakedAmount;\n    }\n\n    /// @notice Returns information about unstaking\n    /// @param user Address of depositor or redeemer\n    /// @return unstakingAmount Amount that is currently unstaking\n    /// @return unstakingTimestamp Amount of rebate\n    function getUnstakingAmount(address user)\n        external\n        view\n        returns (uint96 unstakingAmount, uint32 unstakingTimestamp)\n    {\n        Stake storage stakeInfo = stakes[user];\n        unstakingAmount = stakeInfo.unstakingAmount;\n        unstakingTimestamp = stakeInfo.unstakingTimestamp;\n    }\n\n    /// @notice Returns the rebate treasury fee mode for a user.\n    /// @param user Address of the staker\n    /// @return rebateTreasuryFeeMode Current mode:\n    ///         - 0: rebates for both deposits and redemptions,\n    ///         - 1: rebates for deposits only,\n    ///         - 2: rebates for redemptions only.\n    function getRebateTreasuryFeeMode(address user)\n        external\n        view\n        returns (RebateTreasuryFeeMode rebateTreasuryFeeMode)\n    {\n        Stake storage stakeInfo = stakes[user];\n        rebateTreasuryFeeMode = stakeInfo.rebateTreasuryFeeMode;\n    }\n\n    /// @notice Returns information about stake\n    /// @param user Address of depositor or redeemer\n    /// @return delegatee Delegatee address.\n    function getDelegatee(address user)\n        external\n        view\n        returns (address delegatee)\n    {\n        Stake storage stakeInfo = stakes[user];\n        delegatee = stakeInfo.delegatee;\n    }\n\n    /// @notice Transfers ownership of stake from one address to another\n    /// @param oldStaker Old staker address\n    /// @param newStaker New staker address\n    function forceStakeTransfer(address oldStaker, address newStaker)\n        external\n        onlyOwner\n    {\n        if (oldStaker == address(0)) revert ZeroAddress();\n        if (newStaker == address(0)) revert ZeroAddress();\n\n        Stake storage oldStake = stakes[oldStaker];\n        if (oldStake.stakedAmount == 0) {\n            revert NotAStaker();\n        }\n\n        Stake storage newStake = stakes[newStaker];\n        if (newStake.stakedAmount != 0) {\n            revert AddressAlreadyTaken();\n        }\n        if (delegates[newStaker] != address(0)) {\n            revert WrongDelegatee();\n        }\n\n        newStake.stakedAmount = oldStake.stakedAmount;\n        newStake.unstakingAmount = oldStake.unstakingAmount;\n        newStake.unstakingTimestamp = oldStake.unstakingTimestamp;\n        newStake.rebateTreasuryFeeMode = oldStake.rebateTreasuryFeeMode;\n        newStake.rollingWindowStartIndex = oldStake.rollingWindowStartIndex;\n        for (uint256 i = 0; i < oldStake.rebates.length; i++) {\n            newStake.rebates.push(oldStake.rebates[i]);\n        }\n        if (oldStake.delegatee != address(0)) {\n            address delegatee = oldStake.delegatee;\n            newStake.delegatee = delegatee;\n            delegates[delegatee] = newStaker;\n            oldStake.delegatee = address(0);\n            emit DelegateeSet(newStaker, delegatee);\n        }\n\n        oldStake.stakedAmount = 0;\n        oldStake.unstakingAmount = 0;\n        oldStake.unstakingTimestamp = 0;\n        oldStake.rebateTreasuryFeeMode = RebateTreasuryFeeMode.Both;\n        oldStake.rollingWindowStartIndex = 0;\n\n        emit TransferFinished(oldStaker, newStaker);\n    }\n}\n"
+    }
+  }
+}

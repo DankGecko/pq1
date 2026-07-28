@@ -12,14 +12,14 @@
     "compiled_blob_bytes": 338284,
     "known_call_count": 4580,
     "category_source_counts": {
-      "pinned-evidence": 45,
+      "pinned-evidence": 48,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 62
+      "lower-priority-residual": 59
     },
     "category_leaf_counts": {
-      "pinned-evidence": 156,
+      "pinned-evidence": 166,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 110
+      "lower-priority-residual": 100
     }
   },
   "classification_contract": {
@@ -183,6 +183,12 @@
       "reason": "Pins three admitted StakeWise EthVault route families.",
       "scope": "Only the P2P and Serenita deployments and routes enumerated by the package.",
       "paths": ["tests/erc7730-semantic-evidence/stakewise-claim-exited-assets/manifest.json"]
+    },
+    "threshold": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the admitted Threshold L2 Wormhole send, rebate-staking, and optimistic-mint route families to fixed-block proxy/runtime, verified source/ABI, and token-binding evidence.",
+      "scope": "Exactly the seven L2WormholeGateway sendTbtc leaves, one RebateStaking leaf with five formats, and two TBTCVault leaves with two formats enumerated by the package; opaque VAA/payload routes, live state, future upgrades/deployments, and transaction success are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/threshold/manifest.json"]
     },
     "uniswap-permit2": {
       "classification": "pinned-evidence",
@@ -1610,20 +1616,20 @@
   {
     "source": "threshold/calldata-L2WormholeGateway.json",
     "accepted_leaf_count": 7,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "threshold"
   },
   {
     "source": "threshold/calldata-RebateStaking.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "threshold"
   },
   {
     "source": "threshold/calldata-TBTCVault.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "threshold"
   },
   {
     "source": "uniswap/calldata-UniswapV3Router02.json",

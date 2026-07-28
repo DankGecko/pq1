@@ -1,0 +1,228 @@
+{
+  "schema_version": 1,
+  "scope": "Historical deployment/runtime and semantic evidence for the seven admitted L2WormholeGateway sendTbtc leaves, five RebateStaking routes, and two TBTCVault optimistic-mint leaves.",
+  "upstream": {
+    "threshold": {
+      "repository": "https://github.com/threshold-network/tbtc-v2",
+      "commit": "c10e824f68bcda32e7ab1b425ac00344d96a89c9",
+      "tree": "16522547b39ddfeab8e5e07fffdaa74e752f732a"
+    },
+    "wormhole_sdk_ts": {
+      "repository": "https://github.com/wormhole-foundation/wormhole-sdk-ts",
+      "commit": "4f8a03a5ef9b19a5e4af5b972535f16b77842f8d",
+      "chain_id_source": "source/wormhole-chains.ts"
+    },
+    "sourcify_api": "https://sourcify.dev/server/v2"
+  },
+  "descriptor_families": [
+    {
+      "source": "threshold/calldata-L2WormholeGateway.json",
+      "admitted_leaf_count": 7,
+      "admitted_formats": [
+        "sendTbtc(uint256 amount, uint16 recipientChain, bytes32 recipient, uint256 arbiterFee, uint32 nonce)"
+      ],
+      "refusal_only_formats": [
+        "receiveTbtc(bytes encodedVm)",
+        "sendTbtcWithPayloadToNativeChain(uint256 amount, uint16 recipientNativeChain, bytes32 recipient, uint32 nonce, bytes payload)"
+      ]
+    },
+    {
+      "source": "threshold/calldata-RebateStaking.json",
+      "admitted_leaf_count": 1,
+      "admitted_formats": [
+        "stake(uint96 amount)",
+        "startUnstaking(uint96 amount)",
+        "finalizeUnstaking(address receiver)",
+        "setDelegatee(address _delegatee)",
+        "setRebateTreasuryFeeMode(uint8 _rebateTreasuryFeeMode)"
+      ]
+    },
+    {
+      "source": "threshold/calldata-TBTCVault.json",
+      "admitted_leaf_count": 2,
+      "admitted_formats": [
+        "requestOptimisticMint(bytes32 fundingTxHash, uint32 fundingOutputIndex)",
+        "finalizeOptimisticMint(bytes32 fundingTxHash, uint32 fundingOutputIndex)"
+      ]
+    }
+  ],
+  "claims": [
+    "Each admitted deployment is pinned to a fixed block, runtime bytes, and independently corroborated block hash/state root.",
+    "Gateway and Rebate proxy implementations are pinned through the EIP-1967 implementation slot; Vault standard proxy slots are zero and exact Sourcify runtime/source matches identify direct TBTCVault deployments.",
+    "Gateway tBTC() bindings and token metadata prove tBTC/18 at every admitted fixed block; Rebate token() proves Threshold Network Token/T/18.",
+    "Verified implementation sources and route ABIs bind amount normalization, arbiter-fee conditionality, Wormhole field meaning, Rebate state-derived unstake amount and enum meaning, and Vault minter/state-derived mint semantics."
+  ],
+  "boundary": "Historical fixed-block source/runtime and signed-input meaning only. No live state, transaction-success, future proxy-upgrade/deployment, fallback, blind-signing, production, shipment, or irreversible-action authority.",
+  "artifacts": [
+    {
+      "path": "collect.sh",
+      "bytes": 26676,
+      "sha256": "abd7288afe313c8fa95f735981335918699f9871107093f07e9992d72b337e0e"
+    },
+    {
+      "path": "official/threshold-deployments.json",
+      "bytes": 34930,
+      "sha256": "0f7034e8b67e035b1f9dc2759392d13ad2cbb35ab18fc9da1822a66cbfdb91da"
+    },
+    {
+      "path": "rpc/fixed-block-receipt.json",
+      "bytes": 25478,
+      "sha256": "a7ef72d60a17ebf9dc632b91acf14e05ccbc80958fc90ab550ce45944e9d3cb0"
+    },
+    {
+      "path": "runtime/gateway-arbitrum-implementation.hex",
+      "bytes": 17531,
+      "sha256": "ac368c89d7913573331f2c1e71054f31e1dab9d846eeb7387f68006ea961bd23"
+    },
+    {
+      "path": "runtime/gateway-arbitrum-proxy.hex",
+      "bytes": 4227,
+      "sha256": "1614fc9465db28a22f8b2a725294dda785c2e78f8067ce08afb70238c6450c4e"
+    },
+    {
+      "path": "runtime/gateway-arbitrum-sepolia-implementation.hex",
+      "bytes": 14783,
+      "sha256": "ba718b9b715699c0c1cbe83bae810feeb9e631953cbc9aae07f71072292c67ab"
+    },
+    {
+      "path": "runtime/gateway-arbitrum-sepolia-proxy.hex",
+      "bytes": 4227,
+      "sha256": "1614fc9465db28a22f8b2a725294dda785c2e78f8067ce08afb70238c6450c4e"
+    },
+    {
+      "path": "runtime/gateway-base-implementation.hex",
+      "bytes": 17531,
+      "sha256": "d94c6a20f1c66af33a92118ce93667023268662760902385917f6d6d34392c6b"
+    },
+    {
+      "path": "runtime/gateway-base-proxy.hex",
+      "bytes": 4457,
+      "sha256": "ea166273c7604c16778282b7a816e9fc176ea91aaf813952c9c6b306d6a2c344"
+    },
+    {
+      "path": "runtime/gateway-base-sepolia-implementation.hex",
+      "bytes": 14783,
+      "sha256": "ba718b9b715699c0c1cbe83bae810feeb9e631953cbc9aae07f71072292c67ab"
+    },
+    {
+      "path": "runtime/gateway-base-sepolia-proxy.hex",
+      "bytes": 4457,
+      "sha256": "ea166273c7604c16778282b7a816e9fc176ea91aaf813952c9c6b306d6a2c344"
+    },
+    {
+      "path": "runtime/gateway-optimism-implementation.hex",
+      "bytes": 14783,
+      "sha256": "ba718b9b715699c0c1cbe83bae810feeb9e631953cbc9aae07f71072292c67ab"
+    },
+    {
+      "path": "runtime/gateway-optimism-proxy.hex",
+      "bytes": 4227,
+      "sha256": "1614fc9465db28a22f8b2a725294dda785c2e78f8067ce08afb70238c6450c4e"
+    },
+    {
+      "path": "runtime/gateway-optimism-sepolia-implementation.hex",
+      "bytes": 14783,
+      "sha256": "ba718b9b715699c0c1cbe83bae810feeb9e631953cbc9aae07f71072292c67ab"
+    },
+    {
+      "path": "runtime/gateway-optimism-sepolia-proxy.hex",
+      "bytes": 4227,
+      "sha256": "1614fc9465db28a22f8b2a725294dda785c2e78f8067ce08afb70238c6450c4e"
+    },
+    {
+      "path": "runtime/gateway-polygon-implementation.hex",
+      "bytes": 14783,
+      "sha256": "ba718b9b715699c0c1cbe83bae810feeb9e631953cbc9aae07f71072292c67ab"
+    },
+    {
+      "path": "runtime/gateway-polygon-proxy.hex",
+      "bytes": 4227,
+      "sha256": "1614fc9465db28a22f8b2a725294dda785c2e78f8067ce08afb70238c6450c4e"
+    },
+    {
+      "path": "runtime/rebate-implementation.hex",
+      "bytes": 18803,
+      "sha256": "ffb69a9cc3083da9aff45b2beb097de6af1ef474bd10103c2cd8ebf58fc2721e"
+    },
+    {
+      "path": "runtime/rebate-official-implementation.hex",
+      "bytes": 18803,
+      "sha256": "ffb69a9cc3083da9aff45b2beb097de6af1ef474bd10103c2cd8ebf58fc2721e"
+    },
+    {
+      "path": "runtime/rebate-proxy.hex",
+      "bytes": 4227,
+      "sha256": "1614fc9465db28a22f8b2a725294dda785c2e78f8067ce08afb70238c6450c4e"
+    },
+    {
+      "path": "runtime/vault-ethereum.hex",
+      "bytes": 30249,
+      "sha256": "558c17184289c0719ce25095a2d71c997da189dbd33567756880f4c5c7d9155a"
+    },
+    {
+      "path": "runtime/vault-sepolia.hex",
+      "bytes": 28229,
+      "sha256": "2c72183ae20941ae7e2f877e2c0b89e1a552deb8b17ec45cb47a5fdfab54d0c8"
+    },
+    {
+      "path": "source/threshold-commit.txt",
+      "bytes": 41,
+      "sha256": "2268a5d993b53352860b519a7be426f4375c8a2b843d71a60f26cb10c37ba443"
+    },
+    {
+      "path": "source/wormhole-chains.ts",
+      "bytes": 4293,
+      "sha256": "2357b40bd62887aafe2f4906192ef986d015729e2dd74e03209fafab8a13e382"
+    },
+    {
+      "path": "source/wormhole-sdk-ts-commit.txt",
+      "bytes": 41,
+      "sha256": "26a6d545badcf11bc909f173106916fe5fa18c46b29031033d1b61671dd40cde"
+    },
+    {
+      "path": "verified/gateway-arbitrum.json",
+      "bytes": 26212,
+      "sha256": "d16e05f2b611107888c896da60095cb9107072721e377e02ed6d3bac65fca89b"
+    },
+    {
+      "path": "verified/gateway-base-sepolia.json",
+      "bytes": 19607,
+      "sha256": "c54d8dddb5af0c2f7ae3e9deee325c71de698c11aaa0e3386cf873ccab0ec4ea"
+    },
+    {
+      "path": "verified/gateway-base.json",
+      "bytes": 26187,
+      "sha256": "65608606253d4745f1715904bd9f803cdbfbffe39130333899f6faa1dd53720f"
+    },
+    {
+      "path": "verified/gateway-optimism-sepolia.json",
+      "bytes": 19610,
+      "sha256": "f2e65e976c7adaddada169ffbede908cf6c1c16377af85fdc82645191f1bdd45"
+    },
+    {
+      "path": "verified/gateway-optimism.json",
+      "bytes": 19604,
+      "sha256": "f2443729e6ea8450f8dea5d5a79965dd83e00152c4f835eeb50474c43a1490f8"
+    },
+    {
+      "path": "verified/gateway-polygon.json",
+      "bytes": 19605,
+      "sha256": "792b0f2965e016fcc80bc73251653f9daf40ba6e4945fa8eeb5a585843bf11a5"
+    },
+    {
+      "path": "verified/rebate-staking.json",
+      "bytes": 25400,
+      "sha256": "0aee8ad042878bf79a0e7a2bf342f25df92ecdbcdf7586e6a59ad6801ad118e3"
+    },
+    {
+      "path": "verified/vault-ethereum.json",
+      "bytes": 42846,
+      "sha256": "1f173d202924ff0f070ffe18dc499d1b1271b1856e3898d568e65295aad6eb81"
+    },
+    {
+      "path": "verified/vault-sepolia.json",
+      "bytes": 42853,
+      "sha256": "7ad949799e462c095c49bd918f2aa86b7419afa58d057d6c87397684dc915a44"
+    }
+  ]
+}
