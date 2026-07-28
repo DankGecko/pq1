@@ -41,7 +41,7 @@ const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
 // The upstream fixture bytes remain test-only and outside the catalogue. This
 // root changes only when the separately curated production descriptors do.
-const PROD_ROOT_HEX: &str = "692c602c43d804a12c2f18c9cf4fffade5f0f6868d1f216c2afff00f9f8ad986";
+const PROD_ROOT_HEX: &str = "cf44d648c272d3fd03884bab092add7243aa10bd00408c5b3640b279583e00dc";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1718,7 +1718,7 @@ fn production_interpolation_tags_have_exact_static_erc20_capabilities() {
             );
         }
     }
-    assert_eq!(enrolled, 6, "current corpus enrollment changed");
+    assert_eq!(enrolled, 10, "current corpus enrollment changed");
 }
 
 #[test]

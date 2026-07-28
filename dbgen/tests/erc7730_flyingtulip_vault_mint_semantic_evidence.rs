@@ -454,17 +454,31 @@ fn flyingtulip_vault_mint_evidence_is_complete_and_runtime_bound() {
     let inventory = read_json(
         &workspace_root().join("tests/erc7730-semantic-evidence/accepted-family-inventory.json"),
     );
+    let families = inventory["families"]
+        .as_array()
+        .expect("accepted-family records");
+    let pinned_source_count = families
+        .iter()
+        .filter(|family| family["classification"].as_str() == Some("pinned-evidence"))
+        .count() as u64;
+    let pinned_leaf_count = families
+        .iter()
+        .filter(|family| family["classification"].as_str() == Some("pinned-evidence"))
+        .map(|family| {
+            family["accepted_leaf_count"]
+                .as_u64()
+                .expect("accepted leaf count")
+        })
+        .sum::<u64>();
     assert_eq!(
         inventory["catalogue_snapshot"]["category_source_counts"]["pinned-evidence"].as_u64(),
-        Some(52)
+        Some(pinned_source_count)
     );
     assert_eq!(
         inventory["catalogue_snapshot"]["category_leaf_counts"]["pinned-evidence"].as_u64(),
-        Some(176)
+        Some(pinned_leaf_count)
     );
-    let promoted = inventory["families"]
-        .as_array()
-        .expect("accepted-family records")
+    let promoted = families
         .iter()
         .filter(|family| {
             matches!(

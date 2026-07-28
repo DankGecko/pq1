@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 868633,
-    "sha256": "d305496d6bdf69ecb81abbef2e5c8e3a56f30cc7844aab3f989dea3be440894b"
+    "bytes": 892010,
+    "sha256": "a5c1e9c451f4910b408644620dceea7ad5812809ff02f8b1559ddfea70ac64b3"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -285,9 +285,9 @@
     {
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
-      "files": 40,
-      "bytes": 2624173,
-      "sha256": "031e84660fcc0998aae68e56ed8146d09b3883378434061ba1dc7994d63eb30b"
+      "files": 44,
+    "bytes": 2739561,
+    "sha256": "4efba6d042b82a425b43a28399fb209c46000a64dabbfdc9e9eb3cc67cd1b40d"
     },
     {
       "path": "pqsigner-erc7730",
@@ -336,13 +336,13 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 313678,
-      "sha256": "4a80f766b2bf2bf92c40828c688d1b316475a03bde7c1ad78c2bb9e7cfb3e3de"
+      "sha256": "6ecfe96a131f6fb0eaa7b11fb840b56f11ea3d2683dca1025afd0342d9f90e9b"
     }
   ],
   "capability_inputs": [
     {
       "path": "secure/data/erc20.json",
-      "sha256": "93dc4ef3c2cbcff7d605e08ff144e00149c921d6d64077361469a54df3e29785"
+      "sha256": "00aa5c14d19653f1a2c36b015b695e50fb0bbc74ac3d51145f2360c794477906"
     }
   ],
   "replacements": [
@@ -429,6 +429,34 @@
       "upstream_sha256": "4066152b05d76b5ecec8024a075659fccbda35fb4e35804ef3bc318d188e2f30",
       "replacement_bytes": 5154,
       "replacement_sha256": "1e12f68359f189af4e1197d23e5f9ea99cf18da81819487d738ebe42d73d1c3a"
+    },
+    {
+      "path": "registry/flyingtulip/calldata-EpochRewardsVault-dev.json",
+      "upstream_bytes": 2990,
+      "upstream_sha256": "f5c64290d34b06ec9105551f16ca494773c6fac9676558d16549a13c6fe71d79",
+      "replacement_bytes": 4755,
+      "replacement_sha256": "934f8ae5a151fcf99c63058a9b5bfe6a1c61db7e8669a59470b1c8c05dc1c577"
+    },
+    {
+      "path": "registry/flyingtulip/calldata-EpochRewardsVault.json",
+      "upstream_bytes": 3088,
+      "upstream_sha256": "87a0eea62bc7bcd0af8b76bb4ccf864e57722526320461f51c2f332ab46f17d7",
+      "replacement_bytes": 4534,
+      "replacement_sha256": "11b4d016ad4e467273d060b7d9310dfc2e46fe8137af8da377dcdaa207b92c17"
+    },
+    {
+      "path": "registry/flyingtulip/calldata-MintAndRedeem-dev.json",
+      "upstream_bytes": 2403,
+      "upstream_sha256": "95f97996edeabe366b43b845331248fd85df013f4ff2f47a0f4d4f790a252330",
+      "replacement_bytes": 4594,
+      "replacement_sha256": "55505c2da24f894a04cc8628c3233c38856ff1824727efad37e9d2443677ecef"
+    },
+    {
+      "path": "registry/flyingtulip/calldata-MintAndRedeem.json",
+      "upstream_bytes": 2592,
+      "upstream_sha256": "e3a5cebb0c680b303985b94638ed022a5ece83fcc3962ac6094291c9c27de6a5",
+      "replacement_bytes": 4367,
+      "replacement_sha256": "73603e6c91fdb280ee061559745cc74a7b285c01807feea71068a5a2d754ac9c"
     },
     {
       "path": "registry/flyingtulip/calldata-PftMarketplace.json",

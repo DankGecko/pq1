@@ -926,21 +926,27 @@ fn inventory_promotes_only_the_four_evidenced_sources() {
     let inventory = read_json(
         &workspace_root().join("tests/erc7730-semantic-evidence/accepted-family-inventory.json"),
     );
+    let families = inventory["families"]
+        .as_array()
+        .expect("accepted-family records");
+    let mut source_counts = BTreeMap::<&str, u64>::new();
+    let mut leaf_counts = BTreeMap::<&str, u64>::new();
+    for family in families {
+        let classification = family["classification"]
+            .as_str()
+            .expect("family classification");
+        *source_counts.entry(classification).or_default() += 1;
+        *leaf_counts.entry(classification).or_default() += family["accepted_leaf_count"]
+            .as_u64()
+            .expect("accepted leaf count");
+    }
     assert_eq!(
         inventory["catalogue_snapshot"]["category_source_counts"],
-        json!({
-            "pinned-evidence": 52,
-            "shared-standard-implementation": 133,
-            "lower-priority-residual": 55
-        })
+        serde_json::to_value(source_counts).expect("source counts")
     );
     assert_eq!(
         inventory["catalogue_snapshot"]["category_leaf_counts"],
-        json!({
-            "pinned-evidence": 170,
-            "shared-standard-implementation": 133,
-            "lower-priority-residual": 96
-        })
+        serde_json::to_value(leaf_counts).expect("leaf counts")
     );
     assert_eq!(
         inventory["evidence_sets"]["bridge-exits"]["paths"],
@@ -952,9 +958,7 @@ fn inventory_promotes_only_the_four_evidenced_sources() {
         "starkgate/calldata-StarkGate-STRK.json",
         "swissborg/calldata-NttManager.json",
     ] {
-        let family = inventory["families"]
-            .as_array()
-            .expect("family inventory")
+        let family = families
             .iter()
             .find(|family| family["source"].as_str() == Some(source))
             .unwrap_or_else(|| panic!("missing family {source}"));

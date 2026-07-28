@@ -3104,8 +3104,8 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(result.known_call_count, EXPECTED_KNOWN_CALL_TUPLES);
     assert_eq!(
         hex::encode(result.root),
-        // Re-derived after bounded multi-tail formats were admitted.
-        "692c602c43d804a12c2f18c9cf4fffade5f0f6868d1f216c2afff00f9f8ad986"
+        // Re-derived after the bounded Phase-3 semantic curations.
+        "cf44d648c272d3fd03884bab092add7243aa10bd00408c5b3640b279583e00dc"
     );
 }
 
