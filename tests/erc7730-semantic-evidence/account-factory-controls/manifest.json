@@ -248,23 +248,23 @@
     },
     {
       "path": "source/Factory.ethereum.sol",
-      "sha256": "c7bb6441caa531bb1fa56d0625ea7f5ee685ed3bf7ce016dbd4497e839b21b67"
+      "sha256": "73f52fe9def12c783df3683277edd5a0c9fe0e4295650a7d46222a2ffc4a06d3"
     },
     {
       "path": "source/Factory.hoodi.sol",
-      "sha256": "c7bb6441caa531bb1fa56d0625ea7f5ee685ed3bf7ce016dbd4497e839b21b67"
+      "sha256": "73f52fe9def12c783df3683277edd5a0c9fe0e4295650a7d46222a2ffc4a06d3"
     },
     {
       "path": "source/Operator.ethereum.sol",
-      "sha256": "c50202dbc2f8f24fb083d647ffafee9d8c50b06c54df13573259dd2b133913a9"
+      "sha256": "60e61e77f1805ff343b699ecfddb32231560c4f9dbc9610076b9dc6da10c709f"
     },
     {
       "path": "source/StakeWeight.sol",
-      "sha256": "c10c0c46d88d7b14addc3c71ea1c0e9aa30d706b94ec3e1088c76e7c35696b96"
+      "sha256": "54f0c9e5f0e27b115cb80f0c04ff6f1916d82332a98d3610c35976de504a40cf"
     },
     {
       "path": "source/WalletConnectConfig.sol",
-      "sha256": "c4ef1100050ce4120da32adef43444a05dc65b95eaef8ca4a7f73b4357f2c8a2"
+      "sha256": "0f0f1b0d927ecff0f073e7136bed1670e172cf90205a0015d36f99124de34e58"
     },
     {
       "path": "verification/Sourcify.kiln-ethereum.json",
