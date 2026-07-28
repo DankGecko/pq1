@@ -1,0 +1,47 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "token",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x66a28B080918184851774a89aB94850a41f6a1e5",
+        "data": "0xfc0c546a"
+      },
+      {
+        "blockHash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "mode",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x66a28B080918184851774a89aB94850a41f6a1e5",
+        "data": "0x295a5212"
+      },
+      {
+        "blockHash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "chain-id",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x66a28B080918184851774a89aB94850a41f6a1e5",
+        "data": "0x9a8a0592"
+      },
+      {
+        "blockHash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

@@ -12,14 +12,14 @@
     "compiled_blob_bytes": 345296,
     "known_call_count": 4587,
     "category_source_counts": {
-      "pinned-evidence": 48,
+      "pinned-evidence": 52,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 59
+      "lower-priority-residual": 55
     },
     "category_leaf_counts": {
-      "pinned-evidence": 166,
+      "pinned-evidence": 170,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 100
+      "lower-priority-residual": 96
     }
   },
   "classification_contract": {
@@ -63,6 +63,12 @@
       "reason": "Pins exact unlimited-allowance threshold semantics for three accepted descriptor families.",
       "scope": "Only the approval routes and deployments enumerated by the package.",
       "paths": ["tests/erc7730-semantic-evidence/allowance-threshold-honesty/manifest.json"]
+    },
+    "bridge-exits": {
+      "classification": "pinned-evidence",
+      "reason": "Pins operand-complete Igra exit, Lombard Sepolia, StarkGate deposit, and SwissBorg outbound NTT route semantics to exact fixed-block deployment/source authority.",
+      "scope": "Only the Igra requestExit route, six static Lombard Sepolia routes, StarkGate deposit, and the simple SwissBorg NTT transfer at the deployments enumerated by the package; Lombard dynamic mint/Bitcoin-redemption routes and the SwissBorg arbitrary-instructions overload remain exact-known refusals, while live routing, destination completion, and future upgrades are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/bridge-exits/manifest.json"]
     },
     "celo-election-vote": {
       "classification": "pinned-evidence",
@@ -464,8 +470,8 @@
   {
     "source": "igra/calldata-KasExitBridge.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "bridge-exits"
   },
   {
     "source": "kiln/calldata-Vault-EURC-Morpho-Gauntlet-Core.json",
@@ -698,8 +704,8 @@
   {
     "source": "lombard/calldata-lbtc-sepolia.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "bridge-exits"
   },
   {
     "source": "lombard/eip712-network-fee-authorization-mainnet.json",
@@ -1508,8 +1514,8 @@
   {
     "source": "starkgate/calldata-StarkGate-STRK.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "bridge-exits"
   },
   {
     "source": "swell/calldata-swell.json",
@@ -1526,8 +1532,8 @@
   {
     "source": "swissborg/calldata-NttManager.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "bridge-exits"
   },
   {
     "source": "tally/eip712-tally-arbitrum-arb-token.json",

@@ -1,0 +1,29 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "manager-token-decimals",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x66a28B080918184851774a89aB94850a41f6a1e5",
+        "data": "0x3b97e856"
+      },
+      {
+        "blockHash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "token-code",
+    "method": "eth_getCode",
+    "params": [
+      "0x64d0f55Cd8C7133a9D7102b13987235F486F2224",
+      {
+        "blockHash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

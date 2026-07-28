@@ -1,0 +1,17 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "asset-router",
+    "method": "eth_call",
+    "params": [
+      {
+        "to": "0x731eFa688F3679688cf60A3993b8658138953ED6",
+        "data": "0xfe9c6aa6"
+      },
+      {
+        "blockHash": "0xab08b06d380d5fc12e60c1a21407014dcc5251aa8b37690432ba836d00c2bd88",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

@@ -473,6 +473,13 @@
       "replacement_sha256": "bfe3eca47fb53a433547a93069a74647f804148419aa96795512490f13b3d1c9"
     },
     {
+      "path": "registry/igra/calldata-KasExitBridge.json",
+      "upstream_bytes": 1110,
+      "upstream_sha256": "9c6fbece743979770b283aaf0f973132d3e81fbca971e45bf122fa7398f29197",
+      "replacement_bytes": 2313,
+      "replacement_sha256": "784ed491316c56ceb014106d0a8ab039bb88dc467eb6e2754ed03ff445d9926a"
+    },
+    {
       "path": "registry/kiln/calldata-kiln-fee-splitter-factory.json",
       "upstream_bytes": 3777,
       "upstream_sha256": "ec68c74603c2252c4220993d2b222a69d18b3deab5e0b742b078165a133cefc3",
@@ -525,8 +532,8 @@
       "path": "registry/lombard/calldata-lbtc-sepolia.json",
       "upstream_bytes": 4612,
       "upstream_sha256": "f79cc8eb93054c1233f5cd044a2d4b2f5ba82a4162d4890dc182a1bbfea22fc7",
-      "replacement_bytes": 4666,
-      "replacement_sha256": "974178982fc146e9c83992085524f0fabe3bba9882e2dcff91c6974f1037f49c"
+      "replacement_bytes": 6219,
+      "replacement_sha256": "d93e832f604aa0c1c03e275210ae03b50e2fd9ecbdafa2127118b5bafec3cf43"
     },
     {
       "path": "registry/midas/calldata-MinterVault.json",
@@ -653,6 +660,20 @@
       "upstream_sha256": "8058769e34b7bf4d9bb48ba2040a416f99a0c41b27827b57df26cc4d6cfe19b3",
       "replacement_bytes": 4199,
       "replacement_sha256": "250b5e04754fe1ffefff48341e2384f59fe4ba2960dac430b1d6cbf3a7e100df"
+    },
+    {
+      "path": "registry/starkgate/calldata-StarkGate-STRK.json",
+      "upstream_bytes": 1004,
+      "upstream_sha256": "5f62cef09fa63eafeb5ed357707958dec92c60f7673e056a532f0597207b961b",
+      "replacement_bytes": 2369,
+      "replacement_sha256": "c77fede77abd15b2ea0771b9dd2a4a2cf47bbcae5b2f2bf540517e9e5c238deb"
+    },
+    {
+      "path": "registry/swissborg/calldata-NttManager.json",
+      "upstream_bytes": 2846,
+      "upstream_sha256": "67624662a436152aee08819a3cdfe8362e6c51f5d7f70a5fc206ca890322f96e",
+      "replacement_bytes": 5240,
+      "replacement_sha256": "253146cdf0cf6074b6c116cad54910fecaf15c17f7f8b7ea645bed6ef42971d6"
     },
     {
       "path": "registry/tether/calldata-usdt.json",
