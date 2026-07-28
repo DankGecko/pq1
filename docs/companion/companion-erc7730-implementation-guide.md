@@ -208,7 +208,7 @@ is mandatory before a companion may request the selected forced-blind flow:
    hand-authored seed corpus used by older bring-up snapshots.
 
    <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE SUMMARY -->
-   - Development catalogue: 338,654 B, 399 compiled leaves, 4,587
+   - Development catalogue: 345,171 B, 399 compiled leaves, 4,587
      exact registry-declared known-call tuples, provenance `dev-unattested`.
      The tuple-set SHA-256 receipt is
      `f048eedfab3e8ba4145373ea1f1e30948395cd2b08b215ef1060533c0511f77c`.
@@ -1081,7 +1081,7 @@ provenance remains blocked):
 <!-- BEGIN XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 | Variant | Root | Catalog blob bytes | Compiled leaves |
 |---------|------|-------------------:|----------------:|
-| development (non-e2e) | `0xd216ee07ea1cd44debac313e30ec4e6ccc042d9cf34f07610fbb9af0208d1424` | 338 654 | 399 |
+| development (non-e2e) | `0x11e0017ab0cbf350ae83d27402f1d1ea95e76e9cdb2a8a3778c76271f8041920` | 345 171 | 399 |
 | e2e | `0xbc5573d447e5a96e243464eabb6ccaa303d9897fc6a9cdf3af684cae31cc5ed2` | 5 472 | 11 |
 <!-- END XTASK-VERIFIED ERC7730 CATALOGUE ROOTS -->
 

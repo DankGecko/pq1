@@ -1,7 +1,7 @@
 //! Offline evidence and fail-closed compilation checks for the bounded
 //! Threshold Network calldata slice tracked by PQ1 issue #497.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,6 +9,8 @@ use dbgen::erc7730::build_db_tolerant_with_erc20_capabilities;
 use pqsigner_erc7730::binding::cross_check_contract;
 use pqsigner_erc7730::ir::Erc7730Ir;
 use pqsigner_erc7730::known_calls::may_contain as known_call_may_contain;
+use pqsigner_erc7730::render::enums::lookup_enum_label;
+use pqsigner_erc7730::render::params::parse as parse_params;
 use pqsigner_tx_core::hash::keccak256;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -55,6 +57,41 @@ fn required_str<'a>(value: &'a Value, key: &str) -> &'a str {
     value[key]
         .as_str()
         .unwrap_or_else(|| panic!("{key} must be a string"))
+}
+
+fn pinned_wormhole_chains() -> BTreeMap<u64, String> {
+    let source = fs::read_to_string(evidence_root().join("source/wormhole-chains.ts"))
+        .expect("read pinned Wormhole chain-ID source");
+    let table = source
+        .split_once("const chainIdAndChainEntries = [")
+        .expect("Wormhole chain table start")
+        .1
+        .split_once("] as const")
+        .expect("Wormhole chain table end")
+        .0;
+    let mut chains = BTreeMap::new();
+    for line in table.lines().map(str::trim) {
+        let Some(entry) = line.strip_prefix('[') else {
+            continue;
+        };
+        let (chain_id, label) = entry
+            .split_once(',')
+            .expect("Wormhole chain entry separates ID and label");
+        let chain_id = chain_id
+            .trim()
+            .parse::<u64>()
+            .expect("Wormhole chain ID is an integer");
+        let label = label
+            .split('"')
+            .nth(1)
+            .expect("Wormhole chain label is quoted");
+        assert!(
+            chains.insert(chain_id, label.to_string()).is_none(),
+            "duplicate Wormhole chain ID {chain_id}"
+        );
+    }
+    assert_eq!(chains.len(), 64, "pinned Wormhole chain inventory changed");
+    chains
 }
 
 fn selector(signature: &str) -> [u8; 4] {
@@ -298,6 +335,24 @@ fn threshold_curations_admit_only_operand_complete_routes_and_preserve_refusals(
             "recipientChain".to_string(),
         ])
     );
+    let wormhole_chains = pinned_wormhole_chains();
+    let descriptor_chains = gateway["metadata"]["enums"]["wormholeChain"]
+        .as_object()
+        .expect("Wormhole enum table");
+    assert_eq!(
+        descriptor_chains.len(),
+        wormhole_chains.len(),
+        "descriptor must name every chain in the pinned Wormhole SDK table"
+    );
+    for (chain_id, label) in &wormhole_chains {
+        assert_eq!(
+            descriptor_chains
+                .get(&chain_id.to_string())
+                .and_then(Value::as_str),
+            Some(label.as_str()),
+            "Wormhole destination {chain_id} has a stale or missing label"
+        );
+    }
 
     let rebate = descriptor(REBATE_FILE);
     assert_eq!(
@@ -331,6 +386,48 @@ fn threshold_curations_admit_only_operand_complete_routes_and_preserve_refusals(
     }
 
     let registry = build_registry();
+    let gateway_entry = registry
+        .entries
+        .iter()
+        .find(|entry| entry.source.file_name().and_then(|file| file.to_str()) == Some(GATEWAY_FILE))
+        .expect("compiled gateway entry");
+    let gateway_ir = Erc7730Ir::parse(&gateway_entry.ir_bytes).expect("parse gateway IR");
+    let send_format = gateway_ir
+        .format_iter()
+        .map(|format| format.expect("valid gateway format"))
+        .find(|format| format.selector == selector(SEND_TBTC))
+        .expect("compiled sendTbtc format");
+    let enum_offsets = send_format
+        .fields()
+        .map(|field| field.expect("valid sendTbtc field"))
+        .filter_map(|field| {
+            parse_params(&gateway_ir, field.param_off)
+                .expect("sendTbtc field params")
+                .enum_ref
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        enum_offsets.len(),
+        1,
+        "sendTbtc must compile exactly one destination enum"
+    );
+    for (chain_id, label) in &wormhole_chains {
+        let mut word = [0u8; 32];
+        word[24..].copy_from_slice(&chain_id.to_be_bytes());
+        assert_eq!(
+            lookup_enum_label(gateway_ir.pool, enum_offsets[0], &word),
+            Ok(Some(label.as_bytes())),
+            "compiled Wormhole label mismatch for destination {chain_id}"
+        );
+    }
+    let mut unassigned_word = [0u8; 32];
+    unassigned_word[24..].copy_from_slice(&3u64.to_be_bytes());
+    assert_eq!(
+        lookup_enum_label(gateway_ir.pool, enum_offsets[0], &unassigned_word),
+        Ok(None),
+        "an ID absent from the pinned Wormhole table must not acquire a label"
+    );
+
     let expectations = [
         (GATEWAY_FILE, 7usize, vec![SEND_TBTC]),
         (REBATE_FILE, 1usize, REBATE_ROUTES.to_vec()),

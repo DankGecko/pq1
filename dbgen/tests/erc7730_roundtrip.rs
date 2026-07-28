@@ -3105,7 +3105,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(
         hex::encode(result.root),
         // Re-derived after bounded multi-tail formats were admitted.
-        "d216ee07ea1cd44debac313e30ec4e6ccc042d9cf34f07610fbb9af0208d1424"
+        "11e0017ab0cbf350ae83d27402f1d1ea95e76e9cdb2a8a3778c76271f8041920"
     );
 }
 

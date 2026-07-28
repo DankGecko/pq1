@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 866483,
-    "sha256": "6b595e1106c8991630310a2957405ce204d294103ae8ce54047464f45396b623"
+    "bytes": 868034,
+    "sha256": "dff2ee5b878a39d9ba7a3fc96509051ca3286ecadbb9f42071f4a7692549e388"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -286,8 +286,8 @@
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 40,
-      "bytes": 2618231,
-      "sha256": "b3ee942f45060447f76ee5fef497c84a1c7dc809178de8e00ff6061f72a1d93b"
+      "bytes": 2621892,
+      "sha256": "257a35adbd6ee1a4147b2e0805b99fd2a26d7d4d70410c5aa515466129f81e1d"
     },
     {
       "path": "pqsigner-erc7730",
@@ -336,7 +336,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 313678,
-      "sha256": "0ef8f3c0241331a9bc9963baf232ba3e5f407c71bd855c964e7387c29a8f6622"
+      "sha256": "6db3c1a8c801de3635e912233d819f2adb2c06bffc18a55d84e10122c7173f63"
     }
   ],
   "capability_inputs": [
@@ -686,8 +686,8 @@
       "path": "registry/threshold/calldata-L2WormholeGateway.json",
       "upstream_bytes": 3034,
       "upstream_sha256": "c6d8f5d249d87262b4e7b773f2704284bcbccf16add98805c559e6850ea8db55",
-      "replacement_bytes": 7939,
-      "replacement_sha256": "26ca3683d41c55895cd191d68d61b4e69b858ab1ea6dc78c4a170ab1c1e00a38"
+      "replacement_bytes": 9490,
+      "replacement_sha256": "33da5b323a5179132f5b8b77b1a6498614eec6e301b3551569257ceba09371d9"
     },
     {
       "path": "registry/threshold/calldata-RebateStaking.json",
