@@ -914,14 +914,16 @@ fn liquid_staking_flare_compilation_admits_only_allowlisted_routes_and_refusals(
             .filter(|family| family["classification"] == category)
             .map(|family| family["accepted_leaf_count"].as_u64().unwrap())
             .sum::<u64>();
+        let expected_source_count = (source_count != 0).then_some(source_count);
+        let expected_leaf_count = (leaf_count != 0).then_some(leaf_count);
         assert_eq!(
             inventory["catalogue_snapshot"]["category_source_counts"][category].as_u64(),
-            Some(source_count),
+            expected_source_count,
             "{category} source accounting"
         );
         assert_eq!(
             inventory["catalogue_snapshot"]["category_leaf_counts"][category].as_u64(),
-            Some(leaf_count),
+            expected_leaf_count,
             "{category} leaf accounting"
         );
     }

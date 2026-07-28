@@ -151,18 +151,24 @@ upstream-movement ceremony.
    curated known-call count, tuple-set hash, and Bloom bytes to be identical
    before its checked install. There is no manual patch-reapplication step.
    A replacement may use the PQSigner-local `_pqsigner.deploymentFormats`
-   constraint to select exact format keys for exact already-declared contract
-   deployments, and `_pqsigner.refusalOnlyFormats` to mark exact source format
-   keys that may contribute only to the known-call refusal set. The compiler
-   rejects null, empty, duplicate, unknown, malformed, out-of-context,
-   overlapping, or catalogue-wide selector-colliding entries, and compiles each
-   admitted set atomically. These extensions can only remove authenticated
-   leaves: the independent known-call scan deliberately ignores them, so every
-   omitted source deployment/format tuple remains a hard refusal. For an
-   allowlist-excluded format, the review receipt also records an independently
-   isolated underlying compiler rejection when one is safely derivable; that
-   diagnostics-only probe has a fresh pool, cloned context, and throw-away
-   output and therefore cannot emit a leaf or grant fallback authority.
+   constraint to select exact source format keys for exact already-declared
+   deployments, and `_pqsigner.refusalOnlyFormats` to exclude exact source
+   format keys from IR emission. Contract-context declarations retain their
+   independently inventoried deployment/selector tuples in the known-call
+   refusal set; the existing selector-collision rules continue to apply.
+   EIP-712 declarations are matched by the full exact type-signature string and
+   deployment tuple, bypass the four-byte selector logic, and may use an empty
+   deployment admission only when a non-empty refusal-only set leaves no
+   authenticated leaf. The typed-data signing handler requires a valid
+   descriptor proof, so an omitted EIP-712 deployment/type fails closed; it
+   does not enter `P73K` or any forced-blind path. The compiler rejects null,
+   nonrestrictive empty, duplicate, unknown, malformed, out-of-context, or
+   overlapping declarations and compiles each non-empty admitted set
+   atomically. For an allowlist-excluded format, the review receipt also
+   records an independently isolated underlying compiler rejection when one is
+   safely derivable; that diagnostics-only probe has a fresh pool, cloned
+   context, and throw-away output and therefore cannot emit a leaf or grant
+   fallback authority.
 5. `cargo run -p dbgen --features nested-calldata-test-fixture` — regenerate
    the blobs, known-call Blooms, production/E2E `erc7730_status*.bin` receipts,
    canonical production/E2E `P73K` refused-known sets, `db_roots.rs`
@@ -173,10 +179,12 @@ upstream-movement ceremony.
    plus `## skips` roll-up (finding 1.4).
 6. **Review the review-file diff**: leaves gained/lost, any `degraded=` markers
    (finding 1.1), any new skips by category, any `CONFLICT` dedup error
-   (finding 2.2), and every `C -> F` movement. Each such movement expands
-   signing authority when `erc7730-forced-blind` is enabled and therefore needs
-   an explicit owner decision; catalogue churn cannot silently approve it.
-   This is the human gate on what the device will trust.
+   (finding 2.2), and every contract-call `C -> F` movement. Each contract-call
+   movement expands signing authority when `erc7730-forced-blind` is enabled
+   and therefore needs an explicit owner decision; catalogue churn cannot
+   silently approve it. EIP-712 leaf removals are separately reviewed for
+   semantic honesty but never enter `F`/`P73K` and cannot authorize forced
+   blind. This is the human gate on what the device will trust.
 7. Commit; after the firmware-release quarantine closes, the root rides the
    next reviewed and signed firmware release. Before closure this step produces
    development artifacts only.

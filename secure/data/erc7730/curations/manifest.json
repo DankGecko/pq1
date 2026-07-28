@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 950327,
-    "sha256": "fccec7b2a2c1790393703bbf1718b39036426a1c3130c5962fbd4d7165ab3744"
+    "bytes": 979180,
+    "sha256": "ae60de07ca1d14d63a1701763c9049931dee2e2c4fde3969743195935dd6ce66"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -460,9 +460,9 @@
     {
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
-      "files": 48,
-      "bytes": 2847908,
-      "sha256": "d1c574c251effbd40198964400605dc851b7ecfaa5ba541d0b5d5b525df90f4e"
+      "files": 50,
+      "bytes": 2879816,
+      "sha256": "6d28c42b6438c51d738e097610b0d297cbb040560e26bb6cc634f5a41fafa535"
     },
     {
       "path": "pqsigner-erc7730",
@@ -510,8 +510,8 @@
       "path": "xtask",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
-      "bytes": 313678,
-      "sha256": "1db4e7fac08f8c2d665ca31ad03e018a8d5df45d80ec5dc0df601c5f98d167d4"
+      "bytes": 313679,
+      "sha256": "0027292f69412ec77933632fcdc450453bacc6dadd76eb5b3ab0c217de17a5d9"
     }
   ],
   "capability_inputs": [
@@ -655,6 +655,13 @@
       "replacement_sha256": "9b325c4c555061d1a070808c7f8f5a42f731dc734bb590cea0f32be03f44d6f9"
     },
     {
+      "path": "registry/degate/eip712-degate.json",
+      "upstream_bytes": 2896,
+      "upstream_sha256": "9acddbab5a022ca4a9437a6b0490edb3272157d8f56a01f3bc598939d58138f2",
+      "replacement_bytes": 5165,
+      "replacement_sha256": "d5fd82c49c662d0ecda669be2c3e6a05501eb70b5dba9c19156e5b130b21f4a7"
+    },
+    {
       "path": "registry/ethena/calldata-ethena.json",
       "upstream_bytes": 1420,
       "upstream_sha256": "da12844aa9f109e6f8f3e0579239d9deaf34b7aaf4ec33496f7ac41588a89830",
@@ -763,8 +770,8 @@
       "path": "registry/flyingtulip/eip712-LeverageRfqEngine.json",
       "upstream_bytes": 2688,
       "upstream_sha256": "1ff0f2ff12b41f7f433b3d0137517115b0a0032b8e4a76954b59137ca6455186",
-      "replacement_bytes": 3364,
-      "replacement_sha256": "a06e3ca66c3fbebbfee869cf45da8f8fe7ffd46ad9e7e6709b641acdd602b99e"
+      "replacement_bytes": 3451,
+      "replacement_sha256": "52c65c6ff4b75980b954dd48a850b39d2a3941a79d9cc32d8d4fa224df8f0875"
     },
     {
       "path": "registry/flyingtulip/eip712-PftMarketplace-BuyOffer.json",
@@ -777,22 +784,22 @@
       "path": "registry/flyingtulip/eip712-SessionManager-FT.json",
       "upstream_bytes": 3069,
       "upstream_sha256": "1c62a2c51aeb265e38d30c65ccc812bea3f6e35d381247541b17f0542bf5c7c2",
-      "replacement_bytes": 4681,
-      "replacement_sha256": "b3925f79a8e80653ccce99fe2432b03a1d007872c4ee498f6ca6dbc6223c9884"
+      "replacement_bytes": 4686,
+      "replacement_sha256": "69d47ce80c5a87cca492cf7840bc3ecea39914589466c080521ca77f387c9eb7"
     },
     {
       "path": "registry/flyingtulip/eip712-SessionManager-ftUSD.json",
       "upstream_bytes": 3424,
       "upstream_sha256": "3f9af2a41ced1c6c8de90ae1c1be9a5a42ad5fc99ca77369a3f4c92e315a48a9",
-      "replacement_bytes": 6031,
-      "replacement_sha256": "4356b716033abad99a6d2b3000fd6c5263bbdfa4d273006a430098bd9e9baae1"
+      "replacement_bytes": 6036,
+      "replacement_sha256": "d1b6a704960f1e1b3ac9e2536928772dcd865ee70cfec8ca7195cbb66bde2f08"
     },
     {
       "path": "registry/flyingtulip/eip712-SpotOrderCancel.json",
       "upstream_bytes": 2103,
       "upstream_sha256": "5449f9269973da4edbe9bc405f1a158824e55448fcafd6639fd3d31f64d8a676",
-      "replacement_bytes": 2920,
-      "replacement_sha256": "1e301247088f82d56116d92a9601ebb63ead7fc4c32c46e1084fc39120db5432"
+      "replacement_bytes": 2905,
+      "replacement_sha256": "0ede3a9406f9512e02713cae51fb9199d05ac96f4f25a078ff98e83988a8515a"
     },
     {
       "path": "registry/igra/calldata-KasExitBridge.json",
@@ -814,6 +821,27 @@
       "upstream_sha256": "b9cc03aebb3c30fc8b189345fb3f1416601d3ee6bc6af8f4fac09fb0ab06f13d",
       "replacement_bytes": 9844,
       "replacement_sha256": "ebf6905de06763dd8489bd1d6893214155cc425ed9b13850efdae9439a28976a"
+    },
+    {
+      "path": "registry/ledgerquest/eip712-ledgerquest.json",
+      "upstream_bytes": 698,
+      "upstream_sha256": "26e9a047ebabd084a40b8ef426f9f27d963753cd58596c0dc78abe9f44d9b9f5",
+      "replacement_bytes": 1481,
+      "replacement_sha256": "8a9e1f599e25cac6b8700305ca66e1a46ea4a5087c9802ce9de7b1293972edf3"
+    },
+    {
+      "path": "registry/lens/eip712-lens-lenshub.json",
+      "upstream_bytes": 12909,
+      "upstream_sha256": "e090ba97523330a3d8e55dc9f45af919d6353d5995fbec8d495bb3f54fddbff7",
+      "replacement_bytes": 20761,
+      "replacement_sha256": "f984670616d806e1210298da63542105581fc87e08a5ead1b7453143eee44258"
+    },
+    {
+      "path": "registry/lens/eip712-lens-token-handle-registry.json",
+      "upstream_bytes": 1201,
+      "upstream_sha256": "af42e9abffb10a096f41ac99c622154ae8834977c0a534404748677ef1868b10",
+      "replacement_bytes": 2303,
+      "replacement_sha256": "7241bb48d99b990fd0147c8d4d122bb6f4860ba53818b4497d012dbba8e4ac86"
     },
     {
       "path": "registry/lido/calldata-WithdrawalQueueERC721.json",
@@ -861,15 +889,15 @@
       "path": "registry/lombard/eip712-network-fee-authorization-mainnet.json",
       "upstream_bytes": 814,
       "upstream_sha256": "169e528382579935261bac01972152b2458a9b6983deb571b73f5354a97fbfd8",
-      "replacement_bytes": 2165,
-      "replacement_sha256": "4e72faa0822f2905247da5ede697c797740caf33bf8684edea0a11bad0c5aad6"
+      "replacement_bytes": 2170,
+      "replacement_sha256": "3415093e3825a47c093b5083a611dbe3884b4c409dd3199ea237b912008c15a1"
     },
     {
       "path": "registry/lombard/eip712-network-fee-authorization-sepolia.json",
       "upstream_bytes": 818,
       "upstream_sha256": "685a6b681290c537b09a609272c14fdcedb5eb03198143e12c8255421fd4bb46",
-      "replacement_bytes": 1719,
-      "replacement_sha256": "f050ecffb90496ee77f14fdc59dc2a4ea5783ad2c245d1591e5c786b9aadd9fa"
+      "replacement_bytes": 1801,
+      "replacement_sha256": "6688f176b536922785c8fbd17a13c89db31085bbf5d70d955e5e19d2229e0adb"
     },
     {
       "path": "registry/midas/calldata-MinterVault.json",
@@ -928,11 +956,32 @@
       "replacement_sha256": "ee8b405e19674c61429188d0d5bf2a34273d0d0eabac1b8e8da1982019c25524"
     },
     {
+      "path": "registry/paraswap/eip712-paraswap.json",
+      "upstream_bytes": 2672,
+      "upstream_sha256": "9c19b4ebcc2bfa4729ef24bcd79f0e148aeffb2e5046ac4bb86679c68d2f7770",
+      "replacement_bytes": 4538,
+      "replacement_sha256": "2d8c15bd22bb2f464410fcf46d1e7abb3e2bdb31837858a52dd8539d413773e6"
+    },
+    {
       "path": "registry/quickswap/calldata-QuickSwap.json",
       "upstream_bytes": 15749,
       "upstream_sha256": "19e2481f20414ae9b6669050c9740f919ca3896713693df7b50e60dba685d15f",
       "replacement_bytes": 20411,
       "replacement_sha256": "c5b6e9f2cd030e6d61402c29289f0c3d6fc11419ae6a15cf98de43c8ce7d4dab"
+    },
+    {
+      "path": "registry/rarible/eip712-rarible-erc-1155.json",
+      "upstream_bytes": 1183,
+      "upstream_sha256": "4cb9ddd74f59797eb5dcc189c38cc33a7818dc9fdf6c082000dac074a44135b8",
+      "replacement_bytes": 2233,
+      "replacement_sha256": "d439907d392241334216f83d096f7a33d66a41ce76e028934bff74b8bcddd6c5"
+    },
+    {
+      "path": "registry/rarible/eip712-rarible-erc-721.json",
+      "upstream_bytes": 1091,
+      "upstream_sha256": "b0c8bf917974d22db8b8b5c9dc2bdb57f2e4376591fa71ba2f0972ada0814905",
+      "replacement_bytes": 2067,
+      "replacement_sha256": "8208b57a46f2f33ea127af32e3201a0f02342168edbeeed5f9493b0acd1247dc"
     },
     {
       "path": "registry/safe/calldata-Safe-1.3.0.json",
@@ -1026,6 +1075,13 @@
       "replacement_sha256": "250b5e04754fe1ffefff48341e2384f59fe4ba2960dac430b1d6cbf3a7e100df"
     },
     {
+      "path": "registry/smartcredit/eip712-smartcredit.json",
+      "upstream_bytes": 1191,
+      "upstream_sha256": "fc712f967fbb58a97852de70a26bef5307c09a647a51245aa0d2f3000f5bb799",
+      "replacement_bytes": 2254,
+      "replacement_sha256": "6ea662cc02ba82209032efcdb8dee03e1c0793d58af04cd26822c9b239231e46"
+    },
+    {
       "path": "registry/starkgate/calldata-StarkGate-STRK.json",
       "upstream_bytes": 1004,
       "upstream_sha256": "5f62cef09fa63eafeb5ed357707958dec92c60f7673e056a532f0597207b961b",
@@ -1052,6 +1108,97 @@
       "upstream_sha256": "67624662a436152aee08819a3cdfe8362e6c51f5d7f70a5fc206ca890322f96e",
       "replacement_bytes": 5240,
       "replacement_sha256": "253146cdf0cf6074b6c116cad54910fecaf15c17f7f8b7ea645bed6ef42971d6"
+    },
+    {
+      "path": "registry/tally/eip712-tally-arbitrum-arb-token.json",
+      "upstream_bytes": 681,
+      "upstream_sha256": "29bd44cddc8ad4d068a9a165ba77fc5ed8fa5cb7927fed66285515900b67730f",
+      "replacement_bytes": 1452,
+      "replacement_sha256": "5fcc3eb008bc0cb893014fba1a08081ab6c8d91ad0d533f7544d22580c417a0d"
+    },
+    {
+      "path": "registry/tally/eip712-tally-arbitrum-core-governor.json",
+      "upstream_bytes": 647,
+      "upstream_sha256": "75f03c45cee2b33802a8c993dde71af035d93755f2007537057a8c028b80406a",
+      "replacement_bytes": 1351,
+      "replacement_sha256": "283d8e1ce2563f53d910a3a6e1098fcd51a1bb4d4d07c52a43e3f17722440178"
+    },
+    {
+      "path": "registry/tally/eip712-tally-arbitrum-treasury-governor.json",
+      "upstream_bytes": 651,
+      "upstream_sha256": "4f17200ecd86975f5935a9b380c95f2eba2e348977eb9a5cb41d849a0944b002",
+      "replacement_bytes": 1355,
+      "replacement_sha256": "23af6ecd24ddd85ea0299a698fb6ad5ed37d7eed745c7c987e7f7ef6886f53e4"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-bitcoin-governor.json",
+      "upstream_bytes": 608,
+      "upstream_sha256": "8b794c8b6df8b2af42ea437210561f28c381fc1bd67bd3b7365571f855be3e37",
+      "replacement_bytes": 1298,
+      "replacement_sha256": "e0e4c880336b1a31de3839e7c572efbc7c7940004b9522f8df411ed17611f437"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-bravo-governor.json",
+      "upstream_bytes": 617,
+      "upstream_sha256": "f4109af6491c92ee61d952506f47f9760083a015544bc7903c113328e9ae4390",
+      "replacement_bytes": 1317,
+      "replacement_sha256": "b50357dc939be71715512c04979af9fbe1c4f674965837542635ae7e880f67a0"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-ens-governor.json",
+      "upstream_bytes": 609,
+      "upstream_sha256": "89477daaffcacf1c4186458c309b834a17037f72555293affc6c7a5af7982282",
+      "replacement_bytes": 1302,
+      "replacement_sha256": "71d8f28613c6c5ae528678153901d1755a1bdaaabbd8ef0d68f68cc21444decc"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-ens-token.json",
+      "upstream_bytes": 703,
+      "upstream_sha256": "e38764c872c2f50dca399ab56ef8bf47771f2fa576be6094da286dc9c46fc70a",
+      "replacement_bytes": 1463,
+      "replacement_sha256": "010689887217765eee3396fec2a8a77adaf9b033521466e8918076893f57c660"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-gtk-token.json",
+      "upstream_bytes": 643,
+      "upstream_sha256": "92e7c7eab015581078a36ec3aaf21053471a42d07fd2f4bc2fb706e256c6c4d9",
+      "replacement_bytes": 1436,
+      "replacement_sha256": "795e27ffede1e7d6a4aed134e1a857e246f6fc5b8018388f125830aa07916428"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-hop-governor.json",
+      "upstream_bytes": 609,
+      "upstream_sha256": "d71c94825d76e4ef45fe6753050cd305f57d8c54be413bd4c8ae4996463d6628",
+      "replacement_bytes": 1302,
+      "replacement_sha256": "35cc04924cb3e592fef0c903df43c03758581cd4f02c7aa06d16eeec01414b92"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-hop-token.json",
+      "upstream_bytes": 667,
+      "upstream_sha256": "e50e7daf5c591b3e3f51797f4027f954830a4d0370bf29bafbe3b2696da1ada0",
+      "replacement_bytes": 1427,
+      "replacement_sha256": "0368eddfc774de060ee555ffd57629be4bf5536164e68d3ab74c6b7fefabf509"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-pool-token.json",
+      "upstream_bytes": 670,
+      "upstream_sha256": "dce453fb1d226b36c143b6f4a5bebc6fd55bbe45db75d123a42de93f320ef808",
+      "replacement_bytes": 1422,
+      "replacement_sha256": "666c6ce8478428cd5fdebcc9471397038483cdd8683f83af66949825c5b29798"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-pooltogether-governor.json",
+      "upstream_bytes": 637,
+      "upstream_sha256": "7e58b79667aa698dd29c8fdf0a49c4bbd4f5f9d02f560128340d9e694a55206e",
+      "replacement_bytes": 1320,
+      "replacement_sha256": "f8f2fb1581c4ff643390d9c080b32bfe7131e5a3c0bfdc04a47e05206b7ad117"
+    },
+    {
+      "path": "registry/tally/eip712-tally-ethereum-uni-token.json",
+      "upstream_bytes": 643,
+      "upstream_sha256": "954f456bdc5de2d7ee521a7cf97e9ab977129ce7f102463ad340973db2d2fc26",
+      "replacement_bytes": 1411,
+      "replacement_sha256": "67a7bd7ca457da491e03d8be1e323123d81bb627f50185f59b60e2053a5ed528"
     },
     {
       "path": "registry/tether/calldata-usdt.json",

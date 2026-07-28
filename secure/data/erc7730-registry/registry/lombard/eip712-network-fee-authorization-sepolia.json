@@ -1,6 +1,6 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
-  "_curation_note": "PQSigner semantic curation: the Sepolia feeApproval declaration is retained only as an exact typed-data refusal. The existing bridge-exits evidence pins the StakedLBTC proxy, implementation, runtime, token metadata, and EIP-712 domain name/version, but it does not compactly pin the Sepolia AssetRouter consumer that determines whether signed fee is a maximum ceiling. The descriptor therefore names the value honestly as raw LBTC base units while _pqsigner refuses the only format. No trusted leaf, fallback, blind-signing, hardware, production, shipment, or future-upgrade authority is supplied. See tests/erc7730-semantic-evidence/bridge-exits.",
+  "_curation_note": "PQSigner #498 EIP-712 quarantine: the Sepolia feeApproval declaration is retained only as an exact typed-data refusal. The existing bridge-exits evidence pins the StakedLBTC proxy, implementation, runtime, token metadata, and EIP-712 domain name/version, but it does not compactly pin the Sepolia AssetRouter consumer that determines whether signed fee is a maximum ceiling. The descriptor therefore names the value honestly as raw LBTC base units while _pqsigner refuses the only format. Reconsider only after satisfying reason code missing-fixed-block-authority. No trusted leaf, fallback, blind-signing, hardware, production, shipment, or future-upgrade authority is supplied. See tests/erc7730-semantic-evidence/bridge-exits.",
   "_pqsigner": {
     "deploymentFormats": [],
     "refusalOnlyFormats": [

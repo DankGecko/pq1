@@ -44,9 +44,9 @@
     {
       "id": "ft",
       "vendored_file": "secure/data/erc7730-registry/registry/flyingtulip/eip712-SessionManager-FT.json",
-      "vendored_file_sha256": "b3925f79a8e80653ccce99fe2432b03a1d007872c4ee498f6ca6dbc6223c9884",
+      "vendored_file_sha256": "69d47ce80c5a87cca492cf7840bc3ecea39914589466c080521ca77f387c9eb7",
       "curation_overlay": "secure/data/erc7730/curations/files/registry/flyingtulip/eip712-SessionManager-FT.json",
-      "curation_overlay_sha256": "b3925f79a8e80653ccce99fe2432b03a1d007872c4ee498f6ca6dbc6223c9884",
+      "curation_overlay_sha256": "69d47ce80c5a87cca492cf7840bc3ecea39914589466c080521ca77f387c9eb7",
       "domain": {
         "name": "FT SessionManager",
         "version": "1"
@@ -65,9 +65,9 @@
     {
       "id": "current",
       "vendored_file": "secure/data/erc7730-registry/registry/flyingtulip/eip712-SessionManager-ftUSD.json",
-      "vendored_file_sha256": "4356b716033abad99a6d2b3000fd6c5263bbdfa4d273006a430098bd9e9baae1",
+      "vendored_file_sha256": "d1b6a704960f1e1b3ac9e2536928772dcd865ee70cfec8ca7195cbb66bde2f08",
       "curation_overlay": "secure/data/erc7730/curations/files/registry/flyingtulip/eip712-SessionManager-ftUSD.json",
-      "curation_overlay_sha256": "4356b716033abad99a6d2b3000fd6c5263bbdfa4d273006a430098bd9e9baae1",
+      "curation_overlay_sha256": "d1b6a704960f1e1b3ac9e2536928772dcd865ee70cfec8ca7195cbb66bde2f08",
       "domain": {
         "name": "ftUSD SessionManager",
         "version": "1"

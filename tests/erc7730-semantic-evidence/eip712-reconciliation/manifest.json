@@ -1,0 +1,205 @@
+{
+  "schema_version": 1,
+  "status": "phase-d-frozen",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/498",
+  "baseline": {
+    "commit": "4e83292364889e9f9007e571843c80e57ed657b3",
+    "tree": "ba77147ac597dfa77dcfb8918415cd96d41a0df9",
+    "accepted_family_inventory_sha256": "6c7af295882041028aeb95ad4df6d1c61927c4f0ecca56a294df702188779324",
+    "upstream_registry_commit": "784c87c925e8438e7b4736b2af85a501f8d2a265",
+    "upstream_registry_tree": "8da8dba78c3e581bbd06c15cc681d07e570dcfb1",
+    "source_count": 27,
+    "accepted_leaf_count": 39,
+    "known_call_count": 4615,
+    "forced_eligible_set_sha256": "6f4f8020c26d23304598025df4b0447a9979557573f444a211e55641934b198c",
+    "known_call_bloom_sha256": "9269d7224a81364644f38cad7ad0be541597f253522921557a6c96a384ee904d"
+  },
+  "authority_contract": "Promote only exact source/runtime/domain/type/deployment semantics with executable binding, render, and refusal evidence. Otherwise emit no clear-signing leaf; the typed-data handler's mandatory descriptor proof then fails closed. EIP-712 quarantine never grants forced-blind authority.",
+  "reason_codes": {
+    "missing-fixed-block-authority": "Acquire a fixed-block/two-provider runtime receipt, proxy implementation evidence where applicable, pinned authoritative source/compiler/ABI, exact EIP-712 domain and type-hash derivation, and a real Merkle/binding/render transcript with negative mutations.",
+    "missing-offchain-verifier-authority": "Identify and pin the authoritative verifier or protocol specification that consumes the exact type under the named domain and deployment; a fixture and parser support are insufficient.",
+    "deployment-domain-contradiction": "Resolve the observed fixture/domain or source/deployment contradiction, then supply the complete fixed-block authority and transcript package.",
+    "wrong-deployment-binding": "Replace the incorrect verifying-contract deployment with the authoritative verifier, prove it at a fixed block, and add a regression that the incorrect tuple remains refused.",
+    "presentation-correction-required": "Correct the user-visible protocol or asset identity, then supply fixed-block deployment/type authority and exact transcript evidence.",
+    "resource-bound-unproven": "Supply fixed-block deployment/type authority and prove useful accepted payload bounds plus fatal refusal at every page, array, and string boundary."
+  },
+  "promoted": [
+    {
+      "source": "flyingtulip/eip712-SessionManager-FT.json",
+      "prior_accepted_leaf_count": 2,
+      "evidence": "flyingtulip-sessionmanager"
+    },
+    {
+      "source": "flyingtulip/eip712-SessionManager-ftUSD.json",
+      "prior_accepted_leaf_count": 5,
+      "evidence": "flyingtulip-sessionmanager"
+    },
+    {
+      "source": "lombard/eip712-network-fee-authorization-mainnet.json",
+      "prior_accepted_leaf_count": 1,
+      "evidence": "lombard-lbtc"
+    }
+  ],
+  "quarantined": [
+    {
+      "source": "degate/eip712-degate.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "Upstream fixtures and flat-static rendering do not prove the deployed DeGate verifier or the economic meaning of account, token, fee, and storage identifiers."
+    },
+    {
+      "source": "flyingtulip/eip712-LeverageRfqEngine.json",
+      "prior_accepted_leaf_count": 3,
+      "reason_code": "missing-offchain-verifier-authority",
+      "note": "No pinned source/runtime or authoritative verifier binds LeveragedOrder action, amount, fee, and expiry semantics to these three deployments."
+    },
+    {
+      "source": "flyingtulip/eip712-SpotOrderCancel.json",
+      "prior_accepted_leaf_count": 2,
+      "reason_code": "missing-offchain-verifier-authority",
+      "note": "The verified SessionManager source does not define or consume CancelOrder or TpslGroupCancel; bounded string-preimage rendering is not protocol authority."
+    },
+    {
+      "source": "ledgerquest/eip712-ledgerquest.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "The descriptor fixture and ERC-8176 plumbing test do not prove the deployed verifier or receiver/category/collection semantics."
+    },
+    {
+      "source": "lens/eip712-lens-lenshub.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-offchain-verifier-authority",
+      "note": "Quote has bounded string support but no pinned deployment/verifier package; the accepted snake_case types have no identified authoritative source."
+    },
+    {
+      "source": "lens/eip712-lens-token-handle-registry.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "deployment-domain-contradiction",
+      "note": "The accepted-format fixture uses Example/1 while the descriptor binds Lens Protocol Profiles/2, and the exact signature was not located in authoritative source."
+    },
+    {
+      "source": "lombard/eip712-network-fee-authorization-sepolia.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "The Sepolia token/domain tuple is pinned, but the distinct AssetRouter proxy implementation and the consumer semantics of feeApproval are not source-bound at a fixed block."
+    },
+    {
+      "source": "paraswap/eip712-paraswap.json",
+      "prior_accepted_leaf_count": 5,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "Only mainnet fixtures exist; none of the five deployments has pinned runtime/source authority or reviewed cross-chain code equivalence."
+    },
+    {
+      "source": "rarible/eip712-rarible-erc-1155.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "resource-bound-unproven",
+      "note": "Nested/string rendering is implemented, but source/runtime authority is unpinned and realistic creator/royalty payloads can exceed the trusted page budget."
+    },
+    {
+      "source": "rarible/eip712-rarible-erc-721.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "Nested/string rendering is implemented, but the promising explorer source is not pinned into an exact deployment/type/transcript package."
+    },
+    {
+      "source": "smartcredit/eip712-smartcredit.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "wrong-deployment-binding",
+      "note": "The descriptor address is the SMARTCREDIT ERC-20 token; its verified source has no LoanRequest type or EIP-712 verifier."
+    },
+    {
+      "source": "tally/eip712-tally-arbitrum-arb-token.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "The proxy implementation, runtime, domain, Delegation type, and nonce/expiry semantics are not pinned at a fixed block."
+    },
+    {
+      "source": "tally/eip712-tally-arbitrum-core-governor.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "The proxy implementation, runtime, domain, Ballot type, and uint8 support semantics are not pinned at a fixed block."
+    },
+    {
+      "source": "tally/eip712-tally-arbitrum-treasury-governor.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "The proxy implementation, runtime, domain, Ballot type, and uint8 support semantics are not pinned at a fixed block."
+    },
+    {
+      "source": "tally/eip712-tally-ethereum-bitcoin-governor.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "The stale filename and unpinned Gitcoin Governor Alpha deployment/type evidence prevent an authoritative claim."
+    },
+    {
+      "source": "tally/eip712-tally-ethereum-bravo-governor.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "The delegator implementation, runtime, domain, Ballot type, and uint8 support semantics are not pinned at a fixed block."
+    },
+    {
+      "source": "tally/eip712-tally-ethereum-ens-governor.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "The deployment/runtime, domain, Ballot type, and uint8 support semantics are not pinned at a fixed block."
+    },
+    {
+      "source": "tally/eip712-tally-ethereum-ens-token.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "The deployment/runtime, domain, Delegation type, and nonce/expiry semantics are not pinned at a fixed block."
+    },
+    {
+      "source": "tally/eip712-tally-ethereum-gtk-token.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "presentation-correction-required",
+      "note": "The deployment and source are Gitcoin GTC, while the descriptor displays GTK; fixed-block deployment/type evidence is also absent."
+    },
+    {
+      "source": "tally/eip712-tally-ethereum-hop-governor.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "The deployment/runtime, domain, Ballot type, and uint8 support semantics are not pinned at a fixed block."
+    },
+    {
+      "source": "tally/eip712-tally-ethereum-hop-token.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "The deployment/runtime, domain, Delegation type, and nonce/expiry semantics are not pinned at a fixed block."
+    },
+    {
+      "source": "tally/eip712-tally-ethereum-pool-token.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "The deployment/runtime, domain, Delegation type, and nonce/expiry semantics are not pinned at a fixed block."
+    },
+    {
+      "source": "tally/eip712-tally-ethereum-pooltogether-governor.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "The deployment/runtime, domain, Ballot type, and bool support semantics are not pinned at a fixed block."
+    },
+    {
+      "source": "tally/eip712-tally-ethereum-uni-token.json",
+      "prior_accepted_leaf_count": 1,
+      "reason_code": "missing-fixed-block-authority",
+      "note": "The deployment/runtime, domain, Delegation type, and nonce/expiry semantics are not pinned at a fixed block."
+    }
+  ],
+  "totals": {
+    "promoted_source_count": 3,
+    "promoted_leaf_count": 8,
+    "quarantined_source_count": 24,
+    "quarantined_leaf_count": 31
+  },
+  "result": {
+    "catalogue_source_count": 214,
+    "catalogue_leaf_count": 365,
+    "catalogue_root": "88c2064fd6448112e339e59a78758573b6316a347469c72399015757b4871a2c",
+    "catalogue_blob_sha256": "1597c3d7adaf7b4a7a0209fe4974776e51958d1ad6569987b202d6eb535b2251",
+    "known_call_count": 4615,
+    "forced_eligible_set_sha256": "6f4f8020c26d23304598025df4b0447a9979557573f444a211e55641934b198c",
+    "known_call_bloom_sha256": "9269d7224a81364644f38cad7ad0be541597f253522921557a6c96a384ee904d"
+  },
+  "boundary": "Historical source and E1 transcript evidence only. No live-state, future-upgrade, transaction-success, ERC-8176 production provenance, forced-blind, hardware, shipment, or production authority is implied."
+}

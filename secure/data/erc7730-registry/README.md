@@ -43,13 +43,13 @@ tuple-set SHA-256, and Bloom bytes. Merkle-root or Bloom equality alone is not
 accepted as a faithfulness proof.
 
 <!-- BEGIN XTASK-VERIFIED ERC7730 REGISTRY RECEIPT -->
-Checked-in curated receipt, verified against a fresh build by `--check`: **396 leaves**, **355,397-byte**
+Checked-in curated receipt, verified against a fresh build by `--check`: **365 leaves**, **330,929-byte**
 compiled companion catalogue, root
-`d007b9678da8664249024b2c5b463cafe20b8aa4b33741e44ab0f7286d7748b2`,
+`88c2064fd6448112e339e59a78758573b6316a347469c72399015757b4871a2c`,
 **4,615** canonical known-call tuples, tuple-set SHA-256
 `50dfa0f52c76efc27c7110e9703595d8e1afc2195ffeb847b3567817ced421e6`.
 Curation manifest SHA-256
-`09df4a2adf99227ab9b4c2f0f23222820ebc766fd76408425c5e73a7afdddded` binds upstream commit
+`aaedc45c9f18ff738e26ac5cd3e52cb85c2d0b9bc05ccb20fa5eed8e1e033647` binds upstream commit
 `784c87c925e8438e7b4736b2af85a501f8d2a265` and tree
 `8da8dba78c3e581bbd06c15cc681d07e570dcfb1`.
 Manifest v3 authorizes exactly **73** curation-added known-call tuples and no deletions.

@@ -1,7 +1,8 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
-  "_curation_note": "PQSigner structural quarantine: CancelOrder and TpslGroupCancel remain exact registry-known refusals at both declared deployments. The SessionManager runtime evidence authenticates the FT SessionManager v1 domain, but its verified source contains neither cancellation type nor a verification path for either message; fixtures are not authoritative off-chain-verifier semantics. No clear-signing leaf may be emitted until authoritative FlyingTulip backend/client or signed specification evidence binds these exact types and effects to the domain. This quarantine grants no fallback or blind-signing authority.",
+  "_curation_note": "PQSigner #498 EIP-712 quarantine: the SessionManager runtime evidence authenticates the FT SessionManager v1 domain, but its verified source contains neither CancelOrder nor TpslGroupCancel or a verification path for either message; fixtures are not authoritative off-chain-verifier semantics. No clear-signing leaf may be emitted, so the mandatory typed-data descriptor proof fails closed at both declared deployments. Reconsider only after satisfying reason code missing-offchain-verifier-authority. This quarantine grants no fallback or blind-signing authority.",
   "_pqsigner": {
+    "deploymentFormats": [],
     "refusalOnlyFormats": [
       "CancelOrder(string orderId)",
       "TpslGroupCancel(address user,string positionId,string tpslGroupId,uint256 deadline)"

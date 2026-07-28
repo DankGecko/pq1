@@ -5,27 +5,25 @@
   "catalogue_snapshot": {
     "upstream_commit": "784c87c925e8438e7b4736b2af85a501f8d2a265",
     "upstream_tree": "8da8dba78c3e581bbd06c15cc681d07e570dcfb1",
-    "curated_corpus_sha256": "63b444fa94b08a1a2ddd3740e8fae128877bac92a53dfcf59d7fcf9ffc99989f",
-    "merkle_root": "a8f1bf820f4ff11a2189da88523d87cba83d3e8c7a4f39caae96cc2a03b38fd4",
-    "accepted_leaf_count": 395,
-    "accepted_source_descriptor_count": 237,
-    "compiled_blob_bytes": 354777,
+    "curated_corpus_sha256": "ae60de07ca1d14d63a1701763c9049931dee2e2c4fde3969743195935dd6ce66",
+    "merkle_root": "88c2064fd6448112e339e59a78758573b6316a347469c72399015757b4871a2c",
+    "accepted_leaf_count": 365,
+    "accepted_source_descriptor_count": 214,
+    "compiled_blob_bytes": 330929,
     "known_call_count": 4615,
     "category_source_counts": {
-      "pinned-evidence": 79,
-      "shared-standard-implementation": 133,
-      "lower-priority-residual": 25
+      "pinned-evidence": 81,
+      "shared-standard-implementation": 133
     },
     "category_leaf_counts": {
-      "pinned-evidence": 225,
-      "shared-standard-implementation": 133,
-      "lower-priority-residual": 37
+      "pinned-evidence": 232,
+      "shared-standard-implementation": 133
     }
   },
   "classification_contract": {
     "pinned-evidence": "At least one accepted route/deployment subset in this source family is bound by the named offline evidence package. The evidence scope, not the source leaf count, defines the claim.",
     "shared-standard-implementation": "Every accepted format in the source is inherited unchanged from the shared ERC-4626 rendering template. This records review reuse only; it does not prove any deployment implements ERC-4626 honestly.",
-    "lower-priority-residual": "No pinned deployed-semantics package is named for an accepted subset and the exact shared ERC-4626 template rule does not apply. The named successor proposal owns future reconciliation."
+    "lower-priority-residual": "No pinned deployed-semantics package is named for an accepted subset and the exact shared ERC-4626 template rule does not apply. Any future record in this class must name a concrete GitHub successor issue that owns reconciliation."
   },
   "evidence_sets": {
     "1inch-v6-cancellation": {
@@ -102,8 +100,8 @@
     },
     "flyingtulip-sessionmanager": {
       "classification": "pinned-evidence",
-      "reason": "Pins the curated SessionManager routes across the descriptor deployments.",
-      "scope": "Only the routes and deployments enumerated by the package.",
+      "reason": "Pins the curated calldata routes and the seven admitted EIP-712 SessionManager leaves to exact fixed-block proxy/runtime, verified source/compiler, domain, type, deployment, token metadata, and bounded-array rendering evidence.",
+      "scope": "Only the calldata routes and the FT and ftUSD EIP-712 formats/deployments enumerated by the package; LeverageRfqEngine, SpotOrderCancel, out-of-range arrays, live state, future upgrades, transaction success, fallback, and blind signing are not implied.",
       "paths": ["tests/erc7730-semantic-evidence/flyingtulip-sessionmanager/manifest.json"]
     },
     "flyingtulip-vault-mint": {
@@ -260,14 +258,7 @@
       ]
     }
   },
-  "successor_issues": {
-    "remaining-eip712-families": {
-      "issue_number": 498,
-      "url": "https://github.com/EthereumPhone/PQ1/issues/498",
-      "title": "erc7730-semantic-honesty: Reconcile remaining accepted EIP-712 families",
-      "body": "Use tests/erc7730-semantic-evidence/accepted-family-inventory.json as the exact EIP-712 source-family queue. Pin domain/deployment/runtime and authoritative type/source semantics in bounded slices, and promote only the explicitly evidenced types and deployments. Do not treat a descriptor-family record or leaf count as universal deployment proof."
-    }
-  },
+  "successor_issues": {},
   "families": [
   {
     "source": "1inch/calldata-AggregationRouterV4-eth.json",
@@ -378,12 +369,6 @@
     "evidence": "corestake-sei-avvatar"
   },
   {
-    "source": "degate/eip712-degate.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
     "source": "ethena/calldata-ethena.json",
     "accepted_leaf_count": 1,
     "classification": "pinned-evidence",
@@ -468,28 +453,16 @@
     "evidence": "flyingtulip-sessionmanager"
   },
   {
-    "source": "flyingtulip/eip712-LeverageRfqEngine.json",
-    "accepted_leaf_count": 3,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
     "source": "flyingtulip/eip712-SessionManager-FT.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-sessionmanager"
   },
   {
     "source": "flyingtulip/eip712-SessionManager-ftUSD.json",
     "accepted_leaf_count": 5,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "flyingtulip/eip712-SpotOrderCancel.json",
-    "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-sessionmanager"
   },
   {
     "source": "igra/calldata-KasExitBridge.json",
@@ -676,24 +649,6 @@
     "accepted_leaf_count": 1,
     "classification": "pinned-evidence",
     "evidence": "layerswap-depository-funding"
-  },
-  {
-    "source": "ledgerquest/eip712-ledgerquest.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "lens/eip712-lens-lenshub.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "lens/eip712-lens-token-handle-registry.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
   },
   {
     "source": "lido/calldata-WithdrawalQueueERC721.json",
@@ -1422,28 +1377,10 @@
     "evidence": "p2p-pod-message"
   },
   {
-    "source": "paraswap/eip712-paraswap.json",
-    "accepted_leaf_count": 5,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
     "source": "quickswap/calldata-QuickSwap.json",
     "accepted_leaf_count": 1,
     "classification": "pinned-evidence",
     "evidence": "quickswap-router02-remove-liquidity"
-  },
-  {
-    "source": "rarible/eip712-rarible-erc-1155.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "rarible/eip712-rarible-erc-721.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
   },
   {
     "source": "safe/calldata-Safe-1.3.0.json",
@@ -1524,12 +1461,6 @@
     "evidence": "stakewise-claim-exited-assets"
   },
   {
-    "source": "smartcredit/eip712-smartcredit.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
     "source": "starkgate/calldata-StarkGate-STRK.json",
     "accepted_leaf_count": 1,
     "classification": "pinned-evidence",
@@ -1546,84 +1477,6 @@
     "accepted_leaf_count": 1,
     "classification": "pinned-evidence",
     "evidence": "bridge-exits"
-  },
-  {
-    "source": "tally/eip712-tally-arbitrum-arb-token.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-arbitrum-core-governor.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-arbitrum-treasury-governor.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-bitcoin-governor.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-bravo-governor.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-ens-governor.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-ens-token.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-gtk-token.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-hop-governor.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-hop-token.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-pool-token.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-pooltogether-governor.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "tally/eip712-tally-ethereum-uni-token.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
   },
   {
     "source": "tether/calldata-usdt.json",

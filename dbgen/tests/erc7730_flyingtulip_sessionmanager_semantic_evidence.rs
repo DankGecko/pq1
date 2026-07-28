@@ -1819,9 +1819,10 @@ fn flyingtulip_eip712_admission_and_quarantine_partition_is_exact() {
             actual, refusal_formats,
             "{file_name} refusal boundary drifted"
         );
-        assert!(
-            descriptor["_pqsigner"].get("deploymentFormats").is_none(),
-            "{file_name} must not authorize any deployment-format pair"
+        assert_eq!(
+            descriptor["_pqsigner"]["deploymentFormats"],
+            serde_json::json!([]),
+            "{file_name} must explicitly authorize no deployment-format pair"
         );
         assert!(
             required_str(&descriptor, "_curation_note").contains("No clear-signing leaf"),

@@ -72,12 +72,12 @@ Current security contract:
 - Schema v6 binds explicitly enrolled top-level EIP-712 string preimages to their
   exact signed words and hard-refuses missing, reordered, mismatched, non-ASCII,
   over-128-byte, trailing, or page-overflow display evidence without fallback.
-- The current regenerated development catalogue has **396 leaves**, root
-  `d007b9678da8664249024b2c5b463cafe20b8aa4b33741e44ab0f7286d7748b2`,
+- The current regenerated development catalogue has **365 leaves**, root
+  `88c2064fd6448112e339e59a78758573b6316a347469c72399015757b4871a2c`,
   and **4,615 exact known-call tuples**. The tuple-set receipt is SHA-256
   `50dfa0f52c76efc27c7110e9703595d8e1afc2195ffeb847b3567817ced421e6`;
   Bloom occupancy is 28,646 / 131,072 bits under the compiler-enforced generation cap.
-- The current compiler report records **922** omitted descriptor/formats.
+- The current compiler report records **943** omitted descriptor/formats.
 <!-- END XTASK-VERIFIED ERC7730 INTEGRATION FACTS -->
 - These receipts detect input/artifact drift. They do not turn Bloom insertion
   into a proof of parser completeness. The current independent types-only ABI

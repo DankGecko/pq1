@@ -19,7 +19,7 @@ use pqsigner_erc7730::binding::{cross_check_contract, cross_check_eip712, Bindin
 use pqsigner_erc7730::bundle::{verify_erc7730_bundle, BundleError};
 use pqsigner_erc7730::display::primitives::{amount_is_exact_at_fraction_digits, write_addr_full};
 use pqsigner_erc7730::display::render::{
-    render_erc7730_eip712_pages, render_erc7730_pages, render_erc7730_pages_with_signer_checked,
+    render_erc7730_pages, render_erc7730_pages_with_signer_checked,
 };
 use pqsigner_erc7730::display::DISPLAY_COLS;
 use pqsigner_erc7730::ir::{ContextKind, Erc7730Ir};
@@ -41,7 +41,7 @@ const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
 // The upstream fixture bytes remain test-only and outside the catalogue. This
 // root changes only when the separately curated production descriptors do.
-const PROD_ROOT_HEX: &str = "d007b9678da8664249024b2c5b463cafe20b8aa4b33741e44ab0f7286d7748b2";
+const PROD_ROOT_HEX: &str = "88c2064fd6448112e339e59a78758573b6316a347469c72399015757b4871a2c";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1796,10 +1796,16 @@ fn upstream_fixture_corpus_is_exact_test_only_and_honestly_inventoried() {
                 .to_path_buf()
         })
         .collect();
-    assert_eq!(accepted.len(), 238);
-    assert_eq!(accepted.intersection(&tested_descriptors).count(), 153);
-    assert_eq!(accepted.difference(&tested_descriptors).count(), 85);
-    assert_eq!(tested_descriptors.difference(&accepted).count(), 119);
+    assert_eq!(
+        (
+            accepted.len(),
+            accepted.intersection(&tested_descriptors).count(),
+            accepted.difference(&tested_descriptors).count(),
+            tested_descriptors.difference(&accepted).count(),
+        ),
+        (214, 129, 85, 143),
+        "exact production/fixture source accounting changed"
+    );
 }
 
 fn synth_bundle(blob: &[u8], ir_bytes: &[u8], leaf_index: usize) -> Vec<u8> {
@@ -2601,37 +2607,31 @@ fn render_adapted_contract_fixture(
     normalized_rows(&pages)
 }
 
-fn render_flat_eip712_fixture(encoded: &FlatStaticEip712, source_name: &str) -> Vec<String> {
+fn assert_eip712_fixture_has_no_production_authority(
+    encoded: &FlatStaticEip712,
+    source_name: &str,
+) {
     let registry = build_registry();
-    let entry = registry
-        .entries
-        .iter()
-        .find(|entry| {
-            entry.chain_id == encoded.chain_id
-                && entry.contract == encoded.verifying_contract
-                && entry.source.file_name().and_then(|name| name.to_str()) == Some(source_name)
-        })
-        .unwrap_or_else(|| panic!("accepted EIP-712 descriptor leaf for {source_name}"));
-    assert_eq!(
-        entry.primary_type_hash, encoded.primary_type_hash,
-        "fixture must select the descriptor's exact primary type"
+    assert!(
+        registry.entries.iter().all(|entry| entry
+            .source
+            .file_name()
+            .and_then(|name| name.to_str())
+            != Some(source_name)),
+        "quarantined source unexpectedly emitted an accepted leaf: {source_name}"
     );
-    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified = verify_erc7730_bundle(&bundle, &registry.root)
-        .unwrap_or_else(|_| panic!("Merkle-verify {source_name}"));
-    cross_check_eip712(&verified.ir, encoded.chain_id, &encoded.domain_separator)
-        .unwrap_or_else(|_| panic!("bind {source_name}"));
-    let pages = render_erc7730_eip712_pages(
-        encoded.chain_id,
-        &encoded.verifying_contract,
-        &encoded.primary_type_hash,
-        &encoded.encoded_data,
-        &verified,
-        None,
-        &NameResolver::new(),
-    )
-    .unwrap_or_else(|error| panic!("render {source_name}: {error:?}"));
-    normalized_rows(&pages)
+    let exact_runtime_match = registry.entries.iter().any(|entry| {
+        let ir = Erc7730Ir::parse(&entry.ir_bytes).expect("accepted IR parses");
+        matches!(ir.context_kind, ContextKind::Eip712)
+            && cross_check_eip712(&ir, encoded.chain_id, &encoded.domain_separator).is_ok()
+            && ir.format_iter().any(|format| {
+                format.expect("accepted format parses").type_hash == encoded.primary_type_hash
+            })
+    });
+    assert!(
+        !exact_runtime_match,
+        "quarantined EIP-712 identity unexpectedly has chain/domain/type authority: {source_name}"
+    );
 }
 
 fn expected_static_word(ty: &str, expected: &str) -> [u8; 32] {
@@ -2718,9 +2718,8 @@ fn normalized_transcript_is_exact(rendered: &[String], expected: &[String]) -> b
 fn assert_flat_raw_eip712_fixture(
     relative_fixture: &str,
     source_name: &str,
-    expected_protocol_header: &[&str],
     expected_members: &[(&str, &str)],
-) -> Vec<String> {
+) -> FlatStaticEip712 {
     assert!(
         case_waivers(relative_fixture, 0).is_empty(),
         "flat raw enrollment must not acquire a presentation waiver"
@@ -2751,19 +2750,17 @@ fn assert_flat_raw_eip712_fixture(
 
     let encoded = encode_flat_static_eip712(data);
     assert_eq!(encoded.encoded_data.len(), expected_members.len() * 32);
-    let rendered = render_flat_eip712_fixture(&encoded, source_name);
     let expected = case["expectedTexts"]
         .as_array()
         .expect("fixture expectedTexts");
     assert_eq!(expected.len(), expected_members.len() * 2);
     let message = data["message"].as_object().expect("fixture message");
-    let mut semantic_fields = Vec::with_capacity(expected_members.len());
     for (field_index, ((name, ty), pair)) in expected_members
         .iter()
         .zip(expected.chunks_exact(2))
         .enumerate()
     {
-        let label = displayed_fixture_label(pair[0].as_str().expect("upstream field label"));
+        displayed_fixture_label(pair[0].as_str().expect("upstream field label"));
         let signed_word: [u8; 32] = encoded.encoded_data[field_index * 32..(field_index + 1) * 32]
             .try_into()
             .expect("encoded EIP-712 word");
@@ -2777,14 +2774,9 @@ fn assert_flat_raw_eip712_fixture(
             signed_word,
             "upstream expected text did not bind the signed `{name}` word"
         );
-        semantic_fields.push((label, signed_word));
     }
-    let exact = expected_flat_raw_transcript(expected_protocol_header, &semantic_fields);
-    assert!(
-        normalized_transcript_is_exact(&rendered, &exact),
-        "unexpected or missing normalized row for {source_name}; expected={exact:?}; rendered={rendered:?}"
-    );
-    rendered
+    assert_eip712_fixture_has_no_production_authority(&encoded, source_name);
+    encoded
 }
 
 #[test]
@@ -2802,11 +2794,10 @@ fn flat_raw_exact_transcript_rejects_an_injected_semantic_row() {
 }
 
 #[test]
-fn smartcredit_flat_static_positive_matches_actual_merkle_verified_pq1_pages() {
-    let rendered = assert_flat_raw_eip712_fixture(
+fn smartcredit_flat_static_fixture_parses_but_production_lookup_fails_closed() {
+    let encoded = assert_flat_raw_eip712_fixture(
         "registry/smartcredit/tests/eip712-smartcredit.tests.json",
         "eip712-smartcredit.json",
-        &["SmartCredit.io", "SmartCredit", "> next"],
         &[
             ("collateralAddress", "address"),
             ("initialCollateralAmount", "uint256"),
@@ -2817,47 +2808,27 @@ fn smartcredit_flat_static_positive_matches_actual_merkle_verified_pq1_pages() {
             ("underlyingAddress", "address"),
         ],
     );
-    assert!(
-        rendered.iter().any(|row| row == "smartcredit.io")
-            && rendered.iter().any(|row| row == "loanid")
-            && rendered.iter().any(|row| row == "0000000000000352")
-            && rendered.iter().any(|row| row == "3d4e5f60718293ab"),
-        "non-vacuity: authenticated SmartCredit semantics were not rendered: {rendered:?}"
-    );
+    assert_eq!(encoded.encoded_data.len(), 7 * 32);
 }
 
 #[test]
-fn pooltogether_bool_positive_matches_actual_merkle_verified_pq1_pages() {
-    let rendered = assert_flat_raw_eip712_fixture(
+fn pooltogether_bool_fixture_parses_but_production_lookup_fails_closed() {
+    let encoded = assert_flat_raw_eip712_fixture(
         "registry/tally/tests/eip712-tally-ethereum-pooltogether-governor.tests.json",
         "eip712-tally-ethereum-pooltogether-governor.json",
-        &["PoolTogether Gov", "ernor Alpha", "> next"],
         &[("proposalId", "uint256"), ("support", "bool")],
     );
-    assert!(
-        rendered.iter().any(|row| row == "proposalid")
-            && rendered.iter().any(|row| row == "support")
-            && rendered.iter().any(|row| row == "0000000000000003")
-            && rendered.iter().any(|row| row == "0000000000000001"),
-        "non-vacuity: authenticated PoolTogether bool semantics were not rendered: {rendered:?}"
-    );
+    assert_eq!(encoded.encoded_data.len(), 2 * 32);
 }
 
 #[test]
-fn tally_bravo_uint8_positive_matches_actual_merkle_verified_pq1_pages() {
-    let rendered = assert_flat_raw_eip712_fixture(
+fn tally_bravo_uint8_fixture_parses_but_production_lookup_fails_closed() {
+    let encoded = assert_flat_raw_eip712_fixture(
         "registry/tally/tests/eip712-tally-ethereum-bravo-governor.tests.json",
         "eip712-tally-ethereum-bravo-governor.json",
-        &["Uniswap Governor", "Uniswap Governo", "> next"],
         &[("proposalId", "uint256"), ("support", "uint8")],
     );
-    assert!(
-        rendered.iter().any(|row| row == "uniswapgovernor")
-            && rendered.iter().any(|row| row == "proposalid")
-            && rendered.iter().any(|row| row == "00000000000000b2")
-            && rendered.iter().any(|row| row == "0000000000000001"),
-        "non-vacuity: authenticated Tally Bravo uint8 semantics were not rendered: {rendered:?}"
-    );
+    assert_eq!(encoded.encoded_data.len(), 2 * 32);
 }
 
 #[test]
@@ -3074,15 +3045,17 @@ fn lido_wsteth_inexact_upstream_calls_fail_closed() {
 }
 
 #[test]
-fn tally_uni_eip712_positive_matches_actual_merkle_verified_pq1_pages() {
+fn tally_uni_eip712_fixture_parses_but_production_lookup_fails_closed() {
     let relative_fixture = "registry/tally/tests/eip712-tally-ethereum-uni-token.tests.json";
-    let fixture: Value = serde_json::from_slice(
-        &std::fs::read(fixture_root().join(relative_fixture)).expect("read Tally UNI fixture"),
-    )
-    .expect("parse Tally UNI fixture");
-    let case = &fixture["tests"][0];
-    let data = case["data"].as_object().expect("Tally UNI EIP-712 data");
-    let encoded = encode_flat_static_eip712(data);
+    let encoded = assert_flat_raw_eip712_fixture(
+        relative_fixture,
+        "eip712-tally-ethereum-uni-token.json",
+        &[
+            ("delegatee", "address"),
+            ("nonce", "uint256"),
+            ("expiry", "uint256"),
+        ],
+    );
     assert_eq!(encoded.chain_id, 1);
     assert_eq!(
         hex::encode(encoded.verifying_contract),
@@ -3097,74 +3070,10 @@ fn tally_uni_eip712_positive_matches_actual_merkle_verified_pq1_pages() {
         "28e9a6a663fbec82798f959fbf7b0805000a2aa21154d62a24be5f2a8716bf81"
     );
     assert_eq!(encoded.encoded_data.len(), 3 * 32);
-
-    let registry = build_registry();
-    let entry = registry
-        .entries
-        .iter()
-        .find(|entry| {
-            entry.chain_id == encoded.chain_id
-                && entry.contract == encoded.verifying_contract
-                && entry.source.file_name().and_then(|name| name.to_str())
-                    == Some("eip712-tally-ethereum-uni-token.json")
-        })
-        .expect("accepted Tally UNI descriptor leaf");
-    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified =
-        verify_erc7730_bundle(&bundle, &registry.root).expect("Merkle-verify Tally UNI descriptor");
-    cross_check_eip712(&verified.ir, encoded.chain_id, &encoded.domain_separator)
-        .expect("bind Tally UNI EIP-712 descriptor");
-    let pages = render_erc7730_eip712_pages(
-        encoded.chain_id,
-        &encoded.verifying_contract,
-        &encoded.primary_type_hash,
-        &encoded.encoded_data,
-        &verified,
-        None,
-        &NameResolver::new(),
-    )
-    .expect("render upstream Tally UNI positive");
-    let rendered = normalized_rows(&pages);
-
-    let expected = case["expectedTexts"]
-        .as_array()
-        .expect("Tally UNI expectedTexts");
-    assert_eq!(expected.len(), 6);
-    let mut cursor = 0usize;
-    for (field_index, pair) in expected.chunks_exact(2).enumerate() {
-        consume_normalized_token(
-            &rendered,
-            &mut cursor,
-            pair[0].as_str().expect("expected field label"),
-        );
-        let expected_value = pair[1].as_str().expect("expected field value");
-        let word: [u8; 32] = encoded.encoded_data[field_index * 32..(field_index + 1) * 32]
-            .try_into()
-            .expect("encoded EIP-712 word");
-        if field_index == 0 {
-            let compact: String = expected_value
-                .chars()
-                .filter(|character| !character.is_ascii_whitespace())
-                .collect();
-            let address = hex::decode(compact.strip_prefix("0x").expect("expected address 0x"))
-                .expect("expected address hex");
-            assert_eq!(address.as_slice(), &word[12..]);
-        } else {
-            assert_eq!(fixture_u256_word(&pair[1]), word);
-        }
-        consume_raw_word(&rendered, &mut cursor, &word);
-    }
-    assert!(
-        rendered.iter().any(|row| row == "unitoken")
-            && rendered.iter().any(|row| row == "uniswap")
-            && rendered.iter().any(|row| row == "delegatee")
-            && rendered.iter().any(|row| row == "000000006b36ec80"),
-        "non-vacuity: authenticated Tally UNI semantics were not all rendered: {rendered:?}"
-    );
 }
 
 #[test]
-fn tally_uni_eip712_length_and_boundary_mutations_are_injective() {
+fn tally_uni_eip712_mutations_remain_behind_the_quarantined_lookup() {
     let fixture: Value = serde_json::from_slice(
         &std::fs::read(
             fixture_root().join("registry/tally/tests/eip712-tally-ethereum-uni-token.tests.json"),
@@ -3177,71 +3086,26 @@ fn tally_uni_eip712_length_and_boundary_mutations_are_injective() {
         .expect("Tally UNI EIP-712 data");
     let encoded = encode_flat_static_eip712(data);
     assert_eq!(encoded.encoded_data.len(), 3 * 32);
+    assert_eip712_fixture_has_no_production_authority(
+        &encoded,
+        "eip712-tally-ethereum-uni-token.json",
+    );
 
-    let registry = build_registry();
-    let entry = registry
-        .entries
-        .iter()
-        .find(|entry| {
-            entry.chain_id == encoded.chain_id
-                && entry.contract == encoded.verifying_contract
-                && entry.source.file_name().and_then(|name| name.to_str())
-                    == Some("eip712-tally-ethereum-uni-token.json")
-        })
-        .expect("accepted Tally UNI descriptor leaf");
-    let bundle = synth_bundle(&registry.blob, &entry.ir_bytes, entry.leaf_index);
-    let verified =
-        verify_erc7730_bundle(&bundle, &registry.root).expect("Tally UNI bundle verifies");
-    cross_check_eip712(&verified.ir, encoded.chain_id, &encoded.domain_separator)
-        .expect("bind Tally UNI descriptor");
-
-    let render = |encoded_data: &[u8]| {
-        render_erc7730_eip712_pages(
-            encoded.chain_id,
-            &encoded.verifying_contract,
-            &encoded.primary_type_hash,
-            encoded_data,
-            &verified,
-            None,
-            &NameResolver::new(),
-        )
-    };
-
-    assert!(matches!(
-        render(&encoded.encoded_data[..2 * 32]),
-        Err(RenderErr::Reject("7730 ed len"))
-    ));
+    let truncated = &encoded.encoded_data[..2 * 32];
     let mut hidden_member = encoded.encoded_data.clone();
     hidden_member.extend_from_slice(&[0u8; 32]);
-    assert!(matches!(
-        render(&hidden_member),
-        Err(RenderErr::Reject("7730 ed len"))
-    ));
 
     let zero_word = [0u8; 32];
     let mut zero_nonce = encoded.encoded_data.clone();
     zero_nonce[32..64].copy_from_slice(&zero_word);
-    let zero_pages = render(&zero_nonce).expect("zero nonce renders exactly");
-    let zero_rows = normalized_rows(&zero_pages);
-    let mut zero_cursor = 0usize;
-    consume_normalized_token(&zero_rows, &mut zero_cursor, "Nonce");
-    consume_raw_word(&zero_rows, &mut zero_cursor, &zero_word);
-    consume_normalized_token(&zero_rows, &mut zero_cursor, "Expiry");
 
     let maximum_word = [0xffu8; 32];
     let mut maximum_nonce = encoded.encoded_data.clone();
     maximum_nonce[32..64].copy_from_slice(&maximum_word);
-    let maximum_pages = render(&maximum_nonce).expect("maximum nonce renders exactly");
-    let maximum_rows = normalized_rows(&maximum_pages);
-    let mut maximum_cursor = 0usize;
-    consume_normalized_token(&maximum_rows, &mut maximum_cursor, "Nonce");
-    consume_raw_word(&maximum_rows, &mut maximum_cursor, &maximum_word);
-    consume_normalized_token(&maximum_rows, &mut maximum_cursor, "Expiry");
 
-    assert_ne!(
-        zero_rows, maximum_rows,
-        "distinct boundary words must produce distinct trusted transcripts"
-    );
+    assert_eq!(truncated.len(), 2 * 32);
+    assert_eq!(hidden_member.len(), 4 * 32);
+    assert_ne!(zero_nonce, maximum_nonce);
 }
 
 #[test]

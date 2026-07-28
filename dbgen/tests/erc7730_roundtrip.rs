@@ -101,7 +101,7 @@ fn build_e2e() -> Erc7730BuildResult {
 /// Exact combined catalogue cardinality for the current generated receipt.
 /// Protocol-specific assertions below pin their own deployment/route subsets;
 /// the accepted-family inventory independently accounts for every source.
-const EXPECTED_REGISTRY_LEAVES: usize = 396;
+const EXPECTED_REGISTRY_LEAVES: usize = 365;
 
 /// EIP-712 admission does not add contract selectors to the independent
 /// known-call inventory. Keep its exact cardinality pinned separately from the
@@ -2845,7 +2845,10 @@ fn registry_morpho_blue_assets_and_exact_empty_callbacks_are_bound_on_both_chain
                 let callback_params =
                     parse_params(&ir, callback.param_off).expect("Morpho callback params parse");
                 assert_eq!(callback_params.visibility, Visibility::Always);
-                assert_eq!(callback_params.terminal_kind, Some(TerminalKind::DynamicBytes));
+                assert_eq!(
+                    callback_params.terminal_kind,
+                    Some(TerminalKind::DynamicBytes)
+                );
                 assert_eq!(callback_params.dynamic_kind, Some(DYNAMIC_KIND_BYTES));
                 assert!(
                     callback_params.exact_empty_bytes,
@@ -3105,7 +3108,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(
         hex::encode(result.root),
         // Re-derived after the bounded Phase-4 semantic curations.
-        "d007b9678da8664249024b2c5b463cafe20b8aa4b33741e44ab0f7286d7748b2"
+        "88c2064fd6448112e339e59a78758573b6316a347469c72399015757b4871a2c"
     );
 }
 
@@ -4510,9 +4513,14 @@ fn production_catalogue_has_no_eip712_string_preimage_authority() {
             "unenrolled EIP-712 string format became clear-signable: {source} :: {signature}"
         );
         assert!(
-            skips
-                .iter()
-                .any(|skip| skip.source.ends_with(source) && skip.reason.contains(signature)),
+            skips.iter().any(|skip| {
+                skip.source.ends_with(source)
+                    && (skip.reason.contains(signature)
+                        || skip.reason.contains(
+                            "zero EIP-712 formats after authenticated PQSigner \
+                                 deploymentFormats/refusalOnlyFormats curation",
+                        ))
+            }),
             "missing exact skip receipt for {source} :: {signature}"
         );
     }
@@ -5141,8 +5149,7 @@ fn registry_runtime_dead_opaque_bytes_are_omitted_but_stay_known() {
     );
     let mut morpho_blue = [0u8; 20];
     morpho_blue.copy_from_slice(
-        &hex::decode("bbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb")
-            .expect("Morpho Blue address"),
+        &hex::decode("bbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb").expect("Morpho Blue address"),
     );
     let morpho_empty_selectors: BTreeSet<[u8; 4]> = [
         "supply((address,address,address,address,uint256),uint256,uint256,address,bytes)",
@@ -5612,10 +5619,12 @@ fn successful_stub_output(output: Output) -> Vec<u8> {
 
 /// The Python companion stub at `tools/companion-stub/erc7730_trailer.py`
 /// must produce byte-for-byte bundles that the on-device parser accepts. The
-/// current LBTC deployments each carry BOTH a Contract leaf and an EIP-712
-/// `NetworkFeeAuthorization` leaf, so a first `(chain, contract)` match is
-/// provably wrong. Exact context + full authenticated-IR type-hash lookup must
-/// select the typed leaf, while the no-flag default remains Contract-only.
+/// The evidenced mainnet LBTC deployment carries BOTH a Contract leaf and an
+/// EIP-712 `feeApproval` leaf, so a first `(chain, contract)` match is provably
+/// wrong. Exact context + full authenticated-IR type-hash lookup must select
+/// the typed leaf, while the no-flag default remains Contract-only. The
+/// quarantined Sepolia deployment must retain only its Contract leaf and reject
+/// typed lookup.
 #[test]
 fn companion_stub_context_and_full_type_hash_lookup_verify_on_device() {
     let root_dir = workspace_root();
@@ -5639,10 +5648,7 @@ fn companion_stub_context_and_full_type_hash_lookup_verify_on_device() {
     std::fs::write(&db_path, &result.blob).expect("write current companion fixture");
     let type_hash_hex = "40ac9f6aa27075e64c1ed1ea2e831b20b8c25efdeb6b79fd0cf683c9a9c50725";
     let type_hash: [u8; 32] = hex::decode(type_hash_hex).unwrap().try_into().unwrap();
-    let deployments = [
-        (1u64, "8236a87084f8b84306f72007f36f2618a5634494"),
-        (11_155_111u64, "731efa688f3679688cf60a3993b8658138953ed6"),
-    ];
+    let deployments = [(1u64, "8236a87084f8b84306f72007f36f2618a5634494")];
 
     for (chain_id, address_hex) in deployments {
         let address_vec = hex::decode(address_hex).unwrap();
@@ -5690,6 +5696,42 @@ fn companion_stub_context_and_full_type_hash_lookup_verify_on_device() {
             "selected authenticated IR must carry the complete requested type hash"
         );
     }
+
+    let sepolia_chain_id = 11_155_111u64;
+    let sepolia_address_hex = "731efa688f3679688cf60a3993b8658138953ed6";
+    let sepolia_address: [u8; 20] = hex::decode(sepolia_address_hex)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let sepolia_group: Vec<_> = result
+        .entries
+        .iter()
+        .filter(|entry| entry.chain_id == sepolia_chain_id && entry.contract == sepolia_address)
+        .collect();
+    assert_eq!(
+        sepolia_group.len(),
+        1,
+        "quarantined Sepolia feeApproval must emit no typed-data leaf"
+    );
+    assert_eq!(sepolia_group[0].context_kind, CTX_CONTRACT);
+    let zero_domain_arg = format!("0x{}", "00".repeat(32));
+    let type_hash_arg = format!("0x{type_hash_hex}");
+    let sepolia_output = run_companion_stub(
+        &stub_path,
+        &db_path,
+        sepolia_chain_id,
+        &format!("0x{sepolia_address_hex}"),
+        Some("eip712"),
+        Some(&zero_domain_arg),
+        Some(&type_hash_arg),
+    );
+    assert!(!sepolia_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&sepolia_output.stderr)
+            .contains("no EIP-712 descriptor for chain=11155111"),
+        "quarantined Sepolia typed lookup must fail closed: {}",
+        String::from_utf8_lossy(&sepolia_output.stderr)
+    );
 
     // Backward-compatible three-argument/default CLI lookup is deliberately
     // Contract-only; it must not return the adjacent EIP-712 leaf.

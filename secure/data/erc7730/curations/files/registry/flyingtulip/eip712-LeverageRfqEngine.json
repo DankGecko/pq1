@@ -1,7 +1,8 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
-  "_curation_note": "PQSigner structural quarantine: LeveragedOrder remains an exact registry-known refusal at every declared deployment. The vendored descriptor and fixture do not establish authoritative deployed source/runtime identity, the EIP-712 verification path, or the action, amount-bound, and fee semantics. No clear-signing leaf may be emitted until those claims are independently pinned. This quarantine grants no fallback or blind-signing authority.",
+  "_curation_note": "PQSigner #498 EIP-712 quarantine: the vendored LeveragedOrder descriptor and fixture do not establish authoritative deployed source/runtime identity, the EIP-712 verification path, or the action, amount-bound, and fee semantics. No clear-signing leaf may be emitted, so the mandatory typed-data descriptor proof fails closed at every declared deployment. Reconsider only after satisfying reason code missing-offchain-verifier-authority. This quarantine grants no fallback or blind-signing authority.",
   "_pqsigner": {
+    "deploymentFormats": [],
     "refusalOnlyFormats": [
       "LeveragedOrder(uint8 action,address user,address sellToken,address buyToken,uint256 sellAmount,uint256 buyAmount,uint32 validTo,uint256 feeAmount)"
     ]
