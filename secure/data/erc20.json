@@ -12188,6 +12188,7 @@
   {"chain_id": 137, "address": "0xFFb89d7637Cf4860884ED48b57Ae5562bF64e10F", "name": "Pika", "symbol": "PIKA", "decimals": 18},
   {"chain_id": 137, "address": "0xffBF21632d4AD2B1F85031B418a8f69638118364", "name": "Edge Video AI", "symbol": "FAST", "decimals": 24},
   {"chain_id": 137, "address": "0xFFFFFF9936BD58a008855b0812B44D2c8dffE2aA", "name": "Good Game US Dollar", "symbol": "GGUSD", "decimals": 6},
+  {"chain_id": 146, "address": "0x5DD1A7A369E8273371D2DbF9D83356057088082c", "name": "Flying Tulip", "symbol": "FT", "decimals": 18},
   {"chain_id": 146, "address": "0xF7D85EC4E7710f71992752eac2111312e73E9C9C", "name": "Flying Tulip USD", "symbol": "ftUSD", "decimals": 6},
   {"chain_id": 999, "address": "0x000000000000780555bD0BCA3791f89f9542c2d6", "name": "Kinetiq Governance Token", "symbol": "KNTQ", "decimals": 18},
   {"chain_id": 999, "address": "0x0017dD8D6c963032d075f1D7A2d12637636117E1", "name": "PiP/WHYPE V2 LP", "symbol": "V2-PiP-WHYPE-LP", "decimals": 18},

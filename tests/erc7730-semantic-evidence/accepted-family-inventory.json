@@ -378,12 +378,6 @@
     "successor_issue": "remaining-calldata-families"
   },
   {
-    "source": "fellow-fund/calldata-fellow-fund.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
-  },
-  {
     "source": "flare/calldata-DistributionToDelegators-Flare.json",
     "accepted_leaf_count": 1,
     "classification": "lower-priority-residual",
@@ -1537,12 +1531,6 @@
   },
   {
     "source": "swell/calldata-swell.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
-  },
-  {
-    "source": "swissborg/calldata-ChsbToBorgMigrator.json",
     "accepted_leaf_count": 1,
     "classification": "lower-priority-residual",
     "successor_issue": "remaining-calldata-families"
