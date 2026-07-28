@@ -285,9 +285,9 @@
     {
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
-      "files": 36,
-      "bytes": 2508343,
-      "sha256": "8146e717bade1ba39275561f5f17dfa7d14ddbfbce48302725be1e18bb11c9f4"
+      "files": 37,
+      "bytes": 2539477,
+      "sha256": "f023558a964a04b145ef246ec1fe4dca90400ec339ab5a318a6c4739e4d81996"
     },
     {
       "path": "pqsigner-erc7730",
@@ -336,7 +336,7 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 313678,
-      "sha256": "d6452488ebd564b733097907a8166799d97ad7a3e9bc9ef3a2cfbb2e8e6d81e9"
+      "sha256": "60546c32150a4e584d914409d68a333716660f02a0ed4730fe05c394275e0f22"
     }
   ],
   "capability_inputs": [
@@ -597,6 +597,27 @@
       "upstream_sha256": "d4b2964d8655688277b124bf17e7a5055b7797ed2a38c84f6d7f868ac3db7fd4",
       "replacement_bytes": 2355,
       "replacement_sha256": "e7c0ba9cacc43d2fba0c90ed92551fbc6c67f5783662df529371077c3fce0827"
+    },
+    {
+      "path": "registry/safe/calldata-SafeL2-1.3.0.json",
+      "upstream_bytes": 1425,
+      "upstream_sha256": "c0917a3d4decf344c0599a220fc00ee4eb41202b14d5c74cb87e96dd8a46dd41",
+      "replacement_bytes": 7057,
+      "replacement_sha256": "27a910f57238a1771cf920e290551ffc93efbb667f8d918c5123816fd7b5adee"
+    },
+    {
+      "path": "registry/safe/calldata-SafeL2-1.4.1.json",
+      "upstream_bytes": 826,
+      "upstream_sha256": "70c13f7d1e39e4a78f196f3b0a36224ce2a3314551cf0b4e76a639d0c5328634",
+      "replacement_bytes": 4330,
+      "replacement_sha256": "c247b99e93fdeac090e20220217b2aa0edbcf1e0bd800dba8979180025fcf9ca"
+    },
+    {
+      "path": "registry/safe/calldata-SafeL2-1.5.0.json",
+      "upstream_bytes": 400,
+      "upstream_sha256": "09c816dd08e6d4f03b0d9aaf7c79af0b371ad9676fa299e24b5cbcb2aa96f075",
+      "replacement_bytes": 2386,
+      "replacement_sha256": "7b35a9aaec838b7fb4283e109eef5504caf4396cb93e922d78632309ea0f956c"
     },
     {
       "path": "registry/serenita/calldata-EthVault.json",

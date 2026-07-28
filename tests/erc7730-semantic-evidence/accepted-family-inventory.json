@@ -5,21 +5,21 @@
   "catalogue_snapshot": {
     "upstream_commit": "784c87c925e8438e7b4736b2af85a501f8d2a265",
     "upstream_tree": "8da8dba78c3e581bbd06c15cc681d07e570dcfb1",
-    "curated_corpus_sha256": "f6fe8e477072c00da222442a34ababd28d0e2ab0d91d27d7018b4a273f81324c",
-    "merkle_root": "0d6540341b874741eac3c63ec748675be0cdeba0a1b4d08efd1d2a21eda0a6a0",
+    "curated_corpus_sha256": "1ab96d95b9bcd77dc7cd8a249c975befe8e9dc434738af3b844ced4ab89ba98a",
+    "merkle_root": "3f4762a7bbbfab386de9c8b8bd0815b0ca4213b5133d9d3bbe8cc281790a8473",
     "accepted_leaf_count": 400,
     "accepted_source_descriptor_count": 240,
-    "compiled_blob_bytes": 339112,
+    "compiled_blob_bytes": 338284,
     "known_call_count": 4580,
     "category_source_counts": {
-      "pinned-evidence": 35,
+      "pinned-evidence": 38,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 72
+      "lower-priority-residual": 69
     },
     "category_leaf_counts": {
-      "pinned-evidence": 111,
+      "pinned-evidence": 134,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 156
+      "lower-priority-residual": 133
     }
   },
   "classification_contract": {
@@ -165,6 +165,12 @@
       "reason": "Pins three operand-complete Safe singleton routes across the descriptor deployments for Safe 1.3.0, 1.4.1, and 1.5.0.",
       "scope": "Only addOwnerWithThreshold, changeThreshold, and approveHash in the three Safe singleton descriptors. SafeL2, migrations, setup, execTransaction, owner removal/swap, modules, guards, and fallback authority are not implied.",
       "paths": ["tests/erc7730-semantic-evidence/safe-core/manifest.json"]
+    },
+    "safe-l2": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the same three operand-complete inherited routes across the exact SafeL2 1.3.0, 1.4.1, and 1.5.0 singleton deployments named by the descriptors.",
+      "scope": "Only addOwnerWithThreshold, changeThreshold, and approveHash in the three SafeL2 singleton descriptors. Proxy instances, migrations, setup, execTransaction, owner removal/swap, modules, guards, fallback authority, and L2 event-derived meaning are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/safe-l2/manifest.json"]
     },
     "stakewise-claim-exited-assets": {
       "classification": "pinned-evidence",
@@ -1424,20 +1430,20 @@
   {
     "source": "safe/calldata-SafeL2-1.3.0.json",
     "accepted_leaf_count": 14,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-l2"
   },
   {
     "source": "safe/calldata-SafeL2-1.4.1.json",
     "accepted_leaf_count": 7,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-l2"
   },
   {
     "source": "safe/calldata-SafeL2-1.5.0.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "safe-l2"
   },
   {
     "source": "safe/calldata-SafeMigration-1.4.1.json",
