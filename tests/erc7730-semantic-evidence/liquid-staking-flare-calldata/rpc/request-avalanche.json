@@ -1,0 +1,68 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "block",
+    "method": "eth_getBlockByNumber",
+    "params": ["0x57342cb", false]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "savax-proxy-code",
+    "method": "eth_getCode",
+    "params": ["0x2b2c81e08f1af8835a78bb2a90ae924ace0ea4be", "0x57342cb"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "savax-implementation-code",
+    "method": "eth_getCode",
+    "params": ["0xb791c7a42fd0d10f90deaa906a8735f79719fa53", "0x57342cb"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "savax-implementation-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0x2b2c81e08f1af8835a78bb2a90ae924ace0ea4be", "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc", "0x57342cb"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "savax-admin-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0x2b2c81e08f1af8835a78bb2a90ae924ace0ea4be", "0xb53127684a568b3173ae13b9f8a6016e0195462b5d3e8d6a717850b5d6103", "0x57342cb"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "savax-beacon-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0x2b2c81e08f1af8835a78bb2a90ae924ace0ea4be", "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50", "0x57342cb"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "savax-name",
+    "method": "eth_call",
+    "params": [{"to": "0x2b2c81e08f1af8835a78bb2a90ae924ace0ea4be", "data": "0x06fdde03"}, "0x57342cb"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "savax-symbol",
+    "method": "eth_call",
+    "params": [{"to": "0x2b2c81e08f1af8835a78bb2a90ae924ace0ea4be", "data": "0x95d89b41"}, "0x57342cb"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "savax-decimals",
+    "method": "eth_call",
+    "params": [{"to": "0x2b2c81e08f1af8835a78bb2a90ae924ace0ea4be", "data": "0x313ce567"}, "0x57342cb"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "savax-cooldown-period",
+    "method": "eth_call",
+    "params": [{"to": "0x2b2c81e08f1af8835a78bb2a90ae924ace0ea4be", "data": "0x04646a49"}, "0x57342cb"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "savax-redeem-period",
+    "method": "eth_call",
+    "params": [{"to": "0x2b2c81e08f1af8835a78bb2a90ae924ace0ea4be", "data": "0x40a233a6"}, "0x57342cb"]
+  }
+]

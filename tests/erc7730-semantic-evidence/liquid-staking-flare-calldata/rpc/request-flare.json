@@ -1,0 +1,104 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "block",
+    "method": "eth_getBlockByNumber",
+    "params": ["0x3f0a439", false]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "distribution-code",
+    "method": "eth_getCode",
+    "params": ["0x9c7a4c83842b29bb4a082b0e689cb9474bd938d0", "0x3f0a439"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "distribution-implementation-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0x9c7a4c83842b29bb4a082b0e689cb9474bd938d0", "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc", "0x3f0a439"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "distribution-admin-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0x9c7a4c83842b29bb4a082b0e689cb9474bd938d0", "0xb53127684a568b3173ae13b9f8a6016e0195462b5d3e8d6a717850b5d6103", "0x3f0a439"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "distribution-beacon-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0x9c7a4c83842b29bb4a082b0e689cb9474bd938d0", "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50", "0x3f0a439"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "distribution-wnat",
+    "method": "eth_call",
+    "params": [{"to": "0x9c7a4c83842b29bb4a082b0e689cb9474bd938d0", "data": "0x9edbf007"}, "0x3f0a439"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "distribution-claim-setup-manager",
+    "method": "eth_call",
+    "params": [{"to": "0x9c7a4c83842b29bb4a082b0e689cb9474bd938d0", "data": "0xc4db9619"}, "0x3f0a439"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "polling-code",
+    "method": "eth_getCode",
+    "params": ["0xc8294a2335c6c45de827121090ce4ba9977907d2", "0x3f0a439"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "polling-implementation-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0xc8294a2335c6c45de827121090ce4ba9977907d2", "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc", "0x3f0a439"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "polling-admin-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0xc8294a2335c6c45de827121090ce4ba9977907d2", "0xb53127684a568b3173ae13b9f8a6016e0195462b5d3e8d6a717850b5d6103", "0x3f0a439"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "polling-beacon-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0xc8294a2335c6c45de827121090ce4ba9977907d2", "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50", "0x3f0a439"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "validator-code",
+    "method": "eth_getCode",
+    "params": ["0xc0cf3aaf93bd978c5bc662564aa73e331f2ec0b5", "0x3f0a439"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "validator-implementation-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0xc0cf3aaf93bd978c5bc662564aa73e331f2ec0b5", "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc", "0x3f0a439"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "validator-admin-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0xc0cf3aaf93bd978c5bc662564aa73e331f2ec0b5", "0xb53127684a568b3173ae13b9f8a6016e0195462b5d3e8d6a717850b5d6103", "0x3f0a439"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "validator-beacon-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0xc0cf3aaf93bd978c5bc662564aa73e331f2ec0b5", "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50", "0x3f0a439"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "validator-wnat",
+    "method": "eth_call",
+    "params": [{"to": "0xc0cf3aaf93bd978c5bc662564aa73e331f2ec0b5", "data": "0x9edbf007"}, "0x3f0a439"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "validator-active",
+    "method": "eth_call",
+    "params": [{"to": "0xc0cf3aaf93bd978c5bc662564aa73e331f2ec0b5", "data": "0x02fb0c5e"}, "0x3f0a439"]
+  }
+]

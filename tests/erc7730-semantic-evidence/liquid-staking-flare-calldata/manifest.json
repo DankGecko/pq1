@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "scope": "Offline fixed-block deployment, proxy/runtime, verified source/ABI, configuration, and token-meaning evidence for seven liquid-staking and Flare/Songbird calldata descriptor families.",
+  "artifacts": [
+    {
+      "path": "README.md",
+      "bytes": 3714,
+      "sha256": "8f0bc07b3b71b74a51dc2b1e4939d61c42fea5873c4ef275eae2a845ce2cae50"
+    },
+    {
+      "path": "collect.sh",
+      "bytes": 3471,
+      "sha256": "3ca5a9174ecf410c90a53ab948ade290d0e0300fb3ab6bd1e9e0aae85a3aa6ef"
+    },
+    {
+      "path": "explorer/benqi-savax-implementation.json",
+      "bytes": 104430,
+      "sha256": "edc605c608341c2d02fbe7b0ebb9e6ae0d0fd5549761cf274886b8b1e9745f68"
+    },
+    {
+      "path": "explorer/benqi-savax-proxy.json",
+      "bytes": 32875,
+      "sha256": "1ae1f20454477f340f4e367de4bcaa7395ee23abff892d8e32af83dfaa8ca17b"
+    },
+    {
+      "path": "explorer/ethena-susde.json",
+      "bytes": 261489,
+      "sha256": "730ce6c0c8a613ab6393faea7bc6e5298b46b112602659b03d3d4c24b8f316bb"
+    },
+    {
+      "path": "explorer/flare-distribution.json",
+      "bytes": 477856,
+      "sha256": "a5cbc63131ddd26a6643ead7b58928340f66c32ab0ba9d14ccfcd541553944ad"
+    },
+    {
+      "path": "explorer/flare-polling.json",
+      "bytes": 271022,
+      "sha256": "a57d7fa73167fcb925a956f23af8493fcb94e92af9077d0054777a2ced82a4fc"
+    },
+    {
+      "path": "explorer/flare-validator-reward.json",
+      "bytes": 326514,
+      "sha256": "3876425c01a5a5406de2ae75029918b472cfd8b0ee8386339fdfbac4da9f86e7"
+    },
+    {
+      "path": "explorer/songbird-polling.json",
+      "bytes": 271022,
+      "sha256": "d6dff21fc736d40cf998099b88561a7fba600911f219af425cab033be9705740"
+    },
+    {
+      "path": "explorer/swell-rsweth-implementation.json",
+      "bytes": 502762,
+      "sha256": "89c146ab48f4428baeac84a13498b9d08e157d6c4c86b0a9d1da5e5432b632aa"
+    },
+    {
+      "path": "explorer/swell-rsweth-proxy.json",
+      "bytes": 56911,
+      "sha256": "d4d6cbdfe723871121a59bae742b487f2eaf13bf3a3459710fd340b1e0db52ab"
+    },
+    {
+      "path": "fixed-block-receipt.json",
+      "bytes": 8333,
+      "sha256": "803830d2a9c6b2ba3780645b36fbfc97f6948da4b368170d67dbbc318bf5b57a"
+    },
+    {
+      "path": "rpc/request-avalanche.json",
+      "bytes": 2138,
+      "sha256": "27f9c89b423f997699363408ce67ab2c73206d0bc3db1403f1934cb0242214b6"
+    },
+    {
+      "path": "rpc/request-ethereum.json",
+      "bytes": 5288,
+      "sha256": "42e5bbcd150e6815e793869abee10e7771a674b5cfe12f2e8fffb83f255460a1"
+    },
+    {
+      "path": "rpc/request-flare.json",
+      "bytes": 3603,
+      "sha256": "d28b7ae201f8b2ea51b8fe9e03b7422cb1495776a85f75974ebed7f7c06fda93"
+    },
+    {
+      "path": "rpc/request-songbird.json",
+      "bytes": 1016,
+      "sha256": "cf56c367b6d771baf4f2f2293526f76d17362a348228cb82a159dd12c3fdb728"
+    },
+    {
+      "path": "rpc/response-avalanche.json",
+      "bytes": 46876,
+      "sha256": "6ae131f43b24aee94d7284ca74a1081f98d3818c20a3e0b1d057297c499ae5f4"
+    },
+    {
+      "path": "rpc/response-ethereum.json",
+      "bytes": 89972,
+      "sha256": "f6502692f54fabcde7240895e89e7133b234cfa5f3ade6fb20e26721d36248c0"
+    },
+    {
+      "path": "rpc/response-flare.json",
+      "bytes": 97819,
+      "sha256": "d9e4b0d3698f5d49572e82e3c30fbe5c40c5da7a4a6174039ebdfe4918c6b706"
+    },
+    {
+      "path": "rpc/response-songbird.json",
+      "bytes": 38582,
+      "sha256": "42915bab58901a8083164e4468d9c6b8f84f2f5375a2839658db155e704a6d6e"
+    },
+    {
+      "path": "runtime/benqi-savax-implementation.hex",
+      "bytes": 35905,
+      "sha256": "e2abd9e0f15a728daffcf6b839c2778c47b58ce77762fedd66f35181c7e5289e"
+    },
+    {
+      "path": "runtime/benqi-savax-proxy.hex",
+      "bytes": 4285,
+      "sha256": "fc7a9955086ee32e896f408712d2ded272a227bdda48c4759669cf9778c5dc84"
+    },
+    {
+      "path": "runtime/ethena-susde.hex",
+      "bytes": 34601,
+      "sha256": "ae6880e8d1580c59f352589d1ef86028f2586c76488db77ae4c6c4ef0212480d"
+    },
+    {
+      "path": "runtime/flare-distribution.hex",
+      "bytes": 35677,
+      "sha256": "d174e142e3058dc4f1f4c03e38ca3e258c24dea46e215709f4776c79fe2270e3"
+    },
+    {
+      "path": "runtime/flare-polling.hex",
+      "bytes": 35837,
+      "sha256": "7267f850f86e68a589e959de5111cccdf327a43b5a69ac7262d3ff469d92bee9"
+    },
+    {
+      "path": "runtime/flare-validator-reward.hex",
+      "bytes": 21899,
+      "sha256": "9f34f883f5d6d78624a2d4984edb5858c4e6636a0a80cafc6b30d9deecc52e39"
+    },
+    {
+      "path": "runtime/songbird-polling.hex",
+      "bytes": 35837,
+      "sha256": "ee8d667d89cc71e4bbc441849630290f9ae44b105967d00effc7847cfae145c0"
+    },
+    {
+      "path": "runtime/swell-rsweth-implementation.hex",
+      "bytes": 25185,
+      "sha256": "65b779f8193411d3da7e2710f6285a244025871d0b576572f17fac3a0fa3ac0e"
+    },
+    {
+      "path": "runtime/swell-rsweth-proxy.hex",
+      "bytes": 4227,
+      "sha256": "1614fc9465db28a22f8b2a725294dda785c2e78f8067ce08afb70238c6450c4e"
+    }
+  ]
+}

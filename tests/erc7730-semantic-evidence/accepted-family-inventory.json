@@ -12,14 +12,14 @@
     "compiled_blob_bytes": 353068,
     "known_call_count": 4587,
     "category_source_counts": {
-      "pinned-evidence": 61,
+      "pinned-evidence": 68,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 46
+      "lower-priority-residual": 39
     },
     "category_leaf_counts": {
-      "pinned-evidence": 204,
+      "pinned-evidence": 211,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 61
+      "lower-priority-residual": 54
     }
   },
   "classification_contract": {
@@ -226,6 +226,12 @@
       "scope": "Only Ethereum mainnet and Sepolia deposit/withdraw.",
       "paths": ["tests/erc7730-semantic-evidence/weth9-deposit/manifest.json"]
     },
+    "liquid-staking-flare-calldata": {
+      "classification": "pinned-evidence",
+      "reason": "Pins seven liquid-staking and Flare/Songbird calldata families to exact fixed-block deployment, proxy/runtime, verified source/ABI, configuration, and token-meaning evidence.",
+      "scope": "Exactly the seven source families, deployments, and admitted formats enumerated by the package. Distribution autoClaim and executable PollingFoundation propose remain exact-known refusals; live state, future upgrades/configuration, proposal execution, and transaction success are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/liquid-staking-flare-calldata/manifest.json"]
+    },
     "yieldxyz": {
       "classification": "pinned-evidence",
       "reason": "Pins the four operand-complete POL validator-share routes across seventeen proxies and the exact-spend USDe allocator-vault deposit route to fixed-block proxy/runtime, source/ABI, token, strategy, and configuration evidence.",
@@ -314,8 +320,8 @@
   {
     "source": "benqi/calldata-sAVAX.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "liquid-staking-flare-calldata"
   },
   {
     "source": "celo/calldata-celo_accounts.json",
@@ -374,32 +380,32 @@
   {
     "source": "ethena/calldata-ethena.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "liquid-staking-flare-calldata"
   },
   {
     "source": "flare/calldata-DistributionToDelegators-Flare.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "liquid-staking-flare-calldata"
   },
   {
     "source": "flare/calldata-PollingFoundation-Flare.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "liquid-staking-flare-calldata"
   },
   {
     "source": "flare/calldata-PollingFoundation-Songbird.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "liquid-staking-flare-calldata"
   },
   {
     "source": "flare/calldata-ValidatorRewardManager-Flare.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "liquid-staking-flare-calldata"
   },
   {
     "source": "flyingtulip/calldata-EpochRewardsVault-dev.json",
@@ -1532,8 +1538,8 @@
   {
     "source": "swell/calldata-swell.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "liquid-staking-flare-calldata"
   },
   {
     "source": "swissborg/calldata-NttManager.json",

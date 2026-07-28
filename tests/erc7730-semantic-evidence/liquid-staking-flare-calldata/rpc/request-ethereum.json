@@ -1,0 +1,164 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": "block",
+    "method": "eth_getBlockByNumber",
+    "params": ["0x1871b6c", false]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "susde-code",
+    "method": "eth_getCode",
+    "params": ["0x9d39a5de30e57443bff2a8307a4256c8797a3497", "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "susde-implementation-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0x9d39a5de30e57443bff2a8307a4256c8797a3497", "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc", "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "susde-admin-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0x9d39a5de30e57443bff2a8307a4256c8797a3497", "0xb53127684a568b3173ae13b9f8a6016e0195462b5d3e8d6a717850b5d6103", "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "susde-beacon-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0x9d39a5de30e57443bff2a8307a4256c8797a3497", "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50", "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "susde-name",
+    "method": "eth_call",
+    "params": [{"to": "0x9d39a5de30e57443bff2a8307a4256c8797a3497", "data": "0x06fdde03"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "susde-symbol",
+    "method": "eth_call",
+    "params": [{"to": "0x9d39a5de30e57443bff2a8307a4256c8797a3497", "data": "0x95d89b41"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "susde-decimals",
+    "method": "eth_call",
+    "params": [{"to": "0x9d39a5de30e57443bff2a8307a4256c8797a3497", "data": "0x313ce567"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "susde-asset",
+    "method": "eth_call",
+    "params": [{"to": "0x9d39a5de30e57443bff2a8307a4256c8797a3497", "data": "0x38d52e0f"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "susde-silo",
+    "method": "eth_call",
+    "params": [{"to": "0x9d39a5de30e57443bff2a8307a4256c8797a3497", "data": "0xeb3beb29"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "susde-cooldown-duration",
+    "method": "eth_call",
+    "params": [{"to": "0x9d39a5de30e57443bff2a8307a4256c8797a3497", "data": "0x35269315"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "usde-name",
+    "method": "eth_call",
+    "params": [{"to": "0x4c9edd5852cd905f086c759e8383e09bff1e68b3", "data": "0x06fdde03"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "usde-symbol",
+    "method": "eth_call",
+    "params": [{"to": "0x4c9edd5852cd905f086c759e8383e09bff1e68b3", "data": "0x95d89b41"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "usde-decimals",
+    "method": "eth_call",
+    "params": [{"to": "0x4c9edd5852cd905f086c759e8383e09bff1e68b3", "data": "0x313ce567"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "swell-proxy-code",
+    "method": "eth_getCode",
+    "params": ["0xfae103dc9cf190ed75350761e95403b7b8afa6c0", "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "swell-implementation-code",
+    "method": "eth_getCode",
+    "params": ["0x4796d939b22027c2876d5ce9fde52da9ec4e2362", "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "swell-implementation-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0xfae103dc9cf190ed75350761e95403b7b8afa6c0", "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc", "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "swell-admin-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0xfae103dc9cf190ed75350761e95403b7b8afa6c0", "0xb53127684a568b3173ae13b9f8a6016e0195462b5d3e8d6a717850b5d6103", "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "swell-beacon-slot",
+    "method": "eth_getStorageAt",
+    "params": ["0xfae103dc9cf190ed75350761e95403b7b8afa6c0", "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50", "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "swell-name",
+    "method": "eth_call",
+    "params": [{"to": "0xfae103dc9cf190ed75350761e95403b7b8afa6c0", "data": "0x06fdde03"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "swell-symbol",
+    "method": "eth_call",
+    "params": [{"to": "0xfae103dc9cf190ed75350761e95403b7b8afa6c0", "data": "0x95d89b41"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "swell-decimals",
+    "method": "eth_call",
+    "params": [{"to": "0xfae103dc9cf190ed75350761e95403b7b8afa6c0", "data": "0x313ce567"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "swell-access-manager",
+    "method": "eth_call",
+    "params": [{"to": "0xfae103dc9cf190ed75350761e95403b7b8afa6c0", "data": "0x902340a1"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "swell-deposit-manager",
+    "method": "eth_call",
+    "params": [{"to": "0x796592b2092f7e150c48643da19dd2f28be3333f", "data": "0xf712312c"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "swell-treasury",
+    "method": "eth_call",
+    "params": [{"to": "0x796592b2092f7e150c48643da19dd2f28be3333f", "data": "0x96e9da55"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "swell-operator-registry",
+    "method": "eth_call",
+    "params": [{"to": "0x796592b2092f7e150c48643da19dd2f28be3333f", "data": "0x9ffaaa3b"}, "0x1871b6c"]
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "swell-core-paused",
+    "method": "eth_call",
+    "params": [{"to": "0x796592b2092f7e150c48643da19dd2f28be3333f", "data": "0xa3e7dfd3"}, "0x1871b6c"]
+  }
+]
