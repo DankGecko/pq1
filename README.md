@@ -524,7 +524,7 @@ Nothing here is optional. Run through the entire list **per device class**, not 
 - [ ] Field-tested on staging hardware before public rollout; documented recovery path for a bricked fleet (RDP-2 cannot be unlocked)
 
 **H. External validation**
-- [ ] External audit by an embedded + TrustZone + SE firm (NCC, Trail of Bits, Quarkslab, Kudelski, Riscure) of the *signed production image*
+- [ ] External audit by an embedded + TrustZone + SE firm of the *signed production image*
 - [ ] All findings fixed or risk-accepted with external sign-off; public bug bounty (≥ $25K for seed extraction) + VDP published before any device ships
 - [ ] Independent FI report from a lab; independent attestation that the build is reproducible
 
