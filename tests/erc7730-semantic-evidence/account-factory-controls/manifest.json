@@ -136,7 +136,7 @@
     },
     {
       "path": "collect.sh",
-      "sha256": "ce1a58331999b58138fede8b914fb9c51689d65259528436b67fab1ececc1349"
+      "sha256": "f0654bd780e6ef468340ccc8687c06aa874a36dc87ee7a8750e7fc8fd0b58593"
     },
     {
       "path": "rpc/raw/kiln-ethereum/request-identity.json",

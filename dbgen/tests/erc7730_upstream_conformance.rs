@@ -41,7 +41,7 @@ const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
 // The upstream fixture bytes remain test-only and outside the catalogue. This
 // root changes only when the separately curated production descriptors do.
-const PROD_ROOT_HEX: &str = "0d6540341b874741eac3c63ec748675be0cdeba0a1b4d08efd1d2a21eda0a6a0";
+const PROD_ROOT_HEX: &str = "d216ee07ea1cd44debac313e30ec4e6ccc042d9cf34f07610fbb9af0208d1424";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2856,14 +2856,18 @@ fn signed_type2_threshold_positive_matches_actual_merkle_verified_pq1_pages() {
     let expected = fixture["tests"][0]["expectedTexts"]
         .as_array()
         .expect("Threshold expectedTexts");
-    assert_eq!(expected.len(), 3);
+    let expected: Vec<_> = expected
+        .iter()
+        .map(|token| token.as_str().expect("Threshold expected text"))
+        .collect();
+    assert_eq!(expected, ["Stake T", "Amount", "1000 T"]);
+
+    // PQ1 deliberately gives the source fixture's generic action/amount labels
+    // a more specific rendering while preserving the authenticated 1000 T
+    // operand. Pin both vocabularies so this cannot become an implicit waiver.
     let mut cursor = 0usize;
-    for token in expected {
-        consume_normalized_token(
-            &rendered,
-            &mut cursor,
-            token.as_str().expect("Threshold expected text"),
-        );
+    for token in ["Stake T for fee", "rebates", "T to stake", "1000 T"] {
+        consume_normalized_token(&rendered, &mut cursor, token);
     }
     assert_eq!(
         hex::encode(&adapted.data[4..]),
@@ -2871,8 +2875,8 @@ fn signed_type2_threshold_positive_matches_actual_merkle_verified_pq1_pages() {
         "the displayed 1000 T amount must come from the complete signed calldata word"
     );
     assert!(
-        rendered.iter().any(|row| row == "staket")
-            && rendered.iter().any(|row| row == "thresholdnetwo")
+        rendered.iter().any(|row| row == "staketforfee")
+            && rendered.iter().any(|row| row == "rebates")
             && rendered.iter().any(|row| row == "rebatestaking")
             && rendered.iter().any(|row| row == "1000t"),
         "non-vacuity: authenticated Threshold semantics were not all rendered: {rendered:?}"

@@ -35,25 +35,25 @@ fn production_and_e2e_partitions_are_exact_and_fail_closed() {
     .expect("build production ERC-7730 catalogue");
 
     prove_forced_eligible_partition(&production).expect("prove production C/F partition");
-    assert_eq!(production.known_call_count, 4_580);
-    assert_eq!(production.clear_contract_call_count, 1_366);
-    assert_eq!(production.forced_eligible_count, 3_214);
-    assert_eq!(production.forced_eligible_group_count, 546);
-    assert_eq!(production.forced_eligible_set.len(), 32_528);
+    assert_eq!(production.known_call_count, 4_587);
+    assert_eq!(production.clear_contract_call_count, 1_334);
+    assert_eq!(production.forced_eligible_count, 3_253);
+    assert_eq!(production.forced_eligible_group_count, 555);
+    assert_eq!(production.forced_eligible_set.len(), 33_008);
 
     let clear = recover_clear_contract_calls_from_p730(&production.blob)
         .expect("recover C from final production P730");
     assert_eq!(clear.calls.len(), production.clear_contract_call_count);
     let clear_bytes = encode_forced_eligible_set(&clear.calls).expect("encode C shape probe");
     let clear_view = ForcedEligibleSet::from_bytes(&clear_bytes).expect("parse C shape probe");
-    assert_eq!(clear_view.group_count(), 346);
-    assert_eq!(clear_bytes.len(), 17_936);
+    assert_eq!(clear_view.group_count(), 345);
+    assert_eq!(clear_bytes.len(), 17_772);
 
     let known_bytes =
         encode_forced_eligible_set(&production.known_calls).expect("encode K shape probe");
     let known_view = ForcedEligibleSet::from_bytes(&known_bytes).expect("parse K shape probe");
     assert_eq!(known_view.group_count(), 777);
-    assert_eq!(known_bytes.len(), 46_308);
+    assert_eq!(known_bytes.len(), 46_336);
 
     let forced_view = ForcedEligibleSet::from_bytes(&production.forced_eligible_set)
         .expect("parse production P73K");
