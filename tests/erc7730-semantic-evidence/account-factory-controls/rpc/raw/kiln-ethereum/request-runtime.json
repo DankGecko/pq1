@@ -1,0 +1,14 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "eth_getCode",
+    "params": [
+      "0x8659EEFF31CFcff580D37AF8e7Af250F8998aA83",
+      {
+        "blockHash": "0x1e512402a8962f765cd38a0da170a33058ab9b10cdf746943517bf7176b688de",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

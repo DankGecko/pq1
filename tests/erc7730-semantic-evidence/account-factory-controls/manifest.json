@@ -1,0 +1,286 @@
+{
+  "schema_version": 1,
+  "scope": "Celo Accounts, Kiln Factory, and WalletConnect StakeWeight exact admitted route subsets",
+  "captured_at_utc": "2026-07-27T17:23:38Z",
+  "issue": "https://github.com/EthereumPhone/PQ1/issues/497",
+  "boundary": "Historical fixed-block deployment/source semantics only; no future-upgrade monitoring, mutable-state or execution-success claims, hardware, production, shipment, fallback, or blind-signing authority.",
+  "celo_accounts": {
+    "evidence_manifest": "tests/erc7730-semantic-evidence/celo-validators-first-member/manifest.json",
+    "evidence_manifest_sha256": "2a9c854f3d70dd905b3cd04f69481ce501e4f3c885cad74bbc37c59869ccba9c",
+    "chain_id": 42220,
+    "proxy": "0x7d21685C17607338b313a7174bAb6620baD0aaB7",
+    "implementation": "0x907f5c53c0e31db06af45bc58f076563469c525a",
+    "admitted_signatures": [
+      "authorizeSigner(address,bytes32)",
+      "completeSignerAuthorization(address,bytes32)",
+      "createAccount()",
+      "deletePaymentDelegation()",
+      "removeAttestationSigner()",
+      "removeDefaultSigner(bytes32)",
+      "removeIndexedSigner(bytes32)",
+      "removeSigner(address,bytes32)",
+      "removeStorageRoot(uint256)",
+      "removeValidatorSigner()",
+      "removeVoteSigner()",
+      "setMetadataURL(string)",
+      "setName(string)",
+      "setPaymentDelegation(address,uint256)"
+    ],
+    "refused_declared_signatures": [
+      "addStorageRoot(bytes)",
+      "authorizeAttestationSigner(address,uint8,bytes32,bytes32)",
+      "authorizeSignerWithSignature(address,bytes32,uint8,bytes32,bytes32)",
+      "authorizeValidatorSigner(address,uint8,bytes32,bytes32)",
+      "authorizeValidatorSignerWithPublicKey(address,uint8,bytes32,bytes32,bytes)",
+      "authorizeVoteSigner(address,uint8,bytes32,bytes32)"
+    ]
+  },
+  "kiln": {
+    "admitted_signatures": [
+      "createOperator(address,string,uint256,uint256,address[],uint256[])",
+      "createSplitter(address,bytes32)",
+      "transferOwnership(address)"
+    ],
+    "refused_declared_signatures": [
+      "createSplitterAndCall(address,bytes32,address,bytes)"
+    ],
+    "deployments": [
+      {
+        "slug": "ethereum",
+        "chain_id": 1,
+        "address": "0x8659EEFF31CFcff580D37AF8e7Af250F8998aA83",
+        "block_number_hex": "0x187034b",
+        "block_hash": "0x1e512402a8962f765cd38a0da170a33058ab9b10cdf746943517bf7176b688de",
+        "providers": [
+          {
+            "name": "drpc",
+            "url": "https://eth.drpc.org"
+          },
+          {
+            "name": "mevblocker",
+            "url": "https://rpc.mevblocker.io"
+          }
+        ],
+        "verification": "verification/Sourcify.kiln-ethereum.json",
+        "runtime": "runtime/kiln-ethereum.hex"
+      },
+      {
+        "slug": "hoodi",
+        "chain_id": 560048,
+        "address": "0x1A76bc69922744807E86375f8B8AB8A7cf18Eb7a",
+        "block_number_hex": "0x325601",
+        "block_hash": "0x6a99d242a4c98750e8e41d1994a9ef01172808ee3d42ae6165a0cd8c9ba4cb29",
+        "providers": [
+          {
+            "name": "drpc",
+            "url": "https://hoodi.drpc.org"
+          },
+          {
+            "name": "ethpandaops",
+            "url": "https://rpc.hoodi.ethpandaops.io"
+          }
+        ],
+        "verification": "verification/Sourcify.kiln-hoodi.json",
+        "runtime": "runtime/kiln-hoodi.hex"
+      }
+    ]
+  },
+  "walletconnect": {
+    "chain_id": 10,
+    "proxy": "0x521B4C065Bbdbe3E20B3727340730936912DfA46",
+    "implementation": "0x6845541121e555D1245fe17c6b44273B089C3844",
+    "config": "0xd2f149faa66dc4448176123f850c14ff14f978b3",
+    "token": "0xeF4461891DfB3AC8572cCf7C794664A8DD927945",
+    "token_symbol": "WCT",
+    "token_decimals": 18,
+    "block_number_hex": "0x939db13",
+    "block_hash": "0xe10eb45ddbcd0a98add70f7e1932f8ca4b75ceadc072265f6cacbc93d7e26b94",
+    "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+    "providers": [
+      {
+        "name": "optimism",
+        "url": "https://mainnet.optimism.io"
+      },
+      {
+        "name": "publicnode",
+        "url": "https://optimism-rpc.publicnode.com"
+      }
+    ],
+    "proxy_verification": "verification/Sourcify.stakeweight-proxy-optimism.json",
+    "implementation_verification": "verification/Sourcify.stakeweight-implementation-optimism.json",
+    "admitted_signatures": [
+      "createLock(uint256,uint256)",
+      "depositFor(address,uint256)",
+      "increaseLockAmount(uint256)",
+      "increaseUnlockTime(uint256)",
+      "updateLock(uint256,uint256)",
+      "withdrawAll()"
+    ]
+  },
+  "artifacts": [
+    {
+      "path": "README.md",
+      "sha256": "233bc6761d7fc5c40ca2b80aec1c6cd020fe7241bb2f6a2685994c0a162c3f4b"
+    },
+    {
+      "path": "abi/KilnFactory.routes.ethereum.abi.json",
+      "sha256": "f3fb7df311613ebc52b68154a936a4f55f0b337ba4577714b5331b7851e9ee99"
+    },
+    {
+      "path": "abi/KilnFactory.routes.hoodi.abi.json",
+      "sha256": "f3fb7df311613ebc52b68154a936a4f55f0b337ba4577714b5331b7851e9ee99"
+    },
+    {
+      "path": "abi/StakeWeight.routes.optimism.abi.json",
+      "sha256": "19748c0d1f0dcc76c31d7596f8ebee5c78d3eb5e583c31ac94f7f3c29013d443"
+    },
+    {
+      "path": "collect.sh",
+      "sha256": "ce1a58331999b58138fede8b914fb9c51689d65259528436b67fab1ececc1349"
+    },
+    {
+      "path": "rpc/raw/kiln-ethereum/request-identity.json",
+      "sha256": "b1c62dbff42b74469c42355eb860657d7a87ce0ea971ee7638f0350a5ec734cc"
+    },
+    {
+      "path": "rpc/raw/kiln-ethereum/request-runtime.json",
+      "sha256": "63954e97291d4d3d6845669d2bf70b7706c1ea2307c0729a7a0b75e4338b8c99"
+    },
+    {
+      "path": "rpc/raw/kiln-ethereum/response-drpc-identity.json",
+      "sha256": "2ddaaeeded6eee605c450bc8154fdb3755cc225136af6e6d2a14063d57525a4d"
+    },
+    {
+      "path": "rpc/raw/kiln-ethereum/response-drpc-runtime.json",
+      "sha256": "5c404ac80660a17fe33a6a7094becc9cbe56b0643e8721fd5c208fac87e547a2"
+    },
+    {
+      "path": "rpc/raw/kiln-ethereum/response-mevblocker-identity.json",
+      "sha256": "a62fd9fd526da1f3617c7fcd5e12dbd61caeb48e795e710d7e768066070dcec7"
+    },
+    {
+      "path": "rpc/raw/kiln-ethereum/response-mevblocker-runtime.json",
+      "sha256": "ed615aded0b1f832e026990ce9fd3050ff1ce8e88f5ec98d0b812a4105fe19bb"
+    },
+    {
+      "path": "rpc/raw/kiln-hoodi/request-identity.json",
+      "sha256": "70fb4b52f8e8c3e5dc3c2b750a356cb07d1090325f6103c120ba6ba14de286de"
+    },
+    {
+      "path": "rpc/raw/kiln-hoodi/request-runtime.json",
+      "sha256": "48653331c81f7a83e778876f67c9a4109d659238510a882bfe280dfdac029656"
+    },
+    {
+      "path": "rpc/raw/kiln-hoodi/response-drpc-identity.json",
+      "sha256": "90da29932cf97378261037f299bb43dc1978a2fcd42afed1e81132ed087ea587"
+    },
+    {
+      "path": "rpc/raw/kiln-hoodi/response-drpc-runtime.json",
+      "sha256": "16bd5f7a971a949eb3cc62533f97a4a70fc2b79464cb73baa53ead67bee88229"
+    },
+    {
+      "path": "rpc/raw/kiln-hoodi/response-ethpandaops-identity.json",
+      "sha256": "76ef5f37b072c14a6f435eda0e5e6895ff2662d77b399a0d3e5cdbcebc1dc65f"
+    },
+    {
+      "path": "rpc/raw/kiln-hoodi/response-ethpandaops-runtime.json",
+      "sha256": "c20abfacd73f2fdf6fb3b063c7b1d381fea710ef00e3eb72caa39661dbbb579f"
+    },
+    {
+      "path": "rpc/raw/walletconnect-optimism/request-identity.json",
+      "sha256": "7005b8648dd48bb04ff48e28deb7969a8ff8e5007dbb4468d450925f044ae97c"
+    },
+    {
+      "path": "rpc/raw/walletconnect-optimism/request-links.json",
+      "sha256": "89693cb2b46f14f47ce56292366a0a9d1dd2e611600be4005aedc604506f38d9"
+    },
+    {
+      "path": "rpc/raw/walletconnect-optimism/request-runtime.json",
+      "sha256": "e09e803977bcb34b388457fffbec12f74a6fe1c0212f18766103d4f0f3923f9d"
+    },
+    {
+      "path": "rpc/raw/walletconnect-optimism/response-op-identity.json",
+      "sha256": "99b14b9cebc95afba827688c13533f60329f2302f2f018493bad0e60ae2d8845"
+    },
+    {
+      "path": "rpc/raw/walletconnect-optimism/response-op-links.json",
+      "sha256": "67b2f4952f796cc5baacabc6fd1afcf33fac46154e030efd134ffc01ac8674a4"
+    },
+    {
+      "path": "rpc/raw/walletconnect-optimism/response-op-runtime.json",
+      "sha256": "99144be564828ce3f873eeb90da55bedb96fc13135a59d8292eab20bf9d36b8f"
+    },
+    {
+      "path": "rpc/raw/walletconnect-optimism/response-publicnode-identity.json",
+      "sha256": "9c4affc04470ad7c7dba4f263c9e366cd895586e99a4102237270bb38a318d8c"
+    },
+    {
+      "path": "rpc/raw/walletconnect-optimism/response-publicnode-links.json",
+      "sha256": "48b643a3a7fa6298974385abaabfbdec03d35a9b7853081a33f7d2aea6b433ae"
+    },
+    {
+      "path": "rpc/raw/walletconnect-optimism/response-publicnode-runtime.json",
+      "sha256": "5377c688d5c1f27c48eb4e8925bf1e7151016f4b6ad9d0766cbe7446b292e4f6"
+    },
+    {
+      "path": "runtime/L2WCTProxy.optimism.hex",
+      "sha256": "a191ad2fa638232fb26e31b52ca47b056fb4158a507a87e02051cb7782d94034"
+    },
+    {
+      "path": "runtime/StakeWeight.implementation.optimism.hex",
+      "sha256": "10a6e155f57de2b1536603a92e10dbfb56e8512ab7699f1a258bf5be85b68b90"
+    },
+    {
+      "path": "runtime/StakeWeightProxy.optimism.hex",
+      "sha256": "2cd6995a02df6025fde2b0f55a981dfe70293d93847d25f4fcccaeb2c94b9e1e"
+    },
+    {
+      "path": "runtime/WalletConnectConfigProxy.optimism.hex",
+      "sha256": "6c1e827b9eb6da49980e967c0ae8e1365f51075ddb6042ea5b196bc6ad273eb3"
+    },
+    {
+      "path": "runtime/kiln-ethereum.hex",
+      "sha256": "2e24a1c02530105b54172cc90deb8314b8d09f4c71a4d1682d5ad6ef509482ba"
+    },
+    {
+      "path": "runtime/kiln-hoodi.hex",
+      "sha256": "9e20ac34da92fbaa1bac24cf87acc87252785332b6901e09895da83a31b8bf47"
+    },
+    {
+      "path": "source/Factory.ethereum.sol",
+      "sha256": "c7bb6441caa531bb1fa56d0625ea7f5ee685ed3bf7ce016dbd4497e839b21b67"
+    },
+    {
+      "path": "source/Factory.hoodi.sol",
+      "sha256": "c7bb6441caa531bb1fa56d0625ea7f5ee685ed3bf7ce016dbd4497e839b21b67"
+    },
+    {
+      "path": "source/Operator.ethereum.sol",
+      "sha256": "c50202dbc2f8f24fb083d647ffafee9d8c50b06c54df13573259dd2b133913a9"
+    },
+    {
+      "path": "source/StakeWeight.sol",
+      "sha256": "c10c0c46d88d7b14addc3c71ea1c0e9aa30d706b94ec3e1088c76e7c35696b96"
+    },
+    {
+      "path": "source/WalletConnectConfig.sol",
+      "sha256": "c4ef1100050ce4120da32adef43444a05dc65b95eaef8ca4a7f73b4357f2c8a2"
+    },
+    {
+      "path": "verification/Sourcify.kiln-ethereum.json",
+      "sha256": "ea0b829a985c101dcc626a4347a363bd970f22097786ad3155dba39657f97b48"
+    },
+    {
+      "path": "verification/Sourcify.kiln-hoodi.json",
+      "sha256": "8d8056692b033cc8d6202be9b9616baaf573492416c97913b660e8b1559592b1"
+    },
+    {
+      "path": "verification/Sourcify.stakeweight-implementation-optimism.json",
+      "sha256": "5e6720e5197ecea083deb93fc37d1c1062a542d72fcf948806ed82bfcb943948"
+    },
+    {
+      "path": "verification/Sourcify.stakeweight-proxy-optimism.json",
+      "sha256": "90bf6daa236f1dc2252bc0b75c96a5534338851c193b28f7b8eb6c76b956bc82"
+    }
+  ]
+}

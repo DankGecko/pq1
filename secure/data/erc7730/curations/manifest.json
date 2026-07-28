@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 831162,
-    "sha256": "f6fe8e477072c00da222442a34ababd28d0e2ab0d91d27d7018b4a273f81324c"
+    "bytes": 836513,
+    "sha256": "d6d93893724e32357725db8cbdb23241819053b5ec7c2ab084e2bdb2b1d0661a"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -396,6 +396,13 @@
       "replacement_sha256": "9d6105d4fc42f2d3993a8badfc6084035b5e5eab71a92c13d56bbc4b89e0c469"
     },
     {
+      "path": "registry/celo/calldata-celo_accounts.json",
+      "upstream_bytes": 9998,
+      "upstream_sha256": "c2a51a8ac86d6b762991b39c0c30bdfa9303426f1a463471598c604c35bc7108",
+      "replacement_bytes": 12671,
+      "replacement_sha256": "53705bc2656b0eac4393dccd239cf58ebd8050bdee89051cfa3ee30e41438c12"
+    },
+    {
       "path": "registry/celo/calldata-celo_election.json",
       "upstream_bytes": 4312,
       "upstream_sha256": "a4adc06d56600e19740174f2d3d05c20906c0226f5ac2c6048f9d4b6ea16bbff",
@@ -464,6 +471,13 @@
       "upstream_sha256": "3f9af2a41ced1c6c8de90ae1c1be9a5a42ad5fc99ca77369a3f4c92e315a48a9",
       "replacement_bytes": 3454,
       "replacement_sha256": "bfe3eca47fb53a433547a93069a74647f804148419aa96795512490f13b3d1c9"
+    },
+    {
+      "path": "registry/kiln/calldata-kiln-fee-splitter-factory.json",
+      "upstream_bytes": 3777,
+      "upstream_sha256": "ec68c74603c2252c4220993d2b222a69d18b3deab5e0b742b078165a133cefc3",
+      "replacement_bytes": 5373,
+      "replacement_sha256": "df9a16ac4d0f182341e014728912466371f96c0d7feba85b5cccd162928f4170"
     },
     {
       "path": "registry/layerswap/calldata-LayerswapDepository.json",
@@ -660,6 +674,13 @@
       "upstream_sha256": "c94c89c58e6c17723f087516df4c3dc0d57a86b11799c68b8830b317f515768f",
       "replacement_bytes": 4964,
       "replacement_sha256": "585cda2929c5e88e35d6c98aa6b8edd38e01a03288123d1d6bc60635c2119204"
+    },
+    {
+      "path": "registry/walletconnect/calldata-stakeweight.json",
+      "upstream_bytes": 2842,
+      "upstream_sha256": "c904f53118c650b0a14db5e2eccc17c7bebc2e3e19f05e4de85134fdede280ef",
+      "replacement_bytes": 3924,
+      "replacement_sha256": "af2ecdfe3b6917d8f50e950210dcbcfab6da8f765a56fb15dca52c514180366b"
     },
     {
       "path": "registry/walletconnect/calldata-wct.json",

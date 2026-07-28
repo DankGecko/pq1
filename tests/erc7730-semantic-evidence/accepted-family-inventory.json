@@ -49,6 +49,15 @@
         "tests/erc7730-semantic-evidence/aave-v3-shared-pools/manifest.json"
       ]
     },
+    "account-factory-controls": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the operand-complete Celo Accounts, Kiln Factory, and WalletConnect StakeWeight subsets to exact fixed-block deployment/source authority.",
+      "scope": "Only Celo mainnet Accounts, the Ethereum and Hoodi Kiln factories, and the Optimism StakeWeight proxy/routes enumerated by the package; Celo Alfajores, hidden-signature/opaque/nested-call siblings, future upgrades, and mutable state are not implied.",
+      "paths": [
+        "tests/erc7730-semantic-evidence/account-factory-controls/manifest.json",
+        "tests/erc7730-semantic-evidence/celo-validators-first-member/manifest.json"
+      ]
+    },
     "allowance-threshold-honesty": {
       "classification": "pinned-evidence",
       "reason": "Pins exact unlimited-allowance threshold semantics for three accepted descriptor families.",
@@ -268,9 +277,9 @@
   },
   {
     "source": "celo/calldata-celo_accounts.json",
-    "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "account-factory-controls"
   },
   {
     "source": "celo/calldata-celo_election.json",
@@ -611,8 +620,8 @@
   {
     "source": "kiln/calldata-kiln-fee-splitter-factory.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "account-factory-controls"
   },
   {
     "source": "layerswap/calldata-LayerswapDepository.json",
@@ -1619,8 +1628,8 @@
   {
     "source": "walletconnect/calldata-stakeweight.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "account-factory-controls"
   },
   {
     "source": "walletconnect/calldata-wct.json",
