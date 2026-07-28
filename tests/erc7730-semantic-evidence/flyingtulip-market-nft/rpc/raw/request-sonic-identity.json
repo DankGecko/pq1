@@ -1,0 +1,335 @@
+[
+  {
+    "id": "chain-id",
+    "jsonrpc": "2.0",
+    "method": "eth_chainId",
+    "params": []
+  },
+  {
+    "id": "block",
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockByHash",
+    "params": [
+      "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+      false
+    ]
+  },
+  {
+    "id": "old-pft-proxy-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0xa4215daaf3745e14e96e169e0e7706c479ce04f2",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "old-pft-implementation-slot",
+    "jsonrpc": "2.0",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0xa4215daaf3745e14e96e169e0e7706c479ce04f2",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "new-pft-proxy-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x1d8051c90076faa5b683a3551ee4369d00f99d67",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "new-pft-implementation-slot",
+    "jsonrpc": "2.0",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0x1d8051c90076faa5b683a3551ee4369d00f99d67",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "old-put-proxy-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0xba49d0ac42f4fba4e24a8677a22218a4df75ebaa",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "old-put-implementation-slot",
+    "jsonrpc": "2.0",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0xba49d0ac42f4fba4e24a8677a22218a4df75ebaa",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "new-put-proxy-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0xabd838e9977fc76430d637ed35eccfaf178ce071",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "new-put-implementation-slot",
+    "jsonrpc": "2.0",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0xabd838e9977fc76430d637ed35eccfaf178ce071",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "marketplace-proxy-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x9bb958d459a97e3e37e11becf842e728167d9114",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "marketplace-implementation-slot",
+    "jsonrpc": "2.0",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0x9bb958d459a97e3e37e11becf842e728167d9114",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "old-pft-implementation-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0xc55253ea84050700e1efa8878d4a5053b6bf7c5e",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "new-pft-implementation-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0xcf047256d5cd7354327213929214e5dad3a83326",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "old-put-implementation-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x90ae2cac15f8d58a258f7b4a243657754469922a",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "new-put-implementation-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0x915220f3845d9d0db7960399c4e5ba0038f1170b",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "marketplace-implementation-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0xbdd1327024b66212bf1f6a6a7f8b21f81b1faca4",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "marketplace-pft-slot",
+    "jsonrpc": "2.0",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0x9bb958d459a97e3e37e11becf842e728167d9114",
+      "0x0",
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "old-pft-putmanager",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x4f5e8085",
+        "to": "0xa4215daaf3745e14e96e169e0e7706c479ce04f2"
+      },
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "new-pft-putmanager",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x4f5e8085",
+        "to": "0x1d8051c90076faa5b683a3551ee4369d00f99d67"
+      },
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "old-put-ft",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x0b011758",
+        "to": "0xba49d0ac42f4fba4e24a8677a22218a4df75ebaa"
+      },
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "new-put-ft",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x0b011758",
+        "to": "0xabd838e9977fc76430d637ed35eccfaf178ce071"
+      },
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "old-ft-symbol",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x95d89b41",
+        "to": "0x5dd1a7a369e8273371d2dbf9d83356057088082c"
+      },
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "old-ft-decimals",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x313ce567",
+        "to": "0x5dd1a7a369e8273371d2dbf9d83356057088082c"
+      },
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "new-ft-symbol",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x95d89b41",
+        "to": "0x26382a5331ddb46e7c0c101fb53480eb64a94ad9"
+      },
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "new-ft-decimals",
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [
+      {
+        "data": "0x313ce567",
+        "to": "0x26382a5331ddb46e7c0c101fb53480eb64a94ad9"
+      },
+      {
+        "blockHash": "0xe8fe0e2243aa3041d4741521601e695498f85cd8212cf1e5fe8cbd06910702cf",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

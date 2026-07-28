@@ -1,0 +1,42 @@
+[
+  {
+    "id": "chain-id",
+    "jsonrpc": "2.0",
+    "method": "eth_chainId",
+    "params": []
+  },
+  {
+    "id": "block",
+    "jsonrpc": "2.0",
+    "method": "eth_getBlockByHash",
+    "params": [
+      "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+      false
+    ]
+  },
+  {
+    "id": "old-pft-proxy-code",
+    "jsonrpc": "2.0",
+    "method": "eth_getCode",
+    "params": [
+      "0xa4215daaf3745e14e96e169e0e7706c479ce04f2",
+      {
+        "blockHash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+        "requireCanonical": true
+      }
+    ]
+  },
+  {
+    "id": "old-pft-implementation-slot",
+    "jsonrpc": "2.0",
+    "method": "eth_getStorageAt",
+    "params": [
+      "0xa4215daaf3745e14e96e169e0e7706c479ce04f2",
+      "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+      {
+        "blockHash": "0x6ef230ed8c6d2bd0eaf04e8e59953d2dfa035151e666101de3d7195aefec9af7",
+        "requireCanonical": true
+      }
+    ]
+  }
+]

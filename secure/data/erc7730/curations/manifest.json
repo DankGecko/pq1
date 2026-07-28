@@ -431,11 +431,18 @@
       "replacement_sha256": "1e12f68359f189af4e1197d23e5f9ea99cf18da81819487d738ebe42d73d1c3a"
     },
     {
+      "path": "registry/flyingtulip/calldata-PftMarketplace.json",
+      "upstream_bytes": 5697,
+      "upstream_sha256": "26e43ff65b43bfac17051de5c1392bb2c2f29287560492d6e3f27e78c22bdea3",
+      "replacement_bytes": 7961,
+      "replacement_sha256": "a994d62280e3a94a0bcc2483b8e9fec036b66496021257c4c78b20c230885eb7"
+    },
+    {
       "path": "registry/flyingtulip/calldata-PftNft.json",
       "upstream_bytes": 2324,
       "upstream_sha256": "4d689ea91df44b08018e3fc6b381e5f259134178dbf81645997083143e7f615e",
-      "replacement_bytes": 2317,
-      "replacement_sha256": "a30abb996b18f39899ffa22cedd1e981a6ef958fe394671db3adb4ec9c3afd05"
+      "replacement_bytes": 4035,
+      "replacement_sha256": "8c75b28b1c6e1fa1d6d877b4bfdb9d9db7bf9c7ac6aacc1c3e065cff951b6296"
     },
     {
       "path": "registry/flyingtulip/calldata-PositionsManager.json",
@@ -443,6 +450,13 @@
       "upstream_sha256": "ba6acec05c016f114fd7cfe6be3171d3590fb18bee6b057ec03ea14a04b281e6",
       "replacement_bytes": 3985,
       "replacement_sha256": "16c3c693aa3f08e35e8a80fd383b7d08b0c5e77648bea1ab6541d21399c2146b"
+    },
+    {
+      "path": "registry/flyingtulip/calldata-PutManager.json",
+      "upstream_bytes": 2834,
+      "upstream_sha256": "c7306d4e9d3b4a50364513883bca5cde112e27fd99f6926a5205ee54e8a49ed3",
+      "replacement_bytes": 4927,
+      "replacement_sha256": "14aec43d638d02d3755470e1c5a9ee58bab6ffe92225848db40a50a505e55c87"
     },
     {
       "path": "registry/flyingtulip/calldata-SessionManager.json",

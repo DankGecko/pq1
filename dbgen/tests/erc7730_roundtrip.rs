@@ -4760,9 +4760,14 @@ fn registry_flying_tulip_nft_collections_expand_injectively() {
     }
     assert_eq!(
         format_count, 15,
-        "the twelve NFT formats plus three operator-approval formats expand"
+        "six pFT NFT, three marketplace, and six PutManager formats expand"
     );
-    assert_eq!(nft_field_count, 12);
+    assert_eq!(
+        nft_field_count, 6,
+        "only pFT approve and marketplace listing IDs are collection-authenticated; \
+         PutManager positions intentionally render as raw IDs because one descriptor spans \
+         two pFT collections"
+    );
 }
 
 #[test]
@@ -4840,8 +4845,8 @@ fn registry_flying_tulip_pft_nft_admits_only_injective_operator_approval() {
         assert_eq!(operator_params.terminal_kind, Some(TerminalKind::Address));
         assert_eq!(
             operator_params.addr_types,
-            Some(0x04),
-            "operator rendering must remain contract-restricted"
+            Some(0x07),
+            "operator rendering must admit wallet, EOA, and contract address roles"
         );
 
         let rights = &fields[1];
