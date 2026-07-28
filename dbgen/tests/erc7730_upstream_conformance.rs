@@ -41,7 +41,7 @@ const FIXTURE_RECEIPT_HEX: &str =
     "689a0904b10841fbd5d9ead4a6b8e049f04a5146eac88b6d8f2faa565abd685f";
 // The upstream fixture bytes remain test-only and outside the catalogue. This
 // root changes only when the separately curated production descriptors do.
-const PROD_ROOT_HEX: &str = "272990e48328a5ee25ad9e0b72410115b84e617eb2b4f1d61df3c8d5db20f7fe";
+const PROD_ROOT_HEX: &str = "d007b9678da8664249024b2c5b463cafe20b8aa4b33741e44ab0f7286d7748b2";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1796,10 +1796,10 @@ fn upstream_fixture_corpus_is_exact_test_only_and_honestly_inventoried() {
                 .to_path_buf()
         })
         .collect();
-    assert_eq!(accepted.len(), 240);
-    assert_eq!(accepted.intersection(&tested_descriptors).count(), 154);
-    assert_eq!(accepted.difference(&tested_descriptors).count(), 86);
-    assert_eq!(tested_descriptors.difference(&accepted).count(), 118);
+    assert_eq!(accepted.len(), 238);
+    assert_eq!(accepted.intersection(&tested_descriptors).count(), 153);
+    assert_eq!(accepted.difference(&tested_descriptors).count(), 85);
+    assert_eq!(tested_descriptors.difference(&accepted).count(), 119);
 }
 
 fn synth_bundle(blob: &[u8], ir_bytes: &[u8], leaf_index: usize) -> Vec<u8> {
@@ -2448,6 +2448,7 @@ fn serenita_deposit_and_exit_fixtures_match_corrected_pq1_semantics() {
 
 #[test]
 fn p2p_dynamic_string_mutations_refuse_noncanonical_tail() {
+    const DEVICE_SIGNER: [u8; 20] = [0x44; 20];
     let (_, raw) = fixture_case("registry/p2p/tests/calldata-P2pMessageSender.tests.json", 0);
     let parsed = eip1559::parse(&raw).expect("P2P fixture is canonical unsigned Type-2");
     assert_eq!(
@@ -2471,12 +2472,13 @@ fn p2p_dynamic_string_mutations_refuse_noncanonical_tail() {
     let verified = verify_erc7730_bundle(&bundle, &registry.root).expect("P2P bundle verifies");
     cross_check_contract(&verified.ir, parsed.tx.chain_id, &to).expect("bind P2P descriptor");
     assert!(matches!(
-        render_erc7730_pages(
+        render_erc7730_pages_with_signer_checked(
             &parsed.tx,
             parsed.data,
             &verified,
             None,
             &NameResolver::new(),
+            &DEVICE_SIGNER,
         ),
         Err(RenderErr::Reject("7730 string not displayable"))
     ));
@@ -2496,17 +2498,21 @@ fn p2p_dynamic_string_mutations_refuse_noncanonical_tail() {
 
     let mut canonical_tx = eip1559::parse(&raw).expect("reparse P2P shell").tx;
     canonical_tx.data_len = canonical.len();
-    let canonical_pages = render_erc7730_pages(
+    let canonical_pages = render_erc7730_pages_with_signer_checked(
         &canonical_tx,
         &canonical,
         &verified,
         None,
         &NameResolver::new(),
+        &DEVICE_SIGNER,
     )
-    .expect("canonical short P2P message renders");
+    .expect("canonical short P2P message renders")
+    .pages;
     let canonical_rows = normalized_rows(&canonical_pages);
     let mut canonical_cursor = 0usize;
-    consume_normalized_token(&canonical_rows, &mut canonical_cursor, "Public keys");
+    consume_normalized_token(&canonical_rows, &mut canonical_cursor, "Message sender");
+    consume_full_address(&canonical_rows, &mut canonical_cursor, &DEVICE_SIGNER);
+    consume_normalized_token(&canonical_rows, &mut canonical_cursor, "Message");
     consume_normalized_token(
         &canonical_rows,
         &mut canonical_cursor,
@@ -2519,7 +2525,14 @@ fn p2p_dynamic_string_mutations_refuse_noncanonical_tail() {
     let mut aliased_tx = eip1559::parse(&raw).expect("reparse alias shell").tx;
     aliased_tx.data_len = aliased.len();
     assert!(matches!(
-        render_erc7730_pages(&aliased_tx, &aliased, &verified, None, &NameResolver::new(),),
+        render_erc7730_pages_with_signer_checked(
+            &aliased_tx,
+            &aliased,
+            &verified,
+            None,
+            &NameResolver::new(),
+            &DEVICE_SIGNER,
+        ),
         Err(RenderErr::Reject("7730 res offset != head end"))
     ));
 
@@ -2528,12 +2541,13 @@ fn p2p_dynamic_string_mutations_refuse_noncanonical_tail() {
     let mut truncated_tx = eip1559::parse(&raw).expect("reparse truncation shell").tx;
     truncated_tx.data_len = truncated.len();
     assert!(matches!(
-        render_erc7730_pages(
+        render_erc7730_pages_with_signer_checked(
             &truncated_tx,
             &truncated,
             &verified,
             None,
             &NameResolver::new(),
+            &DEVICE_SIGNER,
         ),
         Err(RenderErr::Reject("7730 res pad oob"))
     ));
@@ -2543,12 +2557,13 @@ fn p2p_dynamic_string_mutations_refuse_noncanonical_tail() {
     let mut trailing_tx = eip1559::parse(&raw).expect("reparse trailing shell").tx;
     trailing_tx.data_len = trailing.len();
     assert!(matches!(
-        render_erc7730_pages(
+        render_erc7730_pages_with_signer_checked(
             &trailing_tx,
             &trailing,
             &verified,
             None,
             &NameResolver::new(),
+            &DEVICE_SIGNER,
         ),
         Err(RenderErr::Reject("7730 res not whole tail"))
     ));

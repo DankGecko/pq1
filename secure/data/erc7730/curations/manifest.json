@@ -25,8 +25,8 @@
   "curated_corpus": {
     "domain": "pqsigner/erc7730-vendor-corpus-v1",
     "files": 387,
-    "bytes": 891876,
-    "sha256": "9123c369b9210380a341282f17787e8fe4206a0a9350bc7a7a0bf5c6dd3de5c5"
+    "bytes": 944675,
+    "sha256": "706ebd0d31223a27a1cdf5fc5b97999cd90fed4407f7d008a17146c0f049c18e"
   },
   "policy": {
     "path": "secure/data/erc7730/policy.toml",
@@ -45,6 +45,76 @@
     },
     {
       "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x0d1e9de1"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x136439dd"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x2eae418c"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x3fb99ca5"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x50ff7225"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x595c6a67"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x5a26fbf4"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x715018a6"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x724af423"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0x9b4e4634"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0xa1ca780b"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0xcd6dc687"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0xf2fde38b"
+    },
+    {
+      "chain_id": 1,
+      "contract": "0x91e677b07f7af907ec9a428aafa9fc14a0d3a338",
+      "selector": "0xfabc1cbc"
+    },
+    {
+      "chain_id": 1,
       "contract": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
       "selector": "0x2e1a7d4d"
     },
@@ -59,6 +129,11 @@
       "selector": "0x0d2c7c16"
     },
     {
+      "chain_id": 10,
+      "contract": "0x1293a54e160d1cd7075487898d65266081a15458",
+      "selector": "0x31f01ed7"
+    },
+    {
       "chain_id": 56,
       "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
       "selector": "0x05b1ea03"
@@ -77,6 +152,11 @@
       "chain_id": 100,
       "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
       "selector": "0x0d2c7c16"
+    },
+    {
+      "chain_id": 137,
+      "contract": "0x09959798b95d00a3183d20fac298e4594e599eab",
+      "selector": "0x31f01ed7"
     },
     {
       "chain_id": 137,
@@ -140,6 +220,11 @@
     },
     {
       "chain_id": 8453,
+      "contract": "0x09959798b95d00a3183d20fac298e4594e599eab",
+      "selector": "0x31f01ed7"
+    },
+    {
+      "chain_id": 8453,
       "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
       "selector": "0x05b1ea03"
     },
@@ -157,6 +242,11 @@
       "chain_id": 42161,
       "contract": "0x111111125421ca6dc452d289314280a0f8842a65",
       "selector": "0x0d2c7c16"
+    },
+    {
+      "chain_id": 42161,
+      "contract": "0x1293a54e160d1cd7075487898d65266081a15458",
+      "selector": "0x31f01ed7"
     },
     {
       "chain_id": 42220,
@@ -209,9 +299,94 @@
       "selector": "0x0d2c7c16"
     },
     {
+      "chain_id": 84532,
+      "contract": "0xc3d46e0266d95215589de639cc4e93b79f88fc6c",
+      "selector": "0x31f01ed7"
+    },
+    {
+      "chain_id": 421614,
+      "contract": "0xc3d46e0266d95215589de639cc4e93b79f88fc6c",
+      "selector": "0x31f01ed7"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x0d1e9de1"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x136439dd"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x2eae418c"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x3fb99ca5"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x50ff7225"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x595c6a67"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x5a26fbf4"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x715018a6"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x724af423"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0x9b4e4634"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0xa1ca780b"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0xcd6dc687"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0xf2fde38b"
+    },
+    {
+      "chain_id": 560048,
+      "contract": "0xcd1442415fc5c29aa848a49d2e232720be07976c",
+      "selector": "0xfabc1cbc"
+    },
+    {
       "chain_id": 11155111,
       "contract": "0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
       "selector": "0x2e1a7d4d"
+    },
+    {
+      "chain_id": 11155420,
+      "contract": "0x5fb63d9e076a314023f2d1ab5dbfd7045c281eba",
+      "selector": "0x31f01ed7"
     },
     {
       "chain_id": 1313161554,
@@ -285,9 +460,9 @@
     {
       "path": "dbgen",
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
-      "files": 44,
-    "bytes": 2741485,
-    "sha256": "5e934447435c2d0c75b631104386870eea4591f94bd3dec3ee1e31ecac2d174e"
+      "files": 48,
+      "bytes": 2831790,
+      "sha256": "d5ddab41da07ce62af4216adc8a68989f829a8b8a0553b40f6fe7b19fbf30ce8"
     },
     {
       "path": "pqsigner-erc7730",
@@ -336,13 +511,13 @@
       "domain": "pqsigner/erc7730-tool-input-tree-v1",
       "files": 5,
       "bytes": 313678,
-    "sha256": "43a7ec8a513386659e0c97e0619f5163a8d92598026930801516fb1e235f2a3d"
+      "sha256": "414c7cbc79935a2953a6bc50290c3855985cf69ac80d55d38a69b5d915570200"
     }
   ],
   "capability_inputs": [
     {
       "path": "secure/data/erc20.json",
-      "sha256": "00aa5c14d19653f1a2c36b015b695e50fb0bbc74ac3d51145f2360c794477906"
+      "sha256": "951e9bc271abc1c228375b1755bcf9c34688fac47f2b194948a95b249f72980e"
     }
   ],
   "replacements": [
@@ -396,6 +571,34 @@
       "replacement_sha256": "9d6105d4fc42f2d3993a8badfc6084035b5e5eab71a92c13d56bbc4b89e0c469"
     },
     {
+      "path": "registry/avvatar-labs-alia/calldata-AgentIdentityRegistry-base.json",
+      "upstream_bytes": 37427,
+      "upstream_sha256": "92ee0286674ee2ec84be831a5d8cff957651464c3895e27c938d586fa0a5ffa1",
+      "replacement_bytes": 40520,
+      "replacement_sha256": "c1ca013abed03b04c2f4ae616363e47402b8bcebb7485f421e3df27758c08c90"
+    },
+    {
+      "path": "registry/avvatar-labs-alia/calldata-AssetIdentityRegistry-base.json",
+      "upstream_bytes": 22579,
+      "upstream_sha256": "e16463c410ae7cacf7f8634c28f976fc8f444f7e7a8d001462c8af698cb09dfd",
+      "replacement_bytes": 24904,
+      "replacement_sha256": "dddc454d63c8c62bd2d0be06973e8d5f1454f052f8de74572c31cabe29db50d8"
+    },
+    {
+      "path": "registry/avvatar-labs-alia/calldata-ScoreEngineV2-base.json",
+      "upstream_bytes": 36590,
+      "upstream_sha256": "94db74f607ad6f231014bf54746ef34c6a88e3bd3a4f70b6c07a5a7c6e1f9491",
+      "replacement_bytes": 37877,
+      "replacement_sha256": "213ebf3757bc6497b0c773d970772be65eecc8623224fc92f084bbdd42cf07ba"
+    },
+    {
+      "path": "registry/benqi/calldata-sAVAX.json",
+      "upstream_bytes": 1535,
+      "upstream_sha256": "33ea0a5a3ab575e3803f8378c67b286a2ab3accc08410b120a75d45e6d0ae102",
+      "replacement_bytes": 4724,
+      "replacement_sha256": "2570d212f7c3e716495f4be23bc93dfb4c5785e76f84e416afa8cf319ced5906"
+    },
+    {
       "path": "registry/celo/calldata-celo_accounts.json",
       "upstream_bytes": 9998,
       "upstream_sha256": "c2a51a8ac86d6b762991b39c0c30bdfa9303426f1a463471598c604c35bc7108",
@@ -429,6 +632,69 @@
       "upstream_sha256": "4066152b05d76b5ecec8024a075659fccbda35fb4e35804ef3bc318d188e2f30",
       "replacement_bytes": 5154,
       "replacement_sha256": "1e12f68359f189af4e1197d23e5f9ea99cf18da81819487d738ebe42d73d1c3a"
+    },
+    {
+      "path": "registry/corestake/calldata-coreagent.json",
+      "upstream_bytes": 2043,
+      "upstream_sha256": "cf42c2d36cd53c55f0d0416131de8a6f69643d9b4bb716fa46a855c8d0246e1a",
+      "replacement_bytes": 3322,
+      "replacement_sha256": "d746d43c5b65c4da789cfac36705b097acf139359af14a5bdbd71be125c66404"
+    },
+    {
+      "path": "registry/corestake/calldata-corestake.json",
+      "upstream_bytes": 1222,
+      "upstream_sha256": "be894b47398b426623de376a86d3a24d53bb72f34d3bb4900b99152fa3f20bef",
+      "replacement_bytes": 2915,
+      "replacement_sha256": "8f4e3a86b288560c35d3fba2776274b9d48fbafd749fe1e008be063241f32cef"
+    },
+    {
+      "path": "registry/corestake/calldata-stakehub.json",
+      "upstream_bytes": 375,
+      "upstream_sha256": "a8c85943a61be2133030c709980bbbcede07608f59d49293276e1b8af53a6923",
+      "replacement_bytes": 1520,
+      "replacement_sha256": "9b325c4c555061d1a070808c7f8f5a42f731dc734bb590cea0f32be03f44d6f9"
+    },
+    {
+      "path": "registry/ethena/calldata-ethena.json",
+      "upstream_bytes": 1420,
+      "upstream_sha256": "da12844aa9f109e6f8f3e0579239d9deaf34b7aaf4ec33496f7ac41588a89830",
+      "replacement_bytes": 3567,
+      "replacement_sha256": "21c5c6b35735e02e2f000ec3417379f48a4fe4323f6e5c2b961fd33f93cb179c"
+    },
+    {
+      "path": "registry/fellow-fund/calldata-fellow-fund.json",
+      "upstream_bytes": 2446,
+      "upstream_sha256": "bb8c8bb6a6523611131405a234d10b60f82b23280ae99c1c0004a90a7e4294ee",
+      "replacement_bytes": 4137,
+      "replacement_sha256": "ebeabe9a8324dab3032b59285fff5b8cf6c582c16074edd1d1590724e08b657f"
+    },
+    {
+      "path": "registry/flare/calldata-DistributionToDelegators-Flare.json",
+      "upstream_bytes": 2055,
+      "upstream_sha256": "6aaa39ef0e9ef28bae43af88612790bbe06d0a5fb79bfffe572566807d0373b5",
+      "replacement_bytes": 4925,
+      "replacement_sha256": "29c13da20139b3194ab20c57f829a0258d83385807f256c3655ec8cc937922f6"
+    },
+    {
+      "path": "registry/flare/calldata-PollingFoundation-Flare.json",
+      "upstream_bytes": 3753,
+      "upstream_sha256": "65c7fdff2cf040aa89196b76c3ac87fd6d9ce4f0aa6bfcf17ac47b10d054fa9d",
+      "replacement_bytes": 8367,
+      "replacement_sha256": "3d43254b8e2eb8cdb40a40a8a7bf9511ce196f682102b33a56890cba94be367c"
+    },
+    {
+      "path": "registry/flare/calldata-PollingFoundation-Songbird.json",
+      "upstream_bytes": 3741,
+      "upstream_sha256": "9ccf8de1a00164b8656ce36e6db48aab25d9609c409bbb9730d32887e1d4b1c3",
+      "replacement_bytes": 8379,
+      "replacement_sha256": "05fad4a4cd93f30fe8440f9a437a31abeb54b89258ce814fdf906f2571ccadc6"
+    },
+    {
+      "path": "registry/flare/calldata-ValidatorRewardManager-Flare.json",
+      "upstream_bytes": 1913,
+      "upstream_sha256": "a194c1693acde230718639882891ce22b73b931ee916d9fa658f8a28d992f5c4",
+      "replacement_bytes": 4259,
+      "replacement_sha256": "61f7ab1470da300be05c6d7ff89f03de99ba16cacd2ccbeb1962c7712a59f3ba"
     },
     {
       "path": "registry/flyingtulip/calldata-EpochRewardsVault-dev.json",
@@ -599,11 +865,25 @@
       "replacement_sha256": "1a60c06511308904d000ab7c2a4bbab9fe5d6b4d4d9e9ca55ab83acb7d6cacd8"
     },
     {
+      "path": "registry/p2p/calldata-EigenPodManager.json",
+      "upstream_bytes": 560,
+      "upstream_sha256": "6c2aac91ac87975c0dd7c25d08351ef09184f0af0f9a51311dbba986448df1f5",
+      "replacement_bytes": 5299,
+      "replacement_sha256": "6afa919ea2f7ade291ec811f3419216940a3043c74967db5bba836499ba7e3f1"
+    },
+    {
       "path": "registry/p2p/calldata-NativeTokenVault.json",
       "upstream_bytes": 3691,
       "upstream_sha256": "900dbec13f7af5c9ce507f1261cd20d275befa87d052a4b29549a7e5867bbf47",
       "replacement_bytes": 3901,
       "replacement_sha256": "88c365a8098621e07ec3fea89e402d4af10de666b649bab8c75440789253f1c9"
+    },
+    {
+      "path": "registry/p2p/calldata-P2pMessageSender.json",
+      "upstream_bytes": 762,
+      "upstream_sha256": "ea84c41eab24bab809ed1bf55203c255ae42ac2f7a66404955f3fdb7413b3169",
+      "replacement_bytes": 2714,
+      "replacement_sha256": "d477c29bed334ceebb4cadb3fe9a6bbb6019118dcfa145c2fe5d813db6827996"
     },
     {
       "path": "registry/p2p/calldata-P2pOrgUnlimitedEthDepositor.json",
@@ -697,6 +977,20 @@
       "replacement_sha256": "8f53ed30c53c42b9b7d087486ce1f54c7cef70f4d0810f4e5a4292a181d6381b"
     },
     {
+      "path": "registry/sei/calldata-sei-distribution.json",
+      "upstream_bytes": 1524,
+      "upstream_sha256": "ff7b9e735b767081f1460f8acfb7e030160176d42eaa76510afd3df2a78ac65d",
+      "replacement_bytes": 3686,
+      "replacement_sha256": "1a9d0276e3b4313afc0c2074a92365861fa76455c5627458ef578587c4536301"
+    },
+    {
+      "path": "registry/sei/calldata-sei-staking.json",
+      "upstream_bytes": 4269,
+      "upstream_sha256": "d64cf477971329437d25b0e7adc96891622c72071ab5b91ab0b2637a2121710a",
+      "replacement_bytes": 6922,
+      "replacement_sha256": "708fc07d622e2f29ce2ed2a9b5ea5fe51bc8909f57e5895802c2e8b1ed8e1970"
+    },
+    {
       "path": "registry/serenita/calldata-EthVault.json",
       "upstream_bytes": 3782,
       "upstream_sha256": "8058769e34b7bf4d9bb48ba2040a416f99a0c41b27827b57df26cc4d6cfe19b3",
@@ -709,6 +1003,20 @@
       "upstream_sha256": "5f62cef09fa63eafeb5ed357707958dec92c60f7673e056a532f0597207b961b",
       "replacement_bytes": 2369,
       "replacement_sha256": "c77fede77abd15b2ea0771b9dd2a4a2cf47bbcae5b2f2bf540517e9e5c238deb"
+    },
+    {
+      "path": "registry/swell/calldata-swell.json",
+      "upstream_bytes": 5499,
+      "upstream_sha256": "76ced7ef2f31d03275978f98aa3ff00bed94e5f66d0911da298827948cf95cd2",
+      "replacement_bytes": 13375,
+      "replacement_sha256": "1b9e683c4627e07880344434f13ef210c65ac6d474ddaaac7b86b7fb894add19"
+    },
+    {
+      "path": "registry/swissborg/calldata-ChsbToBorgMigrator.json",
+      "upstream_bytes": 928,
+      "upstream_sha256": "824af273ab4f2161726fc40a711d7ab047b604dec6380559f0970f6abed4dc0d",
+      "replacement_bytes": 2028,
+      "replacement_sha256": "8070acfa8866252d659316dad6179112210d412cf9654a3133741edd427c623f"
     },
     {
       "path": "registry/swissborg/calldata-NttManager.json",

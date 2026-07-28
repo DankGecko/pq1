@@ -5,21 +5,21 @@
   "catalogue_snapshot": {
     "upstream_commit": "784c87c925e8438e7b4736b2af85a501f8d2a265",
     "upstream_tree": "8da8dba78c3e581bbd06c15cc681d07e570dcfb1",
-    "curated_corpus_sha256": "9123c369b9210380a341282f17787e8fe4206a0a9350bc7a7a0bf5c6dd3de5c5",
-    "merkle_root": "272990e48328a5ee25ad9e0b72410115b84e617eb2b4f1d61df3c8d5db20f7fe",
-    "accepted_leaf_count": 398,
-    "accepted_source_descriptor_count": 240,
-    "compiled_blob_bytes": 353068,
-    "known_call_count": 4587,
+    "curated_corpus_sha256": "706ebd0d31223a27a1cdf5fc5b97999cd90fed4407f7d008a17146c0f049c18e",
+    "merkle_root": "d007b9678da8664249024b2c5b463cafe20b8aa4b33741e44ab0f7286d7748b2",
+    "accepted_leaf_count": 396,
+    "accepted_source_descriptor_count": 238,
+    "compiled_blob_bytes": 355397,
+    "known_call_count": 4615,
     "category_source_counts": {
-      "pinned-evidence": 68,
+      "pinned-evidence": 78,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 39
+      "lower-priority-residual": 27
     },
     "category_leaf_counts": {
-      "pinned-evidence": 211,
+      "pinned-evidence": 224,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 54
+      "lower-priority-residual": 39
     }
   },
   "classification_contract": {
@@ -172,6 +172,12 @@
       "scope": "Only the four deployment leaves and sixteen deployment-format instances enumerated by the package; mutable token state, future token implementations, other routes, and future deployments are not implied.",
       "paths": ["tests/erc7730-semantic-evidence/ondo-managers/manifest.json"]
     },
+    "corestake-sei-avvatar": {
+      "classification": "pinned-evidence",
+      "reason": "Pins the eight Corestake, Sei-native-precompile, and Avvatar descriptor leaves to fixed-block runtime, official or verified source, ABI, and signed-field meaning evidence.",
+      "scope": "Exactly the eight source families and admitted formats enumerated by the package. Sei withdrawMultipleDelegationRewards and createValidator remain exact-known refusals; live state, future upgrades, transaction success, fallback, and blind signing are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/corestake-sei-avvatar/manifest.json"]
+    },
     "p2p-pod-message": {
       "classification": "pinned-evidence",
       "reason": "Pins caller-bound EigenPod creation and generic exact-text P2P message publication across all five accepted deployments.",
@@ -255,12 +261,6 @@
     }
   },
   "successor_issues": {
-    "remaining-calldata-families": {
-      "issue_number": 497,
-      "url": "https://github.com/EthereumPhone/PQ1/issues/497",
-      "title": "erc7730-semantic-honesty: Reconcile remaining accepted calldata families",
-      "body": "Use tests/erc7730-semantic-evidence/accepted-family-inventory.json as the exact source-family queue. In bounded protocol slices, pin deployment/proxy/runtime, authoritative source/ABI, intent and field meaning, and metadata; then promote only the evidenced subset. Preserve exact-known hard refusal and do not infer proof for every leaf emitted by a mixed source descriptor."
-    },
     "remaining-eip712-families": {
       "issue_number": 498,
       "url": "https://github.com/EthereumPhone/PQ1/issues/498",
@@ -307,19 +307,19 @@
   },
   {
     "source": "avvatar-labs-alia/calldata-AgentIdentityRegistry-base.json",
-    "accepted_leaf_count": 5,
+    "accepted_leaf_count": 1,
     "classification": "pinned-evidence",
     "evidence": "corestake-sei-avvatar"
   },
-    {
-      "source": "avvatar-labs-alia/calldata-AssetIdentityRegistry-base.json",
-      "accepted_leaf_count": 4,
-      "classification": "pinned-evidence",
-      "evidence": "corestake-sei-avvatar"
+  {
+    "source": "avvatar-labs-alia/calldata-AssetIdentityRegistry-base.json",
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "avvatar-labs-alia/calldata-ScoreEngineV2-base.json",
-    "accepted_leaf_count": 2,
+    "accepted_leaf_count": 1,
     "classification": "pinned-evidence",
     "evidence": "corestake-sei-avvatar"
   },
@@ -361,13 +361,13 @@
   },
   {
     "source": "corestake/calldata-coreagent.json",
-    "accepted_leaf_count": 3,
+    "accepted_leaf_count": 1,
     "classification": "pinned-evidence",
     "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "corestake/calldata-corestake.json",
-    "accepted_leaf_count": 3,
+    "accepted_leaf_count": 1,
     "classification": "pinned-evidence",
     "evidence": "corestake-sei-avvatar"
   },
@@ -1511,17 +1511,17 @@
     "classification": "pinned-evidence",
     "evidence": "safe-migrations"
   },
-    {
-      "source": "sei/calldata-sei-distribution.json",
-      "accepted_leaf_count": 3,
-      "classification": "pinned-evidence",
-      "evidence": "corestake-sei-avvatar"
+  {
+    "source": "sei/calldata-sei-distribution.json",
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "sei/calldata-sei-staking.json",
-      "accepted_leaf_count": 4,
-      "classification": "pinned-evidence",
-      "evidence": "corestake-sei-avvatar"
+    "accepted_leaf_count": 1,
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "serenita/calldata-EthVault.json",
