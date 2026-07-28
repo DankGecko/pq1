@@ -43,8 +43,9 @@ Confirm against the PDF before relying on any of it:
   through a browser as `…_1500-2.pdf`; the `-2` is a download-dedup suffix, not
   part of the vendor build code, and was dropped so the name matches the
   convention the layer plots in [`../pcb/`](../pcb/) use. Contents unaltered.
-- An earlier revision, `AL_MB_A66_V10_20260704.pdf` (2026-07-04), is superseded
-  and is not tracked here.
+- This is the only schematic revision tracked here. Earlier ODM drops are
+  superseded and are deliberately not kept, so there is nothing to confuse this
+  file with.
 
 ## Scope
 

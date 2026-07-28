@@ -16,8 +16,10 @@ Six-layer stackup, one PDF per copper layer:
 | `AL_A66_MB_V10_20260715_1100-BOT.pdf` | L6 — bottom / solder side |
 
 These are **layout artwork (copper plots), not schematics** — there is no
-netlist, no reference-designator-to-net mapping, and no BOM here. Schematic
-sheets and the BOM are tracked separately.
+netlist, no reference-designator-to-net mapping, and no BOM here. The schematic
+sheets for the same revision are in [`../schematics/`](../schematics/), and are
+the authority for which MCU pin carries which net. The BOM is not tracked in
+this repo yet.
 
 Scope notes:
 
@@ -28,6 +30,8 @@ Scope notes:
 - Layer artwork is the ODM's output for fabrication. It is a record of what was
   built, not a design-review artifact — no signal-integrity, EMC, or
   tamper/side-channel review is implied by its presence in this repo.
-- `*.pdf` is globally `.gitignore`d in this repo (vendor-copyrighted material
-  was purged from history before open-sourcing). This directory is an explicit
-  exception because the artwork is Freedom Factory IP.
+- `*.pdf` is globally `.gitignore`d in this repo because vendor-copyrighted
+  datasheets may not be redistributed (those live outside the repo). This
+  directory is an explicit exception: our own board documentation is open
+  source. The vendor datasheets for the parts *on* this board are not, and are
+  still excluded.
