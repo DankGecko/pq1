@@ -6,11 +6,14 @@ PQ1's pFT approval, marketplace-listing, and PUT-exit displays:
 - three pFT proxies admit `approve` and `setApprovalForAll`;
 - the Sonic marketplace admits `addListing`, `editListing`, and
   `removeListing`; and
-- three PutManager proxies admit `divest` and `withdrawFT`.
+- the two PutManager proxies backed by the same static FT contract admit
+  `divest` and `withdrawFT`.
 
 `buy`, `acceptBuyOffer`, and the proof-bearing `invest` route remain exact-known
-hard refusals. This package does not authorize those calls, another selector,
-fallback, or blind signing.
+hard refusals. The newer Sonic PutManager is also an exact-known refusal for
+`divest` and `withdrawFT` because this shared descriptor cannot injectively
+bind its different FT contract. This package does not authorize those calls,
+another selector, fallback, or blind signing.
 
 ## Source and deployment binding
 
@@ -53,11 +56,13 @@ state, PUT state, and optional Permit2 authority affect the transfer.
 
 `divest` exercises the PUT: it reduces the signed FT entitlement and withdraws
 position collateral to the caller. `withdrawFT` instead returns FT while
-reducing the corresponding collateral protection. The collateral token and
+reducing the corresponding collateral protection. On the two admitted
+PutManagers, the amount is bound to static FT contract `0x5dd1…082c` and the
+trusted display includes that complete token address. The collateral token and
 calculated output come from live position/oracle/vault state, not signed
 calldata, so PQ1 does not invent an output amount. PutManager position IDs are
-shown as raw IDs because one shared descriptor spans two distinct pFT
-collections.
+shown as raw IDs because the admitted pair still spans two chains and the
+source descriptor also covers a distinct pFT collection.
 
 ## Honest boundary
 

@@ -391,7 +391,7 @@ mod tests {
                 .count(),
             2
         );
-        assert!(tail.contains("pub static PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET: [u8; 33056] ="));
+        assert!(tail.contains("pub static PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET: [u8; 33064] ="));
         assert!(tail.contains("pub static PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET: [u8; 16] ="));
         assert!(!tail.contains("pub static PQSIGNER_ERC7730_FORCED_ELIGIBLE_SET: &[u8"));
         assert_eq!(

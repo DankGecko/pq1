@@ -353,7 +353,7 @@ jq -nS \
       {family:"pFT",chain_id:146,proxy:"0x1d8051c90076faa5b683a3551ee4369d00f99d67",implementation:"0xcf047256d5cd7354327213929214e5dad3a83326",put_manager:"0xabd838e9977fc76430d637ed35eccfaf178ce071",accepted_routes:2},
       {family:"PutManager",chain_id:1,proxy:"0xba49d0ac42f4fba4e24a8677a22218a4df75ebaa",implementation:"0x1e4e741e5f0f4f258def137e1968716eddae4bf5",ft:"0x5dd1a7a369e8273371d2dbf9d83356057088082c",pft:"0xa4215daaf3745e14e96e169e0e7706c479ce04f2",accepted_routes:2},
       {family:"PutManager",chain_id:146,proxy:"0xba49d0ac42f4fba4e24a8677a22218a4df75ebaa",implementation:"0x90ae2cac15f8d58a258f7b4a243657754469922a",ft:"0x5dd1a7a369e8273371d2dbf9d83356057088082c",pft:"0xa4215daaf3745e14e96e169e0e7706c479ce04f2",accepted_routes:2},
-      {family:"PutManager",chain_id:146,proxy:"0xabd838e9977fc76430d637ed35eccfaf178ce071",implementation:"0x915220f3845d9d0db7960399c4e5ba0038f1170b",ft:"0x26382a5331ddb46e7c0c101fb53480eb64a94ad9",pft:"0x1d8051c90076faa5b683a3551ee4369d00f99d67",accepted_routes:2},
+      {family:"PutManager",chain_id:146,proxy:"0xabd838e9977fc76430d637ed35eccfaf178ce071",implementation:"0x915220f3845d9d0db7960399c4e5ba0038f1170b",ft:"0x26382a5331ddb46e7c0c101fb53480eb64a94ad9",pft:"0x1d8051c90076faa5b683a3551ee4369d00f99d67",accepted_routes:0},
       {family:"pFTMarketplace",chain_id:146,proxy:"0x9bb958d459a97e3e37e11becf842e728167d9114",implementation:"0xbdd1327024b66212bf1f6a6a7f8b21f81b1faca4",pft:"0x1d8051c90076faa5b683a3551ee4369d00f99d67",accepted_routes:3}
     ],
     admitted_routes: {

@@ -1,6 +1,6 @@
 {
   "$schema": "../../specs/erc7730-v2.schema.json",
-  "_curation_note": "PQSigner semantic curation: only divest and withdrawFT are admitted for the three fixed-block PutManager proxy/implementation pairs below. divest exercises the signed amount of FT entitlement and sends state-derived position collateral; withdrawFT returns the signed FT amount while removing matching PUT protection. Position IDs stay raw because this shared descriptor spans two distinct pFT collections. Both embedded FT deployments are source/runtime-bound as 18-decimal FT. The proof-bearing invest route remains a structural exact-known refusal. Evidence is historical source/compiler/runtime authority, not live position/oracle/vault/liquidity state, success, future upgrades, fallback, or blind signing. See tests/erc7730-semantic-evidence/flyingtulip-market-nft.",
+  "_curation_note": "PQSigner semantic curation: divest and withdrawFT are admitted only for the two fixed-block PutManager proxy/implementation pairs backed by FT 0x5dd1a7a369e8273371d2dbf9d83356057088082c. Their signed FT amounts use tokenAmount so the trusted display includes the complete static token address. divest exercises FT entitlement and sends state-derived position collateral; withdrawFT returns FT while removing matching PUT protection. Position IDs stay raw because the shared descriptor spans multiple pFT collections. The newer Sonic PutManager backed by a different FT contract, the proof-bearing invest route, and every unlisted deployment/format pair remain exact-known refusals. Evidence is historical source/compiler/runtime authority, not live position/oracle/vault/liquidity state, success, future upgrades, fallback, or blind signing. See tests/erc7730-semantic-evidence/flyingtulip-market-nft.",
   "_pqsigner": {
     "deploymentFormats": [
       {
@@ -14,14 +14,6 @@
       {
         "chainId": 146,
         "address": "0xbA49d0AC42f4fBA4e24A8677a22218a4dF75ebaA",
-        "formats": [
-          "divest(uint256 id, uint256 amount_ft)",
-          "withdrawFT(uint256 id, uint256 amount)"
-        ]
-      },
-      {
-        "chainId": 146,
-        "address": "0xAbd838E9977fc76430d637ED35EccFaF178Ce071",
         "formats": [
           "divest(uint256 id, uint256 amount_ft)",
           "withdrawFT(uint256 id, uint256 amount)"
@@ -108,11 +100,9 @@
           {
             "path": "amount_ft",
             "label": "FT to exercise",
-            "format": "unit",
+            "format": "tokenAmount",
             "params": {
-              "base": "FT",
-              "decimals": 18,
-              "prefix": false
+              "token": "0x5DD1A7A369e8273371d2DBf9d83356057088082c"
             },
             "visible": "always"
           },
@@ -137,11 +127,9 @@
           {
             "path": "amount",
             "label": "FT to withdraw",
-            "format": "unit",
+            "format": "tokenAmount",
             "params": {
-              "base": "FT",
-              "decimals": 18,
-              "prefix": false
+              "token": "0x5DD1A7A369e8273371d2DBf9d83356057088082c"
             },
             "visible": "always"
           },

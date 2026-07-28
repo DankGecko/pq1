@@ -26,8 +26,10 @@ const PFT_DEPLOYMENTS: &[(u64, &str)] = &[
 const PUT_DEPLOYMENTS: &[(u64, &str)] = &[
     (1, "ba49d0ac42f4fba4e24a8677a22218a4df75ebaa"),
     (146, "ba49d0ac42f4fba4e24a8677a22218a4df75ebaa"),
-    (146, "abd838e9977fc76430d637ed35eccfaf178ce071"),
 ];
+const PUT_REFUSED_DEPLOYMENTS: &[(u64, &str)] =
+    &[(146, "abd838e9977fc76430d637ed35eccfaf178ce071")];
+const PUT_TOKEN: &str = "5dd1a7a369e8273371d2dbf9d83356057088082c";
 const MARKETPLACE_DEPLOYMENTS: &[(u64, &str)] =
     &[(146, "9bb958d459a97e3e37e11becf842e728167d9114")];
 
@@ -280,6 +282,26 @@ fn flyingtulip_market_nft_evidence_is_complete_and_provider_agreed() {
         required_str(&manifest, "issue"),
         "https://github.com/EthereumPhone/PQ1/issues/497"
     );
+    let put_deployments = manifest["deployments"]
+        .as_array()
+        .expect("deployment receipts")
+        .iter()
+        .filter(|deployment| deployment["family"].as_str() == Some("PutManager"))
+        .collect::<Vec<_>>();
+    assert_eq!(put_deployments.len(), 3);
+    for deployment in put_deployments {
+        let expected_routes =
+            if required_str(deployment, "proxy") == "0xabd838e9977fc76430d637ed35eccfaf178ce071" {
+                0
+            } else {
+                2
+            };
+        assert_eq!(
+            deployment["accepted_routes"].as_u64(),
+            Some(expected_routes),
+            "PutManager admission receipt changed"
+        );
+    }
 
     let declared: BTreeMap<_, _> = manifest["artifacts"]
         .as_array()
@@ -673,17 +695,48 @@ fn flyingtulip_catalogue_admits_only_the_evidenced_formats() {
                         }),
                         "shared PutManager descriptor must not invent one pFT collection"
                     );
-                    let amount = parse_params(&ir, fields[1].param_off).expect("FT unit");
-                    assert_eq!(FormatOp::try_from(fields[1].format_op), Ok(FormatOp::Unit));
-                    assert_eq!(amount.base, Some(b"FT".as_slice()));
-                    assert_eq!(amount.decimals, Some(18));
-                    assert_eq!(amount.prefix, Some(0));
+                    let amount =
+                        parse_params(&ir, fields[1].param_off).expect("static FT token amount");
+                    assert_eq!(
+                        FormatOp::try_from(fields[1].format_op),
+                        Ok(FormatOp::TokenAmount)
+                    );
+                    assert_eq!(amount.token.copied(), Some(address(PUT_TOKEN)));
+                    assert!(amount.token_path.is_none());
                     assert!(parse_params(&ir, fields[2].param_off)
                         .expect("effect annotation")
                         .const_value
                         .is_some());
                 }
             }
+        }
+    }
+
+    for &(chain_id, contract) in PUT_REFUSED_DEPLOYMENTS {
+        let contract = address(contract);
+        assert!(
+            registry.entries.iter().all(|entry| {
+                entry.source.file_name().and_then(|name| name.to_str())
+                    != Some("calldata-PutManager.json")
+                    || entry.chain_id != chain_id
+                    || entry.contract != contract
+            }),
+            "different-FT PutManager unexpectedly emitted a trusted leaf"
+        );
+        for route in PUT_ROUTES.iter().chain(PUT_REFUSALS.iter()) {
+            let refused = selector(route);
+            assert!(
+                registry
+                    .known_calls
+                    .contains(&(chain_id, contract, refused)),
+                "different-FT PutManager {route} lost exact-known refusal"
+            );
+            assert!(known_call_may_contain(
+                &registry.known_calls_bloom,
+                chain_id,
+                &contract,
+                &refused
+            ));
         }
     }
 }

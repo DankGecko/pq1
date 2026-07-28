@@ -17,11 +17,11 @@
   "artifacts": [
     {
       "path": "README.md",
-      "sha256": "66cc65bacacdcb335808673a309dda82485a6a09e78481128c311dcaf23bdc0a"
+      "sha256": "161d9fdeb5acc166d384237069837f812ec875d3142ba6346d146e7e75506566"
     },
     {
       "path": "collect.sh",
-      "sha256": "afe14681b7d537fac4158ef24f56b071a3d88241036bace3764676c926434630"
+      "sha256": "dca21260c51595a20ad0acbc31df38906cc60455ae5156d655d57a98c1835918"
     },
     {
       "path": "compiler/marketplace.json",
@@ -178,7 +178,7 @@
       "proxy": "0xba49d0ac42f4fba4e24a8677a22218a4df75ebaa"
     },
     {
-      "accepted_routes": 2,
+      "accepted_routes": 0,
       "chain_id": 146,
       "family": "PutManager",
       "ft": "0x26382a5331ddb46e7c0c101fb53480eb64a94ad9",

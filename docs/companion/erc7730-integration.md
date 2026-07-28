@@ -72,8 +72,8 @@ Current security contract:
 - Schema v6 binds explicitly enrolled top-level EIP-712 string preimages to their
   exact signed words and hard-refuses missing, reordered, mismatched, non-ASCII,
   over-128-byte, trailing, or page-overflow display evidence without fallback.
-- The current regenerated development catalogue has **399 leaves**, root
-  `cf44d648c272d3fd03884bab092add7243aa10bd00408c5b3640b279583e00dc`,
+- The current regenerated development catalogue has **398 leaves**, root
+  `272990e48328a5ee25ad9e0b72410115b84e617eb2b4f1d61df3c8d5db20f7fe`,
   and **4,587 exact known-call tuples**. The tuple-set receipt is SHA-256
   `f048eedfab3e8ba4145373ea1f1e30948395cd2b08b215ef1060533c0511f77c`;
   Bloom occupancy is 28,492 / 131,072 bits under the compiler-enforced generation cap.

@@ -101,7 +101,7 @@ fn build_e2e() -> Erc7730BuildResult {
 /// Exact combined catalogue cardinality for the current generated receipt.
 /// Protocol-specific assertions below pin their own deployment/route subsets;
 /// the accepted-family inventory independently accounts for every source.
-const EXPECTED_REGISTRY_LEAVES: usize = 399;
+const EXPECTED_REGISTRY_LEAVES: usize = 398;
 
 /// EIP-712 admission does not add contract selectors to the independent
 /// known-call inventory. Keep its exact cardinality pinned separately from the
@@ -3105,7 +3105,7 @@ fn registry_weth9_deposit_and_withdraw_bind_exact_values_and_deployments() {
     assert_eq!(
         hex::encode(result.root),
         // Re-derived after the bounded Phase-3 semantic curations.
-        "cf44d648c272d3fd03884bab092add7243aa10bd00408c5b3640b279583e00dc"
+        "272990e48328a5ee25ad9e0b72410115b84e617eb2b4f1d61df3c8d5db20f7fe"
     );
 }
 
@@ -4741,8 +4741,8 @@ fn registry_flying_tulip_nft_collections_expand_injectively() {
         .collect();
     assert_eq!(
         entries.len(),
-        7,
-        "three real descriptors expand to seven deployments"
+        6,
+        "three real descriptors expand to six deployments"
     );
 
     let mut format_count = 0usize;
@@ -4771,8 +4771,8 @@ fn registry_flying_tulip_nft_collections_expand_injectively() {
         }
     }
     assert_eq!(
-        format_count, 15,
-        "six pFT NFT, three marketplace, and six PutManager formats expand"
+        format_count, 13,
+        "six pFT NFT, three marketplace, and four PutManager formats expand"
     );
     assert_eq!(
         nft_field_count, 6,

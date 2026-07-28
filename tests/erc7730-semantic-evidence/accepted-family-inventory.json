@@ -5,11 +5,11 @@
   "catalogue_snapshot": {
     "upstream_commit": "784c87c925e8438e7b4736b2af85a501f8d2a265",
     "upstream_tree": "8da8dba78c3e581bbd06c15cc681d07e570dcfb1",
-    "curated_corpus_sha256": "a5c1e9c451f4910b408644620dceea7ad5812809ff02f8b1559ddfea70ac64b3",
-    "merkle_root": "cf44d648c272d3fd03884bab092add7243aa10bd00408c5b3640b279583e00dc",
-    "accepted_leaf_count": 399,
+    "curated_corpus_sha256": "9123c369b9210380a341282f17787e8fe4206a0a9350bc7a7a0bf5c6dd3de5c5",
+    "merkle_root": "272990e48328a5ee25ad9e0b72410115b84e617eb2b4f1d61df3c8d5db20f7fe",
+    "accepted_leaf_count": 398,
     "accepted_source_descriptor_count": 240,
-    "compiled_blob_bytes": 353801,
+    "compiled_blob_bytes": 353068,
     "known_call_count": 4587,
     "category_source_counts": {
       "pinned-evidence": 61,
@@ -17,7 +17,7 @@
       "lower-priority-residual": 46
     },
     "category_leaf_counts": {
-      "pinned-evidence": 205,
+      "pinned-evidence": 204,
       "shared-standard-implementation": 133,
       "lower-priority-residual": 61
     }
@@ -451,7 +451,7 @@
   },
   {
     "source": "flyingtulip/calldata-PutManager.json",
-    "accepted_leaf_count": 3,
+    "accepted_leaf_count": 2,
     "classification": "pinned-evidence",
     "evidence": "flyingtulip-market-nft"
   },
