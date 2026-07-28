@@ -4329,8 +4329,20 @@ fn registry_scalar_interpolation_enrollment_is_explicit_and_bounded() {
             1,
             [0xb4, 0x60, 0xaf, 0x94],
         ),
+        (
+            "calldata-EpochRewardsVault.json",
+            146,
+            [0x6e, 0x55, 0x3f, 0x65],
+        ),
+        (
+            "calldata-EpochRewardsVault.json",
+            146,
+            [0xb4, 0x60, 0xaf, 0x94],
+        ),
         ("calldata-MintAndRedeem.json", 1, [0xa6, 0x47, 0xe8, 0xec]),
         ("calldata-MintAndRedeem.json", 1, [0xea, 0x20, 0x92, 0xf3]),
+        ("calldata-MintAndRedeem.json", 146, [0xa6, 0x47, 0xe8, 0xec]),
+        ("calldata-MintAndRedeem.json", 146, [0xea, 0x20, 0x92, 0xf3]),
         ("calldata-wstETH.json", 1, [0xde, 0x0e, 0x9a, 0x3e]),
         ("calldata-wstETH.json", 1, [0xea, 0x59, 0x8c, 0xb0]),
     ]
@@ -4342,7 +4354,7 @@ fn registry_scalar_interpolation_enrollment_is_explicit_and_bounded() {
         "a registry update changed the explicitly reviewed scalar-interpolation set"
     );
     assert_eq!(
-        leaf_format_count, 6,
+        leaf_format_count, 10,
         "only covered deployment-static token identities may retain interpolation"
     );
     assert_eq!(
@@ -4351,7 +4363,7 @@ fn registry_scalar_interpolation_enrollment_is_explicit_and_bounded() {
     );
     assert_eq!(
         candidate_deployment_count - leaf_format_count,
-        17,
+        13,
         "deployment-dynamic or metadata-uncovered candidates must omit the tag"
     );
 }

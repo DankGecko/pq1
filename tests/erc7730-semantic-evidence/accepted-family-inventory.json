@@ -100,6 +100,12 @@
       "scope": "Only the routes and deployments enumerated by the package.",
       "paths": ["tests/erc7730-semantic-evidence/flyingtulip-sessionmanager/manifest.json"]
     },
+    "flyingtulip-vault-mint": {
+      "classification": "pinned-evidence",
+      "reason": "Pins ten Flying Tulip EpochRewardsVault and MintAndRedeem leaves to exact fixed-block proxy/runtime, verified source/ABI, immutable config, and token metadata.",
+      "scope": "Exactly the production and dev deployments and deposit, withdraw, claim, mint, and redeem formats enumerated by the package; live rewards, prices, fees, caps, collateral enablement, queues, sibling routes, transaction success, future upgrades, fallback, and blind signing are not implied.",
+      "paths": ["tests/erc7730-semantic-evidence/flyingtulip-vault-mint/manifest.json"]
+    },
     "lido-staking": {
       "classification": "pinned-evidence",
       "reason": "Pins four admitted stETH and referral-staker routes.",
@@ -398,26 +404,26 @@
   {
     "source": "flyingtulip/calldata-EpochRewardsVault-dev.json",
     "accepted_leaf_count": 3,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-vault-mint"
   },
   {
     "source": "flyingtulip/calldata-EpochRewardsVault.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-vault-mint"
   },
   {
     "source": "flyingtulip/calldata-MintAndRedeem-dev.json",
     "accepted_leaf_count": 3,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-vault-mint"
   },
   {
     "source": "flyingtulip/calldata-MintAndRedeem.json",
     "accepted_leaf_count": 2,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "flyingtulip-vault-mint"
   },
   {
     "source": "flyingtulip/calldata-PftMarketplace.json",

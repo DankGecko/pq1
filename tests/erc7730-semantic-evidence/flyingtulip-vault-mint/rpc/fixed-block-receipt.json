@@ -1,0 +1,269 @@
+{
+  "schema_version": 1,
+  "eip1967_implementation_slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+  "blocks": [
+    {
+      "chain_id": 1,
+      "rpc_endpoint": "https://ethereum-rpc.publicnode.com",
+      "number": 25630880,
+      "number_hex": "0x18718a0",
+      "hash": "0x1ebe0e0fc7e8f305ab8410a6ad91e7c4f26c2a32bad5cdfe6aa65a69ffe54438",
+      "state_root": "0x2362d0f2a8db73ec0d2f7eaa5432f7496d457113a1b0a44b219e65cff021683a",
+      "timestamp": 1785236411
+    },
+    {
+      "chain_id": 56,
+      "rpc_endpoint": "https://bsc-mainnet.public.blastapi.io",
+      "number": 112614313,
+      "number_hex": "0x6b65ba9",
+      "hash": "0x6a8c38ef3df7850e9e2f7079a2d8738aad4032012a0e3c834647ae47e59e728b",
+      "state_root": "0x3dfbefcd7b2ee297455655202bb237ac56d44b5a931e177b408bd75f540605e9",
+      "timestamp": 1785236420
+    },
+    {
+      "chain_id": 146,
+      "rpc_endpoint": "https://rpc.soniclabs.com",
+      "number": 76645292,
+      "number_hex": "0x49183ac",
+      "hash": "0x9c92b5b16bd3c7eed932709a993fb27a5c6fa4fa5ebb55d399ea654a3364c8f0",
+      "state_root": "0x8b3b2058b50ffa603d63e3da9c234bebe39233bf96b5d3924889f6f8e30e251a",
+      "timestamp": 1785236419
+    },
+    {
+      "chain_id": 43114,
+      "rpc_endpoint": "https://api.avax.network/ext/bc/C/rpc",
+      "number": 91431711,
+      "number_hex": "0x573231f",
+      "hash": "0x56f62aae7224b5a286a018e84c99c87aad26669d0ecee19fdf95ba6eba9049dd",
+      "state_root": "0xe6dccdd28292654f997534d48e9ef79e262e969b0e2b5ca54c58f5415549035f",
+      "timestamp": 1785236420
+    }
+  ],
+  "deployments": [
+    {
+      "descriptor": "flyingtulip/calldata-EpochRewardsVault.json",
+      "variant": "epoch-prod",
+      "chain_id": 1,
+      "proxy": "0xeb48218a4c35c814c7678cbcae88c6ee037f7625",
+      "implementation_slot_word": "0x000000000000000000000000ea95e4636badc00881f8f73a0623b0fe8627b6da",
+      "implementation": "0xea95e4636badc00881f8f73a0623b0fe8627b6da",
+      "verified_build": "epoch-prod",
+      "proxy_runtime": "runtime/epoch-prod-1-proxy.hex",
+      "implementation_runtime": "runtime/epoch-prod-1-implementation.hex",
+      "config": {
+        "asset": "0xf7d85ec4e7710f71992752eac2111312e73e9c9c",
+        "ft_reward": "0x5dd1a7a369e8273371d2dbf9d83356057088082c",
+        "yield_wrapper": "0xb44a9c40efc05eb014effeac3cbed6a31f8cb87f",
+        "asset_metadata": {
+          "name": "Flying Tulip USD",
+          "symbol": "ftUSD",
+          "decimals": 6
+        },
+        "reward_metadata": {
+          "name": "Flying Tulip",
+          "symbol": "FT",
+          "decimals": 18
+        }
+      }
+    },
+    {
+      "descriptor": "flyingtulip/calldata-EpochRewardsVault.json",
+      "variant": "epoch-prod",
+      "chain_id": 146,
+      "proxy": "0xd1e5a86f1005f6356bd022c587de0f430cd2aeb1",
+      "implementation_slot_word": "0x0000000000000000000000005aee4b34df62790581e2f2c31468ddfd7020e841",
+      "implementation": "0x5aee4b34df62790581e2f2c31468ddfd7020e841",
+      "verified_build": "epoch-prod",
+      "proxy_runtime": "runtime/epoch-prod-146-proxy.hex",
+      "implementation_runtime": "runtime/epoch-prod-146-implementation.hex",
+      "config": {
+        "asset": "0xf7d85ec4e7710f71992752eac2111312e73e9c9c",
+        "ft_reward": "0x5dd1a7a369e8273371d2dbf9d83356057088082c",
+        "yield_wrapper": "0x9acdce593888e52ec7cf70e3d22f0cf50682cd0b",
+        "asset_metadata": {
+          "name": "Flying Tulip USD",
+          "symbol": "ftUSD",
+          "decimals": 6
+        },
+        "reward_metadata": {
+          "name": "Flying Tulip",
+          "symbol": "FT",
+          "decimals": 18
+        }
+      }
+    },
+    {
+      "descriptor": "flyingtulip/calldata-EpochRewardsVault-dev.json",
+      "variant": "epoch-dev",
+      "chain_id": 146,
+      "proxy": "0x137d66e0a5d4ceee0a7eda011bc3aa94931c7234",
+      "implementation_slot_word": "0x000000000000000000000000c7d386a86287310b806fd3f7650cd787e5978330",
+      "implementation": "0xc7d386a86287310b806fd3f7650cd787e5978330",
+      "verified_build": "epoch-prod",
+      "proxy_runtime": "runtime/epoch-dev-146-proxy.hex",
+      "implementation_runtime": "runtime/epoch-dev-146-implementation.hex",
+      "config": {
+        "asset": "0x04e6227d51fc10afb6c270017690a2b0a1d4427b",
+        "ft_reward": "0x26382a5331ddb46e7c0c101fb53480eb64a94ad9",
+        "yield_wrapper": "0xb3422496006383d7fa83b3218670616e550747f9",
+        "asset_metadata": {
+          "name": "Flying Tulip USD",
+          "symbol": "ftUSD",
+          "decimals": 6
+        },
+        "reward_metadata": {
+          "name": "Flying Tulip",
+          "symbol": "FT",
+          "decimals": 18
+        }
+      }
+    },
+    {
+      "descriptor": "flyingtulip/calldata-EpochRewardsVault-dev.json",
+      "variant": "epoch-dev",
+      "chain_id": 56,
+      "proxy": "0x909573e96dfc3f097b9ee1d007333ca33cf2d4a9",
+      "implementation_slot_word": "0x000000000000000000000000eee75398b528699fe3b68cef4775ed725d2fc513",
+      "implementation": "0xeee75398b528699fe3b68cef4775ed725d2fc513",
+      "verified_build": "epoch-dev",
+      "proxy_runtime": "runtime/epoch-dev-56-proxy.hex",
+      "implementation_runtime": "runtime/epoch-dev-56-implementation.hex",
+      "config": {
+        "asset": "0xfcfacb1a5b980bde7a610afe564cda5f8107493c",
+        "ft_reward": "0x55ec65bce4f2c59660e30c04656622e96eff8537",
+        "yield_wrapper": "0x2e37bac5b6535ff1a8e6ae07fbd4005a40928dc7",
+        "asset_metadata": {
+          "name": "Flying Tulip USD",
+          "symbol": "ftUSD",
+          "decimals": 6
+        },
+        "reward_metadata": {
+          "name": "Flying Tulip",
+          "symbol": "FT",
+          "decimals": 18
+        }
+      }
+    },
+    {
+      "descriptor": "flyingtulip/calldata-EpochRewardsVault-dev.json",
+      "variant": "epoch-dev",
+      "chain_id": 43114,
+      "proxy": "0xb95e2fe3a4966d980ffce98ff067b5d8e097c62c",
+      "implementation_slot_word": "0x000000000000000000000000e034145c83dace0832aa1c97cd638d6bb54e2f82",
+      "implementation": "0xe034145c83dace0832aa1c97cd638d6bb54e2f82",
+      "verified_build": "epoch-dev",
+      "proxy_runtime": "runtime/epoch-dev-43114-proxy.hex",
+      "implementation_runtime": "runtime/epoch-dev-43114-implementation.hex",
+      "config": {
+        "asset": "0xd6ddd9c61b038f768ddcfa3f43c26df6e0ba0285",
+        "ft_reward": "0x4c6fc0effe3f0504635201eb6656444f15c64c33",
+        "yield_wrapper": "0xa974a72f3f2cb18a343fe676e4fedee8e0248f71",
+        "asset_metadata": {
+          "name": "Flying Tulip USD",
+          "symbol": "ftUSD",
+          "decimals": 6
+        },
+        "reward_metadata": {
+          "name": "Flying Tulip",
+          "symbol": "FT",
+          "decimals": 18
+        }
+      }
+    },
+    {
+      "descriptor": "flyingtulip/calldata-MintAndRedeem.json",
+      "variant": "mint-prod",
+      "chain_id": 1,
+      "proxy": "0xaa48ecbc843cf7e9a29155d112b8cb27902bd23c",
+      "implementation_slot_word": "0x0000000000000000000000008852b132b72613a16f1e3960978a3d45c0a7c3c6",
+      "implementation": "0x8852b132b72613a16f1e3960978a3d45c0a7c3c6",
+      "verified_build": "mint-prod",
+      "proxy_runtime": "runtime/mint-prod-1-proxy.hex",
+      "implementation_runtime": "runtime/mint-prod-1-implementation.hex",
+      "config": {
+        "ftusd": "0xf7d85ec4e7710f71992752eac2111312e73e9c9c",
+        "ftusd_metadata": {
+          "name": "Flying Tulip USD",
+          "symbol": "ftUSD",
+          "decimals": 6
+        }
+      }
+    },
+    {
+      "descriptor": "flyingtulip/calldata-MintAndRedeem.json",
+      "variant": "mint-prod",
+      "chain_id": 146,
+      "proxy": "0x0c6f8ec81c3ea5bff06f6cd0791780f9f050ee31",
+      "implementation_slot_word": "0x0000000000000000000000008852b132b72613a16f1e3960978a3d45c0a7c3c6",
+      "implementation": "0x8852b132b72613a16f1e3960978a3d45c0a7c3c6",
+      "verified_build": "mint-prod",
+      "proxy_runtime": "runtime/mint-prod-146-proxy.hex",
+      "implementation_runtime": "runtime/mint-prod-146-implementation.hex",
+      "config": {
+        "ftusd": "0xf7d85ec4e7710f71992752eac2111312e73e9c9c",
+        "ftusd_metadata": {
+          "name": "Flying Tulip USD",
+          "symbol": "ftUSD",
+          "decimals": 6
+        }
+      }
+    },
+    {
+      "descriptor": "flyingtulip/calldata-MintAndRedeem-dev.json",
+      "variant": "mint-dev",
+      "chain_id": 146,
+      "proxy": "0xb9b23b0555b8066f3d5954ea6c679a02339f78dc",
+      "implementation_slot_word": "0x000000000000000000000000be111549a597c672412d3f967dcbebd458feffaf",
+      "implementation": "0xbe111549a597c672412d3f967dcbebd458feffaf",
+      "verified_build": "mint-dev",
+      "proxy_runtime": "runtime/mint-dev-146-proxy.hex",
+      "implementation_runtime": "runtime/mint-dev-146-implementation.hex",
+      "config": {
+        "ftusd": "0x04e6227d51fc10afb6c270017690a2b0a1d4427b",
+        "ftusd_metadata": {
+          "name": "Flying Tulip USD",
+          "symbol": "ftUSD",
+          "decimals": 6
+        }
+      }
+    },
+    {
+      "descriptor": "flyingtulip/calldata-MintAndRedeem-dev.json",
+      "variant": "mint-dev",
+      "chain_id": 56,
+      "proxy": "0x5f8d7b2009355a48ace2643d18e782f5c5818495",
+      "implementation_slot_word": "0x0000000000000000000000002d027ac70e7ba26457df09f5d5eedc83b185afad",
+      "implementation": "0x2d027ac70e7ba26457df09f5d5eedc83b185afad",
+      "verified_build": "mint-dev",
+      "proxy_runtime": "runtime/mint-dev-56-proxy.hex",
+      "implementation_runtime": "runtime/mint-dev-56-implementation.hex",
+      "config": {
+        "ftusd": "0xfcfacb1a5b980bde7a610afe564cda5f8107493c",
+        "ftusd_metadata": {
+          "name": "Flying Tulip USD",
+          "symbol": "ftUSD",
+          "decimals": 6
+        }
+      }
+    },
+    {
+      "descriptor": "flyingtulip/calldata-MintAndRedeem-dev.json",
+      "variant": "mint-dev",
+      "chain_id": 43114,
+      "proxy": "0x83d889120ab0a0683bc59245e77a9d510d5acda0",
+      "implementation_slot_word": "0x000000000000000000000000e2856cb41aaae7068f20bc8234793bebc36fe521",
+      "implementation": "0xe2856cb41aaae7068f20bc8234793bebc36fe521",
+      "verified_build": "mint-dev",
+      "proxy_runtime": "runtime/mint-dev-43114-proxy.hex",
+      "implementation_runtime": "runtime/mint-dev-43114-implementation.hex",
+      "config": {
+        "ftusd": "0xd6ddd9c61b038f768ddcfa3f43c26df6e0ba0285",
+        "ftusd_metadata": {
+          "name": "Flying Tulip USD",
+          "symbol": "ftUSD",
+          "decimals": 6
+        }
+      }
+    }
+  ]
+}
