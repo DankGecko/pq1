@@ -858,6 +858,20 @@
       "replacement_sha256": "d93e832f604aa0c1c03e275210ae03b50e2fd9ecbdafa2127118b5bafec3cf43"
     },
     {
+      "path": "registry/lombard/eip712-network-fee-authorization-mainnet.json",
+      "upstream_bytes": 814,
+      "upstream_sha256": "169e528382579935261bac01972152b2458a9b6983deb571b73f5354a97fbfd8",
+      "replacement_bytes": 2165,
+      "replacement_sha256": "4e72faa0822f2905247da5ede697c797740caf33bf8684edea0a11bad0c5aad6"
+    },
+    {
+      "path": "registry/lombard/eip712-network-fee-authorization-sepolia.json",
+      "upstream_bytes": 818,
+      "upstream_sha256": "685a6b681290c537b09a609272c14fdcedb5eb03198143e12c8255421fd4bb46",
+      "replacement_bytes": 1719,
+      "replacement_sha256": "f050ecffb90496ee77f14fdc59dc2a4ea5783ad2c245d1591e5c786b9aadd9fa"
+    },
+    {
       "path": "registry/midas/calldata-MinterVault.json",
       "upstream_bytes": 10375,
       "upstream_sha256": "e669ebac6228aac7ac8c5f391f8000df0f2812b0284bd61a78f528c01eff40db",

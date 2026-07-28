@@ -1,7 +1,8 @@
 {
   "schema_version": 2,
-  "scope": "Ethereum Lombard LBTC six flat-static accepted routes semantic evidence",
+  "scope": "Ethereum Lombard LBTC six flat-static calldata routes plus feeApproval EIP-712 semantic evidence",
   "issue": "https://github.com/EthereumPhone/PQ1/issues/378",
+  "eip712_issue": "https://github.com/EthereumPhone/PQ1/issues/498",
   "captured_at_utc": "2026-07-21T18:30:00Z",
   "fixed_block": {
     "chain_id": 1,
@@ -67,11 +68,30 @@
       "semantics": "ERC-20 delegated transfer"
     }
   ],
+  "eip712": {
+    "descriptor": "registry/lombard/eip712-network-fee-authorization-mainnet.json",
+    "deployment": {
+      "chain_id": 1,
+      "verifying_contract": "0x8236a87084f8b84306f72007f36f2618a5634494"
+    },
+    "domain": {
+      "canonical_type": "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
+      "name": "Lombard Staked Bitcoin",
+      "version": "1"
+    },
+    "primary_type": {
+      "canonical_type": "feeApproval(uint256 chainId,uint256 fee,uint256 expiry)",
+      "typehash": "0x40ac9f6aa27075e64c1ed1ea2e831b20b8c25efdeb6b79fd0cf683c9a9c50725"
+    },
+    "fee_semantics": "The signed fee is an LBTC-denominated maximum ceiling: AssetRouter verifies the digest over feeAction.fee, then charges min(configured maximumMintCommission, feeAction.fee)."
+  },
   "semantics": {
     "redeem_intent": "request redemption; source burns caller LBTC after sending a mailbox request",
     "redeem_output": "no output amount, completion time, or successful release is signed",
     "permit": "all owner, spender, allowance, deadline, v, r, and s operands are visible; this is an ECDSA permit submission and not a PQ signature claim",
     "standards": "approve, transfer, and transferFrom inherit OpenZeppelin ERC-20 behavior; permit inherits OpenZeppelin ERC20Permit",
+    "fee_approval": "getFeeDigest hashes the canonical feeApproval typehash with block.chainid, fee, and expiry under the StakedLBTC EIP-712 domain; AssetRouter treats signed fee as a maximum LBTC fee ceiling and may charge less",
+    "fee_display": "mainnet resolves @.to through the exact LBTC metadata leaf (8 decimals) and must refuse inexact scaled values rather than round",
     "dynamic_exclusions": "mint(bytes,bytes) and redeemForBtc(bytes,uint256) remain fail-closed because dynamic-tail clear signing is outside this phase"
   },
   "rpc": {
@@ -82,11 +102,11 @@
     ],
     "historical_query_binding": "Every eth_getCode, eth_getStorageAt, and eth_call request uses EIP-1898 blockHash plus requireCanonical:true."
   },
-  "boundary": "Historical fixed-block evidence covers only six accepted flat-static calls at chain 1 proxy 0x8236a87084f8b84306f72007f36f2618a5634494. Router, fees, routes, pause and access state, token metadata, implementations, mailbox processing, output, timing, and success remain mutable. No dynamic calldata, Bitcoin-output validation, fallback, blind-sign, hardware, production, shipment, or future-upgrade authority is supplied.",
+  "boundary": "Historical fixed-block evidence covers six accepted flat-static calls and the feeApproval EIP-712 type at chain 1 proxy 0x8236a87084f8b84306f72007f36f2618a5634494. The signed fee is only a maximum LBTC ceiling; the actually charged fee, router configuration, routes, pause/access state, implementations, mailbox processing, output, timing, signature validity, and success remain mutable. No Sepolia feeApproval admission, dynamic calldata, Bitcoin-output validation, fallback, blind-sign, hardware, production, shipment, or future-upgrade authority is supplied.",
   "artifacts": [
     {
       "path": "README.md",
-      "sha256": "f5e3f071d2d28b9ee132cfe4e93f4630c81c5baaab47eab59ce5349c20d53f1b"
+      "sha256": "a3da485d126ffd18b1fce673551259638649f7d14dd978c4fb2faab24c8f686c"
     },
     {
       "path": "abi/StakedLBTC.accepted-routes.abi.json",

@@ -2,6 +2,7 @@
   "schema_version": 2,
   "scope": "Four bounded bridge and exit ERC-7730 calldata families",
   "issue": "https://github.com/EthereumPhone/PQ1/issues/497",
+  "lombard_eip712_issue": "https://github.com/EthereumPhone/PQ1/issues/498",
   "captured_at_utc": "2026-07-28T10:45:30Z",
   "fixed_blocks": {
     "igra": {
@@ -84,6 +85,18 @@
         "selector": "0x30b93d85"
       }
     ],
+    "lombard_sepolia_eip712_refused": [
+      {
+        "canonical_type": "feeApproval(uint256 chainId,uint256 fee,uint256 expiry)",
+        "typehash": "0x40ac9f6aa27075e64c1ed1ea2e831b20b8c25efdeb6b79fd0cf683c9a9c50725",
+        "domain_name": "Lombard Staked Bitcoin",
+        "domain_version": "1",
+        "chain_id": 11155111,
+        "verifying_contract": "0x731eFa688F3679688cf60A3993b8658138953ED6",
+        "display_unit": "raw LBTC base units",
+        "reason": "The existing evidence package does not pin the Sepolia AssetRouter consumer required to prove that fee is a maximum ceiling."
+      }
+    ],
     "starkgate_admitted": [
       {
         "canonical_signature": "deposit(address,uint256,uint256)",
@@ -115,11 +128,11 @@
     ],
     "historical_query_binding": "Every eth_getCode, eth_getStorageAt, and eth_call request uses EIP-1898 blockHash plus requireCanonical:true."
   },
-  "boundary": "Historical fixed-block evidence covers only the listed route/deployment pairs. Mutable fees, limits, routes, peers, implementations, metadata, execution success, destination processing, fallback, blind signing, hardware, production, and shipment are outside authority.",
+  "boundary": "Historical fixed-block evidence covers only the listed route/deployment pairs. Sepolia feeApproval domain/type identity is recorded only to bind an exact structural refusal; this package does not pin the Sepolia AssetRouter consumer and grants no maximum-fee display authority. Mutable fees, limits, routes, peers, implementations, metadata, execution success, destination processing, fallback, blind signing, hardware, production, and shipment are outside authority.",
   "artifacts": [
     {
       "path": "README.md",
-      "sha256": "741853c89fba8dd7ff5d781b35691a72750ceb1dd8c1fa79abc8360dcc1bda44"
+      "sha256": "e756cc6f76d78ca53093396261e122d5de04f1910b3924e312c8e6571cb04d0e"
     },
     {
       "path": "abi/IgraKasExitBridge.routes.json",

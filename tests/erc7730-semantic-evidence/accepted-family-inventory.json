@@ -5,21 +5,21 @@
   "catalogue_snapshot": {
     "upstream_commit": "784c87c925e8438e7b4736b2af85a501f8d2a265",
     "upstream_tree": "8da8dba78c3e581bbd06c15cc681d07e570dcfb1",
-    "curated_corpus_sha256": "706ebd0d31223a27a1cdf5fc5b97999cd90fed4407f7d008a17146c0f049c18e",
-    "merkle_root": "d007b9678da8664249024b2c5b463cafe20b8aa4b33741e44ab0f7286d7748b2",
-    "accepted_leaf_count": 396,
-    "accepted_source_descriptor_count": 238,
-    "compiled_blob_bytes": 355397,
+    "curated_corpus_sha256": "63b444fa94b08a1a2ddd3740e8fae128877bac92a53dfcf59d7fcf9ffc99989f",
+    "merkle_root": "a8f1bf820f4ff11a2189da88523d87cba83d3e8c7a4f39caae96cc2a03b38fd4",
+    "accepted_leaf_count": 395,
+    "accepted_source_descriptor_count": 237,
+    "compiled_blob_bytes": 354777,
     "known_call_count": 4615,
     "category_source_counts": {
-      "pinned-evidence": 78,
+      "pinned-evidence": 79,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 27
+      "lower-priority-residual": 25
     },
     "category_leaf_counts": {
-      "pinned-evidence": 224,
+      "pinned-evidence": 225,
       "shared-standard-implementation": 133,
-      "lower-priority-residual": 39
+      "lower-priority-residual": 37
     }
   },
   "classification_contract": {
@@ -66,8 +66,8 @@
     },
     "bridge-exits": {
       "classification": "pinned-evidence",
-      "reason": "Pins operand-complete Igra exit, Lombard Sepolia, StarkGate deposit, and SwissBorg outbound NTT route semantics to exact fixed-block deployment/source authority.",
-      "scope": "Only the Igra requestExit route, six static Lombard Sepolia routes, StarkGate deposit, and the simple SwissBorg NTT transfer at the deployments enumerated by the package; Lombard dynamic mint/Bitcoin-redemption routes and the SwissBorg arbitrary-instructions overload remain exact-known refusals, while live routing, destination completion, and future upgrades are not implied.",
+      "reason": "Pins operand-complete Igra exit, Lombard Sepolia calldata, StarkGate deposit, and SwissBorg outbound NTT route semantics to exact fixed-block deployment/source authority; it also records why Lombard Sepolia feeApproval remains structurally refused.",
+      "scope": "Only the Igra requestExit route, six static Lombard Sepolia calldata routes, StarkGate deposit, and the simple SwissBorg NTT transfer at the deployments enumerated by the package; Lombard Sepolia feeApproval, dynamic mint/Bitcoin-redemption routes, and the SwissBorg arbitrary-instructions overload remain refusals, while live routing, destination completion, and future upgrades are not implied.",
       "paths": ["tests/erc7730-semantic-evidence/bridge-exits/manifest.json"]
     },
     "celo-election-vote": {
@@ -138,8 +138,8 @@
     },
     "lombard-lbtc": {
       "classification": "pinned-evidence",
-      "reason": "Pins the six admitted LBTC calldata routes and distinguishes redemption requests from completed redemption.",
-      "scope": "Only the reviewed Ethereum mainnet LBTC deployment and six static routes; Sepolia and Lombard EIP-712 families are not implied.",
+      "reason": "Pins the six admitted LBTC calldata routes plus the mainnet feeApproval EIP-712 deployment/domain/typehash and maximum-LBTC-fee semantics.",
+      "scope": "Only the reviewed Ethereum mainnet LBTC deployment, six static calldata routes, and feeApproval typed data; Sepolia feeApproval remains structurally refused and no other Lombard EIP-712 family is implied.",
       "paths": ["tests/erc7730-semantic-evidence/lombard-lbtc/manifest.json"]
     },
     "legacy-defi-v4-v2": {
@@ -734,14 +734,8 @@
   {
     "source": "lombard/eip712-network-fee-authorization-mainnet.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
-  },
-  {
-    "source": "lombard/eip712-network-fee-authorization-sepolia.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-eip712-families"
+    "classification": "pinned-evidence",
+    "evidence": "lombard-lbtc"
   },
   {
     "source": "midas/calldata-MinterVault.json",

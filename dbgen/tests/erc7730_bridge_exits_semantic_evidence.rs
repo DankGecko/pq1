@@ -32,6 +32,8 @@ const BORG_TOKEN: &str = "0x64d0f55Cd8C7133a9D7102b13987235F486F2224";
 
 const IGRA_SOURCE: &str = "registry/igra/calldata-KasExitBridge.json";
 const LOMBARD_SOURCE: &str = "registry/lombard/calldata-lbtc-sepolia.json";
+const LOMBARD_EIP712_SOURCE: &str =
+    "registry/lombard/eip712-network-fee-authorization-sepolia.json";
 const STARKGATE_SOURCE: &str = "registry/starkgate/calldata-StarkGate-STRK.json";
 const NTT_SOURCE: &str = "registry/swissborg/calldata-NttManager.json";
 
@@ -39,6 +41,9 @@ const IGRA_ROUTE: &str = "requestExit(string,uint64)";
 const STARKGATE_ROUTE: &str = "deposit(address,uint256,uint256)";
 const NTT_SIMPLE: &str = "transfer(uint256,uint16,bytes32)";
 const NTT_EXTENDED: &str = "transfer(uint256,uint16,bytes32,bytes32,bool,bytes)";
+const LOMBARD_FEE_APPROVAL_TYPE: &str = "feeApproval(uint256 chainId,uint256 fee,uint256 expiry)";
+const LOMBARD_FEE_APPROVAL_TYPEHASH: &str =
+    "40ac9f6aa27075e64c1ed1ea2e831b20b8c25efdeb6b79fd0cf683c9a9c50725";
 const LOMBARD_ACCEPTED: [&str; 6] = [
     "approve(address,uint256)",
     "burn(uint256)",
@@ -321,11 +326,19 @@ fn evidence_manifest_receipts_every_archived_byte_and_binds_requests() {
         .values()
     {
         for route in group.as_array().expect("route list") {
-            let signature = required_str(route, "canonical_signature");
-            assert_eq!(
-                required_str(route, "selector"),
-                format!("0x{}", hex::encode(selector(signature)))
-            );
+            if let Some(signature) = route["canonical_signature"].as_str() {
+                assert_eq!(
+                    required_str(route, "selector"),
+                    format!("0x{}", hex::encode(selector(signature)))
+                );
+            } else {
+                let canonical_type = required_str(route, "canonical_type");
+                assert_eq!(canonical_type, LOMBARD_FEE_APPROVAL_TYPE);
+                assert_eq!(
+                    required_str(route, "typehash"),
+                    format!("0x{}", hex::encode(keccak256(canonical_type.as_bytes())))
+                );
+            }
         }
     }
 }
@@ -493,6 +506,42 @@ fn verified_source_and_exact_abis_support_only_the_claimed_meaning() {
         ],
         "Lombard StakedLBTC",
     );
+    let lombard_sources = verified_sources(&lombard);
+    assert_fragments(
+        &lombard_sources["contracts/LBTC/StakedLBTC.sol"],
+        &["__ERC20Permit_init(\"Lombard Staked Bitcoin\");"],
+        "Lombard EIP-712 domain name",
+    );
+    assert_fragments(
+        &lombard_sources["contracts/LBTC/BaseLBTC.sol"],
+        &[
+            "function getFeeDigest(",
+            "Actions.FEE_APPROVAL_EIP712_ACTION,",
+            "block.chainid,",
+            "fee,",
+            "expiry",
+            "_hashTypedDataV4(",
+        ],
+        "Lombard feeApproval digest",
+    );
+    assert_fragments(
+        &lombard_sources["contracts/libs/Actions.sol"],
+        &[
+            "keccak256(\"feeApproval(uint256 chainId,uint256 fee,uint256 expiry)\")",
+            "0x40ac9f6aa27075e64c1ed1ea2e831b20b8c25efdeb6b79fd0cf683c9a9c50725",
+        ],
+        "Lombard feeApproval typehash",
+    );
+    assert_fragments(
+        &lombard_sources
+            ["@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol"],
+        &["__EIP712_init_unchained(name, \"1\");"],
+        "Lombard EIP-712 domain version",
+    );
+    assert_eq!(
+        hex::encode(keccak256(LOMBARD_FEE_APPROVAL_TYPE.as_bytes())),
+        LOMBARD_FEE_APPROVAL_TYPEHASH
+    );
 
     let starkgate = read_json(&evidence.join("blockscout/StarkGate.implementation.ethereum.json"));
     assert_eq!(starkgate["name"], "StarknetERC20Bridge");
@@ -599,6 +648,11 @@ fn curated_descriptors_are_hash_bound_and_semantically_explicit() {
             "f79cc8eb93054c1233f5cd044a2d4b2f5ba82a4162d4890dc182a1bbfea22fc7",
         ),
         (
+            LOMBARD_EIP712_SOURCE,
+            818,
+            "685a6b681290c537b09a609272c14fdcedb5eb03198143e12c8255421fd4bb46",
+        ),
+        (
             STARKGATE_SOURCE,
             1_004,
             "5f62cef09fa63eafeb5ed357707958dec92c60f7673e056a532f0597207b961b",
@@ -676,6 +730,38 @@ fn curated_descriptors_are_hash_bound_and_semantically_explicit() {
         lombard["display"]["formats"]["redeem(uint256 amount)"]["fields"][0]["label"],
         "LBTC to Burn"
     );
+    let lombard_eip712 = read_json(
+        &root
+            .join("secure/data/erc7730-registry")
+            .join(LOMBARD_EIP712_SOURCE),
+    );
+    assert_eq!(lombard_eip712["_pqsigner"]["deploymentFormats"], json!([]));
+    assert_eq!(
+        lombard_eip712["_pqsigner"]["refusalOnlyFormats"],
+        json!([LOMBARD_FEE_APPROVAL_TYPE])
+    );
+    assert_eq!(
+        lombard_eip712["context"]["eip712"]["deployments"],
+        json!([{
+            "chainId": 11_155_111,
+            "address": LOMBARD_PROXY
+        }])
+    );
+    assert_eq!(
+        lombard_eip712["context"]["eip712"]["domain"],
+        json!({
+            "name": "Lombard Staked Bitcoin",
+            "version": "1"
+        })
+    );
+    let fee = &lombard_eip712["display"]["formats"][LOMBARD_FEE_APPROVAL_TYPE]["fields"][1];
+    assert_eq!(fee["format"], "raw");
+    assert_eq!(fee["label"], "Maximum fee (LBTC base units)");
+    assert_eq!(fee["visible"], "always");
+    assert!(lombard_eip712["_curation_note"]
+        .as_str()
+        .expect("Sepolia refusal note")
+        .contains("does not compactly pin the Sepolia AssetRouter consumer"));
 
     let starkgate = read_json(
         &root
@@ -868,6 +954,24 @@ fn compiled_ir_admits_exact_routes_and_unsafe_calls_stay_exact_known_refusals() 
             &selector
         ));
     }
+
+    let lombard_eip712_source = registry_root.join(LOMBARD_EIP712_SOURCE);
+    assert!(
+        registry
+            .entries
+            .iter()
+            .all(|entry| entry.source != lombard_eip712_source),
+        "Sepolia feeApproval quarantine emitted a trusted leaf"
+    );
+    let quarantine_skip = skips
+        .iter()
+        .find(|skip| skip.source == lombard_eip712_source)
+        .expect("Sepolia feeApproval refusal is explicit in build receipts");
+    assert!(
+        quarantine_skip.reason.contains("refusalOnlyFormats"),
+        "unexpected Sepolia quarantine receipt: {}",
+        quarantine_skip.reason
+    );
 
     let ntt_entry = registry
         .entries

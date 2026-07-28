@@ -28,6 +28,14 @@ submits a classical ERC-2612 signature; and `redeem` burns LBTC while requesting
 later processing through mutable AssetRouter state. `mint(bytes,bytes)` and
 `redeemForBtc(bytes,uint256)` remain exact known-call refusals.
 
+The Sepolia EIP-712 declaration is also structurally refused. This package
+binds the StakedLBTC deployment/runtime, metadata, domain name/version, and the
+canonical
+`feeApproval(uint256 chainId,uint256 fee,uint256 expiry)` typehash, but it does
+not pin the Sepolia AssetRouter consumer needed to prove that `fee` is a
+maximum ceiling. The curated descriptor keeps the field's honest unit as raw
+LBTC base units and admits no trusted leaf.
+
 StarkGate's evidenced proxy is a multi-token ERC-20 bridge. `deposit` requires
 a currently serviced token, transfers the exact signed token amount into the
 bridge, validates the Starknet felt recipient, and forwards the exact signed
@@ -47,7 +55,8 @@ This is historical source/runtime authority for only the listed
 deployment/route pairs. It does not prove live fees, limits, routing, peers,
 metadata, balances, allowances, successful execution, destination-chain
 receipt, future proxy implementations, fallback, blind signing, hardware,
-production, or shipment readiness.
+production, or shipment readiness. In particular, it supplies no Sepolia
+feeApproval maximum-fee authority.
 
 Primary records:
 
