@@ -1,0 +1,1477 @@
+{
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_colOracle",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "_mandateRegistry",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "_collateralRegistry",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "newWeight",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "ColOracleBaseWeightUpdated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "baseScore",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "compositeScore",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "modulesUsed",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "CompositeScoreComputed",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "engine",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "bool",
+          "name": "status",
+          "type": "bool"
+        }
+      ],
+      "name": "EngineUpdated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "keeper",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "bool",
+          "name": "status",
+          "type": "bool"
+        }
+      ],
+      "name": "KeeperUpdated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "module",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "ModuleCallFailed",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "module",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "weight",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "moduleType",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "ModuleRegistered",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "module",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "ModuleRemoved",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "module",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "bool",
+          "name": "active",
+          "type": "bool"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "ModuleToggled",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "module",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "oldWeight",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "newWeight",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "ModuleWeightUpdated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "revokedBy",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "OverrideRevoked",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "score",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "reason",
+          "type": "string"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "setBy",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "OverrideSet",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "mandateId",
+          "type": "bytes32"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "score",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "minColScore",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "ScoreBelowThreshold",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "previousScore",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "newScore",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "dropBps",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "ScoreDegraded",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "previousScore",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "newScore",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "confidence",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "ScoreUpdated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "mandateId",
+          "type": "bytes32"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "score",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "shieldThreshold",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "ShieldThresholdReached",
+      "type": "event"
+    },
+    {
+      "inputs": [],
+      "name": "BPS_BASE",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "MAX_MODULES",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "MAX_SCORE",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "mandateId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "checkMandateHealth",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "healthy",
+          "type": "bool"
+        },
+        {
+          "internalType": "uint256",
+          "name": "worstScore",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "worstAsset",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "mandateId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "checkThresholds",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "colOracle",
+      "outputs": [
+        {
+          "internalType": "contract ICOLOracle",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "colOracleBaseWeight",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "collateralRegistry",
+      "outputs": [
+        {
+          "internalType": "contract ICollateralRegistry",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "degradationThresholdBps",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "engines",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getActiveScoresSnapshot",
+      "outputs": [
+        {
+          "internalType": "address[]",
+          "name": "assets",
+          "type": "address[]"
+        },
+        {
+          "internalType": "uint256[]",
+          "name": "scores",
+          "type": "uint256[]"
+        },
+        {
+          "internalType": "bool[]",
+          "name": "freshFlags",
+          "type": "bool[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "mandateId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "getAdjustedLTV",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "ltvBps",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getBestActiveCollateral",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "best",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "bestScore",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        }
+      ],
+      "name": "getCompositeScore",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "compositeScore",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "modulesUsed",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        }
+      ],
+      "name": "getCompositeScoreView",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "compositeScore",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "modulesUsed",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        }
+      ],
+      "name": "getEffectiveScore",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "score",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bool",
+          "name": "fresh",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "module",
+          "type": "address"
+        }
+      ],
+      "name": "getModuleStats",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "weight",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bool",
+          "name": "active",
+          "type": "bool"
+        },
+        {
+          "internalType": "uint256",
+          "name": "success",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "failed",
+          "type": "uint256"
+        },
+        {
+          "internalType": "string",
+          "name": "mType",
+          "type": "string"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getModules",
+      "outputs": [
+        {
+          "components": [
+            {
+              "internalType": "address",
+              "name": "module",
+              "type": "address"
+            },
+            {
+              "internalType": "uint256",
+              "name": "weight",
+              "type": "uint256"
+            },
+            {
+              "internalType": "bool",
+              "name": "active",
+              "type": "bool"
+            },
+            {
+              "internalType": "uint256",
+              "name": "callsSuccess",
+              "type": "uint256"
+            },
+            {
+              "internalType": "uint256",
+              "name": "callsFailed",
+              "type": "uint256"
+            },
+            {
+              "internalType": "string",
+              "name": "moduleType",
+              "type": "string"
+            }
+          ],
+          "internalType": "struct ScoreEngineV2.ScoreModuleConfig[]",
+          "name": "",
+          "type": "tuple[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "mandateId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "isRebalanceTriggered",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "mandateId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "isShieldTriggered",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "keepers",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint8",
+          "name": "",
+          "type": "uint8"
+        }
+      ],
+      "name": "levelMaxLTV",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint8",
+          "name": "",
+          "type": "uint8"
+        }
+      ],
+      "name": "levelMinScore",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "mandateRegistry",
+      "outputs": [
+        {
+          "internalType": "contract IMandateRegistry",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "moduleIndex",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "name": "modules",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "module",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "weight",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bool",
+          "name": "active",
+          "type": "bool"
+        },
+        {
+          "internalType": "uint256",
+          "name": "callsSuccess",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "callsFailed",
+          "type": "uint256"
+        },
+        {
+          "internalType": "string",
+          "name": "moduleType",
+          "type": "string"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "overrides",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "score",
+          "type": "uint256"
+        },
+        {
+          "internalType": "string",
+          "name": "reason",
+          "type": "string"
+        },
+        {
+          "internalType": "address",
+          "name": "setBy",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "setAt",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bool",
+          "name": "active",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "owner",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "pause",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "paused",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        }
+      ],
+      "name": "refreshScore",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address[]",
+          "name": "assets",
+          "type": "address[]"
+        }
+      ],
+      "name": "refreshScoreBatch",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "module",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "weight",
+          "type": "uint256"
+        }
+      ],
+      "name": "registerModule",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "module",
+          "type": "address"
+        }
+      ],
+      "name": "removeModule",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        }
+      ],
+      "name": "revokeScoreOverride",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "scoreCache",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "score",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "confidence",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "updatedAt",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bool",
+          "name": "isActive",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_oracle",
+          "type": "address"
+        }
+      ],
+      "name": "setColOracle",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "weight",
+          "type": "uint256"
+        }
+      ],
+      "name": "setColOracleBaseWeight",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "_bps",
+          "type": "uint256"
+        }
+      ],
+      "name": "setDegradationThreshold",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "engine",
+          "type": "address"
+        },
+        {
+          "internalType": "bool",
+          "name": "status",
+          "type": "bool"
+        }
+      ],
+      "name": "setEngine",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "keeper",
+          "type": "address"
+        },
+        {
+          "internalType": "bool",
+          "name": "status",
+          "type": "bool"
+        }
+      ],
+      "name": "setKeeper",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint8",
+          "name": "level",
+          "type": "uint8"
+        },
+        {
+          "internalType": "uint256",
+          "name": "maxLTV",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "minScore",
+          "type": "uint256"
+        }
+      ],
+      "name": "setLevelParams",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "module",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "newWeight",
+          "type": "uint256"
+        }
+      ],
+      "name": "setModuleWeight",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "asset",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "score",
+          "type": "uint256"
+        },
+        {
+          "internalType": "string",
+          "name": "reason",
+          "type": "string"
+        }
+      ],
+      "name": "setScoreOverride",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "_seconds",
+          "type": "uint256"
+        }
+      ],
+      "name": "setStalePeriod",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "stalePeriod",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "module",
+          "type": "address"
+        },
+        {
+          "internalType": "bool",
+          "name": "active",
+          "type": "bool"
+        }
+      ],
+      "name": "toggleModule",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "transferOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "unpause",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "additional_sources": [],
+  "can_be_visualized_via_sol2uml": true,
+  "certified": false,
+  "compiler_settings": {
+    "evmVersion": "prague",
+    "libraries": {},
+    "metadata": {
+      "appendCBOR": true,
+      "bytecodeHash": "ipfs",
+      "useLiteralContent": false
+    },
+    "optimizer": {
+      "enabled": true,
+      "runs": 200
+    },
+    "outputSelection": {
+      "*": {
+        "": [
+          "*"
+        ],
+        "*": [
+          "*"
+        ]
+      }
+    },
+    "remappings": [
+      "forge-std/=lib/forge-std/src/"
+    ],
+    "viaIR": true
+  },
+  "compiler_version": "v0.8.33+commit.64118f21",
+  "conflicting_implementations": null,
+  "constructor_args": "0x000000000000000000000000e1d56f8db28c4f257df4a501e1d304073475ce14000000000000000000000000d6fdf5fa1bd5a839755e0aa19aa25b5f7739444c0000000000000000000000006bc6c7e0154daca03cd3f1997b193f552a8fad4f",
+  "creation_bytecode": "0x60803461032f57601f61359b38819003918201601f19168301916001600160401b038311848410176103335780849260609460405283398101031261032f5761004781610347565b90610060604061005960208401610347565b9201610347565b603c600a55610708600d556101f4600e55906001600160a01b038316156102f8576001600160a01b03169081156102c0576001600160a01b031691821561027b575f80546001600160a01b03199081163317825560038054610100600160a81b03191660089490941b610100600160a81b031693909317909255600480548316939093178355600580549092169390931790556119647fdf7de25b7f1fd6d0b5205f0e18f1f35bd7b8d84cce336588d184533ce43a6f76556101907f13649b2456f1b42fef0f0040b3aaeabcd21a76a0f3f5defd4f583839455116e855611c207f72c6bfb7988af3a1efa6568f02a999bc52252641c659d85961ca3d372b57d5cf556101f47fd421a5181c571bba3f01190c922c3b2a896fc1d84e86c9f17ac10e67ebef8b5c55611e787fa50eece07c7db1631545c0069bd8f5f54d5935e215d59097edf258a44ba91634556102587f5d6016397a73f5e079297ac5a36fef17b4d9c3831618e63ab105738020ddd720556121347f64c15cc42be7899b001f818cf4433057002112c418d1d3a67cd5cb453051d33e556102bc7fc0da782485e77ae272268ae0a3ff44c1552ecb60b3743924de17a815e0a3cfd75590526123287f12d0c11577e2f0950f57c455c117796550b79f444811db8ba2f69c57b646c78455600c6020526103207f5b84bb9e0f5aa9cc45a8bb66468db5d4816d1e75ff86b5e1f1dd8d144dab80975560405161323f908161035c8239f35b60405162461bcd60e51b815260206004820152601360248201527f53453a207a65726f20636f6c6c61746572616c000000000000000000000000006044820152606490fd5b60405162461bcd60e51b815260206004820152601060248201526f53453a207a65726f206d616e6461746560801b6044820152606490fd5b60405162461bcd60e51b815260206004820152600f60248201526e53453a207a65726f206f7261636c6560881b6044820152606490fd5b5f80fd5b634e487b7160e01b5f52604160045260245ffd5b51906001600160a01b038216820361032f5756fe60806040526004361015610011575f80fd5b5f3560e01c80630a60fa60146121d357806311f367d614612174578063230cd76914611fae5780632680ea2e14611f2457806327ff622314611f08578063289a676114611edc57806329aad6d814611eab5780632cca5ce314611e3c578063322b69eb14611e0d57806334c60ddd14611d875780633bbd64bc14611d4a5780633f4ba83a14611d1a57806341ab44ee1461198b57806343067991146118b85780634ac358a61461189557806350aa366f1461182d5780635c975abb1461180b5780635f1e8c1b146117f05780635f9b1e24146117d3578063650776ac1461173e5780636d2a73cd1461170f5780636e026cdd146116dd57806381b2248a146116535780638456cb5914611620578063848988a8146114115780638da5cb5b146113ea5780638e6ae766146110a15780639016639c14610f06578063988e3cee14610ca05780639eaa1b0914610c84578063a063246114610a53578063a5b36a3614610a36578063a6f4ab2e146109e7578063ad1b132c1461093e578063aeb5c5e814610911578063b2494df3146107a0578063b3ded48a1461076e578063b4b4312614610746578063bf09f27414610709578063c78b9eac1461062e578063d1b9e853146105a6578063d330fadd1461057e578063d881d107146104c9578063e1582e35146104ac578063e6c2fa8814610474578063edffe3b714610429578063f2fde38b146103d5578063fbe68f5c146103595763fc3c3b6314610234575f80fd5b3461031e575f36600319011261031e576003546005546040516333002ab560e11b815260089290921c6001600160a01b0390811692915f9183916004918391165afa801561032a576102ad926040925f92610335575b508251808095819463c8faf29b60e01b83526020600484015260248301906124a9565b03915afa90811561032a575f905f926102e5575b50604080516001600160a01b039092168252602082019290925290819081015b0390f35b9150506040813d604011610322575b8161030160409383612365565b8101031261031e57602061031482612602565b910151905f6102c1565b5f80fd5b3d91506102f4565b6040513d5f823e3d90fd5b6103529192503d805f833e61034a8183612365565b810190612e4a565b905f61028a565b3461031e57602036600319011261031e577f95ede6ddf483750868cff2f6d9f89ea732919ce6c462c1975d64c8fe6300f54e60406004356103a460018060a01b035f541633146124e5565b601e811015806103ca575b6103b89061294a565b80600a558151908152426020820152a1005b5060648111156103af565b3461031e57602036600319011261031e576103ee6122fc565b5f5490610405336001600160a01b038416146124e5565b6001600160a01b03169061041a821515612c9c565b6001600160a01b031916175f55005b3461031e57602036600319011261031e5760043561045160018060a01b035f541633146124e5565b80151580610468575b61046390612ffb565b600e55005b506107d081111561045a565b3461031e57602036600319011261031e576001600160a01b036104956122fc565b165f526009602052602060405f2054604051908152f35b3461031e575f36600319011261031e576020600a54604051908152f35b3461031e57602036600319011261031e576001600160a01b036104ea6122fc565b165f52600960205260405f2054610502811515612edf565b5f19810190811161056a5761051690612479565b5060018101546102e160ff6002840154169260038101549061053f600560048301549201612386565b916040519586958652151560208601526040850152606084015260a0608084015260a0830190612426565b634e487b7160e01b5f52601160045260245ffd5b3461031e575f36600319011261031e576005546040516001600160a01b039091168152602090f35b3461031e577f786c9db967bf0c6b16c7c91adae8a8c554b15a57d373fa2059607300f4616c006105d53661244a565b906105ea60018060a01b035f541633146124e5565b6001600160a01b0381165f908152600160205260409020805460ff191660ff841515161790555b604080516001600160a01b039290921682529115156020820152a1005b3461031e57604036600319011261031e576106476122fc565b6024359061065f60018060a01b035f541633146124e5565b811515806106fe575b6106719061294a565b6001600160a01b03165f81815260096020526040902054909190610696811515612edf565b5f19810190811161056a57817fb158d0cff8d2ab15c94a442549584bb4f46957f0d9c5103e499fbeaeddc60c109260016106dc816106d386612479565b50015494612479565b500155604080519283526020830191909152429082015280606081015b0390a2005b506064821115610668565b3461031e57602036600319011261031e576001600160a01b0361072a6122fc565b165f526002602052602060ff60405f2054166040519015158152f35b3461031e575f36600319011261031e576004546040516001600160a01b039091168152602090f35b3461031e57602036600319011261031e5760ff6107896122ec565b165f52600b602052602060405f2054604051908152f35b3461031e575f36600319011261031e576008546107bc81612616565b906107ca6040519283612365565b80825260208201908160085f527ff3f7a9fe364faab93b216da50a3214154f22a0a2b415b23a84c8169e8b636ee35f915b8383106108a957848660405191829160208301906020845251809152604083019060408160051b85010192915f905b82821061083957505050500390f35b919360019193955060206108998192603f198a820301865260c060a08a518780831b038151168452858101518685015260408101511515604085015260608101516060850152608081015160808501520151918160a08201520190612426565b960192019201859493919261082a565b600660206001926040516108bc8161234a565b848060a01b038654168152848601548382015260ff6002870154161515604082015260038601546060820152600486015460808201526108fe60058701612386565b60a08201528152019201920191906107fb565b3461031e57602036600319011261031e5761093160ff6003541615612521565b61093c60043561303a565b005b3461031e5761094c3661244a565b9061096160018060a01b035f541633146124e5565b6001600160a01b03165f81815260096020526040902054909190610986811515612edf565b5f19810190811161056a57816109d77f87ccc4280644bbe2f738614997bda616cbbb63f78e58181d8d36a8a888ddf2ae9360026109c4604095612479565b50019060ff801983541691151516179055565b81519015158152426020820152a2005b3461031e57602036600319011261031e57600435610a0f60018060a01b035f541633146124e5565b61012c81101580610a29575b610a2490612ffb565b600d55005b5062015180811115610a1b565b3461031e575f36600319011261031e576020600d54604051908152f35b3461031e57602036600319011261031e57610a6c6122fc565b610a8060018060a01b035f541633146124e5565b6001600160a01b03165f81815260096020526040902054610aa2811515612edf565b5f19810181811161056a576008545f19810190811161056a57808203610bb9575b5050506008548015610ba5575f1901610adb81612479565b610b9257805f600592555f60018201555f60028201555f60038201555f600482015501610b088154612312565b9081610b4e575b5050600855805f5260096020525f60408120557f656a9035f6024bd62544dac4e0ce5f74fad7b6a642007795139dd19a8e915b856020604051428152a2005b81601f5f9311600114610b655750555b8280610b0f565b81835260208320610b8291601f0160051c841901906001016129f7565b8082528160208120915555610b5e565b634e487b7160e01b5f525f60045260245ffd5b634e487b7160e01b5f52603160045260245ffd5b610bc290612479565b5090610bcd81612479565b929092610b92578281610be79403610c08575b5050612479565b50546001600160a01b03165f90815260096020526040902055818080610ac3565b600580610c7d9360018060a01b0360018060a01b03825416166bffffffffffffffffffffffff60a01b85541617845560018101546001850155610c6160ff600283015416600286019060ff801983541691151516179055565b6003810154600385015560048101546004850155019101612f22565b8480610be0565b3461031e575f36600319011261031e5760206040516127108152f35b3461031e57602036600319011261031e576004356001600160401b03811161031e573660238201121561031e578060040135906001600160401b03821161031e573660248360051b8301011161031e57610cff60ff6003541615612521565b5f5b8281101561093c576024600582901b830101356001600160a01b038116919082900361031e5760249160a0600354610d3c60ff821615612521565b604051630d47875d60e41b815260048101849052948591829060081c5f196001861b01165afa92831561032a575f5f915f95610eb2575b50825f52600660205260405f209485549081151580610ea9575b610dfd575b8291610dcf610df49260038a5f5160206131ea5f395f51905f52989760019c55878c820155426002820155019060ff801983541691151516179055565b6040519384934292859094939260609260808301968352602083015260408201520152565b0390a201610d01565b929190610e0a8282612567565b90612710820291808304612710149015171561056a57610dcf5f5160206131ea5f395f51905f5295600360019a89610e4586610df498612587565b600e54811015610e61575b50509a505092505091929350610d92565b60408051888152602081018b9052908101919091524260608201527f63616ce213503c94fe81cf72b0f023555ca2ec75f14046c0484053b10bf91aec90608090a2898f610e50565b50818310610d8d565b9450505060a0833d8211610efe575b81610ece60a09383612365565b8101031261031e57825160036020850151101561031e57610ef660806060860151950161255a565b939087610d73565b3d9150610ec1565b3461031e575f36600319011261031e576005546040516333002ab560e11b8152905f90829060049082906001600160a01b03165afa90811561032a575f91611087575b508051610f6e610f5882612616565b91610f666040519384612365565b808352612616565b602082019190601f1901368337825190610fa0610f8a83612616565b92610f986040519485612365565b808452612616565b6020830190601f19013682375f5b8551811015610ff657600190610fd66001600160a01b03610fcf838a612ecb565b51166125a5565b610fe08388612ecb565b9015159052610fef8286612ecb565b5201610fae565b509161101494939160206040519687966060885260608801906124a9565b918683038288015251918281520192905f5b81811061106e57505050602090848303604086015251918281520191905f5b818110611053575050500390f35b82511515845285945060209384019390920191600101611045565b8251855287965060209485019490920191600101611026565b61109b91503d805f833e61034a8183612365565b81610f49565b3461031e57606036600319011261031e576110ba6122fc565b602435906044356001600160401b03811161031e573660238201121561031e578060040135926001600160401b03841161031e576024820191602485369201011161031e5761111360018060a01b035f541633146124e5565b6103e881116113b2578315611377576040519160a083018381106001600160401b038211176113635760405281835261114b85612996565b906111596040519283612365565b858252858160208401375f602087840101526020840191825260408401943386526060850142815260808601916001835260018060a01b031696875f52600760205260405f20965187556001870194519485516001600160401b038111611363578a966111d0826111ca8554612312565b85612a12565b602090601f83116001146112b4579261122b837f61acad925d6b3812de0aac94c01bea83221d3c81e6c9aacac1a90379ef9399629c97946004979461126f9a975f926112a9575b50508160011b915f199060031b1c19161790565b90555b516002850180546001600160a01b039092166001600160a01b0319909216919091179055516003840155519101805460ff191691151560ff16919091179055565b6040519283526060602084015281606084015260808301375f608085830101524260408201526080813395601f80199101168101030190a3005b015190505f80611217565b601f9a9695949392919a19821690835f528b5f20915f5b81811061133157509260049694927f61acad925d6b3812de0aac94c01bea83221d3c81e6c9aacac1a90379ef9399629d6001938361126f9c9b999710611319575b505050811b01905561122e565b01515f1960f88460031b161c191690558f808061130c565b939597999b9c9496989a5090916020600181928786015181550195019301908e9a98969492919c9b999795939c6112cb565b634e487b7160e01b5f52604160045260245ffd5b60405162461bcd60e51b815260206004820152601360248201527214d14e881c99585cdbdb881c995c5d5a5c9959606a1b6044820152606490fd5b60405162461bcd60e51b815260206004820152601060248201526f053453a2073636f7265203e20313030360841b6044820152606490fd5b3461031e575f36600319011261031e575f546040516001600160a01b039091168152602090f35b3461031e57602036600319011261031e5760245f60018060a01b036004541660405192838092635196db3f60e11b825260043560048301525afa90811561032a575f916115fe575b5060c081015160078110156115ea5760036114749114612837565b6005546040516333002ab560e11b81526001600160a01b0390911691905f81600481865afa90811561032a575f916115d0575b505f916103e8916001845b82518110156115af576001600160a01b036114cd8285612ecb565b5116805f52600660205260405f205460e08601906020825101516040519163908c987960e01b8352846004840152602483015260448201525f816064818d5afa90811561032a575f91611563575b5061152b575b50506001016114b2565b611534826125a5565b5091878310611556575b5051511161154e575b8780611521565b5f9150611547565b965096508095968961153e565b90503d805f833e6115748183612365565b81019060408183031261031e5761158a8161255a565b9160208201516001600160401b03811161031e576115a892016129b1565b508a61151b565b60608287876040519215158352602083015260018060a01b03166040820152f35b6115e491503d805f833e61034a8183612365565b836114a7565b634e487b7160e01b5f52602160045260245ffd5b61161a91503d805f833e6116128183612365565b81019061262d565b81611459565b3461031e575f36600319011261031e5761164460018060a01b035f541633146124e5565b6003805460ff19166001179055005b3461031e57602036600319011261031e5760043560085481101561031e5761167a90612479565b5060018060a01b038154166102e160018301549260ff6002820154169060038101546116ad600560048401549301612386565b9260405196879687526020870152151560408601526060850152608084015260c060a084015260c0830190612426565b3461031e57602036600319011261031e5760ff6116f86122ec565b165f52600c602052602060405f2054604051908152f35b3461031e57602036600319011261031e57604061173261172d6122fc565b612cdb565b82519182526020820152f35b3461031e57604036600319011261031e5760246117596122fc565b5f60018060a01b036004541660405193848092635196db3f60e11b8252823560048301525afa90811561032a576020925f926117ad575b5060e061179e60a0926125a5565b50920151015111604051908152f35b60a091925061179e6117ca60e0923d805f833e6116128183612365565b93925050611790565b3461031e575f36600319011261031e576020600e54604051908152f35b3461031e575f36600319011261031e576020604051600a8152f35b3461031e575f36600319011261031e57602060ff600354166040519015158152f35b3461031e57602036600319011261031e576118466122fc565b61185a60018060a01b035f541633146124e5565b61186e6001600160a01b0382161515612c9c565b60038054610100600160a81b03191660089290921b610100600160a81b0316919091179055005b3461031e57602036600319011261031e5760406117326118b36122fc565b612a7a565b3461031e57602036600319011261031e576118d16122fc565b6118e560018060a01b035f541633146124e5565b6001600160a01b03165f8181526007602052604090206004015460ff161561194d57805f526007602052600460405f200160ff198154169055604051904282527fa517c5f3962eed17734a6b11242db9e72e1923f7b2f68d81018135405a99e26b60203393a3005b60405162461bcd60e51b815260206004820152601660248201527553453a206e6f20616374697665206f7665727269646560501b6044820152606490fd5b3461031e57604036600319011261031e576119a46122fc565b602435906119bc60018060a01b035f541633146124e5565b6001600160a01b03168015611ce35781151580611cd8575b6119dd9061294a565b805f52600960205260405f2054611c935760085491600a831015611c4e57604051636465e69f60e01b8152905f82600481865afa91821561032a575f92611c0f575b50604051611a2c8161234a565b8381526020810190828252604081019060018252606081015f815260808201915f835260a0810198878a526801000000000000000081101561136357806001611a789201600855612479565b949094610b9257905184546001600160a01b039091166001600160a01b031990911617845593516001840155925160028301805460ff191691151560ff16919091179055600592516003830155516004820155019351938451946001600160401b03861161136357611af486611aee8454612312565b84612a12565b602090601f8711600114611b8a579580611b45927ff595de18d97eadc684658016ec895a8c06f151bc6e842edd3b1c37ad47e275e697985f92611b7f5750508160011b915f199060031b1c19161790565b90555b600854845f52600960205260405f2055611b746040519283928352606060208401526060830190612426565b4260408301520390a2005b015190508880611217565b90601f19871691835f52815f20925f5b818110611bf757509160019391897ff595de18d97eadc684658016ec895a8c06f151bc6e842edd3b1c37ad47e275e6999a9410611bdf575b505050811b019055611b48565b01515f1960f88460031b161c19169055878080611bd2565b92936020600181928786015181550195019301611b9a565b9091503d805f833e611c218183612365565b810160208282031261031e5781516001600160401b03811161031e57611c4792016129b1565b9084611a1f565b60405162461bcd60e51b815260206004820152601760248201527f53453a206d6178206d6f64756c657320726561636865640000000000000000006044820152606490fd5b60405162461bcd60e51b815260206004820152601d60248201527f53453a206d6f64756c6520616c726561647920726567697374657265640000006044820152606490fd5b5060648211156119d4565b60405162461bcd60e51b815260206004820152600f60248201526e53453a207a65726f206d6f64756c6560881b6044820152606490fd5b3461031e575f36600319011261031e57611d3e60018060a01b035f541633146124e5565b6003805460ff19169055005b3461031e57602036600319011261031e576001600160a01b03611d6b6122fc565b165f526001602052602060ff60405f2054166040519015158152f35b3461031e57604036600319011261031e576024611da26122fc565b5f60018060a01b036004541660405193848092635196db3f60e11b8252823560048301525afa90811561032a576020925f92611de7575b5060e061179e60c0926125a5565b60c091925061179e611e0460e0923d805f833e6116128183612365565b93925050611dd9565b3461031e57604036600319011261031e576020611e34611e2b6122fc565b6024359061287c565b604051908152f35b3461031e577f5828a45825a23d28a669e540bd1ee6621e0f24a2a5f17475073e0d58b03bdfa2611e6b3661244a565b90611e8060018060a01b035f541633146124e5565b6001600160a01b0381165f908152600260205260409020805460ff191660ff84151516179055610611565b3461031e57602036600319011261031e576040611ece611ec96122fc565b6125a5565b825191825215156020820152f35b3461031e575f36600319011261031e5760035460405160089190911c6001600160a01b03168152602090f35b3461031e575f36600319011261031e5760206040516103e88152f35b3461031e57602036600319011261031e576001600160a01b03611f456122fc565b165f52600760205260405f208054611f5f60018301612386565b9160018060a01b036002820154169060ff600460038301549201541690611f98604051958695865260a0602087015260a0860190612426565b9260408501526060840152151560808301520390f35b3461031e57602036600319011261031e57611fc76122fc565b602460a060035492611fdc60ff851615612521565b60405192838092630d47875d60e41b8252600180861b031695866004830152600180861b039060081c165afa90811561032a575f5f915f9361211f575b50835f52600660205260405f2080549081151580612116575b612071575b90610dcf5f5160206131ea5f395f51905f5295600384866106f99655876001820155426002820155019060ff801983541691151516179055565b9061207c8382612567565b91612710830292808404612710149015171561056a575f5160206131ea5f395f51905f52956003610dcf92896120b5866106f998612587565b600e548110156120ce575b505093945050955050612037565b60408051888152602081018b9052908101919091524260608201527f63616ce213503c94fe81cf72b0f023555ca2ec75f14046c0484053b10bf91aec90608090a2898b6120c0565b50818310612032565b9250505060a0813d60a01161216c575b8161213c60a09383612365565b8101031261031e57805160036020830151101561031e5761216460806060840151930161255a565b919084612019565b3d915061212f565b3461031e57602036600319011261031e576001600160a01b036121956122fc565b165f526006602052608060405f2080549060018101549060ff6003600283015492015416916040519384526020840152604083015215156060820152f35b3461031e57606036600319011261031e576121ec6122ec565b60243560ff6044359261220960018060a01b035f541633146124e5565b1690600482116122b357612710811161227d576103e8831161224257815f52600b60205260405f20555f52600c60205260405f20555f80f35b60405162461bcd60e51b8152602060048201526013602482015272053453a206d696e53636f7265203e203130303606c1b6044820152606490fd5b60405162461bcd60e51b815260206004820152600e60248201526d53453a204c5456203e203130302560901b6044820152606490fd5b60405162461bcd60e51b815260206004820152601160248201527014d14e881a5b9d985b1a59081b195d995b607a1b6044820152606490fd5b6004359060ff8216820361031e57565b600435906001600160a01b038216820361031e57565b90600182811c92168015612340575b602083101461232c57565b634e487b7160e01b5f52602260045260245ffd5b91607f1691612321565b60c081019081106001600160401b0382111761136357604052565b90601f801991011681019081106001600160401b0382111761136357604052565b9060405191825f82549261239984612312565b808452936001811690811561240457506001146123c0575b506123be92500383612365565b565b90505f9291925260205f20905f915b8183106123e85750509060206123be928201015f6123b1565b60209193508060019154838589010152019101909184926123cf565b9050602092506123be94915060ff191682840152151560051b8201015f6123b1565b805180835260209291819084018484015e5f828201840152601f01601f1916010190565b604090600319011261031e576004356001600160a01b038116810361031e5790602435801515810361031e5790565b6008548110156124955760085f52600660205f20910201905f90565b634e487b7160e01b5f52603260045260245ffd5b90602080835192838152019201905f5b8181106124c65750505090565b82516001600160a01b03168452602093840193909201916001016124b9565b156124ec57565b60405162461bcd60e51b815260206004820152600d60248201526c29a29d103737ba1037bbb732b960991b6044820152606490fd5b1561252857565b60405162461bcd60e51b815260206004820152600a60248201526914d14e881c185d5cd95960b21b6044820152606490fd5b5190811515820361031e57565b9190820391821161056a57565b8181029291811591840414171561056a57565b8115612591570490565b634e487b7160e01b5f52601260045260245ffd5b6001600160a01b0381165f818152600760205260409020600481015491929160ff166125f857506125d590612cdb565b50905f5260066020526125ef600260405f20015442612567565b600d5410159091565b9150505490600190565b51906001600160a01b038216820361031e57565b6001600160401b0381116113635760051b60200190565b60208183031261031e578051906001600160401b03821161031e5701808203916102c0831261031e57604051926101e084018481106001600160401b03821117611363576040528251845261268460208401612602565b602085015261269560408401612602565b60408501526126a660608401612602565b60608501526126b760808401612602565b608085015260a0830151600581101561031e5760a085015260c083015190600782101561031e576101009160c086015260df19011261031e5760405161010081018181106001600160401b038211176113635760405260e08301518152610100830151602082015261012083015160408201526101408301516060820152610160830151608082015261018083015160a08201526101a083015160c08201526127636101c0840161255a565b60e082015260e08401526101e08201516001600160401b03811161031e5782019080601f8301121561031e5781519061279b82612616565b926127a96040519485612365565b82845260208085019360051b82010191821161031e57602001915b81831061281e575050506101008301526102008101516101208301526102208101516101408301526102408101516101608301526102608101516101808301526102808101516101a08301526102a001516101c082015290565b8251600881101561031e578152602092830192016127c4565b1561283e57565b60405162461bcd60e51b815260206004820152601660248201527553453a206d616e64617465206e6f742061637469766560501b6044820152606490fd5b905f60018060a01b036004541691602460405180948193635196db3f60e11b835260048301525afa90811561032a575f91612930575b5060c081015160078110156115ea5760036128cd9114612837565b60e081019160e08351015115612929576128e6906125a5565b50825151116129235760a0015160058110156115ea5760ff165f52600b602052602060405f2054915101518082105f1461291e575090565b905090565b50505f90565b5050505f90565b61294491503d805f833e6116128183612365565b5f6128b2565b1561295157565b60405162461bcd60e51b815260206004820152601760248201527f53453a20776569676874206f7574206f662072616e67650000000000000000006044820152606490fd5b6001600160401b03811161136357601f01601f191660200190565b81601f8201121561031e578051906129c882612996565b926129d66040519485612365565b8284526020838301011161031e57815f9260208093018386015e8301015290565b5f5b828110612a0557505050565b5f828201556001016129f9565b91601f8211612a2057505050565b808211612a2c57505050565b6123be925f5260205f20916020601f830160051c9210612a57575b601f82910160051c0391016129f7565b5f9150612a47565b9190820180921161056a57565b5f19811461056a5760010190565b6001600160a01b0381165f81815260066020526040812054600854909491939192918115612c9457600a5491612ab08388612574565b92915f5b828110612b2d57505081159050612b2557612ace91612587565b935b6103e88511612b1b575b604080519182526020820186905281018490524260608201527f0a4e77faee25a613a4a526e85646b24b426946bf583570f333b4c66a882d808190608090a2565b6103e89450612ada565b505083612ad0565b612b3681612479565b5060ff60028201541680612c87575b612b53575b50600101612ab4565b805460405163aaebdc2960e01b81526001600160a01b038581166004830152602482018d9052909160209183916044918391165afa5f9181612c54575b50612bf857509081600460019301612ba88154612a6c565b905554604080516001600160a01b038616815242602082015260a085901b859003909216917f69ef1e8db7a4b0600ddb61c5dc5c0e5429c5b382cd7dfd7cc0a0e0a8afe12a249190a25b90612b4a565b986003612c318b612c449498996103e86001979e9211612c4a575b612c2b90612c25888c01548094612574565b90612a5f565b99612a5f565b9601612c3d8154612a6c565b9055612a6c565b97612bf2565b6103e89150612c13565b9091506020813d8211612c7f575b81612c6f60209383612365565b8101031261031e5751905f612b90565b3d9150612c62565b5060018101541515612b45565b505f93505050565b15612ca357565b60405162461bcd60e51b815260206004820152601060248201526f53453a207a65726f206164647265737360801b6044820152606490fd5b6001600160a01b0381165f90815260066020526040812054600854919290918015612e4157600a5490612d0e8285612574565b91925f5b828110612d4957505082159050612d4157612d2d9250612587565b915b6103e88311612d3a57565b6103e89250565b505091612d2f565b612d5281612479565b5060ff60028201541680612e34575b612d6f575b50600101612d12565b805460405163aaebdc2960e01b81526001600160a01b038581166004830152602482018a9052909160209183916044918391165afa5f9181612e01575b50612db8575b50612d66565b612def91816001949a98976103e8612de9949211612df7575b612c2586612de3939401548094612574565b96612a5f565b95612a6c565b96905f612db2565b6103e89150612dd1565b9091506020813d8211612e2c575b81612e1c60209383612365565b8101031261031e5751905f612dac565b3d9150612e0f565b5060018101541515612d61565b50509050905f90565b60208183031261031e578051906001600160401b03821161031e57019080601f8301121561031e578151612e7d81612616565b92612e8b6040519485612365565b81845260208085019260051b82010192831161031e57602001905b828210612eb35750505090565b60208091612ec084612602565b815201910190612ea6565b80518210156124955760209160051b010190565b15612ee657565b60405162461bcd60e51b815260206004820152601460248201527314d14e881b5bd91d5b19481b9bdd08199bdd5b9960621b6044820152606490fd5b919091828114612ff657612f368354612312565b6001600160401b03811161136357612f5281611aee8454612312565b5f93601f8211600114612f9057612f8192939482915f92612f855750508160011b915f199060031b1c19161790565b9055565b015490505f80611217565b601f198216905f5260205f2094835f5260205f20915f5b818110612fde57509583600195969710612fc6575b505050811b019055565b01545f1960f88460031b161c191690555f8080612fbc565b9192600180602092868b015481550194019201612fa7565b509050565b1561300257565b60405162461bcd60e51b815260206004820152601060248201526f53453a206f7574206f662072616e676560801b6044820152606490fd5b6024905f60018060a01b036004541660405193848092635196db3f60e11b82528560048301525afa91821561032a575f926131cd575b5060c082015160078110156115ea57600219016131c9576005546040516333002ab560e11b815292905f90849060049082906001600160a01b03165afa92831561032a575f936131ad575b505f5b83518110156131a757600190836001600160a01b036130dd8388612ecb565b51166130e8816125a5565b5060a060e087018484825151808610613165575b50505051015190818110613115575b50505050016130be565b7f9a4d045766eb21544fd89df9b510bf930118ce5d72a5ef0ee613d7b010f5ac94916131596040519283924291846040919493926060820195825260208201520152565b0390a3835f808061310b565b60408051878152602081019290925242908201527f5a43687f542ed1e0b71f739318915e11885d8d7f740e01b1bb7bb6d53698fa7e90606090a384845f6130fc565b50505050565b6131c29193503d805f833e61034a8183612365565b915f6130bb565b5050565b6131e29192503d805f833e6116128183612365565b905f61307056fea34a8b326a71cee8afee1a590ad39f41e35e9be714cc6a3b1b081aedc4536b30a2646970667358221220c7b8f309c663d0c1f2045b66db76b706e19aa9c95c8020ad57dec21c52252b5064736f6c63430008210033000000000000000000000000e1d56f8db28c4f257df4a501e1d304073475ce14000000000000000000000000d6fdf5fa1bd5a839755e0aa19aa25b5f7739444c0000000000000000000000006bc6c7e0154daca03cd3f1997b193f552a8fad4f",
+  "creation_status": "success",
+  "decoded_constructor_args": [
+    [
+      "0xe1D56f8DB28C4F257dF4A501e1D304073475ce14",
+      {
+        "internalType": "address",
+        "name": "_colOracle",
+        "type": "address"
+      }
+    ],
+    [
+      "0xd6fdF5fa1BD5A839755E0aa19Aa25b5f7739444c",
+      {
+        "internalType": "address",
+        "name": "_mandateRegistry",
+        "type": "address"
+      }
+    ],
+    [
+      "0x6Bc6c7E0154dAcA03Cd3f1997b193f552A8Fad4F",
+      {
+        "internalType": "address",
+        "name": "_collateralRegistry",
+        "type": "address"
+      }
+    ]
+  ],
+  "deployed_bytecode": "0x60806040526004361015610011575f80fd5b5f3560e01c80630a60fa60146121d357806311f367d614612174578063230cd76914611fae5780632680ea2e14611f2457806327ff622314611f08578063289a676114611edc57806329aad6d814611eab5780632cca5ce314611e3c578063322b69eb14611e0d57806334c60ddd14611d875780633bbd64bc14611d4a5780633f4ba83a14611d1a57806341ab44ee1461198b57806343067991146118b85780634ac358a61461189557806350aa366f1461182d5780635c975abb1461180b5780635f1e8c1b146117f05780635f9b1e24146117d3578063650776ac1461173e5780636d2a73cd1461170f5780636e026cdd146116dd57806381b2248a146116535780638456cb5914611620578063848988a8146114115780638da5cb5b146113ea5780638e6ae766146110a15780639016639c14610f06578063988e3cee14610ca05780639eaa1b0914610c84578063a063246114610a53578063a5b36a3614610a36578063a6f4ab2e146109e7578063ad1b132c1461093e578063aeb5c5e814610911578063b2494df3146107a0578063b3ded48a1461076e578063b4b4312614610746578063bf09f27414610709578063c78b9eac1461062e578063d1b9e853146105a6578063d330fadd1461057e578063d881d107146104c9578063e1582e35146104ac578063e6c2fa8814610474578063edffe3b714610429578063f2fde38b146103d5578063fbe68f5c146103595763fc3c3b6314610234575f80fd5b3461031e575f36600319011261031e576003546005546040516333002ab560e11b815260089290921c6001600160a01b0390811692915f9183916004918391165afa801561032a576102ad926040925f92610335575b508251808095819463c8faf29b60e01b83526020600484015260248301906124a9565b03915afa90811561032a575f905f926102e5575b50604080516001600160a01b039092168252602082019290925290819081015b0390f35b9150506040813d604011610322575b8161030160409383612365565b8101031261031e57602061031482612602565b910151905f6102c1565b5f80fd5b3d91506102f4565b6040513d5f823e3d90fd5b6103529192503d805f833e61034a8183612365565b810190612e4a565b905f61028a565b3461031e57602036600319011261031e577f95ede6ddf483750868cff2f6d9f89ea732919ce6c462c1975d64c8fe6300f54e60406004356103a460018060a01b035f541633146124e5565b601e811015806103ca575b6103b89061294a565b80600a558151908152426020820152a1005b5060648111156103af565b3461031e57602036600319011261031e576103ee6122fc565b5f5490610405336001600160a01b038416146124e5565b6001600160a01b03169061041a821515612c9c565b6001600160a01b031916175f55005b3461031e57602036600319011261031e5760043561045160018060a01b035f541633146124e5565b80151580610468575b61046390612ffb565b600e55005b506107d081111561045a565b3461031e57602036600319011261031e576001600160a01b036104956122fc565b165f526009602052602060405f2054604051908152f35b3461031e575f36600319011261031e576020600a54604051908152f35b3461031e57602036600319011261031e576001600160a01b036104ea6122fc565b165f52600960205260405f2054610502811515612edf565b5f19810190811161056a5761051690612479565b5060018101546102e160ff6002840154169260038101549061053f600560048301549201612386565b916040519586958652151560208601526040850152606084015260a0608084015260a0830190612426565b634e487b7160e01b5f52601160045260245ffd5b3461031e575f36600319011261031e576005546040516001600160a01b039091168152602090f35b3461031e577f786c9db967bf0c6b16c7c91adae8a8c554b15a57d373fa2059607300f4616c006105d53661244a565b906105ea60018060a01b035f541633146124e5565b6001600160a01b0381165f908152600160205260409020805460ff191660ff841515161790555b604080516001600160a01b039290921682529115156020820152a1005b3461031e57604036600319011261031e576106476122fc565b6024359061065f60018060a01b035f541633146124e5565b811515806106fe575b6106719061294a565b6001600160a01b03165f81815260096020526040902054909190610696811515612edf565b5f19810190811161056a57817fb158d0cff8d2ab15c94a442549584bb4f46957f0d9c5103e499fbeaeddc60c109260016106dc816106d386612479565b50015494612479565b500155604080519283526020830191909152429082015280606081015b0390a2005b506064821115610668565b3461031e57602036600319011261031e576001600160a01b0361072a6122fc565b165f526002602052602060ff60405f2054166040519015158152f35b3461031e575f36600319011261031e576004546040516001600160a01b039091168152602090f35b3461031e57602036600319011261031e5760ff6107896122ec565b165f52600b602052602060405f2054604051908152f35b3461031e575f36600319011261031e576008546107bc81612616565b906107ca6040519283612365565b80825260208201908160085f527ff3f7a9fe364faab93b216da50a3214154f22a0a2b415b23a84c8169e8b636ee35f915b8383106108a957848660405191829160208301906020845251809152604083019060408160051b85010192915f905b82821061083957505050500390f35b919360019193955060206108998192603f198a820301865260c060a08a518780831b038151168452858101518685015260408101511515604085015260608101516060850152608081015160808501520151918160a08201520190612426565b960192019201859493919261082a565b600660206001926040516108bc8161234a565b848060a01b038654168152848601548382015260ff6002870154161515604082015260038601546060820152600486015460808201526108fe60058701612386565b60a08201528152019201920191906107fb565b3461031e57602036600319011261031e5761093160ff6003541615612521565b61093c60043561303a565b005b3461031e5761094c3661244a565b9061096160018060a01b035f541633146124e5565b6001600160a01b03165f81815260096020526040902054909190610986811515612edf565b5f19810190811161056a57816109d77f87ccc4280644bbe2f738614997bda616cbbb63f78e58181d8d36a8a888ddf2ae9360026109c4604095612479565b50019060ff801983541691151516179055565b81519015158152426020820152a2005b3461031e57602036600319011261031e57600435610a0f60018060a01b035f541633146124e5565b61012c81101580610a29575b610a2490612ffb565b600d55005b5062015180811115610a1b565b3461031e575f36600319011261031e576020600d54604051908152f35b3461031e57602036600319011261031e57610a6c6122fc565b610a8060018060a01b035f541633146124e5565b6001600160a01b03165f81815260096020526040902054610aa2811515612edf565b5f19810181811161056a576008545f19810190811161056a57808203610bb9575b5050506008548015610ba5575f1901610adb81612479565b610b9257805f600592555f60018201555f60028201555f60038201555f600482015501610b088154612312565b9081610b4e575b5050600855805f5260096020525f60408120557f656a9035f6024bd62544dac4e0ce5f74fad7b6a642007795139dd19a8e915b856020604051428152a2005b81601f5f9311600114610b655750555b8280610b0f565b81835260208320610b8291601f0160051c841901906001016129f7565b8082528160208120915555610b5e565b634e487b7160e01b5f525f60045260245ffd5b634e487b7160e01b5f52603160045260245ffd5b610bc290612479565b5090610bcd81612479565b929092610b92578281610be79403610c08575b5050612479565b50546001600160a01b03165f90815260096020526040902055818080610ac3565b600580610c7d9360018060a01b0360018060a01b03825416166bffffffffffffffffffffffff60a01b85541617845560018101546001850155610c6160ff600283015416600286019060ff801983541691151516179055565b6003810154600385015560048101546004850155019101612f22565b8480610be0565b3461031e575f36600319011261031e5760206040516127108152f35b3461031e57602036600319011261031e576004356001600160401b03811161031e573660238201121561031e578060040135906001600160401b03821161031e573660248360051b8301011161031e57610cff60ff6003541615612521565b5f5b8281101561093c576024600582901b830101356001600160a01b038116919082900361031e5760249160a0600354610d3c60ff821615612521565b604051630d47875d60e41b815260048101849052948591829060081c5f196001861b01165afa92831561032a575f5f915f95610eb2575b50825f52600660205260405f209485549081151580610ea9575b610dfd575b8291610dcf610df49260038a5f5160206131ea5f395f51905f52989760019c55878c820155426002820155019060ff801983541691151516179055565b6040519384934292859094939260609260808301968352602083015260408201520152565b0390a201610d01565b929190610e0a8282612567565b90612710820291808304612710149015171561056a57610dcf5f5160206131ea5f395f51905f5295600360019a89610e4586610df498612587565b600e54811015610e61575b50509a505092505091929350610d92565b60408051888152602081018b9052908101919091524260608201527f63616ce213503c94fe81cf72b0f023555ca2ec75f14046c0484053b10bf91aec90608090a2898f610e50565b50818310610d8d565b9450505060a0833d8211610efe575b81610ece60a09383612365565b8101031261031e57825160036020850151101561031e57610ef660806060860151950161255a565b939087610d73565b3d9150610ec1565b3461031e575f36600319011261031e576005546040516333002ab560e11b8152905f90829060049082906001600160a01b03165afa90811561032a575f91611087575b508051610f6e610f5882612616565b91610f666040519384612365565b808352612616565b602082019190601f1901368337825190610fa0610f8a83612616565b92610f986040519485612365565b808452612616565b6020830190601f19013682375f5b8551811015610ff657600190610fd66001600160a01b03610fcf838a612ecb565b51166125a5565b610fe08388612ecb565b9015159052610fef8286612ecb565b5201610fae565b509161101494939160206040519687966060885260608801906124a9565b918683038288015251918281520192905f5b81811061106e57505050602090848303604086015251918281520191905f5b818110611053575050500390f35b82511515845285945060209384019390920191600101611045565b8251855287965060209485019490920191600101611026565b61109b91503d805f833e61034a8183612365565b81610f49565b3461031e57606036600319011261031e576110ba6122fc565b602435906044356001600160401b03811161031e573660238201121561031e578060040135926001600160401b03841161031e576024820191602485369201011161031e5761111360018060a01b035f541633146124e5565b6103e881116113b2578315611377576040519160a083018381106001600160401b038211176113635760405281835261114b85612996565b906111596040519283612365565b858252858160208401375f602087840101526020840191825260408401943386526060850142815260808601916001835260018060a01b031696875f52600760205260405f20965187556001870194519485516001600160401b038111611363578a966111d0826111ca8554612312565b85612a12565b602090601f83116001146112b4579261122b837f61acad925d6b3812de0aac94c01bea83221d3c81e6c9aacac1a90379ef9399629c97946004979461126f9a975f926112a9575b50508160011b915f199060031b1c19161790565b90555b516002850180546001600160a01b039092166001600160a01b0319909216919091179055516003840155519101805460ff191691151560ff16919091179055565b6040519283526060602084015281606084015260808301375f608085830101524260408201526080813395601f80199101168101030190a3005b015190505f80611217565b601f9a9695949392919a19821690835f528b5f20915f5b81811061133157509260049694927f61acad925d6b3812de0aac94c01bea83221d3c81e6c9aacac1a90379ef9399629d6001938361126f9c9b999710611319575b505050811b01905561122e565b01515f1960f88460031b161c191690558f808061130c565b939597999b9c9496989a5090916020600181928786015181550195019301908e9a98969492919c9b999795939c6112cb565b634e487b7160e01b5f52604160045260245ffd5b60405162461bcd60e51b815260206004820152601360248201527214d14e881c99585cdbdb881c995c5d5a5c9959606a1b6044820152606490fd5b60405162461bcd60e51b815260206004820152601060248201526f053453a2073636f7265203e20313030360841b6044820152606490fd5b3461031e575f36600319011261031e575f546040516001600160a01b039091168152602090f35b3461031e57602036600319011261031e5760245f60018060a01b036004541660405192838092635196db3f60e11b825260043560048301525afa90811561032a575f916115fe575b5060c081015160078110156115ea5760036114749114612837565b6005546040516333002ab560e11b81526001600160a01b0390911691905f81600481865afa90811561032a575f916115d0575b505f916103e8916001845b82518110156115af576001600160a01b036114cd8285612ecb565b5116805f52600660205260405f205460e08601906020825101516040519163908c987960e01b8352846004840152602483015260448201525f816064818d5afa90811561032a575f91611563575b5061152b575b50506001016114b2565b611534826125a5565b5091878310611556575b5051511161154e575b8780611521565b5f9150611547565b965096508095968961153e565b90503d805f833e6115748183612365565b81019060408183031261031e5761158a8161255a565b9160208201516001600160401b03811161031e576115a892016129b1565b508a61151b565b60608287876040519215158352602083015260018060a01b03166040820152f35b6115e491503d805f833e61034a8183612365565b836114a7565b634e487b7160e01b5f52602160045260245ffd5b61161a91503d805f833e6116128183612365565b81019061262d565b81611459565b3461031e575f36600319011261031e5761164460018060a01b035f541633146124e5565b6003805460ff19166001179055005b3461031e57602036600319011261031e5760043560085481101561031e5761167a90612479565b5060018060a01b038154166102e160018301549260ff6002820154169060038101546116ad600560048401549301612386565b9260405196879687526020870152151560408601526060850152608084015260c060a084015260c0830190612426565b3461031e57602036600319011261031e5760ff6116f86122ec565b165f52600c602052602060405f2054604051908152f35b3461031e57602036600319011261031e57604061173261172d6122fc565b612cdb565b82519182526020820152f35b3461031e57604036600319011261031e5760246117596122fc565b5f60018060a01b036004541660405193848092635196db3f60e11b8252823560048301525afa90811561032a576020925f926117ad575b5060e061179e60a0926125a5565b50920151015111604051908152f35b60a091925061179e6117ca60e0923d805f833e6116128183612365565b93925050611790565b3461031e575f36600319011261031e576020600e54604051908152f35b3461031e575f36600319011261031e576020604051600a8152f35b3461031e575f36600319011261031e57602060ff600354166040519015158152f35b3461031e57602036600319011261031e576118466122fc565b61185a60018060a01b035f541633146124e5565b61186e6001600160a01b0382161515612c9c565b60038054610100600160a81b03191660089290921b610100600160a81b0316919091179055005b3461031e57602036600319011261031e5760406117326118b36122fc565b612a7a565b3461031e57602036600319011261031e576118d16122fc565b6118e560018060a01b035f541633146124e5565b6001600160a01b03165f8181526007602052604090206004015460ff161561194d57805f526007602052600460405f200160ff198154169055604051904282527fa517c5f3962eed17734a6b11242db9e72e1923f7b2f68d81018135405a99e26b60203393a3005b60405162461bcd60e51b815260206004820152601660248201527553453a206e6f20616374697665206f7665727269646560501b6044820152606490fd5b3461031e57604036600319011261031e576119a46122fc565b602435906119bc60018060a01b035f541633146124e5565b6001600160a01b03168015611ce35781151580611cd8575b6119dd9061294a565b805f52600960205260405f2054611c935760085491600a831015611c4e57604051636465e69f60e01b8152905f82600481865afa91821561032a575f92611c0f575b50604051611a2c8161234a565b8381526020810190828252604081019060018252606081015f815260808201915f835260a0810198878a526801000000000000000081101561136357806001611a789201600855612479565b949094610b9257905184546001600160a01b039091166001600160a01b031990911617845593516001840155925160028301805460ff191691151560ff16919091179055600592516003830155516004820155019351938451946001600160401b03861161136357611af486611aee8454612312565b84612a12565b602090601f8711600114611b8a579580611b45927ff595de18d97eadc684658016ec895a8c06f151bc6e842edd3b1c37ad47e275e697985f92611b7f5750508160011b915f199060031b1c19161790565b90555b600854845f52600960205260405f2055611b746040519283928352606060208401526060830190612426565b4260408301520390a2005b015190508880611217565b90601f19871691835f52815f20925f5b818110611bf757509160019391897ff595de18d97eadc684658016ec895a8c06f151bc6e842edd3b1c37ad47e275e6999a9410611bdf575b505050811b019055611b48565b01515f1960f88460031b161c19169055878080611bd2565b92936020600181928786015181550195019301611b9a565b9091503d805f833e611c218183612365565b810160208282031261031e5781516001600160401b03811161031e57611c4792016129b1565b9084611a1f565b60405162461bcd60e51b815260206004820152601760248201527f53453a206d6178206d6f64756c657320726561636865640000000000000000006044820152606490fd5b60405162461bcd60e51b815260206004820152601d60248201527f53453a206d6f64756c6520616c726561647920726567697374657265640000006044820152606490fd5b5060648211156119d4565b60405162461bcd60e51b815260206004820152600f60248201526e53453a207a65726f206d6f64756c6560881b6044820152606490fd5b3461031e575f36600319011261031e57611d3e60018060a01b035f541633146124e5565b6003805460ff19169055005b3461031e57602036600319011261031e576001600160a01b03611d6b6122fc565b165f526001602052602060ff60405f2054166040519015158152f35b3461031e57604036600319011261031e576024611da26122fc565b5f60018060a01b036004541660405193848092635196db3f60e11b8252823560048301525afa90811561032a576020925f92611de7575b5060e061179e60c0926125a5565b60c091925061179e611e0460e0923d805f833e6116128183612365565b93925050611dd9565b3461031e57604036600319011261031e576020611e34611e2b6122fc565b6024359061287c565b604051908152f35b3461031e577f5828a45825a23d28a669e540bd1ee6621e0f24a2a5f17475073e0d58b03bdfa2611e6b3661244a565b90611e8060018060a01b035f541633146124e5565b6001600160a01b0381165f908152600260205260409020805460ff191660ff84151516179055610611565b3461031e57602036600319011261031e576040611ece611ec96122fc565b6125a5565b825191825215156020820152f35b3461031e575f36600319011261031e5760035460405160089190911c6001600160a01b03168152602090f35b3461031e575f36600319011261031e5760206040516103e88152f35b3461031e57602036600319011261031e576001600160a01b03611f456122fc565b165f52600760205260405f208054611f5f60018301612386565b9160018060a01b036002820154169060ff600460038301549201541690611f98604051958695865260a0602087015260a0860190612426565b9260408501526060840152151560808301520390f35b3461031e57602036600319011261031e57611fc76122fc565b602460a060035492611fdc60ff851615612521565b60405192838092630d47875d60e41b8252600180861b031695866004830152600180861b039060081c165afa90811561032a575f5f915f9361211f575b50835f52600660205260405f2080549081151580612116575b612071575b90610dcf5f5160206131ea5f395f51905f5295600384866106f99655876001820155426002820155019060ff801983541691151516179055565b9061207c8382612567565b91612710830292808404612710149015171561056a575f5160206131ea5f395f51905f52956003610dcf92896120b5866106f998612587565b600e548110156120ce575b505093945050955050612037565b60408051888152602081018b9052908101919091524260608201527f63616ce213503c94fe81cf72b0f023555ca2ec75f14046c0484053b10bf91aec90608090a2898b6120c0565b50818310612032565b9250505060a0813d60a01161216c575b8161213c60a09383612365565b8101031261031e57805160036020830151101561031e5761216460806060840151930161255a565b919084612019565b3d915061212f565b3461031e57602036600319011261031e576001600160a01b036121956122fc565b165f526006602052608060405f2080549060018101549060ff6003600283015492015416916040519384526020840152604083015215156060820152f35b3461031e57606036600319011261031e576121ec6122ec565b60243560ff6044359261220960018060a01b035f541633146124e5565b1690600482116122b357612710811161227d576103e8831161224257815f52600b60205260405f20555f52600c60205260405f20555f80f35b60405162461bcd60e51b8152602060048201526013602482015272053453a206d696e53636f7265203e203130303606c1b6044820152606490fd5b60405162461bcd60e51b815260206004820152600e60248201526d53453a204c5456203e203130302560901b6044820152606490fd5b60405162461bcd60e51b815260206004820152601160248201527014d14e881a5b9d985b1a59081b195d995b607a1b6044820152606490fd5b6004359060ff8216820361031e57565b600435906001600160a01b038216820361031e57565b90600182811c92168015612340575b602083101461232c57565b634e487b7160e01b5f52602260045260245ffd5b91607f1691612321565b60c081019081106001600160401b0382111761136357604052565b90601f801991011681019081106001600160401b0382111761136357604052565b9060405191825f82549261239984612312565b808452936001811690811561240457506001146123c0575b506123be92500383612365565b565b90505f9291925260205f20905f915b8183106123e85750509060206123be928201015f6123b1565b60209193508060019154838589010152019101909184926123cf565b9050602092506123be94915060ff191682840152151560051b8201015f6123b1565b805180835260209291819084018484015e5f828201840152601f01601f1916010190565b604090600319011261031e576004356001600160a01b038116810361031e5790602435801515810361031e5790565b6008548110156124955760085f52600660205f20910201905f90565b634e487b7160e01b5f52603260045260245ffd5b90602080835192838152019201905f5b8181106124c65750505090565b82516001600160a01b03168452602093840193909201916001016124b9565b156124ec57565b60405162461bcd60e51b815260206004820152600d60248201526c29a29d103737ba1037bbb732b960991b6044820152606490fd5b1561252857565b60405162461bcd60e51b815260206004820152600a60248201526914d14e881c185d5cd95960b21b6044820152606490fd5b5190811515820361031e57565b9190820391821161056a57565b8181029291811591840414171561056a57565b8115612591570490565b634e487b7160e01b5f52601260045260245ffd5b6001600160a01b0381165f818152600760205260409020600481015491929160ff166125f857506125d590612cdb565b50905f5260066020526125ef600260405f20015442612567565b600d5410159091565b9150505490600190565b51906001600160a01b038216820361031e57565b6001600160401b0381116113635760051b60200190565b60208183031261031e578051906001600160401b03821161031e5701808203916102c0831261031e57604051926101e084018481106001600160401b03821117611363576040528251845261268460208401612602565b602085015261269560408401612602565b60408501526126a660608401612602565b60608501526126b760808401612602565b608085015260a0830151600581101561031e5760a085015260c083015190600782101561031e576101009160c086015260df19011261031e5760405161010081018181106001600160401b038211176113635760405260e08301518152610100830151602082015261012083015160408201526101408301516060820152610160830151608082015261018083015160a08201526101a083015160c08201526127636101c0840161255a565b60e082015260e08401526101e08201516001600160401b03811161031e5782019080601f8301121561031e5781519061279b82612616565b926127a96040519485612365565b82845260208085019360051b82010191821161031e57602001915b81831061281e575050506101008301526102008101516101208301526102208101516101408301526102408101516101608301526102608101516101808301526102808101516101a08301526102a001516101c082015290565b8251600881101561031e578152602092830192016127c4565b1561283e57565b60405162461bcd60e51b815260206004820152601660248201527553453a206d616e64617465206e6f742061637469766560501b6044820152606490fd5b905f60018060a01b036004541691602460405180948193635196db3f60e11b835260048301525afa90811561032a575f91612930575b5060c081015160078110156115ea5760036128cd9114612837565b60e081019160e08351015115612929576128e6906125a5565b50825151116129235760a0015160058110156115ea5760ff165f52600b602052602060405f2054915101518082105f1461291e575090565b905090565b50505f90565b5050505f90565b61294491503d805f833e6116128183612365565b5f6128b2565b1561295157565b60405162461bcd60e51b815260206004820152601760248201527f53453a20776569676874206f7574206f662072616e67650000000000000000006044820152606490fd5b6001600160401b03811161136357601f01601f191660200190565b81601f8201121561031e578051906129c882612996565b926129d66040519485612365565b8284526020838301011161031e57815f9260208093018386015e8301015290565b5f5b828110612a0557505050565b5f828201556001016129f9565b91601f8211612a2057505050565b808211612a2c57505050565b6123be925f5260205f20916020601f830160051c9210612a57575b601f82910160051c0391016129f7565b5f9150612a47565b9190820180921161056a57565b5f19811461056a5760010190565b6001600160a01b0381165f81815260066020526040812054600854909491939192918115612c9457600a5491612ab08388612574565b92915f5b828110612b2d57505081159050612b2557612ace91612587565b935b6103e88511612b1b575b604080519182526020820186905281018490524260608201527f0a4e77faee25a613a4a526e85646b24b426946bf583570f333b4c66a882d808190608090a2565b6103e89450612ada565b505083612ad0565b612b3681612479565b5060ff60028201541680612c87575b612b53575b50600101612ab4565b805460405163aaebdc2960e01b81526001600160a01b038581166004830152602482018d9052909160209183916044918391165afa5f9181612c54575b50612bf857509081600460019301612ba88154612a6c565b905554604080516001600160a01b038616815242602082015260a085901b859003909216917f69ef1e8db7a4b0600ddb61c5dc5c0e5429c5b382cd7dfd7cc0a0e0a8afe12a249190a25b90612b4a565b986003612c318b612c449498996103e86001979e9211612c4a575b612c2b90612c25888c01548094612574565b90612a5f565b99612a5f565b9601612c3d8154612a6c565b9055612a6c565b97612bf2565b6103e89150612c13565b9091506020813d8211612c7f575b81612c6f60209383612365565b8101031261031e5751905f612b90565b3d9150612c62565b5060018101541515612b45565b505f93505050565b15612ca357565b60405162461bcd60e51b815260206004820152601060248201526f53453a207a65726f206164647265737360801b6044820152606490fd5b6001600160a01b0381165f90815260066020526040812054600854919290918015612e4157600a5490612d0e8285612574565b91925f5b828110612d4957505082159050612d4157612d2d9250612587565b915b6103e88311612d3a57565b6103e89250565b505091612d2f565b612d5281612479565b5060ff60028201541680612e34575b612d6f575b50600101612d12565b805460405163aaebdc2960e01b81526001600160a01b038581166004830152602482018a9052909160209183916044918391165afa5f9181612e01575b50612db8575b50612d66565b612def91816001949a98976103e8612de9949211612df7575b612c2586612de3939401548094612574565b96612a5f565b95612a6c565b96905f612db2565b6103e89150612dd1565b9091506020813d8211612e2c575b81612e1c60209383612365565b8101031261031e5751905f612dac565b3d9150612e0f565b5060018101541515612d61565b50509050905f90565b60208183031261031e578051906001600160401b03821161031e57019080601f8301121561031e578151612e7d81612616565b92612e8b6040519485612365565b81845260208085019260051b82010192831161031e57602001905b828210612eb35750505090565b60208091612ec084612602565b815201910190612ea6565b80518210156124955760209160051b010190565b15612ee657565b60405162461bcd60e51b815260206004820152601460248201527314d14e881b5bd91d5b19481b9bdd08199bdd5b9960621b6044820152606490fd5b919091828114612ff657612f368354612312565b6001600160401b03811161136357612f5281611aee8454612312565b5f93601f8211600114612f9057612f8192939482915f92612f855750508160011b915f199060031b1c19161790565b9055565b015490505f80611217565b601f198216905f5260205f2094835f5260205f20915f5b818110612fde57509583600195969710612fc6575b505050811b019055565b01545f1960f88460031b161c191690555f8080612fbc565b9192600180602092868b015481550194019201612fa7565b509050565b1561300257565b60405162461bcd60e51b815260206004820152601060248201526f53453a206f7574206f662072616e676560801b6044820152606490fd5b6024905f60018060a01b036004541660405193848092635196db3f60e11b82528560048301525afa91821561032a575f926131cd575b5060c082015160078110156115ea57600219016131c9576005546040516333002ab560e11b815292905f90849060049082906001600160a01b03165afa92831561032a575f936131ad575b505f5b83518110156131a757600190836001600160a01b036130dd8388612ecb565b51166130e8816125a5565b5060a060e087018484825151808610613165575b50505051015190818110613115575b50505050016130be565b7f9a4d045766eb21544fd89df9b510bf930118ce5d72a5ef0ee613d7b010f5ac94916131596040519283924291846040919493926060820195825260208201520152565b0390a3835f808061310b565b60408051878152602081019290925242908201527f5a43687f542ed1e0b71f739318915e11885d8d7f740e01b1bb7bb6d53698fa7e90606090a384845f6130fc565b50505050565b6131c29193503d805f833e61034a8183612365565b915f6130bb565b5050565b6131e29192503d805f833e6116128183612365565b905f61307056fea34a8b326a71cee8afee1a590ad39f41e35e9be714cc6a3b1b081aedc4536b30a2646970667358221220c7b8f309c663d0c1f2045b66db76b706e19aa9c95c8020ad57dec21c52252b5064736f6c63430008210033",
+  "evm_version": "prague",
+  "external_libraries": [],
+  "file_path": "src/ScoreEngineV2.sol",
+  "implementations": [],
+  "is_blueprint": false,
+  "is_changed_bytecode": false,
+  "is_fully_verified": true,
+  "is_partially_verified": false,
+  "is_verified": true,
+  "is_verified_via_eth_bytecode_db": false,
+  "is_verified_via_sourcify": false,
+  "is_verified_via_verifier_alliance": false,
+  "language": "solidity",
+  "license_type": "none",
+  "name": "ScoreEngineV2",
+  "optimization_enabled": true,
+  "optimization_runs": 200,
+  "proxy_type": null,
+  "source_code": "// SPDX-License-Identifier: BUSL-1.1\npragma solidity ^0.8.24;\n\n// ═══════════════════════════════════════════════════════════════════════════════\n//  ScoreEngine V2 — ALIA Quality Network · alia-core/alia-engine\n//\n//  Nouveautés V2 :\n//    - IScoreModule : interface standard pour tout modèle externe\n//    - Registre de modules pondérés (OpenClaw, Temporal, Portfolio, Behavioral)\n//    - getCompositeScore() : agrégation COLOracle + modules\n//    - getEffectiveScore() appelle getCompositeScore() — interface externe inchangée\n//    - Pondération configurable par module (0–100)\n//    - Circuit breaker par module (désactivation sans redéploiement)\n//\n//  Contrats référencés (ABIs vérifiés 6 avril 2026) :\n//    COLOracle           0xe1D56f8DB28C4F257dF4A501e1D304073475ce14\n//    MandateRegistry     0xd6fdF5fa1BD5A839755E0aa19Aa25b5f7739444c\n//    CollateralRegistry  0x6Bc6c7E0154dAcA03Cd3f1997b193f552A8Fad4F\n//\n//  V1 : 0x8E6434d860A9c83728376E807b6c55C8e3395d2c (remplacée — aucun dépendant)\n//  Déploiement : Base mainnet Q2 2026\n// ═══════════════════════════════════════════════════════════════════════════════\n\n\n// ───────────────────────────────────────────────────────────────────────────────\n//  INTERFACE MODULES — standard pour tout modèle externe\n// ───────────────────────────────────────────────────────────────────────────────\n\n/**\n * @title IScoreModule\n * @notice Interface que tout module de scoring doit implémenter.\n *\n *         Un module reçoit le score COLOracle de base et retourne\n *         un score ajusté. Il est consultatif — jamais décisionnaire.\n *         ELIERouter voit uniquement le score final de ScoreEngine.\n *\n *         Types de modules prévus :\n *           OPENCLAW   — machine node temps réel 24/7 (depeg, liquidité)\n *           TEMPORAL   — dépréciation continue entre audits humains\n *           PORTFOLIO  — risque concentration sectorielle / custodian\n *           BEHAVIORAL — Avvatar ZKai scoring comportemental\n *           CUSTOM     — tout modèle propriétaire futur\n *\n *         Contraintes :\n *           - getAdjustedScore() doit être pure ou view (pas d'état modifié)\n *           - Doit retourner un score dans [0, 1000]\n *           - Ne doit jamais revert (utiliser try/catch côté ScoreEngine)\n */\ninterface IScoreModule {\n    /**\n     * @param asset      Adresse du token collatéral\n     * @param baseScore  Score COLOracle de base (0–1000)\n     * @return adjustedScore Score ajusté par ce module (0–1000)\n     */\n    function getAdjustedScore(address asset, uint256 baseScore)\n        external view returns (uint256 adjustedScore);\n\n    /**\n     * @return Type du module — utilisé pour les logs et le monitoring\n     *         Valeurs : \"OPENCLAW\" | \"TEMPORAL\" | \"PORTFOLIO\" | \"BEHAVIORAL\" | \"CUSTOM\"\n     */\n    function moduleType() external pure returns (string memory);\n}\n\n\n// ───────────────────────────────────────────────────────────────────────────────\n//  INTERFACES CONTRATS DÉPLOYÉS\n// ───────────────────────────────────────────────────────────────────────────────\n\ninterface ICOLOracle {\n    enum CollateralType { STABLECOIN, RWA, LST }\n    function getScore(address collateral)\n        external view\n        returns (uint256 score, CollateralType ctype, uint256 lastAuditDate, uint256 confidence, bool isActive);\n    function getBestCollateral(address[] calldata candidates)\n        external view\n        returns (address best, uint256 bestScore);\n}\n\ninterface IMandateRegistry {\n    enum MandateLevel   { ROOKIE, DRIVER, PRO, EXPERT, CHAMPION }\n    enum MandateStatus  { PENDING, INVESTOR_SIGNED, AUDITOR_SIGNED, ACTIVE, PAUSED, CLOSED, LIQUIDATED }\n    enum AssetClass     { STABLECOIN, PHYSICAL_ASSET, BOND, EQUITY, PRIVATE_CREDIT, CARBON_CREDIT, LST, UNKNOWN }\n    struct RiskPolicy {\n        uint256 minColScore;\n        uint256 maxLTV;\n        uint256 targetYield;\n        uint256 maxSingleAsset;\n        uint256 maxSectorConcentration;\n        uint256 shieldThreshold;\n        uint256 rebalanceThreshold;\n        bool    allowLeverage;\n    }\n    struct Mandate {\n        bytes32       mandateId;\n        address       investor;\n        address       auditor;\n        address       complianceAgent;\n        address       executor;\n        MandateLevel  level;\n        MandateStatus status;\n        RiskPolicy    riskPolicy;\n        AssetClass[]  allowedAssets;\n        uint256       depositAmount;\n        uint256       minDeposit;\n        uint256       lockupDays;\n        uint256       performanceFee;\n        uint256       managementFee;\n        uint256       hurdleRate;\n    }\n    function getMandate(bytes32 mandateId) external view returns (Mandate memory);\n}\n\ninterface ICollateralRegistry {\n    function isAcceptable(address _token, uint256 _colScore, uint256 _ltv)\n        external view returns (bool acceptable, string memory reason);\n    function getActiveCollaterals() external view returns (address[] memory);\n}\n\n\n// ───────────────────────────────────────────────────────────────────────────────\n//  CONTRAT PRINCIPAL\n// ───────────────────────────────────────────────────────────────────────────────\n\ncontract ScoreEngineV2 {\n\n    // ─── Access control ───────────────────────────────────────────────────────\n\n    address public owner;\n    mapping(address => bool) public keepers;\n    mapping(address => bool) public engines;\n    bool public paused;\n\n    modifier onlyOwner() {\n        require(msg.sender == owner, \"SE: not owner\");\n        _;\n    }\n\n    modifier whenNotPaused() {\n        require(!paused, \"SE: paused\");\n        _;\n    }\n\n    // ─── Références externes ──────────────────────────────────────────────────\n\n    ICOLOracle          public colOracle;\n    IMandateRegistry    public mandateRegistry;\n    ICollateralRegistry public collateralRegistry;\n\n    // ─── Cache des scores ─────────────────────────────────────────────────────\n\n    struct CachedScore {\n        uint256 score;\n        uint256 confidence;\n        uint256 updatedAt;\n        bool    isActive;\n    }\n    mapping(address => CachedScore) public scoreCache;\n\n    // ─── Override d'urgence ───────────────────────────────────────────────────\n\n    struct ScoreOverride {\n        uint256 score;\n        string  reason;\n        address setBy;\n        uint256 setAt;\n        bool    active;\n    }\n    mapping(address => ScoreOverride) public overrides;\n\n    // ─── Registre de modules ──────────────────────────────────────────────────\n\n    /**\n     * @dev Un module enregistré dans ScoreEngine.\n     *\n     *      weight       : pondération du module dans l'agrégation (0–100)\n     *                     La somme des poids n'est pas forcée à 100 —\n     *                     ScoreEngine normalise automatiquement.\n     *      active       : circuit breaker — désactivable sans retirer le module\n     *      callsSuccess : compteur de succès (monitoring santé du module)\n     *      callsFailed  : compteur d'échecs (détection module défaillant)\n     */\n    struct ScoreModuleConfig {\n        address module;\n        uint256 weight;       // 0–100\n        bool    active;\n        uint256 callsSuccess;\n        uint256 callsFailed;\n        string  moduleType;   // snapshot du type au moment de l'enregistrement\n    }\n\n    /// @notice Liste ordonnée des modules enregistrés\n    ScoreModuleConfig[] public modules;\n\n    /// @notice module address → index dans le tableau (1-indexed, 0 = absent)\n    mapping(address => uint256) public moduleIndex;\n\n    /// @notice Nombre maximum de modules simultanés (protection gas)\n    uint256 public constant MAX_MODULES = 10;\n\n    /// @notice Poids minimum accordé à COLOracle dans l'agrégation (0–100)\n    ///         Empêche les modules de prendre le contrôle total du score.\n    ///         Valeur par défaut : 60% pour COLOracle, 40% max pour les modules.\n    uint256 public colOracleBaseWeight = 60;\n\n    // ─── Courbe LTV par MandateLevel ─────────────────────────────────────────\n\n    mapping(uint8 => uint256) public levelMaxLTV;\n    mapping(uint8 => uint256) public levelMinScore;\n\n    // ─── Constantes ───────────────────────────────────────────────────────────\n\n    uint256 public constant MAX_SCORE = 1_000;\n    uint256 public constant BPS_BASE  = 10_000;\n    uint256 public stalePeriod             = 30 minutes;\n    uint256 public degradationThresholdBps = 500;\n\n    // ─── Événements ───────────────────────────────────────────────────────────\n\n    event ScoreUpdated(address indexed asset, uint256 previousScore, uint256 newScore, uint256 confidence, uint256 timestamp);\n    event ScoreDegraded(address indexed asset, uint256 previousScore, uint256 newScore, uint256 dropBps, uint256 timestamp);\n    event ScoreBelowThreshold(address indexed asset, bytes32 indexed mandateId, uint256 score, uint256 minColScore, uint256 timestamp);\n    event ShieldThresholdReached(address indexed asset, bytes32 indexed mandateId, uint256 score, uint256 shieldThreshold, uint256 timestamp);\n    event OverrideSet(address indexed asset, uint256 score, string reason, address indexed setBy, uint256 timestamp);\n    event OverrideRevoked(address indexed asset, address indexed revokedBy, uint256 timestamp);\n\n    // Événements modules\n    event ModuleRegistered(address indexed module, uint256 weight, string moduleType, uint256 timestamp);\n    event ModuleRemoved(address indexed module, uint256 timestamp);\n    event ModuleWeightUpdated(address indexed module, uint256 oldWeight, uint256 newWeight, uint256 timestamp);\n    event ModuleToggled(address indexed module, bool active, uint256 timestamp);\n    event ModuleCallFailed(address indexed module, address asset, uint256 timestamp);\n    event CompositeScoreComputed(address indexed asset, uint256 baseScore, uint256 compositeScore, uint256 modulesUsed, uint256 timestamp);\n\n    event ColOracleBaseWeightUpdated(uint256 newWeight, uint256 timestamp);\n    event KeeperUpdated(address keeper, bool status);\n    event EngineUpdated(address engine, bool status);\n\n\n    // ─── Constructeur ─────────────────────────────────────────────────────────\n\n    constructor(\n        address _colOracle,\n        address _mandateRegistry,\n        address _collateralRegistry\n    ) {\n        require(_colOracle          != address(0), \"SE: zero oracle\");\n        require(_mandateRegistry    != address(0), \"SE: zero mandate\");\n        require(_collateralRegistry != address(0), \"SE: zero collateral\");\n\n        owner               = msg.sender;\n        colOracle           = ICOLOracle(_colOracle);\n        mandateRegistry     = IMandateRegistry(_mandateRegistry);\n        collateralRegistry  = ICollateralRegistry(_collateralRegistry);\n\n        _initLevelParams();\n    }\n\n\n    // ═══════════════════════════════════════════════════════════════════════════\n    //  SECTION 1 — PULL DE SCORES (COLOracle)\n    // ═══════════════════════════════════════════════════════════════════════════\n\n    function refreshScore(address asset) public whenNotPaused {\n        (uint256 score, , , uint256 confidence, bool isActive) = colOracle.getScore(asset);\n\n        CachedScore storage cached = scoreCache[asset];\n        uint256 prevScore = cached.score;\n\n        if (prevScore > 0 && score < prevScore) {\n            uint256 dropBps = ((prevScore - score) * BPS_BASE) / prevScore;\n            if (dropBps >= degradationThresholdBps)\n                emit ScoreDegraded(asset, prevScore, score, dropBps, block.timestamp);\n        }\n\n        cached.score      = score;\n        cached.confidence = confidence;\n        cached.updatedAt  = block.timestamp;\n        cached.isActive   = isActive;\n\n        emit ScoreUpdated(asset, prevScore, score, confidence, block.timestamp);\n    }\n\n    function refreshScoreBatch(address[] calldata assets) external whenNotPaused {\n        for (uint256 i = 0; i < assets.length; ) {\n            refreshScore(assets[i]);\n            unchecked { ++i; }\n        }\n    }\n\n\n    // ═══════════════════════════════════════════════════════════════════════════\n    //  SECTION 2 — AGRÉGATION DES MODULES (le coeur de la V2)\n    // ═══════════════════════════════════════════════════════════════════════════\n\n    /**\n     * @notice Score composite = agrégation pondérée de COLOracle + modules actifs.\n     *\n     *         Algorithme :\n     *           1. Score de base = cache COLOracle (ou override)\n     *           2. Pour chaque module actif : appel try/catch getAdjustedScore()\n     *              - Succès → score module intégré avec son poids\n     *              - Échec  → module ignoré, compteur callsFailed++, event émis\n     *           3. Score final = moyenne pondérée normalisée\n     *              colOracleBaseWeight donne le poids minimum de COLOracle\n     *\n     *         Propriétés de sécurité :\n     *           - Un module défaillant n'empêche pas le calcul\n     *           - colOracleBaseWeight garantit que les modules ne prennent\n     *             jamais plus de (100 - colOracleBaseWeight)% du score final\n     *           - Le résultat est toujours dans [0, 1000]\n     *\n     * @param  asset         Adresse du token collatéral\n     * @return compositeScore Score composite 0–1000\n     * @return modulesUsed   Nombre de modules ayant contribué\n     */\n    function getCompositeScore(address asset)\n        public\n        returns (uint256 compositeScore, uint256 modulesUsed)\n    {\n        // Score de base COLOracle depuis le cache\n        uint256 baseScore = scoreCache[asset].score;\n\n        // Aucun module → retourner directement le score de base\n        if (modules.length == 0) {\n            return (baseScore, 0);\n        }\n\n        // Agrégation pondérée\n        uint256 weightedSum  = baseScore * colOracleBaseWeight;\n        uint256 totalWeight  = colOracleBaseWeight;\n\n        uint256 mLen = modules.length;\n        for (uint256 i = 0; i < mLen; ) {\n            ScoreModuleConfig storage mod = modules[i];\n\n            if (mod.active && mod.weight > 0) {\n                // try/catch — un module qui revert est ignoré\n                try IScoreModule(mod.module).getAdjustedScore(asset, baseScore)\n                    returns (uint256 adjustedScore)\n                {\n                    // Clamp à [0, MAX_SCORE]\n                    if (adjustedScore > MAX_SCORE) adjustedScore = MAX_SCORE;\n\n                    weightedSum += adjustedScore * mod.weight;\n                    totalWeight += mod.weight;\n                    mod.callsSuccess++;\n                    modulesUsed++;\n                } catch {\n                    // Module défaillant — ignoré silencieusement\n                    mod.callsFailed++;\n                    emit ModuleCallFailed(mod.module, asset, block.timestamp);\n                }\n            }\n\n            unchecked { ++i; }\n        }\n\n        // Normalisation\n        compositeScore = totalWeight > 0\n            ? weightedSum / totalWeight\n            : baseScore;\n\n        // Clamp final\n        if (compositeScore > MAX_SCORE) compositeScore = MAX_SCORE;\n\n        emit CompositeScoreComputed(asset, baseScore, compositeScore, modulesUsed, block.timestamp);\n    }\n\n    /**\n     * @notice Version view de getCompositeScore — pour lecture externe sans état.\n     *         Ne met pas à jour les compteurs callsSuccess/callsFailed.\n     *         Utilisée par ELIERouter et les dashboards.\n     */\n    function getCompositeScoreView(address asset)\n        public\n        view\n        returns (uint256 compositeScore, uint256 modulesUsed)\n    {\n        uint256 baseScore = scoreCache[asset].score;\n\n        if (modules.length == 0) return (baseScore, 0);\n\n        uint256 weightedSum = baseScore * colOracleBaseWeight;\n        uint256 totalWeight = colOracleBaseWeight;\n\n        uint256 mLen = modules.length;\n        for (uint256 i = 0; i < mLen; ) {\n            ScoreModuleConfig storage mod = modules[i];\n\n            if (mod.active && mod.weight > 0) {\n                try IScoreModule(mod.module).getAdjustedScore(asset, baseScore)\n                    returns (uint256 adjustedScore)\n                {\n                    if (adjustedScore > MAX_SCORE) adjustedScore = MAX_SCORE;\n                    weightedSum += adjustedScore * mod.weight;\n                    totalWeight += mod.weight;\n                    modulesUsed++;\n                } catch {}\n            }\n\n            unchecked { ++i; }\n        }\n\n        compositeScore = totalWeight > 0 ? weightedSum / totalWeight : baseScore;\n        if (compositeScore > MAX_SCORE) compositeScore = MAX_SCORE;\n    }\n\n\n    // ═══════════════════════════════════════════════════════════════════════════\n    //  SECTION 3 — GETTERS (interface externe inchangée vs V1)\n    // ═══════════════════════════════════════════════════════════════════════════\n\n    /**\n     * @notice Score effectif d'un actif.\n     *         Priorité : override → composite (COLOracle + modules) → cache brut\n     *\n     *         Interface identique à V1 — ELIERouter n'a pas besoin de changer.\n     */\n    function getEffectiveScore(address asset)\n        public\n        view\n        returns (uint256 score, bool fresh)\n    {\n        // Override prioritaire\n        ScoreOverride storage ov = overrides[asset];\n        if (ov.active) return (ov.score, true);\n\n        // Score composite (view — sans modification d'état)\n        (uint256 composite, ) = getCompositeScoreView(asset);\n\n        fresh = (block.timestamp - scoreCache[asset].updatedAt) <= stalePeriod;\n        score = composite;\n    }\n\n    function checkMandateHealth(bytes32 mandateId)\n        external\n        view\n        returns (bool healthy, uint256 worstScore, address worstAsset)\n    {\n        IMandateRegistry.Mandate memory mandate = mandateRegistry.getMandate(mandateId);\n        require(mandate.status == IMandateRegistry.MandateStatus.ACTIVE, \"SE: mandate not active\");\n\n        address[] memory actives = collateralRegistry.getActiveCollaterals();\n        healthy = true; worstScore = MAX_SCORE; worstAsset = address(0);\n\n        for (uint256 i = 0; i < actives.length; ) {\n            address a = actives[i];\n            (bool acceptable, ) = collateralRegistry.isAcceptable(a, scoreCache[a].score, mandate.riskPolicy.maxLTV);\n            if (acceptable) {\n                (uint256 score, ) = getEffectiveScore(a);\n                if (score < worstScore) { worstScore = score; worstAsset = a; }\n                if (score < mandate.riskPolicy.minColScore) healthy = false;\n            }\n            unchecked { ++i; }\n        }\n    }\n\n    function getAdjustedLTV(address asset, bytes32 mandateId)\n        external\n        view\n        returns (uint256 ltvBps)\n    {\n        IMandateRegistry.Mandate memory mandate = mandateRegistry.getMandate(mandateId);\n        require(mandate.status == IMandateRegistry.MandateStatus.ACTIVE, \"SE: mandate not active\");\n        if (!mandate.riskPolicy.allowLeverage) return 0;\n\n        (uint256 score, ) = getEffectiveScore(asset);\n        if (score < mandate.riskPolicy.minColScore) return 0;\n\n        uint256 curveLTV = levelMaxLTV[uint8(mandate.level)];\n        ltvBps = curveLTV < mandate.riskPolicy.maxLTV ? curveLTV : mandate.riskPolicy.maxLTV;\n    }\n\n    function isShieldTriggered(address asset, bytes32 mandateId)\n        external view returns (bool)\n    {\n        IMandateRegistry.Mandate memory mandate = mandateRegistry.getMandate(mandateId);\n        (uint256 score, ) = getEffectiveScore(asset);\n        return score < mandate.riskPolicy.shieldThreshold;\n    }\n\n    function isRebalanceTriggered(address asset, bytes32 mandateId)\n        external view returns (bool)\n    {\n        IMandateRegistry.Mandate memory mandate = mandateRegistry.getMandate(mandateId);\n        (uint256 score, ) = getEffectiveScore(asset);\n        return score < mandate.riskPolicy.rebalanceThreshold;\n    }\n\n    function getBestActiveCollateral()\n        external view\n        returns (address best, uint256 bestScore)\n    {\n        return colOracle.getBestCollateral(collateralRegistry.getActiveCollaterals());\n    }\n\n    function getActiveScoresSnapshot()\n        external view\n        returns (address[] memory assets, uint256[] memory scores, bool[] memory freshFlags)\n    {\n        assets = collateralRegistry.getActiveCollaterals();\n        scores = new uint256[](assets.length);\n        freshFlags = new bool[](assets.length);\n        for (uint256 i = 0; i < assets.length; ) {\n            (scores[i], freshFlags[i]) = getEffectiveScore(assets[i]);\n            unchecked { ++i; }\n        }\n    }\n\n\n    // ═══════════════════════════════════════════════════════════════════════════\n    //  SECTION 4 — GESTION DES MODULES\n    // ═══════════════════════════════════════════════════════════════════════════\n\n    /**\n     * @notice Enregistre un nouveau module de scoring.\n     *\n     *         Le module doit implémenter IScoreModule.\n     *         Le poids est relatif — l'agrégation normalise automatiquement.\n     *         colOracleBaseWeight garantit que COLOracle garde au minimum\n     *         (colOracleBaseWeight / (colOracleBaseWeight + totalModuleWeights)) du score.\n     *\n     * @param module  Adresse du contrat module\n     * @param weight  Poids relatif (0–100)\n     */\n    function registerModule(address module, uint256 weight)\n        external\n        onlyOwner\n    {\n        require(module != address(0),         \"SE: zero module\");\n        require(weight > 0 && weight <= 100,  \"SE: weight out of range\");\n        require(moduleIndex[module] == 0,     \"SE: module already registered\");\n        require(modules.length < MAX_MODULES, \"SE: max modules reached\");\n\n        // Vérification que le module implémente IScoreModule\n        string memory mType = IScoreModule(module).moduleType();\n\n        modules.push(ScoreModuleConfig({\n            module:       module,\n            weight:       weight,\n            active:       true,\n            callsSuccess: 0,\n            callsFailed:  0,\n            moduleType:   mType\n        }));\n\n        // Index 1-based\n        moduleIndex[module] = modules.length;\n\n        emit ModuleRegistered(module, weight, mType, block.timestamp);\n    }\n\n    /**\n     * @notice Retire définitivement un module.\n     *         Pour désactiver temporairement, utiliser toggleModule().\n     */\n    function removeModule(address module) external onlyOwner {\n        uint256 idx = moduleIndex[module];\n        require(idx > 0, \"SE: module not found\");\n\n        uint256 arrayIdx = idx - 1;\n        uint256 lastIdx  = modules.length - 1;\n\n        // Swap avec le dernier puis pop\n        if (arrayIdx != lastIdx) {\n            modules[arrayIdx] = modules[lastIdx];\n            moduleIndex[modules[arrayIdx].module] = idx;\n        }\n\n        modules.pop();\n        delete moduleIndex[module];\n\n        emit ModuleRemoved(module, block.timestamp);\n    }\n\n    /**\n     * @notice Met à jour le poids d'un module.\n     */\n    function setModuleWeight(address module, uint256 newWeight)\n        external\n        onlyOwner\n    {\n        require(newWeight > 0 && newWeight <= 100, \"SE: weight out of range\");\n        uint256 idx = moduleIndex[module];\n        require(idx > 0, \"SE: module not found\");\n\n        uint256 oldWeight = modules[idx - 1].weight;\n        modules[idx - 1].weight = newWeight;\n\n        emit ModuleWeightUpdated(module, oldWeight, newWeight, block.timestamp);\n    }\n\n    /**\n     * @notice Active ou désactive un module sans le retirer.\n     *         Circuit breaker — réponse rapide en cas de module défaillant.\n     */\n    function toggleModule(address module, bool active) external onlyOwner {\n        uint256 idx = moduleIndex[module];\n        require(idx > 0, \"SE: module not found\");\n        modules[idx - 1].active = active;\n        emit ModuleToggled(module, active, block.timestamp);\n    }\n\n    /**\n     * @notice Liste tous les modules enregistrés avec leurs stats.\n     */\n    function getModules() external view returns (ScoreModuleConfig[] memory) {\n        return modules;\n    }\n\n    /**\n     * @notice Stats d'un module spécifique.\n     */\n    function getModuleStats(address module)\n        external view\n        returns (uint256 weight, bool active, uint256 success, uint256 failed, string memory mType)\n    {\n        uint256 idx = moduleIndex[module];\n        require(idx > 0, \"SE: module not found\");\n        ScoreModuleConfig storage mod = modules[idx - 1];\n        return (mod.weight, mod.active, mod.callsSuccess, mod.callsFailed, mod.moduleType);\n    }\n\n\n    // ═══════════════════════════════════════════════════════════════════════════\n    //  SECTION 5 — ALERTES DE SEUIL\n    // ═══════════════════════════════════════════════════════════════════════════\n\n    function checkThresholds(bytes32 mandateId) external whenNotPaused {\n        IMandateRegistry.Mandate memory mandate = mandateRegistry.getMandate(mandateId);\n        if (mandate.status != IMandateRegistry.MandateStatus.ACTIVE) return;\n\n        address[] memory actives = collateralRegistry.getActiveCollaterals();\n        for (uint256 i = 0; i < actives.length; ) {\n            address a = actives[i];\n            (uint256 score, ) = getEffectiveScore(a);\n            if (score < mandate.riskPolicy.minColScore)\n                emit ScoreBelowThreshold(a, mandateId, score, mandate.riskPolicy.minColScore, block.timestamp);\n            if (score < mandate.riskPolicy.shieldThreshold)\n                emit ShieldThresholdReached(a, mandateId, score, mandate.riskPolicy.shieldThreshold, block.timestamp);\n            unchecked { ++i; }\n        }\n    }\n\n\n    // ═══════════════════════════════════════════════════════════════════════════\n    //  SECTION 6 — OVERRIDE D'URGENCE\n    // ═══════════════════════════════════════════════════════════════════════════\n\n    function setScoreOverride(address asset, uint256 score, string calldata reason)\n        external onlyOwner\n    {\n        require(score <= MAX_SCORE,       \"SE: score > 1000\");\n        require(bytes(reason).length > 0, \"SE: reason required\");\n        overrides[asset] = ScoreOverride({ score: score, reason: reason, setBy: msg.sender, setAt: block.timestamp, active: true });\n        emit OverrideSet(asset, score, reason, msg.sender, block.timestamp);\n    }\n\n    function revokeScoreOverride(address asset) external onlyOwner {\n        require(overrides[asset].active, \"SE: no active override\");\n        overrides[asset].active = false;\n        emit OverrideRevoked(asset, msg.sender, block.timestamp);\n    }\n\n\n    // ═══════════════════════════════════════════════════════════════════════════\n    //  SECTION 7 — CONFIGURATION\n    // ═══════════════════════════════════════════════════════════════════════════\n\n    /**\n     * @notice Ajuste le poids minimum de COLOracle dans l'agrégation.\n     *         Valeur recommandée : 50–80.\n     *         En dessous de 50, les modules peuvent prendre trop d'influence.\n     */\n    function setColOracleBaseWeight(uint256 weight) external onlyOwner {\n        require(weight >= 30 && weight <= 100, \"SE: weight out of range\");\n        colOracleBaseWeight = weight;\n        emit ColOracleBaseWeightUpdated(weight, block.timestamp);\n    }\n\n    function setLevelParams(uint8 level, uint256 maxLTV, uint256 minScore)\n        external onlyOwner\n    {\n        require(level <= 4,            \"SE: invalid level\");\n        require(maxLTV <= BPS_BASE,    \"SE: LTV > 100%\");\n        require(minScore <= MAX_SCORE, \"SE: minScore > 1000\");\n        levelMaxLTV[level]   = maxLTV;\n        levelMinScore[level] = minScore;\n    }\n\n    function setColOracle(address _oracle) external onlyOwner {\n        require(_oracle != address(0), \"SE: zero address\");\n        colOracle = ICOLOracle(_oracle);\n    }\n\n    function setStalePeriod(uint256 _seconds) external onlyOwner {\n        require(_seconds >= 5 minutes && _seconds <= 24 hours, \"SE: out of range\");\n        stalePeriod = _seconds;\n    }\n\n    function setDegradationThreshold(uint256 _bps) external onlyOwner {\n        require(_bps > 0 && _bps <= 2_000, \"SE: out of range\");\n        degradationThresholdBps = _bps;\n    }\n\n    function setKeeper(address keeper, bool status) external onlyOwner {\n        keepers[keeper] = status;\n        emit KeeperUpdated(keeper, status);\n    }\n\n    function setEngine(address engine, bool status) external onlyOwner {\n        engines[engine] = status;\n        emit EngineUpdated(engine, status);\n    }\n\n    function transferOwnership(address newOwner) external onlyOwner {\n        require(newOwner != address(0), \"SE: zero address\");\n        owner = newOwner;\n    }\n\n    function pause()   external onlyOwner { paused = true;  }\n    function unpause() external onlyOwner { paused = false; }\n\n\n    // ═══════════════════════════════════════════════════════════════════════════\n    //  SECTION 8 — INIT INTERNE\n    // ═══════════════════════════════════════════════════════════════════════════\n\n    function _initLevelParams() internal {\n        levelMaxLTV[0] = 6_500; levelMinScore[0] = 400; // ROOKIE\n        levelMaxLTV[1] = 7_200; levelMinScore[1] = 500; // DRIVER\n        levelMaxLTV[2] = 7_800; levelMinScore[2] = 600; // PRO\n        levelMaxLTV[3] = 8_500; levelMinScore[3] = 700; // EXPERT\n        levelMaxLTV[4] = 9_000; levelMinScore[4] = 800; // CHAMPION\n    }\n}\n",
+  "sourcify_repo_url": null,
+  "verified_at": "2026-05-25T18:04:16.873929Z",
+  "verified_twin_address_hash": null
+}

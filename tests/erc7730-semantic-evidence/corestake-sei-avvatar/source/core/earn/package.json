@@ -1,0 +1,29 @@
+{
+  "name": "earn",
+  "version": "1.0.0",
+  "description": "ecology project for staking",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/coredao-org/Earn.git"
+  },
+  "author": "",
+  "license": "SEE LICENSE IN <LICENSE>",
+  "bugs": {
+    "url": "https://github.com/coredao-org/Earn/issues"
+  },
+  "homepage": "https://github.com/coredao-org/Earn#readme",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^3.0.0",
+    "hardhat": "^2.19.1",
+    "@openzeppelin/hardhat-upgrades": "^2.4.3",
+    "@nomicfoundation/hardhat-verify": "^2.0.4"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^4.9.3",
+    "@openzeppelin/contracts-upgradeable": "^4.9.3"
+  }
+}

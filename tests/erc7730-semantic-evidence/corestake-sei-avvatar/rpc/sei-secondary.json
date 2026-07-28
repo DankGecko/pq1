@@ -1,0 +1,53 @@
+{
+  "endpoint": "https://sei-evm-rpc.publicnode.com",
+  "request": [
+    {
+      "id": 1,
+      "jsonrpc": "2.0",
+      "method": "eth_chainId",
+      "params": []
+    },
+    {
+      "id": 2,
+      "jsonrpc": "2.0",
+      "method": "eth_getBlockByNumber",
+      "params": [
+        "0xd46b000",
+        false
+      ]
+    }
+  ],
+  "response": [
+    {
+      "id": 1,
+      "jsonrpc": "2.0",
+      "result": "0x531"
+    },
+    {
+      "id": 2,
+      "jsonrpc": "2.0",
+      "result": {
+        "baseFeePerGas": "0xba43b7400",
+        "difficulty": "0x0",
+        "extraData": "0x",
+        "gasLimit": "0xbebc20",
+        "gasUsed": "0x0",
+        "hash": "0xb3798904e924708baab16cb1b7a6a3c2bc0c3f259dcca4679203a3571a6c4a99",
+        "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "miner": "0x922357bd8e69e6119d0630f7abbbf7c5e3879f2f",
+        "mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "nonce": "0x0000000000000000",
+        "number": "0xd46b000",
+        "parentHash": "0x4c3430b8867c76c61bf5c4fe31d5c78e79fefd58327bdeaf5cd01a826a424e05",
+        "receiptsRoot": "0x55a649e4c767eb8af2d9929fc86a622737efd7833736e488c6e0f851e0f3e2a0",
+        "sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+        "size": "0x11c8",
+        "stateRoot": "0xcdbba181b455fec3354a5f0dca7c0967c7bb330bc09892bd5ff265ace99275bf",
+        "timestamp": "0x6a68acd3",
+        "transactions": [],
+        "transactionsRoot": "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+        "uncles": []
+      }
+    }
+  ]
+}

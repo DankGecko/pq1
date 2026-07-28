@@ -307,21 +307,21 @@
   },
   {
     "source": "avvatar-labs-alia/calldata-AgentIdentityRegistry-base.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "accepted_leaf_count": 5,
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
-  {
-    "source": "avvatar-labs-alia/calldata-AssetIdentityRegistry-base.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    {
+      "source": "avvatar-labs-alia/calldata-AssetIdentityRegistry-base.json",
+      "accepted_leaf_count": 4,
+      "classification": "pinned-evidence",
+      "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "avvatar-labs-alia/calldata-ScoreEngineV2-base.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "accepted_leaf_count": 2,
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "benqi/calldata-sAVAX.json",
@@ -361,21 +361,21 @@
   },
   {
     "source": "corestake/calldata-coreagent.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "accepted_leaf_count": 3,
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "corestake/calldata-corestake.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "accepted_leaf_count": 3,
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "corestake/calldata-stakehub.json",
     "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    "classification": "pinned-evidence",
+    "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "degate/eip712-degate.json",
@@ -1511,17 +1511,17 @@
     "classification": "pinned-evidence",
     "evidence": "safe-migrations"
   },
-  {
-    "source": "sei/calldata-sei-distribution.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+    {
+      "source": "sei/calldata-sei-distribution.json",
+      "accepted_leaf_count": 3,
+      "classification": "pinned-evidence",
+      "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "sei/calldata-sei-staking.json",
-    "accepted_leaf_count": 1,
-    "classification": "lower-priority-residual",
-    "successor_issue": "remaining-calldata-families"
+      "accepted_leaf_count": 4,
+      "classification": "pinned-evidence",
+      "evidence": "corestake-sei-avvatar"
   },
   {
     "source": "serenita/calldata-EthVault.json",
